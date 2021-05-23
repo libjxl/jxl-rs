@@ -1,0 +1,6 @@
+/target
+*.swp
+perf.data
+perf.data.old
+tex/
+Cargo.lock
