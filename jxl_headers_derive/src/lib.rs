@@ -152,10 +152,9 @@ fn prettify_type(ty: &syn::Type) -> String {
     return ret;
 }
 
-#[derive(Debug)]
-enum Coder {
-    WithoutConfig(syn::Type),
-    U32(TokenStream2, String),
+#[cfg(feature = "tex")]
+fn prettify_default(d: String, ty: &str) -> String {
+    d.replace(&(ty.to_owned() + " :: default()"), "")
 }
 
 #[derive(Debug)]
@@ -195,10 +194,23 @@ impl Condition {
 }
 
 #[derive(Debug)]
+struct U32 {
+    coder: TokenStream2,
+    pretty: String,
+}
+
+#[derive(Debug)]
+enum Coder {
+    WithoutConfig(syn::Type),
+    U32(U32),
+    Select(Condition, U32, U32),
+}
+
+#[derive(Debug)]
 enum FieldKind {
     Unconditional(Coder),
     Conditional(Condition, Coder),
-    Defaulted(TokenStream2, Condition, Coder),
+    Defaulted(Condition, Coder),
 }
 
 #[derive(Debug)]
@@ -206,6 +218,7 @@ struct Field {
     name: proc_macro2::Ident,
     kind: FieldKind,
     ty: syn::Type,
+    default: Option<TokenStream2>,
 }
 
 impl Field {
@@ -213,6 +226,10 @@ impl Field {
         let mut condition = None;
         let mut default = None;
         let mut coder = None;
+
+        let mut select_coder = None;
+        let mut coder_true = None;
+        let mut coder_false = None;
 
         let mut is_all_default = false;
 
@@ -224,8 +241,11 @@ impl Field {
                         abort!(f, "Repeated coder");
                     }
                     let coder_ast = a.parse_args::<syn::Expr>().unwrap();
-                    let pretty_coder = prettify_coder(&coder_ast);
-                    coder = Some(Coder::U32(parse_coder(coder_ast), pretty_coder));
+                    let pretty = prettify_coder(&coder_ast);
+                    coder = Some(Coder::U32(U32 {
+                        coder: parse_coder(coder_ast),
+                        pretty,
+                    }));
                 }
                 Some("default") => {
                     if default.is_some() {
@@ -252,8 +272,59 @@ impl Field {
                     }
                     is_all_default = true;
                 }
+                Some("select_coder") => {
+                    if select_coder.is_some() {
+                        abort!(f, "Repeated select_coder");
+                    }
+                    let condition_ast = a.parse_args::<syn::Expr>().unwrap();
+                    let pretty_cond = prettify_condition(&condition_ast);
+                    select_coder = Some(Condition {
+                        expr: Some(condition_ast),
+                        has_all_default: false,
+                        pretty: pretty_cond,
+                    });
+                }
+                Some("coder_false") => {
+                    if coder_false.is_some() {
+                        abort!(f, "Repeated coder_false");
+                    }
+                    let coder_ast = a.parse_args::<syn::Expr>().unwrap();
+                    let pretty = prettify_coder(&coder_ast);
+                    coder_false = Some(U32 {
+                        coder: parse_coder(coder_ast),
+                        pretty,
+                    });
+                }
+                Some("coder_true") => {
+                    if coder_true.is_some() {
+                        abort!(f, "Repeated coder_true");
+                    }
+                    let coder_ast = a.parse_args::<syn::Expr>().unwrap();
+                    let pretty = prettify_coder(&coder_ast);
+                    coder_true = Some(U32 {
+                        coder: parse_coder(coder_ast),
+                        pretty,
+                    });
+                }
                 _ => {}
             }
+        }
+
+        if select_coder.is_some() {
+            if coder_true.is_none() || coder_false.is_none() {
+                abort!(
+                    f,
+                    "Invalid field, select_coder is set but coder_true or coder_false are not"
+                )
+            }
+            if coder.is_some() {
+                abort!(f, "Invalid field, select_coder and coder are both present")
+            }
+            coder = Some(Coder::Select(
+                select_coder.unwrap(),
+                coder_true.unwrap(),
+                coder_false.unwrap(),
+            ))
         }
 
         let condition = if condition.is_some() || all_default_field.is_none() {
@@ -271,13 +342,10 @@ impl Field {
 
         let ident = f.ident.as_ref().unwrap();
 
-        let kind = match (condition, default) {
-            (None, None) => FieldKind::Unconditional(coder),
+        let kind = match (condition, &default) {
+            (None, _) => FieldKind::Unconditional(coder),
             (Some(cond), None) => FieldKind::Conditional(cond, coder),
-            (None, Some(_)) => {
-                abort!(f, "Field has default but no condition");
-            }
-            (Some(cond), Some(def)) => FieldKind::Defaulted(def, cond, coder),
+            (Some(cond), Some(_)) => FieldKind::Defaulted(cond, coder),
         };
         if is_all_default {
             *all_default_field = Some(f.ident.as_ref().unwrap().clone());
@@ -286,6 +354,7 @@ impl Field {
             name: ident.clone(),
             kind,
             ty: f.ty.clone(),
+            default,
         }
     }
 
@@ -295,7 +364,23 @@ impl Field {
         let ty = &self.ty;
         let get_config = |coder: &Coder| match coder {
             Coder::WithoutConfig(_) => quote! { () },
-            Coder::U32(coder, _) => quote! { #coder },
+            Coder::U32(U32 { coder, pretty: _ }) => quote! { #coder },
+            Coder::Select(
+                condition,
+                U32 {
+                    coder: coder_true,
+                    pretty: _,
+                },
+                U32 {
+                    coder: coder_false,
+                    pretty: _,
+                },
+            ) => {
+                let cnd = condition.get_expr(all_default_field).unwrap();
+                quote! {
+                    SelectCoder{use_true: #cnd, coder_true: #coder_true, coder_false: #coder_false}
+                }
+            }
         };
         match &self.kind {
             FieldKind::Unconditional(coder) => {
@@ -324,10 +409,11 @@ impl Field {
                     #trc
                 }
             }
-            FieldKind::Defaulted(default, condition, coder) => {
+            FieldKind::Defaulted(condition, coder) => {
                 let cfg = get_config(coder);
                 let cnd = condition.get_expr(all_default_field).unwrap();
                 let pretty_cnd = condition.get_pretty(all_default_field);
+                let default = &self.default;
                 let trc = if trace {
                     quote! { eprintln!("{} is {}, setting {} to {:?}", #pretty_cnd, #cnd, stringify!(#ident), #ident); }
                 } else {
@@ -342,38 +428,92 @@ impl Field {
     }
 
     #[cfg(feature = "tex")]
-    fn texify(&self) -> String {
-        let mut ret = String::new() + "    ";
-        let minted = "\\mintinline[breaklines]{rust}{";
-        let (coder, condition, default) = match &self.kind {
-            FieldKind::Unconditional(coder) => (coder, None, None),
-            FieldKind::Conditional(condition, coder) => (coder, Some(&condition.pretty), None),
-            FieldKind::Defaulted(default, condition, coder) => {
-                (coder, Some(&condition.pretty), Some(default.to_string()))
-            }
+    fn texify(&self, mut row: usize) -> String {
+        let minted = |x| "\\mintinline[breaklines]{rust}{".to_owned() + x + "}";
+        let ident = &self.name;
+        let ident = &quote! {#ident}.to_string();
+        let (coder, condition) = match &self.kind {
+            FieldKind::Unconditional(coder) => (coder, None),
+            FieldKind::Conditional(condition, coder) => (coder, Some(&condition.pretty)),
+            FieldKind::Defaulted(condition, coder) => (coder, Some(&condition.pretty)),
         };
-        if let Some(pretty_cond) = condition {
-            ret += minted;
-            ret += &pretty_cond;
-            ret += "}";
-        }
-        ret += " & ";
-        ret += &match &coder {
+        let mut ret = String::new();
+        let mut add_row = |cond: Option<&str>, coder: &str, dfl: Option<&str>, ident: &str| {
+            if row != 0 {
+                ret += "    \\noalign{\\color{gray!50}\\hrule height 0.1pt}\n";
+            }
+            row += 1;
+            ret += &format!(
+                "    {} & {} & {} & {} \\\\\n",
+                cond.unwrap_or(""),
+                coder,
+                dfl.unwrap_or(""),
+                ident
+            );
+        };
+        let default = self.default.as_ref().map(|d| quote! { #d }.to_string());
+        let default = if let Coder::WithoutConfig(ty) = &coder {
+            let ty = prettify_type(ty);
+            default.map(|d| prettify_default(d, &ty))
+        } else {
+            default
+        };
+        let cond = condition.as_ref().map(|x| minted(x));
+        let dfl = default.as_ref().map(|x| minted(x));
+        let ident = minted(ident);
+
+        match &coder {
             Coder::WithoutConfig(ty) => {
                 let ty = prettify_type(ty);
-                "\\hyperref[hdr:".to_owned() + &ty + "]{" + &ty + "}"
+                add_row(
+                    cond.as_deref(),
+                    &("\\hyperref[hdr:".to_owned() + &ty + "]{" + &ty + "}"),
+                    dfl.as_deref(),
+                    &ident,
+                );
             }
-            Coder::U32(_, pretty_coder) => minted.to_owned() + pretty_coder + " }",
+            Coder::U32(U32 { coder: _, pretty }) => {
+                add_row(cond.as_deref(), &minted(pretty), dfl.as_deref(), &ident);
+            }
+            Coder::Select(
+                Condition {
+                    expr: _,
+                    has_all_default: _,
+                    pretty: condition,
+                },
+                U32 {
+                    coder: _,
+                    pretty: coder_true,
+                },
+                U32 {
+                    coder: _,
+                    pretty: coder_false,
+                },
+            ) => {
+                let cond_true = if let Some(c) = &cond {
+                    "(".to_owned() + condition + ") && (" + c + ")"
+                } else {
+                    condition.clone()
+                };
+                let cond_false = if let Some(c) = &cond {
+                    "!(".to_owned() + condition + ") && (" + c + ")"
+                } else {
+                    "!(".to_owned() + condition + ")"
+                };
+                add_row(
+                    Some(&minted(&cond_true)),
+                    &minted(coder_true),
+                    dfl.as_deref(),
+                    &ident,
+                );
+                add_row(
+                    Some(&minted(&cond_false)),
+                    &minted(coder_false),
+                    dfl.as_deref(),
+                    &ident,
+                );
+            }
         };
-        ret += " & ";
-        if let Some(dfl) = default {
-            ret += &(minted.to_owned() + &dfl + " }")
-        };
-        ret += " & ";
-        ret += minted;
-        let ident = &self.name;
-        ret += &quote! {#ident}.to_string();
-        ret += "} \\\\";
         ret
     }
 }
@@ -387,16 +527,13 @@ fn texify(name: &str, fields: &[Field]) -> () {
     );
     table += r#"
   \centering
-  \begin{tabular}{>{\centering\arraybackslash}m{0.25\textwidth}>{\centering\arraybackslash}m{0.4\textwidth}>{\centering\arraybackslash}m{0.1\textwidth}>{\centering\arraybackslash}m{0.2\textwidth}}
+  \begin{tabular}{>{\centering\arraybackslash}m{0.27\textwidth}>{\centering\arraybackslash}m{0.3\textwidth}>{\centering\arraybackslash}m{0.1\textwidth}>{\centering\arraybackslash}m{0.27\textwidth}}
     \toprule
     \bf condition & \bf type & \bf default & \bf name \\
     \midrule
 "#;
     for (i, f) in fields.iter().enumerate() {
-        if i != 0 {
-            table += "    \\noalign{\\color{gray!50}\\hrule height 0.1pt}\n";
-        }
-        table += &f.texify();
+        table += &f.texify(i);
     }
     table += r#"
     \bottomrule
@@ -415,6 +552,7 @@ fn derive_struct(input: DeriveInput) -> TokenStream2 {
     let name = &input.ident;
 
     let trace = input.attrs.iter().any(|a| a.path.is_ident("trace"));
+    let validate = input.attrs.iter().any(|a| a.path.is_ident("validate"));
 
     let data = if let syn::Data::Struct(struct_data) = &input.data {
         struct_data
@@ -442,25 +580,67 @@ fn derive_struct(input: DeriveInput) -> TokenStream2 {
     let fields_read = fields.iter().map(|x| x.read_fun(&all_default_field, trace));
     let fields_names = fields.iter().map(|x| &x.name);
 
+    let impl_default = if fields.iter().all(|x| x.default.is_some()) {
+        let defaults = fields.iter().map(|f| {
+            let ident = &f.name;
+            let default = f.default.as_ref().unwrap();
+            quote! { #ident : #default }
+        });
+        quote! {
+            impl #name {
+                pub fn default() -> #name {
+                    #name {
+                        #(#defaults),*
+                    }
+                }
+            }
+
+        }
+    } else {
+        quote! {}
+    };
+
+    let impl_validate = if validate {
+        quote! { return_value.check()?; }
+    } else {
+        quote! {}
+    };
+
     texify(&quote! {#name}.to_string(), &fields);
 
     quote! {
-        impl crate::headers::JxlHeader for #name {
-            fn read(br: &mut BitReader) -> Result<#name, Error> {
+        #impl_default
+        impl crate::headers::encodings::UnconditionalCoder<()> for #name {
+            fn read_unconditional(_: (), br: &mut BitReader) -> Result<#name, Error> {
                 use crate::headers::encodings::UnconditionalCoder;
                 use crate::headers::encodings::ConditionalCoder;
                 use crate::headers::encodings::DefaultedCoder;
                 #(#fields_read)*
-                Ok(#name {
+                let return_value = #name {
                     #(#fields_names),*
-                })
+                };
+                #impl_validate
+                Ok(return_value)
             }
         }
     }
 }
 
 #[proc_macro_error]
-#[proc_macro_derive(JxlHeader, attributes(trace, coder, condition, default, all_default))]
+#[proc_macro_derive(
+    UnconditionalCoder,
+    attributes(
+        trace,
+        coder,
+        condition,
+        default,
+        all_default,
+        select_coder,
+        coder_true,
+        coder_false,
+        validate
+    )
+)]
 pub fn derive_jxl_headers(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as DeriveInput);
 

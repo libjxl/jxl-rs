@@ -9,14 +9,14 @@ rm -rf tex/all
 mkdir -p tex/all/
 
 cat > tex/all/main.tex << EOF
-\documentclass[10pt]{article}
+\documentclass[9pt]{article}
 \usepackage{array}
 \usepackage[colorlinks,linkcolor=blue]{hyperref}
 \usepackage{fullpage}
 \usepackage{minted}
 \usepackage{booktabs}
 
-\begin{document}
+\\begin{document}
 EOF
 
 for i in $(ls tex/*.tex)

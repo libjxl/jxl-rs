@@ -5,10 +5,11 @@
 
 extern crate jxl_headers_derive;
 
-use jxl_headers_derive::JxlHeader;
+use jxl_headers_derive::UnconditionalCoder;
 
 use crate::bit_reader::BitReader;
 use crate::error::Error;
+use crate::headers::bit_depth::*;
 use crate::headers::encodings::*;
 use crate::headers::size::*;
 
@@ -20,8 +21,8 @@ impl Signature {
     }
 }
 
-impl crate::headers::JxlHeader for Signature {
-    fn read(br: &mut BitReader) -> Result<Signature, Error> {
+impl crate::headers::encodings::UnconditionalCoder<()> for Signature {
+    fn read_unconditional(_: (), br: &mut BitReader) -> Result<Signature, Error> {
         let sig1 = br.read(8)? as u8;
         let sig2 = br.read(8)? as u8;
         if (sig1, sig2) != (0xff, 0x0a) {
@@ -32,7 +33,7 @@ impl crate::headers::JxlHeader for Signature {
     }
 }
 
-#[derive(JxlHeader, Debug)]
+#[derive(UnconditionalCoder, Debug)]
 struct Animation {
     #[coder(u2S(100, 1000, Bits(10) + 1, Bits(30) + 1))]
     tps_numerator: u32,
@@ -43,7 +44,7 @@ struct Animation {
     have_timecodes: bool,
 }
 
-#[derive(JxlHeader, Debug)]
+#[derive(UnconditionalCoder, Debug)]
 #[trace]
 pub struct ImageMetadata {
     #[all_default]
@@ -69,8 +70,10 @@ pub struct ImageMetadata {
     have_animation: bool,
     #[condition(have_animation)]
     animation: Option<Animation>,
-    // bit_depth: BitDepth,
-    // modular_16bit_sufficient: bool,
+    #[default(BitDepth::default())]
+    bit_depth: BitDepth,
+    #[default(true)]
+    modular_16bit_sufficient: bool,
     // extra_channel_info: Vec<ExtraChannelInfo>,
     // xyb_encoded: bool,
     // color_encoding: ColorEncoding,

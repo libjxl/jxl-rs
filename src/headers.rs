@@ -5,24 +5,41 @@
 
 extern crate jxl_headers_derive;
 
-use jxl_headers_derive::JxlHeader;
+use jxl_headers_derive::UnconditionalCoder;
 
+pub mod bit_depth;
 pub mod encodings;
 pub mod image_metadata;
 pub mod size;
 
 use crate::bit_reader::BitReader;
 use crate::error::Error;
+use crate::headers::encodings::UnconditionalCoder;
 
-pub use encodings::JxlHeader;
 pub use image_metadata::*;
 pub use size::Size;
 
-#[derive(JxlHeader)]
+#[derive(UnconditionalCoder)]
 pub struct FileHeaders {
     #[allow(dead_code)]
     signature: Signature,
     pub size: Size,
     pub image_metadata: ImageMetadata,
     // transform_data: CustomTransformData,
+}
+
+pub trait JxlHeader
+where
+    Self: Sized,
+{
+    fn read(br: &mut BitReader) -> Result<Self, Error>;
+}
+
+impl<T> JxlHeader for T
+where
+    T: UnconditionalCoder<()>,
+{
+    fn read(br: &mut BitReader) -> Result<Self, Error> {
+        Self::read_unconditional((), br)
+    }
 }

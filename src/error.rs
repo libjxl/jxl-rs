@@ -13,4 +13,10 @@ pub enum Error {
     NonZeroPadding,
     #[error("Invalid signature {0:02x}{1:02x}, expected ff0a")]
     InvalidSignature(u8, u8),
+    #[error("Invalid exponent_bits_per_sample: {0}")]
+    InvalidExponent(u32),
+    #[error("Invalid mantissa_bits: {0}")]
+    InvalidMantissa(i32),
+    #[error("Invalid bits_per_sample: {0}")]
+    InvalidBitsPerSample(u32),
 }
