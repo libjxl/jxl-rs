@@ -143,6 +143,15 @@ fn prettify_coder(coder: &syn::Expr) -> String {
     (quote! {#coder}).to_string()
 }
 
+#[cfg(feature = "tex")]
+fn prettify_type(ty: &syn::Type) -> String {
+    let mut ret = (quote! {#ty}).to_string().replace(' ', "");
+    if ret.starts_with("Option<") {
+        ret = ret[7..ret.len() - 1].to_owned();
+    }
+    return ret;
+}
+
 #[derive(Debug)]
 enum Coder {
     WithoutConfig(syn::Type),
@@ -151,8 +160,38 @@ enum Coder {
 
 #[derive(Debug)]
 struct Condition {
-    expr: syn::Expr,
+    expr: Option<syn::Expr>,
+    has_all_default: bool,
     pretty: String,
+}
+
+impl Condition {
+    fn get_expr(&self, all_default_field: &Option<syn::Ident>) -> Option<TokenStream2> {
+        if self.has_all_default {
+            let all_default = all_default_field.as_ref().unwrap();
+            match &self.expr {
+                Some(expr) => Some(quote! { !#all_default && (#expr) }),
+                None => Some(quote! { !#all_default }),
+            }
+        } else {
+            match &self.expr {
+                Some(expr) => Some(quote! { #expr }),
+                None => None,
+            }
+        }
+    }
+    fn get_pretty(&self, all_default_field: &Option<syn::Ident>) -> String {
+        if self.has_all_default {
+            let all_default = all_default_field.as_ref().unwrap();
+            let all_default = "!".to_owned() + &quote! {#all_default}.to_string();
+            match &self.expr {
+                Some(_) => all_default + " && (" + &self.pretty + ")",
+                None => all_default,
+            }
+        } else {
+            self.pretty.clone()
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -170,10 +209,12 @@ struct Field {
 }
 
 impl Field {
-    fn parse(f: &syn::Field) -> Field {
+    fn parse(f: &syn::Field, num: usize, all_default_field: &mut Option<syn::Ident>) -> Field {
         let mut condition = None;
         let mut default = None;
         let mut coder = None;
+
+        let mut is_all_default = false;
 
         // Parse attributes.
         for a in &f.attrs {
@@ -200,13 +241,30 @@ impl Field {
                     let condition_ast = a.parse_args::<syn::Expr>().unwrap();
                     let pretty_cond = prettify_condition(&condition_ast);
                     condition = Some(Condition {
-                        expr: condition_ast,
+                        expr: Some(condition_ast),
+                        has_all_default: all_default_field.is_some(),
                         pretty: pretty_cond,
                     });
+                }
+                Some("all_default") => {
+                    if num != 0 {
+                        abort!(f, "all_default is not the first field");
+                    }
+                    is_all_default = true;
                 }
                 _ => {}
             }
         }
+
+        let condition = if condition.is_some() || all_default_field.is_none() {
+            condition
+        } else {
+            Some(Condition {
+                expr: None,
+                has_all_default: true,
+                pretty: String::new(),
+            })
+        };
 
         // Assume nested field if no coder.
         let coder = coder.unwrap_or(Coder::WithoutConfig(f.ty.clone()));
@@ -221,6 +279,9 @@ impl Field {
             }
             (Some(cond), Some(def)) => FieldKind::Defaulted(def, cond, coder),
         };
+        if is_all_default {
+            *all_default_field = Some(f.ident.as_ref().unwrap().clone());
+        }
         Field {
             name: ident.clone(),
             kind,
@@ -229,7 +290,7 @@ impl Field {
     }
 
     // Produces reading code (possibly with tracing).
-    fn read_fun(&self, trace: bool) -> TokenStream2 {
+    fn read_fun(&self, all_default_field: &Option<syn::Ident>, trace: bool) -> TokenStream2 {
         let ident = &self.name;
         let ty = &self.ty;
         let get_config = |coder: &Coder| match coder {
@@ -251,8 +312,8 @@ impl Field {
             }
             FieldKind::Conditional(condition, coder) => {
                 let cfg = get_config(coder);
-                let cnd = &condition.expr;
-                let pretty_cnd = &condition.pretty;
+                let cnd = condition.get_expr(all_default_field).unwrap();
+                let pretty_cnd = condition.get_pretty(all_default_field);
                 let trc = if trace {
                     quote! { eprintln!("{} is {}, setting {} to {:?}", #pretty_cnd, #cnd, stringify!(#ident), #ident); }
                 } else {
@@ -265,8 +326,8 @@ impl Field {
             }
             FieldKind::Defaulted(default, condition, coder) => {
                 let cfg = get_config(coder);
-                let cnd = &condition.expr;
-                let pretty_cnd = &condition.pretty;
+                let cnd = condition.get_expr(all_default_field).unwrap();
+                let pretty_cnd = condition.get_pretty(all_default_field);
                 let trc = if trace {
                     quote! { eprintln!("{} is {}, setting {} to {:?}", #pretty_cnd, #cnd, stringify!(#ident), #ident); }
                 } else {
@@ -299,7 +360,7 @@ impl Field {
         ret += " & ";
         ret += &match &coder {
             Coder::WithoutConfig(ty) => {
-                let ty = quote! {#ty}.to_string();
+                let ty = prettify_type(ty);
                 "\\hyperref[hdr:".to_owned() + &ty + "]{" + &ty + "}"
             }
             Coder::U32(_, pretty_coder) => minted.to_owned() + pretty_coder + " }",
@@ -326,8 +387,7 @@ fn texify(name: &str, fields: &[Field]) -> () {
     );
     table += r#"
   \centering
-  % also consider >{\centering\arraybackslash}m{0.3\textwidth}
-  \begin{tabular}{cccc}
+  \begin{tabular}{>{\centering\arraybackslash}m{0.25\textwidth}>{\centering\arraybackslash}m{0.4\textwidth}>{\centering\arraybackslash}m{0.1\textwidth}>{\centering\arraybackslash}m{0.2\textwidth}}
     \toprule
     \bf condition & \bf type & \bf default & \bf name \\
     \midrule
@@ -372,8 +432,14 @@ fn derive_struct(input: DeriveInput) -> TokenStream2 {
         abort!(data.fields, "only named fields are supported (for now?)");
     };
 
-    let fields: Vec<_> = fields.iter().map(Field::parse).collect();
-    let fields_read = fields.iter().map(|x| x.read_fun(trace));
+    let mut all_default_field = None;
+
+    let fields: Vec<_> = fields
+        .iter()
+        .enumerate()
+        .map(|(n, f)| Field::parse(f, n, &mut all_default_field))
+        .collect();
+    let fields_read = fields.iter().map(|x| x.read_fun(&all_default_field, trace));
     let fields_names = fields.iter().map(|x| &x.name);
 
     texify(&quote! {#name}.to_string(), &fields);
@@ -394,7 +460,7 @@ fn derive_struct(input: DeriveInput) -> TokenStream2 {
 }
 
 #[proc_macro_error]
-#[proc_macro_derive(JxlHeader, attributes(trace, coder, condition, default))]
+#[proc_macro_derive(JxlHeader, attributes(trace, coder, condition, default, all_default))]
 pub fn derive_jxl_headers(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as DeriveInput);
 
