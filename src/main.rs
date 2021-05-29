@@ -13,8 +13,7 @@ use jxl::headers::JxlHeader;
 // TODO(veluca93): BMFF
 fn parse_jxl_codestream(data: &[u8]) -> Result<(), jxl::error::Error> {
     let mut br = BitReader::new(data);
-    let mut fh = FileHeaders::new();
-    fh.read(&mut br)?;
+    let fh = FileHeaders::read(&mut br)?;
     println!("Image size: {} x {}", fh.size.xsize(), fh.size.ysize());
     println!("Image metadata: {:#?}", fh.image_metadata);
     Ok(())

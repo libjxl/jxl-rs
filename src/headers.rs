@@ -13,14 +13,12 @@ pub mod file_headers;
 use crate::bit_reader::BitReader;
 use crate::error::Error;
 
+pub use encodings::JxlHeader;
 pub use file_headers::*;
-
-pub trait JxlHeader {
-    fn read(&mut self, br: &mut BitReader) -> Result<(), Error>;
-}
 
 #[derive(JxlHeader)]
 pub struct FileHeaders {
+    #[allow(dead_code)]
     signature: Signature,
     pub size: Size,
     pub image_metadata: ImageMetadata,

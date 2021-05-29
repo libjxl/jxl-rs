@@ -20,13 +20,13 @@ impl Signature {
 }
 
 impl crate::headers::JxlHeader for Signature {
-    fn read(&mut self, br: &mut BitReader) -> Result<(), Error> {
+    fn read(br: &mut BitReader) -> Result<Signature, Error> {
         let sig1 = br.read(8)? as u8;
         let sig2 = br.read(8)? as u8;
         if (sig1, sig2) != (0xff, 0x0a) {
             Err(Error::InvalidSignature(sig1, sig2))
         } else {
-            Ok(())
+            Ok(Signature {})
         }
     }
 }
@@ -34,20 +34,20 @@ impl crate::headers::JxlHeader for Signature {
 #[derive(JxlHeader)]
 pub struct Size {
     small: bool,
-    #[condition(self.small)]
+    #[condition(small)]
     #[coder(Bits(5) + 1)]
-    ysize_div8: u32,
-    #[condition(!self.small)]
+    ysize_div8: Option<u32>,
+    #[condition(!small)]
     #[coder(1 + u2S(Bits(9), Bits(13), Bits(18), Bits(30)))]
-    ysize: u32,
+    ysize: Option<u32>,
     #[coder(Bits(3))]
     ratio: u32,
-    #[condition(self.small && self.ratio == 0)]
+    #[condition(small && ratio == 0)]
     #[coder(Bits(5) + 1)]
-    xsize_div8: u32,
-    #[condition(!self.small && self.ratio == 0)]
+    xsize_div8: Option<u32>,
+    #[condition(!small && ratio == 0)]
     #[coder(1 + u2S(Bits(9), Bits(13), Bits(18), Bits(30)))]
-    xsize: u32,
+    xsize: Option<u32>,
 }
 
 fn map_aspect_ratio(ysize: u32, ratio: u32) -> u32 {
@@ -66,18 +66,18 @@ fn map_aspect_ratio(ysize: u32, ratio: u32) -> u32 {
 impl Size {
     pub fn ysize(&self) -> u32 {
         if self.small {
-            self.ysize_div8 * 8
+            self.ysize_div8.unwrap() * 8
         } else {
-            self.ysize
+            self.ysize.unwrap()
         }
     }
 
     pub fn xsize(&self) -> u32 {
         if self.ratio == 0 {
             if self.small {
-                self.xsize_div8 * 8
+                self.xsize_div8.unwrap() * 8
             } else {
-                self.xsize
+                self.xsize.unwrap()
             }
         } else {
             map_aspect_ratio(self.ysize(), self.ratio)
@@ -88,5 +88,5 @@ impl Size {
 #[derive(JxlHeader, Debug)]
 #[trace]
 pub struct ImageMetadata {
-    pub all_default: bool,
+    all_default: bool,
 }

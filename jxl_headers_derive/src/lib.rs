@@ -84,7 +84,8 @@ fn parse_coder(input: syn::Expr) -> TokenStream2 {
     let parse_u2s = |expr_call: &syn::ExprCall, lit: Option<&syn::ExprLit>| {
         if let syn::Expr::Path(ep) = &*expr_call.func {
             if !ep.path.is_ident("u2S") {
-                return parse_single_coder(&input, None);
+                let coder = parse_single_coder(&input, None);
+                return quote! {U32Coder::Direct(#coder)};
             }
             if expr_call.args.len() != 4 {
                 abort!(
@@ -99,7 +100,7 @@ fn parse_coder(input: syn::Expr) -> TokenStream2 {
                 parse_single_coder(&expr_call.args[2], lit),
                 parse_single_coder(&expr_call.args[3], lit),
             ];
-            return quote! {U32Coder(#(#args),*)};
+            return quote! {U32Coder::Select(#(#args),*)};
         }
         abort!(input, "Unexpected function call in coder");
     };
@@ -131,14 +132,6 @@ fn parse_coder(input: syn::Expr) -> TokenStream2 {
     }
 }
 
-fn is_primitive_type(ty: &syn::Type, sty: &str) -> bool {
-    if let syn::Type::Path(syn::TypePath { qself: _, path }) = ty {
-        path.is_ident(sty)
-    } else {
-        false
-    }
-}
-
 fn prettify_condition(cond: &syn::Expr) -> String {
     (quote! {#cond})
         .to_string()
@@ -151,18 +144,29 @@ fn prettify_coder(coder: &syn::Expr) -> String {
 }
 
 #[derive(Debug)]
-enum Type {
-    Nested(String),
-    Bool,
+enum Coder {
+    WithoutConfig(syn::Type),
     U32(TokenStream2, String),
+}
+
+#[derive(Debug)]
+struct Condition {
+    expr: syn::Expr,
+    pretty: String,
+}
+
+#[derive(Debug)]
+enum FieldKind {
+    Unconditional(Coder),
+    Conditional(Condition, Coder),
+    Defaulted(TokenStream2, Condition, Coder),
 }
 
 #[derive(Debug)]
 struct Field {
     name: proc_macro2::Ident,
-    condition: Option<(syn::Expr, String)>,
-    default: TokenStream2,
-    ty: Type,
+    kind: FieldKind,
+    ty: syn::Type,
 }
 
 impl Field {
@@ -173,158 +177,136 @@ impl Field {
 
         // Parse attributes.
         for a in &f.attrs {
-            if a.path.is_ident("coder") {
-                if coder.is_some() {
-                    abort!(f, "Repeated coder");
+            match a.path.get_ident().map(syn::Ident::to_string).as_deref() {
+                Some("coder") => {
+                    if coder.is_some() {
+                        abort!(f, "Repeated coder");
+                    }
+                    let coder_ast = a.parse_args::<syn::Expr>().unwrap();
+                    let pretty_coder = prettify_coder(&coder_ast);
+                    coder = Some(Coder::U32(parse_coder(coder_ast), pretty_coder));
                 }
-                let coder_ast = a.parse_args::<syn::Expr>().unwrap();
-                let pretty_coder = prettify_coder(&coder_ast);
-                coder = Some((parse_coder(coder_ast), pretty_coder));
-            } else if a.path.is_ident("default") {
-                if default.is_some() {
-                    abort!(f, "Repeated default");
+                Some("default") => {
+                    if default.is_some() {
+                        abort!(f, "Repeated default");
+                    }
+                    let default_expr = a.parse_args::<syn::Expr>().unwrap();
+                    default = Some(quote! {#default_expr});
                 }
-                let default_expr = a.parse_args::<syn::Expr>().unwrap();
-                default = Some(quote! {#default_expr});
-            } else if a.path.is_ident("condition") {
-                if condition.is_some() {
-                    abort!(f, "Repeated condition");
+                Some("condition") => {
+                    if condition.is_some() {
+                        abort!(f, "Repeated condition");
+                    }
+                    let condition_ast = a.parse_args::<syn::Expr>().unwrap();
+                    let pretty_cond = prettify_condition(&condition_ast);
+                    condition = Some(Condition {
+                        expr: condition_ast,
+                        pretty: pretty_cond,
+                    });
                 }
-                let condition_ast = a.parse_args::<syn::Expr>().unwrap();
-                let pretty_cond = prettify_condition(&condition_ast);
-                condition = Some((condition_ast, pretty_cond));
-            } else {
-                abort!(a, "Unknown attribute: {:?}", a.path.get_ident())
+                _ => {}
             }
         }
 
-        let ty = if is_primitive_type(&f.ty, "bool") {
-            if coder.is_some() {
-                abort!(f, "Cannot specify coder for bool");
-            }
-            if default.is_none() {
-                default = Some(quote! {false});
-            }
-            Type::Bool
-        } else if is_primitive_type(&f.ty, "u32") {
-            if coder.is_none() {
-                abort!(f, "Must specify coder for u32");
-            }
-            if default.is_none() {
-                default = Some(quote! {0});
-            }
-            let (coder, pretty_coder) = coder.unwrap();
-            Type::U32(coder, pretty_coder)
-        } else {
-            if coder.is_some() {
-                abort!(f, "Cannot specify coder for nested types");
-            }
-            if default.is_some() {
-                abort!(f, "Cannot specify default for nested types");
-            }
-            let t = &f.ty;
-            default = Some(quote! {#t::new()});
-            Type::Nested(quote! {#t}.to_string())
-        };
+        // Assume nested field if no coder.
+        let coder = coder.unwrap_or(Coder::WithoutConfig(f.ty.clone()));
 
         let ident = f.ident.as_ref().unwrap();
-        let default = default.unwrap();
 
+        let kind = match (condition, default) {
+            (None, None) => FieldKind::Unconditional(coder),
+            (Some(cond), None) => FieldKind::Conditional(cond, coder),
+            (None, Some(_)) => {
+                abort!(f, "Field has default but no condition");
+            }
+            (Some(cond), Some(def)) => FieldKind::Defaulted(def, cond, coder),
+        };
         Field {
             name: ident.clone(),
-            condition,
-            default,
-            ty,
+            kind,
+            ty: f.ty.clone(),
         }
     }
 
-    // Produce reading code (possibly with tracing).
+    // Produces reading code (possibly with tracing).
     fn read_fun(&self, trace: bool) -> TokenStream2 {
         let ident = &self.name;
-        let default = &self.default;
-        let read_command = match &self.ty {
-            Type::Nested(_) => quote! { self.#ident.read(br)?;},
-            Type::Bool => quote! { self.#ident = Bool{}.read(br)?;},
-            Type::U32(coder, _) => quote! { self.#ident = #coder.read(br)?; },
+        let ty = &self.ty;
+        let get_config = |coder: &Coder| match coder {
+            Coder::WithoutConfig(_) => quote! { () },
+            Coder::U32(coder, _) => quote! { #coder },
         };
-        let pre_read_trace = match (&self.ty, trace) {
-            (_, false) => quote! {},
-            (Type::Nested(nested), true) => {
-                quote! { eprintln!("reading nested {} {}", #nested, stringify!(#ident)); }
-            }
-            (Type::Bool, true) => quote! { eprint!("reading bool {}: ", stringify!(#ident)); },
-            (Type::U32(_, pretty_coder), true) => {
-                quote! { eprint!("reading {} with {}: ", stringify!(#ident), #pretty_coder); }
-            }
-        };
-        let post_read_trace = match (&self.ty, trace) {
-            (Type::Nested(_), true) | (_, false) => quote! {},
-            _ => quote! { eprintln!("{}", self.#ident); },
-        };
-        let post_default_trace = match (&self.ty, trace) {
-            (_, false) => quote! {},
-            (Type::Nested(_), true) => {
-                quote! { eprintln!("setting {} to default value", stringify!(#ident)); }
-            }
-            (_, true) => {
-                quote! { eprintln!("setting {} to default value {}", stringify!(#ident), #default); }
-            }
-        };
-        let cond_true_trace = match (&self.condition, trace) {
-            (Some((_, pretty_cond)), true) => quote! { eprint!("{} is true, ", #pretty_cond); },
-            _ => quote! {},
-        };
-        let cond_false_trace = match (&self.condition, trace) {
-            (Some((_, pretty_cond)), true) => quote! { eprint!("{} is false, ", #pretty_cond); },
-            _ => quote! {},
-        };
-        if let Some((cond, _)) = &self.condition {
-            quote! {
-                if #cond {
-                    #cond_true_trace
-                    #pre_read_trace
-                    #read_command
-                    #post_read_trace
+        match &self.kind {
+            FieldKind::Unconditional(coder) => {
+                let cfg = get_config(coder);
+                let trc = if trace {
+                    quote! { eprintln!("Setting {} to {:?}", stringify!(#ident), #ident); }
                 } else {
-                    self.#ident = #default;
-                    #cond_false_trace
-                    #post_default_trace;
+                    quote! {}
+                };
+                quote! {
+                    let #ident = <#ty>::read_unconditional(#cfg, br)?;
+                    #trc
                 }
             }
-        } else {
-            quote! {
-                #pre_read_trace
-                #read_command
-                #post_read_trace
+            FieldKind::Conditional(condition, coder) => {
+                let cfg = get_config(coder);
+                let cnd = &condition.expr;
+                let pretty_cnd = &condition.pretty;
+                let trc = if trace {
+                    quote! { eprintln!("{} is {}, setting {} to {:?}", #pretty_cnd, #cnd, stringify!(#ident), #ident); }
+                } else {
+                    quote! {}
+                };
+                quote! {
+                    let #ident = <#ty>::read_conditional(#cfg, #cnd, br)?;
+                    #trc
+                }
+            }
+            FieldKind::Defaulted(default, condition, coder) => {
+                let cfg = get_config(coder);
+                let cnd = &condition.expr;
+                let pretty_cnd = &condition.pretty;
+                let trc = if trace {
+                    quote! { eprintln!("{} is {}, setting {} to {:?}", #pretty_cnd, #cnd, stringify!(#ident), #ident); }
+                } else {
+                    quote! {}
+                };
+                quote! {
+                    let #ident = <#ty>::read_defaulted(#cfg, #cnd, #default, br)?;
+                    #trc
+                }
             }
         }
-    }
-
-    fn init_fun(&self) -> TokenStream2 {
-        let default = &self.default;
-        let ident = &self.name;
-        quote! {#ident : #default}
     }
 
     #[cfg(feature = "tex")]
     fn texify(&self) -> String {
         let mut ret = String::new() + "    ";
         let minted = "\\mintinline[breaklines]{rust}{";
-        if let Some((_, pretty_cond)) = &self.condition {
+        let (coder, condition, default) = match &self.kind {
+            FieldKind::Unconditional(coder) => (coder, None, None),
+            FieldKind::Conditional(condition, coder) => (coder, Some(&condition.pretty), None),
+            FieldKind::Defaulted(default, condition, coder) => {
+                (coder, Some(&condition.pretty), Some(default.to_string()))
+            }
+        };
+        if let Some(pretty_cond) = condition {
             ret += minted;
-            ret += &pretty_cond.replace("self.", "");
+            ret += &pretty_cond;
             ret += "}";
         }
         ret += " & ";
-        ret += &match &self.ty {
-            Type::Nested(nested) => "\\hyperref[hdr:".to_owned() + nested + "]{" + nested + "}",
-            Type::Bool => minted.to_owned() + "bool }",
-            Type::U32(_, pretty_coder) => minted.to_owned() + pretty_coder + " }",
+        ret += &match &coder {
+            Coder::WithoutConfig(ty) => {
+                let ty = quote! {#ty}.to_string();
+                "\\hyperref[hdr:".to_owned() + &ty + "]{" + &ty + "}"
+            }
+            Coder::U32(_, pretty_coder) => minted.to_owned() + pretty_coder + " }",
         };
         ret += " & ";
-        ret += &match &self.ty {
-            Type::Nested(_) => String::new(),
-            _ => minted.to_owned() + &self.default.to_string() + " }",
+        if let Some(dfl) = default {
+            ret += &(minted.to_owned() + &dfl + " }")
         };
         ret += " & ";
         ret += minted;
@@ -390,24 +372,22 @@ fn derive_struct(input: DeriveInput) -> TokenStream2 {
         abort!(data.fields, "only named fields are supported (for now?)");
     };
 
-    let fields: Vec<Field> = fields.iter().map(Field::parse).collect();
-    let fields_read = fields.iter().map(|x: &Field| x.read_fun(trace));
-    let fields_init = fields.iter().map(|x: &Field| x.init_fun());
+    let fields: Vec<_> = fields.iter().map(Field::parse).collect();
+    let fields_read = fields.iter().map(|x| x.read_fun(trace));
+    let fields_names = fields.iter().map(|x| &x.name);
 
     texify(&quote! {#name}.to_string(), &fields);
 
     quote! {
-        impl #name {
-            pub fn new() -> #name {
-                #name {
-                    #(#fields_init),*
-                }
-            }
-        }
         impl crate::headers::JxlHeader for #name {
-            fn read(&mut self, br: &mut BitReader) -> Result<(), Error> {
+            fn read(br: &mut BitReader) -> Result<#name, Error> {
+                use crate::headers::encodings::UnconditionalCoder;
+                use crate::headers::encodings::ConditionalCoder;
+                use crate::headers::encodings::DefaultedCoder;
                 #(#fields_read)*
-                Ok(())
+                Ok(#name {
+                    #(#fields_names),*
+                })
             }
         }
     }
