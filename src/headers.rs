@@ -19,7 +19,7 @@ use crate::headers::encodings::UnconditionalCoder;
 pub use image_metadata::*;
 pub use size::Size;
 
-#[derive(UnconditionalCoder)]
+#[derive(UnconditionalCoder, Debug)]
 pub struct FileHeaders {
     #[allow(dead_code)]
     signature: Signature,

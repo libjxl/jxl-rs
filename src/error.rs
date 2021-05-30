@@ -19,4 +19,6 @@ pub enum Error {
     InvalidMantissa(i32),
     #[error("Invalid bits_per_sample: {0}")]
     InvalidBitsPerSample(u32),
+    #[error("Invalid enum value {0} for {1}")]
+    InvalidEnum(u32, String),
 }

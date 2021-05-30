@@ -27,6 +27,12 @@ pub enum U32Coder {
     Select(U32, U32, U32, U32),
 }
 
+trait CoderConfig
+where
+    Self: Sized,
+{
+}
+
 pub trait UnconditionalCoder<Config>
 where
     Self: Sized,

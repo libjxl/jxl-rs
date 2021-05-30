@@ -14,6 +14,9 @@ use syn::{parse_macro_input, DeriveInput};
 #[cfg(feature = "tex")]
 use std::fs;
 
+#[cfg(feature = "tex")]
+const THIN_LINE: &'static str = "    \\noalign{\\color{gray!50}\\hrule height 0.1pt}\n";
+
 fn get_bits(expr_call: &syn::ExprCall) -> syn::Expr {
     if let syn::Expr::Path(ep) = &*expr_call.func {
         if !ep.path.is_ident("Bits") {
@@ -137,6 +140,7 @@ fn prettify_condition(cond: &syn::Expr) -> String {
         .to_string()
         .replace(" . ", ".")
         .replace("! ", "!")
+        .replace(" :: ", "::")
 }
 
 fn prettify_coder(coder: &syn::Expr) -> String {
@@ -155,6 +159,12 @@ fn prettify_type(ty: &syn::Type) -> String {
 #[cfg(feature = "tex")]
 fn prettify_default(d: String, ty: &str) -> String {
     d.replace(&(ty.to_owned() + " :: default()"), "")
+        .replace(" :: ", "::")
+}
+
+#[cfg(feature = "tex")]
+fn minted(x: &str) -> String {
+    "\\mintinline[breaklines]{rust}{".to_owned() + x + "}"
 }
 
 #[derive(Debug)]
@@ -429,7 +439,6 @@ impl Field {
 
     #[cfg(feature = "tex")]
     fn texify(&self, mut row: usize) -> String {
-        let minted = |x| "\\mintinline[breaklines]{rust}{".to_owned() + x + "}";
         let ident = &self.name;
         let ident = &quote! {#ident}.to_string();
         let (coder, condition) = match &self.kind {
@@ -440,7 +449,7 @@ impl Field {
         let mut ret = String::new();
         let mut add_row = |cond: Option<&str>, coder: &str, dfl: Option<&str>, ident: &str| {
             if row != 0 {
-                ret += "    \\noalign{\\color{gray!50}\\hrule height 0.1pt}\n";
+                ret += THIN_LINE;
             }
             row += 1;
             ret += &format!(
@@ -626,6 +635,88 @@ fn derive_struct(input: DeriveInput) -> TokenStream2 {
     }
 }
 
+#[cfg(feature = "tex")]
+fn texify_enum(input: &DeriveInput) -> () {
+    let name = &input.ident;
+    let name = &quote! {#name}.to_string();
+    let mut table = String::new();
+    table += &format!(
+        "\\begin{{table}}[h]\n  \\caption{{{} enum. \\label{{hdr:{}}}}}\n",
+        name, name
+    );
+    table += r#"
+  \centering
+  \begin{tabular}{cc}
+    \toprule
+    \bf name & \bf value \\
+    \midrule
+"#;
+    let data = if let syn::Data::Enum(enum_data) = &input.data {
+        enum_data
+    } else {
+        abort!(input, "derive_enum didn't get a enum");
+    };
+    let mut last_variant = -1;
+    for (row, var) in data.variants.iter().enumerate() {
+        let ident = &var.ident;
+        let discr = &var.discriminant;
+        let n = quote! {#ident}.to_string();
+        let discr = if let Some((_, d)) = discr {
+            let d = quote! {#d}.to_string().parse::<i32>().unwrap();
+            d
+        } else {
+            last_variant + 1
+        };
+        last_variant = discr;
+        if row != 0 {
+            table += THIN_LINE;
+        }
+        table += &format!(
+            "    {} & {} \\\\\n",
+            &minted(&n),
+            &minted(&discr.to_string())
+        );
+    }
+    table += r#"
+    \bottomrule
+  \end{tabular}
+\end{table}"#;
+    // TODO(veluca93): this may be problematic.
+    fs::create_dir_all("tex").unwrap();
+    let fname = format!("tex/{}.tex", name.to_owned());
+    fs::write(fname, table).unwrap();
+}
+
+#[cfg(not(feature = "tex"))]
+fn texify_enum(_: &DeriveInput) -> () {}
+
+fn derive_enum(input: DeriveInput) -> TokenStream2 {
+    texify_enum(&input);
+    let name = &input.ident;
+    quote! {
+        impl crate::headers::encodings::UnconditionalCoder<U32Coder> for #name {
+            fn read_unconditional(config: U32Coder, br: &mut BitReader) -> Result<#name, Error> {
+                use num_traits::FromPrimitive;
+                let u = u32::read_unconditional(config, br)?;
+                if let Some(e) =  #name::from_u32(u) {
+                    Ok(e)
+                } else {
+                    Err(Error::InvalidEnum(u, stringify!(#name).to_string()))
+                }
+            }
+        }
+        impl crate::headers::encodings::UnconditionalCoder<()> for #name {
+            fn read_unconditional(config: (), br: &mut BitReader) -> Result<#name, Error> {
+                #name::read_unconditional(
+                    U32Coder::Select(
+                        U32::Val(0), U32::Val(1),
+                        U32::BitsOffset{n: 4, off: 2},
+                        U32::BitsOffset{n: 6, off: 18}), br)
+            }
+        }
+    }
+}
+
 #[proc_macro_error]
 #[proc_macro_derive(
     UnconditionalCoder,
@@ -646,6 +737,7 @@ pub fn derive_jxl_headers(input: TokenStream) -> TokenStream {
 
     match &input.data {
         syn::Data::Struct(_) => derive_struct(input).into(),
+        syn::Data::Enum(_) => derive_enum(input).into(),
         _ => abort!(input, "Only implemented for struct"),
     }
 }

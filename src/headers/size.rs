@@ -4,12 +4,26 @@
 // license that can be found in the LICENSE file.
 
 extern crate jxl_headers_derive;
+extern crate num_derive;
 
 use jxl_headers_derive::UnconditionalCoder;
 
 use crate::bit_reader::BitReader;
 use crate::error::Error;
 use crate::headers::encodings::*;
+use num_derive::FromPrimitive;
+
+#[derive(UnconditionalCoder, Copy, Clone, PartialEq, Debug, FromPrimitive)]
+enum AspectRatio {
+    Unknown = 0,
+    Ratio1Over1 = 1,
+    Ratio12Over10 = 2,
+    Ratio4Over3 = 3,
+    Ratio3Over2 = 4,
+    Ratio16Over9 = 5,
+    Ratio5Over4 = 6,
+    Ratio2Over1 = 7,
+}
 
 #[derive(UnconditionalCoder, Debug)]
 pub struct Size {
@@ -21,11 +35,11 @@ pub struct Size {
     #[coder(1 + u2S(Bits(9), Bits(13), Bits(18), Bits(30)))]
     ysize: Option<u32>,
     #[coder(Bits(3))]
-    ratio: u32,
-    #[condition(small && ratio == 0)]
+    ratio: AspectRatio,
+    #[condition(small && ratio == AspectRatio::Unknown)]
     #[coder(Bits(5) + 1)]
     xsize_div8: Option<u32>,
-    #[condition(!small && ratio == 0)]
+    #[condition(!small && ratio == AspectRatio::Unknown)]
     #[coder(1 + u2S(Bits(9), Bits(13), Bits(18), Bits(30)))]
     xsize: Option<u32>,
 }
@@ -40,25 +54,25 @@ pub struct Preview {
     #[coder(1 + u2S(Bits(6), Bits(8) + 64, Bits(10) + 320, Bits(12) + 1344))]
     ysize: Option<u32>,
     #[coder(Bits(3))]
-    ratio: u32,
-    #[condition(div8 && ratio == 0)]
+    ratio: AspectRatio,
+    #[condition(div8 && ratio == AspectRatio::Unknown)]
     #[coder(u2S(16, 32, Bits(5) + 1, Bits(9) + 33))]
     xsize_div8: Option<u32>,
-    #[condition(!div8 && ratio == 0)]
+    #[condition(!div8 && ratio == AspectRatio::Unknown)]
     #[coder(1 + u2S(Bits(6), Bits(8) + 64, Bits(10) + 320, Bits(12) + 1344))]
     xsize: Option<u32>,
 }
 
-fn map_aspect_ratio(ysize: u32, ratio: u32) -> u32 {
+fn map_aspect_ratio(ysize: u32, ratio: AspectRatio) -> u32 {
     match ratio {
-        1 => ysize,
-        2 => (ysize as u64 * 12 / 10) as u32,
-        3 => (ysize as u64 * 4 / 3) as u32,
-        4 => (ysize as u64 * 3 / 2) as u32,
-        5 => (ysize as u64 * 16 / 9) as u32,
-        6 => (ysize as u64 * 5 / 4) as u32,
-        7 => ysize * 2,
-        _ => panic!("Invalid ratio: {}", ratio),
+        AspectRatio::Unknown => panic!("Invalid call to map_aspect_ratio"),
+        AspectRatio::Ratio1Over1 => ysize,
+        AspectRatio::Ratio12Over10 => (ysize as u64 * 12 / 10) as u32,
+        AspectRatio::Ratio4Over3 => (ysize as u64 * 4 / 3) as u32,
+        AspectRatio::Ratio3Over2 => (ysize as u64 * 3 / 2) as u32,
+        AspectRatio::Ratio16Over9 => (ysize as u64 * 16 / 9) as u32,
+        AspectRatio::Ratio5Over4 => (ysize as u64 * 5 / 4) as u32,
+        AspectRatio::Ratio2Over1 => ysize * 2,
     }
 }
 
@@ -72,7 +86,7 @@ impl Size {
     }
 
     pub fn xsize(&self) -> u32 {
-        if self.ratio == 0 {
+        if self.ratio == AspectRatio::Unknown {
             if self.small {
                 self.xsize_div8.unwrap() * 8
             } else {
@@ -94,7 +108,7 @@ impl Preview {
     }
 
     pub fn xsize(&self) -> u32 {
-        if self.ratio == 0 {
+        if self.ratio == AspectRatio::Unknown {
             if self.div8 {
                 self.xsize_div8.unwrap() * 8
             } else {

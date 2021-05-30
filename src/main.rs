@@ -15,7 +15,7 @@ fn parse_jxl_codestream(data: &[u8]) -> Result<(), jxl::error::Error> {
     let mut br = BitReader::new(data);
     let fh = FileHeaders::read(&mut br)?;
     println!("Image size: {} x {}", fh.size.xsize(), fh.size.ysize());
-    println!("Image metadata: {:#?}", fh.image_metadata);
+    println!("File header: {:#?}", fh);
     Ok(())
 }
 

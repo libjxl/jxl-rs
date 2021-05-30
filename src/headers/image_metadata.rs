@@ -6,6 +6,7 @@
 extern crate jxl_headers_derive;
 
 use jxl_headers_derive::UnconditionalCoder;
+use num_derive::FromPrimitive;
 
 use crate::bit_reader::BitReader;
 use crate::error::Error;
@@ -13,6 +14,7 @@ use crate::headers::bit_depth::*;
 use crate::headers::encodings::*;
 use crate::headers::size::*;
 
+#[derive(Debug)]
 pub struct Signature;
 
 impl Signature {
@@ -31,6 +33,18 @@ impl crate::headers::encodings::UnconditionalCoder<()> for Signature {
             Ok(Signature {})
         }
     }
+}
+
+#[derive(UnconditionalCoder, Copy, Clone, PartialEq, Debug, FromPrimitive)]
+enum Orientation {
+    Identity = 1,
+    FlipHorizontal = 2,
+    Rotate180 = 3,
+    FlipVertical = 4,
+    Transpose = 5,
+    Rotate90 = 6,
+    AntiTranspose = 7,
+    Rotate270 = 8,
 }
 
 #[derive(UnconditionalCoder, Debug)]
@@ -52,9 +66,9 @@ pub struct ImageMetadata {
     #[default(false)]
     extra_fields: bool,
     #[condition(extra_fields)]
-    #[default(1)]
-    #[coder(Bits(3)+1)]
-    orientation: u32,
+    #[default(Orientation::Identity)]
+    #[coder(Bits(3) + 1)]
+    orientation: Orientation,
     #[condition(extra_fields)]
     #[default(false)]
     have_intrinsic_size: bool, // TODO(veluca93): fold have_ fields in Option.
