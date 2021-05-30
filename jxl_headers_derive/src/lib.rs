@@ -148,12 +148,16 @@ fn prettify_coder(coder: &syn::Expr) -> String {
 }
 
 #[cfg(feature = "tex")]
-fn prettify_type(ty: &syn::Type) -> String {
+fn prettify_type(ty: &syn::Type) -> (String, String) {
     let mut ret = (quote! {#ty}).to_string().replace(' ', "");
     if ret.starts_with("Option<") {
         ret = ret[7..ret.len() - 1].to_owned();
     }
-    return ret;
+    if ret.starts_with("Vec<") {
+        ret = ret[4..ret.len() - 1].to_owned();
+    }
+    let ret_href = ret.replace("[", "_").replace("]", "_").replace(";", "_");
+    (ret_href, ret)
 }
 
 #[cfg(feature = "tex")]
@@ -203,7 +207,7 @@ impl Condition {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 struct U32 {
     coder: TokenStream2,
     pretty: String,
@@ -214,6 +218,36 @@ enum Coder {
     WithoutConfig(syn::Type),
     U32(U32),
     Select(Condition, U32, U32),
+    Vector(U32, Box<Coder>),
+}
+
+impl Coder {
+    fn config(&self, all_default_field: &Option<syn::Ident>) -> TokenStream2 {
+        match self {
+            Coder::WithoutConfig(_) => quote! { () },
+            Coder::U32(U32 { coder, pretty: _ }) => quote! { #coder },
+            Coder::Select(
+                condition,
+                U32 {
+                    coder: coder_true,
+                    pretty: _,
+                },
+                U32 {
+                    coder: coder_false,
+                    pretty: _,
+                },
+            ) => {
+                let cnd = condition.get_expr(all_default_field).unwrap();
+                quote! {
+                    SelectCoder{use_true: #cnd, coder_true: #coder_true, coder_false: #coder_false}
+                }
+            }
+            Coder::Vector(U32 { coder, pretty: _ }, value_coder) => {
+                let value_coder = value_coder.config(all_default_field);
+                quote! { VectorCoder{size_coder: #coder, value_coder: #value_coder}}
+            }
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -242,6 +276,8 @@ impl Field {
         let mut coder_false = None;
 
         let mut is_all_default = false;
+
+        let mut size_coder = None;
 
         // Parse attributes.
         for a in &f.attrs {
@@ -316,6 +352,17 @@ impl Field {
                         pretty,
                     });
                 }
+                Some("size_coder") => {
+                    if size_coder.is_some() {
+                        abort!(f, "Repeated size_coder");
+                    }
+                    let coder_ast = a.parse_args::<syn::Expr>().unwrap();
+                    let pretty = prettify_coder(&coder_ast);
+                    size_coder = Some(U32 {
+                        coder: parse_coder(coder_ast),
+                        pretty,
+                    });
+                }
                 _ => {}
             }
         }
@@ -348,7 +395,14 @@ impl Field {
         };
 
         // Assume nested field if no coder.
-        let coder = coder.unwrap_or(Coder::WithoutConfig(f.ty.clone()));
+        let mut coder = coder.unwrap_or(Coder::WithoutConfig(f.ty.clone()));
+
+        if let Some(c) = size_coder {
+            if default.is_some() {
+                abort!(f, "size_coder and default are incompatible");
+            }
+            coder = Coder::Vector(c, Box::new(coder))
+        }
 
         let ident = f.ident.as_ref().unwrap();
 
@@ -372,41 +426,21 @@ impl Field {
     fn read_fun(&self, all_default_field: &Option<syn::Ident>, trace: bool) -> TokenStream2 {
         let ident = &self.name;
         let ty = &self.ty;
-        let get_config = |coder: &Coder| match coder {
-            Coder::WithoutConfig(_) => quote! { () },
-            Coder::U32(U32 { coder, pretty: _ }) => quote! { #coder },
-            Coder::Select(
-                condition,
-                U32 {
-                    coder: coder_true,
-                    pretty: _,
-                },
-                U32 {
-                    coder: coder_false,
-                    pretty: _,
-                },
-            ) => {
-                let cnd = condition.get_expr(all_default_field).unwrap();
-                quote! {
-                    SelectCoder{use_true: #cnd, coder_true: #coder_true, coder_false: #coder_false}
-                }
-            }
-        };
         match &self.kind {
             FieldKind::Unconditional(coder) => {
-                let cfg = get_config(coder);
+                let cfg = coder.config(all_default_field);
                 let trc = if trace {
                     quote! { eprintln!("Setting {} to {:?}", stringify!(#ident), #ident); }
                 } else {
                     quote! {}
                 };
                 quote! {
-                    let #ident = <#ty>::read_unconditional(#cfg, br)?;
+                    let #ident = <#ty>::read_unconditional(&#cfg, br)?;
                     #trc
                 }
             }
             FieldKind::Conditional(condition, coder) => {
-                let cfg = get_config(coder);
+                let cfg = coder.config(all_default_field);
                 let cnd = condition.get_expr(all_default_field).unwrap();
                 let pretty_cnd = condition.get_pretty(all_default_field);
                 let trc = if trace {
@@ -415,12 +449,12 @@ impl Field {
                     quote! {}
                 };
                 quote! {
-                    let #ident = <#ty>::read_conditional(#cfg, #cnd, br)?;
+                    let #ident = <#ty>::read_conditional(&#cfg, #cnd, br)?;
                     #trc
                 }
             }
             FieldKind::Defaulted(condition, coder) => {
-                let cfg = get_config(coder);
+                let cfg = coder.config(all_default_field);
                 let cnd = condition.get_expr(all_default_field).unwrap();
                 let pretty_cnd = condition.get_pretty(all_default_field);
                 let default = &self.default;
@@ -430,7 +464,7 @@ impl Field {
                     quote! {}
                 };
                 quote! {
-                    let #ident = <#ty>::read_defaulted(#cfg, #cnd, #default, br)?;
+                    let #ident = <#ty>::read_defaulted(&#cfg, #cnd, #default, br)?;
                     #trc
                 }
             }
@@ -438,45 +472,21 @@ impl Field {
     }
 
     #[cfg(feature = "tex")]
-    fn texify(&self, mut row: usize) -> String {
-        let ident = &self.name;
-        let ident = &quote! {#ident}.to_string();
-        let (coder, condition) = match &self.kind {
-            FieldKind::Unconditional(coder) => (coder, None),
-            FieldKind::Conditional(condition, coder) => (coder, Some(&condition.pretty)),
-            FieldKind::Defaulted(condition, coder) => (coder, Some(&condition.pretty)),
-        };
-        let mut ret = String::new();
-        let mut add_row = |cond: Option<&str>, coder: &str, dfl: Option<&str>, ident: &str| {
-            if row != 0 {
-                ret += THIN_LINE;
-            }
-            row += 1;
-            ret += &format!(
-                "    {} & {} & {} & {} \\\\\n",
-                cond.unwrap_or(""),
-                coder,
-                dfl.unwrap_or(""),
-                ident
-            );
-        };
-        let default = self.default.as_ref().map(|d| quote! { #d }.to_string());
-        let default = if let Coder::WithoutConfig(ty) = &coder {
-            let ty = prettify_type(ty);
-            default.map(|d| prettify_default(d, &ty))
-        } else {
-            default
-        };
-        let cond = condition.as_ref().map(|x| minted(x));
-        let dfl = default.as_ref().map(|x| minted(x));
-        let ident = minted(ident);
-
+    fn texify_coder_and_cond<F>(
+        cond: Option<&str>,
+        coder: &Coder,
+        dfl: Option<&str>,
+        ident: &str,
+        add_row: &mut F,
+    ) where
+        F: FnMut(Option<&str>, &str, Option<&str>, &str) -> (),
+    {
         match &coder {
             Coder::WithoutConfig(ty) => {
-                let ty = prettify_type(ty);
+                let (href_ty, ty) = prettify_type(ty);
                 add_row(
                     cond.as_deref(),
-                    &("\\hyperref[hdr:".to_owned() + &ty + "]{" + &ty + "}"),
+                    &("\\hyperref[hdr:".to_owned() + &href_ty + "]{" + &minted(&ty) + "}"),
                     dfl.as_deref(),
                     &ident,
                 );
@@ -510,19 +520,74 @@ impl Field {
                     "!(".to_owned() + condition + ")"
                 };
                 add_row(
-                    Some(&minted(&cond_true)),
-                    &minted(coder_true),
+                    Some(&cond_true),
+                    &minted(&coder_true),
                     dfl.as_deref(),
                     &ident,
                 );
                 add_row(
-                    Some(&minted(&cond_false)),
-                    &minted(coder_false),
+                    Some(&cond_false),
+                    &minted(&coder_false),
                     dfl.as_deref(),
                     &ident,
                 );
             }
+            Coder::Vector(size_coder, value_coder) => {
+                Field::texify_coder_and_cond(
+                    cond,
+                    &Coder::U32((*size_coder).clone()),
+                    Some("0"),
+                    &("num_".to_owned() + ident),
+                    add_row,
+                );
+                Field::texify_coder_and_cond(
+                    Some(&("0..num_".to_owned() + ident)),
+                    &**value_coder,
+                    None,
+                    ident,
+                    add_row,
+                );
+            }
         };
+    }
+
+    #[cfg(feature = "tex")]
+    fn texify(&self, mut row: usize) -> String {
+        let ident = &self.name;
+        let ident = &quote! {#ident}.to_string();
+        let (coder, condition) = match &self.kind {
+            FieldKind::Unconditional(coder) => (coder, None),
+            FieldKind::Conditional(condition, coder) => (coder, Some(&condition.pretty)),
+            FieldKind::Defaulted(condition, coder) => (coder, Some(&condition.pretty)),
+        };
+        let mut ret = String::new();
+        let mut add_row = |cond: Option<&str>, coder: &str, dfl: Option<&str>, ident: &str| {
+            if row != 0 {
+                ret += THIN_LINE;
+            }
+            row += 1;
+            ret += &format!(
+                "    {} & {} & {} & {} \\\\\n",
+                minted(cond.unwrap_or("")),
+                coder,
+                minted(dfl.unwrap_or("")),
+                minted(ident)
+            );
+        };
+        let default = self.default.as_ref().map(|d| quote! { #d }.to_string());
+        let default = if let Coder::WithoutConfig(ty) = &coder {
+            let ty = prettify_type(ty).1;
+            default.map(|d| prettify_default(d, &ty))
+        } else {
+            default
+        };
+        Field::texify_coder_and_cond(
+            condition.map(String::as_str),
+            coder,
+            default.as_deref(),
+            ident,
+            &mut add_row,
+        );
         ret
     }
 }
@@ -620,7 +685,7 @@ fn derive_struct(input: DeriveInput) -> TokenStream2 {
     quote! {
         #impl_default
         impl crate::headers::encodings::UnconditionalCoder<()> for #name {
-            fn read_unconditional(_: (), br: &mut BitReader) -> Result<#name, Error> {
+            fn read_unconditional(_: &(), br: &mut BitReader) -> Result<#name, Error> {
                 use crate::headers::encodings::UnconditionalCoder;
                 use crate::headers::encodings::ConditionalCoder;
                 use crate::headers::encodings::DefaultedCoder;
@@ -695,7 +760,7 @@ fn derive_enum(input: DeriveInput) -> TokenStream2 {
     let name = &input.ident;
     quote! {
         impl crate::headers::encodings::UnconditionalCoder<U32Coder> for #name {
-            fn read_unconditional(config: U32Coder, br: &mut BitReader) -> Result<#name, Error> {
+            fn read_unconditional(config: &U32Coder, br: &mut BitReader) -> Result<#name, Error> {
                 use num_traits::FromPrimitive;
                 let u = u32::read_unconditional(config, br)?;
                 if let Some(e) =  #name::from_u32(u) {
@@ -706,9 +771,9 @@ fn derive_enum(input: DeriveInput) -> TokenStream2 {
             }
         }
         impl crate::headers::encodings::UnconditionalCoder<()> for #name {
-            fn read_unconditional(config: (), br: &mut BitReader) -> Result<#name, Error> {
+            fn read_unconditional(config: &(), br: &mut BitReader) -> Result<#name, Error> {
                 #name::read_unconditional(
-                    U32Coder::Select(
+                    &U32Coder::Select(
                         U32::Val(0), U32::Val(1),
                         U32::BitsOffset{n: 4, off: 2},
                         U32::BitsOffset{n: 6, off: 18}), br)
@@ -729,7 +794,8 @@ fn derive_enum(input: DeriveInput) -> TokenStream2 {
         select_coder,
         coder_true,
         coder_false,
-        validate
+        validate,
+        size_coder,
     )
 )]
 pub fn derive_jxl_headers(input: TokenStream) -> TokenStream {

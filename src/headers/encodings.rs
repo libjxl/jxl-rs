@@ -27,27 +27,33 @@ pub enum U32Coder {
     Select(U32, U32, U32, U32),
 }
 
-trait CoderConfig
-where
-    Self: Sized,
-{
-}
-
 pub trait UnconditionalCoder<Config>
 where
     Self: Sized,
 {
-    fn read_unconditional(config: Config, br: &mut BitReader) -> Result<Self, Error>;
+    fn read_unconditional(config: &Config, br: &mut BitReader) -> Result<Self, Error>;
 }
 
 impl UnconditionalCoder<()> for bool {
-    fn read_unconditional(_: (), br: &mut BitReader) -> Result<bool, Error> {
+    fn read_unconditional(_: &(), br: &mut BitReader) -> Result<bool, Error> {
         Ok(br.read(1)? != 0)
     }
 }
 
+impl UnconditionalCoder<()> for f32 {
+    fn read_unconditional(_: &(), br: &mut BitReader) -> Result<f32, Error> {
+        use half::f16;
+        let ret = f16::from_bits(br.read(16)? as u16);
+        if !ret.is_finite() {
+            Err(Error::FloatNaNOrInf)
+        } else {
+            Ok(ret.to_f32())
+        }
+    }
+}
+
 impl UnconditionalCoder<U32Coder> for u32 {
-    fn read_unconditional(config: U32Coder, br: &mut BitReader) -> Result<u32, Error> {
+    fn read_unconditional(config: &U32Coder, br: &mut BitReader) -> Result<u32, Error> {
         match config {
             U32Coder::Direct(u) => u.read(br),
             U32Coder::Select(u0, u1, u2, u3) => {
@@ -64,18 +70,71 @@ impl UnconditionalCoder<U32Coder> for u32 {
     }
 }
 
+impl UnconditionalCoder<()> for String {
+    fn read_unconditional(_: &(), br: &mut BitReader) -> Result<String, Error> {
+        let len = u32::read_unconditional(
+            &U32Coder::Select(
+                U32::Val(0),
+                U32::Bits(4),
+                U32::BitsOffset { n: 5, off: 16 },
+                U32::BitsOffset { n: 10, off: 48 },
+            ),
+            br,
+        )?;
+        let mut ret = String::new();
+        ret.reserve(len as usize);
+        for _ in 0..len {
+            ret.push(br.read(8)? as u8 as char);
+        }
+        Ok(ret)
+    }
+}
+
+impl<T: UnconditionalCoder<Config>, Config, const N: usize> UnconditionalCoder<Config> for [T; N] {
+    fn read_unconditional(config: &Config, br: &mut BitReader) -> Result<[T; N], Error> {
+        use array_init::try_array_init;
+        try_array_init(|_| T::read_unconditional(config, br))
+    }
+}
+
+pub struct VectorCoder<T: Sized> {
+    pub size_coder: U32Coder,
+    pub value_coder: T,
+}
+
+impl<Config, T: UnconditionalCoder<Config>> UnconditionalCoder<VectorCoder<Config>> for Vec<T> {
+    fn read_unconditional(
+        config: &VectorCoder<Config>,
+        br: &mut BitReader,
+    ) -> Result<Vec<T>, Error> {
+        let len = u32::read_unconditional(&config.size_coder, br)?;
+        let mut ret: Vec<T> = Vec::new();
+        ret.reserve_exact(len as usize);
+        for _ in 0..len {
+            ret.push(T::read_unconditional(&config.value_coder, br)?);
+        }
+        Ok(ret)
+    }
+}
+
 pub struct SelectCoder<T: Sized> {
     pub use_true: bool,
     pub coder_true: T,
     pub coder_false: T,
 }
 
-impl<T, U: UnconditionalCoder<T>> UnconditionalCoder<SelectCoder<T>> for U {
-    fn read_unconditional(config: SelectCoder<T>, br: &mut BitReader) -> Result<U, Error> {
+// Marker trait to avoid conflicting declarations for [T; N].
+pub trait Selectable {}
+impl Selectable for u32 {}
+
+impl<Config, T: UnconditionalCoder<Config> + Selectable> UnconditionalCoder<SelectCoder<Config>>
+    for T
+{
+    fn read_unconditional(config: &SelectCoder<Config>, br: &mut BitReader) -> Result<T, Error> {
         if config.use_true {
-            U::read_unconditional(config.coder_true, br)
+            T::read_unconditional(&config.coder_true, br)
         } else {
-            U::read_unconditional(config.coder_false, br)
+            T::read_unconditional(&config.coder_false, br)
         }
     }
 }
@@ -84,13 +143,16 @@ pub trait ConditionalCoder<Config>
 where
     Self: Sized,
 {
-    fn read_conditional(config: Config, condition: bool, br: &mut BitReader)
-        -> Result<Self, Error>;
+    fn read_conditional(
+        config: &Config,
+        condition: bool,
+        br: &mut BitReader,
+    ) -> Result<Self, Error>;
 }
 
 impl<Config, T: UnconditionalCoder<Config>> ConditionalCoder<Config> for Option<T> {
     fn read_conditional(
-        config: Config,
+        config: &Config,
         condition: bool,
         br: &mut BitReader,
     ) -> Result<Option<T>, Error> {
@@ -102,12 +164,36 @@ impl<Config, T: UnconditionalCoder<Config>> ConditionalCoder<Config> for Option<
     }
 }
 
+impl ConditionalCoder<()> for String {
+    fn read_conditional(_: &(), condition: bool, br: &mut BitReader) -> Result<String, Error> {
+        if condition {
+            String::read_unconditional(&(), br)
+        } else {
+            Ok(String::new())
+        }
+    }
+}
+
+impl<Config, T: UnconditionalCoder<Config>> ConditionalCoder<VectorCoder<Config>> for Vec<T> {
+    fn read_conditional(
+        config: &VectorCoder<Config>,
+        condition: bool,
+        br: &mut BitReader,
+    ) -> Result<Vec<T>, Error> {
+        if condition {
+            Vec::read_unconditional(config, br)
+        } else {
+            Ok(Vec::new())
+        }
+    }
+}
+
 pub trait DefaultedCoder<Config>
 where
     Self: Sized,
 {
     fn read_defaulted(
-        config: Config,
+        config: &Config,
         condition: bool,
         default: Self,
         br: &mut BitReader,
@@ -116,7 +202,7 @@ where
 
 impl<Config, T: UnconditionalCoder<Config>> DefaultedCoder<Config> for T {
     fn read_defaulted(
-        config: Config,
+        config: &Config,
         condition: bool,
         default: Self,
         br: &mut BitReader,

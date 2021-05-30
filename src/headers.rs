@@ -9,6 +9,7 @@ use jxl_headers_derive::UnconditionalCoder;
 
 pub mod bit_depth;
 pub mod encodings;
+pub mod extra_channels;
 pub mod image_metadata;
 pub mod size;
 
@@ -40,6 +41,6 @@ where
     T: UnconditionalCoder<()>,
 {
     fn read(br: &mut BitReader) -> Result<Self, Error> {
-        Self::read_unconditional((), br)
+        Self::read_unconditional(&(), br)
     }
 }

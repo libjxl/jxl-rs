@@ -12,6 +12,7 @@ use crate::bit_reader::BitReader;
 use crate::error::Error;
 use crate::headers::bit_depth::*;
 use crate::headers::encodings::*;
+use crate::headers::extra_channels::*;
 use crate::headers::size::*;
 
 #[derive(Debug)]
@@ -24,7 +25,7 @@ impl Signature {
 }
 
 impl crate::headers::encodings::UnconditionalCoder<()> for Signature {
-    fn read_unconditional(_: (), br: &mut BitReader) -> Result<Signature, Error> {
+    fn read_unconditional(_: &(), br: &mut BitReader) -> Result<Signature, Error> {
         let sig1 = br.read(8)? as u8;
         let sig2 = br.read(8)? as u8;
         if (sig1, sig2) != (0xff, 0x0a) {
@@ -88,8 +89,10 @@ pub struct ImageMetadata {
     bit_depth: BitDepth,
     #[default(true)]
     modular_16bit_sufficient: bool,
-    // extra_channel_info: Vec<ExtraChannelInfo>,
-    // xyb_encoded: bool,
+    #[size_coder(u2S(0, 1, Bits(4) + 2, Bits(12) + 1))]
+    extra_channel_info: Vec<ExtraChannelInfo>,
+    #[default(true)]
+    xyb_encoded: bool,
     // color_encoding: ColorEncoding,
     // tone_mapping: ToneMapping,
     // extensions: ???,

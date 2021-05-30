@@ -21,4 +21,8 @@ pub enum Error {
     InvalidBitsPerSample(u32),
     #[error("Invalid enum value {0} for {1}")]
     InvalidEnum(u32, String),
+    #[error("Value of dim_shift {0} is too large")]
+    DimShiftTooLarge(u32),
+    #[error("Float is NaN or Inf")]
+    FloatNaNOrInf,
 }
