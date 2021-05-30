@@ -15,7 +15,7 @@ use syn::{parse_macro_input, DeriveInput};
 use std::fs;
 
 #[cfg(feature = "tex")]
-const THIN_LINE: &'static str = "    \\noalign{\\color{gray!50}\\hrule height 0.1pt}\n";
+const THIN_LINE: &str = "    \\noalign{\\color{gray!50}\\hrule height 0.1pt}\n";
 
 fn get_bits(expr_call: &syn::ExprCall) -> syn::Expr {
     if let syn::Expr::Path(ep) = &*expr_call.func {
@@ -123,7 +123,7 @@ fn parse_coder(input: syn::Expr) -> TokenStream2 {
             };
             match (&**left, &**right) {
                 (syn::Expr::Call(expr_call), syn::Expr::Lit(lit)) => {
-                    return parse_u2s(&expr_call, Some(&lit));
+                    parse_u2s(&expr_call, Some(&lit))
                 }
                 _ => abort!(
                     input,
@@ -131,7 +131,7 @@ fn parse_coder(input: syn::Expr) -> TokenStream2 {
                 ),
             }
         }
-        _ => return parse_single_coder(&input, None),
+        _ => parse_single_coder(&input, None),
     }
 }
 
@@ -187,10 +187,7 @@ impl Condition {
                 None => Some(quote! { !#all_default }),
             }
         } else {
-            match &self.expr {
-                Some(expr) => Some(quote! { #expr }),
-                None => None,
-            }
+            self.expr.as_ref().map(|expr| quote! {#expr})
         }
     }
     fn get_pretty(&self, all_default_field: &Option<syn::Ident>) -> String {
@@ -367,7 +364,7 @@ impl Field {
             }
         }
 
-        if select_coder.is_some() {
+        if let Some(select_coder) = select_coder {
             if coder_true.is_none() || coder_false.is_none() {
                 abort!(
                     f,
@@ -378,7 +375,7 @@ impl Field {
                 abort!(f, "Invalid field, select_coder and coder are both present")
             }
             coder = Some(Coder::Select(
-                select_coder.unwrap(),
+                select_coder,
                 coder_true.unwrap(),
                 coder_false.unwrap(),
             ))
@@ -395,7 +392,7 @@ impl Field {
         };
 
         // Assume nested field if no coder.
-        let mut coder = coder.unwrap_or(Coder::WithoutConfig(f.ty.clone()));
+        let mut coder = coder.unwrap_or_else(|| Coder::WithoutConfig(f.ty.clone()));
 
         if let Some(c) = size_coder {
             if default.is_some() {
@@ -479,7 +476,7 @@ impl Field {
         ident: &str,
         add_row: &mut F,
     ) where
-        F: FnMut(Option<&str>, &str, Option<&str>, &str) -> (),
+        F: FnMut(Option<&str>, &str, Option<&str>, &str),
     {
         match &coder {
             Coder::WithoutConfig(ty) => {
@@ -593,7 +590,7 @@ impl Field {
 }
 
 #[cfg(feature = "tex")]
-fn texify(name: &str, fields: &[Field]) -> () {
+fn texify(name: &str, fields: &[Field]) {
     let mut table = String::new();
     table += &format!(
         "\\begin{{table}}[h]\n  \\caption{{{} bundle. \\label{{hdr:{}}}}}\n",
@@ -620,7 +617,7 @@ fn texify(name: &str, fields: &[Field]) -> () {
 }
 
 #[cfg(not(feature = "tex"))]
-fn texify(_: &str, _: &[Field]) -> () {}
+fn texify(_: &str, _: &[Field]) {}
 
 fn derive_struct(input: DeriveInput) -> TokenStream2 {
     let name = &input.ident;
@@ -701,7 +698,7 @@ fn derive_struct(input: DeriveInput) -> TokenStream2 {
 }
 
 #[cfg(feature = "tex")]
-fn texify_enum(input: &DeriveInput) -> () {
+fn texify_enum(input: &DeriveInput) {
     let name = &input.ident;
     let name = &quote! {#name}.to_string();
     let mut table = String::new();
@@ -727,8 +724,7 @@ fn texify_enum(input: &DeriveInput) -> () {
         let discr = &var.discriminant;
         let n = quote! {#ident}.to_string();
         let discr = if let Some((_, d)) = discr {
-            let d = quote! {#d}.to_string().parse::<i32>().unwrap();
-            d
+            (quote! {#d}).to_string().parse::<i32>().unwrap()
         } else {
             last_variant + 1
         };
@@ -753,7 +749,7 @@ fn texify_enum(input: &DeriveInput) -> () {
 }
 
 #[cfg(not(feature = "tex"))]
-fn texify_enum(_: &DeriveInput) -> () {}
+fn texify_enum(_: &DeriveInput) {}
 
 fn derive_enum(input: DeriveInput) -> TokenStream2 {
     texify_enum(&input);

@@ -14,10 +14,10 @@ pub enum U32 {
 
 impl U32 {
     pub fn read(&self, br: &mut BitReader) -> Result<u32, Error> {
-        match self {
-            &U32::Bits(n) => Ok(br.read(n)? as u32),
-            &U32::BitsOffset { n, off } => Ok(br.read(n)? as u32 + off),
-            &U32::Val(val) => Ok(val),
+        match *self {
+            U32::Bits(n) => Ok(br.read(n)? as u32),
+            U32::BitsOffset { n, off } => Ok(br.read(n)? as u32 + off),
+            U32::Val(val) => Ok(val),
         }
     }
 }

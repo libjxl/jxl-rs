@@ -15,7 +15,7 @@ use crate::headers::encodings::*;
 use crate::headers::extra_channels::*;
 use crate::headers::size::*;
 
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub struct Signature;
 
 impl Signature {

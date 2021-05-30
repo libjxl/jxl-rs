@@ -107,7 +107,7 @@ impl<'a> BitReader<'a> {
         Ok(())
     }
 
-    fn refill(&mut self) -> () {
+    fn refill(&mut self) {
         // See Refill() in C++ code.
         if self.data.len() >= 8 {
             let bits = LittleEndian::read_u64(self.data);
@@ -122,9 +122,9 @@ impl<'a> BitReader<'a> {
     }
 
     #[inline(never)]
-    fn refill_slow(&mut self) -> () {
+    fn refill_slow(&mut self) {
         while self.bits_in_buf < 56 {
-            if self.data.len() == 0 {
+            if self.data.is_empty() {
                 return;
             }
             self.bit_buf |= (self.data[0] as u64) << self.bits_in_buf;

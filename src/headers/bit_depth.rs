@@ -35,18 +35,16 @@ impl BitDepth {
             } else {
                 let mantissa_bits =
                     self.bits_per_sample as i32 - self.exponent_bits_per_sample as i32 - 1;
-                if mantissa_bits < 2 || mantissa_bits > 23 {
+                if !(2..=23).contains(&mantissa_bits) {
                     Err(Error::InvalidMantissa(mantissa_bits))
                 } else {
                     Ok(())
                 }
             }
+        } else if self.bits_per_sample > 31 {
+            Err(Error::InvalidBitsPerSample(self.bits_per_sample))
         } else {
-            if self.bits_per_sample > 31 {
-                Err(Error::InvalidBitsPerSample(self.bits_per_sample))
-            } else {
-                Ok(())
-            }
+            Ok(())
         }
     }
 }
