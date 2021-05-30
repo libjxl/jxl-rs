@@ -11,6 +11,7 @@ use num_derive::FromPrimitive;
 use crate::bit_reader::BitReader;
 use crate::error::Error;
 use crate::headers::bit_depth::*;
+use crate::headers::color_encoding::*;
 use crate::headers::encodings::*;
 use crate::headers::extra_channels::*;
 use crate::headers::size::*;
@@ -93,7 +94,8 @@ pub struct ImageMetadata {
     extra_channel_info: Vec<ExtraChannelInfo>,
     #[default(true)]
     xyb_encoded: bool,
-    // color_encoding: ColorEncoding,
+    #[default(ColorEncoding::default())]
+    color_encoding: ColorEncoding,
     // tone_mapping: ToneMapping,
     // extensions: ???,
 }

@@ -8,6 +8,7 @@ extern crate jxl_headers_derive;
 use jxl_headers_derive::UnconditionalCoder;
 
 pub mod bit_depth;
+pub mod color_encoding;
 pub mod encodings;
 pub mod extra_channels;
 pub mod image_metadata;

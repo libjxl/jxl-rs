@@ -70,6 +70,13 @@ impl UnconditionalCoder<U32Coder> for u32 {
     }
 }
 
+impl UnconditionalCoder<U32Coder> for i32 {
+    fn read_unconditional(config: &U32Coder, br: &mut BitReader) -> Result<i32, Error> {
+        let u = u32::read_unconditional(config, br)?;
+        Ok(((u >> 1) ^ (((!u) & 1).wrapping_rem(1))) as i32)
+    }
+}
+
 impl UnconditionalCoder<()> for String {
     fn read_unconditional(_: &(), br: &mut BitReader) -> Result<String, Error> {
         let len = u32::read_unconditional(
