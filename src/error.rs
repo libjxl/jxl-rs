@@ -25,4 +25,14 @@ pub enum Error {
     DimShiftTooLarge(u32),
     #[error("Float is NaN or Inf")]
     FloatNaNOrInf,
+    #[error("Invalid gamma value: {0}")]
+    InvalidGamma(f32),
+    #[error("Invalid color encoding: no ICC and unknown TF / ColorSpace")]
+    InvalidColorEncoding,
+    #[error("Invalid intensity_target: {0}")]
+    InvalidIntensityTarget(f32),
+    #[error("Invalid min_nits: {0}")]
+    InvalidMinNits(f32),
+    #[error("Invalid linear_below {1}, relative_to_max_display is {0}")]
+    InvalidLinearBelow(bool, f32),
 }

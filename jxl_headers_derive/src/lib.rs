@@ -219,10 +219,10 @@ enum Coder {
 }
 
 impl Coder {
-    fn config(&self, all_default_field: &Option<syn::Ident>) -> TokenStream2 {
+    fn config(&self, all_default_field: &Option<syn::Ident>) -> (TokenStream2, TokenStream2) {
         match self {
-            Coder::WithoutConfig(_) => quote! { () },
-            Coder::U32(U32 { coder, pretty: _ }) => quote! { #coder },
+            Coder::WithoutConfig(_) => (quote! {()}, quote! { () }),
+            Coder::U32(U32 { coder, pretty: _ }) => (quote! {U32Coder}, quote! { #coder }),
             Coder::Select(
                 condition,
                 U32 {
@@ -235,13 +235,19 @@ impl Coder {
                 },
             ) => {
                 let cnd = condition.get_expr(all_default_field).unwrap();
-                quote! {
-                    SelectCoder{use_true: #cnd, coder_true: #coder_true, coder_false: #coder_false}
-                }
+                (
+                    quote! {SelectCoder<U32Coder>},
+                    quote! {
+                        SelectCoder{use_true: #cnd, coder_true: #coder_true, coder_false: #coder_false}
+                    },
+                )
             }
             Coder::Vector(U32 { coder, pretty: _ }, value_coder) => {
-                let value_coder = value_coder.config(all_default_field);
-                quote! { VectorCoder{size_coder: #coder, value_coder: #value_coder}}
+                let (ty_value_coder, value_coder) = value_coder.config(all_default_field);
+                (
+                    quote! {VectorCoder<#ty_value_coder>},
+                    quote! {VectorCoder{size_coder: #coder, value_coder: #value_coder}},
+                )
             }
         }
     }
@@ -260,6 +266,7 @@ struct Field {
     kind: FieldKind,
     ty: syn::Type,
     default: Option<TokenStream2>,
+    nonserialized_inits: Vec<TokenStream2>,
 }
 
 impl Field {
@@ -275,6 +282,8 @@ impl Field {
         let mut is_all_default = false;
 
         let mut size_coder = None;
+
+        let mut nonserialized = vec![];
 
         // Parse attributes.
         for a in &f.attrs {
@@ -360,6 +369,10 @@ impl Field {
                         pretty,
                     });
                 }
+                Some("nonserialized") => {
+                    let init = a.parse_args::<syn::Expr>().unwrap();
+                    nonserialized.push(quote! {#init});
+                }
                 _ => {}
             }
         }
@@ -416,6 +429,7 @@ impl Field {
             kind,
             ty: f.ty.clone(),
             default,
+            nonserialized_inits: nonserialized,
         }
     }
 
@@ -423,21 +437,27 @@ impl Field {
     fn read_fun(&self, all_default_field: &Option<syn::Ident>, trace: bool) -> TokenStream2 {
         let ident = &self.name;
         let ty = &self.ty;
+        let nonserialized_inits = &self.nonserialized_inits;
         match &self.kind {
             FieldKind::Unconditional(coder) => {
-                let cfg = coder.config(all_default_field);
+                let (cfg_ty, cfg) = coder.config(all_default_field);
                 let trc = if trace {
                     quote! { eprintln!("Setting {} to {:?}", stringify!(#ident), #ident); }
                 } else {
                     quote! {}
                 };
                 quote! {
-                    let #ident = <#ty>::read_unconditional(&#cfg, br)?;
+                    let #ident = {
+                        let cfg = #cfg;
+                        type NS = <#ty as UnconditionalCoder<#cfg_ty>>::Nonserialized;
+                        let nonserialized = NS { #(#nonserialized_inits),* };
+                        <#ty>::read_unconditional(&cfg, br, &nonserialized)?
+                    };
                     #trc
                 }
             }
             FieldKind::Conditional(condition, coder) => {
-                let cfg = coder.config(all_default_field);
+                let (cfg_ty, cfg) = coder.config(all_default_field);
                 let cnd = condition.get_expr(all_default_field).unwrap();
                 let pretty_cnd = condition.get_pretty(all_default_field);
                 let trc = if trace {
@@ -446,12 +466,18 @@ impl Field {
                     quote! {}
                 };
                 quote! {
-                    let #ident = <#ty>::read_conditional(&#cfg, #cnd, br)?;
+                    let #ident = {
+                        let cond = #cnd;
+                        let cfg = #cfg;
+                        type NS = <#ty as ConditionalCoder<#cfg_ty>>::Nonserialized;
+                        let nonserialized = NS { #(#nonserialized_inits),* };
+                        <#ty>::read_conditional(&cfg, cond, br, &nonserialized)?
+                    };
                     #trc
                 }
             }
             FieldKind::Defaulted(condition, coder) => {
-                let cfg = coder.config(all_default_field);
+                let (cfg_ty, cfg) = coder.config(all_default_field);
                 let cnd = condition.get_expr(all_default_field).unwrap();
                 let pretty_cnd = condition.get_pretty(all_default_field);
                 let default = &self.default;
@@ -461,7 +487,14 @@ impl Field {
                     quote! {}
                 };
                 quote! {
-                    let #ident = <#ty>::read_defaulted(&#cfg, #cnd, #default, br)?;
+                    let #ident = {
+                        let cond = #cnd;
+                        let cfg = #cfg;
+                        let default = #default;
+                        type NS = <#ty as DefaultedCoder<#cfg_ty>>::Nonserialized;
+                        let nonserialized = NS { #(#nonserialized_inits),* };
+                        <#ty>::read_defaulted(&cfg, cond, default, br, &nonserialized)?
+                    };
                     #trc
                 }
             }
@@ -624,6 +657,26 @@ fn derive_struct(input: DeriveInput) -> TokenStream2 {
 
     let trace = input.attrs.iter().any(|a| a.path.is_ident("trace"));
     let validate = input.attrs.iter().any(|a| a.path.is_ident("validate"));
+    let nonserialized: Vec<_> = input
+        .attrs
+        .iter()
+        .filter_map(|a| {
+            if a.path.is_ident("nonserialized") {
+                Some(a.parse_args::<syn::Expr>().unwrap())
+            } else {
+                None
+            }
+        })
+        .collect();
+    if nonserialized.len() > 1 {
+        abort!(input, "repeated nonserialized");
+    }
+    let nonserialized = if nonserialized.is_empty() {
+        quote! {Empty}
+    } else {
+        let v = &nonserialized[0];
+        quote! {#v}
+    };
 
     let data = if let syn::Data::Struct(struct_data) = &input.data {
         struct_data
@@ -682,7 +735,8 @@ fn derive_struct(input: DeriveInput) -> TokenStream2 {
     quote! {
         #impl_default
         impl crate::headers::encodings::UnconditionalCoder<()> for #name {
-            fn read_unconditional(_: &(), br: &mut BitReader) -> Result<#name, Error> {
+            type Nonserialized = #nonserialized;
+            fn read_unconditional(_: &(), br: &mut BitReader, nonserialized: &Self::Nonserialized) -> Result<#name, Error> {
                 use crate::headers::encodings::UnconditionalCoder;
                 use crate::headers::encodings::ConditionalCoder;
                 use crate::headers::encodings::DefaultedCoder;
@@ -756,9 +810,10 @@ fn derive_enum(input: DeriveInput) -> TokenStream2 {
     let name = &input.ident;
     quote! {
         impl crate::headers::encodings::UnconditionalCoder<U32Coder> for #name {
-            fn read_unconditional(config: &U32Coder, br: &mut BitReader) -> Result<#name, Error> {
+            type Nonserialized = Empty;
+            fn read_unconditional(config: &U32Coder, br: &mut BitReader, _: &Empty) -> Result<#name, Error> {
                 use num_traits::FromPrimitive;
-                let u = u32::read_unconditional(config, br)?;
+                let u = u32::read_unconditional(config, br, &Empty{})?;
                 if let Some(e) =  #name::from_u32(u) {
                     Ok(e)
                 } else {
@@ -767,12 +822,13 @@ fn derive_enum(input: DeriveInput) -> TokenStream2 {
             }
         }
         impl crate::headers::encodings::UnconditionalCoder<()> for #name {
-            fn read_unconditional(config: &(), br: &mut BitReader) -> Result<#name, Error> {
+            type Nonserialized = Empty;
+            fn read_unconditional(config: &(), br: &mut BitReader, nonserialized: &Empty) -> Result<#name, Error> {
                 #name::read_unconditional(
                     &U32Coder::Select(
                         U32::Val(0), U32::Val(1),
                         U32::BitsOffset{n: 4, off: 2},
-                        U32::BitsOffset{n: 6, off: 18}), br)
+                        U32::BitsOffset{n: 6, off: 18}), br, nonserialized)
             }
         }
     }
@@ -792,6 +848,7 @@ fn derive_enum(input: DeriveInput) -> TokenStream2 {
         coder_false,
         validate,
         size_coder,
+        nonserialized,
     )
 )]
 pub fn derive_jxl_headers(input: TokenStream) -> TokenStream {

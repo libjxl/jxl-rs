@@ -26,7 +26,8 @@ impl Signature {
 }
 
 impl crate::headers::encodings::UnconditionalCoder<()> for Signature {
-    fn read_unconditional(_: &(), br: &mut BitReader) -> Result<Signature, Error> {
+    type Nonserialized = Empty;
+    fn read_unconditional(_: &(), br: &mut BitReader, _: &Empty) -> Result<Signature, Error> {
         let sig1 = br.read(8)? as u8;
         let sig2 = br.read(8)? as u8;
         if (sig1, sig2) != (0xff, 0x0a) {
@@ -58,6 +59,41 @@ struct Animation {
     #[coder(u2S(0, Bits(3), Bits(16), Bits(32)))]
     num_loops: u32,
     have_timecodes: bool,
+}
+
+#[derive(UnconditionalCoder, Debug)]
+#[validate]
+struct ToneMapping {
+    #[all_default]
+    #[default(true)]
+    all_default: bool,
+    #[default(255.0)]
+    intensity_target: f32,
+    #[default(0.0)]
+    min_nits: f32,
+    #[default(false)]
+    relative_to_max_display: bool,
+    #[default(0.0)]
+    linear_below: f32,
+}
+
+impl ToneMapping {
+    pub fn check(&self) -> Result<(), Error> {
+        if self.intensity_target <= 0.0 {
+            Err(Error::InvalidIntensityTarget(self.intensity_target))
+        } else if self.min_nits < 0.0 || self.min_nits > self.intensity_target {
+            Err(Error::InvalidMinNits(self.min_nits))
+        } else if self.linear_below < 0.0
+            || (self.relative_to_max_display && self.linear_below > 1.0)
+        {
+            Err(Error::InvalidLinearBelow(
+                self.relative_to_max_display,
+                self.linear_below,
+            ))
+        } else {
+            Ok(())
+        }
+    }
 }
 
 #[derive(UnconditionalCoder, Debug)]
@@ -96,6 +132,8 @@ pub struct ImageMetadata {
     xyb_encoded: bool,
     #[default(ColorEncoding::default())]
     color_encoding: ColorEncoding,
-    // tone_mapping: ToneMapping,
+    #[condition(extra_fields)]
+    #[default(ToneMapping::default())]
+    tone_mapping: ToneMapping,
     // extensions: ???,
 }

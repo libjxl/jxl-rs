@@ -27,21 +27,39 @@ pub enum U32Coder {
     Select(U32, U32, U32, U32),
 }
 
+#[derive(Default)]
+pub struct Empty {}
+
 pub trait UnconditionalCoder<Config>
 where
     Self: Sized,
 {
-    fn read_unconditional(config: &Config, br: &mut BitReader) -> Result<Self, Error>;
+    type Nonserialized;
+    fn read_unconditional(
+        config: &Config,
+        br: &mut BitReader,
+        nonserialized: &Self::Nonserialized,
+    ) -> Result<Self, Error>;
 }
 
 impl UnconditionalCoder<()> for bool {
-    fn read_unconditional(_: &(), br: &mut BitReader) -> Result<bool, Error> {
+    type Nonserialized = Empty;
+    fn read_unconditional(
+        _: &(),
+        br: &mut BitReader,
+        _: &Self::Nonserialized,
+    ) -> Result<bool, Error> {
         Ok(br.read(1)? != 0)
     }
 }
 
 impl UnconditionalCoder<()> for f32 {
-    fn read_unconditional(_: &(), br: &mut BitReader) -> Result<f32, Error> {
+    type Nonserialized = Empty;
+    fn read_unconditional(
+        _: &(),
+        br: &mut BitReader,
+        _: &Self::Nonserialized,
+    ) -> Result<f32, Error> {
         use half::f16;
         let ret = f16::from_bits(br.read(16)? as u16);
         if !ret.is_finite() {
@@ -53,7 +71,12 @@ impl UnconditionalCoder<()> for f32 {
 }
 
 impl UnconditionalCoder<U32Coder> for u32 {
-    fn read_unconditional(config: &U32Coder, br: &mut BitReader) -> Result<u32, Error> {
+    type Nonserialized = Empty;
+    fn read_unconditional(
+        config: &U32Coder,
+        br: &mut BitReader,
+        _: &Self::Nonserialized,
+    ) -> Result<u32, Error> {
         match config {
             U32Coder::Direct(u) => u.read(br),
             U32Coder::Select(u0, u1, u2, u3) => {
@@ -71,14 +94,24 @@ impl UnconditionalCoder<U32Coder> for u32 {
 }
 
 impl UnconditionalCoder<U32Coder> for i32 {
-    fn read_unconditional(config: &U32Coder, br: &mut BitReader) -> Result<i32, Error> {
-        let u = u32::read_unconditional(config, br)?;
+    type Nonserialized = Empty;
+    fn read_unconditional(
+        config: &U32Coder,
+        br: &mut BitReader,
+        nonserialized: &Self::Nonserialized,
+    ) -> Result<i32, Error> {
+        let u = u32::read_unconditional(config, br, nonserialized)?;
         Ok(((u >> 1) ^ (((!u) & 1).wrapping_rem(1))) as i32)
     }
 }
 
 impl UnconditionalCoder<()> for String {
-    fn read_unconditional(_: &(), br: &mut BitReader) -> Result<String, Error> {
+    type Nonserialized = Empty;
+    fn read_unconditional(
+        _: &(),
+        br: &mut BitReader,
+        nonserialized: &Self::Nonserialized,
+    ) -> Result<String, Error> {
         let len = u32::read_unconditional(
             &U32Coder::Select(
                 U32::Val(0),
@@ -87,6 +120,7 @@ impl UnconditionalCoder<()> for String {
                 U32::BitsOffset { n: 10, off: 48 },
             ),
             br,
+            nonserialized,
         )?;
         let mut ret = String::new();
         ret.reserve(len as usize);
@@ -98,9 +132,14 @@ impl UnconditionalCoder<()> for String {
 }
 
 impl<T: UnconditionalCoder<Config>, Config, const N: usize> UnconditionalCoder<Config> for [T; N] {
-    fn read_unconditional(config: &Config, br: &mut BitReader) -> Result<[T; N], Error> {
+    type Nonserialized = T::Nonserialized;
+    fn read_unconditional(
+        config: &Config,
+        br: &mut BitReader,
+        nonserialized: &Self::Nonserialized,
+    ) -> Result<[T; N], Error> {
         use array_init::try_array_init;
-        try_array_init(|_| T::read_unconditional(config, br))
+        try_array_init(|_| T::read_unconditional(config, br, nonserialized))
     }
 }
 
@@ -110,15 +149,21 @@ pub struct VectorCoder<T: Sized> {
 }
 
 impl<Config, T: UnconditionalCoder<Config>> UnconditionalCoder<VectorCoder<Config>> for Vec<T> {
+    type Nonserialized = T::Nonserialized;
     fn read_unconditional(
         config: &VectorCoder<Config>,
         br: &mut BitReader,
+        nonserialized: &Self::Nonserialized,
     ) -> Result<Vec<T>, Error> {
-        let len = u32::read_unconditional(&config.size_coder, br)?;
+        let len = u32::read_unconditional(&config.size_coder, br, &Empty {})?;
         let mut ret: Vec<T> = Vec::new();
         ret.reserve_exact(len as usize);
         for _ in 0..len {
-            ret.push(T::read_unconditional(&config.value_coder, br)?);
+            ret.push(T::read_unconditional(
+                &config.value_coder,
+                br,
+                nonserialized,
+            )?);
         }
         Ok(ret)
     }
@@ -137,11 +182,16 @@ impl Selectable for u32 {}
 impl<Config, T: UnconditionalCoder<Config> + Selectable> UnconditionalCoder<SelectCoder<Config>>
     for T
 {
-    fn read_unconditional(config: &SelectCoder<Config>, br: &mut BitReader) -> Result<T, Error> {
+    type Nonserialized = <T as UnconditionalCoder<Config>>::Nonserialized;
+    fn read_unconditional(
+        config: &SelectCoder<Config>,
+        br: &mut BitReader,
+        nonserialized: &Self::Nonserialized,
+    ) -> Result<T, Error> {
         if config.use_true {
-            T::read_unconditional(&config.coder_true, br)
+            T::read_unconditional(&config.coder_true, br, nonserialized)
         } else {
-            T::read_unconditional(&config.coder_false, br)
+            T::read_unconditional(&config.coder_false, br, nonserialized)
         }
     }
 }
@@ -150,21 +200,25 @@ pub trait ConditionalCoder<Config>
 where
     Self: Sized,
 {
+    type Nonserialized;
     fn read_conditional(
         config: &Config,
         condition: bool,
         br: &mut BitReader,
+        nonserialized: &Self::Nonserialized,
     ) -> Result<Self, Error>;
 }
 
 impl<Config, T: UnconditionalCoder<Config>> ConditionalCoder<Config> for Option<T> {
+    type Nonserialized = T::Nonserialized;
     fn read_conditional(
         config: &Config,
         condition: bool,
         br: &mut BitReader,
+        nonserialized: &Self::Nonserialized,
     ) -> Result<Option<T>, Error> {
         if condition {
-            Ok(Some(T::read_unconditional(config, br)?))
+            Ok(Some(T::read_unconditional(config, br, nonserialized)?))
         } else {
             Ok(None)
         }
@@ -172,9 +226,15 @@ impl<Config, T: UnconditionalCoder<Config>> ConditionalCoder<Config> for Option<
 }
 
 impl ConditionalCoder<()> for String {
-    fn read_conditional(_: &(), condition: bool, br: &mut BitReader) -> Result<String, Error> {
+    type Nonserialized = Empty;
+    fn read_conditional(
+        _: &(),
+        condition: bool,
+        br: &mut BitReader,
+        nonserialized: &Empty,
+    ) -> Result<String, Error> {
         if condition {
-            String::read_unconditional(&(), br)
+            String::read_unconditional(&(), br, nonserialized)
         } else {
             Ok(String::new())
         }
@@ -182,13 +242,15 @@ impl ConditionalCoder<()> for String {
 }
 
 impl<Config, T: UnconditionalCoder<Config>> ConditionalCoder<VectorCoder<Config>> for Vec<T> {
+    type Nonserialized = T::Nonserialized;
     fn read_conditional(
         config: &VectorCoder<Config>,
         condition: bool,
         br: &mut BitReader,
+        nonserialized: &Self::Nonserialized,
     ) -> Result<Vec<T>, Error> {
         if condition {
-            Vec::read_unconditional(config, br)
+            Vec::read_unconditional(config, br, nonserialized)
         } else {
             Ok(Vec::new())
         }
@@ -199,23 +261,27 @@ pub trait DefaultedCoder<Config>
 where
     Self: Sized,
 {
+    type Nonserialized;
     fn read_defaulted(
         config: &Config,
         condition: bool,
         default: Self,
         br: &mut BitReader,
+        nonserialized: &Self::Nonserialized,
     ) -> Result<Self, Error>;
 }
 
 impl<Config, T: UnconditionalCoder<Config>> DefaultedCoder<Config> for T {
+    type Nonserialized = T::Nonserialized;
     fn read_defaulted(
         config: &Config,
         condition: bool,
         default: Self,
         br: &mut BitReader,
+        nonserialized: &Self::Nonserialized,
     ) -> Result<T, Error> {
         if condition {
-            Ok(T::read_unconditional(config, br)?)
+            Ok(T::read_unconditional(config, br, nonserialized)?)
         } else {
             Ok(default)
         }

@@ -112,8 +112,8 @@ impl<'a> BitReader<'a> {
         if self.data.len() >= 8 {
             let bits = LittleEndian::read_u64(self.data);
             self.bit_buf |= bits << self.bits_in_buf;
-            self.bits_in_buf |= 56;
             let read_bytes = (63 - self.bits_in_buf) >> 3;
+            self.bits_in_buf |= 56;
             self.data = &self.data[read_bytes..];
             debug_assert!(56 <= self.bits_in_buf && self.bits_in_buf < 64);
         } else {

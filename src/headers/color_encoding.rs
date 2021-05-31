@@ -36,6 +36,25 @@ pub enum Primaries {
     P3 = 11,
 }
 
+#[derive(UnconditionalCoder, Copy, Clone, PartialEq, Debug, FromPrimitive)]
+enum TransferFunction {
+    BT709 = 1,
+    Unknown = 2,
+    Linear = 8,
+    SRGB = 13,
+    PQ = 16,
+    DCI = 17,
+    HLG = 18,
+}
+
+#[derive(UnconditionalCoder, Copy, Clone, PartialEq, Debug, FromPrimitive)]
+enum RenderingIntent {
+    Perceptual = 0,
+    Relative,
+    Saturation,
+    Absolute,
+}
+
 #[derive(UnconditionalCoder, Debug)]
 pub struct CustomXY {
     #[default(0)]
@@ -46,7 +65,48 @@ pub struct CustomXY {
     y: i32,
 }
 
+pub struct CustomTransferFunctionNonserialized {
+    color_space: ColorSpace,
+}
+
 #[derive(UnconditionalCoder, Debug)]
+#[nonserialized(CustomTransferFunctionNonserialized)]
+#[validate]
+pub struct CustomTransferFunction {
+    #[condition(nonserialized.color_space != ColorSpace::XYB)]
+    #[default(false)]
+    have_gamma: bool,
+    #[condition(have_gamma)]
+    #[default(3333333)] // XYB gamma
+    #[coder(Bits(24))]
+    gamma: u32,
+    #[condition(!have_gamma && nonserialized.color_space != ColorSpace::XYB)]
+    #[default(TransferFunction::SRGB)]
+    transfer_function: TransferFunction,
+}
+
+impl CustomTransferFunction {
+    pub fn gamma(&self) -> f32 {
+        assert!(self.have_gamma);
+        self.gamma as f32 * 0.0000001
+    }
+
+    pub fn check(&self) -> Result<(), Error> {
+        if self.have_gamma {
+            let gamma = self.gamma();
+            if gamma > 1.0 || gamma * 8192.0 < 1.0 {
+                Err(Error::InvalidGamma(gamma))
+            } else {
+                Ok(())
+            }
+        } else {
+            Ok(())
+        }
+    }
+}
+
+#[derive(UnconditionalCoder, Debug)]
+#[validate]
 pub struct ColorEncoding {
     #[all_default]
     #[default(true)]
@@ -68,6 +128,24 @@ pub struct ColorEncoding {
     #[condition(primaries == Primaries::Custom)]
     #[default([CustomXY::default(), CustomXY::default(), CustomXY::default()])]
     custom_primaries: [CustomXY; 3],
-    // tf: TransferFunction,
-    // rendering_intent: RenderingIntent,
+    #[condition(!want_icc)]
+    #[default(CustomTransferFunction::default())]
+    #[nonserialized(color_space: color_space)]
+    tf: CustomTransferFunction,
+    #[condition(!want_icc)]
+    #[default(RenderingIntent::Relative)]
+    rendering_intent: RenderingIntent,
+}
+
+impl ColorEncoding {
+    pub fn check(&self) -> Result<(), Error> {
+        if !self.want_icc
+            && (self.color_space == ColorSpace::Unknown
+                || self.tf.transfer_function == TransferFunction::Unknown)
+        {
+            Err(Error::InvalidColorEncoding)
+        } else {
+            Ok(())
+        }
+    }
 }

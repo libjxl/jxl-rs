@@ -48,8 +48,10 @@ pub struct ExtraChannelInfo {
     #[default(0)]
     dim_shift: u32,
     name: String,
+    // TODO(veluca93): if using Option<bool>, this is None when all_default.
     #[condition(ec_type == ExtraChannel::Alpha)]
-    alpha_associated: Option<bool>,
+    #[default(false)]
+    alpha_associated: bool,
     #[condition(ec_type == ExtraChannel::SpotColor)]
     spot_color: Option<[f32; 3]>,
     #[condition(ec_type == ExtraChannel::CFA)]

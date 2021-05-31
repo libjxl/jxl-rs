@@ -16,6 +16,7 @@ pub mod size;
 
 use crate::bit_reader::BitReader;
 use crate::error::Error;
+use crate::headers::encodings::Empty;
 use crate::headers::encodings::UnconditionalCoder;
 
 pub use image_metadata::*;
@@ -40,8 +41,9 @@ where
 impl<T> JxlHeader for T
 where
     T: UnconditionalCoder<()>,
+    T::Nonserialized: Default,
 {
     fn read(br: &mut BitReader) -> Result<Self, Error> {
-        Self::read_unconditional(&(), br)
+        Self::read_unconditional(&(), br, &T::Nonserialized::default())
     }
 }
