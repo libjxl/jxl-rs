@@ -370,8 +370,14 @@ impl Field {
                     });
                 }
                 Some("nonserialized") => {
-                    let init = a.parse_args::<syn::Expr>().unwrap();
-                    nonserialized.push(quote! {#init});
+                    for tok in a.tokens.clone() {
+                        if let proc_macro2::TokenTree::Group(g) = tok {
+                            let stream = g.stream();
+                            nonserialized.push(quote! {#stream});
+                        } else {
+                            abort!(a, "Invalid attribute");
+                        }
+                    }
                 }
                 _ => {}
             }

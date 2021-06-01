@@ -97,7 +97,6 @@ impl ToneMapping {
 }
 
 #[derive(UnconditionalCoder, Debug)]
-#[trace]
 pub struct ImageMetadata {
     #[all_default]
     all_default: bool,
@@ -129,11 +128,11 @@ pub struct ImageMetadata {
     #[size_coder(u2S(0, 1, Bits(4) + 2, Bits(12) + 1))]
     extra_channel_info: Vec<ExtraChannelInfo>,
     #[default(true)]
-    xyb_encoded: bool,
+    pub xyb_encoded: bool,
     #[default(ColorEncoding::default())]
     color_encoding: ColorEncoding,
     #[condition(extra_fields)]
     #[default(ToneMapping::default())]
     tone_mapping: ToneMapping,
-    // extensions: ???,
+    extensions: Option<Extensions>,
 }

@@ -13,6 +13,7 @@ pub mod encodings;
 pub mod extra_channels;
 pub mod image_metadata;
 pub mod size;
+pub mod transform_data;
 
 use crate::bit_reader::BitReader;
 use crate::error::Error;
@@ -21,6 +22,7 @@ use crate::headers::encodings::UnconditionalCoder;
 
 pub use image_metadata::*;
 pub use size::Size;
+pub use transform_data::*;
 
 #[derive(UnconditionalCoder, Debug)]
 pub struct FileHeaders {
@@ -28,7 +30,8 @@ pub struct FileHeaders {
     signature: Signature,
     pub size: Size,
     pub image_metadata: ImageMetadata,
-    // transform_data: CustomTransformData,
+    #[nonserialized(xyb_encoded : image_metadata.xyb_encoded)]
+    pub transform_data: CustomTransformData,
 }
 
 pub trait JxlHeader

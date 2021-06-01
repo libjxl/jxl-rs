@@ -35,4 +35,6 @@ pub enum Error {
     InvalidMinNits(f32),
     #[error("Invalid linear_below {1}, relative_to_max_display is {0}")]
     InvalidLinearBelow(bool, f32),
+    #[error("Overflow when computing a bitstream size")]
+    SizeOverflow,
 }

@@ -105,6 +105,34 @@ impl UnconditionalCoder<U32Coder> for i32 {
     }
 }
 
+impl UnconditionalCoder<()> for u64 {
+    type Nonserialized = Empty;
+    fn read_unconditional(
+        _: &(),
+        br: &mut BitReader,
+        _: &Self::Nonserialized,
+    ) -> Result<u64, Error> {
+        match br.read(2)? {
+            0 => Ok(0),
+            1 => Ok(1 + br.read(4)?),
+            2 => Ok(17 + br.read(8)?),
+            _ => {
+                let mut result: u64 = 0;
+                let mut shift = 12;
+                while br.read(1)? == 1 {
+                    if shift >= 60 {
+                        assert_eq!(shift, 60);
+                        return Ok(result | ((br.read(4)? as u64) << shift));
+                    }
+                    result |= (br.read(8)? as u64) << shift;
+                    shift += 8;
+                }
+                Ok(result)
+            }
+        }
+    }
+}
+
 impl UnconditionalCoder<()> for String {
     type Nonserialized = Empty;
     fn read_unconditional(
@@ -285,5 +313,41 @@ impl<Config, T: UnconditionalCoder<Config>> DefaultedCoder<Config> for T {
         } else {
             Ok(default)
         }
+    }
+}
+
+// TODO(veluca93): this will likely need to be implemented differently if
+// there are extensions.
+#[derive(Debug)]
+pub struct Extensions {}
+
+impl UnconditionalCoder<()> for Extensions {
+    type Nonserialized = Empty;
+    fn read_unconditional(
+        _: &(),
+        br: &mut BitReader,
+        _: &Self::Nonserialized,
+    ) -> Result<Extensions, Error> {
+        use std::convert::TryFrom;
+        let selector = u64::read_unconditional(&(), br, &Empty {})?;
+        let mut total_size: u64 = 0;
+        for i in 0..64 {
+            if (selector & ((1 as u64) << i)) != 0 {
+                let size = u64::read_unconditional(&(), br, &Empty {})?;
+                let sum = total_size.checked_add(size);
+                if let Some(s) = sum {
+                    total_size = s;
+                } else {
+                    return Err(Error::SizeOverflow);
+                }
+            }
+        }
+        let total_size = usize::try_from(total_size);
+        if let Ok(ts) = total_size {
+            br.skip_bits(ts)?;
+        } else {
+            return Err(Error::SizeOverflow);
+        }
+        Ok(Extensions {})
     }
 }
