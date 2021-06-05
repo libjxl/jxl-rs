@@ -37,4 +37,8 @@ pub enum Error {
     InvalidLinearBelow(bool, f32),
     #[error("Overflow when computing a bitstream size")]
     SizeOverflow,
+    #[error("File truncated")]
+    FileTruncated,
+    #[error("Invalid ISOBMMF container")]
+    InvalidBox,
 }

@@ -4,13 +4,13 @@
 // license that can be found in the LICENSE file.
 
 use jxl::bit_reader::BitReader;
+use jxl::bmff::JxlCodestream;
 use jxl::headers::FileHeaders;
 use std::env;
 use std::fs;
 
 use jxl::headers::JxlHeader;
 
-// TODO(veluca93): BMFF
 fn parse_jxl_codestream(data: &[u8]) -> Result<(), jxl::error::Error> {
     let mut br = BitReader::new(data);
     let fh = FileHeaders::read(&mut br)?;
@@ -24,7 +24,17 @@ fn main() {
     assert_eq!(args.len(), 2);
     let file = &args[1];
     let contents = fs::read(file).expect("Something went wrong reading the file");
-    let res = parse_jxl_codestream(&contents[..]);
+    let codestream = JxlCodestream::new(contents);
+    let codestream = if let Ok(cs) = codestream {
+        cs
+    } else {
+        println!(
+            "Error parsing JXL codestream: {}",
+            codestream.err().unwrap()
+        );
+        return;
+    };
+    let res = parse_jxl_codestream(codestream.get());
     if let Err(err) = res {
         println!("Error parsing JXL codestream: {}", err)
     }
