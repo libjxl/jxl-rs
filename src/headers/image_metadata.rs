@@ -39,7 +39,7 @@ impl crate::headers::encodings::UnconditionalCoder<()> for Signature {
 }
 
 #[derive(UnconditionalCoder, Copy, Clone, PartialEq, Debug, FromPrimitive)]
-enum Orientation {
+pub enum Orientation {
     Identity = 1,
     FlipHorizontal = 2,
     Rotate180 = 3,
@@ -51,30 +51,30 @@ enum Orientation {
 }
 
 #[derive(UnconditionalCoder, Debug)]
-struct Animation {
+pub struct Animation {
     #[coder(u2S(100, 1000, Bits(10) + 1, Bits(30) + 1))]
-    tps_numerator: u32,
+    pub tps_numerator: u32,
     #[coder(u2S(1, 1001, Bits(10) + 1, Bits(30) + 1))]
-    tps_denominator: u32,
+    pub tps_denominator: u32,
     #[coder(u2S(0, Bits(3), Bits(16), Bits(32)))]
-    num_loops: u32,
-    have_timecodes: bool,
+    pub num_loops: u32,
+    pub have_timecodes: bool,
 }
 
 #[derive(UnconditionalCoder, Debug)]
 #[validate]
-struct ToneMapping {
+pub struct ToneMapping {
     #[all_default]
     #[default(true)]
-    all_default: bool,
+    pub all_default: bool,
     #[default(255.0)]
-    intensity_target: f32,
+    pub intensity_target: f32,
     #[default(0.0)]
-    min_nits: f32,
+    pub min_nits: f32,
     #[default(false)]
-    relative_to_max_display: bool,
+    pub relative_to_max_display: bool,
     #[default(0.0)]
-    linear_below: f32,
+    pub linear_below: f32,
 }
 
 impl ToneMapping {
@@ -105,34 +105,34 @@ pub struct ImageMetadata {
     #[condition(extra_fields)]
     #[default(Orientation::Identity)]
     #[coder(Bits(3) + 1)]
-    orientation: Orientation,
+    pub orientation: Orientation,
     #[condition(extra_fields)]
     #[default(false)]
     have_intrinsic_size: bool, // TODO(veluca93): fold have_ fields in Option.
     #[condition(have_intrinsic_size)]
-    intrinsic_size: Option<Size>,
+    pub intrinsic_size: Option<Size>,
     #[condition(extra_fields)]
     #[default(false)]
     have_preview: bool,
     #[condition(have_preview)]
-    preview: Option<Preview>,
+    pub preview: Option<Preview>,
     #[condition(extra_fields)]
     #[default(false)]
     have_animation: bool,
     #[condition(have_animation)]
-    animation: Option<Animation>,
+    pub animation: Option<Animation>,
     #[default(BitDepth::default())]
-    bit_depth: BitDepth,
+    pub bit_depth: BitDepth,
     #[default(true)]
-    modular_16bit_sufficient: bool,
+    pub modular_16bit_sufficient: bool,
     #[size_coder(u2S(0, 1, Bits(4) + 2, Bits(12) + 1))]
-    extra_channel_info: Vec<ExtraChannelInfo>,
+    pub extra_channel_info: Vec<ExtraChannelInfo>,
     #[default(true)]
     pub xyb_encoded: bool,
     #[default(ColorEncoding::default())]
-    color_encoding: ColorEncoding,
+    pub color_encoding: ColorEncoding,
     #[condition(extra_fields)]
     #[default(ToneMapping::default())]
-    tone_mapping: ToneMapping,
+    pub tone_mapping: ToneMapping,
     extensions: Option<Extensions>,
 }

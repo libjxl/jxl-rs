@@ -5,6 +5,8 @@
 
 use thiserror::Error;
 
+use crate::entropy_coding::huffman::HUFFMAN_MAX_BITS;
+
 #[derive(Error, Debug)]
 pub enum Error {
     #[error("Read out of bounds")]
@@ -41,4 +43,20 @@ pub enum Error {
     FileTruncated,
     #[error("Invalid ISOBMMF container")]
     InvalidBox,
+    #[error("ICC is too large")]
+    ICCTooLarge,
+    #[error("Invalid HybridUintConfig: {0} {1} {2:?}")]
+    InvalidUintConfig(u32, u32, Option<u32>),
+    #[error("LZ77 enabled when explicitly disallowed")]
+    LZ77Disallowed,
+    #[error("Huffman alphabet too large: {0}, max is {}", 1 << HUFFMAN_MAX_BITS)]
+    AlphabetTooLargeHuff(usize),
+    #[error("Invalid Huffman code")]
+    InvalidHuffman,
+    #[error("Integer too large: nbits {0} > 29")]
+    IntegerTooLarge(u32),
+    #[error("Invalid context map: context id {0} > 255")]
+    InvalidContextMap(u32),
+    #[error("Invalid context map: number of histogram {0}, number of distinct histograms {1}")]
+    InvalidContextMapHole(u32, u32),
 }

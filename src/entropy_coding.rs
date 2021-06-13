@@ -3,10 +3,8 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-pub mod bit_reader;
-pub mod bmff;
-pub mod entropy_coding;
-pub mod error;
-pub mod headers;
-pub mod icc;
-mod util;
+pub mod ans;
+pub mod context_map;
+pub mod decode;
+pub mod huffman;
+pub mod hybrid_uint;

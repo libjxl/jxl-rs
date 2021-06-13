@@ -117,7 +117,7 @@ impl UnconditionalCoder<()> for u64 {
             1 => Ok(1 + br.read(4)?),
             2 => Ok(17 + br.read(8)?),
             _ => {
-                let mut result: u64 = 0;
+                let mut result: u64 = br.read(12)? as u64;
                 let mut shift = 12;
                 while br.read(1)? == 1 {
                     if shift >= 60 {

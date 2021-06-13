@@ -37,7 +37,7 @@ pub enum Primaries {
 }
 
 #[derive(UnconditionalCoder, Copy, Clone, PartialEq, Debug, FromPrimitive)]
-enum TransferFunction {
+pub enum TransferFunction {
     BT709 = 1,
     Unknown = 2,
     Linear = 8,
@@ -48,7 +48,7 @@ enum TransferFunction {
 }
 
 #[derive(UnconditionalCoder, Copy, Clone, PartialEq, Debug, FromPrimitive)]
-enum RenderingIntent {
+pub enum RenderingIntent {
     Perceptual = 0,
     Relative,
     Saturation,
@@ -112,29 +112,29 @@ pub struct ColorEncoding {
     #[default(true)]
     all_default: bool,
     #[default(false)]
-    want_icc: bool,
+    pub want_icc: bool,
     #[default(ColorSpace::RGB)]
-    color_space: ColorSpace,
+    pub color_space: ColorSpace,
     #[condition(!want_icc && color_space != ColorSpace::XYB)]
     #[default(WhitePoint::D65)]
-    white_point: WhitePoint,
+    pub white_point: WhitePoint,
     // TODO(veluca): can this be merged in the enum?
     #[condition(white_point == WhitePoint::Custom)]
     #[default(CustomXY::default())]
-    white: CustomXY,
+    pub white: CustomXY,
     #[condition(!want_icc && color_space != ColorSpace::XYB && color_space != ColorSpace::Gray)]
     #[default(Primaries::SRGB)]
-    primaries: Primaries,
+    pub primaries: Primaries,
     #[condition(primaries == Primaries::Custom)]
     #[default([CustomXY::default(), CustomXY::default(), CustomXY::default()])]
-    custom_primaries: [CustomXY; 3],
+    pub custom_primaries: [CustomXY; 3],
     #[condition(!want_icc)]
     #[default(CustomTransferFunction::default())]
     #[nonserialized(color_space: color_space)]
-    tf: CustomTransferFunction,
+    pub tf: CustomTransferFunction,
     #[condition(!want_icc)]
     #[default(RenderingIntent::Relative)]
-    rendering_intent: RenderingIntent,
+    pub rendering_intent: RenderingIntent,
 }
 
 impl ColorEncoding {
