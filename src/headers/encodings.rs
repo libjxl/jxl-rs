@@ -332,7 +332,7 @@ impl UnconditionalCoder<()> for Extensions {
         let selector = u64::read_unconditional(&(), br, &Empty {})?;
         let mut total_size: u64 = 0;
         for i in 0..64 {
-            if (selector & ((1 as u64) << i)) != 0 {
+            if (selector & (1u64 << i)) != 0 {
                 let size = u64::read_unconditional(&(), br, &Empty {})?;
                 let sum = total_size.checked_add(size);
                 if let Some(s) = sum {

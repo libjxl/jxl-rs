@@ -25,8 +25,7 @@ impl JxlCodestream {
     pub fn new(data: Vec<u8>) -> Result<JxlCodestream, Error> {
         // Box-based file format.
         if data.starts_with(&[
-            0x00, 0x00, 0x00, 0x0C, 'J' as u8, 'X' as u8, 'L' as u8, ' ' as u8, 0x0D, 0x0A, 0x87,
-            0x0A,
+            0x00, 0x00, 0x00, 0x0C, b'J', b'X', b'L', b' ', 0x0D, 0x0A, 0x87, 0x0A,
         ]) {
             let mut state = State::Empty;
             let mut assembled_codestream = vec![];
@@ -49,11 +48,11 @@ impl JxlCodestream {
                     return Err(Error::FileTruncated);
                 }
                 if box_size == 1 {
-                    let sz = BigEndian::read_u64(&data[pos..]) as usize;
-                    if sz >= usize::MAX {
+                    let sz = BigEndian::read_u64(&data[pos..]);
+                    if sz >= usize::MAX as u64 {
                         return Err(Error::InvalidBox);
                     }
-                    box_size = sz;
+                    box_size = sz as usize;
                     pos += 8;
                 }
                 if box_start + box_size > data.len() {
@@ -70,11 +69,11 @@ impl JxlCodestream {
                         }
                         let jxlp_count_and_last = BigEndian::read_u32(&data[pos..]);
                         pos += 4;
-                        let jxlp_count = jxlp_count_and_last & (((1 as u32) << 31) - 1);
+                        let jxlp_count = jxlp_count_and_last & ((1u32 << 31) - 1);
                         if jxlp_count as usize != jxlp_idx.map_or_else(|| 0, |x| x + 1) {
                             return Err(Error::InvalidBox);
                         }
-                        let jxlp_is_last = jxlp_count_and_last >= ((1 as u32) << 31);
+                        let jxlp_is_last = jxlp_count_and_last >= (1u32 << 31);
                         if eof_box && !jxlp_is_last {
                             return Err(Error::InvalidBox);
                         }
