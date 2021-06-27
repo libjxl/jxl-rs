@@ -54,7 +54,7 @@ pub enum Orientation {
 pub struct Animation {
     #[coder(u2S(100, 1000, Bits(10) + 1, Bits(30) + 1))]
     pub tps_numerator: u32,
-    #[coder(u2S(1, 1001, Bits(10) + 1, Bits(30) + 1))]
+    #[coder(u2S(1, 1001, Bits(8) + 1, Bits(10) + 1))]
     pub tps_denominator: u32,
     #[coder(u2S(0, Bits(3), Bits(16), Bits(32)))]
     pub num_loops: u32,

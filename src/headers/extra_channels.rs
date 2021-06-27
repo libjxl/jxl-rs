@@ -54,7 +54,7 @@ pub struct ExtraChannelInfo {
     #[default(false)]
     alpha_associated: bool,
     #[condition(ec_type == ExtraChannel::SpotColor)]
-    spot_color: Option<[f32; 3]>,
+    spot_color: Option<[f32; 4]>,
     #[condition(ec_type == ExtraChannel::CFA)]
     #[coder(u2S(1, Bits(2), Bits(4) + 3, Bits(8) + 19))]
     cfa_channel: Option<u32>,
