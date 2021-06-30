@@ -14,6 +14,7 @@ use crate::error::Error;
 use crate::headers::bit_depth::BitDepth;
 use crate::headers::encodings::*;
 
+#[allow(clippy::upper_case_acronyms)]
 #[derive(UnconditionalCoder, Copy, Clone, PartialEq, Debug, FromPrimitive)]
 enum ExtraChannel {
     Alpha,

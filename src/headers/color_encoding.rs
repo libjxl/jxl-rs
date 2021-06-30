@@ -12,6 +12,7 @@ use crate::bit_reader::BitReader;
 use crate::error::Error;
 use crate::headers::encodings::*;
 
+#[allow(clippy::upper_case_acronyms)]
 #[derive(UnconditionalCoder, Copy, Clone, PartialEq, Debug, FromPrimitive)]
 pub enum ColorSpace {
     RGB,
@@ -20,6 +21,7 @@ pub enum ColorSpace {
     Unknown,
 }
 
+#[allow(clippy::upper_case_acronyms)]
 #[derive(UnconditionalCoder, Copy, Clone, PartialEq, Debug, FromPrimitive)]
 pub enum WhitePoint {
     D65 = 1,
@@ -28,6 +30,7 @@ pub enum WhitePoint {
     DCI = 11,
 }
 
+#[allow(clippy::upper_case_acronyms)]
 #[derive(UnconditionalCoder, Copy, Clone, PartialEq, Debug, FromPrimitive)]
 pub enum Primaries {
     SRGB = 1,
@@ -36,6 +39,7 @@ pub enum Primaries {
     P3 = 11,
 }
 
+#[allow(clippy::upper_case_acronyms)]
 #[derive(UnconditionalCoder, Copy, Clone, PartialEq, Debug, FromPrimitive)]
 pub enum TransferFunction {
     BT709 = 1,
