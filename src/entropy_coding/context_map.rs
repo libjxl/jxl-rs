@@ -42,12 +42,13 @@ fn verify_context_map(ctx_map: &[u8]) -> Result<(), Error> {
 }
 
 pub fn decode_context_map(num_contexts: usize, br: &mut BitReader) -> Result<Vec<u8>, Error> {
-    use std::iter::FromIterator;
     let is_simple = br.read(1)? != 0;
     if is_simple {
         let bits_per_entry = br.read(2)? as usize;
         if bits_per_entry != 0 {
-            Result::from_iter((0..num_contexts).map(|_| Ok(br.read(bits_per_entry)? as u8)))
+            (0..num_contexts)
+                .map(|_| Ok(br.read(bits_per_entry)? as u8))
+                .collect()
         } else {
             Ok(vec![0u8; num_contexts])
         }
@@ -56,14 +57,16 @@ pub fn decode_context_map(num_contexts: usize, br: &mut BitReader) -> Result<Vec
         let histograms = Histograms::decode(1, br, /*allow_lz77=*/ num_contexts > 2)?;
         let reader = histograms.make_reader(br)?;
 
-        let mut ctx_map: Vec<u8> = Result::from_iter((0..num_contexts).map(|_| {
-            let mv = reader.read(br, 0usize)?;
-            if mv > u8::MAX as u32 {
-                Err(Error::InvalidContextMap(mv))
-            } else {
-                Ok(mv as u8)
-            }
-        }))?;
+        let mut ctx_map: Vec<u8> = (0..num_contexts)
+            .map(|_| {
+                let mv = reader.read(br, 0usize)?;
+                if mv > u8::MAX as u32 {
+                    Err(Error::InvalidContextMap(mv))
+                } else {
+                    Ok(mv as u8)
+                }
+            })
+            .collect::<Result<_, _>>()?;
         reader.check_final_state()?;
         if use_mtf {
             inverse_move_to_front(&mut ctx_map[..]);

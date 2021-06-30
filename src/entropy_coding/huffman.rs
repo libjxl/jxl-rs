@@ -438,18 +438,17 @@ pub struct HuffmanCodes {
 
 impl HuffmanCodes {
     pub fn decode(num: usize, br: &mut BitReader) -> Result<HuffmanCodes, Error> {
-        use std::iter::FromIterator;
-        let alphabet_sizes =
-            Result::<Vec<u16>, Error>::from_iter((0..num).map(|_| Ok(decode_varint16(br)? + 1)))?;
+        let alphabet_sizes: Vec<u16> = (0..num)
+            .map(|_| Ok(decode_varint16(br)? + 1))
+            .collect::<Result<_, _>>()?;
         let max = *alphabet_sizes.iter().max().unwrap();
         if max as usize > (1 << HUFFMAN_MAX_BITS) {
             return Err(Error::AlphabetTooLargeHuff(max as usize));
         }
-        let tables = Result::from_iter(
-            alphabet_sizes
-                .iter()
-                .map(|sz| Table::decode(*sz as usize, br)),
-        )?;
+        let tables = alphabet_sizes
+            .iter()
+            .map(|sz| Table::decode(*sz as usize, br))
+            .collect::<Result<_, _>>()?;
         Ok(HuffmanCodes { tables })
     }
     pub fn read(&self, br: &mut BitReader, ctx: usize) -> Result<u32, Error> {

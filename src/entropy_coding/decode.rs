@@ -8,6 +8,7 @@ extern crate jxl_headers_derive;
 use jxl_headers_derive::UnconditionalCoder;
 
 use crate::bit_reader::BitReader;
+#[allow(unused_imports)]
 use crate::entropy_coding::ans::*;
 use crate::entropy_coding::context_map::*;
 use crate::entropy_coding::huffman::*;
@@ -91,7 +92,6 @@ impl Histograms {
         br: &mut BitReader,
         allow_lz77: bool,
     ) -> Result<Histograms, Error> {
-        use std::iter::FromIterator;
         let lz77_params = LZ77Params::read_unconditional(&(), br, &Empty {})?;
         if !allow_lz77 && lz77_params.enabled {
             return Err(Error::LZ77Disallowed);
@@ -124,8 +124,8 @@ impl Histograms {
             br.read(2)? as usize + 5
         };
         let num_histograms = *context_map.iter().max().unwrap() + 1;
-        let uint_configs =
-            Result::from_iter((0..num_histograms).map(|_| HybridUint::decode(log_alpha_size, br)))?;
+        let uint_configs = ((0..num_histograms).map(|_| HybridUint::decode(log_alpha_size, br)))
+            .collect::<Result<_, _>>()?;
 
         let codes = if use_prefix_code {
             Codes::Huffman(HuffmanCodes::decode(num_histograms as usize, br)?)
