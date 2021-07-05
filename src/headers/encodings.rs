@@ -285,6 +285,51 @@ impl<Config, T: UnconditionalCoder<Config>> ConditionalCoder<VectorCoder<Config>
     }
 }
 
+pub trait DefaultedElementCoder<Config, T>
+where
+    Self: Sized,
+{
+    type Nonserialized;
+    fn read_defaulted_element(
+        config: &Config,
+        condition: bool,
+        default: T,
+        br: &mut BitReader,
+        nonserialized: &Self::Nonserialized,
+    ) -> Result<Self, Error>;
+}
+
+impl<Config, T> DefaultedElementCoder<VectorCoder<Config>, T> for Vec<T>
+where
+    T: UnconditionalCoder<Config> + Clone,
+{
+    type Nonserialized = T::Nonserialized;
+
+    fn read_defaulted_element(
+        config: &VectorCoder<Config>,
+        condition: bool,
+        default: T,
+        br: &mut BitReader,
+        nonserialized: &Self::Nonserialized,
+    ) -> Result<Self, Error> {
+        let len = u32::read_unconditional(&config.size_coder, br, &Empty {})?;
+        if condition {
+            let mut ret: Vec<T> = Vec::new();
+            ret.reserve_exact(len as usize);
+            for _ in 0..len {
+                ret.push(T::read_unconditional(
+                    &config.value_coder,
+                    br,
+                    nonserialized,
+                )?);
+            }
+            Ok(ret)
+        } else {
+            Ok(vec![default; len as usize])
+        }
+    }
+}
+
 pub trait DefaultedCoder<Config>
 where
     Self: Sized,
@@ -318,7 +363,7 @@ impl<Config, T: UnconditionalCoder<Config>> DefaultedCoder<Config> for T {
 
 // TODO(veluca93): this will likely need to be implemented differently if
 // there are extensions.
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Default)]
 pub struct Extensions {}
 
 impl UnconditionalCoder<()> for Extensions {

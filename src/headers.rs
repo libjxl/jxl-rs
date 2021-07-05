@@ -11,6 +11,7 @@ pub mod bit_depth;
 pub mod color_encoding;
 pub mod encodings;
 pub mod extra_channels;
+pub mod frame_header;
 pub mod image_metadata;
 pub mod size;
 pub mod transform_data;
