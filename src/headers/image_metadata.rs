@@ -78,7 +78,7 @@ pub struct ToneMapping {
 }
 
 impl ToneMapping {
-    pub fn check(&self) -> Result<(), Error> {
+    pub fn check(&self, _: &Empty) -> Result<(), Error> {
         if self.intensity_target <= 0.0 {
             Err(Error::InvalidIntensityTarget(self.intensity_target))
         } else if self.min_nits < 0.0 || self.min_nits > self.intensity_target {
@@ -125,7 +125,7 @@ pub struct ImageMetadata {
     pub bit_depth: BitDepth,
     #[default(true)]
     pub modular_16bit_sufficient: bool,
-    #[size_coder(u2S(0, 1, Bits(4) + 2, Bits(12) + 1))]
+    #[size_coder(implicit(u2S(0, 1, Bits(4) + 2, Bits(12) + 1)))]
     pub extra_channel_info: Vec<ExtraChannelInfo>,
     #[default(true)]
     pub xyb_encoded: bool,

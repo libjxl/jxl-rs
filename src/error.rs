@@ -59,4 +59,9 @@ pub enum Error {
     InvalidContextMap(u32),
     #[error("Invalid context map: number of histogram {0}, number of distinct histograms {1}")]
     InvalidContextMapHole(u32, u32),
+    // FrameHeader format errors
+    #[error("Invalid extra channel upsampling: upsampling: {0} dim_shift: {1} ec_upsampling: {2}")]
+    InvalidEcUpsampling(u32, u32, u32),
+    #[error("Num_ds: {0} should be smaller than num_passes: {1}")]
+    NumPassesTooLarge(u32, u32),
 }

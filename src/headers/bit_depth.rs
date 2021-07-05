@@ -28,7 +28,7 @@ pub struct BitDepth {
 }
 
 impl BitDepth {
-    fn check(&self) -> Result<(), Error> {
+    fn check(&self, _: &Empty) -> Result<(), Error> {
         if self.floating_point_sample {
             if self.exponent_bits_per_sample < 2 || self.exponent_bits_per_sample > 8 {
                 Err(Error::InvalidExponent(self.exponent_bits_per_sample))

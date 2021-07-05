@@ -135,6 +135,38 @@ fn parse_coder(input: syn::Expr) -> TokenStream2 {
     }
 }
 
+fn parse_size_coder(mut input: syn::Expr) -> TokenStream2 {
+    match input {
+        syn::Expr::Call(syn::ExprCall {
+            ref func,
+            ref mut args,
+            ..
+        }) => {
+            if args.len() != 1 {
+                abort!(input, "Expected 1 argument in sized_coder inner call");
+            }
+
+            match &**func {
+                syn::Expr::Path(expr_path) if expr_path.path.is_ident("implicit") => {
+                    let arg = args.first().unwrap().clone();
+                    parse_coder(arg)
+                }
+                syn::Expr::Path(expr_path) if expr_path.path.is_ident("explicit") => {
+                    quote! { U32Coder::Direct(U32::Val(#args)) }
+                }
+                _ => abort!(
+                    input,
+                    "Unexpected expression in size_coder, must be 'implicit()' or 'explicit()'"
+                ),
+            }
+        }
+        _ => abort!(
+            input,
+            "Unexpected expression in size_coder, must be 'implicit()' or 'explicit()'"
+        ),
+    }
+}
+
 fn prettify_condition(cond: &syn::Expr) -> String {
     (quote! {#cond})
         .to_string()
@@ -266,6 +298,7 @@ struct Field {
     kind: FieldKind,
     ty: syn::Type,
     default: Option<TokenStream2>,
+    default_element: Option<TokenStream2>,
     nonserialized_inits: Vec<TokenStream2>,
 }
 
@@ -284,6 +317,8 @@ impl Field {
         let mut size_coder = None;
 
         let mut nonserialized = vec![];
+
+        let mut default_element = None;
 
         // Parse attributes.
         for a in &f.attrs {
@@ -305,6 +340,13 @@ impl Field {
                     }
                     let default_expr = a.parse_args::<syn::Expr>().unwrap();
                     default = Some(quote! {#default_expr});
+                }
+                Some("default_element") => {
+                    if default_element.is_some() {
+                        abort!(f, "Repeated default_element")
+                    }
+                    let default_element_expr = a.parse_args::<syn::Expr>().unwrap();
+                    default_element = Some(quote! { #default_element_expr })
                 }
                 Some("condition") => {
                     if condition.is_some() {
@@ -365,7 +407,7 @@ impl Field {
                     let coder_ast = a.parse_args::<syn::Expr>().unwrap();
                     let pretty = prettify_coder(&coder_ast);
                     size_coder = Some(U32 {
-                        coder: parse_coder(coder_ast),
+                        coder: parse_size_coder(coder_ast),
                         pretty,
                     });
                 }
@@ -381,6 +423,10 @@ impl Field {
                 }
                 _ => {}
             }
+        }
+
+        if default.is_some() && default_element.is_some() {
+            abort!(f, "default is incompatible with default_element");
         }
 
         if let Some(select_coder) = select_coder {
@@ -414,9 +460,10 @@ impl Field {
         let mut coder = coder.unwrap_or_else(|| Coder::WithoutConfig(f.ty.clone()));
 
         if let Some(c) = size_coder {
-            if default.is_some() {
-                abort!(f, "size_coder and default are incompatible");
+            if default.is_none() {
+                default = Some(quote! { Vec::new() });
             }
+
             coder = Coder::Vector(c, Box::new(coder))
         }
 
@@ -435,6 +482,7 @@ impl Field {
             kind,
             ty: f.ty.clone(),
             default,
+            default_element,
             nonserialized_inits: nonserialized,
         }
     }
@@ -492,6 +540,13 @@ impl Field {
                 } else {
                     quote! {}
                 };
+
+                let (read_fn, default) = if let Some(def) = &self.default_element {
+                    (quote! { read_defaulted_element }, Some(def))
+                } else {
+                    (quote! { read_defaulted }, default.as_ref())
+                };
+
                 quote! {
                     let #ident = {
                         let cond = #cnd;
@@ -499,7 +554,7 @@ impl Field {
                         let default = #default;
                         type NS = <#ty as DefaultedCoder<#cfg_ty>>::Nonserialized;
                         let nonserialized = NS { #(#nonserialized_inits),* };
-                        <#ty>::read_defaulted(&cfg, cond, default, br, &nonserialized)?
+                        <#ty>::#read_fn(&cfg, cond, default, br, &nonserialized)?
                     };
                     #trc
                 }
@@ -579,7 +634,7 @@ impl Field {
                 Field::texify_coder_and_cond(
                     Some(&("0..num_".to_owned() + ident)),
                     &**value_coder,
-                    None,
+                    dfl,
                     ident,
                     add_row,
                 );
@@ -611,12 +666,17 @@ impl Field {
             );
         };
         let default = self.default.as_ref().map(|d| quote! { #d }.to_string());
-        let default = if let Coder::WithoutConfig(ty) = &coder {
-            let ty = prettify_type(ty).1;
-            default.map(|d| prettify_default(d, &ty))
-        } else {
-            default
+        let default = match &coder {
+            Coder::WithoutConfig(ty) => {
+                let ty = prettify_type(ty).1;
+                default.map(|d| prettify_default(d, &ty))
+            }
+            Coder::Vector(_, _) if self.default_element.is_some() => {
+                Some(self.default_element.as_ref().unwrap().to_string())
+            }
+            _ => default,
         };
+
         Field::texify_coder_and_cond(
             condition.map(String::as_str),
             coder,
@@ -731,9 +791,14 @@ fn derive_struct(input: DeriveInput) -> TokenStream2 {
     };
 
     let impl_validate = if validate {
-        quote! { return_value.check()?; }
+        quote! { return_value.check(nonserialized)?; }
     } else {
         quote! {}
+    };
+
+    let align = match input.attrs.iter().any(|a| a.path.is_ident("aligned")) {
+        true => quote! { br.jump_to_byte_boundary()?; },
+        false => quote! {},
     };
 
     texify(&quote! {#name}.to_string(), &fields);
@@ -746,10 +811,13 @@ fn derive_struct(input: DeriveInput) -> TokenStream2 {
                 use crate::headers::encodings::UnconditionalCoder;
                 use crate::headers::encodings::ConditionalCoder;
                 use crate::headers::encodings::DefaultedCoder;
+                use crate::headers::encodings::DefaultedElementCoder;
+                #align
                 #(#fields_read)*
                 let return_value = #name {
                     #(#fields_names),*
                 };
+                #align
                 #impl_validate
                 Ok(return_value)
             }
@@ -848,6 +916,7 @@ fn derive_enum(input: DeriveInput) -> TokenStream2 {
         coder,
         condition,
         default,
+        default_element,
         all_default,
         select_coder,
         coder_true,
@@ -855,6 +924,7 @@ fn derive_enum(input: DeriveInput) -> TokenStream2 {
         validate,
         size_coder,
         nonserialized,
+        aligned,
     )
 )]
 pub fn derive_jxl_headers(input: TokenStream) -> TokenStream {

@@ -95,7 +95,7 @@ impl CustomTransferFunction {
         self.gamma as f32 * 0.0000001
     }
 
-    pub fn check(&self) -> Result<(), Error> {
+    pub fn check(&self, _: &CustomTransferFunctionNonserialized) -> Result<(), Error> {
         if self.have_gamma {
             let gamma = self.gamma();
             if gamma > 1.0 || gamma * 8192.0 < 1.0 {
@@ -142,7 +142,7 @@ pub struct ColorEncoding {
 }
 
 impl ColorEncoding {
-    pub fn check(&self) -> Result<(), Error> {
+    pub fn check(&self, _: &Empty) -> Result<(), Error> {
         if !self.want_icc
             && (self.color_space == ColorSpace::Unknown
                 || self.tf.transfer_function == TransferFunction::Unknown)

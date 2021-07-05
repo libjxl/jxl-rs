@@ -5,7 +5,11 @@
 
 use jxl::bit_reader::BitReader;
 use jxl::bmff::JxlCodestream;
-use jxl::headers::FileHeaders;
+use jxl::headers::{
+    encodings::UnconditionalCoder,
+    frame_header::{FrameHeader, FrameHeaderNonserialized},
+    FileHeaders,
+};
 use jxl::icc::read_icc;
 use std::env;
 use std::fs;
@@ -23,6 +27,25 @@ fn parse_jxl_codestream(data: &[u8]) -> Result<(), jxl::error::Error> {
     } else {
         None
     };
+
+    let have_timecode = match fh.image_metadata.animation {
+        Some(ref a) => a.have_timecodes,
+        None => false,
+    };
+    let _frame_header = FrameHeader::read_unconditional(
+        &(),
+        &mut br,
+        &FrameHeaderNonserialized {
+            xyb_encoded: fh.image_metadata.xyb_encoded,
+            num_extra_channels: fh.image_metadata.extra_channel_info.len() as u32,
+            extra_channel_info: fh.image_metadata.extra_channel_info,
+            have_animation: fh.image_metadata.animation.is_some(),
+            have_timecode,
+            img_width: fh.size.xsize(),
+            img_height: fh.size.ysize(),
+        },
+    )?;
+
     Ok(())
 }
 
