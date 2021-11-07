@@ -45,7 +45,7 @@ fn parse_single_coder(input: &syn::Expr, extra_lit: Option<&syn::ExprLit>) -> To
             Some(elit) => quote! {U32::Val(#lit + #elit)},
         },
         syn::Expr::Call(expr_call) => {
-            let bits = get_bits(&expr_call);
+            let bits = get_bits(expr_call);
             match extra_lit {
                 None => quote! {U32::Bits(#bits)},
                 Some(elit) => quote! {U32::BitsOffset{n: #bits, off: #elit}},
@@ -64,7 +64,7 @@ fn parse_single_coder(input: &syn::Expr, extra_lit: Option<&syn::ExprLit>) -> To
             };
             match (&**left, &**right) {
                 (syn::Expr::Call(expr_call), syn::Expr::Lit(lit)) => {
-                    let bits = get_bits(&expr_call);
+                    let bits = get_bits(expr_call);
                     match extra_lit {
                         None => quote! {U32::BitsOffset{n: #bits, off: #lit}},
                         Some(elit) => quote! {U32::BitsOffset{n: #bits, off: #lit + #elit}},
@@ -109,7 +109,7 @@ fn parse_coder(input: syn::Expr) -> TokenStream2 {
     };
 
     match &input {
-        syn::Expr::Call(expr_call) => parse_u2s(&expr_call, None),
+        syn::Expr::Call(expr_call) => parse_u2s(expr_call, None),
         syn::Expr::Binary(syn::ExprBinary {
             attrs: _,
             left,
@@ -123,7 +123,7 @@ fn parse_coder(input: syn::Expr) -> TokenStream2 {
             };
             match (&**left, &**right) {
                 (syn::Expr::Call(expr_call), syn::Expr::Lit(lit)) => {
-                    parse_u2s(&expr_call, Some(&lit))
+                    parse_u2s(expr_call, Some(lit))
                 }
                 _ => abort!(
                     input,
@@ -579,11 +579,11 @@ impl Field {
                     cond.as_deref(),
                     &("\\hyperref[hdr:".to_owned() + &href_ty + "]{" + &minted(&ty) + "}"),
                     dfl.as_deref(),
-                    &ident,
+                    ident,
                 );
             }
             Coder::U32(U32 { coder: _, pretty }) => {
-                add_row(cond.as_deref(), &minted(pretty), dfl.as_deref(), &ident);
+                add_row(cond.as_deref(), &minted(pretty), dfl.as_deref(), ident);
             }
             Coder::Select(
                 Condition {
@@ -610,17 +610,12 @@ impl Field {
                 } else {
                     "!(".to_owned() + condition + ")"
                 };
-                add_row(
-                    Some(&cond_true),
-                    &minted(&coder_true),
-                    dfl.as_deref(),
-                    &ident,
-                );
+                add_row(Some(&cond_true), &minted(coder_true), dfl.as_deref(), ident);
                 add_row(
                     Some(&cond_false),
-                    &minted(&coder_false),
+                    &minted(coder_false),
                     dfl.as_deref(),
-                    &ident,
+                    ident,
                 );
             }
             Coder::Vector(size_coder, value_coder) => {
