@@ -20,7 +20,7 @@ jobs:
     runs-on: [ubuntu-latest]
     steps:
     - name: Checkout the source
-      uses: actions/checkout@v2
+      uses: actions/checkout@v3
     - name: Check AUTHORS file
       run:
         ./ci/pull_request_checks.sh
@@ -29,7 +29,7 @@ jobs:
     name: Test, Format and Clippy
     runs-on: [ubuntu-latest]
     steps:
-      - uses: actions/checkout@v2
+      - uses: actions/checkout@v3
         with:
           submodules: recursive
 
@@ -41,7 +41,7 @@ jobs:
           override: true
 
       - name: Build artefact caching
-        uses: Swatinem/rust-cache@v1.3.0
+        uses: Swatinem/rust-cache@v2.0.0
 
       - name: Format 
         run: cargo fmt --all -- --check
