@@ -2,4 +2,3 @@
 *.swp
 perf.data
 perf.data.old
-Cargo.lock
