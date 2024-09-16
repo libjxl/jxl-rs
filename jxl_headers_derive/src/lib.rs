@@ -223,16 +223,8 @@ impl Coder {
     fn config(&self, all_default_field: &Option<syn::Ident>) -> (TokenStream2, TokenStream2) {
         match self {
             Coder::WithoutConfig(_) => (quote! {()}, quote! { () }),
-            Coder::U32(U32 { coder  }) => (quote! {U32Coder}, quote! { #coder }),
-            Coder::Select(
-                condition,
-                U32 {
-                    coder: coder_true,
-                },
-                U32 {
-                    coder: coder_false,
-                },
-            ) => {
+            Coder::U32(U32 { coder }) => (quote! {U32Coder}, quote! { #coder }),
+            Coder::Select(condition, U32 { coder: coder_true }, U32 { coder: coder_false }) => {
                 let cnd = condition.get_expr(all_default_field).unwrap();
                 (
                     quote! {SelectCoder<U32Coder>},
@@ -241,7 +233,7 @@ impl Coder {
                     },
                 )
             }
-            Coder::Vector(U32 { coder, }, value_coder) => {
+            Coder::Vector(U32 { coder }, value_coder) => {
                 let (ty_value_coder, value_coder) = value_coder.config(all_default_field);
                 (
                     quote! {VectorCoder<#ty_value_coder>},
