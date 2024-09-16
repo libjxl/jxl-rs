@@ -209,7 +209,6 @@ impl Condition {
 #[derive(Debug, Clone)]
 struct U32 {
     coder: TokenStream2,
-    pretty: String,
 }
 
 #[derive(Debug)]
@@ -224,16 +223,14 @@ impl Coder {
     fn config(&self, all_default_field: &Option<syn::Ident>) -> (TokenStream2, TokenStream2) {
         match self {
             Coder::WithoutConfig(_) => (quote! {()}, quote! { () }),
-            Coder::U32(U32 { coder, pretty: _ }) => (quote! {U32Coder}, quote! { #coder }),
+            Coder::U32(U32 { coder  }) => (quote! {U32Coder}, quote! { #coder }),
             Coder::Select(
                 condition,
                 U32 {
                     coder: coder_true,
-                    pretty: _,
                 },
                 U32 {
                     coder: coder_false,
-                    pretty: _,
                 },
             ) => {
                 let cnd = condition.get_expr(all_default_field).unwrap();
@@ -244,7 +241,7 @@ impl Coder {
                     },
                 )
             }
-            Coder::Vector(U32 { coder, pretty: _ }, value_coder) => {
+            Coder::Vector(U32 { coder, }, value_coder) => {
                 let (ty_value_coder, value_coder) = value_coder.config(all_default_field);
                 (
                     quote! {VectorCoder<#ty_value_coder>},
@@ -298,10 +295,8 @@ impl Field {
                         abort!(f, "Repeated coder");
                     }
                     let coder_ast = a.parse_args::<syn::Expr>().unwrap();
-                    let pretty = prettify_coder(&coder_ast);
                     coder = Some(Coder::U32(U32 {
                         coder: parse_coder(coder_ast),
-                        pretty,
                     }));
                 }
                 Some("default") => {
@@ -353,10 +348,8 @@ impl Field {
                         abort!(f, "Repeated coder_false");
                     }
                     let coder_ast = a.parse_args::<syn::Expr>().unwrap();
-                    let pretty = prettify_coder(&coder_ast);
                     coder_false = Some(U32 {
                         coder: parse_coder(coder_ast),
-                        pretty,
                     });
                 }
                 Some("coder_true") => {
@@ -364,10 +357,8 @@ impl Field {
                         abort!(f, "Repeated coder_true");
                     }
                     let coder_ast = a.parse_args::<syn::Expr>().unwrap();
-                    let pretty = prettify_coder(&coder_ast);
                     coder_true = Some(U32 {
                         coder: parse_coder(coder_ast),
-                        pretty,
                     });
                 }
                 Some("size_coder") => {
@@ -375,10 +366,8 @@ impl Field {
                         abort!(f, "Repeated size_coder");
                     }
                     let coder_ast = a.parse_args::<syn::Expr>().unwrap();
-                    let pretty = prettify_coder(&coder_ast);
                     size_coder = Some(U32 {
                         coder: parse_size_coder(coder_ast),
-                        pretty,
                     });
                 }
                 Some("nonserialized") => {
