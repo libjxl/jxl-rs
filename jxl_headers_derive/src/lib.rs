@@ -169,9 +169,6 @@ fn prettify_condition(cond: &syn::Expr) -> String {
         .replace(" :: ", "::")
 }
 
-fn prettify_coder(coder: &syn::Expr) -> String {
-    (quote! {#coder}).to_string()
-}
 
 #[derive(Debug)]
 struct Condition {
@@ -213,7 +210,7 @@ struct U32 {
 
 #[derive(Debug)]
 enum Coder {
-    WithoutConfig(syn::Type),
+    WithoutConfig,
     U32(U32),
     Select(Condition, U32, U32),
     Vector(U32, Box<Coder>),
@@ -222,7 +219,7 @@ enum Coder {
 impl Coder {
     fn config(&self, all_default_field: &Option<syn::Ident>) -> (TokenStream2, TokenStream2) {
         match self {
-            Coder::WithoutConfig(_) => (quote! {()}, quote! { () }),
+            Coder::WithoutConfig => (quote! {()}, quote! { () }),
             Coder::U32(U32 { coder }) => (quote! {U32Coder}, quote! { #coder }),
             Coder::Select(condition, U32 { coder: coder_true }, U32 { coder: coder_false }) => {
                 let cnd = condition.get_expr(all_default_field).unwrap();
@@ -408,7 +405,7 @@ impl Field {
         };
 
         // Assume nested field if no coder.
-        let mut coder = coder.unwrap_or_else(|| Coder::WithoutConfig(f.ty.clone()));
+        let mut coder = coder.unwrap_or_else(|| Coder::WithoutConfig);
 
         if let Some(c) = size_coder {
             if default.is_none() {
