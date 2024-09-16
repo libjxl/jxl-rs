@@ -169,7 +169,6 @@ fn prettify_condition(cond: &syn::Expr) -> String {
         .replace(" :: ", "::")
 }
 
-
 #[derive(Debug)]
 struct Condition {
     expr: Option<syn::Expr>,
