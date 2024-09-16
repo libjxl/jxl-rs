@@ -11,12 +11,6 @@ use proc_macro_error::{abort, proc_macro_error};
 use quote::quote;
 use syn::{parse_macro_input, DeriveInput};
 
-#[cfg(feature = "tex")]
-use std::fs;
-
-#[cfg(feature = "tex")]
-const THIN_LINE: &str = "    \\noalign{\\color{gray!50}\\hrule height 0.1pt}\n";
-
 fn get_bits(expr_call: &syn::ExprCall) -> syn::Expr {
     if let syn::Expr::Path(ep) = &*expr_call.func {
         if !ep.path.is_ident("Bits") {
@@ -175,34 +169,6 @@ fn prettify_condition(cond: &syn::Expr) -> String {
         .replace(" :: ", "::")
 }
 
-fn prettify_coder(coder: &syn::Expr) -> String {
-    (quote! {#coder}).to_string()
-}
-
-#[cfg(feature = "tex")]
-fn prettify_type(ty: &syn::Type) -> (String, String) {
-    let mut ret = (quote! {#ty}).to_string().replace(' ', "");
-    if ret.starts_with("Option<") {
-        ret = ret[7..ret.len() - 1].to_owned();
-    }
-    if ret.starts_with("Vec<") {
-        ret = ret[4..ret.len() - 1].to_owned();
-    }
-    let ret_href = ret.replace("[", "_").replace("]", "_").replace(";", "_");
-    (ret_href, ret)
-}
-
-#[cfg(feature = "tex")]
-fn prettify_default(d: String, ty: &str) -> String {
-    d.replace(&(ty.to_owned() + " :: default()"), "")
-        .replace(" :: ", "::")
-}
-
-#[cfg(feature = "tex")]
-fn minted(x: &str) -> String {
-    "\\mintinline[breaklines]{rust}{".to_owned() + x + "}"
-}
-
 #[derive(Debug)]
 struct Condition {
     expr: Option<syn::Expr>,
@@ -239,12 +205,11 @@ impl Condition {
 #[derive(Debug, Clone)]
 struct U32 {
     coder: TokenStream2,
-    pretty: String,
 }
 
 #[derive(Debug)]
 enum Coder {
-    WithoutConfig(syn::Type),
+    WithoutConfig,
     U32(U32),
     Select(Condition, U32, U32),
     Vector(U32, Box<Coder>),
@@ -253,19 +218,9 @@ enum Coder {
 impl Coder {
     fn config(&self, all_default_field: &Option<syn::Ident>) -> (TokenStream2, TokenStream2) {
         match self {
-            Coder::WithoutConfig(_) => (quote! {()}, quote! { () }),
-            Coder::U32(U32 { coder, pretty: _ }) => (quote! {U32Coder}, quote! { #coder }),
-            Coder::Select(
-                condition,
-                U32 {
-                    coder: coder_true,
-                    pretty: _,
-                },
-                U32 {
-                    coder: coder_false,
-                    pretty: _,
-                },
-            ) => {
+            Coder::WithoutConfig => (quote! {()}, quote! { () }),
+            Coder::U32(U32 { coder }) => (quote! {U32Coder}, quote! { #coder }),
+            Coder::Select(condition, U32 { coder: coder_true }, U32 { coder: coder_false }) => {
                 let cnd = condition.get_expr(all_default_field).unwrap();
                 (
                     quote! {SelectCoder<U32Coder>},
@@ -274,7 +229,7 @@ impl Coder {
                     },
                 )
             }
-            Coder::Vector(U32 { coder, pretty: _ }, value_coder) => {
+            Coder::Vector(U32 { coder }, value_coder) => {
                 let (ty_value_coder, value_coder) = value_coder.config(all_default_field);
                 (
                     quote! {VectorCoder<#ty_value_coder>},
@@ -328,10 +283,8 @@ impl Field {
                         abort!(f, "Repeated coder");
                     }
                     let coder_ast = a.parse_args::<syn::Expr>().unwrap();
-                    let pretty = prettify_coder(&coder_ast);
                     coder = Some(Coder::U32(U32 {
                         coder: parse_coder(coder_ast),
-                        pretty,
                     }));
                 }
                 Some("default") => {
@@ -383,10 +336,8 @@ impl Field {
                         abort!(f, "Repeated coder_false");
                     }
                     let coder_ast = a.parse_args::<syn::Expr>().unwrap();
-                    let pretty = prettify_coder(&coder_ast);
                     coder_false = Some(U32 {
                         coder: parse_coder(coder_ast),
-                        pretty,
                     });
                 }
                 Some("coder_true") => {
@@ -394,10 +345,8 @@ impl Field {
                         abort!(f, "Repeated coder_true");
                     }
                     let coder_ast = a.parse_args::<syn::Expr>().unwrap();
-                    let pretty = prettify_coder(&coder_ast);
                     coder_true = Some(U32 {
                         coder: parse_coder(coder_ast),
-                        pretty,
                     });
                 }
                 Some("size_coder") => {
@@ -405,10 +354,8 @@ impl Field {
                         abort!(f, "Repeated size_coder");
                     }
                     let coder_ast = a.parse_args::<syn::Expr>().unwrap();
-                    let pretty = prettify_coder(&coder_ast);
                     size_coder = Some(U32 {
                         coder: parse_size_coder(coder_ast),
-                        pretty,
                     });
                 }
                 Some("nonserialized") => {
@@ -457,7 +404,7 @@ impl Field {
         };
 
         // Assume nested field if no coder.
-        let mut coder = coder.unwrap_or_else(|| Coder::WithoutConfig(f.ty.clone()));
+        let mut coder = coder.unwrap_or_else(|| Coder::WithoutConfig);
 
         if let Some(c) = size_coder {
             if default.is_none() {
@@ -561,157 +508,7 @@ impl Field {
             }
         }
     }
-
-    #[cfg(feature = "tex")]
-    fn texify_coder_and_cond<F>(
-        cond: Option<&str>,
-        coder: &Coder,
-        dfl: Option<&str>,
-        ident: &str,
-        add_row: &mut F,
-    ) where
-        F: FnMut(Option<&str>, &str, Option<&str>, &str),
-    {
-        match &coder {
-            Coder::WithoutConfig(ty) => {
-                let (href_ty, ty) = prettify_type(ty);
-                add_row(
-                    cond.as_deref(),
-                    &("\\hyperref[hdr:".to_owned() + &href_ty + "]{" + &minted(&ty) + "}"),
-                    dfl.as_deref(),
-                    ident,
-                );
-            }
-            Coder::U32(U32 { coder: _, pretty }) => {
-                add_row(cond.as_deref(), &minted(pretty), dfl.as_deref(), ident);
-            }
-            Coder::Select(
-                Condition {
-                    expr: _,
-                    has_all_default: _,
-                    pretty: condition,
-                },
-                U32 {
-                    coder: _,
-                    pretty: coder_true,
-                },
-                U32 {
-                    coder: _,
-                    pretty: coder_false,
-                },
-            ) => {
-                let cond_true = if let Some(c) = &cond {
-                    "(".to_owned() + condition + ") && (" + c + ")"
-                } else {
-                    condition.clone()
-                };
-                let cond_false = if let Some(c) = &cond {
-                    "!(".to_owned() + condition + ") && (" + c + ")"
-                } else {
-                    "!(".to_owned() + condition + ")"
-                };
-                add_row(Some(&cond_true), &minted(coder_true), dfl.as_deref(), ident);
-                add_row(
-                    Some(&cond_false),
-                    &minted(coder_false),
-                    dfl.as_deref(),
-                    ident,
-                );
-            }
-            Coder::Vector(size_coder, value_coder) => {
-                Field::texify_coder_and_cond(
-                    cond,
-                    &Coder::U32((*size_coder).clone()),
-                    Some("0"),
-                    &("num_".to_owned() + ident),
-                    add_row,
-                );
-                Field::texify_coder_and_cond(
-                    Some(&("0..num_".to_owned() + ident)),
-                    &**value_coder,
-                    dfl,
-                    ident,
-                    add_row,
-                );
-            }
-        };
-    }
-
-    #[cfg(feature = "tex")]
-    fn texify(&self, mut row: usize) -> String {
-        let ident = &self.name;
-        let ident = &quote! {#ident}.to_string();
-        let (coder, condition) = match &self.kind {
-            FieldKind::Unconditional(coder) => (coder, None),
-            FieldKind::Conditional(condition, coder) => (coder, Some(&condition.pretty)),
-            FieldKind::Defaulted(condition, coder) => (coder, Some(&condition.pretty)),
-        };
-        let mut ret = String::new();
-        let mut add_row = |cond: Option<&str>, coder: &str, dfl: Option<&str>, ident: &str| {
-            if row != 0 {
-                ret += THIN_LINE;
-            }
-            row += 1;
-            ret += &format!(
-                "    {} & {} & {} & {} \\\\\n",
-                minted(cond.unwrap_or("")),
-                coder,
-                minted(dfl.unwrap_or("")),
-                minted(ident)
-            );
-        };
-        let default = self.default.as_ref().map(|d| quote! { #d }.to_string());
-        let default = match &coder {
-            Coder::WithoutConfig(ty) => {
-                let ty = prettify_type(ty).1;
-                default.map(|d| prettify_default(d, &ty))
-            }
-            Coder::Vector(_, _) if self.default_element.is_some() => {
-                Some(self.default_element.as_ref().unwrap().to_string())
-            }
-            _ => default,
-        };
-
-        Field::texify_coder_and_cond(
-            condition.map(String::as_str),
-            coder,
-            default.as_deref(),
-            ident,
-            &mut add_row,
-        );
-        ret
-    }
 }
-
-#[cfg(feature = "tex")]
-fn texify(name: &str, fields: &[Field]) {
-    let mut table = String::new();
-    table += &format!(
-        "\\begin{{table}}[h]\n  \\caption{{{} bundle. \\label{{hdr:{}}}}}\n",
-        name, name
-    );
-    table += r#"
-  \centering
-  \begin{tabular}{>{\centering\arraybackslash}m{0.27\textwidth}>{\centering\arraybackslash}m{0.3\textwidth}>{\centering\arraybackslash}m{0.1\textwidth}>{\centering\arraybackslash}m{0.27\textwidth}}
-    \toprule
-    \bf condition & \bf type & \bf default & \bf name \\
-    \midrule
-"#;
-    for (i, f) in fields.iter().enumerate() {
-        table += &f.texify(i);
-    }
-    table += r#"
-    \bottomrule
-  \end{tabular}
-\end{table}"#;
-    // TODO(veluca93): this may be problematic.
-    fs::create_dir_all("tex").unwrap();
-    let fname = format!("tex/{}.tex", name.to_owned());
-    fs::write(fname, table).unwrap();
-}
-
-#[cfg(not(feature = "tex"))]
-fn texify(_: &str, _: &[Field]) {}
 
 fn derive_struct(input: DeriveInput) -> TokenStream2 {
     let name = &input.ident;
@@ -796,8 +593,6 @@ fn derive_struct(input: DeriveInput) -> TokenStream2 {
         false => quote! {},
     };
 
-    texify(&quote! {#name}.to_string(), &fields);
-
     quote! {
         #impl_default
         impl crate::headers::encodings::UnconditionalCoder<()> for #name {
@@ -820,62 +615,7 @@ fn derive_struct(input: DeriveInput) -> TokenStream2 {
     }
 }
 
-#[cfg(feature = "tex")]
-fn texify_enum(input: &DeriveInput) {
-    let name = &input.ident;
-    let name = &quote! {#name}.to_string();
-    let mut table = String::new();
-    table += &format!(
-        "\\begin{{table}}[h]\n  \\caption{{{} enum. \\label{{hdr:{}}}}}\n",
-        name, name
-    );
-    table += r#"
-  \centering
-  \begin{tabular}{cc}
-    \toprule
-    \bf name & \bf value \\
-    \midrule
-"#;
-    let data = if let syn::Data::Enum(enum_data) = &input.data {
-        enum_data
-    } else {
-        abort!(input, "derive_enum didn't get a enum");
-    };
-    let mut last_variant = -1;
-    for (row, var) in data.variants.iter().enumerate() {
-        let ident = &var.ident;
-        let discr = &var.discriminant;
-        let n = quote! {#ident}.to_string();
-        let discr = if let Some((_, d)) = discr {
-            (quote! {#d}).to_string().parse::<i32>().unwrap()
-        } else {
-            last_variant + 1
-        };
-        last_variant = discr;
-        if row != 0 {
-            table += THIN_LINE;
-        }
-        table += &format!(
-            "    {} & {} \\\\\n",
-            &minted(&n),
-            &minted(&discr.to_string())
-        );
-    }
-    table += r#"
-    \bottomrule
-  \end{tabular}
-\end{table}"#;
-    // TODO(veluca93): this may be problematic.
-    fs::create_dir_all("tex").unwrap();
-    let fname = format!("tex/{}.tex", name.to_owned());
-    fs::write(fname, table).unwrap();
-}
-
-#[cfg(not(feature = "tex"))]
-fn texify_enum(_: &DeriveInput) {}
-
 fn derive_enum(input: DeriveInput) -> TokenStream2 {
-    texify_enum(&input);
     let name = &input.ident;
     quote! {
         impl crate::headers::encodings::UnconditionalCoder<U32Coder> for #name {

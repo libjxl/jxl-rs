@@ -22,4 +22,3 @@ debug = true
 members = ["jxl_headers_derive"]
 
 [features]
-tex = ["jxl_headers_derive/tex"]
