@@ -9,9 +9,6 @@ edition = "2018"
 [lib]
 proc-macro = true
 
-[features]
-tex = []
-
 [dependencies]
 proc-macro2 = "1.0"
 proc-macro-error = "1.0"
