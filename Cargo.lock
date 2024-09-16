@@ -40,6 +40,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "jxl_cli"
+version = "0.1.0"
+dependencies = [
+ "jxl",
+]
+
+[[package]]
 name = "jxl_headers_derive"
 version = "0.1.0"
 dependencies = [
