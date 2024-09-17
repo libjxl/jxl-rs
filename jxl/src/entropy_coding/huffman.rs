@@ -5,7 +5,7 @@
 
 use crate::bit_reader::BitReader;
 use crate::entropy_coding::decode::*;
-use crate::error::Error;
+use crate::error::{Error, Result};
 use crate::util::*;
 
 pub const HUFFMAN_MAX_BITS: usize = 15;
@@ -62,7 +62,7 @@ fn next_table_bit_size(count: &[u16], len: usize, root_bits: usize) -> usize {
 }
 
 impl Table {
-    fn decode_simple_table(al_size: usize, br: &mut BitReader) -> Result<Vec<TableEntry>, Error> {
+    fn decode_simple_table(al_size: usize, br: &mut BitReader) -> Result<Vec<TableEntry>> {
         let max_bits = al_size.ceil_log2();
         let num_symbols = (br.read(2)? + 1) as usize;
         let mut symbols = [0u16; 4];
@@ -198,7 +198,7 @@ impl Table {
         code_length_code_lengths: [u8; CODE_LENGTHS_CODE],
         al_size: usize,
         br: &mut BitReader,
-    ) -> Result<Vec<u8>, Error> {
+    ) -> Result<Vec<u8>> {
         let table = Table::build(5, &code_length_code_lengths)?;
 
         let mut symbol = 0;
@@ -258,7 +258,7 @@ impl Table {
         Ok(code_lengths)
     }
 
-    fn build(root_bits: usize, code_lengths: &[u8]) -> Result<Vec<TableEntry>, Error> {
+    fn build(root_bits: usize, code_lengths: &[u8]) -> Result<Vec<TableEntry>> {
         if code_lengths.len() > 1 << HUFFMAN_MAX_BITS {
             return Err(Error::InvalidHuffman);
         }
@@ -376,7 +376,7 @@ impl Table {
         Ok(table)
     }
 
-    pub fn decode(al_size: usize, br: &mut BitReader) -> Result<Table, Error> {
+    pub fn decode(al_size: usize, br: &mut BitReader) -> Result<Table> {
         let entries = if al_size == 1 {
             vec![TableEntry { bits: 0, value: 0 }; TABLE_SIZE]
         } else {
@@ -416,7 +416,7 @@ impl Table {
         Ok(Table { entries })
     }
 
-    pub fn read(&self, br: &mut BitReader) -> Result<u32, Error> {
+    pub fn read(&self, br: &mut BitReader) -> Result<u32> {
         let mut pos = br.peek(TABLE_BITS) as usize;
         let mut n_bits = self.entries[pos].bits as usize;
         if n_bits > TABLE_BITS {
@@ -436,10 +436,10 @@ pub struct HuffmanCodes {
 }
 
 impl HuffmanCodes {
-    pub fn decode(num: usize, br: &mut BitReader) -> Result<HuffmanCodes, Error> {
+    pub fn decode(num: usize, br: &mut BitReader) -> Result<HuffmanCodes> {
         let alphabet_sizes: Vec<u16> = (0..num)
             .map(|_| Ok(decode_varint16(br)? + 1))
-            .collect::<Result<_, _>>()?;
+            .collect::<Result<_>>()?;
         let max = *alphabet_sizes.iter().max().unwrap();
         if max as usize > (1 << HUFFMAN_MAX_BITS) {
             return Err(Error::AlphabetTooLargeHuff(max as usize));
@@ -447,10 +447,10 @@ impl HuffmanCodes {
         let tables = alphabet_sizes
             .iter()
             .map(|sz| Table::decode(*sz as usize, br))
-            .collect::<Result<_, _>>()?;
+            .collect::<Result<_>>()?;
         Ok(HuffmanCodes { tables })
     }
-    pub fn read(&self, br: &mut BitReader, ctx: usize) -> Result<u32, Error> {
+    pub fn read(&self, br: &mut BitReader, ctx: usize) -> Result<u32> {
         self.tables[ctx].read(br)
     }
 }

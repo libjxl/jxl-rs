@@ -3,6 +3,8 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
+use std::collections::TryReserveError;
+
 use thiserror::Error;
 
 use crate::entropy_coding::huffman::HUFFMAN_MAX_BITS;
@@ -64,4 +66,15 @@ pub enum Error {
     InvalidEcUpsampling(u32, u32, u32),
     #[error("Num_ds: {0} should be smaller than num_passes: {1}")]
     NumPassesTooLarge(u32, u32),
+    #[error("Out of memory: {0}")]
+    OutOfMemory(#[from] TryReserveError),
+    #[error("Image size too large: {0}x{1}")]
+    ImageSizeTooLarge(usize, usize),
+    #[error("Rect out of bounds: {0}x{1}+{2}+{3} rect in {4}x{5} view")]
+    RectOutOfBounds(usize, usize, usize, usize, usize, usize),
+    // Generic arithmetic overflow. Prefer using other errors if possible.
+    #[error("Arithmetic overflow")]
+    ArithmeticOverflow,
 }
+
+pub type Result<T> = std::result::Result<T, Error>;

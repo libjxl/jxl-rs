@@ -9,4 +9,5 @@ pub mod entropy_coding;
 pub mod error;
 pub mod headers;
 pub mod icc;
+pub mod image;
 mod util;
