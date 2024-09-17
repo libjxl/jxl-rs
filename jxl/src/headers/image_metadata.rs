@@ -96,6 +96,8 @@ impl ToneMapping {
     }
 }
 
+// TODO(firsching): remove once we use this!
+#[allow(dead_code)]
 #[derive(UnconditionalCoder, Debug)]
 pub struct ImageMetadata {
     #[all_default]

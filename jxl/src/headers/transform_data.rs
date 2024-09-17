@@ -18,6 +18,8 @@ pub struct CustomTransformDataNonserialized {
     pub xyb_encoded: bool,
 }
 
+// TODO(firsching): remove once we use this!
+#[allow(dead_code)]
 #[derive(UnconditionalCoder, Debug)]
 pub struct OpsinInverseMatrix {
     #[all_default]
@@ -322,6 +324,8 @@ const DEFAULT_KERN_8: [f32; 210] = [
     -0.00458223,
 ];
 
+// TODO(firsching): remove once we use this!
+#[allow(dead_code)]
 #[derive(UnconditionalCoder, Debug)]
 #[nonserialized(CustomTransformDataNonserialized)]
 pub struct CustomTransformData {

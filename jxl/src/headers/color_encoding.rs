@@ -63,9 +63,13 @@ pub enum RenderingIntent {
 pub struct CustomXY {
     #[default(0)]
     #[coder(u2S(Bits(19), Bits(19) + 524288, Bits(20) + 1048576, Bits(21) + 2097152))]
+    // TODO(firsching): remove once we use this!
+    #[allow(dead_code)]
     x: i32,
     #[default(0)]
     #[coder(u2S(Bits(19), Bits(19) + 524288, Bits(20) + 1048576, Bits(21) + 2097152))]
+    // TODO(firsching): remove once we use this!
+    #[allow(dead_code)]
     y: i32,
 }
 
@@ -114,6 +118,8 @@ impl CustomTransferFunction {
 pub struct ColorEncoding {
     #[all_default]
     #[default(true)]
+    // TODO(firsching): remove once we use this!
+    #[allow(dead_code)]
     all_default: bool,
     #[default(false)]
     pub want_icc: bool,
