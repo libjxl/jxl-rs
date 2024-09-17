@@ -223,8 +223,7 @@ impl Table {
                 }
             } else {
                 let extra_bits = code_len - 14;
-                let old_repeat;
-                let repeat_delta;
+
                 let new_len = if code_len == CODE_LENGTH_REPEAT_CODE {
                     prev_code_len
                 } else {
@@ -234,13 +233,13 @@ impl Table {
                     repeat = 0;
                     repeat_code_len = new_len;
                 }
-                old_repeat = repeat;
+                let old_repeat = repeat;
                 if repeat > 0 {
                     repeat -= 2;
                     repeat <<= extra_bits;
                 }
                 repeat += br.read(extra_bits as usize)? as u8 + 3;
-                repeat_delta = repeat - old_repeat;
+                let repeat_delta = repeat - old_repeat;
                 if symbol + repeat_delta as usize > al_size {
                     return Err(Error::InvalidHuffman);
                 }
@@ -366,7 +365,7 @@ impl Table {
                 }
                 counts[len] -= 1;
                 let bits = (len - root_bits) as u8;
-                let value = sorted[symbol] as u16;
+                let value = sorted[symbol];
                 symbol += 1;
                 let pos = table_pos + (key as usize >> root_bits);
                 replicate_value(&mut table[pos..], step, TableEntry { bits, value });

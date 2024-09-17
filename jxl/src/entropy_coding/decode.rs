@@ -32,9 +32,13 @@ pub fn decode_varint16(br: &mut BitReader) -> Result<u16, Error> {
 #[derive(UnconditionalCoder, Debug)]
 struct LZ77Params {
     pub enabled: bool,
+    // TODO(firsching): remove once we use this!
+    #[allow(dead_code)]
     #[condition(enabled)]
     #[coder(u2S(224, 512, 4096, Bits(15) + 8))]
     pub min_symbol: Option<u32>,
+    // TODO(firsching): remove once we use this!
+    #[allow(dead_code)]
     #[condition(enabled)]
     #[coder(u2S(3, 4, Bits(2) + 5, Bits(8) + 9))]
     pub min_length: Option<u32>,
@@ -48,8 +52,12 @@ enum Codes {
 #[derive(Debug)]
 pub struct Histograms {
     lz77_params: LZ77Params,
+    // TODO(firsching): remove once we use this!
+    #[allow(dead_code)]
     lz77_length_uint: Option<HybridUint>,
     context_map: Vec<u8>,
+    // TODO(firsching): remove once we use this!
+    #[allow(dead_code)]
     log_alpha_size: usize,
     uint_configs: Vec<HybridUint>,
     codes: Codes,

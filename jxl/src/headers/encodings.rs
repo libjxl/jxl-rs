@@ -117,14 +117,14 @@ impl UnconditionalCoder<()> for u64 {
             1 => Ok(1 + br.read(4)?),
             2 => Ok(17 + br.read(8)?),
             _ => {
-                let mut result: u64 = br.read(12)? as u64;
+                let mut result: u64 = br.read(12)?;
                 let mut shift = 12;
                 while br.read(1)? == 1 {
                     if shift >= 60 {
                         assert_eq!(shift, 60);
-                        return Ok(result | ((br.read(4)? as u64) << shift));
+                        return Ok(result | (br.read(4)? << shift));
                     }
-                    result |= (br.read(8)? as u64) << shift;
+                    result |= br.read(8)? << shift;
                     shift += 8;
                 }
                 Ok(result)
@@ -373,7 +373,6 @@ impl UnconditionalCoder<()> for Extensions {
         br: &mut BitReader,
         _: &Self::Nonserialized,
     ) -> Result<Extensions, Error> {
-        use std::convert::TryFrom;
         let selector = u64::read_unconditional(&(), br, &Empty {})?;
         let mut total_size: u64 = 0;
         for i in 0..64 {

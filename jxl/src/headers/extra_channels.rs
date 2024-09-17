@@ -36,6 +36,8 @@ enum ExtraChannel {
     Optional,
 }
 
+// TODO(firsching): remove once we use this!
+#[allow(dead_code)]
 #[derive(UnconditionalCoder, Debug)]
 #[validate]
 pub struct ExtraChannelInfo {
