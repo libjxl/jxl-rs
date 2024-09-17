@@ -365,7 +365,7 @@ impl Table {
                 }
                 counts[len] -= 1;
                 let bits = (len - root_bits) as u8;
-                let value = sorted[symbol] as u16;
+                let value = sorted[symbol];
                 symbol += 1;
                 let pos = table_pos + (key as usize >> root_bits);
                 replicate_value(&mut table[pos..], step, TableEntry { bits, value });
