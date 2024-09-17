@@ -223,8 +223,7 @@ impl Table {
                 }
             } else {
                 let extra_bits = code_len - 14;
-                
-                
+
                 let new_len = if code_len == CODE_LENGTH_REPEAT_CODE {
                     prev_code_len
                 } else {
