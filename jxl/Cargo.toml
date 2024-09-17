@@ -14,3 +14,6 @@ num-traits = "0.2.14"
 array-init = "2.0.0"
 half = "1.7.1"
 jxl_headers_derive = { path = "../jxl_headers_derive" }
+
+[features]
+debug_tools = []

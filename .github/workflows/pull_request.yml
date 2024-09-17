@@ -48,4 +48,4 @@ jobs:
         run: cargo clippy --all-targets --all-features --tests --all -- -D warnings
 
       - name: Run tests
-        run: cargo test --all --no-fail-fast
+        run: cargo test --all --no-fail-fast --all-features
