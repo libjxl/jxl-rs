@@ -373,7 +373,6 @@ impl UnconditionalCoder<()> for Extensions {
         br: &mut BitReader,
         _: &Self::Nonserialized,
     ) -> Result<Extensions, Error> {
-        use std::convert::TryFrom;
         let selector = u64::read_unconditional(&(), br, &Empty {})?;
         let mut total_size: u64 = 0;
         for i in 0..64 {
