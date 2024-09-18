@@ -11,14 +11,14 @@ use crate::error::Error;
 #[derive(Debug, Clone)]
 pub struct ContainerBoxHeader {
     ty: ContainerBoxType,
-    size: Option<u64>,
+    box_size: Option<u64>,
     is_last: bool,
 }
 
 pub enum HeaderParseResult {
     Done {
         header: ContainerBoxHeader,
-        size: usize,
+        header_size: usize,
     },
     NeedMoreData,
 }
@@ -31,7 +31,7 @@ impl ContainerBoxHeader {
             return Ok(HeaderParseResult::NeedMoreData);
         }
 
-        let (tbox, size, header_size) = match *buf {
+        let (tbox, box_size, header_size) = match *buf {
             [0, 0, 0, 1, t0, t1, t2, t3, s0, s1, s2, s3, s4, s5, s6, s7, ..] => {
                 let xlbox = u64::from_be_bytes([s0, s1, s2, s3, s4, s5, s6, s7]);
                 let tbox = ContainerBoxType([t0, t1, t2, t3]);
@@ -52,16 +52,16 @@ impl ContainerBoxHeader {
             }
             _ => return Ok(HeaderParseResult::NeedMoreData),
         };
-        let is_last = size.is_none();
+        let is_last = box_size.is_none();
 
         let header = Self {
             ty: tbox,
-            size,
+            box_size,
             is_last,
         };
         Ok(HeaderParseResult::Done {
             header,
-            size: header_size,
+            header_size,
         })
     }
 }
@@ -73,8 +73,8 @@ impl ContainerBoxHeader {
     }
 
     #[inline]
-    pub fn size(&self) -> Option<u64> {
-        self.size
+    pub fn box_size(&self) -> Option<u64> {
+        self.box_size
     }
 
     #[inline]

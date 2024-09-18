@@ -183,8 +183,11 @@ impl ContainerParser {
                     }
                 }
                 DetectState::WaitingBoxHeader => match ContainerBoxHeader::parse(&reader)? {
-                    HeaderParseResult::Done { header, size } => {
-                        reader.advance(size);
+                    HeaderParseResult::Done {
+                        header,
+                        header_size,
+                    } => {
+                        reader.advance(header_size);
                         let tbox = header.box_type();
                         if tbox == ContainerBoxType::CODESTREAM {
                             if self.next_jxlp_index == u32::MAX {
@@ -199,10 +202,10 @@ impl ContainerParser {
                             self.next_jxlp_index = u32::MAX;
                             *state = DetectState::InCodestream {
                                 kind: BitstreamKind::Container,
-                                bytes_left: header.size().map(|x| x as usize),
+                                bytes_left: header.box_size().map(|x| x as usize),
                             };
                         } else if tbox == ContainerBoxType::PARTIAL_CODESTREAM {
-                            if let Some(box_size) = header.size() {
+                            if let Some(box_size) = header.box_size() {
                                 if box_size < 4 {
                                     return Err(Error::InvalidBox);
                                 }
@@ -223,7 +226,7 @@ impl ContainerParser {
 
                             *state = DetectState::WaitingJxlpIndex(header);
                         } else {
-                            let bytes_left = header.size().map(|x| x as usize);
+                            let bytes_left = header.box_size().map(|x| x as usize);
                             *state = DetectState::InAuxBox {
                                 header,
                                 data: Vec::new(),
@@ -261,7 +264,7 @@ impl ContainerParser {
 
                     *state = DetectState::InCodestream {
                         kind: BitstreamKind::Container,
-                        bytes_left: header.size().map(|x| x as usize - 4),
+                        bytes_left: header.box_size().map(|x| x as usize - 4),
                     };
                 }
                 DetectState::InCodestream {
