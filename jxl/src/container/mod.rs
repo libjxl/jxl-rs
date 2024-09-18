@@ -61,6 +61,78 @@ pub enum BitstreamKind {
     Invalid,
 }
 
+struct ConcatSlice<'first, 'second> {
+    slices: (&'first [u8], &'second [u8]),
+    ptr: usize,
+}
+
+impl<'first, 'second> ConcatSlice<'first, 'second> {
+    fn new(slice0: &'first [u8], slice1: &'second [u8]) -> Self {
+        Self {
+            slices: (slice0, slice1),
+            ptr: 0,
+        }
+    }
+
+    fn len(&self) -> usize {
+        self.slices.0.len() + self.slices.1.len()
+    }
+
+    fn remaining_slices(&self) -> (&'first [u8], &'second [u8]) {
+        let (slice0, slice1) = self.slices;
+        let total_len = self.len();
+        let ptr = self.ptr;
+        if ptr >= total_len {
+            (&[], &[])
+        } else if let Some(second_slice_ptr) = ptr.checked_sub(slice0.len()) {
+            (&[], &slice1[second_slice_ptr..])
+        } else {
+            (&slice0[ptr..], slice1)
+        }
+    }
+
+    fn advance(&mut self, bytes: usize) {
+        self.ptr += bytes;
+    }
+
+    fn peek<'out>(&self, out_buf: &'out mut [u8]) -> &'out mut [u8] {
+        let (slice0, slice1) = self.remaining_slices();
+        let total_len = slice0.len() + slice1.len();
+
+        let out_bytes = out_buf.len().min(total_len);
+        let out_buf = &mut out_buf[..out_bytes];
+
+        if out_bytes <= slice0.len() {
+            out_buf.copy_from_slice(&slice0[..out_bytes]);
+        } else {
+            let (out_first, out_second) = out_buf.split_at_mut(slice0.len());
+            out_first.copy_from_slice(slice0);
+            out_second.copy_from_slice(&slice1[..out_second.len()]);
+        }
+
+        out_buf
+    }
+
+    fn fill_vec(&mut self, max_bytes: Option<usize>, v: &mut Vec<u8>) -> Result<usize, Error> {
+        let (slice0, slice1) = self.remaining_slices();
+        let total_len = slice0.len() + slice1.len();
+
+        let out_bytes = max_bytes.unwrap_or(usize::MAX).min(total_len);
+        v.try_reserve(out_bytes)?;
+
+        if out_bytes <= slice0.len() {
+            v.extend_from_slice(&slice0[..out_bytes]);
+        } else {
+            let second_slice_len = out_bytes - slice0.len();
+            v.extend_from_slice(slice0);
+            v.extend_from_slice(&slice1[..second_slice_len]);
+        }
+
+        self.advance(out_bytes);
+        Ok(out_bytes)
+    }
+}
+
 impl ContainerParser {
     const CODESTREAM_SIG: [u8; 2] = [0xff, 0x0a];
     const CONTAINER_SIG: [u8; 12] = [0, 0, 0, 0xc, b'J', b'X', b'L', b' ', 0xd, 0xa, 0x87, 0xa];
@@ -81,27 +153,24 @@ impl ContainerParser {
 
     pub fn feed_bytes(&mut self, input: &[u8]) -> Result<(), Error> {
         let state = &mut self.state;
-        let buf = &mut self.buf;
-        buf.extend_from_slice(input);
+        let mut reader = ConcatSlice::new(&self.buf, input);
 
         loop {
             match state {
                 DetectState::WaitingSignature => {
+                    let mut signature_buf = [0u8; 12];
+                    let buf = reader.peek(&mut signature_buf);
                     if buf.starts_with(&Self::CODESTREAM_SIG) {
                         // tracing::debug!("Codestream signature found");
                         *state = DetectState::InCodestream {
                             kind: BitstreamKind::BareCodestream,
                             bytes_left: None,
                         };
-                        continue;
-                    }
-                    if buf.starts_with(&Self::CONTAINER_SIG) {
+                    } else if buf.starts_with(&Self::CONTAINER_SIG) {
                         // tracing::debug!("Container signature found");
                         *state = DetectState::WaitingBoxHeader;
-                        buf.drain(..Self::CONTAINER_SIG.len());
-                        continue;
-                    }
-                    if !Self::CODESTREAM_SIG.starts_with(buf)
+                        reader.advance(Self::CONTAINER_SIG.len());
+                    } else if !Self::CODESTREAM_SIG.starts_with(buf)
                         && !Self::CONTAINER_SIG.starts_with(buf)
                     {
                         // tracing::error!("Invalid signature");
@@ -109,13 +178,13 @@ impl ContainerParser {
                             kind: BitstreamKind::Invalid,
                             bytes_left: None,
                         };
-                        continue;
+                    } else {
+                        break;
                     }
-                    return Ok(());
                 }
-                DetectState::WaitingBoxHeader => match ContainerBoxHeader::parse(buf)? {
+                DetectState::WaitingBoxHeader => match ContainerBoxHeader::parse(&reader)? {
                     HeaderParseResult::Done { header, size } => {
-                        buf.drain(..size);
+                        reader.advance(size);
                         let tbox = header.box_type();
                         if tbox == ContainerBoxType::CODESTREAM {
                             if self.next_jxlp_index == u32::MAX {
@@ -161,17 +230,18 @@ impl ContainerParser {
                                 bytes_left,
                             };
                         }
-                        continue;
                     }
-                    HeaderParseResult::NeedMoreData => return Ok(()),
+                    HeaderParseResult::NeedMoreData => break,
                 },
                 DetectState::WaitingJxlpIndex(header) => {
+                    let mut buf = [0u8; 4];
+                    reader.peek(&mut buf);
                     if buf.len() < 4 {
-                        return Ok(());
+                        break;
                     }
 
-                    let index = u32::from_be_bytes([buf[0], buf[1], buf[2], buf[3]]);
-                    buf.drain(..4);
+                    let index = u32::from_be_bytes(buf);
+                    reader.advance(4);
                     let is_last = index & 0x80000000 != 0;
                     let index = index & 0x7fffffff;
                     // tracing::trace!(index, is_last);
@@ -198,22 +268,19 @@ impl ContainerParser {
                 DetectState::InCodestream {
                     bytes_left: None, ..
                 } => {
-                    self.codestream.extend_from_slice(buf);
-                    buf.clear();
-                    return Ok(());
+                    reader.fill_vec(None, &mut self.codestream)?;
+                    break;
                 }
                 DetectState::InCodestream {
                     bytes_left: Some(bytes_left),
                     ..
                 } => {
-                    if *bytes_left <= buf.len() {
-                        self.codestream.extend(buf.drain(..*bytes_left));
+                    let bytes_written = reader.fill_vec(Some(*bytes_left), &mut self.codestream)?;
+                    *bytes_left -= bytes_written;
+                    if *bytes_left == 0 {
                         *state = DetectState::WaitingBoxHeader;
                     } else {
-                        *bytes_left -= buf.len();
-                        self.codestream.extend_from_slice(buf);
-                        buf.clear();
-                        return Ok(());
+                        break;
                     }
                 }
                 DetectState::InAuxBox {
@@ -221,30 +288,38 @@ impl ContainerParser {
                     bytes_left: None,
                     ..
                 } => {
-                    data.extend_from_slice(buf);
-                    buf.clear();
-                    return Ok(());
+                    reader.fill_vec(None, data)?;
+                    break;
                 }
                 DetectState::InAuxBox {
                     header,
                     data,
                     bytes_left: Some(bytes_left),
                 } => {
-                    if *bytes_left <= buf.len() {
-                        data.extend(buf.drain(..*bytes_left));
+                    let bytes_written = reader.fill_vec(Some(*bytes_left), data)?;
+                    *bytes_left -= bytes_written;
+                    if *bytes_left == 0 {
                         self.aux_boxes
                             .push((header.box_type(), std::mem::take(data)));
                         *state = DetectState::WaitingBoxHeader;
                     } else {
-                        *bytes_left -= buf.len();
-                        data.extend_from_slice(buf);
-                        buf.clear();
-                        return Ok(());
+                        break;
                     }
                 }
-                DetectState::Done(_) => return Ok(()),
+                DetectState::Done(_) => break,
             }
         }
+
+        let (buf_slice, input_slice) = reader.remaining_slices();
+        if buf_slice.is_empty() {
+            self.buf.clear();
+        } else {
+            let remaining_buf_from = self.buf.len() - buf_slice.len();
+            self.buf.drain(..remaining_buf_from);
+        }
+        self.buf.try_reserve(input_slice.len())?;
+        self.buf.extend_from_slice(input_slice);
+        Ok(())
     }
 
     pub fn take_bytes(&mut self) -> Vec<u8> {

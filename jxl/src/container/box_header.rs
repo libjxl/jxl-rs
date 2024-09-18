@@ -24,7 +24,9 @@ pub enum HeaderParseResult {
 }
 
 impl ContainerBoxHeader {
-    pub fn parse(buf: &[u8]) -> Result<HeaderParseResult, Error> {
+    pub(super) fn parse(reader: &super::ConcatSlice<'_, '_>) -> Result<HeaderParseResult, Error> {
+        let mut buf = [0u8; 16];
+        let buf = reader.peek(&mut buf);
         if buf.len() < 8 {
             return Ok(HeaderParseResult::NeedMoreData);
         }
