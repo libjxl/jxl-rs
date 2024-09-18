@@ -18,14 +18,14 @@ pub struct ContainerParser {
     buf: Vec<u8>,
     codestream: Vec<u8>,
     aux_boxes: Vec<(ContainerBoxType, Vec<u8>)>,
-    next_jxlp_index: u32,
+    jxlp_index_state: JxlpIndexState,
 }
 
 impl std::fmt::Debug for ContainerParser {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("ContainerParser")
             .field("state", &self.state)
-            .field("next_jxlp_index", &self.next_jxlp_index)
+            .field("jxlp_index_state", &self.jxlp_index_state)
             .finish_non_exhaustive()
     }
 }
@@ -59,6 +59,15 @@ pub enum BitstreamKind {
     Container,
     /// Bitstream is not a valid JPEG XL image.
     Invalid,
+}
+
+#[derive(Debug, Copy, Clone, Eq, PartialEq, Default)]
+enum JxlpIndexState {
+    #[default]
+    Initial,
+    SingleJxlc,
+    Jxlp(u32),
+    JxlpFinished,
 }
 
 struct ConcatSlice<'first, 'second> {
@@ -190,16 +199,20 @@ impl ContainerParser {
                         reader.advance(header_size);
                         let tbox = header.box_type();
                         if tbox == ContainerBoxType::CODESTREAM {
-                            if self.next_jxlp_index == u32::MAX {
-                                tracing::debug!("Duplicate jxlc box found");
-                                return Err(Error::InvalidBox);
-                            }
-                            if self.next_jxlp_index != 0 {
-                                tracing::debug!("Found jxlc box instead of jxlp box");
-                                return Err(Error::InvalidBox);
+                            match self.jxlp_index_state {
+                                JxlpIndexState::Initial => {
+                                    self.jxlp_index_state = JxlpIndexState::SingleJxlc;
+                                }
+                                JxlpIndexState::SingleJxlc => {
+                                    tracing::debug!("Duplicate jxlc box found");
+                                    return Err(Error::InvalidBox);
+                                }
+                                JxlpIndexState::Jxlp(_) | JxlpIndexState::JxlpFinished => {
+                                    tracing::debug!("Found jxlc box instead of jxlp box");
+                                    return Err(Error::InvalidBox);
+                                }
                             }
 
-                            self.next_jxlp_index = u32::MAX;
                             *state = DetectState::InCodestream {
                                 kind: BitstreamKind::Container,
                                 bytes_left: header.box_size().map(|x| x as usize),
@@ -211,17 +224,21 @@ impl ContainerParser {
                                 }
                             }
 
-                            if self.next_jxlp_index == u32::MAX {
-                                tracing::debug!("jxlp box found after jxlc box");
-                                return Err(Error::InvalidBox);
-                            }
-
-                            if self.next_jxlp_index >= 0x80000000 {
-                                tracing::debug!(
-                                    "jxlp box #{} should be the last one, found the next one",
-                                    self.next_jxlp_index ^ 0x80000000,
-                                );
-                                return Err(Error::InvalidBox);
+                            match &mut self.jxlp_index_state {
+                                JxlpIndexState::Initial => {
+                                    self.jxlp_index_state = JxlpIndexState::Jxlp(0);
+                                }
+                                JxlpIndexState::Jxlp(index) => {
+                                    *index += 1;
+                                }
+                                JxlpIndexState::SingleJxlc => {
+                                    tracing::debug!("jxlp box found after jxlc box");
+                                    return Err(Error::InvalidBox);
+                                }
+                                JxlpIndexState::JxlpFinished => {
+                                    tracing::debug!("found another jxlp box after the final one");
+                                    return Err(Error::InvalidBox);
+                                }
                             }
 
                             *state = DetectState::WaitingJxlpIndex(header);
@@ -247,19 +264,25 @@ impl ContainerParser {
                     reader.advance(4);
                     let is_last = index & 0x80000000 != 0;
                     let index = index & 0x7fffffff;
-                    if index != self.next_jxlp_index {
-                        tracing::debug!(
-                            "Out-of-order jxlp box found: expected {}, got {}",
-                            self.next_jxlp_index,
-                            index,
-                        );
-                        return Err(Error::InvalidBox);
-                    }
 
-                    if is_last {
-                        self.next_jxlp_index = index | 0x80000000;
-                    } else {
-                        self.next_jxlp_index += 1;
+                    match self.jxlp_index_state {
+                        JxlpIndexState::Jxlp(expected_index) if expected_index == index => {
+                            if is_last {
+                                self.jxlp_index_state = JxlpIndexState::JxlpFinished;
+                            }
+                        }
+                        JxlpIndexState::Jxlp(expected_index) => {
+                            tracing::debug!(
+                                expected_index,
+                                actual_index = index,
+                                "Out-of-order jxlp box found",
+                            );
+                            return Err(Error::InvalidBox);
+                        }
+                        state => {
+                            tracing::debug!(?state, "invalid jxlp index state in WaitingJxlpIndex");
+                            unreachable!("invalid jxlp index state in WaitingJxlpIndex");
+                        }
                     }
 
                     *state = DetectState::InCodestream {
