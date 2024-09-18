@@ -406,14 +406,16 @@ mod test_frame_header {
     use super::*;
     use crate::{
         bit_reader::BitReader,
-        bmff::JxlCodestream,
+        container::ContainerParser,
         headers::{FileHeaders, JxlHeader},
     };
 
-    fn test_frame_header(image: Vec<u8>, correct_frame_header: FrameHeader) {
-        let codestream = JxlCodestream::new(image).unwrap();
+    fn test_frame_header(image: &[u8], correct_frame_header: FrameHeader) {
+        let mut parser = ContainerParser::new();
+        parser.feed_bytes(image).unwrap();
+        let codestream = parser.take_bytes();
 
-        let mut br = BitReader::new(codestream.get());
+        let mut br = BitReader::new(&codestream);
         let fh = FileHeaders::read(&mut br).unwrap();
 
         let have_timecode = match fh.image_metadata.animation {
@@ -441,7 +443,7 @@ mod test_frame_header {
     #[test]
     fn test_basic() {
         test_frame_header(
-            vec![
+            &[
                 0xFF, 0x0A, 0x00, 0x90, 0x01, 0x00, 0x12, 0x88, 0x02, 0x00, 0xD4, 0x00, 0x55, 0x0F,
                 0x00, 0x00, 0xA8, 0x50, 0x19, 0x65, 0xDC, 0xE0, 0xE5, 0x5C, 0xCF, 0x97, 0x1F, 0x3A,
                 0x2C, 0xA6, 0x6D, 0x5C, 0x67, 0x68, 0xAB, 0x6D, 0x0B, 0x4B, 0x12, 0x45, 0xC6, 0xB1,
@@ -489,7 +491,7 @@ mod test_frame_header {
     #[test]
     fn test_extra_channel() {
         test_frame_header(
-            vec![
+            &[
                 0xFF, 0x0A, 0x41, 0xC0, 0x4A, 0x08, 0x10, 0x10, 0x00, 0xE4, 0x01, 0x4B, 0x28, 0x36,
                 0x56, 0x1F, 0xDC, 0x4B, 0x28, 0x98, 0x10, 0x01, 0x55, 0x21, 0xC4, 0x30, 0x06, 0x50,
                 0x87, 0x61, 0xAB, 0x2A, 0xB2, 0x17, 0x03, 0x02, 0xA0, 0x97, 0xCC, 0x08, 0x00, 0xC3,
