@@ -161,19 +161,19 @@ impl ContainerParser {
                     let mut signature_buf = [0u8; 12];
                     let buf = reader.peek(&mut signature_buf);
                     if buf.starts_with(&Self::CODESTREAM_SIG) {
-                        // tracing::debug!("Codestream signature found");
+                        tracing::trace!("Codestream signature found");
                         *state = DetectState::InCodestream {
                             kind: BitstreamKind::BareCodestream,
                             bytes_left: None,
                         };
                     } else if buf.starts_with(&Self::CONTAINER_SIG) {
-                        // tracing::debug!("Container signature found");
+                        tracing::trace!("Container signature found");
                         *state = DetectState::WaitingBoxHeader;
                         reader.advance(Self::CONTAINER_SIG.len());
                     } else if !Self::CODESTREAM_SIG.starts_with(buf)
                         && !Self::CONTAINER_SIG.starts_with(buf)
                     {
-                        // tracing::error!("Invalid signature");
+                        tracing::debug!(?buf, "Invalid signature");
                         *state = DetectState::InCodestream {
                             kind: BitstreamKind::Invalid,
                             bytes_left: None,
@@ -188,11 +188,11 @@ impl ContainerParser {
                         let tbox = header.box_type();
                         if tbox == ContainerBoxType::CODESTREAM {
                             if self.next_jxlp_index == u32::MAX {
-                                // tracing::error!("Duplicate jxlc box found");
+                                tracing::debug!("Duplicate jxlc box found");
                                 return Err(Error::InvalidBox);
                             }
                             if self.next_jxlp_index != 0 {
-                                // tracing::error!("Found jxlc box instead of jxlp box");
+                                tracing::debug!("Found jxlc box instead of jxlp box");
                                 return Err(Error::InvalidBox);
                             }
 
@@ -209,15 +209,15 @@ impl ContainerParser {
                             }
 
                             if self.next_jxlp_index == u32::MAX {
-                                // tracing::error!("jxlp box found after jxlc box");
+                                tracing::debug!("jxlp box found after jxlc box");
                                 return Err(Error::InvalidBox);
                             }
 
                             if self.next_jxlp_index >= 0x80000000 {
-                                // tracing::error!(
-                                //     "jxlp box #{} should be the last one, found the next one",
-                                //     self.next_jxlp_index ^ 0x80000000,
-                                // );
+                                tracing::debug!(
+                                    "jxlp box #{} should be the last one, found the next one",
+                                    self.next_jxlp_index ^ 0x80000000,
+                                );
                                 return Err(Error::InvalidBox);
                             }
 
@@ -244,13 +244,12 @@ impl ContainerParser {
                     reader.advance(4);
                     let is_last = index & 0x80000000 != 0;
                     let index = index & 0x7fffffff;
-                    // tracing::trace!(index, is_last);
                     if index != self.next_jxlp_index {
-                        // tracing::error!(
-                        //     "Out-of-order jxlp box found: expected {}, got {}",
-                        //     self.next_jxlp_index,
-                        //     index,
-                        // );
+                        tracing::debug!(
+                            "Out-of-order jxlp box found: expected {}, got {}",
+                            self.next_jxlp_index,
+                            index,
+                        );
                         return Err(Error::InvalidBox);
                     }
 
