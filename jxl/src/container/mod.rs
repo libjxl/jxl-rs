@@ -3,7 +3,7 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 //
-// Originally copied from jxl-bitstream of jxl-oxide.
+// Originally written for jxl-oxide.
 
 pub mod box_header;
 
