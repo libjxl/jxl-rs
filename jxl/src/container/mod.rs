@@ -79,7 +79,7 @@ impl ContainerParser {
     /// The parser might not fully consume the buffer. Use [`previous_consumed_bytes`] to get how
     /// many bytes are consumed. Bytes not consumed by the parser should be processed again.
     ///
-    /// [`previous_consumed_bytes`]: ContainerDetectingReader::previous_consumed_bytes
+    /// [`previous_consumed_bytes`]: ContainerParser::previous_consumed_bytes
     pub fn process_bytes<'inner, 'buf>(
         &'inner mut self,
         input: &'buf [u8],
@@ -91,7 +91,7 @@ impl ContainerParser {
     ///
     /// Bytes not consumed by the parser should be fed into the parser again.
     ///
-    /// [`process_bytes`]: ContainerDetectingReader::process_bytes
+    /// [`process_bytes`]: ContainerParser::process_bytes
     pub fn previous_consumed_bytes(&self) -> usize {
         self.previous_consumed_bytes
     }
