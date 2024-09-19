@@ -4,7 +4,7 @@
 // license that can be found in the LICENSE file.
 
 use jxl::bit_reader::BitReader;
-use jxl::container::ContainerParser;
+use jxl::container::{ContainerParser, ParseEvent};
 use jxl::headers::{
     encodings::UnconditionalCoder,
     frame_header::{FrameHeader, FrameHeaderNonserialized},
@@ -58,19 +58,37 @@ fn main() {
 
     let mut parser = ContainerParser::new();
     let mut buf = vec![0u8; 4096];
+    let mut buf_valid = 0usize;
+    let mut codestream = Vec::new();
     loop {
-        let count = file.read(&mut buf).expect("cannot read data from file");
+        let count = file
+            .read(&mut buf[buf_valid..])
+            .expect("cannot read data from file");
         if count == 0 {
             break;
         }
+        buf_valid += count;
 
-        if let Err(err) = parser.feed_bytes(&buf[..count]) {
-            println!("Error parsing JXL codestream: {err}");
-            return;
+        for event in parser.process_bytes(&buf[..buf_valid]) {
+            match event {
+                Ok(ParseEvent::BitstreamKind(kind)) => {
+                    println!("Bitstream kind: {kind:?}");
+                }
+                Ok(ParseEvent::Codestream(buf)) => {
+                    codestream.extend_from_slice(buf);
+                }
+                Err(err) => {
+                    println!("Error parsing JXL codestream: {err}");
+                    return;
+                }
+            }
         }
+
+        let consumed = parser.previous_consumed_bytes();
+        buf.copy_within(consumed..buf_valid, 0);
+        buf_valid -= consumed;
     }
 
-    let codestream = parser.take_bytes();
     let res = parse_jxl_codestream(&codestream);
     if let Err(err) = res {
         println!("Error parsing JXL codestream: {}", err)

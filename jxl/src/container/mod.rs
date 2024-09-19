@@ -9,25 +9,14 @@ pub mod box_header;
 
 use box_header::*;
 
-use crate::{error::Error, util::ConcatSlice};
+use crate::error::{Error, Result};
 
 /// Container format parser.
-#[derive(Default)]
+#[derive(Debug, Default)]
 pub struct ContainerParser {
     state: DetectState,
-    buf: Vec<u8>,
-    codestream: Vec<u8>,
-    aux_boxes: Vec<(ContainerBoxType, Vec<u8>)>,
     jxlp_index_state: JxlpIndexState,
-}
-
-impl std::fmt::Debug for ContainerParser {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("ContainerParser")
-            .field("state", &self.state)
-            .field("jxlp_index_state", &self.jxlp_index_state)
-            .finish_non_exhaustive()
-    }
+    previous_consumed_bytes: usize,
 }
 
 #[derive(Debug, Default)]
@@ -37,8 +26,8 @@ enum DetectState {
     WaitingBoxHeader,
     WaitingJxlpIndex(ContainerBoxHeader),
     InAuxBox {
+        #[allow(unused)]
         header: ContainerBoxHeader,
-        data: Vec<u8>,
         bytes_left: Option<usize>,
     },
     InCodestream {
@@ -70,43 +59,53 @@ enum JxlpIndexState {
     JxlpFinished,
 }
 
-impl ContainerParser {
+/// Iterator that reads over a buffer and emits parser events.
+pub struct ParseEvents<'inner, 'buf> {
+    inner: &'inner mut ContainerParser,
+    remaining_input: &'buf [u8],
+    finished: bool,
+}
+
+impl<'inner, 'buf> ParseEvents<'inner, 'buf> {
     const CODESTREAM_SIG: [u8; 2] = [0xff, 0x0a];
     const CONTAINER_SIG: [u8; 12] = [0, 0, 0, 0xc, b'J', b'X', b'L', b' ', 0xd, 0xa, 0x87, 0xa];
 
-    pub fn new() -> Self {
-        Self::default()
-    }
-
-    pub fn kind(&self) -> BitstreamKind {
-        match self.state {
-            DetectState::WaitingSignature => BitstreamKind::Unknown,
-            DetectState::WaitingBoxHeader
-            | DetectState::WaitingJxlpIndex(..)
-            | DetectState::InAuxBox { .. } => BitstreamKind::Container,
-            DetectState::InCodestream { kind, .. } | DetectState::Done(kind) => kind,
+    fn new(parser: &'inner mut ContainerParser, input: &'buf [u8]) -> Self {
+        parser.previous_consumed_bytes = 0;
+        Self {
+            inner: parser,
+            remaining_input: input,
+            finished: false,
         }
     }
 
-    pub fn feed_bytes(&mut self, input: &[u8]) -> Result<(), Error> {
-        let state = &mut self.state;
-        let mut reader = ConcatSlice::new(&self.buf, input);
+    fn emit_single(&mut self) -> Result<Option<ParseEvent<'buf>>> {
+        let state = &mut self.inner.state;
+        let jxlp_index_state = &mut self.inner.jxlp_index_state;
+        let buf = &mut self.remaining_input;
 
         loop {
+            if buf.is_empty() {
+                self.finished = true;
+                return Ok(None);
+            }
+
             match state {
                 DetectState::WaitingSignature => {
-                    let mut signature_buf = [0u8; 12];
-                    let buf = reader.peek(&mut signature_buf);
                     if buf.starts_with(&Self::CODESTREAM_SIG) {
                         tracing::trace!("Codestream signature found");
                         *state = DetectState::InCodestream {
                             kind: BitstreamKind::BareCodestream,
                             bytes_left: None,
                         };
+                        return Ok(Some(ParseEvent::BitstreamKind(
+                            BitstreamKind::BareCodestream,
+                        )));
                     } else if buf.starts_with(&Self::CONTAINER_SIG) {
                         tracing::trace!("Container signature found");
                         *state = DetectState::WaitingBoxHeader;
-                        reader.advance(Self::CONTAINER_SIG.len());
+                        *buf = &buf[Self::CONTAINER_SIG.len()..];
+                        return Ok(Some(ParseEvent::BitstreamKind(BitstreamKind::Container)));
                     } else if !Self::CODESTREAM_SIG.starts_with(buf)
                         && !Self::CONTAINER_SIG.starts_with(buf)
                     {
@@ -115,21 +114,22 @@ impl ContainerParser {
                             kind: BitstreamKind::Invalid,
                             bytes_left: None,
                         };
+                        return Ok(Some(ParseEvent::BitstreamKind(BitstreamKind::Invalid)));
                     } else {
-                        break;
+                        return Ok(None);
                     }
                 }
-                DetectState::WaitingBoxHeader => match ContainerBoxHeader::parse(&reader)? {
+                DetectState::WaitingBoxHeader => match ContainerBoxHeader::parse(buf)? {
                     HeaderParseResult::Done {
                         header,
                         header_size,
                     } => {
-                        reader.advance(header_size);
+                        *buf = &buf[header_size..];
                         let tbox = header.box_type();
                         if tbox == ContainerBoxType::CODESTREAM {
-                            match self.jxlp_index_state {
+                            match jxlp_index_state {
                                 JxlpIndexState::Initial => {
-                                    self.jxlp_index_state = JxlpIndexState::SingleJxlc;
+                                    *jxlp_index_state = JxlpIndexState::SingleJxlc;
                                 }
                                 JxlpIndexState::SingleJxlc => {
                                     tracing::debug!("Duplicate jxlc box found");
@@ -152,9 +152,9 @@ impl ContainerParser {
                                 }
                             }
 
-                            match &mut self.jxlp_index_state {
+                            match jxlp_index_state {
                                 JxlpIndexState::Initial => {
-                                    self.jxlp_index_state = JxlpIndexState::Jxlp(0);
+                                    *jxlp_index_state = JxlpIndexState::Jxlp(0);
                                 }
                                 JxlpIndexState::Jxlp(index) => {
                                     *index += 1;
@@ -172,31 +172,25 @@ impl ContainerParser {
                             *state = DetectState::WaitingJxlpIndex(header);
                         } else {
                             let bytes_left = header.box_size().map(|x| x as usize);
-                            *state = DetectState::InAuxBox {
-                                header,
-                                data: Vec::new(),
-                                bytes_left,
-                            };
+                            *state = DetectState::InAuxBox { header, bytes_left };
                         }
                     }
-                    HeaderParseResult::NeedMoreData => break,
+                    HeaderParseResult::NeedMoreData => return Ok(None),
                 },
                 DetectState::WaitingJxlpIndex(header) => {
-                    let mut buf = [0u8; 4];
-                    reader.peek(&mut buf);
-                    if buf.len() < 4 {
-                        break;
-                    }
+                    let &[b0, b1, b2, b3, ..] = &**buf else {
+                        return Ok(None);
+                    };
 
-                    let index = u32::from_be_bytes(buf);
-                    reader.advance(4);
+                    let index = u32::from_be_bytes([b0, b1, b2, b3]);
+                    *buf = &buf[4..];
                     let is_last = index & 0x80000000 != 0;
                     let index = index & 0x7fffffff;
 
-                    match self.jxlp_index_state {
+                    match *jxlp_index_state {
                         JxlpIndexState::Jxlp(expected_index) if expected_index == index => {
                             if is_last {
-                                self.jxlp_index_state = JxlpIndexState::JxlpFinished;
+                                *jxlp_index_state = JxlpIndexState::JxlpFinished;
                             }
                         }
                         JxlpIndexState::Jxlp(expected_index) => {
@@ -221,69 +215,167 @@ impl ContainerParser {
                 DetectState::InCodestream {
                     bytes_left: None, ..
                 } => {
-                    reader.fill_vec(None, &mut self.codestream)?;
-                    break;
+                    let payload = *buf;
+                    *buf = &[];
+                    return Ok(Some(ParseEvent::Codestream(payload)));
                 }
                 DetectState::InCodestream {
                     bytes_left: Some(bytes_left),
                     ..
                 } => {
-                    let bytes_written = reader.fill_vec(Some(*bytes_left), &mut self.codestream)?;
-                    *bytes_left -= bytes_written;
-                    if *bytes_left == 0 {
+                    let payload = if buf.len() >= *bytes_left {
+                        let (payload, remaining) = buf.split_at(*bytes_left);
                         *state = DetectState::WaitingBoxHeader;
+                        *buf = remaining;
+                        payload
                     } else {
-                        break;
-                    }
+                        let payload = *buf;
+                        *bytes_left -= buf.len();
+                        *buf = &[];
+                        payload
+                    };
+                    return Ok(Some(ParseEvent::Codestream(payload)));
                 }
                 DetectState::InAuxBox {
-                    data,
+                    header: _,
                     bytes_left: None,
-                    ..
                 } => {
-                    reader.fill_vec(None, data)?;
-                    break;
+                    let _payload = *buf;
+                    *buf = &[];
+                    // FIXME: emit auxiliary box event
                 }
                 DetectState::InAuxBox {
-                    header,
-                    data,
+                    header: _,
                     bytes_left: Some(bytes_left),
                 } => {
-                    let bytes_written = reader.fill_vec(Some(*bytes_left), data)?;
-                    *bytes_left -= bytes_written;
-                    if *bytes_left == 0 {
-                        self.aux_boxes
-                            .push((header.box_type(), std::mem::take(data)));
+                    let _payload = if buf.len() >= *bytes_left {
+                        let (payload, remaining) = buf.split_at(*bytes_left);
                         *state = DetectState::WaitingBoxHeader;
+                        *buf = remaining;
+                        payload
                     } else {
-                        break;
-                    }
+                        let payload = *buf;
+                        *bytes_left -= buf.len();
+                        *buf = &[];
+                        payload
+                    };
+                    // FIXME: emit auxiliary box event
                 }
-                DetectState::Done(_) => break,
+                DetectState::Done(_) => return Ok(None),
             }
         }
+    }
+}
 
-        let (buf_slice, input_slice) = reader.remaining_slices();
-        if buf_slice.is_empty() {
-            self.buf.clear();
-        } else {
-            let remaining_buf_from = self.buf.len() - buf_slice.len();
-            self.buf.drain(..remaining_buf_from);
+impl std::fmt::Debug for ParseEvents<'_, '_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ParseEvents")
+            .field("inner", &self.inner)
+            .field(
+                "remaining_input",
+                &format_args!("({} byte(s))", self.remaining_input.len()),
+            )
+            .field("finished", &self.finished)
+            .finish()
+    }
+}
+
+impl<'inner, 'buf> Iterator for ParseEvents<'inner, 'buf> {
+    type Item = Result<ParseEvent<'buf>>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.finished {
+            return None;
         }
-        self.buf.try_reserve(input_slice.len())?;
-        self.buf.extend_from_slice(input_slice);
-        Ok(())
+
+        let initial_buf = self.remaining_input;
+        let event = self.emit_single();
+
+        if event.is_err() {
+            self.finished = true;
+        }
+
+        self.inner.previous_consumed_bytes += initial_buf.len() - self.remaining_input.len();
+        event.transpose()
+    }
+}
+
+/// Parser event emitted by [`ParseEvents`].
+pub enum ParseEvent<'buf> {
+    /// Bitstream structure is detected.
+    BitstreamKind(BitstreamKind),
+    /// Codestream data is read.
+    Codestream(&'buf [u8]),
+}
+
+impl std::fmt::Debug for ParseEvent<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::BitstreamKind(kind) => f.debug_tuple("BitstreamKind").field(kind).finish(),
+            Self::Codestream(buf) => f
+                .debug_tuple("Codestream")
+                .field(&format_args!("{} byte(s)", buf.len()))
+                .finish(),
+        }
+    }
+}
+
+impl ContainerParser {
+    pub fn new() -> Self {
+        Self::default()
     }
 
-    pub fn take_bytes(&mut self) -> Vec<u8> {
-        std::mem::take(&mut self.codestream)
+    pub fn kind(&self) -> BitstreamKind {
+        match self.state {
+            DetectState::WaitingSignature => BitstreamKind::Unknown,
+            DetectState::WaitingBoxHeader
+            | DetectState::WaitingJxlpIndex(..)
+            | DetectState::InAuxBox { .. } => BitstreamKind::Container,
+            DetectState::InCodestream { kind, .. } | DetectState::Done(kind) => kind,
+        }
+    }
+
+    /// Parses input buffer and generates parser events.
+    ///
+    /// The parser might not fully consume the buffer. Use [`previous_consumed_bytes`] to get how
+    /// many bytes are consumed. Bytes not consumed by the parser should be processed again.
+    ///
+    /// [`previous_consumed_bytes`]: ContainerDetectingReader::previous_consumed_bytes
+    pub fn process_bytes<'inner, 'buf>(
+        &'inner mut self,
+        input: &'buf [u8],
+    ) -> ParseEvents<'inner, 'buf> {
+        ParseEvents::new(self, input)
+    }
+
+    /// Get how much bytes are consumed by the previous call of [`process_bytes`].
+    ///
+    /// Bytes not consumed by the parser should be fed into the parser again.
+    ///
+    /// [`process_bytes`]: ContainerDetectingReader::process_bytes
+    pub fn previous_consumed_bytes(&self) -> usize {
+        self.previous_consumed_bytes
     }
 
     pub fn finish(&mut self) {
-        if let DetectState::InAuxBox { header, data, .. } = &mut self.state {
-            self.aux_boxes
-                .push((header.box_type(), std::mem::take(data)));
-        }
+        // FIXME: validate state
         self.state = DetectState::Done(self.kind());
+    }
+}
+
+#[cfg(test)]
+impl ContainerParser {
+    pub(crate) fn collect_codestream(input: &[u8]) -> Result<Vec<u8>> {
+        let mut parser = Self::new();
+        let mut codestream = Vec::new();
+        for event in parser.process_bytes(input) {
+            match event? {
+                ParseEvent::BitstreamKind(_) => {}
+                ParseEvent::Codestream(buf) => {
+                    codestream.extend_from_slice(buf);
+                }
+            }
+        }
+        Ok(codestream)
     }
 }

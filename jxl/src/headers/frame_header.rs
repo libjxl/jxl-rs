@@ -416,10 +416,7 @@ mod test_frame_header {
     };
 
     fn test_frame_header(image: &[u8], correct_frame_header: FrameHeader) {
-        let mut parser = ContainerParser::new();
-        parser.feed_bytes(image).unwrap();
-        let codestream = parser.take_bytes();
-
+        let codestream = ContainerParser::collect_codestream(image).unwrap();
         let mut br = BitReader::new(&codestream);
         let fh = FileHeaders::read(&mut br).unwrap();
 
