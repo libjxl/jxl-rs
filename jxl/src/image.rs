@@ -194,7 +194,7 @@ pub mod debug_tools {
 
     impl ToU8ForWriting for u16 {
         fn to_u8_for_writing(self) -> u8 {
-            (self as u32 * 255 / 65535) as u8
+            ((self as u32 * 0xff + 0x8000) / 0xffff) as u8
         }
     }
 
@@ -206,7 +206,7 @@ pub mod debug_tools {
 
     impl ToU8ForWriting for u32 {
         fn to_u8_for_writing(self) -> u8 {
-            (self as f32 / (2.0f32.powi(32) - 1.0)).to_u8_for_writing()
+            ((self as u64 * 0xff + 0x80000000) / 0xffffffff) as u8
         }
     }
 
@@ -227,6 +227,65 @@ pub mod debug_tools {
                     .map(|x| x.to_u8_for_writing()),
             );
             ret
+        }
+    }
+
+    #[cfg(test)]
+    mod test {
+        use super::super::Image;
+        use super::ToU8ForWriting;
+        use crate::error::Result;
+
+        #[test]
+        fn to_pgm() -> Result<()> {
+            let image = Image::<u8>::new(32, 32)?;
+            assert!(image.as_rect().to_pgm().starts_with(b"P5\n32 32\n255\n"));
+            Ok(())
+        }
+
+        #[test]
+        fn u16_to_u8() {
+            let mut left_source_u16 = 0xffffu16 / 510;
+            for want_u8 in 0x00u8..0xffu8 {
+                assert!(left_source_u16.to_u8_for_writing() == want_u8);
+                assert!((left_source_u16 + 1).to_u8_for_writing() == want_u8 + 1);
+                // Since we have 256 u8 values, but 0x00 and 0xff only have half the
+                // range, we actually get whole ranges of size 0xffff / 255.
+                left_source_u16 = left_source_u16.wrapping_add(0xffff / 255);
+            }
+        }
+
+        #[test]
+        fn f32_to_u8() {
+            let epsilon = 1e-4f32;
+            for want_u8 in 0x00u8..0xffu8 {
+                let threshold = 1f32 / 510f32 + (1f32 / 255f32) * (want_u8 as f32);
+                assert!((threshold - epsilon).to_u8_for_writing() == want_u8);
+                assert!((threshold + epsilon).to_u8_for_writing() == want_u8 + 1);
+            }
+        }
+
+        #[test]
+        fn u32_to_u8() {
+            let mut left_source_u32 = 0xffffffffu32 / 510;
+            for want_u8 in 0x00u8..0xffu8 {
+                assert!(left_source_u32.to_u8_for_writing() == want_u8);
+                assert!((left_source_u32 + 1).to_u8_for_writing() == want_u8 + 1);
+                // Since we have 256 u8 values, but 0x00 and 0xff only have half the
+                // range, we actually get whole ranges of size 0xffffffff / 255.
+                left_source_u32 = left_source_u32.wrapping_add(0xffffffffu32 / 255);
+            }
+        }
+
+        #[test]
+        fn f16_to_u8() {
+            let epsilon = half::f16::from_f32(1e-3f32);
+            for want_u8 in 0x00u8..0xffu8 {
+                let threshold =
+                    half::f16::from_f32(1f32 / 510f32 + (1f32 / 255f32) * (want_u8 as f32));
+                assert!((threshold - epsilon).to_u8_for_writing() == want_u8);
+                assert!((threshold + epsilon).to_u8_for_writing() == want_u8 + 1);
+            }
         }
     }
 }
@@ -250,14 +309,6 @@ mod test {
         assert!(image.as_rect_mut().rect((30, 30), (3, 3)).is_err());
         image.as_rect_mut().rect((30, 30), (1, 1))?.row(0)[0] = 1;
         assert_eq!(image.as_rect_mut().row(30)[30], 1);
-        Ok(())
-    }
-
-    #[cfg(feature = "debug_tools")]
-    #[test]
-    fn to_pgm() -> Result<()> {
-        let image = Image::<u8>::new(32, 32)?;
-        assert!(image.as_rect().to_pgm().starts_with(b"P5\n32 32\n255\n"));
         Ok(())
     }
 }
