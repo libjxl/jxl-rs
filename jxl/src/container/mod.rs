@@ -9,8 +9,8 @@ pub mod box_header;
 pub mod parse;
 
 use box_header::*;
-use parse::*;
 pub use parse::ParseEvent;
+use parse::*;
 
 /// Container format parser.
 #[derive(Debug, Default)]
@@ -35,7 +35,6 @@ enum DetectState {
         kind: BitstreamKind,
         bytes_left: Option<usize>,
     },
-    Done(BitstreamKind),
 }
 
 /// Structure of the decoded bitstream.
@@ -71,7 +70,7 @@ impl ContainerParser {
             DetectState::WaitingBoxHeader
             | DetectState::WaitingJxlpIndex(..)
             | DetectState::InAuxBox { .. } => BitstreamKind::Container,
-            DetectState::InCodestream { kind, .. } | DetectState::Done(kind) => kind,
+            DetectState::InCodestream { kind, .. } => kind,
         }
     }
 
@@ -95,11 +94,6 @@ impl ContainerParser {
     /// [`process_bytes`]: ContainerDetectingReader::process_bytes
     pub fn previous_consumed_bytes(&self) -> usize {
         self.previous_consumed_bytes
-    }
-
-    pub fn finish(&mut self) {
-        // FIXME: validate state
-        self.state = DetectState::Done(self.kind());
     }
 }
 

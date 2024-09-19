@@ -5,7 +5,7 @@
 //
 // Originally written for jxl-oxide.
 
-use super::{box_header::*, DetectState, JxlpIndexState, BitstreamKind, ContainerParser};
+use super::{box_header::*, BitstreamKind, ContainerParser, DetectState, JxlpIndexState};
 use crate::error::{Error, Result};
 
 /// Iterator that reads over a buffer and emits parser events.
@@ -210,7 +210,6 @@ impl<'inner, 'buf> ParseEvents<'inner, 'buf> {
                     };
                     // FIXME: emit auxiliary box event
                 }
-                DetectState::Done(_) => return Ok(None),
             }
         }
     }
