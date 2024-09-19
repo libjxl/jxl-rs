@@ -4,7 +4,7 @@
 // license that can be found in the LICENSE file.
 
 use jxl::bit_reader::BitReader;
-use jxl::bmff::JxlCodestream;
+use jxl::container::ContainerParser;
 use jxl::headers::{
     encodings::UnconditionalCoder,
     frame_header::{FrameHeader, FrameHeaderNonserialized},
@@ -13,6 +13,7 @@ use jxl::headers::{
 use jxl::icc::read_icc;
 use std::env;
 use std::fs;
+use std::io::Read;
 
 use jxl::headers::JxlHeader;
 
@@ -53,18 +54,24 @@ fn main() {
     let args: Vec<String> = env::args().collect();
     assert_eq!(args.len(), 2);
     let file = &args[1];
-    let contents = fs::read(file).expect("Something went wrong reading the file");
-    let codestream = JxlCodestream::new(contents);
-    let codestream = if let Ok(cs) = codestream {
-        cs
-    } else {
-        println!(
-            "Error parsing JXL codestream: {}",
-            codestream.err().unwrap()
-        );
-        return;
-    };
-    let res = parse_jxl_codestream(codestream.get());
+    let mut file = fs::File::open(file).expect("cannot open file");
+
+    let mut parser = ContainerParser::new();
+    let mut buf = vec![0u8; 4096];
+    loop {
+        let count = file.read(&mut buf).expect("cannot read data from file");
+        if count == 0 {
+            break;
+        }
+
+        if let Err(err) = parser.feed_bytes(&buf[..count]) {
+            println!("Error parsing JXL codestream: {err}");
+            return;
+        }
+    }
+
+    let codestream = parser.take_bytes();
+    let res = parse_jxl_codestream(&codestream);
     if let Err(err) = res {
         println!("Error parsing JXL codestream: {}", err)
     }

@@ -4,7 +4,7 @@
 // license that can be found in the LICENSE file.
 
 pub mod bit_reader;
-pub mod bmff;
+pub mod container;
 pub mod entropy_coding;
 pub mod error;
 pub mod headers;
