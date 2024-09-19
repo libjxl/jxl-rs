@@ -5,7 +5,7 @@
 //
 // Originally written for jxl-oxide.
 
-use crate::error::Error;
+use crate::{error::Error, util::ConcatSlice};
 
 /// Box header used in JPEG XL containers.
 #[derive(Debug, Clone)]
@@ -24,7 +24,7 @@ pub enum HeaderParseResult {
 }
 
 impl ContainerBoxHeader {
-    pub(super) fn parse(reader: &super::ConcatSlice<'_, '_>) -> Result<HeaderParseResult, Error> {
+    pub(super) fn parse(reader: &ConcatSlice<'_, '_>) -> Result<HeaderParseResult, Error> {
         let mut buf = [0u8; 16];
         let buf = reader.peek(&mut buf);
         let (tbox, box_size, header_size) = match *buf {
