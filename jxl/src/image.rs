@@ -4,7 +4,7 @@ mod private {
     pub trait Sealed {}
 }
 
-pub trait ImageDataType: private::Sealed + Copy + Default {
+pub trait ImageDataType: private::Sealed + Copy + Default + 'static {
     fn data_type_id() -> usize;
 }
 
