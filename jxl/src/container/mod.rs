@@ -87,9 +87,9 @@ impl ContainerParser {
         ParseEvents::new(self, input)
     }
 
-    /// Get how much bytes are consumed by the previous call of [`process_bytes`].
+    /// Get how many bytes are consumed by the previous call to [`process_bytes`].
     ///
-    /// Bytes not consumed by the parser should be fed into the parser again.
+    /// Bytes not consumed by the parser should be processed again.
     ///
     /// [`process_bytes`]: ContainerParser::process_bytes
     pub fn previous_consumed_bytes(&self) -> usize {

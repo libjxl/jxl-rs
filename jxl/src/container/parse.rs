@@ -253,6 +253,9 @@ pub enum ParseEvent<'buf> {
     /// Bitstream structure is detected.
     BitstreamKind(BitstreamKind),
     /// Codestream data is read.
+    ///
+    /// Returned data may be partial. Complete codestream can be obtained by concatenating all data
+    /// of `Codestream` events.
     Codestream(&'buf [u8]),
 }
 
