@@ -4,3 +4,10 @@ debug = true
 [workspace]
 members = [ "jxl", "jxl_cli", "jxl_headers_derive"]
 resolver = "2"
+
+[workspace.lints.clippy]
+missing_safety_doc = "deny"
+undocumented_unsafe_blocks = "deny"
+
+[workspace.lints.rust]
+unsafe_op_in_unsafe_fn = "deny"

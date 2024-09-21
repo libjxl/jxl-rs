@@ -5,3 +5,6 @@ edition = "2021"
 
 [dependencies]
 jxl = { path = "../jxl" }
+
+[lints]
+workspace = true

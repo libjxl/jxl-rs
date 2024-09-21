@@ -3,6 +3,7 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
+#![deny(unsafe_code)]
 pub mod bit_reader;
 pub mod container;
 pub mod entropy_coding;
