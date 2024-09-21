@@ -6,7 +6,9 @@
 #[allow(unused)]
 mod concat_slice;
 mod log2;
+mod shift_right_ceil;
 
 #[allow(unused)]
 pub use concat_slice::*;
 pub use log2::*;
+pub use shift_right_ceil::*;

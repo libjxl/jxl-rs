@@ -7,7 +7,7 @@ use std::collections::TryReserveError;
 
 use thiserror::Error;
 
-use crate::entropy_coding::huffman::HUFFMAN_MAX_BITS;
+use crate::{entropy_coding::huffman::HUFFMAN_MAX_BITS, image::DataTypeTag};
 
 #[derive(Error, Debug)]
 pub enum Error {
@@ -70,11 +70,21 @@ pub enum Error {
     OutOfMemory(#[from] TryReserveError),
     #[error("Image size too large: {0}x{1}")]
     ImageSizeTooLarge(usize, usize),
+    #[error("Invalid image size: {0}x{1}")]
+    InvalidImageSize(usize, usize),
     #[error("Rect out of bounds: {0}x{1}+{2}+{3} rect in {4}x{5} view")]
     RectOutOfBounds(usize, usize, usize, usize, usize, usize),
     // Generic arithmetic overflow. Prefer using other errors if possible.
     #[error("Arithmetic overflow")]
     ArithmeticOverflow,
+    #[error(
+        "Pipeline channel type mismatch: stage {0} channel {1}, expected {2:?} but found {3:?}"
+    )]
+    PipelineChannelTypeMismatch(String, usize, DataTypeTag, DataTypeTag),
+    #[error("Pipeline has a stage ({0}) with a shift after an expand stage")]
+    PipelineShiftAfterExpand(String),
+    #[error("Channel {0} was not used in the render pipeline")]
+    PipelineChannelUnused(usize),
 }
 
 pub type Result<T> = std::result::Result<T, Error>;

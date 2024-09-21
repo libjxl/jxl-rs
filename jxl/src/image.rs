@@ -3,35 +3,72 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
+use std::fmt::Debug;
+
 use crate::error::{Error, Result};
 
 mod private {
     pub trait Sealed {}
 }
 
-pub trait ImageDataType: private::Sealed + Copy + Default + 'static {
-    fn data_type_id() -> usize;
+#[derive(Copy, Clone, PartialEq, Eq, Debug)]
+pub enum DataTypeTag {
+    U8,
+    U16,
+    U32,
+    F32,
+    I8,
+    I16,
+    I32,
+    F16,
+    F64,
+}
+
+pub trait ImageDataType: private::Sealed + Copy + Default + 'static + Debug {
+    /// ID of this data type. Different types *must* have different values.
+    const DATA_TYPE_ID: DataTypeTag;
+
+    fn from_f64(f: f64) -> Self;
+    fn to_f64(self) -> f64;
 }
 
 macro_rules! impl_image_data_type {
-    ($ty: ty, $id: literal) => {
+    ($ty: ty, $id: ident) => {
         impl private::Sealed for $ty {}
         impl ImageDataType for $ty {
-            fn data_type_id() -> usize {
-                $id
+            const DATA_TYPE_ID: DataTypeTag = DataTypeTag::$id;
+            fn from_f64(f: f64) -> $ty {
+                f as $ty
+            }
+            fn to_f64(self) -> f64 {
+                self as f64
             }
         }
     };
 }
 
-impl_image_data_type!(u8, 0);
-impl_image_data_type!(u16, 1);
-impl_image_data_type!(u32, 2);
-impl_image_data_type!(f32, 3);
-impl_image_data_type!(i8, 4);
-impl_image_data_type!(i16, 5);
-impl_image_data_type!(i32, 6);
-impl_image_data_type!(half::f16, 7);
+impl_image_data_type!(u8, U8);
+impl_image_data_type!(u16, U16);
+impl_image_data_type!(u32, U32);
+impl_image_data_type!(f32, F32);
+impl_image_data_type!(i8, I8);
+impl_image_data_type!(i16, I16);
+impl_image_data_type!(i32, I32);
+
+impl private::Sealed for half::f16 {}
+impl ImageDataType for half::f16 {
+    const DATA_TYPE_ID: DataTypeTag = DataTypeTag::F16;
+    fn from_f64(f: f64) -> half::f16 {
+        half::f16::from_f64(f)
+    }
+    fn to_f64(self) -> f64 {
+        <half::f16>::to_f64(self)
+    }
+}
+
+// Meant to be used by the simple render pipeline and in general for
+// testing purposes.
+impl_image_data_type!(f64, F64);
 
 pub struct Image<T: ImageDataType> {
     size: (usize, usize),
@@ -53,9 +90,16 @@ pub struct ImageRectMut<'a, T: ImageDataType> {
 
 impl<T: ImageDataType> Image<T> {
     pub fn new(xsize: usize, ysize: usize) -> Result<Image<T>> {
+        // These limits let us not worry about overflows.
+        if xsize as u64 >= i64::MAX as u64 / 4 || ysize as u64 >= i64::MAX as u64 / 4 {
+            return Err(Error::ImageSizeTooLarge(xsize, ysize));
+        }
         let total_size = xsize
             .checked_mul(ysize)
             .ok_or(Error::ImageSizeTooLarge(xsize, ysize))?;
+        if xsize == 0 || ysize == 0 {
+            return Err(Error::InvalidImageSize(xsize, ysize));
+        }
         let mut data = vec![];
         data.try_reserve_exact(total_size)?;
         data.resize(total_size, T::default());
@@ -111,11 +155,7 @@ fn rect_size_check(
 }
 
 impl<'a, T: ImageDataType> ImageRect<'a, T> {
-    pub fn rect(
-        &'a self,
-        origin: (usize, usize),
-        size: (usize, usize),
-    ) -> Result<ImageRect<'a, T>> {
+    pub fn rect(&self, origin: (usize, usize), size: (usize, usize)) -> Result<ImageRect<'a, T>> {
         rect_size_check(origin, size, self.size)?;
         Ok(ImageRect {
             origin: (origin.0 + self.origin.0, origin.1 + self.origin.1),
@@ -128,7 +168,7 @@ impl<'a, T: ImageDataType> ImageRect<'a, T> {
         self.size
     }
 
-    pub fn row(&self, row: usize) -> &[T] {
+    pub fn row(&self, row: usize) -> &'a [T] {
         debug_assert!(row < self.size.1);
         let start = (row + self.origin.0) * self.image.size.1 + self.origin.1;
         &self.image.data[start..start + self.size.0]
@@ -292,9 +332,11 @@ pub mod debug_tools {
 
 #[cfg(test)]
 mod test {
+    use arbtest::arbitrary::Arbitrary;
+
     use crate::error::Result;
 
-    use super::Image;
+    use super::{Image, ImageDataType};
 
     #[test]
     fn huge_image() {
@@ -310,5 +352,54 @@ mod test {
         image.as_rect_mut().rect((30, 30), (1, 1))?.row(0)[0] = 1;
         assert_eq!(image.as_rect_mut().row(30)[30], 1);
         Ok(())
+    }
+
+    fn f64_conversions<T: ImageDataType + Eq + for<'a> Arbitrary<'a>>() {
+        arbtest::arbtest(|u| {
+            let t = T::arbitrary(u)?;
+            assert_eq!(t, T::from_f64(t.to_f64()));
+            Ok(())
+        });
+    }
+
+    #[test]
+    fn u8_f64_conv() {
+        f64_conversions::<u8>();
+    }
+
+    #[test]
+    fn u16_f64_conv() {
+        f64_conversions::<u16>();
+    }
+
+    #[test]
+    fn u32_f64_conv() {
+        f64_conversions::<u32>();
+    }
+
+    #[test]
+    fn i8_f64_conv() {
+        f64_conversions::<i8>();
+    }
+
+    #[test]
+    fn i16_f64_conv() {
+        f64_conversions::<i16>();
+    }
+
+    #[test]
+    fn i32_f64_conv() {
+        f64_conversions::<i32>();
+    }
+
+    #[test]
+    fn f32_f64_conv() {
+        arbtest::arbtest(|u| {
+            let t = f32::arbitrary(u)?;
+            if !t.is_nan() {
+                assert_eq!(t, f32::from_f64(t.to_f64()));
+            }
+            Ok(())
+        });
     }
 }
