@@ -151,8 +151,7 @@ impl<'inner, 'buf> ParseEvents<'inner, 'buf> {
                             return Err(Error::InvalidBox);
                         }
                         state => {
-                            tracing::debug!(?state, "invalid jxlp index state in WaitingJxlpIndex");
-                            unreachable!("invalid jxlp index state in WaitingJxlpIndex");
+                            unreachable!("invalid jxlp index state in WaitingJxlpIndex: {state:?}");
                         }
                     }
 
