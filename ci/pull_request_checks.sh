@@ -9,15 +9,15 @@
 
 MYDIR=$(dirname $(realpath "$0"))
 
+TEXT_FILES='(Dockerfile.*|\.c|\.cc|\.cpp|\.gni|\.h|\.java|\.sh|\.m|\.py|\.ui|\.yml|\.rs)$'
+
 set -u
 
 # Check for copyright / license markers.
 test_copyright() {
   local ret=0
   local f
-  for f in $(
-      git ls-files | grep -E \
-      '(Dockerfile.*|\.c|\.cc|\.cpp|\.gni|\.h|\.java|\.sh|\.m|\.py|\.ui|\.yml|\.rs)$'); do
+  for f in $(git ls-files .. | grep -E ${TEXT_FILES}); do
     if [[ "${f#third_party/}" == "$f" ]]; then
       # $f is not in third_party/
       if ! head -n 10 "$f" |
@@ -49,8 +49,7 @@ test_author() {
 # Check for git merge conflict markers.
 test_merge_conflict() {
   local ret=0
-  TEXT_FILES='(\.cc|\.cpp|\.h|\.sh|\.m|\.py|\.md|\.txt|\.cmake|\.rs)$'
-  for f in $(git ls-files | grep -E "${TEXT_FILES}"); do
+  for f in $(git ls-files .. | grep -E "${TEXT_FILES}"); do
     if grep -E '^<<<<<<< ' "$f"; then
       echo "$f: Found git merge conflict marker. Please resolve." >&2
       ret=1

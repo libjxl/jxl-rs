@@ -18,3 +18,6 @@ jxl_headers_derive = { path = "../jxl_headers_derive" }
 
 [features]
 debug_tools = []
+
+[lints]
+workspace = true
