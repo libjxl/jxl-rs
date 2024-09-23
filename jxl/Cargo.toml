@@ -16,6 +16,9 @@ half = "1.7.1"
 tracing = "0.1.40"
 jxl_headers_derive = { path = "../jxl_headers_derive" }
 
+[dev-dependencies]
+arbtest = "0.3.1"
+
 [features]
 debug_tools = []
 

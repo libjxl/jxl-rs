@@ -6,28 +6,18 @@
 // Originally written for jxl-oxide.
 
 pub mod box_header;
+pub mod parse;
 
 use box_header::*;
-
-use crate::{error::Error, util::ConcatSlice};
+pub use parse::ParseEvent;
+use parse::*;
 
 /// Container format parser.
-#[derive(Default)]
+#[derive(Debug, Default)]
 pub struct ContainerParser {
     state: DetectState,
-    buf: Vec<u8>,
-    codestream: Vec<u8>,
-    aux_boxes: Vec<(ContainerBoxType, Vec<u8>)>,
     jxlp_index_state: JxlpIndexState,
-}
-
-impl std::fmt::Debug for ContainerParser {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("ContainerParser")
-            .field("state", &self.state)
-            .field("jxlp_index_state", &self.jxlp_index_state)
-            .finish_non_exhaustive()
-    }
+    previous_consumed_bytes: usize,
 }
 
 #[derive(Debug, Default)]
@@ -37,15 +27,14 @@ enum DetectState {
     WaitingBoxHeader,
     WaitingJxlpIndex(ContainerBoxHeader),
     InAuxBox {
+        #[allow(unused)]
         header: ContainerBoxHeader,
-        data: Vec<u8>,
         bytes_left: Option<usize>,
     },
     InCodestream {
         kind: BitstreamKind,
         bytes_left: Option<usize>,
     },
-    Done(BitstreamKind),
 }
 
 /// Structure of the decoded bitstream.
@@ -71,9 +60,6 @@ enum JxlpIndexState {
 }
 
 impl ContainerParser {
-    const CODESTREAM_SIG: [u8; 2] = [0xff, 0x0a];
-    const CONTAINER_SIG: [u8; 12] = [0, 0, 0, 0xc, b'J', b'X', b'L', b' ', 0xd, 0xa, 0x87, 0xa];
-
     pub fn new() -> Self {
         Self::default()
     }
@@ -84,206 +70,117 @@ impl ContainerParser {
             DetectState::WaitingBoxHeader
             | DetectState::WaitingJxlpIndex(..)
             | DetectState::InAuxBox { .. } => BitstreamKind::Container,
-            DetectState::InCodestream { kind, .. } | DetectState::Done(kind) => kind,
+            DetectState::InCodestream { kind, .. } => kind,
         }
     }
 
-    pub fn feed_bytes(&mut self, input: &[u8]) -> Result<(), Error> {
-        let state = &mut self.state;
-        let mut reader = ConcatSlice::new(&self.buf, input);
+    /// Parses input buffer and generates parser events.
+    ///
+    /// The parser might not fully consume the buffer. Use [`previous_consumed_bytes`] to get how
+    /// many bytes are consumed. Bytes not consumed by the parser should be processed again.
+    ///
+    /// [`previous_consumed_bytes`]: ContainerParser::previous_consumed_bytes
+    pub fn process_bytes<'inner, 'buf>(
+        &'inner mut self,
+        input: &'buf [u8],
+    ) -> ParseEvents<'inner, 'buf> {
+        ParseEvents::new(self, input)
+    }
 
-        loop {
-            match state {
-                DetectState::WaitingSignature => {
-                    let mut signature_buf = [0u8; 12];
-                    let buf = reader.peek(&mut signature_buf);
-                    if buf.starts_with(&Self::CODESTREAM_SIG) {
-                        tracing::trace!("Codestream signature found");
-                        *state = DetectState::InCodestream {
-                            kind: BitstreamKind::BareCodestream,
-                            bytes_left: None,
-                        };
-                    } else if buf.starts_with(&Self::CONTAINER_SIG) {
-                        tracing::trace!("Container signature found");
-                        *state = DetectState::WaitingBoxHeader;
-                        reader.advance(Self::CONTAINER_SIG.len());
-                    } else if !Self::CODESTREAM_SIG.starts_with(buf)
-                        && !Self::CONTAINER_SIG.starts_with(buf)
-                    {
-                        tracing::debug!(?buf, "Invalid signature");
-                        *state = DetectState::InCodestream {
-                            kind: BitstreamKind::Invalid,
-                            bytes_left: None,
-                        };
-                    } else {
-                        break;
-                    }
+    /// Get how many bytes are consumed by the previous call to [`process_bytes`].
+    ///
+    /// Bytes not consumed by the parser should be processed again.
+    ///
+    /// [`process_bytes`]: ContainerParser::process_bytes
+    pub fn previous_consumed_bytes(&self) -> usize {
+        self.previous_consumed_bytes
+    }
+}
+
+#[cfg(test)]
+impl ContainerParser {
+    pub(crate) fn collect_codestream(input: &[u8]) -> crate::error::Result<Vec<u8>> {
+        let mut parser = Self::new();
+        let mut codestream = Vec::new();
+        for event in parser.process_bytes(input) {
+            match event? {
+                ParseEvent::BitstreamKind(_) => {}
+                ParseEvent::Codestream(buf) => {
+                    codestream.extend_from_slice(buf);
                 }
-                DetectState::WaitingBoxHeader => match ContainerBoxHeader::parse(&reader)? {
-                    HeaderParseResult::Done {
-                        header,
-                        header_size,
-                    } => {
-                        reader.advance(header_size);
-                        let tbox = header.box_type();
-                        if tbox == ContainerBoxType::CODESTREAM {
-                            match self.jxlp_index_state {
-                                JxlpIndexState::Initial => {
-                                    self.jxlp_index_state = JxlpIndexState::SingleJxlc;
-                                }
-                                JxlpIndexState::SingleJxlc => {
-                                    tracing::debug!("Duplicate jxlc box found");
-                                    return Err(Error::InvalidBox);
-                                }
-                                JxlpIndexState::Jxlp(_) | JxlpIndexState::JxlpFinished => {
-                                    tracing::debug!("Found jxlc box instead of jxlp box");
-                                    return Err(Error::InvalidBox);
-                                }
-                            }
-
-                            *state = DetectState::InCodestream {
-                                kind: BitstreamKind::Container,
-                                bytes_left: header.box_size().map(|x| x as usize),
-                            };
-                        } else if tbox == ContainerBoxType::PARTIAL_CODESTREAM {
-                            if let Some(box_size) = header.box_size() {
-                                if box_size < 4 {
-                                    return Err(Error::InvalidBox);
-                                }
-                            }
-
-                            match &mut self.jxlp_index_state {
-                                JxlpIndexState::Initial => {
-                                    self.jxlp_index_state = JxlpIndexState::Jxlp(0);
-                                }
-                                JxlpIndexState::Jxlp(index) => {
-                                    *index += 1;
-                                }
-                                JxlpIndexState::SingleJxlc => {
-                                    tracing::debug!("jxlp box found after jxlc box");
-                                    return Err(Error::InvalidBox);
-                                }
-                                JxlpIndexState::JxlpFinished => {
-                                    tracing::debug!("found another jxlp box after the final one");
-                                    return Err(Error::InvalidBox);
-                                }
-                            }
-
-                            *state = DetectState::WaitingJxlpIndex(header);
-                        } else {
-                            let bytes_left = header.box_size().map(|x| x as usize);
-                            *state = DetectState::InAuxBox {
-                                header,
-                                data: Vec::new(),
-                                bytes_left,
-                            };
-                        }
-                    }
-                    HeaderParseResult::NeedMoreData => break,
-                },
-                DetectState::WaitingJxlpIndex(header) => {
-                    let mut buf = [0u8; 4];
-                    reader.peek(&mut buf);
-                    if buf.len() < 4 {
-                        break;
-                    }
-
-                    let index = u32::from_be_bytes(buf);
-                    reader.advance(4);
-                    let is_last = index & 0x80000000 != 0;
-                    let index = index & 0x7fffffff;
-
-                    match self.jxlp_index_state {
-                        JxlpIndexState::Jxlp(expected_index) if expected_index == index => {
-                            if is_last {
-                                self.jxlp_index_state = JxlpIndexState::JxlpFinished;
-                            }
-                        }
-                        JxlpIndexState::Jxlp(expected_index) => {
-                            tracing::debug!(
-                                expected_index,
-                                actual_index = index,
-                                "Out-of-order jxlp box found",
-                            );
-                            return Err(Error::InvalidBox);
-                        }
-                        state => {
-                            tracing::debug!(?state, "invalid jxlp index state in WaitingJxlpIndex");
-                            unreachable!("invalid jxlp index state in WaitingJxlpIndex");
-                        }
-                    }
-
-                    *state = DetectState::InCodestream {
-                        kind: BitstreamKind::Container,
-                        bytes_left: header.box_size().map(|x| x as usize - 4),
-                    };
-                }
-                DetectState::InCodestream {
-                    bytes_left: None, ..
-                } => {
-                    reader.fill_vec(None, &mut self.codestream)?;
-                    break;
-                }
-                DetectState::InCodestream {
-                    bytes_left: Some(bytes_left),
-                    ..
-                } => {
-                    let bytes_written = reader.fill_vec(Some(*bytes_left), &mut self.codestream)?;
-                    *bytes_left -= bytes_written;
-                    if *bytes_left == 0 {
-                        *state = DetectState::WaitingBoxHeader;
-                    } else {
-                        break;
-                    }
-                }
-                DetectState::InAuxBox {
-                    data,
-                    bytes_left: None,
-                    ..
-                } => {
-                    reader.fill_vec(None, data)?;
-                    break;
-                }
-                DetectState::InAuxBox {
-                    header,
-                    data,
-                    bytes_left: Some(bytes_left),
-                } => {
-                    let bytes_written = reader.fill_vec(Some(*bytes_left), data)?;
-                    *bytes_left -= bytes_written;
-                    if *bytes_left == 0 {
-                        self.aux_boxes
-                            .push((header.box_type(), std::mem::take(data)));
-                        *state = DetectState::WaitingBoxHeader;
-                    } else {
-                        break;
-                    }
-                }
-                DetectState::Done(_) => break,
             }
         }
-
-        let (buf_slice, input_slice) = reader.remaining_slices();
-        if buf_slice.is_empty() {
-            self.buf.clear();
-        } else {
-            let remaining_buf_from = self.buf.len() - buf_slice.len();
-            self.buf.drain(..remaining_buf_from);
-        }
-        self.buf.try_reserve(input_slice.len())?;
-        self.buf.extend_from_slice(input_slice);
-        Ok(())
+        Ok(codestream)
     }
+}
 
-    pub fn take_bytes(&mut self) -> Vec<u8> {
-        std::mem::take(&mut self.codestream)
-    }
+#[cfg(test)]
+mod test {
+    use super::*;
 
-    pub fn finish(&mut self) {
-        if let DetectState::InAuxBox { header, data, .. } = &mut self.state {
-            self.aux_boxes
-                .push((header.box_type(), std::mem::take(data)));
-        }
-        self.state = DetectState::Done(self.kind());
+    #[rustfmt::skip]
+    const HEADER: &[u8] = &[
+        0x00, 0x00, 0x00, 0x0c, b'J', b'X', b'L', b' ', 0x0d, 0x0a, 0x87, 0x0a, 0x00, 0x00, 0x00, 0x14,
+        b'f', b't', b'y', b'p', b'j', b'x', b'l', b' ', 0x00, 0x00, 0x00, 0x00, b'j', b'x', b'l', b' ',
+    ];
+
+    #[test]
+    fn parse_partial() {
+        arbtest::arbtest(|u| {
+            // Prepare arbitrary container format data with two jxlp boxes.
+            let total_len = u.arbitrary_len::<u8>()?;
+            let mut codestream0 = vec![0u8; total_len / 2];
+            u.fill_buffer(&mut codestream0)?;
+            let mut codestream1 = vec![0u8; total_len - codestream0.len()];
+            u.fill_buffer(&mut codestream1)?;
+
+            let mut container = HEADER.to_vec();
+            container.extend_from_slice(&(12 + codestream0.len() as u32).to_be_bytes());
+            container.extend_from_slice(b"jxlp\x00\x00\x00\x00");
+            container.extend_from_slice(&codestream0);
+
+            container.extend_from_slice(&(12 + codestream1.len() as u32).to_be_bytes());
+            container.extend_from_slice(b"jxlp\x80\x00\x00\x01");
+            container.extend_from_slice(&codestream1);
+
+            let mut expected = codestream0;
+            expected.extend(codestream1);
+
+            // Create a list of arbitrary splits.
+            let mut tests = Vec::new();
+            u.arbitrary_loop(Some(1), Some(10), |u| {
+                let split_at_idx = u.choose_index(container.len())?;
+                tests.push(container.split_at(split_at_idx));
+                Ok(std::ops::ControlFlow::Continue(()))
+            })?;
+
+            // Test if split index doesn't affect final codestream.
+            for (first, second) in tests {
+                let mut codestream = Vec::new();
+                let mut parser = ContainerParser::new();
+
+                for event in parser.process_bytes(first) {
+                    let event = event.unwrap();
+                    if let ParseEvent::Codestream(data) = event {
+                        codestream.extend_from_slice(data);
+                    }
+                }
+
+                let consumed = parser.previous_consumed_bytes();
+                let mut second_chunk = first[consumed..].to_vec();
+                second_chunk.extend_from_slice(second);
+
+                for event in parser.process_bytes(&second_chunk) {
+                    let event = event.unwrap();
+                    if let ParseEvent::Codestream(data) = event {
+                        codestream.extend_from_slice(data);
+                    }
+                }
+
+                assert_eq!(codestream, expected);
+            }
+
+            Ok(())
+        });
     }
 }
