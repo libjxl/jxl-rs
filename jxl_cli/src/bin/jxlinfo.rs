@@ -18,7 +18,6 @@ fn parse_jxl_codestream(data: &[u8], verbose: bool) -> Result<(), jxl::error::Er
 
     // Non-verbose output
     if !verbose {
-        // let color_space = &fh.image_metadata.color_encoding;
         let how_lossy = if fh.image_metadata.xyb_encoded {
             "lossy"
         } else {
@@ -35,14 +34,12 @@ fn parse_jxl_codestream(data: &[u8], verbose: bool) -> Result<(), jxl::error::Er
     // Verbose output: Use Debug trait to print the FileHeaders
     println!("{:#?}", fh);
 
-    let _icc = if fh.image_metadata.color_encoding.want_icc {
+    // TODO(firsching): consider printing more of less information for ICC
+    // for verbose/non-verbose cases
+    if fh.image_metadata.color_encoding.want_icc {
         let icc_data = read_icc(&mut br)?;
         println!("ICC profile length: {} bytes", icc_data.len());
-        Some(icc_data)
-    } else {
-        None
-    };
-
+    }
     // TODO(firsching): add frame header parsing for each frame
 
     Ok(())
