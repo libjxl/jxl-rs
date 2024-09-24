@@ -5,6 +5,7 @@ edition = "2021"
 
 [dependencies]
 jxl = { path = "../jxl" }
+clap = { version = "4.5.18" }
 
 [lints]
 workspace = true
