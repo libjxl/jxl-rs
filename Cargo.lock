@@ -167,6 +167,7 @@ dependencies = [
 name = "jxl_cli"
 version = "0.1.0"
 dependencies = [
+ "clap",
  "jxl",
 ]
 
@@ -178,14 +179,6 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 1.0.109",
-]
-
-[[package]]
-name = "jxlinfo"
-version = "0.1.0"
-dependencies = [
- "clap",
- "jxl",
 ]
 
 [[package]]
