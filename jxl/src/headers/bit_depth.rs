@@ -28,6 +28,12 @@ pub struct BitDepth {
 }
 
 impl BitDepth {
+    pub fn bits_per_sample(&self) -> u32 {
+        self.bits_per_sample
+    }
+    pub fn exponent_bits_per_sample(&self) -> u32 {
+        self.exponent_bits_per_sample
+    }
     fn check(&self, _: &Empty) -> Result<(), Error> {
         if self.floating_point_sample {
             if self.exponent_bits_per_sample < 2 || self.exponent_bits_per_sample > 8 {

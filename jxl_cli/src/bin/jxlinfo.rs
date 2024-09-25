@@ -6,8 +6,7 @@
 use clap::{Arg, Command};
 use jxl::bit_reader::BitReader;
 use jxl::container::{ContainerParser, ParseEvent};
-use jxl::headers::FileHeaders;
-use jxl::headers::JxlHeader;
+use jxl::headers::{color_encoding::ColorSpace, FileHeaders, JxlHeader};
 use jxl::icc::read_icc;
 use std::fs;
 use std::io::Read;
@@ -24,10 +23,38 @@ fn parse_jxl_codestream(data: &[u8], verbose: bool) -> Result<(), jxl::error::Er
             "(possibly) lossless"
         };
 
-        println!("{}x{}, {}", fh.size.xsize(), fh.size.ysize(), how_lossy,);
+        let color_space = match fh.image_metadata.color_encoding.color_space {
+            ColorSpace::RGB => "RGB",
+            ColorSpace::Gray => "Grayscale",
+            ColorSpace::XYB => "XYB",
+            ColorSpace::Unknown => "Unknown",
+        };
+        let alpha_info = match fh
+            .image_metadata
+            .extra_channel_info
+            .iter()
+            .any(|info| info.alpha_associated())
+        {
+            true => "+Alpha",
+            false => "",
+        };
+        print!(
+            "{}x{}, {}, {}-bit {}{}",
+            fh.size.xsize(),
+            fh.size.ysize(),
+            how_lossy,
+            fh.image_metadata.bit_depth.bits_per_sample(),
+            color_space,
+            alpha_info,
+        );
+        if fh.image_metadata.bit_depth.exponent_bits_per_sample() != 0 {
+            print!(
+                "float ({} exponent bits)",
+                fh.image_metadata.bit_depth.exponent_bits_per_sample()
+            );
+        }
+        println!();
 
-        // TODO(firsching): add non-verbose print for bit-depth
-        // TODO(firsching): add non-verbose print for color space
         return Ok(());
     }
 
