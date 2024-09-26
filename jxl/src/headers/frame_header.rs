@@ -384,12 +384,13 @@ impl FrameHeader {
                 .iter()
                 .zip(&self.ec_upsampling)
                 .find(|(info, ec_upsampling)| {
-                    ((*ec_upsampling << info.dim_shift) < self.upsampling) || (**ec_upsampling > 8)
+                    ((*ec_upsampling << info.dim_shift()) < self.upsampling)
+                        || (**ec_upsampling > 8)
                 })
             {
                 return Err(Error::InvalidEcUpsampling(
                     self.upsampling,
-                    info.dim_shift,
+                    info.dim_shift(),
                     *upsampling,
                 ));
             }

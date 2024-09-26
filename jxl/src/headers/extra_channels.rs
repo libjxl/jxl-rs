@@ -49,7 +49,7 @@ pub struct ExtraChannelInfo {
     bit_depth: BitDepth,
     #[coder(u2S(0, 3, 4, Bits(3) + 1))]
     #[default(0)]
-    pub dim_shift: u32,
+    dim_shift: u32,
     name: String,
     // TODO(veluca93): if using Option<bool>, this is None when all_default.
     #[condition(ec_type == ExtraChannel::Alpha)]
@@ -63,6 +63,9 @@ pub struct ExtraChannelInfo {
 }
 
 impl ExtraChannelInfo {
+    pub fn dim_shift(&self) -> u32 {
+        self.dim_shift
+    }
     pub fn alpha_associated(&self) -> bool {
         self.alpha_associated
     }
