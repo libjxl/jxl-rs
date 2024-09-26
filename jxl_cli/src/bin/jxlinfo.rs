@@ -6,10 +6,54 @@
 use clap::{Arg, Command};
 use jxl::bit_reader::BitReader;
 use jxl::container::{ContainerParser, ParseEvent};
+use jxl::headers::color_encoding::{ColorEncoding, Primaries, WhitePoint};
 use jxl::headers::{FileHeaders, JxlHeader};
 use jxl::icc::read_icc;
 use std::fs;
 use std::io::Read;
+
+fn print_color_encoding(color_encoding: &ColorEncoding) {
+    // Print the color space
+    print!("Color Space: {:?}, ", color_encoding.color_space);
+
+    // Print white point, depending on whether it's a custom white point
+    match color_encoding.white_point {
+        WhitePoint::Custom => {
+            print!(
+                "White point: custom ({}, {}), ",
+                color_encoding.white.x, color_encoding.white.y
+            );
+        }
+        _ => {
+            print!("White point: {:?}, ", color_encoding.white_point);
+        }
+    }
+
+    // Print primaries, check for custom primaries
+    if color_encoding.primaries == Primaries::Custom {
+        println!("Custom primaries: ");
+        for (i, primary) in color_encoding.custom_primaries.iter().enumerate() {
+            print!("  primary {}: ({}, {}), ", i + 1, primary.x, primary.y);
+        }
+    } else {
+        print!("Primaries: {:?}, ", color_encoding.primaries);
+    }
+
+    // Print transfer function details
+    if color_encoding.tf.have_gamma {
+        print!(
+            "Transfer function: gamma (gamma = {}), ",
+            color_encoding.tf.gamma
+        );
+    } else {
+        print!(
+            "Transfer function: {:?}, ",
+            color_encoding.tf.transfer_function
+        );
+    }
+
+    println!("Rendering intent: {:?}", color_encoding.rendering_intent);
+}
 
 fn parse_jxl_codestream(data: &[u8], verbose: bool) -> Result<(), jxl::error::Error> {
     let mut br = BitReader::new(data);
@@ -33,8 +77,13 @@ fn parse_jxl_codestream(data: &[u8], verbose: bool) -> Result<(), jxl::error::Er
             true => "+Alpha",
             false => "",
         };
+        let image_or_animation = match fh.image_metadata.animation {
+            None => "Image",
+            Some(_) => "Animation",
+        };
         print!(
-            "{}x{}, {}, {}-bit {}{}",
+            "JPEG XL {}, {}x{}, {}, {}-bit {}{}",
+            image_or_animation,
             fh.size.xsize(),
             fh.size.ysize(),
             how_lossy,
@@ -49,9 +98,11 @@ fn parse_jxl_codestream(data: &[u8], verbose: bool) -> Result<(), jxl::error::Er
             );
         }
         println!();
-
-        // TODO(firsching): print more info on color encoding
-
+        if fh.image_metadata.color_encoding.want_icc {
+            println!("with ICC profile")
+        } else {
+            print_color_encoding(&fh.image_metadata.color_encoding);
+        }
         return Ok(());
     }
 

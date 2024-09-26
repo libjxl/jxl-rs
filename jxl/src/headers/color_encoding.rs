@@ -63,14 +63,10 @@ pub enum RenderingIntent {
 pub struct CustomXY {
     #[default(0)]
     #[coder(u2S(Bits(19), Bits(19) + 524288, Bits(20) + 1048576, Bits(21) + 2097152))]
-    // TODO(firsching): remove once we use this!
-    #[allow(dead_code)]
-    x: i32,
+    pub x: i32,
     #[default(0)]
     #[coder(u2S(Bits(19), Bits(19) + 524288, Bits(20) + 1048576, Bits(21) + 2097152))]
-    // TODO(firsching): remove once we use this!
-    #[allow(dead_code)]
-    y: i32,
+    pub y: i32,
 }
 
 pub struct CustomTransferFunctionNonserialized {
@@ -83,14 +79,14 @@ pub struct CustomTransferFunctionNonserialized {
 pub struct CustomTransferFunction {
     #[condition(nonserialized.color_space != ColorSpace::XYB)]
     #[default(false)]
-    have_gamma: bool,
+    pub have_gamma: bool,
     #[condition(have_gamma)]
     #[default(3333333)] // XYB gamma
     #[coder(Bits(24))]
-    gamma: u32,
+    pub gamma: u32,
     #[condition(!have_gamma && nonserialized.color_space != ColorSpace::XYB)]
     #[default(TransferFunction::SRGB)]
-    transfer_function: TransferFunction,
+    pub transfer_function: TransferFunction,
 }
 
 impl CustomTransferFunction {
