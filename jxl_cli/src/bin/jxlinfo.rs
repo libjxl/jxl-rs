@@ -6,7 +6,7 @@
 use clap::{Arg, Command};
 use jxl::bit_reader::BitReader;
 use jxl::container::{ContainerParser, ParseEvent};
-use jxl::headers::{color_encoding::ColorSpace, FileHeaders, JxlHeader};
+use jxl::headers::{FileHeaders, JxlHeader};
 use jxl::icc::read_icc;
 use std::fs;
 use std::io::Read;
@@ -23,12 +23,7 @@ fn parse_jxl_codestream(data: &[u8], verbose: bool) -> Result<(), jxl::error::Er
             "(possibly) lossless"
         };
 
-        let color_space = match fh.image_metadata.color_encoding.color_space {
-            ColorSpace::RGB => "RGB",
-            ColorSpace::Gray => "Grayscale",
-            ColorSpace::XYB => "XYB",
-            ColorSpace::Unknown => "Unknown",
-        };
+        let color_space = format!("{:?}", fh.image_metadata.color_encoding.color_space);
         let alpha_info = match fh
             .image_metadata
             .extra_channel_info
@@ -54,6 +49,8 @@ fn parse_jxl_codestream(data: &[u8], verbose: bool) -> Result<(), jxl::error::Er
             );
         }
         println!();
+
+        // TODO(firsching): print more info on color encoding
 
         return Ok(());
     }
