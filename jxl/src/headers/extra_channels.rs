@@ -63,6 +63,9 @@ pub struct ExtraChannelInfo {
 }
 
 impl ExtraChannelInfo {
+    pub fn alpha_associated(&self) -> bool {
+        self.alpha_associated
+    }
     fn check(&self, _: &Empty) -> Result<(), Error> {
         if self.dim_shift > 3 {
             Err(Error::DimShiftTooLarge(self.dim_shift))
