@@ -13,10 +13,10 @@ use crate::entropy_coding::ans::*;
 use crate::entropy_coding::context_map::*;
 use crate::entropy_coding::huffman::*;
 use crate::entropy_coding::hybrid_uint::*;
-use crate::error::Error;
+use crate::error::{Error, Result};
 use crate::headers::encodings::*;
 
-pub fn decode_varint16(br: &mut BitReader) -> Result<u16, Error> {
+pub fn decode_varint16(br: &mut BitReader) -> Result<u16> {
     if br.read(1)? != 0 {
         let nbits = br.read(4)? as usize;
         if nbits == 0 {
@@ -47,6 +47,7 @@ struct LZ77Params {
 #[derive(Debug)]
 enum Codes {
     Huffman(HuffmanCodes),
+    Ans(AnsCodes),
 }
 
 #[derive(Debug)]
@@ -66,40 +67,39 @@ pub struct Histograms {
 #[derive(Debug)]
 pub struct Reader<'a> {
     histograms: &'a Histograms,
+    ans_reader: AnsReader,
 }
 
 impl<'a> Reader<'a> {
     fn read_internal(
-        &self,
+        &mut self,
         br: &mut BitReader,
         uint_config: &HybridUint,
         cluster: usize,
-    ) -> Result<u32, Error> {
+    ) -> Result<u32> {
         let symbol = match &self.histograms.codes {
             Codes::Huffman(hc) => hc.read(br, cluster)?,
+            Codes::Ans(ans) => self.ans_reader.read(ans, br, cluster)?,
         };
         uint_config.read(symbol, br)
     }
 
-    pub fn read(&self, br: &mut BitReader, context: usize) -> Result<u32, Error> {
+    pub fn read(&mut self, br: &mut BitReader, context: usize) -> Result<u32> {
         assert!(!self.histograms.lz77_params.enabled);
         let cluster = self.histograms.context_map[context] as usize;
         self.read_internal(br, &self.histograms.uint_configs[cluster], cluster)
     }
 
-    pub fn check_final_state(self) -> Result<(), Error> {
+    pub fn check_final_state(self) -> Result<()> {
         match &self.histograms.codes {
             Codes::Huffman(_) => Ok(()),
+            Codes::Ans(_) => self.ans_reader.check_final_state(),
         }
     }
 }
 
 impl Histograms {
-    pub fn decode(
-        num_contexts: usize,
-        br: &mut BitReader,
-        allow_lz77: bool,
-    ) -> Result<Histograms, Error> {
+    pub fn decode(num_contexts: usize, br: &mut BitReader, allow_lz77: bool) -> Result<Histograms> {
         let lz77_params = LZ77Params::read_unconditional(&(), br, &Empty {})?;
         if !allow_lz77 && lz77_params.enabled {
             return Err(Error::LZ77Disallowed);
@@ -133,12 +133,16 @@ impl Histograms {
         };
         let num_histograms = *context_map.iter().max().unwrap() + 1;
         let uint_configs = ((0..num_histograms).map(|_| HybridUint::decode(log_alpha_size, br)))
-            .collect::<Result<_, _>>()?;
+            .collect::<Result<_>>()?;
 
         let codes = if use_prefix_code {
             Codes::Huffman(HuffmanCodes::decode(num_histograms as usize, br)?)
         } else {
-            unimplemented!();
+            Codes::Ans(AnsCodes::decode(
+                num_histograms as usize,
+                log_alpha_size,
+                br,
+            )?)
         };
 
         Ok(Histograms {
@@ -150,26 +154,29 @@ impl Histograms {
             codes,
         })
     }
-    fn make_reader_impl(
-        &self,
-        _br: &mut BitReader,
-        _image_width: Option<usize>,
-    ) -> Result<Reader, Error> {
+
+    fn make_reader_impl(&self, br: &mut BitReader, _image_width: Option<usize>) -> Result<Reader> {
         if self.lz77_params.enabled {
             unimplemented!()
         }
-        Ok(Reader { histograms: self })
+
+        let ans_reader = if matches!(self.codes, Codes::Ans(_)) {
+            AnsReader::init(br)?
+        } else {
+            AnsReader::new_unused()
+        };
+
+        Ok(Reader {
+            histograms: self,
+            ans_reader,
+        })
     }
 
-    pub fn make_reader(&self, br: &mut BitReader) -> Result<Reader, Error> {
+    pub fn make_reader(&self, br: &mut BitReader) -> Result<Reader> {
         self.make_reader_impl(br, None)
     }
 
-    pub fn make_reader_with_width(
-        &self,
-        br: &mut BitReader,
-        image_width: usize,
-    ) -> Result<Reader, Error> {
+    pub fn make_reader_with_width(&self, br: &mut BitReader, image_width: usize) -> Result<Reader> {
         self.make_reader_impl(br, Some(image_width))
     }
 }

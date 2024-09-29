@@ -55,7 +55,7 @@ pub fn decode_context_map(num_contexts: usize, br: &mut BitReader) -> Result<Vec
     } else {
         let use_mtf = br.read(1)? != 0;
         let histograms = Histograms::decode(1, br, /*allow_lz77=*/ num_contexts > 2)?;
-        let reader = histograms.make_reader(br)?;
+        let mut reader = histograms.make_reader(br)?;
 
         let mut ctx_map: Vec<u8> = (0..num_contexts)
             .map(|_| {

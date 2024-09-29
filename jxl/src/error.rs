@@ -55,6 +55,10 @@ pub enum Error {
     AlphabetTooLargeHuff(usize),
     #[error("Invalid Huffman code")]
     InvalidHuffman,
+    #[error("Invalid ANS histogram")]
+    InvalidAnsHistogram,
+    #[error("ANS stream checksum mismatch")]
+    AnsChecksumMismatch,
     #[error("Integer too large: nbits {0} > 29")]
     IntegerTooLarge(u32),
     #[error("Invalid context map: context id {0} > 255")]
@@ -87,4 +91,4 @@ pub enum Error {
     PipelineChannelUnused(usize),
 }
 
-pub type Result<T> = std::result::Result<T, Error>;
+pub type Result<T, E = Error> = std::result::Result<T, E>;
