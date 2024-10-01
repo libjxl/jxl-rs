@@ -8,7 +8,8 @@ use crate::entropy_coding::decode::Reader;
 use crate::error::{Error, Result};
 use crate::util::{tracing::instrument, value_of_lowest_1_bit, CeilLog2};
 
-pub struct Permutation(Vec<u32>);
+#[derive(Debug, PartialEq, Default)]
+pub struct Permutation(pub Vec<u32>);
 
 impl std::ops::Deref for Permutation {
     type Target = [u32];

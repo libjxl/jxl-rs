@@ -6,7 +6,7 @@
 use crate::{bit_reader::BitReader, error::Error, headers::encodings::*};
 use jxl_macros::UnconditionalCoder;
 
-#[derive(UnconditionalCoder, Debug)]
+#[derive(UnconditionalCoder, Debug, Clone)]
 #[validate]
 pub struct BitDepth {
     #[default(false)]
