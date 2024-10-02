@@ -89,6 +89,8 @@ pub enum Error {
     PipelineShiftAfterExpand(String),
     #[error("Channel {0} was not used in the render pipeline")]
     PipelineChannelUnused(usize),
+    #[error("Trying to copy rects of different size, src: {0}x{1} dst {2}x{3}")]
+    CopyOfDifferentSize(usize, usize, usize, usize),
 }
 
 pub type Result<T, E = Error> = std::result::Result<T, E>;

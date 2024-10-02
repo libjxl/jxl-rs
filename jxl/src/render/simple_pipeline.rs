@@ -3,10 +3,13 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
+use std::any::Any;
+
 use crate::{
     error::{Error, Result},
     image::{DataTypeTag, Image, ImageDataType},
     render::internal::RenderPipelineStageInfo,
+    util::tracing::*,
     util::ShiftRightCeil,
 };
 
@@ -16,7 +19,7 @@ use super::{
     RenderPipelineInputStage, RenderPipelineStage,
 };
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 struct ChannelInfo {
     ty: Option<DataTypeTag>,
     downsample: (u8, u8),
@@ -27,9 +30,16 @@ pub struct SimpleRenderPipelineBuilder {
     can_shift: bool,
 }
 
-impl RenderPipelineBuilder for SimpleRenderPipelineBuilder {
-    type RenderPipeline = SimpleRenderPipeline;
-    fn new(num_channels: usize, size: (usize, usize), log_group_size: usize) -> Self {
+impl SimpleRenderPipelineBuilder {
+    #[instrument]
+    pub(super) fn new_with_chunk_size(
+        num_channels: usize,
+        size: (usize, usize),
+        log_group_size: usize,
+        chunk_size: usize,
+    ) -> Self {
+        info!("creating simple pipeline");
+        assert!(chunk_size <= u16::MAX as usize);
         SimpleRenderPipelineBuilder {
             pipeline: SimpleRenderPipeline {
                 channel_info: vec![vec![
@@ -49,12 +59,29 @@ impl RenderPipelineBuilder for SimpleRenderPipelineBuilder {
                 ],
                 completed_passes: 0,
                 input_buffers: vec![],
+                chunk_size,
             },
             can_shift: true,
         }
     }
+}
+
+impl RenderPipelineBuilder for SimpleRenderPipelineBuilder {
+    type RenderPipeline = SimpleRenderPipeline;
+
+    fn new(num_channels: usize, size: (usize, usize), log_group_size: usize) -> Self {
+        Self::new_with_chunk_size(num_channels, size, log_group_size, 256)
+    }
+
+    #[instrument(skip_all, err)]
     fn add_stage<Stage: RenderPipelineStage>(mut self, stage: Stage) -> Result<Self> {
         let current_info = self.pipeline.channel_info.last().unwrap().clone();
+        info!(
+            "adding stage '{}'. last stage channel info: {:?} can_shift {}",
+            stage.name(),
+            current_info,
+            self.can_shift
+        );
         let mut after_info = vec![];
         for (c, info) in current_info.iter().enumerate() {
             if !stage.uses_channel(c) {
@@ -85,22 +112,37 @@ impl RenderPipelineBuilder for SimpleRenderPipelineBuilder {
         if Stage::Type::TYPE == RenderPipelineStageType::Extend {
             self.can_shift = false;
         }
+        info!(
+            "added stage '{}'. new channel info: {:?} can_shift {}",
+            stage.name(),
+            after_info,
+            self.can_shift
+        );
+        self.pipeline.channel_info.push(after_info);
         self.pipeline.stages.push(Box::new(stage));
         Ok(self)
     }
 
+    #[instrument(skip_all, err)]
     fn build(mut self) -> Result<Self::RenderPipeline> {
         let channel_info = &mut self.pipeline.channel_info;
+        info!(
+            "final channel info after all stages {:?}",
+            channel_info.last().unwrap()
+        );
         let num_channels = channel_info[0].len();
-        for stage in (0..self.pipeline.stages.len()).rev() {
-            let mut stage_iter = channel_info.iter_mut().skip(stage);
-            let current_info = stage_iter.next().unwrap();
-            let next_info = stage_iter.next().unwrap();
+        for (s, stage) in self.pipeline.stages.iter().enumerate().rev() {
+            let [current_info, next_info, ..] = &mut channel_info[s..] else {
+                unreachable!()
+            };
             for chan in 0..num_channels {
                 let cur_chan = &mut current_info[chan];
                 let next_chan = &next_info[chan];
-                if cur_chan.ty.is_none() {
+                if cur_chan.ty.is_none() && !stage.uses_channel(chan) {
                     cur_chan.ty = next_chan.ty;
+                } else {
+                    assert_eq!(Some(stage.output_type()), next_chan.ty);
+                    cur_chan.ty = Some(stage.input_type());
                 }
                 // Arithmetic overflows here should be very uncommon, so custom error variants
                 // are probably unwarranted.
@@ -115,6 +157,11 @@ impl RenderPipelineBuilder for SimpleRenderPipelineBuilder {
                     .checked_add(next_downsample.1)
                     .ok_or(Error::ArithmeticOverflow)?;
             }
+            info!(
+                "final channel info before stage {s} '{}': {:?}",
+                stage.name(),
+                current_info
+            );
         }
 
         // Ensure all channels have been used, so that we know the types of all buffers at all
@@ -130,7 +177,7 @@ impl RenderPipelineBuilder for SimpleRenderPipelineBuilder {
             .map(|x| {
                 let xsize = self.pipeline.input_size.0.shrc(x.downsample.0);
                 let ysize = self.pipeline.input_size.1.shrc(x.downsample.1);
-                Image::new(xsize, ysize)
+                Image::new((xsize, ysize))
             })
             .collect();
         self.pipeline.input_buffers = input_buffers?;
@@ -151,6 +198,7 @@ pub struct SimpleRenderPipeline {
     group_ready_passes: Vec<usize>,
     completed_passes: usize,
     input_buffers: Vec<Image<f64>>,
+    chunk_size: usize,
 }
 
 fn clone_images<T: ImageDataType>(images: &[Image<T>]) -> Result<Vec<Image<T>>> {
@@ -158,11 +206,20 @@ fn clone_images<T: ImageDataType>(images: &[Image<T>]) -> Result<Vec<Image<T>>> 
 }
 
 impl SimpleRenderPipeline {
+    #[instrument(skip_all, err)]
     fn do_render(&mut self) -> Result<()> {
         let ready_passes = self.group_ready_passes.iter().copied().min().unwrap();
         if ready_passes <= self.completed_passes {
+            info!(
+                "no more ready passes ({} completed, {ready_passes} ready)",
+                self.completed_passes
+            );
             return Ok(());
         }
+        info!(
+            "new ready passes ({} completed, {ready_passes} ready)",
+            self.completed_passes
+        );
         self.completed_passes = ready_passes;
 
         let mut current_buffers = clone_images(&self.input_buffers)?;
@@ -170,6 +227,7 @@ impl SimpleRenderPipeline {
         let mut current_size = self.input_size;
 
         for (i, stage) in self.stages.iter_mut().enumerate() {
+            info!("running stage {i}: {}", stage.name());
             let mut output_buffers = clone_images(&current_buffers)?;
             // Replace buffers of different sizes.
             if stage.shift() != (0, 0) || stage.new_size(current_size) != current_size {
@@ -178,7 +236,7 @@ impl SimpleRenderPipeline {
                     if stage.uses_channel(c) {
                         let xsize = current_size.0.shrc(info.downsample.0);
                         let ysize = current_size.1.shrc(info.downsample.1);
-                        output_buffers[c] = Image::new(xsize, ysize)?;
+                        output_buffers[c] = Image::new((xsize, ysize))?;
                     }
                 }
             }
@@ -194,7 +252,7 @@ impl SimpleRenderPipeline {
                 .filter(|x| stage.uses_channel(x.0))
                 .map(|x| x.1)
                 .collect();
-            stage.run_stage_on(&input_buf, &mut output_buf);
+            stage.run_stage_on(self.chunk_size, &input_buf, &mut output_buf);
             current_buffers = output_buffers;
         }
 
@@ -204,6 +262,8 @@ impl SimpleRenderPipeline {
 
 impl RenderPipeline for SimpleRenderPipeline {
     type Builder = SimpleRenderPipelineBuilder;
+
+    #[instrument(skip_all, err)]
     fn fill_input_two_types<
         T1: crate::image::ImageDataType,
         T2: crate::image::ImageDataType,
@@ -214,10 +274,16 @@ impl RenderPipeline for SimpleRenderPipeline {
         group_fill_info: Vec<super::GroupFillInfo<(F1, F2)>>,
     ) -> Result<()>
     where
-        F1: FnOnce(&mut [crate::image::ImageRectMut<T1>]) -> Result<()> + Send,
-        F2: FnOnce(&mut [crate::image::ImageRectMut<T2>]) -> Result<()> + Send,
+        F1: FnOnce(&mut [crate::image::ImageRectMut<T1>]) -> Result<()>,
+        F2: FnOnce(&mut [crate::image::ImageRectMut<T2>]) -> Result<()>,
     {
         for group_info in group_fill_info {
+            info!(
+                "filling data for group {} using types {:?} and {:?}",
+                group_info.group_id,
+                T1::DATA_TYPE_ID,
+                T2::DATA_TYPE_ID,
+            );
             let group = (
                 group_info.group_id % self.xgroups,
                 group_info.group_id / self.xgroups,
@@ -245,16 +311,16 @@ impl RenderPipeline for SimpleRenderPipeline {
                 assert_eq!(goffset.1 % (1 << downsample.1), 0);
                 if ty == T1::DATA_TYPE_ID {
                     ch_idx.push(images1.len());
-                    images1.push(Image::<T1>::new(
+                    images1.push(Image::<T1>::new((
                         gsize.0.shrc(downsample.0),
                         gsize.1.shrc(downsample.1),
-                    )?);
+                    ))?);
                 } else if ty == T2::DATA_TYPE_ID {
                     ch_idx.push(images2.len());
-                    images2.push(Image::<T2>::new(
+                    images2.push(Image::<T2>::new((
                         gsize.0.shrc(downsample.0),
                         gsize.1.shrc(downsample.1),
-                    )?);
+                    ))?);
                 } else {
                     panic!("Invalid pipeline usage: channels of unknown type");
                 }
@@ -262,8 +328,12 @@ impl RenderPipeline for SimpleRenderPipeline {
             {
                 let mut images1: Vec<_> = images1.iter_mut().map(|x| x.as_rect_mut()).collect();
                 let mut images2: Vec<_> = images2.iter_mut().map(|x| x.as_rect_mut()).collect();
-                group_info.fill_fn.0(&mut images1)?;
-                group_info.fill_fn.1(&mut images2)?;
+                if !images1.is_empty() {
+                    group_info.fill_fn.0(&mut images1)?;
+                }
+                if !images2.is_empty() {
+                    group_info.fill_fn.1(&mut images2)?;
+                }
             }
             for (c, ChannelInfo { ty, downsample }) in self.channel_info[0].iter().enumerate() {
                 let ty = ty.unwrap();
@@ -289,24 +359,33 @@ impl RenderPipeline for SimpleRenderPipeline {
 
         self.do_render()
     }
+
+    fn into_stages(self) -> Vec<Box<dyn std::any::Any>> {
+        self.stages.into_iter().map(|x| x.as_any()).collect()
+    }
+    fn num_groups(&self) -> usize {
+        self.xgroups * self.input_size.1.shrc(self.log_group_size)
+    }
 }
 
 pub trait RenderPipelineRunStage {
     fn run_stage_on<S: RenderPipelineStage<Type = Self>>(
-        stage: &S,
+        stage: &mut S,
+        chunk_size: usize,
         input_buffers: &[&Image<f64>],
         output_buffers: &mut [&mut Image<f64>],
     );
 }
 
-const CHUNK_SIZE: usize = 256;
-
 impl<T: ImageDataType> RenderPipelineRunStage for RenderPipelineInputStage<T> {
+    #[instrument(skip_all)]
     fn run_stage_on<S: RenderPipelineStage<Type = Self>>(
-        stage: &S,
+        stage: &mut S,
+        chunk_size: usize,
         input_buffers: &[&Image<f64>],
         _output_buffers: &mut [&mut Image<f64>],
     ) {
+        info!("running input stage '{}' in simple pipeline", stage.name());
         let numc = input_buffers.len();
         if numc == 0 {
             return;
@@ -315,10 +394,11 @@ impl<T: ImageDataType> RenderPipelineRunStage for RenderPipelineInputStage<T> {
         for b in input_buffers.iter() {
             assert_eq!(size, b.size());
         }
-        let mut buffer = vec![[T::default(); CHUNK_SIZE]; numc];
+        let mut buffer = vec![vec![T::default(); chunk_size]; numc];
         for y in 0..size.1 {
-            for x in (0..size.0).step_by(256) {
-                let xsize = size.0.min(x + CHUNK_SIZE) - x;
+            for x in (0..size.0).step_by(chunk_size) {
+                let xsize = size.0.min(x + chunk_size) - x;
+                debug!("position: {x}x{y} xsize: {xsize}");
                 for c in 0..numc {
                     for ix in 0..xsize {
                         buffer[c][ix] = T::from_f64(input_buffers[c].as_rect().row(y)[x + ix]);
@@ -332,11 +412,17 @@ impl<T: ImageDataType> RenderPipelineRunStage for RenderPipelineInputStage<T> {
 }
 
 impl<T: ImageDataType> RenderPipelineRunStage for RenderPipelineInPlaceStage<T> {
+    #[instrument(skip_all)]
     fn run_stage_on<S: RenderPipelineStage<Type = Self>>(
-        stage: &S,
+        stage: &mut S,
+        chunk_size: usize,
         input_buffers: &[&Image<f64>],
         output_buffers: &mut [&mut Image<f64>],
     ) {
+        info!(
+            "running inplace stage '{}' in simple pipeline",
+            stage.name()
+        );
         let numc = input_buffers.len();
         if numc == 0 {
             return;
@@ -349,10 +435,11 @@ impl<T: ImageDataType> RenderPipelineRunStage for RenderPipelineInPlaceStage<T> 
         for b in output_buffers.iter() {
             assert_eq!(size, b.size());
         }
-        let mut buffer = vec![[T::default(); CHUNK_SIZE]; numc];
+        let mut buffer = vec![vec![T::default(); chunk_size]; numc];
         for y in 0..size.1 {
-            for x in (0..size.0).step_by(CHUNK_SIZE) {
-                let xsize = size.0.min(x + CHUNK_SIZE) - x;
+            for x in (0..size.0).step_by(chunk_size) {
+                let xsize = size.0.min(x + chunk_size) - x;
+                debug!("position: {x}x{y} xsize: {xsize}");
                 for c in 0..numc {
                     for ix in 0..xsize {
                         buffer[c][ix] = T::from_f64(input_buffers[c].as_rect().row(y)[x + ix]);
@@ -380,11 +467,14 @@ impl<
     > RenderPipelineRunStage
     for RenderPipelineInOutStage<InputT, OutputT, BORDER_X, BORDER_Y, SHIFT_X, SHIFT_Y>
 {
+    #[instrument(skip_all)]
     fn run_stage_on<S: RenderPipelineStage<Type = Self>>(
-        stage: &S,
+        stage: &mut S,
+        chunk_size: usize,
         input_buffers: &[&Image<f64>],
         output_buffers: &mut [&mut Image<f64>],
     ) {
+        info!("running inout stage '{}' in simple pipeline", stage.name());
         let numc = input_buffers.len();
         if numc == 0 {
             return;
@@ -401,13 +491,13 @@ impl<
         assert_eq!(input_size.1 << SHIFT_Y, output_size.1);
         let mut buffer_in = vec![
             vec![
-                vec![InputT::default(); CHUNK_SIZE + BORDER_X as usize * 2];
+                vec![InputT::default(); chunk_size + BORDER_X as usize * 2];
                 BORDER_Y as usize * 2 + 1
             ];
             numc
         ];
         let mut buffer_out =
-            vec![vec![vec![OutputT::default(); CHUNK_SIZE << SHIFT_X]; 1 << SHIFT_Y]; numc];
+            vec![vec![vec![OutputT::default(); chunk_size << SHIFT_X]; 1 << SHIFT_Y]; numc];
 
         let mirror = |mut v: i64, size: i64| {
             while v < 0 || v >= size {
@@ -421,10 +511,11 @@ impl<
             v as usize
         };
         for y in 0..input_size.1 {
-            for x in (0..input_size.0).step_by(CHUNK_SIZE) {
+            for x in (0..input_size.0).step_by(chunk_size) {
                 let border_x = BORDER_X as i64;
                 let border_y = BORDER_Y as i64;
-                let xsize = input_size.0.min(x + CHUNK_SIZE) - x;
+                let xsize = input_size.0.min(x + chunk_size) - x;
+                debug!("position: {x}x{y} xsize: {xsize}");
                 for c in 0..numc {
                     for iy in -border_y..=border_y {
                         let imgy = mirror(y as i64 + iy, input_size.1 as i64);
@@ -451,7 +542,7 @@ impl<
                 stage.process_row_chunk((x, y), xsize, &mut row);
                 for c in 0..numc {
                     for iy in 0..1usize << SHIFT_Y {
-                        for ix in 0..input_size.0 << SHIFT_X {
+                        for ix in 0..xsize << SHIFT_X {
                             output_buffers[c].as_rect_mut().row(y + iy)[x + ix] =
                                 buffer_out[c][iy][ix].to_f64();
                         }
@@ -463,11 +554,14 @@ impl<
 }
 
 impl<T: ImageDataType> RenderPipelineRunStage for RenderPipelineExtendStage<T> {
+    #[instrument(skip_all)]
     fn run_stage_on<S: RenderPipelineStage<Type = Self>>(
-        stage: &S,
+        stage: &mut S,
+        chunk_size: usize,
         input_buffers: &[&Image<f64>],
         output_buffers: &mut [&mut Image<f64>],
     ) {
+        info!("running extend stage '{}' in simple pipeline", stage.name());
         let numc = input_buffers.len();
         if numc == 0 {
             return;
@@ -484,6 +578,7 @@ impl<T: ImageDataType> RenderPipelineRunStage for RenderPipelineExtendStage<T> {
         let origin = stage.original_data_origin();
         for c in 0..numc {
             for y in 0..input_size.1 {
+                debug!("copy row: {y}");
                 let in_row = input_buffers[c].as_rect().row(y);
                 output_buffers[c].as_rect_mut().row(origin.1 + y)
                     [origin.0..origin.0 + in_row.len()]
@@ -491,10 +586,11 @@ impl<T: ImageDataType> RenderPipelineRunStage for RenderPipelineExtendStage<T> {
             }
         }
         // Fill in rows above and below the original data.
-        let mut buffer = vec![[T::default(); CHUNK_SIZE]; numc];
+        let mut buffer = vec![vec![T::default(); chunk_size]; numc];
         for y in (0..origin.1).chain(origin.1 + input_size.1..output_size.1) {
-            for x in (0..output_size.0).step_by(CHUNK_SIZE) {
-                let xsize = output_size.0.min(x + CHUNK_SIZE) - x;
+            for x in (0..output_size.0).step_by(chunk_size) {
+                let xsize = output_size.0.min(x + chunk_size) - x;
+                debug!("position above/below: {x}x{y} xsize: {xsize}");
                 let mut row: Vec<_> = buffer.iter_mut().map(|x| x as &mut [T]).collect();
                 stage.process_row_chunk((x, y), xsize, &mut row);
                 for c in 0..numc {
@@ -507,15 +603,16 @@ impl<T: ImageDataType> RenderPipelineRunStage for RenderPipelineExtendStage<T> {
         // Fill in left and right of the original data.
         for y in origin.1..origin.1 + input_size.1 {
             for (x, xsize) in (0..output_size.0)
-                .step_by(CHUNK_SIZE)
-                .map(|x| (x, origin.0.min(x + CHUNK_SIZE) - x))
+                .step_by(chunk_size)
+                .map(|x| (x, origin.0.min(x + chunk_size) - x))
                 .chain(
                     (origin.0 + input_size.0..output_size.0)
-                        .step_by(CHUNK_SIZE)
-                        .map(|x| (x, output_size.0.min(x + CHUNK_SIZE) - x)),
+                        .step_by(chunk_size)
+                        .map(|x| (x, output_size.0.min(x + chunk_size) - x)),
                 )
             {
                 let mut row: Vec<_> = buffer.iter_mut().map(|x| x as &mut [T]).collect();
+                debug!("position on the side: {x}x{y} xsize: {xsize}");
                 stage.process_row_chunk((x, y), xsize, &mut row);
                 for c in 0..numc {
                     for ix in 0..xsize {
@@ -527,16 +624,31 @@ impl<T: ImageDataType> RenderPipelineRunStage for RenderPipelineExtendStage<T> {
     }
 }
 
-trait RunStage {
-    fn run_stage_on(&self, input_buffers: &[&Image<f64>], output_buffers: &mut [&mut Image<f64>]);
+trait RunStage: Any {
+    fn run_stage_on(
+        &mut self,
+        chunk_size: usize,
+        input_buffers: &[&Image<f64>],
+        output_buffers: &mut [&mut Image<f64>],
+    );
     fn shift(&self) -> (u8, u8);
     fn new_size(&self, size: (usize, usize)) -> (usize, usize);
     fn uses_channel(&self, c: usize) -> bool;
+    fn as_any(self: Box<Self>) -> Box<dyn Any>;
+    fn input_type(&self) -> DataTypeTag;
+    fn output_type(&self) -> DataTypeTag;
+    #[allow(unused)]
+    fn name(&self) -> String;
 }
 
 impl<T: RenderPipelineStage> RunStage for T {
-    fn run_stage_on(&self, input_buffers: &[&Image<f64>], output_buffers: &mut [&mut Image<f64>]) {
-        T::Type::run_stage_on(self, input_buffers, output_buffers)
+    fn run_stage_on(
+        &mut self,
+        chunk_size: usize,
+        input_buffers: &[&Image<f64>],
+        output_buffers: &mut [&mut Image<f64>],
+    ) {
+        T::Type::run_stage_on(self, chunk_size, input_buffers, output_buffers)
     }
 
     fn shift(&self) -> (u8, u8) {
@@ -549,5 +661,17 @@ impl<T: RenderPipelineStage> RunStage for T {
 
     fn uses_channel(&self, c: usize) -> bool {
         self.uses_channel(c)
+    }
+    fn as_any(self: Box<Self>) -> Box<dyn Any> {
+        self
+    }
+    fn input_type(&self) -> DataTypeTag {
+        T::Type::INPUT_TYPE
+    }
+    fn output_type(&self) -> DataTypeTag {
+        T::Type::OUTPUT_TYPE.unwrap_or(T::Type::INPUT_TYPE)
+    }
+    fn name(&self) -> String {
+        self.name()
     }
 }

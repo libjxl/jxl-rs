@@ -7,11 +7,14 @@ use std::{any::Any, marker::PhantomData};
 
 use crate::{
     error::Result,
-    image::{ImageDataType, ImageRectMut},
+    image::{DataTypeTag, ImageDataType, ImageRectMut},
 };
 
 mod internal;
 mod simple_pipeline;
+pub mod stages;
+#[cfg(test)]
+mod test;
 
 use internal::RenderPipelineStageInfo;
 
@@ -66,7 +69,8 @@ pub struct RenderPipelineExtendStage<T: ImageDataType> {
     _phantom: PhantomData<T>,
 }
 
-pub trait RenderPipelineStage: Any + Sync {
+// TODO(veluca): figure out how to modify the interface for concurrent usage.
+pub trait RenderPipelineStage: Any {
     type Type: RenderPipelineStageInfo;
 
     /// Which channels are actually used by this stage.
@@ -76,7 +80,7 @@ pub trait RenderPipelineStage: Any + Sync {
     /// Process one chunk of row. The semantics of this function are detailed in the
     /// documentation of the various types of stages.
     fn process_row_chunk(
-        &self,
+        &mut self,
         position: (usize, usize),
         xsize: usize,
         row: &mut [<Self::Type as RenderPipelineStageInfo>::RowType<'_>],
@@ -112,7 +116,7 @@ pub struct GroupFillInfo<F> {
     fill_fn: F,
 }
 
-fn fake_fill_fn(_: &mut [ImageRectMut<u8>]) -> Result<()> {
+fn fake_fill_fn(_: &mut [ImageRectMut<f64>]) -> Result<()> {
     panic!("can only use fill_input_same_type if the inputs are of the same type");
 }
 
@@ -126,8 +130,15 @@ pub trait RenderPipeline {
         group_fill_info: Vec<GroupFillInfo<F>>,
     ) -> Result<()>
     where
-        F: FnOnce(&mut [ImageRectMut<T>]) -> Result<()> + Send,
+        F: FnOnce(&mut [ImageRectMut<T>]) -> Result<()>,
     {
+        const {
+            #[allow(clippy::single_match)]
+            match T::DATA_TYPE_ID {
+                DataTypeTag::F64 => panic!("cannot use f64 with fill_input_same_type"),
+                _ => (),
+            };
+        };
         self.fill_input_two_types(
             group_fill_info
                 .into_iter()
@@ -147,6 +158,9 @@ pub trait RenderPipeline {
         group_fill_info: Vec<GroupFillInfo<(F1, F2)>>,
     ) -> Result<()>
     where
-        F1: FnOnce(&mut [ImageRectMut<T1>]) -> Result<()> + Send,
-        F2: FnOnce(&mut [ImageRectMut<T2>]) -> Result<()> + Send;
+        F1: FnOnce(&mut [ImageRectMut<T1>]) -> Result<()>,
+        F2: FnOnce(&mut [ImageRectMut<T2>]) -> Result<()>;
+
+    fn into_stages(self) -> Vec<Box<dyn Any>>;
+    fn num_groups(&self) -> usize;
 }
