@@ -121,7 +121,7 @@ fn parse_jxl_codestream(data: &[u8], verbose: bool) -> Result<(), jxl::error::Er
 }
 
 fn main() {
-    let matches = Command::new("jxlinfo")
+    let matches = Command::new("jxlinspect")
         .about("Provides info about a JXL file")
         .arg(
             Arg::new("filename")
