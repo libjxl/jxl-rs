@@ -13,11 +13,12 @@ num-derive = "0.3"
 num-traits = "0.2.14"
 array-init = "2.0.0"
 half = "1.7.1"
-tracing = "0.1.40"
-jxl_headers_derive = { path = "../jxl_headers_derive" }
+tracing = { version = "0.1.40", optional = true }
+jxl_macros = { path = "../jxl_macros" }
 
 [dev-dependencies]
 arbtest = "0.3.1"
+test-log = { version = "0.2.16", features = ["trace"] }
 
 [features]
 debug_tools = []

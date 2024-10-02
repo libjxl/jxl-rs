@@ -671,3 +671,8 @@ pub fn derive_jxl_headers(input: TokenStream) -> TokenStream {
         _ => abort!(input, "Only implemented for struct"),
     }
 }
+
+#[proc_macro_attribute]
+pub fn noop(_attr: TokenStream, item: TokenStream) -> TokenStream {
+    item
+}

@@ -3,13 +3,8 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-extern crate jxl_headers_derive;
-
-use jxl_headers_derive::UnconditionalCoder;
-
-use crate::bit_reader::BitReader;
-use crate::error::Error;
-use crate::headers::encodings::*;
+use crate::{bit_reader::BitReader, error::Error, headers::encodings::*};
+use jxl_macros::UnconditionalCoder;
 
 #[derive(UnconditionalCoder, Debug)]
 #[validate]

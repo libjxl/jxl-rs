@@ -1,5 +1,5 @@
 [package]
-name = "jxl_headers_derive"
+name = "jxl_macros"
 version = "0.1.0"
 authors = ["Luca Versari <veluca93@gmail.com>"]
 edition = "2018"

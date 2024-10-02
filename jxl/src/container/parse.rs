@@ -6,7 +6,10 @@
 // Originally written for jxl-oxide.
 
 use super::{box_header::*, BitstreamKind, ContainerParser, DetectState, JxlpIndexState};
-use crate::error::{Error, Result};
+use crate::{
+    error::{Error, Result},
+    util::tracing::*,
+};
 
 /// Iterator that reads over a buffer and emits parser events.
 pub struct ParseEvents<'inner, 'buf> {
@@ -42,7 +45,7 @@ impl<'inner, 'buf> ParseEvents<'inner, 'buf> {
             match state {
                 DetectState::WaitingSignature => {
                     if buf.starts_with(&Self::CODESTREAM_SIG) {
-                        tracing::trace!("Codestream signature found");
+                        info!("Codestream signature found");
                         *state = DetectState::InCodestream {
                             kind: BitstreamKind::BareCodestream,
                             bytes_left: None,
@@ -51,14 +54,14 @@ impl<'inner, 'buf> ParseEvents<'inner, 'buf> {
                             BitstreamKind::BareCodestream,
                         )));
                     } else if buf.starts_with(&Self::CONTAINER_SIG) {
-                        tracing::trace!("Container signature found");
+                        info!("Container signature found");
                         *state = DetectState::WaitingBoxHeader;
                         *buf = &buf[Self::CONTAINER_SIG.len()..];
                         return Ok(Some(ParseEvent::BitstreamKind(BitstreamKind::Container)));
                     } else if !Self::CODESTREAM_SIG.starts_with(buf)
                         && !Self::CONTAINER_SIG.starts_with(buf)
                     {
-                        tracing::debug!(?buf, "Invalid signature");
+                        warn!(?buf, "Invalid signature");
                         *state = DetectState::InCodestream {
                             kind: BitstreamKind::Invalid,
                             bytes_left: None,
@@ -81,11 +84,11 @@ impl<'inner, 'buf> ParseEvents<'inner, 'buf> {
                                     *jxlp_index_state = JxlpIndexState::SingleJxlc;
                                 }
                                 JxlpIndexState::SingleJxlc => {
-                                    tracing::debug!("Duplicate jxlc box found");
+                                    warn!("Duplicate jxlc box found");
                                     return Err(Error::InvalidBox);
                                 }
                                 JxlpIndexState::Jxlp(_) | JxlpIndexState::JxlpFinished => {
-                                    tracing::debug!("Found jxlc box instead of jxlp box");
+                                    warn!("Found jxlc box instead of jxlp box");
                                     return Err(Error::InvalidBox);
                                 }
                             }
@@ -109,11 +112,11 @@ impl<'inner, 'buf> ParseEvents<'inner, 'buf> {
                                     *index += 1;
                                 }
                                 JxlpIndexState::SingleJxlc => {
-                                    tracing::debug!("jxlp box found after jxlc box");
+                                    warn!("jxlp box found after jxlc box");
                                     return Err(Error::InvalidBox);
                                 }
                                 JxlpIndexState::JxlpFinished => {
-                                    tracing::debug!("found another jxlp box after the final one");
+                                    warn!("found another jxlp box after the final one");
                                     return Err(Error::InvalidBox);
                                 }
                             }
@@ -142,8 +145,9 @@ impl<'inner, 'buf> ParseEvents<'inner, 'buf> {
                                 *jxlp_index_state = JxlpIndexState::JxlpFinished;
                             }
                         }
+                        #[allow(unused_variables)]
                         JxlpIndexState::Jxlp(expected_index) => {
-                            tracing::debug!(
+                            warn!(
                                 expected_index,
                                 actual_index = index,
                                 "Out-of-order jxlp box found",

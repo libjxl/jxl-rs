@@ -3,9 +3,7 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-extern crate jxl_headers_derive;
-
-use jxl_headers_derive::UnconditionalCoder;
+use jxl_macros::UnconditionalCoder;
 
 use crate::bit_reader::BitReader;
 #[allow(unused_imports)]

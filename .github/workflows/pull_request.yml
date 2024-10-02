@@ -45,7 +45,13 @@ jobs:
         run: cargo fmt --all -- --check
 
       - name: Clippy
-        run: cargo clippy --all-targets --all-features --tests --all -- -D warnings
+        run: cargo clippy --release --all-targets --all-features --tests --all -- -D warnings
+
+      - name: Clippy with default features
+        run: cargo clippy --release --all-targets --tests --all -- -D warnings
 
       - name: Run tests
-        run: cargo test --all --no-fail-fast --all-features
+        run: cargo test --release --all --no-fail-fast --all-features
+
+      - name: Run tests with default features
+        run: cargo test --release --all --no-fail-fast
