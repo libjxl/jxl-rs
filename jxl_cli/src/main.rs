@@ -51,6 +51,15 @@ fn parse_jxl_codestream(data: &[u8]) -> Result<(), jxl::error::Error> {
 }
 
 fn main() {
+    #[cfg(feature = "tracing-subscriber")]
+    {
+        use tracing_subscriber::{fmt, prelude::*, EnvFilter};
+        tracing_subscriber::registry()
+            .with(fmt::layer())
+            .with(EnvFilter::from_default_env())
+            .init();
+    }
+
     let args: Vec<String> = env::args().collect();
     assert_eq!(args.len(), 2);
     let file = &args[1];

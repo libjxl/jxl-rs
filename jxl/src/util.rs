@@ -7,6 +7,7 @@
 mod concat_slice;
 mod log2;
 mod shift_right_ceil;
+pub mod tracing;
 
 #[allow(unused)]
 pub use concat_slice::*;

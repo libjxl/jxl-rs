@@ -11,7 +11,7 @@ use crate::{
     headers::{encodings::*, extra_channels::ExtraChannelInfo},
 };
 
-use jxl_headers_derive::UnconditionalCoder;
+use jxl_macros::UnconditionalCoder;
 use num_derive::FromPrimitive;
 
 #[derive(UnconditionalCoder, Copy, Clone, PartialEq, Debug, FromPrimitive)]

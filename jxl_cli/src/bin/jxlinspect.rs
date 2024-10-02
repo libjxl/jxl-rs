@@ -121,6 +121,15 @@ fn parse_jxl_codestream(data: &[u8], verbose: bool) -> Result<(), jxl::error::Er
 }
 
 fn main() {
+    #[cfg(feature = "tracing-subscriber")]
+    {
+        use tracing_subscriber::{fmt, prelude::*, EnvFilter};
+        tracing_subscriber::registry()
+            .with(fmt::layer())
+            .with(EnvFilter::from_default_env())
+            .init();
+    }
+
     let matches = Command::new("jxlinspect")
         .about("Provides info about a JXL file")
         .arg(

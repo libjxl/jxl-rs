@@ -6,6 +6,10 @@ edition = "2021"
 [dependencies]
 jxl = { path = "../jxl" }
 clap = { version = "4.5.18" }
+tracing-subscriber = { version = "0.3.18", features=["env-filter"], optional = true }
+
+[features]
+tracing-subscriber = ["dep:tracing-subscriber", "jxl/tracing"]
 
 [lints]
 workspace = true

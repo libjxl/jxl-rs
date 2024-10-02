@@ -117,6 +117,7 @@ impl ContainerParser {
 #[cfg(test)]
 mod test {
     use super::*;
+    use test_log::test;
 
     #[rustfmt::skip]
     const HEADER: &[u8] = &[
