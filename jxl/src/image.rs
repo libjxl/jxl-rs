@@ -5,7 +5,10 @@
 
 use std::fmt::Debug;
 
-use crate::error::{Error, Result};
+use crate::{
+    error::{Error, Result},
+    util::{tracing::*, ShiftRightCeil},
+};
 
 mod private {
     pub trait Sealed {}
@@ -24,12 +27,14 @@ pub enum DataTypeTag {
     F64,
 }
 
-pub trait ImageDataType: private::Sealed + Copy + Default + 'static + Debug {
+pub trait ImageDataType: private::Sealed + Copy + Default + 'static + Debug + PartialEq {
     /// ID of this data type. Different types *must* have different values.
     const DATA_TYPE_ID: DataTypeTag;
 
     fn from_f64(f: f64) -> Self;
     fn to_f64(self) -> f64;
+    #[cfg(test)]
+    fn random<R: rand::Rng>(rng: &mut R) -> Self;
 }
 
 macro_rules! impl_image_data_type {
@@ -42,6 +47,11 @@ macro_rules! impl_image_data_type {
             }
             fn to_f64(self) -> f64 {
                 self as f64
+            }
+            #[cfg(test)]
+            fn random<R: rand::Rng>(rng: &mut R) -> Self {
+                use rand::distributions::{Distribution, Uniform};
+                Uniform::new(<$ty>::MIN, <$ty>::MAX).sample(rng)
             }
         }
     };
@@ -63,6 +73,11 @@ impl ImageDataType for half::f16 {
     }
     fn to_f64(self) -> f64 {
         <half::f16>::to_f64(self)
+    }
+    #[cfg(test)]
+    fn random<R: rand::Rng>(rng: &mut R) -> Self {
+        use rand::distributions::{Distribution, Uniform};
+        Self::from_f64(Uniform::new(Self::MIN.to_f64(), Self::MAX.to_f64()).sample(rng))
     }
 }
 
@@ -88,8 +103,38 @@ pub struct ImageRectMut<'a, T: ImageDataType> {
     image: &'a mut Image<T>,
 }
 
+impl<'a, T: ImageDataType> Debug for ImageRect<'a, T> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "{:?} {}x{}+{}+{}",
+            T::DATA_TYPE_ID,
+            self.size.0,
+            self.size.1,
+            self.origin.0,
+            self.origin.1
+        )
+    }
+}
+
+impl<'a, T: ImageDataType> Debug for ImageRectMut<'a, T> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "mut {:?} {}x{}+{}+{}",
+            T::DATA_TYPE_ID,
+            self.size.0,
+            self.size.1,
+            self.origin.0,
+            self.origin.1
+        )
+    }
+}
+
 impl<T: ImageDataType> Image<T> {
-    pub fn new(xsize: usize, ysize: usize) -> Result<Image<T>> {
+    #[instrument(err)]
+    pub fn new(size: (usize, usize)) -> Result<Image<T>> {
+        let (xsize, ysize) = size;
         // These limits let us not worry about overflows.
         if xsize as u64 >= i64::MAX as u64 / 4 || ysize as u64 >= i64::MAX as u64 / 4 {
             return Err(Error::ImageSizeTooLarge(xsize, ysize));
@@ -100,6 +145,7 @@ impl<T: ImageDataType> Image<T> {
         if xsize == 0 || ysize == 0 {
             return Err(Error::InvalidImageSize(xsize, ysize));
         }
+        debug!("trying to allocate image");
         let mut data = vec![];
         data.try_reserve_exact(total_size)?;
         data.resize(total_size, T::default());
@@ -109,8 +155,41 @@ impl<T: ImageDataType> Image<T> {
         })
     }
 
+    #[cfg(test)]
+    pub fn new_random<R: rand::Rng>(size: (usize, usize), rng: &mut R) -> Result<Image<T>> {
+        let mut img = Self::new(size)?;
+        img.data.iter_mut().for_each(|x| *x = T::random(rng));
+        Ok(img)
+    }
+
     pub fn size(&self) -> (usize, usize) {
         self.size
+    }
+
+    pub fn group_rect(&self, group_id: usize, log_group_size: usize) -> ImageRect<'_, T> {
+        let xgroups = self.size.0.shrc(log_group_size);
+        let group = (group_id % xgroups, group_id / xgroups);
+        let origin = (group.0 << log_group_size, group.1 << log_group_size);
+        let size = (
+            (self.size.0 - origin.0).min(1 << log_group_size),
+            (self.size.1 - origin.1).min(1 << log_group_size),
+        );
+        self.as_rect().rect(origin, size).unwrap()
+    }
+
+    pub fn group_rect_mut(
+        &mut self,
+        group_id: usize,
+        log_group_size: usize,
+    ) -> ImageRectMut<'_, T> {
+        let xgroups = self.size.0.shrc(log_group_size);
+        let group = (group_id % xgroups, group_id / xgroups);
+        let origin = (group.0 << log_group_size, group.1 << log_group_size);
+        let size = (
+            (self.size.0 - origin.0).min(1 << log_group_size),
+            (self.size.1 - origin.1).min(1 << log_group_size),
+        );
+        self.as_rect_mut().into_rect(origin, size).unwrap()
     }
 
     pub fn as_rect(&self) -> ImageRect<'_, T> {
@@ -155,7 +234,7 @@ fn rect_size_check(
 }
 
 impl<'a, T: ImageDataType> ImageRect<'a, T> {
-    pub fn rect(&self, origin: (usize, usize), size: (usize, usize)) -> Result<ImageRect<'a, T>> {
+    pub fn rect(self, origin: (usize, usize), size: (usize, usize)) -> Result<ImageRect<'a, T>> {
         rect_size_check(origin, size, self.size)?;
         Ok(ImageRect {
             origin: (origin.0 + self.origin.0, origin.1 + self.origin.1),
@@ -170,7 +249,12 @@ impl<'a, T: ImageDataType> ImageRect<'a, T> {
 
     pub fn row(&self, row: usize) -> &'a [T] {
         debug_assert!(row < self.size.1);
-        let start = (row + self.origin.0) * self.image.size.1 + self.origin.1;
+        let start = (row + self.origin.1) * self.image.size.0 + self.origin.0;
+        trace!(
+            "{self:?} img size {:?} row {row} start {}",
+            self.image.size,
+            start
+        );
         &self.image.data[start..start + self.size.0]
     }
 
@@ -184,7 +268,50 @@ impl<'a, T: ImageDataType> ImageRect<'a, T> {
             data,
         })
     }
+
+    pub fn iter(&self) -> impl Iterator<Item = T> + '_ {
+        (0..self.size.1).flat_map(|x| self.row(x).iter().cloned())
+    }
+
+    #[cfg(test)]
+    pub fn check_equal(&self, other: ImageRect<T>) {
+        assert_eq!(self.size, other.size);
+        for y in 0..self.size.1 {
+            for x in 0..self.size.0 {
+                if self.row(y)[x] != other.row(y)[x] {
+                    let mut msg = format!(
+                        "mismatch at position {x}x{y}, values {:?} and {:?}",
+                        self.row(y)[x],
+                        other.row(y)[x]
+                    );
+                    if self.origin != (0, 0) {
+                        msg = format!(
+                            "; position in ground truth {}x{}",
+                            x + self.origin.0,
+                            y + self.origin.1
+                        );
+                    }
+                    if other.origin != (0, 0) {
+                        msg = format!(
+                            "; position in checked img {}x{}",
+                            x + other.origin.0,
+                            y + other.origin.1
+                        );
+                    }
+                    panic!("{}", msg);
+                }
+            }
+        }
+    }
 }
+
+impl<'a, T: ImageDataType> PartialEq<ImageRect<'a, T>> for ImageRect<'a, T> {
+    fn eq(&self, other: &ImageRect<'a, T>) -> bool {
+        self.iter().zip(other.iter()).all(|(x, y)| x == y)
+    }
+}
+
+impl<'a, T: ImageDataType + Eq> Eq for ImageRect<'a, T> {}
 
 impl<'a, T: ImageDataType> ImageRectMut<'a, T> {
     pub fn rect(
@@ -200,13 +327,55 @@ impl<'a, T: ImageDataType> ImageRectMut<'a, T> {
         })
     }
 
+    pub fn into_rect(
+        self,
+        origin: (usize, usize),
+        size: (usize, usize),
+    ) -> Result<ImageRectMut<'a, T>> {
+        rect_size_check(origin, size, self.size)?;
+        Ok(ImageRectMut {
+            origin: (origin.0 + self.origin.0, origin.1 + self.origin.1),
+            size,
+            image: self.image,
+        })
+    }
+
     pub fn size(&self) -> (usize, usize) {
         self.size
     }
 
+    #[instrument(skip_all)]
+    pub fn copy_from(&mut self, other: ImageRect<'_, T>) -> Result<()> {
+        if other.size != self.size {
+            return Err(Error::CopyOfDifferentSize(
+                other.size.0,
+                other.size.1,
+                self.size.0,
+                self.size.1,
+            ));
+        }
+
+        for i in 0..self.size.1 {
+            trace!("copying row {i} of {}", self.size.1);
+            self.row(i).copy_from_slice(other.row(i));
+        }
+
+        Ok(())
+    }
+
+    fn row_offset(&self, row: usize) -> usize {
+        debug_assert!(row < self.size.1);
+        (row + self.origin.1) * self.image.size.0 + self.origin.0
+    }
+
     pub fn row(&mut self, row: usize) -> &mut [T] {
         debug_assert!(row < self.size.1);
-        let start = (row + self.origin.0) * self.image.size.1 + self.origin.1;
+        let start = self.row_offset(row);
+        trace!(
+            "{self:?} img size {:?} row {row} start {}",
+            self.image.size,
+            start
+        );
         &mut self.image.data[start..start + self.size.0]
     }
 
@@ -216,6 +385,21 @@ impl<'a, T: ImageDataType> ImageRectMut<'a, T> {
             size: self.size,
             image: self.image,
         }
+    }
+
+    /// Applies `f` to all the pixels in this rect. As side information, `f` is passed the
+    /// coordinates of the pixel in the full image.
+    pub fn apply<F>(&mut self, mut f: F)
+    where
+        F: for<'b> FnMut((usize, usize), &'b mut T),
+    {
+        let origin = self.origin;
+        (0..self.size.1).for_each(|x| {
+            self.row(x)
+                .iter_mut()
+                .enumerate()
+                .for_each(|(y, v)| f((origin.0 + x, origin.1 + y), v))
+        });
     }
 }
 
@@ -278,7 +462,7 @@ pub mod debug_tools {
 
         #[test]
         fn to_pgm() -> Result<()> {
-            let image = Image::<u8>::new(32, 32)?;
+            let image = Image::<u8>::new((32, 32))?;
             assert!(image.as_rect().to_pgm().starts_with(b"P5\n32 32\n255\n"));
             Ok(())
         }
@@ -340,12 +524,12 @@ mod test {
 
     #[test]
     fn huge_image() {
-        assert!(Image::<u8>::new(1 << 28, 1 << 28).is_err());
+        assert!(Image::<u8>::new((1 << 28, 1 << 28)).is_err());
     }
 
     #[test]
     fn rect_basic() -> Result<()> {
-        let mut image = Image::<u8>::new(32, 42)?;
+        let mut image = Image::<u8>::new((32, 42))?;
         assert_eq!(image.as_rect_mut().rect((31, 40), (1, 1))?.size(), (1, 1));
         assert_eq!(image.as_rect_mut().rect((0, 0), (1, 1))?.size(), (1, 1));
         assert!(image.as_rect_mut().rect((30, 30), (3, 3)).is_err());
