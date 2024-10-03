@@ -166,13 +166,17 @@ impl<T: ImageDataType> Image<T> {
         self.size
     }
 
-    pub fn group_rect(&self, group_id: usize, log_group_size: usize) -> ImageRect<'_, T> {
-        let xgroups = self.size.0.shrc(log_group_size);
+    pub fn group_rect(&self, group_id: usize, log_group_size: (usize, usize)) -> ImageRect<'_, T> {
+        let xgroups = self.size.0.shrc(log_group_size.0);
         let group = (group_id % xgroups, group_id / xgroups);
-        let origin = (group.0 << log_group_size, group.1 << log_group_size);
+        let origin = (group.0 << log_group_size.0, group.1 << log_group_size.1);
         let size = (
-            (self.size.0 - origin.0).min(1 << log_group_size),
-            (self.size.1 - origin.1).min(1 << log_group_size),
+            (self.size.0 - origin.0).min(1 << log_group_size.0),
+            (self.size.1 - origin.1).min(1 << log_group_size.1),
+        );
+        trace!(
+            "making rect {}x{}+{}+{} for group {group_id} in image of size {:?}, log group sizes {:?}",
+            size.0, size.1, origin.0, origin.1, self.size, log_group_size
         );
         self.as_rect().rect(origin, size).unwrap()
     }

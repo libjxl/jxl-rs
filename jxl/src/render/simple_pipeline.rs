@@ -126,18 +126,15 @@ impl RenderPipelineBuilder for SimpleRenderPipelineBuilder {
     #[instrument(skip_all, err)]
     fn build(mut self) -> Result<Self::RenderPipeline> {
         let channel_info = &mut self.pipeline.channel_info;
-        info!(
-            "final channel info after all stages {:?}",
-            channel_info.last().unwrap()
-        );
         let num_channels = channel_info[0].len();
+        let mut cur_downsamples = vec![(0u8, 0u8); num_channels];
         for (s, stage) in self.pipeline.stages.iter().enumerate().rev() {
             let [current_info, next_info, ..] = &mut channel_info[s..] else {
                 unreachable!()
             };
             for chan in 0..num_channels {
                 let cur_chan = &mut current_info[chan];
-                let next_chan = &next_info[chan];
+                let next_chan = &mut next_info[chan];
                 if cur_chan.ty.is_none() && !stage.uses_channel(chan) {
                     cur_chan.ty = next_chan.ty;
                 } else {
@@ -146,8 +143,9 @@ impl RenderPipelineBuilder for SimpleRenderPipelineBuilder {
                 }
                 // Arithmetic overflows here should be very uncommon, so custom error variants
                 // are probably unwarranted.
-                let cur_downsample = &mut cur_chan.downsample;
-                let next_downsample = next_chan.downsample;
+                let cur_downsample = &mut cur_downsamples[chan];
+                let next_downsample = &mut next_chan.downsample;
+                let next_total_downsample = *cur_downsample;
                 cur_downsample.0 = cur_downsample
                     .0
                     .checked_add(next_downsample.0)
@@ -156,11 +154,28 @@ impl RenderPipelineBuilder for SimpleRenderPipelineBuilder {
                     .1
                     .checked_add(next_downsample.1)
                     .ok_or(Error::ArithmeticOverflow)?;
+                *next_downsample = next_total_downsample;
+            }
+        }
+        for (chan, cur_downsample) in cur_downsamples.iter().enumerate() {
+            channel_info[0][chan].downsample = *cur_downsample;
+        }
+        #[cfg(feature = "tracing")]
+        {
+            for (s, (current_info, stage)) in channel_info
+                .iter()
+                .zip(self.pipeline.stages.iter())
+                .enumerate()
+            {
+                info!(
+                    "final channel info before stage {s} '{}': {:?}",
+                    stage.name(),
+                    current_info
+                );
             }
             info!(
-                "final channel info before stage {s} '{}': {:?}",
-                stage.name(),
-                current_info
+                "final channel info after all stages {:?}",
+                channel_info.last().unwrap()
             );
         }
 
@@ -232,10 +247,11 @@ impl SimpleRenderPipeline {
             // Replace buffers of different sizes.
             if stage.shift() != (0, 0) || stage.new_size(current_size) != current_size {
                 current_size = stage.new_size(current_size);
-                for (c, info) in self.channel_info[i].iter().enumerate() {
+                for (c, info) in self.channel_info[i + 1].iter().enumerate() {
                     if stage.uses_channel(c) {
                         let xsize = current_size.0.shrc(info.downsample.0);
                         let ysize = current_size.1.shrc(info.downsample.1);
+                        info!("reallocating channel {c} to new size {xsize}x{ysize}");
                         output_buffers[c] = Image::new((xsize, ysize))?;
                     }
                 }
@@ -486,7 +502,6 @@ impl<
             assert_eq!(input_size, input_buffers[c].size());
             assert_eq!(output_size, output_buffers[c].size());
         }
-        assert_eq!(output_size, stage.new_size(input_size));
         assert_eq!(input_size.0 << SHIFT_X, output_size.0);
         assert_eq!(input_size.1 << SHIFT_Y, output_size.1);
         let mut buffer_in = vec![
@@ -543,8 +558,8 @@ impl<
                 for c in 0..numc {
                     for iy in 0..1usize << SHIFT_Y {
                         for ix in 0..xsize << SHIFT_X {
-                            output_buffers[c].as_rect_mut().row(y + iy)[x + ix] =
-                                buffer_out[c][iy][ix].to_f64();
+                            output_buffers[c].as_rect_mut().row((y << SHIFT_Y) + iy)
+                                [(x << SHIFT_X) + ix] = buffer_out[c][iy][ix].to_f64();
                         }
                     }
                 }
