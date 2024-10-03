@@ -5,6 +5,8 @@
 
 mod convert;
 mod save;
+mod upsample;
 
 pub use convert::*;
 pub use save::*;
+pub use upsample::*;

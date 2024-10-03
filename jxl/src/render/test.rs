@@ -6,7 +6,7 @@
 use crate::{
     error::Result,
     image::{Image, ImageDataType, ImageRectMut},
-    util::tracing::instrument,
+    util::{tracing::instrument, ShiftRightCeil},
 };
 use rand::SeedableRng;
 
@@ -22,13 +22,17 @@ pub(super) fn make_and_run_simple_pipeline<
 >(
     stage: S,
     input_images: &[Image<InputT>],
-    final_size: (usize, usize),
+    image_size: (usize, usize),
     chunk_size: usize,
 ) -> Result<(S, Vec<Image<OutputT>>)> {
+    let final_size = stage.new_size(image_size);
     const LOG_GROUP_SIZE: usize = 8;
+    let uses_channel: Vec<_> = (0..input_images.len())
+        .map(|x| stage.uses_channel(x))
+        .collect();
     let mut pipeline = SimpleRenderPipelineBuilder::new_with_chunk_size(
         input_images.len(),
-        input_images[0].size(),
+        image_size,
         LOG_GROUP_SIZE,
         chunk_size,
     )
@@ -38,15 +42,30 @@ pub(super) fn make_and_run_simple_pipeline<
     }
     let mut pipeline = pipeline.build()?;
 
-    let fill_info = (0..pipeline.num_groups()).map(|g| GroupFillInfo {
-        group_id: g,
-        num_filled_passes: 1,
-        fill_fn: move |rects: &mut [ImageRectMut<InputT>]| {
-            for (input, fill) in input_images.iter().zip(rects.iter_mut()) {
-                fill.copy_from(input.group_rect(g, LOG_GROUP_SIZE))?;
-            }
-            Ok(())
-        },
+    let fill_info = (0..pipeline.num_groups()).map(|g| {
+        let uses_channel = uses_channel.clone();
+        GroupFillInfo {
+            group_id: g,
+            num_filled_passes: 1,
+            fill_fn: move |rects: &mut [ImageRectMut<InputT>]| {
+                for ((input, fill), used) in input_images
+                    .iter()
+                    .zip(rects.iter_mut())
+                    .zip(uses_channel.iter().copied())
+                {
+                    let log_group_size = if used {
+                        (
+                            LOG_GROUP_SIZE - S::Type::SHIFT.0 as usize,
+                            LOG_GROUP_SIZE - S::Type::SHIFT.1 as usize,
+                        )
+                    } else {
+                        (LOG_GROUP_SIZE, LOG_GROUP_SIZE)
+                    };
+                    fill.copy_from(input.group_rect(g, log_group_size))?;
+                }
+                Ok(())
+            },
+        }
     });
     pipeline.fill_input_same_type(fill_info.collect())?;
 
@@ -78,20 +97,24 @@ pub(super) fn test_stage_consistency<
     image_size: (usize, usize),
     num_image_channels: usize,
 ) -> Result<()> {
-    let final_size = stage.new_size(image_size);
-    let final_size = (
-        final_size.0 << S::Type::SHIFT.0,
-        final_size.1 << S::Type::SHIFT.1,
-    );
-
     let mut rng = rand_xorshift::XorShiftRng::seed_from_u64(0);
     let images: Result<Vec<_>> = (0..num_image_channels)
-        .map(|_| Image::new_random(image_size, &mut rng))
+        .map(|c| {
+            let size = if stage.uses_channel(c) {
+                (
+                    image_size.0.shrc(S::Type::SHIFT.0),
+                    image_size.1.shrc(S::Type::SHIFT.1),
+                )
+            } else {
+                image_size
+            };
+            Image::new_random(size, &mut rng)
+        })
         .collect();
     let images = images?;
 
     let (stage, base_output) =
-        make_and_run_simple_pipeline::<_, InputT, OutputT>(stage, &images, final_size, 256)?;
+        make_and_run_simple_pipeline::<_, InputT, OutputT>(stage, &images, image_size, 256)?;
 
     let mut stage = Some(stage);
 
@@ -101,7 +124,7 @@ pub(super) fn test_stage_consistency<
         let (s, output) = make_and_run_simple_pipeline::<_, InputT, OutputT>(
             stage.take().unwrap(),
             &images,
-            final_size,
+            image_size,
             chunk_size,
         )
         .unwrap_or_else(|_| panic!("error running pipeline with chunk size {}", chunk_size));
