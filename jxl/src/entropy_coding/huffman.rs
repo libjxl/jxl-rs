@@ -203,7 +203,7 @@ impl Table {
 
         let mut symbol = 0;
         let mut prev_code_len = DEFAULT_CODE_LENGTH;
-        let mut repeat = 0;
+        let mut repeat = 0u16;
         let mut repeat_code_len = 0;
         let mut space = 1 << 15;
 
@@ -238,13 +238,13 @@ impl Table {
                     repeat -= 2;
                     repeat <<= extra_bits;
                 }
-                repeat += br.read(extra_bits as usize)? as u8 + 3;
+                repeat += br.read(extra_bits as usize)? as u16 + 3;
                 let repeat_delta = repeat - old_repeat;
                 if symbol + repeat_delta as usize > al_size {
                     return Err(Error::InvalidHuffman);
                 }
-                for i in 0..repeat_code_len {
-                    code_lengths[symbol + i as usize] = repeat_delta;
+                for i in 0..repeat_delta {
+                    code_lengths[symbol + i as usize] = repeat_code_len;
                 }
                 symbol += repeat_delta as usize;
                 if repeat_code_len != 0 {
@@ -388,7 +388,7 @@ impl Table {
                 let mut code_length_code_lengths = [0u8; CODE_LENGTHS_CODE];
                 let mut space = 32;
                 const STATIC_HUFF_BITS: [u8; 16] = [2, 2, 2, 3, 2, 2, 2, 4, 2, 2, 2, 3, 2, 2, 2, 4];
-                const STATIC_HUFF_VALS: [u8; 16] = [0, 4, 3, 2, 0, 4, 3, 1, 9, 4, 3, 2, 9, 4, 3, 5];
+                const STATIC_HUFF_VALS: [u8; 16] = [0, 4, 3, 2, 0, 4, 3, 1, 0, 4, 3, 2, 0, 4, 3, 5];
                 const CODE_LENGTH_CODE_ORDER: [u8; CODE_LENGTHS_CODE] =
                     [1, 2, 3, 4, 0, 5, 17, 6, 16, 7, 8, 9, 10, 11, 12, 13, 14, 15];
                 let mut num_codes = 0;
@@ -452,5 +452,30 @@ impl HuffmanCodes {
     }
     pub fn read(&self, br: &mut BitReader, ctx: usize) -> Result<u32> {
         self.tables[ctx].read(br)
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+
+    /// Builds Huffman histogram of 256 8-bit symbols.
+    #[cfg(test)]
+    pub(super) fn build_byte_histogram() -> HuffmanCodes {
+        let mut br = BitReader::new(&[0b11101111, 0b00111111, 0, 1, 0, 0b10100000, 0b0110]);
+        HuffmanCodes::decode(1, &mut br).unwrap()
+    }
+
+    #[test]
+    fn byte_histogram() {
+        let codes = build_byte_histogram();
+
+        let expected_arr = [8u8, 13, 21, 34, 55, 89, 144, 233];
+        let bits = expected_arr.map(|v| v.reverse_bits());
+        let mut br = BitReader::new(&bits);
+
+        for expected in expected_arr {
+            assert_eq!(codes.read(&mut br, 0).unwrap(), expected as u32);
+        }
     }
 }
