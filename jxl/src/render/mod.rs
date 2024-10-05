@@ -20,21 +20,25 @@ use internal::RenderPipelineStageInfo;
 
 pub use simple_pipeline::SimpleRenderPipeline;
 
-/// These are the only stages that are assumed to have observable effects, i.e. calls to process_row
-/// for other stages may be omitted if it can be shown they can't affect any Input stage process_row
-/// call that happens inside image boundaries.
+/// Inspects channels and passes data to the following stage as is.
+///
+/// These are the only stages that are assumed to have observable effects, i.e. calls to
+/// `process_row_chunk` for other stages may be omitted if it can be shown they can't affect any
+/// Inspect stage `process_row_chunk` call that happens inside image boundaries.
 /// For these stages, `process_row_chunk` receives read-only access to each row in each channel.
-pub struct RenderPipelineInputStage<InputT: ImageDataType> {
+pub struct RenderPipelineInspectStage<InputT: ImageDataType> {
     _phantom: PhantomData<InputT>,
 }
 
 /// Modifies channels in-place.
+///
 /// For these stages, `process_row_chunk` receives read-write access to each row in each channel.
 pub struct RenderPipelineInPlaceStage<T: ImageDataType> {
     _phantom: PhantomData<T>,
 }
 
 /// Modifies data and writes it to a new buffer, of possibly different type.
+///
 /// BORDER_X and BORDER_Y represent the amount of padding required on the input side.
 /// SHIFT_X and SHIFT_Y represent the base 2 log of the number of rows/columns produced
 /// for each row/column of input.
@@ -60,6 +64,7 @@ pub struct RenderPipelineInOutStage<
 
 /// Does not directly modify the current image pixels, but extends the current image with
 /// additional data.
+///
 /// `uses_channel` must always return true, and stages of this type should override
 /// `new_size` and `original_data_origin`.
 /// `process_row_chunk` will be called with the *new* image coordinates, and will only be called

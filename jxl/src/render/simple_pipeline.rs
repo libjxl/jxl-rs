@@ -16,7 +16,7 @@ use crate::{
 use super::{
     internal::RenderPipelineStageType, RenderPipeline, RenderPipelineBuilder,
     RenderPipelineExtendStage, RenderPipelineInOutStage, RenderPipelineInPlaceStage,
-    RenderPipelineInputStage, RenderPipelineStage,
+    RenderPipelineInspectStage, RenderPipelineStage,
 };
 
 #[derive(Clone, Debug)]
@@ -387,7 +387,7 @@ pub trait RenderPipelineRunStage {
     );
 }
 
-impl<T: ImageDataType> RenderPipelineRunStage for RenderPipelineInputStage<T> {
+impl<T: ImageDataType> RenderPipelineRunStage for RenderPipelineInspectStage<T> {
     #[instrument(skip_all)]
     fn run_stage_on<S: RenderPipelineStage<Type = Self>>(
         stage: &mut S,

@@ -7,12 +7,12 @@ use crate::image::{DataTypeTag, ImageDataType};
 
 use super::{
     RenderPipelineExtendStage, RenderPipelineInOutStage, RenderPipelineInPlaceStage,
-    RenderPipelineInputStage,
+    RenderPipelineInspectStage,
 };
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum RenderPipelineStageType {
-    Input,
+    Inspect,
     InPlace,
     InOut,
     Extend,
@@ -27,8 +27,8 @@ pub trait RenderPipelineStageInfo: super::simple_pipeline::RenderPipelineRunStag
     type RowType<'a>;
 }
 
-impl<InputT: ImageDataType> RenderPipelineStageInfo for RenderPipelineInputStage<InputT> {
-    const TYPE: RenderPipelineStageType = RenderPipelineStageType::Input;
+impl<InputT: ImageDataType> RenderPipelineStageInfo for RenderPipelineInspectStage<InputT> {
+    const TYPE: RenderPipelineStageType = RenderPipelineStageType::Inspect;
     const BORDER: (u8, u8) = (0, 0);
     const SHIFT: (u8, u8) = (0, 0);
     const INPUT_TYPE: DataTypeTag = InputT::DATA_TYPE_ID;

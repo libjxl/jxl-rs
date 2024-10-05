@@ -6,7 +6,7 @@
 use crate::{
     error::Result,
     image::{Image, ImageDataType},
-    render::{RenderPipelineInputStage, RenderPipelineStage},
+    render::{RenderPipelineInspectStage, RenderPipelineStage},
 };
 
 pub struct SaveStage<T: ImageDataType> {
@@ -48,7 +48,7 @@ impl<T: ImageDataType> std::fmt::Display for SaveStage<T> {
 }
 
 impl<T: ImageDataType> RenderPipelineStage for SaveStage<T> {
-    type Type = RenderPipelineInputStage<T>;
+    type Type = RenderPipelineInspectStage<T>;
 
     fn uses_channel(&self, c: usize) -> bool {
         c == self.channel
