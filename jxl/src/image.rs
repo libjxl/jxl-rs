@@ -37,8 +37,28 @@ pub trait ImageDataType: private::Sealed + Copy + Default + 'static + Debug + Pa
     fn random<R: rand::Rng>(rng: &mut R) -> Self;
 }
 
+#[cfg(test)]
+macro_rules! type_min {
+    (f32) => {
+        0.0f32
+    };
+    ($ty: ty) => {
+        <$ty>::MIN
+    };
+}
+
+#[cfg(test)]
+macro_rules! type_max {
+    (f32) => {
+        1.0f32
+    };
+    ($ty: ty) => {
+        <$ty>::MAX
+    };
+}
+
 macro_rules! impl_image_data_type {
-    ($ty: ty, $id: ident) => {
+    ($ty: ident, $id: ident) => {
         impl private::Sealed for $ty {}
         impl ImageDataType for $ty {
             const DATA_TYPE_ID: DataTypeTag = DataTypeTag::$id;
@@ -51,7 +71,9 @@ macro_rules! impl_image_data_type {
             #[cfg(test)]
             fn random<R: rand::Rng>(rng: &mut R) -> Self {
                 use rand::distributions::{Distribution, Uniform};
-                Uniform::new(<$ty>::MIN, <$ty>::MAX).sample(rng)
+                let min = type_min!($ty);
+                let max = type_max!($ty);
+                Uniform::new_inclusive(min, max).sample(rng)
             }
         }
     };
@@ -77,7 +99,7 @@ impl ImageDataType for half::f16 {
     #[cfg(test)]
     fn random<R: rand::Rng>(rng: &mut R) -> Self {
         use rand::distributions::{Distribution, Uniform};
-        Self::from_f64(Uniform::new(Self::MIN.to_f64(), Self::MAX.to_f64()).sample(rng))
+        Self::from_f64(Uniform::new(0.0f32, 1.0f32).sample(rng) as f64)
     }
 }
 
