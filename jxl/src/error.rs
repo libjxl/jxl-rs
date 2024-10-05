@@ -50,7 +50,9 @@ pub enum Error {
     #[error("Invalid HybridUintConfig: {0} {1} {2:?}")]
     InvalidUintConfig(u32, u32, Option<u32>),
     #[error("LZ77 enabled when explicitly disallowed")]
-    LZ77Disallowed,
+    Lz77Disallowed,
+    #[error("LZ77 repeat symbol encountered without decoding any symbols")]
+    UnexpectedLz77Repeat,
     #[error("Huffman alphabet too large: {0}, max is {}", 1 << HUFFMAN_MAX_BITS)]
     AlphabetTooLargeHuff(usize),
     #[error("Invalid Huffman code")]

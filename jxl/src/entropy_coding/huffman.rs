@@ -456,19 +456,21 @@ impl HuffmanCodes {
 }
 
 #[cfg(test)]
-mod test {
-    use super::*;
-
+impl HuffmanCodes {
     /// Builds Huffman histogram of 256 8-bit symbols.
-    #[cfg(test)]
-    pub(super) fn build_byte_histogram() -> HuffmanCodes {
+    pub(super) fn byte_histogram() -> HuffmanCodes {
         let mut br = BitReader::new(&[0b11101111, 0b00111111, 0, 1, 0, 0b10100000, 0b0110]);
         HuffmanCodes::decode(1, &mut br).unwrap()
     }
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
 
     #[test]
     fn byte_histogram() {
-        let codes = build_byte_histogram();
+        let codes = HuffmanCodes::byte_histogram();
 
         let expected_arr = [8u8, 13, 21, 34, 55, 89, 144, 233];
         let bits = expected_arr.map(|v| v.reverse_bits());

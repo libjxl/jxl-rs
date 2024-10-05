@@ -14,6 +14,8 @@ use crate::entropy_coding::hybrid_uint::*;
 use crate::error::{Error, Result};
 use crate::headers::encodings::*;
 
+use super::lz77::Lz77ReaderInner;
+
 pub fn decode_varint16(br: &mut BitReader) -> Result<u16> {
     if br.read(1)? != 0 {
         let nbits = br.read(4)? as usize;
@@ -28,15 +30,11 @@ pub fn decode_varint16(br: &mut BitReader) -> Result<u16> {
 }
 
 #[derive(UnconditionalCoder, Debug)]
-struct LZ77Params {
+struct Lz77Params {
     pub enabled: bool,
-    // TODO(firsching): remove once we use this!
-    #[allow(dead_code)]
     #[condition(enabled)]
     #[coder(u2S(224, 512, 4096, Bits(15) + 8))]
     pub min_symbol: Option<u32>,
-    // TODO(firsching): remove once we use this!
-    #[allow(dead_code)]
     #[condition(enabled)]
     #[coder(u2S(3, 4, Bits(2) + 5, Bits(8) + 9))]
     pub min_length: Option<u32>,
@@ -50,9 +48,7 @@ enum Codes {
 
 #[derive(Debug)]
 pub struct Histograms {
-    lz77_params: LZ77Params,
-    // TODO(firsching): remove once we use this!
-    #[allow(dead_code)]
+    lz77_params: Lz77Params,
     lz77_length_uint: Option<HybridUint>,
     context_map: Vec<u8>,
     // TODO(firsching): remove once we use this!
@@ -65,31 +61,67 @@ pub struct Histograms {
 #[derive(Debug)]
 pub struct Reader<'a> {
     histograms: &'a Histograms,
-    ans_reader: AnsReader,
+    lz77_config: ReaderLz77Config<'a>,
+}
+
+#[derive(Debug)]
+enum ReaderLz77Config<'a> {
+    Disabled(ReaderInner<'a>),
+    Enabled(Lz77ReaderInner<'a>),
 }
 
 impl<'a> Reader<'a> {
-    fn read_internal(
-        &mut self,
-        br: &mut BitReader,
-        uint_config: &HybridUint,
-        cluster: usize,
-    ) -> Result<u32> {
-        let symbol = match &self.histograms.codes {
-            Codes::Huffman(hc) => hc.read(br, cluster)?,
-            Codes::Ans(ans) => self.ans_reader.read(ans, br, cluster)?,
-        };
-        uint_config.read(symbol, br)
-    }
-
     pub fn read(&mut self, br: &mut BitReader, context: usize) -> Result<u32> {
-        assert!(!self.histograms.lz77_params.enabled);
-        let cluster = self.histograms.context_map[context] as usize;
-        self.read_internal(br, &self.histograms.uint_configs[cluster], cluster)
+        let cluster = self.histograms.map_context_to_cluster(context);
+        match &mut self.lz77_config {
+            ReaderLz77Config::Disabled(inner) => inner.read_clustered(br, cluster),
+            ReaderLz77Config::Enabled(inner) => inner.read_clustered(br, cluster),
+        }
     }
 
     pub fn check_final_state(self) -> Result<()> {
-        match &self.histograms.codes {
+        match self.lz77_config {
+            ReaderLz77Config::Disabled(inner) => inner.check_final_state(),
+            ReaderLz77Config::Enabled(inner) => inner.check_final_state(),
+        }
+    }
+}
+
+#[derive(Debug)]
+pub(super) struct ReaderInner<'a> {
+    codes: &'a Codes,
+    uint_configs: &'a [HybridUint],
+    ans_reader: AnsReader,
+}
+
+impl<'a> ReaderInner<'a> {
+    pub(super) fn read_token_clustered(
+        &mut self,
+        br: &mut BitReader,
+        cluster: usize,
+    ) -> Result<u32> {
+        match &self.codes {
+            Codes::Huffman(hc) => hc.read(br, cluster),
+            Codes::Ans(ans) => self.ans_reader.read(ans, br, cluster),
+        }
+    }
+
+    pub(super) fn read_uint_clustered(
+        &self,
+        token: u32,
+        br: &mut BitReader,
+        cluster: usize,
+    ) -> Result<u32> {
+        self.uint_configs[cluster].read(token, br)
+    }
+
+    pub(super) fn read_clustered(&mut self, br: &mut BitReader, cluster: usize) -> Result<u32> {
+        let symbol = self.read_token_clustered(br, cluster)?;
+        self.read_uint_clustered(symbol, br, cluster)
+    }
+
+    pub(super) fn check_final_state(self) -> Result<()> {
+        match &self.codes {
             Codes::Huffman(_) => Ok(()),
             Codes::Ans(_) => self.ans_reader.check_final_state(),
         }
@@ -98,9 +130,9 @@ impl<'a> Reader<'a> {
 
 impl Histograms {
     pub fn decode(num_contexts: usize, br: &mut BitReader, allow_lz77: bool) -> Result<Histograms> {
-        let lz77_params = LZ77Params::read_unconditional(&(), br, &Empty {})?;
+        let lz77_params = Lz77Params::read_unconditional(&(), br, &Empty {})?;
         if !allow_lz77 && lz77_params.enabled {
-            return Err(Error::LZ77Disallowed);
+            return Err(Error::Lz77Disallowed);
         }
         let (num_contexts, lz77_length_uint) = if lz77_params.enabled {
             (
@@ -116,11 +148,6 @@ impl Histograms {
         } else {
             vec![0]
         };
-        // TODO(veluca93): debug print.
-        println!(
-            "nc: {} {:?} {:?} {:?}",
-            num_contexts, lz77_params, context_map, lz77_length_uint
-        );
         assert_eq!(context_map.len(), num_contexts);
 
         let use_prefix_code = br.read(1)? != 0;
@@ -153,20 +180,44 @@ impl Histograms {
         })
     }
 
-    fn make_reader_impl(&self, br: &mut BitReader, _image_width: Option<usize>) -> Result<Reader> {
-        if self.lz77_params.enabled {
-            unimplemented!()
-        }
+    pub fn map_context_to_cluster(&self, context: usize) -> usize {
+        self.context_map[context] as usize
+    }
 
+    fn make_reader_impl(&self, br: &mut BitReader, image_width: Option<usize>) -> Result<Reader> {
         let ans_reader = if matches!(self.codes, Codes::Ans(_)) {
             AnsReader::init(br)?
         } else {
             AnsReader::new_unused()
         };
 
+        let reader = ReaderInner {
+            codes: &self.codes,
+            uint_configs: &self.uint_configs,
+            ans_reader,
+        };
+
+        let lz77_config = if self.lz77_params.enabled {
+            let dist_multiplier = image_width.unwrap_or(0) as u32;
+            let min_symbol = self.lz77_params.min_symbol.unwrap();
+            let min_length = self.lz77_params.min_length.unwrap();
+            let length_config = self.lz77_length_uint.as_ref().unwrap();
+            let reader = Lz77ReaderInner::new(
+                min_symbol,
+                min_length,
+                length_config,
+                dist_multiplier,
+                &self.context_map,
+                reader,
+            );
+            ReaderLz77Config::Enabled(reader)
+        } else {
+            ReaderLz77Config::Disabled(reader)
+        };
+
         Ok(Reader {
             histograms: self,
-            ans_reader,
+            lz77_config,
         })
     }
 
@@ -176,5 +227,35 @@ impl Histograms {
 
     pub fn make_reader_with_width(&self, br: &mut BitReader, image_width: usize) -> Result<Reader> {
         self.make_reader_impl(br, Some(image_width))
+    }
+}
+
+#[cfg(test)]
+impl Histograms {
+    /// Builds a decoder that reads an octet at a time and emits its bit-reversed value.
+    pub fn reverse_octet(num_contexts: usize) -> Self {
+        let d = HuffmanCodes::byte_histogram();
+        let codes = Codes::Huffman(d);
+        let uint_configs = vec![HybridUint::new(8, 0, 0)];
+        Self {
+            lz77_params: Lz77Params {
+                enabled: false,
+                min_symbol: None,
+                min_length: None,
+            },
+            lz77_length_uint: None,
+            uint_configs,
+            log_alpha_size: 15,
+            context_map: vec![0u8; num_contexts],
+            codes,
+        }
+    }
+
+    pub(super) fn as_reader_inner(&self) -> ReaderInner<'_> {
+        ReaderInner {
+            codes: &self.codes,
+            uint_configs: &self.uint_configs,
+            ans_reader: AnsReader::new_unused(),
+        }
     }
 }
