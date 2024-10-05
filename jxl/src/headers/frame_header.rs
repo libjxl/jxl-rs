@@ -220,6 +220,29 @@ struct RestorationFilter {
     extensions: Extensions,
 }
 
+#[derive(UnconditionalCoder, Debug, PartialEq)]
+pub struct Permutation {}
+
+pub struct TocNonserialized {
+    pub permuted: bool,
+    pub num_entries: u32,
+    pub entries: Vec<u32>,
+}
+
+#[derive(UnconditionalCoder, Debug, PartialEq)]
+#[nonserialized(TocNonserialized)]
+pub struct Toc {
+    #[default(false)]
+    permuted: bool,
+    #[condition(permuted)]
+    #[default(Permutation::default())]
+    permutation: Permutation,
+
+    #[coder(u2S(Bits(10), Bits(14) + 1024, Bits(22) + 17408, Bits(30) + 4211712))]
+    #[size_coder(explicit(nonserialized.num_entries))]
+    entries: Vec<u32>,
+}
+
 pub struct FrameHeaderNonserialized {
     pub xyb_encoded: bool,
     pub num_extra_channels: u32,
@@ -377,6 +400,36 @@ pub struct FrameHeader {
 }
 
 impl FrameHeader {
+    fn num_toc_entries(&self) -> u32 {
+        const GROUP_DIM: u32 = 256;
+        const BLOCK_DIM: u32 = 8;
+        const H_SHIFT: [u32; 4] = [0, 1, 1, 0];
+        const V_SHIFT: [u32; 4] = [0, 1, 0, 1];
+        let mut maxhs = 0;
+        let mut maxvs = 0;
+        for ch in self.jpeg_upsampling {
+            maxhs = maxhs.max(H_SHIFT[ch as usize]);
+            maxvs = maxvs.max(V_SHIFT[ch as usize]);
+        }
+        let xsize_blocks = self.width.div_ceil(BLOCK_DIM << maxhs) << maxhs;
+        let ysize_blocks = self.height.div_ceil(BLOCK_DIM << maxvs) << maxvs;
+
+        let group_dim = (GROUP_DIM >> 1) << self.group_size_shift;
+
+        let xsize_groups = self.width.div_ceil(group_dim);
+        let ysize_groups = self.height.div_ceil(group_dim);
+        let xsize_dc_groups = xsize_blocks.div_ceil(group_dim);
+        let ysize_dc_groups = ysize_blocks.div_ceil(group_dim);
+
+        let num_groups = xsize_groups * ysize_groups;
+        let num_dc_groups = xsize_dc_groups * ysize_dc_groups;
+
+        if num_groups == 1 && self.passes.num_passes == 1 {
+            1
+        } else {
+            2 + num_dc_groups
+        }
+    }
     fn check(&self, nonserialized: &FrameHeaderNonserialized) -> Result<(), Error> {
         if self.upsampling > 1 {
             if let Some((info, upsampling)) = nonserialized
@@ -408,7 +461,9 @@ impl FrameHeader {
 }
 
 #[cfg(test)]
-mod test_frame_header {
+mod test {
+    use std::io::Read;
+
     use super::*;
     use crate::{
         bit_reader::BitReader,
@@ -416,7 +471,7 @@ mod test_frame_header {
         headers::{FileHeaders, JxlHeader},
     };
 
-    fn test_frame_header(image: &[u8], correct_frame_header: FrameHeader) {
+    pub fn read_headers(image: &[u8]) -> Result<(FrameHeader, Toc), Error> {
         let codestream = ContainerParser::collect_codestream(image).unwrap();
         let mut br = BitReader::new(&codestream);
         let fh = FileHeaders::read(&mut br).unwrap();
@@ -439,20 +494,64 @@ mod test_frame_header {
             },
         )
         .unwrap();
+        let toc = Toc::read_unconditional(
+            &(),
+            &mut br,
+            &TocNonserialized {
+                permuted: false,
+                num_entries: 0,
+                entries: [].to_vec(),
+            },
+        )
+        .unwrap();
+        Ok((frame_header, toc))
+    }
 
+    fn test_toc(image: &[u8], correct_toc: Toc) {
+        let (_frame_header, toc) = read_headers(image).unwrap();
+        assert_eq!(correct_toc, toc);
+    }
+
+    fn read_test_file(name: &str) -> std::io::Result<Vec<u8>> {
+        let mut file_path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        file_path.push("resources/test/");
+        file_path.push(name);
+        let mut file = std::fs::File::open(&file_path)?;
+        let file_metadata = std::fs::metadata(&file_path)?;
+        let mut buf = vec![0; file_metadata.len() as usize];
+        file.read(&mut buf)?;
+        Ok(buf)
+    }
+
+    #[test]
+    fn permutation() {
+        let bytes = read_test_file("has_permutation_with_container.jxl").unwrap();
+        println!("bytes: {:?}", bytes);
+        let (_frame_header, toc) = read_headers(&bytes).unwrap();
+        assert!(toc.permuted);
+    }
+
+    #[test]
+    fn basic_toc() {
+        test_toc(
+            b"\xFF\x0A\x00\x90\x01\x00\x12\x88\x02\x00\xD4\x00\x55\x0F\x00\x00\xA8\x50\x19\x65\xDC\xE0\xE5\x5C\xCF\x97\x1F\x3A\x2C\xA6\x6D\x5C\x67\x68\xAB\x6D\x0B\x4B\x12\x45\xC6\xB1\x49\x3A\x81\x43\x92\x58\x04\x36\x2E\x98\x07\x18\x00\x86\x99\x03\x27\x33\x50\xE4\x4A\x12\x00",
+            Toc {
+                permuted: false,
+                permutation: super::Permutation::default(),
+                entries: [].to_vec(),
+            },
+        );
+    }
+
+    fn test_frame_header(image: &[u8], correct_frame_header: FrameHeader) {
+        let (frame_header, _toc) = read_headers(image).unwrap();
         assert_eq!(correct_frame_header, frame_header);
     }
 
     #[test]
-    fn test_basic() {
+    fn basic_frame_header() {
         test_frame_header(
-            &[
-                0xFF, 0x0A, 0x00, 0x90, 0x01, 0x00, 0x12, 0x88, 0x02, 0x00, 0xD4, 0x00, 0x55, 0x0F,
-                0x00, 0x00, 0xA8, 0x50, 0x19, 0x65, 0xDC, 0xE0, 0xE5, 0x5C, 0xCF, 0x97, 0x1F, 0x3A,
-                0x2C, 0xA6, 0x6D, 0x5C, 0x67, 0x68, 0xAB, 0x6D, 0x0B, 0x4B, 0x12, 0x45, 0xC6, 0xB1,
-                0x49, 0x3A, 0x81, 0x43, 0x92, 0x58, 0x04, 0x36, 0x2E, 0x98, 0x07, 0x18, 0x00, 0x86,
-                0x99, 0x03, 0x27, 0x33, 0x50, 0xE4, 0x4A, 0x12, 0x00,
-            ],
+            b"\xFF\x0A\x00\x90\x01\x00\x12\x88\x02\x00\xD4\x00\x55\x0F\x00\x00\xA8\x50\x19\x65\xDC\xE0\xE5\x5C\xCF\x97\x1F\x3A\x2C\xA6\x6D\x5C\x67\x68\xAB\x6D\x0B\x4B\x12\x45\xC6\xB1\x49\x3A\x81\x43\x92\x58\x04\x36\x2E\x98\x07\x18\x00\x86\x99\x03\x27\x33\x50\xE4\x4A\x12\x00",
             // TODO(TomasKralCZ): It would be nice to use struct update syntax like this:
             // FrameHeader {
             //     fields that we actually care about
@@ -492,20 +591,9 @@ mod test_frame_header {
     }
 
     #[test]
-    fn test_extra_channel() {
+    fn extra_channel() {
         test_frame_header(
-            &[
-                0xFF, 0x0A, 0x41, 0xC0, 0x4A, 0x08, 0x10, 0x10, 0x00, 0xE4, 0x01, 0x4B, 0x28, 0x36,
-                0x56, 0x1F, 0xDC, 0x4B, 0x28, 0x98, 0x10, 0x01, 0x55, 0x21, 0xC4, 0x30, 0x06, 0x50,
-                0x87, 0x61, 0xAB, 0x2A, 0xB2, 0x17, 0x03, 0x02, 0xA0, 0x97, 0xCC, 0x08, 0x00, 0xC3,
-                0x63, 0x80, 0x49, 0x66, 0x12, 0x04, 0x78, 0x2C, 0xD6, 0x89, 0x53, 0xEF, 0xF9, 0x15,
-                0xFC, 0xD1, 0x6B, 0xC4, 0xF3, 0xC0, 0x0E, 0xA9, 0x8D, 0xB6, 0x16, 0x4E, 0x5C, 0x70,
-                0x06, 0xE2, 0x07, 0x12, 0x62, 0xEC, 0x6C, 0xBE, 0x7C, 0x16, 0xDC, 0x72, 0xCE, 0xF3,
-                0xC1, 0xA2, 0xE2, 0x0A, 0xC8, 0xF9, 0xA1, 0x8C, 0xDA, 0xCF, 0xE3, 0xE8, 0x27, 0xDA,
-                0x66, 0xE2, 0xD6, 0x20, 0x2A, 0x38, 0xC1, 0xF7, 0xD0, 0x66, 0xED, 0xD2, 0xE0, 0x04,
-                0x42, 0x3A, 0x2A, 0x99, 0x2C, 0x12, 0x19, 0x9D, 0x9E, 0x83, 0x28, 0x54, 0x81, 0x55,
-                0x83, 0x3D, 0x69, 0x00, 0x1D, 0x03,
-            ],
+            b"\xFF\x0A\x41\xC0\x4A\x08\x10\x10\x00\xE4\x01\x4B\x28\x36\x56\x1F\xDC\x4B\x28\x98\x10\x01\x55\x21\xC4\x30\x06\x50\x87\x61\xAB\x2A\xB2\x17\x03\x02\xA0\x97\xCC\x08\x00\xC3\x63\x80\x49\x66\x12\x04\x78\x2C\xD6\x89\x53\xEF\xF9\x15\xFC\xD1\x6B\xC4\xF3\xC0\x0E\xA9\x8D\xB6\x16\x4E\x5C\x70\x06\xE2\x07\x12\x62\xEC\x6C\xBE\x7C\x16\xDC\x72\xCE\xF3\xC1\xA2\xE2\x0A\xC8\xF9\xA1\x8C\xDA\xCF\xE3\xE8\x27\xDA\x66\xE2\xD6\x20\x2A\x38\xC1\xF7\xD0\x66\xED\xD2\xE0\x04\x42\x3A\x2A\x99\x2C\x12\x19\x9D\x9E\x83\x28\x54\x81\x55\x83\x3D\x69\x00\x1D\x03",
             FrameHeader {
                 all_default: false,
                 frame_type: FrameType::RegularFrame,
