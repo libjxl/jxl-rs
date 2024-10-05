@@ -77,10 +77,9 @@ impl RenderPipelineBuilder for SimpleRenderPipelineBuilder {
     fn add_stage<Stage: RenderPipelineStage>(mut self, stage: Stage) -> Result<Self> {
         let current_info = self.pipeline.channel_info.last().unwrap().clone();
         info!(
-            "adding stage '{}'. last stage channel info: {:?} can_shift {}",
-            stage.name(),
-            current_info,
-            self.can_shift
+            last_stage_channel_info = ?current_info,
+            can_shift = self.can_shift,
+            "adding stage '{stage}'",
         );
         let mut after_info = vec![];
         for (c, info) in current_info.iter().enumerate() {
@@ -93,7 +92,7 @@ impl RenderPipelineBuilder for SimpleRenderPipelineBuilder {
                 if let Some(ty) = info.ty {
                     if ty != Stage::Type::INPUT_TYPE {
                         return Err(Error::PipelineChannelTypeMismatch(
-                            stage.name(),
+                            stage.to_string(),
                             c,
                             Stage::Type::INPUT_TYPE,
                             ty,
@@ -107,16 +106,15 @@ impl RenderPipelineBuilder for SimpleRenderPipelineBuilder {
             }
         }
         if !self.can_shift && Stage::Type::SHIFT != (0, 0) {
-            return Err(Error::PipelineShiftAfterExpand(stage.name()));
+            return Err(Error::PipelineShiftAfterExpand(stage.to_string()));
         }
         if Stage::Type::TYPE == RenderPipelineStageType::Extend {
             self.can_shift = false;
         }
         info!(
-            "added stage '{}'. new channel info: {:?} can_shift {}",
-            stage.name(),
-            after_info,
-            self.can_shift
+            new_channel_info = ?after_info,
+            can_shift = self.can_shift,
+            "added stage '{stage}'",
         );
         self.pipeline.channel_info.push(after_info);
         self.pipeline.stages.push(Box::new(stage));
@@ -167,11 +165,7 @@ impl RenderPipelineBuilder for SimpleRenderPipelineBuilder {
                 .zip(self.pipeline.stages.iter())
                 .enumerate()
             {
-                info!(
-                    "final channel info before stage {s} '{}': {:?}",
-                    stage.name(),
-                    current_info
-                );
+                info!("final channel info before stage {s} '{stage}': {current_info:?}");
             }
             info!(
                 "final channel info after all stages {:?}",
@@ -242,7 +236,7 @@ impl SimpleRenderPipeline {
         let mut current_size = self.input_size;
 
         for (i, stage) in self.stages.iter_mut().enumerate() {
-            info!("running stage {i}: {}", stage.name());
+            info!("running stage {i}: {stage}");
             let mut output_buffers = clone_images(&current_buffers)?;
             // Replace buffers of different sizes.
             if stage.shift() != (0, 0) || stage.new_size(current_size) != current_size {
@@ -401,7 +395,7 @@ impl<T: ImageDataType> RenderPipelineRunStage for RenderPipelineInputStage<T> {
         input_buffers: &[&Image<f64>],
         _output_buffers: &mut [&mut Image<f64>],
     ) {
-        info!("running input stage '{}' in simple pipeline", stage.name());
+        info!("running input stage '{stage}' in simple pipeline");
         let numc = input_buffers.len();
         if numc == 0 {
             return;
@@ -435,10 +429,7 @@ impl<T: ImageDataType> RenderPipelineRunStage for RenderPipelineInPlaceStage<T> 
         input_buffers: &[&Image<f64>],
         output_buffers: &mut [&mut Image<f64>],
     ) {
-        info!(
-            "running inplace stage '{}' in simple pipeline",
-            stage.name()
-        );
+        info!("running inplace stage '{stage}' in simple pipeline");
         let numc = input_buffers.len();
         if numc == 0 {
             return;
@@ -490,7 +481,7 @@ impl<
         input_buffers: &[&Image<f64>],
         output_buffers: &mut [&mut Image<f64>],
     ) {
-        info!("running inout stage '{}' in simple pipeline", stage.name());
+        info!("running inout stage '{stage}' in simple pipeline");
         let numc = input_buffers.len();
         if numc == 0 {
             return;
@@ -576,7 +567,7 @@ impl<T: ImageDataType> RenderPipelineRunStage for RenderPipelineExtendStage<T> {
         input_buffers: &[&Image<f64>],
         output_buffers: &mut [&mut Image<f64>],
     ) {
-        info!("running extend stage '{}' in simple pipeline", stage.name());
+        info!("running extend stage '{stage}' in simple pipeline");
         let numc = input_buffers.len();
         if numc == 0 {
             return;
@@ -639,7 +630,7 @@ impl<T: ImageDataType> RenderPipelineRunStage for RenderPipelineExtendStage<T> {
     }
 }
 
-trait RunStage: Any {
+trait RunStage: Any + std::fmt::Display {
     fn run_stage_on(
         &mut self,
         chunk_size: usize,
@@ -652,8 +643,6 @@ trait RunStage: Any {
     fn as_any(self: Box<Self>) -> Box<dyn Any>;
     fn input_type(&self) -> DataTypeTag;
     fn output_type(&self) -> DataTypeTag;
-    #[allow(unused)]
-    fn name(&self) -> String;
 }
 
 impl<T: RenderPipelineStage> RunStage for T {
@@ -685,8 +674,5 @@ impl<T: RenderPipelineStage> RunStage for T {
     }
     fn output_type(&self) -> DataTypeTag {
         T::Type::OUTPUT_TYPE.unwrap_or(T::Type::INPUT_TYPE)
-    }
-    fn name(&self) -> String {
-        self.name()
     }
 }

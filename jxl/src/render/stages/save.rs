@@ -36,12 +36,19 @@ impl<T: ImageDataType> SaveStage<T> {
     }
 }
 
+impl<T: ImageDataType> std::fmt::Display for SaveStage<T> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "save channel {} (type {:?})",
+            self.channel,
+            T::DATA_TYPE_ID
+        )
+    }
+}
+
 impl<T: ImageDataType> RenderPipelineStage for SaveStage<T> {
     type Type = RenderPipelineInputStage<T>;
-
-    fn name(&self) -> String {
-        format!("save channel {} (type {:?})", self.channel, T::DATA_TYPE_ID)
-    }
 
     fn uses_channel(&self, c: usize) -> bool {
         c == self.channel

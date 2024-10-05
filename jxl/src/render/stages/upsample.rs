@@ -15,12 +15,18 @@ impl NearestNeighbourUpsample {
     }
 }
 
+impl std::fmt::Display for NearestNeighbourUpsample {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "2x2 nearest neighbour upsample of channel {}",
+            self.channel
+        )
+    }
+}
+
 impl RenderPipelineStage for NearestNeighbourUpsample {
     type Type = RenderPipelineInOutStage<u8, u8, 0, 0, 1, 1>;
-
-    fn name(&self) -> String {
-        format!("2x2 nearest neighbour upsample of channel {}", self.channel)
-    }
 
     fn uses_channel(&self, c: usize) -> bool {
         c == self.channel
