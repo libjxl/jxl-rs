@@ -65,3 +65,15 @@ impl HybridUint {
         Ok((((hi << nbits) | bits) << self.lsb_in_token) | low)
     }
 }
+
+#[cfg(test)]
+impl HybridUint {
+    pub fn new(split_exponent: u32, msb_in_token: u32, lsb_in_token: u32) -> Self {
+        Self {
+            split_token: 1 << split_exponent,
+            split_exponent,
+            msb_in_token,
+            lsb_in_token,
+        }
+    }
+}
