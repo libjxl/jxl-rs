@@ -70,7 +70,7 @@ pub struct RenderPipelineExtendStage<T: ImageDataType> {
 }
 
 // TODO(veluca): figure out how to modify the interface for concurrent usage.
-pub trait RenderPipelineStage: Any {
+pub trait RenderPipelineStage: Any + std::fmt::Display {
     type Type: RenderPipelineStageInfo;
 
     /// Which channels are actually used by this stage.
@@ -97,9 +97,6 @@ pub trait RenderPipelineStage: Any {
     fn original_data_origin(&self) -> (usize, usize) {
         (0, 0)
     }
-
-    /// Returns a name for this stage.
-    fn name(&self) -> String;
 }
 
 pub trait RenderPipelineBuilder: Sized {

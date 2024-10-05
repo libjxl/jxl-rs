@@ -15,12 +15,14 @@ impl ConvertU8F32Stage {
     }
 }
 
+impl std::fmt::Display for ConvertU8F32Stage {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "convert U8 data to F32 in channel {}", self.channel)
+    }
+}
+
 impl RenderPipelineStage for ConvertU8F32Stage {
     type Type = RenderPipelineInOutStage<u8, f32, 0, 0, 0, 0>;
-
-    fn name(&self) -> String {
-        format!("convert U8 data to F32 in channel {}", self.channel)
-    }
 
     fn uses_channel(&self, c: usize) -> bool {
         c == self.channel
