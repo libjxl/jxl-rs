@@ -67,6 +67,10 @@ pub enum Error {
     InvalidContextMap(u32),
     #[error("Invalid context map: number of histogram {0}, number of distinct histograms {1}")]
     InvalidContextMapHole(u32, u32),
+    #[error("Invalid permutation: skipped elements {skip} and encoded elements {end} don't fit in permutation of size {size}")]
+    InvalidPermutationSize { size: u32, skip: u32, end: u32 },
+    #[error("Invalid permutation: Lehmer code {lehmer} out of bounds in permutation of size {size} at index {idx}")]
+    InvalidPermutationLehmerCode { size: u32, idx: u32, lehmer: u32 },
     // FrameHeader format errors
     #[error("Invalid extra channel upsampling: upsampling: {0} dim_shift: {1} ec_upsampling: {2}")]
     InvalidEcUpsampling(u32, u32, u32),
