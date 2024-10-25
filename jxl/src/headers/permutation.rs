@@ -60,8 +60,8 @@ impl Permutation {
         // Create a temporary permutation vector for the elements to permute
         let mut perm_temp: Vec<u32> = (skip..size).collect();
 
-        // Decode the Lehmer code using the naive function
-        decode_lehmer_code_naive(&lehmer, &mut perm_temp)?;
+        // Decode the Lehmer code
+        decode_lehmer_code(&lehmer, &mut perm_temp)?;
 
         // Construct the full permutation vector
         let mut permutation = Vec::with_capacity(size as usize);
