@@ -57,13 +57,11 @@ impl Permutation {
             prev_val = val;
         }
 
-
         // Create a temporary permutation vector for the elements to permute
         let mut perm_temp: Vec<u32> = (skip..size).collect();
 
         // Decode the Lehmer code using the naive function
         decode_lehmer_code_naive(&lehmer, &mut perm_temp)?;
-
 
         // Construct the full permutation vector
         let mut permutation = Vec::with_capacity(size as usize);
@@ -100,15 +98,11 @@ fn ceil_log2_nonzero(x: u32) -> usize {
     }
 }
 
-
 // Decodes the Lehmer code in code[0..n) into permutation[0..n).
-fn decode_lehmer_code(
-    code: &[u32],
-    permutation: &mut [u32],
-) -> Result<()> {
+fn decode_lehmer_code(code: &[u32], permutation: &mut [u32]) -> Result<()> {
     println!("code: {:?}", code);
     println!("permutation: {:?}", permutation);
-    let permutation_copy : Vec<u32> = permutation.to_vec();
+    let permutation_copy: Vec<u32> = permutation.to_vec();
     let n = permutation.len();
     if n == 0 {
         return Err(Error::InvalidPermutationLehmerCode {
@@ -177,11 +171,7 @@ fn decode_lehmer_code(
     Ok(())
 }
 
-
-fn decode_lehmer_code_naive(
-    code: &[u32],
-    permutation: &mut [u32],
-) -> Result<()> {
+fn decode_lehmer_code_naive(code: &[u32], permutation: &mut [u32]) -> Result<()> {
     let n = code.len();
     if n == 0 {
         return Err(Error::InvalidPermutationLehmerCode {
@@ -237,10 +227,9 @@ fn get_context(x: u32) -> usize {
 mod test {
     use super::*;
 
-
-    use arbtest::arbitrary::{self, Arbitrary, Unstructured};
-    use crate::error::Result;
     use super::{decode_lehmer_code, decode_lehmer_code_naive};
+    use crate::error::Result;
+    use arbtest::arbitrary::{self, Arbitrary, Unstructured};
 
     #[test]
     fn generate_permutation_arbtest() {
@@ -274,7 +263,6 @@ mod test {
             // Generate a reasonable size to prevent tests from taking too long
             let size_lehmer = u.int_in_range(1..=1000)?;
 
-
             let mut lehmer: Vec<u32> = Vec::with_capacity(size_lehmer as usize);
             for i in 0..size_lehmer {
                 let max_val = size_lehmer - i - 1;
@@ -297,10 +285,12 @@ mod test {
                 num_of_swaps -= 1;
                 permutation.swap(pos1.try_into().unwrap(), pos2.try_into().unwrap());
             }
-            Ok(PermutationInput { code: lehmer, permutation})
+            Ok(PermutationInput {
+                code: lehmer,
+                permutation,
+            })
         }
     }
-
 
     #[test]
     fn simple() {
@@ -328,7 +318,7 @@ mod test {
         let code = vec![1u32, 1, 2, 3, 3, 6, 0, 1];
 
         // Prepare temp and permutation arrays for the optimized function
-        let mut permutation_optimized : Vec<u32> = (4..16 as u32).collect();
+        let mut permutation_optimized: Vec<u32> = (4..16 as u32).collect();
 
         // Decode using the optimized function
         decode_lehmer_code(&code, &mut permutation_optimized)?;
@@ -357,7 +347,7 @@ mod test {
         let n = code.len();
 
         // Prepare temp and permutation arrays for the optimized function
-        let mut permutation_optimized : Vec<u32> = (0..n as u32).collect();
+        let mut permutation_optimized: Vec<u32> = (0..n as u32).collect();
 
         // Decode using the optimized function
         decode_lehmer_code(&code, &mut permutation_optimized)?;
