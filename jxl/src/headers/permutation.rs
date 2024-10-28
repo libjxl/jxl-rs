@@ -247,7 +247,7 @@ mod test {
 
             let mut permutation = Vec::new();
             let size_permutation = u.int_in_range(size_lehmer..=1000)?;
-            permutation.extend(0..size_permutation as u32);
+            permutation.extend(0..size_permutation);
 
             let num_of_swaps = u.int_in_range(0..=100)?;
             for _ in 0..num_of_swaps {
@@ -270,7 +270,6 @@ mod test {
         let code = vec![1u32, 1, 2, 3, 3, 6, 0, 1];
         let skip = 4;
         let size = 16;
-        let end = 8;
 
         let permutation_slice: Vec<u32> = (skip..size).collect();
 
