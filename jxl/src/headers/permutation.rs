@@ -66,7 +66,7 @@ impl Permutation {
         let permuted_slice = decode_lehmer_code(&lehmer, &permutation[skip as usize..])?;
 
         // Replace the target slice in `permutation`
-        permutation.splice(skip as usize.., permuted_slice);
+        permutation[skip as usize..].copy_from_slice(&permuted_slice);
 
         // Ensure the permutation has the correct size
         assert_eq!(permutation.len(), size as usize);
@@ -91,8 +91,7 @@ fn decode_lehmer_code(code: &[u32], permutation_slice: &[u32]) -> Result<Vec<u32
     permuted.try_reserve(n)?;
     permuted.extend_from_slice(permutation_slice);
 
-    let log2n = (n as u32).ceil_log2();
-    let padded_n = 1 << log2n;
+    let padded_n = (n as u32).next_power_of_two() as usize;
 
     // Allocate temp array inside the function
     let mut temp = vec![];
