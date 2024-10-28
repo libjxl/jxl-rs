@@ -6,8 +6,8 @@
 use crate::bit_reader::BitReader;
 use crate::entropy_coding::decode::Reader;
 use crate::error::{Error, Result};
-use crate::util::CeilLog2;
 use crate::util::value_of_lowest_1_bit;
+use crate::util::CeilLog2;
 
 pub struct Permutation(Vec<u32>);
 
@@ -59,10 +59,9 @@ impl Permutation {
         }
 
         // Initialize the full permutation vector with skipped elements intact
-        let mut permutation : Vec<u32> = Vec::new();
+        let mut permutation: Vec<u32> = Vec::new();
         permutation.try_reserve((size - skip) as usize)?;
         permutation.extend(0..size);
-
 
         // Decode the Lehmer code into the slice starting at `skip`
         let permuted_slice = decode_lehmer_code(&lehmer, &permutation[skip as usize..])?;
@@ -76,7 +75,6 @@ impl Permutation {
         Ok(Self(permutation))
     }
 }
-
 
 // Decodes the Lehmer code in `code` and returns the permuted slice.
 fn decode_lehmer_code(code: &[u32], permutation_slice: &[u32]) -> Result<Vec<u32>> {
