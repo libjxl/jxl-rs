@@ -7,6 +7,7 @@ use crate::bit_reader::BitReader;
 use crate::entropy_coding::decode::Reader;
 use crate::error::{Error, Result};
 use crate::util::CeilLog2;
+use crate::util::value_of_lowest_1_bit;
 
 pub struct Permutation(Vec<usize>);
 
@@ -77,26 +78,6 @@ impl Permutation {
     }
 }
 
-// Returns the value of the lowest set bit.
-fn value_of_lowest_1_bit(t: u32) -> u32 {
-    t & t.wrapping_neg()
-}
-
-// Returns base-2 logarithm, rounded down.
-fn floor_log2_nonzero(x: u32) -> usize {
-    31 - x.leading_zeros() as usize
-}
-
-// Returns base-2 logarithm, rounded up.
-fn ceil_log2_nonzero(x: u32) -> usize {
-    let floor_log2 = floor_log2_nonzero(x);
-    if (x & (x - 1)) == 0 {
-        // power of two
-        floor_log2
-    } else {
-        floor_log2 + 1
-    }
-}
 
 // Decodes the Lehmer code in code[0..n) into permutation[0..n).
 fn decode_lehmer_code(code: &[u32], permutation: &mut [u32]) -> Result<()> {
@@ -112,9 +93,7 @@ fn decode_lehmer_code(code: &[u32], permutation: &mut [u32]) -> Result<()> {
         });
     }
 
-    let code_len = code.len();
-
-    let log2n = ceil_log2_nonzero(n as u32);
+    let log2n = (n as u32).ceil_log2();
     let padded_n = 1 << log2n;
 
     // Allocate temp array inside the function
@@ -171,6 +150,8 @@ fn decode_lehmer_code(code: &[u32], permutation: &mut [u32]) -> Result<()> {
     Ok(())
 }
 
+// Used in testing to check that `decode_lehmer_code` implements the same function.
+#[allow(dead_code)]
 fn decode_lehmer_code_naive(code: &[u32], permutation: &mut [u32]) -> Result<()> {
     let n = code.len();
     if n == 0 {
