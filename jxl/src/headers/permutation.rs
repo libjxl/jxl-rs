@@ -80,8 +80,6 @@ impl Permutation {
 
 // Decodes the Lehmer code in `code` and returns the permuted slice.
 fn decode_lehmer_code(code: &[u32], permutation_slice: &[u32]) -> Result<Vec<u32>> {
-    println!("code: {:?}", code);
-    println!("permutation_slice: {:?}", permutation_slice);
     let n = permutation_slice.len();
     if n == 0 {
         return Err(Error::InvalidPermutationLehmerCode {
