@@ -127,7 +127,7 @@ fn decode_lehmer_code(code: &[u32], permutation: &mut [u32]) -> Result<()> {
     }
 
     for i in 0..n {
-        let code_i = if i < code_len { code[i] } else { 0 };
+        let code_i = *code.get(i).unwrap_or(&0);
 
         // Adjust the maximum allowed value for code_i
         if code_i as usize > n - i - 1 {
