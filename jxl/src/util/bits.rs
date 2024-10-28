@@ -7,7 +7,6 @@
 pub fn value_of_lowest_1_bit(t: u32) -> u32 {
     t & t.wrapping_neg()
 }
-
 #[cfg(test)]
 mod test {
     use super::*;

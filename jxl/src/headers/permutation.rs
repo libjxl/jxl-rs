@@ -9,12 +9,12 @@ use crate::error::{Error, Result};
 use crate::util::CeilLog2;
 use crate::util::value_of_lowest_1_bit;
 
-pub struct Permutation(Vec<usize>);
+pub struct Permutation(Vec<u32>);
 
 impl std::ops::Deref for Permutation {
-    type Target = [usize];
+    type Target = [u32];
 
-    fn deref(&self) -> &[usize] {
+    fn deref(&self) -> &[u32] {
         &self.0
     }
 }
@@ -58,18 +58,17 @@ impl Permutation {
             prev_val = val;
         }
 
-        // Create a temporary permutation vector for the elements to permute
-        let mut perm_temp: Vec<u32> = (skip..size).collect();
+        // Initialize the full permutation vector with skipped elements intact
+        let mut permutation : Vec<u32> = Vec::new();
+        permutation.try_reserve((size - skip) as usize)?;
+        permutation.extend(0..size);
 
-        // Decode the Lehmer code
-        decode_lehmer_code(&lehmer, &mut perm_temp)?;
 
-        // Construct the full permutation vector
-        let mut permutation = Vec::with_capacity(size as usize);
-        permutation.extend(0..(skip as usize)); // Add skipped elements
+        // Decode the Lehmer code into the slice starting at `skip`
+        let permuted_slice = decode_lehmer_code(&lehmer, &permutation[skip as usize..])?;
 
-        // Append the permuted elements
-        permutation.extend(perm_temp.iter().map(|&x| x as usize));
+        // Replace the target slice in `permutation`
+        permutation.splice(skip as usize.., permuted_slice);
 
         // Ensure the permutation has the correct size
         assert_eq!(permutation.len(), size as usize);
@@ -79,12 +78,11 @@ impl Permutation {
 }
 
 
-// Decodes the Lehmer code in code[0..n) into permutation[0..n).
-fn decode_lehmer_code(code: &[u32], permutation: &mut [u32]) -> Result<()> {
+// Decodes the Lehmer code in `code` and returns the permuted slice.
+fn decode_lehmer_code(code: &[u32], permutation_slice: &[u32]) -> Result<Vec<u32>> {
     println!("code: {:?}", code);
-    println!("permutation: {:?}", permutation);
-    let permutation_copy: Vec<u32> = permutation.to_vec();
-    let n = permutation.len();
+    println!("permutation_slice: {:?}", permutation_slice);
+    let n = permutation_slice.len();
     if n == 0 {
         return Err(Error::InvalidPermutationLehmerCode {
             size: 0,
@@ -93,6 +91,7 @@ fn decode_lehmer_code(code: &[u32], permutation: &mut [u32]) -> Result<()> {
         });
     }
 
+    let mut permuted = permutation_slice.to_vec();
     let log2n = (n as u32).ceil_log2();
     let padded_n = 1 << log2n;
 
@@ -138,7 +137,7 @@ fn decode_lehmer_code(code: &[u32], permutation: &mut [u32]) -> Result<()> {
             }
         }
 
-        permutation[i] = permutation_copy[next];
+        permuted[i] = permutation_slice[next];
 
         next += 1;
         while next <= padded_n {
@@ -147,12 +146,12 @@ fn decode_lehmer_code(code: &[u32], permutation: &mut [u32]) -> Result<()> {
         }
     }
 
-    Ok(())
+    Ok(permuted)
 }
 
-// Used in testing to check that `decode_lehmer_code` implements the same function.
+// Decodes the Lehmer code in `code` and returns the permuted vector.
 #[allow(dead_code)]
-fn decode_lehmer_code_naive(code: &[u32], permutation: &mut [u32]) -> Result<()> {
+fn decode_lehmer_code_naive(code: &[u32], permutation_slice: &[u32]) -> Result<Vec<u32>> {
     let n = code.len();
     if n == 0 {
         return Err(Error::InvalidPermutationLehmerCode {
@@ -162,8 +161,8 @@ fn decode_lehmer_code_naive(code: &[u32], permutation: &mut [u32]) -> Result<()>
         });
     }
 
-    // Ensure permutation has sufficient length
-    if permutation.len() < n {
+    // Ensure permutation_slice has sufficient length
+    if permutation_slice.len() < n {
         return Err(Error::InvalidPermutationLehmerCode {
             size: n as u32,
             idx: 0,
@@ -171,10 +170,9 @@ fn decode_lehmer_code_naive(code: &[u32], permutation: &mut [u32]) -> Result<()>
         });
     }
 
-    // Create temp array inside the function with values from 0 to n - 1
-    let mut temp = permutation.to_vec();
-
-    let mut perm_index = 0;
+    // Create temp array with values from permutation_slice
+    let mut temp = permutation_slice.to_vec();
+    let mut permuted = Vec::with_capacity(n);
 
     // Iterate over the Lehmer code
     for (i, &idx) in code.iter().enumerate() {
@@ -186,18 +184,14 @@ fn decode_lehmer_code_naive(code: &[u32], permutation: &mut [u32]) -> Result<()>
             });
         }
 
-        // Assign temp[idx] to permutation[perm_index]
-        permutation[perm_index] = temp.remove(idx as usize);
-        perm_index += 1;
+        // Assign temp[idx] to permuted vector
+        permuted.push(temp.remove(idx as usize));
     }
 
-    // Copy any remaining elements from temp to permutation
-    for val in temp {
-        permutation[perm_index] = val;
-        perm_index += 1;
-    }
+    // Append any remaining elements from temp to permuted
+    permuted.extend(temp);
 
-    Ok(())
+    Ok(permuted)
 }
 
 fn get_context(x: u32) -> usize {
@@ -208,17 +202,17 @@ fn get_context(x: u32) -> usize {
 mod test {
     use super::*;
 
-    use super::{decode_lehmer_code, decode_lehmer_code_naive};
-    use crate::error::Result;
     use arbtest::arbitrary::{self, Arbitrary, Unstructured};
 
     #[test]
     fn generate_permutation_arbtest() {
         arbtest::arbtest(|u| {
-            let mut input = PermutationInput::arbitrary(u)?;
+            let input = PermutationInput::arbitrary(u)?;
 
-            let perm1 = decode_lehmer_code(&input.code, &mut input.permutation);
-            let perm2 = decode_lehmer_code_naive(&input.code, &mut input.permutation);
+            let permutation_slice = input.permutation.as_slice();
+
+            let perm1 = decode_lehmer_code(&input.code, permutation_slice);
+            let perm2 = decode_lehmer_code_naive(&input.code, permutation_slice);
 
             match (perm1, perm2) {
                 // Both Ok, check if permutations are equal
@@ -258,14 +252,15 @@ mod test {
             let mut permutation = Vec::new();
             let size_permutation = u.int_in_range(size_lehmer..=1000)?;
             permutation.extend(0..size_permutation as u32);
-            let mut num_of_swaps = u.int_in_range(0..=100)?;
-            while 0 < num_of_swaps {
+
+            let num_of_swaps = u.int_in_range(0..=100)?;
+            for _ in 0..num_of_swaps {
                 // Randomly swap two positions
                 let pos1 = u.int_in_range(0..=size_permutation - 1)?;
                 let pos2 = u.int_in_range(0..=size_permutation - 1)?;
-                num_of_swaps -= 1;
-                permutation.swap(pos1.try_into().unwrap(), pos2.try_into().unwrap());
+                permutation.swap(pos1 as usize, pos2 as usize);
             }
+
             Ok(PermutationInput {
                 code: lehmer,
                 permutation,
@@ -275,48 +270,43 @@ mod test {
 
     #[test]
     fn simple() {
-        // 1, 1, 2, 3, 3, 6, 0, 1 => 5, 6, 8, 10, 11, 15, 4, 9
-        let mut syms_for_ctx = [
-            vec![1, 1].into_iter(),
-            vec![1, 2].into_iter(),
-            vec![3, 3, 6].into_iter(),
-            vec![0].into_iter(),
-        ];
+        // Lehmer code: [1, 1, 2, 3, 3, 6, 0, 1]
+        let code = vec![1u32, 1, 2, 3, 3, 6, 0, 1];
+        let skip = 4;
+        let size = 16;
+        let end = 8;
 
-        let permutation =
-            Permutation::decode_inner(16, 4, 8, |ctx| Ok(syms_for_ctx[ctx].next().unwrap()))
-                .unwrap();
+        let permutation_slice: Vec<u32> = (skip..size).collect();
 
-        assert_eq!(
-            &*permutation,
-            &[0, 1, 2, 3, 5, 6, 8, 10, 11, 15, 4, 9, 7, 12, 13, 14],
-        );
+        let permuted = decode_lehmer_code(&code, &permutation_slice).unwrap();
+        let permuted_naive = decode_lehmer_code_naive(&code, &permutation_slice).unwrap();
+
+        let mut permutation = Vec::with_capacity(size as usize);
+        permutation.extend(0..skip); // Add skipped elements
+        permutation.extend(permuted.iter());
+        let expected_permutation = vec![0, 1, 2, 3, 5, 6, 8, 10, 11, 15, 4, 9, 7, 12, 13, 14];
+
+        assert_eq!(permutation, expected_permutation);
+        assert_eq!(permuted, permuted_naive);
     }
 
     #[test]
     fn decode_lehmer_compare_different_length() -> Result<(), Box<dyn std::error::Error>> {
-        // Lehmer code: [4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]
+        // Lehmer code: [1, 1, 2, 3, 3, 6, 0, 1]
         let code = vec![1u32, 1, 2, 3, 3, 6, 0, 1];
+        let skip = 4;
+        let size = 16;
 
-        // Prepare temp and permutation arrays for the optimized function
-        let mut permutation_optimized: Vec<u32> = (4..16 as u32).collect();
+        let permutation_slice: Vec<u32> = (skip..size).collect();
 
-        // Decode using the optimized function
-        decode_lehmer_code(&code, &mut permutation_optimized)?;
-        // Prepare temp and permutation arrays for the naive function
-        let mut permutation_naive: Vec<u32> = (4..16 as u32).collect();
-        // Decode using the naive function
-        decode_lehmer_code_naive(&code, &mut permutation_naive)?;
+        let permuted_optimized = decode_lehmer_code(&code, &permutation_slice)?;
+        let permuted_naive = decode_lehmer_code_naive(&code, &permutation_slice)?;
 
-        // Expected permutation: [2, 4, 0, 1, 3]
-        let expected_permutation = vec![5u32, 6, 8, 10, 11, 15, 4, 9, 7, 12, 13, 14];
+        let expected_permuted = vec![5u32, 6, 8, 10, 11, 15, 4, 9, 7, 12, 13, 14];
 
-        // Assert that both permutations match the expected permutation
-        assert_eq!(permutation_optimized, expected_permutation);
-        assert_eq!(permutation_naive, expected_permutation);
-
-        // Assert that both functions produce the same permutation
-        assert_eq!(permutation_optimized, permutation_naive);
+        assert_eq!(permuted_optimized, expected_permuted);
+        assert_eq!(permuted_naive, expected_permuted);
+        assert_eq!(permuted_optimized, permuted_naive);
 
         Ok(())
     }
@@ -326,35 +316,26 @@ mod test {
         // Lehmer code: [2, 3, 0, 0, 0]
         let code = vec![2u32, 3, 0, 0, 0];
         let n = code.len();
+        let permutation_slice: Vec<u32> = (0..n as u32).collect();
 
-        // Prepare temp and permutation arrays for the optimized function
-        let mut permutation_optimized: Vec<u32> = (0..n as u32).collect();
+        let permuted_optimized = decode_lehmer_code(&code, &permutation_slice)?;
+        let permuted_naive = decode_lehmer_code_naive(&code, &permutation_slice)?;
 
-        // Decode using the optimized function
-        decode_lehmer_code(&code, &mut permutation_optimized)?;
-
-        // Prepare temp and permutation arrays for the naive function
-        let mut permutation_naive: Vec<u32> = (0..n as u32).collect();
-
-        // Decode using the naive function
-        decode_lehmer_code_naive(&code, &mut permutation_naive)?;
-
-        // Expected permutation: [2, 4, 0, 1, 3]
         let expected_permutation = vec![2u32, 4, 0, 1, 3];
 
-        // Assert that both permutations match the expected permutation
-        assert_eq!(permutation_optimized, expected_permutation);
-        assert_eq!(permutation_naive, expected_permutation);
-
-        // Assert that both functions produce the same permutation
-        assert_eq!(permutation_optimized, permutation_naive);
+        assert_eq!(permuted_optimized, expected_permutation);
+        assert_eq!(permuted_naive, expected_permutation);
+        assert_eq!(permuted_optimized, permuted_naive);
 
         Ok(())
     }
 
     #[test]
     fn lehmer_out_of_bounds() {
-        let result = Permutation::decode_inner(8, 4, 1, |_| Ok(4));
+        let code = vec![4];
+        let permutation_slice: Vec<u32> = (4..8).collect();
+
+        let result = decode_lehmer_code(&code, &permutation_slice);
         assert!(result.is_err());
     }
 }
