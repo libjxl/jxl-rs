@@ -6,8 +6,7 @@
 use crate::bit_reader::BitReader;
 use crate::entropy_coding::decode::Reader;
 use crate::error::{Error, Result};
-use crate::util::value_of_lowest_1_bit;
-use crate::util::CeilLog2;
+use crate::util::{tracing::instrument, value_of_lowest_1_bit, CeilLog2};
 
 pub struct Permutation(Vec<u32>);
 
@@ -77,6 +76,7 @@ impl Permutation {
 }
 
 // Decodes the Lehmer code in `code` and returns the permuted slice.
+#[instrument(ret, err)]
 fn decode_lehmer_code(code: &[u32], permutation_slice: &[u32]) -> Result<Vec<u32>> {
     let n = permutation_slice.len();
     if n == 0 {
@@ -87,20 +87,19 @@ fn decode_lehmer_code(code: &[u32], permutation_slice: &[u32]) -> Result<Vec<u32
         });
     }
 
-    let mut permuted = permutation_slice.to_vec();
+    let mut permuted = vec![];
+    permuted.try_reserve(n)?;
+    permuted.extend_from_slice(permutation_slice);
+
     let log2n = (n as u32).ceil_log2();
     let padded_n = 1 << log2n;
 
     // Allocate temp array inside the function
-    let mut temp = vec![0u32; padded_n];
+    let mut temp = vec![];
+    temp.try_reserve(padded_n)?;
+    temp.extend((0..padded_n as u32).map(|x| value_of_lowest_1_bit(x + 1)));
 
-    // Initialize temp array
-    for (i, temp_item) in temp.iter_mut().enumerate().take(padded_n) {
-        let i1 = (i + 1) as u32;
-        *temp_item = value_of_lowest_1_bit(i1);
-    }
-
-    for (i, permuted_item) in permuted.iter_mut().enumerate().take(n) {
+    for (i, permuted_item) in permuted.iter_mut().enumerate() {
         let code_i = *code.get(i).unwrap_or(&0);
 
         // Adjust the maximum allowed value for code_i
@@ -146,7 +145,7 @@ fn decode_lehmer_code(code: &[u32], permutation_slice: &[u32]) -> Result<Vec<u32
 }
 
 // Decodes the Lehmer code in `code` and returns the permuted vector.
-#[allow(dead_code)]
+#[cfg(test)]
 fn decode_lehmer_code_naive(code: &[u32], permutation_slice: &[u32]) -> Result<Vec<u32>> {
     let n = code.len();
     if n == 0 {
@@ -197,8 +196,9 @@ fn get_context(x: u32) -> usize {
 #[cfg(test)]
 mod test {
     use super::*;
-
     use arbtest::arbitrary::{self, Arbitrary, Unstructured};
+    use core::assert_eq;
+    use test_log::test;
 
     #[test]
     fn generate_permutation_arbtest() {
@@ -210,15 +210,10 @@ mod test {
             let perm1 = decode_lehmer_code(&input.code, permutation_slice);
             let perm2 = decode_lehmer_code_naive(&input.code, permutation_slice);
 
-            match (perm1, perm2) {
-                // Both Ok, check if permutations are equal
-                (Ok(p1), Ok(p2)) => assert_eq!(p1, p2),
-                // Both Err, compare error strings
-                (Err(e1), Err(e2)) => assert_eq!(e1.to_string(), e2.to_string()),
-                // One is Ok, the other is Err
-                (res1, res2) => panic!("Mismatched results: {:?} != {:?}", res1, res2),
-            }
-
+            assert_eq!(
+                perm1.map_err(|x| x.to_string()),
+                perm2.map_err(|x| x.to_string())
+            );
             Ok(())
         });
     }
