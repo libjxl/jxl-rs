@@ -9,6 +9,7 @@ pub mod encodings;
 pub mod extra_channels;
 pub mod frame_header;
 pub mod image_metadata;
+pub mod permutation;
 pub mod size;
 pub mod transform_data;
 
