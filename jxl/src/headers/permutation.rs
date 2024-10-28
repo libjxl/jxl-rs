@@ -100,7 +100,7 @@ fn decode_lehmer_code(code: &[u32], permutation_slice: &[u32]) -> Result<Vec<u32
         *temp_item = value_of_lowest_1_bit(i1);
     }
 
-   for (i, permuted_item) in permuted.iter_mut().enumerate().take(n) {
+    for (i, permuted_item) in permuted.iter_mut().enumerate().take(n) {
         let code_i = *code.get(i).unwrap_or(&0);
 
         // Adjust the maximum allowed value for code_i
@@ -144,7 +144,6 @@ fn decode_lehmer_code(code: &[u32], permutation_slice: &[u32]) -> Result<Vec<u32
 
     Ok(permuted)
 }
-
 
 // Decodes the Lehmer code in `code` and returns the permuted vector.
 #[allow(dead_code)]
