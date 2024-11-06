@@ -8,7 +8,7 @@
 use crate::{
     bit_reader::BitReader,
     error::Error,
-    headers::{encodings::*, extra_channels::ExtraChannelInfo}, util::tracing,
+    headers::{encodings::*, extra_channels::ExtraChannelInfo},
 };
 
 use jxl_macros::UnconditionalCoder;
@@ -234,7 +234,6 @@ pub struct FrameHeaderNonserialized {
 #[nonserialized(FrameHeaderNonserialized)]
 #[aligned]
 #[validate]
-#[trace]
 pub struct FrameHeader {
     #[all_default]
     #[default(true)]
@@ -411,7 +410,6 @@ impl FrameHeader {
 #[cfg(test)]
 mod test_frame_header {
     use super::*;
-    use crate::util::test::test_utils::read_test_file;
     use crate::{
         bit_reader::BitReader,
         container::ContainerParser,
@@ -447,9 +445,8 @@ mod test_frame_header {
 
     #[test]
     fn test_basic() {
-        let bytes = read_test_file("basic.jxl").unwrap();
         test_frame_header(
-            &bytes,
+            include_bytes!("../../resources/test/basic.jxl"),
             // TODO(TomasKralCZ): It would be nice to use struct update syntax like this:
             // FrameHeader {
             //     fields that we actually care about
@@ -465,7 +462,7 @@ mod test_frame_header {
                 upsampling: 1,
                 ec_upsampling: vec![],
                 group_size_shift: 1,
-                x_qm_scale: 3,
+                x_qm_scale: 2,
                 b_qm_scale: 2,
                 passes: Passes::default(),
                 lf_level: 0,
@@ -490,9 +487,8 @@ mod test_frame_header {
 
     #[test]
     fn test_extra_channel() {
-        let bytes = read_test_file("extra_channels.jxl").unwrap();
         test_frame_header(
-            &bytes,
+            include_bytes!("../../resources/test/extra_channels.jxl"),
             FrameHeader {
                 all_default: false,
                 frame_type: FrameType::RegularFrame,
@@ -534,9 +530,8 @@ mod test_frame_header {
 
     #[test]
     fn test_has_permutation() {
-        let bytes = read_test_file("has_permutation.jxl").unwrap();
         test_frame_header(
-            &bytes,
+            include_bytes!("../../resources/test/has_permutation.jxl"),
             FrameHeader {
                 all_default: false,
                 frame_type: FrameType::RegularFrame,
@@ -547,7 +542,7 @@ mod test_frame_header {
                 upsampling: 1,
                 ec_upsampling: vec![],
                 group_size_shift: 1,
-                x_qm_scale: 2,
+                x_qm_scale: 3,
                 b_qm_scale: 2,
                 passes: Passes::default(),
                 lf_level: 0,
