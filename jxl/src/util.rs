@@ -8,6 +8,7 @@ mod bits;
 mod concat_slice;
 mod log2;
 mod shift_right_ceil;
+pub mod test;
 pub mod tracing;
 
 pub use bits::*;
