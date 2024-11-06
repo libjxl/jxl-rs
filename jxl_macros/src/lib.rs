@@ -607,7 +607,6 @@ fn derive_struct(input: DeriveInput) -> TokenStream2 {
                 let return_value = #name {
                     #(#fields_names),*
                 };
-                #align
                 #impl_validate
                 Ok(return_value)
             }
