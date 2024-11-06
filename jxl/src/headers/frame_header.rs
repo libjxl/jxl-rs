@@ -8,7 +8,7 @@
 use crate::{
     bit_reader::BitReader,
     error::Error,
-    headers::{encodings::*, extra_channels::ExtraChannelInfo},
+    headers::{encodings::*, extra_channels::ExtraChannelInfo}, util::tracing,
 };
 
 use jxl_macros::UnconditionalCoder;
@@ -234,6 +234,7 @@ pub struct FrameHeaderNonserialized {
 #[nonserialized(FrameHeaderNonserialized)]
 #[aligned]
 #[validate]
+#[trace]
 pub struct FrameHeader {
     #[all_default]
     #[default(true)]
