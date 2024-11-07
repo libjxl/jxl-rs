@@ -76,6 +76,8 @@ pub enum Error {
     InvalidEcUpsampling(u32, u32, u32),
     #[error("Num_ds: {0} should be smaller than num_passes: {1}")]
     NumPassesTooLarge(u32, u32),
+    #[error("Non-patch reference frame with a crop")]
+    NonPatchReferenceWithCrop,
     #[error("Out of memory: {0}")]
     OutOfMemory(#[from] TryReserveError),
     #[error("Image size too large: {0}x{1}")]
