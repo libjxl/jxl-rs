@@ -128,7 +128,6 @@ struct RestorationFilterNonserialized {
 #[derive(UnconditionalCoder, Debug, PartialEq)]
 #[nonserialized(RestorationFilterNonserialized)]
 struct RestorationFilter {
-    // all_default isn't mentioned in the spec, but libjxl has it
     #[all_default]
     #[default(true)]
     all_default: bool,
@@ -354,16 +353,23 @@ pub struct FrameHeader {
     #[condition(frame_type != FrameType::LFFrame && !is_last)]
     save_as_reference: u32,
 
-    // TODO(TomasKralCZ): figure out a way of extracting this huge default into separate variables
-    /* The default value for save_before_ct is d_sbct = !(full_frame && (frame_type ==
-    kRegularFrame || frame_type == kSkipProgressive) && blending_info.mode ==
-    kReplace && (duration == 0 || save_as_reference != 0) && !is_last). */
-    #[default(!(!have_crop || (x0 == 0 && y0 == 0 &&
-        width as i64 + x0 as i64 >= nonserialized.img_width as i64 &&
-        height as i64 + y0 as i64 >= nonserialized.img_height as i64))
-        && (frame_type == FrameType::RegularFrame || frame_type == FrameType::SkipProgressive) &&
-        blending_info.mode == BlendingMode::Replace && (duration == 0 || save_as_reference != 0) && !is_last)]
-    #[condition(frame_type != FrameType::LFFrame)]
+    // The following 3 fields are not actually serialized, but just used as variables to help with
+    // defining later conditions.
+    #[default(!is_last && frame_type != FrameType::LFFrame && (duration == 0 || save_as_reference != 0))]
+    #[condition(false)]
+    can_be_referenced: bool,
+
+    #[default(!have_crop || width >= nonserialized.img_width && height >= nonserialized.img_height && x0 == 0 && y0 == 0)]
+    #[condition(false)]
+    full_frame: bool,
+
+    #[default(can_be_referenced && blending_info.mode == BlendingMode::Replace && full_frame &&
+              (frame_type == FrameType::RegularFrame || frame_type == FrameType::SkipProgressive))]
+    #[condition(false)]
+    save_before_ct_def_false: bool,
+
+    #[default(frame_type == FrameType::LFFrame)]
+    #[condition(frame_type == FrameType::ReferenceOnly || save_before_ct_def_false)]
     save_before_ct: bool,
 
     name: String,
@@ -403,6 +409,10 @@ impl FrameHeader {
             ));
         }
 
+        if !self.save_before_ct && !self.full_frame {
+            return Err(Error::NonPatchReferenceWithCrop);
+        }
+
         Ok(())
     }
 }
@@ -416,7 +426,7 @@ mod test_frame_header {
         headers::{FileHeaders, JxlHeader},
     };
 
-    fn test_frame_header(image: &[u8], correct_frame_header: FrameHeader) {
+    fn read_frame_header(image: &[u8]) -> FrameHeader {
         let codestream = ContainerParser::collect_codestream(image).unwrap();
         let mut br = BitReader::new(&codestream);
         let fh = FileHeaders::read(&mut br).unwrap();
@@ -425,7 +435,7 @@ mod test_frame_header {
             Some(ref a) => a.have_timecodes,
             None => false,
         };
-        let frame_header = FrameHeader::read_unconditional(
+        FrameHeader::read_unconditional(
             &(),
             &mut br,
             &FrameHeaderNonserialized {
@@ -438,130 +448,57 @@ mod test_frame_header {
                 img_height: fh.size.ysize(),
             },
         )
-        .unwrap();
-
-        assert_eq!(correct_frame_header, frame_header);
+        .unwrap()
     }
 
     #[test]
     fn test_basic() {
-        test_frame_header(
-            include_bytes!("../../resources/test/basic.jxl"),
-            // TODO(TomasKralCZ): It would be nice to use struct update syntax like this:
-            // FrameHeader {
-            //     fields that we actually care about
-            //     ..FrameHeader::default_from_nonserialized(&nonserialized)
-            // }
-            FrameHeader {
-                all_default: false,
-                frame_type: FrameType::RegularFrame,
-                encoding: Encoding::VarDCT,
-                flags: 0,
-                do_ycbcr: false,
-                jpeg_upsampling: [0, 0, 0],
-                upsampling: 1,
-                ec_upsampling: vec![],
-                group_size_shift: 1,
-                x_qm_scale: 2,
-                b_qm_scale: 2,
-                passes: Passes::default(),
-                lf_level: 0,
-                have_crop: false,
-                x0: 0,
-                y0: 0,
-                width: 0,
-                height: 0,
-                blending_info: BlendingInfo::default(),
-                ec_blending_info: vec![],
-                duration: 0,
-                timecode: 0,
-                is_last: true,
-                save_as_reference: 0,
-                save_before_ct: false,
-                name: String::from(""),
-                restoration_filter: RestorationFilter::default(),
-                extensions: Extensions::default(),
-            },
-        );
+        let frame_header = read_frame_header(include_bytes!("../../resources/test/basic.jxl"));
+        assert_eq!(frame_header.frame_type, FrameType::RegularFrame);
+        assert_eq!(frame_header.encoding, Encoding::VarDCT);
+        assert_eq!(frame_header.flags, 0);
+        assert_eq!(frame_header.upsampling, 1);
+        assert_eq!(frame_header.x_qm_scale, 2);
+        assert_eq!(frame_header.b_qm_scale, 2);
+        assert!(!frame_header.have_crop);
+        assert!(!frame_header.save_before_ct);
+        assert_eq!(frame_header.name, String::from(""));
+        assert_eq!(frame_header.restoration_filter.epf_iters, 1);
     }
 
     #[test]
     fn test_extra_channel() {
-        test_frame_header(
-            include_bytes!("../../resources/test/extra_channels.jxl"),
-            FrameHeader {
-                all_default: false,
-                frame_type: FrameType::RegularFrame,
-                encoding: Encoding::Modular,
-                flags: 0,
-                do_ycbcr: false,
-                jpeg_upsampling: [0, 0, 0],
-                upsampling: 1,
-                ec_upsampling: vec![1],
-                group_size_shift: 2,
-                // libjxl x_qm_scale = 2, but condition is false (should be 3 according to the draft)
-                x_qm_scale: 3,
-                b_qm_scale: 2,
-                passes: Passes::default(),
-                lf_level: 0,
-                have_crop: false,
-                x0: 0,
-                y0: 0,
-                width: 0,
-                height: 0,
-                blending_info: BlendingInfo::default(),
-                ec_blending_info: vec![BlendingInfo::default()],
-                duration: 0,
-                timecode: 0,
-                is_last: true,
-                save_as_reference: 0,
-                save_before_ct: false,
-                name: String::from(""),
-                restoration_filter: RestorationFilter {
-                    all_default: false,
-                    gab: false,
-                    epf_iters: 0,
-                    ..RestorationFilter::default()
-                },
-                extensions: Extensions::default(),
-            },
-        );
+        let frame_header =
+            read_frame_header(include_bytes!("../../resources/test/extra_channels.jxl"));
+        assert_eq!(frame_header.frame_type, FrameType::RegularFrame);
+        assert_eq!(frame_header.encoding, Encoding::Modular);
+        assert_eq!(frame_header.flags, 0);
+        assert_eq!(frame_header.upsampling, 1);
+        assert_eq!(frame_header.ec_upsampling, vec![1]);
+        // libjxl x_qm_scale = 2, but condition is false (should be 3 according to the draft)
+        // Doesn't actually matter since this is modular mode and the value doesn't get used.
+        assert_eq!(frame_header.x_qm_scale, 3);
+        assert_eq!(frame_header.b_qm_scale, 2);
+        assert!(!frame_header.have_crop);
+        assert!(!frame_header.save_before_ct);
+        assert_eq!(frame_header.name, String::from(""));
+        assert_eq!(frame_header.restoration_filter.epf_iters, 0);
+        assert!(!frame_header.restoration_filter.gab);
     }
 
     #[test]
     fn test_has_permutation() {
-        test_frame_header(
-            include_bytes!("../../resources/test/has_permutation.jxl"),
-            FrameHeader {
-                all_default: false,
-                frame_type: FrameType::RegularFrame,
-                encoding: Encoding::VarDCT,
-                flags: 0,
-                do_ycbcr: false,
-                jpeg_upsampling: [0, 0, 0],
-                upsampling: 1,
-                ec_upsampling: vec![],
-                group_size_shift: 1,
-                x_qm_scale: 3,
-                b_qm_scale: 2,
-                passes: Passes::default(),
-                lf_level: 0,
-                have_crop: false,
-                x0: 0,
-                y0: 0,
-                width: 0,
-                height: 0,
-                blending_info: BlendingInfo::default(),
-                ec_blending_info: vec![],
-                duration: 0,
-                timecode: 0,
-                is_last: true,
-                save_as_reference: 0,
-                save_before_ct: false,
-                name: String::from(""),
-                restoration_filter: RestorationFilter::default(),
-                extensions: Extensions::default(),
-            },
-        );
+        let frame_header =
+            read_frame_header(include_bytes!("../../resources/test/has_permutation.jxl"));
+        assert_eq!(frame_header.frame_type, FrameType::RegularFrame);
+        assert_eq!(frame_header.encoding, Encoding::VarDCT);
+        assert_eq!(frame_header.flags, 0);
+        assert_eq!(frame_header.upsampling, 1);
+        assert_eq!(frame_header.x_qm_scale, 3);
+        assert_eq!(frame_header.b_qm_scale, 2);
+        assert!(!frame_header.have_crop);
+        assert!(!frame_header.save_before_ct);
+        assert_eq!(frame_header.name, String::from(""));
+        assert_eq!(frame_header.restoration_filter.epf_iters, 1);
     }
 }
