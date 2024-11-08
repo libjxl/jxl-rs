@@ -3,7 +3,8 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-use crate::{bit_reader::BitReader, error::Error};
+use super::{frame_header::PermutationNonserialized, permutation::Permutation};
+use crate::{bit_reader::BitReader, entropy_coding::decode::Histograms, error::Error};
 
 pub enum U32 {
     Bits(usize),
@@ -155,6 +156,29 @@ impl UnconditionalCoder<()> for String {
             ret.push(br.read(8)? as u8 as char);
         }
         Ok(ret)
+    }
+}
+
+impl UnconditionalCoder<()> for Permutation {
+    type Nonserialized = PermutationNonserialized;
+    fn read_unconditional(
+        _: &(),
+        br: &mut BitReader,
+        nonserialized: &Self::Nonserialized,
+    ) -> Result<Permutation, Error> {
+        // TODO: This is quadratic when incrementally parsing byte by byte,
+        // we might want to find a better way of reading the permutation.
+        let ret = if nonserialized.permuted {
+            let size = nonserialized.num_entries;
+            let num_contexts = 8;
+            let histograms = Histograms::decode(num_contexts, br, /*allow_lz77=*/ true)?;
+            let mut reader = histograms.make_reader(br)?;
+            Permutation::decode(size, 0, br, &mut reader)
+        } else {
+            Ok(Permutation::default())
+        };
+        br.jump_to_byte_boundary()?;
+        ret
     }
 }
 

@@ -14,6 +14,8 @@ use crate::{
 use jxl_macros::UnconditionalCoder;
 use num_derive::FromPrimitive;
 
+use super::{permutation::Permutation, FileHeaders};
+
 #[derive(UnconditionalCoder, Copy, Clone, PartialEq, Debug, FromPrimitive)]
 enum FrameType {
     RegularFrame = 0,
@@ -219,6 +221,32 @@ struct RestorationFilter {
     extensions: Extensions,
 }
 
+pub struct TocNonserialized {
+    pub num_entries: u32,
+}
+
+pub struct PermutationNonserialized {
+    pub num_entries: u32,
+    pub permuted: bool,
+}
+
+#[derive(UnconditionalCoder, Debug, PartialEq)]
+#[nonserialized(TocNonserialized)]
+#[trace]
+pub struct Toc {
+    #[default(false)]
+    permuted: bool,
+
+    // Here we don't use `condition(permuted)`, because `jump_to_byte_boundary` needs to be executed in both cases
+    #[default(Permutation::default())]
+    #[nonserialized(num_entries: nonserialized.num_entries, permuted: permuted)]
+    permutation: Permutation,
+
+    #[coder(u2S(Bits(10), Bits(14) + 1024, Bits(22) + 17408, Bits(30) + 4211712))]
+    #[size_coder(explicit(nonserialized.num_entries))]
+    entries: Vec<u32>,
+}
+
 pub struct FrameHeaderNonserialized {
     pub xyb_encoded: bool,
     pub num_extra_channels: u32,
@@ -382,7 +410,66 @@ pub struct FrameHeader {
     extensions: Extensions,
 }
 
+// TODO(firsching): remove once we use this!
+#[allow(dead_code)]
 impl FrameHeader {
+    fn group_dim(&self) -> u32 {
+        const GROUP_DIM: u32 = 256;
+        (GROUP_DIM >> 1) << self.group_size_shift
+    }
+    fn dc_group_dim(&self) -> u32 {
+        const BLOCK_DIM: u32 = 8;
+        self.group_dim() * BLOCK_DIM
+    }
+    fn xsize(&self, fh: &FileHeaders) -> u32 {
+        if self.width != 0 {
+            self.width
+        } else {
+            fh.size.xsize()
+        }
+    }
+
+    fn ysize(&self, fh: &FileHeaders) -> u32 {
+        if self.height != 0 {
+            self.height
+        } else {
+            fh.size.ysize()
+        }
+    }
+
+    fn num_toc_entries(&self, fh: &FileHeaders) -> u32 {
+        const GROUP_DIM: u32 = 256;
+        const BLOCK_DIM: u32 = 8;
+        const H_SHIFT: [u32; 4] = [0, 1, 1, 0];
+        const V_SHIFT: [u32; 4] = [0, 1, 0, 1];
+        let mut maxhs = 0;
+        let mut maxvs = 0;
+        for ch in self.jpeg_upsampling {
+            maxhs = maxhs.max(H_SHIFT[ch as usize]);
+            maxvs = maxvs.max(V_SHIFT[ch as usize]);
+        }
+        let xsize = self.xsize(fh);
+        let ysize = self.ysize(fh);
+        let xsize_blocks = xsize.div_ceil(BLOCK_DIM << maxhs) << maxhs;
+        let ysize_blocks = ysize.div_ceil(BLOCK_DIM << maxvs) << maxvs;
+
+        let group_dim: u32 = self.group_dim();
+
+        let xsize_groups = xsize.div_ceil(group_dim);
+        let ysize_groups = ysize.div_ceil(group_dim);
+        let xsize_dc_groups = xsize_blocks.div_ceil(group_dim);
+        let ysize_dc_groups = ysize_blocks.div_ceil(group_dim);
+
+        let num_groups = xsize_groups * ysize_groups;
+        let num_dc_groups = xsize_dc_groups * ysize_dc_groups;
+
+        if num_groups == 1 && self.passes.num_passes == 1 {
+            1
+        } else {
+            2 + num_dc_groups + num_groups
+        }
+    }
+
     fn check(&self, nonserialized: &FrameHeaderNonserialized) -> Result<(), Error> {
         if self.upsampling > 1 {
             if let Some((info, upsampling)) = nonserialized
@@ -426,7 +513,7 @@ mod test_frame_header {
         headers::{FileHeaders, JxlHeader},
     };
 
-    fn read_frame_header(image: &[u8]) -> FrameHeader {
+    fn read_frame_header_and_toc(image: &[u8]) -> Result<(FrameHeader, Toc), Error> {
         let codestream = ContainerParser::collect_codestream(image).unwrap();
         let mut br = BitReader::new(&codestream);
         let fh = FileHeaders::read(&mut br).unwrap();
@@ -435,25 +522,36 @@ mod test_frame_header {
             Some(ref a) => a.have_timecodes,
             None => false,
         };
-        FrameHeader::read_unconditional(
+        let frame_header = FrameHeader::read_unconditional(
             &(),
             &mut br,
             &FrameHeaderNonserialized {
                 xyb_encoded: fh.image_metadata.xyb_encoded,
                 num_extra_channels: fh.image_metadata.extra_channel_info.len() as u32,
-                extra_channel_info: fh.image_metadata.extra_channel_info,
+                extra_channel_info: fh.image_metadata.extra_channel_info.clone(),
                 have_animation: fh.image_metadata.animation.is_some(),
                 have_timecode,
                 img_width: fh.size.xsize(),
                 img_height: fh.size.ysize(),
             },
         )
-        .unwrap()
+        .unwrap();
+        let num_toc_entries = frame_header.num_toc_entries(&fh);
+        let toc = Toc::read_unconditional(
+            &(),
+            &mut br,
+            &TocNonserialized {
+                num_entries: num_toc_entries,
+            },
+        )
+        .unwrap();
+        Ok((frame_header, toc))
     }
 
     #[test]
     fn test_basic() {
-        let frame_header = read_frame_header(include_bytes!("../../resources/test/basic.jxl"));
+        let (frame_header, toc) =
+            read_frame_header_and_toc(include_bytes!("../../resources/test/basic.jxl")).unwrap();
         assert_eq!(frame_header.frame_type, FrameType::RegularFrame);
         assert_eq!(frame_header.encoding, Encoding::VarDCT);
         assert_eq!(frame_header.flags, 0);
@@ -464,12 +562,22 @@ mod test_frame_header {
         assert!(!frame_header.save_before_ct);
         assert_eq!(frame_header.name, String::from(""));
         assert_eq!(frame_header.restoration_filter.epf_iters, 1);
+        assert_eq!(
+            toc,
+            Toc {
+                permuted: false,
+                permutation: Permutation::default(),
+                entries: [53].to_vec(),
+            }
+        )
     }
 
     #[test]
     fn test_extra_channel() {
         let frame_header =
-            read_frame_header(include_bytes!("../../resources/test/extra_channels.jxl"));
+            read_frame_header_and_toc(include_bytes!("../../resources/test/extra_channels.jxl"))
+                .unwrap()
+                .0;
         assert_eq!(frame_header.frame_type, FrameType::RegularFrame);
         assert_eq!(frame_header.encoding, Encoding::Modular);
         assert_eq!(frame_header.flags, 0);
@@ -488,8 +596,9 @@ mod test_frame_header {
 
     #[test]
     fn test_has_permutation() {
-        let frame_header =
-            read_frame_header(include_bytes!("../../resources/test/has_permutation.jxl"));
+        let (frame_header, toc) =
+            read_frame_header_and_toc(include_bytes!("../../resources/test/has_permutation.jxl"))
+                .unwrap();
         assert_eq!(frame_header.frame_type, FrameType::RegularFrame);
         assert_eq!(frame_header.encoding, Encoding::VarDCT);
         assert_eq!(frame_header.flags, 0);
@@ -500,5 +609,20 @@ mod test_frame_header {
         assert!(!frame_header.save_before_ct);
         assert_eq!(frame_header.name, String::from(""));
         assert_eq!(frame_header.restoration_filter.epf_iters, 1);
+        assert_eq!(
+            toc,
+            Toc {
+                permuted: true,
+                permutation: Permutation(vec![
+                    0u32, 1, 42, 48, 2, 3, 4, 5, 6, 7, 8, 9, 43, 10, 11, 12, 13, 14, 15, 16, 17,
+                    44, 18, 19, 20, 21, 22, 23, 24, 25, 45, 26, 27, 28, 29, 30, 31, 32, 33, 46, 34,
+                    35, 36, 37, 38, 39, 40, 41, 47,
+                ]),
+                entries: vec![
+                    155, 992, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 9, 9, 9, 9, 9, 9, 9,
+                    9, 9, 9, 9, 9, 9, 9, 9, 9, 5, 5, 5, 5, 5, 5, 5, 5, 697, 5, 5, 5, 5, 5, 60,
+                ],
+            },
+        )
     }
 }

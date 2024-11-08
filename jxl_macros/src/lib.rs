@@ -443,7 +443,7 @@ impl Field {
             FieldKind::Unconditional(coder) => {
                 let (cfg_ty, cfg) = coder.config(all_default_field);
                 let trc = if trace {
-                    quote! { eprintln!("Setting {} to {:?}", stringify!(#ident), #ident); }
+                    quote! { eprintln!("Setting {} to {:?}. total_bits_read: {}, peek: {}", stringify!(#ident), #ident, br.total_bits_read(), br.peek(8)); }
                 } else {
                     quote! {}
                 };
@@ -462,7 +462,7 @@ impl Field {
                 let cnd = condition.get_expr(all_default_field).unwrap();
                 let pretty_cnd = condition.get_pretty(all_default_field);
                 let trc = if trace {
-                    quote! { eprintln!("{} is {}, setting {} to {:?}", #pretty_cnd, #cnd, stringify!(#ident), #ident); }
+                    quote! { eprintln!("{} is {}, setting {} to {:?}. total_bits_read: {}, peek {}", #pretty_cnd, #cnd, stringify!(#ident), #ident, br.total_bits_read(), br.peek(8)); }
                 } else {
                     quote! {}
                 };
@@ -483,7 +483,7 @@ impl Field {
                 let pretty_cnd = condition.get_pretty(all_default_field);
                 let default = &self.default;
                 let trc = if trace {
-                    quote! { eprintln!("{} is {}, setting {} to {:?}", #pretty_cnd, #cnd, stringify!(#ident), #ident); }
+                    quote! { eprintln!("{} is {}, setting {} to {:?}. total_bits_read: {}, peek: {}", #pretty_cnd, #cnd, stringify!(#ident), #ident, br.total_bits_read(), br.peek(8)); }
                 } else {
                     quote! {}
                 };
