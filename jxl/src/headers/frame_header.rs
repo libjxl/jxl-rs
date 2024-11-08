@@ -237,7 +237,7 @@ pub struct Toc {
     #[default(false)]
     permuted: bool,
 
-    // Here we don't have use `condition(permuted)`, because `jump_to_byte_boundary` needs to be executed in both cases
+    // Here we don't use `condition(permuted)`, because `jump_to_byte_boundary` needs to be executed in both cases
     #[default(Permutation::default())]
     #[nonserialized(num_entries: nonserialized.num_entries, permuted: permuted)]
     permutation: Permutation,
