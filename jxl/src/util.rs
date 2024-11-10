@@ -8,7 +8,7 @@ mod bits;
 mod concat_slice;
 mod log2;
 mod shift_right_ceil;
-pub mod tracing;
+pub mod tracing_wrappers;
 
 pub use bits::*;
 #[allow(unused)]
