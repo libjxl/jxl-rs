@@ -9,7 +9,7 @@ use crate::{
     error::{Error, Result},
     image::{DataTypeTag, Image, ImageDataType},
     render::internal::RenderPipelineStageInfo,
-    util::tracing::*,
+    util::tracing_wrappers::*,
     util::ShiftRightCeil,
 };
 

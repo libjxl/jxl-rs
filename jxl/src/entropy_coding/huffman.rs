@@ -6,6 +6,7 @@
 use crate::bit_reader::BitReader;
 use crate::entropy_coding::decode::*;
 use crate::error::{Error, Result};
+use crate::util::tracing_wrappers::*;
 use crate::util::*;
 
 pub const HUFFMAN_MAX_BITS: usize = 15;
@@ -258,6 +259,7 @@ impl Table {
         Ok(code_lengths)
     }
 
+    #[instrument(level = "debug", ret, err)]
     fn build(root_bits: usize, code_lengths: &[u8]) -> Result<Vec<TableEntry>> {
         if code_lengths.len() > 1 << HUFFMAN_MAX_BITS {
             return Err(Error::InvalidHuffman);
@@ -345,6 +347,7 @@ impl Table {
             }
             table_size <<= 1;
         }
+        trace!("table of length {}, table_size: {table_size}", table.len());
 
         /* fill in 2nd level tables and add pointers to root table */
         let mask = (table.len() - 1) as u32;
@@ -362,12 +365,20 @@ impl Table {
                     low = key & mask;
                     table[low as usize].bits = (table_bits + root_bits) as u8;
                     table[low as usize].value = (table_pos - low as usize) as u16;
+                    if table.len() < table_pos + table_size {
+                        table.resize(table_pos + table_size, TableEntry { bits: 0, value: 0 });
+                    }
                 }
                 counts[len] -= 1;
                 let bits = (len - root_bits) as u8;
                 let value = sorted[symbol];
                 symbol += 1;
                 let pos = table_pos + (key as usize >> root_bits);
+                trace!(
+                    "filling 2nd level table of len {len} starting at position {pos} ({table_pos} + {}) of {}",
+                    key as usize >> root_bits,
+                    table.len()
+                );
                 replicate_value(&mut table[pos..], step, TableEntry { bits, value });
                 key = get_next_key(key, len);
             }
@@ -376,6 +387,7 @@ impl Table {
         Ok(table)
     }
 
+    #[instrument(level = "debug", skip(br), ret, err)]
     pub fn decode(al_size: usize, br: &mut BitReader) -> Result<Table> {
         let entries = if al_size == 1 {
             vec![TableEntry { bits: 0, value: 0 }; TABLE_SIZE]
@@ -467,6 +479,7 @@ impl HuffmanCodes {
 #[cfg(test)]
 mod test {
     use super::*;
+    use test_log::test;
 
     #[test]
     fn byte_histogram() {
@@ -479,5 +492,31 @@ mod test {
         for expected in expected_arr {
             assert_eq!(codes.read(&mut br, 0).unwrap(), expected as u32);
         }
+    }
+
+    #[test]
+    fn long_code() {
+        // This correctly sums to 4096 table entries
+        const CODE: [u8; 520] = [
+            3, 6, 7, 7, 7, 7, 7, 7, 7, 7, 8, 7, 8, 7, 8, 8, 8, 8, 8, 8, 8, 9, 9, 8, 9, 9, 9, 9, 9,
+            9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9,
+            9, 9, 9, 9, 9, 9, 9, 8, 9, 9, 8, 9, 9, 9, 9, 9, 8, 9, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8,
+            8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8,
+            8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 7, 7, 7, 7, 8, 8, 8, 8, 8, 8, 8, 8, 7, 8, 8, 8, 8, 8,
+            8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 9, 8, 9, 8, 8, 8, 8, 9, 9, 9, 9, 8, 8, 9, 9, 9, 9, 9, 9,
+            9, 8, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9,
+            9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 10, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 10, 9, 9, 9, 9,
+            9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 8, 4, 0, 0, 0, 0,
+            0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+            0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+            0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+            0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+            0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+            0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+            0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+            0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+            0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 6, 10, 7, 9, 9, 11, 12, 12,
+        ];
+        assert!(Table::build(TABLE_BITS, &CODE).is_ok());
     }
 }

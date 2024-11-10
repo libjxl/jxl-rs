@@ -6,7 +6,7 @@
 use crate::{
     error::Result,
     image::{Image, ImageDataType, ImageRectMut},
-    util::{tracing::instrument, ShiftRightCeil},
+    util::{tracing_wrappers::instrument, ShiftRightCeil},
 };
 use rand::SeedableRng;
 

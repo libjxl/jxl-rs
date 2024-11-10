@@ -7,7 +7,7 @@
 
 use crate::bit_reader::BitReader;
 use crate::error::{Error, Result};
-use crate::util::tracing::*;
+use crate::util::tracing_wrappers::*;
 
 use super::decode::ReaderInner;
 use super::hybrid_uint::HybridUint;

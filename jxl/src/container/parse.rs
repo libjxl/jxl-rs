@@ -8,7 +8,7 @@
 use super::{box_header::*, BitstreamKind, ContainerParser, DetectState, JxlpIndexState};
 use crate::{
     error::{Error, Result},
-    util::tracing::*,
+    util::tracing_wrappers::*,
 };
 
 /// Iterator that reads over a buffer and emits parser events.

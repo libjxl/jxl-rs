@@ -7,7 +7,7 @@ use std::fmt::Debug;
 
 use crate::{
     error::{Error, Result},
-    util::{tracing::*, ShiftRightCeil},
+    util::{tracing_wrappers::*, ShiftRightCeil},
 };
 
 mod private {
