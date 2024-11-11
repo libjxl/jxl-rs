@@ -67,7 +67,10 @@ fn parse_jxl_codestream(data: &[u8], verbose: bool) -> Result<(), jxl::error::Er
             "(possibly) lossless"
         };
 
-        let color_space = format!("{:?}", file_header.image_metadata.color_encoding.color_space);
+        let color_space = format!(
+            "{:?}",
+            file_header.image_metadata.color_encoding.color_space
+        );
         let alpha_info = match file_header
             .image_metadata
             .extra_channel_info
@@ -91,10 +94,18 @@ fn parse_jxl_codestream(data: &[u8], verbose: bool) -> Result<(), jxl::error::Er
             color_space,
             alpha_info,
         );
-        if file_header.image_metadata.bit_depth.exponent_bits_per_sample() != 0 {
+        if file_header
+            .image_metadata
+            .bit_depth
+            .exponent_bits_per_sample()
+            != 0
+        {
             print!(
                 "float ({} exponent bits)",
-                file_header.image_metadata.bit_depth.exponent_bits_per_sample()
+                file_header
+                    .image_metadata
+                    .bit_depth
+                    .exponent_bits_per_sample()
             );
         }
         println!();

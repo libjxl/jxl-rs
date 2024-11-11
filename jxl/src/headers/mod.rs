@@ -17,7 +17,6 @@ use crate::{bit_reader::BitReader, error::Error, headers::encodings::*};
 use frame_header::FrameHeaderNonserialized;
 use jxl_macros::UnconditionalCoder;
 
-
 pub use image_metadata::*;
 pub use size::Size;
 pub use transform_data::*;
