@@ -8,7 +8,7 @@ use jxl::container::{ContainerParser, ParseEvent};
 use jxl::headers::{
     encodings::UnconditionalCoder,
     frame_header::{FrameHeader, FrameHeaderNonserialized},
-    FileHeaders,
+    FileHeader,
 };
 use jxl::icc::read_icc;
 use std::env;
@@ -19,7 +19,7 @@ use jxl::headers::JxlHeader;
 
 fn parse_jxl_codestream(data: &[u8]) -> Result<(), jxl::error::Error> {
     let mut br = BitReader::new(data);
-    let fh = FileHeaders::read(&mut br)?;
+    let fh = FileHeader::read(&mut br)?;
     println!("Image size: {} x {}", fh.size.xsize(), fh.size.ysize());
     let _icc = if fh.image_metadata.color_encoding.want_icc {
         let r = read_icc(&mut br)?;
