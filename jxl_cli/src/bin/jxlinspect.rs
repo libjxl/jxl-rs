@@ -7,7 +7,7 @@ use clap::{Arg, Command};
 use jxl::bit_reader::BitReader;
 use jxl::container::{ContainerParser, ParseEvent};
 use jxl::headers::color_encoding::{ColorEncoding, Primaries, WhitePoint};
-use jxl::headers::{FileHeaders, JxlHeader};
+use jxl::headers::{FileHeader, JxlHeader};
 use jxl::icc::read_icc;
 use std::fs;
 use std::io::Read;
@@ -57,18 +57,18 @@ fn print_color_encoding(color_encoding: &ColorEncoding) {
 
 fn parse_jxl_codestream(data: &[u8], verbose: bool) -> Result<(), jxl::error::Error> {
     let mut br = BitReader::new(data);
-    let fh = FileHeaders::read(&mut br)?;
+    let fileheaders = FileHeader::read(&mut br)?;
 
     // Non-verbose output
     if !verbose {
-        let how_lossy = if fh.image_metadata.xyb_encoded {
+        let how_lossy = if fileheaders.image_metadata.xyb_encoded {
             "lossy"
         } else {
             "(possibly) lossless"
         };
 
-        let color_space = format!("{:?}", fh.image_metadata.color_encoding.color_space);
-        let alpha_info = match fh
+        let color_space = format!("{:?}", fileheaders.image_metadata.color_encoding.color_space);
+        let alpha_info = match fileheaders
             .image_metadata
             .extra_channel_info
             .iter()
@@ -77,41 +77,41 @@ fn parse_jxl_codestream(data: &[u8], verbose: bool) -> Result<(), jxl::error::Er
             true => "+Alpha",
             false => "",
         };
-        let image_or_animation = match fh.image_metadata.animation {
+        let image_or_animation = match fileheaders.image_metadata.animation {
             None => "Image",
             Some(_) => "Animation",
         };
         print!(
             "JPEG XL {}, {}x{}, {}, {}-bit {}{}",
             image_or_animation,
-            fh.size.xsize(),
-            fh.size.ysize(),
+            fileheaders.size.xsize(),
+            fileheaders.size.ysize(),
             how_lossy,
-            fh.image_metadata.bit_depth.bits_per_sample(),
+            fileheaders.image_metadata.bit_depth.bits_per_sample(),
             color_space,
             alpha_info,
         );
-        if fh.image_metadata.bit_depth.exponent_bits_per_sample() != 0 {
+        if fileheaders.image_metadata.bit_depth.exponent_bits_per_sample() != 0 {
             print!(
                 "float ({} exponent bits)",
-                fh.image_metadata.bit_depth.exponent_bits_per_sample()
+                fileheaders.image_metadata.bit_depth.exponent_bits_per_sample()
             );
         }
         println!();
-        if fh.image_metadata.color_encoding.want_icc {
+        if fileheaders.image_metadata.color_encoding.want_icc {
             println!("with ICC profile")
         } else {
-            print_color_encoding(&fh.image_metadata.color_encoding);
+            print_color_encoding(&fileheaders.image_metadata.color_encoding);
         }
         return Ok(());
     }
 
     // Verbose output: Use Debug trait to print the FileHeaders
-    println!("{:#?}", fh);
+    println!("{:#?}", fileheaders);
 
     // TODO(firsching): consider printing more of less information for ICC
     // for verbose/non-verbose cases
-    if fh.image_metadata.color_encoding.want_icc {
+    if fileheaders.image_metadata.color_encoding.want_icc {
         let icc_data = read_icc(&mut br)?;
         println!("ICC profile length: {} bytes", icc_data.len());
     }

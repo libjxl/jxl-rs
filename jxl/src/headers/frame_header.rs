@@ -14,7 +14,7 @@ use crate::{
 use jxl_macros::UnconditionalCoder;
 use num_derive::FromPrimitive;
 
-use super::{permutation::Permutation, FileHeaders};
+use super::{permutation::Permutation, FileHeader};
 
 #[derive(UnconditionalCoder, Copy, Clone, PartialEq, Debug, FromPrimitive)]
 enum FrameType {
@@ -421,7 +421,7 @@ impl FrameHeader {
         const BLOCK_DIM: u32 = 8;
         self.group_dim() * BLOCK_DIM
     }
-    fn xsize(&self, fh: &FileHeaders) -> u32 {
+    fn xsize(&self, fh: &FileHeader) -> u32 {
         if self.width != 0 {
             self.width
         } else {
@@ -429,7 +429,7 @@ impl FrameHeader {
         }
     }
 
-    fn ysize(&self, fh: &FileHeaders) -> u32 {
+    fn ysize(&self, fh: &FileHeader) -> u32 {
         if self.height != 0 {
             self.height
         } else {
@@ -437,7 +437,7 @@ impl FrameHeader {
         }
     }
 
-    fn num_toc_entries(&self, fh: &FileHeaders) -> u32 {
+    fn num_toc_entries(&self, fh: &FileHeader) -> u32 {
         const GROUP_DIM: u32 = 256;
         const BLOCK_DIM: u32 = 8;
         const H_SHIFT: [u32; 4] = [0, 1, 1, 0];
@@ -510,33 +510,21 @@ mod test_frame_header {
     use crate::{
         bit_reader::BitReader,
         container::ContainerParser,
-        headers::{FileHeaders, JxlHeader},
+        headers::{FileHeader, JxlHeader},
     };
 
     fn read_frame_header_and_toc(image: &[u8]) -> Result<(FrameHeader, Toc), Error> {
         let codestream = ContainerParser::collect_codestream(image).unwrap();
         let mut br = BitReader::new(&codestream);
-        let fh = FileHeaders::read(&mut br).unwrap();
+        let file_header = FileHeader::read(&mut br).unwrap();
 
-        let have_timecode = match fh.image_metadata.animation {
-            Some(ref a) => a.have_timecodes,
-            None => false,
-        };
         let frame_header = FrameHeader::read_unconditional(
             &(),
             &mut br,
-            &FrameHeaderNonserialized {
-                xyb_encoded: fh.image_metadata.xyb_encoded,
-                num_extra_channels: fh.image_metadata.extra_channel_info.len() as u32,
-                extra_channel_info: fh.image_metadata.extra_channel_info.clone(),
-                have_animation: fh.image_metadata.animation.is_some(),
-                have_timecode,
-                img_width: fh.size.xsize(),
-                img_height: fh.size.ysize(),
-            },
+            &file_header.frame_header_nonserialized(),
         )
         .unwrap();
-        let num_toc_entries = frame_header.num_toc_entries(&fh);
+        let num_toc_entries = frame_header.num_toc_entries(&file_header);
         let toc = Toc::read_unconditional(
             &(),
             &mut br,
