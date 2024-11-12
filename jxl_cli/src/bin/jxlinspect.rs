@@ -9,8 +9,9 @@ use jxl::container::{ContainerParser, ParseEvent};
 use jxl::headers::color_encoding::{ColorEncoding, Primaries, WhitePoint};
 use jxl::headers::encodings::UnconditionalCoder;
 use jxl::headers::frame_header::{FrameHeader, Toc, TocNonserialized};
-use jxl::headers::{Animation, FileHeader, JxlHeader};
+use jxl::headers::{FileHeader, JxlHeader};
 use jxl::icc::read_icc;
+use std::cmp::Ordering;
 use std::fs;
 use std::io::Read;
 
@@ -125,8 +126,14 @@ fn parse_jxl_codestream(data: &[u8], verbose: bool) -> Result<(), jxl::error::Er
             println!("ICC profile length: {} bytes", icc_data.len());
         }
     }
-    // TODO(firsching): add frame header parsing for each frame
+    //TODO(firsching): handle frames which are blended together, also within animations.
     if file_header.image_metadata.animation.is_some() {
+        let mut total_duration = 0.0f64;
+        let animation = file_header
+            .image_metadata
+            .animation
+            .as_ref()
+            .expect("This should never fail, it was just check in the if condition above");
         let mut not_is_last = true;
         while not_is_last {
             let frame_header = FrameHeader::read_unconditional(
@@ -135,13 +142,10 @@ fn parse_jxl_codestream(data: &[u8], verbose: bool) -> Result<(), jxl::error::Er
                 &file_header.frame_header_nonserialized(),
             )
             .unwrap();
-            let animation = file_header
-                .image_metadata
-                .animation
-                .as_ref()
-                .expect("This should never fail");
+
             let ms = (frame_header.duration as f64) * 1000.0 * (animation.tps_denominator as f64)
                 / (animation.tps_numerator as f64);
+            total_duration += ms;
             println!(
                 "frame: {:?}x{:?} at position ({},{}), duration {ms}ms",
                 frame_header.xsize(&file_header),
@@ -165,6 +169,25 @@ fn parse_jxl_codestream(data: &[u8], verbose: bool) -> Result<(), jxl::error::Er
             not_is_last = !frame_header.is_last;
             // TODO: use return value
             br.skip_bits((num_bytes_to_skip * 8) as usize)?;
+        }
+        print!(
+            "Animation length: {} seconds",
+            total_duration
+                * (if animation.num_loops > 1 {
+                    animation.num_loops as f64
+                } else {
+                    1.0f64
+                })
+                * 0.001
+        );
+        match animation.num_loops.cmp(&1) {
+            Ordering::Greater => println!(
+                " ({} loops of {} seconds)",
+                animation.num_loops,
+                total_duration * 0.001
+            ),
+            Ordering::Equal => println!(),
+            Ordering::Less => println!(" (looping indefinitely)"),
         }
     }
     Ok(())
