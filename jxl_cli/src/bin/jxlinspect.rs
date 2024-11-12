@@ -7,6 +7,8 @@ use clap::{Arg, Command};
 use jxl::bit_reader::BitReader;
 use jxl::container::{ContainerParser, ParseEvent};
 use jxl::headers::color_encoding::{ColorEncoding, Primaries, WhitePoint};
+use jxl::headers::encodings::UnconditionalCoder;
+use jxl::headers::frame_header::{FrameHeader, Toc, TocNonserialized};
 use jxl::headers::{FileHeader, JxlHeader};
 use jxl::icc::read_icc;
 use std::fs;
@@ -127,7 +129,42 @@ fn parse_jxl_codestream(data: &[u8], verbose: bool) -> Result<(), jxl::error::Er
         println!("ICC profile length: {} bytes", icc_data.len());
     }
     // TODO(firsching): add frame header parsing for each frame
-
+    if file_header.image_metadata.animation.is_some() {
+        let mut not_is_last = true;
+        while not_is_last {
+            let frame_header = FrameHeader::read_unconditional(
+                &(),
+                &mut br,
+                &file_header.frame_header_nonserialized(),
+            )
+            .unwrap();
+            println!(
+                "frame: {:?}x{:?}",
+                frame_header.xsize(&file_header),
+                frame_header.ysize(&file_header)
+            );
+            // Read TOC to skip to next
+            let num_toc_entries = frame_header.num_toc_entries(&file_header);
+            let toc = Toc::read_unconditional(
+                &(),
+                &mut br,
+                &TocNonserialized {
+                    num_entries: num_toc_entries,
+                },
+            )
+            .unwrap();
+            let entries = toc.entries;
+            println!("entries : {:?}", entries);
+            let num_bytes_to_skip: u32 = entries.into_iter().sum();
+            // let _ = br.jump_to_byte_boundary();
+            println!("total_bits_read: {:?}", &br.total_bits_read());
+            // TODO: use return value
+            let _ = &br.skip_bits((num_bytes_to_skip * 8) as usize);
+            println!("total_bits_read: {:?}", &br.total_bits_read());
+            let _ = br.jump_to_byte_boundary();
+            not_is_last = !frame_header.is_last;
+        }
+    }
     Ok(())
 }
 

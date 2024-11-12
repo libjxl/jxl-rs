@@ -244,7 +244,7 @@ pub struct Toc {
 
     #[coder(u2S(Bits(10), Bits(14) + 1024, Bits(22) + 17408, Bits(30) + 4211712))]
     #[size_coder(explicit(nonserialized.num_entries))]
-    entries: Vec<u32>,
+    pub entries: Vec<u32>,
 }
 
 pub struct FrameHeaderNonserialized {
@@ -421,23 +421,23 @@ impl FrameHeader {
         const BLOCK_DIM: u32 = 8;
         self.group_dim() * BLOCK_DIM
     }
-    fn xsize(&self, fh: &FileHeader) -> u32 {
+    pub fn xsize(&self, file_header: &FileHeader) -> u32 {
         if self.width != 0 {
             self.width
         } else {
-            fh.size.xsize()
+            file_header.size.xsize()
         }
     }
 
-    fn ysize(&self, fh: &FileHeader) -> u32 {
+    pub fn ysize(&self, file_header: &FileHeader) -> u32 {
         if self.height != 0 {
             self.height
         } else {
-            fh.size.ysize()
+            file_header.size.ysize()
         }
     }
 
-    fn num_toc_entries(&self, fh: &FileHeader) -> u32 {
+    pub fn num_toc_entries(&self, fh: &FileHeader) -> u32 {
         const GROUP_DIM: u32 = 256;
         const BLOCK_DIM: u32 = 8;
         const H_SHIFT: [u32; 4] = [0, 1, 1, 0];
