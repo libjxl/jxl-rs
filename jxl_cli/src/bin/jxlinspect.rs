@@ -9,7 +9,7 @@ use jxl::container::{ContainerParser, ParseEvent};
 use jxl::headers::color_encoding::{ColorEncoding, Primaries, WhitePoint};
 use jxl::headers::encodings::UnconditionalCoder;
 use jxl::headers::frame_header::{FrameHeader, Toc, TocNonserialized};
-use jxl::headers::{FileHeader, JxlHeader};
+use jxl::headers::{Animation, FileHeader, JxlHeader};
 use jxl::icc::read_icc;
 use std::fs;
 use std::io::Read;
@@ -62,71 +62,68 @@ fn parse_jxl_codestream(data: &[u8], verbose: bool) -> Result<(), jxl::error::Er
     let file_header = FileHeader::read(&mut br)?;
 
     // Non-verbose output
-    if !verbose {
-        let how_lossy = if file_header.image_metadata.xyb_encoded {
-            "lossy"
-        } else {
-            "(possibly) lossless"
-        };
+    let how_lossy = if file_header.image_metadata.xyb_encoded {
+        "lossy"
+    } else {
+        "(possibly) lossless"
+    };
 
-        let color_space = format!(
-            "{:?}",
-            file_header.image_metadata.color_encoding.color_space
-        );
-        let alpha_info = match file_header
-            .image_metadata
-            .extra_channel_info
-            .iter()
-            .any(|info| info.alpha_associated())
-        {
-            true => "+Alpha",
-            false => "",
-        };
-        let image_or_animation = match file_header.image_metadata.animation {
-            None => "Image",
-            Some(_) => "Animation",
-        };
+    let color_space = format!(
+        "{:?}",
+        file_header.image_metadata.color_encoding.color_space
+    );
+    let alpha_info = match file_header
+        .image_metadata
+        .extra_channel_info
+        .iter()
+        .any(|info| info.alpha_associated())
+    {
+        true => "+Alpha",
+        false => "",
+    };
+    let image_or_animation = match file_header.image_metadata.animation {
+        None => "Image",
+        Some(_) => "Animation",
+    };
+    print!(
+        "JPEG XL {}, {}x{}, {}, {}-bit {}{}",
+        image_or_animation,
+        file_header.size.xsize(),
+        file_header.size.ysize(),
+        how_lossy,
+        file_header.image_metadata.bit_depth.bits_per_sample(),
+        color_space,
+        alpha_info,
+    );
+    if file_header
+        .image_metadata
+        .bit_depth
+        .exponent_bits_per_sample()
+        != 0
+    {
         print!(
-            "JPEG XL {}, {}x{}, {}, {}-bit {}{}",
-            image_or_animation,
-            file_header.size.xsize(),
-            file_header.size.ysize(),
-            how_lossy,
-            file_header.image_metadata.bit_depth.bits_per_sample(),
-            color_space,
-            alpha_info,
+            "float ({} exponent bits)",
+            file_header
+                .image_metadata
+                .bit_depth
+                .exponent_bits_per_sample()
         );
-        if file_header
-            .image_metadata
-            .bit_depth
-            .exponent_bits_per_sample()
-            != 0
-        {
-            print!(
-                "float ({} exponent bits)",
-                file_header
-                    .image_metadata
-                    .bit_depth
-                    .exponent_bits_per_sample()
-            );
-        }
-        println!();
-        if file_header.image_metadata.color_encoding.want_icc {
-            println!("with ICC profile")
-        } else {
-            print_color_encoding(&file_header.image_metadata.color_encoding);
-        }
-        return Ok(());
     }
-
-    // Verbose output: Use Debug trait to print the FileHeaders
-    println!("{:#?}", file_header);
-
-    // TODO(firsching): consider printing more of less information for ICC
-    // for verbose/non-verbose cases
+    println!();
     if file_header.image_metadata.color_encoding.want_icc {
-        let icc_data = read_icc(&mut br)?;
-        println!("ICC profile length: {} bytes", icc_data.len());
+        println!("with ICC profile")
+    } else {
+        print_color_encoding(&file_header.image_metadata.color_encoding);
+    }
+    if verbose {
+        // Verbose output: Use Debug trait to print the FileHeaders
+        println!("{:#?}", file_header);
+        // TODO(firsching): consider printing more of less information for ICC
+        // for verbose/non-verbose cases
+        if file_header.image_metadata.color_encoding.want_icc {
+            let icc_data = read_icc(&mut br)?;
+            println!("ICC profile length: {} bytes", icc_data.len());
+        }
     }
     // TODO(firsching): add frame header parsing for each frame
     if file_header.image_metadata.animation.is_some() {
@@ -138,10 +135,19 @@ fn parse_jxl_codestream(data: &[u8], verbose: bool) -> Result<(), jxl::error::Er
                 &file_header.frame_header_nonserialized(),
             )
             .unwrap();
+            let animation = file_header
+                .image_metadata
+                .animation
+                .as_ref()
+                .expect("This should never fail");
+            let ms = (frame_header.duration as f64) * 1000.0 * (animation.tps_denominator as f64)
+                / (animation.tps_numerator as f64);
             println!(
-                "frame: {:?}x{:?}",
+                "frame: {:?}x{:?} at position ({},{}), duration {ms}ms",
                 frame_header.xsize(&file_header),
-                frame_header.ysize(&file_header)
+                frame_header.ysize(&file_header),
+                frame_header.x0,
+                frame_header.y0
             );
             // Read TOC to skip to next
             let num_toc_entries = frame_header.num_toc_entries(&file_header);
@@ -154,15 +160,11 @@ fn parse_jxl_codestream(data: &[u8], verbose: bool) -> Result<(), jxl::error::Er
             )
             .unwrap();
             let entries = toc.entries;
-            println!("entries : {:?}", entries);
             let num_bytes_to_skip: u32 = entries.into_iter().sum();
-            // let _ = br.jump_to_byte_boundary();
-            println!("total_bits_read: {:?}", &br.total_bits_read());
-            // TODO: use return value
-            let _ = &br.skip_bits((num_bytes_to_skip * 8) as usize);
-            println!("total_bits_read: {:?}", &br.total_bits_read());
-            let _ = br.jump_to_byte_boundary();
+            br.jump_to_byte_boundary()?;
             not_is_last = !frame_header.is_last;
+            // TODO: use return value
+            br.skip_bits((num_bytes_to_skip * 8) as usize)?;
         }
     }
     Ok(())

@@ -232,7 +232,6 @@ pub struct PermutationNonserialized {
 
 #[derive(UnconditionalCoder, Debug, PartialEq)]
 #[nonserialized(TocNonserialized)]
-#[trace]
 pub struct Toc {
     #[default(false)]
     permuted: bool,
@@ -327,12 +326,12 @@ pub struct FrameHeader {
     #[coder(u2S(Bits(8), Bits(11) + 256, Bits(14) + 2304, Bits(30) + 18688))]
     #[default(0)]
     #[condition(have_crop && frame_type != FrameType::ReferenceOnly)]
-    x0: i32,
+    pub x0: i32,
 
     #[coder(u2S(Bits(8), Bits(11) + 256, Bits(14) + 2304, Bits(30) + 18688))]
     #[default(0)]
     #[condition(have_crop && frame_type != FrameType::ReferenceOnly)]
-    y0: i32,
+    pub y0: i32,
 
     #[coder(u2S(Bits(8), Bits(11) + 256, Bits(14) + 2304, Bits(30) + 18688))]
     #[default(0)]
@@ -364,7 +363,7 @@ pub struct FrameHeader {
     #[default(0)]
     #[condition((frame_type == FrameType::RegularFrame ||
         frame_type == FrameType::SkipProgressive) && nonserialized.have_animation)]
-    duration: u32,
+    pub duration: u32,
 
     #[coder(Bits(32))]
     #[default(0)]
@@ -495,8 +494,7 @@ impl FrameHeader {
                 self.passes.num_passes,
             ));
         }
-
-        if !self.save_before_ct && !self.full_frame {
+        if !self.save_before_ct && !self.full_frame && self.frame_type == FrameType::ReferenceOnly {
             return Err(Error::NonPatchReferenceWithCrop);
         }
 
