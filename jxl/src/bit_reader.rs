@@ -77,25 +77,36 @@ impl<'a> BitReader<'a> {
     /// # Ok::<(), jxl::error::Error>(())
     /// ```
     #[inline(never)]
-    pub fn skip_bits(&mut self, mut num: usize) -> Result<(), Error> {
-        self.total_bits_read += num;
-        if num <= self.bits_in_buf {
-            self.bits_in_buf -= num;
-            self.bit_buf >>= num;
+    pub fn skip_bits(&mut self, mut n: usize) -> Result<(), Error> {
+        // Check if we can skip within the current buffer
+        if let Some(next_remaining_bits) = self.bits_in_buf.checked_sub(n) {
+            self.total_bits_read += n;
+            self.bits_in_buf = next_remaining_bits;
+            self.bit_buf >>= n;
             return Ok(());
         }
-        num -= self.bits_in_buf;
+
+        // Adjust the number of bits to skip and reset the buffer
+        n -= self.bits_in_buf;
+        self.total_bits_read += self.bits_in_buf;
+        self.bit_buf = 0;
         self.bits_in_buf = 0;
-        if num > self.data.len() * 8 {
+
+        // Check if the remaining bits to skip exceed the total bits in `data`
+        if n > self.data.len() * 8 {
+            self.total_bits_read += self.data.len() * 8;
             return Err(Error::OutOfBounds);
         }
-        self.data = &self.data[num / 8..];
+
+        // Skip bytes directly in `data`, then handle leftover bits
+        self.total_bits_read += n;
+        self.data = &self.data[n / 8..];
+        n %= 8;
+
+        // Refill the buffer and adjust for any remaining bits
         self.refill();
-        if num > self.bits_in_buf {
-            return Err(Error::OutOfBounds);
-        }
-        self.bits_in_buf -= num;
-        self.bit_buf >>= num;
+        self.bits_in_buf = self.bits_in_buf.checked_sub(n).ok_or(Error::OutOfBounds)?;
+        self.bit_buf >>= n;
         Ok(())
     }
 
