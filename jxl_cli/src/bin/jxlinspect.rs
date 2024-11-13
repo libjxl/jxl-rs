@@ -126,10 +126,11 @@ fn parse_jxl_codestream(data: &[u8], verbose: bool) -> Result<(), jxl::error::Er
             println!("ICC profile length: {} bytes", icc_data.len());
         }
     }
-    //TODO(firsching): handle frames which are blended together, also within animations.
+    // TODO(firsching): handle frames which are blended together, also within animations.
     if let Some(ref animation) = file_header.image_metadata.animation {
         let mut total_duration = 0.0f64;
         let mut not_is_last = true;
+        // TODO(firsching): make this an iterator or callback, see comment in #42
         while not_is_last {
             let frame_header = FrameHeader::read_unconditional(
                 &(),
