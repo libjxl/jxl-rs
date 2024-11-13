@@ -46,7 +46,11 @@ pub enum Error {
     #[error("Invalid ISOBMMF container")]
     InvalidBox,
     #[error("ICC is too large")]
-    ICCTooLarge,
+    IccTooLarge,
+    #[error("Invalid ICC stream: unexpected end of stream")]
+    IccEndOfStream,
+    #[error("Invalid ICC stream")]
+    InvalidIccStream,
     #[error("Invalid HybridUintConfig: {0} {1} {2:?}")]
     InvalidUintConfig(u32, u32, Option<u32>),
     #[error("LZ77 enabled when explicitly disallowed")]
