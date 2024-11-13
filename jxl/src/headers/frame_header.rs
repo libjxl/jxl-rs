@@ -14,7 +14,7 @@ use crate::{
 use jxl_macros::UnconditionalCoder;
 use num_derive::FromPrimitive;
 
-use super::{permutation::Permutation, FileHeader};
+use super::{permutation::Permutation, Animation, FileHeader};
 
 #[derive(UnconditionalCoder, Copy, Clone, PartialEq, Debug, FromPrimitive)]
 enum FrameType {
@@ -467,6 +467,11 @@ impl FrameHeader {
         } else {
             2 + num_dc_groups + num_groups
         }
+    }
+
+    pub fn duration(&self, animation: &Animation) -> f64 {
+        (self.duration as f64) * 1000.0 * (animation.tps_denominator as f64)
+            / (animation.tps_numerator as f64)
     }
 
     fn check(&self, nonserialized: &FrameHeaderNonserialized) -> Result<(), Error> {

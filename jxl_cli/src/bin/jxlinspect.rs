@@ -137,9 +137,7 @@ fn parse_jxl_codestream(data: &[u8], verbose: bool) -> Result<(), jxl::error::Er
                 &file_header.frame_header_nonserialized(),
             )
             .unwrap();
-
-            let ms = (frame_header.duration as f64) * 1000.0 * (animation.tps_denominator as f64)
-                / (animation.tps_numerator as f64);
+            let ms = frame_header.duration(animation);
             total_duration += ms;
             println!(
                 "frame: {:?}x{:?} at position ({},{}), duration {ms}ms",
@@ -162,7 +160,6 @@ fn parse_jxl_codestream(data: &[u8], verbose: bool) -> Result<(), jxl::error::Er
             let num_bytes_to_skip: u32 = entries.into_iter().sum();
             br.jump_to_byte_boundary()?;
             not_is_last = !frame_header.is_last;
-            // TODO: use return value
             br.skip_bits((num_bytes_to_skip * 8) as usize)?;
         }
         print!(
