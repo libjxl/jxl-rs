@@ -142,13 +142,10 @@ fn parse_jxl_codestream(data: &[u8], verbose: bool) -> Result<(), jxl::error::Er
             total_duration += ms;
             println!(
                 "frame: {:?}x{:?} at position ({},{}), duration {ms}ms",
-                frame_header.xsize(&file_header),
-                frame_header.ysize(&file_header),
-                frame_header.x0,
-                frame_header.y0
+                frame_header.width, frame_header.height, frame_header.x0, frame_header.y0
             );
             // Read TOC to skip to next
-            let num_toc_entries = frame_header.num_toc_entries(&file_header);
+            let num_toc_entries = frame_header.num_toc_entries();
             let toc = Toc::read_unconditional(
                 &(),
                 &mut br,

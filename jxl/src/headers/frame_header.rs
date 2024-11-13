@@ -14,7 +14,7 @@ use crate::{
 use jxl_macros::UnconditionalCoder;
 use num_derive::FromPrimitive;
 
-use super::{permutation::Permutation, Animation, FileHeader};
+use super::{permutation::Permutation, Animation};
 
 #[derive(UnconditionalCoder, Copy, Clone, PartialEq, Debug, FromPrimitive)]
 enum FrameType {
@@ -336,26 +336,26 @@ pub struct FrameHeader {
     #[coder(u2S(Bits(8), Bits(11) + 256, Bits(14) + 2304, Bits(30) + 18688))]
     #[default(0)]
     #[condition(have_crop)]
-    width: u32,
+    frame_width: u32,
 
     #[coder(u2S(Bits(8), Bits(11) + 256, Bits(14) + 2304, Bits(30) + 18688))]
     #[default(0)]
     #[condition(have_crop)]
-    height: u32,
+    frame_height: u32,
 
     /* "normal_frame" denotes the condition !all_default
     && (frame_type == kRegularFrame || frame_type == kSkipProgressive) */
     #[default(BlendingInfo::default())]
     #[condition(frame_type == FrameType::RegularFrame || frame_type == FrameType::SkipProgressive)]
     #[nonserialized(num_extra_channels : nonserialized.num_extra_channels,
-        have_crop : have_crop, x0: x0, y0: y0, width: width, height: height,
+        have_crop : have_crop, x0: x0, y0: y0, width: frame_width, height: frame_height,
         img_width: nonserialized.img_width, img_height: nonserialized.img_height)]
     blending_info: BlendingInfo,
 
     #[size_coder(explicit(nonserialized.num_extra_channels))]
     #[default_element(BlendingInfo::default())]
     #[nonserialized(num_extra_channels : nonserialized.num_extra_channels,
-        have_crop : have_crop, x0: x0, y0: y0, width: width, height: height,
+        have_crop : have_crop, x0: x0, y0: y0, width: frame_width, height: frame_height,
         img_width: nonserialized.img_width, img_height: nonserialized.img_height)]
     ec_blending_info: Vec<BlendingInfo>,
 
@@ -386,7 +386,7 @@ pub struct FrameHeader {
     #[condition(false)]
     can_be_referenced: bool,
 
-    #[default(!have_crop || width >= nonserialized.img_width && height >= nonserialized.img_height && x0 == 0 && y0 == 0)]
+    #[default(!have_crop || frame_width >= nonserialized.img_width && frame_height >= nonserialized.img_height && x0 == 0 && y0 == 0)]
     #[condition(false)]
     full_frame: bool,
 
@@ -407,6 +407,16 @@ pub struct FrameHeader {
 
     #[default(Extensions::default())]
     extensions: Extensions,
+
+    #[coder(Bits(0))]
+    #[default(if frame_width == 0 { nonserialized.img_width } else { frame_width })]
+    #[condition(false)]
+    pub width: u32,
+
+    #[coder(Bits(0))]
+    #[default(if frame_height == 0 { nonserialized.img_height } else { frame_height })]
+    #[condition(false)]
+    pub height: u32,
 }
 
 // TODO(firsching): remove once we use this!
@@ -420,23 +430,8 @@ impl FrameHeader {
         const BLOCK_DIM: u32 = 8;
         self.group_dim() * BLOCK_DIM
     }
-    pub fn xsize(&self, file_header: &FileHeader) -> u32 {
-        if self.width != 0 {
-            self.width
-        } else {
-            file_header.size.xsize()
-        }
-    }
 
-    pub fn ysize(&self, file_header: &FileHeader) -> u32 {
-        if self.height != 0 {
-            self.height
-        } else {
-            file_header.size.ysize()
-        }
-    }
-
-    pub fn num_toc_entries(&self, fh: &FileHeader) -> u32 {
+    pub fn num_toc_entries(&self) -> u32 {
         const GROUP_DIM: u32 = 256;
         const BLOCK_DIM: u32 = 8;
         const H_SHIFT: [u32; 4] = [0, 1, 1, 0];
@@ -447,8 +442,8 @@ impl FrameHeader {
             maxhs = maxhs.max(H_SHIFT[ch as usize]);
             maxvs = maxvs.max(V_SHIFT[ch as usize]);
         }
-        let xsize = self.xsize(fh);
-        let ysize = self.ysize(fh);
+        let xsize = self.width;
+        let ysize = self.height;
         let xsize_blocks = xsize.div_ceil(BLOCK_DIM << maxhs) << maxhs;
         let ysize_blocks = ysize.div_ceil(BLOCK_DIM << maxvs) << maxvs;
 
@@ -527,7 +522,7 @@ mod test_frame_header {
             &file_header.frame_header_nonserialized(),
         )
         .unwrap();
-        let num_toc_entries = frame_header.num_toc_entries(&file_header);
+        let num_toc_entries = frame_header.num_toc_entries();
         let toc = Toc::read_unconditional(
             &(),
             &mut br,
