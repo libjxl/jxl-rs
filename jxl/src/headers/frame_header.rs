@@ -14,7 +14,7 @@ use crate::{
 use jxl_macros::UnconditionalCoder;
 use num_derive::FromPrimitive;
 
-use super::{permutation::Permutation, FileHeader};
+use super::{permutation::Permutation, Animation, FileHeader};
 
 #[derive(UnconditionalCoder, Copy, Clone, PartialEq, Debug, FromPrimitive)]
 enum FrameType {
@@ -232,7 +232,6 @@ pub struct PermutationNonserialized {
 
 #[derive(UnconditionalCoder, Debug, PartialEq)]
 #[nonserialized(TocNonserialized)]
-#[trace]
 pub struct Toc {
     #[default(false)]
     permuted: bool,
@@ -244,7 +243,7 @@ pub struct Toc {
 
     #[coder(u2S(Bits(10), Bits(14) + 1024, Bits(22) + 17408, Bits(30) + 4211712))]
     #[size_coder(explicit(nonserialized.num_entries))]
-    entries: Vec<u32>,
+    pub entries: Vec<u32>,
 }
 
 pub struct FrameHeaderNonserialized {
@@ -327,12 +326,12 @@ pub struct FrameHeader {
     #[coder(u2S(Bits(8), Bits(11) + 256, Bits(14) + 2304, Bits(30) + 18688))]
     #[default(0)]
     #[condition(have_crop && frame_type != FrameType::ReferenceOnly)]
-    x0: i32,
+    pub x0: i32,
 
     #[coder(u2S(Bits(8), Bits(11) + 256, Bits(14) + 2304, Bits(30) + 18688))]
     #[default(0)]
     #[condition(have_crop && frame_type != FrameType::ReferenceOnly)]
-    y0: i32,
+    pub y0: i32,
 
     #[coder(u2S(Bits(8), Bits(11) + 256, Bits(14) + 2304, Bits(30) + 18688))]
     #[default(0)]
@@ -364,7 +363,7 @@ pub struct FrameHeader {
     #[default(0)]
     #[condition((frame_type == FrameType::RegularFrame ||
         frame_type == FrameType::SkipProgressive) && nonserialized.have_animation)]
-    duration: u32,
+    pub duration: u32,
 
     #[coder(Bits(32))]
     #[default(0)]
@@ -421,23 +420,23 @@ impl FrameHeader {
         const BLOCK_DIM: u32 = 8;
         self.group_dim() * BLOCK_DIM
     }
-    fn xsize(&self, fh: &FileHeader) -> u32 {
+    pub fn xsize(&self, file_header: &FileHeader) -> u32 {
         if self.width != 0 {
             self.width
         } else {
-            fh.size.xsize()
+            file_header.size.xsize()
         }
     }
 
-    fn ysize(&self, fh: &FileHeader) -> u32 {
+    pub fn ysize(&self, file_header: &FileHeader) -> u32 {
         if self.height != 0 {
             self.height
         } else {
-            fh.size.ysize()
+            file_header.size.ysize()
         }
     }
 
-    fn num_toc_entries(&self, fh: &FileHeader) -> u32 {
+    pub fn num_toc_entries(&self, fh: &FileHeader) -> u32 {
         const GROUP_DIM: u32 = 256;
         const BLOCK_DIM: u32 = 8;
         const H_SHIFT: [u32; 4] = [0, 1, 1, 0];
@@ -470,6 +469,11 @@ impl FrameHeader {
         }
     }
 
+    pub fn duration(&self, animation: &Animation) -> f64 {
+        (self.duration as f64) * 1000.0 * (animation.tps_denominator as f64)
+            / (animation.tps_numerator as f64)
+    }
+
     fn check(&self, nonserialized: &FrameHeaderNonserialized) -> Result<(), Error> {
         if self.upsampling > 1 {
             if let Some((info, upsampling)) = nonserialized
@@ -495,8 +499,7 @@ impl FrameHeader {
                 self.passes.num_passes,
             ));
         }
-
-        if !self.save_before_ct && !self.full_frame {
+        if !self.save_before_ct && !self.full_frame && self.frame_type == FrameType::ReferenceOnly {
             return Err(Error::NonPatchReferenceWithCrop);
         }
 
