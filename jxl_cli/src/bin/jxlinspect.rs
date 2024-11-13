@@ -127,13 +127,8 @@ fn parse_jxl_codestream(data: &[u8], verbose: bool) -> Result<(), jxl::error::Er
         }
     }
     //TODO(firsching): handle frames which are blended together, also within animations.
-    if file_header.image_metadata.animation.is_some() {
+    if let Some(ref animation) = file_header.image_metadata.animation {
         let mut total_duration = 0.0f64;
-        let animation = file_header
-            .image_metadata
-            .animation
-            .as_ref()
-            .expect("This should never fail, it was just check in the if condition above");
         let mut not_is_last = true;
         while not_is_last {
             let frame_header = FrameHeader::read_unconditional(
