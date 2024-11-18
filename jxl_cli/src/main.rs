@@ -5,11 +5,8 @@
 
 use jxl::bit_reader::BitReader;
 use jxl::container::{ContainerParser, ParseEvent};
-use jxl::headers::{
-    encodings::UnconditionalCoder,
-    frame_header::{FrameHeader, FrameHeaderNonserialized},
-    FileHeader,
-};
+use jxl::frame::Frame;
+use jxl::headers::FileHeader;
 use jxl::icc::read_icc;
 use std::env;
 use std::fs;
@@ -19,33 +16,29 @@ use jxl::headers::JxlHeader;
 
 fn parse_jxl_codestream(data: &[u8]) -> Result<(), jxl::error::Error> {
     let mut br = BitReader::new(data);
-    let fh = FileHeader::read(&mut br)?;
-    println!("Image size: {} x {}", fh.size.xsize(), fh.size.ysize());
-    let _icc = if fh.image_metadata.color_encoding.want_icc {
+    let file_header = FileHeader::read(&mut br)?;
+    println!(
+        "Image size: {} x {}",
+        file_header.size.xsize(),
+        file_header.size.ysize()
+    );
+    if file_header.image_metadata.color_encoding.want_icc {
         let r = read_icc(&mut br)?;
-        println!("ICC: {} {:?}", r.len(), r);
-        Some(r)
-    } else {
-        None
+        println!("found {}-byte ICC", r.len());
     };
 
-    let have_timecode = match fh.image_metadata.animation {
-        Some(ref a) => a.have_timecodes,
-        None => false,
-    };
-    let _frame_header = FrameHeader::read_unconditional(
-        &(),
-        &mut br,
-        &FrameHeaderNonserialized {
-            xyb_encoded: fh.image_metadata.xyb_encoded,
-            num_extra_channels: fh.image_metadata.extra_channel_info.len() as u32,
-            extra_channel_info: fh.image_metadata.extra_channel_info,
-            have_animation: fh.image_metadata.animation.is_some(),
-            have_timecode,
-            img_width: fh.size.xsize(),
-            img_height: fh.size.ysize(),
-        },
-    )?;
+    loop {
+        let frame = Frame::new(&mut br, &file_header)?;
+        br.jump_to_byte_boundary()?;
+
+        let section_readers = frame.sections(&mut br)?;
+
+        println!("read frame with {} sections", section_readers.len());
+
+        if frame.header().is_last {
+            break;
+        }
+    }
 
     Ok(())
 }

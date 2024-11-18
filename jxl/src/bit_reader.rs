@@ -154,4 +154,22 @@ impl<'a> BitReader<'a> {
             self.data = &self.data[1..];
         }
     }
+
+    /// Splits off a separate BitReader to handle the next `n` *full* bytes.
+    /// If `self` is not aligned to a byte boundary, it skips to the next byte boundary.
+    /// `self` is automatically advanced by `n` bytes.
+    pub fn split_at(&mut self, n: usize) -> Result<BitReader<'a>, Error> {
+        self.jump_to_byte_boundary()?;
+        let mut ret = Self { ..*self };
+        self.skip_bits(n * 8)?;
+        let bytes_in_buf = ret.bits_in_buf / 8;
+        if n > bytes_in_buf {
+            // Prevent the returned bitreader from over-reading.
+            ret.data = &ret.data[..n - bytes_in_buf];
+        } else {
+            ret.bits_in_buf -= n * 8;
+            ret.bit_buf &= (1u64 << n) - 1;
+        }
+        Ok(ret)
+    }
 }

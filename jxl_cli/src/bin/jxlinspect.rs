@@ -6,9 +6,8 @@
 use clap::{Arg, Command};
 use jxl::bit_reader::BitReader;
 use jxl::container::{ContainerParser, ParseEvent};
+use jxl::frame::Frame;
 use jxl::headers::color_encoding::{ColorEncoding, Primaries, WhitePoint};
-use jxl::headers::encodings::UnconditionalCoder;
-use jxl::headers::frame_header::{FrameHeader, Toc, TocNonserialized};
 use jxl::headers::{FileHeader, JxlHeader};
 use jxl::icc::read_icc;
 use std::cmp::Ordering;
@@ -130,35 +129,20 @@ fn parse_jxl_codestream(data: &[u8], verbose: bool) -> Result<(), jxl::error::Er
     if let Some(ref animation) = file_header.image_metadata.animation {
         let mut total_duration = 0.0f64;
         let mut not_is_last = true;
-        // TODO(firsching): make this an iterator or callback, see comment in #42
         while not_is_last {
-            let frame_header = FrameHeader::read_unconditional(
-                &(),
-                &mut br,
-                &file_header.frame_header_nonserialized(),
-            )
-            .unwrap();
-            let ms = frame_header.duration(animation);
+            let frame = Frame::new(&mut br, &file_header)?;
+            let ms = frame.header().duration(animation);
             total_duration += ms;
             println!(
                 "frame: {:?}x{:?} at position ({},{}), duration {ms}ms",
-                frame_header.width, frame_header.height, frame_header.x0, frame_header.y0
+                frame.header().width,
+                frame.header().height,
+                frame.header().x0,
+                frame.header().y0
             );
-            // Read TOC to skip to next
-            let num_toc_entries = frame_header.num_toc_entries();
-            let toc = Toc::read_unconditional(
-                &(),
-                &mut br,
-                &TocNonserialized {
-                    num_entries: num_toc_entries,
-                },
-            )
-            .unwrap();
-            let entries = toc.entries;
-            let num_bytes_to_skip: u32 = entries.into_iter().sum();
             br.jump_to_byte_boundary()?;
-            not_is_last = !frame_header.is_last;
-            br.skip_bits((num_bytes_to_skip * 8) as usize)?;
+            not_is_last = !frame.is_last();
+            br.skip_bits(frame.total_bytes_in_toc() * 8)?;
         }
         print!(
             "Animation length: {} seconds",

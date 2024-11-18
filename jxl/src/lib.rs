@@ -8,6 +8,7 @@ pub mod bit_reader;
 pub mod container;
 pub mod entropy_coding;
 pub mod error;
+pub mod frame;
 pub mod headers;
 pub mod icc;
 pub mod image;
