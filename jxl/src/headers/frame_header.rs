@@ -256,6 +256,9 @@ pub struct FrameHeaderNonserialized {
     pub img_height: u32,
 }
 
+const H_SHIFT: [usize; 4] = [0, 1, 1, 0];
+const V_SHIFT: [usize; 4] = [0, 1, 0, 1];
+
 #[derive(UnconditionalCoder, Debug, PartialEq)]
 #[nonserialized(FrameHeaderNonserialized)]
 #[aligned]
@@ -417,6 +420,26 @@ pub struct FrameHeader {
     #[default(if frame_height == 0 { nonserialized.img_height } else { frame_height })]
     #[condition(false)]
     pub height: u32,
+
+    #[coder(Bits(0))]
+    #[default({
+        let mut maxhs = 0u32;
+        for ch in jpeg_upsampling {
+            maxhs = maxhs.max(H_SHIFT[ch as usize] as u32);
+        }
+        maxhs})]
+    #[condition(false)]
+    pub maxhs: u32,
+
+    #[coder(Bits(0))]
+    #[default({
+        let mut maxvs = 0u32;
+        for ch in jpeg_upsampling {
+            maxvs = maxvs.max(V_SHIFT[ch as usize] as u32);
+        }
+        maxvs})]
+    #[condition(false)]
+    pub maxvs: u32,
 }
 
 // TODO(firsching): remove once we use this!
@@ -430,22 +453,13 @@ impl FrameHeader {
         const BLOCK_DIM: u32 = 8;
         self.group_dim() * BLOCK_DIM
     }
-
     fn group_counts(&self) -> (usize, usize) {
         const GROUP_DIM: usize = 256;
         const BLOCK_DIM: usize = 8;
-        const H_SHIFT: [usize; 4] = [0, 1, 1, 0];
-        const V_SHIFT: [usize; 4] = [0, 1, 0, 1];
-        let mut maxhs = 0;
-        let mut maxvs = 0;
-        for ch in self.jpeg_upsampling {
-            maxhs = maxhs.max(H_SHIFT[ch as usize]);
-            maxvs = maxvs.max(V_SHIFT[ch as usize]);
-        }
         let xsize = self.width as usize;
         let ysize = self.height as usize;
-        let xsize_blocks = xsize.div_ceil(BLOCK_DIM << maxhs) << maxhs;
-        let ysize_blocks = ysize.div_ceil(BLOCK_DIM << maxvs) << maxvs;
+        let xsize_blocks = xsize.div_ceil(BLOCK_DIM << self.maxhs) << self.maxhs;
+        let ysize_blocks = ysize.div_ceil(BLOCK_DIM << self.maxvs) << self.maxvs;
 
         let group_dim = self.group_dim() as usize;
 
@@ -494,7 +508,38 @@ impl FrameHeader {
     pub fn has_splines(&self) -> bool {
         self.flags & Flags::ENABLE_SPLINES != 0
     }
-
+    pub fn raw_hshift(&self, c: usize) -> usize {
+        H_SHIFT[self.jpeg_upsampling[c as usize] as usize]
+    }
+    pub fn hshift(&self, c: usize) -> usize {
+        (self.maxhs as usize) - self.raw_hshift(c)
+    }
+    pub fn raw_vshift(&self, c: usize) -> usize {
+        V_SHIFT[self.jpeg_upsampling[c as usize] as usize]
+    }
+    pub fn vshift(&self, c: usize) -> usize {
+        (self.maxvs as usize) - self.raw_vshift(c)
+    }
+    pub fn is444(&self) -> bool {
+        self.hshift(0) == 0 && self.vshift(0) == 0 &&  // Cb
+        self.hshift(2) == 0 && self.vshift(2) == 0 &&  // Cr
+        self.hshift(1) == 0 && self.vshift(1) == 0 // Y
+    }
+    pub fn is420(&self) -> bool {
+        self.hshift(0) == 1 && self.vshift(0) == 1 &&  // Cb
+        self.hshift(2) == 1 && self.vshift(2) == 1 &&  // Cr
+        self.hshift(1) == 0 && self.vshift(1) == 0 // Y
+    }
+    pub fn is422(&self) -> bool {
+        self.hshift(0) == 1 && self.vshift(0) == 0 &&  // Cb
+        self.hshift(2) == 1 && self.vshift(2) == 0 &&  // Cr
+        self.hshift(1) == 0 && self.vshift(1) == 0 // Y
+    }
+    pub fn is440(&self) -> bool {
+        self.hshift(0) == 0 && self.vshift(0) == 1 &&  // Cb
+        self.hshift(2) == 0 && self.vshift(2) == 1 &&  // Cr
+        self.hshift(1) == 0 && self.vshift(1) == 0 // Y
+    }
     fn check(&self, nonserialized: &FrameHeaderNonserialized) -> Result<(), Error> {
         if self.upsampling > 1 {
             if let Some((info, upsampling)) = nonserialized
@@ -523,7 +568,12 @@ impl FrameHeader {
         if !self.save_before_ct && !self.full_frame && self.frame_type == FrameType::ReferenceOnly {
             return Err(Error::NonPatchReferenceWithCrop);
         }
-
+        if !self.is444()
+            && ((self.flags & Flags::SKIP_ADAPTIVE_LF_SMOOTHING) != 0)
+            && self.encoding == Encoding::VarDCT
+        {
+            return Err(Error::Non444ChromaSubsampling);
+        }
         Ok(())
     }
 }

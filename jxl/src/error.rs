@@ -82,6 +82,8 @@ pub enum Error {
     NumPassesTooLarge(u32, u32),
     #[error("Non-patch reference frame with a crop")]
     NonPatchReferenceWithCrop,
+    #[error("Non-444 chroma subsampling is not allowed when adaptive DC smoothing is enabled")]
+    Non444ChromaSubsampling,
     #[error("Out of memory: {0}")]
     OutOfMemory(#[from] TryReserveError),
     #[error("Image size too large: {0}x{1}")]
