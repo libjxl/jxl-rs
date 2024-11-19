@@ -563,6 +563,7 @@ impl FrameHeader {
                 self.passes.num_passes,
             ));
         }
+
         if !self.save_before_ct && !self.full_frame && self.frame_type == FrameType::ReferenceOnly {
             return Err(Error::NonPatchReferenceWithCrop);
         }

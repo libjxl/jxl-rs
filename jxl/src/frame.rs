@@ -7,14 +7,18 @@ use crate::{
     bit_reader::BitReader,
     error::Result,
     headers::{
+        color_encoding::ColorSpace,
         encodings::UnconditionalCoder,
+        extra_channels::ExtraChannelInfo,
         frame_header::{Encoding, FrameHeader, Toc, TocNonserialized},
         FileHeader,
     },
     util::tracing_wrappers::*,
 };
+use modular::Tree;
 use quantizer::LfQuantFactors;
 
+mod modular;
 mod quantizer;
 
 #[derive(Debug, PartialEq, Eq)]
@@ -35,13 +39,15 @@ pub struct LfGlobalState {
     // TODO(veluca93), VarDCT: block context map
     // TODO(veluca93), VarDCT: LF color correlation
     // TODO(veluca93): Modular data
+    #[allow(dead_code)]
+    tree: Option<Tree>,
 }
 
 pub struct Frame {
     header: FrameHeader,
     toc: Toc,
-    #[allow(dead_code)]
-    file_header: FileHeader,
+    modular_color_channels: usize,
+    extra_channel_info: Vec<ExtraChannelInfo>,
     lf_global: Option<LfGlobalState>,
 }
 
@@ -60,9 +66,17 @@ impl Frame {
         )
         .unwrap();
         br.jump_to_byte_boundary()?;
+        let modular_color_channels = if frame_header.encoding == Encoding::VarDCT {
+            0
+        } else if file_header.image_metadata.color_encoding.color_space == ColorSpace::Gray {
+            1
+        } else {
+            3
+        };
         Ok(Self {
             header: frame_header,
-            file_header: file_header.clone(),
+            modular_color_channels,
+            extra_channel_info: file_header.image_metadata.extra_channel_info.clone(),
             toc,
             lf_global: None,
         })
@@ -118,6 +132,7 @@ impl Frame {
     #[instrument(skip_all)]
     pub fn decode_lf_global(&mut self, br: &mut BitReader) -> Result<()> {
         assert!(self.lf_global.is_none());
+        trace!(pos = br.total_bits_read());
 
         if self.header.has_patches() {
             info!("decoding patches");
@@ -142,7 +157,19 @@ impl Frame {
             todo!("VarDCT not implemented");
         }
 
-        self.lf_global = Some(LfGlobalState { lf_quant });
+        let tree = if br.read(1)? == 1 {
+            let size_limit = (1024
+                + self.header.width as usize
+                    * self.header.height as usize
+                    * (self.modular_color_channels + self.extra_channel_info.len())
+                    / 16)
+                .min(1 << 22);
+            Some(Tree::read(br, size_limit)?)
+        } else {
+            None
+        };
+
+        self.lf_global = Some(LfGlobalState { lf_quant, tree });
 
         Ok(())
     }
