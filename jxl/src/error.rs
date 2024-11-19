@@ -107,6 +107,18 @@ pub enum Error {
     CopyOfDifferentSize(usize, usize, usize, usize),
     #[error("LF quantization factor is too small: {0}")]
     LfQuantFactorTooSmall(f32),
+    #[error("Invalid modular mode predictor: {0}")]
+    InvalidPredictor(u32),
+    #[error("Invalid modular mode property: {0}")]
+    InvalidProperty(u32),
+    #[error("Modular tree too large: {0}, limit is {1}")]
+    TreeTooLarge(usize, usize),
+    #[error("Modular tree multiplier too large: {0}, limit is {1}")]
+    TreeMultiplierTooLarge(u32, u32),
+    #[error("Modular tree multiplier too large: {0}, multiplier log is {1}")]
+    TreeMultiplierBitsTooLarge(u32, u32),
+    #[error("Modular tree splits on property {0} at value {1}, which is outside the possible range of [{2}, {3}]")]
+    TreeSplitOnEmptyRange(u8, i32, i32, i32),
 }
 
 pub type Result<T, E = Error> = std::result::Result<T, E>;

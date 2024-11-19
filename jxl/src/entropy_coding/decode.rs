@@ -79,6 +79,11 @@ impl<'a> Reader<'a> {
         }
     }
 
+    pub fn read_signed(&mut self, br: &mut BitReader, cluster: usize) -> Result<i32> {
+        let unsigned = self.read(br, cluster)?;
+        Ok(((unsigned >> 1) ^ ((!unsigned) & 1).wrapping_sub(1)) as i32)
+    }
+
     pub fn check_final_state(self) -> Result<()> {
         match self.lz77_config {
             ReaderLz77Config::Disabled(inner) => inner.check_final_state(),

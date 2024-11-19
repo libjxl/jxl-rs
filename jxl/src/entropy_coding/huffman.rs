@@ -3,6 +3,8 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
+use std::fmt::Debug;
+
 use crate::bit_reader::BitReader;
 use crate::entropy_coding::decode::*;
 use crate::error::{Error, Result};
@@ -16,10 +18,16 @@ const CODE_LENGTHS_CODE: usize = 18;
 const DEFAULT_CODE_LENGTH: u8 = 8;
 const CODE_LENGTH_REPEAT_CODE: u8 = 16;
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Clone, Copy)]
 struct TableEntry {
     bits: u8,
     value: u16,
+}
+
+impl Debug for TableEntry {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}l{}", self.value, self.bits)
+    }
 }
 
 #[derive(Debug)]
@@ -86,6 +94,7 @@ impl Table {
         if !special_4_symbols {
             symbols.sort_unstable();
         };
+        debug!(symbols = ?symbols[..num_symbols]);
         match (num_symbols, special_4_symbols) {
             (1, _) => Ok(vec![
                 TableEntry {
@@ -139,11 +148,11 @@ impl Table {
                     });
                     ret.push(TableEntry {
                         bits: 2,
-                        value: symbols[1],
+                        value: symbols[2],
                     });
                     ret.push(TableEntry {
                         bits: 2,
-                        value: symbols[2],
+                        value: symbols[1],
                     });
                     ret.push(TableEntry {
                         bits: 2,
@@ -259,7 +268,7 @@ impl Table {
         Ok(code_lengths)
     }
 
-    #[instrument(level = "debug", ret, err)]
+    #[instrument(level = "trace", ret, err)]
     fn build(root_bits: usize, code_lengths: &[u8]) -> Result<Vec<TableEntry>> {
         if code_lengths.len() > 1 << HUFFMAN_MAX_BITS {
             return Err(Error::InvalidHuffman);
@@ -387,7 +396,7 @@ impl Table {
         Ok(table)
     }
 
-    #[instrument(level = "debug", skip(br), ret, err)]
+    #[instrument(level = "trace", skip(br), ret, err)]
     pub fn decode(al_size: usize, br: &mut BitReader) -> Result<Table> {
         let entries = if al_size == 1 {
             vec![TableEntry { bits: 0, value: 0 }; TABLE_SIZE]
@@ -422,6 +431,7 @@ impl Table {
                 }
                 let code_lengths =
                     Table::decode_huffman_code_lengths(code_length_code_lengths, al_size, br)?;
+                debug!(?code_lengths);
                 Table::build(TABLE_BITS, &code_lengths)?
             }
         };
