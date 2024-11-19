@@ -5,7 +5,7 @@
 
 use jxl::bit_reader::BitReader;
 use jxl::container::{ContainerParser, ParseEvent};
-use jxl::frame::Frame;
+use jxl::frame::{Frame, Section};
 use jxl::headers::FileHeader;
 use jxl::icc::read_icc;
 use std::env;
@@ -28,12 +28,14 @@ fn parse_jxl_codestream(data: &[u8]) -> Result<(), jxl::error::Error> {
     };
 
     loop {
-        let frame = Frame::new(&mut br, &file_header)?;
+        let mut frame = Frame::new(&mut br, &file_header)?;
         br.jump_to_byte_boundary()?;
 
-        let section_readers = frame.sections(&mut br)?;
+        let mut section_readers = frame.sections(&mut br)?;
 
         println!("read frame with {} sections", section_readers.len());
+
+        frame.decode_lf_global(&mut section_readers[frame.get_section_idx(Section::LfGlobal)])?;
 
         if frame.header().is_last {
             break;

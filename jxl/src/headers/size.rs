@@ -19,7 +19,7 @@ enum AspectRatio {
     Ratio2Over1 = 7,
 }
 
-#[derive(UnconditionalCoder, Debug)]
+#[derive(UnconditionalCoder, Debug, Clone)]
 pub struct Size {
     small: bool,
     #[condition(small)]
@@ -38,7 +38,7 @@ pub struct Size {
     xsize: Option<u32>,
 }
 
-#[derive(UnconditionalCoder, Debug)]
+#[derive(UnconditionalCoder, Debug, Clone)]
 pub struct Preview {
     div8: bool,
     #[condition(div8)]

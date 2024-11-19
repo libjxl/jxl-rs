@@ -54,7 +54,7 @@ pub enum RenderingIntent {
     Absolute,
 }
 
-#[derive(UnconditionalCoder, Debug)]
+#[derive(UnconditionalCoder, Debug, Clone)]
 pub struct CustomXY {
     #[default(0)]
     #[coder(u2S(Bits(19), Bits(19) + 524288, Bits(20) + 1048576, Bits(21) + 2097152))]
@@ -68,7 +68,7 @@ pub struct CustomTransferFunctionNonserialized {
     color_space: ColorSpace,
 }
 
-#[derive(UnconditionalCoder, Debug)]
+#[derive(UnconditionalCoder, Debug, Clone)]
 #[nonserialized(CustomTransferFunctionNonserialized)]
 #[validate]
 pub struct CustomTransferFunction {
@@ -104,7 +104,7 @@ impl CustomTransferFunction {
     }
 }
 
-#[derive(UnconditionalCoder, Debug)]
+#[derive(UnconditionalCoder, Debug, Clone)]
 #[validate]
 pub struct ColorEncoding {
     #[all_default]

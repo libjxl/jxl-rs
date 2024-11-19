@@ -11,7 +11,7 @@ use crate::{
 use jxl_macros::UnconditionalCoder;
 use num_derive::FromPrimitive;
 
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 pub struct Signature;
 
 impl Signature {
@@ -45,7 +45,7 @@ pub enum Orientation {
     Rotate270 = 8,
 }
 
-#[derive(UnconditionalCoder, Debug)]
+#[derive(UnconditionalCoder, Debug, Clone)]
 pub struct Animation {
     #[coder(u2S(100, 1000, Bits(10) + 1, Bits(30) + 1))]
     pub tps_numerator: u32,
@@ -56,7 +56,7 @@ pub struct Animation {
     pub have_timecodes: bool,
 }
 
-#[derive(UnconditionalCoder, Debug)]
+#[derive(UnconditionalCoder, Debug, Clone)]
 #[validate]
 pub struct ToneMapping {
     #[all_default]
@@ -93,7 +93,7 @@ impl ToneMapping {
 
 // TODO(firsching): remove once we use this!
 #[allow(dead_code)]
-#[derive(UnconditionalCoder, Debug)]
+#[derive(UnconditionalCoder, Debug, Clone)]
 pub struct ImageMetadata {
     #[all_default]
     all_default: bool,
