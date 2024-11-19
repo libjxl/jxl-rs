@@ -25,7 +25,7 @@ enum FrameType {
 }
 
 #[derive(UnconditionalCoder, Copy, Clone, PartialEq, Debug, FromPrimitive)]
-enum Encoding {
+pub enum Encoding {
     VarDCT = 0,
     Modular = 1,
 }
@@ -270,7 +270,7 @@ pub struct FrameHeader {
 
     #[coder(Bits(1))]
     #[default(Encoding::VarDCT)]
-    encoding: Encoding,
+    pub encoding: Encoding,
 
     #[default(0)]
     flags: u64,
@@ -431,23 +431,23 @@ impl FrameHeader {
         self.group_dim() * BLOCK_DIM
     }
 
-    pub fn num_toc_entries(&self) -> u32 {
-        const GROUP_DIM: u32 = 256;
-        const BLOCK_DIM: u32 = 8;
-        const H_SHIFT: [u32; 4] = [0, 1, 1, 0];
-        const V_SHIFT: [u32; 4] = [0, 1, 0, 1];
+    fn group_counts(&self) -> (usize, usize) {
+        const GROUP_DIM: usize = 256;
+        const BLOCK_DIM: usize = 8;
+        const H_SHIFT: [usize; 4] = [0, 1, 1, 0];
+        const V_SHIFT: [usize; 4] = [0, 1, 0, 1];
         let mut maxhs = 0;
         let mut maxvs = 0;
         for ch in self.jpeg_upsampling {
             maxhs = maxhs.max(H_SHIFT[ch as usize]);
             maxvs = maxvs.max(V_SHIFT[ch as usize]);
         }
-        let xsize = self.width;
-        let ysize = self.height;
+        let xsize = self.width as usize;
+        let ysize = self.height as usize;
         let xsize_blocks = xsize.div_ceil(BLOCK_DIM << maxhs) << maxhs;
         let ysize_blocks = ysize.div_ceil(BLOCK_DIM << maxvs) << maxvs;
 
-        let group_dim: u32 = self.group_dim();
+        let group_dim = self.group_dim() as usize;
 
         let xsize_groups = xsize.div_ceil(group_dim);
         let ysize_groups = ysize.div_ceil(group_dim);
@@ -457,16 +457,42 @@ impl FrameHeader {
         let num_groups = xsize_groups * ysize_groups;
         let num_dc_groups = xsize_dc_groups * ysize_dc_groups;
 
+        (num_groups, num_dc_groups)
+    }
+
+    pub fn num_groups(&self) -> usize {
+        self.group_counts().0
+    }
+
+    pub fn num_dc_groups(&self) -> usize {
+        self.group_counts().1
+    }
+
+    pub fn num_toc_entries(&self) -> usize {
+        let (num_groups, num_dc_groups) = self.group_counts();
+
         if num_groups == 1 && self.passes.num_passes == 1 {
             1
         } else {
-            2 + num_dc_groups + num_groups
+            2 + num_dc_groups + num_groups * self.passes.num_passes as usize
         }
     }
 
     pub fn duration(&self, animation: &Animation) -> f64 {
         (self.duration as f64) * 1000.0 * (animation.tps_denominator as f64)
             / (animation.tps_numerator as f64)
+    }
+
+    pub fn has_patches(&self) -> bool {
+        self.flags & Flags::ENABLE_PATCHES != 0
+    }
+
+    pub fn has_noise(&self) -> bool {
+        self.flags & Flags::ENABLE_NOISE != 0
+    }
+
+    pub fn has_splines(&self) -> bool {
+        self.flags & Flags::ENABLE_SPLINES != 0
     }
 
     fn check(&self, nonserialized: &FrameHeaderNonserialized) -> Result<(), Error> {
@@ -527,7 +553,7 @@ mod test_frame_header {
             &(),
             &mut br,
             &TocNonserialized {
-                num_entries: num_toc_entries,
+                num_entries: num_toc_entries as u32,
             },
         )
         .unwrap();

@@ -386,7 +386,7 @@ impl<Config, T: UnconditionalCoder<Config>> DefaultedCoder<Config> for T {
 
 // TODO(veluca93): this will likely need to be implemented differently if
 // there are extensions.
-#[derive(Debug, PartialEq, Default)]
+#[derive(Debug, PartialEq, Default, Clone)]
 pub struct Extensions {}
 
 impl UnconditionalCoder<()> for Extensions {

@@ -14,7 +14,7 @@ pub struct CustomTransformDataNonserialized {
 
 // TODO(firsching): remove once we use this!
 #[allow(dead_code)]
-#[derive(UnconditionalCoder, Debug)]
+#[derive(UnconditionalCoder, Debug, Clone)]
 pub struct OpsinInverseMatrix {
     #[all_default]
     #[default(true)]
@@ -320,7 +320,7 @@ const DEFAULT_KERN_8: [f32; 210] = [
 
 // TODO(firsching): remove once we use this!
 #[allow(dead_code)]
-#[derive(UnconditionalCoder, Debug)]
+#[derive(UnconditionalCoder, Debug, Clone)]
 #[nonserialized(CustomTransformDataNonserialized)]
 pub struct CustomTransformData {
     #[all_default]

@@ -21,7 +21,7 @@ pub use image_metadata::*;
 pub use size::Size;
 pub use transform_data::*;
 
-#[derive(UnconditionalCoder, Debug)]
+#[derive(UnconditionalCoder, Debug, Clone)]
 pub struct FileHeader {
     #[allow(dead_code)]
     signature: Signature,

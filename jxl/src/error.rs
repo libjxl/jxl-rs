@@ -103,6 +103,8 @@ pub enum Error {
     PipelineChannelUnused(usize),
     #[error("Trying to copy rects of different size, src: {0}x{1} dst {2}x{3}")]
     CopyOfDifferentSize(usize, usize, usize, usize),
+    #[error("LF quantization factor is too small: {0}")]
+    LfQuantFactorTooSmall(f32),
 }
 
 pub type Result<T, E = Error> = std::result::Result<T, E>;
