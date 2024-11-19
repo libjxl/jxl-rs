@@ -509,13 +509,13 @@ impl FrameHeader {
         self.flags & Flags::ENABLE_SPLINES != 0
     }
     pub fn raw_hshift(&self, c: usize) -> usize {
-        H_SHIFT[self.jpeg_upsampling[c as usize] as usize]
+        H_SHIFT[self.jpeg_upsampling[c] as usize]
     }
     pub fn hshift(&self, c: usize) -> usize {
         (self.maxhs as usize) - self.raw_hshift(c)
     }
     pub fn raw_vshift(&self, c: usize) -> usize {
-        V_SHIFT[self.jpeg_upsampling[c as usize] as usize]
+        V_SHIFT[self.jpeg_upsampling[c] as usize]
     }
     pub fn vshift(&self, c: usize) -> usize {
         (self.maxvs as usize) - self.raw_vshift(c)
