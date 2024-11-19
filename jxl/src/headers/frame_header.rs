@@ -259,6 +259,14 @@ pub struct FrameHeaderNonserialized {
 const H_SHIFT: [usize; 4] = [0, 1, 1, 0];
 const V_SHIFT: [usize; 4] = [0, 1, 0, 1];
 
+fn compute_max(jpeg_upsampling: &[u32], shift_table: &[usize]) -> u32 {
+    jpeg_upsampling
+        .iter()
+        .map(|&ch| shift_table[ch as usize])
+        .max()
+        .unwrap_or(0) as u32
+}
+
 #[derive(UnconditionalCoder, Debug, PartialEq)]
 #[nonserialized(FrameHeaderNonserialized)]
 #[aligned]
@@ -422,22 +430,12 @@ pub struct FrameHeader {
     pub height: u32,
 
     #[coder(Bits(0))]
-    #[default({
-        let mut maxhs = 0u32;
-        for ch in jpeg_upsampling {
-            maxhs = maxhs.max(H_SHIFT[ch as usize] as u32);
-        }
-        maxhs})]
+    #[default(compute_max(&jpeg_upsampling, &H_SHIFT))]
     #[condition(false)]
     pub maxhs: u32,
 
     #[coder(Bits(0))]
-    #[default({
-        let mut maxvs = 0u32;
-        for ch in jpeg_upsampling {
-            maxvs = maxvs.max(V_SHIFT[ch as usize] as u32);
-        }
-        maxvs})]
+    #[default(compute_max(&jpeg_upsampling, &V_SHIFT))]
     #[condition(false)]
     pub maxvs: u32,
 }
