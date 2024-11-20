@@ -451,37 +451,29 @@ impl FrameHeader {
         const BLOCK_DIM: u32 = 8;
         self.group_dim() * BLOCK_DIM
     }
-    fn group_counts(&self) -> (usize, usize) {
-        const GROUP_DIM: usize = 256;
-        const BLOCK_DIM: usize = 8;
+    pub fn num_groups(&self) -> usize {
         let xsize = self.width as usize;
         let ysize = self.height as usize;
-        let xsize_blocks = xsize.div_ceil(BLOCK_DIM << self.maxhs) << self.maxhs;
-        let ysize_blocks = ysize.div_ceil(BLOCK_DIM << self.maxvs) << self.maxvs;
-
         let group_dim = self.group_dim() as usize;
-
         let xsize_groups = xsize.div_ceil(group_dim);
         let ysize_groups = ysize.div_ceil(group_dim);
-        let xsize_dc_groups = xsize_blocks.div_ceil(group_dim);
-        let ysize_dc_groups = ysize_blocks.div_ceil(group_dim);
-
-        let num_groups = xsize_groups * ysize_groups;
-        let num_dc_groups = xsize_dc_groups * ysize_dc_groups;
-
-        (num_groups, num_dc_groups)
-    }
-
-    pub fn num_groups(&self) -> usize {
-        self.group_counts().0
+        xsize_groups * ysize_groups
     }
 
     pub fn num_dc_groups(&self) -> usize {
-        self.group_counts().1
+        const BLOCK_DIM: usize = 8;
+
+        let xsize_blocks = (self.width as usize).div_ceil(BLOCK_DIM << self.maxhs) << self.maxhs;
+        let ysize_blocks = (self.height as usize).div_ceil(BLOCK_DIM << self.maxvs) << self.maxvs;
+        let group_dim = self.group_dim() as usize;
+        let xsize_dc_groups = xsize_blocks.div_ceil(group_dim);
+        let ysize_dc_groups = ysize_blocks.div_ceil(group_dim);
+        xsize_dc_groups * ysize_dc_groups
     }
 
     pub fn num_toc_entries(&self) -> usize {
-        let (num_groups, num_dc_groups) = self.group_counts();
+        let num_groups = self.num_groups();
+        let num_dc_groups = self.num_dc_groups();
 
         if num_groups == 1 && self.passes.num_passes == 1 {
             1
