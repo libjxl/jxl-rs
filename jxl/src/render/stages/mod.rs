@@ -5,8 +5,9 @@
 
 mod convert;
 mod save;
-mod upsample;
+mod chroma_upsample;
+mod upsample2;
 
 pub use convert::*;
 pub use save::*;
-pub use upsample::*;
+pub use chroma_upsample::*;
