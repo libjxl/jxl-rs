@@ -88,6 +88,7 @@ pub trait RenderPipelineStage: Any + std::fmt::Display {
         &mut self,
         position: (usize, usize),
         xsize: usize,
+        // one for each channel
         row: &mut [<Self::Type as RenderPipelineStageInfo>::RowType<'_>],
     );
 
@@ -111,7 +112,6 @@ pub trait RenderPipelineBuilder: Sized {
     fn build(self) -> Result<Self::RenderPipeline>;
 }
 
-#[allow(dead_code)]
 pub struct GroupFillInfo<F> {
     group_id: usize,
     num_filled_passes: usize,
