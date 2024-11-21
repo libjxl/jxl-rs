@@ -130,7 +130,6 @@ struct RestorationFilterNonserialized {
 #[derive(UnconditionalCoder, Debug, PartialEq)]
 #[nonserialized(RestorationFilterNonserialized)]
 struct RestorationFilter {
-    #[all_default]
     #[default(true)]
     all_default: bool,
 
@@ -273,7 +272,6 @@ fn compute_jpeg_shift(jpeg_upsampling: &[u32], shift_table: &[usize]) -> u32 {
 #[validate]
 pub struct FrameHeader {
     #[all_default]
-    #[default(true)]
     all_default: bool,
 
     #[default(FrameType::RegularFrame)]

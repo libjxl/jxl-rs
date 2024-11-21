@@ -317,7 +317,11 @@ impl Field {
                     if num != 0 {
                         abort!(f, "all_default is not the first field");
                     }
+                    if default.is_some() {
+                        abort!(f, "all_default has an implicit default");
+                    }
                     is_all_default = true;
+                    default = Some(quote! { true });
                 }
                 Some("select_coder") => {
                     if select_coder.is_some() {

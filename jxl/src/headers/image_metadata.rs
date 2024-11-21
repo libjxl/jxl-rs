@@ -60,7 +60,6 @@ pub struct Animation {
 #[validate]
 pub struct ToneMapping {
     #[all_default]
-    #[default(true)]
     pub all_default: bool,
     #[default(255.0)]
     pub intensity_target: f32,

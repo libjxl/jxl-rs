@@ -108,7 +108,6 @@ impl CustomTransferFunction {
 #[validate]
 pub struct ColorEncoding {
     #[all_default]
-    #[default(true)]
     // TODO(firsching): remove once we use this!
     #[allow(dead_code)]
     all_default: bool,
