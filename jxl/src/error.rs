@@ -113,6 +113,8 @@ pub enum Error {
     InvalidProperty(u32),
     #[error("Modular tree too large: {0}, limit is {1}")]
     TreeTooLarge(usize, usize),
+    #[error("Modular tree too tall: {0}, limit is {1}")]
+    TreeTooTall(usize, usize),
     #[error("Modular tree multiplier too large: {0}, limit is {1}")]
     TreeMultiplierTooLarge(u32, u32),
     #[error("Modular tree multiplier too large: {0}, multiplier log is {1}")]
