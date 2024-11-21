@@ -153,7 +153,14 @@ impl Tree {
         let mut property_ranges = vec![];
         property_ranges.try_reserve(num_properties * tree.len())?;
         property_ranges.resize(num_properties * tree.len(), (i32::MIN, i32::MAX));
+        let mut height = vec![];
+        height.try_reserve(tree.len())?;
+        height.resize(tree.len(), 0);
         for i in 0..tree.len() {
+            const HEIGHT_LIMIT: usize = 2048;
+            if height[i] > HEIGHT_LIMIT {
+                return Err(Error::TreeTooLarge(height[i], HEIGHT_LIMIT));
+            }
             if let TreeNode::Split {
                 property,
                 val,
@@ -161,6 +168,8 @@ impl Tree {
                 right,
             } = tree[i]
             {
+                height[left as usize] = height[i] + 1;
+                height[right as usize] = height[i] + 1;
                 for p in 0..num_properties {
                     if p == property as usize {
                         let (l, u) = property_ranges[i * num_properties + p];
