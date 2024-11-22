@@ -3,6 +3,8 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
+//TODO(firsching): implement Upsample4x and Upsample8x -- use templates
+
 use crate::{
     headers::CustomTransformData,
     render::{RenderPipelineInOutStage, RenderPipelineStage},
