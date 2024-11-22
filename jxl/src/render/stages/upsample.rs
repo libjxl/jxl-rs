@@ -85,7 +85,6 @@ impl RenderPipelineStage for Upsample2x {
 mod test {
     use super::*;
     use crate::{error::Result, image::Image, render::test::make_and_run_simple_pipeline};
-    use rand::SeedableRng;
     use test_log::test;
 
     #[test]
