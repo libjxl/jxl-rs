@@ -54,7 +54,8 @@ impl RenderPipelineStage for Upsample2x {
     fn uses_channel(&self, c: usize) -> bool {
         c == self.channel
     }
-    // Takes a 5x5 area and upsamples it to 10x10 using the kernel.
+    /// Processes a chunk of a row, applying 2x2 upsampling using a 5x5 kernel.
+    /// Each input value expands into a 2x2 region in the output, based on neighboring inputs.
     fn process_row_chunk(
         &mut self,
         _position: (usize, usize),
