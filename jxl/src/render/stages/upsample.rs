@@ -11,7 +11,7 @@ use crate::{
 };
 
 pub struct Upsample2x {
-    kernel: [[[[f32; 5]; 5]; 1]; 1],
+    kernel: [[[[f32; 5]; 5]; 2]; 2],
     channel: usize,
 }
 
@@ -20,7 +20,7 @@ impl Upsample2x {
     pub fn new(ups_factors: &CustomTransformData, channel: usize) -> Upsample2x {
         let weights = ups_factors.weights2;
         let n = 1;
-        let mut kernel = [[[[0.0; 5]; 5]; 1]; 1];
+        let mut kernel = [[[[0.0; 5]; 5]; 2]; 2];
         for i in 0..5 * n {
             for j in 0..5 * n {
                 let y = i.min(j);
@@ -29,15 +29,18 @@ impl Upsample2x {
                 let x = x as isize;
                 let n = n as isize;
                 let index = (5 * n * y - y * (y - 1) / 2 + x - y) as usize;
+                // Filling in the top left corner from the weights
                 kernel[j / 5][i / 5][j % 5][i % 5] = weights[index];
+                // Mirroring to get the rest of the kernel.
+                kernel[(n as usize) + j / 5][i / 5][4 - (j % 5)][i % 5] = weights[index];
+                kernel[j / 5][(n as usize) + i / 5][j % 5][4 - (i % 5)] = weights[index];
+                kernel[(n as usize) + j / 5][(n as usize) + i / 5][4 - (j % 5)][4 - (i % 5)] =
+                    weights[index];
             }
         }
         Upsample2x { kernel, channel }
     }
-    pub fn kernel(&self, x: usize, y: usize, ix: usize, iy: usize) -> f32 {
-        self.kernel[0][0][if y % 2 == 0 { iy } else { 4 - iy }]
-            [if x % 2 == 0 { ix } else { 4 - ix }]
-    }
+
 }
 
 impl std::fmt::Display for Upsample2x {
@@ -71,7 +74,7 @@ impl RenderPipelineStage for Upsample2x {
                     for i in 0..5 {
                         for j in 0..5 {
                             let input_value = input[i][j + x];
-                            output_val += input_value * self.kernel(di, dj, i % 5, j % 5);
+                            output_val += input_value * self.kernel[di][dj][i % 5][j % 5];
                         }
                     }
                     output[di][dj + 2 * x] = output_val;
