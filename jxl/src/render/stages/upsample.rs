@@ -121,7 +121,7 @@ mod test {
     fn test_upsample2() -> Result<()> {
         let mut input = Image::new((7, 7))?;
         // Put a single "1.0" in the middle of the image.
-        input.as_rect_mut().row(3)[3] = 1.0;
+        input.as_rect_mut().row(3)[3] = 1.0f32;
         let ups_factors = CustomTransformData::default();
         let stage = Upsample2x::new(&ups_factors, 0);
         let output: Vec<Image<f32>> =
