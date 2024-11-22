@@ -16,6 +16,7 @@ pub struct Upsample2x {
 }
 
 impl Upsample2x {
+    #[allow(dead_code)]
     pub fn new(ups_factors: &CustomTransformData, channel: usize) -> Upsample2x {
         // don't copy
         let weights = ups_factors.weights2;
