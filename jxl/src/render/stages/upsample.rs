@@ -99,6 +99,24 @@ mod test {
     }
 
     #[test]
+    fn upsample2x_constant() -> Result<()> {
+        let ups_factors = CustomTransformData::default();
+        let image_size = (238, 412);
+        let input_size = (image_size.0 / 2, image_size.1 / 2);
+        let val = 0.777f32;
+        let input = Image::new_constant(input_size, val)?;
+        let stage = Upsample2x::new(&ups_factors, 0);
+        let output: Vec<Image<f32>> =
+            make_and_run_simple_pipeline(stage, &[input], image_size, 123)?.1;
+        for x in 0..image_size.0 {
+            for y in 0..image_size.1 {
+                assert!((output[0].as_rect().row(y)[x] - val).abs() <= 0.0000001);
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
     fn test_upsample2() -> Result<()> {
         let mut input = Image::new((7, 7))?;
         // Put a single "1.0" in the middle of the image.
