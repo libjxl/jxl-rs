@@ -85,7 +85,18 @@ impl RenderPipelineStage for Upsample2x {
 mod test {
     use super::*;
     use crate::{error::Result, image::Image, render::test::make_and_run_simple_pipeline};
+    use rand::SeedableRng;
     use test_log::test;
+
+    #[test]
+    fn upsample2x_consistency() -> Result<()> {
+        let ups_factors = CustomTransformData::default();
+        crate::render::test::test_stage_consistency::<_, f32, f32>(
+            Upsample2x::new(&ups_factors, 0),
+            (500, 500),
+            1,
+        )
+    }
 
     #[test]
     fn test_upsample2() -> Result<()> {
