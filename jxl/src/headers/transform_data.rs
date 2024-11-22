@@ -323,7 +323,6 @@ const DEFAULT_KERN_8: [f32; 210] = [
 #[nonserialized(CustomTransformDataNonserialized)]
 pub struct CustomTransformData {
     #[all_default]
-    #[default(true)]
     all_default: bool,
     #[condition(nonserialized.xyb_encoded)]
     #[default(OpsinInverseMatrix::default())]
