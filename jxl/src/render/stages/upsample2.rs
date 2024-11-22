@@ -14,27 +14,20 @@ pub struct Upsample2x {
 }
 
 impl Upsample2x {
-    pub fn new(ups_factors: CustomTransformData, channel: usize) -> Upsample2x {
+    pub fn new(ups_factors: &CustomTransformData, channel: usize) -> Upsample2x {
         // don't copy
-        let cloned_ups_factors = ups_factors.clone();
-        let weights = cloned_ups_factors.weights2;
+        let weights = ups_factors.weights2;
         let n = 1;
         let mut kernel = [[[[0.0; 5]; 5]; 1]; 1];
         for i in 0..5 * n {
             for j in 0..5 * n {
                 let y = i.min(j);
                 let x = i.max(j);
-                //println!("n:{n}, x:{x}, y:{y}");
                 let y = y as isize;
                 let x = x as isize;
                 let n = n as isize;
                 let index = (5 * n * y - y * (y - 1) / 2 + x - y) as usize;
-                //println!(
-                //    "index: {index} n: {}, x: {}, y: {}, i:{}, j:{}",
-                //    n, x, y, i, j
-                //);
                 kernel[j / 5][i / 5][j % 5][i % 5] = weights[index];
-                //println!("weight: {:}", weights[index]);
             }
         }
         Upsample2x { kernel, channel }
@@ -66,39 +59,23 @@ impl RenderPipelineStage for Upsample2x {
     ) {
         let n = 2;
         let (input, output) = &mut row[0];
-        println!("output size: {}, {}", output.len(), output[0].len());
 
-        // Iterate over the input rows and columns
-        for i in 0..5 {
-            for j in 0..5 {
-                let input_value = input[i][j];
-                if input_value != 0.0 {
-                    println!("saw non_zero input!");
-                }
-
-                // Upsample this input value into a 2x2 region in the output
-                for di in 0..n {
-                    for dj in 0..n {
-                        let oi = n * i + di;
-                        let oj = n * j + dj;
-
-                        if oi < output.len() && oj < output[oi].len() {
-                            output[oi][oj] += input_value * self.kernel(di, dj, i % 5, j % 5);
-                        } else {
-                            println!("shouldn't happen!?");
-                            println!("oi{oi}, oj{oj}, n{n}, i{i}, ,j{j} di{di},.dj{dj}");
+        for x in 0..xsize {
+            // Upsample this input value into a 2x2 region in the output
+            for di in 0..n {
+                for dj in 0..n {
+                    let mut output_val = 0.0f32;
+                    // Iterate over the input rows and columns
+                    for i in 0..5 {
+                        for j in 0..5 {
+                            let input_value = input[i][j + x];
+                            output_val += input_value * self.kernel(di, dj, i % 5, j % 5);
                         }
                     }
+                    output[di][dj + 2 * x] = output_val;
                 }
             }
         }
-    }
-    fn new_size(&self, current_size: (usize, usize)) -> (usize, usize) {
-        (2 * current_size.0, 2 * current_size.1)
-    }
-
-    fn original_data_origin(&self) -> (usize, usize) {
-        (4, 4)
     }
 }
 
@@ -106,34 +83,40 @@ impl RenderPipelineStage for Upsample2x {
 mod test {
     use super::*;
     use crate::{error::Result, image::Image, render::test::make_and_run_simple_pipeline};
-    use rand::SeedableRng;
     use test_log::test;
 
     #[test]
     fn test_upsample2() -> Result<()> {
-        let mut input = Image::new((5, 5))?;
+        let mut input = Image::new((7, 7))?;
+        // Put a single "1.0" in the middle of the image.
         input
             .as_rect_mut()
-            .row(2)
-            .copy_from_slice(&[0.0f32, 0.0, 10.0, 0.0, 0.0]);
-        for i in 0..5 {
-            println!("row{i}: {:?}", input.as_rect().row(i));
-        }
+            .row(3)
+            .copy_from_slice(&[0.0f32, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0]);
         let ups_factors = CustomTransformData::default();
-        let stage = Upsample2x::new(ups_factors, 0);
+        let stage = Upsample2x::new(&ups_factors, 0);
         let output: Vec<Image<f32>> =
-            make_and_run_simple_pipeline(stage, &[input], (5, 5), 512)?.1;
-        assert_eq!(output[0].as_rect().size(), (10, 10));
-        println!("{:?}", output[0].as_rect());
-
-        for i in 0..10 {
-            println!("row{i}: {:?}", output[0].as_rect().row(i));
+            make_and_run_simple_pipeline(stage, &[input], (14, 14), 77)?.1;
+        assert_eq!(output[0].as_rect().size(), (14, 14));
+        // Check we have a border with zeros
+        for i in 0..14 {
+            for j in 0..2 {
+                assert_eq!(output[0].as_rect().row(j)[i], 0.0);
+                assert_eq!(output[0].as_rect().row(i)[j], 0.0);
+                assert_eq!(output[0].as_rect().row(13 - j)[i], 0.0);
+                assert_eq!(output[0].as_rect().row(i)[13 - j], 0.0);
+            }
         }
-        // TODO: compare to original weights
-        //assert_eq!(
-        //    output[0].as_rect().row(6),
-        //    [1.0, 1.25, 1.75, 2.5, 3.5, 1.0, 1.25, 1.75, 2.5, 3.5]
-        //);
+        // Check the kernel is copied by the "1.0" in the middle
+        for i in 2..12 {
+            for j in 2..12 {
+                // TODO(firsching): check more specifically what weights maps to what output. Also don't perhaps use equality of floats here.
+                assert!(ups_factors
+                    .weights2
+                    .contains(&output[0].as_rect().row(i)[j]))
+            }
+        }
+
         Ok(())
     }
 }
