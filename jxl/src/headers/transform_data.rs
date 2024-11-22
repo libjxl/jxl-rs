@@ -7,7 +7,7 @@
 
 use crate::{bit_reader::BitReader, error::Error, headers::encodings::*};
 use jxl_macros::UnconditionalCoder;
-
+#[derive(Default)]
 pub struct CustomTransformDataNonserialized {
     pub xyb_encoded: bool,
 }
@@ -332,11 +332,11 @@ pub struct CustomTransformData {
     custom_weight_mask: u32,
     #[condition((custom_weight_mask & 1) != 0)]
     #[default(DEFAULT_KERN_2)]
-    weights2: [f32; 15],
+    pub weights2: [f32; 15],
     #[condition((custom_weight_mask & 2) != 0)]
     #[default(DEFAULT_KERN_4)]
-    weights4: [f32; 55],
+    pub weights4: [f32; 55],
     #[condition((custom_weight_mask & 4) != 0)]
     #[default(DEFAULT_KERN_8)]
-    weights8: [f32; 210],
+    pub weights8: [f32; 210],
 }
