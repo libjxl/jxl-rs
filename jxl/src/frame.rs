@@ -15,10 +15,10 @@ use crate::{
     },
     util::tracing_wrappers::*,
 };
-use modular::Tree;
+use modular::{FullModularImage, Tree};
 use quantizer::LfQuantFactors;
 
-mod modular;
+pub mod modular;
 mod quantizer;
 
 #[derive(Debug, PartialEq, Eq)]
@@ -29,18 +29,17 @@ pub enum Section {
     Hf(usize, usize), // group, pass
 }
 
+#[allow(dead_code)]
 pub struct LfGlobalState {
     // TODO(veluca93): patches
     // TODO(veluca93): splines
     // TODO(veluca93): noise
-    #[allow(dead_code)]
     lf_quant: LfQuantFactors,
     // TODO(veluca93), VarDCT: HF quant matrices
     // TODO(veluca93), VarDCT: block context map
     // TODO(veluca93), VarDCT: LF color correlation
-    // TODO(veluca93): Modular data
-    #[allow(dead_code)]
     tree: Option<Tree>,
+    modular_global: FullModularImage,
 }
 
 pub struct Frame {
@@ -121,9 +120,9 @@ impl Frame {
             match section {
                 Section::LfGlobal => 0,
                 Section::Lf(a) => 1 + a,
-                Section::HfGlobal => self.header.num_dc_groups() + 1,
+                Section::HfGlobal => self.header.num_lf_groups() + 1,
                 Section::Hf(group, pass) => {
-                    2 + self.header.num_dc_groups() + self.header.num_groups() * pass + group
+                    2 + self.header.num_lf_groups() + self.header.num_groups() * pass + group
                 }
             }
         }
@@ -169,7 +168,19 @@ impl Frame {
             None
         };
 
-        self.lf_global = Some(LfGlobalState { lf_quant, tree });
+        let modular_global = FullModularImage::read(
+            &self.header,
+            self.modular_color_channels,
+            &self.extra_channel_info,
+            &tree,
+            br,
+        )?;
+
+        self.lf_global = Some(LfGlobalState {
+            lf_quant,
+            tree,
+            modular_global,
+        });
 
         Ok(())
     }
