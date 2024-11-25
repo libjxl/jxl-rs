@@ -90,7 +90,6 @@ mod test {
     use super::*;
     use crate::{error::Result, image::Image, render::test::make_and_run_simple_pipeline};
     use jxl_test_utils::assert_almost_eq;
-    use jxl_test_utils::almost_equal;
     use test_log::test;
 
     #[test]

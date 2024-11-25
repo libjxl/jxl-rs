@@ -1,28 +1,22 @@
-use std::panic;
-
-/// Generic helper function for comparing values with a maximum error margin.
-/// Works for types that implement `Sub` and `PartialOrd`
-pub fn almost_equal<T>(a: T, b: T, max_error: T) -> bool
-where
-    T: std::ops::Sub<Output = T> + PartialOrd + Copy,
-{
-    let diff = if a > b { a - b } else { b - a };
-    diff <= max_error
-}
-
 #[macro_export]
 macro_rules! assert_almost_eq {
-    ($a:expr, $b:expr, $max_error:expr $(,)?) => {{
-        let left = $a;
-        let right = $b;
-        let max_error = $max_error;
-        if !(almost_equal(left, right, max_error)) {
-            panic!(
-                "assertion failed: `(left ≈ right)`\n  left: `{:?}`,\n right: `{:?}`,\n max_error: `{:?}`",
-                left, right, max_error
-            );
+    ($left:expr, $right:expr, $max_error:expr $(,)?) => {
+        match (&$left, &$right) {
+            (left_val, right_val) => {
+                let diff = if *left_val > *right_val {
+                    *left_val - *right_val
+                } else {
+                    *right_val - *left_val
+                };
+                if !(diff <= $max_error) {
+                    panic!(
+                        "assertion failed: `(left ≈ right)`\n  left: `{:?}`,\n right: `{:?}`,\n max_error: `{:?}`",
+                        left_val, right_val, $max_error
+                    );
+                }
+            }
         }
-    }};
+    };
 }
 
 #[cfg(test)]
