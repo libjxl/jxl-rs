@@ -13,4 +13,5 @@ pub mod headers;
 pub mod icc;
 pub mod image;
 pub mod render;
-mod util;
+#[macro_use]
+pub mod util;
