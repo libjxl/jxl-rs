@@ -88,7 +88,10 @@ impl RenderPipelineStage for Upsample2x {
 mod test {
     use super::*;
     //use util::test::assert_almost_eq;
-    use crate::{error::Result, image::Image, render::test::make_and_run_simple_pipeline, util::test::assert_almost_eq};
+    use crate::{
+        error::Result, image::Image, render::test::make_and_run_simple_pipeline,
+        util::test::assert_almost_eq,
+    };
     use test_log::test;
 
     #[test]

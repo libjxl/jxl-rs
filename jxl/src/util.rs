@@ -17,4 +17,3 @@ pub use bits::*;
 pub use concat_slice::*;
 pub use log2::*;
 pub use shift_right_ceil::*;
-
