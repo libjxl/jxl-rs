@@ -296,7 +296,7 @@ pub struct FrameHeader {
     #[coder(u2S(1, 2, 4, 8))]
     #[default(1)]
     #[condition(flags & Flags::USE_LF_FRAME == 0)]
-    upsampling: u32,
+    pub upsampling: u32,
 
     #[size_coder(explicit(nonserialized.num_extra_channels))]
     #[coder(u2S(1, 2, 4, 8))]
@@ -441,37 +441,27 @@ pub struct FrameHeader {
 // TODO(firsching): remove once we use this!
 #[allow(dead_code)]
 impl FrameHeader {
-    fn group_dim(&self) -> u32 {
-        const GROUP_DIM: u32 = 256;
-        (GROUP_DIM >> 1) << self.group_size_shift
+    const GROUP_DIM: usize = 256;
+    const BLOCK_DIM: usize = 8;
+
+    fn group_dim(&self) -> usize {
+        (Self::GROUP_DIM >> 1) << self.group_size_shift
     }
-    fn dc_group_dim(&self) -> u32 {
-        const BLOCK_DIM: u32 = 8;
-        self.group_dim() * BLOCK_DIM
+    fn dc_group_dim(&self) -> usize {
+        self.group_dim() * Self::BLOCK_DIM
     }
+
     pub fn num_groups(&self) -> usize {
-        let xsize = self.width as usize;
-        let ysize = self.height as usize;
-        let group_dim = self.group_dim() as usize;
-        let xsize_groups = xsize.div_ceil(group_dim);
-        let ysize_groups = ysize.div_ceil(group_dim);
-        xsize_groups * ysize_groups
+        self.size_groups().0 * self.size_groups().1
     }
 
-    pub fn num_dc_groups(&self) -> usize {
-        const BLOCK_DIM: usize = 8;
-
-        let xsize_blocks = (self.width as usize).div_ceil(BLOCK_DIM << self.maxhs) << self.maxhs;
-        let ysize_blocks = (self.height as usize).div_ceil(BLOCK_DIM << self.maxvs) << self.maxvs;
-        let group_dim = self.group_dim() as usize;
-        let xsize_dc_groups = xsize_blocks.div_ceil(group_dim);
-        let ysize_dc_groups = ysize_blocks.div_ceil(group_dim);
-        xsize_dc_groups * ysize_dc_groups
+    pub fn num_lf_groups(&self) -> usize {
+        self.size_lf_groups().0 * self.size_lf_groups().1
     }
 
     pub fn num_toc_entries(&self) -> usize {
         let num_groups = self.num_groups();
-        let num_dc_groups = self.num_dc_groups();
+        let num_dc_groups = self.num_lf_groups();
 
         if num_groups == 1 && self.passes.num_passes == 1 {
             1
@@ -528,6 +518,56 @@ impl FrameHeader {
         self.hshift(2) == 0 && self.vshift(2) == 1 &&  // Cr
         self.hshift(1) == 0 && self.vshift(1) == 0 // Y
     }
+
+    /// The dimensions of this frame, as coded in the codestream, excluding padding pixels.
+    pub fn size(&self) -> (usize, usize) {
+        (
+            (self.width as usize).div_ceil(self.upsampling as usize),
+            (self.height as usize).div_ceil(self.upsampling as usize),
+        )
+    }
+
+    /// The dimensions of this frame, as coded in the codestream, in 8x8 blocks.
+    pub fn size_blocks(&self) -> (usize, usize) {
+        (
+            self.size().0.div_ceil(Self::BLOCK_DIM << self.maxhs) << self.maxhs,
+            self.size().1.div_ceil(Self::BLOCK_DIM << self.maxvs) << self.maxvs,
+        )
+    }
+
+    /// The dimensions of this frame, as coded in the codestream but including padding pixels.
+    pub fn size_padded(&self) -> (usize, usize) {
+        if self.encoding == Encoding::Modular {
+            self.size()
+        } else {
+            (
+                self.size_blocks().0 * Self::BLOCK_DIM,
+                self.size_blocks().1 * Self::BLOCK_DIM,
+            )
+        }
+    }
+
+    /// The dimensions of this frame, after upsampling.
+    pub fn size_upsampled(&self) -> (usize, usize) {
+        (self.width as usize, self.height as usize)
+    }
+
+    /// The dimensions of this frame, in groups.
+    pub fn size_groups(&self) -> (usize, usize) {
+        (
+            self.size().0.div_ceil(self.group_dim()),
+            self.size().1.div_ceil(self.group_dim()),
+        )
+    }
+
+    /// The dimensions of this frame, in LF groups.
+    pub fn size_lf_groups(&self) -> (usize, usize) {
+        (
+            self.size_blocks().0.div_ceil(self.group_dim()),
+            self.size_blocks().1.div_ceil(self.group_dim()),
+        )
+    }
+
     fn check(&self, nonserialized: &FrameHeaderNonserialized) -> Result<(), Error> {
         if self.upsampling > 1 {
             if let Some((info, upsampling)) = nonserialized

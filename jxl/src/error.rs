@@ -121,6 +121,12 @@ pub enum Error {
     TreeMultiplierBitsTooLarge(u32, u32),
     #[error("Modular tree splits on property {0} at value {1}, which is outside the possible range of [{2}, {3}]")]
     TreeSplitOnEmptyRange(u8, i32, i32, i32),
+    #[error("Modular stream requested a global tree but there isn't one")]
+    NoGlobalTree,
+    #[error("Invalid transform id")]
+    InvalidTransformId,
+    #[error("Invalid RCT type {0}")]
+    InvalidRCT(u32),
 }
 
 pub type Result<T, E = Error> = std::result::Result<T, E>;
