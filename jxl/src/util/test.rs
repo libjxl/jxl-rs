@@ -27,7 +27,9 @@ macro_rules! assert_almost_eq {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use std::f64::INFINITY;
+    use std::f64::NAN;
+    use std::panic;
 
     #[test]
     fn test_with_floats() {
@@ -44,7 +46,6 @@ mod tests {
 
     #[test]
     fn test_panic() {
-        use std::panic;
         let result = panic::catch_unwind(|| {
             assert_almost_eq!(1.0, 1.2, 0.1);
         });
@@ -60,5 +61,42 @@ mod tests {
             result.is_err(),
             "Expected assert_almost_eq! to panic, but it didn't"
         );
+    }
+    #[test]
+    fn test_nan() {
+        let result = panic::catch_unwind(|| {
+            assert_almost_eq!(NAN, NAN, 0.1);
+        });
+        assert!(
+            result.is_err(),
+            "Expected assert_almost_eq! to panic, but it didn't"
+        );
+
+        let result = panic::catch_unwind(|| {
+            assert_almost_eq!(1.0, 1.0, NAN);
+        });
+        assert!(
+            result.is_err(),
+            "Expected assert_almost_eq! to panic, but it didn't"
+        );
+
+        assert_almost_eq!(1.0, 1.0, INFINITY);
+
+        let result = panic::catch_unwind(|| {
+            assert_almost_eq!(NAN, NAN, INFINITY);
+        });
+        assert!(
+            result.is_err(),
+            "Expected assert_almost_eq! to panic, but it didn't"
+        );
+
+        let result = panic::catch_unwind(|| {
+            assert_almost_eq!(INFINITY, INFINITY, INFINITY);
+        });
+        assert!(
+            result.is_err(),
+            "Expected assert_almost_eq! to panic, but it didn't"
+        );
+
     }
 }
