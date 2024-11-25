@@ -15,6 +15,7 @@ array-init = "2.0.0"
 half = "1.7.1"
 tracing = { version = "0.1.40", optional = true }
 jxl_macros = { path = "../jxl_macros" }
+jxl_test_utils = {path = "../jxl_test_utils" }
 
 [dev-dependencies]
 arbtest = "0.3.1"

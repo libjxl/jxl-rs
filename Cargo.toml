@@ -2,7 +2,7 @@
 debug = true
 
 [workspace]
-members = ["jxl", "jxl_cli", "jxl_macros"]
+members = ["jxl", "jxl_cli", "jxl_macros", "jxl_test_utils"]
 resolver = "2"
 
 [workspace.lints.clippy]

@@ -86,8 +86,11 @@ impl RenderPipelineStage for Upsample2x {
 
 #[cfg(test)]
 mod test {
+    //use jxl_test_utils::assert_almost_equal;
     use super::*;
     use crate::{error::Result, image::Image, render::test::make_and_run_simple_pipeline};
+    use jxl_test_utils::assert_almost_eq;
+    use jxl_test_utils::almost_equal;
     use test_log::test;
 
     #[test]
@@ -112,7 +115,7 @@ mod test {
             make_and_run_simple_pipeline(stage, &[input], image_size, 123)?.1;
         for x in 0..image_size.0 {
             for y in 0..image_size.1 {
-                assert!((output[0].as_rect().row(y)[x] - val).abs() <= 0.0000001);
+                assert_almost_eq!(output[0].as_rect().row(y)[x], val, 0.0000001);
             }
         }
         Ok(())

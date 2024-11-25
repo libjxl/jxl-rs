@@ -185,6 +185,7 @@ dependencies = [
  "byteorder",
  "half",
  "jxl_macros",
+ "jxl_test_utils",
  "num-derive",
  "num-traits",
  "rand",
@@ -212,6 +213,10 @@ dependencies = [
  "quote",
  "syn 1.0.109",
 ]
+
+[[package]]
+name = "jxl_test_utils"
+version = "0.1.0"
 
 [[package]]
 name = "lazy_static"
