@@ -6,18 +6,19 @@
 #[macro_export]
 macro_rules! assert_almost_eq {
     ($left:expr, $right:expr, $max_error:expr $(,)?) => {
-        match (&$left, &$right) {
-            (left_val, right_val) => {
+        match (&$left, &$right, &$max_error) {
+            (left_val, right_val, max_error) => {
                 let diff = if *left_val > *right_val {
                     *left_val - *right_val
                 } else {
                     *right_val - *left_val
                 };
-                if !(diff <= $max_error) {
-                    panic!(
+                match diff.partial_cmp(max_error) {
+                    Some(std::cmp::Ordering::Greater) | None => panic!(
                         "assertion failed: `(left ≈ right)`\n  left: `{:?}`,\n right: `{:?}`,\n max_error: `{:?}`",
-                        left_val, right_val, $max_error
-                    );
+                        left_val, right_val, max_error
+                    ),
+                    _ => {}
                 }
             }
         }
