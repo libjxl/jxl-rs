@@ -13,4 +13,4 @@ pub mod headers;
 pub mod icc;
 pub mod image;
 pub mod render;
-mod util;
+pub mod util;
