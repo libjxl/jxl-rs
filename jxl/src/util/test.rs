@@ -97,6 +97,5 @@ mod tests {
             result.is_err(),
             "Expected assert_almost_eq! to panic, but it didn't"
         );
-
     }
 }
