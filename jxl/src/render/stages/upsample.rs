@@ -123,6 +123,7 @@ mod test {
 
     #[test]
     fn test_upsample2() -> Result<()> {
+        let eps = 0.0000001;
         let mut input = Image::new((7, 7))?;
         // Put a single "1.0" in the middle of the image.
         input.as_rect_mut().row(3)[3] = 1.0f32;
@@ -134,19 +135,37 @@ mod test {
         // Check we have a border with zeros
         for i in 0..14 {
             for j in 0..2 {
-                assert_eq!(output[0].as_rect().row(j)[i], 0.0);
-                assert_eq!(output[0].as_rect().row(i)[j], 0.0);
-                assert_eq!(output[0].as_rect().row(13 - j)[i], 0.0);
-                assert_eq!(output[0].as_rect().row(i)[13 - j], 0.0);
+                assert_almost_eq!(output[0].as_rect().row(j)[i], 0.0, eps);
+                assert_almost_eq!(output[0].as_rect().row(i)[j], 0.0, eps);
+                assert_almost_eq!(output[0].as_rect().row(13 - j)[i], 0.0, eps);
+                assert_almost_eq!(output[0].as_rect().row(i)[13 - j], 0.0, eps);
             }
         }
-        // Check the kernel is copied by the "1.0" in the middle
-        for i in 2..12 {
-            for j in 2..12 {
-                // TODO(firsching): check more specifically what weights maps to what output. Also don't perhaps use equality of floats here.
-                assert!(ups_factors
-                    .weights2
-                    .contains(&output[0].as_rect().row(i)[j]))
+        // Define the mapping for the symmetric top-left kernel
+        let index_map = [
+            [0, 1, 2, 3, 4],
+            [1, 5, 6, 7, 8],
+            [2, 6, 9, 10, 11],
+            [3, 7, 10, 12, 13],
+            [4, 8, 11, 13, 14],
+        ];
+
+        // Validate weights from the kernel
+        let kernel_size = 5;
+        let kernel_offset = 2;
+        let weights = &ups_factors.weights2;
+        for di in 0..2 {
+            for dj in 0..2 {
+                for i in 0..kernel_size {
+                    for j in 0..kernel_size {
+                        let output_value = output[0].as_rect().row(kernel_offset + di + 2 * i)
+                            [kernel_offset + dj + 2 * j];
+                        let mapped_i = if di == 0 { kernel_size - 1 - i } else { i };
+                        let mapped_j = if dj == 0 { kernel_size - 1 - j } else { j };
+                        let weight_index = index_map[mapped_i][mapped_j];
+                        assert_almost_eq!(output_value, weights[weight_index], eps);
+                    }
+                }
             }
         }
 
