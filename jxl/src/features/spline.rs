@@ -69,12 +69,12 @@ struct SplineSegment {
 
 #[derive(Debug, Default)]
 pub struct Splines {
-    quantization_adjustment_: i32,
-    splines_: Vec<QuantizedSpline>,
-    starting_points_: Vec<Point>,
-    segments_: Vec<SplineSegment>,
-    segment_indices_: Vec<usize>,
-    segment_y_start_: Vec<usize>,
+    quantization_adjustment: i32,
+    splines: Vec<QuantizedSpline>,
+    starting_points: Vec<Point>,
+    segments: Vec<SplineSegment>,
+    segment_indices: Vec<usize>,
+    segment_y_start: Vec<usize>,
 }
 
 impl Splines {
@@ -84,26 +84,19 @@ impl Splines {
         starting_points: Vec<Point>,
     ) -> Self {
         Splines {
-            quantization_adjustment_: quantization_adjustment,
-            splines_: splines,
-            starting_points_: starting_points,
-            segments_: Vec::new(),
-            segment_indices_: Vec::new(),
-            segment_y_start_: Vec::new(),
+            quantization_adjustment: quantization_adjustment,
+            splines: splines,
+            starting_points: starting_points,
+            segments: Vec::new(),
+            segment_indices: Vec::new(),
+            segment_y_start: Vec::new(),
         }
     }
 
     fn has_any(&self) -> bool {
-        !self.splines_.is_empty()
+        !self.splines.is_empty()
     }
 
-    fn clear(&mut self) {
-        self.splines_.clear();
-        self.starting_points_.clear();
-        self.segments_.clear();
-        self.segment_indices_.clear();
-        self.segment_y_start_.clear();
-    }
     #[instrument(level = "debug", skip(br), ret, err)]
     pub fn read(br: &mut BitReader, num_pixels: u32) -> Result<Splines> {
         trace!(pos = br.total_bits_read());
@@ -142,18 +135,8 @@ impl Splines {
             last_y = y;
         }
 
-        todo!("complete Splines::read")
-    }
-
-    fn quantized_splines(&self) -> &Vec<QuantizedSpline> {
-        &self.splines_
-    }
-
-    fn starting_points(&self) -> &Vec<Point> {
-        &self.starting_points_
-    }
-
-    fn get_quantization_adjustment(&self) -> i32 {
-        self.quantization_adjustment_
+        let quantization_adjustment = splines_reader.read_signed(br, QUANTIZATION_ADJUSTMENT_CONTEXT)?;
+        todo!("complete Splines::read");
+        Ok(Splines {quantization_adjustment, splines: Vec::new(), starting_points, segments: Vec::new(), segment_indices: Vec::new(), segment_y_start: Vec::new()})
     }
 }
