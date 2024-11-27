@@ -7,7 +7,7 @@
 #![allow(dead_code)]
 use crate::{
     bit_reader::BitReader,
-    entropy_coding::decode::{unpack_signed, Histograms},
+    entropy_coding::decode::{unpack_signed, Histograms, Reader},
     error::{Error, Result},
     util::tracing_wrappers::*,
 };
@@ -52,9 +52,58 @@ pub struct Spline {
 #[derive(Debug, Default)]
 pub struct QuantizedSpline {
     // Double delta-encoded.
-    control_points_: Vec<(i64, i64)>,
-    color_dct_: [[i32; 32]; 3],
-    sigma_dct_: [i32; 32],
+    control_points: Vec<(i64, i64)>,
+    color_dct: [[i32; 32]; 3],
+    sigma_dct: [i32; 32],
+}
+
+impl QuantizedSpline {
+    #[instrument(level = "debug", skip(br), ret, err)]
+    pub fn read(
+        br: &mut BitReader,
+        splines_reader: &mut Reader,
+        max_control_points: u32,
+        total_num_control_points: &mut u32,
+    ) -> Result<QuantizedSpline> {
+        let num_control_points = splines_reader.read(br, NUM_CONTROL_POINTS_CONTEXT)?;
+        *total_num_control_points += num_control_points;
+        if *total_num_control_points > max_control_points {
+            return Err(Error::SplinesTooManyControlPoints(
+                *total_num_control_points,
+                max_control_points,
+            ));
+        }
+        let mut control_points = Vec::with_capacity(num_control_points as usize);
+        for _ in 0..num_control_points {
+            let x = splines_reader.read_signed(br, CONTROL_POINTS_CONTEXT)? as i64;
+            let y = splines_reader.read_signed(br, CONTROL_POINTS_CONTEXT)? as i64;
+            control_points.push((x, y));
+        }
+        // TODO(firsching): Add check that double deltas are not outrageous. (not in spec)
+
+
+        // Decode DCTs and populate the QuantizedSpline struct
+        let mut color_dct = [[0; 32]; 3];
+        let mut sigma_dct = [0; 32];
+
+        let mut decode_dct = |dct: &mut [i32; 32]| -> Result<()> {
+            for value in dct.iter_mut() {
+                *value = splines_reader.read_signed(br, DCT_CONTEXT)?;
+            }
+            Ok(())
+        };
+
+        for c in 0..3 {
+            decode_dct(&mut color_dct[c])?;
+        }
+        decode_dct(&mut sigma_dct)?;
+
+        Ok(QuantizedSpline {
+            control_points,
+            color_dct,
+            sigma_dct,
+        })
+    }
 }
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -135,8 +184,28 @@ impl Splines {
             last_y = y;
         }
 
-        let quantization_adjustment = splines_reader.read_signed(br, QUANTIZATION_ADJUSTMENT_CONTEXT)?;
-        todo!("complete Splines::read");
-        Ok(Splines {quantization_adjustment, splines: Vec::new(), starting_points, segments: Vec::new(), segment_indices: Vec::new(), segment_y_start: Vec::new()})
+        let quantization_adjustment =
+            splines_reader.read_signed(br, QUANTIZATION_ADJUSTMENT_CONTEXT)?;
+
+        let mut splines = Vec::new();
+        let mut num_control_points = 0u32;
+        for _ in 0..num_splines {
+            splines.push(QuantizedSpline::read(
+                br,
+                &mut splines_reader,
+                max_control_points,
+                &mut num_control_points,
+            )?);
+        }
+        splines_reader.check_final_state()?;
+        //todo!("complete Splines::read");
+        Ok(Splines {
+            quantization_adjustment,
+            splines,
+            starting_points,
+            segments: Vec::new(),
+            segment_indices: Vec::new(),
+            segment_y_start: Vec::new(),
+        })
     }
 }
