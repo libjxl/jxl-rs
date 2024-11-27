@@ -12,7 +12,7 @@ use crate::{
     util::tracing_wrappers::*,
 };
 const MAX_NUM_CONTROL_POINTS: u32 = 1 << 20;
-const MAX_NUM_CONTROL_POINTS_PER_PIXEL_RATIO : u32 = 2;
+const MAX_NUM_CONTROL_POINTS_PER_PIXEL_RATIO: u32 = 2;
 const NUM_SPLINES_CONTEXTS: usize = 6;
 #[derive(Debug, Clone, Copy)]
 pub struct Point {
@@ -103,12 +103,12 @@ impl Splines {
         let mut splines_reader = splines_histograms.make_reader(br)?;
         // TODO: check what is right context
         let num_splines = splines_reader.read(br, 1)?;
-        let max_control_points = MAX_NUM_CONTROL_POINTS.min(
-            num_pixels  / MAX_NUM_CONTROL_POINTS_PER_PIXEL_RATIO as u32);
+        let max_control_points =
+            MAX_NUM_CONTROL_POINTS.min(num_pixels / MAX_NUM_CONTROL_POINTS_PER_PIXEL_RATIO as u32);
         if num_splines > max_control_points {
             return Err(Error::SplinesTooMany(num_splines, max_control_points));
         }
-        todo!("complete Splines::decode")
+        todo!("complete Splines::read")
     }
 
     fn quantized_splines(&self) -> &Vec<QuantizedSpline> {
