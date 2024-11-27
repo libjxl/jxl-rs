@@ -8,7 +8,6 @@
 
 use crate::{bit_reader::BitReader, error::Error};
 
-
 #[derive(Debug, Clone, Copy)]
 pub struct Point {
     x: f32,
