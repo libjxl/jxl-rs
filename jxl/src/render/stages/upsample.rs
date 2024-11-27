@@ -3,6 +3,10 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
+
+// TODO(firsching): remove once we use this!
+#![allow(dead_code)]
+
 use crate::{
     headers::CustomTransformData,
     render::{RenderPipelineInOutStage, RenderPipelineStage},
@@ -14,14 +18,8 @@ pub struct Upsample<const N: usize, const SHIFT: u8> {
 }
 
 impl<const N: usize, const SHIFT: u8> Upsample<N, SHIFT> {
-    // TODO(firsching): remove once we use this!
-    #[allow(dead_code)]
     pub fn new(ups_factors: &CustomTransformData, channel: usize) -> Self {
-        assert_eq!(
-            2usize.pow(SHIFT as u32),
-            N,
-            "SHIFT ({SHIFT}) must match log2(N) for N={N}"
-        );
+        const { assert!(1 << SHIFT == N)}
 
         let weights: &[f32] = match N {
             2 => &ups_factors.weights2,
@@ -95,14 +93,8 @@ impl<const N: usize, const SHIFT: u8> RenderPipelineStage for Upsample<N, SHIFT>
     }
 }
 
-// TODO(firsching): remove once we use this!
-#[allow(dead_code)]
 pub type Upsample2x = Upsample<2, 1>;
-// TODO(firsching): remove once we use this!
-#[allow(dead_code)]
 pub type Upsample4x = Upsample<4, 2>;
-// TODO(firsching): remove once we use this!
-#[allow(dead_code)]
 pub type Upsample8x = Upsample<8, 3>;
 
 #[cfg(test)]
