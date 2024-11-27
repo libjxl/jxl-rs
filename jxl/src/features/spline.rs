@@ -155,7 +155,8 @@ impl Splines {
                 (unsigned_x as i32, unsigned_y as i32)
             };
 
-            // TODO: validate spline position here
+            // TODO(firsching): validate spline position
+
             starting_points.push(Point {
                 x: x as f32,
                 y: y as f32,
