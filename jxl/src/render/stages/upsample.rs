@@ -3,7 +3,6 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-
 // TODO(firsching): remove once we use this!
 #![allow(dead_code)]
 
@@ -19,7 +18,7 @@ pub struct Upsample<const N: usize, const SHIFT: u8> {
 
 impl<const N: usize, const SHIFT: u8> Upsample<N, SHIFT> {
     pub fn new(ups_factors: &CustomTransformData, channel: usize) -> Self {
-        const { assert!(1 << SHIFT == N)}
+        const { assert!(1 << SHIFT == N) }
 
         let weights: &[f32] = match N {
             2 => &ups_factors.weights2,
