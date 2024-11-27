@@ -7,7 +7,7 @@
 #![allow(dead_code)]
 use crate::{
     bit_reader::BitReader,
-    entropy_coding::decode::Histograms,
+    entropy_coding::decode::{unpack_signed, Histograms},
     error::{Error, Result},
     util::tracing_wrappers::*,
 };
@@ -109,13 +109,39 @@ impl Splines {
         trace!(pos = br.total_bits_read());
         let splines_histograms = Histograms::decode(NUM_SPLINE_CONTEXTS, br, true)?;
         let mut splines_reader = splines_histograms.make_reader(br)?;
-        // TODO: check what is right context
-        let num_splines = splines_reader.read(br, NUM_SPLINES_CONTEXT)?;
+        let num_splines = 1 + splines_reader.read(br, NUM_SPLINES_CONTEXT)?;
         let max_control_points =
             MAX_NUM_CONTROL_POINTS.min(num_pixels / MAX_NUM_CONTROL_POINTS_PER_PIXEL_RATIO);
         if num_splines > max_control_points {
             return Err(Error::SplinesTooMany(num_splines, max_control_points));
         }
+
+        let mut starting_points = Vec::new();
+        let mut last_x = 0;
+        let mut last_y = 0;
+        for i in 0..num_splines {
+            let unsigned_x = splines_reader.read(br, STARTING_POSITION_CONTEXT)?;
+            let unsigned_y = splines_reader.read(br, STARTING_POSITION_CONTEXT)?;
+
+            let (x, y) = if i != 0 {
+                (
+                    unpack_signed(unsigned_x) + last_x,
+                    unpack_signed(unsigned_y) + last_y,
+                )
+            } else {
+                (unsigned_x as i32, unsigned_y as i32)
+            };
+
+            // TODO: validate spline position here
+            starting_points.push(Point {
+                x: x as f32,
+                y: y as f32,
+            });
+
+            last_x = x;
+            last_y = y;
+        }
+
         todo!("complete Splines::read")
     }
 
