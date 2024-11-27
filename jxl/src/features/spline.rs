@@ -104,7 +104,7 @@ impl Splines {
         // TODO: check what is right context
         let num_splines = splines_reader.read(br, 1)?;
         let max_control_points =
-            MAX_NUM_CONTROL_POINTS.min(num_pixels / MAX_NUM_CONTROL_POINTS_PER_PIXEL_RATIO as u32);
+            MAX_NUM_CONTROL_POINTS.min(num_pixels / MAX_NUM_CONTROL_POINTS_PER_PIXEL_RATIO);
         if num_splines > max_control_points {
             return Err(Error::SplinesTooMany(num_splines, max_control_points));
         }
