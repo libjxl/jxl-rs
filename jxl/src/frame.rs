@@ -6,7 +6,7 @@
 use crate::{
     bit_reader::BitReader,
     error::Result,
-    features::spline::Splines,
+    features::{noise::Noise, spline::Splines},
     headers::{
         color_encoding::ColorSpace,
         encodings::UnconditionalCoder,
@@ -35,7 +35,7 @@ pub struct LfGlobalState {
     // TODO(veluca93): patches
     // TODO(veluca93): splines
     splines: Option<Splines>,
-    // TODO(veluca93): noise
+    noise: Option<Noise>,
     lf_quant: LfQuantFactors,
     // TODO(veluca93), VarDCT: HF quant matrices
     // TODO(veluca93), VarDCT: block context map
@@ -145,10 +145,12 @@ impl Frame {
             None
         };
 
-        if self.header.has_noise() {
+        let noise = if self.header.has_noise() {
             info!("decoding noise");
-            todo!("noise not implemented");
-        }
+            Some(Noise::read(br)?)
+        } else {
+            None
+        };
 
         let lf_quant = LfQuantFactors::new(br)?;
         debug!(?lf_quant);
@@ -180,6 +182,7 @@ impl Frame {
 
         self.lf_global = Some(LfGlobalState {
             splines,
+            noise,
             lf_quant,
             tree,
             modular_global,
@@ -197,6 +200,7 @@ mod test_frame {
         error::Error,
         features::spline::Point,
         headers::{FileHeader, JxlHeader},
+        util::test::assert_almost_eq,
     };
 
     use super::Frame;
@@ -260,6 +264,20 @@ mod test_frame {
             dct
         };
         assert_eq!(spline.sigma_dct, EXPECTED_SIGMA_DCT);
+        Ok(())
+    }
+
+    #[test]
+    fn noise() -> Result<(), Error> {
+        let frame = read_frame(include_bytes!("../resources/test/8x8_noise.jxl"))?;
+        let lf_global = frame.lf_global.unwrap();
+        let noise = lf_global.noise.unwrap();
+        let want_noise = [
+            0.000000, 0.000977, 0.002930, 0.003906, 0.005859, 0.006836, 0.008789, 0.010742,
+        ];
+        for (index, noise_param) in want_noise.iter().enumerate() {
+            assert_almost_eq!(noise.lut[index], *noise_param, 1e-6);
+        }
         Ok(())
     }
 }
