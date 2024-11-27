@@ -139,14 +139,11 @@ impl Frame {
             info!("decoding patches");
             todo!("patches not implemented");
         }
-        let mut splines = if self.header.has_splines() {
-            Some(Splines::default())
+        let splines = if self.header.has_splines() {
+            Some(Splines::read(br, self.header.width * self.header.height)?)
         } else {
             None
         };
-        if let Some(ref mut splines) = splines {
-            splines.decode(br, self.header.width * self.header.height)?;
-        }
 
         if self.header.has_noise() {
             info!("decoding noise");
