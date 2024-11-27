@@ -81,7 +81,6 @@ impl QuantizedSpline {
         }
         // TODO(firsching): Add check that double deltas are not outrageous. (not in spec)
 
-
         // Decode DCTs and populate the QuantizedSpline struct
         let mut color_dct = [[0; 32]; 3];
         let mut sigma_dct = [0; 32];
@@ -93,8 +92,8 @@ impl QuantizedSpline {
             Ok(())
         };
 
-        for c in 0..3 {
-            decode_dct(&mut color_dct[c])?;
+        for channel in &mut color_dct {
+            decode_dct(channel)?;
         }
         decode_dct(&mut sigma_dct)?;
 
@@ -121,27 +120,9 @@ pub struct Splines {
     quantization_adjustment: i32,
     splines: Vec<QuantizedSpline>,
     starting_points: Vec<Point>,
-    segments: Vec<SplineSegment>,
-    segment_indices: Vec<usize>,
-    segment_y_start: Vec<usize>,
 }
 
 impl Splines {
-    pub fn new(
-        quantization_adjustment: i32,
-        splines: Vec<QuantizedSpline>,
-        starting_points: Vec<Point>,
-    ) -> Self {
-        Splines {
-            quantization_adjustment: quantization_adjustment,
-            splines: splines,
-            starting_points: starting_points,
-            segments: Vec::new(),
-            segment_indices: Vec::new(),
-            segment_y_start: Vec::new(),
-        }
-    }
-
     fn has_any(&self) -> bool {
         !self.splines.is_empty()
     }
@@ -198,14 +179,10 @@ impl Splines {
             )?);
         }
         splines_reader.check_final_state()?;
-        //todo!("complete Splines::read");
         Ok(Splines {
             quantization_adjustment,
             splines,
             starting_points,
-            segments: Vec::new(),
-            segment_indices: Vec::new(),
-            segment_y_start: Vec::new(),
         })
     }
 }
