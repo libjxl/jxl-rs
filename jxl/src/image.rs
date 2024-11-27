@@ -185,6 +185,16 @@ impl<T: ImageDataType> Image<T> {
     }
 
     #[cfg(test)]
+    pub fn new_range(size: (usize, usize), start: f32, step: f32) -> Result<Image<T>> {
+        let mut img = Self::new(size)?;
+        img.data
+            .iter_mut()
+            .enumerate()
+            .for_each(|(index, x)| *x = T::from_f64((start + step * index as f32) as f64));
+        Ok(img)
+    }
+
+    #[cfg(test)]
     pub fn new_constant(size: (usize, usize), val: T) -> Result<Image<T>> {
         let mut img = Self::new(size)?;
         img.data.iter_mut().for_each(|x| *x = val);
