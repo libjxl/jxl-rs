@@ -13,7 +13,15 @@ use crate::{
 };
 const MAX_NUM_CONTROL_POINTS: u32 = 1 << 20;
 const MAX_NUM_CONTROL_POINTS_PER_PIXEL_RATIO: u32 = 2;
-const NUM_SPLINES_CONTEXTS: usize = 6;
+
+const QUANTIZATION_ADJUSTMENT_CONTEXT: usize = 0;
+const STARTING_POSITION_CONTEXT: usize = 1;
+const NUM_SPLINES_CONTEXT: usize = 2;
+const NUM_CONTROL_POINTS_CONTEXT: usize = 3;
+const CONTROL_POINTS_CONTEXT: usize = 4;
+const DCT_CONTEXT: usize = 5;
+const NUM_SPLINE_CONTEXTS: usize = 6;
+
 #[derive(Debug, Clone, Copy)]
 pub struct Point {
     x: f32,
@@ -99,10 +107,10 @@ impl Splines {
     #[instrument(level = "debug", skip(br), ret, err)]
     pub fn read(br: &mut BitReader, num_pixels: u32) -> Result<Splines> {
         trace!(pos = br.total_bits_read());
-        let splines_histograms = Histograms::decode(NUM_SPLINES_CONTEXTS, br, true)?;
+        let splines_histograms = Histograms::decode(NUM_SPLINE_CONTEXTS, br, true)?;
         let mut splines_reader = splines_histograms.make_reader(br)?;
         // TODO: check what is right context
-        let num_splines = splines_reader.read(br, 1)?;
+        let num_splines = splines_reader.read(br, NUM_SPLINES_CONTEXT)?;
         let max_control_points =
             MAX_NUM_CONTROL_POINTS.min(num_pixels / MAX_NUM_CONTROL_POINTS_PER_PIXEL_RATIO);
         if num_splines > max_control_points {
