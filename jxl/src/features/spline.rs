@@ -13,6 +13,8 @@ use crate::{
 };
 const MAX_NUM_CONTROL_POINTS: u32 = 1 << 20;
 const MAX_NUM_CONTROL_POINTS_PER_PIXEL_RATIO: u32 = 2;
+const DELTA_LIMIT: i64 = 1 << 30;
+const SPLINE_POS_LIMIT: i32 = 1 << 23;
 
 const QUANTIZATION_ADJUSTMENT_CONTEXT: usize = 0;
 const STARTING_POSITION_CONTEXT: usize = 1;
@@ -78,9 +80,12 @@ impl QuantizedSpline {
             let x = splines_reader.read_signed(br, CONTROL_POINTS_CONTEXT)? as i64;
             let y = splines_reader.read_signed(br, CONTROL_POINTS_CONTEXT)? as i64;
             control_points.push((x, y));
+            // Add check that double deltas are not outrageous (not in spec).
+            let max_delta_delta = x.abs().max(y.abs());
+            if max_delta_delta >= DELTA_LIMIT {
+                return Err(Error::SplinesDeltaLimit(max_delta_delta, DELTA_LIMIT));
+            }
         }
-        // TODO(firsching): Add check that double deltas are not outrageous. (not in spec)
-
         // Decode DCTs and populate the QuantizedSpline struct
         let mut color_dct = [[0; 32]; 3];
         let mut sigma_dct = [0; 32];
@@ -154,8 +159,14 @@ impl Splines {
             } else {
                 (unsigned_x as i32, unsigned_y as i32)
             };
-
-            // TODO(firsching): validate spline position
+            // It is not in spec, but reasonable limit to avoid overflows.
+            let max_coordinate = x.abs().max(y.abs());
+            if max_coordinate >= SPLINE_POS_LIMIT {
+                return Err(Error::SplinesCoordinatesLimit(
+                    max_coordinate,
+                    SPLINE_POS_LIMIT,
+                ));
+            }
 
             starting_points.push(Point {
                 x: x as f32,

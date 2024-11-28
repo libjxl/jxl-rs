@@ -115,6 +115,10 @@ pub enum Error {
     SplinesTooMany(u32, u32),
     #[error("Too many control points for splines: {0}, limit is {1}")]
     SplinesTooManyControlPoints(u32, u32),
+    #[error("Spline coordinates out of bounds: {0}, limit is {1}")]
+    SplinesCoordinatesLimit(i32, i32),
+    #[error("Spline delta-delta is out of bounds: {0}, limit is {1}")]
+    SplinesDeltaLimit(i64, i64),
     #[error("Modular tree too large: {0}, limit is {1}")]
     TreeTooLarge(usize, usize),
     #[error("Modular tree too tall: {0}, limit is {1}")]
