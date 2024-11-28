@@ -111,6 +111,10 @@ pub enum Error {
     InvalidPredictor(u32),
     #[error("Invalid modular mode property: {0}")]
     InvalidProperty(u32),
+    #[error("Too many patches: {0}, limit is {1}")]
+    PatchesTooMany(u32, u32),
+    #[error("Reference too large: {0}, limit is {1}")]
+    PatchesRefTooLarge(u32, u32),
     #[error("Too many splines: {0}, limit is {1}")]
     SplinesTooMany(u32, u32),
     #[error("Too many control points for splines: {0}, limit is {1}")]

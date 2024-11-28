@@ -7,6 +7,7 @@ use crate::{
     bit_reader::BitReader,
     error::Result,
     features::{noise::Noise, spline::Splines},
+    features::patches::PatchesDictionary,
     headers::{
         color_encoding::ColorSpace,
         encodings::UnconditionalCoder,
@@ -32,7 +33,7 @@ pub enum Section {
 
 #[allow(dead_code)]
 pub struct LfGlobalState {
-    // TODO(veluca93): patches
+    patches: Option<PatchesDictionary>,
     // TODO(veluca93): splines
     splines: Option<Splines>,
     noise: Option<Noise>,
@@ -135,11 +136,19 @@ impl Frame {
         assert!(self.lf_global.is_none());
         trace!(pos = br.total_bits_read());
 
-        if self.header.has_patches() {
+        let patches = if self.header.has_patches() {
             info!("decoding patches");
-            todo!("patches not implemented");
-        }
+            Some(PatchesDictionary::read(
+                br,
+                self.header.width,
+                self.header.height,
+            )?)
+        } else {
+            None
+        };
+
         let splines = if self.header.has_splines() {
+            info!("decoding splines");
             Some(Splines::read(br, self.header.width * self.header.height)?)
         } else {
             None
@@ -181,6 +190,7 @@ impl Frame {
         )?;
 
         self.lf_global = Some(LfGlobalState {
+            patches,
             splines,
             noise,
             lf_quant,
@@ -212,6 +222,16 @@ mod test_frame {
         let mut result = Frame::new(&mut br, &file_header)?;
         result.decode_lf_global(&mut br)?;
         Ok(result)
+    }
+
+
+    #[test]
+    fn patches() -> Result<(), Error> {
+        let frame = read_frame(include_bytes!("../resources/test/GrayscalePatchesVarDCT.jxl"))?;
+        let lf_global = frame.lf_global.unwrap();
+        let patches_dict = lf_global.patches.unwrap();
+        // TODO continue here
+        Ok(())
     }
 
     #[test]
