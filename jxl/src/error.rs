@@ -111,9 +111,9 @@ pub enum Error {
     InvalidPredictor(u32),
     #[error("Invalid modular mode property: {0}")]
     InvalidProperty(u32),
-    #[error("To many splines: {0}, limit is {1}")]
+    #[error("Too many splines: {0}, limit is {1}")]
     SplinesTooMany(u32, u32),
-    #[error("To many control points for splines: {0}, limit is {1}")]
+    #[error("Too many control points for splines: {0}, limit is {1}")]
     SplinesTooManyControlPoints(u32, u32),
     #[error("Modular tree too large: {0}, limit is {1}")]
     TreeTooLarge(usize, usize),
