@@ -6,7 +6,7 @@
 use crate::{
     bit_reader::BitReader,
     error::Result,
-    features::{noise::Noise, spline::Splines},
+    features::{noise::Noise, patches::PatchesDictionary, spline::Splines},
     headers::{
         color_encoding::ColorSpace,
         encodings::UnconditionalCoder,
@@ -14,6 +14,7 @@ use crate::{
         frame_header::{Encoding, FrameHeader, Toc, TocNonserialized},
         FileHeader,
     },
+    image::Image,
     util::tracing_wrappers::*,
 };
 use modular::{FullModularImage, Tree};
@@ -32,7 +33,7 @@ pub enum Section {
 
 #[allow(dead_code)]
 pub struct LfGlobalState {
-    // TODO(veluca93): patches
+    patches: Option<PatchesDictionary>,
     // TODO(veluca93): splines
     splines: Option<Splines>,
     noise: Option<Noise>,
@@ -135,11 +136,25 @@ impl Frame {
         assert!(self.lf_global.is_none());
         trace!(pos = br.total_bits_read());
 
-        if self.header.has_patches() {
+        let patches = if self.header.has_patches() {
             info!("decoding patches");
-            todo!("patches not implemented");
-        }
+            // TODO
+            let reference_positions: [Option<Box<Image<u8>>>; 4] = Default::default();
+            // TODO
+            let num_extra_channels = 0;
+            Some(PatchesDictionary::read(
+                br,
+                self.header.width,
+                self.header.height,
+                num_extra_channels,
+                reference_positions,
+            )?)
+        } else {
+            None
+        };
+
         let splines = if self.header.has_splines() {
+            info!("decoding splines");
             Some(Splines::read(br, self.header.width * self.header.height)?)
         } else {
             None
@@ -181,6 +196,7 @@ impl Frame {
         )?;
 
         self.lf_global = Some(LfGlobalState {
+            patches,
             splines,
             noise,
             lf_quant,
