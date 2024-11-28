@@ -29,6 +29,10 @@ pub fn decode_varint16(br: &mut BitReader) -> Result<u16> {
     }
 }
 
+pub fn unpack_signed(unsigned: u32) -> i32 {
+    ((unsigned >> 1) ^ ((!unsigned) & 1).wrapping_sub(1)) as i32
+}
+
 #[derive(UnconditionalCoder, Debug)]
 struct Lz77Params {
     pub enabled: bool,
@@ -81,7 +85,7 @@ impl<'a> Reader<'a> {
 
     pub fn read_signed(&mut self, br: &mut BitReader, cluster: usize) -> Result<i32> {
         let unsigned = self.read(br, cluster)?;
-        Ok(((unsigned >> 1) ^ ((!unsigned) & 1).wrapping_sub(1)) as i32)
+        Ok(unpack_signed(unsigned))
     }
 
     pub fn check_final_state(self) -> Result<()> {

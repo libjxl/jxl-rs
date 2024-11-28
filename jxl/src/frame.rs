@@ -6,6 +6,7 @@
 use crate::{
     bit_reader::BitReader,
     error::Result,
+    features::spline::Splines,
     headers::{
         color_encoding::ColorSpace,
         encodings::UnconditionalCoder,
@@ -33,6 +34,7 @@ pub enum Section {
 pub struct LfGlobalState {
     // TODO(veluca93): patches
     // TODO(veluca93): splines
+    splines: Option<Splines>,
     // TODO(veluca93): noise
     lf_quant: LfQuantFactors,
     // TODO(veluca93), VarDCT: HF quant matrices
@@ -137,11 +139,11 @@ impl Frame {
             info!("decoding patches");
             todo!("patches not implemented");
         }
-
-        if self.header.has_splines() {
-            info!("decoding splines");
-            todo!("splines not implemented");
-        }
+        let splines = if self.header.has_splines() {
+            Some(Splines::read(br, self.header.width * self.header.height)?)
+        } else {
+            None
+        };
 
         if self.header.has_noise() {
             info!("decoding noise");
@@ -177,6 +179,7 @@ impl Frame {
         )?;
 
         self.lf_global = Some(LfGlobalState {
+            splines,
             lf_quant,
             tree,
             modular_global,
