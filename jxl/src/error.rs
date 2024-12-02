@@ -57,7 +57,7 @@ pub enum Error {
     Lz77Disallowed,
     #[error("LZ77 repeat symbol encountered without decoding any symbols")]
     UnexpectedLz77Repeat,
-    #[error("Huffman alphabet too large: {0}, max is {}", 1 << HUFFMAN_MAX_BITS)]
+    #[error("Huffman alphabet too large: {0}, max is {max}", max = 1 << HUFFMAN_MAX_BITS)]
     AlphabetTooLargeHuff(usize),
     #[error("Invalid Huffman code")]
     InvalidHuffman,

@@ -231,7 +231,7 @@ impl std::fmt::Debug for ParseEvents<'_, '_> {
     }
 }
 
-impl<'inner, 'buf> Iterator for ParseEvents<'inner, 'buf> {
+impl<'buf> Iterator for ParseEvents<'_, 'buf> {
     type Item = Result<ParseEvent<'buf>>;
 
     fn next(&mut self) -> Option<Self::Item> {

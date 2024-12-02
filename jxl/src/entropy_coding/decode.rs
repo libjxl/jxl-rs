@@ -74,7 +74,7 @@ enum ReaderLz77Config<'a> {
     Enabled(Lz77ReaderInner<'a>),
 }
 
-impl<'a> Reader<'a> {
+impl Reader<'_> {
     pub fn read(&mut self, br: &mut BitReader, context: usize) -> Result<u32> {
         let cluster = self.histograms.map_context_to_cluster(context);
         match &mut self.lz77_config {
@@ -103,7 +103,7 @@ pub(super) struct ReaderInner<'a> {
     ans_reader: AnsReader,
 }
 
-impl<'a> ReaderInner<'a> {
+impl ReaderInner<'_> {
     pub(super) fn read_token_clustered(
         &mut self,
         br: &mut BitReader,
