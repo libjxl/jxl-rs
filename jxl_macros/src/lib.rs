@@ -9,7 +9,7 @@ use proc_macro::TokenStream;
 use proc_macro2::TokenStream as TokenStream2;
 use proc_macro_error::{abort, proc_macro_error};
 use quote::quote;
-use syn::{parse_macro_input, DeriveInput};
+use syn::{parse_macro_input, DeriveInput, Meta};
 
 fn get_bits(expr_call: &syn::ExprCall) -> syn::Expr {
     if let syn::Expr::Path(ep) = &*expr_call.func {
@@ -277,7 +277,7 @@ impl Field {
 
         // Parse attributes.
         for a in &f.attrs {
-            match a.path.get_ident().map(syn::Ident::to_string).as_deref() {
+            match a.path().get_ident().map(syn::Ident::to_string).as_deref() {
                 Some("coder") => {
                     if coder.is_some() {
                         abort!(f, "Repeated coder");
@@ -363,14 +363,11 @@ impl Field {
                     });
                 }
                 Some("nonserialized") => {
-                    for tok in a.tokens.clone() {
-                        if let proc_macro2::TokenTree::Group(g) = tok {
-                            let stream = g.stream();
-                            nonserialized.push(quote! {#stream});
-                        } else {
-                            abort!(a, "Invalid attribute");
-                        }
-                    }
+                    let Meta::List(ns) = &a.meta else {
+                        abort!(a, "Invalid attribute");
+                    };
+                    let stream = &ns.tokens;
+                    nonserialized.push(quote! {#stream});
                 }
                 _ => {}
             }
@@ -517,13 +514,13 @@ impl Field {
 fn derive_struct(input: DeriveInput) -> TokenStream2 {
     let name = &input.ident;
 
-    let trace = input.attrs.iter().any(|a| a.path.is_ident("trace"));
-    let validate = input.attrs.iter().any(|a| a.path.is_ident("validate"));
+    let trace = input.attrs.iter().any(|a| a.path().is_ident("trace"));
+    let validate = input.attrs.iter().any(|a| a.path().is_ident("validate"));
     let nonserialized: Vec<_> = input
         .attrs
         .iter()
         .filter_map(|a| {
-            if a.path.is_ident("nonserialized") {
+            if a.path().is_ident("nonserialized") {
                 Some(a.parse_args::<syn::Expr>().unwrap())
             } else {
                 None
@@ -592,7 +589,7 @@ fn derive_struct(input: DeriveInput) -> TokenStream2 {
         quote! {}
     };
 
-    let align = match input.attrs.iter().any(|a| a.path.is_ident("aligned")) {
+    let align = match input.attrs.iter().any(|a| a.path().is_ident("aligned")) {
         true => quote! { br.jump_to_byte_boundary()?; },
         false => quote! {},
     };

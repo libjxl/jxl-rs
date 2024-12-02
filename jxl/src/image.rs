@@ -125,7 +125,7 @@ pub struct ImageRectMut<'a, T: ImageDataType> {
     image: &'a mut Image<T>,
 }
 
-impl<'a, T: ImageDataType> Debug for ImageRect<'a, T> {
+impl<T: ImageDataType> Debug for ImageRect<'_, T> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
@@ -139,7 +139,7 @@ impl<'a, T: ImageDataType> Debug for ImageRect<'a, T> {
     }
 }
 
-impl<'a, T: ImageDataType> Debug for ImageRectMut<'a, T> {
+impl<T: ImageDataType> Debug for ImageRectMut<'_, T> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
@@ -344,7 +344,7 @@ impl<'a, T: ImageDataType> PartialEq<ImageRect<'a, T>> for ImageRect<'a, T> {
     }
 }
 
-impl<'a, T: ImageDataType + Eq> Eq for ImageRect<'a, T> {}
+impl<T: ImageDataType + Eq> Eq for ImageRect<'_, T> {}
 
 impl<'a, T: ImageDataType> ImageRectMut<'a, T> {
     pub fn rect(
@@ -473,7 +473,7 @@ pub mod debug_tools {
         }
     }
 
-    impl<'a, T: ImageDataType + ToU8ForWriting> ImageRect<'a, T> {
+    impl<T: ImageDataType + ToU8ForWriting> ImageRect<'_, T> {
         pub fn to_pgm(&self) -> Vec<u8> {
             use std::io::Write;
             let mut ret = vec![];
