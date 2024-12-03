@@ -188,3 +188,78 @@ impl Frame {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod test_frame {
+    use crate::{
+        bit_reader::BitReader,
+        container::ContainerParser,
+        error::Error,
+        features::spline::Point,
+        headers::{FileHeader, JxlHeader},
+    };
+
+    use super::Frame;
+
+    fn read_frame(image: &[u8]) -> Result<Frame, Error> {
+        let codestream = ContainerParser::collect_codestream(image).unwrap();
+        let mut br = BitReader::new(&codestream);
+        let file_header = FileHeader::read(&mut br).unwrap();
+        let mut result = Frame::new(&mut br, &file_header)?;
+        result.decode_lf_global(&mut br)?;
+        Ok(result)
+    }
+
+    #[test]
+    fn splines() -> Result<(), Error> {
+        let frame = read_frame(include_bytes!("../resources/test/splines.jxl"))?;
+        let lf_global = frame.lf_global.unwrap();
+        let splines = lf_global.splines.unwrap();
+        assert_eq!(splines.quantization_adjustment, 0);
+        let expected_starting_points = [Point { x: 9.0, y: 54.0 }].to_vec();
+        assert_eq!(splines.starting_points, expected_starting_points);
+        assert_eq!(splines.splines.len(), 1);
+        let spline = splines.splines[0].clone();
+
+        let expected_control_points = [
+            (109, 105),
+            (-130, -261),
+            (-66, 193),
+            (227, -52),
+            (-170, 290),
+        ]
+        .to_vec();
+        assert_eq!(spline.control_points.clone(), expected_control_points);
+
+        const EXPECTED_COLOR_DCT: [[i32; 32]; 3] = [
+            {
+                let mut row = [0; 32];
+                row[0] = 168;
+                row[1] = 119;
+                row
+            },
+            {
+                let mut row = [0; 32];
+                row[0] = 9;
+                row[2] = 7;
+                row
+            },
+            {
+                let mut row = [0; 32];
+                row[0] = -10;
+                row[1] = 7;
+                row
+            },
+        ];
+        assert_eq!(spline.color_dct, EXPECTED_COLOR_DCT);
+
+        const EXPECTED_SIGMA_DCT: [i32; 32] = {
+            let mut dct = [0; 32];
+            dct[0] = 4;
+            dct[7] = 2;
+            dct
+        };
+        assert_eq!(spline.sigma_dct, EXPECTED_SIGMA_DCT);
+        Ok(())
+    }
+}

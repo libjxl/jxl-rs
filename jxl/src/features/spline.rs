@@ -26,8 +26,8 @@ const NUM_SPLINE_CONTEXTS: usize = 6;
 
 #[derive(Debug, Clone, Copy)]
 pub struct Point {
-    x: f32,
-    y: f32,
+    pub x: f32,
+    pub y: f32,
 }
 
 impl Point {
@@ -51,12 +51,12 @@ pub struct Spline {
     sigma_dct: [f32; 32],
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 pub struct QuantizedSpline {
     // Double delta-encoded.
-    control_points: Vec<(i64, i64)>,
-    color_dct: [[i32; 32]; 3],
-    sigma_dct: [i32; 32],
+    pub control_points: Vec<(i64, i64)>,
+    pub color_dct: [[i32; 32]; 3],
+    pub sigma_dct: [i32; 32],
 }
 
 impl QuantizedSpline {
@@ -120,11 +120,11 @@ struct SplineSegment {
     color: [f32; 3],
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 pub struct Splines {
-    quantization_adjustment: i32,
-    splines: Vec<QuantizedSpline>,
-    starting_points: Vec<Point>,
+    pub quantization_adjustment: i32,
+    pub splines: Vec<QuantizedSpline>,
+    pub starting_points: Vec<Point>,
 }
 
 impl Splines {
