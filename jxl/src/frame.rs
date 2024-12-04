@@ -194,6 +194,8 @@ impl Frame {
 
 #[cfg(test)]
 mod test_frame {
+    use std::{fs, panic, path::Path};
+
     use crate::{
         bit_reader::BitReader,
         container::ContainerParser,
@@ -212,6 +214,45 @@ mod test_frame {
         let mut result = Frame::new(&mut br, &file_header)?;
         result.decode_lf_global(&mut br)?;
         Ok(result)
+    }
+
+    #[test]
+    fn read_all_frames() -> Result<(), Error> {
+        let test_dir = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("resources")
+            .join("test");
+        for entry in fs::read_dir(test_dir).unwrap() {
+            let entry = entry.unwrap();
+            let path = entry.path();
+            if path.extension().map_or(false, |ext| ext == "jxl") {
+                let data = fs::read(path.clone()).unwrap();
+                let result = panic::catch_unwind(|| read_frame(data.as_slice()));
+
+                match result {
+                    Ok(Ok(_frame)) => {}
+                    Ok(Err(e)) => {
+                        return Err(e);
+                    }
+                    Err(e) => {
+                        // A panic occurred
+                        if let Some(msg) = e.downcast_ref::<&str>() {
+                            if msg.contains("VarDCT not implemented") {
+                                println!(
+                                    "Skipping {}: VarDCT not implemented",
+                                    path.clone().display()
+                                );
+                            } else {
+                                panic::resume_unwind(e);
+                            }
+                        } else {
+                            panic::resume_unwind(e);
+                        }
+                    }
+                }
+            }
+        }
+
+        Ok(())
     }
 
     #[test]
