@@ -112,6 +112,11 @@ pub struct Image<T: ImageDataType> {
     data: Vec<T>,
 }
 
+impl<T: ImageDataType> Debug for Image<T> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{:?} {}x{}", T::DATA_TYPE_ID, self.size.0, self.size.1,)
+    }
+}
 #[derive(Clone, Copy)]
 pub struct ImageRect<'a, T: ImageDataType> {
     origin: (usize, usize),

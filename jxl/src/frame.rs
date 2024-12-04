@@ -6,8 +6,7 @@
 use crate::{
     bit_reader::BitReader,
     error::Result,
-    features::{noise::Noise, spline::Splines},
-    features::patches::PatchesDictionary,
+    features::{noise::Noise, patches::PatchesDictionary, spline::Splines},
     headers::{
         color_encoding::ColorSpace,
         encodings::UnconditionalCoder,
@@ -15,6 +14,7 @@ use crate::{
         frame_header::{Encoding, FrameHeader, Toc, TocNonserialized},
         FileHeader,
     },
+    image::Image,
     util::tracing_wrappers::*,
 };
 use modular::{FullModularImage, Tree};
@@ -138,10 +138,16 @@ impl Frame {
 
         let patches = if self.header.has_patches() {
             info!("decoding patches");
+            // TODO
+            let reference_positions: [Option<Box<Image<u8>>>; 4] = Default::default();
+            // TODO
+            let num_extra_channels = 0;
             Some(PatchesDictionary::read(
                 br,
                 self.header.width,
                 self.header.height,
+                num_extra_channels,
+                reference_positions,
             )?)
         } else {
             None
@@ -224,10 +230,11 @@ mod test_frame {
         Ok(result)
     }
 
-
     #[test]
     fn patches() -> Result<(), Error> {
-        let frame = read_frame(include_bytes!("../resources/test/GrayscalePatchesVarDCT.jxl"))?;
+        let frame = read_frame(include_bytes!(
+            "../resources/test/GrayscalePatchesVarDCT.jxl"
+        ))?;
         let lf_global = frame.lf_global.unwrap();
         let patches_dict = lf_global.patches.unwrap();
         // TODO continue here
