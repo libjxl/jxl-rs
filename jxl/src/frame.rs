@@ -194,6 +194,10 @@ impl Frame {
 
 #[cfg(test)]
 mod test_frame {
+    use std::{panic, path::Path};
+
+    use jxl_macros::for_each_test_file;
+
     use crate::{
         bit_reader::BitReader,
         container::ContainerParser,
@@ -213,6 +217,34 @@ mod test_frame {
         result.decode_lf_global(&mut br)?;
         Ok(result)
     }
+
+    fn read_all_frames(path: &Path) -> Result<(), Error> {
+        let data = std::fs::read(path).unwrap();
+        let result = panic::catch_unwind(|| read_frame(data.as_slice()));
+
+        match result {
+            Ok(Ok(_frame)) => {}
+            Ok(Err(e)) => {
+                return Err(e);
+            }
+            Err(e) => {
+                // A panic occurred
+                if let Some(msg) = e.downcast_ref::<&str>() {
+                    if msg.contains("VarDCT not implemented") {
+                        println!("Skipping {}: VarDCT not implemented", path.display());
+                    } else {
+                        panic::resume_unwind(e);
+                    }
+                } else {
+                    panic::resume_unwind(e);
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    for_each_test_file!(read_all_frames);
 
     #[test]
     fn splines() -> Result<(), Error> {

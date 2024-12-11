@@ -5,11 +5,13 @@
 
 extern crate proc_macro;
 
+use std::{fs, path::Path};
+
 use proc_macro::TokenStream;
 use proc_macro2::TokenStream as TokenStream2;
 use proc_macro_error::{abort, proc_macro_error};
 use quote::quote;
-use syn::{parse_macro_input, DeriveInput, Meta};
+use syn::{parse_macro_input, DeriveInput, Ident, Meta};
 
 fn get_bits(expr_call: &syn::ExprCall) -> syn::Expr {
     if let syn::Expr::Path(ep) = &*expr_call.func {
@@ -675,4 +677,41 @@ pub fn derive_jxl_headers(input: TokenStream) -> TokenStream {
 #[proc_macro_attribute]
 pub fn noop(_attr: TokenStream, item: TokenStream) -> TokenStream {
     item
+}
+
+#[proc_macro]
+pub fn for_each_test_file(input: TokenStream) -> TokenStream {
+    let fn_name = parse_macro_input!(input as Ident);
+    let test_dir = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("..")
+        .join("jxl")
+        .join("resources")
+        .join("test");
+
+    let mut tests = vec![];
+
+    for entry in fs::read_dir(test_dir).unwrap() {
+        let entry = entry.unwrap();
+        let path = entry.path();
+        if path.extension().map_or(false, |ext| ext == "jxl") {
+            let filename = path.file_name().unwrap().to_string_lossy();
+            let test_name = format!("{}_{}", fn_name, filename.strip_suffix(".jxl").unwrap());
+            let test_name = Ident::new(&test_name, fn_name.span());
+            tests.push(quote! {
+                #[test]
+                fn #test_name() -> Result<(), Error> {
+                    #fn_name(&Path::new(env!("CARGO_MANIFEST_DIR"))
+                        .join("resources")
+                        .join("test")
+                        .join(#filename)
+                    )
+                }
+            });
+        }
+    }
+
+    quote! {
+        #(#tests)*
+    }
+    .into()
 }
