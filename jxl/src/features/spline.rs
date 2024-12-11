@@ -63,11 +63,6 @@ pub struct QuantizedSpline {
     pub sigma_dct: [i32; 32],
 }
 
-// Maximum number of spline control points per frame is
-//   min(kMaxNumControlPoints, xsize * ysize / 2)
-//const MAX_NUM_CONTROL_POINTS: usize = 1 << 20;
-//const MAX_NUM_CONTROL_POINTS_PER_PIXEL_RATIO: usize = 2;
-
 fn inv_adjusted_quant(adjustment: i32) -> f32 {
     if adjustment >= 0 {
         1.0 / (1.0 + 0.125 * adjustment as f32)
