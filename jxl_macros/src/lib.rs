@@ -695,11 +695,7 @@ pub fn for_each_test_file(input: TokenStream) -> TokenStream {
         let path = entry.path();
         if path.extension().map_or(false, |ext| ext == "jxl") {
             let filename = path.file_name().unwrap().to_string_lossy();
-            let test_name = format!(
-                "{}_{}",
-                fn_name,
-                filename.strip_suffix(".jxl").unwrap()
-            );
+            let test_name = format!("{}_{}", fn_name, filename.strip_suffix(".jxl").unwrap());
             let test_name = Ident::new(&test_name, fn_name.span());
             tests.push(quote! {
                 #[test]
