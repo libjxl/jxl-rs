@@ -71,6 +71,19 @@ fn inv_adjusted_quant(adjustment: i32) -> f32 {
     }
 }
 
+fn validate_spline_point_pos<T: num_traits::ToPrimitive>(x: T, y: T) -> Result<()> {
+    let xi = x.to_i32().unwrap();
+    let yi = y.to_i32().unwrap();
+    let ok_range = -(1i32 << 23)..(1i32 << 23);
+    if !ok_range.contains(&xi) {
+        return Err(Error::SplinesPointOutOfRange(xi, ok_range));
+    }
+    if !ok_range.contains(&yi) {
+        return Err(Error::SplinesPointOutOfRange(yi, ok_range));
+    }
+    Ok(())
+}
+
 const CHANNEL_WEIGHT: [f32; 4] = [0.0042, 0.075, 0.07, 0.3333];
 
 impl QuantizedSpline {
@@ -157,6 +170,8 @@ impl QuantizedSpline {
         for &(dx, dy) in &self.control_points {
             current_delta_x += dx as i32;
             current_delta_y += dy as i32;
+            validate_spline_point_pos(current_delta_x, current_delta_y).unwrap();
+
             manhattan_distance +=
                 current_delta_x.unsigned_abs() as u64 + current_delta_y.unsigned_abs() as u64;
 
@@ -167,11 +182,9 @@ impl QuantizedSpline {
                 ));
             }
 
-            //TODO: validate_spline_point_pos(current_delta_x as f32, current_delta_y as f32)?;
-
             current_x += current_delta_x;
             current_y += current_delta_y;
-            // TODO: validate_spline_point_pos(current_x as f32, current_y as f32)?;
+            validate_spline_point_pos(current_x, current_y).unwrap();
 
             result
                 .control_points
