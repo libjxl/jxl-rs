@@ -18,6 +18,13 @@ impl FloorLog2 for u32 {
     }
 }
 
+impl FloorLog2 for u64 {
+    fn floor_log2(&self) -> Self {
+        debug_assert_ne!(*self, 0);
+        (0u64.leading_zeros() - self.leading_zeros() - 1) as u64
+    }
+}
+
 impl FloorLog2 for usize {
     fn floor_log2(&self) -> Self {
         debug_assert_ne!(*self, 0);

@@ -5,11 +5,13 @@
 
 // TODO(firsching): remove once we use this!
 #![allow(dead_code)]
+use std::f32::consts::FRAC_1_SQRT_2;
+
 use crate::{
     bit_reader::BitReader,
     entropy_coding::decode::{unpack_signed, Histograms, Reader},
     error::{Error, Result},
-    util::tracing_wrappers::*,
+    util::{tracing_wrappers::*, CeilLog2},
 };
 const MAX_NUM_CONTROL_POINTS: u32 = 1 << 20;
 const MAX_NUM_CONTROL_POINTS_PER_PIXEL_RATIO: u32 = 2;
@@ -49,6 +51,8 @@ pub struct Spline {
     // Splines are drawn by normalized Gaussian splatting. This controls the
     // Gaussian's parameter along the spline.
     sigma_dct: [f32; 32],
+    // The estimated area in pixels covered by the spline.
+    estimated_area_reached: u64,
 }
 
 #[derive(Debug, Default, Clone)]
@@ -58,6 +62,21 @@ pub struct QuantizedSpline {
     pub color_dct: [[i32; 32]; 3],
     pub sigma_dct: [i32; 32],
 }
+
+// Maximum number of spline control points per frame is
+//   min(kMaxNumControlPoints, xsize * ysize / 2)
+//const MAX_NUM_CONTROL_POINTS: usize = 1 << 20;
+//const MAX_NUM_CONTROL_POINTS_PER_PIXEL_RATIO: usize = 2;
+
+fn inv_adjusted_quant(adjustment: i32) -> f32 {
+    if adjustment >= 0 {
+        1.0 / (1.0 + 0.125 * adjustment as f32)
+    } else {
+        1.0 - 0.125 * adjustment as f32
+    }
+}
+
+const CHANNEL_WEIGHT: [f32; 4] = [0.0042, 0.075, 0.07, 0.3333];
 
 impl QuantizedSpline {
     #[instrument(level = "debug", skip(br), ret, err)]
@@ -108,6 +127,119 @@ impl QuantizedSpline {
             sigma_dct,
         })
     }
+
+    pub fn dequantize(
+        &self,
+        starting_point: &Point,
+        quantization_adjustment: i32,
+        y_to_x: f32,
+        y_to_b: f32,
+        image_size: u64,
+    ) -> Result<Spline> {
+        let area_limit = (1024 * image_size + (1u64 << 32)).min(1u64 << 42);
+
+        let mut result = Spline {
+            control_points: Vec::with_capacity(self.control_points.len() + 1),
+            color_dct: [[0.0; 32]; 3],
+            sigma_dct: [0.0; 32],
+            estimated_area_reached: 0,
+        };
+
+        let px = starting_point.x.round();
+        let py = starting_point.y.round();
+        //TODO: validate_spline_point_pos(px, py)?;
+
+        let mut current_x = px as i32;
+        let mut current_y = py as i32;
+        result
+            .control_points
+            .push(Point::new(current_x as f32, current_y as f32));
+
+        let mut current_delta_x = 0i32;
+        let mut current_delta_y = 0i32;
+        let mut manhattan_distance = 0u64;
+
+        for &(dx, dy) in &self.control_points {
+            current_delta_x += dx as i32;
+            current_delta_y += dy as i32;
+            manhattan_distance +=
+                current_delta_x.unsigned_abs() as u64 + current_delta_y.unsigned_abs() as u64;
+
+            if manhattan_distance > area_limit {
+                return Err(Error::SplinesDistanceTooLarge(
+                    manhattan_distance,
+                    area_limit,
+                ));
+            }
+
+            //TODO: validate_spline_point_pos(current_delta_x as f32, current_delta_y as f32)?;
+
+            current_x += current_delta_x;
+            current_y += current_delta_y;
+            // TODO: validate_spline_point_pos(current_x as f32, current_y as f32)?;
+
+            result
+                .control_points
+                .push(Point::new(current_x as f32, current_y as f32));
+        }
+
+        let inv_quant = inv_adjusted_quant(quantization_adjustment);
+
+        for (c, weight) in CHANNEL_WEIGHT.iter().enumerate().take(3) {
+            for i in 0..32 {
+                let inv_dct_factor = if i == 0 { FRAC_1_SQRT_2 } else { 1.0 };
+                result.color_dct[c][i] =
+                    self.color_dct[c][i] as f32 * inv_dct_factor * weight * inv_quant;
+            }
+        }
+
+        for i in 0..32 {
+            result.color_dct[0][i] += y_to_x * result.color_dct[1][i];
+            result.color_dct[2][i] += y_to_b * result.color_dct[1][i];
+        }
+
+        let mut width_estimate = 0;
+        let mut color = [0u64; 3];
+
+        for (c, color_val) in color.iter_mut().enumerate() {
+            for i in 0..32 {
+                *color_val += (inv_quant * self.color_dct[c][i] as f32).abs().ceil() as u64;
+            }
+        }
+
+        color[0] += y_to_x.abs().ceil() as u64 * color[1];
+        color[2] += y_to_b.abs().ceil() as u64 * color[1];
+
+        let max_color = color[0].max(color[1]).max(color[2]);
+        let logcolor = 1u64.max((1u64 + max_color).ceil_log2());
+
+        let weight_limit =
+            (((area_limit as f32 / logcolor as f32) / manhattan_distance.max(1) as f32).sqrt())
+                .ceil();
+
+        for i in 0..32 {
+            let inv_dct_factor = if i == 0 { FRAC_1_SQRT_2 } else { 1.0 };
+            result.sigma_dct[i] =
+                self.sigma_dct[i] as f32 * inv_dct_factor * CHANNEL_WEIGHT[3] * inv_quant;
+
+            let weight_f = (inv_quant * self.sigma_dct[i] as f32).abs().ceil();
+            let weight = weight_limit.min(weight_f.max(1.0)) as u64;
+            width_estimate += weight * weight * logcolor;
+        }
+
+        result.estimated_area_reached = width_estimate * manhattan_distance;
+
+        // TODO: move this check to the outside, using the returned estimated_area_reached,
+        // making the caller keep track of the total estimated_area_readed
+        //if result.total_estimated_area_reached > area_limit {
+        //    return Err(Error::SplinesAreaTooLarge(
+        //        *total_estimated_area_reached,
+        //        area_limit,
+        //    ));
+        //}
+
+        Ok(result)
+    }
 }
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -125,6 +257,9 @@ pub struct Splines {
     pub quantization_adjustment: i32,
     pub splines: Vec<QuantizedSpline>,
     pub starting_points: Vec<Point>,
+    segments: Vec<SplineSegment>,
+    segment_indices: Vec<usize>,
+    segment_y_start: Vec<usize>,
 }
 
 impl Splines {
@@ -195,6 +330,7 @@ impl Splines {
             quantization_adjustment,
             splines,
             starting_points,
+            ..Splines::default()
         })
     }
 }
