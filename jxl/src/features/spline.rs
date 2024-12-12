@@ -155,7 +155,7 @@ impl QuantizedSpline {
 
         let px = starting_point.x.round();
         let py = starting_point.y.round();
-        //TODO: validate_spline_point_pos(px, py)?;
+        validate_spline_point_pos(px, py)?;
 
         let mut current_x = px as i32;
         let mut current_y = py as i32;
@@ -170,7 +170,7 @@ impl QuantizedSpline {
         for &(dx, dy) in &self.control_points {
             current_delta_x += dx as i32;
             current_delta_y += dy as i32;
-            validate_spline_point_pos(current_delta_x, current_delta_y).unwrap();
+            validate_spline_point_pos(current_delta_x, current_delta_y)?;
 
             manhattan_distance +=
                 current_delta_x.unsigned_abs() as u64 + current_delta_y.unsigned_abs() as u64;
@@ -184,7 +184,7 @@ impl QuantizedSpline {
 
             current_x += current_delta_x;
             current_y += current_delta_y;
-            validate_spline_point_pos(current_x, current_y).unwrap();
+            validate_spline_point_pos(current_x, current_y)?;
 
             result
                 .control_points
