@@ -3,6 +3,8 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
+use std::fmt::Debug;
+
 use super::Predictor;
 use crate::{
     bit_reader::BitReader,
@@ -29,10 +31,15 @@ enum TreeNode {
 }
 
 #[allow(dead_code)]
-#[derive(Debug)]
 pub struct Tree {
     nodes: Vec<TreeNode>,
     histograms: Histograms,
+}
+
+impl Debug for Tree {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "Tree[{:?}]", self.nodes)
+    }
 }
 
 const SPLIT_VAL_CONTEXT: usize = 0;
