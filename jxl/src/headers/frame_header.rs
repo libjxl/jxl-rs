@@ -9,6 +9,7 @@ use crate::{
     bit_reader::BitReader,
     error::Error,
     headers::{encodings::*, extra_channels::ExtraChannelInfo},
+    util::FloorLog2,
 };
 
 use jxl_macros::UnconditionalCoder;
@@ -42,10 +43,10 @@ impl Flags {
 }
 
 #[derive(UnconditionalCoder, Debug, PartialEq)]
-struct Passes {
+pub struct Passes {
     #[coder(u2S(1, 2, 3, Bits(3) + 4))]
     #[default(1)]
-    num_passes: u32,
+    pub num_passes: u32,
 
     #[coder(u2S(0, 1, 2, Bits(1) + 3))]
     #[default(0)]
@@ -69,6 +70,25 @@ struct Passes {
     #[default_element(0)]
     #[condition(num_passes != 1)]
     last_pass: Vec<u32>,
+}
+
+impl Passes {
+    pub fn downsampling_bracket(&self, pass: usize) -> (usize, usize) {
+        let mut max_shift = 2;
+        let mut min_shift = 3;
+        for i in 0..pass + 1 {
+            for j in 0..self.num_ds as usize {
+                min_shift = self.downsample[j].floor_log2();
+            }
+            if i + 1 == self.num_passes as usize {
+                min_shift = 0
+            }
+            if i != pass {
+                max_shift = min_shift - 1;
+            }
+        }
+        (min_shift as usize, max_shift as usize)
+    }
 }
 
 #[derive(UnconditionalCoder, Copy, Clone, PartialEq, Debug, FromPrimitive)]
@@ -321,7 +341,7 @@ pub struct FrameHeader {
 
     #[condition(frame_type != FrameType::ReferenceOnly)]
     #[default(Passes::default())]
-    passes: Passes,
+    pub passes: Passes,
 
     #[coder(u2S(1, 2, 3, 4))]
     #[default(0)]
@@ -444,10 +464,10 @@ impl FrameHeader {
     const GROUP_DIM: usize = 256;
     const BLOCK_DIM: usize = 8;
 
-    fn group_dim(&self) -> usize {
+    pub fn group_dim(&self) -> usize {
         (Self::GROUP_DIM >> 1) << self.group_size_shift
     }
-    fn dc_group_dim(&self) -> usize {
+    pub fn dc_group_dim(&self) -> usize {
         self.group_dim() * Self::BLOCK_DIM
     }
 
