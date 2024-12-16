@@ -7,7 +7,9 @@ use std::collections::TryReserveError;
 
 use thiserror::Error;
 
-use crate::{entropy_coding::huffman::HUFFMAN_MAX_BITS, image::DataTypeTag};
+use crate::{
+    entropy_coding::huffman::HUFFMAN_MAX_BITS, features::spline::Point, image::DataTypeTag,
+};
 
 #[derive(Error, Debug)]
 pub enum Error {
@@ -111,18 +113,22 @@ pub enum Error {
     InvalidPredictor(u32),
     #[error("Invalid modular mode property: {0}")]
     InvalidProperty(u32),
+    #[error("Point list is empty")]
+    PointListEmpty,
     #[error("Too large area for spline: {0}, limit is {1}")]
     SplinesAreaTooLarge(u64, u64),
     #[error("Too large manhattan_distance reached: {0}, limit is {1}")]
     SplinesDistanceTooLarge(u64, u64),
     #[error("Too many splines: {0}, limit is {1}")]
     SplinesTooMany(u32, u32),
+    #[error("Spline has adjacent coinciding control points: point[{0}]: {1:?}, point[{2}]: {3:?}")]
+    SplineAdjacentCoincidingControlPoints(u32, Point, u32, Point),
     #[error("Too many control points for splines: {0}, limit is {1}")]
     SplinesTooManyControlPoints(u32, u32),
     #[error(
         "Spline point outside valid bounds: coordinates: {0:?}, out of bounds: {1}, bounds: {2:?}"
     )]
-    SplinesPointOutOfRange((i32, i32), i32, std::ops::Range<i32>),
+    SplinesPointOutOfRange(Point, i32, std::ops::Range<i32>),
     #[error("Spline coordinates out of bounds: {0}, limit is {1}")]
     SplinesCoordinatesLimit(i32, i32),
     #[error("Spline delta-delta is out of bounds: {0}, limit is {1}")]

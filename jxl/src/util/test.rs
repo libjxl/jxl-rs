@@ -28,7 +28,9 @@ pub(crate) use assert_almost_eq;
 macro_rules! assert_all_almost_eq {
     ($left:expr, $right:expr, $max_error:expr $(,)?) => {
         let (left_val, right_val, max_error) = (&$left, &$right, &$max_error);
-        assert_eq!(left_val.len(), right_val.len());
+        if left_val.len() != right_val.len() {
+            panic!("assertion failed: `(left ≈ right)`\n left.len(): `{}`,\n right.len(): `{}`", left_val.len(), right_val.len());
+        }
         for index in 0..left_val.len() {
             match $crate::util::test::abs_delta(left_val[index], right_val[index]).partial_cmp(max_error) {
                 Some(std::cmp::Ordering::Greater) | None =>  panic!(
