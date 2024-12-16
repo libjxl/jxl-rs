@@ -76,10 +76,10 @@ fn validate_spline_point_pos<T: num_traits::ToPrimitive>(x: T, y: T) -> Result<(
     let yi = y.to_i32().unwrap();
     let ok_range = -(1i32 << 23)..(1i32 << 23);
     if !ok_range.contains(&xi) {
-        return Err(Error::SplinesPointOutOfRange(xi, ok_range));
+        return Err(Error::SplinesPointOutOfRange((xi, yi), xi, ok_range));
     }
     if !ok_range.contains(&yi) {
-        return Err(Error::SplinesPointOutOfRange(yi, ok_range));
+        return Err(Error::SplinesPointOutOfRange((xi, yi), yi, ok_range));
     }
     Ok(())
 }

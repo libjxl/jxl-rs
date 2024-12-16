@@ -13,16 +13,13 @@ pub fn abs_delta<T: Num + std::cmp::PartialOrd>(left_val: T, right_val: T) -> T 
 
 macro_rules! assert_almost_eq {
     ($left:expr, $right:expr, $max_error:expr $(,)?) => {
-        match (&$left, &$right, &$max_error) {
-            (left_val, right_val, max_error) => {
-                match $crate::util::test::abs_delta(*left_val, *right_val).partial_cmp(max_error) {
-                    Some(std::cmp::Ordering::Greater) | None => panic!(
-                        "assertion failed: `(left ≈ right)`\n  left: `{:?}`,\n right: `{:?}`,\n max_error: `{:?}`",
-                        left_val, right_val, max_error
-                    ),
-                    _ => {}
-                }
-            }
+        let (left_val, right_val, max_error) = (&$left, &$right, &$max_error);
+        match $crate::util::test::abs_delta(*left_val, *right_val).partial_cmp(max_error) {
+            Some(std::cmp::Ordering::Greater) | None => panic!(
+                "assertion failed: `(left ≈ right)`\n  left: `{:?}`,\n right: `{:?}`,\n max_error: `{:?}`",
+                left_val, right_val, max_error
+            ),
+            _ => {}
         }
     };
 }
@@ -30,18 +27,15 @@ pub(crate) use assert_almost_eq;
 
 macro_rules! assert_all_almost_eq {
     ($left:expr, $right:expr, $max_error:expr $(,)?) => {
-        match (&$left, &$right, &$max_error) {
-            (left_val, right_val, max_error) => {
-                assert_eq!(left_val.len(), right_val.len());
-                for index in 0..left_val.len() {
-                    match $crate::util::test::abs_delta(left_val[index], right_val[index]).partial_cmp(max_error) {
-                        Some(std::cmp::Ordering::Greater) | None =>  panic!(
-                            "assertion failed: `(left ≈ right)`\n left: `{:?}`,\n right: `{:?}`,\n max_error: `{:?}`,\n left[{}]: `{}`,\n right[{}]: `{}`",
-                            left_val, right_val, max_error, index, left_val[index], index, right_val[index]
-                        ),
-                        _ => {}
-                    }
-                }
+        let (left_val, right_val, max_error) = (&$left, &$right, &$max_error);
+        assert_eq!(left_val.len(), right_val.len());
+        for index in 0..left_val.len() {
+            match $crate::util::test::abs_delta(left_val[index], right_val[index]).partial_cmp(max_error) {
+                Some(std::cmp::Ordering::Greater) | None =>  panic!(
+                    "assertion failed: `(left ≈ right)`\n left: `{:?}`,\n right: `{:?}`,\n max_error: `{:?}`,\n left[{}]: `{}`,\n right[{}]: `{}`",
+                    left_val, right_val, max_error, index, left_val[index], index, right_val[index]
+                ),
+                _ => {}
             }
         }
     };
