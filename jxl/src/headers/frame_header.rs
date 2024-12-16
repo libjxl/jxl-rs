@@ -275,6 +275,7 @@ pub struct FrameHeader {
     #[all_default]
     all_default: bool,
 
+    #[coder(Bits(2))]
     #[default(FrameType::RegularFrame)]
     frame_type: FrameType,
 
