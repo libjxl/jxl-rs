@@ -270,7 +270,6 @@ fn compute_jpeg_shift(jpeg_upsampling: &[u32], shift_table: &[usize]) -> u32 {
 #[nonserialized(FrameHeaderNonserialized)]
 #[aligned]
 #[validate]
-#[trace]
 pub struct FrameHeader {
     #[all_default]
     all_default: bool,
