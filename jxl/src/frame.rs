@@ -209,18 +209,26 @@ mod test_frame {
 
     use super::Frame;
 
-    fn read_frame(image: &[u8]) -> Result<Frame, Error> {
+    fn read_frames(image: &[u8]) -> Result<Vec<Frame>, Error> {
         let codestream = ContainerParser::collect_codestream(image).unwrap();
         let mut br = BitReader::new(&codestream);
         let file_header = FileHeader::read(&mut br).unwrap();
-        let mut result = Frame::new(&mut br, &file_header)?;
-        result.decode_lf_global(&mut br)?;
-        Ok(result)
+        let mut frames = vec![];
+        loop {
+            let mut frame = Frame::new(&mut br, &file_header)?;
+            let is_last = frame.is_last();
+            frame.decode_lf_global(&mut br)?;
+            frames.push(frame);
+            if is_last {
+                break;
+            }
+        }
+        Ok(frames)
     }
-
+    // TODO(rename)
     fn read_all_frames(path: &Path) -> Result<(), Error> {
         let data = std::fs::read(path).unwrap();
-        let result = panic::catch_unwind(|| read_frame(data.as_slice()));
+        let result = panic::catch_unwind(|| read_frames(data.as_slice()));
 
         match result {
             Ok(Ok(_frame)) => {}
@@ -248,9 +256,11 @@ mod test_frame {
 
     #[test]
     fn splines() -> Result<(), Error> {
-        let frame = read_frame(include_bytes!("../resources/test/splines.jxl"))?;
-        let lf_global = frame.lf_global.unwrap();
-        let splines = lf_global.splines.unwrap();
+        let frames = read_frames(include_bytes!("../resources/test/splines.jxl"))?;
+        assert_eq!(frames.len(), 1);
+        let frame = &frames[0];
+        let lf_global = frame.lf_global.as_ref().unwrap();
+        let splines = lf_global.splines.as_ref().unwrap();
         assert_eq!(splines.quantization_adjustment, 0);
         let expected_starting_points = [Point { x: 9.0, y: 54.0 }].to_vec();
         assert_eq!(splines.starting_points, expected_starting_points);
@@ -301,9 +311,11 @@ mod test_frame {
 
     #[test]
     fn noise() -> Result<(), Error> {
-        let frame = read_frame(include_bytes!("../resources/test/8x8_noise.jxl"))?;
-        let lf_global = frame.lf_global.unwrap();
-        let noise = lf_global.noise.unwrap();
+        let frames = read_frames(include_bytes!("../resources/test/8x8_noise.jxl"))?;
+        assert_eq!(frames.len(), 1);
+        let frame = &frames[0];
+        let lf_global = frame.lf_global.as_ref().unwrap();
+        let noise = lf_global.noise.as_ref().unwrap();
         let want_noise = [
             0.000000, 0.000977, 0.002930, 0.003906, 0.005859, 0.006836, 0.008789, 0.010742,
         ];
