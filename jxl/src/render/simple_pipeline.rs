@@ -40,6 +40,7 @@ impl SimpleRenderPipelineBuilder {
     ) -> Self {
         info!("creating simple pipeline");
         assert!(chunk_size <= u16::MAX as usize);
+        assert_ne!(chunk_size, 0);
         SimpleRenderPipelineBuilder {
             pipeline: SimpleRenderPipeline {
                 channel_info: vec![vec![
@@ -481,6 +482,7 @@ impl<
         input_buffers: &[&Image<f64>],
         output_buffers: &mut [&mut Image<f64>],
     ) {
+        assert_ne!(chunk_size, 0);
         info!("running inout stage '{stage}' in simple pipeline");
         let numc = input_buffers.len();
         if numc == 0 {

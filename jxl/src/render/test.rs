@@ -119,8 +119,7 @@ pub(super) fn test_stage_consistency<
     let mut stage = Some(stage);
 
     arbtest::arbtest(move |p| {
-        let chunk_size = p.arbitrary::<u16>()? as usize;
-
+        let chunk_size = p.arbitrary::<u16>()?.saturating_add(1) as usize;
         let (s, output) = make_and_run_simple_pipeline::<_, InputT, OutputT>(
             stage.take().unwrap(),
             &images,
