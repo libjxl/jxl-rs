@@ -218,10 +218,12 @@ mod test {
             let mut frame = Frame::new(&mut br, &file_header)?;
             let is_last = frame.is_last();
             frame.decode_lf_global(&mut br)?;
+            // TODO: Read/skip the rest of the frame.
             frames.push(frame);
             if is_last {
                 break;
             }
+
         }
         Ok(frames)
     }
