@@ -207,7 +207,7 @@ mod test {
         util::test::assert_almost_eq,
     };
 
-    use super::Frame;
+    use super::{Frame, Section};
 
     fn read_frames(image: &[u8]) -> Result<Vec<Frame>, Error> {
         let codestream = ContainerParser::collect_codestream(image).unwrap();
@@ -217,13 +217,12 @@ mod test {
         loop {
             let mut frame = Frame::new(&mut br, &file_header)?;
             let is_last = frame.is_last();
-            frame.decode_lf_global(&mut br)?;
-            // TODO: Read/skip the rest of the frame.
+            let mut sections = frame.sections(&mut br)?;
+            frame.decode_lf_global(&mut sections[frame.get_section_idx(Section::LfGlobal)])?;
             frames.push(frame);
             if is_last {
                 break;
             }
-
         }
         Ok(frames)
     }
@@ -241,6 +240,8 @@ mod test {
                 if let Some(msg) = e.downcast_ref::<&str>() {
                     if msg.contains("VarDCT not implemented") {
                         println!("Skipping {}: VarDCT not implemented", path.display());
+                    } else if msg.contains("patches not implemented") {
+                        println!("Skipping {}: patches not implented", path.display());
                     } else {
                         panic::resume_unwind(e);
                     }
