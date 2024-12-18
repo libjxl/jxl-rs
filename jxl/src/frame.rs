@@ -193,7 +193,7 @@ impl Frame {
 }
 
 #[cfg(test)]
-mod test_frame {
+mod test {
     use std::{panic, path::Path};
 
     use jxl_macros::for_each_test_file;
@@ -225,8 +225,7 @@ mod test_frame {
         }
         Ok(frames)
     }
-    // TODO(rename)
-    fn read_all_frames(path: &Path) -> Result<(), Error> {
+    fn read_frames_from_path(path: &Path) -> Result<(), Error> {
         let data = std::fs::read(path).unwrap();
         let result = panic::catch_unwind(|| read_frames(data.as_slice()));
 
@@ -252,7 +251,7 @@ mod test_frame {
         Ok(())
     }
 
-    for_each_test_file!(read_all_frames);
+    for_each_test_file!(read_frames_from_path);
 
     #[test]
     fn splines() -> Result<(), Error> {
