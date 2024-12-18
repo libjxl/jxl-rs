@@ -342,4 +342,12 @@ mod test {
         }
         Ok(())
     }
+    #[test]
+    fn patches() -> Result<(), Error> {
+        //let frame = read_frame(include_bytes!("../resources/test/grayscale_patches_modular.jxl"))?;
+        //let lf_global = frame.lf_global.unwrap();
+        //let patches = lf_global.patches.unwrap();
+
+        Ok(())
+    }
 }
