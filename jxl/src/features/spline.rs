@@ -5,7 +5,7 @@
 
 // TODO(firsching): remove once we use this!
 #![allow(dead_code)]
-use std::f32::consts::FRAC_1_SQRT_2;
+use std::{f32::consts::FRAC_1_SQRT_2, iter, ops};
 
 use crate::{
     bit_reader::BitReader,
@@ -26,7 +26,7 @@ const CONTROL_POINTS_CONTEXT: usize = 4;
 const DCT_CONTEXT: usize = 5;
 const NUM_SPLINE_CONTEXTS: usize = 6;
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Default)]
 pub struct Point {
     pub x: f32,
     pub y: f32,
@@ -36,11 +36,55 @@ impl Point {
     fn new(x: f32, y: f32) -> Self {
         Point { x, y }
     }
+    fn abs(&self) -> f32 {
+        self.x.hypot(self.y)
+    }
 }
 
 impl PartialEq for Point {
     fn eq(&self, other: &Self) -> bool {
         (self.x - other.x).abs() < 1e-3 && (self.y - other.y).abs() < 1e-3
+    }
+}
+
+impl ops::Add<Point> for Point {
+    type Output = Point;
+    fn add(self, rhs: Point) -> Point {
+        Point {
+            x: self.x + rhs.x,
+            y: self.y + rhs.y,
+        }
+    }
+}
+
+impl ops::Sub<Point> for Point {
+    type Output = Point;
+    fn sub(self, rhs: Point) -> Point {
+        Point {
+            x: self.x - rhs.x,
+            y: self.y - rhs.y,
+        }
+    }
+}
+
+impl ops::Mul<f32> for Point {
+    type Output = Point;
+    fn mul(self, rhs: f32) -> Point {
+        Point {
+            x: self.x * rhs,
+            y: self.y * rhs,
+        }
+    }
+}
+
+impl ops::Div<f32> for Point {
+    type Output = Point;
+    fn div(self, rhs: f32) -> Point {
+        let inv = 1.0 / rhs;
+        Point {
+            x: self.x * inv,
+            y: self.y * inv,
+        }
     }
 }
 
@@ -53,6 +97,27 @@ pub struct Spline {
     sigma_dct: [f32; 32],
     // The estimated area in pixels covered by the spline.
     estimated_area_reached: u64,
+}
+
+impl Spline {
+    pub fn validate_adjacent_point_coincidence(&self) -> Result<()> {
+        if let Some(item) = self
+            .control_points
+            .iter()
+            .enumerate()
+            .find(|(index, point)| {
+                index + 1 < self.control_points.len() && self.control_points[index + 1] == **point
+            })
+        {
+            return Err(Error::SplineAdjacentCoincidingControlPoints(
+                item.0 as u32,
+                *item.1,
+                (item.0 + 1) as u32,
+                self.control_points[item.0 + 1],
+            ));
+        }
+        Ok(())
+    }
 }
 
 #[derive(Debug, Default, Clone)]
@@ -76,15 +141,33 @@ fn validate_spline_point_pos<T: num_traits::ToPrimitive>(x: T, y: T) -> Result<(
     let yi = y.to_i32().unwrap();
     let ok_range = -(1i32 << 23)..(1i32 << 23);
     if !ok_range.contains(&xi) {
-        return Err(Error::SplinesPointOutOfRange((xi, yi), xi, ok_range));
+        return Err(Error::SplinesPointOutOfRange(
+            Point {
+                x: xi as f32,
+                y: yi as f32,
+            },
+            xi,
+            ok_range,
+        ));
     }
     if !ok_range.contains(&yi) {
-        return Err(Error::SplinesPointOutOfRange((xi, yi), yi, ok_range));
+        return Err(Error::SplinesPointOutOfRange(
+            Point {
+                x: xi as f32,
+                y: yi as f32,
+            },
+            yi,
+            ok_range,
+        ));
     }
     Ok(())
 }
 
 const CHANNEL_WEIGHT: [f32; 4] = [0.0042, 0.075, 0.07, 0.3333];
+
+fn area_limit(image_size: u64) -> u64 {
+    (1024 * image_size + (1u64 << 32)).min(1u64 << 42)
+}
 
 impl QuantizedSpline {
     #[instrument(level = "debug", skip(br), ret, err)]
@@ -144,7 +227,7 @@ impl QuantizedSpline {
         y_to_b: f32,
         image_size: u64,
     ) -> Result<Spline> {
-        let area_limit = (1024 * image_size + (1u64 << 32)).min(1u64 << 42);
+        let area_limit = area_limit(image_size);
 
         let mut result = Spline {
             control_points: Vec::with_capacity(self.control_points.len() + 1),
@@ -237,15 +320,6 @@ impl QuantizedSpline {
 
         result.estimated_area_reached = width_estimate * manhattan_distance;
 
-        // TODO: move this check to the outside, using the returned estimated_area_reached,
-        // making the caller keep track of the total estimated_area_readed
-        //if result.total_estimated_area_reached > area_limit {
-        //    return Err(Error::SplinesAreaTooLarge(
-        //        *total_estimated_area_reached,
-        //        area_limit,
-        //    ));
-        //}
-
         Ok(result)
     }
 }
@@ -270,9 +344,165 @@ pub struct Splines {
     segment_y_start: Vec<usize>,
 }
 
+fn draw_centripetal_catmull_rom_spline(points: &[Point]) -> Result<Vec<Point>> {
+    if points.is_empty() {
+        return Ok([].to_vec());
+    }
+    if points.len() == 1 {
+        return Ok([points[0]].to_vec());
+    }
+    const NUM_POINTS: usize = 16;
+    // Create a view of points with one prepended and one appended point.
+    let extended_points = iter::once(points[0] + (points[0] - points[1]))
+        .chain(points.iter().cloned())
+        .chain(iter::once(
+            points[points.len() - 1] + (points[points.len() - 1] - points[points.len() - 2]),
+        ));
+    // Pair each point with the sqrt of the distance to the next point.
+    let points_and_deltas = extended_points
+        .chain(iter::once(Point::default()))
+        .scan(Point::default(), |previous, p| {
+            let result = Some((*previous, (p - *previous).abs().sqrt()));
+            *previous = p;
+            result
+        })
+        .skip(1);
+    // Window the points with a [Point; 4] window.
+    let windowed_points = points_and_deltas
+        .scan([(Point::default(), 0.0); 4], |window, p| {
+            (window[0], window[1], window[2], window[3]) =
+                (window[1], window[2], window[3], (p.0, p.1));
+            Some([window[0], window[1], window[2], window[3]])
+        })
+        .skip(3);
+    // Create the points necessary per window, and flatten the result.
+    let result = windowed_points
+        .flat_map(|p| {
+            let mut window_result = [Point::default(); NUM_POINTS];
+            window_result[0] = p[1].0;
+            let mut t = [0.0; 4];
+            for k in 0..3 {
+                // TODO(from libjxl): Restrict d[k] with reasonable limit and spec it.
+                t[k + 1] = t[k] + p[k].1;
+            }
+            for (i, window_point) in window_result.iter_mut().enumerate().skip(1) {
+                let tt = p[0].1 + ((i as f32) / (NUM_POINTS as f32)) * p[1].1;
+                let mut a = [Point::default(); 3];
+                for k in 0..3 {
+                    // TODO(from libjxl): Reciprocal multiplication would be faster.
+                    a[k] = p[k].0 + (p[k + 1].0 - p[k].0) * ((tt - t[k]) / p[k].1);
+                }
+                let mut b = [Point::default(); 2];
+                for k in 0..2 {
+                    b[k] = a[k] + (a[k + 1] - a[k]) * ((tt - t[k]) / (p[k].1 + p[k + 1].1));
+                }
+                *window_point = b[0] + (b[1] - b[0]) * ((tt - t[1]) / p[1].1);
+            }
+            window_result
+        })
+        .chain(iter::once(points[points.len() - 1]))
+        .collect();
+    Ok(result)
+}
+
+fn for_each_equally_spaced_point<F: FnMut(Point, f32)>(
+    points: &[Point],
+    desired_distance: f32,
+    mut f: F,
+) {
+    if points.is_empty() {
+        return;
+    }
+    let mut accumulated_distance = 0.0;
+    f(points[0], desired_distance);
+    if points.len() == 1 {
+        return;
+    }
+    for index in 0..(points.len() - 1) {
+        let mut current = points[index];
+        let next = points[index + 1];
+        let segment = next - current;
+        let segment_length = segment.abs();
+        let unit_step = segment / segment_length;
+        if accumulated_distance + segment_length >= desired_distance {
+            current = current + unit_step * (desired_distance - accumulated_distance);
+            f(current, desired_distance);
+            accumulated_distance -= desired_distance;
+        }
+        accumulated_distance += segment_length;
+        while accumulated_distance >= desired_distance {
+            current = current + unit_step * desired_distance;
+            f(current, desired_distance);
+            accumulated_distance -= desired_distance;
+        }
+    }
+    f(points[points.len() - 1], accumulated_distance);
+}
+
+const DESIRED_RENDERING_DISTANCE: f32 = 1.0;
+
 impl Splines {
     fn has_any(&self) -> bool {
         !self.splines.is_empty()
+    }
+
+    // TODO(zond): Add color correlation as parameter.
+    pub fn initialize_draw_cache(&mut self, image_xsize: u64, image_ysize: u64) -> Result<()> {
+        self.segments.clear();
+        self.segment_indices.clear();
+        self.segment_y_start.clear();
+        // let mut segments_by_y = Vec::new();
+        // let mut intermediate_points = Vec::new();
+        let mut total_estimated_area_reached = 0u64;
+        let mut splines = Vec::new();
+        // TODO(zond): Use color correlation here.
+        let y_to_x = 0.0;
+        let y_to_b = 0.0;
+        let area_limit = area_limit(image_xsize * image_ysize);
+        for (index, qspline) in self.splines.iter().enumerate() {
+            let spline = qspline.dequantize(
+                &self.starting_points[index],
+                self.quantization_adjustment,
+                y_to_x,
+                y_to_b,
+                image_xsize * image_ysize,
+            )?;
+            total_estimated_area_reached += spline.estimated_area_reached;
+            if total_estimated_area_reached > area_limit {
+                return Err(Error::SplinesAreaTooLarge(
+                    total_estimated_area_reached,
+                    area_limit,
+                ));
+            }
+            spline.validate_adjacent_point_coincidence()?;
+            splines.push(spline);
+        }
+
+        if total_estimated_area_reached
+            > (8 * image_xsize * image_ysize + (1u64 << 25)).min(1u64 << 30)
+        {
+            warn!(
+                "Large total_estimated_area_reached, expect slower decoding:{}",
+                total_estimated_area_reached
+            );
+        }
+
+        for spline in splines {
+            let mut points_to_draw = Vec::<(Point, f32)>::new();
+            let intermediate_points = draw_centripetal_catmull_rom_spline(&spline.control_points)?;
+            for_each_equally_spaced_point(
+                &intermediate_points,
+                DESIRED_RENDERING_DISTANCE,
+                |p, d| points_to_draw.push((p, d)),
+            );
+            let length = (points_to_draw.len() - 2) as f32 * DESIRED_RENDERING_DISTANCE
+                + points_to_draw[points_to_draw.len() - 1].1;
+            if length <= 0.0 {
+                continue;
+            }
+        }
+
+        todo!("finish translating this function from C++");
     }
 
     #[instrument(level = "debug", skip(br), ret, err)]
@@ -347,7 +577,10 @@ impl Splines {
 mod test_splines {
     use crate::{error::Error, util::test::assert_all_almost_eq};
 
-    use super::{Point, QuantizedSpline, Spline};
+    use super::{
+        draw_centripetal_catmull_rom_spline, for_each_equally_spaced_point, Point, QuantizedSpline,
+        Spline,
+    };
 
     #[test]
     fn dequantize() -> Result<(), Error> {
@@ -624,6 +857,100 @@ mod test_splines {
                 want_dequantized.estimated_area_reached,
             );
         }
+        Ok(())
+    }
+
+    #[test]
+    fn centripetal_catmull_rom_spline() -> Result<(), Error> {
+        let control_points = vec![Point { x: 1.0, y: 2.0 }, Point { x: 4.0, y: 3.0 }];
+        let want_result = [
+            Point { x: 1.0, y: 2.0 },
+            Point {
+                x: 1.1875,
+                y: 2.0625,
+            },
+            Point { x: 1.375, y: 2.125 },
+            Point {
+                x: 1.5625,
+                y: 2.1875,
+            },
+            Point { x: 1.75, y: 2.25 },
+            Point {
+                x: 1.9375,
+                y: 2.3125,
+            },
+            Point { x: 2.125, y: 2.375 },
+            Point {
+                x: 2.3125,
+                y: 2.4375,
+            },
+            Point { x: 2.5, y: 2.5 },
+            Point {
+                x: 2.6875,
+                y: 2.5625,
+            },
+            Point { x: 2.875, y: 2.625 },
+            Point {
+                x: 3.0625,
+                y: 2.6875,
+            },
+            Point { x: 3.25, y: 2.75 },
+            Point {
+                x: 3.4375,
+                y: 2.8125,
+            },
+            Point { x: 3.625, y: 2.875 },
+            Point {
+                x: 3.8125,
+                y: 2.9375,
+            },
+            Point { x: 4.0, y: 3.0 },
+        ];
+        let got_result = draw_centripetal_catmull_rom_spline(&control_points)?;
+        assert_all_almost_eq!(
+            got_result.iter().map(|p| p.x).collect::<Vec<f32>>(),
+            want_result.iter().map(|p| p.x).collect::<Vec<f32>>(),
+            1e-6,
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn equally_spaced_points() -> Result<(), Error> {
+        let desired_rendering_distance = 10.0f32;
+        let segments = [
+            Point { x: 0.0, y: 0.0 },
+            Point { x: 5.0, y: 0.0 },
+            Point { x: 35.0, y: 0.0 },
+            Point { x: 35.0, y: 10.0 },
+        ];
+        let want_results = [
+            (Point { x: 0.0, y: 0.0 }, desired_rendering_distance),
+            (Point { x: 10.0, y: 0.0 }, desired_rendering_distance),
+            (Point { x: 20.0, y: 0.0 }, desired_rendering_distance),
+            (Point { x: 30.0, y: 0.0 }, desired_rendering_distance),
+            (Point { x: 35.0, y: 5.0 }, desired_rendering_distance),
+            (Point { x: 35.0, y: 10.0 }, 5.0f32),
+        ];
+        let mut got_results = Vec::<(Point, f32)>::new();
+        for_each_equally_spaced_point(&segments, desired_rendering_distance, |p, d| {
+            got_results.push((p, d))
+        });
+        assert_all_almost_eq!(
+            got_results.iter().map(|(p, _)| p.x).collect::<Vec<f32>>(),
+            want_results.iter().map(|(p, _)| p.x).collect::<Vec<f32>>(),
+            1e-9
+        );
+        assert_all_almost_eq!(
+            got_results.iter().map(|(p, _)| p.y).collect::<Vec<f32>>(),
+            want_results.iter().map(|(p, _)| p.y).collect::<Vec<f32>>(),
+            1e-9
+        );
+        assert_all_almost_eq!(
+            got_results.iter().map(|(_, d)| *d).collect::<Vec<f32>>(),
+            want_results.iter().map(|(_, d)| *d).collect::<Vec<f32>>(),
+            1e-9
+        );
         Ok(())
     }
 }
