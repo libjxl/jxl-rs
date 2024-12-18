@@ -136,8 +136,8 @@ impl PatchesDictionary {
             // TODO: add check if we are after xyb color transform?
             // let image = reference_frames[ref_positions[0].reference as usize];
             // add checks that use that image here?
-            // TODO: fill in correct numbers here
             let x0 = patches_reader.read(br, PATCH_REFERENCE_POSITION_CONTEXT)? as usize;
+            println!("x0: {x0}");
             let y0 = patches_reader.read(br, PATCH_REFERENCE_POSITION_CONTEXT)? as usize;
             let ref_pos_xsize = patches_reader.read(br, PATCH_SIZE_CONTEXT)? as usize + 1;
             let ref_pos_ysize = patches_reader.read(br, PATCH_SIZE_CONTEXT)? as usize + 1;
@@ -171,10 +171,12 @@ impl PatchesDictionary {
                 if positions.is_empty() {
                     // Read initial position
                     pos.x = patches_reader.read(br, PATCH_POSITION_CONTEXT)? as usize;
+                    println!("initial read: pos.x:{}, peek: {}", pos.x, br.peek(8));
                     pos.y = patches_reader.read(br, PATCH_POSITION_CONTEXT)? as usize;
                 } else {
                     // Read offsets and calculate new position
                     let delta_x = patches_reader.read_signed(br, PATCH_OFFSET_CONTEXT)?;
+                    println!("delta_x: {delta_x}, peek: {}", br.peek(8));
                     if delta_x < 0 && (-delta_x as usize) > positions.last().unwrap().x {
                         return Err(Error::PatchesInvalidDelta(
                             "x".to_string(),
@@ -216,6 +218,7 @@ impl PatchesDictionary {
                 let mut clamp = false;
                 for _ in 0..blendings_stride {
                     let blend_mode = patches_reader.read(br, PATCH_BLEND_MODE_CONTEXT)? as u8;
+                    println!("read blendings stride, peek:{}", br.peek(8));
                     if blend_mode >= PATCH_BLEND_MODE_NUM_BLEND_MODES {
                         return Err(Error::PatchesInvalidBlendMode(
                             blend_mode,

@@ -119,6 +119,8 @@ pub enum Error {
     PatchesInvalidBlendMode(u8, u8),
     #[error("Invalid Patch: negative {0}-coordinate: {1} base {0},  {2} delta {0}")]
     PatchesInvalidDelta(String, usize, i32),
+    #[error("Invalid position specified in reference frame in {0}-coordinate: {0}0 + {0}size = {1} + {2} > {3} = reference_frame {0}size")]
+    PatchesInvalidPosition(String, usize, usize, usize, usize),
     #[error("Invalid Patch {0}: at {1} + {2} > {3}")]
     PatchesOutOfBounds(String, usize, usize, u32),
     #[error("Too many patches: {0}, limit is {1}")]
