@@ -138,7 +138,7 @@ impl FullModularImage {
                 .iter()
                 .enumerate()
                 .filter(|x| x.1.is_coded)
-                .filter(|x| x.1.info.is_meta_or_small(frame_header.group_dim()))
+                .take_while(|x| x.1.info.is_meta_or_small(frame_header.group_dim()))
                 .map(|x| x.0)
                 .collect(),
         );
@@ -148,7 +148,7 @@ impl FullModularImage {
                 .iter()
                 .enumerate()
                 .filter(|x| x.1.is_coded)
-                .filter(|x| !x.1.info.is_meta_or_small(frame_header.group_dim()))
+                .skip_while(|x| x.1.info.is_meta_or_small(frame_header.group_dim()))
                 .filter(|x| x.1.info.is_shift_in_range(3, usize::MAX))
                 .map(|x| x.0)
                 .collect(),
