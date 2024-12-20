@@ -192,7 +192,7 @@ impl QuantizedSpline {
                 max_control_points,
             ));
         }
-        let mut control_points: Vec<(i64, i64)> = Vec::with_capacity(num_control_points as usize);
+        let mut control_points = Vec::with_capacity(num_control_points as usize);
         for _ in 0..num_control_points {
             let x = splines_reader.read_signed(br, CONTROL_POINTS_CONTEXT)? as i64;
             let y = splines_reader.read_signed(br, CONTROL_POINTS_CONTEXT)? as i64;
