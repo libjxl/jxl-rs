@@ -131,8 +131,7 @@ impl PatchesDictionary {
         let mut next_size = 1;
         let mut positions: Vec<PatchPosition> = Vec::new();
         let mut blendings = Vec::new();
-        let mut ref_positions: Vec<PatchReferencePosition> =
-            Vec::with_capacity(num_ref_patch);
+        let mut ref_positions: Vec<PatchReferencePosition> = Vec::with_capacity(num_ref_patch);
         for _ in 0..num_ref_patch {
             let reference = patches_reader.read(br, REFERENCE_FRAME_CONTEXT)? as usize;
             if reference >= DecoderState::MAX_STORED_FRAMES {
