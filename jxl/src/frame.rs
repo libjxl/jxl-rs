@@ -437,8 +437,7 @@ mod test {
                 Ok(None)
             },
         )?;
-        //let lf_global = frame[1].lf_global.as_ref().unwrap();
-        //let patches = lf_global.patches.as_ref().unwrap();
+        // TODO(firsching) add test for patches
         Ok(())
     }
 }
