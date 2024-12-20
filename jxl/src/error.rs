@@ -120,13 +120,17 @@ pub enum Error {
     #[error("Invalid Patch: negative {0}-coordinate: {1} base {0},  {2} delta {0}")]
     PatchesInvalidDelta(String, usize, i32),
     #[error("Invalid position specified in reference frame in {0}-coordinate: {0}0 + {0}size = {1} + {2} > {3} = reference_frame {0}size")]
-    PatchesInvalidPosition(String, usize, usize, usize, usize),
+    PatchesInvalidPosition(String, usize, usize, usize),
+    #[error("Patches invalid reference frame at index {0}")]
+    PatchesInvalidReference(usize),
     #[error("Invalid Patch {0}: at {1} + {2} > {3}")]
     PatchesOutOfBounds(String, usize, usize, u32),
+    #[error("Patches cannot use frames saved post color transforms")]
+    PatchesPostColorTransform(),
     #[error("Too many patches: {0}, limit is {1}")]
     PatchesTooMany(u32, u32),
     #[error("Reference too large: {0}, limit is {1}")]
-    PatchesRefTooLarge(u32, u32),
+    PatchesRefTooLarge(usize, usize),
     #[error("Point list is empty")]
     PointListEmpty,
     #[error("Too large area for spline: {0}, limit is {1}")]
