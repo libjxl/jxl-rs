@@ -10,12 +10,9 @@ use crate::{
     bit_reader::BitReader,
     entropy_coding::decode::Histograms,
     error::{Error, Result},
-    image::Image,
+    frame::DecoderState,
     util::tracing_wrappers::*,
 };
-
-// TODO(firsching): move to some common place?
-const MAX_NUM_REFERENCE_FRAMES: usize = 4;
 
 // Context numbers as specified in Section C.4.5, Listing C.2:
 const NUM_REF_PATCH_CONTEXT: usize = 0;
@@ -81,7 +78,7 @@ fn uses_clamp(blend_mode: u8) -> bool {
 #[derive(Debug, Clone, Copy)]
 struct PatchBlending {
     mode: u8,
-    alpha_channel: u32,
+    alpha_channel: usize,
     clamp: bool,
 }
 
@@ -104,32 +101,25 @@ pub struct PatchPosition {
 
 #[derive(Debug, Default)]
 pub struct PatchesDictionary {
-    pub reference_frames: [Option<ReferenceFrame>; 4],
     pub positions: Vec<PatchPosition>,
     ref_positions: Vec<PatchReferencePosition>,
     blendings: Vec<PatchBlending>,
-    blendings_stride: u32,
-}
-
-#[derive(Debug)]
-pub struct ReferenceFrame {
-    pub frame: Box<Image<u8>>,
-    pub ib_is_in_xyb: bool,
+    blendings_stride: usize,
 }
 
 impl PatchesDictionary {
     #[instrument(level = "debug", skip(br), ret, err)]
     pub fn read(
         br: &mut BitReader,
-        xsize: u32,
-        ysize: u32,
-        num_extra_channels: u32,
-        reference_frames: [Option<ReferenceFrame>; 4],
+        xsize: usize,
+        ysize: usize,
+        decoder_state: &DecoderState,
     ) -> Result<PatchesDictionary> {
+        let num_extra_channels = decoder_state.extra_channel_info().len();
         let blendings_stride = num_extra_channels + 1;
         let patches_histograms = Histograms::decode(NUM_PATCH_DICTIONARY_CONTEXTS, br, true)?;
         let mut patches_reader = patches_histograms.make_reader(br)?;
-        let num_ref_patch = patches_reader.read(br, NUM_REF_PATCH_CONTEXT)?;
+        let num_ref_patch = patches_reader.read(br, NUM_REF_PATCH_CONTEXT)? as usize;
         let num_pixels = xsize * ysize;
         let max_ref_patches = 1024 + num_pixels / 4;
         let max_patches = max_ref_patches * 4;
@@ -142,13 +132,13 @@ impl PatchesDictionary {
         let mut positions: Vec<PatchPosition> = Vec::new();
         let mut blendings = Vec::new();
         let mut ref_positions: Vec<PatchReferencePosition> =
-            Vec::with_capacity(num_ref_patch as usize);
+            Vec::with_capacity(num_ref_patch);
         for _ in 0..num_ref_patch {
             let reference = patches_reader.read(br, REFERENCE_FRAME_CONTEXT)? as usize;
-            if reference >= MAX_NUM_REFERENCE_FRAMES {
+            if reference >= DecoderState::MAX_STORED_FRAMES {
                 return Err(Error::PatchesRefTooLarge(
                     reference,
-                    MAX_NUM_REFERENCE_FRAMES,
+                    DecoderState::MAX_STORED_FRAMES,
                 ));
             }
 
@@ -156,33 +146,33 @@ impl PatchesDictionary {
             let y0 = patches_reader.read(br, PATCH_REFERENCE_POSITION_CONTEXT)? as usize;
             let ref_pos_xsize = patches_reader.read(br, PATCH_SIZE_CONTEXT)? as usize + 1;
             let ref_pos_ysize = patches_reader.read(br, PATCH_SIZE_CONTEXT)? as usize + 1;
-            let reference_frame = &reference_frames[reference];
+            let reference_frame = decoder_state.reference_frame(reference);
             match reference_frame {
                 None => return Err(Error::PatchesInvalidReference(reference)),
                 Some(reference) => {
-                    if !reference.ib_is_in_xyb {
+                    if !reference.saved_before_color_transform {
                         return Err(Error::PatchesPostColorTransform());
                     }
-                    if x0 + ref_pos_xsize > reference.frame.size.0 {
+                    if x0 + ref_pos_xsize > reference.frame[0].size.0 {
                         return Err(Error::PatchesInvalidPosition(
                             "x".to_string(),
                             x0,
                             ref_pos_xsize,
-                            reference.frame.size.0,
+                            reference.frame[0].size.0,
                         ));
                     }
-                    if y0 + ref_pos_ysize > reference.frame.size.1 {
+                    if y0 + ref_pos_ysize > reference.frame[0].size.1 {
                         return Err(Error::PatchesInvalidPosition(
                             "y".to_string(),
                             y0,
                             ref_pos_ysize,
-                            reference.frame.size.1,
+                            reference.frame[0].size.1,
                         ));
                     }
                 }
             }
 
-            let id_count = patches_reader.read(br, PATCH_COUNT_CONTEXT)? + 1;
+            let id_count = patches_reader.read(br, PATCH_COUNT_CONTEXT)? as usize + 1;
             if id_count > max_patches + 1 {
                 return Err(Error::PatchesTooMany(id_count, max_patches));
             }
@@ -196,8 +186,8 @@ impl PatchesDictionary {
                 next_size *= 2;
                 next_size = std::cmp::min(next_size, max_patches);
             }
-            positions.reserve(next_size as usize);
-            blendings.reserve(next_size as usize * PATCH_BLEND_MODE_NUM_BLEND_MODES as usize);
+            positions.reserve(next_size);
+            blendings.reserve(next_size * PATCH_BLEND_MODE_NUM_BLEND_MODES as usize);
 
             for i in 0..id_count {
                 let mut pos = PatchPosition {
@@ -232,7 +222,7 @@ impl PatchesDictionary {
                     pos.y = (positions.last().unwrap().y as i32 + delta_y) as usize;
                 }
 
-                if pos.x + ref_pos_xsize > xsize as usize {
+                if pos.x + ref_pos_xsize > xsize {
                     return Err(Error::PatchesOutOfBounds(
                         "x".to_string(),
                         pos.x,
@@ -240,7 +230,7 @@ impl PatchesDictionary {
                         xsize,
                     ));
                 }
-                if pos.y + ref_pos_ysize > ysize as usize {
+                if pos.y + ref_pos_ysize > ysize {
                     return Err(Error::PatchesOutOfBounds(
                         "y".to_string(),
                         pos.y,
@@ -261,8 +251,9 @@ impl PatchesDictionary {
                     }
 
                     if uses_alpha(blend_mode) {
-                        alpha_channel = patches_reader.read(br, PATCH_ALPHA_CHANNEL_CONTEXT)?;
-                        if alpha_channel >= PATCH_BLEND_MODE_NUM_BLEND_MODES as u32 {
+                        alpha_channel =
+                            patches_reader.read(br, PATCH_ALPHA_CHANNEL_CONTEXT)? as usize;
+                        if alpha_channel >= PATCH_BLEND_MODE_NUM_BLEND_MODES as usize {
                             return Err(Error::PatchesInvalidAlphaChannel(
                                 alpha_channel,
                                 num_extra_channels,
@@ -291,7 +282,6 @@ impl PatchesDictionary {
             })
         }
         Ok(PatchesDictionary {
-            reference_frames,
             positions,
             blendings,
             ref_positions,

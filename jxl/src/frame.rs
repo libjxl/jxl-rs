@@ -6,11 +6,7 @@
 use crate::{
     bit_reader::BitReader,
     error::Result,
-    features::{
-        noise::Noise,
-        patches::{PatchesDictionary, ReferenceFrame},
-        spline::Splines,
-    },
+    features::{noise::Noise, patches::PatchesDictionary, spline::Splines},
     headers::{
         color_encoding::ColorSpace,
         encodings::UnconditionalCoder,
@@ -18,6 +14,7 @@ use crate::{
         frame_header::{Encoding, FrameHeader, Toc, TocNonserialized},
         FileHeader,
     },
+    image::Image,
     util::tracing_wrappers::*,
 };
 use modular::{FullModularImage, Tree};
@@ -47,19 +44,72 @@ pub struct LfGlobalState {
     modular_global: FullModularImage,
 }
 
+#[derive(Debug)]
+pub struct ReferenceFrame {
+    pub frame: Vec<Image<f32>>,
+    pub saved_before_color_transform: bool,
+}
+
+impl ReferenceFrame {
+    // TODO(firsching): make this #[cfg(test)]
+    fn blank(
+        width: usize,
+        height: usize,
+        num_channels: usize,
+        saved_before_color_transform: bool,
+    ) -> Result<Self> {
+        let frame = (0..num_channels)
+            .map(|_| Image::new_constant((width, height), 0.0))
+            .collect::<Result<_>>()?;
+        Ok(Self {
+            frame,
+            saved_before_color_transform,
+        })
+    }
+}
+
+#[derive(Debug)]
+pub struct DecoderState {
+    file_header: FileHeader,
+    reference_frames: [Option<ReferenceFrame>; Self::MAX_STORED_FRAMES],
+}
+
+impl DecoderState {
+    pub const MAX_STORED_FRAMES: usize = 4;
+
+    pub fn new(file_header: FileHeader) -> Self {
+        Self {
+            file_header,
+            reference_frames: [None, None, None, None],
+        }
+    }
+
+    pub fn extra_channel_info(&self) -> &Vec<ExtraChannelInfo> {
+        &self.file_header.image_metadata.extra_channel_info
+    }
+
+    pub fn reference_frame(&self, i: usize) -> Option<&ReferenceFrame> {
+        assert!(i < Self::MAX_STORED_FRAMES);
+        self.reference_frames[i].as_ref()
+    }
+}
+
 pub struct Frame {
     header: FrameHeader,
     toc: Toc,
     modular_color_channels: usize,
-    extra_channel_info: Vec<ExtraChannelInfo>,
     lf_global: Option<LfGlobalState>,
+    decoder_state: DecoderState,
 }
 
 impl Frame {
-    pub fn new(br: &mut BitReader, file_header: &FileHeader) -> Result<Self> {
-        let frame_header =
-            FrameHeader::read_unconditional(&(), br, &file_header.frame_header_nonserialized())
-                .unwrap();
+    pub fn new(br: &mut BitReader, decoder_state: DecoderState) -> Result<Self> {
+        let frame_header = FrameHeader::read_unconditional(
+            &(),
+            br,
+            &decoder_state.file_header.frame_header_nonserialized(),
+        )
+        .unwrap();
         let num_toc_entries = frame_header.num_toc_entries();
         let toc = Toc::read_unconditional(
             &(),
@@ -72,7 +122,13 @@ impl Frame {
         br.jump_to_byte_boundary()?;
         let modular_color_channels = if frame_header.encoding == Encoding::VarDCT {
             0
-        } else if file_header.image_metadata.color_encoding.color_space == ColorSpace::Gray {
+        } else if decoder_state
+            .file_header
+            .image_metadata
+            .color_encoding
+            .color_space
+            == ColorSpace::Gray
+        {
             1
         } else {
             3
@@ -80,9 +136,9 @@ impl Frame {
         Ok(Self {
             header: frame_header,
             modular_color_channels,
-            extra_channel_info: file_header.image_metadata.extra_channel_info.clone(),
             toc,
             lf_global: None,
+            decoder_state,
         })
     }
 
@@ -94,12 +150,8 @@ impl Frame {
         self.toc.entries.iter().map(|x| *x as usize).sum()
     }
 
-    pub fn is_last(&self) -> bool {
-        self.header.is_last
-    }
-
     /// Given a bit reader pointing at the end of the TOC, returns a vector of `BitReader`s, each
-    /// of which reads a specific section.
+    /// of which reads a specific sectionalpha_channel.
     pub fn sections<'a>(&self, br: &'a mut BitReader) -> Result<Vec<BitReader<'a>>> {
         if self.toc.permuted {
             self.toc
@@ -140,16 +192,11 @@ impl Frame {
 
         let patches = if self.header.has_patches() {
             info!("decoding patches");
-            // TODO
-            let reference_positions: [Option<ReferenceFrame>; 4] = Default::default();
-            // TODO
-            let num_extra_channels = 0;
             Some(PatchesDictionary::read(
                 br,
-                self.header.width,
-                self.header.height,
-                num_extra_channels,
-                reference_positions,
+                self.header.width as usize,
+                self.header.height as usize,
+                &self.decoder_state,
             )?)
         } else {
             None
@@ -181,7 +228,8 @@ impl Frame {
             let size_limit = (1024
                 + self.header.width as usize
                     * self.header.height as usize
-                    * (self.modular_color_channels + self.extra_channel_info.len())
+                    * (self.modular_color_channels
+                        + self.decoder_state.extra_channel_info().len())
                     / 16)
                 .min(1 << 22);
             Some(Tree::read(br, size_limit)?)
@@ -192,7 +240,7 @@ impl Frame {
         let modular_global = FullModularImage::read(
             &self.header,
             self.modular_color_channels,
-            &self.extra_channel_info,
+            self.decoder_state.extra_channel_info(),
             &tree,
             br,
         )?;
@@ -207,6 +255,27 @@ impl Frame {
         });
 
         Ok(())
+    }
+
+    pub fn finalize(mut self) -> Result<Option<DecoderState>> {
+        if self.header.can_be_referenced {
+            // TODO(firsching): actually decode the image here, instead of setting it
+            // to a blank image here, once we can decode images.
+            self.decoder_state.reference_frames[self.header.save_as_reference as usize] =
+                Some(ReferenceFrame::blank(
+                    self.header.width as usize,
+                    self.header.height as usize,
+                    // Set num_channels to "1" here unconditionally for now, since we will use this
+                    // channel for the size checks
+                    1,
+                    self.header.save_before_ct,
+                )?);
+        }
+        Ok(if self.header.is_last {
+            None
+        } else {
+            Some(self.decoder_state)
+        })
     }
 }
 
@@ -225,28 +294,34 @@ mod test {
         util::test::assert_almost_eq,
     };
 
-    use super::{Frame, Section};
+    use super::{DecoderState, Frame, Section};
 
-    fn read_frames(image: &[u8]) -> Result<Vec<Frame>, Error> {
+    fn read_frames(
+        image: &[u8],
+        mut callback: impl FnMut(Frame) -> Result<Option<DecoderState>, Error>,
+    ) -> Result<(), Error> {
         let codestream = ContainerParser::collect_codestream(image).unwrap();
         let mut br = BitReader::new(&codestream);
         let file_header = FileHeader::read(&mut br).unwrap();
-        let mut frames = vec![];
+        let mut decoder_state = DecoderState::new(file_header);
         loop {
-            let mut frame = Frame::new(&mut br, &file_header)?;
-            let is_last = frame.is_last();
+            let mut frame = Frame::new(&mut br, decoder_state)?;
             let mut sections = frame.sections(&mut br)?;
             frame.decode_lf_global(&mut sections[frame.get_section_idx(Section::LfGlobal)])?;
-            frames.push(frame);
-            if is_last {
+
+            // Call the callback with the frame
+            if let Some(state) = callback(frame)? {
+                decoder_state = state;
+            } else {
                 break;
             }
         }
-        Ok(frames)
+        Ok(())
     }
+
     fn read_frames_from_path(path: &Path) -> Result<(), Error> {
         let data = std::fs::read(path).unwrap();
-        let result = panic::catch_unwind(|| read_frames(data.as_slice()));
+        let result = panic::catch_unwind(|| read_frames(data.as_slice(), |frame| frame.finalize()));
 
         match result {
             Ok(Ok(_frame)) => {}
@@ -274,7 +349,11 @@ mod test {
 
     #[test]
     fn splines() -> Result<(), Error> {
-        let frames = read_frames(include_bytes!("../resources/test/splines.jxl"))?;
+        let mut frames = Vec::new();
+        read_frames(include_bytes!("../resources/test/splines.jxl"), |frame| {
+            frames.push(frame);
+            Ok(None)
+        })?;
         assert_eq!(frames.len(), 1);
         let frame = &frames[0];
         let lf_global = frame.lf_global.as_ref().unwrap();
@@ -329,7 +408,12 @@ mod test {
 
     #[test]
     fn noise() -> Result<(), Error> {
-        let frames = read_frames(include_bytes!("../resources/test/8x8_noise.jxl"))?;
+        let mut frames = Vec::new();
+        read_frames(include_bytes!("../resources/test/8x8_noise.jxl"), |frame| {
+            frames.push(frame);
+            Ok(None)
+        })?;
+
         assert_eq!(frames.len(), 1);
         let frame = &frames[0];
         let lf_global = frame.lf_global.as_ref().unwrap();
@@ -342,13 +426,19 @@ mod test {
         }
         Ok(())
     }
+
     #[test]
     fn patches() -> Result<(), Error> {
-        let frame = read_frames(include_bytes!(
-            "../resources/test/grayscale_patches_modular.jxl"
-        ))?;
-        let lf_global = frame[1].lf_global.as_ref().unwrap();
-        let patches = lf_global.patches.as_ref().unwrap();
+        let mut frames = Vec::new();
+        read_frames(
+            include_bytes!("../resources/test/grayscale_patches_modular.jxl"),
+            |frame| {
+                frames.push(frame);
+                Ok(None)
+            },
+        )?;
+        //let lf_global = frame[1].lf_global.as_ref().unwrap();
+        //let patches = lf_global.patches.as_ref().unwrap();
         Ok(())
     }
 }

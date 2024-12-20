@@ -114,7 +114,7 @@ pub enum Error {
     #[error("Invalid modular mode property: {0}")]
     InvalidProperty(u32),
     #[error("Invalid alpha channel for blending: {0}, limit is {1}")]
-    PatchesInvalidAlphaChannel(u32, u32),
+    PatchesInvalidAlphaChannel(usize, usize),
     #[error("Invalid patch blend mode: {0}, limit is {1}")]
     PatchesInvalidBlendMode(u8, u8),
     #[error("Invalid Patch: negative {0}-coordinate: {1} base {0},  {2} delta {0}")]
@@ -124,11 +124,11 @@ pub enum Error {
     #[error("Patches invalid reference frame at index {0}")]
     PatchesInvalidReference(usize),
     #[error("Invalid Patch {0}: at {1} + {2} > {3}")]
-    PatchesOutOfBounds(String, usize, usize, u32),
+    PatchesOutOfBounds(String, usize, usize, usize),
     #[error("Patches cannot use frames saved post color transforms")]
     PatchesPostColorTransform(),
     #[error("Too many patches: {0}, limit is {1}")]
-    PatchesTooMany(u32, u32),
+    PatchesTooMany(usize, usize),
     #[error("Reference too large: {0}, limit is {1}")]
     PatchesRefTooLarge(usize, usize),
     #[error("Point list is empty")]

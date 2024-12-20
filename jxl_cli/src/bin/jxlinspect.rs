@@ -6,7 +6,7 @@
 use clap::{Arg, Command};
 use jxl::bit_reader::BitReader;
 use jxl::container::{ContainerParser, ParseEvent};
-use jxl::frame::Frame;
+use jxl::frame::{DecoderState, Frame};
 use jxl::headers::color_encoding::{ColorEncoding, Primaries, WhitePoint};
 use jxl::headers::{FileHeader, JxlHeader};
 use jxl::icc::read_icc;
@@ -128,9 +128,9 @@ fn parse_jxl_codestream(data: &[u8], verbose: bool) -> Result<(), jxl::error::Er
     // TODO(firsching): handle frames which are blended together, also within animations.
     if let Some(ref animation) = file_header.image_metadata.animation {
         let mut total_duration = 0.0f64;
-        let mut not_is_last = true;
-        while not_is_last {
-            let frame = Frame::new(&mut br, &file_header)?;
+        let mut decoder_state = DecoderState::new(file_header.clone());
+        loop {
+            let frame = Frame::new(&mut br, decoder_state)?;
             let ms = frame.header().duration(animation);
             total_duration += ms;
             println!(
@@ -141,8 +141,12 @@ fn parse_jxl_codestream(data: &[u8], verbose: bool) -> Result<(), jxl::error::Er
                 frame.header().y0
             );
             br.jump_to_byte_boundary()?;
-            not_is_last = !frame.is_last();
             br.skip_bits(frame.total_bytes_in_toc() * 8)?;
+            if let Some(state) = frame.finalize()? {
+                decoder_state = state;
+            } else {
+                break;
+            }
         }
         print!(
             "Animation length: {} seconds",
