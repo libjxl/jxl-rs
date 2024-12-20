@@ -15,7 +15,7 @@ use crate::{
 };
 
 // TODO(firsching): move to some common place?
-const MAX_NUM_REFERENCE_FRAMES: u32 = 4;
+const MAX_NUM_REFERENCE_FRAMES: usize = 4;
 
 // Context numbers as specified in Section C.4.5, Listing C.2:
 const NUM_REF_PATCH_CONTEXT: usize = 0;
@@ -65,6 +65,19 @@ const PATCH_BLEND_MODE_ALPHA_WEIGHTED_ADD_ABOVE: u8 = 6;
 const PATCH_BLEND_MODE_ALPHA_WEIGHTED_ADD_BELOW: u8 = 7;
 const PATCH_BLEND_MODE_NUM_BLEND_MODES: u8 = 8;
 
+#[inline]
+fn uses_alpha(blend_mode: u8) -> bool {
+    blend_mode == PATCH_BLEND_MODE_BLEND_ABOVE
+        || blend_mode == PATCH_BLEND_MODE_BLEND_BELOW
+        || blend_mode == PATCH_BLEND_MODE_ALPHA_WEIGHTED_ADD_ABOVE
+        || blend_mode == PATCH_BLEND_MODE_ALPHA_WEIGHTED_ADD_BELOW
+}
+
+#[inline]
+fn uses_clamp(blend_mode: u8) -> bool {
+    uses_alpha(blend_mode) || blend_mode == PATCH_BLEND_MODE_MUL
+}
+
 #[derive(Debug, Clone, Copy)]
 struct PatchBlending {
     mode: u8,
@@ -75,7 +88,7 @@ struct PatchBlending {
 #[derive(Debug, Clone, Copy)]
 pub struct PatchReferencePosition {
     // Not using `ref` like in the spec here, because it is a keyword.
-    reference: u8,
+    reference: usize,
     x0: usize,
     y0: usize,
     xsize: usize,
@@ -91,11 +104,17 @@ pub struct PatchPosition {
 
 #[derive(Debug, Default)]
 pub struct PatchesDictionary {
-    pub reference_frames: [Option<Box<Image<u8>>>; 4],
+    pub reference_frames: [Option<ReferenceFrame>; 4],
     pub positions: Vec<PatchPosition>,
     ref_positions: Vec<PatchReferencePosition>,
     blendings: Vec<PatchBlending>,
     blendings_stride: u32,
+}
+
+#[derive(Debug)]
+pub struct ReferenceFrame {
+    pub frame: Box<Image<u8>>,
+    pub ib_is_in_xyb: bool,
 }
 
 impl PatchesDictionary {
@@ -105,13 +124,12 @@ impl PatchesDictionary {
         xsize: u32,
         ysize: u32,
         num_extra_channels: u32,
-        reference_frames: [Option<Box<Image<u8>>>; 4],
+        reference_frames: [Option<ReferenceFrame>; 4],
     ) -> Result<PatchesDictionary> {
         let blendings_stride = num_extra_channels + 1;
-        trace!(pos = br.total_bits_read());
         let patches_histograms = Histograms::decode(NUM_PATCH_DICTIONARY_CONTEXTS, br, true)?;
         let mut patches_reader = patches_histograms.make_reader(br)?;
-        let num_ref_patch = 1 + patches_reader.read(br, NUM_REF_PATCH_CONTEXT)?;
+        let num_ref_patch = patches_reader.read(br, NUM_REF_PATCH_CONTEXT)?;
         let num_pixels = xsize * ysize;
         let max_ref_patches = 1024 + num_pixels / 4;
         let max_patches = max_ref_patches * 4;
@@ -126,24 +144,43 @@ impl PatchesDictionary {
         let mut ref_positions: Vec<PatchReferencePosition> =
             Vec::with_capacity(num_ref_patch as usize);
         for _ in 0..num_ref_patch {
-            let reference = patches_reader.read(br, REFERENCE_FRAME_CONTEXT)?;
+            let reference = patches_reader.read(br, REFERENCE_FRAME_CONTEXT)? as usize;
             if reference >= MAX_NUM_REFERENCE_FRAMES {
                 return Err(Error::PatchesRefTooLarge(
                     reference,
                     MAX_NUM_REFERENCE_FRAMES,
                 ));
             }
-            // TODO: add check if we are after xyb color transform?
-            // let image = reference_frames[ref_positions[0].reference as usize];
-            // add checks that use that image here?
+
             let x0 = patches_reader.read(br, PATCH_REFERENCE_POSITION_CONTEXT)? as usize;
-            println!("x0: {x0}");
             let y0 = patches_reader.read(br, PATCH_REFERENCE_POSITION_CONTEXT)? as usize;
             let ref_pos_xsize = patches_reader.read(br, PATCH_SIZE_CONTEXT)? as usize + 1;
             let ref_pos_ysize = patches_reader.read(br, PATCH_SIZE_CONTEXT)? as usize + 1;
-
-            // TODO: add check : ref_pos.x0 + ref_pos.xsize > ib.xsize()
-            // TODO: add check : ref_pos.y0 + ref_pos.ysize > ib.ysize()
+            let reference_frame = &reference_frames[reference];
+            match reference_frame {
+                None => return Err(Error::PatchesInvalidReference(reference)),
+                Some(reference) => {
+                    if !reference.ib_is_in_xyb {
+                        return Err(Error::PatchesPostColorTransform());
+                    }
+                    if x0 + ref_pos_xsize > reference.frame.size.0 {
+                        return Err(Error::PatchesInvalidPosition(
+                            "x".to_string(),
+                            x0,
+                            ref_pos_xsize,
+                            reference.frame.size.0,
+                        ));
+                    }
+                    if y0 + ref_pos_ysize > reference.frame.size.1 {
+                        return Err(Error::PatchesInvalidPosition(
+                            "y".to_string(),
+                            y0,
+                            ref_pos_ysize,
+                            reference.frame.size.1,
+                        ));
+                    }
+                }
+            }
 
             let id_count = patches_reader.read(br, PATCH_COUNT_CONTEXT)? + 1;
             if id_count > max_patches + 1 {
@@ -162,21 +199,19 @@ impl PatchesDictionary {
             positions.reserve(next_size as usize);
             blendings.reserve(next_size as usize * PATCH_BLEND_MODE_NUM_BLEND_MODES as usize);
 
-            for _ in 0..id_count {
+            for i in 0..id_count {
                 let mut pos = PatchPosition {
                     x: 0,
                     y: 0,
                     ref_pos_idx: ref_positions.len(),
                 };
-                if positions.is_empty() {
+                if i == 0 {
                     // Read initial position
                     pos.x = patches_reader.read(br, PATCH_POSITION_CONTEXT)? as usize;
-                    println!("initial read: pos.x:{}, peek: {}", pos.x, br.peek(8));
                     pos.y = patches_reader.read(br, PATCH_POSITION_CONTEXT)? as usize;
                 } else {
                     // Read offsets and calculate new position
                     let delta_x = patches_reader.read_signed(br, PATCH_OFFSET_CONTEXT)?;
-                    println!("delta_x: {delta_x}, peek: {}", br.peek(8));
                     if delta_x < 0 && (-delta_x as usize) > positions.last().unwrap().x {
                         return Err(Error::PatchesInvalidDelta(
                             "x".to_string(),
@@ -218,7 +253,6 @@ impl PatchesDictionary {
                 let mut clamp = false;
                 for _ in 0..blendings_stride {
                     let blend_mode = patches_reader.read(br, PATCH_BLEND_MODE_CONTEXT)? as u8;
-                    println!("read blendings stride, peek:{}", br.peek(8));
                     if blend_mode >= PATCH_BLEND_MODE_NUM_BLEND_MODES {
                         return Err(Error::PatchesInvalidBlendMode(
                             blend_mode,
@@ -226,11 +260,8 @@ impl PatchesDictionary {
                         ));
                     }
 
-                    if blend_mode == PATCH_BLEND_MODE_BLEND_ABOVE
-                        || blend_mode == PATCH_BLEND_MODE_BLEND_BELOW
-                    {
-                        alpha_channel =
-                            patches_reader.read(br, PATCH_ALPHA_CHANNEL_CONTEXT)? as u32;
+                    if uses_alpha(blend_mode) {
+                        alpha_channel = patches_reader.read(br, PATCH_ALPHA_CHANNEL_CONTEXT)?;
                         if alpha_channel >= PATCH_BLEND_MODE_NUM_BLEND_MODES as u32 {
                             return Err(Error::PatchesInvalidAlphaChannel(
                                 alpha_channel,
@@ -239,7 +270,7 @@ impl PatchesDictionary {
                         }
                     }
 
-                    if blend_mode == PATCH_BLEND_MODE_ADD || blend_mode == PATCH_BLEND_MODE_MUL {
+                    if uses_clamp(blend_mode) {
                         clamp = patches_reader.read(br, PATCH_CLAMP_CONTEXT)? != 0;
                     }
                     blendings.push(PatchBlending {
@@ -252,7 +283,7 @@ impl PatchesDictionary {
             }
 
             ref_positions.push(PatchReferencePosition {
-                reference: 0,
+                reference,
                 x0,
                 y0,
                 xsize: ref_pos_xsize,

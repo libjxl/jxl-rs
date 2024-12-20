@@ -6,7 +6,11 @@
 use crate::{
     bit_reader::BitReader,
     error::Result,
-    features::{noise::Noise, patches::PatchesDictionary, spline::Splines},
+    features::{
+        noise::Noise,
+        patches::{PatchesDictionary, ReferenceFrame},
+        spline::Splines,
+    },
     headers::{
         color_encoding::ColorSpace,
         encodings::UnconditionalCoder,
@@ -14,7 +18,6 @@ use crate::{
         frame_header::{Encoding, FrameHeader, Toc, TocNonserialized},
         FileHeader,
     },
-    image::Image,
     util::tracing_wrappers::*,
 };
 use modular::{FullModularImage, Tree};
@@ -34,7 +37,6 @@ pub enum Section {
 #[allow(dead_code)]
 pub struct LfGlobalState {
     patches: Option<PatchesDictionary>,
-    // TODO(veluca93): splines
     splines: Option<Splines>,
     noise: Option<Noise>,
     lf_quant: LfQuantFactors,
@@ -139,7 +141,7 @@ impl Frame {
         let patches = if self.header.has_patches() {
             info!("decoding patches");
             // TODO
-            let reference_positions: [Option<Box<Image<u8>>>; 4] = Default::default();
+            let reference_positions: [Option<ReferenceFrame>; 4] = Default::default();
             // TODO
             let num_extra_channels = 0;
             Some(PatchesDictionary::read(
@@ -256,8 +258,6 @@ mod test {
                 if let Some(msg) = e.downcast_ref::<&str>() {
                     if msg.contains("VarDCT not implemented") {
                         println!("Skipping {}: VarDCT not implemented", path.display());
-                    } else if msg.contains("patches not implemented") {
-                        println!("Skipping {}: patches not implented", path.display());
                     } else {
                         panic::resume_unwind(e);
                     }
@@ -344,10 +344,11 @@ mod test {
     }
     #[test]
     fn patches() -> Result<(), Error> {
-        //let frame = read_frame(include_bytes!("../resources/test/grayscale_patches_modular.jxl"))?;
-        //let lf_global = frame.lf_global.unwrap();
-        //let patches = lf_global.patches.unwrap();
-
+        let frame = read_frames(include_bytes!(
+            "../resources/test/grayscale_patches_modular.jxl"
+        ))?;
+        let lf_global = frame[1].lf_global.as_ref().unwrap();
+        let patches = lf_global.patches.as_ref().unwrap();
         Ok(())
     }
 }

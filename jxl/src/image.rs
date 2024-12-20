@@ -108,7 +108,7 @@ impl ImageDataType for half::f16 {
 impl_image_data_type!(f64, F64);
 
 pub struct Image<T: ImageDataType> {
-    size: (usize, usize),
+    pub size: (usize, usize),
     data: Vec<T>,
 }
 
