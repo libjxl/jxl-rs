@@ -122,7 +122,7 @@ pub enum Error {
     #[error("Too many splines: {0}, limit is {1}")]
     SplinesTooMany(u32, u32),
     #[error("Spline has adjacent coinciding control points: point[{0}]: {1:?}, point[{2}]: {3:?}")]
-    SplineAdjacentCoincidingControlPoints(u32, Point, u32, Point),
+    SplineAdjacentCoincidingControlPoints(usize, Point, usize, Point),
     #[error("Too many control points for splines: {0}, limit is {1}")]
     SplinesTooManyControlPoints(u32, u32),
     #[error(

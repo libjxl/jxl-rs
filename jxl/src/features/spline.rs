@@ -5,7 +5,11 @@
 
 // TODO(firsching): remove once we use this!
 #![allow(dead_code)]
-use std::{f32::consts::FRAC_1_SQRT_2, iter, ops};
+use std::{
+    f32::consts::{FRAC_1_SQRT_2, PI, SQRT_2},
+    iter::{self, zip},
+    ops,
+};
 
 use crate::{
     bit_reader::BitReader,
@@ -25,6 +29,7 @@ const NUM_CONTROL_POINTS_CONTEXT: usize = 3;
 const CONTROL_POINTS_CONTEXT: usize = 4;
 const DCT_CONTEXT: usize = 5;
 const NUM_SPLINE_CONTEXTS: usize = 6;
+const DESIRED_RENDERING_DISTANCE: f32 = 1.0;
 
 #[derive(Debug, Clone, Copy, Default)]
 pub struct Point {
@@ -88,32 +93,34 @@ impl ops::Div<f32> for Point {
     }
 }
 
+#[derive(Default)]
 pub struct Spline {
     control_points: Vec<Point>,
     // X, Y, B.
-    color_dct: [[f32; 32]; 3],
+    color_dct: [Dct32; 3],
     // Splines are drawn by normalized Gaussian splatting. This controls the
     // Gaussian's parameter along the spline.
-    sigma_dct: [f32; 32],
+    sigma_dct: Dct32,
     // The estimated area in pixels covered by the spline.
     estimated_area_reached: u64,
 }
 
 impl Spline {
     pub fn validate_adjacent_point_coincidence(&self) -> Result<()> {
-        if let Some(item) = self
-            .control_points
-            .iter()
-            .enumerate()
-            .find(|(index, point)| {
-                index + 1 < self.control_points.len() && self.control_points[index + 1] == **point
-            })
+        if let Some(((index, p0), p1)) = zip(
+            self.control_points
+                .iter()
+                .take(self.control_points.len() - 1)
+                .enumerate(),
+            self.control_points.iter().skip(1),
+        )
+        .find(|((_, p0), p1)| **p0 == **p1)
         {
             return Err(Error::SplineAdjacentCoincidingControlPoints(
-                item.0 as u32,
-                *item.1,
-                (item.0 + 1) as u32,
-                self.control_points[item.0 + 1],
+                index,
+                *p0,
+                index + 1,
+                *p1,
             ));
         }
         Ok(())
@@ -231,9 +238,7 @@ impl QuantizedSpline {
 
         let mut result = Spline {
             control_points: Vec::with_capacity(self.control_points.len() + 1),
-            color_dct: [[0.0; 32]; 3],
-            sigma_dct: [0.0; 32],
-            estimated_area_reached: 0,
+            ..Default::default()
         };
 
         let px = starting_point.x.round();
@@ -279,14 +284,14 @@ impl QuantizedSpline {
         for (c, weight) in CHANNEL_WEIGHT.iter().enumerate().take(3) {
             for i in 0..32 {
                 let inv_dct_factor = if i == 0 { FRAC_1_SQRT_2 } else { 1.0 };
-                result.color_dct[c][i] =
+                result.color_dct[c].0[i] =
                     self.color_dct[c][i] as f32 * inv_dct_factor * weight * inv_quant;
             }
         }
 
         for i in 0..32 {
-            result.color_dct[0][i] += y_to_x * result.color_dct[1][i];
-            result.color_dct[2][i] += y_to_b * result.color_dct[1][i];
+            result.color_dct[0].0[i] += y_to_x * result.color_dct[1].0[i];
+            result.color_dct[2].0[i] += y_to_b * result.color_dct[1].0[i];
         }
 
         let mut width_estimate = 0;
@@ -310,7 +315,7 @@ impl QuantizedSpline {
 
         for i in 0..32 {
             let inv_dct_factor = if i == 0 { FRAC_1_SQRT_2 } else { 1.0 };
-            result.sigma_dct[i] =
+            result.sigma_dct.0[i] =
                 self.sigma_dct[i] as f32 * inv_dct_factor * CHANNEL_WEIGHT[3] * inv_quant;
 
             let weight_f = (inv_quant * self.sigma_dct[i] as f32).abs().ceil();
@@ -341,15 +346,15 @@ pub struct Splines {
     pub starting_points: Vec<Point>,
     segments: Vec<SplineSegment>,
     segment_indices: Vec<usize>,
-    segment_y_start: Vec<usize>,
+    segment_y_start: Vec<u64>,
 }
 
 fn draw_centripetal_catmull_rom_spline(points: &[Point]) -> Result<Vec<Point>> {
     if points.is_empty() {
-        return Ok([].to_vec());
+        return Ok(vec![]);
     }
     if points.len() == 1 {
-        return Ok([points[0]].to_vec());
+        return Ok(vec![points[0]]);
     }
     const NUM_POINTS: usize = 16;
     // Create a view of points with one prepended and one appended point.
@@ -439,20 +444,120 @@ fn for_each_equally_spaced_point<F: FnMut(Point, f32)>(
     f(points[points.len() - 1], accumulated_distance);
 }
 
-const DESIRED_RENDERING_DISTANCE: f32 = 1.0;
+#[derive(Default, Clone, Copy, Debug)]
+struct Dct32([f32; 32]);
+
+impl Dct32 {
+    fn continuous_idct(&self, t: f32) -> f32 {
+        const MULTIPLIERS: [f32; 32] = [
+            PI / 32.0 * 0.0,
+            PI / 32.0 * 1.0,
+            PI / 32.0 * 2.0,
+            PI / 32.0 * 3.0,
+            PI / 32.0 * 4.0,
+            PI / 32.0 * 5.0,
+            PI / 32.0 * 6.0,
+            PI / 32.0 * 7.0,
+            PI / 32.0 * 8.0,
+            PI / 32.0 * 9.0,
+            PI / 32.0 * 10.0,
+            PI / 32.0 * 11.0,
+            PI / 32.0 * 12.0,
+            PI / 32.0 * 13.0,
+            PI / 32.0 * 14.0,
+            PI / 32.0 * 15.0,
+            PI / 32.0 * 16.0,
+            PI / 32.0 * 17.0,
+            PI / 32.0 * 18.0,
+            PI / 32.0 * 19.0,
+            PI / 32.0 * 20.0,
+            PI / 32.0 * 21.0,
+            PI / 32.0 * 22.0,
+            PI / 32.0 * 23.0,
+            PI / 32.0 * 24.0,
+            PI / 32.0 * 25.0,
+            PI / 32.0 * 26.0,
+            PI / 32.0 * 27.0,
+            PI / 32.0 * 28.0,
+            PI / 32.0 * 29.0,
+            PI / 32.0 * 30.0,
+            PI / 32.0 * 31.0,
+        ];
+        let tandhalf = t + 0.5;
+        zip(MULTIPLIERS.iter(), self.0.iter())
+            .map(|(multiplier, coeff)| SQRT_2 * coeff * (multiplier * tandhalf).cos())
+            .sum()
+    }
+}
 
 impl Splines {
+    fn add_segment(
+        &mut self,
+        center: &Point,
+        intensity: f32,
+        color: [f32; 3],
+        sigma: f32,
+        segments_by_y: &mut Vec<(u64, usize)>,
+    ) {
+        if sigma.is_infinite()
+            || sigma == 0.0
+            || (1.0 / sigma).is_infinite()
+            || intensity.is_infinite()
+        {
+            return;
+        }
+        // TODO(zond): Use 3 if not JXL_HIGH_PRECISION
+        const DISTANCE_EXP: f32 = 5.0;
+        let max_color = color
+            .iter()
+            .map(|chan| (chan * intensity).abs())
+            .max_by(|a, b| a.total_cmp(b))
+            .unwrap();
+        let max_distance =
+            (-2.0 * sigma * sigma * (0.1f32.ln() * DISTANCE_EXP - max_color.ln())).sqrt();
+        let segment = SplineSegment {
+            center_x: center.x,
+            center_y: center.y,
+            color,
+            inv_sigma: 1.0 / sigma,
+            sigma_over_4_times_intensity: 0.25 * sigma * intensity,
+            maximum_distance: max_distance,
+        };
+        let y0 = (center.y - max_distance).round() as i64;
+        let y1 = (center.y + max_distance).round() as i64 + 1;
+        for y in 0.max(y0)..y1 {
+            segments_by_y.push((y as u64, self.segments.len()));
+        }
+        self.segments.push(segment);
+    }
+
+    fn add_segments_from_points(
+        &mut self,
+        spline: &Spline,
+        points_to_draw: &[(Point, f32)],
+        length: f32,
+        desired_distance: f32,
+        segments_by_y: &mut Vec<(u64, usize)>,
+    ) {
+        let inv_length = 1.0 / length;
+        for (point_index, (point, multiplier)) in points_to_draw.iter().enumerate() {
+            let progress = (point_index as f32 * desired_distance * inv_length).min(1.0);
+            let mut color = [0.0; 3];
+            for (index, coeffs) in spline.color_dct.iter().enumerate() {
+                color[index] = coeffs.continuous_idct((32.0 - 1.0) * progress);
+            }
+            let sigma = spline.sigma_dct.continuous_idct((32.0 - 1.0) * progress);
+            self.add_segment(point, *multiplier, color, sigma, segments_by_y);
+        }
+    }
+
     fn has_any(&self) -> bool {
         !self.splines.is_empty()
     }
 
     // TODO(zond): Add color correlation as parameter.
     pub fn initialize_draw_cache(&mut self, image_xsize: u64, image_ysize: u64) -> Result<()> {
-        self.segments.clear();
-        self.segment_indices.clear();
         self.segment_y_start.clear();
-        // let mut segments_by_y = Vec::new();
-        // let mut intermediate_points = Vec::new();
         let mut total_estimated_area_reached = 0u64;
         let mut splines = Vec::new();
         // TODO(zond): Use color correlation here.
@@ -487,6 +592,9 @@ impl Splines {
             );
         }
 
+        let mut segments_by_y = Vec::new();
+
+        self.segments.clear();
         for spline in splines {
             let mut points_to_draw = Vec::<(Point, f32)>::new();
             let intermediate_points = draw_centripetal_catmull_rom_spline(&spline.control_points)?;
@@ -500,9 +608,37 @@ impl Splines {
             if length <= 0.0 {
                 continue;
             }
+            self.add_segments_from_points(
+                &spline,
+                &points_to_draw,
+                length,
+                DESIRED_RENDERING_DISTANCE,
+                &mut segments_by_y,
+            );
         }
 
-        todo!("finish translating this function from C++");
+        // TODO(from libjxl): Consider linear sorting here.
+        segments_by_y.sort_by_key(|segment| segment.0);
+
+        self.segment_indices.clear();
+        self.segment_indices.try_reserve(segments_by_y.len())?;
+        self.segment_indices.resize(segments_by_y.len(), 0);
+
+        self.segment_y_start.clear();
+        self.segment_y_start.try_reserve(image_ysize as usize + 1)?;
+        self.segment_y_start.resize(image_ysize as usize + 1, 0);
+
+        for (i, segment) in segments_by_y.iter().enumerate() {
+            self.segment_indices[i] = segment.1;
+            let y = segment.0;
+            if y < image_ysize {
+                self.segment_y_start[y as usize + 1] += 1;
+            }
+        }
+        for y in 0..image_ysize {
+            self.segment_y_start[y as usize + 1] += self.segment_y_start[y as usize];
+        }
+        Ok(())
     }
 
     #[instrument(level = "debug", skip(br), ret, err)]
@@ -575,11 +711,17 @@ impl Splines {
 
 #[cfg(test)]
 mod test_splines {
-    use crate::{error::Error, util::test::assert_all_almost_eq};
+    use std::{f32::consts::SQRT_2, iter::zip};
+
+    use crate::{
+        error::Error,
+        features::spline::SplineSegment,
+        util::test::{assert_all_almost_eq, assert_almost_eq},
+    };
 
     use super::{
-        draw_centripetal_catmull_rom_spline, for_each_equally_spaced_point, Point, QuantizedSpline,
-        Spline,
+        draw_centripetal_catmull_rom_spline, for_each_equally_spaced_point, Dct32, Point,
+        QuantizedSpline, Spline, Splines, DESIRED_RENDERING_DISTANCE,
     };
 
     #[test]
@@ -627,31 +769,31 @@ mod test_splines {
                         Point { x: 17.0, y: 277.0 },
                     ],
                     color_dct: [
-                        [
+                        Dct32([
                             36.3005, 39.6984, 23.2008, 67.4982, 4.4016, 71.5008, 62.2986, 32.298,
                             92.1984, 10.101, 10.7982, 9.198, 6.0984, 10.5, 79.0986, 7.0014,
                             24.5994, 90.7998, 5.502, 84.0, 43.8018, 49.0014, 33.4992, 78.9012,
                             54.4992, 77.9016, 62.1012, 51.3996, 36.4014, 14.301, 83.7018, 35.4018,
-                        ],
-                        [
+                        ]),
+                        Dct32([
                             9.38684, 53.4, 9.525, 74.925, 72.675, 26.7, 7.875, 0.9, 84.9, 23.175,
                             26.475, 31.125, 90.975, 11.7, 74.1, 39.3, 23.7, 82.5, 4.8, 2.7, 61.2,
                             96.375, 13.725, 66.675, 62.925, 82.425, 5.925, 98.7, 21.525, 7.875,
                             51.675, 63.075,
-                        ],
-                        [
+                        ]),
+                        Dct32([
                             47.9949, 39.33, 6.865, 26.275, 33.265, 6.19, 1.715, 98.9, 59.91,
                             59.575, 95.005, 61.295, 82.715, 53.0, 6.13, 30.41, 34.69, 96.92, 93.42,
                             16.98, 38.8, 80.765, 63.005, 18.585, 43.605, 32.305, 61.015, 20.23,
                             24.325, 28.315, 69.105, 62.375,
-                        ],
+                        ]),
                     ],
-                    sigma_dct: [
+                    sigma_dct: Dct32([
                         32.7593, 21.6645, 44.3289, 1.6665, 45.6621, 90.6576, 29.3304, 59.3274,
                         23.6643, 85.3248, 84.6582, 27.3306, 41.9958, 83.9916, 50.6616, 17.6649,
                         93.6573, 4.9995, 2.6664, 69.6597, 94.9905, 51.9948, 24.3309, 18.6648,
                         11.9988, 95.6571, 28.6638, 81.3252, 89.991, 31.3302, 74.6592, 51.9948,
-                    ],
+                    ]),
                     estimated_area_reached: 19843491681,
                 },
             ),
@@ -700,31 +842,31 @@ mod test_splines {
                         Point { x: 233.0, y: 267.0 },
                     ],
                     color_dct: [
-                        [
+                        Dct32([
                             15.0007, 28.9002, 21.9996, 6.5982, 41.7984, 83.0004, 8.6016, 56.8008,
                             68.901, 9.702, 5.4012, 19.7988, 70.7994, 90.0018, 52.5, 65.2008,
                             7.7994, 23.499, 26.4012, 72.198, 64.701, 87.0996, 1.302, 67.4982,
                             45.9984, 68.4012, 65.3982, 35.4984, 29.1018, 12.999, 41.601, 23.898,
-                        ],
-                        [
+                        ]),
+                        Dct32([
                             47.6767, 79.425, 62.7, 29.1, 96.825, 18.525, 17.625, 15.225, 80.475,
                             56.025, 96.225, 59.925, 26.7, 96.075, 92.325, 42.075, 35.775, 54.0,
                             23.175, 54.975, 75.975, 35.775, 58.425, 88.725, 2.4, 78.075, 95.625,
                             27.525, 6.6, 78.525, 24.075, 69.825,
-                        ],
-                        [
+                        ]),
+                        Dct32([
                             43.8159, 96.505, 0.889999, 95.11, 49.085, 71.165, 25.115, 33.565,
                             75.225, 95.015, 82.085, 19.675, 10.53, 44.905, 49.975, 93.315, 83.515,
                             99.5, 64.615, 53.995, 3.52501, 99.685, 45.265, 82.075, 22.42, 37.895,
                             59.995, 32.215, 12.62, 4.605, 65.515, 96.425,
-                        ],
+                        ]),
                     ],
-                    sigma_dct: [
+                    sigma_dct: Dct32([
                         72.589, 2.6664, 41.6625, 2.3331, 39.6627, 78.9921, 69.6597, 19.998,
                         92.3241, 71.6595, 41.9958, 61.9938, 29.997, 49.3284, 70.3263, 45.3288,
                         62.6604, 47.3286, 46.662, 41.3292, 90.6576, 46.662, 91.3242, 54.9945,
                         7.9992, 69.6597, 25.3308, 84.6582, 61.6605, 27.6639, 3.6663, 46.9953,
-                    ],
+                    ]),
                     estimated_area_reached: 25829781306,
                 },
             ),
@@ -777,31 +919,31 @@ mod test_splines {
                         Point { x: 390.0, y: 88.0 },
                     ],
                     color_dct: [
-                        [
+                        Dct32([
                             16.9014, 64.8018, 4.2, 10.6008, 23.499, 17.0016, 79.3002, 5.6994,
                             60.4002, 16.5984, 94.899, 63.7014, 87.5994, 10.5, 3.801, 61.1016,
                             22.8984, 81.9, 80.4006, 40.5006, 45.9018, 25.4016, 39.7992, 30.0006,
                             50.1984, 90.4008, 27.9006, 93.702, 65.1, 48.1992, 22.302, 43.8984,
-                        ],
-                        [
+                        ]),
+                        Dct32([
                             24.9255, 66.0, 3.525, 90.225, 97.125, 15.825, 35.625, 0.6, 68.025,
                             39.6, 24.375, 85.875, 57.675, 77.625, 47.475, 67.875, 4.275, 5.4, 91.2,
                             58.5, 0.075, 52.2, 3.525, 47.775, 63.225, 43.5, 85.8, 35.775, 50.175,
                             35.925, 19.2, 48.225,
-                        ],
-                        [
+                        ]),
+                        Dct32([
                             82.7881, 44.93, 76.395, 39.475, 94.115, 14.285, 89.805, 9.98, 10.485,
                             74.53, 56.295, 65.785, 7.765, 23.305, 52.795, 99.305, 56.775, 46.0,
                             76.71, 13.49, 66.995, 22.38, 29.915, 43.295, 70.295, 26.0, 74.32,
                             53.905, 62.005, 19.125, 49.3, 46.685,
-                        ],
+                        ]),
                     ],
-                    sigma_dct: [
+                    sigma_dct: Dct32([
                         83.4303, 1.6665, 24.9975, 18.6648, 46.662, 75.3258, 27.9972, 62.3271,
                         50.3283, 23.331, 85.6581, 95.9904, 45.6621, 32.9967, 33.33, 52.9947,
                         26.3307, 58.6608, 19.6647, 69.993, 92.6574, 22.6644, 56.9943, 21.6645,
                         76.659, 87.6579, 22.9977, 66.3267, 35.6631, 35.6631, 56.661, 67.3266,
-                    ],
+                    ]),
                     estimated_area_reached: 47263284396,
                 },
             ),
@@ -846,12 +988,16 @@ mod test_splines {
             );
             for index in 0..got_dequantized.color_dct.len() {
                 assert_all_almost_eq!(
-                    got_dequantized.color_dct[index],
-                    want_dequantized.color_dct[index],
+                    got_dequantized.color_dct[index].0,
+                    want_dequantized.color_dct[index].0,
                     1e-4,
                 );
             }
-            assert_all_almost_eq!(got_dequantized.sigma_dct, want_dequantized.sigma_dct, 1e-4);
+            assert_all_almost_eq!(
+                got_dequantized.sigma_dct.0,
+                want_dequantized.sigma_dct.0,
+                1e-4
+            );
             assert_eq!(
                 got_dequantized.estimated_area_reached,
                 want_dequantized.estimated_area_reached,
@@ -951,6 +1097,325 @@ mod test_splines {
             want_results.iter().map(|(_, d)| *d).collect::<Vec<f32>>(),
             1e-9
         );
+        Ok(())
+    }
+
+    #[test]
+    fn dct32() -> Result<(), Error> {
+        let mut dct = Dct32::default();
+        for (i, coeff) in dct.0.iter_mut().enumerate() {
+            *coeff = 0.05f32 * i as f32;
+        }
+        // Golden numbers come from libjxl.
+        let want_out = [
+            16.7353, -18.6042, 7.99317, -7.12508, 4.66999, -4.33676, 3.24505, -3.06945, 2.44468,
+            -2.33509, 1.92438, -1.8484, 1.55314, -1.49642, 1.27014, -1.22549, 1.04345, -1.00677,
+            0.854484, -0.823243, 0.691654, -0.66428, 0.547331, -0.522654, 0.416109, -0.393396,
+            0.294056, -0.272631, 0.178113, -0.157472, 0.0656886, -0.0454512,
+        ];
+        for (t, want) in want_out.iter().enumerate() {
+            let got_out = dct.continuous_idct(t as f32);
+            assert_almost_eq!(got_out, *want, 1e-3);
+        }
+        Ok(())
+    }
+
+    fn verify_segment_almost_equal(seg1: &SplineSegment, seg2: &SplineSegment) {
+        assert_almost_eq!(seg1.center_x, seg2.center_x, 1e-3);
+        assert_almost_eq!(seg1.center_y, seg2.center_y, 1e-3);
+        for (got, want) in zip(seg1.color.iter(), seg2.color.iter()) {
+            assert_almost_eq!(*got, *want, 1e-2);
+        }
+        assert_almost_eq!(seg1.inv_sigma, seg2.inv_sigma, 1e-3);
+        assert_almost_eq!(seg1.maximum_distance, seg2.maximum_distance, 1e-1);
+        assert_almost_eq!(
+            seg1.sigma_over_4_times_intensity,
+            seg2.sigma_over_4_times_intensity,
+            1e-3
+        );
+    }
+
+    #[test]
+    fn spline_segments_add_segment() -> Result<(), Error> {
+        let mut splines = Splines::default();
+        let mut segments_by_y = Vec::<(u64, usize)>::new();
+
+        splines.add_segment(
+            &Point { x: 10.0, y: 20.0 },
+            0.5,
+            [0.5, 0.6, 0.7],
+            0.8,
+            &mut segments_by_y,
+        );
+        // Golden numbers come from libjxl.
+        let want_segment = SplineSegment {
+            center_x: 10.0,
+            center_y: 20.0,
+            color: [0.5, 0.6, 0.7],
+            inv_sigma: 1.25,
+            maximum_distance: 3.65961,
+            sigma_over_4_times_intensity: 0.1,
+        };
+        assert_eq!(splines.segments.len(), 1);
+        verify_segment_almost_equal(&splines.segments[0], &want_segment);
+        let want_segments_by_y = [
+            (16, 0),
+            (17, 0),
+            (18, 0),
+            (19, 0),
+            (20, 0),
+            (21, 0),
+            (22, 0),
+            (23, 0),
+            (24, 0),
+        ];
+        for (got, want) in zip(segments_by_y.iter(), want_segments_by_y.iter()) {
+            assert_eq!(got.0, want.0);
+            assert_eq!(got.1, want.1);
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn spline_segments_add_segments_from_points() -> Result<(), Error> {
+        let mut splines = Splines::default();
+        let mut segments_by_y = Vec::<(u64, usize)>::new();
+        let mut color_dct = [Dct32::default(); 3];
+        for (channel_index, channel_dct) in color_dct.iter_mut().enumerate() {
+            for (coeff_index, coeff) in channel_dct.0.iter_mut().enumerate() {
+                *coeff = 0.1 * channel_index as f32 + 0.05 * coeff_index as f32;
+            }
+        }
+        let mut sigma_dct = Dct32::default();
+        for (coeff_index, coeff) in sigma_dct.0.iter_mut().enumerate() {
+            *coeff = 0.06 * coeff_index as f32;
+        }
+        let spline = Spline {
+            control_points: vec![],
+            color_dct,
+            sigma_dct,
+            estimated_area_reached: 0,
+        };
+        let points_to_draw = vec![
+            (Point { x: 10.0, y: 20.0 }, 1.0),
+            (Point { x: 11.0, y: 21.0 }, 1.0),
+            (Point { x: 12.0, y: 21.0 }, 1.0),
+        ];
+        splines.add_segments_from_points(
+            &spline,
+            &points_to_draw,
+            SQRT_2 + 1.0,
+            DESIRED_RENDERING_DISTANCE,
+            &mut segments_by_y,
+        );
+        // Golden numbers come from libjxl.
+        let want_segments = [
+            SplineSegment {
+                center_x: 10.0,
+                center_y: 20.0,
+                color: [16.7353, 19.6865, 22.6376],
+                inv_sigma: 0.0497949,
+                maximum_distance: 108.64,
+                sigma_over_4_times_intensity: 5.02059,
+            },
+            SplineSegment {
+                center_x: 11.0,
+                center_y: 21.0,
+                color: [-0.819923, -0.79605, -0.772177],
+                inv_sigma: -1.01636,
+                maximum_distance: 4.68042,
+                sigma_over_4_times_intensity: -0.245977,
+            },
+            SplineSegment {
+                center_x: 12.0,
+                center_y: 21.0,
+                color: [-0.776775, -0.754424, -0.732072],
+                inv_sigma: -1.07281,
+                maximum_distance: 4.42351,
+                sigma_over_4_times_intensity: -0.233033,
+            },
+        ];
+        assert_eq!(splines.segments.len(), want_segments.len());
+        for (got, want) in zip(splines.segments.iter(), want_segments.iter()) {
+            verify_segment_almost_equal(got, want);
+        }
+        let want_segments_by_y: Vec<(u64, usize)> = (0..=129)
+            .map(|c| (c, 0))
+            .chain((16..=26).map(|c| (c, 1)))
+            .chain((17..=25).map(|c| (c, 2)))
+            .collect();
+        for (got, want) in zip(segments_by_y.iter(), want_segments_by_y.iter()) {
+            assert_eq!(got.0, want.0);
+            assert_eq!(got.1, want.1);
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn init_draw_cache() -> Result<(), Error> {
+        let mut splines = Splines {
+            splines: vec![
+                QuantizedSpline {
+                    control_points: vec![
+                        (109, 105),
+                        (-247, -261),
+                        (168, 427),
+                        (-46, -360),
+                        (-61, 181),
+                    ],
+                    color_dct: [
+                        [
+                            12223, 9452, 5524, 16071, 1048, 17024, 14833, 7690, 21952, 2405, 2571,
+                            2190, 1452, 2500, 18833, 1667, 5857, 21619, 1310, 20000, 10429, 11667,
+                            7976, 18786, 12976, 18548, 14786, 12238, 8667, 3405, 19929, 8429,
+                        ],
+                        [
+                            177, 712, 127, 999, 969, 356, 105, 12, 1132, 309, 353, 415, 1213, 156,
+                            988, 524, 316, 1100, 64, 36, 816, 1285, 183, 889, 839, 1099, 79, 1316,
+                            287, 105, 689, 841,
+                        ],
+                        [
+                            780, -201, -38, -695, -563, -293, -88, 1400, -357, 520, 979, 431, -118,
+                            590, -971, -127, 157, 206, 1266, 204, -320, -223, 704, -687, -276,
+                            -716, 787, -1121, 40, 292, 249, -10,
+                        ],
+                    ],
+                    sigma_dct: [
+                        139, 65, 133, 5, 137, 272, 88, 178, 71, 256, 254, 82, 126, 252, 152, 53,
+                        281, 15, 8, 209, 285, 156, 73, 56, 36, 287, 86, 244, 270, 94, 224, 156,
+                    ],
+                },
+                QuantizedSpline {
+                    control_points: vec![
+                        (24, -32),
+                        (-178, -7),
+                        (226, 151),
+                        (121, -172),
+                        (-184, 39),
+                        (-201, -182),
+                        (301, 404),
+                    ],
+                    color_dct: [
+                        [
+                            5051, 6881, 5238, 1571, 9952, 19762, 2048, 13524, 16405, 2310, 1286,
+                            4714, 16857, 21429, 12500, 15524, 1857, 5595, 6286, 17190, 15405,
+                            20738, 310, 16071, 10952, 16286, 15571, 8452, 6929, 3095, 9905, 5690,
+                        ],
+                        [
+                            899, 1059, 836, 388, 1291, 247, 235, 203, 1073, 747, 1283, 799, 356,
+                            1281, 1231, 561, 477, 720, 309, 733, 1013, 477, 779, 1183, 32, 1041,
+                            1275, 367, 88, 1047, 321, 931,
+                        ],
+                        [
+                            -78, 244, -883, 943, -682, 752, 107, 262, -75, 557, -202, -575, -231,
+                            -731, -605, 732, 682, 650, 592, -14, -1035, 913, -188, -95, 286, -574,
+                            -509, 67, 86, -1056, 592, 380,
+                        ],
+                    ],
+                    sigma_dct: [
+                        308, 8, 125, 7, 119, 237, 209, 60, 277, 215, 126, 186, 90, 148, 211, 136,
+                        188, 142, 140, 124, 272, 140, 274, 165, 24, 209, 76, 254, 185, 83, 11, 141,
+                    ],
+                },
+            ],
+            starting_points: vec![Point { x: 10.0, y: 20.0 }, Point { x: 5.0, y: 40.0 }],
+            ..Default::default()
+        };
+        splines.initialize_draw_cache(1 << 15, 1 << 15)?;
+        assert_eq!(splines.segments.len(), 1940);
+        let want_segments_sample = [
+            (
+                22,
+                SplineSegment {
+                    center_x: 25.7765,
+                    center_y: 35.333,
+                    color: [-524.997, -509.905, 43.3884],
+                    inv_sigma: -0.00197347,
+                    maximum_distance: 3021.38,
+                    sigma_over_4_times_intensity: -126.68,
+                },
+            ),
+            (
+                474,
+                SplineSegment {
+                    center_x: -16.456,
+                    center_y: 78.8185,
+                    color: [-117.671, -133.552, 343.563],
+                    inv_sigma: -0.00263185,
+                    maximum_distance: 2238.38,
+                    sigma_over_4_times_intensity: -94.9904,
+                },
+            ),
+            (
+                835,
+                SplineSegment {
+                    center_x: -71.937,
+                    center_y: 230.064,
+                    color: [44.7951, 298.941, -395.357],
+                    inv_sigma: 0.0186913,
+                    maximum_distance: 316.45,
+                    sigma_over_4_times_intensity: 13.3752,
+                },
+            ),
+            (
+                1066,
+                SplineSegment {
+                    center_x: -126.259,
+                    center_y: -22.9786,
+                    color: [-136.42, 194.757, -98.1878],
+                    inv_sigma: 0.00753185,
+                    maximum_distance: 769.254,
+                    sigma_over_4_times_intensity: 33.1924,
+                },
+            ),
+            (
+                1328,
+                SplineSegment {
+                    center_x: 73.7087,
+                    center_y: 56.3141,
+                    color: [-13.4439, 162.614, 93.7842],
+                    inv_sigma: 0.00366418,
+                    maximum_distance: 1572.71,
+                    sigma_over_4_times_intensity: 68.2281,
+                },
+            ),
+            (
+                1545,
+                SplineSegment {
+                    center_x: 77.4889,
+                    center_y: -92.3388,
+                    color: [-220.681, 66.1304, -32.2618],
+                    inv_sigma: 0.0316616,
+                    maximum_distance: 183.675,
+                    sigma_over_4_times_intensity: 7.89601,
+                },
+            ),
+            (
+                1774,
+                SplineSegment {
+                    center_x: -16.4359,
+                    center_y: -144.863,
+                    color: [57.3154, -46.3684, 92.1495],
+                    inv_sigma: -0.0152451,
+                    maximum_distance: 371.483,
+                    sigma_over_4_times_intensity: -16.3988,
+                },
+            ),
+            (
+                1929,
+                SplineSegment {
+                    center_x: 61.1934,
+                    center_y: -10.7072,
+                    color: [-69.7881, 300.608, -476.514],
+                    inv_sigma: 0.00322928,
+                    maximum_distance: 1841.38,
+                    sigma_over_4_times_intensity: 77.4166,
+                },
+            ),
+        ];
+        for (index, segment) in want_segments_sample {
+            verify_segment_almost_equal(&segment, &splines.segments[index]);
+        }
         Ok(())
     }
 }
