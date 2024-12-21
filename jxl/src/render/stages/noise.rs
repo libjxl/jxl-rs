@@ -146,7 +146,7 @@ mod test {
     };
     use test_log::test;
 
-    // TODO(mo271): Add more relevant ConvolveNoise tests as per discussions in https://github.com/libjxl/jxl-rs/pull/60.
+    // TODO(firsching): Add more relevant ConvolveNoise tests as per discussions in https://github.com/libjxl/jxl-rs/pull/60.
 
     #[test]
     fn convolve_noise_process_row_chunk() -> Result<()> {
@@ -170,7 +170,7 @@ mod test {
         )
     }
 
-    // TODO(mo271): Add more relevant AddNoise tests as per discussions in https://github.com/libjxl/jxl-rs/pull/60.
+    // TODO(firsching): Add more relevant AddNoise tests as per discussions in https://github.com/libjxl/jxl-rs/pull/60.
 
     #[test]
     fn add_noise_process_row_chunk() -> Result<()> {
