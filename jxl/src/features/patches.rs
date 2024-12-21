@@ -6,6 +6,9 @@
 // TODO(firsching): remove once we use this!
 #![allow(dead_code)]
 
+use num_derive::FromPrimitive;
+use num_traits::FromPrimitive;
+
 use crate::{
     bit_reader::BitReader,
     entropy_coding::decode::Histograms,
@@ -27,57 +30,65 @@ const PATCH_ALPHA_CHANNEL_CONTEXT: usize = 8;
 const PATCH_CLAMP_CONTEXT: usize = 9;
 const NUM_PATCH_DICTIONARY_CONTEXTS: usize = 10;
 
-// Blend modes
-// The new values are the old ones. Useful to skip some channels.
-const PATCH_BLEND_MODE_NONE: u8 = 0;
-// The new values (in the crop) replace the old ones: sample = new
-const PATCH_BLEND_MODE_REPLACE: u8 = 1;
-// The new values (in the crop) get added to the old ones: sample = old + new
-const PATCH_BLEND_MODE_ADD: u8 = 2;
-// The new values (in the crop) get multiplied by the old ones:
-// sample = old * new
-// This blend mode is only supported if BlendColorSpace is kEncoded. The
-// range of the new value matters for multiplication purposes, and its
-// nominal range of 0..1 is computed the same way as this is done for the
-// alpha values in kBlend and kAlphaWeightedAdd.
-const PATCH_BLEND_MODE_MUL: u8 = 3;
-// The new values (in the crop) replace the old ones if alpha>0:
-// For first alpha channel:
-// alpha = old + new * (1 - old)
-// For other channels if !alpha_associated:
-// sample = ((1 - new_alpha) * old * old_alpha + new_alpha * new) / alpha
-// For other channels if alpha_associated:
-// sample = (1 - new_alpha) * old + new
-// The alpha formula applies to the alpha used for the division in the other
-// channels formula, and applies to the alpha channel itself if its
-// blend_channel value matches itself.
-// If using kBlendAbove, new is the patch and old is the original image; if
-// using kBlendBelow, the meaning is inverted.
-const PATCH_BLEND_MODE_BLEND_ABOVE: u8 = 4;
-const PATCH_BLEND_MODE_BLEND_BELOW: u8 = 5;
-// The new values (in the crop) are added to the old ones if alpha>0:
-// For first alpha channel: sample = sample = old + new * (1 - old)
-// For other channels: sample = old + alpha * new
-const PATCH_BLEND_MODE_ALPHA_WEIGHTED_ADD_ABOVE: u8 = 6;
-const PATCH_BLEND_MODE_ALPHA_WEIGHTED_ADD_BELOW: u8 = 7;
-const PATCH_BLEND_MODE_NUM_BLEND_MODES: u8 = 8;
-
-#[inline]
-fn uses_alpha(blend_mode: u8) -> bool {
-    blend_mode == PATCH_BLEND_MODE_BLEND_ABOVE
-        || blend_mode == PATCH_BLEND_MODE_BLEND_BELOW
-        || blend_mode == PATCH_BLEND_MODE_ALPHA_WEIGHTED_ADD_ABOVE
-        || blend_mode == PATCH_BLEND_MODE_ALPHA_WEIGHTED_ADD_BELOW
+/// Blend modes
+#[derive(Debug, PartialEq, Eq, Clone, Copy, FromPrimitive)]
+#[repr(u8)]
+pub enum PatchBlendMode {
+    // The new values are the old ones. Useful to skip some channels.
+    None = 0,
+    // The new values (in the crop) replace the old ones: sample = new
+    Replace = 1,
+    // The new values (in the crop) get added to the old ones: sample = old + new
+    Add = 2,
+    // The new values (in the crop) get multiplied by the old ones:
+    // sample = old * new
+    // This blend mode is only supported if BlendColorSpace is kEncoded. The
+    // range of the new value matters for multiplication purposes, and its
+    // nominal range of 0..1 is computed the same way as this is done for the
+    // alpha values in kBlend and kAlphaWeightedAdd.
+    Mul = 3,
+    // The new values (in the crop) replace the old ones if alpha>0:
+    // For first alpha channel:
+    // alpha = old + new * (1 - old)
+    // For other channels if !alpha_associated:
+    // sample = ((1 - new_alpha) * old * old_alpha + new_alpha * new) / alpha
+    // For other channels if alpha_associated:
+    // sample = (1 - new_alpha) * old + new
+    // The alpha formula applies to the alpha used for the division in the other
+    // channels formula, and applies to the alpha channel itself if its
+    // blend_channel value matches itself.
+    // If using kBlendAbove, new is the patch and old is the original image; if
+    // using kBlendBelow, the meaning is inverted.
+    BlendAbove = 4,
+    BlendBelow = 5,
+    // The new values (in the crop) are added to the old ones if alpha>0:
+    // For first alpha channel: sample = sample = old + new * (1 - old)
+    // For other channels: sample = old + alpha * new
+    AlphaWeightedAddAbove = 6,
+    AlphaWeightedAddBelow = 7,
 }
 
-#[inline]
-fn uses_clamp(blend_mode: u8) -> bool {
-    uses_alpha(blend_mode) || blend_mode == PATCH_BLEND_MODE_MUL
+impl PatchBlendMode {
+    pub const NUM_BLEND_MODES: u8 = 8;
+
+    pub fn uses_alpha(self) -> bool {
+        matches!(
+            self,
+            Self::BlendAbove
+                | Self::BlendBelow
+                | Self::AlphaWeightedAddAbove
+                | Self::AlphaWeightedAddBelow
+        )
+    }
+
+    pub fn uses_clamp(self) -> bool {
+        self.uses_alpha() || self == Self::Mul
+    }
 }
 
 #[derive(Debug, Clone, Copy)]
 struct PatchBlending {
-    mode: u8,
+    mode: PatchBlendMode,
     alpha_channel: usize,
     clamp: bool,
 }
@@ -186,7 +197,7 @@ impl PatchesDictionary {
                 next_size = std::cmp::min(next_size, max_patches);
             }
             positions.reserve(next_size);
-            blendings.reserve(next_size * PATCH_BLEND_MODE_NUM_BLEND_MODES as usize);
+            blendings.reserve(next_size * PatchBlendMode::NUM_BLEND_MODES as usize);
 
             for i in 0..id_count {
                 let mut pos = PatchPosition {
@@ -241,18 +252,21 @@ impl PatchesDictionary {
                 let mut alpha_channel = 0;
                 let mut clamp = false;
                 for _ in 0..blendings_stride {
-                    let blend_mode = patches_reader.read(br, PATCH_BLEND_MODE_CONTEXT)? as u8;
-                    if blend_mode >= PATCH_BLEND_MODE_NUM_BLEND_MODES {
-                        return Err(Error::PatchesInvalidBlendMode(
-                            blend_mode,
-                            PATCH_BLEND_MODE_NUM_BLEND_MODES,
-                        ));
-                    }
+                    let maybe_blend_mode = patches_reader.read(br, PATCH_BLEND_MODE_CONTEXT)? as u8;
+                    let blend_mode = match PatchBlendMode::from_u8(maybe_blend_mode) {
+                        None => {
+                            return Err(Error::PatchesInvalidBlendMode(
+                                maybe_blend_mode,
+                                PatchBlendMode::NUM_BLEND_MODES,
+                            ))
+                        }
+                        Some(blend_mode) => blend_mode,
+                    };
 
-                    if uses_alpha(blend_mode) {
+                    if PatchBlendMode::uses_alpha(blend_mode) {
                         alpha_channel =
                             patches_reader.read(br, PATCH_ALPHA_CHANNEL_CONTEXT)? as usize;
-                        if alpha_channel >= PATCH_BLEND_MODE_NUM_BLEND_MODES as usize {
+                        if alpha_channel >= num_extra_channels {
                             return Err(Error::PatchesInvalidAlphaChannel(
                                 alpha_channel,
                                 num_extra_channels,
@@ -260,7 +274,7 @@ impl PatchesDictionary {
                         }
                     }
 
-                    if uses_clamp(blend_mode) {
+                    if PatchBlendMode::uses_clamp(blend_mode) {
                         clamp = patches_reader.read(br, PATCH_CLAMP_CONTEXT)? != 0;
                     }
                     blendings.push(PatchBlending {
