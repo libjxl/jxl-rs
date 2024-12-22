@@ -15,7 +15,8 @@ use crate::{
     bit_reader::BitReader,
     entropy_coding::decode::{unpack_signed, Histograms, Reader},
     error::{Error, Result},
-    util::{tracing_wrappers::*, try_with_capacity, CeilLog2},
+    util::{tracing_wrappers::*, CeilLog2},
+    util::*
 };
 const MAX_NUM_CONTROL_POINTS: u32 = 1 << 20;
 const MAX_NUM_CONTROL_POINTS_PER_PIXEL_RATIO: u32 = 2;
@@ -192,7 +193,7 @@ impl QuantizedSpline {
                 max_control_points,
             ));
         }
-        let mut control_points = try_with_capacity(num_control_points as usize)?;
+        let mut control_points = Vec::try_with_capacity(num_control_points as usize)?;
         for _ in 0..num_control_points {
             let x = splines_reader.read_signed(br, CONTROL_POINTS_CONTEXT)? as i64;
             let y = splines_reader.read_signed(br, CONTROL_POINTS_CONTEXT)? as i64;
@@ -237,7 +238,7 @@ impl QuantizedSpline {
         let area_limit = area_limit(image_size);
 
         let mut result = Spline {
-            control_points: try_with_capacity(self.control_points.len() + 1)?,
+            control_points: Vec::try_with_capacity(self.control_points.len() + 1)?,
             ..Default::default()
         };
 

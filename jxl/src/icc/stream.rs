@@ -11,7 +11,7 @@ use crate::bit_reader::*;
 use crate::entropy_coding::decode::{Histograms, Reader};
 use crate::error::{Error, Result};
 use crate::util::tracing_wrappers::{instrument, warn};
-use crate::util::try_with_capacity;
+use crate::util::*;
 
 fn read_varint(mut read_one: impl FnMut() -> Result<u8>) -> Result<u64> {
     let mut value = 0u64;
@@ -130,7 +130,7 @@ impl<'br, 'buf, 'hist> IccStream<'br, 'buf, 'hist> {
             return Err(Error::IccEndOfStream);
         }
 
-        let mut out = try_with_capacity(len)?;
+        let mut out = Vec::try_with_capacity(len)?;
 
         for _ in 0..len {
             out.push(self.read_one()?);
