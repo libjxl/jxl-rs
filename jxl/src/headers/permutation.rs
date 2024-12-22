@@ -60,6 +60,7 @@ impl Permutation {
 
         // Initialize the full permutation vector with skipped elements intact
         let mut permutation = try_with_capacity((size - skip) as usize)?;
+        permutation.extend(0..size);
 
         // Decode the Lehmer code into the slice starting at `skip`
         let permuted_slice = decode_lehmer_code(&lehmer, &permutation[skip as usize..])?;
