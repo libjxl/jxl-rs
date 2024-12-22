@@ -227,7 +227,7 @@ mod test {
             // Generate a reasonable size to prevent tests from taking too long
             let size_lehmer = u.int_in_range(1..=1000)?;
 
-            let mut lehmer: Vec<u32> = try_with_capacity(size_lehmer as usize)?;
+            let mut lehmer: Vec<u32> = Vec::with_capacity(size_lehmer as usize);
             for i in 0..size_lehmer {
                 let max_val = size_lehmer - i - 1;
                 let val = if max_val > 0 {
