@@ -151,7 +151,7 @@ impl Frame {
     }
 
     /// Given a bit reader pointing at the end of the TOC, returns a vector of `BitReader`s, each
-    /// of which reads a specific sectionalpha_channel.
+    /// of which reads a specific section.
     pub fn sections<'a>(&self, br: &'a mut BitReader) -> Result<Vec<BitReader<'a>>> {
         if self.toc.permuted {
             self.toc
@@ -259,15 +259,14 @@ impl Frame {
 
     pub fn finalize(mut self) -> Result<Option<DecoderState>> {
         if self.header.can_be_referenced {
-            // TODO(firsching): actually decode the image here, instead of setting it
+            // TODO(firsching): actually use real reference images here, instead of setting it
             // to a blank image here, once we can decode images.
             self.decoder_state.reference_frames[self.header.save_as_reference as usize] =
                 Some(ReferenceFrame::blank(
                     self.header.width as usize,
                     self.header.height as usize,
-                    // Set num_channels to "1" here unconditionally for now, since we will use this
-                    // channel for the size checks
-                    1,
+                    // Set num_channels to "3 + self.decoder_state.extra_channel_info().len()" here unconditionally for now.
+                    3 + self.decoder_state.extra_channel_info().len(),
                     self.header.save_before_ct,
                 )?);
         }
