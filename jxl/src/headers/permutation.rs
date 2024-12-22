@@ -6,6 +6,7 @@
 use crate::bit_reader::BitReader;
 use crate::entropy_coding::decode::Reader;
 use crate::error::{Error, Result};
+use crate::util::try_with_capacity;
 use crate::util::{tracing_wrappers::instrument, value_of_lowest_1_bit, CeilLog2};
 
 #[derive(Debug, PartialEq, Default)]
@@ -41,8 +42,7 @@ impl Permutation {
             return Err(Error::InvalidPermutationSize { size, skip, end });
         }
 
-        let mut lehmer = Vec::new();
-        lehmer.try_reserve(end as usize)?;
+        let mut lehmer = try_with_capacity(end as usize)?;
 
         let mut prev_val = 0u32;
         for idx in skip..(skip + end) {
@@ -59,9 +59,7 @@ impl Permutation {
         }
 
         // Initialize the full permutation vector with skipped elements intact
-        let mut permutation: Vec<u32> = Vec::new();
-        permutation.try_reserve((size - skip) as usize)?;
-        permutation.extend(0..size);
+        let mut permutation = try_with_capacity((size - skip) as usize)?;
 
         // Decode the Lehmer code into the slice starting at `skip`
         let permuted_slice = decode_lehmer_code(&lehmer, &permutation[skip as usize..])?;
