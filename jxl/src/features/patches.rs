@@ -34,7 +34,7 @@ pub enum PatchContext {
 }
 
 impl PatchContext {
-    const NUM_PATCH_DICTIONARY_CONTEXTS: usize = 10;
+    const NUM: usize = 10;
 }
 
 /// Blend modes
@@ -136,7 +136,7 @@ impl PatchesDictionary {
         let num_extra_channels = decoder_state.extra_channel_info().len();
         let blendings_stride = num_extra_channels + 1;
         let patches_histograms =
-            Histograms::decode(PatchContext::NUM_PATCH_DICTIONARY_CONTEXTS, br, true)?;
+            Histograms::decode(PatchContext::NUM, br, true)?;
         let mut patches_reader = patches_histograms.make_reader(br)?;
         let num_ref_patch = patches_reader.read(br, PatchContext::NumRefPatch as usize)? as usize;
         let num_pixels = xsize * ysize;
