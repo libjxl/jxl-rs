@@ -229,9 +229,10 @@ impl PatchesDictionary {
                     max_patches,
                 ));
             }
-            positions.try_reserve(next_size - positions.len())?;
+            positions.try_reserve(next_size.saturating_sub(positions.len()))?;
             blendings.try_reserve(
-                next_size * PatchBlendMode::NUM_BLEND_MODES as usize - blendings.len(),
+                (next_size * PatchBlendMode::NUM_BLEND_MODES as usize)
+                    .saturating_sub(blendings.len()),
             )?;
 
             for i in 0..id_count {
@@ -323,7 +324,6 @@ impl PatchesDictionary {
                     });
                 }
                 positions.push(pos);
-                next_size += 1;
             }
 
             ref_positions.push(PatchReferencePosition {
