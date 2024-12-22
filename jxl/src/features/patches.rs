@@ -135,16 +135,19 @@ impl PatchesDictionary {
     ) -> Result<PatchesDictionary> {
         let num_extra_channels = decoder_state.extra_channel_info().len();
         let blendings_stride = num_extra_channels + 1;
-        let patches_histograms =
-            Histograms::decode(PatchContext::NUM, br, true)?;
+        let patches_histograms = Histograms::decode(PatchContext::NUM, br, true)?;
         let mut patches_reader = patches_histograms.make_reader(br)?;
         let num_ref_patch = patches_reader.read(br, PatchContext::NumRefPatch as usize)? as usize;
         let num_pixels = xsize * ysize;
         let max_ref_patches = 1024 + num_pixels / 4;
         let max_patches = max_ref_patches * 4;
-        let _max_blending_infos = max_patches * 4;
+        let max_blending_infos = max_patches * 4;
         if num_ref_patch > max_ref_patches {
-            return Err(Error::PatchesTooMany(num_ref_patch, max_ref_patches));
+            return Err(Error::PatchesTooMany(
+                "reference patches".to_string(),
+                num_ref_patch,
+                max_ref_patches,
+            ));
         }
         let mut total_patches = 0;
         let mut next_size = 1;
@@ -197,17 +200,32 @@ impl PatchesDictionary {
 
             let id_count = patches_reader.read(br, PatchContext::PatchCount as usize)? as usize + 1;
             if id_count > max_patches + 1 {
-                return Err(Error::PatchesTooMany(id_count, max_patches));
+                return Err(Error::PatchesTooMany(
+                    "patches".to_string(),
+                    id_count,
+                    max_patches,
+                ));
             }
             total_patches += id_count;
 
             if total_patches > max_patches {
-                return Err(Error::PatchesTooMany(total_patches, max_patches));
+                return Err(Error::PatchesTooMany(
+                    "patches".to_string(),
+                    total_patches,
+                    max_patches,
+                ));
             }
 
             if next_size < total_patches {
                 next_size *= 2;
                 next_size = std::cmp::min(next_size, max_patches);
+            }
+            if next_size * blendings_stride > max_blending_infos {
+                return Err(Error::PatchesTooMany(
+                    "blending_info".to_string(),
+                    total_patches,
+                    max_patches,
+                ));
             }
             positions.reserve(next_size);
             blendings.reserve(next_size * PatchBlendMode::NUM_BLEND_MODES as usize);

@@ -127,8 +127,8 @@ pub enum Error {
     PatchesOutOfBounds(String, usize, usize, usize),
     #[error("Patches cannot use frames saved post color transforms")]
     PatchesPostColorTransform(),
-    #[error("Too many patches: {0}, limit is {1}")]
-    PatchesTooMany(usize, usize),
+    #[error("Too many {0}: {1}, limit is {2}")]
+    PatchesTooMany(String, usize, usize),
     #[error("Reference too large: {0}, limit is {1}")]
     PatchesRefTooLarge(usize, usize),
     #[error("Point list is empty")]
