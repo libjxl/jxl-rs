@@ -153,7 +153,8 @@ impl PatchesDictionary {
         let mut next_size = 1;
         let mut positions: Vec<PatchPosition> = Vec::new();
         let mut blendings = Vec::new();
-        let mut ref_positions: Vec<PatchReferencePosition> = Vec::with_capacity(num_ref_patch);
+        let mut ref_positions: Vec<PatchReferencePosition> = Vec::new();
+        ref_positions.try_reserve(num_ref_patch)?;
         for _ in 0..num_ref_patch {
             let reference =
                 patches_reader.read(br, PatchContext::ReferenceFrame as usize)? as usize;
@@ -173,6 +174,7 @@ impl PatchesDictionary {
             let ref_pos_ysize =
                 patches_reader.read(br, PatchContext::PatchSize as usize)? as usize + 1;
             let reference_frame = decoder_state.reference_frame(reference);
+            // TODO(firsching): make sure this check is correct in the presence of downsampled extra channels (also in libjxl).
             match reference_frame {
                 None => return Err(Error::PatchesInvalidReference(reference)),
                 Some(reference) => {
@@ -227,8 +229,10 @@ impl PatchesDictionary {
                     max_patches,
                 ));
             }
-            positions.reserve(next_size);
-            blendings.reserve(next_size * PatchBlendMode::NUM_BLEND_MODES as usize);
+            positions.try_reserve(next_size - positions.len())?;
+            blendings.try_reserve(
+                next_size * PatchBlendMode::NUM_BLEND_MODES as usize - blendings.len(),
+            )?;
 
             for i in 0..id_count {
                 let mut pos = PatchPosition {
@@ -319,6 +323,7 @@ impl PatchesDictionary {
                     });
                 }
                 positions.push(pos);
+                next_size += 1;
             }
 
             ref_positions.push(PatchReferencePosition {
