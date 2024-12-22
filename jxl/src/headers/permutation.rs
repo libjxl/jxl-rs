@@ -6,8 +6,7 @@
 use crate::bit_reader::BitReader;
 use crate::entropy_coding::decode::Reader;
 use crate::error::{Error, Result};
-use crate::util::*;
-use crate::util::{tracing_wrappers::instrument, value_of_lowest_1_bit, CeilLog2};
+use crate::util::{tracing_wrappers::instrument, value_of_lowest_1_bit, CeilLog2, TryWithCapacity};
 
 #[derive(Debug, PartialEq, Default)]
 pub struct Permutation(pub Vec<u32>);

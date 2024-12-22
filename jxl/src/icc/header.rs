@@ -3,7 +3,7 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-use crate::{error::Result, util::*};
+use crate::{error::Result, util::TryWithCapacity};
 
 use super::{IccStream, ICC_HEADER_SIZE};
 

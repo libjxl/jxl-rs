@@ -9,7 +9,7 @@ use byteorder::{BigEndian, ReadBytesExt, WriteBytesExt};
 
 use crate::error::{Error, Result};
 use crate::util::tracing_wrappers::warn;
-use crate::util::*;
+use crate::util::TryWithCapacity;
 
 use super::{read_varint_from_reader, IccStream, ICC_HEADER_SIZE};
 

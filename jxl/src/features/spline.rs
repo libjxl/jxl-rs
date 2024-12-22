@@ -15,8 +15,7 @@ use crate::{
     bit_reader::BitReader,
     entropy_coding::decode::{unpack_signed, Histograms, Reader},
     error::{Error, Result},
-    util::{tracing_wrappers::*, CeilLog2},
-    util::*
+    util::{tracing_wrappers::*, CeilLog2, TryWithCapacity},
 };
 const MAX_NUM_CONTROL_POINTS: u32 = 1 << 20;
 const MAX_NUM_CONTROL_POINTS_PER_PIXEL_RATIO: u32 = 2;
