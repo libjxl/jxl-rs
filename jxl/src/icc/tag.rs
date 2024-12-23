@@ -9,7 +9,7 @@ use byteorder::{BigEndian, ReadBytesExt, WriteBytesExt};
 
 use crate::error::{Error, Result};
 use crate::util::tracing_wrappers::warn;
-use crate::util::TryWithCapacity;
+use crate::util::NewWithCapacity;
 
 use super::{read_varint_from_reader, IccStream, ICC_HEADER_SIZE};
 
@@ -97,7 +97,7 @@ pub(super) fn read_tag_list(
 
 fn shuffle_w2(bytes: &[u8]) -> Result<Vec<u8>> {
     let len = bytes.len();
-    let mut out = Vec::try_with_capacity(len)?;
+    let mut out = Vec::new_with_capacity(len)?;
 
     let height = len / 2;
     let odd = len % 2;
@@ -113,7 +113,7 @@ fn shuffle_w2(bytes: &[u8]) -> Result<Vec<u8>> {
 
 fn shuffle_w4(bytes: &[u8]) -> Result<Vec<u8>> {
     let len = bytes.len();
-    let mut out = Vec::try_with_capacity(len)?;
+    let mut out = Vec::new_with_capacity(len)?;
 
     let step = len / 4;
     let wide_count = len % 4;
