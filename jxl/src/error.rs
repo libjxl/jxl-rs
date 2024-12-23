@@ -113,6 +113,24 @@ pub enum Error {
     InvalidPredictor(u32),
     #[error("Invalid modular mode property: {0}")]
     InvalidProperty(u32),
+    #[error("Invalid alpha channel for blending: {0}, limit is {1}")]
+    PatchesInvalidAlphaChannel(usize, usize),
+    #[error("Invalid patch blend mode: {0}, limit is {1}")]
+    PatchesInvalidBlendMode(u8, u8),
+    #[error("Invalid Patch: negative {0}-coordinate: {1} base {0},  {2} delta {0}")]
+    PatchesInvalidDelta(String, usize, i32),
+    #[error("Invalid position specified in reference frame in {0}-coordinate: {0}0 + {0}size = {1} + {2} > {3} = reference_frame {0}size")]
+    PatchesInvalidPosition(String, usize, usize, usize),
+    #[error("Patches invalid reference frame at index {0}")]
+    PatchesInvalidReference(usize),
+    #[error("Invalid Patch {0}: at {1} + {2} > {3}")]
+    PatchesOutOfBounds(String, usize, usize, usize),
+    #[error("Patches cannot use frames saved post color transforms")]
+    PatchesPostColorTransform(),
+    #[error("Too many {0}: {1}, limit is {2}")]
+    PatchesTooMany(String, usize, usize),
+    #[error("Reference too large: {0}, limit is {1}")]
+    PatchesRefTooLarge(usize, usize),
     #[error("Point list is empty")]
     PointListEmpty,
     #[error("Too large area for spline: {0}, limit is {1}")]

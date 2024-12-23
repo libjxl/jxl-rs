@@ -408,13 +408,13 @@ pub struct FrameHeader {
     #[coder(Bits(2))]
     #[default(0)]
     #[condition(frame_type != FrameType::LFFrame && !is_last)]
-    save_as_reference: u32,
+    pub save_as_reference: u32,
 
     // The following 3 fields are not actually serialized, but just used as variables to help with
     // defining later conditions.
     #[default(!is_last && frame_type != FrameType::LFFrame && (duration == 0 || save_as_reference != 0))]
     #[condition(false)]
-    can_be_referenced: bool,
+    pub can_be_referenced: bool,
 
     #[default(!have_crop || frame_width >= nonserialized.img_width && frame_height >= nonserialized.img_height && x0 == 0 && y0 == 0)]
     #[condition(false)]
@@ -427,7 +427,7 @@ pub struct FrameHeader {
 
     #[default(frame_type == FrameType::LFFrame)]
     #[condition(frame_type == FrameType::ReferenceOnly || save_before_ct_def_false)]
-    save_before_ct: bool,
+    pub save_before_ct: bool,
 
     name: String,
 
