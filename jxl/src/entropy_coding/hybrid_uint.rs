@@ -6,7 +6,7 @@
 use crate::bit_reader::BitReader;
 use crate::error::Error;
 
-use crate::util::*;
+use crate::util::CeilLog2;
 
 #[derive(Debug)]
 pub struct HybridUint {
