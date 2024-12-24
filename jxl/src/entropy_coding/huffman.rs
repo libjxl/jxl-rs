@@ -8,8 +8,7 @@ use std::fmt::Debug;
 use crate::bit_reader::BitReader;
 use crate::entropy_coding::decode::*;
 use crate::error::{Error, Result};
-use crate::util::tracing_wrappers::*;
-use crate::util::*;
+use crate::util::{tracing_wrappers::*, CeilLog2, NewWithCapacity};
 
 pub const HUFFMAN_MAX_BITS: usize = 15;
 const TABLE_BITS: usize = 8;
@@ -104,7 +103,7 @@ impl Table {
                 TABLE_SIZE
             ]),
             (2, _) => {
-                let mut ret = Vec::with_capacity(TABLE_SIZE);
+                let mut ret = Vec::new_with_capacity(TABLE_SIZE)?;
                 for _ in 0..(TABLE_SIZE >> 1) {
                     ret.push(TableEntry {
                         bits: 1,
@@ -118,7 +117,7 @@ impl Table {
                 Ok(ret)
             }
             (3, _) => {
-                let mut ret = Vec::with_capacity(TABLE_SIZE);
+                let mut ret = Vec::new_with_capacity(TABLE_SIZE)?;
                 for _ in 0..(TABLE_SIZE >> 2) {
                     ret.push(TableEntry {
                         bits: 1,
@@ -140,7 +139,7 @@ impl Table {
                 Ok(ret)
             }
             (4, false) => {
-                let mut ret = Vec::with_capacity(TABLE_SIZE);
+                let mut ret = Vec::new_with_capacity(TABLE_SIZE)?;
                 for _ in 0..(TABLE_SIZE >> 2) {
                     ret.push(TableEntry {
                         bits: 2,
@@ -162,7 +161,7 @@ impl Table {
                 Ok(ret)
             }
             (4, true) => {
-                let mut ret = Vec::with_capacity(TABLE_SIZE);
+                let mut ret = Vec::new_with_capacity(TABLE_SIZE)?;
                 symbols[2..4].sort_unstable();
                 for _ in 0..(TABLE_SIZE >> 3) {
                     ret.push(TableEntry {

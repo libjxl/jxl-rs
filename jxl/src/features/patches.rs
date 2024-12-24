@@ -14,7 +14,7 @@ use crate::{
     entropy_coding::decode::Histograms,
     error::{Error, Result},
     frame::DecoderState,
-    util::tracing_wrappers::*,
+    util::{tracing_wrappers::*, NewWithCapacity},
 };
 
 // Context numbers as specified in Section C.4.5, Listing C.2:
@@ -153,8 +153,7 @@ impl PatchesDictionary {
         let mut next_size = 1;
         let mut positions: Vec<PatchPosition> = Vec::new();
         let mut blendings = Vec::new();
-        let mut ref_positions: Vec<PatchReferencePosition> = Vec::new();
-        ref_positions.try_reserve(num_ref_patch)?;
+        let mut ref_positions = Vec::new_with_capacity(num_ref_patch)?;
         for _ in 0..num_ref_patch {
             let reference =
                 patches_reader.read(br, PatchContext::ReferenceFrame as usize)? as usize;
