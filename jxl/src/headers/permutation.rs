@@ -6,7 +6,7 @@
 use crate::bit_reader::BitReader;
 use crate::entropy_coding::decode::Reader;
 use crate::error::{Error, Result};
-use crate::util::{tracing_wrappers::instrument, value_of_lowest_1_bit, CeilLog2};
+use crate::util::{tracing_wrappers::instrument, value_of_lowest_1_bit, CeilLog2, NewWithCapacity};
 
 #[derive(Debug, PartialEq, Default)]
 pub struct Permutation(pub Vec<u32>);
@@ -41,8 +41,7 @@ impl Permutation {
             return Err(Error::InvalidPermutationSize { size, skip, end });
         }
 
-        let mut lehmer = Vec::new();
-        lehmer.try_reserve(end as usize)?;
+        let mut lehmer = Vec::new_with_capacity(end as usize)?;
 
         let mut prev_val = 0u32;
         for idx in skip..(skip + end) {
@@ -59,8 +58,7 @@ impl Permutation {
         }
 
         // Initialize the full permutation vector with skipped elements intact
-        let mut permutation: Vec<u32> = Vec::new();
-        permutation.try_reserve((size - skip) as usize)?;
+        let mut permutation = Vec::new_with_capacity((size - skip) as usize)?;
         permutation.extend(0..size);
 
         // Decode the Lehmer code into the slice starting at `skip`
@@ -88,15 +86,13 @@ fn decode_lehmer_code(code: &[u32], permutation_slice: &[u32]) -> Result<Vec<u32
         });
     }
 
-    let mut permuted = vec![];
-    permuted.try_reserve(n)?;
+    let mut permuted = Vec::new_with_capacity(n)?;
     permuted.extend_from_slice(permutation_slice);
 
     let padded_n = (n as u32).next_power_of_two() as usize;
 
     // Allocate temp array inside the function
-    let mut temp = vec![];
-    temp.try_reserve(padded_n)?;
+    let mut temp = Vec::new_with_capacity(padded_n)?;
     temp.extend((0..padded_n as u32).map(|x| value_of_lowest_1_bit(x + 1)));
 
     for (i, permuted_item) in permuted.iter_mut().enumerate() {
@@ -167,7 +163,7 @@ fn decode_lehmer_code_naive(code: &[u32], permutation_slice: &[u32]) -> Result<V
 
     // Create temp array with values from permutation_slice
     let mut temp = permutation_slice.to_vec();
-    let mut permuted = Vec::with_capacity(n);
+    let mut permuted = Vec::new_with_capacity(n)?;
 
     // Iterate over the Lehmer code
     for (i, &idx) in code.iter().enumerate() {

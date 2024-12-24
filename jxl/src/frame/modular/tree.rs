@@ -10,7 +10,7 @@ use crate::{
     bit_reader::BitReader,
     entropy_coding::decode::Histograms,
     error::{Error, Result},
-    util::tracing_wrappers::*,
+    util::{tracing_wrappers::*, NewWithCapacity},
 };
 
 #[allow(dead_code)]
@@ -115,11 +115,9 @@ impl Tree {
         tree_reader.check_final_state()?;
 
         let num_properties = max_property as usize + 1;
-        let mut property_ranges = vec![];
-        property_ranges.try_reserve(num_properties * tree.len())?;
+        let mut property_ranges = Vec::new_with_capacity(num_properties * tree.len())?;
         property_ranges.resize(num_properties * tree.len(), (i32::MIN, i32::MAX));
-        let mut height = vec![];
-        height.try_reserve(tree.len())?;
+        let mut height = Vec::new_with_capacity(tree.len())?;
         height.resize(tree.len(), 0);
         for i in 0..tree.len() {
             const HEIGHT_LIMIT: usize = 2048;
