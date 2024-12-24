@@ -19,7 +19,6 @@ struct AnsHistogram {
     log_bucket_size: usize,
     bucket_mask: u32,
     // For optimizing fast-lossless case.
-    #[allow(unused)]
     single_symbol: Option<u32>,
 }
 
