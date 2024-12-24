@@ -6,7 +6,6 @@
 use jxl_macros::UnconditionalCoder;
 
 use crate::bit_reader::BitReader;
-#[allow(unused_imports)]
 use crate::entropy_coding::ans::*;
 use crate::entropy_coding::context_map::*;
 use crate::entropy_coding::huffman::*;
