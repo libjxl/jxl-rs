@@ -11,7 +11,6 @@ pub fn abs_delta<T: Num + std::cmp::PartialOrd>(left_val: T, right_val: T) -> T 
     }
 }
 
-#[cfg(test)]
 macro_rules! assert_almost_eq {
     ($left:expr, $right:expr, $max_error:expr $(,)?) => {
         let (left_val, right_val, max_error) = (&$left, &$right, &$max_error);
@@ -24,10 +23,8 @@ macro_rules! assert_almost_eq {
         }
     };
 }
-#[cfg(test)]
 pub(crate) use assert_almost_eq;
 
-#[cfg(test)]
 macro_rules! assert_all_almost_eq {
     ($left:expr, $right:expr, $max_error:expr $(,)?) => {
         let (left_val, right_val, max_error) = (&$left, &$right, &$max_error);
@@ -45,7 +42,6 @@ macro_rules! assert_all_almost_eq {
         }
     };
 }
-#[cfg(test)]
 pub(crate) use assert_all_almost_eq;
 use num_traits::Num;
 
