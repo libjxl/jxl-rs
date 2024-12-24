@@ -25,11 +25,20 @@ jobs:
       run:
         ./ci/pull_request_checks.sh
 
-  rust:
-    name: Test, Format and Clippy
-    runs-on: [ubuntu-latest]
+  checks:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        check: [format, clippy, test]
+        features: [all, default]
+        exclude:
+          # Remove the "format+all" combination, since it is the same as "format+default"
+          - check: format
+            features: all
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout
+        uses: actions/checkout@v4
         with:
           submodules: recursive
 
@@ -38,20 +47,28 @@ jobs:
         with:
           components: clippy, rustfmt
 
-      - name: Build artefact caching
+      - name: Rust cache
         uses: Swatinem/rust-cache@v2.7.3
 
-      - name: Format
+      # format
+      - name: Cargo fmt (check)
+        if: ${{ matrix.check == 'format' }}
         run: cargo fmt --all -- --check
 
-      - name: Clippy
+      # clippy
+      - name: Clippy with all features
+        if: ${{ matrix.check == 'clippy' && matrix.features == 'all' }}
         run: cargo clippy --release --all-targets --all-features --tests --all -- -D warnings
 
       - name: Clippy with default features
+        if: ${{ matrix.check == 'clippy' && matrix.features == 'default' }}
         run: cargo clippy --release --all-targets --tests --all -- -D warnings
 
-      - name: Run tests
+      # test
+      - name: Tests with all features
+        if: ${{ matrix.check == 'test' && matrix.features == 'all' }}
         run: cargo test --release --all --no-fail-fast --all-features
 
-      - name: Run tests with default features
+      - name: Tests with default features
+        if: ${{ matrix.check == 'test' && matrix.features == 'default' }}
         run: cargo test --release --all --no-fail-fast
