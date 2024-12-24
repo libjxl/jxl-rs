@@ -108,10 +108,15 @@ impl ImageDataType for half::f16 {
 impl_image_data_type!(f64, F64);
 
 pub struct Image<T: ImageDataType> {
-    size: (usize, usize),
+    pub size: (usize, usize),
     data: Vec<T>,
 }
 
+impl<T: ImageDataType> Debug for Image<T> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{:?} {}x{}", T::DATA_TYPE_ID, self.size.0, self.size.1,)
+    }
+}
 #[derive(Clone, Copy)]
 pub struct ImageRect<'a, T: ImageDataType> {
     origin: (usize, usize),
@@ -194,7 +199,7 @@ impl<T: ImageDataType> Image<T> {
         Ok(img)
     }
 
-    #[cfg(test)]
+    // TODO(firsching): make this #[cfg(test)]
     pub fn new_constant(size: (usize, usize), val: T) -> Result<Image<T>> {
         let mut img = Self::new(size)?;
         img.data.iter_mut().for_each(|x| *x = val);
