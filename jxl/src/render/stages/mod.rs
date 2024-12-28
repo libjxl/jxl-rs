@@ -9,6 +9,7 @@ mod nearest_neighbor;
 mod noise;
 mod save;
 mod upsample;
+mod xyb;
 
 pub use chroma_upsample::*;
 pub use convert::*;
