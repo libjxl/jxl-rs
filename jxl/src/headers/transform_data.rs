@@ -21,9 +21,9 @@ pub struct OpsinInverseMatrix {
     #[default([11.031566901960783, -9.866943921568629, -0.16462299647058826,
                -3.254147380392157,  4.418770392156863,  -0.16462299647058826,
                -3.6588512862745097, 2.7129230470588235, 1.9459282392156863])]
-    inverse_matrix: [f32; 9],
-    #[default([0.0037930732552754493, 0.0037930732552754493, 0.0037930732552754493])]
-    opsin_biases: [f32; 3],
+    pub inverse_matrix: [f32; 9],
+    #[default([-0.0037930732552754493; 3])]
+    pub opsin_biases: [f32; 3],
     #[default([1.0 - 0.05465007330715401, 1.0 - 0.07005449891748593, 1.0 - 0.049935103337343655, 0.145])]
     quant_biases: [f32; 4],
 }
@@ -326,7 +326,7 @@ pub struct CustomTransformData {
     all_default: bool,
     #[condition(nonserialized.xyb_encoded)]
     #[default(OpsinInverseMatrix::default())]
-    opsin_inverse_matrix: OpsinInverseMatrix,
+    pub opsin_inverse_matrix: OpsinInverseMatrix,
     #[default(0)]
     #[coder(Bits(3))]
     custom_weight_mask: u32,
