@@ -5,6 +5,7 @@
 
 mod chroma_upsample;
 mod convert;
+mod gaborish;
 mod nearest_neighbor;
 mod noise;
 mod save;
