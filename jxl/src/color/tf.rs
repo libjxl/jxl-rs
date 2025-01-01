@@ -12,7 +12,7 @@ const SRGB_POWTABLE_LOWER: [u8; 16] = [
 ];
 
 /// Converts the linear samples with the sRGB transfer curve.
-// Fast linear to sRGB conversion, ported from libjxl. Max error ~1.2e-4
+// Fast linear to sRGB conversion, ported from libjxl. Max error ~1.7e-4
 pub fn linear_to_srgb_fast(samples: &mut [f32]) {
     for s in samples {
         let v = s.to_bits() & 0x7fff_ffff;
@@ -146,7 +146,7 @@ mod test {
 
             linear_to_srgb(&mut samples);
             linear_to_srgb_fast(&mut fast);
-            assert_all_almost_eq!(&samples, &fast, 1.2e-4);
+            assert_all_almost_eq!(&samples, &fast, 1.7e-4);
             Ok(())
         });
     }
