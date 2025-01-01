@@ -12,6 +12,7 @@ use crate::{
         extra_channels::ExtraChannelInfo, frame_header::FrameHeader, modular::GroupHeader,
         JxlHeader,
     },
+    image::Image,
     util::{tracing_wrappers::*, CeilLog2},
 };
 
@@ -20,7 +21,7 @@ mod transforms;
 mod tree;
 
 pub use predict::Predictor;
-use transforms::TransformStep;
+use transforms::{make_grids, TransformStepChunk};
 pub use tree::Tree;
 
 #[derive(Clone, PartialEq, Eq)]
@@ -58,6 +59,27 @@ impl ChannelInfo {
     }
 }
 
+#[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Clone, Copy)]
+enum ModularGridKind {
+    // Single big channel.
+    None,
+    // 2048x2048 image-pixels.
+    Lf,
+    // 256x256 image-pixels.
+    Hf,
+}
+
+#[allow(dead_code)]
+#[derive(Debug)]
+struct ModularBuffer {
+    data: Option<Image<i32>>,
+    // Holds additional information such as the weighted predictor's error channel's last row for
+    // the transform chunk that produced this buffer.
+    auxiliary_data: Option<Image<i32>>,
+    remaining_uses: usize,
+    used_by_transforms: Vec<usize>,
+}
+
 #[allow(dead_code)]
 #[derive(Debug)]
 struct ModularBufferInfo {
@@ -67,6 +89,8 @@ struct ModularBufferInfo {
     is_output: bool,
     is_coded: bool,
     description: String,
+    grid_kind: ModularGridKind,
+    buffer_grid: Vec<ModularBuffer>,
 }
 
 /// A modular image is a sequence of channels to which one or more transforms might have been
@@ -81,10 +105,10 @@ struct ModularBufferInfo {
 #[derive(Debug)]
 pub struct FullModularImage {
     buffer_info: Vec<ModularBufferInfo>,
-    transform_steps: Vec<TransformStep>,
+    transform_steps: Vec<TransformStepChunk>,
     // List of buffer indices of the channels of the modular image encoded in each kind of section.
     // In order, LfGlobal, LfGroup, HfGroup(pass 0), ..., HfGroup(last pass).
-    section_modular_images: Vec<Vec<usize>>,
+    section_buffer_indices: Vec<Vec<usize>>,
 }
 
 impl FullModularImage {
@@ -127,13 +151,13 @@ impl FullModularImage {
             return Err(Error::NoGlobalTree);
         }
 
-        let (buffer_info, transform_steps) =
+        let (mut buffer_info, transform_steps) =
             transforms::meta_apply_transforms(&channels, &header.transforms)?;
 
         // Assign each (channel, group) pair present in the bitstream to the section in which it will be decoded.
-        let mut section_modular_images: Vec<Vec<usize>> = vec![];
+        let mut section_buffer_indices: Vec<Vec<usize>> = vec![];
 
-        section_modular_images.push(
+        section_buffer_indices.push(
             buffer_info
                 .iter()
                 .enumerate()
@@ -143,7 +167,7 @@ impl FullModularImage {
                 .collect(),
         );
 
-        section_modular_images.push(
+        section_buffer_indices.push(
             buffer_info
                 .iter()
                 .enumerate()
@@ -156,7 +180,7 @@ impl FullModularImage {
 
         for pass in 0..frame_header.passes.num_passes as usize {
             let (min_shift, max_shift) = frame_header.passes.downsampling_bracket(pass);
-            section_modular_images.push(
+            section_buffer_indices.push(
                 buffer_info
                     .iter()
                     .enumerate()
@@ -169,18 +193,25 @@ impl FullModularImage {
         }
 
         // Ensure that the channel list in each group is sorted by actual channel ID.
-        for list in section_modular_images.iter_mut() {
+        for list in section_buffer_indices.iter_mut() {
             list.sort_by_key(|x| buffer_info[*x].channel_id);
         }
 
-        // TODO(veluca93): prepare grids, grid sizes and dependency counts for the various grids.
+        trace!(?section_buffer_indices);
+
+        let transform_steps = make_grids(
+            frame_header,
+            transform_steps,
+            &section_buffer_indices,
+            &mut buffer_info,
+        );
 
         // TODO(veluca93): read global channels
 
         Ok(FullModularImage {
             buffer_info,
             transform_steps,
-            section_modular_images,
+            section_buffer_indices,
         })
     }
 }
