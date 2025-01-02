@@ -8,6 +8,7 @@ pub mod test;
 
 mod bits;
 mod concat_slice;
+mod fast_math;
 mod linalg;
 mod log2;
 mod rational_poly;
@@ -17,6 +18,7 @@ mod vec_helpers;
 
 pub use bits::*;
 pub use concat_slice::*;
+pub use fast_math::*;
 pub use linalg::*;
 pub use log2::*;
 pub use rational_poly::*;

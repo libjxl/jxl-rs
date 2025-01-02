@@ -99,6 +99,32 @@ pub fn srgb_to_linear(samples: &mut [f32]) {
     }
 }
 
+/// Converts the linear samples with the BT.709 transfer curve.
+pub fn linear_to_bt709(samples: &mut [f32]) {
+    for s in samples {
+        let a = s.abs();
+        *s = if a <= 0.018 {
+            a * 4.5
+        } else {
+            crate::util::fast_powf(a, 0.45).mul_add(1.099, -0.099)
+        }
+        .copysign(*s);
+    }
+}
+
+/// Converts samples in BT.709 transfer curve to linear. Inverse of `linear_to_bt709`.
+pub fn bt709_to_linear(samples: &mut [f32]) {
+    for s in samples {
+        let a = s.abs();
+        *s = if a <= 0.081 {
+            a / 4.5
+        } else {
+            crate::util::fast_powf(a.mul_add(1.0 / 1.099, 0.099 / 1.099), 1.0 / 0.45)
+        }
+        .copysign(*s);
+    }
+}
+
 #[cfg(test)]
 mod test {
     use test_log::test;
@@ -134,6 +160,19 @@ mod test {
             linear_to_srgb(&mut output);
             srgb_to_linear(&mut output);
             assert_all_almost_eq!(&output, &samples, 2e-6);
+            Ok(())
+        });
+    }
+
+    #[test]
+    fn bt709_roundtrip_arb() {
+        arbtest::arbtest(|u| {
+            let samples: Vec<f32> = arb_samples(u)?;
+            let mut output = samples.clone();
+
+            linear_to_bt709(&mut output);
+            bt709_to_linear(&mut output);
+            assert_all_almost_eq!(&output, &samples, 5e-6);
             Ok(())
         });
     }
