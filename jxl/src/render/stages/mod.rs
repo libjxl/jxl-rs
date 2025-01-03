@@ -11,6 +11,7 @@ mod noise;
 mod save;
 mod upsample;
 mod xyb;
+mod ycbcr;
 
 pub use chroma_upsample::*;
 pub use convert::*;
