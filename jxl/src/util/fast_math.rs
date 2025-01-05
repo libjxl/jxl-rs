@@ -11,7 +11,7 @@ const POW2F_NUMER_COEFFS: [f32; 3] = [1.01749063e1, 4.88687798e1, 9.85506591e1];
 const POW2F_DENOM_COEFFS: [f32; 4] = [2.10242958e-1, -2.22328856e-2, -1.94414990e1, 9.85506633e1];
 
 #[inline]
-fn fast_pow2f(x: f32) -> f32 {
+pub fn fast_pow2f(x: f32) -> f32 {
     let x_floor = x.floor();
     let exp = f32::from_bits(((x_floor as i32 + 127) as u32) << 23);
     let frac = x - x_floor;
@@ -40,11 +40,11 @@ const LOG2F_Q: [f32; 3] = [
 ];
 
 #[inline]
-fn fast_log2f(x: f32) -> f32 {
+pub fn fast_log2f(x: f32) -> f32 {
     let x_bits = x.to_bits() as i32;
-    let exp_bits = x_bits - 0x3f2aaaab;
+    let exp_bits = x_bits.wrapping_sub(0x3f2aaaab);
     let exp_shifted = exp_bits >> 23;
-    let mantissa = f32::from_bits((x_bits - (exp_shifted << 23)) as u32);
+    let mantissa = f32::from_bits((x_bits.wrapping_sub(exp_shifted << 23)) as u32);
     let exp_val = exp_shifted as f32;
 
     let x = mantissa - 1.0;
