@@ -5,13 +5,13 @@
 
 use crate::render::{RenderPipelineInPlaceStage, RenderPipelineStage};
 
-/// Convert XYB to linear sRGB, where 1.0 corresponds to `intensity_target` nits.
+/// Convert YCbCr to linear sRGB
 pub struct YcbcrToLinearSrgbStage {
     first_channel: usize,
 }
 
 impl YcbcrToLinearSrgbStage {
-    #[allow(unused, reason = "remove once we use this")]
+    #[allow(unused, reason = "remove once we actually use this")]
     pub fn new(first_channel: usize) -> Self {
         Self { first_channel }
     }
