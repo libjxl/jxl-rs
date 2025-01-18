@@ -693,7 +693,7 @@ pub fn for_each_test_file(input: TokenStream) -> TokenStream {
     for entry in fs::read_dir(test_dir).unwrap() {
         let entry = entry.unwrap();
         let path = entry.path();
-        if path.extension().map_or(false, |ext| ext == "jxl") {
+        if path.extension().is_some_and(|ext| ext == "jxl") {
             let filename = path.file_name().unwrap().to_string_lossy();
             let test_name = format!("{}_{}", fn_name, filename.strip_suffix(".jxl").unwrap());
             let test_name = Ident::new(&test_name, fn_name.span());
