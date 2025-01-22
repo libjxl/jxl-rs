@@ -9,6 +9,8 @@ use crate::{
     headers::encodings::{Empty, UnconditionalCoder},
 };
 
+pub const NUM_QUANT_TABLES: usize = 17;
+
 #[derive(Debug)]
 #[allow(dead_code)]
 pub struct LfQuantFactors {

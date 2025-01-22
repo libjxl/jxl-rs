@@ -463,11 +463,30 @@ pub fn make_grids(
     // Create grids.
     for g in buffer_info.iter_mut() {
         g.buffer_grid = get_grid_indices(g.grid_kind)
-            .map(|_| ModularBuffer {
-                data: None,
-                auxiliary_data: None,
-                remaining_uses: 0,
-                used_by_transforms: vec![],
+            .map(|(x, y)| {
+                let chan_size = g.info.size;
+                let size = match g.grid_kind {
+                    ModularGridKind::None => chan_size,
+                    ModularGridKind::Lf | ModularGridKind::Hf => {
+                        let group_dim = if g.grid_kind == ModularGridKind::Lf {
+                            frame_header.lf_group_dim()
+                        } else {
+                            frame_header.group_dim()
+                        };
+                        let dx = group_dim >> g.info.shift.unwrap().0;
+                        let bx = x as usize * dx;
+                        let dy = group_dim >> g.info.shift.unwrap().1;
+                        let by = y as usize * dy;
+                        ((chan_size.0 - bx).min(dx), (chan_size.1 - by).min(dy))
+                    }
+                };
+                ModularBuffer {
+                    data: None,
+                    auxiliary_data: None,
+                    remaining_uses: 0,
+                    used_by_transforms: vec![],
+                    size,
+                }
             })
             .collect();
     }
