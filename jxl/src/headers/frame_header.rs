@@ -468,7 +468,7 @@ impl FrameHeader {
     pub fn group_dim(&self) -> usize {
         (Self::GROUP_DIM >> 1) << self.group_size_shift
     }
-    pub fn dc_group_dim(&self) -> usize {
+    pub fn lf_group_dim(&self) -> usize {
         self.group_dim() * Self::BLOCK_DIM
     }
 
