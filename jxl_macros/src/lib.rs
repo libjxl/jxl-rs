@@ -438,17 +438,15 @@ impl Field {
     }
 
     // Produces reading code (possibly with tracing).
-    fn read_fun(&self, all_default_field: &Option<syn::Ident>, trace: bool) -> TokenStream2 {
+    fn read_fun(&self, all_default_field: &Option<syn::Ident>) -> TokenStream2 {
         let ident = &self.name;
         let ty = &self.ty;
         let nonserialized_inits = &self.nonserialized_inits;
         match &self.kind {
             FieldKind::Unconditional(coder) => {
                 let (cfg_ty, cfg) = coder.config(all_default_field);
-                let trc = if trace {
-                    quote! { eprintln!("Setting {} to {:?}. total_bits_read: {}, peek: {}", stringify!(#ident), #ident, br.total_bits_read(), br.peek(8)); }
-                } else {
-                    quote! {}
+                let trc = quote! {
+                    crate::util::tracing_wrappers::trace!("Setting {} to {:?}. total_bits_read: {}, peek: {:08b}", stringify!(#ident), #ident, br.total_bits_read(), br.peek(8));
                 };
                 quote! {
                     let #ident = {
@@ -464,10 +462,8 @@ impl Field {
                 let (cfg_ty, cfg) = coder.config(all_default_field);
                 let cnd = condition.get_expr(all_default_field).unwrap();
                 let pretty_cnd = condition.get_pretty(all_default_field);
-                let trc = if trace {
-                    quote! { eprintln!("{} is {}, setting {} to {:?}. total_bits_read: {}, peek {}", #pretty_cnd, #cnd, stringify!(#ident), #ident, br.total_bits_read(), br.peek(8)); }
-                } else {
-                    quote! {}
+                let trc = quote! {
+                    crate::util::tracing_wrappers::trace!("{} is {}, setting {} to {:?}. total_bits_read: {}, peek {:08b}", #pretty_cnd, #cnd, stringify!(#ident), #ident, br.total_bits_read(), br.peek(8));
                 };
                 quote! {
                     let #ident = {
@@ -485,10 +481,8 @@ impl Field {
                 let cnd = condition.get_expr(all_default_field).unwrap();
                 let pretty_cnd = condition.get_pretty(all_default_field);
                 let default = &self.default;
-                let trc = if trace {
-                    quote! { eprintln!("{} is {}, setting {} to {:?}. total_bits_read: {}, peek: {}", #pretty_cnd, #cnd, stringify!(#ident), #ident, br.total_bits_read(), br.peek(8)); }
-                } else {
-                    quote! {}
+                let trc = quote! {
+                    crate::util::tracing_wrappers::trace!("{} is {}, setting {} to {:?}. total_bits_read: {}, peek {:08b}", #pretty_cnd, #cnd, stringify!(#ident), #ident, br.total_bits_read(), br.peek(8));
                 };
 
                 let (read_fn, default) = if let Some(def) = &self.default_element {
@@ -516,7 +510,6 @@ impl Field {
 fn derive_struct(input: DeriveInput) -> TokenStream2 {
     let name = &input.ident;
 
-    let trace = input.attrs.iter().any(|a| a.path().is_ident("trace"));
     let validate = input.attrs.iter().any(|a| a.path().is_ident("validate"));
     let nonserialized: Vec<_> = input
         .attrs
@@ -562,7 +555,7 @@ fn derive_struct(input: DeriveInput) -> TokenStream2 {
         .enumerate()
         .map(|(n, f)| Field::parse(f, n, &mut all_default_field))
         .collect();
-    let fields_read = fields.iter().map(|x| x.read_fun(&all_default_field, trace));
+    let fields_read = fields.iter().map(|x| x.read_fun(&all_default_field));
     let fields_names = fields.iter().map(|x| &x.name);
 
     let impl_default = if fields.iter().all(|x| x.default.is_some()) {
@@ -649,7 +642,6 @@ fn derive_enum(input: DeriveInput) -> TokenStream2 {
 #[proc_macro_derive(
     UnconditionalCoder,
     attributes(
-        trace,
         coder,
         condition,
         default,
