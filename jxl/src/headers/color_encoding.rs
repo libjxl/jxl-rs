@@ -120,16 +120,16 @@ pub struct ColorEncoding {
     pub white_point: WhitePoint,
     // TODO(veluca): can this be merged in the enum?
     #[condition(white_point == WhitePoint::Custom)]
-    #[default(CustomXY::default())]
+    #[default(CustomXY::default(&field_nonserialized))]
     pub white: CustomXY,
     #[condition(!want_icc && color_space != ColorSpace::XYB && color_space != ColorSpace::Gray)]
     #[default(Primaries::SRGB)]
     pub primaries: Primaries,
     #[condition(primaries == Primaries::Custom)]
-    #[default([CustomXY::default(), CustomXY::default(), CustomXY::default()])]
+    #[default([CustomXY::default(&field_nonserialized), CustomXY::default(&field_nonserialized), CustomXY::default(&field_nonserialized)])]
     pub custom_primaries: [CustomXY; 3],
     #[condition(!want_icc)]
-    #[default(CustomTransferFunction::default())]
+    #[default(CustomTransferFunction::default(&field_nonserialized))]
     #[nonserialized(color_space: color_space)]
     pub tf: CustomTransferFunction,
     #[condition(!want_icc)]

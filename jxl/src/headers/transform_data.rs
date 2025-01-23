@@ -325,7 +325,7 @@ pub struct CustomTransformData {
     #[all_default]
     all_default: bool,
     #[condition(nonserialized.xyb_encoded)]
-    #[default(OpsinInverseMatrix::default())]
+    #[default(OpsinInverseMatrix::default(&field_nonserialized))]
     pub opsin_inverse_matrix: OpsinInverseMatrix,
     #[default(0)]
     #[coder(Bits(3))]
