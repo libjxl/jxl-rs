@@ -100,15 +100,10 @@ enum BlendingMode {
     Mul = 4,
 }
 
+#[derive(Default)]
 struct BlendingInfoNonserialized {
     num_extra_channels: u32,
-    have_crop: bool,
-    x0: i32,
-    y0: i32,
-    width: u32,
-    height: u32,
-    img_width: u32,
-    img_height: u32,
+    full_frame: bool,
 }
 
 #[derive(UnconditionalCoder, Debug, PartialEq, Clone)]
@@ -133,13 +128,8 @@ struct BlendingInfo {
 
     #[coder(u2S(0, 1, 2, 3))]
     #[default(0)]
-    // TODO(TomasKralCZ): figure out a way of extracting this huge condition into separate variables
-    /* Let full_frame be true if and only if have_crop is false or if the
-    frame area given by width and height and offsets x0 and y0 completely covers the image area. */
-    #[condition(mode != BlendingMode::Replace && !(!nonserialized.have_crop ||
-        (nonserialized.x0 == 0 && nonserialized.y0 == 0 &&
-        nonserialized.width as i64 + nonserialized.x0 as i64 >= nonserialized.img_width as i64 &&
-        nonserialized.height as i64 + nonserialized.y0 as i64 >= nonserialized.img_height as i64)))]
+    // This condition is called `resets_canvas` in the spec
+    #[condition(!(nonserialized.full_frame && mode == BlendingMode::Replace))]
     source: u32,
 }
 
@@ -373,20 +363,27 @@ pub struct FrameHeader {
     #[condition(have_crop)]
     frame_height: u32,
 
+    // The following 2 fields are not actually serialized, but just used as variables to help with
+    // defining later conditions.
+    #[default(x0 == 0 && y0 == 0 && (frame_width as i64 + x0 as i64) >= nonserialized.img_width as i64 &&
+        (frame_height as i64 + y0 as i64) >= nonserialized.img_height as i64)]
+    #[condition(false)]
+    completely_covers: bool,
+
+    #[default(!have_crop || completely_covers)]
+    #[condition(false)]
+    full_frame: bool,
+
     /* "normal_frame" denotes the condition !all_default
     && (frame_type == kRegularFrame || frame_type == kSkipProgressive) */
     #[default(BlendingInfo::default(&field_nonserialized))]
     #[condition(frame_type == FrameType::RegularFrame || frame_type == FrameType::SkipProgressive)]
-    #[nonserialized(num_extra_channels : nonserialized.num_extra_channels,
-        have_crop : have_crop, x0: x0, y0: y0, width: frame_width, height: frame_height,
-        img_width: nonserialized.img_width, img_height: nonserialized.img_height)]
+    #[nonserialized(num_extra_channels : nonserialized.num_extra_channels, full_frame : full_frame)]
     blending_info: BlendingInfo,
 
     #[size_coder(explicit(nonserialized.num_extra_channels))]
     #[default_element(BlendingInfo::default(&field_nonserialized))]
-    #[nonserialized(num_extra_channels : nonserialized.num_extra_channels,
-        have_crop : have_crop, x0: x0, y0: y0, width: frame_width, height: frame_height,
-        img_width: nonserialized.img_width, img_height: nonserialized.img_height)]
+    #[nonserialized(num_extra_channels : nonserialized.num_extra_channels, full_frame: full_frame)]
     ec_blending_info: Vec<BlendingInfo>,
 
     #[coder(u2S(0, 1, Bits(8), Bits(32)))]
@@ -410,15 +407,11 @@ pub struct FrameHeader {
     #[condition(frame_type != FrameType::LFFrame && !is_last)]
     pub save_as_reference: u32,
 
-    // The following 3 fields are not actually serialized, but just used as variables to help with
+    // The following 2 fields are not actually serialized, but just used as variables to help with
     // defining later conditions.
     #[default(!is_last && frame_type != FrameType::LFFrame && (duration == 0 || save_as_reference != 0))]
     #[condition(false)]
     pub can_be_referenced: bool,
-
-    #[default(!have_crop || frame_width >= nonserialized.img_width && frame_height >= nonserialized.img_height && x0 == 0 && y0 == 0)]
-    #[condition(false)]
-    full_frame: bool,
 
     #[default(can_be_referenced && blending_info.mode == BlendingMode::Replace && full_frame &&
               (frame_type == FrameType::RegularFrame || frame_type == FrameType::SkipProgressive))]
@@ -438,6 +431,8 @@ pub struct FrameHeader {
     #[default(Extensions::default())]
     extensions: Extensions,
 
+    // The following 4 fields are not actually serialized, but just used as variables to help with
+    // defining later conditions.
     #[coder(Bits(0))]
     #[default(if frame_width == 0 { nonserialized.img_width } else { frame_width })]
     #[condition(false)]
@@ -636,6 +631,7 @@ mod test_frame_header {
         container::ContainerParser,
         headers::{FileHeader, JxlHeader},
     };
+    use test_log::test;
 
     fn read_frame_header_and_toc(image: &[u8]) -> Result<(FrameHeader, Toc), Error> {
         let codestream = ContainerParser::collect_codestream(image).unwrap();
