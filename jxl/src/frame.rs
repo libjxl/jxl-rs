@@ -292,6 +292,7 @@ mod test {
         headers::{FileHeader, JxlHeader},
         util::test::assert_almost_eq,
     };
+    use test_log::test;
 
     use super::{DecoderState, Frame, Section};
 
