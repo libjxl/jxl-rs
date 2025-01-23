@@ -341,7 +341,7 @@ pub struct FrameHeader {
     b_qm_scale: u32,
 
     #[condition(frame_type != FrameType::ReferenceOnly)]
-    #[default(Passes::default())]
+    #[default(Passes::default(&field_nonserialized))]
     pub passes: Passes,
 
     #[coder(u2S(1, 2, 3, 4))]
@@ -375,7 +375,7 @@ pub struct FrameHeader {
 
     /* "normal_frame" denotes the condition !all_default
     && (frame_type == kRegularFrame || frame_type == kSkipProgressive) */
-    #[default(BlendingInfo::default())]
+    #[default(BlendingInfo::default(&field_nonserialized))]
     #[condition(frame_type == FrameType::RegularFrame || frame_type == FrameType::SkipProgressive)]
     #[nonserialized(num_extra_channels : nonserialized.num_extra_channels,
         have_crop : have_crop, x0: x0, y0: y0, width: frame_width, height: frame_height,
@@ -383,7 +383,7 @@ pub struct FrameHeader {
     blending_info: BlendingInfo,
 
     #[size_coder(explicit(nonserialized.num_extra_channels))]
-    #[default_element(BlendingInfo::default())]
+    #[default_element(BlendingInfo::default(&field_nonserialized))]
     #[nonserialized(num_extra_channels : nonserialized.num_extra_channels,
         have_crop : have_crop, x0: x0, y0: y0, width: frame_width, height: frame_height,
         img_width: nonserialized.img_width, img_height: nonserialized.img_height)]
@@ -431,7 +431,7 @@ pub struct FrameHeader {
 
     name: String,
 
-    #[default(RestorationFilter::default())]
+    #[default(RestorationFilter::default(&field_nonserialized))]
     #[nonserialized(encoding : encoding)]
     restoration_filter: RestorationFilter,
 

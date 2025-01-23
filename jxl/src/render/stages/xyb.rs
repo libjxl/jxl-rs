@@ -96,6 +96,7 @@ mod test {
 
     use super::*;
     use crate::error::Result;
+    use crate::headers::encodings::Empty;
     use crate::image::Image;
     use crate::render::test::make_and_run_simple_pipeline;
     use crate::util::test::assert_all_almost_eq;
@@ -103,7 +104,7 @@ mod test {
     #[test]
     fn consistency() -> Result<()> {
         crate::render::test::test_stage_consistency::<_, f32, f32>(
-            XybToLinearSrgbStage::new(0, OpsinInverseMatrix::default(), 255.0),
+            XybToLinearSrgbStage::new(0, OpsinInverseMatrix::default(&Empty {}), 255.0),
             (500, 500),
             3,
         )
@@ -127,7 +128,7 @@ mod test {
             .row(0)
             .copy_from_slice(&[0.471659, 0.43707693, 0.66613984]);
 
-        let stage = XybToLinearSrgbStage::new(0, OpsinInverseMatrix::default(), 255.0);
+        let stage = XybToLinearSrgbStage::new(0, OpsinInverseMatrix::default(&Empty {}), 255.0);
         let output = make_and_run_simple_pipeline::<_, f32, f32>(
             stage,
             &[input_x, input_y, input_b],

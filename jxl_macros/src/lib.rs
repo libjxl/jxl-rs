@@ -218,25 +218,31 @@ enum Coder {
 }
 
 impl Coder {
-    fn config(&self, all_default_field: &Option<syn::Ident>) -> (TokenStream2, TokenStream2) {
+    fn ty(&self) -> TokenStream2 {
         match self {
-            Coder::WithoutConfig => (quote! {()}, quote! { () }),
-            Coder::U32(U32 { coder }) => (quote! {U32Coder}, quote! { #coder }),
+            Coder::WithoutConfig => quote! {()},
+            Coder::U32(..) => quote! {U32Coder},
+            Coder::Select(..) => quote! {SelectCoder<U32Coder>},
+            Coder::Vector(_, value_coder) => {
+                let value_coder_ty = value_coder.ty();
+                quote! {VectorCoder<#value_coder_ty>}
+            }
+        }
+    }
+
+    fn config(&self, all_default_field: &Option<syn::Ident>) -> TokenStream2 {
+        match self {
+            Coder::WithoutConfig => quote! { () },
+            Coder::U32(U32 { coder }) => quote! { #coder },
             Coder::Select(condition, U32 { coder: coder_true }, U32 { coder: coder_false }) => {
                 let cnd = condition.get_expr(all_default_field).unwrap();
-                (
-                    quote! {SelectCoder<U32Coder>},
-                    quote! {
-                        SelectCoder{use_true: #cnd, coder_true: #coder_true, coder_false: #coder_false}
-                    },
-                )
+                quote! {
+                    SelectCoder{use_true: #cnd, coder_true: #coder_true, coder_false: #coder_false}
+                }
             }
             Coder::Vector(U32 { coder }, value_coder) => {
-                let (ty_value_coder, value_coder) = value_coder.config(all_default_field);
-                (
-                    quote! {VectorCoder<#ty_value_coder>},
-                    quote! {VectorCoder{size_coder: #coder, value_coder: #value_coder}},
-                )
+                let value_coder = value_coder.config(all_default_field);
+                quote! {VectorCoder{size_coder: #coder, value_coder: #value_coder}}
             }
         }
     }
@@ -419,10 +425,10 @@ impl Field {
 
         let ident = f.ident.as_ref().unwrap();
 
-        let kind = match (condition, &default) {
+        let kind = match (condition, default.is_some()) {
             (None, _) => FieldKind::Unconditional(coder),
-            (Some(cond), None) => FieldKind::Conditional(cond, coder),
-            (Some(cond), Some(_)) => FieldKind::Defaulted(cond, coder),
+            (Some(cond), false) => FieldKind::Conditional(cond, coder),
+            (Some(cond), true) => FieldKind::Defaulted(cond, coder),
         };
         if is_all_default {
             *all_default_field = Some(f.ident.as_ref().unwrap().clone());
@@ -444,7 +450,8 @@ impl Field {
         let nonserialized_inits = &self.nonserialized_inits;
         match &self.kind {
             FieldKind::Unconditional(coder) => {
-                let (cfg_ty, cfg) = coder.config(all_default_field);
+                let cfg_ty = coder.ty();
+                let cfg = coder.config(all_default_field);
                 let trc = quote! {
                     crate::util::tracing_wrappers::trace!("Setting {} to {:?}. total_bits_read: {}, peek: {:08b}", stringify!(#ident), #ident, br.total_bits_read(), br.peek(8));
                 };
@@ -459,7 +466,8 @@ impl Field {
                 }
             }
             FieldKind::Conditional(condition, coder) => {
-                let (cfg_ty, cfg) = coder.config(all_default_field);
+                let cfg_ty = coder.ty();
+                let cfg = coder.config(all_default_field);
                 let cnd = condition.get_expr(all_default_field).unwrap();
                 let pretty_cnd = condition.get_pretty(all_default_field);
                 let trc = quote! {
@@ -477,7 +485,8 @@ impl Field {
                 }
             }
             FieldKind::Defaulted(condition, coder) => {
-                let (cfg_ty, cfg) = coder.config(all_default_field);
+                let cfg_ty = coder.ty();
+                let cfg = coder.config(all_default_field);
                 let cnd = condition.get_expr(all_default_field).unwrap();
                 let pretty_cnd = condition.get_pretty(all_default_field);
                 let default = &self.default;
@@ -495,14 +504,37 @@ impl Field {
                     let #ident = {
                         let cond = #cnd;
                         let cfg = #cfg;
-                        let default = #default;
                         type NS = <#ty as DefaultedCoder<#cfg_ty>>::Nonserialized;
-                        let nonserialized = NS { #(#nonserialized_inits),* };
-                        <#ty>::#read_fn(&cfg, cond, default, br, &nonserialized)?
+                        let field_nonserialized = NS { #(#nonserialized_inits),* };
+                        let default = #default;
+                        <#ty>::#read_fn(&cfg, cond, default, br, &field_nonserialized)?
                     };
                     #trc
                 }
             }
+        }
+    }
+
+    // Produces default code.
+    fn default_code(&self) -> TokenStream2 {
+        let ident = &self.name;
+        let ty = &self.ty;
+        let nonserialized_inits = &self.nonserialized_inits;
+        let default = &self.default;
+        match &self.kind {
+            FieldKind::Defaulted(_, coder) => {
+                let cfg_ty = coder.ty();
+                let default = &self.default;
+
+                quote! {
+                    let #ident = {
+                        type NS = <#ty as DefaultedCoder<#cfg_ty>>::Nonserialized;
+                        let field_nonserialized = NS { #(#nonserialized_inits),* };
+                        #default
+                    };
+                }
+            }
+            _ => quote! { let #ident = #default; },
         }
     }
 }
@@ -559,16 +591,18 @@ fn derive_struct(input: DeriveInput) -> TokenStream2 {
     let fields_names = fields.iter().map(|x| &x.name);
 
     let impl_default = if fields.iter().all(|x| x.default.is_some()) {
-        let defaults = fields.iter().map(|f| {
+        let field_init = fields.iter().map(Field::default_code);
+        let struct_init = fields.iter().map(|f| {
             let ident = &f.name;
-            let default = f.default.as_ref().unwrap();
-            quote! { #ident : #default }
+            quote! { #ident }
         });
         quote! {
             impl #name {
-                pub fn default() -> #name {
+                #[allow(unused)]
+                pub fn default(nonserialized: &#nonserialized) -> #name {
+                    #(#field_init)*
                     #name {
-                        #(#defaults),*
+                        #(#struct_init),*
                     }
                 }
             }
