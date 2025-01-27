@@ -5,8 +5,11 @@
 
 use crate::render::{RenderPipelineInPlaceStage, RenderPipelineStage};
 
+/// Render spot color
 pub struct SpotColorStage {
+    /// Spot color channel index
     spot_c: usize,
+    /// Spot color in linear RGBA
     spot_color: [f32; 4],
 }
 
