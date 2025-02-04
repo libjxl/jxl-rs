@@ -382,6 +382,7 @@ pub struct FrameHeader {
     blending_info: BlendingInfo,
 
     #[size_coder(explicit(nonserialized.num_extra_channels))]
+    #[condition(frame_type == FrameType::RegularFrame || frame_type == FrameType::SkipProgressive)]
     #[default_element(BlendingInfo::default(&field_nonserialized))]
     #[nonserialized(num_extra_channels : nonserialized.num_extra_channels, full_frame: full_frame)]
     ec_blending_info: Vec<BlendingInfo>,
