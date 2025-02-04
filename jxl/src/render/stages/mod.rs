@@ -6,6 +6,7 @@
 mod apply_transfer;
 mod chroma_upsample;
 mod convert;
+mod epf;
 mod gaborish;
 mod nearest_neighbor;
 mod noise;
