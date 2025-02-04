@@ -42,7 +42,7 @@ pub struct ExtraChannelInfo {
     all_default: bool,
     #[default(ExtraChannel::Alpha)]
     ec_type: ExtraChannel,
-    #[default(BitDepth::default())]
+    #[default(BitDepth::default(&field_nonserialized))]
     bit_depth: BitDepth,
     #[coder(u2S(0, 3, 4, Bits(3) + 1))]
     #[default(0)]

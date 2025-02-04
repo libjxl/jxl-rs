@@ -101,16 +101,19 @@ mod test {
 
     use super::*;
     use crate::{
-        error::Result, image::Image, render::test::make_and_run_simple_pipeline,
-        util::test::assert_almost_eq,
+        error::Result, headers::CustomTransformDataNonserialized, image::Image,
+        render::test::make_and_run_simple_pipeline, util::test::assert_almost_eq,
     };
     use test_log::test;
 
+    fn ups_factors() -> CustomTransformData {
+        CustomTransformData::default(&CustomTransformDataNonserialized { xyb_encoded: true })
+    }
+
     #[test]
     fn upsample2x_consistency() -> Result<()> {
-        let ups_factors = CustomTransformData::default();
         crate::render::test::test_stage_consistency::<_, f32, f32>(
-            Upsample2x::new(&ups_factors, 0),
+            Upsample2x::new(&ups_factors(), 0),
             (500, 500),
             1,
         )
@@ -118,9 +121,8 @@ mod test {
 
     #[test]
     fn upsample4x_consistency() -> Result<()> {
-        let ups_factors = CustomTransformData::default();
         crate::render::test::test_stage_consistency::<_, f32, f32>(
-            Upsample4x::new(&ups_factors, 0),
+            Upsample4x::new(&ups_factors(), 0),
             (500, 500),
             1,
         )
@@ -128,9 +130,8 @@ mod test {
 
     #[test]
     fn upsample8x_consistency() -> Result<()> {
-        let ups_factors = CustomTransformData::default();
         crate::render::test::test_stage_consistency::<_, f32, f32>(
-            Upsample8x::new(&ups_factors, 0),
+            Upsample8x::new(&ups_factors(), 0),
             (504, 504),
             1,
         )
@@ -138,12 +139,11 @@ mod test {
 
     #[test]
     fn upsample2x_constant() -> Result<()> {
-        let ups_factors = CustomTransformData::default();
         let image_size = (238, 412);
         let input_size = (image_size.0 / 2, image_size.1 / 2);
         let val = 0.777f32;
         let input = Image::new_constant(input_size, val)?;
-        let stage = Upsample2x::new(&ups_factors, 0);
+        let stage = Upsample2x::new(&ups_factors(), 0);
         let output: Vec<Image<f32>> =
             make_and_run_simple_pipeline(stage, &[input], image_size, 123)?.1;
         for x in 0..image_size.0 {
@@ -156,12 +156,11 @@ mod test {
 
     #[test]
     fn upsample4x_constant() -> Result<()> {
-        let ups_factors = CustomTransformData::default();
         let image_size = (240, 412);
         let input_size = (image_size.0 / 4, image_size.1 / 4);
         let val = 0.777f32;
         let input = Image::new_constant(input_size, val)?;
-        let stage = Upsample4x::new(&ups_factors, 0);
+        let stage = Upsample4x::new(&ups_factors(), 0);
         let output: Vec<Image<f32>> =
             make_and_run_simple_pipeline(stage, &[input], image_size, 123)?.1;
         for x in 0..image_size.0 {
@@ -174,12 +173,11 @@ mod test {
 
     #[test]
     fn upsample8x_constant() -> Result<()> {
-        let ups_factors = CustomTransformData::default();
         let image_size = (240, 416);
         let input_size = (image_size.0 / 8, image_size.1 / 8);
         let val = 0.777f32;
         let input = Image::new_constant(input_size, val)?;
-        let stage = Upsample8x::new(&ups_factors, 0);
+        let stage = Upsample8x::new(&ups_factors(), 0);
         let output: Vec<Image<f32>> =
             make_and_run_simple_pipeline(stage, &[input], image_size, 123)?.1;
         for x in 0..image_size.0 {
@@ -196,7 +194,7 @@ mod test {
         let mut input = Image::new((7, 7))?;
         // Put a single "1.0" in the middle of the image.
         input.as_rect_mut().row(3)[3] = 1.0f32;
-        let ups_factors = CustomTransformData::default();
+        let ups_factors = ups_factors();
         let stage = Upsample2x::new(&ups_factors, 0);
         let output: Vec<Image<f32>> =
             make_and_run_simple_pipeline(stage, &[input], (14, 14), 77)?.1;
@@ -247,7 +245,7 @@ mod test {
         let mut input = Image::new((7, 7))?;
         // Put a single "1.0" in the middle of the image.
         input.as_rect_mut().row(3)[3] = 1.0f32;
-        let ups_factors = CustomTransformData::default();
+        let ups_factors = ups_factors();
         let stage = Upsample4x::new(&ups_factors, 0);
         let output: Vec<Image<f32>> =
             make_and_run_simple_pipeline(stage, &[input], (28, 28), 1024)?.1;
@@ -334,7 +332,7 @@ mod test {
         let mut input = Image::new((7, 7))?;
         // Put a single "1.0" in the middle of the image.
         input.as_rect_mut().row(3)[3] = 1.0f32;
-        let ups_factors = CustomTransformData::default();
+        let ups_factors = ups_factors();
         let stage = Upsample8x::new(&ups_factors, 0);
         let output: Vec<Image<f32>> =
             make_and_run_simple_pipeline(stage, &[input], (56, 56), 1024)?.1;

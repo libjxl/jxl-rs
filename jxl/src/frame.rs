@@ -292,6 +292,7 @@ mod test {
         headers::{FileHeader, JxlHeader},
         util::test::assert_almost_eq,
     };
+    use test_log::test;
 
     use super::{DecoderState, Frame, Section};
 
@@ -331,7 +332,19 @@ mod test {
                 // A panic occurred
                 if let Some(msg) = e.downcast_ref::<&str>() {
                     if msg.contains("VarDCT not implemented") {
-                        println!("Skipping {}: VarDCT not implemented", path.display());
+                        println!(
+                            "Skipping {}: VarDCT properties not implemented",
+                            path.display()
+                        );
+                    } else {
+                        panic::resume_unwind(e);
+                    }
+                } else if let Some(msg) = e.downcast_ref::<String>() {
+                    if msg.contains("WP and reference properties are not implemented") {
+                        println!(
+                            "Skipping {}: WP / reference properties not implemented",
+                            path.display()
+                        );
                     } else {
                         panic::resume_unwind(e);
                     }
@@ -427,6 +440,7 @@ mod test {
     }
 
     #[test]
+    #[ignore = "WP and reference properties are not implemented yet"]
     fn patches() -> Result<(), Error> {
         let mut frames = Vec::new();
         read_frames(

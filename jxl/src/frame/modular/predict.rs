@@ -3,7 +3,10 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-use crate::error::{Error, Result};
+use crate::{
+    error::{Error, Result},
+    headers::modular::GroupHeader,
+};
 use num_derive::FromPrimitive;
 use num_traits::FromPrimitive;
 
@@ -36,4 +39,19 @@ impl TryFrom<u32> for Predictor {
 
 impl Predictor {
     pub const NUM_PREDICTORS: u32 = Predictor::AverageAll as u32 + 1;
+}
+
+#[derive(Debug)]
+pub struct WeightedPredictorState;
+
+impl WeightedPredictorState {
+    pub fn new(_header: &GroupHeader) -> Self {
+        // TODO(veluca): implement the weighted predictor.
+        Self
+    }
+
+    pub fn predict_and_property(&self) -> (i64, i32) {
+        // TODO(veluca): implement the weighted predictor.
+        (0, 0)
+    }
 }

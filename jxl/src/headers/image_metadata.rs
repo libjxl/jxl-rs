@@ -117,7 +117,7 @@ pub struct ImageMetadata {
     have_animation: bool,
     #[condition(have_animation)]
     pub animation: Option<Animation>,
-    #[default(BitDepth::default())]
+    #[default(BitDepth::default(&field_nonserialized))]
     pub bit_depth: BitDepth,
     #[default(true)]
     pub modular_16bit_sufficient: bool,
@@ -125,10 +125,10 @@ pub struct ImageMetadata {
     pub extra_channel_info: Vec<ExtraChannelInfo>,
     #[default(true)]
     pub xyb_encoded: bool,
-    #[default(ColorEncoding::default())]
+    #[default(ColorEncoding::default(&field_nonserialized))]
     pub color_encoding: ColorEncoding,
     #[condition(extra_fields)]
-    #[default(ToneMapping::default())]
+    #[default(ToneMapping::default(&field_nonserialized))]
     pub tone_mapping: ToneMapping,
     extensions: Option<Extensions>,
 }

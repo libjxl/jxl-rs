@@ -7,7 +7,7 @@ use std::fmt::Debug;
 
 use crate::{
     bit_reader::BitReader,
-    error::{Error, Result},
+    error::Result,
     headers::{
         extra_channels::ExtraChannelInfo, frame_header::FrameHeader, modular::GroupHeader,
         JxlHeader,
@@ -16,10 +16,12 @@ use crate::{
     util::{tracing_wrappers::*, CeilLog2},
 };
 
+mod decode;
 mod predict;
 mod transforms;
 mod tree;
 
+use decode::{decode_modular_section, ModularStreamId};
 pub use predict::Predictor;
 use transforms::{make_grids, TransformStepChunk};
 pub use tree::Tree;
@@ -63,9 +65,9 @@ impl ChannelInfo {
 enum ModularGridKind {
     // Single big channel.
     None,
-    // 2048x2048 image-pixels.
+    // 2048x2048 image-pixels (if modular_group_shift == 1).
     Lf,
-    // 256x256 image-pixels.
+    // 256x256 image-pixels (if modular_group_shift == 1).
     Hf,
 }
 
@@ -78,6 +80,7 @@ struct ModularBuffer {
     auxiliary_data: Option<Image<i32>>,
     remaining_uses: usize,
     used_by_transforms: Vec<usize>,
+    size: (usize, usize),
 }
 
 #[allow(dead_code)]
@@ -144,12 +147,16 @@ impl FullModularImage {
             });
         }
 
+        if channels.is_empty() {
+            return Ok(Self {
+                buffer_info: vec![],
+                transform_steps: vec![],
+                section_buffer_indices: vec![vec![]; 2 + frame_header.passes.num_passes as usize],
+            });
+        }
+
         trace!("reading modular header");
         let header = GroupHeader::read(br)?;
-
-        if header.use_global_tree && global_tree.is_none() {
-            return Err(Error::NoGlobalTree);
-        }
 
         let (mut buffer_info, transform_steps) =
             transforms::meta_apply_transforms(&channels, &header.transforms)?;
@@ -157,37 +164,61 @@ impl FullModularImage {
         // Assign each (channel, group) pair present in the bitstream to the section in which it will be decoded.
         let mut section_buffer_indices: Vec<Vec<usize>> = vec![];
 
+        let mut sorted_buffers: Vec<_> = buffer_info
+            .iter()
+            .enumerate()
+            .filter_map(|(i, b)| {
+                if b.is_coded {
+                    Some((b.channel_id, i))
+                } else {
+                    None
+                }
+            })
+            .collect();
+
+        sorted_buffers.sort_by_key(|x| x.0);
+
         section_buffer_indices.push(
-            buffer_info
+            sorted_buffers
                 .iter()
-                .enumerate()
-                .filter(|x| x.1.is_coded)
-                .take_while(|x| x.1.info.is_meta_or_small(frame_header.group_dim()))
-                .map(|x| x.0)
+                .take_while(|x| {
+                    buffer_info[x.1]
+                        .info
+                        .is_meta_or_small(frame_header.group_dim())
+                })
+                .map(|x| x.1)
                 .collect(),
         );
 
         section_buffer_indices.push(
-            buffer_info
+            sorted_buffers
                 .iter()
-                .enumerate()
-                .filter(|x| x.1.is_coded)
-                .skip_while(|x| x.1.info.is_meta_or_small(frame_header.group_dim()))
-                .filter(|x| x.1.info.is_shift_in_range(3, usize::MAX))
-                .map(|x| x.0)
+                .skip_while(|x| {
+                    buffer_info[x.1]
+                        .info
+                        .is_meta_or_small(frame_header.group_dim())
+                })
+                .filter(|x| buffer_info[x.1].info.is_shift_in_range(3, usize::MAX))
+                .map(|x| x.1)
                 .collect(),
         );
 
         for pass in 0..frame_header.passes.num_passes as usize {
             let (min_shift, max_shift) = frame_header.passes.downsampling_bracket(pass);
             section_buffer_indices.push(
-                buffer_info
+                sorted_buffers
                     .iter()
-                    .enumerate()
-                    .filter(|x| x.1.is_coded)
-                    .filter(|x| !x.1.info.is_meta_or_small(frame_header.group_dim()))
-                    .filter(|x| x.1.info.is_shift_in_range(min_shift, max_shift))
-                    .map(|x| x.0)
+                    .filter(|x| {
+                        !buffer_info[x.1]
+                            .info
+                            .is_meta_or_small(frame_header.group_dim())
+                    })
+                    .filter(|x| {
+                        buffer_info[x.1]
+                            .info
+                            .is_shift_in_range(min_shift, max_shift)
+                    })
+                    .map(|x| x.1)
                     .collect(),
             );
         }
@@ -206,7 +237,15 @@ impl FullModularImage {
             &mut buffer_info,
         );
 
-        // TODO(veluca93): read global channels
+        decode_modular_section(
+            &mut buffer_info,
+            &section_buffer_indices[0],
+            0,
+            ModularStreamId::GlobalData.get_id(frame_header),
+            &header,
+            global_tree,
+            br,
+        )?;
 
         Ok(FullModularImage {
             buffer_info,

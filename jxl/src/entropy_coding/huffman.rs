@@ -90,9 +90,6 @@ impl Table {
         } else {
             false
         };
-        if !special_4_symbols {
-            symbols.sort_unstable();
-        };
         debug!(symbols = ?symbols[..num_symbols]);
         match (num_symbols, special_4_symbols) {
             (1, _) => Ok(vec![
