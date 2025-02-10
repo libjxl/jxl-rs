@@ -3,6 +3,10 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
+use crate::{
+    bit_reader::BitReader, container::ContainerParser, error::Error, headers::{encodings::*, frame_header::TocNonserialized, FileHeader, JxlHeader}
+};
+
 pub fn abs_delta<T: Num + std::cmp::PartialOrd>(left_val: T, right_val: T) -> T {
     if left_val > right_val {
         left_val - right_val
@@ -42,8 +46,37 @@ macro_rules! assert_all_almost_eq {
         }
     };
 }
+
+
+pub fn read_frame_header_and_toc(image: &[u8]) -> Result<(FrameHeader, Toc), Error> {
+    let codestream = ContainerParser::collect_codestream(image).unwrap();
+    let mut br = BitReader::new(&codestream);
+    let file_header = FileHeader::read(&mut br).unwrap();
+
+    let frame_header = FrameHeader::read_unconditional(
+        &(),
+        &mut br,
+        &file_header.frame_header_nonserialized(),
+    )
+    .unwrap();
+    let num_toc_entries = frame_header.num_toc_entries();
+    let toc = Toc::read_unconditional(
+        &(),
+        &mut br,
+        &TocNonserialized {
+            num_entries: num_toc_entries as u32,
+        },
+    )
+    .unwrap();
+    Ok((frame_header, toc))
+}
+
+
+
 pub(crate) use assert_all_almost_eq;
 use num_traits::Num;
+
+use crate::headers::frame_header::{FrameHeader, Toc};
 
 #[cfg(test)]
 mod tests {

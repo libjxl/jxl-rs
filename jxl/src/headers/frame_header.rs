@@ -628,34 +628,9 @@ impl FrameHeader {
 mod test_frame_header {
     use super::*;
     use crate::{
-        bit_reader::BitReader,
-        container::ContainerParser,
-        headers::{FileHeader, JxlHeader},
+    util::test::read_frame_header_and_toc,
     };
     use test_log::test;
-
-    fn read_frame_header_and_toc(image: &[u8]) -> Result<(FrameHeader, Toc), Error> {
-        let codestream = ContainerParser::collect_codestream(image).unwrap();
-        let mut br = BitReader::new(&codestream);
-        let file_header = FileHeader::read(&mut br).unwrap();
-
-        let frame_header = FrameHeader::read_unconditional(
-            &(),
-            &mut br,
-            &file_header.frame_header_nonserialized(),
-        )
-        .unwrap();
-        let num_toc_entries = frame_header.num_toc_entries();
-        let toc = Toc::read_unconditional(
-            &(),
-            &mut br,
-            &TocNonserialized {
-                num_entries: num_toc_entries as u32,
-            },
-        )
-        .unwrap();
-        Ok((frame_header, toc))
-    }
 
     #[test]
     fn test_basic() {
