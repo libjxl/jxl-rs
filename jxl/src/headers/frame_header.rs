@@ -627,9 +627,7 @@ impl FrameHeader {
 #[cfg(test)]
 mod test_frame_header {
     use super::*;
-    use crate::{
-    util::test::read_frame_header_and_toc,
-    };
+    use crate::util::test::read_frame_header_and_toc;
     use test_log::test;
 
     #[test]
