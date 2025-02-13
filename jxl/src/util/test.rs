@@ -56,18 +56,9 @@ pub fn read_all_frameheader_and_toc(image: &[u8]) -> Result<Vec<(FrameHeader, To
     let file_header = FileHeader::read(&mut br).unwrap();
     let mut frames_and_tocs = Vec::new();
     // Loop until we can no longer read valid frame data
-    loop {
-        // Attempt to read the next frame header
-        let frame_header = match FrameHeader::read_unconditional(
-            &(),
-            &mut br,
-            &file_header.frame_header_nonserialized(),
-        ) {
-            Ok(header) => header,
-            // If we can't read another valid frame header, break out (no more frames)
-            Err(_) => break,
-        };
-
+    while let Ok(frame_header) =
+        FrameHeader::read_unconditional(&(), &mut br, &file_header.frame_header_nonserialized())
+    {
         // Read the table of contents for this frame
         let num_toc_entries = frame_header.num_toc_entries();
         let toc = Toc::read_unconditional(

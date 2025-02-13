@@ -348,8 +348,7 @@ mod test_patches {
         bit_reader::BitReader,
         container::ContainerParser,
         error::{Error, Result},
-        features::patches::PatchesDictionary,
-        frame::{DecoderState, Frame, ReferenceFrame},
+        frame::{DecoderState, Frame},
         headers::{FileHeader, JxlHeader},
         util::test::read_all_frameheader_and_toc,
     };
@@ -359,13 +358,11 @@ mod test_patches {
         let image = include_bytes!("../../resources/test/grayscale_patches_modular.jxl");
         let frameheaders_and_tocs = read_all_frameheader_and_toc(image).unwrap();
 
-        //println!("{:?}", 1);
         assert_eq!(frameheaders_and_tocs.len(), 2);
         let (first_frame, _first_toc) = &frameheaders_and_tocs[0];
         assert!(!first_frame.has_patches());
         let (second_frame, _second_toc) = &frameheaders_and_tocs[1];
         assert!(second_frame.has_patches());
-        //println!("{:?}", second_toc);
         // Restarting reading
         let codestream = ContainerParser::collect_codestream(image).unwrap();
         let mut br = BitReader::new(&codestream);
@@ -377,7 +374,7 @@ mod test_patches {
         decoder_state = first_frame.finalize()?.unwrap();
         br.jump_to_byte_boundary()?;
         let second_frame = Frame::new(&mut br, decoder_state)?;
-        //assert!(second_frame.header().has_patches());
+        assert!(second_frame.header().has_patches());
         Ok(())
     }
 }
