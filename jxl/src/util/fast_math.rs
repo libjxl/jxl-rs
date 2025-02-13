@@ -5,10 +5,29 @@
 
 #![allow(clippy::excessive_precision)]
 
+use num_traits::abs;
+
 use super::eval_rational_poly;
 
 const POW2F_NUMER_COEFFS: [f32; 3] = [1.01749063e1, 4.88687798e1, 9.85506591e1];
 const POW2F_DENOM_COEFFS: [f32; 4] = [2.10242958e-1, -2.22328856e-2, -1.94414990e1, 9.85506633e1];
+
+#[inline]
+pub fn fast_erff(x: f32) -> f32 {
+    // Formula from
+    // https://en.wikipedia.org/wiki/Error_function#Numerical_approximations
+    // but constants have been recomputed.
+    let absx = abs(x);
+    // Compute 1 - 1 / ((((x * a + b) * x + c) * x + d) * x + 1)**4
+    let denom1 = absx * 7.77394369e-02 + 2.05260015e-04;
+    let denom2 = denom1 * absx + 2.32120216e-01;
+    let denom3 = denom2 * absx + 2.77820801e-01;
+    let denom4 = denom3 * absx + 1.0;
+    let denom5 = denom4 * denom4;
+    let inv_denom5 = 1.0 / denom5;
+    let result = -inv_denom5 * inv_denom5 + 1.0;
+    result.copysign(x)
+}
 
 #[inline]
 pub fn fast_pow2f(x: f32) -> f32 {
