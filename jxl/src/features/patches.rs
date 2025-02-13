@@ -353,6 +353,7 @@ mod test_patches {
         util::test::read_all_frameheader_and_toc,
     };
 
+    use test_log::test;
     #[test]
     fn read_frame_with_patches() -> Result<(), Error> {
         let image = include_bytes!("../../resources/test/grayscale_patches_modular.jxl");
@@ -372,7 +373,7 @@ mod test_patches {
         let first_frame = Frame::new(&mut br, decoder_state)?;
         assert!(!first_frame.header().has_patches());
         decoder_state = first_frame.finalize()?.unwrap();
-        br.jump_to_byte_boundary()?;
+        //br.jump_to_byte_boundary()?;
         let second_frame = Frame::new(&mut br, decoder_state)?;
         assert!(second_frame.header().has_patches());
         Ok(())
