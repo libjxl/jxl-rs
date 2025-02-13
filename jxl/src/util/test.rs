@@ -48,23 +48,31 @@ impl From<JXLError> for Error {
     }
 }
 
-pub fn abs_delta<T: Num + std::cmp::PartialOrd>(left_val: T, right_val: T) -> T {
-    if left_val > right_val {
-        left_val - right_val
-    } else {
-        right_val - left_val
-    }
-}
-
 macro_rules! assert_almost_eq {
     ($left:expr, $right:expr, $max_error:expr $(,)?) => {
-        let (left_val, right_val, max_error) = (&$left, &$right, &$max_error);
-        match $crate::util::test::abs_delta(*left_val, *right_val).partial_cmp(max_error) {
-            Some(std::cmp::Ordering::Greater) | None => panic!(
+        let (left_val, right_val, max_error) = ($left as f64, $right as f64, $max_error as f64);
+        if matches!((left_val - right_val).abs().partial_cmp(&max_error), Some(std::cmp::Ordering::Greater) | None) {
+            panic!(
                 "assertion failed: `(left ≈ right)`\n  left: `{:?}`,\n right: `{:?}`,\n max_error: `{:?}`",
                 left_val, right_val, max_error
-            ),
-            _ => {}
+            )
+        }
+    };
+    ($left:expr, $right:expr, $max_error_abs:expr, $max_error_rel:expr $(,)?) => {
+        let (left_val, right_val, max_error_abs, max_error_rel) = ($left as f64, $right as f64, $max_error_abs as f64, $max_error_rel as f64);
+        let error = (left_val - right_val).abs();
+        if matches!(error.partial_cmp(&max_error_abs), Some(std::cmp::Ordering::Greater) | None) {
+            panic!(
+                "assertion failed: `(left ≈ right)`\n  left: `{:?}`,\n right: `{:?}`,\n max_error_abs: `{:?}`",
+                left_val, right_val, max_error_abs
+            )
+        }
+        let actual_error_rel = left_val.abs().min(right_val.abs()) * max_error_rel;
+        if matches!(error.partial_cmp(&actual_error_rel), Some(std::cmp::Ordering::Greater) | None) {
+            panic!(
+                "assertion failed: `(left ≈ right)`\n  left: `{:?}`,\n right: `{:?}`,\n max_error_rel: `{:?}`",
+                left_val, right_val, max_error_rel
+            )
         }
     };
 }
@@ -72,17 +80,16 @@ pub(crate) use assert_almost_eq;
 
 macro_rules! assert_all_almost_eq {
     ($left:expr, $right:expr, $max_error:expr $(,)?) => {
-        let (left_val, right_val, max_error) = (&$left, &$right, &$max_error);
+        let (left_val, right_val, max_error) = (&$left, &$right, $max_error as f64);
         if left_val.len() != right_val.len() {
             panic!("assertion failed: `(left ≈ right)`\n left.len(): `{}`,\n right.len(): `{}`", left_val.len(), right_val.len());
         }
         for index in 0..left_val.len() {
-            match $crate::util::test::abs_delta(left_val[index], right_val[index]).partial_cmp(max_error) {
-                Some(std::cmp::Ordering::Greater) | None =>  panic!(
+            if (left_val[index] as f64- right_val[index] as f64).abs() > max_error {
+                panic!(
                     "assertion failed: `(left ≈ right)`\n left: `{:?}`,\n right: `{:?}`,\n max_error: `{:?}`,\n left[{}]: `{}`,\n right[{}]: `{}`",
                     left_val, right_val, max_error, index, left_val[index], index, right_val[index]
-                ),
-                _ => {}
+                )
             }
         }
     };
@@ -91,11 +98,10 @@ macro_rules! assert_all_almost_eq {
 pub fn read_frame_header_and_toc(image: &[u8]) -> Result<(FrameHeader, Toc), JXLError> {
     let codestream = ContainerParser::collect_codestream(image).unwrap();
     let mut br = BitReader::new(&codestream);
-    let file_header = FileHeader::read(&mut br).unwrap();
+    let file_header = FileHeader::read(&mut br)?;
 
     let frame_header =
-        FrameHeader::read_unconditional(&(), &mut br, &file_header.frame_header_nonserialized())
-            .unwrap();
+        FrameHeader::read_unconditional(&(), &mut br, &file_header.frame_header_nonserialized())?;
     let num_toc_entries = frame_header.num_toc_entries();
     let toc = Toc::read_unconditional(
         &(),
@@ -103,8 +109,7 @@ pub fn read_frame_header_and_toc(image: &[u8]) -> Result<(FrameHeader, Toc), JXL
         &TocNonserialized {
             num_entries: num_toc_entries as u32,
         },
-    )
-    .unwrap();
+    )?;
     Ok((frame_header, toc))
 }
 
@@ -199,7 +204,6 @@ pub fn read_pfm(b: &[u8]) -> Result<Vec<Image<f32>>, Error> {
 }
 
 pub(crate) use assert_all_almost_eq;
-use num_traits::Num;
 
 use crate::headers::frame_header::{FrameHeader, Toc};
 
