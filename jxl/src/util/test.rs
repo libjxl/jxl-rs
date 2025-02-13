@@ -50,24 +50,36 @@ macro_rules! assert_all_almost_eq {
     };
 }
 
-pub fn read_frame_header_and_toc(image: &[u8]) -> Result<(FrameHeader, Toc), Error> {
+pub fn read_all_frameheader_and_toc(image: &[u8]) -> Result<Vec<(FrameHeader, Toc)>, Error> {
     let codestream = ContainerParser::collect_codestream(image).unwrap();
     let mut br = BitReader::new(&codestream);
     let file_header = FileHeader::read(&mut br).unwrap();
-
-    let frame_header =
+    let mut frames_and_tocs = Vec::new();
+    // Loop until we can no longer read valid frame data
+    while let Ok(frame_header) =
         FrameHeader::read_unconditional(&(), &mut br, &file_header.frame_header_nonserialized())
-            .unwrap();
-    let num_toc_entries = frame_header.num_toc_entries();
-    let toc = Toc::read_unconditional(
-        &(),
-        &mut br,
-        &TocNonserialized {
-            num_entries: num_toc_entries as u32,
-        },
-    )
-    .unwrap();
-    Ok((frame_header, toc))
+    {
+        // Read the table of contents for this frame
+        let num_toc_entries = frame_header.num_toc_entries();
+        let toc = Toc::read_unconditional(
+            &(),
+            &mut br,
+            &TocNonserialized {
+                num_entries: num_toc_entries as u32,
+            },
+        )?;
+
+        let bytes_until_next_frame = toc.entries.iter().sum::<u32>() as usize;
+        frames_and_tocs.push((frame_header, toc));
+        // Advance to the next byte boundary before skipping the frame payload
+        br.jump_to_byte_boundary()?;
+
+        // Skip the actual frame payload by summing the TOC entries
+        br.skip_bits(8 * bytes_until_next_frame)?;
+    }
+
+    // Return all frame headers and TOCs
+    Ok(frames_and_tocs)
 }
 
 pub(crate) use assert_all_almost_eq;

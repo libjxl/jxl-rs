@@ -627,13 +627,15 @@ impl FrameHeader {
 #[cfg(test)]
 mod test_frame_header {
     use super::*;
-    use crate::util::test::read_frame_header_and_toc;
+    use crate::util::test::read_all_frameheader_and_toc;
     use test_log::test;
 
     #[test]
     fn test_basic() {
-        let (frame_header, toc) =
-            read_frame_header_and_toc(include_bytes!("../../resources/test/basic.jxl")).unwrap();
+        let frameheaders_and_tocs =
+            read_all_frameheader_and_toc(include_bytes!("../../resources/test/basic.jxl")).unwrap();
+        assert_eq!(frameheaders_and_tocs.len(), 1);
+        let (frame_header, toc) = &frameheaders_and_tocs[0];
         assert_eq!(frame_header.frame_type, FrameType::RegularFrame);
         assert_eq!(frame_header.encoding, Encoding::VarDCT);
         assert_eq!(frame_header.flags, 0);
@@ -645,7 +647,7 @@ mod test_frame_header {
         assert_eq!(frame_header.name, String::from(""));
         assert_eq!(frame_header.restoration_filter.epf_iters, 1);
         assert_eq!(
-            toc,
+            *toc,
             Toc {
                 permuted: false,
                 permutation: Permutation::default(),
@@ -656,10 +658,11 @@ mod test_frame_header {
 
     #[test]
     fn test_extra_channel() {
-        let frame_header =
-            read_frame_header_and_toc(include_bytes!("../../resources/test/extra_channels.jxl"))
-                .unwrap()
-                .0;
+        let frameheaders_and_tocs =
+            read_all_frameheader_and_toc(include_bytes!("../../resources/test/extra_channels.jxl"))
+                .unwrap();
+        assert_eq!(frameheaders_and_tocs.len(), 1);
+        let frame_header = &frameheaders_and_tocs[0].0;
         assert_eq!(frame_header.frame_type, FrameType::RegularFrame);
         assert_eq!(frame_header.encoding, Encoding::Modular);
         assert_eq!(frame_header.flags, 0);
@@ -678,9 +681,12 @@ mod test_frame_header {
 
     #[test]
     fn test_has_permutation() {
-        let (frame_header, toc) =
-            read_frame_header_and_toc(include_bytes!("../../resources/test/has_permutation.jxl"))
-                .unwrap();
+        let frameheaders_and_tocs = read_all_frameheader_and_toc(include_bytes!(
+            "../../resources/test/has_permutation.jxl"
+        ))
+        .unwrap();
+        assert_eq!(frameheaders_and_tocs.len(), 1);
+        let (frame_header, toc) = &frameheaders_and_tocs[0];
         assert_eq!(frame_header.frame_type, FrameType::RegularFrame);
         assert_eq!(frame_header.encoding, Encoding::VarDCT);
         assert_eq!(frame_header.flags, 0);
@@ -692,7 +698,7 @@ mod test_frame_header {
         assert_eq!(frame_header.name, String::from(""));
         assert_eq!(frame_header.restoration_filter.epf_iters, 1);
         assert_eq!(
-            toc,
+            *toc,
             Toc {
                 permuted: true,
                 permutation: Permutation(vec![

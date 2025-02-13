@@ -341,3 +341,41 @@ impl PatchesDictionary {
         })
     }
 }
+
+#[cfg(test)]
+mod test_patches {
+    use crate::{
+        bit_reader::BitReader,
+        container::ContainerParser,
+        error::{Error, Result},
+        frame::{DecoderState, Frame},
+        headers::{FileHeader, JxlHeader},
+        util::test::read_all_frameheader_and_toc,
+    };
+
+    use test_log::test;
+    #[test]
+    fn read_frame_with_patches() -> Result<(), Error> {
+        let image = include_bytes!("../../resources/test/grayscale_patches_modular.jxl");
+        let frameheaders_and_tocs = read_all_frameheader_and_toc(image).unwrap();
+
+        assert_eq!(frameheaders_and_tocs.len(), 2);
+        let (first_frame, _first_toc) = &frameheaders_and_tocs[0];
+        assert!(!first_frame.has_patches());
+        let (second_frame, _second_toc) = &frameheaders_and_tocs[1];
+        assert!(second_frame.has_patches());
+        // Restarting reading
+        let codestream = ContainerParser::collect_codestream(image).unwrap();
+        let mut br = BitReader::new(&codestream);
+        let file_header = FileHeader::read(&mut br).unwrap();
+
+        let mut decoder_state = DecoderState::new(file_header);
+        let first_frame = Frame::new(&mut br, decoder_state)?;
+        assert!(!first_frame.header().has_patches());
+        decoder_state = first_frame.finalize()?.unwrap();
+        //br.jump_to_byte_boundary()?;
+        let second_frame = Frame::new(&mut br, decoder_state)?;
+        assert!(second_frame.header().has_patches());
+        Ok(())
+    }
+}
