@@ -10,6 +10,7 @@ mod gaborish;
 mod nearest_neighbor;
 mod noise;
 mod save;
+mod splines;
 mod spot;
 mod upsample;
 mod xyb;
