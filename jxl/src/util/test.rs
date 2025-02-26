@@ -3,12 +3,50 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
+use std::{
+    io::{BufRead, BufReader, Cursor, Read, Write},
+    num::{ParseFloatError, ParseIntError},
+};
+
 use crate::{
     bit_reader::BitReader,
     container::ContainerParser,
-    error::Error,
+    error::Error as JXLError,
     headers::{encodings::*, frame_header::TocNonserialized, FileHeader, JxlHeader},
+    image::Image,
 };
+
+use thiserror::Error;
+
+#[derive(Error, Debug)]
+pub enum Error {
+    #[error("Invalid PFM: {0}")]
+    InvalidPFM(String),
+}
+
+impl From<ParseFloatError> for Error {
+    fn from(value: ParseFloatError) -> Self {
+        Error::InvalidPFM(value.to_string())
+    }
+}
+
+impl From<ParseIntError> for Error {
+    fn from(value: ParseIntError) -> Self {
+        Error::InvalidPFM(value.to_string())
+    }
+}
+
+impl From<std::io::Error> for Error {
+    fn from(value: std::io::Error) -> Self {
+        Error::InvalidPFM(value.to_string())
+    }
+}
+
+impl From<JXLError> for Error {
+    fn from(value: JXLError) -> Self {
+        Error::InvalidPFM(value.to_string())
+    }
+}
 
 pub fn abs_delta<T: Num + std::cmp::PartialOrd>(left_val: T, right_val: T) -> T {
     if left_val > right_val {
@@ -50,7 +88,7 @@ macro_rules! assert_all_almost_eq {
     };
 }
 
-pub fn read_frame_header_and_toc(image: &[u8]) -> Result<(FrameHeader, Toc), Error> {
+pub fn read_frame_header_and_toc(image: &[u8]) -> Result<(FrameHeader, Toc), JXLError> {
     let codestream = ContainerParser::collect_codestream(image).unwrap();
     let mut br = BitReader::new(&codestream);
     let file_header = FileHeader::read(&mut br).unwrap();
@@ -68,6 +106,96 @@ pub fn read_frame_header_and_toc(image: &[u8]) -> Result<(FrameHeader, Toc), Err
     )
     .unwrap();
     Ok((frame_header, toc))
+}
+
+pub fn write_pfm(image: Vec<Image<f32>>, mut buf: impl Write) -> Result<(), Error> {
+    if image.len() == 1 {
+        buf.write_all(b"Pf\n")?;
+    } else if image.len() == 3 {
+        buf.write_all(b"PF\n")?;
+    } else {
+        return Err(Error::InvalidPFM(format!(
+            "invalid number of channels: {}",
+            image.len()
+        )));
+    }
+    let size = image[0].size;
+    for c in image.iter().skip(1) {
+        assert_eq!(size, c.size());
+    }
+    buf.write_fmt(format_args!("{} {}\n", size.0, size.1))?;
+    buf.write_all(b"1.0\n")?;
+    let mut b: [u8; 4];
+    for row in 0..size.1 {
+        for col in 0..size.0 {
+            for c in image.iter() {
+                b = c.as_rect().row(size.1 - row - 1)[col].to_be_bytes();
+                buf.write_all(&b)?;
+            }
+        }
+    }
+    buf.flush()?;
+    Ok(())
+}
+
+pub fn read_pfm(b: &[u8]) -> Result<Vec<Image<f32>>, Error> {
+    let mut bf = BufReader::new(Cursor::new(b));
+    let mut line = String::new();
+    bf.read_line(&mut line)?;
+    let channels = match line.trim() {
+        "Pf" => 1,
+        "PF" => 3,
+        &_ => {
+            return Err(Error::InvalidPFM(format!(
+                "invalid PFM type header {}",
+                line
+            )))
+        }
+    };
+    line.clear();
+    bf.read_line(&mut line)?;
+    let mut dims = line.split_whitespace();
+    let xres = if let Some(xres_str) = dims.next() {
+        xres_str.trim().parse()?
+    } else {
+        return Err(Error::InvalidPFM(format!(
+            "invalid PFM resolution header {}",
+            line
+        )));
+    };
+    let yres = if let Some(yres_str) = dims.next() {
+        yres_str.trim().parse()?
+    } else {
+        return Err(Error::InvalidPFM(format!(
+            "invalid PFM resolution header {}",
+            line
+        )));
+    };
+    line.clear();
+    bf.read_line(&mut line)?;
+    let endianness: f32 = line.trim().parse()?;
+
+    let mut res = Vec::<Image<f32>>::new();
+    for _ in 0..channels {
+        let img = Image::new((xres, yres))?;
+        res.push(img);
+    }
+
+    let mut buf = [0u8; 4];
+    for row in 0..yres {
+        for col in 0..xres {
+            for chan in res.iter_mut() {
+                bf.read_exact(&mut buf)?;
+                chan.as_rect_mut().row(yres - row - 1)[col] = if endianness < 0.0 {
+                    f32::from_le_bytes(buf)
+                } else {
+                    f32::from_be_bytes(buf)
+                }
+            }
+        }
+    }
+
+    Ok(res)
 }
 
 pub(crate) use assert_all_almost_eq;
