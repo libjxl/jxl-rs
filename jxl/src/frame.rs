@@ -52,7 +52,7 @@ pub struct ReferenceFrame {
 
 impl ReferenceFrame {
     // TODO(firsching): make this #[cfg(test)]
-    fn blank(
+    pub fn blank(
         width: usize,
         height: usize,
         num_channels: usize,
@@ -70,8 +70,8 @@ impl ReferenceFrame {
 
 #[derive(Debug)]
 pub struct DecoderState {
-    file_header: FileHeader,
-    reference_frames: [Option<ReferenceFrame>; Self::MAX_STORED_FRAMES],
+    pub file_header: FileHeader,
+    pub reference_frames: [Option<ReferenceFrame>; Self::MAX_STORED_FRAMES],
 }
 
 impl DecoderState {
