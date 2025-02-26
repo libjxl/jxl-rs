@@ -9,12 +9,12 @@ use crate::render::{RenderPipelineInPlaceStage, RenderPipelineStage};
 
 /// Apply transfer function to display-referred linear color samples.
 #[derive(Debug)]
-pub struct ApplyTransferStage {
+pub struct FromLinearStage {
     first_channel: usize,
     tf: TransferFunction,
 }
 
-impl ApplyTransferStage {
+impl FromLinearStage {
     fn new(first_channel: usize, tf: TransferFunction) -> Self {
         Self { first_channel, tf }
     }
@@ -41,7 +41,7 @@ impl ApplyTransferStage {
     }
 }
 
-impl std::fmt::Display for ApplyTransferStage {
+impl std::fmt::Display for FromLinearStage {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let channel = self.first_channel;
         write!(
@@ -55,7 +55,7 @@ impl std::fmt::Display for ApplyTransferStage {
     }
 }
 
-impl RenderPipelineStage for ApplyTransferStage {
+impl RenderPipelineStage for FromLinearStage {
     type Type = RenderPipelineInPlaceStage<f32>;
 
     fn uses_channel(&self, c: usize) -> bool {
@@ -169,7 +169,7 @@ mod test {
     #[test]
     fn consistency_hlg() -> Result<()> {
         crate::render::test::test_stage_consistency::<_, f32, f32>(
-            ApplyTransferStage::hlg(0, 1000f32, LUMINANCE_BT2020),
+            FromLinearStage::hlg(0, 1000f32, LUMINANCE_BT2020),
             (500, 500),
             3,
         )
@@ -178,7 +178,7 @@ mod test {
     #[test]
     fn consistency_pq() -> Result<()> {
         crate::render::test::test_stage_consistency::<_, f32, f32>(
-            ApplyTransferStage::pq(0, 10000f32),
+            FromLinearStage::pq(0, 10000f32),
             (500, 500),
             3,
         )
@@ -187,7 +187,7 @@ mod test {
     #[test]
     fn consistency_srgb() -> Result<()> {
         crate::render::test::test_stage_consistency::<_, f32, f32>(
-            ApplyTransferStage::new(0, TransferFunction::Srgb),
+            FromLinearStage::new(0, TransferFunction::Srgb),
             (500, 500),
             3,
         )
@@ -196,7 +196,7 @@ mod test {
     #[test]
     fn consistency_bt709() -> Result<()> {
         crate::render::test::test_stage_consistency::<_, f32, f32>(
-            ApplyTransferStage::new(0, TransferFunction::Bt709),
+            FromLinearStage::new(0, TransferFunction::Bt709),
             (500, 500),
             3,
         )
@@ -205,7 +205,7 @@ mod test {
     #[test]
     fn consistency_gamma22() -> Result<()> {
         crate::render::test::test_stage_consistency::<_, f32, f32>(
-            ApplyTransferStage::new(0, TransferFunction::Gamma(0.4545455)),
+            FromLinearStage::new(0, TransferFunction::Gamma(0.4545455)),
             (500, 500),
             3,
         )
@@ -219,7 +219,7 @@ mod test {
         let input_b = Image::new_constant((1, 1), 0.203)?;
 
         // 75% HLG
-        let stage = ApplyTransferStage::hlg(0, intensity_target, LUMINANCE_BT2020);
+        let stage = FromLinearStage::hlg(0, intensity_target, LUMINANCE_BT2020);
         let output = make_and_run_simple_pipeline::<_, f32, f32>(
             stage,
             &[input_r, input_g, input_b],
@@ -243,7 +243,7 @@ mod test {
         let input_b = Image::new_constant((1, 1), 0.203)?;
 
         // 58% PQ
-        let stage = ApplyTransferStage::pq(0, intensity_target);
+        let stage = FromLinearStage::pq(0, intensity_target);
         let output = make_and_run_simple_pipeline::<_, f32, f32>(
             stage,
             &[input_r, input_g, input_b],
