@@ -357,7 +357,7 @@ pub fn hlg_to_scene_precise(samples: &mut [f32]) {
     for s in samples {
         let a = s.abs() as f64;
         let y = if a <= 0.5 {
-            a * a * 3.0
+            a * a / 3.0
         } else {
             (((a - HLG_C) / HLG_A).exp() + HLG_B) / 12.0
         };
