@@ -12,6 +12,7 @@ mod noise;
 mod save;
 mod splines;
 mod spot;
+mod to_linear;
 mod upsample;
 mod xyb;
 mod ycbcr;
