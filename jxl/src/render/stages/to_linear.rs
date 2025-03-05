@@ -7,7 +7,7 @@ use crate::color::tf;
 use crate::headers::color_encoding::CustomTransferFunction;
 use crate::render::{RenderPipelineInPlaceStage, RenderPipelineStage};
 
-/// Apply transfer function to display-referred linear color samples.
+/// Convert encoded non-linear color samples to display-referred linear color samples.
 #[derive(Debug)]
 pub struct ToLinearStage {
     first_channel: usize,
@@ -46,7 +46,7 @@ impl std::fmt::Display for ToLinearStage {
         let channel = self.first_channel;
         write!(
             f,
-            "Apply transfer function {:?} to channel [{},{},{}]",
+            "Convert transfer function {:?} to display-referred linear TF for channel [{},{},{}]",
             self.tf,
             channel,
             channel + 1,
@@ -122,13 +122,15 @@ enum TransferFunction {
     Bt709,
     Srgb,
     Pq {
+        /// Original Intensity Target
         intensity_target: f32,
     },
     Hlg {
+        /// Original Intensity Target
         intensity_target: f32,
         luminance_rgb: [f32; 3],
     },
-    /// Inverse gamma in range `(0, 1]`
+    /// Gamma in range `(0, 1]`
     Gamma(f32),
 }
 
