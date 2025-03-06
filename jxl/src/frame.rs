@@ -82,7 +82,7 @@ pub struct ReferenceFrame {
 
 impl ReferenceFrame {
     // TODO(firsching): make this #[cfg(test)]
-    fn blank(
+    pub fn blank(
         width: usize,
         height: usize,
         num_channels: usize,
@@ -268,7 +268,8 @@ impl Frame {
                 br,
                 self.header.width as usize,
                 self.header.height as usize,
-                &self.decoder_state,
+                self.decoder_state.extra_channel_info().len(),
+                &self.decoder_state.reference_frames,
             )?)
         } else {
             None

@@ -72,6 +72,16 @@ pub struct ToneMapping {
 }
 
 impl ToneMapping {
+    #[cfg(test)]
+    pub fn empty() -> ToneMapping {
+        ToneMapping {
+            all_default: false,
+            intensity_target: 0f32,
+            min_nits: 0f32,
+            relative_to_max_display: false,
+            linear_below: 0f32,
+        }
+    }
     pub fn check(&self, _: &Empty) -> Result<(), Error> {
         if self.intensity_target <= 0.0 {
             Err(Error::InvalidIntensityTarget(self.intensity_target))

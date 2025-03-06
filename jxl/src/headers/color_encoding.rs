@@ -85,6 +85,14 @@ pub struct CustomTransferFunction {
 }
 
 impl CustomTransferFunction {
+    #[cfg(test)]
+    pub fn empty() -> CustomTransferFunction {
+        CustomTransferFunction {
+            have_gamma: false,
+            gamma: 0,
+            transfer_function: TransferFunction::Unknown,
+        }
+    }
     pub fn gamma(&self) -> f32 {
         assert!(self.have_gamma);
         self.gamma as f32 * 0.0000001

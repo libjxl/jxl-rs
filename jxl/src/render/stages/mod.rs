@@ -10,6 +10,7 @@ mod from_linear;
 mod gaborish;
 mod nearest_neighbor;
 mod noise;
+mod patches;
 mod save;
 mod splines;
 mod spot;
