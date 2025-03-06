@@ -13,8 +13,10 @@ use crate::{
     bit_reader::BitReader,
     entropy_coding::decode::Histograms,
     error::{Error, Result},
-    frame::DecoderState,
-    util::{tracing_wrappers::*, NewWithCapacity},
+    features::blending::perform_blending,
+    frame::{DecoderState, ReferenceFrame},
+    headers::extra_channels::ExtraChannelInfo,
+    util::{slice, slice_mut, tracing_wrappers::*, NewWithCapacity},
 };
 
 // Context numbers as specified in Section C.4.5, Listing C.2:
@@ -93,14 +95,14 @@ impl PatchBlendMode {
     }
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct PatchBlending {
     pub mode: PatchBlendMode,
     pub alpha_channel: usize,
     pub clamp: bool,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct PatchReferencePosition {
     // Not using `ref` like in the spec here, because it is a keyword.
     reference: usize,
@@ -110,30 +112,167 @@ pub struct PatchReferencePosition {
     ysize: usize,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct PatchPosition {
     x: usize,
     y: usize,
     ref_pos_idx: usize,
 }
 
-#[derive(Debug, Default)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+struct PatchTreeNode {
+    left_child: isize,
+    right_child: isize,
+    y_center: usize,
+    start: usize,
+    num: usize,
+}
+
+#[derive(Debug, Default, PartialEq, Eq)]
 pub struct PatchesDictionary {
     pub positions: Vec<PatchPosition>,
-    ref_positions: Vec<PatchReferencePosition>,
+    pub ref_positions: Vec<PatchReferencePosition>,
     blendings: Vec<PatchBlending>,
     blendings_stride: usize,
+    patch_tree: Vec<PatchTreeNode>,
+    // Number of patches for each row.
+    num_patches: Vec<usize>,
+    sorted_patches_y0: Vec<(usize, usize)>,
+    sorted_patches_y1: Vec<(usize, usize)>,
 }
 
 impl PatchesDictionary {
+    fn compute_patch_tree(&mut self) -> Result<()> {
+        #[derive(Debug, Clone, Copy)]
+        struct PatchInterval {
+            idx: usize,
+            y0: usize,
+            y1: usize,
+        }
+
+        self.patch_tree.clear();
+        self.num_patches.clear();
+        self.sorted_patches_y0.clear();
+        self.sorted_patches_y1.clear();
+
+        if self.positions.is_empty() {
+            return Ok(());
+        }
+
+        // Create a y-interval for each patch.
+        let mut intervals: Vec<PatchInterval> = Vec::new_with_capacity(self.positions.len())?;
+        for (i, pos) in self.positions.iter().enumerate() {
+            let ref_pos = self.ref_positions[pos.ref_pos_idx];
+            if ref_pos.xsize > 0 && ref_pos.ysize > 0 {
+                intervals.push(PatchInterval {
+                    idx: i,
+                    y0: pos.y,
+                    y1: pos.y + self.ref_positions[pos.ref_pos_idx].ysize,
+                });
+            }
+        }
+
+        let intervals_len = intervals.len();
+        let sort_by_y0 = |intervals: &mut Vec<PatchInterval>, start: usize, end: usize| {
+            intervals[start..end].sort_unstable_by_key(|i| i.y0);
+        };
+        let sort_by_y1 = |intervals: &mut Vec<PatchInterval>, start: usize, end: usize| {
+            intervals[start..end].sort_unstable_by_key(|i| i.y1);
+        };
+
+        // Count the number of patches for each row.
+        sort_by_y1(&mut intervals, 0, intervals_len);
+        self.num_patches
+            .resize(intervals.last().map_or(0, |iv| iv.y1), 0); //Safe last()
+        for iv in &intervals {
+            for y in iv.y0..iv.y1 {
+                self.num_patches[y] += 1;
+            }
+        }
+
+        let root = PatchTreeNode {
+            start: 0,
+            num: intervals.len(),
+            ..Default::default()
+        };
+        self.patch_tree.push(root);
+
+        let mut next = 0;
+        while next < self.patch_tree.len() {
+            let node = &mut self.patch_tree[next]; // Borrow mutably *before* accessing fields
+            let start = node.start;
+            let end = node.start + node.num;
+
+            // Choose the y_center for this node to be the median of interval starts.
+            sort_by_y0(&mut intervals, start, end);
+            let middle_idx = start + node.num / 2;
+            node.y_center = intervals[middle_idx].y0;
+
+            // Divide the intervals in [start, end) into three groups:
+            let mut right_start = middle_idx;
+            while right_start < end && intervals[right_start].y0 == node.y_center {
+                right_start += 1;
+            }
+
+            sort_by_y1(&mut intervals, start, right_start);
+            let mut left_end = right_start;
+            while left_end > start && intervals[left_end - 1].y1 > node.y_center {
+                left_end -= 1;
+            }
+
+            // Fill in sorted_patches_y0_ and sorted_patches_y1_ for the current node.
+            node.num = right_start - left_end;
+            node.start = self.sorted_patches_y0.len();
+
+            self.sorted_patches_y1
+                .try_reserve(right_start.saturating_sub(left_end))?;
+            self.sorted_patches_y0
+                .try_reserve(right_start.saturating_sub(left_end))?;
+            for i in (left_end..right_start).rev() {
+                self.sorted_patches_y1
+                    .push((intervals[i].y1, intervals[i].idx));
+            }
+            sort_by_y0(&mut intervals, left_end, right_start);
+            for interval in intervals.iter().take(right_start).skip(left_end) {
+                self.sorted_patches_y0.push((interval.y0, interval.idx));
+            }
+
+            // Create the left and right nodes (if not empty).
+            // We modify left_child/right_child on the *original* node in patch_tree,
+            // so we have to do the assignment *before* we push the new nodes.
+            self.patch_tree[next].left_child = -1;
+            self.patch_tree[next].right_child = -1;
+
+            if left_end > start {
+                let mut left = PatchTreeNode::default();
+                left.start = start;
+                left.num = left_end - left.start;
+                self.patch_tree[next].left_child = self.patch_tree.len() as isize;
+                self.patch_tree.try_reserve(1)?;
+                self.patch_tree.push(left);
+            }
+            if right_start < end {
+                let mut right = PatchTreeNode::default();
+                right.start = right_start;
+                right.num = end - right.start;
+                self.patch_tree[next].right_child = self.patch_tree.len() as isize;
+                self.patch_tree.try_reserve(1)?;
+                self.patch_tree.push(right);
+            }
+
+            next += 1;
+        }
+        Ok(())
+    }
+
     #[instrument(level = "debug", skip(br), ret, err)]
     pub fn read(
         br: &mut BitReader,
         xsize: usize,
         ysize: usize,
-        decoder_state: &DecoderState,
+        num_extra_channels: usize,
+        reference_frames: &[Option<ReferenceFrame>],
     ) -> Result<PatchesDictionary> {
-        let num_extra_channels = decoder_state.extra_channel_info().len();
         let blendings_stride = num_extra_channels + 1;
         let patches_histograms = Histograms::decode(PatchContext::NUM, br, true)?;
         let mut patches_reader = patches_histograms.make_reader(br)?;
@@ -172,7 +311,7 @@ impl PatchesDictionary {
                 patches_reader.read(br, PatchContext::PatchSize as usize)? as usize + 1;
             let ref_pos_ysize =
                 patches_reader.read(br, PatchContext::PatchSize as usize)? as usize + 1;
-            let reference_frame = decoder_state.reference_frame(reference);
+            let reference_frame = &reference_frames[reference];
             // TODO(firsching): make sure this check is correct in the presence of downsampled extra channels (also in libjxl).
             match reference_frame {
                 None => return Err(Error::PatchesInvalidReference(reference)),
@@ -286,9 +425,9 @@ impl PatchesDictionary {
                     ));
                 }
 
-                let mut alpha_channel = 0;
-                let mut clamp = false;
                 for _ in 0..blendings_stride {
+                    let mut alpha_channel = 0;
+                    let mut clamp = false;
                     let maybe_blend_mode =
                         patches_reader.read(br, PatchContext::PatchBlendMode as usize)? as u8;
                     let blend_mode = match PatchBlendMode::from_u8(maybe_blend_mode) {
@@ -301,7 +440,7 @@ impl PatchesDictionary {
                         Some(blend_mode) => blend_mode,
                     };
 
-                    if PatchBlendMode::uses_alpha(blend_mode) {
+                    if PatchBlendMode::uses_alpha(blend_mode) && blendings_stride > 2 {
                         alpha_channel = patches_reader
                             .read(br, PatchContext::PatchAlphaChannel as usize)?
                             as usize;
@@ -333,11 +472,1366 @@ impl PatchesDictionary {
                 ysize: ref_pos_ysize,
             })
         }
-        Ok(PatchesDictionary {
+
+        let mut patches_dict = PatchesDictionary {
             positions,
             blendings,
             ref_positions,
             blendings_stride,
-        })
+            num_patches: vec![],
+            sorted_patches_y0: vec![],
+            sorted_patches_y1: vec![],
+            patch_tree: vec![],
+        };
+        patches_dict.compute_patch_tree()?;
+        Ok(patches_dict)
+    }
+
+    pub fn get_patches_for_row(&self, y: usize) -> Vec<usize> {
+        // TODO(zond): Allocate a buffer for this when building the stage instead of when executing it.
+        let mut result = Vec::<usize>::new();
+        if self.num_patches.len() <= y || self.num_patches[y] == 0 {
+            return result;
+        }
+
+        let mut tree_idx: isize = 0;
+        loop {
+            if tree_idx == -1 {
+                break;
+            }
+
+            // Safe access using get() and unwrap_or().  No need for the assert.
+            let node = self.patch_tree.get(tree_idx as usize).unwrap_or_else(|| {
+                // TODO(firsching): Handle panic differently?
+                panic!("Invalid tree_idx: {}", tree_idx);
+            });
+
+            if y <= node.y_center {
+                for i in 0..node.num {
+                    let p = self.sorted_patches_y0[node.start + i];
+                    if y < p.0 {
+                        break;
+                    }
+                    result.push(p.1);
+                }
+                tree_idx = if y < node.y_center {
+                    node.left_child
+                } else {
+                    -1
+                };
+            } else {
+                for i in 0..node.num {
+                    let p = self.sorted_patches_y1[node.start + i];
+                    if y >= p.0 {
+                        break;
+                    }
+                    result.push(p.1);
+                }
+                tree_idx = node.right_child;
+            }
+        }
+
+        // Ensure that the relative order of patches is preserved.
+        result.sort();
+        result
+    }
+
+    pub fn add_one_row(
+        &self,
+        row: &mut [&mut [f32]],
+        row_pos: (usize, usize),
+        xsize: usize,
+        extra_channel_info: &[ExtraChannelInfo],
+        reference_frames: &[ReferenceFrame],
+    ) {
+        // TODO(zond): Allocate a buffer for this when building the stage instead of when executing it.
+        let mut out = row
+            .iter_mut()
+            .map(|s| &mut s[..xsize])
+            .collect::<Vec<&mut [f32]>>();
+        // TODO(zond): Allocate a buffer for this when building the stage instead of when executing it.
+        let bg = out
+            .iter_mut()
+            .map(|s| s.to_vec())
+            .collect::<Vec<Vec<f32>>>();
+        let num_ec = extra_channel_info.len();
+        // TODO(zond): Check if this shouldn't be `num_ec + 1 == self.blendings_stride` instead.
+        assert!(num_ec < self.blendings_stride);
+        let dummy_fg = vec![0f32];
+        let mut fg = vec![dummy_fg.as_slice(); 3 + num_ec];
+        for pos_idx in self.get_patches_for_row(row_pos.1) {
+            let pos = &self.positions[pos_idx];
+            assert!(row_pos.1 >= pos.y); // assert patch starts at or before current row
+            if pos.x >= row_pos.0 + out[0].len() {
+                // if patch starts before end of current chunk, continue
+                continue;
+            }
+
+            let ref_pos = &self.ref_positions[pos.ref_pos_idx];
+            assert!(pos.y + ref_pos.ysize > row_pos.1); // assert patch ends after current row
+            if pos.x + ref_pos.xsize < row_pos.0 {
+                // if patch ends before current chunk, continue
+                continue;
+            }
+
+            let (ref_x0, out_x0) = if pos.x < row_pos.0 {
+                // if patch starts before current chunk
+                (ref_pos.x0 + row_pos.0 - pos.x, 0) // crop the first part of the patch and use the first part of the chunk
+            } else {
+                // otherwise
+                (ref_pos.x0, pos.x - row_pos.0) // use the first part of the patch and crop the first part of the chunk
+            };
+            let (ref_x1, out_x1) = if out[0].len() - out_x0 < ref_pos.xsize {
+                // if rest of chunk is smaller than patch
+                (ref_pos.x0 + out[0].len() - out_x0, out[0].len()) // crop the last part of the patch and use the last part of the chunk
+            } else {
+                // otherwise
+                (ref_pos.x0 + ref_pos.xsize, out_x0 + ref_pos.xsize) // use the last part of the patch and crop the last part of the chunk
+            };
+
+            let ref_pos_y = ref_pos.y0 + row_pos.1 - pos.y;
+
+            for (c, fg_ptr) in fg.iter_mut().enumerate().take(3) {
+                *fg_ptr = &(reference_frames[ref_pos.reference].frame[c]
+                    .as_rect()
+                    .row(ref_pos_y)[ref_x0..ref_x1]);
+            }
+            for i in 0..num_ec {
+                fg[3 + i] = &(reference_frames[ref_pos.reference].frame[3 + i]
+                    .as_rect()
+                    .row(ref_pos_y)[ref_x0..ref_x1]);
+            }
+
+            let blending_idx = pos_idx * self.blendings_stride;
+            perform_blending(
+                &slice!(bg, .., out_x0..out_x1),
+                &fg,
+                &self.blendings[blending_idx],
+                &self.blendings[blending_idx + 1..],
+                extra_channel_info,
+                &mut slice_mut!(out, .., out_x0..out_x1),
+            );
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+
+    mod read_patches_tests {
+        use super::super::*;
+        use test_log::test;
+
+        #[test]
+        fn read_single_patch_dict() -> Result<()> {
+            let mut br = BitReader::new(&[0x12, 0x4a, 0x8c, 0x63, 0x13, 0x01, 0xa6, 0x53, 0x01]);
+            let got_dict = PatchesDictionary::read(
+                &mut br,
+                1024,
+                1024,
+                0,
+                &[Some(ReferenceFrame::blank(1024, 1024, 1, true).unwrap())],
+            )?;
+            let want_dict = PatchesDictionary {
+                positions: vec![PatchPosition {
+                    x: 10,
+                    y: 20,
+                    ref_pos_idx: 0,
+                }],
+                ref_positions: vec![PatchReferencePosition {
+                    reference: 0,
+                    x0: 0,
+                    y0: 0,
+                    xsize: 1,
+                    ysize: 1,
+                }],
+                blendings: vec![PatchBlending {
+                    mode: PatchBlendMode::Add,
+                    alpha_channel: 0,
+                    clamp: false,
+                }],
+                blendings_stride: 1,
+                num_patches: vec![
+                    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1,
+                ],
+                patch_tree: vec![PatchTreeNode {
+                    left_child: -1,
+                    right_child: -1,
+                    y_center: 20,
+                    start: 0,
+                    num: 1,
+                }],
+                sorted_patches_y0: vec![(20, 0)],
+                sorted_patches_y1: vec![(21, 0)],
+            };
+            assert_eq!(got_dict, want_dict);
+            Ok(())
+        }
+
+        #[test]
+        fn read_multi_patch_dict() -> Result<()> {
+            let mut br = BitReader::new(&[
+                0x12, 0xc6, 0x26, 0x3f, 0x08, 0x4e, 0xb6, 0x0d, 0xf2, 0xde, 0xb6, 0x6d,
+            ]);
+            let got_dict = PatchesDictionary::read(
+                &mut br,
+                1024,
+                1024,
+                2,
+                &[Some(ReferenceFrame::blank(1024, 1024, 1, true).unwrap())],
+            )?;
+            let want_dict = PatchesDictionary {
+                positions: vec![
+                    PatchPosition {
+                        x: 0,
+                        y: 0,
+                        ref_pos_idx: 0,
+                    },
+                    PatchPosition {
+                        x: 5,
+                        y: 5,
+                        ref_pos_idx: 1,
+                    },
+                ],
+                ref_positions: vec![
+                    PatchReferencePosition {
+                        reference: 0,
+                        x0: 0,
+                        y0: 0,
+                        xsize: 2,
+                        ysize: 1,
+                    },
+                    PatchReferencePosition {
+                        reference: 0,
+                        x0: 0,
+                        y0: 0,
+                        xsize: 1,
+                        ysize: 2,
+                    },
+                ],
+                blendings: vec![
+                    PatchBlending {
+                        mode: PatchBlendMode::BlendAbove,
+                        alpha_channel: 1,
+                        clamp: false,
+                    },
+                    PatchBlending {
+                        mode: PatchBlendMode::Mul,
+                        alpha_channel: 0,
+                        clamp: true,
+                    },
+                    PatchBlending {
+                        mode: PatchBlendMode::Mul,
+                        alpha_channel: 0,
+                        clamp: true,
+                    },
+                    PatchBlending {
+                        mode: PatchBlendMode::Mul,
+                        alpha_channel: 0,
+                        clamp: true,
+                    },
+                    PatchBlending {
+                        mode: PatchBlendMode::Mul,
+                        alpha_channel: 0,
+                        clamp: true,
+                    },
+                    PatchBlending {
+                        mode: PatchBlendMode::Mul,
+                        alpha_channel: 0,
+                        clamp: true,
+                    },
+                ],
+                blendings_stride: 3,
+                num_patches: vec![1, 0, 0, 0, 0, 1, 1],
+                patch_tree: vec![
+                    PatchTreeNode {
+                        left_child: 1,
+                        right_child: -1,
+                        y_center: 5,
+                        start: 0,
+                        num: 1,
+                    },
+                    PatchTreeNode {
+                        left_child: -1,
+                        right_child: -1,
+                        y_center: 0,
+                        start: 1,
+                        num: 1,
+                    },
+                ],
+                sorted_patches_y0: vec![(5, 1), (0, 0)],
+                sorted_patches_y1: vec![(7, 1), (1, 0)],
+            };
+            assert_eq!(got_dict, want_dict);
+            Ok(())
+        }
+
+        #[test]
+        fn read_large_patch_dict() -> Result<()> {
+            let mut br = BitReader::new(&[
+                0x12, 0x4e, 0x50, 0x76, 0xeb, 0x41, 0x0d, 0x7e, 0xe5, 0x8e, 0xd2, 0x5d, 0x01,
+            ]);
+            let got_dict = PatchesDictionary::read(
+                &mut br,
+                1024,
+                1024,
+                1,
+                &[Some(ReferenceFrame::blank(1024, 1024, 1, true).unwrap())],
+            )?;
+            let want_dict = PatchesDictionary {
+                positions: vec![PatchPosition {
+                    x: 2,
+                    y: 3,
+                    ref_pos_idx: 0,
+                }],
+                ref_positions: vec![PatchReferencePosition {
+                    reference: 0,
+                    x0: 0,
+                    y0: 0,
+                    xsize: 300,
+                    ysize: 200,
+                }],
+                blendings: vec![
+                    PatchBlending {
+                        mode: PatchBlendMode::AlphaWeightedAddBelow,
+                        alpha_channel: 0,
+                        clamp: false,
+                    },
+                    PatchBlending {
+                        mode: PatchBlendMode::Mul,
+                        alpha_channel: 0,
+                        clamp: false,
+                    },
+                ],
+                blendings_stride: 2,
+                num_patches: vec![
+                    0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
+                    1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
+                    1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
+                    1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
+                    1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
+                    1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
+                    1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
+                    1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
+                ],
+                patch_tree: vec![PatchTreeNode {
+                    left_child: -1,
+                    right_child: -1,
+                    y_center: 3,
+                    start: 0,
+                    num: 1,
+                }],
+                sorted_patches_y0: vec![(3, 0)],
+                sorted_patches_y1: vec![(203, 0)],
+            };
+            assert_eq!(got_dict, want_dict);
+            Ok(())
+        }
+
+        #[test]
+        fn read_clamped_patch_dict() -> Result<()> {
+            let mut br = BitReader::new(&[0x12, 0xc6, 0x26, 0x1f, 0x70, 0xce, 0x06]);
+            let got_dict = PatchesDictionary::read(
+                &mut br,
+                1024,
+                1024,
+                0,
+                &[Some(ReferenceFrame::blank(1024, 1024, 1, true).unwrap())],
+            )?;
+            let want_dict = PatchesDictionary {
+                positions: vec![PatchPosition {
+                    x: 4,
+                    y: 4,
+                    ref_pos_idx: 0,
+                }],
+                ref_positions: vec![PatchReferencePosition {
+                    reference: 0,
+                    x0: 0,
+                    y0: 0,
+                    xsize: 1,
+                    ysize: 1,
+                }],
+                blendings: vec![PatchBlending {
+                    mode: PatchBlendMode::Mul,
+                    alpha_channel: 0,
+                    clamp: true,
+                }],
+                blendings_stride: 1,
+                num_patches: vec![0, 0, 0, 0, 1],
+                patch_tree: vec![PatchTreeNode {
+                    left_child: -1,
+                    right_child: -1,
+                    y_center: 4,
+                    start: 0,
+                    num: 1,
+                }],
+                sorted_patches_y0: vec![(4, 0)],
+                sorted_patches_y1: vec![(5, 0)],
+            };
+            assert_eq!(got_dict, want_dict);
+            Ok(())
+        }
+
+        #[test]
+        fn read_dup_patch_dict() -> Result<()> {
+            let mut br = BitReader::new(&[0x12, 0x0a, 0x8d, 0x88, 0x03, 0x31, 0xd7, 0x35]);
+            let got_dict = PatchesDictionary::read(
+                &mut br,
+                1024,
+                1024,
+                0,
+                &[Some(ReferenceFrame::blank(1024, 1024, 1, true).unwrap())],
+            )?;
+            let want_dict = PatchesDictionary {
+                positions: vec![
+                    PatchPosition {
+                        x: 0,
+                        y: 0,
+                        ref_pos_idx: 0,
+                    },
+                    PatchPosition {
+                        x: 5,
+                        y: 5,
+                        ref_pos_idx: 0,
+                    },
+                ],
+                ref_positions: vec![PatchReferencePosition {
+                    reference: 0,
+                    x0: 0,
+                    y0: 0,
+                    xsize: 1,
+                    ysize: 1,
+                }],
+                blendings: vec![
+                    PatchBlending {
+                        mode: PatchBlendMode::Add,
+                        alpha_channel: 0,
+                        clamp: false,
+                    },
+                    PatchBlending {
+                        mode: PatchBlendMode::Add,
+                        alpha_channel: 0,
+                        clamp: false,
+                    },
+                ],
+                blendings_stride: 1,
+                num_patches: vec![1, 0, 0, 0, 0, 1],
+                patch_tree: vec![
+                    PatchTreeNode {
+                        left_child: 1,
+                        right_child: -1,
+                        y_center: 5,
+                        start: 0,
+                        num: 1,
+                    },
+                    PatchTreeNode {
+                        left_child: -1,
+                        right_child: -1,
+                        y_center: 0,
+                        start: 1,
+                        num: 1,
+                    },
+                ],
+                sorted_patches_y0: vec![(5, 1), (0, 0)],
+                sorted_patches_y1: vec![(6, 1), (1, 0)],
+            };
+            assert_eq!(got_dict, want_dict);
+            Ok(())
+        }
+    }
+
+    mod get_patches_for_row_tests {
+        use super::super::*;
+        use test_log::test;
+
+        // Helper to create a PatchesDictionary for tests
+        fn create_dictionary(
+            positions: Vec<PatchPosition>,
+            ref_positions: Vec<PatchReferencePosition>,
+        ) -> PatchesDictionary {
+            // Using default/empty blendings for these tests as they don't affect get_patches_for_row
+            let mut dict = PatchesDictionary {
+                positions,
+                ref_positions,
+                ..Default::default()
+            };
+            dict.compute_patch_tree().unwrap();
+            dict
+        }
+
+        #[test]
+        fn test_no_patches() {
+            let dict = create_dictionary(vec![], vec![]);
+            assert_eq!(dict.get_patches_for_row(0), vec![] as Vec<usize>);
+            assert_eq!(dict.get_patches_for_row(10), vec![] as Vec<usize>);
+        }
+
+        #[test]
+        fn test_single_patch_hit() {
+            let ref_positions = vec![PatchReferencePosition {
+                reference: 0,
+                x0: 0,
+                y0: 0,
+                xsize: 10,
+                ysize: 5,
+            }];
+            let positions = vec![PatchPosition {
+                x: 0,
+                y: 10,
+                ref_pos_idx: 0,
+            }];
+            let dict = create_dictionary(positions, ref_positions);
+
+            // Patch covers rows 10, 11, 12, 13, 14
+            assert_eq!(dict.get_patches_for_row(10), vec![0]); // First row of patch
+            assert_eq!(dict.get_patches_for_row(12), vec![0]); // Middle row of patch
+            assert_eq!(dict.get_patches_for_row(14), vec![0]); // Last row of patch
+        }
+
+        #[test]
+        fn test_single_patch_miss() {
+            let ref_positions = vec![PatchReferencePosition {
+                reference: 0,
+                x0: 0,
+                y0: 0,
+                xsize: 10,
+                ysize: 5,
+            }]; // Covers y=10 to y=14
+            let positions = vec![PatchPosition {
+                x: 0,
+                y: 10,
+                ref_pos_idx: 0,
+            }];
+            let dict = create_dictionary(positions, ref_positions);
+
+            assert_eq!(dict.get_patches_for_row(9), vec![] as Vec<usize>); // Row before patch
+            assert_eq!(dict.get_patches_for_row(15), vec![] as Vec<usize>); // Row after patch
+        }
+
+        #[test]
+        fn test_single_patch_height_one() {
+            let ref_positions = vec![PatchReferencePosition {
+                reference: 0,
+                x0: 0,
+                y0: 0,
+                xsize: 10,
+                ysize: 1,
+            }]; // Covers y=5 only
+            let positions = vec![PatchPosition {
+                x: 0,
+                y: 5,
+                ref_pos_idx: 0,
+            }];
+            let dict = create_dictionary(positions, ref_positions);
+
+            assert_eq!(dict.get_patches_for_row(4), vec![] as Vec<usize>);
+            assert_eq!(dict.get_patches_for_row(5), vec![0]);
+            assert_eq!(dict.get_patches_for_row(6), vec![] as Vec<usize>);
+        }
+
+        #[test]
+        fn test_multiple_patches_non_overlapping() {
+            let ref_positions = vec![
+                PatchReferencePosition {
+                    reference: 0,
+                    x0: 0,
+                    y0: 0,
+                    xsize: 10,
+                    ysize: 3,
+                }, // Patch 0: rows 5,6,7
+                PatchReferencePosition {
+                    reference: 0,
+                    x0: 0,
+                    y0: 0,
+                    xsize: 10,
+                    ysize: 2,
+                }, // Patch 1: rows 10,11
+            ];
+            let positions = vec![
+                PatchPosition {
+                    x: 0,
+                    y: 5,
+                    ref_pos_idx: 0,
+                },
+                PatchPosition {
+                    x: 0,
+                    y: 10,
+                    ref_pos_idx: 1,
+                },
+            ];
+            let dict = create_dictionary(positions, ref_positions);
+
+            assert_eq!(dict.get_patches_for_row(4), vec![] as Vec<usize>);
+            assert_eq!(dict.get_patches_for_row(5), vec![0]);
+            assert_eq!(dict.get_patches_for_row(7), vec![0]);
+            assert_eq!(dict.get_patches_for_row(8), vec![] as Vec<usize>); // Between patches
+            assert_eq!(dict.get_patches_for_row(9), vec![] as Vec<usize>); // Between patches
+            assert_eq!(dict.get_patches_for_row(10), vec![1]);
+            assert_eq!(dict.get_patches_for_row(11), vec![1]);
+            assert_eq!(dict.get_patches_for_row(12), vec![] as Vec<usize>);
+        }
+
+        #[test]
+        fn test_multiple_patches_overlapping() {
+            let ref_positions = vec![
+                PatchReferencePosition {
+                    reference: 0,
+                    x0: 0,
+                    y0: 0,
+                    xsize: 10,
+                    ysize: 5,
+                }, // Patch 0: rows 10-14
+                PatchReferencePosition {
+                    reference: 0,
+                    x0: 0,
+                    y0: 0,
+                    xsize: 10,
+                    ysize: 4,
+                }, // Patch 1: rows 12-15
+            ];
+            let positions = vec![
+                PatchPosition {
+                    x: 0,
+                    y: 10,
+                    ref_pos_idx: 0,
+                }, // idx 0
+                PatchPosition {
+                    x: 0,
+                    y: 12,
+                    ref_pos_idx: 1,
+                }, // idx 1
+            ];
+            let dict = create_dictionary(positions, ref_positions);
+
+            assert_eq!(dict.get_patches_for_row(10), vec![0]); // Only patch 0
+            assert_eq!(dict.get_patches_for_row(11), vec![0]); // Only patch 0
+            assert_eq!(dict.get_patches_for_row(12), vec![0, 1]); // Both patches (sorted indices)
+            assert_eq!(dict.get_patches_for_row(13), vec![0, 1]); // Both patches
+            assert_eq!(dict.get_patches_for_row(14), vec![0, 1]); // Patch 0 ends, Patch 1 continues
+            assert_eq!(dict.get_patches_for_row(15), vec![1]); // Only patch 1
+            assert_eq!(dict.get_patches_for_row(16), vec![] as Vec<usize>);
+        }
+
+        #[test]
+        fn test_multiple_patches_adjacent() {
+            let ref_positions = vec![
+                PatchReferencePosition {
+                    reference: 0,
+                    x0: 0,
+                    y0: 0,
+                    xsize: 10,
+                    ysize: 2,
+                }, // Patch 0: rows 5,6
+                PatchReferencePosition {
+                    reference: 0,
+                    x0: 0,
+                    y0: 0,
+                    xsize: 10,
+                    ysize: 3,
+                }, // Patch 1: rows 7,8,9
+            ];
+            let positions = vec![
+                PatchPosition {
+                    x: 0,
+                    y: 5,
+                    ref_pos_idx: 0,
+                },
+                PatchPosition {
+                    x: 0,
+                    y: 7,
+                    ref_pos_idx: 1,
+                },
+            ];
+            let dict = create_dictionary(positions, ref_positions);
+
+            assert_eq!(dict.get_patches_for_row(4), vec![] as Vec<usize>);
+            assert_eq!(dict.get_patches_for_row(5), vec![0]);
+            assert_eq!(dict.get_patches_for_row(6), vec![0]);
+            assert_eq!(dict.get_patches_for_row(7), vec![1]); // Patch 0 ends, Patch 1 starts
+            assert_eq!(dict.get_patches_for_row(8), vec![1]);
+            assert_eq!(dict.get_patches_for_row(9), vec![1]);
+            assert_eq!(dict.get_patches_for_row(10), vec![] as Vec<usize>);
+        }
+
+        #[test]
+        fn test_multiple_patches_same_start_different_heights() {
+            let ref_positions = vec![
+                PatchReferencePosition {
+                    reference: 0,
+                    x0: 0,
+                    y0: 0,
+                    xsize: 10,
+                    ysize: 2,
+                }, // Patch 0: rows 3,4
+                PatchReferencePosition {
+                    reference: 0,
+                    x0: 0,
+                    y0: 0,
+                    xsize: 10,
+                    ysize: 4,
+                }, // Patch 1: rows 3,4,5,6
+            ];
+            let positions = vec![
+                PatchPosition {
+                    x: 0,
+                    y: 3,
+                    ref_pos_idx: 0,
+                }, // idx 0
+                PatchPosition {
+                    x: 0,
+                    y: 3,
+                    ref_pos_idx: 1,
+                }, // idx 1
+            ];
+            let dict = create_dictionary(positions, ref_positions);
+
+            assert_eq!(dict.get_patches_for_row(2), vec![] as Vec<usize>);
+            assert_eq!(dict.get_patches_for_row(3), vec![0, 1]); // Both cover
+            assert_eq!(dict.get_patches_for_row(4), vec![0, 1]); // Both cover
+            assert_eq!(dict.get_patches_for_row(5), vec![1]); // Only patch 1 (longer)
+            assert_eq!(dict.get_patches_for_row(6), vec![1]); // Only patch 1
+            assert_eq!(dict.get_patches_for_row(7), vec![] as Vec<usize>);
+        }
+
+        #[test]
+        fn test_patches_out_of_order_definition() {
+            // Define patches in a non-sorted order of their y positions
+            // get_patches_for_row should still return sorted indices if multiple apply.
+            let ref_positions = vec![
+                PatchReferencePosition {
+                    reference: 0,
+                    x0: 0,
+                    y0: 0,
+                    xsize: 5,
+                    ysize: 3,
+                }, // Patch 0 (idx 0): rows 10,11,12
+                PatchReferencePosition {
+                    reference: 0,
+                    x0: 0,
+                    y0: 0,
+                    xsize: 5,
+                    ysize: 3,
+                }, // Patch 1 (idx 1): rows 5,6,7
+                PatchReferencePosition {
+                    reference: 0,
+                    x0: 0,
+                    y0: 0,
+                    xsize: 5,
+                    ysize: 3,
+                }, // Patch 2 (idx 2): rows 10,11,12 (overlaps with 0)
+            ];
+            let positions = vec![
+                PatchPosition {
+                    x: 0,
+                    y: 10,
+                    ref_pos_idx: 0,
+                }, // Patch 0
+                PatchPosition {
+                    x: 0,
+                    y: 5,
+                    ref_pos_idx: 1,
+                }, // Patch 1
+                PatchPosition {
+                    x: 0,
+                    y: 10,
+                    ref_pos_idx: 2,
+                }, // Patch 2
+            ];
+            let dict = create_dictionary(positions, ref_positions);
+
+            assert_eq!(dict.get_patches_for_row(4), vec![] as Vec<usize>);
+            assert_eq!(dict.get_patches_for_row(5), vec![1]);
+            assert_eq!(dict.get_patches_for_row(6), vec![1]);
+            assert_eq!(dict.get_patches_for_row(7), vec![1]);
+            assert_eq!(dict.get_patches_for_row(8), vec![] as Vec<usize>);
+            assert_eq!(dict.get_patches_for_row(9), vec![] as Vec<usize>);
+            assert_eq!(dict.get_patches_for_row(10), vec![0, 2]); // Patches 0 and 2, indices sorted
+            assert_eq!(dict.get_patches_for_row(11), vec![0, 2]);
+            assert_eq!(dict.get_patches_for_row(12), vec![0, 2]);
+            assert_eq!(dict.get_patches_for_row(13), vec![] as Vec<usize>);
+        }
+    }
+
+    mod add_one_row_tests {
+        use super::super::*;
+        use crate::{
+            headers::{bit_depth::BitDepth, extra_channels::ExtraChannel},
+            image::Image,
+            util::test::assert_all_almost_eq,
+        };
+
+        const MAX_ABS_DELTA: f32 = 1e-6; // Adjusted for typical f32 comparisons
+
+        fn create_reference_frame(
+            width: usize,
+            height: usize,
+            channel_data: Vec<Vec<f32>>,
+        ) -> Result<ReferenceFrame> {
+            let mut frame_channels = Vec::new();
+            for data_vec in channel_data {
+                assert_eq!(
+                    data_vec.len(),
+                    width * height,
+                    "Channel data length mismatch"
+                );
+                let img = Image::new_with_data((width, height), data_vec);
+                frame_channels.push(img);
+            }
+            Ok(ReferenceFrame {
+                frame: frame_channels,
+                saved_before_color_transform: true,
+            })
+        }
+
+        #[test]
+        fn test_add_one_row_simple_replace() -> Result<()> {
+            let xsize = 10;
+            let num_base_channels = 3; // R, G, B
+            let const_val = 1.0;
+
+            let ref_frames = vec![create_reference_frame(
+                xsize,
+                1,
+                vec![vec![const_val; xsize]; num_base_channels],
+            )?];
+            let extra_channel_info: Vec<ExtraChannelInfo> = Vec::new();
+
+            let ref_positions = vec![PatchReferencePosition {
+                reference: 0, // Points to main_ref_frame
+                x0: 2,
+                y0: 0,
+                xsize: 3,
+                ysize: 1,
+            }];
+            let positions = vec![PatchPosition {
+                x: 2,
+                y: 0,
+                ref_pos_idx: 0,
+            }];
+            let blendings = vec![PatchBlending {
+                mode: PatchBlendMode::Replace,
+                alpha_channel: 0,
+                clamp: false, // Clamping set to false
+            }];
+            let mut patches_dict = PatchesDictionary {
+                positions,
+                ref_positions,
+                blendings,
+                blendings_stride: 1 + extra_channel_info.len(),
+                patch_tree: Vec::new(),
+                num_patches: Vec::new(),
+                sorted_patches_y0: Vec::new(),
+                sorted_patches_y1: Vec::new(),
+            };
+            patches_dict.compute_patch_tree()?;
+
+            let mut r_data: Vec<f32> = vec![0.0; xsize];
+            let mut g_data: Vec<f32> = vec![0.0; xsize];
+            let mut b_data: Vec<f32> = vec![0.0; xsize];
+            let mut row_slices: Vec<&mut [f32]> = vec![&mut r_data, &mut g_data, &mut b_data];
+
+            let expected_r = vec![0.0, 0.0, 1.0, 1.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0];
+
+            patches_dict.add_one_row(
+                &mut row_slices,
+                (0, 0),
+                xsize,
+                &extra_channel_info,
+                &ref_frames, // Pass the Vec<ReferenceFrame>
+            );
+
+            assert_all_almost_eq!(&r_data, &expected_r, MAX_ABS_DELTA);
+            assert_all_almost_eq!(&g_data, &expected_r, MAX_ABS_DELTA);
+            assert_all_almost_eq!(&b_data, &expected_r, MAX_ABS_DELTA);
+            Ok(())
+        }
+
+        #[test]
+        fn test_add_one_row_simple_add() -> Result<()> {
+            let xsize = 10;
+            let y_coord = 0;
+            let num_base_channels = 3;
+            let const_val = 0.2;
+
+            let ref_frames = vec![create_reference_frame(
+                xsize,
+                1,
+                vec![vec![const_val; xsize]; num_base_channels],
+            )?];
+            let extra_channel_info: Vec<ExtraChannelInfo> = Vec::new();
+
+            let ref_positions = vec![PatchReferencePosition {
+                reference: 0,
+                x0: 2,
+                y0: 0,
+                xsize: 3,
+                ysize: 1,
+            }];
+            let positions = vec![PatchPosition {
+                x: 2,
+                y: 0,
+                ref_pos_idx: 0,
+            }];
+            let blendings = vec![PatchBlending {
+                mode: PatchBlendMode::Add,
+                alpha_channel: 0,
+                clamp: false, // Clamping set to false
+            }];
+            let mut patches_dict = PatchesDictionary {
+                positions,
+                ref_positions,
+                blendings,
+                blendings_stride: 1 + extra_channel_info.len(),
+                patch_tree: Vec::new(),
+                num_patches: Vec::new(),
+                sorted_patches_y0: Vec::new(),
+                sorted_patches_y1: Vec::new(),
+            };
+            patches_dict.compute_patch_tree()?;
+
+            let mut r_data: Vec<f32> = vec![0.5; xsize];
+            let mut g_data: Vec<f32> = vec![0.5; xsize];
+            let mut b_data: Vec<f32> = vec![0.5; xsize];
+            let mut row_slices: Vec<&mut [f32]> = vec![&mut r_data, &mut g_data, &mut b_data];
+
+            let mut expected_r: Vec<f32> = vec![0.5; xsize];
+            for r in expected_r.iter_mut().take(5).skip(2) {
+                *r = 0.5 + 0.2
+            }
+
+            patches_dict.add_one_row(
+                &mut row_slices,
+                (0, y_coord),
+                xsize,
+                &extra_channel_info,
+                &ref_frames,
+            );
+
+            assert_all_almost_eq!(&r_data, &expected_r, MAX_ABS_DELTA);
+            assert_all_almost_eq!(&g_data, &expected_r, MAX_ABS_DELTA);
+            assert_all_almost_eq!(&b_data, &expected_r, MAX_ABS_DELTA);
+            Ok(())
+        }
+
+        #[test]
+        fn test_add_one_row_overlapping_replace() -> Result<()> {
+            let xsize = 10;
+            let y_coord = 0;
+            let num_base_channels = 3;
+
+            let main_ref_frame1 =
+                create_reference_frame(xsize, 1, vec![vec![1.0; xsize]; num_base_channels])?;
+            let main_ref_frame2 =
+                create_reference_frame(xsize, 1, vec![vec![2.0; xsize]; num_base_channels])?;
+
+            let ref_frames = vec![main_ref_frame1, main_ref_frame2];
+            let extra_channel_info: Vec<ExtraChannelInfo> = Vec::new();
+
+            let ref_positions = vec![
+                PatchReferencePosition {
+                    reference: 0, // Points to main_ref_frame1
+                    x0: 0,
+                    y0: 0,
+                    xsize: 4,
+                    ysize: 1,
+                },
+                PatchReferencePosition {
+                    reference: 1, // Points to main_ref_frame2
+                    x0: 0,
+                    y0: 0,
+                    xsize: 3,
+                    ysize: 1,
+                },
+            ];
+            let positions = vec![
+                PatchPosition {
+                    x: 2,
+                    y: 0,
+                    ref_pos_idx: 0,
+                }, // P1: canvas [2..6] with 1.0
+                PatchPosition {
+                    x: 4,
+                    y: 0,
+                    ref_pos_idx: 1,
+                }, // P2: canvas [4..7] with 2.0
+            ];
+            let blendings = vec![
+                PatchBlending {
+                    mode: PatchBlendMode::Replace,
+                    alpha_channel: 0,
+                    clamp: false, // Clamping set to false
+                }, // For P1
+                PatchBlending {
+                    mode: PatchBlendMode::Replace,
+                    alpha_channel: 0,
+                    clamp: false, // Clamping set to false
+                }, // For P2
+            ];
+            let mut patches_dict = PatchesDictionary {
+                positions,
+                ref_positions,
+                blendings,
+                blendings_stride: 1 + extra_channel_info.len(),
+                patch_tree: Vec::new(),
+                num_patches: Vec::new(),
+                sorted_patches_y0: Vec::new(),
+                sorted_patches_y1: Vec::new(),
+            };
+            patches_dict.compute_patch_tree()?;
+
+            let mut r_data: Vec<f32> = vec![0.0; xsize];
+            let mut g_data: Vec<f32> = vec![0.0; xsize];
+            let mut b_data: Vec<f32> = vec![0.0; xsize];
+            let mut row_slices: Vec<&mut [f32]> = vec![&mut r_data, &mut g_data, &mut b_data];
+
+            let expected_r: Vec<f32> = vec![0.0, 0.0, 1.0, 1.0, 2.0, 2.0, 2.0, 0.0, 0.0, 0.0];
+
+            patches_dict.add_one_row(
+                &mut row_slices,
+                (0, y_coord),
+                xsize,
+                &extra_channel_info,
+                &ref_frames,
+            );
+
+            assert_all_almost_eq!(&r_data, &expected_r, MAX_ABS_DELTA);
+            assert_all_almost_eq!(&g_data, &expected_r, MAX_ABS_DELTA);
+            assert_all_almost_eq!(&b_data, &expected_r, MAX_ABS_DELTA);
+            Ok(())
+        }
+
+        #[test]
+        fn test_add_one_row_blend_above_ec_alpha_non_associated() -> Result<()> {
+            let xsize = 1;
+            let y_coord = 0;
+
+            let initial_color_val = 0.1;
+            let initial_ec0_alpha = 0.4;
+            let ref_color_val = 0.8;
+            let ref_ec0_alpha_val = 0.5;
+
+            let ec_info = vec![ExtraChannelInfo::new(
+                true,
+                ExtraChannel::Alpha,
+                BitDepth::f32(),
+                0,
+                "AlphaEC".to_string(),
+                false, // alpha_associated = false
+                None,
+                None,
+            )];
+
+            let main_ref_frame_data = vec![
+                vec![ref_color_val; xsize],     // R
+                vec![ref_color_val; xsize],     // G
+                vec![ref_color_val; xsize],     // B
+                vec![ref_ec0_alpha_val; xsize], // EC0 (Alpha)
+            ];
+            let main_ref_frame = create_reference_frame(xsize, 1, main_ref_frame_data)?;
+
+            let ref_frames = vec![main_ref_frame];
+
+            let ref_positions = vec![PatchReferencePosition {
+                reference: 0,
+                x0: 0,
+                y0: 0,
+                xsize: 1,
+                ysize: 1,
+            }];
+            let positions = vec![PatchPosition {
+                x: 0,
+                y: 0,
+                ref_pos_idx: 0,
+            }];
+            let blendings = vec![
+                PatchBlending {
+                    mode: PatchBlendMode::BlendAbove,
+                    alpha_channel: 0, // Alpha for color is EC0
+                    clamp: false,     // Clamping set to false
+                }, // Color
+                PatchBlending {
+                    mode: PatchBlendMode::BlendAbove,
+                    alpha_channel: 0, // Alpha for EC0 is EC0 itself
+                    clamp: false,     // Clamping set to false
+                }, // EC0
+            ];
+            let mut patches_dict = PatchesDictionary {
+                positions,
+                ref_positions,
+                blendings,
+                blendings_stride: 1 + ec_info.len(), // Color + 1 EC
+                patch_tree: Vec::new(),
+                num_patches: Vec::new(),
+                sorted_patches_y0: Vec::new(),
+                sorted_patches_y1: Vec::new(),
+            };
+            patches_dict.compute_patch_tree()?;
+
+            let mut r_data = vec![initial_color_val; xsize];
+            let mut g_data = vec![initial_color_val; xsize];
+            let mut b_data = vec![initial_color_val; xsize];
+            let mut ec0_data = vec![initial_ec0_alpha; xsize];
+            let mut row_slices: Vec<&mut [f32]> =
+                vec![&mut r_data, &mut g_data, &mut b_data, &mut ec0_data];
+
+            // Calculations based on C++ logic for non-associated alpha:
+            // OutputAlpha = OldAlpha + PatchAlpha * (1 - OldAlpha)
+            // OutputColor = (OldColor * OldAlpha * (1 - PatchAlpha) + PatchColor * PatchAlpha) / OutputAlpha
+            // (If OutputAlpha is very small, OutputColor is 0)
+            let canvas_alpha_val = initial_ec0_alpha; // old_alpha
+            let patch_alpha_val = ref_ec0_alpha_val; // ref_alpha
+
+            let expected_ec0 = canvas_alpha_val + patch_alpha_val * (1.0 - canvas_alpha_val);
+
+            let canvas_color_val = initial_color_val; // old_color
+            let patch_color_val = ref_color_val; // ref_color (straight)
+
+            let expected_color = if expected_ec0.abs() < 1e-5 {
+                // Threshold similar to kSmallAlpha
+                0.0
+            } else {
+                (canvas_color_val * canvas_alpha_val * (1.0 - patch_alpha_val)
+                    + patch_color_val * patch_alpha_val)
+                    / expected_ec0
+            };
+
+            patches_dict.add_one_row(&mut row_slices, (0, y_coord), xsize, &ec_info, &ref_frames);
+
+            assert_all_almost_eq!(&r_data, &vec![expected_color], MAX_ABS_DELTA);
+            assert_all_almost_eq!(&g_data, &vec![expected_color], MAX_ABS_DELTA);
+            assert_all_almost_eq!(&b_data, &vec![expected_color], MAX_ABS_DELTA);
+            assert_all_almost_eq!(&ec0_data, &vec![expected_ec0], MAX_ABS_DELTA);
+            Ok(())
+        }
+
+        #[test]
+        fn test_add_one_row_blend_above_ec_alpha_associated() -> Result<()> {
+            let xsize = 1;
+            let y_coord = 0;
+
+            let initial_color_val = 0.1; // Canvas color, assumed associated
+            let initial_ec0_alpha = 0.4; // Canvas alpha
+            let ref_color_val = 0.8; // Patch color, straight (non-associated)
+            let ref_ec0_alpha_val = 0.5; // Patch alpha
+
+            let ec_info = vec![ExtraChannelInfo::new(
+                true,
+                ExtraChannel::Alpha,
+                BitDepth::f32(),
+                0,
+                "AlphaEC".to_string(),
+                true, // alpha_associated = true
+                None,
+                None,
+            )];
+
+            let main_ref_frame_data = vec![
+                vec![ref_color_val; xsize],     // R
+                vec![ref_color_val; xsize],     // G
+                vec![ref_color_val; xsize],     // B
+                vec![ref_ec0_alpha_val; xsize], // EC0 (Alpha)
+            ];
+            let main_ref_frame = create_reference_frame(xsize, 1, main_ref_frame_data)?;
+
+            let ref_frames = vec![main_ref_frame];
+
+            let ref_positions = vec![PatchReferencePosition {
+                reference: 0,
+                x0: 0,
+                y0: 0,
+                xsize: 1,
+                ysize: 1,
+            }];
+            let positions = vec![PatchPosition {
+                x: 0,
+                y: 0,
+                ref_pos_idx: 0,
+            }];
+            let blendings = vec![
+                PatchBlending {
+                    mode: PatchBlendMode::BlendAbove,
+                    alpha_channel: 0,
+                    clamp: false, // Clamping set to false
+                }, // Color
+                PatchBlending {
+                    mode: PatchBlendMode::BlendAbove,
+                    alpha_channel: 0,
+                    clamp: false, // Clamping set to false
+                }, // EC0
+            ];
+            let mut patches_dict = PatchesDictionary {
+                positions,
+                ref_positions,
+                blendings,
+                blendings_stride: 1 + ec_info.len(),
+                patch_tree: Vec::new(),
+                num_patches: Vec::new(),
+                sorted_patches_y0: Vec::new(),
+                sorted_patches_y1: Vec::new(),
+            };
+            patches_dict.compute_patch_tree()?;
+
+            let mut r_data = vec![initial_color_val; xsize];
+            let mut g_data = vec![initial_color_val; xsize];
+            let mut b_data = vec![initial_color_val; xsize];
+            let mut ec0_data = vec![initial_ec0_alpha; xsize];
+            let mut row_slices: Vec<&mut [f32]> =
+                vec![&mut r_data, &mut g_data, &mut b_data, &mut ec0_data];
+
+            let expected_ec0 = ref_ec0_alpha_val + initial_ec0_alpha * (1.0 - ref_ec0_alpha_val);
+
+            let expected_color = ref_color_val + initial_color_val * (1.0 - ref_ec0_alpha_val);
+
+            patches_dict.add_one_row(&mut row_slices, (0, y_coord), xsize, &ec_info, &ref_frames);
+
+            assert_all_almost_eq!(&ec0_data, &vec![expected_ec0], MAX_ABS_DELTA);
+            assert_all_almost_eq!(&r_data, &vec![expected_color], MAX_ABS_DELTA);
+            assert_all_almost_eq!(&g_data, &vec![expected_color], MAX_ABS_DELTA);
+            assert_all_almost_eq!(&b_data, &vec![expected_color], MAX_ABS_DELTA);
+            Ok(())
+        }
+
+        #[test]
+        fn test_add_one_row_mul_blend() -> Result<()> {
+            let xsize = 2;
+            let y_coord = 0;
+            let num_base_channels = 3;
+
+            let initial_vals = vec![0.5, 2.0];
+            let ref_vals = vec![0.8, 0.7];
+
+            let main_ref_channel_data: Vec<Vec<f32>> = (0..num_base_channels)
+                .map(|_| ref_vals.clone()) // Each color channel gets ref_vals
+                .collect();
+            let main_ref_frame = create_reference_frame(xsize, 1, main_ref_channel_data)?;
+
+            let dummy_channel_data: Vec<Vec<f32>> =
+                (0..num_base_channels).map(|_| vec![0.0; xsize]).collect();
+            let dummy_ref_frame1 = create_reference_frame(xsize, 1, dummy_channel_data.clone())?;
+            let dummy_ref_frame2 = create_reference_frame(xsize, 1, dummy_channel_data)?;
+
+            let ref_frames = vec![main_ref_frame, dummy_ref_frame1, dummy_ref_frame2];
+            let extra_channel_info: Vec<ExtraChannelInfo> = Vec::new();
+
+            let ref_positions = vec![PatchReferencePosition {
+                reference: 0,
+                x0: 0,
+                y0: 0,
+                xsize,
+                ysize: 1,
+            }];
+            let positions = vec![PatchPosition {
+                x: 0,
+                y: 0,
+                ref_pos_idx: 0,
+            }];
+
+            // Test Mul (always without clamp as per new instruction)
+            let blendings = vec![PatchBlending {
+                mode: PatchBlendMode::Mul,
+                alpha_channel: 0,
+                clamp: false, // Clamping set to false
+            }];
+            let mut dict = PatchesDictionary {
+                positions: positions.clone(),
+                ref_positions: ref_positions.clone(),
+                blendings,
+                blendings_stride: 1, // Only color channels
+                patch_tree: Vec::new(),
+                num_patches: Vec::new(),
+                sorted_patches_y0: Vec::new(),
+                sorted_patches_y1: Vec::new(),
+            };
+            dict.compute_patch_tree()?;
+
+            let mut r_data = initial_vals.clone();
+            let mut g_data = initial_vals.clone();
+            let mut b_data = initial_vals.clone();
+            let mut slices: Vec<&mut [f32]> = vec![&mut r_data, &mut g_data, &mut b_data];
+            dict.add_one_row(
+                &mut slices,
+                (0, y_coord),
+                xsize,
+                &extra_channel_info,
+                &ref_frames,
+            );
+
+            let expected_vals = vec![0.5 * 0.8, 2.0 * 0.7]; // [0.4, 1.4]
+            assert_all_almost_eq!(&r_data, &expected_vals, MAX_ABS_DELTA);
+            assert_all_almost_eq!(&g_data, &expected_vals, MAX_ABS_DELTA);
+            assert_all_almost_eq!(&b_data, &expected_vals, MAX_ABS_DELTA);
+
+            Ok(())
+        }
+
+        #[test]
+        fn test_add_one_row_none_blend() -> Result<()> {
+            let xsize = 5;
+            let y_coord = 0;
+            let num_base_channels = 3;
+            let const_val = 100.0;
+
+            let main_channel_data: Vec<Vec<f32>> = (0..num_base_channels)
+                .map(|_| vec![const_val; xsize])
+                .collect();
+            let main_ref_frame = create_reference_frame(xsize, 1, main_channel_data)?;
+
+            let dummy_channel_data: Vec<Vec<f32>> =
+                (0..num_base_channels).map(|_| vec![0.0; xsize]).collect();
+            let dummy_ref_frame1 = create_reference_frame(xsize, 1, dummy_channel_data.clone())?;
+            let dummy_ref_frame2 = create_reference_frame(xsize, 1, dummy_channel_data)?;
+
+            let ref_frames = vec![main_ref_frame, dummy_ref_frame1, dummy_ref_frame2];
+            let extra_channel_info: Vec<ExtraChannelInfo> = Vec::new();
+
+            let ref_positions = vec![PatchReferencePosition {
+                reference: 0,
+                x0: 0,
+                y0: 0,
+                xsize: 3,
+                ysize: 1,
+            }];
+            let positions = vec![PatchPosition {
+                x: 1,
+                y: 0,
+                ref_pos_idx: 0,
+            }];
+            let blendings = vec![PatchBlending {
+                mode: PatchBlendMode::None,
+                alpha_channel: 0,
+                clamp: false, // Clamping set to false
+            }];
+
+            let mut patches_dict = PatchesDictionary {
+                positions,
+                ref_positions,
+                blendings,
+                blendings_stride: 1, // Only color channels
+                patch_tree: Vec::new(),
+                num_patches: Vec::new(),
+                sorted_patches_y0: Vec::new(),
+                sorted_patches_y1: Vec::new(),
+            };
+            patches_dict.compute_patch_tree()?;
+
+            let initial_data: Vec<f32> = (0..xsize).map(|i| i as f32 * 0.1 + 0.05).collect();
+            let mut r_data = initial_data.clone();
+            let mut g_data = initial_data.clone();
+            let mut b_data = initial_data.clone();
+            let mut row_slices: Vec<&mut [f32]> = vec![&mut r_data, &mut g_data, &mut b_data];
+
+            patches_dict.add_one_row(
+                &mut row_slices,
+                (0, y_coord),
+                xsize,
+                &extra_channel_info,
+                &ref_frames,
+            );
+
+            assert_all_almost_eq!(&r_data, &initial_data, MAX_ABS_DELTA);
+            assert_all_almost_eq!(&g_data, &initial_data, MAX_ABS_DELTA);
+            assert_all_almost_eq!(&b_data, &initial_data, MAX_ABS_DELTA);
+            Ok(())
+        }
     }
 }
