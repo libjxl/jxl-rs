@@ -169,7 +169,11 @@ macro_rules! define_idct_1d {
 }
 define_idct_1d!(4, 2);
 define_idct_1d!(8, 4);
-//define_idct_1d!(16, 8);
+define_idct_1d!(16, 8);
+define_idct_1d!(32, 16);
+define_idct_1d!(64, 32);
+define_idct_1d!(128, 64);
+define_idct_1d!(256, 128);
 
 fn transpose<const N: usize, const M: usize>(_data: &mut [f32]) {
     todo!();
@@ -192,15 +196,56 @@ mod tests {
     use std::array;
 
     use crate::{
-        util::test::{assert_all_almost_eq, assert_almost_eq},
+        util::test::{assert_almost_eq},
         var_dct::{
             dct::{IDCT1DImpl, IDCT1D},
             dct_slow::idct1d,
         },
     };
+    macro_rules! test_idct1d_eq_slow_n {
+        ($test_name:ident, $n_val:expr, $tolerance:expr) => {
+            #[test]
+            fn $test_name() {
+                const N: usize = $n_val;
+                const M: usize = 1;
+                const NM: usize = N * M;
 
+                // Generate input data
+                let input_f64_vec: Vec<f64> = (1..=N).map(|i| i as f64).collect();
+                let input_f64: [f64; NM] = input_f64_vec.try_into().expect("Vec to array conversion failed");
+
+                // Run reference implementation
+                let mut output_slow = [0.0; NM];
+                idct1d::<N, M, NM>(&input_f64, &mut output_slow);
+
+                // Prepare input for tested implementation
+                let mut input_arr_2d = [[0.0f32; M]; N];
+                for i in 0..N {
+                    input_arr_2d[i][0] = input_f64[i] as f32;
+                }
+
+                // Run tested implementation (in-place)
+                let mut output = input_arr_2d;
+                IDCT1DImpl::<N>::do_idct::<M>(&mut output);
+
+                // Compare results
+                for i in 0..N {
+                    assert_almost_eq!(output[i][0], output_slow[i] as f32, $tolerance);
+                }
+            }
+        };
+    }
+
+    test_idct1d_eq_slow_n!(test_dct1d_2x1_eq_slow, 2, 1e-6);
+    test_idct1d_eq_slow_n!(test_dct1d_4x1_eq_slow, 4, 1e-6);
+    test_idct1d_eq_slow_n!(test_dct1d_8x1_eq_slow, 8, 1e-5);
+    test_idct1d_eq_slow_n!(test_dct1d_16x1_eq_slow, 16, 1e-4);
+    test_idct1d_eq_slow_n!(test_dct1d_32x1_eq_slow, 32, 1e-3);
+    test_idct1d_eq_slow_n!(test_dct1d_64x1_eq_slow, 64, 1e-2);
+    test_idct1d_eq_slow_n!(test_dct1d_128x1_eq_slow, 128, 1e-2);
+    test_idct1d_eq_slow_n!(test_dct1d_256x1_eq_slow, 256, 1e-1);
     #[test]
-    fn test_dct1d_4x1_eq_slow() {
+    fn test_dct1d_4x1_eq_slow_old() {
         const N: usize = 4;
         const M: usize = 1;
         const NM: usize = N * M;
@@ -220,7 +265,7 @@ mod tests {
     }
 
     #[test]
-    fn test_dct1d_8x1_eq_slow() {
+    fn test_dct1d_8x1_eq_slow_old() {
         const N: usize = 8;
         const M: usize = 1;
         const NM: usize = N * M;
@@ -260,13 +305,11 @@ mod tests {
                 input[i][j] = input_f64[i* M + j] as f32;
             }
         }
-        println!("input_f64: {:?}, input:{:?}", input_f64, input);
         let mut output = input;
 
         // Call the implementation under test (operates on 2D data)
         IDCT1DImpl::<N>::do_idct::<M>(&mut output);
 
-        println!("output: {:?}, output_slow:{:?}", output, output_slow);
         // Compare results element-wise
         for j in 0..M {
             for i in 0..N {
