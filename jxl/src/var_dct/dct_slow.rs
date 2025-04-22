@@ -12,13 +12,13 @@ use std::f64::consts::SQRT_2;
 #[inline(always)]
 fn alpha(u: usize) -> f64 {
     if u == 0 {
-        //0.7071067811865475
         FRAC_1_SQRT_2
     } else {
         1.0
     }
 }
-
+// TODO(firsching): Consider to just use a Vec and skip the templates,
+// since this is slow anyway
 pub fn dct1d<const N: usize, const M: usize, const NM: usize>(
     input: &[f64; NM],
     out: &mut [f64; NM],
@@ -75,6 +75,7 @@ pub fn idct1d<const N: usize, const M: usize, const NM: usize>(
 #[cfg(test)]
 mod tests {
     use std::{array, iter};
+    use test_log::test;
 
     use crate::util::test::assert_all_almost_eq;
 

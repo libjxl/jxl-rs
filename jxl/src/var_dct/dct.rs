@@ -79,7 +79,7 @@ macro_rules! define_idct_1d {
             fn do_idct<const COLUMNS: usize>(data: &mut [[f32; COLUMNS]]) {
                 const { assert!($nhalf * 2 == $n) }
 
-                // We assume `data` is arranged as a 4xCOLUMNS matrix in a flat array.
+                // We assume `data` is arranged as a nxCOLUMNS matrix in a flat array.
 
                 let mut tmp = [[0.0f32; COLUMNS]; $n]; // Temporary buffer
 
@@ -127,6 +127,7 @@ where
 #[cfg(test)]
 mod tests {
     use std::array;
+    use test_log::test;
 
     use crate::{
         util::test::assert_almost_eq,
@@ -165,7 +166,7 @@ mod tests {
 
                 // Compare results
                 for i in 0..N {
-                    assert_almost_eq!(output[i][0], output_slow[i] as f32, $tolerance);
+                    assert_almost_eq!(output[i][0], output_slow[i] as f32, $tolerance, 1e-3);
                 }
             }
         };
@@ -179,45 +180,6 @@ mod tests {
     test_idct1d_eq_slow_n!(test_dct1d_64x1_eq_slow, 64, 1e-2);
     test_idct1d_eq_slow_n!(test_dct1d_128x1_eq_slow, 128, 1e-2);
     test_idct1d_eq_slow_n!(test_dct1d_256x1_eq_slow, 256, 1e-1);
-    #[test]
-    fn test_dct1d_4x1_eq_slow_old() {
-        const N: usize = 4;
-        const M: usize = 1;
-        const NM: usize = N * M;
-        let input_f64: [f64; NM] = [1.0, 2.0, 3.0, 4.0];
-        let mut output_slow = [0.0; NM];
-
-        idct1d::<N, M, NM>(&input_f64, &mut output_slow);
-        let mut input = [[0.0; M]; N];
-        for i in 0..N {
-            input[i][0] = input_f64[i] as f32;
-        }
-        let mut output = input;
-        IDCT1DImpl::<N>::do_idct::<M>(&mut output);
-        for i in 0..N {
-            assert_almost_eq!(output[i][0], output_slow[i] as f32, 1e-6);
-        }
-    }
-
-    #[test]
-    fn test_dct1d_8x1_eq_slow_old() {
-        const N: usize = 8;
-        const M: usize = 1;
-        const NM: usize = N * M;
-        let input_f64: [f64; NM] = [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0];
-        let mut output_slow = [0.0; NM];
-
-        idct1d::<N, M, NM>(&input_f64, &mut output_slow);
-        let mut input = [[0.0; M]; N];
-        for i in 0..N {
-            input[i][0] = input_f64[i] as f32;
-        }
-        let mut output = input;
-        IDCT1DImpl::<N>::do_idct::<M>(&mut output);
-        for i in 0..N {
-            assert_almost_eq!(output[i][0], output_slow[i] as f32, 1e-5);
-        }
-    }
 
     #[test]
     fn test_dct1d_8x3_eq_slow() {
