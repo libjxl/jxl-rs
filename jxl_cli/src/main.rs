@@ -3,14 +3,15 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
+use clap::Parser;
 use jxl::bit_reader::BitReader;
 use jxl::container::{ContainerParser, ParseEvent};
 use jxl::frame::{DecoderState, Frame, Section};
 use jxl::headers::FileHeader;
 use jxl::icc::read_icc;
-use std::env;
 use std::fs;
 use std::io::Read;
+use std::path::PathBuf;
 
 use jxl::headers::JxlHeader;
 
@@ -66,6 +67,11 @@ fn parse_jxl_codestream(data: &[u8]) -> Result<(), jxl::error::Error> {
     Ok(())
 }
 
+#[derive(Parser)]
+struct Opt {
+    input: PathBuf,
+}
+
 fn main() {
     #[cfg(feature = "tracing-subscriber")]
     {
@@ -76,9 +82,8 @@ fn main() {
             .init();
     }
 
-    let args: Vec<String> = env::args().collect();
-    assert_eq!(args.len(), 2);
-    let file = &args[1];
+    let opt = Opt::parse();
+    let file = opt.input;
     let mut file = fs::File::open(file).expect("cannot open file");
 
     let mut parser = ContainerParser::new();
