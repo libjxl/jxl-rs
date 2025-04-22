@@ -42,3 +42,31 @@ impl LfQuantFactors {
         })
     }
 }
+
+#[derive(Debug)]
+#[allow(dead_code)]
+pub struct QuantizerParams {
+    pub global_scale: u32,
+    pub quant_lf: u32,
+}
+
+impl QuantizerParams {
+    pub fn read(br: &mut BitReader) -> Result<QuantizerParams> {
+        let global_scale = match br.read(2)? {
+            0 => br.read(11)? + 1,
+            1 => br.read(11)? + 2049,
+            2 => br.read(12)? + 4097,
+            _ => br.read(16)? + 8193,
+        };
+        let quant_lf = match br.read(2)? {
+            0 => 16,
+            1 => br.read(5)? + 1,
+            2 => br.read(8)? + 1,
+            _ => br.read(16)? + 1,
+        };
+        Ok(QuantizerParams {
+            global_scale: global_scale as u32,
+            quant_lf: quant_lf as u32,
+        })
+    }
+}
