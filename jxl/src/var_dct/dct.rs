@@ -196,7 +196,7 @@ mod tests {
     use std::array;
 
     use crate::{
-        util::test::{assert_almost_eq},
+        util::test::assert_almost_eq,
         var_dct::{
             dct::{IDCT1DImpl, IDCT1D},
             dct_slow::idct1d,
@@ -212,7 +212,9 @@ mod tests {
 
                 // Generate input data
                 let input_f64_vec: Vec<f64> = (1..=N).map(|i| i as f64).collect();
-                let input_f64: [f64; NM] = input_f64_vec.try_into().expect("Vec to array conversion failed");
+                let input_f64: [f64; NM] = input_f64_vec
+                    .try_into()
+                    .expect("Vec to array conversion failed");
 
                 // Run reference implementation
                 let mut output_slow = [0.0; NM];
@@ -302,7 +304,7 @@ mod tests {
         let mut input = [[0.0; M]; N];
         for j in 0..M {
             for i in 0..N {
-                input[i][j] = input_f64[i* M + j] as f32;
+                input[i][j] = input_f64[i * M + j] as f32;
             }
         }
         let mut output = input;
