@@ -170,7 +170,7 @@ impl Tree {
             }
         }
 
-        let histograms = Histograms::decode((tree.len() + 1) / 2, br, true)?;
+        let histograms = Histograms::decode(tree.len().div_ceil(2), br, true)?;
 
         Ok(Tree {
             nodes: tree,

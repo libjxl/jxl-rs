@@ -3,14 +3,15 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
+use clap::Parser;
 use jxl::bit_reader::BitReader;
 use jxl::container::{ContainerParser, ParseEvent};
 use jxl::frame::{DecoderState, Frame, Section};
 use jxl::headers::FileHeader;
 use jxl::icc::read_icc;
-use std::env;
 use std::fs;
 use std::io::Read;
+use std::path::PathBuf;
 
 use jxl::headers::JxlHeader;
 
@@ -36,6 +37,26 @@ fn parse_jxl_codestream(data: &[u8]) -> Result<(), jxl::error::Error> {
         println!("read frame with {} sections", section_readers.len());
 
         frame.decode_lf_global(&mut section_readers[frame.get_section_idx(Section::LfGlobal)])?;
+
+        for group in 0..frame.header().num_lf_groups() {
+            frame.decode_lf_group(
+                group,
+                &mut section_readers[frame.get_section_idx(Section::Lf { group })],
+            )?;
+        }
+
+        frame.decode_hf_global(&mut section_readers[frame.get_section_idx(Section::HfGlobal)])?;
+
+        for pass in 0..frame.header().passes.num_passes as usize {
+            for group in 0..frame.header().num_groups() {
+                frame.decode_hf_group(
+                    group,
+                    pass,
+                    &mut section_readers[frame.get_section_idx(Section::Hf { group, pass })],
+                )?;
+            }
+        }
+
         if let Some(state) = frame.finalize()? {
             decoder_state = state;
         } else {
@@ -44,6 +65,11 @@ fn parse_jxl_codestream(data: &[u8]) -> Result<(), jxl::error::Error> {
     }
 
     Ok(())
+}
+
+#[derive(Parser)]
+struct Opt {
+    input: PathBuf,
 }
 
 fn main() {
@@ -56,9 +82,8 @@ fn main() {
             .init();
     }
 
-    let args: Vec<String> = env::args().collect();
-    assert_eq!(args.len(), 2);
-    let file = &args[1];
+    let opt = Opt::parse();
+    let file = opt.input;
     let mut file = fs::File::open(file).expect("cannot open file");
 
     let mut parser = ContainerParser::new();
