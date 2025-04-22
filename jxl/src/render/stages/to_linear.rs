@@ -7,14 +7,14 @@ use crate::color::tf;
 use crate::headers::color_encoding::CustomTransferFunction;
 use crate::render::{RenderPipelineInPlaceStage, RenderPipelineStage};
 
-/// Apply transfer function to display-referred linear color samples.
+/// Convert encoded non-linear color samples to display-referred linear color samples.
 #[derive(Debug)]
-pub struct ApplyTransferStage {
+pub struct ToLinearStage {
     first_channel: usize,
     tf: TransferFunction,
 }
 
-impl ApplyTransferStage {
+impl ToLinearStage {
     fn new(first_channel: usize, tf: TransferFunction) -> Self {
         Self { first_channel, tf }
     }
@@ -41,12 +41,12 @@ impl ApplyTransferStage {
     }
 }
 
-impl std::fmt::Display for ApplyTransferStage {
+impl std::fmt::Display for ToLinearStage {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let channel = self.first_channel;
         write!(
             f,
-            "Apply transfer function {:?} to channel [{},{},{}]",
+            "Convert transfer function {:?} to display-referred linear TF for channel [{},{},{}]",
             self.tf,
             channel,
             channel + 1,
@@ -55,7 +55,7 @@ impl std::fmt::Display for ApplyTransferStage {
     }
 }
 
-impl RenderPipelineStage for ApplyTransferStage {
+impl RenderPipelineStage for ToLinearStage {
     type Type = RenderPipelineInPlaceStage<f32>;
 
     fn uses_channel(&self, c: usize) -> bool {
@@ -78,33 +78,33 @@ impl RenderPipelineStage for ApplyTransferStage {
         match self.tf {
             TransferFunction::Bt709 => {
                 for row in row {
-                    tf::linear_to_bt709(&mut row[..xsize]);
+                    tf::bt709_to_linear(&mut row[..xsize]);
                 }
             }
             TransferFunction::Srgb => {
                 for row in row {
-                    tf::linear_to_srgb_fast(&mut row[..xsize]);
+                    tf::srgb_to_linear(&mut row[..xsize]);
                 }
             }
             TransferFunction::Pq { intensity_target } => {
                 for row in row {
-                    tf::linear_to_pq(intensity_target, &mut row[..xsize]);
+                    tf::pq_to_linear(intensity_target, &mut row[..xsize]);
                 }
             }
             TransferFunction::Hlg {
                 intensity_target,
                 luminance_rgb,
             } => {
+                tf::hlg_to_scene(&mut row_r[..xsize]);
+                tf::hlg_to_scene(&mut row_g[..xsize]);
+                tf::hlg_to_scene(&mut row_b[..xsize]);
+
                 let rows = [
                     &mut row_r[..xsize],
                     &mut row_g[..xsize],
                     &mut row_b[..xsize],
                 ];
-                tf::hlg_display_to_scene(intensity_target, luminance_rgb, rows);
-
-                tf::scene_to_hlg(&mut row_r[..xsize]);
-                tf::scene_to_hlg(&mut row_g[..xsize]);
-                tf::scene_to_hlg(&mut row_b[..xsize]);
+                tf::hlg_scene_to_display(intensity_target, luminance_rgb, rows);
             }
             TransferFunction::Gamma(g) => {
                 for row in row {
@@ -122,13 +122,15 @@ enum TransferFunction {
     Bt709,
     Srgb,
     Pq {
+        /// Original Intensity Target
         intensity_target: f32,
     },
     Hlg {
+        /// Original Intensity Target
         intensity_target: f32,
         luminance_rgb: [f32; 3],
     },
-    /// Inverse gamma in range `(0, 1]`
+    /// Gamma in range `(0, 1]`
     Gamma(f32),
 }
 
@@ -169,7 +171,7 @@ mod test {
     #[test]
     fn consistency_hlg() -> Result<()> {
         crate::render::test::test_stage_consistency::<_, f32, f32>(
-            ApplyTransferStage::hlg(0, 1000f32, LUMINANCE_BT2020),
+            ToLinearStage::hlg(0, 1000f32, LUMINANCE_BT2020),
             (500, 500),
             3,
         )
@@ -178,7 +180,7 @@ mod test {
     #[test]
     fn consistency_pq() -> Result<()> {
         crate::render::test::test_stage_consistency::<_, f32, f32>(
-            ApplyTransferStage::pq(0, 10000f32),
+            ToLinearStage::pq(0, 10000f32),
             (500, 500),
             3,
         )
@@ -187,7 +189,7 @@ mod test {
     #[test]
     fn consistency_srgb() -> Result<()> {
         crate::render::test::test_stage_consistency::<_, f32, f32>(
-            ApplyTransferStage::new(0, TransferFunction::Srgb),
+            ToLinearStage::new(0, TransferFunction::Srgb),
             (500, 500),
             3,
         )
@@ -196,7 +198,7 @@ mod test {
     #[test]
     fn consistency_bt709() -> Result<()> {
         crate::render::test::test_stage_consistency::<_, f32, f32>(
-            ApplyTransferStage::new(0, TransferFunction::Bt709),
+            ToLinearStage::new(0, TransferFunction::Bt709),
             (500, 500),
             3,
         )
@@ -205,7 +207,7 @@ mod test {
     #[test]
     fn consistency_gamma22() -> Result<()> {
         crate::render::test::test_stage_consistency::<_, f32, f32>(
-            ApplyTransferStage::new(0, TransferFunction::Gamma(0.4545455)),
+            ToLinearStage::new(0, TransferFunction::Gamma(0.4545455)),
             (500, 500),
             3,
         )
@@ -214,12 +216,13 @@ mod test {
     #[test]
     fn sdr_white_hlg() -> Result<()> {
         let intensity_target = 1000f32;
-        let input_r = Image::new_constant((1, 1), 0.203)?;
-        let input_g = Image::new_constant((1, 1), 0.203)?;
-        let input_b = Image::new_constant((1, 1), 0.203)?;
+        // Reversed version of FromLinear test
+        let input_r = Image::new_constant((1, 1), 0.75)?;
+        let input_g = Image::new_constant((1, 1), 0.75)?;
+        let input_b = Image::new_constant((1, 1), 0.75)?;
 
         // 75% HLG
-        let stage = ApplyTransferStage::hlg(0, intensity_target, LUMINANCE_BT2020);
+        let stage = ToLinearStage::hlg(0, intensity_target, LUMINANCE_BT2020);
         let output = make_and_run_simple_pipeline::<_, f32, f32>(
             stage,
             &[input_r, input_g, input_b],
@@ -228,9 +231,9 @@ mod test {
         )?
         .1;
 
-        assert_all_almost_eq!(output[0].as_rect().row(0), &[0.75], 1e-3);
-        assert_all_almost_eq!(output[1].as_rect().row(0), &[0.75], 1e-3);
-        assert_all_almost_eq!(output[2].as_rect().row(0), &[0.75], 1e-3);
+        assert_all_almost_eq!(output[0].as_rect().row(0), &[0.203], 1e-3);
+        assert_all_almost_eq!(output[1].as_rect().row(0), &[0.203], 1e-3);
+        assert_all_almost_eq!(output[2].as_rect().row(0), &[0.203], 1e-3);
 
         Ok(())
     }
@@ -238,12 +241,13 @@ mod test {
     #[test]
     fn sdr_white_pq() -> Result<()> {
         let intensity_target = 1000f32;
-        let input_r = Image::new_constant((1, 1), 0.203)?;
-        let input_g = Image::new_constant((1, 1), 0.203)?;
-        let input_b = Image::new_constant((1, 1), 0.203)?;
+        // Reversed version of FromLinear test
+        let input_r = Image::new_constant((1, 1), 0.5807)?;
+        let input_g = Image::new_constant((1, 1), 0.5807)?;
+        let input_b = Image::new_constant((1, 1), 0.5807)?;
 
         // 58% PQ
-        let stage = ApplyTransferStage::pq(0, intensity_target);
+        let stage = ToLinearStage::pq(0, intensity_target);
         let output = make_and_run_simple_pipeline::<_, f32, f32>(
             stage,
             &[input_r, input_g, input_b],
@@ -252,9 +256,9 @@ mod test {
         )?
         .1;
 
-        assert_all_almost_eq!(output[0].as_rect().row(0), &[0.58], 1e-3);
-        assert_all_almost_eq!(output[1].as_rect().row(0), &[0.58], 1e-3);
-        assert_all_almost_eq!(output[2].as_rect().row(0), &[0.58], 1e-3);
+        assert_all_almost_eq!(output[0].as_rect().row(0), &[0.203], 1e-3);
+        assert_all_almost_eq!(output[1].as_rect().row(0), &[0.203], 1e-3);
+        assert_all_almost_eq!(output[2].as_rect().row(0), &[0.203], 1e-3);
 
         Ok(())
     }

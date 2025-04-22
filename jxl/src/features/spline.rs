@@ -15,7 +15,7 @@ use crate::{
     bit_reader::BitReader,
     entropy_coding::decode::{unpack_signed, Histograms, Reader},
     error::{Error, Result},
-    util::{tracing_wrappers::*, CeilLog2, NewWithCapacity},
+    util::{fast_cos, fast_erff, tracing_wrappers::*, CeilLog2, NewWithCapacity},
 };
 const MAX_NUM_CONTROL_POINTS: u32 = 1 << 20;
 const MAX_NUM_CONTROL_POINTS_PER_PIXEL_RATIO: u32 = 2;
@@ -93,7 +93,7 @@ impl ops::Div<f32> for Point {
     }
 }
 
-#[derive(Default)]
+#[derive(Default, Debug)]
 pub struct Spline {
     control_points: Vec<Point>,
     // X, Y, B.
@@ -299,7 +299,7 @@ impl QuantizedSpline {
 
         for (c, color_val) in color.iter_mut().enumerate() {
             for i in 0..32 {
-                *color_val += (inv_quant * self.color_dct[c][i] as f32).abs().ceil() as u64;
+                *color_val += (inv_quant * self.color_dct[c][i].abs() as f32).ceil() as u64;
             }
         }
 
@@ -318,7 +318,7 @@ impl QuantizedSpline {
             result.sigma_dct.0[i] =
                 self.sigma_dct[i] as f32 * inv_dct_factor * CHANNEL_WEIGHT[3] * inv_quant;
 
-            let weight_f = (inv_quant * self.sigma_dct[i] as f32).abs().ceil();
+            let weight_f = (inv_quant * self.sigma_dct[i].abs() as f32).ceil();
             let weight = weight_limit.min(weight_f.max(1.0)) as u64;
             width_estimate += weight * weight * logcolor;
         }
@@ -485,12 +485,81 @@ impl Dct32 {
         ];
         let tandhalf = t + 0.5;
         zip(MULTIPLIERS.iter(), self.0.iter())
-            .map(|(multiplier, coeff)| SQRT_2 * coeff * (multiplier * tandhalf).cos())
+            .map(|(multiplier, coeff)| SQRT_2 * coeff * fast_cos(multiplier * tandhalf))
             .sum()
     }
 }
 
 impl Splines {
+    #[cfg(test)]
+    pub fn create(
+        quantization_adjustment: i32,
+        splines: Vec<QuantizedSpline>,
+        starting_points: Vec<Point>,
+    ) -> Splines {
+        Splines {
+            quantization_adjustment,
+            splines,
+            starting_points,
+            segments: vec![],
+            segment_indices: vec![],
+            segment_y_start: vec![],
+        }
+    }
+    pub fn draw_segments(&self, row: &mut [&mut [f32]], position: (usize, usize), xsize: usize) {
+        let first_segment_index_pos = self.segment_y_start[position.1];
+        let last_segment_index_pos = self.segment_y_start[position.1 + 1];
+        for segment_index_pos in first_segment_index_pos..last_segment_index_pos {
+            self.draw_segment(
+                row,
+                position,
+                xsize,
+                &self.segments[self.segment_indices[segment_index_pos as usize]],
+            );
+        }
+    }
+    fn draw_segment(
+        &self,
+        row: &mut [&mut [f32]],
+        position: (usize, usize),
+        xsize: usize,
+        segment: &SplineSegment,
+    ) {
+        let (x0, y) = position;
+        let x1 = x0 + xsize;
+        let clamped_x0 = x0.max((segment.center_x - segment.maximum_distance).round() as usize);
+        // one-past-the-end
+        let clamped_x1 = x1.min((segment.center_x + segment.maximum_distance).round() as usize + 1);
+        for x in clamped_x0..clamped_x1 {
+            self.draw_segment_at(row, (x, y), segment);
+        }
+    }
+    fn draw_segment_at(
+        &self,
+        row: &mut [&mut [f32]],
+        position: (usize, usize),
+        segment: &SplineSegment,
+    ) {
+        let (x, y) = position;
+        let inv_sigma = segment.inv_sigma;
+        let half = 0.5f32;
+        let one_over_2s2 = 0.353_553_38_f32;
+        let sigma_over_4_times_intensity = segment.sigma_over_4_times_intensity;
+        let dx = x as f32 - segment.center_x;
+        let dy = y as f32 - segment.center_y;
+        let sqd = dx * dx + dy * dy;
+        let distance = sqd.sqrt();
+        let one_dimensional_factor = fast_erff((distance * half + one_over_2s2) * inv_sigma)
+            - fast_erff((distance * half - one_over_2s2) * inv_sigma);
+        let local_intensity =
+            sigma_over_4_times_intensity * one_dimensional_factor * one_dimensional_factor;
+        for (channel_index, row) in row.iter_mut().enumerate() {
+            let cm = segment.color[channel_index];
+            let inp = row[x];
+            row[x] = cm * local_intensity + inp;
+        }
+    }
+
     fn add_segment(
         &mut self,
         center: &Point,
@@ -508,7 +577,7 @@ impl Splines {
         }
         // TODO(zond): Use 3 if not JXL_HIGH_PRECISION
         const DISTANCE_EXP: f32 = 5.0;
-        let max_color = color
+        let max_color = [0.01, color[0], color[1], color[2]]
             .iter()
             .map(|chan| (chan * intensity).abs())
             .max_by(|a, b| a.total_cmp(b))
@@ -556,13 +625,15 @@ impl Splines {
     }
 
     // TODO(zond): Add color correlation as parameter.
-    pub fn initialize_draw_cache(&mut self, image_xsize: u64, image_ysize: u64) -> Result<()> {
-        self.segment_y_start.clear();
+    pub fn initialize_draw_cache(
+        &mut self,
+        image_xsize: u64,
+        image_ysize: u64,
+        y_to_x: f32,
+        y_to_b: f32,
+    ) -> Result<()> {
         let mut total_estimated_area_reached = 0u64;
         let mut splines = Vec::new();
-        // TODO(zond): Use color correlation here.
-        let y_to_x = 0.0;
-        let y_to_b = 0.0;
         let area_limit = area_limit(image_xsize * image_ysize);
         for (index, qspline) in self.splines.iter().enumerate() {
             let spline = qspline.dequantize(
@@ -710,11 +781,13 @@ impl Splines {
 }
 
 #[cfg(test)]
+#[allow(clippy::excessive_precision)]
 mod test_splines {
     use std::{f32::consts::SQRT_2, iter::zip};
+    use test_log::test;
 
     use crate::{
-        error::Error,
+        error::{Error, Result},
         features::spline::SplineSegment,
         util::test::{assert_all_almost_eq, assert_almost_eq},
     };
@@ -770,29 +843,141 @@ mod test_splines {
                     ],
                     color_dct: [
                         Dct32([
-                            36.3005, 39.6984, 23.2008, 67.4982, 4.4016, 71.5008, 62.2986, 32.298,
-                            92.1984, 10.101, 10.7982, 9.198, 6.0984, 10.5, 79.0986, 7.0014,
-                            24.5994, 90.7998, 5.502, 84.0, 43.8018, 49.0014, 33.4992, 78.9012,
-                            54.4992, 77.9016, 62.1012, 51.3996, 36.4014, 14.301, 83.7018, 35.4018,
+                            36.300457,
+                            39.69839859,
+                            23.20079994,
+                            67.49819946,
+                            4.401599884,
+                            71.50080109,
+                            62.29859924,
+                            32.29800034,
+                            92.19839478,
+                            10.10099983,
+                            10.79819965,
+                            9.197999954,
+                            6.098399639,
+                            10.5,
+                            79.09859467,
+                            7.001399517,
+                            24.59939957,
+                            90.79979706,
+                            5.501999855,
+                            84.0,
+                            43.80179977,
+                            49.00139999,
+                            33.49919891,
+                            78.90119934,
+                            54.49919891,
+                            77.90159607,
+                            62.10119629,
+                            51.39959717,
+                            36.40139771,
+                            14.30099964,
+                            83.70179749,
+                            35.40179825,
                         ]),
                         Dct32([
-                            9.38684, 53.4, 9.525, 74.925, 72.675, 26.7, 7.875, 0.9, 84.9, 23.175,
-                            26.475, 31.125, 90.975, 11.7, 74.1, 39.3, 23.7, 82.5, 4.8, 2.7, 61.2,
-                            96.375, 13.725, 66.675, 62.925, 82.425, 5.925, 98.7, 21.525, 7.875,
-                            51.675, 63.075,
+                            9.386842728,
+                            53.40000153,
+                            9.525000572,
+                            74.92500305,
+                            72.67500305,
+                            26.70000076,
+                            7.875000477,
+                            0.9000000358,
+                            84.90000153,
+                            23.17500114,
+                            26.47500038,
+                            31.12500191,
+                            90.9750061,
+                            11.70000076,
+                            74.1000061,
+                            39.30000305,
+                            23.70000076,
+                            82.5,
+                            4.800000191,
+                            2.700000048,
+                            61.20000076,
+                            96.37500763,
+                            13.72500038,
+                            66.67500305,
+                            62.92500305,
+                            82.42500305,
+                            5.925000191,
+                            98.70000458,
+                            21.52500153,
+                            7.875000477,
+                            51.67500305,
+                            63.07500076,
                         ]),
                         Dct32([
-                            47.9949, 39.33, 6.865, 26.275, 33.265, 6.19, 1.715, 98.9, 59.91,
-                            59.575, 95.005, 61.295, 82.715, 53.0, 6.13, 30.41, 34.69, 96.92, 93.42,
-                            16.98, 38.8, 80.765, 63.005, 18.585, 43.605, 32.305, 61.015, 20.23,
-                            24.325, 28.315, 69.105, 62.375,
+                            47.99487305,
+                            39.33000183,
+                            6.865000725,
+                            26.27500153,
+                            33.2650032,
+                            6.190000534,
+                            1.715000629,
+                            98.90000153,
+                            59.91000366,
+                            59.57500458,
+                            95.00499725,
+                            61.29500198,
+                            82.71500397,
+                            53.0,
+                            6.130004883,
+                            30.41000366,
+                            34.69000244,
+                            96.91999817,
+                            93.4200058,
+                            16.97999954,
+                            38.80000305,
+                            80.76500702,
+                            63.00499725,
+                            18.5850029,
+                            43.60500336,
+                            32.30500412,
+                            61.01499939,
+                            20.23000336,
+                            24.32500076,
+                            28.31500053,
+                            69.10500336,
+                            62.375,
                         ]),
                     ],
                     sigma_dct: Dct32([
-                        32.7593, 21.6645, 44.3289, 1.6665, 45.6621, 90.6576, 29.3304, 59.3274,
-                        23.6643, 85.3248, 84.6582, 27.3306, 41.9958, 83.9916, 50.6616, 17.6649,
-                        93.6573, 4.9995, 2.6664, 69.6597, 94.9905, 51.9948, 24.3309, 18.6648,
-                        11.9988, 95.6571, 28.6638, 81.3252, 89.991, 31.3302, 74.6592, 51.9948,
+                        32.75933838,
+                        21.66449928,
+                        44.32889938,
+                        1.666499972,
+                        45.66209793,
+                        90.6576004,
+                        29.33039856,
+                        59.32740021,
+                        23.66429901,
+                        85.32479858,
+                        84.6581955,
+                        27.33059883,
+                        41.99580002,
+                        83.99160004,
+                        50.66159821,
+                        17.66489983,
+                        93.65729523,
+                        4.999499798,
+                        2.666399956,
+                        69.65969849,
+                        94.9905014,
+                        51.99480057,
+                        24.33090019,
+                        18.66479874,
+                        11.99880028,
+                        95.65709686,
+                        28.66379929,
+                        81.32519531,
+                        89.99099731,
+                        31.3302002,
+                        74.65919495,
+                        51.99480057,
                     ]),
                     estimated_area_reached: 19843491681,
                 },
@@ -843,29 +1028,141 @@ mod test_splines {
                     ],
                     color_dct: [
                         Dct32([
-                            15.0007, 28.9002, 21.9996, 6.5982, 41.7984, 83.0004, 8.6016, 56.8008,
-                            68.901, 9.702, 5.4012, 19.7988, 70.7994, 90.0018, 52.5, 65.2008,
-                            7.7994, 23.499, 26.4012, 72.198, 64.701, 87.0996, 1.302, 67.4982,
-                            45.9984, 68.4012, 65.3982, 35.4984, 29.1018, 12.999, 41.601, 23.898,
+                            15.00070381,
+                            28.90019989,
+                            21.99959946,
+                            6.598199844,
+                            41.79839706,
+                            83.00039673,
+                            8.601599693,
+                            56.80079651,
+                            68.90100098,
+                            9.701999664,
+                            5.401199818,
+                            19.79879951,
+                            70.79940033,
+                            90.00180054,
+                            52.5,
+                            65.20079803,
+                            7.799399853,
+                            23.49899864,
+                            26.40119934,
+                            72.19799805,
+                            64.7009964,
+                            87.09959412,
+                            1.301999927,
+                            67.49819946,
+                            45.99839783,
+                            68.40119934,
+                            65.39820099,
+                            35.49839783,
+                            29.10179901,
+                            12.9989996,
+                            41.60099792,
+                            23.89799881,
                         ]),
                         Dct32([
-                            47.6767, 79.425, 62.7, 29.1, 96.825, 18.525, 17.625, 15.225, 80.475,
-                            56.025, 96.225, 59.925, 26.7, 96.075, 92.325, 42.075, 35.775, 54.0,
-                            23.175, 54.975, 75.975, 35.775, 58.425, 88.725, 2.4, 78.075, 95.625,
-                            27.525, 6.6, 78.525, 24.075, 69.825,
+                            47.67667389,
+                            79.42500305,
+                            62.70000076,
+                            29.10000038,
+                            96.82500458,
+                            18.52500153,
+                            17.625,
+                            15.22500038,
+                            80.4750061,
+                            56.02500153,
+                            96.2250061,
+                            59.92500305,
+                            26.70000076,
+                            96.07500458,
+                            92.32500458,
+                            42.07500076,
+                            35.77500153,
+                            54.00000381,
+                            23.17500114,
+                            54.97500229,
+                            75.9750061,
+                            35.77500153,
+                            58.42500305,
+                            88.7250061,
+                            2.400000095,
+                            78.07500458,
+                            95.625,
+                            27.52500153,
+                            6.600000381,
+                            78.52500153,
+                            24.07500076,
+                            69.82500458,
                         ]),
                         Dct32([
-                            43.8159, 96.505, 0.889999, 95.11, 49.085, 71.165, 25.115, 33.565,
-                            75.225, 95.015, 82.085, 19.675, 10.53, 44.905, 49.975, 93.315, 83.515,
-                            99.5, 64.615, 53.995, 3.52501, 99.685, 45.265, 82.075, 22.42, 37.895,
-                            59.995, 32.215, 12.62, 4.605, 65.515, 96.425,
+                            43.81587219,
+                            96.50500488,
+                            0.8899993896,
+                            95.11000061,
+                            49.0850029,
+                            71.16500092,
+                            25.11499977,
+                            33.56500244,
+                            75.2250061,
+                            95.01499939,
+                            82.08500671,
+                            19.67500305,
+                            10.53000069,
+                            44.90500259,
+                            49.9750061,
+                            93.31500244,
+                            83.51499939,
+                            99.5,
+                            64.61499786,
+                            53.99500275,
+                            3.525009155,
+                            99.68499756,
+                            45.2650032,
+                            82.07500458,
+                            22.42000008,
+                            37.89500427,
+                            59.99499893,
+                            32.21500015,
+                            12.62000084,
+                            4.605003357,
+                            65.51499939,
+                            96.42500305,
                         ]),
                     ],
                     sigma_dct: Dct32([
-                        72.589, 2.6664, 41.6625, 2.3331, 39.6627, 78.9921, 69.6597, 19.998,
-                        92.3241, 71.6595, 41.9958, 61.9938, 29.997, 49.3284, 70.3263, 45.3288,
-                        62.6604, 47.3286, 46.662, 41.3292, 90.6576, 46.662, 91.3242, 54.9945,
-                        7.9992, 69.6597, 25.3308, 84.6582, 61.6605, 27.6639, 3.6663, 46.9953,
+                        72.58903503,
+                        2.666399956,
+                        41.66249847,
+                        2.333099842,
+                        39.66270065,
+                        78.99209595,
+                        69.65969849,
+                        19.99799919,
+                        92.32409668,
+                        71.65950012,
+                        41.99580002,
+                        61.9937973,
+                        29.99699974,
+                        49.32839966,
+                        70.32630157,
+                        45.3288002,
+                        62.66040039,
+                        47.32859802,
+                        46.66199875,
+                        41.32920074,
+                        90.6576004,
+                        46.66199875,
+                        91.32419586,
+                        54.99449921,
+                        7.999199867,
+                        69.65969849,
+                        25.3307991,
+                        84.6581955,
+                        61.66049957,
+                        27.66390038,
+                        3.66629982,
+                        46.99530029,
                     ]),
                     estimated_area_reached: 25829781306,
                 },
@@ -920,29 +1217,141 @@ mod test_splines {
                     ],
                     color_dct: [
                         Dct32([
-                            16.9014, 64.8018, 4.2, 10.6008, 23.499, 17.0016, 79.3002, 5.6994,
-                            60.4002, 16.5984, 94.899, 63.7014, 87.5994, 10.5, 3.801, 61.1016,
-                            22.8984, 81.9, 80.4006, 40.5006, 45.9018, 25.4016, 39.7992, 30.0006,
-                            50.1984, 90.4008, 27.9006, 93.702, 65.1, 48.1992, 22.302, 43.8984,
+                            16.90140724,
+                            64.80179596,
+                            4.199999809,
+                            10.60079956,
+                            23.49899864,
+                            17.00160027,
+                            79.30019379,
+                            5.699399948,
+                            60.40019608,
+                            16.59840012,
+                            94.89899445,
+                            63.70139694,
+                            87.59939575,
+                            10.5,
+                            3.80099988,
+                            61.10159683,
+                            22.89839935,
+                            81.8999939,
+                            80.40059662,
+                            40.50059891,
+                            45.90179825,
+                            25.40159988,
+                            39.79919815,
+                            30.00059891,
+                            50.19839859,
+                            90.40079498,
+                            27.90059853,
+                            93.70199585,
+                            65.09999847,
+                            48.19919968,
+                            22.30200005,
+                            43.89839935,
                         ]),
                         Dct32([
-                            24.9255, 66.0, 3.525, 90.225, 97.125, 15.825, 35.625, 0.6, 68.025,
-                            39.6, 24.375, 85.875, 57.675, 77.625, 47.475, 67.875, 4.275, 5.4, 91.2,
-                            58.5, 0.075, 52.2, 3.525, 47.775, 63.225, 43.5, 85.8, 35.775, 50.175,
-                            35.925, 19.2, 48.225,
+                            24.92551422,
+                            66.0,
+                            3.525000095,
+                            90.2250061,
+                            97.12500763,
+                            15.82500076,
+                            35.625,
+                            0.6000000238,
+                            68.02500153,
+                            39.60000229,
+                            24.37500191,
+                            85.875,
+                            57.67500305,
+                            77.625,
+                            47.47500229,
+                            67.875,
+                            4.275000095,
+                            5.400000095,
+                            91.20000458,
+                            58.50000381,
+                            0.07500000298,
+                            52.20000076,
+                            3.525000095,
+                            47.77500153,
+                            63.22500229,
+                            43.5,
+                            85.80000305,
+                            35.77500153,
+                            50.17500305,
+                            35.92500305,
+                            19.20000076,
+                            48.22500229,
                         ]),
                         Dct32([
-                            82.7881, 44.93, 76.395, 39.475, 94.115, 14.285, 89.805, 9.98, 10.485,
-                            74.53, 56.295, 65.785, 7.765, 23.305, 52.795, 99.305, 56.775, 46.0,
-                            76.71, 13.49, 66.995, 22.38, 29.915, 43.295, 70.295, 26.0, 74.32,
-                            53.905, 62.005, 19.125, 49.3, 46.685,
+                            82.78805542,
+                            44.93000031,
+                            76.39500427,
+                            39.4750061,
+                            94.11500549,
+                            14.2850008,
+                            89.80500031,
+                            9.980000496,
+                            10.48500061,
+                            74.52999878,
+                            56.29500198,
+                            65.78500366,
+                            7.765003204,
+                            23.30500031,
+                            52.79500198,
+                            99.30500031,
+                            56.77500153,
+                            46.0,
+                            76.71000671,
+                            13.49000549,
+                            66.99499512,
+                            22.38000107,
+                            29.91499901,
+                            43.29500198,
+                            70.2950058,
+                            26.0,
+                            74.31999969,
+                            53.90499878,
+                            62.00500488,
+                            19.12500381,
+                            49.30000305,
+                            46.68500137,
                         ]),
                     ],
                     sigma_dct: Dct32([
-                        83.4303, 1.6665, 24.9975, 18.6648, 46.662, 75.3258, 27.9972, 62.3271,
-                        50.3283, 23.331, 85.6581, 95.9904, 45.6621, 32.9967, 33.33, 52.9947,
-                        26.3307, 58.6608, 19.6647, 69.993, 92.6574, 22.6644, 56.9943, 21.6645,
-                        76.659, 87.6579, 22.9977, 66.3267, 35.6631, 35.6631, 56.661, 67.3266,
+                        83.43025208,
+                        1.666499972,
+                        24.99749947,
+                        18.66479874,
+                        46.66199875,
+                        75.32579803,
+                        27.99720001,
+                        62.32709885,
+                        50.32830048,
+                        23.33099937,
+                        85.65809631,
+                        95.99040222,
+                        45.66209793,
+                        32.99670029,
+                        33.32999802,
+                        52.99469757,
+                        26.33069992,
+                        58.66079712,
+                        19.66469955,
+                        69.99299622,
+                        92.65740204,
+                        22.6644001,
+                        56.99430084,
+                        21.66449928,
+                        76.65899658,
+                        87.65789795,
+                        22.99769974,
+                        66.3266983,
+                        35.6631012,
+                        35.6631012,
+                        56.6609993,
+                        67.32659912,
                     ]),
                     estimated_area_reached: 47263284396,
                 },
@@ -1012,32 +1421,41 @@ mod test_splines {
         let want_result = [
             Point { x: 1.0, y: 2.0 },
             Point {
-                x: 1.1875,
+                x: 1.187500119,
                 y: 2.0625,
             },
             Point { x: 1.375, y: 2.125 },
             Point {
-                x: 1.5625,
+                x: 1.562499881,
                 y: 2.1875,
             },
-            Point { x: 1.75, y: 2.25 },
+            Point {
+                x: 1.750000119,
+                y: 2.25,
+            },
             Point {
                 x: 1.9375,
                 y: 2.3125,
             },
             Point { x: 2.125, y: 2.375 },
             Point {
-                x: 2.3125,
+                x: 2.312500238,
                 y: 2.4375,
             },
-            Point { x: 2.5, y: 2.5 },
+            Point {
+                x: 2.500000238,
+                y: 2.5,
+            },
             Point {
                 x: 2.6875,
                 y: 2.5625,
             },
-            Point { x: 2.875, y: 2.625 },
             Point {
-                x: 3.0625,
+                x: 2.875000477,
+                y: 2.625,
+            },
+            Point {
+                x: 3.062499762,
                 y: 2.6875,
             },
             Point { x: 3.25, y: 2.75 },
@@ -1045,9 +1463,12 @@ mod test_splines {
                 x: 3.4375,
                 y: 2.8125,
             },
-            Point { x: 3.625, y: 2.875 },
             Point {
-                x: 3.8125,
+                x: 3.624999762,
+                y: 2.875,
+            },
+            Point {
+                x: 3.812500238,
                 y: 2.9375,
             },
             Point { x: 4.0, y: 3.0 },
@@ -1056,7 +1477,7 @@ mod test_splines {
         assert_all_almost_eq!(
             got_result.iter().map(|p| p.x).collect::<Vec<f32>>(),
             want_result.iter().map(|p| p.x).collect::<Vec<f32>>(),
-            1e-6,
+            1e-10,
         );
         Ok(())
     }
@@ -1108,30 +1529,59 @@ mod test_splines {
         }
         // Golden numbers come from libjxl.
         let want_out = [
-            16.7353, -18.6042, 7.99317, -7.12508, 4.66999, -4.33676, 3.24505, -3.06945, 2.44468,
-            -2.33509, 1.92438, -1.8484, 1.55314, -1.49642, 1.27014, -1.22549, 1.04345, -1.00677,
-            0.854484, -0.823243, 0.691654, -0.66428, 0.547331, -0.522654, 0.416109, -0.393396,
-            0.294056, -0.272631, 0.178113, -0.157472, 0.0656886, -0.0454512,
+            16.7353153229,
+            -18.6041717529,
+            7.9931735992,
+            -7.1250801086,
+            4.6699867249,
+            -4.3367614746,
+            3.2450540066,
+            -3.0694460869,
+            2.4446771145,
+            -2.3350939751,
+            1.9243829250,
+            -1.8484034538,
+            1.5531382561,
+            -1.4964176416,
+            1.2701368332,
+            -1.2254891396,
+            1.0434474945,
+            -1.0067725182,
+            0.8544843197,
+            -0.8232427835,
+            0.6916543841,
+            -0.6642799377,
+            0.5473306179,
+            -0.5226536393,
+            0.4161090851,
+            -0.3933961987,
+            0.2940555215,
+            -0.2726306915,
+            0.1781132221,
+            -0.1574717760,
+            0.0656886101,
+            -0.0454511642,
         ];
         for (t, want) in want_out.iter().enumerate() {
             let got_out = dct.continuous_idct(t as f32);
-            assert_almost_eq!(got_out, *want, 1e-3);
+            assert_almost_eq!(got_out, *want, 1e-4);
         }
         Ok(())
     }
 
     fn verify_segment_almost_equal(seg1: &SplineSegment, seg2: &SplineSegment) {
-        assert_almost_eq!(seg1.center_x, seg2.center_x, 1e-3);
-        assert_almost_eq!(seg1.center_y, seg2.center_y, 1e-3);
+        assert_almost_eq!(seg1.center_x, seg2.center_x, 1e-2, 1e-4);
+        assert_almost_eq!(seg1.center_y, seg2.center_y, 1e-2, 1e-4);
         for (got, want) in zip(seg1.color.iter(), seg2.color.iter()) {
-            assert_almost_eq!(*got, *want, 1e-2);
+            assert_almost_eq!(*got, *want, 1e-2, 1e-4);
         }
-        assert_almost_eq!(seg1.inv_sigma, seg2.inv_sigma, 1e-3);
-        assert_almost_eq!(seg1.maximum_distance, seg2.maximum_distance, 1e-1);
+        assert_almost_eq!(seg1.inv_sigma, seg2.inv_sigma, 1e-2, 1e-4);
+        assert_almost_eq!(seg1.maximum_distance, seg2.maximum_distance, 1e-2, 1e-4);
         assert_almost_eq!(
             seg1.sigma_over_4_times_intensity,
             seg2.sigma_over_4_times_intensity,
-            1e-3
+            1e-2,
+            1e-4
         );
     }
 
@@ -1213,26 +1663,26 @@ mod test_splines {
             SplineSegment {
                 center_x: 10.0,
                 center_y: 20.0,
-                color: [16.7353, 19.6865, 22.6376],
-                inv_sigma: 0.0497949,
-                maximum_distance: 108.64,
-                sigma_over_4_times_intensity: 5.02059,
+                color: [16.73531532, 19.68646049, 22.63760757],
+                inv_sigma: 0.04979490861,
+                maximum_distance: 108.6400299,
+                sigma_over_4_times_intensity: 5.020593643,
             },
             SplineSegment {
                 center_x: 11.0,
                 center_y: 21.0,
-                color: [-0.819923, -0.79605, -0.772177],
-                inv_sigma: -1.01636,
-                maximum_distance: 4.68042,
-                sigma_over_4_times_intensity: -0.245977,
+                color: [-0.8199231625, -0.7960500717, -0.7721766233],
+                inv_sigma: -1.016355753,
+                maximum_distance: 4.680418015,
+                sigma_over_4_times_intensity: -0.2459768653,
             },
             SplineSegment {
                 center_x: 12.0,
                 center_y: 21.0,
-                color: [-0.776775, -0.754424, -0.732072],
-                inv_sigma: -1.07281,
-                maximum_distance: 4.42351,
-                sigma_over_4_times_intensity: -0.233033,
+                color: [-0.7767754197, -0.7544237971, -0.7320720553],
+                inv_sigma: -1.072811365,
+                maximum_distance: 4.423510075,
+                sigma_over_4_times_intensity: -0.2330325693,
             },
         ];
         assert_eq!(splines.segments.len(), want_segments.len());
@@ -1321,95 +1771,95 @@ mod test_splines {
             starting_points: vec![Point { x: 10.0, y: 20.0 }, Point { x: 5.0, y: 40.0 }],
             ..Default::default()
         };
-        splines.initialize_draw_cache(1 << 15, 1 << 15)?;
+        splines.initialize_draw_cache(1 << 15, 1 << 15, 0.0, 0.0)?;
         assert_eq!(splines.segments.len(), 1940);
         let want_segments_sample = [
             (
                 22,
                 SplineSegment {
-                    center_x: 25.7765,
-                    center_y: 35.333,
-                    color: [-524.997, -509.905, 43.3884],
-                    inv_sigma: -0.00197347,
-                    maximum_distance: 3021.38,
-                    sigma_over_4_times_intensity: -126.68,
+                    center_x: 25.77652359,
+                    center_y: 35.33295059,
+                    color: [-524.996582, -509.9048462, 43.3883667],
+                    inv_sigma: -0.00197347207,
+                    maximum_distance: 3021.377197,
+                    sigma_over_4_times_intensity: -126.6802902,
                 },
             ),
             (
                 474,
                 SplineSegment {
-                    center_x: -16.456,
-                    center_y: 78.8185,
-                    color: [-117.671, -133.552, 343.563],
-                    inv_sigma: -0.00263185,
-                    maximum_distance: 2238.38,
-                    sigma_over_4_times_intensity: -94.9904,
+                    center_x: -16.45600891,
+                    center_y: 78.81845856,
+                    color: [-117.6707535, -133.5515594, 343.5632629],
+                    inv_sigma: -0.002631845651,
+                    maximum_distance: 2238.376221,
+                    sigma_over_4_times_intensity: -94.9903717,
                 },
             ),
             (
                 835,
                 SplineSegment {
-                    center_x: -71.937,
-                    center_y: 230.064,
-                    color: [44.7951, 298.941, -395.357],
-                    inv_sigma: 0.0186913,
-                    maximum_distance: 316.45,
-                    sigma_over_4_times_intensity: 13.3752,
+                    center_x: -71.93701172,
+                    center_y: 230.0635529,
+                    color: [44.79507446, 298.9411621, -395.3574524],
+                    inv_sigma: 0.01869126037,
+                    maximum_distance: 316.4499207,
+                    sigma_over_4_times_intensity: 13.3752346,
                 },
             ),
             (
                 1066,
                 SplineSegment {
-                    center_x: -126.259,
-                    center_y: -22.9786,
-                    color: [-136.42, 194.757, -98.1878],
-                    inv_sigma: 0.00753185,
-                    maximum_distance: 769.254,
-                    sigma_over_4_times_intensity: 33.1924,
+                    center_x: -126.2593002,
+                    center_y: -22.97857094,
+                    color: [-136.4196625, 194.757019, -98.18778992],
+                    inv_sigma: 0.007531851064,
+                    maximum_distance: 769.2540283,
+                    sigma_over_4_times_intensity: 33.19237137,
                 },
             ),
             (
                 1328,
                 SplineSegment {
-                    center_x: 73.7087,
-                    center_y: 56.3141,
-                    color: [-13.4439, 162.614, 93.7842],
-                    inv_sigma: 0.00366418,
-                    maximum_distance: 1572.71,
-                    sigma_over_4_times_intensity: 68.2281,
+                    center_x: 73.70871735,
+                    center_y: 56.31413269,
+                    color: [-13.44394779, 162.6139221, 93.78419495],
+                    inv_sigma: 0.003664178308,
+                    maximum_distance: 1572.710327,
+                    sigma_over_4_times_intensity: 68.2281189,
                 },
             ),
             (
                 1545,
                 SplineSegment {
-                    center_x: 77.4889,
-                    center_y: -92.3388,
-                    color: [-220.681, 66.1304, -32.2618],
-                    inv_sigma: 0.0316616,
-                    maximum_distance: 183.675,
-                    sigma_over_4_times_intensity: 7.89601,
+                    center_x: 77.48892975,
+                    center_y: -92.33877563,
+                    color: [-220.6807556, 66.13040924, -32.26184082],
+                    inv_sigma: 0.03166157752,
+                    maximum_distance: 183.6748352,
+                    sigma_over_4_times_intensity: 7.89600563,
                 },
             ),
             (
                 1774,
                 SplineSegment {
-                    center_x: -16.4359,
-                    center_y: -144.863,
-                    color: [57.3154, -46.3684, 92.1495],
-                    inv_sigma: -0.0152451,
-                    maximum_distance: 371.483,
-                    sigma_over_4_times_intensity: -16.3988,
+                    center_x: -16.43594933,
+                    center_y: -144.8626556,
+                    color: [57.31535339, -46.36843109, 92.14952087],
+                    inv_sigma: -0.01524505392,
+                    maximum_distance: 371.4827271,
+                    sigma_over_4_times_intensity: -16.39876175,
                 },
             ),
             (
                 1929,
                 SplineSegment {
-                    center_x: 61.1934,
-                    center_y: -10.7072,
-                    color: [-69.7881, 300.608, -476.514],
-                    inv_sigma: 0.00322928,
-                    maximum_distance: 1841.38,
-                    sigma_over_4_times_intensity: 77.4166,
+                    center_x: 61.19338608,
+                    center_y: -10.70717049,
+                    color: [-69.78807068, 300.6082458, -476.5135803],
+                    inv_sigma: 0.003229281865,
+                    maximum_distance: 1841.37854,
+                    sigma_over_4_times_intensity: 77.41659546,
                 },
             ),
         ];

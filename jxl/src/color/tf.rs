@@ -357,7 +357,7 @@ pub fn hlg_to_scene_precise(samples: &mut [f32]) {
     for s in samples {
         let a = s.abs() as f64;
         let y = if a <= 0.5 {
-            a * a * 3.0
+            a * a / 3.0
         } else {
             (((a - HLG_C) / HLG_A).exp() + HLG_B) / 12.0
         };
@@ -379,6 +379,32 @@ pub fn scene_to_hlg(samples: &mut [f32]) {
             let log = crate::util::fast_log2f(12.0 * a - HLG_B as f32);
             // log2 x = ln x / ln 2, therefore ln x = (ln 2)(log2 x)
             (HLG_A * std::f64::consts::LN_2) as f32 * log + HLG_C as f32
+        };
+        *s = y.copysign(*s);
+    }
+}
+
+/// Converts HLG signal to scene-referred linear sample.
+///
+/// This version uses `fast_pow2f` to apply logarithmic function.
+// Max error: ~5e-6
+pub fn hlg_to_scene(samples: &mut [f32]) {
+    for s in samples {
+        let a = s.abs();
+        let y = if a <= 0.5 {
+            a * a / 3.0
+        } else {
+            const POW: f32 = (std::f64::consts::LOG2_E / HLG_A) as f32;
+            const ADD: f32 = (HLG_B / 12.0) as f32;
+            // TODO(OneDeuxTriSeiGo): replace raw constant with the below equation
+            // when std::f64::exp() can is available as a const fn.
+            //
+            // Equation: ((-HLG_B / HLG_A).exp() / 12.0)
+            // Constant: 0.003_639_807_079_052_639
+            const MUL: f32 = 0.003_639_807;
+
+            // TODO(OneDeuxTriSeiGo): maybe use mul_add?
+            crate::util::fast_pow2f(a * POW) * MUL + ADD
         };
         *s = y.copysign(*s);
     }
@@ -556,6 +582,19 @@ mod test {
             scene_to_hlg(&mut samples);
             scene_to_hlg_precise(&mut precise);
             assert_all_almost_eq!(&samples, &precise, 5e-7);
+            Ok(())
+        });
+    }
+
+    #[test]
+    fn hlg_to_scene_arb() {
+        arbtest::arbtest(|u| {
+            let mut samples = arb_samples(u)?;
+            let mut precise = samples.clone();
+
+            hlg_to_scene(&mut samples);
+            hlg_to_scene_precise(&mut precise);
+            assert_all_almost_eq!(&samples, &precise, 5e-6);
             Ok(())
         });
     }
