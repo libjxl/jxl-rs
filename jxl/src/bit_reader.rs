@@ -122,7 +122,7 @@ impl<'a> BitReader<'a> {
     /// ```
     #[inline(never)]
     pub fn jump_to_byte_boundary(&mut self) -> Result<(), Error> {
-        let byte_boundary = (self.total_bits_read + 7) / 8 * 8;
+        let byte_boundary = self.total_bits_read.div_ceil(8) * 8;
         if self.read(byte_boundary - self.total_bits_read)? != 0 {
             return Err(Error::NonZeroPadding);
         }
