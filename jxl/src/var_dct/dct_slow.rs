@@ -131,7 +131,7 @@ mod tests {
         // Create an iterator that repeats each element 5 times and flattens the result
         let generated_iter = initial
             .iter()
-            .flat_map(|&element| iter::repeat(element).take(M));
+            .flat_map(|&element| iter::repeat_n(element, M));
 
         let expected: Vec<f64> = generated_iter.collect();
         assert_all_almost_eq!(output, expected, 1e-7);
@@ -194,7 +194,7 @@ mod tests {
         // Create an iterator that repeats each element M times (column-wise)
         let generated_iter = initial
             .iter()
-            .flat_map(|&element| iter::repeat(element).take(M));
+            .flat_map(|&element| iter::repeat_n(element, M));
 
         let expected: Vec<f64> = generated_iter.collect();
         assert_all_almost_eq!(output, expected, 1e-7);
