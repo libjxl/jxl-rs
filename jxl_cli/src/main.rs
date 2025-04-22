@@ -37,6 +37,26 @@ fn parse_jxl_codestream(data: &[u8]) -> Result<(), jxl::error::Error> {
         println!("read frame with {} sections", section_readers.len());
 
         frame.decode_lf_global(&mut section_readers[frame.get_section_idx(Section::LfGlobal)])?;
+
+        for group in 0..frame.header().num_lf_groups() {
+            frame.decode_lf_group(
+                group,
+                &mut section_readers[frame.get_section_idx(Section::Lf { group })],
+            )?;
+        }
+
+        frame.decode_hf_global(&mut section_readers[frame.get_section_idx(Section::HfGlobal)])?;
+
+        for pass in 0..frame.header().passes.num_passes as usize {
+            for group in 0..frame.header().num_groups() {
+                frame.decode_hf_group(
+                    group,
+                    pass,
+                    &mut section_readers[frame.get_section_idx(Section::Hf { group, pass })],
+                )?;
+            }
+        }
+
         if let Some(state) = frame.finalize()? {
             decoder_state = state;
         } else {

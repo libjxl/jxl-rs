@@ -21,7 +21,8 @@ mod predict;
 mod transforms;
 mod tree;
 
-use decode::{decode_modular_section, ModularStreamId};
+use decode::decode_modular_section;
+pub use decode::ModularStreamId;
 pub use predict::Predictor;
 use transforms::{make_grids, TransformStepChunk};
 pub use tree::Tree;
@@ -252,5 +253,38 @@ impl FullModularImage {
             transform_steps,
             section_buffer_indices,
         })
+    }
+
+    #[instrument(level = "debug", skip(self, frame_header, global_tree, br), ret)]
+    pub fn read_stream(
+        &mut self,
+        stream: ModularStreamId,
+        frame_header: &FrameHeader,
+        global_tree: &Option<Tree>,
+        br: &mut BitReader,
+    ) -> Result<()> {
+        let (section_id, grid) = match stream {
+            ModularStreamId::ModularLF(group) => (1, group),
+            ModularStreamId::ModularHF { pass, group } => (2 + pass, group),
+            _ => {
+                unreachable!("read_stream should only be used for streams that are part of the main Modular image");
+            }
+        };
+        let header = GroupHeader::read(br)?;
+        if !header.transforms.is_empty() {
+            todo!("Local transforms are not implemented yet");
+        }
+
+        // TODO(veluca): apply global transforms eagerly.
+
+        decode_modular_section(
+            &mut self.buffer_info,
+            &self.section_buffer_indices[section_id],
+            grid,
+            stream.get_id(frame_header),
+            &header,
+            global_tree,
+            br,
+        )
     }
 }

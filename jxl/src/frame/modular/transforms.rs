@@ -113,7 +113,7 @@ fn default_squeeze(data_channel_info: &[(usize, ChannelInfo)]) -> Vec<SqueezePar
             horizontal: false,
             ..sp
         });
-        h = (h + 1) / 2;
+        h = h.div_ceil(2);
     }
     while w > MAX_FIRST_PREVIEW_SIZE || h > MAX_FIRST_PREVIEW_SIZE {
         if w > MAX_FIRST_PREVIEW_SIZE {
@@ -121,14 +121,14 @@ fn default_squeeze(data_channel_info: &[(usize, ChannelInfo)]) -> Vec<SqueezePar
                 horizontal: true,
                 ..sp
             });
-            w = (w + 1) / 2;
+            w = w.div_ceil(2);
         }
         if h > MAX_FIRST_PREVIEW_SIZE {
             params.push(SqueezeParams {
                 horizontal: false,
                 ..sp
             });
-            h = (h + 1) / 2;
+            h = h.div_ceil(2);
         }
     }
 
