@@ -7,6 +7,7 @@ edition = "2021"
 jxl = { path = "../jxl" }
 clap = { version = "4.5.18", features = ["derive"] }
 tracing-subscriber = { version = "0.3.18", features=["env-filter"], optional = true }
+lcms2 = "6.1.0"
 
 [features]
 tracing-subscriber = ["dep:tracing-subscriber", "jxl/tracing"]
