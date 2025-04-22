@@ -19,6 +19,7 @@ use crate::{
 };
 use modular::{FullModularImage, ModularStreamId, Tree};
 use quantizer::LfQuantFactors;
+use quantizer::QuantizerParams;
 
 pub mod modular;
 mod quantizer;
@@ -37,7 +38,7 @@ pub struct LfGlobalState {
     splines: Option<Splines>,
     noise: Option<Noise>,
     lf_quant: LfQuantFactors,
-    // TODO(veluca93), VarDCT: HF quant matrices
+    quant_params: Option<QuantizerParams>,
     // TODO(veluca93), VarDCT: block context map
     // TODO(veluca93), VarDCT: LF color correlation
     tree: Option<Tree>,
@@ -219,8 +220,15 @@ impl Frame {
         let lf_quant = LfQuantFactors::new(br)?;
         debug!(?lf_quant);
 
+        let quant_params = if self.header.encoding == Encoding::VarDCT {
+            info!("decoding VarDCT quantizer params");
+            Some(QuantizerParams::read(br)?)
+        } else {
+            None
+        };
+        debug!(?quant_params);
+
         if self.header.encoding == Encoding::VarDCT {
-            info!("decoding VarDCT info");
             todo!("VarDCT not implemented");
         }
 
@@ -250,6 +258,7 @@ impl Frame {
             splines,
             noise,
             lf_quant,
+            quant_params,
             tree,
             modular_global,
         });
