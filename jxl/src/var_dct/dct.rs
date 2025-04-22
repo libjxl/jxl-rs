@@ -81,77 +81,77 @@ struct CoeffBundle<const N: usize, const SZ: usize>;
 struct IDCT1DImpl<const SIZE: usize>;
 
 trait IDCT1D {
-    fn do_idct<const COLUMNS: usize>(data: &mut [f32]);
+    fn do_idct<const COLUMNS: usize>(data: &mut [[f32; COLUMNS]]);
 }
 
 impl IDCT1D for IDCT1DImpl<1> {
-    fn do_idct<const COLUMNS: usize>(_data: &mut [f32]) {
+    fn do_idct<const COLUMNS: usize>(_data: &mut [[f32; COLUMNS]]) {
         // Do nothing
     }
 }
 
 impl IDCT1D for IDCT1DImpl<2> {
-    fn do_idct<const COLUMNS: usize>(data: &mut [f32]) {
-        let temp0 = data[0];
-        let temp1 = data[1];
-        data[0] = temp0 + temp1;
-        data[1] = temp0 - temp1;
+    fn do_idct<const COLUMNS: usize>(data: &mut [[f32; COLUMNS]]) {
+        for i in 0..COLUMNS {
+            let temp0 = data[0][i];
+            let temp1 = data[1][i];
+            data[0][i] = temp0 + temp1;
+            data[1][i] = temp0 - temp1;
+        }
     }
 }
 
 macro_rules! define_idct_1d {
     ($n:literal, $nhalf: literal) => {
         impl<const SZ: usize> CoeffBundle<$nhalf, SZ> {
-            fn b_transpose(coeff: &mut [f32]) {
+            fn b_transpose(coeff: &mut [[f32; SZ]]) {
                 for i in (1..$nhalf).rev() {
                     for j in 0..SZ {
-                        coeff[i * SZ + j] += coeff[(i - 1) * SZ + j];
+                        coeff[i][j] += coeff[i - 1][j];
                     }
                 }
                 for j in 0..SZ {
-                    coeff[j] *= SQRT_2 as f32;
+                    coeff[0][j] *= SQRT_2 as f32;
                 }
             }
         }
 
         impl<const SZ: usize> CoeffBundle<$n, SZ> {
-            fn forward_even_odd(a_in: &[f32], a_in_stride: usize, a_out: &mut [f32]) {
+            fn forward_even_odd(a_in: &[[f32; SZ]], a_out: &mut [[f32; SZ]]) {
                 for i in 0..($nhalf) {
                     for j in 0..SZ {
-                        a_out[i * SZ + j] = a_in[2 * i * a_in_stride + j];
+                        a_out[i][j] = a_in[2 * i][j];
                     }
                 }
                 for i in ($nhalf)..$n {
                     for j in 0..SZ {
-                        a_out[i * SZ + j] = a_in[(2 * (i - $nhalf) + 1) * a_in_stride + j];
+                        a_out[i][j] = a_in[2 * (i - $nhalf) + 1][j];
                     }
                 }
             }
-            fn multiply_and_add(coeff: &[f32], out: &mut [f32], out_stride: usize) {
+            fn multiply_and_add(coeff: &[[f32; SZ]], out: &mut [[f32; SZ]]) {
                 for i in 0..($nhalf) {
                     for j in 0..SZ {
                         let mul = WcMultipliers::<$n>::K_MULTIPLIERS[i];
-                        let in1 = coeff[i * SZ + j];
-                        let in2 = coeff[($nhalf + i) * SZ + j];
-                        out[i * out_stride + j] = mul * in2 + in1;
-                        out[($n - i - 1) * out_stride + j] = -mul * in2 + in1;
+                        let in1 = coeff[i][j];
+                        let in2 = coeff[$nhalf + i][j];
+                        out[i][j] = mul * in2 + in1;
+                        out[($n - i - 1)][j] = -mul * in2 + in1;
                     }
                 }
             }
         }
 
         impl IDCT1D for IDCT1DImpl<$n> {
-            fn do_idct<const COLUMNS: usize>(data: &mut [f32]) {
+            fn do_idct<const COLUMNS: usize>(data: &mut [[f32; COLUMNS]]) {
                 const { assert!($nhalf * 2 == $n) }
 
                 // We assume `data` is arranged as a 4xCOLUMNS matrix in a flat array.
 
-                // TODO(firsching): make tmp buffer here of size $n*COLUMNS or something, right now
-                // it will only work for COLUMNS=1
-                let mut tmp = [0.0f32; $n]; // Temporary buffer
+                let mut tmp = [[0.0f32; COLUMNS]; $n]; // Temporary buffer
 
                 // 1. ForwardEvenOdd
-                CoeffBundle::<$n, COLUMNS>::forward_even_odd(data, COLUMNS, &mut tmp);
+                CoeffBundle::<$n, COLUMNS>::forward_even_odd(data, &mut tmp);
                 // 2. First Recursive Call (IDCT1DImpl::do_idct)
                 // first half
                 IDCT1DImpl::<$nhalf>::do_idct::<COLUMNS>(&mut tmp[0..$nhalf]);
@@ -162,7 +162,7 @@ macro_rules! define_idct_1d {
                 // second half
                 IDCT1DImpl::<$nhalf>::do_idct::<COLUMNS>(&mut tmp[$nhalf..$n]);
                 // 5. MultiplyAndAdd.
-                CoeffBundle::<$n, COLUMNS>::multiply_and_add(&tmp, data, COLUMNS);
+                CoeffBundle::<$n, COLUMNS>::multiply_and_add(&tmp, data);
             }
         }
     };
@@ -189,8 +189,10 @@ where
 
 #[cfg(test)]
 mod tests {
+    use std::array;
+
     use crate::{
-        util::test::assert_all_almost_eq,
+        util::test::{assert_all_almost_eq, assert_almost_eq},
         var_dct::{
             dct::{IDCT1DImpl, IDCT1D},
             dct_slow::idct1d,
@@ -206,14 +208,15 @@ mod tests {
         let mut output_slow = [0.0; NM];
 
         idct1d::<N, M, NM>(&input_f64, &mut output_slow);
-        let mut input: [f32; N] = [0.0; N];
+        let mut input = [[0.0; M]; N];
         for i in 0..N {
-            input[i] = input_f64[i] as f32;
+            input[i][0] = input_f64[i] as f32;
         }
         let mut output = input;
         IDCT1DImpl::<N>::do_idct::<M>(&mut output);
-        assert_all_almost_eq!(output, output_slow, 1e-6);
-        assert!(!output.iter().all(|&x| x == 0.0));
+        for i in 0..N {
+            assert_almost_eq!(output[i][0], output_slow[i] as f32, 1e-6);
+        }
     }
 
     #[test]
@@ -225,13 +228,50 @@ mod tests {
         let mut output_slow = [0.0; NM];
 
         idct1d::<N, M, NM>(&input_f64, &mut output_slow);
-        let mut input: [f32; N] = [0.0; N];
+        let mut input = [[0.0; M]; N];
         for i in 0..N {
-            input[i] = input_f64[i] as f32;
+            input[i][0] = input_f64[i] as f32;
         }
         let mut output = input;
         IDCT1DImpl::<N>::do_idct::<M>(&mut output);
-        assert_all_almost_eq!(output, output_slow, 1e-5);
-        assert!(!output.iter().all(|&x| x == 0.0));
+        for i in 0..N {
+            assert_almost_eq!(output[i][0], output_slow[i] as f32, 1e-5);
+        }
+    }
+
+    #[test]
+    fn test_dct1d_8x3_eq_slow() {
+        const N: usize = 8;
+        const M: usize = 3;
+        const NM: usize = N * M; // 24
+
+        // Initialize input_f64 with values 1.0 to 24.0
+        let input_f64: [f64; NM] = array::from_fn(|i| (i + 1) as f64);
+
+        let mut output_slow = [0.0; NM];
+
+        // Call slow implementation (operates on flat data)
+        idct1d::<N, M, NM>(&input_f64, &mut output_slow);
+
+        // Prepare input for the implementation under test (2D array: [N][M])
+        let mut input = [[0.0; M]; N];
+        for j in 0..M {
+            for i in 0..N {
+                input[i][j] = input_f64[i* M + j] as f32;
+            }
+        }
+        println!("input_f64: {:?}, input:{:?}", input_f64, input);
+        let mut output = input;
+
+        // Call the implementation under test (operates on 2D data)
+        IDCT1DImpl::<N>::do_idct::<M>(&mut output);
+
+        println!("output: {:?}, output_slow:{:?}", output, output_slow);
+        // Compare results element-wise
+        for j in 0..M {
+            for i in 0..N {
+                assert_almost_eq!(output[i][j], output_slow[i * M + j] as f32, 1e-5);
+            }
+        }
     }
 }
