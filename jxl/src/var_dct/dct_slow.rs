@@ -27,9 +27,10 @@ pub fn dct1d<const N: usize, const M: usize, const NM: usize>(
     let scale: f64 = (2.0f64 / N as f64).sqrt();
 
     let mut matrix = [[0.0f64; N]; N];
-    for u in 0..N {
-        for y in 0..N {
-            matrix[u][y] = alpha(u) * ((y as f64 + 0.5) * u as f64 * PI / N as f64).cos() * scale;
+    for (u, row) in matrix.iter_mut().enumerate() {
+        let alpha_u = alpha(u);
+        for (y, element) in row.iter_mut().enumerate() {
+            *element = alpha_u * ((y as f64 + 0.5) * u as f64 * PI / N as f64).cos() * scale;
         }
     }
 
@@ -52,10 +53,11 @@ pub fn idct1d<const N: usize, const M: usize, const NM: usize>(
     let scale = SQRT_2;
 
     let mut matrix = [[0.0f64; N]; N];
-    for u in 0..N {
-        for y in 0..N {
+    for (u, row) in matrix.iter_mut().enumerate() {
+        let alpha_u = alpha(u);
+        for (y, element) in row.iter_mut().enumerate() {
             // Transpose of DCT matrix.
-            matrix[u][y] = alpha(u) * ((y as f64 + 0.5) * u as f64 * PI / N as f64).cos() * scale;
+            *element = alpha_u * ((y as f64 + 0.5) * u as f64 * PI / N as f64).cos() * scale;
         }
     }
 
