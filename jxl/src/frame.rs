@@ -17,7 +17,7 @@ use crate::{
     image::Image,
     util::tracing_wrappers::*,
 };
-use modular::{FullModularImage, Tree};
+use modular::{FullModularImage, ModularStreamId, Tree};
 use quantizer::LfQuantFactors;
 
 pub mod modular;
@@ -26,9 +26,9 @@ mod quantizer;
 #[derive(Debug, PartialEq, Eq)]
 pub enum Section {
     LfGlobal,
-    Lf(usize),
+    Lf { group: usize },
     HfGlobal,
-    Hf(usize, usize), // group, pass
+    Hf { group: usize, pass: usize },
 }
 
 #[allow(dead_code)]
@@ -176,9 +176,9 @@ impl Frame {
         } else {
             match section {
                 Section::LfGlobal => 0,
-                Section::Lf(a) => 1 + a,
+                Section::Lf { group } => 1 + group,
                 Section::HfGlobal => self.header.num_lf_groups() + 1,
-                Section::Hf(group, pass) => {
+                Section::Hf { group, pass } => {
                     2 + self.header.num_lf_groups() + self.header.num_groups() * pass + group
                 }
             }
@@ -255,6 +255,45 @@ impl Frame {
         });
 
         Ok(())
+    }
+
+    #[instrument(skip(self, br))]
+    pub fn decode_lf_group(&mut self, group: usize, br: &mut BitReader) -> Result<()> {
+        if self.header.encoding == Encoding::VarDCT {
+            info!("decoding VarDCT");
+            todo!("VarDCT not implemented");
+        }
+        let lf_global = self.lf_global.as_mut().unwrap();
+        lf_global.modular_global.read_stream(
+            ModularStreamId::ModularLF(group),
+            &self.header,
+            &lf_global.tree,
+            br,
+        )
+    }
+
+    #[instrument(skip_all)]
+    pub fn decode_hf_global(&mut self, _br: &mut BitReader) -> Result<()> {
+        if self.header.encoding == Encoding::Modular {
+            return Ok(());
+        }
+        info!("decoding VarDCT");
+        todo!("VarDCT not implemented");
+    }
+
+    #[instrument(skip(self, br))]
+    pub fn decode_hf_group(&mut self, group: usize, pass: usize, br: &mut BitReader) -> Result<()> {
+        if self.header.encoding == Encoding::VarDCT {
+            info!("decoding VarDCT");
+            todo!("VarDCT not implemented");
+        }
+        let lf_global = self.lf_global.as_mut().unwrap();
+        lf_global.modular_global.read_stream(
+            ModularStreamId::ModularHF { group, pass },
+            &self.header,
+            &lf_global.tree,
+            br,
+        )
     }
 
     pub fn finalize(mut self) -> Result<Option<DecoderState>> {
