@@ -15,13 +15,14 @@ use crate::headers::frame_header::FrameHeader;
 use crate::util::tracing_wrappers::*;
 use crate::{
     error::Result,
-    headers::{
-        self,
-        modular::{SqueezeParams, TransformId},
-    },
+    headers::{self, modular::TransformId},
 };
 
 use super::{ChannelInfo, ModularBufferInfo, ModularGridKind, Predictor};
+
+mod palette;
+mod rct;
+mod squeeze;
 
 #[derive(Debug, FromPrimitive, PartialEq, Clone, Copy)]
 pub enum RctPermutation {
@@ -44,7 +45,7 @@ pub enum RctOp {
     YCoCg = 6,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy)]
 pub enum TransformStep {
     Rct {
         buf_in: [usize; 3],
@@ -71,70 +72,6 @@ pub enum TransformStep {
     },
 }
 
-fn default_squeeze(data_channel_info: &[(usize, ChannelInfo)]) -> Vec<SqueezeParams> {
-    let mut w = data_channel_info[0].1.size.0;
-    let mut h = data_channel_info[0].1.size.1;
-    let nc = data_channel_info.len();
-
-    let mut params = vec![];
-
-    let num_meta_channels = data_channel_info
-        .iter()
-        .take_while(|x| x.1.is_meta())
-        .count();
-
-    if nc > 2 && data_channel_info[1].1.size == (w, h) {
-        // 420 previews
-        let sp = SqueezeParams {
-            horizontal: true,
-            in_place: false,
-            begin_channel: num_meta_channels as u32 + 1,
-            num_channels: 2,
-        };
-        params.push(sp);
-        params.push(SqueezeParams {
-            horizontal: false,
-            ..sp
-        });
-    }
-
-    const MAX_FIRST_PREVIEW_SIZE: usize = 8;
-
-    let sp = SqueezeParams {
-        begin_channel: num_meta_channels as u32,
-        num_channels: nc as u32,
-        in_place: true,
-        horizontal: false,
-    };
-
-    // vertical first on tall images
-    if w <= h && h > MAX_FIRST_PREVIEW_SIZE {
-        params.push(SqueezeParams {
-            horizontal: false,
-            ..sp
-        });
-        h = h.div_ceil(2);
-    }
-    while w > MAX_FIRST_PREVIEW_SIZE || h > MAX_FIRST_PREVIEW_SIZE {
-        if w > MAX_FIRST_PREVIEW_SIZE {
-            params.push(SqueezeParams {
-                horizontal: true,
-                ..sp
-            });
-            w = w.div_ceil(2);
-        }
-        if h > MAX_FIRST_PREVIEW_SIZE {
-            params.push(SqueezeParams {
-                horizontal: false,
-                ..sp
-            });
-            h = h.div_ceil(2);
-        }
-    }
-
-    params
-}
-
 #[instrument(level = "trace", err)]
 fn check_equal_channels(
     channels: &[(usize, ChannelInfo)],
@@ -152,26 +89,6 @@ fn check_equal_channels(
         if channels[first_chan].1 != channels[first_chan + inc].1 {
             return Err(Error::MixingDifferentChannels);
         }
-    }
-    Ok(())
-}
-
-#[instrument(level = "trace", err)]
-fn check_squeeze_params(channels: &[(usize, ChannelInfo)], params: &SqueezeParams) -> Result<()> {
-    let end_channel = (params.begin_channel + params.num_channels) as usize;
-    if end_channel > channels.len() {
-        return Err(Error::InvalidChannelRange(
-            params.begin_channel as usize,
-            params.num_channels as usize,
-            channels.len(),
-        ));
-    }
-    if channels[params.begin_channel as usize].1.is_meta() != channels[end_channel - 1].1.is_meta()
-    {
-        return Err(Error::MixingDifferentChannels);
-    }
-    if channels[params.begin_channel as usize].1.is_meta() && !params.in_place {
-        return Err(Error::MetaSqueezeRequiresInPlace);
     }
     Ok(())
 }
@@ -199,6 +116,7 @@ pub fn meta_apply_transforms(
             ),
             // To be filled by make_grids.
             grid_kind: ModularGridKind::None,
+            grid_shape: (0, 0),
             buffer_grid: vec![],
         });
     }
@@ -212,6 +130,7 @@ pub fn meta_apply_transforms(
             description,
             // To be filled by make_grids.
             grid_kind: ModularGridKind::None,
+            grid_shape: (0, 0),
             buffer_grid: vec![],
         });
         buffer_info.len() - 1
@@ -254,12 +173,12 @@ pub fn meta_apply_transforms(
             }
             TransformId::Squeeze => {
                 let steps = if transform.squeezes.is_empty() {
-                    default_squeeze(&channels)
+                    squeeze::default_squeeze(&channels)
                 } else {
                     transform.squeezes.clone()
                 };
                 for step in steps {
-                    check_squeeze_params(&channels, &step)?;
+                    squeeze::check_squeeze_params(&channels, &step)?;
                     let in_place = step.in_place;
                     let horizontal = step.horizontal;
                     let begin_channel = step.begin_channel as usize;
@@ -398,6 +317,32 @@ pub struct TransformStepChunk {
     incomplete_deps: usize,
 }
 
+impl TransformStepChunk {
+    // Mark that one dependency of this transform is ready, and potentially runs the transform,
+    // returning the new buffers that are now ready.
+    pub fn dep_ready(
+        &mut self,
+        buffer_info: &mut [ModularBufferInfo],
+    ) -> Result<Vec<(usize, usize)>> {
+        self.incomplete_deps = self.incomplete_deps.checked_sub(1).unwrap();
+        if self.incomplete_deps > 0 {
+            Ok(vec![])
+        } else {
+            match self.step {
+                TransformStep::Rct { .. } => {
+                    rct::do_rct_step(self.step, buffer_info, self.grid_pos)
+                }
+                TransformStep::Palette { .. } => {
+                    palette::do_palette_step(self.step, buffer_info, self.grid_pos)
+                }
+                TransformStep::HSqueeze { .. } | TransformStep::VSqueeze { .. } => {
+                    squeeze::do_squeeze_step(self.step, buffer_info, self.grid_pos)
+                }
+            }
+        }
+    }
+}
+
 // #[instrument(level = "trace", skip_all, ret)]
 pub fn make_grids(
     frame_header: &FrameHeader,
@@ -447,22 +392,21 @@ pub fn make_grids(
         }
     }
 
+    // Set grid shapes.
+    for buf in buffer_info.iter_mut() {
+        buf.grid_shape = buf.grid_kind.grid_shape(frame_header);
+    }
+
     trace!(?buffer_info, "post propagate grid kind");
 
-    let get_grid_shape = |grid_kind| match grid_kind {
-        ModularGridKind::None => (1, 1),
-        ModularGridKind::Lf => frame_header.size_lf_groups(),
-        ModularGridKind::Hf => frame_header.size_groups(),
-    };
-
-    let get_grid_indices = |grid_kind| {
-        let shape = get_grid_shape(grid_kind);
+    let get_grid_indices = |shape: (usize, usize)| {
         (0..shape.1).flat_map(move |y| (0..shape.0).map(move |x| (x as isize, y as isize)))
     };
 
     // Create grids.
     for g in buffer_info.iter_mut() {
-        g.buffer_grid = get_grid_indices(g.grid_kind)
+        let is_output = g.is_output;
+        g.buffer_grid = get_grid_indices(g.grid_shape)
             .map(|(x, y)| {
                 let chan_size = g.info.size;
                 let size = match g.grid_kind {
@@ -483,7 +427,7 @@ pub fn make_grids(
                 ModularBuffer {
                     data: None,
                     auxiliary_data: None,
-                    remaining_uses: 0,
+                    remaining_uses: if is_output { 1 } else { 0 },
                     used_by_transforms: vec![],
                     size,
                 }
@@ -521,7 +465,9 @@ pub fn make_grids(
             }
             _ => unreachable!("invalid combination of output grid kind and buffer grid kind"),
         };
-        let input_grid_size = get_grid_shape(buffer_info[input_grid_idx].grid_kind);
+        let input_grid_size = buffer_info[input_grid_idx]
+            .grid_kind
+            .grid_shape(frame_header);
         let input_grid_size = (input_grid_size.0 as isize, input_grid_size.1 as isize);
         if input_grid_pos.0 < 0
             || input_grid_pos.0 >= input_grid_size.0
@@ -549,9 +495,9 @@ pub fn make_grids(
             } => {
                 // Easy case: we just depend on the 3 input buffers in the same location.
                 let out_kind = buffer_info[buf_out[0]].grid_kind;
-                for (x, y) in get_grid_indices(out_kind) {
-                    let ts =
-                        add_transform_step(transform.clone(), (x, y), &mut grid_transform_steps);
+                let out_shape = buffer_info[buf_out[0]].grid_shape;
+                for (x, y) in get_grid_indices(out_shape) {
+                    let ts = add_transform_step(transform, (x, y), &mut grid_transform_steps);
                     for bin in buf_in {
                         add_grid_use(
                             ts,
@@ -575,14 +521,11 @@ pub fn make_grids(
                 // only make progress one full image row at a time (since we need decoded values
                 // from the previous row or two rows).
                 let out_kind = buffer_info[buf_out].grid_kind;
+                let out_shape = buffer_info[buf_out].grid_shape;
                 let mut ts = 0;
-                for (x, y) in get_grid_indices(out_kind) {
+                for (x, y) in get_grid_indices(out_shape) {
                     if x == 0 {
-                        ts = add_transform_step(
-                            transform.clone(),
-                            (x, y),
-                            &mut grid_transform_steps,
-                        );
+                        ts = add_transform_step(transform, (x, y), &mut grid_transform_steps);
                         add_grid_use(
                             ts,
                             buf_pal,
@@ -621,9 +564,9 @@ pub fn make_grids(
                 // location. We may also depend on other grid positions in the output buffer,
                 // according to the used predictor.
                 let out_kind = buffer_info[buf_out].grid_kind;
-                for (x, y) in get_grid_indices(out_kind) {
-                    let ts =
-                        add_transform_step(transform.clone(), (x, y), &mut grid_transform_steps);
+                let out_shape = buffer_info[buf_out].grid_shape;
+                for (x, y) in get_grid_indices(out_shape) {
+                    let ts = add_transform_step(transform, (x, y), &mut grid_transform_steps);
                     add_grid_use(
                         ts,
                         buf_pal,
@@ -669,9 +612,9 @@ pub fn make_grids(
             }
             TransformStep::HSqueeze { buf_in, buf_out } => {
                 let out_kind = buffer_info[buf_out].grid_kind;
-                for (x, y) in get_grid_indices(out_kind) {
-                    let ts =
-                        add_transform_step(transform.clone(), (x, y), &mut grid_transform_steps);
+                let out_shape = buffer_info[buf_out].grid_shape;
+                for (x, y) in get_grid_indices(out_shape) {
+                    let ts = add_transform_step(transform, (x, y), &mut grid_transform_steps);
                     // Average and residuals from the same position
                     for bin in buf_in {
                         add_grid_use(
@@ -705,9 +648,9 @@ pub fn make_grids(
             }
             TransformStep::VSqueeze { buf_in, buf_out } => {
                 let out_kind = buffer_info[buf_out].grid_kind;
-                for (x, y) in get_grid_indices(out_kind) {
-                    let ts =
-                        add_transform_step(transform.clone(), (x, y), &mut grid_transform_steps);
+                let out_shape = buffer_info[buf_out].grid_shape;
+                for (x, y) in get_grid_indices(out_shape) {
+                    let ts = add_transform_step(transform, (x, y), &mut grid_transform_steps);
                     // Average and residuals from the same position
                     for bin in buf_in {
                         add_grid_use(
