@@ -108,28 +108,64 @@ define_idct_1d!(64, 32);
 define_idct_1d!(128, 64);
 define_idct_1d!(256, 128);
 
-fn transpose<const N: usize, const M: usize>(data: &[[f32; M]]) -> Vec<[f32; N]> {
-    let mut transposed: Vec<[f32; N]> = vec![[0.0f32; N]; M];
-    for (i, data_row) in data.iter().enumerate() {
-        for (j, &input_element) in data_row.iter().enumerate() {
-            transposed[j][i] = input_element;
+fn transpose<const ROWS: usize, const COLS: usize>(input: &[f32], output: &mut [f32]) {
+    assert_eq!(input.len(), ROWS * COLS);
+    assert_eq!(output.len(), ROWS * COLS);
+
+    for r in 0..ROWS {
+        for c in 0..COLS {
+            let input_idx = r * COLS + c;
+            let output_idx = c * ROWS + r;
+            output[output_idx] = input[input_idx];
         }
     }
-    transposed
 }
 
-fn idct2d<const ROWS: usize, const COLS: usize>(data: &mut [[f32; COLS]])
+fn idct2d<const ROWS: usize, const COLS: usize>(data: &mut [f32])
 where
     IDCT1DImpl<ROWS>: IDCT1D,
     IDCT1DImpl<COLS>: IDCT1D,
 {
-    IDCT1DImpl::<ROWS>::do_idct::<COLS>(data);
-    let transposed_data = transpose::<ROWS, COLS>(data);
-    let mut data_copy = [[0.0f32; ROWS]; COLS];
-    data_copy.copy_from_slice(&transposed_data);
-    IDCT1DImpl::<COLS>::do_idct::<ROWS>(&mut data_copy);
-    let transposed_data = transpose(&data_copy);
-    data.copy_from_slice(&transposed_data);
+    assert_eq!(data.len(), ROWS * COLS, "Data length mismatch");
+
+    // Copy data from flat slice `data` into a temporary Vec of arrays (rows).
+    let mut temp_rows: Vec<[f32; COLS]> = vec![[0.0f32; COLS]; ROWS];
+    for r in 0..ROWS {
+        let start = r * COLS;
+        let end = start + COLS;
+        temp_rows[r].copy_from_slice(&data[start..end]);
+    }
+
+    IDCT1DImpl::<ROWS>::do_idct::<COLS>(&mut temp_rows);
+
+    for r in 0..ROWS {
+        let start = r * COLS;
+        let end = start + COLS;
+        data[start..end].copy_from_slice(&temp_rows[r]);
+    }
+
+    // Create a temporary flat buffer for the transposed data.
+    let mut transposed_data = vec![0.0f32; ROWS * COLS];
+    transpose::<ROWS, COLS>(data, &mut transposed_data);
+
+    // Copy data from flat `transposed_data` into a temporary Vec of arrays.
+    let mut temp_cols: Vec<[f32; ROWS]> = vec![[0.0f32; ROWS]; COLS];
+    for c in 0..COLS {
+        let start = c * ROWS;
+        let end = start + ROWS;
+        temp_cols[c].copy_from_slice(&transposed_data[start..end]);
+    }
+
+    // Perform IDCT on the temporary structure (treating original columns as rows).
+    IDCT1DImpl::<COLS>::do_idct::<ROWS>(&mut temp_cols);
+
+    // Copy results back from the temporary structure into the flat `transposed_data`.
+    for c in 0..COLS {
+        let start = c * ROWS;
+        let end = start + ROWS;
+        transposed_data[start..end].copy_from_slice(&temp_cols[c]);
+    }
+    transpose::<COLS, ROWS>(&transposed_data, data);
 }
 
 #[cfg(test)]
@@ -224,14 +260,14 @@ mod tests {
     }
 
     // TODO(firsching): possibly change this test to test against slow
-    // dct method (after adding 2d-variant there).
+    // dct method (after adding 2d-variant there)
     macro_rules! test_idct2d_exists_n_m {
         ($test_name:ident, $n_val:expr, $m_val:expr) => {
             #[test]
             fn $test_name() {
                 const N: usize = $n_val;
                 const M: usize = $m_val;
-                let mut data = [[0.0f32; M]; N];
+                let mut data = [0.0f32; M * N];
                 idct2d::<N, M>(&mut data);
             }
         };
@@ -317,5 +353,4 @@ mod tests {
     test_idct2d_exists_n_m!(test_idct2d_exists_256_64, 256, 64);
     test_idct2d_exists_n_m!(test_idct2d_exists_256_128, 256, 128);
     test_idct2d_exists_n_m!(test_idct2d_exists_256_256, 256, 256);
-
 }
