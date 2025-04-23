@@ -111,19 +111,28 @@ fn parse_jxl_codestream(data: &[u8], verbose: bool) -> Result<(), jxl::error::Er
     }
     println!();
     if file_header.image_metadata.color_encoding.want_icc {
-        println!("with ICC profile")
+        let icc = read_icc(&mut br)?;
+        match lcms2::Profile::new_icc(icc.as_slice()) {
+            Err(_) => println!("with unparseable ICC profile"),
+            Ok(profile) => {
+                match profile.info(lcms2::InfoType::Description, lcms2::Locale::none()) {
+                    None => println!("with undescribed {}-byte ICC profile", icc.len()),
+                    Some(description) => {
+                        println!(
+                            "with {}-byte ICC profile (description: {})",
+                            icc.len(),
+                            description
+                        )
+                    }
+                }
+            }
+        }
     } else {
         print_color_encoding(&file_header.image_metadata.color_encoding);
     }
     if verbose {
         // Verbose output: Use Debug trait to print the FileHeaders
         println!("{:#?}", file_header);
-        // TODO(firsching): consider printing more of less information for ICC
-        // for verbose/non-verbose cases
-        if file_header.image_metadata.color_encoding.want_icc {
-            let icc_data = read_icc(&mut br)?;
-            println!("ICC profile length: {} bytes", icc_data.len());
-        }
     }
     // TODO(firsching): handle frames which are blended together, also within animations.
     if let Some(ref animation) = file_header.image_metadata.animation {
