@@ -15,6 +15,7 @@ use crate::{
     bit_reader::BitReader,
     entropy_coding::decode::{unpack_signed, Histograms, Reader},
     error::{Error, Result},
+    frame::color_correlation_map::ColorCorrelationParams,
     util::{fast_cos, fast_erff, tracing_wrappers::*, CeilLog2, NewWithCapacity},
 };
 const MAX_NUM_CONTROL_POINTS: u32 = 1 << 20;
@@ -624,13 +625,11 @@ impl Splines {
         !self.splines.is_empty()
     }
 
-    // TODO(zond): Add color correlation as parameter.
     pub fn initialize_draw_cache(
         &mut self,
         image_xsize: u64,
         image_ysize: u64,
-        y_to_x: f32,
-        y_to_b: f32,
+        color_correlation_params: &ColorCorrelationParams,
     ) -> Result<()> {
         let mut total_estimated_area_reached = 0u64;
         let mut splines = Vec::new();
@@ -639,8 +638,8 @@ impl Splines {
             let spline = qspline.dequantize(
                 &self.starting_points[index],
                 self.quantization_adjustment,
-                y_to_x,
-                y_to_b,
+                color_correlation_params.y_to_x(),
+                color_correlation_params.y_to_b(),
                 image_xsize * image_ysize,
             )?;
             total_estimated_area_reached += spline.estimated_area_reached;
@@ -789,6 +788,7 @@ mod test_splines {
     use crate::{
         error::{Error, Result},
         features::spline::SplineSegment,
+        frame::color_correlation_map::ColorCorrelationParams,
         util::test::{assert_all_almost_eq, assert_almost_eq},
     };
 
@@ -1771,7 +1771,17 @@ mod test_splines {
             starting_points: vec![Point { x: 10.0, y: 20.0 }, Point { x: 5.0, y: 40.0 }],
             ..Default::default()
         };
-        splines.initialize_draw_cache(1 << 15, 1 << 15, 0.0, 0.0)?;
+        splines.initialize_draw_cache(
+            1 << 15,
+            1 << 15,
+            &ColorCorrelationParams {
+                color_factor: 1,
+                base_correlation_x: 0.0,
+                base_correlation_b: 0.0,
+                ytox_lf: 0,
+                ytob_lf: 0,
+            },
+        )?;
         assert_eq!(splines.segments.len(), 1940);
         let want_segments_sample = [
             (

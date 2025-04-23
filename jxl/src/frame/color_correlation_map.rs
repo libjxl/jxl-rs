@@ -7,6 +7,7 @@ use crate::{
     bit_reader::BitReader,
     error::{Error, Result},
 };
+use std::default::Default;
 
 pub const DEFAULT_COLOR_FACTOR: u32 = 84;
 
@@ -20,16 +21,22 @@ pub struct ColorCorrelationParams {
     pub ytob_lf: i32,
 }
 
+impl Default for ColorCorrelationParams {
+    fn default() -> Self {
+        Self {
+            color_factor: DEFAULT_COLOR_FACTOR,
+            base_correlation_x: 0.0,
+            base_correlation_b: 1.0,
+            ytox_lf: 0,
+            ytob_lf: 0,
+        }
+    }
+}
+
 impl ColorCorrelationParams {
     pub fn read(br: &mut BitReader) -> Result<ColorCorrelationParams, Error> {
         if br.read(1)? == 1 {
-            Ok(ColorCorrelationParams {
-                color_factor: DEFAULT_COLOR_FACTOR,
-                base_correlation_x: 0.0,
-                base_correlation_b: 1.0,
-                ytox_lf: 0,
-                ytob_lf: 0,
-            })
+            Ok(Self::default())
         } else {
             let color_factor = match br.read(2)? {
                 0 => DEFAULT_COLOR_FACTOR,
@@ -58,5 +65,13 @@ impl ColorCorrelationParams {
                 ytob_lf,
             })
         }
+    }
+
+    pub fn y_to_x(&self) -> f32 {
+        self.base_correlation_x + (self.ytox_lf as f32) / (self.color_factor as f32)
+    }
+
+    pub fn y_to_b(&self) -> f32 {
+        self.base_correlation_b + (self.ytob_lf as f32) / (self.color_factor as f32)
     }
 }
