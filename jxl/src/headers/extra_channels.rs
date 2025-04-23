@@ -60,6 +60,29 @@ pub struct ExtraChannelInfo {
 }
 
 impl ExtraChannelInfo {
+    #[cfg(test)]
+    #[allow(clippy::too_many_arguments)]
+    pub fn new(
+        all_default: bool,
+        ec_type: ExtraChannel,
+        bit_depth: BitDepth,
+        dim_shift: u32,
+        name: String,
+        alpha_associated: bool,
+        spot_color: Option<[f32; 4]>,
+        cfa_channel: Option<u32>,
+    ) -> ExtraChannelInfo {
+        ExtraChannelInfo {
+            all_default,
+            ec_type,
+            bit_depth,
+            dim_shift,
+            name,
+            alpha_associated,
+            spot_color,
+            cfa_channel,
+        }
+    }
     pub fn dim_shift(&self) -> u32 {
         self.dim_shift
     }
