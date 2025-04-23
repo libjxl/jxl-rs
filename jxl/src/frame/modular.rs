@@ -72,6 +72,16 @@ enum ModularGridKind {
     Hf,
 }
 
+impl ModularGridKind {
+    fn grid_shape(&self, frame_header: &FrameHeader) -> (usize, usize) {
+        match self {
+            ModularGridKind::None => (1, 1),
+            ModularGridKind::Lf => frame_header.size_lf_groups(),
+            ModularGridKind::Hf => frame_header.size_groups(),
+        }
+    }
+}
+
 #[allow(dead_code)]
 #[derive(Debug)]
 struct ModularBuffer {
@@ -79,9 +89,19 @@ struct ModularBuffer {
     // Holds additional information such as the weighted predictor's error channel's last row for
     // the transform chunk that produced this buffer.
     auxiliary_data: Option<Image<i32>>,
+    // Number of times this buffer will be used, *including* when it is used for output.
     remaining_uses: usize,
     used_by_transforms: Vec<usize>,
     size: (usize, usize),
+}
+
+impl ModularBuffer {
+    fn mark_used(&mut self) {
+        self.remaining_uses = self.remaining_uses.checked_sub(1).unwrap();
+        if self.remaining_uses == 0 {
+            self.data = None;
+        }
+    }
 }
 
 #[allow(dead_code)]
@@ -94,6 +114,7 @@ struct ModularBufferInfo {
     is_coded: bool,
     description: String,
     grid_kind: ModularGridKind,
+    grid_shape: (usize, usize),
     buffer_grid: Vec<ModularBuffer>,
 }
 
@@ -255,12 +276,17 @@ impl FullModularImage {
         })
     }
 
-    #[instrument(level = "debug", skip(self, frame_header, global_tree, br), ret)]
+    #[instrument(
+        level = "debug",
+        skip(self, frame_header, global_tree, on_output, br),
+        ret
+    )]
     pub fn read_stream(
         &mut self,
         stream: ModularStreamId,
         frame_header: &FrameHeader,
         global_tree: &Option<Tree>,
+        on_output: impl Fn(usize, (usize, usize), &Image<i32>) -> Result<()>,
         br: &mut BitReader,
     ) -> Result<()> {
         let (section_id, grid) = match stream {
@@ -275,8 +301,6 @@ impl FullModularImage {
             todo!("Local transforms are not implemented yet");
         }
 
-        // TODO(veluca): apply global transforms eagerly.
-
         decode_modular_section(
             &mut self.buffer_info,
             &self.section_buffer_indices[section_id],
@@ -285,6 +309,42 @@ impl FullModularImage {
             &header,
             global_tree,
             br,
-        )
+        )?;
+
+        let maybe_output = |bi: &mut ModularBufferInfo, grid: usize| -> Result<()> {
+            if bi.is_output {
+                let (gw, _) = bi.grid_shape;
+                let g = (grid % gw, grid / gw);
+                on_output(
+                    bi.channel_id,
+                    g,
+                    bi.buffer_grid[grid].data.as_ref().unwrap(),
+                )?;
+                bi.buffer_grid[grid].mark_used();
+            }
+            Ok(())
+        };
+
+        let mut new_ready_transform_chunks = vec![];
+        for buf in self.section_buffer_indices[section_id].iter() {
+            maybe_output(&mut self.buffer_info[*buf], grid)?;
+            new_ready_transform_chunks.extend(
+                self.buffer_info[*buf].buffer_grid[grid]
+                    .used_by_transforms
+                    .iter()
+                    .copied(),
+            );
+        }
+
+        while let Some(tfm) = new_ready_transform_chunks.pop() {
+            for (new_buf, new_grid) in self.transform_steps[tfm].dep_ready(&mut self.buffer_info)? {
+                maybe_output(&mut self.buffer_info[new_buf], new_grid)?;
+                new_ready_transform_chunks.extend_from_slice(
+                    &self.buffer_info[new_buf].buffer_grid[new_grid].used_by_transforms,
+                );
+            }
+        }
+
+        Ok(())
     }
 }

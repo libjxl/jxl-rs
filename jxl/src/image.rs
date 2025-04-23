@@ -502,6 +502,20 @@ pub mod debug_tools {
         }
     }
 
+    impl ImageRect<'_, i32> {
+        pub fn to_pgm_as_8bit(&self) -> Vec<u8> {
+            use std::io::Write;
+            let mut ret = vec![];
+            write!(&mut ret, "P5\n{} {}\n255\n", self.size.0, self.size.1).unwrap();
+            ret.extend(
+                (0..self.size.1)
+                    .flat_map(|x| self.row(x).iter())
+                    .map(|x| (*x).clamp(0, 255) as u8),
+            );
+            ret
+        }
+    }
+
     #[cfg(test)]
     mod test {
         use super::super::Image;
