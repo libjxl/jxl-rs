@@ -108,20 +108,28 @@ define_idct_1d!(64, 32);
 define_idct_1d!(128, 64);
 define_idct_1d!(256, 128);
 
-fn transpose<const N: usize, const M: usize>(_data: &mut [f32]) {
-    todo!();
+fn transpose<const N: usize, const M: usize>(data: &[[f32; M]]) -> Vec<[f32; N]> {
+    let mut transposed: Vec<[f32; N]> = vec![[0.0f32; N]; M];
+    for (i, data_row) in data.iter().enumerate() {
+        for (j, &input_element) in data_row.iter().enumerate() {
+            transposed[j][i] = input_element;
+        }
+    }
+    transposed
 }
 
-fn idct2d<const ROWS: usize, const COLS: usize>(_data: &mut [f32])
+fn idct2d<const ROWS: usize, const COLS: usize>(data: &mut [[f32; COLS]])
 where
     IDCT1DImpl<ROWS>: IDCT1D,
     IDCT1DImpl<COLS>: IDCT1D,
 {
-    todo!();
-    // TODO(firsching): Add something like
-    // IDCT1DImpl::<ROWS>::do_idct::<COLS>(data);
-    // transpose::<ROWS, COLS>(data);
-    // IDCT1DImpl::<COLS>::do_idct::<ROWS>(data);
+    IDCT1DImpl::<ROWS>::do_idct::<COLS>(data);
+    let transposed_data = transpose::<ROWS, COLS>(data);
+    let mut data_copy = [[0.0f32; ROWS]; COLS];
+    data_copy.copy_from_slice(&transposed_data);
+    IDCT1DImpl::<COLS>::do_idct::<ROWS>(&mut data_copy);
+    let transposed_data = transpose(&data_copy);
+    data.copy_from_slice(&transposed_data);
 }
 
 #[cfg(test)]
@@ -132,7 +140,7 @@ mod tests {
     use crate::{
         util::test::assert_almost_eq,
         var_dct::{
-            dct::{IDCT1DImpl, IDCT1D},
+            dct::{idct2d, IDCT1DImpl, IDCT1D},
             dct_slow::idct1d,
         },
     };
@@ -214,4 +222,100 @@ mod tests {
             }
         }
     }
+
+    // TODO(firsching): possibly change this test to test against slow
+    // dct method (after adding 2d-variant there).
+    macro_rules! test_idct2d_exists_n_m {
+        ($test_name:ident, $n_val:expr, $m_val:expr) => {
+            #[test]
+            fn $test_name() {
+                const N: usize = $n_val;
+                const M: usize = $m_val;
+                let mut data = [[0.0f32; M]; N];
+                idct2d::<N, M>(&mut data);
+            }
+        };
+    }
+    test_idct2d_exists_n_m!(test_idct2d_exists_1_1, 1, 1);
+    test_idct2d_exists_n_m!(test_idct2d_exists_1_2, 1, 2);
+    test_idct2d_exists_n_m!(test_idct2d_exists_1_4, 1, 4);
+    test_idct2d_exists_n_m!(test_idct2d_exists_1_8, 1, 8);
+    test_idct2d_exists_n_m!(test_idct2d_exists_1_16, 1, 16);
+    test_idct2d_exists_n_m!(test_idct2d_exists_1_32, 1, 32);
+    test_idct2d_exists_n_m!(test_idct2d_exists_1_64, 1, 64);
+    test_idct2d_exists_n_m!(test_idct2d_exists_1_128, 1, 128);
+    test_idct2d_exists_n_m!(test_idct2d_exists_1_256, 1, 256);
+    test_idct2d_exists_n_m!(test_idct2d_exists_2_1, 2, 1);
+    test_idct2d_exists_n_m!(test_idct2d_exists_2_2, 2, 2);
+    test_idct2d_exists_n_m!(test_idct2d_exists_2_4, 2, 4);
+    test_idct2d_exists_n_m!(test_idct2d_exists_2_8, 2, 8);
+    test_idct2d_exists_n_m!(test_idct2d_exists_2_16, 2, 16);
+    test_idct2d_exists_n_m!(test_idct2d_exists_2_32, 2, 32);
+    test_idct2d_exists_n_m!(test_idct2d_exists_2_64, 2, 64);
+    test_idct2d_exists_n_m!(test_idct2d_exists_2_128, 2, 128);
+    test_idct2d_exists_n_m!(test_idct2d_exists_2_256, 2, 256);
+    test_idct2d_exists_n_m!(test_idct2d_exists_4_1, 4, 1);
+    test_idct2d_exists_n_m!(test_idct2d_exists_4_2, 4, 2);
+    test_idct2d_exists_n_m!(test_idct2d_exists_4_4, 4, 4);
+    test_idct2d_exists_n_m!(test_idct2d_exists_4_8, 4, 8);
+    test_idct2d_exists_n_m!(test_idct2d_exists_4_16, 4, 16);
+    test_idct2d_exists_n_m!(test_idct2d_exists_4_32, 4, 32);
+    test_idct2d_exists_n_m!(test_idct2d_exists_4_64, 4, 64);
+    test_idct2d_exists_n_m!(test_idct2d_exists_4_128, 4, 128);
+    test_idct2d_exists_n_m!(test_idct2d_exists_4_256, 4, 256);
+    test_idct2d_exists_n_m!(test_idct2d_exists_8_1, 8, 1);
+    test_idct2d_exists_n_m!(test_idct2d_exists_8_2, 8, 2);
+    test_idct2d_exists_n_m!(test_idct2d_exists_8_4, 8, 4);
+    test_idct2d_exists_n_m!(test_idct2d_exists_8_8, 8, 8);
+    test_idct2d_exists_n_m!(test_idct2d_exists_8_16, 8, 16);
+    test_idct2d_exists_n_m!(test_idct2d_exists_8_32, 8, 32);
+    test_idct2d_exists_n_m!(test_idct2d_exists_8_64, 8, 64);
+    test_idct2d_exists_n_m!(test_idct2d_exists_8_128, 8, 128);
+    test_idct2d_exists_n_m!(test_idct2d_exists_8_256, 8, 256);
+    test_idct2d_exists_n_m!(test_idct2d_exists_16_1, 16, 1);
+    test_idct2d_exists_n_m!(test_idct2d_exists_16_2, 16, 2);
+    test_idct2d_exists_n_m!(test_idct2d_exists_16_4, 16, 4);
+    test_idct2d_exists_n_m!(test_idct2d_exists_16_8, 16, 8);
+    test_idct2d_exists_n_m!(test_idct2d_exists_16_16, 16, 16);
+    test_idct2d_exists_n_m!(test_idct2d_exists_16_32, 16, 32);
+    test_idct2d_exists_n_m!(test_idct2d_exists_16_64, 16, 64);
+    test_idct2d_exists_n_m!(test_idct2d_exists_16_128, 16, 128);
+    test_idct2d_exists_n_m!(test_idct2d_exists_16_256, 16, 256);
+    test_idct2d_exists_n_m!(test_idct2d_exists_32_1, 32, 1);
+    test_idct2d_exists_n_m!(test_idct2d_exists_32_2, 32, 2);
+    test_idct2d_exists_n_m!(test_idct2d_exists_32_4, 32, 4);
+    test_idct2d_exists_n_m!(test_idct2d_exists_32_8, 32, 8);
+    test_idct2d_exists_n_m!(test_idct2d_exists_32_16, 32, 16);
+    test_idct2d_exists_n_m!(test_idct2d_exists_32_32, 32, 32);
+    test_idct2d_exists_n_m!(test_idct2d_exists_32_64, 32, 64);
+    test_idct2d_exists_n_m!(test_idct2d_exists_32_128, 32, 128);
+    test_idct2d_exists_n_m!(test_idct2d_exists_32_256, 32, 256);
+    test_idct2d_exists_n_m!(test_idct2d_exists_64_1, 64, 1);
+    test_idct2d_exists_n_m!(test_idct2d_exists_64_2, 64, 2);
+    test_idct2d_exists_n_m!(test_idct2d_exists_64_4, 64, 4);
+    test_idct2d_exists_n_m!(test_idct2d_exists_64_8, 64, 8);
+    test_idct2d_exists_n_m!(test_idct2d_exists_64_16, 64, 16);
+    test_idct2d_exists_n_m!(test_idct2d_exists_64_32, 64, 32);
+    test_idct2d_exists_n_m!(test_idct2d_exists_64_64, 64, 64);
+    test_idct2d_exists_n_m!(test_idct2d_exists_64_128, 64, 128);
+    test_idct2d_exists_n_m!(test_idct2d_exists_64_256, 64, 256);
+    test_idct2d_exists_n_m!(test_idct2d_exists_128_1, 128, 1);
+    test_idct2d_exists_n_m!(test_idct2d_exists_128_2, 128, 2);
+    test_idct2d_exists_n_m!(test_idct2d_exists_128_4, 128, 4);
+    test_idct2d_exists_n_m!(test_idct2d_exists_128_8, 128, 8);
+    test_idct2d_exists_n_m!(test_idct2d_exists_128_16, 128, 16);
+    test_idct2d_exists_n_m!(test_idct2d_exists_128_32, 128, 32);
+    test_idct2d_exists_n_m!(test_idct2d_exists_128_64, 128, 64);
+    test_idct2d_exists_n_m!(test_idct2d_exists_128_128, 128, 128);
+    test_idct2d_exists_n_m!(test_idct2d_exists_128_256, 128, 256);
+    test_idct2d_exists_n_m!(test_idct2d_exists_256_1, 256, 1);
+    test_idct2d_exists_n_m!(test_idct2d_exists_256_2, 256, 2);
+    test_idct2d_exists_n_m!(test_idct2d_exists_256_4, 256, 4);
+    test_idct2d_exists_n_m!(test_idct2d_exists_256_8, 256, 8);
+    test_idct2d_exists_n_m!(test_idct2d_exists_256_16, 256, 16);
+    test_idct2d_exists_n_m!(test_idct2d_exists_256_32, 256, 32);
+    test_idct2d_exists_n_m!(test_idct2d_exists_256_64, 256, 64);
+    test_idct2d_exists_n_m!(test_idct2d_exists_256_128, 256, 128);
+    test_idct2d_exists_n_m!(test_idct2d_exists_256_256, 256, 256);
+
 }
