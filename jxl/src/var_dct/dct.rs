@@ -130,18 +130,18 @@ where
 
     // Copy data from flat slice `data` into a temporary Vec of arrays (rows).
     let mut temp_rows: Vec<[f32; COLS]> = vec![[0.0f32; COLS]; ROWS];
-    for r in 0..ROWS {
+    for (r, column) in temp_rows.iter_mut().enumerate().take(ROWS) {
         let start = r * COLS;
         let end = start + COLS;
-        temp_rows[r].copy_from_slice(&data[start..end]);
+        column.copy_from_slice(&data[start..end]);
     }
 
     IDCT1DImpl::<ROWS>::do_idct::<COLS>(&mut temp_rows);
 
-    for r in 0..ROWS {
+    for (r, column) in temp_rows.iter().enumerate().take(ROWS) {
         let start = r * COLS;
         let end = start + COLS;
-        data[start..end].copy_from_slice(&temp_rows[r]);
+        data[start..end].copy_from_slice(column);
     }
 
     // Create a temporary flat buffer for the transposed data.
@@ -150,20 +150,20 @@ where
 
     // Copy data from flat `transposed_data` into a temporary Vec of arrays.
     let mut temp_cols: Vec<[f32; ROWS]> = vec![[0.0f32; ROWS]; COLS];
-    for c in 0..COLS {
+    for (c, row) in temp_cols.iter_mut().enumerate().take(COLS) {
         let start = c * ROWS;
         let end = start + ROWS;
-        temp_cols[c].copy_from_slice(&transposed_data[start..end]);
+        row.copy_from_slice(&transposed_data[start..end]);
     }
 
     // Perform IDCT on the temporary structure (treating original columns as rows).
     IDCT1DImpl::<COLS>::do_idct::<ROWS>(&mut temp_cols);
 
     // Copy results back from the temporary structure into the flat `transposed_data`.
-    for c in 0..COLS {
+    for (c, row) in temp_cols.iter().enumerate().take(COLS) {
         let start = c * ROWS;
         let end = start + ROWS;
-        transposed_data[start..end].copy_from_slice(&temp_cols[c]);
+        transposed_data[start..end].copy_from_slice(row);
     }
     transpose::<COLS, ROWS>(&transposed_data, data);
 }
