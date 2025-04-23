@@ -32,7 +32,7 @@ use transform_map::INVALID_TRANSFORM;
 
 mod block_context_map;
 mod coeff_order;
-mod color_correlation_map;
+pub mod color_correlation_map;
 mod group;
 pub mod modular;
 mod quantizer;

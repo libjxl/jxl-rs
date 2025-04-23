@@ -41,6 +41,7 @@ impl RenderPipelineStage for SplinesStage {
 #[cfg(test)]
 mod test {
     use crate::features::spline::{Point, QuantizedSpline, Splines};
+    use crate::frame::color_correlation_map::ColorCorrelationParams;
     use crate::render::test::make_and_run_simple_pipeline;
     use crate::util::test::{self, assert_all_almost_eq, read_pfm};
     use crate::{error::Result, image::Image, render::stages::splines::SplinesStage};
@@ -86,7 +87,11 @@ mod test {
             }],
             vec![Point { x: 9.0, y: 54.0 }],
         );
-        splines.initialize_draw_cache(size.0 as u64, size.1 as u64, 0.0, 1.0)?;
+        splines.initialize_draw_cache(
+            size.0 as u64,
+            size.1 as u64,
+            &ColorCorrelationParams::default(),
+        )?;
         let stage = SplinesStage { splines };
         let output: Vec<Image<f32>> =
             make_and_run_simple_pipeline(stage, &target_images, size, 256)?.1;
@@ -135,7 +140,7 @@ mod test {
             }],
             vec![Point { x: 9.0, y: 54.0 }],
         );
-        splines.initialize_draw_cache(500, 500, 0.0, 1.0)?;
+        splines.initialize_draw_cache(500, 500, &ColorCorrelationParams::default())?;
         let stage = SplinesStage { splines };
 
         crate::render::test::test_stage_consistency::<_, f32, f32>(stage, (500, 500), 6)
