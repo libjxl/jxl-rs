@@ -18,12 +18,14 @@ use crate::{
     util::tracing_wrappers::*,
 };
 use block_context_map::BlockContextMap;
+use color_correlation_map::ColorCorrelationParams;
 use modular::{FullModularImage, ModularStreamId, Tree};
 use quantizer::LfQuantFactors;
 use quantizer::QuantizerParams;
 
 mod block_context_map;
 mod coeff_order;
+mod color_correlation_map;
 pub mod modular;
 mod quantizer;
 
@@ -43,7 +45,7 @@ pub struct LfGlobalState {
     lf_quant: LfQuantFactors,
     quant_params: Option<QuantizerParams>,
     block_context_map: Option<BlockContextMap>,
-    // TODO(veluca93), VarDCT: LF color correlation
+    color_correlation_params: Option<ColorCorrelationParams>,
     tree: Option<Tree>,
     modular_global: FullModularImage,
 }
@@ -239,9 +241,13 @@ impl Frame {
         };
         debug!(?block_context_map);
 
-        if self.header.encoding == Encoding::VarDCT {
-            todo!("VarDCT not implemented");
-        }
+        let color_correlation_params = if self.header.encoding == Encoding::VarDCT {
+            info!("decoding color correlation params");
+            Some(ColorCorrelationParams::read(br)?)
+        } else {
+            None
+        };
+        debug!(?color_correlation_params);
 
         let tree = if br.read(1)? == 1 {
             let size_limit = (1024
@@ -271,6 +277,7 @@ impl Frame {
             lf_quant,
             quant_params,
             block_context_map,
+            color_correlation_params,
             tree,
             modular_global,
         });

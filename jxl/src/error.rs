@@ -179,6 +179,8 @@ pub enum Error {
     BlockContextMapSizeTooBig,
     #[error("Invalid BlockConextMap: too many distinct contexts.")]
     TooManyBlockContexts,
+    #[error("Base color correlation out of range.")]
+    BaseColorCorrelationOutOfRange,
 }
 
 pub type Result<T, E = Error> = std::result::Result<T, E>;
