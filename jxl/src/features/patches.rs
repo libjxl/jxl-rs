@@ -94,10 +94,10 @@ impl PatchBlendMode {
 }
 
 #[derive(Debug, Clone, Copy)]
-struct PatchBlending {
-    mode: PatchBlendMode,
-    alpha_channel: usize,
-    clamp: bool,
+pub struct PatchBlending {
+    pub mode: PatchBlendMode,
+    pub alpha_channel: usize,
+    pub clamp: bool,
 }
 
 #[derive(Debug, Clone, Copy)]
