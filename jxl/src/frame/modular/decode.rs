@@ -18,6 +18,7 @@ use super::{
 };
 
 #[allow(unused)]
+#[derive(Debug)]
 pub enum ModularStreamId {
     GlobalData,
     VarDCTLF(usize),

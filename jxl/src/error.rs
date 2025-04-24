@@ -175,6 +175,12 @@ pub enum Error {
     MetaSqueezeRequiresInPlace,
     #[error("Invalid transform: too many squeezes (shift > 30)")]
     TooManySqueezes,
+    #[error("Invalid BlockConextMap: too big.")]
+    BlockContextMapSizeTooBig,
+    #[error("Invalid BlockConextMap: too many distinct contexts.")]
+    TooManyBlockContexts,
+    #[error("Base color correlation out of range.")]
+    BaseColorCorrelationOutOfRange,
 }
 
 pub type Result<T, E = Error> = std::result::Result<T, E>;

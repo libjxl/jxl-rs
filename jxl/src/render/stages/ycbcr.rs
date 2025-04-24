@@ -51,6 +51,7 @@ impl RenderPipelineStage for YcbcrToLinearSrgbStage {
             );
         };
 
+        assert!(xsize <= row_cb.len() && xsize <= row_y.len() && xsize <= row_cr.len());
         for idx in 0..xsize {
             let y = row_y[idx] + 128.0 / 255.0; // shift Y from [-0.5, 0.5] to [0, 1], matching JPEG spec
             let cb = row_cb[idx];

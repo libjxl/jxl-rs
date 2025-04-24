@@ -5,6 +5,7 @@
 
 mod chroma_upsample;
 mod convert;
+mod epf;
 mod from_linear;
 mod gaborish;
 mod nearest_neighbor;

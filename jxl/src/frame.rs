@@ -17,18 +17,24 @@ use crate::{
     image::Image,
     util::tracing_wrappers::*,
 };
-use modular::{FullModularImage, Tree};
+use block_context_map::BlockContextMap;
+use color_correlation_map::ColorCorrelationParams;
+use modular::{FullModularImage, ModularStreamId, Tree};
 use quantizer::LfQuantFactors;
+use quantizer::QuantizerParams;
 
+mod block_context_map;
+mod coeff_order;
+mod color_correlation_map;
 pub mod modular;
 mod quantizer;
 
 #[derive(Debug, PartialEq, Eq)]
 pub enum Section {
     LfGlobal,
-    Lf(usize),
+    Lf { group: usize },
     HfGlobal,
-    Hf(usize, usize), // group, pass
+    Hf { group: usize, pass: usize },
 }
 
 #[allow(dead_code)]
@@ -37,9 +43,9 @@ pub struct LfGlobalState {
     splines: Option<Splines>,
     noise: Option<Noise>,
     lf_quant: LfQuantFactors,
-    // TODO(veluca93), VarDCT: HF quant matrices
-    // TODO(veluca93), VarDCT: block context map
-    // TODO(veluca93), VarDCT: LF color correlation
+    quant_params: Option<QuantizerParams>,
+    block_context_map: Option<BlockContextMap>,
+    color_correlation_params: Option<ColorCorrelationParams>,
     tree: Option<Tree>,
     modular_global: FullModularImage,
 }
@@ -100,6 +106,24 @@ pub struct Frame {
     modular_color_channels: usize,
     lf_global: Option<LfGlobalState>,
     decoder_state: DecoderState,
+}
+
+#[allow(unused_variables)]
+fn handle_decoded_modular_channel(
+    chan: usize,
+    (gx, gy): (usize, usize),
+    img: &Image<i32>,
+) -> Result<()> {
+    #[cfg(feature = "debug_tools")]
+    {
+        std::fs::create_dir_all("/tmp/jxl-debug/").unwrap();
+        std::fs::write(
+            format!("/tmp/jxl-debug/lf_c{chan:02}_gy{gy:03}_gx{gx:03}.pgm"),
+            img.as_rect().to_pgm_as_8bit(),
+        )
+        .unwrap();
+    }
+    Ok(())
 }
 
 impl Frame {
@@ -176,9 +200,9 @@ impl Frame {
         } else {
             match section {
                 Section::LfGlobal => 0,
-                Section::Lf(a) => 1 + a,
+                Section::Lf { group } => 1 + group,
                 Section::HfGlobal => self.header.num_lf_groups() + 1,
-                Section::Hf(group, pass) => {
+                Section::Hf { group, pass } => {
                     2 + self.header.num_lf_groups() + self.header.num_groups() * pass + group
                 }
             }
@@ -219,10 +243,29 @@ impl Frame {
         let lf_quant = LfQuantFactors::new(br)?;
         debug!(?lf_quant);
 
-        if self.header.encoding == Encoding::VarDCT {
-            info!("decoding VarDCT info");
-            todo!("VarDCT not implemented");
-        }
+        let quant_params = if self.header.encoding == Encoding::VarDCT {
+            info!("decoding VarDCT quantizer params");
+            Some(QuantizerParams::read(br)?)
+        } else {
+            None
+        };
+        debug!(?quant_params);
+
+        let block_context_map = if self.header.encoding == Encoding::VarDCT {
+            info!("decoding block context map");
+            Some(BlockContextMap::read(br)?)
+        } else {
+            None
+        };
+        debug!(?block_context_map);
+
+        let color_correlation_params = if self.header.encoding == Encoding::VarDCT {
+            info!("decoding color correlation params");
+            Some(ColorCorrelationParams::read(br)?)
+        } else {
+            None
+        };
+        debug!(?color_correlation_params);
 
         let tree = if br.read(1)? == 1 {
             let size_limit = (1024
@@ -250,11 +293,55 @@ impl Frame {
             splines,
             noise,
             lf_quant,
+            quant_params,
+            block_context_map,
+            color_correlation_params,
             tree,
             modular_global,
         });
 
         Ok(())
+    }
+
+    #[instrument(skip(self, br))]
+    pub fn decode_lf_group(&mut self, group: usize, br: &mut BitReader) -> Result<()> {
+        if self.header.encoding == Encoding::VarDCT {
+            info!("decoding VarDCT");
+            todo!("VarDCT not implemented");
+        }
+        let lf_global = self.lf_global.as_mut().unwrap();
+        lf_global.modular_global.read_stream(
+            ModularStreamId::ModularLF(group),
+            &self.header,
+            &lf_global.tree,
+            handle_decoded_modular_channel,
+            br,
+        )
+    }
+
+    #[instrument(skip_all)]
+    pub fn decode_hf_global(&mut self, _br: &mut BitReader) -> Result<()> {
+        if self.header.encoding == Encoding::Modular {
+            return Ok(());
+        }
+        info!("decoding VarDCT");
+        todo!("VarDCT not implemented");
+    }
+
+    #[instrument(skip(self, br))]
+    pub fn decode_hf_group(&mut self, group: usize, pass: usize, br: &mut BitReader) -> Result<()> {
+        if self.header.encoding == Encoding::VarDCT {
+            info!("decoding VarDCT");
+            todo!("VarDCT not implemented");
+        }
+        let lf_global = self.lf_global.as_mut().unwrap();
+        lf_global.modular_global.read_stream(
+            ModularStreamId::ModularHF { group, pass },
+            &self.header,
+            &lf_global.tree,
+            handle_decoded_modular_channel,
+            br,
+        )
     }
 
     pub fn finalize(mut self) -> Result<Option<DecoderState>> {
