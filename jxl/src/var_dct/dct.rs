@@ -85,6 +85,8 @@ macro_rules! define_dct_1d {
                 for j in 0..SZ {
                     coeff[0][j] = coeff[0][j] * (SQRT_2 as f32) + coeff[1][j];
                 }
+                // empty in the case N_HALF_CONST == 2
+                #[allow(clippy::reversed_empty_ranges)]
                 for i in 1..(N_HALF_CONST - 1) {
                     for j in 0..SZ {
                         coeff[i][j] += coeff[i + 1][j];
