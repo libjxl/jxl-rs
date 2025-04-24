@@ -11,6 +11,9 @@ use crate::{
     frame::coeff_order::NUM_ORDERS,
 };
 
+pub const NON_ZERO_BUCKETS: usize = 37;
+pub const ZERO_DENSITY_CONTEXT_COUNT: usize = 458;
+
 #[derive(Debug)]
 #[allow(dead_code)]
 pub struct BlockContextMap {
@@ -22,6 +25,9 @@ pub struct BlockContextMap {
 }
 
 impl BlockContextMap {
+    pub fn num_ac_contexts(&self) -> usize {
+        self.num_contexts * (NON_ZERO_BUCKETS + ZERO_DENSITY_CONTEXT_COUNT)
+    }
     pub fn read(br: &mut BitReader) -> Result<BlockContextMap, Error> {
         if br.read(1)? == 1 {
             Ok(BlockContextMap {

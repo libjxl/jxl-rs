@@ -20,6 +20,7 @@ pub mod var_dct;
 
 // TODO: Move these to a more appropriate location.
 const BLOCK_DIM: usize = 8;
+const BLOCK_SIZE: usize = BLOCK_DIM * BLOCK_DIM;
 const SIGMA_PADDING: usize = 2;
 #[allow(clippy::excessive_precision)]
 const MIN_SIGMA: f32 = -3.90524291751269967465540850526868;

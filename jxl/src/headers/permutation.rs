@@ -72,6 +72,13 @@ impl Permutation {
 
         Ok(Self(permutation))
     }
+
+    pub fn compose(&mut self, other: &Permutation) {
+        assert_eq!(self.0.len(), other.0.len());
+        for i in 0..self.0.len() {
+            self.0[i] = self.0[other.0[i] as usize]
+        }
+    }
 }
 
 // Decodes the Lehmer code in `code` and returns the permuted slice.

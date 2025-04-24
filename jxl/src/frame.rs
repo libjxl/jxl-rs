@@ -5,6 +5,7 @@
 
 use crate::{
     bit_reader::BitReader,
+    entropy_coding::decode::Histograms,
     error::Result,
     features::{noise::Noise, patches::PatchesDictionary, spline::Splines},
     headers::{
@@ -12,12 +13,15 @@ use crate::{
         encodings::UnconditionalCoder,
         extra_channels::ExtraChannelInfo,
         frame_header::{Encoding, FrameHeader, Toc, TocNonserialized},
+        permutation::Permutation,
         FileHeader,
     },
     image::Image,
     util::tracing_wrappers::*,
+    util::CeilLog2,
 };
 use block_context_map::BlockContextMap;
+use coeff_order::decode_coeff_orders;
 use color_correlation_map::ColorCorrelationParams;
 use modular::{FullModularImage, ModularStreamId, Tree};
 use quantizer::LfQuantFactors;
@@ -28,6 +32,7 @@ mod coeff_order;
 mod color_correlation_map;
 pub mod modular;
 mod quantizer;
+pub mod transform_map;
 
 #[derive(Debug, PartialEq, Eq)]
 pub enum Section {
@@ -48,6 +53,18 @@ pub struct LfGlobalState {
     color_correlation_params: Option<ColorCorrelationParams>,
     tree: Option<Tree>,
     modular_global: FullModularImage,
+}
+
+#[allow(dead_code)]
+pub struct PassState {
+    coeff_orders: Vec<Permutation>,
+    histograms: Histograms,
+}
+
+#[allow(dead_code)]
+pub struct HfGlobalState {
+    num_histograms: u32,
+    passes: Vec<PassState>,
 }
 
 #[derive(Debug)]
@@ -105,6 +122,7 @@ pub struct Frame {
     toc: Toc,
     modular_color_channels: usize,
     lf_global: Option<LfGlobalState>,
+    hf_global: Option<HfGlobalState>,
     decoder_state: DecoderState,
 }
 
@@ -162,6 +180,7 @@ impl Frame {
             modular_color_channels,
             toc,
             lf_global: None,
+            hf_global: None,
             decoder_state,
         })
     }
@@ -320,12 +339,49 @@ impl Frame {
     }
 
     #[instrument(skip_all)]
-    pub fn decode_hf_global(&mut self, _br: &mut BitReader) -> Result<()> {
+    pub fn decode_hf_global(&mut self, br: &mut BitReader) -> Result<()> {
         if self.header.encoding == Encoding::Modular {
             return Ok(());
         }
-        info!("decoding VarDCT");
-        todo!("VarDCT not implemented");
+        let lf_global = self.lf_global.as_mut().unwrap();
+        let block_context_map = lf_global.block_context_map.as_mut().unwrap();
+        if br.read(1)? == 0 {
+            todo!("Custom quant matrix decoding is not implemented")
+        }
+        let num_histo_bits = self.header.num_groups().ceil_log2();
+        let num_histograms: u32 = br.read(num_histo_bits)? as u32 + 1;
+        debug!(
+            "Processing HFGlobal section with {} passes and {} histograms",
+            self.header.passes.num_passes, num_histograms
+        );
+        let mut passes: Vec<PassState> = vec![];
+        #[allow(unused_variables)]
+        for i in 0..self.header.passes.num_passes as usize {
+            let used_orders = match br.read(2)? {
+                0 => 0x5f,
+                1 => 0x13,
+                2 => 0,
+                _ => br.read(coeff_order::NUM_ORDERS)?,
+            } as u32;
+            debug!(used_orders);
+            let coeff_orders = decode_coeff_orders(used_orders, br)?;
+            assert_eq!(coeff_orders.len(), 3 * coeff_order::NUM_ORDERS);
+            let num_contexts = block_context_map.num_ac_contexts();
+            debug!(
+                "Deconding histograms for pass {} with {} contexts",
+                i, num_contexts
+            );
+            let histograms = Histograms::decode(num_contexts, br, true)?;
+            passes.push(PassState {
+                coeff_orders,
+                histograms,
+            });
+        }
+        self.hf_global = Some(HfGlobalState {
+            num_histograms,
+            passes,
+        });
+        Ok(())
     }
 
     #[instrument(skip(self, br))]
