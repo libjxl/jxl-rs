@@ -101,6 +101,7 @@ impl Table {
             ]),
             (2, _) => {
                 let mut ret = Vec::new_with_capacity(TABLE_SIZE)?;
+                symbols[0..2].sort_unstable();
                 for _ in 0..(TABLE_SIZE >> 1) {
                     ret.push(TableEntry {
                         bits: 1,
@@ -115,11 +116,8 @@ impl Table {
             }
             (3, _) => {
                 let mut ret = Vec::new_with_capacity(TABLE_SIZE)?;
+                symbols[1..3].sort_unstable();
                 for _ in 0..(TABLE_SIZE >> 2) {
-                    ret.push(TableEntry {
-                        bits: 1,
-                        value: symbols[0],
-                    });
                     ret.push(TableEntry {
                         bits: 1,
                         value: symbols[0],
@@ -127,6 +125,10 @@ impl Table {
                     ret.push(TableEntry {
                         bits: 2,
                         value: symbols[1],
+                    });
+                    ret.push(TableEntry {
+                        bits: 1,
+                        value: symbols[0],
                     });
                     ret.push(TableEntry {
                         bits: 2,
@@ -137,6 +139,7 @@ impl Table {
             }
             (4, false) => {
                 let mut ret = Vec::new_with_capacity(TABLE_SIZE)?;
+                symbols.sort_unstable();
                 for _ in 0..(TABLE_SIZE >> 2) {
                     ret.push(TableEntry {
                         bits: 2,

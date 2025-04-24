@@ -108,6 +108,24 @@ pub struct Frame {
     decoder_state: DecoderState,
 }
 
+#[allow(unused_variables)]
+fn handle_decoded_modular_channel(
+    chan: usize,
+    (gx, gy): (usize, usize),
+    img: &Image<i32>,
+) -> Result<()> {
+    #[cfg(feature = "debug_tools")]
+    {
+        std::fs::create_dir_all("/tmp/jxl-debug/").unwrap();
+        std::fs::write(
+            format!("/tmp/jxl-debug/lf_c{chan:02}_gy{gy:03}_gx{gx:03}.pgm"),
+            img.as_rect().to_pgm_as_8bit(),
+        )
+        .unwrap();
+    }
+    Ok(())
+}
+
 impl Frame {
     pub fn new(br: &mut BitReader, decoder_state: DecoderState) -> Result<Self> {
         let frame_header = FrameHeader::read_unconditional(
@@ -296,6 +314,7 @@ impl Frame {
             ModularStreamId::ModularLF(group),
             &self.header,
             &lf_global.tree,
+            handle_decoded_modular_channel,
             br,
         )
     }
@@ -320,6 +339,7 @@ impl Frame {
             ModularStreamId::ModularHF { group, pass },
             &self.header,
             &lf_global.tree,
+            handle_decoded_modular_channel,
             br,
         )
     }

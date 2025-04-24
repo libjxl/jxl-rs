@@ -13,7 +13,7 @@ use num_derive::FromPrimitive;
 
 #[allow(clippy::upper_case_acronyms)]
 #[derive(UnconditionalCoder, Copy, Clone, PartialEq, Debug, FromPrimitive)]
-enum ExtraChannel {
+pub enum ExtraChannel {
     Alpha,
     Depth,
     SpotColor,
@@ -41,7 +41,7 @@ pub struct ExtraChannelInfo {
     #[all_default]
     all_default: bool,
     #[default(ExtraChannel::Alpha)]
-    ec_type: ExtraChannel,
+    pub ec_type: ExtraChannel,
     #[default(BitDepth::default(&field_nonserialized))]
     bit_depth: BitDepth,
     #[coder(u2S(0, 3, 4, Bits(3) + 1))]
