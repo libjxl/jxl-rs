@@ -24,7 +24,7 @@ pub fn dct1d<const N: usize, const M: usize, const NM: usize>(
     out: &mut [f64; NM],
 ) {
     const { assert!(NM == N * M, "NM must be equal to N * M") };
-    let scale: f64 = (2.0f64 / N as f64).sqrt();
+    let scale: f64 = SQRT_2;
 
     let mut matrix = [[0.0f64; N]; N];
     for (u, row) in matrix.iter_mut().enumerate() {
@@ -91,16 +91,19 @@ mod tests {
 
         dct1d::<8, 1, 8>(&input, &mut output);
         // obtained with the following python code:
+        // import math
+        // import scipy.fft
+        // scipy.fft.dct(list(map(lambda x: 2*math.sqrt(x)*x , map(float, range(8)))), norm='ortho')
         // import scipy.fft; scipy.fft.dct(list(map(float, range(8))), norm='ortho')
         let expected = [
-            9.89949494,
-            -6.44232302,
-            0.,
-            -0.6734548,
-            0.,
-            -0.2009029,
-            0.,
-            -0.05070232,
+            2.80000000e+01,
+            -1.82216412e+01,
+            -1.38622135e-15,
+            -1.90481783e+00,
+            0.00000000e+00,
+            -5.68239222e-01,
+            -1.29520973e-15,
+            -1.43407825e-01,
         ];
         assert_all_almost_eq!(output, expected, 1e-7);
     }
@@ -119,14 +122,14 @@ mod tests {
         // Expected output should be M copies of the result of applying idct1d to a single column [0.0 .. N-1.0]
         // We take the expected result from the single-column test `test_slow_dct1d`
         let initial = [
-            9.89949494,
-            -6.44232302,
-            0.,
-            -0.6734548,
-            0.,
-            -0.2009029,
-            0.,
-            -0.05070232,
+            2.80000000e+01,
+            -1.82216412e+01,
+            -1.38622135e-15,
+            -1.90481783e+00,
+            0.00000000e+00,
+            -5.68239222e-01,
+            -1.29520973e-15,
+            -1.43407825e-01,
         ];
 
         // Create an iterator that repeats each element 5 times and flattens the result
@@ -166,7 +169,6 @@ mod tests {
         let input: [f64; 2] = [1.0, 3.0];
         let mut output = [0.0; 2];
         idct1d::<2, 1, 2>(&input, &mut output);
-        //assert_all_almost_eq!(output, [2.0 * SQRT_2, -SQRT_2], 1e-7);
     }
     #[test]
     fn test_slow_idct1d_same_on_columns() {
