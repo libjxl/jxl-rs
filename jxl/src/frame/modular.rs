@@ -8,11 +8,12 @@ use std::fmt::Debug;
 use crate::{
     bit_reader::BitReader,
     error::Result,
+    frame::HfMetadata,
     headers::{
         extra_channels::ExtraChannelInfo, frame_header::FrameHeader, modular::GroupHeader,
         JxlHeader,
     },
-    image::Image,
+    image::{Image, Rect},
     util::{tracing_wrappers::*, CeilLog2},
 };
 
@@ -289,6 +290,10 @@ impl FullModularImage {
         on_output: impl Fn(usize, (usize, usize), &Image<i32>) -> Result<()>,
         br: &mut BitReader,
     ) -> Result<()> {
+        if self.buffer_info.is_empty() {
+            info!("No modular channels to decode");
+            return Ok(());
+        }
         let (section_id, grid) = match stream {
             ModularStreamId::ModularLF(group) => (1, group),
             ModularStreamId::ModularHF { pass, group } => (2 + pass, group),
@@ -349,6 +354,37 @@ impl FullModularImage {
     }
 }
 
+fn create_buffers(
+    channels: &[ChannelInfo],
+    desc: &'static str,
+) -> (Vec<ModularBufferInfo>, Vec<usize>) {
+    let mut buffer_info = vec![];
+    let mut buffer_indices = vec![];
+    for (i, chan) in channels.iter().enumerate() {
+        buffer_info.push(ModularBufferInfo {
+            info: chan.clone(),
+            channel_id: i,
+            is_output: true,
+            is_coded: false,
+            description: format!(
+                "{} Input channel {}, size {}x{}",
+                desc, i, chan.size.0, chan.size.1
+            ),
+            grid_kind: ModularGridKind::None,
+            grid_shape: (1, 1),
+            buffer_grid: vec![ModularBuffer {
+                data: None,
+                auxiliary_data: None,
+                remaining_uses: 1,
+                used_by_transforms: vec![],
+                size: chan.size,
+            }],
+        });
+        buffer_indices.push(i);
+    }
+    (buffer_info, buffer_indices)
+}
+
 pub fn decode_vardct_lf(
     group: usize,
     frame_header: &FrameHeader,
@@ -363,41 +399,21 @@ pub fn decode_vardct_lf(
     debug!(?stream_id);
     let r = frame_header.lf_group_rect(group);
     debug!(?r);
+    let channels: Vec<ChannelInfo> = (0..3)
+        .map(|_| ChannelInfo {
+            size: r.size,
+            shift: None,
+        })
+        .collect();
     let header = GroupHeader::read(br)?;
     if !header.transforms.is_empty() {
         todo!("Local transforms are not implemented yet");
     }
     debug!(?header);
-    let mut buffer_info = vec![];
-    for i in 0..3 {
-        let chan = ChannelInfo {
-            size: r.size,
-            shift: None,
-        };
-        buffer_info.push(ModularBufferInfo {
-            info: chan.clone(),
-            channel_id: i,
-            is_output: true,
-            is_coded: false,
-            description: format!(
-                "VarDCT LF Input channel {}, size {}x{}",
-                i, chan.size.0, chan.size.1
-            ),
-            grid_kind: ModularGridKind::None,
-            grid_shape: (1, 1),
-            buffer_grid: vec![ModularBuffer {
-                data: None,
-                auxiliary_data: None,
-                remaining_uses: 1,
-                used_by_transforms: vec![],
-                size: chan.size,
-            }],
-        });
-    }
-    let buffer_indices = [0, 1, 2];
+    let (mut buffer_info, buffer_indices) = create_buffers(&channels, "VarDCT LF");
     decode_modular_section(
         &mut buffer_info,
-        &buffer_indices,
+        buffer_indices.as_slice(),
         0,
         stream_id,
         &header,
@@ -405,5 +421,62 @@ pub fn decode_vardct_lf(
         br,
     )?;
     // TODO(szabadka): Generate the f32 pixels of the LF image.
+    Ok(())
+}
+
+pub fn decode_hf_metadata(
+    group: usize,
+    frame_header: &FrameHeader,
+    global_tree: &Option<Tree>,
+    _hf_meta: &mut HfMetadata,
+    br: &mut BitReader,
+) -> Result<()> {
+    let stream_id = ModularStreamId::LFMeta(group).get_id(frame_header);
+    debug!(?stream_id);
+    let r = frame_header.lf_group_rect(group);
+    debug!(?r);
+    let upper_bound = r.size.0 * r.size.1;
+    let count_num_bits = upper_bound.ceil_log2();
+    let count = br.read(count_num_bits)? + 1;
+    debug!(?count);
+    let header = GroupHeader::read(br)?;
+    if !header.transforms.is_empty() {
+        todo!("Local transforms are not implemented yet");
+    }
+    debug!(?header);
+    assert!(frame_header.is444());
+    let cr = Rect {
+        origin: (r.origin.0 >> 3, r.origin.1 >> 3),
+        size: (r.size.0.div_ceil(8), r.size.1.div_ceil(8)),
+    };
+    let channels = vec![
+        ChannelInfo {
+            size: cr.size,
+            shift: Some((3, 3)),
+        },
+        ChannelInfo {
+            size: cr.size,
+            shift: Some((3, 3)),
+        },
+        ChannelInfo {
+            size: (count as usize, 2),
+            shift: None,
+        },
+        ChannelInfo {
+            size: r.size,
+            shift: None,
+        },
+    ];
+    let (mut buffer_info, buffer_indices) = create_buffers(&channels, "HF Metadata");
+    decode_modular_section(
+        &mut buffer_info,
+        buffer_indices.as_slice(),
+        0,
+        stream_id,
+        &header,
+        global_tree,
+        br,
+    )?;
+    // TODO(szabadka): Fill in HfMetadata from the modular buffers.
     Ok(())
 }
