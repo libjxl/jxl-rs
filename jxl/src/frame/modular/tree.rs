@@ -312,57 +312,21 @@ impl Tree {
             unreachable!();
         };
 
-        let pred = match predictor {
-            Predictor::Zero => 0,
-            Predictor::West => left as i64,
-            Predictor::North => top as i64,
-            Predictor::Select => select(left as i64, top as i64, topleft as i64),
-            Predictor::Gradient => clamped_gradient(left as i64, top as i64, topleft as i64),
-            Predictor::Weighted => wp_pred,
-            Predictor::WestWest => leftleft as i64,
-            Predictor::NorthEast => topright as i64,
-            Predictor::NorthWest => topleft as i64,
-            Predictor::AverageWestAndNorth => (top as i64 + left as i64) / 2,
-            Predictor::AverageWestAndNorthWest => (left as i64 + topleft as i64) / 2,
-            Predictor::AverageNorthAndNorthWest => (top as i64 + topleft as i64) / 2,
-            Predictor::AverageNorthAndNorthEast => (top as i64 + topright as i64) / 2,
-            Predictor::AverageAll => {
-                (6 * top as i64 - 2 * toptop as i64
-                    + 7 * left as i64
-                    + leftleft as i64
-                    + toprightright as i64
-                    + 3 * topright as i64
-                    + 8)
-                    / 16
-            }
-        };
+        let pred = predictor.predict_one(
+            left,
+            top,
+            toptop,
+            topleft,
+            topright,
+            leftleft,
+            toprightright,
+            wp_pred,
+        );
 
         PredictionResult {
             guess: pred + offset as i64,
             multiplier,
             context: id,
         }
-    }
-}
-
-fn select(left: i64, top: i64, topleft: i64) -> i64 {
-    let p = left + top - topleft;
-    if (p - left).abs() < (p - top).abs() {
-        left
-    } else {
-        top
-    }
-}
-
-fn clamped_gradient(left: i64, top: i64, topleft: i64) -> i64 {
-    // Same code/logic as libjxl.
-    let min = left.min(top);
-    let max = left.max(top);
-    let grad = left + top - topleft;
-    let grad_clamp_max = if topleft < min { max } else { grad };
-    if topleft > max {
-        min
-    } else {
-        grad_clamp_max
     }
 }
