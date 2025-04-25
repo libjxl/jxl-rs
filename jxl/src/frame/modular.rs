@@ -348,3 +348,62 @@ impl FullModularImage {
         Ok(())
     }
 }
+
+pub fn decode_vardct_lf(
+    group: usize,
+    frame_header: &FrameHeader,
+    global_tree: &Option<Tree>,
+    _lf_image: &mut Image<f32>,
+    br: &mut BitReader,
+) -> Result<()> {
+    let _extra_precision = br.read(2)?;
+    assert!(frame_header.is444());
+    debug!(?_extra_precision);
+    let stream_id = ModularStreamId::VarDCTLF(group).get_id(frame_header);
+    debug!(?stream_id);
+    let r = frame_header.lf_group_rect(group);
+    debug!(?r);
+    let header = GroupHeader::read(br)?;
+    if !header.transforms.is_empty() {
+        todo!("Local transforms are not implemented yet");
+    }
+    debug!(?header);
+    let mut buffer_info = vec![];
+    for i in 0..3 {
+        let chan = ChannelInfo {
+            size: r.size,
+            shift: None,
+        };
+        buffer_info.push(ModularBufferInfo {
+            info: chan.clone(),
+            channel_id: i,
+            is_output: true,
+            is_coded: false,
+            description: format!(
+                "VarDCT LF Input channel {}, size {}x{}",
+                i, chan.size.0, chan.size.1
+            ),
+            grid_kind: ModularGridKind::None,
+            grid_shape: (1, 1),
+            buffer_grid: vec![ModularBuffer {
+                data: None,
+                auxiliary_data: None,
+                remaining_uses: 1,
+                used_by_transforms: vec![],
+                size: chan.size,
+            }],
+        });
+    }
+    let buffer_indices = [0, 1, 2];
+    decode_modular_section(
+        &mut buffer_info,
+        &buffer_indices,
+        0,
+        stream_id,
+        &header,
+        global_tree,
+        br,
+    )?;
+    // TODO(szabadka): Generate the f32 pixels of the LF image.
+    Ok(())
+}

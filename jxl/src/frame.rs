@@ -23,6 +23,7 @@ use crate::{
 use block_context_map::BlockContextMap;
 use coeff_order::decode_coeff_orders;
 use color_correlation_map::ColorCorrelationParams;
+use modular::decode_vardct_lf;
 use modular::{FullModularImage, ModularStreamId, Tree};
 use quantizer::LfQuantFactors;
 use quantizer::QuantizerParams;
@@ -123,6 +124,7 @@ pub struct Frame {
     modular_color_channels: usize,
     lf_global: Option<LfGlobalState>,
     hf_global: Option<HfGlobalState>,
+    lf_image: Option<Image<f32>>,
     decoder_state: DecoderState,
 }
 
@@ -175,12 +177,19 @@ impl Frame {
         } else {
             3
         };
+        let lf_image = if frame_header.encoding == Encoding::VarDCT && !frame_header.has_lf_frame()
+        {
+            Some(Image::new(frame_header.size_blocks())?)
+        } else {
+            None
+        };
         Ok(Self {
             header: frame_header,
             modular_color_channels,
             toc,
             lf_global: None,
             hf_global: None,
+            lf_image,
             decoder_state,
         })
     }
@@ -324,11 +333,13 @@ impl Frame {
 
     #[instrument(skip(self, br))]
     pub fn decode_lf_group(&mut self, group: usize, br: &mut BitReader) -> Result<()> {
-        if self.header.encoding == Encoding::VarDCT {
-            info!("decoding VarDCT");
+        let lf_global = self.lf_global.as_mut().unwrap();
+        if self.header.encoding == Encoding::VarDCT && !self.header.has_lf_frame() {
+            info!("decoding VarDCT LF with group id {}", group);
+            let lf_image = self.lf_image.as_mut().unwrap();
+            decode_vardct_lf(group, &self.header, &lf_global.tree, lf_image, br)?;
             todo!("VarDCT not implemented");
         }
-        let lf_global = self.lf_global.as_mut().unwrap();
         lf_global.modular_global.read_stream(
             ModularStreamId::ModularLF(group),
             &self.header,
