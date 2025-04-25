@@ -171,6 +171,7 @@ pub fn do_palette_step_general(
     predictor: Predictor,
 ) {
     let (w, h) = buf_in.size();
+    let palette = buf_pal.as_rect();
     let bit_depth = 8; // TODO(sboukortt): plumb the actual bit depth
 
     if w == 0 {
@@ -181,21 +182,76 @@ pub fn do_palette_step_general(
             for y in 0..h {
                 for x in 0..w {
                     let index = buf_in.as_rect().row(y)[x];
-                    let palette_value = {
-                        let palette = buf_pal.as_rect();
-                        get_palette_value(
-                            &palette,
-                            index as isize,
-                            /*c=*/ chan_index,
-                            /*palette_size=*/ num_colors,
-                            /*bit_depth=*/ bit_depth,
-                        )
-                    };
+                    let palette_value = get_palette_value(
+                        &palette,
+                        index as isize,
+                        /*c=*/ chan_index,
+                        /*palette_size=*/ num_colors,
+                        /*bit_depth=*/ bit_depth,
+                    );
                     out.as_rect_mut().row(y)[x] = palette_value;
                 }
             }
         }
-    } else {
+    } else if predictor == Predictor::Weighted {
         todo!();
+    } else {
+        for (chan_index, out) in buf_out.iter_mut().enumerate() {
+            for y in 0..h {
+                let mut out_rect = out.as_rect_mut();
+                let idx = buf_in.as_rect().row(y);
+                for (x, &index) in idx.iter().enumerate() {
+                    let palette_entry = get_palette_value(
+                        &palette,
+                        index as isize,
+                        /*c=*/ chan_index,
+                        /*palette_size=*/ num_colors + num_deltas,
+                        /*bit_depth=*/ bit_depth,
+                    );
+                    let val = if index < num_deltas as i32 {
+                        let left = if x > 0 {
+                            out_rect.row(y)[x - 1]
+                        } else if y > 0 {
+                            out_rect.row(y - 1)[0]
+                        } else {
+                            0
+                        };
+                        let top = if y > 0 { out_rect.row(y - 1)[x] } else { left };
+                        let topleft = if x > 0 && y > 0 {
+                            out_rect.row(y - 1)[x - 1]
+                        } else {
+                            left
+                        };
+                        let topright = if x + 1 < w && y > 0 {
+                            out_rect.row(y - 1)[x + 1]
+                        } else {
+                            top
+                        };
+                        let leftleft = if x > 1 { out_rect.row(y)[x - 2] } else { left };
+                        let toptop = if y > 1 { out_rect.row(y - 2)[x] } else { top };
+                        let toprightright = if x + 2 < w && y > 0 {
+                            out_rect.row(y - 1)[x + 2]
+                        } else {
+                            topright
+                        };
+
+                        let pred = predictor.predict_one(
+                            left,
+                            top,
+                            toptop,
+                            topleft,
+                            topright,
+                            leftleft,
+                            toprightright,
+                            /*wp_pred=*/ 0,
+                        );
+                        (pred + palette_entry as i64) as i32
+                    } else {
+                        palette_entry
+                    };
+                    out_rect.row(y)[x] = val;
+                }
+            }
+        }
     }
 }
