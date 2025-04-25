@@ -444,6 +444,7 @@ mod test {
         error::Error,
         features::spline::Point,
         headers::{FileHeader, JxlHeader},
+        icc::read_icc,
         util::test::assert_almost_eq,
     };
     use test_log::test;
@@ -457,7 +458,12 @@ mod test {
         let codestream = ContainerParser::collect_codestream(image).unwrap();
         let mut br = BitReader::new(&codestream);
         let file_header = FileHeader::read(&mut br).unwrap();
+        if file_header.image_metadata.color_encoding.want_icc {
+            let r = read_icc(&mut br)?;
+            println!("found {}-byte ICC", r.len());
+        };
         let mut decoder_state = DecoderState::new(file_header);
+
         loop {
             let mut frame = Frame::new(&mut br, decoder_state)?;
             let mut sections = frame.sections(&mut br)?;
@@ -475,6 +481,7 @@ mod test {
 
     fn read_frames_from_path(path: &Path) -> Result<(), Error> {
         let data = std::fs::read(path).unwrap();
+
         let result = panic::catch_unwind(|| read_frames(data.as_slice(), |frame| frame.finalize()));
 
         match result {
