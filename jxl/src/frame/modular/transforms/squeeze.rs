@@ -2,23 +2,14 @@
 //
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
+
 use crate::{
     error::{Error, Result},
-    frame::modular::{ChannelInfo, ModularBufferInfo},
+    frame::modular::ChannelInfo,
     headers::modular::SqueezeParams,
 };
 
-use super::TransformStep;
-
 use crate::util::tracing_wrappers::*;
-
-pub fn do_squeeze_step(
-    _step: TransformStep,
-    _buffers: &mut [ModularBufferInfo],
-    (_gx, _gy): (usize, usize),
-) -> Result<Vec<(usize, usize)>> {
-    todo!()
-}
 
 #[instrument(level = "trace", err)]
 pub fn check_squeeze_params(

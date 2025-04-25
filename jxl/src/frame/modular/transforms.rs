@@ -3,9 +3,10 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-// TODO(veluca): remove this.
-#![allow(dead_code)]
+use std::cell::RefCell;
 
+use apply::TransformStep;
+pub use apply::TransformStepChunk;
 use num_derive::FromPrimitive;
 use num_traits::FromPrimitive;
 
@@ -20,6 +21,7 @@ use crate::{
 
 use super::{ChannelInfo, ModularBufferInfo, ModularGridKind, Predictor};
 
+mod apply;
 mod palette;
 mod rct;
 mod squeeze;
@@ -43,33 +45,6 @@ pub enum RctOp {
     AddAvgToSecond = 4,
     AddFirstToThirdAndAvgToSecond = 5,
     YCoCg = 6,
-}
-
-#[derive(Debug, Clone, Copy)]
-pub enum TransformStep {
-    Rct {
-        buf_in: [usize; 3],
-        buf_out: [usize; 3],
-        op: RctOp,
-        perm: RctPermutation,
-    },
-    Palette {
-        buf_in: usize,
-        buf_pal: usize,
-        buf_out: usize,
-        num_colors: usize,
-        num_deltas: usize,
-        chan_index: usize,
-        predictor: Predictor,
-    },
-    HSqueeze {
-        buf_in: [usize; 2],
-        buf_out: usize,
-    },
-    VSqueeze {
-        buf_in: [usize; 2],
-        buf_out: usize,
-    },
 }
 
 #[instrument(level = "trace", err)]
@@ -273,17 +248,17 @@ pub fn meta_apply_transforms(
                         begin_channel, num_channels
                     ),
                 );
-                for i in 0..num_channels {
-                    transform_steps.push(TransformStep::Palette {
-                        buf_in: inchan,
-                        buf_pal: pchan,
-                        buf_out: channels[begin_channel + i].0,
-                        num_colors,
-                        num_deltas,
-                        chan_index: i,
-                        predictor: pred,
-                    });
-                }
+                transform_steps.push(TransformStep::Palette {
+                    buf_in: inchan,
+                    buf_pal: pchan,
+                    buf_out: channels[begin_channel..(begin_channel + num_channels)]
+                        .iter()
+                        .map(|x| x.0)
+                        .collect(),
+                    num_colors,
+                    num_deltas,
+                    predictor: pred,
+                });
                 channels.drain(begin_channel + 1..begin_channel + num_channels);
                 channels[begin_channel].0 = inchan;
                 channels.insert(0, (pchan, pchan_info));
@@ -305,45 +280,7 @@ pub fn meta_apply_transforms(
     Ok((buffer_info, transform_steps))
 }
 
-#[derive(Debug)]
-pub struct TransformStepChunk {
-    step: TransformStep,
-    // Grid position this transform should produce.
-    // Note that this is a lie for Palette with AverageAll or Weighted, as the transform with
-    // position (0, y) will produce the entire row of blocks (*, y) (and there will be no
-    // transforms with position (x, y) with x > 0).
-    grid_pos: (usize, usize),
-    // Number of inputs that are not yet available.
-    incomplete_deps: usize,
-}
-
-impl TransformStepChunk {
-    // Mark that one dependency of this transform is ready, and potentially runs the transform,
-    // returning the new buffers that are now ready.
-    pub fn dep_ready(
-        &mut self,
-        buffer_info: &mut [ModularBufferInfo],
-    ) -> Result<Vec<(usize, usize)>> {
-        self.incomplete_deps = self.incomplete_deps.checked_sub(1).unwrap();
-        if self.incomplete_deps > 0 {
-            Ok(vec![])
-        } else {
-            match self.step {
-                TransformStep::Rct { .. } => {
-                    rct::do_rct_step(self.step, buffer_info, self.grid_pos)
-                }
-                TransformStep::Palette { .. } => {
-                    palette::do_palette_step(self.step, buffer_info, self.grid_pos)
-                }
-                TransformStep::HSqueeze { .. } | TransformStep::VSqueeze { .. } => {
-                    squeeze::do_squeeze_step(self.step, buffer_info, self.grid_pos)
-                }
-            }
-        }
-    }
-}
-
-// #[instrument(level = "trace", skip_all, ret)]
+#[instrument(level = "trace", skip_all, ret)]
 pub fn make_grids(
     frame_header: &FrameHeader,
     transform_steps: Vec<TransformStep>,
@@ -381,7 +318,9 @@ pub fn make_grids(
             TransformStep::Palette {
                 buf_in, buf_out, ..
             } => {
-                buffer_info[*buf_out].grid_kind = buffer_info[*buf_in].grid_kind;
+                for buf in buf_out.iter() {
+                    buffer_info[*buf].grid_kind = buffer_info[*buf_in].grid_kind;
+                }
             }
             TransformStep::HSqueeze { buf_in, buf_out }
             | TransformStep::VSqueeze { buf_in, buf_out } => {
@@ -425,8 +364,8 @@ pub fn make_grids(
                     }
                 };
                 ModularBuffer {
-                    data: None,
-                    auxiliary_data: None,
+                    data: RefCell::new(None),
+                    auxiliary_data: RefCell::new(None),
                     remaining_uses: if is_output { 1 } else { 0 },
                     used_by_transforms: vec![],
                     size,
@@ -438,12 +377,12 @@ pub fn make_grids(
     trace!(?buffer_info, "with grids");
 
     let add_transform_step =
-        |transform: TransformStep,
+        |transform: &TransformStep,
          grid_pos: (isize, isize),
          grid_transform_steps: &mut Vec<TransformStepChunk>| {
             let ts = grid_transform_steps.len();
             grid_transform_steps.push(TransformStepChunk {
-                step: transform,
+                step: transform.clone(),
                 grid_pos: (grid_pos.0 as usize, grid_pos.1 as usize),
                 incomplete_deps: 0,
             });
@@ -489,7 +428,7 @@ pub fn make_grids(
     let mut grid_transform_steps = vec![];
 
     for transform in transform_steps {
-        match transform {
+        match &transform {
             TransformStep::Rct {
                 buf_in, buf_out, ..
             } => {
@@ -497,11 +436,11 @@ pub fn make_grids(
                 let out_kind = buffer_info[buf_out[0]].grid_kind;
                 let out_shape = buffer_info[buf_out[0]].grid_shape;
                 for (x, y) in get_grid_indices(out_shape) {
-                    let ts = add_transform_step(transform, (x, y), &mut grid_transform_steps);
+                    let ts = add_transform_step(&transform, (x, y), &mut grid_transform_steps);
                     for bin in buf_in {
                         add_grid_use(
                             ts,
-                            bin,
+                            *bin,
                             out_kind,
                             (x, y),
                             &mut grid_transform_steps,
@@ -520,15 +459,15 @@ pub fn make_grids(
                 // Delta palette with AverageAll or Weighted. Those are special, because we can
                 // only make progress one full image row at a time (since we need decoded values
                 // from the previous row or two rows).
-                let out_kind = buffer_info[buf_out].grid_kind;
-                let out_shape = buffer_info[buf_out].grid_shape;
+                let out_kind = buffer_info[buf_out[0]].grid_kind;
+                let out_shape = buffer_info[buf_out[0]].grid_shape;
                 let mut ts = 0;
                 for (x, y) in get_grid_indices(out_shape) {
                     if x == 0 {
-                        ts = add_transform_step(transform, (x, y), &mut grid_transform_steps);
+                        ts = add_transform_step(&transform, (x, y), &mut grid_transform_steps);
                         add_grid_use(
                             ts,
-                            buf_pal,
+                            *buf_pal,
                             out_kind,
                             (x, y),
                             &mut grid_transform_steps,
@@ -537,20 +476,22 @@ pub fn make_grids(
                     }
                     add_grid_use(
                         ts,
-                        buf_in,
+                        *buf_in,
                         out_kind,
                         (x, y),
                         &mut grid_transform_steps,
                         buffer_info,
                     );
-                    add_grid_use(
-                        ts,
-                        buf_out,
-                        out_kind,
-                        (x, y - 1),
-                        &mut grid_transform_steps,
-                        buffer_info,
-                    );
+                    for out in buf_out.iter() {
+                        add_grid_use(
+                            ts,
+                            *out,
+                            out_kind,
+                            (x, y - 1),
+                            &mut grid_transform_steps,
+                            buffer_info,
+                        );
+                    }
                 }
             }
             TransformStep::Palette {
@@ -563,13 +504,13 @@ pub fn make_grids(
                 // Maybe-delta palette: we depend on the palette and the input buffer in the same
                 // location. We may also depend on other grid positions in the output buffer,
                 // according to the used predictor.
-                let out_kind = buffer_info[buf_out].grid_kind;
-                let out_shape = buffer_info[buf_out].grid_shape;
+                let out_kind = buffer_info[buf_out[0]].grid_kind;
+                let out_shape = buffer_info[buf_out[0]].grid_shape;
                 for (x, y) in get_grid_indices(out_shape) {
-                    let ts = add_transform_step(transform, (x, y), &mut grid_transform_steps);
+                    let ts = add_transform_step(&transform, (x, y), &mut grid_transform_steps);
                     add_grid_use(
                         ts,
-                        buf_pal,
+                        *buf_pal,
                         out_kind,
                         (x, y),
                         &mut grid_transform_steps,
@@ -577,7 +518,7 @@ pub fn make_grids(
                     );
                     add_grid_use(
                         ts,
-                        buf_in,
+                        *buf_in,
                         out_kind,
                         (x, y),
                         &mut grid_transform_steps,
@@ -599,27 +540,29 @@ pub fn make_grids(
                         Predictor::AverageAll | Predictor::Weighted => unreachable!(),
                     };
                     for (dx, dy) in offsets {
-                        add_grid_use(
-                            ts,
-                            buf_out,
-                            out_kind,
-                            (x + dx, y + dy),
-                            &mut grid_transform_steps,
-                            buffer_info,
-                        );
+                        for out in buf_out.iter() {
+                            add_grid_use(
+                                ts,
+                                *out,
+                                out_kind,
+                                (x + dx, y + dy),
+                                &mut grid_transform_steps,
+                                buffer_info,
+                            );
+                        }
                     }
                 }
             }
             TransformStep::HSqueeze { buf_in, buf_out } => {
-                let out_kind = buffer_info[buf_out].grid_kind;
-                let out_shape = buffer_info[buf_out].grid_shape;
+                let out_kind = buffer_info[*buf_out].grid_kind;
+                let out_shape = buffer_info[*buf_out].grid_shape;
                 for (x, y) in get_grid_indices(out_shape) {
-                    let ts = add_transform_step(transform, (x, y), &mut grid_transform_steps);
+                    let ts = add_transform_step(&transform, (x, y), &mut grid_transform_steps);
                     // Average and residuals from the same position
                     for bin in buf_in {
                         add_grid_use(
                             ts,
-                            bin,
+                            *bin,
                             out_kind,
                             (x, y),
                             &mut grid_transform_steps,
@@ -638,7 +581,7 @@ pub fn make_grids(
                     // Previous decoded
                     add_grid_use(
                         ts,
-                        buf_out,
+                        *buf_out,
                         out_kind,
                         (x - 1, y),
                         &mut grid_transform_steps,
@@ -647,15 +590,15 @@ pub fn make_grids(
                 }
             }
             TransformStep::VSqueeze { buf_in, buf_out } => {
-                let out_kind = buffer_info[buf_out].grid_kind;
-                let out_shape = buffer_info[buf_out].grid_shape;
+                let out_kind = buffer_info[*buf_out].grid_kind;
+                let out_shape = buffer_info[*buf_out].grid_shape;
                 for (x, y) in get_grid_indices(out_shape) {
-                    let ts = add_transform_step(transform, (x, y), &mut grid_transform_steps);
+                    let ts = add_transform_step(&transform, (x, y), &mut grid_transform_steps);
                     // Average and residuals from the same position
                     for bin in buf_in {
                         add_grid_use(
                             ts,
-                            bin,
+                            *bin,
                             out_kind,
                             (x, y),
                             &mut grid_transform_steps,
@@ -674,7 +617,7 @@ pub fn make_grids(
                     // Previous decoded
                     add_grid_use(
                         ts,
-                        buf_out,
+                        *buf_out,
                         out_kind,
                         (x, y - 1),
                         &mut grid_transform_steps,

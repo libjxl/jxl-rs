@@ -2,15 +2,12 @@
 //
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
+
 use crate::{
-    error::Result,
-    frame::modular::{ModularBufferInfo, ModularGridKind, Predictor},
+    frame::modular::Predictor,
     image::{Image, ImageRect},
 };
-
-use super::TransformStep;
-
-const MAX_PALETTE_LOOKUP_TABLE_SIZE: usize = 1 << 16;
+use std::ops::DerefMut;
 
 const RGB_CHANNELS: usize = 3;
 
@@ -22,7 +19,6 @@ const SMALL_CUBE: usize = 4;
 const SMALL_CUBE_BITS: usize = 2;
 // SMALL_CUBE ** 3
 const LARGE_CUBE_OFFSET: usize = SMALL_CUBE * SMALL_CUBE * SMALL_CUBE;
-const IMPLICIT_PALETTE_SIZE: usize = LARGE_CUBE_OFFSET + LARGE_CUBE * LARGE_CUBE * LARGE_CUBE;
 
 fn scale<const DENOM: usize>(value: usize, bit_depth: usize) -> i32 {
     // return (value * ((1 << bit_depth) - 1)) / DENOM;
@@ -166,80 +162,40 @@ fn get_palette_value(
     }
 }
 
-pub fn do_palette_step(
-    step: TransformStep,
-    buffers: &mut [ModularBufferInfo],
-    (gx, gy): (usize, usize),
-) -> Result<Vec<(usize, usize)>> {
-    let TransformStep::Palette {
-        buf_in,
-        buf_pal,
-        buf_out,
-        num_colors,
-        num_deltas,
-        chan_index,
-        predictor,
-    } = step
-    else {
-        unreachable!("non-palette step passed to palette transform")
-    };
-    let grid = buffers[buf_in].grid_shape.0 * gy + gx;
-    assert_eq!(buffers[buf_in].grid_kind, buffers[buf_out].grid_kind);
-    assert_eq!(buffers[buf_in].info.size, buffers[buf_out].info.size);
-    assert!(buffers[buf_out].buffer_grid[grid].data.is_none());
-
-    assert_eq!(buffers[buf_pal].grid_kind, ModularGridKind::None);
-    assert_eq!(buffers[buf_pal].grid_shape, (1, 1));
-
-    let buf_size = buffers[buf_in].buffer_grid[grid]
-        .data
-        .as_ref()
-        .unwrap()
-        .size();
-    buffers[buf_out].buffer_grid[grid].data = Some(Image::new(buf_size)?);
-
-    let (w, h) = buf_size;
+pub fn do_palette_step_general(
+    buf_in: &Image<i32>,
+    buf_pal: &Image<i32>,
+    buf_out: &mut [impl DerefMut<Target = Image<i32>>],
+    num_colors: usize,
+    num_deltas: usize,
+    predictor: Predictor,
+) {
+    let (w, h) = buf_in.size();
     let bit_depth = 8; // TODO(sboukortt): plumb the actual bit depth
 
     if w == 0 {
         // Nothing to do.
         // Avoid touching "empty" channels with non-zero height.
     } else if num_deltas == 0 && predictor == Predictor::Zero {
-        for y in 0..h {
-            for x in 0..w {
-                let index = buffers[buf_in].buffer_grid[grid]
-                    .data
-                    .as_ref()
-                    .unwrap()
-                    .as_rect()
-                    .row(y)[x];
-                let palette_value = {
-                    let palette = buffers[buf_pal].buffer_grid[0]
-                        .data
-                        .as_ref()
-                        .unwrap()
-                        .as_rect();
-                    get_palette_value(
-                        &palette,
-                        index as isize,
-                        /*c=*/ chan_index,
-                        /*palette_size=*/ num_colors,
-                        /*bit_depth=*/ bit_depth,
-                    )
-                };
-                buffers[buf_out].buffer_grid[grid]
-                    .data
-                    .as_mut()
-                    .unwrap()
-                    .as_rect_mut()
-                    .row(y)[x] = palette_value;
+        for (chan_index, out) in buf_out.iter_mut().enumerate() {
+            for y in 0..h {
+                for x in 0..w {
+                    let index = buf_in.as_rect().row(y)[x];
+                    let palette_value = {
+                        let palette = buf_pal.as_rect();
+                        get_palette_value(
+                            &palette,
+                            index as isize,
+                            /*c=*/ chan_index,
+                            /*palette_size=*/ num_colors,
+                            /*bit_depth=*/ bit_depth,
+                        )
+                    };
+                    out.as_rect_mut().row(y)[x] = palette_value;
+                }
             }
         }
     } else {
         todo!();
     }
-
-    buffers[buf_in].buffer_grid[grid].mark_used();
-
-    Ok(vec![(buf_out, grid)])
 }

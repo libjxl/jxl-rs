@@ -3,19 +3,19 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
+use std::ops::DerefMut;
+
 use crate::{
     bit_reader::BitReader,
     entropy_coding::decode::Reader,
     error::{Error, Result},
     frame::quantizer::NUM_QUANT_TABLES,
-    headers::{frame_header::FrameHeader, modular::GroupHeader},
+    headers::{frame_header::FrameHeader, modular::GroupHeader, JxlHeader},
     image::Image,
     util::tracing_wrappers::*,
 };
 
-use super::{
-    predict::WeightedPredictorState, tree::NUM_NONREF_PROPERTIES, ModularBufferInfo, Tree,
-};
+use super::{predict::WeightedPredictorState, tree::NUM_NONREF_PROPERTIES, Tree};
 
 #[allow(unused)]
 #[derive(Debug)]
@@ -49,10 +49,9 @@ impl ModularStreamId {
 #[allow(clippy::too_many_arguments)]
 #[instrument(level = "debug", skip(buffers, reader, br))]
 fn decode_modular_channel(
-    buffers: &mut [ModularBufferInfo],
-    buffer_indices: &[usize],
+    buffers: &mut [impl DerefMut<Target = Image<i32>>],
+    channel_indices: &[usize],
     index: usize,
-    grid_index: usize,
     stream_id: usize,
     header: &GroupHeader,
     tree: &Tree,
@@ -60,40 +59,20 @@ fn decode_modular_channel(
     br: &mut BitReader,
 ) -> Result<()> {
     debug!("reading channel");
-    let size = {
-        let b = &mut buffers[buffer_indices[index]].buffer_grid[grid_index];
-        if b.data.is_none() {
-            b.data = Some(Image::new(b.size)?)
-        }
-        b.size
-    };
-
-    let chan = buffers[buffer_indices[index]].channel_id;
+    let chan = channel_indices[index];
+    let size = buffers[index].size();
     let mut wp_state = WeightedPredictorState::new(header);
     for y in 0..size.1 {
         let mut property_buffer = [0; 256];
         property_buffer[0] = chan as i32;
         property_buffer[1] = stream_id as i32;
         for x in 0..size.0 {
-            let prediction_result = tree.predict(
-                buffers,
-                buffer_indices,
-                index,
-                grid_index,
-                &mut wp_state,
-                x,
-                y,
-                &mut property_buffer,
-            );
+            let prediction_result =
+                tree.predict(buffers, index, &mut wp_state, x, y, &mut property_buffer);
             let dec = reader.read_signed(br, prediction_result.context as usize)?;
             let val =
                 prediction_result.guess + (prediction_result.multiplier as i64) * (dec as i64);
-            buffers[buffer_indices[index]].buffer_grid[grid_index]
-                .data
-                .as_mut()
-                .unwrap()
-                .as_rect_mut()
-                .row(y)[x] = val as i32;
+            buffers[index].as_rect_mut().row(y)[x] = val as i32;
             trace!(y, x, val, dec, ?property_buffer, ?prediction_result);
             // TODO(veluca): update WP errors.
         }
@@ -102,18 +81,30 @@ fn decode_modular_channel(
     Ok(())
 }
 
-pub fn decode_modular_section(
-    buffers: &mut [ModularBufferInfo],
-    buffer_indices: &[usize],
-    grid_index: usize,
+// This function will decode a header and apply local transforms if a header is not given.
+// The intended use of passing a header is for the DcGlobal section.
+pub fn decode_modular_subbitstream(
+    buffers: &mut [impl DerefMut<Target = Image<i32>>],
+    channel_indices: &[usize],
     stream_id: usize,
-    header: &GroupHeader,
+    header: Option<GroupHeader>,
     global_tree: &Option<Tree>,
     br: &mut BitReader,
 ) -> Result<()> {
-    if buffer_indices.is_empty() {
+    let (header, apply_transforms) = if let Some(header) = header {
+        (header, false)
+    } else {
+        let header = GroupHeader::read(br)?;
+        if !header.transforms.is_empty() {
+            // TODO(veluca): meta-apply local transforms.
+            todo!("Local transforms are not implemented yet");
+        }
+        (header, true)
+    };
+    if buffers.is_empty() {
         return Ok(());
     }
+    assert_eq!(buffers.len(), channel_indices.len());
     if header.use_global_tree && global_tree.is_none() {
         return Err(Error::NoGlobalTree);
     }
@@ -137,14 +128,13 @@ pub fn decode_modular_section(
 
     let mut reader = tree.histograms.make_reader(br)?;
 
-    for i in 0..buffer_indices.len() {
+    for i in 0..buffers.len() {
         decode_modular_channel(
             buffers,
-            buffer_indices,
+            channel_indices,
             i,
-            grid_index,
             stream_id,
-            header,
+            &header,
             tree,
             &mut reader,
             br,
@@ -152,6 +142,10 @@ pub fn decode_modular_section(
     }
 
     reader.check_final_state()?;
+
+    if apply_transforms {
+        // TODO(veluca): apply local transforms.
+    }
 
     Ok(())
 }

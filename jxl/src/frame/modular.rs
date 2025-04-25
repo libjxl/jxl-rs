@@ -3,7 +3,7 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-use std::fmt::Debug;
+use std::{cell::RefCell, fmt::Debug};
 
 use crate::{
     bit_reader::BitReader,
@@ -17,12 +17,14 @@ use crate::{
     util::{tracing_wrappers::*, CeilLog2},
 };
 
+mod borrowed_buffers;
 mod decode;
 mod predict;
 mod transforms;
 mod tree;
 
-use decode::decode_modular_section;
+use borrowed_buffers::MutablyBorrowedModularBuffers;
+use decode::decode_modular_subbitstream;
 pub use decode::ModularStreamId;
 pub use predict::Predictor;
 use transforms::{make_grids, TransformStepChunk};
@@ -83,13 +85,15 @@ impl ModularGridKind {
     }
 }
 
-#[allow(dead_code)]
+// Note: this type uses interior mutability to get mutable references to multiple buffers at once.
+// In principle, this is not needed, but the overhead should be minimal so using `unsafe` here is
+// probably not worth it.
 #[derive(Debug)]
 struct ModularBuffer {
-    data: Option<Image<i32>>,
+    data: RefCell<Option<Image<i32>>>,
     // Holds additional information such as the weighted predictor's error channel's last row for
     // the transform chunk that produced this buffer.
-    auxiliary_data: Option<Image<i32>>,
+    auxiliary_data: RefCell<Option<Image<i32>>>,
     // Number of times this buffer will be used, *including* when it is used for output.
     remaining_uses: usize,
     used_by_transforms: Vec<usize>,
@@ -97,15 +101,41 @@ struct ModularBuffer {
 }
 
 impl ModularBuffer {
+    // Gives out a copy of the buffer + auxiliary buffer, marking the buffer as used.
+    // If this was the last usage of the buffer, does not actually copy the buffer.
+    fn get_buffer(&mut self) -> Result<(Image<i32>, Option<Image<i32>>)> {
+        self.remaining_uses = self.remaining_uses.checked_sub(1).unwrap();
+        if self.remaining_uses == 0 {
+            Ok((
+                self.data.borrow_mut().take().unwrap(),
+                self.auxiliary_data.borrow_mut().take(),
+            ))
+        } else {
+            Ok((
+                self.data
+                    .borrow()
+                    .as_ref()
+                    .map(|x| x.as_rect().to_image())
+                    .transpose()?
+                    .unwrap(),
+                self.auxiliary_data
+                    .borrow()
+                    .as_ref()
+                    .map(|x| x.as_rect().to_image())
+                    .transpose()?,
+            ))
+        }
+    }
+
     fn mark_used(&mut self) {
         self.remaining_uses = self.remaining_uses.checked_sub(1).unwrap();
         if self.remaining_uses == 0 {
-            self.data = None;
+            *self.data.borrow_mut() = None;
+            *self.auxiliary_data.borrow_mut() = None;
         }
     }
 }
 
-#[allow(dead_code)]
 #[derive(Debug)]
 struct ModularBufferInfo {
     info: ChannelInfo,
@@ -113,6 +143,7 @@ struct ModularBufferInfo {
     channel_id: usize,
     is_output: bool,
     is_coded: bool,
+    #[allow(dead_code)]
     description: String,
     grid_kind: ModularGridKind,
     grid_shape: (usize, usize),
@@ -260,15 +291,19 @@ impl FullModularImage {
             &mut buffer_info,
         );
 
-        decode_modular_section(
-            &mut buffer_info,
-            &section_buffer_indices[0],
-            0,
-            ModularStreamId::GlobalData.get_id(frame_header),
-            &header,
-            global_tree,
-            br,
-        )?;
+        {
+            let mut buffers =
+                MutablyBorrowedModularBuffers::new(&buffer_info, &section_buffer_indices[0], 0)?;
+
+            decode_modular_subbitstream(
+                &mut buffers.bufs,
+                &buffers.channel_ids,
+                ModularStreamId::GlobalData.get_id(frame_header),
+                Some(header),
+                global_tree,
+                br,
+            )?;
+        }
 
         Ok(FullModularImage {
             buffer_info,
@@ -301,20 +336,23 @@ impl FullModularImage {
                 unreachable!("read_stream should only be used for streams that are part of the main Modular image");
             }
         };
-        let header = GroupHeader::read(br)?;
-        if !header.transforms.is_empty() {
-            todo!("Local transforms are not implemented yet");
-        }
 
-        decode_modular_section(
-            &mut self.buffer_info,
-            &self.section_buffer_indices[section_id],
-            grid,
-            stream.get_id(frame_header),
-            &header,
-            global_tree,
-            br,
-        )?;
+        {
+            let mut buffers = MutablyBorrowedModularBuffers::new(
+                &self.buffer_info,
+                &self.section_buffer_indices[section_id],
+                grid,
+            )?;
+
+            decode_modular_subbitstream(
+                &mut buffers.bufs,
+                &buffers.channel_ids,
+                stream.get_id(frame_header),
+                None,
+                global_tree,
+                br,
+            )?;
+        }
 
         let maybe_output = |bi: &mut ModularBufferInfo, grid: usize| -> Result<()> {
             if bi.is_output {
@@ -323,7 +361,7 @@ impl FullModularImage {
                 on_output(
                     bi.channel_id,
                     g,
-                    bi.buffer_grid[grid].data.as_ref().unwrap(),
+                    bi.buffer_grid[grid].data.borrow().as_ref().unwrap(),
                 )?;
                 bi.buffer_grid[grid].mark_used();
             }
@@ -354,37 +392,6 @@ impl FullModularImage {
     }
 }
 
-fn create_buffers(
-    channels: &[ChannelInfo],
-    desc: &'static str,
-) -> (Vec<ModularBufferInfo>, Vec<usize>) {
-    let mut buffer_info = vec![];
-    let mut buffer_indices = vec![];
-    for (i, chan) in channels.iter().enumerate() {
-        buffer_info.push(ModularBufferInfo {
-            info: chan.clone(),
-            channel_id: i,
-            is_output: true,
-            is_coded: false,
-            description: format!(
-                "{} Input channel {}, size {}x{}",
-                desc, i, chan.size.0, chan.size.1
-            ),
-            grid_kind: ModularGridKind::None,
-            grid_shape: (1, 1),
-            buffer_grid: vec![ModularBuffer {
-                data: None,
-                auxiliary_data: None,
-                remaining_uses: 1,
-                used_by_transforms: vec![],
-                size: chan.size,
-            }],
-        });
-        buffer_indices.push(i);
-    }
-    (buffer_info, buffer_indices)
-}
-
 pub fn decode_vardct_lf(
     group: usize,
     frame_header: &FrameHeader,
@@ -399,27 +406,13 @@ pub fn decode_vardct_lf(
     debug!(?stream_id);
     let r = frame_header.lf_group_rect(group);
     debug!(?r);
-    let channels: Vec<ChannelInfo> = (0..3)
-        .map(|_| ChannelInfo {
-            size: r.size,
-            shift: None,
-        })
-        .collect();
-    let header = GroupHeader::read(br)?;
-    if !header.transforms.is_empty() {
-        todo!("Local transforms are not implemented yet");
-    }
-    debug!(?header);
-    let (mut buffer_info, buffer_indices) = create_buffers(&channels, "VarDCT LF");
-    decode_modular_section(
-        &mut buffer_info,
-        buffer_indices.as_slice(),
-        0,
-        stream_id,
-        &header,
-        global_tree,
-        br,
-    )?;
+    let mut buffers = [
+        Image::new(r.size)?,
+        Image::new(r.size)?,
+        Image::new(r.size)?,
+    ];
+    let mut buf_refs: Vec<_> = buffers.iter_mut().collect();
+    decode_modular_subbitstream(&mut buf_refs, &[0, 1, 2], stream_id, None, global_tree, br)?;
     // TODO(szabadka): Generate the f32 pixels of the LF image.
     Ok(())
 }
@@ -439,41 +432,23 @@ pub fn decode_hf_metadata(
     let count_num_bits = upper_bound.ceil_log2();
     let count = br.read(count_num_bits)? + 1;
     debug!(?count);
-    let header = GroupHeader::read(br)?;
-    if !header.transforms.is_empty() {
-        todo!("Local transforms are not implemented yet");
-    }
-    debug!(?header);
     assert!(frame_header.is444());
     let cr = Rect {
         origin: (r.origin.0 >> 3, r.origin.1 >> 3),
         size: (r.size.0.div_ceil(8), r.size.1.div_ceil(8)),
     };
-    let channels = vec![
-        ChannelInfo {
-            size: cr.size,
-            shift: Some((3, 3)),
-        },
-        ChannelInfo {
-            size: cr.size,
-            shift: Some((3, 3)),
-        },
-        ChannelInfo {
-            size: (count as usize, 2),
-            shift: None,
-        },
-        ChannelInfo {
-            size: r.size,
-            shift: None,
-        },
+    let mut buffers = [
+        Image::new(cr.size)?,
+        Image::new(cr.size)?,
+        Image::new((count as usize, 2))?,
+        Image::new(r.size)?,
     ];
-    let (mut buffer_info, buffer_indices) = create_buffers(&channels, "HF Metadata");
-    decode_modular_section(
-        &mut buffer_info,
-        buffer_indices.as_slice(),
-        0,
+    let mut buf_refs: Vec<_> = buffers.iter_mut().collect();
+    decode_modular_subbitstream(
+        &mut buf_refs,
+        &[0, 1, 2, 3],
         stream_id,
-        &header,
+        None,
         global_tree,
         br,
     )?;
