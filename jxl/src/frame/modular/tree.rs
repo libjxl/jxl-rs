@@ -3,13 +3,14 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-use std::fmt::Debug;
+use std::{fmt::Debug, ops::DerefMut};
 
-use super::{predict::WeightedPredictorState, ModularBufferInfo, Predictor};
+use super::{predict::WeightedPredictorState, Predictor};
 use crate::{
     bit_reader::BitReader,
     entropy_coding::decode::Histograms,
     error::{Error, Result},
+    image::Image,
     util::{tracing_wrappers::*, NewWithCapacity},
 };
 
@@ -201,25 +202,15 @@ impl Tree {
     #[instrument(level = "trace", skip(buffers), ret)]
     pub(super) fn predict(
         &self,
-        buffers: &mut [ModularBufferInfo],
-        buffer_indices: &[usize],
+        buffers: &mut [impl DerefMut<Target = Image<i32>>],
         index: usize,
-        grid_index: usize,
         wp_state: &mut WeightedPredictorState,
         x: usize,
         y: usize,
         property_buffer: &mut [i32; 256],
     ) -> PredictionResult {
-        let get_pixel = |x: usize, y: usize| -> i32 {
-            buffers[buffer_indices[index]].buffer_grid[grid_index]
-                .data
-                .as_ref()
-                .unwrap()
-                .as_rect()
-                .row(y)[x]
-        };
-
-        let (w, _) = buffers[buffer_indices[index]].buffer_grid[grid_index].size;
+        let (w, _) = buffers[index].size();
+        let get_pixel = |x: usize, y: usize| -> i32 { buffers[index].as_rect().row(y)[x] };
 
         let left = if x > 0 {
             get_pixel(x - 1, y)
