@@ -117,16 +117,21 @@ impl<T: ImageDataType> Debug for Image<T> {
         write!(f, "{:?} {}x{}", T::DATA_TYPE_ID, self.size.0, self.size.1,)
     }
 }
+
+#[derive(Clone, Copy, Debug)]
+pub struct Rect {
+    pub origin: (usize, usize),
+    pub size: (usize, usize),
+}
+
 #[derive(Clone, Copy)]
 pub struct ImageRect<'a, T: ImageDataType> {
-    origin: (usize, usize),
-    size: (usize, usize),
+    rect: Rect,
     image: &'a Image<T>,
 }
 
 pub struct ImageRectMut<'a, T: ImageDataType> {
-    origin: (usize, usize),
-    size: (usize, usize),
+    rect: Rect,
     image: &'a mut Image<T>,
 }
 
@@ -136,10 +141,10 @@ impl<T: ImageDataType> Debug for ImageRect<'_, T> {
             f,
             "{:?} {}x{}+{}+{}",
             T::DATA_TYPE_ID,
-            self.size.0,
-            self.size.1,
-            self.origin.0,
-            self.origin.1
+            self.rect.size.0,
+            self.rect.size.1,
+            self.rect.origin.0,
+            self.rect.origin.1
         )
     }
 }
@@ -150,10 +155,10 @@ impl<T: ImageDataType> Debug for ImageRectMut<'_, T> {
             f,
             "mut {:?} {}x{}+{}+{}",
             T::DATA_TYPE_ID,
-            self.size.0,
-            self.size.1,
-            self.origin.0,
-            self.origin.1
+            self.rect.size.0,
+            self.rect.size.1,
+            self.rect.origin.0,
+            self.rect.origin.1
         )
     }
 }
@@ -242,16 +247,20 @@ impl<T: ImageDataType> Image<T> {
 
     pub fn as_rect(&self) -> ImageRect<'_, T> {
         ImageRect {
-            origin: (0, 0),
-            size: self.size,
+            rect: Rect {
+                origin: (0, 0),
+                size: self.size,
+            },
             image: self,
         }
     }
 
     pub fn as_rect_mut(&mut self) -> ImageRectMut<'_, T> {
         ImageRectMut {
-            origin: (0, 0),
-            size: self.size,
+            rect: Rect {
+                origin: (0, 0),
+                size: self.size,
+            },
             image: self,
         }
     }
@@ -283,67 +292,69 @@ fn rect_size_check(
 
 impl<'a, T: ImageDataType> ImageRect<'a, T> {
     pub fn rect(self, origin: (usize, usize), size: (usize, usize)) -> Result<ImageRect<'a, T>> {
-        rect_size_check(origin, size, self.size)?;
+        rect_size_check(origin, size, self.rect.size)?;
         Ok(ImageRect {
-            origin: (origin.0 + self.origin.0, origin.1 + self.origin.1),
-            size,
+            rect: Rect {
+                origin: (origin.0 + self.rect.origin.0, origin.1 + self.rect.origin.1),
+                size,
+            },
             image: self.image,
         })
     }
 
     pub fn size(&self) -> (usize, usize) {
-        self.size
+        self.rect.size
     }
 
     pub fn row(&self, row: usize) -> &'a [T] {
-        debug_assert!(row < self.size.1);
-        let start = (row + self.origin.1) * self.image.size.0 + self.origin.0;
+        debug_assert!(row < self.rect.size.1);
+        let start = (row + self.rect.origin.1) * self.image.size.0 + self.rect.origin.0;
         trace!(
             "{self:?} img size {:?} row {row} start {}",
             self.image.size,
             start
         );
-        &self.image.data[start..start + self.size.0]
+        &self.image.data[start..start + self.rect.size.0]
     }
 
     pub fn to_image(&self) -> Result<Image<T>> {
-        let total_size = self.size.0 * self.size.1;
+        let total_size = self.rect.size.0 * self.rect.size.1;
         let mut data = vec![];
         data.try_reserve_exact(total_size)?;
-        data.extend((0..self.size.1).flat_map(|x| self.row(x).iter()));
+        data.extend((0..self.rect.size.1).flat_map(|x| self.row(x).iter()));
         Ok(Image {
-            size: self.size,
+            size: self.rect.size,
             data,
         })
     }
 
     pub fn iter(&self) -> impl Iterator<Item = T> + '_ {
-        (0..self.size.1).flat_map(|x| self.row(x).iter().cloned())
+        (0..self.rect.size.1).flat_map(|x| self.row(x).iter().cloned())
     }
 
     #[cfg(test)]
     pub fn check_equal(&self, other: ImageRect<T>) {
-        assert_eq!(self.size, other.size);
-        for y in 0..self.size.1 {
-            for x in 0..self.size.0 {
+        assert_eq!(self.rect.size, other.rect.size);
+        for y in 0..self.rect.size.1 {
+            for x in 0..self.rect.size.0 {
                 if self.row(y)[x] != other.row(y)[x] {
                     let mut msg = format!(
                         "mismatch at position {x}x{y}, values {:?} and {:?}",
                         self.row(y)[x],
                         other.row(y)[x]
                     );
-                    if self.origin != (0, 0) {
+                    if self.rect.origin != (0, 0) {
                         msg = format!(
                             "; position in ground truth {}x{}",
-                            x + self.origin.0,
-                            y + self.origin.1
+                            x + self.rect.origin.0,
+                            y + self.rect.origin.1
                         );
                     }
-                    if other.origin != (0, 0) {
+                    if other.rect.origin != (0, 0) {
                         msg = format!(
                             "; position in checked img {}x{}",
-                            x + other.origin.0,
-                            y + other.origin.1
+                            x + other.rect.origin.0,
+                            y + other.rect.origin.1
                         );
                     }
                     panic!("{}", msg);
@@ -367,10 +378,12 @@ impl<'a, T: ImageDataType> ImageRectMut<'a, T> {
         origin: (usize, usize),
         size: (usize, usize),
     ) -> Result<ImageRectMut<'a, T>> {
-        rect_size_check(origin, size, self.size)?;
+        rect_size_check(origin, size, self.rect.size)?;
         Ok(ImageRectMut {
-            origin: (origin.0 + self.origin.0, origin.1 + self.origin.1),
-            size,
+            rect: Rect {
+                origin: (origin.0 + self.rect.origin.0, origin.1 + self.rect.origin.1),
+                size,
+            },
             image: self.image,
         })
     }
@@ -380,31 +393,33 @@ impl<'a, T: ImageDataType> ImageRectMut<'a, T> {
         origin: (usize, usize),
         size: (usize, usize),
     ) -> Result<ImageRectMut<'a, T>> {
-        rect_size_check(origin, size, self.size)?;
+        rect_size_check(origin, size, self.rect.size)?;
         Ok(ImageRectMut {
-            origin: (origin.0 + self.origin.0, origin.1 + self.origin.1),
-            size,
+            rect: Rect {
+                origin: (origin.0 + self.rect.origin.0, origin.1 + self.rect.origin.1),
+                size,
+            },
             image: self.image,
         })
     }
 
     pub fn size(&self) -> (usize, usize) {
-        self.size
+        self.rect.size
     }
 
     #[instrument(skip_all)]
     pub fn copy_from(&mut self, other: ImageRect<'_, T>) -> Result<()> {
-        if other.size != self.size {
+        if other.rect.size != self.rect.size {
             return Err(Error::CopyOfDifferentSize(
-                other.size.0,
-                other.size.1,
-                self.size.0,
-                self.size.1,
+                other.rect.size.0,
+                other.rect.size.1,
+                self.rect.size.0,
+                self.rect.size.1,
             ));
         }
 
-        for i in 0..self.size.1 {
-            trace!("copying row {i} of {}", self.size.1);
+        for i in 0..self.rect.size.1 {
+            trace!("copying row {i} of {}", self.rect.size.1);
             self.row(i).copy_from_slice(other.row(i));
         }
 
@@ -412,25 +427,24 @@ impl<'a, T: ImageDataType> ImageRectMut<'a, T> {
     }
 
     fn row_offset(&self, row: usize) -> usize {
-        debug_assert!(row < self.size.1);
-        (row + self.origin.1) * self.image.size.0 + self.origin.0
+        debug_assert!(row < self.rect.size.1);
+        (row + self.rect.origin.1) * self.image.size.0 + self.rect.origin.0
     }
 
     pub fn row(&mut self, row: usize) -> &mut [T] {
-        debug_assert!(row < self.size.1);
+        debug_assert!(row < self.rect.size.1);
         let start = self.row_offset(row);
         trace!(
             "{self:?} img size {:?} row {row} start {}",
             self.image.size,
             start
         );
-        &mut self.image.data[start..start + self.size.0]
+        &mut self.image.data[start..start + self.rect.size.0]
     }
 
     pub fn as_rect(&'a self) -> ImageRect<'a, T> {
         ImageRect {
-            origin: self.origin,
-            size: self.size,
+            rect: self.rect,
             image: self.image,
         }
     }
@@ -441,8 +455,8 @@ impl<'a, T: ImageDataType> ImageRectMut<'a, T> {
     where
         F: for<'b> FnMut((usize, usize), &'b mut T),
     {
-        let origin = self.origin;
-        (0..self.size.1).for_each(|x| {
+        let origin = self.rect.origin;
+        (0..self.rect.size.1).for_each(|x| {
             self.row(x)
                 .iter_mut()
                 .enumerate()
@@ -492,9 +506,14 @@ pub mod debug_tools {
         pub fn to_pgm(&self) -> Vec<u8> {
             use std::io::Write;
             let mut ret = vec![];
-            write!(&mut ret, "P5\n{} {}\n255\n", self.size.0, self.size.1).unwrap();
+            write!(
+                &mut ret,
+                "P5\n{} {}\n255\n",
+                self.rect.size.0, self.rect.size.1
+            )
+            .unwrap();
             ret.extend(
-                (0..self.size.1)
+                (0..self.rect.size.1)
                     .flat_map(|x| self.row(x).iter())
                     .map(|x| x.to_u8_for_writing()),
             );
@@ -506,9 +525,14 @@ pub mod debug_tools {
         pub fn to_pgm_as_8bit(&self) -> Vec<u8> {
             use std::io::Write;
             let mut ret = vec![];
-            write!(&mut ret, "P5\n{} {}\n255\n", self.size.0, self.size.1).unwrap();
+            write!(
+                &mut ret,
+                "P5\n{} {}\n255\n",
+                self.rect.size.0, self.rect.size.1
+            )
+            .unwrap();
             ret.extend(
-                (0..self.size.1)
+                (0..self.rect.size.1)
                     .flat_map(|x| self.row(x).iter())
                     .map(|x| (*x).clamp(0, 255) as u8),
             );

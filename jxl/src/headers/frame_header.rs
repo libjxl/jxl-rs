@@ -9,11 +9,13 @@ use crate::{
     bit_reader::BitReader,
     error::Error,
     headers::{encodings::*, extra_channels::ExtraChannelInfo},
+    image::Rect,
     util::FloorLog2,
 };
 
 use jxl_macros::UnconditionalCoder;
 use num_derive::FromPrimitive;
+use std::cmp::min;
 
 use super::{permutation::Permutation, Animation};
 
@@ -503,6 +505,9 @@ impl FrameHeader {
     pub fn has_splines(&self) -> bool {
         self.flags & Flags::ENABLE_SPLINES != 0
     }
+    pub fn has_lf_frame(&self) -> bool {
+        self.flags & Flags::USE_LF_FRAME != 0
+    }
     pub fn raw_hshift(&self, c: usize) -> usize {
         H_SHIFT[self.jpeg_upsampling[c] as usize]
     }
@@ -583,6 +588,25 @@ impl FrameHeader {
             self.size_blocks().0.div_ceil(self.group_dim()),
             self.size_blocks().1.div_ceil(self.group_dim()),
         )
+    }
+
+    pub fn lf_group_rect(&self, group: usize) -> Rect {
+        let lf_dims = self.size_lf_groups();
+        let block_dims = self.size_blocks();
+        let gx = group % lf_dims.0;
+        let gy = group / lf_dims.0;
+        let origin = (gx * self.group_dim(), gy * self.group_dim());
+        let size = (
+            min(
+                block_dims.0.checked_sub(origin.0).unwrap(),
+                self.group_dim(),
+            ),
+            min(
+                block_dims.1.checked_sub(origin.1).unwrap(),
+                self.group_dim(),
+            ),
+        );
+        Rect { origin, size }
     }
 
     fn check(&self, nonserialized: &FrameHeaderNonserialized) -> Result<(), Error> {
