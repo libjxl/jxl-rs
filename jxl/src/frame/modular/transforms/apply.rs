@@ -60,7 +60,6 @@ impl TransformStepChunk {
         if self.incomplete_deps > 0 {
             return Ok(vec![]);
         }
-        let (gx, gy) = self.grid_pos;
         let buf_out: &[usize] = match &self.step {
             TransformStep::Rct { buf_out, .. } => buf_out,
             TransformStep::Palette { buf_out, .. } => buf_out,
@@ -69,7 +68,7 @@ impl TransformStepChunk {
             }
         };
 
-        let grid = buffers[buf_out[0]].grid_shape.0 * gy + gx;
+        let grid = buffers[buf_out[0]].get_grid_idx(self.grid_pos);
         for bo in buf_out {
             assert_eq!(buffers[buf_out[0]].grid_kind, buffers[*bo].grid_kind);
             assert_eq!(buffers[buf_out[0]].info.size, buffers[*bo].info.size);

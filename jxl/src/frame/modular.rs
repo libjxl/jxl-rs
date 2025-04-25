@@ -150,6 +150,15 @@ struct ModularBufferInfo {
     buffer_grid: Vec<ModularBuffer>,
 }
 
+impl ModularBufferInfo {
+    fn get_grid_idx(&self, grid: (usize, usize)) -> usize {
+        match self.grid_kind {
+            ModularGridKind::None => 0,
+            ModularGridKind::Lf | ModularGridKind::Hf => self.grid_shape.0 * grid.1 + grid.0,
+        }
+    }
+}
+
 /// A modular image is a sequence of channels to which one or more transforms might have been
 /// applied. We represent a modular image as a list of buffers, some of which are coded in the
 /// bitstream; other buffers are obtained as the output of one of the transformation steps.
@@ -356,6 +365,7 @@ impl FullModularImage {
 
         let maybe_output = |bi: &mut ModularBufferInfo, grid: usize| -> Result<()> {
             if bi.is_output {
+                assert_ne!(bi.grid_kind, ModularGridKind::None);
                 let (gw, _) = bi.grid_shape;
                 let g = (grid % gw, grid / gw);
                 on_output(
