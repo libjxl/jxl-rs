@@ -23,7 +23,7 @@ use crate::{
 use block_context_map::BlockContextMap;
 use coeff_order::decode_coeff_orders;
 use color_correlation_map::ColorCorrelationParams;
-use modular::decode_vardct_lf;
+use modular::{decode_hf_metadata, decode_vardct_lf};
 use modular::{FullModularImage, ModularStreamId, Tree};
 use quantizer::LfQuantFactors;
 use quantizer::QuantizerParams;
@@ -118,6 +118,15 @@ impl DecoderState {
     }
 }
 
+#[allow(dead_code)]
+pub struct HfMetadata {
+    ytox_map: Image<i8>,
+    ytob_map: Image<i8>,
+    raw_quant_map: Image<i32>,
+    transform_map: Image<u8>,
+    epf_map: Image<u8>,
+}
+
 pub struct Frame {
     header: FrameHeader,
     toc: Toc,
@@ -125,6 +134,7 @@ pub struct Frame {
     lf_global: Option<LfGlobalState>,
     hf_global: Option<HfGlobalState>,
     lf_image: Option<Image<f32>>,
+    hf_meta: Option<HfMetadata>,
     decoder_state: DecoderState,
 }
 
@@ -177,9 +187,22 @@ impl Frame {
         } else {
             3
         };
+        let size_blocks = frame_header.size_blocks();
         let lf_image = if frame_header.encoding == Encoding::VarDCT && !frame_header.has_lf_frame()
         {
-            Some(Image::new(frame_header.size_blocks())?)
+            Some(Image::new(size_blocks)?)
+        } else {
+            None
+        };
+        let size_color_tiles = (size_blocks.0.div_ceil(8), size_blocks.1.div_ceil(8));
+        let hf_meta = if frame_header.encoding == Encoding::VarDCT {
+            Some(HfMetadata {
+                ytox_map: Image::new(size_color_tiles)?,
+                ytob_map: Image::new(size_color_tiles)?,
+                raw_quant_map: Image::new(size_blocks)?,
+                transform_map: Image::new(size_blocks)?,
+                epf_map: Image::new(size_blocks)?,
+            })
         } else {
             None
         };
@@ -190,6 +213,7 @@ impl Frame {
             lf_global: None,
             hf_global: None,
             lf_image,
+            hf_meta,
             decoder_state,
         })
     }
@@ -338,7 +362,6 @@ impl Frame {
             info!("decoding VarDCT LF with group id {}", group);
             let lf_image = self.lf_image.as_mut().unwrap();
             decode_vardct_lf(group, &self.header, &lf_global.tree, lf_image, br)?;
-            todo!("VarDCT not implemented");
         }
         lf_global.modular_global.read_stream(
             ModularStreamId::ModularLF(group),
@@ -346,7 +369,13 @@ impl Frame {
             &lf_global.tree,
             handle_decoded_modular_channel,
             br,
-        )
+        )?;
+        if self.header.encoding == Encoding::VarDCT && !self.header.has_lf_frame() {
+            info!("decoding HF metadata with group id {}", group);
+            let hf_meta = self.hf_meta.as_mut().unwrap();
+            decode_hf_metadata(group, &self.header, &lf_global.tree, hf_meta, br)?;
+        }
+        Ok(())
     }
 
     #[instrument(skip_all)]

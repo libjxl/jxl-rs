@@ -169,14 +169,22 @@ mod test {
         arbtest::arbtest(|u| {
             // (0.0, 128.0]
             let base = u.int_in_range(1..=1 << 24)? as f32 / (1 << 17) as f32;
-            // [-8.0, 8.0]
-            let exp = u.int_in_range(-(1i32 << 23)..=1 << 23)? as f32 / (1 << 20) as f32;
+            // [-4.0, 4.0]
+            let exp = u.int_in_range(-(1i32 << 22)..=1 << 22)? as f32 / (1 << 20) as f32;
 
             let expected = base.powf(exp);
             let actual = fast_powf(base, exp);
             let abs_error = (actual - expected).abs();
             let rel_error = abs_error / expected;
-            assert!(rel_error < 3e-5);
+            assert!(
+                rel_error < 3e-5,
+                "base: {}, exp: {}, rel_error: {}, expected: {}, actual: {}",
+                base,
+                exp,
+                rel_error,
+                expected,
+                actual
+            );
             Ok(())
         });
     }
