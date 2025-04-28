@@ -3,11 +3,12 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-use std::{cell::RefCell, fmt::Debug};
+use std::{cell::RefCell, cmp::min, fmt::Debug};
 
 use crate::{
     bit_reader::BitReader,
-    error::Result,
+    error::{Error, Result},
+    frame::transform_map::*,
     frame::HfMetadata,
     headers::{
         extra_channels::ExtraChannelInfo, frame_header::FrameHeader, modular::GroupHeader,
@@ -16,6 +17,7 @@ use crate::{
     image::{Image, Rect},
     util::{tracing_wrappers::*, CeilLog2},
 };
+use num_traits::clamp;
 
 mod borrowed_buffers;
 mod decode;
@@ -431,7 +433,7 @@ pub fn decode_hf_metadata(
     group: usize,
     frame_header: &FrameHeader,
     global_tree: &Option<Tree>,
-    _hf_meta: &mut HfMetadata,
+    hf_meta: &mut HfMetadata,
     br: &mut BitReader,
 ) -> Result<()> {
     let stream_id = ModularStreamId::LFMeta(group).get_id(frame_header);
@@ -440,7 +442,7 @@ pub fn decode_hf_metadata(
     debug!(?r);
     let upper_bound = r.size.0 * r.size.1;
     let count_num_bits = upper_bound.ceil_log2();
-    let count = br.read(count_num_bits)? + 1;
+    let count: usize = br.read(count_num_bits)? as usize + 1;
     debug!(?count);
     assert!(frame_header.is444());
     let cr = Rect {
@@ -450,7 +452,7 @@ pub fn decode_hf_metadata(
     let mut buffers = [
         Image::new(cr.size)?,
         Image::new(cr.size)?,
-        Image::new((count as usize, 2))?,
+        Image::new((count, 2))?,
         Image::new(r.size)?,
     ];
     let mut buf_refs: Vec<_> = buffers.iter_mut().collect();
@@ -462,6 +464,59 @@ pub fn decode_hf_metadata(
         global_tree,
         br,
     )?;
-    // TODO(szabadka): Fill in HfMetadata from the modular buffers.
+    let ytox_image = buffers[0].as_rect();
+    let ytob_image = buffers[1].as_rect();
+    let mut ytox_map = hf_meta.ytox_map.as_rect_mut();
+    let mut ytob_map = hf_meta.ytob_map.as_rect_mut();
+    let mut ytox_map_rect = ytox_map.rect(cr.origin, cr.size)?;
+    let mut ytob_map_rect = ytob_map.rect(cr.origin, cr.size)?;
+    let i8min: i32 = i8::MIN.into();
+    let i8max: i32 = i8::MAX.into();
+    for y in 0..cr.size.1 {
+        for x in 0..cr.size.0 {
+            ytox_map_rect.row(y)[x] = ytox_image.row(y)[x].clamp(i8min, i8min) as i8;
+            ytob_map_rect.row(y)[x] = ytob_image.row(y)[x].clamp(i8max, i8max) as i8;
+        }
+    }
+    let transform_image = buffers[2].as_rect();
+    let epf_image = buffers[3].as_rect();
+    let mut transform_map = hf_meta.transform_map.as_rect_mut();
+    let mut transform_map_rect = transform_map.rect(r.origin, r.size)?;
+    let mut raw_quant_map = hf_meta.raw_quant_map.as_rect_mut();
+    let mut raw_quant_map_rect = raw_quant_map.rect(r.origin, r.size)?;
+    let mut epf_map = hf_meta.epf_map.as_rect_mut();
+    let mut epf_map_rect = epf_map.rect(r.origin, r.size)?;
+    let mut num: usize = 0;
+    for y in 0..r.size.1 {
+        for x in 0..r.size.0 {
+            let epf_val = epf_image.row(y)[x];
+            if !(0..8).contains(&epf_val) {
+                return Err(Error::InvalidEpfValue(epf_val));
+            }
+            epf_map_rect.row(y)[x] = epf_val as u8;
+            if transform_map_rect.row(y)[x] != INVALID_TRANSFORM {
+                continue;
+            }
+            if num >= count {
+                return Err(Error::InvalidVarDCTTransformMap);
+            }
+            let raw_transform = transform_image.row(0)[num];
+            let raw_quant = 1 + clamp(0, 255, transform_image.row(1)[num]);
+            let transform_type = get_transform_type(raw_transform)?;
+            let cx = covered_blocks_x(transform_type) as usize;
+            let cy = covered_blocks_y(transform_type) as usize;
+            let next_group = ((x / 32 + 1) * 32, (y / 32 + 1) * 32);
+            if x + cx > min(r.size.0, next_group.0) || y + cy > min(r.size.1, next_group.1) {
+                return Err(Error::HFBlockOutOfBounds);
+            }
+            for iy in 0..cy {
+                for ix in 0..cx {
+                    transform_map_rect.row(y + iy)[x + ix] = raw_transform as u8;
+                    raw_quant_map_rect.row(y + iy)[x + ix] = raw_quant;
+                }
+            }
+            num += 1;
+        }
+    }
     Ok(())
 }

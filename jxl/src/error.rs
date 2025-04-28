@@ -181,6 +181,14 @@ pub enum Error {
     TooManyBlockContexts,
     #[error("Base color correlation out of range.")]
     BaseColorCorrelationOutOfRange,
+    #[error("Invalid EPF sharpness param {0}")]
+    InvalidEpfValue(i32),
+    #[error("Invalid VarDCT transform type {0}")]
+    InvalidVarDCTTransform(i32),
+    #[error("Invalid VarDCT transform map")]
+    InvalidVarDCTTransformMap,
+    #[error("VarDCT transform overflows HF group")]
+    HFBlockOutOfBounds,
 }
 
 pub type Result<T, E = Error> = std::result::Result<T, E>;

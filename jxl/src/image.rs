@@ -165,7 +165,7 @@ impl<T: ImageDataType> Debug for ImageRectMut<'_, T> {
 
 impl<T: ImageDataType> Image<T> {
     #[instrument(err)]
-    pub fn new(size: (usize, usize)) -> Result<Image<T>> {
+    pub fn new_with_default(size: (usize, usize), default: T) -> Result<Image<T>> {
         let (xsize, ysize) = size;
         // These limits let us not worry about overflows.
         if xsize as u64 >= i64::MAX as u64 / 4 || ysize as u64 >= i64::MAX as u64 / 4 {
@@ -180,11 +180,15 @@ impl<T: ImageDataType> Image<T> {
         debug!("trying to allocate image");
         let mut data = vec![];
         data.try_reserve_exact(total_size)?;
-        data.resize(total_size, T::default());
+        data.resize(total_size, default);
         Ok(Image {
             size: (xsize, ysize),
             data,
         })
+    }
+
+    pub fn new(size: (usize, usize)) -> Result<Image<T>> {
+        Self::new_with_default(size, T::default())
     }
 
     #[cfg(test)]
