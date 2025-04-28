@@ -3,6 +3,7 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
+use crate::error::{Error, Result};
 use enum_iterator::{cardinality, Sequence};
 
 #[allow(clippy::upper_case_acronyms)]
@@ -51,6 +52,45 @@ pub enum HfTransformType {
     DCT256X256 = 24,
     DCT256X128 = 25,
     DCT128X256 = 26,
+}
+
+pub const INVALID_TRANSFORM: u8 = cardinality::<HfTransformType>() as u8;
+
+pub fn get_transform_type(raw_type: i32) -> Result<HfTransformType, Error> {
+    let lut: [HfTransformType; cardinality::<HfTransformType>()] = [
+        HfTransformType::DCT,
+        HfTransformType::IDENTITY,
+        HfTransformType::DCT2X2,
+        HfTransformType::DCT4X4,
+        HfTransformType::DCT16X16,
+        HfTransformType::DCT32X32,
+        HfTransformType::DCT16X8,
+        HfTransformType::DCT8X16,
+        HfTransformType::DCT32X8,
+        HfTransformType::DCT8X32,
+        HfTransformType::DCT32X16,
+        HfTransformType::DCT16X32,
+        HfTransformType::DCT4X8,
+        HfTransformType::DCT8X4,
+        HfTransformType::AFV0,
+        HfTransformType::AFV1,
+        HfTransformType::AFV2,
+        HfTransformType::AFV3,
+        HfTransformType::DCT64X64,
+        HfTransformType::DCT64X32,
+        HfTransformType::DCT32X64,
+        HfTransformType::DCT128X128,
+        HfTransformType::DCT128X64,
+        HfTransformType::DCT64X128,
+        HfTransformType::DCT256X256,
+        HfTransformType::DCT256X128,
+        HfTransformType::DCT128X256,
+    ];
+    if raw_type < 0 || raw_type >= INVALID_TRANSFORM.into() {
+        Err(Error::InvalidVarDCTTransform(raw_type))
+    } else {
+        Ok(lut[raw_type as usize])
+    }
 }
 
 pub fn covered_blocks_x(transform: HfTransformType) -> u32 {
