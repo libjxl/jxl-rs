@@ -230,6 +230,7 @@ impl Frame {
     /// Given a bit reader pointing at the end of the TOC, returns a vector of `BitReader`s, each
     /// of which reads a specific section.
     pub fn sections<'a>(&self, br: &'a mut BitReader) -> Result<Vec<BitReader<'a>>> {
+        debug!(toc = ?self.toc);
         if self.toc.permuted {
             self.toc
                 .permutation
@@ -264,6 +265,7 @@ impl Frame {
 
     #[instrument(skip_all)]
     pub fn decode_lf_global(&mut self, br: &mut BitReader) -> Result<()> {
+        debug!(section_size = br.total_bits_available());
         assert!(self.lf_global.is_none());
         trace!(pos = br.total_bits_read());
 
@@ -358,6 +360,7 @@ impl Frame {
 
     #[instrument(skip(self, br))]
     pub fn decode_lf_group(&mut self, group: usize, br: &mut BitReader) -> Result<()> {
+        debug!(section_size = br.total_bits_available());
         let lf_global = self.lf_global.as_mut().unwrap();
         if self.header.encoding == Encoding::VarDCT && !self.header.has_lf_frame() {
             info!("decoding VarDCT LF with group id {}", group);
@@ -381,6 +384,7 @@ impl Frame {
 
     #[instrument(skip_all)]
     pub fn decode_hf_global(&mut self, br: &mut BitReader) -> Result<()> {
+        debug!(section_size = br.total_bits_available());
         if self.header.encoding == Encoding::Modular {
             return Ok(());
         }
@@ -427,6 +431,7 @@ impl Frame {
 
     #[instrument(skip(self, br))]
     pub fn decode_hf_group(&mut self, group: usize, pass: usize, br: &mut BitReader) -> Result<()> {
+        debug!(section_size = br.total_bits_available());
         if self.header.encoding == Encoding::VarDCT {
             info!("decoding VarDCT");
             todo!("VarDCT not implemented");

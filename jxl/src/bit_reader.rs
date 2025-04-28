@@ -3,7 +3,9 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-use crate::error::Error;
+use std::fmt::Debug;
+
+use crate::{error::Error, util::tracing_wrappers::*};
 use byteorder::{ByteOrder, LittleEndian};
 
 /// Reads bits from a sequence of bytes.
@@ -12,6 +14,19 @@ pub struct BitReader<'a> {
     bit_buf: u64,
     bits_in_buf: usize,
     total_bits_read: usize,
+}
+
+impl Debug for BitReader<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "BitReader{{ data: [{} bytes], bit_buf: {:0width$b}, total_bits_read: {} }}",
+            self.data.len(),
+            self.bit_buf,
+            self.total_bits_read,
+            width = self.bits_in_buf
+        )
+    }
 }
 
 pub const MAX_BITS_PER_CALL: usize = 56;
@@ -65,6 +80,11 @@ impl<'a> BitReader<'a> {
     /// Returns the total number of bits that have been read or skipped.
     pub fn total_bits_read(&self) -> usize {
         self.total_bits_read
+    }
+
+    /// Returns the total number of bits that can still be read or skipped.
+    pub fn total_bits_available(&self) -> usize {
+        self.data.len() * 8 + self.bits_in_buf
     }
 
     /// Skips `num` bits.
@@ -167,9 +187,11 @@ impl<'a> BitReader<'a> {
             // Prevent the returned bitreader from over-reading.
             ret.data = &ret.data[..n - bytes_in_buf];
         } else {
-            ret.bits_in_buf -= n * 8;
-            ret.bit_buf &= (1u64 << n) - 1;
+            ret.bits_in_buf = n * 8;
+            ret.bit_buf &= (1u64 << (n * 8)) - 1;
+            ret.data = &[];
         }
+        debug!(?n, ret=?ret);
         Ok(ret)
     }
 }
