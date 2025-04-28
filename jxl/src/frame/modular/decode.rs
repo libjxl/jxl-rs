@@ -91,6 +91,9 @@ pub fn decode_modular_subbitstream(
     global_tree: &Option<Tree>,
     br: &mut BitReader,
 ) -> Result<()> {
+    if buffers.is_empty() {
+        return Ok(());
+    }
     let (header, apply_transforms) = if let Some(header) = header {
         (header, false)
     } else {
@@ -101,9 +104,6 @@ pub fn decode_modular_subbitstream(
         }
         (header, true)
     };
-    if buffers.is_empty() {
-        return Ok(());
-    }
     assert_eq!(buffers.len(), channel_indices.len());
     if header.use_global_tree && global_tree.is_none() {
         return Err(Error::NoGlobalTree);
