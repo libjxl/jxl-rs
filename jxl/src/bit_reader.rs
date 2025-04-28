@@ -9,6 +9,7 @@ use crate::{error::Error, util::tracing_wrappers::*};
 use byteorder::{ByteOrder, LittleEndian};
 
 /// Reads bits from a sequence of bytes.
+#[derive(Clone)]
 pub struct BitReader<'a> {
     data: &'a [u8],
     bit_buf: u64,
