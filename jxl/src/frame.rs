@@ -231,20 +231,24 @@ impl Frame {
     /// of which reads a specific section.
     pub fn sections<'a>(&self, br: &'a mut BitReader) -> Result<Vec<BitReader<'a>>> {
         debug!(toc = ?self.toc);
-        if self.toc.permuted {
-            self.toc
-                .permutation
-                .iter()
-                .map(|x| self.toc.entries[*x as usize] as usize)
-                .scan(br, |br, count| Some(br.split_at(count)))
-                .collect()
-        } else {
-            self.toc
-                .entries
-                .iter()
-                .scan(br, |br, count| Some(br.split_at(*count as usize)))
-                .collect()
+        let ret = self
+            .toc
+            .entries
+            .iter()
+            .scan(br, |br, count| Some(br.split_at(*count as usize)))
+            .collect::<Result<Vec<_>>>()?;
+        if !self.toc.permuted {
+            return Ok(ret);
         }
+        let mut inv_perm = vec![0; ret.len()];
+        for (i, pos) in self.toc.permutation.iter().enumerate() {
+            inv_perm[*pos as usize] = i;
+        }
+        let mut shuffled_ret = ret.clone();
+        for (br, pos) in ret.into_iter().zip(inv_perm.into_iter()) {
+            shuffled_ret[pos] = br;
+        }
+        Ok(shuffled_ret)
     }
 
     #[instrument(level = "debug", skip(self), ret)]
