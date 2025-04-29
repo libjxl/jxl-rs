@@ -24,7 +24,7 @@ mod predict;
 mod transforms;
 mod tree;
 
-use borrowed_buffers::MutablyBorrowedModularBuffers;
+use borrowed_buffers::with_buffers;
 use decode::decode_modular_subbitstream;
 pub use decode::ModularStreamId;
 pub use predict::Predictor;
@@ -301,19 +301,15 @@ impl FullModularImage {
             &mut buffer_info,
         );
 
-        {
-            let mut buffers =
-                MutablyBorrowedModularBuffers::new(&buffer_info, &section_buffer_indices[0], 0)?;
-
+        with_buffers(&buffer_info, &section_buffer_indices[0], 0, |bufs| {
             decode_modular_subbitstream(
-                &mut buffers.bufs,
-                &buffers.channel_ids,
+                bufs,
                 ModularStreamId::GlobalData.get_id(frame_header),
                 Some(header),
                 global_tree,
                 br,
-            )?;
-        }
+            )
+        })?;
 
         Ok(FullModularImage {
             buffer_info,
@@ -347,22 +343,20 @@ impl FullModularImage {
             }
         };
 
-        {
-            let mut buffers = MutablyBorrowedModularBuffers::new(
-                &self.buffer_info,
-                &self.section_buffer_indices[section_id],
-                grid,
-            )?;
-
-            decode_modular_subbitstream(
-                &mut buffers.bufs,
-                &buffers.channel_ids,
-                stream.get_id(frame_header),
-                None,
-                global_tree,
-                br,
-            )?;
-        }
+        with_buffers(
+            &self.buffer_info,
+            &self.section_buffer_indices[section_id],
+            grid,
+            |bufs| {
+                decode_modular_subbitstream(
+                    bufs,
+                    stream.get_id(frame_header),
+                    None,
+                    global_tree,
+                    br,
+                )
+            },
+        )?;
 
         let maybe_output = |bi: &mut ModularBufferInfo, grid: usize| -> Result<()> {
             if bi.is_output {
@@ -423,7 +417,7 @@ pub fn decode_vardct_lf(
         Image::new(r.size)?,
     ];
     let mut buf_refs: Vec<_> = buffers.iter_mut().collect();
-    decode_modular_subbitstream(&mut buf_refs, &[0, 1, 2], stream_id, None, global_tree, br)?;
+    decode_modular_subbitstream(&mut buf_refs, stream_id, None, global_tree, br)?;
     // TODO(szabadka): Generate the f32 pixels of the LF image.
     Ok(())
 }
@@ -455,14 +449,7 @@ pub fn decode_hf_metadata(
         Image::new(r.size)?,
     ];
     let mut buf_refs: Vec<_> = buffers.iter_mut().collect();
-    decode_modular_subbitstream(
-        &mut buf_refs,
-        &[0, 1, 2, 3],
-        stream_id,
-        None,
-        global_tree,
-        br,
-    )?;
+    decode_modular_subbitstream(&mut buf_refs, stream_id, None, global_tree, br)?;
     let ytox_image = buffers[0].as_rect();
     let ytob_image = buffers[1].as_rect();
     let mut ytox_map = hf_meta.ytox_map.as_rect_mut();

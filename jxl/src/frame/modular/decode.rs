@@ -3,8 +3,6 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-use std::ops::DerefMut;
-
 use crate::{
     bit_reader::BitReader,
     entropy_coding::decode::Reader,
@@ -15,7 +13,10 @@ use crate::{
     util::tracing_wrappers::*,
 };
 
-use super::{predict::WeightedPredictorState, tree::NUM_NONREF_PROPERTIES, Tree};
+use super::{
+    predict::WeightedPredictorState, transforms::apply::TransformStep, tree::NUM_NONREF_PROPERTIES,
+    Tree,
+};
 
 #[allow(unused)]
 #[derive(Debug)]
@@ -49,9 +50,8 @@ impl ModularStreamId {
 #[allow(clippy::too_many_arguments)]
 #[instrument(level = "debug", skip(buffers, reader, br))]
 fn decode_modular_channel(
-    buffers: &mut [impl DerefMut<Target = Image<i32>>],
-    channel_indices: &[usize],
-    index: usize,
+    buffers: &mut [&mut Image<i32>],
+    chan: usize,
     stream_id: usize,
     header: &GroupHeader,
     tree: &Tree,
@@ -59,8 +59,7 @@ fn decode_modular_channel(
     br: &mut BitReader,
 ) -> Result<()> {
     debug!("reading channel");
-    let chan = channel_indices[index];
-    let size = buffers[index].size();
+    let size = buffers[chan].size();
     let mut wp_state = WeightedPredictorState::new(header);
     for y in 0..size.1 {
         let mut property_buffer = [0; 256];
@@ -68,11 +67,11 @@ fn decode_modular_channel(
         property_buffer[1] = stream_id as i32;
         for x in 0..size.0 {
             let prediction_result =
-                tree.predict(buffers, index, &mut wp_state, x, y, &mut property_buffer);
+                tree.predict(buffers, chan, &mut wp_state, x, y, &mut property_buffer);
             let dec = reader.read_signed(br, prediction_result.context as usize)?;
             let val =
                 prediction_result.guess + (prediction_result.multiplier as i64) * (dec as i64);
-            buffers[index].as_rect_mut().row(y)[x] = val as i32;
+            buffers[chan].as_rect_mut().row(y)[x] = val as i32;
             trace!(y, x, val, dec, ?property_buffer, ?prediction_result);
             // TODO(veluca): update WP errors.
         }
@@ -84,8 +83,7 @@ fn decode_modular_channel(
 // This function will decode a header and apply local transforms if a header is not given.
 // The intended use of passing a header is for the DcGlobal section.
 pub fn decode_modular_subbitstream(
-    buffers: &mut [impl DerefMut<Target = Image<i32>>],
-    channel_indices: &[usize],
+    buffers: &mut [&mut Image<i32>],
     stream_id: usize,
     header: Option<GroupHeader>,
     global_tree: &Option<Tree>,
@@ -94,17 +92,17 @@ pub fn decode_modular_subbitstream(
     if buffers.is_empty() {
         return Ok(());
     }
-    let (header, apply_transforms) = if let Some(header) = header {
-        (header, false)
+    let transform_steps: Vec<TransformStep> = vec![];
+    let header = if let Some(h) = header {
+        h
     } else {
-        let header = GroupHeader::read(br)?;
-        if !header.transforms.is_empty() {
-            // TODO(veluca): meta-apply local transforms.
-            todo!("Local transforms are not implemented yet");
+        let h = GroupHeader::read(br)?;
+        if !h.transforms.is_empty() {
+            // TODO(veluca): figure out the best way to implement local transforms.
+            unimplemented!("local transforms are not yet implemented");
         }
-        (header, true)
+        h
     };
-    assert_eq!(buffers.len(), channel_indices.len());
     if header.use_global_tree && global_tree.is_none() {
         return Err(Error::NoGlobalTree);
     }
@@ -129,21 +127,13 @@ pub fn decode_modular_subbitstream(
     let mut reader = tree.histograms.make_reader(br)?;
 
     for i in 0..buffers.len() {
-        decode_modular_channel(
-            buffers,
-            channel_indices,
-            i,
-            stream_id,
-            &header,
-            tree,
-            &mut reader,
-            br,
-        )?;
+        decode_modular_channel(buffers, i, stream_id, &header, tree, &mut reader, br)?;
     }
 
     reader.check_final_state()?;
 
-    if apply_transforms {
+    for step in transform_steps.iter().rev() {
+        let _ = step;
         // TODO(veluca): apply local transforms.
     }
 
