@@ -3,7 +3,7 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-use std::{fmt::Debug, ops::DerefMut};
+use std::fmt::Debug;
 
 use super::{predict::WeightedPredictorState, Predictor};
 use crate::{
@@ -202,7 +202,7 @@ impl Tree {
     #[instrument(level = "trace", skip(buffers), ret)]
     pub(super) fn predict(
         &self,
-        buffers: &mut [impl DerefMut<Target = Image<i32>>],
+        buffers: &mut [&mut Image<i32>],
         index: usize,
         wp_state: &mut WeightedPredictorState,
         x: usize,

@@ -21,7 +21,7 @@ use crate::{
 
 use super::{ChannelInfo, ModularBufferInfo, ModularGridKind, Predictor};
 
-mod apply;
+pub(super) mod apply;
 mod palette;
 mod rct;
 mod squeeze;
