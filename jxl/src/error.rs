@@ -189,6 +189,10 @@ pub enum Error {
     InvalidVarDCTTransformMap,
     #[error("VarDCT transform overflows HF group")]
     HFBlockOutOfBounds,
+    #[error("Invalid AC: nonzeros {0} is too large for {1} 8x8 blocks")]
+    InvalidNumNonZeros(usize, usize),
+    #[error("Invalid AC: {0} nonzeros after decoding block")]
+    EndOfBlockResidualNonZeros(usize),
 }
 
 pub type Result<T, E = Error> = std::result::Result<T, E>;

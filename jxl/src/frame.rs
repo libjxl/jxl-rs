@@ -23,6 +23,7 @@ use crate::{
 use block_context_map::BlockContextMap;
 use coeff_order::decode_coeff_orders;
 use color_correlation_map::ColorCorrelationParams;
+use group::decode_vardct_group;
 use modular::{decode_hf_metadata, decode_vardct_lf};
 use modular::{FullModularImage, ModularStreamId, Tree};
 use quantizer::LfQuantFactors;
@@ -32,6 +33,7 @@ use transform_map::INVALID_TRANSFORM;
 mod block_context_map;
 mod coeff_order;
 mod color_correlation_map;
+mod group;
 pub mod modular;
 mod quantizer;
 pub mod transform_map;
@@ -436,11 +438,13 @@ impl Frame {
     #[instrument(skip(self, br))]
     pub fn decode_hf_group(&mut self, group: usize, pass: usize, br: &mut BitReader) -> Result<()> {
         debug!(section_size = br.total_bits_available());
+        let lf_global = self.lf_global.as_mut().unwrap();
         if self.header.encoding == Encoding::VarDCT {
             info!("decoding VarDCT");
-            todo!("VarDCT not implemented");
+            let hf_global = self.hf_global.as_mut().unwrap();
+            let hf_meta = self.hf_meta.as_mut().unwrap();
+            decode_vardct_group(group, pass, &self.header, lf_global, hf_global, hf_meta, br)?;
         }
-        let lf_global = self.lf_global.as_mut().unwrap();
         lf_global.modular_global.read_stream(
             ModularStreamId::ModularHF { group, pass },
             &self.header,

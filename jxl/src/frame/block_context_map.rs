@@ -14,6 +14,32 @@ use crate::{
 pub const NON_ZERO_BUCKETS: usize = 37;
 pub const ZERO_DENSITY_CONTEXT_COUNT: usize = 458;
 
+pub const COEFF_FREQ_CONTEXT: [usize; 64] = [
+    0xBAD, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 15, 16, 16, 17, 17, 18, 18, 19,
+    19, 20, 20, 21, 21, 22, 22, 23, 23, 23, 23, 24, 24, 24, 24, 25, 25, 25, 25, 26, 26, 26, 26, 27,
+    27, 27, 27, 28, 28, 28, 28, 29, 29, 29, 29, 30, 30, 30, 30,
+];
+
+pub const COEFF_NUM_NONZERO_CONTEXT: [usize; 64] = [
+    0xBAD, 0, 31, 62, 62, 93, 93, 93, 93, 123, 123, 123, 123, 152, 152, 152, 152, 152, 152, 152,
+    152, 180, 180, 180, 180, 180, 180, 180, 180, 180, 180, 180, 180, 206, 206, 206, 206, 206, 206,
+    206, 206, 206, 206, 206, 206, 206, 206, 206, 206, 206, 206, 206, 206, 206, 206, 206, 206, 206,
+    206, 206, 206, 206, 206, 206,
+];
+
+pub fn zero_density_context(
+    nonzeros_left: usize,
+    k: usize,
+    num_blocks: usize,
+    prev: usize,
+) -> usize {
+    let nonzeros_left_norm = nonzeros_left.div_ceil(num_blocks);
+    let k_norm = k / num_blocks;
+    assert!((1..64).contains(&k_norm));
+    assert!((1..64).contains(&nonzeros_left_norm));
+    (COEFF_NUM_NONZERO_CONTEXT[nonzeros_left_norm] + COEFF_FREQ_CONTEXT[k_norm]) * 2 + prev
+}
+
 #[derive(Debug)]
 #[allow(dead_code)]
 pub struct BlockContextMap {
@@ -88,5 +114,31 @@ impl BlockContextMap {
                 })
             }
         }
+    }
+    pub fn block_context(&self, lf_idx: usize, qf: u32, shape_id: usize, c: usize) -> usize {
+        let mut qf_idx: usize = 0;
+        for t in &self.qf_thresholds {
+            if qf > *t {
+                qf_idx += 1;
+            }
+        }
+        let mut idx = if c < 2 { c ^ 1 } else { 2 };
+        idx = idx * NUM_ORDERS + shape_id;
+        idx = idx * (self.qf_thresholds.len() + 1) + qf_idx;
+        idx = idx * self.num_lf_contexts + lf_idx;
+        self.context_map[idx] as usize
+    }
+    pub fn nonzero_context(&self, nonzeros: usize, block_context: usize) -> usize {
+        let context: usize = if nonzeros < 8 {
+            nonzeros
+        } else if nonzeros < 64 {
+            4 + nonzeros / 2
+        } else {
+            36
+        };
+        context * self.num_contexts + block_context
+    }
+    pub fn zero_density_context_offset(&self, block_context: usize) -> usize {
+        self.num_contexts * NON_ZERO_BUCKETS + ZERO_DENSITY_CONTEXT_COUNT * block_context
     }
 }

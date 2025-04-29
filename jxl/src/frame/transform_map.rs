@@ -106,3 +106,10 @@ pub fn covered_blocks_y(transform: HfTransformType) -> u32 {
     ];
     lut[transform as usize]
 }
+
+pub fn block_shape_id(transform: HfTransformType) -> u32 {
+    let lut: [u32; cardinality::<HfTransformType>()] = [
+        0, 1, 1, 1, 2, 3, 4, 4, 5, 5, 6, 6, 1, 1, 1, 1, 1, 1, 7, 8, 8, 9, 10, 10, 11, 12, 12,
+    ];
+    lut[transform as usize]
+}

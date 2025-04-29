@@ -590,6 +590,26 @@ impl FrameHeader {
         )
     }
 
+    pub fn block_group_rect(&self, group: usize) -> Rect {
+        let group_dims = self.size_groups();
+        let block_dims = self.size_blocks();
+        let group_dim_in_blocks = self.group_dim() >> 3;
+        let gx = group % group_dims.0;
+        let gy = group / group_dims.0;
+        let origin = (gx * group_dim_in_blocks, gy * group_dim_in_blocks);
+        let size = (
+            min(
+                block_dims.0.checked_sub(origin.0).unwrap(),
+                group_dim_in_blocks,
+            ),
+            min(
+                block_dims.1.checked_sub(origin.1).unwrap(),
+                group_dim_in_blocks,
+            ),
+        );
+        Rect { origin, size }
+    }
+
     pub fn lf_group_rect(&self, group: usize) -> Rect {
         let lf_dims = self.size_lf_groups();
         let block_dims = self.size_blocks();

@@ -5,7 +5,7 @@
 
 use crate::{
     error::Result,
-    image::{Image, ImageDataType},
+    image::{Image, ImageDataType, Rect},
     render::{RenderPipelineInspectStage, RenderPipelineStage},
 };
 
@@ -59,7 +59,10 @@ impl<T: ImageDataType> RenderPipelineStage for SaveStage<T> {
         // TODO(veluca): consider making `process_row_chunk` return a Result.
         let mut outbuf = self.buf.as_rect_mut();
         let mut outbuf = outbuf
-            .rect(position, (xsize, 1))
+            .rect(Rect {
+                origin: position,
+                size: (xsize, 1),
+            })
             .expect("mismatch in image size");
         outbuf.row(0).copy_from_slice(&input[..xsize]);
     }
