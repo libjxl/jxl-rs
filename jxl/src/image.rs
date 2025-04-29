@@ -231,7 +231,7 @@ impl<T: ImageDataType> Image<T> {
             "making rect {}x{}+{}+{} for group {group_id} in image of size {:?}, log group sizes {:?}",
             size.0, size.1, origin.0, origin.1, self.size, log_group_size
         );
-        self.as_rect().rect(origin, size).unwrap()
+        self.as_rect().rect(Rect { origin, size }).unwrap()
     }
 
     pub fn group_rect_mut(
@@ -246,7 +246,7 @@ impl<T: ImageDataType> Image<T> {
             (self.size.0 - origin.0).min(1 << log_group_size),
             (self.size.1 - origin.1).min(1 << log_group_size),
         );
-        self.as_rect_mut().into_rect(origin, size).unwrap()
+        self.as_rect_mut().into_rect(Rect { origin, size }).unwrap()
     }
 
     pub fn as_rect(&self) -> ImageRect<'_, T> {
@@ -270,24 +270,27 @@ impl<T: ImageDataType> Image<T> {
     }
 }
 
-fn rect_size_check(
-    origin: (usize, usize),
-    size: (usize, usize),
-    ssize: (usize, usize),
-) -> Result<()> {
-    if origin
+fn rect_size_check(rect: Rect, size: (usize, usize)) -> Result<()> {
+    if rect
+        .origin
         .0
-        .checked_add(size.0)
+        .checked_add(rect.size.0)
         .ok_or(Error::ArithmeticOverflow)?
-        > ssize.0
-        || origin
+        > size.0
+        || rect
+            .origin
             .1
-            .checked_add(size.1)
+            .checked_add(rect.size.1)
             .ok_or(Error::ArithmeticOverflow)?
-            > ssize.1
+            > size.1
     {
         Err(Error::RectOutOfBounds(
-            size.0, size.1, origin.0, origin.1, ssize.0, ssize.1,
+            rect.size.0,
+            rect.size.1,
+            rect.origin.0,
+            rect.origin.1,
+            size.0,
+            size.1,
         ))
     } else {
         Ok(())
@@ -295,12 +298,15 @@ fn rect_size_check(
 }
 
 impl<'a, T: ImageDataType> ImageRect<'a, T> {
-    pub fn rect(self, origin: (usize, usize), size: (usize, usize)) -> Result<ImageRect<'a, T>> {
-        rect_size_check(origin, size, self.rect.size)?;
+    pub fn rect(self, rect: Rect) -> Result<ImageRect<'a, T>> {
+        rect_size_check(rect, self.rect.size)?;
         Ok(ImageRect {
             rect: Rect {
-                origin: (origin.0 + self.rect.origin.0, origin.1 + self.rect.origin.1),
-                size,
+                origin: (
+                    rect.origin.0 + self.rect.origin.0,
+                    rect.origin.1 + self.rect.origin.1,
+                ),
+                size: rect.size,
             },
             image: self.image,
         })
@@ -314,8 +320,9 @@ impl<'a, T: ImageDataType> ImageRect<'a, T> {
         debug_assert!(row < self.rect.size.1);
         let start = (row + self.rect.origin.1) * self.image.size.0 + self.rect.origin.0;
         trace!(
-            "{self:?} img size {:?} row {row} start {}",
+            "{self:?} img size {:?} rect size {:?} row {row} start {}",
             self.image.size,
+            self.rect.size,
             start
         );
         &self.image.data[start..start + self.rect.size.0]
@@ -377,31 +384,29 @@ impl<'a, T: ImageDataType> PartialEq<ImageRect<'a, T>> for ImageRect<'a, T> {
 impl<T: ImageDataType + Eq> Eq for ImageRect<'_, T> {}
 
 impl<'a, T: ImageDataType> ImageRectMut<'a, T> {
-    pub fn rect(
-        &'a mut self,
-        origin: (usize, usize),
-        size: (usize, usize),
-    ) -> Result<ImageRectMut<'a, T>> {
-        rect_size_check(origin, size, self.rect.size)?;
+    pub fn rect(&'a mut self, rect: Rect) -> Result<ImageRectMut<'a, T>> {
+        rect_size_check(rect, self.rect.size)?;
         Ok(ImageRectMut {
             rect: Rect {
-                origin: (origin.0 + self.rect.origin.0, origin.1 + self.rect.origin.1),
-                size,
+                origin: (
+                    rect.origin.0 + self.rect.origin.0,
+                    rect.origin.1 + self.rect.origin.1,
+                ),
+                size: rect.size,
             },
             image: self.image,
         })
     }
 
-    pub fn into_rect(
-        self,
-        origin: (usize, usize),
-        size: (usize, usize),
-    ) -> Result<ImageRectMut<'a, T>> {
-        rect_size_check(origin, size, self.rect.size)?;
+    pub fn into_rect(self, rect: Rect) -> Result<ImageRectMut<'a, T>> {
+        rect_size_check(rect, self.rect.size)?;
         Ok(ImageRectMut {
             rect: Rect {
-                origin: (origin.0 + self.rect.origin.0, origin.1 + self.rect.origin.1),
-                size,
+                origin: (
+                    rect.origin.0 + self.rect.origin.0,
+                    rect.origin.1 + self.rect.origin.1,
+                ),
+                size: rect.size,
             },
             image: self.image,
         })
@@ -610,7 +615,7 @@ mod test {
 
     use crate::error::Result;
 
-    use super::{Image, ImageDataType};
+    use super::{Image, ImageDataType, Rect};
 
     #[test]
     fn huge_image() {
@@ -620,10 +625,40 @@ mod test {
     #[test]
     fn rect_basic() -> Result<()> {
         let mut image = Image::<u8>::new((32, 42))?;
-        assert_eq!(image.as_rect_mut().rect((31, 40), (1, 1))?.size(), (1, 1));
-        assert_eq!(image.as_rect_mut().rect((0, 0), (1, 1))?.size(), (1, 1));
-        assert!(image.as_rect_mut().rect((30, 30), (3, 3)).is_err());
-        image.as_rect_mut().rect((30, 30), (1, 1))?.row(0)[0] = 1;
+        assert_eq!(
+            image
+                .as_rect_mut()
+                .rect(Rect {
+                    origin: (31, 40),
+                    size: (1, 1)
+                })?
+                .size(),
+            (1, 1)
+        );
+        assert_eq!(
+            image
+                .as_rect_mut()
+                .rect(Rect {
+                    origin: (0, 0),
+                    size: (1, 1)
+                })?
+                .size(),
+            (1, 1)
+        );
+        assert!(image
+            .as_rect_mut()
+            .rect(Rect {
+                origin: (30, 30),
+                size: (3, 3)
+            })
+            .is_err());
+        image
+            .as_rect_mut()
+            .rect(Rect {
+                origin: (30, 30),
+                size: (1, 1),
+            })?
+            .row(0)[0] = 1;
         assert_eq!(image.as_rect_mut().row(30)[30], 1);
         Ok(())
     }

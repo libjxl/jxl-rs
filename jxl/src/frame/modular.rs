@@ -17,7 +17,6 @@ use crate::{
     image::{Image, Rect},
     util::{tracing_wrappers::*, CeilLog2},
 };
-use num_traits::clamp;
 
 mod borrowed_buffers;
 mod decode;
@@ -468,8 +467,8 @@ pub fn decode_hf_metadata(
     let ytob_image = buffers[1].as_rect();
     let mut ytox_map = hf_meta.ytox_map.as_rect_mut();
     let mut ytob_map = hf_meta.ytob_map.as_rect_mut();
-    let mut ytox_map_rect = ytox_map.rect(cr.origin, cr.size)?;
-    let mut ytob_map_rect = ytob_map.rect(cr.origin, cr.size)?;
+    let mut ytox_map_rect = ytox_map.rect(cr)?;
+    let mut ytob_map_rect = ytob_map.rect(cr)?;
     let i8min: i32 = i8::MIN.into();
     let i8max: i32 = i8::MAX.into();
     for y in 0..cr.size.1 {
@@ -481,11 +480,11 @@ pub fn decode_hf_metadata(
     let transform_image = buffers[2].as_rect();
     let epf_image = buffers[3].as_rect();
     let mut transform_map = hf_meta.transform_map.as_rect_mut();
-    let mut transform_map_rect = transform_map.rect(r.origin, r.size)?;
+    let mut transform_map_rect = transform_map.rect(r)?;
     let mut raw_quant_map = hf_meta.raw_quant_map.as_rect_mut();
-    let mut raw_quant_map_rect = raw_quant_map.rect(r.origin, r.size)?;
+    let mut raw_quant_map_rect = raw_quant_map.rect(r)?;
     let mut epf_map = hf_meta.epf_map.as_rect_mut();
-    let mut epf_map_rect = epf_map.rect(r.origin, r.size)?;
+    let mut epf_map_rect = epf_map.rect(r)?;
     let mut num: usize = 0;
     for y in 0..r.size.1 {
         for x in 0..r.size.0 {
@@ -501,7 +500,7 @@ pub fn decode_hf_metadata(
                 return Err(Error::InvalidVarDCTTransformMap);
             }
             let raw_transform = transform_image.row(0)[num];
-            let raw_quant = 1 + clamp(0, 255, transform_image.row(1)[num]);
+            let raw_quant = 1 + transform_image.row(1)[num].clamp(0, 255);
             let transform_type = get_transform_type(raw_transform)?;
             let cx = covered_blocks_x(transform_type) as usize;
             let cy = covered_blocks_y(transform_type) as usize;
@@ -509,9 +508,14 @@ pub fn decode_hf_metadata(
             if x + cx > min(r.size.0, next_group.0) || y + cy > min(r.size.1, next_group.1) {
                 return Err(Error::HFBlockOutOfBounds);
             }
+            let transform_id = raw_transform as u8;
             for iy in 0..cy {
                 for ix in 0..cx {
-                    transform_map_rect.row(y + iy)[x + ix] = raw_transform as u8;
+                    transform_map_rect.row(y + iy)[x + ix] = if iy == 0 && ix == 0 {
+                        transform_id + 128 // Set highest bit to signal first block.
+                    } else {
+                        transform_id
+                    };
                     raw_quant_map_rect.row(y + iy)[x + ix] = raw_quant;
                 }
             }
