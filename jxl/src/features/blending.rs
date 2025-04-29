@@ -855,23 +855,15 @@ mod tests {
         #[test]
         fn test_bg_equals_bga_and_fg_equals_fga_clamp_true() {
             let bg_data = [0.1, 0.8, 0.5]; // bg and bga are the same
-            let fg_data = [0.9, 0.2, 0.7]; // fg and fga are the same
+            let fg_data = [0.9, 0.2, 1.7]; // fg and fga are the same, will be clamped
             let num_pixels = bg_data.len();
             let mut out = vec![0.0; num_pixels];
             let mut expected_out = vec![0.0; num_pixels];
 
             let alpha_is_premultiplied = false; // This flag is irrelevant in this branch
-            let clamp = true;
 
-            // C++ logic:
-            // if (bg == bga && fg == fga) {
-            //   for (size_t x = 0; x < num_pixels; ++x) {
-            //     float fa = clamp ? fga[x] : Clamp(fga[x]);
-            //     out[x] = (1.f - (1.f - fa) * (1.f - bga[x]));
-            //   }
-            // }
             for i in 0..num_pixels {
-                let fa = fg_data[i]; // clamp is true, so fga[x] is used directly
+                let fa = clamp(fg_data[i]);
                 let bga_val = bg_data[i];
                 expected_out[i] = 1.0 - (1.0 - fa) * (1.0 - bga_val);
             }
@@ -882,7 +874,7 @@ mod tests {
                 &fg_data,
                 &fg_data, // fga is same as fg
                 alpha_is_premultiplied,
-                clamp,
+                true,
                 &mut out,
             );
 
@@ -906,16 +898,9 @@ mod tests {
             // Calculate expected output
             for x in 0..num_pixels {
                 let fa = clamp(fg_fga[x]);
+                // The spec is unclear about which alphas should be clamped, and the C++ version
+                // only clamps fg.
                 expected_out[x] = 1.0 - (1.0 - fa) * (1.0 - bg_bga[x]);
-                // Since bg_bga[x] is used, if it's outside [0,1], the C++ version might behave differently
-                // than expected if Clamp was also applied to bga[x] implicitly in this branch.
-                // However, the C++ code for this branch only clamps fga[x].
-                // Let's refine the expected if bga is also implicitly clamped or not based on typical alpha handling.
-                // The C++ code uses bga[x] directly in `(1.f - bga[x])`. If bga[x] can be > 1 or < 0,
-                // this could lead to unexpected alpha math. Assuming alpha values are typically in [0,1].
-                // For safety and to match the C++'s explicit clamping on `fa` only in this branch:
-                let clamped_bga_x = bg_bga[x]; // In this branch, bga is not explicitly clamped in C++
-                expected_out[x] = 1.0 - (1.0 - fa) * (1.0 - clamped_bga_x);
             }
 
             perform_alpha_blending(
@@ -964,12 +949,8 @@ mod tests {
 
             for x in 0..num_pixels {
                 let fa = clamp(fga[x]);
-                // In C++, bg[x] is used directly. If premultiplied alpha is true,
-                // bg is typically color * alpha. bga is alpha.
-                // The formula is `fg[x] + bg[x] * (1.f - fa)`
-                // Here, bg[x] should be the background color component, not pre-multiplied,
-                // if we strictly follow typical alpha blending formulas.
-                // However, the C++ code just uses `bg[x]`. We must match that.
+                // The spec is unclear about which alphas should be clamped, and the C++ version
+                // only clamps fg.
                 expected_out[x] = fg[x] + bg[x] * (1.0 - fa);
             }
 
@@ -986,7 +967,7 @@ mod tests {
             let bg = [0.1, 0.2, 0.3];
             let bga = [0.8, 0.7, 0.9];
             let fg = [0.4, 0.5, 0.6];
-            let fga = [0.9, 0.6, 0.5]; // No clamping, fga values are within [0,1] but could be anything
+            let fga = [0.9, 0.6, 1.5]; // No clamping, fga values are within [0,1] but could be anything
             let num_pixels = bg.len();
             let mut out = vec![0.0; num_pixels];
             let mut expected_out = vec![0.0; num_pixels];
@@ -1036,7 +1017,7 @@ mod tests {
             let bg = [0.1, 0.2, 0.3];
             let bga = [0.8, 0.7, 0.9];
             let fg = [0.4, 0.5, 0.6];
-            let fga = [0.9, 0.6, 0.5]; // No clamping
+            let fga = [0.9, 0.6, -0.5]; // No clamping
             let num_pixels = bg.len();
             let mut out = vec![0.0; num_pixels];
             let mut expected_out = vec![0.0; num_pixels];
@@ -1059,75 +1040,15 @@ mod tests {
 
         #[test]
         fn test_not_premultiplied_clamp_false_new_a_zero() {
-            let bg = [0.1, 0.2, 0.3];
-            let bga = [1.0, 0.7, 0.9]; // bga[0] is 1.0
-            let fg = [0.4, 0.5, 0.6];
-            let fga = [1.0, 0.6, 0.5]; // fa is 1.0 for the first pixel
-            let num_pixels = bg.len();
-            let mut expected_out = vec![0.0; num_pixels];
-
-            // First pixel: fa = 1.0, bga = 1.0
-            // new_a = 1.0 - (1.0 - 1.0) * (1.0 - 1.0) = 1.0 - 0.0 * 0.0 = 1.0
-            // rnew_a = 1.0
-            // out[0] = (fg[0]*1.0 + bg[0]*1.0*(1.0-1.0)) * 1.0 = fg[0] = 0.4
-            expected_out[0] = (fg[0] * fga[0] + bg[0] * bga[0] * (1.0 - fga[0]))
-                * (1.0 / (1.0 - (1.0 - fga[0]) * (1.0 - bga[0])));
-
-            // Second pixel: General case from previous test
-            let fa1 = fga[1];
-            let bga1 = bga[1];
-            let new_a1 = 1.0 - (1.0 - fa1) * (1.0 - bga1);
-            let rnew_a1 = if new_a1 > 0.0 { 1.0 / new_a1 } else { 0.0 };
-            expected_out[1] = (fg[1] * fa1 + bg[1] * bga1 * (1.0 - fa1)) * rnew_a1;
-
-            // Third pixel: Let's make new_a become zero for a different reason
-            // new_a = 1.f - (1.f - fa) * (1.f - bga[x]);
-            // To make new_a = 0, we need (1-fa)*(1-bga) = 1.
-            // This happens if fa=0 and bga=0.
-            let bg_zero_case = [0.1, 0.0, 0.3]; // bg color for the zero alpha case
-            let bga_zero_case = [0.8, 0.0, 0.9]; // bga is 0 for the second pixel
-            let fg_zero_case = [0.4, 0.9, 0.6]; // fg color for the zero alpha case
-            let fga_zero_case = [0.9, 0.0, 0.5]; // fa is 0 for the second pixel
-
-            let fa2 = fga_zero_case[1]; // 0.0
-            let bga2 = bga_zero_case[1]; // 0.0
-            let new_a2 = 1.0 - (1.0 - fa2) * (1.0 - bga2); // 1.0 - (1.0 * 1.0) = 0.0
-            let rnew_a2 = if new_a2 > 0.0 { 1.0 / new_a2 } else { 0.0 }; // rnew_a2 = 0.0
-                                                                         // out[x] = (fg[x] * fa + bg[x] * bga[x] * (1.f - fa)) * rnew_a;
-                                                                         // out[1] = (fg_zero_case[1]*0.0 + bg_zero_case[1]*0.0*(1.0-0.0)) * 0.0 = 0.0
-            expected_out[1] =
-                (fg_zero_case[1] * fa2 + bg_zero_case[1] * bga2 * (1.0 - fa2)) * rnew_a2;
-            // Re-calculate for the first pixel with these new _zero_case arrays
-            let fa0_zc = fga_zero_case[0];
-            let bga0_zc = bga_zero_case[0];
-            let new_a0_zc = 1.0 - (1.0 - fa0_zc) * (1.0 - bga0_zc);
-            let rnew_a0_zc = if new_a0_zc > 0.0 {
-                1.0 / new_a0_zc
-            } else {
-                0.0
-            };
-            expected_out[0] = (fg_zero_case[0] * fa0_zc
-                + bg_zero_case[0] * bga0_zc * (1.0 - fa0_zc))
-                * rnew_a0_zc;
-
-            expected_out[2] = {
-                // Original third pixel values
-                let fa = fga[2];
-                let current_bga = bga[2];
-                let new_a = 1.0 - (1.0 - fa) * (1.0 - current_bga);
-                let rnew_a = if new_a > 0.0 { 1.0 / new_a } else { 0.0 };
-                (fg[2] * fa + bg[2] * current_bga * (1.0 - fa)) * rnew_a
-            };
-
             // Test with the scenario where new_a can be zero:
             let bg_n_zero = [0.1, 0.9, 0.3]; // bg color for the zero alpha case
             let bga_n_zero = [0.8, 0.0, 0.9]; // bga is 0 for the second pixel
             let fg_n_zero = [0.4, 0.9, 0.6]; // fg color for the zero alpha case
             let fga_n_zero = [0.9, 0.0, 0.5]; // fa is 0 for the second pixel
-            let mut out_n_zero = vec![0.0; num_pixels];
-            let mut expected_out_n_zero = vec![0.0; num_pixels];
+            let mut out_n_zero = vec![0.0; 3];
+            let mut expected_out_n_zero = vec![0.0; 3];
 
-            for x in 0..num_pixels {
+            for x in 0..3 {
                 let fa = fga_n_zero[x];
                 let current_bga = bga_n_zero[x];
                 let new_a = 1.0 - (1.0 - fa) * (1.0 - current_bga);
@@ -1148,17 +1069,9 @@ mod tests {
             assert_all_almost_eq!(out_n_zero, expected_out_n_zero, MAX_DELTA);
         }
 
-        // Test case for when bg, bga, fg, fga point to the *same* underlying slice data,
-        // AND the optimized path is taken (bg == bga && fg == fga).
-        // This is to more closely simulate the C++ pointer check.
-        // In Rust, if you pass the same slice, it's like passing the same pointer.
         #[test]
         fn test_all_same_slice_data_optimized_path_clamp_true() {
-            let data = [0.1, 0.8, 1.2, 0.9, 0.2, -0.3]; // A mix of values
-                                                        // For this test, let's imagine bg, bga, fg, fga are all derived from `data`
-                                                        // but specifically for the C++ `if (bg == bga && fg == fga)` condition,
-                                                        // it means bg and bga are the same array, and fg and fga are the same array.
-                                                        // Let's define them as such.
+            let data = [0.1, 0.8, 1.2, 0.9, 0.2, -0.3];
             let common_bg_bga = &[data[0], data[1], data[2]]; // Represents bg and bga
             let common_fg_fga = &[data[3], data[4], data[5]]; // Represents fg and fga
             let num_pixels = common_bg_bga.len();
@@ -1177,7 +1090,7 @@ mod tests {
                 common_bg_bga, // bga
                 common_fg_fga, // fg
                 common_fg_fga, // fga
-                false,         // alpha_is_premultiplied (irrelevant for this C++ branch)
+                false,         // alpha_is_premultiplied (irrelevant for this branch)
                 true,          // clamp
                 &mut out,
             );
@@ -1223,57 +1136,15 @@ mod tests {
             let mut out = vec![0.0; num_pixels];
             let mut expected_out = vec![0.0; num_pixels];
 
-            for x in 0..num_pixels {
-                let fa = clamp(fga[x]);
-                let current_bga = bga[x]; // C++ doesn't clamp bga in this path
-                                          // new_a = 1.f - (1.f - fa) * (1.f - bga[x]);
-                                          // Expected for x=0: fa=1.0, bga=1.0 => new_a = 1 - (0)*(0) = 1.0. rnew_a=1.0. out = (fg*1 + bg*1*0)*1 = fg = 0.2
-                                          // Expected for x=1: fa=0.0, bga=0.0 => new_a = 1 - (1)*(1) = 0.0. rnew_a=0.0. out = (anything)*0 = 0.0
-                                          // Expected for x=2: fa=0.0 (clamped from -0.1), bga=0.5 => new_a = 1 - (1)*(0.5) = 0.5. rnew_a=2.0. out = (fg*0 + bg*0.5*1)*2 = bg*0.5*2 = bg = 0.5
-                                          // Expected for x=3: fa=1.0 (clamped from 1.2), bga=1.1 => new_a = 1 - (0)*(-0.1) = 1.0. rnew_a=1.0. out = (fg*1 + bg*1.1*0)*1 = fg = 0.2
-
-                let new_a = 1.0 - (1.0 - fa) * (1.0 - current_bga);
-                if new_a == 0.0 {
-                    // Original C++ check is `new_a > 0`
-                    expected_out[x] = (fg[x] * fa + bg[x] * current_bga * (1.0 - fa)) * 0.0;
-                } else {
-                    expected_out[x] =
-                        (fg[x] * fa + bg[x] * current_bga * (1.0 - fa)) * (1.0 / new_a);
-                }
+            for i in 0..4 {
+                expected_out[i] = {
+                    let fa = clamp(fga[i]);
+                    let c_bga = bga[i];
+                    let new_a = 1.0 - (1.0 - fa) * (1.0 - c_bga);
+                    let rnew_a = if new_a > 0.0 { 1.0 / new_a } else { 0.0 };
+                    (fg[i] * fa + bg[i] * c_bga * (1.0 - fa)) * rnew_a
+                };
             }
-            // Recalculate expected with C++'s rnew_a logic strictly:
-            expected_out[0] = {
-                let fa = clamp(fga[0]);
-                let c_bga = bga[0];
-                let new_a = 1.0 - (1.0 - fa) * (1.0 - c_bga);
-                let rnew_a = if new_a > 0.0 { 1.0 / new_a } else { 0.0 };
-                (fg[0] * fa + bg[0] * c_bga * (1.0 - fa)) * rnew_a // (0.2*1 + 0.5*1*0) * 1 = 0.2
-            };
-            expected_out[1] = {
-                let fa = clamp(fga[1]);
-                let c_bga = bga[1];
-                let new_a = 1.0 - (1.0 - fa) * (1.0 - c_bga);
-                let rnew_a = if new_a > 0.0 { 1.0 / new_a } else { 0.0 };
-                (fg[1] * fa + bg[1] * c_bga * (1.0 - fa)) * rnew_a // (0.2*0 + 0.5*0*1)*0 = 0.0
-            };
-            expected_out[2] = {
-                let fa = clamp(fga[2]);
-                let c_bga = bga[2];
-                let new_a = 1.0 - (1.0 - fa) * (1.0 - c_bga);
-                let rnew_a = if new_a > 0.0 { 1.0 / new_a } else { 0.0 };
-                (fg[2] * fa + bg[2] * c_bga * (1.0 - fa)) * rnew_a // (0.2*0 + 0.5*0.5*1)*(1/0.5) = (0.25)*2 = 0.5
-            };
-            expected_out[3] = {
-                // fa=1 (clamped from 1.2), current_bga=1.1
-                let fa = clamp(fga[3]);
-                let c_bga = bga[3];
-                // new_a = 1.0 - (1.0 - 1.0) * (1.0 - 1.1) = 1.0 - 0.0 * (-0.1) = 1.0
-                let new_a = 1.0 - (1.0 - fa) * (1.0 - c_bga);
-                let rnew_a = if new_a > 0.0 { 1.0 / new_a } else { 0.0 }; // rnew_a = 1.0/1.0 = 1.0
-                                                                          // out = (fg[3]*1.0 + bg[3]*1.1*(1.0-1.0)) * 1.0 = (0.2*1.0 + 0.5*1.1*0.0)*1.0 = 0.2
-                (fg[3] * fa + bg[3] * c_bga * (1.0 - fa)) * rnew_a
-            };
-
             perform_alpha_blending(
                 &bg, &bga, &fg, &fga, false, // alpha_is_premultiplied
                 true,  // clamp
@@ -1326,9 +1197,6 @@ mod tests {
         #[test]
         fn test_alpha_weighted_add_fg_is_fga_equivalent() {
             let bg = &[0.1f32, 0.5f32, 1.0f32];
-            // This slice will be passed for both fg and fga arguments.
-            // This tests the C++ `if (fg == fga)` case, assuming the Rust code
-            // implements this by checking if the `fg` and `fga` slice pointers are the same.
             let shared_fg_fga = &[0.2f32, 0.3f32, 0.4f32];
             let mut out = vec![0.0f32; bg.len()];
 
@@ -1358,13 +1226,6 @@ mod tests {
                 expected_out[i] = bg[i] + fg[i] * clamp(fga[i]);
             }
 
-            // Ensure fg and fga are distinct slices for this test path
-            assert_ne!(
-                fg.as_ptr(),
-                fga.as_ptr(),
-                "fg and fga should be distinct slices for this test case"
-            );
-
             perform_alpha_weighted_add(bg, fg, fga, clamp_alpha_param, &mut out);
             assert_all_almost_eq!(&out, &expected_out, MAX_DELTA);
         }
@@ -1381,13 +1242,6 @@ mod tests {
             for i in 0..bg.len() {
                 expected_out[i] = bg[i] + fg[i] * fga[i];
             }
-
-            // Ensure fg and fga are distinct slices for this test path
-            assert_ne!(
-                fg.as_ptr(),
-                fga.as_ptr(),
-                "fg and fga should be distinct slices for this test case"
-            );
 
             perform_alpha_weighted_add(bg, fg, fga, clamp_alpha_param, &mut out);
             assert_all_almost_eq!(&out, &expected_out, MAX_DELTA);
