@@ -151,7 +151,7 @@ fn handle_decoded_modular_channel(
     {
         std::fs::create_dir_all("/tmp/jxl-debug/").unwrap();
         std::fs::write(
-            format!("/tmp/jxl-debug/lf_c{chan:02}_gy{gy:03}_gx{gx:03}.pgm"),
+            format!("/tmp/jxl-debug/modular_c{chan:02}_gy{gy:03}_gx{gx:03}.pgm"),
             img.as_rect().to_pgm_as_8bit(),
         )
         .unwrap();

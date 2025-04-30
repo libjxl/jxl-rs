@@ -13,8 +13,8 @@ use crate::{
 };
 
 use super::{
-    predict::WeightedPredictorState, transforms::apply::TransformStep, tree::NUM_NONREF_PROPERTIES,
-    ModularChannel, Tree,
+    predict::WeightedPredictorState, transforms::apply::meta_apply_local_transforms,
+    tree::NUM_NONREF_PROPERTIES, ModularChannel, Tree,
 };
 
 #[allow(unused)]
@@ -82,7 +82,7 @@ fn decode_modular_channel(
 // This function will decode a header and apply local transforms if a header is not given.
 // The intended use of passing a header is for the DcGlobal section.
 pub fn decode_modular_subbitstream(
-    buffers: &mut [&mut ModularChannel],
+    buffers: Vec<&mut ModularChannel>,
     stream_id: usize,
     header: Option<GroupHeader>,
     global_tree: &Option<Tree>,
@@ -91,17 +91,28 @@ pub fn decode_modular_subbitstream(
     if buffers.is_empty() {
         return Ok(());
     }
-    let transform_steps: Vec<TransformStep> = vec![];
-    let header = if let Some(h) = header {
-        h
-    } else {
-        let h = GroupHeader::read(br)?;
-        if !h.transforms.is_empty() {
-            // TODO(veluca): figure out the best way to implement local transforms.
-            unimplemented!("local transforms are not yet implemented");
+    let mut transform_steps = vec![];
+    let mut buffer_storage = vec![];
+
+    let buffers = buffers.into_iter().collect::<Vec<_>>();
+    let (header, mut buffers) = match header {
+        Some(h) => (h, buffers),
+        None => {
+            let h = GroupHeader::read(br)?;
+            if !h.transforms.is_empty() {
+                // Note: reassigning to `buffers` here convinces the borrow checker that the borrow of
+                // `buffer_storage` ought to outlive `buffers[..]`'s lifetime, which obviously breaks
+                // applying transforms later.
+                let new_bufs;
+                (new_bufs, transform_steps) =
+                    meta_apply_local_transforms(buffers, &mut buffer_storage, &h.transforms)?;
+                (h, new_bufs)
+            } else {
+                (h, buffers)
+            }
         }
-        h
     };
+
     if header.use_global_tree && global_tree.is_none() {
         return Err(Error::NoGlobalTree);
     }
@@ -126,14 +137,15 @@ pub fn decode_modular_subbitstream(
     let mut reader = tree.histograms.make_reader(br)?;
 
     for i in 0..buffers.len() {
-        decode_modular_channel(buffers, i, stream_id, &header, tree, &mut reader, br)?;
+        decode_modular_channel(&mut buffers, i, stream_id, &header, tree, &mut reader, br)?;
     }
 
     reader.check_final_state()?;
 
+    drop(buffers);
+
     for step in transform_steps.iter().rev() {
-        let _ = step;
-        // TODO(veluca): apply local transforms.
+        step.local_apply(&mut buffer_storage)?;
     }
 
     Ok(())

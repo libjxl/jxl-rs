@@ -13,7 +13,7 @@ pub fn with_buffers<T>(
     buffers: &[ModularBufferInfo],
     indices: &[usize],
     grid: usize,
-    f: impl FnOnce(&mut [&mut ModularChannel]) -> Result<T>,
+    f: impl FnOnce(Vec<&mut ModularChannel>) -> Result<T>,
 ) -> Result<T> {
     let mut bufs = vec![];
     for i in indices {
@@ -30,6 +30,5 @@ pub fn with_buffers<T>(
         }
         bufs.push(RefMut::map(data, |x| x.as_mut().unwrap()));
     }
-    let mut buf_refs = bufs.iter_mut().map(|x| x.deref_mut()).collect::<Vec<_>>();
-    f(&mut buf_refs)
+    f(bufs.iter_mut().map(|x| x.deref_mut()).collect())
 }
