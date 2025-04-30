@@ -10,6 +10,7 @@ use crate::{
     bit_reader::BitReader,
     entropy_coding::decode::Histograms,
     error::{Error, Result},
+    frame::modular::predict::PredictionData,
     image::Image,
     util::{tracing_wrappers::*, NewWithCapacity},
 };
@@ -209,34 +210,16 @@ impl Tree {
         y: usize,
         property_buffer: &mut [i32; 256],
     ) -> PredictionResult {
-        let (w, _) = buffers[index].size();
-        let get_pixel = |x: usize, y: usize| -> i32 { buffers[index].as_rect().row(y)[x] };
-
-        let left = if x > 0 {
-            get_pixel(x - 1, y)
-        } else if y > 0 {
-            get_pixel(x, y - 1)
-        } else {
-            0
-        };
-        let top = if y > 0 { get_pixel(x, y - 1) } else { left };
-        let topleft = if x > 0 && y > 0 {
-            get_pixel(x - 1, y - 1)
-        } else {
-            left
-        };
-        let topright = if x + 1 < w && y > 0 {
-            get_pixel(x + 1, y - 1)
-        } else {
-            top
-        };
-        let leftleft = if x > 1 { get_pixel(x - 2, y) } else { left };
-        let toptop = if y > 1 { get_pixel(x, y - 2) } else { top };
-        let toprightright = if x + 2 < w && y > 0 {
-            get_pixel(x + 2, y - 1)
-        } else {
-            topright
-        };
+        let prediction_data = PredictionData::get(buffers[index].as_rect(), x, y);
+        let PredictionData {
+            left,
+            top,
+            toptop,
+            topleft,
+            topright,
+            leftleft,
+            toprightright: _toprightright,
+        } = prediction_data;
 
         trace!(
             left,
@@ -245,7 +228,7 @@ impl Tree {
             topright,
             leftleft,
             toptop,
-            toprightright
+            _toprightright
         );
 
         // Position
@@ -312,16 +295,7 @@ impl Tree {
             unreachable!();
         };
 
-        let pred = predictor.predict_one(
-            left,
-            top,
-            toptop,
-            topleft,
-            topright,
-            leftleft,
-            toprightright,
-            wp_pred,
-        );
+        let pred = predictor.predict_one(prediction_data, wp_pred);
 
         PredictionResult {
             guess: pred + offset as i64,

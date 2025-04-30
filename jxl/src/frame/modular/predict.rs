@@ -6,6 +6,7 @@
 use crate::{
     error::{Error, Result},
     headers::modular::GroupHeader,
+    image::ImageRect,
 };
 use num_derive::FromPrimitive;
 use num_traits::FromPrimitive;
@@ -37,19 +38,69 @@ impl TryFrom<u32> for Predictor {
     }
 }
 
+pub struct PredictionData {
+    pub left: i32,
+    pub top: i32,
+    pub toptop: i32,
+    pub topleft: i32,
+    pub topright: i32,
+    pub leftleft: i32,
+    pub toprightright: i32,
+}
+
+impl PredictionData {
+    pub fn get(rect: ImageRect<i32>, x: usize, y: usize) -> Self {
+        let left = if x > 0 {
+            rect.row(y)[x - 1]
+        } else if y > 0 {
+            rect.row(y - 1)[0]
+        } else {
+            0
+        };
+        let top = if y > 0 { rect.row(y - 1)[x] } else { left };
+        let topleft = if x > 0 && y > 0 {
+            rect.row(y - 1)[x - 1]
+        } else {
+            left
+        };
+        let topright = if x + 1 < rect.size().0 && y > 0 {
+            rect.row(y - 1)[x + 1]
+        } else {
+            top
+        };
+        let leftleft = if x > 1 { rect.row(y)[x - 2] } else { left };
+        let toptop = if y > 1 { rect.row(y - 2)[x] } else { top };
+        let toprightright = if x + 2 < rect.size().0 && y > 0 {
+            rect.row(y - 1)[x + 2]
+        } else {
+            topright
+        };
+        Self {
+            left,
+            top,
+            toptop,
+            topleft,
+            topright,
+            leftleft,
+            toprightright,
+        }
+    }
+}
+
 impl Predictor {
     pub const NUM_PREDICTORS: u32 = Predictor::AverageAll as u32 + 1;
 
-    #[allow(clippy::too_many_arguments)]
     pub fn predict_one(
         &self,
-        left: i32,
-        top: i32,
-        toptop: i32,
-        topleft: i32,
-        topright: i32,
-        leftleft: i32,
-        toprightright: i32,
+        PredictionData {
+            left,
+            top,
+            toptop,
+            topleft,
+            topright,
+            leftleft,
+            toprightright,
+        }: PredictionData,
         wp_pred: i64,
     ) -> i64 {
         match self {
