@@ -5,13 +5,12 @@
 
 use std::fmt::Debug;
 
-use super::{predict::WeightedPredictorState, Predictor};
+use super::{predict::WeightedPredictorState, ModularChannel, Predictor};
 use crate::{
     bit_reader::BitReader,
     entropy_coding::decode::Histograms,
     error::{Error, Result},
     frame::modular::predict::PredictionData,
-    image::Image,
     util::{tracing_wrappers::*, NewWithCapacity},
 };
 
@@ -199,18 +198,17 @@ impl Tree {
     // previous values available for computing the local gradient property.
     // Also, the first two properties (the static properties) should be already set by the caller.
     // All other properties should be 0 on the first call in a row.
-    #[allow(clippy::too_many_arguments)]
     #[instrument(level = "trace", skip(buffers), ret)]
     pub(super) fn predict(
         &self,
-        buffers: &mut [&mut Image<i32>],
+        buffers: &mut [&mut ModularChannel],
         index: usize,
         wp_state: &mut WeightedPredictorState,
         x: usize,
         y: usize,
         property_buffer: &mut [i32; 256],
     ) -> PredictionResult {
-        let prediction_data = PredictionData::get(buffers[index].as_rect(), x, y);
+        let prediction_data = PredictionData::get(buffers[index].data.as_rect(), x, y);
         let PredictionData {
             left,
             top,

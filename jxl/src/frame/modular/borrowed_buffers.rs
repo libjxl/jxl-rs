@@ -7,13 +7,13 @@ use std::{cell::RefMut, ops::DerefMut};
 
 use crate::{error::Result, image::Image};
 
-use super::ModularBufferInfo;
+use super::{ModularBufferInfo, ModularChannel};
 
 pub fn with_buffers<T>(
     buffers: &[ModularBufferInfo],
     indices: &[usize],
     grid: usize,
-    f: impl FnOnce(&mut [&mut Image<i32>]) -> Result<T>,
+    f: impl FnOnce(&mut [&mut ModularChannel]) -> Result<T>,
 ) -> Result<T> {
     let mut bufs = vec![];
     for i in indices {
@@ -22,7 +22,11 @@ pub fn with_buffers<T>(
         let b = &buf.buffer_grid[grid];
         let mut data = b.data.borrow_mut();
         if data.is_none() {
-            *data = Some(Image::new(b.size)?)
+            *data = Some(ModularChannel {
+                data: Image::new(b.size)?,
+                auxiliary_data: None,
+                shift: buf.info.shift,
+            });
         }
         bufs.push(RefMut::map(data, |x| x.as_mut().unwrap()));
     }

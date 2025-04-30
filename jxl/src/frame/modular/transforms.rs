@@ -365,7 +365,6 @@ pub fn make_grids(
                 };
                 ModularBuffer {
                     data: RefCell::new(None),
-                    auxiliary_data: RefCell::new(None),
                     remaining_uses: if is_output { 1 } else { 0 },
                     used_by_transforms: vec![],
                     size,

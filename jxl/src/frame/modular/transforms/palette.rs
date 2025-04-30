@@ -4,10 +4,9 @@
 // license that can be found in the LICENSE file.
 
 use crate::{
-    frame::modular::{predict::PredictionData, Predictor},
-    image::{Image, ImageRect},
+    frame::modular::{predict::PredictionData, ModularChannel, Predictor},
+    image::ImageRect,
 };
-use std::ops::DerefMut;
 
 const RGB_CHANNELS: usize = 3;
 
@@ -163,15 +162,15 @@ fn get_palette_value(
 }
 
 pub fn do_palette_step_general(
-    buf_in: &Image<i32>,
-    buf_pal: &Image<i32>,
-    buf_out: &mut [impl DerefMut<Target = Image<i32>>],
+    buf_in: &ModularChannel,
+    buf_pal: &ModularChannel,
+    buf_out: &mut [&mut ModularChannel],
     num_colors: usize,
     num_deltas: usize,
     predictor: Predictor,
 ) {
-    let (w, h) = buf_in.size();
-    let palette = buf_pal.as_rect();
+    let (w, h) = buf_in.data.size();
+    let palette = buf_pal.data.as_rect();
     let bit_depth = 8; // TODO(sboukortt): plumb the actual bit depth
 
     if w == 0 {
@@ -181,7 +180,7 @@ pub fn do_palette_step_general(
         for (chan_index, out) in buf_out.iter_mut().enumerate() {
             for y in 0..h {
                 for x in 0..w {
-                    let index = buf_in.as_rect().row(y)[x];
+                    let index = buf_in.data.as_rect().row(y)[x];
                     let palette_value = get_palette_value(
                         &palette,
                         index as isize,
@@ -189,7 +188,7 @@ pub fn do_palette_step_general(
                         /*palette_size=*/ num_colors,
                         /*bit_depth=*/ bit_depth,
                     );
-                    out.as_rect_mut().row(y)[x] = palette_value;
+                    out.data.as_rect_mut().row(y)[x] = palette_value;
                 }
             }
         }
@@ -198,7 +197,7 @@ pub fn do_palette_step_general(
     } else {
         for (chan_index, out) in buf_out.iter_mut().enumerate() {
             for y in 0..h {
-                let idx = buf_in.as_rect().row(y);
+                let idx = buf_in.data.as_rect().row(y);
                 for (x, &index) in idx.iter().enumerate() {
                     let palette_entry = get_palette_value(
                         &palette,
@@ -209,14 +208,14 @@ pub fn do_palette_step_general(
                     );
                     let val = if index < num_deltas as i32 {
                         let pred = predictor.predict_one(
-                            PredictionData::get(out.as_rect(), x, y),
+                            PredictionData::get(out.data.as_rect(), x, y),
                             /*wp_pred=*/ 0,
                         );
                         (pred + palette_entry as i64) as i32
                     } else {
                         palette_entry
                     };
-                    out.as_rect_mut().row(y)[x] = val;
+                    out.data.as_rect_mut().row(y)[x] = val;
                 }
             }
         }

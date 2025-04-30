@@ -180,20 +180,20 @@ impl PatchesDictionary {
                     if !reference.saved_before_color_transform {
                         return Err(Error::PatchesPostColorTransform());
                     }
-                    if x0 + ref_pos_xsize > reference.frame[0].size.0 {
+                    if x0 + ref_pos_xsize > reference.frame[0].size().0 {
                         return Err(Error::PatchesInvalidPosition(
                             "x".to_string(),
                             x0,
                             ref_pos_xsize,
-                            reference.frame[0].size.0,
+                            reference.frame[0].size().0,
                         ));
                     }
-                    if y0 + ref_pos_ysize > reference.frame[0].size.1 {
+                    if y0 + ref_pos_ysize > reference.frame[0].size().1 {
                         return Err(Error::PatchesInvalidPosition(
                             "y".to_string(),
                             y0,
                             ref_pos_ysize,
-                            reference.frame[0].size.1,
+                            reference.frame[0].size().1,
                         ));
                     }
                 }

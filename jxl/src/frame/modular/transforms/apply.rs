@@ -86,7 +86,7 @@ impl TransformStepChunk {
                     // If not, creates buffers in the output that are a copy of the input buffers.
                     // This should be rare.
                     *buffers[buf_out[i]].buffer_grid[grid].data.borrow_mut() =
-                        Some(buffers[buf_in[i]].buffer_grid[grid].get_buffer()?.0);
+                        Some(buffers[buf_in[i]].buffer_grid[grid].get_buffer()?);
                 }
                 with_buffers(buffers, buf_out, grid, |bufs| {
                     super::rct::do_rct_step(bufs, *op, *perm);
