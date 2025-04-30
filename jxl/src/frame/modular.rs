@@ -31,7 +31,7 @@ pub use predict::Predictor;
 use transforms::{make_grids, TransformStepChunk};
 pub use tree::Tree;
 
-#[derive(Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq, Copy)]
 struct ChannelInfo {
     size: (usize, usize),
     shift: Option<(usize, usize)>, // None for meta-channels
@@ -121,6 +121,13 @@ impl ModularChannel {
                 .transpose()?,
             shift: self.shift,
         })
+    }
+
+    fn channel_info(&self) -> ChannelInfo {
+        ChannelInfo {
+            size: self.data.size(),
+            shift: self.shift,
+        }
     }
 }
 
@@ -248,7 +255,7 @@ impl FullModularImage {
         let header = GroupHeader::read(br)?;
 
         let (mut buffer_info, transform_steps) =
-            transforms::meta_apply_transforms(&channels, &header.transforms)?;
+            transforms::apply::meta_apply_transforms(&channels, &header.transforms)?;
 
         // Assign each (channel, group) pair present in the bitstream to the section in which it will be decoded.
         let mut section_buffer_indices: Vec<Vec<usize>> = vec![];
@@ -441,8 +448,13 @@ pub fn decode_vardct_lf(
         ModularChannel::new(r.size)?,
         ModularChannel::new(r.size)?,
     ];
-    let mut buf_refs: Vec<_> = buffers.iter_mut().collect();
-    decode_modular_subbitstream(&mut buf_refs, stream_id, None, global_tree, br)?;
+    decode_modular_subbitstream(
+        buffers.iter_mut().collect(),
+        stream_id,
+        None,
+        global_tree,
+        br,
+    )?;
     // TODO(szabadka): Generate the f32 pixels of the LF image.
     Ok(())
 }
@@ -473,8 +485,13 @@ pub fn decode_hf_metadata(
         ModularChannel::new((count, 2))?,
         ModularChannel::new(r.size)?,
     ];
-    let mut buf_refs: Vec<_> = buffers.iter_mut().collect();
-    decode_modular_subbitstream(&mut buf_refs, stream_id, None, global_tree, br)?;
+    decode_modular_subbitstream(
+        buffers.iter_mut().collect(),
+        stream_id,
+        None,
+        global_tree,
+        br,
+    )?;
     let ytox_image = buffers[0].data.as_rect();
     let ytob_image = buffers[1].data.as_rect();
     let mut ytox_map = hf_meta.ytox_map.as_rect_mut();
