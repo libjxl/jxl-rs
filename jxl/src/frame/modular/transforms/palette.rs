@@ -4,7 +4,7 @@
 // license that can be found in the LICENSE file.
 
 use crate::{
-    frame::modular::Predictor,
+    frame::modular::{predict::PredictionData, Predictor},
     image::{Image, ImageRect},
 };
 use std::ops::DerefMut;
@@ -198,7 +198,6 @@ pub fn do_palette_step_general(
     } else {
         for (chan_index, out) in buf_out.iter_mut().enumerate() {
             for y in 0..h {
-                let mut out_rect = out.as_rect_mut();
                 let idx = buf_in.as_rect().row(y);
                 for (x, &index) in idx.iter().enumerate() {
                     let palette_entry = get_palette_value(
@@ -209,47 +208,15 @@ pub fn do_palette_step_general(
                         /*bit_depth=*/ bit_depth,
                     );
                     let val = if index < num_deltas as i32 {
-                        let left = if x > 0 {
-                            out_rect.row(y)[x - 1]
-                        } else if y > 0 {
-                            out_rect.row(y - 1)[0]
-                        } else {
-                            0
-                        };
-                        let top = if y > 0 { out_rect.row(y - 1)[x] } else { left };
-                        let topleft = if x > 0 && y > 0 {
-                            out_rect.row(y - 1)[x - 1]
-                        } else {
-                            left
-                        };
-                        let topright = if x + 1 < w && y > 0 {
-                            out_rect.row(y - 1)[x + 1]
-                        } else {
-                            top
-                        };
-                        let leftleft = if x > 1 { out_rect.row(y)[x - 2] } else { left };
-                        let toptop = if y > 1 { out_rect.row(y - 2)[x] } else { top };
-                        let toprightright = if x + 2 < w && y > 0 {
-                            out_rect.row(y - 1)[x + 2]
-                        } else {
-                            topright
-                        };
-
                         let pred = predictor.predict_one(
-                            left,
-                            top,
-                            toptop,
-                            topleft,
-                            topright,
-                            leftleft,
-                            toprightright,
+                            PredictionData::get(out.as_rect(), x, y),
                             /*wp_pred=*/ 0,
                         );
                         (pred + palette_entry as i64) as i32
                     } else {
                         palette_entry
                     };
-                    out_rect.row(y)[x] = val;
+                    out.as_rect_mut().row(y)[x] = val;
                 }
             }
         }
