@@ -108,7 +108,7 @@ impl ImageDataType for half::f16 {
 impl_image_data_type!(f64, F64);
 
 pub struct Image<T: ImageDataType> {
-    pub size: (usize, usize),
+    size: (usize, usize),
     data: Vec<T>,
 }
 
@@ -267,6 +267,10 @@ impl<T: ImageDataType> Image<T> {
             },
             image: self,
         }
+    }
+
+    pub fn try_clone(&self) -> Result<Self> {
+        self.as_rect().to_image()
     }
 }
 

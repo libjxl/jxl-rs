@@ -86,15 +86,50 @@ impl ModularGridKind {
     }
 }
 
+// All the information on a specific buffer needed by Modular decoding.
+#[derive(Debug)]
+struct ModularChannel {
+    // Actual pixel buffer.
+    data: Image<i32>,
+    // Holds additional information such as the weighted predictor's error channel's last row for
+    // the transform chunk that produced this buffer.
+    auxiliary_data: Option<Image<i32>>,
+    // Shift of the channel (None if this is a meta-channel).
+    shift: Option<(usize, usize)>,
+}
+
+impl ModularChannel {
+    fn new(size: (usize, usize)) -> Result<Self> {
+        Self::new_with_shift(size, Some((0, 0)))
+    }
+
+    fn new_with_shift(size: (usize, usize), shift: Option<(usize, usize)>) -> Result<Self> {
+        Ok(ModularChannel {
+            data: Image::new(size)?,
+            auxiliary_data: None,
+            shift,
+        })
+    }
+
+    fn try_clone(&self) -> Result<Self> {
+        Ok(ModularChannel {
+            data: self.data.try_clone()?,
+            auxiliary_data: self
+                .auxiliary_data
+                .as_ref()
+                .map(Image::try_clone)
+                .transpose()?,
+            shift: self.shift,
+        })
+    }
+}
+
 // Note: this type uses interior mutability to get mutable references to multiple buffers at once.
 // In principle, this is not needed, but the overhead should be minimal so using `unsafe` here is
 // probably not worth it.
 #[derive(Debug)]
 struct ModularBuffer {
-    data: RefCell<Option<Image<i32>>>,
-    // Holds additional information such as the weighted predictor's error channel's last row for
-    // the transform chunk that produced this buffer.
-    auxiliary_data: RefCell<Option<Image<i32>>>,
+    data: RefCell<Option<ModularChannel>>,
     // Number of times this buffer will be used, *including* when it is used for output.
     remaining_uses: usize,
     used_by_transforms: Vec<usize>,
@@ -104,27 +139,18 @@ struct ModularBuffer {
 impl ModularBuffer {
     // Gives out a copy of the buffer + auxiliary buffer, marking the buffer as used.
     // If this was the last usage of the buffer, does not actually copy the buffer.
-    fn get_buffer(&mut self) -> Result<(Image<i32>, Option<Image<i32>>)> {
+    fn get_buffer(&mut self) -> Result<ModularChannel> {
         self.remaining_uses = self.remaining_uses.checked_sub(1).unwrap();
         if self.remaining_uses == 0 {
-            Ok((
-                self.data.borrow_mut().take().unwrap(),
-                self.auxiliary_data.borrow_mut().take(),
-            ))
+            Ok(self.data.borrow_mut().take().unwrap())
         } else {
-            Ok((
-                self.data
-                    .borrow()
-                    .as_ref()
-                    .map(|x| x.as_rect().to_image())
-                    .transpose()?
-                    .unwrap(),
-                self.auxiliary_data
-                    .borrow()
-                    .as_ref()
-                    .map(|x| x.as_rect().to_image())
-                    .transpose()?,
-            ))
+            Ok(self
+                .data
+                .borrow()
+                .as_ref()
+                .map(ModularChannel::try_clone)
+                .transpose()?
+                .unwrap())
         }
     }
 
@@ -132,7 +158,6 @@ impl ModularBuffer {
         self.remaining_uses = self.remaining_uses.checked_sub(1).unwrap();
         if self.remaining_uses == 0 {
             *self.data.borrow_mut() = None;
-            *self.auxiliary_data.borrow_mut() = None;
         }
     }
 }
@@ -366,7 +391,7 @@ impl FullModularImage {
                 on_output(
                     bi.channel_id,
                     g,
-                    bi.buffer_grid[grid].data.borrow().as_ref().unwrap(),
+                    &bi.buffer_grid[grid].data.borrow().as_ref().unwrap().data,
                 )?;
                 bi.buffer_grid[grid].mark_used();
             }
@@ -412,9 +437,9 @@ pub fn decode_vardct_lf(
     let r = frame_header.lf_group_rect(group);
     debug!(?r);
     let mut buffers = [
-        Image::new(r.size)?,
-        Image::new(r.size)?,
-        Image::new(r.size)?,
+        ModularChannel::new(r.size)?,
+        ModularChannel::new(r.size)?,
+        ModularChannel::new(r.size)?,
     ];
     let mut buf_refs: Vec<_> = buffers.iter_mut().collect();
     decode_modular_subbitstream(&mut buf_refs, stream_id, None, global_tree, br)?;
@@ -443,15 +468,15 @@ pub fn decode_hf_metadata(
         size: (r.size.0.div_ceil(8), r.size.1.div_ceil(8)),
     };
     let mut buffers = [
-        Image::new(cr.size)?,
-        Image::new(cr.size)?,
-        Image::new((count, 2))?,
-        Image::new(r.size)?,
+        ModularChannel::new_with_shift(cr.size, Some((3, 3)))?,
+        ModularChannel::new_with_shift(cr.size, Some((3, 3)))?,
+        ModularChannel::new((count, 2))?,
+        ModularChannel::new(r.size)?,
     ];
     let mut buf_refs: Vec<_> = buffers.iter_mut().collect();
     decode_modular_subbitstream(&mut buf_refs, stream_id, None, global_tree, br)?;
-    let ytox_image = buffers[0].as_rect();
-    let ytob_image = buffers[1].as_rect();
+    let ytox_image = buffers[0].data.as_rect();
+    let ytob_image = buffers[1].data.as_rect();
     let mut ytox_map = hf_meta.ytox_map.as_rect_mut();
     let mut ytob_map = hf_meta.ytob_map.as_rect_mut();
     let mut ytox_map_rect = ytox_map.rect(cr)?;
@@ -464,8 +489,8 @@ pub fn decode_hf_metadata(
             ytob_map_rect.row(y)[x] = ytob_image.row(y)[x].clamp(i8max, i8max) as i8;
         }
     }
-    let transform_image = buffers[2].as_rect();
-    let epf_image = buffers[3].as_rect();
+    let transform_image = buffers[2].data.as_rect();
+    let epf_image = buffers[3].data.as_rect();
     let mut transform_map = hf_meta.transform_map.as_rect_mut();
     let mut transform_map_rect = transform_map.rect(r)?;
     let mut raw_quant_map = hf_meta.raw_quant_map.as_rect_mut();

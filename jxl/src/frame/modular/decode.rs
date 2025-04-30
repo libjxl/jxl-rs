@@ -9,13 +9,12 @@ use crate::{
     error::{Error, Result},
     frame::quantizer::NUM_QUANT_TABLES,
     headers::{frame_header::FrameHeader, modular::GroupHeader, JxlHeader},
-    image::Image,
     util::tracing_wrappers::*,
 };
 
 use super::{
     predict::WeightedPredictorState, transforms::apply::TransformStep, tree::NUM_NONREF_PROPERTIES,
-    Tree,
+    ModularChannel, Tree,
 };
 
 #[allow(unused)]
@@ -50,7 +49,7 @@ impl ModularStreamId {
 #[allow(clippy::too_many_arguments)]
 #[instrument(level = "debug", skip(buffers, reader, br))]
 fn decode_modular_channel(
-    buffers: &mut [&mut Image<i32>],
+    buffers: &mut [&mut ModularChannel],
     chan: usize,
     stream_id: usize,
     header: &GroupHeader,
@@ -59,7 +58,7 @@ fn decode_modular_channel(
     br: &mut BitReader,
 ) -> Result<()> {
     debug!("reading channel");
-    let size = buffers[chan].size();
+    let size = buffers[chan].data.size();
     let mut wp_state = WeightedPredictorState::new(header);
     for y in 0..size.1 {
         let mut property_buffer = [0; 256];
@@ -71,7 +70,7 @@ fn decode_modular_channel(
             let dec = reader.read_signed(br, prediction_result.context as usize)?;
             let val =
                 prediction_result.guess + (prediction_result.multiplier as i64) * (dec as i64);
-            buffers[chan].as_rect_mut().row(y)[x] = val as i32;
+            buffers[chan].data.as_rect_mut().row(y)[x] = val as i32;
             trace!(y, x, val, dec, ?property_buffer, ?prediction_result);
             // TODO(veluca): update WP errors.
         }
@@ -83,7 +82,7 @@ fn decode_modular_channel(
 // This function will decode a header and apply local transforms if a header is not given.
 // The intended use of passing a header is for the DcGlobal section.
 pub fn decode_modular_subbitstream(
-    buffers: &mut [&mut Image<i32>],
+    buffers: &mut [&mut ModularChannel],
     stream_id: usize,
     header: Option<GroupHeader>,
     global_tree: &Option<Tree>,

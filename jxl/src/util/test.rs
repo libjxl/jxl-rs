@@ -124,7 +124,7 @@ pub fn write_pfm(image: Vec<Image<f32>>, mut buf: impl Write) -> Result<(), Erro
             image.len()
         )));
     }
-    let size = image[0].size;
+    let size = image[0].size();
     for c in image.iter().skip(1) {
         assert_eq!(size, c.size());
     }
