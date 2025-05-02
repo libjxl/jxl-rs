@@ -434,8 +434,8 @@ pub struct FrameHeader {
     #[default(Extensions::default())]
     extensions: Extensions,
 
-    // The following 4 fields are not actually serialized, but just used as variables to help with
-    // defining later conditions.
+    // The following fields are not actually serialized, but just used as variables for
+    // implementing the methods below.
     #[coder(Bits(0))]
     #[default(if frame_width == 0 { nonserialized.img_width } else { frame_width })]
     #[condition(false)]
@@ -455,16 +455,22 @@ pub struct FrameHeader {
     #[default(compute_jpeg_shift(&jpeg_upsampling, &V_SHIFT))]
     #[condition(false)]
     pub maxvs: u32,
+
+    #[coder(Bits(0))]
+    #[default(nonserialized.num_extra_channels)]
+    #[condition(false)]
+    pub num_extra_channels: u32,
 }
 
-// TODO(firsching): remove once we use this!
-#[allow(dead_code)]
 impl FrameHeader {
     const GROUP_DIM: usize = 256;
     const BLOCK_DIM: usize = 8;
 
+    pub fn log_group_dim(&self) -> usize {
+        (Self::GROUP_DIM.ilog2() - 1 + self.group_size_shift) as usize
+    }
     pub fn group_dim(&self) -> usize {
-        (Self::GROUP_DIM >> 1) << self.group_size_shift
+        1 << self.log_group_dim()
     }
     pub fn lf_group_dim(&self) -> usize {
         self.group_dim() * Self::BLOCK_DIM

@@ -54,9 +54,10 @@ impl SimpleRenderPipelineBuilder {
                 log_group_size,
                 xgroups: size.0.shrc(log_group_size),
                 stages: vec![],
-                group_ready_passes: vec![
-                    0;
-                    size.0.shrc(log_group_size) * size.1.shrc(log_group_size)
+                group_chan_ready_passes: vec![
+                    vec![0; num_channels];
+                    size.0.shrc(log_group_size)
+                        * size.1.shrc(log_group_size)
                 ],
                 completed_passes: 0,
                 input_buffers: vec![],
@@ -205,7 +206,7 @@ pub struct SimpleRenderPipeline {
     log_group_size: usize,
     xgroups: usize,
     stages: Vec<Box<dyn RunStage>>,
-    group_ready_passes: Vec<usize>,
+    group_chan_ready_passes: Vec<Vec<usize>>,
     completed_passes: usize,
     input_buffers: Vec<Image<f64>>,
     chunk_size: usize,
@@ -218,15 +219,21 @@ fn clone_images<T: ImageDataType>(images: &[Image<T>]) -> Result<Vec<Image<T>>> 
 impl SimpleRenderPipeline {
     #[instrument(skip_all, err)]
     fn do_render(&mut self) -> Result<()> {
-        let ready_passes = self.group_ready_passes.iter().copied().min().unwrap();
+        let ready_passes = self
+            .group_chan_ready_passes
+            .iter()
+            .flat_map(|x| x.iter())
+            .copied()
+            .min()
+            .unwrap();
         if ready_passes <= self.completed_passes {
-            info!(
+            debug!(
                 "no more ready passes ({} completed, {ready_passes} ready)",
                 self.completed_passes
             );
             return Ok(());
         }
-        info!(
+        debug!(
             "new ready passes ({} completed, {ready_passes} ready)",
             self.completed_passes
         );
@@ -237,7 +244,7 @@ impl SimpleRenderPipeline {
         let mut current_size = self.input_size;
 
         for (i, stage) in self.stages.iter_mut().enumerate() {
-            info!("running stage {i}: {stage}");
+            debug!("running stage {i}: {stage}");
             let mut output_buffers = clone_images(&current_buffers)?;
             // Replace buffers of different sizes.
             if stage.shift() != (0, 0) || stage.new_size(current_size) != current_size {
@@ -246,7 +253,7 @@ impl SimpleRenderPipeline {
                     if stage.uses_channel(c) {
                         let xsize = current_size.0.shrc(info.downsample.0);
                         let ysize = current_size.1.shrc(info.downsample.1);
-                        info!("reallocating channel {c} to new size {xsize}x{ysize}");
+                        debug!("reallocating channel {c} to new size {xsize}x{ysize}");
                         output_buffers[c] = Image::new((xsize, ysize))?;
                     }
                 }
@@ -275,105 +282,75 @@ impl RenderPipeline for SimpleRenderPipeline {
     type Builder = SimpleRenderPipelineBuilder;
 
     #[instrument(skip_all, err)]
-    fn fill_input_two_types<
-        T1: crate::image::ImageDataType,
-        T2: crate::image::ImageDataType,
-        F1,
-        F2,
-    >(
+    fn fill_input_channels<T: ImageDataType>(
         &mut self,
-        group_fill_info: Vec<super::GroupFillInfo<(F1, F2)>>,
-    ) -> Result<()>
-    where
-        F1: FnOnce(&mut [crate::image::ImageRectMut<T1>]) -> Result<()>,
-        F2: FnOnce(&mut [crate::image::ImageRectMut<T2>]) -> Result<()>,
-    {
-        for group_info in group_fill_info {
-            info!(
-                "filling data for group {} using types {:?} and {:?}",
-                group_info.group_id,
-                T1::DATA_TYPE_ID,
-                T2::DATA_TYPE_ID,
-            );
-            let group = (
-                group_info.group_id % self.xgroups,
-                group_info.group_id / self.xgroups,
-            );
-            let goffset = (
-                group.0 << self.log_group_size,
-                group.1 << self.log_group_size,
-            );
-            let gsize = (
-                self.input_size
-                    .0
-                    .min((goffset.0 + 1) << self.log_group_size)
-                    - goffset.0,
-                self.input_size
-                    .1
-                    .min((goffset.1 + 1) << self.log_group_size)
-                    - goffset.1,
-            );
-            let mut images1 = vec![];
-            let mut images2 = vec![];
-            let mut ch_idx = vec![];
-            for ChannelInfo { ty, downsample } in self.channel_info[0].iter() {
-                let ty = ty.unwrap();
-                assert_eq!(goffset.0 % (1 << downsample.0), 0);
-                assert_eq!(goffset.1 % (1 << downsample.1), 0);
-                if ty == T1::DATA_TYPE_ID {
-                    ch_idx.push(images1.len());
-                    images1.push(Image::<T1>::new((
-                        gsize.0.shrc(downsample.0),
-                        gsize.1.shrc(downsample.1),
-                    ))?);
-                } else if ty == T2::DATA_TYPE_ID {
-                    ch_idx.push(images2.len());
-                    images2.push(Image::<T2>::new((
-                        gsize.0.shrc(downsample.0),
-                        gsize.1.shrc(downsample.1),
-                    ))?);
-                } else {
-                    panic!("Invalid pipeline usage: channels of unknown type");
-                }
+        channels: &[usize],
+        group_id: usize,
+        num_filled_passes: usize,
+        fill_fn: impl FnOnce(&mut [crate::image::ImageRectMut<T>]) -> Result<()>,
+    ) -> Result<()> {
+        debug!(
+            "filling data for group {}, channels {:?}, using type {:?}",
+            group_id,
+            channels,
+            T::DATA_TYPE_ID,
+        );
+        let group = (group_id % self.xgroups, group_id / self.xgroups);
+        let goffset = (
+            group.0 << self.log_group_size,
+            group.1 << self.log_group_size,
+        );
+        let gsize = (
+            self.input_size
+                .0
+                .min(goffset.0 + (1 << self.log_group_size))
+                - goffset.0,
+            self.input_size
+                .1
+                .min(goffset.1 + (1 << self.log_group_size))
+                - goffset.1,
+        );
+        debug!(?gsize, ?group, ?group_id);
+        let mut images = vec![];
+        for c in channels.iter().copied() {
+            let ChannelInfo { ty, downsample } = self.channel_info[0][c];
+            let ty = ty.unwrap();
+            assert_eq!(goffset.0 % (1 << downsample.0), 0);
+            assert_eq!(goffset.1 % (1 << downsample.1), 0);
+            if ty == T::DATA_TYPE_ID {
+                images.push(Image::<T>::new((
+                    gsize.0.shrc(downsample.0),
+                    gsize.1.shrc(downsample.1),
+                ))?);
+            } else {
+                panic!(
+                    "Invalid pipeline usage: incorrect channel type, expected {:?}, found {ty:?}",
+                    T::DATA_TYPE_ID
+                );
             }
-            {
-                let mut images1: Vec<_> = images1.iter_mut().map(|x| x.as_rect_mut()).collect();
-                let mut images2: Vec<_> = images2.iter_mut().map(|x| x.as_rect_mut()).collect();
-                if !images1.is_empty() {
-                    group_info.fill_fn.0(&mut images1)?;
-                }
-                if !images2.is_empty() {
-                    group_info.fill_fn.1(&mut images2)?;
-                }
-            }
-            for (c, ChannelInfo { ty, downsample }) in self.channel_info[0].iter().enumerate() {
-                let ty = ty.unwrap();
-                let off = (goffset.0 >> downsample.0, goffset.1 >> downsample.1);
-                if ty == T1::DATA_TYPE_ID {
-                    for y in 0..gsize.1.shrc(downsample.1) {
-                        for x in 0..gsize.0.shrc(downsample.0) {
-                            self.input_buffers[c].as_rect_mut().row(y + off.1)[x + off.0] =
-                                images1[ch_idx[c]].as_rect().row(y)[x].to_f64();
-                        }
-                    }
-                } else if ty == T2::DATA_TYPE_ID {
-                    for y in 0..gsize.1.shrc(downsample.1) {
-                        for x in 0..gsize.0.shrc(downsample.0) {
-                            self.input_buffers[c].as_rect_mut().row(y + off.1)[x + off.0] =
-                                images2[ch_idx[c]].as_rect().row(y)[x].to_f64();
-                        }
-                    }
-                }
-            }
-            self.group_ready_passes[group_info.group_id] += group_info.num_filled_passes;
         }
-
+        let mut images: Vec<_> = images.iter_mut().map(|x| x.as_rect_mut()).collect();
+        fill_fn(&mut images)?;
+        for (i, c) in channels.iter().copied().enumerate() {
+            let ChannelInfo { ty, downsample } = self.channel_info[0][c];
+            let ty = ty.unwrap();
+            let off = (goffset.0 >> downsample.0, goffset.1 >> downsample.1);
+            assert_eq!(ty, T::DATA_TYPE_ID);
+            for y in 0..gsize.1.shrc(downsample.1) {
+                for x in 0..gsize.0.shrc(downsample.0) {
+                    self.input_buffers[c].as_rect_mut().row(y + off.1)[x + off.0] =
+                        images[i].as_rect().row(y)[x].to_f64();
+                }
+            }
+            self.group_chan_ready_passes[group_id][c] += num_filled_passes;
+        }
         self.do_render()
     }
 
     fn into_stages(self) -> Vec<Box<dyn std::any::Any>> {
         self.stages.into_iter().map(|x| x.as_any()).collect()
     }
+
     fn num_groups(&self) -> usize {
         self.xgroups * self.input_size.1.shrc(self.log_group_size)
     }
@@ -569,7 +546,7 @@ impl<T: ImageDataType> RenderPipelineRunStage for RenderPipelineExtendStage<T> {
         input_buffers: &[&Image<f64>],
         output_buffers: &mut [&mut Image<f64>],
     ) {
-        info!("running extend stage '{stage}' in simple pipeline");
+        debug!("running extend stage '{stage}' in simple pipeline");
         let numc = input_buffers.len();
         if numc == 0 {
             return;

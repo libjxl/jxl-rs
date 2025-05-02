@@ -17,8 +17,11 @@ use crate::{
         FileHeader,
     },
     image::Image,
-    util::tracing_wrappers::*,
-    util::CeilLog2,
+    render::{
+        stages::SaveStage, RenderPipeline, RenderPipelineBuilder, SimpleRenderPipeline,
+        SimpleRenderPipelineBuilder,
+    },
+    util::{tracing_wrappers::*, CeilLog2},
 };
 use block_context_map::BlockContextMap;
 use coeff_order::decode_coeff_orders;
@@ -139,24 +142,7 @@ pub struct Frame {
     lf_image: Option<Image<f32>>,
     hf_meta: Option<HfMetadata>,
     decoder_state: DecoderState,
-}
-
-#[allow(unused_variables)]
-fn handle_decoded_modular_channel(
-    chan: usize,
-    (gx, gy): (usize, usize),
-    img: &Image<i32>,
-) -> Result<()> {
-    #[cfg(feature = "debug_tools")]
-    {
-        std::fs::create_dir_all("/tmp/jxl-debug/").unwrap();
-        std::fs::write(
-            format!("/tmp/jxl-debug/modular_c{chan:02}_gy{gy:03}_gx{gx:03}.pgm"),
-            img.as_rect().to_pgm_as_8bit(),
-        )
-        .unwrap();
-    }
-    Ok(())
+    render_pipeline: Option<SimpleRenderPipeline>,
 }
 
 impl Frame {
@@ -218,6 +204,7 @@ impl Frame {
             lf_image,
             hf_meta,
             decoder_state,
+            render_pipeline: None,
         })
     }
 
@@ -377,7 +364,7 @@ impl Frame {
             ModularStreamId::ModularLF(group),
             &self.header,
             &lf_global.tree,
-            handle_decoded_modular_channel,
+            None,
             br,
         )?;
         if self.header.encoding == Encoding::VarDCT && !self.header.has_lf_frame() {
@@ -435,6 +422,24 @@ impl Frame {
         Ok(())
     }
 
+    #[instrument(skip(self))]
+    pub fn prepare_for_hf(&mut self) -> Result<()> {
+        // TODO(veluca): build the pipeline properly.
+        let num_channels = self.header.num_extra_channels as usize + 3;
+        let mut pipeline = SimpleRenderPipelineBuilder::new(
+            num_channels,
+            self.header.size(),
+            self.header.log_group_dim(),
+        );
+
+        for i in 0..num_channels {
+            pipeline = pipeline.add_stage(SaveStage::<i32>::new(i, self.header.size())?)?;
+        }
+        self.render_pipeline = Some(pipeline.build()?);
+
+        Ok(())
+    }
+
     #[instrument(skip(self, br))]
     pub fn decode_hf_group(&mut self, group: usize, pass: usize, br: &mut BitReader) -> Result<()> {
         debug!(section_size = br.total_bits_available());
@@ -445,16 +450,56 @@ impl Frame {
             let hf_meta = self.hf_meta.as_mut().unwrap();
             decode_vardct_group(group, pass, &self.header, lf_global, hf_global, hf_meta, br)?;
         }
+
+        let mut pass_to_pipeline = |chan: usize, g: usize, img: &Image<i32>| {
+            // TODO(veluca): figure out pass count and check group IDs. Also, investigate whether
+            // reusing the `img` buffer would be possible.
+            self.render_pipeline
+                .as_mut()
+                .unwrap()
+                .fill_input_channels(&[chan], g, 1, |rects| rects[0].copy_from(img.as_rect()))
+        };
+
         lf_global.modular_global.read_stream(
             ModularStreamId::ModularHF { group, pass },
             &self.header,
             &lf_global.tree,
-            handle_decoded_modular_channel,
+            Some(&mut pass_to_pipeline),
             br,
         )
     }
 
     pub fn finalize(mut self) -> Result<Option<DecoderState>> {
+        #[cfg(feature = "debug_tools")]
+        {
+            let saved_frames: Vec<Box<SaveStage<i32>>> = self
+                .render_pipeline
+                .unwrap()
+                .into_stages()
+                .into_iter()
+                .filter_map(|x| x.downcast().ok())
+                .collect();
+            std::fs::create_dir_all("/tmp/jxl-debug/").unwrap();
+            if let [r, g, b] = &saved_frames[..] {
+                std::fs::write(
+                    "/tmp/jxl-debug/decoded.ppm",
+                    crate::image::debug_tools::to_ppm_as_8bit(&[
+                        r.buffer().as_rect(),
+                        g.buffer().as_rect(),
+                        b.buffer().as_rect(),
+                    ]),
+                )
+                .unwrap();
+            } else {
+                for (chan, c) in saved_frames.into_iter().enumerate() {
+                    std::fs::write(
+                        format!("/tmp/jxl-debug/decoded_{chan}.ppm"),
+                        c.buffer().as_rect().to_pgm_as_8bit(),
+                    )
+                    .unwrap();
+                }
+            }
+        }
         if self.header.can_be_referenced {
             // TODO(firsching): actually use real reference images here, instead of setting it
             // to a blank image here, once we can decode images.
@@ -509,8 +554,31 @@ mod test {
 
         loop {
             let mut frame = Frame::new(&mut br, decoder_state)?;
-            let mut sections = frame.sections(&mut br)?;
-            frame.decode_lf_global(&mut sections[frame.get_section_idx(Section::LfGlobal)])?;
+            let mut section_readers = frame.sections(&mut br)?;
+            frame
+                .decode_lf_global(&mut section_readers[frame.get_section_idx(Section::LfGlobal)])?;
+
+            for group in 0..frame.header().num_lf_groups() {
+                frame.decode_lf_group(
+                    group,
+                    &mut section_readers[frame.get_section_idx(Section::Lf { group })],
+                )?;
+            }
+
+            frame
+                .decode_hf_global(&mut section_readers[frame.get_section_idx(Section::HfGlobal)])?;
+
+            frame.prepare_for_hf()?;
+
+            for pass in 0..frame.header().passes.num_passes as usize {
+                for group in 0..frame.header().num_groups() {
+                    frame.decode_hf_group(
+                        group,
+                        pass,
+                        &mut section_readers[frame.get_section_idx(Section::Hf { group, pass })],
+                    )?;
+                }
+            }
 
             // Call the callback with the frame
             if let Some(state) = callback(frame)? {
