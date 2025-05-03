@@ -12,7 +12,7 @@ use rand::SeedableRng;
 
 use super::{
     internal::RenderPipelineStageInfo, simple_pipeline::SimpleRenderPipelineBuilder,
-    stages::SaveStage, GroupFillInfo, RenderPipeline, RenderPipelineBuilder, RenderPipelineStage,
+    stages::SaveStage, RenderPipeline, RenderPipelineBuilder, RenderPipelineStage,
 };
 
 pub(super) fn make_and_run_simple_pipeline<
@@ -27,8 +27,10 @@ pub(super) fn make_and_run_simple_pipeline<
 ) -> Result<(S, Vec<Image<OutputT>>)> {
     let final_size = stage.new_size(image_size);
     const LOG_GROUP_SIZE: usize = 8;
-    let uses_channel: Vec<_> = (0..input_images.len())
-        .map(|x| stage.uses_channel(x))
+    let all_channels = (0..input_images.len()).collect::<Vec<_>>();
+    let uses_channel: Vec<_> = all_channels
+        .iter()
+        .map(|x| stage.uses_channel(*x))
         .collect();
     let mut pipeline = SimpleRenderPipelineBuilder::new_with_chunk_size(
         input_images.len(),
@@ -42,12 +44,12 @@ pub(super) fn make_and_run_simple_pipeline<
     }
     let mut pipeline = pipeline.build()?;
 
-    let fill_info = (0..pipeline.num_groups()).map(|g| {
-        let uses_channel = uses_channel.clone();
-        GroupFillInfo {
-            group_id: g,
-            num_filled_passes: 1,
-            fill_fn: move |rects: &mut [ImageRectMut<InputT>]| {
+    for g in 0..pipeline.num_groups() {
+        pipeline.fill_input_channels(
+            &all_channels,
+            g,
+            1,
+            |rects: &mut [ImageRectMut<InputT>]| {
                 for ((input, fill), used) in input_images
                     .iter()
                     .zip(rects.iter_mut())
@@ -65,9 +67,8 @@ pub(super) fn make_and_run_simple_pipeline<
                 }
                 Ok(())
             },
-        }
-    });
-    pipeline.fill_input_same_type(fill_info.collect())?;
+        )?;
+    }
 
     let mut stages = pipeline.into_stages().into_iter();
     let stage = stages

@@ -382,6 +382,8 @@ pub fn meta_apply_transforms(
         buffer_info[chan.0].channel_id = chid;
     }
 
+    debug!(?transform_steps);
+
     Ok((buffer_info, transform_steps))
 }
 
@@ -486,20 +488,56 @@ pub fn meta_apply_local_transforms<'a, 'b>(
                 b
             })
             .collect();
+
+        let mut buf_remap: Vec<_> = (0..buffer_storage.len()).collect();
+
         for (new_pos, (ch_info, buf)) in buf_new_position
             .iter()
+            .cloned()
             .zip(channels.iter_mut().zip(buf_tmp.into_iter()))
         {
             assert!(matches!(
-                buffer_storage[*new_pos],
+                buffer_storage[new_pos],
                 LocalTransformBuffer::Empty
             ));
-            buffer_storage[*new_pos] = buf;
-            ch_info.0 = *new_pos;
+            buf_remap[ch_info.0] = new_pos;
+            buffer_storage[new_pos] = buf;
+            ch_info.0 = new_pos;
+        }
+
+        for step in transform_steps.iter_mut() {
+            use std::iter::once;
+            match step {
+                TransformStep::Rct {
+                    buf_in, buf_out, ..
+                } => {
+                    for b in buf_in.iter_mut().chain(buf_out.iter_mut()) {
+                        *b = buf_remap[*b];
+                    }
+                }
+                TransformStep::Palette {
+                    buf_in,
+                    buf_pal,
+                    buf_out,
+                    ..
+                } => {
+                    for b in once(buf_in).chain(once(buf_pal)).chain(buf_out.iter_mut()) {
+                        *b = buf_remap[*b];
+                    }
+                }
+                TransformStep::HSqueeze { buf_in, buf_out }
+                | TransformStep::VSqueeze { buf_in, buf_out } => {
+                    for b in once(buf_out).chain(buf_in.iter_mut()) {
+                        *b = buf_remap[*b];
+                    }
+                }
+            }
         }
     }
 
     debug!(?channels, ?buffer_storage, "sorted channels");
+
+    debug!(?transform_steps);
 
     // Since RCT steps will try to transfer buffers from the source channels to the destination
     // channels, make sure we do the reverse transformation here (to have the caller-provided

@@ -208,6 +208,7 @@ pub struct FullModularImage {
     // List of buffer indices of the channels of the modular image encoded in each kind of section.
     // In order, LfGlobal, LfGroup, HfGroup(pass 0), ..., HfGroup(last pass).
     section_buffer_indices: Vec<Vec<usize>>,
+    delayed_ready_sections: Vec<usize>,
 }
 
 impl FullModularImage {
@@ -248,6 +249,7 @@ impl FullModularImage {
                 buffer_info: vec![],
                 transform_steps: vec![],
                 section_buffer_indices: vec![vec![]; 2 + frame_header.passes.num_passes as usize],
+                delayed_ready_sections: vec![],
             });
         }
 
@@ -347,9 +349,11 @@ impl FullModularImage {
             buffer_info,
             transform_steps,
             section_buffer_indices,
+            delayed_ready_sections: vec![],
         })
     }
 
+    #[allow(clippy::type_complexity)]
     #[instrument(
         level = "debug",
         skip(self, frame_header, global_tree, on_output, br),
@@ -360,7 +364,7 @@ impl FullModularImage {
         stream: ModularStreamId,
         frame_header: &FrameHeader,
         global_tree: &Option<Tree>,
-        on_output: impl Fn(usize, (usize, usize), &Image<i32>) -> Result<()>,
+        on_output: Option<&mut dyn FnMut(usize, usize, &Image<i32>) -> Result<()>>,
         br: &mut BitReader,
     ) -> Result<()> {
         if self.buffer_info.is_empty() {
@@ -390,14 +394,17 @@ impl FullModularImage {
             },
         )?;
 
-        let maybe_output = |bi: &mut ModularBufferInfo, grid: usize| -> Result<()> {
+        let Some(on_output) = on_output else {
+            self.delayed_ready_sections
+                .extend_from_slice(&self.section_buffer_indices[section_id]);
+            return Ok(());
+        };
+
+        let mut maybe_output = |bi: &mut ModularBufferInfo, grid: usize| -> Result<()> {
             if bi.is_output {
-                assert_ne!(bi.grid_kind, ModularGridKind::None);
-                let (gw, _) = bi.grid_shape;
-                let g = (grid % gw, grid / gw);
                 on_output(
                     bi.channel_id,
-                    g,
+                    grid,
                     &bi.buffer_grid[grid].data.borrow().as_ref().unwrap().data,
                 )?;
                 bi.buffer_grid[grid].mark_used();
@@ -406,10 +413,14 @@ impl FullModularImage {
         };
 
         let mut new_ready_transform_chunks = vec![];
-        for buf in self.section_buffer_indices[section_id].iter() {
-            maybe_output(&mut self.buffer_info[*buf], grid)?;
+        for buf in self.section_buffer_indices[section_id]
+            .iter()
+            .copied()
+            .chain(self.delayed_ready_sections.drain(..))
+        {
+            maybe_output(&mut self.buffer_info[buf], grid)?;
             new_ready_transform_chunks.extend(
-                self.buffer_info[*buf].buffer_grid[grid]
+                self.buffer_info[buf].buffer_grid[grid]
                     .used_by_transforms
                     .iter()
                     .copied(),

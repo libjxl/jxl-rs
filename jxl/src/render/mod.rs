@@ -7,7 +7,7 @@ use std::{any::Any, marker::PhantomData};
 
 use crate::{
     error::Result,
-    image::{DataTypeTag, ImageDataType, ImageRectMut},
+    image::{ImageDataType, ImageRectMut},
 };
 
 mod internal;
@@ -18,7 +18,7 @@ mod test;
 
 use internal::RenderPipelineStageInfo;
 
-pub use simple_pipeline::SimpleRenderPipeline;
+pub use simple_pipeline::{SimpleRenderPipeline, SimpleRenderPipelineBuilder};
 
 /// Inspects channels and passes data to the following stage as is.
 ///
@@ -112,56 +112,20 @@ pub trait RenderPipelineBuilder: Sized {
     fn build(self) -> Result<Self::RenderPipeline>;
 }
 
-pub struct GroupFillInfo<F> {
-    group_id: usize,
-    num_filled_passes: usize,
-    fill_fn: F,
-}
-
-fn fake_fill_fn(_: &mut [ImageRectMut<f64>]) -> Result<()> {
-    panic!("can only use fill_input_same_type if the inputs are of the same type");
-}
-
 pub trait RenderPipeline {
     type Builder: RenderPipelineBuilder<RenderPipeline = Self>;
 
-    /// Feeds input into the pipeline. Takes as input a vector specifying, for each group that will
-    /// be filled in, how many passes are filled and how to fill in each channel.
-    fn fill_input_same_type<T: ImageDataType, F>(
+    /// Feeds input into the pipeline. In particular, calls `fill_fn` with a rect for each of the
+    /// specified channels. The channel data is expected to represent the given number of
+    /// additional passes (compared to the previous call to fill_input_channels for the same
+    /// channels and groups).
+    fn fill_input_channels<T: ImageDataType>(
         &mut self,
-        group_fill_info: Vec<GroupFillInfo<F>>,
-    ) -> Result<()>
-    where
-        F: FnOnce(&mut [ImageRectMut<T>]) -> Result<()>,
-    {
-        const {
-            #[allow(clippy::single_match)]
-            match T::DATA_TYPE_ID {
-                DataTypeTag::F64 => panic!("cannot use f64 with fill_input_same_type"),
-                _ => (),
-            };
-        };
-        self.fill_input_two_types(
-            group_fill_info
-                .into_iter()
-                .map(|x| GroupFillInfo {
-                    fill_fn: (x.fill_fn, fake_fill_fn),
-                    group_id: x.group_id,
-                    num_filled_passes: x.num_filled_passes,
-                })
-                .collect(),
-        )
-    }
-
-    /// Same as fill_input_same_type, but the inputs might have different types.
-    /// Which type is used for which channel is determined by the stages in the render pipeline.
-    fn fill_input_two_types<T1: ImageDataType, T2: ImageDataType, F1, F2>(
-        &mut self,
-        group_fill_info: Vec<GroupFillInfo<(F1, F2)>>,
-    ) -> Result<()>
-    where
-        F1: FnOnce(&mut [ImageRectMut<T1>]) -> Result<()>,
-        F2: FnOnce(&mut [ImageRectMut<T2>]) -> Result<()>;
+        channels: &[usize],
+        group_id: usize,
+        num_filled_passes: usize,
+        fill_fn: impl FnOnce(&mut [ImageRectMut<T>]) -> Result<()>,
+    ) -> Result<()>;
 
     fn into_stages(self) -> Vec<Box<dyn Any>>;
     fn num_groups(&self) -> usize;

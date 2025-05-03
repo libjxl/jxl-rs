@@ -47,6 +47,8 @@ fn parse_jxl_codestream(data: &[u8]) -> Result<(), jxl::error::Error> {
 
         frame.decode_hf_global(&mut section_readers[frame.get_section_idx(Section::HfGlobal)])?;
 
+        frame.prepare_for_hf()?;
+
         for pass in 0..frame.header().passes.num_passes as usize {
             for group in 0..frame.header().num_groups() {
                 frame.decode_hf_group(

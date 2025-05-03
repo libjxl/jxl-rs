@@ -553,6 +553,28 @@ pub mod debug_tools {
         }
     }
 
+    pub fn to_ppm_as_8bit(img: &[ImageRect<'_, i32>; 3]) -> Vec<u8> {
+        use std::io::Write;
+        let mut ret = vec![];
+        assert_eq!(img[0].size(), img[1].size());
+        assert_eq!(img[0].size(), img[2].size());
+        write!(
+            &mut ret,
+            "P6\n{} {}\n255\n",
+            img[0].size().0,
+            img[0].size().1
+        )
+        .unwrap();
+        ret.extend(
+            (0..img[0].size().1)
+                .flat_map(|y| {
+                    (0..img[0].size().0).flat_map(move |x| [0, 1, 2].map(move |c| img[c].row(y)[x]))
+                })
+                .map(|x| x.clamp(0, 255) as u8),
+        );
+        ret
+    }
+
     #[cfg(test)]
     mod test {
         use super::super::Image;
