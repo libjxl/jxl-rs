@@ -134,7 +134,7 @@ pub fn decode_modular_subbitstream(
         );
     }
 
-    let mut reader = tree.histograms.make_reader(br)?;
+    let mut reader = tree.histograms.make_reader_with_width(br, buffers.len())?;
 
     for i in 0..buffers.len() {
         decode_modular_channel(&mut buffers, i, stream_id, &header, tree, &mut reader, br)?;
