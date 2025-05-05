@@ -18,7 +18,7 @@ use crate::{
         extra_channels::ExtraChannelInfo, frame_header::FrameHeader, modular::GroupHeader,
         JxlHeader,
     },
-    image::{Image, ImageRect, ImageRectMut, Rect},
+    image::{Image, Rect},
     util::{tracing_wrappers::*, CeilLog2},
 };
 
@@ -444,13 +444,12 @@ impl FullModularImage {
     }
 }
 
-#[allow(dead_code)]
 #[allow(clippy::too_many_arguments)]
-fn dequant_lf<'a>(
+fn dequant_lf(
     r: Rect,
-    lf: &'a mut [ImageRectMut<'a, f32>; 3],
-    quant_lf: &'a mut ImageRectMut<'a, u8>,
-    input: &[ImageRect<i32>; 3],
+    lf: &mut [Image<f32>; 3],
+    quant_lf: &mut Image<u8>,
+    input: [&Image<i32>; 3],
     color_correlation_params: &ColorCorrelationParams,
     quant_params: &QuantizerParams,
     lf_quant: &LfQuantFactors,
@@ -463,7 +462,9 @@ fn dequant_lf<'a>(
     let lf_factors = lf_quant.quant_factors.map(|factor| factor * inv_quant_lf);
 
     let [lf0, lf1, lf2] = lf;
-    let mut lf_rects = (lf0.rect(r)?, lf1.rect(r)?, lf2.rect(r)?);
+    let (mut lf0_rect, mut lf1_rect, mut lf2_rect) =
+        (lf0.as_rect_mut(), lf1.as_rect_mut(), lf2.as_rect_mut());
+    let mut lf_rects = (lf0_rect.rect(r)?, lf1_rect.rect(r)?, lf2_rect.rect(r)?);
 
     if frame_header.is444() {
         let fac_x = lf_factors[0] * mul;
@@ -472,9 +473,9 @@ fn dequant_lf<'a>(
         let cfl_fac_x = color_correlation_params.y_to_x();
         let cfl_fac_b = color_correlation_params.y_to_b();
         for y in 0..r.size.1 {
-            let quant_row_x = input[1].row(y);
-            let quant_row_y = input[0].row(y);
-            let quant_row_b = input[2].row(y);
+            let quant_row_x = input[1].as_rect().row(y);
+            let quant_row_y = input[0].as_rect().row(y);
+            let quant_row_b = input[2].as_rect().row(y);
             let dec_row_x = lf_rects.0.row(y);
             let dec_row_y = lf_rects.1.row(y);
             let dec_row_b = lf_rects.2.row(y);
@@ -502,7 +503,7 @@ fn dequant_lf<'a>(
             let fac = lf_factors[c] * mul;
             let ch = input[if c < 2 { c ^ 1 } else { c }];
             for y in 0..rect.size.1 {
-                let quant_row = ch.row(y);
+                let quant_row = ch.as_rect().row(y);
                 let row = lf_rect.row(y);
                 for x in 0..rect.size.0 {
                     row[x] = quant_row[x] as f32 * fac;
@@ -510,7 +511,8 @@ fn dequant_lf<'a>(
             }
         }
     }
-    let mut quant_lf_rect = quant_lf.rect(r)?;
+    let mut quant_lf_as_rect = quant_lf.as_rect_mut();
+    let mut quant_lf_rect = quant_lf_as_rect.rect(r)?;
     if bctx.num_lf_contexts <= 1 {
         for y in 0..r.size.1 {
             quant_lf_rect.row(y).fill(0);
@@ -518,9 +520,9 @@ fn dequant_lf<'a>(
     } else {
         for y in 0..r.size.1 {
             let qlf_row_val = quant_lf_rect.row(y);
-            let quant_row_x = input[1].row(y >> frame_header.vshift(0));
-            let quant_row_y = input[0].row(y >> frame_header.vshift(1));
-            let quant_row_b = input[2].row(y >> frame_header.vshift(2));
+            let quant_row_x = input[1].as_rect().row(y >> frame_header.vshift(0));
+            let quant_row_y = input[0].as_rect().row(y >> frame_header.vshift(1));
+            let quant_row_b = input[2].as_rect().row(y >> frame_header.vshift(2));
             for x in 0..r.size.0 {
                 let bucket_x = bctx.lf_thresholds[0]
                     .iter()
@@ -546,16 +548,23 @@ fn dequant_lf<'a>(
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn decode_vardct_lf(
     group: usize,
     frame_header: &FrameHeader,
     global_tree: &Option<Tree>,
-    _lf_image: &mut Image<f32>,
+    color_correlation_params: &ColorCorrelationParams,
+    quant_params: &QuantizerParams,
+    lf_quant: &LfQuantFactors,
+    bctx: &BlockContextMap,
+    lf_image: &mut [Image<f32>; 3],
+    quant_lf: &mut Image<u8>,
     br: &mut BitReader,
 ) -> Result<()> {
-    let _extra_precision = br.read(2)?;
+    let extra_precision = br.read(2)?;
     assert!(frame_header.is444());
-    debug!(?_extra_precision);
+    debug!(?extra_precision);
+    let mul = 1.0 / (1 << extra_precision) as f32;
     let stream_id = ModularStreamId::VarDCTLF(group).get_id(frame_header);
     debug!(?stream_id);
     let r = frame_header.lf_group_rect(group);
@@ -573,6 +582,18 @@ pub fn decode_vardct_lf(
         br,
     )?;
     // TODO(szabadka): Generate the f32 pixels of the LF image.
+    dequant_lf(
+        r,
+        lf_image,
+        quant_lf,
+        [&buffers[0].data, &buffers[1].data, &buffers[2].data],
+        color_correlation_params,
+        quant_params,
+        lf_quant,
+        mul,
+        frame_header,
+        bctx,
+    )?;
     Ok(())
 }
 
