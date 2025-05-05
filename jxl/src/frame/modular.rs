@@ -8,13 +8,17 @@ use std::{cell::RefCell, cmp::min, fmt::Debug};
 use crate::{
     bit_reader::BitReader,
     error::{Error, Result},
-    frame::transform_map::*,
-    frame::HfMetadata,
+    frame::{
+        block_context_map::BlockContextMap,
+        quantizer::{self, LfQuantFactors, QuantizerParams},
+        transform_map::*,
+        ColorCorrelationParams, HfMetadata,
+    },
     headers::{
         extra_channels::ExtraChannelInfo, frame_header::FrameHeader, modular::GroupHeader,
         JxlHeader,
     },
-    image::{Image, Rect},
+    image::{Image, ImageRect, ImageRectMut, Rect},
     util::{tracing_wrappers::*, CeilLog2},
 };
 
@@ -438,6 +442,108 @@ impl FullModularImage {
 
         Ok(())
     }
+}
+
+#[allow(dead_code)]
+#[allow(clippy::too_many_arguments)]
+fn dequant_lf<'a>(
+    r: Rect,
+    lf: &'a mut [ImageRectMut<'a, f32>; 3],
+    quant_lf: &'a mut ImageRectMut<'a, u8>,
+    input: &[ImageRect<i32>; 3],
+    color_correlation_params: &ColorCorrelationParams,
+    quant_params: &QuantizerParams,
+    lf_quant: &LfQuantFactors,
+    mul: f32,
+    frame_header: &FrameHeader,
+    bctx: &BlockContextMap,
+) -> Result<()> {
+    let inv_quant_lf = (quantizer::GLOBAL_SCALE_DENOM as f32)
+        / (quant_params.global_scale as f32 * quant_params.quant_lf as f32);
+    let lf_factors = lf_quant.quant_factors.map(|factor| factor * inv_quant_lf);
+
+    let [lf0, lf1, lf2] = lf;
+    let mut lf_rects = (lf0.rect(r)?, lf1.rect(r)?, lf2.rect(r)?);
+
+    if frame_header.is444() {
+        let fac_x = lf_factors[0] * mul;
+        let fac_y = lf_factors[1] * mul;
+        let fac_b = lf_factors[2] * mul;
+        let cfl_fac_x = color_correlation_params.y_to_x();
+        let cfl_fac_b = color_correlation_params.y_to_b();
+        for y in 0..r.size.1 {
+            let quant_row_x = input[1].row(y);
+            let quant_row_y = input[0].row(y);
+            let quant_row_b = input[2].row(y);
+            let dec_row_x = lf_rects.0.row(y);
+            let dec_row_y = lf_rects.1.row(y);
+            let dec_row_b = lf_rects.2.row(y);
+            for x in 0..r.size.0 {
+                let in_x = quant_row_x[x] as f32 * fac_x;
+                let in_y = quant_row_y[x] as f32 * fac_y;
+                let in_b = quant_row_b[x] as f32 * fac_b;
+                dec_row_y[x] = in_y;
+                dec_row_x[x] = in_y * cfl_fac_x + in_x;
+                dec_row_b[x] = in_y * cfl_fac_b + in_b;
+            }
+        }
+    } else {
+        for (c, mut lf_rect) in [(1, lf_rects.1), (0, lf_rects.0), (2, lf_rects.2)] {
+            let rect = Rect {
+                origin: (
+                    r.origin.0 >> frame_header.hshift(c),
+                    r.origin.1 >> frame_header.vshift(c),
+                ),
+                size: (
+                    r.size.0 >> frame_header.hshift(c),
+                    r.size.1 >> frame_header.vshift(c),
+                ),
+            };
+            let fac = lf_factors[c] * mul;
+            let ch = input[if c < 2 { c ^ 1 } else { c }];
+            for y in 0..rect.size.1 {
+                let quant_row = ch.row(y);
+                let row = lf_rect.row(y);
+                for x in 0..rect.size.0 {
+                    row[x] = quant_row[x] as f32 * fac;
+                }
+            }
+        }
+    }
+    let mut quant_lf_rect = quant_lf.rect(r)?;
+    if bctx.num_lf_contexts <= 1 {
+        for y in 0..r.size.1 {
+            quant_lf_rect.row(y).fill(0);
+        }
+    } else {
+        for y in 0..r.size.1 {
+            let qlf_row_val = quant_lf_rect.row(y);
+            let quant_row_x = input[1].row(y >> frame_header.vshift(0));
+            let quant_row_y = input[0].row(y >> frame_header.vshift(1));
+            let quant_row_b = input[2].row(y >> frame_header.vshift(2));
+            for x in 0..r.size.0 {
+                let bucket_x = bctx.lf_thresholds[0]
+                    .iter()
+                    .filter(|&t| quant_row_x[x >> frame_header.hshift(0)] > *t)
+                    .count();
+                let bucket_y = bctx.lf_thresholds[1]
+                    .iter()
+                    .filter(|&t| quant_row_y[x >> frame_header.hshift(1)] > *t)
+                    .count();
+                let bucket_b = bctx.lf_thresholds[2]
+                    .iter()
+                    .filter(|&t| quant_row_b[x >> frame_header.hshift(2)] > *t)
+                    .count();
+                let mut bucket = bucket_x;
+                bucket *= bctx.lf_thresholds[2].len() + 1;
+                bucket += bucket_b;
+                bucket *= bctx.lf_thresholds[1].len() + 1;
+                bucket += bucket_y;
+                qlf_row_val[x] = bucket as u8;
+            }
+        }
+    }
+    Ok(())
 }
 
 pub fn decode_vardct_lf(
