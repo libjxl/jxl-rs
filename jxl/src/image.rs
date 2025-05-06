@@ -165,6 +165,16 @@ impl<T: ImageDataType> Debug for ImageRectMut<'_, T> {
     }
 }
 
+#[cfg(test)]
+impl<T: ImageDataType> Clone for Image<T> {
+    fn clone(&self) -> Self {
+        Self {
+            size: self.size,
+            data: self.data.clone(),
+        }
+    }
+}
+
 impl<T: ImageDataType> Image<T> {
     #[instrument(err)]
     pub fn new_with_default(size: (usize, usize), default: T) -> Result<Image<T>> {
@@ -191,6 +201,11 @@ impl<T: ImageDataType> Image<T> {
 
     pub fn new(size: (usize, usize)) -> Result<Image<T>> {
         Self::new_with_default(size, T::default())
+    }
+
+    #[cfg(test)]
+    pub fn new_with_data(size: (usize, usize), data: Vec<T>) -> Image<T> {
+        Image { size, data }
     }
 
     #[cfg(test)]

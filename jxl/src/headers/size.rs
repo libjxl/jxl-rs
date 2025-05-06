@@ -7,8 +7,9 @@ use crate::{bit_reader::BitReader, error::Error, headers::encodings::*};
 use jxl_macros::UnconditionalCoder;
 use num_derive::FromPrimitive;
 
-#[derive(UnconditionalCoder, Copy, Clone, PartialEq, Debug, FromPrimitive)]
+#[derive(UnconditionalCoder, Copy, Clone, PartialEq, Debug, FromPrimitive, Default)]
 enum AspectRatio {
+    #[default]
     Unknown = 0,
     Ratio1Over1 = 1,
     Ratio12Over10 = 2,
@@ -19,7 +20,7 @@ enum AspectRatio {
     Ratio2Over1 = 7,
 }
 
-#[derive(UnconditionalCoder, Debug, Clone)]
+#[derive(UnconditionalCoder, Debug, Clone, Default)]
 pub struct Size {
     small: bool,
     #[condition(small)]

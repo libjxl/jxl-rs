@@ -10,6 +10,7 @@ use crate::{
 };
 
 pub const NUM_QUANT_TABLES: usize = 17;
+pub const GLOBAL_SCALE_DENOM: usize = 1 << 16;
 
 #[derive(Debug)]
 #[allow(dead_code)]

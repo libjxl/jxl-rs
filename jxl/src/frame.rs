@@ -82,7 +82,7 @@ pub struct ReferenceFrame {
 
 impl ReferenceFrame {
     // TODO(firsching): make this #[cfg(test)]
-    fn blank(
+    pub fn blank(
         width: usize,
         height: usize,
         num_channels: usize,
@@ -139,7 +139,8 @@ pub struct Frame {
     modular_color_channels: usize,
     lf_global: Option<LfGlobalState>,
     hf_global: Option<HfGlobalState>,
-    lf_image: Option<Image<f32>>,
+    lf_image: Option<[Image<f32>; 3]>,
+    quant_lf: Option<Image<u8>>,
     hf_meta: Option<HfMetadata>,
     decoder_state: DecoderState,
     render_pipeline: Option<SimpleRenderPipeline>,
@@ -177,8 +178,18 @@ impl Frame {
             3
         };
         let size_blocks = frame_header.size_blocks();
-        let lf_image = if frame_header.encoding == Encoding::VarDCT && !frame_header.has_lf_frame()
-        {
+        let has_lf_image =
+            frame_header.encoding == Encoding::VarDCT && !frame_header.has_lf_frame();
+        let lf_image = if has_lf_image {
+            Some([
+                Image::new(size_blocks)?,
+                Image::new(size_blocks)?,
+                Image::new(size_blocks)?,
+            ])
+        } else {
+            None
+        };
+        let quant_lf = if has_lf_image {
             Some(Image::new(size_blocks)?)
         } else {
             None
@@ -202,6 +213,7 @@ impl Frame {
             lf_global: None,
             hf_global: None,
             lf_image,
+            quant_lf,
             hf_meta,
             decoder_state,
             render_pipeline: None,
@@ -268,7 +280,8 @@ impl Frame {
                 br,
                 self.header.width as usize,
                 self.header.height as usize,
-                &self.decoder_state,
+                self.decoder_state.extra_channel_info().len(),
+                &self.decoder_state.reference_frames,
             )?)
         } else {
             None
@@ -357,8 +370,18 @@ impl Frame {
         let lf_global = self.lf_global.as_mut().unwrap();
         if self.header.encoding == Encoding::VarDCT && !self.header.has_lf_frame() {
             info!("decoding VarDCT LF with group id {}", group);
-            let lf_image = self.lf_image.as_mut().unwrap();
-            decode_vardct_lf(group, &self.header, &lf_global.tree, lf_image, br)?;
+            decode_vardct_lf(
+                group,
+                &self.header,
+                &lf_global.tree,
+                lf_global.color_correlation_params.as_ref().unwrap(),
+                lf_global.quant_params.as_ref().unwrap(),
+                &lf_global.lf_quant,
+                lf_global.block_context_map.as_ref().unwrap(),
+                self.lf_image.as_mut().unwrap(),
+                self.quant_lf.as_mut().unwrap(),
+                br,
+            )?;
         }
         lf_global.modular_global.read_stream(
             ModularStreamId::ModularLF(group),

@@ -24,15 +24,11 @@ pub struct BitDepth {
 
 impl BitDepth {
     #[cfg(test)]
-    pub fn new(
-        floating_point_sample: bool,
-        bits_per_sample: u32,
-        exponent_bits_per_sample: u32,
-    ) -> BitDepth {
+    pub fn f32() -> BitDepth {
         BitDepth {
-            floating_point_sample,
-            bits_per_sample,
-            exponent_bits_per_sample,
+            floating_point_sample: true,
+            bits_per_sample: 32,
+            exponent_bits_per_sample: 8,
         }
     }
     pub fn bits_per_sample(&self) -> u32 {

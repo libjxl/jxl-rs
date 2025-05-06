@@ -1623,7 +1623,7 @@ mod tests {
             let extra_channel_info = [ExtraChannelInfo::new(
                 false,
                 ExtraChannel::Alpha,
-                BitDepth::new(true, 32, 8), // Assuming f32
+                BitDepth::f32(), // Assuming f32
                 0,
                 "alpha".to_string(),
                 true, // alpha_associated = true (premultiplied)
@@ -1693,7 +1693,7 @@ mod tests {
             let extra_channel_info = [ExtraChannelInfo::new(
                 false,
                 ExtraChannel::Alpha,
-                BitDepth::new(true, 32, 8),
+                BitDepth::f32(),
                 0,
                 "alpha".to_string(),
                 false, // alpha_associated = false (non-premultiplied)
@@ -1765,7 +1765,7 @@ mod tests {
             let extra_channel_info = [ExtraChannelInfo::new(
                 false,
                 ExtraChannel::Alpha,
-                BitDepth::new(true, 32, 8),
+                BitDepth::f32(),
                 0,
                 "alpha".to_string(),
                 true, // alpha_associated (doesn't directly affect AWA color, but affects EC0's own blend)
@@ -1903,7 +1903,7 @@ mod tests {
                 ExtraChannelInfo::new(
                     false,
                     ExtraChannel::Unknown,
-                    BitDepth::new(true, 32, 8),
+                    BitDepth::f32(),
                     0,
                     "ec0".to_string(),
                     false,
@@ -1913,7 +1913,7 @@ mod tests {
                 ExtraChannelInfo::new(
                     false,
                     ExtraChannel::Alpha,
-                    BitDepth::new(true, 32, 8),
+                    BitDepth::f32(),
                     0,
                     "alpha_for_ec0".to_string(),
                     true, // EC1 is premultiplied alpha
