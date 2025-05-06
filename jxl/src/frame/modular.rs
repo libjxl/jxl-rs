@@ -581,7 +581,6 @@ pub fn decode_vardct_lf(
         global_tree,
         br,
     )?;
-    // TODO(szabadka): Generate the f32 pixels of the LF image.
     dequant_lf(
         r,
         lf_image,
@@ -593,8 +592,7 @@ pub fn decode_vardct_lf(
         mul,
         frame_header,
         bctx,
-    )?;
-    Ok(())
+    )
 }
 
 pub fn decode_hf_metadata(
