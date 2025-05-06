@@ -86,7 +86,6 @@ pub fn decode_modular_subbitstream(
     stream_id: usize,
     header: Option<GroupHeader>,
     global_tree: &Option<Tree>,
-    image_width: usize,
     br: &mut BitReader,
 ) -> Result<()> {
     if buffers.is_empty() {
@@ -134,7 +133,11 @@ pub fn decode_modular_subbitstream(
             tree.max_property()
         );
     }
-
+    let image_width = buffers
+        .iter()
+        .map(|info| info.channel_info().size.0)
+        .max()
+        .unwrap_or(0);
     let mut reader = tree.histograms.make_reader_with_width(br, image_width)?;
 
     for i in 0..buffers.len() {

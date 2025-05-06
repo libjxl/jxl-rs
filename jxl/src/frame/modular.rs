@@ -33,6 +33,7 @@ pub use tree::Tree;
 
 #[derive(Clone, PartialEq, Eq, Copy)]
 struct ChannelInfo {
+    // width, height
     size: (usize, usize),
     shift: Option<(usize, usize)>, // None for meta-channels
 }
@@ -335,15 +336,12 @@ impl FullModularImage {
             &mut buffer_info,
         );
 
-        let image_width = channels.iter().map(|info| info.size.1).max().unwrap_or(0);
-
         with_buffers(&buffer_info, &section_buffer_indices[0], 0, |bufs| {
             decode_modular_subbitstream(
                 bufs,
                 ModularStreamId::GlobalData.get_id(frame_header),
                 Some(header),
                 global_tree,
-                image_width,
                 br,
             )
         })?;
@@ -392,7 +390,6 @@ impl FullModularImage {
                     stream.get_id(frame_header),
                     None,
                     global_tree,
-                    frame_header.width as usize,
                     br,
                 )
             },
@@ -468,7 +465,6 @@ pub fn decode_vardct_lf(
         stream_id,
         None,
         global_tree,
-        frame_header.width as usize,
         br,
     )?;
     // TODO(szabadka): Generate the f32 pixels of the LF image.
@@ -506,7 +502,6 @@ pub fn decode_hf_metadata(
         stream_id,
         None,
         global_tree,
-        frame_header.width as usize,
         br,
     )?;
     let ytox_image = buffers[0].data.as_rect();

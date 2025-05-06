@@ -108,6 +108,7 @@ impl ImageDataType for half::f16 {
 impl_image_data_type!(f64, F64);
 
 pub struct Image<T: ImageDataType> {
+    // width, height
     size: (usize, usize),
     data: Vec<T>,
 }
@@ -121,6 +122,7 @@ impl<T: ImageDataType> Debug for Image<T> {
 #[derive(Clone, Copy, Debug)]
 pub struct Rect {
     pub origin: (usize, usize),
+    // width, height
     pub size: (usize, usize),
 }
 
