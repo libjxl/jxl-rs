@@ -743,7 +743,14 @@ mod test {
                 Ok(None)
             },
         )?;
-        // TODO(firsching) add test for patches
+        assert_eq!(frames.len(), 2);
+        let first_frame_header = frames[0].header();
+        assert!(!first_frame_header.has_patches());
+        assert!(first_frame_header.can_be_referenced);
+
+        let second_frame_header = frames[1].header();
+        assert!(second_frame_header.has_patches());
+        assert!(!second_frame_header.can_be_referenced);
         Ok(())
     }
 }
