@@ -1870,6 +1870,11 @@ mod test_patches {
         assert!(second_frame_header.has_patches());
         assert!(!second_frame_header.can_be_referenced);
 
+        br.jump_to_byte_boundary()?;
+        br.skip_bits(second_frame.total_bytes_in_toc() * 8)?;
+        let second_frame_finalization = second_frame.finalize()?;
+        assert!(second_frame_finalization.is_none());
+
         Ok(())
     }
 }
