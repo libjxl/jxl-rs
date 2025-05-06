@@ -133,8 +133,12 @@ pub fn decode_modular_subbitstream(
             tree.max_property()
         );
     }
-
-    let mut reader = tree.histograms.make_reader(br)?;
+    let image_width = buffers
+        .iter()
+        .map(|info| info.channel_info().size.0)
+        .max()
+        .unwrap_or(0);
+    let mut reader = tree.histograms.make_reader_with_width(br, image_width)?;
 
     for i in 0..buffers.len() {
         decode_modular_channel(&mut buffers, i, stream_id, &header, tree, &mut reader, br)?;

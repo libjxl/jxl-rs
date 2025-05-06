@@ -37,6 +37,7 @@ pub use tree::Tree;
 
 #[derive(Clone, PartialEq, Eq, Copy)]
 struct ChannelInfo {
+    // width, height
     size: (usize, usize),
     shift: Option<(usize, usize)>, // None for meta-channels
 }
