@@ -335,11 +335,7 @@ impl FullModularImage {
             &mut buffer_info,
         );
 
-        let image_width = channels
-            .iter()
-            .map(|info| info.size.1 as usize)
-            .max()
-            .unwrap_or(0);
+        let image_width = channels.iter().map(|info| info.size.1).max().unwrap_or(0);
 
         with_buffers(&buffer_info, &section_buffer_indices[0], 0, |bufs| {
             decode_modular_subbitstream(
