@@ -12,7 +12,6 @@ use std::default::Default;
 pub const DEFAULT_COLOR_FACTOR: u32 = 84;
 
 #[derive(Debug)]
-#[allow(dead_code)]
 pub struct ColorCorrelationParams {
     pub color_factor: u32,
     pub base_correlation_x: f32,

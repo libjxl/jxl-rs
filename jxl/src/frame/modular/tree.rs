@@ -14,7 +14,6 @@ use crate::{
     util::{tracing_wrappers::*, NewWithCapacity},
 };
 
-#[allow(dead_code)]
 #[derive(Debug)]
 pub enum TreeNode {
     Split {
@@ -31,7 +30,6 @@ pub enum TreeNode {
     },
 }
 
-#[allow(dead_code)]
 pub struct Tree {
     pub nodes: Vec<TreeNode>,
     pub histograms: Histograms,

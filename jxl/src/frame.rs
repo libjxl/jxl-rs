@@ -68,7 +68,6 @@ pub struct PassState {
     histograms: Histograms,
 }
 
-#[allow(dead_code)]
 pub struct HfGlobalState {
     num_histograms: u32,
     passes: Vec<PassState>,
@@ -124,7 +123,6 @@ impl DecoderState {
     }
 }
 
-#[allow(dead_code)]
 pub struct HfMetadata {
     ytox_map: Image<i8>,
     ytob_map: Image<i8>,

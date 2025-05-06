@@ -3,6 +3,7 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
+// TODO(firsching): remove this one we use this!
 #![allow(dead_code)]
 
 use std::f64::consts::SQRT_2;

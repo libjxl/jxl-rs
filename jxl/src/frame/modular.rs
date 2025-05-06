@@ -205,7 +205,6 @@ impl ModularBufferInfo {
 /// The buffers are internally divided in grids, matching the sizes of the groups they are coded
 /// in (with appropriate shifts), or the size of the data produced by applying the appropriate
 /// transforms to each of the groups in the input of the transforms.
-#[allow(dead_code)]
 #[derive(Debug)]
 pub struct FullModularImage {
     buffer_info: Vec<ModularBufferInfo>,

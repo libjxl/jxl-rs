@@ -35,7 +35,6 @@ pub enum Encoding {
 
 struct Flags;
 
-#[allow(dead_code)]
 impl Flags {
     pub const ENABLE_NOISE: u64 = 1;
     pub const ENABLE_PATCHES: u64 = 2;

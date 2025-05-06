@@ -3,9 +3,6 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-// TODO(zond): remove once we use this!
-#![allow(dead_code)]
-
 use crate::{
     features::noise::Noise,
     render::{RenderPipelineInOutStage, RenderPipelineInPlaceStage, RenderPipelineStage},
@@ -16,6 +13,7 @@ pub struct ConvolveNoiseStage {
 }
 
 impl ConvolveNoiseStage {
+    #[allow(dead_code)]
     pub fn new(channel: usize) -> ConvolveNoiseStage {
         ConvolveNoiseStage { channel }
     }
@@ -66,6 +64,7 @@ pub struct AddNoiseStage {
 }
 
 impl AddNoiseStage {
+    #[allow(dead_code)]
     pub fn new(noise: Noise, first_channel: usize) -> AddNoiseStage {
         assert!(first_channel > 2);
         AddNoiseStage {
