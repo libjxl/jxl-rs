@@ -3,8 +3,6 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-// TODO(firsching): remove once we use this!
-#![allow(dead_code)]
 use std::{
     f32::consts::{FRAC_1_SQRT_2, PI, SQRT_2},
     iter::{self, zip},
@@ -621,6 +619,7 @@ impl Splines {
         }
     }
 
+    #[allow(dead_code)]
     fn has_any(&self) -> bool {
         !self.splines.is_empty()
     }

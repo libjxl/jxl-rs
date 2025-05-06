@@ -13,7 +13,6 @@ pub const NUM_QUANT_TABLES: usize = 17;
 pub const GLOBAL_SCALE_DENOM: usize = 1 << 16;
 
 #[derive(Debug)]
-#[allow(dead_code)]
 pub struct LfQuantFactors {
     pub quant_factors: [f32; 3],
     pub inv_quant_factors: [f32; 3],
@@ -45,7 +44,6 @@ impl LfQuantFactors {
 }
 
 #[derive(Debug)]
-#[allow(dead_code)]
 pub struct QuantizerParams {
     pub global_scale: u32,
     pub quant_lf: u32,

@@ -41,7 +41,6 @@ pub fn zero_density_context(
 }
 
 #[derive(Debug)]
-#[allow(dead_code)]
 pub struct BlockContextMap {
     pub lf_thresholds: [Vec<i32>; 3],
     pub qf_thresholds: Vec<u32>,
