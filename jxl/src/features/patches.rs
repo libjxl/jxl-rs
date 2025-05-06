@@ -1832,3 +1832,44 @@ mod tests {
         }
     }
 }
+
+#[cfg(test)]
+mod test_patches {
+    use crate::{
+        bit_reader::BitReader,
+        container::ContainerParser,
+        error::{Error, Result},
+        frame::{DecoderState, Frame},
+        headers::{FileHeader, JxlHeader},
+    };
+
+    use test_log::test;
+    #[test]
+    fn read_frame_with_patches() -> Result<(), Error> {
+        let image = include_bytes!("../../resources/test/grayscale_patches_modular.jxl");
+        let codestream = ContainerParser::collect_codestream(image).unwrap();
+        let mut br = BitReader::new(&codestream);
+        let file_header = FileHeader::read(&mut br).unwrap();
+        let mut decoder_state = DecoderState::new(file_header.clone());
+        // Get the first frame
+        let first_frame = Frame::new(&mut br, decoder_state)?;
+        let first_frame_header = first_frame.header();
+        assert!(!first_frame_header.has_patches());
+        assert!(first_frame_header.can_be_referenced);
+
+        br.jump_to_byte_boundary()?;
+        br.skip_bits(first_frame.total_bytes_in_toc() * 8)?;
+        let first_frame_finalization = first_frame.finalize()?;
+        assert!(first_frame_finalization.is_some());
+        let state = first_frame_finalization.unwrap();
+        decoder_state = state;
+
+        // Get the second frame (with patches)
+        let second_frame = Frame::new(&mut br, decoder_state)?;
+        let second_frame_header = second_frame.header();
+        assert!(second_frame_header.has_patches());
+        assert!(!second_frame_header.can_be_referenced);
+
+        Ok(())
+    }
+}
