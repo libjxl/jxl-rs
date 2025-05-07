@@ -206,7 +206,8 @@ impl Tree {
         y: usize,
         property_buffer: &mut [i32; 256],
     ) -> PredictionResult {
-        let prediction_data = PredictionData::get(buffers[index].data.as_rect(), x, y);
+        let img = &buffers[index].data;
+        let prediction_data = PredictionData::get(img.as_rect(), x, y);
         let PredictionData {
             left,
             top,
@@ -249,7 +250,8 @@ impl Tree {
         property_buffer[14] = left - leftleft;
 
         // Weighted predictor property.
-        let (wp_pred, property) = wp_state.predict_and_property();
+        let (wp_pred, property) =
+            wp_state.predict_and_property((x, y), img.size().0, &prediction_data);
         property_buffer[15] = property;
 
         // TODO(veluca): reference properties.

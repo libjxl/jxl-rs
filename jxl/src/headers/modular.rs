@@ -17,7 +17,7 @@ use super::encodings;
 #[derive(UnconditionalCoder, Debug, PartialEq)]
 pub struct WeightedHeader {
     #[all_default]
-    all_default: bool,
+    pub all_default: bool,
 
     #[coder(Bits(5))]
     #[default(16)]
@@ -62,6 +62,18 @@ pub struct WeightedHeader {
     #[coder(Bits(4))]
     #[default(0xc)]
     pub w3: u32,
+}
+
+impl WeightedHeader {
+    pub fn w(&self, i: usize) -> Result<u32> {
+        match i {
+            0 => Ok(self.w0),
+            1 => Ok(self.w1),
+            2 => Ok(self.w2),
+            3 => Ok(self.w3),
+            _ => Err(Error::OutOfBounds),
+        }
+    }
 }
 
 #[derive(UnconditionalCoder, Debug, PartialEq, Clone, Copy)]
