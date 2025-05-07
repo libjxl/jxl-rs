@@ -105,10 +105,8 @@ mod tests {
         // Prepare input_matrix for dct1d
         // It expects Vec<Vec<f64>> structured as input_matrix[row_idx][col_idx]
         // For N_ROWS=8, M_COLS=1, this means 8 rows, each containing a Vec with 1 element.
-        let input_matrix: Vec<Vec<f64>> = flat_input_data
-            .iter()
-            .map(|&value| vec![value])
-            .collect();
+        let input_matrix: Vec<Vec<f64>> =
+            flat_input_data.iter().map(|&value| vec![value]).collect();
 
         // Call the refactored dct1d function which returns a new matrix
         let output_matrix: Vec<Vec<f64>> = dct1d(&input_matrix);
@@ -116,8 +114,8 @@ mod tests {
         // Extract the first (and only) column from output_matrix for comparison
         let mut result_column: Vec<f64> = Vec::with_capacity(N_ROWS);
         if M_COLS > 0 {
-            for i in 0..N_ROWS {
-                result_column.push(output_matrix[i][0]);
+            for row in output_matrix.iter() {
+                result_column.push(row[0]);
             }
         }
 
@@ -143,9 +141,7 @@ mod tests {
         // Prepare input_matrix for dct1d
         // It expects Vec<Vec<f64>> structured as input_matrix[row_idx][col_idx].
         // Each column of the input should be [0.0, 1.0, ..., N_ROWS-1.0].
-        let input_matrix: Vec<Vec<f64>> = (0..N_ROWS)
-            .map(|r| vec![r as f64; M_COLS])
-            .collect();
+        let input_matrix: Vec<Vec<f64>> = (0..N_ROWS).map(|r| vec![r as f64; M_COLS]).collect();
 
         // Call the refactored dct1d function which returns a new matrix
         let output_matrix: Vec<Vec<f64>> = dct1d(&input_matrix);
