@@ -284,7 +284,7 @@ where
 
     // Copy data from flat slice `data` into a temporary Vec of arrays (rows).
     let mut temp_rows: Vec<[f32; COLS]> = vec![[0.0f32; COLS]; ROWS];
-    for (r, column) in temp_rows.iter_mut().enumerate().take(ROWS) {
+    for (r, column) in temp_rows.iter_mut().enumerate() {
         let start = r * COLS;
         let end = start + COLS;
         column.copy_from_slice(&data[start..end]);
@@ -292,7 +292,7 @@ where
 
     DCT1DImpl::<ROWS>::do_dct::<COLS>(&mut temp_rows);
 
-    for (r, column) in temp_rows.iter().enumerate().take(ROWS) {
+    for (r, column) in temp_rows.iter().enumerate() {
         let start = r * COLS;
         let end = start + COLS;
         data[start..end].copy_from_slice(column);
@@ -304,7 +304,7 @@ where
 
     // Copy data from flat `transposed_data` into a temporary Vec of arrays.
     let mut temp_cols: Vec<[f32; ROWS]> = vec![[0.0f32; ROWS]; COLS];
-    for (c, row) in temp_cols.iter_mut().enumerate().take(COLS) {
+    for (c, row) in temp_cols.iter_mut().enumerate() {
         let start = c * ROWS;
         let end = start + ROWS;
         row.copy_from_slice(&transposed_data[start..end]);
@@ -314,7 +314,7 @@ where
     DCT1DImpl::<COLS>::do_dct::<ROWS>(&mut temp_cols);
 
     // Copy results back from the temporary structure into the flat `transposed_data`.
-    for (c, row) in temp_cols.iter().enumerate().take(COLS) {
+    for (c, row) in temp_cols.iter().enumerate() {
         let start = c * ROWS;
         let end = start + ROWS;
         transposed_data[start..end].copy_from_slice(row);
@@ -331,7 +331,7 @@ where
 
     // Copy data from flat slice `data` into a temporary Vec of arrays (rows).
     let mut temp_rows: Vec<[f32; COLS]> = vec![[0.0f32; COLS]; ROWS];
-    for (r, column) in temp_rows.iter_mut().enumerate().take(ROWS) {
+    for (r, column) in temp_rows.iter_mut().enumerate() {
         let start = r * COLS;
         let end = start + COLS;
         column.copy_from_slice(&data[start..end]);
@@ -339,7 +339,7 @@ where
 
     IDCT1DImpl::<ROWS>::do_idct::<COLS>(&mut temp_rows);
 
-    for (r, column) in temp_rows.iter().enumerate().take(ROWS) {
+    for (r, column) in temp_rows.iter().enumerate() {
         let start = r * COLS;
         let end = start + COLS;
         data[start..end].copy_from_slice(column);
@@ -351,7 +351,7 @@ where
 
     // Copy data from flat `transposed_data` into a temporary Vec of arrays.
     let mut temp_cols: Vec<[f32; ROWS]> = vec![[0.0f32; ROWS]; COLS];
-    for (c, row) in temp_cols.iter_mut().enumerate().take(COLS) {
+    for (c, row) in temp_cols.iter_mut().enumerate() {
         let start = c * ROWS;
         let end = start + ROWS;
         row.copy_from_slice(&transposed_data[start..end]);
@@ -361,7 +361,7 @@ where
     IDCT1DImpl::<COLS>::do_idct::<ROWS>(&mut temp_cols);
 
     // Copy results back from the temporary structure into the flat `transposed_data`.
-    for (c, row) in temp_cols.iter().enumerate().take(COLS) {
+    for (c, row) in temp_cols.iter().enumerate() {
         let start = c * ROWS;
         let end = start + ROWS;
         transposed_data[start..end].copy_from_slice(row);

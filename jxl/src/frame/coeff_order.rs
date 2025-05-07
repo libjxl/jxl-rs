@@ -102,7 +102,7 @@ pub fn decode_coeff_orders(used_orders: u32, br: &mut BitReader) -> Result<Vec<P
     }
     let histograms = Histograms::decode(NUM_PERMUTATION_CONTEXTS, br, true)?;
     let mut reader = histograms.make_reader(br)?;
-    for (ord, transform_type) in TRANSFORM_TYPE_LUT.iter().enumerate().take(NUM_ORDERS) {
+    for (ord, transform_type) in TRANSFORM_TYPE_LUT.iter().enumerate() {
         if used_orders & (1 << ord) == 0 {
             continue;
         }
