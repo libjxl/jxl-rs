@@ -105,6 +105,10 @@ pub fn fast_powf(base: f32, exp: f32) -> f32 {
     fast_pow2f(fast_log2f(base) * exp)
 }
 
+pub fn floor_log2_nonzero<T: num_traits::Unsigned + num_traits::PrimInt>(x: T) -> u32 {
+    (size_of::<T>() * 8 - 1) as u32 ^ x.leading_zeros()
+}
+
 #[cfg(test)]
 mod test {
     use test_log::test;

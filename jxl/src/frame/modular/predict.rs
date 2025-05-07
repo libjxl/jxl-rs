@@ -3,10 +3,13 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
+use std::array::from_fn;
+
 use crate::{
     error::{Error, Result},
     headers::modular::GroupHeader,
     image::ImageRect,
+    util::floor_log2_nonzero,
 };
 use num_derive::FromPrimitive;
 use num_traits::FromPrimitive;
@@ -152,17 +155,231 @@ impl Predictor {
     }
 }
 
-#[derive(Debug)]
-pub struct WeightedPredictorState;
+const NUM_PREDICTORS: usize = 4;
+const PRED_EXTRA_BITS: i64 = 3;
+const PREDICTION_ROUND: i64 = ((1 << PRED_EXTRA_BITS) >> 1) - 1;
+// Allows to approximate division by a number from 1 to 64.
+//  for (int i = 0; i < 64; i++) divlookup[i] = (1 << 24) / (i + 1);
+const DIVLOOKUP: [u32; 64] = [
+    16777216, 8388608, 5592405, 4194304, 3355443, 2796202, 2396745, 2097152, 1864135, 1677721,
+    1525201, 1398101, 1290555, 1198372, 1118481, 1048576, 986895, 932067, 883011, 838860, 798915,
+    762600, 729444, 699050, 671088, 645277, 621378, 599186, 578524, 559240, 541200, 524288, 508400,
+    493447, 479349, 466033, 453438, 441505, 430185, 419430, 409200, 399457, 390167, 381300, 372827,
+    364722, 356962, 349525, 342392, 335544, 328965, 322638, 316551, 310689, 305040, 299593, 294337,
+    289262, 284359, 279620, 275036, 270600, 266305, 262144,
+];
 
-impl WeightedPredictorState {
-    pub fn new(_header: &GroupHeader) -> Self {
-        // TODO(veluca): implement the weighted predictor.
-        Self
+fn add_bits<T: num_traits::PrimInt>(x: T) -> i64 {
+    x.to_i64().unwrap() << PRED_EXTRA_BITS
+}
+
+fn error_weight(x: u32, maxweight: u32) -> u32 {
+    let shift = floor_log2_nonzero(x + 1) as i32 - 5;
+    if shift < 0 {
+        4u32 + maxweight * DIVLOOKUP[x as usize]
+    } else {
+        4u32 + ((maxweight * DIVLOOKUP[x as usize >> shift]) >> shift)
+    }
+}
+
+fn weighted_average(pixels: &[i64; NUM_PREDICTORS], weights: &mut [u32; NUM_PREDICTORS]) -> i64 {
+    let log_weight = floor_log2_nonzero(weights.iter().fold(0u32, |sum, el| sum + *el));
+    let weight_sum = weights.iter_mut().fold(0, |sum, el| {
+        *el >>= log_weight - 4;
+        sum + *el
+    });
+    let sum = weights
+        .iter()
+        .enumerate()
+        .fold(((weight_sum >> 1) - 1) as i64, |sum, (i, weight)| {
+            sum + pixels[i] * *weight as i64
+        });
+    (sum * DIVLOOKUP[(weight_sum - 1) as usize] as i64) >> 24
+}
+
+#[derive(Debug)]
+pub struct WeightedPredictorState<'a> {
+    prediction: [i64; NUM_PREDICTORS],
+    pred: i64,
+    pred_errors: [Vec<u32>; NUM_PREDICTORS],
+    error: Vec<i64>,
+    header: &'a GroupHeader,
+}
+
+impl<'a> WeightedPredictorState<'a> {
+    pub fn new(header: &'a GroupHeader, xsize: usize) -> WeightedPredictorState<'a> {
+        let num_errors = (xsize + 2) * 2;
+        WeightedPredictorState {
+            prediction: [0; NUM_PREDICTORS],
+            pred: 0,
+            pred_errors: from_fn(|_| vec![0; num_errors]),
+            error: vec![0; num_errors],
+            header,
+        }
     }
 
-    pub fn predict_and_property(&self) -> (i64, i32) {
-        // TODO(veluca): implement the weighted predictor.
-        (0, 0)
+    #[allow(dead_code)]
+    pub fn update_errors(&mut self, correct_val: i64, pos: (usize, usize), xsize: usize) {
+        let (cur_row, prev_row) = if pos.1 & 1 != 0 {
+            (0, xsize + 2)
+        } else {
+            (xsize + 2, 0)
+        };
+        let val = add_bits(correct_val);
+        self.error[cur_row + pos.0] = self.pred - val;
+        for (i, pred_err) in self.pred_errors.iter_mut().enumerate() {
+            let err =
+                (((self.prediction[i] - val).abs() + PREDICTION_ROUND) >> PRED_EXTRA_BITS) as u32;
+            pred_err[cur_row + pos.0] = err;
+            let idx = prev_row + pos.0 + 1;
+            pred_err[idx] += err;
+        }
+    }
+
+    pub fn predict_and_property(
+        &mut self,
+        pos: (usize, usize),
+        xsize: usize,
+        data: &PredictionData,
+    ) -> (i64, i32) {
+        let (cur_row, prev_row) = if pos.1 & 1 != 0 {
+            (0, xsize + 2)
+        } else {
+            (xsize + 2, 0)
+        };
+        let pos_n = prev_row + pos.0;
+        let pos_ne = if pos.0 < xsize - 1 { pos_n + 1 } else { pos_n };
+        let pos_nw = if pos.0 > 0 { pos_n - 1 } else { pos_n };
+        let mut weights = [0u32; NUM_PREDICTORS];
+        for (i, weight) in weights.iter_mut().enumerate() {
+            *weight = error_weight(
+                self.pred_errors[i][pos_n]
+                    + self.pred_errors[i][pos_ne]
+                    + self.pred_errors[i][pos_nw],
+                self.header.wp_header.w(i).unwrap(),
+            );
+        }
+        let n = add_bits(data.top);
+        let w = add_bits(data.left);
+        let ne = add_bits(data.topright);
+        let nw = add_bits(data.topleft);
+        let nn = add_bits(data.toptop);
+
+        let te_w = if pos.0 == 0 {
+            0
+        } else {
+            self.error[cur_row + pos.0 - 1]
+        };
+        let te_n = self.error[pos_n];
+        let te_nw = self.error[pos_nw];
+        let sum_wn = te_n + te_w;
+        let te_ne = self.error[pos_ne];
+
+        let mut p = te_w;
+        if te_n.abs() > p.abs() {
+            p = te_n;
+        }
+        if te_nw.abs() > p.abs() {
+            p = te_nw;
+        }
+        if te_ne.abs() > p.abs() {
+            p = te_ne;
+        }
+
+        self.prediction[0] = w + ne - n;
+        self.prediction[1] = n - (((sum_wn + te_ne) * self.header.wp_header.p1c as i64) >> 5);
+        self.prediction[2] = w - (((sum_wn + te_nw) * self.header.wp_header.p2c as i64) >> 5);
+        self.prediction[3] = n
+            - ((te_nw * (self.header.wp_header.p3ca as i64)
+                + (te_n * (self.header.wp_header.p3cb as i64))
+                + (te_ne * (self.header.wp_header.p3cc as i64))
+                + ((nn - n) * (self.header.wp_header.p3cd as i64))
+                + ((nw - w) * (self.header.wp_header.p3ce as i64)))
+                >> 5);
+
+        self.pred = weighted_average(&self.prediction, &mut weights);
+
+        if ((te_n ^ te_w) | (te_n ^ te_nw)) <= 0 {
+            let mx = w.max(ne.max(n));
+            let mn = w.min(ne.min(n));
+            self.pred = mn.max(mx.min(self.pred));
+        }
+        ((self.pred + PREDICTION_ROUND) >> PRED_EXTRA_BITS, p as i32)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::headers::modular::{GroupHeader, WeightedHeader};
+
+    use super::{PredictionData, WeightedPredictorState};
+
+    struct SimpleRandom {
+        out: i64,
+    }
+
+    impl SimpleRandom {
+        fn new() -> SimpleRandom {
+            SimpleRandom { out: 1 }
+        }
+        fn next(&mut self) -> i64 {
+            self.out = self.out * 48271 % 0x7fffffff;
+            self.out
+        }
+    }
+
+    fn step(
+        rng: &mut SimpleRandom,
+        state: &mut WeightedPredictorState,
+        xsize: usize,
+        ysize: usize,
+    ) -> (i64, i32) {
+        let pos = (rng.next() as usize % xsize, rng.next() as usize % ysize);
+        let res = state.predict_and_property(
+            pos,
+            xsize,
+            &PredictionData {
+                top: rng.next() as i32 % 256,
+                left: rng.next() as i32 % 256,
+                topright: rng.next() as i32 % 256,
+                topleft: rng.next() as i32 % 256,
+                toptop: rng.next() as i32 % 256,
+                leftleft: 0,
+                toprightright: 0,
+            },
+        );
+        state.update_errors(rng.next() % 256, pos, xsize);
+        res
+    }
+
+    #[test]
+    fn predict_and_update_errors() {
+        let mut rng = SimpleRandom::new();
+        let header = GroupHeader {
+            use_global_tree: false,
+            wp_header: WeightedHeader {
+                all_default: true,
+                p1c: rng.next() as u32 % 32,
+                p2c: rng.next() as u32 % 32,
+                p3ca: rng.next() as u32 % 32,
+                p3cb: rng.next() as u32 % 32,
+                p3cc: rng.next() as u32 % 32,
+                p3cd: rng.next() as u32 % 32,
+                p3ce: rng.next() as u32 % 32,
+                w0: rng.next() as u32 % 16,
+                w1: rng.next() as u32 % 16,
+                w2: rng.next() as u32 % 16,
+                w3: rng.next() as u32 % 16,
+            },
+            transforms: Vec::new(),
+        };
+        let xsize = 8;
+        let ysize = 8;
+        let mut state = WeightedPredictorState::new(&header, xsize);
+        // The golden number results are generated by using the libjxl predictor with the same input numbers.
+        assert_eq!(step(&mut rng, &mut state, xsize, ysize), (135i64, 0i32));
+        assert_eq!(step(&mut rng, &mut state, xsize, ysize), (110i64, -60i32));
+        assert_eq!(step(&mut rng, &mut state, xsize, ysize), (165i64, 0i32));
+        assert_eq!(step(&mut rng, &mut state, xsize, ysize), (153i64, -60i32));
     }
 }

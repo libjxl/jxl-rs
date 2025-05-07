@@ -59,7 +59,7 @@ fn decode_modular_channel(
 ) -> Result<()> {
     debug!("reading channel");
     let size = buffers[chan].data.size();
-    let mut wp_state = WeightedPredictorState::new(header);
+    let mut wp_state = WeightedPredictorState::new(header, size.0);
     for y in 0..size.1 {
         let mut property_buffer = [0; 256];
         property_buffer[0] = chan as i32;
@@ -72,7 +72,7 @@ fn decode_modular_channel(
                 prediction_result.guess + (prediction_result.multiplier as i64) * (dec as i64);
             buffers[chan].data.as_rect_mut().row(y)[x] = val as i32;
             trace!(y, x, val, dec, ?property_buffer, ?prediction_result);
-            // TODO(veluca): update WP errors.
+            wp_state.update_errors(val, (x, y), size.0);
         }
     }
 
