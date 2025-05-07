@@ -378,7 +378,6 @@ mod tests {
             dct_slow::{dct1d, idct1d},
         },
     };
-    use std::array;
     use test_log::test;
     macro_rules! test_dct1d_eq_slow_n {
         ($test_name:ident, $n_val:expr, $tolerance:expr) => {
@@ -387,8 +386,6 @@ mod tests {
                 const N: usize = $n_val;
                 const M: usize = 1;
                 const NM: usize = N * M;
-
-                // Generate input data
 
                 // Generate input data for the reference dct1d.
                 // Results in vec![vec![1.0], vec![2.0], ..., vec![N.0]]
@@ -417,6 +414,7 @@ mod tests {
             }
         };
     }
+
     macro_rules! test_idct1d_eq_slow_n {
         ($test_name:ident, $n_val:expr, $tolerance:expr) => {
             #[test]
@@ -425,29 +423,29 @@ mod tests {
                 const M: usize = 1;
                 const NM: usize = N * M;
 
-                // Generate input data
-                let input_f64_vec: Vec<f64> = (1..=N).map(|i| (i + 1) as f64).collect();
-                let input_f64: [f64; NM] = input_f64_vec
-                    .try_into()
-                    .expect("Vec to array conversion failed");
+                // Generate input data for the reference idct1d.
+                // Results in vec![vec![1.0], vec![2.0], ..., vec![N.0]]
+                let input_matrix_for_ref: Vec<Vec<f64>> =
+                    std::array::from_fn::<f64, NM, _>(|i| (i + 1) as f64)
+                        .chunks(M)
+                        .map(|row_slice| row_slice.to_vec())
+                        .collect();
 
-                // Run reference implementation
-                let mut output_slow = [0.0; NM];
-                idct1d::<N, M, NM>(&input_f64, &mut output_slow);
+                let output_matrix_slow: Vec<Vec<f64>> = idct1d(&input_matrix_for_ref);
 
-                // Prepare input for tested implementation
+                // IDCT1DImpl expects input coefficient data in [[f32; M]; N] format.
                 let mut input_arr_2d = [[0.0f32; M]; N];
-                for i in 0..N {
-                    input_arr_2d[i][0] = input_f64[i] as f32;
+                for r_idx in 0..N {
+                    for c_idx in 0..M {
+                        input_arr_2d[r_idx][c_idx] = input_matrix_for_ref[r_idx][c_idx] as f32;
+                    }
                 }
 
-                // Run tested implementation (in-place)
                 let mut output = input_arr_2d;
                 IDCT1DImpl::<N>::do_idct::<M>(&mut output);
 
-                // Compare results
                 for i in 0..N {
-                    assert_almost_eq!(output[i][0], output_slow[i] as f32, $tolerance, 1e-3);
+                    assert_almost_eq!(output[i][0], output_matrix_slow[i][0] as f32, $tolerance);
                 }
             }
         };
@@ -478,30 +476,39 @@ mod tests {
         const M: usize = 3;
         const NM: usize = N * M; // 24
 
-        // Initialize input_f64 with values 1.0 to 24.0
-        let input_f64: [f64; NM] = array::from_fn(|i| (i + 1) as f64);
+        // Initialize an N x M matrix with data from 1.0 to 24.0
+        let input_coeffs_matrix_for_ref: Vec<Vec<f64>> =
+            std::array::from_fn::<f64, NM, _>(|i| (i + 1) as f64)
+                .chunks(M)
+                .map(|row_slice| row_slice.to_vec())
+                .collect();
 
-        let mut output_slow = [0.0; NM];
+        let output_matrix_slow: Vec<Vec<f64>> = idct1d(&input_coeffs_matrix_for_ref);
 
-        // Call slow implementation (operates on flat data)
-        idct1d::<N, M, NM>(&input_f64, &mut output_slow);
-
-        // Prepare input for the implementation under test (2D array: [N][M])
-        let mut input = [[0.0; M]; N];
-        for j in 0..M {
-            for i in 0..N {
-                input[i][j] = input_f64[i * M + j] as f32;
+        // Prepare input for the implementation under test (IDCT1DImpl)
+        // IDCT1DImpl expects data in [[f32; M]; N] format.
+        let mut input_coeffs_for_fast_impl = [[0.0f32; M]; N];
+        for r in 0..N {
+            for c in 0..M {
+                // Use the same source coefficient values as the reference IDCT
+                input_coeffs_for_fast_impl[r][c] = input_coeffs_matrix_for_ref[r][c] as f32;
             }
         }
-        let mut output = input;
+
+        // This will be modified in-place by IDCT1DImpl
+        let mut output_fast_impl = input_coeffs_for_fast_impl;
 
         // Call the implementation under test (operates on 2D data)
-        IDCT1DImpl::<N>::do_idct::<M>(&mut output);
+        IDCT1DImpl::<N>::do_idct::<M>(&mut output_fast_impl);
 
         // Compare results element-wise
-        for j in 0..M {
-            for i in 0..N {
-                assert_almost_eq!(output[i][j], output_slow[i * M + j] as f32, 1e-5);
+        for r_idx in 0..N {
+            for c_idx in 0..M {
+                assert_almost_eq!(
+                    output_fast_impl[r_idx][c_idx],
+                    output_matrix_slow[r_idx][c_idx] as f32,
+                    1e-5
+                );
             }
         }
     }
@@ -510,7 +517,7 @@ mod tests {
     fn test_dct1d_8x3_eq_slow() {
         const N: usize = 8;
         const M: usize = 3;
-        const NM: usize = N * M;
+        const NM: usize = N * M; // 24
 
         // Initialize a 3 x 8 marix with data from 1.0 to 24.0
         let input_matrix_for_ref: Vec<Vec<f64>> =
