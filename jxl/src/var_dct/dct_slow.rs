@@ -17,33 +17,47 @@ fn alpha(u: usize) -> f64 {
         1.0
     }
 }
-// TODO(firsching): Consider to just use a Vec and skip the templates,
-// since this is slow anyway
-pub fn dct1d<const N: usize, const M: usize, const NM: usize>(
-    input: &[f64; NM],
-    out: &mut [f64; NM],
-) {
-    const { assert!(NM == N * M, "NM must be equal to N * M") };
+
+pub fn dct1d(input_matrix: &[Vec<f64>]) -> Vec<Vec<f64>> {
+    let num_rows = input_matrix.len();
+
+    if num_rows == 0 {
+        return Vec::new();
+    }
+
+    let num_cols = input_matrix[0].len();
+
+    let mut output_matrix = vec![vec![0.0f64; num_cols]; num_rows];
+
     let scale: f64 = SQRT_2;
 
-    let mut matrix = [[0.0f64; N]; N];
-    for (u, row) in matrix.iter_mut().enumerate() {
-        let alpha_u = alpha(u);
-        for (y, element) in row.iter_mut().enumerate() {
-            *element = alpha_u * ((y as f64 + 0.5) * u as f64 * PI / N as f64).cos() * scale;
+    // Precompute the DCT matrix (size: n_rows x n_rows)
+    let mut dct_coeff_matrix = vec![vec![0.0f64; num_rows]; num_rows];
+    for (u_freq, row) in dct_coeff_matrix.iter_mut().enumerate() {
+        let alpha_u_val = alpha(u_freq);
+        for (y_spatial, coeff) in row.iter_mut().enumerate() {
+            *coeff = alpha_u_val
+                * ((y_spatial as f64 + 0.5) * u_freq as f64 * PI / num_rows as f64).cos()
+                * scale;
         }
     }
 
-    for x in 0..M {
-        for u in 0..N {
+    // Perform the DCT calculation column by column
+    for x_col_idx in 0..num_cols {
+        for u_freq_idx in 0..num_rows {
             let mut sum = 0.0;
-            for y in 0..N {
-                sum += matrix[u][y] * input[M * y + x];
+            for (y_spatial_idx, col) in input_matrix.iter().enumerate() {
+                // This access `input_matrix[y_spatial_idx][x_col_idx]` assumes the input_matrix
+                // is rectangular. If not, it might panic here.
+                sum += dct_coeff_matrix[u_freq_idx][y_spatial_idx] * col[x_col_idx];
             }
-            out[M * u + x] = sum;
+            output_matrix[u_freq_idx][x_col_idx] = sum;
         }
     }
+
+    output_matrix
 }
+
 // TODO: write commment/test showing that "i" in "idct" is not exactly inverse, but scaled (by sqrt N)
 pub fn idct1d<const N: usize, const M: usize, const NM: usize>(
     input: &[f64; NM],
@@ -83,18 +97,30 @@ mod tests {
 
     #[test]
     fn test_slow_dct1d() {
-        const N: usize = 8;
-        const M: usize = 1;
-        const NM: usize = N * M;
-        let input: [f64; NM] = [0.0, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0];
-        let mut output = [0.0; NM];
+        const N_ROWS: usize = 8;
+        const M_COLS: usize = 1;
 
-        dct1d::<8, 1, 8>(&input, &mut output);
-        // obtained with the following python code:
-        // import math
-        // import scipy.fft
-        // scipy.fft.dct(list(map(lambda x: 2*math.sqrt(x)*x , map(float, range(8)))), norm='ortho')
-        // import scipy.fft; scipy.fft.dct(list(map(float, range(8))), norm='ortho')
+        let flat_input_data: [f64; N_ROWS] = [0.0, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0];
+
+        // Prepare input_matrix for dct1d
+        // It expects Vec<Vec<f64>> structured as input_matrix[row_idx][col_idx]
+        // For N_ROWS=8, M_COLS=1, this means 8 rows, each containing a Vec with 1 element.
+        let mut input_matrix: Vec<Vec<f64>> = Vec::with_capacity(N_ROWS);
+        for i in 0..N_ROWS {
+            input_matrix.push(vec![flat_input_data[i]]);
+        }
+
+        // Call the refactored dct1d function which returns a new matrix
+        let output_matrix: Vec<Vec<f64>> = dct1d(&input_matrix);
+
+        // Extract the first (and only) column from output_matrix for comparison
+        let mut result_column: Vec<f64> = Vec::with_capacity(N_ROWS);
+        if M_COLS > 0 {
+            for i in 0..N_ROWS {
+                result_column.push(output_matrix[i][0]);
+            }
+        }
+
         let expected = [
             2.80000000e+01,
             -1.82216412e+01,
@@ -105,23 +131,31 @@ mod tests {
             -1.29520973e-15,
             -1.43407825e-01,
         ];
-        assert_all_almost_eq!(output, expected, 1e-7);
+        // Ensure assert_all_almost_eq can compare Vec<f64> (or slice) with [f64; N]
+        assert_all_almost_eq!(result_column.as_slice(), expected.as_slice(), 1e-7);
     }
 
     #[test]
     fn test_slow_dct1d_same_on_columns() {
-        const N: usize = 8;
-        const M: usize = 5;
-        const NM: usize = N * M;
+        const N_ROWS: usize = 8;
+        const M_COLS: usize = 5;
 
-        let input: [f64; NM] = array::from_fn(|i| ((i as i64) / 5) as f64);
-        let mut output = [0.0; NM];
+        // Prepare input_matrix for dct1d
+        // It expects Vec<Vec<f64>> structured as input_matrix[row_idx][col_idx].
+        // Each column of the input should be [0.0, 1.0, ..., N_ROWS-1.0].
+        let mut input_matrix: Vec<Vec<f64>> = Vec::with_capacity(N_ROWS);
+        for r in 0..N_ROWS {
+            // Create a row where each element is r as f64, repeated M_COLS times.
+            // This ensures input_matrix[r][any_c] = r.
+            // Thus, for any column c, input_matrix[0..N_ROWS-1][c] will be [0.0, 1.0, ..., N_ROWS-1.0].
+            input_matrix.push(vec![r as f64; M_COLS]);
+        }
 
-        dct1d::<N, M, NM>(&input, &mut output);
+        // Call the refactored dct1d function which returns a new matrix
+        let output_matrix: Vec<Vec<f64>> = dct1d(&input_matrix);
 
-        // Expected output should be M copies of the result of applying idct1d to a single column [0.0 .. N-1.0]
-        // We take the expected result from the single-column test `test_slow_dct1d`
-        let initial = [
+        // Expected output for a single column [0.0 .. N_ROWS-1.0]
+        let single_column_dct_expected = [
             2.80000000e+01,
             -1.82216412e+01,
             -1.38622135e-15,
@@ -132,13 +166,12 @@ mod tests {
             -1.43407825e-01,
         ];
 
-        // Create an iterator that repeats each element 5 times and flattens the result
-        let generated_iter = initial
-            .iter()
-            .flat_map(|&element| iter::repeat_n(element, M));
-
-        let expected: Vec<f64> = generated_iter.collect();
-        assert_all_almost_eq!(output, expected, 1e-7);
+        for r_freq_idx in 0..N_ROWS {
+            let actual_row_slice: &[f64] = output_matrix[r_freq_idx].as_slice();
+            let expected_row_values: Vec<f64> =
+                vec![single_column_dct_expected[r_freq_idx]; M_COLS];
+            assert_all_almost_eq!(actual_row_slice, expected_row_values.as_slice(), 1e-7);
+        }
     }
 
     #[test]

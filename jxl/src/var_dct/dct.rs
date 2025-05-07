@@ -389,37 +389,30 @@ mod tests {
                 const NM: usize = N * M;
 
                 // Generate input data
-                let input_f64_vec: Vec<f64> = (1..=N).map(|i| i as f64).collect();
-                let input_f64: [f64; NM] = input_f64_vec
-                    .try_into()
-                    .expect("Vec to array conversion failed");
 
-                // Run reference implementation
-                let mut output_slow = [0.0; NM];
-                dct1d::<N, M, NM>(&input_f64, &mut output_slow);
+                // Generate input data for the reference dct1d.
+                // Results in vec![vec![1.0], vec![2.0], ..., vec![N.0]]
+                let input_matrix_for_ref: Vec<Vec<f64>> =
+                    std::array::from_fn::<f64, NM, _>(|i| (i + 1) as f64)
+                        .chunks(M)
+                        .map(|row_slice| row_slice.to_vec())
+                        .collect();
 
-                // Prepare input for tested implementation
+                let output_matrix_slow: Vec<Vec<f64>> = dct1d(&input_matrix_for_ref);
+
+                // DCT1DImpl expects data in [[f32; M]; N] format.
                 let mut input_arr_2d = [[0.0f32; M]; N];
-                for i in 0..N {
-                    input_arr_2d[i][0] = input_f64[i] as f32;
+                for r_idx in 0..N {
+                    for c_idx in 0..M {
+                        input_arr_2d[r_idx][c_idx] = input_matrix_for_ref[r_idx][c_idx] as f32;
+                    }
                 }
 
-                // Run tested implementation (in-place)
                 let mut output = input_arr_2d;
                 DCT1DImpl::<N>::do_dct::<M>(&mut output);
 
-                // Compare results
-
                 for i in 0..N {
-                    println!(
-                        "fast: {:}, slow: {:}, ratio: {}",
-                        output[i][0],
-                        output_slow[i] as f32,
-                        output[i][0] / (output_slow[i] as f32)
-                    );
-                }
-                for i in 0..N {
-                    assert_almost_eq!(output[i][0], output_slow[i] as f32, $tolerance);
+                    assert_almost_eq!(output[i][0], output_matrix_slow[i][0] as f32, $tolerance);
                 }
             }
         };
@@ -517,32 +510,41 @@ mod tests {
     fn test_dct1d_8x3_eq_slow() {
         const N: usize = 8;
         const M: usize = 3;
-        const NM: usize = N * M; // 24
+        const NM: usize = N * M;
 
-        // Initialize input_f64 with values 1.0 to 24.0
-        let input_f64: [f64; NM] = array::from_fn(|i| (i + 1) as f64);
+        // Initialize a 3 x 8 marix with data from 1.0 to 24.0
+        let input_matrix_for_ref: Vec<Vec<f64>> =
+            std::array::from_fn::<f64, NM, _>(|i| (i + 1) as f64)
+                .chunks(M)
+                .map(|row_slice| row_slice.to_vec())
+                .collect();
 
-        let mut output_slow = [0.0; NM];
+        let output_matrix_slow: Vec<Vec<f64>> = dct1d(&input_matrix_for_ref);
 
-        // Call slow implementation (operates on flat data)
-        dct1d::<N, M, NM>(&input_f64, &mut output_slow);
-
-        // Prepare input for the implementation under test (2D array: [N][M])
-        let mut input = [[0.0; M]; N];
-        for j in 0..M {
-            for i in 0..N {
-                input[i][j] = input_f64[i * M + j] as f32;
+        // Prepare input for the implementation under test (DCT1DImpl)
+        // DCT1DImpl expects data in [[f32; M]; N] format.
+        let mut input_for_fast_impl = [[0.0f32; M]; N];
+        for r in 0..N {
+            for c in 0..M {
+                // Use the same source values as the reference DCT
+                input_for_fast_impl[r][c] = input_matrix_for_ref[r][c] as f32;
             }
         }
-        let mut output = input;
+
+        // This will be modified in-place by DCT1DImpl
+        let mut output_fast_impl = input_for_fast_impl;
 
         // Call the implementation under test (operates on 2D data)
-        DCT1DImpl::<N>::do_dct::<M>(&mut output);
+        DCT1DImpl::<N>::do_dct::<M>(&mut output_fast_impl);
 
         // Compare results element-wise
-        for j in 0..M {
-            for i in 0..N {
-                assert_almost_eq!(output[i][j], output_slow[i * M + j] as f32, 1e-5);
+        for r_freq_idx in 0..N {
+            for c_col_idx in 0..M {
+                assert_almost_eq!(
+                    output_fast_impl[r_freq_idx][c_col_idx],
+                    output_matrix_slow[r_freq_idx][c_col_idx] as f32,
+                    1e-5
+                );
             }
         }
     }
