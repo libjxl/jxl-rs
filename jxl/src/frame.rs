@@ -38,6 +38,7 @@ mod coeff_order;
 pub mod color_correlation_map;
 mod group;
 pub mod modular;
+mod quant_weights;
 mod quantizer;
 pub mod transform_map;
 
