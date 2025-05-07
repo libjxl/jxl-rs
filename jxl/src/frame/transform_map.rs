@@ -3,8 +3,15 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-use crate::error::{Error, Result};
+use crate::{
+    error::{Error, Result},
+    BLOCK_DIM,
+};
 use enum_iterator::{cardinality, Sequence};
+
+pub const MAX_COEFF_BLOCKS: usize = 32;
+pub const MAX_BLOCK_DIM: usize = BLOCK_DIM * MAX_COEFF_BLOCKS;
+pub const MAX_COEFF_AREA: usize = MAX_BLOCK_DIM * MAX_BLOCK_DIM;
 
 #[allow(clippy::upper_case_acronyms)]
 #[derive(Copy, Clone, Debug, PartialEq, Sequence)]
