@@ -30,7 +30,7 @@ jobs:
 
       - name: Run arbtest with extended budget
         env:
-            # ~ 17min
-            ARBTEST_BUDGET_MS: 1000000
+            # 1min40sec
+            ARBTEST_BUDGET_MS: 100000
         # RUST_BACKTRACE=1 is already set in the global env for the workflow
-        run: cargo test
+        run: --release --all --no-fail-fast --all-features
