@@ -171,7 +171,7 @@ pub fn do_palette_step_general(
 ) {
     let (w, h) = buf_in.data.size();
     let palette = buf_pal.data.as_rect();
-    let bit_depth = 8; // TODO(sboukortt): plumb the actual bit depth
+    let bit_depth = buf_in.bit_depth.bits_per_sample().min(24) as usize;
 
     if w == 0 {
         // Nothing to do.

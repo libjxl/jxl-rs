@@ -15,8 +15,8 @@ use crate::{
         ColorCorrelationParams, HfMetadata,
     },
     headers::{
-        extra_channels::ExtraChannelInfo, frame_header::FrameHeader, modular::GroupHeader,
-        JxlHeader,
+        bit_depth::BitDepth, extra_channels::ExtraChannelInfo, frame_header::FrameHeader,
+        modular::GroupHeader, ImageMetadata, JxlHeader,
     },
     image::{Image, Rect},
     util::{tracing_wrappers::*, CeilLog2},
@@ -40,16 +40,18 @@ struct ChannelInfo {
     // width, height
     size: (usize, usize),
     shift: Option<(usize, usize)>, // None for meta-channels
+    bit_depth: BitDepth,
 }
 
 impl Debug for ChannelInfo {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}x{}", self.size.0, self.size.1)?;
         if let Some(shift) = self.shift {
-            write!(f, "(shift {},{})", shift.0, shift.1)
+            write!(f, "(shift {},{})", shift.0, shift.1)?;
         } else {
-            write!(f, "(meta)")
+            write!(f, "(meta)")?;
         }
+        write!(f, "bit_depth: {:?}", self.bit_depth)
     }
 }
 
@@ -101,18 +103,24 @@ struct ModularChannel {
     auxiliary_data: Option<Image<i32>>,
     // Shift of the channel (None if this is a meta-channel).
     shift: Option<(usize, usize)>,
+    bit_depth: BitDepth,
 }
 
 impl ModularChannel {
-    fn new(size: (usize, usize)) -> Result<Self> {
-        Self::new_with_shift(size, Some((0, 0)))
+    fn new(size: (usize, usize), bit_depth: BitDepth) -> Result<Self> {
+        Self::new_with_shift(size, Some((0, 0)), bit_depth)
     }
 
-    fn new_with_shift(size: (usize, usize), shift: Option<(usize, usize)>) -> Result<Self> {
+    fn new_with_shift(
+        size: (usize, usize),
+        shift: Option<(usize, usize)>,
+        bit_depth: BitDepth,
+    ) -> Result<Self> {
         Ok(ModularChannel {
             data: Image::new(size)?,
             auxiliary_data: None,
             shift,
+            bit_depth,
         })
     }
 
@@ -125,6 +133,7 @@ impl ModularChannel {
                 .map(Image::try_clone)
                 .transpose()?,
             shift: self.shift,
+            bit_depth: self.bit_depth,
         })
     }
 
@@ -132,6 +141,7 @@ impl ModularChannel {
         ChannelInfo {
             size: self.data.size(),
             shift: self.shift,
+            bit_depth: self.bit_depth,
         }
     }
 }
@@ -219,6 +229,7 @@ impl FullModularImage {
     #[instrument(level = "debug", skip_all, ret)]
     pub fn read(
         frame_header: &FrameHeader,
+        image_metadata: &ImageMetadata,
         modular_color_channels: usize,
         extra_channel_info: &[ExtraChannelInfo],
         global_tree: &Option<Tree>,
@@ -231,6 +242,7 @@ impl FullModularImage {
             channels.push(ChannelInfo {
                 size: (size.0.div_ceil(1 << shift.0), size.1.div_ceil(1 << shift.1)),
                 shift: Some(shift),
+                bit_depth: image_metadata.bit_depth,
             });
         }
 
@@ -245,6 +257,7 @@ impl FullModularImage {
             channels.push(ChannelInfo {
                 size,
                 shift: Some((shift, shift)),
+                bit_depth: image_metadata.bit_depth,
             });
         }
 
@@ -552,6 +565,7 @@ fn dequant_lf(
 pub fn decode_vardct_lf(
     group: usize,
     frame_header: &FrameHeader,
+    image_metadata: &ImageMetadata,
     global_tree: &Option<Tree>,
     color_correlation_params: &ColorCorrelationParams,
     quant_params: &QuantizerParams,
@@ -570,9 +584,9 @@ pub fn decode_vardct_lf(
     let r = frame_header.lf_group_rect(group);
     debug!(?r);
     let mut buffers = [
-        ModularChannel::new(r.size)?,
-        ModularChannel::new(r.size)?,
-        ModularChannel::new(r.size)?,
+        ModularChannel::new(r.size, image_metadata.bit_depth)?,
+        ModularChannel::new(r.size, image_metadata.bit_depth)?,
+        ModularChannel::new(r.size, image_metadata.bit_depth)?,
     ];
     decode_modular_subbitstream(
         buffers.iter_mut().collect(),
@@ -598,6 +612,7 @@ pub fn decode_vardct_lf(
 pub fn decode_hf_metadata(
     group: usize,
     frame_header: &FrameHeader,
+    image_metadata: &ImageMetadata,
     global_tree: &Option<Tree>,
     hf_meta: &mut HfMetadata,
     br: &mut BitReader,
@@ -616,10 +631,10 @@ pub fn decode_hf_metadata(
         size: (r.size.0.div_ceil(8), r.size.1.div_ceil(8)),
     };
     let mut buffers = [
-        ModularChannel::new_with_shift(cr.size, Some((3, 3)))?,
-        ModularChannel::new_with_shift(cr.size, Some((3, 3)))?,
-        ModularChannel::new((count, 2))?,
-        ModularChannel::new(r.size)?,
+        ModularChannel::new_with_shift(cr.size, Some((3, 3)), image_metadata.bit_depth)?,
+        ModularChannel::new_with_shift(cr.size, Some((3, 3)), image_metadata.bit_depth)?,
+        ModularChannel::new((count, 2), image_metadata.bit_depth)?,
+        ModularChannel::new(r.size, image_metadata.bit_depth)?,
     ];
     decode_modular_subbitstream(
         buffers.iter_mut().collect(),

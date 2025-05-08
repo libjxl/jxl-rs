@@ -26,6 +26,7 @@ pub fn with_buffers<T>(
                 data: Image::new(b.size)?,
                 auxiliary_data: None,
                 shift: buf.info.shift,
+                bit_depth: buf.info.bit_depth,
             });
         }
         bufs.push(RefMut::map(data, |x| x.as_mut().unwrap()));
