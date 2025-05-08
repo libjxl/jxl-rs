@@ -85,21 +85,31 @@ fn main() {
     }
 
     let opt = Opt::parse();
-    let file = opt.input;
-    let mut file = fs::File::open(file).expect("cannot open file");
+    let filename = opt.input;
+    let mut file = match fs::File::open(filename) {
+        Ok(file) => file,
+        Err(err) => {
+            println!("Cannot open file: {err}");
+            return;
+        }
+    };
 
     let mut parser = ContainerParser::new();
     let mut buf = vec![0u8; 4096];
     let mut buf_valid = 0usize;
     let mut codestream = Vec::new();
     loop {
-        let count = file
-            .read(&mut buf[buf_valid..])
-            .expect("cannot read data from file");
-        if count == 0 {
+        let chunk_size = match file.read(&mut buf[buf_valid..]) {
+            Ok(l) => l,
+            Err(err) => {
+                println!("Cannot read data from file: {err}");
+                return;
+            }
+        };
+        if chunk_size == 0 {
             break;
         }
-        buf_valid += count;
+        buf_valid += chunk_size;
 
         for event in parser.process_bytes(&buf[..buf_valid]) {
             match event {
