@@ -243,6 +243,7 @@ fn meta_apply_single_transform(
                     let new_0 = ChannelInfo {
                         shift: new_shift,
                         size: new_size_0,
+                        bit_depth: chan.bit_depth,
                     };
                     let buf_0 = add_transform_buffer(
                         new_0,
@@ -251,6 +252,7 @@ fn meta_apply_single_transform(
                     let new_1 = ChannelInfo {
                         shift: new_shift,
                         size: new_size_1,
+                        bit_depth: chan.bit_depth,
                     };
                     let buf_1 = add_transform_buffer(
                         new_1,
@@ -281,9 +283,13 @@ fn meta_apply_single_transform(
             let pred = Predictor::from_u32(transform.predictor_id)
                 .expect("header decoding should ensure a valid predictor");
             check_equal_channels(channels, begin_channel, num_channels)?;
+            // We already checked the bit_depth for all channels from `begin_channel` is
+            // equal in the line above.
+            let bit_depth = channels[begin_channel].1.bit_depth;
             let pchan_info = ChannelInfo {
                 shift: None,
                 size: (num_colors + num_deltas, num_channels),
+                bit_depth,
             };
             let pchan = add_transform_buffer(
                 pchan_info,
@@ -429,7 +435,11 @@ impl LocalTransformBuffer<'_> {
 
     fn allocate_if_needed(&mut self) -> Result<()> {
         if let LocalTransformBuffer::Placeholder(c) = self {
-            *self = LocalTransformBuffer::Owned(ModularChannel::new_with_shift(c.size, c.shift)?);
+            *self = LocalTransformBuffer::Owned(ModularChannel::new_with_shift(
+                c.size,
+                c.shift,
+                c.bit_depth,
+            )?);
         }
         Ok(())
     }

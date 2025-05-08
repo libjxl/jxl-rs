@@ -341,6 +341,7 @@ impl Frame {
 
         let modular_global = FullModularImage::read(
             &self.header,
+            &self.decoder_state.file_header.image_metadata,
             self.modular_color_channels,
             self.decoder_state.extra_channel_info(),
             &tree,
@@ -371,6 +372,7 @@ impl Frame {
             decode_vardct_lf(
                 group,
                 &self.header,
+                &self.decoder_state.file_header.image_metadata,
                 &lf_global.tree,
                 lf_global.color_correlation_params.as_ref().unwrap(),
                 lf_global.quant_params.as_ref().unwrap(),
@@ -391,7 +393,14 @@ impl Frame {
         if self.header.encoding == Encoding::VarDCT && !self.header.has_lf_frame() {
             info!("decoding HF metadata with group id {}", group);
             let hf_meta = self.hf_meta.as_mut().unwrap();
-            decode_hf_metadata(group, &self.header, &lf_global.tree, hf_meta, br)?;
+            decode_hf_metadata(
+                group,
+                &self.header,
+                &self.decoder_state.file_header.image_metadata,
+                &lf_global.tree,
+                hf_meta,
+                br,
+            )?;
         }
         Ok(())
     }
