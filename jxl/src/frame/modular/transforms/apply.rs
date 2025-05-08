@@ -142,7 +142,6 @@ impl TransformStepChunk {
     }
 }
 
-// TOOD(firsching): add bit-depth check?
 #[instrument(level = "trace", err)]
 fn check_equal_channels(
     channels: &[(usize, ChannelInfo)],
@@ -283,8 +282,10 @@ fn meta_apply_single_transform(
             let num_deltas = transform.num_deltas as usize;
             let pred = Predictor::from_u32(transform.predictor_id)
                 .expect("header decoding should ensure a valid predictor");
-            let bit_depth = channels[0].1.bit_depth; // TODO(firsching): fix
             check_equal_channels(channels, begin_channel, num_channels)?;
+            // We already checked the bit_depth for all channels from `begin_channel` is
+            // equal in the line above.
+            let bit_depth = channels[begin_channel].1.bit_depth;
             let pchan_info = ChannelInfo {
                 shift: None,
                 size: (num_colors + num_deltas, num_channels),
