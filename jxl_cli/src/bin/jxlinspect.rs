@@ -214,7 +214,13 @@ fn main() {
         println!("Processing file: {}", filename);
     }
 
-    let mut file = fs::File::open(filename).expect("Cannot open file");
+    let mut file = match fs::File::open(filename) {
+        Ok(file) => file,
+        Err(err) => {
+            println!("Cannot open file: {err}");
+            return;
+        }
+    };
 
     // Set up the container parser and buffers
     let mut parser = ContainerParser::new();
@@ -223,13 +229,17 @@ fn main() {
     let mut codestream = Vec::new();
 
     loop {
-        let count = file
-            .read(&mut buf[buf_valid..])
-            .expect("Cannot read data from file");
-        if count == 0 {
+        let chunk_size = match file.read(&mut buf[buf_valid..]) {
+            Ok(l) => l,
+            Err(err) => {
+                println!("Cannot read data from file: {err}");
+                return;
+            }
+        };
+        if chunk_size == 0 {
             break;
         }
-        buf_valid += count;
+        buf_valid += chunk_size;
 
         for event in parser.process_bytes(&buf[..buf_valid]) {
             match event {
