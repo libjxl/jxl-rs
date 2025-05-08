@@ -3,7 +3,7 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-#![allow(dead_code)]
+#![cfg(test)]
 
 use std::f64::consts::FRAC_1_SQRT_2;
 use std::f64::consts::PI;
@@ -58,7 +58,6 @@ pub fn dct1d(input_matrix: &[Vec<f64>]) -> Vec<Vec<f64>> {
     output_matrix
 }
 
-// TODO: write commment/test showing that "i" in "idct" is not exactly inverse, but scaled (by sqrt N)
 pub fn idct1d(input_matrix: &[Vec<f64>]) -> Vec<Vec<f64>> {
     let num_rows = input_matrix.len();
 
@@ -247,6 +246,68 @@ mod tests {
             let expected_row_values: Vec<f64> =
                 vec![single_column_idct_expected[r_spatial_idx]; M_COLS];
             assert_all_almost_eq!(actual_row_slice, expected_row_values.as_slice(), 1e-7);
+        }
+    }
+
+    #[test]
+    fn test_dct_idct_scaling() {
+        const N_ROWS: usize = 7;
+        const M_COLS: usize = 13;
+        let input_matrix: Vec<Vec<f64>> = (0..N_ROWS)
+            .map(|r_idx| {
+                (0..M_COLS)
+                    // some arbitrary pattern
+                    .map(|c_idx| (r_idx + c_idx) as f64 * 7.7)
+                    .collect::<Vec<f64>>()
+            })
+            .collect::<Vec<Vec<f64>>>();
+
+        let dct_output = dct1d(&input_matrix);
+        let idct_output = idct1d(&dct_output);
+
+        // Verify that idct1d(dct1d(input)) == N_ROWS * input
+        for r_idx in 0..N_ROWS {
+            let expected_current_row_scaled: Vec<f64> = input_matrix[r_idx]
+                .iter()
+                .map(|&val| val * (N_ROWS as f64))
+                .collect();
+
+            assert_all_almost_eq!(
+                idct_output[r_idx].as_slice(),
+                expected_current_row_scaled.as_slice(),
+                1e-7
+            );
+        }
+    }
+
+    #[test]
+    fn test_idct_dct_scaling() {
+        const N_ROWS: usize = 17;
+        const M_COLS: usize = 11;
+        let input_matrix: Vec<Vec<f64>> = (0..N_ROWS)
+            .map(|r_idx| {
+                (0..M_COLS)
+                    // some arbitrary pattern
+                    .map(|c_idx| (r_idx + c_idx) as f64 * 12.34)
+                    .collect::<Vec<f64>>()
+            })
+            .collect::<Vec<Vec<f64>>>();
+
+        let idct_output = idct1d(&input_matrix);
+        let dct_output = dct1d(&idct_output);
+
+        // Verify that dct1d(idct1d(input)) == N_ROWS * input
+        for r_idx in 0..N_ROWS {
+            let expected_current_row_scaled: Vec<f64> = input_matrix[r_idx]
+                .iter()
+                .map(|&val| val * (N_ROWS as f64))
+                .collect();
+
+            assert_all_almost_eq!(
+                dct_output[r_idx].as_slice(),
+                expected_current_row_scaled.as_slice(),
+                1e-7
+            );
         }
     }
 }
