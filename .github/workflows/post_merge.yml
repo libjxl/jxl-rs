@@ -1,0 +1,29 @@
+name: Post merge checks
+
+on:
+  push:
+    branches:
+      - main
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
+jobs:
+  post_merge_tests:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Rust cache
+        uses: Swatinem/rust-cache@v2.7.3
+
+      - name: Run arbtest with extended budget
+        env:
+            # ~ 17min
+            ARBTEST_BUDGET_MS: 1000000
+        # RUST_BACKTRACE=1 is already set in the global env for the workflow
+        run: cargo test
