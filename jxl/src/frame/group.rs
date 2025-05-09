@@ -8,9 +8,8 @@ use crate::{
     error::{Error, Result},
     frame::{block_context_map::*, transform_map::*, HfGlobalState, HfMetadata, LfGlobalState},
     headers::frame_header::FrameHeader,
-    image::Image,
-    util::tracing_wrappers::*,
-    util::CeilLog2,
+    image::{Image, Rect},
+    util::{tracing_wrappers::*, CeilLog2},
     BLOCK_SIZE,
 };
 
@@ -27,6 +26,10 @@ fn predict_num_nonzeros(nzeros_map: &Image<u32>, bx: usize, by: usize) -> usize 
         (nzeros_map.as_rect().row(by - 1)[bx] + nzeros_map.as_rect().row(by)[bx - 1]).div_ceil(2)
             as usize
     }
+}
+
+fn dequant_hf(data: &mut [f32], block_rect : Rect){
+
 }
 
 pub fn decode_vardct_group(
@@ -70,6 +73,9 @@ pub fn decode_vardct_group(
             let shape_id = block_shape_id(transform_type) as usize;
             let num_blocks = cx * cy;
             let block_size = num_blocks * BLOCK_SIZE;
+
+            // Allocate a 2D vector to store DCT coefficients for all 3 channels.
+            let mut dct_coeffs: Vec<Vec<i32>> = vec![vec![0i32; block_size]; 3];
             for c in [1, 0, 2] {
                 trace!(
                     "Decoding block ({},{}) channel {} with {}x{} block transform {} (shape id {})",
@@ -105,6 +111,7 @@ pub fn decode_vardct_group(
                     }
                     let ctx = histo_offset + zero_density_context(nonzeros, k, num_blocks, prev);
                     let coeff = reader.read_signed(br, ctx)?;
+                    dct_coeffs[c][k] = coeff;
                     prev = if coeff != 0 { 1 } else { 0 };
                     nonzeros -= prev;
                 }
@@ -112,9 +119,13 @@ pub fn decode_vardct_group(
                     return Err(Error::EndOfBlockResidualNonZeros(nonzeros));
                 }
             }
+            // TODO(szabadka): Add dequantization
+
+            // TODO(szabadka): Add chroma from luma
+            // TODO(szabadka): Add inverse dct
+            // TODO(szabadka): call render pipeline.
         }
     }
     reader.check_final_state()?;
-    // TODO(szabadka): Add dequantization, chroma from luma, inverse dct and call render pipeline.
     Ok(())
 }
