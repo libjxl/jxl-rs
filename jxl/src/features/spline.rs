@@ -505,13 +505,13 @@ impl Splines {
             segment_y_start: vec![],
         }
     }
-    pub fn draw_segments(&self, row: &mut [&mut [f32]], position: (usize, usize), xsize: usize) {
-        let first_segment_index_pos = self.segment_y_start[position.1];
-        let last_segment_index_pos = self.segment_y_start[position.1 + 1];
+    pub fn draw_segments(&self, row: &mut [&mut [f32]], row_pos: (usize, usize), xsize: usize) {
+        let first_segment_index_pos = self.segment_y_start[row_pos.1];
+        let last_segment_index_pos = self.segment_y_start[row_pos.1 + 1];
         for segment_index_pos in first_segment_index_pos..last_segment_index_pos {
             self.draw_segment(
                 row,
-                position,
+                row_pos,
                 xsize,
                 &self.segments[self.segment_indices[segment_index_pos as usize]],
             );
@@ -520,26 +520,33 @@ impl Splines {
     fn draw_segment(
         &self,
         row: &mut [&mut [f32]],
-        position: (usize, usize),
+        row_pos: (usize, usize),
         xsize: usize,
         segment: &SplineSegment,
     ) {
-        let (x0, y) = position;
+        let (x0, y) = row_pos;
         let x1 = x0 + xsize;
         let clamped_x0 = x0.max((segment.center_x - segment.maximum_distance).round() as usize);
         // one-past-the-end
         let clamped_x1 = x1.min((segment.center_x + segment.maximum_distance).round() as usize + 1);
+        println!(
+            "row[0].len(): {}, x0: {}, x1: {}",
+            row[0].len(),
+            clamped_x0,
+            clamped_x1
+        );
         for x in clamped_x0..clamped_x1 {
-            self.draw_segment_at(row, (x, y), segment);
+            self.draw_segment_at(row, (x, y), x0, segment);
         }
     }
     fn draw_segment_at(
         &self,
         row: &mut [&mut [f32]],
-        position: (usize, usize),
+        pixel_pos: (usize, usize),
+        row_x0: usize,
         segment: &SplineSegment,
     ) {
-        let (x, y) = position;
+        let (x, y) = pixel_pos;
         let inv_sigma = segment.inv_sigma;
         let half = 0.5f32;
         let one_over_2s2 = 0.353_553_38_f32;
@@ -554,8 +561,8 @@ impl Splines {
             sigma_over_4_times_intensity * one_dimensional_factor * one_dimensional_factor;
         for (channel_index, row) in row.iter_mut().enumerate() {
             let cm = segment.color[channel_index];
-            let inp = row[x];
-            row[x] = cm * local_intensity + inp;
+            let inp = row[x - row_x0];
+            row[x - row_x0] = cm * local_intensity + inp;
         }
     }
 
