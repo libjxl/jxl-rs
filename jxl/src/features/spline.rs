@@ -529,12 +529,6 @@ impl Splines {
         let clamped_x0 = x0.max((segment.center_x - segment.maximum_distance).round() as usize);
         // one-past-the-end
         let clamped_x1 = x1.min((segment.center_x + segment.maximum_distance).round() as usize + 1);
-        println!(
-            "row[0].len(): {}, x0: {}, x1: {}",
-            row[0].len(),
-            clamped_x0,
-            clamped_x1
-        );
         for x in clamped_x0..clamped_x1 {
             self.draw_segment_at(row, (x, y), x0, segment);
         }
