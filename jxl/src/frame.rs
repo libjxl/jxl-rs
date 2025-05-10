@@ -37,7 +37,9 @@ mod block_context_map;
 mod coeff_order;
 pub mod color_correlation_map;
 mod group;
+mod hf_strategy;
 pub mod modular;
+mod quant_weights;
 mod quantizer;
 pub mod transform_map;
 
