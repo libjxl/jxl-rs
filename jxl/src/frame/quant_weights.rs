@@ -8,12 +8,16 @@
 use std::sync::OnceLock;
 
 use enum_iterator::{cardinality, Sequence};
+use half::f16;
 
 use crate::{
     bit_reader::BitReader,
-    error::Result,
+    error::{
+        Error::{HfQuantFactorTooSmall, InvalidPredefinedTable, InvalidQuantEncoding},
+        Result,
+    },
     frame::transform_map::{self, HfTransformType},
-    BLOCK_SIZE,
+    BLOCK_DIM, BLOCK_SIZE,
 };
 
 pub const INV_LF_QUANT: [f32; 3] = [4096.0, 512.0, 256.0];
@@ -24,12 +28,13 @@ pub const LF_QUANT: [f32; 3] = [
     1.0 / INV_LF_QUANT[2],
 ];
 
+const ALMOST_ZERO: f32 = 1e-8;
+
 const MAX_QUANT_TABLE_SIZE: usize = transform_map::MAX_COEFF_AREA;
 const NUM_PREDEFINED_TABLES: usize = 1;
 const CEIL_LOG2_NUM_PREDEFINED_TABLES: usize = 0;
 const LOG2_NUM_QUANT_MODES: usize = 3;
-type FixedDctQuantWeightParams<const NUM_DISTANCE_BANDS: usize> = [[f32; NUM_DISTANCE_BANDS]; 3];
-struct DctQuantWeightParams {
+pub struct DctQuantWeightParams {
     params: [[f32; Self::MAX_DISTANCE_BANDS]; 3],
     num_bands: usize,
 }
@@ -47,9 +52,25 @@ impl DctQuantWeightParams {
         }
         result
     }
+
+    pub fn decode(br: &mut BitReader) -> Result<Self> {
+        let num_bands = br.read(Self::LOG2_MAX_DISTANCE_BANDS)? as usize + 1;
+        let mut params = [[0.0; Self::MAX_DISTANCE_BANDS]; 3];
+        for row in params.iter_mut() {
+            for item in row[..num_bands].iter_mut() {
+                *item = f32::from(f16::from_bits(br.read(16)? as u16));
+            }
+            if row[0] < ALMOST_ZERO {
+                return Err(HfQuantFactorTooSmall(row[0]));
+            }
+            row[0] *= 64.0;
+        }
+        Ok(DctQuantWeightParams { params, num_bands })
+    }
 }
 
-enum QuantEncoding {
+#[allow(clippy::large_enum_variant)]
+pub enum QuantEncoding {
     Library {
         predefined: u8,
     },
@@ -60,20 +81,20 @@ enum QuantEncoding {
         xyb_weights: [[f32; 6]; 3],
     },
     Dct4 {
-        params: FixedDctQuantWeightParams<4>,
+        params: DctQuantWeightParams,
         xyb_mul: [[f32; 2]; 3],
     },
     Dct4x8 {
-        params: FixedDctQuantWeightParams<4>,
+        params: DctQuantWeightParams,
         xyb_mul: [f32; 3],
+    },
+    Afv {
+        params4x8: DctQuantWeightParams,
+        params4x4: DctQuantWeightParams,
+        weights: [[f32; 9]; 3],
     },
     Dct {
         params: DctQuantWeightParams,
-    },
-    Afv {
-        params4x8: FixedDctQuantWeightParams<4>,
-        params4x4: FixedDctQuantWeightParams<4>,
-        weights: [[f32; 9]; 3],
     },
     Raw {
         qtable: Vec<i32>,
@@ -86,6 +107,136 @@ impl QuantEncoding {
         Self::Raw {
             qtable,
             qtable_den: (1 << shift) as f32 * (1.0 / (8.0 * 255.0)),
+        }
+    }
+
+    #[allow(unused_assignments)]
+    pub fn decode(
+        mut required_size_x: usize,
+        mut required_size_y: usize,
+        br: &mut BitReader,
+    ) -> Result<Self> {
+        let required_size = required_size_x * required_size_y;
+        required_size_x *= BLOCK_DIM;
+        required_size_y *= BLOCK_DIM;
+        let mode = br.read(LOG2_NUM_QUANT_MODES)? as u8;
+        match mode {
+            0 => {
+                let predefined = br.read(CEIL_LOG2_NUM_PREDEFINED_TABLES)? as u8;
+                if predefined as usize >= NUM_PREDEFINED_TABLES {
+                    return Err(InvalidPredefinedTable { predefined });
+                }
+                Ok(Self::Library { predefined })
+            }
+            1 => {
+                if required_size != 1 {
+                    return Err(InvalidQuantEncoding {
+                        mode,
+                        required_size,
+                    });
+                }
+                let mut xyb_weights = [[0.0; 3]; 3];
+                for row in xyb_weights.iter_mut() {
+                    for item in row.iter_mut() {
+                        *item = f32::from(f16::from_bits(br.read(16)? as u16));
+                        if item.abs() < ALMOST_ZERO {
+                            return Err(HfQuantFactorTooSmall(*item));
+                        }
+                        *item *= 64.0;
+                    }
+                }
+                Ok(Self::Identity { xyb_weights })
+            }
+            2 => {
+                if required_size != 1 {
+                    return Err(InvalidQuantEncoding {
+                        mode,
+                        required_size,
+                    });
+                }
+                let mut xyb_weights = [[0.0; 6]; 3];
+                for row in xyb_weights.iter_mut() {
+                    for item in row.iter_mut() {
+                        *item = f32::from(f16::from_bits(br.read(16)? as u16));
+                        if item.abs() < ALMOST_ZERO {
+                            return Err(HfQuantFactorTooSmall(*item));
+                        }
+                        *item *= 64.0;
+                    }
+                }
+                Ok(Self::Dct2 { xyb_weights })
+            }
+            3 => {
+                if required_size != 1 {
+                    return Err(InvalidQuantEncoding {
+                        mode,
+                        required_size,
+                    });
+                }
+                let mut xyb_mul = [[0.0; 2]; 3];
+                for row in xyb_mul.iter_mut() {
+                    for item in row.iter_mut() {
+                        *item = f32::from(f16::from_bits(br.read(16)? as u16));
+                        if item.abs() < ALMOST_ZERO {
+                            return Err(HfQuantFactorTooSmall(*item));
+                        }
+                    }
+                }
+                let params = DctQuantWeightParams::decode(br)?;
+                Ok(Self::Dct4 { params, xyb_mul })
+            }
+            4 => {
+                if required_size != 1 {
+                    return Err(InvalidQuantEncoding {
+                        mode,
+                        required_size,
+                    });
+                }
+                let mut xyb_mul = [0.0; 3];
+                for item in xyb_mul.iter_mut() {
+                    *item = f32::from(f16::from_bits(br.read(16)? as u16));
+                    if item.abs() < ALMOST_ZERO {
+                        return Err(HfQuantFactorTooSmall(*item));
+                    }
+                }
+                let params = DctQuantWeightParams::decode(br)?;
+                Ok(Self::Dct4x8 { params, xyb_mul })
+            }
+            5 => {
+                if required_size != 1 {
+                    return Err(InvalidQuantEncoding {
+                        mode,
+                        required_size,
+                    });
+                }
+                let mut weights = [[0.0; 9]; 3];
+                for row in weights.iter_mut() {
+                    for item in row.iter_mut() {
+                        *item = f32::from(f16::from_bits(br.read(16)? as u16));
+                    }
+                    for item in row[0..6].iter_mut() {
+                        *item *= 64.0;
+                    }
+                }
+                let params4x8 = DctQuantWeightParams::decode(br)?;
+                let params4x4 = DctQuantWeightParams::decode(br)?;
+                Ok(Self::Afv {
+                    params4x8,
+                    params4x4,
+                    weights,
+                })
+            }
+            6 => {
+                let params = DctQuantWeightParams::decode(br)?;
+                Ok(Self::Dct { params })
+            }
+            7 => {
+                todo!("decoding not yet implemented for QuantEncoding mode \"raw\"")
+            }
+            _ => Err(InvalidQuantEncoding {
+                mode,
+                required_size,
+            }),
         }
     }
 }
@@ -150,10 +301,10 @@ impl QuantTable {
     }
 }
 
-struct DequantMatrices {
+pub struct DequantMatrices {
     computed_mask: u32,
-    table: [f32; Self::TOTAL_TABLE_SIZE],
-    inv_table: [f32; Self::TOTAL_TABLE_SIZE],
+    table: Vec<f32>,
+    inv_table: Vec<f32>,
     table_offsets: [usize; HfTransformType::CARDINALITY * 3],
     encodings: Vec<QuantEncoding>,
 }
@@ -189,11 +340,11 @@ impl DequantMatrices {
     }
     fn dct4x4() -> QuantEncoding {
         QuantEncoding::Dct4 {
-            params: [
+            params: DctQuantWeightParams::from_array(&[
                 [2200.0, 0.0, 0.0, 0.0],
                 [392.0, 0.0, 0.0, 0.0],
                 [112.0, -0.25, -0.25, -0.5],
-            ],
+            ]),
             xyb_mul: [[1.0, 1.0], [1.0, 1.0], [1.0, 1.0]],
         }
     }
@@ -357,7 +508,7 @@ impl DequantMatrices {
     // dct8x4
     fn dct4x8() -> QuantEncoding {
         QuantEncoding::Dct4x8 {
-            params: [
+            params: DctQuantWeightParams::from_array(&[
                 [
                     2198.050556016380522,
                     -0.96269623020744692,
@@ -376,7 +527,7 @@ impl DequantMatrices {
                     -1.450082094097871593,
                     -1.5843722511996204,
                 ],
-            ],
+            ]),
             xyb_mul: [1.0, 1.0, 1.0],
         }
     }
@@ -676,8 +827,27 @@ impl DequantMatrices {
         &self.inv_table[self.table_offsets[quant_kind as usize * 3 + c]..]
     }
 
-    pub fn decode(_br: &mut BitReader) -> Result<Self> {
-        todo!();
+    pub fn decode(br: &mut BitReader) -> Result<Self> {
+        let all_default = br.read(1)? == 1;
+        let mut encodings = Vec::with_capacity(NUM_QUANT_TABLES);
+        if all_default {
+            for _ in 0..NUM_QUANT_TABLES {
+                encodings.push(QuantEncoding::Library { predefined: 0 })
+            }
+        } else {
+            for (&required_size_x, required_size_y) in
+                Self::REQUIRED_SIZE_X.iter().zip(Self::REQUIRED_SIZE_Y)
+            {
+                encodings.push(QuantEncoding::decode(required_size_x, required_size_y, br)?);
+            }
+        }
+        Ok(Self {
+            computed_mask: 0,
+            table: vec![0.0; Self::TOTAL_TABLE_SIZE],
+            inv_table: vec![0.0; Self::TOTAL_TABLE_SIZE],
+            table_offsets: [0; HfTransformType::CARDINALITY * 3],
+            encodings,
+        })
     }
 
     pub const REQUIRED_SIZE_X: [usize; NUM_QUANT_TABLES] =
