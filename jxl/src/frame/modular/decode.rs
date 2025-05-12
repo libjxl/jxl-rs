@@ -127,9 +127,9 @@ pub fn decode_modular_subbitstream(
         local_tree.as_ref().unwrap()
     };
 
-    if tree.max_property() >= NUM_NONREF_PROPERTIES - 2 {
+    if tree.max_property() >= NUM_NONREF_PROPERTIES {
         todo!(
-            "WP and reference properties are not implemented yet, max property: {}",
+            "reference properties are not implemented yet, max property: {}",
             tree.max_property()
         );
     }

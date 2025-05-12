@@ -642,9 +642,9 @@ mod test {
                         panic::resume_unwind(e);
                     }
                 } else if let Some(msg) = e.downcast_ref::<String>() {
-                    if msg.contains("WP and reference properties are not implemented") {
+                    if msg.contains("reference properties are not implemented") {
                         println!(
-                            "Skipping {}: WP / reference properties not implemented",
+                            "Skipping {}: reference properties not implemented",
                             path.display()
                         );
                     } else {
