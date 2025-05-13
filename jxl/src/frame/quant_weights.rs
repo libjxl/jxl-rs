@@ -13,10 +13,18 @@ use half::f16;
 use crate::{
     bit_reader::BitReader,
     error::{
-        Error::{HfQuantFactorTooSmall, InvalidPredefinedTable, InvalidQuantEncoding},
+        Error::{
+            HfQuantFactorTooSmall, InvalidPredefinedTable, InvalidQuantEncoding,
+            InvalidRawQuantTable,
+        },
         Result,
     },
-    frame::transform_map::{self, HfTransformType},
+    frame::{
+        modular::{decode::decode_modular_subbitstream, ModularChannel, ModularStreamId},
+        transform_map::{self, HfTransformType},
+        LfGlobalState,
+    },
+    headers::{bit_depth::BitDepth, frame_header::FrameHeader},
     BLOCK_DIM, BLOCK_SIZE,
 };
 
@@ -110,10 +118,12 @@ impl QuantEncoding {
         }
     }
 
-    #[allow(unused_assignments)]
     pub fn decode(
         mut required_size_x: usize,
         mut required_size_y: usize,
+        index: usize,
+        header: &FrameHeader,
+        lf_global: &LfGlobalState,
         br: &mut BitReader,
     ) -> Result<Self> {
         let required_size = required_size_x * required_size_y;
@@ -231,7 +241,35 @@ impl QuantEncoding {
                 Ok(Self::Dct { params })
             }
             7 => {
-                todo!("decoding not yet implemented for QuantEncoding mode \"raw\"")
+                let qtable_den = f32::from(f16::from_bits(br.read(16)? as u16));
+                if qtable_den < ALMOST_ZERO {
+                    // qtable[] values are already checked for <= 0 so the denominator may not be negative.
+                    return Err(InvalidRawQuantTable);
+                }
+                let bit_depth = BitDepth::integer_samples(8);
+                let mut image = [
+                    ModularChannel::new((required_size_x, required_size_y), bit_depth)?,
+                    ModularChannel::new((required_size_x, required_size_y), bit_depth)?,
+                    ModularChannel::new((required_size_x, required_size_y), bit_depth)?,
+                ];
+                let stream_id = ModularStreamId::QuantTable(index).get_id(header);
+                decode_modular_subbitstream(
+                    image.iter_mut().collect(),
+                    stream_id,
+                    None,
+                    &lf_global.tree,
+                    br,
+                )?;
+                let mut qtable = Vec::with_capacity(required_size_x * required_size_y * 3);
+                for channel in image.iter_mut() {
+                    for entry in channel.data.as_rect().iter() {
+                        qtable.push(entry);
+                        if entry <= 0 {
+                            return Err(InvalidRawQuantTable);
+                        }
+                    }
+                }
+                Ok(Self::Raw { qtable, qtable_den })
             }
             _ => Err(InvalidQuantEncoding {
                 mode,
@@ -827,7 +865,11 @@ impl DequantMatrices {
         &self.inv_table[self.table_offsets[quant_kind as usize * 3 + c]..]
     }
 
-    pub fn decode(br: &mut BitReader) -> Result<Self> {
+    pub fn decode(
+        header: &FrameHeader,
+        lf_global: &LfGlobalState,
+        br: &mut BitReader,
+    ) -> Result<Self> {
         let all_default = br.read(1)? == 1;
         let mut encodings = Vec::with_capacity(NUM_QUANT_TABLES);
         if all_default {
@@ -835,10 +877,19 @@ impl DequantMatrices {
                 encodings.push(QuantEncoding::Library { predefined: 0 })
             }
         } else {
-            for (&required_size_x, required_size_y) in
-                Self::REQUIRED_SIZE_X.iter().zip(Self::REQUIRED_SIZE_Y)
+            for (i, (&required_size_x, required_size_y)) in Self::REQUIRED_SIZE_X
+                .iter()
+                .zip(Self::REQUIRED_SIZE_Y)
+                .enumerate()
             {
-                encodings.push(QuantEncoding::decode(required_size_x, required_size_y, br)?);
+                encodings.push(QuantEncoding::decode(
+                    required_size_x,
+                    required_size_y,
+                    i,
+                    header,
+                    lf_global,
+                    br,
+                )?);
             }
         }
         Ok(Self {

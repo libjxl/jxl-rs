@@ -416,8 +416,8 @@ impl Frame {
             return Ok(());
         }
         let lf_global = self.lf_global.as_mut().unwrap();
+        let dequant_matrices = DequantMatrices::decode(&self.header, lf_global, br)?;
         let block_context_map = lf_global.block_context_map.as_mut().unwrap();
-        let dequant_matrices = DequantMatrices::decode(br)?;
         let num_histo_bits = self.header.num_groups().ceil_log2();
         let num_histograms: u32 = br.read(num_histo_bits)? as u32 + 1;
         debug!(
@@ -504,6 +504,8 @@ impl Frame {
 
     pub fn finalize(mut self) -> Result<Option<DecoderState>> {
         #[cfg(feature = "debug_tools")]
+        // TODO(firsching): consider options to make it dump selectively only the pgm or the numpy,
+        // or move pgm and or numpy encoding out of debug_tools
         {
             let saved_frames: Vec<Box<SaveStage<i32>>> = self
                 .render_pipeline
@@ -513,6 +515,15 @@ impl Frame {
                 .filter_map(|x| x.downcast().ok())
                 .collect();
             std::fs::create_dir_all("/tmp/jxl-debug/").unwrap();
+
+            let frames_for_numpy: Vec<crate::image::ImageRect<'_, i32>> = saved_frames
+                .iter()
+                .map(|stage_box| stage_box.buffer().as_rect())
+                .collect();
+
+            let numpy_bytes = crate::enc::numpy::to_numpy(frames_for_numpy);
+            std::fs::write("/tmp/jxl-debug/decoded.npy", numpy_bytes).unwrap();
+
             if let [r, g, b] = &saved_frames[..] {
                 std::fs::write(
                     "/tmp/jxl-debug/decoded.ppm",
@@ -533,6 +544,7 @@ impl Frame {
                 }
             }
         }
+
         if self.header.can_be_referenced {
             // TODO(firsching): actually use real reference images here, instead of setting it
             // to a blank image here, once we can decode images.
