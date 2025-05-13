@@ -29,6 +29,7 @@ use color_correlation_map::ColorCorrelationParams;
 use group::decode_vardct_group;
 use modular::{decode_hf_metadata, decode_vardct_lf};
 use modular::{FullModularImage, ModularStreamId, Tree};
+use quant_weights::DequantMatrices;
 use quantizer::LfQuantFactors;
 use quantizer::QuantizerParams;
 use transform_map::INVALID_TRANSFORM;
@@ -72,6 +73,8 @@ pub struct PassState {
 pub struct HfGlobalState {
     num_histograms: u32,
     passes: Vec<PassState>,
+    #[allow(dead_code)]
+    dequant_matrices: DequantMatrices,
 }
 
 #[derive(Debug)]
@@ -413,10 +416,8 @@ impl Frame {
             return Ok(());
         }
         let lf_global = self.lf_global.as_mut().unwrap();
+        let dequant_matrices = DequantMatrices::decode(&self.header, lf_global, br)?;
         let block_context_map = lf_global.block_context_map.as_mut().unwrap();
-        if br.read(1)? == 0 {
-            todo!("Custom quant matrix decoding is not implemented")
-        }
         let num_histo_bits = self.header.num_groups().ceil_log2();
         let num_histograms: u32 = br.read(num_histo_bits)? as u32 + 1;
         debug!(
@@ -449,6 +450,7 @@ impl Frame {
         self.hf_global = Some(HfGlobalState {
             num_histograms,
             passes,
+            dequant_matrices,
         });
         Ok(())
     }

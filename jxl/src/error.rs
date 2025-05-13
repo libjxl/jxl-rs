@@ -77,6 +77,12 @@ pub enum Error {
     InvalidPermutationSize { size: u32, skip: u32, end: u32 },
     #[error("Invalid permutation: Lehmer code {lehmer} out of bounds in permutation of size {size} at index {idx}")]
     InvalidPermutationLehmerCode { size: u32, idx: u32, lehmer: u32 },
+    #[error("Invalid predefined table {predefined}")]
+    InvalidPredefinedTable { predefined: u8 },
+    #[error("Invalid quant encoding with mode {mode} and required size {required_size}")]
+    InvalidQuantEncoding { mode: u8, required_size: usize },
+    #[error("Invalid raw quantization table")]
+    InvalidRawQuantTable,
     // FrameHeader format errors
     #[error("Invalid extra channel upsampling: upsampling: {0} dim_shift: {1} ec_upsampling: {2}")]
     InvalidEcUpsampling(u32, u32, u32),
@@ -109,6 +115,8 @@ pub enum Error {
     CopyOfDifferentSize(usize, usize, usize, usize),
     #[error("LF quantization factor is too small: {0}")]
     LfQuantFactorTooSmall(f32),
+    #[error("HF quantization factor is too small: {0}")]
+    HfQuantFactorTooSmall(f32),
     #[error("Invalid modular mode predictor: {0}")]
     InvalidPredictor(u32),
     #[error("Invalid modular mode property: {0}")]
