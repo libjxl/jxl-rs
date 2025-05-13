@@ -59,7 +59,7 @@ fn decode_modular_channel(
 ) -> Result<()> {
     debug!("reading channel");
     let size = buffers[chan].data.size();
-    let mut wp_state = WeightedPredictorState::new(header, size.0);
+    let mut wp_state = WeightedPredictorState::new(&header.wp_header, size.0);
     for y in 0..size.1 {
         let mut property_buffer = [0; 256];
         property_buffer[0] = chan as i32;
@@ -105,7 +105,7 @@ pub fn decode_modular_subbitstream(
                 // applying transforms later.
                 let new_bufs;
                 (new_bufs, transform_steps) =
-                    meta_apply_local_transforms(buffers, &mut buffer_storage, &h.transforms)?;
+                    meta_apply_local_transforms(buffers, &mut buffer_storage, &h)?;
                 (h, new_bufs)
             } else {
                 (h, buffers)

@@ -274,7 +274,7 @@ impl FullModularImage {
         let header = GroupHeader::read(br)?;
 
         let (mut buffer_info, transform_steps) =
-            transforms::apply::meta_apply_transforms(&channels, &header.transforms)?;
+            transforms::apply::meta_apply_transforms(&channels, &header)?;
 
         // Assign each (channel, group) pair present in the bitstream to the section in which it will be decoded.
         let mut section_buffer_indices: Vec<Vec<usize>> = vec![];
