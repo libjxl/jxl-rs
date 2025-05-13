@@ -81,6 +81,8 @@ pub enum Error {
     InvalidPredefinedTable { predefined: u8 },
     #[error("Invalid quant encoding with mode {mode} and required size {required_size}")]
     InvalidQuantEncoding { mode: u8, required_size: usize },
+    #[error("Invalid raw quantization table")]
+    InvalidRawQuantTable,
     // FrameHeader format errors
     #[error("Invalid extra channel upsampling: upsampling: {0} dim_shift: {1} ec_upsampling: {2}")]
     InvalidEcUpsampling(u32, u32, u32),

@@ -416,8 +416,8 @@ impl Frame {
             return Ok(());
         }
         let lf_global = self.lf_global.as_mut().unwrap();
+        let dequant_matrices = DequantMatrices::decode(&self.header, lf_global, br)?;
         let block_context_map = lf_global.block_context_map.as_mut().unwrap();
-        let dequant_matrices = DequantMatrices::decode(br)?;
         let num_histo_bits = self.header.num_groups().ceil_log2();
         let num_histograms: u32 = br.read(num_histo_bits)? as u32 + 1;
         debug!(
