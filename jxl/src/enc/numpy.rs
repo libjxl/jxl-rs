@@ -3,8 +3,6 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-#![cfg(feature = "debug_tools")]
-
 use crate::image::ImageRect;
 
 fn numpy_header(xsize: usize, ysize: usize, num_channels: usize, num_frames: usize) -> Vec<u8> {
@@ -41,7 +39,7 @@ fn numpy_header(xsize: usize, ysize: usize, num_channels: usize, num_frames: usi
     header
 }
 
-pub fn to_numpy_bytes(img_channels: &[ImageRect<'_, i32>]) -> Vec<u8> {
+fn numpy_bytes(img_channels: &[ImageRect<'_, i32>]) -> Vec<u8> {
     if img_channels.is_empty() {
         return Vec::new();
     }
@@ -80,7 +78,7 @@ pub fn to_numpy(frame: Vec<ImageRect<'_, i32>>) -> Vec<u8> {
     let mut npy_file_bytes = Vec::new();
     npy_file_bytes.extend(numpy_header(width, height, num_channels, num_frames));
     // Consistent channel sizes are checked inside the call to `to_numpy_bytes`.
-    npy_file_bytes.extend(to_numpy_bytes(&frame));
+    npy_file_bytes.extend(numpy_bytes(&frame));
 
     npy_file_bytes
 }

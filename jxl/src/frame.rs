@@ -503,7 +503,7 @@ impl Frame {
     pub fn finalize(mut self) -> Result<Option<DecoderState>> {
         #[cfg(feature = "debug_tools")]
         // TODO(firsching): consider options to make it dump selectively only the pgm or the numpy,
-        // or move pgm decoding out of debug_tools
+        // or move pgm and or numpy encoding out of debug_tools
         {
             let saved_frames: Vec<Box<SaveStage<i32>>> = self
                 .render_pipeline
