@@ -436,7 +436,7 @@ impl Frame {
             debug!(used_orders);
             let coeff_orders = decode_coeff_orders(used_orders, br)?;
             assert_eq!(coeff_orders.len(), 3 * coeff_order::NUM_ORDERS);
-            let num_contexts = block_context_map.num_ac_contexts();
+            let num_contexts = num_histograms as usize * block_context_map.num_ac_contexts();
             debug!(
                 "Deconding histograms for pass {} with {} contexts",
                 i, num_contexts

@@ -46,18 +46,21 @@ pub fn decode_vardct_group(
     debug!(?block_rect);
     let transform_map = hf_meta.transform_map.as_rect();
     let transform_map_rect = transform_map.rect(block_rect)?;
+    let raw_quant_map = hf_meta.raw_quant_map.as_rect();
+    let raw_quant_map_rect = raw_quant_map.rect(block_rect)?;
     let mut num_nzeros: [Image<u32>; 3] = [
         Image::new(block_rect.size)?,
         Image::new(block_rect.size)?,
         Image::new(block_rect.size)?,
     ];
     let block_context_map = lf_global.block_context_map.as_mut().unwrap();
-    if block_context_map.num_lf_contexts > 1 || !block_context_map.qf_thresholds.is_empty() {
+    if block_context_map.num_lf_contexts > 1 {
         todo!("Unsupported block context map");
     }
     let context_offset = histogram_index * block_context_map.num_ac_contexts();
     for by in 0..block_rect.size.1 {
         for bx in 0..block_rect.size.0 {
+            let raw_quant = raw_quant_map_rect.row(by)[bx] as u32;
             let raw_transform_id = transform_map_rect.row(by)[bx];
             let transform_id = raw_transform_id & 127;
             let is_first_block = raw_transform_id >= 128;
@@ -82,7 +85,7 @@ pub fn decode_vardct_group(
                     shape_id
                 );
                 let predicted_nzeros = predict_num_nonzeros(&num_nzeros[c], bx, by);
-                let block_context = block_context_map.block_context(0, 0, shape_id, c);
+                let block_context = block_context_map.block_context(0, raw_quant, shape_id, c);
                 let nonzero_context = block_context_map
                     .nonzero_context(predicted_nzeros, block_context)
                     + context_offset;
