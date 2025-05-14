@@ -637,41 +637,7 @@ mod test {
 
     fn read_frames_from_path(path: &Path) -> Result<(), Error> {
         let data = std::fs::read(path).unwrap();
-
-        let result = panic::catch_unwind(|| read_frames(data.as_slice(), |frame| frame.finalize()));
-
-        match result {
-            Ok(Ok(_frame)) => {}
-            Ok(Err(e)) => {
-                return Err(e);
-            }
-            Err(e) => {
-                // A panic occurred
-                if let Some(msg) = e.downcast_ref::<&str>() {
-                    if msg.contains("VarDCT not implemented") {
-                        println!(
-                            "Skipping {}: VarDCT properties not implemented",
-                            path.display()
-                        );
-                    } else {
-                        panic::resume_unwind(e);
-                    }
-                } else if let Some(msg) = e.downcast_ref::<String>() {
-                    if msg.contains("reference properties are not implemented") {
-                        println!(
-                            "Skipping {}: reference properties not implemented",
-                            path.display()
-                        );
-                    } else {
-                        panic::resume_unwind(e);
-                    }
-                } else {
-                    panic::resume_unwind(e);
-                }
-            }
-        }
-
-        Ok(())
+        read_frames(data.as_slice(), |frame| frame.finalize())
     }
 
     for_each_test_file!(read_frames_from_path);
