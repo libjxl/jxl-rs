@@ -82,6 +82,7 @@ pub enum QuantEncoding {
     Library {
         predefined: u8,
     },
+    // a.k.a. "Hornuss"
     Identity {
         xyb_weights: [[f32; 3]; 3],
     },

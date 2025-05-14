@@ -19,7 +19,7 @@ pub const NUM_ORDERS: usize = 13;
 
 pub const TRANSFORM_TYPE_LUT: [HfTransformType; NUM_ORDERS] = [
     HfTransformType::DCT,
-    HfTransformType::IDENTITY,
+    HfTransformType::IDENTITY, // a.k.a. "Hornuss"
     HfTransformType::DCT16X16,
     HfTransformType::DCT32X32,
     HfTransformType::DCT8X16,

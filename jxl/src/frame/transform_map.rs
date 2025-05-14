@@ -19,6 +19,7 @@ pub enum HfTransformType {
     // Regular block size DCT
     DCT = 0,
     // Encode pixels without transforming
+    // a.k.a "Hornuss"
     IDENTITY = 1,
     // Use 2-by-2 DCT
     DCT2X2 = 2,
