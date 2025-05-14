@@ -6,6 +6,7 @@
 use crate::{
     bit_reader::BitReader,
     error::{Error, Result},
+    frame::quant_weights,
     headers::encodings::{Empty, UnconditionalCoder},
 };
 
@@ -22,9 +23,7 @@ impl LfQuantFactors {
     pub fn new(br: &mut BitReader) -> Result<LfQuantFactors> {
         let mut quant_factors = [0.0f32; 3];
         if br.read(1)? == 1 {
-            quant_factors[0] = 1.0 / 4096.0;
-            quant_factors[1] = 1.0 / 512.0;
-            quant_factors[2] = 1.0 / 256.0;
+            quant_factors = quant_weights::LF_QUANT;
         } else {
             for qf in quant_factors.iter_mut() {
                 *qf = f32::read_unconditional(&(), br, &Empty {})? / 128.0;

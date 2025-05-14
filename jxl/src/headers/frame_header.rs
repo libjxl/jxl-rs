@@ -463,7 +463,9 @@ pub struct FrameHeader {
 
 impl FrameHeader {
     const GROUP_DIM: usize = 256;
-    const BLOCK_DIM: usize = 8;
+    pub(crate) const BLOCK_DIM: usize = 8;
+    #[allow(dead_code)]
+    pub(crate) const BLOCK_SIZE: usize = Self::BLOCK_DIM * Self::BLOCK_DIM;
 
     pub fn log_group_dim(&self) -> usize {
         (Self::GROUP_DIM.ilog2() - 1 + self.group_size_shift) as usize

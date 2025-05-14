@@ -4,7 +4,11 @@
 // license that can be found in the LICENSE file.
 
 use crate::{
-    frame::modular::{predict::PredictionData, ModularChannel, Predictor},
+    frame::modular::{
+        predict::{PredictionData, WeightedPredictorState},
+        ModularChannel, Predictor,
+    },
+    headers::modular::WeightedHeader,
     image::ImageRect,
 };
 
@@ -168,6 +172,7 @@ pub fn do_palette_step_general(
     num_colors: usize,
     num_deltas: usize,
     predictor: Predictor,
+    wp_header: &WeightedHeader,
 ) {
     let (w, h) = buf_in.data.size();
     let palette = buf_pal.data.as_rect();
@@ -193,7 +198,33 @@ pub fn do_palette_step_general(
             }
         }
     } else if predictor == Predictor::Weighted {
-        todo!();
+        let w = buf_in.data.size().0;
+        for (chan_index, out) in buf_out.iter_mut().enumerate() {
+            let mut wp_state = WeightedPredictorState::new(wp_header, w);
+            for y in 0..h {
+                let idx = buf_in.data.as_rect().row(y);
+                for (x, &index) in idx.iter().enumerate() {
+                    let palette_entry = get_palette_value(
+                        &palette,
+                        index as isize,
+                        /*c=*/ chan_index,
+                        /*palette_size=*/ num_colors + num_deltas,
+                        /*bit_depth=*/ bit_depth,
+                    );
+                    let val = if index < num_deltas as i32 {
+                        let prediction_data = PredictionData::get(out.data.as_rect(), x, y);
+                        let (wp_pred, _) =
+                            wp_state.predict_and_property((x, y), w, &prediction_data);
+                        let pred = predictor.predict_one(prediction_data, wp_pred);
+                        (pred + palette_entry as i64) as i32
+                    } else {
+                        palette_entry
+                    };
+                    out.data.as_rect_mut().row(y)[x] = val;
+                    wp_state.update_errors(val as i64, (x, y), w);
+                }
+            }
+        }
     } else {
         for (chan_index, out) in buf_out.iter_mut().enumerate() {
             for y in 0..h {

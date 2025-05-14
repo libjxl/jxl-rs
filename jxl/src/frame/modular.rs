@@ -23,7 +23,7 @@ use crate::{
 };
 
 mod borrowed_buffers;
-mod decode;
+pub(crate) mod decode;
 mod predict;
 mod transforms;
 mod tree;
@@ -95,9 +95,9 @@ impl ModularGridKind {
 
 // All the information on a specific buffer needed by Modular decoding.
 #[derive(Debug)]
-struct ModularChannel {
+pub(crate) struct ModularChannel {
     // Actual pixel buffer.
-    data: Image<i32>,
+    pub data: Image<i32>,
     // Holds additional information such as the weighted predictor's error channel's last row for
     // the transform chunk that produced this buffer.
     auxiliary_data: Option<Image<i32>>,
@@ -107,7 +107,7 @@ struct ModularChannel {
 }
 
 impl ModularChannel {
-    fn new(size: (usize, usize), bit_depth: BitDepth) -> Result<Self> {
+    pub fn new(size: (usize, usize), bit_depth: BitDepth) -> Result<Self> {
         Self::new_with_shift(size, Some((0, 0)), bit_depth)
     }
 
@@ -274,7 +274,7 @@ impl FullModularImage {
         let header = GroupHeader::read(br)?;
 
         let (mut buffer_info, transform_steps) =
-            transforms::apply::meta_apply_transforms(&channels, &header.transforms)?;
+            transforms::apply::meta_apply_transforms(&channels, &header)?;
 
         // Assign each (channel, group) pair present in the bitstream to the section in which it will be decoded.
         let mut section_buffer_indices: Vec<Vec<usize>> = vec![];

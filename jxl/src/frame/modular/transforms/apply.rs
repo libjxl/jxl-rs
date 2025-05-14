@@ -13,7 +13,7 @@ use crate::{
         borrowed_buffers::with_buffers, ChannelInfo, ModularBufferInfo, ModularChannel,
         ModularGridKind, Predictor,
     },
-    headers::{self, modular::TransformId},
+    headers::{self, modular::TransformId, modular::WeightedHeader},
     util::tracing_wrappers::*,
 };
 
@@ -34,6 +34,7 @@ pub enum TransformStep {
         num_colors: usize,
         num_deltas: usize,
         predictor: Predictor,
+        wp_header: WeightedHeader,
     },
     HSqueeze {
         buf_in: [usize; 2],
@@ -107,6 +108,7 @@ impl TransformStepChunk {
                 num_colors,
                 num_deltas,
                 predictor,
+                wp_header,
             } if *predictor != Predictor::Weighted && *predictor != Predictor::AverageAll => {
                 assert_eq!(buffers[buf_out[0]].grid_kind, buffers[*buf_in].grid_kind);
                 assert_eq!(buffers[buf_out[0]].info.size, buffers[*buf_in].info.size);
@@ -126,6 +128,7 @@ impl TransformStepChunk {
                             *num_colors,
                             *num_deltas,
                             *predictor,
+                            wp_header,
                         );
                         Ok(())
                     })?;
@@ -165,6 +168,7 @@ fn check_equal_channels(
 
 fn meta_apply_single_transform(
     transform: &headers::modular::Transform,
+    header: &headers::modular::GroupHeader,
     channels: &mut Vec<(usize, ChannelInfo)>,
     transform_steps: &mut Vec<TransformStep>,
     mut add_transform_buffer: impl FnMut(ChannelInfo, String) -> usize,
@@ -315,6 +319,7 @@ fn meta_apply_single_transform(
                 num_colors,
                 num_deltas,
                 predictor: pred,
+                wp_header: header.wp_header.clone(),
             });
             channels.drain(begin_channel + 1..begin_channel + num_channels);
             channels[begin_channel].0 = inchan;
@@ -331,7 +336,7 @@ fn meta_apply_single_transform(
 #[instrument(level = "trace", ret)]
 pub fn meta_apply_transforms(
     channels: &[ChannelInfo],
-    transforms: &[headers::modular::Transform],
+    header: &headers::modular::GroupHeader,
 ) -> Result<(Vec<ModularBufferInfo>, Vec<TransformStep>)> {
     let mut buffer_info = vec![];
     let mut transform_steps = vec![];
@@ -372,9 +377,10 @@ pub fn meta_apply_transforms(
     };
 
     // Apply transforms to the channel list.
-    for transform in transforms {
+    for transform in &header.transforms {
         meta_apply_single_transform(
             transform,
+            header,
             &mut channels,
             &mut transform_steps,
             &mut add_transform_buffer,
@@ -449,7 +455,7 @@ impl LocalTransformBuffer<'_> {
 pub fn meta_apply_local_transforms<'a, 'b>(
     channels_in: Vec<&'a mut ModularChannel>,
     buffer_storage: &'b mut Vec<LocalTransformBuffer<'a>>,
-    transforms: &[headers::modular::Transform],
+    header: &headers::modular::GroupHeader,
 ) -> Result<(Vec<&'b mut ModularChannel>, Vec<TransformStep>)> {
     let mut transform_steps = vec![];
 
@@ -473,9 +479,10 @@ pub fn meta_apply_local_transforms<'a, 'b>(
     };
 
     // Apply transforms to the channel list.
-    for transform in transforms {
+    for transform in &header.transforms {
         meta_apply_single_transform(
             transform,
+            header,
             &mut channels,
             &mut transform_steps,
             &mut add_transform_buffer,
@@ -636,6 +643,7 @@ impl TransformStep {
                 num_colors,
                 num_deltas,
                 predictor,
+                wp_header,
             } if *predictor != Predictor::Weighted && *predictor != Predictor::AverageAll => {
                 for b in buf_out.iter() {
                     assert_eq!(
@@ -656,6 +664,7 @@ impl TransformStep {
                         *num_colors,
                         *num_deltas,
                         *predictor,
+                        wp_header,
                     );
                 }
                 for (pos, buf) in buf_out.iter().zip(out_bufs.into_iter()) {

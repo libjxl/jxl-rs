@@ -14,7 +14,7 @@ use num_derive::FromPrimitive;
 
 use super::encodings;
 
-#[derive(UnconditionalCoder, Debug, PartialEq)]
+#[derive(UnconditionalCoder, Debug, PartialEq, Clone)]
 pub struct WeightedHeader {
     #[all_default]
     pub all_default: bool,

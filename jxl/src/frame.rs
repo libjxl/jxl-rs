@@ -29,6 +29,7 @@ use color_correlation_map::ColorCorrelationParams;
 use group::decode_vardct_group;
 use modular::{decode_hf_metadata, decode_vardct_lf};
 use modular::{FullModularImage, ModularStreamId, Tree};
+use quant_weights::DequantMatrices;
 use quantizer::LfQuantFactors;
 use quantizer::QuantizerParams;
 use transform_map::INVALID_TRANSFORM;
@@ -38,6 +39,7 @@ mod coeff_order;
 pub mod color_correlation_map;
 mod group;
 pub mod modular;
+mod quant_weights;
 mod quantizer;
 pub mod transform_map;
 
@@ -71,6 +73,8 @@ pub struct PassState {
 pub struct HfGlobalState {
     num_histograms: u32,
     passes: Vec<PassState>,
+    #[allow(dead_code)]
+    dequant_matrices: DequantMatrices,
 }
 
 #[derive(Debug)]
@@ -412,10 +416,8 @@ impl Frame {
             return Ok(());
         }
         let lf_global = self.lf_global.as_mut().unwrap();
+        let dequant_matrices = DequantMatrices::decode(&self.header, lf_global, br)?;
         let block_context_map = lf_global.block_context_map.as_mut().unwrap();
-        if br.read(1)? == 0 {
-            todo!("Custom quant matrix decoding is not implemented")
-        }
         let num_histo_bits = self.header.num_groups().ceil_log2();
         let num_histograms: u32 = br.read(num_histo_bits)? as u32 + 1;
         debug!(
@@ -434,7 +436,7 @@ impl Frame {
             debug!(used_orders);
             let coeff_orders = decode_coeff_orders(used_orders, br)?;
             assert_eq!(coeff_orders.len(), 3 * coeff_order::NUM_ORDERS);
-            let num_contexts = block_context_map.num_ac_contexts();
+            let num_contexts = num_histograms as usize * block_context_map.num_ac_contexts();
             debug!(
                 "Deconding histograms for pass {} with {} contexts",
                 i, num_contexts
@@ -448,6 +450,7 @@ impl Frame {
         self.hf_global = Some(HfGlobalState {
             num_histograms,
             passes,
+            dequant_matrices,
         });
         Ok(())
     }
@@ -501,6 +504,8 @@ impl Frame {
 
     pub fn finalize(mut self) -> Result<Option<DecoderState>> {
         #[cfg(feature = "debug_tools")]
+        // TODO(firsching): consider options to make it dump selectively only the pgm or the numpy,
+        // or move pgm and or numpy encoding out of debug_tools
         {
             let saved_frames: Vec<Box<SaveStage<i32>>> = self
                 .render_pipeline
@@ -510,6 +515,15 @@ impl Frame {
                 .filter_map(|x| x.downcast().ok())
                 .collect();
             std::fs::create_dir_all("/tmp/jxl-debug/").unwrap();
+
+            let frames_for_numpy: Vec<crate::image::ImageRect<'_, i32>> = saved_frames
+                .iter()
+                .map(|stage_box| stage_box.buffer().as_rect())
+                .collect();
+
+            let numpy_bytes = crate::enc::numpy::to_numpy(frames_for_numpy);
+            std::fs::write("/tmp/jxl-debug/decoded.npy", numpy_bytes).unwrap();
+
             if let [r, g, b] = &saved_frames[..] {
                 std::fs::write(
                     "/tmp/jxl-debug/decoded.ppm",
@@ -530,6 +544,7 @@ impl Frame {
                 }
             }
         }
+
         if self.header.can_be_referenced {
             // TODO(firsching): actually use real reference images here, instead of setting it
             // to a blank image here, once we can decode images.
