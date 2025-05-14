@@ -673,7 +673,7 @@ pub fn decode_hf_metadata(
                 return Err(Error::InvalidEpfValue(epf_val));
             }
             epf_map_rect.row(y)[x] = epf_val as u8;
-            if transform_map_rect.row(y)[x] != INVALID_TRANSFORM {
+            if transform_map_rect.row(y)[x] != HfTransformType::INVALID_TRANSFORM {
                 continue;
             }
             if num >= count {
@@ -681,7 +681,7 @@ pub fn decode_hf_metadata(
             }
             let raw_transform = transform_image.row(0)[num];
             let raw_quant = 1 + transform_image.row(1)[num].clamp(0, 255);
-            let transform_type = get_transform_type(raw_transform)?;
+            let transform_type = HfTransformType::from_usize(raw_transform as usize)?;
             let cx = covered_blocks_x(transform_type) as usize;
             let cy = covered_blocks_y(transform_type) as usize;
             let next_group = ((x / 32 + 1) * 32, (y / 32 + 1) * 32);

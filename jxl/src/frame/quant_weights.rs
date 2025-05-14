@@ -5,23 +5,24 @@
 
 #![allow(dead_code)]
 
-use std::sync::OnceLock;
+use std::{f32::consts::SQRT_2, sync::OnceLock};
 
-use enum_iterator::{cardinality, Sequence};
+use enum_iterator::Sequence;
 use half::f16;
 
 use crate::{
     bit_reader::BitReader,
     error::{
         Error::{
-            HfQuantFactorTooSmall, InvalidPredefinedTable, InvalidQuantEncoding,
+            HfQuantFactorTooSmall, InvalidDistanceBand, InvalidPredefinedTable,
+            InvalidQuantEncoding, InvalidQuantEncodingMode, InvalidQuantizationTableWeight,
             InvalidRawQuantTable,
         },
         Result,
     },
     frame::{
         modular::{decode::decode_modular_subbitstream, ModularChannel, ModularStreamId},
-        transform_map::{self, HfTransformType},
+        transform_map::{self, HfTransformType, NUM_HF_TRANSFORM_TYPES},
         LfGlobalState,
     },
     headers::{bit_depth::BitDepth, frame_header::FrameHeader},
@@ -39,8 +40,6 @@ pub const LF_QUANT: [f32; 3] = [
 const ALMOST_ZERO: f32 = 1e-8;
 
 const MAX_QUANT_TABLE_SIZE: usize = transform_map::MAX_COEFF_AREA;
-const NUM_PREDEFINED_TABLES: usize = 1;
-const CEIL_LOG2_NUM_PREDEFINED_TABLES: usize = 0;
 const LOG2_NUM_QUANT_MODES: usize = 3;
 pub struct DctQuantWeightParams {
     params: [[f32; Self::MAX_DISTANCE_BANDS]; 3],
@@ -133,8 +132,8 @@ impl QuantEncoding {
         let mode = br.read(LOG2_NUM_QUANT_MODES)? as u8;
         match mode {
             0 => {
-                let predefined = br.read(CEIL_LOG2_NUM_PREDEFINED_TABLES)? as u8;
-                if predefined as usize >= NUM_PREDEFINED_TABLES {
+                let predefined = br.read(0)? as u8;
+                if predefined as usize >= 1 {
                     return Err(InvalidPredefinedTable { predefined });
                 }
                 Ok(Self::Library { predefined })
@@ -280,8 +279,9 @@ impl QuantEncoding {
     }
 }
 
-#[derive(Sequence)]
+#[derive(Sequence, Clone, Copy)]
 enum QuantTable {
+    // Update QuantTable::VALUES when changing this!
     Dct,
     Identity,
     Dct2x2,
@@ -311,9 +311,44 @@ enum QuantTable {
     Dct128x256,
 }
 
-const NUM_QUANT_TABLES: usize = cardinality::<QuantTable>();
+const NUM_QUANT_TABLES: usize = QuantTable::VALUES.len();
 
 impl QuantTable {
+    pub const VALUES: [QuantTable; 17] = [
+        QuantTable::Dct,
+        QuantTable::Identity,
+        QuantTable::Dct2x2,
+        QuantTable::Dct4x4,
+        QuantTable::Dct16x16,
+        QuantTable::Dct32x32,
+        // QuantTable::Dct16x8
+        QuantTable::Dct8x16,
+        // QuantTable::Dct32x8
+        QuantTable::Dct8x32,
+        // QuantTable::Dct32x16
+        QuantTable::Dct16x32,
+        QuantTable::Dct4x8,
+        // QuantTable::Dct8x4
+        QuantTable::Afv0,
+        // QuantTable::Afv1
+        // QuantTable::Afv2
+        // QuantTable::Afv3
+        QuantTable::Dct64x64,
+        // QuantTable::Dct64x32,
+        QuantTable::Dct32x64,
+        QuantTable::Dct128x128,
+        // QuantTable::Dct128x64,
+        QuantTable::Dct64x128,
+        QuantTable::Dct256x256,
+        // QuantTable::Dct256x128,
+        QuantTable::Dct128x256,
+    ];
+    pub fn from_usize(idx: usize) -> Result<QuantTable> {
+        match QuantTable::VALUES.get(idx) {
+            Some(table) => Ok(*table),
+            None => Err(InvalidQuantEncodingMode),
+        }
+    }
     fn for_strategy(strategy: HfTransformType) -> QuantTable {
         match strategy {
             HfTransformType::DCT => QuantTable::Dct,
@@ -829,9 +864,8 @@ impl DequantMatrices {
             ]),
         }
     }
-    pub fn library() -> &'static [QuantEncoding; NUM_PREDEFINED_TABLES * NUM_QUANT_TABLES] {
-        static QUANTS: OnceLock<[QuantEncoding; NUM_PREDEFINED_TABLES * NUM_QUANT_TABLES]> =
-            OnceLock::new();
+    pub fn library() -> &'static [QuantEncoding; NUM_QUANT_TABLES] {
+        static QUANTS: OnceLock<[QuantEncoding; NUM_QUANT_TABLES]> = OnceLock::new();
         QUANTS.get_or_init(|| {
             [
                 DequantMatrices::dct(),
@@ -912,8 +946,327 @@ impl DequantMatrices {
 
     pub const TOTAL_TABLE_SIZE: usize = Self::SUM_REQUIRED_X_Y * BLOCK_SIZE * 3;
 
-    pub fn ensure_computed(&mut self, _acs_mask: u32) {
-        todo!();
+    pub fn ensure_computed(&mut self, acs_mask: u32) -> Result<()> {
+        let mut offsets = [0usize; NUM_QUANT_TABLES * 3 + 1];
+        let mut pos = 0usize;
+        for i in 0..NUM_QUANT_TABLES {
+            let num = DequantMatrices::REQUIRED_SIZE_X[i]
+                * DequantMatrices::REQUIRED_SIZE_Y[i]
+                * BLOCK_SIZE;
+            for c in 0..3 {
+                offsets[3 * i + c] = pos + c * num;
+            }
+            pos += 3 * num;
+        }
+        offsets[NUM_QUANT_TABLES] = pos;
+        let mut kind_mask = 0u32;
+        for i in 0..NUM_HF_TRANSFORM_TYPES {
+            if acs_mask & (1u32 << i) != 0 {
+                kind_mask |= 1u32 << QuantTable::for_strategy(HfTransformType::VALUES[i]) as u32;
+            }
+        }
+        let mut computed_kind_mask = 0u32;
+        for i in 0..NUM_HF_TRANSFORM_TYPES {
+            if self.computed_mask & (1u32 << i) != 0 {
+                computed_kind_mask |=
+                    1u32 << QuantTable::for_strategy(HfTransformType::VALUES[i]) as u32;
+            }
+        }
+        for table in 0..NUM_QUANT_TABLES {
+            if (1 << table) & computed_kind_mask != 0 {
+                continue;
+            }
+            if (1 << table) & !kind_mask != 0 {
+                continue;
+            }
+            match self.encodings[table] {
+                QuantEncoding::Library { predefined: _ } => {
+                    self.compute_quant_table(true, table)?
+                }
+                _ => self.compute_quant_table(false, table)?,
+            };
+        }
+        self.computed_mask |= acs_mask;
+        Ok(())
+    }
+    fn compute_quant_table(&mut self, library: bool, table_num: usize) -> Result<usize> {
+        let encoding = if library {
+            &DequantMatrices::library()[table_num]
+        } else {
+            &self.encodings[table_num]
+        };
+        let quant_table_idx = QuantTable::from_usize(table_num)? as usize;
+        let wrows = 8 * DequantMatrices::REQUIRED_SIZE_X[quant_table_idx];
+        let wcols = 8 * DequantMatrices::REQUIRED_SIZE_Y[quant_table_idx];
+        let num = wrows * wcols;
+        let mut weights = vec![0f32; 3 * num];
+        match encoding {
+            QuantEncoding::Library { .. } => {
+                // Library and copy quant encoding should get replaced by the actual
+                // parameters by the caller.
+                return Err(InvalidQuantEncodingMode);
+            }
+            QuantEncoding::Identity { xyb_weights } => {
+                for c in 0..3 {
+                    for i in 0..64 {
+                        weights[64 * c + i] = xyb_weights[c][0];
+                    }
+                    weights[64 * c + 1] = xyb_weights[c][1];
+                    weights[64 * c + 8] = xyb_weights[c][1];
+                    weights[64 * c + 9] = xyb_weights[c][2];
+                }
+            }
+            QuantEncoding::Dct2 { xyb_weights } => {
+                for (c, xyb_weight) in xyb_weights.iter().enumerate() {
+                    let start = c * 64;
+                    weights[start] = 0xBAD as f32;
+                    weights[start + 1] = xyb_weight[0];
+                    weights[start + 8] = xyb_weight[0];
+                    weights[start + 9] = xyb_weight[1];
+                    for y in 0..2 {
+                        for x in 0..2 {
+                            weights[start + y * 8 + x + 2] = xyb_weight[2];
+                            weights[start + (y + 2) * 8 + x] = xyb_weight[2];
+                        }
+                    }
+                    for y in 0..2 {
+                        for x in 0..2 {
+                            weights[start + (y + 2) * 8 + x + 2] = xyb_weight[3];
+                        }
+                    }
+                    for y in 0..4 {
+                        for x in 0..4 {
+                            weights[start + y * 8 + x + 4] = xyb_weight[4];
+                            weights[start + (y + 4) * 8 + x] = xyb_weight[4];
+                        }
+                    }
+                    for y in 0..4 {
+                        for x in 0..4 {
+                            weights[start + (y + 4) * 8 + x + 4] = xyb_weight[5];
+                        }
+                    }
+                }
+            }
+            QuantEncoding::Dct4 { params, xyb_mul } => {
+                let mut weights4x4 = [0f32; 3 * 4 * 4];
+                get_quant_weights(4, 4, params, &mut weights4x4)?;
+                for c in 0..3 {
+                    for y in 0..BLOCK_DIM {
+                        for x in 0..BLOCK_DIM {
+                            weights[c * num + y * BLOCK_DIM + x] =
+                                weights4x4[c * 16 + (y / 2) * 4 + (x / 2)];
+                        }
+                    }
+                    weights[c * num + 1] /= xyb_mul[c][0];
+                    weights[c * num + BLOCK_DIM] /= xyb_mul[c][0];
+                    weights[c * num + BLOCK_DIM + 1] /= xyb_mul[c][1];
+                }
+            }
+            QuantEncoding::Dct4x8 { params, xyb_mul } => {
+                let mut weights4x8 = [0f32; 3 * 4 * 8];
+                get_quant_weights(4, 8, params, &mut weights4x8)?;
+                for c in 0..3 {
+                    for y in 0..BLOCK_DIM {
+                        for x in 0..BLOCK_DIM {
+                            weights[c * num + y * BLOCK_DIM + x] =
+                                weights4x8[c * 32 + (y / 2) * 8 + x];
+                        }
+                    }
+                    weights[c * num + BLOCK_DIM] /= xyb_mul[c];
+                }
+            }
+            QuantEncoding::Dct { params } => {
+                get_quant_weights(wrows, wcols, params, &mut weights)?;
+            }
+            QuantEncoding::Raw { qtable, qtable_den } => {
+                if qtable.len() != 3 * num {
+                    return Err(InvalidRawQuantTable);
+                }
+                for i in 0..3 * num {
+                    weights[i] = 1f32 / (qtable_den * qtable[i] as f32);
+                }
+            }
+            QuantEncoding::Afv {
+                params4x8,
+                params4x4,
+                weights: afv_weights,
+            } => {
+                const FREQS: [f32; 16] = [
+                    0xBAD as f32,
+                    0xBAD as f32,
+                    0.8517778890324296,
+                    5.37778436506804,
+                    0xBAD as f32,
+                    0xBAD as f32,
+                    4.734747904497923,
+                    5.449245381693219,
+                    1.6598270267479331,
+                    4f32,
+                    7.275749096817861,
+                    10.423227632456525,
+                    2.662932286148962,
+                    7.630657783650829,
+                    8.962388608184032,
+                    12.97166202570235,
+                ];
+                let mut weights4x8 = [0f32; 3 * 4 * 8];
+                get_quant_weights(4, 8, params4x8, &mut weights4x8)?;
+                let mut weights4x4 = [0f32; 3 * 4 * 4];
+                get_quant_weights(4, 4, params4x4, &mut weights4x4)?;
+                const LO: f32 = 0.8517778890324296;
+                const HI: f32 = 12.97166202570235f32 - LO + 1e-6f32;
+                for c in 0..3 {
+                    let mut bands = [0f32; 4];
+                    bands[0] = afv_weights[c][5];
+                    if bands[0] < ALMOST_ZERO {
+                        return Err(InvalidDistanceBand(0, bands[0]));
+                    }
+                    for i in 1..4 {
+                        bands[i] = bands[i - 1] * mult(afv_weights[c][i + 5]);
+                        if bands[i] < ALMOST_ZERO {
+                            return Err(InvalidDistanceBand(i, bands[i]));
+                        }
+                    }
+
+                    {
+                        let start = c * 64;
+                        weights[start] = 1f32;
+                        let mut set = |x, y, val| {
+                            weights[start + y * 8 + x] = val;
+                        };
+                        set(0, 1, afv_weights[c][0]);
+                        set(1, 0, afv_weights[c][1]);
+                        set(0, 2, afv_weights[c][2]);
+                        set(2, 0, afv_weights[c][3]);
+                        set(2, 2, afv_weights[c][4]);
+
+                        for y in 0..4 {
+                            for x in 0..4 {
+                                if x < 2 && y < 2 {
+                                    continue;
+                                }
+                                let val = interpolate(FREQS[y * 4 + x] - LO, HI, &bands);
+                                set(2 * x, 2 * y, val);
+                            }
+                        }
+                    }
+
+                    for y in 0..BLOCK_DIM / 2 {
+                        for x in 0..BLOCK_DIM {
+                            if x == 0 && y == 0 {
+                                continue;
+                            }
+                            weights[c * num + (2 * y + 1) * BLOCK_DIM + x] =
+                                weights4x8[c * 32 + y * 8 + x];
+                        }
+                    }
+
+                    for y in 0..BLOCK_DIM / 2 {
+                        for x in 0..BLOCK_DIM {
+                            if x == 0 && y == 0 {
+                                continue;
+                            }
+                            weights[c * num + (2 * y) * BLOCK_DIM + 2 * x + 1] =
+                                weights4x4[c * 16 + y * 4 + x];
+                        }
+                    }
+                }
+            }
+        }
+        let pos = table_num * 3;
+        for (i, weight) in weights.iter().enumerate() {
+            if !(ALMOST_ZERO..=1.0 / ALMOST_ZERO).contains(weight) {
+                return Err(InvalidQuantizationTableWeight(*weight));
+            }
+            self.table[pos + i] = 1f32 / weight;
+            self.inv_table[pos + i] = *weight;
+        }
+        let (xs, ys) = coefficient_layout(
+            DequantMatrices::REQUIRED_SIZE_X[quant_table_idx],
+            DequantMatrices::REQUIRED_SIZE_Y[quant_table_idx],
+        );
+        for c in 0..3 {
+            for y in 0..ys {
+                for x in 0..xs {
+                    self.inv_table[pos + c * ys * xs * BLOCK_SIZE + y * BLOCK_DIM * xs + x] = 0f32;
+                }
+            }
+        }
+
+        Ok(0)
+    }
+}
+
+fn coefficient_layout(rows: usize, cols: usize) -> (usize, usize) {
+    (
+        if rows < cols { rows } else { cols },
+        if rows < cols { cols } else { rows },
+    )
+}
+
+fn get_quant_weights(
+    rows: usize,
+    cols: usize,
+    distance_bands: &DctQuantWeightParams,
+    out: &mut [f32],
+) -> Result<()> {
+    for c in 0..3 {
+        let mut bands = [0f32; DctQuantWeightParams::MAX_DISTANCE_BANDS];
+        bands[0] = distance_bands.params[c][0];
+        if bands[0] < ALMOST_ZERO {
+            return Err(InvalidDistanceBand(0, bands[0]));
+        }
+        for i in 1..distance_bands.num_bands {
+            bands[i] = bands[i - 1] * mult(distance_bands.params[c][i]);
+            if bands[i] < ALMOST_ZERO {
+                return Err(InvalidDistanceBand(i, bands[i]));
+            }
+        }
+        let scale = (distance_bands.num_bands - 1) as f32 / (SQRT_2 + 1e-6);
+        let rcpcol = scale / (cols - 1) as f32;
+        let rcprow = scale / (rows - 1) as f32;
+        for y in 0..rows {
+            let dy = y as f32 * rcprow;
+            let dy2 = dy * dy;
+            let mut l = 0;
+            for x in 0..cols {
+                let dx = (x + l) as f32 * rcpcol;
+                let scaled_distance = (dx * dx + dy2).sqrt();
+                let weight = if distance_bands.num_bands == 1 {
+                    bands[0]
+                } else {
+                    interpolate_vec(scaled_distance, &bands)
+                };
+                out[c * cols * rows + y * cols + x] = weight;
+                l = (l + 1) % 4;
+            }
+        }
+    }
+    Ok(())
+}
+
+fn interpolate_vec(scaled_pos: f32, array: &[f32]) -> f32 {
+    let idxf32 = scaled_pos.round();
+    let frac = scaled_pos - idxf32;
+    let idx = idxf32 as usize;
+    let a = array[idx];
+    let b = array[idx + 1];
+    (b / a).powf(frac) * a
+}
+
+fn interpolate(pos: f32, max: f32, array: &[f32]) -> f32 {
+    let scaled_pos = pos * (array.len() - 1) as f32 / max;
+    let idx = scaled_pos as usize;
+    let a = array[idx];
+    let b = array[idx + 1];
+    a * (b / a).powf(scaled_pos - idx as f32)
+}
+
+fn mult(v: f32) -> f32 {
+    if v > 0f32 {
+        1f32 + v
+    } else {
+        1f32 / (1f32 - v)
     }
 }
 
