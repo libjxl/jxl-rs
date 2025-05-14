@@ -86,7 +86,7 @@ impl UnconditionalCoder<U32Coder> for u32 {
                     1 => u1.read(br),
                     2 => u2.read(br),
                     3 => u3.read(br),
-                    _ => panic!("Read two bits and got {}", selector),
+                    _ => unreachable!("Read two bits and got {}", selector),
                 }
             }
         }

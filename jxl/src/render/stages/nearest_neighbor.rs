@@ -80,9 +80,10 @@ mod test {
                 let iy = y / 2;
                 let i = input[0].as_rect().row(iy)[ix];
                 let o = output[0].as_rect().row(y)[x];
-                if i != o {
-                    panic!("Mismatch at output position {x}x{y}: {i} vs output {o}");
-                }
+                assert_eq!(
+                    i, o,
+                    "mismatch at output position {x}x{y}: {i} vs output {o}"
+                );
             }
         }
 

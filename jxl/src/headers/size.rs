@@ -58,9 +58,9 @@ pub struct Preview {
     xsize: Option<u32>,
 }
 
-fn map_aspect_ratio(ysize: u32, ratio: AspectRatio) -> u32 {
+fn map_aspect_ratio<T: Fn() -> u32>(ysize: u32, ratio: AspectRatio, fallback: T) -> u32 {
     match ratio {
-        AspectRatio::Unknown => panic!("Invalid call to map_aspect_ratio"),
+        AspectRatio::Unknown => fallback(),
         AspectRatio::Ratio1Over1 => ysize,
         AspectRatio::Ratio12Over10 => (ysize as u64 * 12 / 10) as u32,
         AspectRatio::Ratio4Over3 => (ysize as u64 * 4 / 3) as u32,
@@ -81,15 +81,13 @@ impl Size {
     }
 
     pub fn xsize(&self) -> u32 {
-        if self.ratio == AspectRatio::Unknown {
+        map_aspect_ratio(self.ysize(), self.ratio, /* fallback */ || {
             if self.small {
                 self.xsize_div8.unwrap() * 8
             } else {
                 self.xsize.unwrap()
             }
-        } else {
-            map_aspect_ratio(self.ysize(), self.ratio)
-        }
+        })
     }
 }
 
@@ -103,14 +101,12 @@ impl Preview {
     }
 
     pub fn xsize(&self) -> u32 {
-        if self.ratio == AspectRatio::Unknown {
+        map_aspect_ratio(self.ysize(), self.ratio, /* fallback */ || {
             if self.div8 {
                 self.xsize_div8.unwrap() * 8
             } else {
                 self.xsize.unwrap()
             }
-        } else {
-            map_aspect_ratio(self.ysize(), self.ratio)
-        }
+        })
     }
 }

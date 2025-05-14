@@ -521,7 +521,7 @@ impl Frame {
                 .map(|stage_box| stage_box.buffer().as_rect())
                 .collect();
 
-            let numpy_bytes = crate::enc::numpy::to_numpy(frames_for_numpy);
+            let numpy_bytes = crate::enc::numpy::to_numpy(frames_for_numpy)?;
             std::fs::write("/tmp/jxl-debug/decoded.npy", numpy_bytes).unwrap();
 
             if let [r, g, b] = &saved_frames[..] {

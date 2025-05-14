@@ -367,30 +367,33 @@ impl<'a, T: ImageDataType> ImageRect<'a, T> {
     #[cfg(test)]
     pub fn check_equal(&self, other: ImageRect<T>) {
         assert_eq!(self.rect.size, other.rect.size);
+        let mismatch_info = |x: usize, y: usize| -> String {
+            let mut msg = format!(
+                "mismatch at position {x}x{y}, values {:?} and {:?}",
+                self.row(y)[x],
+                other.row(y)[x]
+            );
+            if self.rect.origin != (0, 0) {
+                msg = format!(
+                    "{}; position in ground truth {}x{}",
+                    msg,
+                    x + self.rect.origin.0,
+                    y + self.rect.origin.1
+                );
+            }
+            if other.rect.origin != (0, 0) {
+                msg = format!(
+                    "{}; position in checked img {}x{}",
+                    msg,
+                    x + other.rect.origin.0,
+                    y + other.rect.origin.1
+                );
+            }
+            msg
+        };
         for y in 0..self.rect.size.1 {
             for x in 0..self.rect.size.0 {
-                if self.row(y)[x] != other.row(y)[x] {
-                    let mut msg = format!(
-                        "mismatch at position {x}x{y}, values {:?} and {:?}",
-                        self.row(y)[x],
-                        other.row(y)[x]
-                    );
-                    if self.rect.origin != (0, 0) {
-                        msg = format!(
-                            "; position in ground truth {}x{}",
-                            x + self.rect.origin.0,
-                            y + self.rect.origin.1
-                        );
-                    }
-                    if other.rect.origin != (0, 0) {
-                        msg = format!(
-                            "; position in checked img {}x{}",
-                            x + other.rect.origin.0,
-                            y + other.rect.origin.1
-                        );
-                    }
-                    panic!("{}", msg);
-                }
+                assert_eq!(self.row(y)[x], other.row(y)[x], "{}", mismatch_info(x, y));
             }
         }
     }

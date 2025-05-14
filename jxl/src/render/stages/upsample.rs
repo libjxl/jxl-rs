@@ -18,13 +18,14 @@ pub struct Upsample<const N: usize, const SHIFT: u8> {
 
 impl<const N: usize, const SHIFT: u8> Upsample<N, SHIFT> {
     pub fn new(ups_factors: &CustomTransformData, channel: usize) -> Self {
+        const { assert!(SHIFT >= 1 && SHIFT <= 3) }
         const { assert!(1 << SHIFT == N) }
 
         let weights: &[f32] = match N {
             2 => &ups_factors.weights2,
             4 => &ups_factors.weights4,
             8 => &ups_factors.weights8,
-            _ => panic!("Unsupported upsampling factor"),
+            _ => unreachable!(),
         };
 
         let mut kernel = [[[[0.0; 5]; 5]; N]; N];
