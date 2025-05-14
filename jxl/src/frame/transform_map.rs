@@ -3,10 +3,8 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-use crate::{
-    error::{Error, Result},
-    BLOCK_DIM,
-};
+use crate::error::{Error::InvalidVarDCTTransform, Result};
+use crate::BLOCK_DIM;
 use enum_iterator::{cardinality, Sequence};
 
 pub const MAX_COEFF_BLOCKS: usize = 32;
@@ -62,10 +60,11 @@ pub enum HfTransformType {
     DCT128X256 = 26,
 }
 
-pub const INVALID_TRANSFORM: u8 = cardinality::<HfTransformType>() as u8;
+pub const NUM_HF_TRANSFORM_TYPES: usize = HfTransformType::VALUES.len();
 
-pub fn get_transform_type(raw_type: i32) -> Result<HfTransformType, Error> {
-    let lut: [HfTransformType; cardinality::<HfTransformType>()] = [
+impl HfTransformType {
+    pub const INVALID_TRANSFORM: u8 = cardinality::<HfTransformType>() as u8;
+    pub const VALUES: [HfTransformType; 27] = [
         HfTransformType::DCT,
         HfTransformType::IDENTITY,
         HfTransformType::DCT2X2,
@@ -94,10 +93,11 @@ pub fn get_transform_type(raw_type: i32) -> Result<HfTransformType, Error> {
         HfTransformType::DCT256X128,
         HfTransformType::DCT128X256,
     ];
-    if raw_type < 0 || raw_type >= INVALID_TRANSFORM.into() {
-        Err(Error::InvalidVarDCTTransform(raw_type))
-    } else {
-        Ok(lut[raw_type as usize])
+    pub fn from_usize(idx: usize) -> Result<HfTransformType> {
+        match HfTransformType::VALUES.get(idx) {
+            Some(transform) => Ok(*transform),
+            None => Err(InvalidVarDCTTransform(idx)),
+        }
     }
 }
 

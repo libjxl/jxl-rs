@@ -32,7 +32,7 @@ use modular::{FullModularImage, ModularStreamId, Tree};
 use quant_weights::DequantMatrices;
 use quantizer::LfQuantFactors;
 use quantizer::QuantizerParams;
-use transform_map::INVALID_TRANSFORM;
+use transform_map::HfTransformType;
 
 mod block_context_map;
 mod coeff_order;
@@ -202,7 +202,10 @@ impl Frame {
                 ytox_map: Image::new(size_color_tiles)?,
                 ytob_map: Image::new(size_color_tiles)?,
                 raw_quant_map: Image::new(size_blocks)?,
-                transform_map: Image::new_with_default(size_blocks, INVALID_TRANSFORM)?,
+                transform_map: Image::new_with_default(
+                    size_blocks,
+                    HfTransformType::INVALID_TRANSFORM,
+                )?,
                 epf_map: Image::new(size_blocks)?,
             })
         } else {

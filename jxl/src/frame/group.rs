@@ -67,7 +67,7 @@ pub fn decode_vardct_group(
             if !is_first_block {
                 continue;
             }
-            let transform_type = get_transform_type(transform_id as i32)?;
+            let transform_type = HfTransformType::from_usize(transform_id as usize)?;
             let cx = covered_blocks_x(transform_type) as usize;
             let cy = covered_blocks_y(transform_type) as usize;
             let shape_id = block_shape_id(transform_type) as usize;
