@@ -3,6 +3,7 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
+use crate::error::{Error, Result};
 use crate::image::ImageRect;
 
 fn numpy_header(xsize: usize, ysize: usize, num_channels: usize, num_frames: usize) -> Vec<u8> {
@@ -66,9 +67,9 @@ fn numpy_bytes(img_channels: &[ImageRect<'_, i32>]) -> Vec<u8> {
 /// The data will be represented as little-endian 32-bit floats ('<f4').
 /// The shape of the NumPy array will be (1, height, width, num_channels).
 ///
-pub fn to_numpy(frame: Vec<ImageRect<'_, i32>>) -> Vec<u8> {
+pub fn to_numpy(frame: Vec<ImageRect<'_, i32>>) -> Result<Vec<u8>> {
     if frame.is_empty() {
-        panic!("Input frame data is empty, cannot create .npy file.");
+        return Err(Error::NoFrames);
     }
     let size = frame[0].size();
     let (width, height) = size;
@@ -80,5 +81,5 @@ pub fn to_numpy(frame: Vec<ImageRect<'_, i32>>) -> Vec<u8> {
     // Consistent channel sizes are checked inside the call to `to_numpy_bytes`.
     npy_file_bytes.extend(numpy_bytes(&frame));
 
-    npy_file_bytes
+    Ok(npy_file_bytes)
 }

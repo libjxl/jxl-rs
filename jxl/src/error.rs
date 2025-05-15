@@ -103,6 +103,8 @@ pub enum Error {
     // Generic arithmetic overflow. Prefer using other errors if possible.
     #[error("Arithmetic overflow")]
     ArithmeticOverflow,
+    #[error("Empty frame sequence")]
+    NoFrames,
     #[error(
         "Pipeline channel type mismatch: stage {0} channel {1}, expected {2:?} but found {3:?}"
     )]
