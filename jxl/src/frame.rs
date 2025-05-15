@@ -75,6 +75,7 @@ pub struct HfGlobalState {
     passes: Vec<PassState>,
     #[allow(dead_code)]
     dequant_matrices: DequantMatrices,
+    hf_coefficients: Option<Image<i32>>,
 }
 
 #[derive(Debug)]
@@ -133,6 +134,7 @@ pub struct HfMetadata {
     raw_quant_map: Image<i32>,
     transform_map: Image<u8>,
     epf_map: Image<u8>,
+    used_hf_types: u32,
 }
 
 pub struct Frame {
@@ -207,6 +209,7 @@ impl Frame {
                     HfTransformType::INVALID_TRANSFORM,
                 )?,
                 epf_map: Image::new(size_blocks)?,
+                used_hf_types: 0,
             })
         } else {
             None
@@ -419,7 +422,8 @@ impl Frame {
             return Ok(());
         }
         let lf_global = self.lf_global.as_mut().unwrap();
-        let dequant_matrices = DequantMatrices::decode(&self.header, lf_global, br)?;
+        let mut dequant_matrices = DequantMatrices::decode(&self.header, lf_global, br)?;
+        dequant_matrices.ensure_computed(self.hf_meta.as_ref().unwrap().used_hf_types)?;
         let block_context_map = lf_global.block_context_map.as_mut().unwrap();
         let num_histo_bits = self.header.num_groups().ceil_log2();
         let num_histograms: u32 = br.read(num_histo_bits)? as u32 + 1;
@@ -451,10 +455,18 @@ impl Frame {
                 histograms,
             });
         }
+        let hf_coefficients = if passes.len() <= 1 {
+            None
+        } else {
+            let xs = FrameHeader::GROUP_DIM * FrameHeader::GROUP_DIM;
+            let ys = self.header.num_groups();
+            Some(Image::new((xs, ys))?)
+        };
         self.hf_global = Some(HfGlobalState {
             num_histograms,
             passes,
             dequant_matrices,
+            hf_coefficients,
         });
         Ok(())
     }
