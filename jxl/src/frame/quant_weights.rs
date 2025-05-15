@@ -14,15 +14,14 @@ use crate::{
     bit_reader::BitReader,
     error::{
         Error::{
-            HfQuantFactorTooSmall, InvalidDistanceBand, InvalidPredefinedTable,
-            InvalidQuantEncoding, InvalidQuantEncodingMode, InvalidQuantizationTableWeight,
-            InvalidRawQuantTable,
+            HfQuantFactorTooSmall, InvalidDistanceBand, InvalidQuantEncoding,
+            InvalidQuantEncodingMode, InvalidQuantizationTableWeight, InvalidRawQuantTable,
         },
         Result,
     },
     frame::{
         modular::{decode::decode_modular_subbitstream, ModularChannel, ModularStreamId},
-        transform_map::{self, HfTransformType, NUM_HF_TRANSFORM_TYPES},
+        transform_map::{self, HfTransformType},
         LfGlobalState,
     },
     headers::{bit_depth::BitDepth, frame_header::FrameHeader},
@@ -55,7 +54,7 @@ impl DctQuantWeightParams {
             num_bands: N,
         };
         for (params, values) in result.params.iter_mut().zip(values) {
-            params.copy_from_slice(values);
+            params[..values.len()].copy_from_slice(values);
         }
         result
     }
@@ -78,9 +77,7 @@ impl DctQuantWeightParams {
 
 #[allow(clippy::large_enum_variant)]
 pub enum QuantEncoding {
-    Library {
-        predefined: u8,
-    },
+    Library,
     // a.k.a. "Hornuss"
     Identity {
         xyb_weights: [[f32; 3]; 3],
@@ -131,13 +128,7 @@ impl QuantEncoding {
         required_size_y *= BLOCK_DIM;
         let mode = br.read(LOG2_NUM_QUANT_MODES)? as u8;
         match mode {
-            0 => {
-                let predefined = br.read(0)? as u8;
-                if predefined as usize >= 1 {
-                    return Err(InvalidPredefinedTable { predefined });
-                }
-                Ok(Self::Library { predefined })
-            }
+            0 => Ok(Self::Library),
             1 => {
                 if required_size != 1 {
                     return Err(InvalidQuantEncoding {
@@ -311,9 +302,8 @@ enum QuantTable {
     Dct128x256,
 }
 
-const NUM_QUANT_TABLES: usize = QuantTable::VALUES.len();
-
 impl QuantTable {
+    pub const CARDINALITY: usize = Self::VALUES.len();
     pub const VALUES: [QuantTable; 17] = [
         QuantTable::Dct,
         QuantTable::Identity,
@@ -864,8 +854,9 @@ impl DequantMatrices {
             ]),
         }
     }
-    pub fn library() -> &'static [QuantEncoding; NUM_QUANT_TABLES] {
-        static QUANTS: OnceLock<[QuantEncoding; NUM_QUANT_TABLES]> = OnceLock::new();
+
+    pub fn library() -> &'static [QuantEncoding; QuantTable::CARDINALITY] {
+        static QUANTS: OnceLock<[QuantEncoding; QuantTable::CARDINALITY]> = OnceLock::new();
         QUANTS.get_or_init(|| {
             [
                 DequantMatrices::dct(),
@@ -906,10 +897,10 @@ impl DequantMatrices {
         br: &mut BitReader,
     ) -> Result<Self> {
         let all_default = br.read(1)? == 1;
-        let mut encodings = Vec::with_capacity(NUM_QUANT_TABLES);
+        let mut encodings = Vec::with_capacity(QuantTable::CARDINALITY);
         if all_default {
-            for _ in 0..NUM_QUANT_TABLES {
-                encodings.push(QuantEncoding::Library { predefined: 0 })
+            for _ in 0..QuantTable::CARDINALITY {
+                encodings.push(QuantEncoding::Library)
             }
         } else {
             for (i, (&required_size_x, required_size_y)) in Self::REQUIRED_SIZE_X
@@ -936,10 +927,10 @@ impl DequantMatrices {
         })
     }
 
-    pub const REQUIRED_SIZE_X: [usize; NUM_QUANT_TABLES] =
+    pub const REQUIRED_SIZE_X: [usize; QuantTable::CARDINALITY] =
         [1, 1, 1, 1, 2, 4, 1, 1, 2, 1, 1, 8, 4, 16, 8, 32, 16];
 
-    pub const REQUIRED_SIZE_Y: [usize; NUM_QUANT_TABLES] =
+    pub const REQUIRED_SIZE_Y: [usize; QuantTable::CARDINALITY] =
         [1, 1, 1, 1, 2, 4, 2, 4, 4, 1, 1, 8, 8, 16, 16, 32, 32];
 
     pub const SUM_REQUIRED_X_Y: usize = 2056;
@@ -947,9 +938,9 @@ impl DequantMatrices {
     pub const TOTAL_TABLE_SIZE: usize = Self::SUM_REQUIRED_X_Y * BLOCK_SIZE * 3;
 
     pub fn ensure_computed(&mut self, acs_mask: u32) -> Result<()> {
-        let mut offsets = [0usize; NUM_QUANT_TABLES * 3 + 1];
+        let mut offsets = [0usize; QuantTable::CARDINALITY * 3 + 1];
         let mut pos = 0usize;
-        for i in 0..NUM_QUANT_TABLES {
+        for i in 0..QuantTable::CARDINALITY {
             let num = DequantMatrices::REQUIRED_SIZE_X[i]
                 * DequantMatrices::REQUIRED_SIZE_Y[i]
                 * BLOCK_SIZE;
@@ -958,31 +949,29 @@ impl DequantMatrices {
             }
             pos += 3 * num;
         }
-        offsets[NUM_QUANT_TABLES] = pos;
+        offsets[QuantTable::CARDINALITY] = pos;
         let mut kind_mask = 0u32;
-        for i in 0..NUM_HF_TRANSFORM_TYPES {
+        for i in 0..HfTransformType::CARDINALITY {
             if acs_mask & (1u32 << i) != 0 {
                 kind_mask |= 1u32 << QuantTable::for_strategy(HfTransformType::VALUES[i]) as u32;
             }
         }
         let mut computed_kind_mask = 0u32;
-        for i in 0..NUM_HF_TRANSFORM_TYPES {
+        for i in 0..HfTransformType::CARDINALITY {
             if self.computed_mask & (1u32 << i) != 0 {
                 computed_kind_mask |=
                     1u32 << QuantTable::for_strategy(HfTransformType::VALUES[i]) as u32;
             }
         }
-        for table in 0..NUM_QUANT_TABLES {
-            if (1 << table) & computed_kind_mask != 0 {
+        for table in 0..QuantTable::CARDINALITY {
+            if (1u32 << table) & computed_kind_mask != 0 {
                 continue;
             }
-            if (1 << table) & !kind_mask != 0 {
+            if (1u32 << table) & !kind_mask != 0 {
                 continue;
             }
             match self.encodings[table] {
-                QuantEncoding::Library { predefined: _ } => {
-                    self.compute_quant_table(true, table)?
-                }
+                QuantEncoding::Library => self.compute_quant_table(true, table)?,
                 _ => self.compute_quant_table(false, table)?,
             };
         }
@@ -1001,7 +990,7 @@ impl DequantMatrices {
         let num = wrows * wcols;
         let mut weights = vec![0f32; 3 * num];
         match encoding {
-            QuantEncoding::Library { .. } => {
+            QuantEncoding::Library => {
                 // Library and copy quant encoding should get replaced by the actual
                 // parameters by the caller.
                 return Err(InvalidQuantEncodingMode);
@@ -1176,6 +1165,7 @@ impl DequantMatrices {
         let pos = table_num * 3;
         for (i, weight) in weights.iter().enumerate() {
             if !(ALMOST_ZERO..=1.0 / ALMOST_ZERO).contains(weight) {
+                println!("weight index {} is {}", i, *weight);
                 return Err(InvalidQuantizationTableWeight(*weight));
             }
             self.table[pos + i] = 1f32 / weight;
@@ -1270,14 +1260,19 @@ fn mult(v: f32) -> f32 {
     }
 }
 
-#[test]
-fn check_required_x_y() {
-    assert_eq!(
-        DequantMatrices::SUM_REQUIRED_X_Y,
-        DequantMatrices::REQUIRED_SIZE_X
-            .iter()
-            .zip(DequantMatrices::REQUIRED_SIZE_Y)
-            .map(|(&x, y)| x * y)
-            .sum()
-    );
+#[cfg(test)]
+mod test {
+    use crate::frame::quant_weights::DequantMatrices;
+
+    #[test]
+    fn check_required_x_y() {
+        assert_eq!(
+            DequantMatrices::SUM_REQUIRED_X_Y,
+            DequantMatrices::REQUIRED_SIZE_X
+                .iter()
+                .zip(DequantMatrices::REQUIRED_SIZE_Y)
+                .map(|(&x, y)| x * y)
+                .sum()
+        );
+    }
 }

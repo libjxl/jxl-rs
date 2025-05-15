@@ -5,14 +5,13 @@
 
 use crate::error::{Error::InvalidVarDCTTransform, Result};
 use crate::BLOCK_DIM;
-use enum_iterator::{cardinality, Sequence};
 
 pub const MAX_COEFF_BLOCKS: usize = 32;
 pub const MAX_BLOCK_DIM: usize = BLOCK_DIM * MAX_COEFF_BLOCKS;
 pub const MAX_COEFF_AREA: usize = MAX_BLOCK_DIM * MAX_BLOCK_DIM;
 
 #[allow(clippy::upper_case_acronyms)]
-#[derive(Copy, Clone, Debug, PartialEq, Sequence)]
+#[derive(Copy, Clone, Debug, PartialEq)]
 pub enum HfTransformType {
     // Regular block size DCT
     DCT = 0,
@@ -60,10 +59,9 @@ pub enum HfTransformType {
     DCT128X256 = 26,
 }
 
-pub const NUM_HF_TRANSFORM_TYPES: usize = HfTransformType::VALUES.len();
-
 impl HfTransformType {
-    pub const INVALID_TRANSFORM: u8 = cardinality::<HfTransformType>() as u8;
+    pub const INVALID_TRANSFORM: u8 = Self::CARDINALITY as u8;
+    pub const CARDINALITY: usize = Self::VALUES.len();
     pub const VALUES: [HfTransformType; 27] = [
         HfTransformType::DCT,
         HfTransformType::IDENTITY,
@@ -102,21 +100,21 @@ impl HfTransformType {
 }
 
 pub fn covered_blocks_x(transform: HfTransformType) -> u32 {
-    let lut: [u32; cardinality::<HfTransformType>()] = [
+    let lut: [u32; HfTransformType::CARDINALITY] = [
         1, 1, 1, 1, 2, 4, 1, 2, 1, 4, 2, 4, 1, 1, 1, 1, 1, 1, 8, 4, 8, 16, 8, 16, 32, 16, 32,
     ];
     lut[transform as usize]
 }
 
 pub fn covered_blocks_y(transform: HfTransformType) -> u32 {
-    let lut: [u32; cardinality::<HfTransformType>()] = [
+    let lut: [u32; HfTransformType::CARDINALITY] = [
         1, 1, 1, 1, 2, 4, 2, 1, 4, 1, 4, 2, 1, 1, 1, 1, 1, 1, 8, 8, 4, 16, 16, 8, 32, 32, 16,
     ];
     lut[transform as usize]
 }
 
 pub fn block_shape_id(transform: HfTransformType) -> u32 {
-    let lut: [u32; cardinality::<HfTransformType>()] = [
+    let lut: [u32; HfTransformType::CARDINALITY] = [
         0, 1, 1, 1, 2, 3, 4, 4, 5, 5, 6, 6, 1, 1, 1, 1, 1, 1, 7, 8, 8, 9, 10, 10, 11, 12, 12,
     ];
     lut[transform as usize]

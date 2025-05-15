@@ -86,8 +86,6 @@ pub enum Error {
     InvalidPermutationSize { size: u32, skip: u32, end: u32 },
     #[error("Invalid permutation: Lehmer code {lehmer} out of bounds in permutation of size {size} at index {idx}")]
     InvalidPermutationLehmerCode { size: u32, idx: u32, lehmer: u32 },
-    #[error("Invalid predefined table {predefined}")]
-    InvalidPredefinedTable { predefined: u8 },
     #[error("Invalid quant encoding mode")]
     InvalidQuantEncodingMode,
     #[error("Invalid quant encoding with mode {mode} and required size {required_size}")]
