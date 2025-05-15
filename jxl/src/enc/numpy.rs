@@ -41,7 +41,7 @@ fn numpy_header(xsize: usize, ysize: usize, num_channels: usize, num_frames: usi
     header
 }
 
-fn numpy_bytes(image_data: ImageData<i32>, num_channels: usize) -> Vec<u8> {
+fn numpy_bytes(image_data: ImageData<f32>, num_channels: usize) -> Vec<u8> {
     let mut ret = vec![];
     let size = image_data.size;
     let (width, height) = size;
@@ -52,7 +52,7 @@ fn numpy_bytes(image_data: ImageData<i32>, num_channels: usize) -> Vec<u8> {
         for channel in &frame.channels {
             assert_eq!(channel.size(), size);
         }
-        let channel_rects: &Vec<ImageRect<'_, i32>> =
+        let channel_rects: &Vec<ImageRect<'_, f32>> =
             &frame.channels.iter().map(|im| im.as_rect()).collect();
 
         ret.extend(
@@ -62,7 +62,7 @@ fn numpy_bytes(image_data: ImageData<i32>, num_channels: usize) -> Vec<u8> {
                         (0..num_channels).map(move |c| channel_rects[c].row(y)[x])
                     })
                 })
-                .flat_map(|x| ((x.clamp(0, 255) as f32) / 255.0f32).to_le_bytes()),
+                .flat_map(|x| (x.clamp(0.0, 255.0) / 255.0f32).to_le_bytes()),
         );
     }
     ret
@@ -72,7 +72,7 @@ fn numpy_bytes(image_data: ImageData<i32>, num_channels: usize) -> Vec<u8> {
 /// The data will be represented as little-endian 32-bit floats ('<f4').
 /// The shape of the NumPy array will be (num_frames, height, width, num_channels).
 ///
-pub fn to_numpy(image_data: ImageData<i32>) -> Result<Vec<u8>> {
+pub fn to_numpy(image_data: ImageData<f32>) -> Result<Vec<u8>> {
     if image_data.frames.is_empty()
         || image_data.frames[0].channels.is_empty()
         || image_data.size.0 == 0
