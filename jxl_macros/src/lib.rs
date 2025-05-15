@@ -5,13 +5,14 @@
 
 extern crate proc_macro;
 
-use std::{fs, path::Path};
+use std::path::Path;
 
 use proc_macro::TokenStream;
 use proc_macro2::TokenStream as TokenStream2;
 use proc_macro_error::{abort, proc_macro_error};
 use quote::quote;
 use syn::{parse_macro_input, DeriveInput, Ident, Meta};
+use walkdir::WalkDir;
 
 fn get_bits(expr_call: &syn::ExprCall) -> syn::Expr {
     if let syn::Expr::Path(ep) = &*expr_call.func {
@@ -716,20 +717,26 @@ pub fn for_each_test_file(input: TokenStream) -> TokenStream {
 
     let mut tests = vec![];
 
-    for entry in fs::read_dir(test_dir).unwrap() {
+    for entry in WalkDir::new(&test_dir) {
         let entry = entry.unwrap();
         let path = entry.path();
         if path.extension().is_some_and(|ext| ext == "jxl") {
-            let filename = path.file_name().unwrap().to_string_lossy();
-            let test_name = format!("{}_{}", fn_name, filename.strip_suffix(".jxl").unwrap());
+            let pathname = path.to_string_lossy();
+            let relative_path = path
+                .strip_prefix(&test_dir)
+                .unwrap()
+                .to_string_lossy()
+                .replace('/', "__");
+            let test_name = format!(
+                "{}_{}",
+                fn_name,
+                relative_path.strip_suffix(".jxl").unwrap()
+            );
             let test_name = Ident::new(&test_name, fn_name.span());
             tests.push(quote! {
                 #[test]
                 fn #test_name() -> Result<(), Error> {
-                    #fn_name(&Path::new(env!("CARGO_MANIFEST_DIR"))
-                        .join("resources")
-                        .join("test")
-                        .join(#filename)
+                    #fn_name(&Path::new(#pathname)
                     )
                 }
             });
