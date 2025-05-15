@@ -14,6 +14,14 @@ use crate::{
 
 #[derive(Error, Debug)]
 pub enum Error {
+    #[error("Invalid raw quantization table")]
+    InvalidRawQuantTable,
+    #[error("Invalid distance band {0}: {1}")]
+    InvalidDistanceBand(usize, f32),
+    #[error("Invalid AFV bands")]
+    InvalidAFVBands,
+    #[error("Invalid quantization table weight: {0}")]
+    InvalidQuantizationTableWeight(f32),
     #[error("Read out of bounds")]
     OutOfBounds,
     #[error("Non-zero padding bits")]
@@ -80,10 +88,10 @@ pub enum Error {
     InvalidPermutationLehmerCode { size: u32, idx: u32, lehmer: u32 },
     #[error("Invalid predefined table {predefined}")]
     InvalidPredefinedTable { predefined: u8 },
+    #[error("Invalid quant encoding mode")]
+    InvalidQuantEncodingMode,
     #[error("Invalid quant encoding with mode {mode} and required size {required_size}")]
     InvalidQuantEncoding { mode: u8, required_size: usize },
-    #[error("Invalid raw quantization table")]
-    InvalidRawQuantTable,
     // FrameHeader format errors
     #[error("Invalid extra channel upsampling: upsampling: {0} dim_shift: {1} ec_upsampling: {2}")]
     InvalidEcUpsampling(u32, u32, u32),
@@ -195,7 +203,7 @@ pub enum Error {
     #[error("Invalid EPF sharpness param {0}")]
     InvalidEpfValue(i32),
     #[error("Invalid VarDCT transform type {0}")]
-    InvalidVarDCTTransform(i32),
+    InvalidVarDCTTransform(usize),
     #[error("Invalid VarDCT transform map")]
     InvalidVarDCTTransformMap,
     #[error("VarDCT transform overflows HF group")]
