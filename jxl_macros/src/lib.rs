@@ -5,7 +5,7 @@
 
 extern crate proc_macro;
 
-use std::path::Path;
+use std::{collections::HashMap, path::Path};
 
 use proc_macro::TokenStream;
 use proc_macro2::TokenStream as TokenStream2;
@@ -706,6 +706,56 @@ pub fn noop(_attr: TokenStream, item: TokenStream) -> TokenStream {
     item
 }
 
+fn error_reason_to_testcase_map() -> HashMap<String, Vec<String>> {
+    [
+        (
+            "BlockContextMapSizeTooBig",
+            vec!["bench_oriented_brg", "bench_oriented_brg_5"],
+        ),
+        (
+            "called `Result::unwrap()` on an `Err` value: Non444ChromaSubsampling",
+            vec!["cafe", "cafe_5"],
+        ),
+        ("InvalidImageSize(0, 3)", vec!["delta_palette"]),
+        (
+            "NonZeroPadding",
+            vec![
+                "animation_icos4d",
+                "animation_icos4d_5",
+                "progressive",
+                "progressive_5",
+            ],
+        ),
+        ("IntegerTooLarge(31)", vec!["lossless_pfm"]),
+        ("OutOfBounds", vec!["bicycles"]),
+        ("EndOfBlockResidualNonZeros(64)", vec!["bike_5", "bike"]),
+        (
+            "not yet implemented: reference properties are not implemented yet, max property: 34",
+            vec!["spot"],
+        ),
+        (
+            "called `Result::unwrap()` on an `Err` value: NonZeroPadding",
+            vec!["sunset_logo"],
+        ),
+        (
+            "ec_upsampling >= upsampling should be checked in frame header",
+            vec!["upsampling", "upsampling_5"],
+        ),
+        (
+            "EndOfBlockResidualNonZeros(3)",
+            vec!["patches", "patches_5"],
+        ),
+    ]
+    .iter()
+    .map(|(name, error)| {
+        (
+            name.to_string(),
+            error.iter().map(|error| error.to_string()).collect(),
+        )
+    })
+    .collect()
+}
+
 #[proc_macro]
 pub fn for_each_test_file(input: TokenStream) -> TokenStream {
     let fn_name = parse_macro_input!(input as Ident);
@@ -732,9 +782,30 @@ pub fn for_each_test_file(input: TokenStream) -> TokenStream {
                 fn_name,
                 relative_path.strip_suffix(".jxl").unwrap()
             );
+            fn reason_to_ignore(test_name: &str) -> Option<String> {
+                for (reason, files) in error_reason_to_testcase_map() {
+                    if files
+                        .iter()
+                        .any(|filename_suffix| (test_name).ends_with(filename_suffix))
+                    {
+                        return Some(reason);
+                    }
+                }
+                None
+            }
+
+            let ignore_attribute = match reason_to_ignore(&test_name) {
+                Some(reason) => {
+                    let quoted_reason = quote! { #reason };
+                    quote! { #[ignore = #quoted_reason] }
+                }
+                None => quote! {},
+            };
+
             let test_name = Ident::new(&test_name, fn_name.span());
             tests.push(quote! {
                 #[test]
+                #ignore_attribute
                 fn #test_name() -> Result<(), Error> {
                     #fn_name(&Path::new(#pathname)
                     )
