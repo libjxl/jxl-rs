@@ -726,7 +726,7 @@ pub fn for_each_test_file(input: TokenStream) -> TokenStream {
                 .strip_prefix(&test_dir)
                 .unwrap()
                 .to_string_lossy()
-                .replace('/', "__");
+                .replace('/', "_slash_");
             let test_name = format!(
                 "{}_{}",
                 fn_name,
