@@ -4,6 +4,7 @@
 // license that can be found in the LICENSE file.
 
 use std::collections::TryReserveError;
+use std::path::PathBuf;
 
 use thiserror::Error;
 
@@ -211,6 +212,14 @@ pub enum Error {
     InvalidNumNonZeros(usize, usize),
     #[error("Invalid AC: {0} nonzeros after decoding block")]
     EndOfBlockResidualNonZeros(usize),
+    #[error("File not found {0}")]
+    FileNotFound(PathBuf),
+    #[error("Failed to read input file")]
+    InputReadFailure,
+    #[error("Failed to write output file")]
+    OutputWriteFailure,
+    #[error("Output format not supported")]
+    OutputFormatNotSupported,
 }
 
 pub type Result<T, E = Error> = std::result::Result<T, E>;
