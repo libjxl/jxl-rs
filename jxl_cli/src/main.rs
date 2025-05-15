@@ -6,6 +6,8 @@
 use clap::Parser;
 use jxl::bit_reader::BitReader;
 use jxl::container::{ContainerParser, ParseEvent};
+use jxl::enc::{ImageData, ImageFrame};
+use jxl::error::Error;
 use jxl::frame::{DecoderState, Frame, Section};
 use jxl::headers::FileHeader;
 use jxl::icc::read_icc;
@@ -15,7 +17,7 @@ use std::path::PathBuf;
 
 use jxl::headers::JxlHeader;
 
-fn parse_jxl_codestream(data: &[u8]) -> Result<(), jxl::error::Error> {
+fn decode_jxl_codestream(data: &[u8]) -> Result<ImageData<i32>, Error> {
     let mut br = BitReader::new(data);
     let file_header = FileHeader::read(&mut br)?;
     println!(
@@ -26,6 +28,13 @@ fn parse_jxl_codestream(data: &[u8]) -> Result<(), jxl::error::Error> {
     if file_header.image_metadata.color_encoding.want_icc {
         let r = read_icc(&mut br)?;
         println!("found {}-byte ICC", r.len());
+    };
+    let mut image_data: ImageData<i32> = ImageData {
+        size: (
+            file_header.size.xsize() as usize,
+            file_header.size.ysize() as usize,
+        ),
+        frames: vec![],
     };
     let mut decoder_state = DecoderState::new(file_header);
     loop {
@@ -59,22 +68,56 @@ fn parse_jxl_codestream(data: &[u8]) -> Result<(), jxl::error::Error> {
             }
         }
 
-        if let Some(state) = frame.finalize()? {
+        let result = frame.finalize()?;
+        image_data.frames.push(ImageFrame {
+            size: image_data.size,
+            channels: result.1,
+        });
+        if let Some(state) = result.0 {
             decoder_state = state;
         } else {
             break;
         }
     }
 
-    Ok(())
+    Ok(image_data)
+}
+
+fn save_image(image_data: ImageData<i32>, output_filename: PathBuf) -> Result<(), Error> {
+    let fn_str: String = String::from(output_filename.to_string_lossy());
+    let mut output_bytes: Vec<u8> = vec![];
+    if fn_str.ends_with(".ppm") {
+        if image_data.frames.len() == 1 {
+            if let [r, g, b] = &image_data.frames[0].channels[..] {
+                output_bytes = jxl::enc::to_ppm_as_8bit(&[r.as_rect(), g.as_rect(), b.as_rect()]);
+            }
+        }
+    } else if fn_str.ends_with(".pgm") {
+        if image_data.frames.len() == 1 {
+            if let [g] = &image_data.frames[0].channels[..] {
+                output_bytes = g.as_rect().to_pgm_as_8bit();
+            }
+        }
+    } else if fn_str.ends_with(".npy") {
+        output_bytes = jxl::enc::numpy::to_numpy(image_data)?;
+    }
+    if output_bytes.is_empty() {
+        return Err(Error::OutputFormatNotSupported);
+    }
+    if std::fs::write(output_filename, output_bytes).is_err() {
+        Err(Error::OutputWriteFailure)
+    } else {
+        Ok(())
+    }
 }
 
 #[derive(Parser)]
 struct Opt {
     input: PathBuf,
+    output: PathBuf,
 }
 
-fn main() {
+fn main() -> Result<(), Error> {
     #[cfg(feature = "tracing-subscriber")]
     {
         use tracing_subscriber::{fmt, prelude::*, EnvFilter};
@@ -85,12 +128,12 @@ fn main() {
     }
 
     let opt = Opt::parse();
-    let filename = opt.input;
-    let mut file = match fs::File::open(filename) {
+    let input_filename = opt.input;
+    let mut file = match fs::File::open(input_filename.clone()) {
         Ok(file) => file,
         Err(err) => {
             println!("Cannot open file: {err}");
-            return;
+            return Err(Error::FileNotFound(input_filename));
         }
     };
 
@@ -103,7 +146,7 @@ fn main() {
             Ok(l) => l,
             Err(err) => {
                 println!("Cannot read data from file: {err}");
-                return;
+                return Err(Error::InputReadFailure);
             }
         };
         if chunk_size == 0 {
@@ -121,7 +164,7 @@ fn main() {
                 }
                 Err(err) => {
                     println!("Error parsing JXL codestream: {err}");
-                    return;
+                    return Err(err);
                 }
             }
         }
@@ -131,8 +174,6 @@ fn main() {
         buf_valid -= consumed;
     }
 
-    let res = parse_jxl_codestream(&codestream);
-    if let Err(err) = res {
-        println!("Error parsing JXL codestream: {}", err)
-    }
+    let image_data = decode_jxl_codestream(&codestream)?;
+    save_image(image_data, opt.output)
 }

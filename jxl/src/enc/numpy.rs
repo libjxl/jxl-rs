@@ -3,6 +3,7 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
+use crate::enc::ImageData;
 use crate::error::{Error, Result};
 use crate::image::ImageRect;
 
@@ -13,8 +14,8 @@ fn numpy_header(xsize: usize, ysize: usize, num_channels: usize, num_frames: usi
     // Construct the header dictionary string.
     // Note the trailing comma in the tuple and the space before the closing brace, and the newline.
     //
-    // TODO(firsching): shouldn't this be padded by "spaces ('x20') to make the total length of the magic
-    // string + 4 + HEADER_LEN be evenly divisible by 16"? see
+    // TODO(firsching): shouldn't this be padded by "spaces ('x20') to make the total length of
+    // the magic string + 4 + HEADER_LEN be evenly divisible by 16"? see
     // https://github.com/numpy/numpy/blob/main/doc/neps/nep-0001-npy-format.rst
     //
     // The dtype '<f4' signifies little-endian 32-bit float.
@@ -40,46 +41,54 @@ fn numpy_header(xsize: usize, ysize: usize, num_channels: usize, num_frames: usi
     header
 }
 
-fn numpy_bytes(img_channels: &[ImageRect<'_, i32>]) -> Vec<u8> {
-    if img_channels.is_empty() {
-        return Vec::new();
-    }
-
+fn numpy_bytes(image_data: ImageData<i32>, num_channels: usize) -> Vec<u8> {
     let mut ret = vec![];
-    let size = img_channels[0].size();
+    let size = image_data.size;
     let (width, height) = size;
 
-    for channel in img_channels {
-        assert_eq!(channel.size(), size)
-    }
+    for frame in image_data.frames {
+        assert_eq!(frame.size, size);
+        assert_eq!(frame.channels.len(), num_channels);
+        for channel in &frame.channels {
+            assert_eq!(channel.size(), size);
+        }
+        let channel_rects: &Vec<ImageRect<'_, i32>> =
+            &frame.channels.iter().map(|im| im.as_rect()).collect();
 
-    ret.extend(
-        (0..height)
-            .flat_map(|y| {
-                (0..width).flat_map(move |x| [0, 1, 2].map(move |c| img_channels[c].row(y)[x]))
-            })
-            .flat_map(|x| ((x.clamp(0, 255) as f32) / 255.0f32).to_le_bytes()),
-    );
+        ret.extend(
+            (0..height)
+                .flat_map(|y| {
+                    (0..width).flat_map(move |x| {
+                        (0..num_channels).map(move |c| channel_rects[c].row(y)[x])
+                    })
+                })
+                .flat_map(|x| ((x.clamp(0, 255) as f32) / 255.0f32).to_le_bytes()),
+        );
+    }
     ret
 }
 
-/// Converts frames to a Vec<u8> in .npy format.
+/// Converts image_data to a Vec<u8> in .npy format.
 /// The data will be represented as little-endian 32-bit floats ('<f4').
-/// The shape of the NumPy array will be (1, height, width, num_channels).
+/// The shape of the NumPy array will be (num_frames, height, width, num_channels).
 ///
-pub fn to_numpy(frame: Vec<ImageRect<'_, i32>>) -> Result<Vec<u8>> {
-    if frame.is_empty() {
+pub fn to_numpy(image_data: ImageData<i32>) -> Result<Vec<u8>> {
+    if image_data.frames.is_empty()
+        || image_data.frames[0].channels.is_empty()
+        || image_data.size.0 == 0
+        || image_data.size.1 == 0
+    {
         return Err(Error::NoFrames);
     }
-    let size = frame[0].size();
+    let size = image_data.size;
     let (width, height) = size;
-    let num_channels = frame.len();
-    let num_frames = 1;
+    let num_frames = image_data.frames.len();
+    let num_channels = image_data.frames[0].channels.len();
 
     let mut npy_file_bytes = Vec::new();
     npy_file_bytes.extend(numpy_header(width, height, num_channels, num_frames));
     // Consistent channel sizes are checked inside the call to `to_numpy_bytes`.
-    npy_file_bytes.extend(numpy_bytes(&frame));
+    npy_file_bytes.extend(numpy_bytes(image_data, num_channels));
 
     Ok(npy_file_bytes)
 }
