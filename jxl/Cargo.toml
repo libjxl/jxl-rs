@@ -23,8 +23,5 @@ rand = "0.8.5"
 rand_xorshift = "0.3.0"
 test-log = { version = "0.2.16", features = ["trace"] }
 
-[features]
-debug_tools = []
-
 [lints]
 workspace = true

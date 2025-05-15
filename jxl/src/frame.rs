@@ -502,49 +502,7 @@ impl Frame {
         )
     }
 
-    pub fn finalize(mut self) -> Result<Option<DecoderState>> {
-        #[cfg(feature = "debug_tools")]
-        // TODO(firsching): consider options to make it dump selectively only the pgm or the numpy,
-        // or move pgm and or numpy encoding out of debug_tools
-        {
-            let saved_frames: Vec<Box<SaveStage<i32>>> = self
-                .render_pipeline
-                .unwrap()
-                .into_stages()
-                .into_iter()
-                .filter_map(|x| x.downcast().ok())
-                .collect();
-            std::fs::create_dir_all("/tmp/jxl-debug/").unwrap();
-
-            let frames_for_numpy: Vec<crate::image::ImageRect<'_, i32>> = saved_frames
-                .iter()
-                .map(|stage_box| stage_box.buffer().as_rect())
-                .collect();
-
-            let numpy_bytes = crate::enc::numpy::to_numpy(frames_for_numpy)?;
-            std::fs::write("/tmp/jxl-debug/decoded.npy", numpy_bytes).unwrap();
-
-            if let [r, g, b] = &saved_frames[..] {
-                std::fs::write(
-                    "/tmp/jxl-debug/decoded.ppm",
-                    crate::image::debug_tools::to_ppm_as_8bit(&[
-                        r.buffer().as_rect(),
-                        g.buffer().as_rect(),
-                        b.buffer().as_rect(),
-                    ]),
-                )
-                .unwrap();
-            } else {
-                for (chan, c) in saved_frames.into_iter().enumerate() {
-                    std::fs::write(
-                        format!("/tmp/jxl-debug/decoded_{chan}.ppm"),
-                        c.buffer().as_rect().to_pgm_as_8bit(),
-                    )
-                    .unwrap();
-                }
-            }
-        }
-
+    pub fn finalize(mut self) -> Result<(Option<DecoderState>, Vec<Image<i32>>)> {
         if self.header.can_be_referenced {
             // TODO(firsching): actually use real reference images here, instead of setting it
             // to a blank image here, once we can decode images.
@@ -552,15 +510,30 @@ impl Frame {
                 Some(ReferenceFrame::blank(
                     self.header.width as usize,
                     self.header.height as usize,
-                    // Set num_channels to "3 + self.decoder_state.extra_channel_info().len()" here unconditionally for now.
+                    // Set num_channels to "3 + self.decoder_state.extra_channel_info().len()" here
+                    // unconditionally for now.
                     3 + self.decoder_state.extra_channel_info().len(),
                     self.header.save_before_ct,
                 )?);
         }
+
+        let saved_frames: Vec<Box<SaveStage<i32>>> = self
+            .render_pipeline
+            .unwrap()
+            .into_stages()
+            .into_iter()
+            .filter_map(|x| x.downcast().ok())
+            .collect();
+
+        let output_frames: Vec<Image<i32>> = saved_frames
+            .into_iter()
+            .map(|stage_box| stage_box.into_buffer())
+            .collect();
+
         Ok(if self.header.is_last {
-            None
+            (None, output_frames)
         } else {
-            Some(self.decoder_state)
+            (Some(self.decoder_state), output_frames)
         })
     }
 }
@@ -637,7 +610,7 @@ mod test {
 
     fn read_frames_from_path(path: &Path) -> Result<(), Error> {
         let data = std::fs::read(path).unwrap();
-        read_frames(data.as_slice(), |frame| frame.finalize())
+        read_frames(data.as_slice(), |frame| Ok(frame.finalize()?.0))
     }
 
     for_each_test_file!(read_frames_from_path);
