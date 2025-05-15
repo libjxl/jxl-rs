@@ -5,14 +5,13 @@
 
 extern crate proc_macro;
 
-use std::path::Path;
+use std::{fs, path::Path};
 
 use proc_macro::TokenStream;
 use proc_macro2::TokenStream as TokenStream2;
 use proc_macro_error::{abort, proc_macro_error};
 use quote::quote;
 use syn::{parse_macro_input, DeriveInput, Ident, Meta};
-use walkdir::WalkDir;
 
 fn get_bits(expr_call: &syn::ExprCall) -> syn::Expr {
     if let syn::Expr::Path(ep) = &*expr_call.func {
@@ -709,37 +708,40 @@ pub fn noop(_attr: TokenStream, item: TokenStream) -> TokenStream {
 #[proc_macro]
 pub fn for_each_test_file(input: TokenStream) -> TokenStream {
     let fn_name = parse_macro_input!(input as Ident);
-    let test_dir = Path::new(env!("CARGO_MANIFEST_DIR"))
+    let root_test_dir = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("..")
         .join("jxl")
         .join("resources")
         .join("test");
+    let conformance_test_dir = root_test_dir.join("conformance_test_images");
 
     let mut tests = vec![];
 
-    for entry in WalkDir::new(&test_dir) {
-        let entry = entry.unwrap();
-        let path = entry.path();
-        if path.extension().is_some_and(|ext| ext == "jxl") {
-            let pathname = path.to_string_lossy();
-            let relative_path = path
-                .strip_prefix(&test_dir)
-                .unwrap()
-                .to_string_lossy()
-                .replace('/', "_slash_");
-            let test_name = format!(
-                "{}_{}",
-                fn_name,
-                relative_path.strip_suffix(".jxl").unwrap()
-            );
-            let test_name = Ident::new(&test_name, fn_name.span());
-            tests.push(quote! {
-                #[test]
-                fn #test_name() -> Result<(), Error> {
-                    #fn_name(&Path::new(#pathname)
-                    )
-                }
-            });
+    for test_dir in [root_test_dir, conformance_test_dir] {
+        for entry in fs::read_dir(&test_dir).unwrap() {
+            let entry = entry.unwrap();
+            let path = entry.path();
+            if path.extension().is_some_and(|ext| ext == "jxl") {
+                let pathname = path.to_string_lossy();
+                let relative_path = path
+                    .strip_prefix(&test_dir)
+                    .unwrap()
+                    .to_string_lossy()
+                    .replace('/', "_slash_");
+                let test_name = format!(
+                    "{}_{}",
+                    fn_name,
+                    relative_path.strip_suffix(".jxl").unwrap()
+                );
+                let test_name = Ident::new(&test_name, fn_name.span());
+                tests.push(quote! {
+                    #[test]
+                    fn #test_name() -> Result<(), Error> {
+                        #fn_name(&Path::new(#pathname)
+                        )
+                    }
+                });
+            }
         }
     }
 
