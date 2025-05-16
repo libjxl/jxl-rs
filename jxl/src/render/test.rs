@@ -127,7 +127,7 @@ pub(super) fn test_stage_consistency<
             image_size,
             chunk_size,
         )
-        .unwrap_or_else(|_| panic!("error running pipeline with chunk size {}", chunk_size));
+        .unwrap_or_else(|_| panic!("error running pipeline with chunk size {chunk_size}"));
         stage = Some(s);
 
         for (o, bo) in output.iter().zip(base_output.iter()) {
