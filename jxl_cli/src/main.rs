@@ -17,7 +17,7 @@ use std::path::PathBuf;
 
 use jxl::headers::JxlHeader;
 
-fn decode_jxl_codestream(data: &[u8]) -> Result<ImageData<i32>, Error> {
+fn decode_jxl_codestream(data: &[u8]) -> Result<ImageData<f32>, Error> {
     let mut br = BitReader::new(data);
     let file_header = FileHeader::read(&mut br)?;
     println!(
@@ -29,7 +29,7 @@ fn decode_jxl_codestream(data: &[u8]) -> Result<ImageData<i32>, Error> {
         let r = read_icc(&mut br)?;
         println!("found {}-byte ICC", r.len());
     };
-    let mut image_data: ImageData<i32> = ImageData {
+    let mut image_data: ImageData<f32> = ImageData {
         size: (
             file_header.size.xsize() as usize,
             file_header.size.ysize() as usize,
@@ -83,7 +83,7 @@ fn decode_jxl_codestream(data: &[u8]) -> Result<ImageData<i32>, Error> {
     Ok(image_data)
 }
 
-fn save_image(image_data: ImageData<i32>, output_filename: PathBuf) -> Result<(), Error> {
+fn save_image(image_data: ImageData<f32>, output_filename: PathBuf) -> Result<(), Error> {
     let fn_str: String = String::from(output_filename.to_string_lossy());
     let mut output_bytes: Vec<u8> = vec![];
     if fn_str.ends_with(".ppm") {
