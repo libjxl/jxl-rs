@@ -38,6 +38,7 @@ pub fn decode_vardct_group(
     lf_global: &mut LfGlobalState,
     hf_global: &HfGlobalState,
     hf_meta: &HfMetadata,
+    quant_lf: &Image<u8>,
     on_output: &mut dyn FnMut(usize, usize, &Image<f32>) -> Result<()>,
     br: &mut BitReader,
 ) -> Result<(), Error> {
@@ -62,14 +63,13 @@ pub fn decode_vardct_group(
         Image::new(block_rect.size)?,
         Image::new(block_rect.size)?,
     ];
+    let quant_lf_rect = quant_lf.as_rect().rect(block_rect)?;
     let block_context_map = lf_global.block_context_map.as_mut().unwrap();
-    if block_context_map.num_lf_contexts > 1 {
-        todo!("Unsupported block context map");
-    }
     let context_offset = histogram_index * block_context_map.num_ac_contexts();
     for by in 0..block_rect.size.1 {
         for bx in 0..block_rect.size.0 {
             let raw_quant = raw_quant_map_rect.row(by)[bx] as u32;
+            let quant_lf = quant_lf_rect.row(by)[bx] as usize;
             let raw_transform_id = transform_map_rect.row(by)[bx];
             let transform_id = raw_transform_id & 127;
             let is_first_block = raw_transform_id >= 128;
@@ -94,11 +94,17 @@ pub fn decode_vardct_group(
                     shape_id
                 );
                 let predicted_nzeros = predict_num_nonzeros(&num_nzeros[c], bx, by);
-                let block_context = block_context_map.block_context(0, raw_quant, shape_id, c);
+                let block_context =
+                    block_context_map.block_context(quant_lf, raw_quant, shape_id, c);
                 let nonzero_context = block_context_map
                     .nonzero_context(predicted_nzeros, block_context)
                     + context_offset;
                 let mut nonzeros = reader.read(br, nonzero_context)? as usize;
+                trace!(
+                    "block ({bx},{by},{c}) predicted_nzeros: {predicted_nzeros} \
+			nzero_ctx: {nonzero_context} (offset: {context_offset}) \
+			nzeros: {nonzeros}"
+                );
                 if nonzeros + num_blocks > block_size {
                     return Err(Error::InvalidNumNonZeros(nonzeros, num_blocks));
                 }

@@ -445,6 +445,7 @@ impl Frame {
                 i, num_contexts
             );
             let histograms = Histograms::decode(num_contexts, br, true)?;
+            debug!("Found {} histograms", histograms.num_histograms());
             passes.push(PassState {
                 coeff_orders,
                 histograms,
@@ -497,6 +498,7 @@ impl Frame {
             info!("decoding VarDCT");
             let hf_global = self.hf_global.as_mut().unwrap();
             let hf_meta = self.hf_meta.as_mut().unwrap();
+            let quant_lf = self.quant_lf.as_mut().unwrap();
             decode_vardct_group(
                 group,
                 pass,
@@ -504,6 +506,7 @@ impl Frame {
                 lf_global,
                 hf_global,
                 hf_meta,
+                quant_lf,
                 &mut pass_to_pipeline,
                 br,
             )?;
