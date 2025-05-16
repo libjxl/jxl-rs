@@ -99,6 +99,11 @@ pub fn decode_vardct_group(
                     .nonzero_context(predicted_nzeros, block_context)
                     + context_offset;
                 let mut nonzeros = reader.read(br, nonzero_context)? as usize;
+                trace!(
+                    "block ({bx},{by},{c}) predicted_nzeros: {predicted_nzeros} \
+			nzero_ctx: {nonzero_context} (offset: {context_offset}) \
+			nzeros: {nonzeros}"
+                );
                 if nonzeros + num_blocks > block_size {
                     return Err(Error::InvalidNumNonZeros(nonzeros, num_blocks));
                 }
