@@ -11,7 +11,7 @@ use crate::{
     image::Image,
     util::tracing_wrappers::*,
     util::CeilLog2,
-    BLOCK_SIZE,
+    BLOCK_DIM, BLOCK_SIZE,
 };
 
 fn predict_num_nonzeros(nzeros_map: &Image<u32>, bx: usize, by: usize) -> usize {
@@ -29,6 +29,8 @@ fn predict_num_nonzeros(nzeros_map: &Image<u32>, bx: usize, by: usize) -> usize 
     }
 }
 
+#[allow(clippy::too_many_arguments)]
+#[allow(clippy::type_complexity)]
 pub fn decode_vardct_group(
     group: usize,
     pass: usize,
@@ -36,6 +38,7 @@ pub fn decode_vardct_group(
     lf_global: &mut LfGlobalState,
     hf_global: &HfGlobalState,
     hf_meta: &HfMetadata,
+    on_output: &mut dyn FnMut(usize, usize, &Image<f32>) -> Result<()>,
     br: &mut BitReader,
 ) -> Result<(), Error> {
     let num_histo_bits = hf_global.num_histograms.ceil_log2();
@@ -43,6 +46,12 @@ pub fn decode_vardct_group(
     debug!(?histogram_index);
     let mut reader = hf_global.passes[pass].histograms.make_reader(br)?;
     let block_rect = frame_header.block_group_rect(group);
+    let group_size = (block_rect.size.0 * BLOCK_DIM, block_rect.size.1 * BLOCK_DIM);
+    let pixels: [Image<f32>; 3] = [
+        Image::<f32>::new(group_size)?,
+        Image::<f32>::new(group_size)?,
+        Image::<f32>::new(group_size)?,
+    ];
     debug!(?block_rect);
     let transform_map = hf_meta.transform_map.as_rect();
     let transform_map_rect = transform_map.rect(block_rect)?;
@@ -118,6 +127,9 @@ pub fn decode_vardct_group(
         }
     }
     reader.check_final_state()?;
-    // TODO(szabadka): Add dequantization, chroma from luma, inverse dct and call render pipeline.
+    // TODO(szabadka): Add dequantization, chroma from luma and inverse dct.
+    for c in [0, 1, 2] {
+        on_output(c, group, &pixels[c])?;
+    }
     Ok(())
 }
