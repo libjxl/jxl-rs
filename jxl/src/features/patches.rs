@@ -500,7 +500,7 @@ impl PatchesDictionary {
             // Safe access using get() and unwrap_or().  No need for the assert.
             let node = self.patch_tree.get(tree_idx as usize).unwrap_or_else(|| {
                 // TODO(firsching): Handle panic differently?
-                panic!("Invalid tree_idx: {}", tree_idx);
+                panic!("Invalid tree_idx: {tree_idx}");
             });
 
             if y <= node.y_center {
