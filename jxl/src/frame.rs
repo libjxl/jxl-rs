@@ -445,6 +445,7 @@ impl Frame {
                 i, num_contexts
             );
             let histograms = Histograms::decode(num_contexts, br, true)?;
+            debug!("Found {} histograms", histograms.num_histograms());
             passes.push(PassState {
                 coeff_orders,
                 histograms,
