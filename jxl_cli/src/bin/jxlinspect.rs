@@ -132,7 +132,7 @@ fn parse_jxl_codestream(data: &[u8], verbose: bool) -> Result<(), jxl::error::Er
     }
     if verbose {
         // Verbose output: Use Debug trait to print the FileHeaders
-        println!("{:#?}", file_header);
+        println!("{file_header:#?}");
     }
     // TODO(firsching): handle frames which are blended together, also within animations.
     if let Some(ref animation) = file_header.image_metadata.animation {
@@ -211,7 +211,7 @@ fn main() {
     let verbose = matches.get_flag("verbose");
 
     if verbose {
-        println!("Processing file: {}", filename);
+        println!("Processing file: {filename}");
     }
 
     let mut file = match fs::File::open(filename) {

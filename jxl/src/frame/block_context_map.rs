@@ -74,7 +74,7 @@ impl BlockContextMap {
                 let mut v: Vec<i32> = vec![0; num_lf_thresholds];
                 for val in v.iter_mut() {
                     let uval = match br.read(2)? {
-                        0 => 4,
+                        0 => br.read(4)?,
                         1 => br.read(8)? + 16,
                         2 => br.read(16)? + 272,
                         _ => br.read(32)? + 65808,
@@ -88,14 +88,18 @@ impl BlockContextMap {
             let mut qf_thresholds: Vec<u32> = vec![0; num_qf_thresholds];
             for val in qf_thresholds.iter_mut() {
                 *val = match br.read(2)? {
-                    0 => 2,
+                    0 => br.read(2)?,
                     1 => br.read(3)? + 4,
                     2 => br.read(5)? + 12,
                     _ => br.read(8)? + 44,
-                } as u32;
+                } as u32
+                    + 1;
             }
             if num_lf_contexts * (num_qf_thresholds + 1) > 64 {
-                return Err(Error::BlockContextMapSizeTooBig);
+                return Err(Error::BlockContextMapSizeTooBig(
+                    num_lf_contexts,
+                    num_qf_thresholds,
+                ));
             }
             let context_map_size = 3 * NUM_ORDERS * num_lf_contexts * (num_qf_thresholds + 1);
             let context_map = decode_context_map(context_map_size, br)?;
