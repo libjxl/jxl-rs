@@ -191,8 +191,8 @@ fn meta_apply_single_transform(
                 c.0 = add_transform_buffer(
                     c.1,
                     format!(
-                        "RCT (op {:?} perm {:?}) starting at channel {}, input {}",
-                        op, perm, begin_channel, i
+                        "RCT (op {op:?} perm {perm:?}) starting at channel {begin_channel}, \
+			 input {i}"
                     ),
                 );
                 buf_in[i] = c.0;
@@ -298,15 +298,15 @@ fn meta_apply_single_transform(
             let pchan = add_transform_buffer(
                 pchan_info,
                 format!(
-                    "Palette for palette transform starting at channel {} with {} channels",
-                    begin_channel, num_channels
+                    "Palette for palette transform starting at channel {begin_channel} with \
+		     {num_channels} channels"
                 ),
             );
             let inchan = add_transform_buffer(
                 channels[begin_channel].1,
                 format!(
-                    "Pixel data for palette transform starting at channel {} with {} channels",
-                    begin_channel, num_channels
+                    "Pixel data for palette transform starting at channel {begin_channel} with \
+		     {num_channels} channels",
                 ),
             );
             transform_steps.push(TransformStep::Palette {
