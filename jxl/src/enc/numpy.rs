@@ -20,8 +20,8 @@ fn numpy_header(xsize: usize, ysize: usize, num_channels: usize, num_frames: usi
     //
     // The dtype '<f4' signifies little-endian 32-bit float.
     let header_dict_str = format!(
-        "{{'descr': '<f4', 'fortran_order': False, 'shape': ({}, {}, {}, {}), }}\n",
-        num_frames, ysize, xsize, num_channels
+        "{{'descr': '<f4', 'fortran_order': False, 'shape': \
+	 ({num_frames}, {ysize}, {xsize}, {num_channels}), }}\n"
     );
     let header_dict_len = header_dict_str.len();
     assert!(

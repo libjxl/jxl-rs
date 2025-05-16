@@ -150,12 +150,7 @@ pub fn read_pfm(b: &[u8]) -> Result<Vec<Image<f32>>, Error> {
     let channels = match line.trim() {
         "Pf" => 1,
         "PF" => 3,
-        &_ => {
-            return Err(Error::InvalidPFM(format!(
-                "invalid PFM type header {}",
-                line
-            )))
-        }
+        &_ => return Err(Error::InvalidPFM(format!("invalid PFM type header {line}"))),
     };
     line.clear();
     bf.read_line(&mut line)?;
@@ -164,16 +159,14 @@ pub fn read_pfm(b: &[u8]) -> Result<Vec<Image<f32>>, Error> {
         xres_str.trim().parse()?
     } else {
         return Err(Error::InvalidPFM(format!(
-            "invalid PFM resolution header {}",
-            line
+            "invalid PFM resolution header {line}",
         )));
     };
     let yres = if let Some(yres_str) = dims.next() {
         yres_str.trim().parse()?
     } else {
         return Err(Error::InvalidPFM(format!(
-            "invalid PFM resolution header {}",
-            line
+            "invalid PFM resolution header {line}",
         )));
     };
     line.clear();
