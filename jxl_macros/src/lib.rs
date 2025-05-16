@@ -210,6 +210,7 @@ struct U32 {
 }
 
 #[derive(Debug)]
+#[allow(clippy::large_enum_variant)]
 enum Coder {
     WithoutConfig,
     U32(U32),

@@ -182,12 +182,8 @@ mod test {
             let rel_error = abs_error / expected;
             assert!(
                 rel_error < 3e-5,
-                "base: {}, exp: {}, rel_error: {}, expected: {}, actual: {}",
-                base,
-                exp,
-                rel_error,
-                expected,
-                actual
+                "base: {base}, exp: {exp}, rel_error: {rel_error}, expected: {expected}, \
+		 actual: {actual}",
             );
             Ok(())
         });
