@@ -92,10 +92,14 @@ impl BlockContextMap {
                     1 => br.read(3)? + 4,
                     2 => br.read(5)? + 12,
                     _ => br.read(8)? + 44,
-                } as u32 + 1;
+                } as u32
+                    + 1;
             }
             if num_lf_contexts * (num_qf_thresholds + 1) > 64 {
-                return Err(Error::BlockContextMapSizeTooBig(num_lf_contexts, num_qf_thresholds));
+                return Err(Error::BlockContextMapSizeTooBig(
+                    num_lf_contexts,
+                    num_qf_thresholds,
+                ));
             }
             let context_map_size = 3 * NUM_ORDERS * num_lf_contexts * (num_qf_thresholds + 1);
             let context_map = decode_context_map(context_map_size, br)?;
