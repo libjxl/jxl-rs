@@ -71,7 +71,7 @@ impl WeightedHeader {
             1 => Ok(self.w1),
             2 => Ok(self.w2),
             3 => Ok(self.w3),
-            _ => Err(Error::OutOfBounds),
+            _ => unreachable!("WeightedHeader::w called with an out-of-bounds index: {}. This indicates a logical error in the calling code, which should ensure 'i' is within 0..=3.", i),
         }
     }
 }
