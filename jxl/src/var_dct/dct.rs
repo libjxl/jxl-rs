@@ -370,12 +370,37 @@ where
 }
 
 pub fn compute_scaled_dct<const ROWS: usize, const COLS: usize>(
-    _from: &[f32],
-    _from_stride: usize,
-    _to: &mut [f32],
-    _to_stride: usize,
-) {
-    todo!();
+    from: &[f32],
+    from_stride: usize,
+    to: &mut [f32],
+) where
+    DCT1DImpl<ROWS>: DCT1D,
+    DCT1DImpl<COLS>: DCT1D,
+{
+    let mut dct_buffer = [[0.0; COLS]; ROWS];
+    for y in 0..ROWS {
+        dct_buffer[y].copy_from_slice(&from[y * from_stride..y * from_stride + COLS]);
+    }
+    DCT1DImpl::<ROWS>::do_dct::<COLS>(&mut dct_buffer);
+    let mut transposed_dct_buffer = [[0.0; ROWS]; COLS];
+    #[allow(clippy::needless_range_loop)]
+    for y in 0..ROWS {
+        for x in 0..COLS {
+            transposed_dct_buffer[x][y] = dct_buffer[y][x];
+        }
+    }
+    DCT1DImpl::<COLS>::do_dct::<ROWS>(&mut transposed_dct_buffer);
+    if ROWS < COLS {
+        for y in 0..ROWS {
+            for x in 0..COLS {
+                to[y * COLS + x] = transposed_dct_buffer[x][y];
+            }
+        }
+    } else {
+        for y in 0..COLS {
+            to[y * ROWS..(y + 1) * ROWS].copy_from_slice(&transposed_dct_buffer[y]);
+        }
+    }
 }
 
 #[cfg(test)]

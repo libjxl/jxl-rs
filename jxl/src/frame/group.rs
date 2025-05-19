@@ -14,7 +14,7 @@ use crate::{
     image::{Image, Rect},
     util::{tracing_wrappers::*, CeilLog2},
     var_dct::{
-        dct::compute_scaled_dct,
+        dct::{compute_scaled_dct, DCT1DImpl, DCT1D},
         dct_scales::{dct_total_resample_scale, DctResampleScales, HasDctResampleScales},
         transform::*,
     },
@@ -39,8 +39,10 @@ fn reinterpreting_dct<
 ) where
     DctResampleScales<ROWS, DCT_ROWS>: HasDctResampleScales<ROWS>,
     DctResampleScales<COLS, DCT_COLS>: HasDctResampleScales<COLS>,
+    DCT1DImpl<ROWS>: DCT1D,
+    DCT1DImpl<COLS>: DCT1D,
 {
-    compute_scaled_dct::<ROWS, COLS>(input, input_stride, block, COLS);
+    compute_scaled_dct::<ROWS, COLS>(input, input_stride, block);
     if ROWS < COLS {
         for y in 0..ROWS {
             for x in 0..COLS {
