@@ -18,7 +18,7 @@ use crate::{
         bit_depth::BitDepth, extra_channels::ExtraChannelInfo, frame_header::FrameHeader,
         modular::GroupHeader, ImageMetadata, JxlHeader,
     },
-    image::{Image, Rect},
+    image::{Image, ImageRect, ImageRectMut, Rect},
     util::{tracing_wrappers::*, CeilLog2},
 };
 
@@ -666,6 +666,7 @@ pub fn decode_hf_metadata(
     let mut epf_map = hf_meta.epf_map.as_rect_mut();
     let mut epf_map_rect = epf_map.rect(r)?;
     let mut num: usize = 0;
+    let mut used_hf_types: u32 = 0;
     for y in 0..r.size.1 {
         for x in 0..r.size.0 {
             let epf_val = epf_image.row(y)[x];
@@ -681,6 +682,7 @@ pub fn decode_hf_metadata(
             }
             let raw_transform = transform_image.row(0)[num];
             let raw_quant = 1 + transform_image.row(1)[num].clamp(0, 255);
+            used_hf_types |= 1 << raw_transform;
             let transform_type = HfTransformType::from_usize(raw_transform as usize)?;
             let cx = covered_blocks_x(transform_type) as usize;
             let cy = covered_blocks_y(transform_type) as usize;
@@ -700,6 +702,26 @@ pub fn decode_hf_metadata(
                 }
             }
             num += 1;
+        }
+    }
+    hf_meta.used_hf_types |= used_hf_types;
+    Ok(())
+}
+
+pub fn fill_in_modular_rect(dst: &mut ImageRectMut<f32>, src: &ImageRect<i32>) -> Result<()> {
+    if src.size().0 != dst.size().0 || src.size().1 != dst.size().1 {
+        return Err(Error::CopyOfDifferentSize(
+            src.size().0,
+            src.size().1,
+            dst.size().0,
+            dst.size().1,
+        ));
+    }
+    let size = dst.size();
+    for i in 0..size.1 {
+        trace!("copying row {i} of {}", size.1);
+        for j in 0..size.0 {
+            dst.row(i)[j] = src.row(i)[j] as f32;
         }
     }
     Ok(())

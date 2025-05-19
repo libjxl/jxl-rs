@@ -16,7 +16,7 @@ use crate::{
         permutation::Permutation,
         FileHeader,
     },
-    image::Image,
+    image::{Image, Rect},
     render::{
         stages::SaveStage, RenderPipeline, RenderPipelineBuilder, SimpleRenderPipeline,
         SimpleRenderPipelineBuilder,
@@ -27,7 +27,7 @@ use block_context_map::BlockContextMap;
 use coeff_order::decode_coeff_orders;
 use color_correlation_map::ColorCorrelationParams;
 use group::decode_vardct_group;
-use modular::{decode_hf_metadata, decode_vardct_lf};
+use modular::{decode_hf_metadata, decode_vardct_lf, fill_in_modular_rect};
 use modular::{FullModularImage, ModularStreamId, Tree};
 use quant_weights::DequantMatrices;
 use quantizer::LfQuantFactors;
@@ -75,6 +75,7 @@ pub struct HfGlobalState {
     passes: Vec<PassState>,
     #[allow(dead_code)]
     dequant_matrices: DequantMatrices,
+    hf_coefficients: Option<Image<i32>>,
 }
 
 #[derive(Debug)]
@@ -133,6 +134,7 @@ pub struct HfMetadata {
     raw_quant_map: Image<i32>,
     transform_map: Image<u8>,
     epf_map: Image<u8>,
+    used_hf_types: u32,
 }
 
 pub struct Frame {
@@ -207,6 +209,7 @@ impl Frame {
                     HfTransformType::INVALID_TRANSFORM,
                 )?,
                 epf_map: Image::new(size_blocks)?,
+                used_hf_types: 0,
             })
         } else {
             None
@@ -419,7 +422,8 @@ impl Frame {
             return Ok(());
         }
         let lf_global = self.lf_global.as_mut().unwrap();
-        let dequant_matrices = DequantMatrices::decode(&self.header, lf_global, br)?;
+        let mut dequant_matrices = DequantMatrices::decode(&self.header, lf_global, br)?;
+        dequant_matrices.ensure_computed(self.hf_meta.as_ref().unwrap().used_hf_types)?;
         let block_context_map = lf_global.block_context_map.as_mut().unwrap();
         let num_histo_bits = self.header.num_groups().ceil_log2();
         let num_histograms: u32 = br.read(num_histo_bits)? as u32 + 1;
@@ -445,15 +449,24 @@ impl Frame {
                 i, num_contexts
             );
             let histograms = Histograms::decode(num_contexts, br, true)?;
+            debug!("Found {} histograms", histograms.num_histograms());
             passes.push(PassState {
                 coeff_orders,
                 histograms,
             });
         }
+        let hf_coefficients = if passes.len() <= 1 {
+            None
+        } else {
+            let xs = FrameHeader::GROUP_DIM * FrameHeader::GROUP_DIM;
+            let ys = self.header.num_groups();
+            Some(Image::new((xs, ys))?)
+        };
         self.hf_global = Some(HfGlobalState {
             num_histograms,
             passes,
             dequant_matrices,
+            hf_coefficients,
         });
         Ok(())
     }
@@ -469,7 +482,7 @@ impl Frame {
         );
 
         for i in 0..num_channels {
-            pipeline = pipeline.add_stage(SaveStage::<i32>::new(i, self.header.size())?)?;
+            pipeline = pipeline.add_stage(SaveStage::<f32>::new(i, self.header.size())?)?;
         }
         self.render_pipeline = Some(pipeline.build()?);
 
@@ -480,32 +493,57 @@ impl Frame {
     pub fn decode_hf_group(&mut self, group: usize, pass: usize, br: &mut BitReader) -> Result<()> {
         debug!(section_size = br.total_bits_available());
         let lf_global = self.lf_global.as_mut().unwrap();
-        if self.header.encoding == Encoding::VarDCT {
-            info!("decoding VarDCT");
-            let hf_global = self.hf_global.as_mut().unwrap();
-            let hf_meta = self.hf_meta.as_mut().unwrap();
-            decode_vardct_group(group, pass, &self.header, lf_global, hf_global, hf_meta, br)?;
-        }
-
-        let mut pass_to_pipeline = |chan: usize, g: usize, img: &Image<i32>| {
+        let mut pass_to_pipeline = |chan: usize, g: usize, img: &Image<f32>| {
             // TODO(veluca): figure out pass count and check group IDs. Also, investigate whether
             // reusing the `img` buffer would be possible.
             self.render_pipeline
                 .as_mut()
                 .unwrap()
-                .fill_input_channels(&[chan], g, 1, |rects| rects[0].copy_from(img.as_rect()))
+                .fill_input_channels(&[chan], g, 1, |rects| {
+                    rects[0].copy_from(img.as_rect().rect(Rect {
+                        origin: (0, 0),
+                        size: rects[0].size(),
+                    })?)
+                })
         };
-
+        if self.header.encoding == Encoding::VarDCT {
+            info!("decoding VarDCT");
+            let hf_global = self.hf_global.as_mut().unwrap();
+            let hf_meta = self.hf_meta.as_mut().unwrap();
+            let quant_lf = self.quant_lf.as_mut().unwrap();
+            decode_vardct_group(
+                group,
+                pass,
+                &self.header,
+                lf_global,
+                hf_global,
+                hf_meta,
+                quant_lf,
+                &mut pass_to_pipeline,
+                br,
+            )?;
+        }
+        let mut convert_and_pass_to_pipeline = |chan: usize, g: usize, img: &Image<i32>| {
+            // TODO(veluca): figure out pass count and check group IDs. Also, investigate whether
+            // reusing the `img` buffer would be possible.
+            // TODO(szabadka): Move converting to f32 into the render pipeline.
+            self.render_pipeline
+                .as_mut()
+                .unwrap()
+                .fill_input_channels(&[chan], g, 1, |rects| {
+                    fill_in_modular_rect(&mut rects[0], &img.as_rect())
+                })
+        };
         lf_global.modular_global.read_stream(
             ModularStreamId::ModularHF { group, pass },
             &self.header,
             &lf_global.tree,
-            Some(&mut pass_to_pipeline),
+            Some(&mut convert_and_pass_to_pipeline),
             br,
         )
     }
 
-    pub fn finalize(mut self) -> Result<(Option<DecoderState>, Vec<Image<i32>>)> {
+    pub fn finalize(mut self) -> Result<(Option<DecoderState>, Vec<Image<f32>>)> {
         if self.header.can_be_referenced {
             // TODO(firsching): actually use real reference images here, instead of setting it
             // to a blank image here, once we can decode images.
@@ -520,7 +558,7 @@ impl Frame {
                 )?);
         }
 
-        let saved_frames: Vec<Box<SaveStage<i32>>> = self
+        let saved_frames: Vec<Box<SaveStage<f32>>> = self
             .render_pipeline
             .unwrap()
             .into_stages()
@@ -528,7 +566,7 @@ impl Frame {
             .filter_map(|x| x.downcast().ok())
             .collect();
 
-        let output_frames: Vec<Image<i32>> = saved_frames
+        let output_frames: Vec<Image<f32>> = saved_frames
             .into_iter()
             .map(|stage_box| stage_box.into_buffer())
             .collect();
