@@ -136,8 +136,96 @@ impl TransformStepChunk {
                 buffers[*buf_in].buffer_grid[grid].mark_used();
                 buffers[*buf_pal].buffer_grid[0].mark_used();
             }
-            _ => {
-                todo!()
+            TransformStep::Palette { .. } => {
+                todo!("Unimplemented dep_ready for TransformStep::Palette with AverageAll / Weighted predictor")
+            }
+            TransformStep::HSqueeze { buf_in, buf_out } => {
+                {
+                    let (gx, gy) = self.grid_pos;
+                    let in_avg =
+                        Ref::map(buffers[buf_in[0]].buffer_grid[grid].data.borrow(), |x| {
+                            x.as_ref().unwrap()
+                        });
+                    let in_next_avg = if gx + 1 == buffers[buf_in[0]].grid_shape.0 {
+                        None
+                    } else {
+                        let next_avg_grid = buffers[buf_in[0]].get_grid_idx((gx + 1, gy));
+                        Some(Ref::map(
+                            buffers[buf_in[0]].buffer_grid[next_avg_grid].data.borrow(),
+                            |x| x.as_ref().unwrap(),
+                        ))
+                    };
+                    let in_res =
+                        Ref::map(buffers[buf_in[1]].buffer_grid[grid].data.borrow(), |x| {
+                            x.as_ref().unwrap()
+                        });
+                    let out_prev = if gx == 0 {
+                        None
+                    } else {
+                        let prev_out_grid = buffers[*buf_out].get_grid_idx((gx - 1, gy));
+                        Some(Ref::map(
+                            buffers[*buf_out].buffer_grid[prev_out_grid].data.borrow(),
+                            |x| x.as_ref().unwrap(),
+                        ))
+                    };
+
+                    with_buffers(buffers, &[*buf_out], grid, |mut bufs| {
+                        super::squeeze::do_hsqueeze_step(
+                            &in_avg,
+                            &in_res,
+                            &in_next_avg,
+                            &out_prev,
+                            &mut bufs,
+                        );
+                        Ok(())
+                    })?;
+                }
+                buffers[buf_in[0]].buffer_grid[grid].mark_used();
+                buffers[buf_in[1]].buffer_grid[grid].mark_used();
+            }
+            TransformStep::VSqueeze { buf_in, buf_out } => {
+                {
+                    let (gx, gy) = self.grid_pos;
+                    let in_avg =
+                        Ref::map(buffers[buf_in[0]].buffer_grid[grid].data.borrow(), |x| {
+                            x.as_ref().unwrap()
+                        });
+                    let in_next_avg = if gy + 1 == buffers[buf_in[0]].grid_shape.1 {
+                        None
+                    } else {
+                        let next_avg_grid = buffers[buf_in[0]].get_grid_idx((gx, gy + 1));
+                        Some(Ref::map(
+                            buffers[buf_in[0]].buffer_grid[next_avg_grid].data.borrow(),
+                            |x| x.as_ref().unwrap(),
+                        ))
+                    };
+                    let in_res =
+                        Ref::map(buffers[buf_in[1]].buffer_grid[grid].data.borrow(), |x| {
+                            x.as_ref().unwrap()
+                        });
+                    let out_prev = if gy == 0 {
+                        None
+                    } else {
+                        let prev_out_grid = buffers[*buf_out].get_grid_idx((gx, gy - 1));
+                        Some(Ref::map(
+                            buffers[*buf_out].buffer_grid[prev_out_grid].data.borrow(),
+                            |x| x.as_ref().unwrap(),
+                        ))
+                    };
+
+                    with_buffers(buffers, &[*buf_out], grid, |mut bufs| {
+                        super::squeeze::do_vsqueeze_step(
+                            &in_avg,
+                            &in_res,
+                            &in_next_avg,
+                            &out_prev,
+                            &mut bufs,
+                        );
+                        Ok(())
+                    })?;
+                }
+                buffers[buf_in[0]].buffer_grid[grid].mark_used();
+                buffers[buf_in[1]].buffer_grid[grid].mark_used();
             }
         };
 
@@ -671,8 +759,42 @@ impl TransformStep {
                     buffers[*pos] = buf;
                 }
             }
-            _ => {
-                todo!()
+            TransformStep::Palette { .. } => {
+                todo!("Unimplemented local_apply for TransformStep::Palette with AverageAll / Weighted predictor")
+            }
+            TransformStep::HSqueeze { buf_in, buf_out } => {
+                buffers[*buf_out].allocate_if_needed()?;
+                let mut out_buf = buffers[*buf_out].take();
+                let mut in_avg = buffers[buf_in[0]].take();
+                let mut in_res = buffers[buf_in[1]].take();
+                {
+                    let mut bufs: Vec<_> = vec![out_buf.borrow_mut()];
+                    super::squeeze::do_hsqueeze_step(
+                        in_avg.borrow_mut(),
+                        in_res.borrow_mut(),
+                        &None,
+                        &None,
+                        &mut bufs,
+                    );
+                }
+                buffers[*buf_out] = out_buf;
+            }
+            TransformStep::VSqueeze { buf_in, buf_out } => {
+                buffers[*buf_out].allocate_if_needed()?;
+                let mut out_buf = buffers[*buf_out].take();
+                let mut in_avg = buffers[buf_in[0]].take();
+                let mut in_res = buffers[buf_in[1]].take();
+                {
+                    let mut bufs: Vec<_> = vec![out_buf.borrow_mut()];
+                    super::squeeze::do_vsqueeze_step(
+                        in_avg.borrow_mut(),
+                        in_res.borrow_mut(),
+                        &None,
+                        &None,
+                        &mut bufs,
+                    );
+                }
+                buffers[*buf_out] = out_buf;
             }
         };
 
