@@ -12,13 +12,13 @@ use super::dct_scales::WcMultipliers;
 
 struct CoeffBundle<const N: usize, const SZ: usize>;
 
-struct DCT1DImpl<const SIZE: usize>;
-struct IDCT1DImpl<const SIZE: usize>;
+pub struct DCT1DImpl<const SIZE: usize>;
+pub struct IDCT1DImpl<const SIZE: usize>;
 
-trait DCT1D {
+pub trait DCT1D {
     fn do_dct<const COLUMNS: usize>(data: &mut [[f32; COLUMNS]]);
 }
-trait IDCT1D {
+pub trait IDCT1D {
     fn do_idct<const COLUMNS: usize>(data: &mut [[f32; COLUMNS]]);
 }
 
@@ -275,7 +275,7 @@ fn transpose<const ROWS: usize, const COLS: usize>(input: &[f32], output: &mut [
     }
 }
 
-fn dct2d<const ROWS: usize, const COLS: usize>(data: &mut [f32])
+pub fn dct2d<const ROWS: usize, const COLS: usize>(data: &mut [f32])
 where
     DCT1DImpl<ROWS>: DCT1D,
     DCT1DImpl<COLS>: DCT1D,
@@ -322,7 +322,7 @@ where
     transpose::<COLS, ROWS>(&transposed_data, data);
 }
 
-fn idct2d<const ROWS: usize, const COLS: usize>(data: &mut [f32])
+pub fn idct2d<const ROWS: usize, const COLS: usize>(data: &mut [f32])
 where
     IDCT1DImpl<ROWS>: IDCT1D,
     IDCT1DImpl<COLS>: IDCT1D,
