@@ -24,6 +24,8 @@ pub enum Error {
     InvalidQuantizationTableWeight(f32),
     #[error("Read out of bounds")]
     OutOfBounds,
+    #[error("Number of bits for peek too large")]
+    PeekTooLarge,
     #[error("Non-zero padding bits")]
     NonZeroPadding,
     #[error("Invalid signature {0:02x}{1:02x}, expected ff0a")]

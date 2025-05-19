@@ -219,7 +219,7 @@ impl Table {
         let mut code_lengths = vec![0u8; al_size];
 
         while symbol < al_size && space > 0 {
-            let idx = br.peek(5) as usize;
+            let idx = br.peek(5)? as usize;
             br.consume(table[idx].bits as usize)?;
             let code_len = table[idx].value as u8;
             if code_len < CODE_LENGTH_REPEAT_CODE {
@@ -416,7 +416,7 @@ impl Table {
                     if space <= 0 {
                         break;
                     }
-                    let idx = br.peek(4) as usize;
+                    let idx = br.peek(4)? as usize;
                     br.consume(STATIC_HUFF_BITS[idx] as usize)?;
                     let v = STATIC_HUFF_VALS[idx];
                     code_length_code_lengths[CODE_LENGTH_CODE_ORDER[i] as usize] = v;
@@ -438,13 +438,13 @@ impl Table {
     }
 
     pub fn read(&self, br: &mut BitReader) -> Result<u32> {
-        let mut pos = br.peek(TABLE_BITS) as usize;
+        let mut pos = br.peek(TABLE_BITS)? as usize;
         let mut n_bits = self.entries[pos].bits as usize;
         if n_bits > TABLE_BITS {
             br.consume(TABLE_BITS)?;
             n_bits -= TABLE_BITS;
             pos += self.entries[pos].value as usize;
-            pos += br.peek(n_bits) as usize;
+            pos += br.peek(n_bits)? as usize;
         }
         br.consume(self.entries[pos].bits as usize)?;
         Ok(self.entries[pos].value as u32)

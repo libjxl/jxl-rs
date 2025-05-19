@@ -454,7 +454,7 @@ impl Field {
                 let cfg_ty = coder.ty();
                 let cfg = coder.config(all_default_field);
                 let trc = quote! {
-                    crate::util::tracing_wrappers::trace!("Setting {} to {:?}. total_bits_read: {}, peek: {:08b}", stringify!(#ident), #ident, br.total_bits_read(), br.peek(8));
+                    crate::util::tracing_wrappers::trace!("Setting {} to {:?}. total_bits_read: {}, peek: {:08b}", stringify!(#ident), #ident, br.total_bits_read(), br.peek(8)?);
                 };
                 quote! {
                     let #ident = {
@@ -472,7 +472,7 @@ impl Field {
                 let cnd = condition.get_expr(all_default_field).unwrap();
                 let pretty_cnd = condition.get_pretty(all_default_field);
                 let trc = quote! {
-                    crate::util::tracing_wrappers::trace!("{} is {}, setting {} to {:?}. total_bits_read: {}, peek {:08b}", #pretty_cnd, #cnd, stringify!(#ident), #ident, br.total_bits_read(), br.peek(8));
+                    crate::util::tracing_wrappers::trace!("{} is {}, setting {} to {:?}. total_bits_read: {}, peek {:08b}", #pretty_cnd, #cnd, stringify!(#ident), #ident, br.total_bits_read(), br.peek(8)?);
                 };
                 quote! {
                     let #ident = {
@@ -492,7 +492,7 @@ impl Field {
                 let pretty_cnd = condition.get_pretty(all_default_field);
                 let default = &self.default;
                 let trc = quote! {
-                    crate::util::tracing_wrappers::trace!("{} is {}, setting {} to {:?}. total_bits_read: {}, peek {:08b}", #pretty_cnd, #cnd, stringify!(#ident), #ident, br.total_bits_read(), br.peek(8));
+                    crate::util::tracing_wrappers::trace!("{} is {}, setting {} to {:?}. total_bits_read: {}, peek {:08b}", #pretty_cnd, #cnd, stringify!(#ident), #ident, br.total_bits_read(), br.peek(8)?);
                 };
 
                 let (read_fn, default) = if let Some(def) = &self.default_element {

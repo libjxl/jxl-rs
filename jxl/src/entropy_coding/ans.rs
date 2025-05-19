@@ -341,7 +341,7 @@ impl AnsHistogram {
             (10, 3), ( 4, 4), (7, 3), (1, 4), (6, 3), (8, 3), (9, 3), (2, 4),
         ];
 
-        let index = br.peek(7);
+        let index = br.peek(7)?;
         let (sym, bits) = TABLE[index as usize];
         br.consume(bits as usize)?;
         Ok(sym as u16)
@@ -372,7 +372,7 @@ impl AnsHistogram {
         let offset = offset + pos;
 
         let next_state = (*state >> LOG_SUM_PROBS) * dist + offset;
-        let appended_state = (next_state << 16) | br.peek(16) as u32;
+        let appended_state = (next_state << 16) | br.peek(16)? as u32;
         let select_appended = next_state < (1 << 16);
         *state = if select_appended {
             appended_state

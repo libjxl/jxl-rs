@@ -44,16 +44,20 @@ impl<'a> BitReader<'a> {
     }
 
     /// Reads `num` bits from the buffer without consuming them.
-    pub fn peek(&mut self, num: usize) -> u64 {
-        debug_assert!(num <= MAX_BITS_PER_CALL);
+    pub fn peek(&mut self, num: usize) -> Result<u64, Error> {
+        if num <= MAX_BITS_PER_CALL {
+            return Err(Error::PeekTooLarge)
+        };
         self.refill();
-        self.bit_buf & ((1u64 << num) - 1)
+        if self.bits_in_buf < num {
+            return Err(Error::PeekTooLarge);
+        }
+        Ok(self.bit_buf & ((1u64 << num) - 1))
     }
 
     /// Advances by `num` bits. Similar to `skip_bits`, but bits must be in the buffer.
     pub fn consume(&mut self, num: usize) -> Result<(), Error> {
         if self.bits_in_buf < num {
-            println!("oob in consume");
             return Err(Error::OutOfBounds);
         }
         self.bit_buf >>= num;
@@ -74,7 +78,7 @@ impl<'a> BitReader<'a> {
     /// # Ok::<(), jxl::error::Error>(())
     /// ```
     pub fn read(&mut self, num: usize) -> Result<u64, Error> {
-        let ret = self.peek(num);
+        let ret = self.peek(num)?;
         self.consume(num)?;
         Ok(ret)
     }
