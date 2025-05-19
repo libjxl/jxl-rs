@@ -53,6 +53,7 @@ impl<'a> BitReader<'a> {
     /// Advances by `num` bits. Similar to `skip_bits`, but bits must be in the buffer.
     pub fn consume(&mut self, num: usize) -> Result<(), Error> {
         if self.bits_in_buf < num {
+            println!("oob in consume");
             return Err(Error::OutOfBounds);
         }
         self.bit_buf >>= num;
