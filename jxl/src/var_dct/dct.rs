@@ -369,6 +369,15 @@ where
     transpose::<COLS, ROWS>(&transposed_data, data);
 }
 
+pub fn compute_scaled_dct<const ROWS: usize, const COLS: usize>(
+    _from: &[f32],
+    _from_stride: usize,
+    _to: &mut [f32],
+    _to_stride: usize,
+) {
+    todo!();
+}
+
 #[cfg(test)]
 mod tests {
     use crate::{
