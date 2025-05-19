@@ -11,8 +11,10 @@ use crate::{
         LfGlobalState,
     },
     headers::frame_header::FrameHeader,
-    image::Image,
-    util::{tracing_wrappers::*, CeilLog2},
+    image::{Image, Rect},
+    util::tracing_wrappers::*,
+    util::CeilLog2,
+    var_dct::transform::*,
     BLOCK_DIM, BLOCK_SIZE,
 };
 
@@ -94,24 +96,27 @@ pub fn decode_vardct_group(
     let histogram_index: usize = br.read(num_histo_bits as usize)? as usize;
     debug!(?histogram_index);
     let mut reader = hf_global.passes[pass].histograms.make_reader(br)?;
-    let block_rect = frame_header.block_group_rect(group);
-    let group_size = (block_rect.size.0 * BLOCK_DIM, block_rect.size.1 * BLOCK_DIM);
-    let pixels: [Image<f32>; 3] = [
+    let block_group_rect = frame_header.block_group_rect(group);
+    let group_size = (
+        block_group_rect.size.0 * BLOCK_DIM,
+        block_group_rect.size.1 * BLOCK_DIM,
+    );
+    let mut pixels: [Image<f32>; 3] = [
         Image::<f32>::new(group_size)?,
         Image::<f32>::new(group_size)?,
         Image::<f32>::new(group_size)?,
     ];
-    debug!(?block_rect);
+    debug!(?block_group_rect);
     let transform_map = hf_meta.transform_map.as_rect();
-    let transform_map_rect = transform_map.rect(block_rect)?;
+    let transform_map_rect = transform_map.rect(block_group_rect)?;
     let raw_quant_map = hf_meta.raw_quant_map.as_rect();
-    let raw_quant_map_rect = raw_quant_map.rect(block_rect)?;
+    let raw_quant_map_rect = raw_quant_map.rect(block_group_rect)?;
     let mut num_nzeros: [Image<u32>; 3] = [
-        Image::new(block_rect.size)?,
-        Image::new(block_rect.size)?,
-        Image::new(block_rect.size)?,
+        Image::new(block_group_rect.size)?,
+        Image::new(block_group_rect.size)?,
+        Image::new(block_group_rect.size)?,
     ];
-    let quant_lf_rect = quant_lf.as_rect().rect(block_rect)?;
+    let quant_lf_rect = quant_lf.as_rect().rect(block_group_rect)?;
     let block_context_map = lf_global.block_context_map.as_mut().unwrap();
     let context_offset = histogram_index * block_context_map.num_ac_contexts();
     let mut coeffs_storage;
@@ -130,8 +135,13 @@ pub fn decode_vardct_group(
             coeffs_storage.as_mut_slice()
         }
     };
-    for by in 0..block_rect.size.1 {
-        for bx in 0..block_rect.size.0 {
+    let mut transform_buffer: [Vec<f32>; 3] = [
+        vec![0.0; MAX_COEFF_AREA],
+        vec![0.0; MAX_COEFF_AREA],
+        vec![0.0; MAX_COEFF_AREA],
+    ];
+    for by in 0..block_group_rect.size.1 {
+        for bx in 0..block_group_rect.size.0 {
             let raw_quant = raw_quant_map_rect.row(by)[bx] as u32;
             let quant_lf = quant_lf_rect.row(by)[bx] as usize;
             let raw_transform_id = transform_map_rect.row(by)[bx];
@@ -144,8 +154,13 @@ pub fn decode_vardct_group(
             let cx = covered_blocks_x(transform_type) as usize;
             let cy = covered_blocks_y(transform_type) as usize;
             let shape_id = block_shape_id(transform_type) as usize;
+            let block_size = (cx * BLOCK_DIM, cy * BLOCK_DIM);
+            let block_rect = Rect {
+                origin: (bx * BLOCK_DIM, by * BLOCK_DIM),
+                size: block_size,
+            };
             let num_blocks = cx * cy;
-            let block_size = num_blocks * BLOCK_SIZE;
+            let num_coeffs = num_blocks * BLOCK_SIZE;
             for c in [1, 0, 2] {
                 trace!(
                     "Decoding block ({},{}) channel {} with {}x{} block transform {} (shape id {})",
@@ -169,7 +184,7 @@ pub fn decode_vardct_group(
 			nzero_ctx: {nonzero_context} (offset: {context_offset}) \
 			nzeros: {nonzeros}"
                 );
-                if nonzeros + num_blocks > block_size {
+                if nonzeros + num_blocks > num_coeffs {
                     return Err(Error::InvalidNumNonZeros(nonzeros, num_blocks));
                 }
                 for iy in 0..cy {
@@ -180,8 +195,8 @@ pub fn decode_vardct_group(
                 }
                 let histo_offset =
                     block_context_map.zero_density_context_offset(block_context) + context_offset;
-                let mut prev = if nonzeros > block_size / 16 { 0 } else { 1 };
-                for k in num_blocks..block_size {
+                let mut prev = if nonzeros > num_coeffs / 16 { 0 } else { 1 };
+                for k in num_blocks..num_coeffs {
                     if nonzeros == 0 {
                         break;
                     }
@@ -198,10 +213,23 @@ pub fn decode_vardct_group(
                     return Err(Error::EndOfBlockResidualNonZeros(nonzeros));
                 }
             }
+            // TODO(szabadka): Fill in transform_buffer with dequantized coefficients.
+            // TODO(szabadka): Apply chroma-from-luma on the transform_buffer.
+            // TODO(szabadka): Fill in cx x cy corner of transform_buffer with DCT of LF coeffs.
+            for c in [1, 0, 2] {
+                transform_to_pixels(transform_type, &mut transform_buffer[c])?;
+                let mut output = pixels[c].as_rect_mut();
+                let mut output_rect = output.rect(block_rect)?;
+                for i in 0..block_rect.size.1 {
+                    let offset = i * MAX_BLOCK_DIM;
+                    output_rect
+                        .row(i)
+                        .copy_from_slice(&transform_buffer[c][offset..offset + block_rect.size.0]);
+                }
+            }
         }
     }
     reader.check_final_state()?;
-    // TODO(szabadka): Add dequantization, chroma from luma and inverse dct.
     for c in [0, 1, 2] {
         on_output(c, group, &pixels[c])?;
     }
