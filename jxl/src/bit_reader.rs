@@ -192,6 +192,7 @@ impl<'a> BitReader<'a> {
             ret.bit_buf &= (1u64 << (n * 8)) - 1;
             ret.data = &[];
         }
+        ret.total_bits_read = 0;
         debug!(?n, ret=?ret);
         Ok(ret)
     }
