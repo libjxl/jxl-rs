@@ -323,8 +323,8 @@ impl FullModularImage {
             section_buffer_indices.push(
                 sorted_buffers
                     .iter()
-                    .filter(|x| {
-                        !buffer_info[x.1]
+                    .skip_while(|x| {
+                        buffer_info[x.1]
                             .info
                             .is_meta_or_small(frame_header.group_dim())
                     })
