@@ -75,7 +75,7 @@ pub struct HfGlobalState {
     passes: Vec<PassState>,
     #[allow(dead_code)]
     dequant_matrices: DequantMatrices,
-    hf_coefficients: Option<Image<i32>>,
+    hf_coefficients: Option<(Image<i32>, Image<i32>, Image<i32>)>,
 }
 
 #[derive(Debug)]
@@ -460,7 +460,11 @@ impl Frame {
         } else {
             let xs = FrameHeader::GROUP_DIM * FrameHeader::GROUP_DIM;
             let ys = self.header.num_groups();
-            Some(Image::new((xs, ys))?)
+            Some((
+                Image::new((xs, ys))?,
+                Image::new((xs, ys))?,
+                Image::new((xs, ys))?,
+            ))
         };
         self.hf_global = Some(HfGlobalState {
             num_histograms,
