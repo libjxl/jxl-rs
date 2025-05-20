@@ -732,7 +732,7 @@ impl TransformStep {
                 num_deltas,
                 predictor,
                 wp_header,
-            } if *predictor != Predictor::Weighted && *predictor != Predictor::AverageAll => {
+            } => {
                 for b in buf_out.iter() {
                     assert_eq!(
                         buffers[*b].channel_info().size,
@@ -758,9 +758,6 @@ impl TransformStep {
                 for (pos, buf) in buf_out.iter().zip(out_bufs.into_iter()) {
                     buffers[*pos] = buf;
                 }
-            }
-            TransformStep::Palette { .. } => {
-                todo!("Unimplemented local_apply for TransformStep::Palette with AverageAll / Weighted predictor")
             }
             TransformStep::HSqueeze { buf_in, buf_out } => {
                 buffers[*buf_out].allocate_if_needed()?;

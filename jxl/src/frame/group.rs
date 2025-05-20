@@ -7,16 +7,220 @@ use crate::{
     bit_reader::BitReader,
     error::{Error, Result},
     frame::{
-        block_context_map::*, coeff_order, transform_map::*, HfGlobalState, HfMetadata,
-        LfGlobalState,
+        block_context_map::*, coeff_order, quant_weights::DequantMatrices, transform_map::*,
+        HfGlobalState, HfMetadata, LfGlobalState,
     },
     headers::frame_header::FrameHeader,
     image::{Image, Rect},
-    util::tracing_wrappers::*,
-    util::CeilLog2,
-    var_dct::transform::*,
+    util::{tracing_wrappers::*, CeilLog2},
+    var_dct::{
+        dct::{compute_scaled_dct, DCT1DImpl, DCT1D},
+        dct_scales::{dct_total_resample_scale, DctResampleScales, HasDctResampleScales},
+        transform::*,
+    },
     BLOCK_DIM, BLOCK_SIZE,
 };
+
+// Computes the lowest-frequency ROWSxCOLS-sized square in output, which is a
+// DCT_ROWS*DCT_COLS-sized DCT block, by doing a ROWS*COLS DCT on the input
+// block.
+#[allow(dead_code)]
+fn reinterpreting_dct<
+    const DCT_ROWS: usize,
+    const DCT_COLS: usize,
+    const ROWS: usize,
+    const COLS: usize,
+>(
+    input: &[f32],
+    input_stride: usize,
+    output: &mut [f32],
+    output_stride: usize,
+    block: &mut [f32],
+) where
+    DctResampleScales<ROWS, DCT_ROWS>: HasDctResampleScales<ROWS>,
+    DctResampleScales<COLS, DCT_COLS>: HasDctResampleScales<COLS>,
+    DCT1DImpl<ROWS>: DCT1D,
+    DCT1DImpl<COLS>: DCT1D,
+{
+    compute_scaled_dct::<ROWS, COLS>(input, input_stride, block);
+    if ROWS < COLS {
+        for y in 0..ROWS {
+            for x in 0..COLS {
+                output[y * output_stride + x] = block[y * COLS + x]
+                    * dct_total_resample_scale::<ROWS, DCT_ROWS>(y)
+                    * dct_total_resample_scale::<COLS, DCT_COLS>(x);
+            }
+        }
+    } else {
+        for y in 0..COLS {
+            for x in 0..ROWS {
+                output[y * output_stride + x] = block[y * ROWS + x]
+                    * dct_total_resample_scale::<COLS, DCT_COLS>(y)
+                    * dct_total_resample_scale::<ROWS, DCT_ROWS>(x);
+            }
+        }
+    }
+}
+
+#[allow(dead_code)]
+fn lowest_frequencies_from_lf(
+    hf_type: HfTransformType,
+    lf: &[f32],
+    lf_stride: usize,
+    llf: &mut [f32],
+    scratch: &mut [f32],
+) {
+    match hf_type {
+        HfTransformType::DCT16X8 => {
+            reinterpreting_dct::<
+                /*DCT_ROWS=*/ { 2 * BLOCK_DIM },
+                /*DCT_COLS=*/ BLOCK_DIM,
+                /*ROWS=*/ 2,
+                /*COLS=*/ 1,
+            >(lf, lf_stride, llf, 2 * BLOCK_DIM, scratch);
+        }
+        HfTransformType::DCT8X16 => {
+            reinterpreting_dct::<
+                /*DCT_ROWS=*/ BLOCK_DIM,
+                /*DCT_COLS=*/ { 2 * BLOCK_DIM },
+                /*ROWS=*/ 1,
+                /*COLS=*/ 2,
+            >(lf, lf_stride, llf, 2 * BLOCK_DIM, scratch);
+        }
+        HfTransformType::DCT16X16 => {
+            reinterpreting_dct::<
+                /*DCT_ROWS=*/ { 2 * BLOCK_DIM },
+                /*DCT_COLS=*/ { 2 * BLOCK_DIM },
+                /*ROWS=*/ 2,
+                /*COLS=*/ 2,
+            >(lf, lf_stride, llf, 2 * BLOCK_DIM, scratch);
+        }
+        HfTransformType::DCT32X8 => {
+            reinterpreting_dct::<
+                /*DCT_ROWS=*/ { 4 * BLOCK_DIM },
+                /*DCT_COLS=*/ BLOCK_DIM,
+                /*ROWS=*/ 4,
+                /*COLS=*/ 1,
+            >(lf, lf_stride, llf, 4 * BLOCK_DIM, scratch);
+        }
+        HfTransformType::DCT8X32 => {
+            reinterpreting_dct::<
+                /*DCT_ROWS=*/ BLOCK_DIM,
+                /*DCT_COLS=*/ { 4 * BLOCK_DIM },
+                /*ROWS=*/ 1,
+                /*COLS=*/ 4,
+            >(lf, lf_stride, llf, 4 * BLOCK_DIM, scratch);
+        }
+        HfTransformType::DCT32X16 => {
+            reinterpreting_dct::<
+                /*DCT_ROWS=*/ { 4 * BLOCK_DIM },
+                /*DCT_COLS=*/ { 2 * BLOCK_DIM },
+                /*ROWS=*/ 4,
+                /*COLS=*/ 2,
+            >(lf, lf_stride, llf, 4 * BLOCK_DIM, scratch);
+        }
+        HfTransformType::DCT16X32 => {
+            reinterpreting_dct::<
+                /*DCT_ROWS=*/ { 2 * BLOCK_DIM },
+                /*DCT_COLS=*/ { 4 * BLOCK_DIM },
+                /*ROWS=*/ 2,
+                /*COLS=*/ 4,
+            >(lf, lf_stride, llf, 4 * BLOCK_DIM, scratch);
+        }
+        HfTransformType::DCT32X32 => {
+            reinterpreting_dct::<
+                /*DCT_ROWS=*/ { 4 * BLOCK_DIM },
+                /*DCT_COLS=*/ { 4 * BLOCK_DIM },
+                /*ROWS=*/ 4,
+                /*COLS=*/ 4,
+            >(lf, lf_stride, llf, 4 * BLOCK_DIM, scratch);
+        }
+        HfTransformType::DCT64X32 => {
+            reinterpreting_dct::<
+                /*DCT_ROWS=*/ { 8 * BLOCK_DIM },
+                /*DCT_COLS=*/ { 4 * BLOCK_DIM },
+                /*ROWS=*/ 8,
+                /*COLS=*/ 4,
+            >(lf, lf_stride, llf, 8 * BLOCK_DIM, scratch);
+        }
+        HfTransformType::DCT32X64 => {
+            reinterpreting_dct::<
+                /*DCT_ROWS=*/ { 4 * BLOCK_DIM },
+                /*DCT_COLS=*/ { 8 * BLOCK_DIM },
+                /*ROWS=*/ 4,
+                /*COLS=*/ 8,
+            >(lf, lf_stride, llf, 8 * BLOCK_DIM, scratch);
+        }
+        HfTransformType::DCT64X64 => {
+            reinterpreting_dct::<
+                /*DCT_ROWS=*/ { 8 * BLOCK_DIM },
+                /*DCT_COLS=*/ { 8 * BLOCK_DIM },
+                /*ROWS=*/ 8,
+                /*COLS=*/ 8,
+            >(lf, lf_stride, llf, 8 * BLOCK_DIM, scratch);
+        }
+        HfTransformType::DCT128X64 => {
+            reinterpreting_dct::<
+                /*DCT_ROWS=*/ { 16 * BLOCK_DIM },
+                /*DCT_COLS=*/ { 8 * BLOCK_DIM },
+                /*ROWS=*/ 16,
+                /*COLS=*/ 8,
+            >(lf, lf_stride, llf, 16 * BLOCK_DIM, scratch);
+        }
+        HfTransformType::DCT64X128 => {
+            reinterpreting_dct::<
+                /*DCT_ROWS=*/ { 8 * BLOCK_DIM },
+                /*DCT_COLS=*/ { 16 * BLOCK_DIM },
+                /*ROWS=*/ 8,
+                /*COLS=*/ 16,
+            >(lf, lf_stride, llf, 16 * BLOCK_DIM, scratch);
+        }
+        HfTransformType::DCT128X128 => {
+            reinterpreting_dct::<
+                /*DCT_ROWS=*/ { 16 * BLOCK_DIM },
+                /*DCT_COLS=*/ { 16 * BLOCK_DIM },
+                /*ROWS=*/ 16,
+                /*COLS=*/ 16,
+            >(lf, lf_stride, llf, 16 * BLOCK_DIM, scratch);
+        }
+        HfTransformType::DCT256X128 => {
+            reinterpreting_dct::<
+                /*DCT_ROWS=*/ { 32 * BLOCK_DIM },
+                /*DCT_COLS=*/ { 16 * BLOCK_DIM },
+                /*ROWS=*/ 32,
+                /*COLS=*/ 16,
+            >(lf, lf_stride, llf, 32 * BLOCK_DIM, scratch);
+        }
+        HfTransformType::DCT128X256 => {
+            reinterpreting_dct::<
+                /*DCT_ROWS=*/ { 16 * BLOCK_DIM },
+                /*DCT_COLS=*/ { 32 * BLOCK_DIM },
+                /*ROWS=*/ 16,
+                /*COLS=*/ 32,
+            >(lf, lf_stride, llf, 32 * BLOCK_DIM, scratch);
+        }
+        HfTransformType::DCT256X256 => {
+            reinterpreting_dct::<
+                /*DCT_ROWS=*/ { 32 * BLOCK_DIM },
+                /*DCT_COLS=*/ { 32 * BLOCK_DIM },
+                /*ROWS=*/ 32,
+                /*COLS=*/ 32,
+            >(lf, lf_stride, llf, 32 * BLOCK_DIM, scratch);
+        }
+        HfTransformType::DCT
+        | HfTransformType::DCT2X2
+        | HfTransformType::DCT4X4
+        | HfTransformType::DCT4X8
+        | HfTransformType::DCT8X4
+        | HfTransformType::AFV0
+        | HfTransformType::AFV1
+        | HfTransformType::AFV2
+        | HfTransformType::AFV3
+        | HfTransformType::IDENTITY => {
+            llf[0] = lf[0];
+        }
+    }
+}
 
 fn predict_num_nonzeros(nzeros_map: &Image<u32>, bx: usize, by: usize) -> usize {
     if bx == 0 {
@@ -77,6 +281,59 @@ fn dequant_lane(
     block[k] = dequant_x;
     block[size + k] = dequant_y;
     block[2 * size + k] = dequant_b;
+}
+
+#[allow(dead_code, clippy::too_many_arguments)]
+fn dequant_block(
+    hf_type: HfTransformType,
+    inv_global_scale: f32,
+    quant: i32,
+    x_dm_multiplier: f32,
+    b_dm_multiplier: f32,
+    x_cc_mul: f32,
+    b_cc_mul: f32,
+    size: usize,
+    dequant_matrices: &DequantMatrices,
+    covered_blocks: usize,
+    sbx: &[usize; 3],
+    lf_row: &[&[f32]; 3],
+    lf_stride: usize,
+    biases: &[f32; 4],
+    qblock: &[&[f32]; 3],
+    block: &mut [f32],
+    scratch: &mut [f32],
+) {
+    let scaled_dequant_y = inv_global_scale / (quant as f32);
+
+    let scaled_dequant_x = scaled_dequant_y * x_dm_multiplier;
+    let scaled_dequant_b = scaled_dequant_y * b_dm_multiplier;
+
+    let matrices = dequant_matrices.matrix(hf_type, 0);
+
+    for k in 0..covered_blocks * BLOCK_SIZE {
+        dequant_lane(
+            scaled_dequant_x,
+            scaled_dequant_y,
+            scaled_dequant_b,
+            matrices,
+            size,
+            k,
+            x_cc_mul,
+            b_cc_mul,
+            biases,
+            qblock,
+            block,
+        );
+    }
+    for c in 0..3 {
+        lowest_frequencies_from_lf(
+            hf_type,
+            &lf_row[c][sbx[c]..],
+            lf_stride,
+            &mut block[c * size..],
+            scratch,
+        );
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
