@@ -238,7 +238,7 @@ impl FullModularImage {
         let mut channels = vec![];
         for c in 0..modular_color_channels {
             let shift = (frame_header.hshift(c), frame_header.vshift(c));
-            let size = (frame_header.width as usize, frame_header.height as usize);
+            let size = frame_header.size();
             channels.push(ChannelInfo {
                 size: (size.0.div_ceil(1 << shift.0), size.1.div_ceil(1 << shift.1)),
                 shift: Some(shift),
