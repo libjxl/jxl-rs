@@ -141,7 +141,7 @@ struct RestorationFilterNonserialized {
 #[derive(UnconditionalCoder, Debug, PartialEq)]
 #[nonserialized(RestorationFilterNonserialized)]
 struct RestorationFilter {
-    #[default(true)]
+    #[all_default]
     all_default: bool,
 
     #[default(true)]
