@@ -29,6 +29,7 @@ fn decode_jxl_codestream(data: &[u8]) -> Result<ImageData<f32>, Error> {
         let r = read_icc(&mut br)?;
         println!("found {}-byte ICC", r.len());
     };
+    br.jump_to_byte_boundary()?;
     let mut image_data: ImageData<f32> = ImageData {
         size: (
             file_header.size.xsize() as usize,
@@ -39,8 +40,6 @@ fn decode_jxl_codestream(data: &[u8]) -> Result<ImageData<f32>, Error> {
     let mut decoder_state = DecoderState::new(file_header);
     loop {
         let mut frame = Frame::new(&mut br, decoder_state)?;
-        br.jump_to_byte_boundary()?;
-
         let mut section_readers = frame.sections(&mut br)?;
 
         println!("read frame with {} sections", section_readers.len());
