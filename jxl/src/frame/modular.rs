@@ -15,8 +15,8 @@ use crate::{
         ColorCorrelationParams, HfMetadata,
     },
     headers::{
-        bit_depth::BitDepth, extra_channels::ExtraChannelInfo, frame_header::FrameHeader,
-        modular::GroupHeader, ImageMetadata, JxlHeader,
+        bit_depth::BitDepth, frame_header::FrameHeader, modular::GroupHeader, ImageMetadata,
+        JxlHeader,
     },
     image::{Image, ImageRect, ImageRectMut, Rect},
     util::{tracing_wrappers::*, CeilLog2},
@@ -231,14 +231,13 @@ impl FullModularImage {
         frame_header: &FrameHeader,
         image_metadata: &ImageMetadata,
         modular_color_channels: usize,
-        extra_channel_info: &[ExtraChannelInfo],
         global_tree: &Option<Tree>,
         br: &mut BitReader,
     ) -> Result<Self> {
         let mut channels = vec![];
         for c in 0..modular_color_channels {
             let shift = (frame_header.hshift(c), frame_header.vshift(c));
-            let size = (frame_header.width as usize, frame_header.height as usize);
+            let size = frame_header.size();
             channels.push(ChannelInfo {
                 size: (size.0.div_ceil(1 << shift.0), size.1.div_ceil(1 << shift.1)),
                 shift: Some(shift),
@@ -246,14 +245,18 @@ impl FullModularImage {
             });
         }
 
-        for info in extra_channel_info {
-            let shift = info
-                .dim_shift()
-                .checked_sub(frame_header.upsampling.ceil_log2())
+        for ecups in frame_header.ec_upsampling.iter() {
+            let shift_ec = ecups.ceil_log2();
+            let shift_color = frame_header.upsampling.ceil_log2();
+            let shift = shift_ec
+                .checked_sub(shift_color)
                 .expect("ec_upsampling >= upsampling should be checked in frame header")
                 as usize;
             let size = frame_header.size_upsampled();
-            let size = (size.0 >> info.dim_shift(), size.1 >> info.dim_shift());
+            let size = (
+                size.0.div_ceil(*ecups as usize),
+                size.1.div_ceil(*ecups as usize),
+            );
             channels.push(ChannelInfo {
                 size,
                 shift: Some((shift, shift)),
@@ -323,8 +326,8 @@ impl FullModularImage {
             section_buffer_indices.push(
                 sorted_buffers
                     .iter()
-                    .filter(|x| {
-                        !buffer_info[x.1]
+                    .skip_while(|x| {
+                        buffer_info[x.1]
                             .info
                             .is_meta_or_small(frame_header.group_dim())
                     })
@@ -576,17 +579,22 @@ pub fn decode_vardct_lf(
     br: &mut BitReader,
 ) -> Result<()> {
     let extra_precision = br.read(2)?;
-    assert!(frame_header.is444());
     debug!(?extra_precision);
     let mul = 1.0 / (1 << extra_precision) as f32;
     let stream_id = ModularStreamId::VarDCTLF(group).get_id(frame_header);
     debug!(?stream_id);
     let r = frame_header.lf_group_rect(group);
     debug!(?r);
+    let shrink_rect = |size: (usize, usize), c| {
+        (
+            size.0 >> frame_header.hshift(c),
+            size.1 >> frame_header.vshift(c),
+        )
+    };
     let mut buffers = [
-        ModularChannel::new(r.size, image_metadata.bit_depth)?,
-        ModularChannel::new(r.size, image_metadata.bit_depth)?,
-        ModularChannel::new(r.size, image_metadata.bit_depth)?,
+        ModularChannel::new(shrink_rect(r.size, 1), image_metadata.bit_depth)?,
+        ModularChannel::new(shrink_rect(r.size, 0), image_metadata.bit_depth)?,
+        ModularChannel::new(shrink_rect(r.size, 2), image_metadata.bit_depth)?,
     ];
     decode_modular_subbitstream(
         buffers.iter_mut().collect(),
@@ -625,7 +633,6 @@ pub fn decode_hf_metadata(
     let count_num_bits = upper_bound.ceil_log2();
     let count: usize = br.read(count_num_bits)? as usize + 1;
     debug!(?count);
-    assert!(frame_header.is444());
     let cr = Rect {
         origin: (r.origin.0 >> 3, r.origin.1 >> 3),
         size: (r.size.0.div_ceil(8), r.size.1.div_ceil(8)),
@@ -666,6 +673,7 @@ pub fn decode_hf_metadata(
     let mut epf_map = hf_meta.epf_map.as_rect_mut();
     let mut epf_map_rect = epf_map.rect(r)?;
     let mut num: usize = 0;
+    let mut used_hf_types: u32 = 0;
     for y in 0..r.size.1 {
         for x in 0..r.size.0 {
             let epf_val = epf_image.row(y)[x];
@@ -681,9 +689,13 @@ pub fn decode_hf_metadata(
             }
             let raw_transform = transform_image.row(0)[num];
             let raw_quant = 1 + transform_image.row(1)[num].clamp(0, 255);
+            used_hf_types |= 1 << raw_transform;
             let transform_type = HfTransformType::from_usize(raw_transform as usize)?;
             let cx = covered_blocks_x(transform_type) as usize;
             let cy = covered_blocks_y(transform_type) as usize;
+            if (cx > 1 || cy > 1) && !frame_header.is444() {
+                return Err(Error::InvalidBlockSizeForChromaSubsampling);
+            }
             let next_group = ((x / 32 + 1) * 32, (y / 32 + 1) * 32);
             if x + cx > min(r.size.0, next_group.0) || y + cy > min(r.size.1, next_group.1) {
                 return Err(Error::HFBlockOutOfBounds);
@@ -702,6 +714,7 @@ pub fn decode_hf_metadata(
             num += 1;
         }
     }
+    hf_meta.used_hf_types |= used_hf_types;
     Ok(())
 }
 

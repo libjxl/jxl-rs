@@ -141,7 +141,7 @@ struct RestorationFilterNonserialized {
 #[derive(UnconditionalCoder, Debug, PartialEq)]
 #[nonserialized(RestorationFilterNonserialized)]
 struct RestorationFilter {
-    #[default(true)]
+    #[all_default]
     all_default: bool,
 
     #[default(true)]
@@ -314,7 +314,7 @@ pub struct FrameHeader {
     #[coder(u2S(1, 2, 4, 8))]
     #[default_element(1)]
     #[condition(flags & Flags::USE_LF_FRAME == 0)]
-    ec_upsampling: Vec<u32>,
+    pub ec_upsampling: Vec<u32>,
 
     #[coder(Bits(2))]
     #[default(1)]
@@ -366,7 +366,7 @@ pub struct FrameHeader {
 
     // The following 2 fields are not actually serialized, but just used as variables to help with
     // defining later conditions.
-    #[default(x0 == 0 && y0 == 0 && (frame_width as i64 + x0 as i64) >= nonserialized.img_width as i64 &&
+    #[default(x0 <= 0 && y0 <= 0 && (frame_width as i64 + x0 as i64) >= nonserialized.img_width as i64 &&
         (frame_height as i64 + y0 as i64) >= nonserialized.img_height as i64)]
     #[condition(false)]
     completely_covers: bool,
@@ -462,7 +462,7 @@ pub struct FrameHeader {
 }
 
 impl FrameHeader {
-    const GROUP_DIM: usize = 256;
+    pub(crate) const GROUP_DIM: usize = 256;
     pub(crate) const BLOCK_DIM: usize = 8;
     #[allow(dead_code)]
     pub(crate) const BLOCK_SIZE: usize = Self::BLOCK_DIM * Self::BLOCK_DIM;
@@ -550,9 +550,10 @@ impl FrameHeader {
 
     /// The dimensions of this frame, as coded in the codestream, excluding padding pixels.
     pub fn size(&self) -> (usize, usize) {
+        let (width, height) = self.size_upsampled();
         (
-            (self.width as usize).div_ceil(self.upsampling as usize),
-            (self.height as usize).div_ceil(self.upsampling as usize),
+            width.div_ceil(self.upsampling as usize),
+            height.div_ceil(self.upsampling as usize),
         )
     }
 
@@ -578,7 +579,10 @@ impl FrameHeader {
 
     /// The dimensions of this frame, after upsampling.
     pub fn size_upsampled(&self) -> (usize, usize) {
-        (self.width as usize, self.height as usize)
+        (
+            self.width.div_ceil(1 << (3 * self.lf_level)) as usize,
+            self.height.div_ceil(1 << (3 * self.lf_level)) as usize,
+        )
     }
 
     /// The dimensions of this frame, in groups.
@@ -636,6 +640,15 @@ impl FrameHeader {
         Rect { origin, size }
     }
 
+    pub fn postprocess(&mut self, nonserialized: &FrameHeaderNonserialized) {
+        if self.upsampling > 1 {
+            for i in 0..nonserialized.extra_channel_info.len() {
+                let dim_shift = nonserialized.extra_channel_info[i].dim_shift();
+                self.ec_upsampling[i] <<= dim_shift;
+            }
+        }
+    }
+
     fn check(&self, nonserialized: &FrameHeaderNonserialized) -> Result<(), Error> {
         if self.upsampling > 1 {
             if let Some((info, upsampling)) = nonserialized
@@ -666,7 +679,7 @@ impl FrameHeader {
             return Err(Error::NonPatchReferenceWithCrop);
         }
         if !self.is444()
-            && ((self.flags & Flags::SKIP_ADAPTIVE_LF_SMOOTHING) != 0)
+            && ((self.flags & Flags::SKIP_ADAPTIVE_LF_SMOOTHING) == 0)
             && self.encoding == Encoding::VarDCT
         {
             return Err(Error::Non444ChromaSubsampling);
