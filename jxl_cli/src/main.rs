@@ -17,7 +17,7 @@ use std::path::PathBuf;
 
 use jxl::headers::JxlHeader;
 
-fn decode_jxl_codestream(data: &[u8]) -> Result<ImageData<f32>, Error> {
+fn decode_jxl_codestream(data: &[u8]) -> Result<(ImageData<f32>, Vec<u8>), Error> {
     let mut br = BitReader::new(data);
     let file_header = FileHeader::read(&mut br)?;
     println!(
@@ -25,10 +25,15 @@ fn decode_jxl_codestream(data: &[u8]) -> Result<ImageData<f32>, Error> {
         file_header.size.xsize(),
         file_header.size.ysize()
     );
+    // TODO(firsching): Make it such that we also write icc bytes in the
+    // case where want_icc is false.
+    let mut icc_bytes = Vec::<u8>::new();
     if file_header.image_metadata.color_encoding.want_icc {
         let r = read_icc(&mut br)?;
         println!("found {}-byte ICC", r.len());
+        icc_bytes = r;
     };
+
     br.jump_to_byte_boundary()?;
     let mut image_data: ImageData<f32> = ImageData {
         size: (
@@ -79,7 +84,16 @@ fn decode_jxl_codestream(data: &[u8]) -> Result<ImageData<f32>, Error> {
         }
     }
 
-    Ok(image_data)
+    Ok((image_data, icc_bytes))
+}
+
+fn save_icc(icc_bytes: Vec<u8>, icc_filename: Option<PathBuf>) -> Result<(), Error> {
+    match icc_filename {
+        Some(icc_filename) => {
+            std::fs::write(icc_filename, icc_bytes).map_err(|_| Error::OutputWriteFailure)
+        }
+        None => Ok(()),
+    }
 }
 
 fn save_image(image_data: ImageData<f32>, output_filename: PathBuf) -> Result<(), Error> {
@@ -112,8 +126,15 @@ fn save_image(image_data: ImageData<f32>, output_filename: PathBuf) -> Result<()
 
 #[derive(Parser)]
 struct Opt {
+    /// Input JXL file
     input: PathBuf,
+
+    /// Output image file, should end in .ppm, .pgm or .npy
     output: PathBuf,
+
+    ///  If specified, writes the ICC profile of the decoded image
+    #[clap(long)]
+    icc_out: Option<PathBuf>,
 }
 
 fn main() -> Result<(), Error> {
@@ -173,6 +194,7 @@ fn main() -> Result<(), Error> {
         buf_valid -= consumed;
     }
 
-    let image_data = decode_jxl_codestream(&codestream)?;
-    save_image(image_data, opt.output)
+    let (image_data, icc_bytes) = decode_jxl_codestream(&codestream)?;
+    save_image(image_data, opt.output)?;
+    save_icc(icc_bytes, opt.icc_out)
 }
