@@ -377,21 +377,36 @@ pub fn decode_vardct_group(
     let block_context_map = lf_global.block_context_map.as_mut().unwrap();
     let context_offset = histogram_index * block_context_map.num_ac_contexts();
     let mut coeffs_storage;
-    let mut hf_coefficients_rect;
+    let mut hf_coefficients_rects;
     let coeffs = match hf_global.hf_coefficients.as_mut() {
         Some(hf_coefficients) => {
-            hf_coefficients_rect = hf_coefficients.as_rect_mut();
-            let row = hf_coefficients_rect.row(group);
+            hf_coefficients_rects = (
+                hf_coefficients.0.as_rect_mut(),
+                hf_coefficients.1.as_rect_mut(),
+                hf_coefficients.2.as_rect_mut(),
+            );
+            let mut rows = [
+                hf_coefficients_rects.0.row(group),
+                hf_coefficients_rects.1.row(group),
+                hf_coefficients_rects.2.row(group),
+            ];
             if pass == 0 {
-                row.fill(0);
+                for row in rows.iter_mut() {
+                    row.fill(0);
+                }
             }
-            row
+            rows
         }
         None => {
-            coeffs_storage = vec![0; FrameHeader::GROUP_DIM * FrameHeader::GROUP_DIM];
-            coeffs_storage.as_mut_slice()
+            coeffs_storage = vec![0; 3 * FrameHeader::GROUP_DIM * FrameHeader::GROUP_DIM];
+            let (coeffs_x, coeffs_y_b) =
+                coeffs_storage.split_at_mut(FrameHeader::GROUP_DIM * FrameHeader::GROUP_DIM);
+            let (coeffs_y, coeffs_b) =
+                coeffs_y_b.split_at_mut(FrameHeader::GROUP_DIM * FrameHeader::GROUP_DIM);
+            [coeffs_x, coeffs_y, coeffs_b]
         }
     };
+    let mut coeffs_offset = 0;
     let mut transform_buffer: [Vec<f32>; 3] = [
         vec![0.0; MAX_COEFF_AREA],
         vec![0.0; MAX_COEFF_AREA],
@@ -464,7 +479,7 @@ pub fn decode_vardct_group(
                     let order_type = coeff_order::ORDER_LUT[transform_id as usize];
                     let coeff_index =
                         hf_global.passes[pass].coeff_orders[order_type * 3 + c][k] as usize;
-                    coeffs[coeff_index] = coeff;
+                    coeffs[c][coeffs_offset + coeff_index] = coeff;
                 }
                 if nonzeros != 0 {
                     return Err(Error::EndOfBlockResidualNonZeros(nonzeros));
@@ -484,6 +499,7 @@ pub fn decode_vardct_group(
                         .copy_from_slice(&transform_buffer[c][offset..offset + block_rect.size.0]);
                 }
             }
+            coeffs_offset += num_coeffs;
         }
     }
     reader.check_final_state()?;
