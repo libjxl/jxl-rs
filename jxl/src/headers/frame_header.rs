@@ -7,6 +7,7 @@
 
 use crate::{
     bit_reader::BitReader,
+    entropy_coding::decode::unpack_signed,
     error::Error,
     headers::{encodings::*, extra_channels::ExtraChannelInfo},
     image::Rect,
@@ -347,11 +348,21 @@ pub struct FrameHeader {
     #[coder(u2S(Bits(8), Bits(11) + 256, Bits(14) + 2304, Bits(30) + 18688))]
     #[default(0)]
     #[condition(have_crop && frame_type != FrameType::ReferenceOnly)]
-    pub x0: i32,
+    x0_raw: u32,
 
     #[coder(u2S(Bits(8), Bits(11) + 256, Bits(14) + 2304, Bits(30) + 18688))]
     #[default(0)]
     #[condition(have_crop && frame_type != FrameType::ReferenceOnly)]
+    y0_raw: u32,
+
+    #[coder(Bits(0))]
+    #[default(unpack_signed(x0_raw))]
+    #[condition(false)]
+    pub x0: i32,
+
+    #[coder(Bits(0))]
+    #[default(unpack_signed(y0_raw))]
+    #[condition(false)]
     pub y0: i32,
 
     #[coder(u2S(Bits(8), Bits(11) + 256, Bits(14) + 2304, Bits(30) + 18688))]
@@ -366,7 +377,7 @@ pub struct FrameHeader {
 
     // The following 2 fields are not actually serialized, but just used as variables to help with
     // defining later conditions.
-    #[default(x0 == 0 && y0 == 0 && (frame_width as i64 + x0 as i64) >= nonserialized.img_width as i64 &&
+    #[default(x0 <= 0 && y0 <= 0 && (frame_width as i64 + x0 as i64) >= nonserialized.img_width as i64 &&
         (frame_height as i64 + y0 as i64) >= nonserialized.img_height as i64)]
     #[condition(false)]
     completely_covers: bool,
