@@ -5,6 +5,7 @@
 
 use crate::{
     features::noise::Noise,
+    frame::color_correlation_map::ColorCorrelationParams,
     render::{RenderPipelineInOutStage, RenderPipelineInPlaceStage, RenderPipelineStage},
 };
 
@@ -59,17 +60,22 @@ impl RenderPipelineStage for ConvolveNoiseStage {
 
 pub struct AddNoiseStage {
     noise: Noise,
-    // TODO(zond): color_correlation
     first_channel: usize,
+    color_correlation: ColorCorrelationParams,
 }
 
 impl AddNoiseStage {
     #[allow(dead_code)]
-    pub fn new(noise: Noise, first_channel: usize) -> AddNoiseStage {
+    pub fn new(
+        noise: Noise,
+        color_correlation: ColorCorrelationParams,
+        first_channel: usize,
+    ) -> AddNoiseStage {
         assert!(first_channel > 2);
         AddNoiseStage {
             noise,
             first_channel,
+            color_correlation,
         }
     }
 }
@@ -100,10 +106,8 @@ impl RenderPipelineStage for AddNoiseStage {
         row: &mut [&mut [f32]],
     ) {
         let norm_const = 0.22;
-        // TODO(zond): use self.color_correlation.
-        let ytox = 0.0;
-        // TODO(zond): use self.color_correlation.
-        let ytob = 1.0;
+        let ytox = self.color_correlation.y_to_x();
+        let ytob = self.color_correlation.y_to_b();
         for x in 0..xsize {
             let row_rnd_r = row[3][x];
             let row_rnd_g = row[4][x];
@@ -136,6 +140,7 @@ mod test {
     use crate::{
         error::Result,
         features::noise::Noise,
+        frame::color_correlation_map::ColorCorrelationParams,
         image::Image,
         render::{
             stages::noise::{AddNoiseStage, ConvolveNoiseStage},
@@ -185,6 +190,7 @@ mod test {
             Noise {
                 lut: [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0],
             },
+            ColorCorrelationParams::default(),
             3,
         );
         let output: Vec<Image<f32>> = make_and_run_simple_pipeline(
@@ -281,6 +287,7 @@ mod test {
                 Noise {
                     lut: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
                 },
+                ColorCorrelationParams::default(),
                 3,
             ),
             (500, 500),
