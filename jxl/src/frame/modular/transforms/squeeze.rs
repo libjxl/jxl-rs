@@ -3,9 +3,11 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
+use std::cell::Ref;
+
 use crate::{
     error::{Error, Result},
-    frame::modular::ChannelInfo,
+    frame::modular::{ChannelInfo, ModularChannel},
     headers::modular::SqueezeParams,
 };
 
@@ -96,4 +98,172 @@ pub fn default_squeeze(data_channel_info: &[(usize, ChannelInfo)]) -> Vec<Squeez
     }
 
     params
+}
+
+#[inline(always)]
+fn smooth_tendency(b: i64, a: i64, n: i64) -> i64 {
+    let mut diff = 0;
+    if b >= a && a >= n {
+        diff = (4 * b - 3 * n - a + 6) / 12;
+        //      2c = a<<1 + diff - diff&1 <= 2b  so diff - diff&1 <= 2b - 2a
+        //      2d = a<<1 - diff - diff&1 >= 2n  so diff + diff&1 <= 2a - 2n
+        if diff - (diff & 1) > 2 * (b - a) {
+            diff = 2 * (b - a) + 1;
+        }
+        if diff + (diff & 1) > 2 * (a - n) {
+            diff = 2 * (a - n);
+        }
+    } else if b <= a && a <= n {
+        diff = (4 * b - 3 * n - a - 6) / 12;
+        //      2c = a<<1 + diff + diff&1 >= 2b  so diff + diff&1 >= 2b - 2a
+        //      2d = a<<1 - diff + diff&1 <= 2n  so diff - diff&1 >= 2a - 2n
+        if diff + (diff & 1) < 2 * (b - a) {
+            diff = 2 * (b - a) - 1;
+        }
+        if diff - (diff & 1) < 2 * (a - n) {
+            diff = 2 * (a - n);
+        }
+    }
+    diff
+}
+
+#[inline(always)]
+fn unsqueeze(avg: i32, res: i32, next_avg: i32, prev: i32) -> (i32, i32) {
+    let tendency = smooth_tendency(prev as i64, avg as i64, next_avg as i64);
+    let diff = (res as i64) + tendency;
+    let a = (avg as i64) + (diff / 2);
+    let b = a - diff;
+    (a as i32, b as i32)
+}
+
+pub fn do_hsqueeze_step(
+    in_avg: &ModularChannel,
+    in_res: &ModularChannel,
+    in_next_avg: &Option<Ref<'_, ModularChannel>>,
+    out_prev: &Option<Ref<'_, ModularChannel>>,
+    buffers: &mut [&mut ModularChannel],
+) {
+    let out = buffers.first_mut().unwrap();
+    // Shortcut: guarantees that row is at least 1px in the main loop
+    if out.data.size().0 == 0 {
+        return;
+    }
+    let (w, h) = in_res.data.size();
+    // Another shortcut: when output row has just 1px
+    if w == 0 {
+        for y in 0..h {
+            out.data.as_rect_mut().row(y)[0] = in_avg.data.as_rect().row(y)[0];
+        }
+        return;
+    }
+    // Otherwise: 2 or more in in row
+
+    debug_assert!(w >= 1);
+    let has_tail = out.data.size().0 & 1 == 1;
+    if has_tail {
+        debug_assert!(in_avg.data.size().0 == w + 1);
+        debug_assert!(out.data.size().0 == 2 * w + 1);
+    }
+
+    for y in 0..h {
+        let avg_row = in_avg.data.as_rect().row(y);
+        let res_row = in_avg.data.as_rect().row(y);
+        let mut prev_b = match out_prev {
+            None => avg_row[0],
+            Some(mc) => mc.data.as_rect().row(y)[mc.data.size().0 - 1],
+        };
+        // Guarantee that `avg_row[x + 1]` is available.
+        let x_end = if has_tail { w } else { w - 1 };
+        for x in 0..x_end {
+            let (a, b) = unsqueeze(avg_row[x], res_row[x], avg_row[x + 1], prev_b);
+            out.data.as_rect_mut().row(y)[2 * x] = a;
+            out.data.as_rect_mut().row(y)[2 * x + 1] = b;
+            prev_b = b;
+        }
+        if !has_tail {
+            let last_avg = match in_next_avg {
+                None => avg_row[w - 1],
+                Some(mc) => mc.data.as_rect().row(y)[0],
+            };
+            let (a, b) = unsqueeze(avg_row[w - 1], res_row[w - 1], last_avg, prev_b);
+            out.data.as_rect_mut().row(y)[2 * w - 2] = a;
+            out.data.as_rect_mut().row(y)[2 * w - 1] = b;
+        } else {
+            // 1 last pixel
+            out.data.as_rect_mut().row(y)[2 * w] = in_avg.data.as_rect().row(y)[w];
+        }
+    }
+}
+
+pub fn do_vsqueeze_step(
+    in_avg: &ModularChannel,
+    in_res: &ModularChannel,
+    in_next_avg: &Option<Ref<'_, ModularChannel>>,
+    out_prev: &Option<Ref<'_, ModularChannel>>,
+    buffers: &mut [&mut ModularChannel],
+) {
+    let mut out = buffers.first_mut().unwrap().data.as_rect_mut();
+    // Shortcut: guarantees that there at least 1 output row
+    if out.size().1 == 0 {
+        return;
+    }
+    let (w, h) = in_res.data.size();
+    // Another shortcut: when there is one output row
+    if h == 0 {
+        out.row(0).copy_from_slice(in_avg.data.as_rect().row(0));
+        return;
+    }
+    // Otherwise: 2 or more rows
+
+    debug_assert!(h > 0); // i.e. h - 1 >= 0
+    let has_tail = out.size().1 & 1 == 1;
+    if has_tail {
+        debug_assert!(in_avg.data.size().1 == h + 1);
+        debug_assert!(out.size().1 == 2 * h + 1);
+    }
+
+    {
+        let prev_b_row = match out_prev {
+            None => in_avg.data.as_rect().row(0),
+            Some(mc) => mc.data.as_rect().row(mc.data.size().1 - 1),
+        };
+        let avg_row = in_avg.data.as_rect().row(0);
+        let res_row = in_avg.data.as_rect().row(0);
+        let avg_row_next = if !has_tail && (h == 1) {
+            debug_assert!(in_next_avg.is_none());
+            in_avg.data.as_rect().row(0)
+        } else {
+            in_avg.data.as_rect().row(1)
+        };
+        for x in 0..w {
+            let (a, b) = unsqueeze(avg_row[x], res_row[x], avg_row_next[x], prev_b_row[x]);
+            out.row(0)[x] = a;
+            out.row(1)[x] = b;
+        }
+    }
+    for y in 1..h {
+        let avg_row = in_avg.data.as_rect().row(y);
+        let res_row = in_avg.data.as_rect().row(y);
+        let avg_row_next = if y < h - 1 {
+            in_avg.data.as_rect().row(y + 1)
+        } else {
+            match in_next_avg {
+                None => avg_row,
+                Some(mc) => mc.data.as_rect().row(0),
+            }
+        };
+        for x in 0..w {
+            let (a, b) = unsqueeze(
+                avg_row[x],
+                res_row[x],
+                avg_row_next[x],
+                out.row(2 * y - 1)[x],
+            );
+            out.row(2 * y)[x] = a;
+            out.row(2 * y + 1)[x] = b;
+        }
+    }
+    if has_tail {
+        out.row(2 * h).copy_from_slice(in_avg.data.as_rect().row(h));
+    }
 }

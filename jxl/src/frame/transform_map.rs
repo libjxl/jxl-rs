@@ -13,6 +13,7 @@ pub const MAX_COEFF_AREA: usize = MAX_BLOCK_DIM * MAX_BLOCK_DIM;
 #[allow(clippy::upper_case_acronyms)]
 #[derive(Copy, Clone, Debug, PartialEq)]
 pub enum HfTransformType {
+    // Update HfTransformType::VALUES when changing this!
     // Regular block size DCT
     DCT = 0,
     // Encode pixels without transforming

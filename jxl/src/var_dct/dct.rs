@@ -12,13 +12,13 @@ use super::dct_scales::WcMultipliers;
 
 struct CoeffBundle<const N: usize, const SZ: usize>;
 
-struct DCT1DImpl<const SIZE: usize>;
-struct IDCT1DImpl<const SIZE: usize>;
+pub struct DCT1DImpl<const SIZE: usize>;
+pub struct IDCT1DImpl<const SIZE: usize>;
 
-trait DCT1D {
+pub trait DCT1D {
     fn do_dct<const COLUMNS: usize>(data: &mut [[f32; COLUMNS]]);
 }
-trait IDCT1D {
+pub trait IDCT1D {
     fn do_idct<const COLUMNS: usize>(data: &mut [[f32; COLUMNS]]);
 }
 
@@ -275,7 +275,7 @@ fn transpose<const ROWS: usize, const COLS: usize>(input: &[f32], output: &mut [
     }
 }
 
-fn dct2d<const ROWS: usize, const COLS: usize>(data: &mut [f32])
+pub fn dct2d<const ROWS: usize, const COLS: usize>(data: &mut [f32])
 where
     DCT1DImpl<ROWS>: DCT1D,
     DCT1DImpl<COLS>: DCT1D,
@@ -322,7 +322,7 @@ where
     transpose::<COLS, ROWS>(&transposed_data, data);
 }
 
-fn idct2d<const ROWS: usize, const COLS: usize>(data: &mut [f32])
+pub fn idct2d<const ROWS: usize, const COLS: usize>(data: &mut [f32])
 where
     IDCT1DImpl<ROWS>: IDCT1D,
     IDCT1DImpl<COLS>: IDCT1D,
@@ -367,6 +367,40 @@ where
         transposed_data[start..end].copy_from_slice(row);
     }
     transpose::<COLS, ROWS>(&transposed_data, data);
+}
+
+pub fn compute_scaled_dct<const ROWS: usize, const COLS: usize>(
+    from: &[f32],
+    from_stride: usize,
+    to: &mut [f32],
+) where
+    DCT1DImpl<ROWS>: DCT1D,
+    DCT1DImpl<COLS>: DCT1D,
+{
+    let mut dct_buffer = [[0.0; COLS]; ROWS];
+    for y in 0..ROWS {
+        dct_buffer[y].copy_from_slice(&from[y * from_stride..y * from_stride + COLS]);
+    }
+    DCT1DImpl::<ROWS>::do_dct::<COLS>(&mut dct_buffer);
+    let mut transposed_dct_buffer = [[0.0; ROWS]; COLS];
+    #[allow(clippy::needless_range_loop)]
+    for y in 0..ROWS {
+        for x in 0..COLS {
+            transposed_dct_buffer[x][y] = dct_buffer[y][x];
+        }
+    }
+    DCT1DImpl::<COLS>::do_dct::<ROWS>(&mut transposed_dct_buffer);
+    if ROWS < COLS {
+        for y in 0..ROWS {
+            for x in 0..COLS {
+                to[y * COLS + x] = transposed_dct_buffer[x][y];
+            }
+        }
+    } else {
+        for y in 0..COLS {
+            to[y * ROWS..(y + 1) * ROWS].copy_from_slice(&transposed_dct_buffer[y]);
+        }
+    }
 }
 
 #[cfg(test)]

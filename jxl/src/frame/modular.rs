@@ -238,7 +238,7 @@ impl FullModularImage {
         let mut channels = vec![];
         for c in 0..modular_color_channels {
             let shift = (frame_header.hshift(c), frame_header.vshift(c));
-            let size = (frame_header.width as usize, frame_header.height as usize);
+            let size = frame_header.size();
             channels.push(ChannelInfo {
                 size: (size.0.div_ceil(1 << shift.0), size.1.div_ceil(1 << shift.1)),
                 shift: Some(shift),
@@ -323,8 +323,8 @@ impl FullModularImage {
             section_buffer_indices.push(
                 sorted_buffers
                     .iter()
-                    .filter(|x| {
-                        !buffer_info[x.1]
+                    .skip_while(|x| {
+                        buffer_info[x.1]
                             .info
                             .is_meta_or_small(frame_header.group_dim())
                     })
@@ -666,6 +666,7 @@ pub fn decode_hf_metadata(
     let mut epf_map = hf_meta.epf_map.as_rect_mut();
     let mut epf_map_rect = epf_map.rect(r)?;
     let mut num: usize = 0;
+    let mut used_hf_types: u32 = 0;
     for y in 0..r.size.1 {
         for x in 0..r.size.0 {
             let epf_val = epf_image.row(y)[x];
@@ -681,6 +682,7 @@ pub fn decode_hf_metadata(
             }
             let raw_transform = transform_image.row(0)[num];
             let raw_quant = 1 + transform_image.row(1)[num].clamp(0, 255);
+            used_hf_types |= 1 << raw_transform;
             let transform_type = HfTransformType::from_usize(raw_transform as usize)?;
             let cx = covered_blocks_x(transform_type) as usize;
             let cy = covered_blocks_y(transform_type) as usize;
@@ -702,6 +704,7 @@ pub fn decode_hf_metadata(
             num += 1;
         }
     }
+    hf_meta.used_hf_types |= used_hf_types;
     Ok(())
 }
 
