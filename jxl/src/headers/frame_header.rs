@@ -7,7 +7,6 @@
 
 use crate::{
     bit_reader::BitReader,
-    entropy_coding::decode::unpack_signed,
     error::Error,
     headers::{encodings::*, extra_channels::ExtraChannelInfo},
     image::Rect,
@@ -348,21 +347,11 @@ pub struct FrameHeader {
     #[coder(u2S(Bits(8), Bits(11) + 256, Bits(14) + 2304, Bits(30) + 18688))]
     #[default(0)]
     #[condition(have_crop && frame_type != FrameType::ReferenceOnly)]
-    x0_raw: u32,
+    pub x0: i32,
 
     #[coder(u2S(Bits(8), Bits(11) + 256, Bits(14) + 2304, Bits(30) + 18688))]
     #[default(0)]
     #[condition(have_crop && frame_type != FrameType::ReferenceOnly)]
-    y0_raw: u32,
-
-    #[coder(Bits(0))]
-    #[default(unpack_signed(x0_raw))]
-    #[condition(false)]
-    pub x0: i32,
-
-    #[coder(Bits(0))]
-    #[default(unpack_signed(y0_raw))]
-    #[condition(false)]
     pub y0: i32,
 
     #[coder(u2S(Bits(8), Bits(11) + 256, Bits(14) + 2304, Bits(30) + 18688))]
