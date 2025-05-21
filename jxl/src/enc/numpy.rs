@@ -14,15 +14,21 @@ fn numpy_header(xsize: usize, ysize: usize, num_channels: usize, num_frames: usi
     // Construct the header dictionary string.
     // Note the trailing comma in the tuple and the space before the closing brace, and the newline.
     //
-    // TODO(firsching): shouldn't this be padded by "spaces ('x20') to make the total length of
-    // the magic string + 4 + HEADER_LEN be evenly divisible by 16"? see
-    // https://github.com/numpy/numpy/blob/main/doc/neps/nep-0001-npy-format.rst
-    //
     // The dtype '<f4' signifies little-endian 32-bit float.
-    let header_dict_str = format!(
+    let mut header_dict_str = format!(
         "{{'descr': '<f4', 'fortran_order': False, 'shape': \
-	 ({num_frames}, {ysize}, {xsize}, {num_channels}), }}\n"
+	 ({num_frames}, {ysize}, {xsize}, {num_channels}), }}"
     );
+    // https://github.com/numpy/numpy/blob/main/doc/neps/nep-0001-npy-format.rst:
+    // "terminated by a newline ('n') and padded with spaces ('x20') to make the total length of the magic string + 4 + HEADER_LEN be evenly divisible by 16 for alignment purposes"
+    // The 4 is a 2 since the major and minor versions are included in the magic string. The extra 1 at the end is for the newline.
+    header_dict_str.push_str(
+        (0..(16 - ((magic_string.len() + 2 + header_dict_str.len() + 1) % 16) % 16))
+            .map(|_| " ")
+            .collect::<String>()
+            .as_str(),
+    );
+    header_dict_str.push('\n');
     let header_dict_len = header_dict_str.len();
     assert!(
         header_dict_len <= u16::MAX as usize,

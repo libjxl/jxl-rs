@@ -141,7 +141,7 @@ struct RestorationFilterNonserialized {
 #[derive(UnconditionalCoder, Debug, PartialEq)]
 #[nonserialized(RestorationFilterNonserialized)]
 struct RestorationFilter {
-    #[default(true)]
+    #[all_default]
     all_default: bool,
 
     #[default(true)]
@@ -462,7 +462,7 @@ pub struct FrameHeader {
 }
 
 impl FrameHeader {
-    const GROUP_DIM: usize = 256;
+    pub(crate) const GROUP_DIM: usize = 256;
     pub(crate) const BLOCK_DIM: usize = 8;
     #[allow(dead_code)]
     pub(crate) const BLOCK_SIZE: usize = Self::BLOCK_DIM * Self::BLOCK_DIM;
@@ -550,9 +550,10 @@ impl FrameHeader {
 
     /// The dimensions of this frame, as coded in the codestream, excluding padding pixels.
     pub fn size(&self) -> (usize, usize) {
+        let (width, height) = self.size_upsampled();
         (
-            (self.width as usize).div_ceil(self.upsampling as usize),
-            (self.height as usize).div_ceil(self.upsampling as usize),
+            width.div_ceil(self.upsampling as usize),
+            height.div_ceil(self.upsampling as usize),
         )
     }
 
@@ -578,7 +579,10 @@ impl FrameHeader {
 
     /// The dimensions of this frame, after upsampling.
     pub fn size_upsampled(&self) -> (usize, usize) {
-        (self.width as usize, self.height as usize)
+        (
+            self.width.div_ceil(1 << (3 * self.lf_level)) as usize,
+            self.height.div_ceil(1 << (3 * self.lf_level)) as usize,
+        )
     }
 
     /// The dimensions of this frame, in groups.

@@ -236,6 +236,10 @@ impl Histograms {
     pub fn make_reader_with_width(&self, br: &mut BitReader, image_width: usize) -> Result<Reader> {
         self.make_reader_impl(br, Some(image_width))
     }
+
+    pub fn num_histograms(&self) -> usize {
+        *self.context_map.iter().max().unwrap() as usize + 1
+    }
 }
 
 #[cfg(test)]
