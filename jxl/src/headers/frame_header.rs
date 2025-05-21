@@ -314,7 +314,7 @@ pub struct FrameHeader {
     #[coder(u2S(1, 2, 4, 8))]
     #[default_element(1)]
     #[condition(flags & Flags::USE_LF_FRAME == 0)]
-    ec_upsampling: Vec<u32>,
+    pub ec_upsampling: Vec<u32>,
 
     #[coder(Bits(2))]
     #[default(1)]
@@ -366,7 +366,7 @@ pub struct FrameHeader {
 
     // The following 2 fields are not actually serialized, but just used as variables to help with
     // defining later conditions.
-    #[default(x0 == 0 && y0 == 0 && (frame_width as i64 + x0 as i64) >= nonserialized.img_width as i64 &&
+    #[default(x0 <= 0 && y0 <= 0 && (frame_width as i64 + x0 as i64) >= nonserialized.img_width as i64 &&
         (frame_height as i64 + y0 as i64) >= nonserialized.img_height as i64)]
     #[condition(false)]
     completely_covers: bool,
@@ -638,6 +638,15 @@ impl FrameHeader {
             ),
         );
         Rect { origin, size }
+    }
+
+    pub fn postprocess(&mut self, nonserialized: &FrameHeaderNonserialized) {
+        if self.upsampling > 1 {
+            for i in 0..nonserialized.extra_channel_info.len() {
+                let dim_shift = nonserialized.extra_channel_info[i].dim_shift();
+                self.ec_upsampling[i] <<= dim_shift;
+            }
+        }
     }
 
     fn check(&self, nonserialized: &FrameHeaderNonserialized) -> Result<(), Error> {
