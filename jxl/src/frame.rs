@@ -608,6 +608,7 @@ mod test {
             let r = read_icc(&mut br)?;
             println!("found {}-byte ICC", r.len());
         };
+        br.jump_to_byte_boundary()?;
         let mut decoder_state = DecoderState::new(file_header);
 
         loop {
