@@ -4,7 +4,11 @@
 // license that can be found in the LICENSE file.
 
 use super::{frame_header::PermutationNonserialized, permutation::Permutation};
-use crate::{bit_reader::BitReader, entropy_coding::decode::Histograms, error::Error};
+use crate::{
+    bit_reader::BitReader,
+    entropy_coding::decode::{unpack_signed, Histograms},
+    error::Error,
+};
 
 pub enum U32 {
     Bits(usize),
@@ -100,7 +104,7 @@ impl UnconditionalCoder<U32Coder> for i32 {
         nonserialized: &Self::Nonserialized,
     ) -> Result<i32, Error> {
         let u = u32::read_unconditional(config, br, nonserialized)?;
-        Ok(((u >> 1) ^ (((!u) & 1).wrapping_rem(1))) as i32)
+        Ok(unpack_signed(u))
     }
 }
 
