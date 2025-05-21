@@ -15,8 +15,8 @@ use crate::{
         ColorCorrelationParams, HfMetadata,
     },
     headers::{
-        bit_depth::BitDepth, extra_channels::ExtraChannelInfo, frame_header::FrameHeader,
-        modular::GroupHeader, ImageMetadata, JxlHeader,
+        bit_depth::BitDepth, frame_header::FrameHeader, modular::GroupHeader, ImageMetadata,
+        JxlHeader,
     },
     image::{Image, ImageRect, ImageRectMut, Rect},
     util::{tracing_wrappers::*, CeilLog2},
@@ -231,7 +231,6 @@ impl FullModularImage {
         frame_header: &FrameHeader,
         image_metadata: &ImageMetadata,
         modular_color_channels: usize,
-        extra_channel_info: &[ExtraChannelInfo],
         global_tree: &Option<Tree>,
         br: &mut BitReader,
     ) -> Result<Self> {
@@ -246,14 +245,18 @@ impl FullModularImage {
             });
         }
 
-        for info in extra_channel_info {
-            let shift = info
-                .dim_shift()
-                .checked_sub(frame_header.upsampling.ceil_log2())
+        for ecups in frame_header.ec_upsampling.iter() {
+            let shift_ec = ecups.ceil_log2();
+            let shift_color = frame_header.upsampling.ceil_log2();
+            let shift = shift_ec
+                .checked_sub(shift_color)
                 .expect("ec_upsampling >= upsampling should be checked in frame header")
                 as usize;
             let size = frame_header.size_upsampled();
-            let size = (size.0 >> info.dim_shift(), size.1 >> info.dim_shift());
+            let size = (
+                size.0.div_ceil(*ecups as usize),
+                size.1.div_ceil(*ecups as usize),
+            );
             channels.push(ChannelInfo {
                 size,
                 shift: Some((shift, shift)),
