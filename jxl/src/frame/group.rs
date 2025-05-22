@@ -3,15 +3,17 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
+use num_traits::Float;
+
 use crate::{
     bit_reader::BitReader,
     error::{Error, Result},
     frame::{
-        block_context_map::*, coeff_order, quant_weights::DequantMatrices, transform_map::*,
-        HfGlobalState, HfMetadata, LfGlobalState,
+        block_context_map::*, coeff_order, color_correlation_map::COLOR_TILE_DIM_IN_BLOCKS,
+        quant_weights::DequantMatrices, transform_map::*, HfGlobalState, HfMetadata, LfGlobalState,
     },
     headers::frame_header::FrameHeader,
-    image::{Image, Rect},
+    image::{Image, ImageRect, Rect},
     util::{tracing_wrappers::*, CeilLog2},
     var_dct::{
         dct::{compute_scaled_dct, DCT1DImpl, DCT1D},
@@ -24,15 +26,13 @@ use crate::{
 // Computes the lowest-frequency ROWSxCOLS-sized square in output, which is a
 // DCT_ROWS*DCT_COLS-sized DCT block, by doing a ROWS*COLS DCT on the input
 // block.
-#[allow(dead_code)]
 fn reinterpreting_dct<
     const DCT_ROWS: usize,
     const DCT_COLS: usize,
     const ROWS: usize,
     const COLS: usize,
 >(
-    input: &[f32],
-    input_stride: usize,
+    input: &ImageRect<f32>,
     output: &mut [f32],
     output_stride: usize,
     block: &mut [f32],
@@ -42,7 +42,12 @@ fn reinterpreting_dct<
     DCT1DImpl<ROWS>: DCT1D,
     DCT1DImpl<COLS>: DCT1D,
 {
-    compute_scaled_dct::<ROWS, COLS>(input, input_stride, block);
+    let mut dct_input = [[0.0; COLS]; ROWS];
+    #[allow(clippy::needless_range_loop)]
+    for y in 0..ROWS {
+        dct_input[y].copy_from_slice(&input.row(y)[0..COLS]);
+    }
+    compute_scaled_dct::<ROWS, COLS>(dct_input, block);
     if ROWS < COLS {
         for y in 0..ROWS {
             for x in 0..COLS {
@@ -62,11 +67,9 @@ fn reinterpreting_dct<
     }
 }
 
-#[allow(dead_code)]
 fn lowest_frequencies_from_lf(
     hf_type: HfTransformType,
-    lf: &[f32],
-    lf_stride: usize,
+    lf: &ImageRect<f32>,
     llf: &mut [f32],
     scratch: &mut [f32],
 ) {
@@ -77,7 +80,7 @@ fn lowest_frequencies_from_lf(
                 /*DCT_COLS=*/ BLOCK_DIM,
                 /*ROWS=*/ 2,
                 /*COLS=*/ 1,
-            >(lf, lf_stride, llf, 2 * BLOCK_DIM, scratch);
+            >(lf, llf, 2 * BLOCK_DIM, scratch);
         }
         HfTransformType::DCT8X16 => {
             reinterpreting_dct::<
@@ -85,7 +88,7 @@ fn lowest_frequencies_from_lf(
                 /*DCT_COLS=*/ { 2 * BLOCK_DIM },
                 /*ROWS=*/ 1,
                 /*COLS=*/ 2,
-            >(lf, lf_stride, llf, 2 * BLOCK_DIM, scratch);
+            >(lf, llf, 2 * BLOCK_DIM, scratch);
         }
         HfTransformType::DCT16X16 => {
             reinterpreting_dct::<
@@ -93,7 +96,7 @@ fn lowest_frequencies_from_lf(
                 /*DCT_COLS=*/ { 2 * BLOCK_DIM },
                 /*ROWS=*/ 2,
                 /*COLS=*/ 2,
-            >(lf, lf_stride, llf, 2 * BLOCK_DIM, scratch);
+            >(lf, llf, 2 * BLOCK_DIM, scratch);
         }
         HfTransformType::DCT32X8 => {
             reinterpreting_dct::<
@@ -101,7 +104,7 @@ fn lowest_frequencies_from_lf(
                 /*DCT_COLS=*/ BLOCK_DIM,
                 /*ROWS=*/ 4,
                 /*COLS=*/ 1,
-            >(lf, lf_stride, llf, 4 * BLOCK_DIM, scratch);
+            >(lf, llf, 4 * BLOCK_DIM, scratch);
         }
         HfTransformType::DCT8X32 => {
             reinterpreting_dct::<
@@ -109,7 +112,7 @@ fn lowest_frequencies_from_lf(
                 /*DCT_COLS=*/ { 4 * BLOCK_DIM },
                 /*ROWS=*/ 1,
                 /*COLS=*/ 4,
-            >(lf, lf_stride, llf, 4 * BLOCK_DIM, scratch);
+            >(lf, llf, 4 * BLOCK_DIM, scratch);
         }
         HfTransformType::DCT32X16 => {
             reinterpreting_dct::<
@@ -117,7 +120,7 @@ fn lowest_frequencies_from_lf(
                 /*DCT_COLS=*/ { 2 * BLOCK_DIM },
                 /*ROWS=*/ 4,
                 /*COLS=*/ 2,
-            >(lf, lf_stride, llf, 4 * BLOCK_DIM, scratch);
+            >(lf, llf, 4 * BLOCK_DIM, scratch);
         }
         HfTransformType::DCT16X32 => {
             reinterpreting_dct::<
@@ -125,7 +128,7 @@ fn lowest_frequencies_from_lf(
                 /*DCT_COLS=*/ { 4 * BLOCK_DIM },
                 /*ROWS=*/ 2,
                 /*COLS=*/ 4,
-            >(lf, lf_stride, llf, 4 * BLOCK_DIM, scratch);
+            >(lf, llf, 4 * BLOCK_DIM, scratch);
         }
         HfTransformType::DCT32X32 => {
             reinterpreting_dct::<
@@ -133,7 +136,7 @@ fn lowest_frequencies_from_lf(
                 /*DCT_COLS=*/ { 4 * BLOCK_DIM },
                 /*ROWS=*/ 4,
                 /*COLS=*/ 4,
-            >(lf, lf_stride, llf, 4 * BLOCK_DIM, scratch);
+            >(lf, llf, 4 * BLOCK_DIM, scratch);
         }
         HfTransformType::DCT64X32 => {
             reinterpreting_dct::<
@@ -141,7 +144,7 @@ fn lowest_frequencies_from_lf(
                 /*DCT_COLS=*/ { 4 * BLOCK_DIM },
                 /*ROWS=*/ 8,
                 /*COLS=*/ 4,
-            >(lf, lf_stride, llf, 8 * BLOCK_DIM, scratch);
+            >(lf, llf, 8 * BLOCK_DIM, scratch);
         }
         HfTransformType::DCT32X64 => {
             reinterpreting_dct::<
@@ -149,7 +152,7 @@ fn lowest_frequencies_from_lf(
                 /*DCT_COLS=*/ { 8 * BLOCK_DIM },
                 /*ROWS=*/ 4,
                 /*COLS=*/ 8,
-            >(lf, lf_stride, llf, 8 * BLOCK_DIM, scratch);
+            >(lf, llf, 8 * BLOCK_DIM, scratch);
         }
         HfTransformType::DCT64X64 => {
             reinterpreting_dct::<
@@ -157,7 +160,7 @@ fn lowest_frequencies_from_lf(
                 /*DCT_COLS=*/ { 8 * BLOCK_DIM },
                 /*ROWS=*/ 8,
                 /*COLS=*/ 8,
-            >(lf, lf_stride, llf, 8 * BLOCK_DIM, scratch);
+            >(lf, llf, 8 * BLOCK_DIM, scratch);
         }
         HfTransformType::DCT128X64 => {
             reinterpreting_dct::<
@@ -165,7 +168,7 @@ fn lowest_frequencies_from_lf(
                 /*DCT_COLS=*/ { 8 * BLOCK_DIM },
                 /*ROWS=*/ 16,
                 /*COLS=*/ 8,
-            >(lf, lf_stride, llf, 16 * BLOCK_DIM, scratch);
+            >(lf, llf, 16 * BLOCK_DIM, scratch);
         }
         HfTransformType::DCT64X128 => {
             reinterpreting_dct::<
@@ -173,7 +176,7 @@ fn lowest_frequencies_from_lf(
                 /*DCT_COLS=*/ { 16 * BLOCK_DIM },
                 /*ROWS=*/ 8,
                 /*COLS=*/ 16,
-            >(lf, lf_stride, llf, 16 * BLOCK_DIM, scratch);
+            >(lf, llf, 16 * BLOCK_DIM, scratch);
         }
         HfTransformType::DCT128X128 => {
             reinterpreting_dct::<
@@ -181,7 +184,7 @@ fn lowest_frequencies_from_lf(
                 /*DCT_COLS=*/ { 16 * BLOCK_DIM },
                 /*ROWS=*/ 16,
                 /*COLS=*/ 16,
-            >(lf, lf_stride, llf, 16 * BLOCK_DIM, scratch);
+            >(lf, llf, 16 * BLOCK_DIM, scratch);
         }
         HfTransformType::DCT256X128 => {
             reinterpreting_dct::<
@@ -189,7 +192,7 @@ fn lowest_frequencies_from_lf(
                 /*DCT_COLS=*/ { 16 * BLOCK_DIM },
                 /*ROWS=*/ 32,
                 /*COLS=*/ 16,
-            >(lf, lf_stride, llf, 32 * BLOCK_DIM, scratch);
+            >(lf, llf, 32 * BLOCK_DIM, scratch);
         }
         HfTransformType::DCT128X256 => {
             reinterpreting_dct::<
@@ -197,7 +200,7 @@ fn lowest_frequencies_from_lf(
                 /*DCT_COLS=*/ { 32 * BLOCK_DIM },
                 /*ROWS=*/ 16,
                 /*COLS=*/ 32,
-            >(lf, lf_stride, llf, 32 * BLOCK_DIM, scratch);
+            >(lf, llf, 32 * BLOCK_DIM, scratch);
         }
         HfTransformType::DCT256X256 => {
             reinterpreting_dct::<
@@ -205,7 +208,7 @@ fn lowest_frequencies_from_lf(
                 /*DCT_COLS=*/ { 32 * BLOCK_DIM },
                 /*ROWS=*/ 32,
                 /*COLS=*/ 32,
-            >(lf, lf_stride, llf, 32 * BLOCK_DIM, scratch);
+            >(lf, llf, 32 * BLOCK_DIM, scratch);
         }
         HfTransformType::DCT
         | HfTransformType::DCT2X2
@@ -217,7 +220,7 @@ fn lowest_frequencies_from_lf(
         | HfTransformType::AFV2
         | HfTransformType::AFV3
         | HfTransformType::IDENTITY => {
-            llf[0] = lf[0];
+            llf[0] = lf.row(0)[0];
         }
     }
 }
@@ -237,7 +240,6 @@ fn predict_num_nonzeros(nzeros_map: &Image<u32>, bx: usize, by: usize) -> usize 
     }
 }
 
-#[allow(dead_code)]
 fn adjust_quant_bias(c: usize, quant_i: i32, biases: &[f32; 4]) -> f32 {
     match quant_i {
         0 => 0.0,
@@ -250,7 +252,7 @@ fn adjust_quant_bias(c: usize, quant_i: i32, biases: &[f32; 4]) -> f32 {
     }
 }
 
-#[allow(dead_code, clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments)]
 fn dequant_lane(
     scaled_dequant_x: f32,
     scaled_dequant_y: f32,
@@ -261,33 +263,33 @@ fn dequant_lane(
     x_cc_mul: f32,
     b_cc_mul: f32,
     biases: &[f32; 4],
-    qblock: &[&[f32]; 3],
-    block: &mut [f32],
+    qblock: &[&[i32]; 3],
+    block: &mut [Vec<f32>; 3],
 ) {
     let x_mul = dequant_matrices[k] * scaled_dequant_x;
     let y_mul = dequant_matrices[size + k] * scaled_dequant_y;
     let b_mul = dequant_matrices[2 * size + k] * scaled_dequant_b;
 
-    let quantized_x_int = qblock[0][k] as i32;
-    let quantized_y_int = qblock[1][k] as i32;
-    let quantized_b_int = qblock[2][k] as i32;
+    let quantized_x = qblock[0][k];
+    let quantized_y = qblock[1][k];
+    let quantized_b = qblock[2][k];
 
-    let dequant_x_cc = adjust_quant_bias(0, quantized_x_int, biases) * x_mul;
-    let dequant_y = adjust_quant_bias(1, quantized_y_int, biases) * y_mul;
-    let dequant_b_cc = adjust_quant_bias(2, quantized_b_int, biases) * b_mul;
+    let dequant_x_cc = adjust_quant_bias(0, quantized_x, biases) * x_mul;
+    let dequant_y = adjust_quant_bias(1, quantized_y, biases) * y_mul;
+    let dequant_b_cc = adjust_quant_bias(2, quantized_b, biases) * b_mul;
 
     let dequant_x = x_cc_mul * dequant_y + dequant_x_cc;
     let dequant_b = b_cc_mul * dequant_y + dequant_b_cc;
-    block[k] = dequant_x;
-    block[size + k] = dequant_y;
-    block[2 * size + k] = dequant_b;
+    block[0][k] = dequant_x;
+    block[1][k] = dequant_y;
+    block[2][k] = dequant_b;
 }
 
-#[allow(dead_code, clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments)]
 fn dequant_block(
     hf_type: HfTransformType,
     inv_global_scale: f32,
-    quant: i32,
+    quant: u32,
     x_dm_multiplier: f32,
     b_dm_multiplier: f32,
     x_cc_mul: f32,
@@ -295,12 +297,10 @@ fn dequant_block(
     size: usize,
     dequant_matrices: &DequantMatrices,
     covered_blocks: usize,
-    sbx: &[usize; 3],
-    lf_row: &[&[f32]; 3],
-    lf_stride: usize,
+    lf: &Option<[ImageRect<f32>; 3]>,
     biases: &[f32; 4],
-    qblock: &[&[f32]; 3],
-    block: &mut [f32],
+    qblock: &[&[i32]; 3],
+    block: &mut [Vec<f32>; 3],
     scratch: &mut [f32],
 ) {
     let scaled_dequant_y = inv_global_scale / (quant as f32);
@@ -325,14 +325,10 @@ fn dequant_block(
             block,
         );
     }
-    for c in 0..3 {
-        lowest_frequencies_from_lf(
-            hf_type,
-            &lf_row[c][sbx[c]..],
-            lf_stride,
-            &mut block[c * size..],
-            scratch,
-        );
+    if let Some(lf) = lf.as_ref() {
+        for c in 0..3 {
+            lowest_frequencies_from_lf(hf_type, &lf[c], &mut block[c], scratch);
+        }
     }
 }
 
@@ -345,10 +341,15 @@ pub fn decode_vardct_group(
     lf_global: &mut LfGlobalState,
     hf_global: &mut HfGlobalState,
     hf_meta: &HfMetadata,
+    lf_image: &Option<[Image<f32>; 3]>,
     quant_lf: &Image<u8>,
+    quant_biases: &[f32; 4],
     on_output: &mut dyn FnMut(usize, usize, &Image<f32>) -> Result<()>,
     br: &mut BitReader,
 ) -> Result<(), Error> {
+    let x_dm_multiplier = (1.0 / (1.25)).powf(frame_header.x_qm_scale as f32 - 2.0);
+    let b_dm_multiplier = (1.0 / (1.25)).powf(frame_header.b_qm_scale as f32 - 2.0);
+
     let num_histo_bits = hf_global.num_histograms.ceil_log2();
     let histogram_index: usize = br.read(num_histo_bits as usize)? as usize;
     debug!(?histogram_index);
@@ -364,6 +365,33 @@ pub fn decode_vardct_group(
         Image::<f32>::new(group_size)?,
     ];
     debug!(?block_group_rect);
+    let max_block_size = HfTransformType::VALUES
+        .iter()
+        .filter(|&transform_type| (hf_meta.used_hf_types & (1 << *transform_type as u32)) != 0)
+        .map(|&transform_type| {
+            BLOCK_SIZE
+                * covered_blocks_x(transform_type) as usize
+                * covered_blocks_y(transform_type) as usize
+        })
+        .max()
+        .unwrap_or(0);
+    let mut scratch = vec![0.0; max_block_size];
+    let color_correlation_params = lf_global.color_correlation_params.as_ref().unwrap();
+    let cmap_rect = Rect {
+        origin: (
+            block_group_rect.origin.0 / COLOR_TILE_DIM_IN_BLOCKS,
+            block_group_rect.origin.1 / COLOR_TILE_DIM_IN_BLOCKS,
+        ),
+        size: (
+            block_group_rect.size.0.div_ceil(COLOR_TILE_DIM_IN_BLOCKS),
+            block_group_rect.size.1.div_ceil(COLOR_TILE_DIM_IN_BLOCKS),
+        ),
+    };
+    let quant_params = lf_global.quant_params.as_ref().unwrap();
+    let ytox_map = hf_meta.ytox_map.as_rect();
+    let ytox_map_rect = ytox_map.rect(cmap_rect)?;
+    let ytob_map = hf_meta.ytob_map.as_rect();
+    let ytob_map_rect = ytob_map.rect(cmap_rect)?;
     let transform_map = hf_meta.transform_map.as_rect();
     let transform_map_rect = transform_map.rect(block_group_rect)?;
     let raw_quant_map = hf_meta.raw_quant_map.as_rect();
@@ -412,8 +440,50 @@ pub fn decode_vardct_group(
         vec![0.0; MAX_COEFF_AREA],
         vec![0.0; MAX_COEFF_AREA],
     ];
+
+    let hshift = [
+        frame_header.hshift(0),
+        frame_header.hshift(1),
+        frame_header.hshift(2),
+    ];
+    let vshift = [
+        frame_header.vshift(0),
+        frame_header.vshift(1),
+        frame_header.vshift(2),
+    ];
+    let lf = match lf_image.as_ref() {
+        None => None,
+        Some(lf_planes) => {
+            let r: [Rect; 3] = core::array::from_fn(|i| Rect {
+                origin: (
+                    block_group_rect.origin.0 >> hshift[i],
+                    block_group_rect.origin.1 >> vshift[i],
+                ),
+                size: (
+                    block_group_rect.size.0 >> hshift[i],
+                    block_group_rect.size.1 >> vshift[i],
+                ),
+            });
+
+            for (i, rect) in r.iter().enumerate() {
+                rect.is_within(lf_planes[i].size())?;
+            }
+            let [lf_x, lf_y, lf_b] = lf_planes.each_ref();
+            Some([lf_x.as_rect(), lf_y.as_rect(), lf_b.as_rect()])
+        }
+    };
     for by in 0..block_group_rect.size.1 {
+        let sby = [by >> vshift[0], by >> vshift[1], by >> vshift[2]];
+        let ty = by / COLOR_TILE_DIM_IN_BLOCKS;
+
+        let row_cmap_x = ytox_map_rect.row(ty);
+        let row_cmap_b = ytob_map_rect.row(ty);
+
         for bx in 0..block_group_rect.size.0 {
+            let sbx = [bx >> hshift[0], bx >> hshift[1], bx >> hshift[2]];
+            let tx = bx / COLOR_TILE_DIM_IN_BLOCKS;
+            let x_cc_mul = color_correlation_params.y_to_x(row_cmap_x[tx] as i32);
+            let b_cc_mul = color_correlation_params.y_to_b(row_cmap_b[tx] as i32);
             let raw_quant = raw_quant_map_rect.row(by)[bx] as u32;
             let quant_lf = quant_lf_rect.row(by)[bx] as usize;
             let raw_transform_id = transform_map_rect.row(by)[bx];
@@ -422,6 +492,27 @@ pub fn decode_vardct_group(
             if !is_first_block {
                 continue;
             }
+            let lf_rects = match lf.as_ref() {
+                None => None,
+                Some(lf) => {
+                    let [lf_x, lf_y, lf_b] = lf.each_ref();
+                    Some([
+                        lf_x.rect(Rect {
+                            origin: (sbx[0], sby[0]),
+                            size: (lf_x.size().0 - sbx[0], lf_x.size().1 - sby[0]),
+                        })?,
+                        lf_y.rect(Rect {
+                            origin: (sbx[1], sby[1]),
+                            size: (lf_y.size().0 - sbx[1], lf_y.size().1 - sby[1]),
+                        })?,
+                        lf_b.rect(Rect {
+                            origin: (sbx[2], sby[2]),
+                            size: (lf_b.size().0 - sbx[2], lf_b.size().1 - sby[2]),
+                        })?,
+                    ])
+                }
+            };
+
             let transform_type = HfTransformType::from_usize(transform_id as usize)?;
             let cx = covered_blocks_x(transform_type) as usize;
             let cy = covered_blocks_y(transform_type) as usize;
@@ -434,22 +525,20 @@ pub fn decode_vardct_group(
             let num_blocks = cx * cy;
             let num_coeffs = num_blocks * BLOCK_SIZE;
             for c in [1, 0, 2] {
-                let sbx = bx >> frame_header.hshift(c);
-                let sby = by >> frame_header.vshift(c);
-                if (sbx << frame_header.hshift(c)) != bx || (sby << frame_header.vshift(c) != by) {
+                if (sbx[c] << hshift[c]) != bx || (sby[c] << vshift[c] != by) {
                     continue;
                 }
                 trace!(
                     "Decoding block ({},{}) channel {} with {}x{} block transform {} (shape id {})",
-                    sbx,
-                    sby,
+                    sbx[c],
+                    sby[c],
                     c,
                     cx,
                     cy,
                     transform_id,
                     shape_id
                 );
-                let predicted_nzeros = predict_num_nonzeros(&num_nzeros[c], sbx, sby);
+                let predicted_nzeros = predict_num_nonzeros(&num_nzeros[c], sbx[c], sby[c]);
                 let block_context =
                     block_context_map.block_context(quant_lf, raw_quant, shape_id, c);
                 let nonzero_context = block_context_map
@@ -457,16 +546,18 @@ pub fn decode_vardct_group(
                     + context_offset;
                 let mut nonzeros = reader.read(br, nonzero_context)? as usize;
                 trace!(
-                    "block ({sbx},{sby},{c}) predicted_nzeros: {predicted_nzeros} \
-			nzero_ctx: {nonzero_context} (offset: {context_offset}) \
-			nzeros: {nonzeros}"
+                    "block ({},{},{c}) predicted_nzeros: {predicted_nzeros} \
+                       nzero_ctx: {nonzero_context} (offset: {context_offset}) \
+                       nzeros: {nonzeros}",
+                    sbx[c],
+                    sby[c]
                 );
                 if nonzeros + num_blocks > num_coeffs {
                     return Err(Error::InvalidNumNonZeros(nonzeros, num_blocks));
                 }
                 for iy in 0..cy {
                     for ix in 0..cx {
-                        num_nzeros[c].as_rect_mut().row(sby + iy)[sbx + ix] =
+                        num_nzeros[c].as_rect_mut().row(sby[c] + iy)[sbx[c] + ix] =
                             nonzeros.div_ceil(num_blocks) as u32;
                     }
                 }
@@ -490,9 +581,28 @@ pub fn decode_vardct_group(
                     return Err(Error::EndOfBlockResidualNonZeros(nonzeros));
                 }
             }
-            // TODO(szabadka): Fill in transform_buffer with dequantized coefficients.
-            // TODO(szabadka): Apply chroma-from-luma on the transform_buffer.
-            // TODO(szabadka): Fill in cx x cy corner of transform_buffer with DCT of LF coeffs.
+            let qblock = [
+                &coeffs[0][coeffs_offset..],
+                &coeffs[1][coeffs_offset..],
+                &coeffs[2][coeffs_offset..],
+            ];
+            dequant_block(
+                transform_type,
+                1.0 / quant_params.global_scale as f32,
+                raw_quant,
+                x_dm_multiplier,
+                b_dm_multiplier,
+                x_cc_mul,
+                b_cc_mul,
+                num_coeffs,
+                &hf_global.dequant_matrices,
+                num_blocks,
+                &lf_rects,
+                quant_biases,
+                &qblock,
+                &mut transform_buffer,
+                &mut scratch,
+            );
             for c in [1, 0, 2] {
                 transform_to_pixels(transform_type, &mut transform_buffer[c])?;
                 let mut output = pixels[c].as_rect_mut();

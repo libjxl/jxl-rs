@@ -516,7 +516,14 @@ impl Frame {
                 lf_global,
                 hf_global,
                 hf_meta,
+                &self.lf_image,
                 &self.quant_lf,
+                &self
+                    .decoder_state
+                    .file_header
+                    .transform_data
+                    .opsin_inverse_matrix
+                    .quant_biases,
                 &mut pass_to_pipeline,
                 br,
             )?;
