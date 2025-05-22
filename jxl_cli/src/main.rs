@@ -16,6 +16,7 @@ use std::io::Read;
 use std::path::PathBuf;
 
 use jxl::headers::JxlHeader;
+use jxl::util::write_output_file;
 
 fn decode_jxl_codestream(data: &[u8]) -> Result<(ImageData<f32>, Vec<u8>), Error> {
     let mut br = BitReader::new(data);
@@ -89,9 +90,7 @@ fn decode_jxl_codestream(data: &[u8]) -> Result<(ImageData<f32>, Vec<u8>), Error
 
 fn save_icc(icc_bytes: Vec<u8>, icc_filename: Option<PathBuf>) -> Result<(), Error> {
     match icc_filename {
-        Some(icc_filename) => {
-            std::fs::write(icc_filename, icc_bytes).map_err(|_| Error::OutputWriteFailure)
-        }
+        Some(icc_filename) => write_output_file(&icc_filename, &icc_bytes),
         None => Ok(()),
     }
 }
@@ -117,11 +116,7 @@ fn save_image(image_data: ImageData<f32>, output_filename: PathBuf) -> Result<()
     if output_bytes.is_empty() {
         return Err(Error::OutputFormatNotSupported);
     }
-    if std::fs::write(output_filename, output_bytes).is_err() {
-        Err(Error::OutputWriteFailure)
-    } else {
-        Ok(())
-    }
+    write_output_file(&output_filename, &output_bytes)
 }
 
 #[derive(Parser)]
