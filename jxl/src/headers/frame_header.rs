@@ -7,7 +7,6 @@
 
 use crate::{
     bit_reader::BitReader,
-    entropy_coding::decode::unpack_signed,
     error::Error,
     headers::{encodings::*, extra_channels::ExtraChannelInfo},
     image::Rect,
@@ -315,7 +314,7 @@ pub struct FrameHeader {
     #[coder(u2S(1, 2, 4, 8))]
     #[default_element(1)]
     #[condition(flags & Flags::USE_LF_FRAME == 0)]
-    ec_upsampling: Vec<u32>,
+    pub ec_upsampling: Vec<u32>,
 
     #[coder(Bits(2))]
     #[default(1)]
@@ -348,21 +347,11 @@ pub struct FrameHeader {
     #[coder(u2S(Bits(8), Bits(11) + 256, Bits(14) + 2304, Bits(30) + 18688))]
     #[default(0)]
     #[condition(have_crop && frame_type != FrameType::ReferenceOnly)]
-    x0_raw: u32,
+    pub x0: i32,
 
     #[coder(u2S(Bits(8), Bits(11) + 256, Bits(14) + 2304, Bits(30) + 18688))]
     #[default(0)]
     #[condition(have_crop && frame_type != FrameType::ReferenceOnly)]
-    y0_raw: u32,
-
-    #[coder(Bits(0))]
-    #[default(unpack_signed(x0_raw))]
-    #[condition(false)]
-    pub x0: i32,
-
-    #[coder(Bits(0))]
-    #[default(unpack_signed(y0_raw))]
-    #[condition(false)]
     pub y0: i32,
 
     #[coder(u2S(Bits(8), Bits(11) + 256, Bits(14) + 2304, Bits(30) + 18688))]
@@ -651,6 +640,15 @@ impl FrameHeader {
         Rect { origin, size }
     }
 
+    pub fn postprocess(&mut self, nonserialized: &FrameHeaderNonserialized) {
+        if self.upsampling > 1 {
+            for i in 0..nonserialized.extra_channel_info.len() {
+                let dim_shift = nonserialized.extra_channel_info[i].dim_shift();
+                self.ec_upsampling[i] <<= dim_shift;
+            }
+        }
+    }
+
     fn check(&self, nonserialized: &FrameHeaderNonserialized) -> Result<(), Error> {
         if self.upsampling > 1 {
             if let Some((info, upsampling)) = nonserialized
@@ -681,7 +679,7 @@ impl FrameHeader {
             return Err(Error::NonPatchReferenceWithCrop);
         }
         if !self.is444()
-            && ((self.flags & Flags::SKIP_ADAPTIVE_LF_SMOOTHING) != 0)
+            && ((self.flags & Flags::SKIP_ADAPTIVE_LF_SMOOTHING) == 0)
             && self.encoding == Encoding::VarDCT
         {
             return Err(Error::Non444ChromaSubsampling);

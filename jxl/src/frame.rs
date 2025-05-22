@@ -152,12 +152,12 @@ pub struct Frame {
 
 impl Frame {
     pub fn new(br: &mut BitReader, decoder_state: DecoderState) -> Result<Self> {
-        let frame_header = FrameHeader::read_unconditional(
+        let mut frame_header = FrameHeader::read_unconditional(
             &(),
             br,
             &decoder_state.file_header.frame_header_nonserialized(),
-        )
-        .unwrap();
+        )?;
+        frame_header.postprocess(&decoder_state.file_header.frame_header_nonserialized());
         let num_toc_entries = frame_header.num_toc_entries();
         let toc = Toc::read_unconditional(
             &(),
@@ -349,7 +349,6 @@ impl Frame {
             &self.header,
             &self.decoder_state.file_header.image_metadata,
             self.modular_color_channels,
-            self.decoder_state.extra_channel_info(),
             &tree,
             br,
         )?;
