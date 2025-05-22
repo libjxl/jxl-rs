@@ -434,17 +434,22 @@ pub fn decode_vardct_group(
             let num_blocks = cx * cy;
             let num_coeffs = num_blocks * BLOCK_SIZE;
             for c in [1, 0, 2] {
+                let sbx = bx >> frame_header.hshift(c);
+                let sby = by >> frame_header.vshift(c);
+                if (sbx << frame_header.hshift(c)) != bx || (sby << frame_header.vshift(c) != by) {
+                    continue;
+                }
                 trace!(
                     "Decoding block ({},{}) channel {} with {}x{} block transform {} (shape id {})",
-                    bx,
-                    by,
+                    sbx,
+                    sby,
                     c,
                     cx,
                     cy,
                     transform_id,
                     shape_id
                 );
-                let predicted_nzeros = predict_num_nonzeros(&num_nzeros[c], bx, by);
+                let predicted_nzeros = predict_num_nonzeros(&num_nzeros[c], sbx, sby);
                 let block_context =
                     block_context_map.block_context(quant_lf, raw_quant, shape_id, c);
                 let nonzero_context = block_context_map
@@ -452,7 +457,7 @@ pub fn decode_vardct_group(
                     + context_offset;
                 let mut nonzeros = reader.read(br, nonzero_context)? as usize;
                 trace!(
-                    "block ({bx},{by},{c}) predicted_nzeros: {predicted_nzeros} \
+                    "block ({sbx},{sby},{c}) predicted_nzeros: {predicted_nzeros} \
 			nzero_ctx: {nonzero_context} (offset: {context_offset}) \
 			nzeros: {nonzeros}"
                 );
@@ -461,7 +466,7 @@ pub fn decode_vardct_group(
                 }
                 for iy in 0..cy {
                     for ix in 0..cx {
-                        num_nzeros[c].as_rect_mut().row(by + iy)[bx + ix] =
+                        num_nzeros[c].as_rect_mut().row(sby + iy)[sbx + ix] =
                             nonzeros.div_ceil(num_blocks) as u32;
                     }
                 }
