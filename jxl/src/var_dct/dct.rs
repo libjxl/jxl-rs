@@ -3,9 +3,6 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-// TODO(firsching): remove this one we use this!
-#![allow(dead_code)]
-
 use std::f64::consts::SQRT_2;
 
 use super::dct_scales::WcMultipliers;
@@ -114,7 +111,6 @@ macro_rules! define_dct_1d {
             /// Even indexed rows of `a_out` get first half of `a_in`.
             /// Odd indexed rows of `a_out` get second half of `a_in`.
             fn inverse_even_odd(a_in: &[[f32; SZ]], a_out: &mut [[f32; SZ]]) {
-                const N_CONST: usize = $n;
                 const N_HALF_CONST: usize = $nhalf;
                 for i in 0..N_HALF_CONST {
                     for j in 0..SZ {
