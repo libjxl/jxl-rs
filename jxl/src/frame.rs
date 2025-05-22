@@ -156,8 +156,7 @@ impl Frame {
             &(),
             br,
             &decoder_state.file_header.frame_header_nonserialized(),
-        )
-        .unwrap();
+        )?;
         frame_header.postprocess(&decoder_state.file_header.frame_header_nonserialized());
         let num_toc_entries = frame_header.num_toc_entries();
         let toc = Toc::read_unconditional(
