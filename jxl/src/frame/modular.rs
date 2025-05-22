@@ -347,6 +347,25 @@ impl FullModularImage {
         }
 
         trace!(?section_buffer_indices);
+        #[cfg(feature = "tracing")]
+        for (section, indices) in section_buffer_indices.iter().enumerate() {
+            let section_name = match section {
+                0 => "LF global".to_string(),
+                1 => "LF groups".to_string(),
+                _ => format!("HF groups, pass {}", section - 2),
+            };
+            trace!("Modular channels in {section_name}");
+            for i in indices {
+                let bi = &buffer_info[*i];
+                let ci = bi.info;
+                trace!(
+                    "Channel size: {:?} shift: {:?} id: {}",
+                    ci.size,
+                    ci.shift,
+                    bi.channel_id
+                );
+            }
+        }
 
         let transform_steps = make_grids(
             frame_header,

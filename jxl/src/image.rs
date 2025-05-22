@@ -186,7 +186,8 @@ impl<T: ImageDataType> Image<T> {
         let total_size = xsize
             .checked_mul(ysize)
             .ok_or(Error::ImageSizeTooLarge(xsize, ysize))?;
-        if xsize == 0 || ysize == 0 {
+        // We need images with xsize == 0 for delta palette decoding
+        if ysize == 0 {
             return Err(Error::InvalidImageSize(xsize, ysize));
         }
         debug!("trying to allocate image");
