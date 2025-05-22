@@ -218,7 +218,7 @@ pub enum Error {
     InputReadFailure,
     #[error("Failed to write output file")]
     OutputWriteFailure,
-    #[error("Output format not supported")]
+    #[error("Output format not supported: try .ppm, .pgm or .npy")]
     OutputFormatNotSupported,
 }
 
