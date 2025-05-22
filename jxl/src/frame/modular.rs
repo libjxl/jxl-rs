@@ -505,8 +505,8 @@ fn dequant_lf(
         let fac_x = lf_factors[0] * mul;
         let fac_y = lf_factors[1] * mul;
         let fac_b = lf_factors[2] * mul;
-        let cfl_fac_x = color_correlation_params.y_to_x();
-        let cfl_fac_b = color_correlation_params.y_to_b();
+        let cfl_fac_x = color_correlation_params.y_to_x_lf();
+        let cfl_fac_b = color_correlation_params.y_to_b_lf();
         for y in 0..r.size.1 {
             let quant_row_x = input[1].as_rect().row(y);
             let quant_row_y = input[0].as_rect().row(y);

@@ -25,7 +25,7 @@ pub struct OpsinInverseMatrix {
     #[default([-0.0037930732552754493; 3])]
     pub opsin_biases: [f32; 3],
     #[default([1.0 - 0.05465007330715401, 1.0 - 0.07005449891748593, 1.0 - 0.049935103337343655, 0.145])]
-    quant_biases: [f32; 4],
+    pub quant_biases: [f32; 4],
 }
 
 const DEFAULT_KERN_2: [f32; 15] = [

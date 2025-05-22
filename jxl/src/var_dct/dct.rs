@@ -366,23 +366,18 @@ where
 }
 
 pub fn compute_scaled_dct<const ROWS: usize, const COLS: usize>(
-    from: &[f32],
-    from_stride: usize,
+    mut from: [[f32; COLS]; ROWS],
     to: &mut [f32],
 ) where
     DCT1DImpl<ROWS>: DCT1D,
     DCT1DImpl<COLS>: DCT1D,
 {
-    let mut dct_buffer = [[0.0; COLS]; ROWS];
-    for y in 0..ROWS {
-        dct_buffer[y].copy_from_slice(&from[y * from_stride..y * from_stride + COLS]);
-    }
-    DCT1DImpl::<ROWS>::do_dct::<COLS>(&mut dct_buffer);
+    DCT1DImpl::<ROWS>::do_dct::<COLS>(&mut from);
     let mut transposed_dct_buffer = [[0.0; ROWS]; COLS];
     #[allow(clippy::needless_range_loop)]
     for y in 0..ROWS {
         for x in 0..COLS {
-            transposed_dct_buffer[x][y] = dct_buffer[y][x];
+            transposed_dct_buffer[x][y] = from[y][x];
         }
     }
     DCT1DImpl::<COLS>::do_dct::<ROWS>(&mut transposed_dct_buffer);
