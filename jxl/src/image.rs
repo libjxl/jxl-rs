@@ -215,10 +215,8 @@ impl<T: ImageDataType> Image<T> {
         let total_size = xsize
             .checked_mul(ysize)
             .ok_or(Error::ImageSizeTooLarge(xsize, ysize))?;
-        // We need images with xsize == 0 for delta palette decoding
-        if ysize == 0 {
-            return Err(Error::InvalidImageSize(xsize, ysize));
-        }
+        // To simplify modular transform logic, we allow empty images, because some modular
+        // meta-images can have 0 xsize or ysize (e.g. delta-palette, reference property image).
         debug!("trying to allocate image");
         let mut data = vec![];
         data.try_reserve_exact(total_size)?;
