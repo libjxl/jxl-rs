@@ -72,3 +72,36 @@ jobs:
       - name: Tests with default features
         if: ${{ matrix.check == 'test' && matrix.features == 'default' }}
         run: cargo test --release --all --no-fail-fast
+
+  coverage:
+    runs-on: ubuntu-latest
+    steps:
+    - name: Checkout the source
+      uses: actions/checkout@v4
+
+    - name: Install latest rust toolchain
+      uses: dtolnay/rust-toolchain@stable
+
+    - name: Rust cache
+      uses: Swatinem/rust-cache@v2.7.3
+
+    - name: Install llvm-cov
+      run: cargo +stable install cargo-llvm-cov --locked
+
+    - name: Build and gather coverage
+      run: cargo llvm-cov --no-report
+
+    - name: Generate JSON report
+      run: cargo llvm-cov report --json --output-path=coverage.json
+
+    - name: Distill summary
+      run: ./ci/coverage_summary.py >> $GITHUB_STEP_SUMMARY
+
+    - name: Generate HTML report
+      run: cargo llvm-cov report --html --output-dir=coverage_html
+
+    - name: Upload HTML report
+      uses: actions/upload-artifact@v4.6.2
+      with:
+        name: coverage_report
+        path: ./coverage_html/html

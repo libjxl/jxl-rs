@@ -99,6 +99,8 @@ pub enum Error {
     NonPatchReferenceWithCrop,
     #[error("Non-444 chroma subsampling is not allowed when adaptive DC smoothing is enabled")]
     Non444ChromaSubsampling,
+    #[error("Non-444 chroma subsampling is not allowed for bigger than 8x8 transforms")]
+    InvalidBlockSizeForChromaSubsampling,
     #[error("Out of memory: {0}")]
     OutOfMemory(#[from] TryReserveError),
     #[error("Image size too large: {0}x{1}")]
@@ -216,7 +218,7 @@ pub enum Error {
     InputReadFailure,
     #[error("Failed to write output file")]
     OutputWriteFailure,
-    #[error("Output format not supported")]
+    #[error("Output format not supported: try .ppm, .pgm or .npy")]
     OutputFormatNotSupported,
 }
 

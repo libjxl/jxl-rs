@@ -6,12 +6,17 @@
 use crate::{
     bit_reader::BitReader,
     error::{Error, Result},
+    BLOCK_DIM,
 };
 use std::default::Default;
 
+pub const COLOR_TILE_DIM: usize = 64;
+
+pub const COLOR_TILE_DIM_IN_BLOCKS: usize = COLOR_TILE_DIM / BLOCK_DIM;
+
 pub const DEFAULT_COLOR_FACTOR: u32 = 84;
 
-#[derive(Debug)]
+#[derive(Debug, Copy, Clone)]
 pub struct ColorCorrelationParams {
     pub color_factor: u32,
     pub base_correlation_x: f32,
@@ -66,11 +71,26 @@ impl ColorCorrelationParams {
         }
     }
 
-    pub fn y_to_x(&self) -> f32 {
-        self.base_correlation_x + (self.ytox_lf as f32) / (self.color_factor as f32)
+    pub fn y_to_x(&self, factor: i32) -> f32 {
+        self.base_correlation_x + (factor as f32) / (self.color_factor as f32)
     }
 
-    pub fn y_to_b(&self) -> f32 {
-        self.base_correlation_b + (self.ytob_lf as f32) / (self.color_factor as f32)
+    pub fn y_to_x_lf(&self) -> f32 {
+        self.y_to_x(self.ytox_lf)
     }
+
+    pub fn y_to_b(&self, factor: i32) -> f32 {
+        self.base_correlation_b + (factor as f32) / (self.color_factor as f32)
+    }
+
+    pub fn y_to_b_lf(&self) -> f32 {
+        self.y_to_b(self.ytob_lf)
+    }
+}
+
+#[test]
+fn check_consistency_of_constants() {
+    use crate::GROUP_DIM;
+    assert_eq!(COLOR_TILE_DIM % BLOCK_DIM, 0);
+    assert_eq!((GROUP_DIM / BLOCK_DIM) % COLOR_TILE_DIM_IN_BLOCKS, 0);
 }

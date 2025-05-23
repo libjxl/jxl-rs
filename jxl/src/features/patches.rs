@@ -136,6 +136,7 @@ pub struct PatchesDictionary {
     num_patches: Vec<usize>,
     sorted_patches_y0: Vec<(usize, usize)>,
     sorted_patches_y1: Vec<(usize, usize)>,
+    patches_for_row_result: Vec<usize>,
 }
 
 impl PatchesDictionary {
@@ -470,6 +471,7 @@ impl PatchesDictionary {
             })
         }
 
+        let patches_for_row_result = Vec::<usize>::new_with_capacity(positions.len())?;
         let mut patches_dict = PatchesDictionary {
             positions,
             blendings,
@@ -479,16 +481,16 @@ impl PatchesDictionary {
             sorted_patches_y0: vec![],
             sorted_patches_y1: vec![],
             patch_tree: vec![],
+            patches_for_row_result,
         };
         patches_dict.compute_patch_tree()?;
         Ok(patches_dict)
     }
 
-    pub fn get_patches_for_row(&self, y: usize) -> Vec<usize> {
-        // TODO(zond): Allocate a buffer for this when building the stage instead of when executing it.
-        let mut result = Vec::<usize>::new();
+    pub fn set_patches_for_row(&mut self, y: usize) {
+        self.patches_for_row_result.clear();
         if self.num_patches.len() <= y || self.num_patches[y] == 0 {
-            return result;
+            return;
         }
 
         let mut tree_idx: isize = 0;
@@ -509,7 +511,7 @@ impl PatchesDictionary {
                     if y < p.0 {
                         break;
                     }
-                    result.push(p.1);
+                    self.patches_for_row_result.push(p.1);
                 }
                 tree_idx = if y < node.y_center {
                     node.left_child
@@ -522,19 +524,18 @@ impl PatchesDictionary {
                     if y >= p.0 {
                         break;
                     }
-                    result.push(p.1);
+                    self.patches_for_row_result.push(p.1);
                 }
                 tree_idx = node.right_child;
             }
         }
 
         // Ensure that the relative order of patches is preserved.
-        result.sort();
-        result
+        self.patches_for_row_result.sort();
     }
 
     pub fn add_one_row(
-        &self,
+        &mut self,
         row: &mut [&mut [f32]],
         row_pos: (usize, usize),
         xsize: usize,
@@ -556,8 +557,9 @@ impl PatchesDictionary {
         assert!(num_ec < self.blendings_stride);
         let dummy_fg = vec![0f32];
         let mut fg = vec![dummy_fg.as_slice(); 3 + num_ec];
-        for pos_idx in self.get_patches_for_row(row_pos.1) {
-            let pos = &self.positions[pos_idx];
+        self.set_patches_for_row(row_pos.1);
+        for pos_idx in self.patches_for_row_result.iter() {
+            let pos = &self.positions[*pos_idx];
             assert!(row_pos.1 >= pos.y); // assert patch starts at or before current row
             if pos.x >= row_pos.0 + out[0].len() {
                 // if patch starts before end of current chunk, continue
@@ -660,6 +662,7 @@ mod tests {
                 }],
                 sorted_patches_y0: vec![(20, 0)],
                 sorted_patches_y1: vec![(21, 0)],
+                patches_for_row_result: vec![],
             };
             assert_eq!(got_dict, want_dict);
             Ok(())
@@ -758,6 +761,7 @@ mod tests {
                 ],
                 sorted_patches_y0: vec![(5, 1), (0, 0)],
                 sorted_patches_y1: vec![(7, 1), (1, 0)],
+                patches_for_row_result: vec![],
             };
             assert_eq!(got_dict, want_dict);
             Ok(())
@@ -820,6 +824,7 @@ mod tests {
                 }],
                 sorted_patches_y0: vec![(3, 0)],
                 sorted_patches_y1: vec![(203, 0)],
+                patches_for_row_result: vec![],
             };
             assert_eq!(got_dict, want_dict);
             Ok(())
@@ -864,6 +869,7 @@ mod tests {
                 }],
                 sorted_patches_y0: vec![(4, 0)],
                 sorted_patches_y1: vec![(5, 0)],
+                patches_for_row_result: vec![],
             };
             assert_eq!(got_dict, want_dict);
             Ok(())
@@ -931,13 +937,14 @@ mod tests {
                 ],
                 sorted_patches_y0: vec![(5, 1), (0, 0)],
                 sorted_patches_y1: vec![(6, 1), (1, 0)],
+                patches_for_row_result: vec![],
             };
             assert_eq!(got_dict, want_dict);
             Ok(())
         }
     }
 
-    mod get_patches_for_row_tests {
+    mod set_patches_for_row_tests {
         use super::super::*;
         use test_log::test;
 
@@ -958,9 +965,11 @@ mod tests {
 
         #[test]
         fn test_no_patches() {
-            let dict = create_dictionary(vec![], vec![]);
-            assert_eq!(dict.get_patches_for_row(0), vec![] as Vec<usize>);
-            assert_eq!(dict.get_patches_for_row(10), vec![] as Vec<usize>);
+            let mut dict = create_dictionary(vec![], vec![]);
+            dict.set_patches_for_row(0);
+            assert_eq!(dict.patches_for_row_result, vec![] as Vec<usize>);
+            dict.set_patches_for_row(10);
+            assert_eq!(dict.patches_for_row_result, vec![] as Vec<usize>);
         }
 
         #[test]
@@ -977,12 +986,15 @@ mod tests {
                 y: 10,
                 ref_pos_idx: 0,
             }];
-            let dict = create_dictionary(positions, ref_positions);
+            let mut dict = create_dictionary(positions, ref_positions);
 
             // Patch covers rows 10, 11, 12, 13, 14
-            assert_eq!(dict.get_patches_for_row(10), vec![0]); // First row of patch
-            assert_eq!(dict.get_patches_for_row(12), vec![0]); // Middle row of patch
-            assert_eq!(dict.get_patches_for_row(14), vec![0]); // Last row of patch
+            dict.set_patches_for_row(10);
+            assert_eq!(dict.patches_for_row_result, vec![0]); // First row of patch
+            dict.set_patches_for_row(12);
+            assert_eq!(dict.patches_for_row_result, vec![0]); // Middle row of patch
+            dict.set_patches_for_row(14);
+            assert_eq!(dict.patches_for_row_result, vec![0]); // Last row of patch
         }
 
         #[test]
@@ -999,10 +1011,12 @@ mod tests {
                 y: 10,
                 ref_pos_idx: 0,
             }];
-            let dict = create_dictionary(positions, ref_positions);
+            let mut dict = create_dictionary(positions, ref_positions);
 
-            assert_eq!(dict.get_patches_for_row(9), vec![] as Vec<usize>); // Row before patch
-            assert_eq!(dict.get_patches_for_row(15), vec![] as Vec<usize>); // Row after patch
+            dict.set_patches_for_row(9);
+            assert_eq!(dict.patches_for_row_result, vec![] as Vec<usize>); // Row before patch
+            dict.set_patches_for_row(15);
+            assert_eq!(dict.patches_for_row_result, vec![] as Vec<usize>); // Row after patch
         }
 
         #[test]
@@ -1019,11 +1033,14 @@ mod tests {
                 y: 5,
                 ref_pos_idx: 0,
             }];
-            let dict = create_dictionary(positions, ref_positions);
+            let mut dict = create_dictionary(positions, ref_positions);
 
-            assert_eq!(dict.get_patches_for_row(4), vec![] as Vec<usize>);
-            assert_eq!(dict.get_patches_for_row(5), vec![0]);
-            assert_eq!(dict.get_patches_for_row(6), vec![] as Vec<usize>);
+            dict.set_patches_for_row(4);
+            assert_eq!(dict.patches_for_row_result, vec![] as Vec<usize>);
+            dict.set_patches_for_row(5);
+            assert_eq!(dict.patches_for_row_result, vec![0]);
+            dict.set_patches_for_row(6);
+            assert_eq!(dict.patches_for_row_result, vec![] as Vec<usize>);
         }
 
         #[test]
@@ -1056,16 +1073,24 @@ mod tests {
                     ref_pos_idx: 1,
                 },
             ];
-            let dict = create_dictionary(positions, ref_positions);
+            let mut dict = create_dictionary(positions, ref_positions);
 
-            assert_eq!(dict.get_patches_for_row(4), vec![] as Vec<usize>);
-            assert_eq!(dict.get_patches_for_row(5), vec![0]);
-            assert_eq!(dict.get_patches_for_row(7), vec![0]);
-            assert_eq!(dict.get_patches_for_row(8), vec![] as Vec<usize>); // Between patches
-            assert_eq!(dict.get_patches_for_row(9), vec![] as Vec<usize>); // Between patches
-            assert_eq!(dict.get_patches_for_row(10), vec![1]);
-            assert_eq!(dict.get_patches_for_row(11), vec![1]);
-            assert_eq!(dict.get_patches_for_row(12), vec![] as Vec<usize>);
+            dict.set_patches_for_row(4);
+            assert_eq!(dict.patches_for_row_result, vec![] as Vec<usize>);
+            dict.set_patches_for_row(5);
+            assert_eq!(dict.patches_for_row_result, vec![0]);
+            dict.set_patches_for_row(7);
+            assert_eq!(dict.patches_for_row_result, vec![0]);
+            dict.set_patches_for_row(8);
+            assert_eq!(dict.patches_for_row_result, vec![] as Vec<usize>); // Between patches
+            dict.set_patches_for_row(9);
+            assert_eq!(dict.patches_for_row_result, vec![] as Vec<usize>); // Between patches
+            dict.set_patches_for_row(10);
+            assert_eq!(dict.patches_for_row_result, vec![1]);
+            dict.set_patches_for_row(11);
+            assert_eq!(dict.patches_for_row_result, vec![1]);
+            dict.set_patches_for_row(12);
+            assert_eq!(dict.patches_for_row_result, vec![] as Vec<usize>);
         }
 
         #[test]
@@ -1098,15 +1123,22 @@ mod tests {
                     ref_pos_idx: 1,
                 }, // idx 1
             ];
-            let dict = create_dictionary(positions, ref_positions);
+            let mut dict = create_dictionary(positions, ref_positions);
 
-            assert_eq!(dict.get_patches_for_row(10), vec![0]); // Only patch 0
-            assert_eq!(dict.get_patches_for_row(11), vec![0]); // Only patch 0
-            assert_eq!(dict.get_patches_for_row(12), vec![0, 1]); // Both patches (sorted indices)
-            assert_eq!(dict.get_patches_for_row(13), vec![0, 1]); // Both patches
-            assert_eq!(dict.get_patches_for_row(14), vec![0, 1]); // Patch 0 ends, Patch 1 continues
-            assert_eq!(dict.get_patches_for_row(15), vec![1]); // Only patch 1
-            assert_eq!(dict.get_patches_for_row(16), vec![] as Vec<usize>);
+            dict.set_patches_for_row(10);
+            assert_eq!(dict.patches_for_row_result, vec![0]); // Only patch 0
+            dict.set_patches_for_row(11);
+            assert_eq!(dict.patches_for_row_result, vec![0]); // Only patch 0
+            dict.set_patches_for_row(12);
+            assert_eq!(dict.patches_for_row_result, vec![0, 1]); // Both patches (sorted indices)
+            dict.set_patches_for_row(13);
+            assert_eq!(dict.patches_for_row_result, vec![0, 1]); // Both patches
+            dict.set_patches_for_row(14);
+            assert_eq!(dict.patches_for_row_result, vec![0, 1]); // Patch 0 ends, Patch 1 continues
+            dict.set_patches_for_row(15);
+            assert_eq!(dict.patches_for_row_result, vec![1]); // Only patch 1
+            dict.set_patches_for_row(16);
+            assert_eq!(dict.patches_for_row_result, vec![] as Vec<usize>);
         }
 
         #[test]
@@ -1139,15 +1171,22 @@ mod tests {
                     ref_pos_idx: 1,
                 },
             ];
-            let dict = create_dictionary(positions, ref_positions);
+            let mut dict = create_dictionary(positions, ref_positions);
 
-            assert_eq!(dict.get_patches_for_row(4), vec![] as Vec<usize>);
-            assert_eq!(dict.get_patches_for_row(5), vec![0]);
-            assert_eq!(dict.get_patches_for_row(6), vec![0]);
-            assert_eq!(dict.get_patches_for_row(7), vec![1]); // Patch 0 ends, Patch 1 starts
-            assert_eq!(dict.get_patches_for_row(8), vec![1]);
-            assert_eq!(dict.get_patches_for_row(9), vec![1]);
-            assert_eq!(dict.get_patches_for_row(10), vec![] as Vec<usize>);
+            dict.set_patches_for_row(4);
+            assert_eq!(dict.patches_for_row_result, vec![] as Vec<usize>);
+            dict.set_patches_for_row(5);
+            assert_eq!(dict.patches_for_row_result, vec![0]);
+            dict.set_patches_for_row(6);
+            assert_eq!(dict.patches_for_row_result, vec![0]);
+            dict.set_patches_for_row(7);
+            assert_eq!(dict.patches_for_row_result, vec![1]); // Patch 0 ends, Patch 1 starts
+            dict.set_patches_for_row(8);
+            assert_eq!(dict.patches_for_row_result, vec![1]);
+            dict.set_patches_for_row(9);
+            assert_eq!(dict.patches_for_row_result, vec![1]);
+            dict.set_patches_for_row(10);
+            assert_eq!(dict.patches_for_row_result, vec![] as Vec<usize>);
         }
 
         #[test]
@@ -1180,14 +1219,20 @@ mod tests {
                     ref_pos_idx: 1,
                 }, // idx 1
             ];
-            let dict = create_dictionary(positions, ref_positions);
+            let mut dict = create_dictionary(positions, ref_positions);
 
-            assert_eq!(dict.get_patches_for_row(2), vec![] as Vec<usize>);
-            assert_eq!(dict.get_patches_for_row(3), vec![0, 1]); // Both cover
-            assert_eq!(dict.get_patches_for_row(4), vec![0, 1]); // Both cover
-            assert_eq!(dict.get_patches_for_row(5), vec![1]); // Only patch 1 (longer)
-            assert_eq!(dict.get_patches_for_row(6), vec![1]); // Only patch 1
-            assert_eq!(dict.get_patches_for_row(7), vec![] as Vec<usize>);
+            dict.set_patches_for_row(2);
+            assert_eq!(dict.patches_for_row_result, vec![] as Vec<usize>);
+            dict.set_patches_for_row(3);
+            assert_eq!(dict.patches_for_row_result, vec![0, 1]); // Both cover
+            dict.set_patches_for_row(4);
+            assert_eq!(dict.patches_for_row_result, vec![0, 1]); // Both cover
+            dict.set_patches_for_row(5);
+            assert_eq!(dict.patches_for_row_result, vec![1]); // Only patch 1 (longer)
+            dict.set_patches_for_row(6);
+            assert_eq!(dict.patches_for_row_result, vec![1]); // Only patch 1
+            dict.set_patches_for_row(7);
+            assert_eq!(dict.patches_for_row_result, vec![] as Vec<usize>);
         }
 
         #[test]
@@ -1234,18 +1279,28 @@ mod tests {
                     ref_pos_idx: 2,
                 }, // Patch 2
             ];
-            let dict = create_dictionary(positions, ref_positions);
+            let mut dict = create_dictionary(positions, ref_positions);
 
-            assert_eq!(dict.get_patches_for_row(4), vec![] as Vec<usize>);
-            assert_eq!(dict.get_patches_for_row(5), vec![1]);
-            assert_eq!(dict.get_patches_for_row(6), vec![1]);
-            assert_eq!(dict.get_patches_for_row(7), vec![1]);
-            assert_eq!(dict.get_patches_for_row(8), vec![] as Vec<usize>);
-            assert_eq!(dict.get_patches_for_row(9), vec![] as Vec<usize>);
-            assert_eq!(dict.get_patches_for_row(10), vec![0, 2]); // Patches 0 and 2, indices sorted
-            assert_eq!(dict.get_patches_for_row(11), vec![0, 2]);
-            assert_eq!(dict.get_patches_for_row(12), vec![0, 2]);
-            assert_eq!(dict.get_patches_for_row(13), vec![] as Vec<usize>);
+            dict.set_patches_for_row(4);
+            assert_eq!(dict.patches_for_row_result, vec![] as Vec<usize>);
+            dict.set_patches_for_row(5);
+            assert_eq!(dict.patches_for_row_result, vec![1]);
+            dict.set_patches_for_row(6);
+            assert_eq!(dict.patches_for_row_result, vec![1]);
+            dict.set_patches_for_row(7);
+            assert_eq!(dict.patches_for_row_result, vec![1]);
+            dict.set_patches_for_row(8);
+            assert_eq!(dict.patches_for_row_result, vec![] as Vec<usize>);
+            dict.set_patches_for_row(9);
+            assert_eq!(dict.patches_for_row_result, vec![] as Vec<usize>);
+            dict.set_patches_for_row(10);
+            assert_eq!(dict.patches_for_row_result, vec![0, 2]); // Patches 0 and 2, indices sorted
+            dict.set_patches_for_row(11);
+            assert_eq!(dict.patches_for_row_result, vec![0, 2]);
+            dict.set_patches_for_row(12);
+            assert_eq!(dict.patches_for_row_result, vec![0, 2]);
+            dict.set_patches_for_row(13);
+            assert_eq!(dict.patches_for_row_result, vec![] as Vec<usize>);
         }
     }
 
@@ -1319,6 +1374,7 @@ mod tests {
                 num_patches: Vec::new(),
                 sorted_patches_y0: Vec::new(),
                 sorted_patches_y1: Vec::new(),
+                patches_for_row_result: vec![],
             };
             patches_dict.compute_patch_tree()?;
 
@@ -1383,6 +1439,7 @@ mod tests {
                 num_patches: Vec::new(),
                 sorted_patches_y0: Vec::new(),
                 sorted_patches_y1: Vec::new(),
+                patches_for_row_result: vec![],
             };
             patches_dict.compute_patch_tree()?;
 
@@ -1473,6 +1530,7 @@ mod tests {
                 num_patches: Vec::new(),
                 sorted_patches_y0: Vec::new(),
                 sorted_patches_y1: Vec::new(),
+                patches_for_row_result: vec![],
             };
             patches_dict.compute_patch_tree()?;
 
@@ -1561,6 +1619,7 @@ mod tests {
                 num_patches: Vec::new(),
                 sorted_patches_y0: Vec::new(),
                 sorted_patches_y1: Vec::new(),
+                patches_for_row_result: vec![],
             };
             patches_dict.compute_patch_tree()?;
 
@@ -1665,6 +1724,7 @@ mod tests {
                 num_patches: Vec::new(),
                 sorted_patches_y0: Vec::new(),
                 sorted_patches_y1: Vec::new(),
+                patches_for_row_result: vec![],
             };
             patches_dict.compute_patch_tree()?;
 
@@ -1738,6 +1798,7 @@ mod tests {
                 num_patches: Vec::new(),
                 sorted_patches_y0: Vec::new(),
                 sorted_patches_y1: Vec::new(),
+                patches_for_row_result: vec![0usize; 1],
             };
             dict.compute_patch_tree()?;
 
@@ -1808,6 +1869,7 @@ mod tests {
                 num_patches: Vec::new(),
                 sorted_patches_y0: Vec::new(),
                 sorted_patches_y1: Vec::new(),
+                patches_for_row_result: vec![0usize; 1],
             };
             patches_dict.compute_patch_tree()?;
 

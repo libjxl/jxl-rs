@@ -75,6 +75,7 @@ pub struct HfGlobalState {
     passes: Vec<PassState>,
     #[allow(dead_code)]
     dequant_matrices: DequantMatrices,
+    hf_coefficients: Option<(Image<i32>, Image<i32>, Image<i32>)>,
 }
 
 #[derive(Debug)]
@@ -133,6 +134,7 @@ pub struct HfMetadata {
     raw_quant_map: Image<i32>,
     transform_map: Image<u8>,
     epf_map: Image<u8>,
+    used_hf_types: u32,
 }
 
 pub struct Frame {
@@ -142,7 +144,7 @@ pub struct Frame {
     lf_global: Option<LfGlobalState>,
     hf_global: Option<HfGlobalState>,
     lf_image: Option<[Image<f32>; 3]>,
-    quant_lf: Option<Image<u8>>,
+    quant_lf: Image<u8>,
     hf_meta: Option<HfMetadata>,
     decoder_state: DecoderState,
     render_pipeline: Option<SimpleRenderPipeline>,
@@ -150,12 +152,12 @@ pub struct Frame {
 
 impl Frame {
     pub fn new(br: &mut BitReader, decoder_state: DecoderState) -> Result<Self> {
-        let frame_header = FrameHeader::read_unconditional(
+        let mut frame_header = FrameHeader::read_unconditional(
             &(),
             br,
             &decoder_state.file_header.frame_header_nonserialized(),
-        )
-        .unwrap();
+        )?;
+        frame_header.postprocess(&decoder_state.file_header.frame_header_nonserialized());
         let num_toc_entries = frame_header.num_toc_entries();
         let toc = Toc::read_unconditional(
             &(),
@@ -191,11 +193,7 @@ impl Frame {
         } else {
             None
         };
-        let quant_lf = if has_lf_image {
-            Some(Image::new(size_blocks)?)
-        } else {
-            None
-        };
+        let quant_lf = Image::new(size_blocks)?;
         let size_color_tiles = (size_blocks.0.div_ceil(8), size_blocks.1.div_ceil(8));
         let hf_meta = if frame_header.encoding == Encoding::VarDCT {
             Some(HfMetadata {
@@ -207,6 +205,7 @@ impl Frame {
                     HfTransformType::INVALID_TRANSFORM,
                 )?,
                 epf_map: Image::new(size_blocks)?,
+                used_hf_types: 0,
             })
         } else {
             None
@@ -350,7 +349,6 @@ impl Frame {
             &self.header,
             &self.decoder_state.file_header.image_metadata,
             self.modular_color_channels,
-            self.decoder_state.extra_channel_info(),
             &tree,
             br,
         )?;
@@ -386,7 +384,7 @@ impl Frame {
                 &lf_global.lf_quant,
                 lf_global.block_context_map.as_ref().unwrap(),
                 self.lf_image.as_mut().unwrap(),
-                self.quant_lf.as_mut().unwrap(),
+                &mut self.quant_lf,
                 br,
             )?;
         }
@@ -397,7 +395,7 @@ impl Frame {
             None,
             br,
         )?;
-        if self.header.encoding == Encoding::VarDCT && !self.header.has_lf_frame() {
+        if self.header.encoding == Encoding::VarDCT {
             info!("decoding HF metadata with group id {}", group);
             let hf_meta = self.hf_meta.as_mut().unwrap();
             decode_hf_metadata(
@@ -419,7 +417,8 @@ impl Frame {
             return Ok(());
         }
         let lf_global = self.lf_global.as_mut().unwrap();
-        let dequant_matrices = DequantMatrices::decode(&self.header, lf_global, br)?;
+        let mut dequant_matrices = DequantMatrices::decode(&self.header, lf_global, br)?;
+        dequant_matrices.ensure_computed(self.hf_meta.as_ref().unwrap().used_hf_types)?;
         let block_context_map = lf_global.block_context_map.as_mut().unwrap();
         let num_histo_bits = self.header.num_groups().ceil_log2();
         let num_histograms: u32 = br.read(num_histo_bits)? as u32 + 1;
@@ -445,15 +444,28 @@ impl Frame {
                 i, num_contexts
             );
             let histograms = Histograms::decode(num_contexts, br, true)?;
+            debug!("Found {} histograms", histograms.num_histograms());
             passes.push(PassState {
                 coeff_orders,
                 histograms,
             });
         }
+        let hf_coefficients = if passes.len() <= 1 {
+            None
+        } else {
+            let xs = FrameHeader::GROUP_DIM * FrameHeader::GROUP_DIM;
+            let ys = self.header.num_groups();
+            Some((
+                Image::new((xs, ys))?,
+                Image::new((xs, ys))?,
+                Image::new((xs, ys))?,
+            ))
+        };
         self.hf_global = Some(HfGlobalState {
             num_histograms,
             passes,
             dequant_matrices,
+            hf_coefficients,
         });
         Ok(())
     }
@@ -504,6 +516,14 @@ impl Frame {
                 lf_global,
                 hf_global,
                 hf_meta,
+                &self.lf_image,
+                &self.quant_lf,
+                &self
+                    .decoder_state
+                    .file_header
+                    .transform_data
+                    .opsin_inverse_matrix
+                    .quant_biases,
                 &mut pass_to_pipeline,
                 br,
             )?;
@@ -594,6 +614,7 @@ mod test {
             let r = read_icc(&mut br)?;
             println!("found {}-byte ICC", r.len());
         };
+        br.jump_to_byte_boundary()?;
         let mut decoder_state = DecoderState::new(file_header);
 
         loop {

@@ -126,6 +126,35 @@ pub struct Rect {
     pub size: (usize, usize),
 }
 
+impl Rect {
+    pub fn is_within(&self, size: (usize, usize)) -> Result<()> {
+        if self
+            .origin
+            .0
+            .checked_add(self.size.0)
+            .ok_or(Error::ArithmeticOverflow)?
+            > size.0
+            || self
+                .origin
+                .1
+                .checked_add(self.size.1)
+                .ok_or(Error::ArithmeticOverflow)?
+                > size.1
+        {
+            Err(Error::RectOutOfBounds(
+                self.size.0,
+                self.size.1,
+                self.origin.0,
+                self.origin.1,
+                size.0,
+                size.1,
+            ))
+        } else {
+            Ok(())
+        }
+    }
+}
+
 #[derive(Clone, Copy)]
 pub struct ImageRect<'a, T: ImageDataType> {
     rect: Rect,
@@ -186,9 +215,8 @@ impl<T: ImageDataType> Image<T> {
         let total_size = xsize
             .checked_mul(ysize)
             .ok_or(Error::ImageSizeTooLarge(xsize, ysize))?;
-        if xsize == 0 || ysize == 0 {
-            return Err(Error::InvalidImageSize(xsize, ysize));
-        }
+        // To simplify modular transform logic, we allow empty images, because some modular
+        // meta-images can have 0 xsize or ysize (e.g. delta-palette, reference property image).
         debug!("trying to allocate image");
         let mut data = vec![];
         data.try_reserve_exact(total_size)?;
@@ -291,36 +319,9 @@ impl<T: ImageDataType> Image<T> {
     }
 }
 
-fn rect_size_check(rect: Rect, size: (usize, usize)) -> Result<()> {
-    if rect
-        .origin
-        .0
-        .checked_add(rect.size.0)
-        .ok_or(Error::ArithmeticOverflow)?
-        > size.0
-        || rect
-            .origin
-            .1
-            .checked_add(rect.size.1)
-            .ok_or(Error::ArithmeticOverflow)?
-            > size.1
-    {
-        Err(Error::RectOutOfBounds(
-            rect.size.0,
-            rect.size.1,
-            rect.origin.0,
-            rect.origin.1,
-            size.0,
-            size.1,
-        ))
-    } else {
-        Ok(())
-    }
-}
-
 impl<'a, T: ImageDataType> ImageRect<'a, T> {
     pub fn rect(self, rect: Rect) -> Result<ImageRect<'a, T>> {
-        rect_size_check(rect, self.rect.size)?;
+        rect.is_within(self.rect.size)?;
         Ok(ImageRect {
             rect: Rect {
                 origin: (
@@ -409,7 +410,7 @@ impl<T: ImageDataType + Eq> Eq for ImageRect<'_, T> {}
 
 impl<'a, T: ImageDataType> ImageRectMut<'a, T> {
     pub fn rect(&'a mut self, rect: Rect) -> Result<ImageRectMut<'a, T>> {
-        rect_size_check(rect, self.rect.size)?;
+        rect.is_within(self.rect.size)?;
         Ok(ImageRectMut {
             rect: Rect {
                 origin: (
@@ -423,7 +424,7 @@ impl<'a, T: ImageDataType> ImageRectMut<'a, T> {
     }
 
     pub fn into_rect(self, rect: Rect) -> Result<ImageRectMut<'a, T>> {
-        rect_size_check(rect, self.rect.size)?;
+        rect.is_within(self.rect.size)?;
         Ok(ImageRectMut {
             rect: Rect {
                 origin: (
