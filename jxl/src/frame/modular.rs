@@ -187,8 +187,10 @@ impl ModularBuffer {
 #[derive(Debug)]
 struct ModularBufferInfo {
     info: ChannelInfo,
-    // Only accurate for output and coded channels.
-    channel_id: usize,
+    // Only accurate for coded channels.
+    coded_channel_id: usize,
+    // Only accurate for output channels.
+    output_channel_id: usize,
     is_output: bool,
     is_coded: bool,
     #[allow(dead_code)]
@@ -287,7 +289,7 @@ impl FullModularImage {
             .enumerate()
             .filter_map(|(i, b)| {
                 if b.is_coded {
-                    Some((b.channel_id, i))
+                    Some((b.coded_channel_id, i))
                 } else {
                     None
                 }
@@ -343,10 +345,31 @@ impl FullModularImage {
 
         // Ensure that the channel list in each group is sorted by actual channel ID.
         for list in section_buffer_indices.iter_mut() {
-            list.sort_by_key(|x| buffer_info[*x].channel_id);
+            list.sort_by_key(|x| buffer_info[*x].coded_channel_id);
         }
 
         trace!(?section_buffer_indices);
+        #[cfg(feature = "tracing")]
+        for (section, indices) in section_buffer_indices.iter().enumerate() {
+            let section_name = match section {
+                0 => "LF global".to_string(),
+                1 => "LF groups".to_string(),
+                _ => format!("HF groups, pass {}", section - 2),
+            };
+            trace!("Modular channels in {section_name}");
+            for i in indices {
+                let bi = &buffer_info[*i];
+                let ci = bi.info;
+                trace!(
+                    "Channel size: {:?} shift: {:?} coded id: {} output id: {} output: {}",
+                    ci.size,
+                    ci.shift,
+                    bi.coded_channel_id,
+                    bi.output_channel_id,
+                    bi.is_output,
+                );
+            }
+        }
 
         let transform_steps = make_grids(
             frame_header,
@@ -423,7 +446,7 @@ impl FullModularImage {
         let mut maybe_output = |bi: &mut ModularBufferInfo, grid: usize| -> Result<()> {
             if bi.is_output {
                 on_output(
-                    bi.channel_id,
+                    bi.output_channel_id,
                     grid,
                     &bi.buffer_grid[grid].data.borrow().as_ref().unwrap().data,
                 )?;
@@ -486,8 +509,8 @@ fn dequant_lf(
         let fac_x = lf_factors[0] * mul;
         let fac_y = lf_factors[1] * mul;
         let fac_b = lf_factors[2] * mul;
-        let cfl_fac_x = color_correlation_params.y_to_x();
-        let cfl_fac_b = color_correlation_params.y_to_b();
+        let cfl_fac_x = color_correlation_params.y_to_x_lf();
+        let cfl_fac_b = color_correlation_params.y_to_b_lf();
         for y in 0..r.size.1 {
             let quant_row_x = input[1].as_rect().row(y);
             let quant_row_y = input[0].as_rect().row(y);

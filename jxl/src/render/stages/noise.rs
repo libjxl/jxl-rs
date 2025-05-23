@@ -106,8 +106,8 @@ impl RenderPipelineStage for AddNoiseStage {
         row: &mut [&mut [f32]],
     ) {
         let norm_const = 0.22;
-        let ytox = self.color_correlation.y_to_x();
-        let ytob = self.color_correlation.y_to_b();
+        let ytox = self.color_correlation.y_to_x_lf();
+        let ytob = self.color_correlation.y_to_b_lf();
         for x in 0..xsize {
             let row_rnd_r = row[3][x];
             let row_rnd_g = row[4][x];

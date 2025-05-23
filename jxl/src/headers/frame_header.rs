@@ -324,12 +324,12 @@ pub struct FrameHeader {
     #[coder(Bits(3))]
     #[default(3)]
     #[condition(encoding == Encoding::VarDCT && nonserialized.xyb_encoded)]
-    x_qm_scale: u32,
+    pub x_qm_scale: u32,
 
     #[coder(Bits(3))]
     #[default(2)]
     #[condition(encoding == Encoding::VarDCT && nonserialized.xyb_encoded)]
-    b_qm_scale: u32,
+    pub b_qm_scale: u32,
 
     #[condition(frame_type != FrameType::ReferenceOnly)]
     #[default(Passes::default(&field_nonserialized))]
