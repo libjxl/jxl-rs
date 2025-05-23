@@ -435,7 +435,8 @@ pub fn meta_apply_transforms(
     for chan in channels.iter() {
         buffer_info.push(ModularBufferInfo {
             info: chan.1,
-            channel_id: chan.0,
+            coded_channel_id: 0,
+            output_channel_id: chan.0,
             is_output: true,
             is_coded: false,
             description: format!(
@@ -452,7 +453,8 @@ pub fn meta_apply_transforms(
     let mut add_transform_buffer = |info, description| {
         buffer_info.push(ModularBufferInfo {
             info,
-            channel_id: 0,
+            coded_channel_id: 0,
+            output_channel_id: 0,
             is_output: false,
             is_coded: false,
             description,
@@ -479,7 +481,7 @@ pub fn meta_apply_transforms(
     // actually coded.
     for (chid, chan) in channels.iter().enumerate() {
         buffer_info[chan.0].is_coded = true;
-        buffer_info[chan.0].channel_id = chid;
+        buffer_info[chan.0].coded_channel_id = chid;
     }
 
     debug!(?transform_steps);
