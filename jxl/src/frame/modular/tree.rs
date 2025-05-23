@@ -11,6 +11,7 @@ use crate::{
     entropy_coding::decode::Histograms,
     error::{Error, Result},
     frame::modular::predict::PredictionData,
+    image::Image,
     util::{tracing_wrappers::*, NewWithCapacity},
 };
 
@@ -197,6 +198,7 @@ impl Tree {
     // Also, the first two properties (the static properties) should be already set by the caller.
     // All other properties should be 0 on the first call in a row.
     #[instrument(level = "trace", skip(buffers), ret)]
+    #[allow(clippy::too_many_arguments)]
     pub(super) fn predict(
         &self,
         buffers: &mut [&mut ModularChannel],
@@ -204,7 +206,8 @@ impl Tree {
         wp_state: &mut WeightedPredictorState,
         x: usize,
         y: usize,
-        property_buffer: &mut [i32; 256],
+        references: &Image<i32>,
+        property_buffer: &mut [i32],
     ) -> PredictionResult {
         let img = &buffers[index].data;
         let prediction_data = PredictionData::get(img.as_rect(), x, y);
@@ -254,7 +257,10 @@ impl Tree {
             wp_state.predict_and_property((x, y), img.size().0, &prediction_data);
         property_buffer[15] = property;
 
-        // TODO(veluca): reference properties.
+        // Reference properties.
+        let num_refs = references.size().0;
+        let ref_properties = &mut property_buffer[NUM_NONREF_PROPERTIES..];
+        ref_properties[..num_refs].copy_from_slice(&references.as_rect().row(x)[..num_refs]);
 
         trace!(?property_buffer, "new properties");
 

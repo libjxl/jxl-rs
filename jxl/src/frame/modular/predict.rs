@@ -90,6 +90,19 @@ impl PredictionData {
     }
 }
 
+pub fn clamped_gradient(left: i64, top: i64, topleft: i64) -> i64 {
+    // Same code/logic as libjxl.
+    let min = left.min(top);
+    let max = left.max(top);
+    let grad = left + top - topleft;
+    let grad_clamp_max = if topleft < min { max } else { grad };
+    if topleft > max {
+        min
+    } else {
+        grad_clamp_max
+    }
+}
+
 impl Predictor {
     pub const NUM_PREDICTORS: u32 = Predictor::AverageAll as u32 + 1;
 
@@ -111,7 +124,7 @@ impl Predictor {
             Predictor::West => left as i64,
             Predictor::North => top as i64,
             Predictor::Select => Self::select(left as i64, top as i64, topleft as i64),
-            Predictor::Gradient => Self::clamped_gradient(left as i64, top as i64, topleft as i64),
+            Predictor::Gradient => clamped_gradient(left as i64, top as i64, topleft as i64),
             Predictor::Weighted => wp_pred,
             Predictor::WestWest => leftleft as i64,
             Predictor::NorthEast => topright as i64,
@@ -138,19 +151,6 @@ impl Predictor {
             left
         } else {
             top
-        }
-    }
-
-    fn clamped_gradient(left: i64, top: i64, topleft: i64) -> i64 {
-        // Same code/logic as libjxl.
-        let min = left.min(top);
-        let max = left.max(top);
-        let grad = left + top - topleft;
-        let grad_clamp_max = if topleft < min { max } else { grad };
-        if topleft > max {
-            min
-        } else {
-            grad_clamp_max
         }
     }
 }
