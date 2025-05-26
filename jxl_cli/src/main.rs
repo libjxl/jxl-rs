@@ -25,13 +25,14 @@ fn decode_jxl_codestream(data: &[u8]) -> Result<(ImageData<f32>, Vec<u8>), Error
         file_header.size.xsize(),
         file_header.size.ysize()
     );
-    // TODO(firsching): Make it such that we also write icc bytes in the
-    // case where want_icc is false.
-    let mut icc_bytes = Vec::<u8>::new();
-    if file_header.image_metadata.color_encoding.want_icc {
+
+    let icc_bytes = if file_header.image_metadata.color_encoding.want_icc {
         let r = read_icc(&mut br)?;
         println!("found {}-byte ICC", r.len());
-        icc_bytes = r;
+        r
+    } else {
+        // TODO: handle potential error here?
+        file_header.image_metadata.color_encoding.maybe_create_profile()?.unwrap()
     };
 
     br.jump_to_byte_boundary()?;

@@ -644,6 +644,12 @@ mod test {
             } else {
                 break;
             }
+            let maybe_profile = &decoder_state
+                .file_header
+                .image_metadata
+                .color_encoding
+                .maybe_create_profile()?;
+            assert!(maybe_profile.is_some());
         }
         Ok(())
     }

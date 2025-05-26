@@ -44,6 +44,10 @@ pub enum Error {
     InvalidGamma(f32),
     #[error("Invalid color encoding: no ICC and unknown TF / ColorSpace")]
     InvalidColorEncoding,
+    #[error("Invalid color space: should be one of RGB, Gray or XYB")]
+    InvalidColorSpace,
+    #[error("Only perceptual rendering intent implemented for XYB ICC profile.")]
+    InvalidRenderingIntent,
     #[error("Invalid intensity_target: {0}")]
     InvalidIntensityTarget(f32),
     #[error("Invalid min_nits: {0}")]
@@ -220,6 +224,10 @@ pub enum Error {
     OutputWriteFailure,
     #[error("Output format not supported: try .ppm, .pgm or .npy")]
     OutputFormatNotSupported,
+    #[error("lcms error: {0}")]
+    LcmsError(#[from] lcms2::Error),
+    #[error("Unknown transfer function for ICC profile")]
+    TransferFunctionUnknown,
 }
 
 pub type Result<T, E = Error> = std::result::Result<T, E>;
