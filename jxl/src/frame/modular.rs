@@ -228,7 +228,7 @@ pub struct FullModularImage {
 }
 
 impl FullModularImage {
-    #[instrument(level = "debug", skip_all, ret)]
+    #[instrument(level = "debug", skip_all)]
     pub fn read(
         frame_header: &FrameHeader,
         image_metadata: &ImageMetadata,

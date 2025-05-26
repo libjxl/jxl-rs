@@ -61,7 +61,7 @@ const MULTIPLIER_BITS_CONTEXT: usize = 5;
 const NUM_TREE_CONTEXTS: usize = 6;
 
 impl Tree {
-    #[instrument(level = "debug", skip(br), ret, err)]
+    #[instrument(level = "debug", skip(br), err)]
     pub fn read(br: &mut BitReader, size_limit: usize) -> Result<Tree> {
         assert!(size_limit <= u32::MAX as usize);
         trace!(pos = br.total_bits_read());
@@ -242,15 +242,15 @@ impl Tree {
         property_buffer[7] = left;
 
         // Local gradient
-        property_buffer[8] = left - property_buffer[9];
-        property_buffer[9] = left + top - topleft;
+        property_buffer[8] = left.wrapping_sub(property_buffer[9]);
+        property_buffer[9] = left.wrapping_add(top).wrapping_sub(topleft);
 
         // FFV1 context properties
-        property_buffer[10] = left - topleft;
-        property_buffer[11] = topleft - top;
-        property_buffer[12] = top - topright;
-        property_buffer[13] = top - toptop;
-        property_buffer[14] = left - leftleft;
+        property_buffer[10] = left.wrapping_sub(topleft);
+        property_buffer[11] = topleft.wrapping_sub(top);
+        property_buffer[12] = top.wrapping_sub(topright);
+        property_buffer[13] = top.wrapping_sub(toptop);
+        property_buffer[14] = left.wrapping_sub(leftleft);
 
         // Weighted predictor property.
         let (wp_pred, property) =
