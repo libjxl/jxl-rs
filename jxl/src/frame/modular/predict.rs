@@ -169,8 +169,8 @@ const DIVLOOKUP: [u32; 64] = [
     289262, 284359, 279620, 275036, 270600, 266305, 262144,
 ];
 
-fn add_bits<T: num_traits::PrimInt>(x: T) -> i64 {
-    x.to_i64().unwrap() << PRED_EXTRA_BITS
+fn add_bits(x: i32) -> i64 {
+    (x as i64) << PRED_EXTRA_BITS
 }
 
 fn error_weight(x: u32, maxweight: u32) -> u32 {
@@ -202,7 +202,7 @@ pub struct WeightedPredictorState<'a> {
     prediction: [i64; NUM_PREDICTORS],
     pred: i64,
     pred_errors: [Vec<u32>; NUM_PREDICTORS],
-    error: Vec<i64>,
+    error: Vec<i32>,
     wp_header: &'a WeightedHeader,
 }
 
@@ -219,20 +219,20 @@ impl<'a> WeightedPredictorState<'a> {
     }
 
     #[allow(dead_code)]
-    pub fn update_errors(&mut self, correct_val: i64, pos: (usize, usize), xsize: usize) {
+    pub fn update_errors(&mut self, correct_val: i32, pos: (usize, usize), xsize: usize) {
         let (cur_row, prev_row) = if pos.1 & 1 != 0 {
             (0, xsize + 2)
         } else {
             (xsize + 2, 0)
         };
         let val = add_bits(correct_val);
-        self.error[cur_row + pos.0] = self.pred - val;
+        self.error[cur_row + pos.0] = (self.pred - val) as i32;
         for (i, pred_err) in self.pred_errors.iter_mut().enumerate() {
             let err =
                 (((self.prediction[i] - val).abs() + PREDICTION_ROUND) >> PRED_EXTRA_BITS) as u32;
             pred_err[cur_row + pos.0] = err;
             let idx = prev_row + pos.0 + 1;
-            pred_err[idx] += err;
+            pred_err[idx] = pred_err[idx].wrapping_add(err);
         }
     }
 
@@ -254,8 +254,8 @@ impl<'a> WeightedPredictorState<'a> {
         for (i, weight) in weights.iter_mut().enumerate() {
             *weight = error_weight(
                 self.pred_errors[i][pos_n]
-                    + self.pred_errors[i][pos_ne]
-                    + self.pred_errors[i][pos_nw],
+                    .wrapping_add(self.pred_errors[i][pos_ne])
+                    .wrapping_add(self.pred_errors[i][pos_nw]),
                 self.wp_header.w(i).unwrap(),
             );
         }
@@ -268,12 +268,12 @@ impl<'a> WeightedPredictorState<'a> {
         let te_w = if pos.0 == 0 {
             0
         } else {
-            self.error[cur_row + pos.0 - 1]
+            self.error[cur_row + pos.0 - 1] as i64
         };
-        let te_n = self.error[pos_n];
-        let te_nw = self.error[pos_nw];
+        let te_n = self.error[pos_n] as i64;
+        let te_nw = self.error[pos_nw] as i64;
         let sum_wn = te_n + te_w;
-        let te_ne = self.error[pos_ne];
+        let te_ne = self.error[pos_ne] as i64;
 
         let mut p = te_w;
         if te_n.abs() > p.abs() {
@@ -348,7 +348,7 @@ mod tests {
                 toprightright: 0,
             },
         );
-        state.update_errors(rng.next() % 256, pos, xsize);
+        state.update_errors((rng.next() % 256) as i32, pos, xsize);
         res
     }
 

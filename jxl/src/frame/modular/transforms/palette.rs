@@ -221,7 +221,7 @@ pub fn do_palette_step_general(
                         palette_entry
                     };
                     out.data.as_rect_mut().row(y)[x] = val;
-                    wp_state.update_errors(val as i64, (x, y), w);
+                    wp_state.update_errors(val, (x, y), w);
                 }
             }
         }
