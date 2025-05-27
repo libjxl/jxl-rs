@@ -362,7 +362,11 @@ where
         let end = start + ROWS;
         transposed_data[start..end].copy_from_slice(row);
     }
-    transpose::<COLS, ROWS>(&transposed_data, data);
+    if ROWS < COLS {
+        transpose::<COLS, ROWS>(&transposed_data, data);
+    } else {
+        data.copy_from_slice(&transposed_data);
+    }
 }
 
 pub fn compute_scaled_dct<const ROWS: usize, const COLS: usize>(
