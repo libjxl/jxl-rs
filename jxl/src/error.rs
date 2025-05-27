@@ -228,10 +228,16 @@ pub enum Error {
     TransferFunctionUnknown,
     #[error("Attempting to write out of Bounds when writing ICC")]
     IccWriteOutOfBounds,
-    #[error("Invalid tag string when writing ICC:{0}")]
+    #[error("Invalid tag string when writing ICC: {0}")]
     IccInvalidTagString(String),
-    #[error("Invalid text for ICC MLuc string, not ascii:{0}")]
+    #[error("Invalid text for ICC MLuc string, not ascii: {0}")]
     IccMlucTextNotAscii(String),
+    #[error("ICC value is out of range / NaN: {0}")]
+    IccValueOutOfRangeS15Fixed16(f32),
+    #[error("Missing custom white point data")]
+    MissingCustomWhitePointData,
+    #[error("Y value is too small: {0}")]
+    IccInvalidWhitePointY(f32),
 }
 
 pub type Result<T, E = Error> = std::result::Result<T, E>;

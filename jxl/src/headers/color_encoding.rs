@@ -56,6 +56,19 @@ impl fmt::Display for WhitePoint {
     }
 }
 
+impl WhitePoint {
+    pub fn to_xy_coords(&self, custom_xy_data: Option<&CustomXY>) -> Result<(f32, f32), Error> {
+        match self {
+            WhitePoint::Custom => custom_xy_data
+                .map(|data| data.as_f32_coords())
+                .ok_or(Error::MissingCustomWhitePointData),
+            WhitePoint::D65 => Ok((0.3127, 0.3290)),
+            WhitePoint::DCI => Ok((0.314, 0.351)),
+            WhitePoint::E => Ok((1.0 / 3.0, 1.0 / 3.0)),
+        }
+    }
+}
+
 #[allow(clippy::upper_case_acronyms)]
 #[derive(UnconditionalCoder, Copy, Clone, PartialEq, Debug, FromPrimitive)]
 pub enum Primaries {
@@ -141,6 +154,13 @@ pub struct CustomXY {
     #[default(0)]
     #[coder(u2S(Bits(19), Bits(19) + 524288, Bits(20) + 1048576, Bits(21) + 2097152))]
     pub y: i32,
+}
+
+impl CustomXY {
+    /// Converts the stored scaled integer coordinates to f32 (x, y) values.
+    pub fn as_f32_coords(&self) -> (f32, f32) {
+        (self.x as f32 / 1_000_000.0, self.y as f32 / 1_000_000.0)
+    }
 }
 
 pub struct CustomTransferFunctionNonserialized {
@@ -282,6 +302,54 @@ fn pad_to_4_byte_boundary(data: &mut Vec<u8>) {
     data.resize(data.len().next_multiple_of(4), 0u8);
 }
 
+/// Converts an f32 to s15Fixed16 format and appends it as big-endian bytes.
+/// s15Fixed16 is a signed 32-bit number with 1 sign bit, 15 integer bits,
+/// and 16 fractional bits.
+fn append_s15_fixed_16(tags_data: &mut Vec<u8>, value: f32) -> Result<(), Error> {
+    // In libjxl, the following specific range check is used: (-32767.995f <= value) && (value <= 32767.995f)
+    // This is slightly tighter than the theoretical max positive s15.16 value.
+    // We replicate this for consistency.
+    if !(value.is_finite() && (-32767.995..=32767.995).contains(&value)) {
+        return Err(Error::IccValueOutOfRangeS15Fixed16(value));
+    }
+
+    // Multiply by 2^16 and round to nearest integer
+    let scaled_value = (value * 65536.0).round();
+    // Cast to i32 for correct two's complement representation
+    let int_value = scaled_value as i32;
+    tags_data.extend_from_slice(&int_value.to_be_bytes());
+    Ok(())
+}
+
+/// Creates the data for an ICC 'XYZ ' tag and appends it to `tags_data`.
+/// The 'XYZ ' tag contains three s15Fixed16Number values.
+fn create_icc_xyz_tag(tags_data: &mut Vec<u8>, xyz_color: &[f32; 3]) -> Result<(), Error> {
+    // Tag signature 'XYZ ' (4 bytes, note the trailing space)
+    tags_data.extend_from_slice(b"XYZ ");
+
+    // Reserved, must be 0 (4 bytes)
+    tags_data.extend_from_slice(&0u32.to_be_bytes());
+
+    // XYZ data (3 * s15Fixed16Number = 3 * 4 bytes)
+    for &val in xyz_color {
+        append_s15_fixed_16(tags_data, val)?;
+    }
+    Ok(())
+}
+
+/// Converts CIE xy white point coordinates to CIE XYZ values (Y is normalized to 1.0).
+fn cie_xyz_from_white_cie_xy(wx: f32, wy: f32) -> Result<[f32; 3], Error> {
+    // Check for wy being too close to zero to prevent division by zero or extreme values.
+    if wy.abs() < 1e-12 {
+        return Err(Error::IccInvalidWhitePointY(wy));
+    }
+    let factor = 1.0 / wy;
+    let x_val = wx * factor;
+    let y_val = 1.0f32;
+    let z_val = (1.0 - wx - wy) * factor;
+    Ok([x_val, y_val, z_val])
+}
+
 #[derive(UnconditionalCoder, Debug, Clone)]
 #[validate]
 pub struct ColorEncoding {
@@ -296,7 +364,7 @@ pub struct ColorEncoding {
     #[condition(!want_icc && color_space != ColorSpace::XYB)]
     #[default(WhitePoint::D65)]
     pub white_point: WhitePoint,
-    // TODO(veluca): can this be merged in the enum?
+    // TODO(veluca): can this be merged in the enum?!
     #[condition(white_point == WhitePoint::Custom)]
     #[default(CustomXY::default(&field_nonserialized))]
     pub white: CustomXY,
@@ -325,6 +393,15 @@ impl ColorEncoding {
         } else {
             Ok(())
         }
+    }
+
+    pub fn get_resolved_white_point_xy(&self) -> Result<(f32, f32), Error> {
+        let custom_data_for_wp = if self.white_point == WhitePoint::Custom {
+            Some(&self.white)
+        } else {
+            None
+        };
+        self.white_point.to_xy_coords(custom_data_for_wp)
     }
 
     fn can_tone_map_for_icc(&self) -> bool {
@@ -546,6 +623,18 @@ impl ColorEncoding {
             offset_in_tags_blob: cprt_tag_start_offset,
             size_unpadded: cprt_tag_unpadded_size,
         });
+
+        // It is the other way around in libjxl for some reason? TODO: check with Sami!
+        match self.color_space {
+            ColorSpace::Gray => {
+                const D50: [f32; 3] = [0.964203f32, 1.0, 0.824905];
+                create_icc_xyz_tag(&mut tags_data, &D50)?;
+            }
+            _ => {
+                let (wx, wy) = self.get_resolved_white_point_xy()?;
+                create_icc_xyz_tag(&mut tags_data, &cie_xyz_from_white_cie_xy(wx, wy)?)?;
+            }
+        }
 
         // TODO: add the more tags
 
