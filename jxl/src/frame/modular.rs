@@ -683,8 +683,8 @@ pub fn decode_hf_metadata(
     let i8max: i32 = i8::MAX.into();
     for y in 0..cr.size.1 {
         for x in 0..cr.size.0 {
-            ytox_map_rect.row(y)[x] = ytox_image.row(y)[x].clamp(i8min, i8min) as i8;
-            ytob_map_rect.row(y)[x] = ytob_image.row(y)[x].clamp(i8max, i8max) as i8;
+            ytox_map_rect.row(y)[x] = ytox_image.row(y)[x].clamp(i8min, i8max) as i8;
+            ytob_map_rect.row(y)[x] = ytob_image.row(y)[x].clamp(i8min, i8max) as i8;
         }
     }
     let transform_image = buffers[2].data.as_rect();
