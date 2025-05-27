@@ -294,7 +294,6 @@ dependencies = [
  "enum-iterator",
  "half",
  "jxl_macros",
- "lcms2",
  "num-derive",
  "num-traits",
  "rand",

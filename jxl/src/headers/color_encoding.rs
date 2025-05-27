@@ -7,8 +7,6 @@ use crate::{bit_reader::BitReader, error::Error, headers::encodings::*};
 use jxl_macros::UnconditionalCoder;
 use num_derive::FromPrimitive;
 
-use lcms2::{CIExyY, CIExyYTRIPLE, Intent, Profile, ToneCurve};
-
 #[allow(clippy::upper_case_acronyms)]
 #[derive(UnconditionalCoder, Copy, Clone, PartialEq, Debug, FromPrimitive)]
 pub enum ColorSpace {
@@ -28,25 +26,7 @@ pub enum WhitePoint {
 }
 
 impl WhitePoint {
-    pub fn as_lcms_white_point(&self, custom_xy_for_custom_case: &CustomXY) -> CIExyY {
-        let (x_val, y_val) = match self {
-            WhitePoint::Custom => (
-                custom_xy_for_custom_case.x as f64 / 1_000_000.0,
-                custom_xy_for_custom_case.y as f64 / 1_000_000.0,
-            ),
-            WhitePoint::D65 => (0.3127, 0.3290),
-            // From https://ieeexplore.ieee.org/document/7290729 C.2 page 11
-            WhitePoint::DCI => (0.314, 0.351),
-            // Equal energy illuminant
-            WhitePoint::E => (1.0 / 3.0, 1.0 / 3.0),
-        };
-        // Y is 1.0 for chromaticity of white points
-        CIExyY {
-            x: x_val,
-            y: y_val,
-            Y: 1.0,
-        }
-    }
+    // TODO: implement turning into strings for icc writing?
 }
 
 #[allow(clippy::upper_case_acronyms)]
@@ -59,88 +39,7 @@ pub enum Primaries {
 }
 
 impl Primaries {
-    pub fn as_lcms_primaries(
-        &self,
-        custom_primaries_for_custom_case: &[CustomXY; 3],
-    ) -> CIExyYTRIPLE {
-        match self {
-            Primaries::Custom => {
-                let r_xy = &custom_primaries_for_custom_case[0];
-                let g_xy = &custom_primaries_for_custom_case[1];
-                let b_xy = &custom_primaries_for_custom_case[2];
-                CIExyYTRIPLE {
-                    Red: CIExyY {
-                        x: r_xy.x as f64 / 1_000_000.0,
-                        y: r_xy.y as f64 / 1_000_000.0,
-                        Y: 1.0,
-                    },
-                    Green: CIExyY {
-                        x: g_xy.x as f64 / 1_000_000.0,
-                        y: g_xy.y as f64 / 1_000_000.0,
-                        Y: 1.0,
-                    },
-                    Blue: CIExyY {
-                        x: b_xy.x as f64 / 1_000_000.0,
-                        y: b_xy.y as f64 / 1_000_000.0,
-                        Y: 1.0,
-                    },
-                }
-            }
-            Primaries::SRGB => CIExyYTRIPLE {
-                Red: CIExyY {
-                    x: 0.639998686,
-                    y: 0.330010138,
-                    Y: 1.0,
-                },
-                Green: CIExyY {
-                    x: 0.300003784,
-                    y: 0.600003357,
-                    Y: 1.0,
-                },
-                Blue: CIExyY {
-                    x: 0.150002046,
-                    y: 0.059997204,
-                    Y: 1.0,
-                },
-            },
-            Primaries::BT2100 => CIExyYTRIPLE {
-                // Corresponds to k2100 (Rec. BT.2020/BT.2100 primaries)
-                Red: CIExyY {
-                    x: 0.708,
-                    y: 0.292,
-                    Y: 1.0,
-                },
-                Green: CIExyY {
-                    x: 0.170,
-                    y: 0.797,
-                    Y: 1.0,
-                },
-                Blue: CIExyY {
-                    x: 0.131,
-                    y: 0.046,
-                    Y: 1.0,
-                },
-            },
-            Primaries::P3 => CIExyYTRIPLE {
-                // Display P3 / DCI-P3 primaries
-                Red: CIExyY {
-                    x: 0.680,
-                    y: 0.320,
-                    Y: 1.0,
-                },
-                Green: CIExyY {
-                    x: 0.265,
-                    y: 0.690,
-                    Y: 1.0,
-                },
-                Blue: CIExyY {
-                    x: 0.150,
-                    y: 0.060,
-                    Y: 1.0,
-                },
-            },
-        }
-    }
+    // TODO: implement turning into strings for icc writing?
 }
 
 #[allow(clippy::upper_case_acronyms)]
@@ -164,14 +63,7 @@ pub enum RenderingIntent {
 }
 
 impl RenderingIntent {
-    pub fn as_lcms_intent(&self) -> Intent {
-        match self {
-            RenderingIntent::Perceptual => Intent::Perceptual,
-            RenderingIntent::Relative => Intent::RelativeColorimetric,
-            RenderingIntent::Saturation => Intent::Saturation,
-            RenderingIntent::Absolute => Intent::AbsoluteColorimetric,
-        }
-    }
+    // TODO: implement turning into strings for icc writing?
 }
 
 #[derive(UnconditionalCoder, Debug, Clone)]
@@ -230,68 +122,45 @@ impl CustomTransferFunction {
             Ok(())
         }
     }
+}
 
-    // ToneCurve::new expects f64.
-    fn gamma_as_f64(&self) -> f64 {
-        assert!(self.have_gamma);
-        self.gamma as f64 * 0.0000001
+/// Writes a u32 value in big-endian format to the slice at the given position.
+pub fn write_u32_be(slice: &mut [u8], pos: usize, value: u32) -> Result<(), Error> {
+    if pos.checked_add(4).is_none_or(|end| end > slice.len()) {
+        return Err(Error::IccWriteOutOfBounds);
     }
+    slice[pos..pos + 4].copy_from_slice(&value.to_be_bytes());
+    Ok(())
+}
 
-    /// Converts this CustomTransferFunction to an lcms2::ToneCurve.
-    pub fn as_lcms_tone_curve(&self) -> Result<ToneCurve, Error> {
-        if self.have_gamma {
-            Ok(ToneCurve::new(self.gamma_as_f64()))
-        } else {
-            match self.transfer_function {
-                TransferFunction::SRGB => {
-                    // ICC Parametric Curve Type 4 (sRGB EOTF)
-                    // Parameters: [gamma, a, b, c, d]
-                    let params = [
-                        2.4,           // gamma
-                        1.0 / 1.055,   // a
-                        0.055 / 1.055, // b
-                        1.0 / 12.92,   // c
-                        0.04045,       // d
-                    ];
-                    ToneCurve::new_parametric(4, &params).map_err(Error::LcmsError)
-                }
-                TransferFunction::Linear => Ok(ToneCurve::new(1.0)),
-                TransferFunction::BT709 => {
-                    // Also uses an sRGB-like parametric curve structure (ICC Type 4)
-                    // Parameters: [gamma, a, b, c, d]
-                    let params = [
-                        1.0 / 0.45,    // gamma (approx 2.222)
-                        1.0 / 1.099,   // a
-                        0.099 / 1.099, // b
-                        1.0 / 4.5,     // c
-                        0.081,         // d
-                    ];
-                    ToneCurve::new_parametric(4, &params).map_err(Error::LcmsError)
-                }
-                TransferFunction::DCI => {
-                    // Pure gamma 2.6
-                    Ok(ToneCurve::new(2.6))
-                }
-                TransferFunction::PQ => {
-                    // TODO: check with Sami
-                    // ICC Parametric Curve Type 5 (SMPTE ST 2084 PQ EOTF)
-                    // Parameters are ignored by the ICC spec.
-                    // The lcms2 wrapper requires 7 parameters for type 5.
-                    let params = [0.0; 7]; // Dummy parameters
-                    ToneCurve::new_parametric(5, &params).map_err(Error::LcmsError)
-                }
-                TransferFunction::HLG => {
-                    // TODO: check with Sami
-                    // ICC Parametric Curve Type 7 (ARIB STD-B67 HLG EOTF)
-                    // Parameters are ignored by the ICC spec.
-                    // The lcms2 wrapper requires 5 parameters for type 7.
-                    let params = [0.0; 5]; // Dummy parameters
-                    ToneCurve::new_parametric(7, &params).map_err(Error::LcmsError)
-                }
-                TransferFunction::Unknown => Err(Error::TransferFunctionUnknown),
-            }
-        }
+/// Writes a u16 value in big-endian format to the slice at the given position.
+pub fn write_u16_be(slice: &mut [u8], pos: usize, value: u16) -> Result<(), Error> {
+    if pos.checked_add(2).is_none_or(|end| end > slice.len()) {
+        return Err(Error::IccWriteOutOfBounds);
     }
+    slice[pos..pos + 2].copy_from_slice(&value.to_be_bytes());
+    Ok(())
+}
+
+/// Writes a u8 value to the slice at the given position.
+pub fn write_u8(slice: &mut [u8], pos: usize, value: u8) -> Result<(), Error> {
+    if pos.checked_add(1).is_none_or(|end| end > slice.len()) {
+        return Err(Error::IccWriteOutOfBounds);
+    }
+    slice[pos] = value;
+    Ok(())
+}
+
+/// Writes a 4-character ASCII tag string to the slice at the given position.
+pub fn write_icc_tag(slice: &mut [u8], pos: usize, tag_str: &str) -> Result<(), Error> {
+    if tag_str.len() != 4 || !tag_str.is_ascii() {
+        return Err(Error::IccInvalidTagString(tag_str.to_string()));
+    }
+    if pos.checked_add(4).is_none_or(|end| end > slice.len()) {
+        return Err(Error::IccWriteOutOfBounds);
+    }
+    slice[pos..pos + 4].copy_from_slice(tag_str.as_bytes());
+    Ok(())
 }
 
 #[derive(UnconditionalCoder, Debug, Clone)]
@@ -338,12 +207,87 @@ impl ColorEncoding {
             Ok(())
         }
     }
-    pub fn whitepoint_as_lcms(&self) -> CIExyY {
-        self.white_point.as_lcms_white_point(&self.white)
+
+    fn can_tone_map_for_icc(&self) -> bool {
+        // Placeholder
+        // TODO(firsching): implement this function
+        false
     }
 
-    pub fn primaries_as_lcms(&self) -> CIExyYTRIPLE {
-        self.primaries.as_lcms_primaries(&self.custom_primaries)
+    pub fn create_icc_header(&self) -> Result<Vec<u8>, Error> {
+        let mut header_data = vec![0u8; 128];
+
+        // Profile size - To be filled in at the end of profile creation.
+        write_u32_be(&mut header_data, 0, 0)?;
+        const CMM_TAG: &str = "jxl ";
+        // CMM Type
+        write_icc_tag(&mut header_data, 4, CMM_TAG)?;
+
+        // Profile version - ICC v4.4 (0x04400000)
+        // Conformance tests have v4.3, libjxl produces v4.4
+        write_u32_be(&mut header_data, 8, 0x04400000u32)?;
+
+        let profile_class_str = match self.color_space {
+            ColorSpace::XYB => "scnr",
+            _ => "mntr",
+        };
+        write_icc_tag(&mut header_data, 12, profile_class_str)?;
+
+        // Data color space
+        let data_color_space_str = match self.color_space {
+            ColorSpace::Gray => "GRAY",
+            _ => "RGB ",
+        };
+        write_icc_tag(&mut header_data, 16, data_color_space_str)?;
+
+        // PCS - Profile Connection Space
+        // Corresponds to: if (kEnable3DToneMapping && CanToneMap(c))
+        // Assuming kEnable3DToneMapping is true for this port for now.
+        const K_ENABLE_3D_ICC_TONEMAPPING: bool = true;
+        if K_ENABLE_3D_ICC_TONEMAPPING && self.can_tone_map_for_icc() {
+            write_icc_tag(&mut header_data, 20, "Lab ")?;
+        } else {
+            write_icc_tag(&mut header_data, 20, "XYZ ")?;
+        }
+
+        // Date and Time - Placeholder values from libjxl
+        write_u16_be(&mut header_data, 24, 2019)?; // Year
+        write_u16_be(&mut header_data, 26, 12)?; // Month
+        write_u16_be(&mut header_data, 28, 1)?; // Day
+        write_u16_be(&mut header_data, 30, 0)?; // Hours
+        write_u16_be(&mut header_data, 32, 0)?; // Minutes
+        write_u16_be(&mut header_data, 34, 0)?; // Seconds
+
+        write_icc_tag(&mut header_data, 36, "acsp")?;
+        write_icc_tag(&mut header_data, 40, "APPL")?;
+
+        // Profile flags
+        write_u32_be(&mut header_data, 44, 0)?;
+        // Device manufacturer
+        write_u32_be(&mut header_data, 48, 0)?;
+        // Device model
+        write_u32_be(&mut header_data, 52, 0)?;
+        // Device attributes
+        write_u32_be(&mut header_data, 56, 0)?;
+        write_u32_be(&mut header_data, 60, 0)?;
+
+        // Rendering Intent
+        write_u32_be(&mut header_data, 64, self.rendering_intent as u32)?;
+
+        // Whitepoint is fixed to D50 for ICC.
+        write_u32_be(&mut header_data, 68, 0x0000F6D6)?;
+        write_u32_be(&mut header_data, 72, 0x00010000)?;
+        write_u32_be(&mut header_data, 76, 0x0000D32D)?;
+
+        // Profile Creator
+        write_icc_tag(&mut header_data, 80, CMM_TAG)?;
+
+        // Profile ID (MD5 checksum) (offset 84) - 16 bytes.
+        // This is calculated at the end of profile creation and written here.
+
+        // Reserved (offset 100-127) - already zeroed here.
+
+        Ok(header_data)
     }
 
     pub fn maybe_create_profile(&self) -> Result<Option<Vec<u8>>, Error> {
@@ -365,33 +309,9 @@ impl ColorEncoding {
         {
             return Err(Error::InvalidRenderingIntent);
         }
-
-        match self.color_space {
-            ColorSpace::RGB => {
-                // transfer_function: &[&ToneCurve],
-                let tone_curve = &self.tf.as_lcms_tone_curve()?;
-                let mut profile = Profile::new_rgb(
-                    &self.whitepoint_as_lcms(),
-                    &self.primaries_as_lcms(),
-                    // check if we really want repeat the tone curve here.
-                    &[tone_curve, tone_curve, tone_curve],
-                )
-                .map_err(Error::LcmsError)?;
-                // TODO add args:  rendering intent
-                profile.set_header_rendering_intent(self.rendering_intent.as_lcms_intent());
-                let icc_data = profile.icc().map_err(Error::LcmsError)?;
-                Ok(Some(icc_data))
-            }
-            ColorSpace::Gray => {
-                let tone_curve = &self.tf.as_lcms_tone_curve()?;
-                let mut profile = Profile::new_gray(&self.whitepoint_as_lcms(), tone_curve)
-                    .map_err(Error::LcmsError)?;
-                profile.set_header_rendering_intent(self.rendering_intent.as_lcms_intent());
-                let icc_data = profile.icc().map_err(Error::LcmsError)?;
-                Ok(Some(icc_data))
-            }
-            ColorSpace::XYB => unimplemented!(),
-            _ => unreachable!(),
-        }
+        let header = self.create_icc_header()?;
+        // TODO
+        // generate ICC profile as Vec<u8> here and return instead of just header
+        Ok(Some(header))
     }
 }

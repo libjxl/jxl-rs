@@ -32,7 +32,11 @@ fn decode_jxl_codestream(data: &[u8]) -> Result<(ImageData<f32>, Vec<u8>), Error
         r
     } else {
         // TODO: handle potential error here?
-        file_header.image_metadata.color_encoding.maybe_create_profile()?.unwrap()
+        file_header
+            .image_metadata
+            .color_encoding
+            .maybe_create_profile()?
+            .unwrap()
     };
 
     br.jump_to_byte_boundary()?;

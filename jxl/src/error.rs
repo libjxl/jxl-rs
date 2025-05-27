@@ -224,10 +224,12 @@ pub enum Error {
     OutputWriteFailure,
     #[error("Output format not supported: try .ppm, .pgm or .npy")]
     OutputFormatNotSupported,
-    #[error("lcms error: {0}")]
-    LcmsError(#[from] lcms2::Error),
     #[error("Unknown transfer function for ICC profile")]
     TransferFunctionUnknown,
+    #[error("Attempting to write out of Bounds when writing ICC")]
+    IccWriteOutOfBounds,
+    #[error("Invalid tag string when writing ICC:{0}")]
+    IccInvalidTagString(String),
 }
 
 pub type Result<T, E = Error> = std::result::Result<T, E>;

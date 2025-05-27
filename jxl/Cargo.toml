@@ -7,7 +7,6 @@ edition = "2021"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-lcms2 = "6.1.0"
 thiserror = "2.0"
 byteorder = "1.4.3"
 enum-iterator = "2.1.0"
