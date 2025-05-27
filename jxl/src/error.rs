@@ -230,6 +230,8 @@ pub enum Error {
     IccWriteOutOfBounds,
     #[error("Invalid tag string when writing ICC:{0}")]
     IccInvalidTagString(String),
+    #[error("Invalid text for ICC MLuc string, not ascii:{0}")]
+    IccMlucTextNotAscii(String),
 }
 
 pub type Result<T, E = Error> = std::result::Result<T, E>;
