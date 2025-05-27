@@ -388,6 +388,7 @@ pub fn decode_vardct_group(
         ),
     };
     let quant_params = lf_global.quant_params.as_ref().unwrap();
+    let inv_global_scale = quant_params.inv_global_scale();
     let ytox_map = hf_meta.ytox_map.as_rect();
     let ytox_map_rect = ytox_map.rect(cmap_rect)?;
     let ytob_map = hf_meta.ytob_map.as_rect();
@@ -588,7 +589,7 @@ pub fn decode_vardct_group(
             ];
             dequant_block(
                 transform_type,
-                1.0 / quant_params.global_scale as f32,
+                inv_global_scale,
                 raw_quant,
                 x_dm_multiplier,
                 b_dm_multiplier,
@@ -608,7 +609,7 @@ pub fn decode_vardct_group(
                 let mut output = pixels[c].as_rect_mut();
                 let mut output_rect = output.rect(block_rect)?;
                 for i in 0..block_rect.size.1 {
-                    let offset = i * MAX_BLOCK_DIM;
+                    let offset = i * block_rect.size.0;
                     output_rect
                         .row(i)
                         .copy_from_slice(&transform_buffer[c][offset..offset + block_rect.size.0]);
