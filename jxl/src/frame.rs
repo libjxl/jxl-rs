@@ -488,6 +488,19 @@ impl Frame {
         for i in first_modular_channel..num_channels {
             pipeline = pipeline.add_stage(ConvertModularToF32Stage::new(i, metadata.bit_depth))?;
         }
+        if self.decoder_state.file_header.image_metadata.xyb_encoded {
+            let intensity_target = 255.0;
+            let opsin = &self
+                .decoder_state
+                .file_header
+                .transform_data
+                .opsin_inverse_matrix;
+            pipeline = pipeline.add_stage(XybToLinearSrgbStage::new(
+                0,
+                opsin.clone(),
+                intensity_target,
+            ))?;
+        }
         for i in 0..num_channels {
             pipeline = pipeline.add_stage(SaveStage::<f32>::new(i, self.header.size(), 255.0)?)?;
         }
