@@ -18,7 +18,7 @@ use crate::{
     },
     image::{Image, Rect},
     render::{
-        stages::SaveStage, RenderPipeline, RenderPipelineBuilder, SimpleRenderPipeline,
+        stages::*, RenderPipeline, RenderPipelineBuilder, SimpleRenderPipeline,
         SimpleRenderPipelineBuilder,
     },
     util::{tracing_wrappers::*, CeilLog2},
@@ -27,7 +27,7 @@ use block_context_map::BlockContextMap;
 use coeff_order::decode_coeff_orders;
 use color_correlation_map::ColorCorrelationParams;
 use group::decode_vardct_group;
-use modular::{decode_hf_metadata, decode_vardct_lf, fill_in_modular_rect};
+use modular::{decode_hf_metadata, decode_vardct_lf};
 use modular::{FullModularImage, ModularStreamId, Tree};
 use quant_weights::DequantMatrices;
 use quantizer::LfQuantFactors;
@@ -474,14 +474,22 @@ impl Frame {
     pub fn prepare_for_hf(&mut self) -> Result<()> {
         // TODO(veluca): build the pipeline properly.
         let num_channels = self.header.num_extra_channels as usize + 3;
+        let metadata = &self.decoder_state.file_header.image_metadata;
         let mut pipeline = SimpleRenderPipelineBuilder::new(
             num_channels,
             self.header.size(),
             self.header.log_group_dim(),
         );
-
+        let first_modular_channel = if self.header.encoding == Encoding::Modular {
+            0
+        } else {
+            3
+        };
+        for i in first_modular_channel..num_channels {
+            pipeline = pipeline.add_stage(ConvertModularToF32Stage::new(i, metadata.bit_depth))?;
+        }
         for i in 0..num_channels {
-            pipeline = pipeline.add_stage(SaveStage::<f32>::new(i, self.header.size())?)?;
+            pipeline = pipeline.add_stage(SaveStage::<f32>::new(i, self.header.size(), 255.0)?)?;
         }
         self.render_pipeline = Some(pipeline.build()?);
 
@@ -528,22 +536,19 @@ impl Frame {
                 br,
             )?;
         }
-        let mut convert_and_pass_to_pipeline = |chan: usize, g: usize, img: &Image<i32>| {
+        let mut modular_pass_to_pipeline = |chan: usize, g: usize, img: &Image<i32>| {
             // TODO(veluca): figure out pass count and check group IDs. Also, investigate whether
             // reusing the `img` buffer would be possible.
-            // TODO(szabadka): Move converting to f32 into the render pipeline.
             self.render_pipeline
                 .as_mut()
                 .unwrap()
-                .fill_input_channels(&[chan], g, 1, |rects| {
-                    fill_in_modular_rect(&mut rects[0], &img.as_rect())
-                })
+                .fill_input_channels(&[chan], g, 1, |rects| rects[0].copy_from(img.as_rect()))
         };
         lf_global.modular_global.read_stream(
             ModularStreamId::ModularHF { group, pass },
             &self.header,
             &lf_global.tree,
-            Some(&mut convert_and_pass_to_pipeline),
+            Some(&mut modular_pass_to_pipeline),
             br,
         )
     }

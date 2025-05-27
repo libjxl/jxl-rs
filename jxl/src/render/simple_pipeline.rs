@@ -135,11 +135,15 @@ impl RenderPipelineBuilder for SimpleRenderPipelineBuilder {
             for chan in 0..num_channels {
                 let cur_chan = &mut current_info[chan];
                 let next_chan = &mut next_info[chan];
-                if cur_chan.ty.is_none() && !stage.uses_channel(chan) {
-                    cur_chan.ty = next_chan.ty;
-                } else {
+                if stage.uses_channel(chan) {
                     assert_eq!(Some(stage.output_type()), next_chan.ty);
-                    cur_chan.ty = Some(stage.input_type());
+                }
+                if cur_chan.ty.is_none() {
+                    cur_chan.ty = if stage.uses_channel(chan) {
+                        Some(stage.input_type())
+                    } else {
+                        next_chan.ty
+                    }
                 }
                 // Arithmetic overflows here should be very uncommon, so custom error variants
                 // are probably unwarranted.

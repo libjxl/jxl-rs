@@ -18,7 +18,7 @@ use super::{
 pub(super) fn make_and_run_simple_pipeline<
     S: RenderPipelineStage,
     InputT: ImageDataType,
-    OutputT: ImageDataType,
+    OutputT: ImageDataType + std::ops::Mul<Output = OutputT>,
 >(
     stage: S,
     input_images: &[Image<InputT>],
@@ -40,7 +40,11 @@ pub(super) fn make_and_run_simple_pipeline<
     )
     .add_stage(stage)?;
     for i in 0..input_images.len() {
-        pipeline = pipeline.add_stage(SaveStage::<OutputT>::new(i, final_size)?)?;
+        pipeline = pipeline.add_stage(SaveStage::<OutputT>::new(
+            i,
+            final_size,
+            OutputT::from_f64(1.0),
+        )?)?;
     }
     let mut pipeline = pipeline.build()?;
 
@@ -92,7 +96,7 @@ pub(super) fn make_and_run_simple_pipeline<
 pub(super) fn test_stage_consistency<
     S: RenderPipelineStage,
     InputT: ImageDataType,
-    OutputT: ImageDataType,
+    OutputT: ImageDataType + std::ops::Mul<Output = OutputT>,
 >(
     stage: S,
     image_size: (usize, usize),

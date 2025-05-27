@@ -18,7 +18,7 @@ use crate::{
         bit_depth::BitDepth, frame_header::FrameHeader, modular::GroupHeader, ImageMetadata,
         JxlHeader,
     },
-    image::{Image, ImageRect, ImageRectMut, Rect},
+    image::{Image, Rect},
     util::{tracing_wrappers::*, CeilLog2},
 };
 
@@ -738,24 +738,5 @@ pub fn decode_hf_metadata(
         }
     }
     hf_meta.used_hf_types |= used_hf_types;
-    Ok(())
-}
-
-pub fn fill_in_modular_rect(dst: &mut ImageRectMut<f32>, src: &ImageRect<i32>) -> Result<()> {
-    if src.size().0 != dst.size().0 || src.size().1 != dst.size().1 {
-        return Err(Error::CopyOfDifferentSize(
-            src.size().0,
-            src.size().1,
-            dst.size().0,
-            dst.size().1,
-        ));
-    }
-    let size = dst.size();
-    for i in 0..size.1 {
-        trace!("copying row {i} of {}", size.1);
-        for j in 0..size.0 {
-            dst.row(i)[j] = src.row(i)[j] as f32;
-        }
-    }
     Ok(())
 }
