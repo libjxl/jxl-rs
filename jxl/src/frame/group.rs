@@ -466,11 +466,12 @@ pub fn decode_vardct_group(
                 ),
             });
 
-            for (i, rect) in r.iter().enumerate() {
-                rect.is_within(lf_planes[i].size())?;
-            }
             let [lf_x, lf_y, lf_b] = lf_planes.each_ref();
-            Some([lf_x.as_rect(), lf_y.as_rect(), lf_b.as_rect()])
+            Some([
+                lf_x.as_rect().rect(r[0])?,
+                lf_y.as_rect().rect(r[1])?,
+                lf_b.as_rect().rect(r[2])?,
+            ])
         }
     };
     for by in 0..block_group_rect.size.1 {
