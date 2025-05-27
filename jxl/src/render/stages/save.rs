@@ -12,19 +12,27 @@ use crate::{
 pub struct SaveStage<T: ImageDataType> {
     buf: Image<T>,
     channel: usize,
+    // TODO(szabadka): Have a fixed scale per data-type and make the datatype conversions do
+    // the scaling.
+    scale: T,
 }
 
 #[allow(unused)]
 impl<T: ImageDataType> SaveStage<T> {
-    pub(crate) fn new(channel: usize, size: (usize, usize)) -> Result<SaveStage<T>> {
+    pub(crate) fn new(channel: usize, size: (usize, usize), scale: T) -> Result<SaveStage<T>> {
         Ok(SaveStage {
             channel,
             buf: Image::new(size)?,
+            scale,
         })
     }
 
-    pub(crate) fn new_with_buffer(channel: usize, img: Image<T>) -> SaveStage<T> {
-        SaveStage { channel, buf: img }
+    pub(crate) fn new_with_buffer(channel: usize, img: Image<T>, scale: T) -> SaveStage<T> {
+        SaveStage {
+            channel,
+            buf: img,
+            scale,
+        }
     }
 
     pub(crate) fn buffer(&self) -> &Image<T> {
@@ -40,14 +48,15 @@ impl<T: ImageDataType> std::fmt::Display for SaveStage<T> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
-            "save channel {} (type {:?})",
+            "save channel {} (type {:?}) scale {:?}",
             self.channel,
-            T::DATA_TYPE_ID
+            T::DATA_TYPE_ID,
+            self.scale,
         )
     }
 }
 
-impl<T: ImageDataType> RenderPipelineStage for SaveStage<T> {
+impl<T: ImageDataType + std::ops::Mul<Output = T>> RenderPipelineStage for SaveStage<T> {
     type Type = RenderPipelineInspectStage<T>;
 
     fn uses_channel(&self, c: usize) -> bool {
@@ -64,7 +73,9 @@ impl<T: ImageDataType> RenderPipelineStage for SaveStage<T> {
                 size: (xsize, 1),
             })
             .expect("mismatch in image size");
-        outbuf.row(0).copy_from_slice(&input[..xsize]);
+        for ix in 0..xsize {
+            outbuf.row(0)[ix] = input[ix] * self.scale;
+        }
     }
 }
 
@@ -77,7 +88,7 @@ mod test {
 
     #[test]
     fn save_stage() -> Result<()> {
-        let mut save_stage = SaveStage::<u8>::new(0, (128, 128))?;
+        let mut save_stage = SaveStage::<u8>::new(0, (128, 128), 1)?;
         let mut rng = XorShiftRng::seed_from_u64(0);
         let src = Image::<u8>::new_random((128, 128), &mut rng)?;
 
