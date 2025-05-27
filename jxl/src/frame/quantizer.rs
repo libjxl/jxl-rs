@@ -67,4 +67,7 @@ impl QuantizerParams {
             quant_lf: quant_lf as u32,
         })
     }
+    pub fn inv_global_scale(&self) -> f32 {
+        GLOBAL_SCALE_DENOM as f32 / self.global_scale as f32
+    }
 }

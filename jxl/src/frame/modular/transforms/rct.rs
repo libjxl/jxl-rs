@@ -26,19 +26,23 @@ pub fn do_rct_step(buffers: &mut [&mut ModularChannel], op: RctOp, perm: RctPerm
         let apply_rct: fn(i32, i32, i32) -> (i32, i32, i32) = match op {
             RctOp::Noop => break 'rct,
             RctOp::YCoCg => |y, co, cg| {
-                let y = y - (cg >> 1);
-                let g = cg + y;
-                let y = y - (co >> 1);
-                let r = y + co;
+                let y = y.wrapping_sub(cg >> 1);
+                let g = cg.wrapping_add(y);
+                let y = y.wrapping_sub(co >> 1);
+                let r = y.wrapping_add(co);
                 (r, g, y)
             },
-            RctOp::AddFirstToThird => |v0, v1, v2| (v0, v1, v2 + v0),
-            RctOp::AddFirstToSecond => |v0, v1, v2| (v0, v1 + v0, v2),
-            RctOp::AddFirstToSecondAndThird => |v0, v1, v2| (v0, v1 + v0, v2 + v0),
-            RctOp::AddAvgToSecond => |v0, v1, v2| (v0, v1 + ((v0 + v2) >> 1), v2),
+            RctOp::AddFirstToThird => |v0, v1, v2| (v0, v1, v2.wrapping_add(v0)),
+            RctOp::AddFirstToSecond => |v0, v1, v2| (v0, v1.wrapping_add(v0), v2),
+            RctOp::AddFirstToSecondAndThird => {
+                |v0, v1, v2| (v0, v1.wrapping_add(v0), v2.wrapping_add(v0))
+            }
+            RctOp::AddAvgToSecond => {
+                |v0, v1, v2| (v0, v1.wrapping_add((v0.wrapping_add(v2)) >> 1), v2)
+            }
             RctOp::AddFirstToThirdAndAvgToSecond => |v0, v1, v2| {
-                let v2 = v0 + v2;
-                (v0, v1 + ((v0 + v2) >> 1), v2)
+                let v2 = v0.wrapping_add(v2);
+                (v0, v1.wrapping_add((v0.wrapping_add(v2)) >> 1), v2)
             },
         };
 

@@ -111,6 +111,8 @@ fn decode_modular_channel(
     num_ref_props = num_ref_props.div_ceil(4) * 4;
     let mut references = Image::<i32>::new((num_ref_props, size.0))?;
     let num_properties = NUM_NONREF_PROPERTIES + num_ref_props;
+    let make_pixel =
+        |dec: i32, mul: u32, guess: i64| -> i32 { (guess + (mul as i64) * (dec as i64)) as i32 };
     for y in 0..size.1 {
         precompute_references(buffers, chan, y, &mut references);
         let mut property_buffer: Vec<i32> = vec![0; num_properties];
@@ -127,9 +129,8 @@ fn decode_modular_channel(
                 &mut property_buffer,
             );
             let dec = reader.read_signed(br, prediction_result.context as usize)?;
-            let val =
-                prediction_result.guess + (prediction_result.multiplier as i64) * (dec as i64);
-            buffers[chan].data.as_rect_mut().row(y)[x] = val as i32;
+            let val = make_pixel(dec, prediction_result.multiplier, prediction_result.guess);
+            buffers[chan].data.as_rect_mut().row(y)[x] = val;
             trace!(y, x, val, dec, ?property_buffer, ?prediction_result);
             wp_state.update_errors(val, (x, y), size.0);
         }
