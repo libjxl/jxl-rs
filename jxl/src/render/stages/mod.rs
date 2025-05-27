@@ -22,3 +22,4 @@ mod ycbcr;
 pub use chroma_upsample::*;
 pub use convert::*;
 pub use save::*;
+pub use xyb::*;
