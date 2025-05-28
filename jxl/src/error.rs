@@ -238,6 +238,8 @@ pub enum Error {
     MissingCustomWhitePointData,
     #[error("Y value is too small: {0}")]
     IccInvalidWhitePointY(f32),
+    #[error("{2}: wx: {0}, wy: {1}")]
+    IccInvalidWhitePointForAdaptation(f32, f32, String),
 }
 
 pub type Result<T, E = Error> = std::result::Result<T, E>;

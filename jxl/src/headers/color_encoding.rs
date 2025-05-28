@@ -8,6 +8,105 @@ use jxl_macros::UnconditionalCoder;
 use num_derive::FromPrimitive;
 use std::fmt;
 
+// Define type aliases for clarity
+pub type Matrix3x3 = [[f32; 3]; 3];
+pub type Vector3 = [f32; 3];
+
+// Bradford matrices for chromatic adaptation
+const K_BRADFORD: Matrix3x3 = [
+    [0.8951, 0.2664, -0.1614],
+    [-0.7502, 1.7135, 0.0367],
+    [0.0389, -0.0685, 1.0296],
+];
+
+const K_BRADFORD_INV: Matrix3x3 = [
+    [0.9869929, -0.1470543, 0.1599627],
+    [0.4323053, 0.5183603, 0.0492912],
+    [-0.0085287, 0.0400428, 0.9684867],
+];
+
+fn mul_3x3_vector(matrix: &Matrix3x3, vector: &Vector3) -> Vector3 {
+    std::array::from_fn(|i| {
+        matrix[i]
+            .iter()
+            .zip(vector.iter())
+            .map(|(&matrix_element, &vector_element)| matrix_element * vector_element)
+            .sum()
+    })
+}
+
+fn mul_3x3_matrix(mat1: &Matrix3x3, mat2: &Matrix3x3) -> Matrix3x3 {
+    std::array::from_fn(|i| std::array::from_fn(|j| (0..3).map(|k| mat1[i][k] * mat2[k][j]).sum()))
+}
+
+fn adapt_to_xyz_d50(wx: f32, wy: f32) -> Result<Matrix3x3, Error> {
+    if !((0.0..=1.0).contains(&wx) && (0.0..=1.0).contains(&wy)) {
+        return Err(Error::IccInvalidWhitePointForAdaptation(
+            wx,
+            wy,
+            "White point coordinates out of range ([0,1] for x, (0,1] for y)".to_string(),
+        ));
+    }
+
+    // Convert white point (wx, wy) to XYZ with Y=1
+    let x_over_y = wx / wy;
+    let z_over_y = (1.0 - wx - wy) / wy;
+
+    // Check for finiteness, as 1.0 / tiny float can overflow.
+    if !x_over_y.is_finite() || !z_over_y.is_finite() {
+        return Err(Error::IccInvalidWhitePointForAdaptation(
+            wx,
+            wy,
+            "Calculated X/Y or Z/Y for white point is not finite.".to_string(),
+        ));
+    }
+    let w: Vector3 = [x_over_y, 1.0, z_over_y];
+
+    // D50 white point in XYZ (Y=1 form)
+    // These are X_D50/Y_D50, 1.0, Z_D50/Y_D50
+    let w50: Vector3 = [0.96422, 1.0, 0.82521];
+
+    // Transform to LMS color space
+    let lms_source = mul_3x3_vector(&K_BRADFORD, &w);
+    let lms_d50 = mul_3x3_vector(&K_BRADFORD, &w50);
+
+    // Check for invalid LMS values which would lead to division by zero
+    if lms_source.contains(&0.0) {
+        return Err(Error::IccInvalidWhitePointForAdaptation(
+            wx,
+            wy,
+            "LMS components for source white point are zero, leading to division by zero."
+                .to_string(),
+        ));
+    }
+
+    // Create diagonal scaling matrix in LMS space
+    let mut a_diag_matrix: Matrix3x3 = [[0.0; 3]; 3];
+    for i in 0..3 {
+        a_diag_matrix[i][i] = lms_d50[i] / lms_source[i];
+        if !a_diag_matrix[i][i].is_finite() {
+            return Err(Error::IccInvalidWhitePointForAdaptation(
+                wx,
+                wy,
+                format!("Diagonal adaptation matrix component {} is not finite.", i),
+            ));
+        }
+    }
+
+    // Combine transformations
+    let b_matrix = mul_3x3_matrix(&a_diag_matrix, &K_BRADFORD);
+    let final_adaptation_matrix = mul_3x3_matrix(&K_BRADFORD_INV, &b_matrix);
+
+    Ok(final_adaptation_matrix)
+}
+
+pub fn create_icc_chad_matrix(wx: f32, wy: f32) -> Result<Matrix3x3, Error> {
+    // The libjxl checks `wy == 0.0` check here, but this is redundant since
+    // `adapt_to_xyz_d50` handles it robustly.
+    // TODO(firsching): call `adapt_to_xyz_d50` directly when libjxl calls `create_icc_chad_matrix`
+    adapt_to_xyz_d50(wx, wy)
+}
+
 #[allow(clippy::upper_case_acronyms)]
 #[derive(UnconditionalCoder, Copy, Clone, PartialEq, Debug, FromPrimitive)]
 pub enum ColorSpace {
@@ -337,6 +436,23 @@ fn create_icc_xyz_tag(tags_data: &mut Vec<u8>, xyz_color: &[f32; 3]) -> Result<(
     Ok(())
 }
 
+pub fn create_icc_chad_tag(tags_data: &mut Vec<u8>, chad_matrix: &Matrix3x3) -> Result<(), Error> {
+    // The tag type signature "sf32" (4 bytes).
+    tags_data.extend_from_slice(b"sf32");
+
+    // A reserved field (4 bytes), which must be set to 0.
+    tags_data.extend_from_slice(&0u32.to_be_bytes());
+
+    // The 9 matrix elements as s15Fixed16Number values.
+    // m[0][0], m[0][1], m[0][2], m[1][0], ..., m[2][2]
+    for row_array in chad_matrix.iter() {
+        for &value in row_array.iter() {
+            append_s15_fixed_16(tags_data, value)?;
+        }
+    }
+    Ok(())
+}
+
 /// Converts CIE xy white point coordinates to CIE XYZ values (Y is normalized to 1.0).
 fn cie_xyz_from_white_cie_xy(wx: f32, wy: f32) -> Result<[f32; 3], Error> {
     // Check for wy being too close to zero to prevent division by zero or extreme values.
@@ -635,7 +751,13 @@ impl ColorEncoding {
                 create_icc_xyz_tag(&mut tags_data, &cie_xyz_from_white_cie_xy(wx, wy)?)?;
             }
         }
-
+        pad_to_4_byte_boundary(&mut tags_data);
+        if self.color_space != ColorSpace::Gray {
+            let (wx, wy) = self.get_resolved_white_point_xy()?;
+            let chad_matrix = create_icc_chad_matrix(wx, wy)?;
+            create_icc_chad_tag(&mut tags_data, &chad_matrix)?;
+            pad_to_4_byte_boundary(&mut tags_data);
+        }
         // TODO: add the more tags
 
         // Construct the Tag Table bytes
