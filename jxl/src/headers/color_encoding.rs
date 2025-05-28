@@ -39,6 +39,58 @@ fn mul_3x3_matrix(mat1: &Matrix3x3, mat2: &Matrix3x3) -> Matrix3x3 {
     std::array::from_fn(|i| std::array::from_fn(|j| (0..3).map(|k| mat1[i][k] * mat2[k][j]).sum()))
 }
 
+fn det2x2(a: f32, b: f32, c: f32, d: f32) -> f32 {
+    a * d - b * c
+}
+
+fn calculate_cofactor(m: &Matrix3x3, r: usize, c: usize) -> f32 {
+    // Determine indices for the 2x2 submatrix for the minor M_rc
+    let r1 = (r + 1) % 3;
+    let r2 = (r + 2) % 3;
+    let c1 = (c + 1) % 3;
+    let c2 = (c + 2) % 3;
+
+    let minor_val = det2x2(m[r1][c1], m[r1][c2], m[r2][c1], m[r2][c2]);
+
+    if (r + c) % 2 == 0 {
+        minor_val
+    } else {
+        -minor_val
+    }
+}
+
+/// Calculates the inverse of a 3x3 matrix.
+fn inv_3x3_matrix(m: &Matrix3x3) -> Result<Matrix3x3, Error> {
+    let cofactor_matrix: [[f32; 3]; 3] = std::array::from_fn(|r_idx| {
+        std::array::from_fn(|c_idx| calculate_cofactor(m, r_idx, c_idx))
+    });
+
+    let det: f32 = m[0]
+        .iter()
+        .zip(cofactor_matrix[0].iter())
+        .map(|(&m_element, &cof_element)| m_element * cof_element)
+        .sum::<f32>();
+
+    // Check for numerical singularity.
+    const EPSILON: f32 = 1e-12;
+    if det.abs() < EPSILON {
+        return Err(Error::MatrixInversionFailed(det.abs()));
+    }
+
+    let inv_det = 1.0 / det;
+
+    let adjugate_matrix: [[f32; 3]; 3] = std::array::from_fn(|r_idx| {
+        std::array::from_fn(|c_idx| {
+            cofactor_matrix[c_idx][r_idx]
+        })
+    });
+
+    // Inverse matrix = (1/det) * Adjugate matrix.
+    Ok(std::array::from_fn(|r_idx| {
+        std::array::from_fn(|c_idx| adjugate_matrix[r_idx][c_idx] * inv_det)
+    }))
+}
+
 fn adapt_to_xyz_d50(wx: f32, wy: f32) -> Result<Matrix3x3, Error> {
     if !((0.0..=1.0).contains(&wx) && (0.0..=1.0).contains(&wy)) {
         return Err(Error::IccInvalidWhitePointForAdaptation(
