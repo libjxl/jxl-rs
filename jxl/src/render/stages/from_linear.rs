@@ -15,7 +15,7 @@ pub struct FromLinearStage {
 }
 
 impl FromLinearStage {
-    fn new(first_channel: usize, tf: TransferFunction) -> Self {
+    pub fn new(first_channel: usize, tf: TransferFunction) -> Self {
         Self { first_channel, tf }
     }
 
@@ -118,7 +118,7 @@ impl RenderPipelineStage for FromLinearStage {
 }
 
 #[derive(Debug)]
-enum TransferFunction {
+pub enum TransferFunction {
     Bt709,
     Srgb,
     Pq {

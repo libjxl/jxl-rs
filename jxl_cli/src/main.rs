@@ -4,88 +4,13 @@
 // license that can be found in the LICENSE file.
 
 use clap::Parser;
-use jxl::bit_reader::BitReader;
 use jxl::container::{ContainerParser, ParseEvent};
-use jxl::enc::{ImageData, ImageFrame};
+use jxl::decode::DecodeOptions;
+use jxl::enc::ImageData;
 use jxl::error::Error;
-use jxl::frame::{DecoderState, Frame, Section};
-use jxl::headers::FileHeader;
-use jxl::icc::read_icc;
 use std::fs;
 use std::io::Read;
 use std::path::PathBuf;
-
-use jxl::headers::JxlHeader;
-
-fn decode_jxl_codestream(data: &[u8]) -> Result<(ImageData<f32>, Vec<u8>), Error> {
-    let mut br = BitReader::new(data);
-    let file_header = FileHeader::read(&mut br)?;
-    println!(
-        "Image size: {} x {}",
-        file_header.size.xsize(),
-        file_header.size.ysize()
-    );
-    // TODO(firsching): Make it such that we also write icc bytes in the
-    // case where want_icc is false.
-    let mut icc_bytes = Vec::<u8>::new();
-    if file_header.image_metadata.color_encoding.want_icc {
-        let r = read_icc(&mut br)?;
-        println!("found {}-byte ICC", r.len());
-        icc_bytes = r;
-    };
-
-    br.jump_to_byte_boundary()?;
-    let mut image_data: ImageData<f32> = ImageData {
-        size: (
-            file_header.size.xsize() as usize,
-            file_header.size.ysize() as usize,
-        ),
-        frames: vec![],
-    };
-    let mut decoder_state = DecoderState::new(file_header);
-    loop {
-        let mut frame = Frame::new(&mut br, decoder_state)?;
-        let mut section_readers = frame.sections(&mut br)?;
-
-        println!("read frame with {} sections", section_readers.len());
-
-        frame.decode_lf_global(&mut section_readers[frame.get_section_idx(Section::LfGlobal)])?;
-
-        for group in 0..frame.header().num_lf_groups() {
-            frame.decode_lf_group(
-                group,
-                &mut section_readers[frame.get_section_idx(Section::Lf { group })],
-            )?;
-        }
-
-        frame.decode_hf_global(&mut section_readers[frame.get_section_idx(Section::HfGlobal)])?;
-
-        frame.prepare_for_hf()?;
-
-        for pass in 0..frame.header().passes.num_passes as usize {
-            for group in 0..frame.header().num_groups() {
-                frame.decode_hf_group(
-                    group,
-                    pass,
-                    &mut section_readers[frame.get_section_idx(Section::Hf { group, pass })],
-                )?;
-            }
-        }
-
-        let result = frame.finalize()?;
-        image_data.frames.push(ImageFrame {
-            size: image_data.size,
-            channels: result.1,
-        });
-        if let Some(state) = result.0 {
-            decoder_state = state;
-        } else {
-            break;
-        }
-    }
-
-    Ok((image_data, icc_bytes))
-}
 
 fn save_icc(icc_bytes: Vec<u8>, icc_filename: Option<PathBuf>) -> Result<(), Error> {
     match icc_filename {
@@ -194,7 +119,9 @@ fn main() -> Result<(), Error> {
         buf_valid -= consumed;
     }
 
-    let (image_data, icc_bytes) = decode_jxl_codestream(&codestream)?;
+    let mut options = DecodeOptions::new();
+    options.xyb_output_linear = String::from(opt.output.to_string_lossy()).ends_with(".npy");
+    let (image_data, icc_bytes) = jxl::decode::decode_jxl_codestream(options, &codestream)?;
     save_image(image_data, opt.output)?;
     save_icc(icc_bytes, opt.icc_out)
 }
