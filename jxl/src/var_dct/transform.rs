@@ -294,7 +294,7 @@ fn avfidct4x4(coeffs: &[f32], pixels: &mut [f32]) {
     for i in 0..16 {
         let mut pixel: f32 = 0.0;
         for j in 0..16 {
-            pixel += coeffs[j] * afv4x4basis[i * 16 + j];
+            pixel += coeffs[j] * afv4x4basis[j * 16 + i];
         }
         pixels[i] = pixel;
     }
@@ -349,7 +349,7 @@ fn afv_transform_to_pixels(afv_kind: usize, coefficients: &[f32], pixels: &mut [
     }
     // IDCT4x8.
     for iy in 0..4 {
-        for ix in 0..4 {
+        for ix in 0..8 {
             block[iy * 8 + ix] = if ix == 0 && iy == 0 {
                 dcs[2]
             } else {
@@ -360,7 +360,7 @@ fn afv_transform_to_pixels(afv_kind: usize, coefficients: &[f32], pixels: &mut [
     idct2d::<4, 8>(&mut block);
     for iy in 0..4 {
         for ix in 0..8 {
-            pixels[(iy + (1 - afv_y) * 4) * 8 + ix] = block[iy * 4 + ix];
+            pixels[(iy + (1 - afv_y) * 4) * 8 + ix] = block[iy * 8 + ix];
         }
     }
 }
@@ -521,18 +521,18 @@ pub fn transform_to_pixels(
             }
         }
         HfTransformType::DCT8X4 => {
-            let block0 = transform_buffer[0];
-            let block1 = transform_buffer[8];
+            let coefficients: Vec<f32> = transform_buffer[0..64].to_vec();
+            let block0 = coefficients[0];
+            let block1 = coefficients[8];
             let dcs: [f32; 2] = [block0 + block1, block0 - block1];
             for x in 0..2 {
                 let mut block: Vec<f32> = vec![0.0; 8 * 4];
-                for iy in 0..8 {
-                    for ix in 0..4 {
-                        block[iy * 4 + ix] = if ix == 0 && iy == 0 {
+                for iy in 0..4 {
+                    for ix in 0..8 {
+                        block[iy * 8 + ix] = if ix == 0 && iy == 0 {
                             dcs[x]
                         } else {
-                            // Data is stored transposed in the bit-stream.
-                            transform_buffer[(x + ix * 2) * 8 + iy]
+                            coefficients[(x + iy * 2) * 8 + ix]
                         }
                     }
                 }
@@ -545,8 +545,9 @@ pub fn transform_to_pixels(
             }
         }
         HfTransformType::DCT4X8 => {
-            let block0 = transform_buffer[0];
-            let block1 = transform_buffer[8];
+            let coefficients: Vec<f32> = transform_buffer[0..64].to_vec();
+            let block0 = coefficients[0];
+            let block1 = coefficients[8];
             let dcs: [f32; 2] = [block0 + block1, block0 - block1];
             for y in 0..2 {
                 let mut block: Vec<f32> = vec![0.0; 4 * 8];
@@ -555,7 +556,7 @@ pub fn transform_to_pixels(
                         block[iy * 8 + ix] = if ix == 0 && iy == 0 {
                             dcs[y]
                         } else {
-                            transform_buffer[(y + iy * 2) * 8 + ix]
+                            coefficients[(y + iy * 2) * 8 + ix]
                         }
                     }
                 }

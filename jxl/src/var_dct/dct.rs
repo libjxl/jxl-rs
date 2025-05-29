@@ -325,25 +325,13 @@ where
 {
     assert_eq!(data.len(), ROWS * COLS, "Data length mismatch");
 
-    // Copy data from flat slice `data` into a temporary Vec of arrays (rows).
-    let mut temp_rows: Vec<[f32; COLS]> = vec![[0.0f32; COLS]; ROWS];
-    for (r, column) in temp_rows.iter_mut().enumerate() {
-        let start = r * COLS;
-        let end = start + COLS;
-        column.copy_from_slice(&data[start..end]);
-    }
-
-    IDCT1DImpl::<ROWS>::do_idct::<COLS>(&mut temp_rows);
-
-    for (r, column) in temp_rows.iter().enumerate() {
-        let start = r * COLS;
-        let end = start + COLS;
-        data[start..end].copy_from_slice(column);
-    }
-
     // Create a temporary flat buffer for the transposed data.
     let mut transposed_data = vec![0.0f32; ROWS * COLS];
-    transpose::<ROWS, COLS>(data, &mut transposed_data);
+    if ROWS < COLS {
+        transpose::<ROWS, COLS>(data, &mut transposed_data);
+    } else {
+        transposed_data.copy_from_slice(data);
+    }
 
     // Copy data from flat `transposed_data` into a temporary Vec of arrays.
     let mut temp_cols: Vec<[f32; ROWS]> = vec![[0.0f32; ROWS]; COLS];
@@ -362,10 +350,22 @@ where
         let end = start + ROWS;
         transposed_data[start..end].copy_from_slice(row);
     }
-    if ROWS < COLS {
-        transpose::<COLS, ROWS>(&transposed_data, data);
-    } else {
-        data.copy_from_slice(&transposed_data);
+
+    transpose::<COLS, ROWS>(&transposed_data, data);
+
+    // Copy data from flat slice `data` into a temporary Vec of arrays (rows).
+    let mut temp_rows: Vec<[f32; COLS]> = vec![[0.0f32; COLS]; ROWS];
+    for (r, column) in temp_rows.iter_mut().enumerate() {
+        let start = r * COLS;
+        let end = start + COLS;
+        column.copy_from_slice(&data[start..end]);
+    }
+    IDCT1DImpl::<ROWS>::do_idct::<COLS>(&mut temp_rows);
+
+    for (r, column) in temp_rows.iter().enumerate() {
+        let start = r * COLS;
+        let end = start + COLS;
+        data[start..end].copy_from_slice(column);
     }
 }
 
