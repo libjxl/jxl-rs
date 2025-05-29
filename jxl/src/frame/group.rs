@@ -9,7 +9,7 @@ use crate::{
     bit_reader::BitReader,
     error::{Error, Result},
     frame::{
-        block_context_map::*, coeff_order, color_correlation_map::COLOR_TILE_DIM_IN_BLOCKS,
+        block_context_map::*, color_correlation_map::COLOR_TILE_DIM_IN_BLOCKS,
         quant_weights::DequantMatrices, transform_map::*, HfGlobalState, HfMetadata, LfGlobalState,
     },
     headers::frame_header::FrameHeader,
@@ -574,9 +574,8 @@ pub fn decode_vardct_group(
                     let coeff = reader.read_signed(br, ctx)?;
                     prev = if coeff != 0 { 1 } else { 0 };
                     nonzeros -= prev;
-                    let order_type = coeff_order::ORDER_LUT[transform_id as usize];
                     let coeff_index =
-                        hf_global.passes[pass].coeff_orders[order_type * 3 + c][k] as usize;
+                        hf_global.passes[pass].coeff_orders[shape_id * 3 + c][k] as usize;
                     coeffs[c][coeffs_offset + coeff_index] = coeff;
                 }
                 if nonzeros != 0 {

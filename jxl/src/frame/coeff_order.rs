@@ -33,17 +33,6 @@ pub const TRANSFORM_TYPE_LUT: [HfTransformType; NUM_ORDERS] = [
     HfTransformType::DCT128X256,
 ];
 
-pub const ORDER_LUT: [usize; HfTransformType::VALUES.len()] = [
-    /* DCT */ 0, /* IDENTITY */ 1, /* DCT2X2 */ 0, /* DCT4X4 */ 0,
-    /* DCT16X16 */ 2, /* DCT32X32 */ 3, /* DCT16X8 */ 4, /* DCT8X16 */ 4,
-    /* DCT32X8 */ 5, /* DCT8X32 */ 5, /* DCT32X16 */ 6, /* DCT16X32 */ 6,
-    /* DCT4X8 */ 0, /* DCT8X4 */ 0, /* AFV0 */ 1, /* AFV1 */ 1,
-    /* AFV2 */ 1, /* AFV3 */ 1, /* DCT64X64 */ 7, /* DCT64X32 */ 8,
-    /* DCT32X64 */ 8, /* DCT128X128 */ 9, /* DCT128X64 */ 10,
-    /* DCT64X128 */ 10, /* DCT256X256 */ 11, /* DCT256X128 */ 11,
-    /* DCT128X256 */ 12,
-];
-
 pub const NUM_PERMUTATION_CONTEXTS: usize = 8;
 
 pub fn natural_coeff_order(transform: HfTransformType) -> Vec<u32> {
@@ -128,11 +117,4 @@ pub fn decode_coeff_orders(used_orders: u32, br: &mut BitReader) -> Result<Vec<P
     }
     reader.check_final_state()?;
     Ok(permutations)
-}
-
-#[test]
-fn lut_consistency() {
-    for (i, &transform_type) in TRANSFORM_TYPE_LUT.iter().enumerate() {
-        assert_eq!(ORDER_LUT[transform_type as usize], i);
-    }
 }
