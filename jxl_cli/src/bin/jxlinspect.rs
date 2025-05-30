@@ -151,7 +151,7 @@ fn parse_jxl_codestream(data: &[u8], verbose: bool) -> Result<(), jxl::error::Er
             );
             br.jump_to_byte_boundary()?;
             br.skip_bits(frame.total_bytes_in_toc() * 8)?;
-            if let Some(state) = frame.finalize()?.0 {
+            if let Some(state) = frame.finalize()?.decoder_state {
                 decoder_state = state;
             } else {
                 break;

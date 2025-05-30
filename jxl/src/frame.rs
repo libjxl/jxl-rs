@@ -152,6 +152,11 @@ pub struct Frame {
     render_pipeline: Option<SimpleRenderPipeline>,
 }
 
+pub struct FrameOutput {
+    pub decoder_state: Option<DecoderState>,
+    pub channels: Option<Vec<Image<f32>>>,
+}
+
 impl Frame {
     pub fn new(br: &mut BitReader, decoder_state: DecoderState) -> Result<Self> {
         let mut frame_header = FrameHeader::read_unconditional(
@@ -571,7 +576,7 @@ impl Frame {
         )
     }
 
-    pub fn finalize(mut self) -> Result<(Option<DecoderState>, Vec<Image<f32>>)> {
+    pub fn finalize(mut self) -> Result<FrameOutput> {
         if self.header.can_be_referenced {
             // TODO(firsching): actually use real reference images here, instead of setting it
             // to a blank image here, once we can decode images.
@@ -586,24 +591,32 @@ impl Frame {
                 )?);
         }
 
-        let saved_frames: Vec<Box<SaveStage<f32>>> = self
-            .render_pipeline
-            .unwrap()
-            .into_stages()
-            .into_iter()
-            .filter_map(|x| x.downcast().ok())
-            .collect();
-
-        let output_frames: Vec<Image<f32>> = saved_frames
-            .into_iter()
-            .map(|stage_box| stage_box.into_buffer())
-            .collect();
-
-        Ok(if self.header.is_last {
-            (None, output_frames)
+        let channels = if self.header.is_visible() {
+            Some(
+                self.render_pipeline
+                    .unwrap()
+                    .into_stages()
+                    .into_iter()
+                    .filter_map(|x| x.downcast().ok())
+                    .map(|stage_box: Box<SaveStage<f32>>| stage_box.into_buffer())
+                    .collect(),
+            )
         } else {
-            (Some(self.decoder_state), output_frames)
-        })
+            None
+        };
+
+        let decoder_state = if self.header.is_last {
+            None
+        } else {
+            Some(self.decoder_state)
+        };
+
+        let frame_output = FrameOutput {
+            decoder_state,
+            channels,
+        };
+
+        Ok(frame_output)
     }
 }
 

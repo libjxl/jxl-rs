@@ -109,11 +109,13 @@ pub fn decode_jxl_codestream(
         }
         let frame_size = frame.header().size();
         let result = frame.finalize()?;
-        image_data.frames.push(ImageFrame {
-            size: frame_size,
-            channels: result.1,
-        });
-        if let Some(state) = result.0 {
+        if let Some(channels) = result.channels {
+            image_data.frames.push(ImageFrame {
+                size: frame_size,
+                channels,
+            });
+        }
+        if let Some(state) = result.decoder_state {
             decoder_state = state;
         } else {
             break;

@@ -548,6 +548,12 @@ impl FrameHeader {
         self.hshift(1) == 0 && self.vshift(1) == 0 // Y
     }
 
+    pub fn is_visible(&self) -> bool {
+        (self.is_last || self.duration > 0)
+            && (self.frame_type == FrameType::RegularFrame
+                || self.frame_type == FrameType::SkipProgressive)
+    }
+
     /// The dimensions of this frame, as coded in the codestream, excluding padding pixels.
     pub fn size(&self) -> (usize, usize) {
         let (width, height) = self.size_upsampled();
