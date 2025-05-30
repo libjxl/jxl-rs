@@ -6,6 +6,7 @@
 use crate::image::{Image, ImageDataType, ImageRect};
 
 pub mod numpy;
+pub mod png;
 
 pub struct ImageFrame<T: ImageDataType> {
     pub size: (usize, usize),

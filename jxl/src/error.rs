@@ -220,6 +220,8 @@ pub enum Error {
     OutputWriteFailure,
     #[error("Output format not supported: try .ppm, .pgm or .npy")]
     OutputFormatNotSupported,
+    #[error("Invalid number of channels for PNG output ({0})")]
+    PNGInvalidNumChannels(usize),
 }
 
 pub type Result<T, E = Error> = std::result::Result<T, E>;
