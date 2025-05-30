@@ -97,10 +97,10 @@ pub fn decode_jxl_codestream(
         if let Some(ref mut callback) = options.frame_callback {
             callback(&frame)?;
         }
-
+        let frame_size = frame.header().size();
         let result = frame.finalize()?;
         image_data.frames.push(ImageFrame {
-            size: image_data.size,
+            size: frame_size,
             channels: result.1,
         });
         if let Some(state) = result.0 {

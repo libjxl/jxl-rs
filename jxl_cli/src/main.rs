@@ -38,6 +38,8 @@ fn save_image(image_data: ImageData<f32>, output_filename: PathBuf) -> Result<()
         }
     } else if fn_str.ends_with(".npy") {
         output_bytes = jxl::enc::numpy::to_numpy(image_data)?;
+    } else if fn_str.ends_with(".png") {
+        output_bytes = jxl::enc::png::to_png(image_data)?;
     }
     if output_bytes.is_empty() {
         return Err(Error::OutputFormatNotSupported);
