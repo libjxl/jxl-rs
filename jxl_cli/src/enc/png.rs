@@ -3,8 +3,8 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-use crate::enc::ImageData;
-use crate::error::{Error, Result};
+use jxl::decode::ImageData;
+use jxl::error::{Error, Result};
 
 use std::io::BufWriter;
 

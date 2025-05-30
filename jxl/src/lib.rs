@@ -8,7 +8,6 @@ pub mod bit_reader;
 pub mod color;
 pub mod container;
 pub mod decode;
-pub mod enc;
 pub mod entropy_coding;
 pub mod error;
 pub mod features;
