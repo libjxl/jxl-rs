@@ -336,7 +336,6 @@ dependencies = [
  "jxl_macros",
  "num-derive",
  "num-traits",
- "png",
  "rand",
  "rand_xorshift",
  "test-log",
@@ -349,8 +348,10 @@ name = "jxl_cli"
 version = "0.1.0"
 dependencies = [
  "clap",
+ "half",
  "jxl",
  "lcms2",
+ "png",
  "tracing-subscriber",
 ]
 

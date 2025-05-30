@@ -5,12 +5,13 @@
 
 use clap::Parser;
 use jxl::container::{ContainerParser, ParseEvent};
-use jxl::decode::DecodeOptions;
-use jxl::enc::ImageData;
+use jxl::decode::{DecodeOptions, ImageData};
 use jxl::error::Error;
 use std::fs;
 use std::io::Read;
 use std::path::PathBuf;
+
+pub mod enc;
 
 fn save_icc(icc_bytes: Vec<u8>, icc_filename: Option<PathBuf>) -> Result<(), Error> {
     match icc_filename {
@@ -27,19 +28,19 @@ fn save_image(image_data: ImageData<f32>, output_filename: PathBuf) -> Result<()
     if fn_str.ends_with(".ppm") {
         if image_data.frames.len() == 1 {
             if let [r, g, b] = &image_data.frames[0].channels[..] {
-                output_bytes = jxl::enc::to_ppm_as_8bit(&[r.as_rect(), g.as_rect(), b.as_rect()]);
+                output_bytes = enc::pnm::to_ppm_as_8bit(&[r.as_rect(), g.as_rect(), b.as_rect()]);
             }
         }
     } else if fn_str.ends_with(".pgm") {
         if image_data.frames.len() == 1 {
             if let [g] = &image_data.frames[0].channels[..] {
-                output_bytes = g.as_rect().to_pgm_as_8bit();
+                output_bytes = enc::pnm::to_pgm_as_8bit(&g.as_rect());
             }
         }
     } else if fn_str.ends_with(".npy") {
-        output_bytes = jxl::enc::numpy::to_numpy(image_data)?;
+        output_bytes = enc::numpy::to_numpy(image_data)?;
     } else if fn_str.ends_with(".png") {
-        output_bytes = jxl::enc::png::to_png(image_data)?;
+        output_bytes = enc::png::to_png(image_data)?;
     }
     if output_bytes.is_empty() {
         return Err(Error::OutputFormatNotSupported);

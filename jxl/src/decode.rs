@@ -5,11 +5,11 @@
 
 use crate::{
     bit_reader::BitReader,
-    enc::{ImageData, ImageFrame},
     error::Error,
     frame::{DecoderState, Frame, Section},
     headers::{FileHeader, JxlHeader},
     icc::read_icc,
+    image::{Image, ImageDataType},
     util::tracing_wrappers::*,
 };
 
@@ -32,6 +32,16 @@ impl<'a> Default for DecodeOptions<'a> {
     fn default() -> Self {
         Self::new()
     }
+}
+
+pub struct ImageFrame<T: ImageDataType> {
+    pub size: (usize, usize),
+    pub channels: Vec<Image<T>>,
+}
+
+pub struct ImageData<T: ImageDataType> {
+    pub size: (usize, usize),
+    pub frames: Vec<ImageFrame<T>>,
 }
 
 #[allow(unused_mut)]
