@@ -496,6 +496,8 @@ impl Frame {
             pipeline = pipeline.add_stage(ConvertModularToF32Stage::new(i, metadata.bit_depth))?;
         }
 
+        // TODO: chroma upsampling
+
         let filters = &self.header.restoration_filter;
         if filters.gab {
             pipeline = pipeline
@@ -516,6 +518,19 @@ impl Frame {
                 ))?;
         }
 
+        // TODO: EPF
+
+        // TODO: EC upsampling
+
+        // TODO: patches
+
+        // TODO: splines
+
+        // TODO: upsampling
+
+        // TODO: noise
+
+        // TODO: YCbCr
         if self.decoder_state.file_header.image_metadata.xyb_encoded {
             let intensity_target = 255.0;
             let opsin = &self
@@ -532,6 +547,11 @@ impl Frame {
                 pipeline = pipeline.add_stage(FromLinearStage::new(0, TransferFunction::Srgb))?;
             }
         }
+
+        // TODO: blending
+
+        // TODO: spot colors
+
         for i in 0..num_channels {
             pipeline = pipeline.add_stage(SaveStage::<f32>::new(i, self.header.size(), 255.0)?)?;
         }
