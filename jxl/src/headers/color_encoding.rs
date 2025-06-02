@@ -44,14 +44,36 @@ fn det2x2(a: f32, b: f32, c: f32, d: f32) -> f32 {
 }
 
 fn calculate_cofactor(m: &Matrix3x3, r: usize, c: usize) -> f32 {
-    // Determine indices for the 2x2 submatrix for the minor M_rc
-    let r1 = (r + 1) % 3;
-    let r2 = (r + 2) % 3;
-    let c1 = (c + 1) % 3;
-    let c2 = (c + 2) % 3;
+    // Determine the actual row and column indices for the 2x2 submatrix
+    // by excluding the current row 'r' and column 'c'.
+    // Ensure they are taken in ascending order to form the submatrix consistently.
+    let mut sub_rows = [0; 2];
+    let mut sub_cols = [0; 2];
 
-    let minor_val = det2x2(m[r1][c1], m[r1][c2], m[r2][c1], m[r2][c2]);
+    let mut current_idx = 0;
+    for i in 0..3 {
+        if i != r {
+            sub_rows[current_idx] = i;
+            current_idx += 1;
+        }
+    }
 
+    current_idx = 0;
+    for i in 0..3 {
+        if i != c {
+            sub_cols[current_idx] = i;
+            current_idx += 1;
+        }
+    }
+
+    let minor_val = det2x2(
+        m[sub_rows[0]][sub_cols[0]],
+        m[sub_rows[0]][sub_cols[1]],
+        m[sub_rows[1]][sub_cols[0]],
+        m[sub_rows[1]][sub_cols[1]],
+    );
+
+    // Apply the checkerboard pattern sign for the cofactor
     if (r + c) % 2 == 0 {
         minor_val
     } else {
@@ -148,7 +170,7 @@ pub fn primaries_to_xyz(
         [0.0, s_vec[1], 0.0],
         [0.0, 0.0, s_vec[2]],
     ];
-
+    println!("{s_diag_matrix:?}");
     // The final RGB-to-XYZ matrix is P * S_diag
     let result_matrix = mul_3x3_matrix(&p_matrix, &s_diag_matrix);
 
@@ -1091,7 +1113,15 @@ impl ColorEncoding {
                 size_unpadded: b_xyz_tag_unpadded_size,
             });
         }
-
+        if self.color_space == ColorSpace::XYB {
+            // TODO:
+            // JXL_RETURN_IF_ERROR(CreateICCLutAtoBTagForXYB(&tags));
+            // FinalizeICCTag(&tags, &tag_offset, &tag_size);
+            // AddToICCTagTable("A2B0", tag_offset, tag_size, &tagtable, &offsets);
+            // JXL_RETURN_IF_ERROR(CreateICCNoOpBToATag(&tags));
+            // FinalizeICCTag(&tags, &tag_offset, &tag_size);
+            // AddToICCTagTable("B2A0", tag_offset, tag_size, &tagtable, &offsets);
+        }
         // TODO: add the more tags
 
         // Construct the Tag Table bytes
@@ -1130,5 +1160,42 @@ impl ColorEncoding {
         write_u32_be(&mut final_icc_profile_data, 0, total_profile_size)?;
         // TODO: MD5 hashing?
         Ok(Some(final_icc_profile_data))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn assert_matrix_eq(a: &Matrix3x3, b: &Matrix3x3, epsilon: f32) {
+        for r in 0..3 {
+            for c in 0..3 {
+                assert!(
+                    (a[r][c] - b[r][c]).abs() < epsilon,
+                    "Matrices differ at [{}][{}]: expected {}, got {}. Diff: {}",
+                    r,
+                    c,
+                    b[r][c],
+                    a[r][c],
+                    (a[r][c] - b[r][c]).abs()
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn test_3x3_inverse() {
+        let m: Matrix3x3 = [[1.0, -3.0, -2.0], [2.0, 2.0, 1.0], [2.0, 1.0, 1.0]];
+
+        let expected_inv: Matrix3x3 = [[0.2, 0.2, 0.2], [0., 1., -1.], [-0.4, -1.4, 1.6]];
+
+        match inv_3x3_matrix(&m) {
+            Ok(inv_m) => {
+                assert_matrix_eq(&inv_m, &expected_inv, 1e-6);
+            }
+            Err(e) => {
+                panic!("Matrix inversion failed unexpectedly: {:?}", e);
+            }
+        }
     }
 }
