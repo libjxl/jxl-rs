@@ -298,7 +298,7 @@ pub struct FrameHeader {
 
     #[default(false)]
     #[condition(!nonserialized.xyb_encoded)]
-    do_ycbcr: bool,
+    pub do_ycbcr: bool,
 
     #[coder(Bits(2))]
     #[default([0, 0, 0])]

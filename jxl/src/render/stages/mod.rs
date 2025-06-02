@@ -25,3 +25,4 @@ pub use from_linear::*;
 pub use gaborish::*;
 pub use save::*;
 pub use xyb::*;
+pub use ycbcr::*;

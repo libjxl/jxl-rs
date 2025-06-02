@@ -11,7 +11,6 @@ pub struct YcbcrToLinearSrgbStage {
 }
 
 impl YcbcrToLinearSrgbStage {
-    #[allow(unused, reason = "remove once we actually use this")]
     pub fn new(first_channel: usize) -> Self {
         Self { first_channel }
     }
