@@ -18,7 +18,7 @@ use crate::{
     },
     image::{Image, Rect},
     render::{
-        stages::SaveStage, RenderPipeline, RenderPipelineBuilder, SimpleRenderPipeline,
+        stages::*, RenderPipeline, RenderPipelineBuilder, SimpleRenderPipeline,
         SimpleRenderPipelineBuilder,
     },
     util::{tracing_wrappers::*, CeilLog2},
@@ -27,7 +27,7 @@ use block_context_map::BlockContextMap;
 use coeff_order::decode_coeff_orders;
 use color_correlation_map::ColorCorrelationParams;
 use group::decode_vardct_group;
-use modular::{decode_hf_metadata, decode_vardct_lf, fill_in_modular_rect};
+use modular::{decode_hf_metadata, decode_vardct_lf};
 use modular::{FullModularImage, ModularStreamId, Tree};
 use quant_weights::DequantMatrices;
 use quantizer::LfQuantFactors;
@@ -106,6 +106,7 @@ impl ReferenceFrame {
 pub struct DecoderState {
     file_header: FileHeader,
     reference_frames: [Option<ReferenceFrame>; Self::MAX_STORED_FRAMES],
+    pub xyb_output_linear: bool,
 }
 
 impl DecoderState {
@@ -115,6 +116,7 @@ impl DecoderState {
         Self {
             file_header,
             reference_frames: [None, None, None, None],
+            xyb_output_linear: true,
         }
     }
 
@@ -148,6 +150,11 @@ pub struct Frame {
     hf_meta: Option<HfMetadata>,
     decoder_state: DecoderState,
     render_pipeline: Option<SimpleRenderPipeline>,
+}
+
+pub struct FrameOutput {
+    pub decoder_state: Option<DecoderState>,
+    pub channels: Option<Vec<Image<f32>>>,
 }
 
 impl Frame {
@@ -474,14 +481,59 @@ impl Frame {
     pub fn prepare_for_hf(&mut self) -> Result<()> {
         // TODO(veluca): build the pipeline properly.
         let num_channels = self.header.num_extra_channels as usize + 3;
+        let metadata = &self.decoder_state.file_header.image_metadata;
         let mut pipeline = SimpleRenderPipelineBuilder::new(
             num_channels,
             self.header.size(),
             self.header.log_group_dim(),
         );
+        let first_modular_channel = if self.header.encoding == Encoding::Modular {
+            0
+        } else {
+            3
+        };
+        for i in first_modular_channel..num_channels {
+            pipeline = pipeline.add_stage(ConvertModularToF32Stage::new(i, metadata.bit_depth))?;
+        }
 
+        let filters = &self.header.restoration_filter;
+        if filters.gab {
+            pipeline = pipeline
+                .add_stage(GaborishStage::new(
+                    0,
+                    filters.gab_x_weight1,
+                    filters.gab_x_weight2,
+                ))?
+                .add_stage(GaborishStage::new(
+                    1,
+                    filters.gab_y_weight1,
+                    filters.gab_y_weight2,
+                ))?
+                .add_stage(GaborishStage::new(
+                    2,
+                    filters.gab_b_weight1,
+                    filters.gab_b_weight2,
+                ))?;
+        }
+
+        if self.decoder_state.file_header.image_metadata.xyb_encoded {
+            let intensity_target = 255.0;
+            let opsin = &self
+                .decoder_state
+                .file_header
+                .transform_data
+                .opsin_inverse_matrix;
+            pipeline = pipeline.add_stage(XybToLinearSrgbStage::new(
+                0,
+                opsin.clone(),
+                intensity_target,
+            ))?;
+            if !self.decoder_state.xyb_output_linear {
+                pipeline = pipeline.add_stage(FromLinearStage::new(0, TransferFunction::Srgb))?;
+            }
+        }
         for i in 0..num_channels {
-            pipeline = pipeline.add_stage(SaveStage::<f32>::new(i, self.header.size())?)?;
+            pipeline = pipeline.add_stage(SaveStage::<f32>::new(i, self.header.size(), 255.0)?)?;
         }
         self.render_pipeline = Some(pipeline.build()?);
 
@@ -516,32 +568,36 @@ impl Frame {
                 lf_global,
                 hf_global,
                 hf_meta,
+                &self.lf_image,
                 &self.quant_lf,
+                &self
+                    .decoder_state
+                    .file_header
+                    .transform_data
+                    .opsin_inverse_matrix
+                    .quant_biases,
                 &mut pass_to_pipeline,
                 br,
             )?;
         }
-        let mut convert_and_pass_to_pipeline = |chan: usize, g: usize, img: &Image<i32>| {
+        let mut modular_pass_to_pipeline = |chan: usize, g: usize, img: &Image<i32>| {
             // TODO(veluca): figure out pass count and check group IDs. Also, investigate whether
             // reusing the `img` buffer would be possible.
-            // TODO(szabadka): Move converting to f32 into the render pipeline.
             self.render_pipeline
                 .as_mut()
                 .unwrap()
-                .fill_input_channels(&[chan], g, 1, |rects| {
-                    fill_in_modular_rect(&mut rects[0], &img.as_rect())
-                })
+                .fill_input_channels(&[chan], g, 1, |rects| rects[0].copy_from(img.as_rect()))
         };
         lf_global.modular_global.read_stream(
             ModularStreamId::ModularHF { group, pass },
             &self.header,
             &lf_global.tree,
-            Some(&mut convert_and_pass_to_pipeline),
+            Some(&mut modular_pass_to_pipeline),
             br,
         )
     }
 
-    pub fn finalize(mut self) -> Result<(Option<DecoderState>, Vec<Image<f32>>)> {
+    pub fn finalize(mut self) -> Result<FrameOutput> {
         if self.header.can_be_referenced {
             // TODO(firsching): actually use real reference images here, instead of setting it
             // to a blank image here, once we can decode images.
@@ -556,210 +612,164 @@ impl Frame {
                 )?);
         }
 
-        let saved_frames: Vec<Box<SaveStage<f32>>> = self
-            .render_pipeline
-            .unwrap()
-            .into_stages()
-            .into_iter()
-            .filter_map(|x| x.downcast().ok())
-            .collect();
-
-        let output_frames: Vec<Image<f32>> = saved_frames
-            .into_iter()
-            .map(|stage_box| stage_box.into_buffer())
-            .collect();
-
-        Ok(if self.header.is_last {
-            (None, output_frames)
+        let channels = if self.header.is_visible() {
+            Some(
+                self.render_pipeline
+                    .unwrap()
+                    .into_stages()
+                    .into_iter()
+                    .filter_map(|x| x.downcast().ok())
+                    .map(|stage_box: Box<SaveStage<f32>>| stage_box.into_buffer())
+                    .collect(),
+            )
         } else {
-            (Some(self.decoder_state), output_frames)
-        })
+            None
+        };
+
+        let decoder_state = if self.header.is_last {
+            None
+        } else {
+            Some(self.decoder_state)
+        };
+
+        let frame_output = FrameOutput {
+            decoder_state,
+            channels,
+        };
+
+        Ok(frame_output)
     }
 }
 
 #[cfg(test)]
 mod test {
-    use std::{panic, path::Path};
-
-    use jxl_macros::for_each_test_file;
+    use std::panic;
 
     use crate::{
-        bit_reader::BitReader,
         container::ContainerParser,
+        decode::{decode_jxl_codestream, DecodeOptions},
         error::Error,
         features::spline::Point,
-        headers::{FileHeader, JxlHeader},
-        icc::read_icc,
         util::test::assert_almost_eq,
     };
     use test_log::test;
 
-    use super::{DecoderState, Frame, Section};
+    use super::Frame;
 
+    #[allow(clippy::type_complexity)]
     fn read_frames(
         image: &[u8],
-        mut callback: impl FnMut(Frame) -> Result<Option<DecoderState>, Error>,
+        callback: &mut dyn FnMut(&Frame) -> Result<(), Error>,
     ) -> Result<(), Error> {
         let codestream = ContainerParser::collect_codestream(image).unwrap();
-        let mut br = BitReader::new(&codestream);
-        let file_header = FileHeader::read(&mut br).unwrap();
-        if file_header.image_metadata.color_encoding.want_icc {
-            let r = read_icc(&mut br)?;
-            println!("found {}-byte ICC", r.len());
-        };
-        br.jump_to_byte_boundary()?;
-        let mut decoder_state = DecoderState::new(file_header);
-
-        loop {
-            let mut frame = Frame::new(&mut br, decoder_state)?;
-            let mut section_readers = frame.sections(&mut br)?;
-            frame
-                .decode_lf_global(&mut section_readers[frame.get_section_idx(Section::LfGlobal)])?;
-
-            for group in 0..frame.header().num_lf_groups() {
-                frame.decode_lf_group(
-                    group,
-                    &mut section_readers[frame.get_section_idx(Section::Lf { group })],
-                )?;
-            }
-
-            frame
-                .decode_hf_global(&mut section_readers[frame.get_section_idx(Section::HfGlobal)])?;
-
-            frame.prepare_for_hf()?;
-
-            for pass in 0..frame.header().passes.num_passes as usize {
-                for group in 0..frame.header().num_groups() {
-                    frame.decode_hf_group(
-                        group,
-                        pass,
-                        &mut section_readers[frame.get_section_idx(Section::Hf { group, pass })],
-                    )?;
-                }
-            }
-
-            // Call the callback with the frame
-            if let Some(state) = callback(frame)? {
-                decoder_state = state;
-            } else {
-                break;
-            }
-            let maybe_profile = &decoder_state
-                .file_header
-                .image_metadata
-                .color_encoding
-                .maybe_create_profile()?;
-            assert!(maybe_profile.is_some());
-        }
+        let mut options = DecodeOptions::new();
+        options.frame_callback = Some(callback);
+        decode_jxl_codestream(options, &codestream)?;
         Ok(())
     }
 
-    fn read_frames_from_path(path: &Path) -> Result<(), Error> {
-        let data = std::fs::read(path).unwrap();
-        read_frames(data.as_slice(), |frame| Ok(frame.finalize()?.0))
-    }
-
-    for_each_test_file!(read_frames_from_path);
-
     #[test]
     fn splines() -> Result<(), Error> {
-        let mut frames = Vec::new();
-        read_frames(include_bytes!("../resources/test/splines.jxl"), |frame| {
-            frames.push(frame);
-            Ok(None)
-        })?;
-        assert_eq!(frames.len(), 1);
-        let frame = &frames[0];
-        let lf_global = frame.lf_global.as_ref().unwrap();
-        let splines = lf_global.splines.as_ref().unwrap();
-        assert_eq!(splines.quantization_adjustment, 0);
-        let expected_starting_points = [Point { x: 9.0, y: 54.0 }].to_vec();
-        assert_eq!(splines.starting_points, expected_starting_points);
-        assert_eq!(splines.splines.len(), 1);
-        let spline = splines.splines[0].clone();
+        let mut num_frames = 0;
+        let mut verify_frame = |frame: &Frame| {
+            let lf_global = frame.lf_global.as_ref().unwrap();
+            let splines = lf_global.splines.as_ref().unwrap();
+            assert_eq!(splines.quantization_adjustment, 0);
+            let expected_starting_points = [Point { x: 9.0, y: 54.0 }].to_vec();
+            assert_eq!(splines.starting_points, expected_starting_points);
+            assert_eq!(splines.splines.len(), 1);
+            let spline = splines.splines[0].clone();
+            let expected_control_points = [
+                (109, 105),
+                (-130, -261),
+                (-66, 193),
+                (227, -52),
+                (-170, 290),
+            ]
+            .to_vec();
+            assert_eq!(spline.control_points.clone(), expected_control_points);
 
-        let expected_control_points = [
-            (109, 105),
-            (-130, -261),
-            (-66, 193),
-            (227, -52),
-            (-170, 290),
-        ]
-        .to_vec();
-        assert_eq!(spline.control_points.clone(), expected_control_points);
-
-        const EXPECTED_COLOR_DCT: [[i32; 32]; 3] = [
-            {
-                let mut row = [0; 32];
-                row[0] = 168;
-                row[1] = 119;
-                row
-            },
-            {
-                let mut row = [0; 32];
-                row[0] = 9;
-                row[2] = 7;
-                row
-            },
-            {
-                let mut row = [0; 32];
-                row[0] = -10;
-                row[1] = 7;
-                row
-            },
-        ];
-        assert_eq!(spline.color_dct, EXPECTED_COLOR_DCT);
-
-        const EXPECTED_SIGMA_DCT: [i32; 32] = {
-            let mut dct = [0; 32];
-            dct[0] = 4;
-            dct[7] = 2;
-            dct
+            const EXPECTED_COLOR_DCT: [[i32; 32]; 3] = [
+                {
+                    let mut row = [0; 32];
+                    row[0] = 168;
+                    row[1] = 119;
+                    row
+                },
+                {
+                    let mut row = [0; 32];
+                    row[0] = 9;
+                    row[2] = 7;
+                    row
+                },
+                {
+                    let mut row = [0; 32];
+                    row[0] = -10;
+                    row[1] = 7;
+                    row
+                },
+            ];
+            assert_eq!(spline.color_dct, EXPECTED_COLOR_DCT);
+            const EXPECTED_SIGMA_DCT: [i32; 32] = {
+                let mut dct = [0; 32];
+                dct[0] = 4;
+                dct[7] = 2;
+                dct
+            };
+            assert_eq!(spline.sigma_dct, EXPECTED_SIGMA_DCT);
+            num_frames += 1;
+            Ok(())
         };
-        assert_eq!(spline.sigma_dct, EXPECTED_SIGMA_DCT);
+        read_frames(
+            include_bytes!("../resources/test/splines.jxl"),
+            &mut verify_frame,
+        )?;
+        assert_eq!(num_frames, 1);
         Ok(())
     }
 
     #[test]
     fn noise() -> Result<(), Error> {
-        let mut frames = Vec::new();
-        read_frames(include_bytes!("../resources/test/8x8_noise.jxl"), |frame| {
-            frames.push(frame);
-            Ok(None)
-        })?;
-
-        assert_eq!(frames.len(), 1);
-        let frame = &frames[0];
-        let lf_global = frame.lf_global.as_ref().unwrap();
-        let noise = lf_global.noise.as_ref().unwrap();
-        let want_noise = [
-            0.000000, 0.000977, 0.002930, 0.003906, 0.005859, 0.006836, 0.008789, 0.010742,
-        ];
-        for (index, noise_param) in want_noise.iter().enumerate() {
-            assert_almost_eq!(noise.lut[index], *noise_param, 1e-6);
-        }
+        let mut num_frames = 0;
+        let mut verify_frame = |frame: &Frame| {
+            let lf_global = frame.lf_global.as_ref().unwrap();
+            let noise = lf_global.noise.as_ref().unwrap();
+            let want_noise = [
+                0.000000, 0.000977, 0.002930, 0.003906, 0.005859, 0.006836, 0.008789, 0.010742,
+            ];
+            for (index, noise_param) in want_noise.iter().enumerate() {
+                assert_almost_eq!(noise.lut[index], *noise_param, 1e-6);
+            }
+            num_frames += 1;
+            Ok(())
+        };
+        read_frames(
+            include_bytes!("../resources/test/8x8_noise.jxl"),
+            &mut verify_frame,
+        )?;
+        assert_eq!(num_frames, 1);
         Ok(())
     }
 
     #[test]
-    #[ignore = "WP and reference properties are not implemented yet"]
     fn patches() -> Result<(), Error> {
-        let mut frames = Vec::new();
+        let mut num_frames = 0;
+        let mut verify_frame = |frame: &Frame| {
+            if num_frames == 0 {
+                assert!(!frame.header().has_patches());
+                assert!(frame.header().can_be_referenced);
+            } else if num_frames == 1 {
+                assert!(frame.header().has_patches());
+                assert!(!frame.header().can_be_referenced);
+            }
+            num_frames += 1;
+            Ok(())
+        };
         read_frames(
             include_bytes!("../resources/test/grayscale_patches_modular.jxl"),
-            |frame| {
-                frames.push(frame);
-                Ok(None)
-            },
+            &mut verify_frame,
         )?;
-        assert_eq!(frames.len(), 2);
-        let first_frame_header = frames[0].header();
-        assert!(!first_frame_header.has_patches());
-        assert!(first_frame_header.can_be_referenced);
-
-        let second_frame_header = frames[1].header();
-        assert!(second_frame_header.has_patches());
-        assert!(!second_frame_header.can_be_referenced);
+        assert_eq!(num_frames, 2);
         Ok(())
     }
 }

@@ -55,7 +55,8 @@ impl HybridUint {
         let bits_in_token = self.lsb_in_token + self.msb_in_token;
         let nbits =
             self.split_exponent - bits_in_token + ((symbol - self.split_token) >> bits_in_token);
-        if nbits > 29 {
+        // To match the behaviour of libjxl, we limit nbits to 31.
+        if nbits > 31 {
             return Err(Error::IntegerTooLarge(nbits));
         }
         let low = symbol & ((1 << self.lsb_in_token) - 1);

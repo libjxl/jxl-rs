@@ -3,9 +3,9 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-use crate::enc::ImageData;
-use crate::error::{Error, Result};
-use crate::image::ImageRect;
+use jxl::decode::ImageData;
+use jxl::error::{Error, Result};
+use jxl::image::ImageRect;
 
 fn numpy_header(xsize: usize, ysize: usize, num_channels: usize, num_frames: usize) -> Vec<u8> {
     // The magic string and version for .npy files (Version 1.0)

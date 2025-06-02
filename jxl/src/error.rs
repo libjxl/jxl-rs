@@ -246,6 +246,8 @@ pub enum Error {
     MatrixInversionFailed(f64),
     #[error("Unsupported transfer function when writing ICC")]
     IccUnsupportedTransferFunction,
+    #[error("Invalid number of channels for PNG output ({0})")]
+    PNGInvalidNumChannels(usize),
 }
 
 pub type Result<T, E = Error> = std::result::Result<T, E>;

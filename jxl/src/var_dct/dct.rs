@@ -3,9 +3,6 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-// TODO(firsching): remove this one we use this!
-#![allow(dead_code)]
-
 use std::f64::consts::SQRT_2;
 
 use super::dct_scales::WcMultipliers;
@@ -114,7 +111,6 @@ macro_rules! define_dct_1d {
             /// Even indexed rows of `a_out` get first half of `a_in`.
             /// Odd indexed rows of `a_out` get second half of `a_in`.
             fn inverse_even_odd(a_in: &[[f32; SZ]], a_out: &mut [[f32; SZ]]) {
-                const N_CONST: usize = $n;
                 const N_HALF_CONST: usize = $nhalf;
                 for i in 0..N_HALF_CONST {
                     for j in 0..SZ {
@@ -329,25 +325,13 @@ where
 {
     assert_eq!(data.len(), ROWS * COLS, "Data length mismatch");
 
-    // Copy data from flat slice `data` into a temporary Vec of arrays (rows).
-    let mut temp_rows: Vec<[f32; COLS]> = vec![[0.0f32; COLS]; ROWS];
-    for (r, column) in temp_rows.iter_mut().enumerate() {
-        let start = r * COLS;
-        let end = start + COLS;
-        column.copy_from_slice(&data[start..end]);
-    }
-
-    IDCT1DImpl::<ROWS>::do_idct::<COLS>(&mut temp_rows);
-
-    for (r, column) in temp_rows.iter().enumerate() {
-        let start = r * COLS;
-        let end = start + COLS;
-        data[start..end].copy_from_slice(column);
-    }
-
     // Create a temporary flat buffer for the transposed data.
     let mut transposed_data = vec![0.0f32; ROWS * COLS];
-    transpose::<ROWS, COLS>(data, &mut transposed_data);
+    if ROWS < COLS {
+        transpose::<ROWS, COLS>(data, &mut transposed_data);
+    } else {
+        transposed_data.copy_from_slice(data);
+    }
 
     // Copy data from flat `transposed_data` into a temporary Vec of arrays.
     let mut temp_cols: Vec<[f32; ROWS]> = vec![[0.0f32; ROWS]; COLS];
@@ -366,39 +350,52 @@ where
         let end = start + ROWS;
         transposed_data[start..end].copy_from_slice(row);
     }
+
     transpose::<COLS, ROWS>(&transposed_data, data);
+
+    // Copy data from flat slice `data` into a temporary Vec of arrays (rows).
+    let mut temp_rows: Vec<[f32; COLS]> = vec![[0.0f32; COLS]; ROWS];
+    for (r, column) in temp_rows.iter_mut().enumerate() {
+        let start = r * COLS;
+        let end = start + COLS;
+        column.copy_from_slice(&data[start..end]);
+    }
+    IDCT1DImpl::<ROWS>::do_idct::<COLS>(&mut temp_rows);
+
+    for (r, column) in temp_rows.iter().enumerate() {
+        let start = r * COLS;
+        let end = start + COLS;
+        data[start..end].copy_from_slice(column);
+    }
 }
 
 pub fn compute_scaled_dct<const ROWS: usize, const COLS: usize>(
-    from: &[f32],
-    from_stride: usize,
+    mut from: [[f32; COLS]; ROWS],
     to: &mut [f32],
 ) where
     DCT1DImpl<ROWS>: DCT1D,
     DCT1DImpl<COLS>: DCT1D,
 {
-    let mut dct_buffer = [[0.0; COLS]; ROWS];
-    for y in 0..ROWS {
-        dct_buffer[y].copy_from_slice(&from[y * from_stride..y * from_stride + COLS]);
-    }
-    DCT1DImpl::<ROWS>::do_dct::<COLS>(&mut dct_buffer);
+    DCT1DImpl::<ROWS>::do_dct::<COLS>(&mut from);
     let mut transposed_dct_buffer = [[0.0; ROWS]; COLS];
     #[allow(clippy::needless_range_loop)]
     for y in 0..ROWS {
         for x in 0..COLS {
-            transposed_dct_buffer[x][y] = dct_buffer[y][x];
+            transposed_dct_buffer[x][y] = from[y][x];
         }
     }
     DCT1DImpl::<COLS>::do_dct::<ROWS>(&mut transposed_dct_buffer);
     if ROWS < COLS {
         for y in 0..ROWS {
             for x in 0..COLS {
-                to[y * COLS + x] = transposed_dct_buffer[x][y];
+                to[y * COLS + x] = transposed_dct_buffer[x][y] / (ROWS * COLS) as f32;
             }
         }
     } else {
         for y in 0..COLS {
-            to[y * ROWS..(y + 1) * ROWS].copy_from_slice(&transposed_dct_buffer[y]);
+            for x in 0..ROWS {
+                to[y * ROWS + x] = transposed_dct_buffer[y][x] / (ROWS * COLS) as f32;
+            }
         }
     }
 }
@@ -406,9 +403,9 @@ pub fn compute_scaled_dct<const ROWS: usize, const COLS: usize>(
 #[cfg(test)]
 mod tests {
     use crate::{
-        util::test::assert_almost_eq,
+        util::test::{assert_all_almost_eq, assert_almost_eq},
         var_dct::{
-            dct::{dct2d, idct2d, DCT1DImpl, IDCT1DImpl, DCT1D, IDCT1D},
+            dct::{compute_scaled_dct, dct2d, idct2d, DCT1DImpl, IDCT1DImpl, DCT1D, IDCT1D},
             dct_slow::{dct1d, idct1d},
         },
     };
@@ -776,4 +773,58 @@ mod tests {
     test_idct2d_exists_n_m!(test_idct2d_exists_256_128, 256, 128);
     test_dct2d_exists_n_m!(test_dct2d_exists_256_256, 256, 256);
     test_idct2d_exists_n_m!(test_idct2d_exists_256_256, 256, 256);
+
+    #[test]
+    fn test_compute_scaled_dct_wide() {
+        let input = [
+            [86.0, 239.0, 213.0, 36.0, 34.0, 142.0, 248.0, 87.0],
+            [128.0, 122.0, 131.0, 72.0, 156.0, 112.0, 248.0, 55.0],
+            [120.0, 31.0, 246.0, 177.0, 119.0, 154.0, 176.0, 248.0],
+            [21.0, 151.0, 107.0, 101.0, 202.0, 71.0, 246.0, 48.0],
+        ];
+
+        let mut output = [0.0; 4 * 8];
+
+        compute_scaled_dct::<4, 8>(input, &mut output);
+
+        assert_all_almost_eq!(
+            output,
+            [
+                135.219, -13.1026, 0.573698, -6.19682, -29.5938, 11.5028, -13.3955, 21.9205,
+                1.4572, 11.3448, 16.3991, 2.50104, -20.549, 0.363681, 3.94596, -4.05406, -8.21875,
+                6.57931, 0.601308, 1.51804, -20.5312, -9.29264, -19.6983, -0.850355, 12.4189,
+                -5.0881, 5.82096, -20.1997, 3.87769, 2.80762, 24.6634, -8.93341,
+            ],
+            1e-3
+        );
+    }
+
+    #[test]
+    fn test_compute_scaled_dct_tall() {
+        let input = [
+            [86.0, 239.0, 213.0, 36.0],
+            [34.0, 142.0, 248.0, 87.0],
+            [128.0, 122.0, 131.0, 72.0],
+            [156.0, 112.0, 248.0, 55.0],
+            [120.0, 31.0, 246.0, 177.0],
+            [119.0, 154.0, 176.0, 248.0],
+            [21.0, 151.0, 107.0, 101.0],
+            [202.0, 71.0, 246.0, 48.0],
+        ];
+
+        let mut output = [0.0; 8 * 4];
+
+        compute_scaled_dct::<8, 4>(input, &mut output);
+
+        assert_all_almost_eq!(
+            output,
+            [
+                135.219, -0.899633, -4.54363, 9.7776, 7.65625, -7.7203, 10.5073, -11.9921,
+                -8.31418, 5.39457, 11.3896, -17.5006, 11.6535, 12.6257, 9.27026, -0.767252,
+                -29.5938, -19.9538, -17.5214, -0.467021, -3.28125, -7.67861, 11.3504, 5.01615,
+                24.9226, -4.19572, -7.10474, -16.7029, 24.2961, -16.8923, -3.32708, -4.09777,
+            ],
+            1e-3
+        );
+    }
 }

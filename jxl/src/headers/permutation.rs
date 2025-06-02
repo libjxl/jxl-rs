@@ -75,9 +75,11 @@ impl Permutation {
 
     pub fn compose(&mut self, other: &Permutation) {
         assert_eq!(self.0.len(), other.0.len());
-        for i in 0..self.0.len() {
-            self.0[i] = self.0[other.0[i] as usize]
+        let mut tmp: Vec<u32> = vec![0; self.0.len()];
+        for (i, val) in tmp.iter_mut().enumerate().take(self.0.len()) {
+            *val = self.0[other.0[i] as usize]
         }
+        self.0.copy_from_slice(&tmp[..]);
     }
 }
 

@@ -11,6 +11,7 @@ use crate::{
     entropy_coding::decode::Histograms,
     error::{Error, Result},
     frame::modular::predict::PredictionData,
+    image::Image,
     util::{tracing_wrappers::*, NewWithCapacity},
 };
 
@@ -60,7 +61,7 @@ const MULTIPLIER_BITS_CONTEXT: usize = 5;
 const NUM_TREE_CONTEXTS: usize = 6;
 
 impl Tree {
-    #[instrument(level = "debug", skip(br), ret, err)]
+    #[instrument(level = "debug", skip(br), err)]
     pub fn read(br: &mut BitReader, size_limit: usize) -> Result<Tree> {
         assert!(size_limit <= u32::MAX as usize);
         trace!(pos = br.total_bits_read());
@@ -197,6 +198,7 @@ impl Tree {
     // Also, the first two properties (the static properties) should be already set by the caller.
     // All other properties should be 0 on the first call in a row.
     #[instrument(level = "trace", skip(buffers), ret)]
+    #[allow(clippy::too_many_arguments)]
     pub(super) fn predict(
         &self,
         buffers: &mut [&mut ModularChannel],
@@ -204,7 +206,8 @@ impl Tree {
         wp_state: &mut WeightedPredictorState,
         x: usize,
         y: usize,
-        property_buffer: &mut [i32; 256],
+        references: &Image<i32>,
+        property_buffer: &mut [i32],
     ) -> PredictionResult {
         let img = &buffers[index].data;
         let prediction_data = PredictionData::get(img.as_rect(), x, y);
@@ -239,22 +242,25 @@ impl Tree {
         property_buffer[7] = left;
 
         // Local gradient
-        property_buffer[8] = left - property_buffer[9];
-        property_buffer[9] = left + top - topleft;
+        property_buffer[8] = left.wrapping_sub(property_buffer[9]);
+        property_buffer[9] = left.wrapping_add(top).wrapping_sub(topleft);
 
         // FFV1 context properties
-        property_buffer[10] = left - topleft;
-        property_buffer[11] = topleft - top;
-        property_buffer[12] = top - topright;
-        property_buffer[13] = top - toptop;
-        property_buffer[14] = left - leftleft;
+        property_buffer[10] = left.wrapping_sub(topleft);
+        property_buffer[11] = topleft.wrapping_sub(top);
+        property_buffer[12] = top.wrapping_sub(topright);
+        property_buffer[13] = top.wrapping_sub(toptop);
+        property_buffer[14] = left.wrapping_sub(leftleft);
 
         // Weighted predictor property.
         let (wp_pred, property) =
             wp_state.predict_and_property((x, y), img.size().0, &prediction_data);
         property_buffer[15] = property;
 
-        // TODO(veluca): reference properties.
+        // Reference properties.
+        let num_refs = references.size().0;
+        let ref_properties = &mut property_buffer[NUM_NONREF_PROPERTIES..];
+        ref_properties[..num_refs].copy_from_slice(&references.as_rect().row(x)[..num_refs]);
 
         trace!(?property_buffer, "new properties");
 

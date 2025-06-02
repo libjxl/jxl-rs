@@ -638,8 +638,8 @@ impl Splines {
             let spline = qspline.dequantize(
                 &self.starting_points[index],
                 self.quantization_adjustment,
-                color_correlation_params.y_to_x(),
-                color_correlation_params.y_to_b(),
+                color_correlation_params.y_to_x_lf(),
+                color_correlation_params.y_to_b_lf(),
                 image_xsize * image_ysize,
             )?;
             total_estimated_area_reached += spline.estimated_area_reached;

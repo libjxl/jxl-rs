@@ -4,93 +4,15 @@
 // license that can be found in the LICENSE file.
 
 use clap::Parser;
-use jxl::bit_reader::BitReader;
 use jxl::container::{ContainerParser, ParseEvent};
-use jxl::enc::{ImageData, ImageFrame};
+use jxl::decode::{DecodeOptions, ImageData};
 use jxl::error::Error;
-use jxl::frame::{DecoderState, Frame, Section};
-use jxl::headers::FileHeader;
-use jxl::icc::read_icc;
 use std::fs;
 use std::io::Read;
 use std::path::PathBuf;
 
-use jxl::headers::JxlHeader;
+pub mod enc;
 
-fn decode_jxl_codestream(data: &[u8]) -> Result<(ImageData<f32>, Vec<u8>), Error> {
-    let mut br = BitReader::new(data);
-    let file_header = FileHeader::read(&mut br)?;
-    println!(
-        "Image size: {} x {}",
-        file_header.size.xsize(),
-        file_header.size.ysize()
-    );
-
-    let icc_bytes = if file_header.image_metadata.color_encoding.want_icc {
-        let r = read_icc(&mut br)?;
-        println!("found {}-byte ICC", r.len());
-        r
-    } else {
-        // TODO: handle potential error here?
-        file_header
-            .image_metadata
-            .color_encoding
-            .maybe_create_profile()?
-            .unwrap()
-    };
-
-    br.jump_to_byte_boundary()?;
-    let mut image_data: ImageData<f32> = ImageData {
-        size: (
-            file_header.size.xsize() as usize,
-            file_header.size.ysize() as usize,
-        ),
-        frames: vec![],
-    };
-    let mut decoder_state = DecoderState::new(file_header);
-    loop {
-        let mut frame = Frame::new(&mut br, decoder_state)?;
-        let mut section_readers = frame.sections(&mut br)?;
-
-        println!("read frame with {} sections", section_readers.len());
-
-        frame.decode_lf_global(&mut section_readers[frame.get_section_idx(Section::LfGlobal)])?;
-
-        for group in 0..frame.header().num_lf_groups() {
-            frame.decode_lf_group(
-                group,
-                &mut section_readers[frame.get_section_idx(Section::Lf { group })],
-            )?;
-        }
-
-        frame.decode_hf_global(&mut section_readers[frame.get_section_idx(Section::HfGlobal)])?;
-
-        frame.prepare_for_hf()?;
-
-        for pass in 0..frame.header().passes.num_passes as usize {
-            for group in 0..frame.header().num_groups() {
-                frame.decode_hf_group(
-                    group,
-                    pass,
-                    &mut section_readers[frame.get_section_idx(Section::Hf { group, pass })],
-                )?;
-            }
-        }
-
-        let result = frame.finalize()?;
-        image_data.frames.push(ImageFrame {
-            size: image_data.size,
-            channels: result.1,
-        });
-        if let Some(state) = result.0 {
-            decoder_state = state;
-        } else {
-            break;
-        }
-    }
-
-    Ok((image_data, icc_bytes))
-}
 
 fn save_icc(icc_bytes: Vec<u8>, icc_filename: Option<PathBuf>) -> Result<(), Error> {
     match icc_filename {
@@ -107,17 +29,19 @@ fn save_image(image_data: ImageData<f32>, output_filename: PathBuf) -> Result<()
     if fn_str.ends_with(".ppm") {
         if image_data.frames.len() == 1 {
             if let [r, g, b] = &image_data.frames[0].channels[..] {
-                output_bytes = jxl::enc::to_ppm_as_8bit(&[r.as_rect(), g.as_rect(), b.as_rect()]);
+                output_bytes = enc::pnm::to_ppm_as_8bit(&[r.as_rect(), g.as_rect(), b.as_rect()]);
             }
         }
     } else if fn_str.ends_with(".pgm") {
         if image_data.frames.len() == 1 {
             if let [g] = &image_data.frames[0].channels[..] {
-                output_bytes = g.as_rect().to_pgm_as_8bit();
+                output_bytes = enc::pnm::to_pgm_as_8bit(&g.as_rect());
             }
         }
     } else if fn_str.ends_with(".npy") {
-        output_bytes = jxl::enc::numpy::to_numpy(image_data)?;
+        output_bytes = enc::numpy::to_numpy(image_data)?;
+    } else if fn_str.ends_with(".png") {
+        output_bytes = enc::png::to_png(image_data)?;
     }
     if output_bytes.is_empty() {
         return Err(Error::OutputFormatNotSupported);
@@ -199,7 +123,9 @@ fn main() -> Result<(), Error> {
         buf_valid -= consumed;
     }
 
-    let (image_data, icc_bytes) = decode_jxl_codestream(&codestream)?;
+    let mut options = DecodeOptions::new();
+    options.xyb_output_linear = String::from(opt.output.to_string_lossy()).ends_with(".npy");
+    let (image_data, icc_bytes) = jxl::decode::decode_jxl_codestream(options, &codestream)?;
     save_image(image_data, opt.output)?;
     save_icc(icc_bytes, opt.icc_out)
 }

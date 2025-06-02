@@ -885,12 +885,12 @@ impl DequantMatrices {
     }
 
     pub fn matrix(&self, quant_kind: HfTransformType, c: usize) -> &[f32] {
-        assert_eq!((1 << quant_kind as u32) & self.computed_mask, 1);
+        assert_ne!((1 << quant_kind as u32) & self.computed_mask, 0);
         &self.table[self.table_offsets[quant_kind as usize * 3 + c]..]
     }
 
     pub fn inv_matrix(&self, quant_kind: HfTransformType, c: usize) -> &[f32] {
-        assert_eq!((1 << quant_kind as u32) & self.computed_mask, 1);
+        assert_ne!((1 << quant_kind as u32) & self.computed_mask, 0);
         &self.inv_table[self.table_offsets[quant_kind as usize * 3 + c]..]
     }
 

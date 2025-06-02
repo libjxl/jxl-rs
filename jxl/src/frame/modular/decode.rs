@@ -9,13 +9,19 @@ use crate::{
     error::{Error, Result},
     frame::quantizer::NUM_QUANT_TABLES,
     headers::{frame_header::FrameHeader, modular::GroupHeader, JxlHeader},
+    image::Image,
     util::tracing_wrappers::*,
 };
 
 use super::{
-    predict::WeightedPredictorState, transforms::apply::meta_apply_local_transforms,
-    tree::NUM_NONREF_PROPERTIES, ModularChannel, Tree,
+    predict::{clamped_gradient, WeightedPredictorState},
+    transforms::apply::meta_apply_local_transforms,
+    tree::NUM_NONREF_PROPERTIES,
+    ModularChannel, Tree,
 };
+
+use num_traits::abs;
+use std::cmp::max;
 
 #[allow(unused)]
 #[derive(Debug)]
@@ -46,8 +52,48 @@ impl ModularStreamId {
     }
 }
 
+fn precompute_references(
+    buffers: &mut [&mut ModularChannel],
+    chan: usize,
+    y: usize,
+    references: &mut Image<i32>,
+) {
+    references.as_rect_mut().apply(|_, v: &mut i32| *v = 0);
+    let mut offset = 0;
+    let num_extra_props = references.size().0;
+    for i in 0..chan {
+        if offset >= num_extra_props {
+            break;
+        }
+        let j = chan - i - 1;
+        if buffers[j].data.size() != buffers[chan].data.size()
+            || buffers[j].shift != buffers[chan].shift
+        {
+            continue;
+        }
+        let mut refs = references.as_rect_mut();
+        let ref_chan = buffers[j].data.as_rect();
+        for x in 0..buffers[chan].data.size().0 {
+            let v = ref_chan.row(y)[x];
+            refs.row(x)[offset] = abs(v);
+            refs.row(x)[offset + 1] = v;
+            let vleft = if x > 0 { ref_chan.row(y)[x - 1] } else { 0 };
+            let vtop = if y > 0 { ref_chan.row(y - 1)[x] } else { vleft };
+            let vtopleft = if x > 0 && y > 0 {
+                ref_chan.row(y - 1)[x - 1]
+            } else {
+                vleft
+            };
+            let vpredicted = clamped_gradient(vleft as i64, vtop as i64, vtopleft as i64);
+            refs.row(x)[offset + 2] = abs(v as i64 - vpredicted) as i32;
+            refs.row(x)[offset + 3] = (v as i64 - vpredicted) as i32;
+        }
+        offset += 4;
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
-#[instrument(level = "debug", skip(buffers, reader, br))]
+#[instrument(level = "debug", skip(buffers, reader, tree, br))]
 fn decode_modular_channel(
     buffers: &mut [&mut ModularChannel],
     chan: usize,
@@ -60,17 +106,31 @@ fn decode_modular_channel(
     debug!("reading channel");
     let size = buffers[chan].data.size();
     let mut wp_state = WeightedPredictorState::new(&header.wp_header, size.0);
+    let mut num_ref_props =
+        max(0, tree.max_property() as i32 - NUM_NONREF_PROPERTIES as i32) as usize;
+    num_ref_props = num_ref_props.div_ceil(4) * 4;
+    let mut references = Image::<i32>::new((num_ref_props, size.0))?;
+    let num_properties = NUM_NONREF_PROPERTIES + num_ref_props;
+    let make_pixel =
+        |dec: i32, mul: u32, guess: i64| -> i32 { (guess + (mul as i64) * (dec as i64)) as i32 };
     for y in 0..size.1 {
-        let mut property_buffer = [0; 256];
+        precompute_references(buffers, chan, y, &mut references);
+        let mut property_buffer: Vec<i32> = vec![0; num_properties];
         property_buffer[0] = chan as i32;
         property_buffer[1] = stream_id as i32;
         for x in 0..size.0 {
-            let prediction_result =
-                tree.predict(buffers, chan, &mut wp_state, x, y, &mut property_buffer);
+            let prediction_result = tree.predict(
+                buffers,
+                chan,
+                &mut wp_state,
+                x,
+                y,
+                &references,
+                &mut property_buffer,
+            );
             let dec = reader.read_signed(br, prediction_result.context as usize)?;
-            let val =
-                prediction_result.guess + (prediction_result.multiplier as i64) * (dec as i64);
-            buffers[chan].data.as_rect_mut().row(y)[x] = val as i32;
+            let val = make_pixel(dec, prediction_result.multiplier, prediction_result.guess);
+            buffers[chan].data.as_rect_mut().row(y)[x] = val;
             trace!(y, x, val, dec, ?property_buffer, ?prediction_result);
             wp_state.update_errors(val, (x, y), size.0);
         }
@@ -127,12 +187,6 @@ pub fn decode_modular_subbitstream(
         local_tree.as_ref().unwrap()
     };
 
-    if tree.max_property() >= NUM_NONREF_PROPERTIES {
-        todo!(
-            "reference properties are not implemented yet, max property: {}",
-            tree.max_property()
-        );
-    }
     let image_width = buffers
         .iter()
         .map(|info| info.channel_info().size.0)

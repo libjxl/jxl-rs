@@ -134,18 +134,18 @@ struct BlendingInfo {
     source: u32,
 }
 
-struct RestorationFilterNonserialized {
+pub struct RestorationFilterNonserialized {
     encoding: Encoding,
 }
 
 #[derive(UnconditionalCoder, Debug, PartialEq)]
 #[nonserialized(RestorationFilterNonserialized)]
-struct RestorationFilter {
+pub struct RestorationFilter {
     #[all_default]
     all_default: bool,
 
     #[default(true)]
-    gab: bool,
+    pub gab: bool,
 
     #[default(false)]
     #[condition(gab)]
@@ -153,27 +153,27 @@ struct RestorationFilter {
 
     #[default(0.115169525)]
     #[condition(gab_custom)]
-    gab_x_weight1: f32,
+    pub gab_x_weight1: f32,
 
     #[default(0.061248592)]
     #[condition(gab_custom)]
-    gab_x_weight2: f32,
+    pub gab_x_weight2: f32,
 
     #[default(0.115169525)]
     #[condition(gab_custom)]
-    gab_y_weight1: f32,
+    pub gab_y_weight1: f32,
 
     #[default(0.061248592)]
     #[condition(gab_custom)]
-    gab_y_weight2: f32,
+    pub gab_y_weight2: f32,
 
     #[default(0.115169525)]
     #[condition(gab_custom)]
-    gab_b_weight1: f32,
+    pub gab_b_weight1: f32,
 
     #[default(0.061248592)]
     #[condition(gab_custom)]
-    gab_b_weight2: f32,
+    pub gab_b_weight2: f32,
 
     #[coder(Bits(2))]
     #[default(2)]
@@ -324,12 +324,12 @@ pub struct FrameHeader {
     #[coder(Bits(3))]
     #[default(3)]
     #[condition(encoding == Encoding::VarDCT && nonserialized.xyb_encoded)]
-    x_qm_scale: u32,
+    pub x_qm_scale: u32,
 
     #[coder(Bits(3))]
     #[default(2)]
     #[condition(encoding == Encoding::VarDCT && nonserialized.xyb_encoded)]
-    b_qm_scale: u32,
+    pub b_qm_scale: u32,
 
     #[condition(frame_type != FrameType::ReferenceOnly)]
     #[default(Passes::default(&field_nonserialized))]
@@ -428,7 +428,7 @@ pub struct FrameHeader {
 
     #[default(RestorationFilter::default(&field_nonserialized))]
     #[nonserialized(encoding : encoding)]
-    restoration_filter: RestorationFilter,
+    pub restoration_filter: RestorationFilter,
 
     #[default(Extensions::default())]
     extensions: Extensions,
@@ -546,6 +546,12 @@ impl FrameHeader {
         self.hshift(0) == 0 && self.vshift(0) == 1 &&  // Cb
         self.hshift(2) == 0 && self.vshift(2) == 1 &&  // Cr
         self.hshift(1) == 0 && self.vshift(1) == 0 // Y
+    }
+
+    pub fn is_visible(&self) -> bool {
+        (self.is_last || self.duration > 0)
+            && (self.frame_type == FrameType::RegularFrame
+                || self.frame_type == FrameType::SkipProgressive)
     }
 
     /// The dimensions of this frame, as coded in the codestream, excluding padding pixels.

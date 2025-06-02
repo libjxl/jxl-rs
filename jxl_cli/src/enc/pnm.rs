@@ -3,19 +3,7 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-use crate::image::{Image, ImageDataType, ImageRect};
-
-pub mod numpy;
-
-pub struct ImageFrame<T: ImageDataType> {
-    pub size: (usize, usize),
-    pub channels: Vec<Image<T>>,
-}
-
-pub struct ImageData<T: ImageDataType> {
-    pub size: (usize, usize),
-    pub frames: Vec<ImageFrame<T>>,
-}
+use jxl::image::ImageRect;
 
 pub trait ToU8ForWriting {
     fn to_u8_for_writing(self) -> u8;
@@ -51,32 +39,28 @@ impl ToU8ForWriting for half::f16 {
     }
 }
 
-impl<T: ImageDataType + ToU8ForWriting> ImageRect<'_, T> {
-    pub fn to_pgm(&self) -> Vec<u8> {
-        use std::io::Write;
-        let mut ret = vec![];
-        write!(&mut ret, "P5\n{} {}\n255\n", self.size().0, self.size().1).unwrap();
-        ret.extend(
-            (0..self.size().1)
-                .flat_map(|x| self.row(x).iter())
-                .map(|x| x.to_u8_for_writing()),
-        );
-        ret
-    }
+pub fn to_pgm(img: &ImageRect<'_, f32>) -> Vec<u8> {
+    use std::io::Write;
+    let mut ret = vec![];
+    write!(&mut ret, "P5\n{} {}\n255\n", img.size().0, img.size().1).unwrap();
+    ret.extend(
+        (0..img.size().1)
+            .flat_map(|x| img.row(x).iter())
+            .map(|x| x.to_u8_for_writing()),
+    );
+    ret
 }
 
-impl ImageRect<'_, f32> {
-    pub fn to_pgm_as_8bit(&self) -> Vec<u8> {
-        use std::io::Write;
-        let mut ret = vec![];
-        write!(&mut ret, "P5\n{} {}\n255\n", self.size().0, self.size().1).unwrap();
-        ret.extend(
-            (0..self.size().1)
-                .flat_map(|x| self.row(x).iter())
-                .map(|x| (*x).clamp(0.0, 255.0) as u8),
-        );
-        ret
-    }
+pub fn to_pgm_as_8bit(img: &ImageRect<'_, f32>) -> Vec<u8> {
+    use std::io::Write;
+    let mut ret = vec![];
+    write!(&mut ret, "P5\n{} {}\n255\n", img.size().0, img.size().1).unwrap();
+    ret.extend(
+        (0..img.size().1)
+            .flat_map(|x| img.row(x).iter())
+            .map(|x| (*x).clamp(0.0, 255.0) as u8),
+    );
+    ret
 }
 
 pub fn to_ppm_as_8bit(img: &[ImageRect<'_, f32>; 3]) -> Vec<u8> {
@@ -103,14 +87,14 @@ pub fn to_ppm_as_8bit(img: &[ImageRect<'_, f32>; 3]) -> Vec<u8> {
 
 #[cfg(test)]
 mod test {
-    use super::ToU8ForWriting;
-    use crate::error::Result;
-    use crate::image::Image;
+    use super::{to_pgm, ToU8ForWriting};
+    use jxl::error::Result;
+    use jxl::image::Image;
 
     #[test]
-    fn to_pgm() -> Result<()> {
-        let image = Image::<u8>::new((32, 32))?;
-        assert!(image.as_rect().to_pgm().starts_with(b"P5\n32 32\n255\n"));
+    fn covert_to_pgm() -> Result<()> {
+        let image = Image::<f32>::new((32, 32))?;
+        assert!(to_pgm(&image.as_rect()).starts_with(b"P5\n32 32\n255\n"));
         Ok(())
     }
 
