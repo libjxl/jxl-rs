@@ -79,11 +79,8 @@ fn inv_3x3_matrix(m: &Matrix3x3) -> Result<Matrix3x3, Error> {
 
     let inv_det = 1.0 / det;
 
-    let adjugate_matrix: [[f32; 3]; 3] = std::array::from_fn(|r_idx| {
-        std::array::from_fn(|c_idx| {
-            cofactor_matrix[c_idx][r_idx]
-        })
-    });
+    let adjugate_matrix: [[f32; 3]; 3] =
+        std::array::from_fn(|r_idx| std::array::from_fn(|c_idx| cofactor_matrix[c_idx][r_idx]));
 
     // Inverse matrix = (1/det) * Adjugate matrix.
     Ok(std::array::from_fn(|r_idx| {
@@ -91,9 +88,76 @@ fn inv_3x3_matrix(m: &Matrix3x3) -> Result<Matrix3x3, Error> {
     }))
 }
 
+#[allow(clippy::too_many_arguments)]
+pub fn primaries_to_xyz(
+    rx: f32,
+    ry: f32,
+    gx: f32,
+    gy: f32,
+    bx: f32,
+    by: f32,
+    wx: f32,
+    wy: f32,
+) -> Result<Matrix3x3, Error> {
+    // Validate white point coordinates
+    if !((0.0..=1.0).contains(&wx) && (wy > 0.0 && wy <= 1.0)) {
+        return Err(Error::IccInvalidWhitePoint(
+            wx,
+            wy,
+            "White point coordinates out of range ([0,1] for x, (0,1] for y)".to_string(),
+        ));
+    }
+    // Comment from libjxl:
+    // TODO(lode): also require rx, ry, gx, gy, bx, to be in range 0-1? ICC
+    // profiles in theory forbid negative XYZ values, but in practice the ACES P0
+    // color space uses a negative y for the blue primary.
+
+    // Construct the primaries matrix P. Its columns are the XYZ coordinates
+    // of the R, G, B primaries (derived from their chromaticities x, y, z=1-x-y).
+    // P = [[xr, xg, xb],
+    //      [yr, yg, yb],
+    //      [zr, zg, zb]]
+    let rz = 1.0 - rx - ry;
+    let gz = 1.0 - gx - gy;
+    let bz = 1.0 - bx - by;
+    let p_matrix = [[rx, gx, bx], [ry, gy, by], [rz, gz, bz]];
+
+    let p_inv_matrix = inv_3x3_matrix(&p_matrix)?;
+
+    // Convert reference white point (wx, wy) to XYZ form with Y=1
+    // This is WhitePoint_XYZ_wp = [Wx/Wy, 1, (1-Wx-Wy)/Wy]
+    let x_over_y_wp = wx / wy;
+    let z_over_y_wp = (1.0 - wx - wy) / wy;
+
+    if !x_over_y_wp.is_finite() || !z_over_y_wp.is_finite() {
+        return Err(Error::IccInvalidWhitePoint(
+            wx,
+            wy,
+            "Calculated X/Y or Z/Y for white point is not finite.".to_string(),
+        ));
+    }
+    let white_point_xyz_vec: Vector3 = [x_over_y_wp, 1.0, z_over_y_wp];
+
+    // Calculate scaling factors S = [Sr, Sg, Sb] such that P * S = WhitePoint_XYZ_wp
+    // So, S = P_inv * WhitePoint_XYZ_wp
+    let s_vec = mul_3x3_vector(&p_inv_matrix, &white_point_xyz_vec);
+
+    // Construct diagonal matrix S_diag from s_vec
+    let s_diag_matrix = [
+        [s_vec[0], 0.0, 0.0],
+        [0.0, s_vec[1], 0.0],
+        [0.0, 0.0, s_vec[2]],
+    ];
+
+    // The final RGB-to-XYZ matrix is P * S_diag
+    let result_matrix = mul_3x3_matrix(&p_matrix, &s_diag_matrix);
+
+    Ok(result_matrix)
+}
+
 fn adapt_to_xyz_d50(wx: f32, wy: f32) -> Result<Matrix3x3, Error> {
-    if !((0.0..=1.0).contains(&wx) && (0.0..=1.0).contains(&wy)) {
-        return Err(Error::IccInvalidWhitePointForAdaptation(
+    if !((0.0..=1.0).contains(&wx) && (wy > 0.0 && wy <= 1.0)) {
+        return Err(Error::IccInvalidWhitePoint(
             wx,
             wy,
             "White point coordinates out of range ([0,1] for x, (0,1] for y)".to_string(),
@@ -106,7 +170,7 @@ fn adapt_to_xyz_d50(wx: f32, wy: f32) -> Result<Matrix3x3, Error> {
 
     // Check for finiteness, as 1.0 / tiny float can overflow.
     if !x_over_y.is_finite() || !z_over_y.is_finite() {
-        return Err(Error::IccInvalidWhitePointForAdaptation(
+        return Err(Error::IccInvalidWhitePoint(
             wx,
             wy,
             "Calculated X/Y or Z/Y for white point is not finite.".to_string(),
@@ -124,7 +188,7 @@ fn adapt_to_xyz_d50(wx: f32, wy: f32) -> Result<Matrix3x3, Error> {
 
     // Check for invalid LMS values which would lead to division by zero
     if lms_source.contains(&0.0) {
-        return Err(Error::IccInvalidWhitePointForAdaptation(
+        return Err(Error::IccInvalidWhitePoint(
             wx,
             wy,
             "LMS components for source white point are zero, leading to division by zero."
@@ -137,7 +201,7 @@ fn adapt_to_xyz_d50(wx: f32, wy: f32) -> Result<Matrix3x3, Error> {
     for i in 0..3 {
         a_diag_matrix[i][i] = lms_d50[i] / lms_source[i];
         if !a_diag_matrix[i][i].is_finite() {
-            return Err(Error::IccInvalidWhitePointForAdaptation(
+            return Err(Error::IccInvalidWhitePoint(
                 wx,
                 wy,
                 format!("Diagonal adaptation matrix component {} is not finite.", i),
@@ -150,6 +214,48 @@ fn adapt_to_xyz_d50(wx: f32, wy: f32) -> Result<Matrix3x3, Error> {
     let final_adaptation_matrix = mul_3x3_matrix(&K_BRADFORD_INV, &b_matrix);
 
     Ok(final_adaptation_matrix)
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn primaries_to_xyz_d50(
+    rx: f32,
+    ry: f32,
+    gx: f32,
+    gy: f32,
+    bx: f32,
+    by: f32,
+    wx: f32,
+    wy: f32,
+) -> Result<Matrix3x3, Error> {
+    // Get the matrix to convert RGB to XYZ, adapted to its native white point (wx, wy).
+    let rgb_to_xyz_native_wp_matrix = primaries_to_xyz(rx, ry, gx, gy, bx, by, wx, wy)?;
+
+    // Get the chromatic adaptation matrix from the native white point (wx, wy) to D50.
+    let adaptation_to_d50_matrix = adapt_to_xyz_d50(wx, wy)?;
+    // This matrix converts XYZ values relative to white point (wx, wy)
+    // to XYZ values relative to D50.
+
+    // Combine the matrices: M_RGBtoD50XYZ = M_AdaptToD50 * M_RGBtoNativeXYZ
+    // Applying M_RGBtoNativeXYZ first gives XYZ relative to native white point.
+    // Then applying M_AdaptToD50 converts these XYZ values to be relative to D50.
+    let result_matrix = mul_3x3_matrix(&adaptation_to_d50_matrix, &rgb_to_xyz_native_wp_matrix);
+
+    Ok(result_matrix)
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn create_icc_rgb_matrix(
+    rx: f32,
+    ry: f32,
+    gx: f32,
+    gy: f32,
+    bx: f32,
+    by: f32,
+    wx: f32,
+    wy: f32,
+) -> Result<Matrix3x3, Error> {
+    // TODO: think about if we need/want to change precision to f64 for some calculations here
+    primaries_to_xyz_d50(rx, ry, gx, gy, bx, by, wx, wy)
 }
 
 pub fn create_icc_chad_matrix(wx: f32, wy: f32) -> Result<Matrix3x3, Error> {
@@ -241,6 +347,40 @@ impl fmt::Display for Primaries {
                 Primaries::P3 => "DCI",
             }
         )
+    }
+}
+
+impl Primaries {
+    pub fn to_xy_coords(
+        &self,
+        custom_xy_data: Option<&[CustomXY; 3]>,
+    ) -> Result<[(f32, f32); 3], Error> {
+        match self {
+            Primaries::Custom => {
+                let data = custom_xy_data.ok_or(Error::MissingCustomPrimariesData)?;
+                Ok([
+                    data[0].as_f32_coords(),
+                    data[1].as_f32_coords(),
+                    data[2].as_f32_coords(),
+                ])
+            }
+            Primaries::SRGB => Ok([
+                // libjxl uses values very close to that, like 0.639998686; check with Sami what the point of that is
+                (0.640, 0.330), // R
+                (0.300, 0.600), // G
+                (0.150, 0.060), // B
+            ]),
+            Primaries::BT2100 => Ok([
+                (0.708, 0.292), // R
+                (0.170, 0.797), // G
+                (0.131, 0.046), // B
+            ]),
+            Primaries::P3 => Ok([
+                (0.680, 0.320), // R
+                (0.265, 0.690), // G
+                (0.150, 0.060), // B
+            ]),
+        }
     }
 }
 
@@ -441,7 +581,7 @@ pub fn create_icc_mluc_tag(tags: &mut Vec<u8>, text: &str) -> Result<(), Error> 
     Ok(())
 }
 
-struct TagInfo {
+pub struct TagInfo {
     signature: [u8; 4],
     // Offset of this tag's data relative to the START of the `tags_data` block
     offset_in_tags_blob: u32,
@@ -474,9 +614,11 @@ fn append_s15_fixed_16(tags_data: &mut Vec<u8>, value: f32) -> Result<(), Error>
 
 /// Creates the data for an ICC 'XYZ ' tag and appends it to `tags_data`.
 /// The 'XYZ ' tag contains three s15Fixed16Number values.
-fn create_icc_xyz_tag(tags_data: &mut Vec<u8>, xyz_color: &[f32; 3]) -> Result<(), Error> {
+fn create_icc_xyz_tag(tags_data: &mut Vec<u8>, xyz_color: &[f32; 3]) -> Result<TagInfo, Error> {
     // Tag signature 'XYZ ' (4 bytes, note the trailing space)
-    tags_data.extend_from_slice(b"XYZ ");
+    let signature = b"XYZ ";
+    let start_offset = tags_data.len() as u32;
+    tags_data.extend_from_slice(signature);
 
     // Reserved, must be 0 (4 bytes)
     tags_data.extend_from_slice(&0u32.to_be_bytes());
@@ -485,12 +627,22 @@ fn create_icc_xyz_tag(tags_data: &mut Vec<u8>, xyz_color: &[f32; 3]) -> Result<(
     for &val in xyz_color {
         append_s15_fixed_16(tags_data, val)?;
     }
-    Ok(())
+
+    Ok(TagInfo {
+        signature: *signature,
+        offset_in_tags_blob: start_offset,
+        size_unpadded: (tags_data.len() as u32) - start_offset,
+    })
 }
 
-pub fn create_icc_chad_tag(tags_data: &mut Vec<u8>, chad_matrix: &Matrix3x3) -> Result<(), Error> {
+pub fn create_icc_chad_tag(
+    tags_data: &mut Vec<u8>,
+    chad_matrix: &Matrix3x3,
+) -> Result<TagInfo, Error> {
     // The tag type signature "sf32" (4 bytes).
-    tags_data.extend_from_slice(b"sf32");
+    let signature = b"sf32";
+    let start_offset = tags_data.len() as u32;
+    tags_data.extend_from_slice(signature);
 
     // A reserved field (4 bytes), which must be set to 0.
     tags_data.extend_from_slice(&0u32.to_be_bytes());
@@ -502,7 +654,11 @@ pub fn create_icc_chad_tag(tags_data: &mut Vec<u8>, chad_matrix: &Matrix3x3) -> 
             append_s15_fixed_16(tags_data, value)?;
         }
     }
-    Ok(())
+    Ok(TagInfo {
+        signature: *signature,
+        offset_in_tags_blob: start_offset,
+        size_unpadded: (tags_data.len() as u32) - start_offset,
+    })
 }
 
 /// Converts CIE xy white point coordinates to CIE XYZ values (Y is normalized to 1.0).
@@ -570,6 +726,61 @@ impl ColorEncoding {
             None
         };
         self.white_point.to_xy_coords(custom_data_for_wp)
+    }
+
+    pub fn get_resolved_primaries_xy(&self) -> Result<[(f32, f32); 3], Error> {
+        let custom_data = if self.primaries == Primaries::Custom {
+            Some(&self.custom_primaries)
+        } else {
+            None
+        };
+        self.primaries.to_xy_coords(custom_data)
+    }
+
+    fn create_icc_cicp_tag_data(&self, tags_data: &mut Vec<u8>) -> Result<Option<TagInfo>, Error> {
+        if self.color_space != ColorSpace::RGB {
+            return Ok(None);
+        }
+
+        // Determine the CICP value for primaries.
+        let primaries_val: u8 = if self.primaries == Primaries::P3 {
+            if self.white_point == WhitePoint::D65 {
+                12 // P3 D65
+            } else if self.white_point == WhitePoint::DCI {
+                11 // P3 DCI
+            } else {
+                return Ok(None);
+            }
+        } else if self.primaries != Primaries::Custom && self.white_point == WhitePoint::D65 {
+            // These JXL enum values match the ones for CICP with a D65 white point.
+            self.primaries as u8
+        } else {
+            return Ok(None);
+        };
+
+        // Custom gamma or unknown transfer functions cannot be represented.
+        if self.tf.have_gamma || self.tf.transfer_function == TransferFunction::Unknown {
+            return Ok(None);
+        }
+        let tf_val = self.tf.transfer_function as u8;
+
+        let signature = b"cicp";
+        let start_offset = tags_data.len() as u32;
+        tags_data.extend_from_slice(signature);
+        let data_len = tags_data.len();
+        write_u32_be(tags_data, data_len, 0)?;
+        tags_data.push(primaries_val);
+        tags_data.push(tf_val);
+        // Matrix Coefficients (RGB is non-constant luminance)
+        tags_data.push(0);
+        // Video Full Range Flag
+        tags_data.push(1);
+
+        Ok(Some(TagInfo {
+            signature: *signature,
+            offset_in_tags_blob: start_offset,
+            size_unpadded: 12,
+        }))
     }
 
     fn can_tone_map_for_icc(&self) -> bool {
@@ -796,20 +1007,30 @@ impl ColorEncoding {
         match self.color_space {
             ColorSpace::Gray => {
                 const D50: [f32; 3] = [0.964203f32, 1.0, 0.824905];
-                create_icc_xyz_tag(&mut tags_data, &D50)?;
+                collected_tags.push(create_icc_xyz_tag(&mut tags_data, &D50)?);
             }
             _ => {
                 let (wx, wy) = self.get_resolved_white_point_xy()?;
-                create_icc_xyz_tag(&mut tags_data, &cie_xyz_from_white_cie_xy(wx, wy)?)?;
+                collected_tags.push(create_icc_xyz_tag(
+                    &mut tags_data,
+                    &cie_xyz_from_white_cie_xy(wx, wy)?,
+                )?);
             }
         }
         pad_to_4_byte_boundary(&mut tags_data);
         if self.color_space != ColorSpace::Gray {
             let (wx, wy) = self.get_resolved_white_point_xy()?;
             let chad_matrix = create_icc_chad_matrix(wx, wy)?;
-            create_icc_chad_tag(&mut tags_data, &chad_matrix)?;
+            collected_tags.push(create_icc_chad_tag(&mut tags_data, &chad_matrix)?);
             pad_to_4_byte_boundary(&mut tags_data);
         }
+
+        if self.color_space == ColorSpace::RGB {
+            if let Some(tag_info) = self.create_icc_cicp_tag_data(&mut tags_data)? {
+                collected_tags.push(tag_info);
+            }
+        }
+
         // TODO: add the more tags
 
         // Construct the Tag Table bytes
