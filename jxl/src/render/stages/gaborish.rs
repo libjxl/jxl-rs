@@ -14,8 +14,6 @@ pub struct GaborishStage {
 }
 
 impl GaborishStage {
-    // TODO(tirr-c): remove once we use this!
-    #[allow(unused)]
     pub fn new(channel: usize, weight1: f32, weight2: f32) -> Self {
         let weight_total = 1.0 + weight1 * 4.0 + weight2 * 4.0;
         let kernel_top_bottom = [weight2, weight1, weight2].map(|x| x / weight_total);

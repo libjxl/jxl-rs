@@ -530,8 +530,9 @@ impl Frame {
 
         // TODO: noise
 
-        // TODO: YCbCr
-        if self.decoder_state.file_header.image_metadata.xyb_encoded {
+        if self.header.do_ycbcr {
+            pipeline = pipeline.add_stage(YcbcrToLinearSrgbStage::new(0))?;
+        } else if self.decoder_state.file_header.image_metadata.xyb_encoded {
             let intensity_target = 255.0;
             let opsin = &self
                 .decoder_state
