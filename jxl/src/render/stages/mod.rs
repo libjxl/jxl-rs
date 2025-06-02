@@ -22,5 +22,6 @@ mod ycbcr;
 pub use chroma_upsample::*;
 pub use convert::*;
 pub use from_linear::*;
+pub use gaborish::*;
 pub use save::*;
 pub use xyb::*;

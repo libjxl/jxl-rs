@@ -134,18 +134,18 @@ struct BlendingInfo {
     source: u32,
 }
 
-struct RestorationFilterNonserialized {
+pub struct RestorationFilterNonserialized {
     encoding: Encoding,
 }
 
 #[derive(UnconditionalCoder, Debug, PartialEq)]
 #[nonserialized(RestorationFilterNonserialized)]
-struct RestorationFilter {
+pub struct RestorationFilter {
     #[all_default]
     all_default: bool,
 
     #[default(true)]
-    gab: bool,
+    pub gab: bool,
 
     #[default(false)]
     #[condition(gab)]
@@ -153,27 +153,27 @@ struct RestorationFilter {
 
     #[default(0.115169525)]
     #[condition(gab_custom)]
-    gab_x_weight1: f32,
+    pub gab_x_weight1: f32,
 
     #[default(0.061248592)]
     #[condition(gab_custom)]
-    gab_x_weight2: f32,
+    pub gab_x_weight2: f32,
 
     #[default(0.115169525)]
     #[condition(gab_custom)]
-    gab_y_weight1: f32,
+    pub gab_y_weight1: f32,
 
     #[default(0.061248592)]
     #[condition(gab_custom)]
-    gab_y_weight2: f32,
+    pub gab_y_weight2: f32,
 
     #[default(0.115169525)]
     #[condition(gab_custom)]
-    gab_b_weight1: f32,
+    pub gab_b_weight1: f32,
 
     #[default(0.061248592)]
     #[condition(gab_custom)]
-    gab_b_weight2: f32,
+    pub gab_b_weight2: f32,
 
     #[coder(Bits(2))]
     #[default(2)]
@@ -428,7 +428,7 @@ pub struct FrameHeader {
 
     #[default(RestorationFilter::default(&field_nonserialized))]
     #[nonserialized(encoding : encoding)]
-    restoration_filter: RestorationFilter,
+    pub restoration_filter: RestorationFilter,
 
     #[default(Extensions::default())]
     extensions: Extensions,

@@ -495,6 +495,27 @@ impl Frame {
         for i in first_modular_channel..num_channels {
             pipeline = pipeline.add_stage(ConvertModularToF32Stage::new(i, metadata.bit_depth))?;
         }
+
+        let filters = &self.header.restoration_filter;
+        if filters.gab {
+            pipeline = pipeline
+                .add_stage(GaborishStage::new(
+                    0,
+                    filters.gab_x_weight1,
+                    filters.gab_x_weight2,
+                ))?
+                .add_stage(GaborishStage::new(
+                    1,
+                    filters.gab_y_weight1,
+                    filters.gab_y_weight2,
+                ))?
+                .add_stage(GaborishStage::new(
+                    2,
+                    filters.gab_b_weight1,
+                    filters.gab_b_weight2,
+                ))?;
+        }
+
         if self.decoder_state.file_header.image_metadata.xyb_encoded {
             let intensity_target = 255.0;
             let opsin = &self
