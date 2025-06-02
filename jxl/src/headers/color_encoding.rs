@@ -365,7 +365,6 @@ impl Primaries {
                 ])
             }
             Primaries::SRGB => Ok([
-                // libjxl uses values very close to that, like 0.639998686; check with Sami what the point of that is
                 (0.640, 0.330), // R
                 (0.300, 0.600), // G
                 (0.150, 0.060), // B
@@ -616,8 +615,8 @@ fn append_s15_fixed_16(tags_data: &mut Vec<u8>, value: f32) -> Result<(), Error>
 /// The 'XYZ ' tag contains three s15Fixed16Number values.
 fn create_icc_xyz_tag(tags_data: &mut Vec<u8>, xyz_color: &[f32; 3]) -> Result<TagInfo, Error> {
     // Tag signature 'XYZ ' (4 bytes, note the trailing space)
-    let signature = b"XYZ ";
     let start_offset = tags_data.len() as u32;
+    let signature = b"XYZ ";
     tags_data.extend_from_slice(signature);
 
     // Reserved, must be 0 (4 bytes)
@@ -629,7 +628,7 @@ fn create_icc_xyz_tag(tags_data: &mut Vec<u8>, xyz_color: &[f32; 3]) -> Result<T
     }
 
     Ok(TagInfo {
-        signature: *signature,
+        signature: *b"wtpt",
         offset_in_tags_blob: start_offset,
         size_unpadded: (tags_data.len() as u32) - start_offset,
     })
@@ -655,7 +654,7 @@ pub fn create_icc_chad_tag(
         }
     }
     Ok(TagInfo {
-        signature: *signature,
+        signature: *b"chad",
         offset_in_tags_blob: start_offset,
         size_unpadded: (tags_data.len() as u32) - start_offset,
     })
@@ -768,6 +767,7 @@ impl ColorEncoding {
         let start_offset = tags_data.len() as u32;
         tags_data.extend_from_slice(signature);
         let data_len = tags_data.len();
+        tags_data.resize(tags_data.len() + 4, 0);
         write_u32_be(tags_data, data_len, 0)?;
         tags_data.push(primaries_val);
         tags_data.push(tf_val);
@@ -1003,18 +1003,18 @@ impl ColorEncoding {
             size_unpadded: cprt_tag_unpadded_size,
         });
 
-        // It is the other way around in libjxl for some reason? TODO: check with Sami!
         match self.color_space {
             ColorSpace::Gray => {
-                const D50: [f32; 3] = [0.964203f32, 1.0, 0.824905];
-                collected_tags.push(create_icc_xyz_tag(&mut tags_data, &D50)?);
-            }
-            _ => {
                 let (wx, wy) = self.get_resolved_white_point_xy()?;
                 collected_tags.push(create_icc_xyz_tag(
                     &mut tags_data,
                     &cie_xyz_from_white_cie_xy(wx, wy)?,
                 )?);
+            }
+            _ => {
+                // Ok, in this case we will add the chad tag below
+                const D50: [f32; 3] = [0.964203f32, 1.0, 0.824905];
+                collected_tags.push(create_icc_xyz_tag(&mut tags_data, &D50)?);
             }
         }
         pad_to_4_byte_boundary(&mut tags_data);
@@ -1028,7 +1028,68 @@ impl ColorEncoding {
         if self.color_space == ColorSpace::RGB {
             if let Some(tag_info) = self.create_icc_cicp_tag_data(&mut tags_data)? {
                 collected_tags.push(tag_info);
+                // Padding here not necessary, since we add 12 bytes to already 4-byte aligned
+                // buffer
+                // pad_to_4_byte_boundary(&mut tags_data);
             }
+
+            // Get colorant and white point coordinates to build the conversion matrix.
+            let primaries_coords = self.get_resolved_primaries_xy()?;
+            let (rx, ry) = primaries_coords[0];
+            let (gx, gy) = primaries_coords[1];
+            let (bx, by) = primaries_coords[2];
+            let (wx, wy) = self.get_resolved_white_point_xy()?;
+
+            // Calculate the RGB to XYZD50 matrix.
+            let m = create_icc_rgb_matrix(rx, ry, gx, gy, bx, by, wx, wy)?;
+
+            // Extract the columns, which are the XYZ values for the R, G, and B primaries.
+            let r_xyz = [m[0][0], m[1][0], m[2][0]];
+            let g_xyz = [m[0][1], m[1][1], m[2][1]];
+            let b_xyz = [m[0][2], m[1][2], m[2][2]];
+
+            // Helper to create the raw data for any 'XYZ ' type tag.
+            let create_xyz_type_tag_data =
+                |tags: &mut Vec<u8>, xyz: &[f32; 3]| -> Result<u32, Error> {
+                    let start_offset = tags.len();
+                    // The tag *type* is 'XYZ ' for all three
+                    tags.extend_from_slice(b"XYZ ");
+                    tags.extend_from_slice(&0u32.to_be_bytes());
+                    for &val in xyz {
+                        append_s15_fixed_16(tags, val)?;
+                    }
+                    Ok((tags.len() - start_offset) as u32)
+                };
+
+            // Create the 'rXYZ' tag.
+            let r_xyz_tag_start_offset = tags_data.len() as u32;
+            let r_xyz_tag_unpadded_size = create_xyz_type_tag_data(&mut tags_data, &r_xyz)?;
+            pad_to_4_byte_boundary(&mut tags_data);
+            collected_tags.push(TagInfo {
+                signature: *b"rXYZ", // Making the *signature* is unique.
+                offset_in_tags_blob: r_xyz_tag_start_offset,
+                size_unpadded: r_xyz_tag_unpadded_size,
+            });
+
+            // Create the 'gXYZ' tag.
+            let g_xyz_tag_start_offset = tags_data.len() as u32;
+            let g_xyz_tag_unpadded_size = create_xyz_type_tag_data(&mut tags_data, &g_xyz)?;
+            pad_to_4_byte_boundary(&mut tags_data);
+            collected_tags.push(TagInfo {
+                signature: *b"gXYZ",
+                offset_in_tags_blob: g_xyz_tag_start_offset,
+                size_unpadded: g_xyz_tag_unpadded_size,
+            });
+
+            // Create the 'bXYZ' tag.
+            let b_xyz_tag_start_offset = tags_data.len() as u32;
+            let b_xyz_tag_unpadded_size = create_xyz_type_tag_data(&mut tags_data, &b_xyz)?;
+            pad_to_4_byte_boundary(&mut tags_data);
+            collected_tags.push(TagInfo {
+                signature: *b"bXYZ",
+                offset_in_tags_blob: b_xyz_tag_start_offset,
+                size_unpadded: b_xyz_tag_unpadded_size,
+            });
         }
 
         // TODO: add the more tags
