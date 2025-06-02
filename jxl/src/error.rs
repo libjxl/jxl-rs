@@ -243,7 +243,9 @@ pub enum Error {
     #[error("{2}: wx: {0}, wy: {1}")]
     IccInvalidWhitePoint(f32, f32, String),
     #[error("Determinant is zero or too small, matrix is close to singular: |det| = {0}.")]
-    MatrixInversionFailed(f32),
+    MatrixInversionFailed(f64),
+    #[error("Unsupported transfer function when writing ICC")]
+    IccUnsupportedTransferFunction,
 }
 
 pub type Result<T, E = Error> = std::result::Result<T, E>;

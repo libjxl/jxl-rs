@@ -9,23 +9,23 @@ use num_derive::FromPrimitive;
 use std::fmt;
 
 // Define type aliases for clarity
-pub type Matrix3x3 = [[f32; 3]; 3];
-pub type Vector3 = [f32; 3];
+pub type Matrix3x3<T> = [[T; 3]; 3];
+pub type Vector3<T> = [T; 3];
 
 // Bradford matrices for chromatic adaptation
-const K_BRADFORD: Matrix3x3 = [
+const K_BRADFORD: Matrix3x3<f64> = [
     [0.8951, 0.2664, -0.1614],
     [-0.7502, 1.7135, 0.0367],
     [0.0389, -0.0685, 1.0296],
 ];
 
-const K_BRADFORD_INV: Matrix3x3 = [
+const K_BRADFORD_INV: Matrix3x3<f64> = [
     [0.9869929, -0.1470543, 0.1599627],
     [0.4323053, 0.5183603, 0.0492912],
     [-0.0085287, 0.0400428, 0.9684867],
 ];
 
-fn mul_3x3_vector(matrix: &Matrix3x3, vector: &Vector3) -> Vector3 {
+fn mul_3x3_vector(matrix: &Matrix3x3<f64>, vector: &Vector3<f64>) -> Vector3<f64> {
     std::array::from_fn(|i| {
         matrix[i]
             .iter()
@@ -35,15 +35,15 @@ fn mul_3x3_vector(matrix: &Matrix3x3, vector: &Vector3) -> Vector3 {
     })
 }
 
-fn mul_3x3_matrix(mat1: &Matrix3x3, mat2: &Matrix3x3) -> Matrix3x3 {
+fn mul_3x3_matrix(mat1: &Matrix3x3<f64>, mat2: &Matrix3x3<f64>) -> Matrix3x3<f64> {
     std::array::from_fn(|i| std::array::from_fn(|j| (0..3).map(|k| mat1[i][k] * mat2[k][j]).sum()))
 }
 
-fn det2x2(a: f32, b: f32, c: f32, d: f32) -> f32 {
+fn det2x2(a: f64, b: f64, c: f64, d: f64) -> f64 {
     a * d - b * c
 }
 
-fn calculate_cofactor(m: &Matrix3x3, r: usize, c: usize) -> f32 {
+fn calculate_cofactor(m: &Matrix3x3<f64>, r: usize, c: usize) -> f64 {
     // Determine the actual row and column indices for the 2x2 submatrix
     // by excluding the current row 'r' and column 'c'.
     // Ensure they are taken in ascending order to form the submatrix consistently.
@@ -82,26 +82,26 @@ fn calculate_cofactor(m: &Matrix3x3, r: usize, c: usize) -> f32 {
 }
 
 /// Calculates the inverse of a 3x3 matrix.
-fn inv_3x3_matrix(m: &Matrix3x3) -> Result<Matrix3x3, Error> {
-    let cofactor_matrix: [[f32; 3]; 3] = std::array::from_fn(|r_idx| {
+fn inv_3x3_matrix(m: &Matrix3x3<f64>) -> Result<Matrix3x3<f64>, Error> {
+    let cofactor_matrix: [[f64; 3]; 3] = std::array::from_fn(|r_idx| {
         std::array::from_fn(|c_idx| calculate_cofactor(m, r_idx, c_idx))
     });
 
-    let det: f32 = m[0]
+    let det = m[0]
         .iter()
         .zip(cofactor_matrix[0].iter())
         .map(|(&m_element, &cof_element)| m_element * cof_element)
-        .sum::<f32>();
+        .sum::<f64>();
 
     // Check for numerical singularity.
-    const EPSILON: f32 = 1e-12;
+    const EPSILON: f64 = 1e-12;
     if det.abs() < EPSILON {
         return Err(Error::MatrixInversionFailed(det.abs()));
     }
 
     let inv_det = 1.0 / det;
 
-    let adjugate_matrix: [[f32; 3]; 3] =
+    let adjugate_matrix: [[f64; 3]; 3] =
         std::array::from_fn(|r_idx| std::array::from_fn(|c_idx| cofactor_matrix[c_idx][r_idx]));
 
     // Inverse matrix = (1/det) * Adjugate matrix.
@@ -120,7 +120,7 @@ pub fn primaries_to_xyz(
     by: f32,
     wx: f32,
     wy: f32,
-) -> Result<Matrix3x3, Error> {
+) -> Result<Matrix3x3<f64>, Error> {
     // Validate white point coordinates
     if !((0.0..=1.0).contains(&wx) && (wy > 0.0 && wy <= 1.0)) {
         return Err(Error::IccInvalidWhitePoint(
@@ -139,17 +139,21 @@ pub fn primaries_to_xyz(
     // P = [[xr, xg, xb],
     //      [yr, yg, yb],
     //      [zr, zg, zb]]
-    let rz = 1.0 - rx - ry;
-    let gz = 1.0 - gx - gy;
-    let bz = 1.0 - bx - by;
-    let p_matrix = [[rx, gx, bx], [ry, gy, by], [rz, gz, bz]];
+    let rz = 1.0 - rx as f64 - ry as f64;
+    let gz = 1.0 - gx as f64 - gy as f64;
+    let bz = 1.0 - bx as f64 - by as f64;
+    let p_matrix = [
+        [rx as f64, gx as f64, bx as f64],
+        [ry as f64, gy as f64, by as f64],
+        [rz, gz, bz],
+    ];
 
     let p_inv_matrix = inv_3x3_matrix(&p_matrix)?;
 
     // Convert reference white point (wx, wy) to XYZ form with Y=1
     // This is WhitePoint_XYZ_wp = [Wx/Wy, 1, (1-Wx-Wy)/Wy]
-    let x_over_y_wp = wx / wy;
-    let z_over_y_wp = (1.0 - wx - wy) / wy;
+    let x_over_y_wp = wx as f64 / wy as f64;
+    let z_over_y_wp = (1.0 - wx as f64 - wy as f64) / wy as f64;
 
     if !x_over_y_wp.is_finite() || !z_over_y_wp.is_finite() {
         return Err(Error::IccInvalidWhitePoint(
@@ -158,7 +162,7 @@ pub fn primaries_to_xyz(
             "Calculated X/Y or Z/Y for white point is not finite.".to_string(),
         ));
     }
-    let white_point_xyz_vec: Vector3 = [x_over_y_wp, 1.0, z_over_y_wp];
+    let white_point_xyz_vec: Vector3<f64> = [x_over_y_wp, 1.0, z_over_y_wp];
 
     // Calculate scaling factors S = [Sr, Sg, Sb] such that P * S = WhitePoint_XYZ_wp
     // So, S = P_inv * WhitePoint_XYZ_wp
@@ -177,7 +181,7 @@ pub fn primaries_to_xyz(
     Ok(result_matrix)
 }
 
-fn adapt_to_xyz_d50(wx: f32, wy: f32) -> Result<Matrix3x3, Error> {
+fn adapt_to_xyz_d50(wx: f32, wy: f32) -> Result<Matrix3x3<f64>, Error> {
     if !((0.0..=1.0).contains(&wx) && (wy > 0.0 && wy <= 1.0)) {
         return Err(Error::IccInvalidWhitePoint(
             wx,
@@ -187,8 +191,8 @@ fn adapt_to_xyz_d50(wx: f32, wy: f32) -> Result<Matrix3x3, Error> {
     }
 
     // Convert white point (wx, wy) to XYZ with Y=1
-    let x_over_y = wx / wy;
-    let z_over_y = (1.0 - wx - wy) / wy;
+    let x_over_y = wx as f64 / wy as f64;
+    let z_over_y = (1.0 - wx as f64 - wy as f64) / wy as f64;
 
     // Check for finiteness, as 1.0 / tiny float can overflow.
     if !x_over_y.is_finite() || !z_over_y.is_finite() {
@@ -198,11 +202,11 @@ fn adapt_to_xyz_d50(wx: f32, wy: f32) -> Result<Matrix3x3, Error> {
             "Calculated X/Y or Z/Y for white point is not finite.".to_string(),
         ));
     }
-    let w: Vector3 = [x_over_y, 1.0, z_over_y];
+    let w: Vector3<f64> = [x_over_y, 1.0, z_over_y];
 
     // D50 white point in XYZ (Y=1 form)
     // These are X_D50/Y_D50, 1.0, Z_D50/Y_D50
-    let w50: Vector3 = [0.96422, 1.0, 0.82521];
+    let w50: Vector3<f64> = [0.96422, 1.0, 0.82521];
 
     // Transform to LMS color space
     let lms_source = mul_3x3_vector(&K_BRADFORD, &w);
@@ -219,7 +223,7 @@ fn adapt_to_xyz_d50(wx: f32, wy: f32) -> Result<Matrix3x3, Error> {
     }
 
     // Create diagonal scaling matrix in LMS space
-    let mut a_diag_matrix: Matrix3x3 = [[0.0; 3]; 3];
+    let mut a_diag_matrix: Matrix3x3<f64> = [[0.0; 3]; 3];
     for i in 0..3 {
         a_diag_matrix[i][i] = lms_d50[i] / lms_source[i];
         if !a_diag_matrix[i][i].is_finite() {
@@ -248,7 +252,7 @@ pub fn primaries_to_xyz_d50(
     by: f32,
     wx: f32,
     wy: f32,
-) -> Result<Matrix3x3, Error> {
+) -> Result<Matrix3x3<f64>, Error> {
     // Get the matrix to convert RGB to XYZ, adapted to its native white point (wx, wy).
     let rgb_to_xyz_native_wp_matrix = primaries_to_xyz(rx, ry, gx, gy, bx, by, wx, wy)?;
 
@@ -275,12 +279,15 @@ pub fn create_icc_rgb_matrix(
     by: f32,
     wx: f32,
     wy: f32,
-) -> Result<Matrix3x3, Error> {
+) -> Result<Matrix3x3<f32>, Error> {
     // TODO: think about if we need/want to change precision to f64 for some calculations here
-    primaries_to_xyz_d50(rx, ry, gx, gy, bx, by, wx, wy)
+    let result_f64 = primaries_to_xyz_d50(rx, ry, gx, gy, bx, by, wx, wy)?;
+    Ok(std::array::from_fn(|r_idx| {
+        std::array::from_fn(|c_idx| result_f64[r_idx][c_idx] as f32)
+    }))
 }
 
-pub fn create_icc_chad_matrix(wx: f32, wy: f32) -> Result<Matrix3x3, Error> {
+pub fn create_icc_chad_matrix(wx: f32, wy: f32) -> Result<Matrix3x3<f64>, Error> {
     // The libjxl checks `wy == 0.0` check here, but this is redundant since
     // `adapt_to_xyz_d50` handles it robustly.
     // TODO(firsching): call `adapt_to_xyz_d50` directly when libjxl calls `create_icc_chad_matrix`
@@ -387,9 +394,13 @@ impl Primaries {
                 ])
             }
             Primaries::SRGB => Ok([
-                (0.640, 0.330), // R
-                (0.300, 0.600), // G
-                (0.150, 0.060), // B
+                // libjxl has these weird numbers for some reason.
+                (0.639998686, 0.330010138),
+                //(0.640, 0.330), // R
+                (0.300003784, 0.600003357),
+                //(0.300, 0.600), // G
+                (0.150002046, 0.059997204),
+                //(0.150, 0.060), // B
             ]),
             Primaries::BT2100 => Ok([
                 (0.708, 0.292), // R
@@ -658,7 +669,7 @@ fn create_icc_xyz_tag(tags_data: &mut Vec<u8>, xyz_color: &[f32; 3]) -> Result<T
 
 pub fn create_icc_chad_tag(
     tags_data: &mut Vec<u8>,
-    chad_matrix: &Matrix3x3,
+    chad_matrix: &Matrix3x3<f32>,
 ) -> Result<TagInfo, Error> {
     // The tag type signature "sf32" (4 bytes).
     let signature = b"sf32";
@@ -693,6 +704,29 @@ fn cie_xyz_from_white_cie_xy(wx: f32, wy: f32) -> Result<[f32; 3], Error> {
     let y_val = 1.0f32;
     let z_val = (1.0 - wx - wy) * factor;
     Ok([x_val, y_val, z_val])
+}
+
+/// Creates the data for an ICC `para` (parametricCurveType) tag.
+/// It writes `12 + 4 * params.len()` bytes.
+fn create_icc_curv_para_tag(
+    tags_data: &mut Vec<u8>,
+    params: &[f32],
+    curve_type: u16,
+) -> Result<u32, Error> {
+    let start_offset = tags_data.len();
+    // Tag type 'para' (4 bytes)
+    tags_data.extend_from_slice(b"para");
+    // Reserved, must be 0 (4 bytes)
+    tags_data.extend_from_slice(&0u32.to_be_bytes());
+    // Function type (u16, 2 bytes)
+    tags_data.extend_from_slice(&curve_type.to_be_bytes());
+    // Reserved, must be 0 (u16, 2 bytes)
+    tags_data.extend_from_slice(&0u16.to_be_bytes());
+    // Parameters (s15Fixed16Number each)
+    for &param in params {
+        append_s15_fixed_16(tags_data, param)?;
+    }
+    Ok((tags_data.len() - start_offset) as u32)
 }
 
 #[derive(UnconditionalCoder, Debug, Clone)]
@@ -1042,7 +1076,10 @@ impl ColorEncoding {
         pad_to_4_byte_boundary(&mut tags_data);
         if self.color_space != ColorSpace::Gray {
             let (wx, wy) = self.get_resolved_white_point_xy()?;
-            let chad_matrix = create_icc_chad_matrix(wx, wy)?;
+            let chad_matrix_f64 = create_icc_chad_matrix(wx, wy)?;
+            let chad_matrix = std::array::from_fn(|r_idx| {
+                std::array::from_fn(|c_idx| chad_matrix_f64[r_idx][c_idx] as f32)
+            });
             collected_tags.push(create_icc_chad_tag(&mut tags_data, &chad_matrix)?);
             pad_to_4_byte_boundary(&mut tags_data);
         }
@@ -1121,8 +1158,88 @@ impl ColorEncoding {
             // JXL_RETURN_IF_ERROR(CreateICCNoOpBToATag(&tags));
             // FinalizeICCTag(&tags, &tag_offset, &tag_size);
             // AddToICCTagTable("B2A0", tag_offset, tag_size, &tagtable, &offsets);
+        } else if self.can_tone_map_for_icc() {
+            // TODO:
+            // JXL_RETURN_IF_ERROR(CreateICCLutAtoBTagForHDR(c, &tags));
+            // FinalizeICCTag(&tags, &tag_offset, &tag_size);
+            // AddToICCTagTable("A2B0", tag_offset, tag_size, &tagtable, &offsets);
+            // JXL_RETURN_IF_ERROR(CreateICCNoOpBToATag(&tags));
+            // FinalizeICCTag(&tags, &tag_offset, &tag_size);
+            // AddToICCTagTable("B2A0", tag_offset, tag_size, &tagtable, &offsets);
+        } else {
+            let trc_tag_start_offset = tags_data.len() as u32;
+            let trc_tag_unpadded_size = if self.tf.have_gamma {
+                // Type 0 parametric curve: Y = X^gamma
+                let gamma = 1.0 / self.tf.gamma();
+                create_icc_curv_para_tag(&mut tags_data, &[gamma], 0)?
+            } else {
+                match self.tf.transfer_function {
+                    TransferFunction::SRGB => {
+                        // Type 3 parametric curve for sRGB standard.
+                        const PARAMS: [f32; 5] =
+                            [2.4, 1.0 / 1.055, 0.055 / 1.055, 1.0 / 12.92, 0.04045];
+                        create_icc_curv_para_tag(&mut tags_data, &PARAMS, 3)?
+                    }
+                    TransferFunction::BT709 => {
+                        // Type 3 parametric curve for BT.709 standard.
+                        const PARAMS: [f32; 5] =
+                            [1.0 / 0.45, 1.0 / 1.099, 0.099 / 1.099, 1.0 / 4.5, 0.081];
+                        create_icc_curv_para_tag(&mut tags_data, &PARAMS, 3)?
+                    }
+                    TransferFunction::Linear => {
+                        // Type 3 can also represent a linear response (gamma=1.0).
+                        const PARAMS: [f32; 5] = [1.0, 1.0, 0.0, 1.0, 0.0];
+                        create_icc_curv_para_tag(&mut tags_data, &PARAMS, 3)?
+                    }
+                    TransferFunction::DCI => {
+                        // Type 3 can also represent a pure power curve (gamma=2.6).
+                        const PARAMS: [f32; 5] = [2.6, 1.0, 0.0, 1.0, 0.0];
+                        create_icc_curv_para_tag(&mut tags_data, &PARAMS, 3)?
+                    }
+                    // For HLG and PQ, a `curv` (table-based) tag would be created.
+                    // This requires implementing `create_table_curve`, which depends on
+                    // the specific EOTF functions not shown here.
+                    TransferFunction::HLG | TransferFunction::PQ => {
+                        return Err(Error::IccUnsupportedTransferFunction)
+                    }
+                    TransferFunction::Unknown => {
+                        // This should have been caught by the initial check.
+                        return Err(Error::InvalidColorEncoding);
+                    }
+                }
+            };
+            pad_to_4_byte_boundary(&mut tags_data);
+
+            match self.color_space {
+                ColorSpace::Gray => {
+                    // Grayscale profiles use a single 'kTRC' tag.
+                    collected_tags.push(TagInfo {
+                        signature: *b"kTRC",
+                        offset_in_tags_blob: trc_tag_start_offset,
+                        size_unpadded: trc_tag_unpadded_size,
+                    });
+                }
+                _ => {
+                    // For RGB, rTRC, gTRC, and bTRC all point to the same curve data,
+                    // an optimization to keep the profile size small.
+                    collected_tags.push(TagInfo {
+                        signature: *b"rTRC",
+                        offset_in_tags_blob: trc_tag_start_offset,
+                        size_unpadded: trc_tag_unpadded_size,
+                    });
+                    collected_tags.push(TagInfo {
+                        signature: *b"gTRC",
+                        offset_in_tags_blob: trc_tag_start_offset, // Same offset
+                        size_unpadded: trc_tag_unpadded_size,      // Same size
+                    });
+                    collected_tags.push(TagInfo {
+                        signature: *b"bTRC",
+                        offset_in_tags_blob: trc_tag_start_offset, // Same offset
+                        size_unpadded: trc_tag_unpadded_size,      // Same size
+                    });
+                }
+            }
         }
-        // TODO: add the more tags
 
         // Construct the Tag Table bytes
         let mut tag_table_bytes: Vec<u8> = Vec::new();
@@ -1158,7 +1275,7 @@ impl ColorEncoding {
         // Update the profile size in the header (at offset 0)
         let total_profile_size = final_icc_profile_data.len() as u32;
         write_u32_be(&mut final_icc_profile_data, 0, total_profile_size)?;
-        // TODO: MD5 hashing?
+        // TODO(firsching): MD5 hashing!
         Ok(Some(final_icc_profile_data))
     }
 }
@@ -1167,7 +1284,7 @@ impl ColorEncoding {
 mod tests {
     use super::*;
 
-    fn assert_matrix_eq(a: &Matrix3x3, b: &Matrix3x3, epsilon: f32) {
+    fn assert_matrix_eq(a: &Matrix3x3<f64>, b: &Matrix3x3<f64>, epsilon: f64) {
         for r in 0..3 {
             for c in 0..3 {
                 assert!(
@@ -1185,13 +1302,13 @@ mod tests {
 
     #[test]
     fn test_3x3_inverse() {
-        let m: Matrix3x3 = [[1.0, -3.0, -2.0], [2.0, 2.0, 1.0], [2.0, 1.0, 1.0]];
+        let m: Matrix3x3<f64> = [[1.0f64, -3.0, -2.0], [2.0, 2.0, 1.0], [2.0, 1.0, 1.0]];
 
-        let expected_inv: Matrix3x3 = [[0.2, 0.2, 0.2], [0., 1., -1.], [-0.4, -1.4, 1.6]];
+        let expected_inv: Matrix3x3<f64> = [[0.2, 0.2, 0.2], [0., 1., -1.], [-0.4, -1.4, 1.6]];
 
         match inv_3x3_matrix(&m) {
             Ok(inv_m) => {
-                assert_matrix_eq(&inv_m, &expected_inv, 1e-6);
+                assert_matrix_eq(&inv_m, &expected_inv, 1e-12);
             }
             Err(e) => {
                 panic!("Matrix inversion failed unexpectedly: {:?}", e);
