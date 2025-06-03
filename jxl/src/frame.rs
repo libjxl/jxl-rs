@@ -21,7 +21,7 @@ use crate::{
         stages::*, RenderPipeline, RenderPipelineBuilder, SimpleRenderPipeline,
         SimpleRenderPipelineBuilder,
     },
-    util::{tracing_wrappers::*, CeilLog2},
+    util::{tracing_wrappers::*, CeilLog2, Xorshift128Plus},
 };
 use block_context_map::BlockContextMap;
 use coeff_order::decode_coeff_orders;
@@ -482,8 +482,9 @@ impl Frame {
         // TODO(veluca): build the pipeline properly.
         let num_channels = self.header.num_extra_channels as usize + 3;
         let metadata = &self.decoder_state.file_header.image_metadata;
+        let num_temp_channels = if self.header.has_noise() { 3 } else { 0 };
         let mut pipeline = SimpleRenderPipelineBuilder::new(
-            num_channels,
+            num_channels + num_temp_channels,
             self.header.size(),
             self.header.log_group_dim(),
         );
@@ -528,7 +529,18 @@ impl Frame {
 
         // TODO: upsampling
 
-        // TODO: noise
+        if self.header.has_noise() {
+            let lf_global = self.lf_global.as_ref().unwrap();
+            pipeline = pipeline
+                .add_stage(ConvolveNoiseStage::new(num_channels))?
+                .add_stage(ConvolveNoiseStage::new(num_channels + 1))?
+                .add_stage(ConvolveNoiseStage::new(num_channels + 2))?
+                .add_stage(AddNoiseStage::new(
+                    *lf_global.noise.as_ref().unwrap(),
+                    lf_global.color_correlation_params.unwrap_or_default(),
+                    num_channels,
+                ))?;
+        }
 
         if self.header.do_ycbcr {
             pipeline = pipeline.add_stage(YcbcrToLinearSrgbStage::new(0))?;
@@ -564,6 +576,56 @@ impl Frame {
     #[instrument(skip(self, br))]
     pub fn decode_hf_group(&mut self, group: usize, pass: usize, br: &mut BitReader) -> Result<()> {
         debug!(section_size = br.total_bits_available());
+        if self.header.has_noise() {
+            // TODO(sboukortt): consider making this a dedicated stage
+            let num_channels = self.header.num_extra_channels as usize + 3;
+            self.render_pipeline.as_mut().unwrap().fill_input_channels(
+                &[num_channels, num_channels + 1, num_channels + 2],
+                group,
+                1,
+                |rects| {
+                    let group_dim = self.header.group_dim() as u32;
+                    let xsize_groups = self.header.size_groups().0;
+                    let gx = (group % xsize_groups) as u32;
+                    let gy = (group / xsize_groups) as u32;
+                    // TODO(sboukortt): test upsampling+noise
+                    let upsampling = self.header.upsampling;
+                    let x0 = gx * upsampling * group_dim;
+                    let y0 = gy * upsampling * group_dim;
+                    // TODO(sboukortt): actual frame indices for the first two
+                    let mut rng = Xorshift128Plus::new_with_seeds(1, 0, x0, y0);
+                    let bits_to_float = |bits: u32| f32::from_bits((bits >> 9) | 0x3F800000);
+                    for rect in rects {
+                        let (xsize, ysize) = rect.size();
+
+                        const FLOATS_PER_BATCH: usize =
+                            Xorshift128Plus::N * size_of::<u64>() / size_of::<f32>();
+                        let mut batch = [0u64; Xorshift128Plus::N];
+
+                        for y in 0..ysize {
+                            let row = rect.row(y);
+                            for batch_index in 0..xsize.div_ceil(FLOATS_PER_BATCH) {
+                                rng.fill(&mut batch);
+                                let batch_size =
+                                    (xsize - batch_index * FLOATS_PER_BATCH).min(FLOATS_PER_BATCH);
+                                for i in 0..batch_size {
+                                    let x = FLOATS_PER_BATCH * batch_index + i;
+                                    let k = i / 2;
+                                    let high_bytes = i % 2 != 0;
+                                    let bits = if high_bytes {
+                                        ((batch[k] & 0xFFFFFFFF00000000) >> 32) as u32
+                                    } else {
+                                        (batch[k] & 0xFFFFFFFF) as u32
+                                    };
+                                    row[x] = bits_to_float(bits);
+                                }
+                            }
+                        }
+                    }
+                    Ok(())
+                },
+            )?;
+        }
         let lf_global = self.lf_global.as_mut().unwrap();
         let mut pass_to_pipeline = |chan: usize, g: usize, img: &Image<f32>| {
             // TODO(veluca): figure out pass count and check group IDs. Also, investigate whether
