@@ -8,6 +8,8 @@ use jxl_macros::UnconditionalCoder;
 use num_derive::FromPrimitive;
 use std::fmt;
 
+use md5::Context;
+
 // Define type aliases for clarity
 pub type Matrix3x3<T> = [[T; 3]; 3];
 pub type Vector3<T> = [T; 3];
@@ -174,7 +176,6 @@ pub fn primaries_to_xyz(
         [0.0, s_vec[1], 0.0],
         [0.0, 0.0, s_vec[2]],
     ];
-    println!("{s_diag_matrix:?}");
     // The final RGB-to-XYZ matrix is P * S_diag
     let result_matrix = mul_3x3_matrix(&p_matrix, &s_diag_matrix);
 
@@ -1455,7 +1456,11 @@ impl ColorEncoding {
             // bytes and shall not include any padding at the end of the tag data element."
             //
             // The reference from conformance tests and libjxl use the padded size here instead.
-            tag_table_bytes.extend_from_slice(&tag_info.size_unpadded.to_be_bytes());
+
+            // tag_table_bytes.extend_from_slice(&tag_info.size_unpadded.to_be_bytes());
+            // TODO(remove me); temporary testing to byte-identicalness:
+            let padded_size = tag_info.size_unpadded.next_multiple_of(4);
+            tag_table_bytes.extend_from_slice(&padded_size.to_be_bytes());
         }
 
         // Assemble the final ICC profile parts: header + tag_table + tags_data
@@ -1468,7 +1473,41 @@ impl ColorEncoding {
         // Update the profile size in the header (at offset 0)
         let total_profile_size = final_icc_profile_data.len() as u32;
         write_u32_be(&mut final_icc_profile_data, 0, total_profile_size)?;
-        // TODO(firsching): MD5 hashing!
+
+        // Assemble the final ICC profile parts: header + tag_table + tags_data
+        let mut final_icc_profile_data: Vec<u8> =
+            Vec::with_capacity(header.len() + tag_table_bytes.len() + tags_data.len());
+        final_icc_profile_data.extend_from_slice(&header);
+        final_icc_profile_data.extend_from_slice(&tag_table_bytes);
+        final_icc_profile_data.extend_from_slice(&tags_data);
+
+        // Update the profile size in the header (at offset 0)
+        let total_profile_size = final_icc_profile_data.len() as u32;
+        write_u32_be(&mut final_icc_profile_data, 0, total_profile_size)?;
+
+        // The MD5 checksum (Profile ID) must be computed on the profile with
+        // specific header fields zeroed out, as per the ICC specification.
+        let mut profile_for_checksum = final_icc_profile_data.clone();
+
+        if profile_for_checksum.len() >= 84 {
+            // Zero out Profile Flags at offset 44.
+            profile_for_checksum[44..48].fill(0);
+            // Zero out Rendering Intent at offset 64.
+            profile_for_checksum[64..68].fill(0);
+            // The Profile ID field at offset 84 is already zero at this stage.
+        }
+
+        // Compute the MD5 hash on the modified profile data.
+        let mut context = Context::new();
+        context.consume(&profile_for_checksum);
+        let checksum = *context.compute();
+
+        // Write the 16-byte checksum into the "Profile ID" field of the *original*
+        // profile data buffer, starting at offset 84.
+        if final_icc_profile_data.len() >= 100 {
+            final_icc_profile_data[84..100].copy_from_slice(&checksum);
+        }
+
         Ok(Some(final_icc_profile_data))
     }
 }
