@@ -69,7 +69,6 @@ pub fn decode_jxl_codestream(
             .unwrap()
     };
 
-
     br.jump_to_byte_boundary()?;
     let mut image_data: ImageData<f32> = ImageData {
         size: (

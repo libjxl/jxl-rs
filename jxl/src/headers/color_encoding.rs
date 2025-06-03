@@ -758,7 +758,10 @@ pub fn display_from_encoded_pq(display_intensity_target: f32, mut e: f64) -> f64
     let d = (num / den).powf(1.0 / M1);
 
     // The result `d` should always be non-negative for non-negative inputs.
-    debug_assert!(d >= 0.0, "PQ intermediate value `d` should not be negative.");
+    debug_assert!(
+        d >= 0.0,
+        "PQ intermediate value `d` should not be negative."
+    );
 
     // The libjxl implementation includes a scaling factor. Note that `d` represents
     // a value normalized to a 10,000 nit peak.
@@ -896,14 +899,14 @@ pub fn create_table_curve(
             TransferFunction::PQ => {
                 // For PQ, the output of the EOTF is absolute luminance, so we
                 // normalize it back to [0, 1] relative to the peak luminance.
-                display_from_encoded_pq(PQ_INTENSITY_TARGET as f32, x)
-                    / PQ_INTENSITY_TARGET
+                display_from_encoded_pq(PQ_INTENSITY_TARGET as f32, x) / PQ_INTENSITY_TARGET
             }
             _ => unreachable!(), // Already checked above.
         };
 
         // Apply tone mapping if requested.
-        if tone_map && tf == TransferFunction::PQ && PQ_INTENSITY_TARGET > DEFAULT_INTENSITY_TARGET {
+        if tone_map && tf == TransferFunction::PQ && PQ_INTENSITY_TARGET > DEFAULT_INTENSITY_TARGET
+        {
             // TODO(firsching): add tone mapping here. (make y mutable for this)
             // let linear_luminance = y * PQ_INTENSITY_TARGET;
             // let tone_mapped_luminance = rec2408_tone_map(linear_luminance)?;

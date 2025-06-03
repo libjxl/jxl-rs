@@ -13,7 +13,6 @@ use std::path::PathBuf;
 
 pub mod enc;
 
-
 fn save_icc(icc_bytes: Vec<u8>, icc_filename: Option<PathBuf>) -> Result<(), Error> {
     match icc_filename {
         Some(icc_filename) => {
