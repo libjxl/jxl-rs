@@ -105,3 +105,75 @@ jobs:
       with:
         name: coverage_report
         path: ./coverage_html/html
+
+  conformance:
+    runs-on: ubuntu-latest
+    steps:
+    - name: Checkout the source
+      uses: actions/checkout@v4
+
+    - name: Checkout bench
+      uses: actions/checkout@master
+      with:
+        repository: libjxl/bench
+        path: bench      
+        fetch-depth: 1
+
+    - name: Fix bench dependencies
+      run: |
+        ( cd bench && git submodule update --recursive --init --depth 1 --recommend-shallow third_party/conformance )
+        ( cd bench/third_party && rm -rf jxl-rs && ln -s "${GITHUB_WORKSPACE}" jxl-rs )
+
+    - name: Cache conformance objects
+      id: cache-conformance
+      uses: actions/cache@v4
+      with:
+        path: bench/third_party/conformance/.objects
+        key: conformance-objects
+
+    - name: Update conformance objects
+      run: bash bench/third_party/conformance/scripts/download_and_symlink_using_curl.sh
+
+    - name: Install latest rust toolchain
+      uses: dtolnay/rust-toolchain@stable
+      with:
+        components: clippy, rustfmt
+
+    - name: Rust cache
+      uses: Swatinem/rust-cache@v2.7.3
+
+    - name: Build jxl_cli
+      run: cargo build --release --bin jxl_cli
+
+    - name: Setup python3
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.x'
+    
+    - name: Install Python dependencies
+      run: pip install numpy apng pypng
+
+    - name: Install binary dependencies
+      run: sudo apt install imagemagick
+
+    - name: Run jxl-rs conformance tests with ICC
+      id: icc_conformance
+      run: python3 ./bench/third_party/conformance/scripts/conformance.py --decoder "python3 ${GITHUB_WORKSPACE}/bench/scripts/wrap_jxl-rs.py --decoder ' ${GITHUB_WORKSPACE}/bench/third_party/jxl-rs/target/release/jxl_cli %s %s --icc-out %s'" --corpus ${GITHUB_WORKSPACE}/bench/third_party/conformance/testcases/main_level5.txt --results=${GITHUB_WORKSPACE}/bench/docs/dumps/dump_jxl-rs.json --lax
+      continue-on-error: true
+
+    - name: Run jxl-rs conformance tests wrapped in PNG
+      id: png_conformance
+      run: python3 ./bench/third_party/conformance/scripts/conformance.py --decoder "python3 ${GITHUB_WORKSPACE}/bench/scripts/wrap_png.py --decoder ' ${GITHUB_WORKSPACE}/bench/third_party/jxl-rs/target/release/jxl_cli %s %s '" --corpus ${GITHUB_WORKSPACE}/bench/third_party/conformance/testcases/main_level5.txt --results=${GITHUB_WORKSPACE}/bench/docs/dumps/dump_jxl-rs-via-png.json --lax
+      continue-on-error: true
+
+    - name: Export step summary
+      run: ./ci/conformance_summary.py "${GITHUB_WORKSPACE}/bench/docs/dumps/dump_jxl-rs.json" "${GITHUB_WORKSPACE}/bench/docs/dumps/dump_jxl-rs-via-png.json" >> $GITHUB_STEP_SUMMARY
+
+    - name: Merge conformance report HTML
+      run: ./ci/merge_conformance_report.py "${GITHUB_WORKSPACE}/bench/docs" >> conformance_report.html
+
+    - name: Upload HTML report
+      uses: actions/upload-artifact@v4.6.2
+      with:
+        name: conformance_report
+        path: conformance_report.html
