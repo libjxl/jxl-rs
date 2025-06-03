@@ -16,6 +16,7 @@ mod rational_poly;
 mod shift_right_ceil;
 pub mod tracing_wrappers;
 mod vec_helpers;
+mod xorshift128plus;
 
 pub use bits::*;
 pub use concat_slice::*;
@@ -26,3 +27,4 @@ pub(crate) use ndarray::*;
 pub use rational_poly::*;
 pub use shift_right_ceil::*;
 pub use vec_helpers::*;
+pub use xorshift128plus::*;
