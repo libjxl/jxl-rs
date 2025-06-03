@@ -729,6 +729,198 @@ fn create_icc_curv_para_tag(
     Ok((tags_data.len() - start_offset) as u32)
 }
 
+pub fn display_from_encoded_pq(display_intensity_target: f32, mut e: f64) -> f64 {
+    const M1: f64 = 2610.0 / 16384.0;
+    const M2: f64 = (2523.0 / 4096.0) * 128.0;
+    const C1: f64 = 3424.0 / 4096.0;
+    const C2: f64 = (2413.0 / 4096.0) * 32.0;
+    const C3: f64 = (2392.0 / 4096.0) * 32.0;
+    // Handle the zero case directly.
+    if e == 0.0 {
+        return 0.0;
+    }
+
+    // Handle negative inputs by using their absolute
+    // value for the calculation and reapplying the sign at the end.
+    let original_sign = e.signum();
+    e = e.abs();
+
+    // Core PQ EOTF formula from ST 2084.
+    let xp = e.powf(1.0 / M2);
+    let num = (xp - C1).max(0.0);
+    let den = C2 - C3 * xp;
+
+    // In release builds, a zero denominator would lead to `inf` or `NaN`,
+    // which is handled by the assertion below. For valid inputs (e in [0,1]),
+    // the denominator is always positive.
+    debug_assert!(den != 0.0, "PQ transfer function denominator is zero.");
+
+    let d = (num / den).powf(1.0 / M1);
+
+    // The result `d` should always be non-negative for non-negative inputs.
+    debug_assert!(d >= 0.0, "PQ intermediate value `d` should not be negative.");
+
+    // The libjxl implementation includes a scaling factor. Note that `d` represents
+    // a value normalized to a 10,000 nit peak.
+    let scaled_d = d * (10000.0 / display_intensity_target as f64);
+
+    // Re-apply the original sign.
+    scaled_d.copysign(original_sign)
+}
+
+/// TF_HLG_Base class for BT.2100 HLG.
+///
+/// This struct provides methods to convert between non-linear encoded HLG signals
+/// and linear display-referred light, following the definitions in BT.2100-2.
+///
+/// - **"display"**: linear light, normalized to [0, 1].
+/// - **"encoded"**: a non-linear HLG signal, nominally in [0, 1].
+/// - **"scene"**: scene-referred linear light, normalized to [0, 1].
+///
+/// The functions are designed to be unbounded to handle inputs outside the
+/// nominal [0, 1] range, which can occur during color space conversions. Negative
+/// inputs are handled by mirroring the function (`f(-x) = -f(x)`).
+#[allow(non_camel_case_types)]
+pub struct TF_HLG;
+
+impl TF_HLG {
+    // Constants for the HLG formula, as defined in BT.2100.
+    const A: f64 = 0.17883277;
+    const RA: f64 = 1.0 / Self::A;
+    const B: f64 = 1.0 - 4.0 * Self::A;
+    const C: f64 = 0.5599107295;
+    const INV_12: f64 = 1.0 / 12.0;
+
+    /// Converts a non-linear encoded signal to a linear display value (EOTF).
+    ///
+    /// This corresponds to `DisplayFromEncoded(e) = OOTF(InvOETF(e))`.
+    /// Since the OOTF is simplified to an identity function, this is equivalent
+    /// to calling `inv_oetf(e)`.
+    #[inline]
+    pub fn display_from_encoded(e: f64) -> f64 {
+        Self::inv_oetf(e)
+    }
+
+    /// Converts a linear display value to a non-linear encoded signal (inverse EOTF).
+    ///
+    /// This corresponds to `EncodedFromDisplay(d) = OETF(InvOOTF(d))`.
+    /// Since the InvOOTF is an identity function, this is equivalent to `oetf(d)`.
+    #[inline]
+    pub fn encoded_from_display(d: f64) -> f64 {
+        Self::oetf(d)
+    }
+
+    /// The private HLG OETF, converting scene-referred light to a non-linear signal.
+    fn oetf(mut s: f64) -> f64 {
+        if s == 0.0 {
+            return 0.0;
+        }
+        let original_sign = s.signum();
+        s = s.abs();
+
+        let e = if s <= Self::INV_12 {
+            (3.0 * s).sqrt()
+        } else {
+            Self::A * (12.0 * s - Self::B).ln() + Self::C
+        };
+
+        // The result should be positive for positive inputs.
+        debug_assert!(e > 0.0);
+
+        e.copysign(original_sign)
+    }
+
+    /// The private HLG inverse OETF, converting a non-linear signal back to scene-referred light.
+    fn inv_oetf(mut e: f64) -> f64 {
+        if e == 0.0 {
+            return 0.0;
+        }
+        let original_sign = e.signum();
+        e = e.abs();
+
+        let s = if e <= 0.5 {
+            // The `* (1.0 / 3.0)` is slightly more efficient than `/ 3.0`.
+            e * e * (1.0 / 3.0)
+        } else {
+            (((e - Self::C) * Self::RA).exp() + Self::B) * Self::INV_12
+        };
+
+        // The result should be non-negative for non-negative inputs.
+        debug_assert!(s >= 0.0);
+
+        s.copysign(original_sign)
+    }
+}
+
+/// Creates a lookup table for an ICC `curv` tag from a transfer function.
+///
+/// This function generates a vector of 16-bit integers representing the response
+/// of the HLG or PQ electro-optical transfer functions (EOTF).
+///
+/// ### Arguments
+/// * `n` - The number of entries in the lookup table. Must not exceed 4096.
+/// * `tf` - The transfer function to model, either `TransferFunction::HLG` or `TransferFunction::PQ`.
+/// * `tone_map` - A boolean to enable tone mapping for PQ curves. Currently a stub.
+///
+/// ### Returns
+/// A `Result` containing the `Vec<f32>` lookup table or an `Error`.
+pub fn create_table_curve(
+    n: usize,
+    tf: TransferFunction,
+    tone_map: bool,
+) -> Result<Vec<f32>, Error> {
+    // ICC Specification (v4.4, section 10.6) for `curveType` with `curv`
+    // processing elements states the table can have at most 4096 entries.
+    if n > 4096 {
+        return Err(Error::IccTableSizeExceeded(n));
+    }
+
+    if !matches!(tf, TransferFunction::PQ | TransferFunction::HLG) {
+        return Err(Error::IccUnsupportedTransferFunction);
+    }
+
+    // The peak luminance for PQ decoding, as specified in the original C++ code.
+    const PQ_INTENSITY_TARGET: f64 = 10000.0;
+    // The target peak luminance for SDR, used if tone mapping is applied.
+    const DEFAULT_INTENSITY_TARGET: f64 = 255.0; // Placeholder value
+
+    let mut table = Vec::with_capacity(n);
+    for i in 0..n {
+        // `x` represents the normalized input signal, from 0.0 to 1.0.
+        let x = i as f64 / (n - 1) as f64;
+
+        // Apply the specified EOTF to get the linear light value `y`.
+        // The output `y` is normalized to the range [0.0, 1.0].
+        let y = match tf {
+            TransferFunction::HLG => TF_HLG::display_from_encoded(x),
+            TransferFunction::PQ => {
+                // For PQ, the output of the EOTF is absolute luminance, so we
+                // normalize it back to [0, 1] relative to the peak luminance.
+                display_from_encoded_pq(PQ_INTENSITY_TARGET as f32, x)
+                    / PQ_INTENSITY_TARGET
+            }
+            _ => unreachable!(), // Already checked above.
+        };
+
+        // Apply tone mapping if requested.
+        if tone_map && tf == TransferFunction::PQ && PQ_INTENSITY_TARGET > DEFAULT_INTENSITY_TARGET {
+            // TODO(firsching): add tone mapping here. (make y mutable for this)
+            // let linear_luminance = y * PQ_INTENSITY_TARGET;
+            // let tone_mapped_luminance = rec2408_tone_map(linear_luminance)?;
+            // y = tone_mapped_luminance / DEFAULT_INTENSITY_TARGET;
+        }
+
+        // Clamp the final value to the valid range [0.0, 1.0]. This is
+        // particularly important for HLG, which can exceed 1.0.
+        let y_clamped = y.clamp(0.0, 1.0);
+
+        // table.push((y_clamped * 65535.0).round() as u16);
+        table.push(y_clamped as f32);
+    }
+
+    Ok(table)
+}
+
 #[derive(UnconditionalCoder, Debug, Clone)]
 #[validate]
 pub struct ColorEncoding {
@@ -1196,11 +1388,9 @@ impl ColorEncoding {
                         const PARAMS: [f32; 5] = [2.6, 1.0, 0.0, 1.0, 0.0];
                         create_icc_curv_para_tag(&mut tags_data, &PARAMS, 3)?
                     }
-                    // For HLG and PQ, a `curv` (table-based) tag would be created.
-                    // This requires implementing `create_table_curve`, which depends on
-                    // the specific EOTF functions not shown here.
                     TransferFunction::HLG | TransferFunction::PQ => {
-                        return Err(Error::IccUnsupportedTransferFunction)
+                        let params = create_table_curve(64, self.tf.transfer_function, false)?;
+                        create_icc_curv_para_tag(&mut tags_data, params.as_slice(), 3)?
                     }
                     TransferFunction::Unknown => {
                         // This should have been caught by the initial check.

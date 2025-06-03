@@ -246,6 +246,8 @@ pub enum Error {
     MatrixInversionFailed(f64),
     #[error("Unsupported transfer function when writing ICC")]
     IccUnsupportedTransferFunction,
+    #[error("Table size too large when writing ICC: {0}")]
+    IccTableSizeExceeded(usize),
     #[error("Invalid number of channels for PNG output ({0})")]
     PNGInvalidNumChannels(usize),
 }
