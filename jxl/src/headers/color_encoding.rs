@@ -1036,9 +1036,29 @@ impl ColorEncoding {
     }
 
     fn can_tone_map_for_icc(&self) -> bool {
-        // Placeholder
-        // TODO(firsching): implement this function
-        false
+        // This function determines if an ICC profile can be used for tone mapping.
+        // The logic is ported from the libjxl `CanToneMap` function.
+        // The core idea is that if the color space can be represented by a CICP tag
+        // in the ICC profile, then there's more freedom to use other parts of the
+        // profile (like the A2B0 LUT) for tone mapping. Otherwise, the profile must
+        // unambiguously describe the color space.
+
+        let tf = self.tf.transfer_function;
+        let p = self.primaries;
+        let wp = self.white_point;
+
+        // The conditions for being able to tone map are:
+        // 1. The color space must be RGB.
+        // 2. The transfer function must be either PQ (Perceptual Quantizer) or HLG (Hybrid Log-Gamma).
+        // 3. The combination of primaries and white point must be one that is commonly
+        //    describable by a standard CICP value. This includes:
+        //    a) P3 primaries with either a D65 or DCI white point.
+        //    b) Any non-custom primaries, as long as the white point is D65.
+
+        self.color_space == ColorSpace::RGB
+            && (tf == TransferFunction::PQ || tf == TransferFunction::HLG)
+            && ((p == Primaries::P3 && (wp == WhitePoint::D65 || wp == WhitePoint::DCI))
+                || (p != Primaries::Custom && wp == WhitePoint::D65))
     }
 
     pub fn get_color_encoding_description(&self) -> String {
