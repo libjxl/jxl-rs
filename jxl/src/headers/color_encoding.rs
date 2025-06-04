@@ -1368,22 +1368,8 @@ impl ColorEncoding {
         }
         if self.color_space == ColorSpace::XYB {
             todo!("implement A2B0 and B2A0 tags")
-            // TODO:
-            // JXL_RETURN_IF_ERROR(CreateICCLutAtoBTagForXYB(&tags));
-            // FinalizeICCTag(&tags, &tag_offset, &tag_size);
-            // AddToICCTagTable("A2B0", tag_offset, tag_size, &tagtable, &offsets);
-            // JXL_RETURN_IF_ERROR(CreateICCNoOpBToATag(&tags));
-            // FinalizeICCTag(&tags, &tag_offset, &tag_size);
-            // AddToICCTagTable("B2A0", tag_offset, tag_size, &tagtable, &offsets);
         } else if self.can_tone_map_for_icc() {
             todo!("implement A2B0 and B2A0 tags when being able to tone map")
-            // TODO:
-            // JXL_RETURN_IF_ERROR(CreateICCLutAtoBTagForHDR(c, &tags));
-            // FinalizeICCTag(&tags, &tag_offset, &tag_size);
-            // AddToICCTagTable("A2B0", tag_offset, tag_size, &tagtable, &offsets);
-            // JXL_RETURN_IF_ERROR(CreateICCNoOpBToATag(&tags));
-            // FinalizeICCTag(&tags, &tag_offset, &tag_size);
-            // AddToICCTagTable("B2A0", tag_offset, tag_size, &tagtable, &offsets);
         } else {
             let trc_tag_start_offset = tags_data.len() as u32;
             let trc_tag_unpadded_size = if self.tf.have_gamma {
@@ -1479,10 +1465,11 @@ impl ColorEncoding {
             //
             // The reference from conformance tests and libjxl use the padded size here instead.
 
-            // tag_table_bytes.extend_from_slice(&tag_info.size_unpadded.to_be_bytes());
-            // TODO(remove me); temporary testing to byte-identicalness:
-            let padded_size = tag_info.size_unpadded.next_multiple_of(4);
-            tag_table_bytes.extend_from_slice(&padded_size.to_be_bytes());
+            tag_table_bytes.extend_from_slice(&tag_info.size_unpadded.to_be_bytes());
+            // In order to get byte_exact the same output as libjxl, remove the line above
+            // and uncomment the lines below
+            // let padded_size = tag_info.size_unpadded.next_multiple_of(4);
+            // tag_table_bytes.extend_from_slice(&padded_size.to_be_bytes());
         }
 
         // Assemble the final ICC profile parts: header + tag_table + tags_data
@@ -1556,6 +1543,7 @@ mod tests {
 
     #[test]
     fn test_3x3_inverse() {
+        // Random matrix (https://xkcd.com/221/)
         let m: Matrix3x3<f64> = [[1.0f64, -3.0, -2.0], [2.0, 2.0, 1.0], [2.0, 1.0, 1.0]];
 
         let expected_inv: Matrix3x3<f64> = [[0.2, 0.2, 0.2], [0., 1., -1.], [-0.4, -1.4, 1.6]];
