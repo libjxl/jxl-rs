@@ -153,7 +153,7 @@ pub fn primaries_to_xyz(
     let p_inv_matrix = inv_3x3_matrix(&p_matrix)?;
 
     // Convert reference white point (wx, wy) to XYZ form with Y=1
-    // This is WhitePoint_XYZ_wp = [Wx/Wy, 1, (1-Wx-Wy)/Wy]
+    // This is WhitePoint_XYZ_wp = [wx/wy, 1, (1-wx-wy)/wy]
     let x_over_y_wp = wx as f64 / wy as f64;
     let z_over_y_wp = (1.0 - wx as f64 - wy as f64) / wy as f64;
 
