@@ -125,6 +125,19 @@ fn main() -> Result<(), Error> {
     let mut options = DecodeOptions::new();
     options.xyb_output_linear = String::from(opt.output.to_string_lossy()).ends_with(".npy");
     let (image_data, icc_bytes) = jxl::decode::decode_jxl_codestream(options, &codestream)?;
-    save_image(image_data, opt.output)?;
-    save_icc(icc_bytes, opt.icc_out)
+
+    let icc_result = save_icc(icc_bytes, opt.icc_out);
+    let image_result = save_image(image_data, opt.output);
+
+    if let Err(ref err) = icc_result {
+        println!("Failed to save ICC profile: {}", err);
+    }
+    if let Err(ref err) = image_result {
+        println!("Failed to save image: {}", err);
+    }
+
+    icc_result?;
+    image_result?;
+
+    Ok(())
 }
