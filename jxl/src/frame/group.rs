@@ -360,9 +360,18 @@ pub fn decode_vardct_group(
         block_group_rect.size.1 * BLOCK_DIM,
     );
     let mut pixels: [Image<f32>; 3] = [
-        Image::<f32>::new(group_size)?,
-        Image::<f32>::new(group_size)?,
-        Image::<f32>::new(group_size)?,
+        Image::new((
+            group_size.0 >> frame_header.hshift(0),
+            group_size.1 >> frame_header.vshift(0),
+        ))?,
+        Image::new((
+            group_size.0 >> frame_header.hshift(1),
+            group_size.1 >> frame_header.vshift(1),
+        ))?,
+        Image::new((
+            group_size.0 >> frame_header.hshift(2),
+            group_size.1 >> frame_header.vshift(2),
+        ))?,
     ];
     debug!(?block_group_rect);
     let max_block_size = HfTransformType::VALUES
@@ -398,9 +407,18 @@ pub fn decode_vardct_group(
     let raw_quant_map = hf_meta.raw_quant_map.as_rect();
     let raw_quant_map_rect = raw_quant_map.rect(block_group_rect)?;
     let mut num_nzeros: [Image<u32>; 3] = [
-        Image::new(block_group_rect.size)?,
-        Image::new(block_group_rect.size)?,
-        Image::new(block_group_rect.size)?,
+        Image::new((
+            block_group_rect.size.0 >> frame_header.hshift(0),
+            block_group_rect.size.1 >> frame_header.vshift(0),
+        ))?,
+        Image::new((
+            block_group_rect.size.0 >> frame_header.hshift(1),
+            block_group_rect.size.1 >> frame_header.vshift(1),
+        ))?,
+        Image::new((
+            block_group_rect.size.0 >> frame_header.hshift(2),
+            block_group_rect.size.1 >> frame_header.vshift(2),
+        ))?,
     ];
     let quant_lf_rect = quant_lf.as_rect().rect(block_group_rect)?;
     let block_context_map = lf_global.block_context_map.as_mut().unwrap();
@@ -605,14 +623,24 @@ pub fn decode_vardct_group(
                 &mut scratch,
             );
             for c in [1, 0, 2] {
+                if (sbx[c] << hshift[c]) != bx || (sby[c] << vshift[c] != by) {
+                    continue;
+                }
                 transform_to_pixels(transform_type, &mut transform_buffer[c])?;
                 let mut output = pixels[c].as_rect_mut();
-                let mut output_rect = output.rect(block_rect)?;
-                for i in 0..block_rect.size.1 {
-                    let offset = i * block_rect.size.0;
-                    output_rect
-                        .row(i)
-                        .copy_from_slice(&transform_buffer[c][offset..offset + block_rect.size.0]);
+                let downsampled_rect = Rect {
+                    origin: (
+                        block_rect.origin.0 >> hshift[c],
+                        block_rect.origin.1 >> vshift[c],
+                    ),
+                    size: block_rect.size,
+                };
+                let mut output_rect = output.rect(downsampled_rect)?;
+                for i in 0..downsampled_rect.size.1 {
+                    let offset = i * downsampled_rect.size.0;
+                    output_rect.row(i).copy_from_slice(
+                        &transform_buffer[c][offset..offset + downsampled_rect.size.0],
+                    );
                 }
             }
             coeffs_offset += num_coeffs;

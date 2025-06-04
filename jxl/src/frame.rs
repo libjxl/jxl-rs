@@ -497,7 +497,14 @@ impl Frame {
             pipeline = pipeline.add_stage(ConvertModularToF32Stage::new(i, metadata.bit_depth))?;
         }
 
-        // TODO: chroma upsampling
+        for c in 0..3 {
+            if self.header.hshift(c) != 0 {
+                pipeline = pipeline.add_stage(HorizontalChromaUpsample::new(c))?;
+            }
+            if self.header.vshift(c) != 0 {
+                pipeline = pipeline.add_stage(VerticalChromaUpsample::new(c))?;
+            }
+        }
 
         let filters = &self.header.restoration_filter;
         if filters.gab {
