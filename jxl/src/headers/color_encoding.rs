@@ -1347,6 +1347,7 @@ impl ColorEncoding {
             });
         }
         if self.color_space == ColorSpace::XYB {
+            todo!("implement A2B0 and B2A0 tags")
             // TODO:
             // JXL_RETURN_IF_ERROR(CreateICCLutAtoBTagForXYB(&tags));
             // FinalizeICCTag(&tags, &tag_offset, &tag_size);
@@ -1355,6 +1356,7 @@ impl ColorEncoding {
             // FinalizeICCTag(&tags, &tag_offset, &tag_size);
             // AddToICCTagTable("B2A0", tag_offset, tag_size, &tagtable, &offsets);
         } else if self.can_tone_map_for_icc() {
+            todo!("implement A2B0 and B2A0 tags when being able to tone map")
             // TODO:
             // JXL_RETURN_IF_ERROR(CreateICCLutAtoBTagForHDR(c, &tags));
             // FinalizeICCTag(&tags, &tag_offset, &tag_size);
