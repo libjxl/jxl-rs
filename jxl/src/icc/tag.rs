@@ -192,15 +192,15 @@ pub(super) fn read_single_command(
             };
 
             for i in (0..num).step_by(width) {
-                let base_position = decoded_profile.position();
+                let base_position = decoded_profile.position() as usize;
+                let buffer_slice = decoded_profile.get_ref();
 
                 let mut prev = [Wrapping(0u32); 3];
                 for (j, p) in prev[..=order as usize].iter_mut().enumerate() {
-                    let read_from_position = base_position - (stride * (j + 1)) as u64;
-                    decoded_profile.set_position(read_from_position);
-                    p.0 = decoded_profile
-                        .read_u32::<BigEndian>()
-                        .expect("cannot read 32-bit integer after moving backwards");
+                    let offset = base_position - (stride * (j + 1));
+                    let mut p_bytes = [0u8; 4];
+                    p_bytes[(4 - width)..].copy_from_slice(&buffer_slice[offset..offset + width]);
+                    p.0 = u32::from_be_bytes(p_bytes);
                 }
 
                 let p = match order {
@@ -210,7 +210,7 @@ pub(super) fn read_single_command(
                     _ => unreachable!(),
                 };
 
-                decoded_profile.set_position(base_position);
+                decoded_profile.set_position(base_position as u64);
                 for j in 0..width.min(num - i) {
                     let val = Wrapping(bytes[i + j] as u32) + (p >> (8 * (width - 1 - j)));
                     decoded_profile
