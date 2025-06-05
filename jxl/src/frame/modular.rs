@@ -19,6 +19,7 @@ use crate::{
         JxlHeader,
     },
     image::{Image, Rect},
+    render::{RenderPipeline, SimpleRenderPipeline},
     util::{tracing_wrappers::*, CeilLog2},
 };
 
@@ -37,6 +38,8 @@ pub use tree::Tree;
 
 #[derive(Clone, PartialEq, Eq, Copy)]
 struct ChannelInfo {
+    // The index of the output channel in the render pipeline, or -1 for non-output channels.
+    output_channel_idx: isize,
     // width, height
     size: (usize, usize),
     shift: Option<(usize, usize)>, // None for meta-channels
@@ -51,7 +54,11 @@ impl Debug for ChannelInfo {
         } else {
             write!(f, "(meta)")?;
         }
-        write!(f, "bit_depth: {:?}", self.bit_depth)
+        write!(f, "{:?}", self.bit_depth)?;
+        if self.output_channel_idx >= 0 {
+            write!(f, "(output channel {})", self.output_channel_idx)?;
+        }
+        Ok(())
     }
 }
 
@@ -71,6 +78,10 @@ impl ChannelInfo {
             min <= shift && shift <= max
         })
     }
+
+    fn is_equivalent(&self, other: &ChannelInfo) -> bool {
+        self.size == other.size && self.shift == other.shift && self.bit_depth == other.bit_depth
+    }
 }
 
 #[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Clone, Copy)]
@@ -84,6 +95,14 @@ enum ModularGridKind {
 }
 
 impl ModularGridKind {
+    fn grid_dim(&self, frame_header: &FrameHeader, shift: (usize, usize)) -> (usize, usize) {
+        let group_dim = match self {
+            ModularGridKind::None => 0,
+            ModularGridKind::Lf => frame_header.lf_group_dim(),
+            ModularGridKind::Hf => frame_header.group_dim(),
+        };
+        (group_dim >> shift.0, group_dim >> shift.1)
+    }
     fn grid_shape(&self, frame_header: &FrameHeader) -> (usize, usize) {
         match self {
             ModularGridKind::None => (1, 1),
@@ -139,6 +158,7 @@ impl ModularChannel {
 
     fn channel_info(&self) -> ChannelInfo {
         ChannelInfo {
+            output_channel_idx: -1,
             size: self.data.size(),
             shift: self.shift,
             bit_depth: self.bit_depth,
@@ -187,12 +207,8 @@ impl ModularBuffer {
 #[derive(Debug)]
 struct ModularBufferInfo {
     info: ChannelInfo,
-    // Only accurate for coded channels.
-    coded_channel_id: usize,
-    // Only accurate for output channels.
-    output_channel_id: usize,
-    is_output: bool,
-    is_coded: bool,
+    // The index of coded channel in the bit-stream, or -1 for non-coded channels.
+    coded_channel_id: isize,
     #[allow(dead_code)]
     description: String,
     grid_kind: ModularGridKind,
@@ -201,11 +217,55 @@ struct ModularBufferInfo {
 }
 
 impl ModularBufferInfo {
-    fn get_grid_idx(&self, grid: (usize, usize)) -> usize {
-        match self.grid_kind {
-            ModularGridKind::None => 0,
-            ModularGridKind::Lf | ModularGridKind::Hf => self.grid_shape.0 * grid.1 + grid.0,
+    fn get_grid_idx(
+        &self,
+        output_grid_kind: ModularGridKind,
+        output_grid_pos: (usize, usize),
+    ) -> usize {
+        let grid_pos = match (output_grid_kind, self.grid_kind) {
+            (_, ModularGridKind::None) => (0, 0),
+            (ModularGridKind::Lf, ModularGridKind::Lf)
+            | (ModularGridKind::Hf, ModularGridKind::Hf) => output_grid_pos,
+            (ModularGridKind::Hf, ModularGridKind::Lf) => {
+                (output_grid_pos.0 / 8, output_grid_pos.1 / 8)
+            }
+            _ => unreachable!("invalid combination of output grid kind and buffer grid kind"),
+        };
+        self.grid_shape.0 * grid_pos.1 + grid_pos.0
+    }
+    fn get_grid_rect(
+        &self,
+        frame_header: &FrameHeader,
+        output_grid_kind: ModularGridKind,
+        output_grid_pos: (usize, usize),
+    ) -> Rect {
+        let chan_size = self.info.size;
+        if output_grid_kind == ModularGridKind::None {
+            assert_eq!(self.grid_kind, output_grid_kind);
+            return Rect {
+                origin: (0, 0),
+                size: chan_size,
+            };
         }
+        let shift = self.info.shift.unwrap();
+        let grid_dim = output_grid_kind.grid_dim(frame_header, shift);
+        let bx = output_grid_pos.0 * grid_dim.0;
+        let by = output_grid_pos.1 * grid_dim.1;
+        let size = (
+            (chan_size.0 - bx).min(grid_dim.0),
+            (chan_size.1 - by).min(grid_dim.1),
+        );
+        let origin = match (output_grid_kind, self.grid_kind) {
+            (ModularGridKind::Lf, ModularGridKind::Lf)
+            | (ModularGridKind::Hf, ModularGridKind::Hf) => (0, 0),
+            (_, ModularGridKind::None) => (bx, by),
+            (ModularGridKind::Hf, ModularGridKind::Lf) => {
+                let lf_grid_dim = self.grid_kind.grid_dim(frame_header, shift);
+                (bx % lf_grid_dim.0, by % lf_grid_dim.1)
+            }
+            _ => unreachable!("invalid combination of output grid kind and buffer grid kind"),
+        };
+        Rect { origin, size }
     }
 }
 
@@ -224,7 +284,6 @@ pub struct FullModularImage {
     // List of buffer indices of the channels of the modular image encoded in each kind of section.
     // In order, LfGlobal, LfGroup, HfGroup(pass 0), ..., HfGroup(last pass).
     section_buffer_indices: Vec<Vec<usize>>,
-    delayed_ready_sections: Vec<usize>,
 }
 
 impl FullModularImage {
@@ -241,13 +300,14 @@ impl FullModularImage {
             let shift = (frame_header.hshift(c), frame_header.vshift(c));
             let size = frame_header.size();
             channels.push(ChannelInfo {
+                output_channel_idx: c as isize,
                 size: (size.0.div_ceil(1 << shift.0), size.1.div_ceil(1 << shift.1)),
                 shift: Some(shift),
                 bit_depth: image_metadata.bit_depth,
             });
         }
 
-        for ecups in frame_header.ec_upsampling.iter() {
+        for (idx, ecups) in frame_header.ec_upsampling.iter().enumerate() {
             let shift_ec = ecups.ceil_log2();
             let shift_color = frame_header.upsampling.ceil_log2();
             let shift = shift_ec
@@ -260,10 +320,16 @@ impl FullModularImage {
                 size.1.div_ceil(*ecups as usize),
             );
             channels.push(ChannelInfo {
+                output_channel_idx: 3 + idx as isize,
                 size,
                 shift: Some((shift, shift)),
                 bit_depth: image_metadata.bit_depth,
             });
+        }
+
+        #[cfg(feature = "tracing")]
+        for (i, ch) in channels.iter().enumerate() {
+            trace!("Modular channel {i}: {ch:?}");
         }
 
         if channels.is_empty() {
@@ -271,7 +337,6 @@ impl FullModularImage {
                 buffer_info: vec![],
                 transform_steps: vec![],
                 section_buffer_indices: vec![vec![]; 2 + frame_header.passes.num_passes as usize],
-                delayed_ready_sections: vec![],
             });
         }
 
@@ -281,14 +346,15 @@ impl FullModularImage {
         let (mut buffer_info, transform_steps) =
             transforms::apply::meta_apply_transforms(&channels, &header)?;
 
-        // Assign each (channel, group) pair present in the bitstream to the section in which it will be decoded.
+        // Assign each (channel, group) pair present in the bitstream to the section in which it
+        // will be decoded.
         let mut section_buffer_indices: Vec<Vec<usize>> = vec![];
 
         let mut sorted_buffers: Vec<_> = buffer_info
             .iter()
             .enumerate()
             .filter_map(|(i, b)| {
-                if b.is_coded {
+                if b.coded_channel_id >= 0 {
                     Some((b.coded_channel_id, i))
                 } else {
                     None
@@ -356,17 +422,13 @@ impl FullModularImage {
                 1 => "LF groups".to_string(),
                 _ => format!("HF groups, pass {}", section - 2),
             };
-            trace!("Modular channels in {section_name}");
+            trace!("Coded modular channels in {section_name}");
             for i in indices {
                 let bi = &buffer_info[*i];
-                let ci = bi.info;
                 trace!(
-                    "Channel size: {:?} shift: {:?} coded id: {} output id: {} output: {}",
-                    ci.size,
-                    ci.shift,
-                    bi.coded_channel_id,
-                    bi.output_channel_id,
-                    bi.is_output,
+                    "Channel {i} {:?} coded id: {}",
+                    bi.info,
+                    bi.coded_channel_id
                 );
             }
         }
@@ -377,6 +439,33 @@ impl FullModularImage {
             &section_buffer_indices,
             &mut buffer_info,
         );
+
+        #[cfg(feature = "tracing")]
+        for (i, bi) in buffer_info.iter().enumerate() {
+            trace!(
+                "Channel {i} {:?} coded_id: {} '{}' {:?} grid {:?}",
+                bi.info,
+                bi.coded_channel_id,
+                bi.description,
+                bi.grid_kind,
+                bi.grid_shape
+            );
+            for (pos, buf) in bi.buffer_grid.iter().enumerate() {
+                trace!(
+                    "Channel {i} grid {pos} ({}, {})  size: {:?}, uses: {}, used_by: {:?}",
+                    pos % bi.grid_shape.0,
+                    pos / bi.grid_shape.0,
+                    buf.size,
+                    buf.remaining_uses,
+                    buf.used_by_transforms
+                );
+            }
+        }
+
+        #[cfg(feature = "tracing")]
+        for (i, ts) in transform_steps.iter().enumerate() {
+            trace!("Transform {i}: {ts:?}");
+        }
 
         with_buffers(&buffer_info, &section_buffer_indices[0], 0, |bufs| {
             decode_modular_subbitstream(
@@ -392,22 +481,16 @@ impl FullModularImage {
             buffer_info,
             transform_steps,
             section_buffer_indices,
-            delayed_ready_sections: vec![],
         })
     }
 
     #[allow(clippy::type_complexity)]
-    #[instrument(
-        level = "debug",
-        skip(self, frame_header, global_tree, on_output, br),
-        ret
-    )]
+    #[instrument(level = "debug", skip(self, frame_header, global_tree, br), ret)]
     pub fn read_stream(
         &mut self,
         stream: ModularStreamId,
         frame_header: &FrameHeader,
         global_tree: &Option<Tree>,
-        on_output: Option<&mut dyn FnMut(usize, usize, &Image<i32>) -> Result<()>>,
         br: &mut BitReader,
     ) -> Result<()> {
         if self.buffer_info.is_empty() {
@@ -436,46 +519,59 @@ impl FullModularImage {
                 )
             },
         )?;
+        Ok(())
+    }
 
-        let Some(on_output) = on_output else {
-            self.delayed_ready_sections
-                .extend_from_slice(&self.section_buffer_indices[section_id]);
-            return Ok(());
-        };
-
+    #[allow(clippy::type_complexity)]
+    pub fn process_output(
+        &mut self,
+        section_id: usize,
+        grid: usize,
+        frame_header: &FrameHeader,
+        render_pipeline: &mut SimpleRenderPipeline,
+    ) -> Result<()> {
         let mut maybe_output = |bi: &mut ModularBufferInfo, grid: usize| -> Result<()> {
-            if bi.is_output {
-                on_output(
-                    bi.output_channel_id,
-                    grid,
-                    &bi.buffer_grid[grid].data.borrow().as_ref().unwrap().data,
-                )?;
+            if bi.info.output_channel_idx >= 0 {
+                let chan = bi.info.output_channel_idx as usize;
+                render_pipeline.fill_input_channels(&[chan], grid, 1, |rects| {
+                    rects[0].copy_from(
+                        bi.buffer_grid[grid]
+                            .data
+                            .borrow()
+                            .as_ref()
+                            .unwrap()
+                            .data
+                            .as_rect(),
+                    )
+                })?;
                 bi.buffer_grid[grid].mark_used();
             }
             Ok(())
         };
 
         let mut new_ready_transform_chunks = vec![];
-        for buf in self.section_buffer_indices[section_id]
-            .iter()
-            .copied()
-            .chain(self.delayed_ready_sections.drain(..))
-        {
+        for buf in self.section_buffer_indices[section_id].iter().copied() {
             maybe_output(&mut self.buffer_info[buf], grid)?;
-            new_ready_transform_chunks.extend(
-                self.buffer_info[buf].buffer_grid[grid]
-                    .used_by_transforms
-                    .iter()
-                    .copied(),
-            );
+            let new_chunks = self.buffer_info[buf].buffer_grid[grid]
+                .used_by_transforms
+                .to_vec();
+            trace!("Buffer {buf} grid position {grid} used by chunks {new_chunks:?}");
+            new_ready_transform_chunks.extend(new_chunks);
         }
 
+        trace!(?new_ready_transform_chunks);
+
         while let Some(tfm) = new_ready_transform_chunks.pop() {
-            for (new_buf, new_grid) in self.transform_steps[tfm].dep_ready(&mut self.buffer_info)? {
+            trace!("tfm = {tfm} chunk = {:?}", self.transform_steps[tfm]);
+            for (new_buf, new_grid) in
+                self.transform_steps[tfm].dep_ready(frame_header, &mut self.buffer_info)?
+            {
                 maybe_output(&mut self.buffer_info[new_buf], new_grid)?;
-                new_ready_transform_chunks.extend_from_slice(
-                    &self.buffer_info[new_buf].buffer_grid[new_grid].used_by_transforms,
-                );
+                let new_chunks = self.buffer_info[new_buf].buffer_grid[new_grid]
+                    .used_by_transforms
+                    .to_vec();
+                trace!("Buffer {new_buf} grid position {new_grid} used by chunks {new_chunks:?}");
+                new_ready_transform_chunks.extend(new_chunks);
             }
         }
 

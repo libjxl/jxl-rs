@@ -8,6 +8,7 @@ use crate::{
     render::{RenderPipelineInPlaceStage, RenderPipelineStage},
 };
 
+#[allow(dead_code)]
 pub struct SplinesStage {
     splines: Splines,
 }

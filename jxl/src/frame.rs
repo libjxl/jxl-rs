@@ -40,7 +40,7 @@ pub mod color_correlation_map;
 mod group;
 pub mod modular;
 mod quant_weights;
-mod quantizer;
+pub mod quantizer;
 pub mod transform_map;
 
 #[derive(Debug, PartialEq, Eq)]
@@ -107,6 +107,7 @@ pub struct DecoderState {
     file_header: FileHeader,
     reference_frames: [Option<ReferenceFrame>; Self::MAX_STORED_FRAMES],
     pub xyb_output_linear: bool,
+    pub enable_output: bool,
 }
 
 impl DecoderState {
@@ -117,6 +118,7 @@ impl DecoderState {
             file_header,
             reference_frames: [None, None, None, None],
             xyb_output_linear: true,
+            enable_output: true,
         }
     }
 
@@ -279,7 +281,7 @@ impl Frame {
         }
     }
 
-    #[instrument(skip_all)]
+    #[instrument(level = "debug", skip_all)]
     pub fn decode_lf_global(&mut self, br: &mut BitReader) -> Result<()> {
         debug!(section_size = br.total_bits_available());
         assert!(self.lf_global.is_none());
@@ -371,11 +373,24 @@ impl Frame {
             tree,
             modular_global,
         });
+        let lf_global = self.lf_global.as_mut().unwrap();
 
+        let render_pipeline =
+            Self::build_render_pipeline(&self.decoder_state, &self.header, lf_global)?;
+        self.render_pipeline = Some(render_pipeline);
+
+        if self.decoder_state.enable_output {
+            lf_global.modular_global.process_output(
+                0,
+                0,
+                &self.header,
+                self.render_pipeline.as_mut().unwrap(),
+            )?;
+        }
         Ok(())
     }
 
-    #[instrument(skip(self, br))]
+    #[instrument(level = "debug", skip(self, br))]
     pub fn decode_lf_group(&mut self, group: usize, br: &mut BitReader) -> Result<()> {
         debug!(section_size = br.total_bits_available());
         let lf_global = self.lf_global.as_mut().unwrap();
@@ -399,9 +414,16 @@ impl Frame {
             ModularStreamId::ModularLF(group),
             &self.header,
             &lf_global.tree,
-            None,
             br,
         )?;
+        if self.decoder_state.enable_output {
+            lf_global.modular_global.process_output(
+                1,
+                group,
+                &self.header,
+                self.render_pipeline.as_mut().unwrap(),
+            )?;
+        }
         if self.header.encoding == Encoding::VarDCT {
             info!("decoding HF metadata with group id {}", group);
             let hf_meta = self.hf_meta.as_mut().unwrap();
@@ -417,7 +439,7 @@ impl Frame {
         Ok(())
     }
 
-    #[instrument(skip_all)]
+    #[instrument(level = "debug", skip_all)]
     pub fn decode_hf_global(&mut self, br: &mut BitReader) -> Result<()> {
         debug!(section_size = br.total_bits_available());
         if self.header.encoding == Encoding::Modular {
@@ -429,7 +451,7 @@ impl Frame {
         let block_context_map = lf_global.block_context_map.as_mut().unwrap();
         let num_histo_bits = self.header.num_groups().ceil_log2();
         let num_histograms: u32 = br.read(num_histo_bits)? as u32 + 1;
-        debug!(
+        info!(
             "Processing HFGlobal section with {} passes and {} histograms",
             self.header.passes.num_passes, num_histograms
         );
@@ -446,7 +468,7 @@ impl Frame {
             let coeff_orders = decode_coeff_orders(used_orders, br)?;
             assert_eq!(coeff_orders.len(), 3 * coeff_order::NUM_ORDERS);
             let num_contexts = num_histograms as usize * block_context_map.num_ac_contexts();
-            debug!(
+            info!(
                 "Deconding histograms for pass {} with {} contexts",
                 i, num_contexts
             );
@@ -477,36 +499,44 @@ impl Frame {
         Ok(())
     }
 
-    #[instrument(skip(self))]
-    pub fn prepare_for_hf(&mut self) -> Result<()> {
-        // TODO(veluca): build the pipeline properly.
-        let num_channels = self.header.num_extra_channels as usize + 3;
-        let metadata = &self.decoder_state.file_header.image_metadata;
-        let num_temp_channels = if self.header.has_noise() { 3 } else { 0 };
+    pub fn build_render_pipeline(
+        decoder_state: &DecoderState,
+        frame_header: &FrameHeader,
+        lf_global: &LfGlobalState,
+    ) -> Result<SimpleRenderPipeline> {
+        let num_channels = frame_header.num_extra_channels as usize + 3;
+        let num_temp_channels = if frame_header.has_noise() { 3 } else { 0 };
+        let metadata = &decoder_state.file_header.image_metadata;
         let mut pipeline = SimpleRenderPipelineBuilder::new(
             num_channels + num_temp_channels,
-            self.header.size(),
-            self.header.log_group_dim(),
+            frame_header.size(),
+            frame_header.log_group_dim(),
         );
-        let first_modular_channel = if self.header.encoding == Encoding::Modular {
-            0
-        } else {
-            3
-        };
-        for i in first_modular_channel..num_channels {
+        if frame_header.encoding == Encoding::Modular {
+            if decoder_state.file_header.image_metadata.xyb_encoded {
+                pipeline =
+                    pipeline.add_stage(ConvertModularXYBToF32Stage::new(0, &lf_global.lf_quant))?
+            } else {
+                for i in 0..3 {
+                    pipeline =
+                        pipeline.add_stage(ConvertModularToF32Stage::new(i, metadata.bit_depth))?;
+                }
+            }
+        }
+        for i in 3..num_channels {
             pipeline = pipeline.add_stage(ConvertModularToF32Stage::new(i, metadata.bit_depth))?;
         }
 
         for c in 0..3 {
-            if self.header.hshift(c) != 0 {
+            if frame_header.hshift(c) != 0 {
                 pipeline = pipeline.add_stage(HorizontalChromaUpsample::new(c))?;
             }
-            if self.header.vshift(c) != 0 {
+            if frame_header.vshift(c) != 0 {
                 pipeline = pipeline.add_stage(VerticalChromaUpsample::new(c))?;
             }
         }
 
-        let filters = &self.header.restoration_filter;
+        let filters = &frame_header.restoration_filter;
         if filters.gab {
             pipeline = pipeline
                 .add_stage(GaborishStage::new(
@@ -536,8 +566,7 @@ impl Frame {
 
         // TODO: upsampling
 
-        if self.header.has_noise() {
-            let lf_global = self.lf_global.as_ref().unwrap();
+        if frame_header.has_noise() {
             pipeline = pipeline
                 .add_stage(ConvolveNoiseStage::new(num_channels))?
                 .add_stage(ConvolveNoiseStage::new(num_channels + 1))?
@@ -549,12 +578,11 @@ impl Frame {
                 ))?;
         }
 
-        if self.header.do_ycbcr {
+        if frame_header.do_ycbcr {
             pipeline = pipeline.add_stage(YcbcrToLinearSrgbStage::new(0))?;
-        } else if self.decoder_state.file_header.image_metadata.xyb_encoded {
+        } else if decoder_state.file_header.image_metadata.xyb_encoded {
             let intensity_target = 255.0;
-            let opsin = &self
-                .decoder_state
+            let opsin = &decoder_state
                 .file_header
                 .transform_data
                 .opsin_inverse_matrix;
@@ -563,7 +591,7 @@ impl Frame {
                 opsin.clone(),
                 intensity_target,
             ))?;
-            if !self.decoder_state.xyb_output_linear {
+            if !decoder_state.xyb_output_linear {
                 pipeline = pipeline.add_stage(FromLinearStage::new(0, TransferFunction::Srgb))?;
             }
         }
@@ -573,14 +601,12 @@ impl Frame {
         // TODO: spot colors
 
         for i in 0..num_channels {
-            pipeline = pipeline.add_stage(SaveStage::<f32>::new(i, self.header.size(), 255.0)?)?;
+            pipeline = pipeline.add_stage(SaveStage::<f32>::new(i, frame_header.size(), 255.0)?)?;
         }
-        self.render_pipeline = Some(pipeline.build()?);
-
-        Ok(())
+        pipeline.build()
     }
 
-    #[instrument(skip(self, br))]
+    #[instrument(level = "debug", skip(self, br))]
     pub fn decode_hf_group(&mut self, group: usize, pass: usize, br: &mut BitReader) -> Result<()> {
         debug!(section_size = br.total_bits_available());
         if self.header.has_noise() {
@@ -634,24 +660,11 @@ impl Frame {
             )?;
         }
         let lf_global = self.lf_global.as_mut().unwrap();
-        let mut pass_to_pipeline = |chan: usize, g: usize, img: &Image<f32>| {
-            // TODO(veluca): figure out pass count and check group IDs. Also, investigate whether
-            // reusing the `img` buffer would be possible.
-            self.render_pipeline
-                .as_mut()
-                .unwrap()
-                .fill_input_channels(&[chan], g, 1, |rects| {
-                    rects[0].copy_from(img.as_rect().rect(Rect {
-                        origin: (0, 0),
-                        size: rects[0].size(),
-                    })?)
-                })
-        };
         if self.header.encoding == Encoding::VarDCT {
-            info!("decoding VarDCT");
+            info!("Decoding VarDCT group {group}, pass {pass}");
             let hf_global = self.hf_global.as_mut().unwrap();
             let hf_meta = self.hf_meta.as_mut().unwrap();
-            decode_vardct_group(
+            let pixels = decode_vardct_group(
                 group,
                 pass,
                 &self.header,
@@ -666,67 +679,74 @@ impl Frame {
                     .transform_data
                     .opsin_inverse_matrix
                     .quant_biases,
-                &mut pass_to_pipeline,
                 br,
             )?;
+            if self.decoder_state.enable_output {
+                for c in [0, 1, 2] {
+                    self.render_pipeline.as_mut().unwrap().fill_input_channels(
+                        &[c],
+                        group,
+                        1,
+                        |rects| {
+                            rects[0].copy_from(pixels[c].as_rect().rect(Rect {
+                                origin: (0, 0),
+                                size: rects[0].size(),
+                            })?)
+                        },
+                    )?;
+                }
+            }
         }
-        let mut modular_pass_to_pipeline = |chan: usize, g: usize, img: &Image<i32>| {
-            // TODO(veluca): figure out pass count and check group IDs. Also, investigate whether
-            // reusing the `img` buffer would be possible.
-            self.render_pipeline
-                .as_mut()
-                .unwrap()
-                .fill_input_channels(&[chan], g, 1, |rects| rects[0].copy_from(img.as_rect()))
-        };
         lf_global.modular_global.read_stream(
             ModularStreamId::ModularHF { group, pass },
             &self.header,
             &lf_global.tree,
-            Some(&mut modular_pass_to_pipeline),
             br,
-        )
+        )?;
+        if self.decoder_state.enable_output {
+            lf_global.modular_global.process_output(
+                2 + pass,
+                group,
+                &self.header,
+                self.render_pipeline.as_mut().unwrap(),
+            )?;
+        }
+        Ok(())
     }
 
     pub fn finalize(mut self) -> Result<FrameOutput> {
+        let frame_data: Vec<_> = self
+            .render_pipeline
+            .unwrap()
+            .into_stages()
+            .into_iter()
+            .filter_map(|x| x.downcast().ok())
+            .map(|stage_box: Box<SaveStage<f32>>| stage_box.into_buffer())
+            .collect();
+
         if self.header.can_be_referenced {
-            // TODO(firsching): actually use real reference images here, instead of setting it
-            // to a blank image here, once we can decode images.
+            info!("Saving frame in slot {}", self.header.save_as_reference);
             self.decoder_state.reference_frames[self.header.save_as_reference as usize] =
-                Some(ReferenceFrame::blank(
-                    self.header.width as usize,
-                    self.header.height as usize,
-                    // Set num_channels to "3 + self.decoder_state.extra_channel_info().len()" here
-                    // unconditionally for now.
-                    3 + self.decoder_state.extra_channel_info().len(),
-                    self.header.save_before_ct,
-                )?);
+                Some(ReferenceFrame {
+                    frame: frame_data.clone(),
+                    saved_before_color_transform: self.header.save_before_ct,
+                });
         }
 
         let channels = if self.header.is_visible() {
-            Some(
-                self.render_pipeline
-                    .unwrap()
-                    .into_stages()
-                    .into_iter()
-                    .filter_map(|x| x.downcast().ok())
-                    .map(|stage_box: Box<SaveStage<f32>>| stage_box.into_buffer())
-                    .collect(),
-            )
+            Some(frame_data)
         } else {
             None
         };
-
         let decoder_state = if self.header.is_last {
             None
         } else {
             Some(self.decoder_state)
         };
-
         let frame_output = FrameOutput {
             decoder_state,
             channels,
         };
-
         Ok(frame_output)
     }
 }

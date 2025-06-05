@@ -130,10 +130,10 @@ fn main() -> Result<(), Error> {
     let image_result = save_image(image_data, opt.output);
 
     if let Err(ref err) = icc_result {
-        println!("Failed to save ICC profile: {}", err);
+        println!("Failed to save ICC profile: {err}");
     }
     if let Err(ref err) = image_result {
-        println!("Failed to save image: {}", err);
+        println!("Failed to save image: {err}");
     }
 
     icc_result?;

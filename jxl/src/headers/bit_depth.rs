@@ -6,7 +6,9 @@
 use crate::{bit_reader::BitReader, error::Error, headers::encodings::*};
 use jxl_macros::UnconditionalCoder;
 
-#[derive(UnconditionalCoder, Debug, Clone, Copy, PartialEq, Eq)]
+use std::fmt::Debug;
+
+#[derive(UnconditionalCoder, Clone, Copy, PartialEq, Eq)]
 #[validate]
 pub struct BitDepth {
     #[default(false)]
@@ -20,6 +22,31 @@ pub struct BitDepth {
     #[default(0)]
     #[coder(Bits(4)+1)]
     exponent_bits_per_sample: u32,
+}
+
+impl Debug for BitDepth {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        if self.floating_point_sample {
+            match (self.bits_per_sample, self.exponent_bits_per_sample) {
+                (32, 8) => {
+                    write!(f, "F32")
+                }
+                (16, 5) => {
+                    write!(f, "F16")
+                }
+                _ => {
+                    write!(
+                        f,
+                        "FloatE{}M{}",
+                        self.exponent_bits_per_sample,
+                        self.bits_per_sample - self.exponent_bits_per_sample - 1
+                    )
+                }
+            }
+        } else {
+            write!(f, "U{}", self.bits_per_sample)
+        }
+    }
 }
 
 impl BitDepth {
