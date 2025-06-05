@@ -31,7 +31,7 @@ pub struct SimpleRenderPipelineBuilder {
 }
 
 impl SimpleRenderPipelineBuilder {
-    #[instrument]
+    #[instrument(level = "debug")]
     pub(super) fn new_with_chunk_size(
         num_channels: usize,
         size: (usize, usize),
@@ -78,7 +78,7 @@ impl RenderPipelineBuilder for SimpleRenderPipelineBuilder {
     #[instrument(skip_all, err)]
     fn add_stage<Stage: RenderPipelineStage>(mut self, stage: Stage) -> Result<Self> {
         let current_info = self.pipeline.channel_info.last().unwrap().clone();
-        info!(
+        debug!(
             last_stage_channel_info = ?current_info,
             can_shift = self.can_shift,
             "adding stage '{stage}'",
@@ -113,7 +113,7 @@ impl RenderPipelineBuilder for SimpleRenderPipelineBuilder {
         if Stage::Type::TYPE == RenderPipelineStageType::Extend {
             self.can_shift = false;
         }
-        info!(
+        debug!(
             new_channel_info = ?after_info,
             can_shift = self.can_shift,
             "added stage '{stage}'",
@@ -171,9 +171,9 @@ impl RenderPipelineBuilder for SimpleRenderPipelineBuilder {
                 .zip(self.pipeline.stages.iter())
                 .enumerate()
             {
-                info!("final channel info before stage {s} '{stage}': {current_info:?}");
+                debug!("final channel info before stage {s} '{stage}': {current_info:?}");
             }
-            info!(
+            debug!(
                 "final channel info after all stages {:?}",
                 channel_info.last().unwrap()
             );
@@ -377,7 +377,7 @@ impl<T: ImageDataType> RenderPipelineRunStage for RenderPipelineInspectStage<T> 
         input_buffers: &[&Image<f64>],
         _output_buffers: &mut [&mut Image<f64>],
     ) {
-        info!("running input stage '{stage}' in simple pipeline");
+        debug!("running input stage '{stage}' in simple pipeline");
         let numc = input_buffers.len();
         if numc == 0 {
             return;
@@ -411,7 +411,7 @@ impl<T: ImageDataType> RenderPipelineRunStage for RenderPipelineInPlaceStage<T> 
         input_buffers: &[&Image<f64>],
         output_buffers: &mut [&mut Image<f64>],
     ) {
-        info!("running inplace stage '{stage}' in simple pipeline");
+        debug!("running inplace stage '{stage}' in simple pipeline");
         let numc = input_buffers.len();
         if numc == 0 {
             return;
@@ -464,7 +464,7 @@ impl<
         output_buffers: &mut [&mut Image<f64>],
     ) {
         assert_ne!(chunk_size, 0);
-        info!("running inout stage '{stage}' in simple pipeline");
+        debug!("running inout stage '{stage}' in simple pipeline");
         let numc = input_buffers.len();
         if numc == 0 {
             return;

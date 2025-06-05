@@ -107,6 +107,7 @@ impl ImageDataType for half::f16 {
 // testing purposes.
 impl_image_data_type!(f64, F64);
 
+#[derive(Clone)]
 pub struct Image<T: ImageDataType> {
     // width, height
     size: (usize, usize),
@@ -157,7 +158,7 @@ impl Rect {
 
 #[derive(Clone, Copy)]
 pub struct ImageRect<'a, T: ImageDataType> {
-    rect: Rect,
+    pub rect: Rect,
     image: &'a Image<T>,
 }
 
@@ -191,16 +192,6 @@ impl<T: ImageDataType> Debug for ImageRectMut<'_, T> {
             self.rect.origin.0,
             self.rect.origin.1
         )
-    }
-}
-
-#[cfg(test)]
-impl<T: ImageDataType> Clone for Image<T> {
-    fn clone(&self) -> Self {
-        Self {
-            size: self.size,
-            data: self.data.clone(),
-        }
     }
 }
 

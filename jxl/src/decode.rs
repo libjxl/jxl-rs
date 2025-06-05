@@ -16,6 +16,7 @@ use crate::{
 #[allow(clippy::type_complexity)]
 pub struct DecodeOptions<'a> {
     pub xyb_output_linear: bool,
+    enable_output: bool,
     pub frame_callback: Option<&'a mut dyn FnMut(&Frame) -> Result<(), Error>>,
 }
 
@@ -23,6 +24,7 @@ impl<'a> DecodeOptions<'a> {
     pub fn new() -> DecodeOptions<'a> {
         DecodeOptions {
             xyb_output_linear: true,
+            enable_output: true,
             frame_callback: None,
         }
     }
@@ -79,6 +81,7 @@ pub fn decode_jxl_codestream(
     };
     let mut decoder_state = DecoderState::new(file_header);
     decoder_state.xyb_output_linear = options.xyb_output_linear;
+    decoder_state.enable_output = options.enable_output;
     loop {
         let mut frame = Frame::new(&mut br, decoder_state)?;
         let mut section_readers = frame.sections(&mut br)?;
@@ -95,8 +98,6 @@ pub fn decode_jxl_codestream(
         }
 
         frame.decode_hf_global(&mut section_readers[frame.get_section_idx(Section::HfGlobal)])?;
-
-        frame.prepare_for_hf()?;
 
         for pass in 0..frame.header().passes.num_passes as usize {
             for group in 0..frame.header().num_groups() {
@@ -131,7 +132,7 @@ pub fn decode_jxl_codestream(
 
 #[cfg(test)]
 mod test {
-    use super::decode_jxl_codestream;
+    use super::{decode_jxl_codestream, DecodeOptions};
     use crate::{container::ContainerParser, error::Error};
     use jxl_macros::for_each_test_file;
     use std::path::Path;
@@ -139,7 +140,9 @@ mod test {
     fn read_file_from_path(path: &Path) -> Result<(), Error> {
         let data = std::fs::read(path).unwrap();
         let codestream = ContainerParser::collect_codestream(data.as_slice()).unwrap();
-        decode_jxl_codestream(Default::default(), &codestream)?;
+        let mut options = DecodeOptions::new();
+        options.enable_output = false;
+        decode_jxl_codestream(options, &codestream)?;
         Ok(())
     }
 

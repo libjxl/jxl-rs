@@ -4,6 +4,7 @@
 // license that can be found in the LICENSE file.
 
 use crate::{
+    frame::quantizer::LfQuantFactors,
     headers::bit_depth::BitDepth,
     render::{RenderPipelineInOutStage, RenderPipelineStage},
 };
@@ -40,6 +41,60 @@ impl RenderPipelineStage for ConvertU8F32Stage {
         let (input, output) = &mut row[0];
         for i in 0..xsize {
             output[0][i] = input[0][i] as f32 * (1.0 / 255.0);
+        }
+    }
+}
+
+pub struct ConvertModularXYBToF32Stage {
+    first_channel: usize,
+    scale: [f32; 3],
+}
+
+impl ConvertModularXYBToF32Stage {
+    pub fn new(first_channel: usize, lf_quant: &LfQuantFactors) -> ConvertModularXYBToF32Stage {
+        ConvertModularXYBToF32Stage {
+            first_channel,
+            scale: lf_quant.quant_factors,
+        }
+    }
+}
+
+impl std::fmt::Display for ConvertModularXYBToF32Stage {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "convert modular xyb data to F32 in channels {}..{} with scales {:?}",
+            self.first_channel,
+            self.first_channel + 2,
+            self.scale
+        )
+    }
+}
+
+impl RenderPipelineStage for ConvertModularXYBToF32Stage {
+    type Type = RenderPipelineInOutStage<i32, f32, 0, 0, 0, 0>;
+
+    fn uses_channel(&self, c: usize) -> bool {
+        (self.first_channel..self.first_channel + 3).contains(&c)
+    }
+
+    fn process_row_chunk(
+        &mut self,
+        _position: (usize, usize),
+        xsize: usize,
+        row: &mut [(&[&[i32]], &mut [&mut [f32]])],
+    ) {
+        let [scale_x, scale_y, scale_b] = self.scale;
+        let [(input_y, output_x), (input_x, output_y), (input_b, output_b)] = row else {
+            panic!(
+                "incorrect number of channels; expected 3, found {}",
+                row.len()
+            );
+        };
+        for i in 0..xsize {
+            output_x[0][i] = input_x[0][i] as f32 * scale_x;
+            output_y[0][i] = input_y[0][i] as f32 * scale_y;
+            output_b[0][i] = (input_b[0][i] + input_y[0][i]) as f32 * scale_b;
         }
     }
 }

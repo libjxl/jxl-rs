@@ -12,6 +12,7 @@ use crate::{
     render::{RenderPipelineInPlaceStage, RenderPipelineStage},
 };
 
+#[allow(dead_code)]
 pub struct PatchesStage {
     patches: PatchesDictionary,
     extra_channels: Vec<ExtraChannelInfo>,

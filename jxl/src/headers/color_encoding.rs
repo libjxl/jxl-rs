@@ -231,7 +231,7 @@ fn adapt_to_xyz_d50(wx: f32, wy: f32) -> Result<Matrix3x3<f64>, Error> {
             return Err(Error::IccInvalidWhitePoint(
                 wx,
                 wy,
-                format!("Diagonal adaptation matrix component {} is not finite.", i),
+                format!("Diagonal adaptation matrix component {i} is not finite."),
             ));
         }
     }
@@ -1066,7 +1066,7 @@ impl ColorEncoding {
         // Your CustomXY stores i32, which are float * 1_000_000.
         let format_xy_float = |val: i32| -> String { format!("{:.7}", val as f64 / 1_000_000.0) };
         // Helper for formatting gamma float value.
-        let format_gamma_float = |val: f32| -> String { format!("{:.7}", val) };
+        let format_gamma_float = |val: f32| -> String { format!("{val:.7}") };
 
         // Handle special known color spaces first
         if self.color_space == ColorSpace::RGB && self.white_point == WhitePoint::D65 {
@@ -1553,7 +1553,7 @@ mod tests {
                 assert_matrix_eq(&inv_m, &expected_inv, 1e-12);
             }
             Err(e) => {
-                panic!("Matrix inversion failed unexpectedly: {:?}", e);
+                panic!("Matrix inversion failed unexpectedly: {e:?}");
             }
         }
     }

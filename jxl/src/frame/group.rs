@@ -344,9 +344,8 @@ pub fn decode_vardct_group(
     lf_image: &Option<[Image<f32>; 3]>,
     quant_lf: &Image<u8>,
     quant_biases: &[f32; 4],
-    on_output: &mut dyn FnMut(usize, usize, &Image<f32>) -> Result<()>,
     br: &mut BitReader,
-) -> Result<(), Error> {
+) -> Result<[Image<f32>; 3], Error> {
     let x_dm_multiplier = (1.0 / (1.25)).powf(frame_header.x_qm_scale as f32 - 2.0);
     let b_dm_multiplier = (1.0 / (1.25)).powf(frame_header.b_qm_scale as f32 - 2.0);
 
@@ -647,8 +646,5 @@ pub fn decode_vardct_group(
         }
     }
     reader.check_final_state()?;
-    for c in [0, 1, 2] {
-        on_output(c, group, &pixels[c])?;
-    }
-    Ok(())
+    Ok(pixels)
 }
