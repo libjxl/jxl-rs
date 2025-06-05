@@ -44,6 +44,10 @@ pub enum Error {
     InvalidGamma(f32),
     #[error("Invalid color encoding: no ICC and unknown TF / ColorSpace")]
     InvalidColorEncoding,
+    #[error("Invalid color space: should be one of RGB, Gray or XYB")]
+    InvalidColorSpace,
+    #[error("Only perceptual rendering intent implemented for XYB ICC profile.")]
+    InvalidRenderingIntent,
     #[error("Invalid intensity_target: {0}")]
     InvalidIntensityTarget(f32),
     #[error("Invalid min_nits: {0}")]
@@ -220,6 +224,30 @@ pub enum Error {
     OutputWriteFailure,
     #[error("Output format not supported: try .ppm, .pgm or .npy")]
     OutputFormatNotSupported,
+    #[error("Unknown transfer function for ICC profile")]
+    TransferFunctionUnknown,
+    #[error("Attempting to write out of Bounds when writing ICC")]
+    IccWriteOutOfBounds,
+    #[error("Invalid tag string when writing ICC: {0}")]
+    IccInvalidTagString(String),
+    #[error("Invalid text for ICC MLuc string, not ascii: {0}")]
+    IccMlucTextNotAscii(String),
+    #[error("ICC value is out of range / NaN: {0}")]
+    IccValueOutOfRangeS15Fixed16(f32),
+    #[error("Missing custom white point data")]
+    MissingCustomWhitePointData,
+    #[error("Missing custom primaries data")]
+    MissingCustomPrimariesData,
+    #[error("Y value is too small: {0}")]
+    IccInvalidWhitePointY(f32),
+    #[error("{2}: wx: {0}, wy: {1}")]
+    IccInvalidWhitePoint(f32, f32, String),
+    #[error("Determinant is zero or too small, matrix is close to singular: |det| = {0}.")]
+    MatrixInversionFailed(f64),
+    #[error("Unsupported transfer function when writing ICC")]
+    IccUnsupportedTransferFunction,
+    #[error("Table size too large when writing ICC: {0}")]
+    IccTableSizeExceeded(usize),
     #[error("Invalid number of channels for PNG output ({0})")]
     PNGInvalidNumChannels(usize),
 }
