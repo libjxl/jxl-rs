@@ -57,7 +57,7 @@ struct Opt {
     /// Input JXL file
     input: PathBuf,
 
-    /// Output image file, should end in .ppm, .pgm or .npy
+    /// Output image file, should end in .ppm, .pgm, .png or .npy
     output: PathBuf,
 
     ///  If specified, writes the ICC profile of the decoded image
