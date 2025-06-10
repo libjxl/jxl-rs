@@ -224,6 +224,7 @@ mod test {
             stage,
             &[input_r, input_g, input_b],
             (1, 1),
+            0,
             256,
         )?
         .1;
@@ -248,6 +249,7 @@ mod test {
             stage,
             &[input_r, input_g, input_b],
             (1, 1),
+            0,
             256,
         )?
         .1;

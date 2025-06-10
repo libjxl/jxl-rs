@@ -92,7 +92,7 @@ mod test {
         )?;
         let stage = SplinesStage { splines };
         let output: Vec<Image<f32>> =
-            make_and_run_simple_pipeline(stage, &target_images, size, 256)?.1;
+            make_and_run_simple_pipeline(stage, &target_images, size, 0, 256)?.1;
         for c in 0..3 {
             for row in 0..size.1 {
                 assert_all_almost_eq!(

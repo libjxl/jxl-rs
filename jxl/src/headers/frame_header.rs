@@ -591,6 +591,14 @@ impl FrameHeader {
         )
     }
 
+    pub fn size_padded_upsampled(&self) -> (usize, usize) {
+        let (xsize, ysize) = self.size_padded();
+        (
+            xsize * self.upsampling as usize,
+            ysize * self.upsampling as usize,
+        )
+    }
+
     /// The dimensions of this frame, in groups.
     pub fn size_groups(&self) -> (usize, usize) {
         (

@@ -25,6 +25,7 @@ pub(super) fn make_and_run_simple_pipeline<
     stage: S,
     input_images: &[Image<InputT>],
     image_size: (usize, usize),
+    downsampling_shift: usize,
     chunk_size: usize,
 ) -> Result<(S, Vec<Image<OutputT>>)> {
     let final_size = stage.new_size(image_size);
@@ -37,6 +38,7 @@ pub(super) fn make_and_run_simple_pipeline<
     let mut pipeline = SimpleRenderPipelineBuilder::new_with_chunk_size(
         input_images.len(),
         image_size,
+        downsampling_shift,
         LOG_GROUP_SIZE,
         chunk_size,
     )
@@ -122,7 +124,7 @@ pub(super) fn test_stage_consistency<
     let images = images?;
 
     let (stage, base_output) =
-        make_and_run_simple_pipeline::<_, InputT, OutputT>(stage, &images, image_size, 256)?;
+        make_and_run_simple_pipeline::<_, InputT, OutputT>(stage, &images, image_size, 0, 256)?;
 
     let mut stage = Some(stage);
 
@@ -132,6 +134,7 @@ pub(super) fn test_stage_consistency<
             stage.take().unwrap(),
             &images,
             image_size,
+            0,
             chunk_size,
         )
         .unwrap_or_else(|_| panic!("error running pipeline with chunk size {chunk_size}"));

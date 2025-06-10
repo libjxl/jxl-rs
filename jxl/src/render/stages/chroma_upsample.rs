@@ -116,7 +116,8 @@ mod test {
             .row(0)
             .copy_from_slice(&[1.0f32, 2.0, 4.0]);
         let stage = HorizontalChromaUpsample::new(0);
-        let output: Vec<Image<f32>> = make_and_run_simple_pipeline(stage, &[input], (6, 1), 256)?.1;
+        let output: Vec<Image<f32>> =
+            make_and_run_simple_pipeline(stage, &[input], (6, 1), 0, 256)?.1;
         assert_eq!(output[0].as_rect().row(0), [1.0, 1.25, 1.75, 2.5, 3.5, 4.0]);
         Ok(())
     }
@@ -137,7 +138,8 @@ mod test {
         input.as_rect_mut().row(1)[0] = 2.0f32;
         input.as_rect_mut().row(2)[0] = 4.0f32;
         let stage = VerticalChromaUpsample::new(0);
-        let output: Vec<Image<f32>> = make_and_run_simple_pipeline(stage, &[input], (1, 6), 256)?.1;
+        let output: Vec<Image<f32>> =
+            make_and_run_simple_pipeline(stage, &[input], (1, 6), 0, 256)?.1;
         assert_eq!(output[0].as_rect().row(0)[0], 1.0);
         assert_eq!(output[0].as_rect().row(1)[0], 1.25);
         assert_eq!(output[0].as_rect().row(2)[0], 1.75);

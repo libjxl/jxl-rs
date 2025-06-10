@@ -35,12 +35,15 @@ impl SimpleRenderPipelineBuilder {
     pub(super) fn new_with_chunk_size(
         num_channels: usize,
         size: (usize, usize),
-        log_group_size: usize,
+        downsampling_shift: usize,
+        mut log_group_size: usize,
         chunk_size: usize,
     ) -> Self {
         info!("creating simple pipeline");
         assert!(chunk_size <= u16::MAX as usize);
         assert_ne!(chunk_size, 0);
+        // The number of pixels that a group encompasses in the final, upsampled image along one dimension is effectively multiplied by the upsampling factor.
+        log_group_size += downsampling_shift;
         SimpleRenderPipelineBuilder {
             pipeline: SimpleRenderPipeline {
                 channel_info: vec![vec![
@@ -71,8 +74,13 @@ impl SimpleRenderPipelineBuilder {
 impl RenderPipelineBuilder for SimpleRenderPipelineBuilder {
     type RenderPipeline = SimpleRenderPipeline;
 
-    fn new(num_channels: usize, size: (usize, usize), log_group_size: usize) -> Self {
-        Self::new_with_chunk_size(num_channels, size, log_group_size, 256)
+    fn new(
+        num_channels: usize,
+        size: (usize, usize),
+        downsampling_shift: usize,
+        log_group_size: usize,
+    ) -> Self {
+        Self::new_with_chunk_size(num_channels, size, downsampling_shift, log_group_size, 256)
     }
 
     #[instrument(skip_all, err)]
@@ -255,8 +263,8 @@ impl SimpleRenderPipeline {
                 current_size = stage.new_size(current_size);
                 for (c, info) in self.channel_info[i + 1].iter().enumerate() {
                     if stage.uses_channel(c) {
-                        let xsize = current_size.0.shrc(info.downsample.0);
-                        let ysize = current_size.1.shrc(info.downsample.1);
+                        let xsize = current_size.0 << info.downsample.0;
+                        let ysize = current_size.1 << info.downsample.1;
                         debug!("reallocating channel {c} to new size {xsize}x{ysize}");
                         output_buffers[c] = Image::new((xsize, ysize))?;
                     }

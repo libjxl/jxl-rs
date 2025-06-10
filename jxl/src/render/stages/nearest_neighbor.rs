@@ -72,7 +72,7 @@ mod test {
         let input = vec![Image::<u8>::new_random(input_size, &mut rng)?];
         let stage = NearestNeighbourUpsample::new(0);
         let output: Vec<Image<u8>> =
-            make_and_run_simple_pipeline(stage, &input, image_size, 256)?.1;
+            make_and_run_simple_pipeline(stage, &input, image_size, 0, 256)?.1;
         assert_eq!(image_size, output[0].size());
         for y in 0..image_size.1 {
             for x in 0..image_size.0 {
