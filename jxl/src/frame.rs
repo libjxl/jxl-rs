@@ -511,7 +511,8 @@ impl Frame {
         let metadata = &decoder_state.file_header.image_metadata;
         let mut pipeline = SimpleRenderPipelineBuilder::new(
             num_channels + num_temp_channels,
-            frame_header.size(),
+            frame_header.size_padded_upsampled(),
+            frame_header.upsampling.ilog2() as usize,
             frame_header.log_group_dim(),
         );
         if frame_header.encoding == Encoding::Modular {
@@ -573,7 +574,17 @@ impl Frame {
 
         // TODO: splines
 
-        // TODO: upsampling
+        if frame_header.upsampling > 1 {
+            let transform_data = &decoder_state.file_header.transform_data;
+            for c in 0..3 {
+                pipeline = match frame_header.upsampling {
+                    2 => pipeline.add_stage(Upsample2x::new(transform_data, c)),
+                    4 => pipeline.add_stage(Upsample4x::new(transform_data, c)),
+                    8 => pipeline.add_stage(Upsample8x::new(transform_data, c)),
+                    _ => unreachable!(),
+                }?;
+            }
+        }
 
         if frame_header.has_noise() {
             pipeline = pipeline
@@ -592,7 +603,7 @@ impl Frame {
                 pipeline = pipeline.add_stage(SaveStage::<f32>::new(
                     SaveStageType::Reference,
                     i,
-                    frame_header.size(),
+                    frame_header.size_upsampled(),
                     1.0,
                 )?)?;
             }
@@ -625,7 +636,7 @@ impl Frame {
                 pipeline = pipeline.add_stage(SaveStage::<f32>::new(
                     SaveStageType::Output,
                     i,
-                    frame_header.size(),
+                    frame_header.size_upsampled(),
                     255.0,
                 )?)?;
             }

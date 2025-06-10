@@ -96,7 +96,7 @@ mod test {
 
         let stage = GaborishStage::new(0, 0.115169525, 0.061248592);
         let (_, output) =
-            make_and_run_simple_pipeline::<_, f32, f32>(stage, &[image], (2, 2), 256)?;
+            make_and_run_simple_pipeline::<_, f32, f32>(stage, &[image], (2, 2), 0, 256)?;
         let output = output[0].as_rect();
 
         assert_all_almost_eq!(output.row(0), &[0.20686048, 0.7931395], 1e-6);

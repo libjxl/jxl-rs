@@ -107,7 +107,12 @@ pub trait RenderPipelineStage: Any + std::fmt::Display {
 
 pub trait RenderPipelineBuilder: Sized {
     type RenderPipeline: RenderPipeline;
-    fn new(num_channels: usize, size: (usize, usize), log_group_size: usize) -> Self;
+    fn new(
+        num_channels: usize,
+        size: (usize, usize),
+        downsampling_shift: usize,
+        log_group_size: usize,
+    ) -> Self;
     fn add_stage<Stage: RenderPipelineStage>(self, stage: Stage) -> Result<Self>;
     fn build(self) -> Result<Self::RenderPipeline>;
 }

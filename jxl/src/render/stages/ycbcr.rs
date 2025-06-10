@@ -110,6 +110,7 @@ mod test {
             stage,
             &[input_cb, input_y, input_cr],
             (3, 1),
+            0,
             256,
         )?
         .1;

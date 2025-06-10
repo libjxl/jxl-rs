@@ -81,10 +81,14 @@ impl<T: ImageDataType + std::ops::Mul<Output = T>> RenderPipelineStage for SaveS
         c == self.channel
     }
 
-    fn process_row_chunk(&mut self, position: (usize, usize), xsize: usize, row: &mut [&[T]]) {
+    fn process_row_chunk(&mut self, position: (usize, usize), mut xsize: usize, row: &mut [&[T]]) {
         let input = &mut row[0];
         // TODO(veluca): consider making `process_row_chunk` return a Result.
         let mut outbuf = self.buf.as_rect_mut();
+        if position.1 >= outbuf.size().1 {
+            return;
+        }
+        xsize = xsize.min(outbuf.size().0 - position.0);
         let mut outbuf = outbuf
             .rect(Rect {
                 origin: position,

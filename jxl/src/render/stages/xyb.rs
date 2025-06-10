@@ -133,6 +133,7 @@ mod test {
             stage,
             &[input_x, input_y, input_b],
             (3, 1),
+            0,
             256,
         )?
         .1;

@@ -146,7 +146,7 @@ mod test {
         let input = Image::new_constant(input_size, val)?;
         let stage = Upsample2x::new(&ups_factors(), 0);
         let output: Vec<Image<f32>> =
-            make_and_run_simple_pipeline(stage, &[input], image_size, 123)?.1;
+            make_and_run_simple_pipeline(stage, &[input], image_size, 0, 123)?.1;
         for x in 0..image_size.0 {
             for y in 0..image_size.1 {
                 assert_almost_eq!(output[0].as_rect().row(y)[x], val, 0.0000001);
@@ -163,7 +163,7 @@ mod test {
         let input = Image::new_constant(input_size, val)?;
         let stage = Upsample4x::new(&ups_factors(), 0);
         let output: Vec<Image<f32>> =
-            make_and_run_simple_pipeline(stage, &[input], image_size, 123)?.1;
+            make_and_run_simple_pipeline(stage, &[input], image_size, 0, 123)?.1;
         for x in 0..image_size.0 {
             for y in 0..image_size.1 {
                 assert_almost_eq!(output[0].as_rect().row(y)[x], val, 0.00001);
@@ -180,7 +180,7 @@ mod test {
         let input = Image::new_constant(input_size, val)?;
         let stage = Upsample8x::new(&ups_factors(), 0);
         let output: Vec<Image<f32>> =
-            make_and_run_simple_pipeline(stage, &[input], image_size, 123)?.1;
+            make_and_run_simple_pipeline(stage, &[input], image_size, 0, 123)?.1;
         for x in 0..image_size.0 {
             for y in 0..image_size.1 {
                 assert_almost_eq!(output[0].as_rect().row(y)[x], val, 0.00001);
@@ -198,7 +198,7 @@ mod test {
         let ups_factors = ups_factors();
         let stage = Upsample2x::new(&ups_factors, 0);
         let output: Vec<Image<f32>> =
-            make_and_run_simple_pipeline(stage, &[input], (14, 14), 77)?.1;
+            make_and_run_simple_pipeline(stage, &[input], (14, 14), 0, 77)?.1;
         assert_eq!(output[0].as_rect().size(), (14, 14));
         // Check we have a border with zeros
         for i in 0..14 {
@@ -249,7 +249,7 @@ mod test {
         let ups_factors = ups_factors();
         let stage = Upsample4x::new(&ups_factors, 0);
         let output: Vec<Image<f32>> =
-            make_and_run_simple_pipeline(stage, &[input], (28, 28), 1024)?.1;
+            make_and_run_simple_pipeline(stage, &[input], (28, 28), 0, 1024)?.1;
 
         assert_eq!(output[0].as_rect().size(), (28, 28));
 
@@ -336,7 +336,7 @@ mod test {
         let ups_factors = ups_factors();
         let stage = Upsample8x::new(&ups_factors, 0);
         let output: Vec<Image<f32>> =
-            make_and_run_simple_pipeline(stage, &[input], (56, 56), 1024)?.1;
+            make_and_run_simple_pipeline(stage, &[input], (56, 56), 0, 1024)?.1;
 
         assert_eq!(output[0].as_rect().size(), (56, 56));
 

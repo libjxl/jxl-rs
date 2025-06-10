@@ -156,7 +156,8 @@ mod test {
     fn convolve_noise_process_row_chunk() -> Result<()> {
         let input: Image<f32> = Image::new_range((2, 2), 0.0, 1.0)?;
         let stage = ConvolveNoiseStage::new(0);
-        let output: Vec<Image<f32>> = make_and_run_simple_pipeline(stage, &[input], (2, 2), 256)?.1;
+        let output: Vec<Image<f32>> =
+            make_and_run_simple_pipeline(stage, &[input], (2, 2), 0, 256)?.1;
         let rect = output[0].as_rect();
         assert_almost_eq!(rect.row(0)[0], 7.2, 1e-6);
         assert_almost_eq!(rect.row(0)[1], 2.4, 1e-6);
@@ -197,6 +198,7 @@ mod test {
             stage,
             &[input_c0, input_c1, input_c2, input_c3, input_c4, input_c5],
             (xsize, ysize),
+            0,
             256,
         )?
         .1;

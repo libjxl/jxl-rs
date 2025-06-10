@@ -112,7 +112,7 @@ pub fn decode_jxl_codestream(
         if let Some(ref mut callback) = options.frame_callback {
             callback(&frame)?;
         }
-        let frame_size = frame.header().size();
+        let frame_size = frame.header().size_upsampled();
         let result = frame.finalize()?;
         if let Some(channels) = result.channels {
             image_data.frames.push(ImageFrame {
