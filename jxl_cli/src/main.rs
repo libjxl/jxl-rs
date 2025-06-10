@@ -27,12 +27,14 @@ fn save_image(image_data: ImageData<f32>, output_filename: PathBuf) -> Result<()
     let mut output_bytes: Vec<u8> = vec![];
     if fn_str.ends_with(".ppm") {
         if image_data.frames.len() == 1 {
+            assert_eq!(image_data.frames[0].size, image_data.size);
             if let [r, g, b] = &image_data.frames[0].channels[..] {
                 output_bytes = enc::pnm::to_ppm_as_8bit(&[r.as_rect(), g.as_rect(), b.as_rect()]);
             }
         }
     } else if fn_str.ends_with(".pgm") {
         if image_data.frames.len() == 1 {
+            assert_eq!(image_data.frames[0].size, image_data.size);
             if let [g] = &image_data.frames[0].channels[..] {
                 output_bytes = enc::pnm::to_pgm_as_8bit(&g.as_rect());
             }
