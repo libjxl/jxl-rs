@@ -125,7 +125,7 @@ struct PatchTreeNode {
     num: usize,
 }
 
-#[derive(Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct PatchesDictionary {
     pub positions: Vec<PatchPosition>,
     pub ref_positions: Vec<PatchReferencePosition>,
@@ -540,7 +540,7 @@ impl PatchesDictionary {
         row_pos: (usize, usize),
         xsize: usize,
         extra_channel_info: &[ExtraChannelInfo],
-        reference_frames: &[ReferenceFrame],
+        reference_frames: &[Option<ReferenceFrame>],
     ) {
         // TODO(zond): Allocate a buffer for this when building the stage instead of when executing it.
         let mut out = row
@@ -573,30 +573,37 @@ impl PatchesDictionary {
                 continue;
             }
 
-            let (ref_x0, out_x0) = if pos.x < row_pos.0 {
+            let (ref_x0, out_x0, ref_xsize) = if pos.x < row_pos.0 {
                 // if patch starts before current chunk
-                (ref_pos.x0 + row_pos.0 - pos.x, 0) // crop the first part of the patch and use the first part of the chunk
+                // crop the first part of the patch and use the first part of the chunk
+                (
+                    ref_pos.x0 + row_pos.0 - pos.x,
+                    0,
+                    ref_pos.xsize + pos.x - row_pos.0,
+                )
             } else {
                 // otherwise
-                (ref_pos.x0, pos.x - row_pos.0) // use the first part of the patch and crop the first part of the chunk
+                // use the first part of the patch and crop the first part of the chunk
+                (ref_pos.x0, pos.x - row_pos.0, ref_pos.xsize)
             };
-            let (ref_x1, out_x1) = if out[0].len() - out_x0 < ref_pos.xsize {
+            let (ref_x1, out_x1) = if out[0].len() - out_x0 < ref_xsize {
                 // if rest of chunk is smaller than patch
-                (ref_pos.x0 + out[0].len() - out_x0, out[0].len()) // crop the last part of the patch and use the last part of the chunk
+                // crop the last part of the patch and use the last part of the chunk
+                (ref_x0 + out[0].len() - out_x0, out[0].len())
             } else {
                 // otherwise
-                (ref_pos.x0 + ref_pos.xsize, out_x0 + ref_pos.xsize) // use the last part of the patch and crop the last part of the chunk
+                // use the last part of the patch and crop the last part of the chunk
+                (ref_x0 + ref_xsize, out_x0 + ref_xsize)
             };
-
             let ref_pos_y = ref_pos.y0 + row_pos.1 - pos.y;
 
             for (c, fg_ptr) in fg.iter_mut().enumerate().take(3) {
-                *fg_ptr = &(reference_frames[ref_pos.reference].frame[c]
+                *fg_ptr = &(reference_frames[ref_pos.reference].as_ref().unwrap().frame[c]
                     .as_rect()
                     .row(ref_pos_y)[ref_x0..ref_x1]);
             }
             for i in 0..num_ec {
-                fg[3 + i] = &(reference_frames[ref_pos.reference].frame[3 + i]
+                fg[3 + i] = &(reference_frames[ref_pos.reference].as_ref().unwrap().frame[3 + i]
                     .as_rect()
                     .row(ref_pos_y)[ref_x0..ref_x1]);
             }
@@ -1318,7 +1325,7 @@ mod tests {
             width: usize,
             height: usize,
             channel_data: Vec<Vec<f32>>,
-        ) -> Result<ReferenceFrame> {
+        ) -> Result<Option<ReferenceFrame>> {
             let mut frame_channels = Vec::new();
             for data_vec in channel_data {
                 assert_eq!(
@@ -1329,10 +1336,10 @@ mod tests {
                 let img = Image::new_with_data((width, height), data_vec);
                 frame_channels.push(img);
             }
-            Ok(ReferenceFrame {
+            Ok(Some(ReferenceFrame {
                 frame: frame_channels,
                 saved_before_color_transform: true,
-            })
+            }))
         }
 
         #[test]

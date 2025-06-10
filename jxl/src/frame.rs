@@ -34,6 +34,8 @@ use quantizer::LfQuantFactors;
 use quantizer::QuantizerParams;
 use transform_map::HfTransformType;
 
+use std::sync::Arc;
+
 mod block_context_map;
 mod coeff_order;
 pub mod color_correlation_map;
@@ -78,7 +80,7 @@ pub struct HfGlobalState {
     hf_coefficients: Option<(Image<i32>, Image<i32>, Image<i32>)>,
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct ReferenceFrame {
     pub frame: Vec<Image<f32>>,
     pub saved_before_color_transform: bool,
@@ -560,7 +562,14 @@ impl Frame {
 
         // TODO: EC upsampling
 
-        // TODO: patches
+        if frame_header.has_patches() {
+            // TODO(szabadka): Avoid cloning everything.
+            pipeline = pipeline.add_stage(PatchesStage {
+                patches: <Option<PatchesDictionary> as Clone>::clone(&lf_global.patches).unwrap(),
+                extra_channels: metadata.extra_channel_info.clone(),
+                decoder_state: Arc::new(decoder_state.reference_frames.to_vec()),
+            })?
+        }
 
         // TODO: splines
 
@@ -576,6 +585,17 @@ impl Frame {
                     lf_global.color_correlation_params.unwrap_or_default(),
                     num_channels,
                 ))?;
+        }
+
+        if frame_header.can_be_referenced && frame_header.save_before_ct {
+            for i in 0..num_channels {
+                pipeline = pipeline.add_stage(SaveStage::<f32>::new(
+                    SaveStageType::Reference,
+                    i,
+                    frame_header.size(),
+                    1.0,
+                )?)?;
+            }
         }
 
         if frame_header.do_ycbcr {
@@ -600,8 +620,15 @@ impl Frame {
 
         // TODO: spot colors
 
-        for i in 0..num_channels {
-            pipeline = pipeline.add_stage(SaveStage::<f32>::new(i, frame_header.size(), 255.0)?)?;
+        if frame_header.is_visible() {
+            for i in 0..num_channels {
+                pipeline = pipeline.add_stage(SaveStage::<f32>::new(
+                    SaveStageType::Output,
+                    i,
+                    frame_header.size(),
+                    255.0,
+                )?)?;
+            }
         }
         pipeline.build()
     }
@@ -715,26 +742,37 @@ impl Frame {
     }
 
     pub fn finalize(mut self) -> Result<FrameOutput> {
-        let frame_data: Vec<_> = self
+        let mut output_frame_data = Vec::<Image<f32>>::new();
+        let mut reference_frame_data = Vec::<Image<f32>>::new();
+
+        for stage in self
             .render_pipeline
             .unwrap()
             .into_stages()
             .into_iter()
-            .filter_map(|x| x.downcast().ok())
-            .map(|stage_box: Box<SaveStage<f32>>| stage_box.into_buffer())
-            .collect();
+            .filter_map(|x| x.downcast::<SaveStage<f32>>().ok())
+        {
+            match stage.stage_type {
+                SaveStageType::Output => {
+                    output_frame_data.push(stage.into_buffer());
+                }
+                SaveStageType::Reference => {
+                    reference_frame_data.push(stage.into_buffer());
+                }
+            }
+        }
 
         if self.header.can_be_referenced {
             info!("Saving frame in slot {}", self.header.save_as_reference);
             self.decoder_state.reference_frames[self.header.save_as_reference as usize] =
                 Some(ReferenceFrame {
-                    frame: frame_data.clone(),
+                    frame: reference_frame_data,
                     saved_before_color_transform: self.header.save_before_ct,
                 });
         }
 
         let channels = if self.header.is_visible() {
-            Some(frame_data)
+            Some(output_frame_data)
         } else {
             None
         };
