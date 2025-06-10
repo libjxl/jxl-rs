@@ -222,7 +222,7 @@ pub enum Error {
     InputReadFailure,
     #[error("Failed to write output file")]
     OutputWriteFailure,
-    #[error("Output format not supported: try .ppm, .pgm or .npy")]
+    #[error("Output format not supported: try .ppm, .pgm, .png or .npy")]
     OutputFormatNotSupported,
     #[error("Unknown transfer function for ICC profile")]
     TransferFunctionUnknown,
