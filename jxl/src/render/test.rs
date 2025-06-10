@@ -11,8 +11,10 @@ use crate::{
 use rand::SeedableRng;
 
 use super::{
-    internal::RenderPipelineStageInfo, simple_pipeline::SimpleRenderPipelineBuilder,
-    stages::SaveStage, RenderPipeline, RenderPipelineBuilder, RenderPipelineStage,
+    internal::RenderPipelineStageInfo,
+    simple_pipeline::SimpleRenderPipelineBuilder,
+    stages::{SaveStage, SaveStageType},
+    RenderPipeline, RenderPipelineBuilder, RenderPipelineStage,
 };
 
 pub(super) fn make_and_run_simple_pipeline<
@@ -41,6 +43,7 @@ pub(super) fn make_and_run_simple_pipeline<
     .add_stage(stage)?;
     for i in 0..input_images.len() {
         pipeline = pipeline.add_stage(SaveStage::<OutputT>::new(
+            SaveStageType::Output,
             i,
             final_size,
             OutputT::from_f64(1.0),
