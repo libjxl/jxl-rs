@@ -24,6 +24,7 @@ pub use convert::*;
 pub use from_linear::*;
 pub use gaborish::*;
 pub use noise::*;
+pub use patches::*;
 pub use save::*;
 pub use xyb::*;
 pub use ycbcr::*;

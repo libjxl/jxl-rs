@@ -9,7 +9,13 @@ use crate::{
     render::{RenderPipelineInspectStage, RenderPipelineStage},
 };
 
+pub enum SaveStageType {
+    Output,
+    Reference,
+}
+
 pub struct SaveStage<T: ImageDataType> {
+    pub stage_type: SaveStageType,
     buf: Image<T>,
     channel: usize,
     // TODO(szabadka): Have a fixed scale per data-type and make the datatype conversions do
@@ -19,16 +25,28 @@ pub struct SaveStage<T: ImageDataType> {
 
 #[allow(unused)]
 impl<T: ImageDataType> SaveStage<T> {
-    pub(crate) fn new(channel: usize, size: (usize, usize), scale: T) -> Result<SaveStage<T>> {
+    pub(crate) fn new(
+        stage_type: SaveStageType,
+        channel: usize,
+        size: (usize, usize),
+        scale: T,
+    ) -> Result<SaveStage<T>> {
         Ok(SaveStage {
+            stage_type,
             channel,
             buf: Image::new(size)?,
             scale,
         })
     }
 
-    pub(crate) fn new_with_buffer(channel: usize, img: Image<T>, scale: T) -> SaveStage<T> {
+    pub(crate) fn new_with_buffer(
+        stage_type: SaveStageType,
+        channel: usize,
+        img: Image<T>,
+        scale: T,
+    ) -> SaveStage<T> {
         SaveStage {
+            stage_type,
             channel,
             buf: img,
             scale,
@@ -88,7 +106,7 @@ mod test {
 
     #[test]
     fn save_stage() -> Result<()> {
-        let mut save_stage = SaveStage::<u8>::new(0, (128, 128), 1)?;
+        let mut save_stage = SaveStage::<u8>::new(SaveStageType::Output, 0, (128, 128), 1)?;
         let mut rng = XorShiftRng::seed_from_u64(0);
         let src = Image::<u8>::new_random((128, 128), &mut rng)?;
 

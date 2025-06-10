@@ -14,9 +14,9 @@ use crate::{
 
 #[allow(dead_code)]
 pub struct PatchesStage {
-    patches: PatchesDictionary,
-    extra_channels: Vec<ExtraChannelInfo>,
-    decoder_state: Arc<Vec<ReferenceFrame>>,
+    pub patches: PatchesDictionary,
+    pub extra_channels: Vec<ExtraChannelInfo>,
+    pub decoder_state: Arc<Vec<Option<ReferenceFrame>>>,
 }
 
 impl std::fmt::Display for PatchesStage {
@@ -29,7 +29,7 @@ impl RenderPipelineStage for PatchesStage {
     type Type = RenderPipelineInPlaceStage<f32>;
 
     fn uses_channel(&self, c: usize) -> bool {
-        c < 3
+        c < 3 + self.extra_channels.len()
     }
 
     fn process_row_chunk(
