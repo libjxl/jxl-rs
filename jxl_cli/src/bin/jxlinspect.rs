@@ -266,3 +266,20 @@ fn main() {
         println!("Error parsing JXL codestream: {err}");
     }
 }
+
+#[cfg(test)]
+mod jxl_cli_test {
+    use jxl::error::Error;
+    use jxl_macros::for_each_test_file;
+    use std::path::Path;
+
+    use crate::parse_jxl_codestream;
+
+    fn read_file_from_path(path: &Path) -> Result<(), Error> {
+        let data = std::fs::read(path).unwrap();
+        parse_jxl_codestream(&data, false)?;
+        Ok(())
+    }
+
+    for_each_test_file!(read_file_from_path);
+}
