@@ -6,6 +6,7 @@
 use clap::{Arg, Command};
 use jxl::bit_reader::BitReader;
 use jxl::container::{ContainerParser, ParseEvent};
+use jxl::error::{Error, Result};
 use jxl::frame::{DecoderState, Frame};
 use jxl::headers::color_encoding::{ColorEncoding, Primaries, WhitePoint};
 use jxl::headers::{FileHeader, JxlHeader};
@@ -13,6 +14,7 @@ use jxl::icc::read_icc;
 use std::cmp::Ordering;
 use std::fs;
 use std::io::Read;
+use std::path::Path;
 
 fn print_color_encoding(color_encoding: &ColorEncoding) {
     // Print the color space
@@ -57,7 +59,7 @@ fn print_color_encoding(color_encoding: &ColorEncoding) {
     println!("Rendering intent: {:?}", color_encoding.rendering_intent);
 }
 
-fn parse_jxl_codestream(data: &[u8], verbose: bool) -> Result<(), jxl::error::Error> {
+fn parse_jxl_codestream(data: &[u8], verbose: bool) -> Result<()> {
     let mut br = BitReader::new(data);
     let file_header = FileHeader::read(&mut br)?;
 
@@ -180,6 +182,47 @@ fn parse_jxl_codestream(data: &[u8], verbose: bool) -> Result<(), jxl::error::Er
     Ok(())
 }
 
+fn parse_jxl(filename: &Path, verbose: bool) -> Result<()> {
+    let mut file = match fs::File::open(filename) {
+        Ok(file) => file,
+        Err(err) => return Err(Error::InputReadFailure(err)),
+    };
+    // Set up the container parser and buffers
+    let mut parser = ContainerParser::new();
+    let mut buf = vec![0u8; 4096];
+    let mut buf_valid = 0usize;
+    let mut codestream = Vec::new();
+
+    loop {
+        let chunk_size = match file.read(&mut buf[buf_valid..]) {
+            Ok(l) => l,
+            Err(err) => return Err(Error::InputReadFailure(err)),
+        };
+        if chunk_size == 0 {
+            break;
+        }
+        buf_valid += chunk_size;
+
+        for event in parser.process_bytes(&buf[..buf_valid]) {
+            match event {
+                Ok(ParseEvent::BitstreamKind(kind)) => {
+                    println!("Bitstream kind: {kind:?}");
+                }
+                Ok(ParseEvent::Codestream(data)) => {
+                    codestream.extend_from_slice(data);
+                }
+                Err(err) => return Err(err),
+            }
+        }
+
+        let consumed = parser.previous_consumed_bytes();
+        buf.copy_within(consumed..buf_valid, 0);
+        buf_valid -= consumed;
+    }
+
+    parse_jxl_codestream(&codestream, verbose)
+}
+
 fn main() {
     #[cfg(feature = "tracing-subscriber")]
     {
@@ -207,61 +250,14 @@ fn main() {
         )
         .get_matches();
 
-    let filename = matches.get_one::<String>("filename").unwrap();
+    let filename = Path::new(matches.get_one::<String>("filename").unwrap());
     let verbose = matches.get_flag("verbose");
 
     if verbose {
-        println!("Processing file: {filename}");
+        println!("Processing file: {filename:?}");
     }
 
-    let mut file = match fs::File::open(filename) {
-        Ok(file) => file,
-        Err(err) => {
-            println!("Cannot open file: {err}");
-            return;
-        }
-    };
-
-    // Set up the container parser and buffers
-    let mut parser = ContainerParser::new();
-    let mut buf = vec![0u8; 4096];
-    let mut buf_valid = 0usize;
-    let mut codestream = Vec::new();
-
-    loop {
-        let chunk_size = match file.read(&mut buf[buf_valid..]) {
-            Ok(l) => l,
-            Err(err) => {
-                println!("Cannot read data from file: {err}");
-                return;
-            }
-        };
-        if chunk_size == 0 {
-            break;
-        }
-        buf_valid += chunk_size;
-
-        for event in parser.process_bytes(&buf[..buf_valid]) {
-            match event {
-                Ok(ParseEvent::BitstreamKind(kind)) => {
-                    println!("Bitstream kind: {kind:?}");
-                }
-                Ok(ParseEvent::Codestream(data)) => {
-                    codestream.extend_from_slice(data);
-                }
-                Err(err) => {
-                    println!("Error parsing JXL codestream: {err}");
-                    return;
-                }
-            }
-        }
-
-        let consumed = parser.previous_consumed_bytes();
-        buf.copy_within(consumed..buf_valid, 0);
-        buf_valid -= consumed;
-    }
-
-    let res = parse_jxl_codestream(&codestream, verbose);
+    let res = parse_jxl(filename, verbose);
     if let Err(err) = res {
         println!("Error parsing JXL codestream: {err}");
     }
@@ -273,11 +269,10 @@ mod jxl_cli_test {
     use jxl_macros::for_each_test_file;
     use std::path::Path;
 
-    use crate::parse_jxl_codestream;
+    use crate::parse_jxl;
 
     fn read_file_from_path(path: &Path) -> Result<(), Error> {
-        let data = std::fs::read(path).unwrap();
-        parse_jxl_codestream(&data, false)?;
+        parse_jxl(path, false)?;
         Ok(())
     }
 
