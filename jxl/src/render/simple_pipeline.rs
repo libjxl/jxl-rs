@@ -484,8 +484,12 @@ impl<
             assert_eq!(input_size, input_buffers[c].size());
             assert_eq!(output_size, output_buffers[c].size());
         }
-        assert_eq!(input_size.0 << SHIFT_X, output_size.0);
-        assert_eq!(input_size.1 << SHIFT_Y, output_size.1);
+        debug!(
+            "input_size = {input_size:?} output_size = {output_size:?} SHIFT_X = {SHIFT_X} \
+		SHIFT_Y = {SHIFT_Y} BORDER_X = {BORDER_X} BORDER_Y = {BORDER_Y} numc = {numc}"
+        );
+        assert_eq!(input_size.0, output_size.0.div_ceil(1 << SHIFT_X));
+        assert_eq!(input_size.1, output_size.1.div_ceil(1 << SHIFT_Y));
         let mut buffer_in = vec![
             vec![
                 vec![InputT::default(); chunk_size + BORDER_X as usize * 2];
@@ -537,9 +541,11 @@ impl<
                     .map(|(itin, itout)| (itin as &[_], itout as &mut [_]))
                     .collect();
                 stage.process_row_chunk((x, y), xsize, &mut row);
+                let stripe_xsize = (xsize << SHIFT_X).min(output_size.0 - (x << SHIFT_X));
+                let stripe_ysize = (1usize << SHIFT_Y).min(output_size.1 - (y << SHIFT_Y));
                 for c in 0..numc {
-                    for iy in 0..1usize << SHIFT_Y {
-                        for ix in 0..xsize << SHIFT_X {
+                    for iy in 0..stripe_ysize {
+                        for ix in 0..stripe_xsize {
                             output_buffers[c].as_rect_mut().row((y << SHIFT_Y) + iy)
                                 [(x << SHIFT_X) + ix] = buffer_out[c][iy][ix].to_f64();
                         }

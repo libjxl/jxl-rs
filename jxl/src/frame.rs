@@ -511,7 +511,7 @@ impl Frame {
         let metadata = &decoder_state.file_header.image_metadata;
         let mut pipeline = SimpleRenderPipelineBuilder::new(
             num_channels + num_temp_channels,
-            frame_header.size_padded_upsampled(),
+            frame_header.size_upsampled(),
             frame_header.upsampling.ilog2() as usize,
             frame_header.log_group_dim(),
         );
@@ -561,7 +561,25 @@ impl Frame {
 
         // TODO: EPF
 
-        // TODO: EC upsampling
+        let late_ec_upsample = frame_header.upsampling > 1
+            && frame_header
+                .ec_upsampling
+                .iter()
+                .all(|x| *x == frame_header.upsampling);
+
+        if !late_ec_upsample {
+            let transform_data = &decoder_state.file_header.transform_data;
+            for (ec, ec_up) in frame_header.ec_upsampling.iter().enumerate() {
+                if *ec_up > 1 {
+                    pipeline = match *ec_up {
+                        2 => pipeline.add_stage(Upsample2x::new(transform_data, 3 + ec)),
+                        4 => pipeline.add_stage(Upsample4x::new(transform_data, 3 + ec)),
+                        8 => pipeline.add_stage(Upsample8x::new(transform_data, 3 + ec)),
+                        _ => unreachable!(),
+                    }?;
+                }
+            }
+        }
 
         if frame_header.has_patches() {
             // TODO(szabadka): Avoid cloning everything.
@@ -576,7 +594,12 @@ impl Frame {
 
         if frame_header.upsampling > 1 {
             let transform_data = &decoder_state.file_header.transform_data;
-            for c in 0..3 {
+            let nb_channels = if late_ec_upsample {
+                3 + frame_header.ec_upsampling.len()
+            } else {
+                3
+            };
+            for c in 0..nb_channels {
                 pipeline = match frame_header.upsampling {
                     2 => pipeline.add_stage(Upsample2x::new(transform_data, c)),
                     4 => pipeline.add_stage(Upsample4x::new(transform_data, c)),
