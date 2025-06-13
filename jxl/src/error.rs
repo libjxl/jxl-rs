@@ -218,9 +218,9 @@ pub enum Error {
     EndOfBlockResidualNonZeros(usize),
     #[error("File not found {0}")]
     FileNotFound(PathBuf),
-    #[error("Failed to read input file")]
-    InputReadFailure,
-    #[error("Failed to write output file")]
+    #[error("Failed to read input file: {0}")]
+    InputReadFailure(std::io::Error),
+    #[error("Output format not supported: try .ppm, .pgm, .png or .npy")]
     OutputWriteFailure,
     #[error("Output format not supported: try .ppm, .pgm, .png or .npy")]
     OutputFormatNotSupported,

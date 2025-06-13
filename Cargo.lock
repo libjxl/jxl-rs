@@ -351,6 +351,7 @@ dependencies = [
  "clap",
  "half",
  "jxl",
+ "jxl_macros",
  "lcms2",
  "png",
  "tracing-subscriber",
