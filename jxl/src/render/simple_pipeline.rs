@@ -263,8 +263,8 @@ impl SimpleRenderPipeline {
                 current_size = stage.new_size(current_size);
                 for (c, info) in self.channel_info[i + 1].iter().enumerate() {
                     if stage.uses_channel(c) {
-                        let xsize = current_size.0 << info.downsample.0;
-                        let ysize = current_size.1 << info.downsample.1;
+                        let xsize = current_size.0.shrc(info.downsample.0);
+                        let ysize = current_size.1.shrc(info.downsample.1);
                         debug!("reallocating channel {c} to new size {xsize}x{ysize}");
                         output_buffers[c] = Image::new((xsize, ysize))?;
                     }
