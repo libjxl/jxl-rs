@@ -100,7 +100,7 @@ pub trait RenderPipelineStage: Any + std::fmt::Display {
 
     /// Returns the origin of the original image data in the output of this stage.
     /// Should be implemented by `RenderPipelineExtendStage` stages.
-    fn original_data_origin(&self) -> (usize, usize) {
+    fn original_data_origin(&self) -> (isize, isize) {
         (0, 0)
     }
 }

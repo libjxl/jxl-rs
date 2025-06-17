@@ -30,11 +30,15 @@ fn encode_png(image_data: ImageData<f32>, buf: &mut Vec<u8>) -> Result<()> {
     let (width, height) = size;
     let num_channels = image_data.frames[0].channels.len();
 
-    for frame in &image_data.frames {
-        assert_eq!(frame.size, size);
-        assert_eq!(frame.channels.len(), num_channels);
-        for channel in &frame.channels {
-            assert_eq!(channel.size(), size);
+    for (i, frame) in image_data.frames.iter().enumerate() {
+        assert_eq!(frame.size, size, "Frame {i} size mismatch");
+        assert_eq!(
+            frame.channels.len(),
+            num_channels,
+            "Frame {i} num channels mismatch"
+        );
+        for (c, channel) in frame.channels.iter().enumerate() {
+            assert_eq!(channel.size(), size, "Frame {i} channel {c} size mismatch");
         }
     }
 
@@ -42,18 +46,24 @@ fn encode_png(image_data: ImageData<f32>, buf: &mut Vec<u8>) -> Result<()> {
     let mut encoder = png::Encoder::new(w, width as u32, height as u32);
     encoder.set_color(png_color(num_channels)?);
     encoder.set_depth(png::BitDepth::Eight);
+    if image_data.frames.len() > 1 {
+        // TODO(szabadka): Handle error.
+        let _ = encoder.set_animated(image_data.frames.len() as u32, 0);
+    }
     let mut writer = encoder.write_header().unwrap();
     let num_pixels = height * width * num_channels;
     let mut data: Vec<u8> = vec![0; num_pixels];
-    for y in 0..height {
-        for x in 0..width {
-            for c in 0..num_channels {
-                data[(y * width + x) * num_channels + c] =
-                    image_data.frames[0].channels[c].as_rect().row(y)[x].clamp(0.0, 255.0) as u8;
+    for frame in image_data.frames {
+        for y in 0..height {
+            for x in 0..width {
+                for c in 0..num_channels {
+                    data[(y * width + x) * num_channels + c] =
+                        frame.channels[c].as_rect().row(y)[x].clamp(0.0, 255.0) as u8;
+                }
             }
         }
+        writer.write_image_data(&data).unwrap();
     }
-    writer.write_image_data(&data).unwrap();
     Ok(())
 }
 
