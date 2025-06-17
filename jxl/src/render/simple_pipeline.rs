@@ -577,23 +577,40 @@ impl<T: ImageDataType> RenderPipelineRunStage for RenderPipelineExtendStage<T> {
             assert_eq!(output_size, output_buffers[c].size());
         }
         assert_eq!(output_size, stage.new_size(input_size));
-        // First, copy the data in the middle.
         let origin = stage.original_data_origin();
+        assert!(origin.0 <= output_size.0 as isize);
+        assert!(origin.1 <= output_size.1 as isize);
+        assert!(origin.0 + input_size.0 as isize >= 0);
+        assert!(origin.1 + input_size.1 as isize >= 0);
+        let origin = stage.original_data_origin();
+        debug!("input_size = {input_size:?} output_size = {output_size:?} origin = {origin:?}");
+        // Compute the input rectangle
+        let x0 = origin.0.max(0) as usize;
+        let y0 = origin.1.max(0) as usize;
+        let x1 = (origin.0 + input_size.0 as isize).min(output_size.0 as isize) as usize;
+        let y1 = (origin.1 + input_size.1 as isize).min(output_size.1 as isize) as usize;
+        debug!("x0 = {x0} x1 = {x1} y0 = {y0} y1 = {y1}");
+        let in_x0 = (x0 as isize - origin.0) as usize;
+        let in_x1 = (x1 as isize - origin.0) as usize;
+        let in_y0 = (y0 as isize - origin.1) as usize;
+        let in_y1 = (y1 as isize - origin.1) as usize;
+        debug!("in_x0 = {in_x0} in_x1 = {in_x1} in_y0 = {in_y0} in_y1 = {in_y1}");
+        // First, copy the data in the middle.
         for c in 0..numc {
-            for y in 0..input_size.1 {
-                debug!("copy row: {y}");
-                let in_row = input_buffers[c].as_rect().row(y);
-                output_buffers[c].as_rect_mut().row(origin.1 + y)
-                    [origin.0..origin.0 + in_row.len()]
-                    .copy_from_slice(in_row);
+            for in_y in in_y0..in_y1 {
+                debug!("copy row: {in_y}");
+                let in_row = input_buffers[c].as_rect().row(in_y);
+                let y = (in_y as isize + origin.1) as usize;
+                output_buffers[c].as_rect_mut().row(y)[x0..x1]
+                    .copy_from_slice(&in_row[in_x0..in_x1]);
             }
         }
         // Fill in rows above and below the original data.
         let mut buffer = vec![vec![T::default(); chunk_size]; numc];
-        for y in (0..origin.1).chain(origin.1 + input_size.1..output_size.1) {
+        for y in (0..y0).chain(y1..output_size.1) {
             for x in (0..output_size.0).step_by(chunk_size) {
                 let xsize = output_size.0.min(x + chunk_size) - x;
-                debug!("position above/below: {x}x{y} xsize: {xsize}");
+                debug!("position above/below: ({x},{y}) xsize: {xsize}");
                 let mut row: Vec<_> = buffer.iter_mut().map(|x| x as &mut [T]).collect();
                 stage.process_row_chunk((x, y), xsize, &mut row);
                 for c in 0..numc {
@@ -604,18 +621,18 @@ impl<T: ImageDataType> RenderPipelineRunStage for RenderPipelineExtendStage<T> {
             }
         }
         // Fill in left and right of the original data.
-        for y in origin.1..origin.1 + input_size.1 {
-            for (x, xsize) in (0..output_size.0)
+        for y in y0..y1 {
+            for (x, xsize) in (0..x0)
                 .step_by(chunk_size)
-                .map(|x| (x, origin.0.min(x + chunk_size) - x))
+                .map(|x| (x, x0.min(x + chunk_size) - x))
                 .chain(
-                    (origin.0 + input_size.0..output_size.0)
+                    (x1..output_size.0)
                         .step_by(chunk_size)
                         .map(|x| (x, output_size.0.min(x + chunk_size) - x)),
                 )
             {
                 let mut row: Vec<_> = buffer.iter_mut().map(|x| x as &mut [T]).collect();
-                debug!("position on the side: {x}x{y} xsize: {xsize}");
+                debug!("position on the side: ({x},{y}) xsize: {xsize}");
                 stage.process_row_chunk((x, y), xsize, &mut row);
                 for c in 0..numc {
                     for ix in 0..xsize {

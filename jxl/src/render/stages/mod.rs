@@ -3,9 +3,11 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
+mod blending;
 mod chroma_upsample;
 mod convert;
 mod epf;
+mod extend;
 mod from_linear;
 mod gaborish;
 mod nearest_neighbor;
@@ -19,8 +21,10 @@ mod upsample;
 mod xyb;
 mod ycbcr;
 
+pub use blending::*;
 pub use chroma_upsample::*;
 pub use convert::*;
+pub use extend::*;
 pub use from_linear::*;
 pub use gaborish::*;
 pub use noise::*;

@@ -93,7 +93,7 @@ impl Passes {
 }
 
 #[derive(UnconditionalCoder, Copy, Clone, PartialEq, Debug, FromPrimitive)]
-enum BlendingMode {
+pub enum BlendingMode {
     Replace = 0,
     Add = 1,
     Blend = 2,
@@ -102,17 +102,17 @@ enum BlendingMode {
 }
 
 #[derive(Default)]
-struct BlendingInfoNonserialized {
+pub struct BlendingInfoNonserialized {
     num_extra_channels: u32,
     full_frame: bool,
 }
 
 #[derive(UnconditionalCoder, Debug, PartialEq, Clone)]
 #[nonserialized(BlendingInfoNonserialized)]
-struct BlendingInfo {
+pub struct BlendingInfo {
     #[coder(u2S(0, 1, 2, Bits(2) + 3))]
     #[default(BlendingMode::Replace)]
-    mode: BlendingMode,
+    pub mode: BlendingMode,
 
     /* Spec: "Let multi_extra be true if and only if and the number of extra channels is at least two."
     libjxl condition is num_extra_channels > 0 */
@@ -120,18 +120,18 @@ struct BlendingInfo {
     #[default(0)]
     #[condition(nonserialized.num_extra_channels > 0 &&
         (mode == BlendingMode::Blend || mode == BlendingMode::AlphaWeightedAdd))]
-    alpha_channel: u32,
+    pub alpha_channel: u32,
 
     #[default(false)]
     #[condition(nonserialized.num_extra_channels > 0 &&
         (mode == BlendingMode::Blend || mode == BlendingMode::AlphaWeightedAdd || mode == BlendingMode::Mul))]
-    clamp: bool,
+    pub clamp: bool,
 
     #[coder(u2S(0, 1, 2, 3))]
     #[default(0)]
     // This condition is called `resets_canvas` in the spec
     #[condition(!(nonserialized.full_frame && mode == BlendingMode::Replace))]
-    source: u32,
+    pub source: u32,
 }
 
 pub struct RestorationFilterNonserialized {
@@ -380,13 +380,13 @@ pub struct FrameHeader {
     #[default(BlendingInfo::default(&field_nonserialized))]
     #[condition(frame_type == FrameType::RegularFrame || frame_type == FrameType::SkipProgressive)]
     #[nonserialized(num_extra_channels : nonserialized.num_extra_channels, full_frame : full_frame)]
-    blending_info: BlendingInfo,
+    pub blending_info: BlendingInfo,
 
     #[size_coder(explicit(nonserialized.num_extra_channels))]
     #[condition(frame_type == FrameType::RegularFrame || frame_type == FrameType::SkipProgressive)]
     #[default_element(BlendingInfo::default(&field_nonserialized))]
     #[nonserialized(num_extra_channels : nonserialized.num_extra_channels, full_frame: full_frame)]
-    ec_blending_info: Vec<BlendingInfo>,
+    pub ec_blending_info: Vec<BlendingInfo>,
 
     #[coder(u2S(0, 1, Bits(8), Bits(32)))]
     #[default(0)]
@@ -554,6 +554,20 @@ impl FrameHeader {
                 || self.frame_type == FrameType::SkipProgressive)
     }
 
+    pub fn needs_blending(&self) -> bool {
+        if !(self.frame_type == FrameType::RegularFrame
+            || self.frame_type == FrameType::SkipProgressive)
+        {
+            return false;
+        }
+        let replace_all = self.blending_info.mode == BlendingMode::Replace
+            && self
+                .ec_blending_info
+                .iter()
+                .all(|x| x.mode == BlendingMode::Replace);
+        self.have_crop || !replace_all
+    }
+
     /// The dimensions of this frame, as coded in the codestream, excluding padding pixels.
     pub fn size(&self) -> (usize, usize) {
         let (width, height) = self.size_upsampled();
@@ -705,13 +719,13 @@ impl FrameHeader {
 #[cfg(test)]
 mod test_frame_header {
     use super::*;
-    use crate::util::test::read_frame_header_and_toc;
+    use crate::util::test::read_headers_and_toc;
     use test_log::test;
 
     #[test]
     fn test_basic() {
-        let (frame_header, toc) =
-            read_frame_header_and_toc(include_bytes!("../../resources/test/basic.jxl")).unwrap();
+        let (_, frame_header, toc) =
+            read_headers_and_toc(include_bytes!("../../resources/test/basic.jxl")).unwrap();
         assert_eq!(frame_header.frame_type, FrameType::RegularFrame);
         assert_eq!(frame_header.encoding, Encoding::VarDCT);
         assert_eq!(frame_header.flags, 0);
@@ -735,9 +749,9 @@ mod test_frame_header {
     #[test]
     fn test_extra_channel() {
         let frame_header =
-            read_frame_header_and_toc(include_bytes!("../../resources/test/extra_channels.jxl"))
+            read_headers_and_toc(include_bytes!("../../resources/test/extra_channels.jxl"))
                 .unwrap()
-                .0;
+                .1;
         assert_eq!(frame_header.frame_type, FrameType::RegularFrame);
         assert_eq!(frame_header.encoding, Encoding::Modular);
         assert_eq!(frame_header.flags, 0);
@@ -756,8 +770,8 @@ mod test_frame_header {
 
     #[test]
     fn test_has_permutation() {
-        let (frame_header, toc) =
-            read_frame_header_and_toc(include_bytes!("../../resources/test/has_permutation.jxl"))
+        let (_, frame_header, toc) =
+            read_headers_and_toc(include_bytes!("../../resources/test/has_permutation.jxl"))
                 .unwrap();
         assert_eq!(frame_header.frame_type, FrameType::RegularFrame);
         assert_eq!(frame_header.encoding, Encoding::VarDCT);

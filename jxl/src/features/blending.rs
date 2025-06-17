@@ -208,7 +208,7 @@ pub fn perform_blending<T: AsRef<[f32]>, V: AsMut<[f32]>>(
     for i in 0..num_ec {
         match ec_blending[i].mode {
             PatchBlendMode::Add => {
-                for x in 0..tmp.len() {
+                for x in 0..tmp[3 + i].len() {
                     tmp[3 + i][x] = bg[3 + i].as_ref()[x] + fg[3 + i].as_ref()[x];
                 }
             }

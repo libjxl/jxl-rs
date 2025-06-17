@@ -632,6 +632,7 @@ impl Frame {
             }
         }
 
+        let mut linear = false;
         if frame_header.do_ycbcr {
             pipeline = pipeline.add_stage(YcbcrToLinearSrgbStage::new(0))?;
         } else if decoder_state.file_header.image_metadata.xyb_encoded {
@@ -645,12 +646,45 @@ impl Frame {
                 opsin.clone(),
                 intensity_target,
             ))?;
-            if !decoder_state.xyb_output_linear {
+            if decoder_state.xyb_output_linear {
+                linear = true;
+            } else {
                 pipeline = pipeline.add_stage(FromLinearStage::new(0, TransferFunction::Srgb))?;
             }
         }
 
-        // TODO: blending
+        if frame_header.needs_blending() {
+            if linear {
+                pipeline = pipeline.add_stage(FromLinearStage::new(0, TransferFunction::Srgb))?;
+                linear = false;
+            }
+            pipeline = pipeline.add_stage(BlendingStage::new(
+                frame_header,
+                &decoder_state.file_header,
+                &decoder_state.reference_frames,
+            )?)?;
+            pipeline = pipeline.add_stage(ExtendToImageDimensionsStage::new(
+                frame_header,
+                &decoder_state.file_header,
+                &decoder_state.reference_frames,
+            )?)?;
+        }
+        let image_size = &decoder_state.file_header.size;
+        let image_size = (image_size.xsize() as usize, image_size.ysize() as usize);
+
+        if frame_header.can_be_referenced && !frame_header.save_before_ct {
+            if linear {
+                pipeline = pipeline.add_stage(FromLinearStage::new(0, TransferFunction::Srgb))?;
+            }
+            for i in 0..num_channels {
+                pipeline = pipeline.add_stage(SaveStage::<f32>::new(
+                    SaveStageType::Reference,
+                    i,
+                    image_size,
+                    1.0,
+                )?)?;
+            }
+        }
 
         // TODO: spot colors
 
@@ -659,7 +693,7 @@ impl Frame {
                 pipeline = pipeline.add_stage(SaveStage::<f32>::new(
                     SaveStageType::Output,
                     i,
-                    frame_header.size_upsampled(),
+                    image_size,
                     255.0,
                 )?)?;
             }
