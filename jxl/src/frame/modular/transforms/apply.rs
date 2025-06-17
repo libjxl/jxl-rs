@@ -339,8 +339,10 @@ fn meta_apply_single_transform(
             ];
             for i in 0..3 {
                 let c = &mut channels[begin_channel + i];
+                let mut info = c.1;
+                info.output_channel_idx = -1;
                 c.0 = add_transform_buffer(
-                    c.1,
+                    info,
                     format!(
                         "RCT (op {op:?} perm {perm:?}) starting at channel {begin_channel}, \
 			 input {i}"
@@ -456,8 +458,10 @@ fn meta_apply_single_transform(
 		     {num_channels} channels"
                 ),
             );
+            let mut inchan_info = channels[begin_channel].1;
+            inchan_info.output_channel_idx = -1;
             let inchan = add_transform_buffer(
-                channels[begin_channel].1,
+                inchan_info,
                 format!(
                     "Pixel data for palette transform starting at channel {begin_channel} with \
 		     {num_channels} channels",
