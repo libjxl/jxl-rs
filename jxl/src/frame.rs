@@ -779,19 +779,19 @@ impl Frame {
         let mut output_frame_data = Vec::<Image<f32>>::new();
         let mut reference_frame_data = Vec::<Image<f32>>::new();
 
-        for stage in self
-            .render_pipeline
-            .unwrap()
-            .into_stages()
-            .into_iter()
-            .filter_map(|x| x.downcast::<SaveStage<f32>>().ok())
-        {
-            match stage.stage_type {
-                SaveStageType::Output => {
-                    output_frame_data.push(stage.into_buffer());
-                }
-                SaveStageType::Reference => {
-                    reference_frame_data.push(stage.into_buffer());
+        if let Some(render_pipeline) = self.render_pipeline {
+            for stage in render_pipeline
+                .into_stages()
+                .into_iter()
+                .filter_map(|x| x.downcast::<SaveStage<f32>>().ok())
+            {
+                match stage.stage_type {
+                    SaveStageType::Output => {
+                        output_frame_data.push(stage.into_buffer());
+                    }
+                    SaveStageType::Reference => {
+                        reference_frame_data.push(stage.into_buffer());
+                    }
                 }
             }
         }
