@@ -95,8 +95,7 @@ fn main() -> Result<(), Error> {
         let chunk_size = match file.read(&mut buf[buf_valid..]) {
             Ok(l) => l,
             Err(err) => {
-                println!("Cannot read data from file: {err}");
-                return Err(Error::InputReadFailure);
+                return Err(Error::InputReadFailure(err));
             }
         };
         if chunk_size == 0 {
