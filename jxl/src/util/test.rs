@@ -95,7 +95,7 @@ macro_rules! assert_all_almost_eq {
     };
 }
 
-pub fn read_frame_header_and_toc(image: &[u8]) -> Result<(FrameHeader, Toc), JXLError> {
+pub fn read_headers_and_toc(image: &[u8]) -> Result<(FileHeader, FrameHeader, Toc), JXLError> {
     let codestream = ContainerParser::collect_codestream(image).unwrap();
     let mut br = BitReader::new(&codestream);
     let file_header = FileHeader::read(&mut br)?;
@@ -110,7 +110,7 @@ pub fn read_frame_header_and_toc(image: &[u8]) -> Result<(FrameHeader, Toc), JXL
             num_entries: num_toc_entries as u32,
         },
     )?;
-    Ok((frame_header, toc))
+    Ok((file_header, frame_header, toc))
 }
 
 pub fn write_pfm(image: Vec<Image<f32>>, mut buf: impl Write) -> Result<(), Error> {
