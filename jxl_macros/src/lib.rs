@@ -79,7 +79,7 @@ fn parse_single_coder(input: &syn::Expr, extra_lit: Option<&syn::ExprLit>) -> To
     }
 }
 
-fn parse_coder(input: syn::Expr) -> TokenStream2 {
+fn parse_coder(input: &syn::Expr) -> TokenStream2 {
     let parse_u2s = |expr_call: &syn::ExprCall, lit: Option<&syn::ExprLit>| {
         if let syn::Expr::Path(ep) = &*expr_call.func {
             if !ep.path.is_ident("u2S") {
@@ -145,7 +145,7 @@ fn parse_size_coder(mut input: syn::Expr) -> TokenStream2 {
             match &**func {
                 syn::Expr::Path(expr_path) if expr_path.path.is_ident("implicit") => {
                     let arg = args.first().unwrap().clone();
-                    parse_coder(arg)
+                    parse_coder(&arg)
                 }
                 syn::Expr::Path(expr_path) if expr_path.path.is_ident("explicit") => {
                     quote! { U32Coder::Direct(U32::Val(#args)) }
@@ -293,7 +293,7 @@ impl Field {
                     }
                     let coder_ast = a.parse_args::<syn::Expr>().unwrap();
                     coder = Some(Coder::U32(U32 {
-                        coder: parse_coder(coder_ast),
+                        coder: parse_coder(&coder_ast),
                     }));
                 }
                 Some("default") => {
@@ -350,7 +350,7 @@ impl Field {
                     }
                     let coder_ast = a.parse_args::<syn::Expr>().unwrap();
                     coder_false = Some(U32 {
-                        coder: parse_coder(coder_ast),
+                        coder: parse_coder(&coder_ast),
                     });
                 }
                 Some("coder_true") => {
@@ -359,7 +359,7 @@ impl Field {
                     }
                     let coder_ast = a.parse_args::<syn::Expr>().unwrap();
                     coder_true = Some(U32 {
-                        coder: parse_coder(coder_ast),
+                        coder: parse_coder(&coder_ast),
                     });
                 }
                 Some("size_coder") => {
@@ -540,7 +540,7 @@ impl Field {
     }
 }
 
-fn derive_struct(input: DeriveInput) -> TokenStream2 {
+fn derive_struct(input: &DeriveInput) -> TokenStream2 {
     let name = &input.ident;
 
     let validate = input.attrs.iter().any(|a| a.path().is_ident("validate"));
@@ -645,7 +645,7 @@ fn derive_struct(input: DeriveInput) -> TokenStream2 {
     }
 }
 
-fn derive_enum(input: DeriveInput) -> TokenStream2 {
+fn derive_enum(input: &DeriveInput) -> TokenStream2 {
     let name = &input.ident;
     quote! {
         impl crate::headers::encodings::UnconditionalCoder<U32Coder> for #name {
@@ -695,8 +695,8 @@ pub fn derive_jxl_headers(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as DeriveInput);
 
     match &input.data {
-        syn::Data::Struct(_) => derive_struct(input).into(),
-        syn::Data::Enum(_) => derive_enum(input).into(),
+        syn::Data::Struct(_) => derive_struct(&input).into(),
+        syn::Data::Enum(_) => derive_enum(&input).into(),
         _ => abort!(input, "Only implemented for struct"),
     }
 }
