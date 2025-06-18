@@ -163,11 +163,11 @@ jobs:
 
     - name: Run jxl-rs conformance tests wrapped in PNG
       id: png_conformance
-      run: python3 ./bench/third_party/conformance/scripts/conformance.py --decoder "python3 ${GITHUB_WORKSPACE}/bench/scripts/wrap_png.py --decoder ' ${GITHUB_WORKSPACE}/bench/third_party/jxl-rs/target/release/jxl_cli %s %s '" --corpus ${GITHUB_WORKSPACE}/bench/third_party/conformance/testcases/main_level5.txt --results=${GITHUB_WORKSPACE}/bench/docs/dumps/dump_jxl-rs-via-png.json --lax
+      run: python3 ./bench/third_party/conformance/scripts/conformance.py --decoder "python3 ${GITHUB_WORKSPACE}/bench/scripts/wrap_png.py --decoder ' ${GITHUB_WORKSPACE}/bench/third_party/jxl-rs/target/release/jxl_cli %s %s '" --corpus ${GITHUB_WORKSPACE}/bench/third_party/conformance/testcases/main_level5.txt --results=${GITHUB_WORKSPACE}/bench/docs/dumps/dump_jxl-rs_via_png.json --lax
       continue-on-error: true
 
     - name: Export step summary
-      run: ./ci/conformance_summary.py "${GITHUB_WORKSPACE}/bench/docs/dumps/dump_jxl-rs.json" "${GITHUB_WORKSPACE}/bench/docs/dumps/dump_jxl-rs-via-png.json" >> $GITHUB_STEP_SUMMARY
+      run: ./ci/conformance_summary.py "${GITHUB_WORKSPACE}/bench/docs/dumps/dump_jxl-rs.json" "${GITHUB_WORKSPACE}/bench/docs/dumps/dump_jxl-rs_via_png.json" >> $GITHUB_STEP_SUMMARY
 
     - name: Merge conformance report HTML
       run: ./ci/merge_conformance_report.py "${GITHUB_WORKSPACE}/bench/docs" >> conformance_report.html
