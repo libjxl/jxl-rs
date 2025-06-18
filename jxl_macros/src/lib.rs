@@ -83,7 +83,7 @@ fn parse_coder(input: &syn::Expr) -> TokenStream2 {
     let parse_u2s = |expr_call: &syn::ExprCall, lit: Option<&syn::ExprLit>| {
         if let syn::Expr::Path(ep) = &*expr_call.func {
             if !ep.path.is_ident("u2S") {
-                let coder = parse_single_coder(&input, None);
+                let coder = parse_single_coder(input, None);
                 return quote! {U32Coder::Direct(#coder)};
             }
             if expr_call.args.len() != 4 {
@@ -127,7 +127,7 @@ fn parse_coder(input: &syn::Expr) -> TokenStream2 {
                 ),
             }
         }
-        _ => parse_single_coder(&input, None),
+        _ => parse_single_coder(input, None),
     }
 }
 
