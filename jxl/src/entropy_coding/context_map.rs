@@ -18,8 +18,7 @@ fn move_to_front(v: &mut [u8], index: u8) {
 }
 
 fn inverse_move_to_front(v: &mut [u8]) {
-    use array_init::array_init;
-    let mut mtf: [u8; 256] = array_init(|x| x as u8);
+    let mut mtf: [u8; 256] = std::array::from_fn(|x| x as u8);
     for val in v.iter_mut() {
         let index = *val;
         *val = mtf[index as usize];
