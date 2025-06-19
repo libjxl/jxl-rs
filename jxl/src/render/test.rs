@@ -4,9 +4,7 @@
 // license that can be found in the LICENSE file.
 
 use crate::{
-    error::Result,
-    image::{Image, ImageDataType, ImageRectMut},
-    util::{tracing_wrappers::instrument, ShiftRightCeil},
+    error::Result, headers::Orientation, image::{Image, ImageDataType, ImageRectMut}, util::{tracing_wrappers::instrument, ShiftRightCeil}
 };
 use rand::SeedableRng;
 
@@ -49,6 +47,7 @@ pub(super) fn make_and_run_simple_pipeline<
             i,
             final_size,
             OutputT::from_f64(1.0),
+           Orientation::Identity,
         )?)?;
     }
     let mut pipeline = pipeline.build()?;

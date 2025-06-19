@@ -4,24 +4,17 @@
 // license that can be found in the LICENSE file.
 
 use crate::{
-    bit_reader::BitReader,
-    entropy_coding::decode::Histograms,
-    error::Result,
-    features::{noise::Noise, patches::PatchesDictionary, spline::Splines},
-    headers::{
+    bit_reader::BitReader, entropy_coding::decode::Histograms, error::Result, features::{noise::Noise, patches::PatchesDictionary, spline::Splines}, frame, headers::{
         color_encoding::ColorSpace,
         encodings::UnconditionalCoder,
         extra_channels::ExtraChannelInfo,
         frame_header::{Encoding, FrameHeader, Toc, TocNonserialized},
         permutation::Permutation,
         FileHeader,
-    },
-    image::{Image, Rect},
-    render::{
+    }, image::{Image, Rect}, render::{
         stages::*, RenderPipeline, RenderPipelineBuilder, SimpleRenderPipeline,
         SimpleRenderPipelineBuilder,
-    },
-    util::{tracing_wrappers::*, CeilLog2, Xorshift128Plus},
+    }, util::{tracing_wrappers::*, CeilLog2, Xorshift128Plus}
 };
 use block_context_map::BlockContextMap;
 use coeff_order::decode_coeff_orders;
@@ -620,7 +613,6 @@ impl Frame {
                     num_channels,
                 ))?;
         }
-
         if frame_header.can_be_referenced && frame_header.save_before_ct {
             for i in 0..num_channels {
                 pipeline = pipeline.add_stage(SaveStage::<f32>::new(
@@ -628,6 +620,7 @@ impl Frame {
                     i,
                     frame_header.size_upsampled(),
                     1.0,
+                    metadata.orientation,
                 )?)?;
             }
         }
@@ -682,6 +675,7 @@ impl Frame {
                     i,
                     image_size,
                     1.0,
+                    metadata.orientation,
                 )?)?;
             }
         }
@@ -695,6 +689,7 @@ impl Frame {
                     i,
                     image_size,
                     255.0,
+                    metadata.orientation,
                 )?)?;
             }
         }

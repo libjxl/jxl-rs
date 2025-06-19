@@ -4,9 +4,7 @@
 // license that can be found in the LICENSE file.
 
 use crate::{
-    error::Result,
-    image::{Image, ImageDataType, Rect},
-    render::{RenderPipelineInspectStage, RenderPipelineStage},
+    error::Result, headers::Orientation, image::{Image, ImageDataType, Rect}, render::{RenderPipelineInspectStage, RenderPipelineStage}
 };
 
 pub enum SaveStageType {
@@ -21,6 +19,7 @@ pub struct SaveStage<T: ImageDataType> {
     // TODO(szabadka): Have a fixed scale per data-type and make the datatype conversions do
     // the scaling.
     scale: T,
+    orientation : Orientation
 }
 
 #[allow(unused)]
@@ -30,12 +29,14 @@ impl<T: ImageDataType> SaveStage<T> {
         channel: usize,
         size: (usize, usize),
         scale: T,
+        orientation: Orientation,
     ) -> Result<SaveStage<T>> {
         Ok(SaveStage {
             stage_type,
             channel,
             buf: Image::new(size)?,
             scale,
+            orientation,
         })
     }
 
@@ -44,12 +45,14 @@ impl<T: ImageDataType> SaveStage<T> {
         channel: usize,
         img: Image<T>,
         scale: T,
+        orientation: Orientation,
     ) -> SaveStage<T> {
         SaveStage {
             stage_type,
             channel,
             buf: img,
             scale,
+            orientation,
         }
     }
 
@@ -84,6 +87,9 @@ impl<T: ImageDataType + std::ops::Mul<Output = T>> RenderPipelineStage for SaveS
     fn process_row_chunk(&mut self, position: (usize, usize), mut xsize: usize, row: &mut [&[T]]) {
         let input = &mut row[0];
         // TODO(veluca): consider making `process_row_chunk` return a Result.
+        if self.orientation != Orientation::Identity {
+            unimplemented!("Can only save images in Identity orientation, but got {:?}", self.orientation);
+        }
         let mut outbuf = self.buf.as_rect_mut();
         if position.1 >= outbuf.size().1 {
             return;
@@ -110,7 +116,7 @@ mod test {
 
     #[test]
     fn save_stage() -> Result<()> {
-        let mut save_stage = SaveStage::<u8>::new(SaveStageType::Output, 0, (128, 128), 1)?;
+        let mut save_stage = SaveStage::<u8>::new(SaveStageType::Output, 0, (128, 128), 1, Orientation::Identity)?;
         let mut rng = XorShiftRng::seed_from_u64(0);
         let src = Image::<u8>::new_random((128, 128), &mut rng)?;
 
