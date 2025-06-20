@@ -97,34 +97,19 @@ impl<T: ImageDataType + std::ops::Mul<Output = T>> RenderPipelineStage for SaveS
         let mut outbuf_rect = self.buf.as_rect_mut();
         let (width, height) = outbuf_rect.size();
 
-        // Ensure we don't process beyond the buffer's vertical boundary.
+        // Single, corrected boundary check.
         match self.orientation {
             Orientation::Identity | Orientation::FlipHorizontal => {
-                // For these, y_dest == y_src.
                 if position.1 >= height {
                     return;
                 }
             }
             Orientation::FlipVertical | Orientation::Rotate180 => {
-                // For these, y_dest = height - 1 - y_src.
                 if position.1 >= height {
                     return;
                 }
             }
-            // No check needed for transposing orientations yet, as they are unimplemented.
-            _ => {}
-        }
-
-        // Ensure we don't process beyond the buffer's vertical boundary.
-        if (self.orientation == Orientation::Identity
-            || self.orientation == Orientation::FlipHorizontal)
-            && position.1 >= height
-        {
-            return;
-        }
-        if (self.orientation == Orientation::FlipVertical) && height.saturating_sub(1) < position.1
-        {
-            return;
+            _ => {} // No check needed for unimplemented orientations.
         }
 
         xsize = xsize.min(width - position.0);
@@ -137,8 +122,8 @@ impl<T: ImageDataType + std::ops::Mul<Output = T>> RenderPipelineStage for SaveS
                         size: (xsize, 1),
                     })
                     .unwrap();
-                for i in 0..xsize {
-                    out_row.row(0)[i] = input[i] * self.scale;
+                for (out_pixel, &in_pixel) in out_row.row(0).iter_mut().zip(input.iter()) {
+                    *out_pixel = in_pixel * self.scale;
                 }
             }
             Orientation::FlipHorizontal => {
@@ -148,8 +133,8 @@ impl<T: ImageDataType + std::ops::Mul<Output = T>> RenderPipelineStage for SaveS
                         size: (width, 1),
                     })
                     .unwrap();
-                for i in 0..xsize {
-                    out_row.row(0)[width - 1 - position.0 - i] = input[i] * self.scale;
+                for (i, &in_pixel) in input.iter().enumerate().take(xsize) {
+                    out_row.row(0)[width - 1 - position.0 - i] = in_pixel * self.scale;
                 }
             }
             Orientation::FlipVertical => {
@@ -160,8 +145,8 @@ impl<T: ImageDataType + std::ops::Mul<Output = T>> RenderPipelineStage for SaveS
                         size: (xsize, 1),
                     })
                     .unwrap();
-                for i in 0..xsize {
-                    out_row.row(0)[i] = input[i] * self.scale;
+                for (out_pixel, &in_pixel) in out_row.row(0).iter_mut().zip(input.iter()) {
+                    *out_pixel = in_pixel * self.scale;
                 }
             }
             Orientation::Rotate180 => {
@@ -172,8 +157,8 @@ impl<T: ImageDataType + std::ops::Mul<Output = T>> RenderPipelineStage for SaveS
                         size: (width, 1),
                     })
                     .unwrap();
-                for i in 0..xsize {
-                    out_row.row(0)[width - 1 - position.0 - i] = input[i] * self.scale;
+                for (i, &in_pixel) in input.iter().enumerate().take(xsize) {
+                    out_row.row(0)[width - 1 - position.0 - i] = in_pixel * self.scale;
                 }
             }
             _ => {
