@@ -627,7 +627,7 @@ impl Frame {
                     i,
                     frame_header.size_upsampled(),
                     1.0,
-                    metadata.orientation,
+                    Orientation::Identity,
                 )?)?;
             }
         }
