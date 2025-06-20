@@ -14,15 +14,15 @@ use crate::{
 };
 
 #[allow(clippy::type_complexity)]
-pub struct DecodeOptions<'a> {
-    pub xyb_output_linear: bool,
+pub struct DecodeOptions<FC> {
+    xyb_output_linear: bool,
     enable_output: bool,
-    pub frame_callback: Option<&'a mut dyn FnMut(&Frame) -> Result<(), Error>>,
+    frame_callback: Option<FC>,
 }
 
-impl<'a> DecodeOptions<'a> {
-    pub fn new() -> DecodeOptions<'a> {
-        DecodeOptions {
+impl DecodeOptions<fn(&Frame) -> Result<(), Error>> {
+    pub fn new() -> Self {
+        Self {
             xyb_output_linear: true,
             enable_output: true,
             frame_callback: None,
@@ -30,7 +30,22 @@ impl<'a> DecodeOptions<'a> {
     }
 }
 
-impl<'a> Default for DecodeOptions<'a> {
+impl<FC> DecodeOptions<FC> {
+    pub fn set_frame_callback<NFC>(self, frame_callback: NFC) -> DecodeOptions<NFC> {
+        DecodeOptions {
+            xyb_output_linear: self.xyb_output_linear,
+            enable_output: self.enable_output,
+            frame_callback: Some(frame_callback),
+        }
+    }
+
+    pub fn set_xyb_output_linear(mut self, xyb_output_linear: bool) -> Self {
+        self.xyb_output_linear = xyb_output_linear;
+        self
+    }
+}
+
+impl Default for DecodeOptions<fn(&Frame) -> Result<(), Error>> {
     fn default() -> Self {
         Self::new()
     }
@@ -46,10 +61,13 @@ pub struct ImageData<T: ImageDataType> {
     pub frames: Vec<ImageFrame<T>>,
 }
 
-pub fn decode_jxl_codestream(
-    mut options: DecodeOptions,
+pub fn decode_jxl_codestream<FC>(
+    mut options: DecodeOptions<FC>,
     data: &[u8],
-) -> Result<(ImageData<f32>, Vec<u8>), Error> {
+) -> Result<(ImageData<f32>, Vec<u8>), Error>
+where
+    FC: FnMut(&Frame) -> Result<(), Error>,
+{
     let mut br = BitReader::new(data);
     let file_header = FileHeader::read(&mut br)?;
     let input_xsize = file_header.size.xsize();

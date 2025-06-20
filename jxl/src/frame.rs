@@ -877,11 +877,10 @@ mod test {
     #[allow(clippy::type_complexity)]
     fn read_frames(
         image: &[u8],
-        callback: &mut dyn FnMut(&Frame) -> Result<(), Error>,
+        callback: impl FnMut(&Frame) -> Result<(), Error>,
     ) -> Result<(), Error> {
         let codestream = ContainerParser::collect_codestream(image).unwrap();
-        let mut options = DecodeOptions::new();
-        options.frame_callback = Some(callback);
+        let options = DecodeOptions::new().set_frame_callback(callback);
         decode_jxl_codestream(options, &codestream)?;
         Ok(())
     }

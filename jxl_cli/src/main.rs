@@ -124,7 +124,7 @@ fn main() -> Result<(), Error> {
     }
 
     let mut options = DecodeOptions::new();
-    options.xyb_output_linear = String::from(opt.output.to_string_lossy()).ends_with(".npy");
+    options = options.set_xyb_output_linear(opt.output.ends_with(".npy"));
     let (image_data, icc_bytes) = jxl::decode::decode_jxl_codestream(options, &codestream)?;
 
     let icc_result = save_icc(icc_bytes, opt.icc_out);
