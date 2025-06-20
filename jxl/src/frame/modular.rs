@@ -284,6 +284,7 @@ pub struct FullModularImage {
     // List of buffer indices of the channels of the modular image encoded in each kind of section.
     // In order, LfGlobal, LfGroup, HfGroup(pass 0), ..., HfGroup(last pass).
     section_buffer_indices: Vec<Vec<usize>>,
+    modular_color_channels: usize,
 }
 
 impl FullModularImage {
@@ -337,6 +338,7 @@ impl FullModularImage {
                 buffer_info: vec![],
                 transform_steps: vec![],
                 section_buffer_indices: vec![vec![]; 2 + frame_header.passes.num_passes as usize],
+                modular_color_channels,
             });
         }
 
@@ -481,6 +483,7 @@ impl FullModularImage {
             buffer_info,
             transform_steps,
             section_buffer_indices,
+            modular_color_channels,
         })
     }
 
@@ -533,16 +536,24 @@ impl FullModularImage {
         let mut maybe_output = |bi: &mut ModularBufferInfo, grid: usize| -> Result<()> {
             if bi.info.output_channel_idx >= 0 {
                 let chan = bi.info.output_channel_idx as usize;
-                render_pipeline.fill_input_channels(&[chan], grid, 1, |rects| {
-                    rects[0].copy_from(
-                        bi.buffer_grid[grid]
-                            .data
-                            .borrow()
-                            .as_ref()
-                            .unwrap()
-                            .data
-                            .as_rect(),
-                    )
+                let mut channels = vec![chan];
+                if chan == 0 && self.modular_color_channels == 1 {
+                    channels = vec![0, 1, 2];
+                }
+                debug!("Rendering channels {channels:?}, grid position {grid}");
+                render_pipeline.fill_input_channels(&channels, grid, 1, |rects| {
+                    for rect in rects.iter_mut() {
+                        rect.copy_from(
+                            bi.buffer_grid[grid]
+                                .data
+                                .borrow()
+                                .as_ref()
+                                .unwrap()
+                                .data
+                                .as_rect(),
+                        )?;
+                    }
+                    Ok(())
                 })?;
                 bi.buffer_grid[grid].mark_used();
             }
