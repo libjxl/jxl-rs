@@ -95,26 +95,26 @@ impl<T: ImageDataType + std::ops::Mul<Output = T>> RenderPipelineStage for SaveS
     fn process_row_chunk(&mut self, position: (usize, usize), mut xsize: usize, row: &mut [&[T]]) {
         let input = row[0];
         let mut outbuf_rect = self.buf.as_rect_mut();
-        let (width, height) = outbuf_rect.size();
+        let (out_w, out_h) = outbuf_rect.size();
 
-        // Single, corrected boundary check.
-        match self.orientation {
-            Orientation::Identity | Orientation::FlipHorizontal => {
-                if position.1 >= height {
-                    return;
-                }
-            }
-            Orientation::FlipVertical | Orientation::Rotate180 => {
-                if position.1 >= height {
-                    return;
-                }
-            }
-            _ => {} // No check needed for unimplemented orientations.
+        // Establish source dimensions based on the orientation.
+        let (w_src, h_src) = if self.orientation.is_transposing() {
+            (out_h, out_w) // Swapped
+        } else {
+            (out_w, out_h)
+        };
+
+        // Perform boundary checks against source dimensions.
+        if position.1 >= h_src {
+            return;
+        }
+        xsize = xsize.min(w_src - position.0);
+        if xsize == 0 {
+            return;
         }
 
-        xsize = xsize.min(width - position.0);
-
         match self.orientation {
+            // non-transposing cases
             Orientation::Identity => {
                 let mut out_row = outbuf_rect
                     .rect(Rect {
@@ -130,15 +130,15 @@ impl<T: ImageDataType + std::ops::Mul<Output = T>> RenderPipelineStage for SaveS
                 let mut out_row = outbuf_rect
                     .rect(Rect {
                         origin: (0, position.1),
-                        size: (width, 1),
+                        size: (out_w, 1),
                     })
                     .unwrap();
                 for (i, &in_pixel) in input.iter().enumerate().take(xsize) {
-                    out_row.row(0)[width - 1 - position.0 - i] = in_pixel * self.scale;
+                    out_row.row(0)[out_w - 1 - position.0 - i] = in_pixel * self.scale;
                 }
             }
             Orientation::FlipVertical => {
-                let y_out = height - 1 - position.1;
+                let y_out = out_h - 1 - position.1;
                 let mut out_row = outbuf_rect
                     .rect(Rect {
                         origin: (position.0, y_out),
@@ -150,19 +150,40 @@ impl<T: ImageDataType + std::ops::Mul<Output = T>> RenderPipelineStage for SaveS
                 }
             }
             Orientation::Rotate180 => {
-                let y_out = height - 1 - position.1;
+                let y_out = out_h - 1 - position.1;
                 let mut out_row = outbuf_rect
                     .rect(Rect {
                         origin: (0, y_out),
-                        size: (width, 1),
+                        size: (out_w, 1),
                     })
                     .unwrap();
                 for (i, &in_pixel) in input.iter().enumerate().take(xsize) {
-                    out_row.row(0)[width - 1 - position.0 - i] = in_pixel * self.scale;
+                    out_row.row(0)[out_w - 1 - position.0 - i] = in_pixel * self.scale;
                 }
             }
-            _ => {
-                unimplemented!("Can only save images in Identity, Flip, or Rotate180 orientations, but got {:?}", self.orientation);
+
+            // transposing cases
+            Orientation::Transpose
+            | Orientation::Rotate90
+            | Orientation::AntiTranspose
+            | Orientation::Rotate270 => {
+                let y_src = position.1;
+                for (i, &in_pixel) in input.iter().enumerate().take(xsize) {
+                    let x_src = position.0 + i;
+
+                    let (x_dest, y_dest) = match self.orientation {
+                        Orientation::Transpose => (y_src, x_src),
+                        Orientation::Rotate90 => (y_src, w_src - 1 - x_src),
+                        Orientation::AntiTranspose => (h_src - 1 - y_src, w_src - 1 - x_src),
+                        Orientation::Rotate270 => (h_src - 1 - y_src, x_src),
+                        _ => unreachable!(),
+                    };
+
+                    // Final check to ensure we don't write out of the destination buffer bounds.
+                    if x_dest < out_w && y_dest < out_h {
+                        outbuf_rect.row(y_dest)[x_dest] = in_pixel * self.scale;
+                    }
+                }
             }
         }
     }
