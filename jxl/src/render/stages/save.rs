@@ -4,7 +4,10 @@
 // license that can be found in the LICENSE file.
 
 use crate::{
-    error::Result, headers::Orientation, image::{Image, ImageDataType, Rect}, render::{RenderPipelineInspectStage, RenderPipelineStage}
+    error::Result,
+    headers::Orientation,
+    image::{Image, ImageDataType, Rect},
+    render::{RenderPipelineInspectStage, RenderPipelineStage},
 };
 
 pub enum SaveStageType {
@@ -19,7 +22,7 @@ pub struct SaveStage<T: ImageDataType> {
     // TODO(szabadka): Have a fixed scale per data-type and make the datatype conversions do
     // the scaling.
     scale: T,
-    orientation : Orientation
+    orientation: Orientation,
 }
 
 #[allow(unused)]
@@ -31,10 +34,15 @@ impl<T: ImageDataType> SaveStage<T> {
         scale: T,
         orientation: Orientation,
     ) -> Result<SaveStage<T>> {
+        let buf_size = if orientation.is_transposing() {
+            (size.1, size.0)
+        } else {
+            size
+        };
         Ok(SaveStage {
             stage_type,
             channel,
-            buf: Image::new(size)?,
+            buf: Image::new(buf_size)?,
             scale,
             orientation,
         })
@@ -85,24 +93,92 @@ impl<T: ImageDataType + std::ops::Mul<Output = T>> RenderPipelineStage for SaveS
     }
 
     fn process_row_chunk(&mut self, position: (usize, usize), mut xsize: usize, row: &mut [&[T]]) {
-        let input = &mut row[0];
-        // TODO(veluca): consider making `process_row_chunk` return a Result.
-        if self.orientation != Orientation::Identity {
-            unimplemented!("Can only save images in Identity orientation, but got {:?}", self.orientation);
+        let input = row[0];
+        let mut outbuf_rect = self.buf.as_rect_mut();
+        let (width, height) = outbuf_rect.size();
+
+        // Ensure we don't process beyond the buffer's vertical boundary.
+        match self.orientation {
+            Orientation::Identity | Orientation::FlipHorizontal => {
+                // For these, y_dest == y_src.
+                if position.1 >= height {
+                    return;
+                }
+            }
+            Orientation::FlipVertical | Orientation::Rotate180 => {
+                // For these, y_dest = height - 1 - y_src.
+                if position.1 >= height {
+                    return;
+                }
+            }
+            // No check needed for transposing orientations yet, as they are unimplemented.
+            _ => {}
         }
-        let mut outbuf = self.buf.as_rect_mut();
-        if position.1 >= outbuf.size().1 {
+
+        // Ensure we don't process beyond the buffer's vertical boundary.
+        if (self.orientation == Orientation::Identity
+            || self.orientation == Orientation::FlipHorizontal)
+            && position.1 >= height
+        {
             return;
         }
-        xsize = xsize.min(outbuf.size().0 - position.0);
-        let mut outbuf = outbuf
-            .rect(Rect {
-                origin: position,
-                size: (xsize, 1),
-            })
-            .expect("mismatch in image size");
-        for ix in 0..xsize {
-            outbuf.row(0)[ix] = input[ix] * self.scale;
+        if (self.orientation == Orientation::FlipVertical) && height.saturating_sub(1) < position.1
+        {
+            return;
+        }
+
+        xsize = xsize.min(width - position.0);
+
+        match self.orientation {
+            Orientation::Identity => {
+                let mut out_row = outbuf_rect
+                    .rect(Rect {
+                        origin: position,
+                        size: (xsize, 1),
+                    })
+                    .unwrap();
+                for i in 0..xsize {
+                    out_row.row(0)[i] = input[i] * self.scale;
+                }
+            }
+            Orientation::FlipHorizontal => {
+                let mut out_row = outbuf_rect
+                    .rect(Rect {
+                        origin: (0, position.1),
+                        size: (width, 1),
+                    })
+                    .unwrap();
+                for i in 0..xsize {
+                    out_row.row(0)[width - 1 - position.0 - i] = input[i] * self.scale;
+                }
+            }
+            Orientation::FlipVertical => {
+                let y_out = height - 1 - position.1;
+                let mut out_row = outbuf_rect
+                    .rect(Rect {
+                        origin: (position.0, y_out),
+                        size: (xsize, 1),
+                    })
+                    .unwrap();
+                for i in 0..xsize {
+                    out_row.row(0)[i] = input[i] * self.scale;
+                }
+            }
+            Orientation::Rotate180 => {
+                let y_out = height - 1 - position.1;
+                let mut out_row = outbuf_rect
+                    .rect(Rect {
+                        origin: (0, y_out),
+                        size: (width, 1),
+                    })
+                    .unwrap();
+                for i in 0..xsize {
+                    out_row.row(0)[width - 1 - position.0 - i] = input[i] * self.scale;
+                }
+            }
+            _ => {
+                unimplemented!("Can only save images in Identity, Flip, or Rotate180 orientations, but got {:?}", self.orientation);
+            }
         }
     }
 }
@@ -116,7 +192,13 @@ mod test {
 
     #[test]
     fn save_stage() -> Result<()> {
-        let mut save_stage = SaveStage::<u8>::new(SaveStageType::Output, 0, (128, 128), 1, Orientation::Identity)?;
+        let mut save_stage = SaveStage::<u8>::new(
+            SaveStageType::Output,
+            0,
+            (128, 128),
+            1,
+            Orientation::Identity,
+        )?;
         let mut rng = XorShiftRng::seed_from_u64(0);
         let src = Image::<u8>::new_random((128, 128), &mut rng)?;
 
@@ -128,4 +210,59 @@ mod test {
 
         Ok(())
     }
+
+    macro_rules! test_orientation {
+        ($test_name:ident, $orientation:expr, $transform:expr) => {
+            #[test]
+            fn $test_name() -> Result<()> {
+                let (w, h) = (32, 16);
+                let mut rng = XorShiftRng::seed_from_u64(0);
+                let src = Image::<u8>::new_random((w, h), &mut rng)?;
+                let orientation = $orientation;
+
+                let mut save_stage =
+                    SaveStage::<u8>::new(SaveStageType::Output, 0, (w, h), 1, orientation)?;
+
+                for y in 0..h {
+                    save_stage.process_row_chunk((0, y), w, &mut [src.as_rect().row(y)]);
+                }
+
+                // Create the expected result using the provided transform logic
+                let mut expected = Image::<u8>::new((w, h))?;
+                // The transform is a closure: |x, y, w, h| -> (src_x, src_y)
+                let transform = $transform;
+                for y in 0..h {
+                    for x in 0..w {
+                        let (src_x, src_y) = transform(x, y, w, h);
+                        expected.as_rect_mut().row(y)[x] = src.as_rect().row(src_y)[src_x];
+                    }
+                }
+
+                expected
+                    .as_rect()
+                    .check_equal(save_stage.buffer().as_rect());
+
+                Ok(())
+            }
+        };
+    }
+
+    test_orientation!(test_identity, Orientation::Identity, |x, y, _, _| (x, y));
+
+    test_orientation!(
+        test_flip_horizontal,
+        Orientation::FlipHorizontal,
+        |x, y, w, _| (w - 1 - x, y)
+    );
+
+    test_orientation!(
+        test_flip_vertical,
+        Orientation::FlipVertical,
+        |x, y, _, h| (x, h - 1 - y)
+    );
+
+    test_orientation!(test_rotate_180, Orientation::Rotate180, |x, y, w, h| (
+        w - 1 - x,
+        h - 1 - y
+    ));
 }

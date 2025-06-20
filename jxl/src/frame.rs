@@ -4,17 +4,24 @@
 // license that can be found in the LICENSE file.
 
 use crate::{
-    bit_reader::BitReader, entropy_coding::decode::Histograms, error::Result, features::{noise::Noise, patches::PatchesDictionary, spline::Splines}, frame, headers::{
+    bit_reader::BitReader,
+    entropy_coding::decode::Histograms,
+    error::Result,
+    features::{noise::Noise, patches::PatchesDictionary, spline::Splines},
+    headers::{
         color_encoding::ColorSpace,
         encodings::UnconditionalCoder,
         extra_channels::ExtraChannelInfo,
         frame_header::{Encoding, FrameHeader, Toc, TocNonserialized},
         permutation::Permutation,
         FileHeader,
-    }, image::{Image, Rect}, render::{
+    },
+    image::{Image, Rect},
+    render::{
         stages::*, RenderPipeline, RenderPipelineBuilder, SimpleRenderPipeline,
         SimpleRenderPipelineBuilder,
-    }, util::{tracing_wrappers::*, CeilLog2, Xorshift128Plus}
+    },
+    util::{tracing_wrappers::*, CeilLog2, Xorshift128Plus},
 };
 use block_context_map::BlockContextMap;
 use coeff_order::decode_coeff_orders;
