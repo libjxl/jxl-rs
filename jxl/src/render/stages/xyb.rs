@@ -14,8 +14,6 @@ pub struct XybToLinearSrgbStage {
 }
 
 impl XybToLinearSrgbStage {
-    // TODO(tirr-c): remove once we use this!
-    #[allow(unused)]
     pub fn new(first_channel: usize, opsin: OpsinInverseMatrix, intensity_target: f32) -> Self {
         Self {
             first_channel,

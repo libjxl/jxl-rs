@@ -19,19 +19,16 @@ impl FromLinearStage {
         Self { first_channel, tf }
     }
 
-    #[allow(unused, reason = "tirr-c: remove once we use this!")]
     pub fn sdr(first_channel: usize, tf: CustomTransferFunction) -> Self {
         let tf = TransferFunction::try_from(tf).expect("transfer function is not an SDR one");
         Self::new(first_channel, tf)
     }
 
-    #[allow(unused, reason = "tirr-c: remove once we use this!")]
     pub fn pq(first_channel: usize, intensity_target: f32) -> Self {
         let tf = TransferFunction::Pq { intensity_target };
         Self::new(first_channel, tf)
     }
 
-    #[allow(unused, reason = "tirr-c: remove once we use this!")]
     pub fn hlg(first_channel: usize, intensity_target: f32, luminance_rgb: [f32; 3]) -> Self {
         let tf = TransferFunction::Hlg {
             intensity_target,
