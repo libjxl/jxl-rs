@@ -7,7 +7,7 @@ use crate::{
     bit_reader::BitReader,
     error::Error,
     frame::{DecoderState, Frame, Section},
-    headers::{FileHeader, JxlHeader},
+    headers::{bit_depth::BitDepth, FileHeader, JxlHeader},
     icc::read_icc,
     image::{Image, ImageDataType},
     util::tracing_wrappers::*,
@@ -49,9 +49,10 @@ pub struct ImageData<T: ImageDataType> {
 pub fn decode_jxl_codestream(
     mut options: DecodeOptions,
     data: &[u8],
-) -> Result<(ImageData<f32>, Vec<u8>), Error> {
+) -> Result<(ImageData<f32>, BitDepth, Vec<u8>), Error> {
     let mut br = BitReader::new(data);
     let file_header = FileHeader::read(&mut br)?;
+    let bit_depth = file_header.image_metadata.bit_depth;
     let input_xsize = file_header.size.xsize();
     let input_ysize = file_header.size.ysize();
     let (output_xsize, output_ysize) = if file_header.image_metadata.orientation.is_transposing() {
@@ -125,7 +126,7 @@ pub fn decode_jxl_codestream(
         }
     }
 
-    Ok((image_data, icc_bytes))
+    Ok((image_data, bit_depth, icc_bytes))
 }
 
 #[cfg(test)]

@@ -7,6 +7,7 @@ use clap::Parser;
 use jxl::container::{ContainerParser, ParseEvent};
 use jxl::decode::{DecodeOptions, ImageData};
 use jxl::error::Error;
+use jxl::headers::bit_depth::BitDepth;
 use std::fs;
 use std::io::Read;
 use std::path::PathBuf;
@@ -22,7 +23,11 @@ fn save_icc(icc_bytes: Vec<u8>, icc_filename: Option<PathBuf>) -> Result<(), Err
     }
 }
 
-fn save_image(image_data: ImageData<f32>, output_filename: PathBuf) -> Result<(), Error> {
+fn save_image(
+    image_data: ImageData<f32>,
+    bit_depth: BitDepth,
+    output_filename: PathBuf,
+) -> Result<(), Error> {
     let fn_str: String = String::from(output_filename.to_string_lossy());
     let mut output_bytes: Vec<u8> = vec![];
     if fn_str.ends_with(".ppm") {
@@ -42,7 +47,7 @@ fn save_image(image_data: ImageData<f32>, output_filename: PathBuf) -> Result<()
     } else if fn_str.ends_with(".npy") {
         output_bytes = enc::numpy::to_numpy(image_data)?;
     } else if fn_str.ends_with(".png") {
-        output_bytes = enc::png::to_png(image_data)?;
+        output_bytes = enc::png::to_png(image_data, bit_depth)?;
     }
     if output_bytes.is_empty() {
         return Err(Error::OutputFormatNotSupported);
@@ -125,10 +130,11 @@ fn main() -> Result<(), Error> {
 
     let mut options = DecodeOptions::new();
     options.xyb_output_linear = String::from(opt.output.to_string_lossy()).ends_with(".npy");
-    let (image_data, icc_bytes) = jxl::decode::decode_jxl_codestream(options, &codestream)?;
+    let (image_data, bit_depth, icc_bytes) =
+        jxl::decode::decode_jxl_codestream(options, &codestream)?;
 
     let icc_result = save_icc(icc_bytes, opt.icc_out);
-    let image_result = save_image(image_data, opt.output);
+    let image_result = save_image(image_data, bit_depth, opt.output);
 
     if let Err(ref err) = icc_result {
         println!("Failed to save ICC profile: {err}");
