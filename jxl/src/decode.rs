@@ -53,11 +53,14 @@ pub fn decode_jxl_codestream(
 ) -> Result<(ImageData<f32>, Vec<u8>), Error> {
     let mut br = BitReader::new(data);
     let file_header = FileHeader::read(&mut br)?;
-    info!(
-        "Image size: {} x {}",
-        file_header.size.xsize(),
-        file_header.size.ysize()
-    );
+    let input_xsize = file_header.size.xsize();
+    let input_ysize = file_header.size.ysize();
+    let (output_xsize, output_ysize) = if file_header.image_metadata.orientation.is_transposing() {
+        (input_ysize, input_xsize)
+    } else {
+        (input_xsize, input_ysize)
+    };
+    info!("Image size: {} x {}", output_xsize, output_ysize);
     let icc_bytes = if file_header.image_metadata.color_encoding.want_icc {
         let r = read_icc(&mut br)?;
         println!("found {}-byte ICC", r.len());
@@ -73,10 +76,7 @@ pub fn decode_jxl_codestream(
 
     br.jump_to_byte_boundary()?;
     let mut image_data: ImageData<f32> = ImageData {
-        size: (
-            file_header.size.xsize() as usize,
-            file_header.size.ysize() as usize,
-        ),
+        size: (output_xsize as usize, output_ysize as usize),
         frames: vec![],
     };
     let mut decoder_state = DecoderState::new(file_header);

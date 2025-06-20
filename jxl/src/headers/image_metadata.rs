@@ -45,6 +45,18 @@ pub enum Orientation {
     Rotate270 = 8,
 }
 
+impl Orientation {
+    pub fn is_transposing(self) -> bool {
+        matches!(
+            self,
+            Orientation::Transpose
+                | Orientation::AntiTranspose
+                | Orientation::Rotate90
+                | Orientation::Rotate270
+        )
+    }
+}
+
 #[derive(UnconditionalCoder, Debug, Clone)]
 pub struct Animation {
     #[coder(u2S(100, 1000, Bits(10) + 1, Bits(30) + 1))]

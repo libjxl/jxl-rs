@@ -14,7 +14,7 @@ use crate::{
         extra_channels::ExtraChannelInfo,
         frame_header::{Encoding, FrameHeader, Toc, TocNonserialized},
         permutation::Permutation,
-        FileHeader,
+        FileHeader, Orientation,
     },
     image::{Image, Rect},
     render::{
@@ -620,7 +620,6 @@ impl Frame {
                     num_channels,
                 ))?;
         }
-
         if frame_header.can_be_referenced && frame_header.save_before_ct {
             for i in 0..num_channels {
                 pipeline = pipeline.add_stage(SaveStage::<f32>::new(
@@ -628,6 +627,7 @@ impl Frame {
                     i,
                     frame_header.size_upsampled(),
                     1.0,
+                    Orientation::Identity,
                 )?)?;
             }
         }
@@ -682,6 +682,7 @@ impl Frame {
                     i,
                     image_size,
                     1.0,
+                    Orientation::Identity,
                 )?)?;
             }
         }
@@ -695,6 +696,7 @@ impl Frame {
                     i,
                     image_size,
                     255.0,
+                    metadata.orientation,
                 )?)?;
             }
         }

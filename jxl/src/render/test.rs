@@ -5,6 +5,7 @@
 
 use crate::{
     error::Result,
+    headers::Orientation,
     image::{Image, ImageDataType, ImageRectMut},
     util::{tracing_wrappers::instrument, ShiftRightCeil},
 };
@@ -49,6 +50,7 @@ pub(super) fn make_and_run_simple_pipeline<
             i,
             final_size,
             OutputT::from_f64(1.0),
+            Orientation::Identity,
         )?)?;
     }
     let mut pipeline = pipeline.build()?;
