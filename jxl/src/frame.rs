@@ -14,7 +14,7 @@ use crate::{
         extra_channels::ExtraChannelInfo,
         frame_header::{Encoding, FrameHeader, Toc, TocNonserialized},
         permutation::Permutation,
-        FileHeader,
+        FileHeader, Orientation,
     },
     image::{Image, Rect},
     render::{
@@ -682,7 +682,7 @@ impl Frame {
                     i,
                     image_size,
                     1.0,
-                    metadata.orientation,
+                    Orientation::Identity,
                 )?)?;
             }
         }
