@@ -23,7 +23,6 @@ use super::{
 use num_traits::abs;
 use std::cmp::max;
 
-#[allow(unused)]
 #[derive(Debug)]
 pub enum ModularStreamId {
     GlobalData,

@@ -46,7 +46,6 @@ pub struct ImageData<T: ImageDataType> {
     pub frames: Vec<ImageFrame<T>>,
 }
 
-#[allow(unused_mut)]
 pub fn decode_jxl_codestream(
     mut options: DecodeOptions,
     data: &[u8],

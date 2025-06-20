@@ -599,7 +599,6 @@ fn derive_struct(input: &DeriveInput) -> TokenStream2 {
         });
         quote! {
             impl #name {
-                #[allow(unused)]
                 pub fn default(nonserialized: &#nonserialized) -> #name {
                     #(#field_init)*
                     #name {

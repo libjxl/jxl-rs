@@ -12,11 +12,11 @@ pub struct CustomTransformDataNonserialized {
     pub xyb_encoded: bool,
 }
 
-// TODO(firsching): remove once we use this!
-#[allow(dead_code)]
 #[derive(UnconditionalCoder, Debug, Clone)]
 pub struct OpsinInverseMatrix {
     #[all_default]
+    // TODO(firsching): remove once we use this!
+    #[allow(dead_code)]
     all_default: bool,
     #[default([11.031566901960783, -9.866943921568629, -0.16462299647058826,
                -3.254147380392157,  4.418770392156863,  -0.16462299647058826,
