@@ -48,18 +48,12 @@ impl BlendingStage {
         file_header: &FileHeader,
         reference_frames: &[Option<ReferenceFrame>],
     ) -> Result<BlendingStage> {
-        let input_xsize = file_header.size.xsize();
-        let input_ysize = file_header.size.ysize();
-        let (output_xsize, output_ysize) =
-            if file_header.image_metadata.orientation.is_transposing() {
-                (input_ysize, input_xsize)
-            } else {
-                (input_xsize, input_ysize)
-            };
-
         Ok(BlendingStage {
             frame_origin: (frame_header.x0 as isize, frame_header.y0 as isize),
-            image_size: (output_xsize as isize, output_ysize as isize),
+            image_size: (
+                file_header.size.xsize() as isize,
+                file_header.size.ysize() as isize,
+            ),
             blending_info: frame_header.blending_info.clone(),
             ec_blending_info: frame_header.ec_blending_info.clone(),
             extra_channels: file_header.image_metadata.extra_channel_info.clone(),
