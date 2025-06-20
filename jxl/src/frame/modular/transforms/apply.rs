@@ -16,6 +16,9 @@ use crate::{
     headers::{self, frame_header::FrameHeader, modular::TransformId, modular::WeightedHeader},
     util::tracing_wrappers::*,
 };
+use std::cell::RefMut;
+use std::ops::Deref;
+use std::ops::DerefMut;
 
 use super::{RctOp, RctPermutation};
 
@@ -111,6 +114,19 @@ impl TransformStepChunk {
                     super::rct::do_rct_step(&mut bufs, *op, *perm);
                     Ok(())
                 })?;
+                Ok(buf_out.iter().map(|x| (*x, out_grid)).collect())
+            }
+            TransformStep::Palette {
+                buf_in,
+                buf_pal,
+                buf_out,
+                ..
+            } if buffers[*buf_in].info.size.0 == 0 => {
+                // Nothing to do, just bookkeeping.
+                buffers[*buf_in].buffer_grid[out_grid].mark_used();
+                buffers[*buf_pal].buffer_grid[0].mark_used();
+                with_buffers(buffers, buf_out, out_grid, |_| Ok(()))?;
+                Ok(buf_out.iter().map(|x| (*x, out_grid)).collect())
             }
             TransformStep::Palette {
                 buf_in,
@@ -119,8 +135,8 @@ impl TransformStepChunk {
                 num_colors,
                 num_deltas,
                 predictor,
-                wp_header,
-            } if *predictor != Predictor::Weighted && *predictor != Predictor::AverageAll => {
+                ..
+            } if !predictor.requires_full_row() => {
                 assert_eq!(out_grid_kind, buffers[*buf_in].grid_kind);
                 assert_eq!(out_size, buffers[*buf_in].info.size);
 
@@ -132,24 +148,116 @@ impl TransformStepChunk {
                     let img_pal = Ref::map(buffers[*buf_pal].buffer_grid[0].data.borrow(), |x| {
                         x.as_ref().unwrap()
                     });
-                    with_buffers(buffers, buf_out, out_grid, |mut bufs| {
-                        super::palette::do_palette_step_general(
-                            &img_in,
-                            &img_pal,
-                            &mut bufs,
-                            *num_colors,
-                            *num_deltas,
-                            *predictor,
-                            wp_header,
-                        );
-                        Ok(())
-                    })?;
+                    // Ensure that the output buffers are present.
+                    // TODO(szabadka): Extend the callback to support many grid points.
+                    with_buffers(buffers, buf_out, out_grid, |_| Ok(()))?;
+                    let grid_shape = buffers[buf_out[0]].grid_shape;
+                    let grid_x = out_grid % grid_shape.0;
+                    let grid_y = out_grid / grid_shape.0;
+                    let border = if *predictor == Predictor::Zero { 0 } else { 1 };
+                    let grid_x0 = grid_x.saturating_sub(border);
+                    let grid_y0 = grid_y.saturating_sub(border);
+                    let grid_x1 = grid_x + 1;
+                    let grid_y1 = grid_y + 1;
+                    let mut out_bufs = vec![];
+                    for i in buf_out {
+                        for gy in grid_y0..grid_y1 {
+                            for gx in grid_x0..grid_x1 {
+                                let grid = gy * grid_shape.0 + gx;
+                                let buf = &buffers[*i];
+                                let b = &buf.buffer_grid[grid];
+                                let data = b.data.borrow_mut();
+                                out_bufs.push(RefMut::map(data, |x| x.as_mut().unwrap()));
+                            }
+                        }
+                    }
+                    let mut out_buf_refs: Vec<&mut ModularChannel> =
+                        out_bufs.iter_mut().map(|x| x.deref_mut()).collect();
+                    super::palette::do_palette_step_one_group(
+                        &img_in,
+                        &img_pal,
+                        &mut out_buf_refs,
+                        grid_x - grid_x0,
+                        grid_y - grid_y0,
+                        grid_x1 - grid_x0,
+                        grid_y1 - grid_y0,
+                        *num_colors,
+                        *num_deltas,
+                        *predictor,
+                    );
                 }
                 buffers[*buf_in].buffer_grid[out_grid].mark_used();
                 buffers[*buf_pal].buffer_grid[0].mark_used();
+                Ok(buf_out.iter().map(|x| (*x, out_grid)).collect())
             }
-            TransformStep::Palette { .. } => {
-                todo!("Unimplemented dep_ready for TransformStep::Palette with AverageAll / Weighted predictor")
+            TransformStep::Palette {
+                buf_in,
+                buf_pal,
+                buf_out,
+                num_colors,
+                num_deltas,
+                predictor,
+                wp_header,
+            } => {
+                assert_eq!(out_grid_kind, buffers[*buf_in].grid_kind);
+                assert_eq!(out_size, buffers[*buf_in].info.size);
+                let mut generated_chunks = Vec::<(usize, usize)>::new();
+                let grid_shape = buffers[buf_out[0]].grid_shape;
+                {
+                    assert_eq!(out_grid % grid_shape.0, 0);
+                    let grid_y = out_grid / grid_shape.0;
+                    let grid_y0 = grid_y.saturating_sub(1);
+                    let grid_y1 = grid_y + 1;
+                    let mut in_bufs = vec![];
+                    for grid_x in 0..grid_shape.0 {
+                        let grid = grid_y * grid_shape.0 + grid_x;
+                        in_bufs.push(Ref::map(
+                            buffers[*buf_in].buffer_grid[grid].data.borrow(),
+                            |x| x.as_ref().unwrap(),
+                        ));
+                        // Ensure that the output buffers are present.
+                        // TODO(szabadka): Extend the callback to support many grid points.
+                        with_buffers(buffers, buf_out, out_grid + grid_x, |_| Ok(()))?;
+                    }
+                    let in_buf_refs: Vec<&ModularChannel> =
+                        in_bufs.iter().map(|x| x.deref()).collect();
+                    let img_pal = Ref::map(buffers[*buf_pal].buffer_grid[0].data.borrow(), |x| {
+                        x.as_ref().unwrap()
+                    });
+                    let mut out_bufs = vec![];
+                    for i in buf_out {
+                        for grid_y in grid_y0..grid_y1 {
+                            for grid_x in 0..grid_shape.0 {
+                                let grid = grid_y * grid_shape.0 + grid_x;
+                                let buf = &buffers[*i];
+                                let b = &buf.buffer_grid[grid];
+                                let data = b.data.borrow_mut();
+                                out_bufs.push(RefMut::map(data, |x| x.as_mut().unwrap()));
+                            }
+                        }
+                    }
+                    let mut out_buf_refs: Vec<&mut ModularChannel> =
+                        out_bufs.iter_mut().map(|x| x.deref_mut()).collect();
+                    super::palette::do_palette_step_group_row(
+                        &in_buf_refs,
+                        &img_pal,
+                        &mut out_buf_refs,
+                        grid_y - grid_y0,
+                        grid_shape.0,
+                        *num_colors,
+                        *num_deltas,
+                        *predictor,
+                        wp_header,
+                    )?;
+                }
+                buffers[*buf_pal].buffer_grid[0].mark_used();
+                for grid_x in 0..grid_shape.0 {
+                    buffers[*buf_in].buffer_grid[out_grid + grid_x].mark_used();
+                    for buf in buf_out {
+                        generated_chunks.push((*buf, out_grid + grid_x));
+                    }
+                }
+                Ok(generated_chunks)
             }
             TransformStep::HSqueeze { buf_in, buf_out } => {
                 let buf_avg = &buffers[buf_in[0]];
@@ -218,6 +326,7 @@ impl TransformStepChunk {
                 }
                 buffers[buf_in[0]].buffer_grid[in_grid].mark_used();
                 buffers[buf_in[1]].buffer_grid[out_grid].mark_used();
+                Ok(vec![(*buf_out, out_grid)])
             }
             TransformStep::VSqueeze { buf_in, buf_out } => {
                 let buf_avg = &buffers[buf_in[0]];
@@ -286,10 +395,9 @@ impl TransformStepChunk {
                 }
                 buffers[buf_in[0]].buffer_grid[in_grid].mark_used();
                 buffers[buf_in[1]].buffer_grid[out_grid].mark_used();
+                Ok(vec![(*buf_out, out_grid)])
             }
-        };
-
-        Ok(buf_out.iter().map(|x| (*x, out_grid)).collect())
+        }
     }
 }
 

@@ -4,12 +4,13 @@
 // license that can be found in the LICENSE file.
 
 use crate::{
+    error::Result,
     frame::modular::{
         predict::{PredictionData, WeightedPredictorState},
         ModularChannel, Predictor,
     },
     headers::modular::WeightedHeader,
-    image::ImageRect,
+    image::{Image, ImageRect},
 };
 
 const RGB_CHANNELS: usize = 3;
@@ -251,4 +252,201 @@ pub fn do_palette_step_general(
             }
         }
     }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn get_prediction_data(
+    buf: &mut [&mut ModularChannel],
+    idx: usize,
+    grid_x: usize,
+    grid_y: usize,
+    grid_xsize: usize,
+    x: usize,
+    y: usize,
+    xsize: usize,
+    ysize: usize,
+) -> PredictionData {
+    PredictionData::get_with_neighbors(
+        buf[idx].data.as_rect(),
+        if grid_x > 0 {
+            Some(buf[idx - 1].data.as_rect())
+        } else {
+            None
+        },
+        if grid_y > 0 {
+            Some(buf[idx - grid_xsize].data.as_rect())
+        } else {
+            None
+        },
+        if grid_x > 0 && grid_y > 0 {
+            Some(buf[idx - grid_xsize - 1].data.as_rect())
+        } else {
+            None
+        },
+        if grid_x + 1 < grid_xsize {
+            Some(buf[idx + 1].data.as_rect())
+        } else {
+            None
+        },
+        if grid_x + 1 < grid_xsize && grid_y > 0 {
+            Some(buf[idx - grid_xsize + 1].data.as_rect())
+        } else {
+            None
+        },
+        x,
+        y,
+        xsize,
+        ysize,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn do_palette_step_one_group(
+    buf_in: &ModularChannel,
+    buf_pal: &ModularChannel,
+    buf_out: &mut [&mut ModularChannel],
+    grid_x: usize,
+    grid_y: usize,
+    grid_xsize: usize,
+    grid_ysize: usize,
+    num_colors: usize,
+    num_deltas: usize,
+    predictor: Predictor,
+) {
+    let h = buf_in.data.size().1;
+    let palette = buf_pal.data.as_rect();
+    let bit_depth = buf_in.bit_depth.bits_per_sample().min(24) as usize;
+    let num_c = buf_out.len() / (grid_xsize * grid_ysize);
+    let (xsize, ysize) = buf_out[0].data.size();
+
+    for c in 0..num_c {
+        for y in 0..h {
+            let index_img = buf_in.data.as_rect().row(y);
+            let out_idx = c * grid_ysize * grid_xsize + grid_y * grid_xsize + grid_x;
+            for (x, &index) in index_img.iter().enumerate() {
+                let palette_entry = get_palette_value(
+                    &palette,
+                    index as isize,
+                    c,
+                    /*palette_size=*/ num_colors + num_deltas,
+                    /*bit_depth=*/ bit_depth,
+                );
+                let val = if index < num_deltas as i32 {
+                    let pred = predictor.predict_one(
+                        get_prediction_data(
+                            buf_out, out_idx, grid_x, grid_y, grid_xsize, x, y, xsize, ysize,
+                        ),
+                        /*wp_pred=*/ 0,
+                    );
+                    (pred + palette_entry as i64) as i32
+                } else {
+                    palette_entry
+                };
+                buf_out[out_idx].data.as_rect_mut().row(y)[x] = val;
+            }
+        }
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn do_palette_step_group_row(
+    buf_in: &[&ModularChannel],
+    buf_pal: &ModularChannel,
+    buf_out: &mut [&mut ModularChannel],
+    grid_y: usize,
+    grid_xsize: usize,
+    num_colors: usize,
+    num_deltas: usize,
+    predictor: Predictor,
+    wp_header: &WeightedHeader,
+) -> Result<()> {
+    let palette = buf_pal.data.as_rect();
+    let h = buf_in[0].data.size().1;
+    let bit_depth = buf_in[0].bit_depth.bits_per_sample().min(24) as usize;
+    let grid_ysize = grid_y + 1;
+    let num_c = buf_out.len() / (grid_xsize * grid_ysize);
+    let total_w = buf_out[0..grid_xsize]
+        .iter()
+        .map(|buf| buf.data.size().0)
+        .sum();
+    let (xsize, ysize) = buf_out[0].data.size();
+
+    if predictor == Predictor::Weighted {
+        for c in 0..num_c {
+            let mut wp_state = WeightedPredictorState::new(wp_header, total_w);
+            let out_row_idx = c * grid_ysize * grid_xsize + grid_y * grid_xsize;
+            if grid_y > 0 {
+                let prev_row_idx = out_row_idx - grid_y * grid_xsize;
+                wp_state.restore_state(
+                    buf_out[prev_row_idx].auxiliary_data.as_ref().unwrap(),
+                    total_w,
+                );
+            }
+            for y in 0..h {
+                for (grid_x, index_buf) in buf_in.iter().enumerate().take(grid_xsize) {
+                    let index_img = index_buf.data.as_rect().row(y);
+                    let out_idx = out_row_idx + grid_x;
+                    for (x, &index) in index_img.iter().enumerate() {
+                        let palette_entry = get_palette_value(
+                            &palette,
+                            index as isize,
+                            c,
+                            /*palette_size=*/ num_colors + num_deltas,
+                            /*bit_depth=*/ bit_depth,
+                        );
+                        let val = if index < num_deltas as i32 {
+                            let prediction_data = get_prediction_data(
+                                buf_out, out_idx, grid_x, grid_y, grid_xsize, x, y, xsize, ysize,
+                            );
+                            let (pred, _) = wp_state.predict_and_property(
+                                (grid_x * xsize + x, y & 1),
+                                total_w,
+                                &prediction_data,
+                            );
+                            (pred + palette_entry as i64) as i32
+                        } else {
+                            palette_entry
+                        };
+                        buf_out[out_idx].data.as_rect_mut().row(y)[x] = val;
+                        wp_state.update_errors(val, (grid_x * xsize + x, y & 1), total_w);
+                    }
+                }
+            }
+            let mut wp_image = Image::<i32>::new((total_w + 2, 1))?;
+            wp_state.save_state(&mut wp_image, total_w);
+            buf_out[out_row_idx].auxiliary_data = Some(wp_image);
+        }
+    } else {
+        for c in 0..num_c {
+            for y in 0..h {
+                for (grid_x, index_buf) in buf_in.iter().enumerate().take(grid_xsize) {
+                    let index_img = index_buf.data.as_rect().row(y);
+                    let out_idx = c * grid_ysize * grid_xsize + grid_y * grid_xsize + grid_x;
+                    for (x, &index) in index_img.iter().enumerate() {
+                        let palette_entry = get_palette_value(
+                            &palette,
+                            index as isize,
+                            c,
+                            /*palette_size=*/ num_colors + num_deltas,
+                            /*bit_depth=*/ bit_depth,
+                        );
+                        let val = if index < num_deltas as i32 {
+                            let pred = predictor.predict_one(
+                                get_prediction_data(
+                                    buf_out, out_idx, grid_x, grid_y, grid_xsize, x, y, xsize,
+                                    ysize,
+                                ),
+                                /*wp_pred=*/ 0,
+                            );
+                            (pred + palette_entry as i64) as i32
+                        } else {
+                            palette_entry
+                        };
+                        buf_out[out_idx].data.as_rect_mut().row(y)[x] = val;
+                    }
+                }
+            }
+        }
+    }
+    Ok(())
 }
