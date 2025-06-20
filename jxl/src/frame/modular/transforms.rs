@@ -194,9 +194,9 @@ pub fn make_grids(
                 buf_in,
                 buf_pal,
                 buf_out,
-                predictor: Predictor::AverageAll | Predictor::Weighted,
+                predictor,
                 ..
-            } => {
+            } if predictor.requires_full_row() => {
                 // Delta palette with AverageAll or Weighted. Those are special, because we can
                 // only make progress one full image row at a time (since we need decoded values
                 // from the previous row or two rows).
@@ -272,18 +272,7 @@ pub fn make_grids(
                     );
                     let offsets = match predictor {
                         Predictor::Zero => [].as_slice(),
-                        Predictor::West | Predictor::WestWest => &[(-1, 0)],
-                        Predictor::North => &[(0, -1)],
-                        Predictor::Select
-                        | Predictor::Gradient
-                        | Predictor::NorthWest
-                        | Predictor::AverageWestAndNorth
-                        | Predictor::AverageWestAndNorthWest
-                        | Predictor::AverageNorthAndNorthWest => &[(0, -1), (-1, 0), (-1, -1)],
-                        Predictor::NorthEast | Predictor::AverageNorthAndNorthEast => {
-                            &[(0, -1), (1, 0), (1, -1)]
-                        }
-                        Predictor::AverageAll | Predictor::Weighted => unreachable!(),
+                        _ => &[(0, -1), (-1, 0), (-1, -1)],
                     };
                     for (dx, dy) in offsets {
                         for out in buf_out.iter() {

@@ -8,7 +8,7 @@ use std::array::from_fn;
 use crate::{
     error::{Error, Result},
     headers::modular::WeightedHeader,
-    image::ImageRect,
+    image::{Image, ImageRect},
     util::floor_log2_nonzero,
 };
 use num_derive::FromPrimitive;
@@ -31,6 +31,18 @@ pub enum Predictor {
     AverageNorthAndNorthWest = 11,
     AverageNorthAndNorthEast = 12,
     AverageAll = 13,
+}
+
+impl Predictor {
+    pub fn requires_full_row(&self) -> bool {
+        matches!(
+            self,
+            Predictor::Weighted
+                | Predictor::NorthEast
+                | Predictor::AverageNorthAndNorthEast
+                | Predictor::AverageAll
+        )
+    }
 }
 
 impl TryFrom<u32> for Predictor {
@@ -75,6 +87,119 @@ impl PredictionData {
         let toptop = if y > 1 { rect.row(y - 2)[x] } else { top };
         let toprightright = if x + 2 < rect.size().0 && y > 0 {
             rect.row(y - 1)[x + 2]
+        } else {
+            topright
+        };
+        Self {
+            left,
+            top,
+            toptop,
+            topleft,
+            topright,
+            leftleft,
+            toprightright,
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn get_with_neighbors(
+        rect: ImageRect<i32>,
+        rect_left: Option<ImageRect<i32>>,
+        rect_top: Option<ImageRect<i32>>,
+        rect_top_left: Option<ImageRect<i32>>,
+        rect_right: Option<ImageRect<i32>>,
+        rect_top_right: Option<ImageRect<i32>>,
+        x: usize,
+        y: usize,
+        xsize: usize,
+        ysize: usize,
+    ) -> Self {
+        let left = if x > 0 {
+            rect.row(y)[x - 1]
+        } else if let Some(l) = rect_left {
+            l.row(y)[xsize - 1]
+        } else if y > 0 {
+            rect.row(y - 1)[0]
+        } else if let Some(t) = rect_top {
+            t.row(ysize - 1)[0]
+        } else {
+            0
+        };
+        let top = if y > 0 {
+            rect.row(y - 1)[x]
+        } else if let Some(t) = rect_top {
+            t.row(ysize - 1)[x]
+        } else {
+            left
+        };
+        let topleft = if x > 0 {
+            if y > 0 {
+                rect.row(y - 1)[x - 1]
+            } else if let Some(t) = rect_top {
+                t.row(ysize - 1)[x - 1]
+            } else {
+                left
+            }
+        } else if y > 0 {
+            if let Some(l) = rect_left {
+                l.row(y - 1)[xsize - 1]
+            } else {
+                left
+            }
+        } else if let Some(tl) = rect_top_left {
+            tl.row(ysize - 1)[xsize - 1]
+        } else {
+            left
+        };
+        let topright = if x + 1 < rect.size().0 {
+            if y > 0 {
+                rect.row(y - 1)[x + 1]
+            } else if let Some(t) = rect_top {
+                t.row(ysize - 1)[x + 1]
+            } else {
+                top
+            }
+        } else if y > 0 {
+            if let Some(r) = rect_right {
+                r.row(y - 1)[0]
+            } else {
+                top
+            }
+        } else if let Some(tr) = rect_top_right {
+            tr.row(ysize - 1)[0]
+        } else {
+            top
+        };
+        let leftleft = if x > 1 {
+            rect.row(y)[x - 2]
+        } else if let Some(l) = rect_left {
+            l.row(y)[xsize + x - 2]
+        } else {
+            left
+        };
+        let toptop = if y > 1 {
+            rect.row(y - 2)[x]
+        } else if let Some(t) = rect_top {
+            t.row(ysize + y - 2)[x]
+        } else {
+            top
+        };
+        let toprightright = if x + 2 < rect.size().0 {
+            if y > 0 {
+                rect.row(y - 1)[x + 2]
+            } else if let Some(t) = rect_top {
+                t.row(ysize - 1)[x + 2]
+            } else {
+                topright
+            }
+        } else if y > 0 {
+            if let Some(r) = rect_right {
+                r.row(y - 1)[x + 2 - rect.size().0]
+            } else {
+                topright
+            }
+        } else if let Some(tr) = rect_top_right {
+            tr.row(ysize - 1)[x + 2 - rect.size().0]
         } else {
             topright
         };
@@ -218,7 +343,17 @@ impl<'a> WeightedPredictorState<'a> {
         }
     }
 
-    #[allow(dead_code)]
+    pub fn save_state(&self, wp_image: &mut Image<i32>, xsize: usize) {
+        wp_image
+            .as_rect_mut()
+            .row(0)
+            .copy_from_slice(&self.error[xsize + 2..]);
+    }
+
+    pub fn restore_state(&mut self, wp_image: &Image<i32>, xsize: usize) {
+        self.error[xsize + 2..].copy_from_slice(wp_image.as_rect().row(0));
+    }
+
     pub fn update_errors(&mut self, correct_val: i32, pos: (usize, usize), xsize: usize) {
         let (cur_row, prev_row) = if pos.1 & 1 != 0 {
             (0, xsize + 2)
