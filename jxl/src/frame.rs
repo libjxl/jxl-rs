@@ -506,9 +506,14 @@ impl Frame {
         frame_header: &FrameHeader,
         lf_global: &LfGlobalState,
     ) -> Result<SimpleRenderPipeline> {
-        let num_channels = frame_header.num_extra_channels as usize + 3;
-        let num_temp_channels = if frame_header.has_noise() { 3 } else { 0 };
         let metadata = &decoder_state.file_header.image_metadata;
+        let num_main_channels = if metadata.color_encoding.color_space == ColorSpace::Gray {
+            1
+        } else {
+            3
+        };
+        let num_channels = frame_header.num_extra_channels as usize + num_main_channels;
+        let num_temp_channels = if frame_header.has_noise() { 3 } else { 0 };
         let mut pipeline = SimpleRenderPipelineBuilder::new(
             num_channels + num_temp_channels,
             frame_header.size_upsampled(),
@@ -520,45 +525,45 @@ impl Frame {
                 pipeline =
                     pipeline.add_stage(ConvertModularXYBToF32Stage::new(0, &lf_global.lf_quant))?
             } else {
-                for i in 0..3 {
+                for i in 0..num_main_channels {
                     pipeline =
                         pipeline.add_stage(ConvertModularToF32Stage::new(i, metadata.bit_depth))?;
                 }
             }
         }
-        for i in 3..num_channels {
+        for i in num_main_channels..num_channels {
             pipeline = pipeline.add_stage(ConvertModularToF32Stage::new(i, metadata.bit_depth))?;
         }
-
-        for c in 0..3 {
-            if frame_header.hshift(c) != 0 {
-                pipeline = pipeline.add_stage(HorizontalChromaUpsample::new(c))?;
+        if metadata.color_encoding.color_space != ColorSpace::Gray {
+            for c in 0..3 {
+                if frame_header.hshift(c) != 0 {
+                    pipeline = pipeline.add_stage(HorizontalChromaUpsample::new(c))?;
+                }
+                if frame_header.vshift(c) != 0 {
+                    pipeline = pipeline.add_stage(VerticalChromaUpsample::new(c))?;
+                }
             }
-            if frame_header.vshift(c) != 0 {
-                pipeline = pipeline.add_stage(VerticalChromaUpsample::new(c))?;
+
+            let filters = &frame_header.restoration_filter;
+            if filters.gab {
+                pipeline = pipeline
+                    .add_stage(GaborishStage::new(
+                        0,
+                        filters.gab_x_weight1,
+                        filters.gab_x_weight2,
+                    ))?
+                    .add_stage(GaborishStage::new(
+                        1,
+                        filters.gab_y_weight1,
+                        filters.gab_y_weight2,
+                    ))?
+                    .add_stage(GaborishStage::new(
+                        2,
+                        filters.gab_b_weight1,
+                        filters.gab_b_weight2,
+                    ))?;
             }
         }
-
-        let filters = &frame_header.restoration_filter;
-        if filters.gab {
-            pipeline = pipeline
-                .add_stage(GaborishStage::new(
-                    0,
-                    filters.gab_x_weight1,
-                    filters.gab_x_weight2,
-                ))?
-                .add_stage(GaborishStage::new(
-                    1,
-                    filters.gab_y_weight1,
-                    filters.gab_y_weight2,
-                ))?
-                .add_stage(GaborishStage::new(
-                    2,
-                    filters.gab_b_weight1,
-                    filters.gab_b_weight2,
-                ))?;
-        }
-
         // TODO: EPF
 
         let late_ec_upsample = frame_header.upsampling > 1
@@ -572,9 +577,12 @@ impl Frame {
             for (ec, ec_up) in frame_header.ec_upsampling.iter().enumerate() {
                 if *ec_up > 1 {
                     pipeline = match *ec_up {
-                        2 => pipeline.add_stage(Upsample2x::new(transform_data, 3 + ec)),
-                        4 => pipeline.add_stage(Upsample4x::new(transform_data, 3 + ec)),
-                        8 => pipeline.add_stage(Upsample8x::new(transform_data, 3 + ec)),
+                        2 => pipeline
+                            .add_stage(Upsample2x::new(transform_data, num_main_channels + ec)),
+                        4 => pipeline
+                            .add_stage(Upsample4x::new(transform_data, num_main_channels + ec)),
+                        8 => pipeline
+                            .add_stage(Upsample8x::new(transform_data, num_main_channels + ec)),
                         _ => unreachable!(),
                     }?;
                 }
@@ -595,9 +603,9 @@ impl Frame {
         if frame_header.upsampling > 1 {
             let transform_data = &decoder_state.file_header.transform_data;
             let nb_channels = if late_ec_upsample {
-                3 + frame_header.ec_upsampling.len()
+                num_main_channels + frame_header.ec_upsampling.len()
             } else {
-                3
+                num_main_channels
             };
             for c in 0..nb_channels {
                 pipeline = match frame_header.upsampling {
@@ -708,7 +716,13 @@ impl Frame {
         debug!(section_size = br.total_bits_available());
         if self.header.has_noise() {
             // TODO(sboukortt): consider making this a dedicated stage
-            let num_channels = self.header.num_extra_channels as usize + 3;
+            let metadata = &self.decoder_state.file_header.image_metadata;
+            let num_main_channels = if metadata.color_encoding.color_space == ColorSpace::Gray {
+                1
+            } else {
+                3
+            };
+            let num_channels = self.header.num_extra_channels as usize + num_main_channels;
             self.render_pipeline.as_mut().unwrap().fill_input_channels(
                 &[num_channels, num_channels + 1, num_channels + 2],
                 group,
