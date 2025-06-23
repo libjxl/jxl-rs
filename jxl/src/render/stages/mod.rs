@@ -30,6 +30,7 @@ pub use gaborish::*;
 pub use noise::*;
 pub use patches::*;
 pub use save::*;
+pub use splines::*;
 pub use spot::*;
 pub use upsample::*;
 pub use xyb::*;

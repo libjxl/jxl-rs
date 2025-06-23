@@ -596,7 +596,13 @@ impl Frame {
             })?
         }
 
-        // TODO: splines
+        if frame_header.has_splines() {
+            pipeline = pipeline.add_stage(SplinesStage::new(
+                lf_global.splines.clone().unwrap(),
+                frame_header.size(),
+                &lf_global.color_correlation_params.unwrap_or_default(),
+            ))?
+        }
 
         if frame_header.upsampling > 1 {
             let transform_data = &decoder_state.file_header.transform_data;
