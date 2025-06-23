@@ -7,7 +7,7 @@ use crate::headers::extra_channels::{ExtraChannel, ExtraChannelInfo};
 
 use super::patches::{PatchBlendMode, PatchBlending};
 
-const K_SMALL_ALPHA: f32 = 1e-6;
+const K_SMALL_ALPHA: f32 = 1.0f32 / (1u32 << 26) as f32; // Equivalent to C++ kSmallAlpha
 
 #[inline]
 fn maybe_clamp(v: f32, clamp: bool) -> f32 {
@@ -18,32 +18,33 @@ fn perform_alpha_blending_layers<T: AsRef<[f32]>, V: AsMut<[f32]>>(
     bg: &[T],
     fg: &[T],
     alpha_is_premultiplied: bool,
+    alpha: usize,
     clamp: bool,
     out: &mut [V],
 ) {
     if alpha_is_premultiplied {
         for x in 0..out[0].as_mut().len() {
-            let fga = maybe_clamp(fg[3].as_ref()[x], clamp);
+            let fga = maybe_clamp(fg[3+alpha].as_ref()[x], clamp);
             out[0].as_mut()[x] = fg[0].as_ref()[x] + bg[0].as_ref()[x] * (1.0 - fga);
             out[1].as_mut()[x] = fg[1].as_ref()[x] + bg[1].as_ref()[x] * (1.0 - fga);
             out[2].as_mut()[x] = fg[2].as_ref()[x] + bg[2].as_ref()[x] * (1.0 - fga);
-            out[3].as_mut()[x] = 1.0 - (1.0 - fga) * (1.0 - bg[3].as_ref()[x]);
+            out[3+alpha].as_mut()[x] = 1.0 - (1.0 - fga) * (1.0 - bg[3+alpha].as_ref()[x]);
         }
     } else {
         for x in 0..out[0].as_mut().len() {
-            let fga = maybe_clamp(fg[3].as_ref()[x], clamp);
-            let new_a = 1.0 - (1.0 - fga) * (1.0 - bg[3].as_ref()[x]);
+            let fga = maybe_clamp(fg[3+alpha].as_ref()[x], clamp);
+            let new_a = 1.0 - (1.0 - fga) * (1.0 - bg[3+alpha].as_ref()[x]);
             let rnew_a = if new_a > 0.0 { 1.0 / new_a } else { 0.0 };
             out[0].as_mut()[x] = (fg[0].as_ref()[x] * fga
-                + bg[0].as_ref()[x] * bg[3].as_ref()[x] * (1.0 - fga))
+                + bg[0].as_ref()[x] * bg[3+alpha].as_ref()[x] * (1.0 - fga))
                 * rnew_a;
             out[1].as_mut()[x] = (fg[1].as_ref()[x] * fga
-                + bg[1].as_ref()[x] * bg[3].as_ref()[x] * (1.0 - fga))
+                + bg[1].as_ref()[x] * bg[3+alpha].as_ref()[x] * (1.0 - fga))
                 * rnew_a;
             out[2].as_mut()[x] = (fg[2].as_ref()[x] * fga
-                + bg[2].as_ref()[x] * bg[3].as_ref()[x] * (1.0 - fga))
+                + bg[2].as_ref()[x] * bg[3+alpha].as_ref()[x] * (1.0 - fga))
                 * rnew_a;
-            out[3].as_mut()[x] = new_a;
+            out[3+alpha].as_mut()[x] = new_a;
         }
     }
 }
@@ -109,22 +110,9 @@ pub fn perform_mul_blending(bg: &[f32], fg: &[f32], clamp_alpha: bool, out: &mut
     }
 }
 
-pub fn premultiply_alpha(r: &mut [f32], g: &mut [f32], b: &mut [f32], a: &[f32]) {
-    for x in 0..a.len() {
-        let multiplier = a[x].max(K_SMALL_ALPHA);
-        r[x] *= multiplier;
-        g[x] *= multiplier;
-        b[x] *= multiplier;
-    }
-}
-
-pub fn unpremultiply_alpha(r: &mut [f32], g: &mut [f32], b: &mut [f32], a: &[f32]) {
-    for x in 0..a.len() {
-        let multiplier = 1.0 / a[x].max(K_SMALL_ALPHA);
-        r[x] *= multiplier;
-        g[x] *= multiplier;
-        b[x] *= multiplier;
-    }
+pub fn unpremultiply_alpha(r: f32, g: f32, b: f32, a: f32) -> (f32, f32, f32) {
+    let multiplier = 1.0 / a.max(K_SMALL_ALPHA);
+    (r * multiplier, g * multiplier, b * multiplier)
 }
 
 fn add<T: AsRef<[f32]>, V: AsMut<[f32]>>(bg: &[T], fg: &[T], out: &mut [V]) {
@@ -144,19 +132,10 @@ fn blend_weighted<T: AsRef<[f32]>, V: AsMut<[f32]>>(
     out: &mut [V],
 ) {
     perform_alpha_blending_layers(
-        &[
-            bg[0].as_ref(),
-            bg[1].as_ref(),
-            bg[2].as_ref(),
-            bg[3 + alpha].as_ref(),
-        ],
-        &[
-            fg[0].as_ref(),
-            fg[1].as_ref(),
-            fg[2].as_ref(),
-            fg[3 + alpha].as_ref(),
-        ],
+        bg,
+        fg,
         alpha_is_premultiplied,
+        alpha,
         clamp,
         out,
     );
@@ -386,6 +365,7 @@ mod tests {
                 &bg_channels,
                 &fg_channels,
                 alpha_is_premultiplied,
+                0,
                 clamp_alpha,
                 &mut out_channels,
             );
@@ -451,6 +431,7 @@ mod tests {
                 &bg_channels,
                 &fg_channels,
                 alpha_is_premultiplied,
+                0,
                 clamp_alpha,
                 &mut out_channels,
             );
@@ -516,6 +497,7 @@ mod tests {
                 &bg_channels,
                 &fg_channels,
                 alpha_is_premultiplied,
+                0,
                 clamp_alpha,
                 &mut out_channels,
             );
@@ -590,6 +572,7 @@ mod tests {
                 &bg_channels,
                 &fg_channels,
                 alpha_is_premultiplied,
+                0,
                 clamp_alpha,
                 &mut out_channels,
             );
@@ -664,6 +647,7 @@ mod tests {
                 &bg_channels,
                 &fg_channels,
                 alpha_is_premultiplied,
+                0,
                 clamp_alpha,
                 &mut out_channels,
             );
@@ -730,6 +714,7 @@ mod tests {
                 &bg_channels,
                 &fg_channels,
                 alpha_is_premultiplied,
+                0,
                 clamp_alpha,
                 &mut out_channels,
             );
@@ -809,6 +794,7 @@ mod tests {
                 &bg_channels,
                 &fg_channels,
                 alpha_is_premultiplied,
+                0,
                 clamp_alpha,
                 &mut out_channels,
             );
@@ -1185,8 +1171,6 @@ mod tests {
         use super::{super::*, *};
         use crate::util::test::assert_all_almost_eq;
         use test_log::test;
-
-        const K_SMALL_ALPHA: f32 = 1.0f32 / (1u32 << 26) as f32; // Equivalent to C++ kSmallAlpha
 
         // --- Tests for perform_alpha_weighted_add ---
 
