@@ -13,6 +13,7 @@ use crate::{
 pub enum SaveStageType {
     Output,
     Reference,
+    Lf,
 }
 
 pub struct SaveStage<T: ImageDataType> {
