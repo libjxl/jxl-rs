@@ -6,7 +6,7 @@
 use crate::{
     error::Result,
     frame::ReferenceFrame,
-    headers::{extra_channels::ExtraChannelInfo, frame_header::*, FileHeader},
+    headers::{FileHeader, extra_channels::ExtraChannelInfo, frame_header::*},
     render::{RenderPipelineExtendStage, RenderPipelineStage},
 };
 

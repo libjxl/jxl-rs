@@ -75,7 +75,7 @@ struct Opt {
 fn main() -> Result<(), Error> {
     #[cfg(feature = "tracing-subscriber")]
     {
-        use tracing_subscriber::{fmt, prelude::*, EnvFilter};
+        use tracing_subscriber::{EnvFilter, fmt, prelude::*};
         tracing_subscriber::registry()
             .with(fmt::layer())
             .with(EnvFilter::from_default_env())

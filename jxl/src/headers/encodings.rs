@@ -6,7 +6,7 @@
 use super::{frame_header::PermutationNonserialized, permutation::Permutation};
 use crate::{
     bit_reader::BitReader,
-    entropy_coding::decode::{unpack_signed, Histograms},
+    entropy_coding::decode::{Histograms, unpack_signed},
     error::Error,
 };
 

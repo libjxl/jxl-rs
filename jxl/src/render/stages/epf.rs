@@ -6,9 +6,9 @@
 use std::sync::Arc;
 
 use crate::{
+    BLOCK_DIM, MIN_SIGMA, SIGMA_PADDING,
     image::Image,
     render::{RenderPipelineInOutStage, RenderPipelineStage},
-    BLOCK_DIM, MIN_SIGMA, SIGMA_PADDING,
 };
 
 /// 5x5 plus-shaped kernel with 5 SADs per pixel (3x3 plus-shaped). So this makes this filter a 7x7 filter.

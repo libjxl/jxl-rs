@@ -221,11 +221,7 @@ pub fn clamped_gradient(left: i64, top: i64, topleft: i64) -> i64 {
     let max = left.max(top);
     let grad = left + top - topleft;
     let grad_clamp_max = if topleft < min { max } else { grad };
-    if topleft > max {
-        min
-    } else {
-        grad_clamp_max
-    }
+    if topleft > max { min } else { grad_clamp_max }
 }
 
 impl Predictor {

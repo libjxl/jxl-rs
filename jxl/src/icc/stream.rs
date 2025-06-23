@@ -10,8 +10,8 @@ use byteorder::{ReadBytesExt, WriteBytesExt};
 use crate::bit_reader::*;
 use crate::entropy_coding::decode::{Histograms, Reader};
 use crate::error::{Error, Result};
-use crate::util::tracing_wrappers::{instrument, warn};
 use crate::util::NewWithCapacity;
+use crate::util::tracing_wrappers::{instrument, warn};
 
 fn read_varint(mut read_one: impl FnMut() -> Result<u8>) -> Result<u64> {
     let mut value = 0u64;

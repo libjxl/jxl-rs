@@ -7,7 +7,7 @@ use crate::{
     bit_reader::BitReader,
     error::Error,
     frame::{DecoderState, Frame, Section},
-    headers::{bit_depth::BitDepth, FileHeader, JxlHeader},
+    headers::{FileHeader, JxlHeader, bit_depth::BitDepth},
     icc::read_icc,
     image::{Image, ImageDataType},
     util::tracing_wrappers::*,
@@ -131,7 +131,7 @@ pub fn decode_jxl_codestream(
 
 #[cfg(test)]
 mod test {
-    use super::{decode_jxl_codestream, DecodeOptions};
+    use super::{DecodeOptions, decode_jxl_codestream};
     use crate::{container::ContainerParser, error::Error};
     use jxl_macros::for_each_test_file;
     use std::path::Path;

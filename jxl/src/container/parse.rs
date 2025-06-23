@@ -5,7 +5,7 @@
 //
 // Originally written for jxl-oxide.
 
-use super::{box_header::*, BitstreamKind, ContainerParser, DetectState, JxlpIndexState};
+use super::{BitstreamKind, ContainerParser, DetectState, JxlpIndexState, box_header::*};
 use crate::{
     error::{Error, Result},
     util::tracing_wrappers::*,

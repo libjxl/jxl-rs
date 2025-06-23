@@ -6,21 +6,22 @@
 use num_traits::Float;
 
 use crate::{
+    BLOCK_DIM, BLOCK_SIZE,
     bit_reader::BitReader,
     error::{Error, Result},
     frame::{
-        block_context_map::*, color_correlation_map::COLOR_TILE_DIM_IN_BLOCKS,
-        quant_weights::DequantMatrices, transform_map::*, HfGlobalState, HfMetadata, LfGlobalState,
+        HfGlobalState, HfMetadata, LfGlobalState, block_context_map::*,
+        color_correlation_map::COLOR_TILE_DIM_IN_BLOCKS, quant_weights::DequantMatrices,
+        transform_map::*,
     },
     headers::frame_header::FrameHeader,
     image::{Image, ImageRect, Rect},
-    util::{tracing_wrappers::*, CeilLog2},
+    util::{CeilLog2, tracing_wrappers::*},
     var_dct::{
-        dct::{compute_scaled_dct, DCT1DImpl, DCT1D},
-        dct_scales::{dct_total_resample_scale, DctResampleScales, HasDctResampleScales},
+        dct::{DCT1D, DCT1DImpl, compute_scaled_dct},
+        dct_scales::{DctResampleScales, HasDctResampleScales, dct_total_resample_scale},
         transform::*,
     },
-    BLOCK_DIM, BLOCK_SIZE,
 };
 
 // Computes the lowest-frequency ROWSxCOLS-sized square in output, which is a
@@ -543,13 +544,7 @@ pub fn decode_vardct_group(
                 }
                 trace!(
                     "Decoding block ({},{}) channel {} with {}x{} block transform {} (shape id {})",
-                    sbx[c],
-                    sby[c],
-                    c,
-                    cx,
-                    cy,
-                    transform_id,
-                    shape_id
+                    sbx[c], sby[c], c, cx, cy, transform_id, shape_id
                 );
                 let predicted_nzeros = predict_num_nonzeros(&num_nzeros[c], sbx[c], sby[c]);
                 let block_context =
@@ -562,8 +557,7 @@ pub fn decode_vardct_group(
                     "block ({},{},{c}) predicted_nzeros: {predicted_nzeros} \
                        nzero_ctx: {nonzero_context} (offset: {context_offset}) \
                        nzeros: {nonzeros}",
-                    sbx[c],
-                    sby[c]
+                    sbx[c], sby[c]
                 );
                 if nonzeros + num_blocks > num_coeffs {
                     return Err(Error::InvalidNumNonZeros(nonzeros, num_blocks));

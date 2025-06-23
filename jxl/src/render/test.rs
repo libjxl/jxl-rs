@@ -7,15 +7,15 @@ use crate::{
     error::Result,
     headers::Orientation,
     image::{Image, ImageDataType, ImageRectMut},
-    util::{tracing_wrappers::instrument, ShiftRightCeil},
+    util::{ShiftRightCeil, tracing_wrappers::instrument},
 };
 use rand::SeedableRng;
 
 use super::{
+    RenderPipeline, RenderPipelineBuilder, RenderPipelineStage,
     internal::RenderPipelineStageInfo,
     simple_pipeline::SimpleRenderPipelineBuilder,
     stages::{SaveStage, SaveStageType},
-    RenderPipeline, RenderPipelineBuilder, RenderPipelineStage,
 };
 
 pub(super) fn make_and_run_simple_pipeline<

@@ -87,7 +87,7 @@ pub fn to_ppm_as_8bit(img: &[ImageRect<'_, f32>; 3]) -> Vec<u8> {
 
 #[cfg(test)]
 mod test {
-    use super::{to_pgm, ToU8ForWriting};
+    use super::{ToU8ForWriting, to_pgm};
     use jxl::error::Result;
     use jxl::image::Image;
 

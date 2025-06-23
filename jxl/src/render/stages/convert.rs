@@ -85,7 +85,12 @@ impl RenderPipelineStage for ConvertModularXYBToF32Stage {
         row: &mut [(&[&[i32]], &mut [&mut [f32]])],
     ) {
         let [scale_x, scale_y, scale_b] = self.scale;
-        let [(input_y, output_x), (input_x, output_y), (input_b, output_b)] = row else {
+        let [
+            (input_y, output_x),
+            (input_x, output_y),
+            (input_b, output_b),
+        ] = row
+        else {
             panic!(
                 "incorrect number of channels; expected 3, found {}",
                 row.len()

@@ -8,7 +8,7 @@ use std::fmt::Debug;
 use crate::bit_reader::BitReader;
 use crate::entropy_coding::decode::*;
 use crate::error::{Error, Result};
-use crate::util::{tracing_wrappers::*, CeilLog2, NewWithCapacity};
+use crate::util::{CeilLog2, NewWithCapacity, tracing_wrappers::*};
 
 pub const HUFFMAN_MAX_BITS: usize = 15;
 const TABLE_BITS: usize = 8;

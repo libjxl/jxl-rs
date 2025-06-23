@@ -18,7 +18,7 @@ mod stream;
 mod tag;
 
 use header::read_header;
-use stream::{read_varint_from_reader, IccStream};
+use stream::{IccStream, read_varint_from_reader};
 use tag::{read_single_command, read_tag_list};
 
 const ICC_CONTEXTS: usize = 41;

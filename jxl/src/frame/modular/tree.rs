@@ -5,14 +5,14 @@
 
 use std::fmt::Debug;
 
-use super::{predict::WeightedPredictorState, ModularChannel, Predictor};
+use super::{ModularChannel, Predictor, predict::WeightedPredictorState};
 use crate::{
     bit_reader::BitReader,
     entropy_coding::decode::Histograms,
     error::{Error, Result},
     frame::modular::predict::PredictionData,
     image::Image,
-    util::{tracing_wrappers::*, NewWithCapacity},
+    util::{NewWithCapacity, tracing_wrappers::*},
 };
 
 #[derive(Debug)]
@@ -149,7 +149,9 @@ impl Tree {
                         if l > val || u <= val {
                             return Err(Error::TreeSplitOnEmptyRange(p as u8, val, l, u));
                         }
-                        trace!("splitting at node {i} on property {p}, range [{l}, {u}] at position {val}");
+                        trace!(
+                            "splitting at node {i} on property {p}, range [{l}, {u}] at position {val}"
+                        );
                         property_ranges[left as usize * num_properties + p] = (val + 1, u);
                         property_ranges[right as usize * num_properties + p] = (l, val);
                     } else {
@@ -223,12 +225,7 @@ impl Tree {
 
         trace!(
             left,
-            top,
-            topleft,
-            topright,
-            leftleft,
-            toptop,
-            _toprightright
+            top, topleft, topright, leftleft, toptop, _toprightright
         );
 
         // Position

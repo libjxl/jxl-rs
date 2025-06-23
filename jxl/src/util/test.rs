@@ -12,7 +12,7 @@ use crate::{
     bit_reader::BitReader,
     container::ContainerParser,
     error::Error as JXLError,
-    headers::{encodings::*, frame_header::TocNonserialized, FileHeader, JxlHeader},
+    headers::{FileHeader, JxlHeader, encodings::*, frame_header::TocNonserialized},
     image::Image,
 };
 

@@ -86,9 +86,13 @@ pub enum Error {
     InvalidContextMap(u32),
     #[error("Invalid context map: number of histogram {0}, number of distinct histograms {1}")]
     InvalidContextMapHole(u32, u32),
-    #[error("Invalid permutation: skipped elements {skip} and encoded elements {end} don't fit in permutation of size {size}")]
+    #[error(
+        "Invalid permutation: skipped elements {skip} and encoded elements {end} don't fit in permutation of size {size}"
+    )]
     InvalidPermutationSize { size: u32, skip: u32, end: u32 },
-    #[error("Invalid permutation: Lehmer code {lehmer} out of bounds in permutation of size {size} at index {idx}")]
+    #[error(
+        "Invalid permutation: Lehmer code {lehmer} out of bounds in permutation of size {size} at index {idx}"
+    )]
     InvalidPermutationLehmerCode { size: u32, idx: u32, lehmer: u32 },
     #[error("Invalid quant encoding mode")]
     InvalidQuantEncodingMode,
@@ -142,7 +146,9 @@ pub enum Error {
     PatchesInvalidBlendMode(u8, u8),
     #[error("Invalid Patch: negative {0}-coordinate: {1} base {0},  {2} delta {0}")]
     PatchesInvalidDelta(String, usize, i32),
-    #[error("Invalid position specified in reference frame in {0}-coordinate: {0}0 + {0}size = {1} + {2} > {3} = reference_frame {0}size")]
+    #[error(
+        "Invalid position specified in reference frame in {0}-coordinate: {0}0 + {0}size = {1} + {2} > {3} = reference_frame {0}size"
+    )]
     PatchesInvalidPosition(String, usize, usize, usize),
     #[error("Patches invalid reference frame at index {0}")]
     PatchesInvalidReference(usize),
@@ -182,7 +188,9 @@ pub enum Error {
     TreeMultiplierTooLarge(u32, u32),
     #[error("Modular tree multiplier too large: {0}, multiplier log is {1}")]
     TreeMultiplierBitsTooLarge(u32, u32),
-    #[error("Modular tree splits on property {0} at value {1}, which is outside the possible range of [{2}, {3}]")]
+    #[error(
+        "Modular tree splits on property {0} at value {1}, which is outside the possible range of [{2}, {3}]"
+    )]
     TreeSplitOnEmptyRange(u8, i32, i32, i32),
     #[error("Modular stream requested a global tree but there isn't one")]
     NoGlobalTree,

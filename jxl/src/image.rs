@@ -7,7 +7,7 @@ use std::fmt::Debug;
 
 use crate::{
     error::{Error, Result},
-    util::{tracing_wrappers::*, ShiftRightCeil},
+    util::{ShiftRightCeil, tracing_wrappers::*},
 };
 
 mod private {
@@ -334,9 +334,7 @@ impl<'a, T: ImageDataType> ImageRect<'a, T> {
         let start = (row + self.rect.origin.1) * self.image.size.0 + self.rect.origin.0;
         trace!(
             "{self:?} img size {:?} rect size {:?} row {row} start {}",
-            self.image.size,
-            self.rect.size,
-            start
+            self.image.size, self.rect.size, start
         );
         &self.image.data[start..start + self.rect.size.0]
     }
@@ -461,8 +459,7 @@ impl<'a, T: ImageDataType> ImageRectMut<'a, T> {
         let start = self.row_offset(row);
         trace!(
             "{self:?} img size {:?} row {row} start {}",
-            self.image.size,
-            start
+            self.image.size, start
         );
         &mut self.image.data[start..start + self.rect.size.0]
     }
@@ -526,13 +523,15 @@ mod test {
                 .size(),
             (1, 1)
         );
-        assert!(image
-            .as_rect_mut()
-            .rect(Rect {
-                origin: (30, 30),
-                size: (3, 3)
-            })
-            .is_err());
+        assert!(
+            image
+                .as_rect_mut()
+                .rect(Rect {
+                    origin: (30, 30),
+                    size: (3, 3)
+                })
+                .is_err()
+        );
         image
             .as_rect_mut()
             .rect(Rect {

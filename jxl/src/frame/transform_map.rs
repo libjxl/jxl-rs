@@ -3,8 +3,8 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-use crate::error::{Error::InvalidVarDCTTransform, Result};
 use crate::BLOCK_DIM;
+use crate::error::{Error::InvalidVarDCTTransform, Result};
 
 pub const MAX_COEFF_BLOCKS: usize = 32;
 pub const MAX_BLOCK_DIM: usize = BLOCK_DIM * MAX_COEFF_BLOCKS;

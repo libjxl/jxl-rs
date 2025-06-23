@@ -11,6 +11,7 @@ use enum_iterator::Sequence;
 use half::f16;
 
 use crate::{
+    BLOCK_DIM, BLOCK_SIZE,
     bit_reader::BitReader,
     error::{
         Error::{
@@ -20,12 +21,11 @@ use crate::{
         Result,
     },
     frame::{
-        modular::{decode::decode_modular_subbitstream, ModularChannel, ModularStreamId},
-        transform_map::{self, HfTransformType},
         LfGlobalState,
+        modular::{ModularChannel, ModularStreamId, decode::decode_modular_subbitstream},
+        transform_map::{self, HfTransformType},
     },
     headers::{bit_depth::BitDepth, frame_header::FrameHeader},
-    BLOCK_DIM, BLOCK_SIZE,
 };
 
 pub const INV_LF_QUANT: [f32; 3] = [4096.0, 512.0, 256.0];
