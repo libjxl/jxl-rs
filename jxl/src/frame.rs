@@ -690,7 +690,17 @@ impl Frame {
         // TODO: spot colors
 
         if frame_header.is_visible() {
-            for i in 0..num_channels {
+            let color_space = decoder_state
+                .file_header
+                .image_metadata
+                .color_encoding
+                .color_space;
+            let num_color_channels = if color_space == ColorSpace::Gray {
+                1
+            } else {
+                3
+            };
+            for i in (0..num_color_channels).chain(3..num_channels) {
                 pipeline = pipeline.add_stage(SaveStage::<f32>::new(
                     SaveStageType::Output,
                     i,
