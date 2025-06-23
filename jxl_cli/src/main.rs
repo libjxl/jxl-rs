@@ -5,7 +5,7 @@
 
 use clap::Parser;
 use jxl::container::{ContainerParser, ParseEvent};
-use jxl::decode::{DecodeOptions, ImageData};
+use jxl::decode::{DecodeOptions, DecodeResult, ImageData};
 use jxl::error::Error;
 use jxl::headers::bit_depth::BitDepth;
 use std::fs;
@@ -14,7 +14,7 @@ use std::path::PathBuf;
 
 pub mod enc;
 
-fn save_icc(icc_bytes: Vec<u8>, icc_filename: Option<PathBuf>) -> Result<(), Error> {
+fn save_icc(icc_bytes: &[u8], icc_filename: Option<PathBuf>) -> Result<(), Error> {
     match icc_filename {
         Some(icc_filename) => {
             std::fs::write(icc_filename, icc_bytes).map_err(|_| Error::OutputWriteFailure)
@@ -26,6 +26,7 @@ fn save_icc(icc_bytes: Vec<u8>, icc_filename: Option<PathBuf>) -> Result<(), Err
 fn save_image(
     image_data: ImageData<f32>,
     bit_depth: BitDepth,
+    icc_bytes: Option<&[u8]>,
     output_filename: PathBuf,
 ) -> Result<(), Error> {
     let fn_str: String = String::from(output_filename.to_string_lossy());
@@ -47,7 +48,7 @@ fn save_image(
     } else if fn_str.ends_with(".npy") {
         output_bytes = enc::numpy::to_numpy(image_data)?;
     } else if fn_str.ends_with(".png") {
-        output_bytes = enc::png::to_png(image_data, bit_depth)?;
+        output_bytes = enc::png::to_png(image_data, bit_depth, icc_bytes)?;
     }
     if output_bytes.is_empty() {
         return Err(Error::OutputFormatNotSupported);
@@ -132,11 +133,15 @@ fn main() -> Result<(), Error> {
     let mut options = DecodeOptions::new();
     options.xyb_output_linear = numpy_output;
     options.render_spotcolors = !numpy_output;
-    let (image_data, bit_depth, icc_bytes) =
-        jxl::decode::decode_jxl_codestream(options, &codestream)?;
+    let DecodeResult {
+        image_data,
+        bit_depth,
+        original_icc,
+        data_icc,
+    } = jxl::decode::decode_jxl_codestream(options, &codestream)?;
 
-    let icc_result = save_icc(icc_bytes, opt.icc_out);
-    let image_result = save_image(image_data, bit_depth, opt.output);
+    let icc_result = save_icc(original_icc.as_slice(), opt.icc_out);
+    let image_result = save_image(image_data, bit_depth, data_icc.as_deref(), opt.output);
 
     if let Err(ref err) = icc_result {
         println!("Failed to save ICC profile: {err}");

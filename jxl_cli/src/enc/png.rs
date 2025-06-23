@@ -7,6 +7,7 @@ use jxl::decode::ImageData;
 use jxl::error::{Error, Result};
 use jxl::headers::bit_depth::BitDepth;
 
+use std::borrow::Cow;
 use std::io::BufWriter;
 
 fn png_color(num_channels: usize) -> Result<png::ColorType> {
@@ -19,7 +20,12 @@ fn png_color(num_channels: usize) -> Result<png::ColorType> {
     }
 }
 
-fn encode_png(image_data: ImageData<f32>, bit_depth: BitDepth, buf: &mut Vec<u8>) -> Result<()> {
+fn encode_png(
+    image_data: ImageData<f32>,
+    bit_depth: BitDepth,
+    icc_bytes: Option<&[u8]>,
+    buf: &mut Vec<u8>,
+) -> Result<()> {
     if image_data.frames.is_empty()
         || image_data.frames[0].channels.is_empty()
         || image_data.size.0 == 0
@@ -44,7 +50,32 @@ fn encode_png(image_data: ImageData<f32>, bit_depth: BitDepth, buf: &mut Vec<u8>
     }
 
     let w = BufWriter::new(buf);
-    let mut encoder = png::Encoder::new(w, width as u32, height as u32);
+    let mut info = png::Info::with_size(width as u32, height as u32);
+    if let Some(icc_bytes) = icc_bytes {
+        info.icc_profile = Some(Cow::from(icc_bytes));
+    } else {
+        info.srgb = Some(png::SrgbRenderingIntent::RelativeColorimetric);
+        info.source_gamma = Some(png::ScaledFloat::from_scaled(45455));
+        info.source_chromaticities = Some(png::SourceChromaticities {
+            white: (
+                png::ScaledFloat::from_scaled(31270),
+                png::ScaledFloat::from_scaled(32900),
+            ),
+            red: (
+                png::ScaledFloat::from_scaled(64000),
+                png::ScaledFloat::from_scaled(33000),
+            ),
+            green: (
+                png::ScaledFloat::from_scaled(30000),
+                png::ScaledFloat::from_scaled(60000),
+            ),
+            blue: (
+                png::ScaledFloat::from_scaled(15000),
+                png::ScaledFloat::from_scaled(6000),
+            ),
+        });
+    }
+    let mut encoder = png::Encoder::with_info(w, info).unwrap();
     encoder.set_color(png_color(num_channels)?);
     let eight_bits = bit_depth.bits_per_sample() <= 8;
     encoder.set_depth(if eight_bits {
@@ -91,8 +122,12 @@ fn encode_png(image_data: ImageData<f32>, bit_depth: BitDepth, buf: &mut Vec<u8>
     Ok(())
 }
 
-pub fn to_png(image_data: ImageData<f32>, bit_depth: BitDepth) -> Result<Vec<u8>> {
+pub fn to_png(
+    image_data: ImageData<f32>,
+    bit_depth: BitDepth,
+    icc_bytes: Option<&[u8]>,
+) -> Result<Vec<u8>> {
     let mut buf = Vec::<u8>::new();
-    encode_png(image_data, bit_depth, &mut buf)?;
+    encode_png(image_data, bit_depth, icc_bytes, &mut buf)?;
     Ok(buf)
 }

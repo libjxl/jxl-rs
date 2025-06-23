@@ -664,6 +664,7 @@ impl Frame {
                 .file_header
                 .transform_data
                 .opsin_inverse_matrix;
+            // TODO(sboukortt): support more output colorspaces than just sRGB
             pipeline = pipeline.add_stage(XybToLinearSrgbStage::new(
                 0,
                 opsin.clone(),
