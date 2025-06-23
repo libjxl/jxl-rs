@@ -108,6 +108,7 @@ impl ReferenceFrame {
 pub struct DecoderState {
     file_header: FileHeader,
     reference_frames: [Option<ReferenceFrame>; Self::MAX_STORED_FRAMES],
+    lf_frames: [Option<[Image<f32>; 3]>; 4],
     pub xyb_output_linear: bool,
     pub enable_output: bool,
 }
@@ -119,6 +120,7 @@ impl DecoderState {
         Self {
             file_header,
             reference_frames: [None, None, None, None],
+            lf_frames: [None, None, None, None],
             xyb_output_linear: true,
             enable_output: true,
         }
@@ -193,14 +195,16 @@ impl Frame {
             3
         };
         let size_blocks = frame_header.size_blocks();
-        let has_lf_image =
-            frame_header.encoding == Encoding::VarDCT && !frame_header.has_lf_frame();
-        let lf_image = if has_lf_image {
-            Some([
-                Image::new(size_blocks)?,
-                Image::new(size_blocks)?,
-                Image::new(size_blocks)?,
-            ])
+        let lf_image = if frame_header.encoding == Encoding::VarDCT {
+            if frame_header.has_lf_frame() {
+                decoder_state.lf_frames[frame_header.lf_level as usize].clone()
+            } else {
+                Some([
+                    Image::new(size_blocks)?,
+                    Image::new(size_blocks)?,
+                    Image::new(size_blocks)?,
+                ])
+            }
         } else {
             None
         };
@@ -620,6 +624,17 @@ impl Frame {
                     num_channels,
                 ))?;
         }
+        if frame_header.lf_level != 0 {
+            for i in 0..3 {
+                pipeline = pipeline.add_stage(SaveStage::<f32>::new(
+                    SaveStageType::Lf,
+                    i,
+                    frame_header.size_upsampled(),
+                    1.0,
+                    Orientation::Identity,
+                )?)?;
+            }
+        }
         if frame_header.can_be_referenced && frame_header.save_before_ct {
             for i in 0..num_channels {
                 pipeline = pipeline.add_stage(SaveStage::<f32>::new(
@@ -824,7 +839,13 @@ impl Frame {
     pub fn finalize(mut self) -> Result<FrameOutput> {
         let mut output_frame_data = Vec::<Image<f32>>::new();
         let mut reference_frame_data = Vec::<Image<f32>>::new();
+        let mut lf_frame_data = [
+            Image::<f32>::new((0, 0))?,
+            Image::<f32>::new((0, 0))?,
+            Image::<f32>::new((0, 0))?,
+        ];
 
+        let mut lf_chan = 0;
         if let Some(render_pipeline) = self.render_pipeline {
             for stage in render_pipeline
                 .into_stages()
@@ -837,6 +858,10 @@ impl Frame {
                     }
                     SaveStageType::Reference => {
                         reference_frame_data.push(stage.into_buffer());
+                    }
+                    SaveStageType::Lf => {
+                        lf_frame_data[lf_chan] = stage.into_buffer();
+                        lf_chan += 1;
                     }
                 }
             }
@@ -851,6 +876,9 @@ impl Frame {
                 });
         }
 
+        if self.header.lf_level != 0 {
+            self.decoder_state.lf_frames[(self.header.lf_level - 1) as usize] = Some(lf_frame_data);
+        }
         let channels = if self.header.is_visible() {
             Some(output_frame_data)
         } else {

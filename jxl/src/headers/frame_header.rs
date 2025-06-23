@@ -338,7 +338,7 @@ pub struct FrameHeader {
     #[coder(u2S(1, 2, 3, 4))]
     #[default(0)]
     #[condition(frame_type == FrameType::LFFrame)]
-    lf_level: u32,
+    pub lf_level: u32,
 
     #[default(false)]
     #[condition(frame_type != FrameType::LFFrame)]

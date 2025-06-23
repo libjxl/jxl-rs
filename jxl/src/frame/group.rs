@@ -431,17 +431,11 @@ pub fn decode_vardct_group(
                 hf_coefficients.1.as_rect_mut(),
                 hf_coefficients.2.as_rect_mut(),
             );
-            let mut rows = [
+            [
                 hf_coefficients_rects.0.row(group),
                 hf_coefficients_rects.1.row(group),
                 hf_coefficients_rects.2.row(group),
-            ];
-            if pass == 0 {
-                for row in rows.iter_mut() {
-                    row.fill(0);
-                }
-            }
-            rows
+            ]
         }
         None => {
             coeffs_storage = vec![0; 3 * FrameHeader::GROUP_DIM * FrameHeader::GROUP_DIM];
@@ -593,7 +587,7 @@ pub fn decode_vardct_group(
                     nonzeros -= prev;
                     let coeff_index =
                         hf_global.passes[pass].coeff_orders[shape_id * 3 + c][k] as usize;
-                    coeffs[c][coeffs_offset + coeff_index] = coeff;
+                    coeffs[c][coeffs_offset + coeff_index] += coeff;
                 }
                 if nonzeros != 0 {
                     return Err(Error::EndOfBlockResidualNonZeros(nonzeros));
