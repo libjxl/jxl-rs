@@ -4,6 +4,7 @@
 // license that can be found in the LICENSE file.
 
 #![deny(unsafe_code)]
+pub mod api;
 pub mod bit_reader;
 pub mod color;
 pub mod container;
