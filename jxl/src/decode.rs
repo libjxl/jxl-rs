@@ -48,10 +48,18 @@ pub struct ImageData<T: ImageDataType> {
     pub frames: Vec<ImageFrame<T>>,
 }
 
+pub struct DecodeResult {
+    pub image_data: ImageData<f32>,
+    pub bit_depth: BitDepth,
+    pub original_icc: Vec<u8>,
+    // None means sRGB.
+    pub data_icc: Option<Vec<u8>>,
+}
+
 pub fn decode_jxl_codestream(
     mut options: DecodeOptions,
     data: &[u8],
-) -> Result<(ImageData<f32>, BitDepth, Vec<u8>), Error> {
+) -> Result<DecodeResult, Error> {
     let mut br = BitReader::new(data);
     let file_header = FileHeader::read(&mut br)?;
     let bit_depth = file_header.image_metadata.bit_depth;
@@ -63,7 +71,7 @@ pub fn decode_jxl_codestream(
         (input_xsize, input_ysize)
     };
     info!("Image size: {} x {}", output_xsize, output_ysize);
-    let icc_bytes = if file_header.image_metadata.color_encoding.want_icc {
+    let original_icc_bytes = if file_header.image_metadata.color_encoding.want_icc {
         let r = read_icc(&mut br)?;
         println!("found {}-byte ICC", r.len());
         r
@@ -74,6 +82,11 @@ pub fn decode_jxl_codestream(
             .color_encoding
             .maybe_create_profile()?
             .unwrap()
+    };
+    let data_icc_bytes = if file_header.image_metadata.xyb_encoded {
+        None
+    } else {
+        Some(original_icc_bytes.clone())
     };
 
     br.jump_to_byte_boundary()?;
@@ -129,7 +142,12 @@ pub fn decode_jxl_codestream(
         }
     }
 
-    Ok((image_data, bit_depth, icc_bytes))
+    Ok(DecodeResult {
+        image_data,
+        bit_depth,
+        original_icc: original_icc_bytes,
+        data_icc: data_icc_bytes,
+    })
 }
 
 #[cfg(test)]
