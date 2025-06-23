@@ -275,7 +275,7 @@ impl JxlDecoder<WithImageInfo> {
         todo!()
     }
 
-    /// Retrives the file's color profile.
+    /// Retrieves the file's color profile.
     pub fn embedded_color_profile(&self) -> &JxlColorProfile {
         todo!()
     }
