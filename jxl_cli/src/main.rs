@@ -128,8 +128,10 @@ fn main() -> Result<(), Error> {
         buf_valid -= consumed;
     }
 
+    let numpy_output = String::from(opt.output.to_string_lossy()).ends_with(".npy");
     let mut options = DecodeOptions::new();
-    options.xyb_output_linear = String::from(opt.output.to_string_lossy()).ends_with(".npy");
+    options.xyb_output_linear = numpy_output;
+    options.render_spotcolors = !numpy_output;
     let (image_data, bit_depth, icc_bytes) =
         jxl::decode::decode_jxl_codestream(options, &codestream)?;
 

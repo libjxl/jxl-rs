@@ -13,6 +13,7 @@ use crate::{
 };
 
 #[derive(Error, Debug)]
+#[non_exhaustive]
 pub enum Error {
     #[error("Invalid raw quantization table")]
     InvalidRawQuantTable,
@@ -258,6 +259,8 @@ pub enum Error {
     IccTableSizeExceeded(usize),
     #[error("Invalid number of channels for PNG output ({0})")]
     PNGInvalidNumChannels(usize),
+    #[error(transparent)]
+    UserError(Box<dyn std::error::Error>),
 }
 
 pub type Result<T, E = Error> = std::result::Result<T, E>;
