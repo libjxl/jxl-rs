@@ -226,7 +226,7 @@ fn parse_jxl(filename: &Path, verbose: bool) -> Result<()> {
 fn main() {
     #[cfg(feature = "tracing-subscriber")]
     {
-        use tracing_subscriber::{fmt, prelude::*, EnvFilter};
+        use tracing_subscriber::{EnvFilter, fmt, prelude::*};
         tracing_subscriber::registry()
             .with(fmt::layer())
             .with(EnvFilter::from_default_env())

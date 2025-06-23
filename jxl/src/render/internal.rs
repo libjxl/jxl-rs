@@ -46,13 +46,13 @@ impl<T: ImageDataType> RenderPipelineStageInfo for RenderPipelineInPlaceStage<T>
 }
 
 impl<
-        InputT: ImageDataType,
-        OutputT: ImageDataType,
-        const BORDER_X: u8,
-        const BORDER_Y: u8,
-        const SHIFT_X: u8,
-        const SHIFT_Y: u8,
-    > RenderPipelineStageInfo
+    InputT: ImageDataType,
+    OutputT: ImageDataType,
+    const BORDER_X: u8,
+    const BORDER_Y: u8,
+    const SHIFT_X: u8,
+    const SHIFT_Y: u8,
+> RenderPipelineStageInfo
     for RenderPipelineInOutStage<InputT, OutputT, BORDER_X, BORDER_Y, SHIFT_X, SHIFT_Y>
 {
     const TYPE: RenderPipelineStageType = RenderPipelineStageType::InOut;

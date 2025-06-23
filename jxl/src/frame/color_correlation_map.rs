@@ -4,9 +4,9 @@
 // license that can be found in the LICENSE file.
 
 use crate::{
+    BLOCK_DIM,
     bit_reader::BitReader,
     error::{Error, Result},
-    BLOCK_DIM,
 };
 use std::default::Default;
 

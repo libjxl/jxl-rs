@@ -5,7 +5,7 @@
 
 use crate::{error::Result, util::NewWithCapacity};
 
-use super::{IccStream, ICC_HEADER_SIZE};
+use super::{ICC_HEADER_SIZE, IccStream};
 
 fn predict_header(idx: usize, output_size: u32, header: &[u8]) -> u8 {
     match idx {

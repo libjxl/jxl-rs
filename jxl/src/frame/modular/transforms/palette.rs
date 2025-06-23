@@ -6,8 +6,8 @@
 use crate::{
     error::Result,
     frame::modular::{
-        predict::{PredictionData, WeightedPredictorState},
         ModularChannel, Predictor,
+        predict::{PredictionData, WeightedPredictorState},
     },
     headers::modular::WeightedHeader,
     image::{Image, ImageRect},

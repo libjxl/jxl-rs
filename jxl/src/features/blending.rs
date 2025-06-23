@@ -11,11 +11,7 @@ const K_SMALL_ALPHA: f32 = 1e-6;
 
 #[inline]
 fn maybe_clamp(v: f32, clamp: bool) -> f32 {
-    if clamp {
-        v.clamp(0.0, 1.0)
-    } else {
-        v
-    }
+    if clamp { v.clamp(0.0, 1.0) } else { v }
 }
 
 fn perform_alpha_blending_layers<T: AsRef<[f32]>, V: AsMut<[f32]>>(

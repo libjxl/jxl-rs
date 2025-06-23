@@ -13,7 +13,7 @@ use crate::{
     features::blending::perform_blending,
     frame::{DecoderState, ReferenceFrame},
     headers::extra_channels::ExtraChannelInfo,
-    util::{slice, slice_mut, tracing_wrappers::*, NewWithCapacity},
+    util::{NewWithCapacity, slice, slice_mut, tracing_wrappers::*},
 };
 
 // Context numbers as specified in Section C.4.5, Listing C.2:
@@ -433,7 +433,7 @@ impl PatchesDictionary {
                             return Err(Error::PatchesInvalidBlendMode(
                                 maybe_blend_mode,
                                 PatchBlendMode::NUM_BLEND_MODES,
-                            ))
+                            ));
                         }
                         Some(blend_mode) => blend_mode,
                     };

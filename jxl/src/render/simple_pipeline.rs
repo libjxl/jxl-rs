@@ -9,14 +9,14 @@ use crate::{
     error::{Error, Result},
     image::{DataTypeTag, Image, ImageDataType},
     render::internal::RenderPipelineStageInfo,
-    util::tracing_wrappers::*,
     util::ShiftRightCeil,
+    util::tracing_wrappers::*,
 };
 
 use super::{
-    internal::RenderPipelineStageType, RenderPipeline, RenderPipelineBuilder,
-    RenderPipelineExtendStage, RenderPipelineInOutStage, RenderPipelineInPlaceStage,
-    RenderPipelineInspectStage, RenderPipelineStage,
+    RenderPipeline, RenderPipelineBuilder, RenderPipelineExtendStage, RenderPipelineInOutStage,
+    RenderPipelineInPlaceStage, RenderPipelineInspectStage, RenderPipelineStage,
+    internal::RenderPipelineStageType,
 };
 
 #[derive(Clone, Debug)]
@@ -455,13 +455,13 @@ impl<T: ImageDataType> RenderPipelineRunStage for RenderPipelineInPlaceStage<T> 
 }
 
 impl<
-        InputT: ImageDataType,
-        OutputT: ImageDataType,
-        const BORDER_X: u8,
-        const BORDER_Y: u8,
-        const SHIFT_X: u8,
-        const SHIFT_Y: u8,
-    > RenderPipelineRunStage
+    InputT: ImageDataType,
+    OutputT: ImageDataType,
+    const BORDER_X: u8,
+    const BORDER_Y: u8,
+    const SHIFT_X: u8,
+    const SHIFT_Y: u8,
+> RenderPipelineRunStage
     for RenderPipelineInOutStage<InputT, OutputT, BORDER_X, BORDER_Y, SHIFT_X, SHIFT_Y>
 {
     #[instrument(skip_all)]

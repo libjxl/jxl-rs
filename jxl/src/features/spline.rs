@@ -11,10 +11,10 @@ use std::{
 
 use crate::{
     bit_reader::BitReader,
-    entropy_coding::decode::{unpack_signed, Histograms, Reader},
+    entropy_coding::decode::{Histograms, Reader, unpack_signed},
     error::{Error, Result},
     frame::color_correlation_map::ColorCorrelationParams,
-    util::{fast_cos, fast_erff, tracing_wrappers::*, CeilLog2, NewWithCapacity},
+    util::{CeilLog2, NewWithCapacity, fast_cos, fast_erff, tracing_wrappers::*},
 };
 const MAX_NUM_CONTROL_POINTS: u32 = 1 << 20;
 const MAX_NUM_CONTROL_POINTS_PER_PIXEL_RATIO: u32 = 2;
@@ -793,8 +793,8 @@ mod test_splines {
     };
 
     use super::{
-        draw_centripetal_catmull_rom_spline, for_each_equally_spaced_point, Dct32, Point,
-        QuantizedSpline, Spline, Splines, DESIRED_RENDERING_DISTANCE,
+        DESIRED_RENDERING_DISTANCE, Dct32, Point, QuantizedSpline, Spline, Splines,
+        draw_centripetal_catmull_rom_spline, for_each_equally_spaced_point,
     };
 
     #[test]

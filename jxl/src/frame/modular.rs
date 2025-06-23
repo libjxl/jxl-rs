@@ -9,18 +9,18 @@ use crate::{
     bit_reader::BitReader,
     error::{Error, Result},
     frame::{
+        ColorCorrelationParams, HfMetadata,
         block_context_map::BlockContextMap,
         quantizer::{self, LfQuantFactors, QuantizerParams},
         transform_map::*,
-        ColorCorrelationParams, HfMetadata,
     },
     headers::{
-        bit_depth::BitDepth, frame_header::FrameHeader, modular::GroupHeader, ImageMetadata,
-        JxlHeader,
+        ImageMetadata, JxlHeader, bit_depth::BitDepth, frame_header::FrameHeader,
+        modular::GroupHeader,
     },
     image::{Image, Rect},
     render::{RenderPipeline, SimpleRenderPipeline},
-    util::{tracing_wrappers::*, CeilLog2},
+    util::{CeilLog2, tracing_wrappers::*},
 };
 
 mod borrowed_buffers;
@@ -30,10 +30,10 @@ mod transforms;
 mod tree;
 
 use borrowed_buffers::with_buffers;
-use decode::decode_modular_subbitstream;
 pub use decode::ModularStreamId;
+use decode::decode_modular_subbitstream;
 pub use predict::Predictor;
-use transforms::{make_grids, TransformStepChunk};
+use transforms::{TransformStepChunk, make_grids};
 pub use tree::Tree;
 
 #[derive(Clone, PartialEq, Eq, Copy)]
@@ -429,8 +429,7 @@ impl FullModularImage {
                 let bi = &buffer_info[*i];
                 trace!(
                     "Channel {i} {:?} coded id: {}",
-                    bi.info,
-                    bi.coded_channel_id
+                    bi.info, bi.coded_channel_id
                 );
             }
         }
@@ -446,11 +445,7 @@ impl FullModularImage {
         for (i, bi) in buffer_info.iter().enumerate() {
             trace!(
                 "Channel {i} {:?} coded_id: {} '{}' {:?} grid {:?}",
-                bi.info,
-                bi.coded_channel_id,
-                bi.description,
-                bi.grid_kind,
-                bi.grid_shape
+                bi.info, bi.coded_channel_id, bi.description, bi.grid_kind, bi.grid_shape
             );
             for (pos, buf) in bi.buffer_grid.iter().enumerate() {
                 trace!(
@@ -504,7 +499,9 @@ impl FullModularImage {
             ModularStreamId::ModularLF(group) => (1, group),
             ModularStreamId::ModularHF { pass, group } => (2 + pass, group),
             _ => {
-                unreachable!("read_stream should only be used for streams that are part of the main Modular image");
+                unreachable!(
+                    "read_stream should only be used for streams that are part of the main Modular image"
+                );
             }
         };
 

@@ -10,7 +10,7 @@ use crate::{
         patches::{PatchBlendMode, PatchBlending},
     },
     frame::ReferenceFrame,
-    headers::{extra_channels::ExtraChannelInfo, frame_header::*, FileHeader},
+    headers::{FileHeader, extra_channels::ExtraChannelInfo, frame_header::*},
     render::{RenderPipelineInPlaceStage, RenderPipelineStage},
     util::{slice, slice_mut},
 };

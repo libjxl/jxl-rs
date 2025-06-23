@@ -8,10 +8,10 @@ use std::io::{Cursor, Write};
 use byteorder::{BigEndian, ReadBytesExt, WriteBytesExt};
 
 use crate::error::{Error, Result};
-use crate::util::tracing_wrappers::warn;
 use crate::util::NewWithCapacity;
+use crate::util::tracing_wrappers::warn;
 
-use super::{read_varint_from_reader, IccStream, ICC_HEADER_SIZE};
+use super::{ICC_HEADER_SIZE, IccStream, read_varint_from_reader};
 
 const COMMON_TAGS: [&[u8; 4]; 19] = [
     b"rTRC", b"rXYZ", b"cprt", b"wtpt", b"bkpt", b"rXYZ", b"gXYZ", b"bXYZ", b"kXYZ", b"rTRC",

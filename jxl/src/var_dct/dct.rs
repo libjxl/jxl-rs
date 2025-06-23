@@ -405,7 +405,7 @@ mod tests {
     use crate::{
         util::test::{assert_all_almost_eq, assert_almost_eq},
         var_dct::{
-            dct::{compute_scaled_dct, dct2d, idct2d, DCT1DImpl, IDCT1DImpl, DCT1D, IDCT1D},
+            dct::{DCT1D, DCT1DImpl, IDCT1D, IDCT1DImpl, compute_scaled_dct, dct2d, idct2d},
             dct_slow::{dct1d, idct1d},
         },
     };

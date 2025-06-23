@@ -17,7 +17,7 @@ use jxl_macros::UnconditionalCoder;
 use num_derive::FromPrimitive;
 use std::cmp::min;
 
-use super::{permutation::Permutation, Animation};
+use super::{Animation, permutation::Permutation};
 
 #[derive(UnconditionalCoder, Copy, Clone, PartialEq, Debug, FromPrimitive)]
 enum FrameType {
