@@ -297,7 +297,7 @@ impl JxlDecoder<WithImageInfo> {
     pub fn process(
         self,
         input: &mut impl JxlBitstreamInput,
-    ) -> Result<ProcessingResult<JxlDecoder<WithImageInfo>, Self>> {
+    ) -> Result<ProcessingResult<JxlDecoder<WithFrameInfo>, Self>> {
         todo!()
     }
 }
