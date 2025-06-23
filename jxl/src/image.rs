@@ -244,7 +244,7 @@ impl<T: ImageDataType> Image<T> {
         Ok(img)
     }
 
-    // TODO(firsching): make this #[cfg(test)]
+    #[cfg(test)]
     pub fn new_constant(size: (usize, usize), val: T) -> Result<Image<T>> {
         let mut img = Self::new(size)?;
         img.data.iter_mut().for_each(|x| *x = val);
