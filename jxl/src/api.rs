@@ -280,7 +280,7 @@ impl JxlDecoder<WithImageInfo> {
         todo!()
     }
 
-    /// Specifies the preferred color profile to be used for outputing data.
+    /// Specifies the preferred color profile to be used for outputting data.
     /// Same semantics as JxlDecoderSetOutputColorProfile.
     pub fn set_output_color_profile(&mut self, profile: &JxlColorProfile) -> Result<()> {
         todo!()
