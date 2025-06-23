@@ -87,7 +87,7 @@ pub struct ReferenceFrame {
 }
 
 impl ReferenceFrame {
-    // TODO(firsching): make this #[cfg(test)]
+    #[cfg(test)]
     pub fn blank(
         width: usize,
         height: usize,
