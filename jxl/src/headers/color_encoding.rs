@@ -288,13 +288,6 @@ pub fn create_icc_rgb_matrix(
     }))
 }
 
-pub fn create_icc_chad_matrix(wx: f32, wy: f32) -> Result<Matrix3x3<f64>, Error> {
-    // The libjxl checks `wy == 0.0` check here, but this is redundant since
-    // `adapt_to_xyz_d50` handles it robustly.
-    // TODO(firsching): call `adapt_to_xyz_d50` directly when libjxl calls `create_icc_chad_matrix`
-    adapt_to_xyz_d50(wx, wy)
-}
-
 #[allow(clippy::upper_case_acronyms)]
 #[derive(UnconditionalCoder, Copy, Clone, PartialEq, Debug, FromPrimitive)]
 pub enum ColorSpace {
@@ -1292,7 +1285,7 @@ impl ColorEncoding {
         pad_to_4_byte_boundary(&mut tags_data);
         if self.color_space != ColorSpace::Gray {
             let (wx, wy) = self.get_resolved_white_point_xy()?;
-            let chad_matrix_f64 = create_icc_chad_matrix(wx, wy)?;
+            let chad_matrix_f64 = adapt_to_xyz_d50(wx, wy)?;
             let chad_matrix = std::array::from_fn(|r_idx| {
                 std::array::from_fn(|c_idx| chad_matrix_f64[r_idx][c_idx] as f32)
             });
