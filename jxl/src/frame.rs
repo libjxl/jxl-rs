@@ -12,7 +12,7 @@ use crate::{
         FileHeader, Orientation,
         color_encoding::ColorSpace,
         encodings::UnconditionalCoder,
-        extra_channels::ExtraChannelInfo,
+        extra_channels::{ExtraChannel, ExtraChannelInfo},
         frame_header::{Encoding, FrameHeader, Toc, TocNonserialized},
         permutation::Permutation,
     },
@@ -111,6 +111,7 @@ pub struct DecoderState {
     lf_frames: [Option<[Image<f32>; 3]>; 4],
     pub xyb_output_linear: bool,
     pub enable_output: bool,
+    pub render_spotcolors: bool,
 }
 
 impl DecoderState {
@@ -123,6 +124,7 @@ impl DecoderState {
             lf_frames: [None, None, None, None],
             xyb_output_linear: true,
             enable_output: true,
+            render_spotcolors: true,
         }
     }
 
@@ -702,7 +704,20 @@ impl Frame {
             }
         }
 
-        // TODO: spot colors
+        if decoder_state.render_spotcolors {
+            for (i, info) in decoder_state
+                .file_header
+                .image_metadata
+                .extra_channel_info
+                .iter()
+                .enumerate()
+            {
+                if info.ec_type == ExtraChannel::SpotColor {
+                    pipeline =
+                        pipeline.add_stage(SpotColorStage::new(i, info.spot_color.unwrap()))?;
+                }
+            }
+        }
 
         if frame_header.is_visible() {
             let color_space = decoder_state
@@ -716,6 +731,13 @@ impl Frame {
                 3
             };
             for i in (0..num_color_channels).chain(3..num_channels) {
+                if decoder_state.render_spotcolors
+                    && i > 3
+                    && decoder_state.file_header.image_metadata.extra_channel_info[i - 3].ec_type
+                        == ExtraChannel::SpotColor
+                {
+                    continue;
+                }
                 pipeline = pipeline.add_stage(SaveStage::<f32>::new(
                     SaveStageType::Output,
                     i,
