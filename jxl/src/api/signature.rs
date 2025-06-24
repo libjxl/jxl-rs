@@ -28,6 +28,25 @@ pub enum JxlSignatureType {
 pub fn check_signature(file_prefix: &[u8]) -> ProcessingResult<Option<JxlSignatureType>, ()> {
     let prefix_len = file_prefix.len();
 
+    // Check for Codestream signature
+    let codestream_len = CODESTREAM_SIGNATURE.len();
+    // Determine the number of bytes to compare (the length of the shorter slice)
+    let len_to_check = prefix_len.min(codestream_len);
+
+    if file_prefix[..len_to_check] == CODESTREAM_SIGNATURE[..len_to_check] {
+        // The prefix is a valid start. Now, is it complete?
+        return if prefix_len >= codestream_len {
+            ProcessingResult::Complete {
+                result: Some(JxlSignatureType::Codestream),
+            }
+        } else {
+            ProcessingResult::NeedsMoreInput {
+                size_hint: codestream_len - prefix_len,
+                fallback: (),
+            }
+        };
+    }
+
     // Check for Container signature
     let container_len = CONTAINER_SIGNATURE.len();
     // Determine the number of bytes to compare (the length of the shorter slice)
@@ -49,33 +68,16 @@ pub fn check_signature(file_prefix: &[u8]) -> ProcessingResult<Option<JxlSignatu
             }
         };
     }
-
-    // Check for Codestream signature
-    let codestream_len = CODESTREAM_SIGNATURE.len();
-    let len_to_check = prefix_len.min(codestream_len);
-
-    if file_prefix[..len_to_check] == CODESTREAM_SIGNATURE[..len_to_check] {
-        // The prefix is a valid start. Now, is it complete?
-        return if prefix_len >= codestream_len {
-            ProcessingResult::Complete {
-                result: Some(JxlSignatureType::Codestream),
-            }
-        } else {
-            ProcessingResult::NeedsMoreInput {
-                size_hint: codestream_len - prefix_len,
-                fallback: (),
-            }
-        };
-    }
-
     // The prefix doesn't match the start of any known signature.
     ProcessingResult::Complete { result: None }
 }
 
-
 #[cfg(test)]
 mod tests {
-    use crate::api::{check_signature, JxlSignatureType, ProcessingResult, CODESTREAM_SIGNATURE, CONTAINER_SIGNATURE};
+    use crate::api::{
+        CODESTREAM_SIGNATURE, CONTAINER_SIGNATURE, JxlSignatureType, ProcessingResult,
+        check_signature,
+    };
 
     macro_rules! signature_test {
         ($test_name:ident, $bytes:expr, Complete(Some($expected_type:expr))) => {
@@ -140,7 +142,11 @@ mod tests {
         NeedsMoreInput(CODESTREAM_SIGNATURE.len() - 1)
     );
 
-    signature_test!(empty_prefix, &[], NeedsMoreInput(CONTAINER_SIGNATURE.len()));
+    signature_test!(
+        empty_prefix,
+        &[],
+        NeedsMoreInput(CODESTREAM_SIGNATURE.len())
+    );
 
     signature_test!(invalid_sig, &[0x12, 0x34, 0x56, 0x77], Complete(None));
 
@@ -164,4 +170,3 @@ mod tests {
         Complete(Some(JxlSignatureType::Codestream))
     );
 }
-

@@ -7,9 +7,10 @@
 
 use super::{BitstreamKind, ContainerParser, DetectState, JxlpIndexState, box_header::*};
 use crate::{
-    api::{CODESTREAM_SIGNATURE, CONTAINER_SIGNATURE}, error::{Error, Result}, util::tracing_wrappers::*
+    api::{CODESTREAM_SIGNATURE, CONTAINER_SIGNATURE},
+    error::{Error, Result},
+    util::tracing_wrappers::*,
 };
-
 
 /// Iterator that reads over a buffer and emits parser events.
 pub struct ParseEvents<'inner, 'buf> {
