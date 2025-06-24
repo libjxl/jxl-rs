@@ -6,9 +6,9 @@
 use crate::api::ProcessingResult;
 
 /// The magic bytes for a bare JPEG XL codestream.
-pub const CODESTREAM_SIGNATURE: [u8; 2] = [0xff, 0x0a];
+pub(crate) const CODESTREAM_SIGNATURE: [u8; 2] = [0xff, 0x0a];
 /// The magic bytes for a file using the JPEG XL container format.
-pub const CONTAINER_SIGNATURE: [u8; 12] =
+pub(crate) const CONTAINER_SIGNATURE: [u8; 12] =
     [0, 0, 0, 0xc, b'J', b'X', b'L', b' ', 0xd, 0xa, 0x87, 0xa];
 
 #[derive(Debug, PartialEq)]
