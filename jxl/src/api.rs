@@ -21,6 +21,7 @@ use crate::{
 /// estimate of the number of additional bytes needed, and a `fallback`, representing additional
 /// information that might be needed to call the function again (i.e. because it takes a decoder
 /// object by value).
+#[derive(Debug, PartialEq)]
 pub enum ProcessingResult<T, U> {
     Complete { result: T },
     NeedsMoreInput { size_hint: usize, fallback: U },
@@ -410,94 +411,90 @@ mod tests {
         container::parse::{CODESTREAM_SIGNATURE, CONTAINER_SIGNATURE},
     };
 
-    #[test]
-    fn test_full_container_sig() {
-        let result = check_signature(&CONTAINER_SIGNATURE);
-        match result {
-            ProcessingResult::Complete { result } => {
-                assert_eq!(result, Some(JxlSignatureType::Container));
+    macro_rules! signature_test {
+        ($test_name:ident, $bytes:expr, Complete(Some($expected_type:expr))) => {
+            #[test]
+            fn $test_name() {
+                let result = check_signature($bytes);
+                match result {
+                    ProcessingResult::Complete { result } => {
+                        assert_eq!(result, Some($expected_type));
+                    }
+                    _ => panic!("Expected Complete(Some(_)), but got {:?}", result),
+                }
             }
-            _ => panic!("Expected Complete"),
-        }
+        };
+        ($test_name:ident, $bytes:expr, Complete(None)) => {
+            #[test]
+            fn $test_name() {
+                let result = check_signature($bytes);
+                match result {
+                    ProcessingResult::Complete { result } => {
+                        assert_eq!(result, None);
+                    }
+                    _ => panic!("Expected Complete(None), but got {:?}", result),
+                }
+            }
+        };
+        ($test_name:ident, $bytes:expr, NeedsMoreInput($expected_hint:expr)) => {
+            #[test]
+            fn $test_name() {
+                let result = check_signature($bytes);
+                match result {
+                    ProcessingResult::NeedsMoreInput { size_hint, .. } => {
+                        assert_eq!(size_hint, $expected_hint);
+                    }
+                    _ => panic!("Expected NeedsMoreInput, but got {:?}", result),
+                }
+            }
+        };
     }
 
-    #[test]
-    fn test_partial_container_sig() {
-        let result = check_signature(&CONTAINER_SIGNATURE[..5]);
-        match result {
-            ProcessingResult::NeedsMoreInput { size_hint, .. } => {
-                assert_eq!(size_hint, CONTAINER_SIGNATURE.len() - 5);
-            }
-            _ => panic!("Expected NeedsMoreInput"),
-        }
-    }
+    signature_test!(
+        full_container_sig,
+        &CONTAINER_SIGNATURE,
+        Complete(Some(JxlSignatureType::Container))
+    );
 
-    #[test]
-    fn test_full_codestream_sig() {
-        let result = check_signature(&CODESTREAM_SIGNATURE);
-        match result {
-            ProcessingResult::Complete { result } => {
-                assert_eq!(result, Some(JxlSignatureType::Codestream));
-            }
-            _ => panic!("Expected Complete"),
-        }
-    }
+    signature_test!(
+        partial_container_sig,
+        &CONTAINER_SIGNATURE[..5],
+        NeedsMoreInput(CONTAINER_SIGNATURE.len() - 5)
+    );
 
-    #[test]
-    fn test_partial_codestream_sig() {
-        let result = check_signature(&CODESTREAM_SIGNATURE[..1]);
-        match result {
-            ProcessingResult::NeedsMoreInput { size_hint, .. } => {
-                assert_eq!(size_hint, CODESTREAM_SIGNATURE.len() - 1);
-            }
-            _ => panic!("Expected NeedsMoreInput"),
-        }
-    }
+    signature_test!(
+        full_codestream_sig,
+        &CODESTREAM_SIGNATURE,
+        Complete(Some(JxlSignatureType::Codestream))
+    );
 
-    #[test]
-    fn test_empty_prefix() {
-        // An empty prefix could be the start of either, so we need enough
-        // bytes for the longest one to be sure.
-        let result = check_signature(&[]);
-        match result {
-            ProcessingResult::NeedsMoreInput { size_hint, .. } => {
-                assert_eq!(size_hint, CONTAINER_SIGNATURE.len());
-            }
-            _ => panic!("Expected NeedsMoreInput"),
-        }
-    }
+    signature_test!(
+        partial_codestream_sig,
+        &CODESTREAM_SIGNATURE[..1],
+        NeedsMoreInput(CODESTREAM_SIGNATURE.len() - 1)
+    );
 
-    #[test]
-    fn test_invalid_sig() {
-        let result = check_signature(&[0x12, 0x34, 0x56, 0x78]);
-        match result {
-            ProcessingResult::Complete { result } => assert_eq!(result, None),
-            _ => panic!("Expected Complete"),
-        }
-    }
+    signature_test!(empty_prefix, &[], NeedsMoreInput(CONTAINER_SIGNATURE.len()));
 
-    #[test]
-    fn test_sig_with_extra_data() {
-        // Test container signature with extra data appended.
-        let mut container_extra = CONTAINER_SIGNATURE.to_vec();
-        container_extra.extend_from_slice(&[0x11, 0x22, 0x33]);
-        let result_container = check_signature(&container_extra);
-        match result_container {
-            ProcessingResult::Complete { result } => {
-                assert_eq!(result, Some(JxlSignatureType::Container));
-            }
-            _ => panic!("Expected Complete for container with extra data"),
-        }
+    signature_test!(invalid_sig, &[0x12, 0x34, 0x56, 0x77], Complete(None));
 
-        // Test codestream signature with extra data appended.
-        let mut codestream_extra = CODESTREAM_SIGNATURE.to_vec();
-        codestream_extra.extend_from_slice(&[0x44, 0x55, 0x66]);
-        let result_codestream = check_signature(&codestream_extra);
-        match result_codestream {
-            ProcessingResult::Complete { result } => {
-                assert_eq!(result, Some(JxlSignatureType::Codestream));
-            }
-            _ => panic!("Expected Complete for codestream with extra data"),
-        }
-    }
+    signature_test!(
+        container_with_extra_data,
+        &{
+            let mut data = CONTAINER_SIGNATURE.to_vec();
+            data.extend_from_slice(&[0x11, 0x22, 0x33]);
+            data
+        },
+        Complete(Some(JxlSignatureType::Container))
+    );
+
+    signature_test!(
+        codestream_with_extra_data,
+        &{
+            let mut data = CODESTREAM_SIGNATURE.to_vec();
+            data.extend_from_slice(&[0x44, 0x55, 0x66]);
+            data
+        },
+        Complete(Some(JxlSignatureType::Codestream))
+    );
 }
