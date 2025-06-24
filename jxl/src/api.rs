@@ -13,6 +13,10 @@ use crate::{
     headers::{color_encoding::ColorEncoding, frame_header::FrameHeader},
 };
 
+mod input;
+
+pub use input::*;
+
 /// This type represents the return value of a function that reads input from a bitstream. The
 /// variant `Complete` indicates that the operation was completed successfully, and its return
 /// value is available. The variant `NeedsMoreInput` indicates that more input is needed, and the
@@ -28,20 +32,6 @@ pub enum ProcessingResult<T, U> {
 pub enum JxlSignatureType {
     Codestream,
     Container,
-}
-
-pub trait JxlBitstreamInput {
-    /// Returns a lower bound on the total number of bytes that are available right now.
-    fn available_bytes(&mut self) -> usize;
-
-    /// Fills in `buf` with more bytes, returning the number of bytes written.
-    /// If at least `size_hint` bytes are available, they should be written to ensure maximum
-    /// performance. It is guaranteed that, if the input is a valid image, consuming `size_hint`
-    /// bytes would not cause the stream to go past the end of the valid image.
-    fn fill_buf(&mut self, buf: &mut [u8], size_hint: usize) -> Result<usize>;
-
-    /// Returns true iff it is known that no more bytes from the image are available.
-    fn is_complete(&mut self) -> bool; // TODO: might only be necessary for the box API
 }
 
 pub fn check_signature(file_prefix: &[u8]) -> ProcessingResult<Option<JxlSignatureType>, ()> {
