@@ -7,7 +7,7 @@ use clap::Parser;
 use jxl::container::{ContainerParser, ParseEvent};
 use jxl::decode::{DecodeOptions, DecodeResult, ImageData};
 use jxl::error::Error;
-use jxl::headers::bit_depth::BitDepth;
+use jxl::headers::{bit_depth::BitDepth, color_encoding::ColorEncoding};
 use std::fs;
 use std::io::Read;
 use std::path::PathBuf;
@@ -71,6 +71,10 @@ struct Opt {
     ///  If specified, writes the ICC profile of the decoded image
     #[clap(long)]
     icc_out: Option<PathBuf>,
+
+    ///  Likewise but for the ICC profile of the original colorspace
+    #[clap(long)]
+    original_icc_out: Option<PathBuf>,
 }
 
 fn main() -> Result<(), Error> {
@@ -140,17 +144,35 @@ fn main() -> Result<(), Error> {
         data_icc,
     } = jxl::decode::decode_jxl_codestream(options, &codestream)?;
 
-    let icc_result = save_icc(original_icc.as_slice(), opt.icc_out);
+    let original_icc_result = save_icc(original_icc.as_slice(), opt.original_icc_out);
+    let srgb;
+    let data_icc_result = save_icc(
+        match data_icc.as_ref() {
+            Some(data_icc) => data_icc.as_slice(),
+            None => {
+                let grayscale = image_data.frames[0].channels.len() < 3;
+                srgb = ColorEncoding::srgb(grayscale)
+                    .maybe_create_profile()?
+                    .unwrap();
+                srgb.as_slice()
+            }
+        },
+        opt.icc_out,
+    );
     let image_result = save_image(image_data, bit_depth, data_icc.as_deref(), opt.output);
 
-    if let Err(ref err) = icc_result {
-        println!("Failed to save ICC profile: {err}");
+    if let Err(ref err) = original_icc_result {
+        println!("Failed to save original ICC profile: {err}");
+    }
+    if let Err(ref err) = data_icc_result {
+        println!("Failed to save data ICC profile: {err}");
     }
     if let Err(ref err) = image_result {
         println!("Failed to save image: {err}");
     }
 
-    icc_result?;
+    original_icc_result?;
+    data_icc_result?;
     image_result?;
 
     Ok(())
