@@ -8,16 +8,16 @@ use crate::{
     entropy_coding::decode::Reader,
     error::{Error, Result},
     frame::quantizer::NUM_QUANT_TABLES,
-    headers::{JxlHeader, frame_header::FrameHeader, modular::GroupHeader},
+    headers::{frame_header::FrameHeader, modular::GroupHeader, JxlHeader},
     image::Image,
     util::tracing_wrappers::*,
 };
 
 use super::{
-    ModularChannel, Tree,
-    predict::{WeightedPredictorState, clamped_gradient},
+    predict::{clamped_gradient, WeightedPredictorState},
     transforms::apply::meta_apply_local_transforms,
     tree::NUM_NONREF_PROPERTIES,
+    ModularChannel, Tree,
 };
 
 use num_traits::abs;

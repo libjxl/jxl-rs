@@ -5,8 +5,8 @@
 
 use crate::{
     frame::modular::{
-        ModularChannel,
         transforms::{RctOp, RctPermutation},
+        ModularChannel,
     },
     util::tracing_wrappers::*,
 };

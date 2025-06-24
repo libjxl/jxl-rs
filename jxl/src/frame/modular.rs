@@ -9,18 +9,18 @@ use crate::{
     bit_reader::BitReader,
     error::{Error, Result},
     frame::{
-        ColorCorrelationParams, HfMetadata,
         block_context_map::BlockContextMap,
         quantizer::{self, LfQuantFactors, QuantizerParams},
         transform_map::*,
+        ColorCorrelationParams, HfMetadata,
     },
     headers::{
-        ImageMetadata, JxlHeader, bit_depth::BitDepth, frame_header::FrameHeader,
-        modular::GroupHeader,
+        bit_depth::BitDepth, frame_header::FrameHeader, modular::GroupHeader, ImageMetadata,
+        JxlHeader,
     },
     image::{Image, Rect},
     render::{RenderPipeline, SimpleRenderPipeline},
-    util::{CeilLog2, tracing_wrappers::*},
+    util::{tracing_wrappers::*, CeilLog2},
 };
 
 mod borrowed_buffers;
@@ -30,10 +30,10 @@ mod transforms;
 mod tree;
 
 use borrowed_buffers::with_buffers;
-pub use decode::ModularStreamId;
 use decode::decode_modular_subbitstream;
+pub use decode::ModularStreamId;
 pub use predict::Predictor;
-use transforms::{TransformStepChunk, make_grids};
+use transforms::{make_grids, TransformStepChunk};
 pub use tree::Tree;
 
 #[derive(Clone, PartialEq, Eq, Copy)]
@@ -429,7 +429,8 @@ impl FullModularImage {
                 let bi = &buffer_info[*i];
                 trace!(
                     "Channel {i} {:?} coded id: {}",
-                    bi.info, bi.coded_channel_id
+                    bi.info,
+                    bi.coded_channel_id
                 );
             }
         }
@@ -445,7 +446,11 @@ impl FullModularImage {
         for (i, bi) in buffer_info.iter().enumerate() {
             trace!(
                 "Channel {i} {:?} coded_id: {} '{}' {:?} grid {:?}",
-                bi.info, bi.coded_channel_id, bi.description, bi.grid_kind, bi.grid_shape
+                bi.info,
+                bi.coded_channel_id,
+                bi.description,
+                bi.grid_kind,
+                bi.grid_shape
             );
             for (pos, buf) in bi.buffer_grid.iter().enumerate() {
                 trace!(

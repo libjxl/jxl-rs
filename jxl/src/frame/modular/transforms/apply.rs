@@ -10,8 +10,8 @@ use num_traits::FromPrimitive;
 use crate::{
     error::{Error, Result},
     frame::modular::{
-        ChannelInfo, ModularBufferInfo, ModularChannel, ModularGridKind, Predictor,
-        borrowed_buffers::with_buffers,
+        borrowed_buffers::with_buffers, ChannelInfo, ModularBufferInfo, ModularChannel,
+        ModularGridKind, Predictor,
     },
     headers::{self, frame_header::FrameHeader, modular::TransformId, modular::WeightedHeader},
     util::tracing_wrappers::*,
@@ -267,7 +267,9 @@ impl TransformStepChunk {
                 {
                     trace!(
                         "HSqueeze {:?} -> {:?}, grid {out_grid} grid pos {:?}",
-                        buf_in, buf_out, self.grid_pos
+                        buf_in,
+                        buf_out,
+                        self.grid_pos
                     );
                     let (gx, gy) = self.grid_pos;
                     let in_avg = Ref::map(buf_avg.buffer_grid[in_grid].data.borrow(), |x| {
@@ -334,7 +336,9 @@ impl TransformStepChunk {
                 {
                     trace!(
                         "VSqueeze {:?} -> {:?} grid: {out_grid:?} grid pos: {:?}",
-                        buf_in, buf_out, self.grid_pos
+                        buf_in,
+                        buf_out,
+                        self.grid_pos
                     );
                     let (gx, gy) = self.grid_pos;
                     let in_avg = Ref::map(buf_avg.buffer_grid[in_grid].data.borrow(), |x| {

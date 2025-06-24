@@ -9,26 +9,26 @@ use crate::{
     error::Result,
     features::{noise::Noise, patches::PatchesDictionary, spline::Splines},
     headers::{
-        FileHeader, Orientation,
         color_encoding::ColorSpace,
         encodings::UnconditionalCoder,
         extra_channels::{ExtraChannel, ExtraChannelInfo},
         frame_header::{Encoding, FrameHeader, Toc, TocNonserialized},
         permutation::Permutation,
+        FileHeader, Orientation,
     },
     image::{Image, Rect},
     render::{
-        RenderPipeline, RenderPipelineBuilder, SimpleRenderPipeline, SimpleRenderPipelineBuilder,
-        stages::*,
+        stages::*, RenderPipeline, RenderPipelineBuilder, SimpleRenderPipeline,
+        SimpleRenderPipelineBuilder,
     },
-    util::{CeilLog2, Xorshift128Plus, tracing_wrappers::*},
+    util::{tracing_wrappers::*, CeilLog2, Xorshift128Plus},
 };
 use block_context_map::BlockContextMap;
 use coeff_order::decode_coeff_orders;
 use color_correlation_map::ColorCorrelationParams;
 use group::decode_vardct_group;
-use modular::{FullModularImage, ModularStreamId, Tree};
 use modular::{decode_hf_metadata, decode_vardct_lf};
+use modular::{FullModularImage, ModularStreamId, Tree};
 use quant_weights::DequantMatrices;
 use quantizer::LfQuantFactors;
 use quantizer::QuantizerParams;
@@ -932,7 +932,7 @@ mod test {
 
     use crate::{
         container::ContainerParser,
-        decode::{DecodeOptions, decode_jxl_codestream},
+        decode::{decode_jxl_codestream, DecodeOptions},
         error::Error,
         features::spline::Point,
         util::test::assert_almost_eq,

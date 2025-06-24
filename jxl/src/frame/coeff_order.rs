@@ -4,13 +4,13 @@
 // license that can be found in the LICENSE file.
 
 use crate::{
-    BLOCK_DIM, BLOCK_SIZE,
     bit_reader::BitReader,
     error::Result,
-    frame::Histograms,
     frame::transform_map::*,
+    frame::Histograms,
     headers::permutation::Permutation,
-    util::{CeilLog2, tracing_wrappers::*},
+    util::{tracing_wrappers::*, CeilLog2},
+    BLOCK_DIM, BLOCK_SIZE,
 };
 
 use std::mem;

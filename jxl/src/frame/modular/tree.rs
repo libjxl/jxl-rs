@@ -5,14 +5,14 @@
 
 use std::fmt::Debug;
 
-use super::{ModularChannel, Predictor, predict::WeightedPredictorState};
+use super::{predict::WeightedPredictorState, ModularChannel, Predictor};
 use crate::{
     bit_reader::BitReader,
     entropy_coding::decode::Histograms,
     error::{Error, Result},
     frame::modular::predict::PredictionData,
     image::Image,
-    util::{NewWithCapacity, tracing_wrappers::*},
+    util::{tracing_wrappers::*, NewWithCapacity},
 };
 
 #[derive(Debug)]
@@ -225,7 +225,12 @@ impl Tree {
 
         trace!(
             left,
-            top, topleft, topright, leftleft, toptop, _toprightright
+            top,
+            topleft,
+            topright,
+            leftleft,
+            toptop,
+            _toprightright
         );
 
         // Position
