@@ -7,7 +7,11 @@ use crate::{
     bit_reader::BitReader,
     error::Error,
     frame::{DecoderState, Frame, Section},
-    headers::{FileHeader, JxlHeader, bit_depth::BitDepth},
+    headers::{
+        FileHeader, JxlHeader,
+        bit_depth::BitDepth,
+        color_encoding::{ColorEncoding, ColorSpace, TransferFunction},
+    },
     icc::read_icc,
     image::{Image, ImageDataType},
     util::tracing_wrappers::*,
@@ -84,7 +88,16 @@ pub fn decode_jxl_codestream(
             .unwrap()
     };
     let data_icc_bytes = if file_header.image_metadata.xyb_encoded {
-        None
+        if options.xyb_output_linear {
+            let grayscale =
+                file_header.image_metadata.color_encoding.color_space == ColorSpace::Gray;
+            let mut color_encoding = ColorEncoding::srgb(grayscale);
+            color_encoding.tf.transfer_function = TransferFunction::Linear;
+            Some(color_encoding.maybe_create_profile()?.unwrap())
+        } else {
+            // Regular (non-linear) sRGB.
+            None
+        }
     } else {
         Some(original_icc_bytes.clone())
     };

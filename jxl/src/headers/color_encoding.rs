@@ -1512,6 +1512,17 @@ impl ColorEncoding {
 
         Ok(Some(final_icc_profile_data))
     }
+
+    pub fn srgb(grayscale: bool) -> Self {
+        let color_space = if grayscale {
+            ColorSpace::Gray
+        } else {
+            ColorSpace::RGB
+        };
+        let mut result = Self::default(&Empty {});
+        result.color_space = color_space;
+        result
+    }
 }
 
 #[cfg(test)]
@@ -1549,5 +1560,17 @@ mod tests {
                 panic!("Matrix inversion failed unexpectedly: {e:?}");
             }
         }
+    }
+
+    #[test]
+    fn test_srgb() {
+        assert_eq!(
+            ColorEncoding::srgb(false).get_color_encoding_description(),
+            "RGB_D65_SRG_Rel_SRG"
+        );
+        assert_eq!(
+            ColorEncoding::srgb(true).get_color_encoding_description(),
+            "Gra_D65_Rel_SRG"
+        );
     }
 }
