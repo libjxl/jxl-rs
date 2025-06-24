@@ -7,14 +7,9 @@
 
 use super::{BitstreamKind, ContainerParser, DetectState, JxlpIndexState, box_header::*};
 use crate::{
-    error::{Error, Result},
-    util::tracing_wrappers::*,
+    api::{CODESTREAM_SIGNATURE, CONTAINER_SIGNATURE}, error::{Error, Result}, util::tracing_wrappers::*
 };
-/// The magic bytes for a bare JPEG XL codestream.
-pub const CODESTREAM_SIGNATURE: [u8; 2] = [0xff, 0x0a];
-/// The magic bytes for a file using the JPEG XL container format.
-pub const CONTAINER_SIGNATURE: [u8; 12] =
-    [0, 0, 0, 0xc, b'J', b'X', b'L', b' ', 0xd, 0xa, 0x87, 0xa];
+
 
 /// Iterator that reads over a buffer and emits parser events.
 pub struct ParseEvents<'inner, 'buf> {
