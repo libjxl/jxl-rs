@@ -6,7 +6,7 @@
 #![allow(unused_variables)]
 // #![warn(missing_docs)]
 
-use std::{borrow::Cow, marker::PhantomData, mem::MaybeUninit, ops::DerefMut};
+use std::{borrow::Cow, marker::PhantomData};
 
 use crate::{
     error::Result,
@@ -14,8 +14,10 @@ use crate::{
 };
 
 mod input;
+mod output;
 
 pub use input::*;
+pub use output::*;
 
 /// This type represents the return value of a function that reads input from a bitstream. The
 /// variant `Complete` indicates that the operation was completed successfully, and its return
@@ -292,19 +294,6 @@ impl JxlDecoder<WithImageInfo> {
     }
 }
 
-// TODO: implement this for &mut [u8] and &mut [&mut [u8]] (and the corresponding MaybeUninit
-// variants).
-pub trait JxlOutputBuffer {
-    #[allow(unsafe_code)]
-    /// # Safety
-    /// The returned buffers must not be populated with uninit data.
-    unsafe fn get_row_buffers(
-        &mut self,
-        shape: (usize, usize),
-        bytes_per_sample: usize,
-    ) -> impl DerefMut<Target = [&mut [MaybeUninit<u8>]]>;
-}
-
 impl JxlDecoder<WithFrameInfo> {
     /// Skip the current frame.
     pub fn skip_frame(
@@ -331,10 +320,10 @@ impl JxlDecoder<WithFrameInfo> {
 
     /// Guarantees to populate exactly the appropriate part of the buffers.
     /// Wants one buffer for each non-ignored pixel type, i.e. color channels and each extra channel.
-    pub fn process(
+    pub fn process<'a>(
         self,
         input: &mut impl JxlBitstreamInput,
-        buffers: &mut [impl JxlOutputBuffer], // TODO: figure out if dyn is better.
+        buffers: &'a mut [impl JxlOutputBuffer<'a>], // TODO: figure out if dyn is better.
     ) -> Result<ProcessingResult<JxlDecoder<WithImageInfo>, Self>> {
         todo!()
     }

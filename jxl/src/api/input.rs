@@ -17,7 +17,7 @@ pub trait JxlBitstreamInput {
     /// to un-read potentially over-read bytes. If ensuring that data is not read past
     /// the file end is not required, this method can safely be implemented as a no-op.
     /// The provided implementation does nothing.
-    fn unconsume(&mut self, count: usize) -> Result<(), Error> {
+    fn unconsume(&mut self, _count: usize) -> Result<(), Error> {
         Ok(())
     }
 }
