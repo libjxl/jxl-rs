@@ -15,9 +15,11 @@ use crate::{
 
 mod input;
 mod output;
+mod signature;
 
 pub use input::*;
 pub use output::*;
+pub use signature::*;
 
 /// This type represents the return value of a function that reads input from a bitstream. The
 /// variant `Complete` indicates that the operation was completed successfully, and its return
@@ -26,20 +28,11 @@ pub use output::*;
 /// estimate of the number of additional bytes needed, and a `fallback`, representing additional
 /// information that might be needed to call the function again (i.e. because it takes a decoder
 /// object by value).
+#[derive(Debug, PartialEq)]
 pub enum ProcessingResult<T, U> {
     Complete { result: T },
     NeedsMoreInput { size_hint: usize, fallback: U },
 }
-
-pub enum JxlSignatureType {
-    Codestream,
-    Container,
-}
-
-pub fn check_signature(file_prefix: &[u8]) -> ProcessingResult<Option<JxlSignatureType>, ()> {
-    todo!()
-}
-
 pub enum JxlColorProfile {
     Icc(Vec<u8>),
     // TODO(veluca): this should probably not be the raw header representation.

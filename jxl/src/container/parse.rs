@@ -7,6 +7,7 @@
 
 use super::{BitstreamKind, ContainerParser, DetectState, JxlpIndexState, box_header::*};
 use crate::{
+    api::{CODESTREAM_SIGNATURE, CONTAINER_SIGNATURE},
     error::{Error, Result},
     util::tracing_wrappers::*,
 };
@@ -19,9 +20,6 @@ pub struct ParseEvents<'inner, 'buf> {
 }
 
 impl<'inner, 'buf> ParseEvents<'inner, 'buf> {
-    const CODESTREAM_SIG: [u8; 2] = [0xff, 0x0a];
-    const CONTAINER_SIG: [u8; 12] = [0, 0, 0, 0xc, b'J', b'X', b'L', b' ', 0xd, 0xa, 0x87, 0xa];
-
     pub(super) fn new(parser: &'inner mut ContainerParser, input: &'buf [u8]) -> Self {
         parser.previous_consumed_bytes = 0;
         Self {
@@ -44,7 +42,7 @@ impl<'inner, 'buf> ParseEvents<'inner, 'buf> {
 
             match state {
                 DetectState::WaitingSignature => {
-                    if buf.starts_with(&Self::CODESTREAM_SIG) {
+                    if buf.starts_with(&CODESTREAM_SIGNATURE) {
                         info!("Codestream signature found");
                         *state = DetectState::InCodestream {
                             kind: BitstreamKind::BareCodestream,
@@ -53,13 +51,13 @@ impl<'inner, 'buf> ParseEvents<'inner, 'buf> {
                         return Ok(Some(ParseEvent::BitstreamKind(
                             BitstreamKind::BareCodestream,
                         )));
-                    } else if buf.starts_with(&Self::CONTAINER_SIG) {
+                    } else if buf.starts_with(&CONTAINER_SIGNATURE) {
                         info!("Container signature found");
                         *state = DetectState::WaitingBoxHeader;
-                        *buf = &buf[Self::CONTAINER_SIG.len()..];
+                        *buf = &buf[CONTAINER_SIGNATURE.len()..];
                         return Ok(Some(ParseEvent::BitstreamKind(BitstreamKind::Container)));
-                    } else if !Self::CODESTREAM_SIG.starts_with(buf)
-                        && !Self::CONTAINER_SIG.starts_with(buf)
+                    } else if !CODESTREAM_SIGNATURE.starts_with(buf)
+                        && !CONTAINER_SIGNATURE.starts_with(buf)
                     {
                         warn!(?buf, "Invalid signature");
                         *state = DetectState::InCodestream {
