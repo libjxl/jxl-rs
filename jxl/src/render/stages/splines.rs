@@ -5,12 +5,29 @@
 
 use crate::{
     features::spline::Splines,
+    frame::color_correlation_map::ColorCorrelationParams,
     render::{RenderPipelineInPlaceStage, RenderPipelineStage},
 };
 
-#[allow(dead_code)]
 pub struct SplinesStage {
     splines: Splines,
+}
+
+impl SplinesStage {
+    pub fn new(
+        mut splines: Splines,
+        frame_size: (usize, usize),
+        color_correlation_params: &ColorCorrelationParams,
+    ) -> Self {
+        splines
+            .initialize_draw_cache(
+                frame_size.0 as u64,
+                frame_size.1 as u64,
+                color_correlation_params,
+            )
+            .unwrap();
+        SplinesStage { splines }
+    }
 }
 
 impl std::fmt::Display for SplinesStage {
