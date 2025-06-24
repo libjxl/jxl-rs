@@ -7,6 +7,7 @@ use std::borrow::Cow;
 
 use crate::{error::Result, headers::color_encoding::ColorEncoding};
 
+#[derive(Clone)]
 pub enum JxlColorProfile {
     Icc(Vec<u8>),
     // TODO(veluca): this should probably not be the raw header representation.

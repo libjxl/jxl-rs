@@ -259,6 +259,8 @@ pub enum Error {
     IccTableSizeExceeded(usize),
     #[error("Invalid number of channels for PNG output ({0})")]
     PNGInvalidNumChannels(usize),
+    #[error("Invalid CMS configuration: requested ICC but no CMS is configured")]
+    ICCOutputNoCMS,
     #[error(transparent)]
     UserError(Box<dyn std::error::Error>),
 }
