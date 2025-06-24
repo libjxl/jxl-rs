@@ -9,6 +9,7 @@
 use std::{borrow::Cow, marker::PhantomData, mem::MaybeUninit, ops::DerefMut};
 
 use crate::{
+    container::parse::{CODESTREAM_SIGNATURE, CONTAINER_SIGNATURE},
     error::Result,
     headers::{color_encoding::ColorEncoding, frame_header::FrameHeader},
 };
@@ -44,8 +45,49 @@ pub trait JxlBitstreamInput {
     fn is_complete(&mut self) -> bool; // TODO: might only be necessary for the box API
 }
 
+/// Checks if the given buffer starts with a valid JPEG XL signature.
+///
+/// # Returns
+///
+/// A `ProcessingResult` which is:
+/// - `Complete(Some(_))` if a full container or codestream signature is found.
+/// - `Complete(None)` if the prefix is definitively not a JXL signature.
+/// - `NeedsMoreInput` if the prefix matches a signature but is too short.
 pub fn check_signature(file_prefix: &[u8]) -> ProcessingResult<Option<JxlSignatureType>, ()> {
-    todo!()
+    // Check for the longer, more specific container signature first.
+    if CONTAINER_SIGNATURE.starts_with(file_prefix) {
+        if file_prefix.len() >= CONTAINER_SIGNATURE.len() {
+            // We have the full container signature.
+            return ProcessingResult::Complete {
+                result: Some(JxlSignatureType::Container),
+            };
+        } else {
+            // It's a valid prefix of the container signature, but we need more data.
+            return ProcessingResult::NeedsMoreInput {
+                size_hint: CONTAINER_SIGNATURE.len() - file_prefix.len(),
+                fallback: (),
+            };
+        }
+    }
+
+    // Check for the bare codestream signature.
+    if CODESTREAM_SIGNATURE.starts_with(file_prefix) {
+        if file_prefix.len() >= CODESTREAM_SIGNATURE.len() {
+            // We have the full codestream signature.
+            return ProcessingResult::Complete {
+                result: Some(JxlSignatureType::Codestream),
+            };
+        } else {
+            // It's a valid prefix of the codestream signature, but we need more data.
+            return ProcessingResult::NeedsMoreInput {
+                size_hint: CODESTREAM_SIGNATURE.len() - file_prefix.len(),
+                fallback: (),
+            };
+        }
+    }
+
+    // The prefix doesn't match the start of any known signature.
+    ProcessingResult::Complete { result: None }
 }
 
 pub enum JxlColorProfile {
