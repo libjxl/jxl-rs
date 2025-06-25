@@ -71,14 +71,11 @@ impl<S: JxlState> JxlDecoder<S> {
 
 impl JxlDecoder<Initialized> {
     pub fn new(options: JxlDecoderOptions) -> Self {
-        Self::wrap_inner(JxlDecoderInner { options, cms: None })
+        Self::wrap_inner(JxlDecoderInner::new(options, None))
     }
 
     pub fn new_with_cms(options: JxlDecoderOptions, cms: impl JxlCms + 'static) -> Self {
-        Self::wrap_inner(JxlDecoderInner {
-            options,
-            cms: Some(Box::new(cms)),
-        })
+        Self::wrap_inner(JxlDecoderInner::new(options, Some(Box::new(cms))))
     }
 
     pub fn process(
@@ -109,6 +106,11 @@ impl JxlDecoder<WithImageInfo> {
     /// Retrieves the file's color profile.
     pub fn embedded_color_profile(&self) -> &JxlColorProfile {
         self.inner.embedded_color_profile().unwrap()
+    }
+
+    /// Retrieves the current output color profile.
+    pub fn output_color_profile(&self) -> &JxlColorProfile {
+        self.inner.output_color_profile().unwrap()
     }
 
     /// Specifies the preferred color profile to be used for outputting data.
