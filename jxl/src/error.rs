@@ -25,10 +25,12 @@ pub enum Error {
     InvalidQuantizationTableWeight(f32),
     #[error("Read out of bounds; size hint: {0}")]
     OutOfBounds(usize),
+    #[error("Section is too short")]
+    SectionTooShort,
     #[error("Non-zero padding bits")]
     NonZeroPadding,
-    #[error("Invalid signature {0:02x}{1:02x}, expected ff0a")]
-    InvalidSignature(u8, u8),
+    #[error("Invalid signature")]
+    InvalidSignature,
     #[error("Invalid exponent_bits_per_sample: {0}")]
     InvalidExponent(u32),
     #[error("Invalid mantissa_bits: {0}")]
@@ -257,8 +259,8 @@ pub enum Error {
     PNGInvalidNumChannels(usize),
     #[error("Invalid CMS configuration: requested ICC but no CMS is configured")]
     ICCOutputNoCMS,
-    #[error(transparent)]
-    UserError(Box<dyn std::error::Error>),
+    #[error("I/O error: {0}")]
+    IOError(#[from] std::io::Error),
 }
 
 pub type Result<T, E = Error> = std::result::Result<T, E>;

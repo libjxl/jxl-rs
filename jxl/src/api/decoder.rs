@@ -38,13 +38,6 @@ impl<S: JxlState> JxlDecoder<S> {
         }
     }
 
-    /// Resets entirely a decoder, producing a new decoder with the same settings.
-    /// This is faster than creating a new decoder in some cases.
-    pub fn reset(mut self) -> JxlDecoder<Initialized> {
-        self.inner.reset();
-        JxlDecoder::wrap_inner(self.inner)
-    }
-
     /// Rewinds a decoder to the start of the file, allowing past frames to be displayed again.
     pub fn rewind(mut self) -> JxlDecoder<Initialized> {
         self.inner.rewind();
@@ -82,21 +75,13 @@ impl JxlDecoder<Initialized> {
         mut self,
         input: &mut impl JxlBitstreamInput,
     ) -> Result<ProcessingResult<JxlDecoder<WithImageInfo>, Self>> {
-        let inner_result = self.inner.process::<_, [u8]>(input, None)?;
+        let inner_result = self.inner.process(input, None)?;
         Ok(self.map_inner_processing_result(inner_result))
     }
 }
 
 impl JxlDecoder<WithImageInfo> {
-    /// Skip the next `count` frames.
-    pub fn skip_frames(
-        mut self,
-        input: &mut impl JxlBitstreamInput,
-        count: usize,
-    ) -> Result<ProcessingResult<Self, Self>> {
-        let inner_result = self.inner.skip_frames(input, count)?;
-        Ok(self.map_inner_processing_result(inner_result))
-    }
+    // TODO(veluca): once frame skipping is implemented properly, expose that in the API.
 
     /// Obtains the image's basic information.
     pub fn basic_info(&self) -> &JxlBasicInfo {
@@ -131,8 +116,12 @@ impl JxlDecoder<WithImageInfo> {
         mut self,
         input: &mut impl JxlBitstreamInput,
     ) -> Result<ProcessingResult<JxlDecoder<WithFrameInfo>, Self>> {
-        let inner_result = self.inner.process::<_, [u8]>(input, None)?;
+        let inner_result = self.inner.process(input, None)?;
         Ok(self.map_inner_processing_result(inner_result))
+    }
+
+    pub fn has_more_frames(&self) -> bool {
+        self.inner.has_more_frames()
     }
 }
 
@@ -142,7 +131,7 @@ impl JxlDecoder<WithFrameInfo> {
         mut self,
         input: &mut impl JxlBitstreamInput,
     ) -> Result<ProcessingResult<JxlDecoder<WithImageInfo>, Self>> {
-        let inner_result = self.inner.skip_frame(input)?;
+        let inner_result = self.inner.process(input, None)?;
         Ok(self.map_inner_processing_result(inner_result))
     }
 
@@ -157,17 +146,16 @@ impl JxlDecoder<WithFrameInfo> {
     }
 
     /// Draws all the pixels we have data for.
-    pub fn flush_pixels(&mut self) -> Result<()> {
-        self.inner.flush_pixels()
+    pub fn flush_pixels(&mut self, buffers: &mut [JxlOutputBuffer<'_>]) -> Result<()> {
+        self.inner.flush_pixels(buffers)
     }
 
     /// Guarantees to populate exactly the appropriate part of the buffers.
     /// Wants one buffer for each non-ignored pixel type, i.e. color channels and each extra channel.
-    // TODO: figure out if we should pass `Out` as dyn trait.
-    pub fn process<'a, In: JxlBitstreamInput, Out: JxlOutputBuffer<'a> + ?Sized>(
+    pub fn process<In: JxlBitstreamInput>(
         mut self,
         input: &mut In,
-        buffers: &'a mut [&'a mut Out],
+        buffers: &mut [JxlOutputBuffer<'_>],
     ) -> Result<ProcessingResult<JxlDecoder<WithImageInfo>, Self>> {
         let inner_result = self.inner.process(input, Some(buffers))?;
         Ok(self.map_inner_processing_result(inner_result))

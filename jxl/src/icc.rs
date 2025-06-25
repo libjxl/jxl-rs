@@ -165,6 +165,11 @@ impl IncrementalIccReader {
         self.len
     }
 
+    pub fn remaining(&self) -> usize {
+        assert!(self.num_coded_bytes() >= self.out_buf.len());
+        self.num_coded_bytes() - self.out_buf.len()
+    }
+
     pub fn read_one(&mut self, br: &mut BitReader) -> Result<()> {
         let ctx = self.get_icc_ctx() as usize;
         let sym = self.reader.read_unsigned(&self.histograms, br, ctx)?;

@@ -3,6 +3,7 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum JxlColorType {
     Grayscale,
     GrayscaleAlpha,
@@ -23,11 +24,26 @@ impl JxlColorType {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Endianness {
     LittleEndian,
     BigEndian,
 }
 
+impl Endianness {
+    pub fn native() -> Self {
+        #[cfg(target_endian = "little")]
+        {
+            Endianness::LittleEndian
+        }
+        #[cfg(target_endian = "big")]
+        {
+            Endianness::BigEndian
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum JxlDataFormat {
     U8 {
         bit_depth: u8,
@@ -54,6 +70,7 @@ impl JxlDataFormat {
     }
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct JxlPixelFormat {
     pub color_type: JxlColorType,
     // None -> ignore

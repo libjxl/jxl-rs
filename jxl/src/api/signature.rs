@@ -3,7 +3,10 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-use crate::api::ProcessingResult;
+use crate::{
+    api::ProcessingResult,
+    error::{Error, Result},
+};
 
 /// The magic bytes for a bare JPEG XL codestream.
 pub(crate) const CODESTREAM_SIGNATURE: [u8; 2] = [0xff, 0x0a];
@@ -17,6 +20,36 @@ pub enum JxlSignatureType {
     Container,
 }
 
+impl JxlSignatureType {
+    pub(crate) fn signature(&self) -> &[u8] {
+        match self {
+            JxlSignatureType::Container => &CONTAINER_SIGNATURE,
+            JxlSignatureType::Codestream => &CODESTREAM_SIGNATURE,
+        }
+    }
+}
+
+pub(crate) fn check_signature_internal(file_prefix: &[u8]) -> Result<Option<JxlSignatureType>> {
+    let prefix_len = file_prefix.len();
+
+    for st in [JxlSignatureType::Codestream, JxlSignatureType::Container] {
+        let len = st.signature().len();
+        // Determine the number of bytes to compare (the length of the shorter slice)
+        let len_to_check = prefix_len.min(len);
+
+        if file_prefix[..len_to_check] == st.signature()[..len_to_check] {
+            // The prefix is a valid start. Now, is it complete?
+            return if prefix_len >= len {
+                Ok(Some(st))
+            } else {
+                Err(Error::OutOfBounds(len - prefix_len))
+            };
+        }
+    }
+    // The prefix doesn't match the start of any known signature.
+    Ok(None)
+}
+
 /// Checks if the given buffer starts with a valid JPEG XL signature.
 ///
 /// # Returns
@@ -26,50 +59,7 @@ pub enum JxlSignatureType {
 /// - `Complete(None)` if the prefix is definitively not a JXL signature.
 /// - `NeedsMoreInput` if the prefix matches a signature but is too short.
 pub fn check_signature(file_prefix: &[u8]) -> ProcessingResult<Option<JxlSignatureType>, ()> {
-    let prefix_len = file_prefix.len();
-
-    // Check for Codestream signature
-    let codestream_len = CODESTREAM_SIGNATURE.len();
-    // Determine the number of bytes to compare (the length of the shorter slice)
-    let len_to_check = prefix_len.min(codestream_len);
-
-    if file_prefix[..len_to_check] == CODESTREAM_SIGNATURE[..len_to_check] {
-        // The prefix is a valid start. Now, is it complete?
-        return if prefix_len >= codestream_len {
-            ProcessingResult::Complete {
-                result: Some(JxlSignatureType::Codestream),
-            }
-        } else {
-            ProcessingResult::NeedsMoreInput {
-                size_hint: codestream_len - prefix_len,
-                fallback: (),
-            }
-        };
-    }
-
-    // Check for Container signature
-    let container_len = CONTAINER_SIGNATURE.len();
-    // Determine the number of bytes to compare (the length of the shorter slice)
-    let len_to_check = prefix_len.min(container_len);
-
-    // Compare the overlapping part of the prefix and the signature.
-    if file_prefix[..len_to_check] == CONTAINER_SIGNATURE[..len_to_check] {
-        // The prefix is a valid start. Now, is it complete?
-        return if prefix_len >= container_len {
-            // Yes, we have the full signature (or more).
-            ProcessingResult::Complete {
-                result: Some(JxlSignatureType::Container),
-            }
-        } else {
-            // No, we need more bytes to complete the signature.
-            ProcessingResult::NeedsMoreInput {
-                size_hint: container_len - prefix_len,
-                fallback: (),
-            }
-        };
-    }
-    // The prefix doesn't match the start of any known signature.
-    ProcessingResult::Complete { result: None }
+    ProcessingResult::new(check_signature_internal(file_prefix)).unwrap()
 }
 
 #[cfg(test)]
