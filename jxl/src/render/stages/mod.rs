@@ -24,6 +24,7 @@ mod ycbcr;
 pub use blending::*;
 pub use chroma_upsample::*;
 pub use convert::*;
+pub use epf::*;
 pub use extend::*;
 pub use from_linear::*;
 pub use gaborish::*;

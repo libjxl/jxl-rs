@@ -255,6 +255,16 @@ impl<T: ImageDataType> Image<T> {
         self.size
     }
 
+    pub fn fill(&mut self, v: T) {
+        let size = self.size;
+        let mut rect = self.as_rect_mut();
+        for y in 0..size.1 {
+            for x in 0..size.0 {
+                rect.row(y)[x] = v;
+            }
+        }
+    }
+
     pub fn group_rect(&self, group_id: usize, log_group_size: (usize, usize)) -> ImageRect<'_, T> {
         let xgroups = self.size.0.shrc(log_group_size.0);
         let group = (group_id % xgroups, group_id / xgroups);
