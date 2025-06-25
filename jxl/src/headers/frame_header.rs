@@ -177,7 +177,7 @@ pub struct RestorationFilter {
 
     #[coder(Bits(2))]
     #[default(2)]
-    epf_iters: u32,
+    pub epf_iters: u32,
 
     #[default(false)]
     #[condition(epf_iters > 0 && nonserialized.encoding == Encoding::VarDCT)]
@@ -185,7 +185,7 @@ pub struct RestorationFilter {
 
     #[default([0.0, 1.0 / 7.0, 2.0 / 7.0, 3.0 / 7.0, 4.0 / 7.0, 5.0 / 7.0, 6.0 / 7.0, 1.0])]
     #[condition(epf_sharp_custom)]
-    epf_sharp_lut: [f32; 8],
+    pub epf_sharp_lut: [f32; 8],
 
     #[default(false)]
     #[condition(epf_iters > 0)]
@@ -193,7 +193,7 @@ pub struct RestorationFilter {
 
     #[default([40.0, 5.0, 3.5])]
     #[condition(epf_weight_custom)]
-    epf_channel_scale: [f32; 3],
+    pub epf_channel_scale: [f32; 3],
 
     #[default(0.45)]
     #[condition(epf_weight_custom)]
@@ -209,23 +209,23 @@ pub struct RestorationFilter {
 
     #[default(0.46)]
     #[condition(epf_sigma_custom && nonserialized.encoding == Encoding::VarDCT)]
-    epf_quant_mul: f32,
+    pub epf_quant_mul: f32,
 
     #[default(0.9)]
     #[condition(epf_sigma_custom)]
-    epf_pass0_sigma_scale: f32,
+    pub epf_pass0_sigma_scale: f32,
 
     #[default(6.5)]
     #[condition(epf_sigma_custom)]
-    epf_pass2_sigma_scale: f32,
+    pub epf_pass2_sigma_scale: f32,
 
     #[default(2.0 / 3.0)]
     #[condition(epf_sigma_custom)]
-    epf_border_sad_mul: f32,
+    pub epf_border_sad_mul: f32,
 
     #[default(1.0)]
     #[condition(epf_iters > 0 && nonserialized.encoding == Encoding::Modular)]
-    epf_sigma_for_modular: f32,
+    pub epf_sigma_for_modular: f32,
 
     #[default(Extensions::default())]
     extensions: Extensions,

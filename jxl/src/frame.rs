@@ -7,7 +7,9 @@ use crate::{
     bit_reader::BitReader,
     entropy_coding::decode::Histograms,
     error::Result,
-    features::{noise::Noise, patches::PatchesDictionary, spline::Splines},
+    features::{
+        epf::create_sigma_image, noise::Noise, patches::PatchesDictionary, spline::Splines,
+    },
     headers::{
         FileHeader, Orientation,
         color_encoding::ColorSpace,
@@ -32,7 +34,7 @@ use modular::{decode_hf_metadata, decode_vardct_lf};
 use quant_weights::DequantMatrices;
 use quantizer::LfQuantFactors;
 use quantizer::QuantizerParams;
-use transform_map::HfTransformType;
+use transform_map::*;
 
 use std::sync::Arc;
 
@@ -59,7 +61,7 @@ pub struct LfGlobalState {
     splines: Option<Splines>,
     noise: Option<Noise>,
     lf_quant: LfQuantFactors,
-    quant_params: Option<QuantizerParams>,
+    pub quant_params: Option<QuantizerParams>,
     block_context_map: Option<BlockContextMap>,
     color_correlation_params: Option<ColorCorrelationParams>,
     tree: Option<Tree>,
@@ -141,9 +143,9 @@ impl DecoderState {
 pub struct HfMetadata {
     ytox_map: Image<i8>,
     ytob_map: Image<i8>,
-    raw_quant_map: Image<i32>,
-    transform_map: Image<u8>,
-    epf_map: Image<u8>,
+    pub raw_quant_map: Image<i32>,
+    pub transform_map: Image<u8>,
+    pub epf_map: Image<u8>,
     used_hf_types: u32,
 }
 
@@ -381,20 +383,7 @@ impl Frame {
             tree,
             modular_global,
         });
-        let lf_global = self.lf_global.as_mut().unwrap();
 
-        let render_pipeline =
-            Self::build_render_pipeline(&self.decoder_state, &self.header, lf_global)?;
-        self.render_pipeline = Some(render_pipeline);
-
-        if self.decoder_state.enable_output {
-            lf_global.modular_global.process_output(
-                0,
-                0,
-                &self.header,
-                self.render_pipeline.as_mut().unwrap(),
-            )?;
-        }
         Ok(())
     }
 
@@ -424,14 +413,6 @@ impl Frame {
             &lf_global.tree,
             br,
         )?;
-        if self.decoder_state.enable_output {
-            lf_global.modular_global.process_output(
-                1,
-                group,
-                &self.header,
-                self.render_pipeline.as_mut().unwrap(),
-            )?;
-        }
         if self.header.encoding == Encoding::VarDCT {
             info!("decoding HF metadata with group id {}", group);
             let hf_meta = self.hf_meta.as_mut().unwrap();
@@ -511,6 +492,7 @@ impl Frame {
         decoder_state: &DecoderState,
         frame_header: &FrameHeader,
         lf_global: &LfGlobalState,
+        epf_sigma: &Option<Arc<Image<f32>>>,
     ) -> Result<SimpleRenderPipeline> {
         let num_channels = frame_header.num_extra_channels as usize + 3;
         let num_temp_channels = if frame_header.has_noise() { 3 } else { 0 };
@@ -565,7 +547,31 @@ impl Frame {
                 ))?;
         }
 
-        // TODO: EPF
+        let rf = &frame_header.restoration_filter;
+        if rf.epf_iters >= 3 {
+            pipeline = pipeline.add_stage(Epf0Stage::new(
+                rf.epf_pass0_sigma_scale,
+                rf.epf_border_sad_mul,
+                rf.epf_channel_scale,
+                epf_sigma.as_ref().unwrap().clone(),
+            ))?
+        }
+        if rf.epf_iters >= 1 {
+            pipeline = pipeline.add_stage(Epf1Stage::new(
+                1.0,
+                rf.epf_border_sad_mul,
+                rf.epf_channel_scale,
+                epf_sigma.as_ref().unwrap().clone(),
+            ))?
+        }
+        if rf.epf_iters >= 2 {
+            pipeline = pipeline.add_stage(Epf2Stage::new(
+                rf.epf_pass2_sigma_scale,
+                rf.epf_border_sad_mul,
+                rf.epf_channel_scale,
+                epf_sigma.as_ref().unwrap().clone(),
+            ))?
+        }
 
         let late_ec_upsample = frame_header.upsampling > 1
             && frame_header
@@ -755,6 +761,37 @@ impl Frame {
             }
         }
         pipeline.build()
+    }
+
+    pub fn prepare_render_pipeline(&mut self) -> Result<()> {
+        let lf_global = self.lf_global.as_mut().unwrap();
+        let epf_sigma = if self.header.restoration_filter.epf_iters > 0 {
+            let sigma_image = create_sigma_image(&self.header, lf_global, &self.hf_meta)?;
+            Some(Arc::new(sigma_image))
+        } else {
+            None
+        };
+
+        let render_pipeline =
+            Self::build_render_pipeline(&self.decoder_state, &self.header, lf_global, &epf_sigma)?;
+        self.render_pipeline = Some(render_pipeline);
+        if self.decoder_state.enable_output {
+            lf_global.modular_global.process_output(
+                0,
+                0,
+                &self.header,
+                self.render_pipeline.as_mut().unwrap(),
+            )?;
+            for group in 0..self.header.num_lf_groups() {
+                lf_global.modular_global.process_output(
+                    1,
+                    group,
+                    &self.header,
+                    self.render_pipeline.as_mut().unwrap(),
+                )?;
+            }
+        }
+        Ok(())
     }
 
     #[instrument(level = "debug", skip(self, br))]
