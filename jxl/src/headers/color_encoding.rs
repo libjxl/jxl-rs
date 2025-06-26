@@ -478,6 +478,13 @@ impl CustomXY {
     pub fn as_f32_coords(&self) -> (f32, f32) {
         (self.x as f32 / 1_000_000.0, self.y as f32 / 1_000_000.0)
     }
+
+    pub fn from_f32_coords(x: f32, y: f32) -> Self {
+        Self {
+            x: (x * 1_000_000.0).round() as i32,
+            y: (y * 1_000_000.0).round() as i32,
+        }
+    }
 }
 
 pub struct CustomTransferFunctionNonserialized {
