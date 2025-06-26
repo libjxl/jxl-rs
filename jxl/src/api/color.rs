@@ -6,7 +6,7 @@
 use std::borrow::Cow;
 
 use crate::{
-    error::Result,
+    error::{Error, Result},
     headers::{
         color_encoding::{
             ColorEncoding, ColorSpace, CustomXY, Primaries, RenderingIntent, TransferFunction,
@@ -16,7 +16,7 @@ use crate::{
     },
 };
 
-#[derive(Clone)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum JxlWhitePoint {
     D65,
     E,
@@ -24,7 +24,7 @@ pub enum JxlWhitePoint {
     Chromaticity { wx: f32, wy: f32 },
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum JxlPrimaries {
     SRGB,
     BT2100,
@@ -39,7 +39,7 @@ pub enum JxlPrimaries {
     },
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum JxlTransferFunction {
     BT709,
     Linear,
@@ -50,7 +50,7 @@ pub enum JxlTransferFunction {
     Gamma(f32),
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum JxlColorEncoding {
     RgbColorSpace {
         white_point: JxlWhitePoint,
@@ -182,6 +182,76 @@ impl JxlColorEncoding {
         };
         Ok(result)
     }
+
+    pub fn from_internal(internal: &ColorEncoding) -> Result<Self> {
+        let rendering_intent = internal.rendering_intent;
+        if internal.color_space == ColorSpace::XYB {
+            return Ok(Self::XYB { rendering_intent });
+        }
+
+        let white_point = match internal.white_point {
+            WhitePoint::D65 => JxlWhitePoint::D65,
+            WhitePoint::E => JxlWhitePoint::E,
+            WhitePoint::DCI => JxlWhitePoint::DCI,
+            WhitePoint::Custom => {
+                let (wx, wy) = internal.white.as_f32_coords();
+                JxlWhitePoint::Chromaticity { wx, wy }
+            }
+        };
+        let transfer_function = if internal.tf.have_gamma {
+            JxlTransferFunction::Gamma(internal.tf.gamma())
+        } else {
+            match internal.tf.transfer_function {
+                TransferFunction::BT709 => JxlTransferFunction::BT709,
+                TransferFunction::Linear => JxlTransferFunction::Linear,
+                TransferFunction::SRGB => JxlTransferFunction::SRGB,
+                TransferFunction::PQ => JxlTransferFunction::SRGB,
+                TransferFunction::DCI => JxlTransferFunction::DCI,
+                TransferFunction::HLG => JxlTransferFunction::HLG,
+                TransferFunction::Unknown => {
+                    return Err(Error::InvalidColorEncoding);
+                }
+            }
+        };
+
+        if internal.color_space == ColorSpace::Gray {
+            return Ok(Self::GrayscaleColorSpace {
+                white_point,
+                transfer_function,
+                rendering_intent,
+            });
+        }
+
+        let primaries = match internal.primaries {
+            Primaries::SRGB => JxlPrimaries::SRGB,
+            Primaries::BT2100 => JxlPrimaries::BT2100,
+            Primaries::P3 => JxlPrimaries::P3,
+            Primaries::Custom => {
+                let (rx, ry) = internal.custom_primaries[0].as_f32_coords();
+                let (gx, gy) = internal.custom_primaries[1].as_f32_coords();
+                let (bx, by) = internal.custom_primaries[2].as_f32_coords();
+                JxlPrimaries::Chromaticities {
+                    rx,
+                    ry,
+                    gx,
+                    gy,
+                    bx,
+                    by,
+                }
+            }
+        };
+
+        match internal.color_space {
+            ColorSpace::Gray | ColorSpace::XYB => unreachable!(),
+            ColorSpace::RGB => Ok(Self::RgbColorSpace {
+                white_point,
+                primaries,
+                transfer_function,
+                rendering_intent,
+            }),
+            ColorSpace::Unknown => Err(Error::InvalidColorSpace),
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -238,4 +308,45 @@ pub trait JxlCms {
         output: JxlColorProfile,
         intensity_target: f32,
     ) -> Result<Vec<Box<dyn JxlCmsTransformer>>>;
+}
+
+#[cfg(test)]
+mod test {
+    use super::{JxlColorEncoding, JxlPrimaries, JxlTransferFunction, JxlWhitePoint};
+    use crate::headers::color_encoding::RenderingIntent;
+
+    #[test]
+    fn test_roundtrip() {
+        for input in [
+            JxlColorEncoding::RgbColorSpace {
+                white_point: JxlWhitePoint::D65,
+                primaries: JxlPrimaries::P3,
+                transfer_function: JxlTransferFunction::HLG,
+                rendering_intent: RenderingIntent::Relative,
+            },
+            JxlColorEncoding::GrayscaleColorSpace {
+                white_point: JxlWhitePoint::Chromaticity {
+                    wx: 0.3457,
+                    wy: 0.3585,
+                },
+                transfer_function: JxlTransferFunction::Linear,
+                rendering_intent: RenderingIntent::Absolute,
+            },
+            JxlColorEncoding::XYB {
+                rendering_intent: RenderingIntent::Perceptual,
+            },
+        ] {
+            let internal = input.to_internal().unwrap();
+            let reconstructed = JxlColorEncoding::from_internal(&internal).unwrap();
+
+            assert_eq!(input, reconstructed);
+
+            let internal_again = reconstructed.to_internal().unwrap();
+
+            assert_eq!(
+                internal.get_color_encoding_description(),
+                internal_again.get_color_encoding_description()
+            );
+        }
+    }
 }
