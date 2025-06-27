@@ -285,6 +285,25 @@ impl Epf2Stage {
             border_sad_mul,
         }
     }
+    fn acc_avg_weighted_px(
+        &self,
+        c: (f32, f32, f32),
+        r: (f32, f32, f32),
+        inv_sigma: f32,
+        acc: (&mut f32, &mut f32, &mut f32, &mut f32),
+    ) {
+        let (cx, cy, cb) = c;
+        let (rx, ry, rb) = r;
+        let (x_acc, y_acc, b_acc, w_acc) = acc;
+        let sad = (cx - rx).abs() * self.channel_scale[0]
+            + (cy - ry).abs() * self.channel_scale[1]
+            + (cb - rb).abs() * self.channel_scale[2];
+        let weight = (sad * inv_sigma + 1.0).max(0.0);
+        *w_acc += weight;
+        *x_acc += weight * cx;
+        *y_acc += weight * cy;
+        *b_acc += weight * cb;
+    }
 }
 
 impl RenderPipelineStage for Epf2Stage {
@@ -324,41 +343,38 @@ impl RenderPipelineStage for Epf2Stage {
                 continue;
             }
 
-            // Compute SADs
-            let mut sads = [0.0; 1];
-            const SADS_OFF: [[isize; 2]; 1] = [[0, 0]];
-            for ((input_c, _), scale) in row.iter_mut().zip(self.channel_scale) {
-                const PLUS_OFF: [[isize; 2]; 5] = [[0, 0], [-1, 0], [0, -1], [1, 0], [0, 1]];
-                for (sads_i, sad_off) in sads.iter_mut().zip(SADS_OFF) {
-                    let sad = PLUS_OFF.iter().fold(0.0, |acc, off| {
-                        let r11 =
-                            input_c[(1 + off[0]) as usize][1 + x.saturating_add_signed(off[1])];
-                        let c11 = input_c[(1 + sad_off[0] + off[0]) as usize]
-                            [1 + x.saturating_add_signed(sad_off[1] + off[1])];
-                        acc + (r11 - c11).abs()
-                    });
-                    *sads_i = sad.mul_add(scale, *sads_i);
-                }
-            }
-
-            // Compute output based on SADs
             let vsm = sad_mul[ix];
             let inv_sigma = row_sigma[bx] * vsm;
-            for (input_c, output_c) in row.iter_mut() {
-                let mut cc = input_c[1][1 + x];
-                let mut weight = 1.0;
-                for (sad, sad_off) in sads.iter().zip(SADS_OFF) {
-                    let c =
-                        input_c[(1 + sad_off[0]) as usize][1 + x.saturating_add_signed(sad_off[1])];
-                    let w = sad.mul_add(inv_sigma, 1.0).max(0.0);
 
-                    weight += w;
-                    cc = c.mul_add(w, cc);
-                }
+            let x_cc = row[0].0[1][1 + x];
+            let y_cc = row[1].0[1][1 + x];
+            let b_cc = row[2].0[1][1 + x];
 
-                let inv_w = 1.0 / weight;
-                output_c[0][x] = cc * inv_w;
-            }
+            let mut w_acc = 1.0;
+            let mut x_acc = x_cc;
+            let mut y_acc = y_cc;
+            let mut b_acc = b_cc;
+
+            [(0, 1), (1, 0), (1, 2), (2, 1)]
+                .iter()
+                .for_each(|(y_off, x_off)| {
+                    self.acc_avg_weighted_px(
+                        (
+                            row[0].0[*y_off as usize][x_off + x],
+                            row[1].0[*y_off as usize][x_off + x],
+                            row[2].0[*y_off as usize][x_off + x],
+                        ),
+                        (x_cc, y_cc, b_cc),
+                        inv_sigma,
+                        (&mut x_acc, &mut y_acc, &mut b_acc, &mut w_acc),
+                    );
+                });
+
+            let inv_w = 1.0 / w_acc;
+
+            row[0].1[0][x] = x_acc * inv_w;
+            row[1].1[0][x] = y_acc * inv_w;
+            row[2].1[0][x] = b_acc * inv_w;
         }
     }
 }
