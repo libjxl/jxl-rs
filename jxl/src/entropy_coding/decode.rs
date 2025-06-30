@@ -14,6 +14,7 @@ use crate::error::{Error, Result};
 use crate::headers::encodings::*;
 
 use super::lz77::Lz77ReaderInner;
+use super::owned_histograms;
 
 pub fn decode_varint16(br: &mut BitReader) -> Result<u16> {
     if br.read(1)? != 0 {
@@ -192,7 +193,11 @@ impl Histograms {
         self.context_map[context] as usize
     }
 
-    fn make_reader_impl(&self, br: &mut BitReader, image_width: Option<usize>) -> Result<Reader> {
+    pub(super) fn make_reader_impl(
+        &self,
+        br: &mut BitReader,
+        image_width: Option<usize>,
+    ) -> Result<Reader> {
         let ans_reader = if matches!(self.codes, Codes::Ans(_)) {
             AnsReader::init(br)?
         } else {
@@ -235,6 +240,18 @@ impl Histograms {
 
     pub fn make_reader_with_width(&self, br: &mut BitReader, image_width: usize) -> Result<Reader> {
         self.make_reader_impl(br, Some(image_width))
+    }
+
+    pub fn into_reader(self, br: &mut BitReader) -> Result<owned_histograms::Reader> {
+        owned_histograms::Reader::new(self, br, None)
+    }
+
+    pub fn into_reader_with_width(
+        self,
+        br: &mut BitReader,
+        image_width: usize,
+    ) -> Result<owned_histograms::Reader> {
+        owned_histograms::Reader::new(self, br, Some(image_width))
     }
 
     pub fn num_histograms(&self) -> usize {
