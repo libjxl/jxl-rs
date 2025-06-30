@@ -247,7 +247,7 @@ pub fn do_vsqueeze_step(
     for y in 1..h {
         let avg_row = in_avg.row(y);
         let res_row = in_res.row(y);
-        let avg_row_next = if y < h - 1 {
+        let avg_row_next = if has_tail || y < h - 1 {
             in_avg.row(y + 1)
         } else {
             match in_next_avg {
