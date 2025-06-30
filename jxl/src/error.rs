@@ -23,8 +23,8 @@ pub enum Error {
     InvalidAFVBands,
     #[error("Invalid quantization table weight: {0}")]
     InvalidQuantizationTableWeight(f32),
-    #[error("Read out of bounds")]
-    OutOfBounds,
+    #[error("Read out of bounds; size hint: {0}")]
+    OutOfBounds(usize),
     #[error("Non-zero padding bits")]
     NonZeroPadding,
     #[error("Invalid signature {0:02x}{1:02x}, expected ff0a")]

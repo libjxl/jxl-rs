@@ -50,14 +50,24 @@ impl<'a> BitReader<'a> {
         self.bit_buf & ((1u64 << num) - 1)
     }
 
+    /// Un-reads `num` bits back into the buffer. `num` must be such that `self.bits_in_buf + num`
+    /// is at most 64.
+    pub fn unconsume(&mut self, num: usize, bits: u64) {
+        assert!(self.bits_in_buf + num <= 64);
+        assert!(bits >> num == 0);
+        self.bit_buf = (self.bit_buf << num) | bits;
+        self.bits_in_buf += num;
+        self.total_bits_read = self.total_bits_read.wrapping_sub(num);
+    }
+
     /// Advances by `num` bits. Similar to `skip_bits`, but bits must be in the buffer.
     pub fn consume(&mut self, num: usize) -> Result<(), Error> {
         if self.bits_in_buf < num {
-            return Err(Error::OutOfBounds);
+            return Err(Error::OutOfBounds((num - self.bits_in_buf).div_ceil(8)));
         }
         self.bit_buf >>= num;
         self.bits_in_buf -= num;
-        self.total_bits_read += num;
+        self.total_bits_read = self.total_bits_read.wrapping_add(num);
         Ok(())
     }
 
@@ -79,8 +89,9 @@ impl<'a> BitReader<'a> {
     }
 
     /// Returns the total number of bits that have been read or skipped.
-    pub fn total_bits_read(&self) -> usize {
-        self.total_bits_read
+    /// Note that this might be negative if there have been calls to `unread()`.
+    pub fn total_bits_read(&self) -> isize {
+        self.total_bits_read as isize
     }
 
     /// Returns the total number of bits that can still be read or skipped.
@@ -114,21 +125,34 @@ impl<'a> BitReader<'a> {
         self.bits_in_buf = 0;
 
         // Check if the remaining bits to skip exceed the total bits in `data`
-        if n > self.data.len() * 8 {
-            self.total_bits_read += self.data.len() * 8;
-            return Err(Error::OutOfBounds);
+        let bits_available = self.data.len() * 8;
+        if n > bits_available {
+            self.total_bits_read += bits_available;
+            return Err(Error::OutOfBounds(n - bits_available));
         }
 
         // Skip bytes directly in `data`, then handle leftover bits
-        self.total_bits_read += n;
+        self.total_bits_read += n / 8 * 8;
         self.data = &self.data[n / 8..];
         n %= 8;
 
         // Refill the buffer and adjust for any remaining bits
         self.refill();
-        self.bits_in_buf = self.bits_in_buf.checked_sub(n).ok_or(Error::OutOfBounds)?;
-        self.bit_buf >>= n;
-        Ok(())
+        let to_consume = self.bits_in_buf.min(n);
+        self.total_bits_read -= to_consume;
+        n -= to_consume;
+        self.bit_buf >>= to_consume;
+        if n > 0 {
+            Err(Error::OutOfBounds(n))
+        } else {
+            Ok(())
+        }
+    }
+
+    /// Return the number of bits
+    pub fn bits_to_next_byte(&self) -> usize {
+        let byte_boundary = self.total_bits_read.div_ceil(8) * 8;
+        byte_boundary - self.total_bits_read
     }
 
     /// Jumps to the next byte boundary. The skipped bytes have to be 0.
@@ -143,8 +167,7 @@ impl<'a> BitReader<'a> {
     /// ```
     #[inline(never)]
     pub fn jump_to_byte_boundary(&mut self) -> Result<(), Error> {
-        let byte_boundary = self.total_bits_read.div_ceil(8) * 8;
-        if self.read(byte_boundary - self.total_bits_read)? != 0 {
+        if self.read(self.bits_to_next_byte())? != 0 {
             return Err(Error::NonZeroPadding);
         }
         Ok(())
