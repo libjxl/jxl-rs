@@ -73,6 +73,8 @@ impl<const N: usize, const SHIFT: u8> RenderPipelineStage for Upsample<N, SHIFT>
 
         for x in 0..xsize {
             // Upsample this input value into a NxN region in the output
+            let mut minval = input[0][x];
+            let mut maxval = minval;
             for di in 0..N {
                 for dj in 0..N {
                     // Iterate over the input rows and columns
@@ -81,9 +83,11 @@ impl<const N: usize, const SHIFT: u8> RenderPipelineStage for Upsample<N, SHIFT>
                         for j in 0..5 {
                             let input_value = input[i][j + x];
                             output_val += input_value * self.kernel[di][dj][i % 5][j % 5];
+                            minval = input_value.min(minval);
+                            maxval = input_value.max(maxval);
                         }
                     }
-                    output[di][dj + N * x] = output_val;
+                    output[di][dj + N * x] = output_val.clamp(minval, maxval);
                 }
             }
         }
@@ -228,7 +232,7 @@ mod test {
                         let mapped_i = if di == 0 { kernel_size - 1 - i } else { i };
                         let mapped_j = if dj == 0 { kernel_size - 1 - j } else { j };
                         let weight_index = index_map[mapped_i][mapped_j];
-                        assert_almost_eq!(output_value, weights[weight_index], eps);
+                        assert_almost_eq!(output_value, weights[weight_index].clamp(0.0, 1.0), eps);
                     }
                 }
             }
@@ -315,7 +319,7 @@ mod test {
                             j / 4 + (1 - (j % 2)) * 5
                         };
                         let weight_index = index_map[mapped_i][mapped_j];
-                        assert_almost_eq!(output_value, weights[weight_index], eps);
+                        assert_almost_eq!(output_value, weights[weight_index].clamp(0.0, 1.0), eps);
                     }
                 }
             }
@@ -472,7 +476,7 @@ mod test {
                             j / 8 + (3 - (j % 4)) * 5
                         };
                         let weight_index = index_map[mapped_i][mapped_j];
-                        assert_almost_eq!(output_value, weights[weight_index], eps);
+                        assert_almost_eq!(output_value, weights[weight_index].clamp(0.0, 1.0), eps);
                     }
                 }
             }
