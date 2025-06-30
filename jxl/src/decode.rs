@@ -12,7 +12,7 @@ use crate::{
         bit_depth::BitDepth,
         color_encoding::{ColorEncoding, ColorSpace, TransferFunction},
     },
-    icc::read_icc,
+    icc::IncrementalIccReader,
     image::{Image, ImageDataType},
     util::tracing_wrappers::*,
 };
@@ -76,9 +76,11 @@ pub fn decode_jxl_codestream(
     };
     info!("Image size: {} x {}", output_xsize, output_ysize);
     let original_icc_bytes = if file_header.image_metadata.color_encoding.want_icc {
-        let r = read_icc(&mut br)?;
-        println!("found {}-byte ICC", r.len());
-        r
+        let mut r = IncrementalIccReader::new(&mut br)?;
+        r.read_all(&mut br)?;
+        let icc = r.finalize()?;
+        println!("found {}-byte ICC", icc.len());
+        icc
     } else {
         // TODO: handle potential error here?
         file_header
