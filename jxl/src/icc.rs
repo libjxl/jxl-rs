@@ -9,7 +9,7 @@ use byteorder::{BigEndian, ReadBytesExt, WriteBytesExt};
 
 use crate::bit_reader::*;
 use crate::entropy_coding::decode::Histograms;
-use crate::entropy_coding::owned_histograms::Reader;
+use crate::entropy_coding::decode::SymbolReader;
 use crate::error::{Error, Result};
 use crate::headers::encodings::*;
 use crate::util::NewWithCapacity;
@@ -106,7 +106,8 @@ fn read_icc_inner(stream: &mut IccStream) -> Result<Vec<u8>, Error> {
 
 /// Struct to incrementally decode an ICC profile.
 pub struct IncrementalIccReader {
-    reader: Reader,
+    histograms: Histograms,
+    reader: SymbolReader,
     out_buf: Vec<u8>,
     len: usize,
     // [prev, prev_prev]
@@ -123,8 +124,9 @@ impl IncrementalIccReader {
         let len = len as usize;
 
         let histograms = Histograms::decode(ICC_CONTEXTS, br, true)?;
-        let reader = histograms.into_reader(br)?;
+        let reader = SymbolReader::new(&histograms, br, None)?;
         Ok(Self {
+            histograms,
             reader,
             len,
             out_buf: Vec::new_with_capacity(len)?,
@@ -165,7 +167,7 @@ impl IncrementalIccReader {
 
     pub fn read_one(&mut self, br: &mut BitReader) -> Result<()> {
         let ctx = self.get_icc_ctx() as usize;
-        let sym = self.reader.read(br, ctx)?;
+        let sym = self.reader.read_unsigned(&self.histograms, br, ctx)?;
         if sym >= 256 {
             warn!(sym, "Invalid symbol in ICC stream");
             return Err(Error::InvalidIccStream);
@@ -186,7 +188,7 @@ impl IncrementalIccReader {
 
     pub fn finalize(self) -> Result<Vec<u8>> {
         assert_eq!(self.num_coded_bytes(), self.out_buf.len());
-        self.reader.check_final_state()?;
+        self.reader.check_final_state(&self.histograms)?;
         let mut stream = IccStream::new(self.out_buf);
         let profile = read_icc_inner(&mut stream)?;
         stream.finalize()?;

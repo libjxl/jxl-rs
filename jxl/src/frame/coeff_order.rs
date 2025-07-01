@@ -6,6 +6,7 @@
 use crate::{
     BLOCK_DIM, BLOCK_SIZE,
     bit_reader::BitReader,
+    entropy_coding::decode::SymbolReader,
     error::Result,
     frame::Histograms,
     frame::transform_map::*,
@@ -101,7 +102,7 @@ pub fn decode_coeff_orders(used_orders: u32, br: &mut BitReader) -> Result<Vec<P
         return Ok(permutations);
     }
     let histograms = Histograms::decode(NUM_PERMUTATION_CONTEXTS, br, true)?;
-    let mut reader = histograms.make_reader(br)?;
+    let mut reader = SymbolReader::new(&histograms, br, None)?;
     for (ord, transform_type) in TRANSFORM_TYPE_LUT.iter().enumerate() {
         if used_orders & (1 << ord) == 0 {
             continue;
@@ -110,11 +111,11 @@ pub fn decode_coeff_orders(used_orders: u32, br: &mut BitReader) -> Result<Vec<P
         let num_blocks = covered_blocks_x(*transform_type) * covered_blocks_y(*transform_type);
         for c in 0..3 {
             let size = num_blocks * BLOCK_SIZE as u32;
-            let permutation = Permutation::decode(size, num_blocks, br, &mut reader)?;
+            let permutation = Permutation::decode(size, num_blocks, &histograms, br, &mut reader)?;
             let index = 3 * ord + c;
             permutations[index].compose(&permutation);
         }
     }
-    reader.check_final_state()?;
+    reader.check_final_state(&histograms)?;
     Ok(permutations)
 }

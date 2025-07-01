@@ -4,7 +4,8 @@
 // license that can be found in the LICENSE file.
 
 use crate::bit_reader::BitReader;
-use crate::entropy_coding::decode::Reader;
+use crate::entropy_coding::decode::Histograms;
+use crate::entropy_coding::decode::SymbolReader;
 use crate::error::{Error, Result};
 use crate::util::{CeilLog2, NewWithCapacity, tracing_wrappers::instrument, value_of_lowest_1_bit};
 
@@ -24,11 +25,14 @@ impl Permutation {
     pub fn decode(
         size: u32,
         skip: u32,
+        histograms: &Histograms,
         br: &mut BitReader,
-        entropy_reader: &mut Reader,
+        entropy_reader: &mut SymbolReader,
     ) -> Result<Self> {
-        let end = entropy_reader.read(br, get_context(size))?;
-        Self::decode_inner(size, skip, end, |ctx| entropy_reader.read(br, ctx))
+        let end = entropy_reader.read_unsigned(histograms, br, get_context(size))?;
+        Self::decode_inner(size, skip, end, |ctx| {
+            entropy_reader.read_unsigned(histograms, br, ctx)
+        })
     }
 
     fn decode_inner(

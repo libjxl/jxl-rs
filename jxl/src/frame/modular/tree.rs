@@ -9,6 +9,7 @@ use super::{ModularChannel, Predictor, predict::WeightedPredictorState};
 use crate::{
     bit_reader::BitReader,
     entropy_coding::decode::Histograms,
+    entropy_coding::decode::SymbolReader,
     error::{Error, Result},
     frame::modular::predict::PredictionData,
     image::Image,
@@ -66,7 +67,7 @@ impl Tree {
         assert!(size_limit <= u32::MAX as usize);
         trace!(pos = br.total_bits_read());
         let tree_histograms = Histograms::decode(NUM_TREE_CONTEXTS, br, true)?;
-        let mut tree_reader = tree_histograms.make_reader(br)?;
+        let mut tree_reader = SymbolReader::new(&tree_histograms, br, None)?;
         // TODO(veluca): consider early-exiting for trees known to be infinite.
         let mut tree: Vec<TreeNode> = vec![];
         let mut to_decode = 1;
@@ -80,7 +81,7 @@ impl Tree {
                 tree.try_reserve(tree.len() * 2 + 1)?;
             }
             to_decode -= 1;
-            let property = tree_reader.read(br, PROPERTY_CONTEXT)?;
+            let property = tree_reader.read_unsigned(&tree_histograms, br, PROPERTY_CONTEXT)?;
             trace!(property);
             if let Some(property) = property.checked_sub(1) {
                 // inner node.
@@ -88,7 +89,7 @@ impl Tree {
                     return Err(Error::InvalidProperty(property));
                 }
                 max_property = max_property.max(property);
-                let splitval = tree_reader.read_signed(br, SPLIT_VAL_CONTEXT)?;
+                let splitval = tree_reader.read_signed(&tree_histograms, br, SPLIT_VAL_CONTEXT)?;
                 let left_child = (tree.len() + to_decode + 1) as u32;
                 let node = TreeNode::Split {
                     property: property as u8,
@@ -100,13 +101,19 @@ impl Tree {
                 to_decode += 2;
                 tree.push(node);
             } else {
-                let predictor = Predictor::try_from(tree_reader.read(br, PREDICTOR_CONTEXT)?)?;
-                let offset = tree_reader.read_signed(br, OFFSET_CONTEXT)?;
-                let mul_log = tree_reader.read(br, MULTIPLIER_LOG_CONTEXT)?;
+                let predictor = Predictor::try_from(tree_reader.read_unsigned(
+                    &tree_histograms,
+                    br,
+                    PREDICTOR_CONTEXT,
+                )?)?;
+                let offset = tree_reader.read_signed(&tree_histograms, br, OFFSET_CONTEXT)?;
+                let mul_log =
+                    tree_reader.read_unsigned(&tree_histograms, br, MULTIPLIER_LOG_CONTEXT)?;
                 if mul_log >= 31 {
                     return Err(Error::TreeMultiplierTooLarge(mul_log, 31));
                 }
-                let mul_bits = tree_reader.read(br, MULTIPLIER_BITS_CONTEXT)?;
+                let mul_bits =
+                    tree_reader.read_unsigned(&tree_histograms, br, MULTIPLIER_BITS_CONTEXT)?;
                 let multiplier = (mul_bits as u64 + 1) << mul_log;
                 if multiplier > (u32::MAX as u64) {
                     return Err(Error::TreeMultiplierBitsTooLarge(mul_bits, mul_log));
@@ -122,7 +129,7 @@ impl Tree {
                 tree.push(node);
             }
         }
-        tree_reader.check_final_state()?;
+        tree_reader.check_final_state(&tree_histograms)?;
 
         let num_properties = max_property as usize + 1;
         let mut property_ranges = Vec::new_with_capacity(num_properties * tree.len())?;
