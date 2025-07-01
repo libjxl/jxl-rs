@@ -6,7 +6,7 @@
 use super::{frame_header::PermutationNonserialized, permutation::Permutation};
 use crate::{
     bit_reader::BitReader,
-    entropy_coding::decode::{Histograms, unpack_signed},
+    entropy_coding::decode::{Histograms, SymbolReader, unpack_signed},
     error::Error,
 };
 
@@ -175,8 +175,8 @@ impl UnconditionalCoder<()> for Permutation {
             let size = nonserialized.num_entries;
             let num_contexts = 8;
             let histograms = Histograms::decode(num_contexts, br, /*allow_lz77=*/ true)?;
-            let mut reader = histograms.make_reader(br)?;
-            Permutation::decode(size, 0, br, &mut reader)
+            let mut reader = SymbolReader::new(&histograms, br, None)?;
+            Permutation::decode(size, 0, &histograms, br, &mut reader)
         } else {
             Ok(Permutation::default())
         };

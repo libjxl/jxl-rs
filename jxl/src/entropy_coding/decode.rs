@@ -12,9 +12,7 @@ use crate::entropy_coding::huffman::*;
 use crate::entropy_coding::hybrid_uint::*;
 use crate::error::{Error, Result};
 use crate::headers::encodings::*;
-
-use super::lz77::Lz77ReaderInner;
-use super::owned_histograms;
+use crate::util::tracing_wrappers::*;
 
 pub fn decode_varint16(br: &mut BitReader) -> Result<u16> {
     if br.read(1)? != 0 {
@@ -63,74 +61,183 @@ pub struct Histograms {
 }
 
 #[derive(Debug)]
-pub struct Reader<'a> {
-    histograms: &'a Histograms,
-    lz77_config: ReaderLz77Config<'a>,
+pub struct Lz77State {
+    min_symbol: u32,
+    min_length: u32,
+    dist_multiplier: u32,
+    window: Vec<u32>,
+    num_to_copy: u32,
+    copy_pos: u32,
+    num_decoded: u32,
+}
+
+impl Lz77State {
+    const LOG_WINDOW_SIZE: u32 = 20;
+    const WINDOW_MASK: u32 = (1 << Self::LOG_WINDOW_SIZE) - 1;
+
+    #[rustfmt::skip]
+    const SPECIAL_DISTANCES: [(i8, u8); 120] = [
+        ( 0, 1), ( 1, 0), ( 1, 1), (-1, 1), ( 0, 2), ( 2, 0), ( 1, 2), (-1, 2), ( 2, 1), (-2, 1),
+        ( 2, 2), (-2, 2), ( 0, 3), ( 3, 0), ( 1, 3), (-1, 3), ( 3, 1), (-3, 1), ( 2, 3), (-2, 3),
+        ( 3, 2), (-3, 2), ( 0, 4), ( 4, 0), ( 1, 4), (-1, 4), ( 4, 1), (-4, 1), ( 3, 3), (-3, 3),
+        ( 2, 4), (-2, 4), ( 4, 2), (-4, 2), ( 0, 5), ( 3, 4), (-3, 4), ( 4, 3), (-4, 3), ( 5, 0),
+        ( 1, 5), (-1, 5), ( 5, 1), (-5, 1), ( 2, 5), (-2, 5), ( 5, 2), (-5, 2), ( 4, 4), (-4, 4),
+        ( 3, 5), (-3, 5), ( 5, 3), (-5, 3), ( 0, 6), ( 6, 0), ( 1, 6), (-1, 6), ( 6, 1), (-6, 1),
+        ( 2, 6), (-2, 6), ( 6, 2), (-6, 2), ( 4, 5), (-4, 5), ( 5, 4), (-5, 4), ( 3, 6), (-3, 6),
+        ( 6, 3), (-6, 3), ( 0, 7), ( 7, 0), ( 1, 7), (-1, 7), ( 5, 5), (-5, 5), ( 7, 1), (-7, 1),
+        ( 4, 6), (-4, 6), ( 6, 4), (-6, 4), ( 2, 7), (-2, 7), ( 7, 2), (-7, 2), ( 3, 7), (-3, 7),
+        ( 7, 3), (-7, 3), ( 5, 6), (-5, 6), ( 6, 5), (-6, 5), ( 8, 0), ( 4, 7), (-4, 7), ( 7, 4),
+        (-7, 4), ( 8, 1), ( 8, 2), ( 6, 6), (-6, 6), ( 8, 3), ( 5, 7), (-5, 7), ( 7, 5), (-7, 5),
+        ( 8, 4), ( 6, 7), (-6, 7), ( 7, 6), (-7, 6), ( 8, 5), ( 7, 7), (-7, 7), ( 8, 6), ( 8, 7),
+    ];
+
+    fn push_decoded_symbol(&mut self, token: u32) {
+        let offset = (self.num_decoded & Self::WINDOW_MASK) as usize;
+        if let Some(slot) = self.window.get_mut(offset) {
+            *slot = token;
+        } else {
+            debug_assert_eq!(self.window.len(), offset);
+            self.window.push(token);
+        }
+        self.num_decoded += 1;
+    }
+
+    fn pull_symbol(&mut self) -> Option<u32> {
+        if let Some(next_num_to_copy) = self.num_to_copy.checked_sub(1) {
+            let sym = self.window[(self.copy_pos & Self::WINDOW_MASK) as usize];
+            self.copy_pos += 1;
+            self.num_to_copy = next_num_to_copy;
+            Some(sym)
+        } else {
+            None
+        }
+    }
 }
 
 #[derive(Debug)]
-enum ReaderLz77Config<'a> {
-    Disabled(ReaderInner<'a>),
-    Enabled(Lz77ReaderInner<'a>),
+pub struct SymbolReader {
+    pub lz77_state: Option<Lz77State>,
+    pub ans_reader: AnsReader,
 }
 
-impl Reader<'_> {
-    pub fn read(&mut self, br: &mut BitReader, context: usize) -> Result<u32> {
-        let cluster = self.histograms.map_context_to_cluster(context);
-        match &mut self.lz77_config {
-            ReaderLz77Config::Disabled(inner) => inner.read_clustered(br, cluster),
-            ReaderLz77Config::Enabled(inner) => inner.read_clustered(br, cluster),
+impl SymbolReader {
+    pub fn new(
+        histograms: &Histograms,
+        br: &mut BitReader,
+        image_width: Option<usize>,
+    ) -> Result<SymbolReader> {
+        let ans_reader = if matches!(histograms.codes, Codes::Ans(_)) {
+            AnsReader::init(br)?
+        } else {
+            AnsReader::new_unused()
+        };
+
+        let lz77_state = if histograms.lz77_params.enabled {
+            Some(Lz77State {
+                min_symbol: histograms.lz77_params.min_symbol.unwrap(),
+                min_length: histograms.lz77_params.min_length.unwrap(),
+                dist_multiplier: image_width.unwrap_or(0) as u32,
+                window: Vec::new(),
+                num_to_copy: 0,
+                copy_pos: 0,
+                num_decoded: 0,
+            })
+        } else {
+            None
+        };
+
+        Ok(SymbolReader {
+            lz77_state,
+            ans_reader,
+        })
+    }
+
+    pub fn read_unsigned(
+        &mut self,
+        histograms: &Histograms,
+        br: &mut BitReader,
+        context: usize,
+    ) -> Result<u32> {
+        let cluster = histograms.map_context_to_cluster(context);
+        if histograms.lz77_params.enabled {
+            let lz77_state = self.lz77_state.as_mut().unwrap();
+            if let Some(sym) = lz77_state.pull_symbol() {
+                lz77_state.push_decoded_symbol(sym);
+                return Ok(sym);
+            }
+            let token = match &histograms.codes {
+                Codes::Huffman(hc) => hc.read(br, cluster)?,
+                Codes::Ans(ans) => self.ans_reader.read(ans, br, cluster)?,
+            };
+            let Some(lz77_token) = token.checked_sub(lz77_state.min_symbol) else {
+                let sym = histograms.uint_configs[cluster].read(token, br)?;
+                lz77_state.push_decoded_symbol(sym);
+                return Ok(sym);
+            };
+            if lz77_state.num_decoded == 0 {
+                return Err(Error::UnexpectedLz77Repeat);
+            }
+
+            let num_to_copy = histograms
+                .lz77_length_uint
+                .as_ref()
+                .unwrap()
+                .read(lz77_token, br)?;
+            let Some(num_to_copy) = num_to_copy.checked_add(lz77_state.min_length) else {
+                warn!(
+                    num_to_copy,
+                    lz77_state.min_length, "LZ77 num_to_copy overflow"
+                );
+                return Err(Error::ArithmeticOverflow);
+            };
+            lz77_state.num_to_copy = num_to_copy;
+
+            let lz_dist_cluster = *histograms.context_map.last().unwrap() as usize;
+
+            let distance_sym = match &histograms.codes {
+                Codes::Huffman(hc) => hc.read(br, lz_dist_cluster)?,
+                Codes::Ans(ans) => self.ans_reader.read(ans, br, lz_dist_cluster)?,
+            };
+            let distance_sym = histograms.uint_configs[lz_dist_cluster].read(distance_sym, br)?;
+
+            let distance_sub_1 = if lz77_state.dist_multiplier == 0 {
+                distance_sym
+            } else if let Some(distance) = distance_sym.checked_sub(120) {
+                distance
+            } else {
+                let (offset, dist) = Lz77State::SPECIAL_DISTANCES[distance_sym as usize];
+                let dist = (lz77_state.dist_multiplier * dist as u32)
+                    .checked_add_signed(offset as i32 - 1);
+                dist.unwrap_or(0)
+            };
+
+            let distance = (((1 << 20) - 1).min(distance_sub_1) + 1).min(lz77_state.num_decoded);
+            lz77_state.copy_pos = lz77_state.num_decoded - distance;
+
+            let sym = lz77_state.pull_symbol().unwrap();
+            lz77_state.push_decoded_symbol(sym);
+            Ok(sym)
+        } else {
+            let token = match &histograms.codes {
+                Codes::Huffman(hc) => hc.read(br, cluster)?,
+                Codes::Ans(ans) => self.ans_reader.read(ans, br, cluster)?,
+            };
+            histograms.uint_configs[cluster].read(token, br)
         }
     }
 
-    pub fn read_signed(&mut self, br: &mut BitReader, cluster: usize) -> Result<i32> {
-        let unsigned = self.read(br, cluster)?;
+    pub fn read_signed(
+        &mut self,
+        histograms: &Histograms,
+        br: &mut BitReader,
+        context: usize,
+    ) -> Result<i32> {
+        let unsigned = self.read_unsigned(histograms, br, context)?;
         Ok(unpack_signed(unsigned))
     }
 
-    pub fn check_final_state(self) -> Result<()> {
-        match self.lz77_config {
-            ReaderLz77Config::Disabled(inner) => inner.check_final_state(),
-            ReaderLz77Config::Enabled(inner) => inner.check_final_state(),
-        }
-    }
-}
-
-#[derive(Debug)]
-pub(super) struct ReaderInner<'a> {
-    codes: &'a Codes,
-    uint_configs: &'a [HybridUint],
-    ans_reader: AnsReader,
-}
-
-impl ReaderInner<'_> {
-    pub(super) fn read_token_clustered(
-        &mut self,
-        br: &mut BitReader,
-        cluster: usize,
-    ) -> Result<u32> {
-        match &self.codes {
-            Codes::Huffman(hc) => hc.read(br, cluster),
-            Codes::Ans(ans) => self.ans_reader.read(ans, br, cluster),
-        }
-    }
-
-    pub(super) fn read_uint_clustered(
-        &self,
-        token: u32,
-        br: &mut BitReader,
-        cluster: usize,
-    ) -> Result<u32> {
-        self.uint_configs[cluster].read(token, br)
-    }
-
-    pub(super) fn read_clustered(&mut self, br: &mut BitReader, cluster: usize) -> Result<u32> {
-        let symbol = self.read_token_clustered(br, cluster)?;
-        self.read_uint_clustered(symbol, br, cluster)
-    }
-
-    pub(super) fn check_final_state(self) -> Result<()> {
-        match &self.codes {
+    pub fn check_final_state(self, histograms: &Histograms) -> Result<()> {
+        match &histograms.codes {
             Codes::Huffman(_) => Ok(()),
             Codes::Ans(_) => self.ans_reader.check_final_state(),
         }
@@ -193,67 +300,6 @@ impl Histograms {
         self.context_map[context] as usize
     }
 
-    pub(super) fn make_reader_impl(
-        &self,
-        br: &mut BitReader,
-        image_width: Option<usize>,
-    ) -> Result<Reader> {
-        let ans_reader = if matches!(self.codes, Codes::Ans(_)) {
-            AnsReader::init(br)?
-        } else {
-            AnsReader::new_unused()
-        };
-
-        let reader = ReaderInner {
-            codes: &self.codes,
-            uint_configs: &self.uint_configs,
-            ans_reader,
-        };
-
-        let lz77_config = if self.lz77_params.enabled {
-            let dist_multiplier = image_width.unwrap_or(0) as u32;
-            let min_symbol = self.lz77_params.min_symbol.unwrap();
-            let min_length = self.lz77_params.min_length.unwrap();
-            let length_config = self.lz77_length_uint.as_ref().unwrap();
-            let reader = Lz77ReaderInner::new(
-                min_symbol,
-                min_length,
-                length_config,
-                dist_multiplier,
-                &self.context_map,
-                reader,
-            );
-            ReaderLz77Config::Enabled(reader)
-        } else {
-            ReaderLz77Config::Disabled(reader)
-        };
-
-        Ok(Reader {
-            histograms: self,
-            lz77_config,
-        })
-    }
-
-    pub fn make_reader(&self, br: &mut BitReader) -> Result<Reader> {
-        self.make_reader_impl(br, None)
-    }
-
-    pub fn make_reader_with_width(&self, br: &mut BitReader, image_width: usize) -> Result<Reader> {
-        self.make_reader_impl(br, Some(image_width))
-    }
-
-    pub fn into_reader(self, br: &mut BitReader) -> Result<owned_histograms::Reader> {
-        owned_histograms::Reader::new(self, br, None)
-    }
-
-    pub fn into_reader_with_width(
-        self,
-        br: &mut BitReader,
-        image_width: usize,
-    ) -> Result<owned_histograms::Reader> {
-        owned_histograms::Reader::new(self, br, Some(image_width))
-    }
-
     pub fn num_histograms(&self) -> usize {
         *self.context_map.iter().max().unwrap() as usize + 1
     }
@@ -277,14 +323,6 @@ impl Histograms {
             log_alpha_size: 15,
             context_map: vec![0u8; num_contexts],
             codes,
-        }
-    }
-
-    pub(super) fn as_reader_inner(&self) -> ReaderInner<'_> {
-        ReaderInner {
-            codes: &self.codes,
-            uint_configs: &self.uint_configs,
-            ans_reader: AnsReader::new_unused(),
         }
     }
 }

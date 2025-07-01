@@ -11,7 +11,7 @@ use std::{
 
 use crate::{
     bit_reader::BitReader,
-    entropy_coding::decode::{Histograms, Reader, unpack_signed},
+    entropy_coding::decode::{Histograms, SymbolReader, unpack_signed},
     error::{Error, Result},
     frame::color_correlation_map::ColorCorrelationParams,
     util::{CeilLog2, NewWithCapacity, fast_cos, fast_erff, tracing_wrappers::*},
@@ -179,11 +179,13 @@ impl QuantizedSpline {
     #[instrument(level = "debug", skip(br), ret, err)]
     pub fn read(
         br: &mut BitReader,
-        splines_reader: &mut Reader,
+        splines_histograms: &Histograms,
+        splines_reader: &mut SymbolReader,
         max_control_points: u32,
         total_num_control_points: &mut u32,
     ) -> Result<QuantizedSpline> {
-        let num_control_points = splines_reader.read(br, NUM_CONTROL_POINTS_CONTEXT)?;
+        let num_control_points =
+            splines_reader.read_unsigned(splines_histograms, br, NUM_CONTROL_POINTS_CONTEXT)?;
         *total_num_control_points += num_control_points;
         if *total_num_control_points > max_control_points {
             return Err(Error::SplinesTooManyControlPoints(
@@ -193,8 +195,10 @@ impl QuantizedSpline {
         }
         let mut control_points = Vec::new_with_capacity(num_control_points as usize)?;
         for _ in 0..num_control_points {
-            let x = splines_reader.read_signed(br, CONTROL_POINTS_CONTEXT)? as i64;
-            let y = splines_reader.read_signed(br, CONTROL_POINTS_CONTEXT)? as i64;
+            let x =
+                splines_reader.read_signed(splines_histograms, br, CONTROL_POINTS_CONTEXT)? as i64;
+            let y =
+                splines_reader.read_signed(splines_histograms, br, CONTROL_POINTS_CONTEXT)? as i64;
             control_points.push((x, y));
             // Add check that double deltas are not outrageous (not in spec).
             let max_delta_delta = x.abs().max(y.abs());
@@ -208,7 +212,7 @@ impl QuantizedSpline {
 
         let mut decode_dct = |dct: &mut [i32; 32]| -> Result<()> {
             for value in dct.iter_mut() {
-                *value = splines_reader.read_signed(br, DCT_CONTEXT)?;
+                *value = splines_reader.read_signed(splines_histograms, br, DCT_CONTEXT)?;
             }
             Ok(())
         };
@@ -715,8 +719,9 @@ impl Splines {
     pub fn read(br: &mut BitReader, num_pixels: u32) -> Result<Splines> {
         trace!(pos = br.total_bits_read());
         let splines_histograms = Histograms::decode(NUM_SPLINE_CONTEXTS, br, true)?;
-        let mut splines_reader = splines_histograms.make_reader(br)?;
-        let num_splines = 1 + splines_reader.read(br, NUM_SPLINES_CONTEXT)?;
+        let mut splines_reader = SymbolReader::new(&splines_histograms, br, None)?;
+        let num_splines =
+            1 + splines_reader.read_unsigned(&splines_histograms, br, NUM_SPLINES_CONTEXT)?;
         let max_control_points =
             MAX_NUM_CONTROL_POINTS.min(num_pixels / MAX_NUM_CONTROL_POINTS_PER_PIXEL_RATIO);
         if num_splines > max_control_points {
@@ -727,8 +732,10 @@ impl Splines {
         let mut last_x = 0;
         let mut last_y = 0;
         for i in 0..num_splines {
-            let unsigned_x = splines_reader.read(br, STARTING_POSITION_CONTEXT)?;
-            let unsigned_y = splines_reader.read(br, STARTING_POSITION_CONTEXT)?;
+            let unsigned_x =
+                splines_reader.read_unsigned(&splines_histograms, br, STARTING_POSITION_CONTEXT)?;
+            let unsigned_y =
+                splines_reader.read_unsigned(&splines_histograms, br, STARTING_POSITION_CONTEXT)?;
 
             let (x, y) = if i != 0 {
                 (
@@ -757,19 +764,20 @@ impl Splines {
         }
 
         let quantization_adjustment =
-            splines_reader.read_signed(br, QUANTIZATION_ADJUSTMENT_CONTEXT)?;
+            splines_reader.read_signed(&splines_histograms, br, QUANTIZATION_ADJUSTMENT_CONTEXT)?;
 
         let mut splines = Vec::new();
         let mut num_control_points = 0u32;
         for _ in 0..num_splines {
             splines.push(QuantizedSpline::read(
                 br,
+                &splines_histograms,
                 &mut splines_reader,
                 max_control_points,
                 &mut num_control_points,
             )?);
         }
-        splines_reader.check_final_state()?;
+        splines_reader.check_final_state(&splines_histograms)?;
         Ok(Splines {
             quantization_adjustment,
             splines,

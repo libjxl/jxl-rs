@@ -5,7 +5,7 @@
 
 use crate::{
     bit_reader::BitReader,
-    entropy_coding::decode::Reader,
+    entropy_coding::decode::SymbolReader,
     error::{Error, Result},
     frame::quantizer::NUM_QUANT_TABLES,
     headers::{JxlHeader, frame_header::FrameHeader, modular::GroupHeader},
@@ -99,7 +99,7 @@ fn decode_modular_channel(
     stream_id: usize,
     header: &GroupHeader,
     tree: &Tree,
-    reader: &mut Reader,
+    reader: &mut SymbolReader,
     br: &mut BitReader,
 ) -> Result<()> {
     debug!("reading channel");
@@ -127,7 +127,8 @@ fn decode_modular_channel(
                 &references,
                 &mut property_buffer,
             );
-            let dec = reader.read_signed(br, prediction_result.context as usize)?;
+            let dec =
+                reader.read_signed(&tree.histograms, br, prediction_result.context as usize)?;
             let val = make_pixel(dec, prediction_result.multiplier, prediction_result.guess);
             buffers[chan].data.as_rect_mut().row(y)[x] = val;
             trace!(y, x, val, dec, ?property_buffer, ?prediction_result);
@@ -191,13 +192,13 @@ pub fn decode_modular_subbitstream(
         .map(|info| info.channel_info().size.0)
         .max()
         .unwrap_or(0);
-    let mut reader = tree.histograms.make_reader_with_width(br, image_width)?;
+    let mut reader = SymbolReader::new(&tree.histograms, br, Some(image_width))?;
 
     for i in 0..buffers.len() {
         decode_modular_channel(&mut buffers, i, stream_id, &header, tree, &mut reader, br)?;
     }
 
-    reader.check_final_state()?;
+    reader.check_final_state(&tree.histograms)?;
 
     drop(buffers);
 
