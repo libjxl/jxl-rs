@@ -10,7 +10,7 @@ use jxl::error::{Error, Result};
 use jxl::frame::{DecoderState, Frame};
 use jxl::headers::color_encoding::{ColorEncoding, Primaries, WhitePoint};
 use jxl::headers::{FileHeader, JxlHeader};
-use jxl::icc::read_icc;
+use jxl::icc::IncrementalIccReader;
 use std::cmp::Ordering;
 use std::fs;
 use std::io::Read;
@@ -113,7 +113,9 @@ fn parse_jxl_codestream(data: &[u8], verbose: bool) -> Result<()> {
     }
     println!();
     if file_header.image_metadata.color_encoding.want_icc {
-        let icc = read_icc(&mut br)?;
+        let mut r = IncrementalIccReader::new(&mut br)?;
+        r.read_all(&mut br)?;
+        let icc = r.finalize()?;
         match lcms2::Profile::new_icc(icc.as_slice()) {
             Err(_) => println!("with unparseable ICC profile"),
             Ok(profile) => {

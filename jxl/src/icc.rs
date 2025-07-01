@@ -9,8 +9,10 @@ use byteorder::{BigEndian, ReadBytesExt, WriteBytesExt};
 
 use crate::bit_reader::*;
 use crate::entropy_coding::decode::Histograms;
+use crate::entropy_coding::owned_histograms::Reader;
 use crate::error::{Error, Result};
 use crate::headers::encodings::*;
+use crate::util::NewWithCapacity;
 use crate::util::tracing_wrappers::warn;
 
 mod header;
@@ -102,17 +104,92 @@ fn read_icc_inner(stream: &mut IccStream) -> Result<Vec<u8>, Error> {
     Ok(decoded_profile)
 }
 
-/// Read and decode ICC profile from `BitReader`.
-// TODO(tirr-c): Make this resumable.
-pub fn read_icc(br: &mut BitReader) -> Result<Vec<u8>, Error> {
-    let len = u64::read_unconditional(&(), br, &Empty {})?;
-    if len > 1u64 << 20 {
-        return Err(Error::IccTooLarge);
+/// Struct to incrementally decode an ICC profile.
+pub struct IncrementalIccReader {
+    reader: Reader,
+    out_buf: Vec<u8>,
+    len: usize,
+    // [prev, prev_prev]
+    prev_bytes: [u8; 2],
+}
+
+impl IncrementalIccReader {
+    pub fn new(br: &mut BitReader) -> Result<Self> {
+        let len = u64::read_unconditional(&(), br, &Empty {})?;
+        if len > 1u64 << 20 {
+            return Err(Error::IccTooLarge);
+        }
+
+        let len = len as usize;
+
+        let histograms = Histograms::decode(ICC_CONTEXTS, br, true)?;
+        let reader = histograms.into_reader(br)?;
+        Ok(Self {
+            reader,
+            len,
+            out_buf: Vec::new_with_capacity(len)?,
+            prev_bytes: [0, 0],
+        })
     }
 
-    let histograms = Histograms::decode(ICC_CONTEXTS, br, /*allow_lz77=*/ true)?;
-    let mut stream = IccStream::new(br, &histograms, len)?;
-    let profile = read_icc_inner(&mut stream)?;
-    stream.finalize()?;
-    Ok(profile)
+    fn get_icc_ctx(&self) -> u32 {
+        if self.out_buf.len() <= ICC_HEADER_SIZE as usize {
+            return 0;
+        }
+
+        let [b1, b2] = self.prev_bytes;
+
+        let p1 = match b1 {
+            b'a'..=b'z' | b'A'..=b'Z' => 0,
+            b'0'..=b'9' | b'.' | b',' => 1,
+            0..=1 => 2 + b1 as u32,
+            2..=15 => 4,
+            241..=254 => 5,
+            255 => 6,
+            _ => 7,
+        };
+        let p2 = match b2 {
+            b'a'..=b'z' | b'A'..=b'Z' => 0,
+            b'0'..=b'9' | b'.' | b',' => 1,
+            0..=15 => 2,
+            241..=255 => 3,
+            _ => 4,
+        };
+
+        1 + p1 + 8 * p2
+    }
+
+    pub fn num_coded_bytes(&self) -> usize {
+        self.len
+    }
+
+    pub fn read_one(&mut self, br: &mut BitReader) -> Result<()> {
+        let ctx = self.get_icc_ctx() as usize;
+        let sym = self.reader.read(br, ctx)?;
+        if sym >= 256 {
+            warn!(sym, "Invalid symbol in ICC stream");
+            return Err(Error::InvalidIccStream);
+        }
+        let b = sym as u8;
+        self.out_buf.push(b);
+        self.prev_bytes = [b, self.prev_bytes[0]];
+
+        Ok(())
+    }
+
+    pub fn read_all(&mut self, br: &mut BitReader) -> Result<()> {
+        for _ in self.out_buf.len()..self.num_coded_bytes() {
+            self.read_one(br)?
+        }
+        Ok(())
+    }
+
+    pub fn finalize(self) -> Result<Vec<u8>> {
+        assert_eq!(self.num_coded_bytes(), self.out_buf.len());
+        self.reader.check_final_state()?;
+        let mut stream = IccStream::new(self.out_buf);
+        let profile = read_icc_inner(&mut stream)?;
+        stream.finalize()?;
+        Ok(profile)
+    }
 }
