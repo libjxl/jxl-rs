@@ -447,6 +447,11 @@ pub fn decode_vardct_group(
             [coeffs_x, coeffs_y, coeffs_b]
         }
     };
+    let shift_for_pass = if pass < frame_header.passes.shift.len() {
+        frame_header.passes.shift[pass]
+    } else {
+        0
+    };
     let mut coeffs_offset = 0;
     let mut transform_buffer: [Vec<f32>; 3] = [
         vec![0.0; MAX_COEFF_AREA],
@@ -576,7 +581,7 @@ pub fn decode_vardct_group(
                         break;
                     }
                     let ctx = histo_offset + zero_density_context(nonzeros, k, num_blocks, prev);
-                    let coeff = reader.read_signed(br, ctx)?;
+                    let coeff = reader.read_signed(br, ctx)? << shift_for_pass;
                     prev = if coeff != 0 { 1 } else { 0 };
                     nonzeros -= prev;
                     let coeff_index =
