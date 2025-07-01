@@ -478,7 +478,7 @@ mod test {
             loop {
                 match AnsHistogram::decode(&mut br, 8) {
                     Ok(histogram) => validate_buckets(&histogram.buckets),
-                    Err(Error::OutOfBounds) => break,
+                    Err(Error::OutOfBounds(_)) => break,
                     Err(_) => {}
                 }
             }
