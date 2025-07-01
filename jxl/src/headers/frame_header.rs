@@ -58,7 +58,7 @@ pub struct Passes {
     #[coder(Bits(2))]
     #[default_element(0)]
     #[condition(num_passes != 1)]
-    shift: Vec<u32>,
+    pub shift: Vec<u32>,
 
     #[size_coder(explicit(num_ds))]
     #[coder(u2S(1, 2, 4, 8))]
