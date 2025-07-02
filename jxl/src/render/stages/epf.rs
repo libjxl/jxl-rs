@@ -105,10 +105,10 @@ impl RenderPipelineStage for Epf0Stage {
                 const PLUS_OFF: [[isize; 2]; 5] = [[0, 0], [-1, 0], [0, -1], [1, 0], [0, 1]];
                 for (sads_i, sad_off) in sads.iter_mut().zip(SADS_OFF) {
                     let sad = PLUS_OFF.iter().fold(0.0, |acc, off| {
-                        let r11 =
-                            input_c[(3 + off[0]) as usize][3 + x.saturating_add_signed(off[1])];
-                        let c11 = input_c[(3 + sad_off[0] + off[0]) as usize]
-                            [3 + x.saturating_add_signed(sad_off[1] + off[1])];
+                        let r_pos = (3 + off[0], 3 + off[1] + x as isize);
+                        let c_pos = (r_pos.0 + sad_off[0], r_pos.1 + sad_off[1]);
+                        let r11 = input_c[r_pos.0 as usize][r_pos.1 as usize];
+                        let c11 = input_c[c_pos.0 as usize][c_pos.1 as usize];
                         acc + (r11 - c11).abs()
                     });
                     *sads_i = sad.mul_add(scale, *sads_i);
@@ -122,8 +122,8 @@ impl RenderPipelineStage for Epf0Stage {
                 let mut cc = input_c[3][3 + x];
                 let mut weight = 1.0;
                 for (sad, sad_off) in sads.iter().zip(SADS_OFF) {
-                    let c =
-                        input_c[(3 + sad_off[0]) as usize][3 + x.saturating_add_signed(sad_off[1])];
+                    let c_pos = (3 + sad_off[0], 3 + sad_off[1] + x as isize);
+                    let c = input_c[c_pos.0 as usize][c_pos.1 as usize];
                     let w = sad.mul_add(inv_sigma, 1.0).max(0.0);
 
                     weight += w;
@@ -218,10 +218,10 @@ impl RenderPipelineStage for Epf1Stage {
                 const PLUS_OFF: [[isize; 2]; 5] = [[0, 0], [-1, 0], [0, -1], [1, 0], [0, 1]];
                 for (sads_i, sad_off) in sads.iter_mut().zip(SADS_OFF) {
                     let sad = PLUS_OFF.iter().fold(0.0, |acc, off| {
-                        let r11 =
-                            input_c[(2 + off[0]) as usize][2 + x.saturating_add_signed(off[1])];
-                        let c11 = input_c[(2 + sad_off[0] + off[0]) as usize]
-                            [2 + x.saturating_add_signed(sad_off[1] + off[1])];
+                        let r_pos = (2 + off[0], 2 + off[1] + x as isize);
+                        let c_pos = (r_pos.0 + sad_off[0], r_pos.1 + sad_off[1]);
+                        let r11 = input_c[r_pos.0 as usize][r_pos.1 as usize];
+                        let c11 = input_c[c_pos.0 as usize][c_pos.1 as usize];
                         acc + (r11 - c11).abs()
                     });
                     *sads_i = sad.mul_add(scale, *sads_i);
@@ -235,8 +235,8 @@ impl RenderPipelineStage for Epf1Stage {
                 let mut cc = input_c[2][2 + x];
                 let mut weight = 1.0;
                 for (sad, sad_off) in sads.iter().zip(SADS_OFF) {
-                    let c =
-                        input_c[(2 + sad_off[0]) as usize][2 + x.saturating_add_signed(sad_off[1])];
+                    let c_pos = (2 + sad_off[0], 2 + sad_off[1] + x as isize);
+                    let c = input_c[c_pos.0 as usize][c_pos.1 as usize];
                     let w = sad.mul_add(inv_sigma, 1.0).max(0.0);
 
                     weight += w;
