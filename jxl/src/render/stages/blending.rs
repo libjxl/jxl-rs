@@ -12,7 +12,7 @@ use crate::{
     frame::ReferenceFrame,
     headers::{FileHeader, extra_channels::ExtraChannelInfo, frame_header::*},
     render::{RenderPipelineInPlaceStage, RenderPipelineStage},
-    util::{slice, slice_mut},
+    util::slice_mut,
 };
 
 pub struct BlendingStage {
@@ -28,11 +28,11 @@ pub struct BlendingStage {
 impl From<&BlendingInfo> for PatchBlending {
     fn from(info: &BlendingInfo) -> Self {
         let mode = match info.mode {
-            BlendingMode::Replace => PatchBlendMode::Replace,
+            BlendingMode::Replace => PatchBlendMode::None,
             BlendingMode::Add => PatchBlendMode::Add,
             BlendingMode::Mul => PatchBlendMode::Mul,
-            BlendingMode::Blend => PatchBlendMode::BlendAbove,
-            BlendingMode::AlphaWeightedAdd => PatchBlendMode::AlphaWeightedAddAbove,
+            BlendingMode::Blend => PatchBlendMode::BlendBelow,
+            BlendingMode::AlphaWeightedAdd => PatchBlendMode::AlphaWeightedAddBelow,
         };
         PatchBlending {
             mode,
@@ -83,29 +83,30 @@ impl RenderPipelineStage for BlendingStage {
         row: &mut [&mut [f32]],
     ) {
         let num_ec = self.extra_channels.len();
-        let bg_y0 = self.frame_origin.1 + position.1 as isize;
-        let mut bg_x0 = self.frame_origin.0 + position.0 as isize;
-        let mut bg_x1 = bg_x0 + xsize as isize;
-        let mut fg_x0: isize = 0;
-        let mut fg_x1: isize = xsize as isize;
+        let fg_y0 = self.frame_origin.1 + position.1 as isize;
+        let mut fg_x0 = self.frame_origin.0 + position.0 as isize;
+        let mut fg_x1 = fg_x0 + xsize as isize;
+        let mut bg_x0: isize = 0;
+        let mut bg_x1: isize = xsize as isize;
 
-        if bg_x1 <= 0 || bg_x0 >= self.image_size.0 || bg_y0 < 0 || bg_y0 >= self.image_size.1 {
+        if fg_x1 <= 0 || fg_x0 >= self.image_size.0 || fg_y0 < 0 || fg_y0 >= self.image_size.1 {
             return;
         }
 
-        if bg_x0 < 0 {
-            fg_x0 -= bg_x0;
-            bg_x0 = 0;
+        if fg_x0 < 0 {
+            bg_x0 -= fg_x0;
+            fg_x0 = 0;
         }
-        if bg_x1 > self.image_size.0 {
-            fg_x1 = fg_x0 + self.image_size.0 - bg_x0;
-            bg_x1 = self.image_size.0;
+        if fg_x1 > self.image_size.0 {
+            bg_x1 = bg_x0 + self.image_size.0 - fg_x0;
+            fg_x1 = self.image_size.0;
         }
 
-        let bg_x0: usize = bg_x0 as usize;
-        let bg_x1: usize = bg_x1 as usize;
         let fg_x0: usize = fg_x0 as usize;
         let fg_x1: usize = fg_x1 as usize;
+        let bg_x0: usize = bg_x0 as usize;
+        let bg_x1: usize = bg_x1 as usize;
+        let fg_y0: usize = fg_y0 as usize;
 
         // TODO(szabadka): Allocate a buffer for this when building the stage instead of when
         // executing it.
@@ -113,33 +114,27 @@ impl RenderPipelineStage for BlendingStage {
             .iter_mut()
             .map(|s| &mut s[..xsize])
             .collect::<Vec<&mut [f32]>>();
-        // TODO(szabadka): Allocate a buffer for this when building the stage instead of when
-        // executing it.
-        let fg = out
-            .iter_mut()
-            .map(|s| s.to_vec())
-            .collect::<Vec<Vec<f32>>>();
 
-        let mut bg = vec![self.zeros.as_slice(); 3 + num_ec];
+        let mut fg = vec![self.zeros.as_slice(); 3 + num_ec];
 
-        for (c, bg_ptr) in bg.iter_mut().enumerate().take(3) {
+        for (c, fg_ptr) in fg.iter_mut().enumerate().take(3) {
             if self.reference_frames[self.blending_info.source as usize].is_some() {
-                *bg_ptr = &(self.reference_frames[self.blending_info.source as usize]
+                *fg_ptr = &(self.reference_frames[self.blending_info.source as usize]
                     .as_ref()
                     .unwrap()
                     .frame[c]
                     .as_rect()
-                    .row(bg_y0 as usize)[bg_x0..bg_x1]);
+                    .row(fg_y0)[fg_x0..fg_x1]);
             }
         }
         for i in 0..num_ec {
             if self.reference_frames[self.ec_blending_info[i].source as usize].is_some() {
-                bg[3 + i] = &(self.reference_frames[self.ec_blending_info[i].source as usize]
+                fg[3 + i] = &(self.reference_frames[self.ec_blending_info[i].source as usize]
                     .as_ref()
                     .unwrap()
                     .frame[3 + i]
                     .as_rect()
-                    .row(bg_y0 as usize)[bg_x0..bg_x1]);
+                    .row(fg_y0)[fg_x0..fg_x1]);
             }
         }
 
@@ -151,12 +146,11 @@ impl RenderPipelineStage for BlendingStage {
             .collect();
 
         perform_blending(
-            &bg,
-            &slice!(fg, .., fg_x0..fg_x1),
+            &mut slice_mut!(out, .., bg_x0..bg_x1),
+            &fg,
             &blending_info,
             &ec_blending_info,
             &self.extra_channels,
-            &mut slice_mut!(out, .., fg_x0..fg_x1),
         );
     }
 }

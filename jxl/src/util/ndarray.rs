@@ -3,18 +3,6 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-macro_rules! slice {
-    ($data:expr, $range:expr) => {
-        $data[$range]
-    };
-    ($data:expr, $range:expr $(, $rest_ranges:expr)+) => {
-        $data[$range].iter().map(|inner_data| {
-            &slice!(inner_data, $($rest_ranges),+)
-        }).collect::<Vec<_>>()
-    };
-}
-pub(crate) use slice;
-
 macro_rules! slice_mut {
     ($data:expr, $range:expr) => {
         $data[$range]

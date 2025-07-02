@@ -14,7 +14,7 @@ use crate::{
     features::blending::perform_blending,
     frame::{DecoderState, ReferenceFrame},
     headers::extra_channels::ExtraChannelInfo,
-    util::{NewWithCapacity, slice, slice_mut, tracing_wrappers::*},
+    util::{NewWithCapacity, slice_mut, tracing_wrappers::*},
 };
 
 // Context numbers as specified in Section C.4.5, Listing C.2:
@@ -597,11 +597,6 @@ impl PatchesDictionary {
             .iter_mut()
             .map(|s| &mut s[..xsize])
             .collect::<Vec<&mut [f32]>>();
-        // TODO(zond): Allocate a buffer for this when building the stage instead of when executing it.
-        let bg = out
-            .iter_mut()
-            .map(|s| s.to_vec())
-            .collect::<Vec<Vec<f32>>>();
         let num_ec = extra_channel_info.len();
         // TODO(zond): Check if this shouldn't be `num_ec + 1 == self.blendings_stride` instead.
         assert!(num_ec < self.blendings_stride);
@@ -660,12 +655,11 @@ impl PatchesDictionary {
 
             let blending_idx = pos_idx * self.blendings_stride;
             perform_blending(
-                &slice!(bg, .., out_x0..out_x1),
+                &mut slice_mut!(out, .., out_x0..out_x1),
                 &fg,
                 &self.blendings[blending_idx],
                 &self.blendings[blending_idx + 1..],
                 extra_channel_info,
-                &mut slice_mut!(out, .., out_x0..out_x1),
             );
         }
     }
