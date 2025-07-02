@@ -596,7 +596,7 @@ impl Frame {
         if frame_header.has_patches() {
             // TODO(szabadka): Avoid cloning everything.
             pipeline = pipeline.add_stage(PatchesStage {
-                patches: <Option<PatchesDictionary> as Clone>::clone(&lf_global.patches).unwrap(),
+                patches: lf_global.patches.clone().unwrap(),
                 extra_channels: metadata.extra_channel_info.clone(),
                 decoder_state: Arc::new(decoder_state.reference_frames.to_vec()),
             })?
