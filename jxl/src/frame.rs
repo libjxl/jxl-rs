@@ -705,6 +705,7 @@ impl Frame {
         if frame_header.can_be_referenced && !frame_header.save_before_ct {
             if linear {
                 pipeline = pipeline.add_stage(FromLinearStage::new(0, TransferFunction::Srgb))?;
+                linear = false;
             }
             for i in 0..num_channels {
                 pipeline = pipeline.add_stage(SaveStage::<f32>::new(
@@ -750,6 +751,14 @@ impl Frame {
                         == ExtraChannel::SpotColor
                 {
                     continue;
+                }
+                if decoder_state.file_header.image_metadata.xyb_encoded
+                    && decoder_state.xyb_output_linear
+                    && !linear
+                {
+                    pipeline = pipeline
+                        .add_stage(ToLinearStage::new(0, ToLinearTransferFunction::Srgb))?;
+                    linear = true;
                 }
                 pipeline = pipeline.add_stage(SaveStage::<f32>::new(
                     SaveStageType::Output,

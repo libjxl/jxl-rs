@@ -33,6 +33,7 @@ pub use patches::*;
 pub use save::*;
 pub use splines::*;
 pub use spot::*;
+pub use to_linear::{ToLinearStage, TransferFunction as ToLinearTransferFunction};
 pub use upsample::*;
 pub use xyb::*;
 pub use ycbcr::*;
