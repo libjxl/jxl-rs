@@ -665,7 +665,7 @@ impl Frame {
 
         let mut linear = false;
         if frame_header.do_ycbcr {
-            pipeline = pipeline.add_stage(YcbcrToLinearSrgbStage::new(0))?;
+            pipeline = pipeline.add_stage(YcbcrToRgbStage::new(0))?;
         } else if decoder_state.file_header.image_metadata.xyb_encoded {
             let intensity_target = 255.0;
             let opsin = &decoder_state
