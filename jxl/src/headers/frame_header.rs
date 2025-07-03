@@ -680,6 +680,9 @@ impl FrameHeader {
                 self.ec_upsampling[i] <<= dim_shift;
             }
         }
+        if self.encoding != Encoding::VarDCT || !nonserialized.xyb_encoded {
+            self.x_qm_scale = 2;
+        }
     }
 
     fn check(&self, nonserialized: &FrameHeaderNonserialized) -> Result<(), Error> {
