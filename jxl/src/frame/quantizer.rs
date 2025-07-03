@@ -70,4 +70,7 @@ impl QuantizerParams {
     pub fn inv_global_scale(&self) -> f32 {
         GLOBAL_SCALE_DENOM as f32 / self.global_scale as f32
     }
+    pub fn inv_quant_lf(&self) -> f32 {
+        self.inv_global_scale() / self.quant_lf as f32
+    }
 }

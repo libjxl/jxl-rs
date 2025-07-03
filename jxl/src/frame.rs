@@ -25,6 +25,7 @@ use crate::{
     },
     util::{CeilLog2, Xorshift128Plus, tracing_wrappers::*},
 };
+use adaptive_lf_smoothing::adaptive_lf_smoothing;
 use block_context_map::BlockContextMap;
 use coeff_order::decode_coeff_orders;
 use color_correlation_map::ColorCorrelationParams;
@@ -38,6 +39,7 @@ use transform_map::*;
 
 use std::sync::Arc;
 
+mod adaptive_lf_smoothing;
 mod block_context_map;
 mod coeff_order;
 pub mod color_correlation_map;
@@ -801,6 +803,24 @@ impl Frame {
             }
         }
         Ok(())
+    }
+
+    pub fn finalize_lf(&mut self) -> Result<()> {
+        if self.header.should_do_adaptive_lf_smoothing() {
+            let lf_global = self.lf_global.as_mut().unwrap();
+            let lf_quant = &lf_global.lf_quant;
+            let inv_quant_lf = lf_global.quant_params.as_mut().unwrap().inv_quant_lf();
+            adaptive_lf_smoothing(
+                [
+                    inv_quant_lf * lf_quant.quant_factors[0],
+                    inv_quant_lf * lf_quant.quant_factors[1],
+                    inv_quant_lf * lf_quant.quant_factors[2],
+                ],
+                self.lf_image.as_mut().unwrap(),
+            )
+        } else {
+            Ok(())
+        }
     }
 
     #[instrument(level = "debug", skip(self, br))]
