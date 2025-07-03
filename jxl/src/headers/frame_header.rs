@@ -515,6 +515,11 @@ impl FrameHeader {
     pub fn has_lf_frame(&self) -> bool {
         self.flags & Flags::USE_LF_FRAME != 0
     }
+    pub fn should_do_adaptive_lf_smoothing(&self) -> bool {
+        self.flags & Flags::SKIP_ADAPTIVE_LF_SMOOTHING == 0
+            && !self.has_lf_frame()
+            && self.encoding == Encoding::VarDCT
+    }
     pub fn raw_hshift(&self, c: usize) -> usize {
         H_SHIFT[self.jpeg_upsampling[c] as usize]
     }
