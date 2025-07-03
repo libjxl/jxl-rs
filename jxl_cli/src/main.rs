@@ -75,6 +75,10 @@ struct Opt {
     ///  Likewise but for the ICC profile of the original colorspace
     #[clap(long)]
     original_icc_out: Option<PathBuf>,
+
+    /// If specified, takes precedence over the bit depth in the input metadata
+    #[clap(long)]
+    override_bitdepth: Option<u32>,
 }
 
 fn main() -> Result<(), Error> {
@@ -159,6 +163,10 @@ fn main() -> Result<(), Error> {
         },
         opt.icc_out,
     );
+    let bit_depth = match opt.override_bitdepth {
+        None => bit_depth,
+        Some(num_bits) => BitDepth::integer_samples(num_bits),
+    };
     let image_result = save_image(image_data, bit_depth, data_icc.as_deref(), opt.output);
 
     if let Err(ref err) = original_icc_result {
