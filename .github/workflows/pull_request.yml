@@ -6,6 +6,7 @@
 # Workflow to run pull-requests specific checks.
 
 name: PR
+
 on:
   pull_request:
     types: [opened, reopened, synchronize]
@@ -166,7 +167,7 @@ jobs:
       continue-on-error: true
 
     - name: Export step summary
-      run: ./ci/conformance_summary.py "${GITHUB_WORKSPACE}/bench/docs/dumps/dump_jxl-rs.json" "${GITHUB_WORKSPACE}/bench/docs/dumps/dump_jxl-rs_via_png.json" >> $GITHUB_STEP_SUMMARY
+      run: ./ci/conformance_summary.py "${GITHUB_WORKSPACE}/bench/docs/dumps/dump_jxl-rs.json" "${GITHUB_WORKSPACE}/bench/docs/dumps/dump_jxl-rs_via_png.json" "https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}/workflow-runs/${{ github.run_id }}/index.html" >> $GITHUB_STEP_SUMMARY
 
     - name: Merge conformance report HTML
       run: ./ci/merge_conformance_report.py "${GITHUB_WORKSPACE}/bench/docs" >> conformance_report.html
