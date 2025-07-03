@@ -898,7 +898,9 @@ impl Frame {
                     .quant_biases,
                 br,
             )?;
-            if self.decoder_state.enable_output {
+            if self.decoder_state.enable_output
+                && pass + 1 == self.header.passes.num_passes as usize
+            {
                 for c in [0, 1, 2] {
                     self.render_pipeline.as_mut().unwrap().fill_input_channels(
                         &[c],

@@ -111,7 +111,7 @@ impl RenderPipelineStage for Epf0Stage {
                         let c11 = input_c[c_pos.0 as usize][c_pos.1 as usize];
                         acc + (r11 - c11).abs()
                     });
-                    *sads_i = sad.mul_add(scale, *sads_i);
+                    *sads_i += sad * scale;
                 }
             }
 
@@ -124,10 +124,10 @@ impl RenderPipelineStage for Epf0Stage {
                 for (sad, sad_off) in sads.iter().zip(SADS_OFF) {
                     let c_pos = (3 + sad_off[0], 3 + sad_off[1] + x as isize);
                     let c = input_c[c_pos.0 as usize][c_pos.1 as usize];
-                    let w = sad.mul_add(inv_sigma, 1.0).max(0.0);
+                    let w = (sad * inv_sigma + 1.0).max(0.0);
 
                     weight += w;
-                    cc = c.mul_add(w, cc);
+                    cc += c * w;
                 }
 
                 let inv_w = 1.0 / weight;
@@ -224,7 +224,7 @@ impl RenderPipelineStage for Epf1Stage {
                         let c11 = input_c[c_pos.0 as usize][c_pos.1 as usize];
                         acc + (r11 - c11).abs()
                     });
-                    *sads_i = sad.mul_add(scale, *sads_i);
+                    *sads_i += sad * scale;
                 }
             }
 
@@ -237,10 +237,10 @@ impl RenderPipelineStage for Epf1Stage {
                 for (sad, sad_off) in sads.iter().zip(SADS_OFF) {
                     let c_pos = (2 + sad_off[0], 2 + sad_off[1] + x as isize);
                     let c = input_c[c_pos.0 as usize][c_pos.1 as usize];
-                    let w = sad.mul_add(inv_sigma, 1.0).max(0.0);
+                    let w = (sad * inv_sigma + 1.0).max(0.0);
 
                     weight += w;
-                    cc = c.mul_add(w, cc);
+                    cc += c * w;
                 }
 
                 let inv_w = 1.0 / weight;
