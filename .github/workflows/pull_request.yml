@@ -159,7 +159,6 @@ jobs:
     - name: Run jxl-rs conformance tests with ICC
       id: icc_conformance
       run: python3 ./bench/third_party/conformance/scripts/conformance.py --decoder "python3 ${GITHUB_WORKSPACE}/bench/scripts/wrap_jxl-rs.py --decoder ' ${GITHUB_WORKSPACE}/bench/third_party/jxl-rs/target/release/jxl_cli %s %s --icc-out %s'" --corpus ${GITHUB_WORKSPACE}/bench/third_party/conformance/testcases/main_level5.txt --results=${GITHUB_WORKSPACE}/bench/docs/dumps/dump_jxl-rs.json --lax
-      continue-on-error: true
 
     - name: Run jxl-rs conformance tests wrapped in PNG
       id: png_conformance
