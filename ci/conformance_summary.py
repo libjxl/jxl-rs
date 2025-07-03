@@ -27,6 +27,9 @@ def test_status(test: dict[str, any]) -> str:
 def main():
     icc_json_path = sys.argv[1]
     png_json_path = sys.argv[2]
+    full_report_url = sys.argv[3]
+    print('\n')
+    print(f'[Full report]({full_report_url})')
     print('\n')
     print('| Name | ICC result | PNG result |')
     print('|------|------------|------------|')
