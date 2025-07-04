@@ -400,8 +400,10 @@ impl<T: ImageDataType> RenderPipelineRunStage for RenderPipelineInspectStage<T> 
                 let xsize = size.0.min(x + chunk_size) - x;
                 debug!("position: {x}x{y} xsize: {xsize}");
                 for c in 0..numc {
+                    let in_rect = input_buffers[c].as_rect();
+                    let in_row = in_rect.row(y);
                     for ix in 0..xsize {
-                        buffer[c][ix] = T::from_f64(input_buffers[c].as_rect().row(y)[x + ix]);
+                        buffer[c][ix] = T::from_f64(in_row[x + ix]);
                     }
                 }
                 let mut row: Vec<_> = buffer.iter().map(|x| x as &[T]).collect();
@@ -438,15 +440,19 @@ impl<T: ImageDataType> RenderPipelineRunStage for RenderPipelineInPlaceStage<T> 
                 let xsize = size.0.min(x + chunk_size) - x;
                 debug!("position: {x}x{y} xsize: {xsize}");
                 for c in 0..numc {
+                    let in_rect = input_buffers[c].as_rect();
+                    let in_row = in_rect.row(y);
                     for ix in 0..xsize {
-                        buffer[c][ix] = T::from_f64(input_buffers[c].as_rect().row(y)[x + ix]);
+                        buffer[c][ix] = T::from_f64(in_row[x + ix]);
                     }
                 }
                 let mut row: Vec<_> = buffer.iter_mut().map(|x| x as &mut [T]).collect();
                 stage.process_row_chunk((x, y), xsize, &mut row);
                 for c in 0..numc {
+                    let mut out_rect = output_buffers[c].as_rect_mut();
+                    let out_row = out_rect.row(y);
                     for ix in 0..xsize {
-                        output_buffers[c].as_rect_mut().row(y)[x + ix] = buffer[c][ix].to_f64();
+                        out_row[x + ix] = buffer[c][ix].to_f64();
                     }
                 }
             }
@@ -516,14 +522,20 @@ impl<
                 let border_x = BORDER_X as i64;
                 let border_y = BORDER_Y as i64;
                 let xsize = input_size.0.min(x + chunk_size) - x;
+                let xs = xsize as i64;
                 debug!("position: {x}x{y} xsize: {xsize}");
                 for c in 0..numc {
+                    let in_rect = input_buffers[c].as_rect();
                     for iy in -border_y..=border_y {
                         let imgy = mirror(y as i64 + iy, input_size.1 as i64);
-                        for ix in -border_x..xsize as i64 + border_x {
+                        let in_row = in_rect.row(imgy);
+                        let buf_in_row = &mut buffer_in[c][(iy + border_y) as usize];
+                        for ix in (-border_x..0).chain(xs..xs + border_x) {
                             let imgx = mirror(x as i64 + ix, input_size.0 as i64);
-                            buffer_in[c][(iy + border_y) as usize][(ix + border_x) as usize] =
-                                InputT::from_f64(input_buffers[c].as_rect().row(imgy)[imgx]);
+                            buf_in_row[(ix + border_x) as usize] = InputT::from_f64(in_row[imgx]);
+                        }
+                        for ix in 0..xsize {
+                            buf_in_row[ix + border_x as usize] = InputT::from_f64(in_row[x + ix]);
                         }
                     }
                 }
@@ -544,10 +556,11 @@ impl<
                 let stripe_xsize = (xsize << SHIFT_X).min(output_size.0 - (x << SHIFT_X));
                 let stripe_ysize = (1usize << SHIFT_Y).min(output_size.1 - (y << SHIFT_Y));
                 for c in 0..numc {
+                    let mut out_rect = output_buffers[c].as_rect_mut();
                     for iy in 0..stripe_ysize {
+                        let out_row = out_rect.row((y << SHIFT_Y) + iy);
                         for ix in 0..stripe_xsize {
-                            output_buffers[c].as_rect_mut().row((y << SHIFT_Y) + iy)
-                                [(x << SHIFT_X) + ix] = buffer_out[c][iy][ix].to_f64();
+                            out_row[(x << SHIFT_X) + ix] = buffer_out[c][iy][ix].to_f64();
                         }
                     }
                 }
