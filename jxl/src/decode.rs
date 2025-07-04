@@ -4,13 +4,14 @@
 // license that can be found in the LICENSE file.
 
 use crate::{
+    api::{JxlColorEncoding, JxlPrimaries, JxlTransferFunction, JxlWhitePoint},
     bit_reader::BitReader,
     error::Error,
     frame::{DecoderState, Frame, Section},
     headers::{
         FileHeader, JxlHeader,
         bit_depth::BitDepth,
-        color_encoding::{ColorEncoding, ColorSpace, TransferFunction},
+        color_encoding::{ColorSpace, RenderingIntent},
     },
     icc::IncrementalIccReader,
     image::{Image, ImageDataType},
@@ -83,18 +84,27 @@ pub fn decode_jxl_codestream(
         icc
     } else {
         // TODO: handle potential error here?
-        file_header
-            .image_metadata
-            .color_encoding
+        JxlColorEncoding::from_internal(&file_header.image_metadata.color_encoding)?
             .maybe_create_profile()?
             .unwrap()
     };
     let data_icc_bytes = if file_header.image_metadata.xyb_encoded {
         if options.xyb_output_linear {
-            let grayscale =
-                file_header.image_metadata.color_encoding.color_space == ColorSpace::Gray;
-            let mut color_encoding = ColorEncoding::srgb(grayscale);
-            color_encoding.tf.transfer_function = TransferFunction::Linear;
+            let color_encoding =
+                if file_header.image_metadata.color_encoding.color_space == ColorSpace::Gray {
+                    JxlColorEncoding::GrayscaleColorSpace {
+                        white_point: JxlWhitePoint::D65,
+                        transfer_function: JxlTransferFunction::Linear,
+                        rendering_intent: RenderingIntent::Relative,
+                    }
+                } else {
+                    JxlColorEncoding::RgbColorSpace {
+                        white_point: JxlWhitePoint::D65,
+                        primaries: JxlPrimaries::SRGB,
+                        transfer_function: JxlTransferFunction::Linear,
+                        rendering_intent: RenderingIntent::Relative,
+                    }
+                };
             Some(color_encoding.maybe_create_profile()?.unwrap())
         } else {
             // Regular (non-linear) sRGB.
