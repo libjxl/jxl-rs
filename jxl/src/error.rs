@@ -243,10 +243,6 @@ pub enum Error {
     IccMlucTextNotAscii(String),
     #[error("ICC value is out of range / NaN: {0}")]
     IccValueOutOfRangeS15Fixed16(f32),
-    #[error("Missing custom white point data")]
-    MissingCustomWhitePointData,
-    #[error("Missing custom primaries data")]
-    MissingCustomPrimariesData,
     #[error("Y value is too small: {0}")]
     IccInvalidWhitePointY(f32),
     #[error("{2}: wx: {0}, wy: {1}")]
