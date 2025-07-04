@@ -4,10 +4,11 @@
 // license that can be found in the LICENSE file.
 
 use clap::Parser;
+use jxl::api::JxlColorEncoding;
 use jxl::container::{ContainerParser, ParseEvent};
 use jxl::decode::{DecodeOptions, DecodeResult, ImageData};
 use jxl::error::Error;
-use jxl::headers::{bit_depth::BitDepth, color_encoding::ColorEncoding};
+use jxl::headers::bit_depth::BitDepth;
 use std::fs;
 use std::io::Read;
 use std::path::PathBuf;
@@ -155,7 +156,7 @@ fn main() -> Result<(), Error> {
             Some(data_icc) => data_icc.as_slice(),
             None => {
                 let grayscale = image_data.frames[0].channels.len() < 3;
-                srgb = ColorEncoding::srgb(grayscale)
+                srgb = JxlColorEncoding::srgb(grayscale)
                     .maybe_create_profile()?
                     .unwrap();
                 srgb.as_slice()
