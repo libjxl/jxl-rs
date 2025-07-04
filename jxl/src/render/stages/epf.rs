@@ -213,38 +213,57 @@ impl RenderPipelineStage for Epf1Stage {
 
             // Compute SADs
             let mut sads = [0.0; 4];
-            const SADS_OFF: [[isize; 2]; 4] = [[-1, 0], [0, -1], [0, 1], [1, 0]];
             for ((input_c, _), scale) in row.iter_mut().zip(self.channel_scale) {
-                const PLUS_OFF: [[isize; 2]; 5] = [[0, 0], [-1, 0], [0, -1], [1, 0], [0, 1]];
-                for (sads_i, sad_off) in sads.iter_mut().zip(SADS_OFF) {
-                    let sad = PLUS_OFF.iter().fold(0.0, |acc, off| {
-                        let r_pos = (2 + off[0], 2 + off[1] + x as isize);
-                        let c_pos = (r_pos.0 + sad_off[0], r_pos.1 + sad_off[1]);
-                        let r11 = input_c[r_pos.0 as usize][r_pos.1 as usize];
-                        let c11 = input_c[c_pos.0 as usize][c_pos.1 as usize];
-                        acc + (r11 - c11).abs()
-                    });
-                    *sads_i += sad * scale;
-                }
+                let p20 = input_c[0][2 + x];
+                let p11 = input_c[1][1 + x];
+                let p21 = input_c[1][2 + x];
+                let p31 = input_c[1][3 + x];
+                let p02 = input_c[2][x];
+                let p12 = input_c[2][1 + x];
+                let p22 = input_c[2][2 + x];
+                let p32 = input_c[2][3 + x];
+                let p42 = input_c[2][4 + x];
+                let p13 = input_c[3][1 + x];
+                let p23 = input_c[3][2 + x];
+                let p33 = input_c[3][3 + x];
+                let p24 = input_c[4][2 + x];
+                let d20_21 = (p20 - p21).abs();
+                let d11_21 = (p11 - p21).abs();
+                let d22_21 = (p22 - p21).abs();
+                let d31_21 = (p31 - p21).abs();
+                let d02_12 = (p02 - p12).abs();
+                let d11_12 = (p11 - p12).abs();
+                let d12_22 = (p22 - p12).abs();
+                let d31_32 = (p31 - p32).abs();
+                let d22_32 = (p22 - p32).abs();
+                let d42_32 = (p42 - p32).abs();
+                let d13_12 = (p13 - p12).abs();
+                let d22_23 = (p22 - p23).abs();
+                let d13_23 = (p13 - p23).abs();
+                let d33_23 = (p33 - p23).abs();
+                let d33_32 = (p33 - p32).abs();
+                let d24_23 = (p24 - p23).abs();
+                sads[0] += (d20_21 + d11_12 + d22_21 + d31_32 + d22_23) * scale;
+                sads[1] += (d11_21 + d02_12 + d12_22 + d22_32 + d13_23) * scale;
+                sads[2] += (d31_21 + d12_22 + d22_32 + d42_32 + d33_23) * scale;
+                sads[3] += (d22_21 + d13_12 + d22_23 + d33_32 + d24_23) * scale;
             }
 
             // Compute output based on SADs
-            let vsm = sad_mul[ix];
-            let inv_sigma = row_sigma[bx] * vsm;
+            let inv_sigma = row_sigma[bx] * sad_mul[ix];
+            let mut w = 1.0;
+            for sad in sads.iter_mut() {
+                *sad = (*sad * inv_sigma + 1.0).max(0.0);
+                w += *sad;
+            }
+            let inv_w = 1.0 / w;
             for (input_c, output_c) in row.iter_mut() {
-                let mut cc = input_c[2][2 + x];
-                let mut weight = 1.0;
-                for (sad, sad_off) in sads.iter().zip(SADS_OFF) {
-                    let c_pos = (2 + sad_off[0], 2 + sad_off[1] + x as isize);
-                    let c = input_c[c_pos.0 as usize][c_pos.1 as usize];
-                    let w = (sad * inv_sigma + 1.0).max(0.0);
-
-                    weight += w;
-                    cc += c * w;
-                }
-
-                let inv_w = 1.0 / weight;
-                output_c[0][x] = cc * inv_w;
+                output_c[0][x] = (input_c[2][2 + x]
+                    + input_c[1][2 + x] * sads[0]
+                    + input_c[2][1 + x] * sads[1]
+                    + input_c[2][3 + x] * sads[2]
+                    + input_c[3][2 + x] * sads[3])
+                    * inv_w;
             }
         }
     }
