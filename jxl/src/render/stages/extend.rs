@@ -64,10 +64,11 @@ impl RenderPipelineStage for ExtendToImageDimensionsStage {
     }
 
     fn process_row_chunk(
-        &mut self,
+        &self,
         position: (usize, usize),
         xsize: usize,
         row: &mut [&mut [f32]],
+        _state: Option<&mut dyn std::any::Any>,
     ) {
         let num_ec = self.extra_channels.len();
         let num_c = 3 + num_ec;

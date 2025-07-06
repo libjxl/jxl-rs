@@ -255,7 +255,7 @@ impl SimpleRenderPipeline {
 
         let mut current_size = self.input_size;
 
-        for (i, stage) in self.stages.iter_mut().enumerate() {
+        for (i, stage) in self.stages.iter().enumerate() {
             debug!("running stage {i}: {stage}");
             let mut output_buffers = clone_images(&current_buffers)?;
             // Replace buffers of different sizes.
@@ -282,7 +282,13 @@ impl SimpleRenderPipeline {
                 .filter(|x| stage.uses_channel(x.0))
                 .map(|x| x.1)
                 .collect();
-            stage.run_stage_on(self.chunk_size, &input_buf, &mut output_buf);
+            let mut state = stage.init_local_state()?;
+            stage.run_stage_on(
+                self.chunk_size,
+                &input_buf,
+                &mut output_buf,
+                state.as_deref_mut(),
+            );
             current_buffers = output_buffers;
         }
 
@@ -370,20 +376,22 @@ impl RenderPipeline for SimpleRenderPipeline {
 
 pub trait RenderPipelineRunStage {
     fn run_stage_on<S: RenderPipelineStage<Type = Self>>(
-        stage: &mut S,
+        stage: &S,
         chunk_size: usize,
         input_buffers: &[&Image<f64>],
         output_buffers: &mut [&mut Image<f64>],
+        state: Option<&mut dyn Any>,
     );
 }
 
 impl<T: ImageDataType> RenderPipelineRunStage for RenderPipelineInspectStage<T> {
     #[instrument(skip_all)]
     fn run_stage_on<S: RenderPipelineStage<Type = Self>>(
-        stage: &mut S,
+        stage: &S,
         chunk_size: usize,
         input_buffers: &[&Image<f64>],
         _output_buffers: &mut [&mut Image<f64>],
+        mut state: Option<&mut dyn Any>,
     ) {
         debug!("running input stage '{stage}' in simple pipeline");
         let numc = input_buffers.len();
@@ -407,7 +415,7 @@ impl<T: ImageDataType> RenderPipelineRunStage for RenderPipelineInspectStage<T> 
                     }
                 }
                 let mut row: Vec<_> = buffer.iter().map(|x| x as &[T]).collect();
-                stage.process_row_chunk((x, y), xsize, &mut row);
+                stage.process_row_chunk((x, y), xsize, &mut row, state.as_deref_mut());
             }
         }
     }
@@ -416,10 +424,11 @@ impl<T: ImageDataType> RenderPipelineRunStage for RenderPipelineInspectStage<T> 
 impl<T: ImageDataType> RenderPipelineRunStage for RenderPipelineInPlaceStage<T> {
     #[instrument(skip_all)]
     fn run_stage_on<S: RenderPipelineStage<Type = Self>>(
-        stage: &mut S,
+        stage: &S,
         chunk_size: usize,
         input_buffers: &[&Image<f64>],
         output_buffers: &mut [&mut Image<f64>],
+        mut state: Option<&mut dyn Any>,
     ) {
         debug!("running inplace stage '{stage}' in simple pipeline");
         let numc = input_buffers.len();
@@ -447,7 +456,7 @@ impl<T: ImageDataType> RenderPipelineRunStage for RenderPipelineInPlaceStage<T> 
                     }
                 }
                 let mut row: Vec<_> = buffer.iter_mut().map(|x| x as &mut [T]).collect();
-                stage.process_row_chunk((x, y), xsize, &mut row);
+                stage.process_row_chunk((x, y), xsize, &mut row, state.as_deref_mut());
                 for c in 0..numc {
                     let mut out_rect = output_buffers[c].as_rect_mut();
                     let out_row = out_rect.row(y);
@@ -472,10 +481,11 @@ impl<
 {
     #[instrument(skip_all)]
     fn run_stage_on<S: RenderPipelineStage<Type = Self>>(
-        stage: &mut S,
+        stage: &S,
         chunk_size: usize,
         input_buffers: &[&Image<f64>],
         output_buffers: &mut [&mut Image<f64>],
+        mut state: Option<&mut dyn Any>,
     ) {
         assert_ne!(chunk_size, 0);
         debug!("running inout stage '{stage}' in simple pipeline");
@@ -552,7 +562,7 @@ impl<
                     .zip(buffer_out_ref.iter_mut())
                     .map(|(itin, itout)| (itin as &[_], itout as &mut [_]))
                     .collect();
-                stage.process_row_chunk((x, y), xsize, &mut row);
+                stage.process_row_chunk((x, y), xsize, &mut row, state.as_deref_mut());
                 let stripe_xsize = (xsize << SHIFT_X).min(output_size.0 - (x << SHIFT_X));
                 let stripe_ysize = (1usize << SHIFT_Y).min(output_size.1 - (y << SHIFT_Y));
                 for c in 0..numc {
@@ -572,10 +582,11 @@ impl<
 impl<T: ImageDataType> RenderPipelineRunStage for RenderPipelineExtendStage<T> {
     #[instrument(skip_all)]
     fn run_stage_on<S: RenderPipelineStage<Type = Self>>(
-        stage: &mut S,
+        stage: &S,
         chunk_size: usize,
         input_buffers: &[&Image<f64>],
         output_buffers: &mut [&mut Image<f64>],
+        mut state: Option<&mut dyn Any>,
     ) {
         debug!("running extend stage '{stage}' in simple pipeline");
         let numc = input_buffers.len();
@@ -625,7 +636,7 @@ impl<T: ImageDataType> RenderPipelineRunStage for RenderPipelineExtendStage<T> {
                 let xsize = output_size.0.min(x + chunk_size) - x;
                 debug!("position above/below: ({x},{y}) xsize: {xsize}");
                 let mut row: Vec<_> = buffer.iter_mut().map(|x| x as &mut [T]).collect();
-                stage.process_row_chunk((x, y), xsize, &mut row);
+                stage.process_row_chunk((x, y), xsize, &mut row, state.as_deref_mut());
                 for c in 0..numc {
                     for ix in 0..xsize {
                         output_buffers[c].as_rect_mut().row(y)[x + ix] = buffer[c][ix].to_f64();
@@ -646,7 +657,7 @@ impl<T: ImageDataType> RenderPipelineRunStage for RenderPipelineExtendStage<T> {
             {
                 let mut row: Vec<_> = buffer.iter_mut().map(|x| x as &mut [T]).collect();
                 debug!("position on the side: ({x},{y}) xsize: {xsize}");
-                stage.process_row_chunk((x, y), xsize, &mut row);
+                stage.process_row_chunk((x, y), xsize, &mut row, state.as_deref_mut());
                 for c in 0..numc {
                     for ix in 0..xsize {
                         output_buffers[c].as_rect_mut().row(y)[x + ix] = buffer[c][ix].to_f64();
@@ -659,11 +670,13 @@ impl<T: ImageDataType> RenderPipelineRunStage for RenderPipelineExtendStage<T> {
 
 trait RunStage: Any + std::fmt::Display {
     fn run_stage_on(
-        &mut self,
+        &self,
         chunk_size: usize,
         input_buffers: &[&Image<f64>],
         output_buffers: &mut [&mut Image<f64>],
+        state: Option<&mut dyn Any>,
     );
+    fn init_local_state(&self) -> Result<Option<Box<dyn Any>>>;
     fn shift(&self) -> (u8, u8);
     fn new_size(&self, size: (usize, usize)) -> (usize, usize);
     fn uses_channel(&self, c: usize) -> bool;
@@ -674,12 +687,17 @@ trait RunStage: Any + std::fmt::Display {
 
 impl<T: RenderPipelineStage> RunStage for T {
     fn run_stage_on(
-        &mut self,
+        &self,
         chunk_size: usize,
         input_buffers: &[&Image<f64>],
         output_buffers: &mut [&mut Image<f64>],
+        state: Option<&mut dyn Any>,
     ) {
-        T::Type::run_stage_on(self, chunk_size, input_buffers, output_buffers)
+        T::Type::run_stage_on(self, chunk_size, input_buffers, output_buffers, state)
+    }
+
+    fn init_local_state(&self) -> Result<Option<Box<dyn Any>>> {
+        T::init_local_state(self)
     }
 
     fn shift(&self) -> (u8, u8) {

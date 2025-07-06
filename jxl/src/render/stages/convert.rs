@@ -33,10 +33,11 @@ impl RenderPipelineStage for ConvertU8F32Stage {
     }
 
     fn process_row_chunk(
-        &mut self,
+        &self,
         _position: (usize, usize),
         xsize: usize,
         row: &mut [(&[&[u8]], &mut [&mut [f32]])],
+        _state: Option<&mut dyn std::any::Any>,
     ) {
         let (input, output) = &mut row[0];
         for i in 0..xsize {
@@ -79,10 +80,11 @@ impl RenderPipelineStage for ConvertModularXYBToF32Stage {
     }
 
     fn process_row_chunk(
-        &mut self,
+        &self,
         _position: (usize, usize),
         xsize: usize,
         row: &mut [(&[&[i32]], &mut [&mut [f32]])],
+        _state: Option<&mut dyn std::any::Any>,
     ) {
         let [scale_x, scale_y, scale_b] = self.scale;
         let [
@@ -136,10 +138,11 @@ impl RenderPipelineStage for ConvertModularToF32Stage {
     }
 
     fn process_row_chunk(
-        &mut self,
+        &self,
         _position: (usize, usize),
         xsize: usize,
         row: &mut [(&[&[i32]], &mut [&mut [f32]])],
+        _state: Option<&mut dyn std::any::Any>,
     ) {
         let (input, output) = &mut row[0];
         for i in 0..xsize {

@@ -40,10 +40,11 @@ impl RenderPipelineStage for GaborishStage {
     }
 
     fn process_row_chunk(
-        &mut self,
+        &self,
         _position: (usize, usize),
         xsize: usize,
         row: &mut [(&[&[f32]], &mut [&mut [f32]])],
+        _state: Option<&mut dyn std::any::Any>,
     ) {
         let (rows_in, ref mut rows_out) = row[0];
         let row_out = &mut rows_out[0][..xsize];

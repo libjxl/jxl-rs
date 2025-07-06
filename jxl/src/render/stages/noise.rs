@@ -34,10 +34,11 @@ impl RenderPipelineStage for ConvolveNoiseStage {
     }
 
     fn process_row_chunk(
-        &mut self,
+        &self,
         _position: (usize, usize),
         xsize: usize,
         row: &mut [(&[&[f32]], &mut [&mut [f32]])],
+        _state: Option<&mut dyn std::any::Any>,
     ) {
         let (input, output) = &mut row[0];
         for x in 0..xsize {
@@ -100,10 +101,11 @@ impl RenderPipelineStage for AddNoiseStage {
     }
 
     fn process_row_chunk(
-        &mut self,
+        &self,
         _position: (usize, usize),
         xsize: usize,
         row: &mut [&mut [f32]],
+        _state: Option<&mut dyn std::any::Any>,
     ) {
         let norm_const = 0.22;
         let ytox = self.color_correlation.y_to_x_lf();

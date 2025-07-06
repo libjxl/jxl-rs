@@ -3,6 +3,8 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
+use std::sync::Mutex;
+
 use crate::{
     error::Result,
     headers::Orientation,
@@ -18,7 +20,7 @@ pub enum SaveStageType {
 
 pub struct SaveStage<T: ImageDataType> {
     pub stage_type: SaveStageType,
-    buf: Image<T>,
+    buf: Mutex<Image<T>>,
     channel: usize,
     // TODO(szabadka): Have a fixed scale per data-type and make the datatype conversions do
     // the scaling.
@@ -43,7 +45,7 @@ impl<T: ImageDataType> SaveStage<T> {
         Ok(SaveStage {
             stage_type,
             channel,
-            buf: Image::new(buf_size)?,
+            buf: Mutex::new(Image::new(buf_size)?),
             scale,
             orientation,
         })
@@ -59,18 +61,18 @@ impl<T: ImageDataType> SaveStage<T> {
         SaveStage {
             stage_type,
             channel,
-            buf: img,
+            buf: Mutex::new(img),
             scale,
             orientation,
         }
     }
 
-    pub(crate) fn buffer(&self) -> &Image<T> {
-        &self.buf
+    pub(crate) fn buffer(&self) -> impl std::ops::Deref<Target = Image<T>> {
+        self.buf.lock().unwrap()
     }
 
     pub(crate) fn into_buffer(self) -> Image<T> {
-        self.buf
+        self.buf.into_inner().unwrap()
     }
 }
 
@@ -93,9 +95,16 @@ impl<T: ImageDataType + std::ops::Mul<Output = T>> RenderPipelineStage for SaveS
         c == self.channel
     }
 
-    fn process_row_chunk(&mut self, position: (usize, usize), mut xsize: usize, row: &mut [&[T]]) {
+    fn process_row_chunk(
+        &self,
+        position: (usize, usize),
+        mut xsize: usize,
+        row: &mut [&[T]],
+        _state: Option<&mut dyn std::any::Any>,
+    ) {
         let input = row[0];
-        let mut outbuf_rect = self.buf.as_rect_mut();
+        let mut buf = self.buf.lock().unwrap();
+        let mut outbuf_rect = buf.as_rect_mut();
         let (out_w, out_h) = outbuf_rect.size();
 
         // Establish source dimensions based on the orientation.
@@ -199,7 +208,7 @@ mod test {
 
     #[test]
     fn save_stage() -> Result<()> {
-        let mut save_stage = SaveStage::<u8>::new(
+        let save_stage = SaveStage::<u8>::new(
             SaveStageType::Output,
             0,
             (128, 128),
@@ -210,7 +219,7 @@ mod test {
         let src = Image::<u8>::new_random((128, 128), &mut rng)?;
 
         for i in 0..128 {
-            save_stage.process_row_chunk((0, i), 128, &mut [src.as_rect().row(i)]);
+            save_stage.process_row_chunk((0, i), 128, &mut [src.as_rect().row(i)], None);
         }
 
         src.as_rect().check_equal(save_stage.buffer().as_rect());
@@ -229,11 +238,11 @@ mod test {
                 let orientation = $orientation;
 
                 // SaveStage will create its buffer with the correct (possibly swapped) dimensions.
-                let mut save_stage =
+                let save_stage =
                     SaveStage::<u8>::new(SaveStageType::Output, 0, (w, h), 1, orientation)?;
 
                 for y in 0..h {
-                    save_stage.process_row_chunk((0, y), w, &mut [src.as_rect().row(y)]);
+                    save_stage.process_row_chunk((0, y), w, &mut [src.as_rect().row(y)], None);
                 }
 
                 let (out_w, out_h) = save_stage.buffer().size();

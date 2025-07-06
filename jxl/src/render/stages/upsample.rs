@@ -64,10 +64,11 @@ impl<const N: usize, const SHIFT: u8> RenderPipelineStage for Upsample<N, SHIFT>
     /// Processes a chunk of a row, applying NxN upsampling using a 5x5 kernel.
     /// Each input value expands into a NxN region in the output, based on neighboring inputs.
     fn process_row_chunk(
-        &mut self,
+        &self,
         _position: (usize, usize),
         xsize: usize,
         row: &mut [(&[&[f32]], &mut [&mut [f32]])],
+        _state: Option<&mut dyn std::any::Any>,
     ) {
         let (input, output) = &mut row[0];
 

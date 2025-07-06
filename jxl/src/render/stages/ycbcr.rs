@@ -37,10 +37,11 @@ impl RenderPipelineStage for YcbcrToRgbStage {
     }
 
     fn process_row_chunk(
-        &mut self,
+        &self,
         _position: (usize, usize),
         xsize: usize,
         row: &mut [&mut [f32]],
+        _state: Option<&mut dyn std::any::Any>,
     ) {
         // pixels are stored in `Cb Y Cr` order to mimic XYB colorspace
         let [row_cb, row_y, row_cr] = row else {

@@ -56,10 +56,11 @@ impl RenderPipelineStage for Epf0Stage {
     }
 
     fn process_row_chunk(
-        &mut self,
+        &self,
         (xpos, ypos): (usize, usize),
         xsize: usize,
         row: &mut [(&[&[f32]], &mut [&mut [f32]])],
+        _state: Option<&mut dyn std::any::Any>,
     ) {
         assert!(row.len() == 3, "Expected 3 channels, got {}", row.len());
 
@@ -249,10 +250,11 @@ impl RenderPipelineStage for Epf1Stage {
     }
 
     fn process_row_chunk(
-        &mut self,
+        &self,
         (xpos, ypos): (usize, usize),
         xsize: usize,
         row: &mut [(&[&[f32]], &mut [&mut [f32]])],
+        _state: Option<&mut dyn std::any::Any>,
     ) {
         assert!(row.len() == 3, "Expected 3 channels, got {}", row.len());
 
@@ -400,10 +402,11 @@ impl RenderPipelineStage for Epf2Stage {
     }
 
     fn process_row_chunk(
-        &mut self,
+        &self,
         (xpos, ypos): (usize, usize),
         xsize: usize,
         row: &mut [(&[&[f32]], &mut [&mut [f32]])],
+        _state: Option<&mut dyn std::any::Any>,
     ) {
         assert!(row.len() == 3, "Expected 3 channels, got {}", row.len());
 

@@ -60,10 +60,11 @@ impl RenderPipelineStage for FromLinearStage {
     }
 
     fn process_row_chunk(
-        &mut self,
+        &self,
         _position: (usize, usize),
         xsize: usize,
         row: &mut [&mut [f32]],
+        _state: Option<&mut dyn std::any::Any>,
     ) {
         let [row_r, row_g, row_b] = row else {
             panic!(

@@ -3,13 +3,14 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-use std::{ops::Deref, sync::Arc};
+use std::{any::Any, sync::Arc};
 
 use crate::{
     features::patches::PatchesDictionary,
     frame::ReferenceFrame,
     headers::extra_channels::ExtraChannelInfo,
     render::{RenderPipelineInPlaceStage, RenderPipelineStage},
+    util::NewWithCapacity as _,
 };
 
 #[allow(dead_code)]
@@ -33,18 +34,26 @@ impl RenderPipelineStage for PatchesStage {
     }
 
     fn process_row_chunk(
-        &mut self,
+        &self,
         position: (usize, usize),
         xsize: usize,
         row: &mut [&mut [f32]],
+        state: Option<&mut dyn Any>,
     ) {
+        let state: &mut Vec<usize> = state.unwrap().downcast_mut().unwrap();
         self.patches.add_one_row(
             row,
             position,
             xsize,
             &self.extra_channels,
-            self.decoder_state.deref(),
+            &self.decoder_state,
+            state,
         );
+    }
+
+    fn init_local_state(&self) -> crate::error::Result<Option<Box<dyn Any>>> {
+        let patches_for_row_result = Vec::<usize>::new_with_capacity(self.patches.positions.len())?;
+        Ok(Some(Box::new(patches_for_row_result) as Box<dyn Any>))
     }
 }
 
