@@ -33,10 +33,11 @@ impl RenderPipelineStage for HorizontalChromaUpsample {
     }
 
     fn process_row_chunk(
-        &mut self,
+        &self,
         _position: (usize, usize),
         xsize: usize,
         row: &mut [(&[&[f32]], &mut [&mut [f32]])],
+        _state: Option<&mut dyn std::any::Any>,
     ) {
         let (input, output) = &mut row[0];
         for i in 0..xsize {
@@ -75,10 +76,11 @@ impl RenderPipelineStage for VerticalChromaUpsample {
     }
 
     fn process_row_chunk(
-        &mut self,
+        &self,
         _position: (usize, usize),
         xsize: usize,
         row: &mut [(&[&[f32]], &mut [&mut [f32]])],
+        _state: Option<&mut dyn std::any::Any>,
     ) {
         let (input, output) = &mut row[0];
         for i in 0..xsize {

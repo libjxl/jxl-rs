@@ -85,11 +85,12 @@ pub trait RenderPipelineStage: Any + std::fmt::Display {
     /// Process one chunk of row. The semantics of this function are detailed in the
     /// documentation of the various types of stages.
     fn process_row_chunk(
-        &mut self,
+        &self,
         position: (usize, usize),
         xsize: usize,
         // one for each channel
         row: &mut [<Self::Type as RenderPipelineStageInfo>::RowType<'_>],
+        state: Option<&mut dyn Any>,
     );
 
     /// Returns the new size of the image after this stage. Should be implemented by
@@ -102,6 +103,14 @@ pub trait RenderPipelineStage: Any + std::fmt::Display {
     /// Should be implemented by `RenderPipelineExtendStage` stages.
     fn original_data_origin(&self) -> (isize, isize) {
         (0, 0)
+    }
+
+    /// Initializes thread local state for the stage. Returns `Ok(None)` if no state is needed.
+    ///
+    /// This method returns `Box<dyn Any>` for dyn compatibility. `process_row_chunk` should
+    /// downcast the state to the desired type.
+    fn init_local_state(&self) -> Result<Option<Box<dyn Any>>> {
+        Ok(None)
     }
 }
 
