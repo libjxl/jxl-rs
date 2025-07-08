@@ -26,7 +26,7 @@ impl crate::headers::encodings::UnconditionalCoder<()> for Signature {
         let sig1 = br.read(8)? as u8;
         let sig2 = br.read(8)? as u8;
         if (sig1, sig2) != (0xff, 0x0a) {
-            Err(Error::InvalidSignature(sig1, sig2))
+            Err(Error::InvalidSignature)
         } else {
             Ok(Signature {})
         }

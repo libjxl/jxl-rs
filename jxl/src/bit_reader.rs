@@ -50,16 +50,6 @@ impl<'a> BitReader<'a> {
         self.bit_buf & ((1u64 << num) - 1)
     }
 
-    /// Un-reads `num` bits back into the buffer. `num` must be such that `self.bits_in_buf + num`
-    /// is at most 64.
-    pub fn unconsume(&mut self, num: usize, bits: u64) {
-        assert!(self.bits_in_buf + num <= 64);
-        assert!(bits >> num == 0);
-        self.bit_buf = (self.bit_buf << num) | bits;
-        self.bits_in_buf += num;
-        self.total_bits_read = self.total_bits_read.wrapping_sub(num);
-    }
-
     /// Advances by `num` bits. Similar to `skip_bits`, but bits must be in the buffer.
     pub fn consume(&mut self, num: usize) -> Result<(), Error> {
         if self.bits_in_buf < num {
@@ -89,9 +79,8 @@ impl<'a> BitReader<'a> {
     }
 
     /// Returns the total number of bits that have been read or skipped.
-    /// Note that this might be negative if there have been calls to `unread()`.
-    pub fn total_bits_read(&self) -> isize {
-        self.total_bits_read as isize
+    pub fn total_bits_read(&self) -> usize {
+        self.total_bits_read
     }
 
     /// Returns the total number of bits that can still be read or skipped.

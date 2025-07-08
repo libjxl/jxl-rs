@@ -49,7 +49,7 @@ mod quant_weights;
 pub mod quantizer;
 pub mod transform_map;
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq, Clone, Copy)]
 pub enum Section {
     LfGlobal,
     Lf { group: usize },
@@ -110,9 +110,9 @@ impl ReferenceFrame {
 
 #[derive(Debug)]
 pub struct DecoderState {
-    file_header: FileHeader,
-    reference_frames: [Option<ReferenceFrame>; Self::MAX_STORED_FRAMES],
-    lf_frames: [Option<[Image<f32>; 3]>; 4],
+    pub(super) file_header: FileHeader,
+    pub(super) reference_frames: [Option<ReferenceFrame>; Self::MAX_STORED_FRAMES],
+    pub(super) lf_frames: [Option<[Image<f32>; 3]>; 4],
     pub xyb_output_linear: bool,
     pub enable_output: bool,
     pub render_spotcolors: bool,
@@ -187,6 +187,14 @@ impl Frame {
         )
         .unwrap();
         br.jump_to_byte_boundary()?;
+        Self::from_header_and_toc(frame_header, toc, decoder_state)
+    }
+
+    pub fn from_header_and_toc(
+        frame_header: FrameHeader,
+        toc: Toc,
+        decoder_state: DecoderState,
+    ) -> Result<Self> {
         let modular_color_channels = if frame_header.encoding == Encoding::VarDCT {
             0
         } else if decoder_state
@@ -243,6 +251,10 @@ impl Frame {
             decoder_state,
             render_pipeline: None,
         })
+    }
+
+    pub fn toc(&self) -> &Toc {
+        &self.toc
     }
 
     pub fn header(&self) -> &FrameHeader {
