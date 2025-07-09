@@ -11,7 +11,7 @@ use crate::{error::Result, headers::frame_header::FrameHeader};
 use states::*;
 use std::marker::PhantomData;
 
-mod states {
+pub mod states {
     pub trait JxlState {}
     pub struct Initialized;
     pub struct WithImageInfo;
