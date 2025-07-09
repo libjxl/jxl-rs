@@ -76,7 +76,7 @@ impl<'a> JxlOutputBuffer<'a> {
         Self::new_uninit(
             // Safety: `new_uninit` guarantees that no uninit data is ever written to the passed-in
             // slice. Moreover, `T` and `MaybeUninit<T>` have the same memory layout.
-            unsafe { std::mem::transmute::<&'a mut [u8], &'a mut [MaybeUninit<u8>]>(buf) },
+            unsafe { slice::from_raw_parts_mut(buf.as_mut_ptr().cast(), buf.len()) },
             num_rows,
             bytes_per_row,
         )
