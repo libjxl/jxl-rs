@@ -37,7 +37,7 @@ impl<'a> DecodeOptions<'a> {
     }
 }
 
-impl<'a> Default for DecodeOptions<'a> {
+impl Default for DecodeOptions<'_> {
     fn default() -> Self {
         Self::new()
     }

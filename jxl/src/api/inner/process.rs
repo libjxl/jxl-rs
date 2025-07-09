@@ -65,7 +65,8 @@ impl<const SIZE: usize> SmallBuffer<SIZE> {
             };
             buffers = rest;
             let len = self.range.len().min(buf.len());
-            buf[..len].copy_from_slice(&self.buf[self.range.clone()]);
+            // Only copy 'len' bytes, not the entire range, to avoid panic when buf is smaller than range
+            buf[..len].copy_from_slice(&self.buf[self.range.start..self.range.start + len]);
             self.range.start += len;
             num += len;
         }

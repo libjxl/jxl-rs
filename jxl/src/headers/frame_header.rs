@@ -20,7 +20,7 @@ use std::cmp::min;
 use super::{Animation, permutation::Permutation};
 
 #[derive(UnconditionalCoder, Copy, Clone, PartialEq, Debug, FromPrimitive)]
-enum FrameType {
+pub enum FrameType {
     RegularFrame = 0,
     LFFrame = 1,
     ReferenceOnly = 2,
@@ -287,7 +287,7 @@ pub struct FrameHeader {
 
     #[coder(Bits(2))]
     #[default(FrameType::RegularFrame)]
-    frame_type: FrameType,
+    pub frame_type: FrameType,
 
     #[coder(Bits(1))]
     #[default(Encoding::VarDCT)]
@@ -686,8 +686,8 @@ impl FrameHeader {
     }
 
     fn check(&self, nonserialized: &FrameHeaderNonserialized) -> Result<(), Error> {
-        if self.upsampling > 1 {
-            if let Some((info, upsampling)) = nonserialized
+        if self.upsampling > 1
+            && let Some((info, upsampling)) = nonserialized
                 .extra_channel_info
                 .iter()
                 .zip(&self.ec_upsampling)
@@ -695,13 +695,12 @@ impl FrameHeader {
                     ((*ec_upsampling << info.dim_shift()) < self.upsampling)
                         || (**ec_upsampling > 8)
                 })
-            {
-                return Err(Error::InvalidEcUpsampling(
-                    self.upsampling,
-                    info.dim_shift(),
-                    *upsampling,
-                ));
-            }
+        {
+            return Err(Error::InvalidEcUpsampling(
+                self.upsampling,
+                info.dim_shift(),
+                *upsampling,
+            ));
         }
 
         if self.passes.num_ds >= self.passes.num_passes {

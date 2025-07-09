@@ -54,6 +54,8 @@ pub(super) struct CodestreamParser {
     sections: VecDeque<SectionBuffer>,
     ready_section_data: usize,
     skip_sections: bool,
+    // True when we need to process frames without copying them to output buffers, e.g. reference frames
+    process_without_output: bool,
 
     section_state: SectionState,
     available_sections: Vec<SectionBuffer>,
@@ -78,9 +80,18 @@ impl CodestreamParser {
             sections: VecDeque::new(),
             ready_section_data: 0,
             skip_sections: false,
+            process_without_output: false,
             section_state: SectionState::new(0, 0),
             available_sections: vec![],
             has_more_frames: true,
+        }
+    }
+
+    fn has_visible_frame(&self) -> bool {
+        if let Some(frame) = &self.frame {
+            frame.header().is_visible()
+        } else {
+            false
         }
     }
 
@@ -94,8 +105,8 @@ impl CodestreamParser {
         // If we have sections to read, read into sections; otherwise, read into the local buffer.
         loop {
             if !self.sections.is_empty() {
-                assert!(self.non_section_buf.is_empty());
-                if output_buffers.is_none() {
+                let regular_frame = self.has_visible_frame();
+                if !self.process_without_output && output_buffers.is_none() {
                     self.skip_sections = true;
                 }
 
@@ -116,8 +127,13 @@ impl CodestreamParser {
                             break;
                         }
                     }
+
                     // Read sections up to the end of the current box.
-                    let mut available_codestream = box_parser.get_more_codestream(input)? as usize;
+                    let mut available_codestream = match box_parser.get_more_codestream(input) {
+                        Err(Error::OutOfBounds(_)) => 0,
+                        Ok(c) => c as usize,
+                        Err(e) => return Err(e),
+                    };
                     let mut section_buffers = vec![];
                     let mut ready = self.ready_section_data;
                     for buf in self.sections.iter_mut() {
@@ -186,19 +202,26 @@ impl CodestreamParser {
                 }
                 if self.sections.is_empty() {
                     // Go back to parsing a new frame header, if any.
-                    self.frame = None;
-                    return Ok(());
+                    self.process_without_output = false;
+                    if regular_frame {
+                        return Ok(());
+                    }
+                    continue;
                 }
             } else {
                 // Trying to read a frame or a file header.
                 assert!(self.frame.is_none());
                 assert!(self.has_more_frames);
-                let available_codestream = box_parser.get_more_codestream(input)? as usize;
+
+                let available_codestream = match box_parser.get_more_codestream(input) {
+                    Err(Error::OutOfBounds(_)) => 0,
+                    Ok(c) => c as usize,
+                    Err(e) => return Err(e),
+                };
                 let c = self.non_section_buf.refill(
                     |buf| {
                         if !box_parser.box_buffer.is_empty() {
-                            let c = box_parser.box_buffer.take(buf);
-                            Ok(box_parser.box_buffer.consume(c))
+                            Ok(box_parser.box_buffer.take(buf))
                         } else {
                             input.read(buf)
                         }
@@ -206,8 +229,22 @@ impl CodestreamParser {
                     Some(available_codestream),
                 )?;
                 box_parser.consume_codestream(c as u64);
-                // TODO(veluca): skip returning if the current frame is not meant to be displayed.
-                return self.process_non_section(decode_options);
+
+                self.process_non_section(decode_options)?;
+
+                if self.decoder_state.is_some() && self.frame_header.is_none() {
+                    // Return to caller if we found image info.
+                    return Ok(());
+                }
+                if self.frame.is_some() {
+                    if self.has_visible_frame() {
+                        // Return to caller if we found visible frame info.
+                        return Ok(());
+                    } else {
+                        self.process_without_output = true;
+                        continue;
+                    }
+                }
             }
         }
     }

@@ -7,7 +7,7 @@ use std::io::IoSliceMut;
 
 use crate::{
     api::{
-        Endianness, JxlColorEncoding, JxlColorProfile, JxlColorType, JxlDataFormat,
+        Endianness, JxlBasicInfo, JxlColorEncoding, JxlColorProfile, JxlColorType, JxlDataFormat,
         JxlDecoderOptions, JxlPixelFormat, JxlPrimaries, JxlTransferFunction, JxlWhitePoint,
         inner::codestream_parser::SectionState,
     },
@@ -33,6 +33,14 @@ impl CodestreamParser {
             let mut br = BitReader::new(&self.non_section_buf);
             br.skip_bits(self.non_section_bit_offset as usize)?;
             let file_header = FileHeader::read(&mut br)?;
+            self.basic_info = Some(JxlBasicInfo {
+                size: (
+                    file_header.size.xsize() as usize,
+                    file_header.size.ysize() as usize,
+                ),
+                bit_depth: file_header.image_metadata.bit_depth,
+                orientation: file_header.image_metadata.orientation,
+            });
             self.file_header = Some(file_header);
             let bits = br.total_bits_read();
             self.non_section_buf.consume(bits / 8);
@@ -49,7 +57,7 @@ impl CodestreamParser {
                     self.icc_parser = Some(IncrementalIccReader::new(&mut br)?);
                 }
                 let icc_parser = self.icc_parser.as_mut().unwrap();
-                let mut bits = 0;
+                let mut bits = br.total_bits_read();
                 for _ in 0..icc_parser.remaining() {
                     match icc_parser.read_one(&mut br) {
                         Ok(()) => bits = br.total_bits_read(),
@@ -71,22 +79,29 @@ impl CodestreamParser {
                 )?)
             };
             let output_color_profile = if file_header.image_metadata.xyb_encoded {
-                JxlColorProfile::Simple(
-                    if file_header.image_metadata.color_encoding.color_space == ColorSpace::Gray {
-                        JxlColorEncoding::GrayscaleColorSpace {
-                            white_point: JxlWhitePoint::D65,
-                            transfer_function: JxlTransferFunction::Linear,
-                            rendering_intent: RenderingIntent::Relative,
-                        }
-                    } else {
-                        JxlColorEncoding::RgbColorSpace {
-                            white_point: JxlWhitePoint::D65,
-                            primaries: JxlPrimaries::SRGB,
-                            transfer_function: JxlTransferFunction::Linear,
-                            rendering_intent: RenderingIntent::Relative,
-                        }
-                    },
-                )
+                if decode_options.xyb_output_linear {
+                    JxlColorProfile::Simple(
+                        if file_header.image_metadata.color_encoding.color_space == ColorSpace::Gray
+                        {
+                            JxlColorEncoding::GrayscaleColorSpace {
+                                white_point: JxlWhitePoint::D65,
+                                transfer_function: JxlTransferFunction::Linear,
+                                rendering_intent: RenderingIntent::Relative,
+                            }
+                        } else {
+                            JxlColorEncoding::RgbColorSpace {
+                                white_point: JxlWhitePoint::D65,
+                                primaries: JxlPrimaries::SRGB,
+                                transfer_function: JxlTransferFunction::Linear,
+                                rendering_intent: RenderingIntent::Relative,
+                            }
+                        },
+                    )
+                } else {
+                    JxlColorProfile::Simple(JxlColorEncoding::srgb(
+                        file_header.image_metadata.color_encoding.color_space == ColorSpace::Gray,
+                    ))
+                }
             } else {
                 embedded_color_profile.clone()
             };
@@ -122,6 +137,8 @@ impl CodestreamParser {
             decoder_state.xyb_output_linear = decode_options.xyb_output_linear;
             decoder_state.render_spotcolors = decode_options.render_spot_colors;
             self.decoder_state = Some(decoder_state);
+            // Reset bit offset to 0 since we've consumed everything up to a byte boundary
+            self.non_section_bit_offset = 0;
             return Ok(());
         }
 
@@ -153,8 +170,7 @@ impl CodestreamParser {
             &TocNonserialized {
                 num_entries: num_toc_entries as u32,
             },
-        )
-        .unwrap();
+        )?;
         br.jump_to_byte_boundary()?;
         let frame = Frame::from_header_and_toc(
             self.frame_header.take().unwrap(),

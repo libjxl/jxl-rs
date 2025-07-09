@@ -23,6 +23,8 @@ pub use options::*;
 pub use output::*;
 pub use signature::*;
 
+use crate::headers::{bit_depth::BitDepth, image_metadata::Orientation};
+
 /// This type represents the return value of a function that reads input from a bitstream. The
 /// variant `Complete` indicates that the operation was completed successfully, and its return
 /// value is available. The variant `NeedsMoreInput` indicates that more input is needed, and the
@@ -53,4 +55,7 @@ impl<T> ProcessingResult<T, ()> {
 
 pub struct JxlBasicInfo {
     // TODO: fields (including for extra channels, including their names)
+    pub size: (usize, usize),
+    pub bit_depth: BitDepth,
+    pub orientation: Orientation,
 }

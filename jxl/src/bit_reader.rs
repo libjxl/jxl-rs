@@ -34,7 +34,7 @@ pub const MAX_BITS_PER_CALL: usize = 56;
 
 impl<'a> BitReader<'a> {
     /// Constructs a BitReader for a given range of data.
-    pub fn new(data: &[u8]) -> BitReader {
+    pub fn new(data: &[u8]) -> BitReader<'_> {
         BitReader {
             data,
             bit_buf: 0,
@@ -128,9 +128,14 @@ impl<'a> BitReader<'a> {
         // Refill the buffer and adjust for any remaining bits
         self.refill();
         let to_consume = self.bits_in_buf.min(n);
-        self.total_bits_read -= to_consume;
+        // The bits loaded by refill() haven't been counted in total_bits_read yet,
+        // so we add (not subtract) the bits we're consuming. The original code
+        // incorrectly subtracted here, causing underflow when skip_bits was called
+        // on a fresh BitReader.
+        self.total_bits_read += to_consume;
         n -= to_consume;
         self.bit_buf >>= to_consume;
+        self.bits_in_buf -= to_consume;
         if n > 0 {
             Err(Error::OutOfBounds(n))
         } else {
@@ -206,5 +211,26 @@ impl<'a> BitReader<'a> {
         }
         debug!(?n, ret=?ret);
         Ok(ret)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_skip_bits_on_fresh_reader() {
+        // This test checks if skip_bits works correctly on a fresh BitReader
+        let data = [0x12, 0x34, 0x56, 0x78];
+        let mut br = BitReader::new(&data);
+
+        // Try to skip 1 bit on a fresh reader - this should work
+        br.skip_bits(1)
+            .expect("skip_bits should work on fresh reader");
+        assert_eq!(br.total_bits_read(), 1);
+
+        // Read the next 7 bits to complete the byte
+        let val = br.read(7).expect("read should work");
+        assert_eq!(val, 0x12 >> 1); // Should get the lower 7 bits of 0x12
     }
 }

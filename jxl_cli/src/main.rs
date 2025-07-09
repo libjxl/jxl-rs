@@ -4,18 +4,19 @@
 // license that can be found in the LICENSE file.
 
 use clap::Parser;
-use jxl::api::JxlColorEncoding;
-use jxl::container::{ContainerParser, ParseEvent};
-use jxl::decode::{DecodeOptions, DecodeResult, ImageData};
-use jxl::error::Error;
+use jxl::api::{JxlColorProfile, JxlColorType, JxlDecoder, JxlDecoderOptions, JxlOutputBuffer};
+use jxl::decode::{ImageData, ImageFrame};
+use jxl::error::{Error, Result};
 use jxl::headers::bit_depth::BitDepth;
+use jxl::image::Image;
+use jxl::util::NewWithCapacity;
 use std::fs;
 use std::io::Read;
 use std::path::PathBuf;
 
 pub mod enc;
 
-fn save_icc(icc_bytes: &[u8], icc_filename: Option<PathBuf>) -> Result<(), Error> {
+fn save_icc(icc_bytes: &[u8], icc_filename: Option<PathBuf>) -> Result<()> {
     match icc_filename {
         Some(icc_filename) => {
             std::fs::write(icc_filename, icc_bytes).map_err(|_| Error::OutputWriteFailure)
@@ -27,7 +28,7 @@ fn save_icc(icc_bytes: &[u8], icc_filename: Option<PathBuf>) -> Result<(), Error
 fn save_image(
     image_data: ImageData<f32>,
     bit_depth: BitDepth,
-    icc_bytes: Option<&[u8]>,
+    color_profile: &JxlColorProfile,
     output_filename: PathBuf,
 ) -> Result<(), Error> {
     let fn_str: String = String::from(output_filename.to_string_lossy());
@@ -49,7 +50,7 @@ fn save_image(
     } else if fn_str.ends_with(".npy") {
         output_bytes = enc::numpy::to_numpy(image_data)?;
     } else if fn_str.ends_with(".png") {
-        output_bytes = enc::png::to_png(image_data, bit_depth, icc_bytes)?;
+        output_bytes = enc::png::to_png(image_data, bit_depth, color_profile)?;
     }
     if output_bytes.is_empty() {
         return Err(Error::OutputFormatNotSupported);
@@ -80,6 +81,50 @@ struct Opt {
     /// If specified, takes precedence over the bit depth in the input metadata
     #[clap(long)]
     override_bitdepth: Option<u32>,
+
+    #[clap(long, short, action)]
+    with_api: bool,
+}
+
+fn f32_from_bytes(vec: &[u8]) -> f32 {
+    f32::from_ne_bytes(vec.try_into().unwrap())
+}
+
+fn image_from_vec(vec: &[u8], size: (usize, usize)) -> Result<Image<f32>> {
+    let mut image = Image::<f32>::new(size)?;
+    let mut rect = image.as_rect_mut();
+    for y in 0..size.1 {
+        let row = rect.row(y);
+        for (x, v) in row.iter_mut().enumerate().take(size.0) {
+            let base_idx = 4 * (y * size.0 + x);
+            *v = f32_from_bytes(&vec[base_idx..base_idx + 4]);
+        }
+    }
+    Ok(image)
+}
+
+// Extract RGB channels from interleaved RGB buffer
+fn images_from_rgb_vec(vec: &[u8], size: (usize, usize)) -> Result<Vec<Image<f32>>> {
+    let mut r_image = Image::<f32>::new(size)?;
+    let mut g_image = Image::<f32>::new(size)?;
+    let mut b_image = Image::<f32>::new(size)?;
+
+    let mut r_rect = r_image.as_rect_mut();
+    let mut g_rect = g_image.as_rect_mut();
+    let mut b_rect = b_image.as_rect_mut();
+
+    for y in 0..size.1 {
+        let r_row = r_rect.row(y);
+        let g_row = g_rect.row(y);
+        let b_row = b_rect.row(y);
+        for x in 0..size.0 {
+            let base_idx = 12 * (y * size.0 + x);
+            r_row[x] = f32_from_bytes(&vec[base_idx..base_idx + 4]);
+            g_row[x] = f32_from_bytes(&vec[base_idx + 4..base_idx + 8]);
+            b_row[x] = f32_from_bytes(&vec[base_idx + 8..base_idx + 12]);
+        }
+    }
+    Ok(vec![r_image, g_image, b_image])
 }
 
 fn main() -> Result<(), Error> {
@@ -102,73 +147,165 @@ fn main() -> Result<(), Error> {
         }
     };
 
-    let mut parser = ContainerParser::new();
-    let mut buf = vec![0u8; 4096];
-    let mut buf_valid = 0usize;
-    let mut codestream = Vec::new();
-    loop {
-        let chunk_size = match file.read(&mut buf[buf_valid..]) {
-            Ok(l) => l,
-            Err(err) => {
-                return Err(Error::InputReadFailure(err));
+    let numpy_output = String::from(opt.output.to_string_lossy()).ends_with(".npy");
+    let mut options = JxlDecoderOptions::default();
+    options.xyb_output_linear = numpy_output;
+    options.render_spot_colors = !numpy_output;
+    let mut input_bytes = Vec::<u8>::new();
+    file.read_to_end(&mut input_bytes)?;
+    let mut input_buffer = input_bytes.as_slice();
+
+    let mut initialized_decoder = JxlDecoder::<jxl::api::states::Initialized>::new(options);
+
+    // Process until we have image info
+    let mut decoder_with_image_info = loop {
+        match initialized_decoder.process(&mut input_buffer).unwrap() {
+            jxl::api::ProcessingResult::Complete { result } => break Ok(result),
+            jxl::api::ProcessingResult::NeedsMoreInput { fallback, .. } => {
+                if input_buffer.is_empty() {
+                    println!("Not enough data.");
+                    break Err(Error::FileTruncated);
+                }
+                initialized_decoder = fallback;
             }
+        }
+    }?;
+
+    let embedded_profile = decoder_with_image_info.embedded_color_profile();
+    let output_profile = decoder_with_image_info.output_color_profile().clone();
+    let original_bit_depth = decoder_with_image_info.basic_info().bit_depth;
+    let pixel_format = decoder_with_image_info.current_pixel_format().clone();
+    let color_type = pixel_format.color_type;
+    let samples_per_pixel = color_type.samples_per_pixel();
+    let has_alpha = color_type.has_alpha();
+    let samples_per_pixel_except_alpha = if has_alpha {
+        samples_per_pixel - 1
+    } else {
+        samples_per_pixel
+    };
+
+    let original_icc_result = save_icc(embedded_profile.as_icc().as_slice(), opt.original_icc_out);
+    let data_icc = output_profile.as_icc();
+    let data_icc_result = save_icc(data_icc.as_slice(), opt.icc_out);
+
+    let (w, h) = decoder_with_image_info.basic_info().size;
+    let mut image_data = ImageData {
+        size: if decoder_with_image_info
+            .basic_info()
+            .orientation
+            .is_transposing()
+        {
+            (h, w)
+        } else {
+            (w, h)
+        },
+        frames: Vec::new(),
+    };
+
+    loop {
+        let mut decoder_with_frame_info = loop {
+            match decoder_with_image_info.process(&mut input_buffer).unwrap() {
+                jxl::api::ProcessingResult::Complete { result } => break Ok(result),
+                jxl::api::ProcessingResult::NeedsMoreInput { fallback, .. } => {
+                    if input_buffer.is_empty() {
+                        println!("Not enough data.");
+                        break Err(Error::FileTruncated);
+                    }
+                    decoder_with_image_info = fallback;
+                }
+            }
+        }?;
+
+        let mut output_buffers: Vec<Vec<u8>> = Vec::new_with_capacity(samples_per_pixel)?;
+
+        output_buffers.push(vec![
+            0;
+            image_data.size.0
+                * image_data.size.1
+                * samples_per_pixel_except_alpha
+                * 4
+        ]);
+        let num_extra_channels = decoder_with_frame_info.frame_header().num_extra_channels;
+        if has_alpha {
+            assert!(num_extra_channels > 0);
+        }
+        for _ in 0..num_extra_channels {
+            output_buffers.push(vec![0; image_data.size.0 * image_data.size.1 * 4]);
+        }
+
+        let mut outputs = output_buffers
+            .as_mut_slice()
+            .iter_mut()
+            .enumerate()
+            .map(|(i, buffer)| {
+                let bytes_per_pixel = if i == 0 && pixel_format.color_type == JxlColorType::Rgb {
+                    12 // Interleaved RGB
+                } else {
+                    4 // Single channel
+                };
+                JxlOutputBuffer::new(
+                    buffer.as_mut_slice(),
+                    image_data.size.1,
+                    bytes_per_pixel * image_data.size.0,
+                )
+            })
+            .collect::<Vec<JxlOutputBuffer<'_>>>();
+
+        decoder_with_image_info = loop {
+            match decoder_with_frame_info
+                .process(&mut input_buffer, &mut outputs)
+                .unwrap()
+            {
+                jxl::api::ProcessingResult::Complete { result } => break Ok(result),
+                jxl::api::ProcessingResult::NeedsMoreInput { fallback, .. } => {
+                    if input_buffer.is_empty() {
+                        println!("Not enough data.");
+                        break Err(Error::FileTruncated);
+                    }
+                    decoder_with_frame_info = fallback;
+                }
+            }
+        }?;
+
+        let mut image_frame = ImageFrame {
+            size: image_data.size,
+            channels: Vec::new(),
         };
-        if chunk_size == 0 {
+
+        // Handle RGB/RGBA vs grayscale buffer layout
+        if pixel_format.color_type == JxlColorType::Rgb {
+            // First buffer contains interleaved RGB
+            let rgb_channels =
+                images_from_rgb_vec(&output_buffers[0], (image_data.size.0, image_data.size.1))?;
+            image_frame.channels.extend(rgb_channels);
+
+            // Additional buffers contain extra channels (e.g., alpha)
+            for vec in output_buffers.iter().skip(1) {
+                image_frame
+                    .channels
+                    .push(image_from_vec(vec, (image_data.size.0, image_data.size.1))?);
+            }
+        } else {
+            // Each buffer contains a single channel
+            for vec in output_buffers.iter() {
+                image_frame
+                    .channels
+                    .push(image_from_vec(vec, (image_data.size.0, image_data.size.1))?);
+            }
+        }
+
+        image_data.frames.push(image_frame);
+
+        if !decoder_with_image_info.has_more_frames() {
             break;
         }
-        buf_valid += chunk_size;
-
-        for event in parser.process_bytes(&buf[..buf_valid]) {
-            match event {
-                Ok(ParseEvent::BitstreamKind(kind)) => {
-                    println!("Bitstream kind: {kind:?}");
-                }
-                Ok(ParseEvent::Codestream(buf)) => {
-                    codestream.extend_from_slice(buf);
-                }
-                Err(err) => {
-                    println!("Error parsing JXL codestream: {err}");
-                    return Err(err);
-                }
-            }
-        }
-
-        let consumed = parser.previous_consumed_bytes();
-        buf.copy_within(consumed..buf_valid, 0);
-        buf_valid -= consumed;
     }
 
-    let numpy_output = String::from(opt.output.to_string_lossy()).ends_with(".npy");
-    let mut options = DecodeOptions::new();
-    options.xyb_output_linear = numpy_output;
-    options.render_spotcolors = !numpy_output;
-    let DecodeResult {
-        image_data,
-        bit_depth,
-        original_icc,
-        data_icc,
-    } = jxl::decode::decode_jxl_codestream(options, &codestream)?;
-
-    let original_icc_result = save_icc(original_icc.as_slice(), opt.original_icc_out);
-    let srgb;
-    let data_icc_result = save_icc(
-        match data_icc.as_ref() {
-            Some(data_icc) => data_icc.as_slice(),
-            None => {
-                let grayscale = image_data.frames[0].channels.len() < 3;
-                srgb = JxlColorEncoding::srgb(grayscale)
-                    .maybe_create_profile()?
-                    .unwrap();
-                srgb.as_slice()
-            }
-        },
-        opt.icc_out,
-    );
-    let bit_depth = match opt.override_bitdepth {
-        None => bit_depth,
+    let output_bit_depth = match opt.override_bitdepth {
+        None => original_bit_depth,
         Some(num_bits) => BitDepth::integer_samples(num_bits),
     };
-    let image_result = save_image(image_data, bit_depth, data_icc.as_deref(), opt.output);
+    let image_result = save_image(image_data, output_bit_depth, &output_profile, opt.output);
 
     if let Err(ref err) = original_icc_result {
         println!("Failed to save original ICC profile: {err}");

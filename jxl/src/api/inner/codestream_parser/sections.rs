@@ -71,6 +71,7 @@ impl CodestreamParser {
             frame.prepare_render_pipeline()?;
             frame.finalize_lf()?;
             frame.decode_hf_group(0, 0, &mut br)?;
+            self.available_sections.clear();
         } else {
             let mut lf_global_section = None;
             let mut lf_sections = vec![];
@@ -162,17 +163,17 @@ impl CodestreamParser {
             self.has_more_frames = false;
         }
         // TODO(veluca): this code should be integrated in the render pipeline.
-        if let Some(channels) = result.channels {
-            if let Some(bufs) = output_buffers {
-                if self.pixel_format.as_ref().unwrap().color_type == JxlColorType::Grayscale {
-                    for (buf, chan) in bufs.iter_mut().zip(channels.iter()) {
-                        buf.write_from_f32(chan);
-                    }
-                } else {
-                    bufs[0].write_from_rgb_f32(&channels[0], &channels[1], &channels[2]);
-                    for (buf, chan) in bufs.iter_mut().skip(1).zip(channels.iter().skip(3)) {
-                        buf.write_from_f32(chan);
-                    }
+        if let Some(channels) = result.channels
+            && let Some(bufs) = output_buffers
+        {
+            if self.pixel_format.as_ref().unwrap().color_type == JxlColorType::Grayscale {
+                for (buf, chan) in bufs.iter_mut().zip(channels.iter()) {
+                    buf.write_from_f32(chan);
+                }
+            } else {
+                bufs[0].write_from_rgb_f32(&channels[0], &channels[1], &channels[2]);
+                for (buf, chan) in bufs.iter_mut().skip(1).zip(channels.iter().skip(3)) {
+                    buf.write_from_f32(chan);
                 }
             }
         }
