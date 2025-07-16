@@ -175,6 +175,7 @@ fn main() -> Result<(), Error> {
     let with_image_info = feed_initialized_decoder(decoder, &mut input_buffer)?;
     let embedded_profile = with_image_info.embedded_color_profile();
     let output_profile = with_image_info.output_color_profile().clone();
+    let original_bit_depth = with_image_info.basic_info().bit_depth;
     let num_channels = with_image_info
         .current_pixel_format()
         .color_type
@@ -269,12 +270,11 @@ fn main() -> Result<(), Error> {
         image_data.frames.push(image_frame);
     }
 
-    let bit_depth = match opt.override_bitdepth {
-        // TODO(sboukortt): get from bitstream
-        None => BitDepth::integer_samples(16),
+    let output_bit_depth = match opt.override_bitdepth {
+        None => original_bit_depth,
         Some(num_bits) => BitDepth::integer_samples(num_bits),
     };
-    let image_result = save_image(image_data, bit_depth, &output_profile, opt.output);
+    let image_result = save_image(image_data, output_bit_depth, &output_profile, opt.output);
 
     if let Err(ref err) = original_icc_result {
         println!("Failed to save original ICC profile: {err}");
