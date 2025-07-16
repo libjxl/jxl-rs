@@ -83,7 +83,7 @@ impl<'a> JxlOutputBuffer<'a> {
     }
 
     /// Creates a new JxlOutputBuffer from a slice of uninit data.
-    /// It is guaranteed that `buf` will never be used to write uninitalized data.
+    /// It is guaranteed that `buf` will never be used to write uninitialized data.
     pub fn new_uninit(
         buf: &'a mut [MaybeUninit<u8>],
         num_rows: usize,
