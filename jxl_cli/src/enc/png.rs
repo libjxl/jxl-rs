@@ -3,9 +3,13 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
+use jxl::api::{
+    JxlColorEncoding, JxlColorProfile, JxlPrimaries, JxlTransferFunction, JxlWhitePoint,
+};
 use jxl::decode::ImageData;
 use jxl::error::{Error, Result};
 use jxl::headers::bit_depth::BitDepth;
+use jxl::headers::color_encoding::RenderingIntent;
 
 use std::borrow::Cow;
 use std::io::BufWriter;
@@ -23,7 +27,7 @@ fn png_color(num_channels: usize) -> Result<png::ColorType> {
 fn encode_png(
     image_data: ImageData<f32>,
     bit_depth: BitDepth,
-    icc_bytes: Option<&[u8]>,
+    color_profile: &JxlColorProfile,
     buf: &mut Vec<u8>,
 ) -> Result<()> {
     if image_data.frames.is_empty()
@@ -51,29 +55,47 @@ fn encode_png(
 
     let w = BufWriter::new(buf);
     let mut info = png::Info::with_size(width as u32, height as u32);
-    if let Some(icc_bytes) = icc_bytes {
-        info.icc_profile = Some(Cow::from(icc_bytes));
-    } else {
-        info.srgb = Some(png::SrgbRenderingIntent::RelativeColorimetric);
-        info.source_gamma = Some(png::ScaledFloat::from_scaled(45455));
-        info.source_chromaticities = Some(png::SourceChromaticities {
-            white: (
-                png::ScaledFloat::from_scaled(31270),
-                png::ScaledFloat::from_scaled(32900),
-            ),
-            red: (
-                png::ScaledFloat::from_scaled(64000),
-                png::ScaledFloat::from_scaled(33000),
-            ),
-            green: (
-                png::ScaledFloat::from_scaled(30000),
-                png::ScaledFloat::from_scaled(60000),
-            ),
-            blue: (
-                png::ScaledFloat::from_scaled(15000),
-                png::ScaledFloat::from_scaled(6000),
-            ),
-        });
+    match color_profile {
+        JxlColorProfile::Simple(JxlColorEncoding::RgbColorSpace {
+            white_point: JxlWhitePoint::D65,
+            primaries: JxlPrimaries::SRGB,
+            transfer_function: JxlTransferFunction::SRGB,
+            rendering_intent,
+        }) => {
+            info.srgb = Some(match rendering_intent {
+                RenderingIntent::Absolute => png::SrgbRenderingIntent::AbsoluteColorimetric,
+                RenderingIntent::Relative => png::SrgbRenderingIntent::RelativeColorimetric,
+                RenderingIntent::Perceptual => png::SrgbRenderingIntent::Perceptual,
+                RenderingIntent::Saturation => png::SrgbRenderingIntent::Saturation,
+            });
+            info.source_gamma = Some(png::ScaledFloat::from_scaled(45455));
+            info.source_chromaticities = Some(png::SourceChromaticities {
+                white: (
+                    png::ScaledFloat::from_scaled(31270),
+                    png::ScaledFloat::from_scaled(32900),
+                ),
+                red: (
+                    png::ScaledFloat::from_scaled(64000),
+                    png::ScaledFloat::from_scaled(33000),
+                ),
+                green: (
+                    png::ScaledFloat::from_scaled(30000),
+                    png::ScaledFloat::from_scaled(60000),
+                ),
+                blue: (
+                    png::ScaledFloat::from_scaled(15000),
+                    png::ScaledFloat::from_scaled(6000),
+                ),
+            });
+        }
+        JxlColorProfile::Simple(encoding) => {
+            // TODO(sboukortt): CICP
+            let icc_bytes = encoding.maybe_create_profile()?.unwrap();
+            info.icc_profile = Some(Cow::from(icc_bytes));
+        }
+        JxlColorProfile::Icc(icc_bytes) => {
+            info.icc_profile = Some(Cow::Borrowed(icc_bytes));
+        }
     }
     let mut encoder = png::Encoder::with_info(w, info).unwrap();
     encoder.set_color(png_color(num_channels)?);
@@ -125,9 +147,9 @@ fn encode_png(
 pub fn to_png(
     image_data: ImageData<f32>,
     bit_depth: BitDepth,
-    icc_bytes: Option<&[u8]>,
+    color_profile: &JxlColorProfile,
 ) -> Result<Vec<u8>> {
     let mut buf = Vec::<u8>::new();
-    encode_png(image_data, bit_depth, icc_bytes, &mut buf)?;
+    encode_png(image_data, bit_depth, color_profile, &mut buf)?;
     Ok(buf)
 }

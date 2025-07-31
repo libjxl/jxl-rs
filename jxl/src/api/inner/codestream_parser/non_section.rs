@@ -7,7 +7,7 @@ use std::io::IoSliceMut;
 
 use crate::{
     api::{
-        Endianness, JxlColorEncoding, JxlColorProfile, JxlColorType, JxlDataFormat,
+        Endianness, JxlBasicInfo, JxlColorEncoding, JxlColorProfile, JxlColorType, JxlDataFormat,
         JxlDecoderOptions, JxlPixelFormat, JxlPrimaries, JxlTransferFunction, JxlWhitePoint,
         inner::codestream_parser::SectionState,
     },
@@ -33,6 +33,11 @@ impl CodestreamParser {
             let mut br = BitReader::new(&self.non_section_buf);
             br.skip_bits(self.non_section_bit_offset as usize)?;
             let file_header = FileHeader::read(&mut br)?;
+            if self.basic_info.is_none() {
+                self.basic_info = Some(JxlBasicInfo {
+                    bit_depth: file_header.image_metadata.bit_depth,
+                });
+            }
             self.file_header = Some(file_header);
             let bits = br.total_bits_read();
             self.non_section_buf.consume(bits / 8);
@@ -122,6 +127,8 @@ impl CodestreamParser {
             decoder_state.xyb_output_linear = decode_options.xyb_output_linear;
             decoder_state.render_spotcolors = decode_options.render_spot_colors;
             self.decoder_state = Some(decoder_state);
+            // Reset bit offset to 0 since we've consumed everything up to a byte boundary
+            self.non_section_bit_offset = 0;
             return Ok(());
         }
 
@@ -153,8 +160,7 @@ impl CodestreamParser {
             &TocNonserialized {
                 num_entries: num_toc_entries as u32,
             },
-        )
-        .unwrap();
+        )?;
         br.jump_to_byte_boundary()?;
         let frame = Frame::from_header_and_toc(
             self.frame_header.take().unwrap(),

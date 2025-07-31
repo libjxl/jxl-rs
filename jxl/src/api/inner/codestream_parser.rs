@@ -198,7 +198,9 @@ impl CodestreamParser {
                     |buf| {
                         if !box_parser.box_buffer.is_empty() {
                             let c = box_parser.box_buffer.take(buf);
-                            Ok(box_parser.box_buffer.consume(c))
+                            box_parser.box_buffer.consume(c);
+                            // Return the number of bytes read, not the consume() return value
+                            Ok(c)
                         } else {
                             input.read(buf)
                         }
@@ -206,8 +208,18 @@ impl CodestreamParser {
                     Some(available_codestream),
                 )?;
                 box_parser.consume_codestream(c as u64);
-                // TODO(veluca): skip returning if the current frame is not meant to be displayed.
-                return self.process_non_section(decode_options);
+                self.process_non_section(decode_options)?;
+
+                // Check if we completed a state transition
+                if self.decoder_state.is_some() && self.frame_header.is_none() {
+                    // We just finished setting up image info, return to complete the transition
+                    return Ok(());
+                }
+                if self.frame.is_some() {
+                    // We just finished setting up frame info, return to complete the transition
+                    return Ok(());
+                }
+                // Otherwise continue processing
             }
         }
     }

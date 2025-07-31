@@ -43,7 +43,11 @@ impl<const SIZE: usize> SmallBuffer<SIZE> {
                 break;
             }
             let stop = if let Some(max) = max {
-                (self.range.end + max.saturating_sub(total)).min(SIZE)
+                // Calculate how much more we can read, avoiding overflow by using saturating_add
+                // instead of direct addition. This prevents potential panic when range.end + remaining
+                // would exceed usize::MAX.
+                let calc = self.range.end.saturating_add(max.saturating_sub(total));
+                calc.min(SIZE)
             } else {
                 SIZE
             };
@@ -65,7 +69,8 @@ impl<const SIZE: usize> SmallBuffer<SIZE> {
             };
             buffers = rest;
             let len = self.range.len().min(buf.len());
-            buf[..len].copy_from_slice(&self.buf[self.range.clone()]);
+            // Only copy 'len' bytes, not the entire range, to avoid panic when buf is smaller than range
+            buf[..len].copy_from_slice(&self.buf[self.range.start..self.range.start + len]);
             self.range.start += len;
             num += len;
         }

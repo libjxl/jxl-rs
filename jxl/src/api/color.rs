@@ -29,7 +29,7 @@ const K_BRADFORD_INV: Matrix3x3<f64> = [
 ];
 
 #[allow(clippy::too_many_arguments)]
-pub fn primaries_to_xyz(
+fn primaries_to_xyz(
     rx: f32,
     ry: f32,
     gx: f32,
