@@ -126,10 +126,13 @@ impl CodestreamParser {
                         }
                         let len = buf.data.len();
                         if len > ready {
-                            let readable = (available_codestream + ready).min(len);
-                            section_buffers.push(IoSliceMut::new(&mut buf.data[ready..readable]));
-                            available_codestream =
-                                available_codestream.saturating_sub(readable - ready);
+                            // How much do we need to read for this buffer?
+                            let needed = len - ready;
+                            // How much can we actually read?
+                            let can_read = needed.min(available_codestream);
+                            let end = ready + can_read;
+                            section_buffers.push(IoSliceMut::new(&mut buf.data[ready..end]));
+                            available_codestream = available_codestream.saturating_sub(can_read);
                             if available_codestream == 0 {
                                 break;
                             }
