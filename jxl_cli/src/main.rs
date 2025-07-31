@@ -4,7 +4,7 @@
 // license that can be found in the LICENSE file.
 
 use clap::Parser;
-use jxl::api::{JxlColorProfile, JxlDecoder, JxlDecoderOptions, JxlOutputBuffer};
+use jxl::api::{JxlColorProfile, JxlColorType, JxlDecoder, JxlDecoderOptions, JxlOutputBuffer};
 use jxl::decode::{ImageData, ImageFrame};
 use jxl::error::Error;
 use jxl::headers::bit_depth::BitDepth;
@@ -176,10 +176,8 @@ fn main() -> Result<(), Error> {
     let embedded_profile = with_image_info.embedded_color_profile();
     let output_profile = with_image_info.output_color_profile().clone();
     let original_bit_depth = with_image_info.basic_info().bit_depth;
-    let num_channels = with_image_info
-        .current_pixel_format()
-        .color_type
-        .samples_per_pixel();
+    let pixel_format = with_image_info.current_pixel_format().clone();
+    let num_channels = pixel_format.color_type.samples_per_pixel();
 
     let original_icc_result = save_icc(embedded_profile.as_icc().as_slice(), opt.original_icc_out);
     let data_icc = output_profile.as_icc();
@@ -190,8 +188,21 @@ fn main() -> Result<(), Error> {
     let (xsize, ysize) = with_frame_info.frame_header().size();
 
     let mut output_buffers: Vec<Vec<MaybeUninit<u8>>> = Vec::new_with_capacity(num_channels)?;
-    for _ in 0..num_channels {
-        output_buffers.push(vec![MaybeUninit::uninit(); xsize * ysize * 4]);
+    
+    // For RGB/RGBA images, first buffer holds interleaved RGB data, 
+    // additional channels (like alpha) go in separate buffers
+    if pixel_format.color_type == JxlColorType::Rgb {
+        // First buffer for interleaved RGB (3 channels * 4 bytes per float)
+        output_buffers.push(vec![MaybeUninit::uninit(); xsize * ysize * 12]);
+        // Additional buffers for extra channels (e.g., alpha)
+        for _ in 3..num_channels {
+            output_buffers.push(vec![MaybeUninit::uninit(); xsize * ysize * 4]);
+        }
+    } else {
+        // For grayscale or other formats, one buffer per channel
+        for _ in 0..num_channels {
+            output_buffers.push(vec![MaybeUninit::uninit(); xsize * ysize * 4]);
+        }
     }
 
     let image_from_vec = |vec: &Vec<MaybeUninit<u8>>, size| {
@@ -212,11 +223,64 @@ fn main() -> Result<(), Error> {
         }
         Ok::<Image<f32>, Error>(image)
     };
+    
+    // Extract RGB channels from interleaved RGB buffer
+    let images_from_rgb_vec = |vec: &Vec<MaybeUninit<u8>>, size| -> Result<Vec<Image<f32>>, Error> {
+        let mut r_image = Image::<f32>::new(size)?;
+        let mut g_image = Image::<f32>::new(size)?;
+        let mut b_image = Image::<f32>::new(size)?;
+        
+        let mut r_rect = r_image.as_rect_mut();
+        let mut g_rect = g_image.as_rect_mut();
+        let mut b_rect = b_image.as_rect_mut();
+        
+        for y in 0..size.1 {
+            let r_row = r_rect.row(y);
+            let g_row = g_rect.row(y);
+            let b_row = b_rect.row(y);
+            for x in 0..size.0 {
+                let base_idx = 12 * (y * size.0 + x);
+                r_row[x] = f32::from_ne_bytes(unsafe {
+                    [
+                        vec[base_idx].assume_init(),
+                        vec[base_idx + 1].assume_init(),
+                        vec[base_idx + 2].assume_init(),
+                        vec[base_idx + 3].assume_init(),
+                    ]
+                });
+                g_row[x] = f32::from_ne_bytes(unsafe {
+                    [
+                        vec[base_idx + 4].assume_init(),
+                        vec[base_idx + 5].assume_init(),
+                        vec[base_idx + 6].assume_init(),
+                        vec[base_idx + 7].assume_init(),
+                    ]
+                });
+                b_row[x] = f32::from_ne_bytes(unsafe {
+                    [
+                        vec[base_idx + 8].assume_init(),
+                        vec[base_idx + 9].assume_init(),
+                        vec[base_idx + 10].assume_init(),
+                        vec[base_idx + 11].assume_init(),
+                    ]
+                });
+            }
+        }
+        Ok(vec![r_image, g_image, b_image])
+    };
 
     let mut outputs = output_buffers
         .as_mut_slice()
         .iter_mut()
-        .map(|buffer| JxlOutputBuffer::new_uninit(buffer.as_mut_slice(), ysize, 4 * xsize))
+        .enumerate()
+        .map(|(i, buffer)| {
+            let bytes_per_pixel = if i == 0 && pixel_format.color_type == JxlColorType::Rgb {
+                12  // Interleaved RGB
+            } else {
+                4   // Single channel
+            };
+            JxlOutputBuffer::new_uninit(buffer.as_mut_slice(), ysize, bytes_per_pixel * xsize)
+        })
         .collect::<Vec<JxlOutputBuffer<'_>>>();
 
     let mut image_data = ImageData {
@@ -231,11 +295,28 @@ fn main() -> Result<(), Error> {
         size: (xsize, ysize),
         channels: Vec::new(),
     };
-    for vec in output_buffers.iter() {
-        image_frame
-            .channels
-            .push(image_from_vec(vec, (xsize, ysize))?);
+    
+    // Handle RGB/RGBA vs grayscale buffer layout
+    if pixel_format.color_type == JxlColorType::Rgb {
+        // First buffer contains interleaved RGB
+        let rgb_channels = images_from_rgb_vec(&output_buffers[0], (xsize, ysize))?;
+        image_frame.channels.extend(rgb_channels);
+        
+        // Additional buffers contain extra channels (e.g., alpha)
+        for vec in output_buffers.iter().skip(1) {
+            image_frame
+                .channels
+                .push(image_from_vec(vec, (xsize, ysize))?);
+        }
+    } else {
+        // Each buffer contains a single channel
+        for vec in output_buffers.iter() {
+            image_frame
+                .channels
+                .push(image_from_vec(vec, (xsize, ysize))?);
+        }
     }
+    
     image_data.frames.push(image_frame);
 
     while !input_buffer.is_empty() {
@@ -245,14 +326,35 @@ fn main() -> Result<(), Error> {
 
         output_buffers.clear();
         output_buffers.reserve(num_channels);
-        for _ in 0..num_channels {
-            output_buffers.push(vec![MaybeUninit::uninit(); xsize * ysize * 4]);
+        
+        // For RGB/RGBA images, first buffer holds interleaved RGB data, 
+        // additional channels (like alpha) go in separate buffers
+        if pixel_format.color_type == JxlColorType::Rgb {
+            // First buffer for interleaved RGB (3 channels * 4 bytes per float)
+            output_buffers.push(vec![MaybeUninit::uninit(); xsize * ysize * 12]);
+            // Additional buffers for extra channels (e.g., alpha)
+            for _ in 3..num_channels {
+                output_buffers.push(vec![MaybeUninit::uninit(); xsize * ysize * 4]);
+            }
+        } else {
+            // For grayscale or other formats, one buffer per channel
+            for _ in 0..num_channels {
+                output_buffers.push(vec![MaybeUninit::uninit(); xsize * ysize * 4]);
+            }
         }
 
         let mut outputs = output_buffers
             .as_mut_slice()
             .iter_mut()
-            .map(|buffer| JxlOutputBuffer::new_uninit(buffer.as_mut_slice(), ysize, 4 * xsize))
+            .enumerate()
+            .map(|(i, buffer)| {
+                let bytes_per_pixel = if i == 0 && pixel_format.color_type == JxlColorType::Rgb {
+                    12  // Interleaved RGB
+                } else {
+                    4   // Single channel
+                };
+                JxlOutputBuffer::new_uninit(buffer.as_mut_slice(), ysize, bytes_per_pixel * xsize)
+            })
             .collect::<Vec<JxlOutputBuffer<'_>>>();
 
         with_image_info =
@@ -262,11 +364,28 @@ fn main() -> Result<(), Error> {
             size: (xsize, ysize),
             channels: Vec::new(),
         };
-        for vec in output_buffers.iter() {
-            image_frame
-                .channels
-                .push(image_from_vec(vec, (xsize, ysize))?);
+        
+        // Handle RGB/RGBA vs grayscale buffer layout
+        if pixel_format.color_type == JxlColorType::Rgb {
+            // First buffer contains interleaved RGB
+            let rgb_channels = images_from_rgb_vec(&output_buffers[0], (xsize, ysize))?;
+            image_frame.channels.extend(rgb_channels);
+            
+            // Additional buffers contain extra channels (e.g., alpha)
+            for vec in output_buffers.iter().skip(1) {
+                image_frame
+                    .channels
+                    .push(image_from_vec(vec, (xsize, ysize))?);
+            }
+        } else {
+            // Each buffer contains a single channel
+            for vec in output_buffers.iter() {
+                image_frame
+                    .channels
+                    .push(image_from_vec(vec, (xsize, ysize))?);
+            }
         }
+        
         image_data.frames.push(image_frame);
     }
 
