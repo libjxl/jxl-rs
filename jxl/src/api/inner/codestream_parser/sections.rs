@@ -71,6 +71,10 @@ impl CodestreamParser {
             frame.prepare_render_pipeline()?;
             frame.finalize_lf()?;
             frame.decode_hf_group(0, 0, &mut br)?;
+            // Clear available_sections after processing the single-group special case.
+            // Without this, the assertion at line 160 would fail because available_sections
+            // would still contain the processed section.
+            self.available_sections.clear();
         } else {
             let mut lf_global_section = None;
             let mut lf_sections = vec![];

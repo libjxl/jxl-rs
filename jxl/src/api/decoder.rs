@@ -161,3 +161,152 @@ impl JxlDecoder<WithFrameInfo> {
         Ok(self.map_inner_processing_result(inner_result))
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::api::{JxlColorType::Rgb, JxlDecoderOptions, JxlOutputBuffer};
+    use std::mem::MaybeUninit;
+
+    #[test]
+    fn test_decode_basic_jxl() {
+        // Load the test image
+        let test_data = include_bytes!("../../resources/test/basic.jxl");
+        let mut input = test_data.as_slice();
+
+        // Create decoder with default options
+        let options = JxlDecoderOptions::default();
+        let decoder = JxlDecoder::<states::Initialized>::new(options);
+
+        // Process until we have image info
+        let decoder_with_image_info = match decoder.process(&mut input).unwrap() {
+            ProcessingResult::Complete { result } => result,
+            ProcessingResult::NeedsMoreInput { mut fallback, .. } => {
+                // Keep processing until we get image info
+                loop {
+                    match fallback.process(&mut input).unwrap() {
+                        ProcessingResult::Complete { result } => break result,
+                        ProcessingResult::NeedsMoreInput {
+                            fallback: new_fallback,
+                            ..
+                        } => {
+                            if input.is_empty() {
+                                panic!("Unexpected end of input while reading image info");
+                            }
+                            fallback = new_fallback;
+                        }
+                    }
+                }
+            }
+        };
+
+        // Get basic info
+        let basic_info = decoder_with_image_info.basic_info();
+        assert!(basic_info.bit_depth.bits_per_sample() > 0);
+
+        // Get pixel format info
+        let pixel_format = decoder_with_image_info.current_pixel_format().clone();
+        let num_channels = pixel_format.color_type.samples_per_pixel();
+        assert!(num_channels > 0);
+
+        // Process until we have frame info
+        let decoder_with_frame_info = match decoder_with_image_info.process(&mut input).unwrap() {
+            ProcessingResult::Complete { result } => result,
+            ProcessingResult::NeedsMoreInput { mut fallback, .. } => {
+                // Keep processing until we get frame info
+                loop {
+                    match fallback.process(&mut input).unwrap() {
+                        ProcessingResult::Complete { result } => break result,
+                        ProcessingResult::NeedsMoreInput {
+                            fallback: new_fallback,
+                            ..
+                        } => {
+                            if input.is_empty() {
+                                panic!("Unexpected end of input while reading frame info");
+                            }
+                            fallback = new_fallback;
+                        }
+                    }
+                }
+            }
+        };
+
+        // Get frame dimensions
+        let (width, height) = decoder_with_frame_info.frame_header().size();
+        assert!(width > 0);
+        assert!(height > 0);
+
+        // Prepare output buffers
+        let mut output_buffers: Vec<Vec<MaybeUninit<u8>>> = Vec::new();
+
+        // For RGB images, first buffer holds interleaved RGB data
+        if pixel_format.color_type == Rgb {
+            // First buffer for interleaved RGB (3 channels * 4 bytes per float)
+            output_buffers.push(vec![MaybeUninit::uninit(); width * height * 12]);
+            // Additional buffers for extra channels
+            for _ in 3..num_channels {
+                output_buffers.push(vec![MaybeUninit::uninit(); width * height * 4]);
+            }
+        } else {
+            // For grayscale or other formats, one buffer per channel
+            for _ in 0..num_channels {
+                output_buffers.push(vec![MaybeUninit::uninit(); width * height * 4]);
+            }
+        }
+
+        let mut output_slices: Vec<JxlOutputBuffer> = output_buffers
+            .iter_mut()
+            .enumerate()
+            .map(|(i, buffer)| {
+                let bytes_per_pixel = if i == 0 && pixel_format.color_type == Rgb {
+                    12 // Interleaved RGB
+                } else {
+                    4 // Single channel
+                };
+                JxlOutputBuffer::new_uninit(buffer.as_mut_slice(), height, bytes_per_pixel * width)
+            })
+            .collect();
+
+        // Decode the frame
+        let _decoder_with_image_info = match decoder_with_frame_info
+            .process(&mut input, &mut output_slices)
+            .unwrap()
+        {
+            ProcessingResult::Complete { result } => result,
+            ProcessingResult::NeedsMoreInput { mut fallback, .. } => {
+                // Keep processing until frame is decoded
+                loop {
+                    match fallback.process(&mut input, &mut output_slices).unwrap() {
+                        ProcessingResult::Complete { result } => break result,
+                        ProcessingResult::NeedsMoreInput {
+                            fallback: new_fallback,
+                            ..
+                        } => {
+                            if input.is_empty() {
+                                panic!("Unexpected end of input while decoding frame");
+                            }
+                            fallback = new_fallback;
+                        }
+                    }
+                }
+            }
+        };
+
+        // Verify we decoded something
+        if pixel_format.color_type == Rgb {
+            // For RGB, first buffer contains interleaved RGB data
+            assert!(!output_buffers.is_empty());
+            assert_eq!(output_buffers[0].len(), width * height * 12); // 3 channels * 4 bytes
+            // Additional buffers for extra channels
+            for buffer in &output_buffers[1..] {
+                assert_eq!(buffer.len(), width * height * 4);
+            }
+        } else {
+            // For other formats, one buffer per channel
+            assert_eq!(output_buffers.len(), num_channels);
+            for buffer in &output_buffers {
+                assert_eq!(buffer.len(), width * height * 4);
+            }
+        }
+    }
+}
