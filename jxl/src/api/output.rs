@@ -127,15 +127,25 @@ impl<'a> JxlOutputBuffer<'a> {
     pub(super) fn write_from_rgb_f32(&mut self, r: &Image<f32>, g: &Image<f32>, b: &Image<f32>) {
         assert_eq!(r.size(), g.size());
         assert_eq!(r.size(), b.size());
-        assert_eq!(self.bytes_per_row, r.size().0 * 12);
         let (xsize, ysize) = r.size();
-        assert_eq!(ysize, self.num_rows);
-        for y in 0..ysize {
+        
+        // Handle case where the rendered image is smaller than the allocated buffer
+        // (e.g., due to cropping)
+        let required_bytes_per_row = xsize * 12;
+        if self.bytes_per_row < required_bytes_per_row {
+            panic!("Buffer too small: allocated {} bytes per row, but need {} bytes", 
+                   self.bytes_per_row, required_bytes_per_row);
+        }
+        
+        // Only write up to the actual image height
+        let rows_to_write = ysize.min(self.num_rows);
+        for y in 0..rows_to_write {
             let rrow = r.as_rect().row(y);
             let grow = g.as_rect().row(y);
             let brow = b.as_rect().row(y);
             // Safety: uninit data is never written in `row`.
-            let row = unsafe { self.get(y, 0..12 * xsize) };
+            // Use the full allocated width to respect the buffer's stride
+            let row = unsafe { self.get(y, 0..self.bytes_per_row) };
             let rgb = rrow
                 .iter()
                 .zip(grow.iter().zip(brow.iter()))
@@ -146,7 +156,8 @@ impl<'a> JxlOutputBuffer<'a> {
                     arr[8..12].copy_from_slice(&b.to_ne_bytes());
                     arr
                 });
-            for (out, rgb) in row.chunks_exact_mut(12).zip(rgb) {
+            // Only write the actual image width
+            for (out, rgb) in row.chunks_exact_mut(12).take(xsize).zip(rgb) {
                 for i in 0..12 {
                     out[i].write(rgb[i]);
                 }
@@ -155,14 +166,21 @@ impl<'a> JxlOutputBuffer<'a> {
     }
 
     pub(super) fn write_from_f32(&mut self, c: &Image<f32>) {
-        assert_eq!(self.bytes_per_row, c.size().0 * 4);
         let (xsize, ysize) = c.size();
-        assert_eq!(ysize, self.num_rows);
-        for y in 0..ysize {
+        
+        // Handle case where the rendered image is smaller than the allocated buffer
+        let required_bytes_per_row = xsize * 4;
+        if self.bytes_per_row < required_bytes_per_row {
+            panic!("Buffer too small: allocated {} bytes per row, but need {} bytes", 
+                   self.bytes_per_row, required_bytes_per_row);
+        }
+        
+        let rows_to_write = ysize.min(self.num_rows);
+        for y in 0..rows_to_write {
             let crow = c.as_rect().row(y);
             // Safety: uninit data is never written in `row`.
-            let row = unsafe { self.get(y, 0..4 * xsize) };
-            for (out, v) in row.chunks_exact_mut(4).zip(crow) {
+            let row = unsafe { self.get(y, 0..self.bytes_per_row) };
+            for (out, v) in row.chunks_exact_mut(4).take(xsize).zip(crow) {
                 let v = v.to_ne_bytes();
                 for i in 0..4 {
                     out[i].write(v[i]);

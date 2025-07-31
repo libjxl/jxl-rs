@@ -127,6 +127,8 @@ impl CodestreamParser {
             decoder_state.xyb_output_linear = decode_options.xyb_output_linear;
             decoder_state.render_spotcolors = decode_options.render_spot_colors;
             self.decoder_state = Some(decoder_state);
+            // Reset bit offset to 0 since we've consumed everything up to a byte boundary
+            self.non_section_bit_offset = 0;
             return Ok(());
         }
 
@@ -158,8 +160,7 @@ impl CodestreamParser {
             &TocNonserialized {
                 num_entries: num_toc_entries as u32,
             },
-        )
-        .unwrap();
+        )?;
         br.jump_to_byte_boundary()?;
         let frame = Frame::from_header_and_toc(
             self.frame_header.take().unwrap(),
