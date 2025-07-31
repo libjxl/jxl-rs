@@ -166,12 +166,14 @@ impl JxlDecoder<WithFrameInfo> {
 mod tests {
     use super::*;
     use crate::api::{JxlColorType::Rgb, JxlDecoderOptions, JxlOutputBuffer};
+    use crate::error::Error;
+    use jxl_macros::for_each_test_file;
     use std::mem::MaybeUninit;
+    use std::path::Path;
 
-    #[test]
-    fn test_decode_basic_jxl() {
+    fn decode_test_file(path: &Path) -> Result<(), crate::error::Error> {
         // Load the test image
-        let test_data = include_bytes!("../../resources/test/basic.jxl");
+        let test_data = std::fs::read(path).expect("Failed to read test file");
         let mut input = test_data.as_slice();
 
         // Create decoder with default options
@@ -308,5 +310,9 @@ mod tests {
                 assert_eq!(buffer.len(), width * height * 4);
             }
         }
+        
+        Ok(())
     }
+
+    for_each_test_file!(decode_test_file);
 }
