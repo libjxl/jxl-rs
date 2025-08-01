@@ -205,6 +205,7 @@ mod tests {
         // Get basic info
         let basic_info = decoder_with_image_info.basic_info();
         assert!(basic_info.bit_depth.bits_per_sample() > 0);
+        let orientation = basic_info.orientation;
 
         // Get pixel format info
         let pixel_format = decoder_with_image_info.current_pixel_format().clone();
@@ -237,6 +238,13 @@ mod tests {
         let (width, height) = decoder_with_frame_info.frame_header().size();
         assert!(width > 0);
         assert!(height > 0);
+        
+        // Check if orientation transposes dimensions
+        let (buffer_width, buffer_height) = if orientation.is_transposing() {
+            (height, width)
+        } else {
+            (width, height)
+        };
 
         // Prepare output buffers
         let mut output_buffers: Vec<Vec<MaybeUninit<u8>>> = Vec::new();
@@ -244,15 +252,15 @@ mod tests {
         // For RGB images, first buffer holds interleaved RGB data
         if pixel_format.color_type == Rgb {
             // First buffer for interleaved RGB (3 channels * 4 bytes per float)
-            output_buffers.push(vec![MaybeUninit::uninit(); width * height * 12]);
+            output_buffers.push(vec![MaybeUninit::uninit(); buffer_width * buffer_height * 12]);
             // Additional buffers for extra channels
             for _ in 3..num_channels {
-                output_buffers.push(vec![MaybeUninit::uninit(); width * height * 4]);
+                output_buffers.push(vec![MaybeUninit::uninit(); buffer_width * buffer_height * 4]);
             }
         } else {
             // For grayscale or other formats, one buffer per channel
             for _ in 0..num_channels {
-                output_buffers.push(vec![MaybeUninit::uninit(); width * height * 4]);
+                output_buffers.push(vec![MaybeUninit::uninit(); buffer_width * buffer_height * 4]);
             }
         }
 
@@ -265,7 +273,7 @@ mod tests {
                 } else {
                     4 // Single channel
                 };
-                JxlOutputBuffer::new_uninit(buffer.as_mut_slice(), height, bytes_per_pixel * width)
+                JxlOutputBuffer::new_uninit(buffer.as_mut_slice(), buffer_height, bytes_per_pixel * buffer_width)
             })
             .collect();
 
