@@ -62,7 +62,7 @@ impl BoxParser {
                         }
                         Some(JxlSignatureType::Container) => {
                             self.box_buffer
-                                .consume(JxlSignatureType::Codestream.signature().len());
+                                .consume(JxlSignatureType::Container.signature().len());
                             self.state = ParseState::BoxNeeded;
                         }
                     }
@@ -109,10 +109,16 @@ impl BoxParser {
                         }
                         _ => u32::from_be_bytes(self.box_buffer[0..4].try_into().unwrap()) as u64,
                     };
-                    if len <= (min_len + extra_len) as u64 {
-                        return Err(Error::InvalidBox);
-                    }
-                    let content_len = len - (min_len - extra_len) as u64;
+
+                    // Per JXL spec: jxlc box with length 0 has special meaning "extends to EOF"
+                    let content_len = if len == 0 && &ty == b"jxlc" {
+                        u64::MAX
+                    } else {
+                        if len <= (min_len + extra_len) as u64 {
+                            return Err(Error::InvalidBox);
+                        }
+                        len - (min_len - extra_len) as u64
+                    };
                     match &ty {
                         b"jxlc" => {
                             if matches!(
@@ -161,7 +167,7 @@ impl BoxParser {
         let ParseState::CodestreamBox(cb) = &mut self.state else {
             unreachable!()
         };
-        cb.checked_sub(amount).unwrap();
+        *cb = cb.checked_sub(amount).unwrap();
         if *cb == 0 {
             self.state = ParseState::BoxNeeded;
         }
