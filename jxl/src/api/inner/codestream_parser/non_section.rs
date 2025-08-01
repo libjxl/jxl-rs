@@ -36,6 +36,7 @@ impl CodestreamParser {
             if self.basic_info.is_none() {
                 self.basic_info = Some(JxlBasicInfo {
                     bit_depth: file_header.image_metadata.bit_depth,
+                    orientation: file_header.image_metadata.orientation,
                 });
             }
             self.file_header = Some(file_header);
