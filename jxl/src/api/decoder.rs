@@ -234,8 +234,8 @@ mod tests {
             }
         };
 
-        // Get frame dimensions
-        let (width, height) = decoder_with_frame_info.frame_header().size();
+        // Get frame dimensions (after upsampling, which is the actual output size)
+        let (width, height) = decoder_with_frame_info.frame_header().size_upsampled();
         assert!(width > 0);
         assert!(height > 0);
         
