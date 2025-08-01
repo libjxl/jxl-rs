@@ -94,7 +94,7 @@ impl CodestreamParser {
         // If we have sections to read, read into sections; otherwise, read into the local buffer.
         loop {
             if !self.sections.is_empty() {
-                assert!(self.non_section_buf.is_empty());
+                // non_section_buf may contain leftover section data from TOC parsing
                 if output_buffers.is_none() {
                     self.skip_sections = true;
                 }
@@ -141,13 +141,21 @@ impl CodestreamParser {
                     }
                     let mut buffers = &mut section_buffers[..];
                     loop {
-                        let num = if !box_parser.box_buffer.is_empty() {
-                            box_parser.box_buffer.take(buffers)
+                        let (num, from_non_section_buf) = if !self.non_section_buf.is_empty() {
+                            // First consume any leftover data from non_section_buf
+                            let taken = self.non_section_buf.take(buffers);
+                            (taken, true)
+                            // Note: This data was already consumed from box_parser
+                        } else if !box_parser.box_buffer.is_empty() {
+                            (box_parser.box_buffer.take(buffers), false)
                         } else {
-                            input.read(buffers)?
+                            (input.read(buffers)?, false)
                         };
                         self.ready_section_data += num;
-                        box_parser.consume_codestream(num as u64);
+                        // Only consume from box_parser if we didn't read from non_section_buf
+                        if !from_non_section_buf {
+                            box_parser.consume_codestream(num as u64);
+                        }
                         IoSliceMut::advance_slices(&mut buffers, num);
                         if num == 0 || buffers.is_empty() {
                             break;
@@ -163,6 +171,15 @@ impl CodestreamParser {
                     })?;
                 } else {
                     let total_size = self.sections.iter().map(|x| x.len).sum::<usize>();
+
+                    // First, consume any data from non_section_buf (this was already consumed from box_parser)
+                    if !self.non_section_buf.is_empty() {
+                        let in_buf = self.non_section_buf.len();
+                        let to_consume = in_buf.min(total_size - self.ready_section_data);
+                        self.non_section_buf.consume(to_consume);
+                        self.ready_section_data += to_consume;
+                    }
+
                     loop {
                         let to_skip = total_size - self.ready_section_data;
                         if to_skip == 0 {
