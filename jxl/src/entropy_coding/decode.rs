@@ -190,8 +190,6 @@ impl SymbolReader {
                 );
                 return Err(Error::ArithmeticOverflow);
             };
-            lz77_state.num_to_copy = num_to_copy;
-
             let lz_dist_cluster = *histograms.context_map.last().unwrap() as usize;
 
             let distance_sym = match &histograms.codes {
@@ -214,6 +212,7 @@ impl SymbolReader {
             let distance = (((1 << 20) - 1).min(distance_sub_1) + 1).min(lz77_state.num_decoded);
             lz77_state.copy_pos = lz77_state.num_decoded - distance;
 
+            lz77_state.num_to_copy = num_to_copy;
             let sym = lz77_state.pull_symbol().unwrap();
             lz77_state.push_decoded_symbol(sym);
             Ok(sym)

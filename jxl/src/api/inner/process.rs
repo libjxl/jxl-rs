@@ -61,6 +61,10 @@ impl<const SIZE: usize> SmallBuffer<SIZE> {
         Ok(total)
     }
 
+    // pub(super) fn is_empty(&self) -> bool {
+    //     self.buf[self.range.clone()].is_empty()
+    // }
+
     pub(super) fn take(&mut self, mut buffers: &mut [IoSliceMut]) -> usize {
         let mut num = 0;
         while !self.range.is_empty() {
