@@ -35,6 +35,10 @@ impl CodestreamParser {
             let file_header = FileHeader::read(&mut br)?;
             if self.basic_info.is_none() {
                 self.basic_info = Some(JxlBasicInfo {
+                    size: (
+                        file_header.size.xsize() as usize,
+                        file_header.size.ysize() as usize,
+                    ),
                     bit_depth: file_header.image_metadata.bit_depth,
                     orientation: file_header.image_metadata.orientation,
                 });
@@ -55,7 +59,7 @@ impl CodestreamParser {
                     self.icc_parser = Some(IncrementalIccReader::new(&mut br)?);
                 }
                 let icc_parser = self.icc_parser.as_mut().unwrap();
-                let mut bits = 0;
+                let mut bits = br.total_bits_read();
                 for _ in 0..icc_parser.remaining() {
                     match icc_parser.read_one(&mut br) {
                         Ok(()) => bits = br.total_bits_read(),

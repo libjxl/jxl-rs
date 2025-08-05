@@ -55,6 +55,7 @@ impl<T> ProcessingResult<T, ()> {
 
 pub struct JxlBasicInfo {
     // TODO: fields (including for extra channels, including their names)
+    pub size: (usize, usize),
     pub bit_depth: BitDepth,
     pub orientation: Orientation,
 }
