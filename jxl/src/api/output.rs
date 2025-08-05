@@ -128,15 +128,17 @@ impl<'a> JxlOutputBuffer<'a> {
         assert_eq!(r.size(), g.size());
         assert_eq!(r.size(), b.size());
         let (xsize, ysize) = r.size();
-        
+
         // Handle case where the rendered image is smaller than the allocated buffer
         // (e.g., due to cropping)
         let required_bytes_per_row = xsize * 12;
         if self.bytes_per_row < required_bytes_per_row {
-            panic!("Buffer too small: allocated {} bytes per row, but need {} bytes", 
-                   self.bytes_per_row, required_bytes_per_row);
+            panic!(
+                "Buffer too small: allocated {} bytes per row, but need {} bytes",
+                self.bytes_per_row, required_bytes_per_row
+            );
         }
-        
+
         // Only write up to the actual image height
         let rows_to_write = ysize.min(self.num_rows);
         for y in 0..rows_to_write {
@@ -167,14 +169,16 @@ impl<'a> JxlOutputBuffer<'a> {
 
     pub(super) fn write_from_f32(&mut self, c: &Image<f32>) {
         let (xsize, ysize) = c.size();
-        
+
         // Handle case where the rendered image is smaller than the allocated buffer
         let required_bytes_per_row = xsize * 4;
         if self.bytes_per_row < required_bytes_per_row {
-            panic!("Buffer too small: allocated {} bytes per row, but need {} bytes", 
-                   self.bytes_per_row, required_bytes_per_row);
+            panic!(
+                "Buffer too small: allocated {} bytes per row, but need {} bytes",
+                self.bytes_per_row, required_bytes_per_row
+            );
         }
-        
+
         let rows_to_write = ysize.min(self.num_rows);
         for y in 0..rows_to_write {
             let crow = c.as_rect().row(y);
