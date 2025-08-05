@@ -192,7 +192,14 @@ fn decode_with_api(opt: Opt) -> Result<()> {
     let output_profile = decoder_with_image_info.output_color_profile().clone();
     let original_bit_depth = decoder_with_image_info.basic_info().bit_depth;
     let pixel_format = decoder_with_image_info.current_pixel_format().clone();
-    let num_channels = pixel_format.color_type.samples_per_pixel();
+    let color_type = pixel_format.color_type;
+    let samples_per_pixel = color_type.samples_per_pixel();
+    let has_alpha = color_type.has_alpha();
+    let samples_per_pixel_except_alpha = if has_alpha {
+        samples_per_pixel - 1
+    } else {
+        samples_per_pixel
+    };
 
     let original_icc_result = save_icc(embedded_profile.as_icc().as_slice(), opt.original_icc_out);
     let data_icc = output_profile.as_icc();
@@ -226,31 +233,25 @@ fn decode_with_api(opt: Opt) -> Result<()> {
             }
         }?;
 
-        let mut output_buffers: Vec<Vec<MaybeUninit<u8>>> = Vec::new_with_capacity(num_channels)?;
+        let mut output_buffers: Vec<Vec<MaybeUninit<u8>>> =
+            Vec::new_with_capacity(samples_per_pixel)?;
 
-        // For RGB/RGBA images, first buffer holds interleaved RGB data,
-        // additional channels (like alpha) go in separate buffers
-        if pixel_format.color_type == JxlColorType::Rgb {
-            // First buffer for interleaved RGB (3 channels * 4 bytes per float)
+        output_buffers.push(vec![
+            MaybeUninit::uninit();
+            image_data.size.0
+                * image_data.size.1
+                * samples_per_pixel_except_alpha
+                * 4
+        ]);
+        let num_extra_channels = decoder_with_frame_info.frame_header().num_extra_channels;
+        if has_alpha {
+            assert!(num_extra_channels > 0);
+        }
+        for _ in 0..num_extra_channels {
             output_buffers.push(vec![
                 MaybeUninit::uninit();
-                image_data.size.0 * image_data.size.1 * 12
+                image_data.size.0 * image_data.size.1 * 4
             ]);
-            // Additional buffers for extra channels (e.g., alpha)
-            for _ in 3..num_channels {
-                output_buffers.push(vec![
-                    MaybeUninit::uninit();
-                    image_data.size.0 * image_data.size.1 * 4
-                ]);
-            }
-        } else {
-            // For grayscale or other formats, one buffer per channel
-            for _ in 0..num_channels {
-                output_buffers.push(vec![
-                    MaybeUninit::uninit();
-                    image_data.size.0 * image_data.size.1 * 4
-                ]);
-            }
         }
 
         let mut outputs = output_buffers

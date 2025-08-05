@@ -14,6 +14,14 @@ pub enum JxlColorType {
 }
 
 impl JxlColorType {
+    pub fn has_alpha(&self) -> bool {
+        match self {
+            Self::Grayscale => false,
+            Self::GrayscaleAlpha => true,
+            Self::Rgb | Self::Bgr => false,
+            Self::Rgba | Self::Bgra => true,
+        }
+    }
     pub fn samples_per_pixel(&self) -> usize {
         match self {
             Self::Grayscale => 1,
