@@ -145,13 +145,10 @@ impl CodestreamParser {
                         }
                         let len = buf.data.len();
                         if len > ready {
-                            // How much do we need to read for this buffer?
-                            let needed = len - ready;
-                            // How much can we actually read?
-                            let can_read = needed.min(available_codestream);
-                            let end = ready + can_read;
-                            section_buffers.push(IoSliceMut::new(&mut buf.data[ready..end]));
-                            available_codestream = available_codestream.saturating_sub(can_read);
+                            let readable = (available_codestream + ready).min(len);
+                            section_buffers.push(IoSliceMut::new(&mut buf.data[ready..readable]));
+                            available_codestream =
+                                available_codestream.saturating_sub(readable - ready);
                             if available_codestream == 0 {
                                 break;
                             }
@@ -160,21 +157,13 @@ impl CodestreamParser {
                     }
                     let mut buffers = &mut section_buffers[..];
                     loop {
-                        let (num, from_non_section_buf) = if !self.non_section_buf.is_empty() {
-                            // First consume any leftover data from non_section_buf
-                            let taken = self.non_section_buf.take(buffers);
-                            (taken, true)
-                            // Note: This data was already consumed from box_parser
-                        } else if !box_parser.box_buffer.is_empty() {
-                            (box_parser.box_buffer.take(buffers), false)
+                        let num = if !box_parser.box_buffer.is_empty() {
+                            box_parser.box_buffer.take(buffers)
                         } else {
-                            (input.read(buffers)?, false)
+                            input.read(buffers)?
                         };
                         self.ready_section_data += num;
-                        // Only consume from box_parser if we didn't read from non_section_buf
-                        if !from_non_section_buf {
-                            box_parser.consume_codestream(num as u64);
-                        }
+                        box_parser.consume_codestream(num as u64);
                         IoSliceMut::advance_slices(&mut buffers, num);
                         if num == 0 || buffers.is_empty() {
                             break;
@@ -190,15 +179,6 @@ impl CodestreamParser {
                     })?;
                 } else {
                     let total_size = self.sections.iter().map(|x| x.len).sum::<usize>();
-
-                    // First, consume any data from non_section_buf (this was already consumed from box_parser)
-                    if !self.non_section_buf.is_empty() {
-                        let in_buf = self.non_section_buf.len();
-                        let to_consume = in_buf.min(total_size - self.ready_section_data);
-                        self.non_section_buf.consume(to_consume);
-                        self.ready_section_data += to_consume;
-                    }
-
                     loop {
                         let to_skip = total_size - self.ready_section_data;
                         if to_skip == 0 {
@@ -240,17 +220,18 @@ impl CodestreamParser {
                     let initial_bit_offset = self.non_section_bit_offset;
 
                     match self.process_non_section(decode_options) {
-                        Ok(()) => {},
+                        Ok(()) => {}
                         Err(Error::OutOfBounds(_)) => {
                             // If we need more data, that's expected - we'll get it on the next iteration
-                        },
+                        }
                         Err(e) => return Err(e),
                     }
 
                     // Check if we made progress
-                    if self.non_section_buf.len() < initial_len ||
-                       self.non_section_bit_offset != initial_bit_offset ||
-                       self.frame.is_some() {
+                    if self.non_section_buf.len() < initial_len
+                        || self.non_section_bit_offset != initial_bit_offset
+                        || self.frame.is_some()
+                    {
                         // Check if we completed frame setup
                         if self.frame.is_some() {
                             return Ok(());

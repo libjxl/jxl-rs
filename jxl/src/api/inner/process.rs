@@ -43,11 +43,7 @@ impl<const SIZE: usize> SmallBuffer<SIZE> {
                 break;
             }
             let stop = if let Some(max) = max {
-                // Calculate how much more we can read, avoiding overflow by using saturating_add
-                // instead of direct addition. This prevents potential panic when range.end + remaining
-                // would exceed usize::MAX.
-                let calc = self.range.end.saturating_add(max.saturating_sub(total));
-                calc.min(SIZE)
+                (self.range.end + max.saturating_sub(total)).min(SIZE)
             } else {
                 SIZE
             };
@@ -60,10 +56,6 @@ impl<const SIZE: usize> SmallBuffer<SIZE> {
         }
         Ok(total)
     }
-
-    // pub(super) fn is_empty(&self) -> bool {
-    //     self.buf[self.range.clone()].is_empty()
-    // }
 
     pub(super) fn take(&mut self, mut buffers: &mut [IoSliceMut]) -> usize {
         let mut num = 0;
