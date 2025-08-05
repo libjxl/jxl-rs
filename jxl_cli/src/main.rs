@@ -205,16 +205,18 @@ fn main() -> Result<(), Error> {
     let data_icc = output_profile.as_icc();
     let data_icc_result = save_icc(data_icc.as_slice(), opt.icc_out);
 
+    let (w, h) = decoder_with_image_info.basic_info().size;
     let mut image_data = ImageData {
-        size: decoder_with_image_info.basic_info().size,
+        size: if decoder_with_image_info
+            .basic_info()
+            .orientation
+            .is_transposing()
+        {
+            (h, w)
+        } else {
+            (w, h)
+        },
         frames: Vec::new(),
-    };
-
-    // Check if orientation transposes dimensions
-    let (xsize, ysize) = if decoder_with_image_info.basic_info().orientation.is_transposing() {
-        (image_data.size.1, image_data.size.0)
-    } else {
-        (image_data.size.0, image_data.size.1)
     };
 
     loop {
@@ -237,15 +239,24 @@ fn main() -> Result<(), Error> {
         // additional channels (like alpha) go in separate buffers
         if pixel_format.color_type == JxlColorType::Rgb {
             // First buffer for interleaved RGB (3 channels * 4 bytes per float)
-            output_buffers.push(vec![MaybeUninit::uninit(); xsize * ysize * 12]);
+            output_buffers.push(vec![
+                MaybeUninit::uninit();
+                image_data.size.0 * image_data.size.1 * 12
+            ]);
             // Additional buffers for extra channels (e.g., alpha)
             for _ in 3..num_channels {
-                output_buffers.push(vec![MaybeUninit::uninit(); xsize * ysize * 4]);
+                output_buffers.push(vec![
+                    MaybeUninit::uninit();
+                    image_data.size.0 * image_data.size.1 * 4
+                ]);
             }
         } else {
             // For grayscale or other formats, one buffer per channel
             for _ in 0..num_channels {
-                output_buffers.push(vec![MaybeUninit::uninit(); xsize * ysize * 4]);
+                output_buffers.push(vec![
+                    MaybeUninit::uninit();
+                    image_data.size.0 * image_data.size.1 * 4
+                ]);
             }
         }
 
@@ -259,7 +270,11 @@ fn main() -> Result<(), Error> {
                 } else {
                     4 // Single channel
                 };
-                JxlOutputBuffer::new_uninit(buffer.as_mut_slice(), ysize, bytes_per_pixel * xsize)
+                JxlOutputBuffer::new_uninit(
+                    buffer.as_mut_slice(),
+                    image_data.size.1,
+                    bytes_per_pixel * image_data.size.0,
+                )
             })
             .collect::<Vec<JxlOutputBuffer<'_>>>();
 
@@ -280,28 +295,29 @@ fn main() -> Result<(), Error> {
         }?;
 
         let mut image_frame = ImageFrame {
-            size: (xsize, ysize),
+            size: image_data.size,
             channels: Vec::new(),
         };
 
         // Handle RGB/RGBA vs grayscale buffer layout
         if pixel_format.color_type == JxlColorType::Rgb {
             // First buffer contains interleaved RGB
-            let rgb_channels = images_from_rgb_vec(&output_buffers[0], (xsize, ysize))?;
+            let rgb_channels =
+                images_from_rgb_vec(&output_buffers[0], (image_data.size.0, image_data.size.1))?;
             image_frame.channels.extend(rgb_channels);
 
             // Additional buffers contain extra channels (e.g., alpha)
             for vec in output_buffers.iter().skip(1) {
                 image_frame
                     .channels
-                    .push(image_from_vec(vec, (xsize, ysize))?);
+                    .push(image_from_vec(vec, (image_data.size.0, image_data.size.1))?);
             }
         } else {
             // Each buffer contains a single channel
             for vec in output_buffers.iter() {
                 image_frame
                     .channels
-                    .push(image_from_vec(vec, (xsize, ysize))?);
+                    .push(image_from_vec(vec, (image_data.size.0, image_data.size.1))?);
             }
         }
 
