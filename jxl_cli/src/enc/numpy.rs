@@ -53,6 +53,7 @@ fn numpy_bytes(image_data: ImageData<f32>, num_channels: usize) -> Vec<u8> {
     let (width, height) = size;
 
     for frame in image_data.frames {
+        assert_eq!(frame.size, size);
         assert_eq!(frame.channels.len(), num_channels);
         for channel in &frame.channels {
             assert_eq!(channel.size(), size);
