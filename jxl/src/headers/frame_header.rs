@@ -20,7 +20,7 @@ use std::cmp::min;
 use super::{Animation, permutation::Permutation};
 
 #[derive(UnconditionalCoder, Copy, Clone, PartialEq, Debug, FromPrimitive)]
-enum FrameType {
+pub enum FrameType {
     RegularFrame = 0,
     LFFrame = 1,
     ReferenceOnly = 2,
@@ -287,7 +287,7 @@ pub struct FrameHeader {
 
     #[coder(Bits(2))]
     #[default(FrameType::RegularFrame)]
-    frame_type: FrameType,
+    pub frame_type: FrameType,
 
     #[coder(Bits(1))]
     #[default(Encoding::VarDCT)]

@@ -15,7 +15,10 @@ use crate::{
     },
     error::{Error, Result},
     frame::{DecoderState, Frame, Section},
-    headers::{FileHeader, frame_header::FrameHeader},
+    headers::{
+        FileHeader,
+        frame_header::{FrameHeader, FrameType},
+    },
     icc::IncrementalIccReader,
 };
 
@@ -54,6 +57,8 @@ pub(super) struct CodestreamParser {
     sections: VecDeque<SectionBuffer>,
     ready_section_data: usize,
     skip_sections: bool,
+    // True when we need to process frames without copying them to output buffers, e.g. reference frames
+    allow_empty_output: bool,
 
     section_state: SectionState,
     available_sections: Vec<SectionBuffer>,
@@ -78,9 +83,18 @@ impl CodestreamParser {
             sections: VecDeque::new(),
             ready_section_data: 0,
             skip_sections: false,
+            allow_empty_output: false,
             section_state: SectionState::new(0, 0),
             available_sections: vec![],
             has_more_frames: true,
+        }
+    }
+
+    fn has_regular_frame(&self) -> bool {
+        if let Some(frame) = &self.frame {
+            frame.header().frame_type == FrameType::RegularFrame
+        } else {
+            false
         }
     }
 
@@ -94,8 +108,9 @@ impl CodestreamParser {
         // If we have sections to read, read into sections; otherwise, read into the local buffer.
         loop {
             if !self.sections.is_empty() {
+                let regular_frame = self.has_regular_frame();
                 // non_section_buf may contain leftover section data from TOC parsing
-                if output_buffers.is_none() {
+                if !self.allow_empty_output && output_buffers.is_none() {
                     self.skip_sections = true;
                 }
 
@@ -110,8 +125,11 @@ impl CodestreamParser {
 
                     // If all sections are processed, frame is complete
                     if self.sections.is_empty() {
-                        self.frame = None;
-                        return Ok(());
+                        self.allow_empty_output = false;
+                        if regular_frame {
+                            return Ok(());
+                        }
+                        continue;
                     }
 
                     // This is just an estimate as there could be box bytes in the middle.
@@ -201,8 +219,11 @@ impl CodestreamParser {
                 }
                 if self.sections.is_empty() {
                     // Go back to parsing a new frame header, if any.
-                    self.frame = None;
-                    return Ok(());
+                    self.allow_empty_output = false;
+                    if regular_frame {
+                        return Ok(());
+                    }
+                    continue;
                 }
             } else {
                 // Trying to read a frame or a file header.
@@ -218,7 +239,12 @@ impl CodestreamParser {
                 }
 
                 if self.frame.is_some() {
-                    return Ok(());
+                    if self.has_regular_frame() {
+                        return Ok(());
+                    } else {
+                        self.allow_empty_output = true;
+                        continue;
+                    }
                 }
 
                 let available_codestream = box_parser.get_more_codestream(input)? as usize;
@@ -239,16 +265,17 @@ impl CodestreamParser {
 
                 self.process_non_section(decode_options)?;
 
-                // Check if we completed a state transition
                 if self.decoder_state.is_some() && self.frame_header.is_none() {
-                    // We just finished setting up image info, return to complete the transition
                     return Ok(());
                 }
                 if self.frame.is_some() {
-                    // We just finished setting up frame info, return to complete the transition
-                    return Ok(());
+                    if self.has_regular_frame() {
+                        return Ok(());
+                    } else {
+                        self.allow_empty_output = true;
+                        continue;
+                    }
                 }
-                // Otherwise continue processing
             }
         }
     }
