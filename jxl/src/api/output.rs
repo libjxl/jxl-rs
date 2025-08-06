@@ -46,7 +46,7 @@ impl<'a> JxlOutputBuffer<'a> {
     }
 
     /// Creates a new JxlOutputBuffer from raw pointers.
-    /// It is guaranteed that `buf` will never be used to write uninitalized data.
+    /// It is guaranteed that `buf` will never be used to write uninitialized data.
     ///
     /// # Safety
     /// - `buf` must be valid for writes for all bytes in the range
@@ -115,7 +115,7 @@ impl<'a> JxlOutputBuffer<'a> {
         // invariant.
         let start = unsafe { self.buf.add(start) };
         // Safety: due to the struct safety invariant, we know the entire slice is in a range of
-        // memory valid for writes. Moreover, the caller promises not to write uninitalized data
+        // memory valid for writes. Moreover, the caller promises not to write uninitialized data
         // in the returned slice. Finally, as we take self by mutable reference and `self` has
         // exclusive access to the slices described in the safety invariant, we know aliasing
         // rules will not be violated.
