@@ -15,7 +15,6 @@ use jxl::image::Image;
 use jxl::util::NewWithCapacity;
 use std::fs;
 use std::io::Read;
-use std::mem::MaybeUninit;
 use std::path::PathBuf;
 
 pub mod enc;
@@ -90,27 +89,25 @@ struct Opt {
     with_api: bool,
 }
 
-fn image_from_vec(vec: &[MaybeUninit<u8>], size: (usize, usize)) -> Result<Image<f32>> {
+fn image_from_vec(vec: &[u8], size: (usize, usize)) -> Result<Image<f32>> {
     let mut image = Image::<f32>::new(size)?;
     let mut rect = image.as_rect_mut();
     for y in 0..size.1 {
         let row = rect.row(y);
         for x in 0..size.0 {
-            row[x] = f32::from_ne_bytes(unsafe {
-                [
-                    vec[4 * (y * size.0 + x)].assume_init(),
-                    vec[4 * (y * size.0 + x) + 1].assume_init(),
-                    vec[4 * (y * size.0 + x) + 2].assume_init(),
-                    vec[4 * (y * size.0 + x) + 3].assume_init(),
-                ]
-            })
+            row[x] = f32::from_ne_bytes([
+                vec[4 * (y * size.0 + x)],
+                vec[4 * (y * size.0 + x) + 1],
+                vec[4 * (y * size.0 + x) + 2],
+                vec[4 * (y * size.0 + x) + 3],
+            ])
         }
     }
     Ok(image)
 }
 
 // Extract RGB channels from interleaved RGB buffer
-fn images_from_rgb_vec(vec: &[MaybeUninit<u8>], size: (usize, usize)) -> Result<Vec<Image<f32>>> {
+fn images_from_rgb_vec(vec: &[u8], size: (usize, usize)) -> Result<Vec<Image<f32>>> {
     let mut r_image = Image::<f32>::new(size)?;
     let mut g_image = Image::<f32>::new(size)?;
     let mut b_image = Image::<f32>::new(size)?;
@@ -125,30 +122,24 @@ fn images_from_rgb_vec(vec: &[MaybeUninit<u8>], size: (usize, usize)) -> Result<
         let b_row = b_rect.row(y);
         for x in 0..size.0 {
             let base_idx = 12 * (y * size.0 + x);
-            r_row[x] = f32::from_ne_bytes(unsafe {
-                [
-                    vec[base_idx].assume_init(),
-                    vec[base_idx + 1].assume_init(),
-                    vec[base_idx + 2].assume_init(),
-                    vec[base_idx + 3].assume_init(),
-                ]
-            });
-            g_row[x] = f32::from_ne_bytes(unsafe {
-                [
-                    vec[base_idx + 4].assume_init(),
-                    vec[base_idx + 5].assume_init(),
-                    vec[base_idx + 6].assume_init(),
-                    vec[base_idx + 7].assume_init(),
-                ]
-            });
-            b_row[x] = f32::from_ne_bytes(unsafe {
-                [
-                    vec[base_idx + 8].assume_init(),
-                    vec[base_idx + 9].assume_init(),
-                    vec[base_idx + 10].assume_init(),
-                    vec[base_idx + 11].assume_init(),
-                ]
-            });
+            r_row[x] = f32::from_ne_bytes([
+                vec[base_idx],
+                vec[base_idx + 1],
+                vec[base_idx + 2],
+                vec[base_idx + 3],
+            ]);
+            g_row[x] = f32::from_ne_bytes([
+                vec[base_idx + 4],
+                vec[base_idx + 5],
+                vec[base_idx + 6],
+                vec[base_idx + 7],
+            ]);
+            b_row[x] = f32::from_ne_bytes([
+                vec[base_idx + 8],
+                vec[base_idx + 9],
+                vec[base_idx + 10],
+                vec[base_idx + 11],
+            ]);
         }
     }
     Ok(vec![r_image, g_image, b_image])
@@ -233,11 +224,10 @@ fn decode_with_api(opt: Opt) -> Result<()> {
             }
         }?;
 
-        let mut output_buffers: Vec<Vec<MaybeUninit<u8>>> =
-            Vec::new_with_capacity(samples_per_pixel)?;
+        let mut output_buffers: Vec<Vec<u8>> = Vec::new_with_capacity(samples_per_pixel)?;
 
         output_buffers.push(vec![
-            MaybeUninit::uninit();
+            0;
             image_data.size.0
                 * image_data.size.1
                 * samples_per_pixel_except_alpha
@@ -248,10 +238,7 @@ fn decode_with_api(opt: Opt) -> Result<()> {
             assert!(num_extra_channels > 0);
         }
         for _ in 0..num_extra_channels {
-            output_buffers.push(vec![
-                MaybeUninit::uninit();
-                image_data.size.0 * image_data.size.1 * 4
-            ]);
+            output_buffers.push(vec![0; image_data.size.0 * image_data.size.1 * 4]);
         }
 
         let mut outputs = output_buffers
@@ -264,7 +251,7 @@ fn decode_with_api(opt: Opt) -> Result<()> {
                 } else {
                     4 // Single channel
                 };
-                JxlOutputBuffer::new_uninit(
+                JxlOutputBuffer::new(
                     buffer.as_mut_slice(),
                     image_data.size.1,
                     bytes_per_pixel * image_data.size.0,
