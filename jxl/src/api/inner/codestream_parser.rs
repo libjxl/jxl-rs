@@ -100,6 +100,20 @@ impl CodestreamParser {
                 }
 
                 if !self.skip_sections {
+                    self.process_sections(&mut output_buffers).map_err(|e| {
+                        if matches!(e, Error::OutOfBounds(_)) {
+                            Error::SectionTooShort
+                        } else {
+                            e
+                        }
+                    })?;
+
+                    // If all sections are processed, frame is complete
+                    if self.sections.is_empty() {
+                        self.frame = None;
+                        return Ok(());
+                    }
+
                     // This is just an estimate as there could be box bytes in the middle.
                     let mut readable_section_data = (self.non_section_buf.len()
                         + input.available_bytes()?
@@ -115,24 +129,6 @@ impl CodestreamParser {
                         if readable_section_data == 0 {
                             break;
                         }
-                    }
-                    // Check if we already have all the data we need
-                    let total_needed = self.sections.iter().map(|s| s.len).sum::<usize>();
-                    if self.ready_section_data >= total_needed {
-                        self.process_sections(&mut output_buffers).map_err(|e| {
-                            if matches!(e, Error::OutOfBounds(_)) {
-                                Error::SectionTooShort
-                            } else {
-                                e
-                            }
-                        })?;
-
-                        // If all sections are processed, frame is complete
-                        if self.sections.is_empty() {
-                            self.frame = None;
-                            return Ok(());
-                        }
-                        continue;
                     }
 
                     // Read sections up to the end of the current box.
@@ -213,72 +209,35 @@ impl CodestreamParser {
                 assert!(self.frame.is_none());
                 assert!(self.has_more_frames);
 
-                // Try processing existing buffer data first to avoid infinite loops
-                // when container reaches EOF with partial data
-                if !self.non_section_buf.is_empty() {
-                    let initial_len = self.non_section_buf.len();
-                    let initial_bit_offset = self.non_section_bit_offset;
-
-                    match self.process_non_section(decode_options) {
-                        Ok(()) => {}
-                        Err(Error::OutOfBounds(_)) => {
-                            // If we need more data, that's expected - we'll get it on the next iteration
-                        }
-                        Err(e) => return Err(e),
+                match self.process_non_section(decode_options) {
+                    Ok(()) => {}
+                    Err(Error::OutOfBounds(_)) => {
+                        // If we need more data, that's expected - we'll get it on the next iteration
                     }
-
-                    // Check if we made progress
-                    if self.non_section_buf.len() < initial_len
-                        || self.non_section_bit_offset != initial_bit_offset
-                        || self.frame.is_some()
-                    {
-                        // Check if we completed frame setup
-                        if self.frame.is_some() {
-                            return Ok(());
-                        }
-                        // We made progress, continue processing
-                    }
-                    // If no progress, fall through to get more data
+                    Err(e) => return Err(e),
                 }
 
-                // If buffer is empty or we couldn't make progress, try to get more data
-                if self.non_section_buf.is_empty() || self.frame.is_none() {
-                    let available_codestream = box_parser.get_more_codestream(input)? as usize;
+                if self.frame.is_some() {
+                    return Ok(());
+                }
 
-                    if available_codestream == 0 && self.non_section_buf.len() <= 1 {
-                        return Err(Error::OutOfBounds(1));
-                    }
-
-                    if available_codestream > 0 {
-                        // When available_codestream is u64::MAX (from jxlc length 0), let refill read as much as it can
-                        let refill_limit = if available_codestream == usize::MAX {
-                            None
+                let available_codestream = box_parser.get_more_codestream(input)? as usize;
+                let c = self.non_section_buf.refill(
+                    |buf| {
+                        if !box_parser.box_buffer.is_empty() {
+                            let c = box_parser.box_buffer.take(buf);
+                            box_parser.box_buffer.consume(c);
+                            Ok(c)
                         } else {
-                            Some(available_codestream)
-                        };
-
-                        let c = self.non_section_buf.refill(
-                            |buf| {
-                                if !box_parser.box_buffer.is_empty() {
-                                    let c = box_parser.box_buffer.take(buf);
-                                    box_parser.box_buffer.consume(c);
-                                    Ok(c)
-                                } else {
-                                    input.read(buf)
-                                }
-                            },
-                            refill_limit,
-                        )?;
-
-                        if c > 0 {
-                            box_parser.consume_codestream(c as u64);
-                        } else if self.non_section_buf.len() <= 1 {
-                            return Err(Error::OutOfBounds(1));
+                            input.read(buf)
                         }
+                    },
+                    Some(available_codestream),
+                )?;
 
-                        self.process_non_section(decode_options)?;
-                    }
-                }
+                box_parser.consume_codestream(c as u64);
+
+                self.process_non_section(decode_options)?;
 
                 // Check if we completed a state transition
                 if self.decoder_state.is_some() && self.frame_header.is_none() {
