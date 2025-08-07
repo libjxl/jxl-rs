@@ -86,6 +86,10 @@ struct Opt {
     with_api: bool,
 }
 
+fn f32_from_bytes(vec: &[u8]) -> f32 {
+    f32::from_ne_bytes(vec.try_into().unwrap())
+}
+
 fn image_from_vec(vec: &[u8], size: (usize, usize)) -> Result<Image<f32>> {
     let mut image = Image::<f32>::new(size)?;
     let mut rect = image.as_rect_mut();
@@ -93,7 +97,7 @@ fn image_from_vec(vec: &[u8], size: (usize, usize)) -> Result<Image<f32>> {
         let row = rect.row(y);
         for (x, v) in row.iter_mut().enumerate().take(size.0) {
             let base_idx = 4 * (y * size.0 + x);
-            *v = f32::from_ne_bytes(vec[base_idx..base_idx + 4].try_into().unwrap());
+            *v = f32_from_bytes(&vec[base_idx..base_idx + 4]);
         }
     }
     Ok(image)
@@ -115,9 +119,9 @@ fn images_from_rgb_vec(vec: &[u8], size: (usize, usize)) -> Result<Vec<Image<f32
         let b_row = b_rect.row(y);
         for x in 0..size.0 {
             let base_idx = 12 * (y * size.0 + x);
-            r_row[x] = f32::from_ne_bytes(vec[base_idx..base_idx + 4].try_into().unwrap());
-            g_row[x] = f32::from_ne_bytes(vec[base_idx + 4..base_idx + 8].try_into().unwrap());
-            b_row[x] = f32::from_ne_bytes(vec[base_idx + 8..base_idx + 12].try_into().unwrap());
+            r_row[x] = f32_from_bytes(&vec[base_idx..base_idx + 4]);
+            g_row[x] = f32_from_bytes(&vec[base_idx + 4..base_idx + 8]);
+            b_row[x] = f32_from_bytes(&vec[base_idx + 8..base_idx + 12]);
         }
     }
     Ok(vec![r_image, g_image, b_image])
