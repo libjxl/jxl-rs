@@ -24,6 +24,48 @@ fn png_color(num_channels: usize) -> Result<png::ColorType> {
     }
 }
 
+fn make_cicp(encoding: &JxlColorEncoding) -> Option<png::CodingIndependentCodePoints> {
+    let JxlColorEncoding::RgbColorSpace {
+        white_point,
+        primaries,
+        transfer_function,
+        ..
+    } = encoding
+    else {
+        return None;
+    };
+
+    Some(png::CodingIndependentCodePoints {
+        color_primaries: match white_point {
+            JxlWhitePoint::DCI => {
+                if *primaries == JxlPrimaries::P3 {
+                    11
+                } else {
+                    return None;
+                }
+            }
+            JxlWhitePoint::D65 => match primaries {
+                JxlPrimaries::SRGB => 1,
+                JxlPrimaries::BT2100 => 9,
+                JxlPrimaries::P3 => 12,
+                JxlPrimaries::Chromaticities { .. } => return None,
+            },
+            _ => return None,
+        },
+        transfer_function: match transfer_function {
+            JxlTransferFunction::BT709 => 1,
+            JxlTransferFunction::Linear => 8,
+            JxlTransferFunction::SRGB => 13,
+            JxlTransferFunction::PQ => 16,
+            JxlTransferFunction::DCI => 17,
+            JxlTransferFunction::HLG => 18,
+            JxlTransferFunction::Gamma(_) => return None,
+        },
+        matrix_coefficients: 0,
+        is_video_full_range_image: true,
+    })
+}
+
 fn encode_png(
     image_data: ImageData<f32>,
     bit_depth: BitDepth,
@@ -89,7 +131,7 @@ fn encode_png(
             });
         }
         JxlColorProfile::Simple(encoding) => {
-            // TODO(sboukortt): CICP
+            info.coding_independent_code_points = make_cicp(encoding);
             let icc_bytes = encoding.maybe_create_profile()?.unwrap();
             info.icc_profile = Some(Cow::from(icc_bytes));
         }
