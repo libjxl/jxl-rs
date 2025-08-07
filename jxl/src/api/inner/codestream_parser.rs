@@ -58,7 +58,7 @@ pub(super) struct CodestreamParser {
     ready_section_data: usize,
     skip_sections: bool,
     // True when we need to process frames without copying them to output buffers, e.g. reference frames
-    allow_empty_output: bool,
+    process_without_output: bool,
 
     section_state: SectionState,
     available_sections: Vec<SectionBuffer>,
@@ -83,7 +83,7 @@ impl CodestreamParser {
             sections: VecDeque::new(),
             ready_section_data: 0,
             skip_sections: false,
-            allow_empty_output: false,
+            process_without_output: false,
             section_state: SectionState::new(0, 0),
             available_sections: vec![],
             has_more_frames: true,
@@ -110,7 +110,7 @@ impl CodestreamParser {
             if !self.sections.is_empty() {
                 let regular_frame = self.has_regular_frame();
                 // non_section_buf may contain leftover section data from TOC parsing
-                if !self.allow_empty_output && output_buffers.is_none() {
+                if !self.process_without_output && output_buffers.is_none() {
                     self.skip_sections = true;
                 }
 
@@ -125,7 +125,7 @@ impl CodestreamParser {
 
                     // If all sections are processed, frame is complete
                     if self.sections.is_empty() {
-                        self.allow_empty_output = false;
+                        self.process_without_output = false;
                         if regular_frame {
                             return Ok(());
                         }
@@ -219,7 +219,7 @@ impl CodestreamParser {
                 }
                 if self.sections.is_empty() {
                     // Go back to parsing a new frame header, if any.
-                    self.allow_empty_output = false;
+                    self.process_without_output = false;
                     if regular_frame {
                         return Ok(());
                     }
@@ -242,7 +242,7 @@ impl CodestreamParser {
                     if self.has_regular_frame() {
                         return Ok(());
                     } else {
-                        self.allow_empty_output = true;
+                        self.process_without_output = true;
                         continue;
                     }
                 }
@@ -272,7 +272,7 @@ impl CodestreamParser {
                     if self.has_regular_frame() {
                         return Ok(());
                     } else {
-                        self.allow_empty_output = true;
+                        self.process_without_output = true;
                         continue;
                     }
                 }
