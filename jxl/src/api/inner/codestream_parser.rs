@@ -106,7 +106,6 @@ impl CodestreamParser {
         loop {
             if !self.sections.is_empty() {
                 let regular_frame = self.has_visible_frame();
-                // non_section_buf may contain leftover section data from TOC parsing
                 if !self.process_without_output && output_buffers.is_none() {
                     self.skip_sections = true;
                 }
