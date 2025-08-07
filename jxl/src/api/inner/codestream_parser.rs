@@ -253,7 +253,6 @@ impl CodestreamParser {
                     |buf| {
                         if !box_parser.box_buffer.is_empty() {
                             let c = box_parser.box_buffer.take(buf);
-                            box_parser.box_buffer.consume(c);
                             Ok(c)
                         } else {
                             input.read(buf)
