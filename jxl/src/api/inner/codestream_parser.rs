@@ -90,9 +90,10 @@ impl CodestreamParser {
         }
     }
 
-    fn has_regular_frame(&self) -> bool {
+    fn has_renderable_frame(&self) -> bool {
         if let Some(frame) = &self.frame {
-            frame.header().frame_type == FrameType::RegularFrame
+            let frame_type = frame.header().frame_type;
+            frame_type == FrameType::RegularFrame || frame_type == FrameType::SkipProgressive
         } else {
             false
         }
@@ -108,7 +109,7 @@ impl CodestreamParser {
         // If we have sections to read, read into sections; otherwise, read into the local buffer.
         loop {
             if !self.sections.is_empty() {
-                let regular_frame = self.has_regular_frame();
+                let regular_frame = self.has_renderable_frame();
                 // non_section_buf may contain leftover section data from TOC parsing
                 if !self.process_without_output && output_buffers.is_none() {
                     self.skip_sections = true;
@@ -239,7 +240,7 @@ impl CodestreamParser {
                 }
 
                 if self.frame.is_some() {
-                    if self.has_regular_frame() {
+                    if self.has_renderable_frame() {
                         return Ok(());
                     } else {
                         self.process_without_output = true;
@@ -269,7 +270,7 @@ impl CodestreamParser {
                     return Ok(());
                 }
                 if self.frame.is_some() {
-                    if self.has_regular_frame() {
+                    if self.has_renderable_frame() {
                         return Ok(());
                     } else {
                         self.process_without_output = true;
