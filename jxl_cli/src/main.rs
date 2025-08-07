@@ -95,12 +95,8 @@ fn image_from_vec(vec: &[u8], size: (usize, usize)) -> Result<Image<f32>> {
     for y in 0..size.1 {
         let row = rect.row(y);
         for x in 0..size.0 {
-            row[x] = f32::from_ne_bytes([
-                vec[4 * (y * size.0 + x)],
-                vec[4 * (y * size.0 + x) + 1],
-                vec[4 * (y * size.0 + x) + 2],
-                vec[4 * (y * size.0 + x) + 3],
-            ])
+            let base_idx = 4 * (y * size.0 + x);
+            row[x] = f32::from_ne_bytes(vec[base_idx..base_idx+4].try_into().unwrap());
         }
     }
     Ok(image)
@@ -122,24 +118,9 @@ fn images_from_rgb_vec(vec: &[u8], size: (usize, usize)) -> Result<Vec<Image<f32
         let b_row = b_rect.row(y);
         for x in 0..size.0 {
             let base_idx = 12 * (y * size.0 + x);
-            r_row[x] = f32::from_ne_bytes([
-                vec[base_idx],
-                vec[base_idx + 1],
-                vec[base_idx + 2],
-                vec[base_idx + 3],
-            ]);
-            g_row[x] = f32::from_ne_bytes([
-                vec[base_idx + 4],
-                vec[base_idx + 5],
-                vec[base_idx + 6],
-                vec[base_idx + 7],
-            ]);
-            b_row[x] = f32::from_ne_bytes([
-                vec[base_idx + 8],
-                vec[base_idx + 9],
-                vec[base_idx + 10],
-                vec[base_idx + 11],
-            ]);
+            r_row[x] = f32::from_ne_bytes(vec[base_idx..base_idx+4].try_into().unwrap());
+            g_row[x] = f32::from_ne_bytes(vec[base_idx+4..base_idx+8].try_into().unwrap());
+            b_row[x] = f32::from_ne_bytes(vec[base_idx+8..base_idx+12].try_into().unwrap());
         }
     }
     Ok(vec![r_image, g_image, b_image])
