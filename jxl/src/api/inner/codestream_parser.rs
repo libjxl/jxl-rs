@@ -234,10 +234,12 @@ impl CodestreamParser {
                 self.process_non_section(decode_options)?;
 
                 if self.decoder_state.is_some() && self.frame_header.is_none() {
+                    // Return to caller if we found image info.
                     return Ok(());
                 }
                 if self.frame.is_some() {
                     if self.has_visible_frame() {
+                        // Return to caller if we found visible frame info.
                         return Ok(());
                     } else {
                         self.process_without_output = true;
