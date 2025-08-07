@@ -4,11 +4,8 @@
 // license that can be found in the LICENSE file.
 
 use clap::Parser;
-use jxl::api::{
-    JxlColorEncoding, JxlColorProfile, JxlColorType, JxlDecoder, JxlDecoderOptions, JxlOutputBuffer,
-};
-use jxl::container::{ContainerParser, ParseEvent};
-use jxl::decode::{DecodeOptions, DecodeResult, ImageData, ImageFrame};
+use jxl::api::{JxlColorProfile, JxlColorType, JxlDecoder, JxlDecoderOptions, JxlOutputBuffer};
+use jxl::decode::{ImageData, ImageFrame};
 use jxl::error::{Error, Result};
 use jxl::headers::bit_depth::BitDepth;
 use jxl::image::Image;
@@ -84,9 +81,6 @@ struct Opt {
     /// If specified, takes precedence over the bit depth in the input metadata
     #[clap(long)]
     override_bitdepth: Option<u32>,
-
-    #[clap(long, short, action)]
-    with_api: bool,
 }
 
 fn image_from_vec(vec: &[u8], size: (usize, usize)) -> Result<Image<f32>> {
@@ -126,7 +120,17 @@ fn images_from_rgb_vec(vec: &[u8], size: (usize, usize)) -> Result<Vec<Image<f32
     Ok(vec![r_image, g_image, b_image])
 }
 
-fn decode_with_api(opt: Opt) -> Result<()> {
+fn main() -> Result<(), Error> {
+    #[cfg(feature = "tracing-subscriber")]
+    {
+        use tracing_subscriber::{EnvFilter, fmt, prelude::*};
+        tracing_subscriber::registry()
+            .with(fmt::layer())
+            .with(EnvFilter::from_default_env())
+            .init();
+    }
+
+    let opt = Opt::parse();
     let input_filename = opt.input;
     let mut file = match fs::File::open(input_filename.clone()) {
         Ok(file) => file,
@@ -311,121 +315,4 @@ fn decode_with_api(opt: Opt) -> Result<()> {
     image_result?;
 
     Ok(())
-}
-
-fn decode_with_lib(opt: Opt) -> Result<()> {
-    let input_filename = opt.input;
-    let mut file = match fs::File::open(input_filename.clone()) {
-        Ok(file) => file,
-        Err(err) => {
-            println!("Cannot open file: {err}");
-            return Err(Error::FileNotFound(input_filename));
-        }
-    };
-
-    let mut parser = ContainerParser::new();
-    let mut buf = vec![0u8; 4096];
-    let mut buf_valid = 0usize;
-    let mut codestream = Vec::new();
-    loop {
-        let chunk_size = match file.read(&mut buf[buf_valid..]) {
-            Ok(l) => l,
-            Err(err) => {
-                return Err(Error::InputReadFailure(err));
-            }
-        };
-        if chunk_size == 0 {
-            break;
-        }
-        buf_valid += chunk_size;
-
-        for event in parser.process_bytes(&buf[..buf_valid]) {
-            match event {
-                Ok(ParseEvent::BitstreamKind(kind)) => {
-                    println!("Bitstream kind: {kind:?}");
-                }
-                Ok(ParseEvent::Codestream(buf)) => {
-                    codestream.extend_from_slice(buf);
-                }
-                Err(err) => {
-                    println!("Error parsing JXL codestream: {err}");
-                    return Err(err);
-                }
-            }
-        }
-
-        let consumed = parser.previous_consumed_bytes();
-        buf.copy_within(consumed..buf_valid, 0);
-        buf_valid -= consumed;
-    }
-
-    let numpy_output = String::from(opt.output.to_string_lossy()).ends_with(".npy");
-    let mut options = DecodeOptions::new();
-    options.xyb_output_linear = numpy_output;
-    options.render_spotcolors = !numpy_output;
-    let DecodeResult {
-        image_data,
-        bit_depth,
-        original_icc,
-        data_icc,
-    } = jxl::decode::decode_jxl_codestream(options, &codestream)?;
-
-    let original_icc_result = save_icc(original_icc.as_slice(), opt.original_icc_out);
-    let srgb;
-    let grayscale = image_data.frames[0].channels.len() < 3;
-    let data_icc_result = save_icc(
-        match data_icc.as_ref() {
-            Some(data_icc) => data_icc.as_slice(),
-            None => {
-                srgb = JxlColorEncoding::srgb(grayscale)
-                    .maybe_create_profile()?
-                    .unwrap();
-                srgb.as_slice()
-            }
-        },
-        opt.icc_out,
-    );
-    let bit_depth = match opt.override_bitdepth {
-        None => bit_depth,
-        Some(num_bits) => BitDepth::integer_samples(num_bits),
-    };
-    let color_profile = match data_icc {
-        Some(vec) => JxlColorProfile::Icc(vec),
-        None => JxlColorProfile::Simple(JxlColorEncoding::srgb(grayscale)),
-    };
-    let image_result = save_image(image_data, bit_depth, &color_profile, opt.output);
-
-    if let Err(ref err) = original_icc_result {
-        println!("Failed to save original ICC profile: {err}");
-    }
-    if let Err(ref err) = data_icc_result {
-        println!("Failed to save data ICC profile: {err}");
-    }
-    if let Err(ref err) = image_result {
-        println!("Failed to save image: {err}");
-    }
-
-    original_icc_result?;
-    data_icc_result?;
-    image_result?;
-
-    Ok(())
-}
-
-fn main() -> Result<(), Error> {
-    #[cfg(feature = "tracing-subscriber")]
-    {
-        use tracing_subscriber::{EnvFilter, fmt, prelude::*};
-        tracing_subscriber::registry()
-            .with(fmt::layer())
-            .with(EnvFilter::from_default_env())
-            .init();
-    }
-
-    let opt = Opt::parse();
-    if opt.with_api {
-        decode_with_api(opt)
-    } else {
-        decode_with_lib(opt)
-    }
 }
