@@ -99,15 +99,15 @@ impl RenderPipelineBuilder for SimpleRenderPipelineBuilder {
                     downsample: (0, 0),
                 });
             } else {
-                if let Some(ty) = info.ty {
-                    if ty != Stage::Type::INPUT_TYPE {
-                        return Err(Error::PipelineChannelTypeMismatch(
-                            stage.to_string(),
-                            c,
-                            Stage::Type::INPUT_TYPE,
-                            ty,
-                        ));
-                    }
+                if let Some(ty) = info.ty
+                    && ty != Stage::Type::INPUT_TYPE
+                {
+                    return Err(Error::PipelineChannelTypeMismatch(
+                        stage.to_string(),
+                        c,
+                        Stage::Type::INPUT_TYPE,
+                        ty,
+                    ));
                 }
                 after_info.push(ChannelInfo {
                     ty: Some(Stage::Type::OUTPUT_TYPE.unwrap_or(Stage::Type::INPUT_TYPE)),

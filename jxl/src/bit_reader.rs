@@ -34,7 +34,7 @@ pub const MAX_BITS_PER_CALL: usize = 56;
 
 impl<'a> BitReader<'a> {
     /// Constructs a BitReader for a given range of data.
-    pub fn new(data: &[u8]) -> BitReader {
+    pub fn new(data: &[u8]) -> BitReader<'_> {
         BitReader {
             data,
             bit_buf: 0,
