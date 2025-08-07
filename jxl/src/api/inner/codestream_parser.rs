@@ -226,37 +226,24 @@ impl CodestreamParser {
                 assert!(self.frame.is_none());
                 assert!(self.has_more_frames);
 
-                match self.process_non_section(decode_options) {
-                    Ok(()) => {}
-                    Err(Error::OutOfBounds(_)) => {
-                        // If we need more data, that's expected - we'll get it on the next iteration
-                    }
+                let available_codestream = match box_parser.get_more_codestream(input) {
+                    Err(Error::OutOfBounds(_)) => 0,
+                    Ok(c) => c as usize,
                     Err(e) => return Err(e),
+                };
+                if available_codestream > 0 {
+                    let c = self.non_section_buf.refill(
+                        |buf| {
+                            if !box_parser.box_buffer.is_empty() {
+                                Ok(box_parser.box_buffer.take(buf))
+                            } else {
+                                input.read(buf)
+                            }
+                        },
+                        Some(available_codestream),
+                    )?;
+                    box_parser.consume_codestream(c as u64);
                 }
-
-                if self.frame.is_some() {
-                    if self.has_visible_frame() {
-                        return Ok(());
-                    } else {
-                        self.process_without_output = true;
-                        continue;
-                    }
-                }
-
-                let available_codestream = box_parser.get_more_codestream(input)? as usize;
-                let c = self.non_section_buf.refill(
-                    |buf| {
-                        if !box_parser.box_buffer.is_empty() {
-                            let c = box_parser.box_buffer.take(buf);
-                            Ok(c)
-                        } else {
-                            input.read(buf)
-                        }
-                    },
-                    Some(available_codestream),
-                )?;
-
-                box_parser.consume_codestream(c as u64);
 
                 self.process_non_section(decode_options)?;
 
