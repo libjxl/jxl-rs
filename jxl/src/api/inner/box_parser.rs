@@ -164,6 +164,9 @@ impl BoxParser {
     }
 
     pub(super) fn consume_codestream(&mut self, amount: u64) {
+        if amount == 0 {
+            return;
+        }
         let ParseState::CodestreamBox(cb) = &mut self.state else {
             unreachable!()
         };

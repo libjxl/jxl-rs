@@ -111,23 +111,6 @@ impl CodestreamParser {
                 }
 
                 if !self.skip_sections {
-                    self.process_sections(&mut output_buffers).map_err(|e| {
-                        if matches!(e, Error::OutOfBounds(_)) {
-                            Error::SectionTooShort
-                        } else {
-                            e
-                        }
-                    })?;
-
-                    // If all sections are processed, frame is complete
-                    if self.sections.is_empty() {
-                        self.process_without_output = false;
-                        if regular_frame {
-                            return Ok(());
-                        }
-                        continue;
-                    }
-
                     // This is just an estimate as there could be box bytes in the middle.
                     let mut readable_section_data = (self.non_section_buf.len()
                         + input.available_bytes()?
@@ -146,7 +129,11 @@ impl CodestreamParser {
                     }
 
                     // Read sections up to the end of the current box.
-                    let mut available_codestream = box_parser.get_more_codestream(input)? as usize;
+                    let mut available_codestream = match box_parser.get_more_codestream(input) {
+                        Err(Error::OutOfBounds(_)) => 0,
+                        Ok(c) => c as usize,
+                        Err(e) => return Err(e),
+                    };
                     let mut section_buffers = vec![];
                     let mut ready = self.ready_section_data;
                     for buf in self.sections.iter_mut() {
@@ -156,7 +143,8 @@ impl CodestreamParser {
                         let len = buf.data.len();
                         if len > ready {
                             let readable = (available_codestream + ready).min(len);
-                            section_buffers.push(IoSliceMut::new(&mut buf.data[ready..readable]));
+                            section_buffers
+                                .push(IoSliceMut::new(&mut buf.data[ready..readable]));
                             available_codestream =
                                 available_codestream.saturating_sub(readable - ready);
                             if available_codestream == 0 {
@@ -231,19 +219,17 @@ impl CodestreamParser {
                     Ok(c) => c as usize,
                     Err(e) => return Err(e),
                 };
-                if available_codestream > 0 {
-                    let c = self.non_section_buf.refill(
-                        |buf| {
-                            if !box_parser.box_buffer.is_empty() {
-                                Ok(box_parser.box_buffer.take(buf))
-                            } else {
-                                input.read(buf)
-                            }
-                        },
-                        Some(available_codestream),
-                    )?;
-                    box_parser.consume_codestream(c as u64);
-                }
+                let c = self.non_section_buf.refill(
+                    |buf| {
+                        if !box_parser.box_buffer.is_empty() {
+                            Ok(box_parser.box_buffer.take(buf))
+                        } else {
+                            input.read(buf)
+                        }
+                    },
+                    Some(available_codestream),
+                )?;
+                box_parser.consume_codestream(c as u64);
 
                 self.process_non_section(decode_options)?;
 
