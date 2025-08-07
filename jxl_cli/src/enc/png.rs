@@ -106,8 +106,9 @@ fn encode_png(
         png::BitDepth::Sixteen
     });
     if image_data.frames.len() > 1 {
-        // TODO(szabadka): Handle error.
-        let _ = encoder.set_animated(image_data.frames.len() as u32, 0);
+        encoder
+            .set_animated(image_data.frames.len() as u32, 0)
+            .unwrap();
     }
     let mut writer = encoder.write_header().unwrap();
     let num_pixels = height * width * num_channels;

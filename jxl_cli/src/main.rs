@@ -81,6 +81,9 @@ struct Opt {
     /// If specified, takes precedence over the bit depth in the input metadata
     #[clap(long)]
     override_bitdepth: Option<u32>,
+
+    #[clap(long, short, action)]
+    with_api: bool,
 }
 
 fn image_from_vec(vec: &[u8], size: (usize, usize)) -> Result<Image<f32>> {

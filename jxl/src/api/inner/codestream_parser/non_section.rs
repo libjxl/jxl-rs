@@ -79,22 +79,29 @@ impl CodestreamParser {
                 )?)
             };
             let output_color_profile = if file_header.image_metadata.xyb_encoded {
-                JxlColorProfile::Simple(
-                    if file_header.image_metadata.color_encoding.color_space == ColorSpace::Gray {
-                        JxlColorEncoding::GrayscaleColorSpace {
-                            white_point: JxlWhitePoint::D65,
-                            transfer_function: JxlTransferFunction::Linear,
-                            rendering_intent: RenderingIntent::Relative,
-                        }
-                    } else {
-                        JxlColorEncoding::RgbColorSpace {
-                            white_point: JxlWhitePoint::D65,
-                            primaries: JxlPrimaries::SRGB,
-                            transfer_function: JxlTransferFunction::Linear,
-                            rendering_intent: RenderingIntent::Relative,
-                        }
-                    },
-                )
+                if decode_options.xyb_output_linear {
+                    JxlColorProfile::Simple(
+                        if file_header.image_metadata.color_encoding.color_space == ColorSpace::Gray
+                        {
+                            JxlColorEncoding::GrayscaleColorSpace {
+                                white_point: JxlWhitePoint::D65,
+                                transfer_function: JxlTransferFunction::Linear,
+                                rendering_intent: RenderingIntent::Relative,
+                            }
+                        } else {
+                            JxlColorEncoding::RgbColorSpace {
+                                white_point: JxlWhitePoint::D65,
+                                primaries: JxlPrimaries::SRGB,
+                                transfer_function: JxlTransferFunction::Linear,
+                                rendering_intent: RenderingIntent::Relative,
+                            }
+                        },
+                    )
+                } else {
+                    JxlColorProfile::Simple(JxlColorEncoding::srgb(
+                        file_header.image_metadata.color_encoding.color_space == ColorSpace::Gray,
+                    ))
+                }
             } else {
                 embedded_color_profile.clone()
             };
