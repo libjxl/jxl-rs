@@ -370,7 +370,7 @@ impl JxlColorEncoding {
                 TransferFunction::BT709 => JxlTransferFunction::BT709,
                 TransferFunction::Linear => JxlTransferFunction::Linear,
                 TransferFunction::SRGB => JxlTransferFunction::SRGB,
-                TransferFunction::PQ => JxlTransferFunction::SRGB,
+                TransferFunction::PQ => JxlTransferFunction::PQ,
                 TransferFunction::DCI => JxlTransferFunction::DCI,
                 TransferFunction::HLG => JxlTransferFunction::HLG,
                 TransferFunction::Unknown => {
