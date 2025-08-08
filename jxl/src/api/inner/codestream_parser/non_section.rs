@@ -40,6 +40,7 @@ impl CodestreamParser {
                 ),
                 bit_depth: file_header.image_metadata.bit_depth,
                 orientation: file_header.image_metadata.orientation,
+                extra_channels: file_header.image_metadata.extra_channel_info.clone(),
             });
             self.file_header = Some(file_header);
             let bits = br.total_bits_read();
