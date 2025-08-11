@@ -103,21 +103,20 @@ impl BoxParser {
                             min_len + extra_len - self.box_buffer.len(),
                         ));
                     }
-                    let len = match &self.box_buffer[..] {
+                    let box_len = match &self.box_buffer[..] {
                         [0, 0, 0, 1, ..] => {
                             u64::from_be_bytes(self.box_buffer[8..16].try_into().unwrap())
                         }
                         _ => u32::from_be_bytes(self.box_buffer[0..4].try_into().unwrap()) as u64,
                     };
-
                     // Per JXL spec: jxlc box with length 0 has special meaning "extends to EOF"
-                    let content_len = if len == 0 && &ty == b"jxlc" {
+                    let content_len = if box_len == 0 && (&ty == b"jxlp" || &ty == b"jxlc") {
                         u64::MAX
                     } else {
-                        if len <= (min_len + extra_len) as u64 {
+                        if box_len <= (min_len + extra_len) as u64 {
                             return Err(Error::InvalidBox);
                         }
-                        len - (min_len - extra_len) as u64
+                        box_len - min_len as u64 - extra_len as u64
                     };
                     match &ty {
                         b"jxlc" => {
@@ -164,15 +163,13 @@ impl BoxParser {
     }
 
     pub(super) fn consume_codestream(&mut self, amount: u64) {
-        if amount == 0 {
-            return;
-        }
-        let ParseState::CodestreamBox(cb) = &mut self.state else {
+        if let ParseState::CodestreamBox(cb) = &mut self.state {
+            *cb = cb.checked_sub(amount).unwrap();
+            if *cb == 0 {
+                self.state = ParseState::BoxNeeded;
+            }
+        } else if amount != 0 {
             unreachable!()
-        };
-        *cb = cb.checked_sub(amount).unwrap();
-        if *cb == 0 {
-            self.state = ParseState::BoxNeeded;
         }
     }
 }
