@@ -11,6 +11,7 @@ use jxl::container::{ContainerParser, ParseEvent};
 use jxl::decode::{DecodeOptions, DecodeResult, ImageData, ImageFrame};
 use jxl::error::{Error, Result};
 use jxl::headers::bit_depth::BitDepth;
+use jxl::headers::extra_channels::ExtraChannel;
 use jxl::image::Image;
 use jxl::util::NewWithCapacity;
 use std::fs;
@@ -268,31 +269,33 @@ fn with_api(opt: Opt) -> Result<()> {
 
     let embedded_profile = decoder_with_image_info.embedded_color_profile();
     let output_profile = decoder_with_image_info.output_color_profile().clone();
+    let alpha_channel_index = decoder_with_image_info
+        .basic_info()
+        .extra_channels
+        .iter()
+        .position(|info| {
+            info.ec_type == ExtraChannel::Alpha
+        });
     let original_bit_depth = decoder_with_image_info.basic_info().bit_depth;
     let pixel_format = decoder_with_image_info.current_pixel_format().clone();
     let color_type = pixel_format.color_type;
-    let samples_per_pixel = color_type.samples_per_pixel();
-    let has_alpha = color_type.has_alpha();
-    let samples_per_pixel_except_alpha = if has_alpha {
-        samples_per_pixel - 1
-    } else {
-        samples_per_pixel
-    };
+    // TODO(zond): This is the way the API works right now, let's improve it when the API is cleverer.
+    let samples_per_pixel = if color_type == JxlColorType::Grayscale { 1 } else { 3 };
 
     let original_icc_result = save_icc(embedded_profile.as_icc().as_slice(), opt.original_icc_out);
     let data_icc = output_profile.as_icc();
     let data_icc_result = save_icc(data_icc.as_slice(), opt.icc_out);
 
-    let (w, h) = decoder_with_image_info.basic_info().size;
+    let (untransposed_w, untransposed_h) = decoder_with_image_info.basic_info().size;
     let mut image_data = ImageData {
         size: if decoder_with_image_info
             .basic_info()
             .orientation
             .is_transposing()
         {
-            (h, w)
+            (untransposed_h, untransposed_w)
         } else {
-            (w, h)
+            (untransposed_w, untransposed_h)
         },
         frames: Vec::new(),
     };
@@ -317,31 +320,22 @@ fn with_api(opt: Opt) -> Result<()> {
             0;
             image_data.size.0
                 * image_data.size.1
-                * samples_per_pixel_except_alpha
+                * samples_per_pixel
                 * 4
         ]);
-        let num_extra_channels = decoder_with_frame_info.frame_header().num_extra_channels;
-        if has_alpha {
-            assert!(num_extra_channels > 0);
-        }
-        for _ in 0..num_extra_channels {
+        if let Some(alpha_index) = alpha_channel_index {
+            assert!(alpha_index == output_buffers.len(), "alpha channel isn't first channel after color channels");
             output_buffers.push(vec![0; image_data.size.0 * image_data.size.1 * 4]);
         }
 
         let mut outputs = output_buffers
             .as_mut_slice()
             .iter_mut()
-            .enumerate()
-            .map(|(i, buffer)| {
-                let bytes_per_pixel = if i == 0 && pixel_format.color_type == JxlColorType::Rgb {
-                    12 // Interleaved RGB
-                } else {
-                    4 // Single channel
-                };
+            .map(|buffer| {
                 JxlOutputBuffer::new(
                     buffer.as_mut_slice(),
                     image_data.size.1,
-                    bytes_per_pixel * image_data.size.0,
+                    samples_per_pixel * 4 * image_data.size.0,
                 )
             })
             .collect::<Vec<JxlOutputBuffer<'_>>>();
@@ -367,8 +361,15 @@ fn with_api(opt: Opt) -> Result<()> {
             channels: Vec::new(),
         };
 
-        // Handle RGB/RGBA vs grayscale buffer layout
-        if pixel_format.color_type == JxlColorType::Rgb {
+        // Handle RGB vs grayscale buffer layout
+        if pixel_format.color_type == JxlColorType::Grayscale {
+            // Each buffer contains a single channel
+            for vec in output_buffers.iter() {
+                image_frame
+                    .channels
+                    .push(image_from_vec(vec, (image_data.size.0, image_data.size.1))?);
+            }
+        } else {
             // First buffer contains interleaved RGB
             let rgb_channels =
                 images_from_rgb_vec(&output_buffers[0], (image_data.size.0, image_data.size.1))?;
@@ -376,13 +377,6 @@ fn with_api(opt: Opt) -> Result<()> {
 
             // Additional buffers contain extra channels (e.g., alpha)
             for vec in output_buffers.iter().skip(1) {
-                image_frame
-                    .channels
-                    .push(image_from_vec(vec, (image_data.size.0, image_data.size.1))?);
-            }
-        } else {
-            // Each buffer contains a single channel
-            for vec in output_buffers.iter() {
                 image_frame
                     .channels
                     .push(image_from_vec(vec, (image_data.size.0, image_data.size.1))?);
