@@ -13,7 +13,6 @@ use jxl::error::{Error, Result};
 use jxl::headers::bit_depth::BitDepth;
 use jxl::headers::extra_channels::ExtraChannel;
 use jxl::image::Image;
-use jxl::util::NewWithCapacity;
 use std::fs;
 use std::io::Read;
 use std::path::PathBuf;
@@ -316,38 +315,26 @@ fn with_api(opt: Opt) -> Result<()> {
             }
         }?;
 
-        let mut output_buffers: Vec<Vec<u8>> = Vec::new_with_capacity(samples_per_pixel)?;
+        let num_pixels = image_data.size.0 * image_data.size.1;
 
-        output_buffers.push(vec![
-            0;
-            image_data.size.0
-                * image_data.size.1
-                * samples_per_pixel
-                * 4
-        ]);
+        let mut output_vecs = vec![vec![0u8; num_pixels * samples_per_pixel * 4]];
+
         if let Some(alpha_index) = alpha_channel_index {
             assert!(
-                alpha_index == output_buffers.len(),
+                alpha_index == 0,
                 "alpha channel isn't first channel after color channels"
             );
-            output_buffers.push(vec![0; image_data.size.0 * image_data.size.1 * 4]);
+            output_vecs.push(vec![0u8; image_data.size.0 * image_data.size.1 * 4]);
         }
 
-        let mut outputs = output_buffers
-            .as_mut_slice()
-            .iter_mut()
-            .map(|buffer| {
-                JxlOutputBuffer::new(
-                    buffer.as_mut_slice(),
-                    image_data.size.1,
-                    samples_per_pixel * 4 * image_data.size.0,
-                )
-            })
-            .collect::<Vec<JxlOutputBuffer<'_>>>();
+        let mut output_bufs: Vec<JxlOutputBuffer<'_>> = output_vecs.iter_mut().map(|v| {
+            let len = v.len();
+            JxlOutputBuffer::new(v, image_data.size.1, len / image_data.size.1)
+        }).collect();
 
         decoder_with_image_info = loop {
             match decoder_with_frame_info
-                .process(&mut input_buffer, &mut outputs)
+                .process(&mut input_buffer, &mut output_bufs)
                 .unwrap()
             {
                 jxl::api::ProcessingResult::Complete { result } => break Ok(result),
@@ -369,7 +356,7 @@ fn with_api(opt: Opt) -> Result<()> {
         // Handle RGB vs grayscale buffer layout
         if pixel_format.color_type == JxlColorType::Grayscale {
             // Each buffer contains a single channel
-            for vec in output_buffers.iter() {
+            for vec in output_vecs.iter() {
                 image_frame
                     .channels
                     .push(image_from_vec(vec, (image_data.size.0, image_data.size.1))?);
@@ -377,11 +364,11 @@ fn with_api(opt: Opt) -> Result<()> {
         } else {
             // First buffer contains interleaved RGB
             let rgb_channels =
-                images_from_rgb_vec(&output_buffers[0], (image_data.size.0, image_data.size.1))?;
+                images_from_rgb_vec(&output_vecs[0], (image_data.size.0, image_data.size.1))?;
             image_frame.channels.extend(rgb_channels);
 
             // Additional buffers contain extra channels (e.g., alpha)
-            for vec in output_buffers.iter().skip(1) {
+            for vec in output_vecs.iter().skip(1) {
                 image_frame
                     .channels
                     .push(image_from_vec(vec, (image_data.size.0, image_data.size.1))?);
