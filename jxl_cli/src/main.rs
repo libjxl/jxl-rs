@@ -327,10 +327,13 @@ fn with_api(opt: Opt) -> Result<()> {
             output_vecs.push(vec![0u8; image_data.size.0 * image_data.size.1 * 4]);
         }
 
-        let mut output_bufs: Vec<JxlOutputBuffer<'_>> = output_vecs.iter_mut().map(|v| {
-            let len = v.len();
-            JxlOutputBuffer::new(v, image_data.size.1, len / image_data.size.1)
-        }).collect();
+        let mut output_bufs: Vec<JxlOutputBuffer<'_>> = output_vecs
+            .iter_mut()
+            .map(|v| {
+                let len = v.len();
+                JxlOutputBuffer::new(v, image_data.size.1, len / image_data.size.1)
+            })
+            .collect();
 
         decoder_with_image_info = loop {
             match decoder_with_frame_info
