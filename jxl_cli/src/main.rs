@@ -273,14 +273,16 @@ fn with_api(opt: Opt) -> Result<()> {
         .basic_info()
         .extra_channels
         .iter()
-        .position(|info| {
-            info.ec_type == ExtraChannel::Alpha
-        });
+        .position(|info| info.ec_type == ExtraChannel::Alpha);
     let original_bit_depth = decoder_with_image_info.basic_info().bit_depth;
     let pixel_format = decoder_with_image_info.current_pixel_format().clone();
     let color_type = pixel_format.color_type;
     // TODO(zond): This is the way the API works right now, let's improve it when the API is cleverer.
-    let samples_per_pixel = if color_type == JxlColorType::Grayscale { 1 } else { 3 };
+    let samples_per_pixel = if color_type == JxlColorType::Grayscale {
+        1
+    } else {
+        3
+    };
 
     let original_icc_result = save_icc(embedded_profile.as_icc().as_slice(), opt.original_icc_out);
     let data_icc = output_profile.as_icc();
@@ -324,7 +326,10 @@ fn with_api(opt: Opt) -> Result<()> {
                 * 4
         ]);
         if let Some(alpha_index) = alpha_channel_index {
-            assert!(alpha_index == output_buffers.len(), "alpha channel isn't first channel after color channels");
+            assert!(
+                alpha_index == output_buffers.len(),
+                "alpha channel isn't first channel after color channels"
+            );
             output_buffers.push(vec![0; image_data.size.0 * image_data.size.1 * 4]);
         }
 
