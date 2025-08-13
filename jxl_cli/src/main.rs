@@ -12,7 +12,6 @@ use jxl::decode::{DecodeOptions, DecodeResult, ImageData, ImageFrame};
 use jxl::error::{Error, Result};
 use jxl::headers::bit_depth::BitDepth;
 use jxl::image::Image;
-use jxl::util::NewWithCapacity;
 use std::fs;
 use std::io::Read;
 use std::path::PathBuf;
@@ -268,31 +267,31 @@ fn with_api(opt: Opt) -> Result<()> {
 
     let embedded_profile = decoder_with_image_info.embedded_color_profile();
     let output_profile = decoder_with_image_info.output_color_profile().clone();
+    let extra_channels = decoder_with_image_info.basic_info().extra_channels.len();
     let original_bit_depth = decoder_with_image_info.basic_info().bit_depth;
     let pixel_format = decoder_with_image_info.current_pixel_format().clone();
     let color_type = pixel_format.color_type;
-    let samples_per_pixel = color_type.samples_per_pixel();
-    let has_alpha = color_type.has_alpha();
-    let samples_per_pixel_except_alpha = if has_alpha {
-        samples_per_pixel - 1
+    // TODO(zond): This is the way the API works right now, let's improve it when the API is cleverer.
+    let samples_per_pixel = if color_type == JxlColorType::Grayscale {
+        1
     } else {
-        samples_per_pixel
+        3
     };
 
     let original_icc_result = save_icc(embedded_profile.as_icc().as_slice(), opt.original_icc_out);
     let data_icc = output_profile.as_icc();
     let data_icc_result = save_icc(data_icc.as_slice(), opt.icc_out);
 
-    let (w, h) = decoder_with_image_info.basic_info().size;
+    let (untransposed_w, untransposed_h) = decoder_with_image_info.basic_info().size;
     let mut image_data = ImageData {
         size: if decoder_with_image_info
             .basic_info()
             .orientation
             .is_transposing()
         {
-            (h, w)
+            (untransposed_h, untransposed_w)
         } else {
-            (w, h)
+            (untransposed_w, untransposed_h)
         },
         frames: Vec::new(),
     };
@@ -311,44 +310,24 @@ fn with_api(opt: Opt) -> Result<()> {
             }
         }?;
 
-        let mut output_buffers: Vec<Vec<u8>> = Vec::new_with_capacity(samples_per_pixel)?;
+        let num_pixels = image_data.size.0 * image_data.size.1;
 
-        output_buffers.push(vec![
-            0;
-            image_data.size.0
-                * image_data.size.1
-                * samples_per_pixel_except_alpha
-                * 4
-        ]);
-        let num_extra_channels = decoder_with_frame_info.frame_header().num_extra_channels;
-        if has_alpha {
-            assert!(num_extra_channels > 0);
-        }
-        for _ in 0..num_extra_channels {
-            output_buffers.push(vec![0; image_data.size.0 * image_data.size.1 * 4]);
+        let mut output_vecs = vec![vec![0u8; num_pixels * samples_per_pixel * 4]];
+        for _ in 0..extra_channels {
+            output_vecs.push(vec![0u8; num_pixels * 4]);
         }
 
-        let mut outputs = output_buffers
-            .as_mut_slice()
+        let mut output_bufs: Vec<JxlOutputBuffer<'_>> = output_vecs
             .iter_mut()
-            .enumerate()
-            .map(|(i, buffer)| {
-                let bytes_per_pixel = if i == 0 && pixel_format.color_type == JxlColorType::Rgb {
-                    12 // Interleaved RGB
-                } else {
-                    4 // Single channel
-                };
-                JxlOutputBuffer::new(
-                    buffer.as_mut_slice(),
-                    image_data.size.1,
-                    bytes_per_pixel * image_data.size.0,
-                )
+            .map(|v| {
+                let len = v.len();
+                JxlOutputBuffer::new(v, image_data.size.1, len / image_data.size.1)
             })
-            .collect::<Vec<JxlOutputBuffer<'_>>>();
+            .collect();
 
         decoder_with_image_info = loop {
             match decoder_with_frame_info
-                .process(&mut input_buffer, &mut outputs)
+                .process(&mut input_buffer, &mut output_bufs)
                 .unwrap()
             {
                 jxl::api::ProcessingResult::Complete { result } => break Ok(result),
@@ -367,22 +346,22 @@ fn with_api(opt: Opt) -> Result<()> {
             channels: Vec::new(),
         };
 
-        // Handle RGB/RGBA vs grayscale buffer layout
-        if pixel_format.color_type == JxlColorType::Rgb {
-            // First buffer contains interleaved RGB
-            let rgb_channels =
-                images_from_rgb_vec(&output_buffers[0], (image_data.size.0, image_data.size.1))?;
-            image_frame.channels.extend(rgb_channels);
-
-            // Additional buffers contain extra channels (e.g., alpha)
-            for vec in output_buffers.iter().skip(1) {
+        // Handle RGB vs grayscale buffer layout
+        if pixel_format.color_type == JxlColorType::Grayscale {
+            // Each buffer contains a single channel
+            for vec in output_vecs.iter() {
                 image_frame
                     .channels
                     .push(image_from_vec(vec, (image_data.size.0, image_data.size.1))?);
             }
         } else {
-            // Each buffer contains a single channel
-            for vec in output_buffers.iter() {
+            // First buffer contains interleaved RGB
+            let rgb_channels =
+                images_from_rgb_vec(&output_vecs[0], (image_data.size.0, image_data.size.1))?;
+            image_frame.channels.extend(rgb_channels);
+
+            // Additional buffers contain extra channels (e.g., alpha)
+            for vec in output_vecs.iter().skip(1) {
                 image_frame
                     .channels
                     .push(image_from_vec(vec, (image_data.size.0, image_data.size.1))?);
