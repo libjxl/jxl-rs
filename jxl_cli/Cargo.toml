@@ -11,12 +11,15 @@ tracing-subscriber = { version = "0.3.18", features=["env-filter"], optional = t
 lcms2 = "6.1.0"
 half = "2.4.1"
 png = "0.17.16"
+exr = { version = "1.73.0", optional = true }
 
 [dev-dependencies]
 jxl_macros = { path = "../jxl_macros" }
 
 [features]
 tracing-subscriber = ["dep:tracing-subscriber", "jxl/tracing"]
+exr = ["dep:exr"]
+default = ["exr"]
 
 [lints]
 workspace = true

@@ -35,7 +35,9 @@ fn save_image(
 ) -> Result<(), Error> {
     let fn_str: String = String::from(output_filename.to_string_lossy());
     let mut output_bytes: Vec<u8> = vec![];
-    if fn_str.ends_with(".ppm") {
+    if fn_str.ends_with(".exr") {
+        output_bytes = enc::exr::to_exr(image_data, bit_depth, color_profile)?;
+    } else if fn_str.ends_with(".ppm") {
         if image_data.frames.len() == 1 {
             assert_eq!(image_data.frames[0].size, image_data.size);
             if let [r, g, b] = &image_data.frames[0].channels[..] {
@@ -242,8 +244,9 @@ fn with_api(opt: Opt) -> Result<()> {
     };
 
     let numpy_output = String::from(opt.output.to_string_lossy()).ends_with(".npy");
+    let exr_output = String::from(opt.output.to_string_lossy()).ends_with(".exr");
     let mut options = JxlDecoderOptions::default();
-    options.xyb_output_linear = numpy_output;
+    options.xyb_output_linear = numpy_output || exr_output;
     options.render_spot_colors = !numpy_output;
     let mut input_bytes = Vec::<u8>::new();
     file.read_to_end(&mut input_bytes)?;

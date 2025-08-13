@@ -257,6 +257,10 @@ pub enum Error {
     IccTableSizeExceeded(usize),
     #[error("Invalid number of channels for PNG output ({0})")]
     PNGInvalidNumChannels(usize),
+    #[error("Writing of {0} channels not yet implemented for EXR output")]
+    EXRInvalidNumChannels(usize),
+    #[error("EXR requires a linear colorspace (got {0})")]
+    EXRInvalidColorSpace(String),
     #[error("Invalid CMS configuration: requested ICC but no CMS is configured")]
     ICCOutputNoCMS,
     #[error("I/O error: {0}")]
