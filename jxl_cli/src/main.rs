@@ -314,7 +314,6 @@ fn with_api(opt: Opt) -> Result<()> {
 
         let mut output_vecs = vec![vec![0u8; num_pixels * samples_per_pixel * 4]];
         for _ in 0..extra_channels {
-            eprintln!("added extra output vec");
             output_vecs.push(vec![0u8; num_pixels * 4]);
         }
 
