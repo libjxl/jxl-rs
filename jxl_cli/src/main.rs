@@ -11,7 +11,6 @@ use jxl::container::{ContainerParser, ParseEvent};
 use jxl::decode::{DecodeOptions, DecodeResult, ImageData, ImageFrame};
 use jxl::error::{Error, Result};
 use jxl::headers::bit_depth::BitDepth;
-use jxl::headers::extra_channels::ExtraChannel;
 use jxl::image::Image;
 use std::fs;
 use std::io::Read;
@@ -268,11 +267,7 @@ fn with_api(opt: Opt) -> Result<()> {
 
     let embedded_profile = decoder_with_image_info.embedded_color_profile();
     let output_profile = decoder_with_image_info.output_color_profile().clone();
-    let alpha_channel_index = decoder_with_image_info
-        .basic_info()
-        .extra_channels
-        .iter()
-        .position(|info| info.ec_type == ExtraChannel::Alpha);
+    let extra_channels = decoder_with_image_info.basic_info().extra_channels.len();
     let original_bit_depth = decoder_with_image_info.basic_info().bit_depth;
     let pixel_format = decoder_with_image_info.current_pixel_format().clone();
     let color_type = pixel_format.color_type;
@@ -318,13 +313,9 @@ fn with_api(opt: Opt) -> Result<()> {
         let num_pixels = image_data.size.0 * image_data.size.1;
 
         let mut output_vecs = vec![vec![0u8; num_pixels * samples_per_pixel * 4]];
-
-        if let Some(alpha_index) = alpha_channel_index {
-            assert!(
-                alpha_index == 0,
-                "alpha channel isn't first channel after color channels"
-            );
-            output_vecs.push(vec![0u8; image_data.size.0 * image_data.size.1 * 4]);
+        for _ in 0..extra_channels {
+            eprintln!("added extra output vec");
+            output_vecs.push(vec![0u8; num_pixels * 4]);
         }
 
         let mut output_bufs: Vec<JxlOutputBuffer<'_>> = output_vecs
