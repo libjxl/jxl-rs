@@ -33,14 +33,16 @@ impl CodestreamParser {
             let mut br = BitReader::new(&self.non_section_buf);
             br.skip_bits(self.non_section_bit_offset as usize)?;
             let file_header = FileHeader::read(&mut br)?;
+            let data = &file_header.image_metadata;
             self.basic_info = Some(JxlBasicInfo {
                 size: (
                     file_header.size.xsize() as usize,
                     file_header.size.ysize() as usize,
                 ),
-                bit_depth: file_header.image_metadata.bit_depth,
-                orientation: file_header.image_metadata.orientation,
-                extra_channels: file_header.image_metadata.extra_channel_info.clone(),
+                bit_depth: data.bit_depth,
+                orientation: data.orientation,
+                extra_channels: data.extra_channel_info.clone(),
+                animation: data.animation.clone(),
             });
             self.file_header = Some(file_header);
             let bits = br.total_bits_read();
