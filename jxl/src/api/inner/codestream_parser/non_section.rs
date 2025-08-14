@@ -41,13 +41,12 @@ impl CodestreamParser {
                 ),
                 bit_depth: if data.bit_depth.floating_point_sample() {
                     JxlBitDepth::Float {
-                        bits_per_sample: data.bit_depth.bits_per_sample() as usize,
-                        exponent_bits_per_sample: data.bit_depth.exponent_bits_per_sample()
-                            as usize,
+                        bits_per_sample: data.bit_depth.bits_per_sample(),
+                        exponent_bits_per_sample: data.bit_depth.exponent_bits_per_sample(),
                     }
                 } else {
                     JxlBitDepth::Int {
-                        bits_per_sample: data.bit_depth.bits_per_sample() as usize,
+                        bits_per_sample: data.bit_depth.bits_per_sample(),
                     }
                 },
                 orientation: data.orientation,
@@ -59,7 +58,15 @@ impl CodestreamParser {
                         alpha_associated: info.alpha_associated(),
                     })
                     .collect(),
-                animation: data.animation.clone(),
+                animation: data
+                    .animation
+                    .as_ref()
+                    .map(|anim| crate::api::JxlAnimation {
+                        tps_numerator: anim.tps_numerator,
+                        tps_denominator: anim.tps_denominator,
+                        num_loops: anim.num_loops,
+                        have_timecodes: anim.have_timecodes,
+                    }),
             });
             self.file_header = Some(file_header);
             let bits = br.total_bits_read();

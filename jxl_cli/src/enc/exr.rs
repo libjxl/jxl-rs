@@ -36,7 +36,7 @@ mod jxl_exr {
 
     pub fn to_exr(
         image_data: ImageData<f32>,
-        bit_depth: usize,
+        bit_depth: u32,
         color_profile: &JxlColorProfile,
     ) -> Result<Vec<u8>> {
         let tuple_to_vec2 = |(x, y)| Vec2(x, y);
