@@ -71,6 +71,9 @@ impl BitDepth {
     pub fn exponent_bits_per_sample(&self) -> u32 {
         self.exponent_bits_per_sample
     }
+    pub fn floating_point_sample(&self) -> bool {
+        self.floating_point_sample
+    }
     fn check(&self, _: &Empty) -> Result<(), Error> {
         if self.floating_point_sample {
             if self.exponent_bits_per_sample < 2 || self.exponent_bits_per_sample > 8 {
