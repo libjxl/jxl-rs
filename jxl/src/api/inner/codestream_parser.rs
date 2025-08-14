@@ -34,7 +34,7 @@ const NON_SECTION_CHUNK_SIZE: usize = 4096;
 
 pub(super) struct CodestreamParser {
     // TODO(veluca): this would probably be cleaner with some kind of state enum.
-    file_header: Option<FileHeader>,
+    pub(super) file_header: Option<FileHeader>,
     icc_parser: Option<IncrementalIccReader>,
     // These fields are populated once image information is available.
     decoder_state: Option<DecoderState>,

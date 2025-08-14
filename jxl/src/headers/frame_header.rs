@@ -424,7 +424,7 @@ pub struct FrameHeader {
     #[condition(frame_type == FrameType::ReferenceOnly || save_before_ct_def_false)]
     pub save_before_ct: bool,
 
-    name: String,
+    pub name: String,
 
     #[default(RestorationFilter::default(&field_nonserialized))]
     #[nonserialized(encoding : encoding)]
