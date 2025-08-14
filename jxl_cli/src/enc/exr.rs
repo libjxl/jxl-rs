@@ -30,14 +30,13 @@ mod jxl_exr {
     use jxl::api::{JxlColorEncoding, JxlColorProfile, JxlTransferFunction};
     use jxl::decode::ImageData;
     use jxl::error::{Error, Result};
-    use jxl::headers::bit_depth::BitDepth;
 
     use exr::meta::attribute::Chromaticities;
     use exr::prelude::*;
 
     pub fn to_exr(
         image_data: ImageData<f32>,
-        bit_depth: BitDepth,
+        bit_depth: usize,
         color_profile: &JxlColorProfile,
     ) -> Result<Vec<u8>> {
         let tuple_to_vec2 = |(x, y)| Vec2(x, y);
@@ -109,7 +108,7 @@ mod jxl_exr {
         };
         // TODO(sboukortt): convert unassociated alpha to associated if necessary
         for (channel, channel_name) in image_data.frames[0].channels.iter().zip(channel_names) {
-            let sample_data = if bit_depth.bits_per_sample() <= 16 {
+            let sample_data = if bit_depth <= 16 {
                 let mut samples = vec![f16::ZERO; height * width];
                 for y in 0..height {
                     for x in 0..width {

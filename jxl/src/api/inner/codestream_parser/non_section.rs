@@ -7,18 +7,13 @@ use std::io::IoSliceMut;
 
 use crate::{
     api::{
-        Endianness, JxlBasicInfo, JxlColorEncoding, JxlColorProfile, JxlColorType, JxlDataFormat,
-        JxlDecoderOptions, JxlPixelFormat, JxlPrimaries, JxlTransferFunction, JxlWhitePoint,
-        inner::codestream_parser::SectionState,
+        inner::codestream_parser::SectionState, Endianness, JxlBasicInfo, JxlBitDepth, JxlColorEncoding, JxlColorProfile, JxlColorType, JxlDataFormat, JxlDecoderOptions, JxlPixelFormat, JxlPrimaries, JxlTransferFunction, JxlWhitePoint
     },
     bit_reader::BitReader,
     error::{Error, Result},
     frame::{DecoderState, Frame, Section},
     headers::{
-        FileHeader, JxlHeader,
-        color_encoding::{ColorSpace, RenderingIntent},
-        encodings::UnconditionalCoder,
-        frame_header::{FrameHeader, Toc, TocNonserialized},
+        color_encoding::{ColorSpace, RenderingIntent}, encodings::UnconditionalCoder, frame_header::{FrameHeader, Toc, TocNonserialized}, FileHeader, JxlHeader
     },
     icc::IncrementalIccReader,
 };
@@ -39,7 +34,16 @@ impl CodestreamParser {
                     file_header.size.xsize() as usize,
                     file_header.size.ysize() as usize,
                 ),
-                bit_depth: data.bit_depth,
+                bit_depth: if data.bit_depth.floating_point_sample() {
+                    JxlBitDepth::Float{
+                        bits_per_sample: data.bit_depth.bits_per_sample() as usize,
+                        exponent_bits_per_sample: data.bit_depth.exponent_bits_per_sample() as usize,
+                    }
+                } else {
+                    JxlBitDepth::Int{
+                        bits_per_sample: data.bit_depth.bits_per_sample() as usize,
+                    }
+                },
                 orientation: data.orientation,
                 extra_channels: data.extra_channel_info.clone(),
                 animation: data.animation.clone(),

@@ -10,7 +10,6 @@ use jxl::api::{
 use jxl::container::{ContainerParser, ParseEvent};
 use jxl::decode::{DecodeOptions, DecodeResult, ImageData, ImageFrame};
 use jxl::error::{Error, Result};
-use jxl::headers::bit_depth::BitDepth;
 use jxl::image::Image;
 use std::fs;
 use std::io::Read;
@@ -29,7 +28,7 @@ fn save_icc(icc_bytes: &[u8], icc_filename: Option<PathBuf>) -> Result<()> {
 
 fn save_image(
     image_data: ImageData<f32>,
-    bit_depth: BitDepth,
+    bit_depth: usize,
     color_profile: &JxlColorProfile,
     output_filename: PathBuf,
 ) -> Result<(), Error> {
@@ -207,9 +206,9 @@ fn with_lib(opt: Opt) -> Result<()> {
         opt.icc_out,
     );
     let bit_depth = match opt.override_bitdepth {
-        None => bit_depth,
-        Some(num_bits) => BitDepth::integer_samples(num_bits),
-    };
+        None => bit_depth.bits_per_sample(),
+        Some(num_bits) => num_bits,
+    } as usize;
     let color_profile = match data_icc {
         Some(vec) => JxlColorProfile::Icc(vec),
         None => JxlColorProfile::Simple(JxlColorEncoding::srgb(grayscale)),
@@ -270,8 +269,9 @@ fn with_api(opt: Opt) -> Result<()> {
 
     let embedded_profile = decoder_with_image_info.embedded_color_profile();
     let output_profile = decoder_with_image_info.output_color_profile().clone();
-    let extra_channels = decoder_with_image_info.basic_info().extra_channels.len();
-    let original_bit_depth = decoder_with_image_info.basic_info().bit_depth;
+    let info = decoder_with_image_info.basic_info();
+    let extra_channels = info.extra_channels.len();
+    let original_bit_depth = info.bit_depth.clone();
     let pixel_format = decoder_with_image_info.current_pixel_format().clone();
     let color_type = pixel_format.color_type;
     // TODO(zond): This is the way the API works right now, let's improve it when the API is cleverer.
@@ -285,13 +285,9 @@ fn with_api(opt: Opt) -> Result<()> {
     let data_icc = output_profile.as_icc();
     let data_icc_result = save_icc(data_icc.as_slice(), opt.icc_out);
 
-    let (untransposed_w, untransposed_h) = decoder_with_image_info.basic_info().size;
+    let (untransposed_w, untransposed_h) = info.size;
     let mut image_data = ImageData {
-        size: if decoder_with_image_info
-            .basic_info()
-            .orientation
-            .is_transposing()
-        {
+        size: if info.orientation.is_transposing() {
             (untransposed_h, untransposed_w)
         } else {
             (untransposed_w, untransposed_h)
@@ -350,7 +346,7 @@ fn with_api(opt: Opt) -> Result<()> {
         };
 
         // Handle RGB vs grayscale buffer layout
-        if pixel_format.color_type == JxlColorType::Grayscale {
+        if color_type == JxlColorType::Grayscale {
             // Each buffer contains a single channel
             for vec in output_vecs.iter() {
                 image_frame
@@ -379,8 +375,8 @@ fn with_api(opt: Opt) -> Result<()> {
     }
 
     let output_bit_depth = match opt.override_bitdepth {
-        None => original_bit_depth,
-        Some(num_bits) => BitDepth::integer_samples(num_bits),
+        None => original_bit_depth.bits_per_sample(),
+        Some(num_bits) => num_bits as usize,
     };
     let image_result = save_image(image_data, output_bit_depth, &output_profile, opt.output);
 
