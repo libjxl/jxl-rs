@@ -12,7 +12,7 @@ use jxl_macros::UnconditionalCoder;
 use num_derive::FromPrimitive;
 
 #[allow(clippy::upper_case_acronyms)]
-#[derive(UnconditionalCoder, Copy, Clone, PartialEq, Debug, FromPrimitive)]
+#[derive(UnconditionalCoder, Copy, Clone, PartialEq, Debug, FromPrimitive, Eq)]
 pub enum ExtraChannel {
     Alpha,
     Depth,
