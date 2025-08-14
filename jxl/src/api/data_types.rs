@@ -3,6 +3,8 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
+use crate::headers::extra_channels::ExtraChannel;
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum JxlColorType {
     Grayscale,
@@ -106,4 +108,10 @@ impl JxlBitDepth {
             } => *b,
         }
     }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct JxlExtraChannel {
+    pub ec_type: ExtraChannel,
+    pub alpha_associated: bool,
 }
