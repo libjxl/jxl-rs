@@ -26,16 +26,20 @@ jobs:
         ./ci/pull_request_checks.sh
 
   checks:
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.os || 'ubuntu-latest' }}
     strategy:
       fail-fast: false
       matrix:
         check: [format, clippy, test]
         features: [all, default]
+        os: [ubuntu-24.04-arm, ubuntu-latest]
         exclude:
           # Remove the "format+all" combination, since it is the same as "format+default"
           - check: format
             features: all
+          # Rustfmt is not arch-dependent.
+          - check: format
+            os: ubuntu-24.04-arm
     steps:
       - name: Checkout
         uses: actions/checkout@v4
