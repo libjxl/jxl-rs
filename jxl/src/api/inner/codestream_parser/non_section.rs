@@ -8,8 +8,8 @@ use std::io::IoSliceMut;
 use crate::{
     api::{
         Endianness, JxlBasicInfo, JxlBitDepth, JxlColorEncoding, JxlColorProfile, JxlColorType,
-        JxlDataFormat, JxlDecoderOptions, JxlPixelFormat, JxlPrimaries, JxlTransferFunction,
-        JxlWhitePoint, inner::codestream_parser::SectionState,
+        JxlDataFormat, JxlDecoderOptions, JxlExtraChannel, JxlPixelFormat, JxlPrimaries,
+        JxlTransferFunction, JxlWhitePoint, inner::codestream_parser::SectionState,
     },
     bit_reader::BitReader,
     error::{Error, Result},
@@ -51,7 +51,13 @@ impl CodestreamParser {
                     }
                 },
                 orientation: data.orientation,
-                extra_channels: data.extra_channel_info.clone(),
+                extra_channels: data
+                    .extra_channel_info
+                    .iter()
+                    .map(|info| JxlExtraChannel {
+                        ec_type: info.ec_type,
+                    })
+                    .collect(),
                 animation: data.animation.clone(),
             });
             self.file_header = Some(file_header);
