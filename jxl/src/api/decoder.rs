@@ -7,7 +7,7 @@ use super::{
     JxlBasicInfo, JxlBitstreamInput, JxlCms, JxlColorProfile, JxlDecoderInner, JxlDecoderOptions,
     JxlOutputBuffer, JxlPixelFormat, ProcessingResult,
 };
-use crate::{error::Result, headers::frame_header::FrameHeader};
+use crate::{api::JxlFrameHeader, error::Result};
 use states::*;
 use std::marker::PhantomData;
 
@@ -136,7 +136,7 @@ impl JxlDecoder<WithFrameInfo> {
     }
 
     // TODO: don't use the raw bitstream type; include name and extra channel blend info.
-    pub fn frame_header(&self) -> &FrameHeader {
+    pub fn frame_header(&self) -> JxlFrameHeader {
         self.inner.frame_header().unwrap()
     }
 

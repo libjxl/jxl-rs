@@ -62,8 +62,6 @@ impl CodestreamParser {
                     .animation
                     .as_ref()
                     .map(|anim| crate::api::JxlAnimation {
-                        tps_numerator: anim.tps_numerator,
-                        tps_denominator: anim.tps_denominator,
                         num_loops: anim.num_loops,
                         have_timecodes: anim.have_timecodes,
                     }),
