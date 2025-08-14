@@ -25,8 +25,11 @@ jobs:
         with:
           submodules: recursive
 
+      - name: Install latest rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
       - name: Rust cache
-        uses: Swatinem/rust-cache@v2.7.3
+        uses: Swatinem/rust-cache@v2.8.0
 
       - name: Run arbtest with extended budget
         env:

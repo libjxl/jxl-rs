@@ -52,7 +52,10 @@ jobs:
           components: clippy, rustfmt
 
       - name: Rust cache
-        uses: Swatinem/rust-cache@v2.7.3
+        uses: Swatinem/rust-cache@v2.8.0
+        with:
+          prefix-key: ${{ matrix.os }}-${{ matrix.check }}-${{ matrix.features }}
+
 
       # format
       - name: Cargo fmt (check)
