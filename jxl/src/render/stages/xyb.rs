@@ -5,6 +5,7 @@
 
 use crate::headers::OpsinInverseMatrix;
 use crate::render::{RenderPipelineInPlaceStage, RenderPipelineStage};
+use crate::simd::{F32SimdVec, simd_function};
 
 /// Convert XYB to linear sRGB, where 1.0 corresponds to `intensity_target` nits.
 pub struct XybToLinearSrgbStage {
@@ -36,6 +37,61 @@ impl std::fmt::Display for XybToLinearSrgbStage {
     }
 }
 
+simd_function!(
+    xyb_process_dispatch,
+    d: D,
+    fn xyb_process(
+        opsin: &OpsinInverseMatrix,
+        intensity_target: f32,
+        xsize: usize,
+        row_x: &mut [f32],
+        row_y: &mut [f32],
+        row_b: &mut [f32],
+    ) {
+        let OpsinInverseMatrix {
+            inverse_matrix: mat,
+            opsin_biases: bias,
+            ..
+        } = opsin;
+        // TODO(veluca): consider computing the cbrt in advance.
+        let bias_cbrt = bias.map(|x| D::F32Vec::splat(d, x.cbrt()));
+        let intensity_scale = 255.0 / intensity_target;
+        let scaled_bias = bias.map(|x| D::F32Vec::splat(d, x * intensity_scale));
+        let mat = mat.map(|x| D::F32Vec::splat(d, x));
+        let intensity_scale = D::F32Vec::splat(d, intensity_scale);
+
+        for idx in (0..xsize).step_by(D::F32Vec::LEN) {
+            let x = D::F32Vec::load(d, &row_x[idx..]);
+            let y = D::F32Vec::load(d, &row_y[idx..]);
+            let b = D::F32Vec::load(d, &row_b[idx..]);
+
+            // Mix and apply bias
+            let l = y + x - bias_cbrt[0];
+            let m = y - x - bias_cbrt[1];
+            let s = b - bias_cbrt[2];
+
+            // Apply biased inverse gamma and scale (1.0 corresponds to `intensity_target` nits)
+            let l2 = l * l;
+            let m2 = m * m;
+            let s2 = s * s;
+            let scaled_l = l * intensity_scale;
+            let scaled_m = m * intensity_scale;
+            let scaled_s = s * intensity_scale;
+            let l = l2.mul_add(scaled_l, scaled_bias[0]);
+            let m = m2.mul_add(scaled_m, scaled_bias[1]);
+            let s = s2.mul_add(scaled_s, scaled_bias[2]);
+
+            // Apply opsin inverse matrix (linear LMS to linear sRGB)
+            let r = mat[0].mul_add(l, mat[1].mul_add(m, mat[2] * s));
+            let g = mat[3].mul_add(l, mat[4].mul_add(m, mat[5] * s));
+            let b = mat[6].mul_add(l, mat[7].mul_add(m, mat[8] * s));
+            r.store(&mut row_x[idx..]);
+            g.store(&mut row_y[idx..]);
+            b.store(&mut row_b[idx..]);
+        }
+    }
+);
+
 impl RenderPipelineStage for XybToLinearSrgbStage {
     type Type = RenderPipelineInPlaceStage<f32>;
 
@@ -57,35 +113,14 @@ impl RenderPipelineStage for XybToLinearSrgbStage {
             );
         };
 
-        let OpsinInverseMatrix {
-            inverse_matrix: mat,
-            opsin_biases: bias,
-            ..
-        } = self.opsin;
-        let bias_cbrt = bias.map(|x| x.cbrt());
-        let intensity_scale = 255.0 / self.intensity_target;
-
-        for idx in 0..xsize {
-            let x = row_x[idx];
-            let y = row_y[idx];
-            let b = row_b[idx];
-
-            // Mix and apply bias
-            let l = y + x - bias_cbrt[0];
-            let m = y - x - bias_cbrt[1];
-            let s = b - bias_cbrt[2];
-
-            // Apply biased inverse gamma and scale (1.0 corresponds to `intensity_target` nits)
-            let l = (l * l * l + bias[0]) * intensity_scale;
-            let m = (m * m * m + bias[1]) * intensity_scale;
-            let s = (s * s * s + bias[2]) * intensity_scale;
-
-            // Apply opsin inverse matrix (linear LMS to linear sRGB)
-            let [r, g, b] = crate::util::matmul3_vec(mat, [l, m, s]);
-            row_x[idx] = r;
-            row_y[idx] = g;
-            row_b[idx] = b;
-        }
+        xyb_process_dispatch(
+            &self.opsin,
+            self.intensity_target,
+            xsize,
+            row_x,
+            row_y,
+            row_b,
+        );
     }
 }
 
@@ -98,6 +133,10 @@ mod test {
     use crate::headers::encodings::Empty;
     use crate::image::Image;
     use crate::render::test::make_and_run_simple_pipeline;
+    use crate::simd::{
+        ScalarDescriptor, SimdDescriptor, round_up_size_to_two_cache_lines,
+        test_all_instruction_sets,
+    };
     use crate::util::test::assert_all_almost_eq;
 
     #[test]
@@ -143,4 +182,55 @@ mod test {
 
         Ok(())
     }
+
+    fn xyb_process_scalar_equivalent<D: SimdDescriptor>(d: D) {
+        let opsin = OpsinInverseMatrix::default(&Empty {});
+        arbtest::arbtest(|u| {
+            let xsize = u.arbitrary_len::<usize>()?;
+            let intensity_target = u.arbitrary::<u8>()? as f32 * 2.0 + 1.0;
+            let mut row_x = vec![0.0; round_up_size_to_two_cache_lines::<f32>(xsize)];
+            let mut row_y = vec![0.0; round_up_size_to_two_cache_lines::<f32>(xsize)];
+            let mut row_b = vec![0.0; round_up_size_to_two_cache_lines::<f32>(xsize)];
+
+            for i in 0..xsize {
+                row_x[i] = u.arbitrary::<i16>()? as f32 * (1.0 / i16::MAX as f32);
+                row_y[i] = u.arbitrary::<i16>()? as f32 * (1.0 / i16::MAX as f32);
+                row_b[i] = u.arbitrary::<i16>()? as f32 * (1.0 / i16::MAX as f32);
+            }
+
+            let mut scalar_x = row_x.clone();
+            let mut scalar_y = row_y.clone();
+            let mut scalar_b = row_b.clone();
+
+            xyb_process(
+                d,
+                &opsin,
+                intensity_target,
+                xsize,
+                &mut row_x,
+                &mut row_y,
+                &mut row_b,
+            );
+
+            xyb_process(
+                ScalarDescriptor::new().unwrap(),
+                &opsin,
+                intensity_target,
+                xsize,
+                &mut scalar_x,
+                &mut scalar_y,
+                &mut scalar_b,
+            );
+
+            for i in 0..xsize {
+                assert!((row_x[i] - scalar_x[i]).abs() < 1e-8);
+                assert!((row_y[i] - scalar_y[i]).abs() < 1e-8);
+                assert!((row_b[i] - scalar_b[i]).abs() < 1e-8);
+            }
+
+            Ok(())
+        });
+    }
+
+    test_all_instruction_sets!(xyb_process_scalar_equivalent);
 }

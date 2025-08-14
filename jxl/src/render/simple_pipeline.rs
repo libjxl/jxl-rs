@@ -9,8 +9,8 @@ use crate::{
     error::{Error, Result},
     image::{DataTypeTag, Image, ImageDataType},
     render::internal::RenderPipelineStageInfo,
-    util::ShiftRightCeil,
-    util::tracing_wrappers::*,
+    simd::round_up_size_to_two_cache_lines,
+    util::{ShiftRightCeil, tracing_wrappers::*},
 };
 
 use super::{
@@ -402,7 +402,8 @@ impl<T: ImageDataType> RenderPipelineRunStage for RenderPipelineInspectStage<T> 
         for b in input_buffers.iter() {
             assert_eq!(size, b.size());
         }
-        let mut buffer = vec![vec![T::default(); chunk_size]; numc];
+        let mut buffer =
+            vec![vec![T::default(); round_up_size_to_two_cache_lines::<T>(chunk_size)]; numc];
         for y in 0..size.1 {
             for x in (0..size.0).step_by(chunk_size) {
                 let xsize = size.0.min(x + chunk_size) - x;
@@ -443,7 +444,8 @@ impl<T: ImageDataType> RenderPipelineRunStage for RenderPipelineInPlaceStage<T> 
         for b in output_buffers.iter() {
             assert_eq!(size, b.size());
         }
-        let mut buffer = vec![vec![T::default(); chunk_size]; numc];
+        let mut buffer =
+            vec![vec![T::default(); round_up_size_to_two_cache_lines::<T>(chunk_size)]; numc];
         for y in 0..size.1 {
             for x in (0..size.0).step_by(chunk_size) {
                 let xsize = size.0.min(x + chunk_size) - x;
@@ -508,13 +510,27 @@ impl<
         assert_eq!(input_size.1, output_size.1.div_ceil(1 << SHIFT_Y));
         let mut buffer_in = vec![
             vec![
-                vec![InputT::default(); chunk_size + BORDER_X as usize * 2];
+                vec![
+                    InputT::default();
+                    round_up_size_to_two_cache_lines::<OutputT>(
+                        chunk_size + BORDER_X as usize * 2
+                    )
+                ];
                 BORDER_Y as usize * 2 + 1
             ];
             numc
         ];
-        let mut buffer_out =
-            vec![vec![vec![OutputT::default(); chunk_size << SHIFT_X]; 1 << SHIFT_Y]; numc];
+        let mut buffer_out = vec![
+            vec![
+                vec![
+                    OutputT::default();
+                    round_up_size_to_two_cache_lines::<OutputT>(chunk_size)
+                        << SHIFT_X
+                ];
+                1 << SHIFT_Y
+            ];
+            numc
+        ];
 
         let mirror = |mut v: i64, size: i64| {
             while v < 0 || v >= size {
@@ -630,7 +646,8 @@ impl<T: ImageDataType> RenderPipelineRunStage for RenderPipelineExtendStage<T> {
             }
         }
         // Fill in rows above and below the original data.
-        let mut buffer = vec![vec![T::default(); chunk_size]; numc];
+        let mut buffer =
+            vec![vec![T::default(); round_up_size_to_two_cache_lines::<T>(chunk_size)]; numc];
         for y in (0..y0).chain(y1..output_size.1) {
             for x in (0..output_size.0).step_by(chunk_size) {
                 let xsize = output_size.0.min(x + chunk_size) - x;
