@@ -23,9 +23,7 @@ pub use options::*;
 pub use output::*;
 pub use signature::*;
 
-use crate::headers::{
-    Animation, extra_channels::ExtraChannelInfo, image_metadata::Orientation,
-};
+use crate::headers::{Animation, extra_channels::ExtraChannelInfo, image_metadata::Orientation};
 
 /// This type represents the return value of a function that reads input from a bitstream. The
 /// variant `Complete` indicates that the operation was completed successfully, and its return
