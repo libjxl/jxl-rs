@@ -91,16 +91,16 @@ pub struct JxlPixelFormat {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum JxlBitDepth {
     Int {
-        bits_per_sample: usize,
+        bits_per_sample: u32,
     },
     Float {
-        bits_per_sample: usize,
-        exponent_bits_per_sample: usize,
+        bits_per_sample: u32,
+        exponent_bits_per_sample: u32,
     },
 }
 
 impl JxlBitDepth {
-    pub fn bits_per_sample(&self) -> usize {
+    pub fn bits_per_sample(&self) -> u32 {
         match self {
             JxlBitDepth::Int { bits_per_sample: b } => *b,
             JxlBitDepth::Float {
@@ -114,4 +114,12 @@ impl JxlBitDepth {
 pub struct JxlExtraChannel {
     pub ec_type: ExtraChannel,
     pub alpha_associated: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct JxlAnimation {
+    pub tps_numerator: u32,
+    pub tps_denominator: u32,
+    pub num_loops: u32,
+    pub have_timecodes: bool,
 }

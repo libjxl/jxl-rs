@@ -23,7 +23,7 @@ pub use options::*;
 pub use output::*;
 pub use signature::*;
 
-use crate::headers::{Animation, image_metadata::Orientation};
+use crate::headers::image_metadata::Orientation;
 
 /// This type represents the return value of a function that reads input from a bitstream. The
 /// variant `Complete` indicates that the operation was completed successfully, and its return
@@ -58,5 +58,5 @@ pub struct JxlBasicInfo {
     pub bit_depth: JxlBitDepth,
     pub orientation: Orientation,
     pub extra_channels: Vec<JxlExtraChannel>,
-    pub animation: Option<Animation>,
+    pub animation: Option<JxlAnimation>,
 }

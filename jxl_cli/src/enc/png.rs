@@ -67,7 +67,7 @@ fn make_cicp(encoding: &JxlColorEncoding) -> Option<png::CodingIndependentCodePo
 
 fn encode_png(
     image_data: ImageData<f32>,
-    bit_depth: usize,
+    bit_depth: u32,
     color_profile: &JxlColorProfile,
     buf: &mut Vec<u8>,
 ) -> Result<()> {
@@ -188,7 +188,7 @@ fn encode_png(
 
 pub fn to_png(
     image_data: ImageData<f32>,
-    bit_depth: usize,
+    bit_depth: u32,
     color_profile: &JxlColorProfile,
 ) -> Result<Vec<u8>> {
     let mut buf = Vec::<u8>::new();

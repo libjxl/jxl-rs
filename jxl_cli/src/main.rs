@@ -28,7 +28,7 @@ fn save_icc(icc_bytes: &[u8], icc_filename: Option<PathBuf>) -> Result<()> {
 
 fn save_image(
     image_data: ImageData<f32>,
-    bit_depth: usize,
+    bit_depth: u32,
     color_profile: &JxlColorProfile,
     output_filename: PathBuf,
 ) -> Result<(), Error> {
@@ -208,7 +208,7 @@ fn with_lib(opt: Opt) -> Result<()> {
     let bit_depth = match opt.override_bitdepth {
         None => bit_depth.bits_per_sample(),
         Some(num_bits) => num_bits,
-    } as usize;
+    };
     let color_profile = match data_icc {
         Some(vec) => JxlColorProfile::Icc(vec),
         None => JxlColorProfile::Simple(JxlColorEncoding::srgb(grayscale)),
@@ -376,7 +376,7 @@ fn with_api(opt: Opt) -> Result<()> {
 
     let output_bit_depth = match opt.override_bitdepth {
         None => original_bit_depth.bits_per_sample(),
-        Some(num_bits) => num_bits as usize,
+        Some(num_bits) => num_bits,
     };
     let image_result = save_image(image_data, output_bit_depth, &output_profile, opt.output);
 
