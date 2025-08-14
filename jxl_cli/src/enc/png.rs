@@ -8,7 +8,6 @@ use jxl::api::{
 };
 use jxl::decode::ImageData;
 use jxl::error::{Error, Result};
-use jxl::headers::bit_depth::BitDepth;
 use jxl::headers::color_encoding::RenderingIntent;
 
 use std::borrow::Cow;
@@ -68,7 +67,7 @@ fn make_cicp(encoding: &JxlColorEncoding) -> Option<png::CodingIndependentCodePo
 
 fn encode_png(
     image_data: ImageData<f32>,
-    bit_depth: BitDepth,
+    bit_depth: usize,
     color_profile: &JxlColorProfile,
     buf: &mut Vec<u8>,
 ) -> Result<()> {
@@ -141,7 +140,7 @@ fn encode_png(
     }
     let mut encoder = png::Encoder::with_info(w, info).unwrap();
     encoder.set_color(png_color(num_channels)?);
-    let eight_bits = bit_depth.bits_per_sample() <= 8;
+    let eight_bits = bit_depth <= 8;
     encoder.set_depth(if eight_bits {
         png::BitDepth::Eight
     } else {
@@ -189,7 +188,7 @@ fn encode_png(
 
 pub fn to_png(
     image_data: ImageData<f32>,
-    bit_depth: BitDepth,
+    bit_depth: usize,
     color_profile: &JxlColorProfile,
 ) -> Result<Vec<u8>> {
     let mut buf = Vec::<u8>::new();

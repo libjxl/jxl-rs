@@ -85,3 +85,25 @@ pub struct JxlPixelFormat {
     pub color_data_format: Option<JxlDataFormat>,
     pub extra_channel_format: Vec<Option<JxlDataFormat>>,
 }
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum JxlBitDepth {
+    Int {
+        bits_per_sample: usize,
+    },
+    Float {
+        bits_per_sample: usize,
+        exponent_bits_per_sample: usize,
+    },
+}
+
+impl JxlBitDepth {
+    pub fn bits_per_sample(&self) -> usize {
+        match self {
+            JxlBitDepth::Int { bits_per_sample: b } => *b,
+            JxlBitDepth::Float {
+                bits_per_sample: b, ..
+            } => *b,
+        }
+    }
+}
