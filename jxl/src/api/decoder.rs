@@ -230,6 +230,8 @@ mod tests {
                 }
             };
 
+            decoder_with_frame_info.frame_header();
+
             // Prepare output buffers
             let mut output_buffers: Vec<Vec<MaybeUninit<u8>>> = Vec::new();
 
