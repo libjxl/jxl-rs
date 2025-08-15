@@ -6,9 +6,8 @@
 #![allow(dead_code)]
 
 use crate::{
+    api::JxlFrameHeader,
     error::{Error, Result},
-    frame::Frame,
-    headers::frame_header::FrameHeader,
 };
 
 use super::{JxlBasicInfo, JxlCms, JxlColorProfile, JxlDecoderOptions, JxlPixelFormat};
@@ -71,11 +70,20 @@ impl JxlDecoderInner {
         unimplemented!()
     }
 
-    // TODO: don't use the raw bitstream type; include name and extra channel blend info.
-    pub fn frame_header(&self) -> Option<&FrameHeader> {
-        self.codestream_parser.frame.as_ref().map(Frame::header)
-    }
+    pub fn frame_header(&self) -> Option<JxlFrameHeader> {
+        let file_header = self.codestream_parser.file_header.as_ref()?;
+        let frame = self.codestream_parser.frame.as_ref()?;
+        let header = frame.header();
 
+        Some(JxlFrameHeader {
+            name: header.name.clone(),
+            duration: file_header
+                .image_metadata
+                .animation
+                .as_ref()
+                .map(|anim| header.duration(anim)),
+        })
+    }
     /// Number of passes we have full data for.
     pub fn num_completed_passes(&self) -> Option<usize> {
         None // TODO.
