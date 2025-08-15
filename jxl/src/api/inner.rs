@@ -71,25 +71,19 @@ impl JxlDecoderInner {
     }
 
     pub fn frame_header(&self) -> Option<JxlFrameHeader> {
-        if let Some(file_header) = &self.codestream_parser.file_header {
-            if let Some(frame) = &self.codestream_parser.frame {
-                let header = frame.header();
-                Some(JxlFrameHeader {
-                    name: header.name.clone(),
-                    duration: file_header
-                        .image_metadata
-                        .animation
-                        .as_ref()
-                        .map(|anim| header.duration(anim)),
-                })
-            } else {
-                None
-            }
-        } else {
-            None
-        }
-    }
+        let file_header = self.codestream_parser.file_header.as_ref()?;
+        let frame = self.codestream_parser.frame.as_ref()?;
+        let header = frame.header();
 
+        Some(JxlFrameHeader {
+            name: header.name.clone(),
+            duration: file_header
+                .image_metadata
+                .animation
+                .as_ref()
+                .map(|anim| header.duration(anim)),
+        })
+    }
     /// Number of passes we have full data for.
     pub fn num_completed_passes(&self) -> Option<usize> {
         None // TODO.
