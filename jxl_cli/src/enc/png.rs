@@ -6,8 +6,10 @@
 use jxl::api::{
     JxlColorEncoding, JxlColorProfile, JxlPrimaries, JxlTransferFunction, JxlWhitePoint,
 };
+
+use color_eyre::eyre::{Result, WrapErr, eyre};
 use jxl::decode::ImageData;
-use jxl::error::{Error, Result};
+use jxl::error::Error;
 use jxl::headers::color_encoding::RenderingIntent;
 
 use std::borrow::Cow;
@@ -19,7 +21,10 @@ fn png_color(num_channels: usize) -> Result<png::ColorType> {
         2 => Ok(png::ColorType::GrayscaleAlpha),
         3 => Ok(png::ColorType::Rgb),
         4 => Ok(png::ColorType::Rgba),
-        _ => Err(Error::PNGInvalidNumChannels(num_channels)),
+        _ => Err(eyre!(
+            "Invalid number of channels for PNG output {:?}",
+            num_channels
+        )),
     }
 }
 
@@ -76,7 +81,7 @@ fn encode_png(
         || image_data.size.0 == 0
         || image_data.size.1 == 0
     {
-        return Err(Error::NoFrames);
+        return Err(Error::NoFrames).wrap_err("Invalid JXL image");
     }
     let size = image_data.size;
     let (width, height) = size;

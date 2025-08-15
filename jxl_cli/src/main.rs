@@ -4,12 +4,12 @@
 // license that can be found in the LICENSE file.
 
 use clap::Parser;
+use color_eyre::eyre::{Result, WrapErr, eyre};
 use jxl::api::{
     JxlColorEncoding, JxlColorProfile, JxlColorType, JxlDecoder, JxlDecoderOptions, JxlOutputBuffer,
 };
 use jxl::container::{ContainerParser, ParseEvent};
 use jxl::decode::{DecodeOptions, DecodeResult, ImageData, ImageFrame};
-use jxl::error::{Error, Result};
 use jxl::image::Image;
 use std::fs;
 use std::io::Read;
@@ -18,20 +18,18 @@ use std::path::PathBuf;
 pub mod enc;
 
 fn save_icc(icc_bytes: &[u8], icc_filename: Option<PathBuf>) -> Result<()> {
-    match icc_filename {
-        Some(icc_filename) => {
-            std::fs::write(icc_filename, icc_bytes).map_err(|_| Error::OutputWriteFailure)
-        }
-        None => Ok(()),
-    }
+    icc_filename.map_or(Ok(()), |path| {
+        std::fs::write(&path, icc_bytes)
+            .wrap_err_with(|| format!("Failed to write ICC profile to {:?}", path))
+    })
 }
 
 fn save_image(
     image_data: ImageData<f32>,
     bit_depth: u32,
     color_profile: &JxlColorProfile,
-    output_filename: PathBuf,
-) -> Result<(), Error> {
+    output_filename: &PathBuf,
+) -> Result<()> {
     let fn_str: String = String::from(output_filename.to_string_lossy());
     let mut output_bytes: Vec<u8> = vec![];
     if fn_str.ends_with(".exr") {
@@ -56,13 +54,10 @@ fn save_image(
         output_bytes = enc::png::to_png(image_data, bit_depth, color_profile)?;
     }
     if output_bytes.is_empty() {
-        return Err(Error::OutputFormatNotSupported);
+        return Err(eyre!("Output format {:?} not supported", output_filename));
     }
-    if std::fs::write(output_filename, output_bytes).is_err() {
-        Err(Error::OutputWriteFailure)
-    } else {
-        Ok(())
-    }
+    std::fs::write(output_filename, output_bytes)
+        .wrap_err_with(|| format!("Failed to write decoded image to {:?}", &output_filename))
 }
 
 #[derive(Parser)]
@@ -135,41 +130,29 @@ fn images_from_rgb_vec(vec: &[u8], size: (usize, usize)) -> Result<Vec<Image<f32
 
 fn with_lib(opt: Opt) -> Result<()> {
     let input_filename = opt.input;
-    let mut file = match fs::File::open(input_filename.clone()) {
-        Ok(file) => file,
-        Err(err) => {
-            println!("Cannot open file: {err}");
-            return Err(Error::FileNotFound(input_filename));
-        }
-    };
+    let mut file = fs::File::open(input_filename.clone())
+        .wrap_err_with(|| format!("Failed to read source image from {:?}", input_filename))?;
 
     let mut parser = ContainerParser::new();
     let mut buf = vec![0u8; 4096];
     let mut buf_valid = 0usize;
     let mut codestream = Vec::new();
     loop {
-        let chunk_size = match file.read(&mut buf[buf_valid..]) {
-            Ok(l) => l,
-            Err(err) => {
-                return Err(Error::InputReadFailure(err));
-            }
-        };
+        let chunk_size = file
+            .read(&mut buf[buf_valid..])
+            .wrap_err_with(|| format!("Failed reading from {:?}", input_filename))?;
         if chunk_size == 0 {
             break;
         }
         buf_valid += chunk_size;
 
         for event in parser.process_bytes(&buf[..buf_valid]) {
-            match event {
-                Ok(ParseEvent::BitstreamKind(kind)) => {
+            match event? {
+                ParseEvent::BitstreamKind(kind) => {
                     println!("Bitstream kind: {kind:?}");
                 }
-                Ok(ParseEvent::Codestream(buf)) => {
+                ParseEvent::Codestream(buf) => {
                     codestream.extend_from_slice(buf);
-                }
-                Err(err) => {
-                    println!("Error parsing JXL codestream: {err}");
-                    return Err(err);
                 }
             }
         }
@@ -190,10 +173,12 @@ fn with_lib(opt: Opt) -> Result<()> {
         data_icc,
     } = jxl::decode::decode_jxl_codestream(options, &codestream)?;
 
-    let original_icc_result = save_icc(original_icc.as_slice(), opt.original_icc_out);
+    save_icc(original_icc.as_slice(), opt.original_icc_out)
+        .wrap_err("Failed to save original ICC profile")?;
+
     let srgb;
     let grayscale = image_data.frames[0].channels.len() < 3;
-    let data_icc_result = save_icc(
+    save_icc(
         match data_icc.as_ref() {
             Some(data_icc) => data_icc.as_slice(),
             None => {
@@ -204,7 +189,8 @@ fn with_lib(opt: Opt) -> Result<()> {
             }
         },
         opt.icc_out,
-    );
+    )
+    .wrap_err("Failed to save data ICC profile")?;
     let bit_depth = match opt.override_bitdepth {
         None => bit_depth.bits_per_sample(),
         Some(num_bits) => num_bits,
@@ -213,34 +199,14 @@ fn with_lib(opt: Opt) -> Result<()> {
         Some(vec) => JxlColorProfile::Icc(vec),
         None => JxlColorProfile::Simple(JxlColorEncoding::srgb(grayscale)),
     };
-    let image_result = save_image(image_data, bit_depth, &color_profile, opt.output);
-
-    if let Err(ref err) = original_icc_result {
-        println!("Failed to save original ICC profile: {err}");
-    }
-    if let Err(ref err) = data_icc_result {
-        println!("Failed to save data ICC profile: {err}");
-    }
-    if let Err(ref err) = image_result {
-        println!("Failed to save image: {err}");
-    }
-
-    original_icc_result?;
-    data_icc_result?;
-    image_result?;
-
-    Ok(())
+    save_image(image_data, bit_depth, &color_profile, &opt.output)
+        .wrap_err_with(|| format!("Failed to save decoded image to {:?}", &opt.output))
 }
 
 fn with_api(opt: Opt) -> Result<()> {
     let input_filename = opt.input;
-    let mut file = match fs::File::open(input_filename.clone()) {
-        Ok(file) => file,
-        Err(err) => {
-            println!("Cannot open file: {err}");
-            return Err(Error::FileNotFound(input_filename));
-        }
-    };
+    let mut file = fs::File::open(input_filename.clone())
+        .wrap_err_with(|| format!("Failed to read source image from {:?}", input_filename))?;
 
     let numpy_output = String::from(opt.output.to_string_lossy()).ends_with(".npy");
     let exr_output = String::from(opt.output.to_string_lossy()).ends_with(".exr");
@@ -259,8 +225,7 @@ fn with_api(opt: Opt) -> Result<()> {
             jxl::api::ProcessingResult::Complete { result } => break Ok(result),
             jxl::api::ProcessingResult::NeedsMoreInput { fallback, .. } => {
                 if input_buffer.is_empty() {
-                    println!("Not enough data.");
-                    break Err(Error::FileTruncated);
+                    break Err(eyre!("Source file {:?} truncated", input_filename));
                 }
                 initialized_decoder = fallback;
             }
@@ -301,8 +266,7 @@ fn with_api(opt: Opt) -> Result<()> {
                 jxl::api::ProcessingResult::Complete { result } => break Ok(result),
                 jxl::api::ProcessingResult::NeedsMoreInput { fallback, .. } => {
                     if input_buffer.is_empty() {
-                        println!("Not enough data.");
-                        break Err(Error::FileTruncated);
+                        break Err(eyre!("Source file {:?} truncated", input_filename));
                     }
                     decoder_with_image_info = fallback;
                 }
@@ -332,8 +296,7 @@ fn with_api(opt: Opt) -> Result<()> {
                 jxl::api::ProcessingResult::Complete { result } => break Ok(result),
                 jxl::api::ProcessingResult::NeedsMoreInput { fallback, .. } => {
                     if input_buffer.is_empty() {
-                        println!("Not enough data.");
-                        break Err(Error::FileTruncated);
+                        break Err(eyre!("Source file {:?} truncated", input_filename));
                     }
                     decoder_with_frame_info = fallback;
                 }
@@ -378,7 +341,7 @@ fn with_api(opt: Opt) -> Result<()> {
         None => original_bit_depth.bits_per_sample(),
         Some(num_bits) => num_bits,
     };
-    let image_result = save_image(image_data, output_bit_depth, &output_profile, opt.output);
+    let image_result = save_image(image_data, output_bit_depth, &output_profile, &opt.output);
 
     if let Err(ref err) = original_icc_result {
         println!("Failed to save original ICC profile: {err}");
@@ -397,7 +360,7 @@ fn with_api(opt: Opt) -> Result<()> {
     Ok(())
 }
 
-fn main() -> Result<(), Error> {
+fn main() -> Result<()> {
     #[cfg(feature = "tracing-subscriber")]
     {
         use tracing_subscriber::{EnvFilter, fmt, prelude::*};

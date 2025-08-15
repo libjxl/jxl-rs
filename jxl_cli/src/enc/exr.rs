@@ -27,9 +27,10 @@ mod jxl_exr {
 
     use std::io::Cursor;
 
+    use color_eyre::eyre::{Result, WrapErr, eyre};
     use jxl::api::{JxlColorEncoding, JxlColorProfile, JxlTransferFunction};
     use jxl::decode::ImageData;
-    use jxl::error::{Error, Result};
+    use jxl::error::Error;
 
     use exr::meta::attribute::Chromaticities;
     use exr::prelude::*;
@@ -66,11 +67,12 @@ mod jxl_exr {
                 white: tuple_to_vec2(white_point.to_xy_coords()),
             }),
             JxlColorProfile::Icc(_) => {
-                return Err(Error::EXRInvalidColorSpace("ICC profile".into()));
+                return Err(eyre!("EXR requires a linear colorspace (got ICC profile)"));
             }
             JxlColorProfile::Simple(encoding) => {
-                return Err(Error::EXRInvalidColorSpace(
-                    encoding.get_color_encoding_description(),
+                return Err(eyre!(
+                    "Writing of {:?} channels not yet implemented for EXR output",
+                    encoding.get_color_encoding_description()
                 ));
             }
         };
@@ -80,7 +82,7 @@ mod jxl_exr {
             || image_data.size.0 == 0
             || image_data.size.1 == 0
         {
-            return Err(Error::NoFrames);
+            return Err(Error::NoFrames).wrap_err("Invalid JXL image");
         }
         let size = image_data.size;
         let (width, height) = size;
@@ -104,7 +106,12 @@ mod jxl_exr {
             2 => vec!["Y", "A"],
             3 => vec!["R", "G", "B"],
             4 => vec!["R", "G", "B", "A"],
-            _ => return Err(Error::EXRInvalidNumChannels(num_channels)),
+            _ => {
+                return Err(eyre!(
+                    "Writing of {:?} channels not yet implemented for EXR output",
+                    num_channels
+                ));
+            }
         };
         // TODO(sboukortt): convert unassociated alpha to associated if necessary
         for (channel, channel_name) in image_data.frames[0].channels.iter().zip(channel_names) {
@@ -138,9 +145,7 @@ mod jxl_exr {
         // TODO(sboukortt): intensity_target -> whiteLuminance
 
         let mut buf = Cursor::new(Vec::new());
-        match image.write().to_buffered(&mut buf) {
-            Ok(()) => Ok(buf.into_inner()),
-            Err(_) => Err(Error::OutputWriteFailure),
-        }
+        image.write().to_buffered(&mut buf)?;
+        Ok(buf.into_inner())
     }
 }

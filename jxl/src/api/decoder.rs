@@ -166,7 +166,6 @@ impl JxlDecoder<WithFrameInfo> {
 mod tests {
     use super::*;
     use crate::api::{JxlColorType::Rgb, JxlDecoderOptions, JxlOutputBuffer};
-    use crate::error::Error;
     use jxl_macros::for_each_test_file;
     use std::mem::MaybeUninit;
     use std::path::Path;

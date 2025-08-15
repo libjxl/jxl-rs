@@ -4,9 +4,9 @@
 // license that can be found in the LICENSE file.
 
 use clap::{Arg, Command};
+use color_eyre::eyre::{Result, WrapErr};
 use jxl::bit_reader::BitReader;
 use jxl::container::{ContainerParser, ParseEvent};
-use jxl::error::{Error, Result};
 use jxl::frame::{DecoderState, Frame};
 use jxl::headers::color_encoding::{ColorEncoding, Primaries, WhitePoint};
 use jxl::headers::{FileHeader, JxlHeader};
@@ -185,10 +185,8 @@ fn parse_jxl_codestream(data: &[u8], verbose: bool) -> Result<()> {
 }
 
 fn parse_jxl(filename: &Path, verbose: bool) -> Result<()> {
-    let mut file = match fs::File::open(filename) {
-        Ok(file) => file,
-        Err(err) => return Err(Error::InputReadFailure(err)),
-    };
+    let mut file = fs::File::open(filename)
+        .wrap_err_with(|| format!("Failed to read source image from {:?}", filename))?;
     // Set up the container parser and buffers
     let mut parser = ContainerParser::new();
     let mut buf = vec![0u8; 4096];
@@ -196,24 +194,22 @@ fn parse_jxl(filename: &Path, verbose: bool) -> Result<()> {
     let mut codestream = Vec::new();
 
     loop {
-        let chunk_size = match file.read(&mut buf[buf_valid..]) {
-            Ok(l) => l,
-            Err(err) => return Err(Error::InputReadFailure(err)),
-        };
+        let chunk_size = file
+            .read(&mut buf[buf_valid..])
+            .wrap_err_with(|| format!("Failed reading from {:?}", filename))?;
         if chunk_size == 0 {
             break;
         }
         buf_valid += chunk_size;
 
         for event in parser.process_bytes(&buf[..buf_valid]) {
-            match event {
-                Ok(ParseEvent::BitstreamKind(kind)) => {
+            match event? {
+                ParseEvent::BitstreamKind(kind) => {
                     println!("Bitstream kind: {kind:?}");
                 }
-                Ok(ParseEvent::Codestream(data)) => {
+                ParseEvent::Codestream(data) => {
                     codestream.extend_from_slice(data);
                 }
-                Err(err) => return Err(err),
             }
         }
 
@@ -267,13 +263,13 @@ fn main() {
 
 #[cfg(test)]
 mod jxl_cli_test {
-    use jxl::error::Error;
+    use color_eyre::eyre::Result;
     use jxl_macros::for_each_test_file;
     use std::path::Path;
 
     use crate::parse_jxl;
 
-    fn read_file_from_path(path: &Path) -> Result<(), Error> {
+    fn read_file_from_path(path: &Path) -> Result<()> {
         parse_jxl(path, false)?;
         Ok(())
     }
