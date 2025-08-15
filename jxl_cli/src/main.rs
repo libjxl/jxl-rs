@@ -173,12 +173,12 @@ fn with_lib(opt: Opt) -> Result<()> {
         data_icc,
     } = jxl::decode::decode_jxl_codestream(options, &codestream)?;
 
-    save_icc(original_icc.as_slice(), opt.original_icc_out)
-        .wrap_err("Failed to save original ICC profile")?;
+    let original_icc_result = save_icc(original_icc.as_slice(), opt.original_icc_out)
+        .wrap_err("Failed to save original ICC profile");
 
     let srgb;
     let grayscale = image_data.frames[0].channels.len() < 3;
-    save_icc(
+    let data_icc_result = save_icc(
         match data_icc.as_ref() {
             Some(data_icc) => data_icc.as_slice(),
             None => {
@@ -190,7 +190,7 @@ fn with_lib(opt: Opt) -> Result<()> {
         },
         opt.icc_out,
     )
-    .wrap_err("Failed to save data ICC profile")?;
+    .wrap_err("Failed to save data ICC profile");
     let bit_depth = match opt.override_bitdepth {
         None => bit_depth.bits_per_sample(),
         Some(num_bits) => num_bits,
@@ -199,8 +199,24 @@ fn with_lib(opt: Opt) -> Result<()> {
         Some(vec) => JxlColorProfile::Icc(vec),
         None => JxlColorProfile::Simple(JxlColorEncoding::srgb(grayscale)),
     };
-    save_image(image_data, bit_depth, &color_profile, &opt.output)
-        .wrap_err_with(|| format!("Failed to save decoded image to {:?}", &opt.output))
+    let image_result = save_image(image_data, bit_depth, &color_profile, &opt.output)
+        .wrap_err_with(|| format!("Failed to save decoded image to {:?}", &opt.output));
+
+    if let Err(ref err) = original_icc_result {
+        println!("Failed to save original ICC profile: {err}");
+    }
+    if let Err(ref err) = data_icc_result {
+        println!("Failed to save data ICC profile: {err}");
+    }
+    if let Err(ref err) = image_result {
+        println!("Failed to save image: {err}");
+    }
+
+    original_icc_result?;
+    data_icc_result?;
+    image_result?;
+
+    Ok(())
 }
 
 fn with_api(opt: Opt) -> Result<()> {
