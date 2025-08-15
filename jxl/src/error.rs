@@ -4,7 +4,6 @@
 // license that can be found in the LICENSE file.
 
 use std::collections::TryReserveError;
-use std::path::PathBuf;
 
 use thiserror::Error;
 
@@ -59,8 +58,6 @@ pub enum Error {
     InvalidLinearBelow(bool, f32),
     #[error("Overflow when computing a bitstream size")]
     SizeOverflow,
-    #[error("File truncated")]
-    FileTruncated,
     #[error("Invalid ISOBMMF container")]
     InvalidBox,
     #[error("ICC is too large")]
@@ -227,14 +224,6 @@ pub enum Error {
     InvalidNumNonZeros(usize, usize),
     #[error("Invalid AC: {0} nonzeros after decoding block")]
     EndOfBlockResidualNonZeros(usize),
-    #[error("File not found {0}")]
-    FileNotFound(PathBuf),
-    #[error("Failed to read input file: {0}")]
-    InputReadFailure(std::io::Error),
-    #[error("Output format not supported: try .ppm, .pgm, .png or .npy")]
-    OutputWriteFailure,
-    #[error("Output format not supported: try .ppm, .pgm, .png or .npy")]
-    OutputFormatNotSupported,
     #[error("Unknown transfer function for ICC profile")]
     TransferFunctionUnknown,
     #[error("Attempting to write out of Bounds when writing ICC")]
@@ -255,12 +244,6 @@ pub enum Error {
     IccUnsupportedTransferFunction,
     #[error("Table size too large when writing ICC: {0}")]
     IccTableSizeExceeded(usize),
-    #[error("Invalid number of channels for PNG output ({0})")]
-    PNGInvalidNumChannels(usize),
-    #[error("Writing of {0} channels not yet implemented for EXR output")]
-    EXRInvalidNumChannels(usize),
-    #[error("EXR requires a linear colorspace (got {0})")]
-    EXRInvalidColorSpace(String),
     #[error("Invalid CMS configuration: requested ICC but no CMS is configured")]
     ICCOutputNoCMS,
     #[error("I/O error: {0}")]

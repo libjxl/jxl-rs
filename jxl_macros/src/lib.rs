@@ -736,9 +736,8 @@ pub fn for_each_test_file(input: TokenStream) -> TokenStream {
                 let test_name = Ident::new(&test_name, fn_name.span());
                 tests.push(quote! {
                     #[test]
-                    fn #test_name() -> Result<(), Error> {
-                        #fn_name(&Path::new(#pathname)
-                        )
+                    fn #test_name() {
+                        #fn_name(&Path::new(#pathname)).unwrap()
                     }
                 });
             }
