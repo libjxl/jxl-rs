@@ -15,7 +15,7 @@ use crate::{
     },
     error::{Error, Result},
     frame::{DecoderState, Frame, Section},
-    headers::{FileHeader, frame_header::FrameHeader},
+    headers::{Animation, FileHeader, frame_header::FrameHeader},
     icc::IncrementalIccReader,
 };
 
@@ -39,6 +39,7 @@ pub(super) struct CodestreamParser {
     // These fields are populated once image information is available.
     decoder_state: Option<DecoderState>,
     pub(super) basic_info: Option<JxlBasicInfo>,
+    pub(super) animation: Option<Animation>,
     pub(super) embedded_color_profile: Option<JxlColorProfile>,
     pub(super) output_color_profile: Option<JxlColorProfile>,
     pub(super) pixel_format: Option<JxlPixelFormat>,
@@ -70,6 +71,7 @@ impl CodestreamParser {
             icc_parser: None,
             decoder_state: None,
             basic_info: None,
+            animation: None,
             embedded_color_profile: None,
             output_color_profile: None,
             pixel_format: None,

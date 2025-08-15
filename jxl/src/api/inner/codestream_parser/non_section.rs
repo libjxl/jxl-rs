@@ -34,6 +34,7 @@ impl CodestreamParser {
             br.skip_bits(self.non_section_bit_offset as usize)?;
             let file_header = FileHeader::read(&mut br)?;
             let data = &file_header.image_metadata;
+            self.animation = data.animation.clone();
             self.basic_info = Some(JxlBasicInfo {
                 size: (
                     file_header.size.xsize() as usize,
@@ -157,7 +158,6 @@ impl CodestreamParser {
             self.non_section_buf.consume(br.total_bits_read() / 8);
 
             // We now have image information.
-            // TODO(veluca): generate BasicInfo.
             let mut decoder_state = DecoderState::new(self.file_header.take().unwrap());
             decoder_state.xyb_output_linear = decode_options.xyb_output_linear;
             decoder_state.render_spotcolors = decode_options.render_spot_colors;
