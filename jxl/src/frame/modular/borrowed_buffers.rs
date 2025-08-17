@@ -29,6 +29,7 @@ pub fn with_buffers<T>(
                 bit_depth: buf.info.bit_depth,
             });
         }
+
         bufs.push(RefMut::map(data, |x| x.as_mut().unwrap()));
     }
     f(bufs.iter_mut().map(|x| x.deref_mut()).collect())
