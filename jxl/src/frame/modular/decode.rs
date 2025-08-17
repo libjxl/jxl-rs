@@ -148,7 +148,12 @@ pub fn decode_modular_subbitstream(
     global_tree: &Option<Tree>,
     br: &mut BitReader,
 ) -> Result<()> {
-    if buffers.is_empty() {
+    // Skip decoding if all grids are zero-sized.
+    let is_empty = buffers.iter().all(|buffer| {
+        let size = buffer.data.size();
+        size.0 == 0 || size.1 == 0
+    });
+    if is_empty {
         return Ok(());
     }
     let mut transform_steps = vec![];

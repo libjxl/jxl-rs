@@ -38,16 +38,16 @@ pub fn check_squeeze_params(
 }
 
 pub fn default_squeeze(data_channel_info: &[(usize, ChannelInfo)]) -> Vec<SqueezeParams> {
-    let mut w = data_channel_info[0].1.size.0;
-    let mut h = data_channel_info[0].1.size.1;
-    let nc = data_channel_info.len();
-
-    let mut params = vec![];
-
     let num_meta_channels = data_channel_info
         .iter()
         .take_while(|x| x.1.is_meta())
         .count();
+
+    let mut w = data_channel_info[num_meta_channels].1.size.0;
+    let mut h = data_channel_info[num_meta_channels].1.size.1;
+    let nc = data_channel_info.len() - num_meta_channels;
+
+    let mut params = vec![];
 
     if nc > 2 && data_channel_info[1].1.size == (w, h) {
         // 420 previews
