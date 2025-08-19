@@ -624,11 +624,6 @@ impl Splines {
         }
     }
 
-    #[allow(dead_code)]
-    fn has_any(&self) -> bool {
-        !self.splines.is_empty()
-    }
-
     pub fn initialize_draw_cache(
         &mut self,
         image_xsize: u64,

@@ -14,7 +14,6 @@ pub struct ConvolveNoiseStage {
 }
 
 impl ConvolveNoiseStage {
-    #[allow(dead_code)]
     pub fn new(channel: usize) -> ConvolveNoiseStage {
         ConvolveNoiseStage { channel }
     }

@@ -160,9 +160,9 @@ impl CustomTransferFunction {
 #[derive(UnconditionalCoder, Debug, Clone)]
 #[validate]
 pub struct ColorEncoding {
-    #[all_default]
-    // TODO(firsching): remove once we use this!
+    // all_default is never read.
     #[allow(dead_code)]
+    #[all_default]
     all_default: bool,
     #[default(false)]
     pub want_icc: bool,

@@ -6,7 +6,7 @@
 use num_traits::Float;
 
 use crate::{
-    BLOCK_DIM, BLOCK_SIZE,
+    BLOCK_DIM, BLOCK_SIZE, GROUP_DIM,
     bit_reader::BitReader,
     entropy_coding::decode::SymbolReader,
     error::{Error, Result},
@@ -440,11 +440,9 @@ pub fn decode_vardct_group(
             ]
         }
         None => {
-            coeffs_storage = vec![0; 3 * FrameHeader::GROUP_DIM * FrameHeader::GROUP_DIM];
-            let (coeffs_x, coeffs_y_b) =
-                coeffs_storage.split_at_mut(FrameHeader::GROUP_DIM * FrameHeader::GROUP_DIM);
-            let (coeffs_y, coeffs_b) =
-                coeffs_y_b.split_at_mut(FrameHeader::GROUP_DIM * FrameHeader::GROUP_DIM);
+            coeffs_storage = vec![0; 3 * GROUP_DIM * GROUP_DIM];
+            let (coeffs_x, coeffs_y_b) = coeffs_storage.split_at_mut(GROUP_DIM * GROUP_DIM);
+            let (coeffs_y, coeffs_b) = coeffs_y_b.split_at_mut(GROUP_DIM * GROUP_DIM);
             [coeffs_x, coeffs_y, coeffs_b]
         }
     };

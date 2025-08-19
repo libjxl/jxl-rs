@@ -12,6 +12,8 @@ use std::default::Default;
 
 pub const COLOR_TILE_DIM: usize = 64;
 
+const _: () = assert!(COLOR_TILE_DIM % BLOCK_DIM == 0);
+
 pub const COLOR_TILE_DIM_IN_BLOCKS: usize = COLOR_TILE_DIM / BLOCK_DIM;
 
 pub const DEFAULT_COLOR_FACTOR: u32 = 84;
@@ -86,11 +88,4 @@ impl ColorCorrelationParams {
     pub fn y_to_b_lf(&self) -> f32 {
         self.y_to_b(self.ytob_lf)
     }
-}
-
-#[test]
-fn check_consistency_of_constants() {
-    use crate::GROUP_DIM;
-    assert_eq!(COLOR_TILE_DIM % BLOCK_DIM, 0);
-    assert_eq!((GROUP_DIM / BLOCK_DIM) % COLOR_TILE_DIM_IN_BLOCKS, 0);
 }

@@ -10,7 +10,6 @@ use crate::{
     render::{RenderPipelineExtendStage, RenderPipelineStage},
 };
 
-#[allow(dead_code)]
 pub struct ExtendToImageDimensionsStage {
     pub frame_origin: (isize, isize),
     pub image_size: (isize, isize),
