@@ -142,10 +142,10 @@ impl TryFrom<CustomTransferFunction> for TransferFunction {
             match ctf.transfer_function {
                 TransferFunction::BT709 => Ok(Self::Bt709),
                 TransferFunction::Unknown => Err(()),
-                TransferFunction::Linear => Err(()),
+                TransferFunction::Linear => Ok(Self::Gamma(1.0)),
                 TransferFunction::SRGB => Ok(Self::Srgb),
                 TransferFunction::PQ => Err(()),
-                TransferFunction::DCI => Ok(Self::Gamma(2.6f32.recip())),
+                TransferFunction::DCI => Ok(Self::Gamma(2.6_f32.recip())),
                 TransferFunction::HLG => Err(()),
             }
         }

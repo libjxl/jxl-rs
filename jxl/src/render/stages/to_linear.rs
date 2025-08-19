@@ -5,6 +5,7 @@
 
 use crate::color::tf;
 use crate::headers::color_encoding::CustomTransferFunction;
+use crate::render::stages::from_linear;
 use crate::render::{RenderPipelineInPlaceStage, RenderPipelineStage};
 
 /// Convert encoded non-linear color samples to display-referred linear color samples.
@@ -118,44 +119,7 @@ impl RenderPipelineStage for ToLinearStage {
     }
 }
 
-#[derive(Debug)]
-pub enum TransferFunction {
-    Bt709,
-    Srgb,
-    Pq {
-        /// Original Intensity Target
-        intensity_target: f32,
-    },
-    Hlg {
-        /// Original Intensity Target
-        intensity_target: f32,
-        luminance_rgb: [f32; 3],
-    },
-    /// Gamma in range `(0, 1]`
-    Gamma(f32),
-}
-
-impl TryFrom<CustomTransferFunction> for TransferFunction {
-    type Error = ();
-
-    fn try_from(ctf: CustomTransferFunction) -> Result<Self, ()> {
-        use crate::headers::color_encoding::TransferFunction;
-
-        if ctf.have_gamma {
-            Ok(Self::Gamma(ctf.gamma()))
-        } else {
-            match ctf.transfer_function {
-                TransferFunction::BT709 => Ok(Self::Bt709),
-                TransferFunction::Unknown => Err(()),
-                TransferFunction::Linear => Err(()),
-                TransferFunction::SRGB => Ok(Self::Srgb),
-                TransferFunction::PQ => Err(()),
-                TransferFunction::DCI => Ok(Self::Gamma(2.6f32.recip())),
-                TransferFunction::HLG => Err(()),
-            }
-        }
-    }
-}
+pub type TransferFunction = from_linear::TransferFunction;
 
 #[cfg(test)]
 mod test {
