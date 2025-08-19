@@ -115,7 +115,7 @@ impl RenderPipelineStage for FromLinearStage {
     }
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub enum TransferFunction {
     Bt709,
     Srgb,
