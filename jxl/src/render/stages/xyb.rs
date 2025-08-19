@@ -3,33 +3,166 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-use crate::headers::OpsinInverseMatrix;
+use crate::api::{
+    JxlColorEncoding, JxlPrimaries, JxlTransferFunction, JxlWhitePoint, adapt_to_xyz_d50,
+    primaries_to_xyz, primaries_to_xyz_d50,
+};
+use crate::error::Result;
+use crate::headers::{FileHeader, OpsinInverseMatrix};
+use crate::render::stages::from_linear;
 use crate::render::{RenderPipelineInPlaceStage, RenderPipelineStage};
 use crate::simd::{F32SimdVec, simd_function};
+use crate::util::{Matrix3x3, inv_3x3_matrix, mul_3x3_matrix};
 
-/// Convert XYB to linear sRGB, where 1.0 corresponds to `intensity_target` nits.
-pub struct XybToLinearSrgbStage {
-    first_channel: usize,
-    opsin: OpsinInverseMatrix,
-    intensity_target: f32,
+const SRGB_LUMINANCES: [f32; 3] = [0.2126, 0.7152, 0.0722];
+
+#[derive(Clone)]
+pub struct OutputColorInfo {
+    // Luminance of each primary.
+    pub luminances: [f32; 3],
+    pub intensity_target: f32,
+    pub opsin: OpsinInverseMatrix,
+    pub tf: from_linear::TransferFunction,
 }
 
-impl XybToLinearSrgbStage {
-    pub fn new(first_channel: usize, opsin: OpsinInverseMatrix, intensity_target: f32) -> Self {
+#[cfg(test)]
+impl Default for OutputColorInfo {
+    fn default() -> Self {
+        use crate::headers::encodings::Empty;
         Self {
-            first_channel,
-            opsin,
-            intensity_target,
+            luminances: SRGB_LUMINANCES,
+            intensity_target: 255.0,
+            opsin: OpsinInverseMatrix::default(&Empty {}),
+            tf: from_linear::TransferFunction::Srgb,
         }
     }
 }
 
-impl std::fmt::Display for XybToLinearSrgbStage {
+impl OutputColorInfo {
+    fn opsin_matrix_to_matrix3x3(matrix: [f32; 9]) -> Matrix3x3<f64> {
+        [
+            [matrix[0] as f64, matrix[1] as f64, matrix[2] as f64],
+            [matrix[3] as f64, matrix[4] as f64, matrix[5] as f64],
+            [matrix[6] as f64, matrix[7] as f64, matrix[8] as f64],
+        ]
+    }
+
+    fn matrix3x3_to_opsin_matrix(matrix: Matrix3x3<f64>) -> [f32; 9] {
+        [
+            matrix[0][0] as f32,
+            matrix[0][1] as f32,
+            matrix[0][2] as f32,
+            matrix[1][0] as f32,
+            matrix[1][1] as f32,
+            matrix[1][2] as f32,
+            matrix[2][0] as f32,
+            matrix[2][1] as f32,
+            matrix[2][2] as f32,
+        ]
+    }
+
+    pub fn from_header(header: &FileHeader) -> Result<Self> {
+        let srgb_output = OutputColorInfo {
+            luminances: SRGB_LUMINANCES,
+            intensity_target: header.image_metadata.tone_mapping.intensity_target,
+            opsin: header.transform_data.opsin_inverse_matrix.clone(),
+            tf: from_linear::TransferFunction::Srgb,
+        };
+        if header.image_metadata.color_encoding.want_icc {
+            return Ok(srgb_output);
+        }
+
+        let tf;
+        let mut inverse_matrix = Self::opsin_matrix_to_matrix3x3(
+            header.transform_data.opsin_inverse_matrix.inverse_matrix,
+        );
+        let mut luminances = SRGB_LUMINANCES;
+        let desired_colorspace =
+            JxlColorEncoding::from_internal(&header.image_metadata.color_encoding)?;
+        match &desired_colorspace {
+            JxlColorEncoding::XYB { .. } => {
+                return Ok(srgb_output);
+            }
+            JxlColorEncoding::RgbColorSpace {
+                white_point,
+                primaries,
+                transfer_function,
+                ..
+            } => {
+                tf = transfer_function;
+                if *primaries != JxlPrimaries::SRGB || *white_point != JxlWhitePoint::D65 {
+                    let [r, g, b] = JxlPrimaries::SRGB.to_xy_coords();
+                    let w = JxlWhitePoint::D65.to_xy_coords();
+                    let srgb_to_xyzd50 =
+                        primaries_to_xyz_d50(r.0, r.1, g.0, g.1, b.0, b.1, w.0, w.1)?;
+                    let [r, g, b] = primaries.to_xy_coords();
+                    let w = white_point.to_xy_coords();
+                    let original_to_xyz = primaries_to_xyz(r.0, r.1, g.0, g.1, b.0, b.1, w.0, w.1)?;
+                    luminances = original_to_xyz[1].map(|lum| lum as f32);
+                    let adapt_to_d50 = adapt_to_xyz_d50(w.0, w.1)?;
+                    let original_to_xyzd50 = mul_3x3_matrix(&adapt_to_d50, &original_to_xyz);
+                    let xyzd50_to_original = inv_3x3_matrix(&original_to_xyzd50)?;
+                    let srgb_to_original = mul_3x3_matrix(&xyzd50_to_original, &srgb_to_xyzd50);
+                    inverse_matrix = mul_3x3_matrix(&srgb_to_original, &inverse_matrix);
+                }
+            }
+
+            JxlColorEncoding::GrayscaleColorSpace {
+                transfer_function, ..
+            } => {
+                tf = transfer_function;
+                let f64_luminances = luminances.map(|lum| lum as f64);
+                let srgb_to_luminance: Matrix3x3<f64> =
+                    [f64_luminances, f64_luminances, f64_luminances];
+                inverse_matrix = mul_3x3_matrix(&srgb_to_luminance, &inverse_matrix);
+            }
+        }
+
+        let mut opsin = header.transform_data.opsin_inverse_matrix.clone();
+        opsin.inverse_matrix = Self::matrix3x3_to_opsin_matrix(inverse_matrix);
+        let intensity_target = header.image_metadata.tone_mapping.intensity_target;
+        let from_linear_tf = match tf {
+            JxlTransferFunction::PQ => from_linear::TransferFunction::Pq { intensity_target },
+            JxlTransferFunction::HLG => from_linear::TransferFunction::Hlg {
+                intensity_target,
+                luminance_rgb: luminances,
+            },
+            JxlTransferFunction::BT709 => from_linear::TransferFunction::Bt709,
+            JxlTransferFunction::Linear => from_linear::TransferFunction::Gamma(1.0),
+            JxlTransferFunction::SRGB => from_linear::TransferFunction::Srgb,
+            JxlTransferFunction::DCI => from_linear::TransferFunction::Gamma(2.6_f32.recip()),
+            JxlTransferFunction::Gamma(g) => from_linear::TransferFunction::Gamma(*g),
+        };
+        Ok(OutputColorInfo {
+            luminances,
+            intensity_target,
+            opsin,
+            tf: from_linear_tf,
+        })
+    }
+}
+
+/// Convert XYB to linear RGB with appropriate primaries, where 1.0 corresponds to `intensity_target` nits.
+pub struct XybStage {
+    first_channel: usize,
+    output_color_info: OutputColorInfo,
+}
+
+impl XybStage {
+    pub fn new(first_channel: usize, output_color_info: OutputColorInfo) -> Self {
+        Self {
+            first_channel,
+            output_color_info,
+        }
+    }
+}
+
+impl std::fmt::Display for XybStage {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let channel = self.first_channel;
         write!(
             f,
-            "XYB to linear sRGB for channel [{},{},{}]",
+            "XYB to linear for channel [{},{},{}]",
             channel,
             channel + 1,
             channel + 2
@@ -92,7 +225,7 @@ simd_function!(
     }
 );
 
-impl RenderPipelineStage for XybToLinearSrgbStage {
+impl RenderPipelineStage for XybStage {
     type Type = RenderPipelineInPlaceStage<f32>;
 
     fn uses_channel(&self, c: usize) -> bool {
@@ -114,8 +247,8 @@ impl RenderPipelineStage for XybToLinearSrgbStage {
         };
 
         xyb_process_dispatch(
-            &self.opsin,
-            self.intensity_target,
+            &self.output_color_info.opsin,
+            self.output_color_info.intensity_target,
             xsize,
             row_x,
             row_y,
@@ -142,7 +275,7 @@ mod test {
     #[test]
     fn consistency() -> Result<()> {
         crate::render::test::test_stage_consistency::<_, f32, f32>(
-            XybToLinearSrgbStage::new(0, OpsinInverseMatrix::default(&Empty {}), 255.0),
+            XybStage::new(0, OutputColorInfo::default()),
             (500, 500),
             3,
         )
@@ -166,7 +299,7 @@ mod test {
             .row(0)
             .copy_from_slice(&[0.471659, 0.43707693, 0.66613984]);
 
-        let stage = XybToLinearSrgbStage::new(0, OpsinInverseMatrix::default(&Empty {}), 255.0);
+        let stage = XybStage::new(0, OutputColorInfo::default());
         let output = make_and_run_simple_pipeline::<_, f32, f32>(
             stage,
             &[input_x, input_y, input_b],

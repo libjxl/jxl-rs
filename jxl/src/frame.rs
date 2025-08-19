@@ -674,30 +674,23 @@ impl Frame {
         }
 
         let mut linear = false;
+        let output_color_info = OutputColorInfo::from_header(&decoder_state.file_header)?;
         if frame_header.do_ycbcr {
             pipeline = pipeline.add_stage(YcbcrToRgbStage::new(0))?;
         } else if decoder_state.file_header.image_metadata.xyb_encoded {
-            let intensity_target = 255.0;
-            let opsin = &decoder_state
-                .file_header
-                .transform_data
-                .opsin_inverse_matrix;
-            // TODO(sboukortt): support more output colorspaces than just sRGB
-            pipeline = pipeline.add_stage(XybToLinearSrgbStage::new(
-                0,
-                opsin.clone(),
-                intensity_target,
-            ))?;
+            pipeline = pipeline.add_stage(XybStage::new(0, output_color_info.clone()))?;
             if decoder_state.xyb_output_linear {
                 linear = true;
             } else {
-                pipeline = pipeline.add_stage(FromLinearStage::new(0, TransferFunction::Srgb))?;
+                pipeline =
+                    pipeline.add_stage(FromLinearStage::new(0, output_color_info.tf.clone()))?;
             }
         }
 
         if frame_header.needs_blending() {
             if linear {
-                pipeline = pipeline.add_stage(FromLinearStage::new(0, TransferFunction::Srgb))?;
+                pipeline =
+                    pipeline.add_stage(FromLinearStage::new(0, output_color_info.tf.clone()))?;
                 linear = false;
             }
             pipeline = pipeline.add_stage(BlendingStage::new(
@@ -716,7 +709,8 @@ impl Frame {
 
         if frame_header.can_be_referenced && !frame_header.save_before_ct {
             if linear {
-                pipeline = pipeline.add_stage(FromLinearStage::new(0, TransferFunction::Srgb))?;
+                pipeline =
+                    pipeline.add_stage(FromLinearStage::new(0, output_color_info.tf.clone()))?;
                 linear = false;
             }
             for i in 0..num_channels {
@@ -768,8 +762,8 @@ impl Frame {
                     && decoder_state.xyb_output_linear
                     && !linear
                 {
-                    pipeline = pipeline
-                        .add_stage(ToLinearStage::new(0, ToLinearTransferFunction::Srgb))?;
+                    pipeline =
+                        pipeline.add_stage(ToLinearStage::new(0, output_color_info.tf.clone()))?;
                     linear = true;
                 }
                 pipeline = pipeline.add_stage(SaveStage::<f32>::new(

@@ -8,15 +8,15 @@ use std::io::IoSliceMut;
 use crate::{
     api::{
         Endianness, JxlBasicInfo, JxlBitDepth, JxlColorEncoding, JxlColorProfile, JxlColorType,
-        JxlDataFormat, JxlDecoderOptions, JxlExtraChannel, JxlPixelFormat, JxlPrimaries,
-        JxlTransferFunction, JxlWhitePoint, inner::codestream_parser::SectionState,
+        JxlDataFormat, JxlDecoderOptions, JxlExtraChannel, JxlPixelFormat, JxlTransferFunction,
+        inner::codestream_parser::SectionState,
     },
     bit_reader::BitReader,
     error::{Error, Result},
     frame::{DecoderState, Frame, Section},
     headers::{
         FileHeader, JxlHeader,
-        color_encoding::{ColorSpace, RenderingIntent},
+        color_encoding::ColorSpace,
         encodings::UnconditionalCoder,
         frame_header::{FrameHeader, Toc, TocNonserialized},
     },
@@ -105,29 +105,39 @@ impl CodestreamParser {
                 )?)
             };
             let output_color_profile = if file_header.image_metadata.xyb_encoded {
-                if decode_options.xyb_output_linear {
-                    JxlColorProfile::Simple(
-                        if file_header.image_metadata.color_encoding.color_space == ColorSpace::Gray
-                        {
-                            JxlColorEncoding::GrayscaleColorSpace {
-                                white_point: JxlWhitePoint::D65,
-                                transfer_function: JxlTransferFunction::Linear,
-                                rendering_intent: RenderingIntent::Relative,
-                            }
-                        } else {
-                            JxlColorEncoding::RgbColorSpace {
-                                white_point: JxlWhitePoint::D65,
-                                primaries: JxlPrimaries::SRGB,
-                                transfer_function: JxlTransferFunction::Linear,
-                                rendering_intent: RenderingIntent::Relative,
-                            }
-                        },
-                    )
-                } else {
-                    JxlColorProfile::Simple(JxlColorEncoding::srgb(
+                let nonlinear_output_color_profile = match &embedded_color_profile {
+                    JxlColorProfile::Icc(_) => JxlColorEncoding::srgb(
                         file_header.image_metadata.color_encoding.color_space == ColorSpace::Gray,
-                    ))
-                }
+                    ),
+                    JxlColorProfile::Simple(encoding) => encoding.clone(),
+                };
+                JxlColorProfile::Simple(if decode_options.xyb_output_linear {
+                    match nonlinear_output_color_profile {
+                        JxlColorEncoding::RgbColorSpace {
+                            white_point,
+                            primaries,
+                            transfer_function: _,
+                            rendering_intent,
+                        } => JxlColorEncoding::RgbColorSpace {
+                            white_point,
+                            primaries,
+                            transfer_function: JxlTransferFunction::Linear,
+                            rendering_intent,
+                        },
+                        JxlColorEncoding::GrayscaleColorSpace {
+                            white_point,
+                            transfer_function: _,
+                            rendering_intent,
+                        } => JxlColorEncoding::GrayscaleColorSpace {
+                            white_point,
+                            transfer_function: JxlTransferFunction::Linear,
+                            rendering_intent,
+                        },
+                        JxlColorEncoding::XYB { .. } => unreachable!(),
+                    }
+                } else {
+                    nonlinear_output_color_profile
+                })
             } else {
                 embedded_color_profile.clone()
             };
