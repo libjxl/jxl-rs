@@ -3,8 +3,6 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-#![allow(dead_code)]
-
 use std::{f32::consts::SQRT_2, sync::OnceLock};
 
 use enum_iterator::Sequence;
@@ -23,7 +21,7 @@ use crate::{
     frame::{
         LfGlobalState,
         modular::{ModularChannel, ModularStreamId, decode::decode_modular_subbitstream},
-        transform_map::{self, HfTransformType},
+        transform_map::HfTransformType,
     },
     headers::{bit_depth::BitDepth, frame_header::FrameHeader},
 };
@@ -38,7 +36,6 @@ pub const LF_QUANT: [f32; 3] = [
 
 const ALMOST_ZERO: f32 = 1e-8;
 
-const MAX_QUANT_TABLE_SIZE: usize = transform_map::MAX_COEFF_AREA;
 const LOG2_NUM_QUANT_MODES: usize = 3;
 
 #[derive(Debug)]
@@ -111,6 +108,8 @@ pub enum QuantEncoding {
 }
 
 impl QuantEncoding {
+    // TODO(veluca): figure out if this should actually be unused.
+    #[allow(dead_code)]
     pub fn raw_from_qtable(qtable: Vec<i32>, shift: i32) -> Self {
         Self::Raw {
             qtable,
@@ -889,6 +888,8 @@ impl DequantMatrices {
         &self.table[self.table_offsets[quant_kind as usize * 3 + c]..]
     }
 
+    // TODO(veluca): figure out if this should actually be unused.
+    #[allow(dead_code)]
     pub fn inv_matrix(&self, quant_kind: HfTransformType, c: usize) -> &[f32] {
         assert_ne!((1 << quant_kind as u32) & self.computed_mask, 0);
         &self.inv_table[self.table_offsets[quant_kind as usize * 3 + c]..]

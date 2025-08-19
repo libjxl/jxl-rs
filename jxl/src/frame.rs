@@ -4,6 +4,7 @@
 // license that can be found in the LICENSE file.
 
 use crate::{
+    GROUP_DIM,
     bit_reader::BitReader,
     entropy_coding::decode::Histograms,
     error::Result,
@@ -57,7 +58,6 @@ pub enum Section {
     Hf { group: usize, pass: usize },
 }
 
-#[allow(dead_code)]
 pub struct LfGlobalState {
     patches: Option<PatchesDictionary>,
     splines: Option<Splines>,
@@ -70,7 +70,6 @@ pub struct LfGlobalState {
     modular_global: FullModularImage,
 }
 
-#[allow(dead_code)]
 pub struct PassState {
     coeff_orders: Vec<Permutation>,
     histograms: Histograms,
@@ -79,7 +78,6 @@ pub struct PassState {
 pub struct HfGlobalState {
     num_histograms: u32,
     passes: Vec<PassState>,
-    #[allow(dead_code)]
     dequant_matrices: DequantMatrices,
     hf_coefficients: Option<(Image<i32>, Image<i32>, Image<i32>)>,
 }
@@ -485,7 +483,7 @@ impl Frame {
         let hf_coefficients = if passes.len() <= 1 {
             None
         } else {
-            let xs = FrameHeader::GROUP_DIM * FrameHeader::GROUP_DIM;
+            let xs = GROUP_DIM * GROUP_DIM;
             let ys = self.header.num_groups();
             Some((
                 Image::new((xs, ys))?,

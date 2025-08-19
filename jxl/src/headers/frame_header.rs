@@ -6,6 +6,7 @@
 #![allow(clippy::excessive_precision)]
 
 use crate::{
+    BLOCK_DIM, GROUP_DIM,
     bit_reader::BitReader,
     error::Error,
     headers::{encodings::*, extra_channels::ExtraChannelInfo},
@@ -462,19 +463,14 @@ pub struct FrameHeader {
 }
 
 impl FrameHeader {
-    pub(crate) const GROUP_DIM: usize = 256;
-    pub(crate) const BLOCK_DIM: usize = 8;
-    #[allow(dead_code)]
-    pub(crate) const BLOCK_SIZE: usize = Self::BLOCK_DIM * Self::BLOCK_DIM;
-
     pub fn log_group_dim(&self) -> usize {
-        (Self::GROUP_DIM.ilog2() - 1 + self.group_size_shift) as usize
+        (GROUP_DIM.ilog2() - 1 + self.group_size_shift) as usize
     }
     pub fn group_dim(&self) -> usize {
         1 << self.log_group_dim()
     }
     pub fn lf_group_dim(&self) -> usize {
-        self.group_dim() * Self::BLOCK_DIM
+        self.group_dim() * BLOCK_DIM
     }
 
     pub fn num_groups(&self) -> usize {
@@ -585,8 +581,8 @@ impl FrameHeader {
     /// The dimensions of this frame, as coded in the codestream, in 8x8 blocks.
     pub fn size_blocks(&self) -> (usize, usize) {
         (
-            self.size().0.div_ceil(Self::BLOCK_DIM << self.maxhs) << self.maxhs,
-            self.size().1.div_ceil(Self::BLOCK_DIM << self.maxvs) << self.maxvs,
+            self.size().0.div_ceil(BLOCK_DIM << self.maxhs) << self.maxhs,
+            self.size().1.div_ceil(BLOCK_DIM << self.maxvs) << self.maxvs,
         )
     }
 
@@ -596,8 +592,8 @@ impl FrameHeader {
             self.size()
         } else {
             (
-                self.size_blocks().0 * Self::BLOCK_DIM,
-                self.size_blocks().1 * Self::BLOCK_DIM,
+                self.size_blocks().0 * BLOCK_DIM,
+                self.size_blocks().1 * BLOCK_DIM,
             )
         }
     }

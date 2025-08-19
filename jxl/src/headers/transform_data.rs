@@ -14,9 +14,9 @@ pub struct CustomTransformDataNonserialized {
 
 #[derive(UnconditionalCoder, Debug, Clone)]
 pub struct OpsinInverseMatrix {
-    #[all_default]
-    // TODO(firsching): remove once we use this!
+    // We never read the all_default field.
     #[allow(dead_code)]
+    #[all_default]
     all_default: bool,
     #[default([11.031566901960783, -9.866943921568629, -0.16462299647058826,
                -3.254147380392157,  4.418770392156863,  -0.16462299647058826,

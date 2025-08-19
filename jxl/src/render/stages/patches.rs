@@ -13,7 +13,6 @@ use crate::{
     util::NewWithCapacity as _,
 };
 
-#[allow(dead_code)]
 pub struct PatchesStage {
     pub patches: PatchesDictionary,
     pub extra_channels: Vec<ExtraChannelInfo>,

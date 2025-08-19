@@ -112,7 +112,7 @@ impl ToneMapping {
     }
 }
 
-// TODO(firsching): remove once we use this!
+// TODO(veluca): figure out if these fields should be unused.
 #[allow(dead_code)]
 #[derive(UnconditionalCoder, Debug, Clone)]
 pub struct ImageMetadata {

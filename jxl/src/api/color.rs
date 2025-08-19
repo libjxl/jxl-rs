@@ -1293,7 +1293,6 @@ impl TF_HLG {
     }
 
     /// The private HLG OETF, converting scene-referred light to a non-linear signal.
-    #[allow(dead_code)]
     fn oetf(mut s: f64) -> f64 {
         if s == 0.0 {
             return 0.0;

@@ -53,7 +53,7 @@ pub struct Histograms {
     lz77_params: Lz77Params,
     lz77_length_uint: Option<HybridUint>,
     context_map: Vec<u8>,
-    // TODO(firsching): remove once we use this!
+    // TODO(veluca): figure out why this is unused.
     #[allow(dead_code)]
     log_alpha_size: usize,
     uint_configs: Vec<HybridUint>,

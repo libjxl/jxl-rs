@@ -209,7 +209,7 @@ struct ModularBufferInfo {
     info: ChannelInfo,
     // The index of coded channel in the bit-stream, or -1 for non-coded channels.
     coded_channel_id: isize,
-    #[allow(dead_code)]
+    #[cfg_attr(not(feature = "tracing"), allow(dead_code))]
     description: String,
     grid_kind: ModularGridKind,
     grid_shape: (usize, usize),
