@@ -1137,4 +1137,34 @@ mod test {
         assert_eq!(num_frames, 2);
         Ok(())
     }
+
+    #[test]
+    fn multiple_lf_420() -> Result<(), Error> {
+        let mut verify_frame = |frame: &Frame| {
+            assert!(frame.header().is420());
+            let Some(lf_image) = &frame.lf_image else {
+                panic!("no lf_image");
+            };
+            for y in 0..146 {
+                let sample_cb_row = lf_image[0].as_rect().row(y);
+                let sample_cr_row = lf_image[2].as_rect().row(y);
+                for x in 0..146 {
+                    let sample_cb = sample_cb_row[x];
+                    let sample_cr = sample_cr_row[x];
+                    let no_chroma = sample_cb == 0.0 && sample_cr == 0.0;
+                    if y < 128 || x < 128 {
+                        assert!(!no_chroma);
+                    } else {
+                        assert!(no_chroma);
+                    }
+                }
+            }
+            Ok(())
+        };
+        read_frames(
+            include_bytes!("../resources/test/multiple_lf_420.jxl"),
+            &mut verify_frame,
+        )?;
+        Ok(())
+    }
 }
