@@ -29,7 +29,7 @@ const K_BRADFORD_INV: Matrix3x3<f64> = [
 ];
 
 #[allow(clippy::too_many_arguments)]
-fn primaries_to_xyz(
+pub(crate) fn primaries_to_xyz(
     rx: f32,
     ry: f32,
     gx: f32,
@@ -98,7 +98,7 @@ fn primaries_to_xyz(
     Ok(result_matrix)
 }
 
-fn adapt_to_xyz_d50(wx: f32, wy: f32) -> Result<Matrix3x3<f64>, Error> {
+pub(crate) fn adapt_to_xyz_d50(wx: f32, wy: f32) -> Result<Matrix3x3<f64>, Error> {
     if !((0.0..=1.0).contains(&wx) && (wy > 0.0 && wy <= 1.0)) {
         return Err(Error::IccInvalidWhitePoint(
             wx,
@@ -160,7 +160,7 @@ fn adapt_to_xyz_d50(wx: f32, wy: f32) -> Result<Matrix3x3<f64>, Error> {
 }
 
 #[allow(clippy::too_many_arguments)]
-fn primaries_to_xyz_d50(
+pub(crate) fn primaries_to_xyz_d50(
     rx: f32,
     ry: f32,
     gx: f32,
@@ -1293,7 +1293,6 @@ impl TF_HLG {
     }
 
     /// The private HLG OETF, converting scene-referred light to a non-linear signal.
-    #[allow(dead_code)]
     fn oetf(mut s: f64) -> f64 {
         if s == 0.0 {
             return 0.0;

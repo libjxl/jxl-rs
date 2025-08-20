@@ -209,7 +209,7 @@ struct ModularBufferInfo {
     info: ChannelInfo,
     // The index of coded channel in the bit-stream, or -1 for non-coded channels.
     coded_channel_id: isize,
-    #[allow(dead_code)]
+    #[cfg_attr(not(feature = "tracing"), allow(dead_code))]
     description: String,
     grid_kind: ModularGridKind,
     grid_shape: (usize, usize),
@@ -604,12 +604,12 @@ fn dequant_lf(
         / (quant_params.global_scale as f32 * quant_params.quant_lf as f32);
     let lf_factors = lf_quant.quant_factors.map(|factor| factor * inv_quant_lf);
 
-    let [lf0, lf1, lf2] = lf;
-    let (mut lf0_rect, mut lf1_rect, mut lf2_rect) =
-        (lf0.as_rect_mut(), lf1.as_rect_mut(), lf2.as_rect_mut());
-    let mut lf_rects = (lf0_rect.rect(r)?, lf1_rect.rect(r)?, lf2_rect.rect(r)?);
+    let lf_rects = lf.each_mut().map(|lf| lf.as_rect_mut());
 
     if frame_header.is444() {
+        let [mut lf0, mut lf1, mut lf2] = lf_rects;
+        let mut lf_rects = (lf0.rect(r)?, lf1.rect(r)?, lf2.rect(r)?);
+
         let fac_x = lf_factors[0] * mul;
         let fac_y = lf_factors[1] * mul;
         let fac_b = lf_factors[2] * mul;
@@ -632,7 +632,7 @@ fn dequant_lf(
             }
         }
     } else {
-        for (c, mut lf_rect) in [(1, lf_rects.1), (0, lf_rects.0), (2, lf_rects.2)] {
+        for (c, mut lf_rect) in lf_rects.into_iter().enumerate() {
             let rect = Rect {
                 origin: (
                     r.origin.0 >> frame_header.hshift(c),
@@ -643,6 +643,7 @@ fn dequant_lf(
                     r.size.1 >> frame_header.vshift(c),
                 ),
             };
+            let mut lf_rect = lf_rect.rect(rect)?;
             let fac = lf_factors[c] * mul;
             let ch = input[if c < 2 { c ^ 1 } else { c }];
             for y in 0..rect.size.1 {
