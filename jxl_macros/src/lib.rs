@@ -8,7 +8,7 @@ extern crate proc_macro;
 use std::{fs, path::Path};
 
 use proc_macro::TokenStream;
-use proc_macro_error::{abort, proc_macro_error};
+use proc_macro_error2::{abort, proc_macro_error};
 use proc_macro2::TokenStream as TokenStream2;
 use quote::quote;
 use syn::{DeriveInput, Ident, Meta, parse_macro_input};
