@@ -165,7 +165,9 @@ fn encode_png(
                 for x in 0..width {
                     for c in 0..num_channels {
                         data[(y * width + x) * num_channels + c] =
-                            frame.channels[c].as_rect().row(y)[x].clamp(0.0, 255.0) as u8;
+                            frame.channels[c].as_rect().row(y)[x]
+                                .clamp(0.0, 255.0)
+                                .round() as u8;
                     }
                 }
             }
@@ -177,8 +179,9 @@ fn encode_png(
             for y in 0..height {
                 for x in 0..width {
                     for c in 0..num_channels {
-                        let pixel = (frame.channels[c].as_rect().row(y)[x] * 65535.0 / 255.0)
-                            .clamp(0.0, 65535.0) as u16;
+                        let pixel = (frame.channels[c].as_rect().row(y)[x] * 257.0)
+                            .clamp(0.0, 65535.0)
+                            .round() as u16;
                         let index = 2 * ((y * width + x) * num_channels + c);
                         data[index] = (pixel >> 8) as u8;
                         data[index + 1] = (pixel & 0xFF) as u8;
