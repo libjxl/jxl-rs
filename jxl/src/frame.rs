@@ -193,15 +193,13 @@ impl Frame {
         toc: Toc,
         decoder_state: DecoderState,
     ) -> Result<Self> {
+        let image_metadata = &decoder_state.file_header.image_metadata;
+        let is_modular_gray = !frame_header.do_ycbcr
+            && !image_metadata.xyb_encoded
+            && image_metadata.color_encoding.color_space == ColorSpace::Gray;
         let modular_color_channels = if frame_header.encoding == Encoding::VarDCT {
             0
-        } else if decoder_state
-            .file_header
-            .image_metadata
-            .color_encoding
-            .color_space
-            == ColorSpace::Gray
-        {
+        } else if is_modular_gray {
             1
         } else {
             3
@@ -1157,6 +1155,35 @@ mod test {
             include_bytes!("../resources/test/multiple_lf_420.jxl"),
             &mut verify_frame,
         )?;
+        Ok(())
+    }
+
+    #[test]
+    fn xyb_grayscale_patches() -> Result<(), Error> {
+        let mut num_frames = 0;
+        let mut verify_frame = |frame: &Frame| {
+            if num_frames == 0 {
+                assert_eq!(
+                    frame.header.frame_type,
+                    crate::headers::frame_header::FrameType::ReferenceOnly,
+                );
+                assert_eq!(
+                    frame.header.encoding,
+                    crate::headers::frame_header::Encoding::Modular,
+                );
+                assert_eq!(frame.modular_color_channels, 3);
+            } else {
+                assert!(frame.header.has_patches());
+                assert_eq!(frame.modular_color_channels, 0);
+            }
+            num_frames += 1;
+            Ok(())
+        };
+        read_frames(
+            include_bytes!("../resources/test/grayscale_patches_var_dct.jxl"),
+            &mut verify_frame,
+        )?;
+        assert_eq!(num_frames, 2);
         Ok(())
     }
 }
