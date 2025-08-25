@@ -5,10 +5,11 @@
 
 use std::{
     arch::x86_64::{
-        __m512, _mm512_add_ps, _mm512_fmadd_ps, _mm512_loadu_ps, _mm512_mul_ps, _mm512_set1_ps,
-        _mm512_storeu_ps, _mm512_sub_ps,
+        __m512, _mm512_add_ps, _mm512_andnot_si512, _mm512_castps_si512, _mm512_castsi512_ps,
+        _mm512_div_ps, _mm512_fmadd_ps, _mm512_loadu_ps, _mm512_max_ps, _mm512_mul_ps,
+        _mm512_set1_epi32, _mm512_set1_ps, _mm512_storeu_ps, _mm512_sub_ps,
     },
-    ops::{Add, AddAssign, Mul, MulAssign, Sub, SubAssign},
+    ops::{Add, AddAssign, Div, DivAssign, Mul, MulAssign, Sub, SubAssign},
 };
 
 use super::super::{F32SimdVec, SimdDescriptor};
@@ -80,6 +81,19 @@ impl F32SimdVec for F32VecAvx512 {
         // SAFETY: We know avx512f is available from the safety invariant on `d`.
         unsafe { Self(_mm512_set1_ps(v), d) }
     }
+
+    fn_avx!(this: F32VecAvx512, fn abs() -> F32VecAvx512 {
+        F32VecAvx512(
+            _mm512_castsi512_ps(_mm512_andnot_si512(
+                _mm512_set1_epi32(0b10000000000000000000000000000000u32 as i32),
+                _mm512_castps_si512(this.0),
+            )),
+            this.1)
+    });
+
+    fn_avx!(this: F32VecAvx512, fn max(other: F32VecAvx512) -> F32VecAvx512 {
+        F32VecAvx512(_mm512_max_ps(this.0, other.0), this.1)
+    });
 }
 
 impl Add<F32VecAvx512> for F32VecAvx512 {
@@ -103,6 +117,13 @@ impl Mul<F32VecAvx512> for F32VecAvx512 {
     });
 }
 
+impl Div<F32VecAvx512> for F32VecAvx512 {
+    type Output = F32VecAvx512;
+    fn_avx!(this: F32VecAvx512, fn div(rhs: F32VecAvx512) -> F32VecAvx512 {
+        F32VecAvx512(_mm512_div_ps(this.0, rhs.0), this.1)
+    });
+}
+
 impl AddAssign<F32VecAvx512> for F32VecAvx512 {
     fn_avx!(this: &mut F32VecAvx512, fn add_assign(rhs: F32VecAvx512) {
         this.0 = _mm512_add_ps(this.0, rhs.0)
@@ -118,5 +139,11 @@ impl SubAssign<F32VecAvx512> for F32VecAvx512 {
 impl MulAssign<F32VecAvx512> for F32VecAvx512 {
     fn_avx!(this: &mut F32VecAvx512, fn mul_assign(rhs: F32VecAvx512) {
         this.0 = _mm512_mul_ps(this.0, rhs.0)
+    });
+}
+
+impl DivAssign<F32VecAvx512> for F32VecAvx512 {
+    fn_avx!(this: &mut F32VecAvx512, fn div_assign(rhs: F32VecAvx512) {
+        this.0 = _mm512_div_ps(this.0, rhs.0)
     });
 }
