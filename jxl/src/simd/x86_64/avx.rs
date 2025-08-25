@@ -5,8 +5,9 @@
 
 use std::{
     arch::x86_64::{
-        __m256, _mm256_add_ps, _mm256_fmadd_ps, _mm256_loadu_ps, _mm256_mul_ps, _mm256_set1_ps,
-        _mm256_storeu_ps, _mm256_sub_ps,
+        __m256, _mm256_add_ps, _mm256_andnot_si256, _mm256_castps_si256, _mm256_castsi256_ps,
+        _mm256_fmadd_ps, _mm256_loadu_ps, _mm256_mul_ps, _mm256_set1_ps, _mm256_storeu_ps,
+        _mm256_sub_ps,
     },
     ops::{Add, AddAssign, Mul, MulAssign, Sub, SubAssign},
 };
@@ -80,6 +81,15 @@ impl F32SimdVec for F32VecAvx {
         // SAFETY: We know avx is available from the safety invariant on `d`.
         unsafe { Self(_mm256_set1_ps(v), d) }
     }
+
+    fn_avx!(this: F32VecAvx, fn abs() -> F32VecAvx {
+        F32VecAvx(
+            _mm256_castsi256_ps(_mm256_andnot_si256(
+                _mm256_castps_si256(_mm256_set1_ps(-0.0)),
+                _mm256_castps_si256(this.0),
+            )),
+            this.1)
+    });
 }
 
 impl Add<F32VecAvx> for F32VecAvx {

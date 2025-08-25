@@ -46,16 +46,8 @@ impl Epf0Stage {
             border_sad_mul,
         }
     }
-}
 
-impl RenderPipelineStage for Epf0Stage {
-    type Type = RenderPipelineInOutStage<f32, f32, 3, 3, 0, 0>;
-
-    fn uses_channel(&self, c: usize) -> bool {
-        c < 3
-    }
-
-    fn process_row_chunk(
+    fn process_row_chunk_scalar(
         &self,
         (xpos, ypos): (usize, usize),
         xsize: usize,
@@ -202,6 +194,24 @@ impl RenderPipelineStage for Epf0Stage {
                     * inv_w;
             }
         }
+    }
+}
+
+impl RenderPipelineStage for Epf0Stage {
+    type Type = RenderPipelineInOutStage<f32, f32, 3, 3, 0, 0>;
+
+    fn uses_channel(&self, c: usize) -> bool {
+        c < 3
+    }
+
+    fn process_row_chunk(
+        &self,
+        (xpos, ypos): (usize, usize),
+        xsize: usize,
+        row: &mut [(&[&[f32]], &mut [&mut [f32]])],
+        state: Option<&mut dyn std::any::Any>,
+    ) {
+        self.process_row_chunk_scalar((xpos, ypos), xsize, row, state);
     }
 }
 

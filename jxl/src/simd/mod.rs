@@ -67,4 +67,6 @@ pub trait F32SimdVec:
 
     // Requires `mem.len() >= Self::LEN` or it will panic.
     fn store(&self, mem: &mut [f32]);
+
+    fn abs(self) -> Self;
 }

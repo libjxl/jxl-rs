@@ -40,6 +40,10 @@ impl F32SimdVec for F32VecScalar {
     fn splat(_d: Self::Descriptor, v: f32) -> Self {
         Self(v)
     }
+
+    fn abs(self) -> Self {
+        Self(self.0.abs())
+    }
 }
 
 impl Add<F32VecScalar> for F32VecScalar {
