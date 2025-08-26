@@ -596,8 +596,7 @@ impl PatchesDictionary {
             .map(|s| &mut s[..xsize])
             .collect::<Vec<&mut [f32]>>();
         let num_ec = extra_channel_info.len();
-        // TODO(zond): Check if this shouldn't be `num_ec + 1 == self.blendings_stride` instead.
-        assert!(num_ec < self.blendings_stride);
+        assert!(num_ec + 1 == self.blendings_stride);
         let dummy_fg = vec![0f32];
         let mut fg = vec![dummy_fg.as_slice(); 3 + num_ec];
         self.set_patches_for_row(row_pos.1, &mut *patches_for_row_result);
