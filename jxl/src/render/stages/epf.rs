@@ -32,7 +32,6 @@ impl std::fmt::Display for Epf0Stage {
 }
 
 impl Epf0Stage {
-    #[allow(unused, reason = "remove once we actually use this")]
     pub fn new(
         sigma_scale: f32,
         border_sad_mul: f32,
@@ -226,7 +225,6 @@ impl std::fmt::Display for Epf1Stage {
 }
 
 impl Epf1Stage {
-    #[allow(unused, reason = "remove once we actually use this")]
     pub fn new(
         sigma_scale: f32,
         border_sad_mul: f32,
@@ -359,7 +357,6 @@ impl std::fmt::Display for Epf2Stage {
 }
 
 impl Epf2Stage {
-    #[allow(unused, reason = "remove once we actually use this")]
     pub fn new(
         sigma_scale: f32,
         border_sad_mul: f32,
