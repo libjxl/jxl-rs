@@ -12,7 +12,7 @@ use crate::{
     frame::ReferenceFrame,
     headers::{FileHeader, extra_channels::ExtraChannelInfo, frame_header::*},
     render::{RenderPipelineInPlaceStage, RenderPipelineStage},
-    util::slice_mut,
+    util::slice,
 };
 
 pub struct BlendingStage {
@@ -147,7 +147,7 @@ impl RenderPipelineStage for BlendingStage {
             .collect();
 
         perform_blending(
-            &mut slice_mut!(out, .., bg_x0..bg_x1),
+            &mut slice!(&mut out, .., bg_x0..bg_x1),
             &fg,
             &blending_info,
             &ec_blending_info,

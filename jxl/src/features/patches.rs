@@ -14,7 +14,7 @@ use crate::{
     features::blending::perform_blending,
     frame::{DecoderState, ReferenceFrame},
     headers::extra_channels::ExtraChannelInfo,
-    util::{NewWithCapacity, slice_mut, tracing_wrappers::*},
+    util::{NewWithCapacity, slice, tracing_wrappers::*},
 };
 
 // Context numbers as specified in Section C.4.5, Listing C.2:
@@ -652,7 +652,7 @@ impl PatchesDictionary {
 
             let blending_idx = pos_idx * self.blendings_stride;
             perform_blending(
-                &mut slice_mut!(out, .., out_x0..out_x1),
+                &mut slice!(&mut out, .., out_x0..out_x1),
                 &fg,
                 &self.blendings[blending_idx],
                 &self.blendings[blending_idx + 1..],
