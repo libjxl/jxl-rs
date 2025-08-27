@@ -150,3 +150,40 @@ pub(super) fn test_stage_consistency<
     });
     Ok(())
 }
+
+macro_rules! create_in_out_rows {
+    ($u:expr, $border_x:expr, $border_y:expr, $rows:ident, $xsize:ident) => {
+        use crate::simd::round_up_size_to_two_cache_lines;
+        let $xsize: usize = 1 + $u.arbitrary::<usize>()? % 4095;
+        let mut row_vecs = vec![(
+            vec![
+                vec![
+                    0f32;
+                    round_up_size_to_two_cache_lines::<f32>(
+                        round_up_size_to_two_cache_lines::<f32>($xsize) + $border_x * 2
+                    )
+                ];
+                1 + $border_y * 2
+            ],
+            vec![vec![0f32; round_up_size_to_two_cache_lines::<f32>($xsize)]],
+        )];
+
+        let mut row_vecs_refs: Vec<(Vec<&[f32]>, Vec<&mut [f32]>)> = row_vecs
+            .iter_mut()
+            .map(|(left, right)| {
+                (
+                    left.iter().map(|v| v.as_slice()).collect(),
+                    right.iter_mut().map(|v| v.as_mut_slice()).collect(),
+                )
+            })
+            .collect();
+
+        let mut outer: Vec<(&[&[f32]], &mut [&mut [f32]])> = row_vecs_refs
+            .iter_mut()
+            .map(|(left, right)| (left.as_slice(), right.as_mut_slice()))
+            .collect();
+
+        let $rows = &mut outer[..];
+    };
+}
+pub(crate) use create_in_out_rows;

@@ -80,6 +80,13 @@ impl RenderPipelineBuilder for SimpleRenderPipelineBuilder {
         downsampling_shift: usize,
         log_group_size: usize,
     ) -> Self {
+        // The 256 is an even number of cache lines, which makes round_up_size_to_two_cache_lines not round it up.
+        // This is fine since it's also an even number of SIMD lanes - and when using borders in stages we round up
+        // chunk_size + border * 2, and again get space for full SIMD lane loading.
+        // If the chunk size is less than an even number of SIMD lanes, then rounding up chunk_size + border * 2 might
+        // end up with an uneven number of SIMD lanes to read the full chunk.
+        // Example: chunk_size=3833, border=1, round_up_size_to_two_cache_lines(chunk_size + border * 2)=3840,
+        //          reading the last border pixel will then read a lane outside the buffer.
         Self::new_with_chunk_size(num_channels, size, downsampling_shift, log_group_size, 256)
     }
 
