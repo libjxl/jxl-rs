@@ -77,138 +77,145 @@ pub trait F32SimdVec:
 
 #[cfg(test)]
 mod test {
+    use arbtest::arbitrary::Unstructured;
+
     use crate::{
-        simd::{
-            F32SimdVec, ScalarDescriptor, SimdDescriptor, round_up_size_to_two_cache_lines,
-            test_all_instruction_sets,
-        },
+        simd::{F32SimdVec, ScalarDescriptor, SimdDescriptor, test_all_instruction_sets},
         util::test::assert_all_almost_eq,
     };
 
-    fn vec_add<D: SimdDescriptor>(d: D, a: &[f32], b: &[f32]) -> Vec<f32> {
-        assert!(a.len() == b.len());
-        let mut res = vec![0f32; a.len()];
-        for idx in (0..a.len()).step_by(D::F32Vec::LEN) {
-            (D::F32Vec::load(d, &a[idx..]) + D::F32Vec::load(d, &b[idx..])).store(&mut res[idx..]);
-        }
-        res
+    enum Distribution {
+        Floats,
+        NonZeroFloats,
     }
 
-    fn vec_sub<D: SimdDescriptor>(d: D, a: &[f32], b: &[f32]) -> Vec<f32> {
-        assert!(a.len() == b.len());
-        let mut res = vec![0f32; a.len()];
-        for idx in (0..a.len()).step_by(D::F32Vec::LEN) {
-            (D::F32Vec::load(d, &a[idx..]) - D::F32Vec::load(d, &b[idx..])).store(&mut res[idx..]);
-        }
-        res
-    }
-
-    fn vec_mul<D: SimdDescriptor>(d: D, a: &[f32], b: &[f32]) -> Vec<f32> {
-        assert!(a.len() == b.len());
-        let mut res = vec![0f32; a.len()];
-        for idx in (0..a.len()).step_by(D::F32Vec::LEN) {
-            (D::F32Vec::load(d, &a[idx..]) * D::F32Vec::load(d, &b[idx..])).store(&mut res[idx..]);
-        }
-        res
-    }
-
-    fn vec_add_assign<D: SimdDescriptor>(d: D, a: &[f32], b: &[f32]) -> Vec<f32> {
-        assert!(a.len() == b.len());
-        let mut res = vec![0f32; a.len()];
-        for idx in (0..a.len()).step_by(D::F32Vec::LEN) {
-            let mut a_vec = D::F32Vec::load(d, &a[idx..]);
-            a_vec += D::F32Vec::load(d, &b[idx..]);
-            a_vec.store(&mut res[idx..]);
-        }
-        res
-    }
-
-    fn vec_sub_assign<D: SimdDescriptor>(d: D, a: &[f32], b: &[f32]) -> Vec<f32> {
-        assert!(a.len() == b.len());
-        let mut res = vec![0f32; a.len()];
-        for idx in (0..a.len()).step_by(D::F32Vec::LEN) {
-            let mut a_vec = D::F32Vec::load(d, &a[idx..]);
-            a_vec -= D::F32Vec::load(d, &b[idx..]);
-            a_vec.store(&mut res[idx..]);
-        }
-        res
-    }
-
-    fn vec_mul_assign<D: SimdDescriptor>(d: D, a: &[f32], b: &[f32]) -> Vec<f32> {
-        assert!(a.len() == b.len());
-        let mut res = vec![0f32; a.len()];
-        for idx in (0..a.len()).step_by(D::F32Vec::LEN) {
-            let mut a_vec = D::F32Vec::load(d, &a[idx..]);
-            a_vec *= D::F32Vec::load(d, &b[idx..]);
-            a_vec.store(&mut res[idx..]);
-        }
-        res
-    }
-
-    fn vec_abs<D: SimdDescriptor>(d: D, a: &[f32]) -> Vec<f32> {
-        let mut res = vec![0f32; a.len()];
-        for idx in (0..a.len()).step_by(D::F32Vec::LEN) {
-            D::F32Vec::load(d, &a[idx..]).abs().store(&mut res[idx..]);
-        }
-        res
-    }
-
-    fn vec_max<D: SimdDescriptor>(d: D, a: &[f32], b: &[f32]) -> Vec<f32> {
-        assert!(a.len() == b.len());
-        let mut res = vec![0f32; a.len()];
-        for idx in (0..a.len()).step_by(D::F32Vec::LEN) {
-            D::F32Vec::load(d, &a[idx..])
-                .max(D::F32Vec::load(d, &b[idx..]))
-                .store(&mut res[idx..]);
-        }
-        res
-    }
-
-    fn simd_op_scalar_equivalent<D: SimdDescriptor>(d: D) {
-        arbtest::arbtest(|u| {
-            let mut a = vec![0.0; round_up_size_to_two_cache_lines::<f32>(D::F32Vec::LEN)];
-            let mut b = vec![0.0; round_up_size_to_two_cache_lines::<f32>(D::F32Vec::LEN)];
-
-            for i in 0..D::F32Vec::LEN {
-                a[i] = u.arbitrary::<f32>()?;
-                b[i] = u.arbitrary::<f32>()?;
+    fn arb_vec<D: SimdDescriptor>(_: D, u: &mut Unstructured, dist: Distribution) -> Vec<f32> {
+        let mut res = vec![0.0; D::F32Vec::LEN];
+        for v in res.iter_mut() {
+            match dist {
+                Distribution::Floats => {
+                    *v = u.arbitrary::<i32>().unwrap() as f32
+                        / (1.0 + u.arbitrary::<u32>().unwrap() as f32)
+                }
+                Distribution::NonZeroFloats => {
+                    let sign = if u.arbitrary::<bool>().unwrap() {
+                        1.0
+                    } else {
+                        -1.0
+                    };
+                    *v = sign * (1.0 + u.arbitrary::<u32>().unwrap() as f32)
+                        / (1.0 + u.arbitrary::<u32>().unwrap() as f32);
+                }
             }
-
-            let scalar_add_result = vec_add(ScalarDescriptor::new().unwrap(), &a, &b);
-            let d_add_result = vec_add(d, &a, &b);
-            assert_all_almost_eq!(scalar_add_result, d_add_result, 1e-8);
-
-            let scalar_sub_result = vec_sub(ScalarDescriptor::new().unwrap(), &a, &b);
-            let d_sub_result = vec_sub(d, &a, &b);
-            assert_all_almost_eq!(scalar_sub_result, d_sub_result, 1e-8);
-
-            let scalar_mul_result = vec_mul(ScalarDescriptor::new().unwrap(), &a, &b);
-            let d_mul_result = vec_mul(d, &a, &b);
-            assert_all_almost_eq!(scalar_mul_result, d_mul_result, 1e-8);
-
-            let scalar_add_assign_result = vec_add_assign(ScalarDescriptor::new().unwrap(), &a, &b);
-            let d_add_assign_result = vec_add_assign(d, &a, &b);
-            assert_all_almost_eq!(scalar_add_assign_result, d_add_assign_result, 1e-8);
-
-            let scalar_sub_assign_result = vec_sub_assign(ScalarDescriptor::new().unwrap(), &a, &b);
-            let d_sub_assign_result = vec_sub_assign(d, &a, &b);
-            assert_all_almost_eq!(scalar_sub_assign_result, d_sub_assign_result, 1e-8);
-
-            let scalar_mul_assign_result = vec_mul_assign(ScalarDescriptor::new().unwrap(), &a, &b);
-            let d_mul_assign_result = vec_mul_assign(d, &a, &b);
-            assert_all_almost_eq!(scalar_mul_assign_result, d_mul_assign_result, 1e-8);
-
-            let scalar_abs_result = vec_abs(ScalarDescriptor::new().unwrap(), &a);
-            let d_abs_result = vec_abs(d, &a);
-            assert_all_almost_eq!(scalar_abs_result, d_abs_result, 1e-8);
-
-            let scalar_max_result = vec_max(ScalarDescriptor::new().unwrap(), &a, &b);
-            let d_max_result = vec_max(d, &a, &b);
-            assert_all_almost_eq!(scalar_max_result, d_max_result, 1e-8);
-
-            Ok(())
-        });
+        }
+        res
     }
 
-    test_all_instruction_sets!(simd_op_scalar_equivalent);
+    macro_rules! test_instruction {
+        ($name:ident, |$a:ident: $a_dist:ident| $block:expr) => {
+            fn $name<D: SimdDescriptor>(d: D) {
+                fn compute<D: SimdDescriptor>(d: D, a: &[f32]) -> Vec<f32> {
+                    let closure = |$a: D::F32Vec| $block;
+                    let mut res = vec![0f32; a.len()];
+                    for idx in (0..a.len()).step_by(D::F32Vec::LEN) {
+                        closure(D::F32Vec::load(d, &a[idx..])).store(&mut res[idx..]);
+                    }
+                    res
+                }
+                arbtest::arbtest(|u| {
+                    let a = arb_vec(d, u, Distribution::$a_dist);
+                    let scalar_res = compute(ScalarDescriptor::new().unwrap(), &a);
+                    let simd_res = compute(d, &a);
+                    assert_all_almost_eq!(&scalar_res, simd_res, 1e-8);
+                    Ok(())
+                })
+                .size_min(64);
+            }
+            test_all_instruction_sets!($name);
+        };
+        ($name:ident, |$a:ident: $a_dist:ident, $b:ident: $b_dist:ident| $block:expr) => {
+            fn $name<D: SimdDescriptor>(d: D) {
+                fn compute<D: SimdDescriptor>(d: D, a: &[f32], b: &[f32]) -> Vec<f32> {
+                    let closure = |$a: D::F32Vec, $b: D::F32Vec| $block;
+                    let mut res = vec![0f32; a.len()];
+                    for idx in (0..a.len()).step_by(D::F32Vec::LEN) {
+                        closure(D::F32Vec::load(d, &a[idx..]), D::F32Vec::load(d, &b[idx..]))
+                            .store(&mut res[idx..]);
+                    }
+                    res
+                }
+                arbtest::arbtest(|u| {
+                    let a = arb_vec(d, u, Distribution::$a_dist);
+                    let b = arb_vec(d, u, Distribution::$b_dist);
+                    let scalar_res = compute(ScalarDescriptor::new().unwrap(), &a, &b);
+                    let simd_res = compute(d, &a, &b);
+                    assert_all_almost_eq!(&scalar_res, simd_res, 1e-8);
+                    Ok(())
+                })
+                .size_min(128);
+            }
+            test_all_instruction_sets!($name);
+        };
+        ($name:ident, |$a:ident: $a_dist:ident, $b:ident: $b_dist:ident, $c:ident: $c_dist:ident| $block:expr) => {
+            fn $name<D: SimdDescriptor>(d: D) {
+                fn compute<D: SimdDescriptor>(d: D, a: &[f32], b: &[f32], c: &[f32]) -> Vec<f32> {
+                    let closure = |$a: D::F32Vec, $b: D::F32Vec, $c: D::F32Vec| $block;
+                    let mut res = vec![0f32; a.len()];
+                    for idx in (0..a.len()).step_by(D::F32Vec::LEN) {
+                        closure(
+                            D::F32Vec::load(d, &a[idx..]),
+                            D::F32Vec::load(d, &b[idx..]),
+                            D::F32Vec::load(d, &c[idx..]),
+                        )
+                        .store(&mut res[idx..]);
+                    }
+                    res
+                }
+                arbtest::arbtest(|u| {
+                    let a = arb_vec(d, u, Distribution::$a_dist);
+                    let b = arb_vec(d, u, Distribution::$b_dist);
+                    let c = arb_vec(d, u, Distribution::$c_dist);
+                    let scalar_res = compute(ScalarDescriptor::new().unwrap(), &a, &b, &c);
+                    let simd_res = compute(d, &a, &b, &c);
+                    assert_all_almost_eq!(&scalar_res, simd_res, 1e-8);
+                    Ok(())
+                })
+                .size_min(172);
+            }
+            test_all_instruction_sets!($name);
+        };
+    }
+
+    test_instruction!(add, |a: Floats, b: Floats| { a + b });
+    test_instruction!(mul, |a: Floats, b: Floats| { a * b });
+    test_instruction!(sub, |a: Floats, b: Floats| { a - b });
+    test_instruction!(div, |a: Floats, b: NonZeroFloats| { a / b });
+
+    test_instruction!(add_assign, |a: Floats, b: Floats| {
+        let mut res = a;
+        res += b;
+        res
+    });
+    test_instruction!(mul_assign, |a: Floats, b: Floats| {
+        let mut res = a;
+        res *= b;
+        res
+    });
+    test_instruction!(sub_assign, |a: Floats, b: Floats| {
+        let mut res = a;
+        res -= b;
+        res
+    });
+    test_instruction!(div_assign, |a: Floats, b: NonZeroFloats| {
+        let mut res = a;
+        res /= b;
+        res
+    });
+
+    test_instruction!(mul_add, |a: Floats, b: Floats, c: Floats| {
+        a.mul_add(b, c)
+    });
+
+    test_instruction!(abs, |a: Floats| { a.abs() });
+    test_instruction!(max, |a: Floats, b: Floats| { a.max(b) });
 }
