@@ -519,8 +519,10 @@ impl<
             vec![
                 vec![
                     InputT::default();
+                    // Double rounding make sure that we always have enough buffer for reading a whole SIMD lane.
                     round_up_size_to_two_cache_lines::<OutputT>(
-                        chunk_size + BORDER_X as usize * 2
+                        round_up_size_to_two_cache_lines::<OutputT>(chunk_size)
+                            + BORDER_X as usize * 2
                     )
                 ];
                 BORDER_Y as usize * 2 + 1
