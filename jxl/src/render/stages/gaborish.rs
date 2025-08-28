@@ -131,7 +131,7 @@ mod test {
                 .iter()
                 .map(|inner_slice| inner_slice.to_vec())
                 .collect();
-            for (index, scalar_row) in scalar_result.iter().enumerate() {
+            for (index, scalar_row) in scalar_result.iter().take(xsize).enumerate() {
                 assert_all_almost_eq!(scalar_row, simd_result[index], 1e-8);
             }
             Ok(())
