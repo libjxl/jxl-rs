@@ -3,7 +3,9 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
+use crate::render::internal::InOutChannel;
 use crate::render::{RenderPipelineInOutStage, RenderPipelineStage};
+use crate::simd::{F32SimdVec, simd_function};
 
 /// Apply Gabor-like filter to a channel.
 #[derive(Debug)]
@@ -32,6 +34,32 @@ impl std::fmt::Display for GaborishStage {
     }
 }
 
+simd_function!(
+    gaborish_process_dispatch,
+    d: D,
+    fn gaborish_process(
+        stage: &GaborishStage,
+        xsize: usize,
+        row: &mut [InOutChannel<f32, f32>],
+    ) {
+        let (rows_in, ref mut rows_out) = row[0];
+        let row_out = &mut rows_out[0];
+        for idx in (0..xsize).step_by(D::F32Vec::LEN) {
+            let mut sum = D::F32Vec::splat(d, 0f32);
+            let row_and_kernel = std::iter::zip(
+                rows_in,
+                [stage.kernel_top_bottom, stage.kernel_center, stage.kernel_top_bottom],
+            );
+            for (row_in, kernel) in row_and_kernel {
+                for (dx, weight) in kernel.iter().enumerate() {
+                    sum = D::F32Vec::load(d, &row_in[idx + dx..]).mul_add(D::F32Vec::splat(d, *weight), sum);
+                }
+            }
+            sum.store(&mut row_out[idx..]);
+        }
+    }
+);
+
 impl RenderPipelineStage for GaborishStage {
     type Type = RenderPipelineInOutStage<f32, f32, 1, 1, 0, 0>;
 
@@ -43,30 +71,10 @@ impl RenderPipelineStage for GaborishStage {
         &self,
         _position: (usize, usize),
         xsize: usize,
-        row: &mut [(&[&[f32]], &mut [&mut [f32]])],
+        row: &mut [InOutChannel<f32, f32>],
         _state: Option<&mut dyn std::any::Any>,
     ) {
-        let (rows_in, ref mut rows_out) = row[0];
-        let row_out = &mut rows_out[0][..xsize];
-
-        let kernel_top_bottom = self.kernel_top_bottom;
-        let kernel_center = self.kernel_center;
-
-        for (idx, out) in row_out.iter_mut().enumerate() {
-            let mut sum = 0f32;
-            let row_and_kernel = std::iter::zip(
-                rows_in,
-                [kernel_top_bottom, kernel_center, kernel_top_bottom],
-            );
-
-            for (row_in, kernel) in row_and_kernel {
-                for (dx, weight) in kernel.into_iter().enumerate() {
-                    sum += row_in[idx + dx] * weight;
-                }
-            }
-
-            *out = sum;
-        }
+        gaborish_process_dispatch(self, xsize, row);
     }
 }
 
@@ -77,7 +85,8 @@ mod test {
     use super::*;
     use crate::error::Result;
     use crate::image::Image;
-    use crate::render::test::make_and_run_simple_pipeline;
+    use crate::render::test::{create_in_out_rows, make_and_run_simple_pipeline};
+    use crate::simd::{ScalarDescriptor, SimdDescriptor, test_all_instruction_sets};
     use crate::util::test::assert_all_almost_eq;
 
     #[test]
@@ -105,4 +114,29 @@ mod test {
 
         Ok(())
     }
+
+    fn gaborish_process_scalar_equivalent<D: SimdDescriptor>(d: D) {
+        arbtest::arbtest(|u| {
+            let stage = GaborishStage::new(0, 0.115169525, 0.061248592);
+            create_in_out_rows!(u, 1, 1, rows, xsize);
+            gaborish_process(d, &stage, xsize, rows);
+            let simd_result: Vec<Vec<f32>> = rows[0]
+                .1
+                .iter()
+                .map(|inner_slice| inner_slice.to_vec())
+                .collect();
+            gaborish_process(ScalarDescriptor::new().unwrap(), &stage, xsize, rows);
+            let scalar_result: Vec<Vec<f32>> = rows[0]
+                .1
+                .iter()
+                .map(|inner_slice| inner_slice.to_vec())
+                .collect();
+            for (index, scalar_row) in scalar_result.iter().enumerate() {
+                assert_all_almost_eq!(scalar_row, simd_result[index], 1e-8);
+            }
+            Ok(())
+        });
+    }
+
+    test_all_instruction_sets!(gaborish_process_scalar_equivalent);
 }

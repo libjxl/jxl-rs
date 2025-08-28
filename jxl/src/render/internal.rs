@@ -45,6 +45,8 @@ impl<T: ImageDataType> RenderPipelineStageInfo for RenderPipelineInPlaceStage<T>
     type RowType<'a> = &'a mut [T];
 }
 
+pub type InOutChannel<'a, InputT, OutputT> = (&'a [&'a [InputT]], &'a mut [&'a mut [OutputT]]);
+
 impl<
     InputT: ImageDataType,
     OutputT: ImageDataType,
@@ -60,7 +62,7 @@ impl<
     const SHIFT: (u8, u8) = (SHIFT_X, SHIFT_Y);
     const INPUT_TYPE: DataTypeTag = InputT::DATA_TYPE_ID;
     const OUTPUT_TYPE: Option<DataTypeTag> = Some(OutputT::DATA_TYPE_ID);
-    type RowType<'a> = (&'a [&'a [InputT]], &'a mut [&'a mut [OutputT]]);
+    type RowType<'a> = InOutChannel<'a, InputT, OutputT>;
 }
 
 impl<T: ImageDataType> RenderPipelineStageInfo for RenderPipelineExtendStage<T> {
