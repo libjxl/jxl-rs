@@ -1005,7 +1005,7 @@ mod test {
         decode::{DecodeOptions, decode_jxl_codestream},
         error::Error,
         features::spline::Point,
-        util::test::assert_almost_eq,
+        util::test::assert_almost_abs_eq,
     };
     use test_log::test;
 
@@ -1093,7 +1093,7 @@ mod test {
                 0.000000, 0.000977, 0.002930, 0.003906, 0.005859, 0.006836, 0.008789, 0.010742,
             ];
             for (index, noise_param) in want_noise.iter().enumerate() {
-                assert_almost_eq!(noise.lut[index], *noise_param, 1e-6);
+                assert_almost_abs_eq(noise.lut[index], *noise_param, 1e-6);
             }
             num_frames += 1;
             Ok(())

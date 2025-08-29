@@ -75,7 +75,7 @@ mod test {
     use crate::error::Result;
     use crate::image::Image;
     use crate::render::test::make_and_run_simple_pipeline;
-    use crate::util::test::assert_all_almost_eq;
+    use crate::util::test::assert_all_almost_abs_eq;
 
     #[test]
     fn consistency() -> Result<()> {
@@ -119,9 +119,9 @@ mod test {
         )?
         .1;
 
-        assert_all_almost_eq!(output[0].as_rect().row(0), &[0.75, 0.25, 0.25], 1e-6);
-        assert_all_almost_eq!(output[1].as_rect().row(0), &[0.25, 0.75, 0.25], 1e-6);
-        assert_all_almost_eq!(output[2].as_rect().row(0), &[0.25, 0.25, 0.75], 1e-6);
+        assert_all_almost_abs_eq(output[0].as_rect().row(0), &[0.75, 0.25, 0.25], 1e-6);
+        assert_all_almost_abs_eq(output[1].as_rect().row(0), &[0.25, 0.75, 0.25], 1e-6);
+        assert_all_almost_abs_eq(output[2].as_rect().row(0), &[0.25, 0.25, 0.75], 1e-6);
 
         Ok(())
     }

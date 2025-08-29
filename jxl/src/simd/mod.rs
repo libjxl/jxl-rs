@@ -81,7 +81,7 @@ mod test {
 
     use crate::{
         simd::{F32SimdVec, ScalarDescriptor, SimdDescriptor, test_all_instruction_sets},
-        util::test::assert_all_almost_eq,
+        util::test::assert_all_almost_rel_eq,
     };
 
     enum Distribution {
@@ -126,7 +126,7 @@ mod test {
                     let a = arb_vec(d, u, Distribution::$a_dist);
                     let scalar_res = compute(ScalarDescriptor::new().unwrap(), &a);
                     let simd_res = compute(d, &a);
-                    assert_all_almost_eq!(&scalar_res, simd_res, 1e-8);
+                    assert_all_almost_rel_eq(&scalar_res, &simd_res, 1e-8);
                     Ok(())
                 })
                 .size_min(64);
@@ -149,7 +149,7 @@ mod test {
                     let b = arb_vec(d, u, Distribution::$b_dist);
                     let scalar_res = compute(ScalarDescriptor::new().unwrap(), &a, &b);
                     let simd_res = compute(d, &a, &b);
-                    assert_all_almost_eq!(&scalar_res, simd_res, 1e-8);
+                    assert_all_almost_rel_eq(&scalar_res, &simd_res, 1e-8);
                     Ok(())
                 })
                 .size_min(128);
@@ -177,7 +177,7 @@ mod test {
                     let c = arb_vec(d, u, Distribution::$c_dist);
                     let scalar_res = compute(ScalarDescriptor::new().unwrap(), &a, &b, &c);
                     let simd_res = compute(d, &a, &b, &c);
-                    assert_all_almost_eq!(&scalar_res, simd_res, 1e-8);
+                    assert_all_almost_rel_eq(&scalar_res, &simd_res, 1e-8);
                     Ok(())
                 })
                 .size_min(172);

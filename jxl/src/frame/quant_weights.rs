@@ -1277,7 +1277,7 @@ mod test {
     use super::*;
     use crate::error::Result;
     use crate::frame::quant_weights::DequantMatrices;
-    use crate::util::test::{assert_all_almost_eq, assert_almost_eq};
+    use crate::util::test::{assert_all_almost_abs_eq, assert_almost_abs_eq, assert_almost_eq};
 
     #[test]
     fn check_required_x_y() {
@@ -1313,7 +1313,7 @@ mod test {
             24064, 19968, 22016, 24064, 26112, 42496, 58880, 75264, 83456, 91648, 75264, 83456,
             91648, 99840, 165376, 230912, 296448, 329216, 361984, 296448, 329216, 361984,
         ];
-        assert_all_almost_eq!(matrices.table_offsets, target_offsets, 0);
+        assert_all_almost_abs_eq(matrices.table_offsets, target_offsets, 0);
 
         // Golden data produced by libjxl.
         let target_table = [
@@ -2218,7 +2218,7 @@ mod test {
             for c in 0..3 {
                 let start = matrices.table_offsets[3 * i + c];
                 for j in (start..start + size).step_by(size / 10) {
-                    assert_almost_eq!(matrices.table[j], target_table[target_table_index], 1e-5);
+                    assert_almost_abs_eq(matrices.table[j], target_table[target_table_index], 1e-5);
                     target_table_index += 1;
                 }
             }
@@ -3126,11 +3126,11 @@ mod test {
             for c in 0..3 {
                 let start = matrices.table_offsets[3 * i + c];
                 for j in (start..start + size).step_by(size / 10) {
-                    assert_almost_eq!(
+                    assert_almost_eq(
                         matrices.inv_table[j],
                         target_inv_table[target_inv_table_index],
-                        1,
-                        1e-3
+                        1f32,
+                        1e-3,
                     );
                     target_inv_table_index += 1;
                 }

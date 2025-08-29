@@ -147,7 +147,7 @@ mod test {
             stages::noise::{AddNoiseStage, ConvolveNoiseStage},
             test::make_and_run_simple_pipeline,
         },
-        util::test::assert_almost_eq,
+        util::test::assert_almost_abs_eq,
     };
     use test_log::test;
 
@@ -160,10 +160,10 @@ mod test {
         let output: Vec<Image<f32>> =
             make_and_run_simple_pipeline(stage, &[input], (2, 2), 0, 256)?.1;
         let rect = output[0].as_rect();
-        assert_almost_eq!(rect.row(0)[0], 7.2, 1e-6);
-        assert_almost_eq!(rect.row(0)[1], 2.4, 1e-6);
-        assert_almost_eq!(rect.row(1)[0], -2.4, 1e-6);
-        assert_almost_eq!(rect.row(1)[1], -7.2, 1e-6);
+        assert_almost_abs_eq(rect.row(0)[0], 7.2, 1e-6);
+        assert_almost_abs_eq(rect.row(0)[1], 2.4, 1e-6);
+        assert_almost_abs_eq(rect.row(1)[0], -2.4, 1e-6);
+        assert_almost_abs_eq(rect.row(1)[1], -7.2, 1e-6);
         Ok(())
     }
 
@@ -276,7 +276,7 @@ mod test {
             let rect = output[c].as_rect();
             for y in 0..rect.size().1 {
                 for x in 0..rect.size().0 {
-                    assert_almost_eq!(rect.row(y)[x], want_out[c][y][x], 1e-5);
+                    assert_almost_abs_eq(rect.row(y)[x], want_out[c][y][x], 1e-5);
                 }
             }
         }

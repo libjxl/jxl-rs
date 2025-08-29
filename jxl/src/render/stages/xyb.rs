@@ -270,7 +270,7 @@ mod test {
         ScalarDescriptor, SimdDescriptor, round_up_size_to_two_cache_lines,
         test_all_instruction_sets,
     };
-    use crate::util::test::assert_all_almost_eq;
+    use crate::util::test::assert_all_almost_abs_eq;
 
     #[test]
     fn consistency() -> Result<()> {
@@ -309,9 +309,9 @@ mod test {
         )?
         .1;
 
-        assert_all_almost_eq!(output[0].as_rect().row(0), &[1.0, 0.0, 0.0], 1e-6);
-        assert_all_almost_eq!(output[1].as_rect().row(0), &[0.0, 1.0, 0.0], 1e-6);
-        assert_all_almost_eq!(output[2].as_rect().row(0), &[0.0, 0.0, 1.0], 1e-6);
+        assert_all_almost_abs_eq(output[0].as_rect().row(0), &[1.0, 0.0, 0.0], 1e-6);
+        assert_all_almost_abs_eq(output[1].as_rect().row(0), &[0.0, 1.0, 0.0], 1e-6);
+        assert_all_almost_abs_eq(output[2].as_rect().row(0), &[0.0, 0.0, 1.0], 1e-6);
 
         Ok(())
     }

@@ -403,7 +403,7 @@ pub fn compute_scaled_dct<const ROWS: usize, const COLS: usize>(
 #[cfg(test)]
 mod tests {
     use crate::{
-        util::test::{assert_all_almost_eq, assert_almost_eq},
+        util::test::{assert_all_almost_abs_eq, assert_almost_abs_eq},
         var_dct::{
             dct::{DCT1D, DCT1DImpl, IDCT1D, IDCT1DImpl, compute_scaled_dct, dct2d, idct2d},
             dct_slow::{dct1d, idct1d},
@@ -440,7 +440,7 @@ mod tests {
                 DCT1DImpl::<N>::do_dct::<M>(&mut output);
 
                 for i in 0..N {
-                    assert_almost_eq!(output[i][0], output_matrix_slow[i][0] as f32, $tolerance);
+                    assert_almost_abs_eq(output[i][0], output_matrix_slow[i][0] as f32, $tolerance);
                 }
             }
         };
@@ -476,7 +476,7 @@ mod tests {
                 IDCT1DImpl::<N>::do_idct::<M>(&mut output);
 
                 for i in 0..N {
-                    assert_almost_eq!(output[i][0], output_matrix_slow[i][0] as f32, $tolerance);
+                    assert_almost_abs_eq(output[i][0], output_matrix_slow[i][0] as f32, $tolerance);
                 }
             }
         };
@@ -535,10 +535,10 @@ mod tests {
         // Compare results element-wise
         for r_idx in 0..N {
             for c_idx in 0..M {
-                assert_almost_eq!(
+                assert_almost_abs_eq(
                     output_fast_impl[r_idx][c_idx],
                     output_matrix_slow[r_idx][c_idx] as f32,
-                    1e-5
+                    1e-5,
                 );
             }
         }
@@ -578,10 +578,10 @@ mod tests {
         // Compare results element-wise
         for r_freq_idx in 0..N {
             for c_col_idx in 0..M {
-                assert_almost_eq!(
+                assert_almost_abs_eq(
                     output_fast_impl[r_freq_idx][c_col_idx],
                     output_matrix_slow[r_freq_idx][c_col_idx] as f32,
-                    1e-5
+                    1e-5,
                 );
             }
         }
@@ -787,7 +787,7 @@ mod tests {
 
         compute_scaled_dct::<4, 8>(input, &mut output);
 
-        assert_all_almost_eq!(
+        assert_all_almost_abs_eq(
             output,
             [
                 135.219, -13.1026, 0.573698, -6.19682, -29.5938, 11.5028, -13.3955, 21.9205,
@@ -795,7 +795,7 @@ mod tests {
                 6.57931, 0.601308, 1.51804, -20.5312, -9.29264, -19.6983, -0.850355, 12.4189,
                 -5.0881, 5.82096, -20.1997, 3.87769, 2.80762, 24.6634, -8.93341,
             ],
-            1e-3
+            1e-3,
         );
     }
 
@@ -816,7 +816,7 @@ mod tests {
 
         compute_scaled_dct::<8, 4>(input, &mut output);
 
-        assert_all_almost_eq!(
+        assert_all_almost_abs_eq(
             output,
             [
                 135.219, -0.899633, -4.54363, 9.7776, 7.65625, -7.7203, 10.5073, -11.9921,
@@ -824,7 +824,7 @@ mod tests {
                 -29.5938, -19.9538, -17.5214, -0.467021, -3.28125, -7.67861, 11.3504, 5.01615,
                 24.9226, -4.19572, -7.10474, -16.7029, 24.2961, -16.8923, -3.32708, -4.09777,
             ],
-            1e-3
+            1e-3,
         );
     }
 }

@@ -87,7 +87,7 @@ mod test {
     use crate::image::Image;
     use crate::render::test::{create_in_out_rows, make_and_run_simple_pipeline};
     use crate::simd::{ScalarDescriptor, SimdDescriptor, test_all_instruction_sets};
-    use crate::util::test::assert_all_almost_eq;
+    use crate::util::test::assert_all_almost_abs_eq;
 
     #[test]
     fn consistency() -> Result<()> {
@@ -109,8 +109,8 @@ mod test {
             make_and_run_simple_pipeline::<_, f32, f32>(stage, &[image], (2, 2), 0, 256)?;
         let output = output[0].as_rect();
 
-        assert_all_almost_eq!(output.row(0), &[0.20686048, 0.7931395], 1e-6);
-        assert_all_almost_eq!(output.row(1), &[0.7931395, 0.20686048], 1e-6);
+        assert_all_almost_abs_eq(output.row(0), &[0.20686048, 0.7931395], 1e-6);
+        assert_all_almost_abs_eq(output.row(1), &[0.7931395, 0.20686048], 1e-6);
 
         Ok(())
     }
@@ -132,7 +132,7 @@ mod test {
                 .map(|inner_slice| inner_slice.to_vec())
                 .collect();
             for (index, scalar_row) in scalar_result.iter().take(xsize).enumerate() {
-                assert_all_almost_eq!(scalar_row, simd_result[index], 1e-8);
+                assert_all_almost_abs_eq(scalar_row, &simd_result[index], 1e-8);
             }
             Ok(())
         });
