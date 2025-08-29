@@ -4,6 +4,7 @@
 // license that can be found in the LICENSE file.
 
 use std::{
+    fmt::Debug,
     io::{BufRead, BufReader, Cursor, Read, Write},
     num::{ParseFloatError, ParseIntError},
 };
@@ -16,6 +17,7 @@ use crate::{
     image::Image,
 };
 
+use num_traits::AsPrimitive;
 use thiserror::Error;
 
 #[derive(Error, Debug)]
@@ -48,51 +50,139 @@ impl From<JXLError> for Error {
     }
 }
 
-macro_rules! assert_almost_eq {
-    ($left:expr, $right:expr, $max_error:expr $(,)?) => {
-        let (left_val, right_val, max_error) = ($left as f64, $right as f64, $max_error as f64);
-        if matches!((left_val - right_val).abs().partial_cmp(&max_error), Some(std::cmp::Ordering::Greater) | None) {
-            panic!(
-                "assertion failed: `(left ≈ right)`\n  left: `{:?}`,\n right: `{:?}`,\n max_error: `{:?}`",
-                left_val, right_val, max_error
-            )
-        }
-    };
-    ($left:expr, $right:expr, $max_error_abs:expr, $max_error_rel:expr $(,)?) => {
-        let (left_val, right_val, max_error_abs, max_error_rel) = ($left as f64, $right as f64, $max_error_abs as f64, $max_error_rel as f64);
-        let error = (left_val - right_val).abs();
-        if matches!(error.partial_cmp(&max_error_abs), Some(std::cmp::Ordering::Greater) | None) {
-            panic!(
-                "assertion failed: `(left ≈ right)`\n  left: `{:?}`,\n right: `{:?}`,\n max_error_abs: `{:?}`",
-                left_val, right_val, max_error_abs
-            )
-        }
-        let actual_error_rel = left_val.abs().min(right_val.abs()) * max_error_rel;
-        if matches!(error.partial_cmp(&actual_error_rel), Some(std::cmp::Ordering::Greater) | None) {
-            panic!(
-                "assertion failed: `(left ≈ right)`\n  left: `{:?}`,\n right: `{:?}`,\n max_error_rel: `{:?}`",
-                left_val, right_val, max_error_rel
-            )
-        }
-    };
+fn rel_error_gt<T: AsPrimitive<f64>>(left: T, right: T, max_rel_error: T) -> bool {
+    let left_f64: f64 = left.as_();
+    let right_f64: f64 = right.as_();
+    let error = (left_f64 - right_f64).abs();
+    matches!(
+        (2.0 * error / (left_f64.abs() + right_f64.abs() + 1e-16))
+            .partial_cmp(&max_rel_error.as_()),
+        Some(std::cmp::Ordering::Greater) | None
+    )
 }
-pub(crate) use assert_almost_eq;
 
-macro_rules! assert_all_almost_eq {
-    ($left:expr, $right:expr, $max_error:expr $(,)?) => {
-        let (left_val, right_val, max_error) = (&$left, &$right, $max_error as f64);
-        if left_val.len() != right_val.len() {
-            panic!("assertion failed: `(left ≈ right)`\n left.len(): `{}`,\n right.len(): `{}`", left_val.len(), right_val.len());
+fn abs_error_gt<T: AsPrimitive<f64>>(left: T, right: T, max_abs_error: T) -> bool {
+    let left_f64: f64 = left.as_();
+    let right_f64: f64 = right.as_();
+    matches!(
+        (left_f64 - right_f64)
+            .abs()
+            .partial_cmp(&max_abs_error.as_()),
+        Some(std::cmp::Ordering::Greater) | None
+    )
+}
+
+pub fn assert_almost_eq<T: AsPrimitive<f64> + Debug + Copy>(
+    left: T,
+    right: T,
+    max_abs_error: T,
+    max_rel_error: T,
+) {
+    if abs_error_gt(left, right, max_abs_error) || rel_error_gt(left, right, max_rel_error) {
+        panic!(
+            "assertion failed: `(left ≈ right)`\n  left: `{left:?}`,\n right: `{right:?}`,\n max_abs_error: `{max_abs_error:?}`,\n max_rel_error: `{max_rel_error:?}`"
+        );
+    }
+}
+
+pub fn assert_almost_rel_eq<T: AsPrimitive<f64> + Debug + Copy>(
+    left: T,
+    right: T,
+    max_rel_error: T,
+) {
+    if rel_error_gt(left, right, max_rel_error) {
+        panic!(
+            "assertion failed: `(left ≈ right)`\n  left: `{left:?}`,\n right: `{right:?}`,\n max_rel_error: `{max_rel_error:?}`"
+        );
+    }
+}
+
+pub fn assert_almost_abs_eq<T: AsPrimitive<f64> + Debug + Copy>(
+    left: T,
+    right: T,
+    max_abs_error: T,
+) {
+    if abs_error_gt(left, right, max_abs_error) {
+        panic!(
+            "assertion failed: `(left ≈ right)`\n  left: `{left:?}`,\n right: `{right:?}`,\n max_abs_error: `{max_abs_error:?}`"
+        );
+    }
+}
+
+fn assert_same_len<T: AsPrimitive<f64> + Debug + Copy>(left: &[T], right: &[T]) {
+    if left.as_ref().len() != right.as_ref().len() {
+        panic!(
+            "assertion failed: `(left ≈ right)`\n left.len(): `{}`,\n right.len(): `{}`",
+            left.as_ref().len(),
+            right.as_ref().len()
+        );
+    }
+}
+
+pub fn assert_all_almost_eq<T: AsPrimitive<f64> + Debug + Copy, V: AsRef<[T]> + Debug>(
+    left: V,
+    right: V,
+    max_abs_error: T,
+    max_rel_error: T,
+) {
+    assert_same_len(left.as_ref(), right.as_ref());
+    for (idx, (left_val, right_val)) in left
+        .as_ref()
+        .iter()
+        .copied()
+        .zip(right.as_ref().iter().copied())
+        .enumerate()
+    {
+        if abs_error_gt(left_val, right_val, max_abs_error)
+            || rel_error_gt(left_val, right_val, max_rel_error)
+        {
+            panic!(
+                "assertion failed: `(left ≈ right)`\n left: `{left:?}`,\n right: `{right:?}`,\n max_abs_error: `{max_abs_error:?}`,\n max_rel_error: `{max_rel_error:?}`,\n left[{idx}]: `{left_val:?}`,\n right[{idx}]: `{right_val:?}`",
+            );
         }
-        for index in 0..left_val.len() {
-            if (left_val[index] as f64- right_val[index] as f64).abs() > max_error {
-                panic!(
-                    "assertion failed: `(left ≈ right)`\n left: `{:?}`,\n right: `{:?}`,\n max_error: `{:?}`,\n left[{}]: `{}`,\n right[{}]: `{}`",
-                    left_val, right_val, max_error, index, left_val[index], index, right_val[index]
-                )
-            }
+    }
+}
+
+pub fn assert_all_almost_rel_eq<T: AsPrimitive<f64> + Debug + Copy, V: AsRef<[T]> + Debug>(
+    left: V,
+    right: V,
+    max_rel_error: T,
+) {
+    assert_same_len(left.as_ref(), right.as_ref());
+    for (idx, (left_val, right_val)) in left
+        .as_ref()
+        .iter()
+        .copied()
+        .zip(right.as_ref().iter().copied())
+        .enumerate()
+    {
+        if rel_error_gt(left_val, right_val, max_rel_error) {
+            panic!(
+                "assertion failed: `(left ≈ right)`\n left: `{left:?}`,\n right: `{right:?}`,\n max_rel_error: `{max_rel_error:?}`,\n left[{idx}]: `{left_val:?}`,\n right[{idx}]: `{right_val:?}`",
+            );
         }
-    };
+    }
+}
+
+pub fn assert_all_almost_abs_eq<T: AsPrimitive<f64> + Debug + Copy, V: AsRef<[T]> + Debug>(
+    left: V,
+    right: V,
+    max_abs_error: T,
+) {
+    assert_same_len(left.as_ref(), right.as_ref());
+    for (idx, (left_val, right_val)) in left
+        .as_ref()
+        .iter()
+        .copied()
+        .zip(right.as_ref().iter().copied())
+        .enumerate()
+    {
+        if abs_error_gt(left_val, right_val, max_abs_error) {
+            panic!(
+                "assertion failed: `(left ≈ right)`\n left: `{left:?}`,\n right: `{right:?}`,\n max_abs_error: `{max_abs_error:?}`,\n left[{idx}]: `{left_val:?}`,\n right[{idx}]: `{right_val:?}`",
+            );
+        }
+    }
 }
 
 pub fn read_headers_and_toc(image: &[u8]) -> Result<(FileHeader, FrameHeader, Toc), JXLError> {
@@ -196,64 +286,62 @@ pub fn read_pfm(b: &[u8]) -> Result<Vec<Image<f32>>, Error> {
     Ok(res)
 }
 
-pub(crate) use assert_all_almost_eq;
-
 use crate::headers::frame_header::{FrameHeader, Toc};
 
 #[cfg(test)]
 mod tests {
-    use std::panic;
+    use super::*;
 
     #[test]
     fn test_with_floats() {
-        assert_almost_eq!(1.0000001f64, 1.0000002, 0.000001);
-        assert_almost_eq!(1.0, 1.1, 0.2);
+        assert_almost_abs_eq(1.0000001f64, 1.0000002, 0.000001);
+        assert_almost_abs_eq(1.0, 1.1, 0.2);
     }
 
     #[test]
     fn test_with_integers() {
-        assert_almost_eq!(100, 101, 2);
-        assert_almost_eq!(777u32, 770, 7);
-        assert_almost_eq!(500i64, 498, 3);
+        assert_almost_abs_eq(100, 101, 2);
+        assert_almost_abs_eq(777u32, 770, 7);
+        assert_almost_abs_eq(500i64, 498, 3);
     }
 
     #[test]
     #[should_panic]
     fn test_panic_float() {
-        assert_almost_eq!(1.0, 1.2, 0.1);
+        assert_almost_abs_eq(1.0, 1.2, 0.1);
     }
     #[test]
     #[should_panic]
     fn test_panic_integer() {
-        assert_almost_eq!(100, 105, 2);
+        assert_almost_abs_eq(100, 105, 2);
     }
 
     #[test]
     #[should_panic]
     fn test_nan_comparison() {
-        assert_almost_eq!(f64::NAN, f64::NAN, 0.1);
+        assert_almost_abs_eq(f64::NAN, f64::NAN, 0.1);
     }
 
     #[test]
     #[should_panic]
     fn test_nan_tolerance() {
-        assert_almost_eq!(1.0, 1.0, f64::NAN);
+        assert_almost_abs_eq(1.0, 1.0, f64::NAN);
     }
 
     #[test]
     fn test_infinity_tolerance() {
-        assert_almost_eq!(1.0, 1.0, f64::INFINITY);
+        assert_almost_abs_eq(1.0, 1.0, f64::INFINITY);
     }
 
     #[test]
     #[should_panic]
     fn test_nan_comparison_with_infinity_tolerance() {
-        assert_almost_eq!(f32::NAN, f32::NAN, f32::INFINITY);
+        assert_almost_abs_eq(f32::NAN, f32::NAN, f32::INFINITY);
     }
 
     #[test]
     #[should_panic]
     fn test_infinity_comparison_with_infinity_tolerance() {
-        assert_almost_eq!(f32::INFINITY, f32::INFINITY, f32::INFINITY);
+        assert_almost_abs_eq(f32::INFINITY, f32::INFINITY, f32::INFINITY);
     }
 }

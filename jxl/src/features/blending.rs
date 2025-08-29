@@ -267,7 +267,7 @@ mod tests {
 
     mod perform_blending_tests {
         use super::{super::*, *};
-        use crate::{headers::bit_depth::BitDepth, util::test::assert_all_almost_eq};
+        use crate::{headers::bit_depth::BitDepth, util::test::assert_all_almost_abs_eq};
         use test_log::test;
 
         const ABS_DELTA: f32 = 1e-6;
@@ -341,9 +341,9 @@ mod tests {
             );
 
             // Expected: output color is fg color
-            assert_all_almost_eq!(&bg_r, &fg_r, ABS_DELTA);
-            assert_all_almost_eq!(&bg_g, &fg_g, ABS_DELTA);
-            assert_all_almost_eq!(&bg_b, &fg_b, ABS_DELTA);
+            assert_all_almost_abs_eq(&bg_r, &fg_r, ABS_DELTA);
+            assert_all_almost_abs_eq(&bg_g, &fg_g, ABS_DELTA);
+            assert_all_almost_abs_eq(&bg_b, &fg_b, ABS_DELTA);
         }
 
         #[test]
@@ -377,9 +377,9 @@ mod tests {
                 &extra_channel_info,
             );
 
-            assert_all_almost_eq!(&bg_r, &expected_r, ABS_DELTA);
-            assert_all_almost_eq!(&bg_g, &expected_g, ABS_DELTA);
-            assert_all_almost_eq!(&bg_b, &expected_b, ABS_DELTA);
+            assert_all_almost_abs_eq(&bg_r, &expected_r, ABS_DELTA);
+            assert_all_almost_abs_eq(&bg_g, &expected_g, ABS_DELTA);
+            assert_all_almost_abs_eq(&bg_b, &expected_b, ABS_DELTA);
         }
 
         #[test]
@@ -439,10 +439,10 @@ mod tests {
                 &extra_channel_info,
             );
 
-            assert_all_almost_eq!(&bg_a, &[expected_a_val], ABS_DELTA);
-            assert_all_almost_eq!(&bg_r, &[expected_r_val], ABS_DELTA);
-            assert_all_almost_eq!(&bg_g, &[expected_g_val], ABS_DELTA);
-            assert_all_almost_eq!(&bg_b, &[expected_b_val], ABS_DELTA);
+            assert_all_almost_abs_eq(&bg_a, &[expected_a_val], ABS_DELTA);
+            assert_all_almost_abs_eq(&bg_r, &[expected_r_val], ABS_DELTA);
+            assert_all_almost_abs_eq(&bg_g, &[expected_g_val], ABS_DELTA);
+            assert_all_almost_abs_eq(&bg_b, &[expected_b_val], ABS_DELTA);
         }
 
         #[test]
@@ -503,10 +503,10 @@ mod tests {
                 &extra_channel_info,
             );
 
-            assert_all_almost_eq!(&bg_a, &[expected_a_val], ABS_DELTA);
-            assert_all_almost_eq!(&bg_r, &[expected_r_val], ABS_DELTA);
-            assert_all_almost_eq!(&bg_g, &[expected_g_val], ABS_DELTA);
-            assert_all_almost_eq!(&bg_b, &[expected_b_val], ABS_DELTA);
+            assert_all_almost_abs_eq(&bg_a, &[expected_a_val], ABS_DELTA);
+            assert_all_almost_abs_eq(&bg_r, &[expected_r_val], ABS_DELTA);
+            assert_all_almost_abs_eq(&bg_g, &[expected_g_val], ABS_DELTA);
+            assert_all_almost_abs_eq(&bg_b, &[expected_b_val], ABS_DELTA);
         }
 
         #[test]
@@ -567,10 +567,10 @@ mod tests {
                 &extra_channel_info,
             );
 
-            assert_all_almost_eq!(&bg_r, &[expected_r_val], ABS_DELTA);
-            assert_all_almost_eq!(&bg_g, &[expected_g_val], ABS_DELTA);
-            assert_all_almost_eq!(&bg_b, &[expected_b_val], ABS_DELTA);
-            assert_all_almost_eq!(&bg_a, &[expected_a_val], ABS_DELTA);
+            assert_all_almost_abs_eq(&bg_r, &[expected_r_val], ABS_DELTA);
+            assert_all_almost_abs_eq(&bg_g, &[expected_g_val], ABS_DELTA);
+            assert_all_almost_abs_eq(&bg_b, &[expected_b_val], ABS_DELTA);
+            assert_all_almost_abs_eq(&bg_a, &[expected_a_val], ABS_DELTA);
         }
 
         #[test]
@@ -604,9 +604,9 @@ mod tests {
                 &extra_channel_info,
             );
 
-            assert_all_almost_eq!(&bg_r, &expected_r, ABS_DELTA);
-            assert_all_almost_eq!(&bg_g, &expected_g, ABS_DELTA);
-            assert_all_almost_eq!(&bg_b, &expected_b, ABS_DELTA);
+            assert_all_almost_abs_eq(&bg_r, &expected_r, ABS_DELTA);
+            assert_all_almost_abs_eq(&bg_g, &expected_g, ABS_DELTA);
+            assert_all_almost_abs_eq(&bg_b, &expected_b, ABS_DELTA);
         }
 
         #[test]
@@ -699,13 +699,13 @@ mod tests {
             );
 
             // Expected Color (Replace)
-            assert_all_almost_eq!(&bg_r, &fg_r, ABS_DELTA);
-            assert_all_almost_eq!(&bg_g, &fg_g, ABS_DELTA);
-            assert_all_almost_eq!(&bg_b, &fg_b, ABS_DELTA);
+            assert_all_almost_abs_eq(&bg_r, &fg_r, ABS_DELTA);
+            assert_all_almost_abs_eq(&bg_g, &fg_g, ABS_DELTA);
+            assert_all_almost_abs_eq(&bg_b, &fg_b, ABS_DELTA);
 
-            assert_all_almost_eq!(&bg_ec1_alpha, &[expected_out_ec1_alpha], ABS_DELTA);
+            assert_all_almost_abs_eq(&bg_ec1_alpha, &[expected_out_ec1_alpha], ABS_DELTA);
 
-            assert_all_almost_eq!(&bg_ec0, &[expected_out_ec0], ABS_DELTA);
+            assert_all_almost_abs_eq(&bg_ec0, &[expected_out_ec0], ABS_DELTA);
         }
 
         #[test]
@@ -739,9 +739,9 @@ mod tests {
             );
 
             // Expected: output color is fg color due to fallback
-            assert_all_almost_eq!(&bg_r, &fg_r, ABS_DELTA);
-            assert_all_almost_eq!(&bg_g, &fg_g, ABS_DELTA);
-            assert_all_almost_eq!(&bg_b, &fg_b, ABS_DELTA);
+            assert_all_almost_abs_eq(&bg_r, &fg_r, ABS_DELTA);
+            assert_all_almost_abs_eq(&bg_g, &fg_g, ABS_DELTA);
+            assert_all_almost_abs_eq(&bg_b, &fg_b, ABS_DELTA);
         }
 
         #[test]

@@ -415,7 +415,7 @@ mod test {
     use test_log::test;
 
     use super::*;
-    use crate::util::test::assert_all_almost_eq;
+    use crate::util::test::assert_all_almost_abs_eq;
 
     fn arb_samples(
         u: &mut arbtest::arbitrary::Unstructured,
@@ -443,7 +443,7 @@ mod test {
 
             linear_to_srgb(&mut output);
             srgb_to_linear(&mut output);
-            assert_all_almost_eq!(&output, &samples, 2e-6);
+            assert_all_almost_abs_eq(&output, &samples, 2e-6);
             Ok(())
         });
     }
@@ -456,7 +456,7 @@ mod test {
 
             linear_to_bt709(&mut output);
             bt709_to_linear(&mut output);
-            assert_all_almost_eq!(&output, &samples, 5e-6);
+            assert_all_almost_abs_eq(&output, &samples, 5e-6);
             Ok(())
         });
     }
@@ -469,7 +469,7 @@ mod test {
 
             linear_to_srgb(&mut samples);
             linear_to_srgb_fast(&mut fast);
-            assert_all_almost_eq!(&samples, &fast, 1.7e-4);
+            assert_all_almost_abs_eq(&samples, &fast, 1.7e-4);
             Ok(())
         });
     }
@@ -484,7 +484,7 @@ mod test {
             linear_to_pq(intensity_target, &mut samples);
             linear_to_pq_precise(intensity_target, &mut precise);
             // Error seems to increase at intensity_target < 10000
-            assert_all_almost_eq!(&samples, &precise, 8e-7);
+            assert_all_almost_abs_eq(&samples, &precise, 8e-7);
             Ok(())
         });
     }
@@ -498,7 +498,7 @@ mod test {
 
             pq_to_linear(intensity_target, &mut samples);
             pq_to_linear_precise(intensity_target, &mut precise);
-            assert_all_almost_eq!(&samples, &precise, 3e-6);
+            assert_all_almost_abs_eq(&samples, &precise, 3e-6);
             Ok(())
         });
     }
@@ -537,10 +537,10 @@ mod test {
             ];
             hlg_display_to_scene(intensity_target, luminance_rgb, precise);
 
-            assert_all_almost_eq!(
+            assert_all_almost_abs_eq(
                 &[fast_r, fast_g, fast_b],
                 &[precise_r, precise_g, precise_b],
-                7.2e-7
+                7.2e-7,
             );
 
             let mut fast_r = r;
@@ -563,10 +563,10 @@ mod test {
             ];
             hlg_scene_to_display(intensity_target, luminance_rgb, precise);
 
-            assert_all_almost_eq!(
+            assert_all_almost_abs_eq(
                 &[fast_r, fast_g, fast_b],
                 &[precise_r, precise_g, precise_b],
-                7.2e-7
+                7.2e-7,
             );
 
             Ok(())
@@ -581,7 +581,7 @@ mod test {
 
             scene_to_hlg(&mut samples);
             scene_to_hlg_precise(&mut precise);
-            assert_all_almost_eq!(&samples, &precise, 5e-7);
+            assert_all_almost_abs_eq(&samples, &precise, 5e-7);
             Ok(())
         });
     }
@@ -594,7 +594,7 @@ mod test {
 
             hlg_to_scene(&mut samples);
             hlg_to_scene_precise(&mut precise);
-            assert_all_almost_eq!(&samples, &precise, 5e-6);
+            assert_all_almost_abs_eq(&samples, &precise, 5e-6);
             Ok(())
         });
     }

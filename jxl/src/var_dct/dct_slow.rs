@@ -98,7 +98,7 @@ pub fn idct1d(input_matrix: &[Vec<f64>]) -> Vec<Vec<f64>> {
 mod tests {
     use test_log::test;
 
-    use crate::util::test::assert_all_almost_eq;
+    use crate::util::test::assert_all_almost_abs_eq;
 
     use super::*;
 
@@ -136,8 +136,8 @@ mod tests {
             -1.29520973e-15,
             -1.43407825e-01,
         ];
-        // Ensure assert_all_almost_eq can compare Vec<f64> (or slice) with [f64; N]
-        assert_all_almost_eq!(result_column.as_slice(), expected.as_slice(), 1e-7);
+        // Ensure assert_all_almost_abs_eq can compare Vec<f64> (or slice) with [f64; N]
+        assert_all_almost_abs_eq(result_column.as_slice(), expected.as_slice(), 1e-7);
     }
 
     #[test]
@@ -169,7 +169,7 @@ mod tests {
             let actual_row_slice: &[f64] = output_matrix[r_freq_idx].as_slice();
             let expected_row_values: Vec<f64> =
                 vec![single_column_dct_expected[r_freq_idx]; M_COLS];
-            assert_all_almost_eq!(actual_row_slice, expected_row_values.as_slice(), 1e-7);
+            assert_all_almost_abs_eq(actual_row_slice, expected_row_values.as_slice(), 1e-7);
         }
     }
 
@@ -204,7 +204,7 @@ mod tests {
             1.32990088,
             -0.91413457,
         ];
-        assert_all_almost_eq!(result_column.as_slice(), expected.as_slice(), 1e-7);
+        assert_all_almost_abs_eq(result_column.as_slice(), expected.as_slice(), 1e-7);
     }
 
     #[test]
@@ -241,7 +241,7 @@ mod tests {
             let actual_row_slice: &[f64] = output_matrix[r_spatial_idx].as_slice();
             let expected_row_values: Vec<f64> =
                 vec![single_column_idct_expected[r_spatial_idx]; M_COLS];
-            assert_all_almost_eq!(actual_row_slice, expected_row_values.as_slice(), 1e-7);
+            assert_all_almost_abs_eq(actual_row_slice, expected_row_values.as_slice(), 1e-7);
         }
     }
 
@@ -268,10 +268,10 @@ mod tests {
                 .map(|&val| val * (N_ROWS as f64))
                 .collect();
 
-            assert_all_almost_eq!(
+            assert_all_almost_abs_eq(
                 idct_output[r_idx].as_slice(),
                 expected_current_row_scaled.as_slice(),
-                1e-7
+                1e-7,
             );
         }
     }
@@ -299,10 +299,10 @@ mod tests {
                 .map(|&val| val * (N_ROWS as f64))
                 .collect();
 
-            assert_all_almost_eq!(
+            assert_all_almost_abs_eq(
                 dct_output[r_idx].as_slice(),
                 expected_current_row_scaled.as_slice(),
-                1e-7
+                1e-7,
             );
         }
     }

@@ -59,7 +59,7 @@ mod test {
     use crate::features::spline::{Point, QuantizedSpline, Splines};
     use crate::frame::color_correlation_map::ColorCorrelationParams;
     use crate::render::test::make_and_run_simple_pipeline;
-    use crate::util::test::{self, assert_all_almost_eq, read_pfm};
+    use crate::util::test::{self, assert_all_almost_abs_eq, read_pfm};
     use crate::{error::Result, image::Image, render::stages::splines::SplinesStage};
     use test_log::test;
 
@@ -113,10 +113,10 @@ mod test {
             make_and_run_simple_pipeline(stage, &target_images, size, 0, 256)?.1;
         for c in 0..3 {
             for row in 0..size.1 {
-                assert_all_almost_eq!(
+                assert_all_almost_abs_eq(
                     output[c].as_rect().row(row),
                     want_image[c].as_rect().row(row),
-                    1e-3
+                    1e-3,
                 );
             }
         }

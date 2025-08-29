@@ -1361,7 +1361,7 @@ mod tests {
         use crate::{
             headers::{bit_depth::BitDepth, extra_channels::ExtraChannel},
             image::Image,
-            util::test::assert_all_almost_eq,
+            util::test::assert_all_almost_abs_eq,
         };
 
         const MAX_ABS_DELTA: f32 = 1e-6; // Adjusted for typical f32 comparisons
@@ -1445,9 +1445,9 @@ mod tests {
                 &mut vec![],
             );
 
-            assert_all_almost_eq!(&r_data, &expected_r, MAX_ABS_DELTA);
-            assert_all_almost_eq!(&g_data, &expected_r, MAX_ABS_DELTA);
-            assert_all_almost_eq!(&b_data, &expected_r, MAX_ABS_DELTA);
+            assert_all_almost_abs_eq(&r_data, &expected_r, MAX_ABS_DELTA);
+            assert_all_almost_abs_eq(&g_data, &expected_r, MAX_ABS_DELTA);
+            assert_all_almost_abs_eq(&b_data, &expected_r, MAX_ABS_DELTA);
             Ok(())
         }
 
@@ -1513,9 +1513,9 @@ mod tests {
                 &mut vec![],
             );
 
-            assert_all_almost_eq!(&r_data, &expected_r, MAX_ABS_DELTA);
-            assert_all_almost_eq!(&g_data, &expected_r, MAX_ABS_DELTA);
-            assert_all_almost_eq!(&b_data, &expected_r, MAX_ABS_DELTA);
+            assert_all_almost_abs_eq(&r_data, &expected_r, MAX_ABS_DELTA);
+            assert_all_almost_abs_eq(&g_data, &expected_r, MAX_ABS_DELTA);
+            assert_all_almost_abs_eq(&b_data, &expected_r, MAX_ABS_DELTA);
             Ok(())
         }
 
@@ -1601,9 +1601,9 @@ mod tests {
                 &mut vec![],
             );
 
-            assert_all_almost_eq!(&r_data, &expected_r, MAX_ABS_DELTA);
-            assert_all_almost_eq!(&g_data, &expected_r, MAX_ABS_DELTA);
-            assert_all_almost_eq!(&b_data, &expected_r, MAX_ABS_DELTA);
+            assert_all_almost_abs_eq(&r_data, &expected_r, MAX_ABS_DELTA);
+            assert_all_almost_abs_eq(&g_data, &expected_r, MAX_ABS_DELTA);
+            assert_all_almost_abs_eq(&b_data, &expected_r, MAX_ABS_DELTA);
             Ok(())
         }
 
@@ -1711,10 +1711,10 @@ mod tests {
                 &mut vec![],
             );
 
-            assert_all_almost_eq!(&r_data, &vec![expected_color], MAX_ABS_DELTA);
-            assert_all_almost_eq!(&g_data, &vec![expected_color], MAX_ABS_DELTA);
-            assert_all_almost_eq!(&b_data, &vec![expected_color], MAX_ABS_DELTA);
-            assert_all_almost_eq!(&ec0_data, &vec![expected_ec0], MAX_ABS_DELTA);
+            assert_all_almost_abs_eq(&r_data, &vec![expected_color], MAX_ABS_DELTA);
+            assert_all_almost_abs_eq(&g_data, &vec![expected_color], MAX_ABS_DELTA);
+            assert_all_almost_abs_eq(&b_data, &vec![expected_color], MAX_ABS_DELTA);
+            assert_all_almost_abs_eq(&ec0_data, &vec![expected_ec0], MAX_ABS_DELTA);
             Ok(())
         }
 
@@ -1805,10 +1805,10 @@ mod tests {
                 &mut vec![],
             );
 
-            assert_all_almost_eq!(&ec0_data, &vec![expected_ec0], MAX_ABS_DELTA);
-            assert_all_almost_eq!(&r_data, &vec![expected_color], MAX_ABS_DELTA);
-            assert_all_almost_eq!(&g_data, &vec![expected_color], MAX_ABS_DELTA);
-            assert_all_almost_eq!(&b_data, &vec![expected_color], MAX_ABS_DELTA);
+            assert_all_almost_abs_eq(&ec0_data, &vec![expected_ec0], MAX_ABS_DELTA);
+            assert_all_almost_abs_eq(&r_data, &vec![expected_color], MAX_ABS_DELTA);
+            assert_all_almost_abs_eq(&g_data, &vec![expected_color], MAX_ABS_DELTA);
+            assert_all_almost_abs_eq(&b_data, &vec![expected_color], MAX_ABS_DELTA);
             Ok(())
         }
 
@@ -1879,9 +1879,9 @@ mod tests {
             );
 
             let expected_vals = vec![0.5 * 0.8, 2.0 * 0.7]; // [0.4, 1.4]
-            assert_all_almost_eq!(&r_data, &expected_vals, MAX_ABS_DELTA);
-            assert_all_almost_eq!(&g_data, &expected_vals, MAX_ABS_DELTA);
-            assert_all_almost_eq!(&b_data, &expected_vals, MAX_ABS_DELTA);
+            assert_all_almost_abs_eq(&r_data, &expected_vals, MAX_ABS_DELTA);
+            assert_all_almost_abs_eq(&g_data, &expected_vals, MAX_ABS_DELTA);
+            assert_all_almost_abs_eq(&b_data, &expected_vals, MAX_ABS_DELTA);
 
             Ok(())
         }
@@ -1951,9 +1951,9 @@ mod tests {
                 &mut vec![],
             );
 
-            assert_all_almost_eq!(&r_data, &initial_data, MAX_ABS_DELTA);
-            assert_all_almost_eq!(&g_data, &initial_data, MAX_ABS_DELTA);
-            assert_all_almost_eq!(&b_data, &initial_data, MAX_ABS_DELTA);
+            assert_all_almost_abs_eq(&r_data, &initial_data, MAX_ABS_DELTA);
+            assert_all_almost_abs_eq(&g_data, &initial_data, MAX_ABS_DELTA);
+            assert_all_almost_abs_eq(&b_data, &initial_data, MAX_ABS_DELTA);
             Ok(())
         }
     }
