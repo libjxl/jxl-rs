@@ -44,7 +44,7 @@ impl CodestreamParser {
     pub(super) fn process_sections(
         &mut self,
         output_buffers: &mut Option<&mut [JxlOutputBuffer<'_>]>,
-    ) -> Result<()> {
+    ) -> Result<Option<usize>> {
         // Dequeue ready sections.
         while self
             .sections
@@ -56,7 +56,9 @@ impl CodestreamParser {
             self.available_sections.push(s);
         }
         if self.available_sections.is_empty() {
-            return Ok(());
+            return Ok(Some(
+                self.sections.front().unwrap().len - self.ready_section_data,
+            ));
         }
         let frame = self.frame.as_mut().unwrap();
         let frame_header = frame.header();
@@ -153,7 +155,7 @@ impl CodestreamParser {
         }
         // Frame is not yet complete.
         if !self.sections.is_empty() {
-            return Ok(());
+            return Ok(None);
         }
         assert!(self.available_sections.is_empty());
         let result = self.frame.take().unwrap().finalize()?;
@@ -177,6 +179,6 @@ impl CodestreamParser {
                 }
             }
         }
-        Ok(())
+        Ok(None)
     }
 }

@@ -129,7 +129,6 @@ impl CodestreamParser {
                             break;
                         }
                     }
-
                     // Read sections up to the end of the current box.
                     let mut available_codestream = match box_parser.get_more_codestream(input) {
                         Err(Error::OutOfBounds(_)) => 0,
@@ -168,14 +167,12 @@ impl CodestreamParser {
                             break;
                         }
                     }
-                    self.process_sections(&mut output_buffers).map_err(|e| {
-                        // Out-of-bounds errors in sections are not recoverable.
-                        if matches!(e, Error::OutOfBounds(_)) {
-                            Error::SectionTooShort
-                        } else {
-                            e
-                        }
-                    })?;
+                    match self.process_sections(&mut output_buffers) {
+                        Ok(None) => Ok(()),
+                        Ok(Some(missing)) => Err(Error::OutOfBounds(missing)),
+                        Err(Error::OutOfBounds(_)) => Err(Error::SectionTooShort),
+                        Err(err) => Err(err),
+                    }?;
                 } else {
                     let total_size = self.sections.iter().map(|x| x.len).sum::<usize>();
                     loop {

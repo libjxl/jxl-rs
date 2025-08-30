@@ -170,18 +170,34 @@ mod tests {
     use std::mem::MaybeUninit;
     use std::path::Path;
 
-    fn decode_test_file(path: &Path) -> Result<(), crate::error::Error> {
-        // Load the test image
-        let test_data = std::fs::read(path).expect("Failed to read test file");
-        let mut input = test_data.as_slice();
+    #[test]
+    fn decode_small_chunks() {
+        arbtest::arbtest(|u| {
+            decode_test_data(
+                std::fs::read("resources/test/green_queen_vardct_e3.jxl")
+                    .expect("Failed to read test file"),
+                u.arbitrary::<u8>().unwrap() as usize + 1,
+            )
+            .unwrap();
+            Ok(())
+        });
+    }
 
+    fn decode_test_data(data: Vec<u8>, chunk_size: usize) -> Result<(), crate::error::Error> {
         // Create decoder with default options
         let options = JxlDecoderOptions::default();
         let mut initialized_decoder = JxlDecoder::<states::Initialized>::new(options);
 
+        let mut input = data.as_slice();
+        let mut chunk_input = &input[0..0];
+
         // Process until we have image info
         let mut decoder_with_image_info = loop {
-            match initialized_decoder.process(&mut input).unwrap() {
+            chunk_input = &input[..(chunk_input.len().saturating_add(chunk_size)).min(input.len())];
+            let available_before = chunk_input.len();
+            let process_result = initialized_decoder.process(&mut chunk_input);
+            input = &input[(available_before - chunk_input.len())..];
+            match process_result.unwrap() {
                 ProcessingResult::Complete { result } => break result,
                 ProcessingResult::NeedsMoreInput { fallback, .. } => {
                     if input.is_empty() {
@@ -219,7 +235,12 @@ mod tests {
         loop {
             // Process until we have frame info
             let mut decoder_with_frame_info = loop {
-                match decoder_with_image_info.process(&mut input).unwrap() {
+                chunk_input =
+                    &input[..(chunk_input.len().saturating_add(chunk_size)).min(input.len())];
+                let available_before = chunk_input.len();
+                let process_result = decoder_with_image_info.process(&mut chunk_input);
+                input = &input[(available_before - chunk_input.len())..];
+                match process_result.unwrap() {
                     ProcessingResult::Complete { result } => break result,
                     ProcessingResult::NeedsMoreInput { fallback, .. } => {
                         if input.is_empty() {
@@ -229,7 +250,6 @@ mod tests {
                     }
                 }
             };
-
             decoder_with_frame_info.frame_header();
 
             // Prepare output buffers
@@ -277,10 +297,13 @@ mod tests {
                 .collect();
 
             decoder_with_image_info = loop {
-                match decoder_with_frame_info
-                    .process(&mut input, &mut output_slices)
-                    .unwrap()
-                {
+                chunk_input =
+                    &input[..(chunk_input.len().saturating_add(chunk_size)).min(input.len())];
+                let available_before = chunk_input.len();
+                let process_result =
+                    decoder_with_frame_info.process(&mut chunk_input, &mut output_slices);
+                input = &input[(available_before - chunk_input.len())..];
+                match process_result.unwrap() {
                     ProcessingResult::Complete { result } => break result,
                     ProcessingResult::NeedsMoreInput { fallback, .. } => {
                         if input.is_empty() {
@@ -320,6 +343,13 @@ mod tests {
         assert!(frame_count > 0, "No frames were decoded");
 
         Ok(())
+    }
+
+    fn decode_test_file(path: &Path) -> Result<(), crate::error::Error> {
+        decode_test_data(
+            std::fs::read(path).expect("Failed to read test file"),
+            usize::MAX,
+        )
     }
 
     for_each_test_file!(decode_test_file);
