@@ -13,8 +13,6 @@ use crate::{
     util::{Matrix3x3, Vector3, inv_3x3_matrix, mul_3x3_matrix, mul_3x3_vector},
 };
 
-use md5::Context;
-
 // Bradford matrices for chromatic adaptation
 const K_BRADFORD: Matrix3x3<f64> = [
     [0.8951, 0.2664, -0.1614],
@@ -27,6 +25,100 @@ const K_BRADFORD_INV: Matrix3x3<f64> = [
     [0.4323053, 0.5183603, 0.0492912],
     [-0.0085287, 0.0400428, 0.9684867],
 ];
+
+pub fn compute_md5(data: &[u8]) -> [u8; 16] {
+    let mut sum = [0u8; 16];
+    let mut data64 = data.to_vec();
+    data64.push(128);
+
+    // Add bytes such that ((size + 8) & 63) == 0
+    let extra = (64 - ((data64.len() + 8) & 63)) & 63;
+    data64.resize(data64.len() + extra, 0);
+
+    // Append length in bits as 64-bit little-endian
+    let bit_len = (data.len() as u64) << 3;
+    for i in (0..64).step_by(8) {
+        data64.push((bit_len >> i) as u8);
+    }
+
+    const SINEPARTS: [u32; 64] = [
+        0xd76aa478, 0xe8c7b756, 0x242070db, 0xc1bdceee, 0xf57c0faf, 0x4787c62a, 0xa8304613,
+        0xfd469501, 0x698098d8, 0x8b44f7af, 0xffff5bb1, 0x895cd7be, 0x6b901122, 0xfd987193,
+        0xa679438e, 0x49b40821, 0xf61e2562, 0xc040b340, 0x265e5a51, 0xe9b6c7aa, 0xd62f105d,
+        0x02441453, 0xd8a1e681, 0xe7d3fbc8, 0x21e1cde6, 0xc33707d6, 0xf4d50d87, 0x455a14ed,
+        0xa9e3e905, 0xfcefa3f8, 0x676f02d9, 0x8d2a4c8a, 0xfffa3942, 0x8771f681, 0x6d9d6122,
+        0xfde5380c, 0xa4beea44, 0x4bdecfa9, 0xf6bb4b60, 0xbebfbc70, 0x289b7ec6, 0xeaa127fa,
+        0xd4ef3085, 0x04881d05, 0xd9d4d039, 0xe6db99e5, 0x1fa27cf8, 0xc4ac5665, 0xf4292244,
+        0x432aff97, 0xab9423a7, 0xfc93a039, 0x655b59c3, 0x8f0ccc92, 0xffeff47d, 0x85845dd1,
+        0x6fa87e4f, 0xfe2ce6e0, 0xa3014314, 0x4e0811a1, 0xf7537e82, 0xbd3af235, 0x2ad7d2bb,
+        0xeb86d391,
+    ];
+
+    const SHIFT: [u32; 64] = [
+        7, 12, 17, 22, 7, 12, 17, 22, 7, 12, 17, 22, 7, 12, 17, 22, 5, 9, 14, 20, 5, 9, 14, 20, 5,
+        9, 14, 20, 5, 9, 14, 20, 4, 11, 16, 23, 4, 11, 16, 23, 4, 11, 16, 23, 4, 11, 16, 23, 6, 10,
+        15, 21, 6, 10, 15, 21, 6, 10, 15, 21, 6, 10, 15, 21,
+    ];
+
+    let mut a0: u32 = 0x67452301;
+    let mut b0: u32 = 0xefcdab89;
+    let mut c0: u32 = 0x98badcfe;
+    let mut d0: u32 = 0x10325476;
+
+    for i in (0..data64.len()).step_by(64) {
+        let mut a = a0;
+        let mut b = b0;
+        let mut c = c0;
+        let mut d = d0;
+
+        for j in 0..64 {
+            let (f, g) = if j < 16 {
+                ((b & c) | ((!b) & d), j)
+            } else if j < 32 {
+                ((d & b) | ((!d) & c), (5 * j + 1) & 0xf)
+            } else if j < 48 {
+                (b ^ c ^ d, (3 * j + 5) & 0xf)
+            } else {
+                (c ^ (b | (!d)), (7 * j) & 0xf)
+            };
+
+            let dg0 = data64[i + g * 4] as u32;
+            let dg1 = data64[i + g * 4 + 1] as u32;
+            let dg2 = data64[i + g * 4 + 2] as u32;
+            let dg3 = data64[i + g * 4 + 3] as u32;
+            let u = dg0 | (dg1 << 8) | (dg2 << 16) | (dg3 << 24);
+
+            let f = f.wrapping_add(a).wrapping_add(SINEPARTS[j]).wrapping_add(u);
+            a = d;
+            d = c;
+            c = b;
+            b = b.wrapping_add((f << SHIFT[j]) | (f >> (32 - SHIFT[j])));
+        }
+
+        a0 = a0.wrapping_add(a);
+        b0 = b0.wrapping_add(b);
+        c0 = c0.wrapping_add(c);
+        d0 = d0.wrapping_add(d);
+    }
+
+    sum[0] = a0 as u8;
+    sum[1] = (a0 >> 8) as u8;
+    sum[2] = (a0 >> 16) as u8;
+    sum[3] = (a0 >> 24) as u8;
+    sum[4] = b0 as u8;
+    sum[5] = (b0 >> 8) as u8;
+    sum[6] = (b0 >> 16) as u8;
+    sum[7] = (b0 >> 24) as u8;
+    sum[8] = c0 as u8;
+    sum[9] = (c0 >> 8) as u8;
+    sum[10] = (c0 >> 16) as u8;
+    sum[11] = (c0 >> 24) as u8;
+    sum[12] = d0 as u8;
+    sum[13] = (d0 >> 8) as u8;
+    sum[14] = (d0 >> 16) as u8;
+    sum[15] = (d0 >> 24) as u8;
+    sum
+}
 
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn primaries_to_xyz(
@@ -941,9 +1033,7 @@ impl JxlColorEncoding {
         }
 
         // Compute the MD5 hash on the modified profile data.
-        let mut context = Context::new();
-        context.consume(&profile_for_checksum);
-        let checksum = *context.compute();
+        let checksum = compute_md5(&profile_for_checksum);
 
         // Write the 16-byte checksum into the "Profile ID" field of the *original*
         // profile data buffer, starting at offset 84.
@@ -1408,6 +1498,34 @@ fn create_table_curve(
 #[cfg(test)]
 mod test {
     use super::*;
+
+    #[test]
+    fn test_md5() {
+        // Test vectors
+        let test_cases = vec![
+            ("", "d41d8cd98f00b204e9800998ecf8427e"),
+            (
+                "The quick brown fox jumps over the lazy dog",
+                "9e107d9d372bb6826bd81d3542a419d6",
+            ),
+            ("abc", "900150983cd24fb0d6963f7d28e17f72"),
+            ("message digest", "f96b697d7cb7938d525a2f31aaf161d0"),
+            (
+                "abcdefghijklmnopqrstuvwxyz",
+                "c3fcd3d76192e4007dfb496cca67e13b",
+            ),
+            (
+                "12345678901234567890123456789012345678901234567890123456789012345678901234567890",
+                "57edf4a22be3c955ac49da2e2107b67a",
+            ),
+        ];
+
+        for (input, expected) in test_cases {
+            let hash = compute_md5(input.as_bytes());
+            let hex: String = hash.iter().map(|e| format!("{:02x}", e)).collect();
+            assert_eq!(hex, expected, "Failed for input: '{}'", input);
+        }
+    }
 
     #[test]
     fn test_description() {
