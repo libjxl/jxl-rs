@@ -21,8 +21,8 @@ use crate::{
     },
     image::{Image, Rect},
     render::{
-        RenderPipeline, RenderPipelineBuilder, SimpleRenderPipeline, SimpleRenderPipelineBuilder,
-        stages::*,
+        RenderPipeline, RenderPipelineBuilder, SaveStage, SaveStageType, SimpleRenderPipeline,
+        SimpleRenderPipelineBuilder, stages::*,
     },
     util::{CeilLog2, Xorshift128Plus, tracing_wrappers::*},
 };
@@ -650,7 +650,7 @@ impl Frame {
         }
         if frame_header.lf_level != 0 {
             for i in 0..3 {
-                pipeline = pipeline.add_stage(SaveStage::<f32>::new(
+                pipeline = pipeline.add_save_stage(SaveStage::<f32>::new(
                     SaveStageType::Lf,
                     i,
                     frame_header.size_upsampled(),
@@ -661,7 +661,7 @@ impl Frame {
         }
         if frame_header.can_be_referenced && frame_header.save_before_ct {
             for i in 0..num_channels {
-                pipeline = pipeline.add_stage(SaveStage::<f32>::new(
+                pipeline = pipeline.add_save_stage(SaveStage::<f32>::new(
                     SaveStageType::Reference,
                     i,
                     frame_header.size_upsampled(),
@@ -712,7 +712,7 @@ impl Frame {
                 linear = false;
             }
             for i in 0..num_channels {
-                pipeline = pipeline.add_stage(SaveStage::<f32>::new(
+                pipeline = pipeline.add_save_stage(SaveStage::<f32>::new(
                     SaveStageType::Reference,
                     i,
                     image_size,
@@ -764,7 +764,7 @@ impl Frame {
                         pipeline.add_stage(ToLinearStage::new(0, output_color_info.tf.clone()))?;
                     linear = true;
                 }
-                pipeline = pipeline.add_stage(SaveStage::<f32>::new(
+                pipeline = pipeline.add_save_stage(SaveStage::<f32>::new(
                     SaveStageType::Output,
                     i,
                     image_size,

@@ -5,6 +5,8 @@
 
 use std::any::Any;
 
+use save::SaveStage;
+
 use crate::{
     error::{Error, Result},
     image::{DataTypeTag, Image, ImageDataType},
@@ -15,9 +17,11 @@ use crate::{
 
 use super::{
     RenderPipeline, RenderPipelineBuilder, RenderPipelineExtendStage, RenderPipelineInOutStage,
-    RenderPipelineInPlaceStage, RenderPipelineInspectStage, RenderPipelineStage,
-    internal::RenderPipelineStageType,
+    RenderPipelineInPlaceStage, RenderPipelineStage, internal::RenderPipelineStageType,
 };
+
+// TODO(veluca): this should eventually become non-pub.
+pub mod save;
 
 #[derive(Clone, Debug)]
 struct ChannelInfo {
@@ -69,6 +73,60 @@ impl SimpleRenderPipelineBuilder {
             can_shift: true,
         }
     }
+
+    fn add_dyn_stage(
+        mut self,
+        stage: Box<dyn RunStage>,
+        input_type: DataTypeTag,
+        output_type: Option<DataTypeTag>,
+        shift: (u8, u8),
+        is_extend: bool,
+    ) -> Result<Self> {
+        let current_info = self.pipeline.channel_info.last().unwrap().clone();
+        debug!(
+            last_stage_channel_info = ?current_info,
+            can_shift = self.can_shift,
+            "adding stage '{stage}'",
+        );
+        let mut after_info = vec![];
+        for (c, info) in current_info.iter().enumerate() {
+            if !stage.uses_channel(c) {
+                after_info.push(ChannelInfo {
+                    ty: info.ty,
+                    downsample: (0, 0),
+                });
+            } else {
+                if let Some(ty) = info.ty
+                    && ty != input_type
+                {
+                    return Err(Error::PipelineChannelTypeMismatch(
+                        stage.to_string(),
+                        c,
+                        input_type,
+                        ty,
+                    ));
+                }
+                after_info.push(ChannelInfo {
+                    ty: Some(output_type.unwrap_or(input_type)),
+                    downsample: shift,
+                });
+            }
+        }
+        if !self.can_shift && shift != (0, 0) {
+            return Err(Error::PipelineShiftAfterExpand(stage.to_string()));
+        }
+        if is_extend {
+            self.can_shift = false;
+        }
+        debug!(
+            new_channel_info = ?after_info,
+            can_shift = self.can_shift,
+            "added stage '{stage}'",
+        );
+        self.pipeline.channel_info.push(after_info);
+        self.pipeline.stages.push(stage);
+        Ok(self)
+    }
 }
 
 impl RenderPipelineBuilder for SimpleRenderPipelineBuilder {
@@ -91,51 +149,19 @@ impl RenderPipelineBuilder for SimpleRenderPipelineBuilder {
     }
 
     #[instrument(skip_all, err)]
-    fn add_stage<Stage: RenderPipelineStage>(mut self, stage: Stage) -> Result<Self> {
-        let current_info = self.pipeline.channel_info.last().unwrap().clone();
-        debug!(
-            last_stage_channel_info = ?current_info,
-            can_shift = self.can_shift,
-            "adding stage '{stage}'",
-        );
-        let mut after_info = vec![];
-        for (c, info) in current_info.iter().enumerate() {
-            if !stage.uses_channel(c) {
-                after_info.push(ChannelInfo {
-                    ty: info.ty,
-                    downsample: (0, 0),
-                });
-            } else {
-                if let Some(ty) = info.ty
-                    && ty != Stage::Type::INPUT_TYPE
-                {
-                    return Err(Error::PipelineChannelTypeMismatch(
-                        stage.to_string(),
-                        c,
-                        Stage::Type::INPUT_TYPE,
-                        ty,
-                    ));
-                }
-                after_info.push(ChannelInfo {
-                    ty: Some(Stage::Type::OUTPUT_TYPE.unwrap_or(Stage::Type::INPUT_TYPE)),
-                    downsample: Stage::Type::SHIFT,
-                });
-            }
-        }
-        if !self.can_shift && Stage::Type::SHIFT != (0, 0) {
-            return Err(Error::PipelineShiftAfterExpand(stage.to_string()));
-        }
-        if Stage::Type::TYPE == RenderPipelineStageType::Extend {
-            self.can_shift = false;
-        }
-        debug!(
-            new_channel_info = ?after_info,
-            can_shift = self.can_shift,
-            "added stage '{stage}'",
-        );
-        self.pipeline.channel_info.push(after_info);
-        self.pipeline.stages.push(Box::new(stage));
-        Ok(self)
+    fn add_stage<Stage: RenderPipelineStage>(self, stage: Stage) -> Result<Self> {
+        self.add_dyn_stage(
+            Box::new(stage),
+            Stage::Type::INPUT_TYPE,
+            Stage::Type::OUTPUT_TYPE,
+            Stage::Type::SHIFT,
+            Stage::Type::TYPE == RenderPipelineStageType::Extend,
+        )
+    }
+
+    #[instrument(skip_all, err)]
+    fn add_save_stage<T: ImageDataType>(self, stage: SaveStage<T>) -> Result<Self> {
+        self.add_dyn_stage(Box::new(stage), T::DATA_TYPE_ID, None, (0, 0), false)
     }
 
     #[instrument(skip_all, err)]
@@ -389,44 +415,6 @@ pub trait RenderPipelineRunStage {
         output_buffers: &mut [&mut Image<f64>],
         state: Option<&mut dyn Any>,
     );
-}
-
-impl<T: ImageDataType> RenderPipelineRunStage for RenderPipelineInspectStage<T> {
-    #[instrument(skip_all)]
-    fn run_stage_on<S: RenderPipelineStage<Type = Self>>(
-        stage: &S,
-        chunk_size: usize,
-        input_buffers: &[&Image<f64>],
-        _output_buffers: &mut [&mut Image<f64>],
-        mut state: Option<&mut dyn Any>,
-    ) {
-        debug!("running input stage '{stage}' in simple pipeline");
-        let numc = input_buffers.len();
-        if numc == 0 {
-            return;
-        }
-        let size = input_buffers[0].size();
-        for b in input_buffers.iter() {
-            assert_eq!(size, b.size());
-        }
-        let mut buffer =
-            vec![vec![T::default(); round_up_size_to_two_cache_lines::<T>(chunk_size)]; numc];
-        for y in 0..size.1 {
-            for x in (0..size.0).step_by(chunk_size) {
-                let xsize = size.0.min(x + chunk_size) - x;
-                debug!("position: {x}x{y} xsize: {xsize}");
-                for c in 0..numc {
-                    let in_rect = input_buffers[c].as_rect();
-                    let in_row = in_rect.row(y);
-                    for ix in 0..xsize {
-                        buffer[c][ix] = T::from_f64(in_row[x + ix]);
-                    }
-                }
-                let mut row: Vec<_> = buffer.iter().map(|x| x as &[T]).collect();
-                stage.process_row_chunk((x, y), xsize, &mut row, state.as_deref_mut());
-            }
-        }
-    }
 }
 
 impl<T: ImageDataType> RenderPipelineRunStage for RenderPipelineInPlaceStage<T> {

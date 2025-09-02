@@ -3,6 +3,7 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
+use internal::RenderPipelineStageInfo;
 use std::{any::Any, marker::PhantomData};
 
 use crate::{
@@ -16,19 +17,10 @@ pub mod stages;
 #[cfg(test)]
 mod test;
 
-use internal::RenderPipelineStageInfo;
-
-pub use simple_pipeline::{SimpleRenderPipeline, SimpleRenderPipelineBuilder};
-
-/// Inspects channels and passes data to the following stage as is.
-///
-/// These are the only stages that are assumed to have observable effects, i.e. calls to
-/// `process_row_chunk` for other stages may be omitted if it can be shown they can't affect any
-/// Inspect stage `process_row_chunk` call that happens inside image boundaries.
-/// For these stages, `process_row_chunk` receives read-only access to each row in each channel.
-pub struct RenderPipelineInspectStage<InputT: ImageDataType> {
-    _phantom: PhantomData<InputT>,
-}
+pub use simple_pipeline::{
+    SimpleRenderPipeline, SimpleRenderPipelineBuilder,
+    save::{SaveStage, SaveStageType},
+};
 
 /// Modifies channels in-place.
 ///
@@ -123,6 +115,10 @@ pub trait RenderPipelineBuilder: Sized {
         log_group_size: usize,
     ) -> Self;
     fn add_stage<Stage: RenderPipelineStage>(self, stage: Stage) -> Result<Self>;
+    fn add_save_stage<T: ImageDataType + std::ops::Mul<Output = T>>(
+        self,
+        stage: SaveStage<T>,
+    ) -> Result<Self>;
     fn build(self) -> Result<Self::RenderPipeline>;
 }
 
