@@ -3,14 +3,17 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-use std::sync::Mutex;
+use std::{any::Any, sync::Mutex};
 
 use crate::{
     error::Result,
     headers::Orientation,
-    image::{Image, ImageDataType, Rect},
-    render::{RenderPipelineInspectStage, RenderPipelineStage},
+    image::{DataTypeTag, Image, ImageDataType, Rect},
+    simd::round_up_size_to_two_cache_lines,
+    util::tracing_wrappers::debug,
 };
+
+use super::RunStage;
 
 pub enum SaveStageType {
     Output,
@@ -88,13 +91,7 @@ impl<T: ImageDataType> std::fmt::Display for SaveStage<T> {
     }
 }
 
-impl<T: ImageDataType + std::ops::Mul<Output = T>> RenderPipelineStage for SaveStage<T> {
-    type Type = RenderPipelineInspectStage<T>;
-
-    fn uses_channel(&self, c: usize) -> bool {
-        c == self.channel
-    }
-
+impl<T: ImageDataType> SaveStage<T> {
     fn process_row_chunk(
         &self,
         position: (usize, usize),
@@ -196,6 +193,65 @@ impl<T: ImageDataType + std::ops::Mul<Output = T>> RenderPipelineStage for SaveS
                 }
             }
         }
+    }
+}
+
+impl<T: ImageDataType> RunStage for SaveStage<T> {
+    fn run_stage_on(
+        &self,
+        chunk_size: usize,
+        input_buffers: &[&Image<f64>],
+        _output_buffers: &mut [&mut Image<f64>],
+        mut state: Option<&mut dyn Any>,
+    ) {
+        debug!("running save stage '{self}' in simple pipeline");
+        let numc = input_buffers.len();
+        if numc == 0 {
+            return;
+        }
+        let size = input_buffers[0].size();
+        for b in input_buffers.iter() {
+            assert_eq!(size, b.size());
+        }
+        let mut buffer =
+            vec![vec![T::default(); round_up_size_to_two_cache_lines::<T>(chunk_size)]; numc];
+        for y in 0..size.1 {
+            for x in (0..size.0).step_by(chunk_size) {
+                let xsize = size.0.min(x + chunk_size) - x;
+                debug!("position: {x}x{y} xsize: {xsize}");
+                for c in 0..numc {
+                    let in_rect = input_buffers[c].as_rect();
+                    let in_row = in_rect.row(y);
+                    for ix in 0..xsize {
+                        buffer[c][ix] = T::from_f64(in_row[x + ix]);
+                    }
+                }
+                let mut row: Vec<_> = buffer.iter().map(|x| x as &[T]).collect();
+                self.process_row_chunk((x, y), xsize, &mut row, state.as_deref_mut());
+            }
+        }
+    }
+
+    fn init_local_state(&self) -> Result<Option<Box<dyn Any>>> {
+        Ok(None)
+    }
+    fn shift(&self) -> (u8, u8) {
+        (0, 0)
+    }
+    fn new_size(&self, size: (usize, usize)) -> (usize, usize) {
+        size
+    }
+    fn uses_channel(&self, c: usize) -> bool {
+        self.channel == c
+    }
+    fn as_any(self: Box<Self>) -> Box<dyn Any> {
+        self
+    }
+    fn input_type(&self) -> DataTypeTag {
+        T::DATA_TYPE_ID
+    }
+    fn output_type(&self) -> DataTypeTag {
+        T::DATA_TYPE_ID
     }
 }
 

@@ -3,7 +3,7 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-use std::fmt::Debug;
+use std::{fmt::Debug, ops::Mul};
 
 use crate::{
     error::{Error, Result},
@@ -27,7 +27,9 @@ pub enum DataTypeTag {
     F64,
 }
 
-pub trait ImageDataType: private::Sealed + Copy + Default + 'static + Debug + PartialEq {
+pub trait ImageDataType:
+    private::Sealed + Copy + Default + 'static + Debug + PartialEq + Mul<Self, Output = Self>
+{
     /// ID of this data type. Different types *must* have different values.
     const DATA_TYPE_ID: DataTypeTag;
 
