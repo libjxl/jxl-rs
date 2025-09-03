@@ -355,7 +355,11 @@ impl<'a, T: ImageDataType> ImageRect<'a, T> {
         let total_size = self.rect.size.0 * self.rect.size.1;
         let mut data = vec![];
         data.try_reserve_exact(total_size)?;
-        data.extend((0..self.rect.size.1).flat_map(|x| self.row(x).iter()));
+
+        for row_idx in 0..self.rect.size.1 {
+            data.extend_from_slice(self.row(row_idx));
+        }
+
         Ok(Image {
             size: self.rect.size,
             data,
