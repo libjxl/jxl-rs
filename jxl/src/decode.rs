@@ -61,6 +61,7 @@ pub struct DecodeResult {
     pub data_icc: Option<Vec<u8>>,
 }
 
+// TODO(veluca): move this to a test crate & rewrite it to use the API.
 pub fn decode_jxl_codestream(
     mut options: DecodeOptions,
     data: &[u8],

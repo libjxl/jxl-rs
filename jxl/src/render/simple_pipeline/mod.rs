@@ -8,6 +8,7 @@ use std::any::Any;
 use save::SaveStage;
 
 use crate::{
+    BLOCK_DIM,
     error::{Error, Result},
     image::{DataTypeTag, Image, ImageDataType},
     render::internal::RenderPipelineStageInfo,
@@ -327,31 +328,22 @@ impl SimpleRenderPipeline {
 
         Ok(())
     }
-}
 
-impl RenderPipeline for SimpleRenderPipeline {
-    type Builder = SimpleRenderPipelineBuilder;
+    fn group_position(&self, group_id: usize) -> (usize, usize) {
+        (group_id % self.xgroups, group_id / self.xgroups)
+    }
 
-    #[instrument(skip_all, err)]
-    fn fill_input_channels<T: ImageDataType>(
-        &mut self,
-        channels: &[usize],
-        group_id: usize,
-        num_filled_passes: usize,
-        fill_fn: impl FnOnce(&mut [crate::image::ImageRectMut<T>]) -> Result<()>,
-    ) -> Result<()> {
-        debug!(
-            "filling data for group {}, channels {:?}, using type {:?}",
-            group_id,
-            channels,
-            T::DATA_TYPE_ID,
-        );
-        let group = (group_id % self.xgroups, group_id / self.xgroups);
-        let goffset = (
+    fn group_offset(&self, group_id: usize) -> (usize, usize) {
+        let group = self.group_position(group_id);
+        (
             group.0 << self.log_group_size,
             group.1 << self.log_group_size,
-        );
-        let gsize = (
+        )
+    }
+
+    fn group_size(&self, group_id: usize) -> (usize, usize) {
+        let goffset = self.group_offset(group_id);
+        (
             self.input_size
                 .0
                 .min(goffset.0 + (1 << self.log_group_size))
@@ -360,41 +352,82 @@ impl RenderPipeline for SimpleRenderPipeline {
                 .1
                 .min(goffset.1 + (1 << self.log_group_size))
                 - goffset.1,
+        )
+    }
+
+    fn group_size_for_channel(
+        &self,
+        channel: usize,
+        group_id: usize,
+        requested_data_type: DataTypeTag,
+    ) -> (usize, usize) {
+        let goffset = self.group_offset(group_id);
+        let ChannelInfo { downsample, ty } = self.channel_info[0][channel];
+        if ty.unwrap() != requested_data_type {
+            panic!(
+                "Invalid pipeline usage: incorrect channel type, requested {:?}, but pipeline wants {ty:?}",
+                requested_data_type
+            );
+        }
+        assert_eq!(goffset.0 % (1 << downsample.0), 0);
+        assert_eq!(goffset.1 % (1 << downsample.1), 0);
+        let group_size = self.group_size(group_id);
+        (
+            group_size.0.shrc(downsample.0),
+            group_size.1.shrc(downsample.1),
+        )
+    }
+}
+
+impl RenderPipeline for SimpleRenderPipeline {
+    type Builder = SimpleRenderPipelineBuilder;
+
+    #[instrument(skip_all, err)]
+    fn get_buffer_for_group<T: ImageDataType>(
+        &mut self,
+        channel: usize,
+        group_id: usize,
+    ) -> Result<Image<T>> {
+        let sz = self.group_size_for_channel(channel, group_id, T::DATA_TYPE_ID);
+        Image::<T>::new(sz)
+    }
+
+    fn set_buffer_for_group<T: ImageDataType>(
+        &mut self,
+        channel: usize,
+        group_id: usize,
+        num_passes: usize,
+        buf: Image<T>,
+    ) {
+        debug!(
+            "filling data for group {}, channel {}, using type {:?}",
+            group_id,
+            channel,
+            T::DATA_TYPE_ID,
         );
-        debug!(?gsize, ?group, ?group_id);
-        let mut images = vec![];
-        for c in channels.iter().copied() {
-            let ChannelInfo { ty, downsample } = self.channel_info[0][c];
-            let ty = ty.unwrap();
-            assert_eq!(goffset.0 % (1 << downsample.0), 0);
-            assert_eq!(goffset.1 % (1 << downsample.1), 0);
-            if ty == T::DATA_TYPE_ID {
-                images.push(Image::<T>::new((
-                    gsize.0.shrc(downsample.0),
-                    gsize.1.shrc(downsample.1),
-                ))?);
-            } else {
-                panic!(
-                    "Invalid pipeline usage: incorrect channel type, expected {:?}, found {ty:?}",
-                    T::DATA_TYPE_ID
-                );
+        let sz = self.group_size_for_channel(channel, group_id, T::DATA_TYPE_ID);
+        let goffset = self.group_offset(group_id);
+        let ChannelInfo { ty, downsample } = self.channel_info[0][channel];
+        let off = (goffset.0 >> downsample.0, goffset.1 >> downsample.1);
+        debug!(?sz, input_buffers_sz=?self.input_buffers[channel].size(), offset=?off, ?downsample, ?goffset);
+        let bsz = buf.size();
+        assert!(sz.0 <= bsz.0);
+        assert!(sz.1 <= bsz.1);
+        assert!(sz.0 + BLOCK_DIM > bsz.0);
+        assert!(sz.1 + BLOCK_DIM > bsz.1);
+        let ty = ty.unwrap();
+        assert_eq!(ty, T::DATA_TYPE_ID);
+        for y in 0..sz.1 {
+            for x in 0..sz.0 {
+                self.input_buffers[channel].as_rect_mut().row(y + off.1)[x + off.0] =
+                    buf.as_rect().row(y)[x].to_f64();
             }
         }
-        let mut images: Vec<_> = images.iter_mut().map(|x| x.as_rect_mut()).collect();
-        fill_fn(&mut images)?;
-        for (i, c) in channels.iter().copied().enumerate() {
-            let ChannelInfo { ty, downsample } = self.channel_info[0][c];
-            let ty = ty.unwrap();
-            let off = (goffset.0 >> downsample.0, goffset.1 >> downsample.1);
-            assert_eq!(ty, T::DATA_TYPE_ID);
-            for y in 0..gsize.1.shrc(downsample.1) {
-                for x in 0..gsize.0.shrc(downsample.0) {
-                    self.input_buffers[c].as_rect_mut().row(y + off.1)[x + off.0] =
-                        images[i].as_rect().row(y)[x].to_f64();
-                }
-            }
-            self.group_chan_ready_passes[group_id][c] += num_filled_passes;
-        }
+        self.group_chan_ready_passes[group_id][channel] += num_passes;
+    }
+
+    // TODO(veluca): actually use the passed-in buffers.
+    fn do_render(&mut self, _: &mut [Option<crate::api::JxlOutputBuffer>]) -> Result<()> {
         self.do_render()
     }
 

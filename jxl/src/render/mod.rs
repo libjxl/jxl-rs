@@ -7,8 +7,9 @@ use internal::RenderPipelineStageInfo;
 use std::{any::Any, marker::PhantomData};
 
 use crate::{
+    api::JxlOutputBuffer,
     error::Result,
-    image::{ImageDataType, ImageRectMut},
+    image::{Image, ImageDataType},
 };
 
 mod internal;
@@ -115,27 +116,35 @@ pub trait RenderPipelineBuilder: Sized {
         log_group_size: usize,
     ) -> Self;
     fn add_stage<Stage: RenderPipelineStage>(self, stage: Stage) -> Result<Self>;
-    fn add_save_stage<T: ImageDataType + std::ops::Mul<Output = T>>(
-        self,
-        stage: SaveStage<T>,
-    ) -> Result<Self>;
+    fn add_save_stage<T: ImageDataType>(self, stage: SaveStage<T>) -> Result<Self>;
     fn build(self) -> Result<Self::RenderPipeline>;
 }
 
 pub trait RenderPipeline {
     type Builder: RenderPipelineBuilder<RenderPipeline = Self>;
 
-    /// Feeds input into the pipeline. In particular, calls `fill_fn` with a rect for each of the
-    /// specified channels. The channel data is expected to represent the given number of
-    /// additional passes (compared to the previous call to fill_input_channels for the same
-    /// channels and groups).
-    fn fill_input_channels<T: ImageDataType>(
+    /// Obtains a buffer suitable for storing the input at  channel `channel` of group `group_id`.
+    /// This *might* be a buffer that was used to store that channel for that group in a previous
+    /// pass, a new buffer, or a re-used buffer from i.e. previously decoded frames.
+    fn get_buffer_for_group<T: ImageDataType>(
         &mut self,
-        channels: &[usize],
+        channel: usize,
         group_id: usize,
-        num_filled_passes: usize,
-        fill_fn: impl FnOnce(&mut [ImageRectMut<T>]) -> Result<()>,
-    ) -> Result<()>;
+    ) -> Result<Image<T>>;
+
+    /// Gives back the buffer for a channel and group to the render pipeline, marking that
+    /// `num_passes` additional passes (wrt. the previous call to this method for the same channel
+    /// and group, or 0 if no previous call happend) were rendered into the input buffer.
+    fn set_buffer_for_group<T: ImageDataType>(
+        &mut self,
+        channel: usize,
+        group_id: usize,
+        num_passes: usize,
+        buf: Image<T>,
+    );
+
+    /// Renders new data that is available after the last call to `render`.
+    fn do_render(&mut self, buffers: &mut [Option<JxlOutputBuffer>]) -> Result<()>;
 
     fn into_stages(self) -> Vec<Box<dyn Any>>;
     fn num_groups(&self) -> usize;
