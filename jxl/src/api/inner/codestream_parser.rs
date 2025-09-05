@@ -7,6 +7,8 @@ use std::{collections::VecDeque, io::IoSliceMut};
 
 use sections::SectionState;
 
+#[cfg(test)]
+use crate::api::FrameCallback;
 use crate::{
     api::{
         JxlBasicInfo, JxlBitstreamInput, JxlColorProfile, JxlDecoderOptions, JxlOutputBuffer,
@@ -62,6 +64,11 @@ pub(super) struct CodestreamParser {
     available_sections: Vec<SectionBuffer>,
 
     pub(super) has_more_frames: bool,
+
+    #[cfg(test)]
+    pub frame_callback: Option<Box<FrameCallback>>,
+    #[cfg(test)]
+    pub decoded_frames: usize,
 }
 
 impl CodestreamParser {
@@ -86,6 +93,10 @@ impl CodestreamParser {
             section_state: SectionState::new(0, 0),
             available_sections: vec![],
             has_more_frames: true,
+            #[cfg(test)]
+            frame_callback: None,
+            #[cfg(test)]
+            decoded_frames: 0,
         }
     }
 

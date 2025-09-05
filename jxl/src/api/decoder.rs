@@ -7,6 +7,8 @@ use super::{
     JxlBasicInfo, JxlBitstreamInput, JxlCms, JxlColorProfile, JxlDecoderInner, JxlDecoderOptions,
     JxlOutputBuffer, JxlPixelFormat, ProcessingResult,
 };
+#[cfg(test)]
+use crate::frame::Frame;
 use crate::{api::JxlFrameHeader, error::Result};
 use states::*;
 use std::marker::PhantomData;
@@ -30,12 +32,27 @@ pub struct JxlDecoder<State: JxlState> {
     _state: PhantomData<State>,
 }
 
+#[cfg(test)]
+pub type FrameCallback = dyn FnMut(&Frame, usize) -> Result<()>;
+
 impl<S: JxlState> JxlDecoder<S> {
     fn wrap_inner(inner: JxlDecoderInner) -> Self {
         Self {
             inner,
             _state: PhantomData,
         }
+    }
+
+    /// Returns a decoder that processes all frames by calling `callback(frame, frame_index)`.
+    #[cfg(test)]
+    pub fn with_frame_callback(mut self, callback: Box<FrameCallback>) -> Self {
+        self.inner = self.inner.with_frame_callback(callback);
+        self
+    }
+
+    #[cfg(test)]
+    pub fn decoded_frames(&self) -> usize {
+        self.inner.decoded_frames()
     }
 
     /// Rewinds a decoder to the start of the file, allowing past frames to be displayed again.
@@ -165,9 +182,9 @@ impl JxlDecoder<WithFrameInfo> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::api::{JxlColorType::Rgb, JxlDecoderOptions, JxlOutputBuffer};
+    use crate::api::JxlDecoderOptions;
+    use crate::api::test::create_output_buffers;
     use jxl_macros::for_each_test_file;
-    use std::mem::MaybeUninit;
     use std::path::Path;
 
     #[test]
@@ -209,21 +226,13 @@ mod tests {
         };
 
         // Get basic info
-        let basic_info = decoder_with_image_info.basic_info();
+        let basic_info = decoder_with_image_info.basic_info().clone();
         assert!(basic_info.bit_depth.bits_per_sample() > 0);
-        let orientation = basic_info.orientation;
 
         // Get image dimensions (after upsampling, which is the actual output size)
         let (width, height) = basic_info.size;
         assert!(width > 0);
         assert!(height > 0);
-
-        // Check if orientation transposes dimensions
-        let (buffer_width, buffer_height) = if orientation.is_transposing() {
-            (height, width)
-        } else {
-            (width, height)
-        };
 
         // Get pixel format info
         let pixel_format = decoder_with_image_info.current_pixel_format().clone();
@@ -252,49 +261,7 @@ mod tests {
             };
             decoder_with_frame_info.frame_header();
 
-            // Prepare output buffers
-            let mut output_buffers: Vec<Vec<MaybeUninit<u8>>> = Vec::new();
-
-            // For RGB images, first buffer holds interleaved RGB data
-            if pixel_format.color_type == Rgb {
-                // First buffer for interleaved RGB (3 channels * 4 bytes per float)
-                output_buffers.push(vec![
-                    MaybeUninit::uninit();
-                    buffer_width * buffer_height * 12
-                ]);
-                // Additional buffers for extra channels
-                for _ in 3..num_channels {
-                    output_buffers.push(vec![
-                        MaybeUninit::uninit();
-                        buffer_width * buffer_height * 4
-                    ]);
-                }
-            } else {
-                // For grayscale or other formats, one buffer per channel
-                for _ in 0..num_channels {
-                    output_buffers.push(vec![
-                        MaybeUninit::uninit();
-                        buffer_width * buffer_height * 4
-                    ]);
-                }
-            }
-
-            let mut output_slices: Vec<JxlOutputBuffer> = output_buffers
-                .iter_mut()
-                .enumerate()
-                .map(|(i, buffer)| {
-                    let bytes_per_pixel = if i == 0 && pixel_format.color_type == Rgb {
-                        12 // Interleaved RGB
-                    } else {
-                        4 // Single channel
-                    };
-                    JxlOutputBuffer::new_uninit(
-                        buffer.as_mut_slice(),
-                        buffer_height,
-                        bytes_per_pixel * buffer_width,
-                    )
-                })
-                .collect();
+            create_output_buffers!(basic_info, pixel_format, output_buffers, output_slices);
 
             decoder_with_image_info = loop {
                 chunk_input =

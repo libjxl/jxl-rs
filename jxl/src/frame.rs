@@ -990,11 +990,11 @@ impl Frame {
 
 #[cfg(test)]
 mod test {
+    use crate::api::{JxlDecoderOptions, test::create_output_buffers};
     use std::panic;
 
     use crate::{
-        container::ContainerParser,
-        decode::{DecodeOptions, decode_jxl_codestream},
+        api::{JxlDecoder, ProcessingResult, states},
         error::Error,
         features::spline::Point,
         util::test::assert_almost_abs_eq,
@@ -1005,20 +1005,73 @@ mod test {
 
     #[allow(clippy::type_complexity)]
     fn read_frames(
-        image: &[u8],
-        callback: &mut dyn FnMut(&Frame) -> Result<(), Error>,
-    ) -> Result<(), Error> {
-        let codestream = ContainerParser::collect_codestream(image).unwrap();
-        let mut options = DecodeOptions::new();
-        options.frame_callback = Some(callback);
-        decode_jxl_codestream(options, &codestream)?;
-        Ok(())
+        mut input: &[u8],
+        callback: Box<dyn FnMut(&Frame, usize) -> Result<(), Error>>,
+    ) -> Result<usize, Error> {
+        let options = JxlDecoderOptions::default();
+        let mut decoded_frames;
+        let mut initialized_decoder =
+            JxlDecoder::<states::Initialized>::new(options).with_frame_callback(callback);
+
+        let mut decoder_with_image_info = loop {
+            let process_result = initialized_decoder.process(&mut input);
+            match process_result.unwrap() {
+                ProcessingResult::Complete { result } => break result,
+                ProcessingResult::NeedsMoreInput { fallback, .. } => {
+                    if input.is_empty() {
+                        panic!("Unexpected end of input while reading image info");
+                    }
+                    initialized_decoder = fallback;
+                }
+            }
+        };
+
+        let basic_info = decoder_with_image_info.basic_info().clone();
+        let pixel_format = decoder_with_image_info.current_pixel_format().clone();
+
+        loop {
+            let mut decoder_with_frame_info = loop {
+                let process_result = decoder_with_image_info.process(&mut input);
+                match process_result.unwrap() {
+                    ProcessingResult::Complete { result } => break result,
+                    ProcessingResult::NeedsMoreInput { fallback, .. } => {
+                        if input.is_empty() {
+                            panic!("Unexpected end of input while reading frame info");
+                        }
+                        decoder_with_image_info = fallback;
+                    }
+                }
+            };
+
+            create_output_buffers!(basic_info, pixel_format, output_buffers, output_slices);
+
+            decoder_with_image_info = loop {
+                let process_result =
+                    decoder_with_frame_info.process(&mut input, &mut output_slices);
+                match process_result.unwrap() {
+                    ProcessingResult::Complete { result } => break result,
+                    ProcessingResult::NeedsMoreInput { fallback, .. } => {
+                        if input.is_empty() {
+                            panic!("Unexpected end of input while decoding frame");
+                        }
+                        decoder_with_frame_info = fallback;
+                    }
+                }
+            };
+
+            decoded_frames = decoder_with_image_info.decoded_frames();
+
+            if !decoder_with_image_info.has_more_frames() {
+                break;
+            }
+        }
+
+        Ok(decoded_frames)
     }
 
     #[test]
     fn splines() -> Result<(), Error> {
-        let mut num_frames = 0;
-        let mut verify_frame = |frame: &Frame| {
+        let verify_frame = move |frame: &Frame, _| {
             let lf_global = frame.lf_global.as_ref().unwrap();
             let splines = lf_global.splines.as_ref().unwrap();
             assert_eq!(splines.quantization_adjustment, 0);
@@ -1064,21 +1117,21 @@ mod test {
                 dct
             };
             assert_eq!(spline.sigma_dct, EXPECTED_SIGMA_DCT);
-            num_frames += 1;
             Ok(())
         };
-        read_frames(
-            include_bytes!("../resources/test/splines.jxl"),
-            &mut verify_frame,
-        )?;
-        assert_eq!(num_frames, 1);
+        assert_eq!(
+            read_frames(
+                include_bytes!("../resources/test/splines.jxl"),
+                Box::new(verify_frame),
+            )?,
+            1
+        );
         Ok(())
     }
 
     #[test]
     fn noise() -> Result<(), Error> {
-        let mut num_frames = 0;
-        let mut verify_frame = |frame: &Frame| {
+        let verify_frame = |frame: &Frame, _| {
             let lf_global = frame.lf_global.as_ref().unwrap();
             let noise = lf_global.noise.as_ref().unwrap();
             let want_noise = [
@@ -1087,42 +1140,43 @@ mod test {
             for (index, noise_param) in want_noise.iter().enumerate() {
                 assert_almost_abs_eq(noise.lut[index], *noise_param, 1e-6);
             }
-            num_frames += 1;
             Ok(())
         };
-        read_frames(
-            include_bytes!("../resources/test/8x8_noise.jxl"),
-            &mut verify_frame,
-        )?;
-        assert_eq!(num_frames, 1);
+        assert_eq!(
+            read_frames(
+                include_bytes!("../resources/test/8x8_noise.jxl"),
+                Box::new(verify_frame),
+            )?,
+            1
+        );
         Ok(())
     }
 
     #[test]
     fn patches() -> Result<(), Error> {
-        let mut num_frames = 0;
-        let mut verify_frame = |frame: &Frame| {
-            if num_frames == 0 {
+        let verify_frame = |frame: &Frame, frame_index| {
+            if frame_index == 0 {
                 assert!(!frame.header().has_patches());
                 assert!(frame.header().can_be_referenced);
-            } else if num_frames == 1 {
+            } else if frame_index == 1 {
                 assert!(frame.header().has_patches());
                 assert!(!frame.header().can_be_referenced);
             }
-            num_frames += 1;
             Ok(())
         };
-        read_frames(
-            include_bytes!("../resources/test/grayscale_patches_modular.jxl"),
-            &mut verify_frame,
-        )?;
-        assert_eq!(num_frames, 2);
+        assert_eq!(
+            read_frames(
+                include_bytes!("../resources/test/grayscale_patches_modular.jxl"),
+                Box::new(verify_frame),
+            )?,
+            2
+        );
         Ok(())
     }
 
     #[test]
     fn multiple_lf_420() -> Result<(), Error> {
-        let mut verify_frame = |frame: &Frame| {
+        let verify_frame = |frame: &Frame, _| {
             assert!(frame.header().is420());
             let Some(lf_image) = &frame.lf_image else {
                 panic!("no lf_image");
@@ -1145,16 +1199,15 @@ mod test {
         };
         read_frames(
             include_bytes!("../resources/test/multiple_lf_420.jxl"),
-            &mut verify_frame,
+            Box::new(verify_frame),
         )?;
         Ok(())
     }
 
     #[test]
     fn xyb_grayscale_patches() -> Result<(), Error> {
-        let mut num_frames = 0;
-        let mut verify_frame = |frame: &Frame| {
-            if num_frames == 0 {
+        let verify_frame = |frame: &Frame, frame_index| {
+            if frame_index == 0 {
                 assert_eq!(
                     frame.header.frame_type,
                     crate::headers::frame_header::FrameType::ReferenceOnly,
@@ -1168,14 +1221,15 @@ mod test {
                 assert!(frame.header.has_patches());
                 assert_eq!(frame.modular_color_channels, 0);
             }
-            num_frames += 1;
             Ok(())
         };
-        read_frames(
-            include_bytes!("../resources/test/grayscale_patches_var_dct.jxl"),
-            &mut verify_frame,
-        )?;
-        assert_eq!(num_frames, 2);
+        assert_eq!(
+            read_frames(
+                include_bytes!("../resources/test/grayscale_patches_var_dct.jxl"),
+                Box::new(verify_frame),
+            )?,
+            2
+        );
         Ok(())
     }
 }

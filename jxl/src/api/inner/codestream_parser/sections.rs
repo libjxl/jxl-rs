@@ -158,7 +158,21 @@ impl CodestreamParser {
             return Ok(None);
         }
         assert!(self.available_sections.is_empty());
+
+        #[cfg(test)]
+        {
+            self.frame_callback.as_mut().map_or(Ok(()), |cb| {
+                cb(self.frame.as_ref().unwrap(), self.decoded_frames)
+            })?;
+        }
+
         let result = self.frame.take().unwrap().finalize()?;
+
+        #[cfg(test)]
+        {
+            self.decoded_frames += 1;
+        }
+
         if let Some(state) = result.decoder_state {
             self.decoder_state = Some(state);
         } else {

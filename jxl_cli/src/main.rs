@@ -6,8 +6,7 @@
 use clap::Parser;
 use color_eyre::eyre::{Result, WrapErr, eyre};
 use jxl::api::{JxlColorProfile, JxlColorType, JxlDecoder, JxlDecoderOptions, JxlOutputBuffer};
-use jxl::decode::{ImageData, ImageFrame};
-use jxl::image::Image;
+use jxl::image::{Image, ImageDataType};
 use std::fs;
 use std::io::Read;
 use std::path::PathBuf;
@@ -20,6 +19,16 @@ fn save_icc(icc_bytes: &[u8], icc_filename: Option<PathBuf>) -> Result<()> {
         std::fs::write(&path, icc_bytes)
             .wrap_err_with(|| format!("Failed to write ICC profile to {:?}", path))
     })
+}
+
+pub struct ImageFrame<T: ImageDataType> {
+    pub size: (usize, usize),
+    pub channels: Vec<Image<T>>,
+}
+
+pub struct ImageData<T: ImageDataType> {
+    pub size: (usize, usize),
+    pub frames: Vec<ImageFrame<T>>,
 }
 
 fn save_image(

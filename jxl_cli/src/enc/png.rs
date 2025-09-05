@@ -7,8 +7,8 @@ use jxl::api::{
     JxlColorEncoding, JxlColorProfile, JxlPrimaries, JxlTransferFunction, JxlWhitePoint,
 };
 
+use crate::ImageData;
 use color_eyre::eyre::{Result, WrapErr, eyre};
-use jxl::decode::ImageData;
 use jxl::error::Error;
 use jxl::headers::color_encoding::RenderingIntent;
 

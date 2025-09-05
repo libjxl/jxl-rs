@@ -8,8 +8,8 @@ pub use jxl_exr::to_exr;
 #[cfg(not(feature = "exr"))]
 mod jxl_exr {
 
+    use crate::ImageData;
     use jxl::api::JxlColorProfile;
-    use jxl::decode::ImageData;
     use jxl::error::{Error, Result};
     use jxl::headers::bit_depth::BitDepth;
 
@@ -29,11 +29,12 @@ mod jxl_exr {
 
     use color_eyre::eyre::{Result, WrapErr, eyre};
     use jxl::api::{JxlColorEncoding, JxlColorProfile, JxlTransferFunction};
-    use jxl::decode::ImageData;
     use jxl::error::Error;
 
     use exr::meta::attribute::Chromaticities;
     use exr::prelude::*;
+
+    use crate::ImageData;
 
     pub fn to_exr(
         image_data: ImageData<f32>,
