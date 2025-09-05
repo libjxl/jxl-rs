@@ -1,11 +1,14 @@
 [package]
 name = "jxl"
+description = "High performance Rust implementation of a JPEG XL decoder"
 version = "0.1.0"
+readme = "../README.md"
+keywords = ["jpeg-xl", "decoder"]
+categories = ["multimedia::images"]
 authors = ["Luca Versari <veluca93@gmail.com>"]
+repository = "https://github.com/libjxl/jxl-rs"
 edition = "2024"
 license = "BSD-3-Clause"
-
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
 thiserror = "2.0"
@@ -16,7 +19,7 @@ num-traits = "0.2.14"
 array-init = "2.0.0"
 half = "2.4.1"
 tracing = { version = "0.1.40", optional = true }
-jxl_macros = { path = "../jxl_macros" }
+jxl_macros = { path = "../jxl_macros", version = "=0.1.0" }
 
 [dev-dependencies]
 arbtest = "0.3.2"
