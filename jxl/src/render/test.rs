@@ -6,7 +6,7 @@
 use crate::{
     error::Result,
     headers::Orientation,
-    image::{Image, ImageDataType, ImageRectMut},
+    image::{Image, ImageDataType},
     util::{ShiftRightCeil, tracing_wrappers::instrument},
 };
 use rand::SeedableRng;
@@ -54,30 +54,26 @@ pub(super) fn make_and_run_simple_pipeline<
     let mut pipeline = pipeline.build()?;
 
     for g in 0..pipeline.num_groups() {
-        pipeline.fill_input_channels(
-            &all_channels,
-            g,
-            1,
-            |rects: &mut [ImageRectMut<InputT>]| {
-                for ((input, fill), used) in input_images
-                    .iter()
-                    .zip(rects.iter_mut())
-                    .zip(uses_channel.iter().copied())
-                {
-                    let log_group_size = if used {
-                        (
-                            LOG_GROUP_SIZE - S::Type::SHIFT.0 as usize,
-                            LOG_GROUP_SIZE - S::Type::SHIFT.1 as usize,
-                        )
-                    } else {
-                        (LOG_GROUP_SIZE, LOG_GROUP_SIZE)
-                    };
-                    fill.copy_from(input.group_rect(g, log_group_size))?;
-                }
-                Ok(())
-            },
-        )?;
+        for &c in all_channels.iter() {
+            let log_group_size = if uses_channel[c] {
+                (
+                    LOG_GROUP_SIZE - S::Type::SHIFT.0 as usize,
+                    LOG_GROUP_SIZE - S::Type::SHIFT.1 as usize,
+                )
+            } else {
+                (LOG_GROUP_SIZE, LOG_GROUP_SIZE)
+            };
+            pipeline.set_buffer_for_group(
+                c,
+                g,
+                1,
+                input_images[c].group_rect(g, log_group_size).to_image()?,
+            );
+        }
     }
+
+    // TODO(veluca): pass actual output buffers.
+    pipeline.do_render(&mut [])?;
 
     let mut stages = pipeline.into_stages().into_iter();
     let stage = stages

@@ -19,7 +19,7 @@ use crate::{
         frame_header::{Encoding, FrameHeader, Toc, TocNonserialized},
         permutation::Permutation,
     },
-    image::{Image, Rect},
+    image::Image,
     render::{
         RenderPipeline, RenderPipelineBuilder, SaveStage, SaveStageType, SimpleRenderPipeline,
         SimpleRenderPipelineBuilder, stages::*,
@@ -831,52 +831,49 @@ impl Frame {
         if self.header.has_noise() {
             // TODO(sboukortt): consider making this a dedicated stage
             let num_channels = self.header.num_extra_channels as usize + 3;
-            self.render_pipeline.as_mut().unwrap().fill_input_channels(
-                &[num_channels, num_channels + 1, num_channels + 2],
-                group,
-                1,
-                |rects| {
-                    let group_dim = self.header.group_dim() as u32;
-                    let xsize_groups = self.header.size_groups().0;
-                    let gx = (group % xsize_groups) as u32;
-                    let gy = (group / xsize_groups) as u32;
-                    // TODO(sboukortt): test upsampling+noise
-                    let upsampling = self.header.upsampling;
-                    let x0 = gx * upsampling * group_dim;
-                    let y0 = gy * upsampling * group_dim;
-                    // TODO(sboukortt): actual frame indices for the first two
-                    let mut rng = Xorshift128Plus::new_with_seeds(1, 0, x0, y0);
-                    let bits_to_float = |bits: u32| f32::from_bits((bits >> 9) | 0x3F800000);
-                    for rect in rects {
-                        let (xsize, ysize) = rect.size();
 
-                        const FLOATS_PER_BATCH: usize =
-                            Xorshift128Plus::N * size_of::<u64>() / size_of::<f32>();
-                        let mut batch = [0u64; Xorshift128Plus::N];
+            let group_dim = self.header.group_dim() as u32;
+            let xsize_groups = self.header.size_groups().0;
+            let gx = (group % xsize_groups) as u32;
+            let gy = (group / xsize_groups) as u32;
+            // TODO(sboukortt): test upsampling+noise
+            let upsampling = self.header.upsampling;
+            let x0 = gx * upsampling * group_dim;
+            let y0 = gy * upsampling * group_dim;
+            // TODO(sboukortt): actual frame indices for the first two
+            let mut rng = Xorshift128Plus::new_with_seeds(1, 0, x0, y0);
+            let bits_to_float = |bits: u32| f32::from_bits((bits >> 9) | 0x3F800000);
+            let rp = self.render_pipeline.as_mut().unwrap();
+            for i in 0..3 {
+                let mut buf = rp.get_buffer_for_group(num_channels + i, group)?;
+                let mut rect = buf.as_rect_mut();
+                let (xsize, ysize) = rect.size();
+                const FLOATS_PER_BATCH: usize =
+                    Xorshift128Plus::N * size_of::<u64>() / size_of::<f32>();
+                let mut batch = [0u64; Xorshift128Plus::N];
 
-                        for y in 0..ysize {
-                            let row = rect.row(y);
-                            for batch_index in 0..xsize.div_ceil(FLOATS_PER_BATCH) {
-                                rng.fill(&mut batch);
-                                let batch_size =
-                                    (xsize - batch_index * FLOATS_PER_BATCH).min(FLOATS_PER_BATCH);
-                                for i in 0..batch_size {
-                                    let x = FLOATS_PER_BATCH * batch_index + i;
-                                    let k = i / 2;
-                                    let high_bytes = i % 2 != 0;
-                                    let bits = if high_bytes {
-                                        ((batch[k] & 0xFFFFFFFF00000000) >> 32) as u32
-                                    } else {
-                                        (batch[k] & 0xFFFFFFFF) as u32
-                                    };
-                                    row[x] = bits_to_float(bits);
-                                }
-                            }
+                for y in 0..ysize {
+                    let row = rect.row(y);
+                    for batch_index in 0..xsize.div_ceil(FLOATS_PER_BATCH) {
+                        rng.fill(&mut batch);
+                        let batch_size =
+                            (xsize - batch_index * FLOATS_PER_BATCH).min(FLOATS_PER_BATCH);
+                        for i in 0..batch_size {
+                            let x = FLOATS_PER_BATCH * batch_index + i;
+                            let k = i / 2;
+                            let high_bytes = i % 2 != 0;
+                            let bits = if high_bytes {
+                                ((batch[k] & 0xFFFFFFFF00000000) >> 32) as u32
+                            } else {
+                                (batch[k] & 0xFFFFFFFF) as u32
+                            };
+                            row[x] = bits_to_float(bits);
                         }
                     }
-                    Ok(())
-                },
-            )?;
+                }
+
+                rp.set_buffer_for_group(num_channels + i, group, 1, buf);
+            }
         }
         let lf_global = self.lf_global.as_mut().unwrap();
         if self.header.encoding == Encoding::VarDCT {
@@ -903,18 +900,11 @@ impl Frame {
             if self.decoder_state.enable_output
                 && pass + 1 == self.header.passes.num_passes as usize
             {
-                for c in [0, 1, 2] {
-                    self.render_pipeline.as_mut().unwrap().fill_input_channels(
-                        &[c],
-                        group,
-                        1,
-                        |rects| {
-                            rects[0].copy_from(pixels[c].as_rect().rect(Rect {
-                                origin: (0, 0),
-                                size: rects[0].size(),
-                            })?)
-                        },
-                    )?;
+                for (c, p) in pixels.into_iter().enumerate() {
+                    self.render_pipeline
+                        .as_mut()
+                        .unwrap()
+                        .set_buffer_for_group(c, group, 1, p);
                 }
             }
         }
@@ -931,6 +921,8 @@ impl Frame {
                 &self.header,
                 self.render_pipeline.as_mut().unwrap(),
             )?;
+            // TODO(veluca): pass actual output buffers.
+            self.render_pipeline.as_mut().unwrap().do_render(&mut [])?;
         }
         Ok(())
     }

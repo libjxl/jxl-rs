@@ -522,7 +522,6 @@ impl FullModularImage {
         Ok(())
     }
 
-    #[allow(clippy::type_complexity)]
     pub fn process_output(
         &mut self,
         section_id: usize,
@@ -533,26 +532,22 @@ impl FullModularImage {
         let mut maybe_output = |bi: &mut ModularBufferInfo, grid: usize| -> Result<()> {
             if bi.info.output_channel_idx >= 0 {
                 let chan = bi.info.output_channel_idx as usize;
-                let mut channels = vec![chan];
+                debug!("Rendering channel {chan:?}, grid position {grid}");
+                let buf = bi.buffer_grid[grid].get_buffer()?;
+                // TODO(veluca): figure out what to do with passes here.
                 if chan == 0 && self.modular_color_channels == 1 {
-                    channels = vec![0, 1, 2];
-                }
-                debug!("Rendering channels {channels:?}, grid position {grid}");
-                render_pipeline.fill_input_channels(&channels, grid, 1, |rects| {
-                    for rect in rects.iter_mut() {
-                        rect.copy_from(
-                            bi.buffer_grid[grid]
-                                .data
-                                .borrow()
-                                .as_ref()
-                                .unwrap()
-                                .data
-                                .as_rect(),
-                        )?;
+                    for i in 0..2 {
+                        render_pipeline.set_buffer_for_group(
+                            i,
+                            grid,
+                            1,
+                            buf.data.as_rect().to_image()?,
+                        );
                     }
-                    Ok(())
-                })?;
-                bi.buffer_grid[grid].mark_used();
+                    render_pipeline.set_buffer_for_group(2, grid, 1, buf.data);
+                } else {
+                    render_pipeline.set_buffer_for_group(chan, grid, 1, buf.data);
+                }
             }
             Ok(())
         };
