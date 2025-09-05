@@ -8,9 +8,7 @@
 use core::slice;
 use std::{marker::PhantomData, mem::MaybeUninit, ops::Range};
 
-use num_traits::ToBytes;
-
-use crate::image::Image;
+use crate::image::{Image, ImageDataType};
 
 pub struct JxlOutputBuffer<'a> {
     // Safety invariants:
@@ -122,52 +120,30 @@ impl<'a> JxlOutputBuffer<'a> {
         unsafe { slice::from_raw_parts_mut(start, cols.len()) }
     }
 
-    // TODO(veluca): the following methods should be removed, as data should be written
-    // incrementally.
-    pub(super) fn write_from_rgb_f32(&mut self, r: &Image<f32>, g: &Image<f32>, b: &Image<f32>) {
-        assert_eq!(r.size(), g.size());
-        assert_eq!(r.size(), b.size());
-        assert_eq!(self.bytes_per_row, r.size().0 * 12);
-        let (xsize, ysize) = r.size();
-        assert_eq!(ysize, self.num_rows);
-        for y in 0..ysize {
-            let rrow = r.as_rect().row(y);
-            let grow = g.as_rect().row(y);
-            let brow = b.as_rect().row(y);
-            // Safety: uninit data is never written in `row`.
-            let row = unsafe { self.get(y, 0..12 * xsize) };
-            let rgb = rrow
-                .iter()
-                .zip(grow.iter().zip(brow.iter()))
-                .map(|(r, (g, b))| {
-                    let mut arr = [0; 12];
-                    arr[0..4].copy_from_slice(&r.to_ne_bytes());
-                    arr[4..8].copy_from_slice(&g.to_ne_bytes());
-                    arr[8..12].copy_from_slice(&b.to_ne_bytes());
-                    arr
-                });
-            for (out, rgb) in row.chunks_exact_mut(12).zip(rgb) {
-                for i in 0..12 {
-                    out[i].write(rgb[i]);
-                }
-            }
-        }
+    pub(crate) fn from_image<T: ImageDataType>(image: &'a mut Image<T>) -> Self {
+        let (width, height) = image.size();
+        let buf = image.buf_mut();
+        assert!(buf.len() >= width * height);
+        let bytes_per_pixel = std::mem::size_of::<T>();
+        let bytes_per_row = width * bytes_per_pixel;
+        let buf_ptr = buf.as_mut_ptr() as *mut MaybeUninit<u8>;
+
+        // Safety: The pointer comes from a mutable slice of a valid Image,
+        // which lives for 'a. The dimensions are derived from the image itself.
+        // T is guaranteed to be a bag-of-bits type, so the transmute from
+        // a pointer to T to a pointer to u8 is safe.
+        // new_from_ptr will check the invariants (e.g. non-empty).
+        // The JxlOutputBuffer is guaranteed to not write uninitialized data to
+        // the buffer.
+        unsafe { Self::new_from_ptr(buf_ptr, height, bytes_per_row, bytes_per_row) }
     }
 
-    pub(super) fn write_from_f32(&mut self, c: &Image<f32>) {
-        assert_eq!(self.bytes_per_row, c.size().0 * 4);
-        let (xsize, ysize) = c.size();
-        assert_eq!(ysize, self.num_rows);
-        for y in 0..ysize {
-            let crow = c.as_rect().row(y);
-            // Safety: uninit data is never written in `row`.
-            let row = unsafe { self.get(y, 0..4 * xsize) };
-            for (out, v) in row.chunks_exact_mut(4).zip(crow) {
-                let v = v.to_ne_bytes();
-                for i in 0..4 {
-                    out[i].write(v[i]);
-                }
-            }
+    pub(crate) fn from_output_buffer(lender: &'a mut JxlOutputBuffer<'_>) -> Self {
+        // Safety note: this is effectively equivalent to a reborrow. Moreover, the safety
+        // invariants are preserved by virtue of copying all the fields.
+        Self {
+            _ph: PhantomData,
+            ..*lender
         }
     }
 }

@@ -3,7 +3,9 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-use std::{fmt::Debug, ops::Mul};
+#![allow(unsafe_code)]
+
+use std::fmt::Debug;
 
 use crate::{
     error::{Error, Result},
@@ -27,8 +29,10 @@ pub enum DataTypeTag {
     F64,
 }
 
-pub trait ImageDataType:
-    private::Sealed + Copy + Default + 'static + Debug + PartialEq + Mul<Self, Output = Self>
+/// # Safety
+/// Any type implementing this trait must be a "bag-of-bits" type with no padding.
+pub unsafe trait ImageDataType:
+    private::Sealed + Copy + Default + 'static + Debug + PartialEq
 {
     /// ID of this data type. Different types *must* have different values.
     const DATA_TYPE_ID: DataTypeTag;
@@ -62,7 +66,8 @@ macro_rules! type_max {
 macro_rules! impl_image_data_type {
     ($ty: ident, $id: ident) => {
         impl private::Sealed for $ty {}
-        impl ImageDataType for $ty {
+        // Safety: primitive integer/float types are bag-of-bits types.
+        unsafe impl ImageDataType for $ty {
             const DATA_TYPE_ID: DataTypeTag = DataTypeTag::$id;
             fn from_f64(f: f64) -> $ty {
                 f as $ty
@@ -90,7 +95,8 @@ impl_image_data_type!(i16, I16);
 impl_image_data_type!(i32, I32);
 
 impl private::Sealed for half::f16 {}
-impl ImageDataType for half::f16 {
+// Safety: f16 is a bag-of-bits type.
+unsafe impl ImageDataType for half::f16 {
     const DATA_TYPE_ID: DataTypeTag = DataTypeTag::F16;
     fn from_f64(f: f64) -> half::f16 {
         half::f16::from_f64(f)
@@ -319,6 +325,10 @@ impl<T: ImageDataType> Image<T> {
 
     pub fn try_clone(&self) -> Result<Self> {
         self.as_rect().to_image()
+    }
+
+    pub(crate) fn buf_mut(&mut self) -> &mut [T] {
+        &mut self.data
     }
 }
 

@@ -5,9 +5,10 @@
 
 use crate::{
     GROUP_DIM,
+    api::{Endianness, JxlColorType, JxlDataFormat, JxlOutputBuffer, JxlPixelFormat},
     bit_reader::BitReader,
     entropy_coding::decode::Histograms,
-    error::Result,
+    error::{Error, Result},
     features::{
         epf::create_sigma_image, noise::Noise, patches::PatchesDictionary, spline::Splines,
     },
@@ -160,11 +161,8 @@ pub struct Frame {
     hf_meta: Option<HfMetadata>,
     decoder_state: DecoderState,
     render_pipeline: Option<SimpleRenderPipeline>,
-}
-
-pub struct FrameOutput {
-    pub decoder_state: Option<DecoderState>,
-    pub channels: Option<Vec<Image<f32>>>,
+    reference_frame_data: Option<Vec<Image<f32>>>,
+    lf_frame_data: Option<[Image<f32>; 3]>,
 }
 
 impl Frame {
@@ -235,6 +233,30 @@ impl Frame {
         } else {
             None
         };
+
+        let reference_frame_data = if frame_header.can_be_referenced {
+            let num_ref_channels = 3 + image_metadata.extra_channel_info.len();
+            Some(
+                (0..num_ref_channels)
+                    .map(|_| Image::new(frame_header.size_upsampled()))
+                    .collect::<Result<Vec<_>>>()?,
+            )
+        } else {
+            None
+        };
+
+        let lf_frame_data = if frame_header.lf_level != 0 {
+            Some(
+                (0..3)
+                    .map(|_| Image::new(frame_header.size_upsampled()))
+                    .collect::<Result<Vec<_>, _>>()?
+                    .try_into()
+                    .unwrap(),
+            )
+        } else {
+            None
+        };
+
         Ok(Self {
             header: frame_header,
             modular_color_channels,
@@ -246,6 +268,8 @@ impl Frame {
             hf_meta,
             decoder_state,
             render_pipeline: None,
+            reference_frame_data,
+            lf_frame_data,
         })
     }
 
@@ -503,6 +527,7 @@ impl Frame {
         frame_header: &FrameHeader,
         lf_global: &LfGlobalState,
         epf_sigma: &Option<Arc<Image<f32>>>,
+        pixel_format: &JxlPixelFormat,
     ) -> Result<SimpleRenderPipeline> {
         let num_channels = frame_header.num_extra_channels as usize + 3;
         let num_temp_channels = if frame_header.has_noise() { 3 } else { 0 };
@@ -513,6 +538,7 @@ impl Frame {
             frame_header.upsampling.ilog2() as usize,
             frame_header.log_group_dim(),
         );
+
         if frame_header.encoding == Encoding::Modular {
             if decoder_state.file_header.image_metadata.xyb_encoded {
                 pipeline =
@@ -648,26 +674,35 @@ impl Frame {
                     num_channels,
                 ))?;
         }
+
+        let num_regular_output_buffers = frame_header.num_extra_channels as usize + 1;
+        assert_eq!(
+            pixel_format.extra_channel_format.len(),
+            frame_header.num_extra_channels as usize
+        );
+
+        assert!(frame_header.lf_level == 0 || !frame_header.can_be_referenced);
+
         if frame_header.lf_level != 0 {
             for i in 0..3 {
-                pipeline = pipeline.add_save_stage(SaveStage::<f32>::new(
-                    SaveStageType::Lf,
-                    i,
-                    frame_header.size_upsampled(),
-                    1.0,
+                pipeline = pipeline.add_save_stage(SaveStage::new(
+                    &[i],
                     Orientation::Identity,
-                )?)?;
+                    num_regular_output_buffers + i,
+                    JxlColorType::Grayscale,
+                    JxlDataFormat::f32(),
+                ))?;
             }
         }
         if frame_header.can_be_referenced && frame_header.save_before_ct {
             for i in 0..num_channels {
-                pipeline = pipeline.add_save_stage(SaveStage::<f32>::new(
-                    SaveStageType::Reference,
-                    i,
-                    frame_header.size_upsampled(),
-                    1.0,
+                pipeline = pipeline.add_save_stage(SaveStage::new(
+                    &[i],
                     Orientation::Identity,
-                )?)?;
+                    num_regular_output_buffers + i,
+                    JxlColorType::Grayscale,
+                    JxlDataFormat::f32(),
+                ))?;
             }
         }
 
@@ -712,13 +747,13 @@ impl Frame {
                 linear = false;
             }
             for i in 0..num_channels {
-                pipeline = pipeline.add_save_stage(SaveStage::<f32>::new(
-                    SaveStageType::Reference,
-                    i,
-                    image_size,
-                    1.0,
+                pipeline = pipeline.add_save_stage(SaveStage::new(
+                    &[i],
                     Orientation::Identity,
-                )?)?;
+                    num_regular_output_buffers + i,
+                    JxlColorType::Grayscale,
+                    JxlDataFormat::f32(),
+                ))?;
             }
         }
 
@@ -748,35 +783,55 @@ impl Frame {
             } else {
                 3
             };
-            for i in (0..num_color_channels).chain(3..num_channels) {
-                if decoder_state.render_spotcolors
-                    && i > 3
-                    && decoder_state.file_header.image_metadata.extra_channel_info[i - 3].ec_type
-                        == ExtraChannel::SpotColor
-                {
-                    continue;
+            let alpha_in_color = if pixel_format.color_type.has_alpha() {
+                decoder_state
+                    .file_header
+                    .image_metadata
+                    .extra_channel_info
+                    .iter()
+                    .enumerate()
+                    .find(|x| x.1.ec_type == ExtraChannel::Alpha)
+                    .map(|x| x.0 + 3)
+            } else {
+                None
+            };
+            if pixel_format.color_type.is_grayscale() {
+                if num_color_channels == 3 {
+                    return Err(Error::NotGrayscale);
                 }
-                if decoder_state.file_header.image_metadata.xyb_encoded
-                    && decoder_state.xyb_output_linear
-                    && !linear
-                {
-                    pipeline =
-                        pipeline.add_stage(ToLinearStage::new(0, output_color_info.tf.clone()))?;
-                    linear = true;
-                }
-                pipeline = pipeline.add_save_stage(SaveStage::<f32>::new(
-                    SaveStageType::Output,
-                    i,
-                    image_size,
-                    255.0,
+            }
+            let color_source_channels: &[usize] =
+                match (pixel_format.color_type.is_grayscale(), alpha_in_color) {
+                    (true, None) => &[0],
+                    (true, Some(c)) => &[0, c],
+                    (false, None) => &[0, 1, 2],
+                    (false, Some(c)) => &[0, 1, 2, c],
+                };
+            if let Some(df) = &pixel_format.color_data_format {
+                pipeline = pipeline.add_save_stage(SaveStage::new(
+                    color_source_channels,
                     metadata.orientation,
-                )?)?;
+                    0,
+                    pixel_format.color_type,
+                    *df,
+                ))?;
+            }
+            for i in 0..frame_header.num_extra_channels as usize {
+                if let Some(df) = &pixel_format.extra_channel_format[i] {
+                    pipeline = pipeline.add_save_stage(SaveStage::new(
+                        &[3 + i],
+                        metadata.orientation,
+                        1 + i,
+                        JxlColorType::Grayscale,
+                        *df,
+                    ))?;
+                }
             }
         }
         pipeline.build()
     }
 
-    pub fn prepare_render_pipeline(&mut self) -> Result<()> {
+    pub fn prepare_render_pipeline(&mut self, pixel_format: &JxlPixelFormat) -> Result<()> {
         let lf_global = self.lf_global.as_mut().unwrap();
         let epf_sigma = if self.header.restoration_filter.epf_iters > 0 {
             let sigma_image = create_sigma_image(&self.header, lf_global, &self.hf_meta)?;
@@ -785,8 +840,13 @@ impl Frame {
             None
         };
 
-        let render_pipeline =
-            Self::build_render_pipeline(&self.decoder_state, &self.header, lf_global, &epf_sigma)?;
+        let render_pipeline = Self::build_render_pipeline(
+            &self.decoder_state,
+            &self.header,
+            lf_global,
+            &epf_sigma,
+            pixel_format,
+        )?;
         self.render_pipeline = Some(render_pipeline);
         if self.decoder_state.enable_output {
             lf_global.modular_global.process_output(
@@ -849,7 +909,7 @@ impl Frame {
                 let mut rect = buf.as_rect_mut();
                 let (xsize, ysize) = rect.size();
                 const FLOATS_PER_BATCH: usize =
-                    Xorshift128Plus::N * size_of::<u64>() / size_of::<f32>();
+                    Xorshift128Plus::N * std::mem::size_of::<u64>() / std::mem::size_of::<f32>();
                 let mut batch = [0u64; Xorshift128Plus::N];
 
                 for y in 0..ysize {
@@ -921,70 +981,79 @@ impl Frame {
                 &self.header,
                 self.render_pipeline.as_mut().unwrap(),
             )?;
-            // TODO(veluca): pass actual output buffers.
-            self.render_pipeline.as_mut().unwrap().do_render(&mut [])?;
         }
         Ok(())
     }
 
-    pub fn finalize(mut self) -> Result<FrameOutput> {
-        let mut output_frame_data = Vec::<Image<f32>>::new();
-        let mut reference_frame_data = Vec::<Image<f32>>::new();
-        let mut lf_frame_data = [
-            Image::<f32>::new((0, 0))?,
-            Image::<f32>::new((0, 0))?,
-            Image::<f32>::new((0, 0))?,
-        ];
+    pub fn render_frame_output(
+        &mut self,
+        api_buffers: &mut Option<&mut [JxlOutputBuffer<'_>]>,
+        pixel_format: &JxlPixelFormat,
+    ) -> Result<()> {
+        let mut buffers: Vec<Option<JxlOutputBuffer>> = Vec::new();
 
-        let mut lf_chan = 0;
-        if let Some(render_pipeline) = self.render_pipeline {
-            for stage in render_pipeline
-                .into_stages()
-                .into_iter()
-                .filter_map(|x| x.downcast::<SaveStage<f32>>().ok())
-            {
-                match stage.stage_type {
-                    SaveStageType::Output => {
-                        output_frame_data.push(stage.into_buffer());
-                    }
-                    SaveStageType::Reference => {
-                        reference_frame_data.push(stage.into_buffer());
-                    }
-                    SaveStageType::Lf => {
-                        lf_frame_data[lf_chan] = stage.into_buffer();
-                        lf_chan += 1;
-                    }
+        if let Some(api_buffers) = api_buffers {
+            let mut api_buffers_iter = api_buffers.iter_mut();
+
+            if pixel_format.color_data_format.is_some() {
+                buffers.push(Some(JxlOutputBuffer::from_output_buffer(
+                    api_buffers_iter.next().unwrap(),
+                )));
+            }
+
+            for fmt in &pixel_format.extra_channel_format {
+                if fmt.is_some() {
+                    buffers.push(Some(JxlOutputBuffer::from_output_buffer(
+                        api_buffers_iter.next().unwrap(),
+                    )));
                 }
             }
         }
 
+        if let Some(ref_images) = &mut self.reference_frame_data {
+            buffers.extend(
+                ref_images
+                    .iter_mut()
+                    .map(|img| Some(JxlOutputBuffer::from_image(img))),
+            );
+        };
+
+        if let Some(lf_images) = &mut self.lf_frame_data {
+            buffers.extend(
+                lf_images
+                    .iter_mut()
+                    .map(|img| Some(JxlOutputBuffer::from_image(img))),
+            );
+        };
+
+        if buffers.iter().any(|b| b.is_some()) {
+            self.render_pipeline
+                .as_mut()
+                .unwrap()
+                .do_render(&mut buffers[..])?;
+        }
+        Ok(())
+    }
+
+    pub fn finalize(mut self) -> Result<Option<DecoderState>> {
         if self.header.can_be_referenced {
             info!("Saving frame in slot {}", self.header.save_as_reference);
             self.decoder_state.reference_frames[self.header.save_as_reference as usize] =
                 Some(ReferenceFrame {
-                    frame: reference_frame_data,
+                    frame: self.reference_frame_data.unwrap(),
                     saved_before_color_transform: self.header.save_before_ct,
                 });
         }
 
         if self.header.lf_level != 0 {
-            self.decoder_state.lf_frames[(self.header.lf_level - 1) as usize] = Some(lf_frame_data);
+            self.decoder_state.lf_frames[(self.header.lf_level - 1) as usize] = self.lf_frame_data;
         }
-        let channels = if self.header.is_visible() {
-            Some(output_frame_data)
-        } else {
-            None
-        };
         let decoder_state = if self.header.is_last {
             None
         } else {
             Some(self.decoder_state)
         };
-        let frame_output = FrameOutput {
-            decoder_state,
-            channels,
-        };
-        Ok(frame_output)
+        Ok(decoder_state)
     }
 }
 

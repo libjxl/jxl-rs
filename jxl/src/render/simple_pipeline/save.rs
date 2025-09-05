@@ -6,6 +6,7 @@
 use std::{any::Any, sync::Mutex};
 
 use crate::{
+    api::{JxlColorType, JxlDataFormat, JxlPixelFormat},
     error::Result,
     headers::Orientation,
     image::{DataTypeTag, Image, ImageDataType, Rect},
@@ -15,83 +16,45 @@ use crate::{
 
 use super::RunStage;
 
-pub enum SaveStageType {
-    Output,
-    Reference,
-    Lf,
-}
-
-pub struct SaveStage<T: ImageDataType> {
-    pub stage_type: SaveStageType,
-    buf: Mutex<Image<T>>,
-    channel: usize,
-    // TODO(szabadka): Have a fixed scale per data-type and make the datatype conversions do
-    // the scaling.
-    scale: T,
+pub struct SaveStage {
+    channels: Vec<usize>,
     orientation: Orientation,
+    output_buffer_index: usize,
+    color_type: JxlColorType,
+    data_format: JxlDataFormat,
 }
 
 #[allow(unused)]
-impl<T: ImageDataType> SaveStage<T> {
+impl SaveStage {
     pub(crate) fn new(
-        stage_type: SaveStageType,
-        channel: usize,
-        size: (usize, usize),
-        scale: T,
+        channels: &[usize],
         orientation: Orientation,
-    ) -> Result<SaveStage<T>> {
-        let buf_size = if orientation.is_transposing() {
-            (size.1, size.0)
-        } else {
-            size
-        };
-        Ok(SaveStage {
-            stage_type,
-            channel,
-            buf: Mutex::new(Image::new(buf_size)?),
-            scale,
+        output_buffer_index: usize,
+        color_type: JxlColorType,
+        data_format: JxlDataFormat,
+    ) -> SaveStage {
+        Self {
+            channels: channels.to_vec(),
             orientation,
-        })
-    }
-
-    pub(crate) fn new_with_buffer(
-        stage_type: SaveStageType,
-        channel: usize,
-        img: Image<T>,
-        scale: T,
-        orientation: Orientation,
-    ) -> SaveStage<T> {
-        SaveStage {
-            stage_type,
-            channel,
-            buf: Mutex::new(img),
-            scale,
-            orientation,
+            output_buffer_index,
+            color_type,
+            data_format,
         }
-    }
-
-    pub(crate) fn buffer(&self) -> impl std::ops::Deref<Target = Image<T>> {
-        self.buf.lock().unwrap()
-    }
-
-    pub(crate) fn into_buffer(self) -> Image<T> {
-        self.buf.into_inner().unwrap()
     }
 }
 
-impl<T: ImageDataType> std::fmt::Display for SaveStage<T> {
+impl std::fmt::Display for SaveStage {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
-            "save channel {} (type {:?}) scale {:?}",
-            self.channel,
-            T::DATA_TYPE_ID,
-            self.scale,
+            "save channels {:?} (type {:?} {:?})",
+            self.channels, self.color_type, self.data_format
         )
     }
 }
 
-impl<T: ImageDataType> SaveStage<T> {
+impl SaveStage {
+    /*
     fn process_row_chunk(
         &self,
         position: (usize, usize),
@@ -194,9 +157,10 @@ impl<T: ImageDataType> SaveStage<T> {
             }
         }
     }
+    */
 }
 
-impl<T: ImageDataType> RunStage for SaveStage<T> {
+impl RunStage for SaveStage {
     fn run_stage_on(
         &self,
         chunk_size: usize,
@@ -205,6 +169,7 @@ impl<T: ImageDataType> RunStage for SaveStage<T> {
         mut state: Option<&mut dyn Any>,
     ) {
         debug!("running save stage '{self}' in simple pipeline");
+        /*
         let numc = input_buffers.len();
         if numc == 0 {
             return;
@@ -230,6 +195,7 @@ impl<T: ImageDataType> RunStage for SaveStage<T> {
                 self.process_row_chunk((x, y), xsize, &mut row, state.as_deref_mut());
             }
         }
+        */
     }
 
     fn init_local_state(&self) -> Result<Option<Box<dyn Any>>> {
@@ -242,16 +208,17 @@ impl<T: ImageDataType> RunStage for SaveStage<T> {
         size
     }
     fn uses_channel(&self, c: usize) -> bool {
-        self.channel == c
+        self.channels.contains(&c)
     }
     fn as_any(self: Box<Self>) -> Box<dyn Any> {
         self
     }
     fn input_type(&self) -> DataTypeTag {
-        T::DATA_TYPE_ID
+        // TODO(veluca): this should be data-dependent.
+        f32::DATA_TYPE_ID
     }
     fn output_type(&self) -> DataTypeTag {
-        T::DATA_TYPE_ID
+        self.input_type()
     }
 }
 

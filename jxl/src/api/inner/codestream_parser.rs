@@ -115,6 +115,17 @@ impl CodestreamParser {
         decode_options: &JxlDecoderOptions,
         mut output_buffers: Option<&mut [JxlOutputBuffer]>,
     ) -> Result<()> {
+        if let Some(output_buffers) = &output_buffers {
+            let px = self.pixel_format.as_ref().unwrap();
+            let expected_len = if px.color_data_format.is_some() { 1 } else { 0 }
+                + px.extra_channel_format
+                    .iter()
+                    .filter(|x| x.is_some())
+                    .count();
+            if output_buffers.len() != expected_len {
+                return Err(Error::WrongBufferCount(output_buffers.len(), expected_len));
+            }
+        }
         // If we have sections to read, read into sections; otherwise, read into the local buffer.
         loop {
             if !self.sections.is_empty() {

@@ -248,6 +248,10 @@ pub enum Error {
     ICCOutputNoCMS,
     #[error("I/O error: {0}")]
     IOError(#[from] std::io::Error),
+    #[error("Wrong buffer count: {0} buffers given, {1} buffers expected")]
+    WrongBufferCount(usize, usize),
+    #[error("Image is not grayscale, but grayscale output was requested")]
+    NotGrayscale,
 }
 
 pub type Result<T, E = Error> = std::result::Result<T, E>;

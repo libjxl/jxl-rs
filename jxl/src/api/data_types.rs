@@ -32,6 +32,14 @@ impl JxlColorType {
             Self::Rgba | Self::Bgra => 4,
         }
     }
+    pub fn is_grayscale(&self) -> bool {
+        match self {
+            Self::Grayscale => true,
+            Self::GrayscaleAlpha => true,
+            Self::Rgb | Self::Bgr => false,
+            Self::Rgba | Self::Bgra => false,
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -76,6 +84,12 @@ impl JxlDataFormat {
             Self::U8 { .. } => 1,
             Self::U16 { .. } | Self::F16 { .. } => 2,
             Self::F32 { .. } => 4,
+        }
+    }
+
+    pub fn f32() -> Self {
+        Self::F32 {
+            endianness: Endianness::native(),
         }
     }
 }
