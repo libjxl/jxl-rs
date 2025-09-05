@@ -13,6 +13,8 @@ mod input;
 mod options;
 mod output;
 mod signature;
+#[cfg(test)]
+pub(crate) mod test;
 
 pub use color::*;
 pub use data_types::*;
@@ -53,6 +55,7 @@ impl<T> ProcessingResult<T, ()> {
     }
 }
 
+#[derive(Clone)]
 pub struct JxlBasicInfo {
     pub size: (usize, usize),
     pub bit_depth: JxlBitDepth,

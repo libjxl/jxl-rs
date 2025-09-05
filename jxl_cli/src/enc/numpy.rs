@@ -3,7 +3,7 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-use jxl::decode::ImageData;
+use crate::ImageData;
 use jxl::error::{Error, Result};
 use jxl::image::ImageRect;
 

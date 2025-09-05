@@ -3,6 +3,8 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
+#[cfg(test)]
+use crate::api::FrameCallback;
 use crate::{
     api::JxlFrameHeader,
     error::{Error, Result},
@@ -33,6 +35,17 @@ impl JxlDecoderInner {
             box_parser: BoxParser::new(),
             codestream_parser: CodestreamParser::new(),
         }
+    }
+
+    #[cfg(test)]
+    pub fn with_frame_callback(mut self, callback: Box<FrameCallback>) -> Self {
+        self.codestream_parser.frame_callback = Some(callback);
+        self
+    }
+
+    #[cfg(test)]
+    pub fn decoded_frames(&self) -> usize {
+        self.codestream_parser.decoded_frames
     }
 
     /// Obtains the image's basic information, if available.
