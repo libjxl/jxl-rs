@@ -60,7 +60,7 @@ mod test {
     #[test]
     fn nn_consistency() -> Result<()> {
         crate::render::test::test_stage_consistency::<_, u8, u8>(
-            NearestNeighbourUpsample::new(0),
+            || NearestNeighbourUpsample::new(0),
             (500, 500),
             1,
         )
@@ -74,7 +74,7 @@ mod test {
         let input = vec![Image::<u8>::new_random(input_size, &mut rng)?];
         let stage = NearestNeighbourUpsample::new(0);
         let output: Vec<Image<u8>> =
-            make_and_run_simple_pipeline(stage, &input, image_size, 0, 256)?.1;
+            make_and_run_simple_pipeline(stage, &input, image_size, 0, 256)?;
         assert_eq!(image_size, output[0].size());
         for y in 0..image_size.1 {
             for x in 0..image_size.0 {

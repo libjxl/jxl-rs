@@ -167,7 +167,7 @@ mod test {
     #[test]
     fn consistency_hlg() -> Result<()> {
         crate::render::test::test_stage_consistency::<_, f32, f32>(
-            FromLinearStage::hlg(0, 1000f32, LUMINANCE_BT2020),
+            || FromLinearStage::hlg(0, 1000f32, LUMINANCE_BT2020),
             (500, 500),
             3,
         )
@@ -176,7 +176,7 @@ mod test {
     #[test]
     fn consistency_pq() -> Result<()> {
         crate::render::test::test_stage_consistency::<_, f32, f32>(
-            FromLinearStage::pq(0, 10000f32),
+            || FromLinearStage::pq(0, 10000f32),
             (500, 500),
             3,
         )
@@ -185,7 +185,7 @@ mod test {
     #[test]
     fn consistency_srgb() -> Result<()> {
         crate::render::test::test_stage_consistency::<_, f32, f32>(
-            FromLinearStage::new(0, TransferFunction::Srgb),
+            || FromLinearStage::new(0, TransferFunction::Srgb),
             (500, 500),
             3,
         )
@@ -194,7 +194,7 @@ mod test {
     #[test]
     fn consistency_bt709() -> Result<()> {
         crate::render::test::test_stage_consistency::<_, f32, f32>(
-            FromLinearStage::new(0, TransferFunction::Bt709),
+            || FromLinearStage::new(0, TransferFunction::Bt709),
             (500, 500),
             3,
         )
@@ -203,7 +203,7 @@ mod test {
     #[test]
     fn consistency_gamma22() -> Result<()> {
         crate::render::test::test_stage_consistency::<_, f32, f32>(
-            FromLinearStage::new(0, TransferFunction::Gamma(0.4545455)),
+            || FromLinearStage::new(0, TransferFunction::Gamma(0.4545455)),
             (500, 500),
             3,
         )
@@ -224,8 +224,7 @@ mod test {
             (1, 1),
             0,
             256,
-        )?
-        .1;
+        )?;
 
         assert_all_almost_abs_eq(output[0].as_rect().row(0), &[0.75], 1e-3);
         assert_all_almost_abs_eq(output[1].as_rect().row(0), &[0.75], 1e-3);
@@ -249,8 +248,7 @@ mod test {
             (1, 1),
             0,
             256,
-        )?
-        .1;
+        )?;
 
         assert_all_almost_abs_eq(output[0].as_rect().row(0), &[0.58], 1e-3);
         assert_all_almost_abs_eq(output[1].as_rect().row(0), &[0.58], 1e-3);

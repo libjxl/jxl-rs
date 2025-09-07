@@ -16,6 +16,8 @@ use std::fs;
 use std::io::Read;
 use std::path::Path;
 
+// TODO(veluca): switch this file to the API.
+
 fn print_color_encoding(color_encoding: &ColorEncoding) {
     // Print the color space
     print!("Color Space: {:?}, ", color_encoding.color_space);
@@ -155,7 +157,7 @@ fn parse_jxl_codestream(data: &[u8], verbose: bool) -> Result<()> {
             );
             br.jump_to_byte_boundary()?;
             br.skip_bits(frame.total_bytes_in_toc() * 8)?;
-            if let Some(state) = frame.finalize()?.decoder_state {
+            if let Some(state) = frame.finalize()? {
                 decoder_state = state;
             } else {
                 break;

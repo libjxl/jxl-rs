@@ -38,9 +38,8 @@ impl JxlDecoderInner {
     }
 
     #[cfg(test)]
-    pub fn with_frame_callback(mut self, callback: Box<FrameCallback>) -> Self {
+    pub fn set_frame_callback(&mut self, callback: Box<FrameCallback>) {
         self.codestream_parser.frame_callback = Some(callback);
-        self
     }
 
     #[cfg(test)]

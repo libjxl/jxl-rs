@@ -161,8 +161,9 @@ impl RenderPipelineBuilder for SimpleRenderPipelineBuilder {
     }
 
     #[instrument(skip_all, err)]
-    fn add_save_stage<T: ImageDataType>(self, stage: SaveStage<T>) -> Result<Self> {
-        self.add_dyn_stage(Box::new(stage), T::DATA_TYPE_ID, None, (0, 0), false)
+    fn add_save_stage(self, stage: SaveStage) -> Result<Self> {
+        let it = stage.input_type();
+        self.add_dyn_stage(Box::new(stage), it, None, (0, 0), false)
     }
 
     #[instrument(skip_all, err)]
@@ -429,10 +430,6 @@ impl RenderPipeline for SimpleRenderPipeline {
     // TODO(veluca): actually use the passed-in buffers.
     fn do_render(&mut self, _: &mut [Option<crate::api::JxlOutputBuffer>]) -> Result<()> {
         self.do_render()
-    }
-
-    fn into_stages(self) -> Vec<Box<dyn std::any::Any>> {
-        self.stages.into_iter().map(|x| x.as_any()).collect()
     }
 
     fn num_groups(&self) -> usize {
@@ -727,7 +724,6 @@ trait RunStage: Any + std::fmt::Display {
     fn shift(&self) -> (u8, u8);
     fn new_size(&self, size: (usize, usize)) -> (usize, usize);
     fn uses_channel(&self, c: usize) -> bool;
-    fn as_any(self: Box<Self>) -> Box<dyn Any>;
     fn input_type(&self) -> DataTypeTag;
     fn output_type(&self) -> DataTypeTag;
 }
@@ -757,9 +753,6 @@ impl<T: RenderPipelineStage> RunStage for T {
 
     fn uses_channel(&self, c: usize) -> bool {
         self.uses_channel(c)
-    }
-    fn as_any(self: Box<Self>) -> Box<dyn Any> {
-        self
     }
     fn input_type(&self) -> DataTypeTag {
         T::Type::INPUT_TYPE

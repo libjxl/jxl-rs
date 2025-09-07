@@ -214,7 +214,7 @@ mod test {
     #[test]
     fn u8_consistency() -> Result<()> {
         crate::render::test::test_stage_consistency::<_, u8, f32>(
-            ConvertU8F32Stage::new(0),
+            || ConvertU8F32Stage::new(0),
             (500, 500),
             1,
         )

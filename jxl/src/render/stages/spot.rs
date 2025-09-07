@@ -80,7 +80,7 @@ mod test {
     #[test]
     fn consistency() -> Result<()> {
         crate::render::test::test_stage_consistency::<_, f32, f32>(
-            SpotColorStage::new(0, [0.0; 4]),
+            || SpotColorStage::new(0, [0.0; 4]),
             (500, 500),
             4,
         )
@@ -116,8 +116,7 @@ mod test {
             (3, 1),
             0,
             256,
-        )?
-        .1;
+        )?;
 
         assert_all_almost_abs_eq(output[0].as_rect().row(0), &[0.75, 0.25, 0.25], 1e-6);
         assert_all_almost_abs_eq(output[1].as_rect().row(0), &[0.25, 0.75, 0.25], 1e-6);

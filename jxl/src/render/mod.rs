@@ -18,10 +18,7 @@ pub mod stages;
 #[cfg(test)]
 mod test;
 
-pub use simple_pipeline::{
-    SimpleRenderPipeline, SimpleRenderPipelineBuilder,
-    save::{SaveStage, SaveStageType},
-};
+pub use simple_pipeline::{SimpleRenderPipeline, SimpleRenderPipelineBuilder, save::SaveStage};
 
 /// Modifies channels in-place.
 ///
@@ -116,7 +113,7 @@ pub trait RenderPipelineBuilder: Sized {
         log_group_size: usize,
     ) -> Self;
     fn add_stage<Stage: RenderPipelineStage>(self, stage: Stage) -> Result<Self>;
-    fn add_save_stage<T: ImageDataType>(self, stage: SaveStage<T>) -> Result<Self>;
+    fn add_save_stage(self, stage: SaveStage) -> Result<Self>;
     fn build(self) -> Result<Self::RenderPipeline>;
 }
 
@@ -146,6 +143,5 @@ pub trait RenderPipeline {
     /// Renders new data that is available after the last call to `render`.
     fn do_render(&mut self, buffers: &mut [Option<JxlOutputBuffer>]) -> Result<()>;
 
-    fn into_stages(self) -> Vec<Box<dyn Any>>;
     fn num_groups(&self) -> usize;
 }

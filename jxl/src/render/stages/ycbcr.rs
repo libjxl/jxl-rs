@@ -82,7 +82,7 @@ mod test {
     #[test]
     fn consistency() -> Result<()> {
         crate::render::test::test_stage_consistency::<_, f32, f32>(
-            YcbcrToRgbStage::new(0),
+            || YcbcrToRgbStage::new(0),
             (500, 500),
             3,
         )
@@ -113,8 +113,7 @@ mod test {
             (3, 1),
             0,
             256,
-        )?
-        .1;
+        )?;
 
         assert_all_almost_abs_eq(output[0].as_rect().row(0), &[1.0, 0.0, 0.0], 1e-6);
         assert_all_almost_abs_eq(output[1].as_rect().row(0), &[0.0, 1.0, 0.0], 1e-6);

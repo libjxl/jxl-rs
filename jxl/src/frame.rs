@@ -5,7 +5,7 @@
 
 use crate::{
     GROUP_DIM,
-    api::{Endianness, JxlColorType, JxlDataFormat, JxlOutputBuffer, JxlPixelFormat},
+    api::{JxlColorType, JxlDataFormat, JxlOutputBuffer, JxlPixelFormat},
     bit_reader::BitReader,
     entropy_coding::decode::Histograms,
     error::{Error, Result},
@@ -22,7 +22,7 @@ use crate::{
     },
     image::Image,
     render::{
-        RenderPipeline, RenderPipelineBuilder, SaveStage, SaveStageType, SimpleRenderPipeline,
+        RenderPipeline, RenderPipelineBuilder, SaveStage, SimpleRenderPipeline,
         SimpleRenderPipelineBuilder, stages::*,
     },
     util::{CeilLog2, Xorshift128Plus, tracing_wrappers::*},
@@ -737,8 +737,6 @@ impl Frame {
                 &decoder_state.reference_frames,
             )?)?;
         }
-        let image_size = &decoder_state.file_header.size;
-        let image_size = (image_size.xsize() as usize, image_size.ysize() as usize);
 
         if frame_header.can_be_referenced && !frame_header.save_before_ct {
             if linear {
@@ -799,6 +797,13 @@ impl Frame {
                 if num_color_channels == 3 {
                     return Err(Error::NotGrayscale);
                 }
+            }
+            if decoder_state.file_header.image_metadata.xyb_encoded
+                && decoder_state.xyb_output_linear
+                && !linear
+            {
+                pipeline =
+                    pipeline.add_stage(ToLinearStage::new(0, output_color_info.tf.clone()))?;
             }
             let color_source_channels: &[usize] =
                 match (pixel_format.color_type.is_grayscale(), alpha_in_color) {
@@ -990,6 +995,12 @@ impl Frame {
         api_buffers: &mut Option<&mut [JxlOutputBuffer<'_>]>,
         pixel_format: &JxlPixelFormat,
     ) -> Result<()> {
+        let Some(render_pipeline) = self.render_pipeline.as_mut() else {
+            // We don't yet have any output ready (as the pipeline would be initialized otherwise),
+            // so exit without doing anything.
+            return Ok(());
+        };
+
         let mut buffers: Vec<Option<JxlOutputBuffer>> = Vec::new();
 
         if let Some(api_buffers) = api_buffers {
@@ -1027,10 +1038,7 @@ impl Frame {
         };
 
         if buffers.iter().any(|b| b.is_some()) {
-            self.render_pipeline
-                .as_mut()
-                .unwrap()
-                .do_render(&mut buffers[..])?;
+            render_pipeline.do_render(&mut buffers[..])?;
         }
         Ok(())
     }
@@ -1059,84 +1067,12 @@ impl Frame {
 
 #[cfg(test)]
 mod test {
-    use crate::api::{JxlDecoderOptions, test::create_output_buffers};
     use std::panic;
 
-    use crate::{
-        api::{JxlDecoder, ProcessingResult, states},
-        error::Error,
-        features::spline::Point,
-        util::test::assert_almost_abs_eq,
-    };
+    use crate::{error::Error, features::spline::Point, util::test::assert_almost_abs_eq};
     use test_log::test;
 
     use super::Frame;
-
-    #[allow(clippy::type_complexity)]
-    fn read_frames(
-        mut input: &[u8],
-        callback: Box<dyn FnMut(&Frame, usize) -> Result<(), Error>>,
-    ) -> Result<usize, Error> {
-        let options = JxlDecoderOptions::default();
-        let mut decoded_frames;
-        let mut initialized_decoder =
-            JxlDecoder::<states::Initialized>::new(options).with_frame_callback(callback);
-
-        let mut decoder_with_image_info = loop {
-            let process_result = initialized_decoder.process(&mut input);
-            match process_result.unwrap() {
-                ProcessingResult::Complete { result } => break result,
-                ProcessingResult::NeedsMoreInput { fallback, .. } => {
-                    if input.is_empty() {
-                        panic!("Unexpected end of input while reading image info");
-                    }
-                    initialized_decoder = fallback;
-                }
-            }
-        };
-
-        let basic_info = decoder_with_image_info.basic_info().clone();
-        let pixel_format = decoder_with_image_info.current_pixel_format().clone();
-
-        loop {
-            let mut decoder_with_frame_info = loop {
-                let process_result = decoder_with_image_info.process(&mut input);
-                match process_result.unwrap() {
-                    ProcessingResult::Complete { result } => break result,
-                    ProcessingResult::NeedsMoreInput { fallback, .. } => {
-                        if input.is_empty() {
-                            panic!("Unexpected end of input while reading frame info");
-                        }
-                        decoder_with_image_info = fallback;
-                    }
-                }
-            };
-
-            create_output_buffers!(basic_info, pixel_format, output_buffers, output_slices);
-
-            decoder_with_image_info = loop {
-                let process_result =
-                    decoder_with_frame_info.process(&mut input, &mut output_slices);
-                match process_result.unwrap() {
-                    ProcessingResult::Complete { result } => break result,
-                    ProcessingResult::NeedsMoreInput { fallback, .. } => {
-                        if input.is_empty() {
-                            panic!("Unexpected end of input while decoding frame");
-                        }
-                        decoder_with_frame_info = fallback;
-                    }
-                }
-            };
-
-            decoded_frames = decoder_with_image_info.decoded_frames();
-
-            if !decoder_with_image_info.has_more_frames() {
-                break;
-            }
-        }
-
-        Ok(decoded_frames)
-    }
 
     #[test]
     fn splines() -> Result<(), Error> {
@@ -1189,9 +1125,10 @@ mod test {
             Ok(())
         };
         assert_eq!(
-            read_frames(
+            crate::api::tests::decode(
                 include_bytes!("../resources/test/splines.jxl"),
-                Box::new(verify_frame),
+                usize::MAX,
+                Some(Box::new(verify_frame)),
             )?,
             1
         );
@@ -1212,9 +1149,10 @@ mod test {
             Ok(())
         };
         assert_eq!(
-            read_frames(
+            crate::api::tests::decode(
                 include_bytes!("../resources/test/8x8_noise.jxl"),
-                Box::new(verify_frame),
+                usize::MAX,
+                Some(Box::new(verify_frame)),
             )?,
             1
         );
@@ -1234,9 +1172,10 @@ mod test {
             Ok(())
         };
         assert_eq!(
-            read_frames(
+            crate::api::tests::decode(
                 include_bytes!("../resources/test/grayscale_patches_modular.jxl"),
-                Box::new(verify_frame),
+                usize::MAX,
+                Some(Box::new(verify_frame)),
             )?,
             2
         );
@@ -1266,9 +1205,10 @@ mod test {
             }
             Ok(())
         };
-        read_frames(
+        crate::api::tests::decode(
             include_bytes!("../resources/test/multiple_lf_420.jxl"),
-            Box::new(verify_frame),
+            usize::MAX,
+            Some(Box::new(verify_frame)),
         )?;
         Ok(())
     }
@@ -1293,9 +1233,10 @@ mod test {
             Ok(())
         };
         assert_eq!(
-            read_frames(
+            crate::api::tests::decode(
                 include_bytes!("../resources/test/grayscale_patches_var_dct.jxl"),
-                Box::new(verify_frame),
+                usize::MAX,
+                Some(Box::new(verify_frame)),
             )?,
             2
         );

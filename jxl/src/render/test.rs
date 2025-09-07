@@ -4,29 +4,30 @@
 // license that can be found in the LICENSE file.
 
 use crate::{
+    api::{Endianness, JxlColorType, JxlDataFormat, JxlOutputBuffer},
     error::Result,
     headers::Orientation,
-    image::{Image, ImageDataType},
+    image::{DataTypeTag, Image, ImageDataType},
     util::{ShiftRightCeil, tracing_wrappers::instrument},
 };
 use rand::SeedableRng;
 
 use super::{
-    RenderPipeline, RenderPipelineBuilder, RenderPipelineStage, SaveStage, SaveStageType,
+    RenderPipeline, RenderPipelineBuilder, RenderPipelineStage, SaveStage,
     internal::RenderPipelineStageInfo, simple_pipeline::SimpleRenderPipelineBuilder,
 };
 
 pub(super) fn make_and_run_simple_pipeline<
     S: RenderPipelineStage,
     InputT: ImageDataType,
-    OutputT: ImageDataType + std::ops::Mul<Output = OutputT>,
+    OutputT: ImageDataType,
 >(
     stage: S,
     input_images: &[Image<InputT>],
     image_size: (usize, usize),
     downsampling_shift: usize,
     chunk_size: usize,
-) -> Result<(S, Vec<Image<OutputT>>)> {
+) -> Result<Vec<Image<OutputT>>> {
     let final_size = stage.new_size(image_size);
     const LOG_GROUP_SIZE: usize = 8;
     let all_channels = (0..input_images.len()).collect::<Vec<_>>();
@@ -42,14 +43,28 @@ pub(super) fn make_and_run_simple_pipeline<
         chunk_size,
     )
     .add_stage(stage)?;
+
+    let jxl_data_type = match OutputT::DATA_TYPE_ID {
+        DataTypeTag::U8 | DataTypeTag::I8 => JxlDataFormat::U8 { bit_depth: 8 },
+        DataTypeTag::U16 | DataTypeTag::I16 => JxlDataFormat::U16 {
+            bit_depth: 16,
+            endianness: Endianness::native(),
+        },
+        DataTypeTag::F32 => JxlDataFormat::f32(),
+        DataTypeTag::F16 => JxlDataFormat::F16 {
+            endianness: Endianness::native(),
+        },
+        _ => unimplemented!("unsupported data type"),
+    };
+
     for i in 0..input_images.len() {
-        pipeline = pipeline.add_save_stage(SaveStage::<OutputT>::new(
-            SaveStageType::Output,
-            i,
-            final_size,
-            OutputT::from_f64(1.0),
+        pipeline = pipeline.add_save_stage(SaveStage::new(
+            &[i],
             Orientation::Identity,
-        )?)?;
+            i,
+            JxlColorType::Grayscale,
+            jxl_data_type,
+        ))?;
     }
     let mut pipeline = pipeline.build()?;
 
@@ -72,38 +87,32 @@ pub(super) fn make_and_run_simple_pipeline<
         }
     }
 
-    // TODO(veluca): pass actual output buffers.
-    pipeline.do_render(&mut [])?;
+    let mut outputs = (0..input_images.len())
+        .map(|_| Image::<OutputT>::new(final_size))
+        .collect::<Result<Vec<_>, _>>()?;
 
-    let mut stages = pipeline.into_stages().into_iter();
-    let stage = stages
-        .next()
-        .unwrap()
-        .downcast::<S>()
-        .expect("first stage is always the tested stage");
-
-    let outputs = stages
-        .map(|s| {
-            s.downcast::<SaveStage<OutputT>>()
-                .expect("all later stages are always SaveStage")
-                .into_buffer()
-        })
+    let mut buf_ptrs: Vec<_> = outputs
+        .iter_mut()
+        .map(|x| Some(JxlOutputBuffer::from_image(x)))
         .collect();
 
-    Ok((*stage, outputs))
+    pipeline.do_render(&mut buf_ptrs)?;
+
+    Ok(outputs)
 }
 
-#[instrument(skip(stage), err)]
+#[instrument(skip(make_stage), err)]
 pub(super) fn test_stage_consistency<
     S: RenderPipelineStage,
     InputT: ImageDataType,
     OutputT: ImageDataType + std::ops::Mul<Output = OutputT>,
 >(
-    stage: S,
+    make_stage: impl Fn() -> S,
     image_size: (usize, usize),
     num_image_channels: usize,
 ) -> Result<()> {
     let mut rng = rand_xorshift::XorShiftRng::seed_from_u64(0);
+    let stage = make_stage();
     let images: Result<Vec<_>> = (0..num_image_channels)
         .map(|c| {
             let size = if stage.uses_channel(c) {
@@ -119,22 +128,19 @@ pub(super) fn test_stage_consistency<
         .collect();
     let images = images?;
 
-    let (stage, base_output) =
+    let base_output =
         make_and_run_simple_pipeline::<_, InputT, OutputT>(stage, &images, image_size, 0, 256)?;
-
-    let mut stage = Some(stage);
 
     arbtest::arbtest(move |p| {
         let chunk_size = p.arbitrary::<u16>()?.saturating_add(1) as usize;
-        let (s, output) = make_and_run_simple_pipeline::<_, InputT, OutputT>(
-            stage.take().unwrap(),
+        let output = make_and_run_simple_pipeline::<_, InputT, OutputT>(
+            make_stage(),
             &images,
             image_size,
             0,
             chunk_size,
         )
         .unwrap_or_else(|_| panic!("error running pipeline with chunk size {chunk_size}"));
-        stage = Some(s);
 
         for (o, bo) in output.iter().zip(base_output.iter()) {
             bo.as_rect().check_equal(o.as_rect());

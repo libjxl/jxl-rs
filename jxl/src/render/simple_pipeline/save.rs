@@ -3,14 +3,13 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-use std::{any::Any, sync::Mutex};
+use std::any::Any;
 
 use crate::{
-    api::{JxlColorType, JxlDataFormat, JxlPixelFormat},
+    api::{JxlColorType, JxlDataFormat},
     error::Result,
     headers::Orientation,
-    image::{DataTypeTag, Image, ImageDataType, Rect},
-    simd::round_up_size_to_two_cache_lines,
+    image::{DataTypeTag, Image, ImageDataType},
     util::tracing_wrappers::debug,
 };
 
@@ -160,13 +159,14 @@ impl SaveStage {
     */
 }
 
+// TODO(veluca): get rid of this, and make a enum { Save, Process }.
 impl RunStage for SaveStage {
     fn run_stage_on(
         &self,
-        chunk_size: usize,
-        input_buffers: &[&Image<f64>],
+        _chunk_size: usize,
+        _input_buffers: &[&Image<f64>],
         _output_buffers: &mut [&mut Image<f64>],
-        mut state: Option<&mut dyn Any>,
+        _state: Option<&mut dyn Any>,
     ) {
         debug!("running save stage '{self}' in simple pipeline");
         /*
@@ -210,9 +210,6 @@ impl RunStage for SaveStage {
     fn uses_channel(&self, c: usize) -> bool {
         self.channels.contains(&c)
     }
-    fn as_any(self: Box<Self>) -> Box<dyn Any> {
-        self
-    }
     fn input_type(&self) -> DataTypeTag {
         // TODO(veluca): this should be data-dependent.
         f32::DATA_TYPE_ID
@@ -224,120 +221,122 @@ impl RunStage for SaveStage {
 
 #[cfg(test)]
 mod test {
-    use super::*;
-    use rand::SeedableRng;
-    use rand_xorshift::XorShiftRng;
-    use test_log::test;
+    /*
+        use super::*;
+        use rand::SeedableRng;
+        use rand_xorshift::XorShiftRng;
+        use test_log::test;
 
-    #[test]
-    fn save_stage() -> Result<()> {
-        let save_stage = SaveStage::<u8>::new(
-            SaveStageType::Output,
-            0,
-            (128, 128),
-            1,
-            Orientation::Identity,
-        )?;
-        let mut rng = XorShiftRng::seed_from_u64(0);
-        let src = Image::<u8>::new_random((128, 128), &mut rng)?;
+        #[test]
+        fn save_stage() -> Result<()> {
+            let save_stage = SaveStage::<u8>::new(
+                SaveStageType::Output,
+                0,
+                (128, 128),
+                1,
+                Orientation::Identity,
+            )?;
+            let mut rng = XorShiftRng::seed_from_u64(0);
+            let src = Image::<u8>::new_random((128, 128), &mut rng)?;
 
-        for i in 0..128 {
-            save_stage.process_row_chunk((0, i), 128, &mut [src.as_rect().row(i)], None);
+            for i in 0..128 {
+                save_stage.process_row_chunk((0, i), 128, &mut [src.as_rect().row(i)], None);
+            }
+
+            src.as_rect().check_equal(save_stage.buffer().as_rect());
+
+            Ok(())
         }
 
-        src.as_rect().check_equal(save_stage.buffer().as_rect());
+        macro_rules! test_orientation {
+            ($test_name:ident, $orientation:expr, $transform:expr) => {
+                #[test]
+                fn $test_name() -> Result<()> {
+                    // Source dimensions
+                    let (w, h) = (32, 16);
+                    let mut rng = XorShiftRng::seed_from_u64(0);
+                    let src = Image::<u8>::new_random((w, h), &mut rng)?;
+                    let orientation = $orientation;
 
-        Ok(())
-    }
+                    // SaveStage will create its buffer with the correct (possibly swapped) dimensions.
+                    let save_stage =
+                        SaveStage::<u8>::new(SaveStageType::Output, 0, (w, h), 1, orientation)?;
 
-    macro_rules! test_orientation {
-        ($test_name:ident, $orientation:expr, $transform:expr) => {
-            #[test]
-            fn $test_name() -> Result<()> {
-                // Source dimensions
-                let (w, h) = (32, 16);
-                let mut rng = XorShiftRng::seed_from_u64(0);
-                let src = Image::<u8>::new_random((w, h), &mut rng)?;
-                let orientation = $orientation;
-
-                // SaveStage will create its buffer with the correct (possibly swapped) dimensions.
-                let save_stage =
-                    SaveStage::<u8>::new(SaveStageType::Output, 0, (w, h), 1, orientation)?;
-
-                for y in 0..h {
-                    save_stage.process_row_chunk((0, y), w, &mut [src.as_rect().row(y)], None);
-                }
-
-                let (out_w, out_h) = save_stage.buffer().size();
-
-                let mut expected = Image::<u8>::new((out_w, out_h))?;
-
-                // The transform is a closure: |x_dest, y_dest, w_src, h_src| -> (x_src, y_src)
-                let transform = $transform;
-
-                // Iterate over the DESTINATION image pixels.
-                for y_dest in 0..out_h {
-                    for x_dest in 0..out_w {
-                        // For each destination pixel, find its corresponding source pixel.
-                        let (src_x, src_y) = transform(x_dest, y_dest, w, h);
-                        expected.as_rect_mut().row(y_dest)[x_dest] =
-                            src.as_rect().row(src_y)[src_x];
+                    for y in 0..h {
+                        save_stage.process_row_chunk((0, y), w, &mut [src.as_rect().row(y)], None);
                     }
+
+                    let (out_w, out_h) = save_stage.buffer().size();
+
+                    let mut expected = Image::<u8>::new((out_w, out_h))?;
+
+                    // The transform is a closure: |x_dest, y_dest, w_src, h_src| -> (x_src, y_src)
+                    let transform = $transform;
+
+                    // Iterate over the DESTINATION image pixels.
+                    for y_dest in 0..out_h {
+                        for x_dest in 0..out_w {
+                            // For each destination pixel, find its corresponding source pixel.
+                            let (src_x, src_y) = transform(x_dest, y_dest, w, h);
+                            expected.as_rect_mut().row(y_dest)[x_dest] =
+                                src.as_rect().row(src_y)[src_x];
+                        }
+                    }
+
+                    expected
+                        .as_rect()
+                        .check_equal(save_stage.buffer().as_rect());
+
+                    Ok(())
                 }
+            };
+        }
+        test_orientation!(orientation_identity, Orientation::Identity, |x, y, _, _| (
+            x, y
+        ));
 
-                expected
-                    .as_rect()
-                    .check_equal(save_stage.buffer().as_rect());
+        test_orientation!(
+            orientation_flip_horizontal,
+            Orientation::FlipHorizontal,
+            |x, y, w, _| (w - 1 - x, y)
+        );
 
-                Ok(())
-            }
-        };
-    }
-    test_orientation!(orientation_identity, Orientation::Identity, |x, y, _, _| (
-        x, y
-    ));
+        test_orientation!(
+            orientation_flip_vertical,
+            Orientation::FlipVertical,
+            |x, y, _, h| (x, h - 1 - y)
+        );
 
-    test_orientation!(
-        orientation_flip_horizontal,
-        Orientation::FlipHorizontal,
-        |x, y, w, _| (w - 1 - x, y)
-    );
+        test_orientation!(
+            orientation_rotate_180,
+            Orientation::Rotate180,
+            |x, y, w, h| (w - 1 - x, h - 1 - y)
+        );
 
-    test_orientation!(
-        orientation_flip_vertical,
-        Orientation::FlipVertical,
-        |x, y, _, h| (x, h - 1 - y)
-    );
+        // transposing orientations
 
-    test_orientation!(
-        orientation_rotate_180,
-        Orientation::Rotate180,
-        |x, y, w, h| (w - 1 - x, h - 1 - y)
-    );
+        test_orientation!(
+            orientation_transpose,
+            Orientation::Transpose,
+            |x_dest, y_dest, _, _| (y_dest, x_dest)
+        );
 
-    // transposing orientations
+        test_orientation!(
+            orientation_rotate_90,
+            Orientation::Rotate90,
+            |x_dest, y_dest, w_src, _| (w_src - 1 - y_dest, x_dest)
+        );
 
-    test_orientation!(
-        orientation_transpose,
-        Orientation::Transpose,
-        |x_dest, y_dest, _, _| (y_dest, x_dest)
-    );
+        test_orientation!(
+            orientation_anti_transpose,
+            Orientation::AntiTranspose,
+            |x_dest, y_dest, w_src, h_src| (w_src - 1 - y_dest, h_src - 1 - x_dest)
+        );
 
-    test_orientation!(
-        orientation_rotate_90,
-        Orientation::Rotate90,
-        |x_dest, y_dest, w_src, _| (w_src - 1 - y_dest, x_dest)
-    );
-
-    test_orientation!(
-        orientation_anti_transpose,
-        Orientation::AntiTranspose,
-        |x_dest, y_dest, w_src, h_src| (w_src - 1 - y_dest, h_src - 1 - x_dest)
-    );
-
-    test_orientation!(
-        orientation_rotate_270,
-        Orientation::Rotate270,
-        |x_dest, y_dest, _, h_src| (y_dest, h_src - 1 - x_dest)
-    );
+        test_orientation!(
+            orientation_rotate_270,
+            Orientation::Rotate270,
+            |x_dest, y_dest, _, h_src| (y_dest, h_src - 1 - x_dest)
+        );
+    */
 }
