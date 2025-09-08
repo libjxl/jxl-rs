@@ -5,13 +5,11 @@
 
 extern crate proc_macro;
 
-use std::{fs, path::Path};
-
 use proc_macro::TokenStream;
 use proc_macro_error2::{abort, proc_macro_error};
 use proc_macro2::TokenStream as TokenStream2;
 use quote::quote;
-use syn::{DeriveInput, Ident, Meta, parse_macro_input};
+use syn::{DeriveInput, Meta, parse_macro_input};
 
 fn get_bits(expr_call: &syn::ExprCall) -> syn::Expr {
     if let syn::Expr::Path(ep) = &*expr_call.func {
@@ -705,8 +703,12 @@ pub fn noop(_attr: TokenStream, item: TokenStream) -> TokenStream {
     item
 }
 
+#[cfg(feature = "test")]
 #[proc_macro]
 pub fn for_each_test_file(input: TokenStream) -> TokenStream {
+    use std::{fs, path::Path};
+    use syn::Ident;
+
     let fn_name = parse_macro_input!(input as Ident);
     let root_test_dir = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("..")
