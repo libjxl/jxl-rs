@@ -5,7 +5,6 @@
 
 use std::{f32::consts::SQRT_2, sync::OnceLock};
 
-use enum_iterator::Sequence;
 use half::f16;
 
 use crate::{
@@ -272,7 +271,7 @@ impl QuantEncoding {
     }
 }
 
-#[derive(Sequence, Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug)]
 enum QuantTable {
     // Update QuantTable::VALUES when changing this!
     Dct,
