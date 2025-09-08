@@ -200,6 +200,7 @@ pub(crate) mod tests {
         });
     }
 
+    #[allow(clippy::type_complexity)]
     pub fn decode(
         mut input: &[u8],
         chunk_size: usize,
@@ -283,14 +284,14 @@ pub(crate) mod tests {
 
             let mut api_buffers: Vec<_> = buffers
                 .iter_mut()
-                .map(|x| JxlOutputBuffer::from_image(x))
+                .map(JxlOutputBuffer::from_image)
                 .collect();
 
             decoder_with_image_info = advance_decoder!(decoder_with_frame_info, &mut api_buffers);
 
             // All pixels should have been overwritten, so they should no longer be NaNs.
             for buf in buffers {
-                let (ys, xs) = buf.size();
+                let (xs, ys) = buf.size();
                 for y in 0..ys {
                     for x in 0..xs {
                         assert!(!buf.as_rect().row(y)[x].is_nan());

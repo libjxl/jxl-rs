@@ -7,8 +7,9 @@ use internal::RenderPipelineStageInfo;
 use std::{any::Any, marker::PhantomData};
 
 use crate::{
-    api::JxlOutputBuffer,
+    api::{JxlColorType, JxlDataFormat, JxlOutputBuffer},
     error::Result,
+    headers::Orientation,
     image::{Image, ImageDataType},
 };
 
@@ -18,7 +19,7 @@ pub mod stages;
 #[cfg(test)]
 mod test;
 
-pub use simple_pipeline::{SimpleRenderPipeline, SimpleRenderPipelineBuilder, save::SaveStage};
+pub use simple_pipeline::{SimpleRenderPipeline, SimpleRenderPipelineBuilder};
 
 /// Modifies channels in-place.
 ///
@@ -113,7 +114,14 @@ pub trait RenderPipelineBuilder: Sized {
         log_group_size: usize,
     ) -> Self;
     fn add_stage<Stage: RenderPipelineStage>(self, stage: Stage) -> Result<Self>;
-    fn add_save_stage(self, stage: SaveStage) -> Result<Self>;
+    fn add_save_stage(
+        self,
+        channels: &[usize],
+        orientation: Orientation,
+        output_buffer_index: usize,
+        color_type: JxlColorType,
+        data_format: JxlDataFormat,
+    ) -> Result<Self>;
     fn build(self) -> Result<Self::RenderPipeline>;
 }
 

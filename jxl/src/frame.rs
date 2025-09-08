@@ -22,8 +22,8 @@ use crate::{
     },
     image::Image,
     render::{
-        RenderPipeline, RenderPipelineBuilder, SaveStage, SimpleRenderPipeline,
-        SimpleRenderPipelineBuilder, stages::*,
+        RenderPipeline, RenderPipelineBuilder, SimpleRenderPipeline, SimpleRenderPipelineBuilder,
+        stages::*,
     },
     util::{CeilLog2, Xorshift128Plus, tracing_wrappers::*},
 };
@@ -235,10 +235,18 @@ impl Frame {
         };
 
         let reference_frame_data = if frame_header.can_be_referenced {
+            let image_size = &decoder_state.file_header.size;
+            let image_size = (image_size.xsize() as usize, image_size.ysize() as usize);
+            let sz = if frame_header.save_before_ct {
+                frame_header.size_upsampled()
+            } else {
+                image_size
+            };
+
             let num_ref_channels = 3 + image_metadata.extra_channel_info.len();
             Some(
                 (0..num_ref_channels)
-                    .map(|_| Image::new(frame_header.size_upsampled()))
+                    .map(|_| Image::new(sz))
                     .collect::<Result<Vec<_>>>()?,
             )
         } else {
@@ -685,24 +693,24 @@ impl Frame {
 
         if frame_header.lf_level != 0 {
             for i in 0..3 {
-                pipeline = pipeline.add_save_stage(SaveStage::new(
+                pipeline = pipeline.add_save_stage(
                     &[i],
                     Orientation::Identity,
                     num_regular_output_buffers + i,
                     JxlColorType::Grayscale,
                     JxlDataFormat::f32(),
-                ))?;
+                )?;
             }
         }
         if frame_header.can_be_referenced && frame_header.save_before_ct {
             for i in 0..num_channels {
-                pipeline = pipeline.add_save_stage(SaveStage::new(
+                pipeline = pipeline.add_save_stage(
                     &[i],
                     Orientation::Identity,
                     num_regular_output_buffers + i,
                     JxlColorType::Grayscale,
                     JxlDataFormat::f32(),
-                ))?;
+                )?;
             }
         }
 
@@ -745,13 +753,13 @@ impl Frame {
                 linear = false;
             }
             for i in 0..num_channels {
-                pipeline = pipeline.add_save_stage(SaveStage::new(
+                pipeline = pipeline.add_save_stage(
                     &[i],
                     Orientation::Identity,
                     num_regular_output_buffers + i,
                     JxlColorType::Grayscale,
                     JxlDataFormat::f32(),
-                ))?;
+                )?;
             }
         }
 
@@ -793,10 +801,8 @@ impl Frame {
             } else {
                 None
             };
-            if pixel_format.color_type.is_grayscale() {
-                if num_color_channels == 3 {
-                    return Err(Error::NotGrayscale);
-                }
+            if pixel_format.color_type.is_grayscale() && num_color_channels == 3 {
+                return Err(Error::NotGrayscale);
             }
             if decoder_state.file_header.image_metadata.xyb_encoded
                 && decoder_state.xyb_output_linear
@@ -813,23 +819,23 @@ impl Frame {
                     (false, Some(c)) => &[0, 1, 2, c],
                 };
             if let Some(df) = &pixel_format.color_data_format {
-                pipeline = pipeline.add_save_stage(SaveStage::new(
+                pipeline = pipeline.add_save_stage(
                     color_source_channels,
                     metadata.orientation,
                     0,
                     pixel_format.color_type,
                     *df,
-                ))?;
+                )?;
             }
             for i in 0..frame_header.num_extra_channels as usize {
                 if let Some(df) = &pixel_format.extra_channel_format[i] {
-                    pipeline = pipeline.add_save_stage(SaveStage::new(
+                    pipeline = pipeline.add_save_stage(
                         &[3 + i],
                         metadata.orientation,
                         1 + i,
                         JxlColorType::Grayscale,
                         *df,
-                    ))?;
+                    )?;
                 }
             }
         }
@@ -1003,22 +1009,27 @@ impl Frame {
 
         let mut buffers: Vec<Option<JxlOutputBuffer>> = Vec::new();
 
+        macro_rules! buffers_from_api {
+            ($get_next: expr) => {
+                if pixel_format.color_data_format.is_some() {
+                    buffers.push($get_next);
+                }
+
+                for fmt in &pixel_format.extra_channel_format {
+                    if fmt.is_some() {
+                        buffers.push($get_next);
+                    }
+                }
+            };
+        }
+
         if let Some(api_buffers) = api_buffers {
             let mut api_buffers_iter = api_buffers.iter_mut();
-
-            if pixel_format.color_data_format.is_some() {
-                buffers.push(Some(JxlOutputBuffer::from_output_buffer(
-                    api_buffers_iter.next().unwrap(),
-                )));
-            }
-
-            for fmt in &pixel_format.extra_channel_format {
-                if fmt.is_some() {
-                    buffers.push(Some(JxlOutputBuffer::from_output_buffer(
-                        api_buffers_iter.next().unwrap(),
-                    )));
-                }
-            }
+            buffers_from_api!(Some(JxlOutputBuffer::from_output_buffer(
+                api_buffers_iter.next().unwrap(),
+            )));
+        } else {
+            buffers_from_api!(None);
         }
 
         if let Some(ref_images) = &mut self.reference_frame_data {

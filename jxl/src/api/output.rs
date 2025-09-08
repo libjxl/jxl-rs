@@ -120,6 +120,15 @@ impl<'a> JxlOutputBuffer<'a> {
         unsafe { slice::from_raw_parts_mut(start, cols.len()) }
     }
 
+    #[inline]
+    pub fn write_bytes(&mut self, row: usize, col: usize, bytes: &[u8]) {
+        // Safety: We never use the returned slice to write uninit data.
+        let slice = unsafe { self.get(row, col..col + bytes.len()) };
+        for (w, s) in slice.iter_mut().zip(bytes.iter().copied()) {
+            w.write(s);
+        }
+    }
+
     pub(crate) fn from_image<T: ImageDataType>(image: &'a mut Image<T>) -> Self {
         let (width, height) = image.size();
         let buf = image.buf_mut();
@@ -145,5 +154,9 @@ impl<'a> JxlOutputBuffer<'a> {
             _ph: PhantomData,
             ..*lender
         }
+    }
+
+    pub(crate) fn byte_size(&self) -> (usize, usize) {
+        (self.bytes_per_row, self.num_rows)
     }
 }

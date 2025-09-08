@@ -3,37 +3,44 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-use std::any::Any;
+use half::f16;
 
 use crate::{
-    api::{JxlColorType, JxlDataFormat},
-    error::Result,
+    api::{Endianness, JxlColorType, JxlDataFormat, JxlOutputBuffer},
+    error::{Error, Result},
     headers::Orientation,
-    image::{DataTypeTag, Image, ImageDataType},
-    util::tracing_wrappers::debug,
+    image::{DataTypeTag, Image},
 };
-
-use super::RunStage;
 
 pub struct SaveStage {
     channels: Vec<usize>,
     orientation: Orientation,
     output_buffer_index: usize,
     color_type: JxlColorType,
+    // TODO(veluca): should SaveStage handle bit_depth, or should it be handled when converting to
+    // the correct data type?
     data_format: JxlDataFormat,
 }
 
-#[allow(unused)]
 impl SaveStage {
     pub(crate) fn new(
         channels: &[usize],
         orientation: Orientation,
         output_buffer_index: usize,
-        color_type: JxlColorType,
+        mut color_type: JxlColorType,
         data_format: JxlDataFormat,
     ) -> SaveStage {
+        let mut channels = channels.to_vec();
+        if color_type == JxlColorType::Bgr {
+            color_type = JxlColorType::Rgb;
+            channels.swap(0, 2);
+        }
+        if color_type == JxlColorType::Bgra {
+            color_type = JxlColorType::Rgba;
+            channels.swap(0, 2);
+        }
         Self {
-            channels: channels.to_vec(),
+            channels,
             orientation,
             output_buffer_index,
             color_type,
@@ -53,290 +60,225 @@ impl std::fmt::Display for SaveStage {
 }
 
 impl SaveStage {
-    /*
-    fn process_row_chunk(
+    pub(super) fn save(
         &self,
-        position: (usize, usize),
-        mut xsize: usize,
-        row: &mut [&[T]],
-        _state: Option<&mut dyn std::any::Any>,
-    ) {
-        let input = row[0];
-        let mut buf = self.buf.lock().unwrap();
-        let mut outbuf_rect = buf.as_rect_mut();
-        let (out_w, out_h) = outbuf_rect.size();
-
-        // Establish source dimensions based on the orientation.
-        let (w_src, h_src) = if self.orientation.is_transposing() {
-            (out_h, out_w) // Swapped
+        data: &[Image<f64>],
+        buffers: &mut [Option<JxlOutputBuffer>],
+    ) -> Result<()> {
+        for i in self.channels.iter().skip(1) {
+            assert_eq!(data[self.channels[0]].size(), data[*i].size());
+        }
+        let Some(buf) = buffers[self.output_buffer_index].as_mut() else {
+            return Ok(());
+        };
+        let size = data[0].size();
+        let osize = if self.orientation.is_transposing() {
+            (size.1, size.0)
         } else {
-            (out_w, out_h)
+            size
         };
 
-        // Perform boundary checks against source dimensions.
-        if position.1 >= h_src {
-            return;
+        let expected_w = self.channels.len() * self.data_format.bytes_per_sample() * osize.0;
+
+        if buf.byte_size() != (expected_w, osize.1) {
+            return Err(Error::InvalidOutputBufferSize(
+                buf.byte_size().0,
+                buf.byte_size().1,
+                osize.0,
+                osize.1,
+                self.color_type,
+                self.data_format,
+            ));
         }
-        xsize = xsize.min(w_src - position.0);
-        if xsize == 0 {
-            return;
-        }
 
-        match self.orientation {
-            // non-transposing cases
-            Orientation::Identity => {
-                let mut out_row = outbuf_rect
-                    .rect(Rect {
-                        origin: position,
-                        size: (xsize, 1),
-                    })
-                    .unwrap();
-                for (out_pixel, &in_pixel) in out_row.row(0).iter_mut().zip(input.iter()) {
-                    *out_pixel = in_pixel * self.scale;
-                }
-            }
-            Orientation::FlipHorizontal => {
-                let mut out_row = outbuf_rect
-                    .rect(Rect {
-                        origin: (0, position.1),
-                        size: (out_w, 1),
-                    })
-                    .unwrap();
-                for (i, &in_pixel) in input.iter().enumerate().take(xsize) {
-                    out_row.row(0)[out_w - 1 - position.0 - i] = in_pixel * self.scale;
-                }
-            }
-            Orientation::FlipVertical => {
-                let y_out = out_h - 1 - position.1;
-                let mut out_row = outbuf_rect
-                    .rect(Rect {
-                        origin: (position.0, y_out),
-                        size: (xsize, 1),
-                    })
-                    .unwrap();
-                for (out_pixel, &in_pixel) in out_row.row(0).iter_mut().zip(input.iter()) {
-                    *out_pixel = in_pixel * self.scale;
-                }
-            }
-            Orientation::Rotate180 => {
-                let y_out = out_h - 1 - position.1;
-                let mut out_row = outbuf_rect
-                    .rect(Rect {
-                        origin: (0, y_out),
-                        size: (out_w, 1),
-                    })
-                    .unwrap();
-                for (i, &in_pixel) in input.iter().enumerate().take(xsize) {
-                    out_row.row(0)[out_w - 1 - position.0 - i] = in_pixel * self.scale;
-                }
-            }
-
-            // transposing cases
-            Orientation::Transpose
-            | Orientation::Rotate90
-            | Orientation::AntiTranspose
-            | Orientation::Rotate270 => {
-                let y_src = position.1;
-                for (i, &in_pixel) in input.iter().enumerate().take(xsize) {
-                    let x_src = position.0 + i;
-
-                    let (x_dest, y_dest) = match self.orientation {
-                        Orientation::Transpose => (y_src, x_src),
-                        Orientation::Rotate90 => (y_src, w_src - 1 - x_src),
-                        Orientation::AntiTranspose => (h_src - 1 - y_src, w_src - 1 - x_src),
-                        Orientation::Rotate270 => (h_src - 1 - y_src, x_src),
-                        _ => unreachable!(),
+        // TODO(veluca): this is very slow. That's fine for the simple pipeline, but probably not
+        // so fine for the final one.
+        for (c, &chan) in self.channels.iter().enumerate() {
+            let chan = data[chan].as_rect();
+            for y in 0..size.1 {
+                let src_row = chan.row(y);
+                for (x, &px) in src_row.iter().enumerate() {
+                    let (dx, dy) = match self.orientation {
+                        Orientation::Identity => (x, y),
+                        Orientation::Rotate90 => (y, size.0 - 1 - x),
+                        Orientation::Rotate180 => (size.0 - 1 - x, size.1 - 1 - y),
+                        Orientation::Rotate270 => (size.1 - 1 - y, x),
+                        Orientation::Transpose => (y, x),
+                        Orientation::FlipVertical => (x, size.1 - 1 - y),
+                        Orientation::FlipHorizontal => (size.0 - 1 - x, y),
+                        Orientation::AntiTranspose => (size.1 - 1 - y, size.0 - 1 - x),
                     };
+                    let dx = dx * self.channels.len() + c;
+                    let bps = self.data_format.bytes_per_sample();
 
-                    // Final check to ensure we don't write out of the destination buffer bounds.
-                    if x_dest < out_w && y_dest < out_h {
-                        outbuf_rect.row(y_dest)[x_dest] = in_pixel * self.scale;
+                    macro_rules! write_pixel {
+                        ($px: expr, $endianness: expr) => {
+                            let px = $px;
+                            let px_bytes = if $endianness == Endianness::LittleEndian {
+                                px.to_le_bytes()
+                            } else {
+                                px.to_be_bytes()
+                            };
+                            buf.write_bytes(dy, dx * bps, &px_bytes);
+                        };
+                    }
+
+                    match self.data_format {
+                        JxlDataFormat::U8 { .. } => {
+                            write_pixel!(px as u8, Endianness::LittleEndian);
+                        }
+                        JxlDataFormat::U16 { endianness, .. } => {
+                            write_pixel!(px as u16, endianness);
+                        }
+                        JxlDataFormat::F32 { endianness } => {
+                            write_pixel!(px as f32, endianness);
+                        }
+                        JxlDataFormat::F16 { endianness } => {
+                            write_pixel!(f16::from_f64(px), endianness);
+                        }
                     }
                 }
             }
         }
-    }
-    */
-}
-
-// TODO(veluca): get rid of this, and make a enum { Save, Process }.
-impl RunStage for SaveStage {
-    fn run_stage_on(
-        &self,
-        _chunk_size: usize,
-        _input_buffers: &[&Image<f64>],
-        _output_buffers: &mut [&mut Image<f64>],
-        _state: Option<&mut dyn Any>,
-    ) {
-        debug!("running save stage '{self}' in simple pipeline");
-        /*
-        let numc = input_buffers.len();
-        if numc == 0 {
-            return;
-        }
-        let size = input_buffers[0].size();
-        for b in input_buffers.iter() {
-            assert_eq!(size, b.size());
-        }
-        let mut buffer =
-            vec![vec![T::default(); round_up_size_to_two_cache_lines::<T>(chunk_size)]; numc];
-        for y in 0..size.1 {
-            for x in (0..size.0).step_by(chunk_size) {
-                let xsize = size.0.min(x + chunk_size) - x;
-                debug!("position: {x}x{y} xsize: {xsize}");
-                for c in 0..numc {
-                    let in_rect = input_buffers[c].as_rect();
-                    let in_row = in_rect.row(y);
-                    for ix in 0..xsize {
-                        buffer[c][ix] = T::from_f64(in_row[x + ix]);
-                    }
-                }
-                let mut row: Vec<_> = buffer.iter().map(|x| x as &[T]).collect();
-                self.process_row_chunk((x, y), xsize, &mut row, state.as_deref_mut());
-            }
-        }
-        */
+        Ok(())
     }
 
-    fn init_local_state(&self) -> Result<Option<Box<dyn Any>>> {
-        Ok(None)
-    }
-    fn shift(&self) -> (u8, u8) {
-        (0, 0)
-    }
-    fn new_size(&self, size: (usize, usize)) -> (usize, usize) {
-        size
-    }
-    fn uses_channel(&self, c: usize) -> bool {
+    pub(super) fn uses_channel(&self, c: usize) -> bool {
         self.channels.contains(&c)
     }
-    fn input_type(&self) -> DataTypeTag {
-        // TODO(veluca): this should be data-dependent.
-        f32::DATA_TYPE_ID
-    }
-    fn output_type(&self) -> DataTypeTag {
-        self.input_type()
+
+    pub(super) fn input_type(&self) -> DataTypeTag {
+        self.data_format.data_type()
     }
 }
 
 #[cfg(test)]
 mod test {
-    /*
-        use super::*;
-        use rand::SeedableRng;
-        use rand_xorshift::XorShiftRng;
-        use test_log::test;
+    use super::*;
+    use crate::{image::ImageDataType, util::test::assert_almost_eq};
+    use rand::SeedableRng;
+    use rand_xorshift::XorShiftRng;
+    use test_log::test;
 
-        #[test]
-        fn save_stage() -> Result<()> {
-            let save_stage = SaveStage::<u8>::new(
-                SaveStageType::Output,
-                0,
-                (128, 128),
-                1,
-                Orientation::Identity,
-            )?;
-            let mut rng = XorShiftRng::seed_from_u64(0);
-            let src = Image::<u8>::new_random((128, 128), &mut rng)?;
+    #[test]
+    fn save_stage() -> Result<()> {
+        let save_stage = SaveStage::new(
+            &[0],
+            Orientation::Identity,
+            0,
+            JxlColorType::Grayscale,
+            JxlDataFormat::U8 { bit_depth: 8 },
+        );
+        let mut rng = XorShiftRng::seed_from_u64(0);
+        let src = [Image::<f64>::new_random((128, 128), &mut rng)?];
+        let mut dst = Image::<u8>::new_random((128, 128), &mut rng)?;
 
-            for i in 0..128 {
-                save_stage.process_row_chunk((0, i), 128, &mut [src.as_rect().row(i)], None);
+        save_stage.save(&src, &mut [Some(JxlOutputBuffer::from_image(&mut dst))])?;
+
+        for y in 0..128 {
+            for x in 0..128 {
+                assert_eq!(
+                    u8::from_f64(src[0].as_rect().row(y)[x]),
+                    dst.as_rect().row(y)[x]
+                );
             }
-
-            src.as_rect().check_equal(save_stage.buffer().as_rect());
-
-            Ok(())
         }
 
-        macro_rules! test_orientation {
-            ($test_name:ident, $orientation:expr, $transform:expr) => {
-                #[test]
-                fn $test_name() -> Result<()> {
-                    // Source dimensions
-                    let (w, h) = (32, 16);
-                    let mut rng = XorShiftRng::seed_from_u64(0);
-                    let src = Image::<u8>::new_random((w, h), &mut rng)?;
-                    let orientation = $orientation;
+        Ok(())
+    }
 
-                    // SaveStage will create its buffer with the correct (possibly swapped) dimensions.
-                    let save_stage =
-                        SaveStage::<u8>::new(SaveStageType::Output, 0, (w, h), 1, orientation)?;
+    fn do_test_orientation(
+        orientation: Orientation,
+        transform: impl Fn(usize, usize, usize, usize) -> (usize, usize),
+    ) -> Result<()> {
+        let (w, h) = (32, 16);
+        let mut rng = XorShiftRng::seed_from_u64(0);
+        let src = [Image::<f64>::new_random((w, h), &mut rng)?];
 
-                    for y in 0..h {
-                        save_stage.process_row_chunk((0, y), w, &mut [src.as_rect().row(y)], None);
-                    }
+        let (ow, oh) = if orientation.is_transposing() {
+            (h, w)
+        } else {
+            (w, h)
+        };
 
-                    let (out_w, out_h) = save_stage.buffer().size();
+        let save_stage = SaveStage::new(
+            &[0],
+            orientation,
+            0,
+            JxlColorType::Grayscale,
+            JxlDataFormat::f32(),
+        );
 
-                    let mut expected = Image::<u8>::new((out_w, out_h))?;
+        let mut rng = XorShiftRng::seed_from_u64(0);
+        let mut dst = Image::<f32>::new_random((ow, oh), &mut rng)?;
 
-                    // The transform is a closure: |x_dest, y_dest, w_src, h_src| -> (x_src, y_src)
-                    let transform = $transform;
+        save_stage.save(&src, &mut [Some(JxlOutputBuffer::from_image(&mut dst))])?;
 
-                    // Iterate over the DESTINATION image pixels.
-                    for y_dest in 0..out_h {
-                        for x_dest in 0..out_w {
-                            // For each destination pixel, find its corresponding source pixel.
-                            let (src_x, src_y) = transform(x_dest, y_dest, w, h);
-                            expected.as_rect_mut().row(y_dest)[x_dest] =
-                                src.as_rect().row(src_y)[src_x];
-                        }
-                    }
-
-                    expected
-                        .as_rect()
-                        .check_equal(save_stage.buffer().as_rect());
-
-                    Ok(())
-                }
-            };
+        // Iterate over the DESTINATION image pixels.
+        for y_dest in 0..oh {
+            for x_dest in 0..ow {
+                // For each destination pixel, find its corresponding source pixel.
+                let (src_x, src_y) = transform(x_dest, y_dest, w, h);
+                assert_almost_eq(
+                    dst.as_rect().row(y_dest)[x_dest],
+                    src[0].as_rect().row(src_y)[src_x] as f32,
+                    1e-5,
+                    1e-5,
+                );
+            }
         }
-        test_orientation!(orientation_identity, Orientation::Identity, |x, y, _, _| (
-            x, y
-        ));
 
-        test_orientation!(
-            orientation_flip_horizontal,
-            Orientation::FlipHorizontal,
-            |x, y, w, _| (w - 1 - x, y)
-        );
+        Ok(())
+    }
 
-        test_orientation!(
-            orientation_flip_vertical,
-            Orientation::FlipVertical,
-            |x, y, _, h| (x, h - 1 - y)
-        );
+    #[test]
+    fn orientation_identity() -> Result<()> {
+        do_test_orientation(Orientation::Identity, |x, y, _, _| (x, y))
+    }
 
-        test_orientation!(
-            orientation_rotate_180,
-            Orientation::Rotate180,
-            |x, y, w, h| (w - 1 - x, h - 1 - y)
-        );
+    #[test]
+    fn orientation_flip_horizontal() -> Result<()> {
+        do_test_orientation(Orientation::FlipHorizontal, |x, y, w, _| (w - 1 - x, y))
+    }
 
-        // transposing orientations
+    #[test]
+    fn orientation_flip_vertical() -> Result<()> {
+        do_test_orientation(Orientation::FlipVertical, |x, y, _, h| (x, h - 1 - y))
+    }
 
-        test_orientation!(
-            orientation_transpose,
-            Orientation::Transpose,
-            |x_dest, y_dest, _, _| (y_dest, x_dest)
-        );
+    #[test]
+    fn orientation_rotate_180() -> Result<()> {
+        do_test_orientation(Orientation::Rotate180, |x, y, w, h| (w - 1 - x, h - 1 - y))
+    }
 
-        test_orientation!(
-            orientation_rotate_90,
-            Orientation::Rotate90,
-            |x_dest, y_dest, w_src, _| (w_src - 1 - y_dest, x_dest)
-        );
+    // transposing orientations
 
-        test_orientation!(
-            orientation_anti_transpose,
+    #[test]
+    fn orientation_transpose() -> Result<()> {
+        do_test_orientation(Orientation::Transpose, |x_dest, y_dest, _, _| {
+            (y_dest, x_dest)
+        })
+    }
+
+    #[test]
+    fn orientation_rotate_90() -> Result<()> {
+        do_test_orientation(Orientation::Rotate90, |x_dest, y_dest, w_src, _| {
+            (w_src - 1 - y_dest, x_dest)
+        })
+    }
+
+    #[test]
+    fn orientation_anti_transpose() -> Result<()> {
+        do_test_orientation(
             Orientation::AntiTranspose,
-            |x_dest, y_dest, w_src, h_src| (w_src - 1 - y_dest, h_src - 1 - x_dest)
-        );
+            |x_dest, y_dest, w_src, h_src| (w_src - 1 - y_dest, h_src - 1 - x_dest),
+        )
+    }
 
-        test_orientation!(
-            orientation_rotate_270,
-            Orientation::Rotate270,
-            |x_dest, y_dest, _, h_src| (y_dest, h_src - 1 - x_dest)
-        );
-    */
+    #[test]
+    fn orientation_rotate_270() -> Result<()> {
+        do_test_orientation(Orientation::Rotate270, |x_dest, y_dest, _, h_src| {
+            (y_dest, h_src - 1 - x_dest)
+        })
+    }
 }

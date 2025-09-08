@@ -13,8 +13,8 @@ use crate::{
 use rand::SeedableRng;
 
 use super::{
-    RenderPipeline, RenderPipelineBuilder, RenderPipelineStage, SaveStage,
-    internal::RenderPipelineStageInfo, simple_pipeline::SimpleRenderPipelineBuilder,
+    RenderPipeline, RenderPipelineBuilder, RenderPipelineStage, internal::RenderPipelineStageInfo,
+    simple_pipeline::SimpleRenderPipelineBuilder,
 };
 
 pub(super) fn make_and_run_simple_pipeline<
@@ -58,13 +58,13 @@ pub(super) fn make_and_run_simple_pipeline<
     };
 
     for i in 0..input_images.len() {
-        pipeline = pipeline.add_save_stage(SaveStage::new(
+        pipeline = pipeline.add_save_stage(
             &[i],
             Orientation::Identity,
             i,
             JxlColorType::Grayscale,
             jxl_data_type,
-        ))?;
+        )?;
     }
     let mut pipeline = pipeline.build()?;
 

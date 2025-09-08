@@ -48,6 +48,9 @@ macro_rules! type_min {
     (f32) => {
         0.0f32
     };
+    (f64) => {
+        0.0f64
+    };
     ($ty: ty) => {
         <$ty>::MIN
     };
@@ -57,6 +60,9 @@ macro_rules! type_min {
 macro_rules! type_max {
     (f32) => {
         1.0f32
+    };
+    (f64) => {
+        1.0f64
     };
     ($ty: ty) => {
         <$ty>::MAX

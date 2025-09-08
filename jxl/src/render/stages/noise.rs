@@ -195,7 +195,7 @@ mod test {
             ColorCorrelationParams::default(),
             3,
         );
-        let output = make_and_run_simple_pipeline(
+        let output = make_and_run_simple_pipeline::<_, _, f32>(
             stage,
             &[input_c0, input_c1, input_c2, input_c3, input_c4, input_c5],
             (xsize, ysize),
