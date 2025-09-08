@@ -26,7 +26,7 @@ paste = "1.0.15"
 rand = "0.8.5"
 rand_xorshift = "0.3.0"
 test-log = { version = "0.2.16", features = ["trace"] }
-jxl_macros = { path = "../jxl_macros", version = "*", features = ["test"] }
+jxl_macros = { path = "../jxl_macros", version = "=0.1.1", features = ["test"] }
 
 [lints]
 workspace = true
