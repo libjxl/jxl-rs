@@ -553,3 +553,60 @@ impl RenderPipelineStage for Epf2Stage {
         epf2_process_row_chunk_dispatch(self, (xpos, ypos), xsize, row);
     }
 }
+
+#[cfg(test)]
+mod test {
+    use rand::SeedableRng;
+    use test_log::test;
+
+    use super::*;
+    use crate::error::Result;
+
+    #[test]
+    fn epf0_consistency() -> Result<()> {
+        let mut rng = rand_xorshift::XorShiftRng::seed_from_u64(0);
+        let sigma = Arc::new(Image::new_random((128, 128), &mut rng).unwrap());
+        crate::render::test::test_stage_consistency::<_, f32, f32>(
+            || Epf0Stage {
+                sigma_scale: 0.9,
+                border_sad_mul: 2.0 / 3.0,
+                channel_scale: [40.0, 5.0, 3.5],
+                sigma: sigma.clone(),
+            },
+            (512, 512),
+            4,
+        )
+    }
+
+    #[test]
+    fn epf1_consistency() -> Result<()> {
+        let mut rng = rand_xorshift::XorShiftRng::seed_from_u64(0);
+        let sigma = Arc::new(Image::new_random((128, 128), &mut rng).unwrap());
+        crate::render::test::test_stage_consistency::<_, f32, f32>(
+            || Epf1Stage {
+                sigma_scale: 1.0,
+                border_sad_mul: 2.0 / 3.0,
+                channel_scale: [40.0, 5.0, 3.5],
+                sigma: sigma.clone(),
+            },
+            (512, 512),
+            4,
+        )
+    }
+
+    #[test]
+    fn epf2_consistency() -> Result<()> {
+        let mut rng = rand_xorshift::XorShiftRng::seed_from_u64(0);
+        let sigma = Arc::new(Image::new_random((128, 128), &mut rng).unwrap());
+        crate::render::test::test_stage_consistency::<_, f32, f32>(
+            || Epf2Stage {
+                sigma_scale: 6.5,
+                border_sad_mul: 2.0 / 3.0,
+                channel_scale: [40.0, 5.0, 3.5],
+                sigma: sigma.clone(),
+            },
+            (512, 512),
+            4,
+        )
+    }
+}
