@@ -1,7 +1,7 @@
 [package]
 name = "jxl"
 description = "High performance Rust implementation of a JPEG XL decoder"
-version = "0.1.0"
+version = "0.1.1"
 readme = "../README.md"
 keywords = ["jpeg-xl", "decoder"]
 categories = ["multimedia::images"]
@@ -18,7 +18,7 @@ num-traits = "0.2.14"
 array-init = "2.0.0"
 half = "2.4.1"
 tracing = { version = "0.1.40", optional = true }
-jxl_macros = { path = "../jxl_macros", version = "=0.1.0" }
+jxl_macros = { path = "../jxl_macros", version = "=0.1.1" }
 
 [dev-dependencies]
 arbtest = "0.3.2"

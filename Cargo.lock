@@ -425,7 +425,7 @@ dependencies = [
 
 [[package]]
 name = "jxl"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "arbtest",
  "array-init",
@@ -459,7 +459,7 @@ dependencies = [
 
 [[package]]
 name = "jxl_macros"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "proc-macro-error2",
  "proc-macro2",
