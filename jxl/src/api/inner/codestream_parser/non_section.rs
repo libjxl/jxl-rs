@@ -36,10 +36,17 @@ impl CodestreamParser {
             let data = &file_header.image_metadata;
             self.animation = data.animation.clone();
             self.basic_info = Some(JxlBasicInfo {
-                size: (
-                    file_header.size.xsize() as usize,
-                    file_header.size.ysize() as usize,
-                ),
+                size: if data.orientation.is_transposing() {
+                    (
+                        file_header.size.ysize() as usize,
+                        file_header.size.xsize() as usize,
+                    )
+                } else {
+                    (
+                        file_header.size.xsize() as usize,
+                        file_header.size.ysize() as usize,
+                    )
+                },
                 bit_depth: if data.bit_depth.floating_point_sample() {
                     JxlBitDepth::Float {
                         bits_per_sample: data.bit_depth.bits_per_sample(),

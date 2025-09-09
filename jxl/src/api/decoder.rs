@@ -243,9 +243,9 @@ pub(crate) mod tests {
         assert!(basic_info.bit_depth.bits_per_sample() > 0);
 
         // Get image dimensions (after upsampling, which is the actual output size)
-        let (width, height) = basic_info.size;
-        assert!(width > 0);
-        assert!(height > 0);
+        let (buffer_width, buffer_height) = basic_info.size;
+        assert!(buffer_width > 0);
+        assert!(buffer_height > 0);
 
         // Get pixel format info
         // TODO(veluca): this relies on the default pixel format using floats. We should not do
@@ -258,12 +258,6 @@ pub(crate) mod tests {
         loop {
             // Process until we have frame info
             let mut decoder_with_frame_info = advance_decoder!(decoder_with_image_info);
-
-            let (buffer_width, buffer_height) = if basic_info.orientation.is_transposing() {
-                (height, width)
-            } else {
-                (width, height)
-            };
 
             // First channel is interleaved.
             let mut buffers = vec![Image::new_constant(
