@@ -151,7 +151,6 @@ impl JxlDecoder<WithFrameInfo> {
         Ok(self.map_inner_processing_result(inner_result))
     }
 
-    // TODO: don't use the raw bitstream type; include name and extra channel blend info.
     pub fn frame_header(&self) -> JxlFrameHeader {
         self.inner.frame_header().unwrap()
     }
