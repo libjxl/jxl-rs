@@ -181,13 +181,8 @@ fn main() -> Result<()> {
     let data_icc = output_profile.as_icc();
     let data_icc_result = save_icc(data_icc.as_slice(), opt.icc_out);
 
-    let (untransposed_w, untransposed_h) = info.size;
     let mut image_data = ImageData {
-        size: if info.orientation.is_transposing() {
-            (untransposed_h, untransposed_w)
-        } else {
-            (untransposed_w, untransposed_h)
-        },
+        size: info.size,
         frames: Vec::new(),
     };
 
