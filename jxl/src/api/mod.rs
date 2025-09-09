@@ -55,7 +55,6 @@ impl<T> ProcessingResult<T, ()> {
 
 #[derive(Clone)]
 pub struct JxlBasicInfo {
-    // TODO(veluca): shouldn't this be the size *after* applying orientation?
     pub size: (usize, usize),
     pub bit_depth: JxlBitDepth,
     pub orientation: Orientation,
