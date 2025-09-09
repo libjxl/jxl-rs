@@ -1153,7 +1153,7 @@ mod test {
         };
         assert_eq!(
             crate::api::tests::decode(
-                include_bytes!("../resources/test/splines.jxl"),
+                include_bytes!("../../resources/test/splines.jxl"),
                 usize::MAX,
                 Some(Box::new(verify_frame)),
             )?,
@@ -1177,7 +1177,7 @@ mod test {
         };
         assert_eq!(
             crate::api::tests::decode(
-                include_bytes!("../resources/test/8x8_noise.jxl"),
+                include_bytes!("../../resources/test/8x8_noise.jxl"),
                 usize::MAX,
                 Some(Box::new(verify_frame)),
             )?,
@@ -1200,7 +1200,7 @@ mod test {
         };
         assert_eq!(
             crate::api::tests::decode(
-                include_bytes!("../resources/test/grayscale_patches_modular.jxl"),
+                include_bytes!("../../resources/test/grayscale_patches_modular.jxl"),
                 usize::MAX,
                 Some(Box::new(verify_frame)),
             )?,
@@ -1233,7 +1233,7 @@ mod test {
             Ok(())
         };
         crate::api::tests::decode(
-            include_bytes!("../resources/test/multiple_lf_420.jxl"),
+            include_bytes!("../../resources/test/multiple_lf_420.jxl"),
             usize::MAX,
             Some(Box::new(verify_frame)),
         )?;
@@ -1261,7 +1261,7 @@ mod test {
         };
         assert_eq!(
             crate::api::tests::decode(
-                include_bytes!("../resources/test/grayscale_patches_var_dct.jxl"),
+                include_bytes!("../../resources/test/grayscale_patches_var_dct.jxl"),
                 usize::MAX,
                 Some(Box::new(verify_frame)),
             )?,
