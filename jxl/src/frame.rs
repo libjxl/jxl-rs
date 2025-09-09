@@ -105,6 +105,22 @@ impl ReferenceFrame {
             saved_before_color_transform,
         })
     }
+    #[cfg(test)]
+    pub fn random<R: rand::Rng>(
+        mut rng: &mut R,
+        width: usize,
+        height: usize,
+        num_channels: usize,
+        saved_before_color_transform: bool,
+    ) -> Result<Self> {
+        let frame = (0..num_channels)
+            .map(|_| Image::new_random((width, height), &mut rng))
+            .collect::<Result<_>>()?;
+        Ok(Self {
+            frame,
+            saved_before_color_transform,
+        })
+    }
 }
 
 #[derive(Debug)]

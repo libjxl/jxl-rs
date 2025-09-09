@@ -78,6 +78,37 @@ pub enum PatchBlendMode {
 impl PatchBlendMode {
     pub const NUM_BLEND_MODES: u8 = 8;
 
+    #[cfg(test)]
+    fn try_from(i: u8) -> Result<PatchBlendMode> {
+        match i {
+            0 => Ok(PatchBlendMode::None),
+            1 => Ok(PatchBlendMode::Replace),
+            2 => Ok(PatchBlendMode::Add),
+            3 => Ok(PatchBlendMode::Mul),
+            4 => Ok(PatchBlendMode::BlendAbove),
+            5 => Ok(PatchBlendMode::BlendBelow),
+            6 => Ok(PatchBlendMode::AlphaWeightedAddAbove),
+            7 => Ok(PatchBlendMode::AlphaWeightedAddBelow),
+            _ => Err(Error::PatchesInvalidBlendMode(
+                i,
+                PatchBlendMode::NUM_BLEND_MODES,
+            )),
+        }
+    }
+
+    #[cfg(test)]
+    fn random<R: rand::Rng>(rng: &mut R) -> Self {
+        use rand::distributions::{Distribution, Uniform};
+        Self::try_from(
+            Uniform::new_inclusive(
+                PatchBlendMode::None as u8,
+                PatchBlendMode::AlphaWeightedAddBelow as u8,
+            )
+            .sample(rng),
+        )
+        .unwrap()
+    }
+
     pub fn uses_alpha(self) -> bool {
         matches!(
             self,
@@ -140,6 +171,60 @@ pub struct PatchesDictionary {
 }
 
 impl PatchesDictionary {
+    #[cfg(test)]
+    pub fn random<R: rand::Rng>(
+        size: (usize, usize),
+        num_extra_channels: usize,
+        alpha_channel: usize,
+        reference_frames: usize,
+        rng: &mut R,
+    ) -> Self {
+        use rand::distributions::{Distribution, Uniform};
+        let width_dist = Uniform::new_inclusive(0, size.0 - 1);
+        let height_dist = Uniform::new_inclusive(0, size.1 - 1);
+        let num_refs = Uniform::new_inclusive(1, 5).sample(rng);
+        let ref_dist = Uniform::new_inclusive(0, num_refs - 1);
+        let ref_frame_dist = Uniform::new_inclusive(0, reference_frames - 1);
+        let num_patches = Uniform::new_inclusive(num_refs, 10).sample(rng);
+        let mut result = PatchesDictionary {
+            positions: (0..num_patches)
+                .map(|_| PatchPosition {
+                    x: width_dist.sample(rng),
+                    y: height_dist.sample(rng),
+                    ref_pos_idx: ref_dist.sample(rng),
+                })
+                .collect(),
+            ref_positions: (0..num_refs)
+                .map(|_| {
+                    let mut result = PatchReferencePosition {
+                        reference: ref_frame_dist.sample(rng),
+                        x0: width_dist.sample(rng),
+                        y0: height_dist.sample(rng),
+                        xsize: 0,
+                        ysize: 0,
+                    };
+                    result.xsize = Uniform::new_inclusive(1, size.0 - result.x0).sample(rng);
+                    result.ysize = Uniform::new_inclusive(1, size.1 - result.y0).sample(rng);
+                    result
+                })
+                .collect(),
+            blendings: (0..num_patches)
+                .map(|_| PatchBlending {
+                    mode: PatchBlendMode::random(rng),
+                    alpha_channel,
+                    clamp: Uniform::new_inclusive(0, 1).sample(rng) == 0,
+                })
+                .collect(),
+            blendings_stride: num_extra_channels + 1,
+            patch_tree: vec![],
+            num_patches: vec![],
+            sorted_patches_y0: vec![],
+            sorted_patches_y1: vec![],
+        };
+        result.compute_patch_tree().unwrap();
+        result
+    }
+
     fn compute_patch_tree(&mut self) -> Result<()> {
         #[derive(Debug, Clone, Copy)]
         struct PatchInterval {

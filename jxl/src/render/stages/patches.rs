@@ -58,6 +58,39 @@ impl RenderPipelineStage for PatchesStage {
 
 #[cfg(test)]
 mod test {
+    use rand::SeedableRng;
+    use test_log::test;
+
+    use super::*;
+    use crate::error::Result;
+    use crate::util::test::read_headers_and_toc;
+
     #[test]
-    fn process_row_chunk() {}
+    fn patches_consistency() -> Result<()> {
+        let (file_header, _, _) =
+            read_headers_and_toc(include_bytes!("../../../resources/test/basic.jxl")).unwrap();
+        let mut rng = rand_xorshift::XorShiftRng::seed_from_u64(0);
+        let patch_dict = PatchesDictionary::random(
+            (500, 500),
+            file_header.image_metadata.extra_channel_info.len(),
+            0,
+            4,
+            &mut rng,
+        );
+        let reference_frames = Arc::new(vec![
+            Some(ReferenceFrame::random(&mut rng, 500, 500, 4, false)?),
+            Some(ReferenceFrame::random(&mut rng, 500, 500, 4, false)?),
+            Some(ReferenceFrame::random(&mut rng, 500, 500, 4, false)?),
+            Some(ReferenceFrame::random(&mut rng, 500, 500, 4, false)?),
+        ]);
+        crate::render::test::test_stage_consistency::<_, f32, f32>(
+            || PatchesStage {
+                patches: patch_dict.clone(),
+                extra_channels: file_header.image_metadata.extra_channel_info.clone(),
+                decoder_state: reference_frames.clone(),
+            },
+            (500, 500),
+            4,
+        )
+    }
 }

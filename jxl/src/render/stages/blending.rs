@@ -158,6 +158,7 @@ impl RenderPipelineStage for BlendingStage {
 
 #[cfg(test)]
 mod test {
+    use rand::SeedableRng;
     use test_log::test;
 
     use super::*;
@@ -168,7 +169,13 @@ mod test {
     fn blending_consistency() -> Result<()> {
         let (file_header, frame_header, _) =
             read_headers_and_toc(include_bytes!("../../../resources/test/basic.jxl")).unwrap();
-        let reference_frames: Vec<Option<ReferenceFrame>> = vec![None, None, None, None];
+        let mut rng = rand_xorshift::XorShiftRng::seed_from_u64(0);
+        let reference_frames: Vec<Option<ReferenceFrame>> = vec![
+            Some(ReferenceFrame::random(&mut rng, 500, 500, 4, false)?),
+            Some(ReferenceFrame::random(&mut rng, 500, 500, 4, false)?),
+            Some(ReferenceFrame::random(&mut rng, 500, 500, 4, false)?),
+            Some(ReferenceFrame::random(&mut rng, 500, 500, 4, false)?),
+        ];
         crate::render::test::test_stage_consistency::<_, f32, f32>(
             || BlendingStage::new(&frame_header, &file_header, &reference_frames).unwrap(),
             (500, 500),
