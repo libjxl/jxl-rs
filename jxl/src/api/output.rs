@@ -129,7 +129,7 @@ impl<'a> JxlOutputBuffer<'a> {
         }
     }
 
-    pub(crate) fn from_image<T: ImageDataType>(image: &'a mut Image<T>) -> Self {
+    pub fn from_image<T: ImageDataType>(image: &'a mut Image<T>) -> Self {
         let (width, height) = image.size();
         let buf = image.buf_mut();
         assert!(buf.len() >= width * height);
