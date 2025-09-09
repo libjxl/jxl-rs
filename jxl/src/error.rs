@@ -8,7 +8,10 @@ use std::collections::TryReserveError;
 use thiserror::Error;
 
 use crate::{
-    entropy_coding::huffman::HUFFMAN_MAX_BITS, features::spline::Point, image::DataTypeTag,
+    api::{JxlColorType, JxlDataFormat},
+    entropy_coding::huffman::HUFFMAN_MAX_BITS,
+    features::spline::Point,
+    image::DataTypeTag,
 };
 
 #[derive(Error, Debug)]
@@ -248,6 +251,12 @@ pub enum Error {
     ICCOutputNoCMS,
     #[error("I/O error: {0}")]
     IOError(#[from] std::io::Error),
+    #[error("Wrong buffer count: {0} buffers given, {1} buffers expected")]
+    WrongBufferCount(usize, usize),
+    #[error("Image is not grayscale, but grayscale output was requested")]
+    NotGrayscale,
+    #[error("Invalid output buffer byte size {0}x{1} for {2}x{3} image with type {4:?} {5:?}")]
+    InvalidOutputBufferSize(usize, usize, usize, usize, JxlColorType, JxlDataFormat),
 }
 
 pub type Result<T, E = Error> = std::result::Result<T, E>;

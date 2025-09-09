@@ -43,11 +43,10 @@ impl<S: JxlState> JxlDecoder<S> {
         }
     }
 
-    /// Returns a decoder that processes all frames by calling `callback(frame, frame_index)`.
+    /// Sets a callback that processes all frames by calling `callback(frame, frame_index)`.
     #[cfg(test)]
-    pub fn with_frame_callback(mut self, callback: Box<FrameCallback>) -> Self {
-        self.inner = self.inner.with_frame_callback(callback);
-        self
+    pub fn set_frame_callback(&mut self, callback: Box<FrameCallback>) {
+        self.inner.set_frame_callback(callback);
     }
 
     #[cfg(test)]
@@ -180,50 +179,65 @@ impl JxlDecoder<WithFrameInfo> {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use crate::api::JxlDecoderOptions;
-    use crate::api::test::create_output_buffers;
+    use crate::error::Error;
+    use crate::image::Image;
     use jxl_macros::for_each_test_file;
     use std::path::Path;
 
     #[test]
     fn decode_small_chunks() {
         arbtest::arbtest(|u| {
-            decode_test_data(
-                std::fs::read("resources/test/green_queen_vardct_e3.jxl")
-                    .expect("Failed to read test file"),
+            decode(
+                &std::fs::read("resources/test/green_queen_vardct_e3.jxl").unwrap(),
                 u.arbitrary::<u8>().unwrap() as usize + 1,
+                None,
             )
             .unwrap();
             Ok(())
         });
     }
 
-    fn decode_test_data(data: Vec<u8>, chunk_size: usize) -> Result<(), crate::error::Error> {
-        // Create decoder with default options
+    #[allow(clippy::type_complexity)]
+    pub fn decode(
+        mut input: &[u8],
+        chunk_size: usize,
+        callback: Option<Box<dyn FnMut(&Frame, usize) -> Result<(), Error>>>,
+    ) -> Result<usize, Error> {
         let options = JxlDecoderOptions::default();
         let mut initialized_decoder = JxlDecoder::<states::Initialized>::new(options);
 
-        let mut input = data.as_slice();
+        if let Some(callback) = callback {
+            initialized_decoder.set_frame_callback(callback);
+        }
+
         let mut chunk_input = &input[0..0];
 
-        // Process until we have image info
-        let mut decoder_with_image_info = loop {
-            chunk_input = &input[..(chunk_input.len().saturating_add(chunk_size)).min(input.len())];
-            let available_before = chunk_input.len();
-            let process_result = initialized_decoder.process(&mut chunk_input);
-            input = &input[(available_before - chunk_input.len())..];
-            match process_result.unwrap() {
-                ProcessingResult::Complete { result } => break result,
-                ProcessingResult::NeedsMoreInput { fallback, .. } => {
-                    if input.is_empty() {
-                        panic!("Unexpected end of input while reading image info");
+        macro_rules! advance_decoder {
+            ($decoder: ident $(, $extra_arg: expr)?) => {
+                loop {
+                    chunk_input =
+                        &input[..(chunk_input.len().saturating_add(chunk_size)).min(input.len())];
+                    let available_before = chunk_input.len();
+                    let process_result = $decoder.process(&mut chunk_input $(, $extra_arg)?);
+                    input = &input[(available_before - chunk_input.len())..];
+                    match process_result.unwrap() {
+                        ProcessingResult::Complete { result } => break result,
+                        ProcessingResult::NeedsMoreInput { fallback, .. } => {
+                            if input.is_empty() {
+                                panic!("Unexpected end of input");
+                            }
+                            $decoder = fallback;
+                        }
                     }
-                    initialized_decoder = fallback;
                 }
-            }
-        };
+            };
+        }
+
+        // Process until we have image info
+        let mut decoder_with_image_info = advance_decoder!(initialized_decoder);
 
         // Get basic info
         let basic_info = decoder_with_image_info.basic_info().clone();
@@ -235,88 +249,71 @@ mod tests {
         assert!(height > 0);
 
         // Get pixel format info
+        // TODO(veluca): this relies on the default pixel format using floats. We should not do
+        // this, and instead call set_pixel_format, but that is currently not implemented.
         let pixel_format = decoder_with_image_info.current_pixel_format().clone();
+
         let num_channels = pixel_format.color_type.samples_per_pixel();
         assert!(num_channels > 0);
 
-        let mut frame_count = 0;
-
         loop {
             // Process until we have frame info
-            let mut decoder_with_frame_info = loop {
-                chunk_input =
-                    &input[..(chunk_input.len().saturating_add(chunk_size)).min(input.len())];
-                let available_before = chunk_input.len();
-                let process_result = decoder_with_image_info.process(&mut chunk_input);
-                input = &input[(available_before - chunk_input.len())..];
-                match process_result.unwrap() {
-                    ProcessingResult::Complete { result } => break result,
-                    ProcessingResult::NeedsMoreInput { fallback, .. } => {
-                        if input.is_empty() {
-                            panic!("Unexpected end of input while reading frame info");
-                        }
-                        decoder_with_image_info = fallback;
-                    }
-                }
-            };
-            decoder_with_frame_info.frame_header();
+            let mut decoder_with_frame_info = advance_decoder!(decoder_with_image_info);
 
-            create_output_buffers!(basic_info, pixel_format, output_buffers, output_slices);
-
-            decoder_with_image_info = loop {
-                chunk_input =
-                    &input[..(chunk_input.len().saturating_add(chunk_size)).min(input.len())];
-                let available_before = chunk_input.len();
-                let process_result =
-                    decoder_with_frame_info.process(&mut chunk_input, &mut output_slices);
-                input = &input[(available_before - chunk_input.len())..];
-                match process_result.unwrap() {
-                    ProcessingResult::Complete { result } => break result,
-                    ProcessingResult::NeedsMoreInput { fallback, .. } => {
-                        if input.is_empty() {
-                            panic!("Unexpected end of input while decoding frame");
-                        }
-                        decoder_with_frame_info = fallback;
-                    }
-                }
-            };
-
-            // Verify we decoded something
-            if pixel_format.color_type == Rgb {
-                // For RGB, first buffer contains interleaved RGB data
-                assert!(!output_buffers.is_empty());
-                assert_eq!(output_buffers[0].len(), width * height * 12); // 3 channels * 4 bytes
-                // Additional buffers for extra channels
-                for buffer in &output_buffers[1..] {
-                    assert_eq!(buffer.len(), width * height * 4);
-                }
+            let (buffer_width, buffer_height) = if basic_info.orientation.is_transposing() {
+                (height, width)
             } else {
-                // For other formats, one buffer per channel
-                assert_eq!(output_buffers.len(), num_channels);
-                for buffer in &output_buffers {
-                    assert_eq!(buffer.len(), width * height * 4);
+                (width, height)
+            };
+
+            // First channel is interleaved.
+            let mut buffers = vec![Image::new_constant(
+                (buffer_width * num_channels, buffer_height),
+                f32::NAN,
+            )?];
+
+            for ecf in pixel_format.extra_channel_format.iter() {
+                if ecf.is_none() {
+                    continue;
                 }
+                buffers.push(Image::new_constant(
+                    (buffer_width, buffer_height),
+                    f32::NAN,
+                )?);
             }
 
-            frame_count += 1;
+            let mut api_buffers: Vec<_> = buffers
+                .iter_mut()
+                .map(JxlOutputBuffer::from_image)
+                .collect();
+
+            decoder_with_image_info = advance_decoder!(decoder_with_frame_info, &mut api_buffers);
+
+            // All pixels should have been overwritten, so they should no longer be NaNs.
+            for buf in buffers {
+                let (xs, ys) = buf.size();
+                for y in 0..ys {
+                    for x in 0..xs {
+                        assert!(!buf.as_rect().row(y)[x].is_nan());
+                    }
+                }
+            }
 
             // Check if there are more frames
             if !decoder_with_image_info.has_more_frames() {
-                break;
+                let decoded_frames = decoder_with_image_info.decoded_frames();
+
+                // Ensure we decoded at least one frame
+                assert!(decoded_frames > 0, "No frames were decoded");
+
+                return Ok(decoded_frames);
             }
         }
-
-        // Ensure we decoded at least one frame
-        assert!(frame_count > 0, "No frames were decoded");
-
-        Ok(())
     }
 
-    fn decode_test_file(path: &Path) -> Result<(), crate::error::Error> {
-        decode_test_data(
-            std::fs::read(path).expect("Failed to read test file"),
-            usize::MAX,
-        )
+    fn decode_test_file(path: &Path) -> Result<(), Error> {
+        decode(&std::fs::read(path)?, usize::MAX, None)?;
+        Ok(())
     }
 
     for_each_test_file!(decode_test_file);

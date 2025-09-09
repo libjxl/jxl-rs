@@ -170,7 +170,7 @@ mod test {
             read_headers_and_toc(include_bytes!("../../../resources/test/basic.jxl")).unwrap();
         let reference_frames: Vec<Option<ReferenceFrame>> = vec![None, None, None, None];
         crate::render::test::test_stage_consistency::<_, f32, f32>(
-            BlendingStage::new(&frame_header, &file_header, &reference_frames)?,
+            || BlendingStage::new(&frame_header, &file_header, &reference_frames).unwrap(),
             (500, 500),
             4,
         )

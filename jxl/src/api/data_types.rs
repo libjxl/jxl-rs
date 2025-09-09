@@ -3,7 +3,7 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-use crate::headers::extra_channels::ExtraChannel;
+use crate::{headers::extra_channels::ExtraChannel, image::DataTypeTag};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum JxlColorType {
@@ -30,6 +30,14 @@ impl JxlColorType {
             Self::GrayscaleAlpha => 2,
             Self::Rgb | Self::Bgr => 3,
             Self::Rgba | Self::Bgra => 4,
+        }
+    }
+    pub fn is_grayscale(&self) -> bool {
+        match self {
+            Self::Grayscale => true,
+            Self::GrayscaleAlpha => true,
+            Self::Rgb | Self::Bgr => false,
+            Self::Rgba | Self::Bgra => false,
         }
     }
 }
@@ -76,6 +84,21 @@ impl JxlDataFormat {
             Self::U8 { .. } => 1,
             Self::U16 { .. } | Self::F16 { .. } => 2,
             Self::F32 { .. } => 4,
+        }
+    }
+
+    pub fn f32() -> Self {
+        Self::F32 {
+            endianness: Endianness::native(),
+        }
+    }
+
+    pub(crate) fn data_type(&self) -> DataTypeTag {
+        match self {
+            JxlDataFormat::U8 { .. } => DataTypeTag::U8,
+            JxlDataFormat::U16 { .. } => DataTypeTag::U16,
+            JxlDataFormat::F16 { .. } => DataTypeTag::F16,
+            JxlDataFormat::F32 { .. } => DataTypeTag::F32,
         }
     }
 }

@@ -3,12 +3,7 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-use crate::{
-    api::{JxlColorType, JxlOutputBuffer},
-    bit_reader::BitReader,
-    error::Result,
-    frame::Section,
-};
+use crate::{api::JxlOutputBuffer, bit_reader::BitReader, error::Result, frame::Section};
 
 use super::CodestreamParser;
 
@@ -70,7 +65,7 @@ impl CodestreamParser {
             frame.decode_lf_global(&mut br)?;
             frame.decode_lf_group(0, &mut br)?;
             frame.decode_hf_global(&mut br)?;
-            frame.prepare_render_pipeline()?;
+            frame.prepare_render_pipeline(self.pixel_format.as_ref().unwrap())?;
             frame.finalize_lf()?;
             frame.decode_hf_group(0, 0, &mut br)?;
             self.available_sections.clear();
@@ -139,7 +134,7 @@ impl CodestreamParser {
 
             if let Some(hf_global) = hf_global_section {
                 frame.decode_hf_global(&mut BitReader::new(&hf_global.data))?;
-                frame.prepare_render_pipeline()?;
+                frame.prepare_render_pipeline(self.pixel_format.as_ref().unwrap())?;
                 frame.finalize_lf()?;
             }
 
@@ -153,6 +148,12 @@ impl CodestreamParser {
                 }
             }
         }
+
+        self.frame
+            .as_mut()
+            .unwrap()
+            .render_frame_output(output_buffers, self.pixel_format.as_ref().unwrap())?;
+
         // Frame is not yet complete.
         if !self.sections.is_empty() {
             return Ok(None);
@@ -166,32 +167,16 @@ impl CodestreamParser {
             })?;
         }
 
-        let result = self.frame.take().unwrap().finalize()?;
-
         #[cfg(test)]
         {
             self.decoded_frames += 1;
         }
 
-        if let Some(state) = result.decoder_state {
+        let decoder_state = self.frame.take().unwrap().finalize()?;
+        if let Some(state) = decoder_state {
             self.decoder_state = Some(state);
         } else {
             self.has_more_frames = false;
-        }
-        // TODO(veluca): this code should be integrated in the render pipeline.
-        if let Some(channels) = result.channels
-            && let Some(bufs) = output_buffers
-        {
-            if self.pixel_format.as_ref().unwrap().color_type == JxlColorType::Grayscale {
-                for (buf, chan) in bufs.iter_mut().zip(channels.iter()) {
-                    buf.write_from_f32(chan);
-                }
-            } else {
-                bufs[0].write_from_rgb_f32(&channels[0], &channels[1], &channels[2]);
-                for (buf, chan) in bufs.iter_mut().skip(1).zip(channels.iter().skip(3)) {
-                    buf.write_from_f32(chan);
-                }
-            }
         }
         Ok(None)
     }

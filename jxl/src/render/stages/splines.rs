@@ -14,6 +14,7 @@ pub struct SplinesStage {
 }
 
 impl SplinesStage {
+    // TODO(veluca): should this return a Result?
     pub fn new(
         mut splines: Splines,
         frame_size: (usize, usize),
@@ -72,7 +73,7 @@ mod test {
             Image::<f32>::new_constant((320, 320), 0.0)?,
         ];
         let size = target_images[0].size();
-        let mut splines = Splines::create(
+        let splines = Splines::create(
             0,
             vec![QuantizedSpline {
                 control_points: vec![
@@ -103,14 +104,13 @@ mod test {
             }],
             vec![Point { x: 9.0, y: 54.0 }],
         );
-        splines.initialize_draw_cache(
-            size.0 as u64,
-            size.1 as u64,
-            &ColorCorrelationParams::default(),
+        let output: Vec<Image<f32>> = make_and_run_simple_pipeline(
+            SplinesStage::new(splines.clone(), size, &ColorCorrelationParams::default()),
+            &target_images,
+            size,
+            0,
+            256,
         )?;
-        let stage = SplinesStage { splines };
-        let output: Vec<Image<f32>> =
-            make_and_run_simple_pipeline(stage, &target_images, size, 0, 256)?.1;
         for c in 0..3 {
             for row in 0..size.1 {
                 assert_all_almost_abs_eq(
@@ -125,7 +125,7 @@ mod test {
 
     #[test]
     fn splines_consistency() -> Result<()> {
-        let mut splines = Splines::create(
+        let splines = Splines::create(
             0,
             vec![QuantizedSpline {
                 control_points: vec![
@@ -156,9 +156,17 @@ mod test {
             }],
             vec![Point { x: 9.0, y: 54.0 }],
         );
-        splines.initialize_draw_cache(500, 500, &ColorCorrelationParams::default())?;
-        let stage = SplinesStage { splines };
 
-        crate::render::test::test_stage_consistency::<_, f32, f32>(stage, (500, 500), 6)
+        crate::render::test::test_stage_consistency::<_, f32, f32>(
+            || {
+                SplinesStage::new(
+                    splines.clone(),
+                    (500, 500),
+                    &ColorCorrelationParams::default(),
+                )
+            },
+            (500, 500),
+            6,
+        )
     }
 }

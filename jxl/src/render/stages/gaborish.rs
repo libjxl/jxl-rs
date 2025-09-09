@@ -92,7 +92,7 @@ mod test {
     #[test]
     fn consistency() -> Result<()> {
         crate::render::test::test_stage_consistency::<_, f32, f32>(
-            GaborishStage::new(0, 0.115169525, 0.061248592),
+            || GaborishStage::new(0, 0.115169525, 0.061248592),
             (500, 500),
             1,
         )
@@ -105,8 +105,7 @@ mod test {
         image.as_rect_mut().row(1).copy_from_slice(&[1.0, 0.0]);
 
         let stage = GaborishStage::new(0, 0.115169525, 0.061248592);
-        let (_, output) =
-            make_and_run_simple_pipeline::<_, f32, f32>(stage, &[image], (2, 2), 0, 256)?;
+        let output = make_and_run_simple_pipeline::<_, f32, f32>(stage, &[image], (2, 2), 0, 256)?;
         let output = output[0].as_rect();
 
         assert_all_almost_abs_eq(output.row(0), &[0.20686048, 0.7931395], 1e-6);

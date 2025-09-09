@@ -93,25 +93,10 @@ struct Opt {
     override_bitdepth: Option<u32>,
 }
 
-fn f32_from_bytes(vec: &[u8]) -> f32 {
-    f32::from_ne_bytes(vec.try_into().unwrap())
-}
-
-fn image_from_vec(vec: &[u8], size: (usize, usize)) -> Result<Image<f32>> {
-    let mut image = Image::<f32>::new(size)?;
-    let mut rect = image.as_rect_mut();
-    for y in 0..size.1 {
-        let row = rect.row(y);
-        for (x, v) in row.iter_mut().enumerate().take(size.0) {
-            let base_idx = 4 * (y * size.0 + x);
-            *v = f32_from_bytes(&vec[base_idx..base_idx + 4]);
-        }
-    }
-    Ok(image)
-}
-
 // Extract RGB channels from interleaved RGB buffer
-fn images_from_rgb_vec(vec: &[u8], size: (usize, usize)) -> Result<Vec<Image<f32>>> {
+fn planes_from_interleaved(interleaved: &Image<f32>) -> Result<Vec<Image<f32>>> {
+    let size = interleaved.size();
+    let size = (size.0 / 3, size.1);
     let mut r_image = Image::<f32>::new(size)?;
     let mut g_image = Image::<f32>::new(size)?;
     let mut b_image = Image::<f32>::new(size)?;
@@ -119,16 +104,17 @@ fn images_from_rgb_vec(vec: &[u8], size: (usize, usize)) -> Result<Vec<Image<f32
     let mut r_rect = r_image.as_rect_mut();
     let mut g_rect = g_image.as_rect_mut();
     let mut b_rect = b_image.as_rect_mut();
+    let interleaved_rect = interleaved.as_rect();
 
     for y in 0..size.1 {
         let r_row = r_rect.row(y);
         let g_row = g_rect.row(y);
         let b_row = b_rect.row(y);
+        let src_row = interleaved_rect.row(y);
         for x in 0..size.0 {
-            let base_idx = 12 * (y * size.0 + x);
-            r_row[x] = f32_from_bytes(&vec[base_idx..base_idx + 4]);
-            g_row[x] = f32_from_bytes(&vec[base_idx + 4..base_idx + 8]);
-            b_row[x] = f32_from_bytes(&vec[base_idx + 8..base_idx + 12]);
+            r_row[x] = src_row[3 * x];
+            g_row[x] = src_row[3 * x + 1];
+            b_row[x] = src_row[3 * x + 2];
         }
     }
     Ok(vec![r_image, g_image, b_image])
@@ -218,19 +204,18 @@ fn main() -> Result<()> {
             }
         }?;
 
-        let num_pixels = image_data.size.0 * image_data.size.1;
+        let mut outputs = vec![Image::<f32>::new((
+            image_data.size.0 * samples_per_pixel,
+            image_data.size.1,
+        ))?];
 
-        let mut output_vecs = vec![vec![0u8; num_pixels * samples_per_pixel * 4]];
         for _ in 0..extra_channels {
-            output_vecs.push(vec![0u8; num_pixels * 4]);
+            outputs.push(Image::<f32>::new(image_data.size)?);
         }
 
-        let mut output_bufs: Vec<JxlOutputBuffer<'_>> = output_vecs
+        let mut output_bufs: Vec<JxlOutputBuffer<'_>> = outputs
             .iter_mut()
-            .map(|v| {
-                let len = v.len();
-                JxlOutputBuffer::new(v, image_data.size.1, len / image_data.size.1)
-            })
+            .map(JxlOutputBuffer::from_image)
             .collect();
 
         decoder_with_image_info = loop {
@@ -256,23 +241,14 @@ fn main() -> Result<()> {
         // Handle RGB vs grayscale buffer layout
         if color_type == JxlColorType::Grayscale {
             // Each buffer contains a single channel
-            for vec in output_vecs.iter() {
-                image_frame
-                    .channels
-                    .push(image_from_vec(vec, (image_data.size.0, image_data.size.1))?);
-            }
+            image_frame.channels = outputs;
         } else {
             // First buffer contains interleaved RGB
-            let rgb_channels =
-                images_from_rgb_vec(&output_vecs[0], (image_data.size.0, image_data.size.1))?;
+            let rgb_channels = planes_from_interleaved(&outputs[0])?;
             image_frame.channels.extend(rgb_channels);
 
             // Additional buffers contain extra channels (e.g., alpha)
-            for vec in output_vecs.iter().skip(1) {
-                image_frame
-                    .channels
-                    .push(image_from_vec(vec, (image_data.size.0, image_data.size.1))?);
-            }
+            image_frame.channels.extend(outputs.into_iter().skip(1));
         }
 
         image_data.frames.push(image_frame);

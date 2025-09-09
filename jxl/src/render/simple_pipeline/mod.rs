@@ -9,7 +9,9 @@ use save::SaveStage;
 
 use crate::{
     BLOCK_DIM,
+    api::{JxlColorType, JxlDataFormat, JxlOutputBuffer},
     error::{Error, Result},
+    headers::Orientation,
     image::{DataTypeTag, Image, ImageDataType},
     render::internal::RenderPipelineStageInfo,
     simd::round_up_size_to_two_cache_lines,
@@ -21,8 +23,21 @@ use super::{
     RenderPipelineInPlaceStage, RenderPipelineStage, internal::RenderPipelineStageType,
 };
 
-// TODO(veluca): this should eventually become non-pub.
-pub mod save;
+mod save;
+
+enum Stage {
+    Process(Box<dyn RunStage>),
+    Save(SaveStage),
+}
+
+impl std::fmt::Display for Stage {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Stage::Process(s) => write!(f, "{}", s),
+            Stage::Save(s) => write!(f, "{}", s),
+        }
+    }
+}
 
 #[derive(Clone, Debug)]
 struct ChannelInfo {
@@ -75,9 +90,9 @@ impl SimpleRenderPipelineBuilder {
         }
     }
 
-    fn add_dyn_stage(
+    fn add_stage_internal(
         mut self,
-        stage: Box<dyn RunStage>,
+        stage: Stage,
         input_type: DataTypeTag,
         output_type: Option<DataTypeTag>,
         shift: (u8, u8),
@@ -91,7 +106,11 @@ impl SimpleRenderPipelineBuilder {
         );
         let mut after_info = vec![];
         for (c, info) in current_info.iter().enumerate() {
-            if !stage.uses_channel(c) {
+            let uses_channel = match &stage {
+                Stage::Process(s) => s.uses_channel(c),
+                Stage::Save(s) => s.uses_channel(c),
+            };
+            if !uses_channel {
                 after_info.push(ChannelInfo {
                     ty: info.ty,
                     downsample: (0, 0),
@@ -150,19 +169,34 @@ impl RenderPipelineBuilder for SimpleRenderPipelineBuilder {
     }
 
     #[instrument(skip_all, err)]
-    fn add_stage<Stage: RenderPipelineStage>(self, stage: Stage) -> Result<Self> {
-        self.add_dyn_stage(
-            Box::new(stage),
-            Stage::Type::INPUT_TYPE,
-            Stage::Type::OUTPUT_TYPE,
-            Stage::Type::SHIFT,
-            Stage::Type::TYPE == RenderPipelineStageType::Extend,
+    fn add_stage<S: RenderPipelineStage>(self, stage: S) -> Result<Self> {
+        self.add_stage_internal(
+            Stage::Process(Box::new(stage)),
+            S::Type::INPUT_TYPE,
+            S::Type::OUTPUT_TYPE,
+            S::Type::SHIFT,
+            S::Type::TYPE == RenderPipelineStageType::Extend,
         )
     }
 
     #[instrument(skip_all, err)]
-    fn add_save_stage<T: ImageDataType>(self, stage: SaveStage<T>) -> Result<Self> {
-        self.add_dyn_stage(Box::new(stage), T::DATA_TYPE_ID, None, (0, 0), false)
+    fn add_save_stage(
+        self,
+        channels: &[usize],
+        orientation: Orientation,
+        output_buffer_index: usize,
+        color_type: JxlColorType,
+        data_format: JxlDataFormat,
+    ) -> Result<Self> {
+        let stage = SaveStage::new(
+            channels,
+            orientation,
+            output_buffer_index,
+            color_type,
+            data_format,
+        );
+        let it = stage.input_type();
+        self.add_stage_internal(Stage::Save(stage), it, None, (0, 0), false)
     }
 
     #[instrument(skip_all, err)]
@@ -177,12 +211,20 @@ impl RenderPipelineBuilder for SimpleRenderPipelineBuilder {
             for chan in 0..num_channels {
                 let cur_chan = &mut current_info[chan];
                 let next_chan = &mut next_info[chan];
-                if stage.uses_channel(chan) {
-                    assert_eq!(Some(stage.output_type()), next_chan.ty);
-                }
+                let (uses_channel, input_type) = match stage {
+                    Stage::Process(s) => {
+                        let uses_channel = s.uses_channel(chan);
+                        if uses_channel {
+                            assert_eq!(Some(s.output_type()), next_chan.ty);
+                        }
+                        (uses_channel, s.input_type())
+                    }
+                    Stage::Save(s) => (s.uses_channel(chan), s.input_type()),
+                };
+
                 if cur_chan.ty.is_none() {
-                    cur_chan.ty = if stage.uses_channel(chan) {
-                        Some(stage.input_type())
+                    cur_chan.ty = if uses_channel {
+                        Some(input_type)
                     } else {
                         next_chan.ty
                     }
@@ -251,7 +293,7 @@ pub struct SimpleRenderPipeline {
     input_size: (usize, usize),
     log_group_size: usize,
     xgroups: usize,
-    stages: Vec<Box<dyn RunStage>>,
+    stages: Vec<Stage>,
     group_chan_ready_passes: Vec<Vec<usize>>,
     completed_passes: usize,
     input_buffers: Vec<Image<f64>>,
@@ -264,7 +306,7 @@ fn clone_images<T: ImageDataType>(images: &[Image<T>]) -> Result<Vec<Image<T>>> 
 
 impl SimpleRenderPipeline {
     #[instrument(skip_all, err)]
-    fn do_render(&mut self) -> Result<()> {
+    fn do_render(&mut self, buffers: &mut [Option<JxlOutputBuffer>]) -> Result<()> {
         let ready_passes = self
             .group_chan_ready_passes
             .iter()
@@ -292,37 +334,44 @@ impl SimpleRenderPipeline {
         for (i, stage) in self.stages.iter().enumerate() {
             debug!("running stage {i}: {stage}");
             let mut output_buffers = clone_images(&current_buffers)?;
-            // Replace buffers of different sizes.
-            if stage.shift() != (0, 0) || stage.new_size(current_size) != current_size {
-                current_size = stage.new_size(current_size);
-                for (c, info) in self.channel_info[i + 1].iter().enumerate() {
-                    if stage.uses_channel(c) {
-                        let xsize = current_size.0.shrc(info.downsample.0);
-                        let ysize = current_size.1.shrc(info.downsample.1);
-                        debug!("reallocating channel {c} to new size {xsize}x{ysize}");
-                        output_buffers[c] = Image::new((xsize, ysize))?;
+            match stage {
+                Stage::Process(stage) => {
+                    // Replace buffers of different sizes.
+                    if stage.shift() != (0, 0) || stage.new_size(current_size) != current_size {
+                        current_size = stage.new_size(current_size);
+                        for (c, info) in self.channel_info[i + 1].iter().enumerate() {
+                            if stage.uses_channel(c) {
+                                let xsize = current_size.0.shrc(info.downsample.0);
+                                let ysize = current_size.1.shrc(info.downsample.1);
+                                debug!("reallocating channel {c} to new size {xsize}x{ysize}");
+                                output_buffers[c] = Image::new((xsize, ysize))?;
+                            }
+                        }
                     }
+                    let input_buf: Vec<_> = current_buffers
+                        .iter()
+                        .enumerate()
+                        .filter(|x| stage.uses_channel(x.0))
+                        .map(|x| x.1)
+                        .collect();
+                    let mut output_buf: Vec<_> = output_buffers
+                        .iter_mut()
+                        .enumerate()
+                        .filter(|x| stage.uses_channel(x.0))
+                        .map(|x| x.1)
+                        .collect();
+                    let mut state = stage.init_local_state()?;
+                    stage.run_stage_on(
+                        self.chunk_size,
+                        &input_buf,
+                        &mut output_buf,
+                        state.as_deref_mut(),
+                    );
+                }
+                Stage::Save(stage) => {
+                    stage.save(&output_buffers, buffers)?;
                 }
             }
-            let input_buf: Vec<_> = current_buffers
-                .iter()
-                .enumerate()
-                .filter(|x| stage.uses_channel(x.0))
-                .map(|x| x.1)
-                .collect();
-            let mut output_buf: Vec<_> = output_buffers
-                .iter_mut()
-                .enumerate()
-                .filter(|x| stage.uses_channel(x.0))
-                .map(|x| x.1)
-                .collect();
-            let mut state = stage.init_local_state()?;
-            stage.run_stage_on(
-                self.chunk_size,
-                &input_buf,
-                &mut output_buf,
-                state.as_deref_mut(),
-            );
             current_buffers = output_buffers;
         }
 
@@ -426,13 +475,8 @@ impl RenderPipeline for SimpleRenderPipeline {
         self.group_chan_ready_passes[group_id][channel] += num_passes;
     }
 
-    // TODO(veluca): actually use the passed-in buffers.
-    fn do_render(&mut self, _: &mut [Option<crate::api::JxlOutputBuffer>]) -> Result<()> {
-        self.do_render()
-    }
-
-    fn into_stages(self) -> Vec<Box<dyn std::any::Any>> {
-        self.stages.into_iter().map(|x| x.as_any()).collect()
+    fn do_render(&mut self, buffers: &mut [Option<JxlOutputBuffer>]) -> Result<()> {
+        self.do_render(buffers)
     }
 
     fn num_groups(&self) -> usize {
@@ -727,7 +771,6 @@ trait RunStage: Any + std::fmt::Display {
     fn shift(&self) -> (u8, u8);
     fn new_size(&self, size: (usize, usize)) -> (usize, usize);
     fn uses_channel(&self, c: usize) -> bool;
-    fn as_any(self: Box<Self>) -> Box<dyn Any>;
     fn input_type(&self) -> DataTypeTag;
     fn output_type(&self) -> DataTypeTag;
 }
@@ -757,9 +800,6 @@ impl<T: RenderPipelineStage> RunStage for T {
 
     fn uses_channel(&self, c: usize) -> bool {
         self.uses_channel(c)
-    }
-    fn as_any(self: Box<Self>) -> Box<dyn Any> {
-        self
     }
     fn input_type(&self) -> DataTypeTag {
         T::Type::INPUT_TYPE

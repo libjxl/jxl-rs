@@ -68,7 +68,7 @@ fn numpy_bytes(image_data: ImageData<f32>, num_channels: usize) -> Vec<u8> {
                         (0..num_channels).map(move |c| channel_rects[c].row(y)[x])
                     })
                 })
-                .flat_map(|x| (x.clamp(0.0, 255.0) / 255.0f32).to_le_bytes()),
+                .flat_map(|x| (x.clamp(0.0, 1.0)).to_le_bytes()),
         );
     }
     ret

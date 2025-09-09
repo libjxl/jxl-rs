@@ -104,7 +104,7 @@ mod test {
     #[test]
     fn hchr_consistency() -> Result<()> {
         crate::render::test::test_stage_consistency::<_, f32, f32>(
-            HorizontalChromaUpsample::new(0),
+            || HorizontalChromaUpsample::new(0),
             (500, 500),
             1,
         )
@@ -119,7 +119,7 @@ mod test {
             .copy_from_slice(&[1.0f32, 2.0, 4.0]);
         let stage = HorizontalChromaUpsample::new(0);
         let output: Vec<Image<f32>> =
-            make_and_run_simple_pipeline(stage, &[input], (6, 1), 0, 256)?.1;
+            make_and_run_simple_pipeline(stage, &[input], (6, 1), 0, 256)?;
         assert_eq!(output[0].as_rect().row(0), [1.0, 1.25, 1.75, 2.5, 3.5, 4.0]);
         Ok(())
     }
@@ -127,7 +127,7 @@ mod test {
     #[test]
     fn vchr_consistency() -> Result<()> {
         crate::render::test::test_stage_consistency::<_, f32, f32>(
-            VerticalChromaUpsample::new(0),
+            || VerticalChromaUpsample::new(0),
             (500, 500),
             1,
         )
@@ -141,7 +141,7 @@ mod test {
         input.as_rect_mut().row(2)[0] = 4.0f32;
         let stage = VerticalChromaUpsample::new(0);
         let output: Vec<Image<f32>> =
-            make_and_run_simple_pipeline(stage, &[input], (1, 6), 0, 256)?.1;
+            make_and_run_simple_pipeline(stage, &[input], (1, 6), 0, 256)?;
         assert_eq!(output[0].as_rect().row(0)[0], 1.0);
         assert_eq!(output[0].as_rect().row(1)[0], 1.25);
         assert_eq!(output[0].as_rect().row(2)[0], 1.75);
