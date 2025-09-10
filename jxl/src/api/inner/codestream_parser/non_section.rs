@@ -57,7 +57,6 @@ impl CodestreamParser {
                         bits_per_sample: data.bit_depth.bits_per_sample(),
                     }
                 },
-                orientation: data.orientation,
                 extra_channels: data
                     .extra_channel_info
                     .iter()
