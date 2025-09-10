@@ -60,4 +60,5 @@ pub struct JxlBasicInfo {
     pub orientation: Orientation,
     pub extra_channels: Vec<JxlExtraChannel>,
     pub animation: Option<JxlAnimation>,
+    pub uses_original_profile: bool,
 }

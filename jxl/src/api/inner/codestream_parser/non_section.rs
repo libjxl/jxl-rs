@@ -73,6 +73,7 @@ impl CodestreamParser {
                         num_loops: anim.num_loops,
                         have_timecodes: anim.have_timecodes,
                     }),
+                uses_original_profile: !data.xyb_encoded,
             });
             self.file_header = Some(file_header);
             let bits = br.total_bits_read();

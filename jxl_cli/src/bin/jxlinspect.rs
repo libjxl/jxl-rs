@@ -4,121 +4,96 @@
 // license that can be found in the LICENSE file.
 
 use clap::{Arg, Command};
-use color_eyre::eyre::{Result, WrapErr};
-use jxl::bit_reader::BitReader;
-use jxl::container::{ContainerParser, ParseEvent};
-use jxl::frame::{DecoderState, Frame};
-use jxl::headers::color_encoding::{ColorEncoding, Primaries, WhitePoint};
-use jxl::headers::{FileHeader, JxlHeader};
-use jxl::icc::IncrementalIccReader;
-use std::cmp::Ordering;
-use std::fs;
-use std::io::Read;
+use color_eyre::eyre::{Result, eyre};
+use jxl::api::{
+    JxlBitDepth, JxlColorEncoding, JxlColorProfile, JxlDecoder, JxlDecoderOptions, JxlOutputBuffer,
+    ProcessingResult,
+};
+use jxl::headers::extra_channels::ExtraChannel;
+use jxl::image::Image;
+use std::fs::File;
+use std::io::{BufReader, Read};
 use std::path::Path;
 
-// TODO(veluca): switch this file to the API.
+fn parse_jxl(path: &Path) -> Result<()> {
+    let file = File::open(path)?;
+    let mut reader = BufReader::new(file);
 
-fn print_color_encoding(color_encoding: &ColorEncoding) {
-    // Print the color space
-    print!("Color Space: {:?}, ", color_encoding.color_space);
+    let options = JxlDecoderOptions::default();
+    let mut initialized_decoder = JxlDecoder::<jxl::api::states::Initialized>::new(options);
 
-    // Print white point, depending on whether it's a custom white point
-    match color_encoding.white_point {
-        WhitePoint::Custom => {
-            print!(
-                "White point: custom ({}, {}), ",
-                color_encoding.white.x, color_encoding.white.y
-            );
-        }
-        _ => {
-            print!("White point: {:?}, ", color_encoding.white_point);
-        }
+    let mut buffer = vec![0; 16384];
+    let mut offset = 0usize;
+    let mut len = 0usize;
+
+    macro_rules! advance_decoder {
+        ($decoder: ident $(, $extra_arg: expr)?) => {
+            loop {
+                let mut data = &buffer[offset..(offset+len)];
+                let result = $decoder.process(&mut data $(, $extra_arg)?)?;
+                offset += len - data.len();
+                len = data.len();
+                match result {
+                    ProcessingResult::Complete { result } => break Ok(result),
+                    ProcessingResult::NeedsMoreInput { fallback, .. } => {
+                        $decoder = fallback;
+                        if len == 0 {
+                            offset = 0;
+                            len = reader.read(&mut buffer)?;
+                            if len == 0 {
+                                break Err(eyre!("Source file {:?} truncated", path));
+                            }
+                        }
+                    }
+                }
+            }
+        };
     }
 
-    // Print primaries, check for custom primaries
-    if color_encoding.primaries == Primaries::Custom {
-        println!("Custom primaries: ");
-        for (i, primary) in color_encoding.custom_primaries.iter().enumerate() {
-            print!("  primary {}: ({}, {}), ", i + 1, primary.x, primary.y);
-        }
-    } else {
-        print!("Primaries: {:?}, ", color_encoding.primaries);
-    }
+    let mut decoder_with_image_info = advance_decoder!(initialized_decoder)?;
 
-    // Print transfer function details
-    if color_encoding.tf.have_gamma {
-        print!(
-            "Transfer function: gamma (gamma = {}), ",
-            color_encoding.tf.gamma
-        );
-    } else {
-        print!(
-            "Transfer function: {:?}, ",
-            color_encoding.tf.transfer_function
-        );
-    }
+    let info = decoder_with_image_info.basic_info().clone();
 
-    println!("Rendering intent: {:?}", color_encoding.rendering_intent);
-}
-
-fn parse_jxl_codestream(data: &[u8], verbose: bool) -> Result<()> {
-    let mut br = BitReader::new(data);
-    let file_header = FileHeader::read(&mut br)?;
-
-    // Non-verbose output
-    let how_lossy = if file_header.image_metadata.xyb_encoded {
-        "lossy"
-    } else {
+    let how_lossy = if info.uses_original_profile {
         "(possibly) lossless"
+    } else {
+        "lossy"
     };
-
-    let color_space = format!(
-        "{:?}",
-        file_header.image_metadata.color_encoding.color_space
-    );
-    let alpha_info = match file_header
-        .image_metadata
-        .extra_channel_info
+    let color_space = format!("{}", decoder_with_image_info.embedded_color_profile());
+    let alpha_info = if info
+        .extra_channels
         .iter()
-        .any(|info| info.alpha_associated())
+        .any(|c| c.ec_type == ExtraChannel::Alpha)
     {
-        true => "+Alpha",
-        false => "",
+        "+Alpha"
+    } else {
+        ""
     };
-    let image_or_animation = match file_header.image_metadata.animation {
-        None => "Image",
-        Some(_) => "Animation",
+    let image_or_animation = if info.animation.is_some() {
+        "Animation"
+    } else {
+        "Image"
     };
     print!(
-        "JPEG XL {}, {}x{}, {}, {}-bit {}{}",
+        "JPEG XL {}, {}x{}, {}, {}-bit, {}{}",
         image_or_animation,
-        file_header.size.xsize(),
-        file_header.size.ysize(),
+        info.size.0,
+        info.size.1,
         how_lossy,
-        file_header.image_metadata.bit_depth.bits_per_sample(),
+        info.bit_depth.bits_per_sample(),
         color_space,
         alpha_info,
     );
-    if file_header
-        .image_metadata
-        .bit_depth
-        .exponent_bits_per_sample()
-        != 0
+    if let JxlBitDepth::Float {
+        bits_per_sample: _,
+        exponent_bits_per_sample: ebps,
+    } = info.bit_depth
     {
-        print!(
-            "float ({} exponent bits)",
-            file_header
-                .image_metadata
-                .bit_depth
-                .exponent_bits_per_sample()
-        );
+        print!(", float ({} exponent bits)", ebps);
     }
     println!();
-    if file_header.image_metadata.color_encoding.want_icc {
-        let mut r = IncrementalIccReader::new(&mut br)?;
-        r.read_all(&mut br)?;
-        let icc = r.finalize()?;
-        match lcms2::Profile::new_icc(icc.as_slice()) {
+    match decoder_with_image_info.output_color_profile() {
+        JxlColorProfile::Icc(icc) => match lcms2::Profile::new_icc(icc.as_slice()) {
             Err(_) => println!("with unparseable ICC profile"),
             Ok(profile) => {
                 match profile.info(lcms2::InfoType::Description, lcms2::Locale::none()) {
@@ -132,95 +107,102 @@ fn parse_jxl_codestream(data: &[u8], verbose: bool) -> Result<()> {
                     }
                 }
             }
-        }
-    } else {
-        print_color_encoding(&file_header.image_metadata.color_encoding);
+        },
+        JxlColorProfile::Simple(color_encoding) => match color_encoding {
+            JxlColorEncoding::GrayscaleColorSpace {
+                white_point,
+                transfer_function,
+                rendering_intent,
+            } => {
+                println!(
+                    "White point: {}, Transfer function: {}, Rendering intent: {}",
+                    white_point, transfer_function, rendering_intent
+                );
+            }
+            JxlColorEncoding::RgbColorSpace {
+                white_point,
+                primaries,
+                transfer_function,
+                rendering_intent,
+            } => {
+                println!(
+                    "White point: {}, Primaries: {}, Transfer function: {}, Rendering intent: {}",
+                    white_point, primaries, transfer_function, rendering_intent
+                );
+            }
+            JxlColorEncoding::XYB { rendering_intent } => {
+                println!("Rendering intent: {}", rendering_intent);
+            }
+        },
     }
-    if verbose {
-        // Verbose output: Use Debug trait to print the FileHeaders
-        println!("{file_header:#?}");
-    }
-    // TODO(firsching): handle frames which are blended together, also within animations.
-    if let Some(ref animation) = file_header.image_metadata.animation {
-        let mut total_duration = 0.0f64;
-        let mut decoder_state = DecoderState::new(file_header.clone());
+
+    if let Some(animation) = info.animation {
+        let pixel_format = decoder_with_image_info.current_pixel_format().clone();
+        let num_channels: usize = pixel_format.color_type.samples_per_pixel();
+        let mut num_frames = 0;
+        let mut total_seconds = 0.0;
+
         loop {
-            let frame = Frame::new(&mut br, decoder_state)?;
-            let ms = frame.header().duration(animation);
-            total_duration += ms;
-            println!(
-                "frame: {:?}x{:?} at position ({},{}), duration {ms}ms",
-                frame.header().width,
-                frame.header().height,
-                frame.header().x0,
-                frame.header().y0
+            let mut decoder_with_frame_info = advance_decoder!(decoder_with_image_info)?;
+
+            eprintln!("1");
+            let duration = decoder_with_frame_info.frame_header().duration.unwrap();
+            eprintln!("2");
+            total_seconds += duration;
+            println!("Frame {}, duration {}s", num_frames, duration);
+            eprintln!("3");
+
+            let mut outputs = vec![Image::<f32>::new((
+                info.size.0 * num_channels,
+                info.size.1,
+            ))?];
+            eprintln!("4");
+
+            for _ in 0..info.extra_channels.len() {
+                outputs.push(Image::<f32>::new(info.size)?);
+            }
+            eprintln!("5");
+
+            let mut output_bufs: Vec<JxlOutputBuffer<'_>> = outputs
+                .iter_mut()
+                .map(JxlOutputBuffer::from_image)
+                .collect();
+            eprintln!("6");
+
+            decoder_with_image_info = advance_decoder!(decoder_with_frame_info, &mut output_bufs)?;
+
+            eprintln!("7");
+            num_frames += 1;
+
+            eprintln!(
+                "8 has more frames {}",
+                decoder_with_image_info.has_more_frames()
             );
-            br.jump_to_byte_boundary()?;
-            br.skip_bits(frame.total_bytes_in_toc() * 8)?;
-            if let Some(state) = frame.finalize()? {
-                decoder_state = state;
-            } else {
+            if !decoder_with_image_info.has_more_frames() {
                 break;
             }
+            eprintln!("9");
         }
+
         print!(
-            "Animation length: {} seconds",
-            total_duration
-                * (if animation.num_loops > 1 {
-                    animation.num_loops as f64
-                } else {
-                    1.0f64
-                })
-                * 0.001
+            "Animation length: {} frames in {} seconds",
+            num_frames,
+            total_seconds / 1000.0
         );
-        match animation.num_loops.cmp(&1) {
-            Ordering::Greater => println!(
-                " ({} loops of {} seconds)",
+        if animation.have_timecodes {
+            print!(" with (potentially) individual timecodes");
+        }
+        if animation.num_loops < 1 {
+            println!(" (looping indefinitely)");
+        } else if animation.num_loops > 1 {
+            println!(
+                " ({} loops, in total {} seconds)",
                 animation.num_loops,
-                total_duration * 0.001
-            ),
-            Ordering::Equal => println!(),
-            Ordering::Less => println!(" (looping indefinitely)"),
+                animation.num_loops as f64 * total_seconds
+            );
         }
     }
     Ok(())
-}
-
-fn parse_jxl(filename: &Path, verbose: bool) -> Result<()> {
-    let mut file = fs::File::open(filename)
-        .wrap_err_with(|| format!("Failed to read source image from {:?}", filename))?;
-    // Set up the container parser and buffers
-    let mut parser = ContainerParser::new();
-    let mut buf = vec![0u8; 4096];
-    let mut buf_valid = 0usize;
-    let mut codestream = Vec::new();
-
-    loop {
-        let chunk_size = file
-            .read(&mut buf[buf_valid..])
-            .wrap_err_with(|| format!("Failed reading from {:?}", filename))?;
-        if chunk_size == 0 {
-            break;
-        }
-        buf_valid += chunk_size;
-
-        for event in parser.process_bytes(&buf[..buf_valid]) {
-            match event? {
-                ParseEvent::BitstreamKind(kind) => {
-                    println!("Bitstream kind: {kind:?}");
-                }
-                ParseEvent::Codestream(data) => {
-                    codestream.extend_from_slice(data);
-                }
-            }
-        }
-
-        let consumed = parser.previous_consumed_bytes();
-        buf.copy_within(consumed..buf_valid, 0);
-        buf_valid -= consumed;
-    }
-
-    parse_jxl_codestream(&codestream, verbose)
 }
 
 fn main() {
@@ -241,23 +223,11 @@ fn main() {
                 .required(true)
                 .index(1),
         )
-        .arg(
-            Arg::new("verbose")
-                .short('v')
-                .long("verbose")
-                .help("Provides more verbose output")
-                .num_args(0),
-        )
         .get_matches();
 
     let filename = Path::new(matches.get_one::<String>("filename").unwrap());
-    let verbose = matches.get_flag("verbose");
 
-    if verbose {
-        println!("Processing file: {filename:?}");
-    }
-
-    let res = parse_jxl(filename, verbose);
+    let res = parse_jxl(filename);
     if let Err(err) = res {
         println!("Error parsing JXL codestream: {err}");
     }
@@ -265,16 +235,8 @@ fn main() {
 
 #[cfg(test)]
 mod jxl_cli_test {
-    use color_eyre::eyre::Result;
+    use super::*;
     use jxl_macros::for_each_test_file;
-    use std::path::Path;
 
-    use crate::parse_jxl;
-
-    fn read_file_from_path(path: &Path) -> Result<()> {
-        parse_jxl(path, false)?;
-        Ok(())
-    }
-
-    for_each_test_file!(read_file_from_path);
+    for_each_test_file!(parse_jxl);
 }

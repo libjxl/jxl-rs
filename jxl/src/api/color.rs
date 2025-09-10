@@ -436,6 +436,16 @@ pub enum JxlColorEncoding {
     },
 }
 
+impl fmt::Display for JxlColorEncoding {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::RgbColorSpace { .. } => f.write_str("RGB"),
+            Self::GrayscaleColorSpace { .. } => f.write_str("Gra"),
+            Self::XYB { .. } => f.write_str("XYB"),
+        }
+    }
+}
+
 impl JxlColorEncoding {
     pub fn from_internal(internal: &ColorEncoding) -> Result<Self> {
         let rendering_intent = internal.rendering_intent;
@@ -1073,6 +1083,15 @@ impl JxlColorProfile {
         match self {
             Self::Icc(x) => Cow::Borrowed(x),
             Self::Simple(encoding) => Cow::Owned(encoding.maybe_create_profile().unwrap().unwrap()),
+        }
+    }
+}
+
+impl fmt::Display for JxlColorProfile {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Icc(_) => f.write_str("ICC"),
+            Self::Simple(enc) => write!(f, "{}", enc),
         }
     }
 }
