@@ -3,6 +3,7 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
+use super::render::pipeline;
 use super::{
     block_context_map::BlockContextMap,
     coeff_order::decode_coeff_orders,
@@ -13,6 +14,7 @@ use super::{
     quantizer::{LfQuantFactors, QuantizerParams},
     transform_map::*,
 };
+use crate::render::{LowMemoryRenderPipeline, SimpleRenderPipeline};
 use crate::{
     GROUP_DIM,
     bit_reader::BitReader,
@@ -112,6 +114,7 @@ impl Frame {
         };
 
         Ok(Self {
+            use_simple_pipeline: decoder_state.use_simple_pipeline,
             header: frame_header,
             modular_color_channels,
             toc,
@@ -363,9 +366,8 @@ impl Frame {
             // TODO(sboukortt): actual frame indices for the first two
             let mut rng = Xorshift128Plus::new_with_seeds(1, 0, x0, y0);
             let bits_to_float = |bits: u32| f32::from_bits((bits >> 9) | 0x3F800000);
-            let rp = self.render_pipeline.as_mut().unwrap();
             for i in 0..3 {
-                let mut buf = rp.get_buffer_for_group(num_channels + i, group)?;
+                let mut buf = pipeline!(self, p, p.get_buffer_for_group(num_channels + i, group)?);
                 let mut rect = buf.as_rect_mut();
                 let (xsize, ysize) = rect.size();
                 const FLOATS_PER_BATCH: usize =
@@ -391,8 +393,11 @@ impl Frame {
                         }
                     }
                 }
-
-                rp.set_buffer_for_group(num_channels + i, group, 1, buf);
+                pipeline!(
+                    self,
+                    p,
+                    p.set_buffer_for_group(num_channels + i, group, 1, buf)
+                )
             }
         }
         let lf_global = self.lf_global.as_mut().unwrap();
@@ -420,11 +425,8 @@ impl Frame {
             if self.decoder_state.enable_output
                 && pass + 1 == self.header.passes.num_passes as usize
             {
-                for (c, p) in pixels.into_iter().enumerate() {
-                    self.render_pipeline
-                        .as_mut()
-                        .unwrap()
-                        .set_buffer_for_group(c, group, 1, p);
+                for (c, img) in pixels.into_iter().enumerate() {
+                    pipeline!(self, p, p.set_buffer_for_group(c, group, 1, img));
                 }
             }
         }
@@ -439,7 +441,13 @@ impl Frame {
                 2 + pass,
                 group,
                 &self.header,
-                self.render_pipeline.as_mut().unwrap(),
+                &mut |chan, group, num_passes, image| {
+                    pipeline!(
+                        self,
+                        p,
+                        p.set_buffer_for_group(chan, group, num_passes, image)
+                    );
+                },
             )?;
         }
         Ok(())

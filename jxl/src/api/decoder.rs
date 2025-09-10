@@ -135,6 +135,11 @@ impl JxlDecoder<WithImageInfo> {
     pub fn has_more_frames(&self) -> bool {
         self.inner.has_more_frames()
     }
+
+    #[cfg(test)]
+    pub(crate) fn set_use_simple_pipeline(&mut self, u: bool) {
+        self.inner.set_use_simple_pipeline(u);
+    }
 }
 
 impl JxlDecoder<WithFrameInfo> {
@@ -179,6 +184,7 @@ pub(crate) mod tests {
     use crate::api::JxlDecoderOptions;
     use crate::error::Error;
     use crate::image::Image;
+    use crate::util::test::assert_almost_eq;
     use jxl_macros::for_each_test_file;
     use std::path::Path;
 
@@ -188,6 +194,7 @@ pub(crate) mod tests {
             decode(
                 &std::fs::read("resources/test/green_queen_vardct_e3.jxl").unwrap(),
                 u.arbitrary::<u8>().unwrap() as usize + 1,
+                false,
                 None,
             )
             .unwrap();
@@ -199,8 +206,9 @@ pub(crate) mod tests {
     pub fn decode(
         mut input: &[u8],
         chunk_size: usize,
+        use_simple_pipeline: bool,
         callback: Option<Box<dyn FnMut(&Frame, usize) -> Result<(), Error>>>,
-    ) -> Result<usize, Error> {
+    ) -> Result<(usize, Vec<Vec<Image<f32>>>), Error> {
         let options = JxlDecoderOptions::default();
         let mut initialized_decoder = JxlDecoder::<states::Initialized>::new(options);
 
@@ -233,6 +241,7 @@ pub(crate) mod tests {
 
         // Process until we have image info
         let mut decoder_with_image_info = advance_decoder!(initialized_decoder);
+        decoder_with_image_info.set_use_simple_pipeline(use_simple_pipeline);
 
         // Get basic info
         let basic_info = decoder_with_image_info.basic_info().clone();
@@ -250,6 +259,8 @@ pub(crate) mod tests {
 
         let num_channels = pixel_format.color_type.samples_per_pixel();
         assert!(num_channels > 0);
+
+        let mut frames = vec![];
 
         loop {
             // Process until we have frame info
@@ -279,7 +290,7 @@ pub(crate) mod tests {
             decoder_with_image_info = advance_decoder!(decoder_with_frame_info, &mut api_buffers);
 
             // All pixels should have been overwritten, so they should no longer be NaNs.
-            for buf in buffers {
+            for buf in buffers.iter() {
                 let (xs, ys) = buf.size();
                 for y in 0..ys {
                     for x in 0..xs {
@@ -288,6 +299,8 @@ pub(crate) mod tests {
                 }
             }
 
+            frames.push(buffers);
+
             // Check if there are more frames
             if !decoder_with_image_info.has_more_frames() {
                 let decoded_frames = decoder_with_image_info.decoded_frames();
@@ -295,15 +308,49 @@ pub(crate) mod tests {
                 // Ensure we decoded at least one frame
                 assert!(decoded_frames > 0, "No frames were decoded");
 
-                return Ok(decoded_frames);
+                return Ok((decoded_frames, frames));
             }
         }
     }
 
     fn decode_test_file(path: &Path) -> Result<(), Error> {
-        decode(&std::fs::read(path)?, usize::MAX, None)?;
+        decode(&std::fs::read(path)?, usize::MAX, false, None)?;
         Ok(())
     }
 
     for_each_test_file!(decode_test_file);
+
+    fn compare_pipelines(path: &Path) -> Result<(), Error> {
+        let file = std::fs::read(path)?;
+        let simple_frames = decode(&file, usize::MAX, true, None)?.1;
+        let frames = decode(&file, usize::MAX, false, None)?.1;
+        assert_eq!(frames.len(), simple_frames.len());
+        for (fc, (f, sf)) in frames
+            .into_iter()
+            .zip(simple_frames.into_iter())
+            .enumerate()
+        {
+            assert_eq!(
+                f.len(),
+                sf.len(),
+                "Frame {fc} has different channels counts",
+            );
+            for (c, (b, sb)) in f.into_iter().zip(sf.into_iter()).enumerate() {
+                assert_eq!(
+                    b.size(),
+                    sb.size(),
+                    "Channel {c} in frame {fc} has different sizes",
+                );
+                let sz = b.size();
+                for y in 0..sz.1 {
+                    for x in 0..sz.0 {
+                        assert_almost_eq(b.as_rect().row(y)[x], sb.as_rect().row(y)[x], 1e-5, 1e-5);
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
+    for_each_test_file!(compare_pipelines);
 }

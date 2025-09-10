@@ -19,7 +19,6 @@ use crate::{
         modular::GroupHeader,
     },
     image::{Image, Rect},
-    render::{RenderPipeline, SimpleRenderPipeline},
     util::{CeilLog2, tracing_wrappers::*},
 };
 
@@ -527,7 +526,7 @@ impl FullModularImage {
         section_id: usize,
         grid: usize,
         frame_header: &FrameHeader,
-        render_pipeline: &mut SimpleRenderPipeline,
+        pass_to_pipeline: &mut dyn FnMut(usize, usize, usize, Image<i32>),
     ) -> Result<()> {
         let mut maybe_output = |bi: &mut ModularBufferInfo, grid: usize| -> Result<()> {
             if bi.info.output_channel_idx >= 0 {
@@ -537,16 +536,11 @@ impl FullModularImage {
                 // TODO(veluca): figure out what to do with passes here.
                 if chan == 0 && self.modular_color_channels == 1 {
                     for i in 0..2 {
-                        render_pipeline.set_buffer_for_group(
-                            i,
-                            grid,
-                            1,
-                            buf.data.as_rect().to_image()?,
-                        );
+                        pass_to_pipeline(i, grid, 1, buf.data.as_rect().to_image()?);
                     }
-                    render_pipeline.set_buffer_for_group(2, grid, 1, buf.data);
+                    pass_to_pipeline(2, grid, 1, buf.data);
                 } else {
-                    render_pipeline.set_buffer_for_group(chan, grid, 1, buf.data);
+                    pass_to_pipeline(chan, grid, 1, buf.data);
                 }
             }
             Ok(())

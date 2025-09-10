@@ -177,10 +177,6 @@ impl CodestreamParser {
             self.frame_callback.as_mut().map_or(Ok(()), |cb| {
                 cb(self.frame.as_ref().unwrap(), self.decoded_frames)
             })?;
-        }
-
-        #[cfg(test)]
-        {
             self.decoded_frames += 1;
         }
 

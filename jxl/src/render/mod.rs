@@ -14,11 +14,13 @@ use crate::{
 };
 
 mod internal;
+mod low_memory_pipeline;
 mod simple_pipeline;
 pub mod stages;
 #[cfg(test)]
 mod test;
 
+pub use low_memory_pipeline::{LowMemoryRenderPipeline, LowMemoryRenderPipelineBuilder};
 pub use simple_pipeline::{SimpleRenderPipeline, SimpleRenderPipelineBuilder};
 
 /// Modifies channels in-place.
@@ -60,7 +62,8 @@ pub struct RenderPipelineInOutStage<
 /// `new_size` and `original_data_origin`.
 /// `process_row_chunk` will be called with the *new* image coordinates, and will only be called
 /// on row chunks outside of the original image data.
-/// After stages of this type, no stage can have a non-0 SHIFT_X or SHIFT_Y.
+/// After stages of this type, no stage can have a non-0 SHIFT_X, SHIFT_Y, BORDER_X or BORDER_Y.
+/// There can be at most one extend stage per image.
 pub struct RenderPipelineExtendStage<T: ImageDataType> {
     _phantom: PhantomData<T>,
 }
@@ -112,6 +115,7 @@ pub trait RenderPipelineBuilder: Sized {
         size: (usize, usize),
         downsampling_shift: usize,
         log_group_size: usize,
+        num_passes: usize,
     ) -> Self;
     fn add_stage<Stage: RenderPipelineStage>(self, stage: Stage) -> Result<Self>;
     fn add_save_stage(
@@ -122,7 +126,7 @@ pub trait RenderPipelineBuilder: Sized {
         color_type: JxlColorType,
         data_format: JxlDataFormat,
     ) -> Result<Self>;
-    fn build(self) -> Result<Self::RenderPipeline>;
+    fn build(self) -> Result<Box<Self::RenderPipeline>>;
 }
 
 pub trait RenderPipeline {

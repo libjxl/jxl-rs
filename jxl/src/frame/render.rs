@@ -3,6 +3,7 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
+use std::any::Any;
 use std::sync::Arc;
 
 use crate::api::JxlCms;
@@ -14,8 +15,7 @@ use crate::features::epf::create_sigma_image;
 use crate::headers::frame_header::Encoding;
 use crate::headers::{Orientation, color_encoding::ColorSpace, extra_channels::ExtraChannel};
 use crate::render::{
-    RenderPipeline, RenderPipelineBuilder, SimpleRenderPipeline, SimpleRenderPipelineBuilder,
-    stages::*,
+    LowMemoryRenderPipeline, RenderPipeline, RenderPipelineBuilder, SimpleRenderPipeline, stages::*,
 };
 use crate::{
     api::JxlPixelFormat,
@@ -24,17 +24,41 @@ use crate::{
     image::Image,
 };
 
+macro_rules! pipeline {
+    ($frame: expr, $pipeline: ident, $op: expr) => {
+        if $frame.use_simple_pipeline {
+            let $pipeline = $frame
+                .render_pipeline
+                .as_mut()
+                .unwrap()
+                .downcast_mut::<SimpleRenderPipeline>()
+                .unwrap();
+            $op
+        } else {
+            let $pipeline = $frame
+                .render_pipeline
+                .as_mut()
+                .unwrap()
+                .downcast_mut::<LowMemoryRenderPipeline>()
+                .unwrap();
+            $op
+        }
+    };
+}
+
+pub(crate) use pipeline;
+
 impl Frame {
     pub fn render_frame_output(
         &mut self,
         api_buffers: &mut Option<&mut [JxlOutputBuffer<'_>]>,
         pixel_format: &JxlPixelFormat,
     ) -> Result<()> {
-        let Some(render_pipeline) = self.render_pipeline.as_mut() else {
+        if self.render_pipeline.is_none() {
             // We don't yet have any output ready (as the pipeline would be initialized otherwise),
             // so exit without doing anything.
             return Ok(());
-        };
+        }
 
         let mut buffers: Vec<Option<JxlOutputBuffer>> = Vec::new();
 
@@ -78,25 +102,27 @@ impl Frame {
         };
 
         if buffers.iter().any(|b| b.is_some()) {
-            render_pipeline.do_render(&mut buffers[..])?;
+            pipeline!(self, p, p.do_render(&mut buffers[..])?);
         }
         Ok(())
     }
-    pub fn build_render_pipeline(
+
+    pub fn build_render_pipeline<T: RenderPipeline>(
         decoder_state: &DecoderState,
         frame_header: &FrameHeader,
         lf_global: &LfGlobalState,
         epf_sigma: &Option<Arc<Image<f32>>>,
         pixel_format: &JxlPixelFormat,
-    ) -> Result<SimpleRenderPipeline> {
+    ) -> Result<Box<T>> {
         let num_channels = frame_header.num_extra_channels as usize + 3;
         let num_temp_channels = if frame_header.has_noise() { 3 } else { 0 };
         let metadata = &decoder_state.file_header.image_metadata;
-        let mut pipeline = SimpleRenderPipelineBuilder::new(
+        let mut pipeline = T::Builder::new(
             num_channels + num_temp_channels,
             frame_header.size_upsampled(),
             frame_header.upsampling.ilog2() as usize,
             frame_header.log_group_dim(),
+            frame_header.passes.num_passes as usize,
         );
 
         if frame_header.encoding == Encoding::Modular {
@@ -407,27 +433,42 @@ impl Frame {
             None
         };
 
-        let render_pipeline = Self::build_render_pipeline(
-            &self.decoder_state,
-            &self.header,
-            lf_global,
-            &epf_sigma,
-            pixel_format,
-        )?;
-        self.render_pipeline = Some(render_pipeline);
-        if self.decoder_state.enable_output {
-            lf_global.modular_global.process_output(
-                0,
-                0,
+        let render_pipeline = if self.use_simple_pipeline {
+            Self::build_render_pipeline::<SimpleRenderPipeline>(
+                &self.decoder_state,
                 &self.header,
-                self.render_pipeline.as_mut().unwrap(),
-            )?;
+                lf_global,
+                &epf_sigma,
+                pixel_format,
+            )? as Box<dyn Any>
+        } else {
+            Self::build_render_pipeline::<LowMemoryRenderPipeline>(
+                &self.decoder_state,
+                &self.header,
+                lf_global,
+                &epf_sigma,
+                pixel_format,
+            )? as Box<dyn Any>
+        };
+        self.render_pipeline = Some(render_pipeline);
+
+        if self.decoder_state.enable_output {
+            let mut pass_to_pipeline = |chan, group, num_passes, image| {
+                pipeline!(
+                    self,
+                    p,
+                    p.set_buffer_for_group(chan, group, num_passes, image)
+                );
+            };
+            lf_global
+                .modular_global
+                .process_output(0, 0, &self.header, &mut pass_to_pipeline)?;
             for group in 0..self.header.num_lf_groups() {
                 lf_global.modular_global.process_output(
                     1,
                     group,
                     &self.header,
-                    self.render_pipeline.as_mut().unwrap(),
+                    &mut pass_to_pipeline,
                 )?;
             }
         }

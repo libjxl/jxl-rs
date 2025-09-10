@@ -104,4 +104,9 @@ impl JxlDecoderInner {
     pub fn has_more_frames(&self) -> bool {
         self.codestream_parser.has_more_frames
     }
+
+    #[cfg(test)]
+    pub(crate) fn set_use_simple_pipeline(&mut self, u: bool) {
+        self.codestream_parser.set_use_simple_pipeline(u);
+    }
 }

@@ -96,6 +96,7 @@ impl SimpleRenderPipelineBuilder {
         input_type: DataTypeTag,
         output_type: Option<DataTypeTag>,
         shift: (u8, u8),
+        border: (u8, u8),
         is_extend: bool,
     ) -> Result<Self> {
         let current_info = self.pipeline.channel_info.last().unwrap().clone();
@@ -132,8 +133,8 @@ impl SimpleRenderPipelineBuilder {
                 });
             }
         }
-        if !self.can_shift && shift != (0, 0) {
-            return Err(Error::PipelineShiftAfterExpand(stage.to_string()));
+        if !self.can_shift && (shift != (0, 0) || border != (0, 0) || is_extend) {
+            return Err(Error::PipelineInvalidStageAfterExtend(stage.to_string()));
         }
         if is_extend {
             self.can_shift = false;
@@ -157,6 +158,7 @@ impl RenderPipelineBuilder for SimpleRenderPipelineBuilder {
         size: (usize, usize),
         downsampling_shift: usize,
         log_group_size: usize,
+        _num_passes: usize,
     ) -> Self {
         // The 256 is an even number of cache lines, which makes round_up_size_to_two_cache_lines not round it up.
         // This is fine since it's also an even number of SIMD lanes - and when using borders in stages we round up
@@ -175,6 +177,7 @@ impl RenderPipelineBuilder for SimpleRenderPipelineBuilder {
             S::Type::INPUT_TYPE,
             S::Type::OUTPUT_TYPE,
             S::Type::SHIFT,
+            S::Type::BORDER,
             S::Type::TYPE == RenderPipelineStageType::Extend,
         )
     }
@@ -196,11 +199,11 @@ impl RenderPipelineBuilder for SimpleRenderPipelineBuilder {
             data_format,
         );
         let it = stage.input_type();
-        self.add_stage_internal(Stage::Save(stage), it, None, (0, 0), false)
+        self.add_stage_internal(Stage::Save(stage), it, None, (0, 0), (0, 0), false)
     }
 
     #[instrument(skip_all, err)]
-    fn build(mut self) -> Result<Self::RenderPipeline> {
+    fn build(mut self) -> Result<Box<Self::RenderPipeline>> {
         let channel_info = &mut self.pipeline.channel_info;
         let num_channels = channel_info[0].len();
         let mut cur_downsamples = vec![(0u8, 0u8); num_channels];
@@ -281,7 +284,7 @@ impl RenderPipelineBuilder for SimpleRenderPipelineBuilder {
             .collect();
         self.pipeline.input_buffers = input_buffers?;
 
-        Ok(self.pipeline)
+        Ok(Box::new(self.pipeline))
     }
 }
 
