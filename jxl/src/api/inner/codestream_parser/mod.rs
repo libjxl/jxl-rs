@@ -188,7 +188,7 @@ impl CodestreamParser {
                             break;
                         }
                     }
-                    match self.process_sections(&mut output_buffers) {
+                    match self.process_sections(decode_options, &mut output_buffers) {
                         Ok(None) => Ok(()),
                         Ok(Some(missing)) => Err(Error::OutOfBounds(missing)),
                         Err(Error::OutOfBounds(_)) => Err(Error::SectionTooShort),

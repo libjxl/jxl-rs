@@ -5,6 +5,7 @@
 
 use std::sync::Arc;
 
+use crate::api::JxlCms;
 use crate::api::JxlColorType;
 use crate::api::JxlDataFormat;
 use crate::api::JxlOutputBuffer;
@@ -393,7 +394,11 @@ impl Frame {
         pipeline.build()
     }
 
-    pub fn prepare_render_pipeline(&mut self, pixel_format: &JxlPixelFormat) -> Result<()> {
+    pub fn prepare_render_pipeline(
+        &mut self,
+        pixel_format: &JxlPixelFormat,
+        _cms: Option<&dyn JxlCms>,
+    ) -> Result<()> {
         let lf_global = self.lf_global.as_mut().unwrap();
         let epf_sigma = if self.header.restoration_filter.epf_iters > 0 {
             let sigma_image = create_sigma_image(&self.header, lf_global, &self.hf_meta)?;

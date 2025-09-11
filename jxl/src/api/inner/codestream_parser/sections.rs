@@ -3,7 +3,12 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-use crate::{api::JxlOutputBuffer, bit_reader::BitReader, error::Result, frame::Section};
+use crate::{
+    api::{JxlDecoderOptions, JxlOutputBuffer},
+    bit_reader::BitReader,
+    error::Result,
+    frame::Section,
+};
 
 use super::CodestreamParser;
 
@@ -38,6 +43,7 @@ fn retain_by_value<T>(vec: &mut Vec<T>, mut f: impl FnMut(T) -> Option<T>) {
 impl CodestreamParser {
     pub(super) fn process_sections(
         &mut self,
+        decode_options: &JxlDecoderOptions,
         output_buffers: &mut Option<&mut [JxlOutputBuffer<'_>]>,
     ) -> Result<Option<usize>> {
         // Dequeue ready sections.
@@ -65,7 +71,10 @@ impl CodestreamParser {
             frame.decode_lf_global(&mut br)?;
             frame.decode_lf_group(0, &mut br)?;
             frame.decode_hf_global(&mut br)?;
-            frame.prepare_render_pipeline(self.pixel_format.as_ref().unwrap())?;
+            frame.prepare_render_pipeline(
+                self.pixel_format.as_ref().unwrap(),
+                decode_options.cms.as_deref(),
+            )?;
             frame.finalize_lf()?;
             frame.decode_hf_group(0, 0, &mut br)?;
             self.available_sections.clear();
@@ -134,7 +143,10 @@ impl CodestreamParser {
 
             if let Some(hf_global) = hf_global_section {
                 frame.decode_hf_global(&mut BitReader::new(&hf_global.data))?;
-                frame.prepare_render_pipeline(self.pixel_format.as_ref().unwrap())?;
+                frame.prepare_render_pipeline(
+                    self.pixel_format.as_ref().unwrap(),
+                    decode_options.cms.as_deref(),
+                )?;
                 frame.finalize_lf()?;
             }
 
