@@ -3,6 +3,8 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
+use crate::api::JxlCms;
+
 pub enum JxlProgressiveMode {
     /// Renders all pixels in every call to Process.
     Eager,
@@ -23,6 +25,7 @@ pub struct JxlDecoderOptions {
     pub progressive_mode: JxlProgressiveMode,
     pub xyb_output_linear: bool,
     pub enable_output: bool,
+    pub cms: Option<Box<dyn JxlCms>>,
 }
 
 impl Default for JxlDecoderOptions {
@@ -37,6 +40,7 @@ impl Default for JxlDecoderOptions {
             progressive_mode: JxlProgressiveMode::Pass,
             xyb_output_linear: true,
             enable_output: true,
+            cms: None,
         }
     }
 }

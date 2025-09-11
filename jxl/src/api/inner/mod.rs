@@ -10,7 +10,7 @@ use crate::{
     error::{Error, Result},
 };
 
-use super::{JxlBasicInfo, JxlCms, JxlColorProfile, JxlDecoderOptions, JxlPixelFormat};
+use super::{JxlBasicInfo, JxlColorProfile, JxlDecoderOptions, JxlPixelFormat};
 use box_parser::BoxParser;
 use codestream_parser::CodestreamParser;
 
@@ -21,17 +21,15 @@ mod process;
 /// Low-level, less-type-safe API.
 pub struct JxlDecoderInner {
     options: JxlDecoderOptions,
-    cms: Option<Box<dyn JxlCms>>,
     box_parser: BoxParser,
     codestream_parser: CodestreamParser,
 }
 
 impl JxlDecoderInner {
     /// Creates a new decoder with the given options and, optionally, CMS.
-    pub fn new(options: JxlDecoderOptions, cms: Option<Box<dyn JxlCms>>) -> Self {
+    pub fn new(options: JxlDecoderOptions) -> Self {
         JxlDecoderInner {
             options,
-            cms,
             box_parser: BoxParser::new(),
             codestream_parser: CodestreamParser::new(),
         }
@@ -64,8 +62,8 @@ impl JxlDecoderInner {
 
     /// Specifies the preferred color profile to be used for outputting data.
     /// Same semantics as JxlDecoderSetOutputColorProfile.
-    pub fn set_output_color_profile(&mut self, profile: &JxlColorProfile) -> Result<()> {
-        if let (JxlColorProfile::Icc(_), None) = (profile, &self.cms) {
+    pub fn set_output_color_profile(&mut self, profile: JxlColorProfile) -> Result<()> {
+        if let (JxlColorProfile::Icc(_), None) = (profile, &self.options.cms) {
             return Err(Error::ICCOutputNoCMS);
         }
         unimplemented!()

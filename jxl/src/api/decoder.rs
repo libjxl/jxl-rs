@@ -4,7 +4,7 @@
 // license that can be found in the LICENSE file.
 
 use super::{
-    JxlBasicInfo, JxlBitstreamInput, JxlCms, JxlColorProfile, JxlDecoderInner, JxlDecoderOptions,
+    JxlBasicInfo, JxlBitstreamInput, JxlColorProfile, JxlDecoderInner, JxlDecoderOptions,
     JxlOutputBuffer, JxlPixelFormat, ProcessingResult,
 };
 #[cfg(test)]
@@ -80,11 +80,7 @@ impl<S: JxlState> JxlDecoder<S> {
 
 impl JxlDecoder<Initialized> {
     pub fn new(options: JxlDecoderOptions) -> Self {
-        Self::wrap_inner(JxlDecoderInner::new(options, None))
-    }
-
-    pub fn new_with_cms(options: JxlDecoderOptions, cms: impl JxlCms + 'static) -> Self {
-        Self::wrap_inner(JxlDecoderInner::new(options, Some(Box::new(cms))))
+        Self::wrap_inner(JxlDecoderInner::new(options))
     }
 
     pub fn process(
@@ -116,7 +112,7 @@ impl JxlDecoder<WithImageInfo> {
 
     /// Specifies the preferred color profile to be used for outputting data.
     /// Same semantics as JxlDecoderSetOutputColorProfile.
-    pub fn set_output_color_profile(&mut self, profile: &JxlColorProfile) -> Result<()> {
+    pub fn set_output_color_profile(&mut self, profile: JxlColorProfile) -> Result<()> {
         self.inner.set_output_color_profile(profile)
     }
 
