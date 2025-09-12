@@ -9,8 +9,6 @@ pub struct NearestNeighbourUpsample {
 }
 
 impl NearestNeighbourUpsample {
-    // TODO(veluca): this probably should be #[cfg(test)]
-    #[allow(dead_code)]
     pub fn new(channel: usize) -> NearestNeighbourUpsample {
         NearestNeighbourUpsample { channel }
     }
