@@ -10,7 +10,6 @@ mod epf;
 mod extend;
 mod from_linear;
 mod gaborish;
-mod nearest_neighbor;
 mod noise;
 mod patches;
 mod splines;
@@ -19,6 +18,9 @@ mod to_linear;
 mod upsample;
 mod xyb;
 mod ycbcr;
+
+#[cfg(test)]
+mod nearest_neighbor;
 
 pub use blending::*;
 pub use chroma_upsample::*;
