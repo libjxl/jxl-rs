@@ -3,16 +3,16 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-use internal::RenderPipelineStageInfo;
+use internal::{BoxedStage, RenderPipelineShared, RenderPipelineStageInfo};
 use std::{any::Any, marker::PhantomData};
 
 use crate::{
-    api::{JxlColorType, JxlDataFormat, JxlOutputBuffer},
+    api::JxlOutputBuffer,
     error::Result,
-    headers::Orientation,
     image::{Image, ImageDataType},
 };
 
+mod builder;
 mod internal;
 mod low_memory_pipeline;
 mod save;
@@ -21,8 +21,9 @@ pub mod stages;
 #[cfg(test)]
 mod test;
 
-pub use low_memory_pipeline::{LowMemoryRenderPipeline, LowMemoryRenderPipelineBuilder};
-pub use simple_pipeline::{SimpleRenderPipeline, SimpleRenderPipelineBuilder};
+pub(crate) use builder::RenderPipelineBuilder;
+pub(crate) use low_memory_pipeline::LowMemoryRenderPipeline;
+pub(crate) use simple_pipeline::SimpleRenderPipeline;
 
 /// Modifies channels in-place.
 ///
@@ -109,29 +110,10 @@ pub trait RenderPipelineStage: Any + std::fmt::Display {
     }
 }
 
-pub trait RenderPipelineBuilder: Sized {
-    type RenderPipeline: RenderPipeline;
-    fn new(
-        num_channels: usize,
-        size: (usize, usize),
-        downsampling_shift: usize,
-        log_group_size: usize,
-        num_passes: usize,
-    ) -> Self;
-    fn add_stage<Stage: RenderPipelineStage>(self, stage: Stage) -> Result<Self>;
-    fn add_save_stage(
-        self,
-        channels: &[usize],
-        orientation: Orientation,
-        output_buffer_index: usize,
-        color_type: JxlColorType,
-        data_format: JxlDataFormat,
-    ) -> Result<Self>;
-    fn build(self) -> Result<Box<Self::RenderPipeline>>;
-}
+pub(crate) trait RenderPipeline: Sized {
+    type BoxedStage: BoxedStage;
 
-pub trait RenderPipeline {
-    type Builder: RenderPipelineBuilder<RenderPipeline = Self>;
+    fn new_from_shared(shared: RenderPipelineShared<Self::BoxedStage>) -> Result<Self>;
 
     /// Obtains a buffer suitable for storing the input at  channel `channel` of group `group_id`.
     /// This *might* be a buffer that was used to store that channel for that group in a previous

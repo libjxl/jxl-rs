@@ -9,7 +9,7 @@ use crate::{
     api::{Endianness, JxlDataFormat, JxlOutputBuffer},
     error::{Error, Result},
     headers::Orientation,
-    image::{DataTypeTag, Image},
+    image::Image,
     render::save::SaveStage,
 };
 
@@ -95,14 +95,6 @@ impl SaveStage {
             }
         }
         Ok(())
-    }
-
-    pub(super) fn uses_channel(&self, c: usize) -> bool {
-        self.channels.contains(&c)
-    }
-
-    pub(super) fn input_type(&self) -> DataTypeTag {
-        self.data_format.data_type()
     }
 }
 

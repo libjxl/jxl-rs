@@ -6,6 +6,7 @@
 use crate::{
     api::{JxlColorType, JxlDataFormat},
     headers::Orientation,
+    image::DataTypeTag,
 };
 
 pub struct SaveStage {
@@ -40,6 +41,14 @@ impl SaveStage {
             color_type,
             data_format,
         }
+    }
+
+    pub fn uses_channel(&self, c: usize) -> bool {
+        self.channels.contains(&c)
+    }
+
+    pub fn input_type(&self) -> DataTypeTag {
+        self.data_format.data_type()
     }
 }
 

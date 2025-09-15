@@ -107,7 +107,7 @@ impl Frame {
         Ok(())
     }
 
-    pub fn build_render_pipeline<T: RenderPipeline>(
+    pub(crate) fn build_render_pipeline<T: RenderPipeline>(
         decoder_state: &DecoderState,
         frame_header: &FrameHeader,
         lf_global: &LfGlobalState,
@@ -117,7 +117,7 @@ impl Frame {
         let num_channels = frame_header.num_extra_channels as usize + 3;
         let num_temp_channels = if frame_header.has_noise() { 3 } else { 0 };
         let metadata = &decoder_state.file_header.image_metadata;
-        let mut pipeline = T::Builder::new(
+        let mut pipeline = RenderPipelineBuilder::<T>::new(
             num_channels + num_temp_channels,
             frame_header.size_upsampled(),
             frame_header.upsampling.ilog2() as usize,

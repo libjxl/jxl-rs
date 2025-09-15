@@ -3,337 +3,132 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-use std::any::Any;
+use std::{any::Any, fmt::Display, ops::ControlFlow};
 
 use crate::{
     BLOCK_DIM,
-    api::{JxlColorType, JxlDataFormat, JxlOutputBuffer},
-    error::{Error, Result},
-    headers::Orientation,
+    api::JxlOutputBuffer,
+    error::Result,
     image::{DataTypeTag, Image, ImageDataType},
-    render::internal::RenderPipelineStageInfo,
+    render::internal::{ChannelInfo, RenderPipelineStageInfo},
     simd::round_up_size_to_two_cache_lines,
     util::{ShiftRightCeil, tracing_wrappers::*},
 };
 
 use super::{
-    RenderPipeline, RenderPipelineBuilder, RenderPipelineExtendStage, RenderPipelineInOutStage,
-    RenderPipelineInPlaceStage, RenderPipelineStage, internal::RenderPipelineStageType,
-    save::SaveStage,
+    BoxedStage, RenderPipeline, RenderPipelineExtendStage, RenderPipelineInOutStage,
+    RenderPipelineInPlaceStage, RenderPipelineStage,
+    internal::{RenderPipelineShared, Stage},
 };
 
 mod save;
-
-enum Stage {
-    Process(Box<dyn RunStage>),
-    Save(SaveStage),
-}
-
-impl std::fmt::Display for Stage {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Stage::Process(s) => write!(f, "{}", s),
-            Stage::Save(s) => write!(f, "{}", s),
-        }
-    }
-}
-
-#[derive(Clone, Debug)]
-struct ChannelInfo {
-    ty: Option<DataTypeTag>,
-    downsample: (u8, u8),
-}
-
-pub struct SimpleRenderPipelineBuilder {
-    pipeline: SimpleRenderPipeline,
-    can_shift: bool,
-}
-
-impl SimpleRenderPipelineBuilder {
-    #[instrument(level = "debug")]
-    pub(super) fn new_with_chunk_size(
-        num_channels: usize,
-        size: (usize, usize),
-        downsampling_shift: usize,
-        mut log_group_size: usize,
-        chunk_size: usize,
-    ) -> Self {
-        info!("creating simple pipeline");
-        assert!(chunk_size <= u16::MAX as usize);
-        assert_ne!(chunk_size, 0);
-        // The number of pixels that a group encompasses in the final, upsampled image along one dimension is effectively multiplied by the upsampling factor.
-        log_group_size += downsampling_shift;
-        SimpleRenderPipelineBuilder {
-            pipeline: SimpleRenderPipeline {
-                channel_info: vec![vec![
-                    ChannelInfo {
-                        ty: None,
-                        downsample: (0, 0)
-                    };
-                    num_channels
-                ]],
-                input_size: size,
-                log_group_size,
-                xgroups: size.0.shrc(log_group_size),
-                stages: vec![],
-                group_chan_ready_passes: vec![
-                    vec![0; num_channels];
-                    size.0.shrc(log_group_size)
-                        * size.1.shrc(log_group_size)
-                ],
-                completed_passes: 0,
-                input_buffers: vec![],
-                chunk_size,
-            },
-            can_shift: true,
-        }
-    }
-
-    fn add_stage_internal(
-        mut self,
-        stage: Stage,
-        input_type: DataTypeTag,
-        output_type: Option<DataTypeTag>,
-        shift: (u8, u8),
-        border: (u8, u8),
-        is_extend: bool,
-    ) -> Result<Self> {
-        let current_info = self.pipeline.channel_info.last().unwrap().clone();
-        debug!(
-            last_stage_channel_info = ?current_info,
-            can_shift = self.can_shift,
-            "adding stage '{stage}'",
-        );
-        let mut after_info = vec![];
-        for (c, info) in current_info.iter().enumerate() {
-            let uses_channel = match &stage {
-                Stage::Process(s) => s.uses_channel(c),
-                Stage::Save(s) => s.uses_channel(c),
-            };
-            if !uses_channel {
-                after_info.push(ChannelInfo {
-                    ty: info.ty,
-                    downsample: (0, 0),
-                });
-            } else {
-                if let Some(ty) = info.ty
-                    && ty != input_type
-                {
-                    return Err(Error::PipelineChannelTypeMismatch(
-                        stage.to_string(),
-                        c,
-                        input_type,
-                        ty,
-                    ));
-                }
-                after_info.push(ChannelInfo {
-                    ty: Some(output_type.unwrap_or(input_type)),
-                    downsample: shift,
-                });
-            }
-        }
-        if !self.can_shift && (shift != (0, 0) || border != (0, 0) || is_extend) {
-            return Err(Error::PipelineInvalidStageAfterExtend(stage.to_string()));
-        }
-        if is_extend {
-            self.can_shift = false;
-        }
-        debug!(
-            new_channel_info = ?after_info,
-            can_shift = self.can_shift,
-            "added stage '{stage}'",
-        );
-        self.pipeline.channel_info.push(after_info);
-        self.pipeline.stages.push(stage);
-        Ok(self)
-    }
-}
-
-impl RenderPipelineBuilder for SimpleRenderPipelineBuilder {
-    type RenderPipeline = SimpleRenderPipeline;
-
-    fn new(
-        num_channels: usize,
-        size: (usize, usize),
-        downsampling_shift: usize,
-        log_group_size: usize,
-        _num_passes: usize,
-    ) -> Self {
-        // The 256 is an even number of cache lines, which makes round_up_size_to_two_cache_lines not round it up.
-        // This is fine since it's also an even number of SIMD lanes - and when using borders in stages we round up
-        // chunk_size + border * 2, and again get space for full SIMD lane loading.
-        // If the chunk size is less than an even number of SIMD lanes, then rounding up chunk_size + border * 2 might
-        // end up with an uneven number of SIMD lanes to read the full chunk.
-        // Example: chunk_size=3833, border=1, round_up_size_to_two_cache_lines(chunk_size + border * 2)=3840,
-        //          reading the last border pixel will then read a lane outside the buffer.
-        Self::new_with_chunk_size(num_channels, size, downsampling_shift, log_group_size, 256)
-    }
-
-    #[instrument(skip_all, err)]
-    fn add_stage<S: RenderPipelineStage>(self, stage: S) -> Result<Self> {
-        self.add_stage_internal(
-            Stage::Process(Box::new(stage)),
-            S::Type::INPUT_TYPE,
-            S::Type::OUTPUT_TYPE,
-            S::Type::SHIFT,
-            S::Type::BORDER,
-            S::Type::TYPE == RenderPipelineStageType::Extend,
-        )
-    }
-
-    #[instrument(skip_all, err)]
-    fn add_save_stage(
-        self,
-        channels: &[usize],
-        orientation: Orientation,
-        output_buffer_index: usize,
-        color_type: JxlColorType,
-        data_format: JxlDataFormat,
-    ) -> Result<Self> {
-        let stage = SaveStage::new(
-            channels,
-            orientation,
-            output_buffer_index,
-            color_type,
-            data_format,
-        );
-        let it = stage.input_type();
-        self.add_stage_internal(Stage::Save(stage), it, None, (0, 0), (0, 0), false)
-    }
-
-    #[instrument(skip_all, err)]
-    fn build(mut self) -> Result<Box<Self::RenderPipeline>> {
-        let channel_info = &mut self.pipeline.channel_info;
-        let num_channels = channel_info[0].len();
-        let mut cur_downsamples = vec![(0u8, 0u8); num_channels];
-        for (s, stage) in self.pipeline.stages.iter().enumerate().rev() {
-            let [current_info, next_info, ..] = &mut channel_info[s..] else {
-                unreachable!()
-            };
-            for chan in 0..num_channels {
-                let cur_chan = &mut current_info[chan];
-                let next_chan = &mut next_info[chan];
-                let (uses_channel, input_type) = match stage {
-                    Stage::Process(s) => {
-                        let uses_channel = s.uses_channel(chan);
-                        if uses_channel {
-                            assert_eq!(Some(s.output_type()), next_chan.ty);
-                        }
-                        (uses_channel, s.input_type())
-                    }
-                    Stage::Save(s) => (s.uses_channel(chan), s.input_type()),
-                };
-
-                if cur_chan.ty.is_none() {
-                    cur_chan.ty = if uses_channel {
-                        Some(input_type)
-                    } else {
-                        next_chan.ty
-                    }
-                }
-                // Arithmetic overflows here should be very uncommon, so custom error variants
-                // are probably unwarranted.
-                let cur_downsample = &mut cur_downsamples[chan];
-                let next_downsample = &mut next_chan.downsample;
-                let next_total_downsample = *cur_downsample;
-                cur_downsample.0 = cur_downsample
-                    .0
-                    .checked_add(next_downsample.0)
-                    .ok_or(Error::ArithmeticOverflow)?;
-                cur_downsample.1 = cur_downsample
-                    .1
-                    .checked_add(next_downsample.1)
-                    .ok_or(Error::ArithmeticOverflow)?;
-                *next_downsample = next_total_downsample;
-            }
-        }
-        for (chan, cur_downsample) in cur_downsamples.iter().enumerate() {
-            channel_info[0][chan].downsample = *cur_downsample;
-        }
-        #[cfg(feature = "tracing")]
-        {
-            for (s, (current_info, stage)) in channel_info
-                .iter()
-                .zip(self.pipeline.stages.iter())
-                .enumerate()
-            {
-                debug!("final channel info before stage {s} '{stage}': {current_info:?}");
-            }
-            debug!(
-                "final channel info after all stages {:?}",
-                channel_info.last().unwrap()
-            );
-        }
-
-        // Ensure all channels have been used, so that we know the types of all buffers at all
-        // stages.
-        for (c, chinfo) in channel_info.iter().flat_map(|x| x.iter().enumerate()) {
-            if chinfo.ty.is_none() {
-                return Err(Error::PipelineChannelUnused(c));
-            }
-        }
-
-        let input_buffers: Result<_> = channel_info[0]
-            .iter()
-            .map(|x| {
-                let xsize = self.pipeline.input_size.0.shrc(x.downsample.0);
-                let ysize = self.pipeline.input_size.1.shrc(x.downsample.1);
-                Image::new((xsize, ysize))
-            })
-            .collect();
-        self.pipeline.input_buffers = input_buffers?;
-
-        Ok(Box::new(self.pipeline))
-    }
-}
 
 /// A RenderPipeline that waits for all input of a pass to be ready before doing any rendering, and
 /// prioritizes simplicity over memory usage and computational efficiency.
 /// Eventually meant to be used only for verification purposes.
 pub struct SimpleRenderPipeline {
-    channel_info: Vec<Vec<ChannelInfo>>,
-    input_size: (usize, usize),
-    log_group_size: usize,
-    xgroups: usize,
-    stages: Vec<Stage>,
-    group_chan_ready_passes: Vec<Vec<usize>>,
-    completed_passes: usize,
+    shared: RenderPipelineShared<Box<dyn RunStage>>,
     input_buffers: Vec<Image<f64>>,
-    chunk_size: usize,
 }
 
 fn clone_images<T: ImageDataType>(images: &[Image<T>]) -> Result<Vec<Image<T>>> {
     images.iter().map(|x| x.as_rect().to_image()).collect()
 }
 
-impl SimpleRenderPipeline {
+impl RenderPipeline for SimpleRenderPipeline {
+    type BoxedStage = Box<dyn RunStage>;
+
+    fn new_from_shared(shared: RenderPipelineShared<Self::BoxedStage>) -> Result<Self> {
+        let input_buffers = shared.channel_info[0]
+            .iter()
+            .map(|x| {
+                let xsize = shared.input_size.0.shrc(x.downsample.0);
+                let ysize = shared.input_size.1.shrc(x.downsample.1);
+                Image::new((xsize, ysize))
+            })
+            .collect::<Result<Vec<_>>>()?;
+
+        Ok(Self {
+            shared,
+            input_buffers,
+        })
+    }
+
+    #[instrument(skip_all, err)]
+    fn get_buffer_for_group<T: ImageDataType>(
+        &mut self,
+        channel: usize,
+        group_id: usize,
+    ) -> Result<Image<T>> {
+        let sz = self
+            .shared
+            .group_size_for_channel(channel, group_id, T::DATA_TYPE_ID);
+        Image::<T>::new(sz)
+    }
+
+    fn set_buffer_for_group<T: ImageDataType>(
+        &mut self,
+        channel: usize,
+        group_id: usize,
+        num_passes: usize,
+        buf: Image<T>,
+    ) {
+        debug!(
+            "filling data for group {}, channel {}, using type {:?}",
+            group_id,
+            channel,
+            T::DATA_TYPE_ID,
+        );
+        let sz = self
+            .shared
+            .group_size_for_channel(channel, group_id, T::DATA_TYPE_ID);
+        let goffset = self.shared.group_offset(group_id);
+        let ChannelInfo { ty, downsample } = self.shared.channel_info[0][channel];
+        let off = (goffset.0 >> downsample.0, goffset.1 >> downsample.1);
+        debug!(?sz, input_buffers_sz=?self.input_buffers[channel].size(), offset=?off, ?downsample, ?goffset);
+        let bsz = buf.size();
+        assert!(sz.0 <= bsz.0);
+        assert!(sz.1 <= bsz.1);
+        assert!(sz.0 + BLOCK_DIM > bsz.0);
+        assert!(sz.1 + BLOCK_DIM > bsz.1);
+        let ty = ty.unwrap();
+        assert_eq!(ty, T::DATA_TYPE_ID);
+        for y in 0..sz.1 {
+            for x in 0..sz.0 {
+                self.input_buffers[channel].as_rect_mut().row(y + off.1)[x + off.0] =
+                    buf.as_rect().row(y)[x].to_f64();
+            }
+        }
+        self.shared.group_chan_ready_passes[group_id][channel] += num_passes;
+    }
+
     #[instrument(skip_all, err)]
     fn do_render(&mut self, buffers: &mut [Option<JxlOutputBuffer>]) -> Result<()> {
         let ready_passes = self
+            .shared
             .group_chan_ready_passes
             .iter()
             .flat_map(|x| x.iter())
             .copied()
             .min()
             .unwrap();
-        if ready_passes <= self.completed_passes {
+        if ready_passes <= self.shared.completed_passes {
             debug!(
                 "no more ready passes ({} completed, {ready_passes} ready)",
-                self.completed_passes
+                self.shared.completed_passes
             );
             return Ok(());
         }
         debug!(
             "new ready passes ({} completed, {ready_passes} ready)",
-            self.completed_passes
+            self.shared.completed_passes
         );
-        self.completed_passes = ready_passes;
 
         let mut current_buffers = clone_images(&self.input_buffers)?;
 
-        let mut current_size = self.input_size;
+        let mut current_size = self.shared.input_size;
 
-        for (i, stage) in self.stages.iter().enumerate() {
+        for (i, stage) in self.shared.stages.iter().enumerate() {
             debug!("running stage {i}: {stage}");
             let mut output_buffers = clone_images(&current_buffers)?;
             match stage {
@@ -341,7 +136,7 @@ impl SimpleRenderPipeline {
                     // Replace buffers of different sizes.
                     if stage.shift() != (0, 0) || stage.new_size(current_size) != current_size {
                         current_size = stage.new_size(current_size);
-                        for (c, info) in self.channel_info[i + 1].iter().enumerate() {
+                        for (c, info) in self.shared.channel_info[i + 1].iter().enumerate() {
                             if stage.uses_channel(c) {
                                 let xsize = current_size.0.shrc(info.downsample.0);
                                 let ysize = current_size.1.shrc(info.downsample.1);
@@ -364,7 +159,7 @@ impl SimpleRenderPipeline {
                         .collect();
                     let mut state = stage.init_local_state()?;
                     stage.run_stage_on(
-                        self.chunk_size,
+                        self.shared.chunk_size,
                         &input_buf,
                         &mut output_buf,
                         state.as_deref_mut(),
@@ -377,112 +172,13 @@ impl SimpleRenderPipeline {
             current_buffers = output_buffers;
         }
 
+        self.shared.completed_passes = ready_passes;
+
         Ok(())
     }
 
-    fn group_position(&self, group_id: usize) -> (usize, usize) {
-        (group_id % self.xgroups, group_id / self.xgroups)
-    }
-
-    fn group_offset(&self, group_id: usize) -> (usize, usize) {
-        let group = self.group_position(group_id);
-        (
-            group.0 << self.log_group_size,
-            group.1 << self.log_group_size,
-        )
-    }
-
-    fn group_size(&self, group_id: usize) -> (usize, usize) {
-        let goffset = self.group_offset(group_id);
-        (
-            self.input_size
-                .0
-                .min(goffset.0 + (1 << self.log_group_size))
-                - goffset.0,
-            self.input_size
-                .1
-                .min(goffset.1 + (1 << self.log_group_size))
-                - goffset.1,
-        )
-    }
-
-    fn group_size_for_channel(
-        &self,
-        channel: usize,
-        group_id: usize,
-        requested_data_type: DataTypeTag,
-    ) -> (usize, usize) {
-        let goffset = self.group_offset(group_id);
-        let ChannelInfo { downsample, ty } = self.channel_info[0][channel];
-        if ty.unwrap() != requested_data_type {
-            panic!(
-                "Invalid pipeline usage: incorrect channel type, requested {:?}, but pipeline wants {ty:?}",
-                requested_data_type
-            );
-        }
-        assert_eq!(goffset.0 % (1 << downsample.0), 0);
-        assert_eq!(goffset.1 % (1 << downsample.1), 0);
-        let group_size = self.group_size(group_id);
-        (
-            group_size.0.shrc(downsample.0),
-            group_size.1.shrc(downsample.1),
-        )
-    }
-}
-
-impl RenderPipeline for SimpleRenderPipeline {
-    type Builder = SimpleRenderPipelineBuilder;
-
-    #[instrument(skip_all, err)]
-    fn get_buffer_for_group<T: ImageDataType>(
-        &mut self,
-        channel: usize,
-        group_id: usize,
-    ) -> Result<Image<T>> {
-        let sz = self.group_size_for_channel(channel, group_id, T::DATA_TYPE_ID);
-        Image::<T>::new(sz)
-    }
-
-    fn set_buffer_for_group<T: ImageDataType>(
-        &mut self,
-        channel: usize,
-        group_id: usize,
-        num_passes: usize,
-        buf: Image<T>,
-    ) {
-        debug!(
-            "filling data for group {}, channel {}, using type {:?}",
-            group_id,
-            channel,
-            T::DATA_TYPE_ID,
-        );
-        let sz = self.group_size_for_channel(channel, group_id, T::DATA_TYPE_ID);
-        let goffset = self.group_offset(group_id);
-        let ChannelInfo { ty, downsample } = self.channel_info[0][channel];
-        let off = (goffset.0 >> downsample.0, goffset.1 >> downsample.1);
-        debug!(?sz, input_buffers_sz=?self.input_buffers[channel].size(), offset=?off, ?downsample, ?goffset);
-        let bsz = buf.size();
-        assert!(sz.0 <= bsz.0);
-        assert!(sz.1 <= bsz.1);
-        assert!(sz.0 + BLOCK_DIM > bsz.0);
-        assert!(sz.1 + BLOCK_DIM > bsz.1);
-        let ty = ty.unwrap();
-        assert_eq!(ty, T::DATA_TYPE_ID);
-        for y in 0..sz.1 {
-            for x in 0..sz.0 {
-                self.input_buffers[channel].as_rect_mut().row(y + off.1)[x + off.0] =
-                    buf.as_rect().row(y)[x].to_f64();
-            }
-        }
-        self.group_chan_ready_passes[group_id][channel] += num_passes;
-    }
-
-    fn do_render(&mut self, buffers: &mut [Option<JxlOutputBuffer>]) -> Result<()> {
-        self.do_render(buffers)
-    }
-
     fn num_groups(&self) -> usize {
-        self.xgroups * self.input_size.1.shrc(self.log_group_size)
+        self.shared.num_groups()
     }
 }
 
@@ -761,7 +457,7 @@ impl<T: ImageDataType> RenderPipelineRunStage for RenderPipelineExtendStage<T> {
     }
 }
 
-trait RunStage: Any + std::fmt::Display {
+pub(crate) trait RunStage: Any + Display {
     fn run_stage_on(
         &self,
         chunk_size: usize,
@@ -808,5 +504,20 @@ impl<T: RenderPipelineStage> RunStage for T {
     }
     fn output_type(&self) -> DataTypeTag {
         T::Type::OUTPUT_TYPE.unwrap_or(T::Type::INPUT_TYPE)
+    }
+}
+
+impl BoxedStage for Box<dyn RunStage> {
+    fn new<S: RenderPipelineStage>(stage: S) -> Self {
+        Box::new(stage)
+    }
+    fn uses_channel(&self, c: usize) -> bool {
+        (**self).uses_channel(c)
+    }
+    fn input_type(&self) -> DataTypeTag {
+        (**self).input_type()
+    }
+    fn output_type(&self) -> DataTypeTag {
+        (**self).output_type()
     }
 }

@@ -8,13 +8,13 @@ use crate::{
     error::Result,
     headers::Orientation,
     image::{DataTypeTag, Image, ImageDataType},
+    render::SimpleRenderPipeline,
     util::{ShiftRightCeil, tracing_wrappers::instrument},
 };
 use rand::SeedableRng;
 
 use super::{
     RenderPipeline, RenderPipelineBuilder, RenderPipelineStage, internal::RenderPipelineStageInfo,
-    simple_pipeline::SimpleRenderPipelineBuilder,
 };
 
 pub(super) fn make_and_run_simple_pipeline<
@@ -35,11 +35,12 @@ pub(super) fn make_and_run_simple_pipeline<
         .iter()
         .map(|x| stage.uses_channel(*x))
         .collect();
-    let mut pipeline = SimpleRenderPipelineBuilder::new_with_chunk_size(
+    let mut pipeline = RenderPipelineBuilder::<SimpleRenderPipeline>::new_with_chunk_size(
         input_images.len(),
         image_size,
         downsampling_shift,
         LOG_GROUP_SIZE,
+        1,
         chunk_size,
     )
     .add_stage(stage)?;

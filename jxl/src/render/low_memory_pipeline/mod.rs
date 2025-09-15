@@ -1,59 +1,25 @@
-use crate::api::{JxlColorType, JxlDataFormat, JxlOutputBuffer};
+use std::fmt::Display;
+
+use crate::api::JxlOutputBuffer;
 use crate::image::{Image, ImageDataType};
 use crate::util::tracing_wrappers::*;
-use crate::{error::Result, headers::Orientation};
+use crate::error::Result;
 
-use super::{RenderPipeline, RenderPipelineBuilder, RenderPipelineStage};
+use super::internal::{BoxedStage, RenderPipelineShared};
+use super::{RenderPipeline, RenderPipelineStage};
 
 mod save;
-mod stage;
 
 pub struct LowMemoryRenderPipeline {
     //
 }
 
-pub struct LowMemoryRenderPipelineBuilder {
-    //
-}
-
-impl RenderPipelineBuilder for LowMemoryRenderPipelineBuilder {
-    type RenderPipeline = LowMemoryRenderPipeline;
-
-    fn new(
-        num_channels: usize,
-        size: (usize, usize),
-        downsampling_shift: usize,
-        log_group_size: usize,
-        num_passes: usize,
-    ) -> Self {
-        todo!()
-    }
-
-    #[instrument(skip_all, err)]
-    fn add_stage<S: RenderPipelineStage>(self, stage: S) -> Result<Self> {
-        todo!()
-    }
-
-    #[instrument(skip_all, err)]
-    fn add_save_stage(
-        self,
-        channels: &[usize],
-        orientation: Orientation,
-        output_buffer_index: usize,
-        color_type: JxlColorType,
-        data_format: JxlDataFormat,
-    ) -> Result<Self> {
-        todo!()
-    }
-
-    #[instrument(skip_all, err)]
-    fn build(mut self) -> Result<Box<Self::RenderPipeline>> {
-        todo!()
-    }
-}
-
 impl RenderPipeline for LowMemoryRenderPipeline {
-    type Builder = LowMemoryRenderPipelineBuilder;
+    type BoxedStage = Box<dyn RunStage>; // TODO
+
+    fn new_from_shared(shared: RenderPipelineShared<Self::BoxedStage>) -> Result<Self> {
+        todo!()
+    }
 
     #[instrument(skip_all, err)]
     fn get_buffer_for_group<T: ImageDataType>(
@@ -79,6 +45,25 @@ impl RenderPipeline for LowMemoryRenderPipeline {
     }
 
     fn num_groups(&self) -> usize {
+        todo!()
+    }
+}
+
+pub(crate) trait RunStage: Display {
+    // TODO
+}
+
+impl BoxedStage for Box<dyn RunStage> {
+    fn new<S: RenderPipelineStage>(stage: S) -> Self {
+        todo!()
+    }
+    fn input_type(&self) -> crate::image::DataTypeTag {
+        todo!()
+    }
+    fn output_type(&self) -> crate::image::DataTypeTag {
+        todo!()
+    }
+    fn uses_channel(&self, channel: usize) -> bool {
         todo!()
     }
 }
