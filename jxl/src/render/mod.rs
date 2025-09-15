@@ -15,6 +15,7 @@ use crate::{
 
 mod internal;
 mod low_memory_pipeline;
+mod save;
 mod simple_pipeline;
 pub mod stages;
 #[cfg(test)]

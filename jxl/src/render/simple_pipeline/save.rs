@@ -6,61 +6,15 @@
 use half::f16;
 
 use crate::{
-    api::{Endianness, JxlColorType, JxlDataFormat, JxlOutputBuffer},
+    api::{Endianness, JxlDataFormat, JxlOutputBuffer},
     error::{Error, Result},
     headers::Orientation,
     image::{DataTypeTag, Image},
+    render::save::SaveStage,
 };
 
-pub struct SaveStage {
-    channels: Vec<usize>,
-    orientation: Orientation,
-    output_buffer_index: usize,
-    color_type: JxlColorType,
-    // TODO(veluca): should SaveStage handle bit_depth, or should it be handled when converting to
-    // the correct data type?
-    data_format: JxlDataFormat,
-}
-
 impl SaveStage {
-    pub(crate) fn new(
-        channels: &[usize],
-        orientation: Orientation,
-        output_buffer_index: usize,
-        mut color_type: JxlColorType,
-        data_format: JxlDataFormat,
-    ) -> SaveStage {
-        let mut channels = channels.to_vec();
-        if color_type == JxlColorType::Bgr {
-            color_type = JxlColorType::Rgb;
-            channels.swap(0, 2);
-        }
-        if color_type == JxlColorType::Bgra {
-            color_type = JxlColorType::Rgba;
-            channels.swap(0, 2);
-        }
-        Self {
-            channels,
-            orientation,
-            output_buffer_index,
-            color_type,
-            data_format,
-        }
-    }
-}
-
-impl std::fmt::Display for SaveStage {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(
-            f,
-            "save channels {:?} (type {:?} {:?})",
-            self.channels, self.color_type, self.data_format
-        )
-    }
-}
-
-impl SaveStage {
-    pub(super) fn save(
+    pub(super) fn save_simple(
         &self,
         data: &[Image<f64>],
         buffers: &mut [Option<JxlOutputBuffer>],
@@ -155,7 +109,7 @@ impl SaveStage {
 #[cfg(test)]
 mod test {
     use super::*;
-    use crate::{image::ImageDataType, util::test::assert_almost_eq};
+    use crate::{api::JxlColorType, image::ImageDataType, util::test::assert_almost_eq};
     use rand::SeedableRng;
     use rand_xorshift::XorShiftRng;
     use test_log::test;
@@ -173,7 +127,7 @@ mod test {
         let src = [Image::<f64>::new_random((128, 128), &mut rng)?];
         let mut dst = Image::<u8>::new_random((128, 128), &mut rng)?;
 
-        save_stage.save(&src, &mut [Some(JxlOutputBuffer::from_image(&mut dst))])?;
+        save_stage.save_simple(&src, &mut [Some(JxlOutputBuffer::from_image(&mut dst))])?;
 
         for y in 0..128 {
             for x in 0..128 {
@@ -212,7 +166,7 @@ mod test {
         let mut rng = XorShiftRng::seed_from_u64(0);
         let mut dst = Image::<f32>::new_random((ow, oh), &mut rng)?;
 
-        save_stage.save(&src, &mut [Some(JxlOutputBuffer::from_image(&mut dst))])?;
+        save_stage.save_simple(&src, &mut [Some(JxlOutputBuffer::from_image(&mut dst))])?;
 
         // Iterate over the DESTINATION image pixels.
         for y_dest in 0..oh {

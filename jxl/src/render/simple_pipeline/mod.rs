@@ -5,8 +5,6 @@
 
 use std::any::Any;
 
-use save::SaveStage;
-
 use crate::{
     BLOCK_DIM,
     api::{JxlColorType, JxlDataFormat, JxlOutputBuffer},
@@ -21,6 +19,7 @@ use crate::{
 use super::{
     RenderPipeline, RenderPipelineBuilder, RenderPipelineExtendStage, RenderPipelineInOutStage,
     RenderPipelineInPlaceStage, RenderPipelineStage, internal::RenderPipelineStageType,
+    save::SaveStage,
 };
 
 mod save;
@@ -372,7 +371,7 @@ impl SimpleRenderPipeline {
                     );
                 }
                 Stage::Save(stage) => {
-                    stage.save(&output_buffers, buffers)?;
+                    stage.save_simple(&output_buffers, buffers)?;
                 }
             }
             current_buffers = output_buffers;

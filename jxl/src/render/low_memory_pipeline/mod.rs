@@ -5,6 +5,9 @@ use crate::{error::Result, headers::Orientation};
 
 use super::{RenderPipeline, RenderPipelineBuilder, RenderPipelineStage};
 
+mod save;
+mod stage;
+
 pub struct LowMemoryRenderPipeline {
     //
 }
