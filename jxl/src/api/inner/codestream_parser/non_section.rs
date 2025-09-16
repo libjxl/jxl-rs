@@ -24,6 +24,7 @@ use crate::{
 };
 
 use super::{CodestreamParser, SectionBuffer};
+use crate::api::ToneMapping;
 
 impl CodestreamParser {
     pub(super) fn process_non_section(&mut self, decode_options: &JxlDecoderOptions) -> Result<()> {
@@ -74,6 +75,12 @@ impl CodestreamParser {
                         have_timecodes: anim.have_timecodes,
                     }),
                 uses_original_profile: !data.xyb_encoded,
+                tone_mapping: ToneMapping {
+                    intensity_target: data.tone_mapping.intensity_target,
+                    min_nits: data.tone_mapping.min_nits,
+                    relative_to_max_display: data.tone_mapping.relative_to_max_display,
+                    linear_below: data.tone_mapping.linear_below,
+                },
             });
             self.file_header = Some(file_header);
             let bits = br.total_bits_read();
