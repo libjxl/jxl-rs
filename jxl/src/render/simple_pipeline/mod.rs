@@ -3,22 +3,22 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-use std::{any::Any, fmt::Display, ops::ControlFlow};
+use std::any::Any;
 
 use crate::{
     BLOCK_DIM,
     api::JxlOutputBuffer,
     error::Result,
-    image::{DataTypeTag, Image, ImageDataType},
-    render::internal::{ChannelInfo, RenderPipelineStageInfo},
+    image::{Image, ImageDataType},
+    render::internal::ChannelInfo,
     simd::round_up_size_to_two_cache_lines,
     util::{ShiftRightCeil, tracing_wrappers::*},
 };
 
 use super::{
-    BoxedStage, RenderPipeline, RenderPipelineExtendStage, RenderPipelineInOutStage,
+    RenderPipeline, RenderPipelineExtendStage, RenderPipelineInOutStage,
     RenderPipelineInPlaceStage, RenderPipelineStage,
-    internal::{RenderPipelineShared, Stage},
+    internal::{RenderPipelineRunStage, RenderPipelineShared, RunStage, Stage},
 };
 
 mod save;
@@ -27,7 +27,7 @@ mod save;
 /// prioritizes simplicity over memory usage and computational efficiency.
 /// Eventually meant to be used only for verification purposes.
 pub struct SimpleRenderPipeline {
-    shared: RenderPipelineShared<Box<dyn RunStage>>,
+    shared: RenderPipelineShared<Image<f64>>,
     input_buffers: Vec<Image<f64>>,
 }
 
@@ -36,9 +36,9 @@ fn clone_images<T: ImageDataType>(images: &[Image<T>]) -> Result<Vec<Image<T>>> 
 }
 
 impl RenderPipeline for SimpleRenderPipeline {
-    type BoxedStage = Box<dyn RunStage>;
+    type Buffer = Image<f64>;
 
-    fn new_from_shared(shared: RenderPipelineShared<Self::BoxedStage>) -> Result<Self> {
+    fn new_from_shared(shared: RenderPipelineShared<Self::Buffer>) -> Result<Self> {
         let input_buffers = shared.channel_info[0]
             .iter()
             .map(|x| {
@@ -180,19 +180,13 @@ impl RenderPipeline for SimpleRenderPipeline {
     fn num_groups(&self) -> usize {
         self.shared.num_groups()
     }
+
+    fn box_stage<S: RenderPipelineStage>(stage: S) -> Box<dyn RunStage<Self::Buffer>> {
+        Box::new(stage)
+    }
 }
 
-pub trait RenderPipelineRunStage {
-    fn run_stage_on<S: RenderPipelineStage<Type = Self>>(
-        stage: &S,
-        chunk_size: usize,
-        input_buffers: &[&Image<f64>],
-        output_buffers: &mut [&mut Image<f64>],
-        state: Option<&mut dyn Any>,
-    );
-}
-
-impl<T: ImageDataType> RenderPipelineRunStage for RenderPipelineInPlaceStage<T> {
+impl<T: ImageDataType> RenderPipelineRunStage<Image<f64>> for RenderPipelineInPlaceStage<T> {
     #[instrument(skip_all)]
     fn run_stage_on<S: RenderPipelineStage<Type = Self>>(
         stage: &S,
@@ -248,7 +242,7 @@ impl<
     const BORDER_Y: u8,
     const SHIFT_X: u8,
     const SHIFT_Y: u8,
-> RenderPipelineRunStage
+> RenderPipelineRunStage<Image<f64>>
     for RenderPipelineInOutStage<InputT, OutputT, BORDER_X, BORDER_Y, SHIFT_X, SHIFT_Y>
 {
     #[instrument(skip_all)]
@@ -367,7 +361,7 @@ impl<
     }
 }
 
-impl<T: ImageDataType> RenderPipelineRunStage for RenderPipelineExtendStage<T> {
+impl<T: ImageDataType> RenderPipelineRunStage<Image<f64>> for RenderPipelineExtendStage<T> {
     #[instrument(skip_all)]
     fn run_stage_on<S: RenderPipelineStage<Type = Self>>(
         stage: &S,
@@ -454,70 +448,5 @@ impl<T: ImageDataType> RenderPipelineRunStage for RenderPipelineExtendStage<T> {
                 }
             }
         }
-    }
-}
-
-pub(crate) trait RunStage: Any + Display {
-    fn run_stage_on(
-        &self,
-        chunk_size: usize,
-        input_buffers: &[&Image<f64>],
-        output_buffers: &mut [&mut Image<f64>],
-        state: Option<&mut dyn Any>,
-    );
-    fn init_local_state(&self) -> Result<Option<Box<dyn Any>>>;
-    fn shift(&self) -> (u8, u8);
-    fn new_size(&self, size: (usize, usize)) -> (usize, usize);
-    fn uses_channel(&self, c: usize) -> bool;
-    fn input_type(&self) -> DataTypeTag;
-    fn output_type(&self) -> DataTypeTag;
-}
-
-impl<T: RenderPipelineStage> RunStage for T {
-    fn run_stage_on(
-        &self,
-        chunk_size: usize,
-        input_buffers: &[&Image<f64>],
-        output_buffers: &mut [&mut Image<f64>],
-        state: Option<&mut dyn Any>,
-    ) {
-        T::Type::run_stage_on(self, chunk_size, input_buffers, output_buffers, state)
-    }
-
-    fn init_local_state(&self) -> Result<Option<Box<dyn Any>>> {
-        T::init_local_state(self)
-    }
-
-    fn shift(&self) -> (u8, u8) {
-        T::Type::SHIFT
-    }
-
-    fn new_size(&self, size: (usize, usize)) -> (usize, usize) {
-        self.new_size(size)
-    }
-
-    fn uses_channel(&self, c: usize) -> bool {
-        self.uses_channel(c)
-    }
-    fn input_type(&self) -> DataTypeTag {
-        T::Type::INPUT_TYPE
-    }
-    fn output_type(&self) -> DataTypeTag {
-        T::Type::OUTPUT_TYPE.unwrap_or(T::Type::INPUT_TYPE)
-    }
-}
-
-impl BoxedStage for Box<dyn RunStage> {
-    fn new<S: RenderPipelineStage>(stage: S) -> Self {
-        Box::new(stage)
-    }
-    fn uses_channel(&self, c: usize) -> bool {
-        (**self).uses_channel(c)
-    }
-    fn input_type(&self) -> DataTypeTag {
-        (**self).input_type()
-    }
-    fn output_type(&self) -> DataTypeTag {
-        (**self).output_type()
     }
 }

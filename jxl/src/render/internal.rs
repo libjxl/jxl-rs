@@ -3,12 +3,14 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
+use std::any::Any;
 use std::fmt::Display;
-use std::ops::ControlFlow;
 
-use crate::image::{DataTypeTag, ImageDataType};
-use crate::util::{ShiftRightCeil, tracing_wrappers::*};
+use crate::error::Result;
+use crate::image::{DataTypeTag, Image, ImageDataType};
+use crate::util::ShiftRightCeil;
 
+use super::low_memory_pipeline::row_buffers::RowBuffer;
 use super::save::SaveStage;
 use super::{
     RenderPipelineExtendStage, RenderPipelineInOutStage, RenderPipelineInPlaceStage,
@@ -22,7 +24,9 @@ pub enum RenderPipelineStageType {
     Extend,
 }
 
-pub trait RenderPipelineStageInfo: super::simple_pipeline::RenderPipelineRunStage {
+pub trait RenderPipelineStageInfo:
+    RenderPipelineRunStage<Image<f64>> + RenderPipelineRunStage<RowBuffer>
+{
     const TYPE: RenderPipelineStageType;
     const BORDER: (u8, u8);
     const SHIFT: (u8, u8);
@@ -69,19 +73,12 @@ impl<T: ImageDataType> RenderPipelineStageInfo for RenderPipelineExtendStage<T> 
     type RowType<'a> = &'a mut [T];
 }
 
-pub trait BoxedStage: Display {
-    fn new<S: RenderPipelineStage>(stage: S) -> Self;
-    fn uses_channel(&self, channel: usize) -> bool;
-    fn input_type(&self) -> DataTypeTag;
-    fn output_type(&self) -> DataTypeTag;
-}
-
-pub enum Stage<BoxedStage> {
-    Process(BoxedStage),
+pub enum Stage<Buffer> {
+    Process(Box<dyn RunStage<Buffer>>),
     Save(SaveStage),
 }
 
-impl<BoxedStage: Display> Display for Stage<BoxedStage> {
+impl<Buffer> Display for Stage<Buffer> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Stage::Process(s) => write!(f, "{}", s),
@@ -96,7 +93,7 @@ pub struct ChannelInfo {
     pub downsample: (u8, u8),
 }
 
-pub struct RenderPipelineShared<BoxedStage> {
+pub struct RenderPipelineShared<Buffer> {
     pub channel_info: Vec<Vec<ChannelInfo>>,
     pub input_size: (usize, usize),
     pub log_group_size: usize,
@@ -105,10 +102,10 @@ pub struct RenderPipelineShared<BoxedStage> {
     pub completed_passes: usize,
     pub num_passes: usize,
     pub chunk_size: usize,
-    pub stages: Vec<Stage<BoxedStage>>,
+    pub stages: Vec<Stage<Buffer>>,
 }
 
-impl<BoxedStage> RenderPipelineShared<BoxedStage> {
+impl<Buffer> RenderPipelineShared<Buffer> {
     pub fn group_position(&self, group_id: usize) -> (usize, usize) {
         (group_id % self.xgroups, group_id / self.xgroups)
     }
@@ -160,5 +157,74 @@ impl<BoxedStage> RenderPipelineShared<BoxedStage> {
 
     pub fn num_groups(&self) -> usize {
         self.xgroups * self.input_size.1.shrc(self.log_group_size)
+    }
+}
+
+pub(crate) trait RunStage<Buffer>: Any + Display {
+    fn run_stage_on(
+        &self,
+        chunk_size: usize,
+        input_buffers: &[&Buffer],
+        output_buffers: &mut [&mut Buffer],
+        state: Option<&mut dyn Any>,
+    );
+    fn init_local_state(&self) -> Result<Option<Box<dyn Any>>>;
+    fn shift(&self) -> (u8, u8);
+    fn new_size(&self, size: (usize, usize)) -> (usize, usize);
+    fn uses_channel(&self, c: usize) -> bool;
+    fn input_type(&self) -> DataTypeTag;
+    fn output_type(&self) -> DataTypeTag;
+}
+
+pub trait RenderPipelineRunStage<Buffer> {
+    fn run_stage_on<S: RenderPipelineStage<Type = Self>>(
+        stage: &S,
+        chunk_size: usize,
+        input_buffers: &[&Buffer],
+        output_buffers: &mut [&mut Buffer],
+        state: Option<&mut dyn Any>,
+    );
+}
+
+impl<T: RenderPipelineStage, Buffer> RunStage<Buffer> for T
+where
+    T::Type: RenderPipelineRunStage<Buffer>,
+{
+    fn run_stage_on(
+        &self,
+        chunk_size: usize,
+        input_buffers: &[&Buffer],
+        output_buffers: &mut [&mut Buffer],
+        state: Option<&mut dyn Any>,
+    ) {
+        <T::Type as RenderPipelineRunStage<Buffer>>::run_stage_on(
+            self,
+            chunk_size,
+            input_buffers,
+            output_buffers,
+            state,
+        )
+    }
+
+    fn init_local_state(&self) -> Result<Option<Box<dyn Any>>> {
+        T::init_local_state(self)
+    }
+
+    fn shift(&self) -> (u8, u8) {
+        T::Type::SHIFT
+    }
+
+    fn new_size(&self, size: (usize, usize)) -> (usize, usize) {
+        self.new_size(size)
+    }
+
+    fn uses_channel(&self, c: usize) -> bool {
+        self.uses_channel(c)
+    }
+    fn input_type(&self) -> DataTypeTag {
+        T::Type::INPUT_TYPE
+    }
+    fn output_type(&self) -> DataTypeTag {
+        T::Type::OUTPUT_TYPE.unwrap_or(T::Type::INPUT_TYPE)
     }
 }

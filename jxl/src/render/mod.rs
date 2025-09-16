@@ -3,7 +3,7 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-use internal::{BoxedStage, RenderPipelineShared, RenderPipelineStageInfo};
+use internal::{RenderPipelineShared, RenderPipelineStageInfo, RunStage};
 use std::{any::Any, marker::PhantomData};
 
 use crate::{
@@ -111,9 +111,9 @@ pub trait RenderPipelineStage: Any + std::fmt::Display {
 }
 
 pub(crate) trait RenderPipeline: Sized {
-    type BoxedStage: BoxedStage;
+    type Buffer: 'static;
 
-    fn new_from_shared(shared: RenderPipelineShared<Self::BoxedStage>) -> Result<Self>;
+    fn new_from_shared(shared: RenderPipelineShared<Self::Buffer>) -> Result<Self>;
 
     /// Obtains a buffer suitable for storing the input at  channel `channel` of group `group_id`.
     /// This *might* be a buffer that was used to store that channel for that group in a previous
@@ -139,4 +139,6 @@ pub(crate) trait RenderPipeline: Sized {
     fn do_render(&mut self, buffers: &mut [Option<JxlOutputBuffer>]) -> Result<()>;
 
     fn num_groups(&self) -> usize;
+
+    fn box_stage<S: RenderPipelineStage>(stage: S) -> Box<dyn RunStage<Self::Buffer>>;
 }

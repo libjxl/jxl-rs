@@ -27,7 +27,7 @@ pub(crate) use scalar::test_all_instruction_sets;
 
 pub(crate) use scalar::ScalarDescriptor;
 
-const CACHE_LINE_BYTE_SIZE: usize = 64;
+pub const CACHE_LINE_BYTE_SIZE: usize = 64;
 
 pub fn round_up_size_to_two_cache_lines<T>(size: usize) -> usize {
     let elements_per_cache_line = CACHE_LINE_BYTE_SIZE / std::mem::size_of::<T>() * 2;

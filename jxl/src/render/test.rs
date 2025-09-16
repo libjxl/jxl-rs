@@ -14,7 +14,8 @@ use crate::{
 use rand::SeedableRng;
 
 use super::{
-    RenderPipeline, RenderPipelineBuilder, RenderPipelineStage, internal::RenderPipelineStageInfo,
+    RenderPipeline, RenderPipelineBuilder, RenderPipelineStage,
+    internal::{RenderPipelineRunStage, RenderPipelineStageInfo},
 };
 
 pub(super) fn make_and_run_simple_pipeline<
@@ -27,7 +28,10 @@ pub(super) fn make_and_run_simple_pipeline<
     image_size: (usize, usize),
     downsampling_shift: usize,
     chunk_size: usize,
-) -> Result<Vec<Image<OutputT>>> {
+) -> Result<Vec<Image<OutputT>>>
+where
+    S::Type: RenderPipelineRunStage<Image<f64>>,
+{
     let final_size = stage.new_size(image_size);
     const LOG_GROUP_SIZE: usize = 8;
     let all_channels = (0..input_images.len()).collect::<Vec<_>>();
@@ -111,7 +115,10 @@ pub(super) fn test_stage_consistency<
     make_stage: impl Fn() -> S,
     image_size: (usize, usize),
     num_image_channels: usize,
-) -> Result<()> {
+) -> Result<()>
+where
+    S::Type: RenderPipelineRunStage<Image<f64>>,
+{
     let mut rng = rand_xorshift::XorShiftRng::seed_from_u64(0);
     let stage = make_stage();
     let images: Result<Vec<_>> = (0..num_image_channels)

@@ -7,9 +7,7 @@ use crate::api::{JxlColorType, JxlDataFormat};
 use crate::error::{Error, Result};
 use crate::headers::Orientation;
 use crate::image::DataTypeTag;
-use crate::render::internal::{
-    BoxedStage, ChannelInfo, RenderPipelineStageInfo, RenderPipelineStageType,
-};
+use crate::render::internal::{ChannelInfo, RenderPipelineStageInfo, RenderPipelineStageType};
 use crate::render::save::SaveStage;
 use crate::util::{ShiftRightCeil, tracing_wrappers::*};
 
@@ -17,7 +15,7 @@ use super::internal::{RenderPipelineShared, Stage};
 use super::{RenderPipeline, RenderPipelineStage};
 
 pub(crate) struct RenderPipelineBuilder<Pipeline: RenderPipeline> {
-    shared: RenderPipelineShared<Pipeline::BoxedStage>,
+    shared: RenderPipelineShared<Pipeline::Buffer>,
     can_shift: bool,
 }
 
@@ -65,7 +63,7 @@ impl<Pipeline: RenderPipeline> RenderPipelineBuilder<Pipeline> {
 
     fn add_stage_internal(
         mut self,
-        stage: Stage<Pipeline::BoxedStage>,
+        stage: Stage<Pipeline::Buffer>,
         input_type: DataTypeTag,
         output_type: Option<DataTypeTag>,
         shift: (u8, u8),
@@ -129,27 +127,20 @@ impl<Pipeline: RenderPipeline> RenderPipelineBuilder<Pipeline> {
         log_group_size: usize,
         num_passes: usize,
     ) -> Self {
-        // The 256 is an even number of cache lines, which makes round_up_size_to_two_cache_lines not round it up.
-        // This is fine since it's also an even number of SIMD lanes - and when using borders in stages we round up
-        // chunk_size + border * 2, and again get space for full SIMD lane loading.
-        // If the chunk size is less than an even number of SIMD lanes, then rounding up chunk_size + border * 2 might
-        // end up with an uneven number of SIMD lanes to read the full chunk.
-        // Example: chunk_size=3833, border=1, round_up_size_to_two_cache_lines(chunk_size + border * 2)=3840,
-        //          reading the last border pixel will then read a lane outside the buffer.
         Self::new_with_chunk_size(
             num_channels,
             size,
             downsampling_shift,
             log_group_size,
             num_passes,
-            256,
+            (1 << log_group_size).min(256),
         )
     }
 
     #[instrument(skip_all, err)]
     pub fn add_stage<S: RenderPipelineStage>(self, stage: S) -> Result<Self> {
         self.add_stage_internal(
-            Stage::Process(Pipeline::BoxedStage::new(stage)),
+            Stage::Process(Pipeline::box_stage(stage)),
             S::Type::INPUT_TYPE,
             S::Type::OUTPUT_TYPE,
             S::Type::SHIFT,

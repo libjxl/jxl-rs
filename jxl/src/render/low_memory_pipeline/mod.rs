@@ -1,23 +1,35 @@
-use std::fmt::Display;
+// Copyright (c) the JPEG XL Project Authors. All rights reserved.
+//
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
+use row_buffers::RowBuffer;
 
 use crate::api::JxlOutputBuffer;
-use crate::image::{Image, ImageDataType};
-use crate::util::tracing_wrappers::*;
 use crate::error::Result;
+use crate::image::{Image, ImageDataType};
+use crate::simd::CACHE_LINE_BYTE_SIZE;
+use crate::util::tracing_wrappers::*;
 
-use super::internal::{BoxedStage, RenderPipelineShared};
+use super::internal::{RenderPipelineShared, RunStage};
 use super::{RenderPipeline, RenderPipelineStage};
 
+pub(super) mod row_buffers;
+mod run_stage;
 mod save;
+
+const MAX_OVERALL_BORDER: usize = 16; // probably an overestimate.
+
+const _: () = assert!(MAX_OVERALL_BORDER * 8 <= CACHE_LINE_BYTE_SIZE * 2);
 
 pub struct LowMemoryRenderPipeline {
     //
 }
 
 impl RenderPipeline for LowMemoryRenderPipeline {
-    type BoxedStage = Box<dyn RunStage>; // TODO
+    type Buffer = RowBuffer;
 
-    fn new_from_shared(shared: RenderPipelineShared<Self::BoxedStage>) -> Result<Self> {
+    fn new_from_shared(shared: RenderPipelineShared<Self::Buffer>) -> Result<Self> {
         todo!()
     }
 
@@ -47,23 +59,8 @@ impl RenderPipeline for LowMemoryRenderPipeline {
     fn num_groups(&self) -> usize {
         todo!()
     }
-}
 
-pub(crate) trait RunStage: Display {
-    // TODO
-}
-
-impl BoxedStage for Box<dyn RunStage> {
-    fn new<S: RenderPipelineStage>(stage: S) -> Self {
-        todo!()
-    }
-    fn input_type(&self) -> crate::image::DataTypeTag {
-        todo!()
-    }
-    fn output_type(&self) -> crate::image::DataTypeTag {
-        todo!()
-    }
-    fn uses_channel(&self, channel: usize) -> bool {
+    fn box_stage<S: RenderPipelineStage>(stage: S) -> Box<dyn RunStage<Self::Buffer>> {
         todo!()
     }
 }

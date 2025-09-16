@@ -29,6 +29,17 @@ pub enum DataTypeTag {
     F64,
 }
 
+impl DataTypeTag {
+    pub fn size(&self) -> usize {
+        match self {
+            DataTypeTag::U8 | DataTypeTag::I8 => 1,
+            DataTypeTag::U16 | DataTypeTag::F16 | DataTypeTag::I16 => 2,
+            DataTypeTag::U32 | DataTypeTag::F32 | DataTypeTag::I32 => 4,
+            DataTypeTag::F64 => 8,
+        }
+    }
+}
+
 /// # Safety
 /// Any type implementing this trait must be a "bag-of-bits" type with no padding.
 pub unsafe trait ImageDataType:
