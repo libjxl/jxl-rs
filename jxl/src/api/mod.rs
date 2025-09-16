@@ -54,6 +54,14 @@ impl<T> ProcessingResult<T, ()> {
 }
 
 #[derive(Clone)]
+pub struct ToneMapping {
+    pub intensity_target: f32,
+    pub min_nits: f32,
+    pub relative_to_max_display: bool,
+    pub linear_below: f32,
+}
+
+#[derive(Clone)]
 pub struct JxlBasicInfo {
     pub size: (usize, usize),
     pub bit_depth: JxlBitDepth,
@@ -61,4 +69,5 @@ pub struct JxlBasicInfo {
     pub extra_channels: Vec<JxlExtraChannel>,
     pub animation: Option<JxlAnimation>,
     pub uses_original_profile: bool,
+    pub tone_mapping: ToneMapping,
 }
