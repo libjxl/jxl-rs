@@ -257,6 +257,8 @@ pub enum Error {
     NotGrayscale,
     #[error("Invalid output buffer byte size {0}x{1} for {2}x{3} image with type {4:?} {5:?}")]
     InvalidOutputBufferSize(usize, usize, usize, usize, JxlColorType, JxlDataFormat),
+    #[error("Attempting to save channels with different downsample amounts: {0:?} and {1:?}")]
+    SaveDifferentDownsample((u8, u8), (u8, u8)),
 }
 
 pub type Result<T, E = Error> = std::result::Result<T, E>;

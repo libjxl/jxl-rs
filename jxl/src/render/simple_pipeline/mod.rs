@@ -29,6 +29,7 @@ mod save;
 pub struct SimpleRenderPipeline {
     shared: RenderPipelineShared<Image<f64>>,
     input_buffers: Vec<Image<f64>>,
+    completed_passes: usize,
 }
 
 fn clone_images<T: ImageDataType>(images: &[Image<T>]) -> Result<Vec<Image<T>>> {
@@ -51,6 +52,7 @@ impl RenderPipeline for SimpleRenderPipeline {
         Ok(Self {
             shared,
             input_buffers,
+            completed_passes: 0,
         })
     }
 
@@ -112,16 +114,16 @@ impl RenderPipeline for SimpleRenderPipeline {
             .copied()
             .min()
             .unwrap();
-        if ready_passes <= self.shared.completed_passes {
+        if ready_passes <= self.completed_passes {
             debug!(
                 "no more ready passes ({} completed, {ready_passes} ready)",
-                self.shared.completed_passes
+                self.completed_passes
             );
             return Ok(());
         }
         debug!(
             "new ready passes ({} completed, {ready_passes} ready)",
-            self.shared.completed_passes
+            self.completed_passes
         );
 
         let mut current_buffers = clone_images(&self.input_buffers)?;
@@ -172,7 +174,7 @@ impl RenderPipeline for SimpleRenderPipeline {
             current_buffers = output_buffers;
         }
 
-        self.shared.completed_passes = ready_passes;
+        self.completed_passes = ready_passes;
 
         Ok(())
     }
@@ -267,8 +269,13 @@ impl<
             assert_eq!(output_size, output_buffers[c].size());
         }
         debug!(
-            "input_size = {input_size:?} output_size = {output_size:?} SHIFT_X = {SHIFT_X} \
-		SHIFT_Y = {SHIFT_Y} BORDER_X = {BORDER_X} BORDER_Y = {BORDER_Y} numc = {numc}"
+            ?input_size,
+            ?output_size,
+            SHIFT_X,
+            SHIFT_Y,
+            BORDER_X,
+            BORDER_Y,
+            numc
         );
         assert_eq!(input_size.0, output_size.0.div_ceil(1 << SHIFT_X));
         assert_eq!(input_size.1, output_size.1.div_ceil(1 << SHIFT_Y));

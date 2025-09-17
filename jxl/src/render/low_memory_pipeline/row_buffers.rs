@@ -3,7 +3,7 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-use std::any::Any;
+use std::{any::Any, ops::Range};
 
 use half::f16;
 
@@ -19,7 +19,9 @@ pub struct RowBuffer {
     // rid of the double allocation & the typeid checking on access.
     buffer: Box<dyn Any>,
     pub(super) row_len: usize,
+    pub(super) row_stride: usize,
     pub(super) next_row: usize,
+    pub(super) row_range: Range<usize>,
 }
 
 fn make_buffer<T: Default + Clone + 'static>(len: usize) -> Result<Box<dyn Any>> {
@@ -32,29 +34,32 @@ fn make_buffer<T: Default + Clone + 'static>(len: usize) -> Result<Box<dyn Any>>
 impl RowBuffer {
     pub fn new(
         data_type: DataTypeTag,
-        y_border: usize,
-        input_y_shift: usize,
-        chunk_size: usize,
+        next_y_border: usize,
+        y_shift: usize,
+        row_len: usize,
     ) -> Result<Self> {
-        let num_rows = ((y_border + 1).max(1 << input_y_shift) + y_border).shrc(input_y_shift)
-            << input_y_shift;
-        let row_len = chunk_size + 4 * (CACHE_LINE_BYTE_SIZE / data_type.size());
+        // This is slightly wasteful (i.e. if y_shift = 2 and next_y_border = 1, it uses 4 more
+        // rows than would be necessary), but certainly sufficient.
+        let num_rows = (1 << y_shift) + 2 * (next_y_border.shrc(y_shift) << y_shift);
+        let row_stride = row_len + 4 * (CACHE_LINE_BYTE_SIZE / data_type.size());
         let buffer: Box<dyn Any> = match data_type {
-            DataTypeTag::U8 => make_buffer::<u8>(row_len * num_rows)?,
-            DataTypeTag::I8 => make_buffer::<i8>(row_len * num_rows)?,
-            DataTypeTag::U16 => make_buffer::<u16>(row_len * num_rows)?,
-            DataTypeTag::F16 => make_buffer::<f16>(row_len * num_rows)?,
-            DataTypeTag::I16 => make_buffer::<i16>(row_len * num_rows)?,
-            DataTypeTag::U32 => make_buffer::<u32>(row_len * num_rows)?,
-            DataTypeTag::F32 => make_buffer::<f32>(row_len * num_rows)?,
-            DataTypeTag::I32 => make_buffer::<i32>(row_len * num_rows)?,
-            DataTypeTag::F64 => make_buffer::<f64>(row_len * num_rows)?,
+            DataTypeTag::U8 => make_buffer::<u8>(row_stride * num_rows)?,
+            DataTypeTag::I8 => make_buffer::<i8>(row_stride * num_rows)?,
+            DataTypeTag::U16 => make_buffer::<u16>(row_stride * num_rows)?,
+            DataTypeTag::F16 => make_buffer::<f16>(row_stride * num_rows)?,
+            DataTypeTag::I16 => make_buffer::<i16>(row_stride * num_rows)?,
+            DataTypeTag::U32 => make_buffer::<u32>(row_stride * num_rows)?,
+            DataTypeTag::F32 => make_buffer::<f32>(row_stride * num_rows)?,
+            DataTypeTag::I32 => make_buffer::<i32>(row_stride * num_rows)?,
+            DataTypeTag::F64 => make_buffer::<f64>(row_stride * num_rows)?,
         };
 
         Ok(Self {
             buffer,
+            row_stride,
             row_len,
             next_row: 0,
+            row_range: 0..0,
         })
     }
 

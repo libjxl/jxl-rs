@@ -69,7 +69,7 @@ impl<T: ImageDataType> RenderPipelineStageInfo for RenderPipelineExtendStage<T> 
     const BORDER: (u8, u8) = (0, 0);
     const SHIFT: (u8, u8) = (0, 0);
     const INPUT_TYPE: DataTypeTag = T::DATA_TYPE_ID;
-    const OUTPUT_TYPE: Option<DataTypeTag> = None;
+    const OUTPUT_TYPE: Option<DataTypeTag> = Some(T::DATA_TYPE_ID);
     type RowType<'a> = &'a mut [T];
 }
 
@@ -97,17 +97,17 @@ pub struct RenderPipelineShared<Buffer> {
     pub channel_info: Vec<Vec<ChannelInfo>>,
     pub input_size: (usize, usize),
     pub log_group_size: usize,
-    pub xgroups: usize,
+    pub group_count: (usize, usize),
     pub group_chan_ready_passes: Vec<Vec<usize>>,
-    pub completed_passes: usize,
     pub num_passes: usize,
     pub chunk_size: usize,
     pub stages: Vec<Stage<Buffer>>,
+    pub extend_stage_index: Option<usize>,
 }
 
 impl<Buffer> RenderPipelineShared<Buffer> {
     pub fn group_position(&self, group_id: usize) -> (usize, usize) {
-        (group_id % self.xgroups, group_id / self.xgroups)
+        (group_id % self.group_count.0, group_id / self.group_count.0)
     }
 
     pub fn group_offset(&self, group_id: usize) -> (usize, usize) {
@@ -156,7 +156,7 @@ impl<Buffer> RenderPipelineShared<Buffer> {
     }
 
     pub fn num_groups(&self) -> usize {
-        self.xgroups * self.input_size.1.shrc(self.log_group_size)
+        self.group_count.0 * self.group_count.1
     }
 }
 
@@ -170,10 +170,12 @@ pub(crate) trait RunStage<Buffer>: Any + Display {
     );
     fn init_local_state(&self) -> Result<Option<Box<dyn Any>>>;
     fn shift(&self) -> (u8, u8);
+    fn border(&self) -> (u8, u8);
     fn new_size(&self, size: (usize, usize)) -> (usize, usize);
     fn uses_channel(&self, c: usize) -> bool;
     fn input_type(&self) -> DataTypeTag;
-    fn output_type(&self) -> DataTypeTag;
+    fn output_type(&self) -> Option<DataTypeTag>;
+    fn stage_type(&self) -> RenderPipelineStageType;
 }
 
 pub trait RenderPipelineRunStage<Buffer> {
@@ -214,6 +216,10 @@ where
         T::Type::SHIFT
     }
 
+    fn border(&self) -> (u8, u8) {
+        T::Type::BORDER
+    }
+
     fn new_size(&self, size: (usize, usize)) -> (usize, usize) {
         self.new_size(size)
     }
@@ -224,7 +230,10 @@ where
     fn input_type(&self) -> DataTypeTag {
         T::Type::INPUT_TYPE
     }
-    fn output_type(&self) -> DataTypeTag {
-        T::Type::OUTPUT_TYPE.unwrap_or(T::Type::INPUT_TYPE)
+    fn output_type(&self) -> Option<DataTypeTag> {
+        T::Type::OUTPUT_TYPE
+    }
+    fn stage_type(&self) -> RenderPipelineStageType {
+        T::Type::TYPE
     }
 }

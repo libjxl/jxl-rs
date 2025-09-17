@@ -16,7 +16,6 @@ use super::{RenderPipeline, RenderPipelineStage};
 
 pub(crate) struct RenderPipelineBuilder<Pipeline: RenderPipeline> {
     shared: RenderPipelineShared<Pipeline::Buffer>,
-    can_shift: bool,
 }
 
 impl<Pipeline: RenderPipeline> RenderPipelineBuilder<Pipeline> {
@@ -46,18 +45,17 @@ impl<Pipeline: RenderPipeline> RenderPipelineBuilder<Pipeline> {
                 ]],
                 input_size: size,
                 log_group_size,
-                xgroups: size.0.shrc(log_group_size),
+                group_count: (size.0.shrc(log_group_size), size.1.shrc(log_group_size)),
                 stages: vec![],
                 group_chan_ready_passes: vec![
                     vec![0; num_channels];
                     size.0.shrc(log_group_size)
                         * size.1.shrc(log_group_size)
                 ],
-                completed_passes: 0,
                 num_passes,
                 chunk_size,
+                extend_stage_index: None,
             },
-            can_shift: true,
         }
     }
 
@@ -73,7 +71,7 @@ impl<Pipeline: RenderPipeline> RenderPipelineBuilder<Pipeline> {
         let current_info = self.shared.channel_info.last().unwrap().clone();
         debug!(
             last_stage_channel_info = ?current_info,
-            can_shift = self.can_shift,
+            extend_stage_index= ?self.shared.extend_stage_index,
             "adding stage '{stage}'",
         );
         let mut after_info = vec![];
@@ -104,15 +102,17 @@ impl<Pipeline: RenderPipeline> RenderPipelineBuilder<Pipeline> {
                 });
             }
         }
-        if !self.can_shift && (shift != (0, 0) || border != (0, 0) || is_extend) {
+        if self.shared.extend_stage_index.is_some()
+            && (shift != (0, 0) || border != (0, 0) || is_extend)
+        {
             return Err(Error::PipelineInvalidStageAfterExtend(stage.to_string()));
         }
         if is_extend {
-            self.can_shift = false;
+            self.shared.extend_stage_index = Some(self.shared.stages.len());
         }
         debug!(
             new_channel_info = ?after_info,
-            can_shift = self.can_shift,
+            extend_stage_index= ?self.shared.extend_stage_index,
             "added stage '{stage}'",
         );
         self.shared.channel_info.push(after_info);
@@ -133,7 +133,7 @@ impl<Pipeline: RenderPipeline> RenderPipelineBuilder<Pipeline> {
             downsampling_shift,
             log_group_size,
             num_passes,
-            (1 << log_group_size).min(256),
+            1 << log_group_size,
         )
     }
 
@@ -178,14 +178,15 @@ impl<Pipeline: RenderPipeline> RenderPipelineBuilder<Pipeline> {
             let [current_info, next_info, ..] = &mut channel_info[s..] else {
                 unreachable!()
             };
+            let mut save_downsample = None;
             for chan in 0..num_channels {
                 let cur_chan = &mut current_info[chan];
                 let next_chan = &mut next_info[chan];
                 let (uses_channel, input_type) = match stage {
                     Stage::Process(s) => {
                         let uses_channel = s.uses_channel(chan);
-                        if uses_channel {
-                            assert_eq!(Some(s.output_type()), next_chan.ty);
+                        if uses_channel && s.output_type().is_some() {
+                            assert_eq!(s.output_type(), next_chan.ty);
                         }
                         (uses_channel, s.input_type())
                     }
@@ -202,6 +203,15 @@ impl<Pipeline: RenderPipeline> RenderPipelineBuilder<Pipeline> {
                 // Arithmetic overflows here should be very uncommon, so custom error variants
                 // are probably unwarranted.
                 let cur_downsample = &mut cur_downsamples[chan];
+                if matches!(stage, Stage::Save(_))
+                    && save_downsample.is_some_and(|x| x != *cur_downsample)
+                {
+                    save_downsample = Some(*cur_downsample);
+                    return Err(Error::SaveDifferentDownsample(
+                        save_downsample.unwrap(),
+                        *cur_downsample,
+                    ));
+                }
                 let next_downsample = &mut next_chan.downsample;
                 let next_total_downsample = *cur_downsample;
                 cur_downsample.0 = cur_downsample
