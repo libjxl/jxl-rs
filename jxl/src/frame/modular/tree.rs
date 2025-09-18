@@ -212,7 +212,7 @@ impl Tree {
         &self,
         buffers: &mut [&mut ModularChannel],
         index: usize,
-        wp_state: &mut WeightedPredictorState,
+        wp_state: Option<&mut WeightedPredictorState>,
         x: usize,
         y: usize,
         references: &Image<i32>,
@@ -257,9 +257,18 @@ impl Tree {
         property_buffer[14] = left.wrapping_sub(leftleft);
 
         // Weighted predictor property.
-        let (wp_pred, property) =
-            wp_state.predict_and_property((x, y), img.size().0, &prediction_data);
-        property_buffer[15] = property;
+        let wp_pred = match wp_state {
+            None => {
+                property_buffer[15] = 0;
+                0
+            }
+            Some(wp_state) => {
+                let (wp_pred, property) =
+                    wp_state.predict_and_property((x, y), img.size().0, &prediction_data);
+                property_buffer[15] = property;
+                wp_pred
+            }
+        };
 
         // Reference properties.
         let num_refs = references.size().0;
