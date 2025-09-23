@@ -77,7 +77,7 @@ pub fn natural_coeff_order(transform: HfTransformType) -> Vec<u32> {
         for j in 0..(i + 1) {
             let mut x = xsize - 1 - (i - j);
             let mut y = xsize - 1 - j;
-            if i % 2 != 0 {
+            if i.is_multiple_of(2) {
                 mem::swap(&mut x, &mut y);
             }
             if (y & xsm) != 0 {
