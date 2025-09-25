@@ -119,3 +119,34 @@ pub fn decode_coeff_orders(used_orders: u32, br: &mut BitReader) -> Result<Vec<P
     reader.check_final_state(&histograms)?;
     Ok(permutations)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // Golden data generated from libjxl's `ComputeNaturalCoeffOrder` for DCT (8x8).
+    const COEFF_ORDER_1X1: [u32; 64] = [
+        0, 1, 8, 16, 9, 2, 3, 10, 17, 24, 32, 25, 18, 11, 4, 5, 12, 19, 26, 33, 40, 48, 41, 34, 27,
+        20, 13, 6, 7, 14, 21, 28, 35, 42, 49, 56, 57, 50, 43, 36, 29, 22, 15, 23, 30, 37, 44, 51,
+        58, 59, 52, 45, 38, 31, 39, 46, 53, 60, 61, 54, 47, 55, 62, 63,
+    ];
+
+    // Golden data generated from libjxl's `ComputeNaturalCoeffOrder` for DCT8X16 (16x8).
+    const COEFF_ORDER_2X1: [u32; 128] = [
+        0, 1, 16, 2, 3, 17, 32, 18, 4, 5, 19, 33, 48, 34, 20, 6, 7, 21, 35, 49, 64, 50, 36, 22, 8,
+        9, 23, 37, 51, 65, 80, 66, 52, 38, 24, 10, 11, 25, 39, 53, 67, 81, 96, 82, 68, 54, 40, 26,
+        12, 13, 27, 41, 55, 69, 83, 97, 112, 98, 84, 70, 56, 42, 28, 14, 15, 29, 43, 57, 71, 85,
+        99, 113, 114, 100, 86, 72, 58, 44, 30, 31, 45, 59, 73, 87, 101, 115, 116, 102, 88, 74, 60,
+        46, 47, 61, 75, 89, 103, 117, 118, 104, 90, 76, 62, 63, 77, 91, 105, 119, 120, 106, 92, 78,
+        79, 93, 107, 121, 122, 108, 94, 95, 109, 123, 124, 110, 111, 125, 126, 127,
+    ];
+
+    #[test]
+    fn test_natural_coeff_order() {
+        let order_1x1 = natural_coeff_order(HfTransformType::DCT);
+        assert_eq!(order_1x1, COEFF_ORDER_1X1);
+
+        let order_2x1 = natural_coeff_order(HfTransformType::DCT8X16);
+        assert_eq!(order_2x1, COEFF_ORDER_2X1);
+    }
+}
