@@ -145,43 +145,31 @@ fn parse_jxl(path: &Path) -> Result<()> {
         loop {
             let mut decoder_with_frame_info = advance_decoder!(decoder_with_image_info)?;
 
-            eprintln!("1");
             let duration = decoder_with_frame_info.frame_header().duration.unwrap();
-            eprintln!("2");
             total_seconds += duration;
             println!("Frame {}, duration {}s", num_frames, duration);
-            eprintln!("3");
 
             let mut outputs = vec![Image::<f32>::new((
                 info.size.0 * num_channels,
                 info.size.1,
             ))?];
-            eprintln!("4");
 
             for _ in 0..info.extra_channels.len() {
                 outputs.push(Image::<f32>::new(info.size)?);
             }
-            eprintln!("5");
 
             let mut output_bufs: Vec<JxlOutputBuffer<'_>> = outputs
                 .iter_mut()
                 .map(JxlOutputBuffer::from_image)
                 .collect();
-            eprintln!("6");
 
             decoder_with_image_info = advance_decoder!(decoder_with_frame_info, &mut output_bufs)?;
 
-            eprintln!("7");
             num_frames += 1;
 
-            eprintln!(
-                "8 has more frames {}",
-                decoder_with_image_info.has_more_frames()
-            );
             if !decoder_with_image_info.has_more_frames() {
                 break;
             }
-            eprintln!("9");
         }
 
         print!(
