@@ -72,7 +72,7 @@ mod jxl_exr {
             }
             JxlColorProfile::Simple(encoding) => {
                 return Err(eyre!(
-                    "Writing of {:?} channels not yet implemented for EXR output",
+                    "Writing of images in colorspace {:?} not yet implemented for EXR output",
                     encoding.get_color_encoding_description()
                 ));
             }
@@ -120,7 +120,7 @@ mod jxl_exr {
                 let mut samples = vec![f16::ZERO; height * width];
                 for y in 0..height {
                     for x in 0..width {
-                        samples[y * width + x] = f16::from_f32(channel.as_rect().row(y)[x] / 255.0);
+                        samples[y * width + x] = f16::from_f32(channel.as_rect().row(y)[x]);
                     }
                 }
                 FlatSamples::F16(samples)
@@ -128,7 +128,7 @@ mod jxl_exr {
                 let mut samples = vec![0.0; height * width];
                 for y in 0..height {
                     for x in 0..width {
-                        samples[y * width + x] = channel.as_rect().row(y)[x] / 255.0;
+                        samples[y * width + x] = channel.as_rect().row(y)[x];
                     }
                 }
                 FlatSamples::F32(samples)
