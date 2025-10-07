@@ -135,7 +135,7 @@ fn int_to_float(input: &[i32], output: &mut [f32], bit_depth: &BitDepth) {
     let bits = bit_depth.bits_per_sample();
     let exp_bits = bit_depth.exponent_bits_per_sample();
     if bits == 32 {
-        assert!(exp_bits == 8);
+        assert_eq!(exp_bits, 8);
         for (&in_val, out_val) in input.iter().zip(output) {
             *out_val = f32::from_bits(in_val as u32);
         }
@@ -155,6 +155,14 @@ fn int_to_float(input: &[i32], output: &mut [f32], bit_depth: &BitDepth) {
         }
         let mut exp = (f >> mant_bits) as i32;
         let mut mantissa = f & ((1 << mant_bits) - 1);
+        if exp == (1 << exp_bits) - 1 {
+            // NaN or infinity
+            f = if signbit { 0x80000000 } else { 0 };
+            f |= 0b11111111 << 23;
+            f |= mantissa << mant_shift;
+            *out_val = f32::from_bits(f);
+            continue;
+        }
         mantissa <<= mant_shift;
         // Try to normalize only if there is space for maneuver.
         if exp == 0 && exp_bits < 8 {
