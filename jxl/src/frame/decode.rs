@@ -3,16 +3,16 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-use super::block_context_map::BlockContextMap;
-use super::coeff_order::decode_coeff_orders;
-use super::color_correlation_map::ColorCorrelationParams;
-use super::group::decode_vardct_group;
-use super::modular::{
-    FullModularImage, ModularStreamId, Tree, decode_hf_metadata, decode_vardct_lf,
+use super::{
+    block_context_map::BlockContextMap,
+    coeff_order::decode_coeff_orders,
+    color_correlation_map::ColorCorrelationParams,
+    group::decode_vardct_group,
+    modular::{FullModularImage, ModularStreamId, Tree, decode_hf_metadata, decode_vardct_lf},
+    quant_weights::DequantMatrices,
+    quantizer::{LfQuantFactors, QuantizerParams},
+    transform_map::*,
 };
-use super::quant_weights::DequantMatrices;
-use super::quantizer::{LfQuantFactors, QuantizerParams};
-use super::transform_map::*;
 use crate::{
     GROUP_DIM,
     bit_reader::BitReader,

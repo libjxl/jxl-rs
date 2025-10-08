@@ -15,6 +15,20 @@ impl SimdDescriptor for ScalarDescriptor {
     fn new() -> Option<Self> {
         Some(Self)
     }
+
+    #[inline(always)]
+    fn transpose<const ROWS: usize, const COLS: usize>(self, input: &[f32], output: &mut [f32]) {
+        assert_eq!(input.len(), ROWS * COLS);
+        assert_eq!(output.len(), ROWS * COLS);
+
+        for r in 0..ROWS {
+            for c in 0..COLS {
+                let input_idx = r * COLS + c;
+                let output_idx = c * ROWS + r;
+                output[output_idx] = input[input_idx];
+            }
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -29,8 +43,20 @@ impl F32SimdVec for F32VecScalar {
         Self(mem[0])
     }
 
+    #[inline(always)]
+    fn load_partial(d: Self::Descriptor, size: usize, mem: &[f32]) -> Self {
+        assert_eq!(size, 1);
+        Self::load(d, mem)
+    }
+
     fn store(&self, mem: &mut [f32]) {
         mem[0] = self.0;
+    }
+
+    #[inline(always)]
+    fn store_partial(&self, size: usize, mem: &mut [f32]) {
+        assert_eq!(size, 1);
+        self.store(mem)
     }
 
     fn mul_add(self, mul: Self, add: Self) -> Self {
@@ -107,9 +133,12 @@ macro_rules! simd_function {
     (
         $dname:ident,
         $descr:ident: $descr_ty:ident,
+        $(#[$($attr:meta)*])*
         $pub:vis fn $name:ident($($arg:ident: $ty:ty),* $(,)?) $(-> $ret:ty )? $body: block
     ) => {
+        $(#[$($attr)*])*
         $pub fn $name<$descr_ty: crate::simd::SimdDescriptor>($descr: $descr_ty, $($arg: $ty),*) $(-> $ret)? $body
+        $(#[$($attr)*])*
         $pub fn $dname($($arg: $ty),*) $(-> $ret)? {
             use crate::simd::SimdDescriptor;
             $name(crate::simd::ScalarDescriptor::new().unwrap(), $($arg),*)

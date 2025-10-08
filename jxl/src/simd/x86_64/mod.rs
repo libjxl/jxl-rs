@@ -12,11 +12,14 @@ macro_rules! simd_function {
     (
         $dname:ident,
         $descr:ident: $descr_ty:ident,
+        $(#[$($attr:meta)*])*
         $pub:vis fn $name:ident($($arg:ident: $ty:ty),* $(,)?) $(-> $ret:ty )? $body: block
     ) => {
         #[inline(always)]
+        $(#[$($attr)*])*
         $pub fn $name<$descr_ty: crate::simd::SimdDescriptor>($descr: $descr_ty, $($arg: $ty),*) $(-> $ret)? $body
         #[allow(unsafe_code)]
+        $(#[$($attr)*])*
         $pub fn $dname($($arg: $ty),*) $(-> $ret)? {
             use crate::simd::SimdDescriptor;
             if let Some(d) = crate::simd::Avx512Descriptor::new() {
