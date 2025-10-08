@@ -38,6 +38,8 @@ pub trait SimdDescriptor: Sized + Copy + Debug + Send + Sync {
     type F32Vec: F32SimdVec<Descriptor = Self>;
 
     fn new() -> Option<Self>;
+
+    fn transpose<const ROWS: usize, const COLS: usize>(self, input: &[f32], output: &mut [f32]);
 }
 
 pub trait F32SimdVec:
@@ -67,8 +69,14 @@ pub trait F32SimdVec:
     // Requires `mem.len() >= Self::LEN` or it will panic.
     fn load(d: Self::Descriptor, mem: &[f32]) -> Self;
 
+    // Requires `mem.len() >= SIZE` or it will panic.
+    fn load_partial(d: Self::Descriptor, size: usize, mem: &[f32]) -> Self;
+
     // Requires `mem.len() >= Self::LEN` or it will panic.
     fn store(&self, mem: &mut [f32]);
+
+    // Requires `mem.len() >= SIZE` or it will panic.
+    fn store_partial(&self, size: usize, mem: &mut [f32]);
 
     fn abs(self) -> Self;
 

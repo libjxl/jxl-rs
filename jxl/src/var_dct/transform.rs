@@ -7,6 +7,7 @@ use crate::{
     BLOCK_DIM,
     error::{Error, Result},
     frame::transform_map::*,
+    simd::SimdDescriptor,
     var_dct::dct::*,
 };
 
@@ -300,7 +301,13 @@ fn avfidct4x4(coeffs: &[f32], pixels: &mut [f32]) {
     }
 }
 
-fn afv_transform_to_pixels(afv_kind: usize, coefficients: &[f32], pixels: &mut [f32]) {
+#[inline(always)]
+fn afv_transform_to_pixels<D: SimdDescriptor>(
+    d: D,
+    afv_kind: usize,
+    coefficients: &[f32],
+    pixels: &mut [f32],
+) {
     let afv_x = afv_kind & 1;
     let afv_y = afv_kind / 2;
     let block00 = coefficients[0];
@@ -341,7 +348,7 @@ fn afv_transform_to_pixels(afv_kind: usize, coefficients: &[f32], pixels: &mut [
             };
         }
     }
-    idct2d::<4, 4>(&mut block[0..16]);
+    idct2d::<D, 4, 4>(d, &mut block[0..16]);
     for iy in 0..4 {
         for ix in 0..4 {
             pixels[(iy + afv_y * 4) * 8 + (1 - afv_x) * 4 + ix] = block[iy * 4 + ix];
@@ -357,7 +364,7 @@ fn afv_transform_to_pixels(afv_kind: usize, coefficients: &[f32], pixels: &mut [
             };
         }
     }
-    idct2d::<4, 8>(&mut block);
+    idct2d::<D, 4, 8>(d, &mut block);
     for iy in 0..4 {
         for ix in 0..8 {
             pixels[(iy + (1 - afv_y) * 4) * 8 + ix] = block[iy * 8 + ix];
@@ -365,80 +372,82 @@ fn afv_transform_to_pixels(afv_kind: usize, coefficients: &[f32], pixels: &mut [
     }
 }
 
-pub fn transform_to_pixels(
+#[inline(always)]
+pub fn transform_to_pixels<D: SimdDescriptor>(
+    d: D,
     transform_type: HfTransformType,
     transform_buffer: &mut [f32],
 ) -> Result<(), Error> {
     match transform_type {
         HfTransformType::DCT => {
-            idct2d::<8, 8>(&mut transform_buffer[0..64]);
+            idct2d::<D, 8, 8>(d, &mut transform_buffer[0..64]);
         }
         HfTransformType::DCT16X16 => {
-            idct2d::<16, 16>(&mut transform_buffer[0..256]);
+            idct2d::<D, 16, 16>(d, &mut transform_buffer[0..256]);
         }
         HfTransformType::DCT32X32 => {
-            idct2d::<32, 32>(&mut transform_buffer[0..1024]);
+            idct2d::<D, 32, 32>(d, &mut transform_buffer[0..1024]);
         }
         HfTransformType::DCT16X8 => {
-            idct2d::<16, 8>(&mut transform_buffer[0..128]);
+            idct2d::<D, 16, 8>(d, &mut transform_buffer[0..128]);
         }
         HfTransformType::DCT8X16 => {
-            idct2d::<8, 16>(&mut transform_buffer[0..128]);
+            idct2d::<D, 8, 16>(d, &mut transform_buffer[0..128]);
         }
         HfTransformType::DCT32X8 => {
-            idct2d::<32, 8>(&mut transform_buffer[0..256]);
+            idct2d::<D, 32, 8>(d, &mut transform_buffer[0..256]);
         }
         HfTransformType::DCT8X32 => {
-            idct2d::<8, 32>(&mut transform_buffer[0..256]);
+            idct2d::<D, 8, 32>(d, &mut transform_buffer[0..256]);
         }
         HfTransformType::DCT32X16 => {
-            idct2d::<32, 16>(&mut transform_buffer[0..512]);
+            idct2d::<D, 32, 16>(d, &mut transform_buffer[0..512]);
         }
         HfTransformType::DCT16X32 => {
-            idct2d::<16, 32>(&mut transform_buffer[0..512]);
+            idct2d::<D, 16, 32>(d, &mut transform_buffer[0..512]);
         }
         HfTransformType::DCT64X64 => {
-            idct2d::<64, 64>(&mut transform_buffer[0..4096]);
+            idct2d::<D, 64, 64>(d, &mut transform_buffer[0..4096]);
         }
         HfTransformType::DCT64X32 => {
-            idct2d::<64, 32>(&mut transform_buffer[0..2048]);
+            idct2d::<D, 64, 32>(d, &mut transform_buffer[0..2048]);
         }
         HfTransformType::DCT32X64 => {
-            idct2d::<32, 64>(&mut transform_buffer[0..2048]);
+            idct2d::<D, 32, 64>(d, &mut transform_buffer[0..2048]);
         }
         HfTransformType::DCT128X128 => {
-            idct2d::<128, 128>(&mut transform_buffer[0..16384]);
+            idct2d::<D, 128, 128>(d, &mut transform_buffer[0..16384]);
         }
         HfTransformType::DCT128X64 => {
-            idct2d::<128, 64>(&mut transform_buffer[0..8192]);
+            idct2d::<D, 128, 64>(d, &mut transform_buffer[0..8192]);
         }
         HfTransformType::DCT64X128 => {
-            idct2d::<64, 128>(&mut transform_buffer[0..8192]);
+            idct2d::<D, 64, 128>(d, &mut transform_buffer[0..8192]);
         }
         HfTransformType::DCT256X256 => {
-            idct2d::<256, 256>(&mut transform_buffer[0..65536]);
+            idct2d::<D, 256, 256>(d, &mut transform_buffer[0..65536]);
         }
         HfTransformType::DCT256X128 => {
-            idct2d::<256, 128>(&mut transform_buffer[0..32768]);
+            idct2d::<D, 256, 128>(d, &mut transform_buffer[0..32768]);
         }
         HfTransformType::DCT128X256 => {
-            idct2d::<128, 256>(&mut transform_buffer[0..32768]);
+            idct2d::<D, 128, 256>(d, &mut transform_buffer[0..32768]);
         }
         HfTransformType::AFV0 => {
             let block: Vec<f32> = transform_buffer[0..64].to_vec();
-            afv_transform_to_pixels(0, &block, &mut transform_buffer[0..64]);
+            afv_transform_to_pixels::<D>(d, 0, &block, &mut transform_buffer[0..64]);
         }
         HfTransformType::AFV1 => {
             let block: Vec<f32> = transform_buffer[0..64].to_vec();
-            afv_transform_to_pixels(1, &block, &mut transform_buffer[0..64]);
+            afv_transform_to_pixels::<D>(d, 1, &block, &mut transform_buffer[0..64]);
         }
         HfTransformType::AFV2 => {
             let block: Vec<f32> = transform_buffer[0..64].to_vec();
-            afv_transform_to_pixels(2, &block, &mut transform_buffer[0..64]);
+            afv_transform_to_pixels::<D>(d, 2, &block, &mut transform_buffer[0..64]);
         }
         HfTransformType::AFV3 => {
             let block: Vec<f32> = transform_buffer[0..64].to_vec();
-            afv_transform_to_pixels(3, &block, &mut transform_buffer[0..64]);
+            afv_transform_to_pixels::<D>(d, 3, &block, &mut transform_buffer[0..64]);
         }
         HfTransformType::IDENTITY => {
             let coefficients: Vec<f32> = transform_buffer[0..64].to_vec();
@@ -511,7 +520,7 @@ pub fn transform_to_pixels(
                             block[iy * 4 + ix] = coefficients[(y + iy * 2) * 8 + x + ix * 2];
                         }
                     }
-                    idct2d::<4, 4>(&mut block);
+                    idct2d::<D, 4, 4>(d, &mut block);
                     for iy in 0..4 {
                         for ix in 0..4 {
                             transform_buffer[(y * 4 + iy) * 8 + x * 4 + ix] = block[iy * 4 + ix];
@@ -536,7 +545,7 @@ pub fn transform_to_pixels(
                         }
                     }
                 }
-                idct2d::<8, 4>(&mut block);
+                idct2d::<D, 8, 4>(d, &mut block);
                 for iy in 0..8 {
                     for ix in 0..4 {
                         transform_buffer[iy * 8 + x * 4 + ix] = block[iy * 4 + ix];
@@ -560,7 +569,7 @@ pub fn transform_to_pixels(
                         }
                     }
                 }
-                idct2d::<4, 8>(&mut block);
+                idct2d::<D, 4, 8>(d, &mut block);
                 for iy in 0..4 {
                     for ix in 0..8 {
                         transform_buffer[(y * 4 + iy) * 8 + ix] = block[iy * 8 + ix];

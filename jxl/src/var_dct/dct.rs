@@ -3,9 +3,9 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-use std::f64::consts::SQRT_2;
-
 use super::dct_scales::WcMultipliers;
+use crate::simd::{F32SimdVec, SimdDescriptor};
+use std::f64::consts::SQRT_2;
 
 struct CoeffBundle<const N: usize, const SZ: usize>;
 
@@ -13,25 +13,28 @@ pub struct DCT1DImpl<const SIZE: usize>;
 pub struct IDCT1DImpl<const SIZE: usize>;
 
 pub trait DCT1D {
-    fn do_dct<const COLUMNS: usize>(data: &mut [[f32; COLUMNS]]);
+    fn do_dct<D: SimdDescriptor, const COLUMNS: usize>(d: D, data: &mut [[f32; COLUMNS]]);
 }
 pub trait IDCT1D {
-    fn do_idct<const COLUMNS: usize>(data: &mut [[f32; COLUMNS]]);
+    fn do_idct<D: SimdDescriptor, const COLUMNS: usize>(d: D, data: &mut [[f32; COLUMNS]]);
 }
 
 impl DCT1D for DCT1DImpl<1> {
-    fn do_dct<const COLUMNS: usize>(_data: &mut [[f32; COLUMNS]]) {
+    #[inline(always)]
+    fn do_dct<D: SimdDescriptor, const COLUMNS: usize>(_d: D, _data: &mut [[f32; COLUMNS]]) {
         // Do nothing
     }
 }
 impl IDCT1D for IDCT1DImpl<1> {
-    fn do_idct<const COLUMNS: usize>(_data: &mut [[f32; COLUMNS]]) {
+    #[inline(always)]
+    fn do_idct<D: SimdDescriptor, const COLUMNS: usize>(_d: D, _data: &mut [[f32; COLUMNS]]) {
         // Do nothing
     }
 }
 
 impl DCT1D for DCT1DImpl<2> {
-    fn do_dct<const COLUMNS: usize>(data: &mut [[f32; COLUMNS]]) {
+    #[inline(always)]
+    fn do_dct<D: SimdDescriptor, const COLUMNS: usize>(_d: D, data: &mut [[f32; COLUMNS]]) {
         for i in 0..COLUMNS {
             let temp0 = data[0][i];
             let temp1 = data[1][i];
@@ -42,13 +45,9 @@ impl DCT1D for DCT1DImpl<2> {
 }
 
 impl IDCT1D for IDCT1DImpl<2> {
-    fn do_idct<const COLUMNS: usize>(data: &mut [[f32; COLUMNS]]) {
-        for i in 0..COLUMNS {
-            let temp0 = data[0][i];
-            let temp1 = data[1][i];
-            data[0][i] = temp0 + temp1;
-            data[1][i] = temp0 - temp1;
-        }
+    #[inline(always)]
+    fn do_idct<D: SimdDescriptor, const COLUMNS: usize>(d: D, data: &mut [[f32; COLUMNS]]) {
+        DCT1DImpl::<2>::do_dct::<D, COLUMNS>(d, data)
     }
 }
 
@@ -126,7 +125,7 @@ macro_rules! define_dct_1d {
         }
 
         impl DCT1D for DCT1DImpl<$n> {
-            fn do_dct<const COLUMNS: usize>(data: &mut [[f32; COLUMNS]]) {
+            fn do_dct<D: SimdDescriptor, const COLUMNS: usize>(d: D, data: &mut [[f32; COLUMNS]]) {
                 const { assert!($nhalf * 2 == $n, "N/2 * 2 must be N") }
                 assert!(
                     data.len() == $n,
@@ -147,7 +146,7 @@ macro_rules! define_dct_1d {
 
                 // 2. First Recursive Call (do_dct)
                 //    first half
-                DCT1DImpl::<$nhalf>::do_dct::<COLUMNS>(&mut tmp_buffer[0..$nhalf]);
+                DCT1DImpl::<$nhalf>::do_dct::<D, COLUMNS>(d, &mut tmp_buffer[0..$nhalf]);
 
                 // 3. SubReverse
                 //    Inputs: first N/2 rows of data, second N/2 rows of data
@@ -164,7 +163,7 @@ macro_rules! define_dct_1d {
 
                 // 5. Second Recursive Call (do_dct)
                 //    second half.
-                DCT1DImpl::<$nhalf>::do_dct::<COLUMNS>(&mut tmp_buffer[$nhalf..$n]);
+                DCT1DImpl::<$nhalf>::do_dct::<D, COLUMNS>(d, &mut tmp_buffer[$nhalf..$n]);
 
                 // 6. B
                 //    Operates on the second N/2 rows of tmp_buffer.
@@ -214,8 +213,8 @@ macro_rules! define_idct_1d {
             }
             fn multiply_and_add(coeff: &[[f32; SZ]], out: &mut [[f32; SZ]]) {
                 for i in 0..($nhalf) {
+                    let mul = WcMultipliers::<$n>::K_MULTIPLIERS[i];
                     for j in 0..SZ {
-                        let mul = WcMultipliers::<$n>::K_MULTIPLIERS[i];
                         let in1 = coeff[i][j];
                         let in2 = coeff[$nhalf + i][j];
                         out[i][j] = mul * in2 + in1;
@@ -226,7 +225,7 @@ macro_rules! define_idct_1d {
         }
 
         impl IDCT1D for IDCT1DImpl<$n> {
-            fn do_idct<const COLUMNS: usize>(data: &mut [[f32; COLUMNS]]) {
+            fn do_idct<D: SimdDescriptor, const COLUMNS: usize>(d: D, data: &mut [[f32; COLUMNS]]) {
                 const { assert!($nhalf * 2 == $n, "N/2 * 2 must be N") }
 
                 // We assume `data` is arranged as a nxCOLUMNS matrix.
@@ -237,13 +236,13 @@ macro_rules! define_idct_1d {
                 CoeffBundle::<$n, COLUMNS>::forward_even_odd(data, &mut tmp);
                 // 2. First Recursive Call (IDCT1DImpl::do_idct)
                 // first half
-                IDCT1DImpl::<$nhalf>::do_idct::<COLUMNS>(&mut tmp[0..$nhalf]);
+                IDCT1DImpl::<$nhalf>::do_idct::<D, COLUMNS>(d, &mut tmp[0..$nhalf]);
                 // 3. BTranspose.
                 // only the second half
                 CoeffBundle::<$nhalf, COLUMNS>::b_transpose(&mut tmp[$nhalf..$n]);
                 // 4. Second Recursive Call (IDCT1DImpl::do_idct)
                 // second half
-                IDCT1DImpl::<$nhalf>::do_idct::<COLUMNS>(&mut tmp[$nhalf..$n]);
+                IDCT1DImpl::<$nhalf>::do_idct::<D, COLUMNS>(d, &mut tmp[$nhalf..$n]);
                 // 5. MultiplyAndAdd.
                 CoeffBundle::<$n, COLUMNS>::multiply_and_add(&tmp, data);
             }
@@ -258,20 +257,8 @@ define_idct_1d!(64, 32);
 define_idct_1d!(128, 64);
 define_idct_1d!(256, 128);
 
-fn transpose<const ROWS: usize, const COLS: usize>(input: &[f32], output: &mut [f32]) {
-    assert_eq!(input.len(), ROWS * COLS);
-    assert_eq!(output.len(), ROWS * COLS);
-
-    for r in 0..ROWS {
-        for c in 0..COLS {
-            let input_idx = r * COLS + c;
-            let output_idx = c * ROWS + r;
-            output[output_idx] = input[input_idx];
-        }
-    }
-}
-
-pub fn dct2d<const ROWS: usize, const COLS: usize>(data: &mut [f32])
+#[inline(always)]
+pub fn dct2d<D: SimdDescriptor, const ROWS: usize, const COLS: usize>(d: D, data: &mut [f32])
 where
     DCT1DImpl<ROWS>: DCT1D,
     DCT1DImpl<COLS>: DCT1D,
@@ -286,7 +273,7 @@ where
         column.copy_from_slice(&data[start..end]);
     }
 
-    DCT1DImpl::<ROWS>::do_dct::<COLS>(&mut temp_rows);
+    DCT1DImpl::<ROWS>::do_dct::<D, COLS>(d, &mut temp_rows);
 
     for (r, column) in temp_rows.iter().enumerate() {
         let start = r * COLS;
@@ -296,7 +283,7 @@ where
 
     // Create a temporary flat buffer for the transposed data.
     let mut transposed_data = vec![0.0f32; ROWS * COLS];
-    transpose::<ROWS, COLS>(data, &mut transposed_data);
+    d.transpose::<ROWS, COLS>(data, &mut transposed_data);
 
     // Copy data from flat `transposed_data` into a temporary Vec of arrays.
     let mut temp_cols: Vec<[f32; ROWS]> = vec![[0.0f32; ROWS]; COLS];
@@ -307,7 +294,7 @@ where
     }
 
     // Perform DCT on the temporary structure (treating original columns as rows).
-    DCT1DImpl::<COLS>::do_dct::<ROWS>(&mut temp_cols);
+    DCT1DImpl::<COLS>::do_dct::<D, ROWS>(d, &mut temp_cols);
 
     // Copy results back from the temporary structure into the flat `transposed_data`.
     for (c, row) in temp_cols.iter().enumerate() {
@@ -315,10 +302,11 @@ where
         let end = start + ROWS;
         transposed_data[start..end].copy_from_slice(row);
     }
-    transpose::<COLS, ROWS>(&transposed_data, data);
+    d.transpose::<COLS, ROWS>(&transposed_data, data);
 }
 
-pub fn idct2d<const ROWS: usize, const COLS: usize>(data: &mut [f32])
+#[inline(always)]
+pub fn idct2d<D: SimdDescriptor, const ROWS: usize, const COLS: usize>(d: D, data: &mut [f32])
 where
     IDCT1DImpl<ROWS>: IDCT1D,
     IDCT1DImpl<COLS>: IDCT1D,
@@ -328,7 +316,7 @@ where
     // Create a temporary flat buffer for the transposed data.
     let mut transposed_data = vec![0.0f32; ROWS * COLS];
     if ROWS < COLS {
-        transpose::<ROWS, COLS>(data, &mut transposed_data);
+        d.transpose::<ROWS, COLS>(data, &mut transposed_data);
     } else {
         transposed_data.copy_from_slice(data);
     }
@@ -342,7 +330,7 @@ where
     }
 
     // Perform IDCT on the temporary structure (treating original columns as rows).
-    IDCT1DImpl::<COLS>::do_idct::<ROWS>(&mut temp_cols);
+    IDCT1DImpl::<COLS>::do_idct::<D, ROWS>(d, &mut temp_cols);
 
     // Copy results back from the temporary structure into the flat `transposed_data`.
     for (c, row) in temp_cols.iter().enumerate() {
@@ -351,7 +339,7 @@ where
         transposed_data[start..end].copy_from_slice(row);
     }
 
-    transpose::<COLS, ROWS>(&transposed_data, data);
+    d.transpose::<COLS, ROWS>(&transposed_data, data);
 
     // Copy data from flat slice `data` into a temporary Vec of arrays (rows).
     let mut temp_rows: Vec<[f32; COLS]> = vec![[0.0f32; COLS]; ROWS];
@@ -360,7 +348,7 @@ where
         let end = start + COLS;
         column.copy_from_slice(&data[start..end]);
     }
-    IDCT1DImpl::<ROWS>::do_idct::<COLS>(&mut temp_rows);
+    IDCT1DImpl::<ROWS>::do_idct::<D, COLS>(d, &mut temp_rows);
 
     for (r, column) in temp_rows.iter().enumerate() {
         let start = r * COLS;
@@ -369,32 +357,48 @@ where
     }
 }
 
-pub fn compute_scaled_dct<const ROWS: usize, const COLS: usize>(
+#[inline(always)]
+pub fn compute_scaled_dct<D: SimdDescriptor, const ROWS: usize, const COLS: usize>(
+    d: D,
     mut from: [[f32; COLS]; ROWS],
     to: &mut [f32],
 ) where
     DCT1DImpl<ROWS>: DCT1D,
     DCT1DImpl<COLS>: DCT1D,
 {
-    DCT1DImpl::<ROWS>::do_dct::<COLS>(&mut from);
+    DCT1DImpl::<ROWS>::do_dct::<D, COLS>(d, &mut from);
     let mut transposed_dct_buffer = [[0.0; ROWS]; COLS];
-    #[allow(clippy::needless_range_loop)]
-    for y in 0..ROWS {
-        for x in 0..COLS {
-            transposed_dct_buffer[x][y] = from[y][x];
-        }
-    }
-    DCT1DImpl::<COLS>::do_dct::<ROWS>(&mut transposed_dct_buffer);
-    if ROWS < COLS {
-        for y in 0..ROWS {
-            for x in 0..COLS {
-                to[y * COLS + x] = transposed_dct_buffer[x][y] / (ROWS * COLS) as f32;
+    d.transpose::<ROWS, COLS>(
+        from.as_flattened(),
+        transposed_dct_buffer.as_flattened_mut(),
+    );
+    DCT1DImpl::<COLS>::do_dct::<D, ROWS>(d, &mut transposed_dct_buffer);
+    let normalization_factor = D::F32Vec::splat(d, 1.0 / (ROWS * COLS) as f32);
+    if ROWS >= COLS {
+        if ROWS * COLS < D::F32Vec::LEN {
+            let coeffs =
+                D::F32Vec::load_partial(d, ROWS * COLS, transposed_dct_buffer.as_flattened());
+            (coeffs * normalization_factor).store_partial(ROWS * COLS, to);
+        } else {
+            assert_eq!(ROWS * COLS % D::F32Vec::LEN, 0);
+            for i in (0..ROWS * COLS).step_by(D::F32Vec::LEN) {
+                let coeffs = D::F32Vec::load(d, transposed_dct_buffer.as_flattened()[i..].as_ref());
+                (coeffs * normalization_factor).store(to[i..].as_mut());
             }
         }
     } else {
-        for y in 0..COLS {
-            for x in 0..ROWS {
-                to[y * ROWS + x] = transposed_dct_buffer[y][x] / (ROWS * COLS) as f32;
+        d.transpose::<COLS, ROWS>(
+            transposed_dct_buffer.as_flattened(),
+            to[..ROWS * COLS].as_mut(),
+        );
+        if ROWS * COLS < D::F32Vec::LEN {
+            let coeffs = D::F32Vec::load_partial(d, ROWS * COLS, to);
+            (coeffs * normalization_factor).store_partial(ROWS * COLS, to);
+        } else {
+            assert_eq!(ROWS * COLS % D::F32Vec::LEN, 0);
+            for i in (0..ROWS * COLS).step_by(D::F32Vec::LEN) {
+                let coeffs = D::F32Vec::load(d, to[i..].as_ref());
+                (coeffs * normalization_factor).store(to[i..].as_mut());
             }
         }
     }
@@ -403,6 +407,7 @@ pub fn compute_scaled_dct<const ROWS: usize, const COLS: usize>(
 #[cfg(test)]
 mod tests {
     use crate::{
+        simd::ScalarDescriptor,
         util::test::{assert_all_almost_abs_eq, assert_almost_abs_eq},
         var_dct::{
             dct::{DCT1D, DCT1DImpl, IDCT1D, IDCT1DImpl, compute_scaled_dct, dct2d, idct2d},
@@ -410,6 +415,7 @@ mod tests {
         },
     };
     use test_log::test;
+
     macro_rules! test_dct1d_eq_slow_n {
         ($test_name:ident, $n_val:expr, $tolerance:expr) => {
             #[test]
@@ -437,7 +443,8 @@ mod tests {
                 }
 
                 let mut output = input_arr_2d;
-                DCT1DImpl::<N>::do_dct::<M>(&mut output);
+                let d = ScalarDescriptor {};
+                DCT1DImpl::<N>::do_dct::<_, M>(d, &mut output);
 
                 for i in 0..N {
                     assert_almost_abs_eq(output[i][0], output_matrix_slow[i][0] as f32, $tolerance);
@@ -473,7 +480,8 @@ mod tests {
                 }
 
                 let mut output = input_arr_2d;
-                IDCT1DImpl::<N>::do_idct::<M>(&mut output);
+                let d = ScalarDescriptor {};
+                IDCT1DImpl::<N>::do_idct::<_, M>(d, &mut output);
 
                 for i in 0..N {
                     assert_almost_abs_eq(output[i][0], output_matrix_slow[i][0] as f32, $tolerance);
@@ -530,7 +538,8 @@ mod tests {
         let mut output_fast_impl = input_coeffs_for_fast_impl;
 
         // Call the implementation under test (operates on 2D data)
-        IDCT1DImpl::<N>::do_idct::<M>(&mut output_fast_impl);
+        let d = ScalarDescriptor {};
+        IDCT1DImpl::<N>::do_idct::<_, M>(d, &mut output_fast_impl);
 
         // Compare results element-wise
         for r_idx in 0..N {
@@ -573,7 +582,8 @@ mod tests {
         let mut output_fast_impl = input_for_fast_impl;
 
         // Call the implementation under test (operates on 2D data)
-        DCT1DImpl::<N>::do_dct::<M>(&mut output_fast_impl);
+        let d = ScalarDescriptor {};
+        DCT1DImpl::<N>::do_dct::<_, M>(d, &mut output_fast_impl);
 
         // Compare results element-wise
         for r_freq_idx in 0..N {
@@ -596,7 +606,8 @@ mod tests {
                 const N: usize = $n_val;
                 const M: usize = $m_val;
                 let mut data = [0.0f32; M * N];
-                idct2d::<N, M>(&mut data);
+                let d = ScalarDescriptor {};
+                idct2d::<_, N, M>(d, &mut data);
             }
         };
     }
@@ -607,7 +618,8 @@ mod tests {
                 const N: usize = $n_val;
                 const M: usize = $m_val;
                 let mut data = [0.0f32; M * N];
-                dct2d::<N, M>(&mut data);
+                let d = ScalarDescriptor {};
+                dct2d::<_, N, M>(d, &mut data);
             }
         };
     }
@@ -785,7 +797,8 @@ mod tests {
 
         let mut output = [0.0; 4 * 8];
 
-        compute_scaled_dct::<4, 8>(input, &mut output);
+        let d = ScalarDescriptor {};
+        compute_scaled_dct::<_, 4, 8>(d, input, &mut output);
 
         assert_all_almost_abs_eq(
             output,
@@ -814,7 +827,8 @@ mod tests {
 
         let mut output = [0.0; 8 * 4];
 
-        compute_scaled_dct::<8, 4>(input, &mut output);
+        let d = ScalarDescriptor {};
+        compute_scaled_dct::<_, 8, 4>(d, input, &mut output);
 
         assert_all_almost_abs_eq(
             output,

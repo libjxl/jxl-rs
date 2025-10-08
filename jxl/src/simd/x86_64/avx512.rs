@@ -6,8 +6,9 @@
 use std::{
     arch::x86_64::{
         __m512, _mm512_add_ps, _mm512_andnot_si512, _mm512_castps_si512, _mm512_castsi512_ps,
-        _mm512_div_ps, _mm512_fmadd_ps, _mm512_loadu_ps, _mm512_max_ps, _mm512_mul_ps,
-        _mm512_set1_epi32, _mm512_set1_ps, _mm512_storeu_ps, _mm512_sub_ps,
+        _mm512_div_ps, _mm512_fmadd_ps, _mm512_loadu_ps, _mm512_mask_loadu_ps,
+        _mm512_mask_storeu_ps, _mm512_max_ps, _mm512_mul_ps, _mm512_set1_epi32, _mm512_set1_ps,
+        _mm512_setzero_ps, _mm512_storeu_ps, _mm512_sub_ps,
     },
     ops::{Add, AddAssign, Div, DivAssign, Mul, MulAssign, Sub, SubAssign},
 };
@@ -43,6 +44,12 @@ impl SimdDescriptor for Avx512Descriptor {
         } else {
             None
         }
+    }
+
+    #[inline(always)]
+    fn transpose<const ROWS: usize, const COLS: usize>(self, input: &[f32], output: &mut [f32]) {
+        // TODO: implement an AVX-512-specific version
+        self.as_avx().transpose::<ROWS, COLS>(input, output)
     }
 }
 
@@ -82,11 +89,32 @@ impl F32SimdVec for F32VecAvx512 {
     }
 
     #[inline(always)]
+    fn load_partial(d: Self::Descriptor, size: usize, mem: &[f32]) -> Self {
+        assert!(Self::LEN >= size);
+        assert!(mem.len() >= size);
+        // SAFETY: we just checked that `mem` has enough space. Moreover, we know avx512f is available
+        // from the safety invariant on `d`.
+        Self(
+            unsafe { _mm512_mask_loadu_ps(_mm512_setzero_ps(), (1u16 << size) - 1, mem.as_ptr()) },
+            d,
+        )
+    }
+
+    #[inline(always)]
     fn store(&self, mem: &mut [f32]) {
         assert!(mem.len() >= Self::LEN);
         // SAFETY: we just checked that `mem` has enough space. Moreover, we know avx512f is available
         // from the safety invariant on `self.1`.
         unsafe { _mm512_storeu_ps(mem.as_mut_ptr(), self.0) }
+    }
+
+    #[inline(always)]
+    fn store_partial(&self, size: usize, mem: &mut [f32]) {
+        assert!(Self::LEN >= size);
+        assert!(mem.len() >= size);
+        // SAFETY: we just checked that `mem` has enough space. Moreover, we know avx512f is available
+        // from the safety invariant on `self.1`.
+        unsafe { _mm512_mask_storeu_ps(mem.as_mut_ptr(), (1u16 << size) - 1, self.0) }
     }
 
     fn_avx!(this: F32VecAvx512, fn mul_add(mul: F32VecAvx512, add: F32VecAvx512) -> F32VecAvx512 {
