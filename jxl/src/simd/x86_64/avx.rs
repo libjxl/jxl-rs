@@ -16,14 +16,22 @@ use super::super::{F32SimdVec, SimdDescriptor};
 
 // Safety invariant: this type is only ever constructed if avx2 and fma are available.
 #[derive(Clone, Copy, Debug)]
-pub struct AvxDescriptor;
+pub struct AvxDescriptor(());
+
+impl AvxDescriptor {
+    /// Safety:
+    /// The caller must guarantee that the "avx2" and "fma" target features are available.
+    pub unsafe fn new_unchecked() -> Self {
+        Self(())
+    }
+}
 
 impl SimdDescriptor for AvxDescriptor {
     type F32Vec = F32VecAvx;
     fn new() -> Option<Self> {
         if is_x86_feature_detected!("avx2") && is_x86_feature_detected!("fma") {
             // SAFETY: we just checked avx2 and fma.
-            Some(Self)
+            Some(unsafe { Self::new_unchecked() })
         } else {
             None
         }

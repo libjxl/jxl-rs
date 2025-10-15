@@ -12,18 +12,34 @@ use std::{
     ops::{Add, AddAssign, Div, DivAssign, Mul, MulAssign, Sub, SubAssign},
 };
 
+use crate::simd::AvxDescriptor;
+
 use super::super::{F32SimdVec, SimdDescriptor};
 
 // Safety invariant: this type is only ever constructed if avx512f is available.
 #[derive(Clone, Copy, Debug)]
-pub struct Avx512Descriptor;
+pub struct Avx512Descriptor(());
+
+#[allow(unused)]
+impl Avx512Descriptor {
+    /// Safety:
+    /// The caller must guarantee that the "avx512f" target feature is available.
+    pub unsafe fn new_unchecked() -> Self {
+        Self(())
+    }
+    pub fn as_avx(&self) -> AvxDescriptor {
+        // SAFETY: the safety invariant on `self` guarantees avx512f is available, which implies
+        // avx2 and fma.
+        unsafe { AvxDescriptor::new_unchecked() }
+    }
+}
 
 impl SimdDescriptor for Avx512Descriptor {
     type F32Vec = F32VecAvx512;
     fn new() -> Option<Self> {
         if is_x86_feature_detected!("avx512f") {
             // SAFETY: we just checked avx512f.
-            Some(Self)
+            Some(Self(()))
         } else {
             None
         }
