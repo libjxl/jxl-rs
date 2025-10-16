@@ -152,9 +152,9 @@ macro_rules! define_dct_1d {
                     }
                     if remainder != 0 {
                         let j = D::F32Vec::LEN * num_full;
-                        let coeff_curr = D::F32Vec::load_partial(d, remainder, &coeff[i][j..]);
-                        let coeff_next = D::F32Vec::load_partial(d, remainder, &coeff[i + 1][j..]);
-                        (coeff_curr + coeff_next).store_partial(remainder, &mut coeff[i][j..]);
+                        let coeffs_curr = D::F32Vec::load_partial(d, remainder, &coeff[i][j..]);
+                        let coeffs_next = D::F32Vec::load_partial(d, remainder, &coeff[i + 1][j..]);
+                        (coeffs_curr + coeffs_next).store_partial(remainder, &mut coeff[i][j..]);
                     }
                 }
             }
@@ -163,13 +163,24 @@ macro_rules! define_dct_1d {
         // Helper functions for CoeffBundle operating on $n rows
         impl<const SZ: usize> CoeffBundle<$n, SZ> {
             /// Multiplies the second half of `coeff` by WcMultipliers.
-            fn multiply(coeff: &mut [[f32; SZ]]) {
+            fn multiply<D: SimdDescriptor>(d: D, coeff: &mut [[f32; SZ]]) {
                 const N_CONST: usize = $n;
                 const N_HALF_CONST: usize = $nhalf;
                 for i in 0..N_HALF_CONST {
-                    let mul_val = WcMultipliers::<N_CONST>::K_MULTIPLIERS[i];
-                    for j in 0..SZ {
-                        coeff[N_HALF_CONST + i][j] *= mul_val;
+                    let num_full = SZ / D::F32Vec::LEN;
+                    let remainder = SZ % D::F32Vec::LEN;
+
+                    let mul_val = D::F32Vec::splat(d, WcMultipliers::<N_CONST>::K_MULTIPLIERS[i]);
+                    for j in (0..D::F32Vec::LEN * num_full).step_by(D::F32Vec::LEN) {
+                        let coeffs = D::F32Vec::load(d, &coeff[N_HALF_CONST + i][j..]);
+                        (coeffs * mul_val).store(&mut coeff[N_HALF_CONST + i][j..]);
+                    }
+                    if remainder != 0 {
+                        let j = D::F32Vec::LEN * num_full;
+                        let coeffs =
+                            D::F32Vec::load_partial(d, remainder, &coeff[N_HALF_CONST + i][j..]);
+                        (coeffs * mul_val)
+                            .store_partial(remainder, &mut coeff[N_HALF_CONST + i][j..]);
                     }
                 }
             }
@@ -177,16 +188,33 @@ macro_rules! define_dct_1d {
             /// De-interleaves `a_in` into `a_out`.
             /// Even indexed rows of `a_out` get first half of `a_in`.
             /// Odd indexed rows of `a_out` get second half of `a_in`.
-            fn inverse_even_odd(a_in: &[[f32; SZ]], a_out: &mut [[f32; SZ]]) {
+            fn inverse_even_odd<D: SimdDescriptor>(
+                d: D,
+                a_in: &[[f32; SZ]],
+                a_out: &mut [[f32; SZ]],
+            ) {
                 const N_HALF_CONST: usize = $nhalf;
+                let num_full = SZ / D::F32Vec::LEN;
+                let remainder = SZ % D::F32Vec::LEN;
                 for i in 0..N_HALF_CONST {
-                    for j in 0..SZ {
-                        a_out[2 * i][j] = a_in[i][j];
+                    for j in (0..D::F32Vec::LEN * num_full).step_by(D::F32Vec::LEN) {
+                        D::F32Vec::load(d, &a_in[i][j..]).store(&mut a_out[2 * i][j..]);
+                    }
+                    if remainder != 0 {
+                        let j = D::F32Vec::LEN * num_full;
+                        D::F32Vec::load_partial(d, remainder, &a_in[i][j..])
+                            .store_partial(remainder, &mut a_out[2 * i][j..]);
                     }
                 }
                 for i in 0..N_HALF_CONST {
-                    for j in 0..SZ {
-                        a_out[2 * i + 1][j] = a_in[N_HALF_CONST + i][j];
+                    for j in (0..D::F32Vec::LEN * num_full).step_by(D::F32Vec::LEN) {
+                        D::F32Vec::load(d, &a_in[N_HALF_CONST + i][j..])
+                            .store(&mut a_out[2 * i + 1][j..]);
+                    }
+                    if remainder != 0 {
+                        let j = D::F32Vec::LEN * num_full;
+                        D::F32Vec::load_partial(d, remainder, &a_in[N_HALF_CONST + i][j..])
+                            .store_partial(remainder, &mut a_out[2 * i + 1][j..]);
                     }
                 }
             }
@@ -229,7 +257,7 @@ macro_rules! define_dct_1d {
 
                 // 4. Multiply(tmp);
                 //    Operates on the entire tmp_buffer.
-                CoeffBundle::<$n, COLUMNS>::multiply(&mut tmp_buffer);
+                CoeffBundle::<$n, COLUMNS>::multiply::<D>(d, &mut tmp_buffer);
 
                 // 5. Second Recursive Call (do_dct)
                 //    second half.
@@ -240,7 +268,7 @@ macro_rules! define_dct_1d {
                 CoeffBundle::<$nhalf, COLUMNS>::b::<D>(d, &mut tmp_buffer[$nhalf..$n]);
 
                 // 7. InverseEvenOdd
-                CoeffBundle::<$n, COLUMNS>::inverse_even_odd(&tmp_buffer, data);
+                CoeffBundle::<$n, COLUMNS>::inverse_even_odd::<D>(d, &tmp_buffer, data);
             }
         }
     };
