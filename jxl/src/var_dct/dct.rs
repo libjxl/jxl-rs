@@ -284,14 +284,31 @@ define_dct_1d!(256, 128);
 macro_rules! define_idct_1d {
     ($n:literal, $nhalf: literal) => {
         impl<const SZ: usize> CoeffBundle<$nhalf, SZ> {
-            fn b_transpose(coeff: &mut [[f32; SZ]]) {
+            fn b_transpose<D: SimdDescriptor>(d: D, coeff: &mut [[f32; SZ]]) {
+                let num_full = SZ / D::F32Vec::LEN;
+                let remainder = SZ % D::F32Vec::LEN;
                 for i in (1..$nhalf).rev() {
-                    for j in 0..SZ {
-                        coeff[i][j] += coeff[i - 1][j];
+                    for j in (0..D::F32Vec::LEN * num_full).step_by(D::F32Vec::LEN) {
+                        let coeffs_curr = D::F32Vec::load(d, &coeff[i][j..]);
+                        let coeffs_prev = D::F32Vec::load(d, &coeff[i - 1][j..]);
+                        (coeffs_curr + coeffs_prev).store(&mut coeff[i][j..]);
+                    }
+                    if remainder != 0 {
+                        let j = D::F32Vec::LEN * num_full;
+                        let coeffs_curr = D::F32Vec::load_partial(d, remainder, &coeff[i][j..]);
+                        let coeffs_prev = D::F32Vec::load_partial(d, remainder, &coeff[i - 1][j..]);
+                        (coeffs_curr + coeffs_prev).store_partial(remainder, &mut coeff[i][j..]);
                     }
                 }
-                for j in 0..SZ {
-                    coeff[0][j] *= SQRT_2 as f32;
+                let sqrt2 = D::F32Vec::splat(d, SQRT_2 as f32);
+                for j in (0..D::F32Vec::LEN * num_full).step_by(D::F32Vec::LEN) {
+                    let coeffs = D::F32Vec::load(d, &coeff[0][j..]);
+                    (coeffs * sqrt2).store(&mut coeff[0][j..]);
+                }
+                if remainder != 0 {
+                    let j = D::F32Vec::LEN * num_full;
+                    let coeffs = D::F32Vec::load_partial(d, remainder, &coeff[0][j..]);
+                    (coeffs * sqrt2).store_partial(remainder, &mut coeff[0][j..]);
                 }
             }
         }
@@ -337,7 +354,7 @@ macro_rules! define_idct_1d {
                 IDCT1DImpl::<$nhalf>::do_idct::<D, COLUMNS>(d, &mut tmp[0..$nhalf]);
                 // 3. BTranspose.
                 // only the second half
-                CoeffBundle::<$nhalf, COLUMNS>::b_transpose(&mut tmp[$nhalf..$n]);
+                CoeffBundle::<$nhalf, COLUMNS>::b_transpose::<D>(d, &mut tmp[$nhalf..$n]);
                 // 4. Second Recursive Call (IDCT1DImpl::do_idct)
                 // second half
                 IDCT1DImpl::<$nhalf>::do_idct::<D, COLUMNS>(d, &mut tmp[$nhalf..$n]);
