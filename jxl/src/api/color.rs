@@ -765,10 +765,10 @@ impl JxlColorEncoding {
     }
 
     pub fn maybe_create_profile(&self) -> Result<Option<Vec<u8>>, Error> {
-        if let JxlColorEncoding::XYB { rendering_intent } = self
-            && *rendering_intent != RenderingIntent::Perceptual
-        {
-            return Err(Error::InvalidRenderingIntent);
+        if let JxlColorEncoding::XYB { rendering_intent } = self {
+            if *rendering_intent != RenderingIntent::Perceptual {
+                return Err(Error::InvalidRenderingIntent);
+            }
         }
         let header = self.create_icc_header()?;
         let mut tags_data: Vec<u8> = Vec::new();

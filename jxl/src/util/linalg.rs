@@ -65,7 +65,7 @@ fn calculate_cofactor(m: &Matrix3x3<f64>, r: usize, c: usize) -> f64 {
     );
 
     // Apply the checkerboard pattern sign for the cofactor
-    if (r + c).is_multiple_of(2) {
+    if (r + c) % 2 == 0 {
         minor_val
     } else {
         -minor_val
