@@ -34,12 +34,21 @@ impl IDCT1D for IDCT1DImpl<1> {
 
 impl DCT1D for DCT1DImpl<2> {
     #[inline(always)]
-    fn do_dct<D: SimdDescriptor, const COLUMNS: usize>(_d: D, data: &mut [[f32; COLUMNS]]) {
-        for i in 0..COLUMNS {
-            let temp0 = data[0][i];
-            let temp1 = data[1][i];
-            data[0][i] = temp0 + temp1;
-            data[1][i] = temp0 - temp1;
+    fn do_dct<D: SimdDescriptor, const COLUMNS: usize>(d: D, data: &mut [[f32; COLUMNS]]) {
+        let num_full = COLUMNS / D::F32Vec::LEN;
+        let remainder = COLUMNS % D::F32Vec::LEN;
+        for i in (0..D::F32Vec::LEN * num_full).step_by(D::F32Vec::LEN) {
+            let temp0 = D::F32Vec::load(d, &data[0][i..]);
+            let temp1 = D::F32Vec::load(d, &data[1][i..]);
+            (temp0 + temp1).store(&mut data[0][i..]);
+            (temp0 - temp1).store(&mut data[1][i..]);
+        }
+        if remainder != 0 {
+            let i = D::F32Vec::LEN * num_full;
+            let temp0 = D::F32Vec::load_partial(d, remainder, &data[0][i..]);
+            let temp1 = D::F32Vec::load_partial(d, remainder, &data[1][i..]);
+            (temp0 + temp1).store_partial(remainder, &mut data[0][i..]);
+            (temp0 - temp1).store_partial(remainder, &mut data[1][i..]);
         }
     }
 }
@@ -56,37 +65,96 @@ macro_rules! define_dct_1d {
         // Helper functions for CoeffBundle operating on $nhalf rows
         impl<const SZ: usize> CoeffBundle<$nhalf, SZ> {
             /// Adds a_in1[i] and a_in2[$nhalf - 1 - i], storing in a_out[i].
-            fn add_reverse(a_in1: &[[f32; SZ]], a_in2: &[[f32; SZ]], a_out: &mut [[f32; SZ]]) {
+            fn add_reverse<D: SimdDescriptor>(
+                d: D,
+                a_in1: &[[f32; SZ]],
+                a_in2: &[[f32; SZ]],
+                a_out: &mut [[f32; SZ]],
+            ) {
                 const N_HALF_CONST: usize = $nhalf;
                 for i in 0..N_HALF_CONST {
-                    for j in 0..SZ {
-                        a_out[i][j] = a_in1[i][j] + a_in2[N_HALF_CONST - 1 - i][j];
+                    let num_full = SZ / D::F32Vec::LEN;
+                    let remainder = SZ % D::F32Vec::LEN;
+                    for j in (0..D::F32Vec::LEN * num_full).step_by(D::F32Vec::LEN) {
+                        let in1 = D::F32Vec::load(d, &a_in1[i][j..]);
+                        let in2 = D::F32Vec::load(d, &a_in2[N_HALF_CONST - 1 - i][j..]);
+                        (in1 + in2).store(&mut a_out[i][j..]);
+                    }
+                    if remainder != 0 {
+                        let j = D::F32Vec::LEN * num_full;
+                        let in1 = D::F32Vec::load_partial(d, remainder, &a_in1[i][j..]);
+                        let in2 = D::F32Vec::load_partial(
+                            d,
+                            remainder,
+                            &a_in2[N_HALF_CONST - 1 - i][j..],
+                        );
+                        (in1 + in2).store_partial(remainder, &mut a_out[i][j..]);
                     }
                 }
             }
 
             /// Subtracts a_in2[$nhalf - 1 - i] from a_in1[i], storing in a_out[i].
-            fn sub_reverse(a_in1: &[[f32; SZ]], a_in2: &[[f32; SZ]], a_out: &mut [[f32; SZ]]) {
+            fn sub_reverse<D: SimdDescriptor>(
+                d: D,
+                a_in1: &[[f32; SZ]],
+                a_in2: &[[f32; SZ]],
+                a_out: &mut [[f32; SZ]],
+            ) {
                 const N_HALF_CONST: usize = $nhalf;
                 for i in 0..N_HALF_CONST {
-                    for j in 0..SZ {
-                        a_out[i][j] = a_in1[i][j] - a_in2[N_HALF_CONST - 1 - i][j];
+                    let num_full = SZ / D::F32Vec::LEN;
+                    let remainder = SZ % D::F32Vec::LEN;
+                    for j in (0..D::F32Vec::LEN * num_full).step_by(D::F32Vec::LEN) {
+                        let in1 = D::F32Vec::load(d, &a_in1[i][j..]);
+                        let in2 = D::F32Vec::load(d, &a_in2[N_HALF_CONST - 1 - i][j..]);
+                        (in1 - in2).store(&mut a_out[i][j..]);
+                    }
+                    if remainder != 0 {
+                        let j = D::F32Vec::LEN * num_full;
+                        let in1 = D::F32Vec::load_partial(d, remainder, &a_in1[i][j..]);
+                        let in2 = D::F32Vec::load_partial(
+                            d,
+                            remainder,
+                            &a_in2[N_HALF_CONST - 1 - i][j..],
+                        );
+                        (in1 - in2).store_partial(remainder, &mut a_out[i][j..]);
                     }
                 }
             }
 
             /// Applies the B transform (forward DCT step).
             /// Operates on a slice of $nhalf rows.
-            fn b(coeff: &mut [[f32; SZ]]) {
+            fn b<D: SimdDescriptor>(d: D, coeff: &mut [[f32; SZ]]) {
                 const N_HALF_CONST: usize = $nhalf;
-                for j in 0..SZ {
-                    coeff[0][j] = coeff[0][j] * (SQRT_2 as f32) + coeff[1][j];
+                let sqrt2 = D::F32Vec::splat(d, SQRT_2 as f32);
+                let num_full = SZ / D::F32Vec::LEN;
+                let remainder = SZ % D::F32Vec::LEN;
+                for j in (0..D::F32Vec::LEN * num_full).step_by(D::F32Vec::LEN) {
+                    let coeff0 = D::F32Vec::load(d, &coeff[0][j..]);
+                    let coeff1 = D::F32Vec::load(d, &coeff[1][j..]);
+                    coeff0.mul_add(sqrt2, coeff1).store(&mut coeff[0][j..]);
+                }
+                if remainder != 0 {
+                    let j = D::F32Vec::LEN * num_full;
+                    let coeff0 = D::F32Vec::load_partial(d, remainder, &coeff[0][j..]);
+                    let coeff1 = D::F32Vec::load_partial(d, remainder, &coeff[1][j..]);
+                    coeff0
+                        .mul_add(sqrt2, coeff1)
+                        .store_partial(remainder, &mut coeff[0][j..]);
                 }
                 // empty in the case N_HALF_CONST == 2
                 #[allow(clippy::reversed_empty_ranges)]
                 for i in 1..(N_HALF_CONST - 1) {
-                    for j in 0..SZ {
-                        coeff[i][j] += coeff[i + 1][j];
+                    for j in (0..D::F32Vec::LEN * num_full).step_by(D::F32Vec::LEN) {
+                        let coeff_curr = D::F32Vec::load(d, &coeff[i][j..]);
+                        let coeff_next = D::F32Vec::load(d, &coeff[i + 1][j..]);
+                        (coeff_curr + coeff_next).store(&mut coeff[i][j..]);
+                    }
+                    if remainder != 0 {
+                        let j = D::F32Vec::LEN * num_full;
+                        let coeff_curr = D::F32Vec::load_partial(d, remainder, &coeff[i][j..]);
+                        let coeff_next = D::F32Vec::load_partial(d, remainder, &coeff[i + 1][j..]);
+                        (coeff_curr + coeff_next).store_partial(remainder, &mut coeff[i][j..]);
                     }
                 }
             }
@@ -138,7 +206,8 @@ macro_rules! define_dct_1d {
                 //
                 //    Inputs: first N/2 rows of data, second N/2 rows of data
                 //    Output: first N/2 rows of tmp_buffer
-                CoeffBundle::<$nhalf, COLUMNS>::add_reverse(
+                CoeffBundle::<$nhalf, COLUMNS>::add_reverse::<D>(
+                    d,
                     &data[0..$nhalf],
                     &data[$nhalf..$n],
                     &mut tmp_buffer[0..$nhalf],
@@ -151,7 +220,8 @@ macro_rules! define_dct_1d {
                 // 3. SubReverse
                 //    Inputs: first N/2 rows of data, second N/2 rows of data
                 //    Output: second N/2 rows of tmp_buffer
-                CoeffBundle::<$nhalf, COLUMNS>::sub_reverse(
+                CoeffBundle::<$nhalf, COLUMNS>::sub_reverse::<D>(
+                    d,
                     &data[0..$nhalf],
                     &data[$nhalf..$n],
                     &mut tmp_buffer[$nhalf..$n],
@@ -167,7 +237,7 @@ macro_rules! define_dct_1d {
 
                 // 6. B
                 //    Operates on the second N/2 rows of tmp_buffer.
-                CoeffBundle::<$nhalf, COLUMNS>::b(&mut tmp_buffer[$nhalf..$n]);
+                CoeffBundle::<$nhalf, COLUMNS>::b::<D>(d, &mut tmp_buffer[$nhalf..$n]);
 
                 // 7. InverseEvenOdd
                 CoeffBundle::<$n, COLUMNS>::inverse_even_odd(&tmp_buffer, data);
