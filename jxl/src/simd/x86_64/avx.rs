@@ -10,7 +10,7 @@ use std::{
         _mm256_add_ps, _mm256_andnot_si256, _mm256_castps_si256, _mm256_castsi256_ps,
         _mm256_div_ps, _mm256_fmadd_ps, _mm256_loadu_ps, _mm256_loadu_si256, _mm256_maskload_ps,
         _mm256_maskstore_ps, _mm256_max_ps, _mm256_mul_ps, _mm256_set1_epi32, _mm256_set1_ps,
-        _mm256_storeu_ps, _mm256_sub_ps,
+        _mm256_storeu_ps, _mm256_sub_ps, _mm256_xor_si256,
     },
     ops::{Add, AddAssign, Div, DivAssign, Mul, MulAssign, Sub, SubAssign},
 };
@@ -173,6 +173,9 @@ impl F32SimdVec for F32VecAvx {
     fn load_partial(d: Self::Descriptor, size: usize, mem: &[f32]) -> Self {
         debug_assert!(Self::LEN >= size);
         assert!(mem.len() >= size);
+        if size == Self::LEN {
+            return Self::load(d, mem);
+        }
         // SAFETY: we just checked that `mem` has enough space. Moreover, we know avx is available
         // from the safety invariant on `d`.
         Self(
@@ -192,6 +195,9 @@ impl F32SimdVec for F32VecAvx {
     fn store_partial(&self, size: usize, mem: &mut [f32]) {
         assert!(Self::LEN >= size);
         assert!(mem.len() >= size);
+        if size == Self::LEN {
+            return self.store(mem);
+        }
         // SAFETY: we just checked that `mem` has enough space. Moreover, we know avx is available
         // from the safety invariant on `d`.
         unsafe { _mm256_maskstore_ps(mem.as_mut_ptr(), get_mask(size), self.0) }
@@ -210,6 +216,15 @@ impl F32SimdVec for F32VecAvx {
     fn_avx!(this: F32VecAvx, fn abs() -> F32VecAvx {
         F32VecAvx(
             _mm256_castsi256_ps(_mm256_andnot_si256(
+                _mm256_set1_epi32(0b10000000000000000000000000000000u32 as i32),
+                _mm256_castps_si256(this.0),
+            )),
+            this.1)
+    });
+
+    fn_avx!(this: F32VecAvx, fn neg() -> F32VecAvx {
+        F32VecAvx(
+            _mm256_castsi256_ps(_mm256_xor_si256(
                 _mm256_set1_epi32(0b10000000000000000000000000000000u32 as i32),
                 _mm256_castps_si256(this.0),
             )),
