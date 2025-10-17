@@ -3,15 +3,17 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-use super::super::{F32SimdVec, ScalarDescriptor, SimdDescriptor};
+use super::super::{F32SimdVec, I32SimdVec, ScalarDescriptor, SimdDescriptor, SimdMask};
 use std::{
     arch::x86_64::{
         __m256, __m256i, _mm_loadu_ps, _mm_storeu_ps, _mm_unpackhi_ps, _mm_unpacklo_ps,
-        _mm256_add_ps, _mm256_andnot_si256, _mm256_castps_si256, _mm256_castsi256_ps,
+        _mm256_abs_epi32, _mm256_add_epi32, _mm256_add_ps, _mm256_andnot_si256, _mm256_blendv_ps,
+        _mm256_castps_si256, _mm256_castsi256_ps, _mm256_cmpgt_epi32, _mm256_cvtepi32_ps,
         _mm256_div_ps, _mm256_fmadd_ps, _mm256_fnmadd_ps, _mm256_loadu_ps, _mm256_loadu_si256,
-        _mm256_maskload_ps, _mm256_maskstore_ps, _mm256_max_ps, _mm256_mul_ps,
+        _mm256_maskload_ps, _mm256_maskstore_ps, _mm256_max_ps, _mm256_mul_epi32, _mm256_mul_ps,
         _mm256_permute2f128_ps, _mm256_set1_epi32, _mm256_set1_ps, _mm256_shuffle_ps,
-        _mm256_storeu_ps, _mm256_sub_ps, _mm256_unpackhi_ps, _mm256_unpacklo_ps, _mm256_xor_si256,
+        _mm256_storeu_ps, _mm256_sub_epi32, _mm256_sub_ps, _mm256_unpackhi_ps, _mm256_unpacklo_ps,
+        _mm256_xor_si256,
     },
     ops::{Add, AddAssign, Div, DivAssign, Mul, MulAssign, Sub, SubAssign},
 };
@@ -81,6 +83,9 @@ impl AvxDescriptor {
 
 impl SimdDescriptor for AvxDescriptor {
     type F32Vec = F32VecAvx;
+    type I32Vec = I32VecAvx;
+    type Mask = MaskAvx;
+
     fn new() -> Option<Self> {
         if is_x86_feature_detected!("avx2") && is_x86_feature_detected!("fma") {
             // SAFETY: we just checked avx2 and fma.
@@ -235,9 +240,13 @@ macro_rules! fn_avx {
 #[repr(transparent)]
 pub struct F32VecAvx(__m256, AvxDescriptor);
 
+#[derive(Clone, Copy, Debug)]
+#[repr(transparent)]
+pub struct MaskAvx(__m256, AvxDescriptor);
+
 #[target_feature(enable = "avx2")]
 #[inline]
-fn get_mask(size: usize) -> __m256i {
+fn get_partial_mask(size: usize) -> __m256i {
     const MASKS: [i32; 15] = [-1, -1, -1, -1, -1, -1, -1, -1, 0, 0, 0, 0, 0, 0, 0];
     // SAFETY: the pointer arithmetic is safe because:
     // `(size - 1) & 7` is between 0 and 7 (inclusive);
@@ -271,7 +280,7 @@ impl F32SimdVec for F32VecAvx {
         // SAFETY: we just checked that `mem` has enough space. Moreover, we know avx is available
         // from the safety invariant on `d`.
         Self(
-            unsafe { _mm256_maskload_ps(mem.as_ptr(), get_mask(size)) },
+            unsafe { _mm256_maskload_ps(mem.as_ptr(), get_partial_mask(size)) },
             d,
         )
     }
@@ -292,7 +301,7 @@ impl F32SimdVec for F32VecAvx {
         }
         // SAFETY: we just checked that `mem` has enough space. Moreover, we know avx is available
         // from the safety invariant on `d`.
-        unsafe { _mm256_maskstore_ps(mem.as_mut_ptr(), get_mask(size), self.0) }
+        unsafe { _mm256_maskstore_ps(mem.as_mut_ptr(), get_partial_mask(size), self.0) }
     }
 
     fn_avx!(this: F32VecAvx, fn mul_add(mul: F32VecAvx, add: F32VecAvx) -> F32VecAvx {
@@ -381,5 +390,99 @@ impl MulAssign<F32VecAvx> for F32VecAvx {
 impl DivAssign<F32VecAvx> for F32VecAvx {
     fn_avx!(this: &mut F32VecAvx, fn div_assign(rhs: F32VecAvx) {
         this.0 = _mm256_div_ps(this.0, rhs.0)
+    });
+}
+
+#[derive(Clone, Copy, Debug)]
+#[repr(transparent)]
+pub struct I32VecAvx(__m256i, AvxDescriptor);
+
+impl I32SimdVec for I32VecAvx {
+    type Descriptor = AvxDescriptor;
+    type F32Vec = F32VecAvx;
+    type Mask = MaskAvx;
+
+    const LEN: usize = 8;
+
+    #[inline(always)]
+    fn load(d: Self::Descriptor, mem: &[i32]) -> Self {
+        assert!(mem.len() >= Self::LEN);
+        // SAFETY: we just checked that `mem` has enough space. Moreover, we know avx is available
+        // from the safety invariant on `d`.
+        Self(unsafe { _mm256_loadu_si256(mem.as_ptr() as *const _) }, d)
+    }
+
+    #[inline(always)]
+    fn splat(d: Self::Descriptor, v: i32) -> Self {
+        // SAFETY: We know avx is available from the safety invariant on `d`.
+        unsafe { Self(_mm256_set1_epi32(v), d) }
+    }
+
+    fn_avx!(this: I32VecAvx, fn as_f32() -> F32VecAvx {
+        F32VecAvx(_mm256_cvtepi32_ps(this.0), this.1)
+    });
+
+    fn_avx!(this: I32VecAvx, fn abs() -> I32VecAvx {
+        I32VecAvx(
+            _mm256_abs_epi32(
+                this.0,
+            ),
+            this.1)
+    });
+
+    fn_avx!(this: I32VecAvx, fn gt(rhs: I32VecAvx) -> MaskAvx {
+        MaskAvx(
+            _mm256_castsi256_ps(_mm256_cmpgt_epi32(this.0, rhs.0)),
+            this.1,
+        )
+    });
+}
+
+impl Add<I32VecAvx> for I32VecAvx {
+    type Output = I32VecAvx;
+    fn_avx!(this: I32VecAvx, fn add(rhs: I32VecAvx) -> I32VecAvx {
+        I32VecAvx(_mm256_add_epi32(this.0, rhs.0), this.1)
+    });
+}
+
+impl Sub<I32VecAvx> for I32VecAvx {
+    type Output = I32VecAvx;
+    fn_avx!(this: I32VecAvx, fn sub(rhs: I32VecAvx) -> I32VecAvx {
+        I32VecAvx(_mm256_sub_epi32(this.0, rhs.0), this.1)
+    });
+}
+
+impl Mul<I32VecAvx> for I32VecAvx {
+    type Output = I32VecAvx;
+    fn_avx!(this: I32VecAvx, fn mul(rhs: I32VecAvx) -> I32VecAvx {
+        I32VecAvx(_mm256_mul_epi32(this.0, rhs.0), this.1)
+    });
+}
+
+impl AddAssign<I32VecAvx> for I32VecAvx {
+    fn_avx!(this: &mut I32VecAvx, fn add_assign(rhs: I32VecAvx) {
+        this.0 = _mm256_add_epi32(this.0, rhs.0)
+    });
+}
+
+impl SubAssign<I32VecAvx> for I32VecAvx {
+    fn_avx!(this: &mut I32VecAvx, fn sub_assign(rhs: I32VecAvx) {
+        this.0 = _mm256_sub_epi32(this.0, rhs.0)
+    });
+}
+
+impl MulAssign<I32VecAvx> for I32VecAvx {
+    fn_avx!(this: &mut I32VecAvx, fn mul_assign(rhs: I32VecAvx) {
+        this.0 = _mm256_mul_epi32(this.0, rhs.0)
+    });
+}
+
+impl SimdMask for MaskAvx {
+    type Descriptor = AvxDescriptor;
+    type F32Vec = F32VecAvx;
+    type I32Vec = I32VecAvx;
+
+    fn_avx!(this: MaskAvx, fn if_then_else_f32(if_true: F32VecAvx, if_false: F32VecAvx) -> F32VecAvx {
+        F32VecAvx(_mm256_blendv_ps(if_false.0, if_true.0, this.0), this.1)
     });
 }

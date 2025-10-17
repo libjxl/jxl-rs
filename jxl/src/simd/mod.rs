@@ -30,6 +30,10 @@ pub(crate) use scalar::ScalarDescriptor;
 pub trait SimdDescriptor: Sized + Copy + Debug + Send + Sync {
     type F32Vec: F32SimdVec<Descriptor = Self>;
 
+    type I32Vec: I32SimdVec<Descriptor = Self, F32Vec = Self::F32Vec, Mask = Self::Mask>;
+
+    type Mask: SimdMask<Descriptor = Self, F32Vec = Self::F32Vec, I32Vec = Self::I32Vec>;
+
     fn new() -> Option<Self>;
 
     fn transpose<const ROWS: usize, const COLS: usize>(self, input: &[f32], output: &mut [f32]);
@@ -87,6 +91,51 @@ pub trait F32SimdVec:
     fn neg(self) -> Self;
 
     fn max(self, other: Self) -> Self;
+}
+
+pub trait I32SimdVec:
+    Sized
+    + Copy
+    + Debug
+    + Send
+    + Sync
+    + Add<Self, Output = Self>
+    + Mul<Self, Output = Self>
+    + Sub<Self, Output = Self>
+    + AddAssign<Self>
+    + MulAssign<Self>
+    + SubAssign<Self>
+{
+    type Descriptor: SimdDescriptor;
+
+    type F32Vec: F32SimdVec;
+
+    type Mask: SimdMask;
+
+    #[allow(dead_code)]
+    const LEN: usize;
+
+    /// Converts v to an array of v.
+    fn splat(d: Self::Descriptor, v: i32) -> Self;
+
+    // Requires `mem.len() >= Self::LEN` or it will panic.
+    fn load(d: Self::Descriptor, mem: &[i32]) -> Self;
+
+    fn abs(self) -> Self;
+
+    fn as_f32(self) -> Self::F32Vec;
+
+    fn gt(self, other: Self) -> Self::Mask;
+}
+
+pub trait SimdMask: Sized + Copy + Debug + Send + Sync {
+    type Descriptor: SimdDescriptor;
+
+    type F32Vec: F32SimdVec;
+
+    type I32Vec: I32SimdVec;
+
+    fn if_then_else_f32(self, if_true: Self::F32Vec, if_false: Self::F32Vec) -> Self::F32Vec;
 }
 
 #[cfg(test)]
