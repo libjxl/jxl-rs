@@ -13,50 +13,76 @@ pub struct DCT1DImpl<const SIZE: usize>;
 pub struct IDCT1DImpl<const SIZE: usize>;
 
 pub trait DCT1D {
-    fn do_dct<D: SimdDescriptor, const COLUMNS: usize>(d: D, data: &mut [[f32; COLUMNS]]);
+    fn do_dct<D: SimdDescriptor, const COLUMNS: usize, const full: bool>(
+        d: D,
+        data: &mut [[f32; COLUMNS]],
+        starting_column: usize,
+        num_columns: usize,
+    );
 }
 pub trait IDCT1D {
-    fn do_idct<D: SimdDescriptor, const COLUMNS: usize>(d: D, data: &mut [[f32; COLUMNS]]);
+    fn do_idct<D: SimdDescriptor, const COLUMNS: usize, const full: bool>(
+        d: D,
+        data: &mut [[f32; COLUMNS]],
+        starting_column: usize,
+        num_columns: usize,
+    );
 }
 
 impl DCT1D for DCT1DImpl<1> {
     #[inline(always)]
-    fn do_dct<D: SimdDescriptor, const COLUMNS: usize>(_d: D, _data: &mut [[f32; COLUMNS]]) {
+    fn do_dct<D: SimdDescriptor, const COLUMNS: usize, const full: bool>(
+        _d: D,
+        _data: &mut [[f32; COLUMNS]],
+        _starting_column: usize,
+        _num_columns: usize,
+    ) {
         // Do nothing
     }
 }
 impl IDCT1D for IDCT1DImpl<1> {
     #[inline(always)]
-    fn do_idct<D: SimdDescriptor, const COLUMNS: usize>(_d: D, _data: &mut [[f32; COLUMNS]]) {
+    fn do_idct<D: SimdDescriptor, const COLUMNS: usize, const full: bool>(
+        _d: D,
+        _data: &mut [[f32; COLUMNS]],
+        _starting_column: usize,
+        _num_columns: usize,
+    ) {
         // Do nothing
     }
 }
 
 impl DCT1D for DCT1DImpl<2> {
     #[inline(always)]
-    fn do_dct<D: SimdDescriptor, const COLUMNS: usize>(d: D, data: &mut [[f32; COLUMNS]]) {
-        let num_full = COLUMNS / D::F32Vec::LEN;
-        let remainder = COLUMNS % D::F32Vec::LEN;
-        for i in (0..D::F32Vec::LEN * num_full).step_by(D::F32Vec::LEN) {
-            let temp0 = D::F32Vec::load(d, &data[0][i..]);
-            let temp1 = D::F32Vec::load(d, &data[1][i..]);
-            (temp0 + temp1).store(&mut data[0][i..]);
-            (temp0 - temp1).store(&mut data[1][i..]);
-        }
-        if remainder != 0 {
-            let i = D::F32Vec::LEN * num_full;
-            let temp0 = D::F32Vec::load_partial(d, remainder, &data[0][i..]);
-            let temp1 = D::F32Vec::load_partial(d, remainder, &data[1][i..]);
-            (temp0 + temp1).store_partial(remainder, &mut data[0][i..]);
-            (temp0 - temp1).store_partial(remainder, &mut data[1][i..]);
+    fn do_dct<D: SimdDescriptor, const COLUMNS: usize, const full: bool>(
+        d: D,
+        data: &mut [[f32; COLUMNS]],
+        starting_column: usize,
+        num_columns: usize,
+    ) {
+        if full {
+            let temp0 = D::F32Vec::load(d, &data[0][starting_column..]);
+            let temp1 = D::F32Vec::load(d, &data[1][starting_column..]);
+            (temp0 + temp1).store(&mut data[0][starting_column..]);
+            (temp0 - temp1).store(&mut data[1][starting_column..]);
+        } else {
+            let temp0 = D::F32Vec::load_partial(d, num_columns, &data[0][starting_column..]);
+            let temp1 = D::F32Vec::load_partial(d, num_columns, &data[1][starting_column..]);
+            (temp0 + temp1).store_partial(num_columns, &mut data[0][starting_column..]);
+            (temp0 - temp1).store_partial(num_columns, &mut data[1][starting_column..]);
         }
     }
 }
 
 impl IDCT1D for IDCT1DImpl<2> {
     #[inline(always)]
-    fn do_idct<D: SimdDescriptor, const COLUMNS: usize>(d: D, data: &mut [[f32; COLUMNS]]) {
-        DCT1DImpl::<2>::do_dct::<D, COLUMNS>(d, data)
+    fn do_idct<D: SimdDescriptor, const COLUMNS: usize, const full: bool>(
+        d: D,
+        data: &mut [[f32; COLUMNS]],
+        starting_column: usize,
+        num_columns: usize,
+    ) {
+        DCT1DImpl::<2>::do_dct::<D, COLUMNS, full>(d, data, starting_column, num_columns)
     }
 }
 
@@ -70,91 +96,90 @@ macro_rules! define_dct_1d {
                 a_in1: &[[f32; SZ]],
                 a_in2: &[[f32; SZ]],
                 a_out: &mut [[f32; SZ]],
+                starting_column: usize,
+                num_columns: usize,
             ) {
                 const N_HALF_CONST: usize = $nhalf;
                 for i in 0..N_HALF_CONST {
-                    let num_full = SZ / D::F32Vec::LEN;
-                    let remainder = SZ % D::F32Vec::LEN;
-                    for j in (0..D::F32Vec::LEN * num_full).step_by(D::F32Vec::LEN) {
+                    let j = starting_column;
+                    if full {
                         let in1 = D::F32Vec::load(d, &a_in1[i][j..]);
                         let in2 = D::F32Vec::load(d, &a_in2[N_HALF_CONST - 1 - i][j..]);
                         (in1 + in2).store(&mut a_out[i][j..]);
-                    }
-                    if remainder != 0 {
-                        let j = D::F32Vec::LEN * num_full;
-                        let in1 = D::F32Vec::load_partial(d, remainder, &a_in1[i][j..]);
+                    } else {
+                        let in1 = D::F32Vec::load_partial(d, num_columns, &a_in1[i][j..]);
                         let in2 = D::F32Vec::load_partial(
                             d,
-                            remainder,
+                            num_columns,
                             &a_in2[N_HALF_CONST - 1 - i][j..],
                         );
-                        (in1 + in2).store_partial(remainder, &mut a_out[i][j..]);
+                        (in1 + in2).store_partial(num_columns, &mut a_out[i][j..]);
                     }
                 }
             }
 
             /// Subtracts a_in2[$nhalf - 1 - i] from a_in1[i], storing in a_out[i].
-            fn sub_reverse<D: SimdDescriptor>(
+            fn sub_reverse<D: SimdDescriptor, const full: bool>(
                 d: D,
                 a_in1: &[[f32; SZ]],
                 a_in2: &[[f32; SZ]],
                 a_out: &mut [[f32; SZ]],
+                starting_column: usize,
+                num_columns: usize,
             ) {
                 const N_HALF_CONST: usize = $nhalf;
                 for i in 0..N_HALF_CONST {
-                    let num_full = SZ / D::F32Vec::LEN;
-                    let remainder = SZ % D::F32Vec::LEN;
-                    for j in (0..D::F32Vec::LEN * num_full).step_by(D::F32Vec::LEN) {
+                    let j = starting_column;
+                    if full {
                         let in1 = D::F32Vec::load(d, &a_in1[i][j..]);
                         let in2 = D::F32Vec::load(d, &a_in2[N_HALF_CONST - 1 - i][j..]);
                         (in1 - in2).store(&mut a_out[i][j..]);
-                    }
-                    if remainder != 0 {
-                        let j = D::F32Vec::LEN * num_full;
-                        let in1 = D::F32Vec::load_partial(d, remainder, &a_in1[i][j..]);
+                    } else {
+                        let in1 = D::F32Vec::load_partial(d, num_columns, &a_in1[i][j..]);
                         let in2 = D::F32Vec::load_partial(
                             d,
-                            remainder,
+                            num_columns,
                             &a_in2[N_HALF_CONST - 1 - i][j..],
                         );
-                        (in1 - in2).store_partial(remainder, &mut a_out[i][j..]);
+                        (in1 - in2).store_partial(num_columns, &mut a_out[i][j..]);
                     }
                 }
             }
 
             /// Applies the B transform (forward DCT step).
             /// Operates on a slice of $nhalf rows.
-            fn b<D: SimdDescriptor>(d: D, coeff: &mut [[f32; SZ]]) {
+            fn b<D: SimdDescriptor, const full: bool>(
+                d: D,
+                coeff: &mut [[f32; SZ]],
+                starting_column: usize,
+                num_columns: usize,
+            ) {
                 const N_HALF_CONST: usize = $nhalf;
                 let sqrt2 = D::F32Vec::splat(d, SQRT_2 as f32);
-                let num_full = SZ / D::F32Vec::LEN;
-                let remainder = SZ % D::F32Vec::LEN;
-                for j in (0..D::F32Vec::LEN * num_full).step_by(D::F32Vec::LEN) {
+                let j = starting_column;
+                if full {
                     let coeff0 = D::F32Vec::load(d, &coeff[0][j..]);
                     let coeff1 = D::F32Vec::load(d, &coeff[1][j..]);
                     coeff0.mul_add(sqrt2, coeff1).store(&mut coeff[0][j..]);
-                }
-                if remainder != 0 {
-                    let j = D::F32Vec::LEN * num_full;
-                    let coeff0 = D::F32Vec::load_partial(d, remainder, &coeff[0][j..]);
-                    let coeff1 = D::F32Vec::load_partial(d, remainder, &coeff[1][j..]);
+                } else {
+                    let coeff0 = D::F32Vec::load_partial(d, num_columns, &coeff[0][j..]);
+                    let coeff1 = D::F32Vec::load_partial(d, num_columns, &coeff[1][j..]);
                     coeff0
                         .mul_add(sqrt2, coeff1)
-                        .store_partial(remainder, &mut coeff[0][j..]);
+                        .store_partial(num_columns, &mut coeff[0][j..]);
                 }
                 // empty in the case N_HALF_CONST == 2
                 #[allow(clippy::reversed_empty_ranges)]
                 for i in 1..(N_HALF_CONST - 1) {
-                    for j in (0..D::F32Vec::LEN * num_full).step_by(D::F32Vec::LEN) {
+                    if full {
                         let coeff_curr = D::F32Vec::load(d, &coeff[i][j..]);
                         let coeff_next = D::F32Vec::load(d, &coeff[i + 1][j..]);
                         (coeff_curr + coeff_next).store(&mut coeff[i][j..]);
-                    }
-                    if remainder != 0 {
-                        let j = D::F32Vec::LEN * num_full;
-                        let coeffs_curr = D::F32Vec::load_partial(d, remainder, &coeff[i][j..]);
-                        let coeffs_next = D::F32Vec::load_partial(d, remainder, &coeff[i + 1][j..]);
-                        (coeffs_curr + coeffs_next).store_partial(remainder, &mut coeff[i][j..]);
+                    } else {
+                        let coeffs_curr = D::F32Vec::load_partial(d, num_columns, &coeff[i][j..]);
+                        let coeffs_next =
+                            D::F32Vec::load_partial(d, num_columns, &coeff[i + 1][j..]);
+                        (coeffs_curr + coeffs_next).store_partial(num_columns, &mut coeff[i][j..]);
                     }
                 }
             }
@@ -163,24 +188,25 @@ macro_rules! define_dct_1d {
         // Helper functions for CoeffBundle operating on $n rows
         impl<const SZ: usize> CoeffBundle<$n, SZ> {
             /// Multiplies the second half of `coeff` by WcMultipliers.
-            fn multiply<D: SimdDescriptor>(d: D, coeff: &mut [[f32; SZ]]) {
+            fn multiply<D: SimdDescriptor, const full: bool>(
+                d: D,
+                coeff: &mut [[f32; SZ]],
+                starting_column: usize,
+                num_columns: usize,
+            ) {
                 const N_CONST: usize = $n;
                 const N_HALF_CONST: usize = $nhalf;
                 for i in 0..N_HALF_CONST {
-                    let num_full = SZ / D::F32Vec::LEN;
-                    let remainder = SZ % D::F32Vec::LEN;
-
+                    let j = starting_column;
                     let mul_val = D::F32Vec::splat(d, WcMultipliers::<N_CONST>::K_MULTIPLIERS[i]);
-                    for j in (0..D::F32Vec::LEN * num_full).step_by(D::F32Vec::LEN) {
+                    if full {
                         let coeffs = D::F32Vec::load(d, &coeff[N_HALF_CONST + i][j..]);
                         (coeffs * mul_val).store(&mut coeff[N_HALF_CONST + i][j..]);
-                    }
-                    if remainder != 0 {
-                        let j = D::F32Vec::LEN * num_full;
+                    } else {
                         let coeffs =
-                            D::F32Vec::load_partial(d, remainder, &coeff[N_HALF_CONST + i][j..]);
+                            D::F32Vec::load_partial(d, num_columns, &coeff[N_HALF_CONST + i][j..]);
                         (coeffs * mul_val)
-                            .store_partial(remainder, &mut coeff[N_HALF_CONST + i][j..]);
+                            .store_partial(num_columns, &mut coeff[N_HALF_CONST + i][j..]);
                     }
                 }
             }
@@ -188,33 +214,31 @@ macro_rules! define_dct_1d {
             /// De-interleaves `a_in` into `a_out`.
             /// Even indexed rows of `a_out` get first half of `a_in`.
             /// Odd indexed rows of `a_out` get second half of `a_in`.
-            fn inverse_even_odd<D: SimdDescriptor>(
+            fn inverse_even_odd<D: SimdDescriptor, const full: bool>(
                 d: D,
                 a_in: &[[f32; SZ]],
                 a_out: &mut [[f32; SZ]],
+                starting_column: usize,
+                num_columns: usize,
             ) {
                 const N_HALF_CONST: usize = $nhalf;
-                let num_full = SZ / D::F32Vec::LEN;
-                let remainder = SZ % D::F32Vec::LEN;
                 for i in 0..N_HALF_CONST {
-                    for j in (0..D::F32Vec::LEN * num_full).step_by(D::F32Vec::LEN) {
+                    let j = starting_column;
+                    if full {
                         D::F32Vec::load(d, &a_in[i][j..]).store(&mut a_out[2 * i][j..]);
-                    }
-                    if remainder != 0 {
-                        let j = D::F32Vec::LEN * num_full;
-                        D::F32Vec::load_partial(d, remainder, &a_in[i][j..])
-                            .store_partial(remainder, &mut a_out[2 * i][j..]);
+                    } else {
+                        D::F32Vec::load_partial(d, num_columns, &a_in[i][j..])
+                            .store_partial(num_columns, &mut a_out[2 * i][j..]);
                     }
                 }
                 for i in 0..N_HALF_CONST {
-                    for j in (0..D::F32Vec::LEN * num_full).step_by(D::F32Vec::LEN) {
+                    let j = starting_column;
+                    if full {
                         D::F32Vec::load(d, &a_in[N_HALF_CONST + i][j..])
                             .store(&mut a_out[2 * i + 1][j..]);
-                    }
-                    if remainder != 0 {
-                        let j = D::F32Vec::LEN * num_full;
-                        D::F32Vec::load_partial(d, remainder, &a_in[N_HALF_CONST + i][j..])
-                            .store_partial(remainder, &mut a_out[2 * i + 1][j..]);
+                    } else {
+                        D::F32Vec::load_partial(d, num_columns, &a_in[N_HALF_CONST + i][j..])
+                            .store_partial(num_columns, &mut a_out[2 * i + 1][j..]);
                     }
                 }
             }
