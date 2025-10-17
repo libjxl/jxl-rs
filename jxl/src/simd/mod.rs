@@ -37,6 +37,8 @@ pub fn round_up_size_to_two_cache_lines<T>(size: usize) -> usize {
 pub trait SimdDescriptor: Sized + Copy + Debug + Send + Sync {
     type F32Vec: F32SimdVec<Descriptor = Self>;
 
+    type I32Vec: I32SimdVec<Descriptor = Self, F32Vec = Self::F32Vec>;
+
     fn new() -> Option<Self>;
 
     fn transpose<const ROWS: usize, const COLS: usize>(self, input: &[f32], output: &mut [f32]);
@@ -61,6 +63,8 @@ pub trait F32SimdVec:
 
     const LEN: usize;
 
+    fn zero(d: Self::Descriptor) -> Self;
+
     /// Converts v to an array of v.
     fn splat(d: Self::Descriptor, v: f32) -> Self;
 
@@ -81,6 +85,44 @@ pub trait F32SimdVec:
     fn abs(self) -> Self;
 
     fn max(self, other: Self) -> Self;
+}
+
+pub trait I32SimdVec:
+    Sized
+    + Copy
+    + Debug
+    + Send
+    + Sync
+    + Add<Self, Output = Self>
+    + Mul<Self, Output = Self>
+    + Sub<Self, Output = Self>
+    + AddAssign<Self>
+    + MulAssign<Self>
+    + SubAssign<Self>
+{
+    type Descriptor: SimdDescriptor;
+
+    type F32Vec: F32SimdVec;
+
+    const LEN: usize;
+
+    fn zero(d: Self::Descriptor) -> Self;
+
+    /// Converts v to an array of v.
+    fn splat(d: Self::Descriptor, v: i32) -> Self;
+
+    // Requires `mem.len() >= Self::LEN` or it will panic.
+    fn load(d: Self::Descriptor, mem: &[i32]) -> Self;
+
+    // Requires `mem.len() >= Self::LEN` or it will panic.
+    fn store(&self, mem: &mut [i32]);
+
+    fn as_f32(self) -> Self::F32Vec;
+
+    // TODO(sboukortt): make this return a separate Mask type, and move `if_then_else` to that type (will benefit AVX-512)
+    fn eq(self, other: Self) -> Self;
+
+    fn if_then_else_f32(self, if_true: Self::F32Vec, if_false: Self::F32Vec) -> Self::F32Vec;
 }
 
 #[cfg(test)]

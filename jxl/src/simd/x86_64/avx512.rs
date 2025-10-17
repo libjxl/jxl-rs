@@ -3,19 +3,19 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
+use super::super::{AvxDescriptor, F32SimdVec, I32SimdVec, SimdDescriptor};
 use std::{
     arch::x86_64::{
-        __m512, _mm512_add_ps, _mm512_andnot_si512, _mm512_castps_si512, _mm512_castsi512_ps,
-        _mm512_div_ps, _mm512_fmadd_ps, _mm512_loadu_ps, _mm512_mask_loadu_ps,
-        _mm512_mask_storeu_ps, _mm512_max_ps, _mm512_mul_ps, _mm512_set1_epi32, _mm512_set1_ps,
-        _mm512_setzero_ps, _mm512_storeu_ps, _mm512_sub_ps,
+        __m512, __m512i, _mm512_add_epi32, _mm512_add_ps, _mm512_and_ps, _mm512_andnot_ps,
+        _mm512_andnot_si512, _mm512_castps_si512, _mm512_castsi512_ps, _mm512_cmpeq_epi32_mask,
+        _mm512_cvtepi32_ps, _mm512_div_ps, _mm512_fmadd_ps, _mm512_loadu_epi32, _mm512_loadu_ps,
+        _mm512_mask_loadu_ps, _mm512_mask_storeu_ps, _mm512_maskz_expand_epi32, _mm512_max_ps,
+        _mm512_mul_epi32, _mm512_mul_ps, _mm512_or_ps, _mm512_set1_epi32, _mm512_set1_ps,
+        _mm512_setzero_epi32, _mm512_setzero_ps, _mm512_storeu_epi32, _mm512_storeu_ps,
+        _mm512_sub_epi32, _mm512_sub_ps,
     },
     ops::{Add, AddAssign, Div, DivAssign, Mul, MulAssign, Sub, SubAssign},
 };
-
-use crate::simd::AvxDescriptor;
-
-use super::super::{F32SimdVec, SimdDescriptor};
 
 // Safety invariant: this type is only ever constructed if avx512f is available.
 #[derive(Clone, Copy, Debug)]
@@ -37,6 +37,7 @@ impl Avx512Descriptor {
 
 impl SimdDescriptor for Avx512Descriptor {
     type F32Vec = F32VecAvx512;
+    type I32Vec = I32VecAvx512;
     fn new() -> Option<Self> {
         if is_x86_feature_detected!("avx512f") {
             // SAFETY: we just checked avx512f.
@@ -122,6 +123,12 @@ impl F32SimdVec for F32VecAvx512 {
     });
 
     #[inline(always)]
+    fn zero(d: Self::Descriptor) -> Self {
+        // SAFETY: We know avx512f is available from the safety invariant on `d`.
+        unsafe { Self(_mm512_setzero_ps(), d) }
+    }
+
+    #[inline(always)]
     fn splat(d: Self::Descriptor, v: f32) -> Self {
         // SAFETY: We know avx512f is available from the safety invariant on `d`.
         unsafe { Self(_mm512_set1_ps(v), d) }
@@ -190,5 +197,117 @@ impl MulAssign<F32VecAvx512> for F32VecAvx512 {
 impl DivAssign<F32VecAvx512> for F32VecAvx512 {
     fn_avx!(this: &mut F32VecAvx512, fn div_assign(rhs: F32VecAvx512) {
         this.0 = _mm512_div_ps(this.0, rhs.0)
+    });
+}
+
+#[derive(Clone, Copy, Debug)]
+#[repr(transparent)]
+pub struct I32VecAvx512(__m512i, Avx512Descriptor);
+
+impl I32SimdVec for I32VecAvx512 {
+    type Descriptor = Avx512Descriptor;
+    type F32Vec = F32VecAvx512;
+
+    const LEN: usize = 16;
+
+    #[inline(always)]
+    fn load(d: Self::Descriptor, mem: &[i32]) -> Self {
+        assert!(mem.len() >= Self::LEN);
+        // SAFETY: we just checked that `mem` has enough space. Moreover, we know avx512f is available
+        // from the safety invariant on `d`.
+        Self(unsafe { _mm512_loadu_epi32(mem.as_ptr()) }, d)
+    }
+
+    #[inline(always)]
+    fn store(&self, mem: &mut [i32]) {
+        assert!(mem.len() >= Self::LEN);
+        // SAFETY: we just checked that `mem` has enough space. Moreover, we know avx512f is available
+        // from the safety invariant on `self.1`.
+        unsafe { _mm512_storeu_epi32(mem.as_mut_ptr(), self.0) }
+    }
+
+    #[inline(always)]
+    fn zero(d: Self::Descriptor) -> Self {
+        // SAFETY: We know avx512f is available from the safety invariant on `d`.
+        unsafe { Self(_mm512_setzero_epi32(), d) }
+    }
+
+    #[inline(always)]
+    fn splat(d: Self::Descriptor, v: i32) -> Self {
+        // SAFETY: We know avx512f is available from the safety invariant on `d`.
+        unsafe { Self(_mm512_set1_epi32(v), d) }
+    }
+
+    #[inline(always)]
+    fn as_f32(self) -> Self::F32Vec {
+        // SAFETY: We know avx512f is available from the safety invariant on `self`.
+        unsafe { F32VecAvx512(_mm512_cvtepi32_ps(self.0), self.1) }
+    }
+
+    #[inline(always)]
+    fn eq(self, other: Self) -> Self {
+        // SAFETY: We know avx512f is available from the safety invariant on `self`.
+        unsafe {
+            Self(
+                _mm512_maskz_expand_epi32(
+                    _mm512_cmpeq_epi32_mask(self.0, other.0),
+                    _mm512_set1_epi32(-1),
+                ),
+                self.1,
+            )
+        }
+    }
+
+    #[inline(always)]
+    fn if_then_else_f32(self, if_true: Self::F32Vec, if_false: Self::F32Vec) -> Self::F32Vec {
+        // SAFETY: We know avx512f is available from the safety invariant on `self`.
+        unsafe {
+            F32VecAvx512(
+                _mm512_or_ps(
+                    _mm512_and_ps(_mm512_castsi512_ps(self.0), if_true.0),
+                    _mm512_andnot_ps(_mm512_castsi512_ps(self.0), if_false.0),
+                ),
+                self.1,
+            )
+        }
+    }
+}
+
+impl Add<I32VecAvx512> for I32VecAvx512 {
+    type Output = I32VecAvx512;
+    fn_avx!(this: I32VecAvx512, fn add(rhs: I32VecAvx512) -> I32VecAvx512 {
+        I32VecAvx512(_mm512_add_epi32(this.0, rhs.0), this.1)
+    });
+}
+
+impl Sub<I32VecAvx512> for I32VecAvx512 {
+    type Output = I32VecAvx512;
+    fn_avx!(this: I32VecAvx512, fn sub(rhs: I32VecAvx512) -> I32VecAvx512 {
+        I32VecAvx512(_mm512_sub_epi32(this.0, rhs.0), this.1)
+    });
+}
+
+impl Mul<I32VecAvx512> for I32VecAvx512 {
+    type Output = I32VecAvx512;
+    fn_avx!(this: I32VecAvx512, fn mul(rhs: I32VecAvx512) -> I32VecAvx512 {
+        I32VecAvx512(_mm512_mul_epi32(this.0, rhs.0), this.1)
+    });
+}
+
+impl AddAssign<I32VecAvx512> for I32VecAvx512 {
+    fn_avx!(this: &mut I32VecAvx512, fn add_assign(rhs: I32VecAvx512) {
+        this.0 = _mm512_add_epi32(this.0, rhs.0)
+    });
+}
+
+impl SubAssign<I32VecAvx512> for I32VecAvx512 {
+    fn_avx!(this: &mut I32VecAvx512, fn sub_assign(rhs: I32VecAvx512) {
+        this.0 = _mm512_sub_epi32(this.0, rhs.0)
+    });
+}
+
+impl MulAssign<I32VecAvx512> for I32VecAvx512 {
+    fn_avx!(this: &mut I32VecAvx512, fn mul_assign(rhs: I32VecAvx512) {
+        this.0 = _mm512_mul_epi32(this.0, rhs.0)
     });
 }
