@@ -3,7 +3,7 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-use crate::render::{RenderPipelineInOutStage, RenderPipelineStage};
+use crate::render::RenderPipelineInOutStage;
 
 pub struct HorizontalChromaUpsample {
     channel: usize,
@@ -25,8 +25,11 @@ impl std::fmt::Display for HorizontalChromaUpsample {
     }
 }
 
-impl RenderPipelineStage for HorizontalChromaUpsample {
-    type Type = RenderPipelineInOutStage<f32, f32, 1, 0, 1, 0>;
+impl RenderPipelineInOutStage for HorizontalChromaUpsample {
+    type InputT = f32;
+    type OutputT = f32;
+    const SHIFT: (u8, u8) = (1, 0);
+    const BORDER: (u8, u8) = (1, 0);
 
     fn uses_channel(&self, c: usize) -> bool {
         c == self.channel
@@ -36,18 +39,19 @@ impl RenderPipelineStage for HorizontalChromaUpsample {
         &self,
         _position: (usize, usize),
         xsize: usize,
-        row: &mut [(&[&[f32]], &mut [&mut [f32]])],
+        input_rows: &[&[&[f32]]],
+        output_rows: &mut [&mut [&mut [f32]]],
         _state: Option<&mut dyn std::any::Any>,
     ) {
-        let (input, output) = &mut row[0];
+        let input = input_rows[0];
         for i in 0..xsize {
             let scaled_cur = input[0][i + 1] * 0.75;
             let prev = input[0][i];
             let next = input[0][i + 2];
             let left = 0.25 * prev + scaled_cur;
             let right = 0.25 * next + scaled_cur;
-            output[0][2 * i] = left;
-            output[0][2 * i + 1] = right;
+            output_rows[0][0][2 * i] = left;
+            output_rows[0][0][2 * i + 1] = right;
         }
     }
 }
@@ -68,8 +72,11 @@ impl std::fmt::Display for VerticalChromaUpsample {
     }
 }
 
-impl RenderPipelineStage for VerticalChromaUpsample {
-    type Type = RenderPipelineInOutStage<f32, f32, 0, 1, 0, 1>;
+impl RenderPipelineInOutStage for VerticalChromaUpsample {
+    type InputT = f32;
+    type OutputT = f32;
+    const SHIFT: (u8, u8) = (0, 1);
+    const BORDER: (u8, u8) = (0, 1);
 
     fn uses_channel(&self, c: usize) -> bool {
         c == self.channel
@@ -79,10 +86,12 @@ impl RenderPipelineStage for VerticalChromaUpsample {
         &self,
         _position: (usize, usize),
         xsize: usize,
-        row: &mut [(&[&[f32]], &mut [&mut [f32]])],
+        input_rows: &[&[&[f32]]],
+        output_rows: &mut [&mut [&mut [f32]]],
         _state: Option<&mut dyn std::any::Any>,
     ) {
-        let (input, output) = &mut row[0];
+        let input = input_rows[0];
+        let output = &mut output_rows[0];
         for i in 0..xsize {
             let scaled_cur = input[1][i] * 0.75;
             let prev = input[0][i];
@@ -103,7 +112,7 @@ mod test {
 
     #[test]
     fn hchr_consistency() -> Result<()> {
-        crate::render::test::test_stage_consistency::<_, f32, f32>(
+        crate::render::test::test_stage_consistency(
             || HorizontalChromaUpsample::new(0),
             (500, 500),
             1,
@@ -126,7 +135,7 @@ mod test {
 
     #[test]
     fn vchr_consistency() -> Result<()> {
-        crate::render::test::test_stage_consistency::<_, f32, f32>(
+        crate::render::test::test_stage_consistency(
             || VerticalChromaUpsample::new(0),
             (500, 500),
             1,

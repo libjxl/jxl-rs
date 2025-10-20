@@ -8,7 +8,6 @@ use half::f16;
 use crate::{
     api::{Endianness, JxlDataFormat, JxlOutputBuffer},
     error::{Error, Result},
-    headers::Orientation,
     image::Image,
     render::save::SaveStage,
 };
@@ -52,16 +51,7 @@ impl SaveStage {
             for y in 0..size.1 {
                 let src_row = chan.row(y);
                 for (x, &px) in src_row.iter().enumerate() {
-                    let (dx, dy) = match self.orientation {
-                        Orientation::Identity => (x, y),
-                        Orientation::Rotate90 => (y, size.0 - 1 - x),
-                        Orientation::Rotate180 => (size.0 - 1 - x, size.1 - 1 - y),
-                        Orientation::Rotate270 => (size.1 - 1 - y, x),
-                        Orientation::Transpose => (y, x),
-                        Orientation::FlipVertical => (x, size.1 - 1 - y),
-                        Orientation::FlipHorizontal => (size.0 - 1 - x, y),
-                        Orientation::AntiTranspose => (size.1 - 1 - y, size.0 - 1 - x),
-                    };
+                    let (dx, dy) = self.orientation.display_pixel((x, y), size);
                     let dx = dx * self.channels.len() + c;
                     let bps = self.data_format.bytes_per_sample();
 
@@ -101,7 +91,9 @@ impl SaveStage {
 #[cfg(test)]
 mod test {
     use super::*;
-    use crate::{api::JxlColorType, image::ImageDataType, util::test::assert_almost_eq};
+    use crate::{
+        api::JxlColorType, headers::Orientation, image::ImageDataType, util::test::assert_almost_eq,
+    };
     use rand::SeedableRng;
     use rand_xorshift::XorShiftRng;
     use test_log::test;

@@ -5,7 +5,7 @@
 
 use crate::color::tf;
 use crate::headers::color_encoding::CustomTransferFunction;
-use crate::render::{RenderPipelineInPlaceStage, RenderPipelineStage};
+use crate::render::RenderPipelineInPlaceStage;
 
 /// Apply transfer function to display-referred linear color samples.
 #[derive(Debug)]
@@ -52,8 +52,8 @@ impl std::fmt::Display for FromLinearStage {
     }
 }
 
-impl RenderPipelineStage for FromLinearStage {
-    type Type = RenderPipelineInPlaceStage<f32>;
+impl RenderPipelineInPlaceStage for FromLinearStage {
+    type Type = f32;
 
     fn uses_channel(&self, c: usize) -> bool {
         (self.first_channel..self.first_channel + 3).contains(&c)
@@ -166,7 +166,7 @@ mod test {
 
     #[test]
     fn consistency_hlg() -> Result<()> {
-        crate::render::test::test_stage_consistency::<_, f32, f32>(
+        crate::render::test::test_stage_consistency(
             || FromLinearStage::hlg(0, 1000f32, LUMINANCE_BT2020),
             (500, 500),
             3,
@@ -175,7 +175,7 @@ mod test {
 
     #[test]
     fn consistency_pq() -> Result<()> {
-        crate::render::test::test_stage_consistency::<_, f32, f32>(
+        crate::render::test::test_stage_consistency(
             || FromLinearStage::pq(0, 10000f32),
             (500, 500),
             3,
@@ -184,7 +184,7 @@ mod test {
 
     #[test]
     fn consistency_srgb() -> Result<()> {
-        crate::render::test::test_stage_consistency::<_, f32, f32>(
+        crate::render::test::test_stage_consistency(
             || FromLinearStage::new(0, TransferFunction::Srgb),
             (500, 500),
             3,
@@ -193,7 +193,7 @@ mod test {
 
     #[test]
     fn consistency_bt709() -> Result<()> {
-        crate::render::test::test_stage_consistency::<_, f32, f32>(
+        crate::render::test::test_stage_consistency(
             || FromLinearStage::new(0, TransferFunction::Bt709),
             (500, 500),
             3,
@@ -202,7 +202,7 @@ mod test {
 
     #[test]
     fn consistency_gamma22() -> Result<()> {
-        crate::render::test::test_stage_consistency::<_, f32, f32>(
+        crate::render::test::test_stage_consistency(
             || FromLinearStage::new(0, TransferFunction::Gamma(0.4545455)),
             (500, 500),
             3,
@@ -218,13 +218,8 @@ mod test {
 
         // 75% HLG
         let stage = FromLinearStage::hlg(0, intensity_target, LUMINANCE_BT2020);
-        let output = make_and_run_simple_pipeline::<_, f32, f32>(
-            stage,
-            &[input_r, input_g, input_b],
-            (1, 1),
-            0,
-            256,
-        )?;
+        let output =
+            make_and_run_simple_pipeline(stage, &[input_r, input_g, input_b], (1, 1), 0, 256)?;
 
         assert_all_almost_abs_eq(output[0].as_rect().row(0), &[0.75], 1e-3);
         assert_all_almost_abs_eq(output[1].as_rect().row(0), &[0.75], 1e-3);
@@ -242,13 +237,8 @@ mod test {
 
         // 58% PQ
         let stage = FromLinearStage::pq(0, intensity_target);
-        let output = make_and_run_simple_pipeline::<_, f32, f32>(
-            stage,
-            &[input_r, input_g, input_b],
-            (1, 1),
-            0,
-            256,
-        )?;
+        let output =
+            make_and_run_simple_pipeline(stage, &[input_r, input_g, input_b], (1, 1), 0, 256)?;
 
         assert_all_almost_abs_eq(output[0].as_rect().row(0), &[0.58], 1e-3);
         assert_all_almost_abs_eq(output[1].as_rect().row(0), &[0.58], 1e-3);

@@ -3,8 +3,7 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-use crate::render::internal::InOutChannel;
-use crate::render::{RenderPipelineInOutStage, RenderPipelineStage};
+use crate::render::RenderPipelineInOutStage;
 use crate::simd::{F32SimdVec, simd_function};
 
 /// Apply Gabor-like filter to a channel.
@@ -40,14 +39,14 @@ simd_function!(
     fn gaborish_process(
         stage: &GaborishStage,
         xsize: usize,
-        row: &mut [InOutChannel<f32, f32>],
+        input_rows: &[&[&[f32]]],
+        output_rows: &mut [&mut [&mut [f32]]],
     ) {
-        let (rows_in, ref mut rows_out) = row[0];
-        let row_out = &mut rows_out[0];
+        let row_out = &mut output_rows[0][0];
         for idx in (0..xsize).step_by(D::F32Vec::LEN) {
             let mut sum = D::F32Vec::splat(d, 0f32);
             let row_and_kernel = std::iter::zip(
-                rows_in,
+                input_rows[0],
                 [stage.kernel_top_bottom, stage.kernel_center, stage.kernel_top_bottom],
             );
             for (row_in, kernel) in row_and_kernel {
@@ -60,8 +59,11 @@ simd_function!(
     }
 );
 
-impl RenderPipelineStage for GaborishStage {
-    type Type = RenderPipelineInOutStage<f32, f32, 1, 1, 0, 0>;
+impl RenderPipelineInOutStage for GaborishStage {
+    type InputT = f32;
+    type OutputT = f32;
+    const SHIFT: (u8, u8) = (0, 0);
+    const BORDER: (u8, u8) = (1, 1);
 
     fn uses_channel(&self, c: usize) -> bool {
         c == self.channel
@@ -71,10 +73,11 @@ impl RenderPipelineStage for GaborishStage {
         &self,
         _position: (usize, usize),
         xsize: usize,
-        row: &mut [InOutChannel<f32, f32>],
+        input_rows: &[&[&[f32]]],
+        output_rows: &mut [&mut [&mut [f32]]],
         _state: Option<&mut dyn std::any::Any>,
     ) {
-        gaborish_process_dispatch(self, xsize, row);
+        gaborish_process_dispatch(self, xsize, input_rows, output_rows);
     }
 }
 
@@ -85,13 +88,12 @@ mod test {
     use super::*;
     use crate::error::Result;
     use crate::image::Image;
-    use crate::render::test::{create_in_out_rows, make_and_run_simple_pipeline};
-    use crate::simd::{ScalarDescriptor, SimdDescriptor, test_all_instruction_sets};
+    use crate::render::test::make_and_run_simple_pipeline;
     use crate::util::test::assert_all_almost_abs_eq;
 
     #[test]
     fn consistency() -> Result<()> {
-        crate::render::test::test_stage_consistency::<_, f32, f32>(
+        crate::render::test::test_stage_consistency(
             || GaborishStage::new(0, 0.115169525, 0.061248592),
             (500, 500),
             1,
@@ -105,7 +107,7 @@ mod test {
         image.as_rect_mut().row(1).copy_from_slice(&[1.0, 0.0]);
 
         let stage = GaborishStage::new(0, 0.115169525, 0.061248592);
-        let output = make_and_run_simple_pipeline::<_, f32, f32>(stage, &[image], (2, 2), 0, 256)?;
+        let output = make_and_run_simple_pipeline(stage, &[image], (2, 2), 0, 256)?;
         let output = output[0].as_rect();
 
         assert_all_almost_abs_eq(output.row(0), &[0.20686048, 0.7931395], 1e-6);
@@ -113,29 +115,4 @@ mod test {
 
         Ok(())
     }
-
-    fn gaborish_process_scalar_equivalent<D: SimdDescriptor>(d: D) {
-        arbtest::arbtest(|u| {
-            let stage = GaborishStage::new(0, 0.115169525, 0.061248592);
-            create_in_out_rows!(u, 1, 1, rows, xsize);
-            gaborish_process(d, &stage, xsize, rows);
-            let simd_result: Vec<Vec<f32>> = rows[0]
-                .1
-                .iter()
-                .map(|inner_slice| inner_slice.to_vec())
-                .collect();
-            gaborish_process(ScalarDescriptor::new().unwrap(), &stage, xsize, rows);
-            let scalar_result: Vec<Vec<f32>> = rows[0]
-                .1
-                .iter()
-                .map(|inner_slice| inner_slice.to_vec())
-                .collect();
-            for (index, scalar_row) in scalar_result.iter().take(xsize).enumerate() {
-                assert_all_almost_abs_eq(scalar_row, &simd_result[index], 1e-8);
-            }
-            Ok(())
-        });
-    }
-
-    test_all_instruction_sets!(gaborish_process_scalar_equivalent);
 }

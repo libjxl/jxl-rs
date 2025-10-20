@@ -3,10 +3,7 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-use crate::{
-    headers::CustomTransformData,
-    render::{RenderPipelineInOutStage, RenderPipelineStage},
-};
+use crate::{headers::CustomTransformData, render::RenderPipelineInOutStage};
 
 pub struct Upsample<const N: usize, const SHIFT: u8> {
     kernel: [[[[f32; 5]; 5]; N]; N],
@@ -55,8 +52,11 @@ impl<const N: usize, const SHIFT: u8> std::fmt::Display for Upsample<N, SHIFT> {
     }
 }
 
-impl<const N: usize, const SHIFT: u8> RenderPipelineStage for Upsample<N, SHIFT> {
-    type Type = RenderPipelineInOutStage<f32, f32, 2, 2, SHIFT, SHIFT>;
+impl<const N: usize, const SHIFT: u8> RenderPipelineInOutStage for Upsample<N, SHIFT> {
+    type InputT = f32;
+    type OutputT = f32;
+    const SHIFT: (u8, u8) = (SHIFT, SHIFT);
+    const BORDER: (u8, u8) = (2, 2);
 
     fn uses_channel(&self, c: usize) -> bool {
         c == self.channel
@@ -67,10 +67,11 @@ impl<const N: usize, const SHIFT: u8> RenderPipelineStage for Upsample<N, SHIFT>
         &self,
         _position: (usize, usize),
         xsize: usize,
-        row: &mut [(&[&[f32]], &mut [&mut [f32]])],
+        input_rows: &[&[&[f32]]],
+        output_rows: &mut [&mut [&mut [f32]]],
         _state: Option<&mut dyn std::any::Any>,
     ) {
-        let (input, output) = &mut row[0];
+        let input = input_rows[0];
 
         for x in 0..xsize {
             // Upsample this input value into a NxN region in the output
@@ -88,7 +89,7 @@ impl<const N: usize, const SHIFT: u8> RenderPipelineStage for Upsample<N, SHIFT>
                             maxval = input_value.max(maxval);
                         }
                     }
-                    output[di][dj + N * x] = output_val.clamp(minval, maxval);
+                    output_rows[0][di][dj + N * x] = output_val.clamp(minval, maxval);
                 }
             }
         }
@@ -115,7 +116,7 @@ mod test {
 
     #[test]
     fn upsample2x_consistency() -> Result<()> {
-        crate::render::test::test_stage_consistency::<_, f32, f32>(
+        crate::render::test::test_stage_consistency(
             || Upsample2x::new(&ups_factors(), 0),
             (500, 500),
             1,
@@ -124,7 +125,7 @@ mod test {
 
     #[test]
     fn upsample4x_consistency() -> Result<()> {
-        crate::render::test::test_stage_consistency::<_, f32, f32>(
+        crate::render::test::test_stage_consistency(
             || Upsample4x::new(&ups_factors(), 0),
             (500, 500),
             1,
@@ -133,7 +134,7 @@ mod test {
 
     #[test]
     fn upsample8x_consistency() -> Result<()> {
-        crate::render::test::test_stage_consistency::<_, f32, f32>(
+        crate::render::test::test_stage_consistency(
             || Upsample8x::new(&ups_factors(), 0),
             (504, 504),
             1,

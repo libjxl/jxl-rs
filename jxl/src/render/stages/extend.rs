@@ -7,12 +7,20 @@ use crate::{
     error::Result,
     frame::ReferenceFrame,
     headers::{FileHeader, extra_channels::ExtraChannelInfo, frame_header::*},
-    render::{RenderPipelineExtendStage, RenderPipelineStage},
 };
 
+/// Does not directly modify the current image pixels, but extends the current image with
+/// additional data.
+///
+/// `uses_channel` must always return true, and stages of this type should override
+/// `new_size` and `original_data_origin`.
+/// `process_row_chunk` will be called with the *new* image coordinates, and will only be called
+/// on row chunks outside of the original image data.
+/// After stages of this type, no stage can have a non-0 SHIFT_X, SHIFT_Y, BORDER_X or BORDER_Y.
+/// There can be at most one extend stage per image.
 pub struct ExtendToImageDimensionsStage {
     pub frame_origin: (isize, isize),
-    pub image_size: (isize, isize),
+    pub image_size: (usize, usize),
     pub blending_info: BlendingInfo,
     pub ec_blending_info: Vec<BlendingInfo>,
     pub extra_channels: Vec<ExtraChannelInfo>,
@@ -30,8 +38,8 @@ impl ExtendToImageDimensionsStage {
         Ok(ExtendToImageDimensionsStage {
             frame_origin: (frame_header.x0 as isize, frame_header.y0 as isize),
             image_size: (
-                file_header.size.xsize() as isize,
-                file_header.size.ysize() as isize,
+                file_header.size.xsize() as usize,
+                file_header.size.ysize() as usize,
             ),
             blending_info: frame_header.blending_info.clone(),
             ec_blending_info: frame_header.ec_blending_info.clone(),
@@ -48,59 +56,26 @@ impl std::fmt::Display for ExtendToImageDimensionsStage {
     }
 }
 
-impl RenderPipelineStage for ExtendToImageDimensionsStage {
-    type Type = RenderPipelineExtendStage<f32>;
-
-    fn uses_channel(&self, _c: usize) -> bool {
-        true
-    }
-
-    fn new_size(&self, _current_size: (usize, usize)) -> (usize, usize) {
-        (self.image_size.0 as usize, self.image_size.1 as usize)
-    }
-
-    fn original_data_origin(&self) -> (isize, isize) {
-        self.frame_origin
-    }
-
-    fn process_row_chunk(
+impl ExtendToImageDimensionsStage {
+    pub(in crate::render) fn process_row_chunk(
         &self,
         position: (usize, usize),
         xsize: usize,
-        row: &mut [&mut [f32]],
-        _state: Option<&mut dyn std::any::Any>,
+        c: usize,
+        row: &mut [f32],
     ) {
-        let num_ec = self.extra_channels.len();
-        let num_c = 3 + num_ec;
         let x0 = position.0;
         let x1 = x0 + xsize;
         let y0 = position.1;
-
-        let mut bg = vec![self.zeros.as_slice(); num_c];
-        for (c, bg_ptr) in bg.iter_mut().enumerate().take(3) {
-            if self.reference_frames[self.blending_info.source as usize].is_some() {
-                *bg_ptr = self.reference_frames[self.blending_info.source as usize]
-                    .as_ref()
-                    .unwrap()
-                    .frame[c]
-                    .as_rect()
-                    .row(y0);
-            }
-        }
-        for i in 0..num_ec {
-            if self.reference_frames[self.ec_blending_info[i].source as usize].is_some() {
-                bg[3 + i] = self.reference_frames[self.ec_blending_info[i].source as usize]
-                    .as_ref()
-                    .unwrap()
-                    .frame[3 + i]
-                    .as_rect()
-                    .row(y0);
-            }
-        }
-
-        for c in 0..num_c {
-            row[c][0..xsize].copy_from_slice(&bg[c][x0..x1]);
-        }
+        let source = if c < 3 {
+            self.blending_info.source as usize
+        } else {
+            self.ec_blending_info[c - 3].source as usize
+        };
+        let bg = self.reference_frames[source].as_ref().unwrap().frame[c]
+            .as_rect()
+            .row(y0);
+        row[0..xsize].copy_from_slice(&bg[x0..x1]);
     }
 }
 
@@ -117,7 +92,7 @@ mod test {
         let (file_header, frame_header, _) =
             read_headers_and_toc(include_bytes!("../../../resources/test/basic.jxl")).unwrap();
         let reference_frames: Vec<Option<ReferenceFrame>> = vec![None, None, None, None];
-        crate::render::test::test_stage_consistency::<_, f32, f32>(
+        crate::render::test::test_stage_consistency(
             || {
                 ExtendToImageDimensionsStage::new(&frame_header, &file_header, &reference_frames)
                     .unwrap()

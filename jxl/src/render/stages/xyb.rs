@@ -9,8 +9,8 @@ use crate::api::{
 };
 use crate::error::Result;
 use crate::headers::{FileHeader, OpsinInverseMatrix};
+use crate::render::RenderPipelineInPlaceStage;
 use crate::render::stages::from_linear;
-use crate::render::{RenderPipelineInPlaceStage, RenderPipelineStage};
 use crate::simd::{F32SimdVec, simd_function};
 use crate::util::{Matrix3x3, inv_3x3_matrix, mul_3x3_matrix};
 
@@ -225,8 +225,8 @@ simd_function!(
     }
 );
 
-impl RenderPipelineStage for XybStage {
-    type Type = RenderPipelineInPlaceStage<f32>;
+impl RenderPipelineInPlaceStage for XybStage {
+    type Type = f32;
 
     fn uses_channel(&self, c: usize) -> bool {
         (self.first_channel..self.first_channel + 3).contains(&c)
@@ -274,7 +274,7 @@ mod test {
 
     #[test]
     fn consistency() -> Result<()> {
-        crate::render::test::test_stage_consistency::<_, f32, f32>(
+        crate::render::test::test_stage_consistency(
             || XybStage::new(0, OutputColorInfo::default()),
             (500, 500),
             3,
@@ -300,13 +300,8 @@ mod test {
             .copy_from_slice(&[0.471659, 0.43707693, 0.66613984]);
 
         let stage = XybStage::new(0, OutputColorInfo::default());
-        let output = make_and_run_simple_pipeline::<_, f32, f32>(
-            stage,
-            &[input_x, input_y, input_b],
-            (3, 1),
-            0,
-            256,
-        )?;
+        let output =
+            make_and_run_simple_pipeline(stage, &[input_x, input_y, input_b], (3, 1), 0, 256)?;
 
         assert_all_almost_abs_eq(output[0].as_rect().row(0), &[1.0, 0.0, 0.0], 1e-6);
         assert_all_almost_abs_eq(output[1].as_rect().row(0), &[0.0, 1.0, 0.0], 1e-6);

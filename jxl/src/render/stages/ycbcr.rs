@@ -3,7 +3,7 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-use crate::render::{RenderPipelineInPlaceStage, RenderPipelineStage};
+use crate::render::RenderPipelineInPlaceStage;
 
 /// Convert YCbCr to RGB
 pub struct YcbcrToRgbStage {
@@ -29,8 +29,8 @@ impl std::fmt::Display for YcbcrToRgbStage {
     }
 }
 
-impl RenderPipelineStage for YcbcrToRgbStage {
-    type Type = RenderPipelineInPlaceStage<f32>;
+impl RenderPipelineInPlaceStage for YcbcrToRgbStage {
+    type Type = f32;
 
     fn uses_channel(&self, c: usize) -> bool {
         (self.first_channel..self.first_channel + 3).contains(&c)
@@ -81,11 +81,7 @@ mod test {
 
     #[test]
     fn consistency() -> Result<()> {
-        crate::render::test::test_stage_consistency::<_, f32, f32>(
-            || YcbcrToRgbStage::new(0),
-            (500, 500),
-            3,
-        )
+        crate::render::test::test_stage_consistency(|| YcbcrToRgbStage::new(0), (500, 500), 3)
     }
 
     #[test]
@@ -107,13 +103,8 @@ mod test {
             .copy_from_slice(&[0.5, -0.41868758, -0.08131241]);
 
         let stage = YcbcrToRgbStage::new(0);
-        let output = make_and_run_simple_pipeline::<_, f32, f32>(
-            stage,
-            &[input_cb, input_y, input_cr],
-            (3, 1),
-            0,
-            256,
-        )?;
+        let output =
+            make_and_run_simple_pipeline(stage, &[input_cb, input_y, input_cr], (3, 1), 0, 256)?;
 
         assert_all_almost_abs_eq(output[0].as_rect().row(0), &[1.0, 0.0, 0.0], 1e-6);
         assert_all_almost_abs_eq(output[1].as_rect().row(0), &[0.0, 1.0, 0.0], 1e-6);

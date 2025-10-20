@@ -5,55 +5,32 @@
 
 use std::any::Any;
 
-use crate::{image::ImageDataType, util::tracing_wrappers::*};
+use crate::{
+    render::{RunInPlaceStage, internal::RunInOutStage},
+    util::tracing_wrappers::*,
+};
 
 use super::{
-    super::{
-        RenderPipelineExtendStage, RenderPipelineInOutStage, RenderPipelineInPlaceStage,
-        RenderPipelineStage, internal::RenderPipelineRunStage,
-    },
+    super::{RenderPipelineInOutStage, RenderPipelineInPlaceStage},
     row_buffers::RowBuffer,
 };
 
-impl<T: ImageDataType> RenderPipelineRunStage<RowBuffer> for RenderPipelineInPlaceStage<T> {
+impl<T: RenderPipelineInPlaceStage> RunInPlaceStage<RowBuffer> for T {
     #[instrument(skip_all)]
-    fn run_stage_on<S: RenderPipelineStage<Type = Self>>(
-        stage: &S,
+    fn run_stage_on(
+        &self,
         chunk_size: usize,
-        input_buffers: &[&RowBuffer],
-        output_buffers: &mut [&mut RowBuffer],
+        buffers: &mut [&mut RowBuffer],
         state: Option<&mut dyn Any>,
     ) {
         todo!()
     }
 }
 
-impl<
-    InputT: ImageDataType,
-    OutputT: ImageDataType,
-    const BORDER_X: u8,
-    const BORDER_Y: u8,
-    const SHIFT_X: u8,
-    const SHIFT_Y: u8,
-> RenderPipelineRunStage<RowBuffer>
-    for RenderPipelineInOutStage<InputT, OutputT, BORDER_X, BORDER_Y, SHIFT_X, SHIFT_Y>
-{
+impl<T: RenderPipelineInOutStage> RunInOutStage<RowBuffer> for T {
     #[instrument(skip_all)]
-    fn run_stage_on<S: RenderPipelineStage<Type = Self>>(
-        stage: &S,
-        chunk_size: usize,
-        input_buffers: &[&RowBuffer],
-        output_buffers: &mut [&mut RowBuffer],
-        state: Option<&mut dyn Any>,
-    ) {
-        todo!()
-    }
-}
-
-impl<T: ImageDataType> RenderPipelineRunStage<RowBuffer> for RenderPipelineExtendStage<T> {
-    #[instrument(skip_all)]
-    fn run_stage_on<S: RenderPipelineStage<Type = Self>>(
-        stage: &S,
+    fn run_stage_on(
+        &self,
         chunk_size: usize,
         input_buffers: &[&RowBuffer],
         output_buffers: &mut [&mut RowBuffer],

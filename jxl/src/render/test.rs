@@ -14,24 +14,50 @@ use crate::{
 use rand::SeedableRng;
 
 use super::{
-    RenderPipeline, RenderPipelineBuilder, RenderPipelineStage,
-    internal::{RenderPipelineRunStage, RenderPipelineStageInfo},
+    RenderPipeline, RenderPipelineBuilder, RenderPipelineInOutStage, RenderPipelineInPlaceStage,
+    internal::Stage, stages::ExtendToImageDimensionsStage,
 };
 
-pub(super) fn make_and_run_simple_pipeline<
-    S: RenderPipelineStage,
-    InputT: ImageDataType,
-    OutputT: ImageDataType,
->(
-    stage: S,
+pub(super) trait RenderPipelineTestableStage<V> {
+    type InputT: ImageDataType;
+    type OutputT: ImageDataType;
+    fn into_stage(self) -> Stage<Image<f64>>;
+}
+
+impl RenderPipelineTestableStage<()> for ExtendToImageDimensionsStage {
+    type InputT = f32;
+    type OutputT = f32;
+    fn into_stage(self) -> Stage<Image<f64>> {
+        Stage::Extend(self)
+    }
+}
+
+impl<T: RenderPipelineInOutStage> RenderPipelineTestableStage<()> for T {
+    type InputT = T::InputT;
+    type OutputT = T::OutputT;
+    fn into_stage(self) -> Stage<Image<f64>> {
+        Stage::InOut(Box::new(self))
+    }
+}
+
+pub(super) struct Empty {}
+
+impl<T: RenderPipelineInPlaceStage> RenderPipelineTestableStage<Empty> for T {
+    type InputT = T::Type;
+    type OutputT = T::Type;
+    fn into_stage(self) -> Stage<Image<f64>> {
+        Stage::InPlace(Box::new(self))
+    }
+}
+
+fn make_and_run_simple_pipeline_impl<InputT: ImageDataType, OutputT: ImageDataType>(
+    stage: Stage<Image<f64>>,
     input_images: &[Image<InputT>],
     image_size: (usize, usize),
     downsampling_shift: usize,
     chunk_size: usize,
-) -> Result<Vec<Image<OutputT>>>
-where
-    S::Type: RenderPipelineRunStage<Image<f64>>,
-{
+) -> Result<Vec<Image<OutputT>>> {
+    let shift = stage.shift();
     let final_size = stage.new_size(image_size);
     const LOG_GROUP_SIZE: usize = 8;
     let all_channels = (0..input_images.len()).collect::<Vec<_>>();
@@ -47,7 +73,7 @@ where
         1,
         chunk_size,
     )
-    .add_stage(stage)?;
+    .add_stage_internal(stage)?;
 
     let jxl_data_type = match OutputT::DATA_TYPE_ID {
         DataTypeTag::U8 | DataTypeTag::I8 => JxlDataFormat::U8 { bit_depth: 8 },
@@ -77,8 +103,8 @@ where
         for &c in all_channels.iter() {
             let log_group_size = if uses_channel[c] {
                 (
-                    LOG_GROUP_SIZE - S::Type::SHIFT.0 as usize,
-                    LOG_GROUP_SIZE - S::Type::SHIFT.1 as usize,
+                    LOG_GROUP_SIZE - shift.0 as usize,
+                    LOG_GROUP_SIZE - shift.1 as usize,
                 )
             } else {
                 (LOG_GROUP_SIZE, LOG_GROUP_SIZE)
@@ -106,27 +132,36 @@ where
     Ok(outputs)
 }
 
+pub(super) fn make_and_run_simple_pipeline<S: RenderPipelineTestableStage<V>, V>(
+    stage: S,
+    input_images: &[Image<S::InputT>],
+    image_size: (usize, usize),
+    downsampling_shift: usize,
+    chunk_size: usize,
+) -> Result<Vec<Image<S::OutputT>>> {
+    make_and_run_simple_pipeline_impl(
+        stage.into_stage(),
+        input_images,
+        image_size,
+        downsampling_shift,
+        chunk_size,
+    )
+}
+
 #[instrument(skip(make_stage), err)]
-pub(super) fn test_stage_consistency<
-    S: RenderPipelineStage,
-    InputT: ImageDataType,
-    OutputT: ImageDataType + std::ops::Mul<Output = OutputT>,
->(
+pub(super) fn test_stage_consistency<S: RenderPipelineTestableStage<V>, V>(
     make_stage: impl Fn() -> S,
     image_size: (usize, usize),
     num_image_channels: usize,
-) -> Result<()>
-where
-    S::Type: RenderPipelineRunStage<Image<f64>>,
-{
+) -> Result<()> {
     let mut rng = rand_xorshift::XorShiftRng::seed_from_u64(0);
-    let stage = make_stage();
+    let stage = make_stage().into_stage();
     let images: Result<Vec<_>> = (0..num_image_channels)
         .map(|c| {
             let size = if stage.uses_channel(c) {
                 (
-                    image_size.0.shrc(S::Type::SHIFT.0),
-                    image_size.1.shrc(S::Type::SHIFT.1),
+                    image_size.0.shrc(stage.shift().0),
+                    image_size.1.shrc(stage.shift().1),
                 )
             } else {
                 image_size
@@ -136,13 +171,14 @@ where
         .collect();
     let images = images?;
 
-    let base_output =
-        make_and_run_simple_pipeline::<_, InputT, OutputT>(stage, &images, image_size, 0, 256)?;
+    let base_output = make_and_run_simple_pipeline_impl::<S::InputT, S::OutputT>(
+        stage, &images, image_size, 0, 256,
+    )?;
 
     arbtest::arbtest(move |p| {
         let chunk_size = p.arbitrary::<u16>()?.saturating_add(1) as usize;
-        let output = make_and_run_simple_pipeline::<_, InputT, OutputT>(
-            make_stage(),
+        let output = make_and_run_simple_pipeline_impl::<S::InputT, S::OutputT>(
+            make_stage().into_stage(),
             &images,
             image_size,
             0,
@@ -158,40 +194,3 @@ where
     });
     Ok(())
 }
-
-macro_rules! create_in_out_rows {
-    ($u:expr, $border_x:expr, $border_y:expr, $rows:ident, $xsize:ident) => {
-        use crate::simd::round_up_size_to_two_cache_lines;
-        let $xsize: usize = 1 + $u.arbitrary::<usize>()? % 4095;
-        let mut row_vecs = vec![(
-            vec![
-                vec![
-                    0f32;
-                    round_up_size_to_two_cache_lines::<f32>(
-                        round_up_size_to_two_cache_lines::<f32>($xsize) + $border_x * 2
-                    )
-                ];
-                1 + $border_y * 2
-            ],
-            vec![vec![0f32; round_up_size_to_two_cache_lines::<f32>($xsize)]],
-        )];
-
-        let mut row_vecs_refs: Vec<(Vec<&[f32]>, Vec<&mut [f32]>)> = row_vecs
-            .iter_mut()
-            .map(|(left, right)| {
-                (
-                    left.iter().map(|v| v.as_slice()).collect(),
-                    right.iter_mut().map(|v| v.as_mut_slice()).collect(),
-                )
-            })
-            .collect();
-
-        let mut outer: Vec<(&[&[f32]], &mut [&mut [f32]])> = row_vecs_refs
-            .iter_mut()
-            .map(|(left, right)| (left.as_slice(), right.as_mut_slice()))
-            .collect();
-
-        let $rows = &mut outer[..];
-    };
-}
-pub(crate) use create_in_out_rows;

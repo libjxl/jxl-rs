@@ -11,13 +11,14 @@ use row_buffers::RowBuffer;
 use crate::BLOCK_DIM;
 use crate::api::JxlOutputBuffer;
 use crate::error::Result;
-use crate::image::{Image, ImageDataType};
-use crate::render::internal::{RenderPipelineStageType, Stage};
+use crate::headers::Orientation;
+use crate::image::{Image, ImageDataType, Rect};
+use crate::render::internal::Stage;
 use crate::simd::CACHE_LINE_BYTE_SIZE;
-use crate::util::tracing_wrappers::*;
+use crate::util::{ShiftRightCeil, tracing_wrappers::*};
 
-use super::internal::{RenderPipelineShared, RunStage};
-use super::{RenderPipeline, RenderPipelineStage};
+use super::RenderPipeline;
+use super::internal::{RenderPipelineShared, RunInOutStage, RunInPlaceStage};
 
 mod render_group;
 pub(super) mod row_buffers;
@@ -35,21 +36,25 @@ struct InputBuffer {
 }
 
 struct SaveStageBufferInfo {
-    stage_index: usize,
     buffer_index: usize,
     downsample: (u8, u8),
+    orientation: Orientation,
 }
 
 pub struct LowMemoryRenderPipeline {
     shared: RenderPipelineShared<RowBuffer>,
     input_buffers: Vec<InputBuffer>,
     row_buffers: Vec<Vec<RowBuffer>>,
-    // The input buffer that each channel of each stage should use (none for input data).
-    stage_input_buffer_index: Vec<Vec<Option<usize>>>,
+    // The input buffer that each channel of each stage should use. 0 corresponds to input data.
+    stage_input_buffer_index: Vec<Vec<usize>>,
     // Tracks whether we already rendered the padding around the core frame (if any).
     padding_was_rendered: bool,
     // sorted by buffer_index; all values of buffer_index are distinct.
     save_buffer_info: Vec<SaveStageBufferInfo>,
+    // The amount of pixels we need to load from neighbouring groups in each dimension.
+    border_pixels: (usize, usize),
+    // Local states of each stage, if any.
+    local_states: Vec<Option<Box<dyn Any>>>,
 }
 
 impl RenderPipeline for LowMemoryRenderPipeline {
@@ -67,46 +72,50 @@ impl RenderPipeline for LowMemoryRenderPipeline {
             }
         }
         let nc = shared.channel_info[0].len();
-        let mut previous_inout = vec![None::<usize>; nc];
+        let mut previous_inout = vec![0usize; nc];
         let mut stage_input_buffer_index = vec![];
-        let mut row_buffers = vec![];
-        let mut used_with_border = vec![vec![0u8; nc]; shared.stages.len()];
+        let mut used_with_border = vec![vec![0u8; nc]; shared.stages.len() + 1];
 
         // For each stage, compute in which stage its input was buffered (the previous InOut
         // stage). Also, compute for each InOut stage and channel the border with which the stage
         // output is used; this will used to allocate buffers of the correct size.
         for (i, stage) in shared.stages.iter().enumerate() {
             stage_input_buffer_index.push(previous_inout.clone());
-            if let Stage::Process(p) = stage
-                && p.stage_type() == RenderPipelineStageType::InOut
-            {
+            if let Stage::InOut(p) = stage {
                 for chan in 0..nc {
                     if !p.uses_channel(chan) {
                         continue;
                     }
-                    if let Some(prev) = previous_inout[chan] {
-                        used_with_border[prev][chan] = p.border().1;
-                    }
-                    previous_inout[chan] = Some(i);
+                    used_with_border[previous_inout[chan]][chan] = p.border().1;
+                    previous_inout[chan] = i + 1;
                 }
             }
         }
 
+        let mut initial_buffers = vec![];
+        for chan in 0..nc {
+            initial_buffers.push(RowBuffer::new(
+                shared.channel_info[0][chan].ty.unwrap(),
+                used_with_border[0][chan] as usize,
+                0,
+                shared.chunk_size >> shared.channel_info[0][chan].downsample.0,
+            )?);
+        }
+        let mut row_buffers = vec![initial_buffers];
+
         // Allocate buffers.
         for (i, stage) in shared.stages.iter().enumerate() {
             let mut stage_buffers = vec![];
-            if let Stage::Process(p) = stage
-                && p.stage_type() == RenderPipelineStageType::InOut
-            {
+            if let Stage::InOut(p) = stage {
                 for chan in 0..nc {
                     if !p.uses_channel(chan) {
                         continue;
                     }
                     stage_buffers.push(RowBuffer::new(
-                        p.output_type().unwrap(),
-                        used_with_border[i][chan] as usize,
+                        p.output_type(),
+                        used_with_border[i + 1][chan] as usize,
                         p.shift().1 as usize,
-                        shared.chunk_size >> shared.channel_info[i][chan].downsample.0,
+                        shared.chunk_size >> shared.channel_info[i + 1][chan].downsample.0,
                     )?);
                 }
             }
@@ -115,34 +124,51 @@ impl RenderPipeline for LowMemoryRenderPipeline {
         // Compute information to be used to compute sub-rects for "save" stages to operate on
         // rects.
         let mut save_buffer_info = vec![];
-        'stage: for ((i, s), ci) in shared
-            .stages
-            .iter()
-            .enumerate()
-            .zip(shared.channel_info.iter())
-        {
+        'stage: for (s, ci) in shared.stages.iter().zip(shared.channel_info.iter()) {
             let Stage::Save(s) = s else {
                 continue;
             };
             for (c, ci) in ci.iter().enumerate() {
                 if s.uses_channel(c) {
                     save_buffer_info.push(SaveStageBufferInfo {
-                        stage_index: i,
                         buffer_index: s.output_buffer_index,
                         downsample: ci.downsample,
+                        orientation: s.orientation,
                     });
                     continue 'stage;
                 }
             }
         }
         save_buffer_info.sort_by_key(|x| x.buffer_index);
+
+        // Compute the amount of border pixels needed per channel.
+        let mut border_pixels = vec![(0usize, 0usize); nc];
+        for s in shared.stages.iter().rev() {
+            for c in 0..nc {
+                if !s.uses_channel(c) {
+                    continue;
+                }
+                border_pixels[c].0 = border_pixels[c].0.shrc(s.shift().0) + s.border().0 as usize;
+                border_pixels[c].1 = border_pixels[c].1.shrc(s.shift().1) + s.border().1 as usize;
+            }
+        }
+        let border_pixels = (
+            border_pixels.iter().map(|x| x.0).max().unwrap(),
+            border_pixels.iter().map(|x| x.1).max().unwrap(),
+        );
         Ok(Self {
-            shared,
             input_buffers,
             stage_input_buffer_index,
             row_buffers,
             padding_was_rendered: false,
             save_buffer_info,
+            border_pixels,
+            local_states: shared
+                .stages
+                .iter()
+                .map(|x| x.init_local_state())
+                .collect::<Result<_>>()?,
+            shared,
         })
     }
 
@@ -196,33 +222,40 @@ impl RenderPipeline for LowMemoryRenderPipeline {
 
     fn do_render(&mut self, buffers: &mut [Option<JxlOutputBuffer>]) -> Result<()> {
         if self.shared.extend_stage_index.is_some() {
+            // TODO(veluca): implement this case.
             unimplemented!()
         }
         // First, render all groups that have made progress.
         // TODO(veluca): this could potentially be quadratic for huge images that receive a group
         // at a time. Take care of that.
-        for (g, gi) in self.shared.group_chan_ready_passes.iter().enumerate() {
-            let ready_passes = gi.iter().copied().min().unwrap();
+        for g in 0..self.shared.group_chan_ready_passes.len() {
+            let ready_passes = self.shared.group_chan_ready_passes[g]
+                .iter()
+                .copied()
+                .min()
+                .unwrap();
             if self.input_buffers[g].completed_passes < ready_passes {
                 let (gx, gy) = self.shared.group_position(g);
-                let mut fully_ready_passes = usize::MAX;
-                for dy in -1..=1 {
-                    let igy = gy as isize + dy;
-                    if igy < 0 || igy >= self.shared.group_count.1 as isize {
-                        continue;
-                    }
-                    for dx in -1..=1 {
-                        let igx = gx as isize + dx;
-                        if igx < 0 || igx >= self.shared.group_count.0 as isize {
+                let mut fully_ready_passes = ready_passes;
+                if self.border_pixels.0 != 0 && self.border_pixels.1 != 0 {
+                    for dy in -1..=1 {
+                        let igy = gy as isize + dy;
+                        if igy < 0 || igy >= self.shared.group_count.1 as isize {
                             continue;
                         }
-                        let ig = (igy as usize) * self.shared.group_count.0 + igx as usize;
-                        let ready_passes = self.shared.group_chan_ready_passes[ig]
-                            .iter()
-                            .copied()
-                            .min()
-                            .unwrap();
-                        fully_ready_passes = fully_ready_passes.min(ready_passes);
+                        for dx in -1..=1 {
+                            let igx = gx as isize + dx;
+                            if igx < 0 || igx >= self.shared.group_count.0 as isize {
+                                continue;
+                            }
+                            let ig = (igy as usize) * self.shared.group_count.0 + igx as usize;
+                            let ready_passes = self.shared.group_chan_ready_passes[ig]
+                                .iter()
+                                .copied()
+                                .min()
+                                .unwrap();
+                            fully_ready_passes = fully_ready_passes.min(ready_passes);
+                        }
                     }
                 }
                 if self.input_buffers[g].completed_passes >= fully_ready_passes {
@@ -234,8 +267,47 @@ impl RenderPipeline for LowMemoryRenderPipeline {
                     self.input_buffers[g].completed_passes
                 );
 
-                // TODO: extract buffers and call render_buffer.
-                todo!();
+                // Prepare output buffers for the group.
+                let mut local_buffers = vec![];
+                local_buffers.try_reserve(buffers.len())?;
+                for _ in 0..buffers.len() {
+                    local_buffers.push(None::<JxlOutputBuffer>);
+                }
+                let mut buffer_iter = buffers.iter_mut().enumerate();
+                for bi in self.save_buffer_info.iter() {
+                    let Some(buf) = (loop {
+                        let Some((i, b)) = buffer_iter.next() else {
+                            panic!("Invalid save_buffer_info");
+                        };
+                        if i != bi.buffer_index {
+                            continue;
+                        }
+                        break b;
+                    }) else {
+                        continue;
+                    };
+                    let size = (
+                        1 << (self.shared.log_group_size - bi.downsample.0 as usize),
+                        1 << (self.shared.log_group_size - bi.downsample.1 as usize),
+                    );
+                    let origin = (size.0 * gx, size.1 * gy);
+                    let image_size = (
+                        self.shared.input_size.0 >> bi.downsample.0,
+                        self.shared.input_size.1 >> bi.downsample.1,
+                    );
+                    let size = (
+                        (size.0 + origin.0).min(image_size.0) - origin.0,
+                        (size.1 + origin.1).min(image_size.1) - origin.1,
+                    );
+                    local_buffers[bi.buffer_index] = Some(
+                        buf.subrect(
+                            bi.orientation
+                                .display_rect(Rect { size, origin }, image_size),
+                        ),
+                    );
+                }
+
+                self.render_group((gx, gy), &mut local_buffers)?;
 
                 self.input_buffers[g].completed_passes = fully_ready_passes;
             }
@@ -244,24 +316,26 @@ impl RenderPipeline for LowMemoryRenderPipeline {
         // Clear buffers that will not be used again.
         for g in 0..self.shared.group_chan_ready_passes.len() {
             let (gx, gy) = self.shared.group_position(g);
-            let mut neigh_complete_passes = usize::MAX;
-            for dy in -1..=1 {
-                let igy = gy as isize + dy;
-                if igy < 0 || igy >= self.shared.group_count.1 as isize {
-                    continue;
-                }
-                for dx in -1..=1 {
-                    let igx = gx as isize + dx;
-                    if igx < 0 || igx >= self.shared.group_count.0 as isize {
+            let mut neigh_complete_passes = self.input_buffers[g].completed_passes;
+            if self.border_pixels.0 != 0 && self.border_pixels.1 != 0 {
+                for dy in -1..=1 {
+                    let igy = gy as isize + dy;
+                    if igy < 0 || igy >= self.shared.group_count.1 as isize {
                         continue;
                     }
-                    let ig = (igy as usize) * self.shared.group_count.0 + igx as usize;
-                    neigh_complete_passes = self.input_buffers[ig]
-                        .completed_passes
-                        .min(neigh_complete_passes);
+                    for dx in -1..=1 {
+                        let igx = gx as isize + dx;
+                        if igx < 0 || igx >= self.shared.group_count.0 as isize {
+                            continue;
+                        }
+                        let ig = (igy as usize) * self.shared.group_count.0 + igx as usize;
+                        neigh_complete_passes = self.input_buffers[ig]
+                            .completed_passes
+                            .min(neigh_complete_passes);
+                    }
                 }
             }
-            if self.shared.num_passes >= neigh_complete_passes {
+            if self.shared.num_passes <= neigh_complete_passes {
                 for b in self.input_buffers[g].data.iter_mut() {
                     *b = None;
                 }
@@ -275,7 +349,15 @@ impl RenderPipeline for LowMemoryRenderPipeline {
         self.shared.num_groups()
     }
 
-    fn box_stage<S: RenderPipelineStage>(stage: S) -> Box<dyn RunStage<Self::Buffer>> {
+    fn box_inout_stage<S: super::RenderPipelineInOutStage>(
+        stage: S,
+    ) -> Box<dyn RunInOutStage<Self::Buffer>> {
+        Box::new(stage)
+    }
+
+    fn box_inplace_stage<S: super::RenderPipelineInPlaceStage>(
+        stage: S,
+    ) -> Box<dyn RunInPlaceStage<Self::Buffer>> {
         Box::new(stage)
     }
 }

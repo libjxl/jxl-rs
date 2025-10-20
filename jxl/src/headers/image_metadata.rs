@@ -7,6 +7,7 @@ use crate::{
     bit_reader::BitReader,
     error::Error,
     headers::{bit_depth::*, color_encoding::*, encodings::*, extra_channels::*, size::*},
+    image::Rect,
 };
 use jxl_macros::UnconditionalCoder;
 use num_derive::FromPrimitive;
@@ -46,7 +47,7 @@ pub enum Orientation {
 }
 
 impl Orientation {
-    pub fn is_transposing(self) -> bool {
+    pub fn is_transposing(&self) -> bool {
         matches!(
             self,
             Orientation::Transpose
@@ -54,6 +55,63 @@ impl Orientation {
                 | Orientation::Rotate90
                 | Orientation::Rotate270
         )
+    }
+
+    pub fn display_pixel(&self, (x, y): (usize, usize), size: (usize, usize)) -> (usize, usize) {
+        match self {
+            Orientation::Identity => (x, y),
+            Orientation::Rotate90 => (y, size.0 - 1 - x),
+            Orientation::Rotate180 => (size.0 - 1 - x, size.1 - 1 - y),
+            Orientation::Rotate270 => (size.1 - 1 - y, x),
+            Orientation::Transpose => (y, x),
+            Orientation::FlipVertical => (x, size.1 - 1 - y),
+            Orientation::FlipHorizontal => (size.0 - 1 - x, y),
+            Orientation::AntiTranspose => (size.1 - 1 - y, size.0 - 1 - x),
+        }
+    }
+
+    pub fn display_rect(
+        &self,
+        Rect {
+            size: (sx, sy),
+            origin: (ox, oy),
+        }: Rect,
+        size: (usize, usize),
+    ) -> Rect {
+        match self {
+            Orientation::Identity => Rect {
+                origin: (ox, oy),
+                size: (sx, sy),
+            },
+            Orientation::Rotate90 => Rect {
+                origin: (oy, size.0 - sx - ox),
+                size: (sy, sx),
+            },
+            Orientation::Rotate180 => Rect {
+                origin: (size.0 - sx - ox, size.1 - sy - oy),
+                size: (sx, sy),
+            },
+            Orientation::Rotate270 => Rect {
+                origin: (size.1 - sy - oy, ox),
+                size: (sy, sx),
+            },
+            Orientation::Transpose => Rect {
+                origin: (oy, ox),
+                size: (sy, sx),
+            },
+            Orientation::FlipVertical => Rect {
+                origin: (ox, size.1 - sy - oy),
+                size: (sx, sy),
+            },
+            Orientation::FlipHorizontal => Rect {
+                origin: (size.0 - sx - ox, oy),
+                size: (sx, sy),
+            },
+            Orientation::AntiTranspose => Rect {
+                origin: (size.1 - sy - oy, size.0 - sx - ox),
+                size: (sy, sx),
+            },
+        }
     }
 }
 

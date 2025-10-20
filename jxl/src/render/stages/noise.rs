@@ -6,7 +6,7 @@
 use crate::{
     features::noise::Noise,
     frame::color_correlation_map::ColorCorrelationParams,
-    render::{RenderPipelineInOutStage, RenderPipelineInPlaceStage, RenderPipelineStage},
+    render::{RenderPipelineInOutStage, RenderPipelineInPlaceStage},
 };
 
 pub struct ConvolveNoiseStage {
@@ -25,8 +25,11 @@ impl std::fmt::Display for ConvolveNoiseStage {
     }
 }
 
-impl RenderPipelineStage for ConvolveNoiseStage {
-    type Type = RenderPipelineInOutStage<f32, f32, 2, 2, 0, 0>;
+impl RenderPipelineInOutStage for ConvolveNoiseStage {
+    type InputT = f32;
+    type OutputT = f32;
+    const SHIFT: (u8, u8) = (0, 0);
+    const BORDER: (u8, u8) = (2, 2);
 
     fn uses_channel(&self, c: usize) -> bool {
         c == self.channel
@@ -36,10 +39,11 @@ impl RenderPipelineStage for ConvolveNoiseStage {
         &self,
         _position: (usize, usize),
         xsize: usize,
-        row: &mut [(&[&[f32]], &mut [&mut [f32]])],
+        input_rows: &[&[&[f32]]],
+        output_rows: &mut [&mut [&mut [f32]]],
         _state: Option<&mut dyn std::any::Any>,
     ) {
-        let (input, output) = &mut row[0];
+        let input = input_rows[0];
         for x in 0..xsize {
             let mut others = 0.0;
             for i in 0..5 {
@@ -53,7 +57,7 @@ impl RenderPipelineStage for ConvolveNoiseStage {
             others += input[2][x + 1];
             others += input[2][x + 3];
             others += input[2][x + 4];
-            output[0][x] = others * 0.16 + input[2][x + 2] * -3.84;
+            output_rows[0][0][x] = others * 0.16 + input[2][x + 2] * -3.84;
         }
     }
 }
@@ -92,8 +96,8 @@ impl std::fmt::Display for AddNoiseStage {
     }
 }
 
-impl RenderPipelineStage for AddNoiseStage {
-    type Type = RenderPipelineInPlaceStage<f32>;
+impl RenderPipelineInPlaceStage for AddNoiseStage {
+    type Type = f32;
 
     fn uses_channel(&self, c: usize) -> bool {
         c < 3 || (c >= self.first_channel && c < self.first_channel + 3)
@@ -169,11 +173,7 @@ mod test {
 
     #[test]
     fn convolve_noise_consistency() -> Result<()> {
-        crate::render::test::test_stage_consistency::<_, f32, f32>(
-            || ConvolveNoiseStage::new(0),
-            (500, 500),
-            1,
-        )
+        crate::render::test::test_stage_consistency(|| ConvolveNoiseStage::new(0), (500, 500), 1)
     }
 
     // TODO(firsching): Add more relevant AddNoise tests as per discussions in https://github.com/libjxl/jxl-rs/pull/60.
@@ -195,7 +195,7 @@ mod test {
             ColorCorrelationParams::default(),
             3,
         );
-        let output = make_and_run_simple_pipeline::<_, _, f32>(
+        let output = make_and_run_simple_pipeline(
             stage,
             &[input_c0, input_c1, input_c2, input_c3, input_c4, input_c5],
             (xsize, ysize),
@@ -284,7 +284,7 @@ mod test {
 
     #[test]
     fn add_noise_consistency() -> Result<()> {
-        crate::render::test::test_stage_consistency::<_, f32, f32>(
+        crate::render::test::test_stage_consistency(
             || {
                 AddNoiseStage::new(
                     Noise {

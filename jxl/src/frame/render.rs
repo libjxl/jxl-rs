@@ -127,42 +127,43 @@ impl Frame {
 
         if frame_header.encoding == Encoding::Modular {
             if decoder_state.file_header.image_metadata.xyb_encoded {
-                pipeline =
-                    pipeline.add_stage(ConvertModularXYBToF32Stage::new(0, &lf_global.lf_quant))?
+                pipeline = pipeline
+                    .add_inout_stage(ConvertModularXYBToF32Stage::new(0, &lf_global.lf_quant))?
             } else {
                 for i in 0..3 {
-                    pipeline =
-                        pipeline.add_stage(ConvertModularToF32Stage::new(i, metadata.bit_depth))?;
+                    pipeline = pipeline
+                        .add_inout_stage(ConvertModularToF32Stage::new(i, metadata.bit_depth))?;
                 }
             }
         }
         for i in 3..num_channels {
-            pipeline = pipeline.add_stage(ConvertModularToF32Stage::new(i, metadata.bit_depth))?;
+            pipeline =
+                pipeline.add_inout_stage(ConvertModularToF32Stage::new(i, metadata.bit_depth))?;
         }
 
         for c in 0..3 {
             if frame_header.hshift(c) != 0 {
-                pipeline = pipeline.add_stage(HorizontalChromaUpsample::new(c))?;
+                pipeline = pipeline.add_inout_stage(HorizontalChromaUpsample::new(c))?;
             }
             if frame_header.vshift(c) != 0 {
-                pipeline = pipeline.add_stage(VerticalChromaUpsample::new(c))?;
+                pipeline = pipeline.add_inout_stage(VerticalChromaUpsample::new(c))?;
             }
         }
 
         let filters = &frame_header.restoration_filter;
         if filters.gab {
             pipeline = pipeline
-                .add_stage(GaborishStage::new(
+                .add_inout_stage(GaborishStage::new(
                     0,
                     filters.gab_x_weight1,
                     filters.gab_x_weight2,
                 ))?
-                .add_stage(GaborishStage::new(
+                .add_inout_stage(GaborishStage::new(
                     1,
                     filters.gab_y_weight1,
                     filters.gab_y_weight2,
                 ))?
-                .add_stage(GaborishStage::new(
+                .add_inout_stage(GaborishStage::new(
                     2,
                     filters.gab_b_weight1,
                     filters.gab_b_weight2,
@@ -171,7 +172,7 @@ impl Frame {
 
         let rf = &frame_header.restoration_filter;
         if rf.epf_iters >= 3 {
-            pipeline = pipeline.add_stage(Epf0Stage::new(
+            pipeline = pipeline.add_inout_stage(Epf0Stage::new(
                 rf.epf_pass0_sigma_scale,
                 rf.epf_border_sad_mul,
                 rf.epf_channel_scale,
@@ -179,7 +180,7 @@ impl Frame {
             ))?
         }
         if rf.epf_iters >= 1 {
-            pipeline = pipeline.add_stage(Epf1Stage::new(
+            pipeline = pipeline.add_inout_stage(Epf1Stage::new(
                 1.0,
                 rf.epf_border_sad_mul,
                 rf.epf_channel_scale,
@@ -187,7 +188,7 @@ impl Frame {
             ))?
         }
         if rf.epf_iters >= 2 {
-            pipeline = pipeline.add_stage(Epf2Stage::new(
+            pipeline = pipeline.add_inout_stage(Epf2Stage::new(
                 rf.epf_pass2_sigma_scale,
                 rf.epf_border_sad_mul,
                 rf.epf_channel_scale,
@@ -206,9 +207,9 @@ impl Frame {
             for (ec, ec_up) in frame_header.ec_upsampling.iter().enumerate() {
                 if *ec_up > 1 {
                     pipeline = match *ec_up {
-                        2 => pipeline.add_stage(Upsample2x::new(transform_data, 3 + ec)),
-                        4 => pipeline.add_stage(Upsample4x::new(transform_data, 3 + ec)),
-                        8 => pipeline.add_stage(Upsample8x::new(transform_data, 3 + ec)),
+                        2 => pipeline.add_inout_stage(Upsample2x::new(transform_data, 3 + ec)),
+                        4 => pipeline.add_inout_stage(Upsample4x::new(transform_data, 3 + ec)),
+                        8 => pipeline.add_inout_stage(Upsample8x::new(transform_data, 3 + ec)),
                         _ => unreachable!(),
                     }?;
                 }
@@ -217,7 +218,7 @@ impl Frame {
 
         if frame_header.has_patches() {
             // TODO(szabadka): Avoid cloning everything.
-            pipeline = pipeline.add_stage(PatchesStage {
+            pipeline = pipeline.add_inplace_stage(PatchesStage {
                 patches: lf_global.patches.clone().unwrap(),
                 extra_channels: metadata.extra_channel_info.clone(),
                 decoder_state: Arc::new(decoder_state.reference_frames.to_vec()),
@@ -225,7 +226,7 @@ impl Frame {
         }
 
         if frame_header.has_splines() {
-            pipeline = pipeline.add_stage(SplinesStage::new(
+            pipeline = pipeline.add_inplace_stage(SplinesStage::new(
                 lf_global.splines.clone().unwrap(),
                 frame_header.size(),
                 &lf_global.color_correlation_params.unwrap_or_default(),
@@ -241,9 +242,9 @@ impl Frame {
             };
             for c in 0..nb_channels {
                 pipeline = match frame_header.upsampling {
-                    2 => pipeline.add_stage(Upsample2x::new(transform_data, c)),
-                    4 => pipeline.add_stage(Upsample4x::new(transform_data, c)),
-                    8 => pipeline.add_stage(Upsample8x::new(transform_data, c)),
+                    2 => pipeline.add_inout_stage(Upsample2x::new(transform_data, c)),
+                    4 => pipeline.add_inout_stage(Upsample4x::new(transform_data, c)),
+                    8 => pipeline.add_inout_stage(Upsample8x::new(transform_data, c)),
                     _ => unreachable!(),
                 }?;
             }
@@ -251,10 +252,10 @@ impl Frame {
 
         if frame_header.has_noise() {
             pipeline = pipeline
-                .add_stage(ConvolveNoiseStage::new(num_channels))?
-                .add_stage(ConvolveNoiseStage::new(num_channels + 1))?
-                .add_stage(ConvolveNoiseStage::new(num_channels + 2))?
-                .add_stage(AddNoiseStage::new(
+                .add_inout_stage(ConvolveNoiseStage::new(num_channels))?
+                .add_inout_stage(ConvolveNoiseStage::new(num_channels + 1))?
+                .add_inout_stage(ConvolveNoiseStage::new(num_channels + 2))?
+                .add_inplace_stage(AddNoiseStage::new(
                     *lf_global.noise.as_ref().unwrap(),
                     lf_global.color_correlation_params.unwrap_or_default(),
                     num_channels,
@@ -295,29 +296,29 @@ impl Frame {
         let mut linear = false;
         let output_color_info = OutputColorInfo::from_header(&decoder_state.file_header)?;
         if frame_header.do_ycbcr {
-            pipeline = pipeline.add_stage(YcbcrToRgbStage::new(0))?;
+            pipeline = pipeline.add_inplace_stage(YcbcrToRgbStage::new(0))?;
         } else if decoder_state.file_header.image_metadata.xyb_encoded {
-            pipeline = pipeline.add_stage(XybStage::new(0, output_color_info.clone()))?;
+            pipeline = pipeline.add_inplace_stage(XybStage::new(0, output_color_info.clone()))?;
             if decoder_state.xyb_output_linear {
                 linear = true;
             } else {
-                pipeline =
-                    pipeline.add_stage(FromLinearStage::new(0, output_color_info.tf.clone()))?;
+                pipeline = pipeline
+                    .add_inplace_stage(FromLinearStage::new(0, output_color_info.tf.clone()))?;
             }
         }
 
         if frame_header.needs_blending() {
             if linear {
-                pipeline =
-                    pipeline.add_stage(FromLinearStage::new(0, output_color_info.tf.clone()))?;
+                pipeline = pipeline
+                    .add_inplace_stage(FromLinearStage::new(0, output_color_info.tf.clone()))?;
                 linear = false;
             }
-            pipeline = pipeline.add_stage(BlendingStage::new(
+            pipeline = pipeline.add_inplace_stage(BlendingStage::new(
                 frame_header,
                 &decoder_state.file_header,
                 &decoder_state.reference_frames,
             )?)?;
-            pipeline = pipeline.add_stage(ExtendToImageDimensionsStage::new(
+            pipeline = pipeline.add_extend_stage(ExtendToImageDimensionsStage::new(
                 frame_header,
                 &decoder_state.file_header,
                 &decoder_state.reference_frames,
@@ -326,8 +327,8 @@ impl Frame {
 
         if frame_header.can_be_referenced && !frame_header.save_before_ct {
             if linear {
-                pipeline =
-                    pipeline.add_stage(FromLinearStage::new(0, output_color_info.tf.clone()))?;
+                pipeline = pipeline
+                    .add_inplace_stage(FromLinearStage::new(0, output_color_info.tf.clone()))?;
                 linear = false;
             }
             for i in 0..num_channels {
@@ -350,8 +351,8 @@ impl Frame {
                 .enumerate()
             {
                 if info.ec_type == ExtraChannel::SpotColor {
-                    pipeline =
-                        pipeline.add_stage(SpotColorStage::new(i, info.spot_color.unwrap()))?;
+                    pipeline = pipeline
+                        .add_inplace_stage(SpotColorStage::new(i, info.spot_color.unwrap()))?;
                 }
             }
         }
@@ -386,8 +387,8 @@ impl Frame {
                 && decoder_state.xyb_output_linear
                 && !linear
             {
-                pipeline =
-                    pipeline.add_stage(ToLinearStage::new(0, output_color_info.tf.clone()))?;
+                pipeline = pipeline
+                    .add_inplace_stage(ToLinearStage::new(0, output_color_info.tf.clone()))?;
             }
             let color_source_channels: &[usize] =
                 match (pixel_format.color_type.is_grayscale(), alpha_in_color) {

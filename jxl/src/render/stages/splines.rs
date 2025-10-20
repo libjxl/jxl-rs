@@ -4,9 +4,8 @@
 // license that can be found in the LICENSE file.
 
 use crate::{
-    features::spline::Splines,
-    frame::color_correlation_map::ColorCorrelationParams,
-    render::{RenderPipelineInPlaceStage, RenderPipelineStage},
+    features::spline::Splines, frame::color_correlation_map::ColorCorrelationParams,
+    render::RenderPipelineInPlaceStage,
 };
 
 pub struct SplinesStage {
@@ -37,8 +36,8 @@ impl std::fmt::Display for SplinesStage {
     }
 }
 
-impl RenderPipelineStage for SplinesStage {
-    type Type = RenderPipelineInPlaceStage<f32>;
+impl RenderPipelineInPlaceStage for SplinesStage {
+    type Type = f32;
 
     fn uses_channel(&self, c: usize) -> bool {
         c < 3
@@ -157,7 +156,7 @@ mod test {
             vec![Point { x: 9.0, y: 54.0 }],
         );
 
-        crate::render::test::test_stage_consistency::<_, f32, f32>(
+        crate::render::test::test_stage_consistency(
             || {
                 SplinesStage::new(
                     splines.clone(),

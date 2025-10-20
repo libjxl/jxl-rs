@@ -7,82 +7,81 @@ use std::any::Any;
 use std::fmt::Display;
 
 use crate::error::Result;
-use crate::image::{DataTypeTag, Image, ImageDataType};
+use crate::image::{DataTypeTag, ImageDataType};
 use crate::util::ShiftRightCeil;
 
-use super::low_memory_pipeline::row_buffers::RowBuffer;
 use super::save::SaveStage;
-use super::{
-    RenderPipelineExtendStage, RenderPipelineInOutStage, RenderPipelineInPlaceStage,
-    RenderPipelineStage,
-};
-
-#[derive(Copy, Clone, Debug, PartialEq, Eq)]
-pub enum RenderPipelineStageType {
-    InPlace,
-    InOut,
-    Extend,
-}
-
-pub trait RenderPipelineStageInfo:
-    RenderPipelineRunStage<Image<f64>> + RenderPipelineRunStage<RowBuffer>
-{
-    const TYPE: RenderPipelineStageType;
-    const BORDER: (u8, u8);
-    const SHIFT: (u8, u8);
-    const INPUT_TYPE: DataTypeTag;
-    const OUTPUT_TYPE: Option<DataTypeTag>;
-    type RowType<'a>;
-}
-
-impl<T: ImageDataType> RenderPipelineStageInfo for RenderPipelineInPlaceStage<T> {
-    const TYPE: RenderPipelineStageType = RenderPipelineStageType::InPlace;
-    const BORDER: (u8, u8) = (0, 0);
-    const SHIFT: (u8, u8) = (0, 0);
-    const INPUT_TYPE: DataTypeTag = T::DATA_TYPE_ID;
-    const OUTPUT_TYPE: Option<DataTypeTag> = None;
-    type RowType<'a> = &'a mut [T];
-}
-
-pub type InOutChannel<'a, InputT, OutputT> = (&'a [&'a [InputT]], &'a mut [&'a mut [OutputT]]);
-
-impl<
-    InputT: ImageDataType,
-    OutputT: ImageDataType,
-    const BORDER_X: u8,
-    const BORDER_Y: u8,
-    const SHIFT_X: u8,
-    const SHIFT_Y: u8,
-> RenderPipelineStageInfo
-    for RenderPipelineInOutStage<InputT, OutputT, BORDER_X, BORDER_Y, SHIFT_X, SHIFT_Y>
-{
-    const TYPE: RenderPipelineStageType = RenderPipelineStageType::InOut;
-    const BORDER: (u8, u8) = (BORDER_X, BORDER_Y);
-    const SHIFT: (u8, u8) = (SHIFT_X, SHIFT_Y);
-    const INPUT_TYPE: DataTypeTag = InputT::DATA_TYPE_ID;
-    const OUTPUT_TYPE: Option<DataTypeTag> = Some(OutputT::DATA_TYPE_ID);
-    type RowType<'a> = InOutChannel<'a, InputT, OutputT>;
-}
-
-impl<T: ImageDataType> RenderPipelineStageInfo for RenderPipelineExtendStage<T> {
-    const TYPE: RenderPipelineStageType = RenderPipelineStageType::Extend;
-    const BORDER: (u8, u8) = (0, 0);
-    const SHIFT: (u8, u8) = (0, 0);
-    const INPUT_TYPE: DataTypeTag = T::DATA_TYPE_ID;
-    const OUTPUT_TYPE: Option<DataTypeTag> = Some(T::DATA_TYPE_ID);
-    type RowType<'a> = &'a mut [T];
-}
+use super::stages::ExtendToImageDimensionsStage;
+use super::{RenderPipelineInOutStage, RenderPipelineInPlaceStage};
 
 pub enum Stage<Buffer> {
-    Process(Box<dyn RunStage<Buffer>>),
+    InPlace(Box<dyn RunInPlaceStage<Buffer>>),
+    InOut(Box<dyn RunInOutStage<Buffer>>),
     Save(SaveStage),
+    Extend(ExtendToImageDimensionsStage),
+}
+
+impl<Buffer: 'static> Stage<Buffer> {
+    pub(super) fn init_local_state(&self) -> Result<Option<Box<dyn Any>>> {
+        match self {
+            Stage::InPlace(s) => s.init_local_state(),
+            Stage::InOut(s) => s.init_local_state(),
+            _ => Ok(None),
+        }
+    }
+
+    pub(super) fn shift(&self) -> (u8, u8) {
+        match self {
+            Stage::InOut(s) => s.shift(),
+            _ => (0, 0),
+        }
+    }
+
+    pub(super) fn border(&self) -> (u8, u8) {
+        match self {
+            Stage::InOut(s) => s.border(),
+            _ => (0, 0),
+        }
+    }
+
+    pub(super) fn new_size(&self, size: (usize, usize)) -> (usize, usize) {
+        match self {
+            Stage::Extend(e) => e.image_size,
+            _ => size,
+        }
+    }
+
+    pub(super) fn uses_channel(&self, c: usize) -> bool {
+        match self {
+            Stage::Extend(_) => true,
+            Stage::InPlace(s) => s.uses_channel(c),
+            Stage::InOut(s) => s.uses_channel(c),
+            Stage::Save(s) => s.uses_channel(c),
+        }
+    }
+    pub(super) fn input_type(&self) -> DataTypeTag {
+        match self {
+            Stage::Extend(_) => DataTypeTag::F32,
+            Stage::InPlace(s) => s.ty(),
+            Stage::InOut(s) => s.input_type(),
+            Stage::Save(s) => s.input_type(),
+        }
+    }
+    pub(super) fn output_type(&self) -> Option<DataTypeTag> {
+        match self {
+            Stage::InOut(s) => Some(s.output_type()),
+            _ => None,
+        }
+    }
 }
 
 impl<Buffer> Display for Stage<Buffer> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Stage::Process(s) => write!(f, "{}", s),
+            Stage::InOut(s) => write!(f, "{}", s),
+            Stage::InPlace(s) => write!(f, "{}", s),
             Stage::Save(s) => write!(f, "{}", s),
+            Stage::Extend(e) => write!(f, "{}", e),
         }
     }
 }
@@ -160,80 +159,69 @@ impl<Buffer> RenderPipelineShared<Buffer> {
     }
 }
 
-pub(crate) trait RunStage<Buffer>: Any + Display {
-    fn run_stage_on(
-        &self,
-        chunk_size: usize,
-        input_buffers: &[&Buffer],
-        output_buffers: &mut [&mut Buffer],
-        state: Option<&mut dyn Any>,
-    );
+pub trait InPlaceStage: Any + Display {
     fn init_local_state(&self) -> Result<Option<Box<dyn Any>>>;
-    fn shift(&self) -> (u8, u8);
-    fn border(&self) -> (u8, u8);
-    fn new_size(&self, size: (usize, usize)) -> (usize, usize);
     fn uses_channel(&self, c: usize) -> bool;
-    fn input_type(&self) -> DataTypeTag;
-    fn output_type(&self) -> Option<DataTypeTag>;
-    fn stage_type(&self) -> RenderPipelineStageType;
+    fn ty(&self) -> DataTypeTag;
 }
 
-pub trait RenderPipelineRunStage<Buffer> {
-    fn run_stage_on<S: RenderPipelineStage<Type = Self>>(
-        stage: &S,
+pub trait RunInPlaceStage<Buffer>: InPlaceStage {
+    fn run_stage_on(
+        &self,
         chunk_size: usize,
-        input_buffers: &[&Buffer],
-        output_buffers: &mut [&mut Buffer],
+        buffers: &mut [&mut Buffer],
         state: Option<&mut dyn Any>,
     );
 }
 
-impl<T: RenderPipelineStage, Buffer> RunStage<Buffer> for T
-where
-    T::Type: RenderPipelineRunStage<Buffer>,
-{
-    fn run_stage_on(
-        &self,
-        chunk_size: usize,
-        input_buffers: &[&Buffer],
-        output_buffers: &mut [&mut Buffer],
-        state: Option<&mut dyn Any>,
-    ) {
-        <T::Type as RenderPipelineRunStage<Buffer>>::run_stage_on(
-            self,
-            chunk_size,
-            input_buffers,
-            output_buffers,
-            state,
-        )
-    }
-
+impl<T: RenderPipelineInPlaceStage> InPlaceStage for T {
     fn init_local_state(&self) -> Result<Option<Box<dyn Any>>> {
-        T::init_local_state(self)
+        self.init_local_state()
     }
-
-    fn shift(&self) -> (u8, u8) {
-        T::Type::SHIFT
-    }
-
-    fn border(&self) -> (u8, u8) {
-        T::Type::BORDER
-    }
-
-    fn new_size(&self, size: (usize, usize)) -> (usize, usize) {
-        self.new_size(size)
-    }
-
     fn uses_channel(&self, c: usize) -> bool {
         self.uses_channel(c)
     }
+    fn ty(&self) -> DataTypeTag {
+        T::Type::DATA_TYPE_ID
+    }
+}
+
+pub trait InOutStage: Any + Display {
+    fn init_local_state(&self) -> Result<Option<Box<dyn Any>>>;
+    fn shift(&self) -> (u8, u8);
+    fn border(&self) -> (u8, u8);
+    fn uses_channel(&self, c: usize) -> bool;
+    fn input_type(&self) -> DataTypeTag;
+    fn output_type(&self) -> DataTypeTag;
+}
+
+impl<T: RenderPipelineInOutStage> InOutStage for T {
+    fn init_local_state(&self) -> Result<Option<Box<dyn Any>>> {
+        self.init_local_state()
+    }
+    fn uses_channel(&self, c: usize) -> bool {
+        self.uses_channel(c)
+    }
+    fn shift(&self) -> (u8, u8) {
+        T::SHIFT
+    }
+    fn border(&self) -> (u8, u8) {
+        T::BORDER
+    }
     fn input_type(&self) -> DataTypeTag {
-        T::Type::INPUT_TYPE
+        T::InputT::DATA_TYPE_ID
     }
-    fn output_type(&self) -> Option<DataTypeTag> {
-        T::Type::OUTPUT_TYPE
+    fn output_type(&self) -> DataTypeTag {
+        T::OutputT::DATA_TYPE_ID
     }
-    fn stage_type(&self) -> RenderPipelineStageType {
-        T::Type::TYPE
-    }
+}
+
+pub trait RunInOutStage<Buffer>: InOutStage {
+    fn run_stage_on(
+        &self,
+        chunk_size: usize,
+        input_buffers: &[&Buffer],
+        output_buffers: &mut [&mut Buffer],
+        state: Option<&mut dyn Any>,
+    );
 }

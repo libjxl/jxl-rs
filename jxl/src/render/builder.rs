@@ -6,13 +6,13 @@
 use crate::api::{JxlColorType, JxlDataFormat};
 use crate::error::{Error, Result};
 use crate::headers::Orientation;
-use crate::image::DataTypeTag;
-use crate::render::internal::{ChannelInfo, RenderPipelineStageInfo, RenderPipelineStageType};
+use crate::render::internal::ChannelInfo;
 use crate::render::save::SaveStage;
 use crate::util::{ShiftRightCeil, tracing_wrappers::*};
 
 use super::internal::{RenderPipelineShared, Stage};
-use super::{RenderPipeline, RenderPipelineStage};
+use super::stages::ExtendToImageDimensionsStage;
+use super::{RenderPipeline, RenderPipelineInOutStage, RenderPipelineInPlaceStage};
 
 pub(crate) struct RenderPipelineBuilder<Pipeline: RenderPipeline> {
     shared: RenderPipelineShared<Pipeline::Buffer>,
@@ -59,15 +59,12 @@ impl<Pipeline: RenderPipeline> RenderPipelineBuilder<Pipeline> {
         }
     }
 
-    fn add_stage_internal(
-        mut self,
-        stage: Stage<Pipeline::Buffer>,
-        input_type: DataTypeTag,
-        output_type: Option<DataTypeTag>,
-        shift: (u8, u8),
-        border: (u8, u8),
-        is_extend: bool,
-    ) -> Result<Self> {
+    pub(super) fn add_stage_internal(mut self, stage: Stage<Pipeline::Buffer>) -> Result<Self> {
+        let input_type = stage.input_type();
+        let output_type = stage.output_type();
+        let shift = stage.shift();
+        let border = stage.border();
+        let is_extend = matches!(stage, Stage::Extend(_));
         let current_info = self.shared.channel_info.last().unwrap().clone();
         debug!(
             last_stage_channel_info = ?current_info,
@@ -76,11 +73,7 @@ impl<Pipeline: RenderPipeline> RenderPipelineBuilder<Pipeline> {
         );
         let mut after_info = vec![];
         for (c, info) in current_info.iter().enumerate() {
-            let uses_channel = match &stage {
-                Stage::Save(s) => s.uses_channel(c),
-                Stage::Process(s) => s.uses_channel(c),
-            };
-            if !uses_channel {
+            if !stage.uses_channel(c) {
                 after_info.push(ChannelInfo {
                     ty: info.ty,
                     downsample: (0, 0),
@@ -138,18 +131,6 @@ impl<Pipeline: RenderPipeline> RenderPipelineBuilder<Pipeline> {
     }
 
     #[instrument(skip_all, err)]
-    pub fn add_stage<S: RenderPipelineStage>(self, stage: S) -> Result<Self> {
-        self.add_stage_internal(
-            Stage::Process(Pipeline::box_stage(stage)),
-            S::Type::INPUT_TYPE,
-            S::Type::OUTPUT_TYPE,
-            S::Type::SHIFT,
-            S::Type::BORDER,
-            S::Type::TYPE == RenderPipelineStageType::Extend,
-        )
-    }
-
-    #[instrument(skip_all, err)]
     pub fn add_save_stage(
         self,
         channels: &[usize],
@@ -165,8 +146,22 @@ impl<Pipeline: RenderPipeline> RenderPipelineBuilder<Pipeline> {
             color_type,
             data_format,
         );
-        let it = stage.input_type();
-        self.add_stage_internal(Stage::Save(stage), it, None, (0, 0), (0, 0), false)
+        self.add_stage_internal(Stage::Save(stage))
+    }
+
+    #[instrument(skip_all, err)]
+    pub fn add_extend_stage(self, extend: ExtendToImageDimensionsStage) -> Result<Self> {
+        self.add_stage_internal(Stage::Extend(extend))
+    }
+
+    #[instrument(skip_all, err)]
+    pub fn add_inplace_stage<S: RenderPipelineInPlaceStage>(self, stage: S) -> Result<Self> {
+        self.add_stage_internal(Stage::InPlace(Pipeline::box_inplace_stage(stage)))
+    }
+
+    #[instrument(skip_all, err)]
+    pub fn add_inout_stage<S: RenderPipelineInOutStage>(self, stage: S) -> Result<Self> {
+        self.add_stage_internal(Stage::InOut(Pipeline::box_inout_stage(stage)))
     }
 
     #[instrument(skip_all, err)]
@@ -182,16 +177,8 @@ impl<Pipeline: RenderPipeline> RenderPipelineBuilder<Pipeline> {
             for chan in 0..num_channels {
                 let cur_chan = &mut current_info[chan];
                 let next_chan = &mut next_info[chan];
-                let (uses_channel, input_type) = match stage {
-                    Stage::Process(s) => {
-                        let uses_channel = s.uses_channel(chan);
-                        if uses_channel && s.output_type().is_some() {
-                            assert_eq!(s.output_type(), next_chan.ty);
-                        }
-                        (uses_channel, s.input_type())
-                    }
-                    Stage::Save(s) => (s.uses_channel(chan), s.input_type()),
-                };
+                let uses_channel = stage.uses_channel(chan);
+                let input_type = stage.input_type();
 
                 if cur_chan.ty.is_none() {
                     cur_chan.ty = if uses_channel {
