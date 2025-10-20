@@ -265,6 +265,7 @@ fn predict_num_nonzeros(nzeros_map: &Image<u32>, bx: usize, by: usize) -> usize 
     }
 }
 
+#[inline(always)]
 fn adjust_quant_bias(c: usize, quant_i: i32, biases: &[f32; 4]) -> f32 {
     match quant_i {
         0 => 0.0,
@@ -278,6 +279,7 @@ fn adjust_quant_bias(c: usize, quant_i: i32, biases: &[f32; 4]) -> f32 {
 }
 
 #[allow(clippy::too_many_arguments)]
+#[inline(always)]
 fn dequant_lane(
     scaled_dequant_x: f32,
     scaled_dequant_y: f32,
@@ -360,6 +362,7 @@ fn dequant_block<D: SimdDescriptor>(
 }
 
 #[allow(clippy::too_many_arguments)]
+#[inline(always)]
 fn dequant_and_transform_to_pixels<D: SimdDescriptor>(
     d: D,
     quant_biases: &[f32; 4],

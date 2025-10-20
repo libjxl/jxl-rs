@@ -121,6 +121,7 @@ impl F32SimdVec for F32VecAvx512 {
         F32VecAvx512(_mm512_fmadd_ps(this.0, mul.0, add.0), this.1)
     });
 
+    #[inline(always)]
     fn splat(d: Self::Descriptor, v: f32) -> Self {
         // SAFETY: We know avx512f is available from the safety invariant on `d`.
         unsafe { Self(_mm512_set1_ps(v), d) }
