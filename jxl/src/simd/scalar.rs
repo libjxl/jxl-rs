@@ -39,6 +39,7 @@ impl F32SimdVec for F32VecScalar {
 
     const LEN: usize = 1;
 
+    #[inline(always)]
     fn load(_d: Self::Descriptor, mem: &[f32]) -> Self {
         Self(mem[0])
     }
@@ -49,6 +50,7 @@ impl F32SimdVec for F32VecScalar {
         Self::load(d, mem)
     }
 
+    #[inline(always)]
     fn store(&self, mem: &mut [f32]) {
         mem[0] = self.0;
     }
@@ -59,18 +61,22 @@ impl F32SimdVec for F32VecScalar {
         self.store(mem)
     }
 
+    #[inline(always)]
     fn mul_add(self, mul: Self, add: Self) -> Self {
         Self(self.0.mul_add(mul.0, add.0))
     }
 
+    #[inline(always)]
     fn splat(_d: Self::Descriptor, v: f32) -> Self {
         Self(v)
     }
 
+    #[inline(always)]
     fn abs(self) -> Self {
         Self(self.0.abs())
     }
 
+    #[inline(always)]
     fn max(self, other: Self) -> Self {
         Self(self.0.max(other.0))
     }
