@@ -4,7 +4,8 @@
 // license that can be found in the LICENSE file.
 
 use crate::{
-    api::{JxlColorType, JxlDataFormat},
+    api::{JxlColorType, JxlDataFormat, JxlOutputBuffer},
+    error::{Error, Result},
     headers::Orientation,
     image::DataTypeTag,
 };
@@ -49,6 +50,31 @@ impl SaveStage {
 
     pub fn input_type(&self) -> DataTypeTag {
         self.data_format.data_type()
+    }
+
+    pub fn check_buffer_size(
+        &self,
+        size: (usize, usize),
+        buffer: Option<&JxlOutputBuffer>,
+    ) -> Result<()> {
+        let Some(buf) = buffer else {
+            return Ok(());
+        };
+        let osize = self.orientation.map_size(size);
+
+        let expected_w = self.channels.len() * self.data_format.bytes_per_sample() * osize.0;
+
+        if buf.byte_size() != (expected_w, osize.1) {
+            return Err(Error::InvalidOutputBufferSize(
+                buf.byte_size().0,
+                buf.byte_size().1,
+                osize.0,
+                osize.1,
+                self.color_type,
+                self.data_format,
+            ));
+        }
+        Ok(())
     }
 }
 

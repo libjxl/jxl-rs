@@ -10,6 +10,7 @@ use std::{marker::PhantomData, mem::MaybeUninit, ops::Range};
 
 use crate::image::{Image, ImageDataType, Rect};
 
+#[derive(Debug)]
 pub struct JxlOutputBuffer<'a> {
     // Safety invariants:
     //  - uninit data is never written to `buf`.

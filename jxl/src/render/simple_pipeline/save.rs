@@ -7,7 +7,7 @@ use half::f16;
 
 use crate::{
     api::{Endianness, JxlDataFormat, JxlOutputBuffer},
-    error::{Error, Result},
+    error::Result,
     image::Image,
     render::save::SaveStage,
 };
@@ -25,24 +25,8 @@ impl SaveStage {
             return Ok(());
         };
         let size = data[0].size();
-        let osize = if self.orientation.is_transposing() {
-            (size.1, size.0)
-        } else {
-            size
-        };
 
-        let expected_w = self.channels.len() * self.data_format.bytes_per_sample() * osize.0;
-
-        if buf.byte_size() != (expected_w, osize.1) {
-            return Err(Error::InvalidOutputBufferSize(
-                buf.byte_size().0,
-                buf.byte_size().1,
-                osize.0,
-                osize.1,
-                self.color_type,
-                self.data_format,
-            ));
-        }
+        self.check_buffer_size(size, Some(buf))?;
 
         // TODO(veluca): this is very slow. That's fine for the simple pipeline, but probably not
         // so fine for the final one.

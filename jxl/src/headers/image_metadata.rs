@@ -57,6 +57,14 @@ impl Orientation {
         )
     }
 
+    pub fn map_size(&self, size: (usize, usize)) -> (usize, usize) {
+        if self.is_transposing() {
+            (size.1, size.0)
+        } else {
+            size
+        }
+    }
+
     pub fn display_pixel(&self, (x, y): (usize, usize), size: (usize, usize)) -> (usize, usize) {
         match self {
             Orientation::Identity => (x, y),

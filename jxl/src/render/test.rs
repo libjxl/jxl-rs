@@ -99,7 +99,8 @@ fn make_and_run_simple_pipeline_impl<InputT: ImageDataType, OutputT: ImageDataTy
     }
     let mut pipeline = pipeline.build()?;
 
-    for g in 0..pipeline.num_groups() {
+    let num_groups = image_size.0.shrc(LOG_GROUP_SIZE) * image_size.1.shrc(LOG_GROUP_SIZE);
+    for g in 0..num_groups {
         for &c in all_channels.iter() {
             let log_group_size = if uses_channel[c] {
                 (

@@ -4,7 +4,6 @@
 // license that can be found in the LICENSE file.
 
 use std::any::Any;
-use std::usize;
 
 use row_buffers::RowBuffer;
 
@@ -20,14 +19,11 @@ use crate::util::{ShiftRightCeil, tracing_wrappers::*};
 use super::RenderPipeline;
 use super::internal::{RenderPipelineShared, RunInOutStage, RunInPlaceStage};
 
+mod helpers;
 mod render_group;
 pub(super) mod row_buffers;
 mod run_stage;
 mod save;
-
-const MAX_OVERALL_BORDER: usize = 16; // probably an overestimate.
-
-const _: () = assert!(MAX_OVERALL_BORDER * 8 <= CACHE_LINE_BYTE_SIZE * 2);
 
 struct InputBuffer {
     // One buffer per channel.
@@ -39,20 +35,25 @@ struct SaveStageBufferInfo {
     buffer_index: usize,
     downsample: (u8, u8),
     orientation: Orientation,
+    byte_size: usize,
 }
 
 pub struct LowMemoryRenderPipeline {
     shared: RenderPipelineShared<RowBuffer>,
     input_buffers: Vec<InputBuffer>,
     row_buffers: Vec<Vec<RowBuffer>>,
-    // The input buffer that each channel of each stage should use. 0 corresponds to input data.
-    stage_input_buffer_index: Vec<Vec<usize>>,
+    // The input buffer that each channel of each stage should use.
+    // This is indexed both by stage index (0 corresponds to input data, 1 to stage[0], etc) and by
+    // channel index (as only used channels have a buffer).
+    stage_input_buffer_index: Vec<Vec<(usize, usize)>>,
     // Tracks whether we already rendered the padding around the core frame (if any).
     padding_was_rendered: bool,
     // sorted by buffer_index; all values of buffer_index are distinct.
     save_buffer_info: Vec<SaveStageBufferInfo>,
     // The amount of pixels we need to load from neighbouring groups in each dimension.
-    border_pixels: (usize, usize),
+    border_pixels: Vec<(usize, usize)>,
+    // Whether this render pipeline doesn't need any border (i.e. border_pixels is always 0).
+    bordeless: bool,
     // Local states of each stage, if any.
     local_states: Vec<Option<Box<dyn Any>>>,
 }
@@ -72,22 +73,30 @@ impl RenderPipeline for LowMemoryRenderPipeline {
             }
         }
         let nc = shared.channel_info[0].len();
-        let mut previous_inout = vec![0usize; nc];
+        let mut previous_inout: Vec<_> = (0..nc).map(|x| (0usize, x)).collect();
         let mut stage_input_buffer_index = vec![];
-        let mut used_with_border = vec![vec![0u8; nc]; shared.stages.len() + 1];
+        let mut next_border_and_cur_downsample = vec![vec![]];
+
+        for ci in shared.channel_info[0].iter() {
+            next_border_and_cur_downsample[0].push((0, ci.downsample));
+        }
 
         // For each stage, compute in which stage its input was buffered (the previous InOut
         // stage). Also, compute for each InOut stage and channel the border with which the stage
         // output is used; this will used to allocate buffers of the correct size.
         for (i, stage) in shared.stages.iter().enumerate() {
             stage_input_buffer_index.push(previous_inout.clone());
+            next_border_and_cur_downsample.push(vec![]);
             if let Stage::InOut(p) = stage {
                 for chan in 0..nc {
                     if !p.uses_channel(chan) {
                         continue;
                     }
-                    used_with_border[previous_inout[chan]][chan] = p.border().1;
-                    previous_inout[chan] = i + 1;
+                    let (ps, pc) = previous_inout[chan];
+                    next_border_and_cur_downsample[ps][pc].0 = p.border().1;
+                    previous_inout[chan] = (i + 1, next_border_and_cur_downsample[i + 1].len());
+                    next_border_and_cur_downsample[i + 1]
+                        .push((0, shared.channel_info[i + 1][chan].downsample));
                 }
             }
         }
@@ -96,7 +105,7 @@ impl RenderPipeline for LowMemoryRenderPipeline {
         for chan in 0..nc {
             initial_buffers.push(RowBuffer::new(
                 shared.channel_info[0][chan].ty.unwrap(),
-                used_with_border[0][chan] as usize,
+                next_border_and_cur_downsample[0][chan].0 as usize,
                 0,
                 shared.chunk_size >> shared.channel_info[0][chan].downsample.0,
             )?);
@@ -106,18 +115,13 @@ impl RenderPipeline for LowMemoryRenderPipeline {
         // Allocate buffers.
         for (i, stage) in shared.stages.iter().enumerate() {
             let mut stage_buffers = vec![];
-            if let Stage::InOut(p) = stage {
-                for chan in 0..nc {
-                    if !p.uses_channel(chan) {
-                        continue;
-                    }
-                    stage_buffers.push(RowBuffer::new(
-                        p.output_type(),
-                        used_with_border[i + 1][chan] as usize,
-                        p.shift().1 as usize,
-                        shared.chunk_size >> shared.channel_info[i + 1][chan].downsample.0,
-                    )?);
-                }
+            for (next_y_border, (dsx, _)) in next_border_and_cur_downsample[i + 1].iter() {
+                stage_buffers.push(RowBuffer::new(
+                    stage.output_type().unwrap(),
+                    *next_y_border as usize,
+                    stage.shift().1 as usize,
+                    shared.chunk_size >> *dsx,
+                )?);
             }
             row_buffers.push(stage_buffers);
         }
@@ -134,6 +138,7 @@ impl RenderPipeline for LowMemoryRenderPipeline {
                         buffer_index: s.output_buffer_index,
                         downsample: ci.downsample,
                         orientation: s.orientation,
+                        byte_size: s.data_format.bytes_per_sample() * s.channels.len(),
                     });
                     continue 'stage;
                 }
@@ -152,16 +157,24 @@ impl RenderPipeline for LowMemoryRenderPipeline {
                 border_pixels[c].1 = border_pixels[c].1.shrc(s.shift().1) + s.border().1 as usize;
             }
         }
-        let border_pixels = (
-            border_pixels.iter().map(|x| x.0).max().unwrap(),
-            border_pixels.iter().map(|x| x.1).max().unwrap(),
-        );
+
+        for (c, (bx, by)) in border_pixels.iter().copied().enumerate() {
+            assert!(bx * shared.channel_info[0][c].ty.unwrap().size() <= 2 * CACHE_LINE_BYTE_SIZE);
+            assert!(by * shared.channel_info[0][c].ty.unwrap().size() <= 2 * CACHE_LINE_BYTE_SIZE);
+        }
+
+        // TODO: remove.
+        for s in shared.stages.iter() {
+            println!("{s}");
+        }
+
         Ok(Self {
             input_buffers,
             stage_input_buffer_index,
             row_buffers,
             padding_was_rendered: false,
             save_buffer_info,
+            bordeless: border_pixels.iter().all(|x| *x == (0, 0)),
             border_pixels,
             local_states: shared
                 .stages
@@ -221,6 +234,7 @@ impl RenderPipeline for LowMemoryRenderPipeline {
     }
 
     fn do_render(&mut self, buffers: &mut [Option<JxlOutputBuffer>]) -> Result<()> {
+        // TODO(veluca): consider checking buffer sizes here.
         if self.shared.extend_stage_index.is_some() {
             // TODO(veluca): implement this case.
             unimplemented!()
@@ -237,7 +251,7 @@ impl RenderPipeline for LowMemoryRenderPipeline {
             if self.input_buffers[g].completed_passes < ready_passes {
                 let (gx, gy) = self.shared.group_position(g);
                 let mut fully_ready_passes = ready_passes;
-                if self.border_pixels.0 != 0 && self.border_pixels.1 != 0 {
+                if !self.bordeless {
                     for dy in -1..=1 {
                         let igy = gy as isize + dy;
                         if igy < 0 || igy >= self.shared.group_count.1 as isize {
@@ -299,12 +313,14 @@ impl RenderPipeline for LowMemoryRenderPipeline {
                         (size.0 + origin.0).min(image_size.0) - origin.0,
                         (size.1 + origin.1).min(image_size.1) - origin.1,
                     );
-                    local_buffers[bi.buffer_index] = Some(
-                        buf.subrect(
-                            bi.orientation
-                                .display_rect(Rect { size, origin }, image_size),
-                        ),
-                    );
+                    let rect = bi
+                        .orientation
+                        .display_rect(Rect { size, origin }, image_size);
+                    let rect = Rect {
+                        origin: (rect.origin.0 * bi.byte_size, rect.origin.1),
+                        size: (rect.size.0 * bi.byte_size, rect.size.1),
+                    };
+                    local_buffers[bi.buffer_index] = Some(buf.subrect(rect));
                 }
 
                 self.render_group((gx, gy), &mut local_buffers)?;
@@ -317,7 +333,7 @@ impl RenderPipeline for LowMemoryRenderPipeline {
         for g in 0..self.shared.group_chan_ready_passes.len() {
             let (gx, gy) = self.shared.group_position(g);
             let mut neigh_complete_passes = self.input_buffers[g].completed_passes;
-            if self.border_pixels.0 != 0 && self.border_pixels.1 != 0 {
+            if !self.bordeless {
                 for dy in -1..=1 {
                     let igy = gy as isize + dy;
                     if igy < 0 || igy >= self.shared.group_count.1 as isize {
@@ -343,10 +359,6 @@ impl RenderPipeline for LowMemoryRenderPipeline {
         }
 
         Ok(())
-    }
-
-    fn num_groups(&self) -> usize {
-        self.shared.num_groups()
     }
 
     fn box_inout_stage<S: super::RenderPipelineInOutStage>(

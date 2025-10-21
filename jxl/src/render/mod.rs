@@ -112,8 +112,6 @@ pub(crate) trait RenderPipeline: Sized {
     /// Renders new data that is available after the last call to `render`.
     fn do_render(&mut self, buffers: &mut [Option<JxlOutputBuffer>]) -> Result<()>;
 
-    fn num_groups(&self) -> usize;
-
     fn box_inout_stage<S: RenderPipelineInOutStage>(
         stage: S,
     ) -> Box<dyn RunInOutStage<Self::Buffer>>;

@@ -72,9 +72,11 @@ impl ExtendToImageDimensionsStage {
         } else {
             self.ec_blending_info[c - 3].source as usize
         };
-        let bg = self.reference_frames[source].as_ref().unwrap().frame[c]
-            .as_rect()
-            .row(y0);
+        let bg = if let Some(bg) = self.reference_frames[source].as_ref() {
+            bg.frame[c].as_rect().row(y0)
+        } else {
+            self.zeros.as_slice()
+        };
         row[0..xsize].copy_from_slice(&bg[x0..x1]);
     }
 }

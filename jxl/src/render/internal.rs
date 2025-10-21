@@ -154,9 +154,14 @@ impl<Buffer> RenderPipelineShared<Buffer> {
         )
     }
 
-    pub fn num_groups(&self) -> usize {
-        self.group_count.0 * self.group_count.1
+    pub fn num_channels(&self) -> usize {
+        self.channel_info[0].len()
     }
+}
+
+pub trait PipelineBuffer {
+    type InPlaceExtraInfo;
+    type InOutExtraInfo;
 }
 
 pub trait InPlaceStage: Any + Display {
@@ -165,10 +170,10 @@ pub trait InPlaceStage: Any + Display {
     fn ty(&self) -> DataTypeTag;
 }
 
-pub trait RunInPlaceStage<Buffer>: InPlaceStage {
+pub trait RunInPlaceStage<Buffer: PipelineBuffer>: InPlaceStage {
     fn run_stage_on(
         &self,
-        chunk_size: usize,
+        info: Buffer::InPlaceExtraInfo,
         buffers: &mut [&mut Buffer],
         state: Option<&mut dyn Any>,
     );
@@ -216,10 +221,10 @@ impl<T: RenderPipelineInOutStage> InOutStage for T {
     }
 }
 
-pub trait RunInOutStage<Buffer>: InOutStage {
+pub trait RunInOutStage<Buffer: PipelineBuffer>: InOutStage {
     fn run_stage_on(
         &self,
-        chunk_size: usize,
+        info: Buffer::InOutExtraInfo,
         input_buffers: &[&Buffer],
         output_buffers: &mut [&mut Buffer],
         state: Option<&mut dyn Any>,

@@ -198,10 +198,6 @@ impl RenderPipeline for SimpleRenderPipeline {
         Ok(())
     }
 
-    fn num_groups(&self) -> usize {
-        self.shared.num_groups()
-    }
-
     fn box_inout_stage<S: RenderPipelineInOutStage>(
         stage: S,
     ) -> Box<dyn super::RunInOutStage<Self::Buffer>> {

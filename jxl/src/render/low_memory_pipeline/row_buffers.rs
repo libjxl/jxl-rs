@@ -10,21 +10,32 @@ use half::f16;
 use crate::{
     error::Result,
     image::{DataTypeTag, ImageDataType},
-    simd::CACHE_LINE_BYTE_SIZE,
+    simd::{CACHE_LINE_BYTE_SIZE, num_per_cache_line},
     util::ShiftRightCeil,
 };
 
+/// Temporary storage for data rows. Note that the first pixel of the group is expected to be
+/// located *two cachelines worth of data* inside the row.
 pub struct RowBuffer {
     // TODO(veluca): consider making this into a Vec<u8> and using casts instead, if we want to get
     // rid of the double allocation & the typeid checking on access.
     buffer: Box<dyn Any>,
-    pub(super) row_len: usize,
-    pub(super) row_stride: usize,
-    pub(super) next_row: usize,
-    pub(super) row_range: Range<usize>,
+    // Distance (in number of elements) between the start of two rows.
+    row_stride: usize,
+    // Index of the next row to be saved in this RowBuffer.
+    next_row: usize,
+    // Number of rows that are actually stored.
+    // TODO(veluca): consider padding this to a power of 2 and using & here. In *most* cases,
+    // that's not a huge loss in memory usage (for most images, num_rows is 1/3/5/7, which would
+    // become 1/4/8/8).
+    num_rows: usize,
+    // Range of rows that will be saved in the RowBuffer in the current call to render_group, using
+    // *absolute* coordinates.
+    row_range: Range<usize>,
 }
 
 fn make_buffer<T: Default + Clone + 'static>(len: usize) -> Result<Box<dyn Any>> {
+    // TODO(veluca): allocate this aligned to a cache line.
     let mut vec = Vec::<T>::new();
     vec.try_reserve(len)?;
     vec.resize(len, Default::default());
@@ -57,16 +68,59 @@ impl RowBuffer {
         Ok(Self {
             buffer,
             row_stride,
-            row_len,
             next_row: 0,
+            num_rows,
             row_range: 0..0,
         })
     }
 
-    pub fn get_buf<T: ImageDataType>(&mut self) -> &mut [T] {
+    pub fn get_buf_mut<T: ImageDataType>(&mut self) -> &mut [T] {
         &mut *self
             .buffer
             .downcast_mut::<Vec<T>>()
             .expect("called get_buf with the wrong buffer type")
+    }
+
+    pub fn get_buf<T: ImageDataType>(&self) -> &[T] {
+        &*self
+            .buffer
+            .downcast_ref::<Vec<T>>()
+            .expect("called get_buf with the wrong buffer type")
+    }
+
+    pub fn get_row<T: ImageDataType>(&self, row: usize) -> &[T] {
+        assert!(row >= self.row_range.start);
+        let row_idx = (row - self.row_range.start) % self.num_rows;
+        let start = row_idx * self.row_stride;
+        &self.get_buf()[start..start + self.row_stride]
+    }
+
+    pub fn get_row_mut<T: ImageDataType>(&mut self, row: usize) -> &mut [T] {
+        assert!(row >= self.row_range.start);
+        let row_idx = (row - self.row_range.start) % self.num_rows;
+        let stride = self.row_stride;
+        let start = row_idx * stride;
+        &mut self.get_buf_mut()[start..start + stride]
+    }
+
+    // TODO(veluca): use some kind of smallvec.
+    pub fn advance_rows<T: ImageDataType>(&mut self, num: usize, xoffset: usize) -> Vec<&mut [T]> {
+        if num != 1 {
+            unimplemented!()
+        }
+        let row_idx = (self.next_row + self.num_rows) % self.num_rows;
+        self.next_row += 1;
+        let stride = self.row_stride;
+        let start = row_idx * stride;
+        vec![&mut self.get_buf_mut()[start + xoffset..start + stride - xoffset]]
+    }
+
+    pub fn reset(&mut self, row_range: Range<usize>) {
+        self.next_row = row_range.start;
+        self.row_range = row_range;
+    }
+
+    pub const fn x0_offset<T: ImageDataType>() -> usize {
+        2 * num_per_cache_line::<T>()
     }
 }

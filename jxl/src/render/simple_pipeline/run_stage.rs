@@ -4,10 +4,16 @@ use crate::{
     image::{Image, ImageDataType},
     render::{
         RenderPipelineInOutStage, RenderPipelineInPlaceStage, RunInOutStage, RunInPlaceStage,
+        internal::PipelineBuffer,
     },
     simd::round_up_size_to_two_cache_lines,
     util::tracing_wrappers::*,
 };
+
+impl PipelineBuffer for Image<f64> {
+    type InPlaceExtraInfo = usize;
+    type InOutExtraInfo = usize;
+}
 
 impl<T: RenderPipelineInPlaceStage> RunInPlaceStage<Image<f64>> for T {
     fn run_stage_on(
