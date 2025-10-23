@@ -258,8 +258,11 @@ define_idct_1d!(128, 64);
 define_idct_1d!(256, 128);
 
 #[inline(always)]
-pub fn dct2d<D: SimdDescriptor, const ROWS: usize, const COLS: usize>(d: D, data: &mut [f32])
-where
+pub fn dct2d<D: SimdDescriptor, const ROWS: usize, const COLS: usize>(
+    d: D,
+    data: &mut [f32],
+    scratch: &mut [f32],
+) where
     DCT1DImpl<ROWS>: DCT1D,
     DCT1DImpl<COLS>: DCT1D,
 {
@@ -267,35 +270,38 @@ where
 
     DCT1DImpl::<ROWS>::do_dct::<D, COLS>(d, data.as_chunks_mut::<COLS>().0);
 
-    let mut temp_cols: Vec<[f32; ROWS]> = vec![[0.0f32; ROWS]; COLS];
-    d.transpose::<ROWS, COLS>(data, temp_cols.as_flattened_mut());
+    let temp_cols = &mut scratch[..ROWS * COLS];
+    d.transpose::<ROWS, COLS>(data, temp_cols);
 
     // Perform DCT on the temporary structure (treating original columns as rows).
-    DCT1DImpl::<COLS>::do_dct::<D, ROWS>(d, &mut temp_cols);
+    DCT1DImpl::<COLS>::do_dct::<D, ROWS>(d, temp_cols.as_chunks_mut::<ROWS>().0);
 
-    d.transpose::<COLS, ROWS>(temp_cols.as_flattened(), data);
+    d.transpose::<COLS, ROWS>(temp_cols, data);
 }
 
 #[inline(always)]
-pub fn idct2d<D: SimdDescriptor, const ROWS: usize, const COLS: usize>(d: D, data: &mut [f32])
-where
+pub fn idct2d<D: SimdDescriptor, const ROWS: usize, const COLS: usize>(
+    d: D,
+    data: &mut [f32],
+    scratch: &mut [f32],
+) where
     IDCT1DImpl<ROWS>: IDCT1D,
     IDCT1DImpl<COLS>: IDCT1D,
 {
     assert_eq!(data.len(), ROWS * COLS, "Data length mismatch");
 
     // Create a temporary buffer for the transposed data.
-    let mut temp_cols: Vec<[f32; ROWS]> = vec![[0.0f32; ROWS]; COLS];
+    let temp_cols = &mut scratch[..ROWS * COLS];
     if ROWS < COLS {
-        d.transpose::<ROWS, COLS>(data, temp_cols.as_flattened_mut());
+        d.transpose::<ROWS, COLS>(data, temp_cols);
     } else {
-        temp_cols.as_flattened_mut().copy_from_slice(data);
+        temp_cols.copy_from_slice(data);
     }
 
     // Perform IDCT on the temporary structure (treating original columns as rows).
-    IDCT1DImpl::<COLS>::do_idct::<D, ROWS>(d, &mut temp_cols);
+    IDCT1DImpl::<COLS>::do_idct::<D, ROWS>(d, temp_cols.as_chunks_mut::<ROWS>().0);
 
-    d.transpose::<COLS, ROWS>(temp_cols.as_flattened(), data);
+    d.transpose::<COLS, ROWS>(temp_cols, data);
 
     IDCT1DImpl::<ROWS>::do_idct::<D, COLS>(d, data.as_chunks_mut::<COLS>().0);
 }
@@ -549,8 +555,9 @@ mod tests {
                 const N: usize = $n_val;
                 const M: usize = $m_val;
                 let mut data = [0.0f32; M * N];
+                let mut scratch = [0.0f32; M * N];
                 let d = ScalarDescriptor {};
-                idct2d::<_, N, M>(d, &mut data);
+                idct2d::<_, N, M>(d, &mut data, &mut scratch);
             }
         };
     }
@@ -561,8 +568,9 @@ mod tests {
                 const N: usize = $n_val;
                 const M: usize = $m_val;
                 let mut data = [0.0f32; M * N];
+                let mut scratch = [0.0f32; M * N];
                 let d = ScalarDescriptor {};
-                dct2d::<_, N, M>(d, &mut data);
+                dct2d::<_, N, M>(d, &mut data, &mut scratch);
             }
         };
     }
