@@ -265,44 +265,15 @@ where
 {
     assert_eq!(data.len(), ROWS * COLS, "Data length mismatch");
 
-    // Copy data from flat slice `data` into a temporary Vec of arrays (rows).
-    let mut temp_rows: Vec<[f32; COLS]> = vec![[0.0f32; COLS]; ROWS];
-    for (r, column) in temp_rows.iter_mut().enumerate() {
-        let start = r * COLS;
-        let end = start + COLS;
-        column.copy_from_slice(&data[start..end]);
-    }
+    DCT1DImpl::<ROWS>::do_dct::<D, COLS>(d, data.as_chunks_mut::<COLS>().0);
 
-    DCT1DImpl::<ROWS>::do_dct::<D, COLS>(d, &mut temp_rows);
-
-    for (r, column) in temp_rows.iter().enumerate() {
-        let start = r * COLS;
-        let end = start + COLS;
-        data[start..end].copy_from_slice(column);
-    }
-
-    // Create a temporary flat buffer for the transposed data.
-    let mut transposed_data = vec![0.0f32; ROWS * COLS];
-    d.transpose::<ROWS, COLS>(data, &mut transposed_data);
-
-    // Copy data from flat `transposed_data` into a temporary Vec of arrays.
     let mut temp_cols: Vec<[f32; ROWS]> = vec![[0.0f32; ROWS]; COLS];
-    for (c, row) in temp_cols.iter_mut().enumerate() {
-        let start = c * ROWS;
-        let end = start + ROWS;
-        row.copy_from_slice(&transposed_data[start..end]);
-    }
+    d.transpose::<ROWS, COLS>(data, temp_cols.as_flattened_mut());
 
     // Perform DCT on the temporary structure (treating original columns as rows).
     DCT1DImpl::<COLS>::do_dct::<D, ROWS>(d, &mut temp_cols);
 
-    // Copy results back from the temporary structure into the flat `transposed_data`.
-    for (c, row) in temp_cols.iter().enumerate() {
-        let start = c * ROWS;
-        let end = start + ROWS;
-        transposed_data[start..end].copy_from_slice(row);
-    }
-    d.transpose::<COLS, ROWS>(&transposed_data, data);
+    d.transpose::<COLS, ROWS>(temp_cols.as_flattened(), data);
 }
 
 #[inline(always)]
@@ -313,48 +284,20 @@ where
 {
     assert_eq!(data.len(), ROWS * COLS, "Data length mismatch");
 
-    // Create a temporary flat buffer for the transposed data.
-    let mut transposed_data = vec![0.0f32; ROWS * COLS];
-    if ROWS < COLS {
-        d.transpose::<ROWS, COLS>(data, &mut transposed_data);
-    } else {
-        transposed_data.copy_from_slice(data);
-    }
-
-    // Copy data from flat `transposed_data` into a temporary Vec of arrays.
+    // Create a temporary buffer for the transposed data.
     let mut temp_cols: Vec<[f32; ROWS]> = vec![[0.0f32; ROWS]; COLS];
-    for (c, row) in temp_cols.iter_mut().enumerate() {
-        let start = c * ROWS;
-        let end = start + ROWS;
-        row.copy_from_slice(&transposed_data[start..end]);
+    if ROWS < COLS {
+        d.transpose::<ROWS, COLS>(data, temp_cols.as_flattened_mut());
+    } else {
+        temp_cols.as_flattened_mut().copy_from_slice(data);
     }
 
     // Perform IDCT on the temporary structure (treating original columns as rows).
     IDCT1DImpl::<COLS>::do_idct::<D, ROWS>(d, &mut temp_cols);
 
-    // Copy results back from the temporary structure into the flat `transposed_data`.
-    for (c, row) in temp_cols.iter().enumerate() {
-        let start = c * ROWS;
-        let end = start + ROWS;
-        transposed_data[start..end].copy_from_slice(row);
-    }
+    d.transpose::<COLS, ROWS>(temp_cols.as_flattened(), data);
 
-    d.transpose::<COLS, ROWS>(&transposed_data, data);
-
-    // Copy data from flat slice `data` into a temporary Vec of arrays (rows).
-    let mut temp_rows: Vec<[f32; COLS]> = vec![[0.0f32; COLS]; ROWS];
-    for (r, column) in temp_rows.iter_mut().enumerate() {
-        let start = r * COLS;
-        let end = start + COLS;
-        column.copy_from_slice(&data[start..end]);
-    }
-    IDCT1DImpl::<ROWS>::do_idct::<D, COLS>(d, &mut temp_rows);
-
-    for (r, column) in temp_rows.iter().enumerate() {
-        let start = r * COLS;
-        let end = start + COLS;
-        data[start..end].copy_from_slice(column);
-    }
+    IDCT1DImpl::<ROWS>::do_idct::<D, COLS>(d, data.as_chunks_mut::<COLS>().0);
 }
 
 #[inline(always)]
