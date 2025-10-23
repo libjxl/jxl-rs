@@ -84,6 +84,7 @@ macro_rules! define_dct_1d {
         // Helper functions for CoeffBundle operating on $nhalf rows
         impl<const SZ: usize> CoeffBundle<$nhalf, SZ> {
             /// Adds a_in1[i] and a_in2[$nhalf - 1 - i], storing in a_out[i].
+            #[inline(always)]
             fn add_reverse<D: SimdDescriptor>(
                 d: D,
                 a_in1: &[[f32; SZ]],
@@ -103,6 +104,7 @@ macro_rules! define_dct_1d {
             }
 
             /// Subtracts a_in2[$nhalf - 1 - i] from a_in1[i], storing in a_out[i].
+            #[inline(always)]
             fn sub_reverse<D: SimdDescriptor>(
                 d: D,
                 a_in1: &[[f32; SZ]],
@@ -123,6 +125,7 @@ macro_rules! define_dct_1d {
 
             /// Applies the B transform (forward DCT step).
             /// Operates on a slice of $nhalf rows.
+            #[inline(always)]
             fn b<D: SimdDescriptor>(
                 d: D,
                 coeff: &mut [[f32; SZ]],
@@ -150,6 +153,7 @@ macro_rules! define_dct_1d {
         // Helper functions for CoeffBundle operating on $n rows
         impl<const SZ: usize> CoeffBundle<$n, SZ> {
             /// Multiplies the second half of `coeff` by WcMultipliers.
+            #[inline(always)]
             fn multiply<D: SimdDescriptor>(
                 d: D,
                 coeff: &mut [[f32; SZ]],
@@ -171,6 +175,7 @@ macro_rules! define_dct_1d {
             /// De-interleaves `a_in` into `a_out`.
             /// Even indexed rows of `a_out` get first half of `a_in`.
             /// Odd indexed rows of `a_out` get second half of `a_in`.
+            #[inline(always)]
             fn inverse_even_odd<D: SimdDescriptor>(
                 d: D,
                 a_in: &[[f32; SZ]],
@@ -193,6 +198,7 @@ macro_rules! define_dct_1d {
         }
 
         impl DCT1D for DCT1DImpl<$n> {
+            #[inline(always)]
             fn do_dct<D: SimdDescriptor, const COLUMNS: usize>(
                 d: D,
                 data: &mut [[f32; COLUMNS]],
@@ -291,6 +297,7 @@ define_dct_1d!(256, 128);
 macro_rules! define_idct_1d {
     ($n:literal, $nhalf: literal) => {
         impl<const SZ: usize> CoeffBundle<$nhalf, SZ> {
+            #[inline(always)]
             fn b_transpose<D: SimdDescriptor>(
                 d: D,
                 coeff: &mut [[f32; SZ]],
@@ -310,6 +317,7 @@ macro_rules! define_idct_1d {
         }
 
         impl<const SZ: usize> CoeffBundle<$n, SZ> {
+            #[inline(always)]
             fn forward_even_odd<D: SimdDescriptor>(
                 d: D,
                 a_in: &[[f32; SZ]],
@@ -327,6 +335,7 @@ macro_rules! define_idct_1d {
                         .store_partial(num_columns, &mut a_out[i][j..]);
                 }
             }
+            #[inline(always)]
             fn multiply_and_add<D: SimdDescriptor>(
                 d: D,
                 coeff: &[[f32; SZ]],
@@ -348,6 +357,7 @@ macro_rules! define_idct_1d {
         }
 
         impl IDCT1D for IDCT1DImpl<$n> {
+            #[inline(always)]
             fn do_idct<D: SimdDescriptor, const COLUMNS: usize>(
                 d: D,
                 data: &mut [[f32; COLUMNS]],
