@@ -65,9 +65,15 @@ impl<T: RenderPipelineInOutStage> RunInOutStage<RowBuffer> for T {
         state: Option<&mut dyn Any>,
     ) {
         let xoff_in = RowBuffer::x0_offset::<T::InputT>();
+        let ibordery = Self::BORDER.1 as isize;
         let input_rows: Vec<_> = input_buffers
             .iter()
-            .map(|x| vec![&x.get_row::<T::InputT>(current_row)[xoff_in..]])
+            .map(|x| {
+                // TODO: this is wrong.
+                (-ibordery..=ibordery)
+                    .map(|iy| &x.get_row::<T::InputT>(current_row)[xoff_in..])
+                    .collect::<Vec<_>>()
+            })
             .collect();
         let xoff_out = RowBuffer::x0_offset::<T::OutputT>();
         let mut output_rows: Vec<_> = output_buffers

@@ -50,10 +50,9 @@ pub struct LowMemoryRenderPipeline {
     padding_was_rendered: bool,
     // sorted by buffer_index; all values of buffer_index are distinct.
     save_buffer_info: Vec<SaveStageBufferInfo>,
-    // The amount of pixels we need to load from neighbouring groups in each dimension.
+    // The amount of pixels that each stage needs to have available around the current group to
+    // decode the group data correctly.
     border_pixels: Vec<(usize, usize)>,
-    // Whether this render pipeline doesn't need any border (i.e. border_pixels is always 0).
-    bordeless: bool,
     // Local states of each stage, if any.
     local_states: Vec<Option<Box<dyn Any>>>,
 }
@@ -146,21 +145,26 @@ impl RenderPipeline for LowMemoryRenderPipeline {
         }
         save_buffer_info.sort_by_key(|x| x.buffer_index);
 
-        // Compute the amount of border pixels needed per channel.
+        // Compute the amount of border pixels needed per channel, per stage.
         let mut border_pixels = vec![(0usize, 0usize); nc];
+        let mut border_pixels_per_stage = vec![];
         for s in shared.stages.iter().rev() {
+            let mut stage_max = (0, 0);
             for c in 0..nc {
                 if !s.uses_channel(c) {
                     continue;
                 }
                 border_pixels[c].0 = border_pixels[c].0.shrc(s.shift().0) + s.border().0 as usize;
                 border_pixels[c].1 = border_pixels[c].1.shrc(s.shift().1) + s.border().1 as usize;
+                stage_max.0 = stage_max.0.max(border_pixels[c].0);
+                stage_max.1 = stage_max.1.max(border_pixels[c].1);
             }
+            border_pixels_per_stage.push(stage_max);
         }
 
-        for (c, (bx, by)) in border_pixels.iter().copied().enumerate() {
+        for c in 0..nc {
+            let (bx, _) = border_pixels_per_stage[0];
             assert!(bx * shared.channel_info[0][c].ty.unwrap().size() <= 2 * CACHE_LINE_BYTE_SIZE);
-            assert!(by * shared.channel_info[0][c].ty.unwrap().size() <= 2 * CACHE_LINE_BYTE_SIZE);
         }
 
         // TODO: remove.
@@ -174,8 +178,7 @@ impl RenderPipeline for LowMemoryRenderPipeline {
             row_buffers,
             padding_was_rendered: false,
             save_buffer_info,
-            bordeless: border_pixels.iter().all(|x| *x == (0, 0)),
-            border_pixels,
+            border_pixels: border_pixels_per_stage,
             local_states: shared
                 .stages
                 .iter()
@@ -251,7 +254,7 @@ impl RenderPipeline for LowMemoryRenderPipeline {
             if self.input_buffers[g].completed_passes < ready_passes {
                 let (gx, gy) = self.shared.group_position(g);
                 let mut fully_ready_passes = ready_passes;
-                if !self.bordeless {
+                if self.border_pixels[0] != (0, 0) {
                     for dy in -1..=1 {
                         let igy = gy as isize + dy;
                         if igy < 0 || igy >= self.shared.group_count.1 as isize {
@@ -333,7 +336,7 @@ impl RenderPipeline for LowMemoryRenderPipeline {
         for g in 0..self.shared.group_chan_ready_passes.len() {
             let (gx, gy) = self.shared.group_position(g);
             let mut neigh_complete_passes = self.input_buffers[g].completed_passes;
-            if !self.bordeless {
+            if self.border_pixels[0] != (0, 0) {
                 for dy in -1..=1 {
                     let igy = gy as isize + dy;
                     if igy < 0 || igy >= self.shared.group_count.1 as isize {

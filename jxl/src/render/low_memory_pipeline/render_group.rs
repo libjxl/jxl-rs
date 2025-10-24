@@ -68,10 +68,90 @@ impl LowMemoryRenderPipeline {
         (gx, gy): (usize, usize),
         buffers: &mut [Option<JxlOutputBuffer>],
     ) -> Result<()> {
-        if !self.bordeless {
-            // TODO(veluca): implement this case.
-            unimplemented!()
-        }
+        /*
+          // We pretend that every stage has a vertical shift of 0, i.e. it is as tall
+          // as the final image.
+          // We call each such row a "virtual" row, because it may or may not correspond
+          // to an actual row of the current processing stage; actual processing happens
+          // when vy % (1<<vshift) == 0.
+
+          int num_extra_rows = *std::max_element(virtual_ypadding_for_output_.begin(),
+                                                 virtual_ypadding_for_output_.end());
+
+          for (int vy = -num_extra_rows;
+               vy < static_cast<int>(image_area_rect.ysize()) + num_extra_rows; vy++) {
+            for (size_t i = 0; i < first_trailing_stage_; i++) {
+              int stage_vy = vy - num_extra_rows + virtual_ypadding_for_output_[i];
+
+              if (stage_vy % (1 << channel_shifts_[i][anyc_[i]].second) != 0) {
+                continue;
+              }
+
+              if (stage_vy < -virtual_ypadding_for_output_[i]) {
+                continue;
+              }
+
+              int y = stage_vy >> channel_shifts_[i][anyc_[i]].second;
+
+              ptrdiff_t image_y = static_cast<ptrdiff_t>(group_rect[i].y0()) + y;
+              // Do not produce rows in out-of-bounds areas.
+              if (image_y < 0 ||
+                  image_y >= static_cast<ptrdiff_t>(image_rect_[i].ysize())) {
+                continue;
+              }
+
+              // Get the input/output rows and potentially apply mirroring to the input.
+              prepare_io_rows(y, i);
+
+              // Produce output rows.
+              JXL_RETURN_IF_ERROR(stages_[i]->ProcessRow(
+                  input_rows[i], output_rows, xpadding_for_output_[i],
+                  group_rect[i].xsize(), group_rect[i].x0(), image_y, thread_id));
+            }
+
+            // Process trailing stages, i.e. the final set of non-kInOut stages; they
+            // all have the same input buffer and no need to use any mirroring.
+
+            int y = vy - num_extra_rows;
+
+            for (size_t c = 0; c < input_data.size(); c++) {
+              // Skip pixels that are not part of the actual final image area.
+              input_rows[first_trailing_stage_][c][0] =
+                  rows.GetBuffer(stage_input_for_channel_[first_trailing_stage_][c], y,
+                                 c) +
+                  x_pixels_skip;
+            }
+
+            // Check that we are not outside of the bounds for the current rendering
+            // rect. Not doing so might result in overwriting some rows that have been
+            // written (or will be written) by other threads.
+            if (y < 0 || y >= static_cast<ptrdiff_t>(image_area_rect.ysize())) {
+              continue;
+            }
+
+            // Avoid running pipeline stages on pixels that are outside the full image
+            // area. As trailing stages have no borders, this is a free optimization
+            // (and may be necessary for correctness, as some stages assume coordinates
+            // are within bounds).
+            ptrdiff_t full_image_y = frame_y0 + image_area_rect.y0() + y;
+            if (full_image_y < 0 ||
+                full_image_y >= static_cast<ptrdiff_t>(full_image_ysize)) {
+              continue;
+            }
+
+            for (size_t i = first_trailing_stage_; i < stages_.size(); i++) {
+              // Before the first_image_dim_stage_, coordinates are relative to the
+              // current frame.
+              size_t x0 =
+                  i < first_image_dim_stage_ ? full_image_x0 - frame_x0 : full_image_x0;
+              size_t y0 =
+                  i < first_image_dim_stage_ ? full_image_y - frame_y0 : full_image_y;
+              JXL_RETURN_IF_ERROR(stages_[i]->ProcessRow(
+                  input_rows[first_trailing_stage_], output_rows,
+                  /*xextra=*/0, full_image_x1 - full_image_x0, x0, y0, thread_id));
+            }
+          }
+        */
 
         let gid = gy * self.shared.group_count.0 + gx;
         let (xsize, num_rows) = self.shared.group_size(gid);
