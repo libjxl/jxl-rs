@@ -126,7 +126,7 @@ impl<Pipeline: RenderPipeline> RenderPipelineBuilder<Pipeline> {
             downsampling_shift,
             log_group_size,
             num_passes,
-            1 << log_group_size,
+            1 << (log_group_size + downsampling_shift),
         )
     }
 

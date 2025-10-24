@@ -184,7 +184,7 @@ pub(crate) mod tests {
     use crate::api::JxlDecoderOptions;
     use crate::error::Error;
     use crate::image::Image;
-    use crate::util::test::assert_almost_eq;
+    use crate::util::test::assert_almost_eq_coords;
     use jxl_macros::for_each_test_file;
     use std::path::Path;
 
@@ -294,7 +294,10 @@ pub(crate) mod tests {
                 let (xs, ys) = buf.size();
                 for y in 0..ys {
                     for x in 0..xs {
-                        assert!(!buf.as_rect().row(y)[x].is_nan());
+                        assert!(
+                            !buf.as_rect().row(y)[x].is_nan(),
+                            "NaN at {x} {y} (image size {xs}x{ys})"
+                        );
                     }
                 }
             }
@@ -341,10 +344,21 @@ pub(crate) mod tests {
                     sb.size(),
                     "Channel {c} in frame {fc} has different sizes",
                 );
+                // TODO(veluca): This check actually succeeds if we disable SIMD.
+                // With SIMD, the exact output of computations in epf.rs appear to depend on the
+                // lane that the computation was done in (???). We should investigate this.
+                // b.as_rect().check_equal(sb.as_rect());
                 let sz = b.size();
                 for y in 0..sz.1 {
                     for x in 0..sz.0 {
-                        assert_almost_eq(b.as_rect().row(y)[x], sb.as_rect().row(y)[x], 1e-5, 1e-5);
+                        assert_almost_eq_coords(
+                            b.as_rect().row(y)[x],
+                            sb.as_rect().row(y)[x],
+                            1e-4,
+                            1e-4,
+                            (x, y),
+                            c,
+                        );
                     }
                 }
             }

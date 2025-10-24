@@ -22,16 +22,11 @@ pub struct RowBuffer {
     buffer: Box<dyn Any>,
     // Distance (in number of elements) between the start of two rows.
     row_stride: usize,
-    // Index of the next row to be saved in this RowBuffer.
-    next_row: usize,
     // Number of rows that are actually stored.
     // TODO(veluca): consider padding this to a power of 2 and using & here. In *most* cases,
     // that's not a huge loss in memory usage (for most images, num_rows is 1/3/5/7, which would
     // become 1/4/8/8).
     num_rows: usize,
-    // Range of rows that will be saved in the RowBuffer in the current call to render_group, using
-    // *absolute* coordinates.
-    row_range: Range<usize>,
 }
 
 fn make_buffer<T: Default + Clone + 'static>(len: usize) -> Result<Box<dyn Any>> {
@@ -52,7 +47,9 @@ impl RowBuffer {
         // This is slightly wasteful (i.e. if y_shift = 2 and next_y_border = 1, it uses 4 more
         // rows than would be necessary), but certainly sufficient.
         let num_rows = (1 << y_shift) + 2 * (next_y_border.shrc(y_shift) << y_shift);
-        let row_stride = row_len + 4 * (CACHE_LINE_BYTE_SIZE / data_type.size());
+        // Input offset is at *two* cachelines, and we need up to *three* cachelines on the other
+        // side as the data might exceed xsize slightly.
+        let row_stride = row_len + 5 * (CACHE_LINE_BYTE_SIZE / data_type.size());
         let buffer: Box<dyn Any> = match data_type {
             DataTypeTag::U8 => make_buffer::<u8>(row_stride * num_rows)?,
             DataTypeTag::I8 => make_buffer::<i8>(row_stride * num_rows)?,
@@ -68,9 +65,7 @@ impl RowBuffer {
         Ok(Self {
             buffer,
             row_stride,
-            next_row: 0,
             num_rows,
-            row_range: 0..0,
         })
     }
 
@@ -89,35 +84,32 @@ impl RowBuffer {
     }
 
     pub fn get_row<T: ImageDataType>(&self, row: usize) -> &[T] {
-        assert!(row >= self.row_range.start);
-        let row_idx = (row - self.row_range.start) % self.num_rows;
+        let row_idx = row % self.num_rows;
         let start = row_idx * self.row_stride;
         &self.get_buf()[start..start + self.row_stride]
     }
 
     pub fn get_row_mut<T: ImageDataType>(&mut self, row: usize) -> &mut [T] {
-        assert!(row >= self.row_range.start);
-        let row_idx = (row - self.row_range.start) % self.num_rows;
+        let row_idx = row % self.num_rows;
         let stride = self.row_stride;
         let start = row_idx * stride;
         &mut self.get_buf_mut()[start..start + stride]
     }
 
     // TODO(veluca): use some kind of smallvec.
-    pub fn advance_rows<T: ImageDataType>(&mut self, num: usize, xoffset: usize) -> Vec<&mut [T]> {
-        if num != 1 {
+    pub fn get_rows_mut<T: ImageDataType>(
+        &mut self,
+        y: Range<usize>,
+        xoffset: usize,
+    ) -> Vec<&mut [T]> {
+        assert!(y.clone().count() <= self.num_rows);
+        if y.clone().count() != 1 {
             unimplemented!()
         }
-        let row_idx = (self.next_row + self.num_rows) % self.num_rows;
-        self.next_row += 1;
+        let row_idx = y.start % self.num_rows;
         let stride = self.row_stride;
         let start = row_idx * stride;
         vec![&mut self.get_buf_mut()[start + xoffset..start + stride - xoffset]]
-    }
-
-    pub fn reset(&mut self, row_range: Range<usize>) {
-        self.next_row = row_range.start;
-        self.row_range = row_range;
     }
 
     pub const fn x0_offset<T: ImageDataType>() -> usize {

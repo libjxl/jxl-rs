@@ -50,9 +50,16 @@ pub struct LowMemoryRenderPipeline {
     padding_was_rendered: bool,
     // sorted by buffer_index; all values of buffer_index are distinct.
     save_buffer_info: Vec<SaveStageBufferInfo>,
-    // The amount of pixels that each stage needs to have available around the current group to
-    // decode the group data correctly.
-    border_pixels: Vec<(usize, usize)>,
+    // The amount of pixels that each stage needs to *output* around the current group to
+    // run future stages correctly.
+    stage_output_border_pixels: Vec<(usize, usize)>,
+    // The amount of pixels that we need to read (for every channel) in non-edge groups to run all
+    // stages correctly.
+    input_border_pixels: Vec<(usize, usize)>,
+    has_nontrivial_border: bool,
+    // For every stage, the downsampling level of *any* channel that the stage uses at that point.
+    // Note that this must be equal across all the used channels.
+    downsampling_for_stage: Vec<(usize, usize)>,
     // Local states of each stage, if any.
     local_states: Vec<Option<Box<dyn Any>>>,
 }
@@ -154,13 +161,15 @@ impl RenderPipeline for LowMemoryRenderPipeline {
                 if !s.uses_channel(c) {
                     continue;
                 }
-                border_pixels[c].0 = border_pixels[c].0.shrc(s.shift().0) + s.border().0 as usize;
-                border_pixels[c].1 = border_pixels[c].1.shrc(s.shift().1) + s.border().1 as usize;
                 stage_max.0 = stage_max.0.max(border_pixels[c].0);
                 stage_max.1 = stage_max.1.max(border_pixels[c].1);
+
+                border_pixels[c].0 = border_pixels[c].0.shrc(s.shift().0) + s.border().0 as usize;
+                border_pixels[c].1 = border_pixels[c].1.shrc(s.shift().1) + s.border().1 as usize;
             }
             border_pixels_per_stage.push(stage_max);
         }
+        border_pixels_per_stage.reverse();
 
         for c in 0..nc {
             let (bx, _) = border_pixels_per_stage[0];
@@ -172,19 +181,43 @@ impl RenderPipeline for LowMemoryRenderPipeline {
             println!("{s}");
         }
 
+        let downsampling_for_stage = shared
+            .stages
+            .iter()
+            .zip(shared.channel_info.iter())
+            .map(|(s, ci)| {
+                let dowsamplings: Vec<_> = (0..nc)
+                    .filter_map(|c| {
+                        if s.uses_channel(c) {
+                            Some(ci[c].downsample)
+                        } else {
+                            None
+                        }
+                    })
+                    .collect();
+                for &d in dowsamplings.iter() {
+                    assert_eq!(d, dowsamplings[0]);
+                }
+                (dowsamplings[0].0 as usize, dowsamplings[0].1 as usize)
+            })
+            .collect();
+
         Ok(Self {
             input_buffers,
             stage_input_buffer_index,
             row_buffers,
             padding_was_rendered: false,
             save_buffer_info,
-            border_pixels: border_pixels_per_stage,
+            stage_output_border_pixels: border_pixels_per_stage,
+            has_nontrivial_border: border_pixels.iter().any(|x| *x != (0, 0)),
+            input_border_pixels: border_pixels,
             local_states: shared
                 .stages
                 .iter()
                 .map(|x| x.init_local_state())
                 .collect::<Result<_>>()?,
             shared,
+            downsampling_for_stage,
         })
     }
 
@@ -254,7 +287,7 @@ impl RenderPipeline for LowMemoryRenderPipeline {
             if self.input_buffers[g].completed_passes < ready_passes {
                 let (gx, gy) = self.shared.group_position(g);
                 let mut fully_ready_passes = ready_passes;
-                if self.border_pixels[0] != (0, 0) {
+                if self.has_nontrivial_border {
                     for dy in -1..=1 {
                         let igy = gy as isize + dy;
                         if igy < 0 || igy >= self.shared.group_count.1 as isize {
@@ -336,7 +369,7 @@ impl RenderPipeline for LowMemoryRenderPipeline {
         for g in 0..self.shared.group_chan_ready_passes.len() {
             let (gx, gy) = self.shared.group_position(g);
             let mut neigh_complete_passes = self.input_buffers[g].completed_passes;
-            if self.border_pixels[0] != (0, 0) {
+            if self.has_nontrivial_border {
                 for dy in -1..=1 {
                     let igy = gy as isize + dy;
                     if igy < 0 || igy >= self.shared.group_count.1 as isize {
