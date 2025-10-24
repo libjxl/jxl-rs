@@ -418,49 +418,34 @@ pub fn dct2d<D: SimdDescriptor, const ROWS: usize, const COLS: usize>(
 {
     assert_eq!(data.len(), ROWS * COLS, "Data length mismatch");
 
+    // 1. Row transforms.
+    let temp_rows = data.as_chunks_mut::<COLS>().0;
     let num_full = COLS / D::F32Vec::LEN;
     let remainder = COLS % D::F32Vec::LEN;
     for starting_column in (0..num_full * D::F32Vec::LEN).step_by(D::F32Vec::LEN) {
-        DCT1DImpl::<ROWS>::do_dct::<D, COLS>(
-            d,
-            data.as_chunks_mut::<COLS>().0,
-            starting_column,
-            D::F32Vec::LEN,
-        );
+        DCT1DImpl::<ROWS>::do_dct::<D, COLS>(d, temp_rows, starting_column, D::F32Vec::LEN);
     }
     if remainder != 0 {
-        DCT1DImpl::<ROWS>::do_dct::<D, COLS>(
-            d,
-            data.as_chunks_mut::<COLS>().0,
-            num_full * D::F32Vec::LEN,
-            remainder,
-        );
+        DCT1DImpl::<ROWS>::do_dct::<D, COLS>(d, temp_rows, num_full * D::F32Vec::LEN, remainder);
     }
 
-    let temp_cols = &mut scratch[..ROWS * COLS];
-    d.transpose::<ROWS, COLS>(data, temp_cols);
+    // 2. Transpose.
+    let temp_cols_slice = &mut scratch[..ROWS * COLS];
+    d.transpose::<ROWS, COLS>(data, temp_cols_slice);
 
-    // Perform DCT on the temporary structure (treating original columns as rows).
+    // 3. Column transforms.
+    let temp_cols = temp_cols_slice.as_chunks_mut::<ROWS>().0;
     let num_full = ROWS / D::F32Vec::LEN;
     let remainder = ROWS % D::F32Vec::LEN;
     for starting_row in (0..num_full * D::F32Vec::LEN).step_by(D::F32Vec::LEN) {
-        DCT1DImpl::<COLS>::do_dct::<D, ROWS>(
-            d,
-            temp_cols.as_chunks_mut::<ROWS>().0,
-            starting_row,
-            D::F32Vec::LEN,
-        );
+        DCT1DImpl::<COLS>::do_dct::<D, ROWS>(d, temp_cols, starting_row, D::F32Vec::LEN);
     }
     if remainder != 0 {
-        DCT1DImpl::<COLS>::do_dct::<D, ROWS>(
-            d,
-            temp_cols.as_chunks_mut::<ROWS>().0,
-            num_full * D::F32Vec::LEN,
-            remainder,
-        );
+        DCT1DImpl::<COLS>::do_dct::<D, ROWS>(d, temp_cols, num_full * D::F32Vec::LEN, remainder);
     }
 
-    d.transpose::<COLS, ROWS>(temp_cols, data);
+    // 4. Transpose back.
+    d.transpose::<COLS, ROWS>(temp_cols_slice, data);
 }
 
 pub fn idct2d<D: SimdDescriptor, const ROWS: usize, const COLS: usize>(
@@ -473,52 +458,35 @@ pub fn idct2d<D: SimdDescriptor, const ROWS: usize, const COLS: usize>(
 {
     assert_eq!(data.len(), ROWS * COLS, "Data length mismatch");
 
-    // Create a temporary buffer for the transposed data.
-    let temp_cols = &mut scratch[..ROWS * COLS];
+    // 1. Column IDCTs (on transposed data)
+    let temp_cols_slice = &mut scratch[..ROWS * COLS];
     if ROWS < COLS {
-        d.transpose::<ROWS, COLS>(data, temp_cols);
+        d.transpose::<ROWS, COLS>(data, temp_cols_slice);
     } else {
-        temp_cols.copy_from_slice(data);
+        temp_cols_slice.copy_from_slice(data);
     }
 
-    // Perform IDCT on the temporary structure (treating original columns as rows).
+    let temp_cols = temp_cols_slice.as_chunks_mut::<ROWS>().0;
     let num_full = ROWS / D::F32Vec::LEN;
     let remainder = ROWS % D::F32Vec::LEN;
     for starting_row in (0..num_full * D::F32Vec::LEN).step_by(D::F32Vec::LEN) {
-        IDCT1DImpl::<COLS>::do_idct::<D, ROWS>(
-            d,
-            temp_cols.as_chunks_mut::<ROWS>().0,
-            starting_row,
-            D::F32Vec::LEN,
-        );
+        IDCT1DImpl::<COLS>::do_idct::<D, ROWS>(d, temp_cols, starting_row, D::F32Vec::LEN);
     }
     if remainder != 0 {
-        IDCT1DImpl::<COLS>::do_idct::<D, ROWS>(
-            d,
-            temp_cols.as_chunks_mut::<ROWS>().0,
-            num_full * D::F32Vec::LEN,
-            remainder,
-        );
+        IDCT1DImpl::<COLS>::do_idct::<D, ROWS>(d, temp_cols, num_full * D::F32Vec::LEN, remainder);
     }
 
-    d.transpose::<COLS, ROWS>(temp_cols, data);
+    // 2. Transpose back
+    d.transpose::<COLS, ROWS>(temp_cols_slice, data);
+    // 3. Row IDCTs
+    let temp_rows = data.as_chunks_mut::<COLS>().0;
     let num_full = COLS / D::F32Vec::LEN;
     let remainder = COLS % D::F32Vec::LEN;
     for starting_column in (0..num_full * D::F32Vec::LEN).step_by(D::F32Vec::LEN) {
-        IDCT1DImpl::<ROWS>::do_idct::<D, COLS>(
-            d,
-            data.as_chunks_mut::<COLS>().0,
-            starting_column,
-            D::F32Vec::LEN,
-        );
+        IDCT1DImpl::<ROWS>::do_idct::<D, COLS>(d, temp_rows, starting_column, D::F32Vec::LEN);
     }
     if remainder != 0 {
-        IDCT1DImpl::<ROWS>::do_idct::<D, COLS>(
-            d,
-            data.as_chunks_mut::<COLS>().0,
-            num_full * D::F32Vec::LEN,
-            remainder,
-        );
+        IDCT1DImpl::<ROWS>::do_idct::<D, COLS>(d, temp_rows, num_full * D::F32Vec::LEN, remainder);
     }
 }
 
@@ -1062,7 +1030,7 @@ mod tests {
 
         let start = std::time::Instant::now();
         for _ in 0..iters {
-            dct2d::<_, ROWS, COLS>(d, &mut data, scratch.as_mut_slice());
+            dct2d::<_, ROWS, COLS>(d, &mut data, &mut scratch);
         }
         let elapsed = start.elapsed();
         if iters > 1 {
