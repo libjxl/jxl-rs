@@ -30,7 +30,6 @@ pub trait IDCT1D {
 }
 
 impl DCT1D for DCT1DImpl<1> {
-    #[inline(always)]
     fn do_dct<D: SimdDescriptor, const COLUMNS: usize>(
         _d: D,
         _data: &mut [[f32; COLUMNS]],
@@ -41,7 +40,6 @@ impl DCT1D for DCT1DImpl<1> {
     }
 }
 impl IDCT1D for IDCT1DImpl<1> {
-    #[inline(always)]
     fn do_idct<D: SimdDescriptor, const COLUMNS: usize>(
         _d: D,
         _data: &mut [[f32; COLUMNS]],
@@ -53,7 +51,6 @@ impl IDCT1D for IDCT1DImpl<1> {
 }
 
 impl DCT1D for DCT1DImpl<2> {
-    #[inline(always)]
     fn do_dct<D: SimdDescriptor, const COLUMNS: usize>(
         d: D,
         data: &mut [[f32; COLUMNS]],
@@ -68,7 +65,6 @@ impl DCT1D for DCT1DImpl<2> {
 }
 
 impl IDCT1D for IDCT1DImpl<2> {
-    #[inline(always)]
     fn do_idct<D: SimdDescriptor, const COLUMNS: usize>(
         d: D,
         data: &mut [[f32; COLUMNS]],
@@ -412,6 +408,7 @@ define_idct_1d!(64, 32);
 define_idct_1d!(128, 64);
 define_idct_1d!(256, 128);
 
+#[inline(always)]
 pub fn dct2d<D: SimdDescriptor, const ROWS: usize, const COLS: usize>(
     d: D,
     data: &mut [f32],
@@ -452,6 +449,7 @@ pub fn dct2d<D: SimdDescriptor, const ROWS: usize, const COLS: usize>(
     d.transpose::<COLS, ROWS>(temp_cols_slice, data);
 }
 
+#[inline(always)]
 pub fn idct2d<D: SimdDescriptor, const ROWS: usize, const COLS: usize>(
     d: D,
     data: &mut [f32],
