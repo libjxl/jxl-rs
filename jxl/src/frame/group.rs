@@ -411,7 +411,7 @@ fn dequant_and_transform_to_pixels<D: SimdDescriptor>(
         if (sbx[c] << hshift[c]) != bx || (sby[c] << vshift[c] != by) {
             continue;
         }
-        transform_to_pixels::<D>(d, transform_type, &mut transform_buffer[c])?;
+        transform_to_pixels::<D>(d, transform_type, &mut transform_buffer[c], scratch)?;
         let mut output = pixels[c].as_rect_mut();
         let downsampled_rect = Rect {
             origin: (
