@@ -408,149 +408,106 @@ define_idct_1d!(64, 32);
 define_idct_1d!(128, 64);
 define_idct_1d!(256, 128);
 
-pub fn dct2d<D: SimdDescriptor, const ROWS: usize, const COLS: usize>(d: D, data: &mut [f32])
-where
+pub fn dct2d<D: SimdDescriptor, const ROWS: usize, const COLS: usize>(
+    d: D,
+    data: &mut [f32],
+    scratch: &mut [f32],
+) where
     DCT1DImpl<ROWS>: DCT1D,
     DCT1DImpl<COLS>: DCT1D,
 {
     assert_eq!(data.len(), ROWS * COLS, "Data length mismatch");
 
-    // Copy data from flat slice `data` into a temporary Vec of arrays (rows).
-    let mut temp_rows: Vec<[f32; COLS]> = vec![[0.0f32; COLS]; ROWS];
-    for (r, column) in temp_rows.iter_mut().enumerate() {
-        let start = r * COLS;
-        let end = start + COLS;
-        column.copy_from_slice(&data[start..end]);
-    }
-
+    // 1. Row transforms.
+    let temp_rows = data.as_chunks_mut::<COLS>().0;
     let num_full = COLS / D::F32Vec::LEN;
     let remainder = COLS % D::F32Vec::LEN;
     for starting_column in (0..num_full * D::F32Vec::LEN).step_by(D::F32Vec::LEN) {
-        DCT1DImpl::<ROWS>::do_dct::<D, COLS>(d, &mut temp_rows, starting_column, D::F32Vec::LEN);
+        DCT1DImpl::<ROWS>::do_dct::<D, COLS>(d, temp_rows, starting_column, D::F32Vec::LEN);
     }
     if remainder != 0 {
         DCT1DImpl::<ROWS>::do_dct::<D, COLS>(
             d,
-            &mut temp_rows,
+            temp_rows,
             num_full * D::F32Vec::LEN,
             remainder,
         );
     }
 
-    for (r, column) in temp_rows.iter().enumerate() {
-        let start = r * COLS;
-        let end = start + COLS;
-        data[start..end].copy_from_slice(column);
-    }
+    // 2. Transpose.
+    let temp_cols_slice = &mut scratch[..ROWS * COLS];
+    d.transpose::<ROWS, COLS>(data, temp_cols_slice);
 
-    // Create a temporary flat buffer for the transposed data.
-    let mut transposed_data = vec![0.0f32; ROWS * COLS];
-    d.transpose::<ROWS, COLS>(data, &mut transposed_data);
-
-    // Copy data from flat `transposed_data` into a temporary Vec of arrays.
-    let mut temp_cols: Vec<[f32; ROWS]> = vec![[0.0f32; ROWS]; COLS];
-    for (c, row) in temp_cols.iter_mut().enumerate() {
-        let start = c * ROWS;
-        let end = start + ROWS;
-        row.copy_from_slice(&transposed_data[start..end]);
-    }
-
-    // Perform DCT on the temporary structure (treating original columns as rows).
+    // 3. Column transforms.
+    let temp_cols = temp_cols_slice.as_chunks_mut::<ROWS>().0;
     let num_full = ROWS / D::F32Vec::LEN;
     let remainder = ROWS % D::F32Vec::LEN;
     for starting_row in (0..num_full * D::F32Vec::LEN).step_by(D::F32Vec::LEN) {
-        DCT1DImpl::<COLS>::do_dct::<D, ROWS>(d, &mut temp_cols, starting_row, D::F32Vec::LEN);
+        DCT1DImpl::<COLS>::do_dct::<D, ROWS>(d, temp_cols, starting_row, D::F32Vec::LEN);
     }
     if remainder != 0 {
         DCT1DImpl::<COLS>::do_dct::<D, ROWS>(
             d,
-            &mut temp_cols,
+            temp_cols,
             num_full * D::F32Vec::LEN,
             remainder,
         );
     }
 
-    // Copy results back from the temporary structure into the flat `transposed_data`.
-    for (c, row) in temp_cols.iter().enumerate() {
-        let start = c * ROWS;
-        let end = start + ROWS;
-        transposed_data[start..end].copy_from_slice(row);
-    }
-    d.transpose::<COLS, ROWS>(&transposed_data, data);
+    // 4. Transpose back.
+    d.transpose::<COLS, ROWS>(temp_cols_slice, data);
 }
 
-pub fn idct2d<D: SimdDescriptor, const ROWS: usize, const COLS: usize>(d: D, data: &mut [f32])
-where
+pub fn idct2d<D: SimdDescriptor, const ROWS: usize, const COLS: usize>(
+    d: D,
+    data: &mut [f32],
+    scratch: &mut [f32],
+) where
     IDCT1DImpl<ROWS>: IDCT1D,
     IDCT1DImpl<COLS>: IDCT1D,
 {
     assert_eq!(data.len(), ROWS * COLS, "Data length mismatch");
 
-    // Create a temporary flat buffer for the transposed data.
-    let mut transposed_data = vec![0.0f32; ROWS * COLS];
+    // 1. Column IDCTs (on transposed data)
+    let temp_cols_slice = &mut scratch[..ROWS * COLS];
     if ROWS < COLS {
-        d.transpose::<ROWS, COLS>(data, &mut transposed_data);
+        d.transpose::<ROWS, COLS>(data, temp_cols_slice);
     } else {
-        transposed_data.copy_from_slice(data);
+        temp_cols_slice.copy_from_slice(data);
     }
 
-    // Copy data from flat `transposed_data` into a temporary Vec of arrays.
-    let mut temp_cols: Vec<[f32; ROWS]> = vec![[0.0f32; ROWS]; COLS];
-    for (c, row) in temp_cols.iter_mut().enumerate() {
-        let start = c * ROWS;
-        let end = start + ROWS;
-        row.copy_from_slice(&transposed_data[start..end]);
-    }
-
-    // Perform IDCT on the temporary structure (treating original columns as rows).
+    let temp_cols = temp_cols_slice.as_chunks_mut::<ROWS>().0;
     let num_full = ROWS / D::F32Vec::LEN;
     let remainder = ROWS % D::F32Vec::LEN;
     for starting_row in (0..num_full * D::F32Vec::LEN).step_by(D::F32Vec::LEN) {
-        IDCT1DImpl::<COLS>::do_idct::<D, ROWS>(d, &mut temp_cols, starting_row, D::F32Vec::LEN);
+        IDCT1DImpl::<COLS>::do_idct::<D, ROWS>(d, temp_cols, starting_row, D::F32Vec::LEN);
     }
     if remainder != 0 {
         IDCT1DImpl::<COLS>::do_idct::<D, ROWS>(
             d,
-            &mut temp_cols,
+            temp_cols,
             num_full * D::F32Vec::LEN,
             remainder,
         );
     }
 
-    // Copy results back from the temporary structure into the flat `transposed_data`.
-    for (c, row) in temp_cols.iter().enumerate() {
-        let start = c * ROWS;
-        let end = start + ROWS;
-        transposed_data[start..end].copy_from_slice(row);
-    }
+    // 2. Transpose back
+    d.transpose::<COLS, ROWS>(temp_cols_slice, data);
 
-    d.transpose::<COLS, ROWS>(&transposed_data, data);
-
-    // Copy data from flat slice `data` into a temporary Vec of arrays (rows).
-    let mut temp_rows: Vec<[f32; COLS]> = vec![[0.0f32; COLS]; ROWS];
-    for (r, column) in temp_rows.iter_mut().enumerate() {
-        let start = r * COLS;
-        let end = start + COLS;
-        column.copy_from_slice(&data[start..end]);
-    }
+    // 3. Row IDCTs
+    let temp_rows = data.as_chunks_mut::<COLS>().0;
     let num_full = COLS / D::F32Vec::LEN;
     let remainder = COLS % D::F32Vec::LEN;
     for starting_column in (0..num_full * D::F32Vec::LEN).step_by(D::F32Vec::LEN) {
-        IDCT1DImpl::<ROWS>::do_idct::<D, COLS>(d, &mut temp_rows, starting_column, D::F32Vec::LEN);
+        IDCT1DImpl::<ROWS>::do_idct::<D, COLS>(d, temp_rows, starting_column, D::F32Vec::LEN);
     }
     if remainder != 0 {
         IDCT1DImpl::<ROWS>::do_idct::<D, COLS>(
             d,
-            &mut temp_rows,
+            temp_rows,
             num_full * D::F32Vec::LEN,
             remainder,
         );
-    }
-
-    for (r, column) in temp_rows.iter().enumerate() {
-        let start = r * COLS;
-        let end = start + COLS;
-        data[start..end].copy_from_slice(column);
     }
 }
 
@@ -834,8 +791,9 @@ mod tests {
                 const N: usize = $n_val;
                 const M: usize = $m_val;
                 let mut data = [0.0f32; M * N];
+                let mut scratch = [0.0f32; M * N];
                 let d = ScalarDescriptor {};
-                idct2d::<_, N, M>(d, &mut data);
+                idct2d::<_, N, M>(d, &mut data, &mut scratch);
             }
         };
     }
@@ -846,8 +804,9 @@ mod tests {
                 const N: usize = $n_val;
                 const M: usize = $m_val;
                 let mut data = [0.0f32; M * N];
+                let mut scratch = [0.0f32; M * N];
                 let d = ScalarDescriptor {};
-                dct2d::<_, N, M>(d, &mut data);
+                dct2d::<_, N, M>(d, &mut data, &mut scratch);
             }
         };
     }
@@ -1084,6 +1043,7 @@ mod tests {
             120.0, 31.0, 246.0, 177.0, 119.0, 154.0, 176.0, 248.0,
             21.0, 151.0, 107.0, 101.0, 202.0, 71.0, 246.0, 48.0,
         ];
+        let mut scratch = [0.0; ROWS * COLS];
 
         let d = ScalarDescriptor {};
 
@@ -1094,7 +1054,7 @@ mod tests {
 
         let start = std::time::Instant::now();
         for _ in 0..iters {
-            dct2d::<_, ROWS, COLS>(d, &mut data);
+            dct2d::<_, ROWS, COLS>(d, &mut data, &mut scratch);
         }
         let elapsed = start.elapsed();
         if iters > 1 {
