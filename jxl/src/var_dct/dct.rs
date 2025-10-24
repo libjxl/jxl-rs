@@ -1069,4 +1069,36 @@ mod tests {
             1e-3,
         );
     }
+
+    #[test]
+    fn bench_dct2d() {
+        const ROWS: usize = 8;
+        const COLS: usize = 8;
+        let mut data = [
+            86.0, 239.0, 213.0, 36.0, 34.0, 142.0, 248.0, 87.0,
+            128.0, 122.0, 131.0, 72.0, 156.0, 112.0, 248.0, 55.0,
+            120.0, 31.0, 246.0, 177.0, 119.0, 154.0, 176.0, 248.0,
+            21.0, 151.0, 107.0, 101.0, 202.0, 71.0, 246.0, 48.0,
+            86.0, 239.0, 213.0, 36.0, 34.0, 142.0, 248.0, 87.0,
+            128.0, 122.0, 131.0, 72.0, 156.0, 112.0, 248.0, 55.0,
+            120.0, 31.0, 246.0, 177.0, 119.0, 154.0, 176.0, 248.0,
+            21.0, 151.0, 107.0, 101.0, 202.0, 71.0, 246.0, 48.0,
+        ];
+
+        let d = ScalarDescriptor {};
+
+        let iters = std::env::var("DCT2D_BENCH_ITERATIONS")
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(1);
+
+        let start = std::time::Instant::now();
+        for _ in 0..iters {
+            dct2d::<_, ROWS, COLS>(d, &mut data);
+        }
+        let elapsed = start.elapsed();
+        if iters > 1 {
+            println!("dct2d 8x8: {:?} per iteration", elapsed / iters);
+        }
+    }
 }
