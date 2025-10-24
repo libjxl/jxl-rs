@@ -5,13 +5,14 @@
 
 use std::ops::{Add, AddAssign, Div, DivAssign, Mul, MulAssign, Sub, SubAssign};
 
-use super::{F32SimdVec, SimdDescriptor};
+use super::{F32SimdVec, I32SimdVec, SimdDescriptor};
 
 #[derive(Clone, Copy, Debug)]
 pub struct ScalarDescriptor;
 
 impl SimdDescriptor for ScalarDescriptor {
     type F32Vec = F32VecScalar;
+    type I32Vec = I32VecScalar;
     fn new() -> Option<Self> {
         Some(Self)
     }
@@ -64,6 +65,11 @@ impl F32SimdVec for F32VecScalar {
     #[inline(always)]
     fn mul_add(self, mul: Self, add: Self) -> Self {
         Self(self.0.mul_add(mul.0, add.0))
+    }
+
+    #[inline(always)]
+    fn zero(_d: Self::Descriptor) -> Self {
+        Self(0.0)
     }
 
     #[inline(always)]
@@ -131,6 +137,90 @@ impl MulAssign<F32VecScalar> for F32VecScalar {
 impl DivAssign<F32VecScalar> for F32VecScalar {
     fn div_assign(&mut self, rhs: F32VecScalar) {
         self.0 /= rhs.0;
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct I32VecScalar(i32);
+
+impl I32SimdVec for I32VecScalar {
+    type Descriptor = ScalarDescriptor;
+    type F32Vec = F32VecScalar;
+
+    const LEN: usize = 1;
+
+    #[inline(always)]
+    fn load(_d: Self::Descriptor, mem: &[i32]) -> Self {
+        Self(mem[0])
+    }
+
+    #[inline(always)]
+    fn store(&self, mem: &mut [i32]) {
+        mem[0] = self.0;
+    }
+
+    #[inline(always)]
+    fn zero(_d: Self::Descriptor) -> Self {
+        Self(0)
+    }
+
+    #[inline(always)]
+    fn splat(_d: Self::Descriptor, v: i32) -> Self {
+        Self(v)
+    }
+
+    #[inline(always)]
+    fn as_f32(self) -> Self::F32Vec {
+        F32VecScalar(self.0 as f32)
+    }
+
+    #[inline(always)]
+    fn eq(self, other: Self) -> Self {
+        Self(if self.0 == other.0 { 1 } else { 0 })
+    }
+
+    #[inline(always)]
+    fn if_then_else_f32(self, if_true: Self::F32Vec, if_false: Self::F32Vec) -> Self::F32Vec {
+        F32VecScalar(if self.0 != 0 { if_true.0 } else { if_false.0 })
+    }
+}
+
+impl Add<I32VecScalar> for I32VecScalar {
+    type Output = I32VecScalar;
+    fn add(self, rhs: I32VecScalar) -> Self::Output {
+        Self(self.0 + rhs.0)
+    }
+}
+
+impl Sub<I32VecScalar> for I32VecScalar {
+    type Output = I32VecScalar;
+    fn sub(self, rhs: I32VecScalar) -> Self::Output {
+        Self(self.0 - rhs.0)
+    }
+}
+
+impl Mul<I32VecScalar> for I32VecScalar {
+    type Output = I32VecScalar;
+    fn mul(self, rhs: I32VecScalar) -> Self::Output {
+        Self(self.0 * rhs.0)
+    }
+}
+
+impl AddAssign<I32VecScalar> for I32VecScalar {
+    fn add_assign(&mut self, rhs: I32VecScalar) {
+        self.0 += rhs.0;
+    }
+}
+
+impl SubAssign<I32VecScalar> for I32VecScalar {
+    fn sub_assign(&mut self, rhs: I32VecScalar) {
+        self.0 -= rhs.0;
+    }
+}
+
+impl MulAssign<I32VecScalar> for I32VecScalar {
+    fn mul_assign(&mut self, rhs: I32VecScalar) {
+        self.0 *= rhs.0;
     }
 }
 

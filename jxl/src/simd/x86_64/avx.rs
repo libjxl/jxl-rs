@@ -3,14 +3,16 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-use super::super::{F32SimdVec, ScalarDescriptor, SimdDescriptor};
+use super::super::{F32SimdVec, I32SimdVec, ScalarDescriptor, SimdDescriptor};
 use std::{
     arch::x86_64::{
         __m256, __m256i, _mm_loadu_ps, _mm_storeu_ps, _mm_unpackhi_ps, _mm_unpacklo_ps,
-        _mm256_add_ps, _mm256_andnot_si256, _mm256_castps_si256, _mm256_castsi256_ps,
+        _mm256_add_epi32, _mm256_add_ps, _mm256_and_ps, _mm256_andnot_ps, _mm256_andnot_si256,
+        _mm256_castps_si256, _mm256_castsi256_ps, _mm256_cmpeq_epi32, _mm256_cvtepi32_ps,
         _mm256_div_ps, _mm256_fmadd_ps, _mm256_loadu_ps, _mm256_loadu_si256, _mm256_maskload_ps,
-        _mm256_maskstore_ps, _mm256_max_ps, _mm256_mul_ps, _mm256_set1_epi32, _mm256_set1_ps,
-        _mm256_storeu_ps, _mm256_sub_ps,
+        _mm256_maskstore_ps, _mm256_max_ps, _mm256_mul_epi32, _mm256_mul_ps, _mm256_or_ps,
+        _mm256_set1_epi32, _mm256_set1_ps, _mm256_setzero_ps, _mm256_setzero_si256,
+        _mm256_storeu_ps, _mm256_storeu_si256, _mm256_sub_epi32, _mm256_sub_ps,
     },
     ops::{Add, AddAssign, Div, DivAssign, Mul, MulAssign, Sub, SubAssign},
 };
@@ -80,6 +82,8 @@ impl AvxDescriptor {
 
 impl SimdDescriptor for AvxDescriptor {
     type F32Vec = F32VecAvx;
+    type I32Vec = I32VecAvx;
+
     fn new() -> Option<Self> {
         if is_x86_feature_detected!("avx2") && is_x86_feature_detected!("fma") {
             // SAFETY: we just checked avx2 and fma.
@@ -193,6 +197,12 @@ impl F32SimdVec for F32VecAvx {
     });
 
     #[inline(always)]
+    fn zero(d: Self::Descriptor) -> Self {
+        // SAFETY: We know avx is available from the safety invariant on `d`.
+        unsafe { Self(_mm256_setzero_ps(), d) }
+    }
+
+    #[inline(always)]
     fn splat(d: Self::Descriptor, v: f32) -> Self {
         // SAFETY: We know avx is available from the safety invariant on `d`.
         unsafe { Self(_mm256_set1_ps(v), d) }
@@ -261,5 +271,109 @@ impl MulAssign<F32VecAvx> for F32VecAvx {
 impl DivAssign<F32VecAvx> for F32VecAvx {
     fn_avx!(this: &mut F32VecAvx, fn div_assign(rhs: F32VecAvx) {
         this.0 = _mm256_div_ps(this.0, rhs.0)
+    });
+}
+
+#[derive(Clone, Copy, Debug)]
+#[repr(transparent)]
+pub struct I32VecAvx(__m256i, AvxDescriptor);
+
+impl I32SimdVec for I32VecAvx {
+    type Descriptor = AvxDescriptor;
+    type F32Vec = F32VecAvx;
+
+    const LEN: usize = 8;
+
+    #[inline(always)]
+    fn load(d: Self::Descriptor, mem: &[i32]) -> Self {
+        assert!(mem.len() >= Self::LEN);
+        // SAFETY: we just checked that `mem` has enough space. Moreover, we know avx is available
+        // from the safety invariant on `d`.
+        Self(unsafe { _mm256_loadu_si256(mem.as_ptr() as *const _) }, d)
+    }
+
+    #[inline(always)]
+    fn store(&self, mem: &mut [i32]) {
+        assert!(mem.len() >= Self::LEN);
+        // SAFETY: we just checked that `mem` has enough space. Moreover, we know avx is available
+        // from the safety invariant on `self.1`.
+        unsafe { _mm256_storeu_si256(mem.as_mut_ptr() as *mut _, self.0) }
+    }
+
+    #[inline(always)]
+    fn zero(d: Self::Descriptor) -> Self {
+        // SAFETY: We know avx is available from the safety invariant on `d`.
+        unsafe { Self(_mm256_setzero_si256(), d) }
+    }
+
+    #[inline(always)]
+    fn splat(d: Self::Descriptor, v: i32) -> Self {
+        // SAFETY: We know avx is available from the safety invariant on `d`.
+        unsafe { Self(_mm256_set1_epi32(v), d) }
+    }
+
+    #[inline(always)]
+    fn as_f32(self) -> Self::F32Vec {
+        // SAFETY: We know avx is available from the safety invariant on `self`.
+        unsafe { F32VecAvx(_mm256_cvtepi32_ps(self.0), self.1) }
+    }
+
+    #[inline(always)]
+    fn eq(self, other: Self) -> Self {
+        // SAFETY: We know avx is available from the safety invariant on `self`.
+        unsafe { Self(_mm256_cmpeq_epi32(self.0, other.0), self.1) }
+    }
+
+    #[inline(always)]
+    fn if_then_else_f32(self, if_true: Self::F32Vec, if_false: Self::F32Vec) -> Self::F32Vec {
+        // SAFETY: We know avx is available from the safety invariant on `self`.
+        unsafe {
+            F32VecAvx(
+                _mm256_or_ps(
+                    _mm256_and_ps(_mm256_castsi256_ps(self.0), if_true.0),
+                    _mm256_andnot_ps(_mm256_castsi256_ps(self.0), if_false.0),
+                ),
+                self.1,
+            )
+        }
+    }
+}
+
+impl Add<I32VecAvx> for I32VecAvx {
+    type Output = I32VecAvx;
+    fn_avx!(this: I32VecAvx, fn add(rhs: I32VecAvx) -> I32VecAvx {
+        I32VecAvx(_mm256_add_epi32(this.0, rhs.0), this.1)
+    });
+}
+
+impl Sub<I32VecAvx> for I32VecAvx {
+    type Output = I32VecAvx;
+    fn_avx!(this: I32VecAvx, fn sub(rhs: I32VecAvx) -> I32VecAvx {
+        I32VecAvx(_mm256_sub_epi32(this.0, rhs.0), this.1)
+    });
+}
+
+impl Mul<I32VecAvx> for I32VecAvx {
+    type Output = I32VecAvx;
+    fn_avx!(this: I32VecAvx, fn mul(rhs: I32VecAvx) -> I32VecAvx {
+        I32VecAvx(_mm256_mul_epi32(this.0, rhs.0), this.1)
+    });
+}
+
+impl AddAssign<I32VecAvx> for I32VecAvx {
+    fn_avx!(this: &mut I32VecAvx, fn add_assign(rhs: I32VecAvx) {
+        this.0 = _mm256_add_epi32(this.0, rhs.0)
+    });
+}
+
+impl SubAssign<I32VecAvx> for I32VecAvx {
+    fn_avx!(this: &mut I32VecAvx, fn sub_assign(rhs: I32VecAvx) {
+        this.0 = _mm256_sub_epi32(this.0, rhs.0)
+    });
+}
+
+impl MulAssign<I32VecAvx> for I32VecAvx {
+    fn_avx!(this: &mut I32VecAvx, fn mul_assign(rhs: I32VecAvx) {
+        this.0 = _mm256_mul_epi32(this.0, rhs.0)
     });
 }
