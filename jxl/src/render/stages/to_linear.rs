@@ -111,7 +111,7 @@ impl RenderPipelineStage for ToLinearStage {
             TransferFunction::Gamma(g) => {
                 for row in row {
                     for v in &mut row[..xsize] {
-                        *v = crate::util::fast_powf(*v, g);
+                        *v = crate::util::fast_powf(v.abs(), g).copysign(*v);
                     }
                 }
             }
