@@ -112,6 +112,15 @@ impl SimdDescriptor for AvxDescriptor {
         }
         // TODO: reserve the above for `ROWS.min(COLS) <= 4` and add an 8×8 version
     }
+
+    fn call<R>(self, f: impl FnOnce(Self) -> R) -> R {
+        #[target_feature(enable = "avx2,fma")]
+        unsafe fn inner<R>(d: AvxDescriptor, f: impl FnOnce(AvxDescriptor) -> R) -> R {
+            f(d)
+        }
+        // SAFETY: the safety invariant on `self` guarantees avx2 and fma.
+        unsafe { inner(self, f) }
+    }
 }
 
 // TODO(veluca): retire this macro once we have #[unsafe(target_feature)].

@@ -40,6 +40,11 @@ pub trait SimdDescriptor: Sized + Copy + Debug + Send + Sync {
     fn new() -> Option<Self>;
 
     fn transpose<const ROWS: usize, const COLS: usize>(self, input: &[f32], output: &mut [f32]);
+
+    /// Calls the given closure within a target feature context.
+    /// This enables establishing an unbroken chain of inline functions from the feature-annotated
+    /// gateway up to the closure, allowing SIMD intrinsics to be used safely.
+    fn call<R>(self, f: impl FnOnce(Self) -> R) -> R;
 }
 
 pub trait F32SimdVec:
@@ -226,4 +231,36 @@ mod test {
 
     test_instruction!(abs, |a: Floats| { a.abs() });
     test_instruction!(max, |a: Floats, b: Floats| { a.max(b) });
+
+    // Test that the call method works, compiles, and can capture arguments
+    fn test_call<D: SimdDescriptor>(d: D) {
+        // Test basic call functionality
+        let result = d.call(|_d| 42);
+        assert_eq!(result, 42);
+
+        // Test with capturing variables
+        let multiplier = 3.0f32;
+        let addend = 5.0f32;
+
+        // Test SIMD operations inside call with captures
+        let input = vec![1.0f32; D::F32Vec::LEN * 4];
+        let mut output = vec![0.0f32; D::F32Vec::LEN * 4];
+
+        d.call(|d| {
+            let mult_vec = D::F32Vec::splat(d, multiplier);
+            let add_vec = D::F32Vec::splat(d, addend);
+
+            for idx in (0..input.len()).step_by(D::F32Vec::LEN) {
+                let vec = D::F32Vec::load(d, &input[idx..]);
+                let result = vec * mult_vec + add_vec;
+                result.store(&mut output[idx..]);
+            }
+        });
+
+        // Verify results
+        for &val in &output {
+            assert_eq!(val, 1.0 * multiplier + addend);
+        }
+    }
+    test_all_instruction_sets!(test_call);
 }
