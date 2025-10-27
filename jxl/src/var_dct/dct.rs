@@ -30,6 +30,7 @@ pub trait IDCT1D {
 }
 
 impl DCT1D for DCT1DImpl<1> {
+    #[inline(always)]
     fn do_dct<D: SimdDescriptor, const COLUMNS: usize>(
         _d: D,
         _data: &mut [[f32; COLUMNS]],
@@ -40,6 +41,7 @@ impl DCT1D for DCT1DImpl<1> {
     }
 }
 impl IDCT1D for IDCT1DImpl<1> {
+    #[inline(always)]
     fn do_idct<D: SimdDescriptor, const COLUMNS: usize>(
         _d: D,
         _data: &mut [[f32; COLUMNS]],
@@ -51,6 +53,7 @@ impl IDCT1D for IDCT1DImpl<1> {
 }
 
 impl DCT1D for DCT1DImpl<2> {
+    #[inline(always)]
     fn do_dct<D: SimdDescriptor, const COLUMNS: usize>(
         d: D,
         data: &mut [[f32; COLUMNS]],
@@ -65,6 +68,7 @@ impl DCT1D for DCT1DImpl<2> {
 }
 
 impl IDCT1D for IDCT1DImpl<2> {
+    #[inline(always)]
     fn do_idct<D: SimdDescriptor, const COLUMNS: usize>(
         d: D,
         data: &mut [[f32; COLUMNS]],
@@ -80,6 +84,7 @@ macro_rules! define_dct_1d {
         // Helper functions for CoeffBundle operating on $nhalf rows
         impl<const SZ: usize> CoeffBundle<$nhalf, SZ> {
             /// Adds a_in1[i] and a_in2[$nhalf - 1 - i], storing in a_out[i].
+            #[inline(always)]
             fn add_reverse<D: SimdDescriptor>(
                 d: D,
                 a_in1: &[[f32; SZ]],
@@ -99,6 +104,7 @@ macro_rules! define_dct_1d {
             }
 
             /// Subtracts a_in2[$nhalf - 1 - i] from a_in1[i], storing in a_out[i].
+            #[inline(always)]
             fn sub_reverse<D: SimdDescriptor>(
                 d: D,
                 a_in1: &[[f32; SZ]],
@@ -119,6 +125,7 @@ macro_rules! define_dct_1d {
 
             /// Applies the B transform (forward DCT step).
             /// Operates on a slice of $nhalf rows.
+            #[inline(always)]
             fn b<D: SimdDescriptor>(
                 d: D,
                 coeff: &mut [[f32; SZ]],
@@ -146,6 +153,7 @@ macro_rules! define_dct_1d {
         // Helper functions for CoeffBundle operating on $n rows
         impl<const SZ: usize> CoeffBundle<$n, SZ> {
             /// Multiplies the second half of `coeff` by WcMultipliers.
+            #[inline(always)]
             fn multiply<D: SimdDescriptor>(
                 d: D,
                 coeff: &mut [[f32; SZ]],
@@ -167,6 +175,7 @@ macro_rules! define_dct_1d {
             /// De-interleaves `a_in` into `a_out`.
             /// Even indexed rows of `a_out` get first half of `a_in`.
             /// Odd indexed rows of `a_out` get second half of `a_in`.
+            #[inline(always)]
             fn inverse_even_odd<D: SimdDescriptor>(
                 d: D,
                 a_in: &[[f32; SZ]],
@@ -189,6 +198,7 @@ macro_rules! define_dct_1d {
         }
 
         impl DCT1D for DCT1DImpl<$n> {
+            #[inline(always)]
             fn do_dct<D: SimdDescriptor, const COLUMNS: usize>(
                 d: D,
                 data: &mut [[f32; COLUMNS]],
@@ -419,41 +429,46 @@ pub fn dct2d<D: SimdDescriptor, const ROWS: usize, const COLS: usize>(
 {
     assert_eq!(data.len(), ROWS * COLS, "Data length mismatch");
 
+    // OPTION 2: Wrap entire loop bodies (with inline always) - two boundaries
     // 1. Row transforms.
-    let temp_rows = data.as_chunks_mut::<COLS>().0;
-    let num_full = COLS / D::F32Vec::LEN;
-    let remainder = COLS % D::F32Vec::LEN;
-    for starting_column in (0..num_full * D::F32Vec::LEN).step_by(D::F32Vec::LEN) {
-        DCT1DImpl::<ROWS>::do_dct::<D, COLS>(d, temp_rows, starting_column, D::F32Vec::LEN);
-    }
-    if remainder != 0 {
-        DCT1DImpl::<ROWS>::do_dct::<D, COLS>(
-            d,
-            temp_rows,
-            num_full * D::F32Vec::LEN,
-            remainder,
-        );
-    }
+    d.call(|d| {
+        let temp_rows = data.as_chunks_mut::<COLS>().0;
+        let num_full = COLS / D::F32Vec::LEN;
+        let remainder = COLS % D::F32Vec::LEN;
+        for starting_column in (0..num_full * D::F32Vec::LEN).step_by(D::F32Vec::LEN) {
+            DCT1DImpl::<ROWS>::do_dct::<D, COLS>(d, temp_rows, starting_column, D::F32Vec::LEN);
+        }
+        if remainder != 0 {
+            DCT1DImpl::<ROWS>::do_dct::<D, COLS>(
+                d,
+                temp_rows,
+                num_full * D::F32Vec::LEN,
+                remainder,
+            );
+        }
+    });
 
     // 2. Transpose.
     let temp_cols_slice = &mut scratch[..ROWS * COLS];
     d.transpose::<ROWS, COLS>(data, temp_cols_slice);
 
     // 3. Column transforms.
-    let temp_cols = temp_cols_slice.as_chunks_mut::<ROWS>().0;
-    let num_full = ROWS / D::F32Vec::LEN;
-    let remainder = ROWS % D::F32Vec::LEN;
-    for starting_row in (0..num_full * D::F32Vec::LEN).step_by(D::F32Vec::LEN) {
-        DCT1DImpl::<COLS>::do_dct::<D, ROWS>(d, temp_cols, starting_row, D::F32Vec::LEN);
-    }
-    if remainder != 0 {
-        DCT1DImpl::<COLS>::do_dct::<D, ROWS>(
-            d,
-            temp_cols,
-            num_full * D::F32Vec::LEN,
-            remainder,
-        );
-    }
+    d.call(|d| {
+        let temp_cols = temp_cols_slice.as_chunks_mut::<ROWS>().0;
+        let num_full = ROWS / D::F32Vec::LEN;
+        let remainder = ROWS % D::F32Vec::LEN;
+        for starting_row in (0..num_full * D::F32Vec::LEN).step_by(D::F32Vec::LEN) {
+            DCT1DImpl::<COLS>::do_dct::<D, ROWS>(d, temp_cols, starting_row, D::F32Vec::LEN);
+        }
+        if remainder != 0 {
+            DCT1DImpl::<COLS>::do_dct::<D, ROWS>(
+                d,
+                temp_cols,
+                num_full * D::F32Vec::LEN,
+                remainder,
+            );
+        }
+    });
 
     // 4. Transpose back.
     d.transpose::<COLS, ROWS>(temp_cols_slice, data);
