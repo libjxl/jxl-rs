@@ -333,6 +333,7 @@ define_dct_1d!(256, 128);
 macro_rules! define_idct_1d {
     ($n:literal, $nhalf: literal) => {
         impl<const SZ: usize> CoeffBundle<$nhalf, SZ> {
+            #[inline(always)]
             fn b_transpose<D: SimdDescriptor>(
                 d: D,
                 coeff: &mut [[f32; SZ]],
@@ -352,6 +353,7 @@ macro_rules! define_idct_1d {
         }
 
         impl<const SZ: usize> CoeffBundle<$n, SZ> {
+            #[inline(always)]
             fn forward_even_odd<D: SimdDescriptor>(
                 d: D,
                 a_in: &[[f32; SZ]],
@@ -369,6 +371,7 @@ macro_rules! define_idct_1d {
                         .store_partial(num_columns, &mut a_out[i][j..]);
                 }
             }
+            #[inline(always)]
             fn multiply_and_add<D: SimdDescriptor>(
                 d: D,
                 coeff: &[[f32; SZ]],
@@ -390,6 +393,7 @@ macro_rules! define_idct_1d {
         }
 
         impl IDCT1D for IDCT1DImpl<$n> {
+            #[inline(always)]
             fn do_idct<D: SimdDescriptor, const COLUMNS: usize>(
                 d: D,
                 data: &mut [[f32; COLUMNS]],
@@ -469,7 +473,6 @@ pub fn dct2d<D: SimdDescriptor, const ROWS: usize, const COLS: usize>(
 {
     assert_eq!(data.len(), ROWS * COLS, "Data length mismatch");
 
-    // OPTION 2: Wrap entire loop bodies (with inline always) - two boundaries
     // 1. Row transforms.
     d.call(|d| {
         let temp_rows = data.as_chunks_mut::<COLS>().0;
