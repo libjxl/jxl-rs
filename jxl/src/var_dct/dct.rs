@@ -386,7 +386,7 @@ macro_rules! define_idct_1d {
                     let in2 = D::F32Vec::load_partial(d, num_columns, &coeff[$nhalf + i][j..]);
                     in2.mul_add(mul, in1)
                         .store_partial(num_columns, &mut out[i][j..]);
-                    in2.mul_add(mul.neg(), in1)
+                    in2.neg_mul_add(mul, in1)
                         .store_partial(num_columns, &mut out[($n - i - 1)][j..]);
                 }
             }

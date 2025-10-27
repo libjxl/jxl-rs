@@ -71,6 +71,10 @@ pub trait F32SimdVec:
 
     fn mul_add(self, mul: Self, add: Self) -> Self;
 
+    /// Computes `add - self * mul`, equivalent to `self * (-mul) + add`.
+    /// Uses fused multiply-add with negation when available (FMA3 fnmadd).
+    fn neg_mul_add(self, mul: Self, add: Self) -> Self;
+
     // Requires `mem.len() >= Self::LEN` or it will panic.
     fn load(d: Self::Descriptor, mem: &[f32]) -> Self;
 
@@ -229,6 +233,10 @@ mod test {
 
     test_instruction!(mul_add, |a: Floats, b: Floats, c: Floats| {
         a.mul_add(b, c)
+    });
+
+    test_instruction!(neg_mul_add, |a: Floats, b: Floats, c: Floats| {
+        a.neg_mul_add(b, c)
     });
 
     test_instruction!(abs, |a: Floats| { a.abs() });

@@ -8,10 +8,11 @@ use std::{
     arch::x86_64::{
         __m256, __m256i, _mm_loadu_ps, _mm_storeu_ps, _mm_unpackhi_ps, _mm_unpacklo_ps,
         _mm256_add_ps, _mm256_andnot_si256, _mm256_castps_si256, _mm256_castsi256_ps,
-        _mm256_div_ps, _mm256_fmadd_ps, _mm256_loadu_ps, _mm256_loadu_si256, _mm256_maskload_ps,
-        _mm256_maskstore_ps, _mm256_max_ps, _mm256_mul_ps, _mm256_permute2f128_ps,
-        _mm256_set1_epi32, _mm256_set1_ps, _mm256_shuffle_ps, _mm256_storeu_ps, _mm256_sub_ps,
-        _mm256_unpackhi_ps, _mm256_unpacklo_ps, _mm256_xor_si256,
+        _mm256_div_ps, _mm256_fmadd_ps, _mm256_fnmadd_ps, _mm256_loadu_ps, _mm256_loadu_si256,
+        _mm256_maskload_ps, _mm256_maskstore_ps, _mm256_max_ps, _mm256_mul_ps,
+        _mm256_permute2f128_ps, _mm256_set1_epi32, _mm256_set1_ps, _mm256_shuffle_ps,
+        _mm256_storeu_ps, _mm256_sub_ps, _mm256_unpackhi_ps, _mm256_unpacklo_ps,
+        _mm256_xor_si256,
     },
     ops::{Add, AddAssign, Div, DivAssign, Mul, MulAssign, Sub, SubAssign},
 };
@@ -296,6 +297,10 @@ impl F32SimdVec for F32VecAvx {
 
     fn_avx!(this: F32VecAvx, fn mul_add(mul: F32VecAvx, add: F32VecAvx) -> F32VecAvx {
         F32VecAvx(_mm256_fmadd_ps(this.0, mul.0, add.0), this.1)
+    });
+
+    fn_avx!(this: F32VecAvx, fn neg_mul_add(mul: F32VecAvx, add: F32VecAvx) -> F32VecAvx {
+        F32VecAvx(_mm256_fnmadd_ps(this.0, mul.0, add.0), this.1)
     });
 
     #[inline(always)]
