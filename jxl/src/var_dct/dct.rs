@@ -79,6 +79,38 @@ impl IDCT1D for IDCT1DImpl<2> {
     }
 }
 
+/// Helper macro to conditionally wrap recursive DCT calls in d.call() based on size.
+/// For small sizes (≤4), call directly to reduce compilation time.
+/// For larger sizes (>4), use d.call() to enable aggressive inlining within the boundary.
+macro_rules! maybe_call_dct {
+    // Small sizes: direct call
+    ($d:expr, 2, $($call:tt)*) => {
+        $($call)*
+    };
+    ($d:expr, 4, $($call:tt)*) => {
+        $($call)*
+    };
+    // Larger sizes: wrap in d.call()
+    ($d:expr, $size:literal, $($call:tt)*) => {
+        $d.call(|_d| $($call)*)
+    };
+}
+
+/// Helper macro for IDCT - same logic as maybe_call_dct
+macro_rules! maybe_call_idct {
+    // Small sizes: direct call
+    ($d:expr, 2, $($call:tt)*) => {
+        $($call)*
+    };
+    ($d:expr, 4, $($call:tt)*) => {
+        $($call)*
+    };
+    // Larger sizes: wrap in d.call()
+    ($d:expr, $size:literal, $($call:tt)*) => {
+        $d.call(|_d| $($call)*)
+    };
+}
+
 macro_rules! define_dct_1d {
     ($n:literal, $nhalf: literal) => {
         // Helper functions for CoeffBundle operating on $nhalf rows
@@ -228,11 +260,13 @@ macro_rules! define_dct_1d {
 
                 // 2. First Recursive Call (do_dct)
                 //    first half
-                DCT1DImpl::<$nhalf>::do_dct::<D, COLUMNS>(
-                    d,
-                    &mut tmp_buffer[0..$nhalf],
-                    starting_column,
-                    num_columns,
+                maybe_call_dct!(d, $nhalf,
+                    DCT1DImpl::<$nhalf>::do_dct::<D, COLUMNS>(
+                        d,
+                        &mut tmp_buffer[0..$nhalf],
+                        starting_column,
+                        num_columns,
+                    )
                 );
 
                 // 3. SubReverse
@@ -258,11 +292,13 @@ macro_rules! define_dct_1d {
 
                 // 5. Second Recursive Call (do_dct)
                 //    second half.
-                DCT1DImpl::<$nhalf>::do_dct::<D, COLUMNS>(
-                    d,
-                    &mut tmp_buffer[$nhalf..$n],
-                    starting_column,
-                    num_columns,
+                maybe_call_dct!(d, $nhalf,
+                    DCT1DImpl::<$nhalf>::do_dct::<D, COLUMNS>(
+                        d,
+                        &mut tmp_buffer[$nhalf..$n],
+                        starting_column,
+                        num_columns,
+                    )
                 );
 
                 // 6. B
@@ -376,11 +412,13 @@ macro_rules! define_idct_1d {
                 );
                 // 2. First Recursive Call (IDCT1DImpl::do_idct)
                 // first half
-                IDCT1DImpl::<$nhalf>::do_idct::<D, COLUMNS>(
-                    d,
-                    &mut tmp[0..$nhalf],
-                    starting_column,
-                    num_columns,
+                maybe_call_idct!(d, $nhalf,
+                    IDCT1DImpl::<$nhalf>::do_idct::<D, COLUMNS>(
+                        d,
+                        &mut tmp[0..$nhalf],
+                        starting_column,
+                        num_columns,
+                    )
                 );
                 // 3. BTranspose.
                 // only the second half
@@ -392,11 +430,13 @@ macro_rules! define_idct_1d {
                 );
                 // 4. Second Recursive Call (IDCT1DImpl::do_idct)
                 // second half
-                IDCT1DImpl::<$nhalf>::do_idct::<D, COLUMNS>(
-                    d,
-                    &mut tmp[$nhalf..$n],
-                    starting_column,
-                    num_columns,
+                maybe_call_idct!(d, $nhalf,
+                    IDCT1DImpl::<$nhalf>::do_idct::<D, COLUMNS>(
+                        d,
+                        &mut tmp[$nhalf..$n],
+                        starting_column,
+                        num_columns,
+                    )
                 );
                 // 5. MultiplyAndAdd.
                 CoeffBundle::<$n, COLUMNS>::multiply_and_add(
