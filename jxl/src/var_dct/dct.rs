@@ -61,7 +61,7 @@ impl DCT1D for DCT1DImpl<2> {
         num_columns: usize,
     ) {
         if num_columns < D::F32Vec::LEN {
-            // Scalar path: faster for small num_columns
+            // Scalar path: faster than masked SIMD for small num_columns
             for j in starting_column..(starting_column + num_columns) {
                 let temp0 = data[0][j];
                 let temp1 = data[1][j];
@@ -69,7 +69,7 @@ impl DCT1D for DCT1DImpl<2> {
                 data[1][j] = temp0 - temp1;
             }
         } else {
-            // SIMD path: use when num_columns >= vector length
+            // SIMD path: faster when num_columns >= vector length
             let temp0 = D::F32Vec::load_partial(d, num_columns, &data[0][starting_column..]);
             let temp1 = D::F32Vec::load_partial(d, num_columns, &data[1][starting_column..]);
             (temp0 + temp1).store_partial(num_columns, &mut data[0][starting_column..]);
