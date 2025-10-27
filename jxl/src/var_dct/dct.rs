@@ -19,6 +19,7 @@ pub trait DCT1D {
         starting_column: usize,
         num_columns: usize,
     );
+    fn do_dct_full<const COLUMNS: usize>(data: &mut [[f32; COLUMNS]]);
 }
 pub trait IDCT1D {
     fn do_idct<D: SimdDescriptor, const COLUMNS: usize>(
@@ -37,6 +38,11 @@ impl DCT1D for DCT1DImpl<1> {
         _starting_column: usize,
         _num_columns: usize,
     ) {
+        // Do nothing
+    }
+
+    #[inline(always)]
+    fn do_dct_full<const COLUMNS: usize>(_data: &mut [[f32; COLUMNS]]) {
         // Do nothing
     }
 }
@@ -74,6 +80,18 @@ impl DCT1D for DCT1DImpl<2> {
             let temp1 = D::F32Vec::load_partial(d, num_columns, &data[1][starting_column..]);
             (temp0 + temp1).store_partial(num_columns, &mut data[0][starting_column..]);
             (temp0 - temp1).store_partial(num_columns, &mut data[1][starting_column..]);
+        }
+    }
+
+    /// Full-width DCT2 - processes all columns (0..COLUMNS) without parameters.
+    /// Original simple implementation - fastest for compute_scaled_dct.
+    #[inline(always)]
+    fn do_dct_full<const COLUMNS: usize>(data: &mut [[f32; COLUMNS]]) {
+        for i in 0..COLUMNS {
+            let temp0 = data[0][i];
+            let temp1 = data[1][i];
+            data[0][i] = temp0 + temp1;
+            data[1][i] = temp0 - temp1;
         }
     }
 }
@@ -140,6 +158,22 @@ macro_rules! define_dct_1d {
     ($n:literal, $nhalf: literal) => {
         // Helper functions for CoeffBundle operating on $nhalf rows
         impl<const SZ: usize> CoeffBundle<$nhalf, SZ> {
+            /// Adds a_in1[i] and a_in2[$nhalf - 1 - i], storing in a_out[i]. (Full-width)
+            /// This version processes all columns (0..SZ) - used by compute_scaled_dct
+            #[inline(always)]
+            fn add_reverse_full(
+                a_in1: &[[f32; SZ]],
+                a_in2: &[[f32; SZ]],
+                a_out: &mut [[f32; SZ]],
+            ) {
+                const N_HALF_CONST: usize = $nhalf;
+                for i in 0..N_HALF_CONST {
+                    for j in 0..SZ {
+                        a_out[i][j] = a_in1[i][j] + a_in2[N_HALF_CONST - 1 - i][j];
+                    }
+                }
+            }
+
             /// Adds a_in1[i] and a_in2[$nhalf - 1 - i], storing in a_out[i]. (Scalar)
             #[inline(always)]
             fn add_reverse_scalar(
@@ -177,6 +211,21 @@ macro_rules! define_dct_1d {
                 }
             }
 
+            /// Subtracts a_in2[$nhalf - 1 - i] from a_in1[i], storing in a_out[i]. (Full-width)
+            #[inline(always)]
+            fn sub_reverse_full(
+                a_in1: &[[f32; SZ]],
+                a_in2: &[[f32; SZ]],
+                a_out: &mut [[f32; SZ]],
+            ) {
+                const N_HALF_CONST: usize = $nhalf;
+                for i in 0..N_HALF_CONST {
+                    for j in 0..SZ {
+                        a_out[i][j] = a_in1[i][j] - a_in2[N_HALF_CONST - 1 - i][j];
+                    }
+                }
+            }
+
             /// Subtracts a_in2[$nhalf - 1 - i] from a_in1[i], storing in a_out[i]. (Scalar)
             #[inline(always)]
             fn sub_reverse_scalar(
@@ -211,6 +260,21 @@ macro_rules! define_dct_1d {
                     let in2 =
                         D::F32Vec::load_partial(d, num_columns, &a_in2[N_HALF_CONST - 1 - i][j..]);
                     (in1 - in2).store_partial(num_columns, &mut a_out[i][j..]);
+                }
+            }
+
+            /// Applies the B transform (forward DCT step). (Full-width)
+            #[inline(always)]
+            fn b_full(coeff: &mut [[f32; SZ]]) {
+                const N_HALF_CONST: usize = $nhalf;
+                for j in 0..SZ {
+                    coeff[0][j] = coeff[0][j] * (SQRT_2 as f32) + coeff[1][j];
+                }
+                #[allow(clippy::reversed_empty_ranges)]
+                for i in 1..(N_HALF_CONST - 1) {
+                    for j in 0..SZ {
+                        coeff[i][j] += coeff[i + 1][j];
+                    }
                 }
             }
 
@@ -264,6 +328,19 @@ macro_rules! define_dct_1d {
 
         // Helper functions for CoeffBundle operating on $n rows
         impl<const SZ: usize> CoeffBundle<$n, SZ> {
+            /// Multiplies the second half of `coeff` by WcMultipliers. (Full-width)
+            #[inline(always)]
+            fn multiply_full(coeff: &mut [[f32; SZ]]) {
+                const N_CONST: usize = $n;
+                const N_HALF_CONST: usize = $nhalf;
+                for i in 0..N_HALF_CONST {
+                    let mul_val = WcMultipliers::<N_CONST>::K_MULTIPLIERS[i];
+                    for j in 0..SZ {
+                        coeff[N_HALF_CONST + i][j] *= mul_val;
+                    }
+                }
+            }
+
             /// Multiplies the second half of `coeff` by WcMultipliers. (Scalar)
             #[inline(always)]
             fn multiply_scalar(
@@ -298,6 +375,25 @@ macro_rules! define_dct_1d {
                         D::F32Vec::load_partial(d, num_columns, &coeff[N_HALF_CONST + i][j..]);
                     (coeffs * mul_val)
                         .store_partial(num_columns, &mut coeff[N_HALF_CONST + i][j..]);
+                }
+            }
+
+            /// De-interleaves `a_in` into `a_out`. (Full-width)
+            #[inline(always)]
+            fn inverse_even_odd_full(
+                a_in: &[[f32; SZ]],
+                a_out: &mut [[f32; SZ]],
+            ) {
+                const N_HALF_CONST: usize = $nhalf;
+                for i in 0..N_HALF_CONST {
+                    for j in 0..SZ {
+                        a_out[2 * i][j] = a_in[i][j];
+                    }
+                }
+                for i in 0..N_HALF_CONST {
+                    for j in 0..SZ {
+                        a_out[2 * i + 1][j] = a_in[N_HALF_CONST + i][j];
+                    }
                 }
             }
 
@@ -487,6 +583,49 @@ macro_rules! define_dct_1d {
                     num_cols: num_columns,
                     vec_len: D::F32Vec::LEN
                 );
+            }
+
+            /// Full-width DCT - processes all columns (0..COLUMNS) without chunking.
+            /// This is faster than do_dct because it avoids runtime parameters and offset arithmetic.
+            /// Used by compute_scaled_dct which never needs chunking.
+            #[inline(always)]
+            fn do_dct_full<const COLUMNS: usize>(data: &mut [[f32; COLUMNS]]) {
+                const { assert!($nhalf * 2 == $n, "N/2 * 2 must be N") }
+                assert!(
+                    data.len() == $n,
+                    "Input data must have $n rows for DCT1DImpl<$n>"
+                );
+
+                let mut tmp_buffer = [[0.0f32; COLUMNS]; $n];
+
+                // 1. AddReverse
+                CoeffBundle::<$nhalf, COLUMNS>::add_reverse_full(
+                    &data[0..$nhalf],
+                    &data[$nhalf..$n],
+                    &mut tmp_buffer[0..$nhalf],
+                );
+
+                // 2. First Recursive Call (do_dct_full) - first half
+                DCT1DImpl::<$nhalf>::do_dct_full::<COLUMNS>(&mut tmp_buffer[0..$nhalf]);
+
+                // 3. SubReverse
+                CoeffBundle::<$nhalf, COLUMNS>::sub_reverse_full(
+                    &data[0..$nhalf],
+                    &data[$nhalf..$n],
+                    &mut tmp_buffer[$nhalf..$n],
+                );
+
+                // 4. Multiply
+                CoeffBundle::<$n, COLUMNS>::multiply_full(&mut tmp_buffer);
+
+                // 5. Second Recursive Call (do_dct_full) - second half
+                DCT1DImpl::<$nhalf>::do_dct_full::<COLUMNS>(&mut tmp_buffer[$nhalf..$n]);
+
+                // 6. B
+                CoeffBundle::<$nhalf, COLUMNS>::b_full(&mut tmp_buffer[$nhalf..$n]);
+
+                // 7. InverseEvenOdd
+                CoeffBundle::<$n, COLUMNS>::inverse_even_odd_full(&tmp_buffer, data);
             }
         }
     };
@@ -757,23 +896,8 @@ pub fn compute_scaled_dct<D: SimdDescriptor, const ROWS: usize, const COLS: usiz
     DCT1DImpl<ROWS>: DCT1D,
     DCT1DImpl<COLS>: DCT1D,
 {
-    // Row transforms
-    d.call(|d| {
-        if COLS <= D::F32Vec::LEN {
-            // Fast path: process all columns at once
-            DCT1DImpl::<ROWS>::do_dct::<D, COLS>(d, &mut from, 0, COLS);
-        } else {
-            // Chunked processing for wide matrices
-            let num_full = COLS / D::F32Vec::LEN;
-            let remainder = COLS % D::F32Vec::LEN;
-            for starting_column in (0..num_full * D::F32Vec::LEN).step_by(D::F32Vec::LEN) {
-                DCT1DImpl::<ROWS>::do_dct::<D, COLS>(d, &mut from, starting_column, D::F32Vec::LEN);
-            }
-            if remainder != 0 {
-                DCT1DImpl::<ROWS>::do_dct::<D, COLS>(d, &mut from, num_full * D::F32Vec::LEN, remainder);
-            }
-        }
-    });
+    // Row transforms - use fast full-width version (no runtime parameters!)
+    DCT1DImpl::<ROWS>::do_dct_full::<COLS>(&mut from);
 
     // Transpose
     let mut transposed_dct_buffer = [[0.0; ROWS]; COLS];
@@ -782,33 +906,8 @@ pub fn compute_scaled_dct<D: SimdDescriptor, const ROWS: usize, const COLS: usiz
         transposed_dct_buffer.as_flattened_mut(),
     );
 
-    // Column transforms
-    d.call(|d| {
-        if ROWS <= D::F32Vec::LEN {
-            // Fast path: process all rows at once
-            DCT1DImpl::<COLS>::do_dct::<D, ROWS>(d, &mut transposed_dct_buffer, 0, ROWS);
-        } else {
-            // Chunked processing for tall matrices
-            let num_full = ROWS / D::F32Vec::LEN;
-            let remainder = ROWS % D::F32Vec::LEN;
-            for starting_row in (0..num_full * D::F32Vec::LEN).step_by(D::F32Vec::LEN) {
-                DCT1DImpl::<COLS>::do_dct::<D, ROWS>(
-                    d,
-                    &mut transposed_dct_buffer,
-                    starting_row,
-                    D::F32Vec::LEN,
-                );
-            }
-            if remainder != 0 {
-                DCT1DImpl::<COLS>::do_dct::<D, ROWS>(
-                    d,
-                    &mut transposed_dct_buffer,
-                    num_full * D::F32Vec::LEN,
-                    remainder,
-                );
-            }
-        }
-    });
+    // Column transforms - use fast full-width version
+    DCT1DImpl::<COLS>::do_dct_full::<ROWS>(&mut transposed_dct_buffer);
 
 
     // Normalization and output

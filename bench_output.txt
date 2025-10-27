@@ -1,0 +1,1 @@
+error: no bench target named `bench_dct` in default-run packages
