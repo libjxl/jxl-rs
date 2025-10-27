@@ -593,14 +593,22 @@ pub fn compute_scaled_dct<D: SimdDescriptor, const ROWS: usize, const COLS: usiz
     DCT1DImpl<COLS>: DCT1D,
 {
     // Row transforms
-    let num_full = COLS / D::F32Vec::LEN;
-    let remainder = COLS % D::F32Vec::LEN;
-    for starting_column in (0..num_full * D::F32Vec::LEN).step_by(D::F32Vec::LEN) {
-        DCT1DImpl::<ROWS>::do_dct::<D, COLS>(d, &mut from, starting_column, D::F32Vec::LEN);
-    }
-    if remainder != 0 {
-        DCT1DImpl::<ROWS>::do_dct::<D, COLS>(d, &mut from, num_full * D::F32Vec::LEN, remainder);
-    }
+    d.call(|d| {
+        if COLS <= D::F32Vec::LEN {
+            // Fast path: process all columns at once
+            DCT1DImpl::<ROWS>::do_dct::<D, COLS>(d, &mut from, 0, COLS);
+        } else {
+            // Chunked processing for wide matrices
+            let num_full = COLS / D::F32Vec::LEN;
+            let remainder = COLS % D::F32Vec::LEN;
+            for starting_column in (0..num_full * D::F32Vec::LEN).step_by(D::F32Vec::LEN) {
+                DCT1DImpl::<ROWS>::do_dct::<D, COLS>(d, &mut from, starting_column, D::F32Vec::LEN);
+            }
+            if remainder != 0 {
+                DCT1DImpl::<ROWS>::do_dct::<D, COLS>(d, &mut from, num_full * D::F32Vec::LEN, remainder);
+            }
+        }
+    });
 
     // Transpose
     let mut transposed_dct_buffer = [[0.0; ROWS]; COLS];
@@ -610,24 +618,33 @@ pub fn compute_scaled_dct<D: SimdDescriptor, const ROWS: usize, const COLS: usiz
     );
 
     // Column transforms
-    let num_full = ROWS / D::F32Vec::LEN;
-    let remainder = ROWS % D::F32Vec::LEN;
-    for starting_row in (0..num_full * D::F32Vec::LEN).step_by(D::F32Vec::LEN) {
-        DCT1DImpl::<COLS>::do_dct::<D, ROWS>(
-            d,
-            &mut transposed_dct_buffer,
-            starting_row,
-            D::F32Vec::LEN,
-        );
-    }
-    if remainder != 0 {
-        DCT1DImpl::<COLS>::do_dct::<D, ROWS>(
-            d,
-            &mut transposed_dct_buffer,
-            num_full * D::F32Vec::LEN,
-            remainder,
-        );
-    }
+    d.call(|d| {
+        if ROWS <= D::F32Vec::LEN {
+            // Fast path: process all rows at once
+            DCT1DImpl::<COLS>::do_dct::<D, ROWS>(d, &mut transposed_dct_buffer, 0, ROWS);
+        } else {
+            // Chunked processing for tall matrices
+            let num_full = ROWS / D::F32Vec::LEN;
+            let remainder = ROWS % D::F32Vec::LEN;
+            for starting_row in (0..num_full * D::F32Vec::LEN).step_by(D::F32Vec::LEN) {
+                DCT1DImpl::<COLS>::do_dct::<D, ROWS>(
+                    d,
+                    &mut transposed_dct_buffer,
+                    starting_row,
+                    D::F32Vec::LEN,
+                );
+            }
+            if remainder != 0 {
+                DCT1DImpl::<COLS>::do_dct::<D, ROWS>(
+                    d,
+                    &mut transposed_dct_buffer,
+                    num_full * D::F32Vec::LEN,
+                    remainder,
+                );
+            }
+        }
+    });
+
 
     // Normalization and output
     let normalization_factor = D::F32Vec::splat(d, 1.0 / (ROWS * COLS) as f32);
@@ -1205,4 +1222,42 @@ mod tests {
     }
 
     test_all_instruction_sets!(bench_compute_scaled_dct);
+
+    fn bench_compute_scaled_dct_8x8<D: SimdDescriptor>(d: D) {
+        const ROWS: usize = 8;
+        const COLS: usize = 8;
+        let input = [
+            [86.0, 239.0, 213.0, 36.0, 34.0, 142.0, 248.0, 87.0],
+            [128.0, 122.0, 131.0, 72.0, 156.0, 112.0, 248.0, 55.0],
+            [120.0, 31.0, 246.0, 177.0, 119.0, 154.0, 176.0, 248.0],
+            [21.0, 151.0, 107.0, 101.0, 202.0, 71.0, 246.0, 48.0],
+            [86.0, 239.0, 213.0, 36.0, 34.0, 142.0, 248.0, 87.0],
+            [128.0, 122.0, 131.0, 72.0, 156.0, 112.0, 248.0, 55.0],
+            [120.0, 31.0, 246.0, 177.0, 119.0, 154.0, 176.0, 248.0],
+            [21.0, 151.0, 107.0, 101.0, 202.0, 71.0, 246.0, 48.0],
+        ];
+        let mut output = [0.0; ROWS * COLS];
+
+        let iters = std::env::var("DCT2D_BENCH_ITERATIONS")
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(1);
+
+        let start = std::time::Instant::now();
+        for _ in 0..iters {
+            compute_scaled_dct::<_, ROWS, COLS>(d, input, &mut output);
+        }
+        let elapsed = start.elapsed();
+        if iters > 1 {
+            println!(
+                "compute_scaled_dct {}x{} ({:?}): {:?} per iteration",
+                ROWS,
+                COLS,
+                d,
+                elapsed / iters
+            );
+        }
+    }
+
+    test_all_instruction_sets!(bench_compute_scaled_dct_8x8);
 }
