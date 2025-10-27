@@ -51,6 +51,15 @@ impl SimdDescriptor for Avx512Descriptor {
         // TODO: implement an AVX-512-specific version
         self.as_avx().transpose::<ROWS, COLS>(input, output)
     }
+
+    fn call<R>(self, f: impl FnOnce(Self) -> R) -> R {
+        #[target_feature(enable = "avx512f")]
+        unsafe fn inner<R>(d: Avx512Descriptor, f: impl FnOnce(Avx512Descriptor) -> R) -> R {
+            f(d)
+        }
+        // SAFETY: the safety invariant on `self` guarantees avx512f.
+        unsafe { inner(self, f) }
+    }
 }
 
 // TODO(veluca): retire this macro once we have #[unsafe(target_feature)].
