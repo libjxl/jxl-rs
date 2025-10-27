@@ -173,6 +173,9 @@ impl F32SimdVec for F32VecAvx {
     fn load_partial(d: Self::Descriptor, size: usize, mem: &[f32]) -> Self {
         debug_assert!(Self::LEN >= size);
         assert!(mem.len() >= size);
+        if size == Self::LEN {
+            return Self::load(d, mem);
+        }
         // SAFETY: we just checked that `mem` has enough space. Moreover, we know avx is available
         // from the safety invariant on `d`.
         Self(
@@ -192,6 +195,9 @@ impl F32SimdVec for F32VecAvx {
     fn store_partial(&self, size: usize, mem: &mut [f32]) {
         assert!(Self::LEN >= size);
         assert!(mem.len() >= size);
+        if size == Self::LEN {
+            return self.store(mem);
+        }
         // SAFETY: we just checked that `mem` has enough space. Moreover, we know avx is available
         // from the safety invariant on `d`.
         unsafe { _mm256_maskstore_ps(mem.as_mut_ptr(), get_mask(size), self.0) }

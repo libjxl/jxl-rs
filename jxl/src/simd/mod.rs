@@ -284,4 +284,34 @@ mod test {
         }
     }
     test_all_instruction_sets!(test_neg);
+
+    fn test_load_store_partial<D: SimdDescriptor>(d: D) {
+        // Test partial load/store operations with various sizes
+        for size in 1..=D::F32Vec::LEN {
+            let input: Vec<f32> = (0..size).map(|i| i as f32).collect();
+            let mut output = vec![99.0f32; D::F32Vec::LEN]; // Fill with sentinel value
+
+            let vec = D::F32Vec::load_partial(d, size, &input);
+            vec.store_partial(size, &mut output);
+
+            // Verify that the first 'size' elements match
+            for i in 0..size {
+                assert_eq!(
+                    output[i], input[i],
+                    "Mismatch at index {} (size={}): expected {}, got {}",
+                    i, size, input[i], output[i]
+                );
+            }
+
+            // Verify that elements beyond 'size' are unchanged (still sentinel)
+            for i in size..D::F32Vec::LEN {
+                assert_eq!(
+                    output[i], 99.0,
+                    "Element at index {} was modified (size={})",
+                    i, size
+                );
+            }
+        }
+    }
+    test_all_instruction_sets!(test_load_store_partial);
 }

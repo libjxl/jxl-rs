@@ -101,6 +101,9 @@ impl F32SimdVec for F32VecAvx512 {
     fn load_partial(d: Self::Descriptor, size: usize, mem: &[f32]) -> Self {
         assert!(Self::LEN >= size);
         assert!(mem.len() >= size);
+        if size == Self::LEN {
+            return Self::load(d, mem);
+        }
         // SAFETY: we just checked that `mem` has enough space. Moreover, we know avx512f is available
         // from the safety invariant on `d`.
         Self(
@@ -121,6 +124,9 @@ impl F32SimdVec for F32VecAvx512 {
     fn store_partial(&self, size: usize, mem: &mut [f32]) {
         assert!(Self::LEN >= size);
         assert!(mem.len() >= size);
+        if size == Self::LEN {
+            return self.store(mem);
+        }
         // SAFETY: we just checked that `mem` has enough space. Moreover, we know avx512f is available
         // from the safety invariant on `self.1`.
         unsafe { _mm512_mask_storeu_ps(mem.as_mut_ptr(), (1u16 << size) - 1, self.0) }
