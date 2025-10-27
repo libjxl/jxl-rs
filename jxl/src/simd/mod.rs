@@ -270,7 +270,7 @@ mod test {
         // Test negation operation with enough elements for any SIMD size
         let len = D::F32Vec::LEN * 2; // Ensure we have at least 2 full vectors
         let input: Vec<f32> = (0..len)
-            .map(|i| if i % 2 == 0 { (i as f32) } else { -(i as f32) })
+            .map(|i| if i % 2 == 0 { i as f32 } else { -(i as f32) })
             .collect();
         let expected: Vec<f32> = (0..len)
             .map(|i| if i % 2 == 0 { -(i as f32) } else { i as f32 })
@@ -312,11 +312,11 @@ mod test {
             }
 
             // Verify that elements beyond 'size' are unchanged (still sentinel)
-            for i in size..D::F32Vec::LEN {
+            for (idx, &val) in output.iter().enumerate().skip(size).take(D::F32Vec::LEN - size) {
                 assert_eq!(
-                    output[i], 99.0,
+                    val, 99.0,
                     "Element at index {} was modified (size={})",
-                    i, size
+                    idx, size
                 );
             }
         }
