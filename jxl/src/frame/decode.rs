@@ -159,8 +159,8 @@ impl Frame {
             info!("decoding patches");
             Some(PatchesDictionary::read(
                 br,
-                self.header.width as usize,
-                self.header.height as usize,
+                self.header.size_padded().0,
+                self.header.size_padded().1,
                 self.decoder_state.extra_channel_info().len(),
                 &self.decoder_state.reference_frames,
             )?)
