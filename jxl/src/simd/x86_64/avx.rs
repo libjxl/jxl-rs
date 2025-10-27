@@ -95,7 +95,7 @@ impl SimdDescriptor for AvxDescriptor {
         assert_eq!(input.len(), ROWS * COLS);
         assert_eq!(output.len(), ROWS * COLS);
 
-        if ROWS % 8 == 0 && COLS % 8 == 0 {
+        if ROWS.is_multiple_of(8) && COLS.is_multiple_of(8) {
             for r in (0..ROWS).step_by(8) {
                 let input_row = &input[r * COLS..];
                 for c in (0..COLS).step_by(8) {
@@ -106,7 +106,7 @@ impl SimdDescriptor for AvxDescriptor {
                     }
                 }
             }
-        } else if ROWS % 4 == 0 && COLS % 4 == 0 {
+        } else if ROWS.is_multiple_of(4) && COLS.is_multiple_of(4) {
             for r in (0..ROWS).step_by(4) {
                 let input_row = &input[r * COLS..];
                 for c in (0..COLS).step_by(4) {
@@ -159,8 +159,8 @@ impl AvxDescriptor {
         // SAFETY: The asserts at the top of the function guarantee that the input slice is large
         // enough for these memory operations.
         unsafe {
-            r0 = _mm256_loadu_ps(input.as_ptr().add(0 * input_stride));
-            r1 = _mm256_loadu_ps(input.as_ptr().add(1 * input_stride));
+            r0 = _mm256_loadu_ps(input.as_ptr());
+            r1 = _mm256_loadu_ps(input.as_ptr().add(input_stride));
             r2 = _mm256_loadu_ps(input.as_ptr().add(2 * input_stride));
             r3 = _mm256_loadu_ps(input.as_ptr().add(3 * input_stride));
             r4 = _mm256_loadu_ps(input.as_ptr().add(4 * input_stride));
@@ -202,8 +202,8 @@ impl AvxDescriptor {
         // SAFETY: The asserts at the top of the function guarantee that the output slice is large
         // enough for these memory operations.
         unsafe {
-            _mm256_storeu_ps(output.as_mut_ptr().add(0 * output_stride), c0);
-            _mm256_storeu_ps(output.as_mut_ptr().add(1 * output_stride), c1);
+            _mm256_storeu_ps(output.as_mut_ptr(), c0);
+            _mm256_storeu_ps(output.as_mut_ptr().add(output_stride), c1);
             _mm256_storeu_ps(output.as_mut_ptr().add(2 * output_stride), c2);
             _mm256_storeu_ps(output.as_mut_ptr().add(3 * output_stride), c3);
             _mm256_storeu_ps(output.as_mut_ptr().add(4 * output_stride), c4);

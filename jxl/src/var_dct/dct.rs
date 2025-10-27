@@ -500,12 +500,7 @@ pub fn idct2d<D: SimdDescriptor, const ROWS: usize, const COLS: usize>(
         IDCT1DImpl::<COLS>::do_idct::<D, ROWS>(d, temp_cols, starting_row, D::F32Vec::LEN);
     }
     if remainder != 0 {
-        IDCT1DImpl::<COLS>::do_idct::<D, ROWS>(
-            d,
-            temp_cols,
-            num_full * D::F32Vec::LEN,
-            remainder,
-        );
+        IDCT1DImpl::<COLS>::do_idct::<D, ROWS>(d, temp_cols, num_full * D::F32Vec::LEN, remainder);
     }
 
     // 2. Transpose back
@@ -519,12 +514,7 @@ pub fn idct2d<D: SimdDescriptor, const ROWS: usize, const COLS: usize>(
         IDCT1DImpl::<ROWS>::do_idct::<D, COLS>(d, temp_rows, starting_column, D::F32Vec::LEN);
     }
     if remainder != 0 {
-        IDCT1DImpl::<ROWS>::do_idct::<D, COLS>(
-            d,
-            temp_rows,
-            num_full * D::F32Vec::LEN,
-            remainder,
-        );
+        IDCT1DImpl::<ROWS>::do_idct::<D, COLS>(d, temp_rows, num_full * D::F32Vec::LEN, remainder);
     }
 }
 
@@ -601,10 +591,10 @@ pub fn compute_scaled_dct<D: SimdDescriptor, const ROWS: usize, const COLS: usiz
 #[cfg(test)]
 mod tests {
     use crate::{
-        simd::{test_all_instruction_sets, ScalarDescriptor, SimdDescriptor},
+        simd::{ScalarDescriptor, SimdDescriptor, test_all_instruction_sets},
         util::test::{assert_all_almost_abs_eq, assert_almost_abs_eq},
         var_dct::{
-            dct::{compute_scaled_dct, dct2d, idct2d, DCT1DImpl, IDCT1DImpl, DCT1D, IDCT1D},
+            dct::{DCT1D, DCT1DImpl, IDCT1D, IDCT1DImpl, compute_scaled_dct, dct2d, idct2d},
             dct_slow::{dct1d, idct1d},
         },
     };
@@ -1050,14 +1040,11 @@ mod tests {
         const ROWS: usize = 8;
         const COLS: usize = 8;
         let mut data = [
-            86.0, 239.0, 213.0, 36.0, 34.0, 142.0, 248.0, 87.0,
-            128.0, 122.0, 131.0, 72.0, 156.0, 112.0, 248.0, 55.0,
-            120.0, 31.0, 246.0, 177.0, 119.0, 154.0, 176.0, 248.0,
-            21.0, 151.0, 107.0, 101.0, 202.0, 71.0, 246.0, 48.0,
-            86.0, 239.0, 213.0, 36.0, 34.0, 142.0, 248.0, 87.0,
-            128.0, 122.0, 131.0, 72.0, 156.0, 112.0, 248.0, 55.0,
-            120.0, 31.0, 246.0, 177.0, 119.0, 154.0, 176.0, 248.0,
-            21.0, 151.0, 107.0, 101.0, 202.0, 71.0, 246.0, 48.0,
+            86.0, 239.0, 213.0, 36.0, 34.0, 142.0, 248.0, 87.0, 128.0, 122.0, 131.0, 72.0, 156.0,
+            112.0, 248.0, 55.0, 120.0, 31.0, 246.0, 177.0, 119.0, 154.0, 176.0, 248.0, 21.0, 151.0,
+            107.0, 101.0, 202.0, 71.0, 246.0, 48.0, 86.0, 239.0, 213.0, 36.0, 34.0, 142.0, 248.0,
+            87.0, 128.0, 122.0, 131.0, 72.0, 156.0, 112.0, 248.0, 55.0, 120.0, 31.0, 246.0, 177.0,
+            119.0, 154.0, 176.0, 248.0, 21.0, 151.0, 107.0, 101.0, 202.0, 71.0, 246.0, 48.0,
         ];
         let mut scratch = [0.0; ROWS * COLS];
 
