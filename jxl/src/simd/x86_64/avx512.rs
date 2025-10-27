@@ -8,7 +8,7 @@ use std::{
         __m512, _mm512_add_ps, _mm512_andnot_si512, _mm512_castps_si512, _mm512_castsi512_ps,
         _mm512_div_ps, _mm512_fmadd_ps, _mm512_loadu_ps, _mm512_mask_loadu_ps,
         _mm512_mask_storeu_ps, _mm512_max_ps, _mm512_mul_ps, _mm512_set1_epi32, _mm512_set1_ps,
-        _mm512_setzero_ps, _mm512_storeu_ps, _mm512_sub_ps,
+        _mm512_setzero_ps, _mm512_storeu_ps, _mm512_sub_ps, _mm512_xor_si512,
     },
     ops::{Add, AddAssign, Div, DivAssign, Mul, MulAssign, Sub, SubAssign},
 };
@@ -139,6 +139,15 @@ impl F32SimdVec for F32VecAvx512 {
     fn_avx!(this: F32VecAvx512, fn abs() -> F32VecAvx512 {
         F32VecAvx512(
             _mm512_castsi512_ps(_mm512_andnot_si512(
+                _mm512_set1_epi32(0b10000000000000000000000000000000u32 as i32),
+                _mm512_castps_si512(this.0),
+            )),
+            this.1)
+    });
+
+    fn_avx!(this: F32VecAvx512, fn neg() -> F32VecAvx512 {
+        F32VecAvx512(
+            _mm512_castsi512_ps(_mm512_xor_si512(
                 _mm512_set1_epi32(0b10000000000000000000000000000000u32 as i32),
                 _mm512_castps_si512(this.0),
             )),

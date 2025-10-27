@@ -85,6 +85,8 @@ pub trait F32SimdVec:
 
     fn abs(self) -> Self;
 
+    fn neg(self) -> Self;
+
     fn max(self, other: Self) -> Self;
 }
 
@@ -263,4 +265,23 @@ mod test {
         }
     }
     test_all_instruction_sets!(test_call);
+
+    fn test_neg<D: SimdDescriptor>(d: D) {
+        // Test negation operation with enough elements for any SIMD size
+        let len = D::F32Vec::LEN * 2; // Ensure we have at least 2 full vectors
+        let input: Vec<f32> = (0..len).map(|i| if i % 2 == 0 { (i as f32) } else { -(i as f32) }).collect();
+        let expected: Vec<f32> = (0..len).map(|i| if i % 2 == 0 { -(i as f32) } else { i as f32 }).collect();
+        let mut output = vec![0.0f32; input.len()];
+
+        for idx in (0..input.len()).step_by(D::F32Vec::LEN) {
+            let vec = D::F32Vec::load(d, &input[idx..]);
+            let negated = vec.neg();
+            negated.store(&mut output[idx..]);
+        }
+
+        for (i, (&out, &exp)) in output.iter().zip(expected.iter()).enumerate() {
+            assert_eq!(out, exp, "Mismatch at index {}: expected {}, got {}", i, exp, out);
+        }
+    }
+    test_all_instruction_sets!(test_neg);
 }

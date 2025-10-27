@@ -82,6 +82,11 @@ impl F32SimdVec for F32VecScalar {
     }
 
     #[inline(always)]
+    fn neg(self) -> Self {
+        Self(-self.0)
+    }
+
+    #[inline(always)]
     fn max(self, other: Self) -> Self {
         Self(self.0.max(other.0))
     }
