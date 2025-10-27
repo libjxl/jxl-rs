@@ -314,4 +314,30 @@ mod test {
         }
     }
     test_all_instruction_sets!(test_load_store_partial);
+
+    fn test_transpose_8x8<D: SimdDescriptor>(d: D) {
+        // Test 8x8 matrix transpose
+        // Input: sequential values 0..64
+        let mut input = vec![0.0f32; 64];
+        for (i, val) in input.iter_mut().enumerate() {
+            *val = i as f32;
+        }
+
+        let mut output = vec![0.0f32; 64];
+        d.transpose::<8, 8>(&input, &mut output);
+
+        // Verify transpose: output[i*8+j] should equal input[j*8+i]
+        for i in 0..8 {
+            for j in 0..8 {
+                let expected = input[j * 8 + i];
+                let actual = output[i * 8 + j];
+                assert_eq!(
+                    actual, expected,
+                    "Mismatch at position ({}, {}): expected {}, got {}",
+                    i, j, expected, actual
+                );
+            }
+        }
+    }
+    test_all_instruction_sets!(test_transpose_8x8);
 }
