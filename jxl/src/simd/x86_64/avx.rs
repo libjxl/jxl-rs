@@ -11,8 +11,7 @@ use std::{
         _mm256_div_ps, _mm256_fmadd_ps, _mm256_fnmadd_ps, _mm256_loadu_ps, _mm256_loadu_si256,
         _mm256_maskload_ps, _mm256_maskstore_ps, _mm256_max_ps, _mm256_mul_ps,
         _mm256_permute2f128_ps, _mm256_set1_epi32, _mm256_set1_ps, _mm256_shuffle_ps,
-        _mm256_storeu_ps, _mm256_sub_ps, _mm256_unpackhi_ps, _mm256_unpacklo_ps,
-        _mm256_xor_si256,
+        _mm256_storeu_ps, _mm256_sub_ps, _mm256_unpackhi_ps, _mm256_unpacklo_ps, _mm256_xor_si256,
     },
     ops::{Add, AddAssign, Div, DivAssign, Mul, MulAssign, Sub, SubAssign},
 };

@@ -89,6 +89,7 @@ pub trait F32SimdVec:
 
     fn abs(self) -> Self;
 
+    #[allow(dead_code)]
     fn neg(self) -> Self;
 
     fn max(self, other: Self) -> Self;

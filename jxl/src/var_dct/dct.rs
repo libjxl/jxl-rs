@@ -260,7 +260,9 @@ macro_rules! define_dct_1d {
 
                 // 2. First Recursive Call (do_dct)
                 //    first half
-                maybe_call_dct!(d, $nhalf,
+                maybe_call_dct!(
+                    d,
+                    $nhalf,
                     DCT1DImpl::<$nhalf>::do_dct::<D, COLUMNS>(
                         d,
                         &mut tmp_buffer[0..$nhalf],
@@ -292,7 +294,9 @@ macro_rules! define_dct_1d {
 
                 // 5. Second Recursive Call (do_dct)
                 //    second half.
-                maybe_call_dct!(d, $nhalf,
+                maybe_call_dct!(
+                    d,
+                    $nhalf,
                     DCT1DImpl::<$nhalf>::do_dct::<D, COLUMNS>(
                         d,
                         &mut tmp_buffer[$nhalf..$n],
@@ -416,7 +420,9 @@ macro_rules! define_idct_1d {
                 );
                 // 2. First Recursive Call (IDCT1DImpl::do_idct)
                 // first half
-                maybe_call_idct!(d, $nhalf,
+                maybe_call_idct!(
+                    d,
+                    $nhalf,
                     IDCT1DImpl::<$nhalf>::do_idct::<D, COLUMNS>(
                         d,
                         &mut tmp[0..$nhalf],
@@ -434,7 +440,9 @@ macro_rules! define_idct_1d {
                 );
                 // 4. Second Recursive Call (IDCT1DImpl::do_idct)
                 // second half
-                maybe_call_idct!(d, $nhalf,
+                maybe_call_idct!(
+                    d,
+                    $nhalf,
                     IDCT1DImpl::<$nhalf>::do_idct::<D, COLUMNS>(
                         d,
                         &mut tmp[$nhalf..$n],
@@ -544,7 +552,12 @@ pub fn idct2d<D: SimdDescriptor, const ROWS: usize, const COLS: usize>(
             IDCT1DImpl::<COLS>::do_idct::<D, ROWS>(d, temp_cols, starting_row, D::F32Vec::LEN);
         }
         if remainder != 0 {
-            IDCT1DImpl::<COLS>::do_idct::<D, ROWS>(d, temp_cols, num_full * D::F32Vec::LEN, remainder);
+            IDCT1DImpl::<COLS>::do_idct::<D, ROWS>(
+                d,
+                temp_cols,
+                num_full * D::F32Vec::LEN,
+                remainder,
+            );
         }
     });
 
@@ -560,7 +573,12 @@ pub fn idct2d<D: SimdDescriptor, const ROWS: usize, const COLS: usize>(
             IDCT1DImpl::<ROWS>::do_idct::<D, COLS>(d, temp_rows, starting_column, D::F32Vec::LEN);
         }
         if remainder != 0 {
-            IDCT1DImpl::<ROWS>::do_idct::<D, COLS>(d, temp_rows, num_full * D::F32Vec::LEN, remainder);
+            IDCT1DImpl::<ROWS>::do_idct::<D, COLS>(
+                d,
+                temp_rows,
+                num_full * D::F32Vec::LEN,
+                remainder,
+            );
         }
     });
 }
@@ -582,7 +600,12 @@ pub fn compute_scaled_dct<D: SimdDescriptor, const ROWS: usize, const COLS: usiz
             DCT1DImpl::<ROWS>::do_dct::<D, COLS>(d, &mut from, starting_column, D::F32Vec::LEN);
         }
         if remainder != 0 {
-            DCT1DImpl::<ROWS>::do_dct::<D, COLS>(d, &mut from, num_full * D::F32Vec::LEN, remainder);
+            DCT1DImpl::<ROWS>::do_dct::<D, COLS>(
+                d,
+                &mut from,
+                num_full * D::F32Vec::LEN,
+                remainder,
+            );
         }
     });
 
@@ -1128,14 +1151,11 @@ mod tests {
         const ROWS: usize = 8;
         const COLS: usize = 8;
         let mut data = [
-            86.0, 239.0, 213.0, 36.0, 34.0, 142.0, 248.0, 87.0,
-            128.0, 122.0, 131.0, 72.0, 156.0, 112.0, 248.0, 55.0,
-            120.0, 31.0, 246.0, 177.0, 119.0, 154.0, 176.0, 248.0,
-            21.0, 151.0, 107.0, 101.0, 202.0, 71.0, 246.0, 48.0,
-            86.0, 239.0, 213.0, 36.0, 34.0, 142.0, 248.0, 87.0,
-            128.0, 122.0, 131.0, 72.0, 156.0, 112.0, 248.0, 55.0,
-            120.0, 31.0, 246.0, 177.0, 119.0, 154.0, 176.0, 248.0,
-            21.0, 151.0, 107.0, 101.0, 202.0, 71.0, 246.0, 48.0,
+            86.0, 239.0, 213.0, 36.0, 34.0, 142.0, 248.0, 87.0, 128.0, 122.0, 131.0, 72.0, 156.0,
+            112.0, 248.0, 55.0, 120.0, 31.0, 246.0, 177.0, 119.0, 154.0, 176.0, 248.0, 21.0, 151.0,
+            107.0, 101.0, 202.0, 71.0, 246.0, 48.0, 86.0, 239.0, 213.0, 36.0, 34.0, 142.0, 248.0,
+            87.0, 128.0, 122.0, 131.0, 72.0, 156.0, 112.0, 248.0, 55.0, 120.0, 31.0, 246.0, 177.0,
+            119.0, 154.0, 176.0, 248.0, 21.0, 151.0, 107.0, 101.0, 202.0, 71.0, 246.0, 48.0,
         ];
         let mut scratch = [0.0; ROWS * COLS];
 
