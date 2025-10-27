@@ -592,53 +592,44 @@ pub fn compute_scaled_dct<D: SimdDescriptor, const ROWS: usize, const COLS: usiz
     DCT1DImpl<ROWS>: DCT1D,
     DCT1DImpl<COLS>: DCT1D,
 {
-    // 1. Row transforms
-    d.call(|d| {
-        let num_full = COLS / D::F32Vec::LEN;
-        let remainder = COLS % D::F32Vec::LEN;
-        for starting_column in (0..num_full * D::F32Vec::LEN).step_by(D::F32Vec::LEN) {
-            DCT1DImpl::<ROWS>::do_dct::<D, COLS>(d, &mut from, starting_column, D::F32Vec::LEN);
-        }
-        if remainder != 0 {
-            DCT1DImpl::<ROWS>::do_dct::<D, COLS>(
-                d,
-                &mut from,
-                num_full * D::F32Vec::LEN,
-                remainder,
-            );
-        }
-    });
+    // Row transforms
+    let num_full = COLS / D::F32Vec::LEN;
+    let remainder = COLS % D::F32Vec::LEN;
+    for starting_column in (0..num_full * D::F32Vec::LEN).step_by(D::F32Vec::LEN) {
+        DCT1DImpl::<ROWS>::do_dct::<D, COLS>(d, &mut from, starting_column, D::F32Vec::LEN);
+    }
+    if remainder != 0 {
+        DCT1DImpl::<ROWS>::do_dct::<D, COLS>(d, &mut from, num_full * D::F32Vec::LEN, remainder);
+    }
 
-    // 2. Transpose
+    // Transpose
     let mut transposed_dct_buffer = [[0.0; ROWS]; COLS];
     d.transpose::<ROWS, COLS>(
         from.as_flattened(),
         transposed_dct_buffer.as_flattened_mut(),
     );
 
-    // 3. Column transforms
-    d.call(|d| {
-        let num_full = ROWS / D::F32Vec::LEN;
-        let remainder = ROWS % D::F32Vec::LEN;
-        for starting_row in (0..num_full * D::F32Vec::LEN).step_by(D::F32Vec::LEN) {
-            DCT1DImpl::<COLS>::do_dct::<D, ROWS>(
-                d,
-                &mut transposed_dct_buffer,
-                starting_row,
-                D::F32Vec::LEN,
-            );
-        }
-        if remainder != 0 {
-            DCT1DImpl::<COLS>::do_dct::<D, ROWS>(
-                d,
-                &mut transposed_dct_buffer,
-                num_full * D::F32Vec::LEN,
-                remainder,
-            );
-        }
-    });
+    // Column transforms
+    let num_full = ROWS / D::F32Vec::LEN;
+    let remainder = ROWS % D::F32Vec::LEN;
+    for starting_row in (0..num_full * D::F32Vec::LEN).step_by(D::F32Vec::LEN) {
+        DCT1DImpl::<COLS>::do_dct::<D, ROWS>(
+            d,
+            &mut transposed_dct_buffer,
+            starting_row,
+            D::F32Vec::LEN,
+        );
+    }
+    if remainder != 0 {
+        DCT1DImpl::<COLS>::do_dct::<D, ROWS>(
+            d,
+            &mut transposed_dct_buffer,
+            num_full * D::F32Vec::LEN,
+            remainder,
+        );
+    }
 
-    // 4. Normalization and output
+    // Normalization and output
     let normalization_factor = D::F32Vec::splat(d, 1.0 / (ROWS * COLS) as f32);
     if ROWS >= COLS {
         if ROWS * COLS < D::F32Vec::LEN {
@@ -648,7 +639,8 @@ pub fn compute_scaled_dct<D: SimdDescriptor, const ROWS: usize, const COLS: usiz
         } else {
             assert_eq!(ROWS * COLS % D::F32Vec::LEN, 0);
             for i in (0..ROWS * COLS).step_by(D::F32Vec::LEN) {
-                let coeffs = D::F32Vec::load(d, transposed_dct_buffer.as_flattened()[i..].as_ref());
+                let coeffs =
+                    D::F32Vec::load(d, transposed_dct_buffer.as_flattened()[i..].as_ref());
                 (coeffs * normalization_factor).store(to[i..].as_mut());
             }
         }
