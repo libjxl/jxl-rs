@@ -312,7 +312,12 @@ mod test {
             }
 
             // Verify that elements beyond 'size' are unchanged (still sentinel)
-            for (idx, &val) in output.iter().enumerate().skip(size).take(D::F32Vec::LEN - size) {
+            for (idx, &val) in output
+                .iter()
+                .enumerate()
+                .skip(size)
+                .take(D::F32Vec::LEN - size)
+            {
                 assert_eq!(
                     val, 99.0,
                     "Element at index {} was modified (size={})",
