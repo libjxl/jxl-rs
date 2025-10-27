@@ -103,13 +103,19 @@ impl RowBuffer {
         xoffset: usize,
     ) -> Vec<&mut [T]> {
         assert!(y.clone().count() <= self.num_rows);
-        if y.clone().count() != 1 {
-            unimplemented!()
-        }
-        let row_idx = y.start % self.num_rows;
+        let first_row_idx = y.start % self.num_rows;
         let stride = self.row_stride;
-        let start = row_idx * stride;
-        vec![&mut self.get_buf_mut()[start + xoffset..start + stride - xoffset]]
+        let start = first_row_idx * stride;
+        let num_pre = (y.clone().count() + first_row_idx).saturating_sub(self.num_rows);
+        let num_post = y.clone().count() - num_pre;
+        let buf = self.get_buf_mut::<T>();
+        let (pre, post) = buf.split_at_mut(start);
+        let pre_rows = pre.chunks_exact_mut(stride).take(num_pre);
+        let post_rows = post.chunks_exact_mut(stride).take(num_post);
+        post_rows
+            .chain(pre_rows)
+            .map(|x| &mut x[xoffset..])
+            .collect()
     }
 
     pub const fn x0_offset<T: ImageDataType>() -> usize {

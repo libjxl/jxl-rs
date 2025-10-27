@@ -354,7 +354,7 @@ pub(crate) mod tests {
                         assert_almost_eq_coords(
                             b.as_rect().row(y)[x],
                             sb.as_rect().row(y)[x],
-                            1e-4,
+                            1e-5,
                             1e-4,
                             (x, y),
                             c,
