@@ -81,6 +81,7 @@ impl<const N: usize, const SHIFT: u8> RenderPipelineInOutStage for Upsample<N, S
                 for dj in 0..N {
                     // Iterate over the input rows and columns
                     let mut output_val = 0.0;
+                    #[allow(clippy::needless_range_loop)]
                     for i in 0..5 {
                         for j in 0..5 {
                             let input_value = input[i][j + x];

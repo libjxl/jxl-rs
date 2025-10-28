@@ -16,6 +16,7 @@ use super::row_buffers::RowBuffer;
 // Placeholder slow implementation.
 impl SaveStage {
     // Takes as input only those channels that are *actually* saved.
+    #[allow(clippy::too_many_arguments)]
     pub(super) fn save_lowmem(
         &self,
         data: &[&RowBuffer],

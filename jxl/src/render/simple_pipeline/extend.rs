@@ -64,10 +64,10 @@ impl ExtendToImageDimensionsStage {
             for x in (0..output_size.0).step_by(chunk_size) {
                 let xsize = output_size.0.min(x + chunk_size) - x;
                 debug!("position above/below: ({x},{y}) xsize: {xsize}");
-                for c in 0..numc {
+                for (c, buf) in output_buffers.iter_mut().enumerate() {
                     self.process_row_chunk((x, y), xsize, c, &mut buffer);
-                    for ix in 0..xsize {
-                        output_buffers[c].as_rect_mut().row(y)[x + ix] = buffer[ix].to_f64();
+                    for (ix, px) in buffer.iter().enumerate().take(xsize) {
+                        buf.as_rect_mut().row(y)[x + ix] = px.to_f64();
                     }
                 }
             }
@@ -84,10 +84,10 @@ impl ExtendToImageDimensionsStage {
                 )
             {
                 debug!("position on the side: ({x},{y}) xsize: {xsize}");
-                for c in 0..numc {
+                for (c, buf) in output_buffers.iter_mut().enumerate() {
                     self.process_row_chunk((x, y), xsize, c, &mut buffer);
-                    for ix in 0..xsize {
-                        output_buffers[c].as_rect_mut().row(y)[x + ix] = buffer[ix].to_f64();
+                    for (ix, px) in buffer.iter().enumerate().take(xsize) {
+                        buf.as_rect_mut().row(y)[x + ix] = px.to_f64();
                     }
                 }
             }

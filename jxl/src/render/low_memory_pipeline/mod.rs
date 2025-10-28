@@ -91,7 +91,7 @@ fn extract_local_buffers<'a>(
         }) else {
             continue;
         };
-        let Some(Rect { origin, size }) = get_rect(&bi) else {
+        let Some(Rect { origin, size }) = get_rect(bi) else {
             continue;
         };
         let frame_size = (
@@ -237,13 +237,13 @@ impl RenderPipeline for LowMemoryRenderPipeline {
             stage_input_buffer_index.push(previous_inout.clone());
             next_border_and_cur_downsample.push(vec![]);
             if let Stage::InOut(p) = stage {
-                for chan in 0..nc {
+                for (chan, (ps, pc)) in previous_inout.iter_mut().enumerate() {
                     if !p.uses_channel(chan) {
                         continue;
                     }
-                    let (ps, pc) = previous_inout[chan];
-                    next_border_and_cur_downsample[ps][pc].0 = p.border().1;
-                    previous_inout[chan] = (i + 1, next_border_and_cur_downsample[i + 1].len());
+                    next_border_and_cur_downsample[*ps][*pc].0 = p.border().1;
+                    *ps = i + 1;
+                    *pc = next_border_and_cur_downsample[i + 1].len();
                     next_border_and_cur_downsample[i + 1]
                         .push((0, shared.channel_info[i + 1][chan].downsample));
                 }
@@ -306,15 +306,15 @@ impl RenderPipeline for LowMemoryRenderPipeline {
         let mut border_pixels_per_stage = vec![];
         for s in shared.stages.iter().rev() {
             let mut stage_max = (0, 0);
-            for c in 0..nc {
+            for (c, bp) in border_pixels.iter_mut().enumerate() {
                 if !s.uses_channel(c) {
                     continue;
                 }
-                stage_max.0 = stage_max.0.max(border_pixels[c].0);
-                stage_max.1 = stage_max.1.max(border_pixels[c].1);
+                stage_max.0 = stage_max.0.max(bp.0);
+                stage_max.1 = stage_max.1.max(bp.1);
 
-                border_pixels[c].0 = border_pixels[c].0.shrc(s.shift().0) + s.border().0 as usize;
-                border_pixels[c].1 = border_pixels[c].1.shrc(s.shift().1) + s.border().1 as usize;
+                bp.0 = bp.0.shrc(s.shift().0) + s.border().0 as usize;
+                bp.1 = bp.1.shrc(s.shift().1) + s.border().1 as usize;
             }
             border_pixels_per_stage.push(stage_max);
         }
