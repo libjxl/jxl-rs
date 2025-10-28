@@ -1297,6 +1297,222 @@ mod tests {
 
     test_all_instruction_sets!(bench_compute_scaled_dct);
 
+    fn bench_dct2d_16x16<D: SimdDescriptor>(d: D) {
+        const ROWS: usize = 16;
+        const COLS: usize = 16;
+        let mut data = [1.0; ROWS * COLS];
+        let mut scratch = [0.0; ROWS * COLS];
+
+        let iters = std::env::var("DCT2D_BENCH_ITERATIONS")
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(1);
+
+        let start = std::time::Instant::now();
+        for _ in 0..iters {
+            dct2d::<_, ROWS, COLS>(d, &mut data, &mut scratch);
+        }
+        let elapsed = start.elapsed();
+        if iters > 1 {
+            println!("dct2d {}x{} ({:?}): {:?} per iteration", ROWS, COLS, d, elapsed / iters);
+        }
+    }
+
+    test_all_instruction_sets!(bench_dct2d_16x16);
+
+    fn bench_dct2d_32x32<D: SimdDescriptor>(d: D) {
+        const ROWS: usize = 32;
+        const COLS: usize = 32;
+        let mut data = [1.0; ROWS * COLS];
+        let mut scratch = [0.0; ROWS * COLS];
+
+        let iters = std::env::var("DCT2D_BENCH_ITERATIONS")
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(1);
+
+        let start = std::time::Instant::now();
+        for _ in 0..iters {
+            dct2d::<_, ROWS, COLS>(d, &mut data, &mut scratch);
+        }
+        let elapsed = start.elapsed();
+        if iters > 1 {
+            println!("dct2d {}x{} ({:?}): {:?} per iteration", ROWS, COLS, d, elapsed / iters);
+        }
+    }
+
+    test_all_instruction_sets!(bench_dct2d_32x32);
+
+    fn bench_dct2d_64x64<D: SimdDescriptor>(d: D) {
+        const ROWS: usize = 64;
+        const COLS: usize = 64;
+        let mut data = [1.0; ROWS * COLS];
+        let mut scratch = [0.0; ROWS * COLS];
+
+        let iters = std::env::var("DCT2D_BENCH_ITERATIONS")
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(1);
+
+        let start = std::time::Instant::now();
+        for _ in 0..iters {
+            dct2d::<_, ROWS, COLS>(d, &mut data, &mut scratch);
+        }
+        let elapsed = start.elapsed();
+        if iters > 1 {
+            println!("dct2d {}x{} ({:?}): {:?} per iteration", ROWS, COLS, d, elapsed / iters);
+        }
+    }
+
+    test_all_instruction_sets!(bench_dct2d_64x64);
+
+    fn bench_idct2d_16x16<D: SimdDescriptor>(d: D) {
+        const ROWS: usize = 16;
+        const COLS: usize = 16;
+        let mut data = [1.0; ROWS * COLS];
+        let mut scratch = [0.0; ROWS * COLS];
+
+        let iters = std::env::var("DCT2D_BENCH_ITERATIONS")
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(1);
+
+        let start = std::time::Instant::now();
+        for _ in 0..iters {
+            idct2d::<_, ROWS, COLS>(d, &mut data, &mut scratch);
+        }
+        let elapsed = start.elapsed();
+        if iters > 1 {
+            println!("idct2d {}x{} ({:?}): {:?} per iteration", ROWS, COLS, d, elapsed / iters);
+        }
+    }
+
+    test_all_instruction_sets!(bench_idct2d_16x16);
+
+    fn bench_idct2d_32x32<D: SimdDescriptor>(d: D) {
+        const ROWS: usize = 32;
+        const COLS: usize = 32;
+        let mut data = [1.0; ROWS * COLS];
+        let mut scratch = [0.0; ROWS * COLS];
+
+        let iters = std::env::var("DCT2D_BENCH_ITERATIONS")
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(1);
+
+        let start = std::time::Instant::now();
+        for _ in 0..iters {
+            idct2d::<_, ROWS, COLS>(d, &mut data, &mut scratch);
+        }
+        let elapsed = start.elapsed();
+        if iters > 1 {
+            println!("idct2d {}x{} ({:?}): {:?} per iteration", ROWS, COLS, d, elapsed / iters);
+        }
+    }
+
+    test_all_instruction_sets!(bench_idct2d_32x32);
+
+    fn bench_idct2d_64x64<D: SimdDescriptor>(d: D) {
+        const ROWS: usize = 64;
+        const COLS: usize = 64;
+        let mut data = [1.0; ROWS * COLS];
+        let mut scratch = [0.0; ROWS * COLS];
+
+        let iters = std::env::var("DCT2D_BENCH_ITERATIONS")
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(1);
+
+        let start = std::time::Instant::now();
+        for _ in 0..iters {
+            idct2d::<_, ROWS, COLS>(d, &mut data, &mut scratch);
+        }
+        let elapsed = start.elapsed();
+        if iters > 1 {
+            println!("idct2d {}x{} ({:?}): {:?} per iteration", ROWS, COLS, d, elapsed / iters);
+        }
+    }
+
+    test_all_instruction_sets!(bench_idct2d_64x64);
+
+    fn bench_compute_scaled_dct_16x16<D: SimdDescriptor>(d: D) {
+        const ROWS: usize = 16;
+        const COLS: usize = 16;
+        let input = [[1.0; COLS]; ROWS];
+        let mut output = [0.0; ROWS * COLS];
+
+        let iters = std::env::var("DCT2D_BENCH_ITERATIONS")
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(1);
+
+        let start = std::time::Instant::now();
+        for _ in 0..iters {
+            compute_scaled_dct::<_, ROWS, COLS>(d, input, &mut output);
+        }
+        let elapsed = start.elapsed();
+        if iters > 1 {
+            println!(
+                "compute_scaled_dct {}x{} ({:?}): {:?} per iteration",
+                ROWS, COLS, d, elapsed / iters
+            );
+        }
+    }
+
+    test_all_instruction_sets!(bench_compute_scaled_dct_16x16);
+
+    fn bench_compute_scaled_dct_32x32<D: SimdDescriptor>(d: D) {
+        const ROWS: usize = 32;
+        const COLS: usize = 32;
+        let input = [[1.0; COLS]; ROWS];
+        let mut output = [0.0; ROWS * COLS];
+
+        let iters = std::env::var("DCT2D_BENCH_ITERATIONS")
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(1);
+
+        let start = std::time::Instant::now();
+        for _ in 0..iters {
+            compute_scaled_dct::<_, ROWS, COLS>(d, input, &mut output);
+        }
+        let elapsed = start.elapsed();
+        if iters > 1 {
+            println!(
+                "compute_scaled_dct {}x{} ({:?}): {:?} per iteration",
+                ROWS, COLS, d, elapsed / iters
+            );
+        }
+    }
+
+    test_all_instruction_sets!(bench_compute_scaled_dct_32x32);
+
+    fn bench_compute_scaled_dct_64x64<D: SimdDescriptor>(d: D) {
+        const ROWS: usize = 64;
+        const COLS: usize = 64;
+        let input = [[1.0; COLS]; ROWS];
+        let mut output = [0.0; ROWS * COLS];
+
+        let iters = std::env::var("DCT2D_BENCH_ITERATIONS")
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(1);
+
+        let start = std::time::Instant::now();
+        for _ in 0..iters {
+            compute_scaled_dct::<_, ROWS, COLS>(d, input, &mut output);
+        }
+        let elapsed = start.elapsed();
+        if iters > 1 {
+            println!(
+                "compute_scaled_dct {}x{} ({:?}): {:?} per iteration",
+                ROWS, COLS, d, elapsed / iters
+            );
+        }
+    }
+
+    test_all_instruction_sets!(bench_compute_scaled_dct_64x64);
+
     fn bench_compute_scaled_dct_8x8<D: SimdDescriptor>(d: D) {
         const ROWS: usize = 8;
         const COLS: usize = 8;
