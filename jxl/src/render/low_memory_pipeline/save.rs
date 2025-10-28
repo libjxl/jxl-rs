@@ -84,15 +84,17 @@ impl SaveStage {
             let nc = self.channels.len();
             let (x0, y0) = self.orientation.display_pixel((0, relative_y), save_size);
             let (x1, y1) = self.orientation.display_pixel((1, relative_y), save_size);
-            let dx = x1 as isize - x0 as isize;
-            let dy = y1 as isize - y0 as isize;
+            let x0 = x0 as isize;
+            let y0 = y0 as isize;
+            let dx = x1 as isize - x0;
+            let dy = y1 as isize - y0;
             match self.data_format {
                 JxlDataFormat::U8 { .. } => {
                     let src_row = d.get_row::<u8>(frame_y);
                     for ix in save_start.0..save_end.0 {
                         let px = src_row[RowBuffer::x0_offset::<u8>() + ix];
-                        let y = y0 + (dy * (ix - save_start.0) as isize) as usize;
-                        let x = x0 + (dx * (ix - save_start.0) as isize) as usize;
+                        let y = (y0 + (dy * (ix - save_start.0) as isize)) as usize;
+                        let x = (x0 + (dx * (ix - save_start.0) as isize)) as usize;
                         write_pixel!(px, Endianness::LittleEndian, y, x * nc + c);
                     }
                 }
@@ -100,8 +102,8 @@ impl SaveStage {
                     let src_row = d.get_row::<u16>(frame_y);
                     for ix in save_start.0..save_end.0 {
                         let px = src_row[RowBuffer::x0_offset::<u16>() + ix];
-                        let y = y0 + (dy * (ix - save_start.0) as isize) as usize;
-                        let x = x0 + (dx * (ix - save_start.0) as isize) as usize;
+                        let y = (y0 + (dy * (ix - save_start.0) as isize)) as usize;
+                        let x = (x0 + (dx * (ix - save_start.0) as isize)) as usize;
                         write_pixel!(px, endianness, y, (x * nc + c) * 2);
                     }
                 }
@@ -109,8 +111,8 @@ impl SaveStage {
                     let src_row = d.get_row::<f16>(frame_y);
                     for ix in save_start.0..save_end.0 {
                         let px = src_row[RowBuffer::x0_offset::<f16>() + ix];
-                        let y = y0 + (dy * (ix - save_start.0) as isize) as usize;
-                        let x = x0 + (dx * (ix - save_start.0) as isize) as usize;
+                        let y = (y0 + (dy * (ix - save_start.0) as isize)) as usize;
+                        let x = (x0 + (dx * (ix - save_start.0) as isize)) as usize;
                         write_pixel!(px, endianness, y, (x * nc + c) * 2);
                     }
                 }
@@ -118,8 +120,8 @@ impl SaveStage {
                     let src_row = d.get_row::<f32>(frame_y);
                     for ix in save_start.0..save_end.0 {
                         let px = src_row[RowBuffer::x0_offset::<f32>() + ix];
-                        let y = y0 + (dy * (ix - save_start.0) as isize) as usize;
-                        let x = x0 + (dx * (ix - save_start.0) as isize) as usize;
+                        let y = (y0 + (dy * (ix - save_start.0) as isize)) as usize;
+                        let x = (x0 + (dx * (ix - save_start.0) as isize)) as usize;
                         write_pixel!(px, endianness, y, (x * nc + c) * 4);
                     }
                 }

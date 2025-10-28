@@ -77,8 +77,7 @@ impl RowBuffer {
     }
 
     pub fn get_buf<T: ImageDataType>(&self) -> &[T] {
-        self
-            .buffer
+        self.buffer
             .downcast_ref::<Vec<T>>()
             .expect("called get_buf with the wrong buffer type")
     }

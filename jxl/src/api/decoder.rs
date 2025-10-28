@@ -184,7 +184,7 @@ pub(crate) mod tests {
     use crate::api::JxlDecoderOptions;
     use crate::error::Error;
     use crate::image::Image;
-    use crate::util::test::assert_almost_eq_coords;
+    use crate::util::test::assert_almost_abs_eq_coords;
     use jxl_macros::for_each_test_file;
     use std::path::Path;
 
@@ -370,11 +370,10 @@ pub(crate) mod tests {
                 }
                 for y in 0..sz.1 {
                     for x in 0..sz.0 {
-                        assert_almost_eq_coords(
+                        assert_almost_abs_eq_coords(
                             b.as_rect().row(y)[x],
                             sb.as_rect().row(y)[x],
-                            3e-5,
-                            1e-4,
+                            1e-5,
                             (x, y),
                             c,
                         );
