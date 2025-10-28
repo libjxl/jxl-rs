@@ -154,46 +154,82 @@ macro_rules! scalar_or_simd {
     };
 }
 
+/// Macro to define both _full and parameterized versions of a helper function.
+/// The _full version uses compile-time constants (starting_column=0, num_columns=COLUMNS).
+/// Both versions choose scalar vs SIMD based on num_columns <= 4.
+macro_rules! define_helper_pair {
+    (
+        $(#[$attr:meta])*
+        fn $name:ident<const SZ: usize, D: SimdDescriptor>(
+            d: D,
+            $($param_name:ident: $param_ty:ty),* $(,)?
+        ) {
+            $($body:tt)*
+        }
+    ) => {
+        // Full version: defines starting_column and num_columns as compile-time constants
+        $(#[$attr])*
+        #[inline(always)]
+        fn ${name}_full<D: SimdDescriptor, const COLUMNS: usize>(
+            d: D,
+            $($param_name: $param_ty),*
+        ) {
+            const starting_column: usize = 0;
+            const num_columns: usize = COLUMNS;
+            $($body)*
+        }
+
+        // Parameterized version: takes starting_column and num_columns as runtime parameters
+        $(#[$attr])*
+        #[inline(always)]
+        fn $name<D: SimdDescriptor>(
+            d: D,
+            $($param_name: $param_ty),*,
+            starting_column: usize,
+            num_columns: usize,
+        ) {
+            $($body)*
+        }
+    };
+}
+
 macro_rules! define_dct_1d {
     ($n:literal, $nhalf: literal) => {
         // Helper functions for CoeffBundle operating on $nhalf rows
         impl<const SZ: usize> CoeffBundle<$nhalf, SZ> {
             /// Adds a_in1[i] and a_in2[$nhalf - 1 - i], storing in a_out[i]. (Full-width)
-            /// This version processes all columns (0..SZ) - used by compute_scaled_dct
             #[inline(always)]
-            fn add_reverse_full(
+            fn add_reverse_full<D: SimdDescriptor, const COLUMNS: usize>(
+                d: D,
                 a_in1: &[[f32; SZ]],
                 a_in2: &[[f32; SZ]],
                 a_out: &mut [[f32; SZ]],
             ) {
                 const N_HALF_CONST: usize = $nhalf;
-                for i in 0..N_HALF_CONST {
-                    for j in 0..SZ {
-                        a_out[i][j] = a_in1[i][j] + a_in2[N_HALF_CONST - 1 - i][j];
+                const starting_column: usize = 0;
+                const num_columns: usize = COLUMNS;
+
+                if num_columns <= 4 {
+                    // Scalar path - faster for small widths
+                    for i in 0..N_HALF_CONST {
+                        for j in starting_column..(starting_column + num_columns) {
+                            a_out[i][j] = a_in1[i][j] + a_in2[N_HALF_CONST - 1 - i][j];
+                        }
+                    }
+                } else {
+                    // SIMD path - faster for full vectors
+                    for i in 0..N_HALF_CONST {
+                        let j = starting_column;
+                        let in1 = D::F32Vec::load_partial(d, num_columns, &a_in1[i][j..]);
+                        let in2 = D::F32Vec::load_partial(d, num_columns, &a_in2[N_HALF_CONST - 1 - i][j..]);
+                        (in1 + in2).store_partial(num_columns, &mut a_out[i][j..]);
                     }
                 }
             }
 
-            /// Adds a_in1[i] and a_in2[$nhalf - 1 - i], storing in a_out[i]. (Scalar)
+            /// Adds a_in1[i] and a_in2[$nhalf - 1 - i], storing in a_out[i]. (Parameterized)
             #[inline(always)]
-            fn add_reverse_scalar(
-                a_in1: &[[f32; SZ]],
-                a_in2: &[[f32; SZ]],
-                a_out: &mut [[f32; SZ]],
-                starting_column: usize,
-                num_columns: usize,
-            ) {
-                const N_HALF_CONST: usize = $nhalf;
-                for i in 0..N_HALF_CONST {
-                    for j in starting_column..(starting_column + num_columns) {
-                        a_out[i][j] = a_in1[i][j] + a_in2[N_HALF_CONST - 1 - i][j];
-                    }
-                }
-            }
-
-            /// Adds a_in1[i] and a_in2[$nhalf - 1 - i], storing in a_out[i]. (SIMD)
-            #[inline(always)]
-            fn add_reverse_simd<D: SimdDescriptor>(
+            fn add_reverse<D: SimdDescriptor>(
                 d: D,
                 a_in1: &[[f32; SZ]],
                 a_in2: &[[f32; SZ]],
@@ -202,50 +238,58 @@ macro_rules! define_dct_1d {
                 num_columns: usize,
             ) {
                 const N_HALF_CONST: usize = $nhalf;
-                for i in 0..N_HALF_CONST {
-                    let j = starting_column;
-                    let in1 = D::F32Vec::load_partial(d, num_columns, &a_in1[i][j..]);
-                    let in2 =
-                        D::F32Vec::load_partial(d, num_columns, &a_in2[N_HALF_CONST - 1 - i][j..]);
-                    (in1 + in2).store_partial(num_columns, &mut a_out[i][j..]);
+
+                if num_columns <= 4 {
+                    // Scalar path - faster for small widths
+                    for i in 0..N_HALF_CONST {
+                        for j in starting_column..(starting_column + num_columns) {
+                            a_out[i][j] = a_in1[i][j] + a_in2[N_HALF_CONST - 1 - i][j];
+                        }
+                    }
+                } else {
+                    // SIMD path - faster for full vectors
+                    for i in 0..N_HALF_CONST {
+                        let j = starting_column;
+                        let in1 = D::F32Vec::load_partial(d, num_columns, &a_in1[i][j..]);
+                        let in2 = D::F32Vec::load_partial(d, num_columns, &a_in2[N_HALF_CONST - 1 - i][j..]);
+                        (in1 + in2).store_partial(num_columns, &mut a_out[i][j..]);
+                    }
                 }
             }
 
             /// Subtracts a_in2[$nhalf - 1 - i] from a_in1[i], storing in a_out[i]. (Full-width)
             #[inline(always)]
-            fn sub_reverse_full(
+            fn sub_reverse_full<D: SimdDescriptor, const COLUMNS: usize>(
+                d: D,
                 a_in1: &[[f32; SZ]],
                 a_in2: &[[f32; SZ]],
                 a_out: &mut [[f32; SZ]],
             ) {
                 const N_HALF_CONST: usize = $nhalf;
-                for i in 0..N_HALF_CONST {
-                    for j in 0..SZ {
-                        a_out[i][j] = a_in1[i][j] - a_in2[N_HALF_CONST - 1 - i][j];
+                const starting_column: usize = 0;
+                const num_columns: usize = COLUMNS;
+
+                if num_columns <= 4 {
+                    // Scalar path
+                    for i in 0..N_HALF_CONST {
+                        for j in starting_column..(starting_column + num_columns) {
+                            a_out[i][j] = a_in1[i][j] - a_in2[N_HALF_CONST - 1 - i][j];
+                        }
+                    }
+                } else {
+                    // SIMD path
+                    for i in 0..N_HALF_CONST {
+                        let j = starting_column;
+                        let in1 = D::F32Vec::load_partial(d, num_columns, &a_in1[i][j..]);
+                        let in2 = D::F32Vec::load_partial(d, num_columns, &a_in2[N_HALF_CONST - 1 - i][j..]);
+                        (in1 - in2).store_partial(num_columns, &mut a_out[i][j..]);
                     }
                 }
             }
 
-            /// Subtracts a_in2[$nhalf - 1 - i] from a_in1[i], storing in a_out[i]. (Scalar)
+            /// Subtracts a_in2[$nhalf - 1 - i] from a_in1[i], storing in a_out[i]. (Parameterized)
             #[inline(always)]
-            fn sub_reverse_scalar(
-                a_in1: &[[f32; SZ]],
-                a_in2: &[[f32; SZ]],
-                a_out: &mut [[f32; SZ]],
-                starting_column: usize,
-                num_columns: usize,
-            ) {
-                const N_HALF_CONST: usize = $nhalf;
-                for i in 0..N_HALF_CONST {
-                    for j in starting_column..(starting_column + num_columns) {
-                        a_out[i][j] = a_in1[i][j] - a_in2[N_HALF_CONST - 1 - i][j];
-                    }
-                }
-            }
-
-            /// Subtracts a_in2[$nhalf - 1 - i] from a_in1[i], storing in a_out[i]. (SIMD)
-            #[inline(always)]
-            fn sub_reverse_simd<D: SimdDescriptor>(
+            fn sub_reverse<D: SimdDescriptor>(
                 d: D,
                 a_in1: &[[f32; SZ]],
                 a_in2: &[[f32; SZ]],
@@ -254,74 +298,100 @@ macro_rules! define_dct_1d {
                 num_columns: usize,
             ) {
                 const N_HALF_CONST: usize = $nhalf;
-                for i in 0..N_HALF_CONST {
-                    let j = starting_column;
-                    let in1 = D::F32Vec::load_partial(d, num_columns, &a_in1[i][j..]);
-                    let in2 =
-                        D::F32Vec::load_partial(d, num_columns, &a_in2[N_HALF_CONST - 1 - i][j..]);
-                    (in1 - in2).store_partial(num_columns, &mut a_out[i][j..]);
+
+                if num_columns <= 4 {
+                    // Scalar path
+                    for i in 0..N_HALF_CONST {
+                        for j in starting_column..(starting_column + num_columns) {
+                            a_out[i][j] = a_in1[i][j] - a_in2[N_HALF_CONST - 1 - i][j];
+                        }
+                    }
+                } else {
+                    // SIMD path
+                    for i in 0..N_HALF_CONST {
+                        let j = starting_column;
+                        let in1 = D::F32Vec::load_partial(d, num_columns, &a_in1[i][j..]);
+                        let in2 = D::F32Vec::load_partial(d, num_columns, &a_in2[N_HALF_CONST - 1 - i][j..]);
+                        (in1 - in2).store_partial(num_columns, &mut a_out[i][j..]);
+                    }
                 }
             }
 
             /// Applies the B transform (forward DCT step). (Full-width)
             #[inline(always)]
-            fn b_full(coeff: &mut [[f32; SZ]]) {
-                const N_HALF_CONST: usize = $nhalf;
-                for j in 0..SZ {
-                    coeff[0][j] = coeff[0][j] * (SQRT_2 as f32) + coeff[1][j];
-                }
-                #[allow(clippy::reversed_empty_ranges)]
-                for i in 1..(N_HALF_CONST - 1) {
-                    for j in 0..SZ {
-                        coeff[i][j] += coeff[i + 1][j];
-                    }
-                }
-            }
-
-            /// Applies the B transform (forward DCT step). (Scalar)
-            /// Operates on a slice of $nhalf rows.
-            #[inline(always)]
-            fn b_scalar(
+            fn b_full<D: SimdDescriptor, const COLUMNS: usize>(
+                d: D,
                 coeff: &mut [[f32; SZ]],
-                starting_column: usize,
-                num_columns: usize,
             ) {
                 const N_HALF_CONST: usize = $nhalf;
-                for j in starting_column..(starting_column + num_columns) {
-                    coeff[0][j] = coeff[0][j] * (SQRT_2 as f32) + coeff[1][j];
-                }
-                // empty in the case N_HALF_CONST == 2
-                #[allow(clippy::reversed_empty_ranges)]
-                for i in 1..(N_HALF_CONST - 1) {
+                const starting_column: usize = 0;
+                const num_columns: usize = COLUMNS;
+
+                if num_columns <= 4 {
+                    // Scalar path
                     for j in starting_column..(starting_column + num_columns) {
-                        coeff[i][j] += coeff[i + 1][j];
+                        coeff[0][j] = coeff[0][j] * (SQRT_2 as f32) + coeff[1][j];
+                    }
+                    #[allow(clippy::reversed_empty_ranges)]
+                    for i in 1..(N_HALF_CONST - 1) {
+                        for j in starting_column..(starting_column + num_columns) {
+                            coeff[i][j] += coeff[i + 1][j];
+                        }
+                    }
+                } else {
+                    // SIMD path
+                    let sqrt2 = D::F32Vec::splat(d, SQRT_2 as f32);
+                    let j = starting_column;
+                    let coeff0 = D::F32Vec::load_partial(d, num_columns, &coeff[0][j..]);
+                    let coeff1 = D::F32Vec::load_partial(d, num_columns, &coeff[1][j..]);
+                    coeff0
+                        .mul_add(sqrt2, coeff1)
+                        .store_partial(num_columns, &mut coeff[0][j..]);
+                    #[allow(clippy::reversed_empty_ranges)]
+                    for i in 1..(N_HALF_CONST - 1) {
+                        let coeffs_curr = D::F32Vec::load_partial(d, num_columns, &coeff[i][j..]);
+                        let coeffs_next = D::F32Vec::load_partial(d, num_columns, &coeff[i + 1][j..]);
+                        (coeffs_curr + coeffs_next).store_partial(num_columns, &mut coeff[i][j..]);
                     }
                 }
             }
 
-            /// Applies the B transform (forward DCT step). (SIMD)
-            /// Operates on a slice of $nhalf rows.
+            /// Applies the B transform (forward DCT step). (Parameterized)
             #[inline(always)]
-            fn b_simd<D: SimdDescriptor>(
+            fn b<D: SimdDescriptor>(
                 d: D,
                 coeff: &mut [[f32; SZ]],
                 starting_column: usize,
                 num_columns: usize,
             ) {
                 const N_HALF_CONST: usize = $nhalf;
-                let sqrt2 = D::F32Vec::splat(d, SQRT_2 as f32);
-                let j = starting_column;
-                let coeff0 = D::F32Vec::load_partial(d, num_columns, &coeff[0][j..]);
-                let coeff1 = D::F32Vec::load_partial(d, num_columns, &coeff[1][j..]);
-                coeff0
-                    .mul_add(sqrt2, coeff1)
-                    .store_partial(num_columns, &mut coeff[0][j..]);
-                // empty in the case N_HALF_CONST == 2
-                #[allow(clippy::reversed_empty_ranges)]
-                for i in 1..(N_HALF_CONST - 1) {
-                    let coeffs_curr = D::F32Vec::load_partial(d, num_columns, &coeff[i][j..]);
-                    let coeffs_next = D::F32Vec::load_partial(d, num_columns, &coeff[i + 1][j..]);
-                    (coeffs_curr + coeffs_next).store_partial(num_columns, &mut coeff[i][j..]);
+
+                if num_columns <= 4 {
+                    // Scalar path
+                    for j in starting_column..(starting_column + num_columns) {
+                        coeff[0][j] = coeff[0][j] * (SQRT_2 as f32) + coeff[1][j];
+                    }
+                    #[allow(clippy::reversed_empty_ranges)]
+                    for i in 1..(N_HALF_CONST - 1) {
+                        for j in starting_column..(starting_column + num_columns) {
+                            coeff[i][j] += coeff[i + 1][j];
+                        }
+                    }
+                } else {
+                    // SIMD path
+                    let sqrt2 = D::F32Vec::splat(d, SQRT_2 as f32);
+                    let j = starting_column;
+                    let coeff0 = D::F32Vec::load_partial(d, num_columns, &coeff[0][j..]);
+                    let coeff1 = D::F32Vec::load_partial(d, num_columns, &coeff[1][j..]);
+                    coeff0
+                        .mul_add(sqrt2, coeff1)
+                        .store_partial(num_columns, &mut coeff[0][j..]);
+                    #[allow(clippy::reversed_empty_ranges)]
+                    for i in 1..(N_HALF_CONST - 1) {
+                        let coeffs_curr = D::F32Vec::load_partial(d, num_columns, &coeff[i][j..]);
+                        let coeffs_next = D::F32Vec::load_partial(d, num_columns, &coeff[i + 1][j..]);
+                        (coeffs_curr + coeffs_next).store_partial(num_columns, &mut coeff[i][j..]);
+                    }
                 }
             }
         }
@@ -330,37 +400,39 @@ macro_rules! define_dct_1d {
         impl<const SZ: usize> CoeffBundle<$n, SZ> {
             /// Multiplies the second half of `coeff` by WcMultipliers. (Full-width)
             #[inline(always)]
-            fn multiply_full(coeff: &mut [[f32; SZ]]) {
-                const N_CONST: usize = $n;
-                const N_HALF_CONST: usize = $nhalf;
-                for i in 0..N_HALF_CONST {
-                    let mul_val = WcMultipliers::<N_CONST>::K_MULTIPLIERS[i];
-                    for j in 0..SZ {
-                        coeff[N_HALF_CONST + i][j] *= mul_val;
-                    }
-                }
-            }
-
-            /// Multiplies the second half of `coeff` by WcMultipliers. (Scalar)
-            #[inline(always)]
-            fn multiply_scalar(
+            fn multiply_full<D: SimdDescriptor, const COLUMNS: usize>(
+                d: D,
                 coeff: &mut [[f32; SZ]],
-                starting_column: usize,
-                num_columns: usize,
             ) {
                 const N_CONST: usize = $n;
                 const N_HALF_CONST: usize = $nhalf;
-                for i in 0..N_HALF_CONST {
-                    let mul_val = WcMultipliers::<N_CONST>::K_MULTIPLIERS[i];
-                    for j in starting_column..(starting_column + num_columns) {
-                        coeff[N_HALF_CONST + i][j] *= mul_val;
+                const starting_column: usize = 0;
+                const num_columns: usize = COLUMNS;
+
+                if num_columns <= 4 {
+                    // Scalar path
+                    for i in 0..N_HALF_CONST {
+                        let mul_val = WcMultipliers::<N_CONST>::K_MULTIPLIERS[i];
+                        for j in starting_column..(starting_column + num_columns) {
+                            coeff[N_HALF_CONST + i][j] *= mul_val;
+                        }
+                    }
+                } else {
+                    // SIMD path
+                    for i in 0..N_HALF_CONST {
+                        let j = starting_column;
+                        let mul_val = D::F32Vec::splat(d, WcMultipliers::<N_CONST>::K_MULTIPLIERS[i]);
+                        let coeffs =
+                            D::F32Vec::load_partial(d, num_columns, &coeff[N_HALF_CONST + i][j..]);
+                        (coeffs * mul_val)
+                            .store_partial(num_columns, &mut coeff[N_HALF_CONST + i][j..]);
                     }
                 }
             }
 
-            /// Multiplies the second half of `coeff` by WcMultipliers. (SIMD)
+            /// Multiplies the second half of `coeff` by WcMultipliers. (Parameterized)
             #[inline(always)]
-            fn multiply_simd<D: SimdDescriptor>(
+            fn multiply<D: SimdDescriptor>(
                 d: D,
                 coeff: &mut [[f32; SZ]],
                 starting_column: usize,
@@ -368,63 +440,69 @@ macro_rules! define_dct_1d {
             ) {
                 const N_CONST: usize = $n;
                 const N_HALF_CONST: usize = $nhalf;
-                for i in 0..N_HALF_CONST {
-                    let j = starting_column;
-                    let mul_val = D::F32Vec::splat(d, WcMultipliers::<N_CONST>::K_MULTIPLIERS[i]);
-                    let coeffs =
-                        D::F32Vec::load_partial(d, num_columns, &coeff[N_HALF_CONST + i][j..]);
-                    (coeffs * mul_val)
-                        .store_partial(num_columns, &mut coeff[N_HALF_CONST + i][j..]);
+
+                if num_columns <= 4 {
+                    // Scalar path
+                    for i in 0..N_HALF_CONST {
+                        let mul_val = WcMultipliers::<N_CONST>::K_MULTIPLIERS[i];
+                        for j in starting_column..(starting_column + num_columns) {
+                            coeff[N_HALF_CONST + i][j] *= mul_val;
+                        }
+                    }
+                } else {
+                    // SIMD path
+                    for i in 0..N_HALF_CONST {
+                        let j = starting_column;
+                        let mul_val = D::F32Vec::splat(d, WcMultipliers::<N_CONST>::K_MULTIPLIERS[i]);
+                        let coeffs =
+                            D::F32Vec::load_partial(d, num_columns, &coeff[N_HALF_CONST + i][j..]);
+                        (coeffs * mul_val)
+                            .store_partial(num_columns, &mut coeff[N_HALF_CONST + i][j..]);
+                    }
                 }
             }
 
             /// De-interleaves `a_in` into `a_out`. (Full-width)
             #[inline(always)]
-            fn inverse_even_odd_full(
+            fn inverse_even_odd_full<D: SimdDescriptor, const COLUMNS: usize>(
+                d: D,
                 a_in: &[[f32; SZ]],
                 a_out: &mut [[f32; SZ]],
             ) {
                 const N_HALF_CONST: usize = $nhalf;
-                for i in 0..N_HALF_CONST {
-                    for j in 0..SZ {
-                        a_out[2 * i][j] = a_in[i][j];
+                const starting_column: usize = 0;
+                const num_columns: usize = COLUMNS;
+
+                if num_columns <= 4 {
+                    // Scalar path
+                    for i in 0..N_HALF_CONST {
+                        for j in starting_column..(starting_column + num_columns) {
+                            a_out[2 * i][j] = a_in[i][j];
+                        }
                     }
-                }
-                for i in 0..N_HALF_CONST {
-                    for j in 0..SZ {
-                        a_out[2 * i + 1][j] = a_in[N_HALF_CONST + i][j];
+                    for i in 0..N_HALF_CONST {
+                        for j in starting_column..(starting_column + num_columns) {
+                            a_out[2 * i + 1][j] = a_in[N_HALF_CONST + i][j];
+                        }
+                    }
+                } else {
+                    // SIMD path
+                    for i in 0..N_HALF_CONST {
+                        let j = starting_column;
+                        D::F32Vec::load_partial(d, num_columns, &a_in[i][j..])
+                            .store_partial(num_columns, &mut a_out[2 * i][j..]);
+                    }
+                    for i in 0..N_HALF_CONST {
+                        let j = starting_column;
+                        D::F32Vec::load_partial(d, num_columns, &a_in[N_HALF_CONST + i][j..])
+                            .store_partial(num_columns, &mut a_out[2 * i + 1][j..]);
                     }
                 }
             }
 
-            /// De-interleaves `a_in` into `a_out`. (Scalar)
-            /// Even indexed rows of `a_out` get first half of `a_in`.
-            /// Odd indexed rows of `a_out` get second half of `a_in`.
+            /// De-interleaves `a_in` into `a_out`. (Parameterized)
             #[inline(always)]
-            fn inverse_even_odd_scalar(
-                a_in: &[[f32; SZ]],
-                a_out: &mut [[f32; SZ]],
-                starting_column: usize,
-                num_columns: usize,
-            ) {
-                const N_HALF_CONST: usize = $nhalf;
-                for i in 0..N_HALF_CONST {
-                    for j in starting_column..(starting_column + num_columns) {
-                        a_out[2 * i][j] = a_in[i][j];
-                    }
-                }
-                for i in 0..N_HALF_CONST {
-                    for j in starting_column..(starting_column + num_columns) {
-                        a_out[2 * i + 1][j] = a_in[N_HALF_CONST + i][j];
-                    }
-                }
-            }
-
-            /// De-interleaves `a_in` into `a_out`. (SIMD)
-            /// Even indexed rows of `a_out` get first half of `a_in`.
-            /// Odd indexed rows of `a_out` get second half of `a_in`.
-            #[inline(always)]
-            fn inverse_even_odd_simd<D: SimdDescriptor>(
+            fn inverse_even_odd<D: SimdDescriptor>(
                 d: D,
                 a_in: &[[f32; SZ]],
                 a_out: &mut [[f32; SZ]],
@@ -432,15 +510,31 @@ macro_rules! define_dct_1d {
                 num_columns: usize,
             ) {
                 const N_HALF_CONST: usize = $nhalf;
-                for i in 0..N_HALF_CONST {
-                    let j = starting_column;
-                    D::F32Vec::load_partial(d, num_columns, &a_in[i][j..])
-                        .store_partial(num_columns, &mut a_out[2 * i][j..]);
-                }
-                for i in 0..N_HALF_CONST {
-                    let j = starting_column;
-                    D::F32Vec::load_partial(d, num_columns, &a_in[N_HALF_CONST + i][j..])
-                        .store_partial(num_columns, &mut a_out[2 * i + 1][j..]);
+
+                if num_columns <= 4 {
+                    // Scalar path
+                    for i in 0..N_HALF_CONST {
+                        for j in starting_column..(starting_column + num_columns) {
+                            a_out[2 * i][j] = a_in[i][j];
+                        }
+                    }
+                    for i in 0..N_HALF_CONST {
+                        for j in starting_column..(starting_column + num_columns) {
+                            a_out[2 * i + 1][j] = a_in[N_HALF_CONST + i][j];
+                        }
+                    }
+                } else {
+                    // SIMD path
+                    for i in 0..N_HALF_CONST {
+                        let j = starting_column;
+                        D::F32Vec::load_partial(d, num_columns, &a_in[i][j..])
+                            .store_partial(num_columns, &mut a_out[2 * i][j..]);
+                    }
+                    for i in 0..N_HALF_CONST {
+                        let j = starting_column;
+                        D::F32Vec::load_partial(d, num_columns, &a_in[N_HALF_CONST + i][j..])
+                            .store_partial(num_columns, &mut a_out[2 * i + 1][j..]);
+                    }
                 }
             }
         }
