@@ -166,15 +166,16 @@ macro_rules! define_dct_1d {
             ) {
                 const N_HALF_CONST: usize = $nhalf;
 
-                if num_columns <= 4 {
-                    // Scalar path - faster for small widths
+                // Use scalar if: small size OR doesn't fit in one vector
+                if num_columns <= 4 || num_columns > D::F32Vec::LEN {
+                    // Scalar path
                     for i in 0..N_HALF_CONST {
                         for j in starting_column..(starting_column + num_columns) {
                             a_out[i][j] = a_in1[i][j] + a_in2[N_HALF_CONST - 1 - i][j];
                         }
                     }
                 } else {
-                    // SIMD path - faster for full vectors
+                    // SIMD path - num_columns fits in one vector
                     for i in 0..N_HALF_CONST {
                         let j = starting_column;
                         let in1 = D::F32Vec::load_partial(d, num_columns, &a_in1[i][j..]);
