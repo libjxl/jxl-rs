@@ -6,9 +6,9 @@
 use std::{
     arch::x86_64::{
         __m512, _mm512_add_ps, _mm512_andnot_si512, _mm512_castps_si512, _mm512_castsi512_ps,
-        _mm512_div_ps, _mm512_fmadd_ps, _mm512_loadu_ps, _mm512_mask_loadu_ps,
+        _mm512_div_ps, _mm512_fmadd_ps, _mm512_fnmadd_ps, _mm512_loadu_ps, _mm512_mask_loadu_ps,
         _mm512_mask_storeu_ps, _mm512_max_ps, _mm512_mul_ps, _mm512_set1_epi32, _mm512_set1_ps,
-        _mm512_setzero_ps, _mm512_storeu_ps, _mm512_sub_ps,
+        _mm512_setzero_ps, _mm512_storeu_ps, _mm512_sub_ps, _mm512_xor_si512,
     },
     ops::{Add, AddAssign, Div, DivAssign, Mul, MulAssign, Sub, SubAssign},
 };
@@ -101,6 +101,11 @@ impl F32SimdVec for F32VecAvx512 {
     fn load_partial(d: Self::Descriptor, size: usize, mem: &[f32]) -> Self {
         assert!(Self::LEN >= size);
         assert!(mem.len() >= size);
+        // Fast path: avoid mask setup overhead when loading full vectors
+        // This optimization skips the expensive mask creation and masked load when size == LEN
+        if size == Self::LEN {
+            return Self::load(d, mem);
+        }
         // SAFETY: we just checked that `mem` has enough space. Moreover, we know avx512f is available
         // from the safety invariant on `d`.
         Self(
@@ -121,6 +126,9 @@ impl F32SimdVec for F32VecAvx512 {
     fn store_partial(&self, size: usize, mem: &mut [f32]) {
         assert!(Self::LEN >= size);
         assert!(mem.len() >= size);
+        if size == Self::LEN {
+            return self.store(mem);
+        }
         // SAFETY: we just checked that `mem` has enough space. Moreover, we know avx512f is available
         // from the safety invariant on `self.1`.
         unsafe { _mm512_mask_storeu_ps(mem.as_mut_ptr(), (1u16 << size) - 1, self.0) }
@@ -128,6 +136,10 @@ impl F32SimdVec for F32VecAvx512 {
 
     fn_avx!(this: F32VecAvx512, fn mul_add(mul: F32VecAvx512, add: F32VecAvx512) -> F32VecAvx512 {
         F32VecAvx512(_mm512_fmadd_ps(this.0, mul.0, add.0), this.1)
+    });
+
+    fn_avx!(this: F32VecAvx512, fn neg_mul_add(mul: F32VecAvx512, add: F32VecAvx512) -> F32VecAvx512 {
+        F32VecAvx512(_mm512_fnmadd_ps(this.0, mul.0, add.0), this.1)
     });
 
     #[inline(always)]
@@ -139,7 +151,16 @@ impl F32SimdVec for F32VecAvx512 {
     fn_avx!(this: F32VecAvx512, fn abs() -> F32VecAvx512 {
         F32VecAvx512(
             _mm512_castsi512_ps(_mm512_andnot_si512(
-                _mm512_set1_epi32(0b10000000000000000000000000000000u32 as i32),
+                _mm512_set1_epi32(i32::MIN),
+                _mm512_castps_si512(this.0),
+            )),
+            this.1)
+    });
+
+    fn_avx!(this: F32VecAvx512, fn neg() -> F32VecAvx512 {
+        F32VecAvx512(
+            _mm512_castsi512_ps(_mm512_xor_si512(
+                _mm512_set1_epi32(i32::MIN),
                 _mm512_castps_si512(this.0),
             )),
             this.1)

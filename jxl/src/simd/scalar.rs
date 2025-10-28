@@ -72,6 +72,11 @@ impl F32SimdVec for F32VecScalar {
     }
 
     #[inline(always)]
+    fn neg_mul_add(self, mul: Self, add: Self) -> Self {
+        Self((-self.0).mul_add(mul.0, add.0))
+    }
+
+    #[inline(always)]
     fn splat(_d: Self::Descriptor, v: f32) -> Self {
         Self(v)
     }
@@ -79,6 +84,11 @@ impl F32SimdVec for F32VecScalar {
     #[inline(always)]
     fn abs(self) -> Self {
         Self(self.0.abs())
+    }
+
+    #[inline(always)]
+    fn neg(self) -> Self {
+        Self(-self.0)
     }
 
     #[inline(always)]
