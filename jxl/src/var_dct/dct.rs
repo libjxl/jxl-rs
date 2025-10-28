@@ -715,7 +715,9 @@ pub fn compute_scaled_dct<D: SimdDescriptor, const ROWS: usize, const COLS: usiz
     DCT1DImpl<COLS>: DCT1D,
 {
     // Row transforms
-    DCT1DImpl::<ROWS>::do_dct::<D, COLS>(d, &mut from);
+    d.call(|d| {
+        DCT1DImpl::<ROWS>::do_dct::<D, COLS>(d, &mut from);
+    });
 
     // Transpose
     let mut transposed_dct_buffer = [[0.0; ROWS]; COLS];
@@ -725,20 +727,23 @@ pub fn compute_scaled_dct<D: SimdDescriptor, const ROWS: usize, const COLS: usiz
     );
 
     // Column transforms
-    DCT1DImpl::<COLS>::do_dct::<D, ROWS>(d, &mut transposed_dct_buffer);
+    d.call(|d| {
+        DCT1DImpl::<COLS>::do_dct::<D, ROWS>(d, &mut transposed_dct_buffer);
+    });
 
 
     // Normalization and output
     let norm_factor_scalar = 1.0 / (ROWS * COLS) as f32;
 
     if ROWS >= COLS {
-        // For small sizes, use scalar normalization (faster due to compiler optimization)
+        // For small sizes (≤64 elements), always use scalar normalization
+        // Even on SIMD descriptors, scalar is faster due to better compiler optimization
         if ROWS * COLS <= 64 {
             for i in 0..ROWS * COLS {
                 to[i] = transposed_dct_buffer.as_flattened()[i] * norm_factor_scalar;
             }
         } else {
-            // For large sizes, use SIMD normalization
+            // For large sizes, use SIMD normalization with runtime loop
             let normalization_factor = D::F32Vec::splat(d, norm_factor_scalar);
             if ROWS * COLS < D::F32Vec::LEN {
                 let coeffs =
@@ -759,13 +764,14 @@ pub fn compute_scaled_dct<D: SimdDescriptor, const ROWS: usize, const COLS: usiz
             to[..ROWS * COLS].as_mut(),
         );
 
-        // For small sizes, use scalar normalization (faster due to compiler optimization)
+        // For small sizes (≤64 elements), always use scalar normalization
+        // Even on SIMD descriptors, scalar is faster due to better compiler optimization
         if ROWS * COLS <= 64 {
             for i in 0..ROWS * COLS {
                 to[i] *= norm_factor_scalar;
             }
         } else {
-            // For large sizes, use SIMD normalization
+            // For large sizes, use SIMD normalization with runtime loop
             let normalization_factor = D::F32Vec::splat(d, norm_factor_scalar);
             if ROWS * COLS < D::F32Vec::LEN {
                 let coeffs = D::F32Vec::load_partial(d, ROWS * COLS, to);
