@@ -356,7 +356,7 @@ pub fn compute_scaled_dct<D: SimdDescriptor, const ROWS: usize, const COLS: usiz
 #[cfg(test)]
 mod tests {
     use crate::{
-        simd::ScalarDescriptor,
+        simd::{ScalarDescriptor, SimdDescriptor, test_all_instruction_sets},
         util::test::{assert_all_almost_abs_eq, assert_almost_abs_eq},
         var_dct::{
             dct::{DCT1D, DCT1DImpl, IDCT1D, IDCT1DImpl, compute_scaled_dct, dct2d, idct2d},
@@ -792,4 +792,132 @@ mod tests {
             1e-3,
         );
     }
+
+    fn bench_dct2d<D: SimdDescriptor>(d: D) {
+        fn run_size<D: SimdDescriptor, const ROWS: usize, const COLS: usize>(d: D)
+        where
+            DCT1DImpl<ROWS>: DCT1D,
+            DCT1DImpl<COLS>: DCT1D,
+        {
+            let mut data = vec![1.0; ROWS * COLS];
+            let mut scratch = vec![0.0; ROWS * COLS];
+
+            let iters = std::env::var("DCT_BENCH_ITERATIONS")
+                .ok()
+                .and_then(|s| s.parse().ok())
+                .unwrap_or(1);
+
+            let start = std::time::Instant::now();
+            for _ in 0..iters {
+                dct2d::<_, ROWS, COLS>(d, &mut data, &mut scratch);
+            }
+            let elapsed = start.elapsed();
+            if iters > 1 {
+                println!(
+                    "dct2d {}x{} ({:?}): {:?} per iteration",
+                    ROWS,
+                    COLS,
+                    d,
+                    elapsed / iters
+                );
+            }
+        }
+
+        run_size::<_, 8, 8>(d);
+        run_size::<_, 16, 16>(d);
+        run_size::<_, 32, 32>(d);
+        run_size::<_, 64, 64>(d);
+    }
+
+    test_all_instruction_sets!(bench_dct2d);
+
+    fn bench_idct2d<D: SimdDescriptor>(d: D) {
+        fn run_size<D: SimdDescriptor, const ROWS: usize, const COLS: usize>(d: D)
+        where
+            IDCT1DImpl<ROWS>: IDCT1D,
+            IDCT1DImpl<COLS>: IDCT1D,
+        {
+            let mut data = vec![1.0; ROWS * COLS];
+            let mut scratch = vec![0.0; ROWS * COLS];
+
+            let iters = std::env::var("DCT_BENCH_ITERATIONS")
+                .ok()
+                .and_then(|s| s.parse().ok())
+                .unwrap_or(1);
+
+            let start = std::time::Instant::now();
+            for _ in 0..iters {
+                idct2d::<_, ROWS, COLS>(d, &mut data, &mut scratch);
+            }
+            let elapsed = start.elapsed();
+            if iters > 1 {
+                println!(
+                    "idct2d {}x{} ({:?}): {:?} per iteration",
+                    ROWS,
+                    COLS,
+                    d,
+                    elapsed / iters
+                );
+            }
+        }
+
+        run_size::<_, 8, 8>(d);
+        run_size::<_, 16, 16>(d);
+        run_size::<_, 32, 32>(d);
+        run_size::<_, 64, 64>(d);
+    }
+
+    test_all_instruction_sets!(bench_idct2d);
+
+    fn bench_compute_scaled_dct<D: SimdDescriptor>(d: D) {
+        fn run_size<D: SimdDescriptor, const ROWS: usize, const COLS: usize>(d: D)
+        where
+            DCT1DImpl<ROWS>: DCT1D,
+            DCT1DImpl<COLS>: DCT1D,
+        {
+            let input_vec = vec![vec![1.0; COLS]; ROWS];
+            let mut input = [[0.0; COLS]; ROWS];
+            for (i, row) in input_vec.iter().enumerate() {
+                input[i].copy_from_slice(row);
+            }
+            let mut output = vec![0.0; ROWS * COLS];
+
+            let iters = std::env::var("DCT_BENCH_ITERATIONS")
+                .ok()
+                .and_then(|s| s.parse().ok())
+                .unwrap_or(1);
+
+            let start = std::time::Instant::now();
+            for _ in 0..iters {
+                compute_scaled_dct::<_, ROWS, COLS>(d, input, &mut output);
+            }
+            let elapsed = start.elapsed();
+            if iters > 1 {
+                println!(
+                    "compute_scaled_dct {}x{} ({:?}): {:?} per iteration",
+                    ROWS,
+                    COLS,
+                    d,
+                    elapsed / iters
+                );
+            }
+        }
+
+        // Square sizes
+        run_size::<_, 8, 8>(d);
+        run_size::<_, 16, 16>(d);
+        run_size::<_, 32, 32>(d);
+        run_size::<_, 64, 64>(d);
+
+        // Non-square sizes
+        run_size::<_, 8, 4>(d);
+        run_size::<_, 16, 8>(d);
+        run_size::<_, 32, 16>(d);
+        run_size::<_, 64, 32>(d);
+        run_size::<_, 8, 16>(d);
+        run_size::<_, 16, 32>(d);
+        run_size::<_, 32, 64>(d);
+    }
+
+    test_all_instruction_sets!(bench_compute_scaled_dct);
 }
