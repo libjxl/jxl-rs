@@ -71,6 +71,10 @@ pub trait F32SimdVec:
 
     fn mul_add(self, mul: Self, add: Self) -> Self;
 
+    /// Computes `add - self * mul`, equivalent to `self * (-mul) + add`.
+    /// Uses fused multiply-add with negation when available (FMA3 fnmadd).
+    fn neg_mul_add(self, mul: Self, add: Self) -> Self;
+
     // Requires `mem.len() >= Self::LEN` or it will panic.
     fn load(d: Self::Descriptor, mem: &[f32]) -> Self;
 
@@ -84,6 +88,10 @@ pub trait F32SimdVec:
     fn store_partial(&self, size: usize, mem: &mut [f32]);
 
     fn abs(self) -> Self;
+
+    /// Negates all elements. Currently unused but kept for API completeness.
+    #[allow(dead_code)]
+    fn neg(self) -> Self;
 
     fn max(self, other: Self) -> Self;
 }
@@ -229,6 +237,48 @@ mod test {
         a.mul_add(b, c)
     });
 
+    test_instruction!(neg_mul_add, |a: Floats, b: Floats, c: Floats| {
+        a.neg_mul_add(b, c)
+    });
+
+    // Validate that neg_mul_add computes c - a * b correctly
+    fn test_neg_mul_add_correctness<D: SimdDescriptor>(d: D) {
+        let a_vals = [
+            2.0, 3.0, 4.0, 5.0, 1.5, 2.5, 3.5, 4.5, 2.5, 3.5, 4.5, 5.5, 1.0, 2.0, 3.0, 4.0,
+        ];
+        let b_vals = [
+            1.0, 2.0, 3.0, 4.0, 0.5, 1.5, 2.5, 3.5, 1.5, 2.5, 3.5, 4.5, 0.25, 0.75, 1.25, 1.75,
+        ];
+        let c_vals = [
+            10.0, 20.0, 30.0, 40.0, 5.0, 15.0, 25.0, 35.0, 12.0, 22.0, 32.0, 42.0, 6.0, 16.0, 26.0,
+            36.0,
+        ];
+
+        let a = D::F32Vec::load(d, &a_vals[..D::F32Vec::LEN]);
+        let b = D::F32Vec::load(d, &b_vals[..D::F32Vec::LEN]);
+        let c = D::F32Vec::load(d, &c_vals[..D::F32Vec::LEN]);
+
+        let result = a.neg_mul_add(b, c);
+        let expected = c - a * b;
+
+        let mut result_vals = [0.0; 16];
+        let mut expected_vals = [0.0; 16];
+        result.store(&mut result_vals[..D::F32Vec::LEN]);
+        expected.store(&mut expected_vals[..D::F32Vec::LEN]);
+
+        for i in 0..D::F32Vec::LEN {
+            assert!(
+                (result_vals[i] - expected_vals[i]).abs() < 1e-5,
+                "neg_mul_add correctness failed at index {}: got {}, expected {}",
+                i,
+                result_vals[i],
+                expected_vals[i]
+            );
+        }
+    }
+
+    test_all_instruction_sets!(test_neg_mul_add_correctness);
+
     test_instruction!(abs, |a: Floats| { a.abs() });
     test_instruction!(max, |a: Floats, b: Floats| { a.max(b) });
 
@@ -263,4 +313,92 @@ mod test {
         }
     }
     test_all_instruction_sets!(test_call);
+
+    fn test_neg<D: SimdDescriptor>(d: D) {
+        // Test negation operation with enough elements for any SIMD size
+        let len = D::F32Vec::LEN * 2; // Ensure we have at least 2 full vectors
+        let input: Vec<f32> = (0..len)
+            .map(|i| if i % 2 == 0 { i as f32 } else { -(i as f32) })
+            .collect();
+        let expected: Vec<f32> = (0..len)
+            .map(|i| if i % 2 == 0 { -(i as f32) } else { i as f32 })
+            .collect();
+        let mut output = vec![0.0f32; input.len()];
+
+        for idx in (0..input.len()).step_by(D::F32Vec::LEN) {
+            let vec = D::F32Vec::load(d, &input[idx..]);
+            let negated = vec.neg();
+            negated.store(&mut output[idx..]);
+        }
+
+        for (i, (&out, &exp)) in output.iter().zip(expected.iter()).enumerate() {
+            assert_eq!(
+                out, exp,
+                "Mismatch at index {}: expected {}, got {}",
+                i, exp, out
+            );
+        }
+    }
+    test_all_instruction_sets!(test_neg);
+
+    fn test_load_store_partial<D: SimdDescriptor>(d: D) {
+        // Test partial load/store operations with various sizes
+        for size in 1..=D::F32Vec::LEN {
+            let input: Vec<f32> = (0..size).map(|i| i as f32).collect();
+            let mut output = vec![99.0f32; D::F32Vec::LEN]; // Fill with sentinel value
+
+            let vec = D::F32Vec::load_partial(d, size, &input);
+            vec.store_partial(size, &mut output);
+
+            // Verify that the first 'size' elements match
+            for i in 0..size {
+                assert_eq!(
+                    output[i], input[i],
+                    "Mismatch at index {} (size={}): expected {}, got {}",
+                    i, size, input[i], output[i]
+                );
+            }
+
+            // Verify that elements beyond 'size' are unchanged (still sentinel)
+            for (idx, &val) in output
+                .iter()
+                .enumerate()
+                .skip(size)
+                .take(D::F32Vec::LEN - size)
+            {
+                assert_eq!(
+                    val, 99.0,
+                    "Element at index {} was modified (size={})",
+                    idx, size
+                );
+            }
+        }
+    }
+    test_all_instruction_sets!(test_load_store_partial);
+
+    fn test_transpose_8x8<D: SimdDescriptor>(d: D) {
+        // Test 8x8 matrix transpose
+        // Input: sequential values 0..64
+        let mut input = vec![0.0f32; 64];
+        for (i, val) in input.iter_mut().enumerate() {
+            *val = i as f32;
+        }
+
+        let mut output = vec![0.0f32; 64];
+        d.transpose::<8, 8>(&input, &mut output);
+
+        // Verify transpose: output[i*8+j] should equal input[j*8+i]
+        for i in 0..8 {
+            for j in 0..8 {
+                let expected = input[j * 8 + i];
+                let actual = output[i * 8 + j];
+                assert_eq!(
+                    actual, expected,
+                    "Mismatch at position ({}, {}): expected {}, got {}",
+                    i, j, expected, actual
+                );
+            }
+        }
+    }
+    test_all_instruction_sets!(test_transpose_8x8);
 }
