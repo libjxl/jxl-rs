@@ -8,7 +8,7 @@ use std::sync::Arc;
 use crate::{
     BLOCK_DIM, MIN_SIGMA, SIGMA_PADDING,
     image::Image,
-    render::{RenderPipelineInOutStage, RenderPipelineStage},
+    render::RenderPipelineInOutStage,
     simd::{F32SimdVec, simd_function},
 };
 
@@ -48,8 +48,6 @@ impl Epf0Stage {
     }
 }
 
-type EPFRow<'a> = [(&'a [&'a [f32]], &'a mut [&'a mut [f32]])];
-
 simd_function!(
     epf0_process_row_chunk_dispatch,
     d: D,
@@ -57,10 +55,12 @@ simd_function!(
     stage: &Epf0Stage,
     pos: (usize, usize),
     xsize: usize,
-    row: &mut EPFRow,
+    input_rows: &[&[&[f32]]],
+    output_rows: &mut[&mut[&mut[f32]]],
 ) {
     let (xpos, ypos) = pos;
-    assert!(row.len() == 3, "Expected 3 channels, got {}", row.len());
+    assert_eq!(input_rows.len(), 3);
+    assert_eq!(output_rows.len(), 3);
 
     let row_sigma = stage.sigma.as_rect().row(ypos / BLOCK_DIM + SIGMA_PADDING);
 
@@ -83,7 +83,7 @@ simd_function!(
         }
 
         if sigma_storage.iter().all(|&sigma| sigma < MIN_SIGMA) {
-            for (input_c, output_c) in row.iter_mut() {
+            for (input_c, output_c) in input_rows.iter().zip(output_rows.iter_mut()) {
                 D::F32Vec::load(d, &input_c[3][3 + x..]).store(&mut output_c[0][x..]);
             }
             continue;
@@ -99,7 +99,7 @@ simd_function!(
 
         // Compute SADs
         let mut sads = [D::F32Vec::splat(d, 0.0); 12];
-        for ((input_c, _), scale) in row.iter_mut().zip(stage.channel_scale) {
+        for (input_c, scale) in input_rows.iter().zip(stage.channel_scale) {
             let scale = D::F32Vec::splat(d, scale);
 
             let p30 = D::F32Vec::load(d, &input_c[0][3 + x..]);
@@ -200,7 +200,7 @@ simd_function!(
             w += *sad;
         }
         let inv_w = D::F32Vec::splat(d, 1.0) / w;
-        for (input_c, output_c) in row.iter_mut() {
+        for (input_c, output_c) in input_rows.iter().zip(output_rows.iter_mut()) {
             let mut out = D::F32Vec::load(d, &input_c[3][3 + x..]);
             for (row_idx, col_idx, sad_idx) in [
                 (5, 3+x, 11),
@@ -223,8 +223,11 @@ simd_function!(
     }
 });
 
-impl RenderPipelineStage for Epf0Stage {
-    type Type = RenderPipelineInOutStage<f32, f32, 3, 3, 0, 0>;
+impl RenderPipelineInOutStage for Epf0Stage {
+    type InputT = f32;
+    type OutputT = f32;
+    const SHIFT: (u8, u8) = (0, 0);
+    const BORDER: (u8, u8) = (3, 3);
 
     fn uses_channel(&self, c: usize) -> bool {
         c < 3
@@ -234,10 +237,11 @@ impl RenderPipelineStage for Epf0Stage {
         &self,
         (xpos, ypos): (usize, usize),
         xsize: usize,
-        row: &mut EPFRow,
+        input_rows: &[&[&[f32]]],
+        output_rows: &mut [&mut [&mut [f32]]],
         _state: Option<&mut dyn std::any::Any>,
     ) {
-        epf0_process_row_chunk_dispatch(self, (xpos, ypos), xsize, row);
+        epf0_process_row_chunk_dispatch(self, (xpos, ypos), xsize, input_rows, output_rows);
     }
 }
 
@@ -284,10 +288,12 @@ fn epf1_process_row_chunk(
     stage: &Epf1Stage,
     pos: (usize, usize),
     xsize: usize,
-    row: &mut EPFRow,
+    input_rows: &[&[&[f32]]],
+    output_rows: &mut[&mut[&mut[f32]]],
 ) {
     let (xpos, ypos) = pos;
-    assert!(row.len() == 3, "Expected 3 channels, got {}", row.len());
+    assert_eq!(input_rows.len(), 3);
+    assert_eq!(output_rows.len(), 3);
 
     let row_sigma = stage.sigma.as_rect().row(ypos / BLOCK_DIM + SIGMA_PADDING);
 
@@ -310,7 +316,7 @@ fn epf1_process_row_chunk(
         }
 
         if sigma_storage.iter().all(|&sigma| sigma < MIN_SIGMA) {
-            for (input_c, output_c) in row.iter_mut() {
+            for (input_c, output_c) in input_rows.iter().zip(output_rows.iter_mut()) {
                 D::F32Vec::load(d, &input_c[2][2 + x..]).store(&mut output_c[0][x..]);
             }
             continue;
@@ -326,7 +332,7 @@ fn epf1_process_row_chunk(
 
         // Compute SADs
         let mut sads = [D::F32Vec::splat(d, 0.0); 4];
-        for ((input_c, _), scale) in row.iter_mut().zip(stage.channel_scale) {
+        for (input_c, scale) in input_rows.iter().zip(stage.channel_scale) {
             let scale = D::F32Vec::splat(d, scale);
             let p20 = D::F32Vec::load(d, &input_c[0][2 + x..]);
             let p11 = D::F32Vec::load(d, &input_c[1][1 + x..]);
@@ -373,7 +379,7 @@ fn epf1_process_row_chunk(
             w += *sad;
         }
         let inv_w = D::F32Vec::splat(d, 1.0) / w;
-        for (input_c, output_c) in row.iter_mut() {
+        for (input_c, output_c) in input_rows.iter().zip(output_rows.iter_mut()) {
             let mut out = D::F32Vec::load(d, &input_c[2][2 + x..]);
             for (row_idx, col_idx, sad_idx) in [
                 (3, 2+x, 3),
@@ -388,8 +394,11 @@ fn epf1_process_row_chunk(
     }
 });
 
-impl RenderPipelineStage for Epf1Stage {
-    type Type = RenderPipelineInOutStage<f32, f32, 2, 2, 0, 0>;
+impl RenderPipelineInOutStage for Epf1Stage {
+    type InputT = f32;
+    type OutputT = f32;
+    const SHIFT: (u8, u8) = (0, 0);
+    const BORDER: (u8, u8) = (2, 2);
 
     fn uses_channel(&self, c: usize) -> bool {
         c < 3
@@ -399,10 +408,11 @@ impl RenderPipelineStage for Epf1Stage {
         &self,
         (xpos, ypos): (usize, usize),
         xsize: usize,
-        row: &mut EPFRow,
+        input_rows: &[&[&[f32]]],
+        output_rows: &mut [&mut [&mut [f32]]],
         _state: Option<&mut dyn std::any::Any>,
     ) {
-        epf1_process_row_chunk_dispatch(self, (xpos, ypos), xsize, row);
+        epf1_process_row_chunk_dispatch(self, (xpos, ypos), xsize, input_rows, output_rows);
     }
 }
 
@@ -449,16 +459,13 @@ fn epf2_process_row_chunk(
     stage: &Epf2Stage,
     pos: (usize, usize),
     xsize: usize,
-    row: &mut EPFRow,
+    input_rows: &[&[&[f32]]],
+    output_rows: &mut[&mut[&mut[f32]]],
 ) {
     let (xpos, ypos) = pos;
-    let [
-        (input_x, output_x),
-        (input_y, output_y),
-        (input_b, output_b),
-    ] = row
+    let ([input_x, input_y, input_b], [output_x, output_y, output_b]) = (input_rows, output_rows)
     else {
-        panic!("Expected 3 channels, got {}", row.len());
+        panic!("Expected 3 channels, got {}", input_rows.len());
     };
 
     let row_sigma = stage.sigma.as_rect().row(ypos / BLOCK_DIM + SIGMA_PADDING);
@@ -536,8 +543,11 @@ fn epf2_process_row_chunk(
     }
 });
 
-impl RenderPipelineStage for Epf2Stage {
-    type Type = RenderPipelineInOutStage<f32, f32, 1, 1, 0, 0>;
+impl RenderPipelineInOutStage for Epf2Stage {
+    type InputT = f32;
+    type OutputT = f32;
+    const SHIFT: (u8, u8) = (0, 0);
+    const BORDER: (u8, u8) = (1, 1);
 
     fn uses_channel(&self, c: usize) -> bool {
         c < 3
@@ -547,10 +557,11 @@ impl RenderPipelineStage for Epf2Stage {
         &self,
         (xpos, ypos): (usize, usize),
         xsize: usize,
-        row: &mut EPFRow,
+        input_rows: &[&[&[f32]]],
+        output_rows: &mut [&mut [&mut [f32]]],
         _state: Option<&mut dyn std::any::Any>,
     ) {
-        epf2_process_row_chunk_dispatch(self, (xpos, ypos), xsize, row);
+        epf2_process_row_chunk_dispatch(self, (xpos, ypos), xsize, input_rows, output_rows);
     }
 }
 
@@ -566,7 +577,7 @@ mod test {
     fn epf0_consistency() -> Result<()> {
         let mut rng = rand_xorshift::XorShiftRng::seed_from_u64(0);
         let sigma = Arc::new(Image::new_random((128, 128), &mut rng).unwrap());
-        crate::render::test::test_stage_consistency::<_, f32, f32>(
+        crate::render::test::test_stage_consistency(
             || Epf0Stage {
                 sigma_scale: 0.9,
                 border_sad_mul: 2.0 / 3.0,
@@ -582,7 +593,7 @@ mod test {
     fn epf1_consistency() -> Result<()> {
         let mut rng = rand_xorshift::XorShiftRng::seed_from_u64(0);
         let sigma = Arc::new(Image::new_random((128, 128), &mut rng).unwrap());
-        crate::render::test::test_stage_consistency::<_, f32, f32>(
+        crate::render::test::test_stage_consistency(
             || Epf1Stage {
                 sigma_scale: 1.0,
                 border_sad_mul: 2.0 / 3.0,
@@ -598,7 +609,7 @@ mod test {
     fn epf2_consistency() -> Result<()> {
         let mut rng = rand_xorshift::XorShiftRng::seed_from_u64(0);
         let sigma = Arc::new(Image::new_random((128, 128), &mut rng).unwrap());
-        crate::render::test::test_stage_consistency::<_, f32, f32>(
+        crate::render::test::test_stage_consistency(
             || Epf2Stage {
                 sigma_scale: 6.5,
                 border_sad_mul: 2.0 / 3.0,

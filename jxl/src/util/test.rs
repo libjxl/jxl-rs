@@ -109,6 +109,21 @@ pub fn assert_almost_abs_eq<T: AsPrimitive<f64> + Debug + Copy>(
     }
 }
 
+pub fn assert_almost_abs_eq_coords<T: AsPrimitive<f64> + Debug + Copy>(
+    left: T,
+    right: T,
+    max_abs_error: T,
+    pos: (usize, usize),
+    c: usize,
+) {
+    if abs_error_gt(left, right, max_abs_error) {
+        panic!(
+            "assertion failed @{pos:?}, c {c}: `(left ≈ right)`\n  left: `{left:?}`,\n right: `{right:?}`,\n abs error: `{:?}`\n max_abs_error: `{max_abs_error:?}`",
+            (left.as_() - right.as_()).abs()
+        );
+    }
+}
+
 fn assert_same_len<T: AsPrimitive<f64> + Debug + Copy>(left: &[T], right: &[T]) {
     if left.as_ref().len() != right.as_ref().len() {
         panic!(

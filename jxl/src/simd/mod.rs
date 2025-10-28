@@ -27,11 +27,21 @@ pub(crate) use scalar::test_all_instruction_sets;
 
 pub(crate) use scalar::ScalarDescriptor;
 
-const CACHE_LINE_BYTE_SIZE: usize = 64;
+pub const CACHE_LINE_BYTE_SIZE: usize = 64;
+
+pub const fn num_per_cache_line<T>() -> usize {
+    // Post-mono check that T is smaller than a cache line and has size a power of 2.
+    // This prevents some of the silliest mistakes.
+    const {
+        assert!(std::mem::size_of::<T>() <= CACHE_LINE_BYTE_SIZE);
+        assert!(std::mem::size_of::<T>().is_power_of_two());
+    }
+    CACHE_LINE_BYTE_SIZE / std::mem::size_of::<T>()
+}
 
 pub fn round_up_size_to_two_cache_lines<T>(size: usize) -> usize {
-    let elements_per_cache_line = CACHE_LINE_BYTE_SIZE / std::mem::size_of::<T>() * 2;
-    size.div_ceil(elements_per_cache_line) * elements_per_cache_line
+    let n = const { num_per_cache_line::<T>() * 2 };
+    size.div_ceil(n) * n
 }
 
 pub trait SimdDescriptor: Sized + Copy + Debug + Send + Sync {

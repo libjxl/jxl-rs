@@ -3,7 +3,7 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-use crate::render::{RenderPipelineInPlaceStage, RenderPipelineStage};
+use crate::render::RenderPipelineInPlaceStage;
 
 /// Render spot color
 pub struct SpotColorStage {
@@ -29,8 +29,8 @@ impl SpotColorStage {
     }
 }
 
-impl RenderPipelineStage for SpotColorStage {
-    type Type = RenderPipelineInPlaceStage<f32>;
+impl RenderPipelineInPlaceStage for SpotColorStage {
+    type Type = f32;
 
     fn uses_channel(&self, c: usize) -> bool {
         c < 3 || c == self.spot_c
@@ -79,7 +79,7 @@ mod test {
 
     #[test]
     fn consistency() -> Result<()> {
-        crate::render::test::test_stage_consistency::<_, f32, f32>(
+        crate::render::test::test_stage_consistency(
             || SpotColorStage::new(0, [0.0; 4]),
             (500, 500),
             4,
@@ -110,7 +110,7 @@ mod test {
             .copy_from_slice(&[1.0, 1.0, 1.0]);
 
         let stage = SpotColorStage::new(0, [0.5; 4]);
-        let output = make_and_run_simple_pipeline::<_, f32, f32>(
+        let output = make_and_run_simple_pipeline(
             stage,
             &[input_r, input_g, input_b, input_s],
             (3, 1),

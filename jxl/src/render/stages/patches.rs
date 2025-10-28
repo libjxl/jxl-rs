@@ -6,10 +6,8 @@
 use std::{any::Any, sync::Arc};
 
 use crate::{
-    features::patches::PatchesDictionary,
-    frame::ReferenceFrame,
-    headers::extra_channels::ExtraChannelInfo,
-    render::{RenderPipelineInPlaceStage, RenderPipelineStage},
+    features::patches::PatchesDictionary, frame::ReferenceFrame,
+    headers::extra_channels::ExtraChannelInfo, render::RenderPipelineInPlaceStage,
     util::NewWithCapacity as _,
 };
 
@@ -25,8 +23,8 @@ impl std::fmt::Display for PatchesStage {
     }
 }
 
-impl RenderPipelineStage for PatchesStage {
-    type Type = RenderPipelineInPlaceStage<f32>;
+impl RenderPipelineInPlaceStage for PatchesStage {
+    type Type = f32;
 
     fn uses_channel(&self, c: usize) -> bool {
         c < 3 + self.extra_channels.len()
@@ -83,7 +81,7 @@ mod test {
             Some(ReferenceFrame::random(&mut rng, 500, 500, 4, false)?),
             Some(ReferenceFrame::random(&mut rng, 500, 500, 4, false)?),
         ]);
-        crate::render::test::test_stage_consistency::<_, f32, f32>(
+        crate::render::test::test_stage_consistency(
             || PatchesStage {
                 patches: patch_dict.clone(),
                 extra_channels: file_header.image_metadata.extra_channel_info.clone(),

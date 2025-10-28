@@ -108,6 +108,14 @@ impl CodestreamParser {
         }
     }
 
+    #[cfg(test)]
+    pub(crate) fn set_use_simple_pipeline(&mut self, u: bool) {
+        self.decoder_state
+            .as_mut()
+            .unwrap()
+            .set_use_simple_pipeline(u);
+    }
+
     pub(super) fn process<In: JxlBitstreamInput>(
         &mut self,
         box_parser: &mut BoxParser,

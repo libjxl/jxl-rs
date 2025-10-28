@@ -3,130 +3,91 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-use internal::RenderPipelineStageInfo;
-use std::{any::Any, marker::PhantomData};
+use internal::{RenderPipelineShared, RunInOutStage, RunInPlaceStage};
+use std::any::Any;
 
 use crate::{
-    api::{JxlColorType, JxlDataFormat, JxlOutputBuffer},
+    api::JxlOutputBuffer,
     error::Result,
-    headers::Orientation,
     image::{Image, ImageDataType},
 };
 
+mod builder;
 mod internal;
+mod low_memory_pipeline;
+mod save;
 mod simple_pipeline;
 pub mod stages;
 #[cfg(test)]
 mod test;
 
-pub use simple_pipeline::{SimpleRenderPipeline, SimpleRenderPipelineBuilder};
+pub(crate) use builder::RenderPipelineBuilder;
+pub(crate) use low_memory_pipeline::LowMemoryRenderPipeline;
+pub(crate) use simple_pipeline::SimpleRenderPipeline;
 
 /// Modifies channels in-place.
-///
-/// For these stages, `process_row_chunk` receives read-write access to each row in each channel.
-pub struct RenderPipelineInPlaceStage<T: ImageDataType> {
-    _phantom: PhantomData<T>,
-}
+pub trait RenderPipelineInPlaceStage: Any + std::fmt::Display {
+    type Type: ImageDataType;
 
-/// Modifies data and writes it to a new buffer, of possibly different type.
-///
-/// BORDER_X and BORDER_Y represent the amount of padding required on the input side.
-/// SHIFT_X and SHIFT_Y represent the base 2 log of the number of rows/columns produced
-/// for each row/column of input.
-///
-/// For each channel:
-///  - the input slice contains 1 + BORDER_Y * 2 slices, each of length
-///    xsize + BORDER_X * 2, i.e. covering one input row and up to BORDER pixels of
-///    padding on either side.
-///  - the output slice contains 1 << SHIFT_Y slices, each of length xsize << SHIFT_X, the
-///    corresponding output pixels.
-///
-/// `process_row_chunk` is passed a pair of q(input, output)` slices.
-pub struct RenderPipelineInOutStage<
-    InputT: ImageDataType,
-    OutputT: ImageDataType,
-    const BORDER_X: u8,
-    const BORDER_Y: u8,
-    const SHIFT_X: u8,
-    const SHIFT_Y: u8,
-> {
-    _phantom: PhantomData<(InputT, OutputT)>,
-}
-
-/// Does not directly modify the current image pixels, but extends the current image with
-/// additional data.
-///
-/// `uses_channel` must always return true, and stages of this type should override
-/// `new_size` and `original_data_origin`.
-/// `process_row_chunk` will be called with the *new* image coordinates, and will only be called
-/// on row chunks outside of the original image data.
-/// After stages of this type, no stage can have a non-0 SHIFT_X or SHIFT_Y.
-pub struct RenderPipelineExtendStage<T: ImageDataType> {
-    _phantom: PhantomData<T>,
-}
-
-// TODO(veluca): figure out how to modify the interface for concurrent usage.
-pub trait RenderPipelineStage: Any + std::fmt::Display {
-    type Type: RenderPipelineStageInfo;
-
-    /// Which channels are actually used by this stage.
-    /// Must always return `true` if `Self::Type` is `RenderPipelineExtendStage`.
-    fn uses_channel(&self, c: usize) -> bool;
-
-    /// Process one chunk of row. The semantics of this function are detailed in the
-    /// documentation of the various types of stages.
     fn process_row_chunk(
         &self,
         position: (usize, usize),
         xsize: usize,
         // one for each channel
-        row: &mut [<Self::Type as RenderPipelineStageInfo>::RowType<'_>],
+        row: &mut [&mut [Self::Type]],
         state: Option<&mut dyn Any>,
     );
 
-    /// Returns the new size of the image after this stage. Should be implemented by
-    /// `RenderPipelineExtendStage` stages.
-    fn new_size(&self, current_size: (usize, usize)) -> (usize, usize) {
-        current_size
-    }
-
-    /// Returns the origin of the original image data in the output of this stage.
-    /// Should be implemented by `RenderPipelineExtendStage` stages.
-    fn original_data_origin(&self) -> (isize, isize) {
-        (0, 0)
-    }
-
-    /// Initializes thread local state for the stage. Returns `Ok(None)` if no state is needed.
-    ///
-    /// This method returns `Box<dyn Any>` for dyn compatibility. `process_row_chunk` should
-    /// downcast the state to the desired type.
     fn init_local_state(&self) -> Result<Option<Box<dyn Any>>> {
         Ok(None)
     }
+
+    fn uses_channel(&self, c: usize) -> bool;
 }
 
-pub trait RenderPipelineBuilder: Sized {
-    type RenderPipeline: RenderPipeline;
-    fn new(
-        num_channels: usize,
-        size: (usize, usize),
-        downsampling_shift: usize,
-        log_group_size: usize,
-    ) -> Self;
-    fn add_stage<Stage: RenderPipelineStage>(self, stage: Stage) -> Result<Self>;
-    fn add_save_stage(
-        self,
-        channels: &[usize],
-        orientation: Orientation,
-        output_buffer_index: usize,
-        color_type: JxlColorType,
-        data_format: JxlDataFormat,
-    ) -> Result<Self>;
-    fn build(self) -> Result<Self::RenderPipeline>;
+/// Modifies data and writes it to a new buffer, of possibly different type.
+///
+/// BORDER.0 and BORDER.1 represent the amount of padding required on the input side.
+/// SHIFT.0 and SHIFT.1 represent the base 2 log of the number of rows/columns produced
+/// for each row/column of input.
+///
+/// For each channel:
+///  - the input slice contains 1 + BORDER.1 * 2 slices, each of length
+///    xsize + BORDER.0 * 2, i.e. covering one input row and up to BORDER pixels of
+///    padding on either side.
+///  - the output slice contains 1 << SHIFT.1 slices, each of length xsize << SHIFT.0, the
+///    corresponding output pixels.
+pub trait RenderPipelineInOutStage: Any + std::fmt::Display {
+    type InputT: ImageDataType;
+    type OutputT: ImageDataType;
+
+    const BORDER: (u8, u8);
+    const SHIFT: (u8, u8);
+
+    fn process_row_chunk(
+        &self,
+        position: (usize, usize),
+        xsize: usize,
+        // channel, row, column
+        input_rows: &[&[&[Self::InputT]]],
+        // channel, row, column
+        output_rows: &mut [&mut [&mut [Self::OutputT]]],
+        state: Option<&mut dyn Any>,
+    );
+
+    fn init_local_state(&self) -> Result<Option<Box<dyn Any>>> {
+        Ok(None)
+    }
+
+    fn uses_channel(&self, c: usize) -> bool;
 }
 
-pub trait RenderPipeline {
-    type Builder: RenderPipelineBuilder<RenderPipeline = Self>;
+// TODO(veluca): find a way to reduce the generated code due to having two builders, to integrate
+// SIMD dispatch in the pipeline, and to test consistency across instruction sets in the pipeline.
+pub(crate) trait RenderPipeline: Sized {
+    type Buffer: 'static;
+
+    fn new_from_shared(shared: RenderPipelineShared<Self::Buffer>) -> Result<Self>;
 
     /// Obtains a buffer suitable for storing the input at  channel `channel` of group `group_id`.
     /// This *might* be a buffer that was used to store that channel for that group in a previous
@@ -151,5 +112,11 @@ pub trait RenderPipeline {
     /// Renders new data that is available after the last call to `render`.
     fn do_render(&mut self, buffers: &mut [Option<JxlOutputBuffer>]) -> Result<()>;
 
-    fn num_groups(&self) -> usize;
+    fn box_inout_stage<S: RenderPipelineInOutStage>(
+        stage: S,
+    ) -> Box<dyn RunInOutStage<Self::Buffer>>;
+
+    fn box_inplace_stage<S: RenderPipelineInPlaceStage>(
+        stage: S,
+    ) -> Box<dyn RunInPlaceStage<Self::Buffer>>;
 }

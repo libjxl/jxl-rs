@@ -8,8 +8,9 @@
 use core::slice;
 use std::{marker::PhantomData, mem::MaybeUninit, ops::Range};
 
-use crate::image::{Image, ImageDataType};
+use crate::image::{Image, ImageDataType, Rect};
 
+#[derive(Debug)]
 pub struct JxlOutputBuffer<'a> {
     // Safety invariants:
     //  - uninit data is never written to `buf`.
@@ -154,6 +155,26 @@ impl<'a> JxlOutputBuffer<'a> {
             _ph: PhantomData,
             ..*lender
         }
+    }
+
+    /// Extracts a sub-rectangle from this buffer. Rectangle coordinates are in bytes.
+    pub(crate) fn subrect(&mut self, rect: Rect) -> Self {
+        assert!(rect.origin.1 < self.num_rows);
+        assert!(rect.origin.1.checked_add(rect.size.1).unwrap() <= self.num_rows);
+        assert!(rect.origin.0 < self.bytes_per_row);
+        assert!(rect.origin.0.checked_add(rect.size.0).unwrap() <= self.bytes_per_row);
+        // SAFETY: the safety invariant of `self`, together with the above check, guarantees that
+        // the calculation does not overflow and that the new pointer stays within the bounds of
+        // the allocation.
+        let start_ptr = unsafe {
+            self.buf
+                .add(rect.origin.1 * self.bytes_between_rows + rect.origin.0)
+        };
+        // SAFETY: Thanks to the check above, all the bytes accessible from `buf` at the
+        // appropriate ranges are a subset of the ones accessible from `self.buf` at the
+        // correct ranges for `self`. Thus, the safety invariant of `self` ensures that
+        // the safety preconditions of this call are satisfied.
+        unsafe { Self::new_from_ptr(start_ptr, rect.size.1, rect.size.0, self.bytes_between_rows) }
     }
 
     pub(crate) fn byte_size(&self) -> (usize, usize) {

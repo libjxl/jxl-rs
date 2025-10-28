@@ -11,7 +11,7 @@ use crate::{
     },
     frame::ReferenceFrame,
     headers::{FileHeader, extra_channels::ExtraChannelInfo, frame_header::*},
-    render::{RenderPipelineInPlaceStage, RenderPipelineStage},
+    render::RenderPipelineInPlaceStage,
     util::slice,
 };
 
@@ -69,8 +69,8 @@ impl std::fmt::Display for BlendingStage {
     }
 }
 
-impl RenderPipelineStage for BlendingStage {
-    type Type = RenderPipelineInPlaceStage<f32>;
+impl RenderPipelineInPlaceStage for BlendingStage {
+    type Type = f32;
 
     fn uses_channel(&self, c: usize) -> bool {
         c < 3 + self.extra_channels.len()
@@ -176,7 +176,7 @@ mod test {
             Some(ReferenceFrame::random(&mut rng, 500, 500, 4, false)?),
             Some(ReferenceFrame::random(&mut rng, 500, 500, 4, false)?),
         ];
-        crate::render::test::test_stage_consistency::<_, f32, f32>(
+        crate::render::test::test_stage_consistency(
             || BlendingStage::new(&frame_header, &file_header, &reference_frames).unwrap(),
             (500, 500),
             4,

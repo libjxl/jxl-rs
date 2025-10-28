@@ -6,61 +6,14 @@
 use half::f16;
 
 use crate::{
-    api::{Endianness, JxlColorType, JxlDataFormat, JxlOutputBuffer},
-    error::{Error, Result},
-    headers::Orientation,
-    image::{DataTypeTag, Image},
+    api::{Endianness, JxlDataFormat, JxlOutputBuffer},
+    error::Result,
+    image::Image,
+    render::save::SaveStage,
 };
 
-pub struct SaveStage {
-    channels: Vec<usize>,
-    orientation: Orientation,
-    output_buffer_index: usize,
-    color_type: JxlColorType,
-    // TODO(veluca): should SaveStage handle bit_depth, or should it be handled when converting to
-    // the correct data type?
-    data_format: JxlDataFormat,
-}
-
 impl SaveStage {
-    pub(crate) fn new(
-        channels: &[usize],
-        orientation: Orientation,
-        output_buffer_index: usize,
-        mut color_type: JxlColorType,
-        data_format: JxlDataFormat,
-    ) -> SaveStage {
-        let mut channels = channels.to_vec();
-        if color_type == JxlColorType::Bgr {
-            color_type = JxlColorType::Rgb;
-            channels.swap(0, 2);
-        }
-        if color_type == JxlColorType::Bgra {
-            color_type = JxlColorType::Rgba;
-            channels.swap(0, 2);
-        }
-        Self {
-            channels,
-            orientation,
-            output_buffer_index,
-            color_type,
-            data_format,
-        }
-    }
-}
-
-impl std::fmt::Display for SaveStage {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(
-            f,
-            "save channels {:?} (type {:?} {:?})",
-            self.channels, self.color_type, self.data_format
-        )
-    }
-}
-
-impl SaveStage {
-    pub(super) fn save(
+    pub(super) fn save_simple(
         &self,
         data: &[Image<f64>],
         buffers: &mut [Option<JxlOutputBuffer>],
@@ -72,24 +25,8 @@ impl SaveStage {
             return Ok(());
         };
         let size = data[0].size();
-        let osize = if self.orientation.is_transposing() {
-            (size.1, size.0)
-        } else {
-            size
-        };
 
-        let expected_w = self.channels.len() * self.data_format.bytes_per_sample() * osize.0;
-
-        if buf.byte_size() != (expected_w, osize.1) {
-            return Err(Error::InvalidOutputBufferSize(
-                buf.byte_size().0,
-                buf.byte_size().1,
-                osize.0,
-                osize.1,
-                self.color_type,
-                self.data_format,
-            ));
-        }
+        self.check_buffer_size(size, Some(buf))?;
 
         // TODO(veluca): this is very slow. That's fine for the simple pipeline, but probably not
         // so fine for the final one.
@@ -98,16 +35,7 @@ impl SaveStage {
             for y in 0..size.1 {
                 let src_row = chan.row(y);
                 for (x, &px) in src_row.iter().enumerate() {
-                    let (dx, dy) = match self.orientation {
-                        Orientation::Identity => (x, y),
-                        Orientation::Rotate90 => (y, size.0 - 1 - x),
-                        Orientation::Rotate180 => (size.0 - 1 - x, size.1 - 1 - y),
-                        Orientation::Rotate270 => (size.1 - 1 - y, x),
-                        Orientation::Transpose => (y, x),
-                        Orientation::FlipVertical => (x, size.1 - 1 - y),
-                        Orientation::FlipHorizontal => (size.0 - 1 - x, y),
-                        Orientation::AntiTranspose => (size.1 - 1 - y, size.0 - 1 - x),
-                    };
+                    let (dx, dy) = self.orientation.display_pixel((x, y), size);
                     let dx = dx * self.channels.len() + c;
                     let bps = self.data_format.bytes_per_sample();
 
@@ -142,20 +70,14 @@ impl SaveStage {
         }
         Ok(())
     }
-
-    pub(super) fn uses_channel(&self, c: usize) -> bool {
-        self.channels.contains(&c)
-    }
-
-    pub(super) fn input_type(&self) -> DataTypeTag {
-        self.data_format.data_type()
-    }
 }
 
 #[cfg(test)]
 mod test {
     use super::*;
-    use crate::{image::ImageDataType, util::test::assert_almost_eq};
+    use crate::{
+        api::JxlColorType, headers::Orientation, image::ImageDataType, util::test::assert_almost_eq,
+    };
     use rand::SeedableRng;
     use rand_xorshift::XorShiftRng;
     use test_log::test;
@@ -173,7 +95,7 @@ mod test {
         let src = [Image::<f64>::new_random((128, 128), &mut rng)?];
         let mut dst = Image::<u8>::new_random((128, 128), &mut rng)?;
 
-        save_stage.save(&src, &mut [Some(JxlOutputBuffer::from_image(&mut dst))])?;
+        save_stage.save_simple(&src, &mut [Some(JxlOutputBuffer::from_image(&mut dst))])?;
 
         for y in 0..128 {
             for x in 0..128 {
@@ -212,7 +134,7 @@ mod test {
         let mut rng = XorShiftRng::seed_from_u64(0);
         let mut dst = Image::<f32>::new_random((ow, oh), &mut rng)?;
 
-        save_stage.save(&src, &mut [Some(JxlOutputBuffer::from_image(&mut dst))])?;
+        save_stage.save_simple(&src, &mut [Some(JxlOutputBuffer::from_image(&mut dst))])?;
 
         // Iterate over the DESTINATION image pixels.
         for y_dest in 0..oh {

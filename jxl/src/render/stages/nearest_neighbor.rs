@@ -3,7 +3,7 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-use crate::render::{RenderPipelineInOutStage, RenderPipelineStage};
+use crate::render::RenderPipelineInOutStage;
 pub struct NearestNeighbourUpsample {
     channel: usize,
 }
@@ -24,8 +24,11 @@ impl std::fmt::Display for NearestNeighbourUpsample {
     }
 }
 
-impl RenderPipelineStage for NearestNeighbourUpsample {
-    type Type = RenderPipelineInOutStage<u8, u8, 0, 0, 1, 1>;
+impl RenderPipelineInOutStage for NearestNeighbourUpsample {
+    type InputT = f32;
+    type OutputT = f32;
+    const SHIFT: (u8, u8) = (1, 1);
+    const BORDER: (u8, u8) = (0, 0);
 
     fn uses_channel(&self, c: usize) -> bool {
         c == self.channel
@@ -35,10 +38,12 @@ impl RenderPipelineStage for NearestNeighbourUpsample {
         &self,
         _position: (usize, usize),
         xsize: usize,
-        row: &mut [(&[&[u8]], &mut [&mut [u8]])],
+        input_rows: &[&[&[f32]]],
+        output_rows: &mut [&mut [&mut [f32]]],
         _state: Option<&mut dyn std::any::Any>,
     ) {
-        let (input, output) = &mut row[0];
+        let input = input_rows[0];
+        let output = &mut output_rows[0];
         for i in 0..xsize {
             output[0][i * 2] = input[0][i];
             output[0][i * 2 + 1] = input[0][i];
@@ -57,7 +62,7 @@ mod test {
 
     #[test]
     fn nn_consistency() -> Result<()> {
-        crate::render::test::test_stage_consistency::<_, u8, u8>(
+        crate::render::test::test_stage_consistency(
             || NearestNeighbourUpsample::new(0),
             (500, 500),
             1,
@@ -69,9 +74,9 @@ mod test {
         let image_size = (500, 400);
         let input_size = (image_size.0 / 2, image_size.1 / 2);
         let mut rng = rand_xorshift::XorShiftRng::seed_from_u64(0);
-        let input = vec![Image::<u8>::new_random(input_size, &mut rng)?];
+        let input = vec![Image::<f32>::new_random(input_size, &mut rng)?];
         let stage = NearestNeighbourUpsample::new(0);
-        let output: Vec<Image<u8>> =
+        let output: Vec<Image<f32>> =
             make_and_run_simple_pipeline(stage, &input, image_size, 0, 256)?;
         assert_eq!(image_size, output[0].size());
         for y in 0..image_size.1 {

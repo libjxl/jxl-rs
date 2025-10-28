@@ -129,8 +129,8 @@ pub enum Error {
         "Pipeline channel type mismatch: stage {0} channel {1}, expected {2:?} but found {3:?}"
     )]
     PipelineChannelTypeMismatch(String, usize, DataTypeTag, DataTypeTag),
-    #[error("Pipeline has a stage ({0}) with a shift after an expand stage")]
-    PipelineShiftAfterExpand(String),
+    #[error("Invalid stage {0} after extend stage")]
+    PipelineInvalidStageAfterExtend(String),
     #[error("Channel {0} was not used in the render pipeline")]
     PipelineChannelUnused(usize),
     #[error("Trying to copy rects of different size, src: {0}x{1} dst {2}x{3}")]
@@ -257,6 +257,8 @@ pub enum Error {
     NotGrayscale,
     #[error("Invalid output buffer byte size {0}x{1} for {2}x{3} image with type {4:?} {5:?}")]
     InvalidOutputBufferSize(usize, usize, usize, usize, JxlColorType, JxlDataFormat),
+    #[error("Attempting to save channels with different downsample amounts: {0:?} and {1:?}")]
+    SaveDifferentDownsample((u8, u8), (u8, u8)),
 }
 
 pub type Result<T, E = Error> = std::result::Result<T, E>;

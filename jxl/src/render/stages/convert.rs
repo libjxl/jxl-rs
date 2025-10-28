@@ -4,9 +4,8 @@
 // license that can be found in the LICENSE file.
 
 use crate::{
-    frame::quantizer::LfQuantFactors,
-    headers::bit_depth::BitDepth,
-    render::{RenderPipelineInOutStage, RenderPipelineStage},
+    frame::quantizer::LfQuantFactors, headers::bit_depth::BitDepth,
+    render::RenderPipelineInOutStage,
 };
 
 pub struct ConvertU8F32Stage {
@@ -25,8 +24,11 @@ impl std::fmt::Display for ConvertU8F32Stage {
     }
 }
 
-impl RenderPipelineStage for ConvertU8F32Stage {
-    type Type = RenderPipelineInOutStage<u8, f32, 0, 0, 0, 0>;
+impl RenderPipelineInOutStage for ConvertU8F32Stage {
+    type InputT = u8;
+    type OutputT = f32;
+    const SHIFT: (u8, u8) = (0, 0);
+    const BORDER: (u8, u8) = (0, 0);
 
     fn uses_channel(&self, c: usize) -> bool {
         c == self.channel
@@ -36,12 +38,13 @@ impl RenderPipelineStage for ConvertU8F32Stage {
         &self,
         _position: (usize, usize),
         xsize: usize,
-        row: &mut [(&[&[u8]], &mut [&mut [f32]])],
+        input_rows: &[&[&[u8]]],
+        output_rows: &mut [&mut [&mut [f32]]],
         _state: Option<&mut dyn std::any::Any>,
     ) {
-        let (input, output) = &mut row[0];
+        let input = input_rows[0];
         for i in 0..xsize {
-            output[0][i] = input[0][i] as f32 * (1.0 / 255.0);
+            output_rows[0][0][i] = input[0][i] as f32 * (1.0 / 255.0);
         }
     }
 }
@@ -72,8 +75,11 @@ impl std::fmt::Display for ConvertModularXYBToF32Stage {
     }
 }
 
-impl RenderPipelineStage for ConvertModularXYBToF32Stage {
-    type Type = RenderPipelineInOutStage<i32, f32, 0, 0, 0, 0>;
+impl RenderPipelineInOutStage for ConvertModularXYBToF32Stage {
+    type InputT = i32;
+    type OutputT = f32;
+    const SHIFT: (u8, u8) = (0, 0);
+    const BORDER: (u8, u8) = (0, 0);
 
     fn uses_channel(&self, c: usize) -> bool {
         (self.first_channel..self.first_channel + 3).contains(&c)
@@ -83,19 +89,17 @@ impl RenderPipelineStage for ConvertModularXYBToF32Stage {
         &self,
         _position: (usize, usize),
         xsize: usize,
-        row: &mut [(&[&[i32]], &mut [&mut [f32]])],
+        input_rows: &[&[&[i32]]],
+        output_rows: &mut [&mut [&mut [f32]]],
         _state: Option<&mut dyn std::any::Any>,
     ) {
         let [scale_x, scale_y, scale_b] = self.scale;
-        let [
-            (input_y, output_x),
-            (input_x, output_y),
-            (input_b, output_b),
-        ] = row
+        let ([input_y, input_x, input_b], [output_x, output_y, output_b]) =
+            (input_rows, output_rows)
         else {
             panic!(
                 "incorrect number of channels; expected 3, found {}",
-                row.len()
+                input_rows.len()
             );
         };
         for i in 0..xsize {
@@ -187,8 +191,11 @@ fn int_to_float(input: &[i32], output: &mut [f32], bit_depth: &BitDepth) {
     }
 }
 
-impl RenderPipelineStage for ConvertModularToF32Stage {
-    type Type = RenderPipelineInOutStage<i32, f32, 0, 0, 0, 0>;
+impl RenderPipelineInOutStage for ConvertModularToF32Stage {
+    type InputT = i32;
+    type OutputT = f32;
+    const SHIFT: (u8, u8) = (0, 0);
+    const BORDER: (u8, u8) = (0, 0);
 
     fn uses_channel(&self, c: usize) -> bool {
         c == self.channel
@@ -198,16 +205,21 @@ impl RenderPipelineStage for ConvertModularToF32Stage {
         &self,
         _position: (usize, usize),
         xsize: usize,
-        row: &mut [(&[&[i32]], &mut [&mut [f32]])],
+        input_rows: &[&[&[i32]]],
+        output_rows: &mut [&mut [&mut [f32]]],
         _state: Option<&mut dyn std::any::Any>,
     ) {
-        let (input, output) = &mut row[0];
+        let input = input_rows[0];
         if self.bit_depth.floating_point_sample() {
-            int_to_float(&input[0][..xsize], &mut output[0][..xsize], &self.bit_depth);
+            int_to_float(
+                &input[0][..xsize],
+                &mut output_rows[0][0][..xsize],
+                &self.bit_depth,
+            );
         } else {
             let scale = 1.0 / ((1u64 << self.bit_depth.bits_per_sample()) - 1) as f32;
             for i in 0..xsize {
-                output[0][i] = input[0][i] as f32 * scale;
+                output_rows[0][0][i] = input[0][i] as f32 * scale;
             }
         }
     }
@@ -221,10 +233,6 @@ mod test {
 
     #[test]
     fn u8_consistency() -> Result<()> {
-        crate::render::test::test_stage_consistency::<_, u8, f32>(
-            || ConvertU8F32Stage::new(0),
-            (500, 500),
-            1,
-        )
+        crate::render::test::test_stage_consistency(|| ConvertU8F32Stage::new(0), (500, 500), 1)
     }
 }

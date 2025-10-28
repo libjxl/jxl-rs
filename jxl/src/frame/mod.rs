@@ -3,6 +3,8 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
+use std::any::Any;
+
 use crate::{
     bit_reader::BitReader,
     entropy_coding::decode::Histograms,
@@ -16,7 +18,6 @@ use crate::{
         permutation::Permutation,
     },
     image::Image,
-    render::SimpleRenderPipeline,
     util::tracing_wrappers::*,
 };
 use adaptive_lf_smoothing::adaptive_lf_smoothing;
@@ -118,6 +119,7 @@ pub struct DecoderState {
     pub xyb_output_linear: bool,
     pub enable_output: bool,
     pub render_spotcolors: bool,
+    pub use_simple_pipeline: bool,
 }
 
 impl DecoderState {
@@ -131,6 +133,7 @@ impl DecoderState {
             xyb_output_linear: true,
             enable_output: true,
             render_spotcolors: true,
+            use_simple_pipeline: false,
         }
     }
 
@@ -141,6 +144,10 @@ impl DecoderState {
     pub fn reference_frame(&self, i: usize) -> Option<&ReferenceFrame> {
         assert!(i < Self::MAX_STORED_FRAMES);
         self.reference_frames[i].as_ref()
+    }
+
+    pub fn set_use_simple_pipeline(&mut self, u: bool) {
+        self.use_simple_pipeline = u;
     }
 }
 
@@ -163,9 +170,10 @@ pub struct Frame {
     quant_lf: Image<u8>,
     hf_meta: Option<HfMetadata>,
     decoder_state: DecoderState,
-    render_pipeline: Option<SimpleRenderPipeline>,
+    render_pipeline: Option<Box<dyn Any>>,
     reference_frame_data: Option<Vec<Image<f32>>>,
     lf_frame_data: Option<[Image<f32>; 3]>,
+    use_simple_pipeline: bool,
 }
 
 impl Frame {
@@ -261,10 +269,21 @@ impl Frame {
 mod test {
     use std::panic;
 
-    use crate::{error::Error, features::spline::Point, util::test::assert_almost_abs_eq};
+    use crate::{
+        error::{Error, Result},
+        features::spline::Point,
+        util::test::assert_almost_abs_eq,
+    };
     use test_log::test;
 
     use super::Frame;
+
+    fn decode(
+        bytes: &[u8],
+        verify: impl Fn(&Frame, usize) -> Result<()> + 'static,
+    ) -> Result<usize> {
+        crate::api::tests::decode(bytes, usize::MAX, false, Some(Box::new(verify))).map(|x| x.0)
+    }
 
     #[test]
     fn splines() -> Result<(), Error> {
@@ -317,10 +336,9 @@ mod test {
             Ok(())
         };
         assert_eq!(
-            crate::api::tests::decode(
+            decode(
                 include_bytes!("../../resources/test/splines.jxl"),
-                usize::MAX,
-                Some(Box::new(verify_frame)),
+                verify_frame
             )?,
             1
         );
@@ -341,10 +359,9 @@ mod test {
             Ok(())
         };
         assert_eq!(
-            crate::api::tests::decode(
+            decode(
                 include_bytes!("../../resources/test/8x8_noise.jxl"),
-                usize::MAX,
-                Some(Box::new(verify_frame)),
+                verify_frame,
             )?,
             1
         );
@@ -364,10 +381,9 @@ mod test {
             Ok(())
         };
         assert_eq!(
-            crate::api::tests::decode(
+            decode(
                 include_bytes!("../../resources/test/grayscale_patches_modular.jxl"),
-                usize::MAX,
-                Some(Box::new(verify_frame)),
+                verify_frame,
             )?,
             2
         );
@@ -397,10 +413,9 @@ mod test {
             }
             Ok(())
         };
-        crate::api::tests::decode(
+        decode(
             include_bytes!("../../resources/test/multiple_lf_420.jxl"),
-            usize::MAX,
-            Some(Box::new(verify_frame)),
+            verify_frame,
         )?;
         Ok(())
     }
@@ -425,10 +440,9 @@ mod test {
             Ok(())
         };
         assert_eq!(
-            crate::api::tests::decode(
+            decode(
                 include_bytes!("../../resources/test/grayscale_patches_var_dct.jxl"),
-                usize::MAX,
-                Some(Box::new(verify_frame)),
+                verify_frame,
             )?,
             2
         );
