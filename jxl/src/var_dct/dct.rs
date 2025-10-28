@@ -729,18 +729,28 @@ pub fn compute_scaled_dct<D: SimdDescriptor, const ROWS: usize, const COLS: usiz
 
 
     // Normalization and output
-    let normalization_factor = D::F32Vec::splat(d, 1.0 / (ROWS * COLS) as f32);
+    let norm_factor_scalar = 1.0 / (ROWS * COLS) as f32;
+
     if ROWS >= COLS {
-        if ROWS * COLS < D::F32Vec::LEN {
-            let coeffs =
-                D::F32Vec::load_partial(d, ROWS * COLS, transposed_dct_buffer.as_flattened());
-            (coeffs * normalization_factor).store_partial(ROWS * COLS, to);
+        // For small sizes, use scalar normalization (faster due to compiler optimization)
+        if ROWS * COLS <= 64 {
+            for i in 0..ROWS * COLS {
+                to[i] = transposed_dct_buffer.as_flattened()[i] * norm_factor_scalar;
+            }
         } else {
-            assert_eq!(ROWS * COLS % D::F32Vec::LEN, 0);
-            for i in (0..ROWS * COLS).step_by(D::F32Vec::LEN) {
+            // For large sizes, use SIMD normalization
+            let normalization_factor = D::F32Vec::splat(d, norm_factor_scalar);
+            if ROWS * COLS < D::F32Vec::LEN {
                 let coeffs =
-                    D::F32Vec::load(d, transposed_dct_buffer.as_flattened()[i..].as_ref());
-                (coeffs * normalization_factor).store(to[i..].as_mut());
+                    D::F32Vec::load_partial(d, ROWS * COLS, transposed_dct_buffer.as_flattened());
+                (coeffs * normalization_factor).store_partial(ROWS * COLS, to);
+            } else {
+                assert_eq!(ROWS * COLS % D::F32Vec::LEN, 0);
+                for i in (0..ROWS * COLS).step_by(D::F32Vec::LEN) {
+                    let coeffs =
+                        D::F32Vec::load(d, transposed_dct_buffer.as_flattened()[i..].as_ref());
+                    (coeffs * normalization_factor).store(to[i..].as_mut());
+                }
             }
         }
     } else {
@@ -748,14 +758,24 @@ pub fn compute_scaled_dct<D: SimdDescriptor, const ROWS: usize, const COLS: usiz
             transposed_dct_buffer.as_flattened(),
             to[..ROWS * COLS].as_mut(),
         );
-        if ROWS * COLS < D::F32Vec::LEN {
-            let coeffs = D::F32Vec::load_partial(d, ROWS * COLS, to);
-            (coeffs * normalization_factor).store_partial(ROWS * COLS, to);
+
+        // For small sizes, use scalar normalization (faster due to compiler optimization)
+        if ROWS * COLS <= 64 {
+            for i in 0..ROWS * COLS {
+                to[i] *= norm_factor_scalar;
+            }
         } else {
-            assert_eq!(ROWS * COLS % D::F32Vec::LEN, 0);
-            for i in (0..ROWS * COLS).step_by(D::F32Vec::LEN) {
-                let coeffs = D::F32Vec::load(d, to[i..].as_ref());
-                (coeffs * normalization_factor).store(to[i..].as_mut());
+            // For large sizes, use SIMD normalization
+            let normalization_factor = D::F32Vec::splat(d, norm_factor_scalar);
+            if ROWS * COLS < D::F32Vec::LEN {
+                let coeffs = D::F32Vec::load_partial(d, ROWS * COLS, to);
+                (coeffs * normalization_factor).store_partial(ROWS * COLS, to);
+            } else {
+                assert_eq!(ROWS * COLS % D::F32Vec::LEN, 0);
+                for i in (0..ROWS * COLS).step_by(D::F32Vec::LEN) {
+                    let coeffs = D::F32Vec::load(d, to[i..].as_ref());
+                    (coeffs * normalization_factor).store(to[i..].as_mut());
+                }
             }
         }
     }
