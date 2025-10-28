@@ -318,6 +318,8 @@ impl Frame {
                 &decoder_state.file_header,
                 &decoder_state.reference_frames,
             )?)?;
+            // TODO(veluca): we might not need to add an extend stage if the image size is
+            // compatible with the frame size.
             pipeline = pipeline.add_extend_stage(ExtendToImageDimensionsStage::new(
                 frame_header,
                 &decoder_state.file_header,

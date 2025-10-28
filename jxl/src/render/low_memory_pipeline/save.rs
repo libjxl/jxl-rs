@@ -20,13 +20,52 @@ impl SaveStage {
         &self,
         data: &[&RowBuffer],
         buffers: &mut [Option<JxlOutputBuffer>],
-        size: (usize, usize),
-        image_y: usize,
-        group_y0: usize,
+        group_size: (usize, usize),
+        frame_y: usize,
+        group_origin: (usize, usize),
+        full_image_size: (usize, usize),
+        frame_origin: (isize, isize),
     ) -> Result<()> {
         let Some(buf) = buffers[self.output_buffer_index].as_mut() else {
             return Ok(());
         };
+
+        let group_y = frame_y - group_origin.1;
+
+        let relative_full_image_start = (
+            -frame_origin.0 - (group_origin.0 as isize),
+            -frame_origin.1 - (group_origin.1 as isize),
+        );
+
+        let relative_full_image_end = (
+            relative_full_image_start.0 + full_image_size.0 as isize,
+            relative_full_image_start.1 + full_image_size.1 as isize,
+        );
+
+        let save_start = (
+            relative_full_image_start.0.max(0) as usize,
+            relative_full_image_start.1.max(0) as usize,
+        );
+
+        let save_end = (
+            relative_full_image_end.0.clamp(0, group_size.0 as isize) as usize,
+            relative_full_image_end.1.clamp(0, group_size.1 as isize) as usize,
+        );
+
+        // If the visible area were empty, we'd have gotten None for the buffer.
+        assert!(save_start.0 < save_end.0);
+        assert!(save_start.1 < save_end.1);
+
+        if !(save_start.1..save_end.1).contains(&group_y) {
+            // The current row is outside the visible area - skip rendering it.
+            return Ok(());
+        }
+
+        let relative_y = group_y - save_start.1;
+
+        let save_size = (save_end.0 - save_start.0, save_end.1 - save_start.1);
+
+        // TODO(veluca): this is very slow, speed it up.
 
         macro_rules! write_pixel {
             ($px: expr, $endianness: expr, $y: expr, $x: expr) => {
@@ -40,51 +79,46 @@ impl SaveStage {
             };
         }
 
-        // TODO(veluca): this is very slow, speed it up.
         for (c, d) in data.iter().enumerate() {
             let nc = self.channels.len();
-            let (x0, y0) = self
-                .orientation
-                .display_pixel((0, image_y - group_y0), size);
-            let (x1, y1) = self
-                .orientation
-                .display_pixel((1, image_y - group_y0), size);
+            let (x0, y0) = self.orientation.display_pixel((0, relative_y), save_size);
+            let (x1, y1) = self.orientation.display_pixel((1, relative_y), save_size);
             let dx = x1 as isize - x0 as isize;
             let dy = y1 as isize - y0 as isize;
             match self.data_format {
                 JxlDataFormat::U8 { .. } => {
-                    let src_row = d.get_row::<u8>(image_y);
-                    for ix in 0..size.0 {
+                    let src_row = d.get_row::<u8>(frame_y);
+                    for ix in save_start.0..save_end.0 {
                         let px = src_row[RowBuffer::x0_offset::<u8>() + ix];
-                        let y = y0 + (dy * ix as isize) as usize;
-                        let x = x0 + (dx * ix as isize) as usize;
+                        let y = y0 + (dy * (ix - save_start.0) as isize) as usize;
+                        let x = x0 + (dx * (ix - save_start.0) as isize) as usize;
                         write_pixel!(px, Endianness::LittleEndian, y, x * nc + c);
                     }
                 }
                 JxlDataFormat::U16 { endianness, .. } => {
-                    let src_row = d.get_row::<u16>(image_y);
-                    for ix in 0..size.0 {
+                    let src_row = d.get_row::<u16>(frame_y);
+                    for ix in save_start.0..save_end.0 {
                         let px = src_row[RowBuffer::x0_offset::<u16>() + ix];
-                        let y = y0 + (dy * ix as isize) as usize;
-                        let x = x0 + (dx * ix as isize) as usize;
+                        let y = y0 + (dy * (ix - save_start.0) as isize) as usize;
+                        let x = x0 + (dx * (ix - save_start.0) as isize) as usize;
                         write_pixel!(px, endianness, y, (x * nc + c) * 2);
                     }
                 }
                 JxlDataFormat::F16 { endianness, .. } => {
-                    let src_row = d.get_row::<f16>(image_y);
-                    for ix in 0..size.0 {
+                    let src_row = d.get_row::<f16>(frame_y);
+                    for ix in save_start.0..save_end.0 {
                         let px = src_row[RowBuffer::x0_offset::<f16>() + ix];
-                        let y = y0 + (dy * ix as isize) as usize;
-                        let x = x0 + (dx * ix as isize) as usize;
+                        let y = y0 + (dy * (ix - save_start.0) as isize) as usize;
+                        let x = x0 + (dx * (ix - save_start.0) as isize) as usize;
                         write_pixel!(px, endianness, y, (x * nc + c) * 2);
                     }
                 }
                 JxlDataFormat::F32 { endianness, .. } => {
-                    let src_row = d.get_row::<f32>(image_y);
-                    for ix in 0..size.0 {
+                    let src_row = d.get_row::<f32>(frame_y);
+                    for ix in save_start.0..save_end.0 {
                         let px = src_row[RowBuffer::x0_offset::<f32>() + ix];
-                        let y = y0 + (dy * ix as isize) as usize;
-                        let x = x0 + (dx * ix as isize) as usize;
+                        let y = y0 + (dy * (ix - save_start.0) as isize) as usize;
+                        let x = x0 + (dx * (ix - save_start.0) as isize) as usize;
                         write_pixel!(px, endianness, y, (x * nc + c) * 4);
                     }
                 }

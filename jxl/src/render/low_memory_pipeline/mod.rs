@@ -36,6 +36,7 @@ struct SaveStageBufferInfo {
     downsample: (u8, u8),
     orientation: Orientation,
     byte_size: usize,
+    after_extend: bool,
 }
 
 pub struct LowMemoryRenderPipeline {
@@ -62,6 +63,148 @@ pub struct LowMemoryRenderPipeline {
     downsampling_for_stage: Vec<(usize, usize)>,
     // Local states of each stage, if any.
     local_states: Vec<Option<Box<dyn Any>>>,
+}
+
+fn extract_local_buffers<'a>(
+    buffers: &'a mut [Option<JxlOutputBuffer>],
+    save_buffer_info: &[SaveStageBufferInfo],
+    get_rect: impl Fn(&SaveStageBufferInfo) -> Option<Rect>,
+    frame_size: (usize, usize),
+    full_image_size: (usize, usize),
+    frame_origin: (isize, isize),
+) -> Result<Vec<Option<JxlOutputBuffer<'a>>>> {
+    let mut local_buffers = vec![];
+    local_buffers.try_reserve(buffers.len())?;
+    for _ in 0..buffers.len() {
+        local_buffers.push(None::<JxlOutputBuffer>);
+    }
+    let mut buffer_iter = buffers.iter_mut().enumerate();
+    for bi in save_buffer_info.iter() {
+        let Some(buf) = (loop {
+            let Some((i, b)) = buffer_iter.next() else {
+                panic!("Invalid save_buffer_info");
+            };
+            if i != bi.buffer_index {
+                continue;
+            }
+            break b;
+        }) else {
+            continue;
+        };
+        let Some(Rect { origin, size }) = get_rect(&bi) else {
+            continue;
+        };
+        let frame_size = (
+            frame_size.0.shrc(bi.downsample.0),
+            frame_size.1.shrc(bi.downsample.1),
+        );
+        let size = (
+            (size.0 + origin.0).min(frame_size.0) - origin.0,
+            (size.1 + origin.1).min(frame_size.1) - origin.1,
+        );
+        let mut rect = Rect { size, origin };
+        if bi.after_extend {
+            // clip this rect to its visible area in the full image (in full image coordinates).
+            let origin = (
+                rect.origin.0 as isize + frame_origin.0,
+                rect.origin.1 as isize + frame_origin.1,
+            );
+            let end = (
+                origin.0 + rect.size.0 as isize,
+                origin.1 + rect.size.1 as isize,
+            );
+            let origin = (origin.0.max(0) as usize, origin.1.max(0) as usize);
+            let end = (
+                end.0.min(full_image_size.0 as isize).max(0) as usize,
+                end.1.min(full_image_size.1 as isize).max(0) as usize,
+            );
+            if origin.0 >= end.0 || origin.1 >= end.1 {
+                // rect would be empty
+                continue;
+            }
+            rect = Rect {
+                origin,
+                size: (end.0 - origin.0, end.1 - origin.1),
+            };
+        }
+        let rect = bi.orientation.display_rect(rect, full_image_size);
+        let rect = Rect {
+            origin: (rect.origin.0 * bi.byte_size, rect.origin.1),
+            size: (rect.size.0 * bi.byte_size, rect.size.1),
+        };
+        local_buffers[bi.buffer_index] = Some(buf.subrect(rect));
+    }
+    Ok(local_buffers)
+}
+
+impl LowMemoryRenderPipeline {
+    fn render_padding(&mut self, buffers: &mut [Option<JxlOutputBuffer>]) -> Result<()> {
+        // TODO(veluca): consider pre-computing those strips at pipeline construction and making
+        // smaller strips.
+        let e = self.shared.extend_stage_index.unwrap();
+        let Stage::Extend(e) = &self.shared.stages[e] else {
+            unreachable!("extend stage is not an extend stage");
+        };
+        // Split the full image area in 4 strips: left and right of the frame, and above and below.
+        // We divide each part further in strips of width self.shared.chunk_size.
+        let mut strips = vec![];
+        if e.frame_origin.0 > 0 {
+            let xend = e.frame_origin.0 as usize;
+            for x in (0..xend).step_by(self.shared.chunk_size) {
+                let xe = (x + self.shared.chunk_size).min(xend);
+                strips.push((x..xe, 0..e.image_size.1));
+            }
+        }
+        if e.frame_origin.1 > 0 {
+            let xstart = e.frame_origin.0.max(0) as usize;
+            let xend = (e.frame_origin.0 + self.shared.input_size.0 as isize) as usize;
+            for x in (xstart..xend).step_by(self.shared.chunk_size) {
+                let xe = (x + self.shared.chunk_size).min(xend);
+                strips.push((x..xe, 0..e.frame_origin.1 as usize));
+            }
+        }
+        if e.frame_origin.1 + (self.shared.input_size.1 as isize) < e.image_size.1 as isize {
+            let ystart = (e.frame_origin.1 + (self.shared.input_size.1 as isize)).max(0) as usize;
+            let yend = e.image_size.1;
+            let xstart = e.frame_origin.0.max(0) as usize;
+            let xend = (e.frame_origin.0 + self.shared.input_size.0 as isize) as usize;
+            for x in (xstart..xend).step_by(self.shared.chunk_size) {
+                let xe = (x + self.shared.chunk_size).min(xend);
+                strips.push((x..xe, ystart..yend));
+            }
+        }
+        if e.frame_origin.0 + (self.shared.input_size.0 as isize) < e.image_size.0 as isize {
+            let xstart = (e.frame_origin.0 + (self.shared.input_size.0 as isize)).max(0) as usize;
+            let xend = e.image_size.0;
+            for x in (xstart..xend).step_by(self.shared.chunk_size) {
+                let xe = (x + self.shared.chunk_size).min(xend);
+                strips.push((x..xe, 0..e.image_size.1));
+            }
+        }
+        let full_image_size = e.image_size;
+        for (xrange, yrange) in strips {
+            let mut local_buffers = extract_local_buffers(
+                buffers,
+                &self.save_buffer_info,
+                |bi| {
+                    if bi.after_extend {
+                        assert_eq!(bi.downsample, (0, 0));
+                        Some(Rect {
+                            origin: (xrange.start, yrange.start),
+                            size: (xrange.clone().count(), yrange.clone().count()),
+                        })
+                    } else {
+                        None
+                    }
+                },
+                full_image_size,
+                full_image_size,
+                (0, 0),
+            )?;
+            self.render_outside_frame(xrange, yrange, &mut local_buffers)?;
+        }
+        Ok(())
+    }
 }
 
 impl RenderPipeline for LowMemoryRenderPipeline {
@@ -134,7 +277,12 @@ impl RenderPipeline for LowMemoryRenderPipeline {
         // Compute information to be used to compute sub-rects for "save" stages to operate on
         // rects.
         let mut save_buffer_info = vec![];
-        'stage: for (s, ci) in shared.stages.iter().zip(shared.channel_info.iter()) {
+        'stage: for (i, (s, ci)) in shared
+            .stages
+            .iter()
+            .zip(shared.channel_info.iter())
+            .enumerate()
+        {
             let Stage::Save(s) = s else {
                 continue;
             };
@@ -145,6 +293,7 @@ impl RenderPipeline for LowMemoryRenderPipeline {
                         downsample: ci.downsample,
                         orientation: s.orientation,
                         byte_size: s.data_format.bytes_per_sample() * s.channels.len(),
+                        after_extend: shared.extend_stage_index.is_some_and(|e| i > e),
                     });
                     continue 'stage;
                 }
@@ -174,11 +323,6 @@ impl RenderPipeline for LowMemoryRenderPipeline {
         for c in 0..nc {
             let (bx, _) = border_pixels_per_stage[0];
             assert!(bx * shared.channel_info[0][c].ty.unwrap().size() <= 2 * CACHE_LINE_BYTE_SIZE);
-        }
-
-        // TODO: remove.
-        for s in shared.stages.iter() {
-            println!("{s}");
         }
 
         let downsampling_for_stage = shared
@@ -270,11 +414,29 @@ impl RenderPipeline for LowMemoryRenderPipeline {
     }
 
     fn do_render(&mut self, buffers: &mut [Option<JxlOutputBuffer>]) -> Result<()> {
-        // TODO(veluca): consider checking buffer sizes here.
-        if self.shared.extend_stage_index.is_some() {
-            // TODO(veluca): implement this case.
-            unimplemented!()
+        // Check that buffer sizes are correct.
+        {
+            let mut size = self.shared.input_size;
+            for (i, s) in self.shared.stages.iter().enumerate() {
+                match s {
+                    Stage::Extend(e) => size = e.image_size,
+                    Stage::Save(s) => {
+                        let (dx, dy) = self.downsampling_for_stage[i];
+                        s.check_buffer_size(
+                            (size.0 >> dx, size.1 >> dy),
+                            buffers[s.output_buffer_index].as_ref(),
+                        )?
+                    }
+                    _ => {}
+                }
+            }
         }
+
+        if self.shared.extend_stage_index.is_some() && !self.padding_was_rendered {
+            self.padding_was_rendered = true;
+            self.render_padding(buffers)?;
+        }
+
         // First, render all groups that have made progress.
         // TODO(veluca): this could potentially be quadratic for huge images that receive a group
         // at a time. Take care of that.
@@ -287,6 +449,7 @@ impl RenderPipeline for LowMemoryRenderPipeline {
             if self.input_buffers[g].completed_passes < ready_passes {
                 let (gx, gy) = self.shared.group_position(g);
                 let mut fully_ready_passes = ready_passes;
+                // Here we assume that we never need more than one group worth of border.
                 if self.has_nontrivial_border {
                     for dy in -1..=1 {
                         let igy = gy as isize + dy;
@@ -318,46 +481,29 @@ impl RenderPipeline for LowMemoryRenderPipeline {
                 );
 
                 // Prepare output buffers for the group.
-                let mut local_buffers = vec![];
-                local_buffers.try_reserve(buffers.len())?;
-                for _ in 0..buffers.len() {
-                    local_buffers.push(None::<JxlOutputBuffer>);
-                }
-                let mut buffer_iter = buffers.iter_mut().enumerate();
-                for bi in self.save_buffer_info.iter() {
-                    let Some(buf) = (loop {
-                        let Some((i, b)) = buffer_iter.next() else {
-                            panic!("Invalid save_buffer_info");
-                        };
-                        if i != bi.buffer_index {
-                            continue;
-                        }
-                        break b;
-                    }) else {
-                        continue;
+                let (origin, size) = if let Some(e) = self.shared.extend_stage_index {
+                    let Stage::Extend(e) = &self.shared.stages[e] else {
+                        unreachable!("extend stage is not an extend stage");
                     };
-                    let size = (
-                        1 << (self.shared.log_group_size - bi.downsample.0 as usize),
-                        1 << (self.shared.log_group_size - bi.downsample.1 as usize),
-                    );
-                    let origin = (size.0 * gx, size.1 * gy);
-                    let image_size = (
-                        self.shared.input_size.0 >> bi.downsample.0,
-                        self.shared.input_size.1 >> bi.downsample.1,
-                    );
-                    let size = (
-                        (size.0 + origin.0).min(image_size.0) - origin.0,
-                        (size.1 + origin.1).min(image_size.1) - origin.1,
-                    );
-                    let rect = bi
-                        .orientation
-                        .display_rect(Rect { size, origin }, image_size);
-                    let rect = Rect {
-                        origin: (rect.origin.0 * bi.byte_size, rect.origin.1),
-                        size: (rect.size.0 * bi.byte_size, rect.size.1),
-                    };
-                    local_buffers[bi.buffer_index] = Some(buf.subrect(rect));
-                }
+                    (e.frame_origin, e.image_size)
+                } else {
+                    ((0, 0), self.shared.input_size)
+                };
+                let mut local_buffers = extract_local_buffers(
+                    buffers,
+                    &self.save_buffer_info,
+                    |bi| {
+                        let size = (
+                            1 << (self.shared.log_group_size - bi.downsample.0 as usize),
+                            1 << (self.shared.log_group_size - bi.downsample.1 as usize),
+                        );
+                        let origin = (size.0 * gx, size.1 * gy);
+                        Some(Rect { origin, size })
+                    },
+                    self.shared.input_size,
+                    size,
+                    origin,
+                )?;
 
                 self.render_group((gx, gy), &mut local_buffers)?;
 

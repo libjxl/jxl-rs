@@ -349,6 +349,25 @@ pub(crate) mod tests {
                 // lane that the computation was done in (???). We should investigate this.
                 // b.as_rect().check_equal(sb.as_rect());
                 let sz = b.size();
+                if false {
+                    let f = std::fs::File::create(Path::new("/tmp/").join(format!(
+                        "{}_diff_chan{c}.pbm",
+                        path.as_os_str().to_string_lossy().replace("/", "_")
+                    )))?;
+                    use std::io::Write;
+                    let mut f = std::io::BufWriter::new(f);
+                    writeln!(f, "P1\n{} {}", sz.0, sz.1)?;
+                    for y in 0..sz.1 {
+                        for x in 0..sz.0 {
+                            if (b.as_rect().row(y)[x] - sb.as_rect().row(y)[x]).abs() > 1e-8 {
+                                write!(f, "1")?;
+                            } else {
+                                write!(f, "0")?;
+                            }
+                        }
+                    }
+                    drop(f);
+                }
                 for y in 0..sz.1 {
                     for x in 0..sz.0 {
                         assert_almost_eq_coords(

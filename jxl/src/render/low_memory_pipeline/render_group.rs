@@ -148,13 +148,16 @@ impl LowMemoryRenderPipeline {
         let (x0, y0) = self.shared.group_offset(gid);
 
         let num_channels = self.shared.num_channels();
-        let num_extra_rows = self
-            .input_border_pixels
-            .iter()
-            .chain(self.stage_output_border_pixels.iter())
-            .map(|x| x.1)
-            .max()
-            .unwrap();
+        let mut num_extra_rows = 0;
+
+        for c in 0..num_channels {
+            num_extra_rows = num_extra_rows
+                .max(self.input_border_pixels[c].1 << self.shared.channel_info[0][c].downsample.1);
+        }
+        for s in 0..self.shared.stages.len() {
+            num_extra_rows = num_extra_rows
+                .max(self.stage_output_border_pixels[s].1 << self.downsampling_for_stage[s].1);
+        }
 
         // This follows the same implementation strategy as the C++ code in libjxl.
         // We pretend that every stage has a vertical shift of 0, i.e. it is as tall
@@ -167,16 +170,19 @@ impl LowMemoryRenderPipeline {
         let vy1 = y0 + num_rows + num_extra_rows;
 
         for vy in vy0..vy1 {
+            let mut current_origin = (0, 0);
+            let mut current_size = self.shared.input_size;
+
             // Step 1: read input channels.
             for c in 0..num_channels {
                 // Same logic as below, but adapted to the input stage.
                 let dy = self.shared.channel_info[0][c].downsample.1;
-                let stage_vy =
-                    vy as isize - num_extra_rows as isize + self.input_border_pixels[c].1 as isize;
+                let scaled_y_border = self.input_border_pixels[c].1 << dy;
+                let stage_vy = vy as isize - num_extra_rows as isize + scaled_y_border as isize;
                 if stage_vy % (1 << dy) != 0 {
                     continue;
                 }
-                if stage_vy - (y0 as isize) < -(self.input_border_pixels[c].1 as isize) {
+                if stage_vy - (y0 as isize) < -(scaled_y_border as isize) {
                     continue;
                 }
                 let y = stage_vy >> dy;
@@ -185,18 +191,20 @@ impl LowMemoryRenderPipeline {
                     continue;
                 }
                 let y = y as usize;
-                self.fill_initial_buffers(c, y, y0, (gx, gy));
+                self.fill_initial_buffers(c, y, y0 >> dy, (gx, gy));
             }
             // Step 2: go through stages one by one.
             for (i, stage) in self.shared.stages.iter().enumerate() {
+                let (dx, dy) = self.downsampling_for_stage[i];
+                // The logic below uses *virtual* y coordinates, so we need to convert the border
+                // amount appropriately.
+                let scaled_y_border = self.stage_output_border_pixels[i].1 << dy;
                 // I knew the reason behind this formula at some point, but now I don't.
-                let stage_vy = vy as isize - num_extra_rows as isize
-                    + self.stage_output_border_pixels[i].1 as isize;
-                let dy = self.downsampling_for_stage[i].1;
+                let stage_vy = vy as isize - num_extra_rows as isize + scaled_y_border as isize;
                 if stage_vy % (1 << dy) != 0 {
                     continue;
                 }
-                if stage_vy - (y0 as isize) < -(self.stage_output_border_pixels[i].1 as isize) {
+                if stage_vy - (y0 as isize) < -(scaled_y_border as isize) {
                     continue;
                 }
                 let y = stage_vy >> dy;
@@ -222,11 +230,11 @@ impl LowMemoryRenderPipeline {
                             ExtraInfo {
                                 xsize: shifted_xsize,
                                 current_row: y,
-                                group_origin: (x0, y0),
+                                group_x0: x0 >> dx,
                                 out_extra_x,
                                 is_first_xgroup: gx == 0,
                                 is_last_xgroup: gx + 1 == self.shared.group_count.0,
-                                image_height: self.shared.input_size.1,
+                                image_height: self.shared.input_size.1 >> dy,
                             },
                             &mut buffers,
                             self.local_states[i].as_deref_mut(),
@@ -242,10 +250,19 @@ impl LowMemoryRenderPipeline {
                                 &self.row_buffers[si][ci]
                             })
                             .collect();
-                        s.save_lowmem(&input_data, &mut *buffers, (xsize, num_rows), y, y0)?;
+                        s.save_lowmem(
+                            &input_data,
+                            &mut *buffers,
+                            (xsize >> dx, num_rows >> dy),
+                            y,
+                            (x0 >> dx, y0 >> dy),
+                            current_size,
+                            current_origin,
+                        )?;
                     }
                     Stage::Extend(s) => {
-                        unimplemented!()
+                        current_size = s.image_size;
+                        current_origin = s.frame_origin;
                     }
                     Stage::InOut(s) => {
                         let borderx = s.border().0 as usize;
@@ -272,7 +289,7 @@ impl LowMemoryRenderPipeline {
                                 }
                             }
                         }
-                        if gx + 1 == self.shared.group_count.0 && s.border().1 != 0 {
+                        if gx + 1 == self.shared.group_count.0 && borderx != 0 {
                             for c in 0..num_channels {
                                 if !s.uses_channel(c) {
                                     continue;
@@ -307,10 +324,118 @@ impl LowMemoryRenderPipeline {
                             ExtraInfo {
                                 xsize: shifted_xsize,
                                 current_row: y,
-                                group_origin: (x0, y0),
+                                group_x0: x0 >> dx,
                                 out_extra_x,
                                 is_first_xgroup: gx == 0,
                                 is_last_xgroup: gx + 1 == self.shared.group_count.0,
+                                image_height: self.shared.input_size.1 >> dy,
+                            },
+                            &input_data,
+                            &mut outb[..],
+                            self.local_states[i].as_deref_mut(),
+                        );
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
+    // Renders a chunk of data outside the current frame.
+    #[instrument(skip(self, buffers))]
+    pub(super) fn render_outside_frame(
+        &mut self,
+        xrange: Range<usize>,
+        yrange: Range<usize>,
+        buffers: &mut [Option<JxlOutputBuffer>],
+    ) -> Result<()> {
+        let num_channels = self.shared.num_channels();
+        let x0 = xrange.start;
+        let y0 = yrange.start;
+        let xsize = xrange.clone().count();
+        let ysize = yrange.clone().count();
+        // Significantly simplified version of render_group.
+        for y in yrange.clone() {
+            let extend = self.shared.extend_stage_index.unwrap();
+            // Step 1: get padding from extend stage.
+            for c in 0..num_channels {
+                let (si, ci) = self.stage_input_buffer_index[extend][c];
+                let buffer = &mut self.row_buffers[si][ci];
+                let Stage::Extend(extend) = &self.shared.stages[extend] else {
+                    unreachable!("extend stage is not an extend stage");
+                };
+                let row = &mut buffer.get_row_mut(y)[RowBuffer::x0_offset::<f32>()..];
+                extend.process_row_chunk((x0, y), xsize, c, row);
+            }
+            // Step 2: go through remaining stages one by one.
+            for (i, stage) in self.shared.stages.iter().enumerate().skip(extend + 1) {
+                assert_eq!(self.downsampling_for_stage[i], (0, 0));
+
+                match stage {
+                    Stage::InPlace(s) => {
+                        let buffer_indices: Vec<_> = (0..num_channels)
+                            .filter(|c| s.uses_channel(*c))
+                            .map(|x| self.stage_input_buffer_index[i][x])
+                            .collect();
+                        let mut buffers =
+                            get_distinct_indices(&mut self.row_buffers, &buffer_indices);
+                        s.run_stage_on(
+                            ExtraInfo {
+                                xsize,
+                                current_row: y,
+                                group_x0: x0,
+                                out_extra_x: 0,
+                                is_first_xgroup: false,
+                                is_last_xgroup: false,
+                                image_height: self.shared.input_size.1,
+                            },
+                            &mut buffers,
+                            self.local_states[i].as_deref_mut(),
+                        );
+                    }
+                    Stage::Save(s) => {
+                        // Find buffers for channels that will be saved.
+                        let input_data: Vec<_> = s
+                            .channels
+                            .iter()
+                            .map(|c| {
+                                let (si, ci) = self.stage_input_buffer_index[i][*c];
+                                &self.row_buffers[si][ci]
+                            })
+                            .collect();
+                        s.save_lowmem(
+                            &input_data,
+                            &mut *buffers,
+                            (xsize, ysize),
+                            y,
+                            (x0, y0),
+                            (xrange.end, yrange.end), // this is not true, but works out correctly.
+                            (0, 0),
+                        )?;
+                    }
+                    Stage::Extend(_) => {
+                        unreachable!("duplicate extend stage");
+                    }
+                    Stage::InOut(s) => {
+                        assert_eq!(s.border(), (0, 0));
+                        let (inb, outb) = self.row_buffers.split_at_mut(i + 1);
+                        // Prepare pointers to input and output buffers.
+                        let input_data: Vec<_> = (0..num_channels)
+                            .filter(|c| s.uses_channel(*c))
+                            .map(|c| {
+                                let (si, ci) = self.stage_input_buffer_index[i][c];
+                                &inb[si][ci]
+                            })
+                            .collect();
+                        let mut outb: Vec<_> = outb[0].iter_mut().collect();
+                        s.run_stage_on(
+                            ExtraInfo {
+                                xsize,
+                                current_row: y,
+                                group_x0: x0,
+                                out_extra_x: 0,
+                                is_first_xgroup: false,
+                                is_last_xgroup: false,
                                 image_height: self.shared.input_size.1,
                             },
                             &input_data,

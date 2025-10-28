@@ -25,7 +25,7 @@ pub struct ExtraInfo {
     // Additional border pixels requested in the output on each side, if not first/last xgroup.
     pub(super) out_extra_x: usize,
     pub(super) current_row: usize,
-    pub(super) group_origin: (usize, usize),
+    pub(super) group_x0: usize,
     pub(super) is_first_xgroup: bool,
     pub(super) is_last_xgroup: bool,
     pub(super) image_height: usize,
@@ -43,7 +43,7 @@ impl<T: RenderPipelineInPlaceStage> RunInPlaceStage<RowBuffer> for T {
         ExtraInfo {
             xsize,
             current_row,
-            group_origin,
+            group_x0,
             out_extra_x,
             image_height: _,
             is_first_xgroup,
@@ -62,7 +62,7 @@ impl<T: RenderPipelineInPlaceStage> RunInPlaceStage<RowBuffer> for T {
             .collect();
 
         self.process_row_chunk(
-            (group_origin.0 - xpre, current_row),
+            (group_x0 - xpre, current_row),
             xend - xstart,
             &mut rows[..],
             state,
@@ -77,7 +77,7 @@ impl<T: RenderPipelineInOutStage> RunInOutStage<RowBuffer> for T {
         ExtraInfo {
             xsize,
             current_row,
-            group_origin,
+            group_x0,
             out_extra_x,
             image_height,
             is_first_xgroup,
@@ -127,7 +127,7 @@ impl<T: RenderPipelineInOutStage> RunInOutStage<RowBuffer> for T {
         let mut output_rows: Vec<_> = output_rows.iter_mut().map(|x| &mut x[..]).collect();
 
         self.process_row_chunk(
-            (group_origin.0 - xpre, current_row),
+            (group_x0 - xpre, current_row),
             xend - xstart,
             &input_rows[..],
             &mut output_rows[..],
