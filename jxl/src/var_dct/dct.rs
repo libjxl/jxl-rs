@@ -19,7 +19,7 @@ pub trait DCT1D {
         starting_column: usize,
         num_columns: usize,
     );
-    fn do_dct_full<const COLUMNS: usize>(data: &mut [[f32; COLUMNS]]);
+    fn do_dct_full<D: SimdDescriptor, const COLUMNS: usize>(d: D, data: &mut [[f32; COLUMNS]]);
 }
 pub trait IDCT1D {
     fn do_idct<D: SimdDescriptor, const COLUMNS: usize>(
@@ -42,7 +42,7 @@ impl DCT1D for DCT1DImpl<1> {
     }
 
     #[inline(always)]
-    fn do_dct_full<const COLUMNS: usize>(_data: &mut [[f32; COLUMNS]]) {
+    fn do_dct_full<D: SimdDescriptor, const COLUMNS: usize>(_d: D, _data: &mut [[f32; COLUMNS]]) {
         // Do nothing
     }
 }
@@ -86,7 +86,8 @@ impl DCT1D for DCT1DImpl<2> {
     /// Full-width DCT2 - processes all columns (0..COLUMNS) without parameters.
     /// Original simple implementation - fastest for compute_scaled_dct.
     #[inline(always)]
-    fn do_dct_full<const COLUMNS: usize>(data: &mut [[f32; COLUMNS]]) {
+    fn do_dct_full<D: SimdDescriptor, const COLUMNS: usize>(_d: D, data: &mut [[f32; COLUMNS]]) {
+        // For DCT2, simple scalar loop is optimal for all sizes
         for i in 0..COLUMNS {
             let temp0 = data[0][i];
             let temp1 = data[1][i];
@@ -140,59 +141,6 @@ macro_rules! maybe_call_idct {
     };
 }
 
-/// Macro to dispatch to scalar or SIMD version based on compile-time check
-macro_rules! scalar_or_simd {
-    (scalar: $scalar_call:expr, simd: $simd_call:expr, num_cols: $num_cols:expr, vec_len: $vec_len:expr) => {
-        // Since num_columns is runtime, we need runtime check
-        // But the branch predictor will optimize this well, and the entire
-        // function will be inlined, so the optimizer can eliminate dead code paths
-        if $num_cols < $vec_len {
-            $scalar_call
-        } else {
-            $simd_call
-        }
-    };
-}
-
-/// Macro to define both _full and parameterized versions of a helper function.
-/// The _full version uses compile-time constants (starting_column=0, num_columns=COLUMNS).
-/// Both versions choose scalar vs SIMD based on num_columns <= 4.
-macro_rules! define_helper_pair {
-    (
-        $(#[$attr:meta])*
-        fn $name:ident<const SZ: usize, D: SimdDescriptor>(
-            d: D,
-            $($param_name:ident: $param_ty:ty),* $(,)?
-        ) {
-            $($body:tt)*
-        }
-    ) => {
-        // Full version: defines starting_column and num_columns as compile-time constants
-        $(#[$attr])*
-        #[inline(always)]
-        fn ${name}_full<D: SimdDescriptor, const COLUMNS: usize>(
-            d: D,
-            $($param_name: $param_ty),*
-        ) {
-            const starting_column: usize = 0;
-            const num_columns: usize = COLUMNS;
-            $($body)*
-        }
-
-        // Parameterized version: takes starting_column and num_columns as runtime parameters
-        $(#[$attr])*
-        #[inline(always)]
-        fn $name<D: SimdDescriptor>(
-            d: D,
-            $($param_name: $param_ty),*,
-            starting_column: usize,
-            num_columns: usize,
-        ) {
-            $($body)*
-        }
-    };
-}
-
 macro_rules! define_dct_1d {
     ($n:literal, $nhalf: literal) => {
         // Helper functions for CoeffBundle operating on $nhalf rows
@@ -206,23 +154,21 @@ macro_rules! define_dct_1d {
                 a_out: &mut [[f32; SZ]],
             ) {
                 const N_HALF_CONST: usize = $nhalf;
-                const starting_column: usize = 0;
-                const num_columns: usize = COLUMNS;
-
-                if num_columns <= 4 {
-                    // Scalar path - faster for small widths
+                // Choose scalar vs SIMD based on size and vector length
+                // Scalar is faster than masked SIMD for small sizes
+                if COLUMNS <= 4 || D::F32Vec::LEN > COLUMNS {
+                    // Scalar path
                     for i in 0..N_HALF_CONST {
-                        for j in starting_column..(starting_column + num_columns) {
+                        for j in 0..COLUMNS {
                             a_out[i][j] = a_in1[i][j] + a_in2[N_HALF_CONST - 1 - i][j];
                         }
                     }
                 } else {
-                    // SIMD path - faster for full vectors
+                    // SIMD path - safe because COLUMNS >= D::F32Vec::LEN
                     for i in 0..N_HALF_CONST {
-                        let j = starting_column;
-                        let in1 = D::F32Vec::load_partial(d, num_columns, &a_in1[i][j..]);
-                        let in2 = D::F32Vec::load_partial(d, num_columns, &a_in2[N_HALF_CONST - 1 - i][j..]);
-                        (in1 + in2).store_partial(num_columns, &mut a_out[i][j..]);
+                        let in1 = D::F32Vec::load_partial(d, COLUMNS, &a_in1[i][0..]);
+                        let in2 = D::F32Vec::load_partial(d, COLUMNS, &a_in2[N_HALF_CONST - 1 - i][0..]);
+                        (in1 + in2).store_partial(COLUMNS, &mut a_out[i][0..]);
                     }
                 }
             }
@@ -266,23 +212,19 @@ macro_rules! define_dct_1d {
                 a_out: &mut [[f32; SZ]],
             ) {
                 const N_HALF_CONST: usize = $nhalf;
-                const starting_column: usize = 0;
-                const num_columns: usize = COLUMNS;
-
-                if num_columns <= 4 {
+                if COLUMNS <= 4 || D::F32Vec::LEN > COLUMNS {
                     // Scalar path
                     for i in 0..N_HALF_CONST {
-                        for j in starting_column..(starting_column + num_columns) {
+                        for j in 0..COLUMNS {
                             a_out[i][j] = a_in1[i][j] - a_in2[N_HALF_CONST - 1 - i][j];
                         }
                     }
                 } else {
                     // SIMD path
                     for i in 0..N_HALF_CONST {
-                        let j = starting_column;
-                        let in1 = D::F32Vec::load_partial(d, num_columns, &a_in1[i][j..]);
-                        let in2 = D::F32Vec::load_partial(d, num_columns, &a_in2[N_HALF_CONST - 1 - i][j..]);
-                        (in1 - in2).store_partial(num_columns, &mut a_out[i][j..]);
+                        let in1 = D::F32Vec::load_partial(d, COLUMNS, &a_in1[i][0..]);
+                        let in2 = D::F32Vec::load_partial(d, COLUMNS, &a_in2[N_HALF_CONST - 1 - i][0..]);
+                        (in1 - in2).store_partial(COLUMNS, &mut a_out[i][0..]);
                     }
                 }
             }
@@ -324,34 +266,28 @@ macro_rules! define_dct_1d {
                 coeff: &mut [[f32; SZ]],
             ) {
                 const N_HALF_CONST: usize = $nhalf;
-                const starting_column: usize = 0;
-                const num_columns: usize = COLUMNS;
-
-                if num_columns <= 4 {
+                if COLUMNS <= 4 || D::F32Vec::LEN > COLUMNS {
                     // Scalar path
-                    for j in starting_column..(starting_column + num_columns) {
+                    for j in 0..COLUMNS {
                         coeff[0][j] = coeff[0][j] * (SQRT_2 as f32) + coeff[1][j];
                     }
                     #[allow(clippy::reversed_empty_ranges)]
                     for i in 1..(N_HALF_CONST - 1) {
-                        for j in starting_column..(starting_column + num_columns) {
+                        for j in 0..COLUMNS {
                             coeff[i][j] += coeff[i + 1][j];
                         }
                     }
                 } else {
                     // SIMD path
                     let sqrt2 = D::F32Vec::splat(d, SQRT_2 as f32);
-                    let j = starting_column;
-                    let coeff0 = D::F32Vec::load_partial(d, num_columns, &coeff[0][j..]);
-                    let coeff1 = D::F32Vec::load_partial(d, num_columns, &coeff[1][j..]);
-                    coeff0
-                        .mul_add(sqrt2, coeff1)
-                        .store_partial(num_columns, &mut coeff[0][j..]);
+                    let coeff0 = D::F32Vec::load_partial(d, COLUMNS, &coeff[0][0..]);
+                    let coeff1 = D::F32Vec::load_partial(d, COLUMNS, &coeff[1][0..]);
+                    coeff0.mul_add(sqrt2, coeff1).store_partial(COLUMNS, &mut coeff[0][0..]);
                     #[allow(clippy::reversed_empty_ranges)]
                     for i in 1..(N_HALF_CONST - 1) {
-                        let coeffs_curr = D::F32Vec::load_partial(d, num_columns, &coeff[i][j..]);
-                        let coeffs_next = D::F32Vec::load_partial(d, num_columns, &coeff[i + 1][j..]);
-                        (coeffs_curr + coeffs_next).store_partial(num_columns, &mut coeff[i][j..]);
+                        let coeffs_curr = D::F32Vec::load_partial(d, COLUMNS, &coeff[i][0..]);
+                        let coeffs_next = D::F32Vec::load_partial(d, COLUMNS, &coeff[i + 1][0..]);
+                        (coeffs_curr + coeffs_next).store_partial(COLUMNS, &mut coeff[i][0..]);
                     }
                 }
             }
@@ -406,26 +342,20 @@ macro_rules! define_dct_1d {
             ) {
                 const N_CONST: usize = $n;
                 const N_HALF_CONST: usize = $nhalf;
-                const starting_column: usize = 0;
-                const num_columns: usize = COLUMNS;
-
-                if num_columns <= 4 {
+                if COLUMNS <= 4 || D::F32Vec::LEN > COLUMNS {
                     // Scalar path
                     for i in 0..N_HALF_CONST {
                         let mul_val = WcMultipliers::<N_CONST>::K_MULTIPLIERS[i];
-                        for j in starting_column..(starting_column + num_columns) {
+                        for j in 0..COLUMNS {
                             coeff[N_HALF_CONST + i][j] *= mul_val;
                         }
                     }
                 } else {
                     // SIMD path
                     for i in 0..N_HALF_CONST {
-                        let j = starting_column;
                         let mul_val = D::F32Vec::splat(d, WcMultipliers::<N_CONST>::K_MULTIPLIERS[i]);
-                        let coeffs =
-                            D::F32Vec::load_partial(d, num_columns, &coeff[N_HALF_CONST + i][j..]);
-                        (coeffs * mul_val)
-                            .store_partial(num_columns, &mut coeff[N_HALF_CONST + i][j..]);
+                        let coeffs = D::F32Vec::load_partial(d, COLUMNS, &coeff[N_HALF_CONST + i][0..]);
+                        (coeffs * mul_val).store_partial(COLUMNS, &mut coeff[N_HALF_CONST + i][0..]);
                     }
                 }
             }
@@ -470,32 +400,28 @@ macro_rules! define_dct_1d {
                 a_out: &mut [[f32; SZ]],
             ) {
                 const N_HALF_CONST: usize = $nhalf;
-                const starting_column: usize = 0;
-                const num_columns: usize = COLUMNS;
 
-                if num_columns <= 4 {
+                if COLUMNS <= 4 || D::F32Vec::LEN > COLUMNS {
                     // Scalar path
                     for i in 0..N_HALF_CONST {
-                        for j in starting_column..(starting_column + num_columns) {
+                        for j in 0..COLUMNS {
                             a_out[2 * i][j] = a_in[i][j];
                         }
                     }
                     for i in 0..N_HALF_CONST {
-                        for j in starting_column..(starting_column + num_columns) {
+                        for j in 0..COLUMNS {
                             a_out[2 * i + 1][j] = a_in[N_HALF_CONST + i][j];
                         }
                     }
                 } else {
                     // SIMD path
                     for i in 0..N_HALF_CONST {
-                        let j = starting_column;
-                        D::F32Vec::load_partial(d, num_columns, &a_in[i][j..])
-                            .store_partial(num_columns, &mut a_out[2 * i][j..]);
+                        D::F32Vec::load_partial(d, COLUMNS, &a_in[i][0..])
+                            .store_partial(COLUMNS, &mut a_out[2 * i][0..]);
                     }
                     for i in 0..N_HALF_CONST {
-                        let j = starting_column;
-                        D::F32Vec::load_partial(d, num_columns, &a_in[N_HALF_CONST + i][j..])
-                            .store_partial(num_columns, &mut a_out[2 * i + 1][j..]);
+                        D::F32Vec::load_partial(d, COLUMNS, &a_in[N_HALF_CONST + i][0..])
+                            .store_partial(COLUMNS, &mut a_out[2 * i + 1][0..]);
                     }
                 }
             }
@@ -556,26 +482,13 @@ macro_rules! define_dct_1d {
                 let mut tmp_buffer = [[0.0f32; COLUMNS]; $n];
 
                 // 1. AddReverse
-                //    Inputs: first N/2 rows of data, second N/2 rows of data
-                //    Output: first N/2 rows of tmp_buffer
-                scalar_or_simd!(
-                    scalar: CoeffBundle::<$nhalf, COLUMNS>::add_reverse_scalar(
-                        &data[0..$nhalf],
-                        &data[$nhalf..$n],
-                        &mut tmp_buffer[0..$nhalf],
-                        starting_column,
-                        num_columns,
-                    ),
-                    simd: CoeffBundle::<$nhalf, COLUMNS>::add_reverse_simd(
-                        d,
-                        &data[0..$nhalf],
-                        &data[$nhalf..$n],
-                        &mut tmp_buffer[0..$nhalf],
-                        starting_column,
-                        num_columns,
-                    ),
-                    num_cols: num_columns,
-                    vec_len: D::F32Vec::LEN
+                CoeffBundle::<$nhalf, COLUMNS>::add_reverse(
+                    d,
+                    &data[0..$nhalf],
+                    &data[$nhalf..$n],
+                    &mut tmp_buffer[0..$nhalf],
+                    starting_column,
+                    num_columns,
                 );
 
                 // 2. First Recursive Call (do_dct) - first half
@@ -591,43 +504,21 @@ macro_rules! define_dct_1d {
                 );
 
                 // 3. SubReverse
-                //    Inputs: first N/2 rows of data, second N/2 rows of data
-                //    Output: second N/2 rows of tmp_buffer
-                scalar_or_simd!(
-                    scalar: CoeffBundle::<$nhalf, COLUMNS>::sub_reverse_scalar(
-                        &data[0..$nhalf],
-                        &data[$nhalf..$n],
-                        &mut tmp_buffer[$nhalf..$n],
-                        starting_column,
-                        num_columns,
-                    ),
-                    simd: CoeffBundle::<$nhalf, COLUMNS>::sub_reverse_simd(
-                        d,
-                        &data[0..$nhalf],
-                        &data[$nhalf..$n],
-                        &mut tmp_buffer[$nhalf..$n],
-                        starting_column,
-                        num_columns,
-                    ),
-                    num_cols: num_columns,
-                    vec_len: D::F32Vec::LEN
+                CoeffBundle::<$nhalf, COLUMNS>::sub_reverse(
+                    d,
+                    &data[0..$nhalf],
+                    &data[$nhalf..$n],
+                    &mut tmp_buffer[$nhalf..$n],
+                    starting_column,
+                    num_columns,
                 );
 
-                // 4. Multiply - operates on the entire tmp_buffer
-                scalar_or_simd!(
-                    scalar: CoeffBundle::<$n, COLUMNS>::multiply_scalar(
-                        &mut tmp_buffer,
-                        starting_column,
-                        num_columns,
-                    ),
-                    simd: CoeffBundle::<$n, COLUMNS>::multiply_simd(
-                        d,
-                        &mut tmp_buffer,
-                        starting_column,
-                        num_columns,
-                    ),
-                    num_cols: num_columns,
-                    vec_len: D::F32Vec::LEN
+                // 4. Multiply
+                CoeffBundle::<$n, COLUMNS>::multiply(
+                    d,
+                    &mut tmp_buffer,
+                    starting_column,
+                    num_columns,
                 );
 
                 // 5. Second Recursive Call (do_dct) - second half
@@ -642,40 +533,21 @@ macro_rules! define_dct_1d {
                     )
                 );
 
-                // 6. B - operates on the second N/2 rows of tmp_buffer
-                scalar_or_simd!(
-                    scalar: CoeffBundle::<$nhalf, COLUMNS>::b_scalar(
-                        &mut tmp_buffer[$nhalf..$n],
-                        starting_column,
-                        num_columns,
-                    ),
-                    simd: CoeffBundle::<$nhalf, COLUMNS>::b_simd(
-                        d,
-                        &mut tmp_buffer[$nhalf..$n],
-                        starting_column,
-                        num_columns,
-                    ),
-                    num_cols: num_columns,
-                    vec_len: D::F32Vec::LEN
+                // 6. B
+                CoeffBundle::<$nhalf, COLUMNS>::b(
+                    d,
+                    &mut tmp_buffer[$nhalf..$n],
+                    starting_column,
+                    num_columns,
                 );
 
                 // 7. InverseEvenOdd
-                scalar_or_simd!(
-                    scalar: CoeffBundle::<$n, COLUMNS>::inverse_even_odd_scalar(
-                        &tmp_buffer,
-                        data,
-                        starting_column,
-                        num_columns,
-                    ),
-                    simd: CoeffBundle::<$n, COLUMNS>::inverse_even_odd_simd(
-                        d,
-                        &tmp_buffer,
-                        data,
-                        starting_column,
-                        num_columns,
-                    ),
-                    num_cols: num_columns,
-                    vec_len: D::F32Vec::LEN
+                CoeffBundle::<$n, COLUMNS>::inverse_even_odd(
+                    d,
+                    &tmp_buffer,
+                    data,
+                    starting_column,
+                    num_columns,
                 );
             }
 
@@ -683,7 +555,7 @@ macro_rules! define_dct_1d {
             /// This is faster than do_dct because it avoids runtime parameters and offset arithmetic.
             /// Used by compute_scaled_dct which never needs chunking.
             #[inline(always)]
-            fn do_dct_full<const COLUMNS: usize>(data: &mut [[f32; COLUMNS]]) {
+            fn do_dct_full<D: SimdDescriptor, const COLUMNS: usize>(d: D, data: &mut [[f32; COLUMNS]]) {
                 const { assert!($nhalf * 2 == $n, "N/2 * 2 must be N") }
                 assert!(
                     data.len() == $n,
@@ -693,33 +565,35 @@ macro_rules! define_dct_1d {
                 let mut tmp_buffer = [[0.0f32; COLUMNS]; $n];
 
                 // 1. AddReverse
-                CoeffBundle::<$nhalf, COLUMNS>::add_reverse_full(
+                CoeffBundle::<$nhalf, COLUMNS>::add_reverse_full::<D, COLUMNS>(
+                    d,
                     &data[0..$nhalf],
                     &data[$nhalf..$n],
                     &mut tmp_buffer[0..$nhalf],
                 );
 
                 // 2. First Recursive Call (do_dct_full) - first half
-                DCT1DImpl::<$nhalf>::do_dct_full::<COLUMNS>(&mut tmp_buffer[0..$nhalf]);
+                DCT1DImpl::<$nhalf>::do_dct_full::<D, COLUMNS>(d, &mut tmp_buffer[0..$nhalf]);
 
                 // 3. SubReverse
-                CoeffBundle::<$nhalf, COLUMNS>::sub_reverse_full(
+                CoeffBundle::<$nhalf, COLUMNS>::sub_reverse_full::<D, COLUMNS>(
+                    d,
                     &data[0..$nhalf],
                     &data[$nhalf..$n],
                     &mut tmp_buffer[$nhalf..$n],
                 );
 
                 // 4. Multiply
-                CoeffBundle::<$n, COLUMNS>::multiply_full(&mut tmp_buffer);
+                CoeffBundle::<$n, COLUMNS>::multiply_full::<D, COLUMNS>(d, &mut tmp_buffer);
 
                 // 5. Second Recursive Call (do_dct_full) - second half
-                DCT1DImpl::<$nhalf>::do_dct_full::<COLUMNS>(&mut tmp_buffer[$nhalf..$n]);
+                DCT1DImpl::<$nhalf>::do_dct_full::<D, COLUMNS>(d, &mut tmp_buffer[$nhalf..$n]);
 
                 // 6. B
-                CoeffBundle::<$nhalf, COLUMNS>::b_full(&mut tmp_buffer[$nhalf..$n]);
+                CoeffBundle::<$nhalf, COLUMNS>::b_full::<D, COLUMNS>(d, &mut tmp_buffer[$nhalf..$n]);
 
                 // 7. InverseEvenOdd
-                CoeffBundle::<$n, COLUMNS>::inverse_even_odd_full(&tmp_buffer, data);
+                CoeffBundle::<$n, COLUMNS>::inverse_even_odd_full::<D, COLUMNS>(d, &tmp_buffer, data);
             }
         }
     };
@@ -991,7 +865,7 @@ pub fn compute_scaled_dct<D: SimdDescriptor, const ROWS: usize, const COLS: usiz
     DCT1DImpl<COLS>: DCT1D,
 {
     // Row transforms - use fast full-width version (no runtime parameters!)
-    DCT1DImpl::<ROWS>::do_dct_full::<COLS>(&mut from);
+    DCT1DImpl::<ROWS>::do_dct_full::<D, COLS>(d, &mut from);
 
     // Transpose
     let mut transposed_dct_buffer = [[0.0; ROWS]; COLS];
@@ -1001,7 +875,7 @@ pub fn compute_scaled_dct<D: SimdDescriptor, const ROWS: usize, const COLS: usiz
     );
 
     // Column transforms - use fast full-width version
-    DCT1DImpl::<COLS>::do_dct_full::<ROWS>(&mut transposed_dct_buffer);
+    DCT1DImpl::<COLS>::do_dct_full::<D, ROWS>(d, &mut transposed_dct_buffer);
 
 
     // Normalization and output
