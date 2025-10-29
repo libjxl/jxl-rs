@@ -11,8 +11,7 @@ use crate::{
         RenderPipelineInOutStage, RenderPipelineInPlaceStage, RunInOutStage, RunInPlaceStage,
         internal::PipelineBuffer,
     },
-    simd::round_up_size_to_two_cache_lines,
-    util::tracing_wrappers::*,
+    util::{round_up_size_to_two_cache_lines, tracing_wrappers::*},
 };
 
 impl PipelineBuffer for Image<f64> {

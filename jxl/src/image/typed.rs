@@ -5,7 +5,10 @@
 
 use std::{fmt::Debug, marker::PhantomData};
 
-use crate::{error::Result, simd::CACHE_LINE_BYTE_SIZE, util::tracing_wrappers::*};
+use crate::{
+    error::Result,
+    util::{CACHE_LINE_BYTE_SIZE, tracing_wrappers::*},
+};
 
 use super::{ImageDataType, OwnedRawImage, RawImageRect, RawImageRectMut, Rect};
 

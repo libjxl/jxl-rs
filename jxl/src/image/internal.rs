@@ -12,8 +12,7 @@ use std::{
 
 use crate::{
     error::{Error, Result},
-    simd::CACHE_LINE_BYTE_SIZE,
-    util::tracing_wrappers::*,
+    util::{CACHE_LINE_BYTE_SIZE, tracing_wrappers::*},
 };
 
 use super::Rect;
