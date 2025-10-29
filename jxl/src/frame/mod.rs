@@ -3,7 +3,7 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-use std::any::Any;
+use std::{any::Any, sync::Arc};
 
 use crate::{
     bit_reader::BitReader,
@@ -48,7 +48,7 @@ pub enum Section {
 }
 
 pub struct LfGlobalState {
-    patches: Option<PatchesDictionary>,
+    patches: Option<Arc<PatchesDictionary>>,
     splines: Option<Splines>,
     noise: Option<Noise>,
     lf_quant: LfQuantFactors,
@@ -71,7 +71,7 @@ pub struct HfGlobalState {
     hf_coefficients: Option<(Image<i32>, Image<i32>, Image<i32>)>,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 pub struct ReferenceFrame {
     pub frame: Vec<Image<f32>>,
     pub saved_before_color_transform: bool,
@@ -86,7 +86,7 @@ impl ReferenceFrame {
         saved_before_color_transform: bool,
     ) -> Result<Self> {
         let frame = (0..num_channels)
-            .map(|_| Image::new_constant((width, height), 0.0))
+            .map(|_| Image::new((width, height)))
             .collect::<Result<_>>()?;
         Ok(Self {
             frame,
@@ -114,7 +114,7 @@ impl ReferenceFrame {
 #[derive(Debug)]
 pub struct DecoderState {
     pub(super) file_header: FileHeader,
-    pub(super) reference_frames: [Option<ReferenceFrame>; Self::MAX_STORED_FRAMES],
+    pub(super) reference_frames: Arc<[Option<ReferenceFrame>; Self::MAX_STORED_FRAMES]>,
     pub(super) lf_frames: [Option<[Image<f32>; 3]>; 4],
     pub xyb_output_linear: bool,
     pub enable_output: bool,
@@ -128,7 +128,7 @@ impl DecoderState {
     pub fn new(file_header: FileHeader) -> Self {
         Self {
             file_header,
-            reference_frames: [None, None, None, None],
+            reference_frames: Arc::new([None, None, None, None]),
             lf_frames: [None, None, None, None],
             xyb_output_linear: true,
             enable_output: true,
@@ -244,13 +244,17 @@ impl Frame {
     }
 
     pub fn finalize(mut self) -> Result<Option<DecoderState>> {
+        // First, drop the render pipeline to ensure that no other references to the reference
+        // frames are around.
+        self.render_pipeline = None;
         if self.header.can_be_referenced {
             info!("Saving frame in slot {}", self.header.save_as_reference);
-            self.decoder_state.reference_frames[self.header.save_as_reference as usize] =
-                Some(ReferenceFrame {
-                    frame: self.reference_frame_data.unwrap(),
-                    saved_before_color_transform: self.header.save_before_ct,
-                });
+            let rf = Arc::get_mut(&mut self.decoder_state.reference_frames)
+                .expect("remaining references to reference_frames");
+            rf[self.header.save_as_reference as usize] = Some(ReferenceFrame {
+                frame: self.reference_frame_data.unwrap(),
+                saved_before_color_transform: self.header.save_before_ct,
+            });
         }
 
         if self.header.lf_level != 0 {

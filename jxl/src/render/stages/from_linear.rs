@@ -212,9 +212,9 @@ mod test {
     #[test]
     fn sdr_white_hlg() -> Result<()> {
         let intensity_target = 1000f32;
-        let input_r = Image::new_constant((1, 1), 0.203)?;
-        let input_g = Image::new_constant((1, 1), 0.203)?;
-        let input_b = Image::new_constant((1, 1), 0.203)?;
+        let input_r = Image::new_with_value((1, 1), 0.203)?;
+        let input_g = Image::new_with_value((1, 1), 0.203)?;
+        let input_b = Image::new_with_value((1, 1), 0.203)?;
 
         // 75% HLG
         let stage = FromLinearStage::hlg(0, intensity_target, LUMINANCE_BT2020);
@@ -231,9 +231,9 @@ mod test {
     #[test]
     fn sdr_white_pq() -> Result<()> {
         let intensity_target = 1000f32;
-        let input_r = Image::new_constant((1, 1), 0.203)?;
-        let input_g = Image::new_constant((1, 1), 0.203)?;
-        let input_b = Image::new_constant((1, 1), 0.203)?;
+        let input_r = Image::new_with_value((1, 1), 0.203)?;
+        let input_g = Image::new_with_value((1, 1), 0.203)?;
+        let input_b = Image::new_with_value((1, 1), 0.203)?;
 
         // 58% PQ
         let stage = FromLinearStage::pq(0, intensity_target);

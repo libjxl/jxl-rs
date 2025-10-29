@@ -31,7 +31,7 @@ pub struct SimpleRenderPipeline {
 }
 
 fn clone_images<T: ImageDataType>(images: &[Image<T>]) -> Result<Vec<Image<T>>> {
-    images.iter().map(|x| x.as_rect().to_image()).collect()
+    images.iter().map(|x| x.try_clone()).collect()
 }
 
 impl RenderPipeline for SimpleRenderPipeline {

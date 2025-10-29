@@ -67,9 +67,9 @@ mod test {
     fn splines_process_row_chunk() -> Result<(), test::Error> {
         let want_image = read_pfm(include_bytes!("../../../resources/test/splines.pfm"))?;
         let target_images = [
-            Image::<f32>::new_constant((320, 320), 0.0)?,
-            Image::<f32>::new_constant((320, 320), 0.0)?,
-            Image::<f32>::new_constant((320, 320), 0.0)?,
+            Image::<f32>::new((320, 320))?,
+            Image::<f32>::new((320, 320))?,
+            Image::<f32>::new((320, 320))?,
         ];
         let size = target_images[0].size();
         let splines = Splines::create(

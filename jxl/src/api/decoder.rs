@@ -267,7 +267,7 @@ pub(crate) mod tests {
             let mut decoder_with_frame_info = advance_decoder!(decoder_with_image_info);
 
             // First channel is interleaved.
-            let mut buffers = vec![Image::new_constant(
+            let mut buffers = vec![Image::new_with_value(
                 (buffer_width * num_channels, buffer_height),
                 f32::NAN,
             )?];
@@ -276,7 +276,7 @@ pub(crate) mod tests {
                 if ecf.is_none() {
                     continue;
                 }
-                buffers.push(Image::new_constant(
+                buffers.push(Image::new_with_value(
                     (buffer_width, buffer_height),
                     f32::NAN,
                 )?);
@@ -284,7 +284,7 @@ pub(crate) mod tests {
 
             let mut api_buffers: Vec<_> = buffers
                 .iter_mut()
-                .map(JxlOutputBuffer::from_image)
+                .map(|b| JxlOutputBuffer::from_image_rect_mut(b.as_rect_mut().into_raw()))
                 .collect();
 
             decoder_with_image_info = advance_decoder!(decoder_with_frame_info, &mut api_buffers);

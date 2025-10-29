@@ -160,7 +160,7 @@ fn parse_jxl(path: &Path) -> Result<()> {
 
             let mut output_bufs: Vec<JxlOutputBuffer<'_>> = outputs
                 .iter_mut()
-                .map(JxlOutputBuffer::from_image)
+                .map(|x| JxlOutputBuffer::from_image_rect_mut(x.as_rect_mut().into_raw()))
                 .collect();
 
             decoder_with_image_info = advance_decoder!(decoder_with_frame_info, &mut output_bufs)?;

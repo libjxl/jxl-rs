@@ -132,7 +132,7 @@ fn extract_local_buffers<'a>(
             origin: (rect.origin.0 * bi.byte_size, rect.origin.1),
             size: (rect.size.0 * bi.byte_size, rect.size.1),
         };
-        local_buffers[bi.buffer_index] = Some(buf.subrect(rect));
+        local_buffers[bi.buffer_index] = Some(buf.rect(rect));
     }
     Ok(local_buffers)
 }

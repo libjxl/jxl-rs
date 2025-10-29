@@ -3,6 +3,8 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
+use std::sync::Arc;
+
 use crate::{
     error::Result,
     frame::ReferenceFrame,
@@ -24,7 +26,7 @@ pub struct ExtendToImageDimensionsStage {
     pub blending_info: BlendingInfo,
     pub ec_blending_info: Vec<BlendingInfo>,
     pub extra_channels: Vec<ExtraChannelInfo>,
-    pub reference_frames: Vec<Option<ReferenceFrame>>,
+    pub reference_frames: Arc<[Option<ReferenceFrame>; 4]>,
     pub zeros: Vec<f32>,
 }
 
@@ -33,7 +35,7 @@ impl ExtendToImageDimensionsStage {
     pub fn new(
         frame_header: &FrameHeader,
         file_header: &FileHeader,
-        reference_frames: &[Option<ReferenceFrame>],
+        reference_frames: Arc<[Option<ReferenceFrame>; 4]>,
     ) -> Result<ExtendToImageDimensionsStage> {
         Ok(ExtendToImageDimensionsStage {
             frame_origin: (frame_header.x0 as isize, frame_header.y0 as isize),
@@ -44,7 +46,7 @@ impl ExtendToImageDimensionsStage {
             blending_info: frame_header.blending_info.clone(),
             ec_blending_info: frame_header.ec_blending_info.clone(),
             extra_channels: file_header.image_metadata.extra_channel_info.clone(),
-            reference_frames: reference_frames.to_owned(),
+            reference_frames,
             zeros: vec![0f32; file_header.size.xsize() as usize],
         })
     }
@@ -83,6 +85,8 @@ impl ExtendToImageDimensionsStage {
 
 #[cfg(test)]
 mod test {
+    use std::sync::Arc;
+
     use test_log::test;
 
     use super::*;
@@ -93,11 +97,15 @@ mod test {
     fn extend_consistency() -> Result<()> {
         let (file_header, frame_header, _) =
             read_headers_and_toc(include_bytes!("../../../resources/test/basic.jxl")).unwrap();
-        let reference_frames: Vec<Option<ReferenceFrame>> = vec![None, None, None, None];
+        let reference_frames = Arc::new([None, None, None, None]);
         crate::render::test::test_stage_consistency(
             || {
-                ExtendToImageDimensionsStage::new(&frame_header, &file_header, &reference_frames)
-                    .unwrap()
+                ExtendToImageDimensionsStage::new(
+                    &frame_header,
+                    &file_header,
+                    reference_frames.clone(),
+                )
+                .unwrap()
             },
             (500, 500),
             4,

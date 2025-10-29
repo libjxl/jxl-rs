@@ -114,6 +114,8 @@ pub enum Error {
     InvalidBlockSizeForChromaSubsampling,
     #[error("Out of memory: {0}")]
     OutOfMemory(#[from] TryReserveError),
+    #[error("Out of memory when allocating image of byte size {0}x{1}")]
+    ImageOutOfMemory(usize, usize),
     #[error("Image size too large: {0}x{1}")]
     ImageSizeTooLarge(usize, usize),
     #[error("Invalid image size: {0}x{1}")]
