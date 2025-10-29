@@ -11,10 +11,9 @@ use crate::BLOCK_DIM;
 use crate::api::JxlOutputBuffer;
 use crate::error::Result;
 use crate::headers::Orientation;
-use crate::image::{Image, ImageDataType, Rect};
+use crate::image::{Image, ImageDataType, OwnedRawImage, Rect};
 use crate::render::internal::Stage;
-use crate::simd::CACHE_LINE_BYTE_SIZE;
-use crate::util::{ShiftRightCeil, tracing_wrappers::*};
+use crate::util::{CACHE_LINE_BYTE_SIZE, ShiftRightCeil, tracing_wrappers::*};
 
 use super::RenderPipeline;
 use super::internal::{RenderPipelineShared, RunInOutStage, RunInPlaceStage};
@@ -27,7 +26,7 @@ mod save;
 
 struct InputBuffer {
     // One buffer per channel.
-    data: Vec<Option<Box<dyn Any>>>,
+    data: Vec<Option<OwnedRawImage>>,
     completed_passes: usize,
 }
 
@@ -375,9 +374,7 @@ impl RenderPipeline for LowMemoryRenderPipeline {
             .shared
             .group_size_for_channel(channel, group_id, T::DATA_TYPE_ID);
         if let Some(buf) = self.input_buffers[group_id].data[channel].take() {
-            let img: Image<T> = *buf
-                .downcast()
-                .expect("inconsistent usage of pipeline buffers");
+            let img = Image::<T>::from_raw(buf);
             let bsz = img.size();
             assert!(sz.0 <= bsz.0);
             assert!(sz.1 <= bsz.1);
@@ -409,7 +406,7 @@ impl RenderPipeline for LowMemoryRenderPipeline {
         assert!(sz.1 <= bsz.1);
         assert!(sz.0 + BLOCK_DIM > bsz.0);
         assert!(sz.1 + BLOCK_DIM > bsz.1);
-        self.input_buffers[group_id].data[channel] = Some(Box::new(buf));
+        self.input_buffers[group_id].data[channel] = Some(buf.into_raw());
         self.shared.group_chan_ready_passes[group_id][channel] += num_passes;
     }
 

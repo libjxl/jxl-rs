@@ -3,15 +3,21 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-use half::f16;
-
 use crate::{
     api::{Endianness, JxlDataFormat, JxlOutputBuffer},
     error::Result,
+    headers::Orientation,
     render::save::SaveStage,
 };
 
 use super::row_buffers::RowBuffer;
+
+mod identity;
+
+// TODO(veluca): at the moment, integrating the interleaving logic in crate::simd seems more hassle
+// than is worth. Consider re-evaluating later.
+#[cfg(target_arch = "x86_64")]
+mod x86_64;
 
 // Placeholder slow implementation.
 impl SaveStage {
@@ -66,7 +72,19 @@ impl SaveStage {
 
         let save_size = (save_end.0 - save_start.0, save_end.1 - save_start.1);
 
-        // TODO(veluca): this is very slow, speed it up.
+        let num_fast = match self.orientation {
+            Orientation::Identity => identity::store(
+                data,
+                frame_y,
+                save_start.0..save_end.0,
+                buf,
+                relative_y,
+                self.data_format,
+            ),
+            _ => 0,
+        };
+
+        // TODO(veluca): this is very slow, implement more fast paths.
 
         macro_rules! write_pixel {
             ($px: expr, $endianness: expr, $y: expr, $x: expr) => {
@@ -91,26 +109,17 @@ impl SaveStage {
             match self.data_format {
                 JxlDataFormat::U8 { .. } => {
                     let src_row = d.get_row::<u8>(frame_y);
-                    for ix in save_start.0..save_end.0 {
+                    for ix in (save_start.0..save_end.0).skip(num_fast) {
                         let px = src_row[RowBuffer::x0_offset::<u8>() + ix];
                         let y = (y0 + (dy * (ix - save_start.0) as isize)) as usize;
                         let x = (x0 + (dx * (ix - save_start.0) as isize)) as usize;
                         write_pixel!(px, Endianness::LittleEndian, y, x * nc + c);
                     }
                 }
-                JxlDataFormat::U16 { endianness, .. } => {
+                JxlDataFormat::U16 { endianness, .. } | JxlDataFormat::F16 { endianness, .. } => {
                     let src_row = d.get_row::<u16>(frame_y);
-                    for ix in save_start.0..save_end.0 {
+                    for ix in (save_start.0..save_end.0).skip(num_fast) {
                         let px = src_row[RowBuffer::x0_offset::<u16>() + ix];
-                        let y = (y0 + (dy * (ix - save_start.0) as isize)) as usize;
-                        let x = (x0 + (dx * (ix - save_start.0) as isize)) as usize;
-                        write_pixel!(px, endianness, y, (x * nc + c) * 2);
-                    }
-                }
-                JxlDataFormat::F16 { endianness, .. } => {
-                    let src_row = d.get_row::<f16>(frame_y);
-                    for ix in save_start.0..save_end.0 {
-                        let px = src_row[RowBuffer::x0_offset::<f16>() + ix];
                         let y = (y0 + (dy * (ix - save_start.0) as isize)) as usize;
                         let x = (x0 + (dx * (ix - save_start.0) as isize)) as usize;
                         write_pixel!(px, endianness, y, (x * nc + c) * 2);
@@ -118,7 +127,7 @@ impl SaveStage {
                 }
                 JxlDataFormat::F32 { endianness, .. } => {
                     let src_row = d.get_row::<f32>(frame_y);
-                    for ix in save_start.0..save_end.0 {
+                    for ix in (save_start.0..save_end.0).skip(num_fast) {
                         let px = src_row[RowBuffer::x0_offset::<f32>() + ix];
                         let y = (y0 + (dy * (ix - save_start.0) as isize)) as usize;
                         let x = (x0 + (dx * (ix - save_start.0) as isize)) as usize;

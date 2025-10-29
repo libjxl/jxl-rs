@@ -6,8 +6,7 @@
 use crate::{
     image::{Image, ImageDataType},
     render::stages::ExtendToImageDimensionsStage,
-    simd::round_up_size_to_two_cache_lines,
-    util::tracing_wrappers::*,
+    util::{round_up_size_to_two_cache_lines, tracing_wrappers::*},
 };
 
 impl ExtendToImageDimensionsStage {

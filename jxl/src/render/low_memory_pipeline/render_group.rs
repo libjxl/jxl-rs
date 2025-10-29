@@ -5,12 +5,10 @@
 
 use std::ops::Range;
 
-use half::f16;
-
 use crate::{
     api::JxlOutputBuffer,
     error::Result,
-    image::{DataTypeTag, Image, ImageDataType},
+    image::DataTypeTag,
     render::{
         internal::Stage,
         low_memory_pipeline::{
@@ -23,21 +21,6 @@ use crate::{
 
 use super::{LowMemoryRenderPipeline, row_buffers::RowBuffer};
 
-fn apply_x_padding_impl<T: ImageDataType>(
-    buf: &mut RowBuffer,
-    y: usize,
-    to_pad: Range<isize>,
-    valid_pixels: Range<isize>,
-) {
-    let x0_offset = RowBuffer::x0_offset::<T>() as isize;
-    let row = buf.get_row_mut::<T>(y);
-    let num_valid = valid_pixels.clone().count();
-    for x in to_pad {
-        let sx = mirror(x - valid_pixels.start, num_valid) as isize + valid_pixels.start;
-        row[(x0_offset + x) as usize] = row[(x0_offset + sx) as usize];
-    }
-}
-
 fn apply_x_padding(
     input_type: DataTypeTag,
     buf: &mut RowBuffer,
@@ -45,32 +28,52 @@ fn apply_x_padding(
     to_pad: Range<isize>,
     valid_pixels: Range<isize>,
 ) {
-    // TODO(veluca): consider using a type-erased approach here (we only care about element
-    // sizes).
-    match input_type {
-        DataTypeTag::U8 => apply_x_padding_impl::<u8>(buf, y, to_pad, valid_pixels),
-        DataTypeTag::I8 => apply_x_padding_impl::<i8>(buf, y, to_pad, valid_pixels),
-        DataTypeTag::U16 => apply_x_padding_impl::<u16>(buf, y, to_pad, valid_pixels),
-        DataTypeTag::I16 => apply_x_padding_impl::<i16>(buf, y, to_pad, valid_pixels),
-        DataTypeTag::F16 => apply_x_padding_impl::<f16>(buf, y, to_pad, valid_pixels),
-        DataTypeTag::U32 => apply_x_padding_impl::<u32>(buf, y, to_pad, valid_pixels),
-        DataTypeTag::I32 => apply_x_padding_impl::<i32>(buf, y, to_pad, valid_pixels),
-        DataTypeTag::F32 => apply_x_padding_impl::<f32>(buf, y, to_pad, valid_pixels),
-        DataTypeTag::F64 => apply_x_padding_impl::<f64>(buf, y, to_pad, valid_pixels),
+    let x0_offset = RowBuffer::x0_byte_offset() as isize;
+    let row = buf.get_row_mut::<u8>(y);
+    let num_valid = valid_pixels.clone().count();
+    let sz = input_type.size();
+    match sz {
+        1 => {
+            for x in to_pad {
+                let sx = mirror(x - valid_pixels.start, num_valid) as isize + valid_pixels.start;
+                let from = (x0_offset + sx) as usize;
+                let to = (x0_offset + x) as usize;
+                row[to] = row[from];
+            }
+        }
+        2 => {
+            for x in to_pad {
+                let sx = mirror(x - valid_pixels.start, num_valid) as isize + valid_pixels.start;
+                let from = (x0_offset + sx * 2) as usize;
+                let to = (x0_offset + x * 2) as usize;
+                row[to] = row[from];
+                row[to + 1] = row[from + 1];
+            }
+        }
+        4 => {
+            for x in to_pad {
+                let sx = mirror(x - valid_pixels.start, num_valid) as isize + valid_pixels.start;
+                let from = (x0_offset + sx * 4) as usize;
+                let to = (x0_offset + x * 4) as usize;
+                row[to] = row[from];
+                row[to + 1] = row[from + 1];
+                row[to + 2] = row[from + 2];
+                row[to + 3] = row[from + 3];
+            }
+        }
+        _ => {
+            unimplemented!("only 1, 2 or 4 byte data types supported");
+        }
     }
 }
 
 impl LowMemoryRenderPipeline {
-    fn fill_buffer_row<T: ImageDataType>(
-        &mut self,
-        y: usize,
-        y0: usize,
-        c: usize,
-        (gx, gy): (usize, usize),
-    ) {
+    fn fill_initial_buffers(&mut self, c: usize, y: usize, y0: usize, (gx, gy): (usize, usize)) {
+        let ty = self.shared.channel_info[0][c]
+            .ty
+            .expect("Channel info should be populated at this point");
         let gys = 1
             << (self.shared.log_group_size - self.shared.channel_info[0][c].downsample.1 as usize);
-        let extrax = self.input_border_pixels[0].0;
 
         let (input_y, igy) = if y < y0 {
             (y + gys - y0, gy - 1)
@@ -80,59 +83,40 @@ impl LowMemoryRenderPipeline {
             (y - y0, gy)
         };
 
-        let output_row = self.row_buffers[0][c].get_row_mut::<T>(y);
-        let x0_offset = RowBuffer::x0_offset::<T>();
+        let output_row = self.row_buffers[0][c].get_row_mut::<u8>(y);
+
+        // Both are in units of bytes.
+        let x0_offset = RowBuffer::x0_byte_offset();
+        let extrax = self.input_border_pixels[0].0 * ty.size();
 
         let base_gid = igy * self.shared.group_count.0 + gx;
 
         // Previous group horizontally, if any.
         if gx > 0 && extrax != 0 {
-            let input_buf = &self.input_buffers[base_gid - 1].data[c]
+            let input_buf = self.input_buffers[base_gid - 1].data[c]
                 .as_ref()
                 .unwrap()
-                .downcast_ref::<Image<T>>()
-                .unwrap();
-            let input_row = input_buf.as_rect().row(input_y);
+                .as_rect();
+            let input_row = input_buf.row(input_y);
             output_row[x0_offset - extrax..x0_offset]
-                .copy_from_slice(&input_row[input_buf.size().0 - extrax..]);
+                .copy_from_slice(&input_row[input_buf.byte_size().0 - extrax..]);
         }
-        let input_buf = &self.input_buffers[base_gid].data[c]
+        let input_buf = self.input_buffers[base_gid].data[c]
             .as_ref()
             .unwrap()
-            .downcast_ref::<Image<T>>()
-            .unwrap();
-        let input_row = input_buf.as_rect().row(input_y);
-        let gxs = input_buf.size().0;
+            .as_rect();
+        let input_row = input_buf.row(input_y);
+        let gxs = input_buf.byte_size().0; // bytes
         output_row[x0_offset..x0_offset + gxs].copy_from_slice(input_row);
         // Next group horizontally, if any.
         if gx + 1 < self.shared.group_count.0 && extrax != 0 {
             let input_buf = &self.input_buffers[base_gid + 1].data[c]
                 .as_ref()
                 .unwrap()
-                .downcast_ref::<Image<T>>()
-                .unwrap();
-            let input_row = input_buf.as_rect().row(input_y);
+                .as_rect();
+            let input_row = input_buf.row(input_y);
             output_row[gxs + x0_offset..gxs + x0_offset + extrax]
                 .copy_from_slice(&input_row[..extrax]);
-        }
-    }
-
-    fn fill_initial_buffers(&mut self, c: usize, y: usize, y0: usize, (gx, gy): (usize, usize)) {
-        // TODO(veluca): consider using a type-erased approach here (we only care about element
-        // sizes).
-        match self.shared.channel_info[0][c].ty {
-            Some(DataTypeTag::F64) => self.fill_buffer_row::<f64>(y, y0, c, (gx, gy)),
-            Some(DataTypeTag::F32) => self.fill_buffer_row::<f32>(y, y0, c, (gx, gy)),
-            Some(DataTypeTag::I32) => self.fill_buffer_row::<i32>(y, y0, c, (gx, gy)),
-            Some(DataTypeTag::U32) => self.fill_buffer_row::<u32>(y, y0, c, (gx, gy)),
-            Some(DataTypeTag::I16) => self.fill_buffer_row::<i16>(y, y0, c, (gx, gy)),
-            Some(DataTypeTag::F16) => self.fill_buffer_row::<f16>(y, y0, c, (gx, gy)),
-            Some(DataTypeTag::U16) => self.fill_buffer_row::<u16>(y, y0, c, (gx, gy)),
-            Some(DataTypeTag::I8) => self.fill_buffer_row::<i8>(y, y0, c, (gx, gy)),
-            Some(DataTypeTag::U8) => self.fill_buffer_row::<u8>(y, y0, c, (gx, gy)),
-            None => {
-                panic!("Channel info should be populated at this point");
-            }
         }
     }
 
