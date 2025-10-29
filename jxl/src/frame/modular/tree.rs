@@ -264,8 +264,10 @@ impl Tree {
 
         // Reference properties.
         let num_refs = references.size().0;
-        let ref_properties = &mut property_buffer[NUM_NONREF_PROPERTIES..];
-        ref_properties[..num_refs].copy_from_slice(&references.as_rect().row(x)[..num_refs]);
+        if num_refs != 0 {
+            let ref_properties = &mut property_buffer[NUM_NONREF_PROPERTIES..];
+            ref_properties[..num_refs].copy_from_slice(&references.as_rect().row(x)[..num_refs]);
+        }
 
         trace!(?property_buffer, "new properties");
 

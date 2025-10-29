@@ -95,7 +95,12 @@ mod test {
         let src = [Image::<f64>::new_random((128, 128), &mut rng)?];
         let mut dst = Image::<u8>::new_random((128, 128), &mut rng)?;
 
-        save_stage.save_simple(&src, &mut [Some(JxlOutputBuffer::from_image(&mut dst))])?;
+        save_stage.save_simple(
+            &src,
+            &mut [Some(JxlOutputBuffer::from_image_rect_mut(
+                dst.as_rect_mut().into_raw(),
+            ))],
+        )?;
 
         for y in 0..128 {
             for x in 0..128 {
@@ -134,7 +139,12 @@ mod test {
         let mut rng = XorShiftRng::seed_from_u64(0);
         let mut dst = Image::<f32>::new_random((ow, oh), &mut rng)?;
 
-        save_stage.save_simple(&src, &mut [Some(JxlOutputBuffer::from_image(&mut dst))])?;
+        save_stage.save_simple(
+            &src,
+            &mut [Some(JxlOutputBuffer::from_image_rect_mut(
+                dst.as_rect_mut().into_raw(),
+            ))],
+        )?;
 
         // Iterate over the DESTINATION image pixels.
         for y_dest in 0..oh {

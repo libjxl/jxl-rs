@@ -11,16 +11,15 @@ mod decoder;
 mod inner;
 mod input;
 mod options;
-mod output;
 mod signature;
 
+pub use crate::image::JxlOutputBuffer;
 pub use color::*;
 pub use data_types::*;
 pub use decoder::*;
 pub use inner::*;
 pub use input::*;
 pub use options::*;
-pub use output::*;
 pub use signature::*;
 
 use crate::headers::image_metadata::Orientation;

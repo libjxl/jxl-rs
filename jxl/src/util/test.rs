@@ -14,7 +14,7 @@ use crate::{
     container::ContainerParser,
     error::Error as JXLError,
     headers::{FileHeader, JxlHeader, encodings::*, frame_header::TocNonserialized},
-    image::Image,
+    image::{Image, ImageDataType, ImageRect},
 };
 
 use num_traits::AsPrimitive;
@@ -196,6 +196,23 @@ pub fn assert_all_almost_abs_eq<T: AsPrimitive<f64> + Debug + Copy, V: AsRef<[T]
             panic!(
                 "assertion failed: `(left ≈ right)`\n left: `{left:?}`,\n right: `{right:?}`,\n max_abs_error: `{max_abs_error:?}`,\n left[{idx}]: `{left_val:?}`,\n right[{idx}]: `{right_val:?}`",
             );
+        }
+    }
+}
+
+pub fn check_equal_images<T: ImageDataType>(a: ImageRect<T>, b: ImageRect<T>) {
+    assert_eq!(a.size(), b.size());
+    let mismatch_info = |x: usize, y: usize| -> String {
+        let msg = format!(
+            "mismatch at position {x}x{y}, values {:?} and {:?}",
+            a.row(y)[x],
+            b.row(y)[x]
+        );
+        msg
+    };
+    for y in 0..a.size().1 {
+        for x in 0..a.size().0 {
+            assert_eq!(a.row(y)[x], b.row(y)[x], "{}", mismatch_info(x, y));
         }
     }
 }

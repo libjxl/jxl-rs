@@ -3,6 +3,8 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
+use std::sync::Arc;
+
 use super::render::pipeline;
 use super::{
     block_context_map::BlockContextMap,
@@ -14,6 +16,7 @@ use super::{
     quantizer::{LfQuantFactors, QuantizerParams},
     transform_map::*,
 };
+use crate::error::Error;
 use crate::render::{LowMemoryRenderPipeline, SimpleRenderPipeline};
 use crate::{
     GROUP_DIM,
@@ -53,7 +56,12 @@ impl Frame {
         let size_blocks = frame_header.size_blocks();
         let lf_image = if frame_header.encoding == Encoding::VarDCT {
             if frame_header.has_lf_frame() {
-                decoder_state.lf_frames[frame_header.lf_level as usize].clone()
+                decoder_state.lf_frames[frame_header.lf_level as usize]
+                    .as_ref()
+                    .map(|[a, b, c]| {
+                        Ok::<_, Error>([a.try_clone()?, b.try_clone()?, c.try_clone()?])
+                    })
+                    .transpose()?
             } else {
                 Some([
                     Image::new(size_blocks)?,
@@ -71,7 +79,7 @@ impl Frame {
                 ytox_map: Image::new(size_color_tiles)?,
                 ytob_map: Image::new(size_color_tiles)?,
                 raw_quant_map: Image::new(size_blocks)?,
-                transform_map: Image::new_with_default(
+                transform_map: Image::new_with_value(
                     size_blocks,
                     HfTransformType::INVALID_TRANSFORM,
                 )?,
@@ -165,7 +173,7 @@ impl Frame {
                 self.header.size_padded().0,
                 self.header.size_padded().1,
                 self.decoder_state.extra_channel_info().len(),
-                &self.decoder_state.reference_frames,
+                &self.decoder_state.reference_frames[..],
             )?)
         } else {
             None
@@ -234,7 +242,7 @@ impl Frame {
         )?;
 
         self.lf_global = Some(LfGlobalState {
-            patches,
+            patches: patches.map(Arc::new),
             splines,
             noise,
             lf_quant,

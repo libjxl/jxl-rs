@@ -264,7 +264,14 @@ impl ModularBufferInfo {
             }
             _ => unreachable!("invalid combination of output grid kind and buffer grid kind"),
         };
-        Rect { origin, size }
+        if size.0 == 0 || size.1 == 0 {
+            Rect {
+                origin: (0, 0),
+                size: (0, 0),
+            }
+        } else {
+            Rect { origin, size }
+        }
     }
 }
 
@@ -536,7 +543,7 @@ impl FullModularImage {
                 // TODO(veluca): figure out what to do with passes here.
                 if chan == 0 && self.modular_color_channels == 1 {
                     for i in 0..2 {
-                        pass_to_pipeline(i, grid, 1, buf.data.as_rect().to_image()?);
+                        pass_to_pipeline(i, grid, 1, buf.data.try_clone()?);
                     }
                     pass_to_pipeline(2, grid, 1, buf.data);
                 } else {

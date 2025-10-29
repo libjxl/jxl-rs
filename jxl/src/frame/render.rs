@@ -78,7 +78,7 @@ impl Frame {
 
         if let Some(api_buffers) = api_buffers {
             let mut api_buffers_iter = api_buffers.iter_mut();
-            buffers_from_api!(Some(JxlOutputBuffer::from_output_buffer(
+            buffers_from_api!(Some(JxlOutputBuffer::reborrow(
                 api_buffers_iter.next().unwrap(),
             )));
         } else {
@@ -86,19 +86,19 @@ impl Frame {
         }
 
         if let Some(ref_images) = &mut self.reference_frame_data {
-            buffers.extend(
-                ref_images
-                    .iter_mut()
-                    .map(|img| Some(JxlOutputBuffer::from_image(img))),
-            );
+            buffers.extend(ref_images.iter_mut().map(|img| {
+                Some(JxlOutputBuffer::from_image_rect_mut(
+                    img.as_rect_mut().into_raw(),
+                ))
+            }));
         };
 
         if let Some(lf_images) = &mut self.lf_frame_data {
-            buffers.extend(
-                lf_images
-                    .iter_mut()
-                    .map(|img| Some(JxlOutputBuffer::from_image(img))),
-            );
+            buffers.extend(lf_images.iter_mut().map(|img| {
+                Some(JxlOutputBuffer::from_image_rect_mut(
+                    img.as_rect_mut().into_raw(),
+                ))
+            }));
         };
 
         if buffers.iter().any(|b| b.is_some()) {
@@ -217,11 +217,10 @@ impl Frame {
         }
 
         if frame_header.has_patches() {
-            // TODO(szabadka): Avoid cloning everything.
             pipeline = pipeline.add_inplace_stage(PatchesStage {
                 patches: lf_global.patches.clone().unwrap(),
                 extra_channels: metadata.extra_channel_info.clone(),
-                decoder_state: Arc::new(decoder_state.reference_frames.to_vec()),
+                decoder_state: decoder_state.reference_frames.clone(),
             })?
         }
 
@@ -316,14 +315,14 @@ impl Frame {
             pipeline = pipeline.add_inplace_stage(BlendingStage::new(
                 frame_header,
                 &decoder_state.file_header,
-                &decoder_state.reference_frames,
+                decoder_state.reference_frames.clone(),
             )?)?;
             // TODO(veluca): we might not need to add an extend stage if the image size is
             // compatible with the frame size.
             pipeline = pipeline.add_extend_stage(ExtendToImageDimensionsStage::new(
                 frame_header,
                 &decoder_state.file_header,
-                &decoder_state.reference_frames,
+                decoder_state.reference_frames.clone(),
             )?)?;
         }
 
