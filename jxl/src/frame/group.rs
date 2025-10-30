@@ -5,6 +5,8 @@
 
 use num_traits::Float;
 
+use jxl_transforms::{transform::*, transform_map::*};
+
 use crate::{
     BLOCK_DIM, BLOCK_SIZE, GROUP_DIM,
     bit_reader::BitReader,
@@ -13,242 +15,14 @@ use crate::{
     frame::{
         HfGlobalState, HfMetadata, LfGlobalState, block_context_map::*,
         color_correlation_map::COLOR_TILE_DIM_IN_BLOCKS, quant_weights::DequantMatrices,
-        transform_map::*,
     },
     headers::frame_header::FrameHeader,
     image::{Image, ImageRect, Rect},
     util::{CeilLog2, tracing_wrappers::*},
-    var_dct::{
-        dct::{DCT1D, DCT1DImpl, compute_scaled_dct},
-        dct_scales::{DctResampleScales, HasDctResampleScales, dct_total_resample_scale},
-        transform::*,
-    },
 };
 use jxl_simd::{F32SimdVec, I32SimdVec, SimdDescriptor, SimdMask, simd_function};
 
-// Computes the lowest-frequency ROWSxCOLS-sized square in output, which is a
-// DCT_ROWS*DCT_COLS-sized DCT block, by doing a ROWS*COLS DCT on the input
-// block.
-#[inline(always)]
-fn reinterpreting_dct<
-    D: SimdDescriptor,
-    const DCT_ROWS: usize,
-    const DCT_COLS: usize,
-    const ROWS: usize,
-    const COLS: usize,
->(
-    d: D,
-    input: &ImageRect<f32>,
-    output: &mut [f32],
-    output_stride: usize,
-    block: &mut [f32],
-) where
-    DctResampleScales<ROWS, DCT_ROWS>: HasDctResampleScales<ROWS>,
-    DctResampleScales<COLS, DCT_COLS>: HasDctResampleScales<COLS>,
-    DCT1DImpl<ROWS>: DCT1D,
-    DCT1DImpl<COLS>: DCT1D,
-{
-    let mut dct_input = [[0.0; COLS]; ROWS];
-    #[allow(clippy::needless_range_loop)]
-    for y in 0..ROWS {
-        dct_input[y].copy_from_slice(&input.row(y)[0..COLS]);
-    }
-    compute_scaled_dct::<D, ROWS, COLS>(d, dct_input, block);
-    if ROWS < COLS {
-        for y in 0..ROWS {
-            for x in 0..COLS {
-                output[y * output_stride + x] = block[y * COLS + x]
-                    * dct_total_resample_scale::<ROWS, DCT_ROWS>(y)
-                    * dct_total_resample_scale::<COLS, DCT_COLS>(x);
-            }
-        }
-    } else {
-        for y in 0..COLS {
-            for x in 0..ROWS {
-                output[y * output_stride + x] = block[y * ROWS + x]
-                    * dct_total_resample_scale::<COLS, DCT_COLS>(y)
-                    * dct_total_resample_scale::<ROWS, DCT_ROWS>(x);
-            }
-        }
-    }
-}
-
-#[inline(always)]
-fn lowest_frequencies_from_lf<D: SimdDescriptor>(
-    d: D,
-    hf_type: HfTransformType,
-    lf: &ImageRect<f32>,
-    llf: &mut [f32],
-    scratch: &mut [f32],
-) {
-    match hf_type {
-        HfTransformType::DCT16X8 => {
-            reinterpreting_dct::<
-                D,
-                /*DCT_ROWS=*/ { 2 * BLOCK_DIM },
-                /*DCT_COLS=*/ BLOCK_DIM,
-                /*ROWS=*/ 2,
-                /*COLS=*/ 1,
-            >(d, lf, llf, 2 * BLOCK_DIM, scratch);
-        }
-        HfTransformType::DCT8X16 => {
-            reinterpreting_dct::<
-                D,
-                /*DCT_ROWS=*/ BLOCK_DIM,
-                /*DCT_COLS=*/ { 2 * BLOCK_DIM },
-                /*ROWS=*/ 1,
-                /*COLS=*/ 2,
-            >(d, lf, llf, 2 * BLOCK_DIM, scratch);
-        }
-        HfTransformType::DCT16X16 => {
-            reinterpreting_dct::<
-                D,
-                /*DCT_ROWS=*/ { 2 * BLOCK_DIM },
-                /*DCT_COLS=*/ { 2 * BLOCK_DIM },
-                /*ROWS=*/ 2,
-                /*COLS=*/ 2,
-            >(d, lf, llf, 2 * BLOCK_DIM, scratch);
-        }
-        HfTransformType::DCT32X8 => {
-            reinterpreting_dct::<
-                D,
-                /*DCT_ROWS=*/ { 4 * BLOCK_DIM },
-                /*DCT_COLS=*/ BLOCK_DIM,
-                /*ROWS=*/ 4,
-                /*COLS=*/ 1,
-            >(d, lf, llf, 4 * BLOCK_DIM, scratch);
-        }
-        HfTransformType::DCT8X32 => {
-            reinterpreting_dct::<
-                D,
-                /*DCT_ROWS=*/ BLOCK_DIM,
-                /*DCT_COLS=*/ { 4 * BLOCK_DIM },
-                /*ROWS=*/ 1,
-                /*COLS=*/ 4,
-            >(d, lf, llf, 4 * BLOCK_DIM, scratch);
-        }
-        HfTransformType::DCT32X16 => {
-            reinterpreting_dct::<
-                D,
-                /*DCT_ROWS=*/ { 4 * BLOCK_DIM },
-                /*DCT_COLS=*/ { 2 * BLOCK_DIM },
-                /*ROWS=*/ 4,
-                /*COLS=*/ 2,
-            >(d, lf, llf, 4 * BLOCK_DIM, scratch);
-        }
-        HfTransformType::DCT16X32 => {
-            reinterpreting_dct::<
-                D,
-                /*DCT_ROWS=*/ { 2 * BLOCK_DIM },
-                /*DCT_COLS=*/ { 4 * BLOCK_DIM },
-                /*ROWS=*/ 2,
-                /*COLS=*/ 4,
-            >(d, lf, llf, 4 * BLOCK_DIM, scratch);
-        }
-        HfTransformType::DCT32X32 => {
-            reinterpreting_dct::<
-                D,
-                /*DCT_ROWS=*/ { 4 * BLOCK_DIM },
-                /*DCT_COLS=*/ { 4 * BLOCK_DIM },
-                /*ROWS=*/ 4,
-                /*COLS=*/ 4,
-            >(d, lf, llf, 4 * BLOCK_DIM, scratch);
-        }
-        HfTransformType::DCT64X32 => {
-            reinterpreting_dct::<
-                D,
-                /*DCT_ROWS=*/ { 8 * BLOCK_DIM },
-                /*DCT_COLS=*/ { 4 * BLOCK_DIM },
-                /*ROWS=*/ 8,
-                /*COLS=*/ 4,
-            >(d, lf, llf, 8 * BLOCK_DIM, scratch);
-        }
-        HfTransformType::DCT32X64 => {
-            reinterpreting_dct::<
-                D,
-                /*DCT_ROWS=*/ { 4 * BLOCK_DIM },
-                /*DCT_COLS=*/ { 8 * BLOCK_DIM },
-                /*ROWS=*/ 4,
-                /*COLS=*/ 8,
-            >(d, lf, llf, 8 * BLOCK_DIM, scratch);
-        }
-        HfTransformType::DCT64X64 => {
-            reinterpreting_dct::<
-                D,
-                /*DCT_ROWS=*/ { 8 * BLOCK_DIM },
-                /*DCT_COLS=*/ { 8 * BLOCK_DIM },
-                /*ROWS=*/ 8,
-                /*COLS=*/ 8,
-            >(d, lf, llf, 8 * BLOCK_DIM, scratch);
-        }
-        HfTransformType::DCT128X64 => {
-            reinterpreting_dct::<
-                D,
-                /*DCT_ROWS=*/ { 16 * BLOCK_DIM },
-                /*DCT_COLS=*/ { 8 * BLOCK_DIM },
-                /*ROWS=*/ 16,
-                /*COLS=*/ 8,
-            >(d, lf, llf, 16 * BLOCK_DIM, scratch);
-        }
-        HfTransformType::DCT64X128 => {
-            reinterpreting_dct::<
-                D,
-                /*DCT_ROWS=*/ { 8 * BLOCK_DIM },
-                /*DCT_COLS=*/ { 16 * BLOCK_DIM },
-                /*ROWS=*/ 8,
-                /*COLS=*/ 16,
-            >(d, lf, llf, 16 * BLOCK_DIM, scratch);
-        }
-        HfTransformType::DCT128X128 => {
-            reinterpreting_dct::<
-                D,
-                /*DCT_ROWS=*/ { 16 * BLOCK_DIM },
-                /*DCT_COLS=*/ { 16 * BLOCK_DIM },
-                /*ROWS=*/ 16,
-                /*COLS=*/ 16,
-            >(d, lf, llf, 16 * BLOCK_DIM, scratch);
-        }
-        HfTransformType::DCT256X128 => {
-            reinterpreting_dct::<
-                D,
-                /*DCT_ROWS=*/ { 32 * BLOCK_DIM },
-                /*DCT_COLS=*/ { 16 * BLOCK_DIM },
-                /*ROWS=*/ 32,
-                /*COLS=*/ 16,
-            >(d, lf, llf, 32 * BLOCK_DIM, scratch);
-        }
-        HfTransformType::DCT128X256 => {
-            reinterpreting_dct::<
-                D,
-                /*DCT_ROWS=*/ { 16 * BLOCK_DIM },
-                /*DCT_COLS=*/ { 32 * BLOCK_DIM },
-                /*ROWS=*/ 16,
-                /*COLS=*/ 32,
-            >(d, lf, llf, 32 * BLOCK_DIM, scratch);
-        }
-        HfTransformType::DCT256X256 => {
-            reinterpreting_dct::<
-                D,
-                /*DCT_ROWS=*/ { 32 * BLOCK_DIM },
-                /*DCT_COLS=*/ { 32 * BLOCK_DIM },
-                /*ROWS=*/ 32,
-                /*COLS=*/ 32,
-            >(d, lf, llf, 32 * BLOCK_DIM, scratch);
-        }
-        HfTransformType::DCT
-        | HfTransformType::DCT2X2
-        | HfTransformType::DCT4X4
-        | HfTransformType::DCT4X8
-        | HfTransformType::DCT8X4
-        | HfTransformType::AFV0
-        | HfTransformType::AFV1
-        | HfTransformType::AFV2
-        | HfTransformType::AFV3
-        | HfTransformType::IDENTITY => {
-            llf[0] = lf.row(0)[0];
-        }
-    }
-}
+const LF_BUFFER_SIZE: usize = 32 * 32;
 
 fn predict_num_nonzeros(nzeros_map: &Image<u32>, bx: usize, by: usize) -> usize {
     if bx == 0 {
@@ -330,11 +104,9 @@ fn dequant_block<D: SimdDescriptor>(
     size: usize,
     dequant_matrices: &DequantMatrices,
     covered_blocks: usize,
-    lf: &Option<[ImageRect<f32>; 3]>,
     biases: &[f32; 4],
     qblock: &[&[i32]; 3],
     block: &mut [Vec<f32>; 3],
-    scratch: &mut [f32],
 ) {
     let scaled_dequant_y = inv_global_scale / (quant as f32);
 
@@ -359,11 +131,6 @@ fn dequant_block<D: SimdDescriptor>(
             qblock,
             block,
         );
-    }
-    if let Some(lf) = lf.as_ref() {
-        for c in 0..3 {
-            lowest_frequencies_from_lf::<D>(d, hf_type, &lf[c], &mut block[c], scratch);
-        }
     }
 }
 
@@ -407,17 +174,24 @@ fn dequant_and_transform_to_pixels<D: SimdDescriptor>(
         num_coeffs,
         dequant_matrices,
         num_blocks,
-        lf_rects,
         quant_biases,
         qblock,
         transform_buffer,
-        scratch,
     );
     for c in [1, 0, 2] {
         if (sbx[c] << hshift[c]) != bx || (sby[c] << vshift[c] != by) {
             continue;
         }
-        transform_to_pixels::<D>(d, transform_type, &mut transform_buffer[c], scratch)?;
+        let (lf, scratch) = scratch.split_at_mut(LF_BUFFER_SIZE);
+        {
+            let xs = covered_blocks_x(transform_type) as usize;
+            let ys = covered_blocks_y(transform_type) as usize;
+            let rect = lf_rects.as_ref().unwrap()[c];
+            for (y, lf) in lf.chunks_exact_mut(xs).enumerate().take(ys) {
+                lf.copy_from_slice(&rect.row(y)[0..xs]);
+            }
+        }
+        transform_to_pixels(transform_type, lf, &mut transform_buffer[c], scratch);
         let mut output = pixels[c].as_rect_mut();
         let downsampled_rect = Rect {
             origin: (
@@ -536,17 +310,9 @@ pub fn decode_vardct_group(
         ))?,
     ];
     debug!(?block_group_rect);
-    let max_block_size = HfTransformType::VALUES
-        .iter()
-        .filter(|&transform_type| (hf_meta.used_hf_types & (1 << *transform_type as u32)) != 0)
-        .map(|&transform_type| {
-            BLOCK_SIZE
-                * covered_blocks_x(transform_type) as usize
-                * covered_blocks_y(transform_type) as usize
-        })
-        .max()
-        .unwrap_or(0);
-    let mut scratch = vec![0.0; max_block_size];
+    // TODO(veluca): this should become LF_BUFFER_SIZE once the reinterpreting_dct doesn't need
+    // scratch space.
+    let mut scratch = vec![0.0; 2 * LF_BUFFER_SIZE];
     let color_correlation_params = lf_global.color_correlation_params.as_ref().unwrap();
     let cmap_rect = Rect {
         origin: (
@@ -692,7 +458,8 @@ pub fn decode_vardct_group(
                 }
             };
 
-            let transform_type = HfTransformType::from_usize(transform_id as usize)?;
+            let transform_type = HfTransformType::from_usize(transform_id as usize)
+                .ok_or(Error::InvalidVarDCTTransform(transform_id as usize))?;
             let cx = covered_blocks_x(transform_type) as usize;
             let cy = covered_blocks_y(transform_type) as usize;
             let shape_id = block_shape_id(transform_type) as usize;

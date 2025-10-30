@@ -5,11 +5,13 @@
 
 use crate::{
     SIGMA_PADDING,
-    error::Result,
-    frame::{HfMetadata, LfGlobalState, transform_map::*},
+    error::{Error, Result},
+    frame::{HfMetadata, LfGlobalState},
     headers::frame_header::{Encoding, FrameHeader},
     image::Image,
 };
+
+use jxl_transforms::transform_map::*;
 
 pub fn create_sigma_image(
     frame_header: &FrameHeader,
@@ -42,7 +44,8 @@ pub fn create_sigma_image(
                 if !is_first_block {
                     continue;
                 }
-                let transform_type = HfTransformType::from_usize(transform_id as usize)?;
+                let transform_type = HfTransformType::from_usize(transform_id as usize)
+                    .ok_or(Error::InvalidVarDCTTransform(transform_id as usize))?;
                 let cx = covered_blocks_x(transform_type) as usize;
                 let cy = covered_blocks_y(transform_type) as usize;
                 let sigma_quant =

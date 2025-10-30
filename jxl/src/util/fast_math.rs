@@ -6,7 +6,7 @@
 #![allow(clippy::excessive_precision)]
 
 use super::{eval_rational_poly, eval_rational_poly_simd};
-use jxl_simd::{F32SimdVec, I32SimdVec, SimdDescriptor};
+use jxl_simd::{F32SimdVec, I32SimdVec, SimdDescriptor, shl, shr};
 use std::f32::consts::{PI, SQRT_2};
 
 const POW2F_NUMER_COEFFS: [f32; 3] = [1.01749063e1, 4.88687798e1, 9.85506591e1];
@@ -79,8 +79,7 @@ pub fn fast_pow2f(x: f32) -> f32 {
 #[inline(always)]
 pub fn fast_pow2f_simd<D: SimdDescriptor>(d: D, x: D::F32Vec) -> D::F32Vec {
     let x_floor = x.floor();
-    let exp =
-        ((x_floor.as_i32() + D::I32Vec::splat(d, 127)) << D::I32Vec::splat(d, 23)).bitcast_to_f32();
+    let exp = shl!(x_floor.as_i32() + D::I32Vec::splat(d, 127), 23).bitcast_to_f32();
     let frac = x - x_floor;
 
     let num = frac + D::F32Vec::splat(d, POW2F_NUMER_COEFFS[0]);
@@ -123,8 +122,8 @@ pub fn fast_log2f(x: f32) -> f32 {
 pub fn fast_log2f_simd<D: SimdDescriptor>(d: D, x: D::F32Vec) -> D::F32Vec {
     let x_bits = x.bitcast_to_i32();
     let exp_bits = x_bits - D::I32Vec::splat(d, 0x3f2aaaab);
-    let exp_shifted = exp_bits >> D::I32Vec::splat(d, 23);
-    let mantissa = (x_bits - (exp_shifted << D::I32Vec::splat(d, 23))).bitcast_to_f32();
+    let exp_shifted = shr!(exp_bits, 23);
+    let mantissa = (x_bits - shl!(exp_shifted, 23)).bitcast_to_f32();
     let exp_val = exp_shifted.as_f32();
 
     let x = mantissa - D::F32Vec::splat(d, 1.0);

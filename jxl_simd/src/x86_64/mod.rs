@@ -4,9 +4,11 @@
 // license that can be found in the LICENSE file.
 
 #![allow(unsafe_code)]
+#![allow(clippy::identity_op)]
 
 pub(super) mod avx;
 pub(super) mod avx512;
+pub(super) mod sse42;
 
 #[macro_export]
 macro_rules! simd_function {
@@ -39,6 +41,14 @@ macro_rules! simd_function {
                 // SAFETY: we just checked for avx2 and fma.
                 return unsafe { inner(d, $($arg),*) };
             }
+            if let Some(d) = $crate::Sse42Descriptor::new() {
+                #[target_feature(enable = "sse4.2")]
+                fn inner(d: $crate::Sse42Descriptor, $($arg: $ty),*) $(-> $ret)? {
+                    $name(d, $($arg),*)
+                }
+                // SAFETY: we just checked for sse4.2.
+                return unsafe { inner(d, $($arg),*) };
+            }
             $name($crate::ScalarDescriptor::new().unwrap(), $($arg),*)
         }
     };
@@ -57,6 +67,18 @@ macro_rules! test_all_instruction_sets {
             }
             #[allow(unsafe_code)]
             #[test]
+            fn [<$name _sse42>]() {
+                use $crate::SimdDescriptor;
+                let Some(d) = $crate::Sse42Descriptor::new() else { return; };
+                #[target_feature(enable = "sse4.2")]
+                fn inner(d: $crate::Sse42Descriptor) {
+                    $name(d)
+                }
+                // SAFETY: we just checked for sse4.2.
+                return unsafe { inner(d) };
+            }
+            #[allow(unsafe_code)]
+            #[test]
             fn [<$name _avx>]() {
                 use $crate::SimdDescriptor;
                 let Some(d) = $crate::AvxDescriptor::new() else { return; };
@@ -66,7 +88,6 @@ macro_rules! test_all_instruction_sets {
                 }
                 // SAFETY: we just checked for avx2 and fma.
                 return unsafe { inner(d) };
-
             }
             #[allow(unsafe_code)]
             #[test]
@@ -120,6 +141,21 @@ macro_rules! bench_all_instruction_sets {
             }
             // SAFETY: we just checked for avx2 and fma.
             unsafe { inner(d, $criterion, "avx") };
+        }
+        if let Some(d) = $crate::Sse42Descriptor::new() {
+            #[target_feature(enable = "sse4.2")]
+            fn inner(
+                d: $crate::Sse42Descriptor,
+                criterion: &mut ::criterion::BenchmarkGroup<
+                    '_,
+                    impl ::criterion::measurement::Measurement,
+                >,
+                name: &str,
+            ) {
+                $name(d, criterion, name)
+            }
+            // SAFETY: we just checked for sse4.2.
+            unsafe { inner(d, $criterion, "sse42") };
         }
         $name(
             $crate::ScalarDescriptor::new().unwrap(),

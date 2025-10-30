@@ -3,18 +3,21 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-use super::super::{F32SimdVec, I32SimdVec, ScalarDescriptor, SimdDescriptor, SimdMask};
+use crate::{impl_f32_array_interface, x86_64::sse42::Sse42Descriptor};
+
+use super::super::{F32SimdVec, I32SimdVec, SimdDescriptor, SimdMask};
 use std::{
     arch::x86_64::{
-        __m256, __m256i, _CMP_GT_OQ, _mm_loadu_ps, _mm_storeu_ps, _mm_unpackhi_ps, _mm_unpacklo_ps,
-        _mm256_abs_epi32, _mm256_add_epi32, _mm256_add_ps, _mm256_and_ps, _mm256_andnot_ps,
-        _mm256_blendv_ps, _mm256_castps_si256, _mm256_castsi256_ps, _mm256_cmp_ps,
-        _mm256_cmpgt_epi32, _mm256_cvtepi32_ps, _mm256_cvtps_epi32, _mm256_div_ps, _mm256_floor_ps,
-        _mm256_fmadd_ps, _mm256_fnmadd_ps, _mm256_loadu_ps, _mm256_loadu_si256, _mm256_maskload_ps,
+        __m256, __m256i, _CMP_GT_OQ, _mm256_abs_epi32, _mm256_add_epi32, _mm256_add_ps,
+        _mm256_and_ps, _mm256_andnot_ps, _mm256_blendv_ps, _mm256_castpd_ps, _mm256_castps_pd,
+        _mm256_castps_si256, _mm256_castsi256_ps, _mm256_cmp_ps, _mm256_cmpgt_epi32,
+        _mm256_cvtepi32_ps, _mm256_cvtps_epi32, _mm256_div_ps, _mm256_floor_ps, _mm256_fmadd_ps,
+        _mm256_fnmadd_ps, _mm256_loadu_ps, _mm256_loadu_si256, _mm256_maskload_ps,
         _mm256_maskstore_ps, _mm256_max_ps, _mm256_mul_epi32, _mm256_mul_ps, _mm256_or_ps,
         _mm256_permute2f128_ps, _mm256_set1_epi32, _mm256_set1_ps, _mm256_setzero_ps,
-        _mm256_shuffle_ps, _mm256_sllv_epi32, _mm256_sqrt_ps, _mm256_srav_epi32, _mm256_storeu_ps,
-        _mm256_sub_epi32, _mm256_sub_ps, _mm256_unpackhi_ps, _mm256_unpacklo_ps, _mm256_xor_ps,
+        _mm256_slli_epi32, _mm256_sllv_epi32, _mm256_sqrt_ps, _mm256_srai_epi32, _mm256_srav_epi32,
+        _mm256_storeu_ps, _mm256_sub_epi32, _mm256_sub_ps, _mm256_unpackhi_pd, _mm256_unpackhi_ps,
+        _mm256_unpacklo_pd, _mm256_unpacklo_ps, _mm256_xor_ps,
     },
     ops::{
         Add, AddAssign, Div, DivAssign, Mul, MulAssign, Shl, ShlAssign, Shr, ShrAssign, Sub,
@@ -32,56 +35,11 @@ impl AvxDescriptor {
     pub unsafe fn new_unchecked() -> Self {
         Self(())
     }
-}
 
-impl AvxDescriptor {
-    #[target_feature(enable = "avx")]
-    #[inline]
-    fn transpose4x4f32(
-        self,
-        input: &[f32],
-        input_stride: usize,
-        output: &mut [f32],
-        output_stride: usize,
-    ) {
-        assert!(input_stride >= 4);
-        assert!(input.len() >= input_stride.checked_mul(3).unwrap().checked_add(4).unwrap());
-        assert!(
-            output.len()
-                >= output_stride
-                    .checked_mul(3)
-                    .unwrap()
-                    .checked_add(4)
-                    .unwrap()
-        );
-
-        // SAFETY: input is verified to be large enough for this pointer arithmetic.
-        let (p0, p1, p2, p3) = unsafe {
-            (
-                _mm_loadu_ps(input.as_ptr()),
-                _mm_loadu_ps(input.as_ptr().add(input_stride)),
-                _mm_loadu_ps(input.as_ptr().add(2 * input_stride)),
-                _mm_loadu_ps(input.as_ptr().add(3 * input_stride)),
-            )
-        };
-
-        let q0 = _mm_unpacklo_ps(p0, p2);
-        let q1 = _mm_unpacklo_ps(p1, p3);
-        let q2 = _mm_unpackhi_ps(p0, p2);
-        let q3 = _mm_unpackhi_ps(p1, p3);
-
-        let r0 = _mm_unpacklo_ps(q0, q1);
-        let r1 = _mm_unpackhi_ps(q0, q1);
-        let r2 = _mm_unpacklo_ps(q2, q3);
-        let r3 = _mm_unpackhi_ps(q2, q3);
-
-        // SAFETY: output is verified to be large enough for this pointer arithmetic.
-        unsafe {
-            _mm_storeu_ps(output.as_mut_ptr(), r0);
-            _mm_storeu_ps(output.as_mut_ptr().add(output_stride), r1);
-            _mm_storeu_ps(output.as_mut_ptr().add(2 * output_stride), r2);
-            _mm_storeu_ps(output.as_mut_ptr().add(3 * output_stride), r3);
-        }
+    pub fn as_sse42(&self) -> Sse42Descriptor {
+        // SAFETY: the safety invariant on `self` guarantees avx is available, which implies
+        // sse42.
+        unsafe { Sse42Descriptor::new_unchecked() }
     }
 }
 
@@ -89,6 +47,17 @@ impl SimdDescriptor for AvxDescriptor {
     type F32Vec = F32VecAvx;
     type I32Vec = I32VecAvx;
     type Mask = MaskAvx;
+
+    type Descriptor256 = Self;
+    type Descriptor128 = Sse42Descriptor;
+
+    fn maybe_downgrade_256bit(self) -> Self::Descriptor256 {
+        self
+    }
+
+    fn maybe_downgrade_128bit(self) -> Self::Descriptor128 {
+        self.as_sse42()
+    }
 
     fn new() -> Option<Self> {
         if is_x86_feature_detected!("avx2") && is_x86_feature_detected!("fma") {
@@ -105,30 +74,25 @@ impl SimdDescriptor for AvxDescriptor {
         assert_eq!(output.len(), ROWS * COLS);
 
         if ROWS.is_multiple_of(8) && COLS.is_multiple_of(8) {
-            for r in (0..ROWS).step_by(8) {
-                let input_row = &input[r * COLS..];
-                for c in (0..COLS).step_by(8) {
-                    let output_row = &mut output[c * ROWS..];
+            let input: &[[_; 8]] = input.as_chunks().0;
+            let output: &mut [[_; 8]] = output.as_chunks_mut().0;
+            let cols_div_8 = COLS / 8;
+            let rows_div_8 = ROWS / 8;
+            for r in 0..rows_div_8 {
+                for c in 0..cols_div_8 {
                     // SAFETY: We know avx is available from the safety invariant on `self`.
                     unsafe {
-                        Self::transpose8x8f32(&input_row[c..], COLS, &mut output_row[r..], ROWS);
-                    }
-                }
-            }
-        } else if ROWS.is_multiple_of(4) && COLS.is_multiple_of(4) {
-            for r in (0..ROWS).step_by(4) {
-                let input_row = &input[r * COLS..];
-                for c in (0..COLS).step_by(4) {
-                    let output_row = &mut output[c * ROWS..];
-                    // SAFETY: We know avx is available from the safety invariant on `self`.
-                    unsafe {
-                        self.transpose4x4f32(&input_row[c..], COLS, &mut output_row[r..], ROWS);
+                        self.transpose8x8f32(
+                            &input[r * COLS + c..],
+                            cols_div_8,
+                            &mut output[c * ROWS + r..],
+                            rows_div_8,
+                        );
                     }
                 }
             }
         } else {
-            let scalar = ScalarDescriptor {};
-            scalar.transpose::<ROWS, COLS>(input, output);
+            self.as_sse42().transpose::<ROWS, COLS>(input, output);
         }
     }
 
@@ -142,40 +106,39 @@ impl SimdDescriptor for AvxDescriptor {
     }
 }
 
+#[target_feature(enable = "avx2")]
+#[inline]
+fn unpacklo_pd(a: __m256, b: __m256) -> __m256 {
+    _mm256_castpd_ps(_mm256_unpacklo_pd(_mm256_castps_pd(a), _mm256_castps_pd(b)))
+}
+
+#[target_feature(enable = "avx2")]
+#[inline]
+fn unpackhi_pd(a: __m256, b: __m256) -> __m256 {
+    _mm256_castpd_ps(_mm256_unpackhi_pd(_mm256_castps_pd(a), _mm256_castps_pd(b)))
+}
+
 impl AvxDescriptor {
     #[target_feature(enable = "avx2")]
     #[inline]
     fn transpose8x8f32(
-        input: &[f32],
+        self,
+        input: &[[f32; 8]],
         input_stride: usize,
-        output: &mut [f32],
+        output: &mut [[f32; 8]],
         output_stride: usize,
     ) {
-        assert!(input_stride >= 8);
-        assert!(input.len() >= input_stride.checked_mul(7).unwrap().checked_add(8).unwrap());
-        assert!(output_stride >= 8);
-        assert!(
-            output.len()
-                >= output_stride
-                    .checked_mul(7)
-                    .unwrap()
-                    .checked_add(8)
-                    .unwrap()
-        );
+        assert!(input.len() > input_stride * 7);
+        assert!(output.len() > output_stride * 7);
 
-        let (r0, r1, r2, r3, r4, r5, r6, r7);
-        // SAFETY: The asserts at the top of the function guarantee that the input slice is large
-        // enough for these memory operations and that the offset calculations don't overflow.
-        unsafe {
-            r0 = _mm256_loadu_ps(input.as_ptr());
-            r1 = _mm256_loadu_ps(input.as_ptr().add(input_stride));
-            r2 = _mm256_loadu_ps(input.as_ptr().add(input_stride * 2));
-            r3 = _mm256_loadu_ps(input.as_ptr().add(input_stride * 3));
-            r4 = _mm256_loadu_ps(input.as_ptr().add(input_stride * 4));
-            r5 = _mm256_loadu_ps(input.as_ptr().add(input_stride * 5));
-            r6 = _mm256_loadu_ps(input.as_ptr().add(input_stride * 6));
-            r7 = _mm256_loadu_ps(input.as_ptr().add(input_stride * 7));
-        }
+        let r0 = F32VecAvx::load_array(self, &input[0]).0;
+        let r1 = F32VecAvx::load_array(self, &input[1 * input_stride]).0;
+        let r2 = F32VecAvx::load_array(self, &input[2 * input_stride]).0;
+        let r3 = F32VecAvx::load_array(self, &input[3 * input_stride]).0;
+        let r4 = F32VecAvx::load_array(self, &input[4 * input_stride]).0;
+        let r5 = F32VecAvx::load_array(self, &input[5 * input_stride]).0;
+        let r6 = F32VecAvx::load_array(self, &input[6 * input_stride]).0;
+        let r7 = F32VecAvx::load_array(self, &input[7 * input_stride]).0;
 
         // Stage 1: Unpack low/high pairs
         let t0 = _mm256_unpacklo_ps(r0, r1);
@@ -188,37 +151,33 @@ impl AvxDescriptor {
         let t7 = _mm256_unpackhi_ps(r6, r7);
 
         // Stage 2: Shuffle to group 32-bit elements
-        let s0 = _mm256_shuffle_ps(t0, t2, 0b01_00_01_00); // _MM_SHUFFLE(1,0,1,0)
-        let s1 = _mm256_shuffle_ps(t0, t2, 0b11_10_11_10); // _MM_SHUFFLE(3,2,3,2)
-        let s2 = _mm256_shuffle_ps(t1, t3, 0b01_00_01_00);
-        let s3 = _mm256_shuffle_ps(t1, t3, 0b11_10_11_10);
-        let s4 = _mm256_shuffle_ps(t4, t6, 0b01_00_01_00);
-        let s5 = _mm256_shuffle_ps(t4, t6, 0b11_10_11_10);
-        let s6 = _mm256_shuffle_ps(t5, t7, 0b01_00_01_00);
-        let s7 = _mm256_shuffle_ps(t5, t7, 0b11_10_11_10);
+        let s0 = unpacklo_pd(t0, t2);
+        let s1 = unpackhi_pd(t0, t2);
+        let s2 = unpacklo_pd(t1, t3);
+        let s3 = unpackhi_pd(t1, t3);
+        let s4 = unpacklo_pd(t4, t6);
+        let s5 = unpackhi_pd(t4, t6);
+        let s6 = unpacklo_pd(t5, t7);
+        let s7 = unpackhi_pd(t5, t7);
 
         // Stage 3: 128-bit permute to finalize transpose
-        let c0 = _mm256_permute2f128_ps(s0, s4, 0x20);
-        let c1 = _mm256_permute2f128_ps(s1, s5, 0x20);
-        let c2 = _mm256_permute2f128_ps(s2, s6, 0x20);
-        let c3 = _mm256_permute2f128_ps(s3, s7, 0x20);
-        let c4 = _mm256_permute2f128_ps(s0, s4, 0x31);
-        let c5 = _mm256_permute2f128_ps(s1, s5, 0x31);
-        let c6 = _mm256_permute2f128_ps(s2, s6, 0x31);
-        let c7 = _mm256_permute2f128_ps(s3, s7, 0x31);
+        let c0 = _mm256_permute2f128_ps::<0x20>(s0, s4);
+        let c1 = _mm256_permute2f128_ps::<0x20>(s1, s5);
+        let c2 = _mm256_permute2f128_ps::<0x20>(s2, s6);
+        let c3 = _mm256_permute2f128_ps::<0x20>(s3, s7);
+        let c4 = _mm256_permute2f128_ps::<0x31>(s0, s4);
+        let c5 = _mm256_permute2f128_ps::<0x31>(s1, s5);
+        let c6 = _mm256_permute2f128_ps::<0x31>(s2, s6);
+        let c7 = _mm256_permute2f128_ps::<0x31>(s3, s7);
 
-        // SAFETY: The asserts at the top of the function guarantee that the output slice is large
-        // enough for these memory operations and that the offset calculations don't overflow.
-        unsafe {
-            _mm256_storeu_ps(output.as_mut_ptr(), c0);
-            _mm256_storeu_ps(output.as_mut_ptr().add(output_stride), c1);
-            _mm256_storeu_ps(output.as_mut_ptr().add(output_stride * 2), c2);
-            _mm256_storeu_ps(output.as_mut_ptr().add(output_stride * 3), c3);
-            _mm256_storeu_ps(output.as_mut_ptr().add(output_stride * 4), c4);
-            _mm256_storeu_ps(output.as_mut_ptr().add(output_stride * 5), c5);
-            _mm256_storeu_ps(output.as_mut_ptr().add(output_stride * 6), c6);
-            _mm256_storeu_ps(output.as_mut_ptr().add(output_stride * 7), c7);
-        }
+        F32VecAvx(c0, self).store_array(&mut output[0]);
+        F32VecAvx(c1, self).store_array(&mut output[1 * output_stride]);
+        F32VecAvx(c2, self).store_array(&mut output[2 * output_stride]);
+        F32VecAvx(c3, self).store_array(&mut output[3 * output_stride]);
+        F32VecAvx(c4, self).store_array(&mut output[4 * output_stride]);
+        F32VecAvx(c5, self).store_array(&mut output[5 * output_stride]);
+        F32VecAvx(c6, self).store_array(&mut output[6 * output_stride]);
+        F32VecAvx(c7, self).store_array(&mut output[7 * output_stride]);
     }
 }
 
@@ -370,6 +329,69 @@ impl F32SimdVec for F32VecAvx {
     fn_avx!(this: F32VecAvx, fn bitcast_to_i32() -> I32VecAvx {
         I32VecAvx(_mm256_castps_si256(this.0), this.1)
     });
+
+    impl_f32_array_interface!();
+
+    #[inline(always)]
+    fn transpose_square(d: Self::Descriptor, data: &mut [Self::UnderlyingArray], stride: usize) {
+        #[target_feature(enable = "avx2")]
+        #[inline]
+        fn transpose8x8f32(d: AvxDescriptor, data: &mut [[f32; 8]], stride: usize) {
+            assert!(data.len() > stride * 7);
+
+            let r0 = F32VecAvx::load_array(d, &data[0]).0;
+            let r1 = F32VecAvx::load_array(d, &data[1 * stride]).0;
+            let r2 = F32VecAvx::load_array(d, &data[2 * stride]).0;
+            let r3 = F32VecAvx::load_array(d, &data[3 * stride]).0;
+            let r4 = F32VecAvx::load_array(d, &data[4 * stride]).0;
+            let r5 = F32VecAvx::load_array(d, &data[5 * stride]).0;
+            let r6 = F32VecAvx::load_array(d, &data[6 * stride]).0;
+            let r7 = F32VecAvx::load_array(d, &data[7 * stride]).0;
+
+            // Stage 1: Unpack low/high pairs
+            let t0 = _mm256_unpacklo_ps(r0, r1);
+            let t1 = _mm256_unpackhi_ps(r0, r1);
+            let t2 = _mm256_unpacklo_ps(r2, r3);
+            let t3 = _mm256_unpackhi_ps(r2, r3);
+            let t4 = _mm256_unpacklo_ps(r4, r5);
+            let t5 = _mm256_unpackhi_ps(r4, r5);
+            let t6 = _mm256_unpacklo_ps(r6, r7);
+            let t7 = _mm256_unpackhi_ps(r6, r7);
+
+            // Stage 2: Shuffle to group 32-bit elements
+            let s0 = unpacklo_pd(t0, t2);
+            let s1 = unpackhi_pd(t0, t2);
+            let s2 = unpacklo_pd(t1, t3);
+            let s3 = unpackhi_pd(t1, t3);
+            let s4 = unpacklo_pd(t4, t6);
+            let s5 = unpackhi_pd(t4, t6);
+            let s6 = unpacklo_pd(t5, t7);
+            let s7 = unpackhi_pd(t5, t7);
+
+            // Stage 3: 128-bit permute to finalize transpose
+            let c0 = _mm256_permute2f128_ps::<0x20>(s0, s4);
+            let c1 = _mm256_permute2f128_ps::<0x20>(s1, s5);
+            let c2 = _mm256_permute2f128_ps::<0x20>(s2, s6);
+            let c3 = _mm256_permute2f128_ps::<0x20>(s3, s7);
+            let c4 = _mm256_permute2f128_ps::<0x31>(s0, s4);
+            let c5 = _mm256_permute2f128_ps::<0x31>(s1, s5);
+            let c6 = _mm256_permute2f128_ps::<0x31>(s2, s6);
+            let c7 = _mm256_permute2f128_ps::<0x31>(s3, s7);
+
+            F32VecAvx(c0, d).store_array(&mut data[0]);
+            F32VecAvx(c1, d).store_array(&mut data[1 * stride]);
+            F32VecAvx(c2, d).store_array(&mut data[2 * stride]);
+            F32VecAvx(c3, d).store_array(&mut data[3 * stride]);
+            F32VecAvx(c4, d).store_array(&mut data[4 * stride]);
+            F32VecAvx(c5, d).store_array(&mut data[5 * stride]);
+            F32VecAvx(c6, d).store_array(&mut data[6 * stride]);
+            F32VecAvx(c7, d).store_array(&mut data[7 * stride]);
+        }
+        // SAFETY: the safety invariant on `d` guarantees avx2
+        unsafe {
+            transpose8x8f32(d, data, stride);
+        }
+    }
 }
 
 impl Add<F32VecAvx> for F32VecAvx {
@@ -467,6 +489,18 @@ impl I32SimdVec for I32VecAvx {
             this.1,
         )
     });
+
+    #[inline(always)]
+    fn shl<const AMOUNT_U: u32, const AMOUNT_I: i32>(self) -> Self {
+        // SAFETY: We know avx2 is available from the safety invariant on `d`.
+        unsafe { I32VecAvx(_mm256_slli_epi32::<AMOUNT_I>(self.0), self.1) }
+    }
+
+    #[inline(always)]
+    fn shr<const AMOUNT_U: u32, const AMOUNT_I: i32>(self) -> Self {
+        // SAFETY: We know avx2 is available from the safety invariant on `d`.
+        unsafe { I32VecAvx(_mm256_srai_epi32::<AMOUNT_I>(self.0), self.1) }
+    }
 }
 
 impl Add<I32VecAvx> for I32VecAvx {

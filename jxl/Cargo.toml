@@ -11,6 +11,7 @@ edition = "2024"
 license = "BSD-3-Clause"
 
 [dependencies]
+jxl_transforms = { path = "../jxl_transforms", version = "0.1.0" }
 thiserror = "2.0"
 byteorder = "1.4.3"
 num-derive = "0.4"
@@ -28,11 +29,6 @@ rand = "0.8.5"
 rand_xorshift = "0.3.0"
 test-log = { version = "0.2.16", features = ["trace"] }
 jxl_macros = { path = "../jxl_macros", version = "=0.1.1", features = ["test"] }
-criterion = { version = "0.5", features = ["html_reports"] }
 
 [lints]
 workspace = true
-
-[[bench]]
-name = "dct"
-harness = false

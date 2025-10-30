@@ -37,7 +37,6 @@ pub mod modular;
 mod quant_weights;
 pub mod quantizer;
 pub mod render;
-pub mod transform_map;
 
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
 pub enum Section {
