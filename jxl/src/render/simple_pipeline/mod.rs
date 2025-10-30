@@ -87,10 +87,13 @@ impl RenderPipeline for SimpleRenderPipeline {
         let off = (goffset.0 >> downsample.0, goffset.1 >> downsample.1);
         debug!(?sz, input_buffers_sz=?self.input_buffers[channel].size(), offset=?off, ?downsample, ?goffset);
         let bsz = buf.size();
+        // These asserts should catch cases in which we hand back groups of the wrong size (or as
+        // large as a full frame). Note that, because of chroma subsampling, padding can be up to
+        // two blocks.
         assert!(sz.0 <= bsz.0);
         assert!(sz.1 <= bsz.1);
-        assert!(sz.0 + BLOCK_DIM > bsz.0);
-        assert!(sz.1 + BLOCK_DIM > bsz.1);
+        assert!(sz.0 + BLOCK_DIM * 2 > bsz.0);
+        assert!(sz.1 + BLOCK_DIM * 2 > bsz.1);
         let ty = ty.unwrap();
         assert_eq!(ty, T::DATA_TYPE_ID);
         for y in 0..sz.1 {

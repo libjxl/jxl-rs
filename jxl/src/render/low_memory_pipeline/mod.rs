@@ -3,6 +3,8 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
+#![allow(clippy::needless_range_loop)]
+
 use std::any::Any;
 
 use row_buffers::RowBuffer;
@@ -376,10 +378,13 @@ impl RenderPipeline for LowMemoryRenderPipeline {
         if let Some(buf) = self.input_buffers[group_id].data[channel].take() {
             let img = Image::<T>::from_raw(buf);
             let bsz = img.size();
+            // These asserts should catch cases in which we hand back groups of the wrong size (or as
+            // large as a full frame). Note that, because of chroma subsampling, padding can be up to
+            // two blocks.
             assert!(sz.0 <= bsz.0);
             assert!(sz.1 <= bsz.1);
-            assert!(sz.0 + BLOCK_DIM > bsz.0);
-            assert!(sz.1 + BLOCK_DIM > bsz.1);
+            assert!(sz.0 + BLOCK_DIM * 2 > bsz.0);
+            assert!(sz.1 + BLOCK_DIM * 2 > bsz.1);
             return Ok(img);
         }
         Image::<T>::new(sz)
@@ -402,10 +407,13 @@ impl RenderPipeline for LowMemoryRenderPipeline {
             .shared
             .group_size_for_channel(channel, group_id, T::DATA_TYPE_ID);
         let bsz = buf.size();
+        // These asserts should catch cases in which we hand back groups of the wrong size (or as
+        // large as a full frame). Note that, because of chroma subsampling, padding can be up to
+        // two blocks.
         assert!(sz.0 <= bsz.0);
         assert!(sz.1 <= bsz.1);
-        assert!(sz.0 + BLOCK_DIM > bsz.0);
-        assert!(sz.1 + BLOCK_DIM > bsz.1);
+        assert!(sz.0 + BLOCK_DIM * 2 > bsz.0);
+        assert!(sz.1 + BLOCK_DIM * 2 > bsz.1);
         self.input_buffers[group_id].data[channel] = Some(buf.into_raw());
         self.shared.group_chan_ready_passes[group_id][channel] += num_passes;
     }

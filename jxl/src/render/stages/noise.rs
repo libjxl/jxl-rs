@@ -3,6 +3,8 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
+#![allow(clippy::needless_range_loop)]
+
 use crate::{
     features::noise::Noise,
     frame::color_correlation_map::ColorCorrelationParams,

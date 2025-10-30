@@ -3,6 +3,8 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
+#![allow(clippy::needless_range_loop)]
+
 use super::dct_scales::WcMultipliers;
 use jxl_simd::{F32SimdVec, SimdDescriptor};
 use std::f64::consts::SQRT_2;
