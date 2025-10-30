@@ -8,16 +8,17 @@ pub use jxl_exr::to_exr;
 #[cfg(not(feature = "exr"))]
 mod jxl_exr {
     use crate::ImageData;
+    use color_eyre::eyre::{Result, eyre};
     use jxl::api::JxlColorProfile;
-    use jxl::error::{Error, Result};
-    use jxl::headers::bit_depth::BitDepth;
+    use std::io::{Seek, Write};
 
-    pub fn to_exr(
+    pub fn to_exr<Writer: Write + Seek>(
         _image_data: ImageData<f32>,
-        _bit_depth: BitDepth,
+        _bit_depth: u32,
         _color_profile: &JxlColorProfile,
-    ) -> Result<Vec<u8>> {
-        return Err(Error::OutputFormatNotSupported);
+        _writer: &mut Writer,
+    ) -> Result<()> {
+        return Err(eyre!("jxl_cli built without support for EXR output"));
     }
 }
 
