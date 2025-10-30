@@ -263,7 +263,7 @@ impl TransformStepChunk {
                 let buf_avg = &buffers[buf_in[0]];
                 let buf_res = &buffers[buf_in[1]];
                 let in_grid = buf_avg.get_grid_idx(out_grid_kind, self.grid_pos);
-                assert_eq!(out_grid_kind, buf_res.grid_kind);
+                let res_grid = buf_res.get_grid_idx(out_grid_kind, self.grid_pos);
                 {
                     trace!(
                         "HSqueeze {:?} -> {:?}, grid {out_grid} grid pos {:?}",
@@ -289,7 +289,7 @@ impl TransformStepChunk {
                     } else {
                         None
                     };
-                    let in_res = Ref::map(buf_res.buffer_grid[out_grid].data.borrow(), |x| {
+                    let in_res = Ref::map(buf_res.buffer_grid[res_grid].data.borrow(), |x| {
                         x.as_ref().unwrap()
                     });
                     let out_prev = if gx == 0 {
@@ -323,14 +323,14 @@ impl TransformStepChunk {
                     })?;
                 }
                 buffers[buf_in[0]].buffer_grid[in_grid].mark_used();
-                buffers[buf_in[1]].buffer_grid[out_grid].mark_used();
+                buffers[buf_in[1]].buffer_grid[res_grid].mark_used();
                 Ok(vec![(*buf_out, out_grid)])
             }
             TransformStep::VSqueeze { buf_in, buf_out } => {
                 let buf_avg = &buffers[buf_in[0]];
                 let buf_res = &buffers[buf_in[1]];
                 let in_grid = buf_avg.get_grid_idx(out_grid_kind, self.grid_pos);
-                assert_eq!(out_grid_kind, buf_res.grid_kind);
+                let res_grid = buf_res.get_grid_idx(out_grid_kind, self.grid_pos);
                 {
                     trace!(
                         "VSqueeze {:?} -> {:?} grid: {out_grid:?} grid pos: {:?}",
@@ -356,7 +356,7 @@ impl TransformStepChunk {
                     } else {
                         None
                     };
-                    let in_res = Ref::map(buf_res.buffer_grid[out_grid].data.borrow(), |x| {
+                    let in_res = Ref::map(buf_res.buffer_grid[res_grid].data.borrow(), |x| {
                         x.as_ref().unwrap()
                     });
                     let out_prev = if gy == 0 {
@@ -390,7 +390,7 @@ impl TransformStepChunk {
                     })?;
                 }
                 buffers[buf_in[0]].buffer_grid[in_grid].mark_used();
-                buffers[buf_in[1]].buffer_grid[out_grid].mark_used();
+                buffers[buf_in[1]].buffer_grid[res_grid].mark_used();
                 Ok(vec![(*buf_out, out_grid)])
             }
         }
