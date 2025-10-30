@@ -487,7 +487,7 @@ impl Dct32 {
             PI / 32.0 * 31.0,
         ];
         let tandhalf = t + 0.5;
-        zip(MULTIPLIERS.iter(), self.0.iter())
+        zip(MULTIPLIERS, self.0)
             .map(|(multiplier, coeff)| SQRT_2 * coeff * fast_cos(multiplier * tandhalf))
             .sum()
     }

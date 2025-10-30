@@ -5,9 +5,9 @@
 
 #![allow(clippy::excessive_precision)]
 
+use super::{eval_rational_poly, eval_rational_poly_simd};
+use jxl_simd::{F32SimdVec, I32SimdVec, SimdDescriptor};
 use std::f32::consts::{PI, SQRT_2};
-
-use super::eval_rational_poly;
 
 const POW2F_NUMER_COEFFS: [f32; 3] = [1.01749063e1, 4.88687798e1, 9.85506591e1];
 const POW2F_DENOM_COEFFS: [f32; 4] = [2.10242958e-1, -2.22328856e-2, -1.94414990e1, 9.85506633e1];
@@ -76,6 +76,26 @@ pub fn fast_pow2f(x: f32) -> f32 {
     num / den
 }
 
+#[inline(always)]
+pub fn fast_pow2f_simd<D: SimdDescriptor>(d: D, x: D::F32Vec) -> D::F32Vec {
+    let x_floor = x.floor();
+    let exp =
+        ((x_floor.as_i32() + D::I32Vec::splat(d, 127)) << D::I32Vec::splat(d, 23)).bitcast_to_f32();
+    let frac = x - x_floor;
+
+    let num = frac + D::F32Vec::splat(d, POW2F_NUMER_COEFFS[0]);
+    let num = num.mul_add(frac, D::F32Vec::splat(d, POW2F_NUMER_COEFFS[1]));
+    let num = num.mul_add(frac, D::F32Vec::splat(d, POW2F_NUMER_COEFFS[2]));
+    let num = num * exp;
+
+    let den = D::F32Vec::splat(d, POW2F_DENOM_COEFFS[0])
+        .mul_add(frac, D::F32Vec::splat(d, POW2F_DENOM_COEFFS[1]));
+    let den = den.mul_add(frac, D::F32Vec::splat(d, POW2F_DENOM_COEFFS[2]));
+    let den = den.mul_add(frac, D::F32Vec::splat(d, POW2F_DENOM_COEFFS[3]));
+
+    num / den
+}
+
 const LOG2F_P: [f32; 3] = [
     -1.8503833400518310e-6,
     1.4287160470083755,
@@ -99,10 +119,27 @@ pub fn fast_log2f(x: f32) -> f32 {
     eval_rational_poly(x, LOG2F_P, LOG2F_Q) + exp_val
 }
 
+#[inline(always)]
+pub fn fast_log2f_simd<D: SimdDescriptor>(d: D, x: D::F32Vec) -> D::F32Vec {
+    let x_bits = x.bitcast_to_i32();
+    let exp_bits = x_bits - D::I32Vec::splat(d, 0x3f2aaaab);
+    let exp_shifted = exp_bits >> D::I32Vec::splat(d, 23);
+    let mantissa = (x_bits - (exp_shifted << D::I32Vec::splat(d, 23))).bitcast_to_f32();
+    let exp_val = exp_shifted.as_f32();
+
+    let x = mantissa - D::F32Vec::splat(d, 1.0);
+    eval_rational_poly_simd(d, x, LOG2F_P, LOG2F_Q) + exp_val
+}
+
 // Max relative error: ~3e-5
 #[inline]
 pub fn fast_powf(base: f32, exp: f32) -> f32 {
     fast_pow2f(fast_log2f(base) * exp)
+}
+
+#[inline]
+pub fn fast_powf_simd<D: SimdDescriptor>(d: D, base: D::F32Vec, exp: D::F32Vec) -> D::F32Vec {
+    fast_pow2f_simd(d, fast_log2f_simd(d, base) * exp)
 }
 
 pub fn floor_log2_nonzero<T: num_traits::Unsigned + num_traits::PrimInt>(x: T) -> u32 {
