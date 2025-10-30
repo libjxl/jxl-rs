@@ -7,7 +7,6 @@ pub use jxl_exr::to_exr;
 
 #[cfg(not(feature = "exr"))]
 mod jxl_exr {
-
     use crate::ImageData;
     use jxl::api::JxlColorProfile;
     use jxl::error::{Error, Result};
@@ -24,8 +23,7 @@ mod jxl_exr {
 
 #[cfg(feature = "exr")]
 mod jxl_exr {
-
-    use std::io::Cursor;
+    use std::io::{Seek, Write};
 
     use color_eyre::eyre::{Result, WrapErr, eyre};
     use jxl::api::{JxlColorEncoding, JxlColorProfile, JxlTransferFunction};
@@ -36,11 +34,12 @@ mod jxl_exr {
 
     use crate::ImageData;
 
-    pub fn to_exr(
+    pub fn to_exr<Writer: Write + Seek>(
         image_data: ImageData<f32>,
         bit_depth: u32,
         color_profile: &JxlColorProfile,
-    ) -> Result<Vec<u8>> {
+        writer: &mut Writer,
+    ) -> Result<()> {
         let tuple_to_vec2 = |(x, y)| Vec2(x, y);
         let chromaticities = match color_profile {
             JxlColorProfile::Simple(JxlColorEncoding::RgbColorSpace {
@@ -145,8 +144,7 @@ mod jxl_exr {
         image.attributes.chromaticities = chromaticities;
         // TODO(sboukortt): intensity_target -> whiteLuminance
 
-        let mut buf = Cursor::new(Vec::new());
-        image.write().to_buffered(&mut buf)?;
-        Ok(buf.into_inner())
+        image.write().to_buffered(writer)?;
+        Ok(())
     }
 }

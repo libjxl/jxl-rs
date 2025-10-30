@@ -3,7 +3,8 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-use jxl::image::ImageRect;
+use jxl::{error::Result, image::ImageRect};
+use std::io::Write;
 
 pub trait ToU8ForWriting {
     fn to_u8_for_writing(self) -> u8;
@@ -39,38 +40,31 @@ impl ToU8ForWriting for half::f16 {
     }
 }
 
-pub fn to_pgm_as_8bit(img: &ImageRect<'_, f32>) -> Vec<u8> {
-    use std::io::Write;
-    let mut ret = vec![];
-    write!(&mut ret, "P5\n{} {}\n255\n", img.size().0, img.size().1).unwrap();
-    ret.extend(
-        (0..img.size().1)
-            .flat_map(|x| img.row(x).iter())
-            .map(|x| x.to_u8_for_writing()),
-    );
-    ret
+pub fn to_pgm_as_8bit<Writer: Write>(img: &ImageRect<'_, f32>, writer: &mut Writer) -> Result<()> {
+    write!(writer, "P5\n{} {}\n255\n", img.size().0, img.size().1)?;
+    for y in 0..img.size().1 {
+        for x in img.row(y).iter() {
+            writer.write_all(&[x.to_u8_for_writing()])?;
+        }
+    }
+    Ok(())
 }
 
-pub fn to_ppm_as_8bit(img: &[ImageRect<'_, f32>; 3]) -> Vec<u8> {
-    use std::io::Write;
-    let mut ret = vec![];
+pub fn to_ppm_as_8bit<Writer: Write>(
+    img: &[ImageRect<'_, f32>; 3],
+    writer: &mut Writer,
+) -> Result<()> {
     assert_eq!(img[0].size(), img[1].size());
     assert_eq!(img[0].size(), img[2].size());
-    write!(
-        &mut ret,
-        "P6\n{} {}\n255\n",
-        img[0].size().0,
-        img[0].size().1
-    )
-    .unwrap();
-    ret.extend(
-        (0..img[0].size().1)
-            .flat_map(|y| {
-                (0..img[0].size().0).flat_map(move |x| [0, 1, 2].map(move |c| img[c].row(y)[x]))
-            })
-            .map(|x| x.to_u8_for_writing()),
-    );
-    ret
+    write!(writer, "P6\n{} {}\n255\n", img[0].size().0, img[0].size().1)?;
+    for y in 0..img[0].size().1 {
+        for x in 0..img[0].size().0 {
+            for c in [0, 1, 2] {
+                writer.write_all(&[img[c].row(y)[x].to_u8_for_writing()])?;
+            }
+        }
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -82,7 +76,9 @@ mod test {
     #[test]
     fn covert_to_pgm() -> Result<()> {
         let image = Image::<f32>::new((32, 32))?;
-        assert!(to_pgm_as_8bit(&image.as_rect()).starts_with(b"P5\n32 32\n255\n"));
+        let mut bytes = vec![];
+        to_pgm_as_8bit(&image.as_rect(), &mut bytes)?;
+        assert!(bytes.starts_with(b"P5\n32 32\n255\n"));
         Ok(())
     }
 

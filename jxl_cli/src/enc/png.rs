@@ -13,7 +13,7 @@ use jxl::error::Error;
 use jxl::headers::color_encoding::RenderingIntent;
 
 use std::borrow::Cow;
-use std::io::BufWriter;
+use std::io::Write;
 
 fn png_color(num_channels: usize) -> Result<png::ColorType> {
     match num_channels {
@@ -70,11 +70,11 @@ fn make_cicp(encoding: &JxlColorEncoding) -> Option<png::CodingIndependentCodePo
     })
 }
 
-fn encode_png(
+pub fn to_png<Writer: Write>(
     image_data: ImageData<f32>,
     bit_depth: u32,
     color_profile: &JxlColorProfile,
-    buf: &mut Vec<u8>,
+    buf: &mut Writer,
 ) -> Result<()> {
     if image_data.frames.is_empty()
         || image_data.frames[0].channels.is_empty()
@@ -99,7 +99,6 @@ fn encode_png(
         }
     }
 
-    let w = BufWriter::new(buf);
     let mut info = png::Info::with_size(width as u32, height as u32);
     match color_profile {
         JxlColorProfile::Simple(JxlColorEncoding::RgbColorSpace {
@@ -143,7 +142,7 @@ fn encode_png(
             info.icc_profile = Some(Cow::Borrowed(icc_bytes));
         }
     }
-    let mut encoder = png::Encoder::with_info(w, info).unwrap();
+    let mut encoder = png::Encoder::with_info(buf, info).unwrap();
     encoder.set_color(png_color(num_channels)?);
     let eight_bits = bit_depth <= 8;
     encoder.set_depth(if eight_bits {
@@ -152,11 +151,9 @@ fn encode_png(
         png::BitDepth::Sixteen
     });
     if image_data.frames.len() > 1 {
-        encoder
-            .set_animated(image_data.frames.len() as u32, 0)
-            .unwrap();
+        encoder.set_animated(image_data.frames.len() as u32, 0)?;
     }
-    let mut writer = encoder.write_header().unwrap();
+    let mut writer = encoder.write_header()?;
     let num_pixels = height * width * num_channels;
     if eight_bits {
         let mut data: Vec<u8> = vec![0; num_pixels];
@@ -171,7 +168,7 @@ fn encode_png(
                     }
                 }
             }
-            writer.write_image_data(&data).unwrap();
+            writer.write_image_data(&data)?;
         }
     } else {
         let mut data: Vec<u8> = vec![0; 2 * num_pixels];
@@ -188,18 +185,8 @@ fn encode_png(
                     }
                 }
             }
-            writer.write_image_data(&data).unwrap();
+            writer.write_image_data(&data)?;
         }
     }
     Ok(())
-}
-
-pub fn to_png(
-    image_data: ImageData<f32>,
-    bit_depth: u32,
-    color_profile: &JxlColorProfile,
-) -> Result<Vec<u8>> {
-    let mut buf = Vec::<u8>::new();
-    encode_png(image_data, bit_depth, color_profile, &mut buf)?;
-    Ok(buf)
 }
