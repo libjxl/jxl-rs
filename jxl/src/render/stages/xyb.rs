@@ -11,8 +11,8 @@ use crate::error::Result;
 use crate::headers::{FileHeader, OpsinInverseMatrix};
 use crate::render::RenderPipelineInPlaceStage;
 use crate::render::stages::from_linear;
-use crate::simd::{F32SimdVec, simd_function};
 use crate::util::{Matrix3x3, inv_3x3_matrix, mul_3x3_matrix};
+use jxl_simd::{F32SimdVec, simd_function};
 
 const SRGB_LUMINANCES: [f32; 3] = [0.2126, 0.7152, 0.0722];
 
@@ -266,9 +266,9 @@ mod test {
     use crate::headers::encodings::Empty;
     use crate::image::Image;
     use crate::render::test::make_and_run_simple_pipeline;
-    use crate::simd::{ScalarDescriptor, SimdDescriptor, test_all_instruction_sets};
     use crate::util::round_up_size_to_two_cache_lines;
     use crate::util::test::assert_all_almost_abs_eq;
+    use jxl_simd::{ScalarDescriptor, SimdDescriptor, test_all_instruction_sets};
 
     #[test]
     fn consistency() -> Result<()> {
@@ -318,9 +318,9 @@ mod test {
             let mut row_b = vec![0.0; round_up_size_to_two_cache_lines::<f32>(xsize)];
 
             for i in 0..xsize {
-                row_x[i] = u.arbitrary::<i16>()? as f32 * (1.0 / i16::MAX as f32);
-                row_y[i] = u.arbitrary::<i16>()? as f32 * (1.0 / i16::MAX as f32);
-                row_b[i] = u.arbitrary::<i16>()? as f32 * (1.0 / i16::MAX as f32);
+                row_x[i] = u.arbitrary::<i16>()? as f32 * (0.07 / i16::MAX as f32);
+                row_y[i] = u.arbitrary::<u16>()? as f32 * (1.0 / u16::MAX as f32);
+                row_b[i] = u.arbitrary::<u16>()? as f32 * (1.0 / u16::MAX as f32);
             }
 
             let mut scalar_x = row_x.clone();
@@ -348,9 +348,19 @@ mod test {
             );
 
             for i in 0..xsize {
-                assert!((row_x[i] - scalar_x[i]).abs() < 1e-8);
-                assert!((row_y[i] - scalar_y[i]).abs() < 1e-8);
-                assert!((row_b[i] - scalar_b[i]).abs() < 1e-8);
+                for (simd, scalar) in [
+                    (row_x[i], scalar_x[i]),
+                    (row_y[i], scalar_y[i]),
+                    (row_b[i], scalar_b[i]),
+                ] {
+                    let abs = (simd - scalar).abs();
+                    let max = simd.abs().max(scalar.abs());
+                    let rel = abs / max;
+                    assert!(
+                        abs < 1e-3 || rel < 1e-3,
+                        "simd {simd}, scalar {scalar}, abs {abs:?} rel {rel:?}",
+                    );
+                }
             }
 
             Ok(())

@@ -19,6 +19,7 @@ array-init = "2.0.0"
 half = "2.4.1"
 tracing = { version = "0.1.40", optional = true }
 jxl_macros = { path = "../jxl_macros", version = "=0.1.1" }
+jxl_simd = { path = "../jxl_simd", version = "=0.1.1" }
 
 [dev-dependencies]
 arbtest = "0.3.2"
@@ -27,6 +28,11 @@ rand = "0.8.5"
 rand_xorshift = "0.3.0"
 test-log = { version = "0.2.16", features = ["trace"] }
 jxl_macros = { path = "../jxl_macros", version = "=0.1.1", features = ["test"] }
+criterion = { version = "0.5", features = ["html_reports"] }
 
 [lints]
 workspace = true
+
+[[bench]]
+name = "dct"
+harness = false

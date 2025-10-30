@@ -23,7 +23,7 @@ use std::{
 pub struct AvxDescriptor(());
 
 impl AvxDescriptor {
-    /// Safety:
+    /// # Safety
     /// The caller must guarantee that the "avx2" and "fma" target features are available.
     pub unsafe fn new_unchecked() -> Self {
         Self(())

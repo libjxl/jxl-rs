@@ -17,7 +17,6 @@ use crate::{
     },
     headers::frame_header::FrameHeader,
     image::{Image, ImageRect, Rect},
-    simd::{F32SimdVec, I32SimdVec, SimdDescriptor, SimdMask, simd_function},
     util::{CeilLog2, tracing_wrappers::*},
     var_dct::{
         dct::{DCT1D, DCT1DImpl, compute_scaled_dct},
@@ -25,6 +24,7 @@ use crate::{
         transform::*,
     },
 };
+use jxl_simd::{F32SimdVec, I32SimdVec, SimdDescriptor, SimdMask, simd_function};
 
 // Computes the lowest-frequency ROWSxCOLS-sized square in output, which is a
 // DCT_ROWS*DCT_COLS-sized DCT block, by doing a ROWS*COLS DCT on the input

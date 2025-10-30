@@ -73,12 +73,12 @@ impl F32SimdVec for F32VecScalar {
 
     #[inline(always)]
     fn mul_add(self, mul: Self, add: Self) -> Self {
-        Self(self.0.mul_add(mul.0, add.0))
+        Self((self.0 * mul.0) + add.0)
     }
 
     #[inline(always)]
     fn neg_mul_add(self, mul: Self, add: Self) -> Self {
-        Self((-self.0).mul_add(mul.0, add.0))
+        Self(-(self.0 * mul.0) + add.0)
     }
 
     #[inline(always)]
@@ -240,7 +240,8 @@ impl SimdMask for MaskScalar {
     }
 }
 
-#[allow(unused_macros)]
+#[cfg(not(target_arch = "x86_64"))]
+#[macro_export]
 macro_rules! simd_function {
     (
         $dname:ident,
@@ -249,19 +250,17 @@ macro_rules! simd_function {
         $pub:vis fn $name:ident($($arg:ident: $ty:ty),* $(,)?) $(-> $ret:ty )? $body: block
     ) => {
         $(#[$($attr)*])*
-        $pub fn $name<$descr_ty: crate::simd::SimdDescriptor>($descr: $descr_ty, $($arg: $ty),*) $(-> $ret)? $body
+        $pub fn $name<$descr_ty: $crate::SimdDescriptor>($descr: $descr_ty, $($arg: $ty),*) $(-> $ret)? $body
         $(#[$($attr)*])*
         $pub fn $dname($($arg: $ty),*) $(-> $ret)? {
-            use crate::simd::SimdDescriptor;
-            $name(crate::simd::ScalarDescriptor::new().unwrap(), $($arg),*)
+            use $crate::SimdDescriptor;
+            $name($crate::ScalarDescriptor::new().unwrap(), $($arg),*)
         }
     };
 }
 
-#[allow(unused_imports)]
-pub(crate) use simd_function;
-
-#[allow(unused_macros)]
+#[cfg(not(target_arch = "x86_64"))]
+#[macro_export]
 macro_rules! test_all_instruction_sets {
     (
         $name:ident
@@ -269,12 +268,25 @@ macro_rules! test_all_instruction_sets {
         paste::paste! {
             #[test]
             fn [<$name _scalar>]() {
-                use crate::simd::SimdDescriptor;
-                $name(crate::simd::ScalarDescriptor::new().unwrap())
+                use $crate::SimdDescriptor;
+                $name($crate::ScalarDescriptor::new().unwrap())
             }
         }
     };
 }
 
-#[allow(unused_imports)]
-pub(crate) use test_all_instruction_sets;
+#[cfg(not(target_arch = "x86_64"))]
+#[macro_export]
+macro_rules! bench_all_instruction_sets {
+    (
+        $name:ident,
+        $criterion:ident
+    ) => {
+        use $crate::SimdDescriptor;
+        $name(
+            $crate::ScalarDescriptor::new().unwrap(),
+            $criterion,
+            &format!("{}_scalar", stringify!($name)),
+        );
+    };
+}

@@ -92,7 +92,7 @@ macro_rules! type_max {
 macro_rules! impl_image_data_type {
     ($ty: ident, $id: ident) => {
         impl private::Sealed for $ty {}
-        // Safety: primitive integer/float types are bag-of-bits types.
+        // SAFETY: primitive integer/float types are bag-of-bits types.
         unsafe impl ImageDataType for $ty {
             const DATA_TYPE_ID: DataTypeTag = DataTypeTag::$id;
             fn from_f64(f: f64) -> $ty {
@@ -125,7 +125,7 @@ impl_image_data_type!(i32, I32);
 impl_image_data_type!(f64, F64);
 
 impl private::Sealed for half::f16 {}
-// Safety: f16 is a bag-of-bits type.
+// SAFETY: f16 is a bag-of-bits type.
 unsafe impl ImageDataType for half::f16 {
     const DATA_TYPE_ID: DataTypeTag = DataTypeTag::F16;
     fn from_f64(f: f64) -> half::f16 {

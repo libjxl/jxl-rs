@@ -83,7 +83,7 @@ impl<'a> JxlOutputBuffer<'a> {
         }
     }
 
-    /// Safety:
+    /// # Safety
     /// The caller must guarantee that the returned slice is not used for writing uninit data.
     pub(crate) unsafe fn row_mut(&mut self, row: usize) -> &mut [MaybeUninit<u8>] {
         // SAFETY: caller guarantees no uninit data is written, and we have write access to the
