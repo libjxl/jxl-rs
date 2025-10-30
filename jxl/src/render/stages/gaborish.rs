@@ -10,19 +10,19 @@ use crate::simd::{F32SimdVec, simd_function};
 #[derive(Debug)]
 pub struct GaborishStage {
     channel: usize,
-    kernel_top_bottom: [f32; 3],
-    kernel_center: [f32; 3],
+    weight0: f32,
+    weight1: f32,
+    weight2: f32,
 }
 
 impl GaborishStage {
     pub fn new(channel: usize, weight1: f32, weight2: f32) -> Self {
         let weight_total = 1.0 + weight1 * 4.0 + weight2 * 4.0;
-        let kernel_top_bottom = [weight2, weight1, weight2].map(|x| x / weight_total);
-        let kernel_center = [weight1, 1.0, weight1].map(|x| x / weight_total);
         Self {
             channel,
-            kernel_top_bottom,
-            kernel_center,
+            weight0: 1.0 / weight_total,
+            weight1: weight1 / weight_total,
+            weight2: weight2 / weight_total,
         }
     }
 }
@@ -43,18 +43,46 @@ simd_function!(
         output_rows: &mut [&mut [&mut [f32]]],
     ) {
         let row_out = &mut output_rows[0][0];
-        for idx in (0..xsize).step_by(D::F32Vec::LEN) {
-            let mut sum = D::F32Vec::splat(d, 0f32);
-            let row_and_kernel = std::iter::zip(
-                input_rows[0],
-                [stage.kernel_top_bottom, stage.kernel_center, stage.kernel_top_bottom],
-            );
-            for (row_in, kernel) in row_and_kernel {
-                for (dx, weight) in kernel.iter().enumerate() {
-                    sum = D::F32Vec::load(d, &row_in[idx + dx..]).mul_add(D::F32Vec::splat(d, *weight), sum);
-                }
-            }
-            sum.store(&mut row_out[idx..]);
+
+        let w0 = D::F32Vec::splat(d, stage.weight0);
+        let w1 = D::F32Vec::splat(d, stage.weight1);
+        let w2 = D::F32Vec::splat(d, stage.weight2);
+
+        let [row_top, row_center, row_bottom] = input_rows[0] else {
+            unreachable!();
+        };
+
+        // These asserts help the compiler skip checks in the loop.
+        assert_eq!(row_top.len(), row_center.len());
+        assert_eq!(row_top.len(), row_bottom.len());
+
+        let num_vec = xsize.div_ceil(D::F32Vec::LEN);
+
+        let len = D::F32Vec::LEN;
+        let window_len = len + 2;
+
+        for (((top, center), bottom), out) in row_top
+            .windows(window_len)
+            .step_by(len)
+            .zip(row_center.windows(window_len).step_by(len))
+            .zip(row_bottom.windows(window_len).step_by(len))
+            .zip(row_out.chunks_exact_mut(D::F32Vec::LEN))
+            .take(num_vec)
+        {
+            let p00 = D::F32Vec::load(d, top);
+            let p01 = D::F32Vec::load(d, &top[1..]);
+            let p02 = D::F32Vec::load(d, &top[2..]);
+            let p10 = D::F32Vec::load(d, center);
+            let p11 = D::F32Vec::load(d, &center[1..]);
+            let p12 = D::F32Vec::load(d, &center[2..]);
+            let p20 = D::F32Vec::load(d, bottom);
+            let p21 = D::F32Vec::load(d, &bottom[1..]);
+            let p22 = D::F32Vec::load(d, &bottom[2..]);
+
+            let sum = p11 * w0;
+            let sum = w1.mul_add(p01 + p10 + p21 + p12, sum);
+            let sum = w2.mul_add(p00 + p02 + p20 + p22, sum);
+            sum.store(out);
         }
     }
 );
