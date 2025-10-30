@@ -4,7 +4,7 @@
 // license that can be found in the LICENSE file.
 
 use crate::render::RenderPipelineInOutStage;
-use crate::simd::{F32SimdVec, simd_function};
+use jxl_simd::{F32SimdVec, simd_function};
 
 /// Apply Gabor-like filter to a channel.
 #[derive(Debug)]

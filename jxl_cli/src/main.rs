@@ -8,7 +8,8 @@ use color_eyre::eyre::{Result, WrapErr, eyre};
 use jxl::api::{JxlColorProfile, JxlColorType, JxlDecoder, JxlDecoderOptions, JxlOutputBuffer};
 use jxl::image::{Image, ImageDataType};
 use std::fs;
-use std::io::Read;
+use std::fs::File;
+use std::io::{BufWriter, Read, Write};
 use std::path::PathBuf;
 use std::time::Instant;
 
@@ -38,32 +39,35 @@ fn save_image(
     output_filename: &PathBuf,
 ) -> Result<()> {
     let fn_str = output_filename.to_string_lossy();
-    let mut output_bytes: Vec<u8> = vec![];
+    let mut writer = BufWriter::new(File::create(output_filename)?);
     if fn_str.ends_with(".exr") {
-        output_bytes = enc::exr::to_exr(image_data, bit_depth, color_profile)?;
+        enc::exr::to_exr(image_data, bit_depth, color_profile, &mut writer)?;
     } else if fn_str.ends_with(".ppm") {
         if image_data.frames.len() == 1 {
             assert_eq!(image_data.frames[0].size, image_data.size);
             if let [r, g, b] = &image_data.frames[0].channels[..] {
-                output_bytes = enc::pnm::to_ppm_as_8bit(&[r.as_rect(), g.as_rect(), b.as_rect()]);
+                enc::pnm::to_ppm_as_8bit(&[r.as_rect(), g.as_rect(), b.as_rect()], &mut writer)?;
             }
         }
     } else if fn_str.ends_with(".pgm") {
         if image_data.frames.len() == 1 {
             assert_eq!(image_data.frames[0].size, image_data.size);
             if let [g] = &image_data.frames[0].channels[..] {
-                output_bytes = enc::pnm::to_pgm_as_8bit(&g.as_rect());
+                enc::pnm::to_pgm_as_8bit(&g.as_rect(), &mut writer)?;
             }
         }
     } else if fn_str.ends_with(".npy") {
-        output_bytes = enc::numpy::to_numpy(image_data)?;
+        enc::numpy::to_numpy(image_data, &mut writer)?;
     } else if fn_str.ends_with(".png") {
-        output_bytes = enc::png::to_png(image_data, bit_depth, color_profile)?;
+        enc::png::to_png(image_data, bit_depth, color_profile, &mut writer)?;
+    } else {
+        return Err(eyre!(
+            "Output format not supported for {:?}",
+            output_filename
+        ));
     }
-    if output_bytes.is_empty() {
-        return Err(eyre!("Output format {:?} not supported", output_filename));
-    }
-    std::fs::write(output_filename, output_bytes)
+    writer
+        .flush()
         .wrap_err_with(|| format!("Failed to write decoded image to {:?}", &output_filename))
 }
 

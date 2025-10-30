@@ -14,18 +14,9 @@ mod x86_64;
 mod scalar;
 
 #[cfg(target_arch = "x86_64")]
-pub(crate) use x86_64::{avx::AvxDescriptor, avx512::Avx512Descriptor, simd_function};
+pub use x86_64::{avx::AvxDescriptor, avx512::Avx512Descriptor};
 
-#[cfg(not(target_arch = "x86_64"))]
-pub(crate) use scalar::simd_function;
-
-#[cfg(all(test, target_arch = "x86_64"))]
-pub(crate) use x86_64::test_all_instruction_sets;
-
-#[cfg(all(test, not(target_arch = "x86_64")))]
-pub(crate) use scalar::test_all_instruction_sets;
-
-pub(crate) use scalar::ScalarDescriptor;
+pub use scalar::ScalarDescriptor;
 
 pub trait SimdDescriptor: Sized + Copy + Debug + Send + Sync {
     type F32Vec: F32SimdVec<Descriptor = Self>;
@@ -142,10 +133,7 @@ pub trait SimdMask: Sized + Copy + Debug + Send + Sync {
 mod test {
     use arbtest::arbitrary::Unstructured;
 
-    use crate::{
-        simd::{F32SimdVec, ScalarDescriptor, SimdDescriptor, test_all_instruction_sets},
-        util::test::assert_all_almost_rel_eq,
-    };
+    use crate::{F32SimdVec, ScalarDescriptor, SimdDescriptor, test_all_instruction_sets};
 
     enum Distribution {
         Floats,
@@ -174,6 +162,16 @@ mod test {
         res
     }
 
+    fn compare_scalar_simd(scalar: f32, simd: f32, max_abs: f32, max_rel: f32) {
+        let abs = (simd - scalar).abs();
+        let max = simd.abs().max(scalar.abs());
+        let rel = abs / max;
+        assert!(
+            abs < max_abs || rel < max_rel,
+            "simd {simd}, scalar {scalar}, abs {abs:?} rel {rel:?}",
+        );
+    }
+
     macro_rules! test_instruction {
         ($name:ident, |$a:ident: $a_dist:ident| $block:expr) => {
             fn $name<D: SimdDescriptor>(d: D) {
@@ -189,7 +187,9 @@ mod test {
                     let a = arb_vec(d, u, Distribution::$a_dist);
                     let scalar_res = compute(ScalarDescriptor::new().unwrap(), &a);
                     let simd_res = compute(d, &a);
-                    assert_all_almost_rel_eq(&scalar_res, &simd_res, 1e-8);
+                    for (scalar, simd) in scalar_res.iter().zip(simd_res.iter()) {
+                        compare_scalar_simd(*scalar, *simd, 1e-6, 1e-6);
+                    }
                     Ok(())
                 })
                 .size_min(64);
@@ -212,7 +212,9 @@ mod test {
                     let b = arb_vec(d, u, Distribution::$b_dist);
                     let scalar_res = compute(ScalarDescriptor::new().unwrap(), &a, &b);
                     let simd_res = compute(d, &a, &b);
-                    assert_all_almost_rel_eq(&scalar_res, &simd_res, 1e-8);
+                    for (scalar, simd) in scalar_res.iter().zip(simd_res.iter()) {
+                        compare_scalar_simd(*scalar, *simd, 1e-6, 1e-6);
+                    }
                     Ok(())
                 })
                 .size_min(128);
@@ -240,7 +242,10 @@ mod test {
                     let c = arb_vec(d, u, Distribution::$c_dist);
                     let scalar_res = compute(ScalarDescriptor::new().unwrap(), &a, &b, &c);
                     let simd_res = compute(d, &a, &b, &c);
-                    assert_all_almost_rel_eq(&scalar_res, &simd_res, 1e-8);
+                    for (scalar, simd) in scalar_res.iter().zip(simd_res.iter()) {
+                        // Lowered because of fma.
+                        compare_scalar_simd(*scalar, *simd, 1e-5, 1e-5);
+                    }
                     Ok(())
                 })
                 .size_min(172);

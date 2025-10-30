@@ -6,8 +6,15 @@
 use crate::ImageData;
 use jxl::error::{Error, Result};
 use jxl::image::ImageRect;
+use std::io::Write;
 
-fn numpy_header(xsize: usize, ysize: usize, num_channels: usize, num_frames: usize) -> Vec<u8> {
+fn numpy_header<Writer: Write>(
+    xsize: usize,
+    ysize: usize,
+    num_channels: usize,
+    num_frames: usize,
+    writer: &mut Writer,
+) -> Result<()> {
     // The magic string and version for .npy files (Version 1.0)
     let magic_string: [u8; 8] = [0x93, b'N', b'U', b'M', b'P', b'Y', 0x01, 0x00];
 
@@ -39,16 +46,18 @@ fn numpy_header(xsize: usize, ysize: usize, num_channels: usize, num_frames: usi
     let header_len_bytes = (header_dict_len as u16).to_le_bytes();
 
     // Assemble the full header.
-    let mut header: Vec<u8> = Vec::new();
-    header.extend_from_slice(&magic_string);
-    header.extend_from_slice(&header_len_bytes);
-    header.extend_from_slice(header_dict_str.as_bytes());
+    writer.write_all(&magic_string)?;
+    writer.write_all(&header_len_bytes)?;
+    writer.write_all(header_dict_str.as_bytes())?;
 
-    header
+    Ok(())
 }
 
-fn numpy_bytes(image_data: ImageData<f32>, num_channels: usize) -> Vec<u8> {
-    let mut ret = vec![];
+fn numpy_bytes<Writer: Write>(
+    image_data: ImageData<f32>,
+    num_channels: usize,
+    writer: &mut Writer,
+) -> Result<()> {
     let size = image_data.size;
     let (width, height) = size;
 
@@ -61,24 +70,22 @@ fn numpy_bytes(image_data: ImageData<f32>, num_channels: usize) -> Vec<u8> {
         let channel_rects: &Vec<ImageRect<'_, f32>> =
             &frame.channels.iter().map(|im| im.as_rect()).collect();
 
-        ret.extend(
-            (0..height)
-                .flat_map(|y| {
-                    (0..width).flat_map(move |x| {
-                        (0..num_channels).map(move |c| channel_rects[c].row(y)[x])
-                    })
-                })
-                .flat_map(|x| (x.clamp(0.0, 1.0)).to_le_bytes()),
-        );
+        for y in 0..height {
+            for x in 0..width {
+                for channel in channel_rects {
+                    writer.write_all(&channel.row(y)[x].clamp(0.0, 1.0).to_le_bytes())?;
+                }
+            }
+        }
     }
-    ret
+    Ok(())
 }
 
 /// Converts image_data to a Vec<u8> in .npy format.
 /// The data will be represented as little-endian 32-bit floats ('<f4').
 /// The shape of the NumPy array will be (num_frames, height, width, num_channels).
 ///
-pub fn to_numpy(image_data: ImageData<f32>) -> Result<Vec<u8>> {
+pub fn to_numpy<Writer: Write>(image_data: ImageData<f32>, writer: &mut Writer) -> Result<()> {
     if image_data.frames.is_empty()
         || image_data.frames[0].channels.is_empty()
         || image_data.size.0 == 0
@@ -91,10 +98,9 @@ pub fn to_numpy(image_data: ImageData<f32>) -> Result<Vec<u8>> {
     let num_frames = image_data.frames.len();
     let num_channels = image_data.frames[0].channels.len();
 
-    let mut npy_file_bytes = Vec::new();
-    npy_file_bytes.extend(numpy_header(width, height, num_channels, num_frames));
+    numpy_header(width, height, num_channels, num_frames, writer)?;
     // Consistent channel sizes are checked inside the call to `to_numpy_bytes`.
-    npy_file_bytes.extend(numpy_bytes(image_data, num_channels));
+    numpy_bytes(image_data, num_channels, writer)?;
 
-    Ok(npy_file_bytes)
+    Ok(())
 }
