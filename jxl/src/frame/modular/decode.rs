@@ -57,7 +57,7 @@ fn precompute_references(
     y: usize,
     references: &mut Image<i32>,
 ) {
-    references.as_rect_mut().apply(|_, v: &mut i32| *v = 0);
+    references.fill(0);
     let mut offset = 0;
     let num_extra_props = references.size().0;
     for i in 0..chan {

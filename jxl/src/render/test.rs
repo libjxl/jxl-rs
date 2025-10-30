@@ -7,9 +7,13 @@ use crate::{
     api::{Endianness, JxlColorType, JxlDataFormat, JxlOutputBuffer},
     error::Result,
     headers::Orientation,
-    image::{DataTypeTag, Image, ImageDataType},
+    image::{DataTypeTag, Image, ImageDataType, Rect},
     render::SimpleRenderPipeline,
-    util::{ShiftRightCeil, tracing_wrappers::instrument},
+    util::{
+        ShiftRightCeil,
+        test::check_equal_images,
+        tracing_wrappers::{instrument, trace},
+    },
 };
 use rand::SeedableRng;
 
@@ -48,6 +52,35 @@ impl<T: RenderPipelineInPlaceStage> RenderPipelineTestableStage<Empty> for T {
     fn into_stage(self) -> Stage<Image<f64>> {
         Stage::InPlace(Box::new(self))
     }
+}
+
+fn extract_group_rect<T: ImageDataType>(
+    image: &Image<T>,
+    group_id: usize,
+    log_group_size: (usize, usize),
+) -> Result<Image<T>> {
+    let xgroups = image.size().0.shrc(log_group_size.0);
+    let group = (group_id % xgroups, group_id / xgroups);
+    let origin = (group.0 << log_group_size.0, group.1 << log_group_size.1);
+    let size = (
+        (image.size().0 - origin.0).min(1 << log_group_size.0),
+        (image.size().1 - origin.1).min(1 << log_group_size.1),
+    );
+    trace!(
+        "making rect {}x{}+{}+{} for group {group_id} in image of size {:?}, log group sizes {:?}",
+        size.0,
+        size.1,
+        origin.0,
+        origin.1,
+        image.size(),
+        log_group_size
+    );
+    let rect = image.as_rect().rect(Rect { origin, size }).unwrap();
+    let mut out = Image::new(rect.size()).unwrap();
+    for y in 0..out.size().1 {
+        out.as_rect_mut().row(y).copy_from_slice(rect.row(y));
+    }
+    Ok(out)
 }
 
 fn make_and_run_simple_pipeline_impl<InputT: ImageDataType, OutputT: ImageDataType>(
@@ -114,7 +147,7 @@ fn make_and_run_simple_pipeline_impl<InputT: ImageDataType, OutputT: ImageDataTy
                 c,
                 g,
                 1,
-                input_images[c].group_rect(g, log_group_size).to_image()?,
+                extract_group_rect(&input_images[c], g, log_group_size)?,
             );
         }
     }
@@ -125,7 +158,11 @@ fn make_and_run_simple_pipeline_impl<InputT: ImageDataType, OutputT: ImageDataTy
 
     let mut buf_ptrs: Vec<_> = outputs
         .iter_mut()
-        .map(|x| Some(JxlOutputBuffer::from_image(x)))
+        .map(|x| {
+            Some(JxlOutputBuffer::from_image_rect_mut(
+                x.as_rect_mut().into_raw(),
+            ))
+        })
         .collect();
 
     pipeline.do_render(&mut buf_ptrs)?;
@@ -188,7 +225,7 @@ pub(super) fn test_stage_consistency<S: RenderPipelineTestableStage<V>, V>(
         .unwrap_or_else(|_| panic!("error running pipeline with chunk size {chunk_size}"));
 
         for (o, bo) in output.iter().zip(base_output.iter()) {
-            bo.as_rect().check_equal(o.as_rect());
+            check_equal_images(bo.as_rect(), o.as_rect());
         }
 
         Ok(())

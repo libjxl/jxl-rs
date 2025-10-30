@@ -1454,16 +1454,26 @@ mod tests {
         fn create_reference_frame(
             width: usize,
             height: usize,
-            channel_data: Vec<Vec<f32>>,
+            channel_values: &[f32],
         ) -> Result<Option<ReferenceFrame>> {
             let mut frame_channels = Vec::new();
-            for data_vec in channel_data {
-                assert_eq!(
-                    data_vec.len(),
-                    width * height,
-                    "Channel data length mismatch"
-                );
-                let img = Image::new_with_data((width, height), data_vec);
+            for v in channel_values.iter() {
+                let img = Image::new_with_value((width, height), *v)?;
+                frame_channels.push(img);
+            }
+            Ok(Some(ReferenceFrame {
+                frame: frame_channels,
+                saved_before_color_transform: true,
+            }))
+        }
+
+        fn create_reference_frame_single_row<const N: usize>(
+            rows: &[[f32; N]],
+        ) -> Result<Option<ReferenceFrame>> {
+            let mut frame_channels = Vec::new();
+            for v in rows.iter() {
+                let mut img = Image::new((N, 1))?;
+                img.as_rect_mut().row(0).copy_from_slice(v);
                 frame_channels.push(img);
             }
             Ok(Some(ReferenceFrame {
@@ -1475,14 +1485,8 @@ mod tests {
         #[test]
         fn test_add_one_row_simple_replace() -> Result<()> {
             let xsize = 10;
-            let num_base_channels = 3; // R, G, B
-            let const_val = 1.0;
 
-            let ref_frames = vec![create_reference_frame(
-                xsize,
-                1,
-                vec![vec![const_val; xsize]; num_base_channels],
-            )?];
+            let ref_frames = vec![create_reference_frame(xsize, 1, &[1.0; 3])?];
             let extra_channel_info: Vec<ExtraChannelInfo> = Vec::new();
 
             let ref_positions = vec![PatchReferencePosition {
@@ -1540,14 +1544,8 @@ mod tests {
         fn test_add_one_row_simple_add() -> Result<()> {
             let xsize = 10;
             let y_coord = 0;
-            let num_base_channels = 3;
-            let const_val = 0.2;
 
-            let ref_frames = vec![create_reference_frame(
-                xsize,
-                1,
-                vec![vec![const_val; xsize]; num_base_channels],
-            )?];
+            let ref_frames = vec![create_reference_frame(xsize, 1, &[0.2; 3])?];
             let extra_channel_info: Vec<ExtraChannelInfo> = Vec::new();
 
             let ref_positions = vec![PatchReferencePosition {
@@ -1608,12 +1606,9 @@ mod tests {
         fn test_add_one_row_overlapping_replace() -> Result<()> {
             let xsize = 10;
             let y_coord = 0;
-            let num_base_channels = 3;
 
-            let main_ref_frame1 =
-                create_reference_frame(xsize, 1, vec![vec![1.0; xsize]; num_base_channels])?;
-            let main_ref_frame2 =
-                create_reference_frame(xsize, 1, vec![vec![2.0; xsize]; num_base_channels])?;
+            let main_ref_frame1 = create_reference_frame(xsize, 1, &[1.0; 3])?;
+            let main_ref_frame2 = create_reference_frame(xsize, 1, &[2.0; 3])?;
 
             let ref_frames = vec![main_ref_frame1, main_ref_frame2];
             let extra_channel_info: Vec<ExtraChannelInfo> = Vec::new();
@@ -1713,13 +1708,16 @@ mod tests {
                 None,
             )];
 
-            let main_ref_frame_data = vec![
-                vec![ref_color_val; xsize],     // R
-                vec![ref_color_val; xsize],     // G
-                vec![ref_color_val; xsize],     // B
-                vec![ref_ec0_alpha_val; xsize], // EC0 (Alpha)
-            ];
-            let main_ref_frame = create_reference_frame(xsize, 1, main_ref_frame_data)?;
+            let main_ref_frame = create_reference_frame(
+                xsize,
+                1,
+                &[
+                    ref_color_val,
+                    ref_color_val,
+                    ref_color_val,
+                    ref_ec0_alpha_val,
+                ],
+            )?;
 
             let ref_frames = vec![main_ref_frame];
 
@@ -1824,13 +1822,16 @@ mod tests {
                 None,
             )];
 
-            let main_ref_frame_data = vec![
-                vec![ref_color_val; xsize],     // R
-                vec![ref_color_val; xsize],     // G
-                vec![ref_color_val; xsize],     // B
-                vec![ref_ec0_alpha_val; xsize], // EC0 (Alpha)
-            ];
-            let main_ref_frame = create_reference_frame(xsize, 1, main_ref_frame_data)?;
+            let main_ref_frame = create_reference_frame(
+                xsize,
+                1,
+                &[
+                    ref_color_val,
+                    ref_color_val,
+                    ref_color_val,
+                    ref_ec0_alpha_val,
+                ],
+            )?;
 
             let ref_frames = vec![main_ref_frame];
 
@@ -1901,20 +1902,13 @@ mod tests {
         fn test_add_one_row_mul_blend() -> Result<()> {
             let xsize = 2;
             let y_coord = 0;
-            let num_base_channels = 3;
 
-            let initial_vals = vec![0.5, 2.0];
-            let ref_vals = vec![0.8, 0.7];
+            let initial_vals = [0.5, 2.0];
+            let ref_vals = [0.8, 0.7];
 
-            let main_ref_channel_data: Vec<Vec<f32>> = (0..num_base_channels)
-                .map(|_| ref_vals.clone()) // Each color channel gets ref_vals
-                .collect();
-            let main_ref_frame = create_reference_frame(xsize, 1, main_ref_channel_data)?;
-
-            let dummy_channel_data: Vec<Vec<f32>> =
-                (0..num_base_channels).map(|_| vec![0.0; xsize]).collect();
-            let dummy_ref_frame1 = create_reference_frame(xsize, 1, dummy_channel_data.clone())?;
-            let dummy_ref_frame2 = create_reference_frame(xsize, 1, dummy_channel_data)?;
+            let main_ref_frame = create_reference_frame_single_row(&[ref_vals; 3])?;
+            let dummy_ref_frame1 = create_reference_frame_single_row(&[[0.0; 2]; 3])?;
+            let dummy_ref_frame2 = create_reference_frame_single_row(&[[0.0; 2]; 3])?;
 
             let ref_frames = vec![main_ref_frame, dummy_ref_frame1, dummy_ref_frame2];
             let extra_channel_info: Vec<ExtraChannelInfo> = Vec::new();
@@ -1950,9 +1944,9 @@ mod tests {
             };
             dict.compute_patch_tree()?;
 
-            let mut r_data = initial_vals.clone();
-            let mut g_data = initial_vals.clone();
-            let mut b_data = initial_vals.clone();
+            let mut r_data = initial_vals;
+            let mut g_data = initial_vals;
+            let mut b_data = initial_vals;
             let mut slices: Vec<&mut [f32]> = vec![&mut r_data, &mut g_data, &mut b_data];
             dict.add_one_row(
                 &mut slices,
@@ -1963,7 +1957,7 @@ mod tests {
                 &mut vec![],
             );
 
-            let expected_vals = vec![0.5 * 0.8, 2.0 * 0.7]; // [0.4, 1.4]
+            let expected_vals = [0.5 * 0.8, 2.0 * 0.7]; // [0.4, 1.4]
             assert_all_almost_abs_eq(&r_data, &expected_vals, MAX_ABS_DELTA);
             assert_all_almost_abs_eq(&g_data, &expected_vals, MAX_ABS_DELTA);
             assert_all_almost_abs_eq(&b_data, &expected_vals, MAX_ABS_DELTA);
@@ -1975,18 +1969,10 @@ mod tests {
         fn test_add_one_row_none_blend() -> Result<()> {
             let xsize = 5;
             let y_coord = 0;
-            let num_base_channels = 3;
-            let const_val = 100.0;
 
-            let main_channel_data: Vec<Vec<f32>> = (0..num_base_channels)
-                .map(|_| vec![const_val; xsize])
-                .collect();
-            let main_ref_frame = create_reference_frame(xsize, 1, main_channel_data)?;
-
-            let dummy_channel_data: Vec<Vec<f32>> =
-                (0..num_base_channels).map(|_| vec![0.0; xsize]).collect();
-            let dummy_ref_frame1 = create_reference_frame(xsize, 1, dummy_channel_data.clone())?;
-            let dummy_ref_frame2 = create_reference_frame(xsize, 1, dummy_channel_data)?;
+            let main_ref_frame = create_reference_frame(xsize, 1, &[100.0; 3])?;
+            let dummy_ref_frame1 = create_reference_frame(xsize, 1, &[0.0; 3])?;
+            let dummy_ref_frame2 = create_reference_frame(xsize, 1, &[0.0; 3])?;
 
             let ref_frames = vec![main_ref_frame, dummy_ref_frame1, dummy_ref_frame2];
             let extra_channel_info: Vec<ExtraChannelInfo> = Vec::new();

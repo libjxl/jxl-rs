@@ -5,13 +5,15 @@
 
 use std::ops::{Add, AddAssign, Div, DivAssign, Mul, MulAssign, Sub, SubAssign};
 
-use super::{F32SimdVec, SimdDescriptor};
+use super::{F32SimdVec, I32SimdVec, SimdDescriptor, SimdMask};
 
 #[derive(Clone, Copy, Debug)]
 pub struct ScalarDescriptor;
 
 impl SimdDescriptor for ScalarDescriptor {
     type F32Vec = F32VecScalar;
+    type I32Vec = I32VecScalar;
+    type Mask = MaskScalar;
     fn new() -> Option<Self> {
         Some(Self)
     }
@@ -38,6 +40,9 @@ impl SimdDescriptor for ScalarDescriptor {
 
 #[derive(Clone, Copy, Debug)]
 pub struct F32VecScalar(f32);
+
+#[derive(Clone, Copy, Debug)]
+pub struct MaskScalar(bool);
 
 impl F32SimdVec for F32VecScalar {
     type Descriptor = ScalarDescriptor;
@@ -146,6 +151,92 @@ impl MulAssign<F32VecScalar> for F32VecScalar {
 impl DivAssign<F32VecScalar> for F32VecScalar {
     fn div_assign(&mut self, rhs: F32VecScalar) {
         self.0 /= rhs.0;
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct I32VecScalar(i32);
+
+impl I32SimdVec for I32VecScalar {
+    type Descriptor = ScalarDescriptor;
+    type F32Vec = F32VecScalar;
+    type Mask = MaskScalar;
+
+    const LEN: usize = 1;
+
+    #[inline(always)]
+    fn splat(_d: Self::Descriptor, v: i32) -> Self {
+        Self(v)
+    }
+
+    #[inline(always)]
+    fn load(_d: Self::Descriptor, mem: &[i32]) -> Self {
+        Self(mem[0])
+    }
+
+    #[inline(always)]
+    fn abs(self) -> Self {
+        Self(self.0.abs())
+    }
+
+    #[inline(always)]
+    fn as_f32(self) -> Self::F32Vec {
+        F32VecScalar(self.0 as f32)
+    }
+
+    #[inline(always)]
+    fn gt(self, other: Self) -> Self::Mask {
+        MaskScalar(self.0 > other.0)
+    }
+}
+
+impl Add<I32VecScalar> for I32VecScalar {
+    type Output = I32VecScalar;
+    fn add(self, rhs: I32VecScalar) -> Self::Output {
+        Self(self.0 + rhs.0)
+    }
+}
+
+impl Sub<I32VecScalar> for I32VecScalar {
+    type Output = I32VecScalar;
+    fn sub(self, rhs: I32VecScalar) -> Self::Output {
+        Self(self.0 - rhs.0)
+    }
+}
+
+impl Mul<I32VecScalar> for I32VecScalar {
+    type Output = I32VecScalar;
+    fn mul(self, rhs: I32VecScalar) -> Self::Output {
+        Self(self.0 * rhs.0)
+    }
+}
+
+impl AddAssign<I32VecScalar> for I32VecScalar {
+    fn add_assign(&mut self, rhs: I32VecScalar) {
+        self.0 += rhs.0;
+    }
+}
+
+impl SubAssign<I32VecScalar> for I32VecScalar {
+    fn sub_assign(&mut self, rhs: I32VecScalar) {
+        self.0 -= rhs.0;
+    }
+}
+
+impl MulAssign<I32VecScalar> for I32VecScalar {
+    fn mul_assign(&mut self, rhs: I32VecScalar) {
+        self.0 *= rhs.0;
+    }
+}
+
+impl SimdMask for MaskScalar {
+    type Descriptor = ScalarDescriptor;
+    type F32Vec = F32VecScalar;
+    type I32Vec = I32VecScalar;
+
+    #[inline(always)]
+    fn if_then_else_f32(self, if_true: Self::F32Vec, if_false: Self::F32Vec) -> Self::F32Vec {
+        F32VecScalar(if self.0 { if_true.0 } else { if_false.0 })
     }
 }
 

@@ -27,25 +27,12 @@ pub(crate) use scalar::test_all_instruction_sets;
 
 pub(crate) use scalar::ScalarDescriptor;
 
-pub const CACHE_LINE_BYTE_SIZE: usize = 64;
-
-pub const fn num_per_cache_line<T>() -> usize {
-    // Post-mono check that T is smaller than a cache line and has size a power of 2.
-    // This prevents some of the silliest mistakes.
-    const {
-        assert!(std::mem::size_of::<T>() <= CACHE_LINE_BYTE_SIZE);
-        assert!(std::mem::size_of::<T>().is_power_of_two());
-    }
-    CACHE_LINE_BYTE_SIZE / std::mem::size_of::<T>()
-}
-
-pub fn round_up_size_to_two_cache_lines<T>(size: usize) -> usize {
-    let n = const { num_per_cache_line::<T>() * 2 };
-    size.div_ceil(n) * n
-}
-
 pub trait SimdDescriptor: Sized + Copy + Debug + Send + Sync {
     type F32Vec: F32SimdVec<Descriptor = Self>;
+
+    type I32Vec: I32SimdVec<Descriptor = Self, F32Vec = Self::F32Vec, Mask = Self::Mask>;
+
+    type Mask: SimdMask<Descriptor = Self, F32Vec = Self::F32Vec, I32Vec = Self::I32Vec>;
 
     fn new() -> Option<Self>;
 
@@ -104,6 +91,51 @@ pub trait F32SimdVec:
     fn neg(self) -> Self;
 
     fn max(self, other: Self) -> Self;
+}
+
+pub trait I32SimdVec:
+    Sized
+    + Copy
+    + Debug
+    + Send
+    + Sync
+    + Add<Self, Output = Self>
+    + Mul<Self, Output = Self>
+    + Sub<Self, Output = Self>
+    + AddAssign<Self>
+    + MulAssign<Self>
+    + SubAssign<Self>
+{
+    type Descriptor: SimdDescriptor;
+
+    type F32Vec: F32SimdVec;
+
+    type Mask: SimdMask;
+
+    #[allow(dead_code)]
+    const LEN: usize;
+
+    /// Converts v to an array of v.
+    fn splat(d: Self::Descriptor, v: i32) -> Self;
+
+    // Requires `mem.len() >= Self::LEN` or it will panic.
+    fn load(d: Self::Descriptor, mem: &[i32]) -> Self;
+
+    fn abs(self) -> Self;
+
+    fn as_f32(self) -> Self::F32Vec;
+
+    fn gt(self, other: Self) -> Self::Mask;
+}
+
+pub trait SimdMask: Sized + Copy + Debug + Send + Sync {
+    type Descriptor: SimdDescriptor;
+
+    type F32Vec: F32SimdVec;
+
+    type I32Vec: I32SimdVec;
+
+    fn if_then_else_f32(self, if_true: Self::F32Vec, if_false: Self::F32Vec) -> Self::F32Vec;
 }
 
 #[cfg(test)]

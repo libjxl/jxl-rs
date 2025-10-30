@@ -7,6 +7,7 @@
 pub mod test;
 
 mod bits;
+mod cacheline;
 mod concat_slice;
 mod fast_math;
 mod linalg;
@@ -19,6 +20,7 @@ mod vec_helpers;
 mod xorshift128plus;
 
 pub use bits::*;
+pub use cacheline::*;
 pub use concat_slice::*;
 pub use fast_math::*;
 pub use linalg::*;

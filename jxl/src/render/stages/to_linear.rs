@@ -182,9 +182,9 @@ mod test {
     fn sdr_white_hlg() -> Result<()> {
         let intensity_target = 1000f32;
         // Reversed version of FromLinear test
-        let input_r = Image::new_constant((1, 1), 0.75)?;
-        let input_g = Image::new_constant((1, 1), 0.75)?;
-        let input_b = Image::new_constant((1, 1), 0.75)?;
+        let input_r = Image::new_with_value((1, 1), 0.75)?;
+        let input_g = Image::new_with_value((1, 1), 0.75)?;
+        let input_b = Image::new_with_value((1, 1), 0.75)?;
 
         // 75% HLG
         let stage = ToLinearStage::hlg(0, intensity_target, LUMINANCE_BT2020);
@@ -202,9 +202,9 @@ mod test {
     fn sdr_white_pq() -> Result<()> {
         let intensity_target = 1000f32;
         // Reversed version of FromLinear test
-        let input_r = Image::new_constant((1, 1), 0.5807)?;
-        let input_g = Image::new_constant((1, 1), 0.5807)?;
-        let input_b = Image::new_constant((1, 1), 0.5807)?;
+        let input_r = Image::new_with_value((1, 1), 0.5807)?;
+        let input_g = Image::new_with_value((1, 1), 0.5807)?;
+        let input_b = Image::new_with_value((1, 1), 0.5807)?;
 
         // 58% PQ
         let stage = ToLinearStage::pq(0, intensity_target);

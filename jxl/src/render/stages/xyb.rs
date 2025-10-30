@@ -266,10 +266,8 @@ mod test {
     use crate::headers::encodings::Empty;
     use crate::image::Image;
     use crate::render::test::make_and_run_simple_pipeline;
-    use crate::simd::{
-        ScalarDescriptor, SimdDescriptor, round_up_size_to_two_cache_lines,
-        test_all_instruction_sets,
-    };
+    use crate::simd::{ScalarDescriptor, SimdDescriptor, test_all_instruction_sets};
+    use crate::util::round_up_size_to_two_cache_lines;
     use crate::util::test::assert_all_almost_abs_eq;
 
     #[test]

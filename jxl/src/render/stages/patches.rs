@@ -12,9 +12,9 @@ use crate::{
 };
 
 pub struct PatchesStage {
-    pub patches: PatchesDictionary,
+    pub patches: Arc<PatchesDictionary>,
     pub extra_channels: Vec<ExtraChannelInfo>,
-    pub decoder_state: Arc<Vec<Option<ReferenceFrame>>>,
+    pub decoder_state: Arc<[Option<ReferenceFrame>; 4]>,
 }
 
 impl std::fmt::Display for PatchesStage {
@@ -43,7 +43,7 @@ impl RenderPipelineInPlaceStage for PatchesStage {
             position,
             xsize,
             &self.extra_channels,
-            &self.decoder_state,
+            &self.decoder_state[..],
             state,
         );
     }
@@ -56,6 +56,8 @@ impl RenderPipelineInPlaceStage for PatchesStage {
 
 #[cfg(test)]
 mod test {
+    use std::sync::Arc;
+
     use rand::SeedableRng;
     use test_log::test;
 
@@ -68,14 +70,14 @@ mod test {
         let (file_header, _, _) =
             read_headers_and_toc(include_bytes!("../../../resources/test/basic.jxl")).unwrap();
         let mut rng = rand_xorshift::XorShiftRng::seed_from_u64(0);
-        let patch_dict = PatchesDictionary::random(
+        let patch_dict = Arc::new(PatchesDictionary::random(
             (500, 500),
             file_header.image_metadata.extra_channel_info.len(),
             0,
             4,
             &mut rng,
-        );
-        let reference_frames = Arc::new(vec![
+        ));
+        let reference_frames = Arc::new([
             Some(ReferenceFrame::random(&mut rng, 500, 500, 4, false)?),
             Some(ReferenceFrame::random(&mut rng, 500, 500, 4, false)?),
             Some(ReferenceFrame::random(&mut rng, 500, 500, 4, false)?),
