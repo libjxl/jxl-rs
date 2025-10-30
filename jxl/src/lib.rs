@@ -16,7 +16,6 @@ pub mod headers;
 pub mod icc;
 pub mod image;
 pub mod render;
-mod simd;
 pub mod util;
 pub mod var_dct;
 

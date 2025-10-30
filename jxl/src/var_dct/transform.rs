@@ -7,9 +7,9 @@ use crate::{
     BLOCK_DIM,
     error::{Error, Result},
     frame::transform_map::*,
-    simd::SimdDescriptor,
     var_dct::dct::*,
 };
+use jxl_simd::SimdDescriptor;
 
 fn idct2_top_block(s: usize, block_in: &[f32], block_out: &mut [f32]) {
     let num_2x2 = s / 2;
