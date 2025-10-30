@@ -3,11 +3,8 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-use crate::BLOCK_DIM;
-use crate::error::{Error::InvalidVarDCTTransform, Result};
-
 pub const MAX_COEFF_BLOCKS: usize = 32;
-pub const MAX_BLOCK_DIM: usize = BLOCK_DIM * MAX_COEFF_BLOCKS;
+pub const MAX_BLOCK_DIM: usize = 8 * MAX_COEFF_BLOCKS;
 pub const MAX_COEFF_AREA: usize = MAX_BLOCK_DIM * MAX_BLOCK_DIM;
 
 #[allow(clippy::upper_case_acronyms)]
@@ -92,11 +89,8 @@ impl HfTransformType {
         HfTransformType::DCT256X128,
         HfTransformType::DCT128X256,
     ];
-    pub fn from_usize(idx: usize) -> Result<HfTransformType> {
-        match HfTransformType::VALUES.get(idx) {
-            Some(transform) => Ok(*transform),
-            None => Err(InvalidVarDCTTransform(idx)),
-        }
+    pub fn from_usize(idx: usize) -> Option<HfTransformType> {
+        HfTransformType::VALUES.get(idx).copied()
     }
 }
 

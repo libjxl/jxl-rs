@@ -9,10 +9,11 @@ use crate::{
     entropy_coding::decode::SymbolReader,
     error::Result,
     frame::Histograms,
-    frame::transform_map::*,
     headers::permutation::Permutation,
     util::{CeilLog2, tracing_wrappers::*},
 };
+
+use jxl_transforms::transform_map::*;
 
 use std::mem;
 

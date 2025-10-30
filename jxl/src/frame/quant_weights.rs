@@ -20,10 +20,10 @@ use crate::{
     frame::{
         LfGlobalState,
         modular::{ModularChannel, ModularStreamId, decode::decode_modular_subbitstream},
-        transform_map::HfTransformType,
     },
     headers::{bit_depth::BitDepth, frame_header::FrameHeader},
 };
+use jxl_transforms::transform_map::*;
 
 pub const INV_LF_QUANT: [f32; 3] = [4096.0, 512.0, 256.0];
 
@@ -954,8 +954,11 @@ impl DequantMatrices {
         }
         for i in 0..HfTransformType::CARDINALITY {
             for c in 0..3 {
-                self.table_offsets[i * 3 + c] = offsets
-                    [QuantTable::for_strategy(HfTransformType::from_usize(i)?) as usize * 3 + c];
+                self.table_offsets[i * 3 + c] =
+                    offsets[QuantTable::for_strategy(HfTransformType::from_usize(i).unwrap())
+                        as usize
+                        * 3
+                        + c];
             }
         }
         let mut kind_mask = 0u32;
@@ -2210,7 +2213,7 @@ mod test {
         ];
         let mut target_table_index = 0;
         for i in 0..HfTransformType::CARDINALITY {
-            let qt_idx = QuantTable::for_strategy(HfTransformType::from_usize(i)?) as usize;
+            let qt_idx = QuantTable::for_strategy(HfTransformType::from_usize(i).unwrap()) as usize;
             let size = DequantMatrices::REQUIRED_SIZE_X[qt_idx]
                 * DequantMatrices::REQUIRED_SIZE_Y[qt_idx]
                 * BLOCK_SIZE;
@@ -3118,7 +3121,7 @@ mod test {
         ];
         let mut target_inv_table_index = 0;
         for i in 0..HfTransformType::CARDINALITY {
-            let qt_idx = QuantTable::for_strategy(HfTransformType::from_usize(i)?) as usize;
+            let qt_idx = QuantTable::for_strategy(HfTransformType::from_usize(i).unwrap()) as usize;
             let size = DequantMatrices::REQUIRED_SIZE_X[qt_idx]
                 * DequantMatrices::REQUIRED_SIZE_Y[qt_idx]
                 * BLOCK_SIZE;

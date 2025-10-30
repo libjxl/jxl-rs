@@ -3,6 +3,8 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
+use crate::impl_f32_array_interface;
+
 use super::{F32SimdVec, I32SimdVec, SimdDescriptor, SimdMask};
 
 #[derive(Clone, Copy, Debug)]
@@ -12,6 +14,18 @@ impl SimdDescriptor for ScalarDescriptor {
     type F32Vec = f32;
     type I32Vec = i32;
     type Mask = bool;
+
+    type Descriptor256 = Self;
+    type Descriptor128 = Self;
+
+    fn maybe_downgrade_256bit(self) -> Self::Descriptor256 {
+        self
+    }
+
+    fn maybe_downgrade_128bit(self) -> Self::Descriptor128 {
+        self
+    }
+
     fn new() -> Option<Self> {
         Some(Self)
     }
@@ -127,6 +141,13 @@ impl F32SimdVec for f32 {
     fn bitcast_to_i32(self) -> i32 {
         self.to_bits() as i32
     }
+
+    impl_f32_array_interface!();
+
+    #[inline(always)]
+    fn transpose_square(_d: Self::Descriptor, _data: &mut [Self::UnderlyingArray], _stride: usize) {
+        // Nothing to do.
+    }
 }
 
 impl I32SimdVec for i32 {
@@ -162,6 +183,16 @@ impl I32SimdVec for i32 {
     #[inline(always)]
     fn gt(self, other: Self) -> bool {
         self > other
+    }
+
+    #[inline(always)]
+    fn shl<const AMOUNT_U: u32, const AMOUNT_I: i32>(self) -> Self {
+        self << AMOUNT_U
+    }
+
+    #[inline(always)]
+    fn shr<const AMOUNT_U: u32, const AMOUNT_I: i32>(self) -> Self {
+        self >> AMOUNT_U
     }
 }
 

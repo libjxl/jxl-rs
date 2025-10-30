@@ -5,10 +5,7 @@
 
 use std::{
     fmt::Debug,
-    ops::{
-        Add, AddAssign, Div, DivAssign, Mul, MulAssign, Shl, ShlAssign, Shr, ShrAssign, Sub,
-        SubAssign,
-    },
+    ops::{Add, AddAssign, Div, DivAssign, Mul, MulAssign, Sub, SubAssign},
 };
 
 #[cfg(target_arch = "x86_64")]
@@ -17,7 +14,7 @@ mod x86_64;
 mod scalar;
 
 #[cfg(target_arch = "x86_64")]
-pub use x86_64::{avx::AvxDescriptor, avx512::Avx512Descriptor};
+pub use x86_64::{avx::AvxDescriptor, avx512::Avx512Descriptor, sse42::Sse42Descriptor};
 
 pub use scalar::ScalarDescriptor;
 
@@ -28,9 +25,20 @@ pub trait SimdDescriptor: Sized + Copy + Debug + Send + Sync {
 
     type Mask: SimdMask<Descriptor = Self>;
 
+    type Descriptor256: SimdDescriptor;
+    type Descriptor128: SimdDescriptor;
+
     fn new() -> Option<Self>;
 
     fn transpose<const ROWS: usize, const COLS: usize>(self, input: &[f32], output: &mut [f32]);
+
+    /// Returns a vector descriptor suitable for operations on vectors of length 256 (Self if the
+    /// current vector type is suitable). Note that it might still be beneficial to use `Self` for
+    /// .call(), as the compiler could make use of features from more advanced instruction sets.
+    fn maybe_downgrade_256bit(self) -> Self::Descriptor256;
+
+    /// Same as Self::maybe_downgrade_256bit, but for 128 bits.
+    fn maybe_downgrade_128bit(self) -> Self::Descriptor128;
 
     /// Calls the given closure within a target feature context.
     /// This enables establishing an unbroken chain of inline functions from the feature-annotated
@@ -57,6 +65,9 @@ pub trait F32SimdVec:
 
     const LEN: usize;
 
+    /// An array of f32 of length Self::LEN.
+    type UnderlyingArray: Copy + Default + Debug;
+
     /// Converts v to an array of v.
     fn splat(d: Self::Descriptor, v: f32) -> Self;
 
@@ -71,11 +82,15 @@ pub trait F32SimdVec:
     // Requires `mem.len() >= Self::LEN` or it will panic.
     fn load(d: Self::Descriptor, mem: &[f32]) -> Self;
 
+    fn load_array(d: Self::Descriptor, mem: &Self::UnderlyingArray) -> Self;
+
     // Requires `mem.len() >= SIZE` or it will panic.
     fn load_partial(d: Self::Descriptor, size: usize, mem: &[f32]) -> Self;
 
     // Requires `mem.len() >= Self::LEN` or it will panic.
     fn store(&self, mem: &mut [f32]);
+
+    fn store_array(&self, mem: &mut Self::UnderlyingArray);
 
     // Requires `mem.len() >= SIZE` or it will panic.
     fn store_partial(&self, size: usize, mem: &mut [f32]);
@@ -99,6 +114,18 @@ pub trait F32SimdVec:
     fn as_i32(self) -> <<Self as F32SimdVec>::Descriptor as SimdDescriptor>::I32Vec;
 
     fn bitcast_to_i32(self) -> <<Self as F32SimdVec>::Descriptor as SimdDescriptor>::I32Vec;
+
+    /// Converts a slice of f32 into a slice of Self::UnderlyingArray. If slice.len() is not a
+    /// multiple of `Self::LEN` this will panic.
+    fn make_array_slice(slice: &[f32]) -> &[Self::UnderlyingArray];
+
+    /// Converts a mut slice of f32 into a slice of Self::UnderlyingArray. If slice.len() is not a
+    /// multiple of `Self::LEN` this will panic.
+    fn make_array_slice_mut(slice: &mut [f32]) -> &mut [Self::UnderlyingArray];
+
+    /// Transposes the Self::LEN x Self::LEN matrix formed by array elements
+    /// `data[stride * i]` for i = 0..Self::LEN.
+    fn transpose_square(d: Self::Descriptor, data: &mut [Self::UnderlyingArray], stride: usize);
 }
 
 pub trait I32SimdVec:
@@ -110,13 +137,9 @@ pub trait I32SimdVec:
     + Add<Self, Output = Self>
     + Mul<Self, Output = Self>
     + Sub<Self, Output = Self>
-    + Shl<Self, Output = Self>
-    + Shr<Self, Output = Self>
     + AddAssign<Self>
     + MulAssign<Self>
     + SubAssign<Self>
-    + ShlAssign<Self>
-    + ShrAssign<Self>
 {
     type Descriptor: SimdDescriptor;
 
@@ -136,6 +159,24 @@ pub trait I32SimdVec:
     fn bitcast_to_f32(self) -> <<Self as I32SimdVec>::Descriptor as SimdDescriptor>::F32Vec;
 
     fn gt(self, other: Self) -> <<Self as I32SimdVec>::Descriptor as SimdDescriptor>::Mask;
+
+    fn shl<const AMOUNT_U: u32, const AMOUNT_I: i32>(self) -> Self;
+
+    fn shr<const AMOUNT_U: u32, const AMOUNT_I: i32>(self) -> Self;
+}
+
+#[macro_export]
+macro_rules! shl {
+    ($val: expr, $amount: literal) => {
+        <_ as $crate::I32SimdVec>::shl::<{ $amount as u32 }, { $amount as i32 }>($val)
+    };
+}
+
+#[macro_export]
+macro_rules! shr {
+    ($val: expr, $amount: literal) => {
+        <_ as $crate::I32SimdVec>::shr::<{ $amount as u32 }, { $amount as i32 }>($val)
+    };
 }
 
 pub trait SimdMask: Sized + Copy + Debug + Send + Sync {
@@ -147,6 +188,38 @@ pub trait SimdMask: Sized + Copy + Debug + Send + Sync {
         if_false: <<Self as SimdMask>::Descriptor as SimdDescriptor>::F32Vec,
     ) -> <<Self as SimdMask>::Descriptor as SimdDescriptor>::F32Vec;
 }
+
+macro_rules! impl_f32_array_interface {
+    () => {
+        type UnderlyingArray = [f32; Self::LEN];
+
+        #[inline(always)]
+        fn make_array_slice(slice: &[f32]) -> &[Self::UnderlyingArray] {
+            let (ret, rem) = slice.as_chunks();
+            assert!(rem.is_empty());
+            ret
+        }
+
+        #[inline(always)]
+        fn make_array_slice_mut(slice: &mut [f32]) -> &mut [Self::UnderlyingArray] {
+            let (ret, rem) = slice.as_chunks_mut();
+            assert!(rem.is_empty());
+            ret
+        }
+
+        #[inline(always)]
+        fn load_array(d: Self::Descriptor, mem: &Self::UnderlyingArray) -> Self {
+            Self::load(d, mem)
+        }
+
+        #[inline(always)]
+        fn store_array(&self, mem: &mut Self::UnderlyingArray) {
+            self.store(mem);
+        }
+    };
+}
+
+pub(crate) use impl_f32_array_interface;
 
 #[cfg(test)]
 mod test {

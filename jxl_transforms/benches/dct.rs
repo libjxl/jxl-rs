@@ -4,52 +4,51 @@
 // license that can be found in the LICENSE file.
 
 use criterion::measurement::Measurement;
-use criterion::{BenchmarkGroup, BenchmarkId, Criterion, criterion_group, criterion_main};
-use jxl::var_dct::dct::{DCT1D, DCT1DImpl, IDCT1D, IDCT1DImpl, compute_scaled_dct, idct2d};
-use jxl_simd::{SimdDescriptor, bench_all_instruction_sets};
+use criterion::{criterion_group, criterion_main, BenchmarkGroup, BenchmarkId, Criterion};
+use jxl_simd::{bench_all_instruction_sets, SimdDescriptor};
+use jxl_transforms::dct::{compute_scaled_dct, DCT1DImpl, DCT1D};
+use jxl_transforms::idct2d::*;
+use jxl_transforms::transform_map::MAX_COEFF_AREA;
 
 fn bench_idct2d<D: SimdDescriptor>(d: D, c: &mut BenchmarkGroup<'_, impl Measurement>, name: &str) {
-    fn run_size<D: SimdDescriptor, const ROWS: usize, const COLS: usize>(
-        c: &mut BenchmarkGroup<'_, impl Measurement>,
-        d: D,
-        name: &str,
-    ) where
-        IDCT1DImpl<ROWS>: IDCT1D,
-        IDCT1DImpl<COLS>: IDCT1D,
-    {
-        let id = BenchmarkId::new(name, format_args!("{ROWS}x{COLS}"));
+    let mut data = vec![1.0; MAX_COEFF_AREA];
 
-        let mut data = vec![1.0; ROWS * COLS];
-        let mut scratch = vec![0.0; ROWS * COLS];
-        c.bench_function(id, |b| {
-            b.iter(|| {
-                d.call(|d| idct2d::<_, ROWS, COLS>(d, &mut data, &mut scratch));
-            })
-        });
+    macro_rules! run {
+        ($fun: ident, $name: literal, $sz: expr) => {
+            let id = BenchmarkId::new(name, format_args!("{}", $name));
+            c.bench_function(id, |b| {
+                b.iter(|| {
+                    d.call(
+                        #[inline(always)]
+                        |d| $fun(d, &mut data[..$sz]),
+                    );
+                })
+            });
+        };
     }
 
-    run_size::<_, 2, 2>(c, d, name);
-    run_size::<_, 4, 4>(c, d, name);
-    run_size::<_, 4, 8>(c, d, name);
-    run_size::<_, 8, 4>(c, d, name);
-    run_size::<_, 8, 8>(c, d, name);
-    run_size::<_, 16, 8>(c, d, name);
-    run_size::<_, 8, 16>(c, d, name);
-    run_size::<_, 16, 16>(c, d, name);
-    run_size::<_, 32, 8>(c, d, name);
-    run_size::<_, 8, 32>(c, d, name);
-    run_size::<_, 32, 16>(c, d, name);
-    run_size::<_, 16, 32>(c, d, name);
-    run_size::<_, 32, 32>(c, d, name);
-    run_size::<_, 64, 32>(c, d, name);
-    run_size::<_, 32, 64>(c, d, name);
-    run_size::<_, 64, 64>(c, d, name);
-    run_size::<_, 128, 64>(c, d, name);
-    run_size::<_, 64, 128>(c, d, name);
-    run_size::<_, 128, 128>(c, d, name);
-    run_size::<_, 256, 128>(c, d, name);
-    run_size::<_, 128, 256>(c, d, name);
-    run_size::<_, 256, 256>(c, d, name);
+    run!(idct2d_2_2, "2x2", 2 * 2);
+    run!(idct2d_4_4, "4x4", 4 * 4);
+    run!(idct2d_4_8, "4x8", 4 * 8);
+    run!(idct2d_8_4, "8x4", 4 * 8);
+    run!(idct2d_8_8, "8x8", 8 * 8);
+    run!(idct2d_16_8, "16x8", 16 * 8);
+    run!(idct2d_8_16, "8x16", 8 * 16);
+    run!(idct2d_16_16, "16x16", 16 * 16);
+    run!(idct2d_32_8, "32x8", 32 * 8);
+    run!(idct2d_8_32, "8x32", 8 * 32);
+    run!(idct2d_32_16, "32x16", 32 * 16);
+    run!(idct2d_16_32, "16x32", 16 * 32);
+    run!(idct2d_32_32, "32x32", 32 * 32);
+    run!(idct2d_64_32, "64x32", 64 * 32);
+    run!(idct2d_32_64, "32x64", 32 * 64);
+    run!(idct2d_64_64, "64x64", 64 * 64);
+    run!(idct2d_128_64, "128x64", 128 * 64);
+    run!(idct2d_64_128, "64x128", 64 * 128);
+    run!(idct2d_128_128, "128x128", 128 * 128);
+    run!(idct2d_256_128, "256x128", 256 * 128);
+    run!(idct2d_128_256, "128x256", 128 * 256);
+    run!(idct2d_256_256, "256x256", 256 * 256);
 }
 
 fn bench_compute_scaled_dct<D: SimdDescriptor>(
@@ -72,10 +71,11 @@ fn bench_compute_scaled_dct<D: SimdDescriptor>(
         for (i, row) in input_vec.iter().enumerate() {
             input[i].copy_from_slice(row);
         }
+        let mut input = [1.0; MAX_COEFF_AREA / 64];
         let mut output = vec![0.0; ROWS * COLS];
         c.bench_function(id, |b| {
             b.iter(|| {
-                d.call(|d| compute_scaled_dct::<_, ROWS, COLS>(d, input, &mut output));
+                d.call(|d| compute_scaled_dct::<_, ROWS, COLS>(d, &mut input, &mut output));
             })
         });
     }

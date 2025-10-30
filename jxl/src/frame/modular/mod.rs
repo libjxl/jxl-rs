@@ -12,7 +12,6 @@ use crate::{
         ColorCorrelationParams, HfMetadata,
         block_context_map::BlockContextMap,
         quantizer::{self, LfQuantFactors, QuantizerParams},
-        transform_map::*,
     },
     headers::{
         ImageMetadata, JxlHeader, bit_depth::BitDepth, frame_header::FrameHeader,
@@ -21,6 +20,7 @@ use crate::{
     image::{Image, Rect},
     util::{CeilLog2, tracing_wrappers::*},
 };
+use jxl_transforms::transform_map::*;
 
 mod borrowed_buffers;
 pub(crate) mod decode;
@@ -814,7 +814,8 @@ pub fn decode_hf_metadata(
             let raw_transform = transform_image.row(0)[num];
             let raw_quant = 1 + transform_image.row(1)[num].clamp(0, 255);
             used_hf_types |= 1 << raw_transform;
-            let transform_type = HfTransformType::from_usize(raw_transform as usize)?;
+            let transform_type = HfTransformType::from_usize(raw_transform as usize)
+                .ok_or(Error::InvalidVarDCTTransform(raw_transform as usize))?;
             let cx = covered_blocks_x(transform_type) as usize;
             let cy = covered_blocks_y(transform_type) as usize;
             if (cx > 1 || cy > 1) && !frame_header.is444() {

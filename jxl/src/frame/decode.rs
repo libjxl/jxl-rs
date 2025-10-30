@@ -14,7 +14,6 @@ use super::{
     modular::{FullModularImage, ModularStreamId, Tree, decode_hf_metadata, decode_vardct_lf},
     quant_weights::DequantMatrices,
     quantizer::{LfQuantFactors, QuantizerParams},
-    transform_map::*,
 };
 use crate::error::Error;
 use crate::render::{LowMemoryRenderPipeline, SimpleRenderPipeline};
@@ -35,6 +34,7 @@ use crate::{
     render::RenderPipeline,
     util::{CeilLog2, Xorshift128Plus, tracing_wrappers::*},
 };
+use jxl_transforms::transform_map::*;
 
 impl Frame {
     pub fn from_header_and_toc(

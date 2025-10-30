@@ -17,7 +17,6 @@ pub mod icc;
 pub mod image;
 pub mod render;
 pub mod util;
-pub mod var_dct;
 
 // TODO: Move these to a more appropriate location.
 const GROUP_DIM: usize = 256;

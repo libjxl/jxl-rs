@@ -1,8 +1,11 @@
 [profile.release]
 debug = true
 
+[profile.bench]
+debug = true
+
 [workspace]
-members = ["jxl", "jxl_cli", "jxl_macros", "jxl_simd"]
+members = ["jxl", "jxl_cli", "jxl_macros", "jxl_simd", "jxl_transforms"]
 resolver = "2"
 
 [workspace.lints.clippy]
