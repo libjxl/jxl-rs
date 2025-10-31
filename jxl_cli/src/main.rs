@@ -37,6 +37,8 @@ fn save_image(
     bit_depth: u32,
     color_profile: &JxlColorProfile,
     output_filename: &PathBuf,
+    jxl_animation: Option<&jxl::api::JxlAnimation>,
+    frame_durations: &[f64],
 ) -> Result<()> {
     let fn_str = output_filename.to_string_lossy();
     let mut writer = BufWriter::new(File::create(output_filename)?);
@@ -59,7 +61,14 @@ fn save_image(
     } else if fn_str.ends_with(".npy") {
         enc::numpy::to_numpy(image_data, &mut writer)?;
     } else if fn_str.ends_with(".png") {
-        enc::png::to_png(image_data, bit_depth, color_profile, &mut writer)?;
+        enc::png::to_png(
+            image_data,
+            bit_depth,
+            color_profile,
+            &mut writer,
+            jxl_animation,
+            frame_durations,
+        )?;
     } else {
         return Err(eyre!(
             "Output format not supported for {:?}",
@@ -181,6 +190,8 @@ fn main() -> Result<()> {
         3
     };
 
+    let jxl_animation = info.animation.clone();
+
     let original_icc_result = save_icc(embedded_profile.as_icc().as_slice(), opt.original_icc_out);
     let data_icc = output_profile.as_icc();
     let data_icc_result = save_icc(data_icc.as_slice(), opt.icc_out);
@@ -189,6 +200,8 @@ fn main() -> Result<()> {
         size: info.size,
         frames: Vec::new(),
     };
+
+    let mut frame_durations: Vec<f64> = Vec::new();
 
     loop {
         let mut decoder_with_frame_info = loop {
@@ -202,6 +215,9 @@ fn main() -> Result<()> {
                 }
             }
         }?;
+
+        let frame_header = decoder_with_frame_info.frame_header();
+        frame_durations.push(frame_header.duration.unwrap_or(0.0));
 
         let mut outputs = vec![Image::<f32>::new((
             image_data.size.0 * samples_per_pixel,
@@ -272,7 +288,14 @@ fn main() -> Result<()> {
             None => original_bit_depth.bits_per_sample(),
             Some(num_bits) => num_bits,
         };
-        let image_result = save_image(image_data, output_bit_depth, &output_profile, &path);
+        let image_result = save_image(
+            image_data,
+            output_bit_depth,
+            &output_profile,
+            &path,
+            jxl_animation.as_ref(),
+            &frame_durations,
+        );
 
         if let Err(ref err) = original_icc_result {
             println!("Failed to save original ICC profile: {err}");

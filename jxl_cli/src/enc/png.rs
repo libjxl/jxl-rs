@@ -15,6 +15,36 @@ use jxl::headers::color_encoding::RenderingIntent;
 use std::borrow::Cow;
 use std::io::Write;
 
+fn gcd(a: u64, b: u64) -> u64 {
+    if b == 0 { a } else { gcd(b, a % b) }
+}
+
+fn calculate_apng_delay(duration_ms: f64) -> Result<(u16, u16)> {
+    if duration_ms < 0.0 {
+        return Err(eyre!("Negative frame duration: {}", duration_ms));
+    }
+    if duration_ms == 0.0 {
+        return Ok((0, 1));
+    }
+
+    let mut num = duration_ms.round() as u64;
+    let mut den = 1000u64;
+
+    let common = gcd(num, den);
+    num /= common;
+    den /= common;
+
+    if num > u16::MAX as u64 || den > u16::MAX as u64 {
+        Err(eyre!(
+            "APNG frame delay overflow after GCD: {}/{}",
+            num,
+            den
+        ))
+    } else {
+        Ok((num as u16, den as u16))
+    }
+}
+
 fn png_color(num_channels: usize) -> Result<png::ColorType> {
     match num_channels {
         1 => Ok(png::ColorType::Grayscale),
@@ -75,6 +105,8 @@ pub fn to_png<Writer: Write>(
     bit_depth: u32,
     color_profile: &JxlColorProfile,
     buf: &mut Writer,
+    jxl_animation: Option<&jxl::api::JxlAnimation>,
+    frame_durations: &[f64],
 ) -> Result<()> {
     if image_data.frames.is_empty()
         || image_data.frames[0].channels.is_empty()
@@ -150,14 +182,25 @@ pub fn to_png<Writer: Write>(
     } else {
         png::BitDepth::Sixteen
     });
-    if image_data.frames.len() > 1 {
+    if let Some(anim) = jxl_animation {
+        if image_data.frames.len() > 1 {
+            encoder.set_animated(image_data.frames.len() as u32, anim.num_loops)?;
+        }
+    } else if image_data.frames.len() > 1 {
         encoder.set_animated(image_data.frames.len() as u32, 0)?;
     }
     let mut writer = encoder.write_header()?;
+
     let num_pixels = height * width * num_channels;
     if eight_bits {
         let mut data: Vec<u8> = vec![0; num_pixels];
-        for frame in image_data.frames {
+        for (frame_idx, frame) in image_data.frames.into_iter().enumerate() {
+            if frame_idx > 0 {
+                let duration_ms = frame_durations[frame_idx - 1];
+                let (delay_num, delay_den) = calculate_apng_delay(duration_ms)?;
+                writer.set_frame_delay(delay_num, delay_den)?;
+            }
+
             for y in 0..height {
                 for x in 0..width {
                     for c in 0..num_channels {
@@ -171,8 +214,15 @@ pub fn to_png<Writer: Write>(
             writer.write_image_data(&data)?;
         }
     } else {
+        // 16-bit
         let mut data: Vec<u8> = vec![0; 2 * num_pixels];
-        for frame in image_data.frames {
+        for (frame_idx, frame) in image_data.frames.into_iter().enumerate() {
+            if frame_idx > 0 {
+                let duration_ms = frame_durations[frame_idx - 1];
+                let (delay_num, delay_den) = calculate_apng_delay(duration_ms)?;
+                writer.set_frame_delay(delay_num, delay_den)?;
+            }
+
             for y in 0..height {
                 for x in 0..width {
                     for c in 0..num_channels {
