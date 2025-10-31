@@ -241,7 +241,7 @@ impl RawImageBuffer {
     /// bytes between rows of a newly allocated image with the same size does not match the value
     /// for `self`.
     ///
-    /// Safety:
+    /// # Safety
     /// The caller must ensure that the data referenced by self -- *all*
     /// self.minimum_allocation_size() bytes starting from self.buf, not just the accessible bytes
     /// -- can be read.
@@ -267,7 +267,7 @@ impl RawImageBuffer {
 
     /// Deallocates an owning buffer that was allocated by try_allocate.
     ///
-    /// Safety:
+    /// # Safety
     /// The data referenced by `self` must have been allocated with Self::try_allocate.
     pub(super) unsafe fn deallocate(&mut self) {
         if !self.buf.is_null() {

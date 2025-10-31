@@ -61,7 +61,10 @@ fn save_image(
     } else if fn_str.ends_with(".png") {
         enc::png::to_png(image_data, bit_depth, color_profile, &mut writer)?;
     } else {
-        return Err(eyre!("Output format {:?} not supported", output_filename));
+        return Err(eyre!(
+            "Output format not supported for {:?}",
+            output_filename
+        ));
     }
     writer
         .flush()

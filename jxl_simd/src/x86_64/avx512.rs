@@ -3,7 +3,6 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-use super::super::{AvxDescriptor, F32SimdVec, I32SimdVec, SimdDescriptor, SimdMask};
 use std::{
     arch::x86_64::{
         __m512, __m512i, __mmask16, _mm512_abs_epi32, _mm512_add_epi32, _mm512_add_ps,
@@ -16,13 +15,15 @@ use std::{
     ops::{Add, AddAssign, Div, DivAssign, Mul, MulAssign, Sub, SubAssign},
 };
 
+use super::super::{AvxDescriptor, F32SimdVec, I32SimdVec, SimdDescriptor, SimdMask};
+
 // Safety invariant: this type is only ever constructed if avx512f is available.
 #[derive(Clone, Copy, Debug)]
 pub struct Avx512Descriptor(());
 
 #[allow(unused)]
 impl Avx512Descriptor {
-    /// Safety:
+    /// # Safety
     /// The caller must guarantee that the "avx512f" target feature is available.
     pub unsafe fn new_unchecked() -> Self {
         Self(())
