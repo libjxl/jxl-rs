@@ -141,6 +141,8 @@ pub struct JxlExtraChannel {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct JxlAnimation {
+    pub tps_numerator: u32,
+    pub tps_denominator: u32,
     pub num_loops: u32,
     pub have_timecodes: bool,
 }
