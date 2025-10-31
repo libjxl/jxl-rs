@@ -84,6 +84,8 @@ pub trait F32SimdVec:
 
     fn floor(self) -> Self;
 
+    fn sqrt(self) -> Self;
+
     /// Negates all elements. Currently unused but kept for API completeness.
     #[allow(dead_code)]
     fn neg(self) -> Self;
@@ -91,6 +93,8 @@ pub trait F32SimdVec:
     fn copysign(self, sign: Self) -> Self;
 
     fn max(self, other: Self) -> Self;
+
+    fn gt(self, other: Self) -> <<Self as F32SimdVec>::Descriptor as SimdDescriptor>::Mask;
 
     fn as_i32(self) -> <<Self as F32SimdVec>::Descriptor as SimdDescriptor>::I32Vec;
 

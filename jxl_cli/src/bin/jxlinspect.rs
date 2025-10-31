@@ -147,7 +147,7 @@ fn parse_jxl(path: &Path) -> Result<()> {
 
             let duration = decoder_with_frame_info.frame_header().duration.unwrap();
             total_seconds += duration;
-            println!("Frame {}, duration {}s", num_frames, duration);
+            println!("Frame {}, duration {}ms", num_frames, duration);
 
             let mut outputs = vec![Image::<f32>::new((
                 info.size.0 * num_channels,

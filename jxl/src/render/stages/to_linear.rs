@@ -76,7 +76,7 @@ fn to_linear_process(tf: &TransferFunction, xsize: usize, row: &mut [&mut [f32]]
         }
         TransferFunction::Srgb => {
             for row in row {
-                tf::srgb_to_linear(&mut row[..xsize]);
+                tf::srgb_to_linear_simd(d, &mut row[..xsize.next_multiple_of(D::F32Vec::LEN)]);
             }
         }
         TransferFunction::Pq { intensity_target } => {
@@ -101,8 +101,8 @@ fn to_linear_process(tf: &TransferFunction, xsize: usize, row: &mut [&mut [f32]]
         }
         TransferFunction::Gamma(g) => {
             for row in row {
-                for values in row[..xsize.next_multiple_of(D::F32Vec::LEN)]
-                    .chunks_exact_mut(D::F32Vec::LEN)
+                for values in
+                    row[..xsize.next_multiple_of(D::F32Vec::LEN)].chunks_exact_mut(D::F32Vec::LEN)
                 {
                     let v = D::F32Vec::load(d, values);
                     crate::util::fast_powf_simd(d, v.abs(), D::F32Vec::splat(d, g))

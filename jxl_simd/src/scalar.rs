@@ -94,6 +94,11 @@ impl F32SimdVec for f32 {
     }
 
     #[inline(always)]
+    fn sqrt(self) -> Self {
+        self.sqrt()
+    }
+
+    #[inline(always)]
     fn neg(self) -> Self {
         -self
     }
@@ -106,6 +111,11 @@ impl F32SimdVec for f32 {
     #[inline(always)]
     fn max(self, other: Self) -> Self {
         self.max(other)
+    }
+
+    #[inline(always)]
+    fn gt(self, other: Self) -> bool {
+        self > other
     }
 
     #[inline(always)]
