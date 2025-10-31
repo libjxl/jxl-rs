@@ -193,9 +193,9 @@ mod test {
     }
 
     #[test]
-    fn orientation_rotate_90() -> Result<()> {
-        do_test_orientation(Orientation::Rotate90, |x_dest, y_dest, w_src, _| {
-            (w_src - 1 - y_dest, x_dest)
+    fn orientation_rotate_90_cw() -> Result<()> {
+        do_test_orientation(Orientation::Rotate90Cw, |x_dest, y_dest, _, h_src| {
+            (y_dest, h_src - 1 - x_dest)
         })
     }
 
@@ -208,9 +208,9 @@ mod test {
     }
 
     #[test]
-    fn orientation_rotate_270() -> Result<()> {
-        do_test_orientation(Orientation::Rotate270, |x_dest, y_dest, _, h_src| {
-            (y_dest, h_src - 1 - x_dest)
+    fn orientation_rotate_90_ccw() -> Result<()> {
+        do_test_orientation(Orientation::Rotate90Ccw, |x_dest, y_dest, w_src, _| {
+            (w_src - 1 - y_dest, x_dest)
         })
     }
 }

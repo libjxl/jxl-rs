@@ -41,9 +41,9 @@ pub enum Orientation {
     Rotate180 = 3,
     FlipVertical = 4,
     Transpose = 5,
-    Rotate90 = 6,
+    Rotate90Cw = 6,
     AntiTranspose = 7,
-    Rotate270 = 8,
+    Rotate90Ccw = 8,
 }
 
 impl Orientation {
@@ -52,8 +52,8 @@ impl Orientation {
             self,
             Orientation::Transpose
                 | Orientation::AntiTranspose
-                | Orientation::Rotate90
-                | Orientation::Rotate270
+                | Orientation::Rotate90Cw
+                | Orientation::Rotate90Ccw
         )
     }
 
@@ -68,13 +68,13 @@ impl Orientation {
     pub fn display_pixel(&self, (x, y): (usize, usize), size: (usize, usize)) -> (usize, usize) {
         match self {
             Orientation::Identity => (x, y),
-            Orientation::Rotate90 => (y, size.0 - 1 - x),
-            Orientation::Rotate180 => (size.0 - 1 - x, size.1 - 1 - y),
-            Orientation::Rotate270 => (size.1 - 1 - y, x),
-            Orientation::Transpose => (y, x),
-            Orientation::FlipVertical => (x, size.1 - 1 - y),
             Orientation::FlipHorizontal => (size.0 - 1 - x, y),
+            Orientation::Rotate180 => (size.0 - 1 - x, size.1 - 1 - y),
+            Orientation::FlipVertical => (x, size.1 - 1 - y),
+            Orientation::Transpose => (y, x),
+            Orientation::Rotate90Cw => (size.1 - 1 - y, x),
             Orientation::AntiTranspose => (size.1 - 1 - y, size.0 - 1 - x),
+            Orientation::Rotate90Ccw => (y, size.0 - 1 - x),
         }
     }
 
@@ -91,32 +91,32 @@ impl Orientation {
                 origin: (ox, oy),
                 size: (sx, sy),
             },
-            Orientation::Rotate90 => Rect {
-                origin: (oy, size.0 - sx - ox),
-                size: (sy, sx),
+            Orientation::FlipHorizontal => Rect {
+                origin: (size.0 - sx - ox, oy),
+                size: (sx, sy),
             },
             Orientation::Rotate180 => Rect {
                 origin: (size.0 - sx - ox, size.1 - sy - oy),
                 size: (sx, sy),
             },
-            Orientation::Rotate270 => Rect {
-                origin: (size.1 - sy - oy, ox),
-                size: (sy, sx),
+            Orientation::FlipVertical => Rect {
+                origin: (ox, size.1 - sy - oy),
+                size: (sx, sy),
             },
             Orientation::Transpose => Rect {
                 origin: (oy, ox),
                 size: (sy, sx),
             },
-            Orientation::FlipVertical => Rect {
-                origin: (ox, size.1 - sy - oy),
-                size: (sx, sy),
-            },
-            Orientation::FlipHorizontal => Rect {
-                origin: (size.0 - sx - ox, oy),
-                size: (sx, sy),
+            Orientation::Rotate90Cw => Rect {
+                origin: (size.1 - sy - oy, ox),
+                size: (sy, sx),
             },
             Orientation::AntiTranspose => Rect {
                 origin: (size.1 - sy - oy, size.0 - sx - ox),
+                size: (sy, sx),
+            },
+            Orientation::Rotate90Ccw => Rect {
+                origin: (oy, size.0 - sx - ox),
                 size: (sy, sx),
             },
         }
