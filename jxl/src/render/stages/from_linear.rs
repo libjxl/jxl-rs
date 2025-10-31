@@ -72,7 +72,14 @@ fn from_linear_process(tf: &TransferFunction, xsize: usize, row: &mut [&mut [f32
         }
         TransferFunction::Srgb => {
             for row in row {
-                tf::linear_to_srgb_fast(&mut row[..xsize]);
+                if D::F32Vec::LEN == 1 {
+                    tf::linear_to_srgb_fast(&mut row[..xsize]);
+                } else {
+                    tf::linear_to_srgb_simd(
+                        d,
+                        &mut row[..xsize.next_multiple_of(D::F32Vec::LEN)],
+                    );
+                }
             }
         }
         TransferFunction::Pq { intensity_target } => {

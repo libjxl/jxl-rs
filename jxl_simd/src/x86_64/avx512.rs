@@ -6,14 +6,15 @@
 use super::super::{AvxDescriptor, F32SimdVec, I32SimdVec, SimdDescriptor, SimdMask};
 use std::{
     arch::x86_64::{
-        __m512, __m512i, __mmask16, _MM_FROUND_FLOOR, _mm512_abs_epi32, _mm512_abs_ps,
+        __m512, __m512i, __mmask16, _CMP_GT_OQ, _MM_FROUND_FLOOR, _mm512_abs_epi32, _mm512_abs_ps,
         _mm512_add_epi32, _mm512_add_ps, _mm512_and_si512, _mm512_andnot_si512,
-        _mm512_castps_si512, _mm512_castsi512_ps, _mm512_cmpgt_epi32_mask, _mm512_cvtepi32_ps,
-        _mm512_cvtps_epi32, _mm512_div_ps, _mm512_fmadd_ps, _mm512_fnmadd_ps, _mm512_loadu_epi32,
-        _mm512_loadu_ps, _mm512_mask_blend_ps, _mm512_mask_loadu_ps, _mm512_mask_storeu_ps,
-        _mm512_max_ps, _mm512_mul_epi32, _mm512_mul_ps, _mm512_or_si512, _mm512_roundscale_ps,
-        _mm512_set1_epi32, _mm512_set1_ps, _mm512_setzero_ps, _mm512_sllv_epi32, _mm512_srav_epi32,
-        _mm512_storeu_ps, _mm512_sub_epi32, _mm512_sub_ps, _mm512_xor_si512,
+        _mm512_castps_si512, _mm512_castsi512_ps, _mm512_cmp_ps_mask, _mm512_cmpgt_epi32_mask,
+        _mm512_cvtepi32_ps, _mm512_cvtps_epi32, _mm512_div_ps, _mm512_fmadd_ps, _mm512_fnmadd_ps,
+        _mm512_loadu_epi32, _mm512_loadu_ps, _mm512_mask_blend_ps, _mm512_mask_loadu_ps,
+        _mm512_mask_storeu_ps, _mm512_max_ps, _mm512_mul_epi32, _mm512_mul_ps, _mm512_or_si512,
+        _mm512_roundscale_ps, _mm512_set1_epi32, _mm512_set1_ps, _mm512_setzero_ps,
+        _mm512_sllv_epi32, _mm512_sqrt_ps, _mm512_srav_epi32, _mm512_storeu_ps, _mm512_sub_epi32,
+        _mm512_sub_ps, _mm512_xor_si512,
     },
     ops::{
         Add, AddAssign, Div, DivAssign, Mul, MulAssign, Shl, ShlAssign, Shr, ShrAssign, Sub,
@@ -172,6 +173,10 @@ impl F32SimdVec for F32VecAvx512 {
         F32VecAvx512(_mm512_roundscale_ps::<{ _MM_FROUND_FLOOR }>(this.0), this.1)
     });
 
+    fn_avx!(this: F32VecAvx512, fn sqrt() -> F32VecAvx512 {
+        F32VecAvx512(_mm512_sqrt_ps(this.0), this.1)
+    });
+
     fn_avx!(this: F32VecAvx512, fn neg() -> F32VecAvx512 {
         F32VecAvx512(
             _mm512_castsi512_ps(_mm512_xor_si512(
@@ -195,6 +200,10 @@ impl F32SimdVec for F32VecAvx512 {
 
     fn_avx!(this: F32VecAvx512, fn max(other: F32VecAvx512) -> F32VecAvx512 {
         F32VecAvx512(_mm512_max_ps(this.0, other.0), this.1)
+    });
+
+    fn_avx!(this: F32VecAvx512, fn gt(other: F32VecAvx512) -> MaskAvx512 {
+        MaskAvx512(_mm512_cmp_ps_mask::<{_CMP_GT_OQ}>(this.0, other.0), this.1)
     });
 
     fn_avx!(this: F32VecAvx512, fn as_i32() -> I32VecAvx512 {
