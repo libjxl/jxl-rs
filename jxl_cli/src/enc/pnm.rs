@@ -24,7 +24,8 @@ impl ToU8ForWriting for u16 {
 
 impl ToU8ForWriting for f32 {
     fn to_u8_for_writing(self) -> u8 {
-        (self * 255.0).clamp(0.0, 255.0).round() as u8
+        // + 0.5 instead of round is fine since we clamp to non-negative
+        ((self * 255.0).clamp(0.0, 255.0) + 0.5) as u8
     }
 }
 
