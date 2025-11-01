@@ -43,16 +43,10 @@ impl Frame {
         decoder_state: DecoderState,
     ) -> Result<Self> {
         let image_metadata = &decoder_state.file_header.image_metadata;
-        let is_modular_gray = !frame_header.do_ycbcr
+        let is_gray = !frame_header.do_ycbcr
             && !image_metadata.xyb_encoded
             && image_metadata.color_encoding.color_space == ColorSpace::Gray;
-        let modular_color_channels = if frame_header.encoding == Encoding::VarDCT {
-            0
-        } else if is_modular_gray {
-            1
-        } else {
-            3
-        };
+        let color_channels = if is_gray { 1 } else { 3 };
         let size_blocks = frame_header.size_blocks();
         let lf_image = if frame_header.encoding == Encoding::VarDCT {
             if frame_header.has_lf_frame() {
@@ -124,7 +118,7 @@ impl Frame {
         Ok(Self {
             use_simple_pipeline: decoder_state.use_simple_pipeline,
             header: frame_header,
-            modular_color_channels,
+            color_channels,
             toc,
             lf_global: None,
             hf_global: None,
@@ -224,8 +218,7 @@ impl Frame {
             let size_limit = (1024
                 + self.header.width as usize
                     * self.header.height as usize
-                    * (self.modular_color_channels
-                        + self.decoder_state.extra_channel_info().len())
+                    * (self.color_channels + self.decoder_state.extra_channel_info().len())
                     / 16)
                 .min(1 << 22);
             Some(Tree::read(br, size_limit)?)
@@ -236,7 +229,7 @@ impl Frame {
         let modular_global = FullModularImage::read(
             &self.header,
             &self.decoder_state.file_header.image_metadata,
-            self.modular_color_channels,
+            self.modular_color_channels(),
             &tree,
             br,
         )?;
