@@ -187,7 +187,7 @@ impl Tree {
         })
     }
 
-    pub fn max_property(&self) -> usize {
+    pub fn max_property_count(&self) -> usize {
         self.nodes
             .iter()
             .map(|x| match x {
@@ -195,11 +195,14 @@ impl Tree {
                 TreeNode::Split { property, .. } => *property,
             })
             .max()
-            .unwrap() as usize
+            .unwrap_or_default() as usize
+            + 1
     }
 
     pub fn num_prev_channels(&self) -> usize {
-        self.max_property().saturating_sub(NUM_NONREF_PROPERTIES) / PROPERTIES_PER_PREVCHAN
+        self.max_property_count()
+            .saturating_sub(NUM_NONREF_PROPERTIES)
+            .div_ceil(PROPERTIES_PER_PREVCHAN)
     }
 
     // Note: `property_buffer` is passed as input because this implementation relies on having the

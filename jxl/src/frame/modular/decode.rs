@@ -7,7 +7,7 @@ use crate::{
     bit_reader::BitReader,
     entropy_coding::decode::SymbolReader,
     error::{Error, Result},
-    frame::quantizer::NUM_QUANT_TABLES,
+    frame::{modular::tree::PROPERTIES_PER_PREVCHAN, quantizer::NUM_QUANT_TABLES},
     headers::{JxlHeader, frame_header::FrameHeader, modular::GroupHeader},
     image::Image,
     util::tracing_wrappers::*,
@@ -21,7 +21,6 @@ use super::{
 };
 
 use num_traits::abs;
-use std::cmp::max;
 
 #[derive(Debug)]
 pub enum ModularStreamId {
@@ -106,9 +105,11 @@ fn decode_modular_channel(
     debug!("reading channel");
     let size = buffers[chan].data.size();
     let mut wp_state = WeightedPredictorState::new(&header.wp_header, size.0);
-    let mut num_ref_props =
-        max(0, tree.max_property() as i32 - NUM_NONREF_PROPERTIES as i32) as usize;
-    num_ref_props = num_ref_props.div_ceil(4) * 4;
+    let mut num_ref_props = tree
+        .max_property_count()
+        .saturating_sub(NUM_NONREF_PROPERTIES);
+    // The precompute_references function stores 4 values per reference property (offset + 0,1,2,3)
+    num_ref_props = num_ref_props.div_ceil(PROPERTIES_PER_PREVCHAN) * PROPERTIES_PER_PREVCHAN;
     let mut references = Image::<i32>::new((num_ref_props, size.0))?;
     let num_properties = NUM_NONREF_PROPERTIES + num_ref_props;
     let make_pixel =
