@@ -189,7 +189,15 @@ pub fn decode_modular_subbitstream(
         return Err(Error::NoGlobalTree);
     }
     let local_tree = if !header.use_global_tree {
-        Some(Tree::read(br, 1024)?)
+        let num_local_samples = buffers
+            .iter()
+            .map(|buf| {
+                let (width, height) = buf.channel_info().size;
+                width * height
+            })
+            .sum::<usize>();
+        let size_limit = (1024 + num_local_samples).min(1 << 20);
+        Some(Tree::read(br, size_limit)?)
     } else {
         None
     };
