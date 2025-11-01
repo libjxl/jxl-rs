@@ -98,6 +98,7 @@ impl<'a, T: ImageDataType> ImageRect<'a, T> {
         )
     }
 
+    #[inline(always)]
     pub fn row(&self, row: usize) -> &'a [T] {
         let row = self.raw.row(row);
         // SAFETY: Since self.raw.data.is_aligned(T::DATA_TYPE_ID.size()), the returned slice is
@@ -149,6 +150,7 @@ impl<'a, T: ImageDataType> ImageRectMut<'a, T> {
         )
     }
 
+    #[inline(always)]
     pub fn row(&mut self, row: usize) -> &mut [T] {
         let row = self.raw.row(row);
         // SAFETY: Since self.raw.data.is_aligned(T::DATA_TYPE_ID.size()), the returned slice is
