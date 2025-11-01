@@ -24,8 +24,9 @@ pub trait IDCT1D {
 /// Threshold for choosing scalar vs SIMD paths in DCT operations.
 /// For column counts <= this value, scalar code is faster than masked SIMD operations
 /// due to the overhead of mask setup and partial vector operations.
-/// This threshold is tuned for typical SIMD vector lengths (AVX: 8 floats, AVX-512: 16 floats).
-const SIMD_THRESHOLD: usize = 4;
+/// This threshold is tuned for typical SIMD vector lengths (AVX: 8 floats, AVX-512: 16 floats,
+/// NEON: 4 floats).
+const SIMD_THRESHOLD: usize = if cfg!(target_arch = "aarch64") { 2 } else { 4 };
 
 impl DCT1D for DCT1DImpl<1> {
     #[inline(always)]

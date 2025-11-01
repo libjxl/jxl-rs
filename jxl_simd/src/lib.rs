@@ -14,10 +14,16 @@ use std::{
 #[cfg(target_arch = "x86_64")]
 mod x86_64;
 
+#[cfg(target_arch = "aarch64")]
+mod aarch64;
+
 mod scalar;
 
 #[cfg(target_arch = "x86_64")]
 pub use x86_64::{avx::AvxDescriptor, avx512::Avx512Descriptor};
+
+#[cfg(target_arch = "aarch64")]
+pub use aarch64::neon::NeonDescriptor;
 
 pub use scalar::ScalarDescriptor;
 
@@ -467,4 +473,56 @@ mod test {
         }
     }
     test_all_instruction_sets!(test_transpose_8x8);
+
+    fn test_transpose_4x4<D: SimdDescriptor>(d: D) {
+        // Test 4x4 matrix transpose
+        // Input: sequential values 0..16
+        let mut input = vec![0.0f32; 16];
+        for (i, val) in input.iter_mut().enumerate() {
+            *val = i as f32;
+        }
+
+        let mut output = vec![0.0f32; 16];
+        d.transpose::<4, 4>(&input, &mut output);
+
+        // Verify transpose: output[i*4+j] should equal input[j*4+i]
+        for i in 0..4 {
+            for j in 0..4 {
+                let expected = input[j * 4 + i];
+                let actual = output[i * 4 + j];
+                assert_eq!(
+                    actual, expected,
+                    "Mismatch at position ({}, {}): expected {}, got {}",
+                    i, j, expected, actual
+                );
+            }
+        }
+    }
+    test_all_instruction_sets!(test_transpose_4x4);
+
+    fn test_transpose_4x8<D: SimdDescriptor>(d: D) {
+        // Test 4x8 matrix transpose
+        // Input: sequential values 0..32
+        let mut input = vec![0.0f32; 32];
+        for (i, val) in input.iter_mut().enumerate() {
+            *val = i as f32;
+        }
+
+        let mut output = vec![0.0f32; 32];
+        d.transpose::<4, 8>(&input, &mut output);
+
+        // Verify transpose: output[i*4+j] should equal input[j*8+i]
+        for i in 0..8 {
+            for j in 0..4 {
+                let expected = input[j * 8 + i];
+                let actual = output[i * 4 + j];
+                assert_eq!(
+                    actual, expected,
+                    "Mismatch at position ({}, {}): expected {}, got {}",
+                    i, j, expected, actual
+                );
+            }
+        }
+    }
+    test_all_instruction_sets!(test_transpose_4x8);
 }
