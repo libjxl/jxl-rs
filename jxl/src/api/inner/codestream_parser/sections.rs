@@ -115,7 +115,7 @@ impl CodestreamParser {
                     }
                     Section::Hf { group, pass } => {
                         if !self.section_state.hf_global_done
-                            && self.section_state.completed_passes[group] != pass as u8
+                            || self.section_state.completed_passes[group] != pass as u8
                         {
                             Some(sec)
                         } else {
