@@ -220,7 +220,7 @@ macro_rules! bench_all_instruction_sets {
         $name(
             $crate::ScalarDescriptor::new().unwrap(),
             $criterion,
-            &format!("{}_scalar", stringify!($name)),
+            "scalar",
         );
     };
 }
