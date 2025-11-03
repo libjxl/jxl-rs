@@ -7,13 +7,13 @@ pub use jxl_exr::to_exr;
 
 #[cfg(not(feature = "exr"))]
 mod jxl_exr {
-    use crate::ImageData;
+    use crate::DecodeOutput;
     use color_eyre::eyre::{Result, eyre};
     use jxl::api::JxlColorProfile;
     use std::io::{Seek, Write};
 
     pub fn to_exr<Writer: Write + Seek>(
-        _image_data: ImageData<f32>,
+        _image_data: DecodeOutput<f32>,
         _bit_depth: u32,
         _color_profile: &JxlColorProfile,
         _writer: &mut Writer,
@@ -33,16 +33,15 @@ mod jxl_exr {
     use exr::meta::attribute::Chromaticities;
     use exr::prelude::*;
 
-    use crate::ImageData;
+    use crate::DecodeOutput;
 
     pub fn to_exr<Writer: Write + Seek>(
-        image_data: ImageData<f32>,
+        image_data: &DecodeOutput<f32>,
         bit_depth: u32,
-        color_profile: &JxlColorProfile,
         writer: &mut Writer,
     ) -> Result<()> {
         let tuple_to_vec2 = |(x, y)| Vec2(x, y);
-        let chromaticities = match color_profile {
+        let chromaticities = match &image_data.output_profile {
             JxlColorProfile::Simple(JxlColorEncoding::RgbColorSpace {
                 white_point,
                 primaries,
@@ -85,19 +84,21 @@ mod jxl_exr {
         {
             return Err(Error::NoFrames).wrap_err("Invalid JXL image");
         }
-        let size = image_data.size;
-        let (width, height) = size;
+        let (width, height) = image_data.size;
         let num_channels = image_data.frames[0].channels.len();
 
         for (i, frame) in image_data.frames.iter().enumerate() {
-            assert_eq!(frame.size, size, "Frame {i} size mismatch");
             assert_eq!(
                 frame.channels.len(),
                 num_channels,
                 "Frame {i} num channels mismatch"
             );
             for (c, channel) in frame.channels.iter().enumerate() {
-                assert_eq!(channel.size(), size, "Frame {i} channel {c} size mismatch");
+                assert_eq!(
+                    channel.size(),
+                    image_data.size,
+                    "Frame {i} channel {c} size mismatch"
+                );
             }
         }
 

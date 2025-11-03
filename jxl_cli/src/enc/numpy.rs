@@ -3,7 +3,7 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-use crate::ImageData;
+use crate::DecodeOutput;
 use jxl::error::{Error, Result};
 use jxl::image::ImageRect;
 use std::io::Write;
@@ -54,18 +54,16 @@ fn numpy_header<Writer: Write>(
 }
 
 fn numpy_bytes<Writer: Write>(
-    image_data: ImageData<f32>,
+    image_data: &DecodeOutput<f32>,
     num_channels: usize,
     writer: &mut Writer,
 ) -> Result<()> {
-    let size = image_data.size;
-    let (width, height) = size;
+    let (width, height) = image_data.size;
 
-    for frame in image_data.frames {
-        assert_eq!(frame.size, size);
+    for frame in &image_data.frames {
         assert_eq!(frame.channels.len(), num_channels);
         for channel in &frame.channels {
-            assert_eq!(channel.size(), size);
+            assert_eq!(channel.size(), image_data.size);
         }
         let channel_rects: &Vec<ImageRect<'_, f32>> =
             &frame.channels.iter().map(|im| im.as_rect()).collect();
@@ -85,7 +83,7 @@ fn numpy_bytes<Writer: Write>(
 /// The data will be represented as little-endian 32-bit floats ('<f4').
 /// The shape of the NumPy array will be (num_frames, height, width, num_channels).
 ///
-pub fn to_numpy<Writer: Write>(image_data: ImageData<f32>, writer: &mut Writer) -> Result<()> {
+pub fn to_numpy<Writer: Write>(image_data: &DecodeOutput<f32>, writer: &mut Writer) -> Result<()> {
     if image_data.frames.is_empty()
         || image_data.frames[0].channels.is_empty()
         || image_data.size.0 == 0

@@ -7,7 +7,7 @@ use jxl::api::{
     JxlColorEncoding, JxlColorProfile, JxlPrimaries, JxlTransferFunction, JxlWhitePoint,
 };
 
-use crate::ImageData;
+use crate::DecodeOutput;
 use color_eyre::eyre::{Result, WrapErr, eyre};
 use jxl::error::Error;
 use jxl::headers::color_encoding::RenderingIntent;
@@ -101,12 +101,9 @@ fn make_cicp(encoding: &JxlColorEncoding) -> Option<png::CodingIndependentCodePo
 }
 
 pub fn to_png<Writer: Write>(
-    image_data: ImageData<f32>,
+    image_data: &DecodeOutput<f32>,
     bit_depth: u32,
-    color_profile: &JxlColorProfile,
     buf: &mut Writer,
-    jxl_animation: Option<&jxl::api::JxlAnimation>,
-    frame_durations: &[f64],
 ) -> Result<()> {
     if image_data.frames.is_empty()
         || image_data.frames[0].channels.is_empty()
@@ -115,24 +112,26 @@ pub fn to_png<Writer: Write>(
     {
         return Err(Error::NoFrames).wrap_err("Invalid JXL image");
     }
-    let size = image_data.size;
-    let (width, height) = size;
+    let (width, height) = image_data.size;
     let num_channels = image_data.frames[0].channels.len();
 
     for (i, frame) in image_data.frames.iter().enumerate() {
-        assert_eq!(frame.size, size, "Frame {i} size mismatch");
         assert_eq!(
             frame.channels.len(),
             num_channels,
             "Frame {i} num channels mismatch"
         );
         for (c, channel) in frame.channels.iter().enumerate() {
-            assert_eq!(channel.size(), size, "Frame {i} channel {c} size mismatch");
+            assert_eq!(
+                channel.size(),
+                image_data.size,
+                "Frame {i} channel {c} size mismatch"
+            );
         }
     }
 
     let mut info = png::Info::with_size(width as u32, height as u32);
-    match color_profile {
+    match &image_data.output_profile {
         JxlColorProfile::Simple(JxlColorEncoding::RgbColorSpace {
             white_point: JxlWhitePoint::D65,
             primaries: JxlPrimaries::SRGB,
@@ -182,7 +181,7 @@ pub fn to_png<Writer: Write>(
     } else {
         png::BitDepth::Sixteen
     });
-    if let Some(anim) = jxl_animation {
+    if let Some(anim) = &image_data.jxl_animation {
         if image_data.frames.len() > 1 {
             encoder.set_animated(image_data.frames.len() as u32, anim.num_loops)?;
         }
@@ -194,13 +193,7 @@ pub fn to_png<Writer: Write>(
     let num_pixels = height * width * num_channels;
     if eight_bits {
         let mut data: Vec<u8> = vec![0; num_pixels];
-        for (frame_idx, frame) in image_data.frames.into_iter().enumerate() {
-            if frame_idx > 0 {
-                let duration_ms = frame_durations[frame_idx - 1];
-                let (delay_num, delay_den) = calculate_apng_delay(duration_ms)?;
-                writer.set_frame_delay(delay_num, delay_den)?;
-            }
-
+        for (index, frame) in image_data.frames.iter().enumerate() {
             for y in 0..height {
                 for x in 0..width {
                     for c in 0..num_channels {
@@ -212,17 +205,15 @@ pub fn to_png<Writer: Write>(
                 }
             }
             writer.write_image_data(&data)?;
+            if index + 1 < image_data.frames.len() && image_data.frames.len() > 1 {
+                let (delay_num, delay_den) = calculate_apng_delay(frame.duration)?;
+                writer.set_frame_delay(delay_num, delay_den)?;
+            }
         }
     } else {
         // 16-bit
         let mut data: Vec<u8> = vec![0; 2 * num_pixels];
-        for (frame_idx, frame) in image_data.frames.into_iter().enumerate() {
-            if frame_idx > 0 {
-                let duration_ms = frame_durations[frame_idx - 1];
-                let (delay_num, delay_den) = calculate_apng_delay(duration_ms)?;
-                writer.set_frame_delay(delay_num, delay_den)?;
-            }
-
+        for (index, frame) in image_data.frames.iter().enumerate() {
             for y in 0..height {
                 for x in 0..width {
                     for c in 0..num_channels {
@@ -237,6 +228,10 @@ pub fn to_png<Writer: Write>(
                 }
             }
             writer.write_image_data(&data)?;
+            if index + 1 < image_data.frames.len() && image_data.frames.len() > 1 {
+                let (delay_num, delay_den) = calculate_apng_delay(frame.duration)?;
+                writer.set_frame_delay(delay_num, delay_den)?;
+            }
         }
     }
     Ok(())
