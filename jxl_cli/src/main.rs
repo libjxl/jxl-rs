@@ -5,61 +5,66 @@
 
 use clap::Parser;
 use color_eyre::eyre::{Result, WrapErr, eyre};
-use jxl::api::{JxlColorProfile, JxlColorType, JxlDecoder, JxlDecoderOptions, JxlOutputBuffer};
+use jxl::api::{
+    JxlAnimation, JxlBitDepth, JxlColorProfile, JxlColorType, JxlDecoder, JxlDecoderOptions,
+    JxlOutputBuffer,
+};
 use jxl::image::{Image, ImageDataType};
 use std::fs;
 use std::fs::File;
 use std::io::{BufWriter, Read, Write};
 use std::path::PathBuf;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 pub mod enc;
 
-fn save_icc(icc_bytes: &[u8], icc_filename: Option<PathBuf>) -> Result<()> {
+fn save_icc(icc_bytes: &[u8], icc_filename: Option<&PathBuf>) -> Result<()> {
     icc_filename.map_or(Ok(()), |path| {
-        std::fs::write(&path, icc_bytes)
+        std::fs::write(path, icc_bytes)
             .wrap_err_with(|| format!("Failed to write ICC profile to {:?}", path))
     })
 }
 
 pub struct ImageFrame<T: ImageDataType> {
-    pub size: (usize, usize),
     pub channels: Vec<Image<T>>,
+    pub duration: f64,
 }
 
-pub struct ImageData<T: ImageDataType> {
+pub struct DecodeOutput<T: ImageDataType> {
     pub size: (usize, usize),
     pub frames: Vec<ImageFrame<T>>,
+    pub original_bit_depth: JxlBitDepth,
+    pub output_profile: JxlColorProfile,
+    pub jxl_animation: Option<JxlAnimation>,
+    pub original_icc_result: Result<()>,
+    pub data_icc_result: Result<()>,
 }
 
 fn save_image(
-    image_data: ImageData<f32>,
+    image_data: &DecodeOutput<f32>,
     bit_depth: u32,
-    color_profile: &JxlColorProfile,
     output_filename: &PathBuf,
 ) -> Result<()> {
     let fn_str = output_filename.to_string_lossy();
     let mut writer = BufWriter::new(File::create(output_filename)?);
     if fn_str.ends_with(".exr") {
-        enc::exr::to_exr(image_data, bit_depth, color_profile, &mut writer)?;
+        enc::exr::to_exr(image_data, bit_depth, &mut writer)?;
     } else if fn_str.ends_with(".ppm") {
-        if image_data.frames.len() == 1 {
-            assert_eq!(image_data.frames[0].size, image_data.size);
-            if let [r, g, b] = &image_data.frames[0].channels[..] {
-                enc::pnm::to_ppm_as_8bit(&[r.as_rect(), g.as_rect(), b.as_rect()], &mut writer)?;
-            }
+        if image_data.frames.len() == 1
+            && let [r, g, b] = &image_data.frames[0].channels[..]
+        {
+            enc::pnm::to_ppm_as_8bit(&[r.as_rect(), g.as_rect(), b.as_rect()], &mut writer)?;
         }
     } else if fn_str.ends_with(".pgm") {
-        if image_data.frames.len() == 1 {
-            assert_eq!(image_data.frames[0].size, image_data.size);
-            if let [g] = &image_data.frames[0].channels[..] {
-                enc::pnm::to_pgm_as_8bit(&g.as_rect(), &mut writer)?;
-            }
+        if image_data.frames.len() == 1
+            && let [g] = &image_data.frames[0].channels[..]
+        {
+            enc::pnm::to_pgm_as_8bit(&g.as_rect(), &mut writer)?;
         }
     } else if fn_str.ends_with(".npy") {
         enc::numpy::to_numpy(image_data, &mut writer)?;
     } else if fn_str.ends_with(".png") {
-        enc::png::to_png(image_data, bit_depth, color_profile, &mut writer)?;
+        enc::png::to_png(image_data, bit_depth, &mut writer)?;
     } else {
         return Err(eyre!(
             "Output format not supported for {:?}",
@@ -83,6 +88,10 @@ struct Opt {
     /// Print measured decoding speed..
     #[clap(long, short, action)]
     speedtest: bool,
+
+    /// Number of times to repeat the decoding.
+    #[clap(long, short)]
+    num_reps: Option<u32>,
 
     ///  If specified, writes the ICC profile of the decoded image
     #[clap(long)]
@@ -124,34 +133,14 @@ fn planes_from_interleaved(interleaved: &Image<f32>) -> Result<Vec<Image<f32>>> 
     Ok(vec![r_image, g_image, b_image])
 }
 
-fn main() -> Result<()> {
-    #[cfg(feature = "tracing-subscriber")]
-    {
-        use tracing_subscriber::{EnvFilter, fmt, prelude::*};
-        tracing_subscriber::registry()
-            .with(fmt::layer())
-            .with(EnvFilter::from_default_env())
-            .init();
-    }
-
-    let opt = Opt::parse();
-    let mut file = fs::File::open(opt.input.clone())
-        .wrap_err_with(|| format!("Failed to read source image from {:?}", opt.input))?;
-
-    let (numpy_output, exr_output) = match &opt.output.as_ref().map(|p| p.to_string_lossy()) {
-        Some(path) => (path.ends_with(".npy"), path.ends_with(".exr")),
-        None => (false, false),
-    };
-    let mut options = JxlDecoderOptions::default();
-    options.xyb_output_linear = numpy_output || exr_output;
-    options.render_spot_colors = !numpy_output;
-    let mut input_bytes = Vec::<u8>::new();
-    file.read_to_end(&mut input_bytes)?;
-    let mut input_buffer = input_bytes.as_slice();
-
+fn decode_bytes(
+    mut input_buffer: &[u8],
+    decoder_options: JxlDecoderOptions,
+    cli_opt: &Opt,
+) -> Result<(DecodeOutput<f32>, Duration)> {
     let start = Instant::now();
 
-    let mut initialized_decoder = JxlDecoder::<jxl::api::states::Initialized>::new(options);
+    let mut initialized_decoder = JxlDecoder::<jxl::api::states::Initialized>::new(decoder_options);
 
     // Process until we have image info
     let mut decoder_with_image_info = loop {
@@ -159,19 +148,32 @@ fn main() -> Result<()> {
             jxl::api::ProcessingResult::Complete { result } => break Ok(result),
             jxl::api::ProcessingResult::NeedsMoreInput { fallback, .. } => {
                 if input_buffer.is_empty() {
-                    break Err(eyre!("Source file {:?} truncated", opt.input));
+                    break Err(eyre!("Source file {:?} truncated", cli_opt.input));
                 }
                 initialized_decoder = fallback;
             }
         }
     }?;
 
+    let info = decoder_with_image_info.basic_info();
     let embedded_profile = decoder_with_image_info.embedded_color_profile();
     let output_profile = decoder_with_image_info.output_color_profile().clone();
-    let info = decoder_with_image_info.basic_info();
-    let num_pixels = info.size.0 * info.size.1;
+    let data_icc_result = save_icc(output_profile.as_icc().as_slice(), cli_opt.icc_out.as_ref());
+
+    let mut image_data = DecodeOutput {
+        size: info.size,
+        frames: Vec::new(),
+        original_bit_depth: info.bit_depth.clone(),
+        output_profile,
+        jxl_animation: info.animation.clone(),
+        original_icc_result: save_icc(
+            embedded_profile.as_icc().as_slice(),
+            cli_opt.original_icc_out.as_ref(),
+        ),
+        data_icc_result,
+    };
+
     let extra_channels = info.extra_channels.len();
-    let original_bit_depth = info.bit_depth.clone();
     let pixel_format = decoder_with_image_info.current_pixel_format().clone();
     let color_type = pixel_format.color_type;
     // TODO(zond): This is the way the API works right now, let's improve it when the API is cleverer.
@@ -181,27 +183,20 @@ fn main() -> Result<()> {
         3
     };
 
-    let original_icc_result = save_icc(embedded_profile.as_icc().as_slice(), opt.original_icc_out);
-    let data_icc = output_profile.as_icc();
-    let data_icc_result = save_icc(data_icc.as_slice(), opt.icc_out);
-
-    let mut image_data = ImageData {
-        size: info.size,
-        frames: Vec::new(),
-    };
-
     loop {
         let mut decoder_with_frame_info = loop {
             match decoder_with_image_info.process(&mut input_buffer).unwrap() {
                 jxl::api::ProcessingResult::Complete { result } => break Ok(result),
                 jxl::api::ProcessingResult::NeedsMoreInput { fallback, .. } => {
                     if input_buffer.is_empty() {
-                        break Err(eyre!("Source file {:?} truncated", opt.input));
+                        break Err(eyre!("Source file {:?} truncated", cli_opt.input));
                     }
                     decoder_with_image_info = fallback;
                 }
             }
         }?;
+
+        let frame_header = decoder_with_frame_info.frame_header();
 
         let mut outputs = vec![Image::<f32>::new((
             image_data.size.0 * samples_per_pixel,
@@ -225,7 +220,7 @@ fn main() -> Result<()> {
                 jxl::api::ProcessingResult::Complete { result } => break Ok(result),
                 jxl::api::ProcessingResult::NeedsMoreInput { fallback, .. } => {
                     if input_buffer.is_empty() {
-                        break Err(eyre!("Source file {:?} truncated", opt.input));
+                        break Err(eyre!("Source file {:?} truncated", cli_opt.input));
                     }
                     decoder_with_frame_info = fallback;
                 }
@@ -233,7 +228,7 @@ fn main() -> Result<()> {
         }?;
 
         let mut image_frame = ImageFrame {
-            size: image_data.size,
+            duration: frame_header.duration.unwrap_or(0.0),
             channels: Vec::new(),
         };
 
@@ -256,28 +251,73 @@ fn main() -> Result<()> {
             break;
         }
     }
+    let duration = start.elapsed();
+
+    Ok((image_data, duration))
+}
+
+fn main() -> Result<()> {
+    #[cfg(feature = "tracing-subscriber")]
+    {
+        use tracing_subscriber::{EnvFilter, fmt, prelude::*};
+        tracing_subscriber::registry()
+            .with(fmt::layer())
+            .with(EnvFilter::from_default_env())
+            .init();
+    }
+
+    let opt = Opt::parse();
+    let mut file = fs::File::open(opt.input.clone())
+        .wrap_err_with(|| format!("Failed to read source image from {:?}", opt.input))?;
+
+    let (numpy_output, exr_output) = match &opt.output.as_ref().map(|p| p.to_string_lossy()) {
+        Some(path) => (path.ends_with(".npy"), path.ends_with(".exr")),
+        None => (false, false),
+    };
+    let options = || {
+        let mut options = JxlDecoderOptions::default();
+        options.xyb_output_linear = numpy_output || exr_output;
+        options.render_spot_colors = !numpy_output;
+        options
+    };
+    let mut input_bytes = Vec::<u8>::new();
+    file.read_to_end(&mut input_bytes)?;
+    let input_buffer = input_bytes.as_slice();
+
+    let reps = opt.num_reps.unwrap_or(1);
+    let mut duration_sum = Duration::new(0, 0);
+    let image_data = (0..reps)
+        .try_fold(None, |_, _| -> Result<Option<DecodeOutput<f32>>> {
+            let (iteration_image_data, iteration_duration) =
+                decode_bytes(input_buffer, options(), &opt)?;
+            duration_sum += iteration_duration;
+            Ok(Some(iteration_image_data))
+        })?
+        .unwrap();
 
     if opt.speedtest {
-        let duration = start.elapsed().as_nanos() as f64 / 1e9;
+        let num_pixels = image_data.size.0 * image_data.size.1;
+        let duration_seconds = duration_sum.as_nanos() as f64 / 1e9;
+        let avg_seconds = duration_seconds / reps as f64;
         println!(
             "Decoded {} pixels in {} seconds: {} pixels/s",
-            num_pixels,
-            duration,
-            num_pixels as f64 / duration
+            reps as usize * num_pixels,
+            duration_seconds,
+            num_pixels as f64 / avg_seconds
         );
     }
 
     let image_result: Option<Result<()>> = opt.output.map(|path| {
         let output_bit_depth = match opt.override_bitdepth {
-            None => original_bit_depth.bits_per_sample(),
+            None => image_data.original_bit_depth.bits_per_sample(),
             Some(num_bits) => num_bits,
         };
-        let image_result = save_image(image_data, output_bit_depth, &output_profile, &path);
+        let image_result = save_image(&image_data, output_bit_depth, &path);
 
-        if let Err(ref err) = original_icc_result {
+        if let Err(err) = &image_data.original_icc_result {
             println!("Failed to save original ICC profile: {err}");
         }
-        if let Err(ref err) = data_icc_result {
+        if let Err(err) = &image_data.data_icc_result {
             println!("Failed to save data ICC profile: {err}");
         }
         if let Err(ref err) = image_result {
@@ -286,8 +326,8 @@ fn main() -> Result<()> {
         image_result
     });
 
-    original_icc_result?;
-    data_icc_result?;
+    image_data.original_icc_result?;
+    image_data.data_icc_result?;
 
     image_result.unwrap_or(Ok(()))?;
 

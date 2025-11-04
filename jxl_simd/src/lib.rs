@@ -5,7 +5,10 @@
 
 use std::{
     fmt::Debug,
-    ops::{Add, AddAssign, Div, DivAssign, Mul, MulAssign, Sub, SubAssign},
+    ops::{
+        Add, AddAssign, Div, DivAssign, Mul, MulAssign, Shl, ShlAssign, Shr, ShrAssign, Sub,
+        SubAssign,
+    },
 };
 
 #[cfg(target_arch = "x86_64")]
@@ -21,9 +24,9 @@ pub use scalar::ScalarDescriptor;
 pub trait SimdDescriptor: Sized + Copy + Debug + Send + Sync {
     type F32Vec: F32SimdVec<Descriptor = Self>;
 
-    type I32Vec: I32SimdVec<Descriptor = Self, F32Vec = Self::F32Vec, Mask = Self::Mask>;
+    type I32Vec: I32SimdVec<Descriptor = Self>;
 
-    type Mask: SimdMask<Descriptor = Self, F32Vec = Self::F32Vec, I32Vec = Self::I32Vec>;
+    type Mask: SimdMask<Descriptor = Self>;
 
     fn new() -> Option<Self>;
 
@@ -57,6 +60,8 @@ pub trait F32SimdVec:
     /// Converts v to an array of v.
     fn splat(d: Self::Descriptor, v: f32) -> Self;
 
+    fn zero(d: Self::Descriptor) -> Self;
+
     fn mul_add(self, mul: Self, add: Self) -> Self;
 
     /// Computes `add - self * mul`, equivalent to `self * (-mul) + add`.
@@ -77,11 +82,23 @@ pub trait F32SimdVec:
 
     fn abs(self) -> Self;
 
+    fn floor(self) -> Self;
+
+    fn sqrt(self) -> Self;
+
     /// Negates all elements. Currently unused but kept for API completeness.
     #[allow(dead_code)]
     fn neg(self) -> Self;
 
+    fn copysign(self, sign: Self) -> Self;
+
     fn max(self, other: Self) -> Self;
+
+    fn gt(self, other: Self) -> <<Self as F32SimdVec>::Descriptor as SimdDescriptor>::Mask;
+
+    fn as_i32(self) -> <<Self as F32SimdVec>::Descriptor as SimdDescriptor>::I32Vec;
+
+    fn bitcast_to_i32(self) -> <<Self as F32SimdVec>::Descriptor as SimdDescriptor>::I32Vec;
 }
 
 pub trait I32SimdVec:
@@ -93,15 +110,15 @@ pub trait I32SimdVec:
     + Add<Self, Output = Self>
     + Mul<Self, Output = Self>
     + Sub<Self, Output = Self>
+    + Shl<Self, Output = Self>
+    + Shr<Self, Output = Self>
     + AddAssign<Self>
     + MulAssign<Self>
     + SubAssign<Self>
+    + ShlAssign<Self>
+    + ShrAssign<Self>
 {
     type Descriptor: SimdDescriptor;
-
-    type F32Vec: F32SimdVec;
-
-    type Mask: SimdMask;
 
     #[allow(dead_code)]
     const LEN: usize;
@@ -114,19 +131,21 @@ pub trait I32SimdVec:
 
     fn abs(self) -> Self;
 
-    fn as_f32(self) -> Self::F32Vec;
+    fn as_f32(self) -> <<Self as I32SimdVec>::Descriptor as SimdDescriptor>::F32Vec;
 
-    fn gt(self, other: Self) -> Self::Mask;
+    fn bitcast_to_f32(self) -> <<Self as I32SimdVec>::Descriptor as SimdDescriptor>::F32Vec;
+
+    fn gt(self, other: Self) -> <<Self as I32SimdVec>::Descriptor as SimdDescriptor>::Mask;
 }
 
 pub trait SimdMask: Sized + Copy + Debug + Send + Sync {
     type Descriptor: SimdDescriptor;
 
-    type F32Vec: F32SimdVec;
-
-    type I32Vec: I32SimdVec;
-
-    fn if_then_else_f32(self, if_true: Self::F32Vec, if_false: Self::F32Vec) -> Self::F32Vec;
+    fn if_then_else_f32(
+        self,
+        if_true: <<Self as SimdMask>::Descriptor as SimdDescriptor>::F32Vec,
+        if_false: <<Self as SimdMask>::Descriptor as SimdDescriptor>::F32Vec,
+    ) -> <<Self as SimdMask>::Descriptor as SimdDescriptor>::F32Vec;
 }
 
 #[cfg(test)]

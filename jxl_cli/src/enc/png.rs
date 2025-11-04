@@ -7,13 +7,43 @@ use jxl::api::{
     JxlColorEncoding, JxlColorProfile, JxlPrimaries, JxlTransferFunction, JxlWhitePoint,
 };
 
-use crate::ImageData;
+use crate::DecodeOutput;
 use color_eyre::eyre::{Result, WrapErr, eyre};
 use jxl::error::Error;
 use jxl::headers::color_encoding::RenderingIntent;
 
 use std::borrow::Cow;
 use std::io::Write;
+
+fn gcd(a: u64, b: u64) -> u64 {
+    if b == 0 { a } else { gcd(b, a % b) }
+}
+
+fn calculate_apng_delay(duration_ms: f64) -> Result<(u16, u16)> {
+    if duration_ms < 0.0 {
+        return Err(eyre!("Negative frame duration: {}", duration_ms));
+    }
+    if duration_ms == 0.0 {
+        return Ok((0, 1));
+    }
+
+    let mut num = duration_ms.round() as u64;
+    let mut den = 1000u64;
+
+    let common = gcd(num, den);
+    num /= common;
+    den /= common;
+
+    if num > u16::MAX as u64 || den > u16::MAX as u64 {
+        Err(eyre!(
+            "APNG frame delay overflow after GCD: {}/{}",
+            num,
+            den
+        ))
+    } else {
+        Ok((num as u16, den as u16))
+    }
+}
 
 fn png_color(num_channels: usize) -> Result<png::ColorType> {
     match num_channels {
@@ -71,9 +101,8 @@ fn make_cicp(encoding: &JxlColorEncoding) -> Option<png::CodingIndependentCodePo
 }
 
 pub fn to_png<Writer: Write>(
-    image_data: ImageData<f32>,
+    image_data: &DecodeOutput<f32>,
     bit_depth: u32,
-    color_profile: &JxlColorProfile,
     buf: &mut Writer,
 ) -> Result<()> {
     if image_data.frames.is_empty()
@@ -83,24 +112,26 @@ pub fn to_png<Writer: Write>(
     {
         return Err(Error::NoFrames).wrap_err("Invalid JXL image");
     }
-    let size = image_data.size;
-    let (width, height) = size;
+    let (width, height) = image_data.size;
     let num_channels = image_data.frames[0].channels.len();
 
     for (i, frame) in image_data.frames.iter().enumerate() {
-        assert_eq!(frame.size, size, "Frame {i} size mismatch");
         assert_eq!(
             frame.channels.len(),
             num_channels,
             "Frame {i} num channels mismatch"
         );
         for (c, channel) in frame.channels.iter().enumerate() {
-            assert_eq!(channel.size(), size, "Frame {i} channel {c} size mismatch");
+            assert_eq!(
+                channel.size(),
+                image_data.size,
+                "Frame {i} channel {c} size mismatch"
+            );
         }
     }
 
     let mut info = png::Info::with_size(width as u32, height as u32);
-    match color_profile {
+    match &image_data.output_profile {
         JxlColorProfile::Simple(JxlColorEncoding::RgbColorSpace {
             white_point: JxlWhitePoint::D65,
             primaries: JxlPrimaries::SRGB,
@@ -150,35 +181,46 @@ pub fn to_png<Writer: Write>(
     } else {
         png::BitDepth::Sixteen
     });
-    if image_data.frames.len() > 1 {
+    if let Some(anim) = &image_data.jxl_animation {
+        if image_data.frames.len() > 1 {
+            encoder.set_animated(image_data.frames.len() as u32, anim.num_loops)?;
+        }
+    } else if image_data.frames.len() > 1 {
         encoder.set_animated(image_data.frames.len() as u32, 0)?;
     }
     let mut writer = encoder.write_header()?;
+
     let num_pixels = height * width * num_channels;
     if eight_bits {
         let mut data: Vec<u8> = vec![0; num_pixels];
-        for frame in image_data.frames {
+        for (index, frame) in image_data.frames.iter().enumerate() {
             for y in 0..height {
                 for x in 0..width {
                     for c in 0..num_channels {
+                        // + 0.5 instead of round is fine since we clamp to non-negative
                         data[(y * width + x) * num_channels + c] =
-                            (frame.channels[c].as_rect().row(y)[x] * 255.0)
-                                .clamp(0.0, 255.0)
-                                .round() as u8;
+                            ((frame.channels[c].as_rect().row(y)[x] * 255.0).clamp(0.0, 255.0)
+                                + 0.5) as u8;
                     }
                 }
             }
             writer.write_image_data(&data)?;
+            if index + 1 < image_data.frames.len() && image_data.frames.len() > 1 {
+                let (delay_num, delay_den) = calculate_apng_delay(frame.duration)?;
+                writer.set_frame_delay(delay_num, delay_den)?;
+            }
         }
     } else {
+        // 16-bit
         let mut data: Vec<u8> = vec![0; 2 * num_pixels];
-        for frame in image_data.frames {
+        for (index, frame) in image_data.frames.iter().enumerate() {
             for y in 0..height {
                 for x in 0..width {
                     for c in 0..num_channels {
-                        let pixel = (frame.channels[c].as_rect().row(y)[x] * 65535.0)
+                        // + 0.5 instead of round is fine since we clamp to non-negative
+                        let pixel = ((frame.channels[c].as_rect().row(y)[x] * 65535.0)
                             .clamp(0.0, 65535.0)
-                            .round() as u16;
+                            + 0.5) as u16;
                         let index = 2 * ((y * width + x) * num_channels + c);
                         data[index] = (pixel >> 8) as u8;
                         data[index + 1] = (pixel & 0xFF) as u8;
@@ -186,6 +228,10 @@ pub fn to_png<Writer: Write>(
                 }
             }
             writer.write_image_data(&data)?;
+            if index + 1 < image_data.frames.len() && image_data.frames.len() > 1 {
+                let (delay_num, delay_den) = calculate_apng_delay(frame.duration)?;
+                writer.set_frame_delay(delay_num, delay_den)?;
+            }
         }
     }
     Ok(())

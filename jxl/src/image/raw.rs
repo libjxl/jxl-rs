@@ -76,6 +76,7 @@ pub struct RawImageRect<'a> {
 }
 
 impl<'a> RawImageRect<'a> {
+    #[inline(always)]
     pub fn row(&self, row: usize) -> &[u8] {
         // SAFETY: we have shared access to the accessible bytes of `self.data`.
         let row = unsafe { self.data.row(row) };
@@ -107,6 +108,7 @@ pub struct RawImageRectMut<'a> {
 }
 
 impl<'a> RawImageRectMut<'a> {
+    #[inline(always)]
     pub fn row(&mut self, row: usize) -> &mut [u8] {
         // SAFETY: we don't write uninit data to `row`, and we have exclusive access to the accessible
         // bytes of `self.data`.

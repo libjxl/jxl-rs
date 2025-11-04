@@ -6,16 +6,20 @@
 use super::super::{F32SimdVec, I32SimdVec, ScalarDescriptor, SimdDescriptor, SimdMask};
 use std::{
     arch::x86_64::{
-        __m256, __m256i, _mm_loadu_ps, _mm_storeu_ps, _mm_unpackhi_ps, _mm_unpacklo_ps,
-        _mm256_abs_epi32, _mm256_add_epi32, _mm256_add_ps, _mm256_andnot_si256, _mm256_blendv_ps,
-        _mm256_castps_si256, _mm256_castsi256_ps, _mm256_cmpgt_epi32, _mm256_cvtepi32_ps,
-        _mm256_div_ps, _mm256_fmadd_ps, _mm256_fnmadd_ps, _mm256_loadu_ps, _mm256_loadu_si256,
-        _mm256_maskload_ps, _mm256_maskstore_ps, _mm256_max_ps, _mm256_mul_epi32, _mm256_mul_ps,
-        _mm256_permute2f128_ps, _mm256_set1_epi32, _mm256_set1_ps, _mm256_shuffle_ps,
-        _mm256_storeu_ps, _mm256_sub_epi32, _mm256_sub_ps, _mm256_unpackhi_ps, _mm256_unpacklo_ps,
-        _mm256_xor_si256,
+        __m256, __m256i, _CMP_GT_OQ, _mm_loadu_ps, _mm_storeu_ps, _mm_unpackhi_ps, _mm_unpacklo_ps,
+        _mm256_abs_epi32, _mm256_add_epi32, _mm256_add_ps, _mm256_and_ps, _mm256_andnot_ps,
+        _mm256_blendv_ps, _mm256_castps_si256, _mm256_castsi256_ps, _mm256_cmp_ps,
+        _mm256_cmpgt_epi32, _mm256_cvtepi32_ps, _mm256_cvtps_epi32, _mm256_div_ps, _mm256_floor_ps,
+        _mm256_fmadd_ps, _mm256_fnmadd_ps, _mm256_loadu_ps, _mm256_loadu_si256, _mm256_maskload_ps,
+        _mm256_maskstore_ps, _mm256_max_ps, _mm256_mul_epi32, _mm256_mul_ps, _mm256_or_ps,
+        _mm256_permute2f128_ps, _mm256_set1_epi32, _mm256_set1_ps, _mm256_setzero_ps,
+        _mm256_shuffle_ps, _mm256_sllv_epi32, _mm256_sqrt_ps, _mm256_srav_epi32, _mm256_storeu_ps,
+        _mm256_sub_epi32, _mm256_sub_ps, _mm256_unpackhi_ps, _mm256_unpacklo_ps, _mm256_xor_ps,
     },
-    ops::{Add, AddAssign, Div, DivAssign, Mul, MulAssign, Sub, SubAssign},
+    ops::{
+        Add, AddAssign, Div, DivAssign, Mul, MulAssign, Shl, ShlAssign, Shr, ShrAssign, Sub,
+        SubAssign,
+    },
 };
 
 // Safety invariant: this type is only ever constructed if avx2 and fma are available.
@@ -318,26 +322,53 @@ impl F32SimdVec for F32VecAvx {
         unsafe { Self(_mm256_set1_ps(v), d) }
     }
 
+    #[inline(always)]
+    fn zero(d: Self::Descriptor) -> Self {
+        // SAFETY: We know avx is available from the safety invariant on `d`.
+        unsafe { Self(_mm256_setzero_ps(), d) }
+    }
+
     fn_avx!(this: F32VecAvx, fn abs() -> F32VecAvx {
-        F32VecAvx(
-            _mm256_castsi256_ps(_mm256_andnot_si256(
-                _mm256_set1_epi32(i32::MIN),
-                _mm256_castps_si256(this.0),
-            )),
-            this.1)
+        F32VecAvx(_mm256_andnot_ps(_mm256_set1_ps(-0.0), this.0), this.1)
+    });
+
+    fn_avx!(this: F32VecAvx, fn floor() -> F32VecAvx {
+        F32VecAvx(_mm256_floor_ps(this.0), this.1)
+    });
+
+    fn_avx!(this: F32VecAvx, fn sqrt() -> F32VecAvx {
+        F32VecAvx(_mm256_sqrt_ps(this.0), this.1)
     });
 
     fn_avx!(this: F32VecAvx, fn neg() -> F32VecAvx {
+        F32VecAvx(_mm256_xor_ps(_mm256_set1_ps(-0.0), this.0), this.1)
+    });
+
+    fn_avx!(this: F32VecAvx, fn copysign(sign: F32VecAvx) -> F32VecAvx {
+        let sign_mask = _mm256_castsi256_ps(_mm256_set1_epi32(i32::MIN));
         F32VecAvx(
-            _mm256_castsi256_ps(_mm256_xor_si256(
-                _mm256_set1_epi32(i32::MIN),
-                _mm256_castps_si256(this.0),
-            )),
-            this.1)
+            _mm256_or_ps(
+                _mm256_andnot_ps(sign_mask, this.0),
+                _mm256_and_ps(sign_mask, sign.0),
+            ),
+            this.1,
+        )
     });
 
     fn_avx!(this: F32VecAvx, fn max(other: F32VecAvx) -> F32VecAvx {
         F32VecAvx(_mm256_max_ps(this.0, other.0), this.1)
+    });
+
+    fn_avx!(this: F32VecAvx, fn gt(other: F32VecAvx) -> MaskAvx {
+        MaskAvx(_mm256_cmp_ps::<{_CMP_GT_OQ}>(this.0, other.0), this.1)
+    });
+
+    fn_avx!(this: F32VecAvx, fn as_i32() -> I32VecAvx {
+        I32VecAvx(_mm256_cvtps_epi32(this.0), this.1)
+    });
+
+    fn_avx!(this: F32VecAvx, fn bitcast_to_i32() -> I32VecAvx {
+        I32VecAvx(_mm256_castps_si256(this.0), this.1)
     });
 }
 
@@ -399,8 +430,6 @@ pub struct I32VecAvx(__m256i, AvxDescriptor);
 
 impl I32SimdVec for I32VecAvx {
     type Descriptor = AvxDescriptor;
-    type F32Vec = F32VecAvx;
-    type Mask = MaskAvx;
 
     const LEN: usize = 8;
 
@@ -422,11 +451,13 @@ impl I32SimdVec for I32VecAvx {
         F32VecAvx(_mm256_cvtepi32_ps(this.0), this.1)
     });
 
+    fn_avx!(this: I32VecAvx, fn bitcast_to_f32() -> F32VecAvx {
+        F32VecAvx(_mm256_castsi256_ps(this.0), this.1)
+    });
+
     fn_avx!(this: I32VecAvx, fn abs() -> I32VecAvx {
         I32VecAvx(
-            _mm256_abs_epi32(
-                this.0,
-            ),
+            _mm256_abs_epi32(this.0),
             this.1)
     });
 
@@ -459,6 +490,20 @@ impl Mul<I32VecAvx> for I32VecAvx {
     });
 }
 
+impl Shl<I32VecAvx> for I32VecAvx {
+    type Output = I32VecAvx;
+    fn_avx!(this: I32VecAvx, fn shl(rhs: I32VecAvx) -> I32VecAvx {
+        I32VecAvx(_mm256_sllv_epi32(this.0, rhs.0), this.1)
+    });
+}
+
+impl Shr<I32VecAvx> for I32VecAvx {
+    type Output = I32VecAvx;
+    fn_avx!(this: I32VecAvx, fn shr(rhs: I32VecAvx) -> I32VecAvx {
+        I32VecAvx(_mm256_srav_epi32(this.0, rhs.0), this.1)
+    });
+}
+
 impl AddAssign<I32VecAvx> for I32VecAvx {
     fn_avx!(this: &mut I32VecAvx, fn add_assign(rhs: I32VecAvx) {
         this.0 = _mm256_add_epi32(this.0, rhs.0)
@@ -477,10 +522,20 @@ impl MulAssign<I32VecAvx> for I32VecAvx {
     });
 }
 
+impl ShlAssign<I32VecAvx> for I32VecAvx {
+    fn_avx!(this: &mut I32VecAvx, fn shl_assign(rhs: I32VecAvx) {
+        this.0 = _mm256_sllv_epi32(this.0, rhs.0)
+    });
+}
+
+impl ShrAssign<I32VecAvx> for I32VecAvx {
+    fn_avx!(this: &mut I32VecAvx, fn shr_assign(rhs: I32VecAvx) {
+        this.0 = _mm256_srav_epi32(this.0, rhs.0)
+    });
+}
+
 impl SimdMask for MaskAvx {
     type Descriptor = AvxDescriptor;
-    type F32Vec = F32VecAvx;
-    type I32Vec = I32VecAvx;
 
     fn_avx!(this: MaskAvx, fn if_then_else_f32(if_true: F32VecAvx, if_false: F32VecAvx) -> F32VecAvx {
         F32VecAvx(_mm256_blendv_ps(if_false.0, if_true.0, this.0), this.1)

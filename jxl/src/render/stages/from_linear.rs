@@ -6,6 +6,7 @@
 use crate::color::tf;
 use crate::headers::color_encoding::CustomTransferFunction;
 use crate::render::RenderPipelineInPlaceStage;
+use jxl_simd::{F32SimdVec, simd_function};
 
 /// Apply transfer function to display-referred linear color samples.
 #[derive(Debug)]
@@ -52,6 +53,70 @@ impl std::fmt::Display for FromLinearStage {
     }
 }
 
+simd_function!(
+from_linear_process_dispatch,
+d: D,
+fn from_linear_process(tf: &TransferFunction, xsize: usize, row: &mut [&mut [f32]]) {
+    let [row_r, row_g, row_b] = row else {
+        panic!(
+            "incorrect number of channels; expected 3, found {}",
+            row.len()
+        );
+    };
+
+    match *tf {
+        TransferFunction::Bt709 => {
+            for row in row {
+                tf::linear_to_bt709(&mut row[..xsize]);
+            }
+        }
+        TransferFunction::Srgb => {
+            for row in row {
+                if D::F32Vec::LEN == 1 {
+                    tf::linear_to_srgb_fast(&mut row[..xsize]);
+                } else {
+                    tf::linear_to_srgb_simd(
+                        d,
+                        &mut row[..xsize.next_multiple_of(D::F32Vec::LEN)],
+                    );
+                }
+            }
+        }
+        TransferFunction::Pq { intensity_target } => {
+            for row in row {
+                tf::linear_to_pq(intensity_target, &mut row[..xsize]);
+            }
+        }
+        TransferFunction::Hlg {
+            intensity_target,
+            luminance_rgb,
+        } => {
+            let rows = [
+                &mut row_r[..xsize],
+                &mut row_g[..xsize],
+                &mut row_b[..xsize],
+            ];
+            tf::hlg_display_to_scene(intensity_target, luminance_rgb, rows);
+
+            tf::scene_to_hlg(&mut row_r[..xsize]);
+            tf::scene_to_hlg(&mut row_g[..xsize]);
+            tf::scene_to_hlg(&mut row_b[..xsize]);
+        }
+        TransferFunction::Gamma(g) => {
+            for row in row {
+                for values in row[..xsize.next_multiple_of(D::F32Vec::LEN)]
+                    .chunks_exact_mut(D::F32Vec::LEN)
+                {
+                    let v = D::F32Vec::load(d, values);
+                    crate::util::fast_powf_simd(d, v.abs(), D::F32Vec::splat(d, g))
+                        .copysign(v)
+                        .store(values);
+                }
+            }
+        }
+    }
+});
+
 impl RenderPipelineInPlaceStage for FromLinearStage {
     type Type = f32;
 
@@ -66,52 +131,7 @@ impl RenderPipelineInPlaceStage for FromLinearStage {
         row: &mut [&mut [f32]],
         _state: Option<&mut dyn std::any::Any>,
     ) {
-        let [row_r, row_g, row_b] = row else {
-            panic!(
-                "incorrect number of channels; expected 3, found {}",
-                row.len()
-            );
-        };
-
-        match self.tf {
-            TransferFunction::Bt709 => {
-                for row in row {
-                    tf::linear_to_bt709(&mut row[..xsize]);
-                }
-            }
-            TransferFunction::Srgb => {
-                for row in row {
-                    tf::linear_to_srgb_fast(&mut row[..xsize]);
-                }
-            }
-            TransferFunction::Pq { intensity_target } => {
-                for row in row {
-                    tf::linear_to_pq(intensity_target, &mut row[..xsize]);
-                }
-            }
-            TransferFunction::Hlg {
-                intensity_target,
-                luminance_rgb,
-            } => {
-                let rows = [
-                    &mut row_r[..xsize],
-                    &mut row_g[..xsize],
-                    &mut row_b[..xsize],
-                ];
-                tf::hlg_display_to_scene(intensity_target, luminance_rgb, rows);
-
-                tf::scene_to_hlg(&mut row_r[..xsize]);
-                tf::scene_to_hlg(&mut row_g[..xsize]);
-                tf::scene_to_hlg(&mut row_b[..xsize]);
-            }
-            TransferFunction::Gamma(g) => {
-                for row in row {
-                    for v in &mut row[..xsize] {
-                        *v = crate::util::fast_powf(v.abs(), g).copysign(*v)
-                    }
-                }
-            }
-        }
+        from_linear_process_dispatch(&self.tf, xsize, row)
     }
 }
 

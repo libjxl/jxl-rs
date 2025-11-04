@@ -3,7 +3,8 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-use crate::util::eval_rational_poly;
+use crate::util::{eval_rational_poly, eval_rational_poly_simd};
+use jxl_simd::{F32SimdVec, SimdDescriptor, SimdMask};
 
 const SRGB_POWTABLE_UPPER: [u8; 16] = [
     0x00, 0x0a, 0x19, 0x26, 0x32, 0x41, 0x4d, 0x5c, 0x68, 0x75, 0x83, 0x8f, 0xa0, 0xaa, 0xb9, 0xc6,
@@ -70,6 +71,40 @@ pub fn linear_to_srgb(samples: &mut [f32]) {
     }
 }
 
+#[inline(always)]
+pub fn linear_to_srgb_simd<D: SimdDescriptor>(d: D, samples: &mut [f32]) {
+    #[allow(clippy::excessive_precision)]
+    const P: [f32; 5] = [
+        -5.135152395e-4,
+        5.287254571e-3,
+        3.903842876e-1,
+        1.474205315,
+        7.352629620e-1,
+    ];
+
+    #[allow(clippy::excessive_precision)]
+    const Q: [f32; 5] = [
+        1.004519624e-2,
+        3.036675394e-1,
+        1.340816930,
+        9.258482155e-1,
+        2.424867759e-2,
+    ];
+
+    for vec in samples.chunks_exact_mut(D::F32Vec::LEN) {
+        let x = D::F32Vec::load(d, vec);
+        let a = x.abs();
+        D::F32Vec::splat(d, 0.0031308)
+            .gt(a)
+            .if_then_else_f32(
+                a * D::F32Vec::splat(d, 12.92),
+                eval_rational_poly_simd(d, a.sqrt(), P, Q),
+            )
+            .copysign(x)
+            .store(vec);
+    }
+}
+
 /// Converts samples in sRGB transfer curve to linear. Inverse of `linear_to_srgb`.
 pub fn srgb_to_linear(samples: &mut [f32]) {
     #[allow(clippy::excessive_precision)]
@@ -98,6 +133,40 @@ pub fn srgb_to_linear(samples: &mut [f32]) {
             eval_rational_poly(a, P, Q)
         }
         .copysign(*x);
+    }
+}
+
+#[inline(always)]
+pub fn srgb_to_linear_simd<D: SimdDescriptor>(d: D, samples: &mut [f32]) {
+    #[allow(clippy::excessive_precision)]
+    const P: [f32; 5] = [
+        2.200248328e-4,
+        1.043637593e-2,
+        1.624820318e-1,
+        7.961564959e-1,
+        8.210152774e-1,
+    ];
+
+    #[allow(clippy::excessive_precision)]
+    const Q: [f32; 5] = [
+        2.631846970e-1,
+        1.076976492,
+        4.987528350e-1,
+        -5.512498495e-2,
+        6.521209011e-3,
+    ];
+
+    for vec in samples.chunks_exact_mut(D::F32Vec::LEN) {
+        let x = D::F32Vec::load(d, vec);
+        let a = x.abs();
+        D::F32Vec::splat(d, 0.04045)
+            .gt(a)
+            .if_then_else_f32(
+                a / D::F32Vec::splat(d, 12.92),
+                eval_rational_poly_simd(d, a, P, Q),
+            )
+            .copysign(x)
+            .store(vec);
     }
 }
 

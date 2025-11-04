@@ -65,6 +65,7 @@ impl RawImageBuffer {
     /// Checks that self.buf, self.bytes_per_row, self.bytes_between_rows are all multiple of align.
     /// This guarantees that `self.get_row()` and `self.get_row_mut()` return slices aligned to
     /// `align`.
+    #[inline(always)]
     pub(super) fn is_aligned(&self, align: usize) -> bool {
         self.bytes_per_row.is_multiple_of(align)
             && self.bytes_between_rows.is_multiple_of(align)
@@ -121,6 +122,7 @@ impl RawImageBuffer {
         }
     }
 
+    #[inline]
     pub(super) fn byte_size(&self) -> (usize, usize) {
         (self.bytes_per_row, self.num_rows)
     }
@@ -129,6 +131,7 @@ impl RawImageBuffer {
     /// - No uninit data must be written to the returned slice.
     /// - The caller must ensure that ownership rules are respected (for example, because they
     ///   have exclusive access to the data).
+    #[inline(always)]
     pub(super) unsafe fn row_mut(&mut self, row: usize) -> &mut [MaybeUninit<u8>] {
         assert!(row < self.num_rows);
         let start = row * self.bytes_between_rows;
@@ -146,6 +149,7 @@ impl RawImageBuffer {
     /// # Safety
     /// The caller must ensure that ownership and lifetime rules are respected (for example,
     /// because they have shared access to the data).
+    #[inline(always)]
     pub(super) unsafe fn row(&self, row: usize) -> &[MaybeUninit<u8>] {
         assert!(row < self.num_rows);
         let start = row * self.bytes_between_rows;

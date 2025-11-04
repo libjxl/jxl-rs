@@ -3,19 +3,24 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
+use super::super::{AvxDescriptor, F32SimdVec, I32SimdVec, SimdDescriptor, SimdMask};
 use std::{
     arch::x86_64::{
-        __m512, __m512i, __mmask16, _mm512_abs_epi32, _mm512_add_epi32, _mm512_add_ps,
-        _mm512_andnot_si512, _mm512_castps_si512, _mm512_castsi512_ps, _mm512_cmpgt_epi32_mask,
-        _mm512_cvtepi32_ps, _mm512_div_ps, _mm512_fmadd_ps, _mm512_fnmadd_ps, _mm512_loadu_epi32,
-        _mm512_loadu_ps, _mm512_mask_blend_ps, _mm512_mask_loadu_ps, _mm512_mask_storeu_ps,
-        _mm512_max_ps, _mm512_mul_epi32, _mm512_mul_ps, _mm512_set1_epi32, _mm512_set1_ps,
-        _mm512_setzero_ps, _mm512_storeu_ps, _mm512_sub_epi32, _mm512_sub_ps, _mm512_xor_si512,
+        __m512, __m512i, __mmask16, _CMP_GT_OQ, _MM_FROUND_FLOOR, _mm512_abs_epi32, _mm512_abs_ps,
+        _mm512_add_epi32, _mm512_add_ps, _mm512_and_si512, _mm512_andnot_si512,
+        _mm512_castps_si512, _mm512_castsi512_ps, _mm512_cmp_ps_mask, _mm512_cmpgt_epi32_mask,
+        _mm512_cvtepi32_ps, _mm512_cvtps_epi32, _mm512_div_ps, _mm512_fmadd_ps, _mm512_fnmadd_ps,
+        _mm512_loadu_epi32, _mm512_loadu_ps, _mm512_mask_blend_ps, _mm512_mask_loadu_ps,
+        _mm512_mask_storeu_ps, _mm512_max_ps, _mm512_mul_epi32, _mm512_mul_ps, _mm512_or_si512,
+        _mm512_roundscale_ps, _mm512_set1_epi32, _mm512_set1_ps, _mm512_setzero_ps,
+        _mm512_sllv_epi32, _mm512_sqrt_ps, _mm512_srav_epi32, _mm512_storeu_ps, _mm512_sub_epi32,
+        _mm512_sub_ps, _mm512_xor_si512,
     },
-    ops::{Add, AddAssign, Div, DivAssign, Mul, MulAssign, Sub, SubAssign},
+    ops::{
+        Add, AddAssign, Div, DivAssign, Mul, MulAssign, Shl, ShlAssign, Shr, ShrAssign, Sub,
+        SubAssign,
+    },
 };
-
-use super::super::{AvxDescriptor, F32SimdVec, I32SimdVec, SimdDescriptor, SimdMask};
 
 // Safety invariant: this type is only ever constructed if avx512f is available.
 #[derive(Clone, Copy, Debug)]
@@ -154,13 +159,22 @@ impl F32SimdVec for F32VecAvx512 {
         unsafe { Self(_mm512_set1_ps(v), d) }
     }
 
+    #[inline(always)]
+    fn zero(d: Self::Descriptor) -> Self {
+        // SAFETY: We know avx512f is available from the safety invariant on `d`.
+        unsafe { Self(_mm512_setzero_ps(), d) }
+    }
+
     fn_avx!(this: F32VecAvx512, fn abs() -> F32VecAvx512 {
-        F32VecAvx512(
-            _mm512_castsi512_ps(_mm512_andnot_si512(
-                _mm512_set1_epi32(i32::MIN),
-                _mm512_castps_si512(this.0),
-            )),
-            this.1)
+        F32VecAvx512(_mm512_abs_ps(this.0), this.1)
+    });
+
+    fn_avx!(this: F32VecAvx512, fn floor() -> F32VecAvx512 {
+        F32VecAvx512(_mm512_roundscale_ps::<{ _MM_FROUND_FLOOR }>(this.0), this.1)
+    });
+
+    fn_avx!(this: F32VecAvx512, fn sqrt() -> F32VecAvx512 {
+        F32VecAvx512(_mm512_sqrt_ps(this.0), this.1)
     });
 
     fn_avx!(this: F32VecAvx512, fn neg() -> F32VecAvx512 {
@@ -169,11 +183,35 @@ impl F32SimdVec for F32VecAvx512 {
                 _mm512_set1_epi32(i32::MIN),
                 _mm512_castps_si512(this.0),
             )),
-            this.1)
+            this.1,
+        )
+    });
+
+    fn_avx!(this: F32VecAvx512, fn copysign(sign: F32VecAvx512) -> F32VecAvx512 {
+        let sign_mask = _mm512_set1_epi32(i32::MIN);
+        F32VecAvx512(
+            _mm512_castsi512_ps(_mm512_or_si512(
+                _mm512_andnot_si512(sign_mask, _mm512_castps_si512(this.0)),
+                _mm512_and_si512(sign_mask, _mm512_castps_si512(sign.0)),
+            )),
+            this.1,
+        )
     });
 
     fn_avx!(this: F32VecAvx512, fn max(other: F32VecAvx512) -> F32VecAvx512 {
         F32VecAvx512(_mm512_max_ps(this.0, other.0), this.1)
+    });
+
+    fn_avx!(this: F32VecAvx512, fn gt(other: F32VecAvx512) -> MaskAvx512 {
+        MaskAvx512(_mm512_cmp_ps_mask::<{_CMP_GT_OQ}>(this.0, other.0), this.1)
+    });
+
+    fn_avx!(this: F32VecAvx512, fn as_i32() -> I32VecAvx512 {
+        I32VecAvx512(_mm512_cvtps_epi32(this.0), this.1)
+    });
+
+    fn_avx!(this: F32VecAvx512, fn bitcast_to_i32() -> I32VecAvx512 {
+        I32VecAvx512(_mm512_castps_si512(this.0), this.1)
     });
 }
 
@@ -235,8 +273,6 @@ pub struct I32VecAvx512(__m512i, Avx512Descriptor);
 
 impl I32SimdVec for I32VecAvx512 {
     type Descriptor = Avx512Descriptor;
-    type F32Vec = F32VecAvx512;
-    type Mask = MaskAvx512;
 
     const LEN: usize = 16;
 
@@ -258,19 +294,16 @@ impl I32SimdVec for I32VecAvx512 {
          F32VecAvx512(_mm512_cvtepi32_ps(this.0), this.1)
     });
 
+    fn_avx!(this: I32VecAvx512, fn bitcast_to_f32() -> F32VecAvx512 {
+         F32VecAvx512(_mm512_castsi512_ps(this.0), this.1)
+    });
+
     fn_avx!(this: I32VecAvx512, fn abs() -> I32VecAvx512 {
-        I32VecAvx512(
-            _mm512_abs_epi32(
-                this.0,
-            ),
-            this.1)
+        I32VecAvx512(_mm512_abs_epi32(this.0), this.1)
     });
 
     fn_avx!(this: I32VecAvx512, fn gt(rhs: I32VecAvx512) -> MaskAvx512 {
-        MaskAvx512(
-            _mm512_cmpgt_epi32_mask(this.0, rhs.0),
-            this.1
-        )
+        MaskAvx512(_mm512_cmpgt_epi32_mask(this.0, rhs.0), this.1)
     });
 }
 
@@ -295,6 +328,20 @@ impl Mul<I32VecAvx512> for I32VecAvx512 {
     });
 }
 
+impl Shl<I32VecAvx512> for I32VecAvx512 {
+    type Output = I32VecAvx512;
+    fn_avx!(this: I32VecAvx512, fn shl(rhs: I32VecAvx512) -> I32VecAvx512 {
+        I32VecAvx512(_mm512_sllv_epi32(this.0, rhs.0), this.1)
+    });
+}
+
+impl Shr<I32VecAvx512> for I32VecAvx512 {
+    type Output = I32VecAvx512;
+    fn_avx!(this: I32VecAvx512, fn shr(rhs: I32VecAvx512) -> I32VecAvx512 {
+        I32VecAvx512(_mm512_srav_epi32(this.0, rhs.0), this.1)
+    });
+}
+
 impl AddAssign<I32VecAvx512> for I32VecAvx512 {
     fn_avx!(this: &mut I32VecAvx512, fn add_assign(rhs: I32VecAvx512) {
         this.0 = _mm512_add_epi32(this.0, rhs.0)
@@ -313,10 +360,20 @@ impl MulAssign<I32VecAvx512> for I32VecAvx512 {
     });
 }
 
+impl ShlAssign<I32VecAvx512> for I32VecAvx512 {
+    fn_avx!(this: &mut I32VecAvx512, fn shl_assign(rhs: I32VecAvx512) {
+        this.0 = _mm512_sllv_epi32(this.0, rhs.0)
+    });
+}
+
+impl ShrAssign<I32VecAvx512> for I32VecAvx512 {
+    fn_avx!(this: &mut I32VecAvx512, fn shr_assign(rhs: I32VecAvx512) {
+        this.0 = _mm512_srav_epi32(this.0, rhs.0)
+    });
+}
+
 impl SimdMask for MaskAvx512 {
     type Descriptor = Avx512Descriptor;
-    type F32Vec = F32VecAvx512;
-    type I32Vec = I32VecAvx512;
 
     fn_avx!(this: MaskAvx512, fn if_then_else_f32(if_true: F32VecAvx512, if_false: F32VecAvx512) -> F32VecAvx512 {
          F32VecAvx512(_mm512_mask_blend_ps(this.0, if_false.0, if_true.0), this.1)

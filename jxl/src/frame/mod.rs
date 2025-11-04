@@ -14,7 +14,7 @@ use crate::{
         FileHeader,
         encodings::UnconditionalCoder,
         extra_channels::ExtraChannelInfo,
-        frame_header::{FrameHeader, Toc, TocNonserialized},
+        frame_header::{Encoding, FrameHeader, Toc, TocNonserialized},
         permutation::Permutation,
     },
     image::Image,
@@ -163,7 +163,7 @@ pub struct HfMetadata {
 pub struct Frame {
     header: FrameHeader,
     toc: Toc,
-    modular_color_channels: usize,
+    color_channels: usize,
     lf_global: Option<LfGlobalState>,
     hf_global: Option<HfGlobalState>,
     lf_image: Option<[Image<f32>; 3]>,
@@ -266,6 +266,14 @@ impl Frame {
             Some(self.decoder_state)
         };
         Ok(decoder_state)
+    }
+
+    fn modular_color_channels(&self) -> usize {
+        if self.header.encoding == Encoding::VarDCT {
+            0
+        } else {
+            self.color_channels
+        }
     }
 }
 
@@ -436,10 +444,10 @@ mod test {
                     frame.header.encoding,
                     crate::headers::frame_header::Encoding::Modular,
                 );
-                assert_eq!(frame.modular_color_channels, 3);
+                assert_eq!(frame.modular_color_channels(), 3);
             } else {
                 assert!(frame.header.has_patches());
-                assert_eq!(frame.modular_color_channels, 0);
+                assert_eq!(frame.modular_color_channels(), 0);
             }
             Ok(())
         };

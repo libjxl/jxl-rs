@@ -95,26 +95,36 @@ macro_rules! bench_all_instruction_sets {
             #[target_feature(enable = "avx512f")]
             fn inner(
                 d: $crate::Avx512Descriptor,
-                criterion: &mut criterion::Criterion,
+                criterion: &mut ::criterion::BenchmarkGroup<
+                    '_,
+                    impl ::criterion::measurement::Measurement,
+                >,
                 name: &str,
             ) {
                 $name(d, criterion, name)
             }
             // SAFETY: we just checked for avx512f.
-            unsafe { inner(d, $criterion, &format!("{}_avx512", stringify!($name))) };
+            unsafe { inner(d, $criterion, "avx512") };
         }
         if let Some(d) = $crate::AvxDescriptor::new() {
             #[target_feature(enable = "avx2,fma")]
-            fn inner(d: $crate::AvxDescriptor, criterion: &mut criterion::Criterion, name: &str) {
+            fn inner(
+                d: $crate::AvxDescriptor,
+                criterion: &mut ::criterion::BenchmarkGroup<
+                    '_,
+                    impl ::criterion::measurement::Measurement,
+                >,
+                name: &str,
+            ) {
                 $name(d, criterion, name)
             }
             // SAFETY: we just checked for avx2 and fma.
-            unsafe { inner(d, $criterion, &format!("{}_avx", stringify!($name))) };
+            unsafe { inner(d, $criterion, "avx") };
         }
         $name(
             $crate::ScalarDescriptor::new().unwrap(),
             $criterion,
-            &format!("{}_scalar", stringify!($name)),
+            "scalar",
         );
     };
 }

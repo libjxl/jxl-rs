@@ -79,8 +79,23 @@ impl F32SimdVec for f32 {
     }
 
     #[inline(always)]
+    fn zero(_d: Self::Descriptor) -> Self {
+        0.0
+    }
+
+    #[inline(always)]
     fn abs(self) -> Self {
         self.abs()
+    }
+
+    #[inline(always)]
+    fn floor(self) -> Self {
+        self.floor()
+    }
+
+    #[inline(always)]
+    fn sqrt(self) -> Self {
+        self.sqrt()
     }
 
     #[inline(always)]
@@ -89,15 +104,33 @@ impl F32SimdVec for f32 {
     }
 
     #[inline(always)]
+    fn copysign(self, sign: Self) -> Self {
+        self.copysign(sign)
+    }
+
+    #[inline(always)]
     fn max(self, other: Self) -> Self {
         self.max(other)
+    }
+
+    #[inline(always)]
+    fn gt(self, other: Self) -> bool {
+        self > other
+    }
+
+    #[inline(always)]
+    fn as_i32(self) -> i32 {
+        self as i32
+    }
+
+    #[inline(always)]
+    fn bitcast_to_i32(self) -> i32 {
+        self.to_bits() as i32
     }
 }
 
 impl I32SimdVec for i32 {
     type Descriptor = ScalarDescriptor;
-    type F32Vec = f32;
-    type Mask = bool;
 
     const LEN: usize = 1;
 
@@ -122,6 +155,11 @@ impl I32SimdVec for i32 {
     }
 
     #[inline(always)]
+    fn bitcast_to_f32(self) -> f32 {
+        f32::from_bits(self as u32)
+    }
+
+    #[inline(always)]
     fn gt(self, other: Self) -> bool {
         self > other
     }
@@ -129,8 +167,6 @@ impl I32SimdVec for i32 {
 
 impl SimdMask for bool {
     type Descriptor = ScalarDescriptor;
-    type F32Vec = f32;
-    type I32Vec = i32;
 
     #[inline(always)]
     fn if_then_else_f32(self, if_true: f32, if_false: f32) -> f32 {
@@ -184,7 +220,7 @@ macro_rules! bench_all_instruction_sets {
         $name(
             $crate::ScalarDescriptor::new().unwrap(),
             $criterion,
-            &format!("{}_scalar", stringify!($name)),
+            "scalar",
         );
     };
 }
