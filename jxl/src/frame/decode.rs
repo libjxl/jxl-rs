@@ -370,7 +370,6 @@ impl Frame {
             let upsampling = self.header.upsampling;
             let x0 = gx * upsampling * group_dim;
             let y0 = gy * upsampling * group_dim;
-            // TODO(sboukortt): actual frame indices for the first two
             let mut rng = Xorshift128Plus::new_with_seeds(
                 self.decoder_state.visible_frame_index as u32,
                 self.decoder_state.nonvisible_frame_index as u32,
