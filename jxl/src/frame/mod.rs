@@ -120,6 +120,8 @@ pub struct DecoderState {
     pub enable_output: bool,
     pub render_spotcolors: bool,
     pub use_simple_pipeline: bool,
+    pub visible_frame_index: usize,
+    pub nonvisible_frame_index: usize,
 }
 
 impl DecoderState {
@@ -133,7 +135,9 @@ impl DecoderState {
             xyb_output_linear: true,
             enable_output: true,
             render_spotcolors: true,
-            use_simple_pipeline: false,
+            use_simple_pipeline: true,
+            visible_frame_index: 0,
+            nonvisible_frame_index: 0,
         }
     }
 

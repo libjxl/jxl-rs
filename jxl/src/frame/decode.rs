@@ -40,8 +40,14 @@ impl Frame {
     pub fn from_header_and_toc(
         frame_header: FrameHeader,
         toc: Toc,
-        decoder_state: DecoderState,
+        mut decoder_state: DecoderState,
     ) -> Result<Self> {
+        if frame_header.is_visible() {
+            decoder_state.visible_frame_index += 1;
+            decoder_state.nonvisible_frame_index = 0;
+        } else {
+            decoder_state.nonvisible_frame_index += 1;
+        }
         let image_metadata = &decoder_state.file_header.image_metadata;
         let is_gray = !frame_header.do_ycbcr
             && !image_metadata.xyb_encoded
@@ -364,8 +370,12 @@ impl Frame {
             let upsampling = self.header.upsampling;
             let x0 = gx * upsampling * group_dim;
             let y0 = gy * upsampling * group_dim;
-            // TODO(sboukortt): actual frame indices for the first two
-            let mut rng = Xorshift128Plus::new_with_seeds(1, 0, x0, y0);
+            let mut rng = Xorshift128Plus::new_with_seeds(
+                self.decoder_state.visible_frame_index as u32,
+                self.decoder_state.nonvisible_frame_index as u32,
+                x0,
+                y0,
+            );
             let bits_to_float = |bits: u32| f32::from_bits((bits >> 9) | 0x3F800000);
             for i in 0..3 {
                 let mut buf = pipeline!(self, p, p.get_buffer_for_group(num_channels + i, group)?);
