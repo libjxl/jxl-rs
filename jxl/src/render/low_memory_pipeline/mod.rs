@@ -158,7 +158,8 @@ impl LowMemoryRenderPipeline {
         }
         if e.frame_origin.1 > 0 {
             let xstart = e.frame_origin.0.max(0) as usize;
-            let xend = (e.frame_origin.0 + self.shared.input_size.0 as isize) as usize;
+            let xend = ((e.frame_origin.0 + self.shared.input_size.0 as isize) as usize)
+                .min(e.image_size.0);
             for x in (xstart..xend).step_by(self.shared.chunk_size) {
                 let xe = (x + self.shared.chunk_size).min(xend);
                 strips.push((x..xe, 0..e.frame_origin.1 as usize));
@@ -168,7 +169,8 @@ impl LowMemoryRenderPipeline {
             let ystart = (e.frame_origin.1 + (self.shared.input_size.1 as isize)).max(0) as usize;
             let yend = e.image_size.1;
             let xstart = e.frame_origin.0.max(0) as usize;
-            let xend = (e.frame_origin.0 + self.shared.input_size.0 as isize) as usize;
+            let xend = ((e.frame_origin.0 + self.shared.input_size.0 as isize) as usize)
+                .min(e.image_size.0);
             for x in (xstart..xend).step_by(self.shared.chunk_size) {
                 let xe = (x + self.shared.chunk_size).min(xend);
                 strips.push((x..xe, ystart..yend));
