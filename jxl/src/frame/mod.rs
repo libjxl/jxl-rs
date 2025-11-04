@@ -135,7 +135,7 @@ impl DecoderState {
             xyb_output_linear: true,
             enable_output: true,
             render_spotcolors: true,
-            use_simple_pipeline: true,
+            use_simple_pipeline: false,
             visible_frame_index: 0,
             nonvisible_frame_index: 0,
         }
