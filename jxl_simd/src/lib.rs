@@ -30,8 +30,6 @@ pub trait SimdDescriptor: Sized + Copy + Debug + Send + Sync {
 
     fn new() -> Option<Self>;
 
-    fn transpose<const ROWS: usize, const COLS: usize>(self, input: &[f32], output: &mut [f32]);
-
     /// Returns a vector descriptor suitable for operations on vectors of length 256 (Self if the
     /// current vector type is suitable). Note that it might still be beneficial to use `Self` for
     /// .call(), as the compiler could make use of features from more advanced instruction sets.
@@ -84,16 +82,10 @@ pub trait F32SimdVec:
 
     fn load_array(d: Self::Descriptor, mem: &Self::UnderlyingArray) -> Self;
 
-    // Requires `mem.len() >= SIZE` or it will panic.
-    fn load_partial(d: Self::Descriptor, size: usize, mem: &[f32]) -> Self;
-
     // Requires `mem.len() >= Self::LEN` or it will panic.
     fn store(&self, mem: &mut [f32]);
 
     fn store_array(&self, mem: &mut Self::UnderlyingArray);
-
-    // Requires `mem.len() >= SIZE` or it will panic.
-    fn store_partial(&self, size: usize, mem: &mut [f32]);
 
     fn abs(self) -> Self;
 
@@ -480,57 +472,23 @@ mod test {
     }
     test_all_instruction_sets!(test_neg);
 
-    fn test_load_store_partial<D: SimdDescriptor>(d: D) {
-        // Test partial load/store operations with various sizes
-        for size in 1..=D::F32Vec::LEN {
-            let input: Vec<f32> = (0..size).map(|i| i as f32).collect();
-            let mut output = vec![99.0f32; D::F32Vec::LEN]; // Fill with sentinel value
-
-            let vec = D::F32Vec::load_partial(d, size, &input);
-            vec.store_partial(size, &mut output);
-
-            // Verify that the first 'size' elements match
-            for i in 0..size {
-                assert_eq!(
-                    output[i], input[i],
-                    "Mismatch at index {} (size={}): expected {}, got {}",
-                    i, size, input[i], output[i]
-                );
-            }
-
-            // Verify that elements beyond 'size' are unchanged (still sentinel)
-            for (idx, &val) in output
-                .iter()
-                .enumerate()
-                .skip(size)
-                .take(D::F32Vec::LEN - size)
-            {
-                assert_eq!(
-                    val, 99.0,
-                    "Element at index {} was modified (size={})",
-                    idx, size
-                );
-            }
-        }
-    }
-    test_all_instruction_sets!(test_load_store_partial);
-
-    fn test_transpose_8x8<D: SimdDescriptor>(d: D) {
-        // Test 8x8 matrix transpose
-        // Input: sequential values 0..64
-        let mut input = vec![0.0f32; 64];
+    fn test_transpose_square<D: SimdDescriptor>(d: D) {
+        // Test square matrix transpose
+        let len = D::F32Vec::LEN;
+        // Input: sequential values 0..
+        let mut input = vec![0.0f32; len * len];
         for (i, val) in input.iter_mut().enumerate() {
             *val = i as f32;
         }
 
-        let mut output = vec![0.0f32; 64];
-        d.transpose::<8, 8>(&input, &mut output);
+        let mut output = input.clone();
+        D::F32Vec::transpose_square(d, D::F32Vec::make_array_slice_mut(&mut output), 1);
 
-        // Verify transpose: output[i*8+j] should equal input[j*8+i]
-        for i in 0..8 {
-            for j in 0..8 {
-                let expected = input[j * 8 + i];
-                let actual = output[i * 8 + j];
+        // Verify transpose: output[i*len+j] should equal input[j*len+i]
+        for i in 0..len {
+            for j in 0..len {
+                let expected = input[j * len + i];
+                let actual = output[i * len + j];
                 assert_eq!(
                     actual, expected,
                     "Mismatch at position ({}, {}): expected {}, got {}",
@@ -539,5 +497,5 @@ mod test {
             }
         }
     }
-    test_all_instruction_sets!(test_transpose_8x8);
+    test_all_instruction_sets!(test_transpose_square);
 }

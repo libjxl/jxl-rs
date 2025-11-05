@@ -3,12 +3,7 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-use crate::{
-    dct::{compute_scaled_dct, DCT1DImpl, DCT1D},
-    idct2d::*,
-    scales::{dct_total_resample_scale, DctResampleScales, HasDctResampleScales},
-    transform_map::HfTransformType,
-};
+use crate::{idct2d::*, reinterpreting_dct2d::*, transform_map::HfTransformType};
 use jxl_simd::{simd_function, SimdDescriptor};
 
 fn idct2_top_block(s: usize, block_in: &[f32], block_out: &mut [f32]) {
@@ -372,57 +367,12 @@ fn afv_transform_to_pixels<D: SimdDescriptor>(
     }
 }
 
-// Computes the lowest-frequency ROWSxCOLS-sized square in output, which is a
-// DCT_ROWS*DCT_COLS-sized DCT block, by doing a ROWS*COLS DCT on the input
-// block.
-#[inline(always)]
-pub fn reinterpreting_dct<
-    D: SimdDescriptor,
-    const DCT_ROWS: usize,
-    const DCT_COLS: usize,
-    const ROWS: usize,
-    const COLS: usize,
->(
-    d: D,
-    dct_input: &mut [f32],
-    output: &mut [f32],
-    output_stride: usize,
-    block: &mut [f32],
-) where
-    DctResampleScales<ROWS, DCT_ROWS>: HasDctResampleScales<ROWS>,
-    DctResampleScales<COLS, DCT_COLS>: HasDctResampleScales<COLS>,
-    DCT1DImpl<ROWS>: DCT1D,
-    DCT1DImpl<COLS>: DCT1D,
-{
-    compute_scaled_dct::<D, ROWS, COLS>(d, dct_input, block);
-    if ROWS < COLS {
-        for y in 0..ROWS {
-            for x in 0..COLS {
-                output[y * output_stride + x] = block[y * COLS + x]
-                    * dct_total_resample_scale::<ROWS, DCT_ROWS>(y)
-                    * dct_total_resample_scale::<COLS, DCT_COLS>(x);
-            }
-        }
-    } else {
-        for y in 0..COLS {
-            for x in 0..ROWS {
-                output[y * output_stride + x] = block[y * ROWS + x]
-                    * dct_total_resample_scale::<COLS, DCT_COLS>(y)
-                    * dct_total_resample_scale::<ROWS, DCT_ROWS>(x);
-            }
-        }
-    }
-}
-
 #[inline(always)]
 pub fn transform_to_pixels_impl<D: SimdDescriptor>(
     d: D,
     transform_type: HfTransformType,
     lf: &mut [f32],
     transform_buffer: &mut [f32],
-    // TODO(veluca): get rid of this once reinterpreting_dct is also ported to the same logic as
-    // idct2d.
-    scratch: &mut [f32],
 ) {
     match transform_type {
         HfTransformType::DCT => {
@@ -430,71 +380,71 @@ pub fn transform_to_pixels_impl<D: SimdDescriptor>(
             idct2d_8_8(d, &mut transform_buffer[0..64]);
         }
         HfTransformType::DCT16X16 => {
-            reinterpreting_dct::<D, 16, 16, 2, 2>(d, lf, transform_buffer, 16, scratch);
+            reinterpreting_dct2d_2_2(d, &mut lf[..4], transform_buffer);
             idct2d_16_16(d, &mut transform_buffer[0..256]);
         }
         HfTransformType::DCT32X32 => {
-            reinterpreting_dct::<D, 32, 32, 4, 4>(d, lf, transform_buffer, 32, scratch);
+            reinterpreting_dct2d_4_4(d, &mut lf[..16], transform_buffer);
             idct2d_32_32(d, &mut transform_buffer[0..1024]);
         }
         HfTransformType::DCT16X8 => {
-            reinterpreting_dct::<D, 16, 8, 2, 1>(d, lf, transform_buffer, 16, scratch);
+            reinterpreting_dct2d_2_1(d, &mut lf[..2], transform_buffer);
             idct2d_16_8(d, &mut transform_buffer[0..128]);
         }
         HfTransformType::DCT8X16 => {
-            reinterpreting_dct::<D, 8, 16, 1, 2>(d, lf, transform_buffer, 16, scratch);
+            reinterpreting_dct2d_1_2(d, &mut lf[..2], transform_buffer);
             idct2d_8_16(d, &mut transform_buffer[0..128]);
         }
         HfTransformType::DCT32X8 => {
-            reinterpreting_dct::<D, 32, 8, 4, 1>(d, lf, transform_buffer, 32, scratch);
+            reinterpreting_dct2d_4_1(d, &mut lf[..4], transform_buffer);
             idct2d_32_8(d, &mut transform_buffer[0..256]);
         }
         HfTransformType::DCT8X32 => {
-            reinterpreting_dct::<D, 8, 32, 1, 4>(d, lf, transform_buffer, 32, scratch);
+            reinterpreting_dct2d_1_4(d, &mut lf[..4], transform_buffer);
             idct2d_8_32(d, &mut transform_buffer[0..256]);
         }
         HfTransformType::DCT32X16 => {
-            reinterpreting_dct::<D, 32, 16, 4, 2>(d, lf, transform_buffer, 32, scratch);
+            reinterpreting_dct2d_4_2(d, &mut lf[..8], transform_buffer);
             idct2d_32_16(d, &mut transform_buffer[0..512]);
         }
         HfTransformType::DCT16X32 => {
-            reinterpreting_dct::<D, 16, 32, 2, 4>(d, lf, transform_buffer, 32, scratch);
+            reinterpreting_dct2d_2_4(d, &mut lf[..8], transform_buffer);
             idct2d_16_32(d, &mut transform_buffer[0..512]);
         }
         HfTransformType::DCT64X64 => {
-            reinterpreting_dct::<D, 64, 64, 8, 8>(d, lf, transform_buffer, 64, scratch);
+            reinterpreting_dct2d_8_8(d, &mut lf[..64], transform_buffer);
             idct2d_64_64(d, &mut transform_buffer[0..4096]);
         }
         HfTransformType::DCT64X32 => {
-            reinterpreting_dct::<D, 64, 32, 8, 4>(d, lf, transform_buffer, 64, scratch);
+            reinterpreting_dct2d_8_4(d, &mut lf[..32], transform_buffer);
             idct2d_64_32(d, &mut transform_buffer[0..2048]);
         }
         HfTransformType::DCT32X64 => {
-            reinterpreting_dct::<D, 32, 64, 4, 8>(d, lf, transform_buffer, 64, scratch);
+            reinterpreting_dct2d_4_8(d, &mut lf[..32], transform_buffer);
             idct2d_32_64(d, &mut transform_buffer[0..2048]);
         }
         HfTransformType::DCT128X128 => {
-            reinterpreting_dct::<D, 128, 128, 16, 16>(d, lf, transform_buffer, 128, scratch);
+            reinterpreting_dct2d_16_16(d, &mut lf[..256], transform_buffer);
             idct2d_128_128(d, &mut transform_buffer[0..16384]);
         }
         HfTransformType::DCT128X64 => {
-            reinterpreting_dct::<D, 128, 64, 16, 8>(d, lf, transform_buffer, 128, scratch);
+            reinterpreting_dct2d_16_8(d, &mut lf[..128], transform_buffer);
             idct2d_128_64(d, &mut transform_buffer[0..8192]);
         }
         HfTransformType::DCT64X128 => {
-            reinterpreting_dct::<D, 64, 128, 8, 16>(d, lf, transform_buffer, 128, scratch);
+            reinterpreting_dct2d_8_16(d, &mut lf[..128], transform_buffer);
             idct2d_64_128(d, &mut transform_buffer[0..8192]);
         }
         HfTransformType::DCT256X256 => {
-            reinterpreting_dct::<D, 256, 256, 32, 32>(d, lf, transform_buffer, 256, scratch);
+            reinterpreting_dct2d_32_32(d, &mut lf[..1024], transform_buffer);
             idct2d_256_256(d, &mut transform_buffer[0..65536]);
         }
         HfTransformType::DCT256X128 => {
-            reinterpreting_dct::<D, 256, 128, 32, 16>(d, lf, transform_buffer, 256, scratch);
+            reinterpreting_dct2d_32_16(d, &mut lf[..512], transform_buffer);
             idct2d_256_128(d, &mut transform_buffer[0..32768]);
         }
         HfTransformType::DCT128X256 => {
-            reinterpreting_dct::<D, 128, 256, 16, 32>(d, lf, transform_buffer, 256, scratch);
+            reinterpreting_dct2d_16_32(d, &mut lf[..512], transform_buffer);
             idct2d_128_256(d, &mut transform_buffer[0..32768]);
         }
         HfTransformType::AFV0 => {
@@ -661,8 +611,7 @@ simd_function!(
         transform_type: HfTransformType,
         lf: &mut [f32],
         transform_buffer: &mut [f32],
-        scratch: &mut [f32],
     ) {
-        transform_to_pixels_impl(d, transform_type, lf, transform_buffer, scratch);
+        transform_to_pixels_impl(d, transform_type, lf, transform_buffer);
     }
 );

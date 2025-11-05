@@ -16,7 +16,13 @@ for i in 2 4 8 16 32 64 128 256
 do
     python3 gen_idct.py $i > src/idct$i.rs
 done 
-python3 gen_idct2d.py > src/idct2d.rs && cargo fmt
+for i in 2 4 8 16 32
+do
+    python3 gen_reinterpreting_dct.py $i > src/reinterpreting_dct$i.rs
+done 
+python3 gen_idct2d.py > src/idct2d.rs
+python3 gen_reinterpreting_dct2d.py > src/reinterpreting_dct2d.rs
+cargo fmt
 ```
 
 ## SIMD type selection
@@ -40,23 +46,27 @@ full vectors at a time. We don't use any additional memory to store transposes.
 
 Let K be vector length (which divides both sides of the DCT as per above).
 
-## N x 2N transforms and 8x32 IDCT
+### N x 2N transforms and 8x32 IDCT
 For those transforms, the final output should be the same shape as the input.
 Thus, we logically need to transpose, DCT, transpose and DCT. However, we can
 instead first do a set of row-DCTs on K rows, transposing every KxK
 sub-matrix in place in advance, then do a column-DCT on the first K columns,
 and finally transpose the KxK sub-matrices in the columns again.
 
-## N x N transforms
+### N x N transforms
 Square transforms are easy: we can do column-DCTs, then swap KxK blocks between
 lower and upper triangular part of the block-matrix, going K columns by K columns
 and transposing during the swap, and do a column-DCT after each group of columns
 is complete.
 
-## 2N x N transforms and 32x8 DCT
+### 2N x N IDCTs and 32x8 IDCT
 For these transforms, we have a special implementation of 1D-IDCT that does part
 of the transpose.
 In particular, we transpose NxN blocks as in the square case. We are then left
 with doing the row-DCT and interleaving blocks so that they go from stacked
 horizontally to stacked vertically. Since that can be done by just reshuffling
 individual columns of vectors, we merge that operation with the DCT.
+
+### 2N x N DCTs
+This is basically the same as the IDCTs, but in reverse order. Thus, the
+"special" DCT applies a different permutation.
