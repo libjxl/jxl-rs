@@ -376,7 +376,7 @@ fn afv_transform_to_pixels<D: SimdDescriptor>(
 // DCT_ROWS*DCT_COLS-sized DCT block, by doing a ROWS*COLS DCT on the input
 // block.
 #[inline(always)]
-fn reinterpreting_dct<
+pub fn reinterpreting_dct<
     D: SimdDescriptor,
     const DCT_ROWS: usize,
     const DCT_COLS: usize,
