@@ -3,11 +3,13 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
+#![allow(clippy::identity_op)]
+
 use criterion::measurement::Measurement;
 use criterion::{criterion_group, criterion_main, BenchmarkGroup, BenchmarkId, Criterion};
 use jxl_simd::{bench_all_instruction_sets, SimdDescriptor};
-use jxl_transforms::dct::{compute_scaled_dct, DCT1DImpl, DCT1D};
 use jxl_transforms::idct2d::*;
+use jxl_transforms::transform::reinterpreting_dct;
 use jxl_transforms::transform_map::MAX_COEFF_AREA;
 
 fn bench_idct2d<D: SimdDescriptor>(d: D, c: &mut BenchmarkGroup<'_, impl Measurement>, name: &str) {
@@ -51,46 +53,50 @@ fn bench_idct2d<D: SimdDescriptor>(d: D, c: &mut BenchmarkGroup<'_, impl Measure
     run!(idct2d_256_256, "256x256", 256 * 256);
 }
 
-fn bench_compute_scaled_dct<D: SimdDescriptor>(
+fn bench_reinterpreting_dct<D: SimdDescriptor>(
     d: D,
     c: &mut BenchmarkGroup<'_, impl Measurement>,
     name: &str,
 ) {
-    fn run_size<D: SimdDescriptor, const ROWS: usize, const COLS: usize>(
-        c: &mut BenchmarkGroup<'_, impl Measurement>,
-        d: D,
-        name: &str,
-    ) where
-        DCT1DImpl<ROWS>: DCT1D,
-        DCT1DImpl<COLS>: DCT1D,
-    {
-        let id = BenchmarkId::new(name, format_args!("{ROWS}x{COLS}"));
+    let mut data = vec![1.0; MAX_COEFF_AREA];
+    let mut block = vec![1.0; MAX_COEFF_AREA];
+    let mut output = vec![0.0; MAX_COEFF_AREA];
 
-        let input_vec = vec![vec![1.0; COLS]; ROWS];
-        let mut input = [[0.0; COLS]; ROWS];
-        for (i, row) in input_vec.iter().enumerate() {
-            input[i].copy_from_slice(row);
-        }
-        let mut input = [1.0; MAX_COEFF_AREA / 64];
-        let mut output = vec![0.0; ROWS * COLS];
-        c.bench_function(id, |b| {
-            b.iter(|| {
-                d.call(|d| compute_scaled_dct::<_, ROWS, COLS>(d, &mut input, &mut output));
-            })
-        });
+    macro_rules! run {
+        ($rows: literal, $cols: literal, $name: literal, $sz: expr) => {
+            let id = BenchmarkId::new(name, format_args!("{}", $name));
+
+            c.bench_function(id, |b| {
+                b.iter(|| {
+                    reinterpreting_dct::<_, { 8 * $rows }, { 8 * $cols }, $rows, $cols>(
+                        d,
+                        &mut data[..$sz],
+                        &mut output,
+                        $rows.max($cols),
+                        &mut block,
+                    );
+                })
+            });
+        };
     }
 
-    run_size::<_, 2, 2>(c, d, name);
-    run_size::<_, 4, 4>(c, d, name);
-    run_size::<_, 8, 4>(c, d, name);
-    run_size::<_, 4, 8>(c, d, name);
-    run_size::<_, 8, 8>(c, d, name);
-    run_size::<_, 8, 16>(c, d, name);
-    run_size::<_, 16, 8>(c, d, name);
-    run_size::<_, 16, 16>(c, d, name);
-    run_size::<_, 32, 16>(c, d, name);
-    run_size::<_, 16, 32>(c, d, name);
-    run_size::<_, 32, 32>(c, d, name);
+    run!(1, 2, "1x2", 1 * 2);
+    run!(2, 1, "2x1", 2 * 1);
+    run!(2, 2, "2x2", 2 * 2);
+    run!(1, 4, "1x4", 1 * 4);
+    run!(4, 1, "4x1", 4 * 1);
+    run!(2, 4, "2x4", 2 * 4);
+    run!(4, 2, "4x2", 4 * 2);
+    run!(4, 4, "4x4", 4 * 4);
+    run!(8, 4, "8x4", 8 * 4);
+    run!(4, 8, "4x8", 4 * 8);
+    run!(8, 8, "8x8", 8 * 8);
+    run!(8, 16, "8x16", 8 * 16);
+    run!(16, 8, "16x8", 16 * 8);
+    run!(16, 16, "16x16", 16 * 16);
+    run!(32, 16, "32x16", 32 * 16);
+    run!(16, 32, "16x32", 16 * 32);
+    run!(32, 32, "32x32", 32 * 32);
 }
 
 fn idct_benches(c: &mut Criterion) {
@@ -102,11 +108,11 @@ fn idct_benches(c: &mut Criterion) {
     group.finish();
 }
 
-fn compute_scaled_dct_benches(c: &mut Criterion) {
-    let mut group = c.benchmark_group("compute_scaled_dct");
+fn reinterpreting_dct_benches(c: &mut Criterion) {
+    let mut group = c.benchmark_group("reinterpreting_dct");
     let g = &mut group;
 
-    bench_all_instruction_sets!(bench_compute_scaled_dct, g);
+    bench_all_instruction_sets!(bench_reinterpreting_dct, g);
 
     group.finish();
 }
@@ -114,6 +120,6 @@ fn compute_scaled_dct_benches(c: &mut Criterion) {
 criterion_group!(
     name = benches;
     config = Criterion::default().sample_size(50);
-    targets = idct_benches, compute_scaled_dct_benches
+    targets = idct_benches, reinterpreting_dct_benches
 );
 criterion_main!(benches);
