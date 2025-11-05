@@ -4,8 +4,6 @@
 // license that can be found in the LICENSE file.
 
 use super::*;
-use crate::dct::{DCT1DImpl, DCT1D};
-use crate::transform::reinterpreting_dct;
 use jxl_simd::{test_all_instruction_sets, ScalarDescriptor, SimdDescriptor};
 use rand::Rng;
 use rand::SeedableRng;
@@ -135,6 +133,17 @@ pub fn slow_idct2d(input: &[Vec<f64>]) -> Vec<Vec<f64>> {
     idct1d(&transposed1)
 }
 
+pub fn scales(n: usize) -> Vec<f64> {
+    (0..n)
+        .map(|i| {
+            (i as f64 / (16 * n) as f64 * PI).cos()
+                * (i as f64 / (8 * n) as f64 * PI).cos()
+                * (i as f64 / (4 * n) as f64 * PI).cos()
+                * n as f64
+        })
+        .collect()
+}
+
 pub fn slow_reinterpreting_dct2d(input: &[Vec<f64>]) -> Vec<Vec<f64>> {
     let rows = input.len();
     let cols = input[0].len();
@@ -147,31 +156,18 @@ pub fn slow_reinterpreting_dct2d(input: &[Vec<f64>]) -> Vec<Vec<f64>> {
         dct2
     };
 
-    let row_scales: Vec<_> = (0..rows)
-        .map(|i| {
-            (i as f64 / (16 * rows) as f64 * PI).cos()
-                * (i as f64 / (8 * rows) as f64 * PI).cos()
-                * (i as f64 / (4 * rows) as f64 * PI).cos()
-        })
-        .collect();
-    let col_scales: Vec<_> = (0..cols)
-        .map(|i| {
-            (i as f64 / (16 * cols) as f64 * PI).cos()
-                * (i as f64 / (8 * cols) as f64 * PI).cos()
-                * (i as f64 / (4 * cols) as f64 * PI).cos()
-        })
-        .collect();
-
+    let row_scales = scales(rows);
+    let col_scales = scales(cols);
     if rows < cols {
         for y in 0..rows {
             for x in 0..cols {
-                res[y][x] /= row_scales[y] * col_scales[x] * (rows * cols) as f64;
+                res[y][x] /= row_scales[y] * col_scales[x];
             }
         }
     } else {
         for y in 0..cols {
             for x in 0..rows {
-                res[y][x] /= row_scales[x] * col_scales[y] * (rows * cols) as f64;
+                res[y][x] /= row_scales[x] * col_scales[y];
             }
         }
     }
@@ -188,52 +184,66 @@ fn check_close(a: f64, b: f64, max_err: f64) {
     );
 }
 
-macro_rules! test_dct1d_eq_slow_n {
-    ($test_name:ident, $n_val:expr, $tolerance:expr) => {
+macro_rules! test_reinterpreting_dct1d_eq_slow_n {
+    ($test_name:ident, $n_val:expr, $do_idct_fun:path, $tolerance:expr) => {
         #[test]
         fn $test_name() {
             const N: usize = $n_val;
-            const M: usize = 1;
-            const NM: usize = N * M;
 
-            // Generate input data for the reference dct1d.
-            // Results in vec![vec![1.0], vec![2.0], ..., vec![N.0]]
-            let input_matrix_for_ref: Vec<Vec<f64>> =
-                std::array::from_fn::<f64, NM, _>(|i| (i + 1) as f64)
-                    .chunks(M)
-                    .map(|row_slice| row_slice.to_vec())
-                    .collect();
+            let input_matrix_for_ref = random_matrix(N, 1);
 
             let output_matrix_slow: Vec<Vec<f64>> = dct1d(&input_matrix_for_ref);
 
-            // DCT1DImpl expects data in [[f32; M]; N] format.
-            let mut input_arr_2d = [[0.0f32; M]; N];
-            for r_idx in 0..N {
-                for c_idx in 0..M {
-                    input_arr_2d[r_idx][c_idx] = input_matrix_for_ref[r_idx][c_idx] as f32;
-                }
-            }
-
-            let mut output = input_arr_2d;
+            let mut output: Vec<_> = input_matrix_for_ref.iter().map(|x| x[0] as f32).collect();
             let d = ScalarDescriptor {};
-            DCT1DImpl::<N>::do_dct::<_, M>(d, &mut output);
+
+            let (output_chunks, remainder) = output.as_chunks_mut::<1>();
+            assert!(remainder.is_empty());
+            $do_idct_fun(d, output_chunks, 1);
+
+            let scales = scales(N);
 
             for i in 0..N {
-                check_close(output[i][0] as f64, output_matrix_slow[i][0], $tolerance);
+                check_close(
+                    output[i] as f64,
+                    output_matrix_slow[i][0] / scales[i],
+                    $tolerance,
+                );
             }
         }
     };
 }
 
-test_dct1d_eq_slow_n!(test_dct1d_1x1_eq_slow, 1, 1e-6);
-test_dct1d_eq_slow_n!(test_dct1d_2x1_eq_slow, 2, 1e-6);
-test_dct1d_eq_slow_n!(test_dct1d_4x1_eq_slow, 4, 1e-6);
-test_dct1d_eq_slow_n!(test_dct1d_8x1_eq_slow, 8, 1e-5);
-test_dct1d_eq_slow_n!(test_dct1d_16x1_eq_slow, 16, 1e-4);
-test_dct1d_eq_slow_n!(test_dct1d_32x1_eq_slow, 32, 1e-3);
-test_dct1d_eq_slow_n!(test_dct1d_64x1_eq_slow, 64, 1e-2);
-test_dct1d_eq_slow_n!(test_dct1d_128x1_eq_slow, 128, 1e-2);
-test_dct1d_eq_slow_n!(test_dct1d_256x1_eq_slow, 256, 1e-1);
+test_reinterpreting_dct1d_eq_slow_n!(
+    test_reinterpreting_dct1d_2_eq_slow,
+    2,
+    do_reinterpreting_dct_2,
+    1e-6
+);
+test_reinterpreting_dct1d_eq_slow_n!(
+    test_reinterpreting_dct1d_4_eq_slow,
+    4,
+    do_reinterpreting_dct_4,
+    1e-6
+);
+test_reinterpreting_dct1d_eq_slow_n!(
+    test_reinterpreting_dct1d_8_eq_slow,
+    8,
+    do_reinterpreting_dct_8,
+    1e-6
+);
+test_reinterpreting_dct1d_eq_slow_n!(
+    test_reinterpreting_dct1d_16_eq_slow,
+    16,
+    do_reinterpreting_dct_16,
+    5e-6
+);
+test_reinterpreting_dct1d_eq_slow_n!(
+    test_reinterpreting_dct1d_32_eq_slow,
+    32,
+    do_reinterpreting_dct_32,
+    5e-6
+);
 
 fn random_matrix(n: usize, m: usize) -> Vec<Vec<f64>> {
     let mut rng = ChaCha12Rng::seed_from_u64(0);
@@ -331,7 +341,7 @@ test_idct2d_eq_slow!(test_idct2d_128_256_eq_slow, 128, 256, idct2d_128_256, 1e-3
 test_idct2d_eq_slow!(test_idct2d_256_256_eq_slow, 256, 256, idct2d_256_256, 5e-3);
 
 macro_rules! test_reinterpreting_dct_eq_slow {
-    ($test_name:ident, $rows:expr, $cols:expr, $tol:expr) => {
+    ($test_name:ident, $fun: ident, $rows:expr, $cols:expr, $tol:expr) => {
         fn $test_name<D: SimdDescriptor>(d: D) {
             const N: usize = $rows;
             const M: usize = $cols;
@@ -346,23 +356,16 @@ macro_rules! test_reinterpreting_dct_eq_slow {
                 .map(|x| *x as f32)
                 .collect();
 
-            let mut block = [0.0; $rows * $cols];
-            let mut output = [0.0; $rows * $cols];
+            let mut output = [0.0; $rows * $cols * 64];
 
-            reinterpreting_dct::<_, { 8 * $rows }, { 8 * $cols }, $rows, $cols>(
-                d,
-                &mut fast_input,
-                &mut output,
-                $rows.max($cols),
-                &mut block,
-            );
+            $fun(d, &mut fast_input, &mut output);
 
             let on = slow_output.len();
             let om = slow_output[0].len();
 
             for r in 0..on {
                 for c in 0..om {
-                    check_close(output[r * om + c] as f64, slow_output[r][c], $tol);
+                    check_close(output[r * om * 8 + c] as f64, slow_output[r][c], $tol);
                 }
             }
         }
@@ -370,20 +373,122 @@ macro_rules! test_reinterpreting_dct_eq_slow {
     };
 }
 
-test_reinterpreting_dct_eq_slow!(test_reinterpreting_dct_1x2_eq_slow, 1, 2, 1e-6);
-test_reinterpreting_dct_eq_slow!(test_reinterpreting_dct_2x1_eq_slow, 2, 1, 1e-6);
-test_reinterpreting_dct_eq_slow!(test_reinterpreting_dct_2x2_eq_slow, 2, 2, 1e-6);
-test_reinterpreting_dct_eq_slow!(test_reinterpreting_dct_1x4_eq_slow, 1, 4, 1e-6);
-test_reinterpreting_dct_eq_slow!(test_reinterpreting_dct_4x1_eq_slow, 4, 1, 1e-6);
-test_reinterpreting_dct_eq_slow!(test_reinterpreting_dct_2x4_eq_slow, 2, 4, 1e-6);
-test_reinterpreting_dct_eq_slow!(test_reinterpreting_dct_4x2_eq_slow, 4, 2, 1e-6);
-test_reinterpreting_dct_eq_slow!(test_reinterpreting_dct_4x4_eq_slow, 4, 4, 1e-6);
-test_reinterpreting_dct_eq_slow!(test_reinterpreting_dct_8x4_eq_slow, 8, 4, 1e-6);
-test_reinterpreting_dct_eq_slow!(test_reinterpreting_dct_4x8_eq_slow, 4, 8, 1e-6);
-test_reinterpreting_dct_eq_slow!(test_reinterpreting_dct_8x8_eq_slow, 8, 8, 1e-6);
-test_reinterpreting_dct_eq_slow!(test_reinterpreting_dct_8x16_eq_slow, 8, 16, 1e-6);
-test_reinterpreting_dct_eq_slow!(test_reinterpreting_dct_16x8_eq_slow, 16, 8, 1e-6);
-test_reinterpreting_dct_eq_slow!(test_reinterpreting_dct_16x16_eq_slow, 16, 16, 1e-6);
-test_reinterpreting_dct_eq_slow!(test_reinterpreting_dct_32x16_eq_slow, 32, 16, 1e-6);
-test_reinterpreting_dct_eq_slow!(test_reinterpreting_dct_16x32_eq_slow, 16, 32, 1e-6);
-test_reinterpreting_dct_eq_slow!(test_reinterpreting_dct_32x32_eq_slow, 32, 32, 1e-6);
+test_reinterpreting_dct_eq_slow!(
+    test_reinterpreting_dct_1x2_eq_slow,
+    reinterpreting_dct2d_1_2,
+    1,
+    2,
+    1e-6
+);
+test_reinterpreting_dct_eq_slow!(
+    test_reinterpreting_dct_2x1_eq_slow,
+    reinterpreting_dct2d_2_1,
+    2,
+    1,
+    1e-6
+);
+test_reinterpreting_dct_eq_slow!(
+    test_reinterpreting_dct_2x2_eq_slow,
+    reinterpreting_dct2d_2_2,
+    2,
+    2,
+    1e-6
+);
+test_reinterpreting_dct_eq_slow!(
+    test_reinterpreting_dct_1x4_eq_slow,
+    reinterpreting_dct2d_1_4,
+    1,
+    4,
+    1e-6
+);
+test_reinterpreting_dct_eq_slow!(
+    test_reinterpreting_dct_4x1_eq_slow,
+    reinterpreting_dct2d_4_1,
+    4,
+    1,
+    1e-6
+);
+test_reinterpreting_dct_eq_slow!(
+    test_reinterpreting_dct_2x4_eq_slow,
+    reinterpreting_dct2d_2_4,
+    2,
+    4,
+    1e-6
+);
+test_reinterpreting_dct_eq_slow!(
+    test_reinterpreting_dct_4x2_eq_slow,
+    reinterpreting_dct2d_4_2,
+    4,
+    2,
+    1e-6
+);
+test_reinterpreting_dct_eq_slow!(
+    test_reinterpreting_dct_4x4_eq_slow,
+    reinterpreting_dct2d_4_4,
+    4,
+    4,
+    1e-6
+);
+test_reinterpreting_dct_eq_slow!(
+    test_reinterpreting_dct_8x4_eq_slow,
+    reinterpreting_dct2d_8_4,
+    8,
+    4,
+    1e-6
+);
+test_reinterpreting_dct_eq_slow!(
+    test_reinterpreting_dct_4x8_eq_slow,
+    reinterpreting_dct2d_4_8,
+    4,
+    8,
+    1e-6
+);
+test_reinterpreting_dct_eq_slow!(
+    test_reinterpreting_dct_8x8_eq_slow,
+    reinterpreting_dct2d_8_8,
+    8,
+    8,
+    1e-6
+);
+test_reinterpreting_dct_eq_slow!(
+    test_reinterpreting_dct_8x16_eq_slow,
+    reinterpreting_dct2d_8_16,
+    8,
+    16,
+    5e-6
+);
+test_reinterpreting_dct_eq_slow!(
+    test_reinterpreting_dct_16x8_eq_slow,
+    reinterpreting_dct2d_16_8,
+    16,
+    8,
+    5e-6
+);
+test_reinterpreting_dct_eq_slow!(
+    test_reinterpreting_dct_16x16_eq_slow,
+    reinterpreting_dct2d_16_16,
+    16,
+    16,
+    5e-6
+);
+test_reinterpreting_dct_eq_slow!(
+    test_reinterpreting_dct_32x16_eq_slow,
+    reinterpreting_dct2d_32_16,
+    32,
+    16,
+    5e-6
+);
+test_reinterpreting_dct_eq_slow!(
+    test_reinterpreting_dct_16x32_eq_slow,
+    reinterpreting_dct2d_16_32,
+    16,
+    32,
+    5e-6
+);
+test_reinterpreting_dct_eq_slow!(
+    test_reinterpreting_dct_32x32_eq_slow,
+    reinterpreting_dct2d_32_32,
+    32,
+    32,
+    5e-6
+);

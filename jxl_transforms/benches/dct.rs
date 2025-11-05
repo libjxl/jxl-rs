@@ -8,9 +8,8 @@
 use criterion::measurement::Measurement;
 use criterion::{criterion_group, criterion_main, BenchmarkGroup, BenchmarkId, Criterion};
 use jxl_simd::{bench_all_instruction_sets, SimdDescriptor};
-use jxl_transforms::idct2d::*;
-use jxl_transforms::transform::reinterpreting_dct;
 use jxl_transforms::transform_map::MAX_COEFF_AREA;
+use jxl_transforms::*;
 
 fn bench_idct2d<D: SimdDescriptor>(d: D, c: &mut BenchmarkGroup<'_, impl Measurement>, name: &str) {
     let mut data = vec![1.0; MAX_COEFF_AREA];
@@ -59,44 +58,40 @@ fn bench_reinterpreting_dct<D: SimdDescriptor>(
     name: &str,
 ) {
     let mut data = vec![1.0; MAX_COEFF_AREA];
-    let mut block = vec![1.0; MAX_COEFF_AREA];
     let mut output = vec![0.0; MAX_COEFF_AREA];
 
     macro_rules! run {
-        ($rows: literal, $cols: literal, $name: literal, $sz: expr) => {
+        ($fun: ident, $name: literal, $sz: expr) => {
             let id = BenchmarkId::new(name, format_args!("{}", $name));
 
             c.bench_function(id, |b| {
                 b.iter(|| {
-                    reinterpreting_dct::<_, { 8 * $rows }, { 8 * $cols }, $rows, $cols>(
-                        d,
-                        &mut data[..$sz],
-                        &mut output,
-                        $rows.max($cols),
-                        &mut block,
-                    );
+                    d.call(
+                        #[inline(always)]
+                        |d| $fun(d, &mut data[..$sz], &mut output),
+                    )
                 })
             });
         };
     }
 
-    run!(1, 2, "1x2", 1 * 2);
-    run!(2, 1, "2x1", 2 * 1);
-    run!(2, 2, "2x2", 2 * 2);
-    run!(1, 4, "1x4", 1 * 4);
-    run!(4, 1, "4x1", 4 * 1);
-    run!(2, 4, "2x4", 2 * 4);
-    run!(4, 2, "4x2", 4 * 2);
-    run!(4, 4, "4x4", 4 * 4);
-    run!(8, 4, "8x4", 8 * 4);
-    run!(4, 8, "4x8", 4 * 8);
-    run!(8, 8, "8x8", 8 * 8);
-    run!(8, 16, "8x16", 8 * 16);
-    run!(16, 8, "16x8", 16 * 8);
-    run!(16, 16, "16x16", 16 * 16);
-    run!(32, 16, "32x16", 32 * 16);
-    run!(16, 32, "16x32", 16 * 32);
-    run!(32, 32, "32x32", 32 * 32);
+    run!(reinterpreting_dct2d_1_2, "1x2", 1 * 2);
+    run!(reinterpreting_dct2d_2_1, "2x1", 2 * 1);
+    run!(reinterpreting_dct2d_2_2, "2x2", 2 * 2);
+    run!(reinterpreting_dct2d_1_4, "1x4", 1 * 4);
+    run!(reinterpreting_dct2d_4_1, "4x1", 4 * 1);
+    run!(reinterpreting_dct2d_2_4, "2x4", 2 * 4);
+    run!(reinterpreting_dct2d_4_2, "4x2", 4 * 2);
+    run!(reinterpreting_dct2d_4_4, "4x4", 4 * 4);
+    run!(reinterpreting_dct2d_8_4, "8x4", 8 * 4);
+    run!(reinterpreting_dct2d_4_8, "4x8", 4 * 8);
+    run!(reinterpreting_dct2d_8_8, "8x8", 8 * 8);
+    run!(reinterpreting_dct2d_8_16, "8x16", 8 * 16);
+    run!(reinterpreting_dct2d_16_8, "16x8", 16 * 8);
+    run!(reinterpreting_dct2d_16_16, "16x16", 16 * 16);
+    run!(reinterpreting_dct2d_32_16, "32x16", 32 * 16);
+    run!(reinterpreting_dct2d_16_32, "16x32", 16 * 32);
+    run!(reinterpreting_dct2d_32_32, "32x32", 32 * 32);
 }
 
 fn idct_benches(c: &mut Criterion) {

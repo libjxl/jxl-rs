@@ -12,13 +12,12 @@ use std::{
         _mm512_castpd_ps, _mm512_castps_pd, _mm512_castps_si512, _mm512_castsi512_ps,
         _mm512_cmp_ps_mask, _mm512_cmpgt_epi32_mask, _mm512_cvtepi32_ps, _mm512_cvtps_epi32,
         _mm512_div_ps, _mm512_fmadd_ps, _mm512_fnmadd_ps, _mm512_loadu_epi32, _mm512_loadu_ps,
-        _mm512_mask_blend_ps, _mm512_mask_loadu_ps, _mm512_mask_storeu_ps, _mm512_max_ps,
-        _mm512_mul_epi32, _mm512_mul_ps, _mm512_or_si512, _mm512_permutex2var_pd,
-        _mm512_roundscale_ps, _mm512_set1_epi32, _mm512_set1_epi64, _mm512_set1_ps,
-        _mm512_setr_epi64, _mm512_setzero_ps, _mm512_slli_epi32, _mm512_sllv_epi32, _mm512_sqrt_ps,
-        _mm512_srai_epi32, _mm512_srav_epi32, _mm512_storeu_ps, _mm512_sub_epi32, _mm512_sub_ps,
-        _mm512_unpackhi_pd, _mm512_unpackhi_ps, _mm512_unpacklo_pd, _mm512_unpacklo_ps,
-        _mm512_xor_si512,
+        _mm512_mask_blend_ps, _mm512_max_ps, _mm512_mul_epi32, _mm512_mul_ps, _mm512_or_si512,
+        _mm512_permutex2var_pd, _mm512_roundscale_ps, _mm512_set1_epi32, _mm512_set1_epi64,
+        _mm512_set1_ps, _mm512_setr_epi64, _mm512_setzero_ps, _mm512_slli_epi32, _mm512_sllv_epi32,
+        _mm512_sqrt_ps, _mm512_srai_epi32, _mm512_srav_epi32, _mm512_storeu_ps, _mm512_sub_epi32,
+        _mm512_sub_ps, _mm512_unpackhi_pd, _mm512_unpackhi_ps, _mm512_unpacklo_pd,
+        _mm512_unpacklo_ps, _mm512_xor_si512,
     },
     ops::{
         Add, AddAssign, Div, DivAssign, Mul, MulAssign, Shl, ShlAssign, Shr, ShrAssign, Sub,
@@ -69,34 +68,6 @@ impl SimdDescriptor for Avx512Descriptor {
         }
     }
 
-    #[inline(always)]
-    fn transpose<const ROWS: usize, const COLS: usize>(self, input: &[f32], output: &mut [f32]) {
-        assert_eq!(input.len(), ROWS * COLS);
-        assert_eq!(output.len(), ROWS * COLS);
-
-        if ROWS.is_multiple_of(16) && COLS.is_multiple_of(16) {
-            let input: &[[_; 16]] = input.as_chunks().0;
-            let output: &mut [[_; 16]] = output.as_chunks_mut().0;
-            let cols_div_16 = COLS / 16;
-            let rows_div_16 = ROWS / 16;
-            for r in 0..rows_div_16 {
-                for c in 0..cols_div_16 {
-                    // SAFETY: We know avx512f is available from the safety invariant on `self`.
-                    unsafe {
-                        self.transpose16x16f32(
-                            &input[r * COLS + c..],
-                            cols_div_16,
-                            &mut output[c * ROWS + r..],
-                            rows_div_16,
-                        );
-                    }
-                }
-            }
-        } else {
-            self.as_avx().transpose::<ROWS, COLS>(input, output);
-        }
-    }
-
     fn call<R>(self, f: impl FnOnce(Self) -> R) -> R {
         #[target_feature(enable = "avx512f")]
         unsafe fn inner<R>(d: Avx512Descriptor, f: impl FnOnce(Avx512Descriptor) -> R) -> R {
@@ -125,168 +96,6 @@ macro_rules! fn_avx {
     };
 }
 
-impl Avx512Descriptor {
-    #[target_feature(enable = "avx512f")]
-    #[inline]
-    fn transpose16x16f32(
-        self,
-        input: &[[f32; 16]],
-        input_stride: usize,
-        output: &mut [[f32; 16]],
-        output_stride: usize,
-    ) {
-        assert!(input.len() > input_stride * 15);
-        assert!(output.len() > output_stride * 15);
-
-        let r0 = F32VecAvx512::load_array(self, &input[0]).0;
-        let r1 = F32VecAvx512::load_array(self, &input[1 * input_stride]).0;
-        let r2 = F32VecAvx512::load_array(self, &input[2 * input_stride]).0;
-        let r3 = F32VecAvx512::load_array(self, &input[3 * input_stride]).0;
-        let r4 = F32VecAvx512::load_array(self, &input[4 * input_stride]).0;
-        let r5 = F32VecAvx512::load_array(self, &input[5 * input_stride]).0;
-        let r6 = F32VecAvx512::load_array(self, &input[6 * input_stride]).0;
-        let r7 = F32VecAvx512::load_array(self, &input[7 * input_stride]).0;
-        let r8 = F32VecAvx512::load_array(self, &input[8 * input_stride]).0;
-        let r9 = F32VecAvx512::load_array(self, &input[9 * input_stride]).0;
-        let r10 = F32VecAvx512::load_array(self, &input[10 * input_stride]).0;
-        let r11 = F32VecAvx512::load_array(self, &input[11 * input_stride]).0;
-        let r12 = F32VecAvx512::load_array(self, &input[12 * input_stride]).0;
-        let r13 = F32VecAvx512::load_array(self, &input[13 * input_stride]).0;
-        let r14 = F32VecAvx512::load_array(self, &input[14 * input_stride]).0;
-        let r15 = F32VecAvx512::load_array(self, &input[15 * input_stride]).0;
-
-        // Stage 1: Unpack low/high pairs
-        let t0 = _mm512_unpacklo_ps(r0, r1);
-        let t1 = _mm512_unpackhi_ps(r0, r1);
-        let t2 = _mm512_unpacklo_ps(r2, r3);
-        let t3 = _mm512_unpackhi_ps(r2, r3);
-        let t4 = _mm512_unpacklo_ps(r4, r5);
-        let t5 = _mm512_unpackhi_ps(r4, r5);
-        let t6 = _mm512_unpacklo_ps(r6, r7);
-        let t7 = _mm512_unpackhi_ps(r6, r7);
-        let t8 = _mm512_unpacklo_ps(r8, r9);
-        let t9 = _mm512_unpackhi_ps(r8, r9);
-        let t10 = _mm512_unpacklo_ps(r10, r11);
-        let t11 = _mm512_unpackhi_ps(r10, r11);
-        let t12 = _mm512_unpacklo_ps(r12, r13);
-        let t13 = _mm512_unpackhi_ps(r12, r13);
-        let t14 = _mm512_unpacklo_ps(r14, r15);
-        let t15 = _mm512_unpackhi_ps(r14, r15);
-
-        // Cast to 64 bits.
-        let t0 = _mm512_castps_pd(t0);
-        let t1 = _mm512_castps_pd(t1);
-        let t2 = _mm512_castps_pd(t2);
-        let t3 = _mm512_castps_pd(t3);
-        let t4 = _mm512_castps_pd(t4);
-        let t5 = _mm512_castps_pd(t5);
-        let t6 = _mm512_castps_pd(t6);
-        let t7 = _mm512_castps_pd(t7);
-        let t8 = _mm512_castps_pd(t8);
-        let t9 = _mm512_castps_pd(t9);
-        let t10 = _mm512_castps_pd(t10);
-        let t11 = _mm512_castps_pd(t11);
-        let t12 = _mm512_castps_pd(t12);
-        let t13 = _mm512_castps_pd(t13);
-        let t14 = _mm512_castps_pd(t14);
-        let t15 = _mm512_castps_pd(t15);
-
-        // Stage 2: Shuffle to group 32-bit elements
-        let s0 = _mm512_unpacklo_pd(t0, t2);
-        let s1 = _mm512_unpackhi_pd(t0, t2);
-        let s2 = _mm512_unpacklo_pd(t1, t3);
-        let s3 = _mm512_unpackhi_pd(t1, t3);
-        let s4 = _mm512_unpacklo_pd(t4, t6);
-        let s5 = _mm512_unpackhi_pd(t4, t6);
-        let s6 = _mm512_unpacklo_pd(t5, t7);
-        let s7 = _mm512_unpackhi_pd(t5, t7);
-        let s8 = _mm512_unpacklo_pd(t8, t10);
-        let s9 = _mm512_unpackhi_pd(t8, t10);
-        let s10 = _mm512_unpacklo_pd(t9, t11);
-        let s11 = _mm512_unpackhi_pd(t9, t11);
-        let s12 = _mm512_unpacklo_pd(t12, t14);
-        let s13 = _mm512_unpackhi_pd(t12, t14);
-        let s14 = _mm512_unpacklo_pd(t13, t15);
-        let s15 = _mm512_unpackhi_pd(t13, t15);
-
-        // Stage 3: 128-bit permute
-        let idx_hi = _mm512_setr_epi64(0, 1, 8, 9, 4, 5, 12, 13);
-        let idx_lo = _mm512_add_epi64(idx_hi, _mm512_set1_epi64(2));
-
-        let c0 = _mm512_permutex2var_pd(s0, idx_hi, s4);
-        let c1 = _mm512_permutex2var_pd(s1, idx_hi, s5);
-        let c2 = _mm512_permutex2var_pd(s2, idx_hi, s6);
-        let c3 = _mm512_permutex2var_pd(s3, idx_hi, s7);
-        let c4 = _mm512_permutex2var_pd(s0, idx_lo, s4);
-        let c5 = _mm512_permutex2var_pd(s1, idx_lo, s5);
-        let c6 = _mm512_permutex2var_pd(s2, idx_lo, s6);
-        let c7 = _mm512_permutex2var_pd(s3, idx_lo, s7);
-        let c8 = _mm512_permutex2var_pd(s8, idx_hi, s12);
-        let c9 = _mm512_permutex2var_pd(s9, idx_hi, s13);
-        let c10 = _mm512_permutex2var_pd(s10, idx_hi, s14);
-        let c11 = _mm512_permutex2var_pd(s11, idx_hi, s15);
-        let c12 = _mm512_permutex2var_pd(s8, idx_lo, s12);
-        let c13 = _mm512_permutex2var_pd(s9, idx_lo, s13);
-        let c14 = _mm512_permutex2var_pd(s10, idx_lo, s14);
-        let c15 = _mm512_permutex2var_pd(s11, idx_lo, s15);
-
-        // Stage 4: 256-bit permute
-        let idx_hi = _mm512_setr_epi64(0, 1, 2, 3, 8, 9, 10, 11);
-        let idx_lo = _mm512_add_epi64(idx_hi, _mm512_set1_epi64(4));
-
-        let o0 = _mm512_permutex2var_pd(c0, idx_hi, c8);
-        let o1 = _mm512_permutex2var_pd(c1, idx_hi, c9);
-        let o2 = _mm512_permutex2var_pd(c2, idx_hi, c10);
-        let o3 = _mm512_permutex2var_pd(c3, idx_hi, c11);
-        let o4 = _mm512_permutex2var_pd(c4, idx_hi, c12);
-        let o5 = _mm512_permutex2var_pd(c5, idx_hi, c13);
-        let o6 = _mm512_permutex2var_pd(c6, idx_hi, c14);
-        let o7 = _mm512_permutex2var_pd(c7, idx_hi, c15);
-        let o8 = _mm512_permutex2var_pd(c0, idx_lo, c8);
-        let o9 = _mm512_permutex2var_pd(c1, idx_lo, c9);
-        let o10 = _mm512_permutex2var_pd(c2, idx_lo, c10);
-        let o11 = _mm512_permutex2var_pd(c3, idx_lo, c11);
-        let o12 = _mm512_permutex2var_pd(c4, idx_lo, c12);
-        let o13 = _mm512_permutex2var_pd(c5, idx_lo, c13);
-        let o14 = _mm512_permutex2var_pd(c6, idx_lo, c14);
-        let o15 = _mm512_permutex2var_pd(c7, idx_lo, c15);
-
-        let o0 = _mm512_castpd_ps(o0);
-        let o1 = _mm512_castpd_ps(o1);
-        let o2 = _mm512_castpd_ps(o2);
-        let o3 = _mm512_castpd_ps(o3);
-        let o4 = _mm512_castpd_ps(o4);
-        let o5 = _mm512_castpd_ps(o5);
-        let o6 = _mm512_castpd_ps(o6);
-        let o7 = _mm512_castpd_ps(o7);
-        let o8 = _mm512_castpd_ps(o8);
-        let o9 = _mm512_castpd_ps(o9);
-        let o10 = _mm512_castpd_ps(o10);
-        let o11 = _mm512_castpd_ps(o11);
-        let o12 = _mm512_castpd_ps(o12);
-        let o13 = _mm512_castpd_ps(o13);
-        let o14 = _mm512_castpd_ps(o14);
-        let o15 = _mm512_castpd_ps(o15);
-
-        F32VecAvx512(o0, self).store_array(&mut output[0]);
-        F32VecAvx512(o1, self).store_array(&mut output[1 * output_stride]);
-        F32VecAvx512(o2, self).store_array(&mut output[2 * output_stride]);
-        F32VecAvx512(o3, self).store_array(&mut output[3 * output_stride]);
-        F32VecAvx512(o4, self).store_array(&mut output[4 * output_stride]);
-        F32VecAvx512(o5, self).store_array(&mut output[5 * output_stride]);
-        F32VecAvx512(o6, self).store_array(&mut output[6 * output_stride]);
-        F32VecAvx512(o7, self).store_array(&mut output[7 * output_stride]);
-        F32VecAvx512(o8, self).store_array(&mut output[8 * output_stride]);
-        F32VecAvx512(o9, self).store_array(&mut output[9 * output_stride]);
-        F32VecAvx512(o10, self).store_array(&mut output[10 * output_stride]);
-        F32VecAvx512(o11, self).store_array(&mut output[11 * output_stride]);
-        F32VecAvx512(o12, self).store_array(&mut output[12 * output_stride]);
-        F32VecAvx512(o13, self).store_array(&mut output[13 * output_stride]);
-        F32VecAvx512(o14, self).store_array(&mut output[14 * output_stride]);
-        F32VecAvx512(o15, self).store_array(&mut output[15 * output_stride]);
-    }
-}
-
 #[derive(Clone, Copy, Debug)]
 #[repr(transparent)]
 pub struct F32VecAvx512(__m512, Avx512Descriptor);
@@ -309,40 +118,11 @@ impl F32SimdVec for F32VecAvx512 {
     }
 
     #[inline(always)]
-    fn load_partial(d: Self::Descriptor, size: usize, mem: &[f32]) -> Self {
-        assert!(Self::LEN >= size);
-        assert!(mem.len() >= size);
-        // Fast path: avoid mask setup overhead when loading full vectors
-        // This optimization skips the expensive mask creation and masked load when size == LEN
-        if size == Self::LEN {
-            return Self::load(d, mem);
-        }
-        // SAFETY: we just checked that `mem` has enough space. Moreover, we know avx512f is available
-        // from the safety invariant on `d`.
-        Self(
-            unsafe { _mm512_mask_loadu_ps(_mm512_setzero_ps(), (1u16 << size) - 1, mem.as_ptr()) },
-            d,
-        )
-    }
-
-    #[inline(always)]
     fn store(&self, mem: &mut [f32]) {
         assert!(mem.len() >= Self::LEN);
         // SAFETY: we just checked that `mem` has enough space. Moreover, we know avx512f is available
         // from the safety invariant on `self.1`.
         unsafe { _mm512_storeu_ps(mem.as_mut_ptr(), self.0) }
-    }
-
-    #[inline(always)]
-    fn store_partial(&self, size: usize, mem: &mut [f32]) {
-        assert!(Self::LEN >= size);
-        assert!(mem.len() >= size);
-        if size == Self::LEN {
-            return self.store(mem);
-        }
-        // SAFETY: we just checked that `mem` has enough space. Moreover, we know avx512f is available
-        // from the safety invariant on `self.1`.
-        unsafe { _mm512_mask_storeu_ps(mem.as_mut_ptr(), (1u16 << size) - 1, self.0) }
     }
 
     fn_avx!(this: F32VecAvx512, fn mul_add(mul: F32VecAvx512, add: F32VecAvx512) -> F32VecAvx512 {

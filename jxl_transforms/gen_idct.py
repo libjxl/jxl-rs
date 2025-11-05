@@ -64,8 +64,7 @@ def b_transpose(variables):
     ret = [0] * len(variables)
     for i in range(1, n):
         ret[i] = next()
-        print("let mut v%d = v%d + v%d;" %
-              (ret[i], variables[i - 1], variables[i]))
+        print("let mut v%d = v%d + v%d;" % (ret[i], variables[i - 1], variables[i]))
     ret[0] = next()
     print(
         "let mut v%d = v%d * D::F32Vec::splat(d, std::f32::consts::SQRT_2);"
@@ -114,15 +113,13 @@ def idct(variables):
     ret = [0] * len(variables)
     if n == 2:
         ret[0] = next()
-        print("let mut v%d = v%d + v%d;" %
-              (ret[0], variables[0], variables[1]))
+        print("let mut v%d = v%d + v%d;" % (ret[0], variables[0], variables[1]))
         ret[1] = next()
-        print("let mut v%d = v%d - v%d;" %
-              (ret[1], variables[0], variables[1]))
+        print("let mut v%d = v%d - v%d;" % (ret[1], variables[0], variables[1]))
     else:
         ret = forward_even_odd(variables)
         first_half = ret[: n // 2]
-        second_half = ret[n // 2:]
+        second_half = ret[n // 2 :]
         if n // 2 <= INLINE_UP_TO_REC:
             first_half = idct(first_half)
         else:
