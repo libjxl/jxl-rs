@@ -80,10 +80,12 @@ impl Passes {
         let mut min_shift = 3;
         for i in 0..pass + 1 {
             for j in 0..self.num_ds as usize {
-                min_shift = self.downsample[j].floor_log2();
+                if i == self.last_pass[j] as usize {
+                    min_shift = self.downsample[j].floor_log2();
+                }
             }
             if i + 1 == self.num_passes as usize {
-                min_shift = 0
+                min_shift = 0;
             }
             if i != pass {
                 max_shift = min_shift - 1;
