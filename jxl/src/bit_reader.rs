@@ -44,6 +44,7 @@ impl<'a> BitReader<'a> {
     }
 
     /// Reads `num` bits from the buffer without consuming them.
+    #[inline]
     pub fn peek(&mut self, num: usize) -> u64 {
         debug_assert!(num <= MAX_BITS_PER_CALL);
         self.refill();
@@ -72,6 +73,7 @@ impl<'a> BitReader<'a> {
     /// assert!(br.read(1).is_err());
     /// # Ok::<(), jxl::error::Error>(())
     /// ```
+    #[inline]
     pub fn read(&mut self, num: usize) -> Result<u64, Error> {
         let ret = self.peek(num);
         self.consume(num)?;
@@ -167,6 +169,7 @@ impl<'a> BitReader<'a> {
         Ok(())
     }
 
+    #[inline]
     fn refill(&mut self) {
         // See Refill() in C++ code.
         if self.data.len() >= 8 {

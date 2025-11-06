@@ -349,13 +349,14 @@ impl AnsHistogram {
 }
 
 impl AnsHistogram {
-    #[inline(always)]
+    #[inline]
     pub fn read(&self, br: &mut BitReader, state: &mut u32) -> Result<u32> {
         let idx = *state & 0xfff;
         let i = (idx >> self.log_bucket_size) as usize;
         let pos = idx & self.bucket_mask;
 
-        let bucket = self.buckets[i];
+        debug_assert!(self.buckets.len().is_power_of_two());
+        let bucket = self.buckets[i & (self.buckets.len() - 1)];
         let alias_symbol = bucket.alias_symbol as usize;
         let alias_cutoff = bucket.alias_cutoff as u32;
         let dist = bucket.dist as u32;
@@ -421,6 +422,7 @@ impl AnsReader {
         Ok(Self(initial_state))
     }
 
+    #[inline]
     pub fn read(&mut self, codes: &AnsCodes, br: &mut BitReader, ctx: usize) -> Result<u32> {
         codes.histograms[ctx].read(br, &mut self.0)
     }

@@ -152,6 +152,7 @@ impl SymbolReader {
         })
     }
 
+    #[inline]
     pub fn read_unsigned(
         &mut self,
         histograms: &Histograms,
@@ -225,6 +226,7 @@ impl SymbolReader {
         }
     }
 
+    #[inline(always)]
     pub fn read_signed(
         &mut self,
         histograms: &Histograms,

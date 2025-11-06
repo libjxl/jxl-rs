@@ -48,6 +48,8 @@ impl HybridUint {
             lsb_in_token,
         })
     }
+
+    #[inline]
     pub fn read(&self, symbol: u32, br: &mut BitReader) -> Result<u32, Error> {
         if symbol < self.split_token {
             return Ok(symbol);
