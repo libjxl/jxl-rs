@@ -160,6 +160,11 @@ impl I32SimdVec for i32 {
     }
 
     #[inline(always)]
+    fn eq(self, other: Self) -> bool {
+        self == other
+    }
+
+    #[inline(always)]
     fn shl<const AMOUNT_U: u32, const AMOUNT_I: i32>(self) -> Self {
         self << AMOUNT_U
     }
@@ -176,6 +181,11 @@ impl SimdMask for bool {
     #[inline(always)]
     fn if_then_else_f32(self, if_true: f32, if_false: f32) -> f32 {
         if self { if_true } else { if_false }
+    }
+
+    #[inline(always)]
+    fn all(self) -> bool {
+        self
     }
 }
 
