@@ -5,7 +5,10 @@
 
 use std::{
     fmt::Debug,
-    ops::{Add, AddAssign, Div, DivAssign, Mul, MulAssign, Sub, SubAssign},
+    ops::{
+        Add, AddAssign, BitAnd, BitAndAssign, BitOr, BitOrAssign, Div, DivAssign, Mul, MulAssign,
+        Sub, SubAssign,
+    },
 };
 
 #[cfg(target_arch = "x86_64")]
@@ -129,9 +132,13 @@ pub trait I32SimdVec:
     + Add<Self, Output = Self>
     + Mul<Self, Output = Self>
     + Sub<Self, Output = Self>
+    + BitAnd<Self, Output = Self>
+    + BitOr<Self, Output = Self>
     + AddAssign<Self>
     + MulAssign<Self>
     + SubAssign<Self>
+    + BitAndAssign<Self>
+    + BitOrAssign<Self>
 {
     type Descriptor: SimdDescriptor;
 
@@ -151,6 +158,8 @@ pub trait I32SimdVec:
     fn bitcast_to_f32(self) -> <<Self as I32SimdVec>::Descriptor as SimdDescriptor>::F32Vec;
 
     fn gt(self, other: Self) -> <<Self as I32SimdVec>::Descriptor as SimdDescriptor>::Mask;
+
+    fn eq(self, other: Self) -> <<Self as I32SimdVec>::Descriptor as SimdDescriptor>::Mask;
 
     fn shl<const AMOUNT_U: u32, const AMOUNT_I: i32>(self) -> Self;
 
@@ -179,6 +188,8 @@ pub trait SimdMask: Sized + Copy + Debug + Send + Sync {
         if_true: <<Self as SimdMask>::Descriptor as SimdDescriptor>::F32Vec,
         if_false: <<Self as SimdMask>::Descriptor as SimdDescriptor>::F32Vec,
     ) -> <<Self as SimdMask>::Descriptor as SimdDescriptor>::F32Vec;
+
+    fn all(self) -> bool;
 }
 
 macro_rules! impl_f32_array_interface {

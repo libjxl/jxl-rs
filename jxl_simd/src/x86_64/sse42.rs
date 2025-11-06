@@ -8,14 +8,18 @@ use crate::impl_f32_array_interface;
 use super::super::{F32SimdVec, I32SimdVec, SimdDescriptor, SimdMask};
 use std::{
     arch::x86_64::{
-        __m128, __m128i, _mm_abs_epi32, _mm_add_epi32, _mm_add_ps, _mm_and_ps, _mm_andnot_ps,
-        _mm_andnot_si128, _mm_blendv_ps, _mm_castps_si128, _mm_castsi128_ps, _mm_cmpgt_epi32,
-        _mm_cmpgt_ps, _mm_cvtepi32_ps, _mm_cvtps_epi32, _mm_div_ps, _mm_floor_ps, _mm_loadu_ps,
-        _mm_loadu_si128, _mm_max_ps, _mm_mul_epi32, _mm_mul_ps, _mm_or_ps, _mm_set1_epi32,
-        _mm_set1_ps, _mm_setzero_ps, _mm_slli_epi32, _mm_sqrt_ps, _mm_srai_epi32, _mm_storeu_ps,
-        _mm_sub_epi32, _mm_sub_ps, _mm_unpackhi_ps, _mm_unpacklo_ps, _mm_xor_si128,
+        __m128, __m128i, _mm_abs_epi32, _mm_add_epi32, _mm_add_ps, _mm_and_ps, _mm_and_si128,
+        _mm_andnot_ps, _mm_andnot_si128, _mm_blendv_ps, _mm_castps_si128, _mm_castsi128_ps,
+        _mm_cmpeq_epi32, _mm_cmpgt_epi32, _mm_cmpgt_ps, _mm_cvtepi32_ps, _mm_cvtps_epi32,
+        _mm_div_ps, _mm_floor_ps, _mm_loadu_ps, _mm_loadu_si128, _mm_max_ps, _mm_movemask_ps,
+        _mm_mul_epi32, _mm_mul_ps, _mm_or_ps, _mm_or_si128, _mm_set1_epi32, _mm_set1_ps,
+        _mm_setzero_ps, _mm_slli_epi32, _mm_sqrt_ps, _mm_srai_epi32, _mm_storeu_ps, _mm_sub_epi32,
+        _mm_sub_ps, _mm_unpackhi_ps, _mm_unpacklo_ps, _mm_xor_si128,
     },
-    ops::{Add, AddAssign, Div, DivAssign, Mul, MulAssign, Sub, SubAssign},
+    ops::{
+        Add, AddAssign, BitAnd, BitAndAssign, BitOr, BitOrAssign, Div, DivAssign, Mul, MulAssign,
+        Sub, SubAssign,
+    },
 };
 
 // Safety invariant: this type is only ever constructed if sse4.2 is available.
@@ -320,6 +324,13 @@ impl I32SimdVec for I32VecSse42 {
         )
     });
 
+    fn_sse42!(this: I32VecSse42, fn eq(rhs: I32VecSse42) -> MaskSse42 {
+        MaskSse42(
+            _mm_castsi128_ps(_mm_cmpeq_epi32(this.0, rhs.0)),
+            this.1,
+        )
+    });
+
     #[inline(always)]
     fn shl<const AMOUNT_U: u32, const AMOUNT_I: i32>(self) -> Self {
         // SAFETY: We know sse2 is available from the safety invariant on `d`.
@@ -354,6 +365,20 @@ impl Mul<I32VecSse42> for I32VecSse42 {
     });
 }
 
+impl BitAnd<I32VecSse42> for I32VecSse42 {
+    type Output = I32VecSse42;
+    fn_sse42!(this: I32VecSse42, fn bitand(rhs: I32VecSse42) -> I32VecSse42 {
+        I32VecSse42(_mm_and_si128(this.0, rhs.0), this.1)
+    });
+}
+
+impl BitOr<I32VecSse42> for I32VecSse42 {
+    type Output = I32VecSse42;
+    fn_sse42!(this: I32VecSse42, fn bitor(rhs: I32VecSse42) -> I32VecSse42 {
+        I32VecSse42(_mm_or_si128(this.0, rhs.0), this.1)
+    });
+}
+
 impl AddAssign<I32VecSse42> for I32VecSse42 {
     fn_sse42!(this: &mut I32VecSse42, fn add_assign(rhs: I32VecSse42) {
         this.0 = _mm_add_epi32(this.0, rhs.0)
@@ -372,10 +397,26 @@ impl MulAssign<I32VecSse42> for I32VecSse42 {
     });
 }
 
+impl BitAndAssign<I32VecSse42> for I32VecSse42 {
+    fn_sse42!(this: &mut I32VecSse42, fn bitand_assign(rhs: I32VecSse42) {
+        this.0 = _mm_and_si128(this.0, rhs.0)
+    });
+}
+
+impl BitOrAssign<I32VecSse42> for I32VecSse42 {
+    fn_sse42!(this: &mut I32VecSse42, fn bitor_assign(rhs: I32VecSse42) {
+        this.0 = _mm_or_si128(this.0, rhs.0)
+    });
+}
+
 impl SimdMask for MaskSse42 {
     type Descriptor = Sse42Descriptor;
 
     fn_sse42!(this: MaskSse42, fn if_then_else_f32(if_true: F32VecSse42, if_false: F32VecSse42) -> F32VecSse42 {
         F32VecSse42(_mm_blendv_ps(if_false.0, if_true.0, this.0), this.1)
+    });
+
+    fn_sse42!(this: MaskSse42, fn all() -> bool {
+        _mm_movemask_ps(this.0) == 0b1111
     });
 }

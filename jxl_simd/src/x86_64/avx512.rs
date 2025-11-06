@@ -10,18 +10,18 @@ use std::{
         __m512, __m512i, __mmask16, _CMP_GT_OQ, _MM_FROUND_FLOOR, _mm512_abs_epi32, _mm512_abs_ps,
         _mm512_add_epi32, _mm512_add_epi64, _mm512_add_ps, _mm512_and_si512, _mm512_andnot_si512,
         _mm512_castpd_ps, _mm512_castps_pd, _mm512_castps_si512, _mm512_castsi512_ps,
-        _mm512_cmp_ps_mask, _mm512_cmpgt_epi32_mask, _mm512_cvtepi32_ps, _mm512_cvtps_epi32,
-        _mm512_div_ps, _mm512_fmadd_ps, _mm512_fnmadd_ps, _mm512_loadu_epi32, _mm512_loadu_ps,
-        _mm512_mask_blend_ps, _mm512_max_ps, _mm512_mul_epi32, _mm512_mul_ps, _mm512_or_si512,
-        _mm512_permutex2var_pd, _mm512_roundscale_ps, _mm512_set1_epi32, _mm512_set1_epi64,
-        _mm512_set1_ps, _mm512_setr_epi64, _mm512_setzero_ps, _mm512_slli_epi32, _mm512_sllv_epi32,
-        _mm512_sqrt_ps, _mm512_srai_epi32, _mm512_srav_epi32, _mm512_storeu_ps, _mm512_sub_epi32,
-        _mm512_sub_ps, _mm512_unpackhi_pd, _mm512_unpackhi_ps, _mm512_unpacklo_pd,
-        _mm512_unpacklo_ps, _mm512_xor_si512,
+        _mm512_cmp_ps_mask, _mm512_cmpeq_epi32_mask, _mm512_cmpgt_epi32_mask, _mm512_cvtepi32_ps,
+        _mm512_cvtps_epi32, _mm512_div_ps, _mm512_fmadd_ps, _mm512_fnmadd_ps, _mm512_loadu_epi32,
+        _mm512_loadu_ps, _mm512_mask_blend_ps, _mm512_max_ps, _mm512_mul_epi32, _mm512_mul_ps,
+        _mm512_or_si512, _mm512_permutex2var_pd, _mm512_roundscale_ps, _mm512_set1_epi32,
+        _mm512_set1_epi64, _mm512_set1_ps, _mm512_setr_epi64, _mm512_setzero_ps, _mm512_slli_epi32,
+        _mm512_sllv_epi32, _mm512_sqrt_ps, _mm512_srai_epi32, _mm512_srav_epi32, _mm512_storeu_ps,
+        _mm512_sub_epi32, _mm512_sub_ps, _mm512_unpackhi_pd, _mm512_unpackhi_ps,
+        _mm512_unpacklo_pd, _mm512_unpacklo_ps, _mm512_xor_si512,
     },
     ops::{
-        Add, AddAssign, Div, DivAssign, Mul, MulAssign, Shl, ShlAssign, Shr, ShrAssign, Sub,
-        SubAssign,
+        Add, AddAssign, BitAnd, BitAndAssign, BitOr, BitOrAssign, Div, DivAssign, Mul, MulAssign,
+        Shl, ShlAssign, Shr, ShrAssign, Sub, SubAssign,
     },
 };
 
@@ -448,6 +448,10 @@ impl I32SimdVec for I32VecAvx512 {
         MaskAvx512(_mm512_cmpgt_epi32_mask(this.0, rhs.0), this.1)
     });
 
+    fn_avx!(this: I32VecAvx512, fn eq(rhs: I32VecAvx512) -> MaskAvx512 {
+        MaskAvx512(_mm512_cmpeq_epi32_mask(this.0, rhs.0), this.1)
+    });
+
     #[inline(always)]
     fn shl<const AMOUNT_U: u32, const AMOUNT_I: i32>(self) -> Self {
         // SAFETY: We know avx512f is available from the safety invariant on `d`.
@@ -496,6 +500,20 @@ impl Shr<I32VecAvx512> for I32VecAvx512 {
     });
 }
 
+impl BitAnd<I32VecAvx512> for I32VecAvx512 {
+    type Output = I32VecAvx512;
+    fn_avx!(this: I32VecAvx512, fn bitand(rhs: I32VecAvx512) -> I32VecAvx512 {
+        I32VecAvx512(_mm512_and_si512(this.0, rhs.0), this.1)
+    });
+}
+
+impl BitOr<I32VecAvx512> for I32VecAvx512 {
+    type Output = I32VecAvx512;
+    fn_avx!(this: I32VecAvx512, fn bitor(rhs: I32VecAvx512) -> I32VecAvx512 {
+        I32VecAvx512(_mm512_or_si512(this.0, rhs.0), this.1)
+    });
+}
+
 impl AddAssign<I32VecAvx512> for I32VecAvx512 {
     fn_avx!(this: &mut I32VecAvx512, fn add_assign(rhs: I32VecAvx512) {
         this.0 = _mm512_add_epi32(this.0, rhs.0)
@@ -526,10 +544,26 @@ impl ShrAssign<I32VecAvx512> for I32VecAvx512 {
     });
 }
 
+impl BitAndAssign<I32VecAvx512> for I32VecAvx512 {
+    fn_avx!(this: &mut I32VecAvx512, fn bitand_assign(rhs: I32VecAvx512) {
+        this.0 = _mm512_and_si512(this.0, rhs.0)
+    });
+}
+
+impl BitOrAssign<I32VecAvx512> for I32VecAvx512 {
+    fn_avx!(this: &mut I32VecAvx512, fn bitor_assign(rhs: I32VecAvx512) {
+        this.0 = _mm512_or_si512(this.0, rhs.0)
+    });
+}
+
 impl SimdMask for MaskAvx512 {
     type Descriptor = Avx512Descriptor;
 
     fn_avx!(this: MaskAvx512, fn if_then_else_f32(if_true: F32VecAvx512, if_false: F32VecAvx512) -> F32VecAvx512 {
          F32VecAvx512(_mm512_mask_blend_ps(this.0, if_false.0, if_true.0), this.1)
+    });
+
+    fn_avx!(this: MaskAvx512, fn all() -> bool {
+        this.0 == 0b1111111111111111
     });
 }
