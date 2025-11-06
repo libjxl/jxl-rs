@@ -57,11 +57,15 @@ pub fn default_squeeze(data_channel_info: &[(usize, ChannelInfo)]) -> Vec<Squeez
             begin_channel: num_meta_channels as u32 + 1,
             num_channels: 2,
         };
-        params.push(sp);
-        params.push(SqueezeParams {
-            horizontal: false,
-            ..sp
-        });
+        if w > 1 {
+            params.push(sp);
+        }
+        if h > 1 {
+            params.push(SqueezeParams {
+                horizontal: false,
+                ..sp
+            });
+        }
     }
 
     const MAX_FIRST_PREVIEW_SIZE: usize = 8;

@@ -369,19 +369,14 @@ impl TransformStepChunk {
                             |x| x.as_ref().unwrap(),
                         ))
                     };
-
+                    let avg_grid_rect =
+                        buf_avg.get_grid_rect(frame_header, out_grid_kind, (gx, gy));
+                    let res_grid_rect =
+                        buf_res.get_grid_rect(frame_header, out_grid_kind, (gx, gy));
                     with_buffers(buffers, &[*buf_out], out_grid, |mut bufs| {
                         super::squeeze::do_vsqueeze_step(
-                            &in_avg.data.as_rect().rect(buf_avg.get_grid_rect(
-                                frame_header,
-                                out_grid_kind,
-                                (gx, gy),
-                            ))?,
-                            &in_res.data.as_rect().rect(buf_res.get_grid_rect(
-                                frame_header,
-                                out_grid_kind,
-                                (gx, gy),
-                            ))?,
+                            &in_avg.data.as_rect().rect(avg_grid_rect)?,
+                            &in_res.data.as_rect().rect(res_grid_rect)?,
                             &in_next_avg_rect,
                             &out_prev,
                             &mut bufs,
