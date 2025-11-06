@@ -5,7 +5,7 @@
 
 use std::sync::Arc;
 
-use crate::{BLOCK_DIM, MIN_SIGMA, SIGMA_PADDING, image::Image, render::RenderPipelineInOutStage};
+use crate::{BLOCK_DIM, MIN_SIGMA, image::Image, render::RenderPipelineInOutStage};
 
 use jxl_simd::{F32SimdVec, simd_function};
 
@@ -59,7 +59,7 @@ simd_function!(
     assert_eq!(input_rows.len(), 3);
     assert_eq!(output_rows.len(), 3);
 
-    let row_sigma = stage.sigma.as_rect().row(ypos / BLOCK_DIM + SIGMA_PADDING);
+    let row_sigma = stage.sigma.as_rect().row(ypos / BLOCK_DIM);
 
     let sm = stage.sigma_scale * 1.65;
     let bsm = sm * stage.border_sad_mul;
@@ -76,7 +76,7 @@ simd_function!(
     for x in (0..xsize).step_by(D::F32Vec::LEN) {
         for (k, value) in sigma_storage.iter_mut().enumerate() {
             let x = x + k;
-            *value = row_sigma[(x + xpos + SIGMA_PADDING * BLOCK_DIM) / BLOCK_DIM];
+            *value = row_sigma[(x + xpos) / BLOCK_DIM];
         }
 
         if sigma_storage.iter().all(|&sigma| sigma < MIN_SIGMA) {
@@ -292,7 +292,7 @@ fn epf1_process_row_chunk(
     assert_eq!(input_rows.len(), 3);
     assert_eq!(output_rows.len(), 3);
 
-    let row_sigma = stage.sigma.as_rect().row(ypos / BLOCK_DIM + SIGMA_PADDING);
+    let row_sigma = stage.sigma.as_rect().row(ypos / BLOCK_DIM);
 
     let sm = stage.sigma_scale * 1.65;
     let bsm = sm * stage.border_sad_mul;
@@ -309,7 +309,7 @@ fn epf1_process_row_chunk(
     for x in (0..xsize).step_by(D::F32Vec::LEN) {
         for (k, value) in sigma_storage.iter_mut().enumerate() {
             let x = x + k;
-            *value = row_sigma[(x + xpos + SIGMA_PADDING * BLOCK_DIM) / BLOCK_DIM];
+            *value = row_sigma[(x + xpos) / BLOCK_DIM];
         }
 
         if sigma_storage.iter().all(|&sigma| sigma < MIN_SIGMA) {
@@ -465,7 +465,7 @@ fn epf2_process_row_chunk(
         panic!("Expected 3 channels, got {}", input_rows.len());
     };
 
-    let row_sigma = stage.sigma.as_rect().row(ypos / BLOCK_DIM + SIGMA_PADDING);
+    let row_sigma = stage.sigma.as_rect().row(ypos / BLOCK_DIM);
 
     let sm = stage.sigma_scale * 1.65;
     let bsm = sm * stage.border_sad_mul;
@@ -482,7 +482,7 @@ fn epf2_process_row_chunk(
     for x in (0..xsize).step_by(D::F32Vec::LEN) {
         for (k, value) in sigma_storage.iter_mut().enumerate() {
                 let x = x + k;
-            *value = row_sigma[(x + xpos + SIGMA_PADDING * BLOCK_DIM) / BLOCK_DIM];
+            *value = row_sigma[(x + xpos) / BLOCK_DIM];
         }
 
         if sigma_storage.iter().all(|&sigma| sigma < MIN_SIGMA) {
