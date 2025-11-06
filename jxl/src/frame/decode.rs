@@ -355,6 +355,7 @@ impl Frame {
         });
         Ok(())
     }
+
     #[instrument(level = "debug", skip(self, br))]
     pub fn decode_hf_group(&mut self, group: usize, pass: usize, br: &mut BitReader) -> Result<()> {
         debug!(section_size = br.total_bits_available());
@@ -411,6 +412,7 @@ impl Frame {
                 )
             }
         }
+
         let lf_global = self.lf_global.as_mut().unwrap();
         if self.header.encoding == Encoding::VarDCT {
             info!("Decoding VarDCT group {group}, pass {pass}");

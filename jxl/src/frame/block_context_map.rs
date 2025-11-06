@@ -5,10 +5,10 @@
 
 use crate::{
     bit_reader::BitReader,
-    entropy_coding::context_map::*,
-    entropy_coding::decode::unpack_signed,
+    entropy_coding::{context_map::*, decode::unpack_signed},
     error::{Error, Result},
     frame::coeff_order::NUM_ORDERS,
+    util::ShiftRightCeil,
 };
 
 pub const NON_ZERO_BUCKETS: usize = 37;
@@ -27,17 +27,19 @@ pub const COEFF_NUM_NONZERO_CONTEXT: [usize; 64] = [
     206, 206, 206, 206, 206, 206,
 ];
 
+#[inline]
 pub fn zero_density_context(
     nonzeros_left: usize,
     k: usize,
-    num_blocks: usize,
+    log_num_blocks: usize,
     prev: usize,
 ) -> usize {
-    let nonzeros_left_norm = nonzeros_left.div_ceil(num_blocks);
-    let k_norm = k / num_blocks;
-    assert!((1..64).contains(&k_norm));
-    assert!((1..64).contains(&nonzeros_left_norm));
-    (COEFF_NUM_NONZERO_CONTEXT[nonzeros_left_norm] + COEFF_FREQ_CONTEXT[k_norm]) * 2 + prev
+    let nonzeros_left_norm = nonzeros_left.shrc(log_num_blocks);
+    let k_norm = k >> log_num_blocks;
+    debug_assert!((1..64).contains(&k_norm));
+    debug_assert!((1..64).contains(&nonzeros_left_norm));
+    (COEFF_NUM_NONZERO_CONTEXT[nonzeros_left_norm & 63] + COEFF_FREQ_CONTEXT[k_norm & 63]) * 2
+        + prev
 }
 
 #[derive(Debug)]

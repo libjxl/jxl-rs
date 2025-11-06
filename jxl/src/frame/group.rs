@@ -18,12 +18,13 @@ use crate::{
     },
     headers::frame_header::FrameHeader,
     image::{Image, ImageRect, Rect},
-    util::{CeilLog2, tracing_wrappers::*},
+    util::{CeilLog2, ShiftRightCeil, tracing_wrappers::*},
 };
 use jxl_simd::{F32SimdVec, I32SimdVec, SimdDescriptor, SimdMask, simd_function};
 
 const LF_BUFFER_SIZE: usize = 32 * 32;
 
+#[inline]
 fn predict_num_nonzeros(nzeros_map: &Image<u32>, bx: usize, by: usize) -> usize {
     if bx == 0 {
         if by == 0 {
@@ -468,6 +469,8 @@ pub fn decode_vardct_group(
             };
             let num_blocks = cx * cy;
             let num_coeffs = num_blocks * BLOCK_SIZE;
+            let log_num_blocks = num_blocks.ilog2() as usize;
+            let pass_info = &hf_global.passes[pass];
             for c in [1, 0, 2] {
                 if (sbx[c] << hshift[c]) != bx || (sby[c] << vshift[c] != by) {
                     continue;
@@ -494,27 +497,30 @@ pub fn decode_vardct_group(
                 if nonzeros + num_blocks > num_coeffs {
                     return Err(Error::InvalidNumNonZeros(nonzeros, num_blocks));
                 }
+                let mut nzrect = num_nzeros[c].as_rect_mut();
                 for iy in 0..cy {
+                    let nzrow = nzrect.row(sby[c] + iy);
                     for ix in 0..cx {
-                        num_nzeros[c].as_rect_mut().row(sby[c] + iy)[sbx[c] + ix] =
-                            nonzeros.div_ceil(num_blocks) as u32;
+                        nzrow[sbx[c] + ix] = nonzeros.shrc(log_num_blocks) as u32;
                     }
                 }
                 let histo_offset =
                     block_context_map.zero_density_context_offset(block_context) + context_offset;
                 let mut prev = if nonzeros > num_coeffs / 16 { 0 } else { 1 };
+                let permutation = &pass_info.coeff_orders[shape_id * 3 + c];
+                let current_coeffs = &mut coeffs[c][coeffs_offset..coeffs_offset + num_coeffs];
                 for k in num_blocks..num_coeffs {
                     if nonzeros == 0 {
                         break;
                     }
-                    let ctx = histo_offset + zero_density_context(nonzeros, k, num_blocks, prev);
-                    let coeff = reader.read_signed(&hf_global.passes[pass].histograms, br, ctx)?
-                        << shift_for_pass;
+                    let ctx =
+                        histo_offset + zero_density_context(nonzeros, k, log_num_blocks, prev);
+                    let coeff =
+                        reader.read_signed(&pass_info.histograms, br, ctx)? << shift_for_pass;
                     prev = if coeff != 0 { 1 } else { 0 };
                     nonzeros -= prev;
-                    let coeff_index =
-                        hf_global.passes[pass].coeff_orders[shape_id * 3 + c][k] as usize;
-                    coeffs[c][coeffs_offset + coeff_index] += coeff;
+                    let coeff_index = permutation[k] as usize;
+                    current_coeffs[coeff_index] += coeff;
                 }
                 if nonzeros != 0 {
                     return Err(Error::EndOfBlockResidualNonZeros(nonzeros));
