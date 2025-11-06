@@ -49,7 +49,7 @@ pub fn default_squeeze(data_channel_info: &[(usize, ChannelInfo)]) -> Vec<Squeez
 
     let mut params = vec![];
 
-    if nc > 2 && data_channel_info[1].1.size == (w, h) {
+    if nc > 2 && data_channel_info[num_meta_channels + 1].1.size == (w, h) {
         // 420 previews
         let sp = SqueezeParams {
             horizontal: true,
