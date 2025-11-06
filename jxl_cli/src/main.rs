@@ -144,7 +144,7 @@ fn decode_bytes(
 
     // Process until we have image info
     let mut decoder_with_image_info = loop {
-        match initialized_decoder.process(&mut input_buffer).unwrap() {
+        match initialized_decoder.process(&mut input_buffer)? {
             jxl::api::ProcessingResult::Complete { result } => break Ok(result),
             jxl::api::ProcessingResult::NeedsMoreInput { fallback, .. } => {
                 if input_buffer.is_empty() {
@@ -185,7 +185,7 @@ fn decode_bytes(
 
     loop {
         let mut decoder_with_frame_info = loop {
-            match decoder_with_image_info.process(&mut input_buffer).unwrap() {
+            match decoder_with_image_info.process(&mut input_buffer)? {
                 jxl::api::ProcessingResult::Complete { result } => break Ok(result),
                 jxl::api::ProcessingResult::NeedsMoreInput { fallback, .. } => {
                     if input_buffer.is_empty() {
@@ -213,10 +213,7 @@ fn decode_bytes(
             .collect();
 
         decoder_with_image_info = loop {
-            match decoder_with_frame_info
-                .process(&mut input_buffer, &mut output_bufs)
-                .unwrap()
-            {
+            match decoder_with_frame_info.process(&mut input_buffer, &mut output_bufs)? {
                 jxl::api::ProcessingResult::Complete { result } => break Ok(result),
                 jxl::api::ProcessingResult::NeedsMoreInput { fallback, .. } => {
                     if input_buffer.is_empty() {
