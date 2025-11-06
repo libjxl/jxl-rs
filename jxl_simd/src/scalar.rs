@@ -30,20 +30,6 @@ impl SimdDescriptor for ScalarDescriptor {
         Some(Self)
     }
 
-    #[inline(always)]
-    fn transpose<const ROWS: usize, const COLS: usize>(self, input: &[f32], output: &mut [f32]) {
-        assert_eq!(input.len(), ROWS * COLS);
-        assert_eq!(output.len(), ROWS * COLS);
-
-        for r in 0..ROWS {
-            for c in 0..COLS {
-                let input_idx = r * COLS + c;
-                let output_idx = c * ROWS + r;
-                output[output_idx] = input[input_idx];
-            }
-        }
-    }
-
     fn call<R>(self, f: impl FnOnce(Self) -> R) -> R {
         // No special features needed for scalar implementation
         f(self)
@@ -61,20 +47,8 @@ impl F32SimdVec for f32 {
     }
 
     #[inline(always)]
-    fn load_partial(d: Self::Descriptor, size: usize, mem: &[f32]) -> Self {
-        assert_eq!(size, 1);
-        Self::load(d, mem)
-    }
-
-    #[inline(always)]
     fn store(&self, mem: &mut [f32]) {
         mem[0] = *self;
-    }
-
-    #[inline(always)]
-    fn store_partial(&self, size: usize, mem: &mut [f32]) {
-        assert_eq!(size, 1);
-        self.store(mem)
     }
 
     #[inline(always)]

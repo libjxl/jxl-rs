@@ -12,12 +12,11 @@ use std::{
         _mm256_and_ps, _mm256_andnot_ps, _mm256_blendv_ps, _mm256_castpd_ps, _mm256_castps_pd,
         _mm256_castps_si256, _mm256_castsi256_ps, _mm256_cmp_ps, _mm256_cmpgt_epi32,
         _mm256_cvtepi32_ps, _mm256_cvtps_epi32, _mm256_div_ps, _mm256_floor_ps, _mm256_fmadd_ps,
-        _mm256_fnmadd_ps, _mm256_loadu_ps, _mm256_loadu_si256, _mm256_maskload_ps,
-        _mm256_maskstore_ps, _mm256_max_ps, _mm256_mul_epi32, _mm256_mul_ps, _mm256_or_ps,
-        _mm256_permute2f128_ps, _mm256_set1_epi32, _mm256_set1_ps, _mm256_setzero_ps,
-        _mm256_slli_epi32, _mm256_sllv_epi32, _mm256_sqrt_ps, _mm256_srai_epi32, _mm256_srav_epi32,
-        _mm256_storeu_ps, _mm256_sub_epi32, _mm256_sub_ps, _mm256_unpackhi_pd, _mm256_unpackhi_ps,
-        _mm256_unpacklo_pd, _mm256_unpacklo_ps, _mm256_xor_ps,
+        _mm256_fnmadd_ps, _mm256_loadu_ps, _mm256_loadu_si256, _mm256_max_ps, _mm256_mul_epi32,
+        _mm256_mul_ps, _mm256_or_ps, _mm256_permute2f128_ps, _mm256_set1_epi32, _mm256_set1_ps,
+        _mm256_setzero_ps, _mm256_slli_epi32, _mm256_sllv_epi32, _mm256_sqrt_ps, _mm256_srai_epi32,
+        _mm256_srav_epi32, _mm256_storeu_ps, _mm256_sub_epi32, _mm256_sub_ps, _mm256_unpackhi_pd,
+        _mm256_unpackhi_ps, _mm256_unpacklo_pd, _mm256_unpacklo_ps, _mm256_xor_ps,
     },
     ops::{
         Add, AddAssign, Div, DivAssign, Mul, MulAssign, Shl, ShlAssign, Shr, ShrAssign, Sub,
@@ -68,34 +67,6 @@ impl SimdDescriptor for AvxDescriptor {
         }
     }
 
-    #[inline(always)]
-    fn transpose<const ROWS: usize, const COLS: usize>(self, input: &[f32], output: &mut [f32]) {
-        assert_eq!(input.len(), ROWS * COLS);
-        assert_eq!(output.len(), ROWS * COLS);
-
-        if ROWS.is_multiple_of(8) && COLS.is_multiple_of(8) {
-            let input: &[[_; 8]] = input.as_chunks().0;
-            let output: &mut [[_; 8]] = output.as_chunks_mut().0;
-            let cols_div_8 = COLS / 8;
-            let rows_div_8 = ROWS / 8;
-            for r in 0..rows_div_8 {
-                for c in 0..cols_div_8 {
-                    // SAFETY: We know avx is available from the safety invariant on `self`.
-                    unsafe {
-                        self.transpose8x8f32(
-                            &input[r * COLS + c..],
-                            cols_div_8,
-                            &mut output[c * ROWS + r..],
-                            rows_div_8,
-                        );
-                    }
-                }
-            }
-        } else {
-            self.as_sse42().transpose::<ROWS, COLS>(input, output);
-        }
-    }
-
     fn call<R>(self, f: impl FnOnce(Self) -> R) -> R {
         #[target_feature(enable = "avx2,fma")]
         unsafe fn inner<R>(d: AvxDescriptor, f: impl FnOnce(AvxDescriptor) -> R) -> R {
@@ -103,81 +74,6 @@ impl SimdDescriptor for AvxDescriptor {
         }
         // SAFETY: the safety invariant on `self` guarantees avx2 and fma.
         unsafe { inner(self, f) }
-    }
-}
-
-#[target_feature(enable = "avx2")]
-#[inline]
-fn unpacklo_pd(a: __m256, b: __m256) -> __m256 {
-    _mm256_castpd_ps(_mm256_unpacklo_pd(_mm256_castps_pd(a), _mm256_castps_pd(b)))
-}
-
-#[target_feature(enable = "avx2")]
-#[inline]
-fn unpackhi_pd(a: __m256, b: __m256) -> __m256 {
-    _mm256_castpd_ps(_mm256_unpackhi_pd(_mm256_castps_pd(a), _mm256_castps_pd(b)))
-}
-
-impl AvxDescriptor {
-    #[target_feature(enable = "avx2")]
-    #[inline]
-    fn transpose8x8f32(
-        self,
-        input: &[[f32; 8]],
-        input_stride: usize,
-        output: &mut [[f32; 8]],
-        output_stride: usize,
-    ) {
-        assert!(input.len() > input_stride * 7);
-        assert!(output.len() > output_stride * 7);
-
-        let r0 = F32VecAvx::load_array(self, &input[0]).0;
-        let r1 = F32VecAvx::load_array(self, &input[1 * input_stride]).0;
-        let r2 = F32VecAvx::load_array(self, &input[2 * input_stride]).0;
-        let r3 = F32VecAvx::load_array(self, &input[3 * input_stride]).0;
-        let r4 = F32VecAvx::load_array(self, &input[4 * input_stride]).0;
-        let r5 = F32VecAvx::load_array(self, &input[5 * input_stride]).0;
-        let r6 = F32VecAvx::load_array(self, &input[6 * input_stride]).0;
-        let r7 = F32VecAvx::load_array(self, &input[7 * input_stride]).0;
-
-        // Stage 1: Unpack low/high pairs
-        let t0 = _mm256_unpacklo_ps(r0, r1);
-        let t1 = _mm256_unpackhi_ps(r0, r1);
-        let t2 = _mm256_unpacklo_ps(r2, r3);
-        let t3 = _mm256_unpackhi_ps(r2, r3);
-        let t4 = _mm256_unpacklo_ps(r4, r5);
-        let t5 = _mm256_unpackhi_ps(r4, r5);
-        let t6 = _mm256_unpacklo_ps(r6, r7);
-        let t7 = _mm256_unpackhi_ps(r6, r7);
-
-        // Stage 2: Shuffle to group 32-bit elements
-        let s0 = unpacklo_pd(t0, t2);
-        let s1 = unpackhi_pd(t0, t2);
-        let s2 = unpacklo_pd(t1, t3);
-        let s3 = unpackhi_pd(t1, t3);
-        let s4 = unpacklo_pd(t4, t6);
-        let s5 = unpackhi_pd(t4, t6);
-        let s6 = unpacklo_pd(t5, t7);
-        let s7 = unpackhi_pd(t5, t7);
-
-        // Stage 3: 128-bit permute to finalize transpose
-        let c0 = _mm256_permute2f128_ps::<0x20>(s0, s4);
-        let c1 = _mm256_permute2f128_ps::<0x20>(s1, s5);
-        let c2 = _mm256_permute2f128_ps::<0x20>(s2, s6);
-        let c3 = _mm256_permute2f128_ps::<0x20>(s3, s7);
-        let c4 = _mm256_permute2f128_ps::<0x31>(s0, s4);
-        let c5 = _mm256_permute2f128_ps::<0x31>(s1, s5);
-        let c6 = _mm256_permute2f128_ps::<0x31>(s2, s6);
-        let c7 = _mm256_permute2f128_ps::<0x31>(s3, s7);
-
-        F32VecAvx(c0, self).store_array(&mut output[0]);
-        F32VecAvx(c1, self).store_array(&mut output[1 * output_stride]);
-        F32VecAvx(c2, self).store_array(&mut output[2 * output_stride]);
-        F32VecAvx(c3, self).store_array(&mut output[3 * output_stride]);
-        F32VecAvx(c4, self).store_array(&mut output[4 * output_stride]);
-        F32VecAvx(c5, self).store_array(&mut output[5 * output_stride]);
-        F32VecAvx(c6, self).store_array(&mut output[6 * output_stride]);
-        F32VecAvx(c7, self).store_array(&mut output[7 * output_stride]);
     }
 }
 
@@ -207,17 +103,6 @@ pub struct F32VecAvx(__m256, AvxDescriptor);
 #[repr(transparent)]
 pub struct MaskAvx(__m256, AvxDescriptor);
 
-#[target_feature(enable = "avx2")]
-#[inline]
-fn get_partial_mask(size: usize) -> __m256i {
-    const MASKS: [i32; 15] = [-1, -1, -1, -1, -1, -1, -1, -1, 0, 0, 0, 0, 0, 0, 0];
-    // SAFETY: the pointer arithmetic is safe because:
-    // `(size - 1) & 7` is between 0 and 7 (inclusive);
-    // `7 - ((size - 1) & 7)` is therefore also between 0 and 7 (inclusive);
-    // all starting indices between 0 and 7 into a 15-element array leave at least 8 elements to load.
-    unsafe { _mm256_loadu_si256(MASKS.as_ptr().add(7 - ((size - 1) & 7)) as *const _) }
-}
-
 impl F32SimdVec for F32VecAvx {
     type Descriptor = AvxDescriptor;
 
@@ -232,39 +117,11 @@ impl F32SimdVec for F32VecAvx {
     }
 
     #[inline(always)]
-    fn load_partial(d: Self::Descriptor, size: usize, mem: &[f32]) -> Self {
-        debug_assert!(Self::LEN >= size);
-        assert!(mem.len() >= size);
-        // Fast path: avoid mask setup overhead when loading full vectors
-        // This optimization skips the expensive mask creation and masked load when size == LEN
-        if size == Self::LEN {
-            return Self::load(d, mem);
-        }
-        // SAFETY: we just checked that `mem` has enough space. Moreover, we know avx is available
-        // from the safety invariant on `d`.
-        Self(
-            unsafe { _mm256_maskload_ps(mem.as_ptr(), get_partial_mask(size)) },
-            d,
-        )
-    }
-
-    #[inline(always)]
     fn store(&self, mem: &mut [f32]) {
         assert!(mem.len() >= Self::LEN);
         // SAFETY: we just checked that `mem` has enough space. Moreover, we know avx is available
         // from the safety invariant on `self.1`.
         unsafe { _mm256_storeu_ps(mem.as_mut_ptr(), self.0) }
-    }
-    #[inline(always)]
-    fn store_partial(&self, size: usize, mem: &mut [f32]) {
-        assert!(Self::LEN >= size);
-        assert!(mem.len() >= size);
-        if size == Self::LEN {
-            return self.store(mem);
-        }
-        // SAFETY: we just checked that `mem` has enough space. Moreover, we know avx is available
-        // from the safety invariant on `d`.
-        unsafe { _mm256_maskstore_ps(mem.as_mut_ptr(), get_partial_mask(size), self.0) }
     }
 
     fn_avx!(this: F32VecAvx, fn mul_add(mul: F32VecAvx, add: F32VecAvx) -> F32VecAvx {
@@ -334,6 +191,18 @@ impl F32SimdVec for F32VecAvx {
 
     #[inline(always)]
     fn transpose_square(d: Self::Descriptor, data: &mut [Self::UnderlyingArray], stride: usize) {
+        #[target_feature(enable = "avx2")]
+        #[inline]
+        fn unpacklo_pd(a: __m256, b: __m256) -> __m256 {
+            _mm256_castpd_ps(_mm256_unpacklo_pd(_mm256_castps_pd(a), _mm256_castps_pd(b)))
+        }
+
+        #[target_feature(enable = "avx2")]
+        #[inline]
+        fn unpackhi_pd(a: __m256, b: __m256) -> __m256 {
+            _mm256_castpd_ps(_mm256_unpackhi_pd(_mm256_castps_pd(a), _mm256_castps_pd(b)))
+        }
+
         #[target_feature(enable = "avx2")]
         #[inline]
         fn transpose8x8f32(d: AvxDescriptor, data: &mut [[f32; 8]], stride: usize) {

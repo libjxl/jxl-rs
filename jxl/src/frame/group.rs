@@ -182,7 +182,7 @@ fn dequant_and_transform_to_pixels<D: SimdDescriptor>(
         if (sbx[c] << hshift[c]) != bx || (sby[c] << vshift[c] != by) {
             continue;
         }
-        let (lf, scratch) = scratch.split_at_mut(LF_BUFFER_SIZE);
+        let lf = &mut scratch[..];
         {
             let xs = covered_blocks_x(transform_type) as usize;
             let ys = covered_blocks_y(transform_type) as usize;
@@ -191,7 +191,7 @@ fn dequant_and_transform_to_pixels<D: SimdDescriptor>(
                 lf.copy_from_slice(&rect.row(y)[0..xs]);
             }
         }
-        transform_to_pixels(transform_type, lf, &mut transform_buffer[c], scratch);
+        transform_to_pixels(transform_type, lf, &mut transform_buffer[c]);
         let mut output = pixels[c].as_rect_mut();
         let downsampled_rect = Rect {
             origin: (
@@ -310,9 +310,7 @@ pub fn decode_vardct_group(
         ))?,
     ];
     debug!(?block_group_rect);
-    // TODO(veluca): this should become LF_BUFFER_SIZE once the reinterpreting_dct doesn't need
-    // scratch space.
-    let mut scratch = vec![0.0; 2 * LF_BUFFER_SIZE];
+    let mut scratch = vec![0.0; LF_BUFFER_SIZE];
     let color_correlation_params = lf_global.color_correlation_params.as_ref().unwrap();
     let cmap_rect = Rect {
         origin: (
