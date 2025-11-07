@@ -98,8 +98,7 @@ impl RenderPipeline for SimpleRenderPipeline {
         assert_eq!(ty, T::DATA_TYPE_ID);
         for y in 0..sz.1 {
             for x in 0..sz.0 {
-                self.input_buffers[channel].as_rect_mut().row(y + off.1)[x + off.0] =
-                    buf.as_rect().row(y)[x].to_f64();
+                self.input_buffers[channel].row_mut(y + off.1)[x + off.0] = buf.row(y)[x].to_f64();
             }
         }
         self.shared.group_chan_ready_passes[group_id][channel] += num_passes;

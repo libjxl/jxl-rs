@@ -9,7 +9,8 @@ use std::any::Any;
 use crate::{
     api::JxlOutputBuffer,
     error::Result,
-    image::{Image, ImageDataType},
+    image::{DataTypeTag, Image, ImageDataType},
+    util::CACHE_LINE_BYTE_SIZE,
 };
 
 mod builder;
@@ -20,6 +21,24 @@ mod simple_pipeline;
 pub mod stages;
 #[cfg(test)]
 mod test;
+
+const MAX_BORDER: usize = 9;
+
+pub const fn input_image_offset_tag(tag: DataTypeTag) -> (usize, usize) {
+    (CACHE_LINE_BYTE_SIZE / tag.size(), MAX_BORDER)
+}
+
+pub const fn input_image_offset<T: ImageDataType>() -> (usize, usize) {
+    input_image_offset_tag(T::DATA_TYPE_ID)
+}
+
+pub const fn input_image_total_padding_tag(tag: DataTypeTag) -> (usize, usize) {
+    (4 * CACHE_LINE_BYTE_SIZE / tag.size(), MAX_BORDER * 2)
+}
+
+pub const fn input_image_total_padding<T: ImageDataType>() -> (usize, usize) {
+    input_image_total_padding_tag(T::DATA_TYPE_ID)
+}
 
 pub(crate) use builder::RenderPipelineBuilder;
 pub(crate) use low_memory_pipeline::LowMemoryRenderPipeline;

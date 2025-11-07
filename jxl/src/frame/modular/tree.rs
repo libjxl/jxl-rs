@@ -222,7 +222,7 @@ impl Tree {
         property_buffer: &mut [i32],
     ) -> PredictionResult {
         let img = &buffers[index].data;
-        let prediction_data = PredictionData::get(img.as_rect(), x, y);
+        let prediction_data = PredictionData::get(img, x, y);
         let PredictionData {
             left,
             top,
@@ -269,7 +269,7 @@ impl Tree {
         let num_refs = references.size().0;
         if num_refs != 0 {
             let ref_properties = &mut property_buffer[NUM_NONREF_PROPERTIES..];
-            ref_properties[..num_refs].copy_from_slice(&references.as_rect().row(x)[..num_refs]);
+            ref_properties[..num_refs].copy_from_slice(&references.row(x)[..num_refs]);
         }
 
         trace!(?property_buffer, "new properties");

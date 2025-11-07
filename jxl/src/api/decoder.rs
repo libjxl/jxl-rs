@@ -183,7 +183,7 @@ pub(crate) mod tests {
     use super::*;
     use crate::api::JxlDecoderOptions;
     use crate::error::Error;
-    use crate::image::Image;
+    use crate::image::{Image, Rect};
     use crate::util::test::assert_almost_abs_eq_coords;
     use jxl_macros::for_each_test_file;
     use std::path::Path;
@@ -284,7 +284,15 @@ pub(crate) mod tests {
 
             let mut api_buffers: Vec<_> = buffers
                 .iter_mut()
-                .map(|b| JxlOutputBuffer::from_image_rect_mut(b.as_rect_mut().into_raw()))
+                .map(|b| {
+                    JxlOutputBuffer::from_image_rect_mut(
+                        b.get_rect_mut(Rect {
+                            origin: (0, 0),
+                            size: b.size(),
+                        })
+                        .into_raw(),
+                    )
+                })
                 .collect();
 
             decoder_with_image_info = advance_decoder!(decoder_with_frame_info, &mut api_buffers);
@@ -293,11 +301,9 @@ pub(crate) mod tests {
             for buf in buffers.iter() {
                 let (xs, ys) = buf.size();
                 for y in 0..ys {
-                    for x in 0..xs {
-                        assert!(
-                            !buf.as_rect().row(y)[x].is_nan(),
-                            "NaN at {x} {y} (image size {xs}x{ys})"
-                        );
+                    let row = buf.row(y);
+                    for (x, v) in row.iter().enumerate() {
+                        assert!(!v.is_nan(), "NaN at {x} {y} (image size {xs}x{ys})");
                     }
                 }
             }
@@ -359,7 +365,7 @@ pub(crate) mod tests {
                     writeln!(f, "P1\n{} {}", sz.0, sz.1)?;
                     for y in 0..sz.1 {
                         for x in 0..sz.0 {
-                            if (b.as_rect().row(y)[x] - sb.as_rect().row(y)[x]).abs() > 1e-8 {
+                            if (b.row(y)[x] - sb.row(y)[x]).abs() > 1e-8 {
                                 write!(f, "1")?;
                             } else {
                                 write!(f, "0")?;
@@ -370,13 +376,7 @@ pub(crate) mod tests {
                 }
                 for y in 0..sz.1 {
                     for x in 0..sz.0 {
-                        assert_almost_abs_eq_coords(
-                            b.as_rect().row(y)[x],
-                            sb.as_rect().row(y)[x],
-                            1e-5,
-                            (x, y),
-                            c,
-                        );
+                        assert_almost_abs_eq_coords(b.row(y)[x], sb.row(y)[x], 1e-5, (x, y), c);
                     }
                 }
             }

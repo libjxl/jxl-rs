@@ -92,22 +92,10 @@ mod test {
         let mut input_g = Image::new((3, 1))?;
         let mut input_b = Image::new((3, 1))?;
         let mut input_s = Image::new((3, 1))?;
-        input_r
-            .as_rect_mut()
-            .row(0)
-            .copy_from_slice(&[1.0, 0.0, 0.0]);
-        input_g
-            .as_rect_mut()
-            .row(0)
-            .copy_from_slice(&[0.0, 1.0, 0.0]);
-        input_b
-            .as_rect_mut()
-            .row(0)
-            .copy_from_slice(&[0.0, 0.0, 1.0]);
-        input_s
-            .as_rect_mut()
-            .row(0)
-            .copy_from_slice(&[1.0, 1.0, 1.0]);
+        input_r.row_mut(0).copy_from_slice(&[1.0, 0.0, 0.0]);
+        input_g.row_mut(0).copy_from_slice(&[0.0, 1.0, 0.0]);
+        input_b.row_mut(0).copy_from_slice(&[0.0, 0.0, 1.0]);
+        input_s.row_mut(0).copy_from_slice(&[1.0, 1.0, 1.0]);
 
         let stage = SpotColorStage::new(0, [0.5; 4]);
         let output = make_and_run_simple_pipeline(
@@ -118,9 +106,9 @@ mod test {
             256,
         )?;
 
-        assert_all_almost_abs_eq(output[0].as_rect().row(0), &[0.75, 0.25, 0.25], 1e-6);
-        assert_all_almost_abs_eq(output[1].as_rect().row(0), &[0.25, 0.75, 0.25], 1e-6);
-        assert_all_almost_abs_eq(output[2].as_rect().row(0), &[0.25, 0.25, 0.75], 1e-6);
+        assert_all_almost_abs_eq(output[0].row(0), &[0.75, 0.25, 0.25], 1e-6);
+        assert_all_almost_abs_eq(output[1].row(0), &[0.25, 0.75, 0.25], 1e-6);
+        assert_all_almost_abs_eq(output[2].row(0), &[0.25, 0.25, 0.75], 1e-6);
 
         Ok(())
     }

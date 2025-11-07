@@ -285,25 +285,22 @@ mod test {
         let mut input_y = Image::new((3, 1))?;
         let mut input_b = Image::new((3, 1))?;
         input_x
-            .as_rect_mut()
-            .row(0)
+            .row_mut(0)
             .copy_from_slice(&[0.028100073, -0.015386105, 0.0]);
         input_y
-            .as_rect_mut()
-            .row(0)
+            .row_mut(0)
             .copy_from_slice(&[0.4881882, 0.71478134, 0.2781282]);
         input_b
-            .as_rect_mut()
-            .row(0)
+            .row_mut(0)
             .copy_from_slice(&[0.471659, 0.43707693, 0.66613984]);
 
         let stage = XybStage::new(0, OutputColorInfo::default());
         let output =
             make_and_run_simple_pipeline(stage, &[input_x, input_y, input_b], (3, 1), 0, 256)?;
 
-        assert_all_almost_abs_eq(output[0].as_rect().row(0), &[1.0, 0.0, 0.0], 1e-6);
-        assert_all_almost_abs_eq(output[1].as_rect().row(0), &[0.0, 1.0, 0.0], 1e-6);
-        assert_all_almost_abs_eq(output[2].as_rect().row(0), &[0.0, 0.0, 1.0], 1e-6);
+        assert_all_almost_abs_eq(output[0].row(0), &[1.0, 0.0, 0.0], 1e-6);
+        assert_all_almost_abs_eq(output[1].row(0), &[0.0, 1.0, 0.0], 1e-6);
+        assert_all_almost_abs_eq(output[2].row(0), &[0.0, 0.0, 1.0], 1e-6);
 
         Ok(())
     }

@@ -126,7 +126,6 @@ impl RenderPipelineInPlaceStage for BlendingStage {
                     .as_ref()
                     .unwrap()
                     .frame[c]
-                    .as_rect()
                     .row(fg_y0)[fg_x0..fg_x1]);
             }
         }
@@ -136,7 +135,6 @@ impl RenderPipelineInPlaceStage for BlendingStage {
                     .as_ref()
                     .unwrap()
                     .frame[3 + i]
-                    .as_rect()
                     .row(fg_y0)[fg_x0..fg_x1]);
             }
         }

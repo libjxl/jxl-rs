@@ -105,7 +105,6 @@ pub type Upsample8x = Upsample<8, 3>;
 
 #[cfg(test)]
 mod test {
-
     use super::*;
     use crate::{
         error::Result, headers::CustomTransformDataNonserialized, image::Image,
@@ -155,7 +154,7 @@ mod test {
             make_and_run_simple_pipeline(stage, &[input], image_size, 0, 123)?;
         for x in 0..image_size.0 {
             for y in 0..image_size.1 {
-                assert_almost_abs_eq(output[0].as_rect().row(y)[x], val, 0.0000001);
+                assert_almost_abs_eq(output[0].row(y)[x], val, 0.0000001);
             }
         }
         Ok(())
@@ -172,7 +171,7 @@ mod test {
             make_and_run_simple_pipeline(stage, &[input], image_size, 0, 123)?;
         for x in 0..image_size.0 {
             for y in 0..image_size.1 {
-                assert_almost_abs_eq(output[0].as_rect().row(y)[x], val, 0.00001);
+                assert_almost_abs_eq(output[0].row(y)[x], val, 0.00001);
             }
         }
         Ok(())
@@ -189,7 +188,7 @@ mod test {
             make_and_run_simple_pipeline(stage, &[input], image_size, 0, 123)?;
         for x in 0..image_size.0 {
             for y in 0..image_size.1 {
-                assert_almost_abs_eq(output[0].as_rect().row(y)[x], val, 0.00001);
+                assert_almost_abs_eq(output[0].row(y)[x], val, 0.00001);
             }
         }
         Ok(())
@@ -200,19 +199,19 @@ mod test {
         let eps = 0.0000001;
         let mut input = Image::new((7, 7))?;
         // Put a single "1.0" in the middle of the image.
-        input.as_rect_mut().row(3)[3] = 1.0f32;
+        input.row_mut(3)[3] = 1.0f32;
         let ups_factors = ups_factors();
         let stage = Upsample2x::new(&ups_factors, 0);
         let output: Vec<Image<f32>> =
             make_and_run_simple_pipeline(stage, &[input], (14, 14), 0, 77)?;
-        assert_eq!(output[0].as_rect().size(), (14, 14));
+        assert_eq!(output[0].size(), (14, 14));
         // Check we have a border with zeros
         for i in 0..14 {
             for j in 0..2 {
-                assert_almost_abs_eq(output[0].as_rect().row(j)[i], 0.0, eps);
-                assert_almost_abs_eq(output[0].as_rect().row(i)[j], 0.0, eps);
-                assert_almost_abs_eq(output[0].as_rect().row(13 - j)[i], 0.0, eps);
-                assert_almost_abs_eq(output[0].as_rect().row(i)[13 - j], 0.0, eps);
+                assert_almost_abs_eq(output[0].row(j)[i], 0.0, eps);
+                assert_almost_abs_eq(output[0].row(i)[j], 0.0, eps);
+                assert_almost_abs_eq(output[0].row(13 - j)[i], 0.0, eps);
+                assert_almost_abs_eq(output[0].row(i)[13 - j], 0.0, eps);
             }
         }
         // Define the mapping for the symmetric top-left kernel
@@ -232,8 +231,8 @@ mod test {
             for dj in 0..2 {
                 for i in 0..kernel_size {
                     for j in 0..kernel_size {
-                        let output_value = output[0].as_rect().row(kernel_offset + di + 2 * i)
-                            [kernel_offset + dj + 2 * j];
+                        let output_value =
+                            output[0].row(kernel_offset + di + 2 * i)[kernel_offset + dj + 2 * j];
                         let mapped_i = if di == 0 { kernel_size - 1 - i } else { i };
                         let mapped_j = if dj == 0 { kernel_size - 1 - j } else { j };
                         let weight_index = index_map[mapped_i][mapped_j];
@@ -255,21 +254,21 @@ mod test {
         let eps = 0.0000001;
         let mut input = Image::new((7, 7))?;
         // Put a single "1.0" in the middle of the image.
-        input.as_rect_mut().row(3)[3] = 1.0f32;
+        input.row_mut(3)[3] = 1.0f32;
         let ups_factors = ups_factors();
         let stage = Upsample4x::new(&ups_factors, 0);
         let output: Vec<Image<f32>> =
             make_and_run_simple_pipeline(stage, &[input], (28, 28), 0, 1024)?;
 
-        assert_eq!(output[0].as_rect().size(), (28, 28));
+        assert_eq!(output[0].size(), (28, 28));
 
         // Check we have a border with zeros
         for i in 0..28 {
             for j in 0..4 {
-                assert_almost_abs_eq(output[0].as_rect().row(j)[i], 0.0, eps);
-                assert_almost_abs_eq(output[0].as_rect().row(i)[j], 0.0, eps);
-                assert_almost_abs_eq(output[0].as_rect().row(27 - j)[i], 0.0, eps);
-                assert_almost_abs_eq(output[0].as_rect().row(i)[27 - j], 0.0, eps);
+                assert_almost_abs_eq(output[0].row(j)[i], 0.0, eps);
+                assert_almost_abs_eq(output[0].row(i)[j], 0.0, eps);
+                assert_almost_abs_eq(output[0].row(27 - j)[i], 0.0, eps);
+                assert_almost_abs_eq(output[0].row(i)[27 - j], 0.0, eps);
             }
         }
 
@@ -291,7 +290,7 @@ mod test {
         let kernel_size = 5;
         let kernel_offset = 4;
         let weights = &ups_factors.weights4;
-        let row_size = output[0].as_rect().size().0;
+        let row_size = output[0].size().0;
         let column_size = row_size;
         for di in 0..4 {
             for dj in 0..4 {
@@ -302,15 +301,13 @@ mod test {
                         let offset_i = kernel_offset + i;
                         let offset_j = kernel_offset + j;
                         // Testing symmetry
-                        let output_value = output[0].as_rect().row(offset_i)[offset_j];
+                        let output_value = output[0].row(offset_i)[offset_j];
                         let output_value_mirrored_right =
-                            output[0].as_rect().row(row_size - offset_i - 1)[offset_j];
-                        let output_value_mirrored_down = output[0]
-                            .as_rect()
-                            .row(row_size - offset_i - 1)[column_size - offset_j - 1];
-                        let output_value_mirrored_down_right = output[0]
-                            .as_rect()
-                            .row(row_size - offset_i - 1)[column_size - offset_j - 1];
+                            output[0].row(row_size - offset_i - 1)[offset_j];
+                        let output_value_mirrored_down =
+                            output[0].row(row_size - offset_i - 1)[column_size - offset_j - 1];
+                        let output_value_mirrored_down_right =
+                            output[0].row(row_size - offset_i - 1)[column_size - offset_j - 1];
 
                         assert_almost_abs_eq(output_value, output_value_mirrored_right, eps);
                         assert_almost_abs_eq(output_value, output_value_mirrored_down, eps);
@@ -346,21 +343,21 @@ mod test {
         let eps = 0.0000001;
         let mut input = Image::new((7, 7))?;
         // Put a single "1.0" in the middle of the image.
-        input.as_rect_mut().row(3)[3] = 1.0f32;
+        input.row_mut(3)[3] = 1.0f32;
         let ups_factors = ups_factors();
         let stage = Upsample8x::new(&ups_factors, 0);
         let output: Vec<Image<f32>> =
             make_and_run_simple_pipeline(stage, &[input], (56, 56), 0, 1024)?;
 
-        assert_eq!(output[0].as_rect().size(), (56, 56));
+        assert_eq!(output[0].size(), (56, 56));
 
         // Check we have a border with zeros
         for i in 0..56 {
             for j in 0..8 {
-                assert_almost_abs_eq(output[0].as_rect().row(j)[i], 0.0, eps);
-                assert_almost_abs_eq(output[0].as_rect().row(i)[j], 0.0, eps);
-                assert_almost_abs_eq(output[0].as_rect().row(55 - j)[i], 0.0, eps);
-                assert_almost_abs_eq(output[0].as_rect().row(i)[55 - j], 0.0, eps);
+                assert_almost_abs_eq(output[0].row(j)[i], 0.0, eps);
+                assert_almost_abs_eq(output[0].row(i)[j], 0.0, eps);
+                assert_almost_abs_eq(output[0].row(55 - j)[i], 0.0, eps);
+                assert_almost_abs_eq(output[0].row(i)[55 - j], 0.0, eps);
             }
         }
 
@@ -452,7 +449,7 @@ mod test {
         let kernel_size = 5;
         let kernel_offset = 8;
         let weights = &ups_factors.weights8;
-        let row_size = output[0].as_rect().size().0;
+        let row_size = output[0].size().0;
         let column_size = row_size;
         for di in 0..8 {
             for dj in 0..8 {
@@ -463,15 +460,13 @@ mod test {
                         let offset_i = kernel_offset + i;
                         let offset_j = kernel_offset + j;
                         // Testing symmetry
-                        let output_value = output[0].as_rect().row(offset_i)[offset_j];
+                        let output_value = output[0].row(offset_i)[offset_j];
                         let output_value_mirrored_right =
-                            output[0].as_rect().row(row_size - offset_i - 1)[offset_j];
-                        let output_value_mirrored_down = output[0]
-                            .as_rect()
-                            .row(row_size - offset_i - 1)[column_size - offset_j - 1];
-                        let output_value_mirrored_down_right = output[0]
-                            .as_rect()
-                            .row(row_size - offset_i - 1)[column_size - offset_j - 1];
+                            output[0].row(row_size - offset_i - 1)[offset_j];
+                        let output_value_mirrored_down =
+                            output[0].row(row_size - offset_i - 1)[column_size - offset_j - 1];
+                        let output_value_mirrored_down_right =
+                            output[0].row(row_size - offset_i - 1)[column_size - offset_j - 1];
 
                         assert_almost_abs_eq(output_value, output_value_mirrored_right, eps);
                         assert_almost_abs_eq(output_value, output_value_mirrored_down, eps);

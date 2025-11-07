@@ -14,8 +14,9 @@ use crate::api::JxlOutputBuffer;
 use crate::error::Result;
 use crate::headers::Orientation;
 use crate::image::{Image, ImageDataType, OwnedRawImage, Rect};
+use crate::render::MAX_BORDER;
 use crate::render::internal::Stage;
-use crate::util::{CACHE_LINE_BYTE_SIZE, ShiftRightCeil, tracing_wrappers::*};
+use crate::util::{ShiftRightCeil, tracing_wrappers::*};
 
 use super::RenderPipeline;
 use super::internal::{RenderPipelineShared, RunInOutStage, RunInPlaceStage};
@@ -323,10 +324,7 @@ impl RenderPipeline for LowMemoryRenderPipeline {
         }
         border_pixels_per_stage.reverse();
 
-        for c in 0..nc {
-            let (bx, _) = border_pixels_per_stage[0];
-            assert!(bx * shared.channel_info[0][c].ty.unwrap().size() <= 2 * CACHE_LINE_BYTE_SIZE);
-        }
+        assert!(border_pixels_per_stage[0].0 <= MAX_BORDER);
 
         let downsampling_for_stage = shared
             .stages

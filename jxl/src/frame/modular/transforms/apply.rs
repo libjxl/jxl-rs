@@ -13,7 +13,12 @@ use crate::{
         ChannelInfo, ModularBufferInfo, ModularChannel, ModularGridKind, Predictor,
         borrowed_buffers::with_buffers,
     },
-    headers::{self, frame_header::FrameHeader, modular::TransformId, modular::WeightedHeader},
+    headers::{
+        self,
+        frame_header::FrameHeader,
+        modular::{TransformId, WeightedHeader},
+    },
+    image::Rect,
     util::tracing_wrappers::*,
 };
 use std::cell::RefMut;
@@ -281,11 +286,11 @@ impl TransformStepChunk {
                             x.as_ref().unwrap()
                         });
                     let in_next_avg_rect = if has_next {
-                        Some(in_next_avg.data.as_rect().rect(buf_avg.get_grid_rect(
+                        Some(in_next_avg.data.get_rect(buf_avg.get_grid_rect(
                             frame_header,
                             out_grid_kind,
                             (gx_next, gy),
-                        ))?)
+                        )))
                     } else {
                         None
                     };
@@ -305,16 +310,16 @@ impl TransformStepChunk {
 
                     with_buffers(buffers, &[*buf_out], out_grid, |mut bufs| {
                         super::squeeze::do_hsqueeze_step(
-                            &in_avg.data.as_rect().rect(buf_avg.get_grid_rect(
+                            &in_avg.data.get_rect(buf_avg.get_grid_rect(
                                 frame_header,
                                 out_grid_kind,
                                 (gx, gy),
-                            ))?,
-                            &in_res.data.as_rect().rect(buf_res.get_grid_rect(
+                            )),
+                            &in_res.data.get_rect(buf_res.get_grid_rect(
                                 frame_header,
                                 out_grid_kind,
                                 (gx, gy),
-                            ))?,
+                            )),
                             &in_next_avg_rect,
                             &out_prev,
                             &mut bufs,
@@ -348,11 +353,11 @@ impl TransformStepChunk {
                             x.as_ref().unwrap()
                         });
                     let in_next_avg_rect = if has_next {
-                        Some(in_next_avg.data.as_rect().rect(buf_avg.get_grid_rect(
+                        Some(in_next_avg.data.get_rect(buf_avg.get_grid_rect(
                             frame_header,
                             out_grid_kind,
                             (gx, gy_next),
-                        ))?)
+                        )))
                     } else {
                         None
                     };
@@ -375,8 +380,8 @@ impl TransformStepChunk {
                         buf_res.get_grid_rect(frame_header, out_grid_kind, (gx, gy));
                     with_buffers(buffers, &[*buf_out], out_grid, |mut bufs| {
                         super::squeeze::do_vsqueeze_step(
-                            &in_avg.data.as_rect().rect(avg_grid_rect)?,
-                            &in_res.data.as_rect().rect(res_grid_rect)?,
+                            &in_avg.data.get_rect(avg_grid_rect),
+                            &in_res.data.get_rect(res_grid_rect),
                             &in_next_avg_rect,
                             &out_prev,
                             &mut bufs,
@@ -933,9 +938,17 @@ impl TransformStep {
                 let mut in_res = buffers[buf_in[1]].take();
                 {
                     let mut bufs: Vec<_> = vec![out_buf.borrow_mut()];
+                    let in_avg = &in_avg.borrow_mut().data;
+                    let in_res = &in_res.borrow_mut().data;
                     super::squeeze::do_hsqueeze_step(
-                        &in_avg.borrow_mut().data.as_rect(),
-                        &in_res.borrow_mut().data.as_rect(),
+                        &in_avg.get_rect(Rect {
+                            size: in_avg.size(),
+                            origin: (0, 0),
+                        }),
+                        &in_res.get_rect(Rect {
+                            size: in_res.size(),
+                            origin: (0, 0),
+                        }),
                         &None,
                         &None,
                         &mut bufs,
@@ -950,9 +963,17 @@ impl TransformStep {
                 let mut in_res = buffers[buf_in[1]].take();
                 {
                     let mut bufs: Vec<_> = vec![out_buf.borrow_mut()];
+                    let in_avg = &in_avg.borrow_mut().data;
+                    let in_res = &in_res.borrow_mut().data;
                     super::squeeze::do_vsqueeze_step(
-                        &in_avg.borrow_mut().data.as_rect(),
-                        &in_res.borrow_mut().data.as_rect(),
+                        &in_avg.get_rect(Rect {
+                            size: in_avg.size(),
+                            origin: (0, 0),
+                        }),
+                        &in_res.get_rect(Rect {
+                            size: in_res.size(),
+                            origin: (0, 0),
+                        }),
                         &None,
                         &None,
                         &mut bufs,

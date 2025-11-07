@@ -8,7 +8,7 @@ use std::array::from_fn;
 use crate::{
     error::{Error, Result},
     headers::modular::WeightedHeader,
-    image::{Image, ImageRect},
+    image::Image,
     util::floor_log2_nonzero,
 };
 use num_derive::FromPrimitive;
@@ -64,7 +64,7 @@ pub struct PredictionData {
 }
 
 impl PredictionData {
-    pub fn get(rect: ImageRect<i32>, x: usize, y: usize) -> Self {
+    pub fn get(rect: &Image<i32>, x: usize, y: usize) -> Self {
         let left = if x > 0 {
             rect.row(y)[x - 1]
         } else if y > 0 {
@@ -103,12 +103,12 @@ impl PredictionData {
 
     #[allow(clippy::too_many_arguments)]
     pub fn get_with_neighbors(
-        rect: ImageRect<i32>,
-        rect_left: Option<ImageRect<i32>>,
-        rect_top: Option<ImageRect<i32>>,
-        rect_top_left: Option<ImageRect<i32>>,
-        rect_right: Option<ImageRect<i32>>,
-        rect_top_right: Option<ImageRect<i32>>,
+        rect: &Image<i32>,
+        rect_left: Option<&Image<i32>>,
+        rect_top: Option<&Image<i32>>,
+        rect_top_left: Option<&Image<i32>>,
+        rect_right: Option<&Image<i32>>,
+        rect_top_right: Option<&Image<i32>>,
         x: usize,
         y: usize,
         xsize: usize,
@@ -341,13 +341,12 @@ impl<'a> WeightedPredictorState<'a> {
 
     pub fn save_state(&self, wp_image: &mut Image<i32>, xsize: usize) {
         wp_image
-            .as_rect_mut()
-            .row(0)
+            .row_mut(0)
             .copy_from_slice(&self.error[xsize + 2..]);
     }
 
     pub fn restore_state(&mut self, wp_image: &Image<i32>, xsize: usize) {
-        self.error[xsize + 2..].copy_from_slice(wp_image.as_rect().row(0));
+        self.error[xsize + 2..].copy_from_slice(wp_image.row(0));
     }
 
     pub fn update_errors(&mut self, correct_val: i32, pos: (usize, usize), xsize: usize) {

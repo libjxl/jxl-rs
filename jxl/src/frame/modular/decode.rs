@@ -69,22 +69,23 @@ fn precompute_references(
         {
             continue;
         }
-        let mut refs = references.as_rect_mut();
-        let ref_chan = buffers[j].data.as_rect();
+        let ref_chan_row = buffers[j].data.row(y);
+        let ref_chan_prev = buffers[j].data.row(y.saturating_sub(1));
         for x in 0..buffers[chan].data.size().0 {
-            let v = ref_chan.row(y)[x];
-            refs.row(x)[offset] = abs(v);
-            refs.row(x)[offset + 1] = v;
-            let vleft = if x > 0 { ref_chan.row(y)[x - 1] } else { 0 };
-            let vtop = if y > 0 { ref_chan.row(y - 1)[x] } else { vleft };
+            let ref_row = references.row_mut(x);
+            let v = ref_chan_row[x];
+            ref_row[offset] = abs(v);
+            ref_row[offset + 1] = v;
+            let vleft = if x > 0 { ref_chan_row[x - 1] } else { 0 };
+            let vtop = if y > 0 { ref_chan_prev[x] } else { vleft };
             let vtopleft = if x > 0 && y > 0 {
-                ref_chan.row(y - 1)[x - 1]
+                ref_chan_prev[x - 1]
             } else {
                 vleft
             };
             let vpredicted = clamped_gradient(vleft as i64, vtop as i64, vtopleft as i64);
-            refs.row(x)[offset + 2] = abs(v as i64 - vpredicted) as i32;
-            refs.row(x)[offset + 3] = (v as i64 - vpredicted) as i32;
+            ref_row[offset + 2] = abs(v as i64 - vpredicted) as i32;
+            ref_row[offset + 3] = (v as i64 - vpredicted) as i32;
         }
         offset += 4;
     }
@@ -136,7 +137,7 @@ fn decode_modular_channel(
             let dec =
                 reader.read_signed(&tree.histograms, br, prediction_result.context as usize)?;
             let val = make_pixel(dec, prediction_result.multiplier, prediction_result.guess);
-            buffers[chan].data.as_rect_mut().row(y)[x] = val;
+            buffers[chan].data.row_mut(y)[x] = val;
             trace!(y, x, val, dec, ?property_buffer, ?prediction_result);
             if tree_uses_weighted_predictor {
                 wp_state.update_errors(val, (x, y), size.0);

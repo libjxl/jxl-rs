@@ -51,10 +51,9 @@ impl ExtendToImageDimensionsStage {
         for c in 0..numc {
             for in_y in in_y0..in_y1 {
                 debug!("copy row: {in_y}");
-                let in_row = input_buffers[c].as_rect().row(in_y);
+                let in_row = input_buffers[c].row(in_y);
                 let y = (in_y as isize + origin.1) as usize;
-                output_buffers[c].as_rect_mut().row(y)[x0..x1]
-                    .copy_from_slice(&in_row[in_x0..in_x1]);
+                output_buffers[c].row_mut(y)[x0..x1].copy_from_slice(&in_row[in_x0..in_x1]);
             }
         }
         // Fill in rows above and below the original data.
@@ -66,7 +65,7 @@ impl ExtendToImageDimensionsStage {
                 for (c, buf) in output_buffers.iter_mut().enumerate() {
                     self.process_row_chunk((x, y), xsize, c, &mut buffer);
                     for (ix, px) in buffer.iter().enumerate().take(xsize) {
-                        buf.as_rect_mut().row(y)[x + ix] = px.to_f64();
+                        buf.row_mut(y)[x + ix] = px.to_f64();
                     }
                 }
             }
@@ -86,7 +85,7 @@ impl ExtendToImageDimensionsStage {
                 for (c, buf) in output_buffers.iter_mut().enumerate() {
                     self.process_row_chunk((x, y), xsize, c, &mut buffer);
                     for (ix, px) in buffer.iter().enumerate().take(xsize) {
-                        buf.as_rect_mut().row(y)[x + ix] = px.to_f64();
+                        buf.row_mut(y)[x + ix] = px.to_f64();
                     }
                 }
             }

@@ -47,8 +47,7 @@ impl<T: RenderPipelineInPlaceStage> RunInPlaceStage<Image<f64>> for T {
                 let xsize = size.0.min(x + chunk_size) - x;
                 debug!("position: {x}x{y} xsize: {xsize}");
                 for c in 0..numc {
-                    let in_rect = buffers[c].as_rect();
-                    let in_row = in_rect.row(y);
+                    let in_row = buffers[c].row(y);
                     for ix in 0..xsize {
                         buffer[c][ix] = T::Type::from_f64(in_row[x + ix]);
                     }
@@ -56,8 +55,7 @@ impl<T: RenderPipelineInPlaceStage> RunInPlaceStage<Image<f64>> for T {
                 let mut row: Vec<_> = buffer.iter_mut().map(|x| x as &mut [_]).collect();
                 self.process_row_chunk((x, y), xsize, &mut row, state.as_deref_mut());
                 for c in 0..numc {
-                    let mut out_rect = buffers[c].as_rect_mut();
-                    let out_row = out_rect.row(y);
+                    let out_row = buffers[c].row_mut(y);
                     for ix in 0..xsize {
                         out_row[x + ix] = buffer[c][ix].to_f64();
                     }
@@ -143,10 +141,9 @@ impl<T: RenderPipelineInOutStage> RunInOutStage<Image<f64>> for T {
                 let xs = xsize as i64;
                 debug!("position: {x}x{y} xsize: {xsize}");
                 for c in 0..numc {
-                    let in_rect = input_buffers[c].as_rect();
                     for iy in -border_y..=border_y {
                         let imgy = mirror(y as i64 + iy, input_size.1 as i64);
-                        let in_row = in_rect.row(imgy);
+                        let in_row = input_buffers[c].row(imgy);
                         let buf_in_row = &mut buffer_in[c][(iy + border_y) as usize];
                         for ix in (-border_x..0).chain(xs..xs + border_x) {
                             let imgx = mirror(x as i64 + ix, input_size.0 as i64);
@@ -182,9 +179,8 @@ impl<T: RenderPipelineInOutStage> RunInOutStage<Image<f64>> for T {
                 let stripe_ysize =
                     (1usize << Self::SHIFT.1).min(output_size.1 - (y << Self::SHIFT.1));
                 for c in 0..numc {
-                    let mut out_rect = output_buffers[c].as_rect_mut();
                     for iy in 0..stripe_ysize {
-                        let out_row = out_rect.row((y << Self::SHIFT.1) + iy);
+                        let out_row = output_buffers[c].row_mut((y << Self::SHIFT.1) + iy);
                         for ix in 0..stripe_xsize {
                             out_row[(x << Self::SHIFT.0) + ix] = buffer_out[c][iy][ix].to_f64();
                         }

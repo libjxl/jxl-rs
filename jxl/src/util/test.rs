@@ -14,7 +14,7 @@ use crate::{
     container::ContainerParser,
     error::Error as JXLError,
     headers::{FileHeader, JxlHeader, encodings::*, frame_header::TocNonserialized},
-    image::{Image, ImageDataType, ImageRect},
+    image::{Image, ImageDataType},
 };
 
 use num_traits::AsPrimitive;
@@ -200,7 +200,7 @@ pub fn assert_all_almost_abs_eq<T: AsPrimitive<f64> + Debug + Copy, V: AsRef<[T]
     }
 }
 
-pub fn check_equal_images<T: ImageDataType>(a: ImageRect<T>, b: ImageRect<T>) {
+pub fn check_equal_images<T: ImageDataType>(a: &Image<T>, b: &Image<T>) {
     assert_eq!(a.size(), b.size());
     let mismatch_info = |x: usize, y: usize| -> String {
         let msg = format!(
@@ -256,7 +256,7 @@ pub fn write_pfm(image: Vec<Image<f32>>, mut buf: impl Write) -> Result<(), Erro
     for row in 0..size.1 {
         for col in 0..size.0 {
             for c in image.iter() {
-                b = c.as_rect().row(size.1 - row - 1)[col].to_be_bytes();
+                b = c.row(size.1 - row - 1)[col].to_be_bytes();
                 buf.write_all(&b)?;
             }
         }
@@ -306,7 +306,7 @@ pub fn read_pfm(b: &[u8]) -> Result<Vec<Image<f32>>, Error> {
         for col in 0..xres {
             for chan in res.iter_mut() {
                 bf.read_exact(&mut buf)?;
-                chan.as_rect_mut().row(yres - row - 1)[col] = if endianness < 0.0 {
+                chan.row_mut(yres - row - 1)[col] = if endianness < 0.0 {
                     f32::from_le_bytes(buf)
                 } else {
                     f32::from_be_bytes(buf)

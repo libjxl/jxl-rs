@@ -68,7 +68,7 @@ fn epf2_process_row_chunk(
         panic!("Expected 3 channels, got {}", input_rows.len());
     };
 
-    let row_sigma = stage.sigma.as_rect().row(ypos / BLOCK_DIM);
+    let row_sigma = stage.sigma.row(ypos / BLOCK_DIM);
 
     const { assert!(D::F32Vec::LEN <= 16) };
 

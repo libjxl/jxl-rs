@@ -90,25 +90,22 @@ mod test {
         let mut input_cb = Image::new((3, 1))?;
         let mut input_cr = Image::new((3, 1))?;
         input_y
-            .as_rect_mut()
-            .row(0)
+            .row_mut(0)
             .copy_from_slice(&[-0.20296079, 0.08503921, -0.3879608]);
         input_cb
-            .as_rect_mut()
-            .row(0)
+            .row_mut(0)
             .copy_from_slice(&[-0.16873589, -0.3312641, 0.5]);
         input_cr
-            .as_rect_mut()
-            .row(0)
+            .row_mut(0)
             .copy_from_slice(&[0.5, -0.41868758, -0.08131241]);
 
         let stage = YcbcrToRgbStage::new(0);
         let output =
             make_and_run_simple_pipeline(stage, &[input_cb, input_y, input_cr], (3, 1), 0, 256)?;
 
-        assert_all_almost_abs_eq(output[0].as_rect().row(0), &[1.0, 0.0, 0.0], 1e-6);
-        assert_all_almost_abs_eq(output[1].as_rect().row(0), &[0.0, 1.0, 0.0], 1e-6);
-        assert_all_almost_abs_eq(output[2].as_rect().row(0), &[0.0, 0.0, 1.0], 1e-6);
+        assert_all_almost_abs_eq(output[0].row(0), &[1.0, 0.0, 0.0], 1e-6);
+        assert_all_almost_abs_eq(output[1].row(0), &[0.0, 1.0, 0.0], 1e-6);
+        assert_all_almost_abs_eq(output[2].row(0), &[0.0, 0.0, 1.0], 1e-6);
 
         Ok(())
     }

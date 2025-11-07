@@ -5,7 +5,6 @@
 
 use crate::DecodeOutput;
 use jxl::error::{Error, Result};
-use jxl::image::ImageRect;
 use std::io::Write;
 
 fn numpy_header<Writer: Write>(
@@ -65,12 +64,10 @@ fn numpy_bytes<Writer: Write>(
         for channel in &frame.channels {
             assert_eq!(channel.size(), image_data.size);
         }
-        let channel_rects: &Vec<ImageRect<'_, f32>> =
-            &frame.channels.iter().map(|im| im.as_rect()).collect();
 
         for y in 0..height {
             for x in 0..width {
-                for channel in channel_rects {
+                for channel in frame.channels.iter() {
                     writer.write_all(&channel.row(y)[x].clamp(0.0, 1.0).to_le_bytes())?;
                 }
             }

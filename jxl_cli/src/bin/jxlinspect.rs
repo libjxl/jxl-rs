@@ -10,7 +10,7 @@ use jxl::api::{
     ProcessingResult,
 };
 use jxl::headers::extra_channels::ExtraChannel;
-use jxl::image::Image;
+use jxl::image::{Image, Rect};
 use std::fs::File;
 use std::io::{BufReader, Read};
 use std::path::Path;
@@ -160,7 +160,13 @@ fn parse_jxl(path: &Path) -> Result<()> {
 
             let mut output_bufs: Vec<JxlOutputBuffer<'_>> = outputs
                 .iter_mut()
-                .map(|x| JxlOutputBuffer::from_image_rect_mut(x.as_rect_mut().into_raw()))
+                .map(|x| {
+                    let rect = Rect {
+                        size: x.size(),
+                        origin: (0, 0),
+                    };
+                    JxlOutputBuffer::from_image_rect_mut(x.get_rect_mut(rect).into_raw())
+                })
                 .collect();
 
             decoder_with_image_info = advance_decoder!(decoder_with_frame_info, &mut output_bufs)?;

@@ -170,6 +170,10 @@ impl RawImageBuffer {
         if rect.size.0 == 0 || rect.size.1 == 0 {
             return Self::empty();
         }
+        // More helpful message in debug builds (not needed for safety).
+        if cfg!(debug_assertions) {
+            rect.check_within(self.byte_size());
+        }
         assert!(rect.origin.1 < self.num_rows);
         assert!(rect.origin.1.checked_add(rect.size.1).unwrap() <= self.num_rows);
         assert!(rect.origin.0 < self.bytes_per_row);

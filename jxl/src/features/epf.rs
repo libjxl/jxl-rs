@@ -30,16 +30,14 @@ pub fn create_sigma_image(
     const INV_SIGMA_NUM: f32 = -1.1715728752538099024;
     if frame_header.encoding == Encoding::VarDCT {
         let hf_meta = hf_meta.as_ref().unwrap();
-        let raw_quant_map = hf_meta.raw_quant_map.as_rect();
-        let transform_map = hf_meta.transform_map.as_rect();
         let quant_params = lf_global.quant_params.as_ref().unwrap();
         let quant_scale = 1.0 / quant_params.inv_global_scale();
-        let epf_map = hf_meta.epf_map.as_rect();
-        let mut sigma_rect = sigma_image.as_rect_mut();
         for by in 0..size_blocks.1 {
+            let raw_quant_row = hf_meta.raw_quant_map.row(by);
+            let transform_row = hf_meta.transform_map.row(by);
             for bx in 0..size_blocks.0 {
-                let raw_quant = raw_quant_map.row(by)[bx];
-                let raw_transform_id = transform_map.row(by)[bx];
+                let raw_quant = raw_quant_row[bx];
+                let raw_transform_id = transform_row[bx];
                 let transform_id = raw_transform_id & 127;
                 let is_first_block = raw_transform_id >= 128;
                 if !is_first_block {
@@ -53,9 +51,9 @@ pub fn create_sigma_image(
                     rf.epf_quant_mul / (quant_scale * raw_quant as f32 * INV_SIGMA_NUM);
                 for iy in 0..cy {
                     for ix in 0..cx {
-                        let sharpness = epf_map.row(by + iy)[bx + ix] as usize;
+                        let sharpness = hf_meta.epf_map.row(by + iy)[bx + ix] as usize;
                         let sigma = (sigma_quant * rf.epf_sharp_lut[sharpness]).min(-1e-4);
-                        sigma_rect.row(by + iy)[bx + ix] = 1.0 / sigma;
+                        sigma_image.row_mut(by + iy)[bx + ix] = 1.0 / sigma;
                     }
                 }
             }

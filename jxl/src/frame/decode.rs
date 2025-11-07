@@ -380,14 +380,13 @@ impl Frame {
             let bits_to_float = |bits: u32| f32::from_bits((bits >> 9) | 0x3F800000);
             for i in 0..3 {
                 let mut buf = pipeline!(self, p, p.get_buffer_for_group(num_channels + i, group)?);
-                let mut rect = buf.as_rect_mut();
-                let (xsize, ysize) = rect.size();
+                let (xsize, ysize) = buf.size();
                 const FLOATS_PER_BATCH: usize =
                     Xorshift128Plus::N * std::mem::size_of::<u64>() / std::mem::size_of::<f32>();
                 let mut batch = [0u64; Xorshift128Plus::N];
 
                 for y in 0..ysize {
-                    let row = rect.row(y);
+                    let row = buf.row_mut(y);
                     for batch_index in 0..xsize.div_ceil(FLOATS_PER_BATCH) {
                         rng.fill(&mut batch);
                         let batch_size =

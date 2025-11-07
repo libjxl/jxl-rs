@@ -30,13 +30,12 @@ fn predict_num_nonzeros(nzeros_map: &Image<u32>, bx: usize, by: usize) -> usize 
         if by == 0 {
             32
         } else {
-            nzeros_map.as_rect().row(by - 1)[0] as usize
+            nzeros_map.row(by - 1)[0] as usize
         }
     } else if by == 0 {
-        nzeros_map.as_rect().row(by)[bx - 1] as usize
+        nzeros_map.row(by)[bx - 1] as usize
     } else {
-        (nzeros_map.as_rect().row(by - 1)[bx] + nzeros_map.as_rect().row(by)[bx - 1]).div_ceil(2)
-            as usize
+        (nzeros_map.row(by - 1)[bx] + nzeros_map.row(by)[bx - 1]).div_ceil(2) as usize
     }
 }
 
@@ -193,7 +192,6 @@ fn dequant_and_transform_to_pixels<D: SimdDescriptor>(
             }
         }
         transform_to_pixels(transform_type, lf, &mut transform_buffer[c]);
-        let mut output = pixels[c].as_rect_mut();
         let downsampled_rect = Rect {
             origin: (
                 block_rect.origin.0 >> hshift[c],
@@ -201,7 +199,7 @@ fn dequant_and_transform_to_pixels<D: SimdDescriptor>(
             ),
             size: block_rect.size,
         };
-        let mut output_rect = output.rect(downsampled_rect)?;
+        let mut output_rect = pixels[c].get_rect_mut(downsampled_rect);
         for i in 0..downsampled_rect.size.1 {
             let offset = i * downsampled_rect.size.0;
             output_rect
@@ -325,14 +323,10 @@ pub fn decode_vardct_group(
     };
     let quant_params = lf_global.quant_params.as_ref().unwrap();
     let inv_global_scale = quant_params.inv_global_scale();
-    let ytox_map = hf_meta.ytox_map.as_rect();
-    let ytox_map_rect = ytox_map.rect(cmap_rect)?;
-    let ytob_map = hf_meta.ytob_map.as_rect();
-    let ytob_map_rect = ytob_map.rect(cmap_rect)?;
-    let transform_map = hf_meta.transform_map.as_rect();
-    let transform_map_rect = transform_map.rect(block_group_rect)?;
-    let raw_quant_map = hf_meta.raw_quant_map.as_rect();
-    let raw_quant_map_rect = raw_quant_map.rect(block_group_rect)?;
+    let ytox_map = hf_meta.ytox_map.get_rect(cmap_rect);
+    let ytob_map = hf_meta.ytob_map.get_rect(cmap_rect);
+    let transform_map = hf_meta.transform_map.get_rect(block_group_rect);
+    let raw_quant_map = hf_meta.raw_quant_map.get_rect(block_group_rect);
     let mut num_nzeros: [Image<u32>; 3] = [
         Image::new((
             block_group_rect.size.0 >> frame_header.hshift(0),
@@ -347,24 +341,16 @@ pub fn decode_vardct_group(
             block_group_rect.size.1 >> frame_header.vshift(2),
         ))?,
     ];
-    let quant_lf_rect = quant_lf.as_rect().rect(block_group_rect)?;
+    let quant_lf_rect = quant_lf.get_rect(block_group_rect);
     let block_context_map = lf_global.block_context_map.as_mut().unwrap();
     let context_offset = histogram_index * block_context_map.num_ac_contexts();
     let mut coeffs_storage;
-    let mut hf_coefficients_rects;
     let coeffs = match hf_global.hf_coefficients.as_mut() {
-        Some(hf_coefficients) => {
-            hf_coefficients_rects = (
-                hf_coefficients.0.as_rect_mut(),
-                hf_coefficients.1.as_rect_mut(),
-                hf_coefficients.2.as_rect_mut(),
-            );
-            [
-                hf_coefficients_rects.0.row(group),
-                hf_coefficients_rects.1.row(group),
-                hf_coefficients_rects.2.row(group),
-            ]
-        }
+        Some(hf_coefficients) => [
+            hf_coefficients.0.row_mut(group),
+            hf_coefficients.1.row_mut(group),
+            hf_coefficients.2.row_mut(group),
+        ],
         None => {
             coeffs_storage = vec![0; 3 * GROUP_DIM * GROUP_DIM];
             let (coeffs_x, coeffs_y_b) = coeffs_storage.split_at_mut(GROUP_DIM * GROUP_DIM);
@@ -410,9 +396,9 @@ pub fn decode_vardct_group(
 
             let [lf_x, lf_y, lf_b] = lf_planes.each_ref();
             Some([
-                lf_x.as_rect().rect(r[0])?,
-                lf_y.as_rect().rect(r[1])?,
-                lf_b.as_rect().rect(r[2])?,
+                lf_x.get_rect(r[0]),
+                lf_y.get_rect(r[1]),
+                lf_b.get_rect(r[2]),
             ])
         }
     };
@@ -420,17 +406,17 @@ pub fn decode_vardct_group(
         let sby = [by >> vshift[0], by >> vshift[1], by >> vshift[2]];
         let ty = by / COLOR_TILE_DIM_IN_BLOCKS;
 
-        let row_cmap_x = ytox_map_rect.row(ty);
-        let row_cmap_b = ytob_map_rect.row(ty);
+        let row_cmap_x = ytox_map.row(ty);
+        let row_cmap_b = ytob_map.row(ty);
 
         for bx in 0..block_group_rect.size.0 {
             let sbx = [bx >> hshift[0], bx >> hshift[1], bx >> hshift[2]];
             let tx = bx / COLOR_TILE_DIM_IN_BLOCKS;
             let x_cc_mul = color_correlation_params.y_to_x(row_cmap_x[tx] as i32);
             let b_cc_mul = color_correlation_params.y_to_b(row_cmap_b[tx] as i32);
-            let raw_quant = raw_quant_map_rect.row(by)[bx] as u32;
+            let raw_quant = raw_quant_map.row(by)[bx] as u32;
             let quant_lf = quant_lf_rect.row(by)[bx] as usize;
-            let raw_transform_id = transform_map_rect.row(by)[bx];
+            let raw_transform_id = transform_map.row(by)[bx];
             let transform_id = raw_transform_id & 127;
             let is_first_block = raw_transform_id >= 128;
             if !is_first_block {
@@ -444,15 +430,15 @@ pub fn decode_vardct_group(
                         lf_x.rect(Rect {
                             origin: (sbx[0], sby[0]),
                             size: (lf_x.size().0 - sbx[0], lf_x.size().1 - sby[0]),
-                        })?,
+                        }),
                         lf_y.rect(Rect {
                             origin: (sbx[1], sby[1]),
                             size: (lf_y.size().0 - sbx[1], lf_y.size().1 - sby[1]),
-                        })?,
+                        }),
                         lf_b.rect(Rect {
                             origin: (sbx[2], sby[2]),
                             size: (lf_b.size().0 - sbx[2], lf_b.size().1 - sby[2]),
-                        })?,
+                        }),
                     ])
                 }
             };
@@ -497,9 +483,8 @@ pub fn decode_vardct_group(
                 if nonzeros + num_blocks > num_coeffs {
                     return Err(Error::InvalidNumNonZeros(nonzeros, num_blocks));
                 }
-                let mut nzrect = num_nzeros[c].as_rect_mut();
                 for iy in 0..cy {
-                    let nzrow = nzrect.row(sby[c] + iy);
+                    let nzrow = num_nzeros[c].row_mut(sby[c] + iy);
                     for ix in 0..cx {
                         nzrow[sbx[c] + ix] = nonzeros.shrc(log_num_blocks) as u32;
                     }
