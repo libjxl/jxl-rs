@@ -14,10 +14,7 @@ impl<T: ImageDataType> Image<T> {
     pub fn new_random<R: rand::Rng>(size: (usize, usize), rng: &mut R) -> Result<Image<T>> {
         let mut img = Self::new(size)?;
         for y in 0..size.1 {
-            img.as_rect_mut()
-                .row(y)
-                .iter_mut()
-                .for_each(|x| *x = T::random(rng));
+            img.row_mut(y).iter_mut().for_each(|x| *x = T::random(rng));
         }
         Ok(img)
     }
@@ -26,13 +23,9 @@ impl<T: ImageDataType> Image<T> {
     pub fn new_range(size: (usize, usize), start: f32, step: f32) -> Result<Image<T>> {
         let mut img = Self::new(size)?;
         for y in 0..size.1 {
-            img.as_rect_mut()
-                .row(y)
-                .iter_mut()
-                .enumerate()
-                .for_each(|(x, val)| {
-                    *val = T::from_f64((start + step * (y * size.0 + x) as f32) as f64)
-                });
+            img.row_mut(y).iter_mut().enumerate().for_each(|(x, val)| {
+                *val = T::from_f64((start + step * (y * size.0 + x) as f32) as f64)
+            });
         }
         Ok(img)
     }
@@ -48,41 +41,29 @@ fn rect_basic() -> Result<()> {
     let mut image = Image::<u8>::new((32, 42))?;
     assert_eq!(
         image
-            .as_rect_mut()
-            .rect(Rect {
+            .get_rect_mut(Rect {
                 origin: (31, 40),
                 size: (1, 1)
-            })?
+            })
             .size(),
         (1, 1)
     );
     assert_eq!(
         image
-            .as_rect_mut()
-            .rect(Rect {
+            .get_rect_mut(Rect {
                 origin: (0, 0),
                 size: (1, 1)
-            })?
+            })
             .size(),
         (1, 1)
     );
-    assert!(
-        image
-            .as_rect_mut()
-            .rect(Rect {
-                origin: (30, 30),
-                size: (3, 3)
-            })
-            .is_err()
-    );
     image
-        .as_rect_mut()
-        .rect(Rect {
+        .get_rect_mut(Rect {
             origin: (30, 30),
             size: (1, 1),
-        })?
+        })
         .row(0)[0] = 1;
-    assert_eq!(image.as_rect_mut().row(30)[30], 1);
+    assert_eq!(image.row(30)[30], 1);
     Ok(())
 }
 

@@ -227,7 +227,6 @@ fn hsqueeze_impl<D: SimdDescriptor>(
         debug_assert!(out.size().0 == 2 * w + 1);
     }
 
-    let mut out_rect = out.as_rect_mut();
     let mask = !(lanes - 1);
     let y_limit = if w >= lanes { h & mask } else { y_start };
 
@@ -244,7 +243,7 @@ fn hsqueeze_impl<D: SimdDescriptor>(
             None => avg_first,
             Some(mc) => {
                 let mc_w = mc.data.size().0;
-                let mc = mc.data.as_rect();
+                let mc = &mc.data;
                 for (dy, out) in buf[..lanes].iter_mut().enumerate() {
                     *out = f32::from_bits(mc.row(y + dy)[mc_w - 1] as u32);
                 }
@@ -282,7 +281,7 @@ fn hsqueeze_impl<D: SimdDescriptor>(
             D::F32Vec::transpose_square(d, buf_arr, 1);
             D::F32Vec::transpose_square(d, &mut buf_arr[lanes..], 1);
             for dy in 0..lanes {
-                let out_row = &mut out_rect.row(y + dy)[2 * x - 2..][..2 * lanes];
+                let out_row = &mut out.row_mut(y + dy)[2 * x - 2..][..2 * lanes];
                 for group in 0..2 {
                     let v = D::F32Vec::load_array(d, &buf_arr[dy + group * lanes]).bitcast_to_i32();
                     v.store(&mut out_row[group * lanes..]);
@@ -350,7 +349,7 @@ fn hsqueeze_impl<D: SimdDescriptor>(
 
         let x_limit = 2 * (remainder_count + 1);
         for dy in 0..lanes {
-            let out_row = &mut out_rect.row(y + dy)[2 * x - 2..];
+            let out_row = &mut out.row_mut(y + dy)[2 * x - 2..];
             for (dx, out) in out_row[..x_limit].iter_mut().enumerate() {
                 let group = dx / lanes;
                 let group_x = dx % lanes;
@@ -360,7 +359,7 @@ fn hsqueeze_impl<D: SimdDescriptor>(
 
         if has_tail {
             for dy in 0..lanes {
-                out_rect.row(y + dy)[2 * w] = in_avg.row(y + dy)[w];
+                out.row_mut(y + dy)[2 * w] = in_avg.row(y + dy)[w];
             }
         }
     }
@@ -411,20 +410,19 @@ fn hsqueeze_scalar(
         debug_assert!(out.size().0 == 2 * w + 1);
     }
 
-    let mut out_rect = out.as_rect_mut();
     for y in y_start..h {
         let avg_row = in_avg.row(y);
         let res_row = in_res.row(y);
         let mut prev_b = match out_prev {
             None => avg_row[0],
-            Some(mc) => mc.data.as_rect().row(y)[mc.data.size().0 - 1],
+            Some(mc) => mc.data.row(y)[mc.data.size().0 - 1],
         };
         // Guarantee that `avg_row[x + 1]` is available.
         let x_end = if has_tail { w } else { w - 1 };
         for x in 0..x_end {
             let (a, b) = unsqueeze_scalar(avg_row[x], res_row[x], avg_row[x + 1], prev_b);
-            out_rect.row(y)[2 * x] = a;
-            out_rect.row(y)[2 * x + 1] = b;
+            out.row_mut(y)[2 * x] = a;
+            out.row_mut(y)[2 * x + 1] = b;
             prev_b = b;
         }
         if !has_tail {
@@ -433,11 +431,11 @@ fn hsqueeze_scalar(
                 Some(mc) => mc.row(y)[0],
             };
             let (a, b) = unsqueeze_scalar(avg_row[w - 1], res_row[w - 1], last_avg, prev_b);
-            out_rect.row(y)[2 * w - 2] = a;
-            out_rect.row(y)[2 * w - 1] = b;
+            out.row_mut(y)[2 * w - 2] = a;
+            out.row_mut(y)[2 * w - 1] = b;
         } else {
             // 1 last pixel
-            out_rect.row(y)[2 * w] = in_avg.row(y)[w];
+            out.row_mut(y)[2 * w] = in_avg.row(y)[w];
         }
     }
 }
@@ -474,7 +472,7 @@ pub fn do_hsqueeze_step(
     // Another shortcut: when output row has just 1px
     if w == 0 {
         for y in 0..h {
-            out.data.as_rect_mut().row(y)[0] = in_avg.row(y)[0];
+            out.data.row_mut(y)[0] = in_avg.row(y)[0];
         }
         return;
     }
@@ -490,7 +488,7 @@ pub fn do_vsqueeze_step(
     buffers: &mut [&mut ModularChannel],
 ) {
     trace!("vsqueeze step in_avg: {in_avg:?} in_res: {in_res:?} in_next_avg: {in_next_avg:?}");
-    let mut out = buffers.first_mut().unwrap().data.as_rect_mut();
+    let out = &mut buffers.first_mut().unwrap().data;
     // Shortcut: guarantees that there at least 1 output row
     if out.size().1 == 0 {
         return;
@@ -498,7 +496,7 @@ pub fn do_vsqueeze_step(
     let (w, h) = in_res.size();
     // Another shortcut: when there is one output row
     if h == 0 {
-        out.row(0).copy_from_slice(in_avg.row(0));
+        out.row_mut(0).copy_from_slice(in_avg.row(0));
         return;
     }
     // Otherwise: 2 or more rows
@@ -513,7 +511,7 @@ pub fn do_vsqueeze_step(
     {
         let prev_b_row = match out_prev {
             None => in_avg.row(0),
-            Some(mc) => mc.data.as_rect().row(mc.data.size().1 - 1),
+            Some(mc) => mc.data.row(mc.data.size().1 - 1),
         };
         let avg_row = in_avg.row(0);
         let res_row = in_res.row(0);
@@ -525,8 +523,8 @@ pub fn do_vsqueeze_step(
         };
         for x in 0..w {
             let (a, b) = unsqueeze_scalar(avg_row[x], res_row[x], avg_row_next[x], prev_b_row[x]);
-            out.row(0)[x] = a;
-            out.row(1)[x] = b;
+            out.row_mut(0)[x] = a;
+            out.row_mut(1)[x] = b;
         }
     }
     for y in 1..h {
@@ -547,11 +545,11 @@ pub fn do_vsqueeze_step(
                 avg_row_next[x],
                 out.row(2 * y - 1)[x],
             );
-            out.row(2 * y)[x] = a;
-            out.row(2 * y + 1)[x] = b;
+            out.row_mut(2 * y)[x] = a;
+            out.row_mut(2 * y + 1)[x] = b;
         }
     }
     if has_tail {
-        out.row(2 * h).copy_from_slice(in_avg.row(h));
+        out.row_mut(2 * h).copy_from_slice(in_avg.row(h));
     }
 }

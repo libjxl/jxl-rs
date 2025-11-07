@@ -22,6 +22,7 @@ use crate::{
         modular::{ModularChannel, ModularStreamId, decode::decode_modular_subbitstream},
     },
     headers::{bit_depth::BitDepth, frame_header::FrameHeader},
+    image::Rect,
 };
 use jxl_transforms::transform_map::*;
 
@@ -254,7 +255,14 @@ impl QuantEncoding {
                 )?;
                 let mut qtable = Vec::with_capacity(required_size_x * required_size_y * 3);
                 for channel in image.iter_mut() {
-                    for entry in channel.data.as_rect().iter() {
+                    for entry in channel
+                        .data
+                        .get_rect(Rect {
+                            size: (required_size_x, required_size_y),
+                            origin: (0, 0),
+                        })
+                        .iter()
+                    {
                         qtable.push(entry);
                         if entry <= 0 {
                             return Err(InvalidRawQuantTable);

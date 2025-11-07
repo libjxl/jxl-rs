@@ -120,8 +120,6 @@ pub enum Error {
     ImageSizeTooLarge(usize, usize),
     #[error("Invalid image size: {0}x{1}")]
     InvalidImageSize(usize, usize),
-    #[error("Rect out of bounds: {0}x{1}+{2}+{3} rect in {4}x{5} view")]
-    RectOutOfBounds(usize, usize, usize, usize, usize, usize),
     // Generic arithmetic overflow. Prefer using other errors if possible.
     #[error("Arithmetic overflow")]
     ArithmeticOverflow,

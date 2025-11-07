@@ -28,12 +28,9 @@ impl SaveStage {
 
         self.check_buffer_size(size, Some(buf))?;
 
-        // TODO(veluca): this is very slow. That's fine for the simple pipeline, but probably not
-        // so fine for the final one.
         for (c, &chan) in self.channels.iter().enumerate() {
-            let chan = data[chan].as_rect();
             for y in 0..size.1 {
-                let src_row = chan.row(y);
+                let src_row = data[chan].row(y);
                 for (x, &px) in src_row.iter().enumerate() {
                     let (dx, dy) = self.orientation.display_pixel((x, y), size);
                     let dx = dx * self.channels.len() + c;
@@ -76,7 +73,10 @@ impl SaveStage {
 mod test {
     use super::*;
     use crate::{
-        api::JxlColorType, headers::Orientation, image::ImageDataType, util::test::assert_almost_eq,
+        api::JxlColorType,
+        headers::Orientation,
+        image::{ImageDataType, Rect},
+        util::test::assert_almost_eq,
     };
     use rand::SeedableRng;
     use rand_xorshift::XorShiftRng;
@@ -98,16 +98,17 @@ mod test {
         save_stage.save_simple(
             &src,
             &mut [Some(JxlOutputBuffer::from_image_rect_mut(
-                dst.as_rect_mut().into_raw(),
+                dst.get_rect_mut(Rect {
+                    size: (128, 128),
+                    origin: (0, 0),
+                })
+                .into_raw(),
             ))],
         )?;
 
         for y in 0..128 {
             for x in 0..128 {
-                assert_eq!(
-                    u8::from_f64(src[0].as_rect().row(y)[x]),
-                    dst.as_rect().row(y)[x]
-                );
+                assert_eq!(u8::from_f64(src[0].row(y)[x]), dst.row(y)[x]);
             }
         }
 
@@ -142,7 +143,11 @@ mod test {
         save_stage.save_simple(
             &src,
             &mut [Some(JxlOutputBuffer::from_image_rect_mut(
-                dst.as_rect_mut().into_raw(),
+                dst.get_rect_mut(Rect {
+                    origin: (0, 0),
+                    size: (ow, oh),
+                })
+                .into_raw(),
             ))],
         )?;
 
@@ -152,8 +157,8 @@ mod test {
                 // For each destination pixel, find its corresponding source pixel.
                 let (src_x, src_y) = transform(x_dest, y_dest, w, h);
                 assert_almost_eq(
-                    dst.as_rect().row(y_dest)[x_dest],
-                    src[0].as_rect().row(src_y)[src_x] as f32,
+                    dst.row(y_dest)[x_dest],
+                    src[0].row(src_y)[src_x] as f32,
                     1e-5,
                     1e-5,
                 );

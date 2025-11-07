@@ -75,10 +75,10 @@ fn extract_group_rect<T: ImageDataType>(
         image.size(),
         log_group_size
     );
-    let rect = image.as_rect().rect(Rect { origin, size }).unwrap();
+    let rect = image.get_rect(Rect { origin, size });
     let mut out = Image::new(rect.size()).unwrap();
     for y in 0..out.size().1 {
-        out.as_rect_mut().row(y).copy_from_slice(rect.row(y));
+        out.row_mut(y).copy_from_slice(rect.row(y));
     }
     Ok(out)
 }
@@ -159,8 +159,13 @@ fn make_and_run_simple_pipeline_impl<InputT: ImageDataType, OutputT: ImageDataTy
     let mut buf_ptrs: Vec<_> = outputs
         .iter_mut()
         .map(|x| {
+            let size = x.size();
             Some(JxlOutputBuffer::from_image_rect_mut(
-                x.as_rect_mut().into_raw(),
+                x.get_rect_mut(Rect {
+                    size,
+                    origin: (0, 0),
+                })
+                .into_raw(),
             ))
         })
         .collect();
@@ -225,7 +230,7 @@ pub(super) fn test_stage_consistency<S: RenderPipelineTestableStage<V>, V>(
         .unwrap_or_else(|_| panic!("error running pipeline with chunk size {chunk_size}"));
 
         for (o, bo) in output.iter().zip(base_output.iter()) {
-            check_equal_images(bo.as_rect(), o.as_rect());
+            check_equal_images(bo, o);
         }
 
         Ok(())

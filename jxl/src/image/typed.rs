@@ -21,11 +21,23 @@ pub struct Image<T: ImageDataType> {
 
 impl<T: ImageDataType> Image<T> {
     #[instrument(ret, err)]
+    pub fn new_with_padding(
+        size: (usize, usize),
+        offset: (usize, usize),
+        padding: (usize, usize),
+    ) -> Result<Image<T>> {
+        let s = T::DATA_TYPE_ID.size();
+        let img = OwnedRawImage::new_zeroed_with_padding(
+            (size.0 * s, size.1),
+            (offset.0 * s, offset.1),
+            (padding.0 * s, padding.1),
+        )?;
+        Ok(Self::from_raw(img))
+    }
+
+    #[instrument(ret, err)]
     pub fn new(size: (usize, usize)) -> Result<Image<T>> {
-        Ok(Self::from_raw(OwnedRawImage::new_zeroed((
-            size.0 * T::DATA_TYPE_ID.size(),
-            size.1,
-        ))?))
+        Self::new_with_padding(size, (0, 0), (0, 0))
     }
 
     pub fn new_with_value(size: (usize, usize), value: T) -> Result<Image<T>> {
@@ -44,17 +56,34 @@ impl<T: ImageDataType> Image<T> {
     }
 
     pub fn fill(&mut self, v: T) {
+        if self.size().0 == 0 {
+            return;
+        }
         for y in 0..self.size().1 {
-            self.as_rect_mut().row(y).fill(v);
+            self.row_mut(y).fill(v);
         }
     }
 
-    pub fn as_rect(&self) -> ImageRect<'_, T> {
-        ImageRect::from_raw(self.raw.as_rect())
+    pub fn get_rect_including_padding_mut(&mut self, rect: Rect) -> ImageRectMut<'_, T> {
+        ImageRectMut::from_raw(
+            self.raw
+                .get_rect_including_padding_mut(rect.to_byte_rect(T::DATA_TYPE_ID)),
+        )
     }
 
-    pub fn as_rect_mut(&mut self) -> ImageRectMut<'_, T> {
-        ImageRectMut::from_raw(self.raw.as_rect_mut())
+    pub fn get_rect_including_padding(&mut self, rect: Rect) -> ImageRect<'_, T> {
+        ImageRect::from_raw(
+            self.raw
+                .get_rect_including_padding(rect.to_byte_rect(T::DATA_TYPE_ID)),
+        )
+    }
+
+    pub fn get_rect_mut(&mut self, rect: Rect) -> ImageRectMut<'_, T> {
+        ImageRectMut::from_raw(self.raw.get_rect_mut(rect.to_byte_rect(T::DATA_TYPE_ID)))
+    }
+
+    pub fn get_rect(&self, rect: Rect) -> ImageRect<'_, T> {
+        ImageRect::from_raw(self.raw.get_rect(rect.to_byte_rect(T::DATA_TYPE_ID)))
     }
 
     pub fn try_clone(&self) -> Result<Self> {
@@ -74,6 +103,33 @@ impl<T: ImageDataType> Image<T> {
             _ph: PhantomData,
         }
     }
+
+    #[inline(always)]
+    pub fn row(&self, row: usize) -> &[T] {
+        let row = self.raw.row(row);
+        // SAFETY: Since self.raw.data.is_aligned(T::DATA_TYPE_ID.size()), the returned slice is
+        // aligned to T::DATA_TYPE_ID.size(), and sizeof(T) == T::DATA_TYPE_ID.size()
+        // by the requirements of ImageDataType; moreover ImageDataType requires T to be a
+        // bag-of-bits type with no padding, so the implicit transmute is not an issue.
+        unsafe {
+            std::slice::from_raw_parts(row.as_ptr() as *const T, row.len() / T::DATA_TYPE_ID.size())
+        }
+    }
+
+    #[inline(always)]
+    pub fn row_mut(&mut self, row: usize) -> &mut [T] {
+        let row = self.raw.row_mut(row);
+        // SAFETY: Since self.raw.data.is_aligned(T::DATA_TYPE_ID.size()), the returned slice is
+        // aligned to T::DATA_TYPE_ID.size(), and sizeof(T) == T::DATA_TYPE_ID.size()
+        // by the requirements of ImageDataType; moreover ImageDataType requires T to be a
+        // bag-of-bits type with no padding, so the implicit transmute is not an issue.
+        unsafe {
+            std::slice::from_raw_parts_mut(
+                row.as_mut_ptr() as *mut T,
+                row.len() / T::DATA_TYPE_ID.size(),
+            )
+        }
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -84,11 +140,8 @@ pub struct ImageRect<'a, T: ImageDataType> {
 }
 
 impl<'a, T: ImageDataType> ImageRect<'a, T> {
-    pub fn rect(&self, rect: Rect) -> Result<ImageRect<'a, T>> {
-        rect.is_within(self.size())?;
-        Ok(Self::from_raw(
-            self.raw.rect(rect.to_byte_rect(T::DATA_TYPE_ID)),
-        ))
+    pub fn rect(&self, rect: Rect) -> ImageRect<'a, T> {
+        Self::from_raw(self.raw.rect(rect.to_byte_rect(T::DATA_TYPE_ID)))
     }
 
     pub fn size(&self) -> (usize, usize) {
@@ -136,11 +189,8 @@ pub struct ImageRectMut<'a, T: ImageDataType> {
 }
 
 impl<'a, T: ImageDataType> ImageRectMut<'a, T> {
-    pub fn rect(&'a mut self, rect: Rect) -> Result<ImageRectMut<'a, T>> {
-        rect.is_within(self.size())?;
-        Ok(Self::from_raw(
-            self.raw.rect_mut(rect.to_byte_rect(T::DATA_TYPE_ID)),
-        ))
+    pub fn rect(&'a mut self, rect: Rect) -> ImageRectMut<'a, T> {
+        Self::from_raw(self.raw.rect_mut(rect.to_byte_rect(T::DATA_TYPE_ID)))
     }
 
     pub fn size(&self) -> (usize, usize) {

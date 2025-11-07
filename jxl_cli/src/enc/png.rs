@@ -199,8 +199,7 @@ pub fn to_png<Writer: Write>(
                     for c in 0..num_channels {
                         // + 0.5 instead of round is fine since we clamp to non-negative
                         data[(y * width + x) * num_channels + c] =
-                            ((frame.channels[c].as_rect().row(y)[x] * 255.0).clamp(0.0, 255.0)
-                                + 0.5) as u8;
+                            ((frame.channels[c].row(y)[x] * 255.0).clamp(0.0, 255.0) + 0.5) as u8;
                     }
                 }
             }
@@ -218,8 +217,7 @@ pub fn to_png<Writer: Write>(
                 for x in 0..width {
                     for c in 0..num_channels {
                         // + 0.5 instead of round is fine since we clamp to non-negative
-                        let pixel = ((frame.channels[c].as_rect().row(y)[x] * 65535.0)
-                            .clamp(0.0, 65535.0)
+                        let pixel = ((frame.channels[c].row(y)[x] * 65535.0).clamp(0.0, 65535.0)
                             + 0.5) as u16;
                         let index = 2 * ((y * width + x) * num_channels + c);
                         data[index] = (pixel >> 8) as u8;

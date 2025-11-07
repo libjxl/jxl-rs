@@ -93,27 +93,18 @@ impl LowMemoryRenderPipeline {
 
         // Previous group horizontally, if any.
         if gx > 0 && extrax != 0 {
-            let input_buf = self.input_buffers[base_gid - 1].data[c]
-                .as_ref()
-                .unwrap()
-                .as_rect();
+            let input_buf = self.input_buffers[base_gid - 1].data[c].as_ref().unwrap();
             let input_row = input_buf.row(input_y);
             output_row[x0_offset - extrax..x0_offset]
                 .copy_from_slice(&input_row[input_buf.byte_size().0 - extrax..]);
         }
-        let input_buf = self.input_buffers[base_gid].data[c]
-            .as_ref()
-            .unwrap()
-            .as_rect();
+        let input_buf = self.input_buffers[base_gid].data[c].as_ref().unwrap();
         let input_row = input_buf.row(input_y);
         let gxs = input_buf.byte_size().0; // bytes
         output_row[x0_offset..x0_offset + gxs].copy_from_slice(input_row);
         // Next group horizontally, if any.
         if gx + 1 < self.shared.group_count.0 && extrax != 0 {
-            let input_buf = &self.input_buffers[base_gid + 1].data[c]
-                .as_ref()
-                .unwrap()
-                .as_rect();
+            let input_buf = self.input_buffers[base_gid + 1].data[c].as_ref().unwrap();
             let input_row = input_buf.row(input_y);
             output_row[gxs + x0_offset..gxs + x0_offset + extrax]
                 .copy_from_slice(&input_row[..extrax]);

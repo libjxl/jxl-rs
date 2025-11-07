@@ -8,6 +8,7 @@ use std::ops::Range;
 use crate::{
     error::Result,
     image::{DataTypeTag, ImageDataType},
+    render::MAX_BORDER,
     util::{
         CACHE_LINE_BYTE_SIZE, CacheLine, num_per_cache_line, slice_from_cachelines,
         slice_from_cachelines_mut,
@@ -35,9 +36,9 @@ impl RowBuffer {
         row_len: usize,
     ) -> Result<Self> {
         let num_rows = (1 << y_shift) + 2 * next_y_border;
-        // Input offset is at *two* cachelines, and we need up to *three* cachelines on the other
+        // Input offset is at *one* cacheline, and we need up to *three* cachelines on the other
         // side as the data might exceed xsize slightly.
-        let row_stride = (row_len * data_type.size()).div_ceil(CACHE_LINE_BYTE_SIZE) + 5;
+        let row_stride = (row_len * data_type.size()).div_ceil(CACHE_LINE_BYTE_SIZE) + 4;
         let mut buffer = Vec::<CacheLine>::new();
         buffer.try_reserve_exact(row_stride * num_rows)?;
         buffer.resize(row_stride * num_rows, CacheLine::default());
@@ -85,10 +86,11 @@ impl RowBuffer {
     }
 
     pub const fn x0_offset<T: ImageDataType>() -> usize {
-        2 * num_per_cache_line::<T>()
+        assert!(num_per_cache_line::<T>() >= MAX_BORDER);
+        num_per_cache_line::<T>()
     }
 
     pub const fn x0_byte_offset() -> usize {
-        2 * CACHE_LINE_BYTE_SIZE
+        CACHE_LINE_BYTE_SIZE
     }
 }

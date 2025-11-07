@@ -3,7 +3,7 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-use jxl::{error::Result, image::ImageRect};
+use jxl::{error::Result, image::Image};
 use std::io::Write;
 
 pub trait ToU8ForWriting {
@@ -41,7 +41,7 @@ impl ToU8ForWriting for half::f16 {
     }
 }
 
-pub fn to_pgm_as_8bit<Writer: Write>(img: &ImageRect<'_, f32>, writer: &mut Writer) -> Result<()> {
+pub fn to_pgm_as_8bit<Writer: Write>(img: &Image<f32>, writer: &mut Writer) -> Result<()> {
     write!(writer, "P5\n{} {}\n255\n", img.size().0, img.size().1)?;
     for y in 0..img.size().1 {
         for x in img.row(y).iter() {
@@ -51,10 +51,7 @@ pub fn to_pgm_as_8bit<Writer: Write>(img: &ImageRect<'_, f32>, writer: &mut Writ
     Ok(())
 }
 
-pub fn to_ppm_as_8bit<Writer: Write>(
-    img: &[ImageRect<'_, f32>; 3],
-    writer: &mut Writer,
-) -> Result<()> {
+pub fn to_ppm_as_8bit<Writer: Write>(img: [&Image<f32>; 3], writer: &mut Writer) -> Result<()> {
     assert_eq!(img[0].size(), img[1].size());
     assert_eq!(img[0].size(), img[2].size());
     write!(writer, "P6\n{} {}\n255\n", img[0].size().0, img[0].size().1)?;
@@ -78,7 +75,7 @@ mod test {
     fn covert_to_pgm() -> Result<()> {
         let image = Image::<f32>::new((32, 32))?;
         let mut bytes = vec![];
-        to_pgm_as_8bit(&image.as_rect(), &mut bytes)?;
+        to_pgm_as_8bit(&image, &mut bytes)?;
         assert!(bytes.starts_with(b"P5\n32 32\n255\n"));
         Ok(())
     }

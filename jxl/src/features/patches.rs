@@ -726,12 +726,10 @@ impl PatchesDictionary {
 
             for (c, fg_ptr) in fg.iter_mut().enumerate().take(3) {
                 *fg_ptr = &(reference_frames[ref_pos.reference].as_ref().unwrap().frame[c]
-                    .as_rect()
                     .row(ref_pos_y)[ref_x0..ref_x1]);
             }
             for i in 0..num_ec {
                 fg[3 + i] = &(reference_frames[ref_pos.reference].as_ref().unwrap().frame[3 + i]
-                    .as_rect()
                     .row(ref_pos_y)[ref_x0..ref_x1]);
             }
 
@@ -1473,7 +1471,7 @@ mod tests {
             let mut frame_channels = Vec::new();
             for v in rows.iter() {
                 let mut img = Image::new((N, 1))?;
-                img.as_rect_mut().row(0).copy_from_slice(v);
+                img.row_mut(0).copy_from_slice(v);
                 frame_channels.push(img);
             }
             Ok(Some(ReferenceFrame {

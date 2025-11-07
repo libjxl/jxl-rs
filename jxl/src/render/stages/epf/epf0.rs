@@ -66,7 +66,7 @@ simd_function!(
     assert_eq!(input_rows.len(), 3);
     assert_eq!(output_rows.len(), 3);
 
-    let row_sigma = stage.sigma.as_rect().row(ypos / BLOCK_DIM);
+    let row_sigma = stage.sigma.row(ypos / BLOCK_DIM);
 
     const { assert!(D::F32Vec::LEN <= 16) };
 

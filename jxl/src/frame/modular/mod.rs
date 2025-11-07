@@ -600,11 +600,13 @@ fn dequant_lf(
         / (quant_params.global_scale as f32 * quant_params.quant_lf as f32);
     let lf_factors = lf_quant.quant_factors.map(|factor| factor * inv_quant_lf);
 
-    let lf_rects = lf.each_mut().map(|lf| lf.as_rect_mut());
-
     if frame_header.is444() {
-        let [mut lf0, mut lf1, mut lf2] = lf_rects;
-        let mut lf_rects = (lf0.rect(r)?, lf1.rect(r)?, lf2.rect(r)?);
+        let [lf0, lf1, lf2] = lf;
+        let mut lf_rects = (
+            lf0.get_rect_mut(r),
+            lf1.get_rect_mut(r),
+            lf2.get_rect_mut(r),
+        );
 
         let fac_x = lf_factors[0] * mul;
         let fac_y = lf_factors[1] * mul;
@@ -612,9 +614,9 @@ fn dequant_lf(
         let cfl_fac_x = color_correlation_params.y_to_x_lf();
         let cfl_fac_b = color_correlation_params.y_to_b_lf();
         for y in 0..r.size.1 {
-            let quant_row_x = input[1].as_rect().row(y);
-            let quant_row_y = input[0].as_rect().row(y);
-            let quant_row_b = input[2].as_rect().row(y);
+            let quant_row_x = input[1].row(y);
+            let quant_row_y = input[0].row(y);
+            let quant_row_b = input[2].row(y);
             let dec_row_x = lf_rects.0.row(y);
             let dec_row_y = lf_rects.1.row(y);
             let dec_row_b = lf_rects.2.row(y);
@@ -628,7 +630,7 @@ fn dequant_lf(
             }
         }
     } else {
-        for (c, mut lf_rect) in lf_rects.into_iter().enumerate() {
+        for (c, lf_rect) in lf.iter_mut().enumerate() {
             let rect = Rect {
                 origin: (
                     r.origin.0 >> frame_header.hshift(c),
@@ -639,11 +641,11 @@ fn dequant_lf(
                     r.size.1 >> frame_header.vshift(c),
                 ),
             };
-            let mut lf_rect = lf_rect.rect(rect)?;
+            let mut lf_rect = lf_rect.get_rect_mut(rect);
             let fac = lf_factors[c] * mul;
             let ch = input[if c < 2 { c ^ 1 } else { c }];
             for y in 0..rect.size.1 {
-                let quant_row = ch.as_rect().row(y);
+                let quant_row = ch.row(y);
                 let row = lf_rect.row(y);
                 for x in 0..rect.size.0 {
                     row[x] = quant_row[x] as f32 * fac;
@@ -651,8 +653,7 @@ fn dequant_lf(
             }
         }
     }
-    let mut quant_lf_as_rect = quant_lf.as_rect_mut();
-    let mut quant_lf_rect = quant_lf_as_rect.rect(r)?;
+    let mut quant_lf_rect = quant_lf.get_rect_mut(r);
     if bctx.num_lf_contexts <= 1 {
         for y in 0..r.size.1 {
             quant_lf_rect.row(y).fill(0);
@@ -660,9 +661,9 @@ fn dequant_lf(
     } else {
         for y in 0..r.size.1 {
             let qlf_row_val = quant_lf_rect.row(y);
-            let quant_row_x = input[1].as_rect().row(y >> frame_header.vshift(0));
-            let quant_row_y = input[0].as_rect().row(y >> frame_header.vshift(1));
-            let quant_row_b = input[2].as_rect().row(y >> frame_header.vshift(2));
+            let quant_row_x = input[1].row(y >> frame_header.vshift(0));
+            let quant_row_y = input[0].row(y >> frame_header.vshift(1));
+            let quant_row_b = input[2].row(y >> frame_header.vshift(2));
             for x in 0..r.size.0 {
                 let bucket_x = bctx.lf_thresholds[0]
                     .iter()
@@ -774,37 +775,38 @@ pub fn decode_hf_metadata(
         global_tree,
         br,
     )?;
-    let ytox_image = buffers[0].data.as_rect();
-    let ytob_image = buffers[1].data.as_rect();
-    let mut ytox_map = hf_meta.ytox_map.as_rect_mut();
-    let mut ytob_map = hf_meta.ytob_map.as_rect_mut();
-    let mut ytox_map_rect = ytox_map.rect(cr)?;
-    let mut ytob_map_rect = ytob_map.rect(cr)?;
+    let ytox_image = &buffers[0].data;
+    let ytob_image = &buffers[1].data;
+    let mut ytox_map_rect = hf_meta.ytox_map.get_rect_mut(cr);
+    let mut ytob_map_rect = hf_meta.ytob_map.get_rect_mut(cr);
     let i8min: i32 = i8::MIN.into();
     let i8max: i32 = i8::MAX.into();
     for y in 0..cr.size.1 {
+        let row_in_x = ytox_image.row(y);
+        let row_in_b = ytob_image.row(y);
+        let row_out_x = ytox_map_rect.row(y);
+        let row_out_b = ytob_map_rect.row(y);
         for x in 0..cr.size.0 {
-            ytox_map_rect.row(y)[x] = ytox_image.row(y)[x].clamp(i8min, i8max) as i8;
-            ytob_map_rect.row(y)[x] = ytob_image.row(y)[x].clamp(i8min, i8max) as i8;
+            row_out_x[x] = row_in_x[x].clamp(i8min, i8max) as i8;
+            row_out_b[x] = row_in_b[x].clamp(i8min, i8max) as i8;
         }
     }
-    let transform_image = buffers[2].data.as_rect();
-    let epf_image = buffers[3].data.as_rect();
-    let mut transform_map = hf_meta.transform_map.as_rect_mut();
-    let mut transform_map_rect = transform_map.rect(r)?;
-    let mut raw_quant_map = hf_meta.raw_quant_map.as_rect_mut();
-    let mut raw_quant_map_rect = raw_quant_map.rect(r)?;
-    let mut epf_map = hf_meta.epf_map.as_rect_mut();
-    let mut epf_map_rect = epf_map.rect(r)?;
+    let transform_image = &buffers[2].data;
+    let epf_image = &buffers[3].data;
+    let mut transform_map_rect = hf_meta.transform_map.get_rect_mut(r);
+    let mut raw_quant_map_rect = hf_meta.raw_quant_map.get_rect_mut(r);
+    let mut epf_map_rect = hf_meta.epf_map.get_rect_mut(r);
     let mut num: usize = 0;
     let mut used_hf_types: u32 = 0;
     for y in 0..r.size.1 {
+        let epf_row_in = epf_image.row(y);
+        let epf_row_out = epf_map_rect.row(y);
         for x in 0..r.size.0 {
-            let epf_val = epf_image.row(y)[x];
+            let epf_val = epf_row_in[x];
             if !(0..8).contains(&epf_val) {
                 return Err(Error::InvalidEpfValue(epf_val));
             }
-            epf_map_rect.row(y)[x] = epf_val as u8;
+            epf_row_out[x] = epf_val as u8;
             if transform_map_rect.row(y)[x] != HfTransformType::INVALID_TRANSFORM {
                 continue;
             }

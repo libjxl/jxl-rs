@@ -14,6 +14,7 @@ use crate::error::{Error, Result};
 use crate::features::epf::create_sigma_image;
 use crate::headers::frame_header::Encoding;
 use crate::headers::{Orientation, color_encoding::ColorSpace, extra_channels::ExtraChannel};
+use crate::image::Rect;
 use crate::render::{
     LowMemoryRenderPipeline, RenderPipeline, RenderPipelineBuilder, SimpleRenderPipeline, stages::*,
 };
@@ -87,16 +88,24 @@ impl Frame {
 
         if let Some(ref_images) = &mut self.reference_frame_data {
             buffers.extend(ref_images.iter_mut().map(|img| {
+                let rect = Rect {
+                    size: img.size(),
+                    origin: (0, 0),
+                };
                 Some(JxlOutputBuffer::from_image_rect_mut(
-                    img.as_rect_mut().into_raw(),
+                    img.get_rect_mut(rect).into_raw(),
                 ))
             }));
         };
 
         if let Some(lf_images) = &mut self.lf_frame_data {
             buffers.extend(lf_images.iter_mut().map(|img| {
+                let rect = Rect {
+                    size: img.size(),
+                    origin: (0, 0),
+                };
                 Some(JxlOutputBuffer::from_image_rect_mut(
-                    img.as_rect_mut().into_raw(),
+                    img.get_rect_mut(rect).into_raw(),
                 ))
             }));
         };

@@ -83,8 +83,8 @@ mod test {
             for x in 0..image_size.0 {
                 let ix = x / 2;
                 let iy = y / 2;
-                let i = input[0].as_rect().row(iy)[ix];
-                let o = output[0].as_rect().row(y)[x];
+                let i = input[0].row(iy)[ix];
+                let o = output[0].row(y)[x];
                 assert_eq!(
                     i, o,
                     "mismatch at output position {x}x{y}: {i} vs output {o}"

@@ -49,16 +49,13 @@ pub fn adaptive_lf_smoothing(lf_factors: [f32; 3], lf_image: &mut [Image<f32>; 3
     ];
     for c in 0..3 {
         for y in [0, ysize - 1] {
-            smoothed[c]
-                .as_rect_mut()
-                .row(y)
-                .copy_from_slice(lf_image[c].as_rect().row(y));
+            smoothed[c].row_mut(y).copy_from_slice(lf_image[c].row(y));
         }
     }
     for y in 1..ysize - 1 {
         for x in [0, xsize - 1] {
             for c in 0..3 {
-                smoothed[c].as_rect_mut().row(y)[x] = lf_image[c].as_rect().row(y)[x];
+                smoothed[c].row_mut(y)[x] = lf_image[c].row(y)[x];
             }
         }
         for x in 1..xsize - 1 {
@@ -67,30 +64,30 @@ pub fn adaptive_lf_smoothing(lf_factors: [f32; 3], lf_image: &mut [Image<f32>; 3
                 lf_factors[0],
                 gap,
                 x,
-                lf_image[0].as_rect().row(y - 1),
-                lf_image[0].as_rect().row(y),
-                lf_image[0].as_rect().row(y + 1),
+                lf_image[0].row(y - 1),
+                lf_image[0].row(y),
+                lf_image[0].row(y + 1),
             );
             let (mc_y, sm_y, gap) = compute_pixel_channel(
                 lf_factors[1],
                 gap,
                 x,
-                lf_image[1].as_rect().row(y - 1),
-                lf_image[1].as_rect().row(y),
-                lf_image[1].as_rect().row(y + 1),
+                lf_image[1].row(y - 1),
+                lf_image[1].row(y),
+                lf_image[1].row(y + 1),
             );
             let (mc_b, sm_b, gap) = compute_pixel_channel(
                 lf_factors[2],
                 gap,
                 x,
-                lf_image[2].as_rect().row(y - 1),
-                lf_image[2].as_rect().row(y),
-                lf_image[2].as_rect().row(y + 1),
+                lf_image[2].row(y - 1),
+                lf_image[2].row(y),
+                lf_image[2].row(y + 1),
             );
             let factor = (3.0 - 4.0 * gap).max(0.0);
-            smoothed[0].as_rect_mut().row(y)[x] = (sm_x - mc_x) * factor + mc_x;
-            smoothed[1].as_rect_mut().row(y)[x] = (sm_y - mc_y) * factor + mc_y;
-            smoothed[2].as_rect_mut().row(y)[x] = (sm_b - mc_b) * factor + mc_b;
+            smoothed[0].row_mut(y)[x] = (sm_x - mc_x) * factor + mc_x;
+            smoothed[1].row_mut(y)[x] = (sm_y - mc_y) * factor + mc_y;
+            smoothed[2].row_mut(y)[x] = (sm_b - mc_b) * factor + mc_b;
         }
     }
     *lf_image = smoothed;

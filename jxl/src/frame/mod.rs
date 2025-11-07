@@ -413,8 +413,8 @@ mod test {
                 panic!("no lf_image");
             };
             for y in 0..146 {
-                let sample_cb_row = lf_image[0].as_rect().row(y);
-                let sample_cr_row = lf_image[2].as_rect().row(y);
+                let sample_cb_row = lf_image[0].row(y);
+                let sample_cr_row = lf_image[2].row(y);
                 for x in 0..146 {
                     let sample_cb = sample_cb_row[x];
                     let sample_cr = sample_cr_row[x];

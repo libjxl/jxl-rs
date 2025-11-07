@@ -112,11 +112,7 @@ mod test {
         )?;
         for c in 0..3 {
             for row in 0..size.1 {
-                assert_all_almost_abs_eq(
-                    output[c].as_rect().row(row),
-                    want_image[c].as_rect().row(row),
-                    1e-3,
-                );
+                assert_all_almost_abs_eq(output[c].row(row), want_image[c].row(row), 1e-3);
             }
         }
         Ok(())

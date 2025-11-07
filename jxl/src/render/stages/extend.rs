@@ -75,7 +75,7 @@ impl ExtendToImageDimensionsStage {
             self.ec_blending_info[c - 3].source as usize
         };
         let bg = if let Some(bg) = self.reference_frames[source].as_ref() {
-            bg.frame[c].as_rect().row(y0)
+            bg.frame[c].row(y0)
         } else {
             self.zeros.as_slice()
         };

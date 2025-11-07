@@ -10,7 +10,7 @@ use crate::{
         predict::{PredictionData, WeightedPredictorState},
     },
     headers::modular::WeightedHeader,
-    image::{Image, ImageRect},
+    image::Image,
 };
 
 const RGB_CHANNELS: usize = 3;
@@ -39,7 +39,7 @@ fn scale<const DENOM: usize>(value: usize, bit_depth: usize) -> i32 {
 // result is a delta palette entry, it is the responsibility of the caller to
 // treat it as such.
 fn get_palette_value(
-    palette: &ImageRect<i32>,
+    palette: &Image<i32>,
     index: isize,
     c: usize,
     palette_size: usize,
@@ -176,7 +176,7 @@ pub fn do_palette_step_general(
     wp_header: &WeightedHeader,
 ) {
     let (w, h) = buf_in.data.size();
-    let palette = buf_pal.data.as_rect();
+    let palette = &buf_pal.data;
     let bit_depth = buf_in.bit_depth.bits_per_sample().min(24) as usize;
 
     if w == 0 {
@@ -185,16 +185,18 @@ pub fn do_palette_step_general(
     } else if num_deltas == 0 && predictor == Predictor::Zero {
         for (chan_index, out) in buf_out.iter_mut().enumerate() {
             for y in 0..h {
+                let row_index = buf_in.data.row(y);
+                let row_out = out.data.row_mut(y);
                 for x in 0..w {
-                    let index = buf_in.data.as_rect().row(y)[x];
+                    let index = row_index[x];
                     let palette_value = get_palette_value(
-                        &palette,
+                        palette,
                         index as isize,
                         /*c=*/ chan_index,
                         /*palette_size=*/ num_colors,
                         /*bit_depth=*/ bit_depth,
                     );
-                    out.data.as_rect_mut().row(y)[x] = palette_value;
+                    row_out[x] = palette_value;
                 }
             }
         }
@@ -203,17 +205,17 @@ pub fn do_palette_step_general(
         for (chan_index, out) in buf_out.iter_mut().enumerate() {
             let mut wp_state = WeightedPredictorState::new(wp_header, w);
             for y in 0..h {
-                let idx = buf_in.data.as_rect().row(y);
+                let idx = buf_in.data.row(y);
                 for (x, &index) in idx.iter().enumerate() {
                     let palette_entry = get_palette_value(
-                        &palette,
+                        palette,
                         index as isize,
                         /*c=*/ chan_index,
                         /*palette_size=*/ num_colors + num_deltas,
                         /*bit_depth=*/ bit_depth,
                     );
                     let val = if index < num_deltas as i32 {
-                        let prediction_data = PredictionData::get(out.data.as_rect(), x, y);
+                        let prediction_data = PredictionData::get(&out.data, x, y);
                         let (wp_pred, _) =
                             wp_state.predict_and_property((x, y), w, &prediction_data);
                         let pred = predictor.predict_one(prediction_data, wp_pred);
@@ -221,7 +223,7 @@ pub fn do_palette_step_general(
                     } else {
                         palette_entry
                     };
-                    out.data.as_rect_mut().row(y)[x] = val;
+                    out.data.row_mut(y)[x] = val;
                     wp_state.update_errors(val, (x, y), w);
                 }
             }
@@ -229,25 +231,23 @@ pub fn do_palette_step_general(
     } else {
         for (chan_index, out) in buf_out.iter_mut().enumerate() {
             for y in 0..h {
-                let idx = buf_in.data.as_rect().row(y);
+                let idx = buf_in.data.row(y);
                 for (x, &index) in idx.iter().enumerate() {
                     let palette_entry = get_palette_value(
-                        &palette,
+                        palette,
                         index as isize,
                         /*c=*/ chan_index,
                         /*palette_size=*/ num_colors + num_deltas,
                         /*bit_depth=*/ bit_depth,
                     );
                     let val = if index < num_deltas as i32 {
-                        let pred = predictor.predict_one(
-                            PredictionData::get(out.data.as_rect(), x, y),
-                            /*wp_pred=*/ 0,
-                        );
+                        let pred = predictor
+                            .predict_one(PredictionData::get(&out.data, x, y), /*wp_pred=*/ 0);
                         (pred + palette_entry as i64) as i32
                     } else {
                         palette_entry
                     };
-                    out.data.as_rect_mut().row(y)[x] = val;
+                    out.data.row_mut(y)[x] = val;
                 }
             }
         }
@@ -267,29 +267,29 @@ fn get_prediction_data(
     ysize: usize,
 ) -> PredictionData {
     PredictionData::get_with_neighbors(
-        buf[idx].data.as_rect(),
+        &buf[idx].data,
         if grid_x > 0 {
-            Some(buf[idx - 1].data.as_rect())
+            Some(&buf[idx - 1].data)
         } else {
             None
         },
         if grid_y > 0 {
-            Some(buf[idx - grid_xsize].data.as_rect())
+            Some(&buf[idx - grid_xsize].data)
         } else {
             None
         },
         if grid_x > 0 && grid_y > 0 {
-            Some(buf[idx - grid_xsize - 1].data.as_rect())
+            Some(&buf[idx - grid_xsize - 1].data)
         } else {
             None
         },
         if grid_x + 1 < grid_xsize {
-            Some(buf[idx + 1].data.as_rect())
+            Some(&buf[idx + 1].data)
         } else {
             None
         },
         if grid_x + 1 < grid_xsize && grid_y > 0 {
-            Some(buf[idx - grid_xsize + 1].data.as_rect())
+            Some(&buf[idx - grid_xsize + 1].data)
         } else {
             None
         },
@@ -314,18 +314,18 @@ pub fn do_palette_step_one_group(
     predictor: Predictor,
 ) {
     let h = buf_in.data.size().1;
-    let palette = buf_pal.data.as_rect();
+    let palette = &buf_pal.data;
     let bit_depth = buf_in.bit_depth.bits_per_sample().min(24) as usize;
     let num_c = buf_out.len() / (grid_xsize * grid_ysize);
     let (xsize, ysize) = buf_out[0].data.size();
 
     for c in 0..num_c {
         for y in 0..h {
-            let index_img = buf_in.data.as_rect().row(y);
+            let index_img = buf_in.data.row(y);
             let out_idx = c * grid_ysize * grid_xsize + grid_y * grid_xsize + grid_x;
             for (x, &index) in index_img.iter().enumerate() {
                 let palette_entry = get_palette_value(
-                    &palette,
+                    palette,
                     index as isize,
                     c,
                     /*palette_size=*/ num_colors + num_deltas,
@@ -342,7 +342,7 @@ pub fn do_palette_step_one_group(
                 } else {
                     palette_entry
                 };
-                buf_out[out_idx].data.as_rect_mut().row(y)[x] = val;
+                buf_out[out_idx].data.row_mut(y)[x] = val;
             }
         }
     }
@@ -360,7 +360,7 @@ pub fn do_palette_step_group_row(
     predictor: Predictor,
     wp_header: &WeightedHeader,
 ) -> Result<()> {
-    let palette = buf_pal.data.as_rect();
+    let palette = &buf_pal.data;
     let h = buf_in[0].data.size().1;
     let bit_depth = buf_in[0].bit_depth.bits_per_sample().min(24) as usize;
     let grid_ysize = grid_y + 1;
@@ -384,11 +384,11 @@ pub fn do_palette_step_group_row(
             }
             for y in 0..h {
                 for (grid_x, index_buf) in buf_in.iter().enumerate().take(grid_xsize) {
-                    let index_img = index_buf.data.as_rect().row(y);
+                    let index_img = index_buf.data.row(y);
                     let out_idx = out_row_idx + grid_x;
                     for (x, &index) in index_img.iter().enumerate() {
                         let palette_entry = get_palette_value(
-                            &palette,
+                            palette,
                             index as isize,
                             c,
                             /*palette_size=*/ num_colors + num_deltas,
@@ -407,7 +407,7 @@ pub fn do_palette_step_group_row(
                         } else {
                             palette_entry
                         };
-                        buf_out[out_idx].data.as_rect_mut().row(y)[x] = val;
+                        buf_out[out_idx].data.row_mut(y)[x] = val;
                         wp_state.update_errors(val, (grid_x * xsize + x, y & 1), total_w);
                     }
                 }
@@ -420,11 +420,11 @@ pub fn do_palette_step_group_row(
         for c in 0..num_c {
             for y in 0..h {
                 for (grid_x, index_buf) in buf_in.iter().enumerate().take(grid_xsize) {
-                    let index_img = index_buf.data.as_rect().row(y);
+                    let index_img = index_buf.data.row(y);
                     let out_idx = c * grid_ysize * grid_xsize + grid_y * grid_xsize + grid_x;
                     for (x, &index) in index_img.iter().enumerate() {
                         let palette_entry = get_palette_value(
-                            &palette,
+                            palette,
                             index as isize,
                             c,
                             /*palette_size=*/ num_colors + num_deltas,
@@ -442,7 +442,7 @@ pub fn do_palette_step_group_row(
                         } else {
                             palette_entry
                         };
-                        buf_out[out_idx].data.as_rect_mut().row(y)[x] = val;
+                        buf_out[out_idx].data.row_mut(y)[x] = val;
                     }
                 }
             }

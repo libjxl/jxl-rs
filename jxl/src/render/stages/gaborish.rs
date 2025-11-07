@@ -131,15 +131,14 @@ mod test {
     #[test]
     fn checkerboard() -> Result<()> {
         let mut image = Image::new((2, 2))?;
-        image.as_rect_mut().row(0).copy_from_slice(&[0.0, 1.0]);
-        image.as_rect_mut().row(1).copy_from_slice(&[1.0, 0.0]);
+        image.row_mut(0).copy_from_slice(&[0.0, 1.0]);
+        image.row_mut(1).copy_from_slice(&[1.0, 0.0]);
 
         let stage = GaborishStage::new(0, 0.115169525, 0.061248592);
         let output = make_and_run_simple_pipeline(stage, &[image], (2, 2), 0, 256)?;
-        let output = output[0].as_rect();
 
-        assert_all_almost_abs_eq(output.row(0), &[0.20686048, 0.7931395], 1e-6);
-        assert_all_almost_abs_eq(output.row(1), &[0.7931395, 0.20686048], 1e-6);
+        assert_all_almost_abs_eq(output[0].row(0), &[0.20686048, 0.7931395], 1e-6);
+        assert_all_almost_abs_eq(output[0].row(1), &[0.7931395, 0.20686048], 1e-6);
 
         Ok(())
     }

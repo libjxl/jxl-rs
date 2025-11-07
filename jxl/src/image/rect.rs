@@ -3,8 +3,6 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-use crate::error::{Error, Result};
-
 use super::DataTypeTag;
 
 #[derive(Clone, Copy, Debug)]
@@ -15,30 +13,14 @@ pub struct Rect {
 }
 
 impl Rect {
-    pub fn is_within(&self, size: (usize, usize)) -> Result<()> {
-        if self
-            .origin
-            .0
-            .checked_add(self.size.0)
-            .ok_or(Error::ArithmeticOverflow)?
-            > size.0
-            || self
-                .origin
-                .1
-                .checked_add(self.size.1)
-                .ok_or(Error::ArithmeticOverflow)?
-                > size.1
+    pub fn check_within(&self, size: (usize, usize)) {
+        if self.origin.0.checked_add(self.size.0).unwrap() > size.0
+            || self.origin.1.checked_add(self.size.1).unwrap() > size.1
         {
-            Err(Error::RectOutOfBounds(
-                self.size.0,
-                self.size.1,
-                self.origin.0,
-                self.origin.1,
-                size.0,
-                size.1,
-            ))
-        } else {
-            Ok(())
+            panic!(
+                "Rect out of bounds: {}x{}+{}+{} rect in {}x{} view",
+                self.size.0, self.size.1, self.origin.0, self.origin.1, size.0, size.1
+            );
         }
     }
 

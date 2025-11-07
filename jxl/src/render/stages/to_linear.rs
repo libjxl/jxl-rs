@@ -204,9 +204,9 @@ mod test {
         let output =
             make_and_run_simple_pipeline(stage, &[input_r, input_g, input_b], (1, 1), 0, 256)?;
 
-        assert_all_almost_abs_eq(output[0].as_rect().row(0), &[0.203], 1e-3);
-        assert_all_almost_abs_eq(output[1].as_rect().row(0), &[0.203], 1e-3);
-        assert_all_almost_abs_eq(output[2].as_rect().row(0), &[0.203], 1e-3);
+        assert_all_almost_abs_eq(output[0].row(0), &[0.203], 1e-3);
+        assert_all_almost_abs_eq(output[1].row(0), &[0.203], 1e-3);
+        assert_all_almost_abs_eq(output[2].row(0), &[0.203], 1e-3);
 
         Ok(())
     }
@@ -224,9 +224,9 @@ mod test {
         let output =
             make_and_run_simple_pipeline(stage, &[input_r, input_g, input_b], (1, 1), 0, 256)?;
 
-        assert_all_almost_abs_eq(output[0].as_rect().row(0), &[0.203], 1e-3);
-        assert_all_almost_abs_eq(output[1].as_rect().row(0), &[0.203], 1e-3);
-        assert_all_almost_abs_eq(output[2].as_rect().row(0), &[0.203], 1e-3);
+        assert_all_almost_abs_eq(output[0].row(0), &[0.203], 1e-3);
+        assert_all_almost_abs_eq(output[1].row(0), &[0.203], 1e-3);
+        assert_all_almost_abs_eq(output[2].row(0), &[0.203], 1e-3);
 
         Ok(())
     }

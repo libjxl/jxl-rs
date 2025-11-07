@@ -9,7 +9,7 @@ use jxl::api::{
     JxlAnimation, JxlBitDepth, JxlColorProfile, JxlColorType, JxlDecoder, JxlDecoderOptions,
     JxlOutputBuffer,
 };
-use jxl::image::{Image, ImageDataType};
+use jxl::image::{Image, ImageDataType, Rect};
 use std::fs;
 use std::fs::File;
 use std::io::{BufWriter, Read, Write};
@@ -53,13 +53,13 @@ fn save_image(
         if image_data.frames.len() == 1
             && let [r, g, b] = &image_data.frames[0].channels[..]
         {
-            enc::pnm::to_ppm_as_8bit(&[r.as_rect(), g.as_rect(), b.as_rect()], &mut writer)?;
+            enc::pnm::to_ppm_as_8bit([r, g, b], &mut writer)?;
         }
     } else if fn_str.ends_with(".pgm") {
         if image_data.frames.len() == 1
             && let [g] = &image_data.frames[0].channels[..]
         {
-            enc::pnm::to_pgm_as_8bit(&g.as_rect(), &mut writer)?;
+            enc::pnm::to_pgm_as_8bit(g, &mut writer)?;
         }
     } else if fn_str.ends_with(".npy") {
         enc::numpy::to_numpy(image_data, &mut writer)?;
@@ -114,16 +114,11 @@ fn planes_from_interleaved(interleaved: &Image<f32>) -> Result<Vec<Image<f32>>> 
     let mut g_image = Image::<f32>::new(size)?;
     let mut b_image = Image::<f32>::new(size)?;
 
-    let mut r_rect = r_image.as_rect_mut();
-    let mut g_rect = g_image.as_rect_mut();
-    let mut b_rect = b_image.as_rect_mut();
-    let interleaved_rect = interleaved.as_rect();
-
     for y in 0..size.1 {
-        let r_row = r_rect.row(y);
-        let g_row = g_rect.row(y);
-        let b_row = b_rect.row(y);
-        let src_row = interleaved_rect.row(y);
+        let r_row = r_image.row_mut(y);
+        let g_row = g_image.row_mut(y);
+        let b_row = b_image.row_mut(y);
+        let src_row = interleaved.row(y);
         for x in 0..size.0 {
             r_row[x] = src_row[3 * x];
             g_row[x] = src_row[3 * x + 1];
@@ -209,7 +204,13 @@ fn decode_bytes(
 
         let mut output_bufs: Vec<JxlOutputBuffer<'_>> = outputs
             .iter_mut()
-            .map(|x| JxlOutputBuffer::from_image_rect_mut(x.as_rect_mut().into_raw()))
+            .map(|x| {
+                let rect = Rect {
+                    size: x.size(),
+                    origin: (0, 0),
+                };
+                JxlOutputBuffer::from_image_rect_mut(x.get_rect_mut(rect).into_raw())
+            })
             .collect();
 
         decoder_with_image_info = loop {
