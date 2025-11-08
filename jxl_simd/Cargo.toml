@@ -16,5 +16,12 @@ license = "BSD-3-Clause"
 arbtest = "0.3.2"
 paste = "1.0.15"
 
+[features]
+all-simd = ["sse42", "avx", "avx512", "neon"]
+sse42 = []
+avx = ["sse42"]
+avx512 = ["avx"]
+neon = []
+
 [lints]
 workspace = true

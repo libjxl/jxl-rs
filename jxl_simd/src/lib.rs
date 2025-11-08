@@ -19,10 +19,14 @@ mod aarch64;
 
 mod scalar;
 
-#[cfg(target_arch = "x86_64")]
-pub use x86_64::{avx::AvxDescriptor, avx512::Avx512Descriptor, sse42::Sse42Descriptor};
+#[cfg(all(target_arch = "x86_64", feature = "avx"))]
+pub use x86_64::avx::AvxDescriptor;
+#[cfg(all(target_arch = "x86_64", feature = "avx512"))]
+pub use x86_64::avx512::Avx512Descriptor;
+#[cfg(all(target_arch = "x86_64", feature = "sse42"))]
+pub use x86_64::sse42::Sse42Descriptor;
 
-#[cfg(target_arch = "aarch64")]
+#[cfg(all(target_arch = "aarch64", feature = "neon"))]
 pub use aarch64::neon::NeonDescriptor;
 
 pub use scalar::ScalarDescriptor;

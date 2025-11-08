@@ -9,16 +9,14 @@ pub use jxl_exr::to_exr;
 mod jxl_exr {
     use crate::DecodeOutput;
     use color_eyre::eyre::{Result, eyre};
-    use jxl::api::JxlColorProfile;
     use std::io::{Seek, Write};
 
     pub fn to_exr<Writer: Write + Seek>(
-        _image_data: DecodeOutput<f32>,
+        _image_data: &DecodeOutput<f32>,
         _bit_depth: u32,
-        _color_profile: &JxlColorProfile,
         _writer: &mut Writer,
     ) -> Result<()> {
-        return Err(eyre!("jxl_cli built without support for EXR output"));
+        Err(eyre!("jxl_cli built without support for EXR output"))
     }
 }
 

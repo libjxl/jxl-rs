@@ -21,6 +21,13 @@ criterion = { version = "0.5.1", features = ["html_reports"] }
 test-log = "0.2.14"
 paste = "1.0.15"
 
+[features]
+all-simd = ["jxl_simd/all-simd"]
+sse42 = ["jxl_simd/sse42"]
+avx = ["jxl_simd/avx"]
+avx512 = ["jxl_simd/avx512"]
+neon = ["jxl_simd/neon"]
+
 [[bench]]
 name = "dct"
 harness = false
