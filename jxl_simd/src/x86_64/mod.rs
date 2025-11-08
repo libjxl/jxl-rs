@@ -42,13 +42,17 @@ macro_rules! simd_function {
 #[macro_export]
 macro_rules! simd_function_body_sse42 {
     ($name:ident($($arg:ident: $ty:ty),* $(,)?) $(-> $ret:ty )?; ($($val:expr),* $(,)?)) => {
-        if let Some(d) = $crate::Sse42Descriptor::new() {
+        if cfg!(target_feature = "sse4.2") {
+            // SAFETY: we just checked for sse4.2.
+            let d = unsafe { $crate::Sse42Descriptor::new_unchecked() };
+            return $name(d, $($val),*);
+        } else if let Some(d) = $crate::Sse42Descriptor::new() {
             #[target_feature(enable = "sse4.2")]
-            fn inner(d: $crate::Sse42Descriptor, $($arg: $ty),*) $(-> $ret)? {
+            fn sse42(d: $crate::Sse42Descriptor, $($arg: $ty),*) $(-> $ret)? {
                 $name(d, $($val),*)
             }
             // SAFETY: we just checked for sse4.2.
-            return unsafe { inner(d, $($arg),*) };
+            return unsafe { sse42(d, $($arg),*) };
         }
     };
 }
@@ -58,13 +62,17 @@ macro_rules! simd_function_body_sse42 {
 #[macro_export]
 macro_rules! simd_function_body_avx {
     ($name:ident($($arg:ident: $ty:ty),* $(,)?) $(-> $ret:ty )?; ($($val:expr),* $(,)?)) => {
-        if let Some(d) = $crate::AvxDescriptor::new() {
+        if cfg!(all(target_feature = "avx2", target_feature = "fma")) {
+            // SAFETY: we just checked for avx2 and fma.
+            let d = unsafe { $crate::AvxDescriptor::new_unchecked() };
+            return $name(d, $($val),*);
+        } else if let Some(d) = $crate::AvxDescriptor::new() {
             #[target_feature(enable = "avx2,fma")]
-            fn inner(d: $crate::AvxDescriptor, $($arg: $ty),*) $(-> $ret)? {
+            fn avx(d: $crate::AvxDescriptor, $($arg: $ty),*) $(-> $ret)? {
                 $name(d, $($val),*)
             }
             // SAFETY: we just checked for avx2 and fma.
-            return unsafe { inner(d, $($arg),*) };
+            return unsafe { avx(d, $($arg),*) };
         }
     };
 }
@@ -74,13 +82,17 @@ macro_rules! simd_function_body_avx {
 #[macro_export]
 macro_rules! simd_function_body_avx512 {
     ($name:ident($($arg:ident: $ty:ty),* $(,)?) $(-> $ret:ty )?; ($($val:expr),* $(,)?)) => {
-        if let Some(d) = $crate::Avx512Descriptor::new() {
+        if cfg!(target_feature = "avx512f") {
+            // SAFETY: we just checked for avx512f.
+            let d = unsafe { $crate::Avx512Descriptor::new_unchecked() };
+            return $name(d, $($val),*);
+        } else if let Some(d) = $crate::Avx512Descriptor::new() {
             #[target_feature(enable = "avx512f")]
-            fn inner(d: $crate::Avx512Descriptor, $($arg: $ty),*) $(-> $ret)? {
+            fn avx512(d: $crate::Avx512Descriptor, $($arg: $ty),*) $(-> $ret)? {
                 $name(d, $($val),*)
             }
             // SAFETY: we just checked for avx512f.
-            return unsafe { inner(d, $($arg),*) };
+            return unsafe { avx512(d, $($arg),*) };
         }
     };
 }
