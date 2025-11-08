@@ -36,13 +36,17 @@ macro_rules! simd_function {
 #[macro_export]
 macro_rules! simd_function_body_neon {
     ($name:ident($($arg:ident: $ty:ty),* $(,)?) $(-> $ret:ty )?; ($($val:expr),* $(,)?)) => {
-        if let Some(d) = $crate::NeonDescriptor::new() {
+        if cfg!(target_feature = "neon") {
+            // SAFETY: we just checked for neon.
+            let d = unsafe { $crate::NeonDescriptor::new_unchecked() };
+            return $name(d, $($val),*);
+        } else if let Some(d) = $crate::NeonDescriptor::new() {
             #[target_feature(enable = "neon")]
-            fn inner(d: $crate::NeonDescriptor, $($arg: $ty),*) $(-> $ret)? {
+            fn neon(d: $crate::NeonDescriptor, $($arg: $ty),*) $(-> $ret)? {
                 $name(d, $($val),*)
             }
             // SAFETY: we just checked for neon.
-            return unsafe { inner(d, $($arg),*) };
+            return unsafe { neon(d, $($arg),*) };
         }
     };
 }
