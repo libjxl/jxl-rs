@@ -6,6 +6,7 @@
 #![allow(unsafe_code)]
 #![allow(clippy::identity_op)]
 
+#[cfg(feature = "neon")]
 pub(super) mod neon;
 
 #[macro_export]
@@ -22,18 +23,35 @@ macro_rules! simd_function {
         #[allow(unsafe_code)]
         $(#[$($attr)*])*
         $pub fn $dname($($arg: $ty),*) $(-> $ret)? {
+            #[allow(unused)]
             use $crate::SimdDescriptor;
-            if let Some(d) = $crate::NeonDescriptor::new() {
-                #[target_feature(enable = "neon")]
-                fn inner(d: $crate::NeonDescriptor, $($arg: $ty),*) $(-> $ret)? {
-                    $name(d, $($arg),*)
-                }
-                // SAFETY: we just checked for neon.
-                return unsafe { inner(d, $($arg),*) };
-            }
+            $crate::simd_function_body_neon!($name($($arg: $ty),*) $(-> $ret)?; ($($arg),*));
             $name($crate::ScalarDescriptor::new().unwrap(), $($arg),*)
         }
     };
+}
+
+#[cfg(feature = "neon")]
+#[doc(hidden)]
+#[macro_export]
+macro_rules! simd_function_body_neon {
+    ($name:ident($($arg:ident: $ty:ty),* $(,)?) $(-> $ret:ty )?; ($($val:expr),* $(,)?)) => {
+        if let Some(d) = $crate::NeonDescriptor::new() {
+            #[target_feature(enable = "neon")]
+            fn inner(d: $crate::NeonDescriptor, $($arg: $ty),*) $(-> $ret)? {
+                $name(d, $($val),*)
+            }
+            // SAFETY: we just checked for neon.
+            return unsafe { inner(d, $($arg),*) };
+        }
+    };
+}
+
+#[cfg(not(feature = "neon"))]
+#[doc(hidden)]
+#[macro_export]
+macro_rules! simd_function_body_neon {
+    ($($ignore:tt)*) => {};
 }
 
 #[macro_export]
@@ -47,6 +65,18 @@ macro_rules! test_all_instruction_sets {
                 use $crate::SimdDescriptor;
                 $name($crate::ScalarDescriptor::new().unwrap())
             }
+        }
+
+        $crate::test_neon!($name);
+    };
+}
+
+#[cfg(feature = "neon")]
+#[doc(hidden)]
+#[macro_export]
+macro_rules! test_neon {
+    ($name:ident) => {
+        paste::paste! {
             #[allow(unsafe_code)]
             #[test]
             fn [<$name _neon>]() {
@@ -64,6 +94,13 @@ macro_rules! test_all_instruction_sets {
     };
 }
 
+#[cfg(not(feature = "neon"))]
+#[doc(hidden)]
+#[macro_export]
+macro_rules! test_neon {
+    ($name:ident) => {};
+}
+
 #[macro_export]
 macro_rules! bench_all_instruction_sets {
     (
@@ -71,21 +108,10 @@ macro_rules! bench_all_instruction_sets {
         $criterion:ident
     ) => {
         use $crate::SimdDescriptor;
-        if let Some(d) = $crate::NeonDescriptor::new() {
-            #[target_feature(enable = "neon")]
-            fn inner(
-                d: $crate::NeonDescriptor,
-                criterion: &mut ::criterion::BenchmarkGroup<
-                    '_,
-                    impl ::criterion::measurement::Measurement,
-                >,
-                name: &str,
-            ) {
-                $name(d, criterion, name)
-            }
-            // SAFETY: we just checked for neon.
-            unsafe { inner(d, $criterion, "neon") };
-        }
+        $crate::simd_function_body_neon!(
+            $name($criterion: &mut ::criterion::BenchmarkGroup<'_, impl ::criterion::measurement::Measurement>);
+            ($criterion, "neon")
+        );
         $name(
             $crate::ScalarDescriptor::new().unwrap(),
             $criterion,

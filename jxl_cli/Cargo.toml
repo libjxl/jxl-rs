@@ -21,7 +21,13 @@ jxl_macros = { path = "../jxl_macros", features = ["test"] }
 [features]
 tracing-subscriber = ["dep:tracing-subscriber", "jxl/tracing"]
 exr = ["dep:exr"]
-default = ["exr"]
+default = ["exr", "all-simd"]
+
+all-simd = ["jxl/all-simd"]
+sse42 = ["jxl/sse42"]
+avx = ["jxl/avx"]
+avx512 = ["jxl/avx512"]
+neon = ["jxl/neon"]
 
 [lints]
 workspace = true

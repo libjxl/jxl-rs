@@ -31,12 +31,14 @@ jobs:
       fail-fast: false
       matrix:
         check: [format, clippy, test]
-        features: [all, default]
+        features: [all, default, none]
         os: [ubuntu-24.04-arm, ubuntu-latest]
         exclude:
-          # Remove the "format+all" combination, since it is the same as "format+default"
+          # Remove the "format+all" and "format+none" combination, since it is the same as "format+default"
           - check: format
             features: all
+          - check: format
+            features: none
           # Rustfmt is not arch-dependent.
           - check: format
             os: ubuntu-24.04-arm
@@ -71,6 +73,10 @@ jobs:
         if: ${{ matrix.check == 'clippy' && matrix.features == 'default' }}
         run: cargo clippy --release --all-targets --tests --all -- -D warnings
 
+      - name: Clippy with no features
+        if: ${{ matrix.check == 'clippy' && matrix.features == 'none' }}
+        run: cargo clippy --release --all-targets --no-default-features --tests --all -- -D warnings
+
       # test
       - name: Tests with all features
         if: ${{ matrix.check == 'test' && matrix.features == 'all' }}
@@ -79,6 +85,10 @@ jobs:
       - name: Tests with default features
         if: ${{ matrix.check == 'test' && matrix.features == 'default' }}
         run: cargo test --release --all --no-fail-fast
+
+      - name: Tests with no features
+        if: ${{ matrix.check == 'test' && matrix.features == 'none' }}
+        run: cargo test --release --all --no-fail-fast --no-default-features
 
   coverage:
     runs-on: ubuntu-latest
