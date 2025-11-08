@@ -232,18 +232,19 @@ macro_rules! bench_all_instruction_sets {
     ) => {
         #[allow(unused)]
         use $crate::SimdDescriptor;
-        $crate::simd_function_body_avx512!(
+        // `simd_function_body_*` does early return; wrap it with an immediately-invoked closure
+        (|| $crate::simd_function_body_avx512!(
             $name($criterion: &mut ::criterion::BenchmarkGroup<'_, impl ::criterion::measurement::Measurement>);
             ($criterion, "avx512")
-        );
-        $crate::simd_function_body_avx!(
+        ))();
+        (|| $crate::simd_function_body_avx!(
             $name($criterion: &mut ::criterion::BenchmarkGroup<'_, impl ::criterion::measurement::Measurement>);
             ($criterion, "avx")
-        );
-        $crate::simd_function_body_sse42!(
+        ))();
+        (|| $crate::simd_function_body_sse42!(
             $name($criterion: &mut ::criterion::BenchmarkGroup<'_, impl ::criterion::measurement::Measurement>);
             ($criterion, "sse42")
-        );
+        ))();
         $name(
             $crate::ScalarDescriptor::new().unwrap(),
             $criterion,
