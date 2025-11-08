@@ -25,23 +25,8 @@ jobs:
       run:
         ./ci/pull_request_checks.sh
 
-  checks:
-    runs-on: ${{ matrix.os || 'ubuntu-latest' }}
-    strategy:
-      fail-fast: false
-      matrix:
-        check: [format, clippy, test]
-        features: [all, default, none]
-        os: [ubuntu-24.04-arm, ubuntu-latest]
-        exclude:
-          # Remove the "format+all" and "format+none" combination, since it is the same as "format+default"
-          - check: format
-            features: all
-          - check: format
-            features: none
-          # Rustfmt is not arch-dependent.
-          - check: format
-            os: ubuntu-24.04-arm
+  format:
+    runs-on: ubuntu-latest
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -51,43 +36,81 @@ jobs:
       - name: Install latest rust toolchain
         uses: dtolnay/rust-toolchain@stable
         with:
-          components: clippy, rustfmt
+          components: rustfmt
+
+
+      - name: Cargo fmt (check)
+        run: cargo fmt --all -- --check
+
+  clippy:
+    runs-on: ${{ matrix.os || 'ubuntu-latest' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        features: [all, none]
+        os: [ubuntu-24.04-arm, ubuntu-latest]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install latest rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
 
       - name: Rust cache
         uses: Swatinem/rust-cache@v2.8.0
         with:
-          prefix-key: ${{ matrix.os }}-${{ matrix.check }}-${{ matrix.features }}
+          prefix-key: ${{ matrix.os }}-clippy-${{ matrix.features }}
 
 
-      # format
-      - name: Cargo fmt (check)
-        if: ${{ matrix.check == 'format' }}
-        run: cargo fmt --all -- --check
-
-      # clippy
       - name: Clippy with all features
         if: ${{ matrix.check == 'clippy' && matrix.features == 'all' }}
         run: cargo clippy --release --all-targets --all-features --tests --all -- -D warnings
-
-      - name: Clippy with default features
-        if: ${{ matrix.check == 'clippy' && matrix.features == 'default' }}
-        run: cargo clippy --release --all-targets --tests --all -- -D warnings
 
       - name: Clippy with no features
         if: ${{ matrix.check == 'clippy' && matrix.features == 'none' }}
         run: cargo clippy --release --all-targets --no-default-features --tests --all -- -D warnings
 
-      # test
-      - name: Tests with all features
-        if: ${{ matrix.check == 'test' && matrix.features == 'all' }}
-        run: cargo test --release --all --no-fail-fast --all-features
+  test:
+    runs-on: ${{ matrix.os || 'ubuntu-latest' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04-arm, ubuntu-latest]
+        simd: [none]
+        include:
+          - os: ubuntu-latest
+            simd: sse42
+          - os: ubuntu-latest
+            simd: avx
+          - os: ubuntu-latest
+            simd: avx512
+          - os: ubuntu-24.04-arm
+            simd: neon
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
 
-      - name: Tests with default features
-        if: ${{ matrix.check == 'test' && matrix.features == 'default' }}
-        run: cargo test --release --all --no-fail-fast
+      - name: Install latest rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Rust cache
+        uses: Swatinem/rust-cache@v2.8.0
+        with:
+          prefix-key: ${{ matrix.os }}-test-${{ matrix.simd }}
+
+
+      - name: Tests with SIMD feature ${{ matrix.simd }}
+        if: ${{ matrix.simd != 'none' }}
+        run: cargo test --release --all --no-fail-fast --no-default-features --features ${{ matrix.simd }}
 
       - name: Tests with no features
-        if: ${{ matrix.check == 'test' && matrix.features == 'none' }}
+        if: ${{ matrix.simd == 'none' }}
         run: cargo test --release --all --no-fail-fast --no-default-features
 
   coverage:
