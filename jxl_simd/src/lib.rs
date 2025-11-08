@@ -14,10 +14,16 @@ use std::{
 #[cfg(target_arch = "x86_64")]
 mod x86_64;
 
+#[cfg(target_arch = "aarch64")]
+mod aarch64;
+
 mod scalar;
 
 #[cfg(target_arch = "x86_64")]
 pub use x86_64::{avx::AvxDescriptor, avx512::Avx512Descriptor, sse42::Sse42Descriptor};
+
+#[cfg(target_arch = "aarch64")]
+pub use aarch64::neon::NeonDescriptor;
 
 pub use scalar::ScalarDescriptor;
 
