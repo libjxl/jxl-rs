@@ -3,25 +3,14 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-use crate::{impl_f32_array_interface, x86_64::sse42::Sse42Descriptor};
+use crate::{U32SimdVec, impl_f32_array_interface, x86_64::sse42::Sse42Descriptor};
 
 use super::super::{F32SimdVec, I32SimdVec, SimdDescriptor, SimdMask};
 use std::{
-    arch::x86_64::{
-        __m256, __m256i, _CMP_GT_OQ, _mm256_abs_epi32, _mm256_add_epi32, _mm256_add_ps,
-        _mm256_and_ps, _mm256_and_si256, _mm256_andnot_ps, _mm256_blendv_ps, _mm256_castpd_ps,
-        _mm256_castps_pd, _mm256_castps_si256, _mm256_castsi256_ps, _mm256_cmp_ps,
-        _mm256_cmpeq_epi32, _mm256_cmpgt_epi32, _mm256_cvtepi32_ps, _mm256_cvtps_epi32,
-        _mm256_div_ps, _mm256_floor_ps, _mm256_fmadd_ps, _mm256_fnmadd_ps, _mm256_loadu_ps,
-        _mm256_loadu_si256, _mm256_max_ps, _mm256_movemask_ps, _mm256_mul_epi32, _mm256_mul_ps,
-        _mm256_or_ps, _mm256_or_si256, _mm256_permute2f128_ps, _mm256_set1_epi32, _mm256_set1_ps,
-        _mm256_setzero_ps, _mm256_slli_epi32, _mm256_sllv_epi32, _mm256_sqrt_ps, _mm256_srai_epi32,
-        _mm256_srav_epi32, _mm256_storeu_ps, _mm256_sub_epi32, _mm256_sub_ps, _mm256_unpackhi_pd,
-        _mm256_unpackhi_ps, _mm256_unpacklo_pd, _mm256_unpacklo_ps, _mm256_xor_ps,
-    },
+    arch::x86_64::*,
     ops::{
-        Add, AddAssign, BitAnd, BitAndAssign, BitOr, BitOrAssign, Div, DivAssign, Mul, MulAssign,
-        Shl, ShlAssign, Shr, ShrAssign, Sub, SubAssign,
+        Add, AddAssign, BitAnd, BitAndAssign, BitOr, BitOrAssign, BitXor, BitXorAssign, Div,
+        DivAssign, Mul, MulAssign, Neg, Shl, ShlAssign, Shr, ShrAssign, Sub, SubAssign,
     },
 };
 
@@ -46,6 +35,7 @@ impl AvxDescriptor {
 impl SimdDescriptor for AvxDescriptor {
     type F32Vec = F32VecAvx;
     type I32Vec = I32VecAvx;
+    type U32Vec = U32VecAvx;
     type Mask = MaskAvx;
 
     type Descriptor256 = Self;
@@ -334,6 +324,14 @@ impl I32SimdVec for I32VecAvx {
     }
 
     #[inline(always)]
+    fn store(&self, mem: &mut [i32]) {
+        assert!(mem.len() >= Self::LEN);
+        // SAFETY: we just checked that `mem` has enough space. Moreover, we know avx is available
+        // from the safety invariant on `self.1`.
+        unsafe { _mm256_storeu_si256(mem.as_mut_ptr().cast(), self.0) }
+    }
+
+    #[inline(always)]
     fn splat(d: Self::Descriptor, v: i32) -> Self {
         // SAFETY: We know avx is available from the safety invariant on `d`.
         unsafe { Self(_mm256_set1_epi32(v), d) }
@@ -346,6 +344,11 @@ impl I32SimdVec for I32VecAvx {
     fn_avx!(this: I32VecAvx, fn bitcast_to_f32() -> F32VecAvx {
         F32VecAvx(_mm256_castsi256_ps(this.0), this.1)
     });
+
+    #[inline(always)]
+    fn bitcast_to_u32(self) -> U32VecAvx {
+        U32VecAvx(self.0, self.1)
+    }
 
     fn_avx!(this: I32VecAvx, fn abs() -> I32VecAvx {
         I32VecAvx(
@@ -360,11 +363,19 @@ impl I32SimdVec for I32VecAvx {
         )
     });
 
+    fn_avx!(this: I32VecAvx, fn lt_zero() -> MaskAvx {
+        I32VecAvx(_mm256_setzero_si256(), this.1).gt(this)
+    });
+
     fn_avx!(this: I32VecAvx, fn eq(rhs: I32VecAvx) -> MaskAvx {
         MaskAvx(
             _mm256_castsi256_ps(_mm256_cmpeq_epi32(this.0, rhs.0)),
             this.1,
         )
+    });
+
+    fn_avx!(this: I32VecAvx, fn eq_zero() -> MaskAvx {
+        this.eq(I32VecAvx(_mm256_setzero_si256(), this.1))
     });
 
     #[inline(always)]
@@ -378,6 +389,14 @@ impl I32SimdVec for I32VecAvx {
         // SAFETY: We know avx2 is available from the safety invariant on `d`.
         unsafe { I32VecAvx(_mm256_srai_epi32::<AMOUNT_I>(self.0), self.1) }
     }
+
+    fn_avx!(this: I32VecAvx, fn mul_wide_take_high(rhs: I32VecAvx) -> I32VecAvx {
+        let l = _mm256_mul_epi32(this.0, rhs.0);
+        let h = _mm256_mul_epi32(_mm256_srli_epi64::<32>(this.0), _mm256_srli_epi64::<32>(rhs.0));
+        let p0 = _mm256_unpacklo_epi32(l, h);
+        let p1 = _mm256_unpackhi_epi32(l, h);
+        I32VecAvx(_mm256_unpackhi_epi64(p0, p1), this.1)
+    });
 }
 
 impl Add<I32VecAvx> for I32VecAvx {
@@ -415,6 +434,13 @@ impl Shr<I32VecAvx> for I32VecAvx {
     });
 }
 
+impl Neg for I32VecAvx {
+    type Output = I32VecAvx;
+    fn_avx!(this: I32VecAvx, fn neg() -> I32VecAvx {
+        I32VecAvx(_mm256_setzero_si256(), this.1) - this
+    });
+}
+
 impl BitAnd<I32VecAvx> for I32VecAvx {
     type Output = I32VecAvx;
     fn_avx!(this: I32VecAvx, fn bitand(rhs: I32VecAvx) -> I32VecAvx {
@@ -426,6 +452,13 @@ impl BitOr<I32VecAvx> for I32VecAvx {
     type Output = I32VecAvx;
     fn_avx!(this: I32VecAvx, fn bitor(rhs: I32VecAvx) -> I32VecAvx {
         I32VecAvx(_mm256_or_si256(this.0, rhs.0), this.1)
+    });
+}
+
+impl BitXor<I32VecAvx> for I32VecAvx {
+    type Output = I32VecAvx;
+    fn_avx!(this: I32VecAvx, fn bitxor(rhs: I32VecAvx) -> I32VecAvx {
+        I32VecAvx(_mm256_xor_si256(this.0, rhs.0), this.1)
     });
 }
 
@@ -471,6 +504,33 @@ impl BitOrAssign<I32VecAvx> for I32VecAvx {
     });
 }
 
+impl BitXorAssign<I32VecAvx> for I32VecAvx {
+    fn_avx!(this: &mut I32VecAvx, fn bitxor_assign(rhs: I32VecAvx) {
+        this.0 = _mm256_xor_si256(this.0, rhs.0)
+    });
+}
+
+#[derive(Clone, Copy, Debug)]
+#[repr(transparent)]
+pub struct U32VecAvx(__m256i, AvxDescriptor);
+
+impl U32SimdVec for U32VecAvx {
+    type Descriptor = AvxDescriptor;
+
+    const LEN: usize = 8;
+
+    #[inline(always)]
+    fn bitcast_to_i32(self) -> I32VecAvx {
+        I32VecAvx(self.0, self.1)
+    }
+
+    #[inline(always)]
+    fn shr<const AMOUNT_U: u32, const AMOUNT_I: i32>(self) -> Self {
+        // SAFETY: We know avx2 is available from the safety invariant on `self.1`.
+        unsafe { Self(_mm256_srli_epi32::<AMOUNT_I>(self.0), self.1) }
+    }
+}
+
 impl SimdMask for MaskAvx {
     type Descriptor = AvxDescriptor;
 
@@ -478,7 +538,33 @@ impl SimdMask for MaskAvx {
         F32VecAvx(_mm256_blendv_ps(if_false.0, if_true.0, this.0), this.1)
     });
 
+    fn_avx!(this: MaskAvx, fn if_then_else_i32(if_true: I32VecAvx, if_false: I32VecAvx) -> I32VecAvx {
+        I32VecAvx(_mm256_blendv_epi8(if_false.0, if_true.0, _mm256_castps_si256(this.0)), this.1)
+    });
+
+    fn_avx!(this: MaskAvx, fn maskz_i32(v: I32VecAvx) -> I32VecAvx {
+        I32VecAvx(_mm256_andnot_si256(_mm256_castps_si256(this.0), v.0), this.1)
+    });
+
     fn_avx!(this: MaskAvx, fn all() -> bool {
         _mm256_movemask_ps(this.0) == 0b11111111
+    });
+
+    fn_avx!(this: MaskAvx, fn andnot(rhs: MaskAvx) -> MaskAvx {
+        MaskAvx(_mm256_andnot_ps(this.0, rhs.0), this.1)
+    });
+}
+
+impl BitAnd<MaskAvx> for MaskAvx {
+    type Output = MaskAvx;
+    fn_avx!(this: MaskAvx, fn bitand(rhs: MaskAvx) -> MaskAvx {
+        MaskAvx(_mm256_and_ps(this.0, rhs.0), this.1)
+    });
+}
+
+impl BitOr<MaskAvx> for MaskAvx {
+    type Output = MaskAvx;
+    fn_avx!(this: MaskAvx, fn bitor(rhs: MaskAvx) -> MaskAvx {
+        MaskAvx(_mm256_or_ps(this.0, rhs.0), this.1)
     });
 }

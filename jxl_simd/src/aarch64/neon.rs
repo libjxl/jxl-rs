@@ -5,9 +5,11 @@
 
 use std::arch::aarch64::*;
 use std::ops::{
-    Add, AddAssign, BitAnd, BitAndAssign, BitOr, BitOrAssign, Div, DivAssign, Mul, MulAssign, Sub,
-    SubAssign,
+    Add, AddAssign, BitAnd, BitAndAssign, BitOr, BitOrAssign, BitXor, BitXorAssign, Div, DivAssign,
+    Mul, MulAssign, Neg, Sub, SubAssign,
 };
+
+use crate::U32SimdVec;
 
 use super::super::{F32SimdVec, I32SimdVec, SimdDescriptor, SimdMask};
 
@@ -27,6 +29,8 @@ impl SimdDescriptor for NeonDescriptor {
     type F32Vec = F32VecNeon;
 
     type I32Vec = I32VecNeon;
+
+    type U32Vec = U32VecNeon;
 
     type Mask = MaskNeon;
 
@@ -319,6 +323,14 @@ impl I32SimdVec for I32VecNeon {
         Self(unsafe { vld1q_s32(mem.as_ptr()) }, d)
     }
 
+    #[inline(always)]
+    fn store(&self, mem: &mut [i32]) {
+        assert!(mem.len() >= Self::LEN);
+        // SAFETY: we just checked that `mem` has enough space. Moreover, we know neon is available
+        // from the safety invariant on `d`.
+        unsafe { vst1q_s32(mem.as_mut_ptr(), self.0) }
+    }
+
     fn_neon! {
         fn abs(this: I32VecNeon) -> I32VecNeon {
             I32VecNeon(vabsq_s32(this.0), this.1)
@@ -332,12 +344,32 @@ impl I32SimdVec for I32VecNeon {
             F32VecNeon(vreinterpretq_f32_s32(this.0), this.1)
         }
 
+        fn bitcast_to_u32(this: I32VecNeon) -> U32VecNeon {
+            U32VecNeon(vreinterpretq_u32_s32(this.0), this.1)
+        }
+
         fn gt(this: I32VecNeon, other: I32VecNeon) -> MaskNeon {
             MaskNeon(vcgtq_s32(this.0, other.0), this.1)
         }
 
+        fn lt_zero(this: I32VecNeon) -> MaskNeon {
+            MaskNeon(vcltzq_s32(this.0), this.1)
+        }
+
         fn eq(this: I32VecNeon, other: I32VecNeon) -> MaskNeon {
             MaskNeon(vceqq_s32(this.0, other.0), this.1)
+        }
+
+        fn eq_zero(this: I32VecNeon) -> MaskNeon {
+            MaskNeon(vceqzq_s32(this.0), this.1)
+        }
+
+        fn mul_wide_take_high(this: I32VecNeon, rhs: I32VecNeon) -> I32VecNeon {
+            let l = vmull_s32(vget_low_s32(this.0), vget_low_s32(rhs.0));
+            let l = vreinterpretq_s32_s64(l);
+            let h = vmull_high_s32(this.0, rhs.0);
+            let h = vreinterpretq_s32_s64(h);
+            I32VecNeon(vuzp2q_s32(l, h), this.1)
         }
     }
 
@@ -381,6 +413,15 @@ impl Mul<I32VecNeon> for I32VecNeon {
     }
 }
 
+impl Neg for I32VecNeon {
+    type Output = I32VecNeon;
+    fn_neon! {
+        fn neg(this: I32VecNeon) -> I32VecNeon {
+            I32VecNeon(vnegq_s32(this.0), this.1)
+        }
+    }
+}
+
 impl BitAnd<I32VecNeon> for I32VecNeon {
     type Output = I32VecNeon;
     fn_neon! {
@@ -395,6 +436,15 @@ impl BitOr<I32VecNeon> for I32VecNeon {
     fn_neon! {
         fn bitor(this: I32VecNeon, rhs: I32VecNeon) -> I32VecNeon {
             I32VecNeon(vorrq_s32(this.0, rhs.0), this.1)
+        }
+    }
+}
+
+impl BitXor<I32VecNeon> for I32VecNeon {
+    type Output = I32VecNeon;
+    fn_neon! {
+        fn bitxor(this: I32VecNeon, rhs: I32VecNeon) -> I32VecNeon {
+            I32VecNeon(veorq_s32(this.0, rhs.0), this.1)
         }
     }
 }
@@ -439,6 +489,36 @@ impl BitOrAssign<I32VecNeon> for I32VecNeon {
     }
 }
 
+impl BitXorAssign<I32VecNeon> for I32VecNeon {
+    fn_neon! {
+        fn bitxor_assign(this: &mut I32VecNeon, rhs: I32VecNeon) {
+            this.0 = veorq_s32(this.0, rhs.0);
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+#[repr(transparent)]
+pub struct U32VecNeon(uint32x4_t, NeonDescriptor);
+
+impl U32SimdVec for U32VecNeon {
+    type Descriptor = NeonDescriptor;
+
+    const LEN: usize = 4;
+
+    fn_neon! {
+        fn bitcast_to_i32(this: U32VecNeon) -> I32VecNeon {
+            I32VecNeon(vreinterpretq_s32_u32(this.0), this.1)
+        }
+    }
+
+    #[inline(always)]
+    fn shr<const AMOUNT_U: u32, const AMOUNT_I: i32>(self) -> Self {
+        // SAFETY: We know neon is available from the safety invariant on `self.1`.
+        unsafe { Self(vshrq_n_u32::<AMOUNT_I>(self.0), self.1) }
+    }
+}
+
 #[derive(Clone, Copy, Debug)]
 #[repr(transparent)]
 pub struct MaskNeon(uint32x4_t, NeonDescriptor);
@@ -455,8 +535,42 @@ impl SimdMask for MaskNeon {
             F32VecNeon(vbslq_f32(this.0, if_true.0, if_false.0), this.1)
         }
 
+        fn if_then_else_i32(
+            this: MaskNeon,
+            if_true: I32VecNeon,
+            if_false: I32VecNeon,
+        ) -> I32VecNeon {
+            I32VecNeon(vbslq_s32(this.0, if_true.0, if_false.0), this.1)
+        }
+
+        fn maskz_i32(this: MaskNeon, v: I32VecNeon) -> I32VecNeon {
+            I32VecNeon(vbicq_s32(v.0, vreinterpretq_s32_u32(this.0)), this.1)
+        }
+
+        fn andnot(this: MaskNeon, rhs: MaskNeon) -> MaskNeon {
+            MaskNeon(vbicq_u32(rhs.0, this.0), this.1)
+        }
+
         fn all(this: MaskNeon) -> bool {
             vminvq_u32(this.0) == u32::MAX
+        }
+    }
+}
+
+impl BitAnd<MaskNeon> for MaskNeon {
+    type Output = MaskNeon;
+    fn_neon! {
+        fn bitand(this: MaskNeon, rhs: MaskNeon) -> MaskNeon {
+            MaskNeon(vandq_u32(this.0, rhs.0), this.1)
+        }
+    }
+}
+
+impl BitOr<MaskNeon> for MaskNeon {
+    type Output = MaskNeon;
+    fn_neon! {
+        fn bitor(this: MaskNeon, rhs: MaskNeon) -> MaskNeon {
+            MaskNeon(vorrq_u32(this.0, rhs.0), this.1)
         }
     }
 }
