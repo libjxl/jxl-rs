@@ -4,24 +4,12 @@
 // license that can be found in the LICENSE file.
 
 use super::super::{AvxDescriptor, F32SimdVec, I32SimdVec, SimdDescriptor, SimdMask};
-use crate::{Sse42Descriptor, impl_f32_array_interface};
+use crate::{Sse42Descriptor, U32SimdVec, impl_f32_array_interface};
 use std::{
-    arch::x86_64::{
-        __m512, __m512i, __mmask16, _CMP_GT_OQ, _MM_FROUND_FLOOR, _mm512_abs_epi32, _mm512_abs_ps,
-        _mm512_add_epi32, _mm512_add_epi64, _mm512_add_ps, _mm512_and_si512, _mm512_andnot_si512,
-        _mm512_castpd_ps, _mm512_castps_pd, _mm512_castps_si512, _mm512_castsi512_ps,
-        _mm512_cmp_ps_mask, _mm512_cmpeq_epi32_mask, _mm512_cmpgt_epi32_mask, _mm512_cvtepi32_ps,
-        _mm512_cvtps_epi32, _mm512_div_ps, _mm512_fmadd_ps, _mm512_fnmadd_ps, _mm512_loadu_epi32,
-        _mm512_loadu_ps, _mm512_mask_blend_ps, _mm512_max_ps, _mm512_mul_epi32, _mm512_mul_ps,
-        _mm512_or_si512, _mm512_permutex2var_pd, _mm512_roundscale_ps, _mm512_set1_epi32,
-        _mm512_set1_epi64, _mm512_set1_ps, _mm512_setr_epi64, _mm512_setzero_ps, _mm512_slli_epi32,
-        _mm512_sllv_epi32, _mm512_sqrt_ps, _mm512_srai_epi32, _mm512_srav_epi32, _mm512_storeu_ps,
-        _mm512_sub_epi32, _mm512_sub_ps, _mm512_unpackhi_pd, _mm512_unpackhi_ps,
-        _mm512_unpacklo_pd, _mm512_unpacklo_ps, _mm512_xor_si512,
-    },
+    arch::x86_64::*,
     ops::{
-        Add, AddAssign, BitAnd, BitAndAssign, BitOr, BitOrAssign, Div, DivAssign, Mul, MulAssign,
-        Shl, ShlAssign, Shr, ShrAssign, Sub, SubAssign,
+        Add, AddAssign, BitAnd, BitAndAssign, BitOr, BitOrAssign, BitXor, BitXorAssign, Div,
+        DivAssign, Mul, MulAssign, Neg, Shl, ShlAssign, Shr, ShrAssign, Sub, SubAssign,
     },
 };
 
@@ -46,6 +34,7 @@ impl Avx512Descriptor {
 impl SimdDescriptor for Avx512Descriptor {
     type F32Vec = F32VecAvx512;
     type I32Vec = I32VecAvx512;
+    type U32Vec = U32VecAvx512;
     type Mask = MaskAvx512;
 
     type Descriptor256 = AvxDescriptor;
@@ -427,6 +416,14 @@ impl I32SimdVec for I32VecAvx512 {
     }
 
     #[inline(always)]
+    fn store(&self, mem: &mut [i32]) {
+        assert!(mem.len() >= Self::LEN);
+        // SAFETY: we just checked that `mem` has enough space. Moreover, we know avx512f is available
+        // from the safety invariant on `self.1`.
+        unsafe { _mm512_storeu_epi32(mem.as_mut_ptr(), self.0) }
+    }
+
+    #[inline(always)]
     fn splat(d: Self::Descriptor, v: i32) -> Self {
         // SAFETY: We know avx512f is available from the safety invariant on `d`.
         unsafe { Self(_mm512_set1_epi32(v), d) }
@@ -440,6 +437,11 @@ impl I32SimdVec for I32VecAvx512 {
          F32VecAvx512(_mm512_castsi512_ps(this.0), this.1)
     });
 
+    #[inline(always)]
+    fn bitcast_to_u32(self) -> U32VecAvx512 {
+        U32VecAvx512(self.0, self.1)
+    }
+
     fn_avx!(this: I32VecAvx512, fn abs() -> I32VecAvx512 {
         I32VecAvx512(_mm512_abs_epi32(this.0), this.1)
     });
@@ -448,8 +450,16 @@ impl I32SimdVec for I32VecAvx512 {
         MaskAvx512(_mm512_cmpgt_epi32_mask(this.0, rhs.0), this.1)
     });
 
+    fn_avx!(this: I32VecAvx512, fn lt_zero() -> MaskAvx512 {
+        I32VecAvx512(_mm512_setzero_epi32(), this.1).gt(this)
+    });
+
     fn_avx!(this: I32VecAvx512, fn eq(rhs: I32VecAvx512) -> MaskAvx512 {
         MaskAvx512(_mm512_cmpeq_epi32_mask(this.0, rhs.0), this.1)
+    });
+
+    fn_avx!(this: I32VecAvx512, fn eq_zero() -> MaskAvx512 {
+        I32VecAvx512(_mm512_setzero_epi32(), this.1).eq(this)
     });
 
     #[inline(always)]
@@ -463,6 +473,13 @@ impl I32SimdVec for I32VecAvx512 {
         // SAFETY: We know avx512f is available from the safety invariant on `d`.
         unsafe { I32VecAvx512(_mm512_srai_epi32::<AMOUNT_U>(self.0), self.1) }
     }
+
+    fn_avx!(this: I32VecAvx512, fn mul_wide_take_high(rhs: I32VecAvx512) -> I32VecAvx512 {
+        let l = _mm512_mul_epi32(this.0, rhs.0);
+        let h = _mm512_mul_epi32(_mm512_srli_epi64::<32>(this.0), _mm512_srli_epi64::<32>(rhs.0));
+        let idx = _mm512_setr_epi32(1, 17, 3, 19, 5, 21, 7, 23, 9, 25, 11, 27, 13, 29, 15, 31);
+        I32VecAvx512(_mm512_permutex2var_epi32(l, idx, h), this.1)
+    });
 }
 
 impl Add<I32VecAvx512> for I32VecAvx512 {
@@ -483,6 +500,13 @@ impl Mul<I32VecAvx512> for I32VecAvx512 {
     type Output = I32VecAvx512;
     fn_avx!(this: I32VecAvx512, fn mul(rhs: I32VecAvx512) -> I32VecAvx512 {
         I32VecAvx512(_mm512_mul_epi32(this.0, rhs.0), this.1)
+    });
+}
+
+impl Neg for I32VecAvx512 {
+    type Output = I32VecAvx512;
+    fn_avx!(this: I32VecAvx512, fn neg() -> I32VecAvx512 {
+        I32VecAvx512(_mm512_setzero_epi32(), this.1) - this
     });
 }
 
@@ -511,6 +535,13 @@ impl BitOr<I32VecAvx512> for I32VecAvx512 {
     type Output = I32VecAvx512;
     fn_avx!(this: I32VecAvx512, fn bitor(rhs: I32VecAvx512) -> I32VecAvx512 {
         I32VecAvx512(_mm512_or_si512(this.0, rhs.0), this.1)
+    });
+}
+
+impl BitXor<I32VecAvx512> for I32VecAvx512 {
+    type Output = I32VecAvx512;
+    fn_avx!(this: I32VecAvx512, fn bitxor(rhs: I32VecAvx512) -> I32VecAvx512 {
+        I32VecAvx512(_mm512_xor_si512(this.0, rhs.0), this.1)
     });
 }
 
@@ -556,14 +587,67 @@ impl BitOrAssign<I32VecAvx512> for I32VecAvx512 {
     });
 }
 
+impl BitXorAssign<I32VecAvx512> for I32VecAvx512 {
+    fn_avx!(this: &mut I32VecAvx512, fn bitxor_assign(rhs: I32VecAvx512) {
+        this.0 = _mm512_xor_si512(this.0, rhs.0)
+    });
+}
+
+#[derive(Clone, Copy, Debug)]
+#[repr(transparent)]
+pub struct U32VecAvx512(__m512i, Avx512Descriptor);
+
+impl U32SimdVec for U32VecAvx512 {
+    type Descriptor = Avx512Descriptor;
+
+    const LEN: usize = 8;
+
+    #[inline(always)]
+    fn bitcast_to_i32(self) -> I32VecAvx512 {
+        I32VecAvx512(self.0, self.1)
+    }
+
+    #[inline(always)]
+    fn shr<const AMOUNT_U: u32, const AMOUNT_I: i32>(self) -> Self {
+        // SAFETY: We know avx512f is available from the safety invariant on `self.1`.
+        unsafe { Self(_mm512_srli_epi32::<AMOUNT_U>(self.0), self.1) }
+    }
+}
+
 impl SimdMask for MaskAvx512 {
     type Descriptor = Avx512Descriptor;
 
     fn_avx!(this: MaskAvx512, fn if_then_else_f32(if_true: F32VecAvx512, if_false: F32VecAvx512) -> F32VecAvx512 {
-         F32VecAvx512(_mm512_mask_blend_ps(this.0, if_false.0, if_true.0), this.1)
+        F32VecAvx512(_mm512_mask_blend_ps(this.0, if_false.0, if_true.0), this.1)
+    });
+
+    fn_avx!(this: MaskAvx512, fn if_then_else_i32(if_true: I32VecAvx512, if_false: I32VecAvx512) -> I32VecAvx512 {
+        I32VecAvx512(_mm512_mask_blend_epi32(this.0, if_false.0, if_true.0), this.1)
+    });
+
+    fn_avx!(this: MaskAvx512, fn maskz_i32(v: I32VecAvx512) -> I32VecAvx512 {
+        I32VecAvx512(_mm512_mask_set1_epi32(v.0, this.0, 0), this.1)
     });
 
     fn_avx!(this: MaskAvx512, fn all() -> bool {
         this.0 == 0b1111111111111111
+    });
+
+    fn_avx!(this: MaskAvx512, fn andnot(rhs: MaskAvx512) -> MaskAvx512 {
+        MaskAvx512((!this.0) & rhs.0, this.1)
+    });
+}
+
+impl BitAnd<MaskAvx512> for MaskAvx512 {
+    type Output = MaskAvx512;
+    fn_avx!(this: MaskAvx512, fn bitand(rhs: MaskAvx512) -> MaskAvx512 {
+        MaskAvx512(this.0 & rhs.0, this.1)
+    });
+}
+
+impl BitOr<MaskAvx512> for MaskAvx512 {
+    type Output = MaskAvx512;
+    fn_avx!(this: MaskAvx512, fn bitor(rhs: MaskAvx512) -> MaskAvx512 {
+        MaskAvx512(this.0 | rhs.0, this.1)
     });
 }

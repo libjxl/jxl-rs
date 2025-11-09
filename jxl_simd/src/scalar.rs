@@ -3,7 +3,7 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-use crate::impl_f32_array_interface;
+use crate::{U32SimdVec, impl_f32_array_interface};
 
 use super::{F32SimdVec, I32SimdVec, SimdDescriptor, SimdMask};
 
@@ -13,6 +13,7 @@ pub struct ScalarDescriptor;
 impl SimdDescriptor for ScalarDescriptor {
     type F32Vec = f32;
     type I32Vec = i32;
+    type U32Vec = u32;
     type Mask = bool;
 
     type Descriptor256 = Self;
@@ -140,6 +141,11 @@ impl I32SimdVec for i32 {
     }
 
     #[inline(always)]
+    fn store(&self, mem: &mut [i32]) {
+        mem[0] = *self;
+    }
+
+    #[inline(always)]
     fn abs(self) -> Self {
         self.abs()
     }
@@ -155,8 +161,18 @@ impl I32SimdVec for i32 {
     }
 
     #[inline(always)]
+    fn bitcast_to_u32(self) -> u32 {
+        self as u32
+    }
+
+    #[inline(always)]
     fn gt(self, other: Self) -> bool {
         self > other
+    }
+
+    #[inline(always)]
+    fn lt_zero(self) -> bool {
+        self < 0
     }
 
     #[inline(always)]
@@ -165,8 +181,34 @@ impl I32SimdVec for i32 {
     }
 
     #[inline(always)]
+    fn eq_zero(self) -> bool {
+        self == 0
+    }
+
+    #[inline(always)]
     fn shl<const AMOUNT_U: u32, const AMOUNT_I: i32>(self) -> Self {
         self << AMOUNT_U
+    }
+
+    #[inline(always)]
+    fn shr<const AMOUNT_U: u32, const AMOUNT_I: i32>(self) -> Self {
+        self >> AMOUNT_U
+    }
+
+    #[inline(always)]
+    fn mul_wide_take_high(self, rhs: Self) -> Self {
+        ((self as i64 * rhs as i64) >> 32) as i32
+    }
+}
+
+impl U32SimdVec for u32 {
+    type Descriptor = ScalarDescriptor;
+
+    const LEN: usize = 1;
+
+    #[inline(always)]
+    fn bitcast_to_i32(self) -> i32 {
+        self as i32
     }
 
     #[inline(always)]
@@ -184,8 +226,23 @@ impl SimdMask for bool {
     }
 
     #[inline(always)]
+    fn if_then_else_i32(self, if_true: i32, if_false: i32) -> i32 {
+        if self { if_true } else { if_false }
+    }
+
+    #[inline(always)]
+    fn maskz_i32(self, v: i32) -> i32 {
+        if self { 0 } else { v }
+    }
+
+    #[inline(always)]
     fn all(self) -> bool {
         self
+    }
+
+    #[inline(always)]
+    fn andnot(self, rhs: Self) -> Self {
+        (!self) & rhs
     }
 }
 

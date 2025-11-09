@@ -6,8 +6,8 @@
 use std::{
     fmt::Debug,
     ops::{
-        Add, AddAssign, BitAnd, BitAndAssign, BitOr, BitOrAssign, Div, DivAssign, Mul, MulAssign,
-        Sub, SubAssign,
+        Add, AddAssign, BitAnd, BitAndAssign, BitOr, BitOrAssign, BitXor, BitXorAssign, Div,
+        DivAssign, Mul, MulAssign, Neg, Sub, SubAssign,
     },
 };
 
@@ -36,10 +36,12 @@ pub trait SimdDescriptor: Sized + Copy + Debug + Send + Sync {
 
     type I32Vec: I32SimdVec<Descriptor = Self>;
 
+    type U32Vec: U32SimdVec<Descriptor = Self>;
+
     type Mask: SimdMask<Descriptor = Self>;
 
-    type Descriptor256: SimdDescriptor;
-    type Descriptor128: SimdDescriptor;
+    type Descriptor256: SimdDescriptor<Descriptor256 = Self::Descriptor256>;
+    type Descriptor128: SimdDescriptor<Descriptor128 = Self::Descriptor128>;
 
     fn new() -> Option<Self>;
 
@@ -142,13 +144,16 @@ pub trait I32SimdVec:
     + Add<Self, Output = Self>
     + Mul<Self, Output = Self>
     + Sub<Self, Output = Self>
+    + Neg<Output = Self>
     + BitAnd<Self, Output = Self>
     + BitOr<Self, Output = Self>
+    + BitXor<Self, Output = Self>
     + AddAssign<Self>
     + MulAssign<Self>
     + SubAssign<Self>
     + BitAndAssign<Self>
     + BitOrAssign<Self>
+    + BitXorAssign<Self>
 {
     type Descriptor: SimdDescriptor;
 
@@ -161,17 +166,39 @@ pub trait I32SimdVec:
     // Requires `mem.len() >= Self::LEN` or it will panic.
     fn load(d: Self::Descriptor, mem: &[i32]) -> Self;
 
+    // Requires `mem.len() >= Self::LEN` or it will panic.
+    fn store(&self, mem: &mut [i32]);
+
     fn abs(self) -> Self;
 
     fn as_f32(self) -> <<Self as I32SimdVec>::Descriptor as SimdDescriptor>::F32Vec;
 
     fn bitcast_to_f32(self) -> <<Self as I32SimdVec>::Descriptor as SimdDescriptor>::F32Vec;
 
+    fn bitcast_to_u32(self) -> <<Self as I32SimdVec>::Descriptor as SimdDescriptor>::U32Vec;
+
     fn gt(self, other: Self) -> <<Self as I32SimdVec>::Descriptor as SimdDescriptor>::Mask;
+
+    fn lt_zero(self) -> <<Self as I32SimdVec>::Descriptor as SimdDescriptor>::Mask;
 
     fn eq(self, other: Self) -> <<Self as I32SimdVec>::Descriptor as SimdDescriptor>::Mask;
 
+    fn eq_zero(self) -> <<Self as I32SimdVec>::Descriptor as SimdDescriptor>::Mask;
+
     fn shl<const AMOUNT_U: u32, const AMOUNT_I: i32>(self) -> Self;
+
+    fn shr<const AMOUNT_U: u32, const AMOUNT_I: i32>(self) -> Self;
+
+    fn mul_wide_take_high(self, rhs: Self) -> Self;
+}
+
+pub trait U32SimdVec: Sized + Copy + Debug + Send + Sync {
+    type Descriptor: SimdDescriptor;
+
+    #[allow(dead_code)]
+    const LEN: usize;
+
+    fn bitcast_to_i32(self) -> <<Self as U32SimdVec>::Descriptor as SimdDescriptor>::I32Vec;
 
     fn shr<const AMOUNT_U: u32, const AMOUNT_I: i32>(self) -> Self;
 }
@@ -179,18 +206,20 @@ pub trait I32SimdVec:
 #[macro_export]
 macro_rules! shl {
     ($val: expr, $amount: literal) => {
-        <_ as $crate::I32SimdVec>::shl::<{ $amount as u32 }, { $amount as i32 }>($val)
+        $val.shl::<{ $amount as u32 }, { $amount as i32 }>()
     };
 }
 
 #[macro_export]
 macro_rules! shr {
     ($val: expr, $amount: literal) => {
-        <_ as $crate::I32SimdVec>::shr::<{ $amount as u32 }, { $amount as i32 }>($val)
+        $val.shr::<{ $amount as u32 }, { $amount as i32 }>()
     };
 }
 
-pub trait SimdMask: Sized + Copy + Debug + Send + Sync {
+pub trait SimdMask:
+    Sized + Copy + Debug + Send + Sync + BitAnd<Self, Output = Self> + BitOr<Self, Output = Self>
+{
     type Descriptor: SimdDescriptor;
 
     fn if_then_else_f32(
@@ -199,7 +228,21 @@ pub trait SimdMask: Sized + Copy + Debug + Send + Sync {
         if_false: <<Self as SimdMask>::Descriptor as SimdDescriptor>::F32Vec,
     ) -> <<Self as SimdMask>::Descriptor as SimdDescriptor>::F32Vec;
 
+    fn if_then_else_i32(
+        self,
+        if_true: <<Self as SimdMask>::Descriptor as SimdDescriptor>::I32Vec,
+        if_false: <<Self as SimdMask>::Descriptor as SimdDescriptor>::I32Vec,
+    ) -> <<Self as SimdMask>::Descriptor as SimdDescriptor>::I32Vec;
+
+    fn maskz_i32(
+        self,
+        v: <<Self as SimdMask>::Descriptor as SimdDescriptor>::I32Vec,
+    ) -> <<Self as SimdMask>::Descriptor as SimdDescriptor>::I32Vec;
+
     fn all(self) -> bool;
+
+    // !self & rhs
+    fn andnot(self, rhs: Self) -> Self;
 }
 
 macro_rules! impl_f32_array_interface {
