@@ -8,7 +8,7 @@ use crate::{
     api::JxlOutputBuffer,
     error::Result,
     image::{Image, ImageDataType},
-    render::internal::ChannelInfo,
+    render::{buffer_splitter::BufferSplitter, internal::ChannelInfo},
     util::{ShiftRightCeil, tracing_wrappers::*},
 };
 
@@ -30,82 +30,9 @@ pub struct SimpleRenderPipeline {
     completed_passes: usize,
 }
 
-fn clone_images<T: ImageDataType>(images: &[Image<T>]) -> Result<Vec<Image<T>>> {
-    images.iter().map(|x| x.try_clone()).collect()
-}
-
-impl RenderPipeline for SimpleRenderPipeline {
-    type Buffer = Image<f64>;
-
-    fn new_from_shared(shared: RenderPipelineShared<Self::Buffer>) -> Result<Self> {
-        let input_buffers = shared.channel_info[0]
-            .iter()
-            .map(|x| {
-                let xsize = shared.input_size.0.shrc(x.downsample.0);
-                let ysize = shared.input_size.1.shrc(x.downsample.1);
-                Image::new((xsize, ysize))
-            })
-            .collect::<Result<Vec<_>>>()?;
-
-        Ok(Self {
-            shared,
-            input_buffers,
-            completed_passes: 0,
-        })
-    }
-
+impl SimpleRenderPipeline {
     #[instrument(skip_all, err)]
-    fn get_buffer_for_group<T: ImageDataType>(
-        &mut self,
-        channel: usize,
-        group_id: usize,
-    ) -> Result<Image<T>> {
-        let sz = self
-            .shared
-            .group_size_for_channel(channel, group_id, T::DATA_TYPE_ID);
-        Image::<T>::new(sz)
-    }
-
-    fn set_buffer_for_group<T: ImageDataType>(
-        &mut self,
-        channel: usize,
-        group_id: usize,
-        num_passes: usize,
-        buf: Image<T>,
-    ) {
-        debug!(
-            "filling data for group {}, channel {}, using type {:?}",
-            group_id,
-            channel,
-            T::DATA_TYPE_ID,
-        );
-        let sz = self
-            .shared
-            .group_size_for_channel(channel, group_id, T::DATA_TYPE_ID);
-        let goffset = self.shared.group_offset(group_id);
-        let ChannelInfo { ty, downsample } = self.shared.channel_info[0][channel];
-        let off = (goffset.0 >> downsample.0, goffset.1 >> downsample.1);
-        debug!(?sz, input_buffers_sz=?self.input_buffers[channel].size(), offset=?off, ?downsample, ?goffset);
-        let bsz = buf.size();
-        // These asserts should catch cases in which we hand back groups of the wrong size (or as
-        // large as a full frame). Note that, because of chroma subsampling, padding can be up to
-        // two blocks.
-        assert!(sz.0 <= bsz.0);
-        assert!(sz.1 <= bsz.1);
-        assert!(sz.0 + BLOCK_DIM * 2 > bsz.0);
-        assert!(sz.1 + BLOCK_DIM * 2 > bsz.1);
-        let ty = ty.unwrap();
-        assert_eq!(ty, T::DATA_TYPE_ID);
-        for y in 0..sz.1 {
-            for x in 0..sz.0 {
-                self.input_buffers[channel].row_mut(y + off.1)[x + off.0] = buf.row(y)[x].to_f64();
-            }
-        }
-        self.shared.group_chan_ready_passes[group_id][channel] += num_passes;
-    }
-
-    #[instrument(skip_all, err)]
-    fn do_render(&mut self, buffers: &mut [Option<JxlOutputBuffer>]) -> Result<()> {
+    fn do_render(&mut self, buffer_splitter: &mut BufferSplitter) -> Result<()> {
         let ready_passes = self
             .shared
             .group_chan_ready_passes
@@ -189,14 +116,101 @@ impl RenderPipeline for SimpleRenderPipeline {
                     );
                 }
                 Stage::Save(stage) => {
-                    stage.save_simple(&output_buffers, buffers)?;
+                    stage.save_simple(&output_buffers, buffer_splitter.get_full_buffers())?;
                 }
             }
             current_buffers = output_buffers;
         }
 
         self.completed_passes = ready_passes;
+        Ok(())
+    }
+}
 
+fn clone_images<T: ImageDataType>(images: &[Image<T>]) -> Result<Vec<Image<T>>> {
+    images.iter().map(|x| x.try_clone()).collect()
+}
+
+impl RenderPipeline for SimpleRenderPipeline {
+    type Buffer = Image<f64>;
+
+    fn new_from_shared(shared: RenderPipelineShared<Self::Buffer>) -> Result<Self> {
+        let input_buffers = shared.channel_info[0]
+            .iter()
+            .map(|x| {
+                let xsize = shared.input_size.0.shrc(x.downsample.0);
+                let ysize = shared.input_size.1.shrc(x.downsample.1);
+                Image::new((xsize, ysize))
+            })
+            .collect::<Result<Vec<_>>>()?;
+
+        Ok(Self {
+            shared,
+            input_buffers,
+            completed_passes: 0,
+        })
+    }
+
+    #[instrument(skip_all, err)]
+    fn get_buffer_for_group<T: ImageDataType>(
+        &mut self,
+        channel: usize,
+        group_id: usize,
+    ) -> Result<Image<T>> {
+        let sz = self
+            .shared
+            .group_size_for_channel(channel, group_id, T::DATA_TYPE_ID);
+        Image::<T>::new(sz)
+    }
+
+    fn set_buffer_for_group<T: ImageDataType>(
+        &mut self,
+        channel: usize,
+        group_id: usize,
+        num_passes: usize,
+        buf: Image<T>,
+        buffer_splitter: &mut BufferSplitter,
+    ) -> Result<()> {
+        debug!(
+            "filling data for group {}, channel {}, using type {:?}",
+            group_id,
+            channel,
+            T::DATA_TYPE_ID,
+        );
+        let sz = self
+            .shared
+            .group_size_for_channel(channel, group_id, T::DATA_TYPE_ID);
+        let goffset = self.shared.group_offset(group_id);
+        let ChannelInfo { ty, downsample } = self.shared.channel_info[0][channel];
+        let off = (goffset.0 >> downsample.0, goffset.1 >> downsample.1);
+        debug!(?sz, input_buffers_sz=?self.input_buffers[channel].size(), offset=?off, ?downsample, ?goffset);
+        let bsz = buf.size();
+        // These asserts should catch cases in which we hand back groups of the wrong size (or as
+        // large as a full frame). Note that, because of chroma subsampling, padding can be up to
+        // two blocks.
+        assert!(sz.0 <= bsz.0);
+        assert!(sz.1 <= bsz.1);
+        assert!(sz.0 + BLOCK_DIM * 2 > bsz.0);
+        assert!(sz.1 + BLOCK_DIM * 2 > bsz.1);
+        let ty = ty.unwrap();
+        assert_eq!(ty, T::DATA_TYPE_ID);
+        for y in 0..sz.1 {
+            for x in 0..sz.0 {
+                self.input_buffers[channel].row_mut(y + off.1)[x + off.0] = buf.row(y)[x].to_f64();
+            }
+        }
+        self.shared.group_chan_ready_passes[group_id][channel] += num_passes;
+
+        self.do_render(buffer_splitter)
+    }
+
+    fn check_buffer_sizes(&self, _buffers: &mut [Option<JxlOutputBuffer>]) -> Result<()> {
+        // This will be checked during rendering.
+        Ok(())
+    }
+
+    fn render_outside_frame(&mut self, _buffer_splitter: &mut BufferSplitter) -> Result<()> {
+        // Nothing to do in the simple pipeline.
         Ok(())
     }
 

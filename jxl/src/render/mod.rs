@@ -9,10 +9,11 @@ use std::any::Any;
 use crate::{
     api::JxlOutputBuffer,
     error::Result,
-    image::{DataTypeTag, Image, ImageDataType},
-    util::CACHE_LINE_BYTE_SIZE,
+    image::{Image, ImageDataType},
+    render::buffer_splitter::BufferSplitter,
 };
 
+pub mod buffer_splitter;
 mod builder;
 mod internal;
 mod low_memory_pipeline;
@@ -22,23 +23,15 @@ pub mod stages;
 #[cfg(test)]
 mod test;
 
+// Interesting border amounts:
+// - 0 (lossless)
+// - 1 (420 JPEG recompression)
+// - 4 (Gaborish + EPF 1 + EPF 2)
+// - 7 (Gaborish + EPF 0 + EPF 1 + EPF 2)
+// - 9 (Gaborish + EPF 0/1/2 + upsampling)
+// Note: adding 420 does *not* increase this value, because on chroma channels we get
+// 9.div_ceil(2)+1 = 6 pixels of border, below the 9 for luma.
 const MAX_BORDER: usize = 9;
-
-pub const fn input_image_offset_tag(tag: DataTypeTag) -> (usize, usize) {
-    (CACHE_LINE_BYTE_SIZE / tag.size(), MAX_BORDER)
-}
-
-pub const fn input_image_offset<T: ImageDataType>() -> (usize, usize) {
-    input_image_offset_tag(T::DATA_TYPE_ID)
-}
-
-pub const fn input_image_total_padding_tag(tag: DataTypeTag) -> (usize, usize) {
-    (4 * CACHE_LINE_BYTE_SIZE / tag.size(), MAX_BORDER * 2)
-}
-
-pub const fn input_image_total_padding<T: ImageDataType>() -> (usize, usize) {
-    input_image_total_padding_tag(T::DATA_TYPE_ID)
-}
 
 pub(crate) use builder::RenderPipelineBuilder;
 pub(crate) use low_memory_pipeline::LowMemoryRenderPipeline;
@@ -126,10 +119,16 @@ pub(crate) trait RenderPipeline: Sized {
         group_id: usize,
         num_passes: usize,
         buf: Image<T>,
-    );
+        buffer_splitter: &mut BufferSplitter,
+    ) -> Result<()>;
 
-    /// Renders new data that is available after the last call to `render`.
-    fn do_render(&mut self, buffers: &mut [Option<JxlOutputBuffer>]) -> Result<()>;
+    /// Checks whether the provided buffer sizes are correct.
+    fn check_buffer_sizes(&self, buffers: &mut [Option<JxlOutputBuffer>]) -> Result<()>;
+
+    /// Renders any data outside the frame that would not be rendered by calls to
+    /// set_buffer_for_group. Can be called multiple times - it is up to the pipeline
+    /// implementation to ensure rendering only happens once.
+    fn render_outside_frame(&mut self, buffer_splitter: &mut BufferSplitter) -> Result<()>;
 
     fn box_inout_stage<S: RenderPipelineInOutStage>(
         stage: S,

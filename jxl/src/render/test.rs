@@ -8,7 +8,7 @@ use crate::{
     error::Result,
     headers::Orientation,
     image::{DataTypeTag, Image, ImageDataType, Rect},
-    render::SimpleRenderPipeline,
+    render::{SimpleRenderPipeline, buffer_splitter::BufferSplitter},
     util::{
         ShiftRightCeil,
         test::check_equal_images,
@@ -133,24 +133,6 @@ fn make_and_run_simple_pipeline_impl<InputT: ImageDataType, OutputT: ImageDataTy
     let mut pipeline = pipeline.build()?;
 
     let num_groups = image_size.0.shrc(LOG_GROUP_SIZE) * image_size.1.shrc(LOG_GROUP_SIZE);
-    for g in 0..num_groups {
-        for &c in all_channels.iter() {
-            let log_group_size = if uses_channel[c] {
-                (
-                    LOG_GROUP_SIZE - shift.0 as usize,
-                    LOG_GROUP_SIZE - shift.1 as usize,
-                )
-            } else {
-                (LOG_GROUP_SIZE, LOG_GROUP_SIZE)
-            };
-            pipeline.set_buffer_for_group(
-                c,
-                g,
-                1,
-                extract_group_rect(&input_images[c], g, log_group_size)?,
-            );
-        }
-    }
 
     let mut outputs = (0..input_images.len())
         .map(|_| Image::<OutputT>::new(final_size))
@@ -170,7 +152,27 @@ fn make_and_run_simple_pipeline_impl<InputT: ImageDataType, OutputT: ImageDataTy
         })
         .collect();
 
-    pipeline.do_render(&mut buf_ptrs)?;
+    let mut buffer_splitter = BufferSplitter::new(&mut buf_ptrs);
+
+    for g in 0..num_groups {
+        for &c in all_channels.iter() {
+            let log_group_size = if uses_channel[c] {
+                (
+                    LOG_GROUP_SIZE - shift.0 as usize,
+                    LOG_GROUP_SIZE - shift.1 as usize,
+                )
+            } else {
+                (LOG_GROUP_SIZE, LOG_GROUP_SIZE)
+            };
+            pipeline.set_buffer_for_group(
+                c,
+                g,
+                1,
+                extract_group_rect(&input_images[c], g, log_group_size)?,
+                &mut buffer_splitter,
+            )?;
+        }
+    }
 
     Ok(outputs)
 }

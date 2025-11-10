@@ -74,9 +74,8 @@ impl<'a> JxlOutputBuffer<'a> {
         )
     }
 
-    pub(crate) fn reborrow(lender: &'a mut JxlOutputBuffer<'_>) -> Self {
-        // Safety note: this is effectively equivalent to a reborrow. Moreover, the safety
-        // invariants are preserved by virtue of copying all the fields.
+    pub(crate) fn reborrow(lender: &'a mut JxlOutputBuffer<'_>) -> JxlOutputBuffer<'a> {
+        // Safety note: this is effectively equivalent to a reborrow.
         Self {
             _ph: PhantomData,
             ..*lender
@@ -105,7 +104,9 @@ impl<'a> JxlOutputBuffer<'a> {
         self.inner.byte_size()
     }
 
-    pub fn rect(&mut self, rect: Rect) -> Self {
+    pub fn rect(&mut self, rect: Rect) -> JxlOutputBuffer<'_> {
+        // Safety note: the return value borrows from `self`, so we are lending our memory to the
+        // returned JxlOutputBuffer.
         Self {
             inner: self.inner.rect(rect),
             _ph: PhantomData,

@@ -24,10 +24,36 @@ impl Rect {
         }
     }
 
-    pub const fn to_byte_rect(&self, data_type: DataTypeTag) -> Rect {
+    pub fn to_byte_rect(&self, data_type: DataTypeTag) -> Rect {
+        self.to_byte_rect_sz(data_type.size())
+    }
+
+    pub fn to_byte_rect_sz(&self, sz: usize) -> Rect {
         Rect {
-            origin: (self.origin.0 * data_type.size(), self.origin.1),
-            size: (self.size.0 * data_type.size(), self.size.1),
+            origin: (self.origin.0 * sz, self.origin.1),
+            size: (self.size.0 * sz, self.size.1),
+        }
+    }
+
+    pub fn downsample(&self, downsample: (u8, u8)) -> Rect {
+        Rect {
+            origin: (self.origin.0 >> downsample.0, self.origin.1 >> downsample.1),
+            size: (self.size.0 >> downsample.0, self.size.1 >> downsample.1),
+        }
+    }
+
+    pub fn end(&self) -> (usize, usize) {
+        (self.origin.0 + self.size.0, self.origin.1 + self.size.1)
+    }
+
+    pub fn clip(&self, size: (usize, usize)) -> Rect {
+        let end = self.end();
+        Rect {
+            origin: self.origin,
+            size: (
+                end.0.min(size.0).saturating_sub(self.origin.0),
+                end.1.min(size.1).saturating_sub(self.origin.1),
+            ),
         }
     }
 }
