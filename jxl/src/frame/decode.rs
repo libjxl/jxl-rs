@@ -16,6 +16,7 @@ use super::{
     quantizer::{LfQuantFactors, QuantizerParams},
 };
 use crate::error::Error;
+use crate::render::buffer_splitter::BufferSplitter;
 use crate::render::{LowMemoryRenderPipeline, SimpleRenderPipeline};
 use crate::{
     GROUP_DIM,
@@ -135,6 +136,7 @@ impl Frame {
             render_pipeline: None,
             reference_frame_data,
             lf_frame_data,
+            lf_global_was_rendered: false,
         })
     }
     /// Given a bit reader pointing at the end of the TOC, returns a vector of `BitReader`s, each
@@ -356,8 +358,14 @@ impl Frame {
         Ok(())
     }
 
-    #[instrument(level = "debug", skip(self, br))]
-    pub fn decode_hf_group(&mut self, group: usize, pass: usize, br: &mut BitReader) -> Result<()> {
+    #[instrument(level = "debug", skip(self, br, buffer_splitter))]
+    pub fn decode_hf_group(
+        &mut self,
+        group: usize,
+        pass: usize,
+        mut br: BitReader,
+        buffer_splitter: &mut BufferSplitter,
+    ) -> Result<()> {
         debug!(section_size = br.total_bits_available());
         if self.header.has_noise() {
             // TODO(sboukortt): consider making this a dedicated stage
@@ -407,7 +415,7 @@ impl Frame {
                 pipeline!(
                     self,
                     p,
-                    p.set_buffer_for_group(num_channels + i, group, 1, buf)
+                    p.set_buffer_for_group(num_channels + i, group, 1, buf, buffer_splitter)?
                 )
             }
         }
@@ -432,13 +440,17 @@ impl Frame {
                     .transform_data
                     .opsin_inverse_matrix
                     .quant_biases,
-                br,
+                &mut br,
             )?;
             if self.decoder_state.enable_output
                 && pass + 1 == self.header.passes.num_passes as usize
             {
                 for (c, img) in pixels.into_iter().enumerate() {
-                    pipeline!(self, p, p.set_buffer_for_group(c, group, 1, img));
+                    pipeline!(
+                        self,
+                        p,
+                        p.set_buffer_for_group(c, group, 1, img, buffer_splitter)?
+                    );
                 }
             }
         }
@@ -446,7 +458,7 @@ impl Frame {
             ModularStreamId::ModularHF { group, pass },
             &self.header,
             &lf_global.tree,
-            br,
+            &mut br,
         )?;
         if self.decoder_state.enable_output {
             lf_global.modular_global.process_output(
@@ -457,8 +469,9 @@ impl Frame {
                     pipeline!(
                         self,
                         p,
-                        p.set_buffer_for_group(chan, group, num_passes, image)
+                        p.set_buffer_for_group(chan, group, num_passes, image, buffer_splitter)?
                     );
+                    Ok(())
                 },
             )?;
         }

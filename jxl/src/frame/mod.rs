@@ -177,6 +177,7 @@ pub struct Frame {
     reference_frame_data: Option<Vec<Image<f32>>>,
     lf_frame_data: Option<[Image<f32>; 3]>,
     use_simple_pipeline: bool,
+    lf_global_was_rendered: bool,
 }
 
 impl Frame {

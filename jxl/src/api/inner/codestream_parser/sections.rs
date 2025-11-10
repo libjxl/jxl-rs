@@ -63,6 +63,7 @@ impl CodestreamParser {
         }
         let frame = self.frame.as_mut().unwrap();
         let frame_header = frame.header();
+        let pixel_format = self.pixel_format.as_ref().unwrap();
         if frame_header.num_groups() == 1 && frame_header.passes.num_passes == 1 {
             // Single-group special case.
             assert_eq!(self.available_sections.len(), 1);
@@ -76,7 +77,11 @@ impl CodestreamParser {
                 decode_options.cms.as_deref(),
             )?;
             frame.finalize_lf()?;
-            frame.decode_hf_group(0, 0, &mut br)?;
+            frame.decode_and_render_hf_groups(
+                output_buffers,
+                pixel_format,
+                vec![(0, vec![(0, br)])],
+            )?;
             self.available_sections.clear();
         } else {
             let mut lf_global_section = None;
@@ -150,21 +155,27 @@ impl CodestreamParser {
                 frame.finalize_lf()?;
             }
 
-            for g in sorted_sections_for_each_group {
-                // TODO(veluca): render all the available passes at once.
-                for sec in g {
-                    let Section::Hf { group, pass } = sec.section else {
-                        unreachable!()
-                    };
-                    frame.decode_hf_group(group, pass, &mut BitReader::new(&sec.data))?;
-                }
-            }
-        }
+            let groups = sorted_sections_for_each_group
+                .iter()
+                .enumerate()
+                .map(|(g, grp)| {
+                    (
+                        g,
+                        grp.iter()
+                            .map(|sec| {
+                                let Section::Hf { group, pass } = sec.section else {
+                                    unreachable!()
+                                };
+                                assert_eq!(group, g);
+                                (pass, BitReader::new(&sec.data))
+                            })
+                            .collect(),
+                    )
+                })
+                .collect();
 
-        self.frame
-            .as_mut()
-            .unwrap()
-            .render_frame_output(output_buffers, self.pixel_format.as_ref().unwrap())?;
+            frame.decode_and_render_hf_groups(output_buffers, pixel_format, groups)?;
+        }
 
         // Frame is not yet complete.
         if !self.sections.is_empty() {

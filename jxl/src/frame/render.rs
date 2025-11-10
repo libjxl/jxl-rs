@@ -10,11 +10,13 @@ use crate::api::JxlCms;
 use crate::api::JxlColorType;
 use crate::api::JxlDataFormat;
 use crate::api::JxlOutputBuffer;
+use crate::bit_reader::BitReader;
 use crate::error::{Error, Result};
 use crate::features::epf::create_sigma_image;
 use crate::headers::frame_header::Encoding;
 use crate::headers::{Orientation, color_encoding::ColorSpace, extra_channels::ExtraChannel};
 use crate::image::Rect;
+use crate::render::buffer_splitter::BufferSplitter;
 use crate::render::{
     LowMemoryRenderPipeline, RenderPipeline, RenderPipelineBuilder, SimpleRenderPipeline, stages::*,
 };
@@ -50,12 +52,14 @@ macro_rules! pipeline {
 pub(crate) use pipeline;
 
 impl Frame {
-    pub fn render_frame_output(
+    pub fn decode_and_render_hf_groups(
         &mut self,
         api_buffers: &mut Option<&mut [JxlOutputBuffer<'_>]>,
         pixel_format: &JxlPixelFormat,
+        groups: Vec<(usize, Vec<(usize, BitReader)>)>,
     ) -> Result<()> {
         if self.render_pipeline.is_none() {
+            assert_eq!(groups.iter().map(|x| x.1.len()).sum::<usize>(), 0);
             // We don't yet have any output ready (as the pipeline would be initialized otherwise),
             // so exit without doing anything.
             return Ok(());
@@ -86,7 +90,12 @@ impl Frame {
             buffers_from_api!(None);
         }
 
-        if let Some(ref_images) = &mut self.reference_frame_data {
+        // Temporarily remove the reference/lf frames to be saved; we will move them back once
+        // rendering is done.
+        let mut reference_frame_data = std::mem::take(&mut self.reference_frame_data);
+        let mut lf_frame_data = std::mem::take(&mut self.lf_frame_data);
+
+        if let Some(ref_images) = &mut reference_frame_data {
             buffers.extend(ref_images.iter_mut().map(|img| {
                 let rect = Rect {
                     size: img.size(),
@@ -98,7 +107,7 @@ impl Frame {
             }));
         };
 
-        if let Some(lf_images) = &mut self.lf_frame_data {
+        if let Some(lf_images) = &mut lf_frame_data {
             buffers.extend(lf_images.iter_mut().map(|img| {
                 let rect = Rect {
                     size: img.size(),
@@ -110,9 +119,47 @@ impl Frame {
             }));
         };
 
-        if buffers.iter().any(|b| b.is_some()) {
-            pipeline!(self, p, p.do_render(&mut buffers[..])?);
+        pipeline!(self, p, p.check_buffer_sizes(&mut buffers[..])?);
+
+        let mut buffer_splitter = BufferSplitter::new(&mut buffers[..]);
+
+        pipeline!(self, p, p.render_outside_frame(&mut buffer_splitter)?);
+
+        // Render data from the lf global section, if we didn't do so already, before rendering HF.
+        if !self.lf_global_was_rendered {
+            self.lf_global_was_rendered = true;
+            let lf_global = self.lf_global.as_mut().unwrap();
+            let mut pass_to_pipeline = |chan, group, num_passes, image| {
+                pipeline!(
+                    self,
+                    p,
+                    p.set_buffer_for_group(chan, group, num_passes, image, &mut buffer_splitter)?
+                );
+                Ok(())
+            };
+            lf_global
+                .modular_global
+                .process_output(0, 0, &self.header, &mut pass_to_pipeline)?;
+            for group in 0..self.header.num_lf_groups() {
+                lf_global.modular_global.process_output(
+                    1,
+                    group,
+                    &self.header,
+                    &mut pass_to_pipeline,
+                )?;
+            }
         }
+
+        for (group, passes) in groups {
+            // TODO(veluca): render all the available passes at once.
+            for (pass, br) in passes {
+                self.decode_hf_group(group, pass, br, &mut buffer_splitter)?;
+            }
+        }
+
+        self.reference_frame_data = reference_frame_data;
+        self.lf_frame_data = lf_frame_data;
+
         Ok(())
     }
 
@@ -462,27 +509,7 @@ impl Frame {
             )? as Box<dyn Any>
         };
         self.render_pipeline = Some(render_pipeline);
-
-        if self.decoder_state.enable_output {
-            let mut pass_to_pipeline = |chan, group, num_passes, image| {
-                pipeline!(
-                    self,
-                    p,
-                    p.set_buffer_for_group(chan, group, num_passes, image)
-                );
-            };
-            lf_global
-                .modular_global
-                .process_output(0, 0, &self.header, &mut pass_to_pipeline)?;
-            for group in 0..self.header.num_lf_groups() {
-                lf_global.modular_global.process_output(
-                    1,
-                    group,
-                    &self.header,
-                    &mut pass_to_pipeline,
-                )?;
-            }
-        }
+        self.lf_global_was_rendered = false;
         Ok(())
     }
 }

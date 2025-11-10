@@ -533,7 +533,7 @@ impl FullModularImage {
         section_id: usize,
         grid: usize,
         frame_header: &FrameHeader,
-        pass_to_pipeline: &mut dyn FnMut(usize, usize, usize, Image<i32>),
+        pass_to_pipeline: &mut dyn FnMut(usize, usize, usize, Image<i32>) -> Result<()>,
     ) -> Result<()> {
         let mut maybe_output = |bi: &mut ModularBufferInfo, grid: usize| -> Result<()> {
             if bi.info.output_channel_idx >= 0 {
@@ -543,11 +543,11 @@ impl FullModularImage {
                 // TODO(veluca): figure out what to do with passes here.
                 if chan == 0 && self.modular_color_channels == 1 {
                     for i in 0..2 {
-                        pass_to_pipeline(i, grid, 1, buf.data.try_clone()?);
+                        pass_to_pipeline(i, grid, 1, buf.data.try_clone()?)?;
                     }
-                    pass_to_pipeline(2, grid, 1, buf.data);
+                    pass_to_pipeline(2, grid, 1, buf.data)?;
                 } else {
-                    pass_to_pipeline(chan, grid, 1, buf.data);
+                    pass_to_pipeline(chan, grid, 1, buf.data)?;
                 }
             }
             Ok(())
