@@ -101,14 +101,10 @@ pub(crate) trait RenderPipeline: Sized {
 
     fn new_from_shared(shared: RenderPipelineShared<Self::Buffer>) -> Result<Self>;
 
-    /// Obtains a buffer suitable for storing the input at  channel `channel` of group `group_id`.
+    /// Obtains a buffer suitable for storing the input in channel `channel`.
     /// This *might* be a buffer that was used to store that channel for that group in a previous
     /// pass, a new buffer, or a re-used buffer from i.e. previously decoded frames.
-    fn get_buffer_for_group<T: ImageDataType>(
-        &mut self,
-        channel: usize,
-        group_id: usize,
-    ) -> Result<Image<T>>;
+    fn get_buffer<T: ImageDataType>(&mut self, channel: usize) -> Result<Image<T>>;
 
     /// Gives back the buffer for a channel and group to the render pipeline, marking that
     /// `num_passes` additional passes (wrt. the previous call to this method for the same channel

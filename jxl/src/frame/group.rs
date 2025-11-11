@@ -280,8 +280,9 @@ pub fn decode_vardct_group(
     lf_image: &Option<[Image<f32>; 3]>,
     quant_lf: &Image<u8>,
     quant_biases: &[f32; 4],
+    pixels: &mut [Image<f32>; 3],
     br: &mut BitReader,
-) -> Result<[Image<f32>; 3], Error> {
+) -> Result<(), Error> {
     let x_dm_multiplier = (1.0 / (1.25)).powf(frame_header.x_qm_scale as f32 - 2.0);
     let b_dm_multiplier = (1.0 / (1.25)).powf(frame_header.b_qm_scale as f32 - 2.0);
 
@@ -290,24 +291,6 @@ pub fn decode_vardct_group(
     debug!(?histogram_index);
     let mut reader = SymbolReader::new(&hf_global.passes[pass].histograms, br, None)?;
     let block_group_rect = frame_header.block_group_rect(group);
-    let group_size = (
-        block_group_rect.size.0 * BLOCK_DIM,
-        block_group_rect.size.1 * BLOCK_DIM,
-    );
-    let mut pixels: [Image<f32>; 3] = [
-        Image::new((
-            group_size.0 >> frame_header.hshift(0),
-            group_size.1 >> frame_header.vshift(0),
-        ))?,
-        Image::new((
-            group_size.0 >> frame_header.hshift(1),
-            group_size.1 >> frame_header.vshift(1),
-        ))?,
-        Image::new((
-            group_size.0 >> frame_header.hshift(2),
-            group_size.1 >> frame_header.vshift(2),
-        ))?,
-    ];
     debug!(?block_group_rect);
     let mut scratch = vec![0.0; LF_BUFFER_SIZE];
     let color_correlation_params = lf_global.color_correlation_params.as_ref().unwrap();
@@ -521,7 +504,7 @@ pub fn decode_vardct_group(
                 quant_biases,
                 x_dm_multiplier,
                 b_dm_multiplier,
-                &mut pixels,
+                pixels,
                 &mut scratch,
                 inv_global_scale,
                 &mut transform_buffer,
@@ -546,5 +529,5 @@ pub fn decode_vardct_group(
         }
     }
     reader.check_final_state(&hf_global.passes[pass].histograms)?;
-    Ok(pixels)
+    Ok(())
 }

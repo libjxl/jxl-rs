@@ -9,7 +9,6 @@ use std::any::Any;
 
 use row_buffers::RowBuffer;
 
-use crate::BLOCK_DIM;
 use crate::api::JxlOutputBuffer;
 use crate::error::Result;
 use crate::image::{Image, ImageDataType, OwnedRawImage, Rect};
@@ -68,13 +67,15 @@ impl LowMemoryRenderPipeline {
     ) -> Result<()> {
         let (gx, gy) = self.shared.group_position(new_group_id);
 
+        // We put groups that are 2 afar here, because even if they could not have become
+        // renderable, they might have become freeable.
         let mut possible_groups = vec![];
-        for dy in -1..=1 {
+        for dy in -2..=2 {
             let igy = gy as isize + dy;
             if igy < 0 || igy >= self.shared.group_count.1 as isize {
                 continue;
             }
-            for dx in -1..=1 {
+            for dx in -2..=2 {
                 let igx = gx as isize + dx;
                 if igx < 0 || igx >= self.shared.group_count.0 as isize {
                     continue;
@@ -347,26 +348,8 @@ impl RenderPipeline for LowMemoryRenderPipeline {
     }
 
     #[instrument(skip_all, err)]
-    fn get_buffer_for_group<T: ImageDataType>(
-        &mut self,
-        channel: usize,
-        group_id: usize,
-    ) -> Result<Image<T>> {
-        let sz = self
-            .shared
-            .group_size_for_channel(channel, group_id, T::DATA_TYPE_ID);
-        if let Some(buf) = self.input_buffers[group_id].data[channel].take() {
-            let img = Image::<T>::from_raw(buf);
-            let bsz = img.size();
-            // These asserts should catch cases in which we hand back groups of the wrong size (or as
-            // large as a full frame). Note that, because of chroma subsampling, padding can be up to
-            // two blocks.
-            assert!(sz.0 <= bsz.0);
-            assert!(sz.1 <= bsz.1);
-            assert!(sz.0 + BLOCK_DIM * 2 > bsz.0);
-            assert!(sz.1 + BLOCK_DIM * 2 > bsz.1);
-            return Ok(img);
-        }
+    fn get_buffer<T: ImageDataType>(&mut self, channel: usize) -> Result<Image<T>> {
+        let sz = self.shared.group_size_for_channel(channel, T::DATA_TYPE_ID);
         Image::<T>::new(sz)
     }
 
@@ -384,17 +367,6 @@ impl RenderPipeline for LowMemoryRenderPipeline {
             channel,
             T::DATA_TYPE_ID,
         );
-        let sz = self
-            .shared
-            .group_size_for_channel(channel, group_id, T::DATA_TYPE_ID);
-        let bsz = buf.size();
-        // These asserts should catch cases in which we hand back groups of the wrong size (or as
-        // large as a full frame). Note that, because of chroma subsampling, padding can be up to
-        // two blocks.
-        assert!(sz.0 <= bsz.0);
-        assert!(sz.1 <= bsz.1);
-        assert!(sz.0 + BLOCK_DIM * 2 > bsz.0);
-        assert!(sz.1 + BLOCK_DIM * 2 > bsz.1);
         self.input_buffers[group_id].data[channel] = Some(buf.into_raw());
         self.shared.group_chan_ready_passes[group_id][channel] += num_passes;
 

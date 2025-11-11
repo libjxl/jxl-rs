@@ -379,6 +379,10 @@ impl Frame {
             let upsampling = self.header.upsampling;
             let x0 = gx * upsampling * group_dim;
             let y0 = gy * upsampling * group_dim;
+            let x1 = ((x0 + upsampling * group_dim) as usize).min(self.header.size_upsampled().0);
+            let y1 = ((y0 + upsampling * group_dim) as usize).min(self.header.size_upsampled().1);
+            let xsize = x1 - x0 as usize;
+            let ysize = y1 - y0 as usize;
             let mut rng = Xorshift128Plus::new_with_seeds(
                 self.decoder_state.visible_frame_index as u32,
                 self.decoder_state.nonvisible_frame_index as u32,
@@ -387,8 +391,7 @@ impl Frame {
             );
             let bits_to_float = |bits: u32| f32::from_bits((bits >> 9) | 0x3F800000);
             for i in 0..3 {
-                let mut buf = pipeline!(self, p, p.get_buffer_for_group(num_channels + i, group)?);
-                let (xsize, ysize) = buf.size();
+                let mut buf = pipeline!(self, p, p.get_buffer(num_channels + i)?);
                 const FLOATS_PER_BATCH: usize =
                     Xorshift128Plus::N * std::mem::size_of::<u64>() / std::mem::size_of::<f32>();
                 let mut batch = [0u64; Xorshift128Plus::N];
@@ -425,7 +428,12 @@ impl Frame {
             info!("Decoding VarDCT group {group}, pass {pass}");
             let hf_global = self.hf_global.as_mut().unwrap();
             let hf_meta = self.hf_meta.as_mut().unwrap();
-            let pixels = decode_vardct_group(
+            let mut pixels = [
+                pipeline!(self, p, p.get_buffer(0))?,
+                pipeline!(self, p, p.get_buffer(1))?,
+                pipeline!(self, p, p.get_buffer(2))?,
+            ];
+            decode_vardct_group(
                 group,
                 pass,
                 &self.header,
@@ -440,6 +448,7 @@ impl Frame {
                     .transform_data
                     .opsin_inverse_matrix
                     .quant_biases,
+                &mut pixels,
                 &mut br,
             )?;
             if self.decoder_state.enable_output
@@ -460,21 +469,19 @@ impl Frame {
             &lf_global.tree,
             &mut br,
         )?;
-        if self.decoder_state.enable_output {
-            lf_global.modular_global.process_output(
-                2 + pass,
-                group,
-                &self.header,
-                &mut |chan, group, num_passes, image| {
-                    pipeline!(
-                        self,
-                        p,
-                        p.set_buffer_for_group(chan, group, num_passes, image, buffer_splitter)?
-                    );
-                    Ok(())
-                },
-            )?;
-        }
+        lf_global.modular_global.process_output(
+            2 + pass,
+            group,
+            &self.header,
+            &mut |chan, group, num_passes, image| {
+                pipeline!(
+                    self,
+                    p,
+                    p.set_buffer_for_group(chan, group, num_passes, image, buffer_splitter)?
+                );
+                Ok(())
+            },
+        )?;
         Ok(())
     }
 }
