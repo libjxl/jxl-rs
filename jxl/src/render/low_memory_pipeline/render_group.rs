@@ -23,13 +23,11 @@ use super::{LowMemoryRenderPipeline, row_buffers::RowBuffer};
 
 fn apply_x_padding(
     input_type: DataTypeTag,
-    buf: &mut RowBuffer,
-    y: usize,
+    row: &mut [u8],
     to_pad: Range<isize>,
     valid_pixels: Range<isize>,
 ) {
     let x0_offset = RowBuffer::x0_byte_offset() as isize;
-    let row = buf.get_row_mut::<u8>(y);
     let num_valid = valid_pixels.clone().count();
     let sz = input_type.size();
     match sz {
@@ -84,10 +82,9 @@ impl LowMemoryRenderPipeline {
         };
 
         let output_row = self.row_buffers[0][c].get_row_mut::<u8>(y);
-
         // Both are in units of bytes.
         let x0_offset = RowBuffer::x0_byte_offset();
-        let extrax = self.input_border_pixels[0].0 * ty.size();
+        let extrax = self.input_border_pixels[c].0 * ty.size();
 
         let base_gid = igy * self.shared.group_count.0 + gx;
 
@@ -106,8 +103,17 @@ impl LowMemoryRenderPipeline {
         if gx + 1 < self.shared.group_count.0 && extrax != 0 {
             let input_buf = self.input_buffers[base_gid + 1].data[c].as_ref().unwrap();
             let input_row = input_buf.row(input_y);
-            output_row[gxs + x0_offset..gxs + x0_offset + extrax]
-                .copy_from_slice(&input_row[..extrax]);
+            let dx = self.shared.channel_info[0][c].downsample.0;
+            let gid = gy * self.shared.group_count.0 + gx;
+            let next_group_xsize = self.shared.group_size(gid + 1).0.shrc(dx);
+            let border_x = extrax.min(next_group_xsize * ty.size());
+            output_row[gxs + x0_offset..gxs + x0_offset + border_x]
+                .copy_from_slice(&input_row[..border_x]);
+            if border_x < extrax {
+                let pad_from = ((gxs + border_x) / ty.size()) as isize;
+                let pad_to = ((gxs + extrax) / ty.size()) as isize;
+                apply_x_padding(ty, output_row, pad_from..pad_to, 0..pad_from);
+            }
         }
     }
 
@@ -191,7 +197,7 @@ impl LowMemoryRenderPipeline {
                 let y = y as usize;
 
                 let out_extra_x = self.stage_output_border_pixels[i].0;
-                let shifted_xsize = xsize.shrc(self.downsampling_for_stage[i].0);
+                let shifted_xsize = xsize.shrc(dx);
 
                 match stage {
                     Stage::InPlace(s) => {
@@ -249,13 +255,11 @@ impl LowMemoryRenderPipeline {
                                     continue;
                                 }
                                 let (si, ci) = self.stage_input_buffer_index[i][c];
-                                let buf = &mut self.row_buffers[si][ci];
                                 for iy in -bordery..=bordery {
                                     let y = mirror(y as isize + iy, shifted_ysize);
                                     apply_x_padding(
                                         s.input_type(),
-                                        buf,
-                                        y,
+                                        self.row_buffers[si][ci].get_row_mut::<u8>(y),
                                         -(borderx as isize)..0,
                                         // Either xsize is the actual size of the image, or it is
                                         // much larger than borderx, so this works out either way.
@@ -270,13 +274,11 @@ impl LowMemoryRenderPipeline {
                                     continue;
                                 }
                                 let (si, ci) = self.stage_input_buffer_index[i][c];
-                                let buf = &mut self.row_buffers[si][ci];
                                 for iy in -bordery..=bordery {
                                     let y = mirror(y as isize + iy, shifted_ysize);
                                     apply_x_padding(
                                         s.input_type(),
-                                        buf,
-                                        y,
+                                        self.row_buffers[si][ci].get_row_mut::<u8>(y),
                                         shifted_xsize as isize..(shifted_xsize + borderx) as isize,
                                         // borderx..0 is either data from the neighbouring group or
                                         // data that was filled in by the iteration above.
