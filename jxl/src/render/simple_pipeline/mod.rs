@@ -4,7 +4,6 @@
 // license that can be found in the LICENSE file.
 
 use crate::{
-    BLOCK_DIM,
     api::JxlOutputBuffer,
     error::Result,
     image::{Image, ImageDataType},
@@ -152,14 +151,8 @@ impl RenderPipeline for SimpleRenderPipeline {
     }
 
     #[instrument(skip_all, err)]
-    fn get_buffer_for_group<T: ImageDataType>(
-        &mut self,
-        channel: usize,
-        group_id: usize,
-    ) -> Result<Image<T>> {
-        let sz = self
-            .shared
-            .group_size_for_channel(channel, group_id, T::DATA_TYPE_ID);
+    fn get_buffer<T: ImageDataType>(&mut self, channel: usize) -> Result<Image<T>> {
+        let sz = self.shared.group_size_for_channel(channel, T::DATA_TYPE_ID);
         Image::<T>::new(sz)
     }
 
@@ -177,26 +170,19 @@ impl RenderPipeline for SimpleRenderPipeline {
             channel,
             T::DATA_TYPE_ID,
         );
-        let sz = self
-            .shared
-            .group_size_for_channel(channel, group_id, T::DATA_TYPE_ID);
+        let sz = self.shared.group_size_for_channel(channel, T::DATA_TYPE_ID);
         let goffset = self.shared.group_offset(group_id);
         let ChannelInfo { ty, downsample } = self.shared.channel_info[0][channel];
         let off = (goffset.0 >> downsample.0, goffset.1 >> downsample.1);
         debug!(?sz, input_buffers_sz=?self.input_buffers[channel].size(), offset=?off, ?downsample, ?goffset);
-        let bsz = buf.size();
-        // These asserts should catch cases in which we hand back groups of the wrong size (or as
-        // large as a full frame). Note that, because of chroma subsampling, padding can be up to
-        // two blocks.
-        assert!(sz.0 <= bsz.0);
-        assert!(sz.1 <= bsz.1);
-        assert!(sz.0 + BLOCK_DIM * 2 > bsz.0);
-        assert!(sz.1 + BLOCK_DIM * 2 > bsz.1);
         let ty = ty.unwrap();
         assert_eq!(ty, T::DATA_TYPE_ID);
-        for y in 0..sz.1 {
-            for x in 0..sz.0 {
-                self.input_buffers[channel].row_mut(y + off.1)[x + off.0] = buf.row(y)[x].to_f64();
+        let total_sz = self.input_buffers[channel].size();
+        for y in 0..sz.1.min(total_sz.1 - off.1) {
+            let row_in = buf.row(y);
+            let row_out = self.input_buffers[channel].row_mut(y + off.1);
+            for x in 0..sz.0.min(total_sz.0 - off.0) {
+                row_out[x + off.0] = row_in[x].to_f64();
             }
         }
         self.shared.group_chan_ready_passes[group_id][channel] += num_passes;

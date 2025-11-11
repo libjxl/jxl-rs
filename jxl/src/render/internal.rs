@@ -8,7 +8,6 @@ use std::fmt::Display;
 
 use crate::error::Result;
 use crate::image::{DataTypeTag, ImageDataType};
-use crate::util::ShiftRightCeil;
 
 use super::save::SaveStage;
 use super::stages::ExtendToImageDimensionsStage;
@@ -134,10 +133,8 @@ impl<Buffer> RenderPipelineShared<Buffer> {
     pub fn group_size_for_channel(
         &self,
         channel: usize,
-        group_id: usize,
         requested_data_type: DataTypeTag,
     ) -> (usize, usize) {
-        let goffset = self.group_offset(group_id);
         let ChannelInfo { downsample, ty } = self.channel_info[0][channel];
         if ty.unwrap() != requested_data_type {
             panic!(
@@ -145,12 +142,9 @@ impl<Buffer> RenderPipelineShared<Buffer> {
                 requested_data_type
             );
         }
-        assert_eq!(goffset.0 % (1 << downsample.0), 0);
-        assert_eq!(goffset.1 % (1 << downsample.1), 0);
-        let group_size = self.group_size(group_id);
         (
-            group_size.0.shrc(downsample.0),
-            group_size.1.shrc(downsample.1),
+            1 << (self.log_group_size - downsample.0 as usize),
+            1 << (self.log_group_size - downsample.1 as usize),
         )
     }
 
