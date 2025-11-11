@@ -10,11 +10,11 @@ use jxl::api::{
     JxlOutputBuffer,
 };
 use jxl::image::{Image, ImageDataType, Rect};
-use std::fs;
 use std::fs::File;
 use std::io::{BufWriter, Read, Write};
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
+use std::{fs, mem};
 
 pub mod enc;
 
@@ -28,6 +28,7 @@ fn save_icc(icc_bytes: &[u8], icc_filename: Option<&PathBuf>) -> Result<()> {
 pub struct ImageFrame<T: ImageDataType> {
     pub channels: Vec<Image<T>>,
     pub duration: f64,
+    pub color_type: JxlColorType,
 }
 
 pub struct DecodeOutput<T: ImageDataType> {
@@ -225,33 +226,18 @@ fn decode_bytes(
             }
         }?;
 
-        let mut image_frame = ImageFrame {
+        image_data.frames.push(ImageFrame {
             duration: frame_header.duration.unwrap_or(0.0),
-            channels: Vec::new(),
-        };
-
-        // Handle RGB vs grayscale buffer layout
-        if color_type == JxlColorType::Grayscale {
-            // Each buffer contains a single channel
-            image_frame.channels = outputs;
-        } else {
-            // First buffer contains interleaved RGB
-            let rgb_channels = planes_from_interleaved(&outputs[0])?;
-            image_frame.channels.extend(rgb_channels);
-
-            // Additional buffers contain extra channels (e.g., alpha)
-            image_frame.channels.extend(outputs.into_iter().skip(1));
-        }
-
-        image_data.frames.push(image_frame);
+            channels: outputs,
+            color_type,
+        });
 
         if !decoder_with_image_info.has_more_frames() {
             break;
         }
     }
-    let duration = start.elapsed();
 
-    Ok((image_data, duration))
+    Ok((image_data, start.elapsed()))
 }
 
 fn main() -> Result<()> {
@@ -284,7 +270,7 @@ fn main() -> Result<()> {
 
     let reps = opt.num_reps.unwrap_or(1);
     let mut duration_sum = Duration::new(0, 0);
-    let image_data = (0..reps)
+    let mut image_data = (0..reps)
         .try_fold(None, |_, _| -> Result<Option<DecodeOutput<f32>>> {
             let (iteration_image_data, iteration_duration) =
                 decode_bytes(input_buffer, options(), &opt)?;
@@ -292,6 +278,14 @@ fn main() -> Result<()> {
             Ok(Some(iteration_image_data))
         })?
         .unwrap();
+
+    for frame in image_data.frames.iter_mut() {
+        if frame.color_type != JxlColorType::Grayscale {
+            let mut new_channels = planes_from_interleaved(&frame.channels[0])?;
+            new_channels.extend(mem::take(&mut frame.channels).into_iter().skip(1));
+            frame.channels = new_channels;
+        }
+    }
 
     if opt.speedtest {
         let num_pixels = image_data.size.0 * image_data.size.1;
