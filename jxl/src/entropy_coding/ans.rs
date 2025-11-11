@@ -373,14 +373,14 @@ impl AnsHistogram {
         let offset = offset + pos;
 
         let next_state = (*state >> LOG_SUM_PROBS) * dist + offset;
-        let appended_state = (next_state << 16) | br.peek(16) as u32;
         let select_appended = next_state < (1 << 16);
         *state = if select_appended {
+            let appended_state = (next_state << 16) | br.peek(16) as u32;
+            br.consume(16)?;
             appended_state
         } else {
             next_state
         };
-        br.consume(if select_appended { 16 } else { 0 })?;
         Ok(symbol as u32)
     }
 
