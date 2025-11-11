@@ -357,31 +357,24 @@ impl AnsHistogram {
 
         debug_assert!(self.buckets.len().is_power_of_two());
         let bucket = self.buckets[i & (self.buckets.len() - 1)];
-        let alias_symbol = bucket.alias_symbol as usize;
+        let alias_symbol = bucket.alias_symbol as u32;
         let alias_cutoff = bucket.alias_cutoff as u32;
         let dist = bucket.dist as u32;
 
-        let map_to_alias = pos >= alias_cutoff;
-        let (offset, dist_xor) = if map_to_alias {
-            (bucket.alias_offset as u32, bucket.alias_dist_xor as u32)
-        } else {
-            (0, 0)
-        };
+        let map_to_alias = (pos >= alias_cutoff) as u32;
+        let offset = (bucket.alias_offset as u32) * map_to_alias;
+        let dist_xor = (bucket.alias_dist_xor as u32) * map_to_alias;
 
         let dist = dist ^ dist_xor;
-        let symbol = if map_to_alias { alias_symbol } else { i };
+        let symbol = (alias_symbol * map_to_alias) | (i as u32 * (1 - map_to_alias));
         let offset = offset + pos;
 
         let next_state = (*state >> LOG_SUM_PROBS) * dist + offset;
-        let select_appended = next_state < (1 << 16);
-        *state = if select_appended {
-            let appended_state = (next_state << 16) | br.peek(16) as u32;
-            br.consume(16)?;
-            appended_state
-        } else {
-            next_state
-        };
-        Ok(symbol as u32)
+        let select_appended = (next_state < (1 << 16)) as u32;
+        let appended_state = (next_state << 16) | (br.peek(16) as u32);
+        *state = (appended_state * select_appended) | (next_state * (1 - select_appended));
+        br.consume((16 * select_appended) as usize)?;
+        Ok(symbol)
     }
 
     // For optimizing fast-lossless case.
