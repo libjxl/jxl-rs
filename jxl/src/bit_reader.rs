@@ -47,7 +47,9 @@ impl<'a> BitReader<'a> {
     #[inline]
     pub fn peek(&mut self, num: usize) -> u64 {
         debug_assert!(num <= MAX_BITS_PER_CALL);
-        self.refill();
+        if self.bits_in_buf < num {
+            self.refill();
+        }
         self.bit_buf & ((1u64 << num) - 1)
     }
 
