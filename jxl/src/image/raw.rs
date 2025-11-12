@@ -100,6 +100,14 @@ impl OwnedRawImage {
         (size.0 - self.padding.0, size.1 - self.padding.1)
     }
 
+    pub fn byte_offset(&self) -> (usize, usize) {
+        self.offset
+    }
+
+    pub fn byte_padding(&self) -> (usize, usize) {
+        self.padding
+    }
+
     pub fn try_clone(&self) -> Result<OwnedRawImage> {
         Ok(Self {
             // SAFETY: we own the data that self.data references, so it is all accessible.

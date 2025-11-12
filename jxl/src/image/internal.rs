@@ -133,17 +133,23 @@ impl RawImageBuffer {
     ///   have exclusive access to the data).
     #[inline(always)]
     pub(super) unsafe fn row_mut(&mut self, row: usize) -> &mut [MaybeUninit<u8>] {
-        assert!(row < self.num_rows);
-        let start = row * self.bytes_between_rows;
-        // SAFETY: `start` is guaranteed to be <= isize::MAX, and `self.buf + start` is guaranteed
-        // to fit within the same allocated object, as per safety invariants of this struct.
-        // We checked above that `row` and `cols` satisfy the requirements to apply the safety
-        // invariant.
-        let start = unsafe { self.buf.add(start) };
-        // SAFETY: due to the struct safety invariant, we know the entire slice is in a range of
-        // memory valid for writes. Moreover, the caller promises not to write uninitialized data
-        // in the returned slice. Finally, the caller guarantees aliasing rules will not be violated.
-        unsafe { std::slice::from_raw_parts_mut(start, self.bytes_per_row) }
+        // SAFETY: The safety requirements for distinct_rows_mut match the ones for row_mut.
+        unsafe { self.distinct_rows_mut([row])[0] }
+    }
+
+    /// Note: this is quadratic in the number of rows.
+    /// # Safety
+    /// - No uninit data must be written to the returned slice.
+    /// - The caller must ensure that ownership rules are respected (for example, because they
+    ///   have exclusive access to the data).
+    #[inline(always)]
+    pub(super) unsafe fn distinct_rows_mut<I: DistinctRowsIndexes>(
+        &mut self,
+        rows: I,
+    ) -> I::Output<'_, MaybeUninit<u8>> {
+        // SAFETY: the safety requirements of `get_rows_mut` are the same as the ones for
+        // `distinct_rows_mut`.
+        unsafe { rows.get_rows_mut(self) }
     }
 
     /// # Safety
@@ -286,5 +292,74 @@ impl RawImageBuffer {
                 dealloc(self.buf as *mut u8, layout);
             }
         }
+    }
+}
+
+#[allow(private_interfaces)]
+pub trait DistinctRowsIndexes {
+    type Output<'a, T: 'static>;
+
+    /// # Safety
+    /// - No uninit data must be written to the returned slice.
+    /// - The caller must ensure that ownership rules are respected (for example, because they
+    ///   have exclusive access to the data).
+    unsafe fn get_rows_mut<'a>(
+        &self,
+        image: &'a mut RawImageBuffer,
+    ) -> Self::Output<'a, MaybeUninit<u8>>;
+
+    /// # Safety
+    /// - The rows are properly aligned
+    /// - The rows contain data that is valid for type T (and thus initialized).
+    unsafe fn transmute_rows<'a, T: 'static>(
+        rows: Self::Output<'a, MaybeUninit<u8>>,
+    ) -> Self::Output<'a, T>;
+}
+
+#[allow(private_interfaces)]
+impl<const S: usize> DistinctRowsIndexes for [usize; S] {
+    type Output<'a, T: 'static> = [&'a mut [T]; S];
+
+    #[inline(always)]
+    unsafe fn get_rows_mut<'a>(
+        &self,
+        image: &'a mut RawImageBuffer,
+    ) -> Self::Output<'a, MaybeUninit<u8>> {
+        for i in 0..S {
+            assert!(self[i] < image.num_rows);
+            for j in i + 1..S {
+                assert_ne!(self[i], self[j]);
+            }
+        }
+        let start = self.map(|row| row * image.bytes_between_rows);
+        let start = start.map(|start| {
+            // SAFETY: `start` is guaranteed to be <= isize::MAX, and `self.buf + start` is guaranteed
+            // to fit within the same allocated object, as per safety invariants of the image struct.
+            // We checked above that `row` satisfies the requirements to apply the safety invariant.
+            unsafe { image.buf.add(start) }
+        });
+        start.map(|start| {
+            // SAFETY: due to the struct safety invariant, we know the entire slice is in a range of
+            // memory valid for writes. Moreover, the caller promises not to write uninitialized
+            // data in the returned slice. Finally, the caller guarantees aliasing rules will not
+            // be violated outside of this struct, and since we checked that all the values of
+            // `self` are distinct they are also not violated across the various slices returned by
+            unsafe { std::slice::from_raw_parts_mut(start, image.bytes_per_row) }
+        })
+    }
+
+    #[inline(always)]
+    unsafe fn transmute_rows<'a, T: 'static>(
+        rows: Self::Output<'a, MaybeUninit<u8>>,
+    ) -> Self::Output<'a, T> {
+        rows.map(|row| {
+            // SAFETY: The caller guarantees the transmute is safe and proper alignment.
+            unsafe {
+                std::slice::from_raw_parts_mut(
+                    row.as_mut_ptr() as *mut T,
+                    row.len() / std::mem::size_of::<T>(),
+                )
+            }
+        })
     }
 }

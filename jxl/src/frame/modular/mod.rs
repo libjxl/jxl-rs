@@ -35,6 +35,10 @@ pub use predict::Predictor;
 use transforms::{TransformStepChunk, make_grids};
 pub use tree::Tree;
 
+// Two rows on top, two pixels to the left, two pixels to the right.
+const IMAGE_PADDING: (usize, usize) = (4, 2);
+const IMAGE_OFFSET: (usize, usize) = (2, 2);
+
 #[derive(Clone, PartialEq, Eq, Copy)]
 struct ChannelInfo {
     // The index of the output channel in the render pipeline, or -1 for non-output channels.
@@ -135,7 +139,7 @@ impl ModularChannel {
         bit_depth: BitDepth,
     ) -> Result<Self> {
         Ok(ModularChannel {
-            data: Image::new(size)?,
+            data: Image::new_with_padding(size, IMAGE_OFFSET, IMAGE_PADDING)?,
             auxiliary_data: None,
             shift,
             bit_depth,

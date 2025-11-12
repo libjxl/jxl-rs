@@ -5,7 +5,11 @@
 
 use std::{cell::RefMut, ops::DerefMut};
 
-use crate::{error::Result, image::Image};
+use crate::{
+    error::Result,
+    frame::modular::{IMAGE_OFFSET, IMAGE_PADDING},
+    image::Image,
+};
 
 use super::{ModularBufferInfo, ModularChannel};
 
@@ -23,7 +27,7 @@ pub fn with_buffers<T>(
         let mut data = b.data.borrow_mut();
         if data.is_none() {
             *data = Some(ModularChannel {
-                data: Image::new(b.size)?,
+                data: Image::new_with_padding(b.size, IMAGE_OFFSET, IMAGE_PADDING)?,
                 auxiliary_data: None,
                 shift: buf.info.shift,
                 bit_depth: buf.info.bit_depth,

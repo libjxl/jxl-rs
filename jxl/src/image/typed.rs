@@ -7,6 +7,7 @@ use std::{fmt::Debug, marker::PhantomData};
 
 use crate::{
     error::Result,
+    image::internal::DistinctRowsIndexes,
     util::{CACHE_LINE_BYTE_SIZE, tracing_wrappers::*},
 };
 
@@ -52,6 +53,20 @@ impl<T: ImageDataType> Image<T> {
         (
             self.raw.byte_size().0 / T::DATA_TYPE_ID.size(),
             self.raw.byte_size().1,
+        )
+    }
+
+    pub fn offset(&self) -> (usize, usize) {
+        (
+            self.raw.byte_offset().0 / T::DATA_TYPE_ID.size(),
+            self.raw.byte_offset().1,
+        )
+    }
+
+    pub fn padding(&self) -> (usize, usize) {
+        (
+            self.raw.byte_padding().0 / T::DATA_TYPE_ID.size(),
+            self.raw.byte_padding().1,
         )
     }
 
@@ -129,6 +144,22 @@ impl<T: ImageDataType> Image<T> {
                 row.len() / T::DATA_TYPE_ID.size(),
             )
         }
+    }
+
+    /// Note: this is quadratic in the number of rows. Indexing *ignores any padding rows*, i.e.
+    /// the row at index 0 will be the first row of the *padding*, unlike with all the other row
+    /// accessors.
+    #[inline(always)]
+    pub fn distinct_full_rows_mut<I: DistinctRowsIndexes>(&mut self, rows: I) -> I::Output<'_, T> {
+        // SAFETY: we don't write uninit data to the returned `rows`, and `self.raw` has ownership
+        // of the accessible bytes of `self.raw.data`.
+        let rows = unsafe { self.raw.data.distinct_rows_mut(rows) };
+        // SAFETY: Since self.raw.data.is_aligned(T::DATA_TYPE_ID.size()), the returned slices are
+        // aligned to T::DATA_TYPE_ID.size(), and sizeof(T) == T::DATA_TYPE_ID.size() by the
+        // requirements of ImageDataType; moreover ImageDataType requires T to be a bag-of-bits
+        // type with no padding and `self.raw` guarantees its accessible bytes are initialized, so
+        // the transmute is not an issue.
+        unsafe { I::transmute_rows(rows) }
     }
 }
 
