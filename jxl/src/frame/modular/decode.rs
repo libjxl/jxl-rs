@@ -7,7 +7,12 @@ use crate::{
     bit_reader::BitReader,
     entropy_coding::decode::SymbolReader,
     error::{Error, Result},
-    frame::{modular::tree::PROPERTIES_PER_PREVCHAN, quantizer::NUM_QUANT_TABLES},
+    frame::{
+        modular::{
+            IMAGE_OFFSET, IMAGE_PADDING, predict::PredictionData, tree::PROPERTIES_PER_PREVCHAN,
+        },
+        quantizer::NUM_QUANT_TABLES,
+    },
     headers::{JxlHeader, frame_header::FrameHeader, modular::GroupHeader},
     image::Image,
     util::tracing_wrappers::*,
@@ -99,11 +104,20 @@ fn decode_modular_channel(
     stream_id: usize,
     header: &GroupHeader,
     tree: &Tree,
-    tree_uses_weighted_predictor: bool,
     reader: &mut SymbolReader,
     br: &mut BitReader,
 ) -> Result<()> {
     debug!("reading channel");
+    let tree_uses_weighted_predictor = tree.nodes.iter().any(|node| {
+        matches!(
+            node,
+            TreeNode::Leaf {
+                predictor: Predictor::Weighted,
+                ..
+            } | TreeNode::Split { property: 15, .. }
+        )
+    });
+
     let size = buffers[chan].data.size();
     let mut wp_state = WeightedPredictorState::new(&header.wp_header, size.0);
     let mut num_ref_props = tree
@@ -115,15 +129,39 @@ fn decode_modular_channel(
     let num_properties = NUM_NONREF_PROPERTIES + num_ref_props;
     let make_pixel =
         |dec: i32, mul: u32, guess: i64| -> i32 { (guess + (mul as i64) * (dec as i64)) as i32 };
+
+    assert_eq!(buffers[chan].data.padding(), IMAGE_PADDING);
+    assert_eq!(buffers[chan].data.offset(), IMAGE_OFFSET);
+
+    const { assert!(IMAGE_OFFSET.1 == 2) };
+
+    let mut prediction_data = PredictionData::default();
     for y in 0..size.1 {
         precompute_references(buffers, chan, y, &mut references);
         let mut property_buffer: Vec<i32> = vec![0; num_properties];
         property_buffer[0] = chan as i32;
         property_buffer[1] = stream_id as i32;
+        let [row, row_top, row_toptop] =
+            buffers[chan].data.distinct_full_rows_mut([y + 2, y + 1, y]);
+        let row = &mut row[IMAGE_OFFSET.0..IMAGE_OFFSET.0 + size.0];
+        let row_top = &mut row_top[IMAGE_OFFSET.0..IMAGE_OFFSET.0 + size.0];
+        let row_toptop = &mut row_toptop[IMAGE_OFFSET.0..IMAGE_OFFSET.0 + size.0];
+        let mut last = 0;
         for x in 0..size.0 {
+            prediction_data = match (x, y) {
+                (0, 0) | (0, 1) => PredictionData::get_rows(row, row_top, row_toptop, x, y),
+                (0, _) if size.0 > 2 => {
+                    PredictionData::init_for_interior_row(row, row_top, row_toptop)
+                }
+                (_, 0) | (_, 1) => PredictionData::get_rows(row, row_top, row_toptop, x, y),
+                (x, _) if x + 2 >= size.0 => {
+                    PredictionData::get_rows(row, row_top, row_toptop, x, y)
+                }
+                _ => prediction_data.update_for_interior_row(row_top, row_toptop, x, last),
+            };
             let prediction_result = tree.predict(
-                buffers,
-                chan,
+                prediction_data,
+                size.0,
                 if tree_uses_weighted_predictor {
                     Some(&mut wp_state)
                 } else {
@@ -137,7 +175,8 @@ fn decode_modular_channel(
             let dec =
                 reader.read_signed(&tree.histograms, br, prediction_result.context as usize)?;
             let val = make_pixel(dec, prediction_result.multiplier, prediction_result.guess);
-            buffers[chan].data.row_mut(y)[x] = val;
+            row[x] = val;
+            last = val;
             trace!(y, x, val, dec, ?property_buffer, ?prediction_result);
             if tree_uses_weighted_predictor {
                 wp_state.update_errors(val, (x, y), size.0);
@@ -209,16 +248,6 @@ pub fn decode_modular_subbitstream(
         local_tree.as_ref().unwrap()
     };
 
-    let tree_uses_weighted_predictor = tree.nodes.iter().any(|node| {
-        matches!(
-            node,
-            TreeNode::Leaf {
-                predictor: Predictor::Weighted,
-                ..
-            } | TreeNode::Split { property: 15, .. }
-        )
-    });
-
     let image_width = buffers
         .iter()
         .map(|info| info.channel_info().size.0)
@@ -227,16 +256,7 @@ pub fn decode_modular_subbitstream(
     let mut reader = SymbolReader::new(&tree.histograms, br, Some(image_width))?;
 
     for i in 0..buffers.len() {
-        decode_modular_channel(
-            &mut buffers,
-            i,
-            stream_id,
-            &header,
-            tree,
-            tree_uses_weighted_predictor,
-            &mut reader,
-            br,
-        )?;
+        decode_modular_channel(&mut buffers, i, stream_id, &header, tree, &mut reader, br)?;
     }
 
     reader.check_final_state(&tree.histograms)?;

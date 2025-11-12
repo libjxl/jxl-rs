@@ -5,7 +5,7 @@
 
 use std::fmt::Debug;
 
-use super::{ModularChannel, Predictor, predict::WeightedPredictorState};
+use super::{Predictor, predict::WeightedPredictorState};
 use crate::{
     bit_reader::BitReader,
     entropy_coding::decode::Histograms,
@@ -209,20 +209,19 @@ impl Tree {
     // previous values available for computing the local gradient property.
     // Also, the first two properties (the static properties) should be already set by the caller.
     // All other properties should be 0 on the first call in a row.
-    #[instrument(level = "trace", skip(buffers), ret)]
+    #[inline]
+    #[instrument(level = "trace", ret)]
     #[allow(clippy::too_many_arguments)]
     pub(super) fn predict(
         &self,
-        buffers: &mut [&mut ModularChannel],
-        index: usize,
+        prediction_data: PredictionData,
+        xsize: usize,
         wp_state: Option<&mut WeightedPredictorState>,
         x: usize,
         y: usize,
         references: &Image<i32>,
         property_buffer: &mut [i32],
     ) -> PredictionResult {
-        let img = &buffers[index].data;
-        let prediction_data = PredictionData::get(img, x, y);
         let PredictionData {
             left,
             top,
@@ -262,7 +261,7 @@ impl Tree {
         // Weighted predictor property.
         let wp_pred;
         (wp_pred, property_buffer[15]) = wp_state
-            .map(|wp_state| wp_state.predict_and_property((x, y), img.size().0, &prediction_data))
+            .map(|wp_state| wp_state.predict_and_property((x, y), xsize, &prediction_data))
             .unwrap_or((0, 0));
 
         // Reference properties.

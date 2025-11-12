@@ -53,6 +53,7 @@ impl TryFrom<u32> for Predictor {
     }
 }
 
+#[derive(Debug, Clone, Copy, Default)]
 pub struct PredictionData {
     pub left: i32,
     pub top: i32,
@@ -64,29 +65,77 @@ pub struct PredictionData {
 }
 
 impl PredictionData {
-    pub fn get(rect: &Image<i32>, x: usize, y: usize) -> Self {
+    pub fn init_for_interior_row(
+        row: &[i32],
+        row_top: &[i32],
+        row_toptop: &[i32],
+    ) -> PredictionData {
+        debug_assert!(row.len() >= 2);
+        let left = row_top[0];
+        let top = row_top[0];
+        let topleft = left;
+        let topright = row_top[1];
+        let leftleft = top;
+        let toptop = row_toptop[0];
+        let toprightright = row_top[2];
+        Self {
+            left,
+            top,
+            toptop,
+            topleft,
+            topright,
+            leftleft,
+            toprightright,
+        }
+    }
+
+    #[inline]
+    pub fn update_for_interior_row(
+        self,
+        row_top: &[i32],
+        row_toptop: &[i32],
+        x: usize,
+        cur: i32,
+    ) -> PredictionData {
+        debug_assert!(x > 0);
+        debug_assert!(x + 2 < row_top.len());
+        let left = cur;
+        let top = self.topright;
+        let topleft = self.top;
+        let topright = self.toprightright;
+        let leftleft = if x == 1 { left } else { self.left };
+        let toptop = row_toptop[x];
+        let toprightright = row_top[x + 2];
+        Self {
+            left,
+            top,
+            toptop,
+            topleft,
+            topright,
+            leftleft,
+            toprightright,
+        }
+    }
+
+    pub fn get_rows(row: &[i32], row_top: &[i32], row_toptop: &[i32], x: usize, y: usize) -> Self {
         let left = if x > 0 {
-            rect.row(y)[x - 1]
+            row[x - 1]
         } else if y > 0 {
-            rect.row(y - 1)[0]
+            row_top[0]
         } else {
             0
         };
-        let top = if y > 0 { rect.row(y - 1)[x] } else { left };
-        let topleft = if x > 0 && y > 0 {
-            rect.row(y - 1)[x - 1]
-        } else {
-            left
-        };
-        let topright = if x + 1 < rect.size().0 && y > 0 {
-            rect.row(y - 1)[x + 1]
+        let top = if y > 0 { row_top[x] } else { left };
+        let topleft = if x > 0 && y > 0 { row_top[x - 1] } else { left };
+        let topright = if x + 1 < row.len() && y > 0 {
+            row_top[x + 1]
         } else {
             top
         };
-        let leftleft = if x > 1 { rect.row(y)[x - 2] } else { left };
-        let toptop = if y > 1 { rect.row(y - 2)[x] } else { top };
-        let toprightright = if x + 2 < rect.size().0 && y > 0 {
-            rect.row(y - 1)[x + 2]
+        let leftleft = if x > 1 { row[x - 2] } else { left };
+        let toptop = if y > 1 { row_toptop[x] } else { top };
+        let toprightright = if x + 2 < row.len() && y > 0 {
+            row_top[x + 2]
         } else {
             topright
         };
@@ -99,6 +148,16 @@ impl PredictionData {
             leftleft,
             toprightright,
         }
+    }
+
+    pub fn get(rect: &Image<i32>, x: usize, y: usize) -> Self {
+        Self::get_rows(
+            rect.row(y),
+            rect.row(y.saturating_sub(1)),
+            rect.row(y.saturating_sub(2)),
+            x,
+            y,
+        )
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -227,6 +286,7 @@ pub fn clamped_gradient(left: i64, top: i64, topleft: i64) -> i64 {
 impl Predictor {
     pub const NUM_PREDICTORS: u32 = Predictor::AverageAll as u32 + 1;
 
+    #[inline]
     pub fn predict_one(
         &self,
         PredictionData {
@@ -297,9 +357,9 @@ fn add_bits(x: i32) -> i64 {
 fn error_weight(x: u32, maxweight: u32) -> u32 {
     let shift = floor_log2_nonzero(x + 1) as i32 - 5;
     if shift < 0 {
-        4u32 + maxweight * DIVLOOKUP[x as usize]
+        4u32 + maxweight * DIVLOOKUP[x as usize & 63]
     } else {
-        4u32 + ((maxweight * DIVLOOKUP[x as usize >> shift]) >> shift)
+        4u32 + ((maxweight * DIVLOOKUP[(x as usize >> shift) & 63]) >> shift)
     }
 }
 
@@ -349,6 +409,7 @@ impl<'a> WeightedPredictorState<'a> {
         self.error[xsize + 2..].copy_from_slice(wp_image.row(0));
     }
 
+    #[inline]
     pub fn update_errors(&mut self, correct_val: i32, pos: (usize, usize), xsize: usize) {
         let (cur_row, prev_row) = if pos.1 & 1 != 0 {
             (0, xsize + 2)
@@ -366,6 +427,7 @@ impl<'a> WeightedPredictorState<'a> {
         }
     }
 
+    #[inline]
     pub fn predict_and_property(
         &mut self,
         pos: (usize, usize),
