@@ -29,7 +29,8 @@ use crate::{
     },
     headers::{
         color_encoding::ColorSpace,
-        frame_header::{Encoding, FrameHeader, Toc},
+        frame_header::{Encoding, FrameHeader},
+        toc::Toc,
     },
     image::Image,
     render::RenderPipeline,
