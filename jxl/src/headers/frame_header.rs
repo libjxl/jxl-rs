@@ -18,7 +18,7 @@ use jxl_macros::UnconditionalCoder;
 use num_derive::FromPrimitive;
 use std::cmp::min;
 
-use super::{Animation, permutation::Permutation};
+use super::Animation;
 
 #[derive(UnconditionalCoder, Copy, Clone, PartialEq, Debug, FromPrimitive)]
 pub enum FrameType {
@@ -234,29 +234,9 @@ pub struct RestorationFilter {
     extensions: Extensions,
 }
 
-pub struct TocNonserialized {
-    pub num_entries: u32,
-}
-
 pub struct PermutationNonserialized {
     pub num_entries: u32,
     pub permuted: bool,
-}
-
-#[derive(UnconditionalCoder, Debug, PartialEq)]
-#[nonserialized(TocNonserialized)]
-pub struct Toc {
-    #[default(false)]
-    pub permuted: bool,
-
-    // Here we don't use `condition(permuted)`, because `jump_to_byte_boundary` needs to be executed in both cases
-    #[default(Permutation::default())]
-    #[nonserialized(num_entries: nonserialized.num_entries, permuted: permuted)]
-    pub permutation: Permutation,
-
-    #[coder(u2S(Bits(10), Bits(14) + 1024, Bits(22) + 17408, Bits(30) + 4211712))]
-    #[size_coder(explicit(nonserialized.num_entries))]
-    pub entries: Vec<u32>,
 }
 
 pub struct FrameHeaderNonserialized {
@@ -723,6 +703,8 @@ impl FrameHeader {
 
 #[cfg(test)]
 mod test_frame_header {
+    use super::super::permutation::Permutation;
+    use super::super::toc::Toc;
     use super::*;
     use crate::util::test::read_headers_and_toc;
     use test_log::test;

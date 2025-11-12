@@ -12,6 +12,7 @@ pub mod image_metadata;
 pub mod modular;
 pub mod permutation;
 pub mod size;
+pub mod toc;
 pub mod transform_data;
 
 use crate::{bit_reader::BitReader, error::Error, headers::encodings::*};

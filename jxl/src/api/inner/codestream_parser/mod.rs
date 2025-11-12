@@ -17,7 +17,7 @@ use crate::{
     },
     error::{Error, Result},
     frame::{DecoderState, Frame, Section},
-    headers::{Animation, FileHeader, frame_header::FrameHeader},
+    headers::{Animation, FileHeader, frame_header::FrameHeader, toc::IncrementalTocReader},
     icc::IncrementalIccReader,
 };
 
@@ -49,6 +49,7 @@ pub(super) struct CodestreamParser {
     // These fields are populated when starting to decode a frame, and cleared once
     // the frame is done.
     frame_header: Option<FrameHeader>,
+    toc_parser: Option<IncrementalTocReader>,
     pub(super) frame: Option<Frame>,
 
     // Buffers.
@@ -83,6 +84,7 @@ impl CodestreamParser {
             output_color_profile: None,
             pixel_format: None,
             frame_header: None,
+            toc_parser: None,
             frame: None,
             non_section_buf: SmallBuffer::new(),
             non_section_bit_offset: 0,

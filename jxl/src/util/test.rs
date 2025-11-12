@@ -13,7 +13,12 @@ use crate::{
     bit_reader::BitReader,
     container::ContainerParser,
     error::Error as JXLError,
-    headers::{FileHeader, JxlHeader, encodings::*, frame_header::TocNonserialized},
+    headers::{
+        FileHeader, JxlHeader,
+        encodings::*,
+        frame_header::FrameHeader,
+        toc::{Toc, TocNonserialized},
+    },
     image::{Image, ImageDataType},
 };
 
@@ -317,8 +322,6 @@ pub fn read_pfm(b: &[u8]) -> Result<Vec<Image<f32>>, Error> {
 
     Ok(res)
 }
-
-use crate::headers::frame_header::{FrameHeader, Toc};
 
 #[cfg(test)]
 mod tests {
