@@ -397,6 +397,10 @@ impl AnsCodes {
             .collect::<Result<_>>()?;
         Ok(Self { histograms })
     }
+
+    pub fn single_symbol(&self, ctx: usize) -> Option<u32> {
+        self.histograms[ctx].single_symbol()
+    }
 }
 
 #[derive(Debug)]

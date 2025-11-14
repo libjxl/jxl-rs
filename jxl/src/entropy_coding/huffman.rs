@@ -474,6 +474,28 @@ impl HuffmanCodes {
     pub fn read(&self, br: &mut BitReader, ctx: usize) -> Result<u32> {
         self.tables[ctx].read(br)
     }
+    pub fn single_symbol(&self, ctx: usize) -> Option<u32> {
+        if let TableEntry { bits: 0, value } = self.tables[ctx].entries[0] {
+            Some(value as u32)
+        } else {
+            None
+        }
+    }
+}
+
+#[cfg(test)]
+impl Table {
+    fn new_single_symbol(sym: u16) -> Table {
+        Table {
+            entries: vec![
+                TableEntry {
+                    bits: 0,
+                    value: sym
+                };
+                TABLE_SIZE
+            ],
+        }
+    }
 }
 
 #[cfg(test)]
@@ -482,6 +504,12 @@ impl HuffmanCodes {
     pub(super) fn byte_histogram() -> HuffmanCodes {
         let mut br = BitReader::new(&[0b11101111, 0b00111111, 0, 1, 0, 0b10100000, 0b0110]);
         HuffmanCodes::decode(1, &mut br).unwrap()
+    }
+
+    pub(super) fn byte_histogram_rle() -> HuffmanCodes {
+        let mut histogram = Self::byte_histogram();
+        histogram.tables.push(Table::new_single_symbol(1));
+        histogram
     }
 }
 
