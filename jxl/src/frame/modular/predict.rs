@@ -65,30 +65,6 @@ pub struct PredictionData {
 }
 
 impl PredictionData {
-    pub fn init_for_interior_row(
-        row: &[i32],
-        row_top: &[i32],
-        row_toptop: &[i32],
-    ) -> PredictionData {
-        debug_assert!(row.len() >= 2);
-        let left = row_top[0];
-        let top = row_top[0];
-        let topleft = left;
-        let topright = row_top[1];
-        let leftleft = top;
-        let toptop = row_toptop[0];
-        let toprightright = row_top[2];
-        Self {
-            left,
-            top,
-            toptop,
-            topleft,
-            topright,
-            leftleft,
-            toprightright,
-        }
-    }
-
     #[inline]
     pub fn update_for_interior_row(
         self,
@@ -96,16 +72,18 @@ impl PredictionData {
         row_toptop: &[i32],
         x: usize,
         cur: i32,
+        needs_top: bool,
+        needs_toptop: bool,
     ) -> PredictionData {
-        debug_assert!(x > 0);
+        debug_assert!(x > 1);
         debug_assert!(x + 2 < row_top.len());
         let left = cur;
         let top = self.topright;
         let topleft = self.top;
         let topright = self.toprightright;
-        let leftleft = if x == 1 { left } else { self.left };
-        let toptop = row_toptop[x];
-        let toprightright = row_top[x + 2];
+        let leftleft = self.left;
+        let toptop = if needs_toptop { row_toptop[x] } else { 0 };
+        let toprightright = if needs_top { row_top[x + 2] } else { 0 };
         Self {
             left,
             top,
@@ -379,23 +357,23 @@ fn weighted_average(pixels: &[i64; NUM_PREDICTORS], weights: &mut [u32; NUM_PRED
 }
 
 #[derive(Debug)]
-pub struct WeightedPredictorState<'a> {
+pub struct WeightedPredictorState {
     prediction: [i64; NUM_PREDICTORS],
     pred: i64,
     pred_errors: [Vec<u32>; NUM_PREDICTORS],
     error: Vec<i32>,
-    wp_header: &'a WeightedHeader,
+    wp_header: WeightedHeader,
 }
 
-impl<'a> WeightedPredictorState<'a> {
-    pub fn new(wp_header: &'a WeightedHeader, xsize: usize) -> WeightedPredictorState<'a> {
+impl WeightedPredictorState {
+    pub fn new(wp_header: &WeightedHeader, xsize: usize) -> WeightedPredictorState {
         let num_errors = (xsize + 2) * 2;
         WeightedPredictorState {
             prediction: [0; NUM_PREDICTORS],
             pred: 0,
             pred_errors: from_fn(|_| vec![0; num_errors]),
             error: vec![0; num_errors],
-            wp_header,
+            wp_header: wp_header.clone(),
         }
     }
 
@@ -409,7 +387,7 @@ impl<'a> WeightedPredictorState<'a> {
         self.error[xsize + 2..].copy_from_slice(wp_image.row(0));
     }
 
-    #[inline]
+    #[inline(always)]
     pub fn update_errors(&mut self, correct_val: i32, pos: (usize, usize), xsize: usize) {
         let (cur_row, prev_row) = if pos.1 & 1 != 0 {
             (0, xsize + 2)
@@ -427,7 +405,7 @@ impl<'a> WeightedPredictorState<'a> {
         }
     }
 
-    #[inline]
+    #[inline(always)]
     pub fn predict_and_property(
         &mut self,
         pos: (usize, usize),

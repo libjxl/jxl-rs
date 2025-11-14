@@ -16,7 +16,7 @@ use crate::{
     util::{NewWithCapacity, tracing_wrappers::*},
 };
 
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy)]
 pub enum TreeNode {
     Split {
         property: u8,
@@ -60,6 +60,118 @@ const OFFSET_CONTEXT: usize = 3;
 const MULTIPLIER_LOG_CONTEXT: usize = 4;
 const MULTIPLIER_BITS_CONTEXT: usize = 5;
 const NUM_TREE_CONTEXTS: usize = 6;
+
+// Note: `property_buffer` is passed as input because this implementation relies on having the
+// previous values available for computing the local gradient property.
+// Also, the first two properties (the static properties) should be already set by the caller.
+// All other properties should be 0 on the first call in a row.
+#[inline]
+#[instrument(level = "trace", ret)]
+#[allow(clippy::too_many_arguments)]
+pub(super) fn predict(
+    tree: &[TreeNode],
+    prediction_data: PredictionData,
+    xsize: usize,
+    wp_state: Option<&mut WeightedPredictorState>,
+    x: usize,
+    y: usize,
+    references: &Image<i32>,
+    property_buffer: &mut [i32],
+) -> PredictionResult {
+    let PredictionData {
+        left,
+        top,
+        toptop,
+        topleft,
+        topright,
+        leftleft,
+        toprightright: _toprightright,
+    } = prediction_data;
+
+    trace!(
+        left,
+        top, topleft, topright, leftleft, toptop, _toprightright
+    );
+
+    // Position
+    property_buffer[2] = y as i32;
+    property_buffer[3] = x as i32;
+
+    // Neighbours
+    property_buffer[4] = top.abs();
+    property_buffer[5] = left.abs();
+    property_buffer[6] = top;
+    property_buffer[7] = left;
+
+    // Local gradient
+    property_buffer[8] = left.wrapping_sub(property_buffer[9]);
+    property_buffer[9] = left.wrapping_add(top).wrapping_sub(topleft);
+
+    // FFV1 context properties
+    property_buffer[10] = left.wrapping_sub(topleft);
+    property_buffer[11] = topleft.wrapping_sub(top);
+    property_buffer[12] = top.wrapping_sub(topright);
+    property_buffer[13] = top.wrapping_sub(toptop);
+    property_buffer[14] = left.wrapping_sub(leftleft);
+
+    // Weighted predictor property.
+    let wp_pred;
+    (wp_pred, property_buffer[15]) = wp_state
+        .map(|wp_state| wp_state.predict_and_property((x, y), xsize, &prediction_data))
+        .unwrap_or((0, 0));
+
+    // Reference properties.
+    let num_refs = references.size().0;
+    if num_refs != 0 {
+        let ref_properties = &mut property_buffer[NUM_NONREF_PROPERTIES..];
+        ref_properties[..num_refs].copy_from_slice(&references.row(x)[..num_refs]);
+    }
+
+    trace!(?property_buffer, "new properties");
+
+    let mut tree_node = 0;
+    while let TreeNode::Split {
+        property,
+        val,
+        left,
+        right,
+    } = tree[tree_node]
+    {
+        if property_buffer[property as usize] > val {
+            trace!(
+                "left at node {tree_node} [{} > {val}]",
+                property_buffer[property as usize]
+            );
+            tree_node = left as usize;
+        } else {
+            trace!(
+                "right at node {tree_node} [{} <= {val}]",
+                property_buffer[property as usize]
+            );
+            tree_node = right as usize;
+        }
+    }
+
+    trace!(leaf = ?tree[tree_node]);
+
+    let TreeNode::Leaf {
+        predictor,
+        offset,
+        multiplier,
+        id,
+    } = tree[tree_node]
+    else {
+        unreachable!();
+    };
+
+    let pred = predictor.predict_one(prediction_data, wp_pred);
+
+    PredictionResult {
+        guess: pred + offset as i64,
+        multiplier,
+        context: id,
+    }
+}
 
 impl Tree {
     #[instrument(level = "debug", skip(br), err)]
@@ -203,117 +315,5 @@ impl Tree {
         self.max_property_count()
             .saturating_sub(NUM_NONREF_PROPERTIES)
             .div_ceil(PROPERTIES_PER_PREVCHAN)
-    }
-
-    // Note: `property_buffer` is passed as input because this implementation relies on having the
-    // previous values available for computing the local gradient property.
-    // Also, the first two properties (the static properties) should be already set by the caller.
-    // All other properties should be 0 on the first call in a row.
-    #[inline]
-    #[instrument(level = "trace", ret)]
-    #[allow(clippy::too_many_arguments)]
-    pub(super) fn predict(
-        &self,
-        prediction_data: PredictionData,
-        xsize: usize,
-        wp_state: Option<&mut WeightedPredictorState>,
-        x: usize,
-        y: usize,
-        references: &Image<i32>,
-        property_buffer: &mut [i32],
-    ) -> PredictionResult {
-        let PredictionData {
-            left,
-            top,
-            toptop,
-            topleft,
-            topright,
-            leftleft,
-            toprightright: _toprightright,
-        } = prediction_data;
-
-        trace!(
-            left,
-            top, topleft, topright, leftleft, toptop, _toprightright
-        );
-
-        // Position
-        property_buffer[2] = y as i32;
-        property_buffer[3] = x as i32;
-
-        // Neighbours
-        property_buffer[4] = top.abs();
-        property_buffer[5] = left.abs();
-        property_buffer[6] = top;
-        property_buffer[7] = left;
-
-        // Local gradient
-        property_buffer[8] = left.wrapping_sub(property_buffer[9]);
-        property_buffer[9] = left.wrapping_add(top).wrapping_sub(topleft);
-
-        // FFV1 context properties
-        property_buffer[10] = left.wrapping_sub(topleft);
-        property_buffer[11] = topleft.wrapping_sub(top);
-        property_buffer[12] = top.wrapping_sub(topright);
-        property_buffer[13] = top.wrapping_sub(toptop);
-        property_buffer[14] = left.wrapping_sub(leftleft);
-
-        // Weighted predictor property.
-        let wp_pred;
-        (wp_pred, property_buffer[15]) = wp_state
-            .map(|wp_state| wp_state.predict_and_property((x, y), xsize, &prediction_data))
-            .unwrap_or((0, 0));
-
-        // Reference properties.
-        let num_refs = references.size().0;
-        if num_refs != 0 {
-            let ref_properties = &mut property_buffer[NUM_NONREF_PROPERTIES..];
-            ref_properties[..num_refs].copy_from_slice(&references.row(x)[..num_refs]);
-        }
-
-        trace!(?property_buffer, "new properties");
-
-        let mut tree_node = 0;
-        while let TreeNode::Split {
-            property,
-            val,
-            left,
-            right,
-        } = self.nodes[tree_node]
-        {
-            if property_buffer[property as usize] > val {
-                trace!(
-                    "left at node {tree_node} [{} > {val}]",
-                    property_buffer[property as usize]
-                );
-                tree_node = left as usize;
-            } else {
-                trace!(
-                    "right at node {tree_node} [{} <= {val}]",
-                    property_buffer[property as usize]
-                );
-                tree_node = right as usize;
-            }
-        }
-
-        trace!(leaf = ?self.nodes[tree_node]);
-
-        let TreeNode::Leaf {
-            predictor,
-            offset,
-            multiplier,
-            id,
-        } = self.nodes[tree_node]
-        else {
-            unreachable!();
-        };
-
-        let pred = predictor.predict_one(prediction_data, wp_pred);
-
-        PredictionResult {
-            guess: pred + offset as i64,
-            multiplier,
-            context: id,
-        }
     }
 }
