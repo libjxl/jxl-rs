@@ -103,10 +103,10 @@ macro_rules! impl_image_data_type {
             }
             #[cfg(test)]
             fn random<R: rand::Rng>(rng: &mut R) -> Self {
-                use rand::distributions::{Distribution, Uniform};
+                use rand::distr::{Distribution, Uniform};
                 let min = type_min!($ty);
                 let max = type_max!($ty);
-                Uniform::new_inclusive(min, max).sample(rng)
+                Uniform::new_inclusive(min, max).unwrap().sample(rng)
             }
         }
     };
@@ -136,7 +136,7 @@ unsafe impl ImageDataType for half::f16 {
     }
     #[cfg(test)]
     fn random<R: rand::Rng>(rng: &mut R) -> Self {
-        use rand::distributions::{Distribution, Uniform};
-        Self::from_f64(Uniform::new(0.0f32, 1.0f32).sample(rng) as f64)
+        use rand::distr::{Distribution, Uniform};
+        Self::from_f64(Uniform::new(0.0f32, 1.0f32).unwrap().sample(rng) as f64)
     }
 }

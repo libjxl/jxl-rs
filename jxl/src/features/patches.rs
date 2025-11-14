@@ -98,12 +98,13 @@ impl PatchBlendMode {
 
     #[cfg(test)]
     fn random<R: rand::Rng>(rng: &mut R) -> Self {
-        use rand::distributions::{Distribution, Uniform};
+        use rand::distr::{Distribution, Uniform};
         Self::try_from(
             Uniform::new_inclusive(
                 PatchBlendMode::None as u8,
                 PatchBlendMode::AlphaWeightedAddBelow as u8,
             )
+            .unwrap()
             .sample(rng),
         )
         .unwrap()
@@ -179,13 +180,13 @@ impl PatchesDictionary {
         reference_frames: usize,
         rng: &mut R,
     ) -> Self {
-        use rand::distributions::{Distribution, Uniform};
-        let width_dist = Uniform::new_inclusive(0, size.0 - 1);
-        let height_dist = Uniform::new_inclusive(0, size.1 - 1);
-        let num_refs = Uniform::new_inclusive(1, 5).sample(rng);
-        let ref_dist = Uniform::new_inclusive(0, num_refs - 1);
-        let ref_frame_dist = Uniform::new_inclusive(0, reference_frames - 1);
-        let num_patches = Uniform::new_inclusive(num_refs, 10).sample(rng);
+        use rand::distr::{Distribution, Uniform};
+        let width_dist = Uniform::new_inclusive(0, size.0 - 1).unwrap();
+        let height_dist = Uniform::new_inclusive(0, size.1 - 1).unwrap();
+        let num_refs = Uniform::new_inclusive(1, 5).unwrap().sample(rng);
+        let ref_dist = Uniform::new_inclusive(0, num_refs - 1).unwrap();
+        let ref_frame_dist = Uniform::new_inclusive(0, reference_frames - 1).unwrap();
+        let num_patches = Uniform::new_inclusive(num_refs, 10).unwrap().sample(rng);
         let mut result = PatchesDictionary {
             positions: (0..num_patches)
                 .map(|_| PatchPosition {
@@ -203,8 +204,12 @@ impl PatchesDictionary {
                         xsize: 0,
                         ysize: 0,
                     };
-                    result.xsize = Uniform::new_inclusive(1, size.0 - result.x0).sample(rng);
-                    result.ysize = Uniform::new_inclusive(1, size.1 - result.y0).sample(rng);
+                    result.xsize = Uniform::new_inclusive(1, size.0 - result.x0)
+                        .unwrap()
+                        .sample(rng);
+                    result.ysize = Uniform::new_inclusive(1, size.1 - result.y0)
+                        .unwrap()
+                        .sample(rng);
                     result
                 })
                 .collect(),
@@ -212,7 +217,7 @@ impl PatchesDictionary {
                 .map(|_| PatchBlending {
                     mode: PatchBlendMode::random(rng),
                     alpha_channel,
-                    clamp: Uniform::new_inclusive(0, 1).sample(rng) == 0,
+                    clamp: Uniform::new_inclusive(0, 1).unwrap().sample(rng) == 0,
                 })
                 .collect(),
             blendings_stride: num_extra_channels + 1,
