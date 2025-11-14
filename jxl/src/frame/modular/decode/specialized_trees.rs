@@ -252,10 +252,37 @@ impl ModularChannelDecoder for WpOnlyLookup {
     }
 }
 
+pub struct SingleGradientOnly {
+    ctx: usize,
+}
+
+impl ModularChannelDecoder for SingleGradientOnly {
+    const NEEDS_TOP: bool = true;
+    const NEEDS_TOPTOP: bool = false;
+
+    fn init_row(&mut self, _: &mut [&mut ModularChannel], _: usize, _: usize) {}
+
+    #[inline(always)]
+    fn decode_one(
+        &mut self,
+        prediction_data: PredictionData,
+        _: (usize, usize),
+        _: usize,
+        reader: &mut SymbolReader,
+        br: &mut BitReader,
+        histograms: &Histograms,
+    ) -> Result<i32> {
+        let pred = Predictor::Gradient.predict_one(prediction_data, 0);
+        let dec = reader.read_signed(histograms, br, self.ctx)?;
+        Ok(make_pixel(dec, 1, pred))
+    }
+}
+
 #[allow(clippy::large_enum_variant)]
 pub enum TreeSpecialCase {
     NoWp(NoWpTree),
     WpOnly(WpOnlyLookup),
+    SingleGradientOnly(SingleGradientOnly),
     General(GeneralTree),
 }
 
@@ -317,6 +344,20 @@ pub fn specialize_tree(
                 pruned_tree.push(node);
             }
         }
+    }
+
+    if let [
+        TreeNode::Leaf {
+            predictor: Predictor::Gradient,
+            multiplier: 1,
+            offset: 0,
+            id,
+        },
+    ] = &*pruned_tree
+    {
+        return Ok(TreeSpecialCase::SingleGradientOnly(SingleGradientOnly {
+            ctx: *id as usize,
+        }));
     }
 
     if !uses_non_wp
