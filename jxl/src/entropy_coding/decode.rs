@@ -160,6 +160,27 @@ impl SymbolReader {
         context: usize,
     ) -> Result<u32> {
         let cluster = histograms.map_context_to_cluster(context);
+        self.read_unsigned_clustered(histograms, br, cluster)
+    }
+
+    #[inline(always)]
+    pub fn read_signed(
+        &mut self,
+        histograms: &Histograms,
+        br: &mut BitReader,
+        context: usize,
+    ) -> Result<i32> {
+        let unsigned = self.read_unsigned(histograms, br, context)?;
+        Ok(unpack_signed(unsigned))
+    }
+
+    #[inline]
+    pub fn read_unsigned_clustered(
+        &mut self,
+        histograms: &Histograms,
+        br: &mut BitReader,
+        cluster: usize,
+    ) -> Result<u32> {
         if histograms.lz77_params.enabled {
             let lz77_state = self.lz77_state.as_mut().unwrap();
             if let Some(sym) = lz77_state.pull_symbol() {
@@ -227,13 +248,13 @@ impl SymbolReader {
     }
 
     #[inline(always)]
-    pub fn read_signed(
+    pub fn read_signed_clustered(
         &mut self,
         histograms: &Histograms,
         br: &mut BitReader,
-        context: usize,
+        cluster: usize,
     ) -> Result<i32> {
-        let unsigned = self.read_unsigned(histograms, br, context)?;
+        let unsigned = self.read_unsigned_clustered(histograms, br, cluster)?;
         Ok(unpack_signed(unsigned))
     }
 
