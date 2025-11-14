@@ -48,6 +48,15 @@ enum Codes {
     Ans(AnsCodes),
 }
 
+impl Codes {
+    fn single_symbol(&self, ctx: usize) -> Option<u32> {
+        match self {
+            Self::Huffman(hc) => hc.single_symbol(ctx),
+            Self::Ans(ans) => ans.single_symbol(ctx),
+        }
+    }
+}
+
 #[derive(Debug)]
 pub struct Histograms {
     lz77_params: Lz77Params,
@@ -150,6 +159,37 @@ impl SymbolReader {
             lz77_state,
             ans_reader,
         })
+    }
+
+    pub fn try_into_rle(self, histograms: &Histograms) -> Result<RleSymbolReader, Self> {
+        let &Some(Lz77State {
+            min_symbol,
+            min_length,
+            dist_multiplier: 1..,
+            num_decoded: 0,
+            ..
+        }) = &self.lz77_state
+        else {
+            return Err(self);
+        };
+
+        let lz_dist_cluster = *histograms.context_map.last().unwrap() as usize;
+        let lz_conf = &histograms.uint_configs[lz_dist_cluster];
+        let Some(sym) = histograms.codes.single_symbol(lz_dist_cluster) else {
+            return Err(self);
+        };
+
+        if sym == 1 && lz_conf.is_split_exponent_zero() {
+            Ok(RleSymbolReader {
+                min_symbol,
+                min_length,
+                ans_reader: self.ans_reader,
+                last_sym: None,
+                repeat_count: 0,
+            })
+        } else {
+            Err(self)
+        }
     }
 
     #[inline]
@@ -266,6 +306,108 @@ impl SymbolReader {
     }
 }
 
+#[derive(Debug)]
+pub struct RleSymbolReader {
+    min_symbol: u32,
+    min_length: u32,
+    ans_reader: AnsReader,
+    last_sym: Option<u32>,
+    repeat_count: u32,
+}
+
+#[derive(Debug, Copy, Clone)]
+enum RleToken {
+    Value(u32),
+    Repeat(u32),
+}
+
+impl RleSymbolReader {
+    #[inline]
+    fn read_token_clustered(
+        &mut self,
+        histograms: &Histograms,
+        br: &mut BitReader,
+        cluster: usize,
+    ) -> Result<RleToken> {
+        let token = match &histograms.codes {
+            Codes::Huffman(hc) => hc.read(br, cluster)?,
+            Codes::Ans(ans) => self.ans_reader.read(ans, br, cluster)?,
+        };
+
+        Ok(if let Some(token) = token.checked_sub(self.min_symbol) {
+            let lz_length_conf = histograms.lz77_length_uint.as_ref().unwrap();
+            let count = lz_length_conf.read(token, br)?;
+            RleToken::Repeat(count + self.min_length)
+        } else {
+            let sym = histograms.uint_configs[cluster].read(token, br)?;
+            RleToken::Value(sym)
+        })
+    }
+
+    #[inline]
+    pub fn read_unsigned(
+        &mut self,
+        histograms: &Histograms,
+        br: &mut BitReader,
+        context: usize,
+    ) -> Result<u32> {
+        let cluster = histograms.map_context_to_cluster(context);
+        self.read_unsigned_clustered(histograms, br, cluster)
+    }
+
+    #[inline(always)]
+    pub fn read_signed(
+        &mut self,
+        histograms: &Histograms,
+        br: &mut BitReader,
+        context: usize,
+    ) -> Result<i32> {
+        let unsigned = self.read_unsigned(histograms, br, context)?;
+        Ok(unpack_signed(unsigned))
+    }
+
+    #[inline]
+    pub fn read_unsigned_clustered(
+        &mut self,
+        histograms: &Histograms,
+        br: &mut BitReader,
+        cluster: usize,
+    ) -> Result<u32> {
+        if self.repeat_count == 0 {
+            let token = self.read_token_clustered(histograms, br, cluster)?;
+            match token {
+                RleToken::Value(sym) => {
+                    self.last_sym = Some(sym);
+                    self.repeat_count = 1;
+                }
+                RleToken::Repeat(count) => {
+                    self.repeat_count = count;
+                }
+            }
+        }
+        self.repeat_count -= 1;
+        self.last_sym.ok_or(Error::UnexpectedLz77Repeat)
+    }
+
+    #[inline(always)]
+    pub fn read_signed_clustered(
+        &mut self,
+        histograms: &Histograms,
+        br: &mut BitReader,
+        cluster: usize,
+    ) -> Result<i32> {
+        let unsigned = self.read_unsigned_clustered(histograms, br, cluster)?;
+        Ok(unpack_signed(unsigned))
+    }
+
+    pub fn check_final_state(self, histograms: &Histograms) -> Result<()> {
+        match &histograms.codes {
+            Codes::Huffman(_) => Ok(()),
+            Codes::Ans(_) => self.ans_reader.check_final_state(),
+        }
+    }
+}
+
 impl Histograms {
     pub fn decode(num_contexts: usize, br: &mut BitReader, allow_lz77: bool) -> Result<Histograms> {
         let lz77_params = Lz77Params::read_unconditional(&(), br, &Empty {})?;
@@ -346,5 +488,89 @@ impl Histograms {
             context_map: vec![0u8; num_contexts],
             codes,
         }
+    }
+
+    pub fn rle(num_contexts: usize, min_symbol: u32, min_length: u32) -> Self {
+        let d = HuffmanCodes::byte_histogram_rle();
+        let codes = Codes::Huffman(d);
+        let uint_configs = vec![HybridUint::new(8, 0, 0), HybridUint::new(0, 0, 0)];
+        let mut context_map = vec![0u8; num_contexts + 1];
+        *context_map.last_mut().unwrap() = 1;
+        Self {
+            lz77_params: Lz77Params {
+                enabled: true,
+                min_symbol: Some(min_symbol),
+                min_length: Some(min_length),
+            },
+            lz77_length_uint: Some(HybridUint::new(8, 0, 0)),
+            uint_configs,
+            log_alpha_size: 15,
+            context_map,
+            codes,
+        }
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use std::ops::ControlFlow;
+
+    use test_log::test;
+
+    use super::*;
+
+    #[test]
+    fn rle_arb() {
+        let histograms = Histograms::rle(1, 240, 3);
+
+        arbtest::arbtest(|u| {
+            let width = u.int_in_range(1usize..=256)?;
+
+            let mut bytes = Vec::new();
+            let mut is_prev_repeat = true;
+            let mut expected_num_bytes = 0usize;
+            u.arbitrary_loop(None, None, |u| {
+                let do_repeat = !is_prev_repeat && u.ratio(1, 4)?;
+                let range = if do_repeat { 240u8..=255 } else { 0u8..=239 };
+                let byte = u.int_in_range(range)?;
+                bytes.push(byte);
+
+                is_prev_repeat = do_repeat;
+                expected_num_bytes += if do_repeat { byte as usize - 237 } else { 1 };
+                Ok(if expected_num_bytes >= 256 {
+                    ControlFlow::Break(())
+                } else {
+                    ControlFlow::Continue(())
+                })
+            })?;
+            for b in &mut bytes {
+                *b = b.reverse_bits();
+            }
+
+            // Read normally
+            let mut normal_br = BitReader::new(&bytes);
+            let mut normal_reader =
+                SymbolReader::new(&histograms, &mut normal_br, Some(width)).unwrap();
+
+            // Read RLE
+            let mut rle_br = BitReader::new(&bytes);
+            let rle_reader = SymbolReader::new(&histograms, &mut rle_br, Some(width)).unwrap();
+            let mut rle_reader = rle_reader.try_into_rle(&histograms).unwrap();
+
+            for _ in 0..expected_num_bytes {
+                let expected = normal_reader
+                    .read_unsigned_clustered(&histograms, &mut normal_br, 0)
+                    .unwrap();
+                let actual = rle_reader
+                    .read_unsigned_clustered(&histograms, &mut rle_br, 0)
+                    .unwrap();
+                assert_eq!(actual, expected);
+            }
+            assert_eq!(rle_reader.repeat_count, 0);
+            assert_eq!(normal_br.total_bits_available(), 0);
+            assert_eq!(rle_br.total_bits_available(), 0);
+
+            Ok(())
+        });
     }
 }
