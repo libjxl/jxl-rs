@@ -111,9 +111,10 @@ impl CodestreamParser {
                         Err(e) => return Err(e),
                     }
                 }
+                let icc_result = self.icc_parser.take().unwrap().finalize(&mut br);
                 self.non_section_buf.consume(bits / 8);
                 self.non_section_bit_offset = (bits % 8) as u8;
-                JxlColorProfile::Icc(self.icc_parser.take().unwrap().finalize()?)
+                JxlColorProfile::Icc(icc_result?)
             } else {
                 JxlColorProfile::Simple(JxlColorEncoding::from_internal(
                     &file_header.image_metadata.color_encoding,

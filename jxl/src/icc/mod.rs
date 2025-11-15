@@ -172,28 +172,34 @@ impl IncrementalIccReader {
 
     pub fn read_one(&mut self, br: &mut BitReader) -> Result<()> {
         let ctx = self.get_icc_ctx() as usize;
-        let sym = self.reader.read_unsigned(&self.histograms, br, ctx)?;
+        let checkpoint = self.reader.checkpoint::<1>();
+        let sym = self.reader.read_unsigned(&self.histograms, br, ctx);
+
+        if let Err(err) = br.check_for_error() {
+            self.reader.restore(checkpoint);
+            return Err(err);
+        }
         if sym >= 256 {
             warn!(sym, "Invalid symbol in ICC stream");
             return Err(Error::InvalidIccStream);
         }
+
         let b = sym as u8;
         self.out_buf.push(b);
         self.prev_bytes = [b, self.prev_bytes[0]];
-
         Ok(())
     }
 
     pub fn read_all(&mut self, br: &mut BitReader) -> Result<()> {
         for _ in self.out_buf.len()..self.num_coded_bytes() {
-            self.read_one(br)?
+            self.read_one(br)?;
         }
         Ok(())
     }
 
-    pub fn finalize(self) -> Result<Vec<u8>> {
+    pub fn finalize(self, br: &mut BitReader) -> Result<Vec<u8>> {
         assert_eq!(self.num_coded_bytes(), self.out_buf.len());
-        self.reader.check_final_state(&self.histograms)?;
+        self.reader.check_final_state(&self.histograms, br)?;
         let mut stream = IccStream::new(self.out_buf);
         let profile = read_icc_inner(&mut stream)?;
         stream.finalize()?;

@@ -15,6 +15,7 @@ pub struct BitReader<'a> {
     bit_buf: u64,
     bits_in_buf: usize,
     total_bits_read: usize,
+    initial_bits: usize,
 }
 
 impl Debug for BitReader<'_> {
@@ -40,6 +41,7 @@ impl<'a> BitReader<'a> {
             bit_buf: 0,
             bits_in_buf: 0,
             total_bits_read: 0,
+            initial_bits: data.len() * 8,
         }
     }
 
@@ -64,6 +66,13 @@ impl<'a> BitReader<'a> {
         Ok(())
     }
 
+    #[inline]
+    pub fn consume_optimistic(&mut self, num: usize) {
+        self.bit_buf >>= num;
+        self.bits_in_buf = self.bits_in_buf.saturating_sub(num);
+        self.total_bits_read = self.total_bits_read.wrapping_add(num);
+    }
+
     /// Reads `num` bits from the buffer.
     /// ```
     /// # use jxl::bit_reader::BitReader;
@@ -80,6 +89,21 @@ impl<'a> BitReader<'a> {
         let ret = self.peek(num);
         self.consume(num)?;
         Ok(ret)
+    }
+
+    #[inline]
+    pub fn read_optimistic(&mut self, num: usize) -> u64 {
+        let ret = self.peek(num);
+        self.consume_optimistic(num);
+        ret
+    }
+
+    pub fn check_for_error(&self) -> Result<(), Error> {
+        if self.total_bits_read > self.initial_bits {
+            Err(Error::OutOfBounds(self.total_bits_read - self.initial_bits))
+        } else {
+            Ok(())
+        }
     }
 
     /// Returns the total number of bits that have been read or skipped.

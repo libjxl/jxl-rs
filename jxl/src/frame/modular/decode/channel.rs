@@ -72,8 +72,7 @@ fn decode_modular_channel_small(
                 &references,
                 &mut property_buffer,
             );
-            let dec =
-                reader.read_signed(&tree.histograms, br, prediction_result.context as usize)?;
+            let dec = reader.read_signed(&tree.histograms, br, prediction_result.context as usize);
             let val = make_pixel(dec, prediction_result.multiplier, prediction_result.guess);
             row[x] = val;
             wp_state.update_errors(val, (x, y), size.0);
@@ -95,7 +94,7 @@ pub(super) trait ModularChannelDecoder {
         reader: &mut SymbolReader,
         br: &mut BitReader,
         histograms: &Histograms,
-    ) -> Result<i32>;
+    ) -> i32;
 }
 
 #[inline(never)]
@@ -130,14 +129,14 @@ fn decode_modular_channel_impl<D: ModularChannelDecoder>(
         let mut prediction_data = PredictionData::default();
         for x in 0..2 {
             prediction_data = PredictionData::get_rows(row, row_top, row_toptop, x, y);
-            let val = do_decode_cold(&mut decoder, prediction_data, (x, y), reader, br)?;
+            let val = do_decode_cold(&mut decoder, prediction_data, (x, y), reader, br);
             row[x] = val;
             last = val;
         }
         if y < 2 {
             for x in 2..size.0 - 2 {
                 let prediction_data = PredictionData::get_rows(row, row_top, row_toptop, x, y);
-                let val = do_decode_cold(&mut decoder, prediction_data, (x, y), reader, br)?;
+                let val = do_decode_cold(&mut decoder, prediction_data, (x, y), reader, br);
                 row[x] = val;
             }
         } else {
@@ -151,14 +150,14 @@ fn decode_modular_channel_impl<D: ModularChannelDecoder>(
                     D::NEEDS_TOPTOP,
                 );
                 let val =
-                    decoder.decode_one(prediction_data, (x, y), size.0, reader, br, histograms)?;
+                    decoder.decode_one(prediction_data, (x, y), size.0, reader, br, histograms);
                 *r = val;
                 last = val;
             }
         }
         for x in size.0 - 2..size.0 {
             prediction_data = PredictionData::get_rows(row, row_top, row_toptop, x, y);
-            let val = do_decode_cold(&mut decoder, prediction_data, (x, y), reader, br)?;
+            let val = do_decode_cold(&mut decoder, prediction_data, (x, y), reader, br);
             row[x] = val;
         }
     }
@@ -166,7 +165,7 @@ fn decode_modular_channel_impl<D: ModularChannelDecoder>(
 }
 
 #[allow(clippy::too_many_arguments)]
-#[instrument(level = "debug", skip(buffers, reader, tree, br))]
+#[instrument(level = "debug", skip(buffers, reader, tree))]
 pub(super) fn decode_modular_channel(
     buffers: &mut [&mut ModularChannel],
     chan: usize,

@@ -58,7 +58,7 @@ pub fn decode_context_map(num_contexts: usize, br: &mut BitReader) -> Result<Vec
 
         let mut ctx_map: Vec<u8> = (0..num_contexts)
             .map(|_| {
-                let mv = reader.read_unsigned(&histograms, br, 0usize)?;
+                let mv = reader.read_unsigned(&histograms, br, 0usize);
                 if mv > u8::MAX as u32 {
                     Err(Error::InvalidContextMap(mv))
                 } else {
@@ -66,7 +66,7 @@ pub fn decode_context_map(num_contexts: usize, br: &mut BitReader) -> Result<Vec
                 }
             })
             .collect::<Result<_, _>>()?;
-        reader.check_final_state(&histograms)?;
+        reader.check_final_state(&histograms, br)?;
         if use_mtf {
             inverse_move_to_front(&mut ctx_map[..]);
         }
