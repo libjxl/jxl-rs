@@ -77,13 +77,14 @@ pub fn decode_modular_subbitstream(
         .map(|info| info.channel_info().size.0)
         .max()
         .unwrap_or(0);
-    let mut reader = SymbolReader::new(&tree.histograms, br, Some(image_width))?;
+    let reader = SymbolReader::new(&tree.histograms, br, Some(image_width))?;
+    let mut reader = reader.into_optimistic(&tree.histograms, br);
 
     for i in 0..buffers.len() {
-        decode_modular_channel(&mut buffers, i, stream_id, &header, tree, &mut reader, br)?;
+        decode_modular_channel(&mut buffers, i, stream_id, &header, tree, &mut reader)?;
     }
 
-    reader.check_final_state(&tree.histograms)?;
+    reader.check_final_state()?;
 
     drop(buffers);
 
