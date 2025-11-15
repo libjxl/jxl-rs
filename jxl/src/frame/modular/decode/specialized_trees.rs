@@ -73,7 +73,7 @@ impl ModularChannelDecoder for NoWpTree {
         reader: &mut SymbolReader,
         br: &mut BitReader,
         histograms: &Histograms,
-    ) -> Result<i32> {
+    ) -> i32 {
         let prediction_result = predict(
             &self.nodes,
             prediction_data,
@@ -84,12 +84,8 @@ impl ModularChannelDecoder for NoWpTree {
             &self.references,
             &mut self.property_buffer,
         );
-        let dec = reader.read_signed(histograms, br, prediction_result.context as usize)?;
-        Ok(make_pixel(
-            dec,
-            prediction_result.multiplier,
-            prediction_result.guess,
-        ))
+        let dec = reader.read_signed(histograms, br, prediction_result.context as usize);
+        make_pixel(dec, prediction_result.multiplier, prediction_result.guess)
     }
 }
 
@@ -131,7 +127,7 @@ impl ModularChannelDecoder for GeneralTree {
         reader: &mut SymbolReader,
         br: &mut BitReader,
         histograms: &Histograms,
-    ) -> Result<i32> {
+    ) -> i32 {
         let prediction_result = predict(
             &self.no_wp_tree.nodes,
             prediction_data,
@@ -142,10 +138,10 @@ impl ModularChannelDecoder for GeneralTree {
             &self.no_wp_tree.references,
             &mut self.no_wp_tree.property_buffer,
         );
-        let dec = reader.read_signed(histograms, br, prediction_result.context as usize)?;
+        let dec = reader.read_signed(histograms, br, prediction_result.context as usize);
         let val = make_pixel(dec, prediction_result.multiplier, prediction_result.guess);
         self.wp_state.update_errors(val, pos, xsize);
-        Ok(val)
+        val
     }
 }
 
@@ -239,16 +235,16 @@ impl ModularChannelDecoder for WpOnlyLookup {
         reader: &mut SymbolReader,
         br: &mut BitReader,
         histograms: &Histograms,
-    ) -> Result<i32> {
+    ) -> i32 {
         let (wp_pred, property) = self
             .wp_state
             .predict_and_property(pos, xsize, &prediction_data);
         let ctx =
             self.lut[(property - LUT_MIN_SPLITVAL).clamp(0, LUT_TABLE_SIZE as i32 - 1) as usize];
-        let dec = reader.read_signed_clustered(histograms, br, ctx as usize)?;
+        let dec = reader.read_signed_clustered(histograms, br, ctx as usize);
         let val = dec + wp_pred as i32;
         self.wp_state.update_errors(val, pos, xsize);
-        Ok(val)
+        val
     }
 }
 
@@ -271,10 +267,10 @@ impl ModularChannelDecoder for SingleGradientOnly {
         reader: &mut SymbolReader,
         br: &mut BitReader,
         histograms: &Histograms,
-    ) -> Result<i32> {
+    ) -> i32 {
         let pred = Predictor::Gradient.predict_one(prediction_data, 0);
-        let dec = reader.read_signed(histograms, br, self.ctx)?;
-        Ok(make_pixel(dec, 1, pred))
+        let dec = reader.read_signed(histograms, br, self.ctx);
+        make_pixel(dec, 1, pred)
     }
 }
 

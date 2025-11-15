@@ -54,22 +54,19 @@ impl HybridUint {
     }
 
     #[inline]
-    pub fn read(&self, symbol: u32, br: &mut BitReader) -> Result<u32, Error> {
+    pub fn read(&self, symbol: u32, br: &mut BitReader) -> u32 {
         if symbol < self.split_token {
-            return Ok(symbol);
+            return symbol;
         }
         let bits_in_token = self.lsb_in_token + self.msb_in_token;
         let nbits =
             self.split_exponent - bits_in_token + ((symbol - self.split_token) >> bits_in_token);
-        // To match the behaviour of libjxl, we limit nbits to 31.
-        if nbits > 31 {
-            return Err(Error::IntegerTooLarge(nbits));
-        }
+        // TODO(tirr-c): Assert `nbits <= 31`.
         let low = symbol & ((1 << self.lsb_in_token) - 1);
         let symbol_nolow = symbol >> self.lsb_in_token;
-        let bits = br.read(nbits as usize)? as u32;
+        let bits = br.read_optimistic(nbits as usize) as u32;
         let hi = (symbol_nolow & ((1 << self.msb_in_token) - 1)) | (1 << self.msb_in_token);
-        Ok((((hi << nbits) | bits) << self.lsb_in_token) | low)
+        (((hi << nbits) | bits) << self.lsb_in_token) | low
     }
 }
 

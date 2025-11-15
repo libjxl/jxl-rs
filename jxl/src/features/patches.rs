@@ -368,7 +368,7 @@ impl PatchesDictionary {
             &patches_histograms,
             br,
             PatchContext::NumRefPatch as usize,
-        )? as usize;
+        ) as usize;
         let num_pixels = xsize * ysize;
         let max_ref_patches = 1024 + num_pixels / 4;
         let max_patches = max_ref_patches * 4;
@@ -390,7 +390,7 @@ impl PatchesDictionary {
                 &patches_histograms,
                 br,
                 PatchContext::ReferenceFrame as usize,
-            )? as usize;
+            ) as usize;
             if reference >= DecoderState::MAX_STORED_FRAMES {
                 return Err(Error::PatchesRefTooLarge(
                     reference,
@@ -402,23 +402,23 @@ impl PatchesDictionary {
                 &patches_histograms,
                 br,
                 PatchContext::PatchReferencePosition as usize,
-            )? as usize;
+            ) as usize;
             let y0 = patches_reader.read_unsigned(
                 &patches_histograms,
                 br,
                 PatchContext::PatchReferencePosition as usize,
-            )? as usize;
+            ) as usize;
             let ref_pos_xsize = patches_reader.read_unsigned(
                 &patches_histograms,
                 br,
                 PatchContext::PatchSize as usize,
-            )? as usize
+            ) as usize
                 + 1;
             let ref_pos_ysize = patches_reader.read_unsigned(
                 &patches_histograms,
                 br,
                 PatchContext::PatchSize as usize,
-            )? as usize
+            ) as usize
                 + 1;
             let reference_frame = &reference_frames[reference];
             // TODO(firsching): make sure this check is correct in the presence of downsampled extra channels (also in libjxl).
@@ -451,7 +451,7 @@ impl PatchesDictionary {
                 &patches_histograms,
                 br,
                 PatchContext::PatchCount as usize,
-            )? as usize
+            ) as usize
                 + 1;
             if id_count > max_patches + 1 {
                 return Err(Error::PatchesTooMany(
@@ -499,19 +499,19 @@ impl PatchesDictionary {
                         &patches_histograms,
                         br,
                         PatchContext::PatchPosition as usize,
-                    )? as usize;
+                    ) as usize;
                     pos.y = patches_reader.read_unsigned(
                         &patches_histograms,
                         br,
                         PatchContext::PatchPosition as usize,
-                    )? as usize;
+                    ) as usize;
                 } else {
                     // Read offsets and calculate new position
                     let delta_x = patches_reader.read_signed(
                         &patches_histograms,
                         br,
                         PatchContext::PatchOffset as usize,
-                    )?;
+                    );
                     if delta_x < 0 && (-delta_x as usize) > positions.last().unwrap().x {
                         return Err(Error::PatchesInvalidDelta(
                             "x".to_string(),
@@ -525,7 +525,7 @@ impl PatchesDictionary {
                         &patches_histograms,
                         br,
                         PatchContext::PatchOffset as usize,
-                    )?;
+                    );
                     if delta_y < 0 && (-delta_y as usize) > positions.last().unwrap().y {
                         return Err(Error::PatchesInvalidDelta(
                             "y".to_string(),
@@ -560,7 +560,7 @@ impl PatchesDictionary {
                         &patches_histograms,
                         br,
                         PatchContext::PatchBlendMode as usize,
-                    )? as u8;
+                    ) as u8;
                     let blend_mode = match PatchBlendMode::from_u8(maybe_blend_mode) {
                         None => {
                             return Err(Error::PatchesInvalidBlendMode(
@@ -576,7 +576,7 @@ impl PatchesDictionary {
                             &patches_histograms,
                             br,
                             PatchContext::PatchAlphaChannel as usize,
-                        )? as usize;
+                        ) as usize;
                         if alpha_channel >= num_extra_channels {
                             return Err(Error::PatchesInvalidAlphaChannel(
                                 alpha_channel,
@@ -590,7 +590,7 @@ impl PatchesDictionary {
                             &patches_histograms,
                             br,
                             PatchContext::PatchClamp as usize,
-                        )? != 0;
+                        ) != 0;
                     }
                     blendings.push(PatchBlending {
                         mode: blend_mode,

@@ -29,7 +29,7 @@ impl Permutation {
         br: &mut BitReader,
         entropy_reader: &mut SymbolReader,
     ) -> Result<Self> {
-        let end = entropy_reader.read_unsigned(histograms, br, get_context(size))?;
+        let end = entropy_reader.read_unsigned(histograms, br, get_context(size));
         Self::decode_inner(size, skip, end, |ctx| {
             entropy_reader.read_unsigned(histograms, br, ctx)
         })
@@ -39,7 +39,7 @@ impl Permutation {
         size: u32,
         skip: u32,
         end: u32,
-        mut read: impl FnMut(usize) -> Result<u32>,
+        mut read: impl FnMut(usize) -> u32,
     ) -> Result<Self> {
         if end > size - skip {
             return Err(Error::InvalidPermutationSize { size, skip, end });
@@ -49,7 +49,7 @@ impl Permutation {
 
         let mut prev_val = 0u32;
         for idx in skip..(skip + end) {
-            let val = read(get_context(prev_val))?;
+            let val = read(get_context(prev_val));
             if val >= size - idx {
                 return Err(Error::InvalidPermutationLehmerCode {
                     size,

@@ -117,7 +117,7 @@ pub fn decode_coeff_orders(used_orders: u32, br: &mut BitReader) -> Result<Vec<P
             permutations[index].compose(&permutation);
         }
     }
-    reader.check_final_state(&histograms)?;
+    reader.check_final_state(&histograms, br)?;
     Ok(permutations)
 }
 

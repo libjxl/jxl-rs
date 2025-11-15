@@ -83,7 +83,7 @@ pub fn decode_modular_subbitstream(
         decode_modular_channel(&mut buffers, i, stream_id, &header, tree, &mut reader, br)?;
     }
 
-    reader.check_final_state(&tree.histograms)?;
+    reader.check_final_state(&tree.histograms, br)?;
 
     drop(buffers);
 

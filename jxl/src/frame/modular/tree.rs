@@ -193,7 +193,7 @@ impl Tree {
                 tree.try_reserve(tree.len() * 2 + 1)?;
             }
             to_decode -= 1;
-            let property = tree_reader.read_unsigned(&tree_histograms, br, PROPERTY_CONTEXT)?;
+            let property = tree_reader.read_unsigned(&tree_histograms, br, PROPERTY_CONTEXT);
             trace!(property);
             if let Some(property) = property.checked_sub(1) {
                 // inner node.
@@ -201,7 +201,7 @@ impl Tree {
                     return Err(Error::InvalidProperty(property));
                 }
                 max_property = max_property.max(property);
-                let splitval = tree_reader.read_signed(&tree_histograms, br, SPLIT_VAL_CONTEXT)?;
+                let splitval = tree_reader.read_signed(&tree_histograms, br, SPLIT_VAL_CONTEXT);
                 let left_child = (tree.len() + to_decode + 1) as u32;
                 let node = TreeNode::Split {
                     property: property as u8,
@@ -217,15 +217,15 @@ impl Tree {
                     &tree_histograms,
                     br,
                     PREDICTOR_CONTEXT,
-                )?)?;
-                let offset = tree_reader.read_signed(&tree_histograms, br, OFFSET_CONTEXT)?;
+                ))?;
+                let offset = tree_reader.read_signed(&tree_histograms, br, OFFSET_CONTEXT);
                 let mul_log =
-                    tree_reader.read_unsigned(&tree_histograms, br, MULTIPLIER_LOG_CONTEXT)?;
+                    tree_reader.read_unsigned(&tree_histograms, br, MULTIPLIER_LOG_CONTEXT);
                 if mul_log >= 31 {
                     return Err(Error::TreeMultiplierTooLarge(mul_log, 31));
                 }
                 let mul_bits =
-                    tree_reader.read_unsigned(&tree_histograms, br, MULTIPLIER_BITS_CONTEXT)?;
+                    tree_reader.read_unsigned(&tree_histograms, br, MULTIPLIER_BITS_CONTEXT);
                 let multiplier = (mul_bits as u64 + 1) << mul_log;
                 if multiplier > (u32::MAX as u64) {
                     return Err(Error::TreeMultiplierBitsTooLarge(mul_bits, mul_log));
@@ -241,7 +241,7 @@ impl Tree {
                 tree.push(node);
             }
         }
-        tree_reader.check_final_state(&tree_histograms)?;
+        tree_reader.check_final_state(&tree_histograms, br)?;
 
         let num_properties = max_property as usize + 1;
         let mut property_ranges = Vec::new_with_capacity(num_properties * tree.len())?;
