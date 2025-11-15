@@ -289,7 +289,8 @@ pub fn decode_vardct_group(
     let num_histo_bits = hf_global.num_histograms.ceil_log2();
     let histogram_index: usize = br.read(num_histo_bits as usize)? as usize;
     debug!(?histogram_index);
-    let mut reader = SymbolReader::new(&hf_global.passes[pass].histograms, br, None)?;
+    let reader = SymbolReader::new(&hf_global.passes[pass].histograms, br, None)?;
+    let mut reader = reader.into_optimistic(&hf_global.passes[pass].histograms, br);
     let block_group_rect = frame_header.block_group_rect(group);
     debug!(?block_group_rect);
     let mut scratch = vec![0.0; LF_BUFFER_SIZE];
@@ -454,9 +455,7 @@ pub fn decode_vardct_group(
                 let nonzero_context = block_context_map
                     .nonzero_context(predicted_nzeros, block_context)
                     + context_offset;
-                let mut nonzeros =
-                    reader.read_unsigned(&hf_global.passes[pass].histograms, br, nonzero_context)?
-                        as usize;
+                let mut nonzeros = reader.read_unsigned(nonzero_context) as usize;
                 trace!(
                     "block ({},{},{c}) predicted_nzeros: {predicted_nzeros} \
                        nzero_ctx: {nonzero_context} (offset: {context_offset}) \
@@ -483,8 +482,7 @@ pub fn decode_vardct_group(
                     }
                     let ctx =
                         histo_offset + zero_density_context(nonzeros, k, log_num_blocks, prev);
-                    let coeff =
-                        reader.read_signed(&pass_info.histograms, br, ctx)? << shift_for_pass;
+                    let coeff = reader.read_signed(ctx) << shift_for_pass;
                     prev = if coeff != 0 { 1 } else { 0 };
                     nonzeros -= prev;
                     let coeff_index = permutation[k] as usize;
@@ -528,6 +526,6 @@ pub fn decode_vardct_group(
             coeffs_offset += num_coeffs;
         }
     }
-    reader.check_final_state(&hf_global.passes[pass].histograms)?;
+    reader.check_final_state()?;
     Ok(())
 }

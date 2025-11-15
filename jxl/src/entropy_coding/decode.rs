@@ -100,6 +100,24 @@ impl Lz77State {
         ( 8, 4), ( 6, 7), (-6, 7), ( 7, 6), (-7, 6), ( 8, 5), ( 7, 7), (-7, 7), ( 8, 6), ( 8, 7),
     ];
 
+    #[inline]
+    fn apply_copy(&mut self, distance_sym: u32, num_to_copy: u32) {
+        let distance_sub_1 = if self.dist_multiplier == 0 {
+            distance_sym
+        } else if let Some(distance) = distance_sym.checked_sub(120) {
+            distance
+        } else {
+            let (offset, dist) = Lz77State::SPECIAL_DISTANCES[distance_sym as usize];
+            let dist = (self.dist_multiplier * dist as u32).checked_add_signed(offset as i32 - 1);
+            dist.unwrap_or(0)
+        };
+
+        let distance = (((1 << 20) - 1).min(distance_sub_1) + 1).min(self.num_decoded);
+        self.copy_pos = self.num_decoded - distance;
+        self.num_to_copy = num_to_copy;
+    }
+
+    #[inline]
     fn push_decoded_symbol(&mut self, token: u32) {
         let offset = (self.num_decoded & Self::WINDOW_MASK) as usize;
         if let Some(slot) = self.window.get_mut(offset) {
@@ -111,6 +129,7 @@ impl Lz77State {
         self.num_decoded += 1;
     }
 
+    #[inline]
     fn pull_symbol(&mut self) -> Option<u32> {
         if let Some(next_num_to_copy) = self.num_to_copy.checked_sub(1) {
             let sym = self.window[(self.copy_pos & Self::WINDOW_MASK) as usize];
@@ -150,6 +169,25 @@ impl RleState {
             self.repeat_count = 1;
         }
         Ok(())
+    }
+
+    #[inline]
+    fn push_token_optimistic(
+        &mut self,
+        token: u32,
+        histograms: &Histograms,
+        br: &mut BitReader,
+        cluster: usize,
+    ) {
+        if let Some(token) = token.checked_sub(self.min_symbol) {
+            let lz_length_conf = histograms.lz77_length_uint.as_ref().unwrap();
+            let count = lz_length_conf.read_optimistic(token, br);
+            self.repeat_count = count + self.min_length;
+        } else {
+            let sym = histograms.uint_configs[cluster].read_optimistic(token, br);
+            self.last_sym = Some(sym);
+            self.repeat_count = 1;
+        }
     }
 
     #[inline]
@@ -297,31 +335,16 @@ impl SymbolReader {
                     );
                     return Err(Error::ArithmeticOverflow);
                 };
-                let lz_dist_cluster = *histograms.context_map.last().unwrap() as usize;
 
+                let lz_dist_cluster = *histograms.context_map.last().unwrap() as usize;
                 let distance_sym = match &histograms.codes {
                     Codes::Huffman(hc) => hc.read(br, lz_dist_cluster)?,
                     Codes::Ans(ans) => self.ans_reader.read(ans, br, lz_dist_cluster)?,
                 };
                 let distance_sym =
                     histograms.uint_configs[lz_dist_cluster].read(distance_sym, br)?;
+                lz77_state.apply_copy(distance_sym, num_to_copy);
 
-                let distance_sub_1 = if lz77_state.dist_multiplier == 0 {
-                    distance_sym
-                } else if let Some(distance) = distance_sym.checked_sub(120) {
-                    distance
-                } else {
-                    let (offset, dist) = Lz77State::SPECIAL_DISTANCES[distance_sym as usize];
-                    let dist = (lz77_state.dist_multiplier * dist as u32)
-                        .checked_add_signed(offset as i32 - 1);
-                    dist.unwrap_or(0)
-                };
-
-                let distance =
-                    (((1 << 20) - 1).min(distance_sub_1) + 1).min(lz77_state.num_decoded);
-                lz77_state.copy_pos = lz77_state.num_decoded - distance;
-
-                lz77_state.num_to_copy = num_to_copy;
                 let sym = lz77_state.pull_symbol().unwrap();
                 lz77_state.push_decoded_symbol(sym);
                 Ok(sym)
@@ -353,8 +376,149 @@ impl SymbolReader {
         Ok(unpack_signed(unsigned))
     }
 
+    pub fn into_optimistic<'h, 'br, 'a>(
+        self,
+        histograms: &'h Histograms,
+        br: &'br mut BitReader<'a>,
+    ) -> OptimisticSymbolReader<'h, 'br, 'a> {
+        OptimisticSymbolReader {
+            state: self.state,
+            ans_reader: self.ans_reader,
+            histograms,
+            br,
+            error_lz77_repeat: false,
+            error_arithmetic_overflow: false,
+        }
+    }
+
     pub fn check_final_state(self, histograms: &Histograms) -> Result<()> {
         match &histograms.codes {
+            Codes::Huffman(_) => Ok(()),
+            Codes::Ans(_) => self.ans_reader.check_final_state(),
+        }
+    }
+}
+
+#[derive(Debug)]
+pub struct OptimisticSymbolReader<'h, 'br, 'a> {
+    state: SymbolReaderState,
+    ans_reader: AnsReader,
+    histograms: &'h Histograms,
+    br: &'br mut BitReader<'a>,
+    error_lz77_repeat: bool,
+    error_arithmetic_overflow: bool,
+}
+
+impl OptimisticSymbolReader<'_, '_, '_> {
+    #[inline]
+    pub fn read_unsigned(&mut self, context: usize) -> u32 {
+        let cluster = self.histograms.map_context_to_cluster(context);
+        self.read_unsigned_clustered(cluster)
+    }
+
+    #[inline(always)]
+    pub fn read_signed(&mut self, context: usize) -> i32 {
+        let unsigned = self.read_unsigned(context);
+        unpack_signed(unsigned)
+    }
+
+    #[inline]
+    pub fn read_unsigned_clustered(&mut self, cluster: usize) -> u32 {
+        match &mut self.state {
+            SymbolReaderState::None => {
+                let token = match &self.histograms.codes {
+                    Codes::Huffman(hc) => hc.read_optimistic(self.br, cluster),
+                    Codes::Ans(ans) => self.ans_reader.read_optimistic(ans, self.br, cluster),
+                };
+                self.histograms.uint_configs[cluster].read_optimistic(token, self.br)
+            }
+
+            SymbolReaderState::Lz77(lz77_state) => {
+                if let Some(sym) = lz77_state.pull_symbol() {
+                    lz77_state.push_decoded_symbol(sym);
+                    return sym;
+                }
+                let token = match &self.histograms.codes {
+                    Codes::Huffman(hc) => hc.read_optimistic(self.br, cluster),
+                    Codes::Ans(ans) => self.ans_reader.read_optimistic(ans, self.br, cluster),
+                };
+                let Some(lz77_token) = token.checked_sub(lz77_state.min_symbol) else {
+                    let sym = self.histograms.uint_configs[cluster].read_optimistic(token, self.br);
+                    lz77_state.push_decoded_symbol(sym);
+                    return sym;
+                };
+                if lz77_state.num_decoded == 0 {
+                    self.error_lz77_repeat = true;
+                    return 0;
+                }
+
+                let num_to_copy = self
+                    .histograms
+                    .lz77_length_uint
+                    .as_ref()
+                    .unwrap()
+                    .read_optimistic(lz77_token, self.br);
+                let Some(num_to_copy) = num_to_copy.checked_add(lz77_state.min_length) else {
+                    warn!(
+                        num_to_copy,
+                        lz77_state.min_length, "LZ77 num_to_copy overflow"
+                    );
+                    self.error_arithmetic_overflow = true;
+                    return 0;
+                };
+
+                let lz_dist_cluster = *self.histograms.context_map.last().unwrap() as usize;
+                let distance_sym = match &self.histograms.codes {
+                    Codes::Huffman(hc) => hc.read_optimistic(self.br, lz_dist_cluster),
+                    Codes::Ans(ans) => {
+                        self.ans_reader
+                            .read_optimistic(ans, self.br, lz_dist_cluster)
+                    }
+                };
+                let distance_sym = self.histograms.uint_configs[lz_dist_cluster]
+                    .read_optimistic(distance_sym, self.br);
+                lz77_state.apply_copy(distance_sym, num_to_copy);
+
+                let sym = lz77_state.pull_symbol().unwrap();
+                lz77_state.push_decoded_symbol(sym);
+                sym
+            }
+
+            SymbolReaderState::Rle(rle_state) => {
+                if let Some(sym) = rle_state.pull_symbol() {
+                    return sym;
+                }
+
+                let token = match &self.histograms.codes {
+                    Codes::Huffman(hc) => hc.read_optimistic(self.br, cluster),
+                    Codes::Ans(ans) => self.ans_reader.read_optimistic(ans, self.br, cluster),
+                };
+                rle_state.push_token_optimistic(token, self.histograms, self.br, cluster);
+                if let Some(sym) = rle_state.pull_symbol() {
+                    sym
+                } else {
+                    self.error_lz77_repeat = true;
+                    0
+                }
+            }
+        }
+    }
+
+    #[inline(always)]
+    pub fn read_signed_clustered(&mut self, cluster: usize) -> i32 {
+        let unsigned = self.read_unsigned_clustered(cluster);
+        unpack_signed(unsigned)
+    }
+
+    pub fn check_final_state(self) -> Result<()> {
+        if self.error_lz77_repeat {
+            return Err(Error::UnexpectedLz77Repeat);
+        }
+        if self.error_arithmetic_overflow {
+            return Err(Error::ArithmeticOverflow);
+        }
+        self.br.check_for_error()?;
+        match &self.histograms.codes {
             Codes::Huffman(_) => Ok(()),
             Codes::Ans(_) => self.ans_reader.check_final_state(),
         }

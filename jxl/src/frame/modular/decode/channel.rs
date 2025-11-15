@@ -5,8 +5,7 @@
 
 use super::common::precompute_references;
 use crate::{
-    bit_reader::BitReader,
-    entropy_coding::decode::{Histograms, SymbolReader},
+    entropy_coding::decode::OptimisticSymbolReader,
     error::Result,
     frame::modular::{
         IMAGE_OFFSET, IMAGE_PADDING, ModularChannel, Tree,
@@ -32,8 +31,7 @@ fn decode_modular_channel_small(
     stream_id: usize,
     header: &GroupHeader,
     tree: &Tree,
-    reader: &mut SymbolReader,
-    br: &mut BitReader,
+    reader: &mut OptimisticSymbolReader,
 ) -> Result<()> {
     let size = buffers[chan].data.size();
     let mut wp_state = WeightedPredictorState::new(&header.wp_header, size.0);
@@ -72,8 +70,7 @@ fn decode_modular_channel_small(
                 &references,
                 &mut property_buffer,
             );
-            let dec =
-                reader.read_signed(&tree.histograms, br, prediction_result.context as usize)?;
+            let dec = reader.read_signed(prediction_result.context as usize);
             let val = make_pixel(dec, prediction_result.multiplier, prediction_result.guess);
             row[x] = val;
             wp_state.update_errors(val, (x, y), size.0);
@@ -92,10 +89,8 @@ pub(super) trait ModularChannelDecoder {
         prediction_data: PredictionData,
         pos: (usize, usize),
         xsize: usize,
-        reader: &mut SymbolReader,
-        br: &mut BitReader,
-        histograms: &Histograms,
-    ) -> Result<i32>;
+        reader: &mut OptimisticSymbolReader,
+    ) -> i32;
 }
 
 #[inline(never)]
@@ -103,9 +98,7 @@ fn decode_modular_channel_impl<D: ModularChannelDecoder>(
     buffers: &mut [&mut ModularChannel],
     chan: usize,
     mut decoder: D,
-    reader: &mut SymbolReader,
-    br: &mut BitReader,
-    histograms: &Histograms,
+    reader: &mut OptimisticSymbolReader,
 ) -> Result<()> {
     let size = buffers[chan].data.size();
     debug_assert!(size.0 >= 4);
@@ -115,8 +108,8 @@ fn decode_modular_channel_impl<D: ModularChannelDecoder>(
 
     // Let the compiler decide whether inlining in the borders is worth it.
     let do_decode_cold =
-        |decoder: &mut D, prediction_data, pos, reader: &mut SymbolReader, br: &mut BitReader| {
-            decoder.decode_one(prediction_data, pos, size.0, reader, br, histograms)
+        |decoder: &mut D, prediction_data, pos, reader: &mut OptimisticSymbolReader| {
+            decoder.decode_one(prediction_data, pos, size.0, reader)
         };
 
     for y in 0..size.1 {
@@ -130,14 +123,14 @@ fn decode_modular_channel_impl<D: ModularChannelDecoder>(
         let mut prediction_data = PredictionData::default();
         for x in 0..2 {
             prediction_data = PredictionData::get_rows(row, row_top, row_toptop, x, y);
-            let val = do_decode_cold(&mut decoder, prediction_data, (x, y), reader, br)?;
+            let val = do_decode_cold(&mut decoder, prediction_data, (x, y), reader);
             row[x] = val;
             last = val;
         }
         if y < 2 {
             for x in 2..size.0 - 2 {
                 let prediction_data = PredictionData::get_rows(row, row_top, row_toptop, x, y);
-                let val = do_decode_cold(&mut decoder, prediction_data, (x, y), reader, br)?;
+                let val = do_decode_cold(&mut decoder, prediction_data, (x, y), reader);
                 row[x] = val;
             }
         } else {
@@ -150,15 +143,14 @@ fn decode_modular_channel_impl<D: ModularChannelDecoder>(
                     D::NEEDS_TOP,
                     D::NEEDS_TOPTOP,
                 );
-                let val =
-                    decoder.decode_one(prediction_data, (x, y), size.0, reader, br, histograms)?;
+                let val = decoder.decode_one(prediction_data, (x, y), size.0, reader);
                 *r = val;
                 last = val;
             }
         }
         for x in size.0 - 2..size.0 {
             prediction_data = PredictionData::get_rows(row, row_top, row_toptop, x, y);
-            let val = do_decode_cold(&mut decoder, prediction_data, (x, y), reader, br)?;
+            let val = do_decode_cold(&mut decoder, prediction_data, (x, y), reader);
             row[x] = val;
         }
     }
@@ -166,15 +158,14 @@ fn decode_modular_channel_impl<D: ModularChannelDecoder>(
 }
 
 #[allow(clippy::too_many_arguments)]
-#[instrument(level = "debug", skip(buffers, reader, tree, br))]
+#[instrument(level = "debug", skip(buffers, reader, tree))]
 pub(super) fn decode_modular_channel(
     buffers: &mut [&mut ModularChannel],
     chan: usize,
     stream_id: usize,
     header: &GroupHeader,
     tree: &Tree,
-    reader: &mut SymbolReader,
-    br: &mut BitReader,
+    reader: &mut OptimisticSymbolReader,
 ) -> Result<()> {
     debug!("reading channel");
     let size = buffers[chan].data.size();
@@ -182,7 +173,7 @@ pub(super) fn decode_modular_channel(
         || size.1 <= IMAGE_PADDING.1
         || size.0 * size.1 <= SMALL_CHANNEL_THRESHOLD
     {
-        return decode_modular_channel_small(buffers, chan, stream_id, header, tree, reader, br);
+        return decode_modular_channel_small(buffers, chan, stream_id, header, tree, reader);
     }
 
     assert_eq!(buffers[chan].data.padding(), IMAGE_PADDING);
@@ -192,17 +183,11 @@ pub(super) fn decode_modular_channel(
 
     let special_tree = specialize_tree(tree, chan, stream_id, size.0, header)?;
     match special_tree {
-        TreeSpecialCase::NoWp(t) => {
-            decode_modular_channel_impl(buffers, chan, t, reader, br, &tree.histograms)
-        }
-        TreeSpecialCase::WpOnly(t) => {
-            decode_modular_channel_impl(buffers, chan, t, reader, br, &tree.histograms)
-        }
+        TreeSpecialCase::NoWp(t) => decode_modular_channel_impl(buffers, chan, t, reader),
+        TreeSpecialCase::WpOnly(t) => decode_modular_channel_impl(buffers, chan, t, reader),
         TreeSpecialCase::SingleGradientOnly(t) => {
-            decode_modular_channel_impl(buffers, chan, t, reader, br, &tree.histograms)
+            decode_modular_channel_impl(buffers, chan, t, reader)
         }
-        TreeSpecialCase::General(t) => {
-            decode_modular_channel_impl(buffers, chan, t, reader, br, &tree.histograms)
-        }
+        TreeSpecialCase::General(t) => decode_modular_channel_impl(buffers, chan, t, reader),
     }
 }

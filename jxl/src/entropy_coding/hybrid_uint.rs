@@ -71,6 +71,21 @@ impl HybridUint {
         let hi = (symbol_nolow & ((1 << self.msb_in_token) - 1)) | (1 << self.msb_in_token);
         Ok((((hi << nbits) | bits) << self.lsb_in_token) | low)
     }
+
+    #[inline]
+    pub fn read_optimistic(&self, symbol: u32, br: &mut BitReader) -> u32 {
+        if symbol < self.split_token {
+            return symbol;
+        }
+        let bits_in_token = self.lsb_in_token + self.msb_in_token;
+        let nbits =
+            self.split_exponent - bits_in_token + ((symbol - self.split_token) >> bits_in_token);
+        let low = symbol & ((1 << self.lsb_in_token) - 1);
+        let symbol_nolow = symbol >> self.lsb_in_token;
+        let bits = br.read_optimistic(nbits as usize) as u32;
+        let hi = (symbol_nolow & ((1 << self.msb_in_token) - 1)) | (1 << self.msb_in_token);
+        (((hi << nbits) | bits) << self.lsb_in_token) | low
+    }
 }
 
 #[cfg(test)]

@@ -437,6 +437,7 @@ impl Table {
         Ok(Table { entries })
     }
 
+    #[inline]
     pub fn read(&self, br: &mut BitReader) -> Result<u32> {
         let mut pos = br.peek(TABLE_BITS) as usize;
         let mut n_bits = self.entries[pos].bits as usize;
@@ -448,6 +449,20 @@ impl Table {
         }
         br.consume(self.entries[pos].bits as usize)?;
         Ok(self.entries[pos].value as u32)
+    }
+
+    #[inline]
+    pub fn read_optimistic(&self, br: &mut BitReader) -> u32 {
+        let mut pos = br.peek(TABLE_BITS) as usize;
+        let mut n_bits = self.entries[pos].bits as usize;
+        if n_bits > TABLE_BITS {
+            br.consume_optimistic(TABLE_BITS);
+            n_bits -= TABLE_BITS;
+            pos += self.entries[pos].value as usize;
+            pos += br.peek(n_bits) as usize;
+        }
+        br.consume_optimistic(self.entries[pos].bits as usize);
+        self.entries[pos].value as u32
     }
 }
 
@@ -471,9 +486,17 @@ impl HuffmanCodes {
             .collect::<Result<_>>()?;
         Ok(HuffmanCodes { tables })
     }
+
+    #[inline]
     pub fn read(&self, br: &mut BitReader, ctx: usize) -> Result<u32> {
         self.tables[ctx].read(br)
     }
+
+    #[inline]
+    pub fn read_optimistic(&self, br: &mut BitReader, ctx: usize) -> u32 {
+        self.tables[ctx].read_optimistic(br)
+    }
+
     pub fn single_symbol(&self, ctx: usize) -> Option<u32> {
         if let TableEntry { bits: 0, value } = self.tables[ctx].entries[0] {
             Some(value as u32)

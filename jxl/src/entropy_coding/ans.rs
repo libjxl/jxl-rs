@@ -350,7 +350,7 @@ impl AnsHistogram {
 
 impl AnsHistogram {
     #[inline]
-    pub fn read(&self, br: &mut BitReader, state: &mut u32) -> Result<u32> {
+    fn read_inner(&self, br: &mut BitReader, state: &mut u32) -> (u32, u32) {
         let idx = *state & 0xfff;
         let i = (idx >> self.log_bucket_size) as usize;
         let pos = idx & self.bucket_mask;
@@ -373,12 +373,24 @@ impl AnsHistogram {
         let select_appended = (next_state < (1 << 16)) as u32;
         let appended_state = (next_state << 16) | (br.peek(16) as u32);
         *state = (appended_state * select_appended) | (next_state * (1 - select_appended));
+        (symbol, select_appended)
+    }
+
+    #[inline]
+    pub fn read(&self, br: &mut BitReader, state: &mut u32) -> Result<u32> {
+        let (symbol, select_appended) = self.read_inner(br, state);
         br.consume((16 * select_appended) as usize)?;
         Ok(symbol)
     }
 
+    #[inline]
+    pub fn read_optimistic(&self, br: &mut BitReader, state: &mut u32) -> u32 {
+        let (symbol, select_appended) = self.read_inner(br, state);
+        br.consume_optimistic((16 * select_appended) as usize);
+        symbol
+    }
+
     // For optimizing fast-lossless case.
-    #[allow(unused)]
     #[inline]
     pub fn single_symbol(&self) -> Option<u32> {
         self.single_symbol
@@ -422,6 +434,11 @@ impl AnsReader {
     #[inline]
     pub fn read(&mut self, codes: &AnsCodes, br: &mut BitReader, ctx: usize) -> Result<u32> {
         codes.histograms[ctx].read(br, &mut self.0)
+    }
+
+    #[inline]
+    pub fn read_optimistic(&mut self, codes: &AnsCodes, br: &mut BitReader, ctx: usize) -> u32 {
+        codes.histograms[ctx].read_optimistic(br, &mut self.0)
     }
 
     pub fn check_final_state(self) -> Result<()> {
