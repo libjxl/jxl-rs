@@ -5,7 +5,7 @@
 
 use std::{fmt::Debug, marker::PhantomData};
 
-use crate::error::Result;
+use crate::{error::Result, util::CACHE_LINE_BYTE_SIZE};
 
 use super::{Rect, internal::RawImageBuffer};
 
@@ -23,8 +23,13 @@ impl OwnedRawImage {
     pub fn new_zeroed_with_padding(
         byte_size: (usize, usize),
         offset: (usize, usize),
-        padding: (usize, usize),
+        mut padding: (usize, usize),
     ) -> Result<Self> {
+        // Since RawImageBuffer::try_allocate will round up the length of a row to a cache line,
+        // might as well declare that as available padding space.
+        if !(padding.0 + byte_size.0).is_multiple_of(CACHE_LINE_BYTE_SIZE) {
+            padding.0 += CACHE_LINE_BYTE_SIZE - (padding.0 + byte_size.0) % CACHE_LINE_BYTE_SIZE;
+        }
         Ok(Self {
             // Safety note: the returned memory is initialized and part of a single allocation of
             // the correct length.

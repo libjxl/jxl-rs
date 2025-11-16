@@ -45,9 +45,6 @@ fn decode_modular_channel_small(
     let mut references = Image::<i32>::new((num_ref_props, size.0))?;
     let num_properties = NUM_NONREF_PROPERTIES + num_ref_props;
 
-    assert_eq!(buffers[chan].data.padding(), IMAGE_PADDING);
-    assert_eq!(buffers[chan].data.offset(), IMAGE_OFFSET);
-
     const { assert!(IMAGE_OFFSET.1 == 2) };
 
     for y in 0..size.1 {
@@ -184,7 +181,8 @@ pub(super) fn decode_modular_channel(
         return decode_modular_channel_small(buffers, chan, stream_id, header, tree, reader, br);
     }
 
-    assert_eq!(buffers[chan].data.padding(), IMAGE_PADDING);
+    assert_eq!(buffers[chan].data.padding().1, IMAGE_PADDING.1);
+    assert!(buffers[chan].data.padding().0 >= IMAGE_PADDING.0);
     assert_eq!(buffers[chan].data.offset(), IMAGE_OFFSET);
 
     // We now know the channel has size at least IMAGE_PADDING.

@@ -19,8 +19,8 @@ pub const fn num_per_cache_line<T>() -> usize {
     CACHE_LINE_BYTE_SIZE / std::mem::size_of::<T>()
 }
 
-pub fn round_up_size_to_two_cache_lines<T>(size: usize) -> usize {
-    let n = const { num_per_cache_line::<T>() * 2 };
+pub fn round_up_size_to_cache_line<T>(size: usize) -> usize {
+    let n = const { num_per_cache_line::<T>() };
     size.div_ceil(n) * n
 }
 

@@ -13,7 +13,7 @@ use crate::{
         RenderPipelineInOutStage, RenderPipelineInPlaceStage, RunInOutStage, RunInPlaceStage,
         internal::PipelineBuffer,
     },
-    util::{round_up_size_to_two_cache_lines, tracing_wrappers::*},
+    util::{round_up_size_to_cache_line, tracing_wrappers::*},
 };
 
 impl PipelineBuffer for Image<f64> {
@@ -39,7 +39,7 @@ impl<T: RenderPipelineInPlaceStage> RunInPlaceStage<Image<f64>> for T {
         }
         let mut buffer =
             vec![
-                vec![T::Type::default(); round_up_size_to_two_cache_lines::<T::Type>(chunk_size)];
+                vec![T::Type::default(); round_up_size_to_cache_line::<T::Type>(chunk_size)];
                 numc
             ];
         for y in 0..size.1 {
@@ -101,8 +101,8 @@ impl<T: RenderPipelineInOutStage> RunInOutStage<Image<f64>> for T {
                 vec![
                     T::InputT::default();
                     // Double rounding make sure that we always have enough buffer for reading a whole SIMD lane.
-                    round_up_size_to_two_cache_lines::<T::OutputT>(
-                        round_up_size_to_two_cache_lines::<T::OutputT>(chunk_size)
+                    round_up_size_to_cache_line::<T::OutputT>(
+                        round_up_size_to_cache_line::<T::OutputT>(chunk_size)
                             + T::BORDER.0 as usize * 2
                     )
                 ];
@@ -114,7 +114,7 @@ impl<T: RenderPipelineInOutStage> RunInOutStage<Image<f64>> for T {
             vec![
                 vec![
                     T::OutputT::default();
-                    round_up_size_to_two_cache_lines::<T::OutputT>(chunk_size)
+                    round_up_size_to_cache_line::<T::OutputT>(chunk_size)
                         << T::SHIFT.0
                 ];
                 1 << T::SHIFT.1

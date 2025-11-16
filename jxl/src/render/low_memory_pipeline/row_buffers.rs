@@ -16,7 +16,7 @@ use crate::{
 };
 
 /// Temporary storage for data rows. Note that the first pixel of the group is expected to be
-/// located *two cachelines worth of data* inside the row.
+/// located *one cacheline worth of data* inside the row.
 pub struct RowBuffer {
     buffer: Box<[CacheLine]>,
     // Distance (in number of *cache lines*) between the start of two rows.
@@ -36,9 +36,9 @@ impl RowBuffer {
         row_len: usize,
     ) -> Result<Self> {
         let num_rows = (1 << y_shift) + 2 * next_y_border;
-        // Input offset is at *one* cacheline, and we need up to *three* cachelines on the other
+        // Input offset is at *one* cacheline, and we need up to *two* cachelines on the other
         // side as the data might exceed xsize slightly.
-        let row_stride = (row_len * data_type.size()).div_ceil(CACHE_LINE_BYTE_SIZE) + 4;
+        let row_stride = (row_len * data_type.size()).div_ceil(CACHE_LINE_BYTE_SIZE) + 3;
         let mut buffer = Vec::<CacheLine>::new();
         buffer.try_reserve_exact(row_stride * num_rows)?;
         buffer.resize(row_stride * num_rows, CacheLine::default());
