@@ -266,7 +266,7 @@ mod test {
     use crate::headers::encodings::Empty;
     use crate::image::Image;
     use crate::render::test::make_and_run_simple_pipeline;
-    use crate::util::round_up_size_to_two_cache_lines;
+    use crate::util::round_up_size_to_cache_line;
     use crate::util::test::assert_all_almost_abs_eq;
     use jxl_simd::{ScalarDescriptor, SimdDescriptor, test_all_instruction_sets};
 
@@ -310,9 +310,9 @@ mod test {
         arbtest::arbtest(|u| {
             let xsize = u.arbitrary_len::<usize>()?;
             let intensity_target = u.arbitrary::<u8>()? as f32 * 2.0 + 1.0;
-            let mut row_x = vec![0.0; round_up_size_to_two_cache_lines::<f32>(xsize)];
-            let mut row_y = vec![0.0; round_up_size_to_two_cache_lines::<f32>(xsize)];
-            let mut row_b = vec![0.0; round_up_size_to_two_cache_lines::<f32>(xsize)];
+            let mut row_x = vec![0.0; round_up_size_to_cache_line::<f32>(xsize)];
+            let mut row_y = vec![0.0; round_up_size_to_cache_line::<f32>(xsize)];
+            let mut row_b = vec![0.0; round_up_size_to_cache_line::<f32>(xsize)];
 
             for i in 0..xsize {
                 row_x[i] = u.arbitrary::<i16>()? as f32 * (0.07 / i16::MAX as f32);
