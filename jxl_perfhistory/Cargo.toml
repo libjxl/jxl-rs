@@ -1,0 +1,16 @@
+[package]
+name = "jxl_perfhistory"
+version = "0.1.0"
+edition = "2024"
+license = "BSD-3-Clause"
+
+[dependencies]
+clap = { version = "4.5.18", features = ["derive"] }
+git2 = "0.19"
+color-eyre = "0.6.5"
+statrs = "0.18.0"
+tempdir = "0.3.7"
+rand = "0.9.2"
+
+[lints]
+workspace = true
