@@ -9,7 +9,7 @@ use jxl::api::{JxlColorType, JxlDecoderOptions};
 use jxl::image::Image;
 use jxl_cli::{dec, enc};
 use std::fs::File;
-use std::io::{BufWriter, Read, Write};
+use std::io::{BufReader, BufWriter, Read, Write};
 use std::path::PathBuf;
 use std::time::Duration;
 use std::{fs, mem};
@@ -133,20 +133,30 @@ fn main() -> Result<()> {
         options.render_spot_colors = !numpy_output;
         options
     };
-    let mut input_bytes = Vec::<u8>::new();
-    file.read_to_end(&mut input_bytes)?;
-    let input_buffer = input_bytes.as_slice();
 
     let reps = opt.num_reps.unwrap_or(1);
     let mut duration_sum = Duration::new(0, 0);
-    let mut image_data = (0..reps)
-        .try_fold(None, |_, _| -> Result<Option<dec::DecodeOutput<f32>>> {
-            let (iteration_image_data, iteration_duration) =
-                dec::decode_bytes(input_buffer, options())?;
-            duration_sum += iteration_duration;
-            Ok(Some(iteration_image_data))
-        })?
-        .unwrap();
+
+    let mut image_data = if reps > 1 {
+        // For multiple repetitions (benchmarking), read into memory to avoid I/O variability
+        let mut input_bytes = Vec::<u8>::new();
+        file.read_to_end(&mut input_bytes)?;
+        (0..reps)
+            .try_fold(None, |_, _| -> Result<Option<dec::DecodeOutput<f32>>> {
+                let mut input = input_bytes.as_slice();
+                let (iteration_image_data, iteration_duration) =
+                    dec::decode_frames(&mut input, options())?;
+                duration_sum += iteration_duration;
+                Ok(Some(iteration_image_data))
+            })?
+            .unwrap()
+    } else {
+        // For single decode, stream from file
+        let mut reader = BufReader::new(file);
+        let (image_data, duration) = dec::decode_frames(&mut reader, options())?;
+        duration_sum = duration;
+        image_data
+    };
 
     let data_icc_result = save_icc(
         image_data.output_profile.as_icc().as_slice(),
