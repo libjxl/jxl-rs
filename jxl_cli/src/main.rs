@@ -5,18 +5,14 @@
 
 use clap::Parser;
 use color_eyre::eyre::{Result, WrapErr, eyre};
-use jxl::api::{
-    JxlAnimation, JxlBitDepth, JxlColorProfile, JxlColorType, JxlDecoder, JxlDecoderOptions,
-    JxlOutputBuffer,
-};
-use jxl::image::{Image, ImageDataType, Rect};
+use jxl::api::{JxlColorType, JxlDecoderOptions};
+use jxl::image::Image;
+use jxl_cli::{dec, enc};
 use std::fs::File;
 use std::io::{BufWriter, Read, Write};
 use std::path::PathBuf;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 use std::{fs, mem};
-
-pub mod enc;
 
 fn save_icc(icc_bytes: &[u8], icc_filename: Option<&PathBuf>) -> Result<()> {
     icc_filename.map_or(Ok(()), |path| {
@@ -25,24 +21,8 @@ fn save_icc(icc_bytes: &[u8], icc_filename: Option<&PathBuf>) -> Result<()> {
     })
 }
 
-pub struct ImageFrame<T: ImageDataType> {
-    pub channels: Vec<Image<T>>,
-    pub duration: f64,
-    pub color_type: JxlColorType,
-}
-
-pub struct DecodeOutput<T: ImageDataType> {
-    pub size: (usize, usize),
-    pub frames: Vec<ImageFrame<T>>,
-    pub original_bit_depth: JxlBitDepth,
-    pub output_profile: JxlColorProfile,
-    pub jxl_animation: Option<JxlAnimation>,
-    pub original_icc_result: Result<()>,
-    pub data_icc_result: Result<()>,
-}
-
 fn save_image(
-    image_data: &DecodeOutput<f32>,
+    image_data: &dec::DecodeOutput<f32>,
     bit_depth: u32,
     output_filename: &PathBuf,
 ) -> Result<()> {
@@ -129,117 +109,6 @@ fn planes_from_interleaved(interleaved: &Image<f32>) -> Result<Vec<Image<f32>>> 
     Ok(vec![r_image, g_image, b_image])
 }
 
-fn decode_bytes(
-    mut input_buffer: &[u8],
-    decoder_options: JxlDecoderOptions,
-    cli_opt: &Opt,
-) -> Result<(DecodeOutput<f32>, Duration)> {
-    let start = Instant::now();
-
-    let mut initialized_decoder = JxlDecoder::<jxl::api::states::Initialized>::new(decoder_options);
-
-    // Process until we have image info
-    let mut decoder_with_image_info = loop {
-        match initialized_decoder.process(&mut input_buffer)? {
-            jxl::api::ProcessingResult::Complete { result } => break Ok(result),
-            jxl::api::ProcessingResult::NeedsMoreInput { fallback, .. } => {
-                if input_buffer.is_empty() {
-                    break Err(eyre!("Source file {:?} truncated", cli_opt.input));
-                }
-                initialized_decoder = fallback;
-            }
-        }
-    }?;
-
-    let info = decoder_with_image_info.basic_info();
-    let embedded_profile = decoder_with_image_info.embedded_color_profile();
-    let output_profile = decoder_with_image_info.output_color_profile().clone();
-    let data_icc_result = save_icc(output_profile.as_icc().as_slice(), cli_opt.icc_out.as_ref());
-
-    let mut image_data = DecodeOutput {
-        size: info.size,
-        frames: Vec::new(),
-        original_bit_depth: info.bit_depth.clone(),
-        output_profile,
-        jxl_animation: info.animation.clone(),
-        original_icc_result: save_icc(
-            embedded_profile.as_icc().as_slice(),
-            cli_opt.original_icc_out.as_ref(),
-        ),
-        data_icc_result,
-    };
-
-    let extra_channels = info.extra_channels.len();
-    let pixel_format = decoder_with_image_info.current_pixel_format().clone();
-    let color_type = pixel_format.color_type;
-    // TODO(zond): This is the way the API works right now, let's improve it when the API is cleverer.
-    let samples_per_pixel = if color_type == JxlColorType::Grayscale {
-        1
-    } else {
-        3
-    };
-
-    loop {
-        let mut decoder_with_frame_info = loop {
-            match decoder_with_image_info.process(&mut input_buffer)? {
-                jxl::api::ProcessingResult::Complete { result } => break Ok(result),
-                jxl::api::ProcessingResult::NeedsMoreInput { fallback, .. } => {
-                    if input_buffer.is_empty() {
-                        break Err(eyre!("Source file {:?} truncated", cli_opt.input));
-                    }
-                    decoder_with_image_info = fallback;
-                }
-            }
-        }?;
-
-        let frame_header = decoder_with_frame_info.frame_header();
-
-        let mut outputs = vec![Image::<f32>::new((
-            image_data.size.0 * samples_per_pixel,
-            image_data.size.1,
-        ))?];
-
-        for _ in 0..extra_channels {
-            outputs.push(Image::<f32>::new(image_data.size)?);
-        }
-
-        let mut output_bufs: Vec<JxlOutputBuffer<'_>> = outputs
-            .iter_mut()
-            .map(|x| {
-                let rect = Rect {
-                    size: x.size(),
-                    origin: (0, 0),
-                };
-                JxlOutputBuffer::from_image_rect_mut(x.get_rect_mut(rect).into_raw())
-            })
-            .collect();
-
-        decoder_with_image_info = loop {
-            match decoder_with_frame_info.process(&mut input_buffer, &mut output_bufs)? {
-                jxl::api::ProcessingResult::Complete { result } => break Ok(result),
-                jxl::api::ProcessingResult::NeedsMoreInput { fallback, .. } => {
-                    if input_buffer.is_empty() {
-                        break Err(eyre!("Source file {:?} truncated", cli_opt.input));
-                    }
-                    decoder_with_frame_info = fallback;
-                }
-            }
-        }?;
-
-        image_data.frames.push(ImageFrame {
-            duration: frame_header.duration.unwrap_or(0.0),
-            channels: outputs,
-            color_type,
-        });
-
-        if !decoder_with_image_info.has_more_frames() {
-            break;
-        }
-    }
-
-    Ok((image_data, start.elapsed()))
-}
-
 fn main() -> Result<()> {
     #[cfg(feature = "tracing-subscriber")]
     {
@@ -271,13 +140,22 @@ fn main() -> Result<()> {
     let reps = opt.num_reps.unwrap_or(1);
     let mut duration_sum = Duration::new(0, 0);
     let mut image_data = (0..reps)
-        .try_fold(None, |_, _| -> Result<Option<DecodeOutput<f32>>> {
+        .try_fold(None, |_, _| -> Result<Option<dec::DecodeOutput<f32>>> {
             let (iteration_image_data, iteration_duration) =
-                decode_bytes(input_buffer, options(), &opt)?;
+                dec::decode_bytes(input_buffer, options())?;
             duration_sum += iteration_duration;
             Ok(Some(iteration_image_data))
         })?
         .unwrap();
+
+    let data_icc_result = save_icc(
+        image_data.output_profile.as_icc().as_slice(),
+        opt.icc_out.as_ref(),
+    );
+    let original_icc_result = save_icc(
+        image_data.embedded_profile.as_icc().as_slice(),
+        opt.original_icc_out.as_ref(),
+    );
 
     for frame in image_data.frames.iter_mut() {
         if frame.color_type != JxlColorType::Grayscale {
@@ -306,10 +184,10 @@ fn main() -> Result<()> {
         };
         let image_result = save_image(&image_data, output_bit_depth, &path);
 
-        if let Err(err) = &image_data.original_icc_result {
+        if let Err(err) = &original_icc_result {
             println!("Failed to save original ICC profile: {err}");
         }
-        if let Err(err) = &image_data.data_icc_result {
+        if let Err(err) = &data_icc_result {
             println!("Failed to save data ICC profile: {err}");
         }
         if let Err(ref err) = image_result {
@@ -318,8 +196,8 @@ fn main() -> Result<()> {
         image_result
     });
 
-    image_data.original_icc_result?;
-    image_data.data_icc_result?;
+    original_icc_result?;
+    data_icc_result?;
 
     image_result.unwrap_or(Ok(()))?;
 

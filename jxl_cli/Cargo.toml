@@ -17,6 +17,7 @@ color-eyre = "0.6.5"
 
 [dev-dependencies]
 jxl_macros = { path = "../jxl_macros", features = ["test"] }
+criterion = { version = "0.7.0", features = ["html_reports"] }
 
 [features]
 tracing-subscriber = ["dep:tracing-subscriber", "jxl/tracing"]
@@ -31,3 +32,7 @@ neon = ["jxl/neon"]
 
 [lints]
 workspace = true
+
+[[bench]]
+name = "decode"
+harness = false

@@ -7,7 +7,7 @@ pub use jxl_exr::to_exr;
 
 #[cfg(not(feature = "exr"))]
 mod jxl_exr {
-    use crate::DecodeOutput;
+    use crate::dec::DecodeOutput;
     use color_eyre::eyre::{Result, eyre};
     use std::io::{Seek, Write};
 
@@ -31,7 +31,7 @@ mod jxl_exr {
     use exr::meta::attribute::Chromaticities;
     use exr::prelude::*;
 
-    use crate::DecodeOutput;
+    use crate::dec::DecodeOutput;
 
     pub fn to_exr<Writer: Write + Seek>(
         image_data: &DecodeOutput<f32>,
