@@ -8,8 +8,8 @@ use std::time::{Duration, Instant};
 use color_eyre::eyre::{Result, eyre};
 use jxl::{
     api::{
-        JxlAnimation, JxlBitDepth, JxlColorProfile, JxlColorType, JxlDecoder, JxlDecoderOptions,
-        JxlOutputBuffer, ProcessingResult, states::WithImageInfo,
+        JxlAnimation, JxlBitDepth, JxlBitstreamInput, JxlColorProfile, JxlColorType, JxlDecoder,
+        JxlDecoderOptions, JxlOutputBuffer, ProcessingResult, states::WithImageInfo,
     },
     image::{Image, ImageDataType, Rect},
 };
@@ -29,25 +29,27 @@ pub struct DecodeOutput<T: ImageDataType> {
     pub jxl_animation: Option<JxlAnimation>,
 }
 
-pub fn decode_header(
-    input_buffer: &mut &[u8],
+pub fn decode_header<In: JxlBitstreamInput>(
+    input: &mut In,
     decoder_options: JxlDecoderOptions,
 ) -> Result<JxlDecoder<WithImageInfo>> {
     let initialized_decoder = JxlDecoder::<jxl::api::states::Initialized>::new(decoder_options);
 
-    match initialized_decoder.process(input_buffer)? {
+    match initialized_decoder.process(input)? {
         ProcessingResult::Complete { result } => Ok(result),
         ProcessingResult::NeedsMoreInput { .. } => Err(eyre!("Source file truncated")),
     }
 }
 
-pub fn decode_bytes(
-    mut input_buffer: &[u8],
+/// Decode a JXL image from any input that implements JxlBitstreamInput.
+/// This works with both byte slices (`&mut &[u8]`) and buffered readers (`&mut BufReader<File>`).
+pub fn decode_frames<In: JxlBitstreamInput>(
+    input: &mut In,
     decoder_options: JxlDecoderOptions,
 ) -> Result<(DecodeOutput<f32>, Duration)> {
     let start = Instant::now();
 
-    let mut decoder_with_image_info = decode_header(&mut input_buffer, decoder_options)?;
+    let mut decoder_with_image_info = decode_header(input, decoder_options)?;
 
     let info = decoder_with_image_info.basic_info();
     let embedded_profile = decoder_with_image_info.embedded_color_profile().clone();
@@ -73,7 +75,7 @@ pub fn decode_bytes(
     };
 
     loop {
-        let decoder_with_frame_info = match decoder_with_image_info.process(&mut input_buffer)? {
+        let decoder_with_frame_info = match decoder_with_image_info.process(input)? {
             ProcessingResult::Complete { result } => result,
             ProcessingResult::NeedsMoreInput { .. } => return Err(eyre!("Source file truncated")),
         };
@@ -100,9 +102,7 @@ pub fn decode_bytes(
             })
             .collect();
 
-        decoder_with_image_info = match decoder_with_frame_info
-            .process(&mut input_buffer, &mut output_bufs)?
-        {
+        decoder_with_image_info = match decoder_with_frame_info.process(input, &mut output_bufs)? {
             ProcessingResult::Complete { result } => result,
             ProcessingResult::NeedsMoreInput { .. } => return Err(eyre!("Source file truncated")),
         };
