@@ -243,24 +243,39 @@ impl CodestreamParser {
                 assert!(self.frame.is_none());
                 assert!(self.has_more_frames);
 
-                let available_codestream = match box_parser.get_more_codestream(input) {
-                    Err(Error::OutOfBounds(_)) => 0,
-                    Ok(c) => c as usize,
-                    Err(e) => return Err(e),
-                };
-                let c = self.non_section_buf.refill(
-                    |buf| {
-                        if !box_parser.box_buffer.is_empty() {
-                            Ok(box_parser.box_buffer.take(buf))
-                        } else {
-                            input.read(buf)
-                        }
-                    },
-                    Some(available_codestream),
-                )?;
-                box_parser.consume_codestream(c as u64);
+                // Loop to handle incremental parsing (e.g. large ICC profiles) that may need
+                // multiple buffer refills to complete.
+                loop {
+                    let available_codestream = match box_parser.get_more_codestream(input) {
+                        Err(Error::OutOfBounds(_)) => 0,
+                        Ok(c) => c as usize,
+                        Err(e) => return Err(e),
+                    };
+                    let c = self.non_section_buf.refill(
+                        |buf| {
+                            if !box_parser.box_buffer.is_empty() {
+                                Ok(box_parser.box_buffer.take(buf))
+                            } else {
+                                input.read(buf)
+                            }
+                        },
+                        Some(available_codestream),
+                    )?;
+                    box_parser.consume_codestream(c as u64);
 
-                self.process_non_section(decode_options)?;
+                    match self.process_non_section(decode_options) {
+                        Ok(()) => break,
+                        Err(Error::OutOfBounds(n)) => {
+                            // Check if input still has data - if so, refill and retry
+                            if input.available_bytes().unwrap_or(0) > 0 {
+                                continue;
+                            } else {
+                                return Err(Error::OutOfBounds(n));
+                            }
+                        }
+                        Err(e) => return Err(e),
+                    }
+                }
 
                 if self.decoder_state.is_some() && self.frame_header.is_none() {
                     // Return to caller if we found image info.
