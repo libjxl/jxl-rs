@@ -415,4 +415,102 @@ pub(crate) mod tests {
         };
         assert_eq!(decoder.basic_info().preview_size, Some((16, 16)));
     }
+
+    #[test]
+    fn test_num_completed_passes() {
+        use crate::image::{Image, Rect};
+        let file = std::fs::read("resources/test/basic.jxl").unwrap();
+        let options = JxlDecoderOptions::default();
+        let mut decoder = JxlDecoder::<states::Initialized>::new(options);
+        let mut input = file.as_slice();
+        // Process until we have image info
+        let mut decoder_with_info = loop {
+            match decoder.process(&mut input).unwrap() {
+                ProcessingResult::Complete { result } => break result,
+                ProcessingResult::NeedsMoreInput { fallback, .. } => decoder = fallback,
+            }
+        };
+        let info = decoder_with_info.basic_info().clone();
+        let mut decoder_with_frame = loop {
+            match decoder_with_info.process(&mut input).unwrap() {
+                ProcessingResult::Complete { result } => break result,
+                ProcessingResult::NeedsMoreInput { fallback, .. } => {
+                    decoder_with_info = fallback;
+                }
+            }
+        };
+        // Before processing frame, passes should be 0
+        assert_eq!(decoder_with_frame.num_completed_passes(), 0);
+        // Process the frame
+        let mut output = Image::<f32>::new((info.size.0 * 3, info.size.1)).unwrap();
+        let rect = Rect {
+            size: output.size(),
+            origin: (0, 0),
+        };
+        let mut bufs = [JxlOutputBuffer::from_image_rect_mut(
+            output.get_rect_mut(rect).into_raw(),
+        )];
+        loop {
+            match decoder_with_frame.process(&mut input, &mut bufs).unwrap() {
+                ProcessingResult::Complete { .. } => break,
+                ProcessingResult::NeedsMoreInput { fallback, .. } => decoder_with_frame = fallback,
+            }
+        }
+    }
+
+    #[test]
+    fn test_set_pixel_format() {
+        use crate::api::{JxlColorType, JxlDataFormat, JxlPixelFormat};
+
+        let file = std::fs::read("resources/test/basic.jxl").unwrap();
+        let options = JxlDecoderOptions::default();
+        let mut decoder = JxlDecoder::<states::Initialized>::new(options);
+        let mut input = file.as_slice();
+        let mut decoder = loop {
+            match decoder.process(&mut input).unwrap() {
+                ProcessingResult::Complete { result } => break result,
+                ProcessingResult::NeedsMoreInput { fallback, .. } => decoder = fallback,
+            }
+        };
+        // Check default pixel format
+        let default_format = decoder.current_pixel_format().clone();
+        assert_eq!(default_format.color_type, JxlColorType::Rgb);
+
+        // Set a new pixel format
+        let new_format = JxlPixelFormat {
+            color_type: JxlColorType::Grayscale,
+            color_data_format: Some(JxlDataFormat::U8 { bit_depth: 8 }),
+            extra_channel_format: vec![],
+        };
+        decoder.set_pixel_format(new_format.clone());
+
+        // Verify it was set
+        assert_eq!(decoder.current_pixel_format(), &new_format);
+    }
+
+    #[test]
+    fn test_set_output_color_profile() {
+        use crate::api::JxlColorProfile;
+
+        let file = std::fs::read("resources/test/basic.jxl").unwrap();
+        let options = JxlDecoderOptions::default();
+        let mut decoder = JxlDecoder::<states::Initialized>::new(options);
+        let mut input = file.as_slice();
+        let mut decoder = loop {
+            match decoder.process(&mut input).unwrap() {
+                ProcessingResult::Complete { result } => break result,
+                ProcessingResult::NeedsMoreInput { fallback, .. } => decoder = fallback,
+            }
+        };
+
+        // Get the embedded profile and set it as output (should work)
+        let embedded = decoder.embedded_color_profile().clone();
+        let result = decoder.set_output_color_profile(embedded);
+        assert!(result.is_ok());
+
+        // Setting an ICC profile without CMS should fail
+        let icc_profile = JxlColorProfile::Icc(vec![0u8; 100]);
+        let result = decoder.set_output_color_profile(icc_profile);
+        assert!(result.is_err());
+    }
 }

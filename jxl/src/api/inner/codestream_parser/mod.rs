@@ -116,6 +116,11 @@ impl CodestreamParser {
         }
     }
 
+    /// Returns the number of passes that are fully completed across all groups.
+    pub(super) fn num_completed_passes(&self) -> usize {
+        self.section_state.num_completed_passes()
+    }
+
     #[cfg(test)]
     pub(crate) fn set_use_simple_pipeline(&mut self, u: bool) {
         self.decoder_state

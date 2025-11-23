@@ -63,10 +63,11 @@ impl JxlDecoderInner {
     /// Specifies the preferred color profile to be used for outputting data.
     /// Same semantics as JxlDecoderSetOutputColorProfile.
     pub fn set_output_color_profile(&mut self, profile: JxlColorProfile) -> Result<()> {
-        if let (JxlColorProfile::Icc(_), None) = (profile, &self.options.cms) {
+        if let (JxlColorProfile::Icc(_), None) = (&profile, &self.options.cms) {
             return Err(Error::ICCOutputNoCMS);
         }
-        unimplemented!()
+        self.codestream_parser.output_color_profile = Some(profile);
+        Ok(())
     }
 
     pub fn current_pixel_format(&self) -> Option<&JxlPixelFormat> {
@@ -74,8 +75,7 @@ impl JxlDecoderInner {
     }
 
     pub fn set_pixel_format(&mut self, pixel_format: JxlPixelFormat) {
-        drop(pixel_format);
-        unimplemented!()
+        self.codestream_parser.pixel_format = Some(pixel_format);
     }
 
     pub fn frame_header(&self) -> Option<JxlFrameHeader> {
@@ -94,9 +94,11 @@ impl JxlDecoderInner {
             size,
         })
     }
+
     /// Number of passes we have full data for.
+    /// Returns the minimum number of passes completed across all groups.
     pub fn num_completed_passes(&self) -> Option<usize> {
-        None // TODO.
+        Some(self.codestream_parser.num_completed_passes())
     }
 
     /// Rewinds a decoder to the start of the file, allowing past frames to be displayed again.

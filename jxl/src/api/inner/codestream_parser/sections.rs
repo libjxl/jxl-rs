@@ -28,6 +28,16 @@ impl SectionState {
             completed_passes: vec![0; num_groups],
         }
     }
+
+    /// Returns the number of passes that are fully completed across all groups.
+    /// A pass is fully completed when all groups have decoded that pass.
+    pub(super) fn num_completed_passes(&self) -> usize {
+        self.completed_passes
+            .iter()
+            .copied()
+            .min()
+            .unwrap_or(0) as usize
+    }
 }
 
 // No guarantees on the order of calls to f, or the order of retained elements in vec.
