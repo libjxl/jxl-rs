@@ -6,6 +6,7 @@
 use std::{borrow::Cow, fmt};
 
 use crate::{
+    color::tf::{hlg_to_scene, linear_to_pq_precise, pq_to_linear_precise},
     error::{Error, Result},
     headers::color_encoding::{
         ColorEncoding, ColorSpace, Primaries, RenderingIntent, TransferFunction, WhitePoint,
@@ -1591,15 +1592,15 @@ struct Rec2408ToneMapper {
 
 impl Rec2408ToneMapper {
     fn new(source_range: (f32, f32), target_range: (f32, f32), luminances: [f32; 3]) -> Self {
-        let pq_mastering_min = Self::inv_eotf(source_range.0);
-        let pq_mastering_max = Self::inv_eotf(source_range.1);
+        let pq_mastering_min = Self::linear_to_pq(source_range.0);
+        let pq_mastering_max = Self::linear_to_pq(source_range.1);
         let pq_mastering_range = pq_mastering_max - pq_mastering_min;
         let inv_pq_mastering_range = 1.0 / pq_mastering_range;
 
         let min_lum =
-            (Self::inv_eotf(target_range.0) - pq_mastering_min) * inv_pq_mastering_range;
+            (Self::linear_to_pq(target_range.0) - pq_mastering_min) * inv_pq_mastering_range;
         let max_lum =
-            (Self::inv_eotf(target_range.1) - pq_mastering_min) * inv_pq_mastering_range;
+            (Self::linear_to_pq(target_range.1) - pq_mastering_min) * inv_pq_mastering_range;
         let ks = 1.5 * max_lum - 0.5;
 
         Self {
@@ -1619,34 +1620,20 @@ impl Rec2408ToneMapper {
         }
     }
 
-    /// PQ EOTF inverse (Encoded from Display)
-    #[allow(clippy::excessive_precision)] // PQ constants are exact per SMPTE ST 2084
-    fn inv_eotf(luminance: f32) -> f32 {
-        // PQ transfer function constants from SMPTE ST 2084
-        const M1: f32 = 0.1593017578125;
-        const M2: f32 = 78.84375;
-        const C1: f32 = 0.8359375;
-        const C2: f32 = 18.8515625;
-        const C3: f32 = 18.6875;
-
-        let y = (luminance / 10000.0).max(0.0);
-        let ym1 = y.powf(M1);
-        ((C1 + C2 * ym1) / (1.0 + C3 * ym1)).powf(M2)
+    /// PQ inverse EOTF - converts luminance (nits) to PQ encoded value.
+    /// Uses the existing `linear_to_pq_precise` from color::tf.
+    fn linear_to_pq(luminance: f32) -> f32 {
+        let mut val = [luminance / 10000.0]; // Normalize to 0-1 for 10000 nits
+        linear_to_pq_precise(10000.0, &mut val);
+        val[0]
     }
 
-    /// PQ EOTF (Display from Encoded)
-    #[allow(clippy::excessive_precision)] // PQ constants are exact per SMPTE ST 2084
-    fn eotf(encoded: f32) -> f32 {
-        const M1: f32 = 0.1593017578125;
-        const M2: f32 = 78.84375;
-        const C1: f32 = 0.8359375;
-        const C2: f32 = 18.8515625;
-        const C3: f32 = 18.6875;
-
-        let e_1_m2 = encoded.powf(1.0 / M2);
-        let num = (e_1_m2 - C1).max(0.0);
-        let den = C2 - C3 * e_1_m2;
-        10000.0 * (num / den).powf(1.0 / M1)
+    /// PQ EOTF - converts PQ encoded value to luminance (nits).
+    /// Uses the existing `pq_to_linear_precise` from color::tf.
+    fn pq_to_linear(encoded: f32) -> f32 {
+        let mut val = [encoded];
+        pq_to_linear_precise(10000.0, &mut val);
+        val[0] * 10000.0
     }
 
     fn t(&self, a: f32) -> f32 {
@@ -1669,7 +1656,7 @@ impl Rec2408ToneMapper {
                 + self.luminances[1] * rgb[1]
                 + self.luminances[2] * rgb[2]);
 
-        let normalized_pq = ((Self::inv_eotf(luminance) - self.pq_mastering_min)
+        let normalized_pq = ((Self::linear_to_pq(luminance) - self.pq_mastering_min)
             * self.inv_pq_mastering_range)
             .min(1.0);
 
@@ -1684,7 +1671,7 @@ impl Rec2408ToneMapper {
         let one_minus_e2_4 = one_minus_e2_2 * one_minus_e2_2;
         let e3 = self.min_lum * one_minus_e2_4 + e2;
         let e4 = e3 * self.pq_mastering_range + self.pq_mastering_min;
-        let d4 = Self::eotf(e4);
+        let d4 = Self::pq_to_linear(e4);
         let new_luminance = d4.clamp(0.0, self.target_range.1);
 
         let min_luminance = 1e-6;
@@ -1699,35 +1686,25 @@ impl Rec2408ToneMapper {
     }
 }
 
-/// HLG OOTF for tone mapping HLG content.
-struct HlgOotf {
-    exponent: f32,
-    luminances: [f32; 3],
-    apply_ootf: bool,
-}
+/// Apply HLG OOTF for tone mapping HLG content to SDR.
+/// This implements the HLG OOTF inline for a single pixel, based on the same math
+/// as `color::tf::hlg_scene_to_display` but avoiding the bulk-processing API.
+fn apply_hlg_ootf(rgb: &mut [f32; 3], target_luminance: f32, luminances: [f32; 3]) {
+    // HLG OOTF: scene-referred to display-referred conversion
+    // system_gamma = 1.2 * 1.111^log2(intensity_display / 1000)
+    let system_gamma = 1.2_f32 * 1.111_f32.powf((target_luminance / 1e3).log2());
+    let exp = system_gamma - 1.0;
 
-impl HlgOotf {
-    fn new(source_luminance: f32, target_luminance: f32, luminances: [f32; 3]) -> Self {
-        let gamma = 1.111_f32.powf((target_luminance / source_luminance).log2());
-        let exponent = gamma - 1.0;
-        Self {
-            exponent,
-            luminances,
-            apply_ootf: !(-0.01..=0.01).contains(&exponent),
-        }
+    if exp.abs() < 0.1 {
+        return;
     }
 
-    fn apply(&self, rgb: &mut [f32; 3]) {
-        if !self.apply_ootf {
-            return;
-        }
-        let luminance =
-            self.luminances[0] * rgb[0] + self.luminances[1] * rgb[1] + self.luminances[2] * rgb[2];
-        let ratio = luminance.powf(self.exponent).min(1e9);
-        for v in rgb.iter_mut() {
-            *v *= ratio;
-        }
-    }
+    // Compute luminance and apply OOTF
+    let mixed = rgb[0] * luminances[0] + rgb[1] * luminances[1] + rgb[2] * luminances[2];
+    let mult = crate::util::fast_powf(mixed, exp);
+    rgb[0] *= mult;
+    rgb[1] *= mult;
+    rgb[2] *= mult;
 }
 
 /// Desaturate out-of-gamut pixels while preserving luminance.
@@ -1772,18 +1749,6 @@ fn gamut_map(rgb: &mut [f32; 3], luminances: &[f32; 3], preserve_saturation: f32
     }
 }
 
-/// Helper function to multiply two 3x3 matrices (f32 version)
-fn mul_3x3_f32(a: [[f32; 3]; 3], b: [[f32; 3]; 3]) -> [[f32; 3]; 3] {
-    let mut result = [[0.0f32; 3]; 3];
-    for i in 0..3 {
-        for j in 0..3 {
-            for k in 0..3 {
-                result[i][j] += a[i][k] * b[k][j];
-            }
-        }
-    }
-    result
-}
 
 /// Tone map a single pixel and convert to PCS Lab for ICC profile.
 fn tone_map_pixel(
@@ -1814,16 +1779,17 @@ fn tone_map_pixel(
         JxlTransferFunction::PQ => {
             // PQ EOTF - convert from encoded to linear (normalized to 0-1 range for 10000 nits)
             [
-                Rec2408ToneMapper::eotf(input[0]) / 10000.0,
-                Rec2408ToneMapper::eotf(input[1]) / 10000.0,
-                Rec2408ToneMapper::eotf(input[2]) / 10000.0,
+                Rec2408ToneMapper::pq_to_linear(input[0]) / 10000.0,
+                Rec2408ToneMapper::pq_to_linear(input[1]) / 10000.0,
+                Rec2408ToneMapper::pq_to_linear(input[2]) / 10000.0,
             ]
         }
-        JxlTransferFunction::HLG => [
-            TF_HLG::display_from_encoded(input[0] as f64) as f32,
-            TF_HLG::display_from_encoded(input[1] as f64) as f32,
-            TF_HLG::display_from_encoded(input[2] as f64) as f32,
-        ],
+        JxlTransferFunction::HLG => {
+            // Use existing hlg_to_scene from color::tf
+            let mut vals = [input[0], input[1], input[2]];
+            hlg_to_scene(&mut vals);
+            vals
+        }
         _ => return Err(Error::IccUnsupportedTransferFunction),
     };
 
@@ -1838,8 +1804,8 @@ fn tone_map_pixel(
             tone_mapper.tone_map(&mut linear);
         }
         JxlTransferFunction::HLG => {
-            let ootf = HlgOotf::new(300.0, 80.0, luminances);
-            ootf.apply(&mut linear);
+            // Apply HLG OOTF (80 nit SDR target)
+            apply_hlg_ootf(&mut linear, 80.0, luminances);
         }
         _ => {}
     }
@@ -1848,16 +1814,15 @@ fn tone_map_pixel(
     gamut_map(&mut linear, &luminances, 0.3);
 
     // Get chromatic adaptation matrix
-    let chad_f64 = adapt_to_xyz_d50(wx, wy)?;
-    let chad: [[f32; 3]; 3] =
-        std::array::from_fn(|r| std::array::from_fn(|c| chad_f64[r][c] as f32));
-
-    // Convert primaries_xyz to f32
-    let primaries_xyz_f32: [[f32; 3]; 3] =
-        std::array::from_fn(|r| std::array::from_fn(|c| primaries_xyz[r][c] as f32));
+    let chad = adapt_to_xyz_d50(wx, wy)?;
 
     // Combine matrices: to_xyzd50 = chad * primaries_xyz
-    let to_xyzd50 = mul_3x3_f32(chad, primaries_xyz_f32);
+    // Use mul_3x3_matrix from util which works with f64
+    let to_xyzd50_f64 = mul_3x3_matrix(&chad, &primaries_xyz);
+
+    // Convert to f32 for the final calculation
+    let to_xyzd50: [[f32; 3]; 3] =
+        std::array::from_fn(|r| std::array::from_fn(|c| to_xyzd50_f64[r][c] as f32));
 
     // Apply matrix to get XYZ D50
     let xyz = [
@@ -2081,10 +2046,9 @@ mod test {
     #[test]
     fn test_hlg_ootf() {
         let luminances = [0.2627, 0.6780, 0.0593];
-        let ootf = HlgOotf::new(300.0, 80.0, luminances);
 
         let mut rgb = [0.5, 0.5, 0.5];
-        ootf.apply(&mut rgb);
+        apply_hlg_ootf(&mut rgb, 80.0, luminances);
         // Result should be in valid range
         assert!(rgb[0] >= 0.0, "R should be non-negative");
         assert!(rgb[1] >= 0.0, "G should be non-negative");
@@ -2211,11 +2175,11 @@ mod test {
 
     #[test]
     fn test_pq_eotf_inv_eotf_roundtrip() {
-        // Test that inv_eotf and eotf are inverses
-        let test_values = [0.0, 100.0, 1000.0, 5000.0, 10000.0];
+        // Test that linear_to_pq and pq_to_linear are inverses
+        let test_values: [f32; 5] = [0.0, 100.0, 1000.0, 5000.0, 10000.0];
         for &luminance in &test_values {
-            let encoded = Rec2408ToneMapper::inv_eotf(luminance);
-            let decoded = Rec2408ToneMapper::eotf(encoded);
+            let encoded = Rec2408ToneMapper::linear_to_pq(luminance);
+            let decoded = Rec2408ToneMapper::pq_to_linear(encoded);
             let diff = (luminance - decoded).abs();
             assert!(
                 diff < 1.0,

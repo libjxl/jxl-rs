@@ -239,3 +239,146 @@ pub(super) fn test_stage_consistency<S: RenderPipelineTestableStage<V>, V>(
     });
     Ok(())
 }
+
+#[test]
+fn alpha_boundary_bug() {
+    use crate::api::{JxlDecoder, JxlDecoderOptions, JxlOutputBuffer, ProcessingResult};
+    use crate::image::{Image, Rect};
+
+    // Download dice.jxl (800x600 with alpha channel)
+    let data = std::process::Command::new("curl")
+        .args(["-sL", "https://jpegxl.info/images/dice.jxl"])
+        .output()
+        .expect("Failed to download")
+        .stdout;
+    
+    println!("Downloaded {} bytes", data.len());
+
+    let options = JxlDecoderOptions::default();
+    let decoder = JxlDecoder::new(options);
+
+    // Process to get image info
+    let mut input = data.as_slice();
+    let decoder = match decoder.process(&mut input).unwrap() {
+        ProcessingResult::Complete { result } => result,
+        _ => panic!("Need more input"),
+    };
+
+    let (width, height) = decoder.basic_info().size;
+    println!("Image size: {}x{}", width, height);
+    
+    let pixel_format = decoder.current_pixel_format();
+    let num_color_channels = pixel_format.color_type.samples_per_pixel();
+    println!("Color channels: {}, Extra channels: {}", 
+             num_color_channels, pixel_format.extra_channel_format.len());
+
+    // Process to get frame info  
+    let decoder = match decoder.process(&mut input).unwrap() {
+        ProcessingResult::Complete { result } => result,
+        _ => panic!("Need more input"),
+    };
+
+    // Prepare output buffers: RGB (interleaved) + Alpha (separate)
+    let mut rgb_buffer = Image::<f32>::new_with_value(
+        (width * num_color_channels, height), f32::NAN
+    ).unwrap();
+    let mut alpha_buffer = Image::<f32>::new_with_value(
+        (width, height), f32::NAN
+    ).unwrap();
+
+    let mut buffers = vec![
+        JxlOutputBuffer::from_image_rect_mut(
+            rgb_buffer.get_rect_mut(Rect { 
+                origin: (0, 0), 
+                size: (width * num_color_channels, height) 
+            }).into_raw()
+        ),
+        JxlOutputBuffer::from_image_rect_mut(
+            alpha_buffer.get_rect_mut(Rect { 
+                origin: (0, 0), 
+                size: (width, height) 
+            }).into_raw()
+        ),
+    ];
+
+    // Decode
+    let _ = match decoder.process(&mut input, &mut buffers).unwrap() {
+        ProcessingResult::Complete { result } => result,
+        _ => panic!("Need more input"),
+    };
+
+    // Check alpha at group boundaries (y = middle of image)
+    let y = height / 2;
+    println!("\nAlpha values at y={}:", y);
+    println!("{:>4} | {:>12} | Status", "x", "Alpha");
+    println!("{}", "-".repeat(35));
+    
+    let mut all_ok = true;
+    for x in [254usize, 255, 256, 257, 510, 511, 512, 513] {
+        let alpha = alpha_buffer.row(y)[x];
+        let status = if alpha >= 0.0 && alpha <= 1.0 { "OK" } else { "*** BUG ***" };
+        if alpha < 0.0 || alpha > 1.0 {
+            all_ok = false;
+        }
+        println!("{:>4} | {:>12.4} | {}", x, alpha, status);
+    }
+    
+    if !all_ok {
+        println!("\n*** ALPHA CHANNEL BUG DETECTED AT GROUP BOUNDARIES ***");
+    }
+    
+    // This will fail if the bug exists
+    for x in [254usize, 255, 256, 257, 510, 511, 512, 513] {
+        let alpha = alpha_buffer.row(y)[x];
+        assert!(
+            alpha >= 0.0 && alpha <= 1.0,
+            "Alpha at x={} is {} (should be in [0,1])", x, alpha
+        );
+    }
+}
+
+#[test]
+fn alpha_boundary_raw_buffers() {
+    use crate::api::{JxlDecoder, JxlDecoderOptions, JxlOutputBuffer, ProcessingResult, states};
+    
+    let data = std::process::Command::new("curl")
+        .args(["-sL", "https://jpegxl.info/images/dice.jxl"])
+        .output()
+        .expect("curl failed");
+    let input = data.stdout;
+    
+    let options = JxlDecoderOptions::default();
+    let decoder = JxlDecoder::<states::Initialized>::new(options);
+    let mut input_slice: &[u8] = &input;
+    
+    let decoder_info = match decoder.process(&mut input_slice).unwrap() {
+        ProcessingResult::Complete { result } => result,
+        _ => panic!("need more input"),
+    };
+    
+    let (width, height) = decoder_info.basic_info().size;
+    let pixel_format = decoder_info.current_pixel_format().clone();
+    let num_c = pixel_format.color_type.samples_per_pixel();
+    
+    let decoder_frame = match decoder_info.process(&mut input_slice).unwrap() {
+        ProcessingResult::Complete { result } => result,
+        _ => panic!("need more input"),
+    };
+    
+    // Use raw byte buffers like our capi
+    let mut rgb_buf = vec![0u8; width * height * num_c * 4];
+    let mut alpha_buf = vec![0u8; width * height * 4];
+    
+    let rgb_out = JxlOutputBuffer::new(&mut rgb_buf, height, width * num_c * 4);
+    let alpha_out = JxlOutputBuffer::new(&mut alpha_buf, height, width * 4);
+    
+    let _ = decoder_frame.process(&mut input_slice, &mut [rgb_out, alpha_out]).unwrap();
+    
+    // Check alpha at x=256
+    let y = height / 2;
+    let offset = (y * width + 256) * 4;
+    let alpha = f32::from_le_bytes([alpha_buf[offset], alpha_buf[offset+1], alpha_buf[offset+2], alpha_buf[offset+3]]);
+    
+    println!("Upstream with raw buffers: alpha at x=256 = {}", alpha);
+    assert!(alpha >= 0.0 && alpha <= 1.0, "Alpha at x=256 is {} (bug!)", alpha);
+}
