@@ -126,6 +126,10 @@ pub(crate) trait RenderPipeline: Sized {
     /// implementation to ensure rendering only happens once.
     fn render_outside_frame(&mut self, buffer_splitter: &mut BufferSplitter) -> Result<()>;
 
+    /// Flushes any pending rendered data to the output buffers.
+    /// This is used for progressive decoding to output partially decoded pixels.
+    fn flush(&mut self, buffer_splitter: &mut BufferSplitter) -> Result<()>;
+
     fn box_inout_stage<S: RenderPipelineInOutStage>(
         stage: S,
     ) -> Box<dyn RunInOutStage<Self::Buffer>>;

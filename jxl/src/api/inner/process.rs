@@ -114,7 +114,7 @@ impl JxlDecoderInner {
     }
 
     /// Draws all the pixels we have data for.
-    pub fn flush_pixels(&mut self, _buffers: &mut [JxlOutputBuffer]) -> Result<()> {
-        todo!()
+    pub fn flush_pixels(&mut self, buffers: &mut [JxlOutputBuffer]) -> Result<()> {
+        self.codestream_parser.flush_pixels(buffers)
     }
 }
