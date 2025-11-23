@@ -900,7 +900,10 @@ impl JxlColorEncoding {
             });
         }
         if self.can_tone_map_for_icc() {
-            todo!("implement A2B0 and B2A0 tags when being able to tone map")
+            // HDR tone mapping ICC profiles (A2B0/B2A0 tags) not yet implemented.
+            // Return None to indicate no ICC profile is available for HDR content.
+            // Callers should handle this gracefully (e.g., use default sRGB output).
+            return Ok(None);
         } else {
             match self {
                 JxlColorEncoding::XYB { .. } => todo!("implement A2B0 and B2A0 tags"),
@@ -1079,10 +1082,31 @@ pub enum JxlColorProfile {
 }
 
 impl JxlColorProfile {
+    /// Returns the ICC profile, panicking if unavailable.
+    ///
+    /// # Panics
+    /// Panics if the color encoding cannot generate an ICC profile (e.g., HDR content).
+    /// Consider using `try_as_icc` for fallible conversion.
     pub fn as_icc(&self) -> Cow<'_, Vec<u8>> {
         match self {
             Self::Icc(x) => Cow::Borrowed(x),
             Self::Simple(encoding) => Cow::Owned(encoding.maybe_create_profile().unwrap().unwrap()),
+        }
+    }
+
+    /// Attempts to get an ICC profile, returning None if unavailable.
+    ///
+    /// Returns `None` for color encodings that cannot generate ICC profiles,
+    /// such as HDR content (PQ/HLG transfer functions) which require tone mapping
+    /// tags that are not yet implemented.
+    pub fn try_as_icc(&self) -> Option<Cow<'_, Vec<u8>>> {
+        match self {
+            Self::Icc(x) => Some(Cow::Borrowed(x)),
+            Self::Simple(encoding) => encoding
+                .maybe_create_profile()
+                .ok()
+                .flatten()
+                .map(Cow::Owned),
         }
     }
 }
