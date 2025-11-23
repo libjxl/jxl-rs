@@ -17,7 +17,6 @@ byteorder = "1.4.3"
 num-derive = "0.4"
 num-traits = "0.2.14"
 array-init = "2.0.0"
-half = { version = "2.4.1", features = ["use-intrinsics"] }
 tracing = { version = "0.1.40", optional = true }
 jxl_macros = { path = "../jxl_macros", version = "=0.1.1" }
 jxl_simd = { path = "../jxl_simd", version = "=0.1.1" }
