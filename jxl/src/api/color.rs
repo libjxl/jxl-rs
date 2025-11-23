@@ -900,10 +900,40 @@ impl JxlColorEncoding {
             });
         }
         if self.can_tone_map_for_icc() {
-            // HDR tone mapping ICC profiles (A2B0/B2A0 tags) not yet implemented.
-            // Return None to indicate no ICC profile is available for HDR content.
-            // Callers should handle this gracefully (e.g., use default sRGB output).
-            return Ok(None);
+            // Create A2B0 tag for HDR tone mapping
+            if let JxlColorEncoding::RgbColorSpace {
+                white_point,
+                primaries,
+                transfer_function,
+                ..
+            } = self
+            {
+                let a2b0_start = tags_data.len() as u32;
+                create_icc_lut_atob_tag_for_hdr(
+                    transfer_function,
+                    primaries,
+                    white_point,
+                    &mut tags_data,
+                )?;
+                pad_to_4_byte_boundary(&mut tags_data);
+                let a2b0_size = (tags_data.len() as u32) - a2b0_start;
+                collected_tags.push(TagInfo {
+                    signature: *b"A2B0",
+                    offset_in_tags_blob: a2b0_start,
+                    size_unpadded: a2b0_size,
+                });
+
+                // Create B2A0 tag (no-op, required by Safari)
+                let b2a0_start = tags_data.len() as u32;
+                create_icc_noop_btoa_tag(&mut tags_data)?;
+                pad_to_4_byte_boundary(&mut tags_data);
+                let b2a0_size = (tags_data.len() as u32) - b2a0_start;
+                collected_tags.push(TagInfo {
+                    signature: *b"B2A0",
+                    offset_in_tags_blob: b2a0_start,
+                    size_unpadded: b2a0_size,
+                });
+            }
         } else {
             match self {
                 JxlColorEncoding::XYB { .. } => todo!("implement A2B0 and B2A0 tags"),
@@ -1534,6 +1564,432 @@ fn create_table_curve(
     Ok(table)
 }
 
+// ============================================================================
+// HDR Tone Mapping Implementation
+// ============================================================================
+
+/// BT.2408 HDR to SDR tone mapper.
+/// Maps PQ content from source range (e.g., 0-10000 nits) to target range (e.g., 0-250 nits).
+struct Rec2408ToneMapper {
+    source_range: (f32, f32), // (min, max) in nits
+    target_range: (f32, f32),
+    luminances: [f32; 3], // RGB luminance coefficients (Y values)
+
+    // Precomputed values
+    pq_mastering_min: f32,
+    #[allow(dead_code)] // Stored for potential future use / debugging
+    pq_mastering_max: f32,
+    pq_mastering_range: f32,
+    inv_pq_mastering_range: f32,
+    min_lum: f32,
+    max_lum: f32,
+    ks: f32,
+    inv_one_minus_ks: f32,
+    normalizer: f32,
+    inv_target_peak: f32,
+}
+
+impl Rec2408ToneMapper {
+    fn new(source_range: (f32, f32), target_range: (f32, f32), luminances: [f32; 3]) -> Self {
+        let pq_mastering_min = Self::inv_eotf(source_range.0);
+        let pq_mastering_max = Self::inv_eotf(source_range.1);
+        let pq_mastering_range = pq_mastering_max - pq_mastering_min;
+        let inv_pq_mastering_range = 1.0 / pq_mastering_range;
+
+        let min_lum =
+            (Self::inv_eotf(target_range.0) - pq_mastering_min) * inv_pq_mastering_range;
+        let max_lum =
+            (Self::inv_eotf(target_range.1) - pq_mastering_min) * inv_pq_mastering_range;
+        let ks = 1.5 * max_lum - 0.5;
+
+        Self {
+            source_range,
+            target_range,
+            luminances,
+            pq_mastering_min,
+            pq_mastering_max,
+            pq_mastering_range,
+            inv_pq_mastering_range,
+            min_lum,
+            max_lum,
+            ks,
+            inv_one_minus_ks: 1.0 / (1.0 - ks).max(1e-6),
+            normalizer: source_range.1 / target_range.1,
+            inv_target_peak: 1.0 / target_range.1,
+        }
+    }
+
+    /// PQ EOTF inverse (Encoded from Display)
+    #[allow(clippy::excessive_precision)] // PQ constants are exact per SMPTE ST 2084
+    fn inv_eotf(luminance: f32) -> f32 {
+        // PQ transfer function constants from SMPTE ST 2084
+        const M1: f32 = 0.1593017578125;
+        const M2: f32 = 78.84375;
+        const C1: f32 = 0.8359375;
+        const C2: f32 = 18.8515625;
+        const C3: f32 = 18.6875;
+
+        let y = (luminance / 10000.0).max(0.0);
+        let ym1 = y.powf(M1);
+        ((C1 + C2 * ym1) / (1.0 + C3 * ym1)).powf(M2)
+    }
+
+    /// PQ EOTF (Display from Encoded)
+    #[allow(clippy::excessive_precision)] // PQ constants are exact per SMPTE ST 2084
+    fn eotf(encoded: f32) -> f32 {
+        const M1: f32 = 0.1593017578125;
+        const M2: f32 = 78.84375;
+        const C1: f32 = 0.8359375;
+        const C2: f32 = 18.8515625;
+        const C3: f32 = 18.6875;
+
+        let e_1_m2 = encoded.powf(1.0 / M2);
+        let num = (e_1_m2 - C1).max(0.0);
+        let den = C2 - C3 * e_1_m2;
+        10000.0 * (num / den).powf(1.0 / M1)
+    }
+
+    fn t(&self, a: f32) -> f32 {
+        (a - self.ks) * self.inv_one_minus_ks
+    }
+
+    fn p(&self, b: f32) -> f32 {
+        let t_b = self.t(b);
+        let t_b_2 = t_b * t_b;
+        let t_b_3 = t_b_2 * t_b;
+        (2.0 * t_b_3 - 3.0 * t_b_2 + 1.0) * self.ks
+            + (t_b_3 - 2.0 * t_b_2 + t_b) * (1.0 - self.ks)
+            + (-2.0 * t_b_3 + 3.0 * t_b_2) * self.max_lum
+    }
+
+    /// Apply tone mapping to RGB values (in-place)
+    fn tone_map(&self, rgb: &mut [f32; 3]) {
+        let luminance = self.source_range.1
+            * (self.luminances[0] * rgb[0]
+                + self.luminances[1] * rgb[1]
+                + self.luminances[2] * rgb[2]);
+
+        let normalized_pq = ((Self::inv_eotf(luminance) - self.pq_mastering_min)
+            * self.inv_pq_mastering_range)
+            .min(1.0);
+
+        let e2 = if normalized_pq < self.ks {
+            normalized_pq
+        } else {
+            self.p(normalized_pq)
+        };
+
+        let one_minus_e2 = 1.0 - e2;
+        let one_minus_e2_2 = one_minus_e2 * one_minus_e2;
+        let one_minus_e2_4 = one_minus_e2_2 * one_minus_e2_2;
+        let e3 = self.min_lum * one_minus_e2_4 + e2;
+        let e4 = e3 * self.pq_mastering_range + self.pq_mastering_min;
+        let d4 = Self::eotf(e4);
+        let new_luminance = d4.clamp(0.0, self.target_range.1);
+
+        let min_luminance = 1e-6;
+        let use_cap = luminance <= min_luminance;
+        let ratio = new_luminance / luminance.max(min_luminance);
+        let cap = new_luminance * self.inv_target_peak;
+        let multiplier = ratio * self.normalizer;
+
+        for c in rgb.iter_mut() {
+            *c = if use_cap { cap } else { *c * multiplier };
+        }
+    }
+}
+
+/// HLG OOTF for tone mapping HLG content.
+struct HlgOotf {
+    exponent: f32,
+    luminances: [f32; 3],
+    apply_ootf: bool,
+}
+
+impl HlgOotf {
+    fn new(source_luminance: f32, target_luminance: f32, luminances: [f32; 3]) -> Self {
+        let gamma = 1.111_f32.powf((target_luminance / source_luminance).log2());
+        let exponent = gamma - 1.0;
+        Self {
+            exponent,
+            luminances,
+            apply_ootf: !(-0.01..=0.01).contains(&exponent),
+        }
+    }
+
+    fn apply(&self, rgb: &mut [f32; 3]) {
+        if !self.apply_ootf {
+            return;
+        }
+        let luminance =
+            self.luminances[0] * rgb[0] + self.luminances[1] * rgb[1] + self.luminances[2] * rgb[2];
+        let ratio = luminance.powf(self.exponent).min(1e9);
+        for v in rgb.iter_mut() {
+            *v *= ratio;
+        }
+    }
+}
+
+/// Desaturate out-of-gamut pixels while preserving luminance.
+fn gamut_map(rgb: &mut [f32; 3], luminances: &[f32; 3], preserve_saturation: f32) {
+    let luminance = luminances[0] * rgb[0] + luminances[1] * rgb[1] + luminances[2] * rgb[2];
+
+    let mut gray_mix_saturation = 0.0_f32;
+    let mut gray_mix_luminance = 0.0_f32;
+
+    for &val in rgb.iter() {
+        let val_minus_gray = val - luminance;
+        let inv_val_minus_gray = if val_minus_gray == 0.0 {
+            1.0
+        } else {
+            1.0 / val_minus_gray
+        };
+        let val_over_val_minus_gray = val * inv_val_minus_gray;
+
+        if val_minus_gray < 0.0 {
+            gray_mix_saturation = gray_mix_saturation.max(val_over_val_minus_gray);
+        }
+
+        gray_mix_luminance = gray_mix_luminance.max(if val_minus_gray <= 0.0 {
+            gray_mix_saturation
+        } else {
+            val_over_val_minus_gray - inv_val_minus_gray
+        });
+    }
+
+    let gray_mix = (preserve_saturation * (gray_mix_saturation - gray_mix_luminance)
+        + gray_mix_luminance)
+        .clamp(0.0, 1.0);
+
+    for val in rgb.iter_mut() {
+        *val = gray_mix * (luminance - *val) + *val;
+    }
+
+    let max_clr = rgb[0].max(rgb[1]).max(rgb[2]).max(1.0);
+    let normalizer = 1.0 / max_clr;
+    for v in rgb.iter_mut() {
+        *v *= normalizer;
+    }
+}
+
+/// Helper function to multiply two 3x3 matrices (f32 version)
+fn mul_3x3_f32(a: [[f32; 3]; 3], b: [[f32; 3]; 3]) -> [[f32; 3]; 3] {
+    let mut result = [[0.0f32; 3]; 3];
+    for i in 0..3 {
+        for j in 0..3 {
+            for k in 0..3 {
+                result[i][j] += a[i][k] * b[k][j];
+            }
+        }
+    }
+    result
+}
+
+/// Tone map a single pixel and convert to PCS Lab for ICC profile.
+fn tone_map_pixel(
+    transfer_function: &JxlTransferFunction,
+    primaries: &JxlPrimaries,
+    white_point: &JxlWhitePoint,
+    input: [f32; 3],
+) -> Result<[u8; 3], Error> {
+    // Get primaries coordinates
+    let primaries_coords = primaries.to_xy_coords();
+    let (rx, ry) = primaries_coords[0];
+    let (gx, gy) = primaries_coords[1];
+    let (bx, by) = primaries_coords[2];
+    let (wx, wy) = white_point.to_xy_coords();
+
+    // Get the RGB to XYZ matrix (not adapted to D50 yet)
+    let primaries_xyz = primaries_to_xyz(rx, ry, gx, gy, bx, by, wx, wy)?;
+
+    // Extract luminances from Y row of the matrix
+    let luminances = [
+        primaries_xyz[1][0] as f32,
+        primaries_xyz[1][1] as f32,
+        primaries_xyz[1][2] as f32,
+    ];
+
+    // Apply EOTF to get linear values
+    let mut linear = match transfer_function {
+        JxlTransferFunction::PQ => {
+            // PQ EOTF - convert from encoded to linear (normalized to 0-1 range for 10000 nits)
+            [
+                Rec2408ToneMapper::eotf(input[0]) / 10000.0,
+                Rec2408ToneMapper::eotf(input[1]) / 10000.0,
+                Rec2408ToneMapper::eotf(input[2]) / 10000.0,
+            ]
+        }
+        JxlTransferFunction::HLG => [
+            TF_HLG::display_from_encoded(input[0] as f64) as f32,
+            TF_HLG::display_from_encoded(input[1] as f64) as f32,
+            TF_HLG::display_from_encoded(input[2] as f64) as f32,
+        ],
+        _ => return Err(Error::IccUnsupportedTransferFunction),
+    };
+
+    // Apply tone mapping
+    match transfer_function {
+        JxlTransferFunction::PQ => {
+            let tone_mapper = Rec2408ToneMapper::new(
+                (0.0, 10000.0), // PQ source range
+                (0.0, 250.0),   // SDR target range
+                luminances,
+            );
+            tone_mapper.tone_map(&mut linear);
+        }
+        JxlTransferFunction::HLG => {
+            let ootf = HlgOotf::new(300.0, 80.0, luminances);
+            ootf.apply(&mut linear);
+        }
+        _ => {}
+    }
+
+    // Gamut map
+    gamut_map(&mut linear, &luminances, 0.3);
+
+    // Get chromatic adaptation matrix
+    let chad_f64 = adapt_to_xyz_d50(wx, wy)?;
+    let chad: [[f32; 3]; 3] =
+        std::array::from_fn(|r| std::array::from_fn(|c| chad_f64[r][c] as f32));
+
+    // Convert primaries_xyz to f32
+    let primaries_xyz_f32: [[f32; 3]; 3] =
+        std::array::from_fn(|r| std::array::from_fn(|c| primaries_xyz[r][c] as f32));
+
+    // Combine matrices: to_xyzd50 = chad * primaries_xyz
+    let to_xyzd50 = mul_3x3_f32(chad, primaries_xyz_f32);
+
+    // Apply matrix to get XYZ D50
+    let xyz = [
+        linear[0] * to_xyzd50[0][0] + linear[1] * to_xyzd50[0][1] + linear[2] * to_xyzd50[0][2],
+        linear[0] * to_xyzd50[1][0] + linear[1] * to_xyzd50[1][1] + linear[2] * to_xyzd50[1][2],
+        linear[0] * to_xyzd50[2][0] + linear[1] * to_xyzd50[2][1] + linear[2] * to_xyzd50[2][2],
+    ];
+
+    // Convert XYZ to Lab
+    // D50 reference white
+    const XN: f32 = 0.964212;
+    const YN: f32 = 1.0;
+    const ZN: f32 = 0.825188;
+    const DELTA: f32 = 6.0 / 29.0;
+
+    let lab_f = |x: f32| -> f32 {
+        if x <= DELTA * DELTA * DELTA {
+            x * (1.0 / (3.0 * DELTA * DELTA)) + 4.0 / 29.0
+        } else {
+            x.cbrt()
+        }
+    };
+
+    let f_x = lab_f(xyz[0] / XN);
+    let f_y = lab_f(xyz[1] / YN);
+    let f_z = lab_f(xyz[2] / ZN);
+
+    // Convert to ICC PCS Lab encoding (8-bit)
+    // L* = 116 * f(Y/Yn) - 16, encoded as L* / 100 * 255
+    // a* = 500 * (f(X/Xn) - f(Y/Yn)), encoded as (a* + 128) for 8-bit
+    // b* = 200 * (f(Y/Yn) - f(Z/Zn)), encoded as (b* + 128) for 8-bit
+    Ok([
+        (255.0 * (1.16 * f_y - 0.16).clamp(0.0, 1.0)).round() as u8,
+        (128.0 + (500.0 * (f_x - f_y)).clamp(-128.0, 127.0)).round() as u8,
+        (128.0 + (200.0 * (f_y - f_z)).clamp(-128.0, 127.0)).round() as u8,
+    ])
+}
+
+/// Create mft1 (8-bit LUT) A2B0 tag for HDR tone mapping.
+fn create_icc_lut_atob_tag_for_hdr(
+    transfer_function: &JxlTransferFunction,
+    primaries: &JxlPrimaries,
+    white_point: &JxlWhitePoint,
+    tags: &mut Vec<u8>,
+) -> Result<(), Error> {
+    const LUT_DIM: usize = 9; // 9x9x9 3D LUT
+
+    // Tag signature: 'mft1'
+    tags.extend_from_slice(b"mft1");
+    // Reserved
+    tags.extend_from_slice(&0u32.to_be_bytes());
+    // Number of input channels
+    tags.push(3);
+    // Number of output channels
+    tags.push(3);
+    // Number of CLUT grid points
+    tags.push(LUT_DIM as u8);
+    // Padding
+    tags.push(0);
+
+    // Identity matrix (3x3, s15Fixed16)
+    for i in 0..3 {
+        for j in 0..3 {
+            let val: f32 = if i == j { 1.0 } else { 0.0 };
+            append_s15_fixed_16(tags, val)?;
+        }
+    }
+
+    // Input tables (identity, 256 entries per channel)
+    for _ in 0..3 {
+        for i in 0..256 {
+            tags.push(i as u8);
+        }
+    }
+
+    // 3D CLUT
+    for ix in 0..LUT_DIM {
+        for iy in 0..LUT_DIM {
+            for ib in 0..LUT_DIM {
+                let input = [
+                    ix as f32 / (LUT_DIM - 1) as f32,
+                    iy as f32 / (LUT_DIM - 1) as f32,
+                    ib as f32 / (LUT_DIM - 1) as f32,
+                ];
+                let pcslab = tone_map_pixel(transfer_function, primaries, white_point, input)?;
+                tags.extend_from_slice(&pcslab);
+            }
+        }
+    }
+
+    // Output tables (identity, 256 entries per channel)
+    for _ in 0..3 {
+        for i in 0..256 {
+            tags.push(i as u8);
+        }
+    }
+
+    Ok(())
+}
+
+/// Create mBA B2A0 tag (no-op, required by some software like Safari).
+fn create_icc_noop_btoa_tag(tags: &mut Vec<u8>) -> Result<(), Error> {
+    // Tag signature: 'mBA '
+    tags.extend_from_slice(b"mBA ");
+    // Reserved
+    tags.extend_from_slice(&0u32.to_be_bytes());
+    // Number of input channels
+    tags.push(3);
+    // Number of output channels
+    tags.push(3);
+    // Padding
+    tags.extend_from_slice(&0u16.to_be_bytes());
+    // Offset to first B curve
+    tags.extend_from_slice(&32u32.to_be_bytes());
+    // Offset to matrix (0 = none)
+    tags.extend_from_slice(&0u32.to_be_bytes());
+    // Offset to first M curve (0 = none)
+    tags.extend_from_slice(&0u32.to_be_bytes());
+    // Offset to CLUT (0 = none)
+    tags.extend_from_slice(&0u32.to_be_bytes());
+    // Offset to first A curve (0 = none)
+    tags.extend_from_slice(&0u32.to_be_bytes());
+
+    // Three identity parametric curves (gamma = 1.0)
+    // Each curve is a 'para' type with function type 0 (simple gamma)
+    for _ in 0..3 {
+        create_icc_curv_para_tag(tags, &[1.0], 0)?;
+    }
+
+    Ok(())
+}
+
 #[cfg(test)]
 mod test {
     use super::*;
@@ -1595,6 +2051,293 @@ mod test {
             }
             .get_color_encoding_description(),
             "DisplayP3"
+        );
+    }
+
+    #[test]
+    fn test_rec2408_tone_mapper() {
+        // Test the Rec2408ToneMapper with BT.2100 luminances
+        let luminances = [0.2627, 0.6780, 0.0593]; // BT.2100/BT.2020
+        let tone_mapper = Rec2408ToneMapper::new((0.0, 10000.0), (0.0, 250.0), luminances);
+
+        // Test with a bright HDR pixel (should be compressed)
+        let mut rgb = [0.8, 0.8, 0.8]; // High values in PQ space = very bright
+        tone_mapper.tone_map(&mut rgb);
+        // Result should be within valid range
+        assert!(rgb[0] >= 0.0 && rgb[0] <= 1.0, "R out of range: {}", rgb[0]);
+        assert!(rgb[1] >= 0.0 && rgb[1] <= 1.0, "G out of range: {}", rgb[1]);
+        assert!(rgb[2] >= 0.0 && rgb[2] <= 1.0, "B out of range: {}", rgb[2]);
+
+        // Test with a dark pixel (should not be affected much)
+        let mut rgb_dark = [0.1, 0.1, 0.1];
+        tone_mapper.tone_map(&mut rgb_dark);
+        assert!(
+            rgb_dark[0] >= 0.0 && rgb_dark[0] <= 1.0,
+            "R out of range: {}",
+            rgb_dark[0]
+        );
+    }
+
+    #[test]
+    fn test_hlg_ootf() {
+        let luminances = [0.2627, 0.6780, 0.0593];
+        let ootf = HlgOotf::new(300.0, 80.0, luminances);
+
+        let mut rgb = [0.5, 0.5, 0.5];
+        ootf.apply(&mut rgb);
+        // Result should be in valid range
+        assert!(rgb[0] >= 0.0, "R should be non-negative");
+        assert!(rgb[1] >= 0.0, "G should be non-negative");
+        assert!(rgb[2] >= 0.0, "B should be non-negative");
+    }
+
+    #[test]
+    fn test_gamut_map() {
+        let luminances = [0.2627, 0.6780, 0.0593];
+
+        // Test out-of-gamut pixel (negative value)
+        let mut rgb = [-0.1, 0.5, 0.5];
+        gamut_map(&mut rgb, &luminances, 0.3);
+        // All values should be non-negative after gamut mapping
+        assert!(rgb[0] >= 0.0, "R should be non-negative after gamut map");
+        assert!(rgb[1] >= 0.0, "G should be non-negative after gamut map");
+        assert!(rgb[2] >= 0.0, "B should be non-negative after gamut map");
+
+        // Test in-gamut pixel (should not change much)
+        let mut rgb_valid = [0.5, 0.3, 0.2];
+        gamut_map(&mut rgb_valid, &luminances, 0.3);
+        assert!(rgb_valid[0] >= 0.0 && rgb_valid[0] <= 1.0);
+        assert!(rgb_valid[1] >= 0.0 && rgb_valid[1] <= 1.0);
+        assert!(rgb_valid[2] >= 0.0 && rgb_valid[2] <= 1.0);
+    }
+
+    #[test]
+    fn test_tone_map_pixel_pq() {
+        let result = tone_map_pixel(
+            &JxlTransferFunction::PQ,
+            &JxlPrimaries::BT2100,
+            &JxlWhitePoint::D65,
+            [0.5, 0.5, 0.5],
+        );
+        assert!(result.is_ok());
+        let lab = result.unwrap();
+        // Lab L* should be in reasonable range for mid-gray after tone mapping
+        assert!(lab[0] > 0, "L* should be positive for non-black input");
+        // a* and b* should be near neutral (128) for achromatic input
+        assert!((lab[1] as i32 - 128).abs() < 10, "a* should be near neutral");
+        assert!((lab[2] as i32 - 128).abs() < 10, "b* should be near neutral");
+    }
+
+    #[test]
+    fn test_tone_map_pixel_hlg() {
+        let result = tone_map_pixel(
+            &JxlTransferFunction::HLG,
+            &JxlPrimaries::BT2100,
+            &JxlWhitePoint::D65,
+            [0.5, 0.5, 0.5],
+        );
+        assert!(result.is_ok());
+        let lab = result.unwrap();
+        // Lab L* should be in reasonable range
+        assert!(lab[0] > 0, "L* should be positive for non-black input");
+        // a* and b* should be near neutral (128) for achromatic input
+        assert!((lab[1] as i32 - 128).abs() < 10, "a* should be near neutral");
+        assert!((lab[2] as i32 - 128).abs() < 10, "b* should be near neutral");
+    }
+
+    #[test]
+    fn test_hdr_icc_profile_generation_pq() {
+        // Test that PQ HDR color encoding generates an ICC profile with A2B0/B2A0 tags.
+        // This tests the complete HDR tone mapping pipeline without needing an actual
+        // HDR JXL file - the color encoding is constructed programmatically.
+        let encoding = JxlColorEncoding::RgbColorSpace {
+            white_point: JxlWhitePoint::D65,
+            primaries: JxlPrimaries::BT2100,
+            transfer_function: JxlTransferFunction::PQ,
+            rendering_intent: RenderingIntent::Relative,
+        };
+
+        assert!(encoding.can_tone_map_for_icc());
+
+        let result = encoding.maybe_create_profile();
+        assert!(result.is_ok(), "Profile creation should succeed");
+        let profile_opt = result.unwrap();
+        assert!(profile_opt.is_some(), "Profile should be generated for PQ");
+
+        let profile = profile_opt.unwrap();
+        // Profile should be a valid ICC profile (starts with profile size, then signature)
+        assert!(profile.len() > 128, "Profile should have header + tags");
+
+        // Verify header has Lab PCS (bytes 20-23 should be "Lab ")
+        assert_eq!(&profile[20..24], b"Lab ", "PCS should be Lab for HDR profiles");
+
+        // Check for 'mft1' (A2B0 tag type) somewhere in the profile
+        assert!(
+            profile.windows(4).any(|w| w == b"mft1"),
+            "Profile should contain mft1 tag (A2B0)"
+        );
+        assert!(
+            profile.windows(4).any(|w| w == b"mBA "),
+            "Profile should contain mBA tag (B2A0)"
+        );
+
+        // Verify CICP tag is present (for standard primaries)
+        assert!(
+            profile.windows(4).any(|w| w == b"cicp"),
+            "Profile should contain cicp tag"
+        );
+    }
+
+    #[test]
+    fn test_hdr_icc_profile_generation_hlg() {
+        // Test that HLG HDR color encoding generates an ICC profile with A2B0/B2A0 tags
+        let encoding = JxlColorEncoding::RgbColorSpace {
+            white_point: JxlWhitePoint::D65,
+            primaries: JxlPrimaries::BT2100,
+            transfer_function: JxlTransferFunction::HLG,
+            rendering_intent: RenderingIntent::Relative,
+        };
+
+        assert!(encoding.can_tone_map_for_icc());
+
+        let result = encoding.maybe_create_profile();
+        assert!(result.is_ok(), "Profile creation should succeed");
+        let profile_opt = result.unwrap();
+        assert!(profile_opt.is_some(), "Profile should be generated for HLG");
+
+        let profile = profile_opt.unwrap();
+        assert!(profile.len() > 128, "Profile should have header + tags");
+    }
+
+    #[test]
+    fn test_pq_eotf_inv_eotf_roundtrip() {
+        // Test that inv_eotf and eotf are inverses
+        let test_values = [0.0, 100.0, 1000.0, 5000.0, 10000.0];
+        for &luminance in &test_values {
+            let encoded = Rec2408ToneMapper::inv_eotf(luminance);
+            let decoded = Rec2408ToneMapper::eotf(encoded);
+            let diff = (luminance - decoded).abs();
+            assert!(
+                diff < 1.0,
+                "Roundtrip failed for {}: got {}, diff {}",
+                luminance,
+                decoded,
+                diff
+            );
+        }
+    }
+
+    #[test]
+    fn test_can_tone_map_for_icc() {
+        // PQ with D65 and standard primaries should be able to tone map
+        let pq_bt2100 = JxlColorEncoding::RgbColorSpace {
+            white_point: JxlWhitePoint::D65,
+            primaries: JxlPrimaries::BT2100,
+            transfer_function: JxlTransferFunction::PQ,
+            rendering_intent: RenderingIntent::Relative,
+        };
+        assert!(pq_bt2100.can_tone_map_for_icc());
+
+        // HLG with D65 and standard primaries should be able to tone map
+        let hlg_bt2100 = JxlColorEncoding::RgbColorSpace {
+            white_point: JxlWhitePoint::D65,
+            primaries: JxlPrimaries::BT2100,
+            transfer_function: JxlTransferFunction::HLG,
+            rendering_intent: RenderingIntent::Relative,
+        };
+        assert!(hlg_bt2100.can_tone_map_for_icc());
+
+        // sRGB should NOT be able to tone map (not HDR)
+        let srgb = JxlColorEncoding::srgb(false);
+        assert!(!srgb.can_tone_map_for_icc());
+
+        // Custom primaries should NOT be able to tone map
+        let custom_pq = JxlColorEncoding::RgbColorSpace {
+            white_point: JxlWhitePoint::D65,
+            primaries: JxlPrimaries::Chromaticities {
+                rx: 0.7,
+                ry: 0.3,
+                gx: 0.2,
+                gy: 0.8,
+                bx: 0.15,
+                by: 0.05,
+            },
+            transfer_function: JxlTransferFunction::PQ,
+            rendering_intent: RenderingIntent::Relative,
+        };
+        assert!(!custom_pq.can_tone_map_for_icc());
+    }
+
+    /// Integration test: decode actual HDR PQ test file and verify ICC profile
+    #[test]
+    fn test_hdr_pq_file_icc_profile() {
+        use crate::api::{JxlDecoder, JxlDecoderOptions, ProcessingResult};
+
+        let data = std::fs::read("resources/test/hdr_pq_test.jxl")
+            .expect("Failed to read hdr_pq_test.jxl - run from jxl crate directory");
+
+        let options = JxlDecoderOptions::default();
+        let decoder = JxlDecoder::new(options);
+        let mut input: &[u8] = &data;
+
+        let decoder_info = match decoder.process(&mut input).unwrap() {
+            ProcessingResult::Complete { result } => result,
+            _ => panic!("Expected complete decoding"),
+        };
+
+        // Get the color profile
+        let color_profile = decoder_info.output_color_profile();
+
+        // For HDR PQ content, we should be able to generate an ICC profile
+        let icc = color_profile.try_as_icc();
+        assert!(icc.is_some(), "Should generate ICC profile for HDR PQ content");
+
+        let profile = icc.unwrap();
+        // Verify it's an HDR profile with Lab PCS
+        assert_eq!(&profile[20..24], b"Lab ", "PCS should be Lab for HDR");
+        // Verify A2B0 tag exists
+        assert!(
+            profile.windows(4).any(|w| w == b"A2B0"),
+            "Should have A2B0 tag"
+        );
+        // Verify B2A0 tag exists
+        assert!(
+            profile.windows(4).any(|w| w == b"B2A0"),
+            "Should have B2A0 tag"
+        );
+    }
+
+    /// Integration test: decode actual HDR HLG test file and verify ICC profile
+    #[test]
+    fn test_hdr_hlg_file_icc_profile() {
+        use crate::api::{JxlDecoder, JxlDecoderOptions, ProcessingResult};
+
+        let data = std::fs::read("resources/test/hdr_hlg_test.jxl")
+            .expect("Failed to read hdr_hlg_test.jxl - run from jxl crate directory");
+
+        let options = JxlDecoderOptions::default();
+        let decoder = JxlDecoder::new(options);
+        let mut input: &[u8] = &data;
+
+        let decoder_info = match decoder.process(&mut input).unwrap() {
+            ProcessingResult::Complete { result } => result,
+            _ => panic!("Expected complete decoding"),
+        };
+
+        // Get the color profile
+        let color_profile = decoder_info.output_color_profile();
+
+        // For HDR HLG content, we should be able to generate an ICC profile
+        let icc = color_profile.try_as_icc();
+        assert!(icc.is_some(), "Should generate ICC profile for HDR HLG content");
+
+        let profile = icc.unwrap();
+        // Verify it's an HDR profile with Lab PCS
+        assert_eq!(&profile[20..24], b"Lab ", "PCS should be Lab for HDR");
+        // Verify A2B0 tag exists
+        assert!(
+            profile.windows(4).any(|w| w == b"A2B0"),
+            "Should have A2B0 tag"
         );
     }
 }
