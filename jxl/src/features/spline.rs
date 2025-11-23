@@ -1601,7 +1601,7 @@ mod test_splines {
             0.5,
             [0.5, 0.6, 0.7],
             0.8,
-            true, // Use high precision to match original golden data
+            true,
             &mut segments_by_y,
         );
         // Golden numbers come from libjxl.
@@ -1663,7 +1663,7 @@ mod test_splines {
             &points_to_draw,
             SQRT_2 + 1.0,
             DESIRED_RENDERING_DISTANCE,
-            true, // Use high precision to match original golden data
+            true,
             &mut segments_by_y,
         );
         // Golden numbers come from libjxl.
@@ -1789,7 +1789,7 @@ mod test_splines {
                 ytox_lf: 0,
                 ytob_lf: 0,
             },
-            true, // Use high precision to match original golden data
+            true,
         )?;
         assert_eq!(splines.segments.len(), 1940);
         let want_segments_sample = [
