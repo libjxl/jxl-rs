@@ -570,6 +570,7 @@ impl Splines {
         intensity: f32,
         color: [f32; 3],
         sigma: f32,
+        high_precision: bool,
         segments_by_y: &mut Vec<(u64, usize)>,
     ) {
         if sigma.is_infinite()
@@ -579,15 +580,14 @@ impl Splines {
         {
             return;
         }
-        // TODO(zond): Use 3 if not JXL_HIGH_PRECISION
-        const DISTANCE_EXP: f32 = 5.0;
+        let distance_exp: f32 = if high_precision { 5.0 } else { 3.0 };
         let max_color = [0.01, color[0], color[1], color[2]]
             .iter()
             .map(|chan| (chan * intensity).abs())
             .max_by(|a, b| a.total_cmp(b))
             .unwrap();
         let max_distance =
-            (-2.0 * sigma * sigma * (0.1f32.ln() * DISTANCE_EXP - max_color.ln())).sqrt();
+            (-2.0 * sigma * sigma * (0.1f32.ln() * distance_exp - max_color.ln())).sqrt();
         let segment = SplineSegment {
             center_x: center.x,
             center_y: center.y,
@@ -610,6 +610,7 @@ impl Splines {
         points_to_draw: &[(Point, f32)],
         length: f32,
         desired_distance: f32,
+        high_precision: bool,
         segments_by_y: &mut Vec<(u64, usize)>,
     ) {
         let inv_length = 1.0 / length;
@@ -620,7 +621,7 @@ impl Splines {
                 color[index] = coeffs.continuous_idct((32.0 - 1.0) * progress);
             }
             let sigma = spline.sigma_dct.continuous_idct((32.0 - 1.0) * progress);
-            self.add_segment(point, *multiplier, color, sigma, segments_by_y);
+            self.add_segment(point, *multiplier, color, sigma, high_precision, segments_by_y);
         }
     }
 
@@ -629,6 +630,7 @@ impl Splines {
         image_xsize: u64,
         image_ysize: u64,
         color_correlation_params: &ColorCorrelationParams,
+        high_precision: bool,
     ) -> Result<()> {
         let mut total_estimated_area_reached = 0u64;
         let mut splines = Vec::new();
@@ -682,6 +684,7 @@ impl Splines {
                 &points_to_draw,
                 length,
                 DESIRED_RENDERING_DISTANCE,
+                high_precision,
                 &mut segments_by_y,
             );
         }
@@ -1598,6 +1601,7 @@ mod test_splines {
             0.5,
             [0.5, 0.6, 0.7],
             0.8,
+            true, // Use high precision to match original golden data
             &mut segments_by_y,
         );
         // Golden numbers come from libjxl.
@@ -1659,6 +1663,7 @@ mod test_splines {
             &points_to_draw,
             SQRT_2 + 1.0,
             DESIRED_RENDERING_DISTANCE,
+            true, // Use high precision to match original golden data
             &mut segments_by_y,
         );
         // Golden numbers come from libjxl.
@@ -1784,6 +1789,7 @@ mod test_splines {
                 ytox_lf: 0,
                 ytob_lf: 0,
             },
+            true, // Use high precision to match original golden data
         )?;
         assert_eq!(splines.segments.len(), 1940);
         let want_segments_sample = [

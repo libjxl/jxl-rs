@@ -18,12 +18,14 @@ impl SplinesStage {
         mut splines: Splines,
         frame_size: (usize, usize),
         color_correlation_params: &ColorCorrelationParams,
+        high_precision: bool,
     ) -> Self {
         splines
             .initialize_draw_cache(
                 frame_size.0 as u64,
                 frame_size.1 as u64,
                 color_correlation_params,
+                high_precision,
             )
             .unwrap();
         SplinesStage { splines }
@@ -104,7 +106,7 @@ mod test {
             vec![Point { x: 9.0, y: 54.0 }],
         );
         let output: Vec<Image<f32>> = make_and_run_simple_pipeline(
-            SplinesStage::new(splines.clone(), size, &ColorCorrelationParams::default()),
+            SplinesStage::new(splines.clone(), size, &ColorCorrelationParams::default(), true),
             &target_images,
             size,
             0,
@@ -158,6 +160,7 @@ mod test {
                     splines.clone(),
                     (500, 500),
                     &ColorCorrelationParams::default(),
+                    false,
                 )
             },
             (500, 500),

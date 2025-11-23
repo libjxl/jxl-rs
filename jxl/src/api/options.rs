@@ -26,6 +26,10 @@ pub struct JxlDecoderOptions {
     pub xyb_output_linear: bool,
     pub enable_output: bool,
     pub cms: Option<Box<dyn JxlCms>>,
+    /// Use high precision mode for spline rendering.
+    /// When false (default), uses lower precision settings that match libjxl's default.
+    /// When true, uses higher precision at the cost of performance.
+    pub high_precision: bool,
 }
 
 impl Default for JxlDecoderOptions {
@@ -41,6 +45,7 @@ impl Default for JxlDecoderOptions {
             xyb_output_linear: true,
             enable_output: true,
             cms: None,
+            high_precision: false,
         }
     }
 }
