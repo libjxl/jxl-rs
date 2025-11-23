@@ -59,14 +59,14 @@ impl OwnedRawImage {
     }
 
     fn shift_rect(&self, rect: Rect) -> Rect {
-        let ret = Rect {
+        if cfg!(debug_assertions) {
+            // Check the original rect is within the content size (without padding)
+            rect.check_within(self.byte_size());
+        }
+        Rect {
             origin: (rect.origin.0 + self.offset.0, rect.origin.1 + self.offset.1),
             size: rect.size,
-        };
-        if cfg!(debug_assertions) {
-            ret.check_within(self.byte_size());
         }
-        ret
     }
 
     pub fn get_rect_mut(&mut self, rect: Rect) -> RawImageRectMut<'_> {

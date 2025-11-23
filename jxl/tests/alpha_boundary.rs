@@ -7,7 +7,6 @@ use jxl::api::{JxlDecoder, JxlDecoderOptions, JxlOutputBuffer, ProcessingResult}
 use jxl::image::{Image, Rect};
 
 #[test]
-#[ignore] // Known bug: Rect out of bounds at group boundaries. Run with --ignored to verify fix.
 fn alpha_boundary() {
     let data = std::fs::read("resources/test/dice.jxl").expect("Failed to read dice.jxl");
 
