@@ -106,7 +106,12 @@ mod test {
             vec![Point { x: 9.0, y: 54.0 }],
         );
         let output: Vec<Image<f32>> = make_and_run_simple_pipeline(
-            SplinesStage::new(splines.clone(), size, &ColorCorrelationParams::default(), true),
+            SplinesStage::new(
+                splines.clone(),
+                size,
+                &ColorCorrelationParams::default(),
+                true,
+            ),
             &target_images,
             size,
             0,

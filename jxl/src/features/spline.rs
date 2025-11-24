@@ -621,7 +621,14 @@ impl Splines {
                 color[index] = coeffs.continuous_idct((32.0 - 1.0) * progress);
             }
             let sigma = spline.sigma_dct.continuous_idct((32.0 - 1.0) * progress);
-            self.add_segment(point, *multiplier, color, sigma, high_precision, segments_by_y);
+            self.add_segment(
+                point,
+                *multiplier,
+                color,
+                sigma,
+                high_precision,
+                segments_by_y,
+            );
         }
     }
 
