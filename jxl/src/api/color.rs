@@ -1747,7 +1747,6 @@ fn gamut_map(rgb: &mut [f32; 3], luminances: &[f32; 3], preserve_saturation: f32
     }
 }
 
-
 /// Tone map a single pixel and convert to PCS Lab for ICC profile.
 fn tone_map_pixel(
     transfer_function: &JxlTransferFunction,
@@ -2086,8 +2085,14 @@ mod test {
         // Lab L* should be in reasonable range for mid-gray after tone mapping
         assert!(lab[0] > 0, "L* should be positive for non-black input");
         // a* and b* should be near neutral (128) for achromatic input
-        assert!((lab[1] as i32 - 128).abs() < 10, "a* should be near neutral");
-        assert!((lab[2] as i32 - 128).abs() < 10, "b* should be near neutral");
+        assert!(
+            (lab[1] as i32 - 128).abs() < 10,
+            "a* should be near neutral"
+        );
+        assert!(
+            (lab[2] as i32 - 128).abs() < 10,
+            "b* should be near neutral"
+        );
     }
 
     #[test]
@@ -2103,8 +2108,14 @@ mod test {
         // Lab L* should be in reasonable range
         assert!(lab[0] > 0, "L* should be positive for non-black input");
         // a* and b* should be near neutral (128) for achromatic input
-        assert!((lab[1] as i32 - 128).abs() < 10, "a* should be near neutral");
-        assert!((lab[2] as i32 - 128).abs() < 10, "b* should be near neutral");
+        assert!(
+            (lab[1] as i32 - 128).abs() < 10,
+            "a* should be near neutral"
+        );
+        assert!(
+            (lab[2] as i32 - 128).abs() < 10,
+            "b* should be near neutral"
+        );
     }
 
     #[test]
@@ -2131,7 +2142,11 @@ mod test {
         assert!(profile.len() > 128, "Profile should have header + tags");
 
         // Verify header has Lab PCS (bytes 20-23 should be "Lab ")
-        assert_eq!(&profile[20..24], b"Lab ", "PCS should be Lab for HDR profiles");
+        assert_eq!(
+            &profile[20..24],
+            b"Lab ",
+            "PCS should be Lab for HDR profiles"
+        );
 
         // Check for 'mft1' (A2B0 tag type) somewhere in the profile
         assert!(
@@ -2252,7 +2267,10 @@ mod test {
 
         // For HDR PQ content, we should be able to generate an ICC profile
         let icc = color_profile.try_as_icc();
-        assert!(icc.is_some(), "Should generate ICC profile for HDR PQ content");
+        assert!(
+            icc.is_some(),
+            "Should generate ICC profile for HDR PQ content"
+        );
 
         let profile = icc.unwrap();
         // Verify it's an HDR profile with Lab PCS
@@ -2291,7 +2309,10 @@ mod test {
 
         // For HDR HLG content, we should be able to generate an ICC profile
         let icc = color_profile.try_as_icc();
-        assert!(icc.is_some(), "Should generate ICC profile for HDR HLG content");
+        assert!(
+            icc.is_some(),
+            "Should generate ICC profile for HDR HLG content"
+        );
 
         let profile = icc.unwrap();
         // Verify it's an HDR profile with Lab PCS
