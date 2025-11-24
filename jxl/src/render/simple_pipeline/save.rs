@@ -54,7 +54,10 @@ impl SaveStage {
                             let val = (px.clamp(0.0, 1.0) * max).round() as u8;
                             write_pixel!(val, Endianness::LittleEndian);
                         }
-                        JxlDataFormat::U16 { endianness, bit_depth } => {
+                        JxlDataFormat::U16 {
+                            endianness,
+                            bit_depth,
+                        } => {
                             let max = ((1u32 << bit_depth) - 1) as f64;
                             let val = (px.clamp(0.0, 1.0) * max).round() as u16;
                             write_pixel!(val, endianness);
@@ -77,10 +80,7 @@ impl SaveStage {
 mod test {
     use super::*;
     use crate::{
-        api::JxlColorType,
-        headers::Orientation,
-        image::Rect,
-        util::test::assert_almost_eq,
+        api::JxlColorType, headers::Orientation, image::Rect, util::test::assert_almost_eq,
     };
     use rand::SeedableRng;
     use rand_xorshift::XorShiftRng;

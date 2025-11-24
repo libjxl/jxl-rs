@@ -8,7 +8,7 @@ use crate::error::{Error, Result};
 use crate::headers::Orientation;
 use crate::render::internal::ChannelInfo;
 use crate::render::save::SaveStage;
-use crate::render::stages::{ConvertF32ToU16Stage, ConvertF32ToU8Stage};
+use crate::render::stages::{ConvertF32ToU8Stage, ConvertF32ToU16Stage};
 use crate::util::{ShiftRightCeil, tracing_wrappers::*};
 
 use super::internal::{RenderPipelineShared, Stage};
@@ -164,8 +164,8 @@ impl<Pipeline: RenderPipeline> RenderPipelineBuilder<Pipeline> {
                         channel_types[i].is_none_or(|ty| ty == crate::image::DataTypeTag::F32);
 
                     if needs_conversion {
-                        self = self
-                            .add_inout_stage(ConvertF32ToU8Stage::new(channel, bit_depth))?;
+                        self =
+                            self.add_inout_stage(ConvertF32ToU8Stage::new(channel, bit_depth))?;
                     }
                 }
             }
@@ -176,8 +176,8 @@ impl<Pipeline: RenderPipeline> RenderPipelineBuilder<Pipeline> {
                         channel_types[i].is_none_or(|ty| ty == crate::image::DataTypeTag::F32);
 
                     if needs_conversion {
-                        self = self
-                            .add_inout_stage(ConvertF32ToU16Stage::new(channel, bit_depth))?;
+                        self =
+                            self.add_inout_stage(ConvertF32ToU16Stage::new(channel, bit_depth))?;
                     }
                 }
             }
