@@ -5,7 +5,7 @@
 
 use std::{f32::consts::SQRT_2, sync::OnceLock};
 
-use half::f16;
+use crate::util::f16;
 
 use crate::{
     BLOCK_DIM, BLOCK_SIZE,
