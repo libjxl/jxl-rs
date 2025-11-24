@@ -3,7 +3,7 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-use half::f16;
+use crate::util::f16;
 
 use crate::{
     api::{Endianness, JxlDataFormat, JxlOutputBuffer},

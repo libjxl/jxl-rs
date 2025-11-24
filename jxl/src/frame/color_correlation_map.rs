@@ -50,7 +50,7 @@ impl ColorCorrelationParams {
                 2 => (br.read(8)? + 2) as u32,
                 _ => (br.read(16)? + 258) as u32,
             };
-            use half::f16;
+            use crate::util::f16;
             let val_x = f16::from_bits(br.read(16)? as u16);
             let val_b = f16::from_bits(br.read(16)? as u16);
             if !val_x.is_finite() || !val_b.is_finite() {

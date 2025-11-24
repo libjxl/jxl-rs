@@ -64,7 +64,7 @@ impl UnconditionalCoder<()> for f32 {
         br: &mut BitReader,
         _: &Self::Nonserialized,
     ) -> Result<f32, Error> {
-        use half::f16;
+        use crate::util::f16;
         let ret = f16::from_bits(br.read(16)? as u16);
         if !ret.is_finite() {
             Err(Error::FloatNaNOrInf)

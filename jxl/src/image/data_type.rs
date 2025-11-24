@@ -40,7 +40,7 @@ const _: () = {
     assert!(std::mem::size_of::<u8>() == DataTypeTag::U8.size());
     assert!(std::mem::size_of::<i16>() == DataTypeTag::I16.size());
     assert!(std::mem::size_of::<u16>() == DataTypeTag::U16.size());
-    assert!(std::mem::size_of::<half::f16>() == DataTypeTag::F16.size());
+    assert!(std::mem::size_of::<crate::util::f16>() == DataTypeTag::F16.size());
     assert!(std::mem::size_of::<i32>() == DataTypeTag::I32.size());
     assert!(std::mem::size_of::<u32>() == DataTypeTag::U32.size());
     assert!(std::mem::size_of::<f32>() == DataTypeTag::F32.size());
@@ -124,15 +124,15 @@ impl_image_data_type!(i32, I32);
 // testing purposes.
 impl_image_data_type!(f64, F64);
 
-impl private::Sealed for half::f16 {}
-// SAFETY: f16 is a bag-of-bits type.
-unsafe impl ImageDataType for half::f16 {
+impl private::Sealed for crate::util::f16 {}
+// SAFETY: f16 is a bag-of-bits type (transparent wrapper around u16).
+unsafe impl ImageDataType for crate::util::f16 {
     const DATA_TYPE_ID: DataTypeTag = DataTypeTag::F16;
-    fn from_f64(f: f64) -> half::f16 {
-        half::f16::from_f64(f)
+    fn from_f64(f: f64) -> crate::util::f16 {
+        crate::util::f16::from_f64(f)
     }
     fn to_f64(self) -> f64 {
-        <half::f16>::to_f64(self)
+        crate::util::f16::to_f64(self)
     }
     #[cfg(test)]
     fn random<R: rand::Rng>(rng: &mut R) -> Self {
