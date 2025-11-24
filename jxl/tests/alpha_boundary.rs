@@ -22,7 +22,10 @@ fn alpha_boundary() {
 
     let basic_info = decoder.basic_info();
     let (width, height) = basic_info.size;
-    let num_color_channels = decoder.current_pixel_format().color_type.samples_per_pixel();
+    let num_color_channels = decoder
+        .current_pixel_format()
+        .color_type
+        .samples_per_pixel();
 
     // Process to get frame info
     let decoder = match decoder.process(&mut input).unwrap() {
