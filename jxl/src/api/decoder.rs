@@ -385,4 +385,442 @@ pub(crate) mod tests {
     }
 
     for_each_test_file!(compare_pipelines);
+
+    /// Test that flush_pixels works when no frame is currently being decoded.
+    #[test]
+    fn test_flush_pixels_no_frame() {
+        // Load a test file
+        let file = std::fs::read("resources/test/green_queen_vardct_e3.jxl").unwrap();
+        let mut input = &file[..];
+        let options = JxlDecoderOptions::default();
+        let decoder = JxlDecoder::<states::Initialized>::new(options);
+
+        // Process until we have image info
+        let mut chunk_input = &input[0..0];
+        let decoder_with_image_info;
+        {
+            let mut d = decoder;
+            loop {
+                chunk_input = &input[..(chunk_input.len().saturating_add(1024)).min(input.len())];
+                let available_before = chunk_input.len();
+                let process_result = d.process(&mut chunk_input);
+                input = &input[(available_before - chunk_input.len())..];
+                match process_result.unwrap() {
+                    ProcessingResult::Complete { result } => {
+                        decoder_with_image_info = result;
+                        break;
+                    }
+                    ProcessingResult::NeedsMoreInput { fallback, .. } => {
+                        d = fallback;
+                    }
+                }
+            }
+        }
+
+        // Process until we have frame info
+        let mut decoder_with_frame_info;
+        {
+            let mut d = decoder_with_image_info;
+            loop {
+                chunk_input = &input[..(chunk_input.len().saturating_add(1024)).min(input.len())];
+                let available_before = chunk_input.len();
+                let process_result = d.process(&mut chunk_input);
+                input = &input[(available_before - chunk_input.len())..];
+                match process_result.unwrap() {
+                    ProcessingResult::Complete { result } => {
+                        decoder_with_frame_info = result;
+                        break;
+                    }
+                    ProcessingResult::NeedsMoreInput { fallback, .. } => {
+                        d = fallback;
+                    }
+                }
+            }
+        }
+
+        // Get the basic info for buffer sizes
+        let basic_info = decoder_with_frame_info.inner.basic_info().unwrap().clone();
+        let (buffer_width, buffer_height) = basic_info.size;
+        let pixel_format = decoder_with_frame_info
+            .inner
+            .current_pixel_format()
+            .unwrap()
+            .clone();
+        let num_channels = pixel_format.color_type.samples_per_pixel();
+
+        // Create buffer
+        let mut buffer = Image::new_with_value(
+            (buffer_width * num_channels, buffer_height),
+            f32::NAN,
+        )
+        .unwrap();
+        let api_buffer = JxlOutputBuffer::from_image_rect_mut(
+            buffer
+                .get_rect_mut(Rect {
+                    origin: (0, 0),
+                    size: buffer.size(),
+                })
+                .into_raw(),
+        );
+
+        // Call flush_pixels - should not panic even though we haven't received any section data yet
+        let result = decoder_with_frame_info.flush_pixels(&mut [api_buffer]);
+        assert!(result.is_ok());
+    }
+
+    /// Test that flush_pixels can be called and returns Ok even with no render pipeline.
+    #[test]
+    fn test_flush_pixels_inner_no_pipeline() {
+        // Test that flush_pixels at the inner level handles no-pipeline case gracefully
+        let file = std::fs::read("resources/test/green_queen_vardct_e3.jxl").unwrap();
+        let mut input = &file[..];
+        let options = JxlDecoderOptions::default();
+        let mut inner = crate::api::JxlDecoderInner::new(options);
+
+        // Get image info first
+        let mut chunk = &input[..4096.min(input.len())];
+        let _ = inner.process(&mut chunk, None);
+        input = &input[(4096.min(input.len()) - chunk.len())..];
+
+        // Get frame info
+        chunk = &input[..4096.min(input.len())];
+        let _ = inner.process(&mut chunk, None);
+
+        // Create a small test buffer using Image
+        let mut test_image: Image<f32> = Image::new((4, 4)).unwrap();
+        let output_buffer = JxlOutputBuffer::from_image_rect_mut(
+            test_image
+                .get_rect_mut(Rect {
+                    origin: (0, 0),
+                    size: test_image.size(),
+                })
+                .into_raw(),
+        );
+
+        // flush_pixels should return Ok even if no pipeline is set up
+        let result = inner.flush_pixels(&mut [output_buffer]);
+        assert!(result.is_ok());
+    }
+
+    /// Test that flush_pixels can be called multiple times without error.
+    #[test]
+    fn test_flush_pixels_multiple_calls() {
+        let file = std::fs::read("resources/test/green_queen_vardct_e3.jxl").unwrap();
+        let mut input = &file[..];
+        let options = JxlDecoderOptions::default();
+        let decoder = JxlDecoder::<states::Initialized>::new(options);
+
+        let mut chunk_input = &input[0..0];
+        let decoder_with_image_info;
+        {
+            let mut d = decoder;
+            loop {
+                chunk_input = &input[..(chunk_input.len().saturating_add(1024)).min(input.len())];
+                let available_before = chunk_input.len();
+                let process_result = d.process(&mut chunk_input);
+                input = &input[(available_before - chunk_input.len())..];
+                match process_result.unwrap() {
+                    ProcessingResult::Complete { result } => {
+                        decoder_with_image_info = result;
+                        break;
+                    }
+                    ProcessingResult::NeedsMoreInput { fallback, .. } => {
+                        d = fallback;
+                    }
+                }
+            }
+        }
+
+        let basic_info = decoder_with_image_info.basic_info().clone();
+        let (buffer_width, buffer_height) = basic_info.size;
+        let pixel_format = decoder_with_image_info.current_pixel_format().clone();
+        let num_channels = pixel_format.color_type.samples_per_pixel();
+
+        let mut decoder_with_frame_info;
+        {
+            let mut d = decoder_with_image_info;
+            loop {
+                chunk_input = &input[..(chunk_input.len().saturating_add(1024)).min(input.len())];
+                let available_before = chunk_input.len();
+                let process_result = d.process(&mut chunk_input);
+                input = &input[(available_before - chunk_input.len())..];
+                match process_result.unwrap() {
+                    ProcessingResult::Complete { result } => {
+                        decoder_with_frame_info = result;
+                        break;
+                    }
+                    ProcessingResult::NeedsMoreInput { fallback, .. } => {
+                        d = fallback;
+                    }
+                }
+            }
+        }
+
+        let mut buffer =
+            Image::new_with_value((buffer_width * num_channels, buffer_height), f32::NAN).unwrap();
+
+        // Call flush_pixels multiple times - should all succeed
+        for _ in 0..5 {
+            let api_buffer = JxlOutputBuffer::from_image_rect_mut(
+                buffer
+                    .get_rect_mut(Rect {
+                        origin: (0, 0),
+                        size: buffer.size(),
+                    })
+                    .into_raw(),
+            );
+            let result = decoder_with_frame_info.flush_pixels(&mut [api_buffer]);
+            assert!(result.is_ok(), "flush_pixels should succeed on repeated calls");
+        }
+    }
+
+    /// Test that flush_pixels works correctly with both pipeline types.
+    #[test]
+    fn test_flush_pixels_simple_pipeline() {
+        let file = std::fs::read("resources/test/green_queen_vardct_e3.jxl").unwrap();
+        let mut input = &file[..];
+        let options = JxlDecoderOptions::default();
+        let decoder = JxlDecoder::<states::Initialized>::new(options);
+
+        let mut chunk_input = &input[0..0];
+        let mut decoder_with_image_info;
+        {
+            let mut d = decoder;
+            loop {
+                chunk_input = &input[..(chunk_input.len().saturating_add(4096)).min(input.len())];
+                let available_before = chunk_input.len();
+                let process_result = d.process(&mut chunk_input);
+                input = &input[(available_before - chunk_input.len())..];
+                match process_result.unwrap() {
+                    ProcessingResult::Complete { result } => {
+                        decoder_with_image_info = result;
+                        break;
+                    }
+                    ProcessingResult::NeedsMoreInput { fallback, .. } => {
+                        d = fallback;
+                    }
+                }
+            }
+        }
+
+        // Enable simple pipeline
+        decoder_with_image_info.set_use_simple_pipeline(true);
+
+        let basic_info = decoder_with_image_info.basic_info().clone();
+        let (buffer_width, buffer_height) = basic_info.size;
+        let pixel_format = decoder_with_image_info.current_pixel_format().clone();
+        let num_channels = pixel_format.color_type.samples_per_pixel();
+
+        let mut decoder_with_frame_info;
+        {
+            let mut d = decoder_with_image_info;
+            loop {
+                chunk_input = &input[..(chunk_input.len().saturating_add(4096)).min(input.len())];
+                let available_before = chunk_input.len();
+                let process_result = d.process(&mut chunk_input);
+                input = &input[(available_before - chunk_input.len())..];
+                match process_result.unwrap() {
+                    ProcessingResult::Complete { result } => {
+                        decoder_with_frame_info = result;
+                        break;
+                    }
+                    ProcessingResult::NeedsMoreInput { fallback, .. } => {
+                        d = fallback;
+                    }
+                }
+            }
+        }
+
+        let mut buffer =
+            Image::new_with_value((buffer_width * num_channels, buffer_height), f32::NAN).unwrap();
+
+        let api_buffer = JxlOutputBuffer::from_image_rect_mut(
+            buffer
+                .get_rect_mut(Rect {
+                    origin: (0, 0),
+                    size: buffer.size(),
+                })
+                .into_raw(),
+        );
+
+        // flush_pixels should work with simple pipeline
+        let result = decoder_with_frame_info.flush_pixels(&mut [api_buffer]);
+        assert!(result.is_ok(), "flush_pixels should work with simple pipeline");
+    }
+
+    /// Test flush_pixels on a modular image to verify it works with different encodings.
+    #[test]
+    fn test_flush_pixels_modular_image() {
+        // Use a modular-encoded image
+        let file = std::fs::read("resources/test/green_queen_modular_e3.jxl").unwrap();
+        let mut input = &file[..];
+        let options = JxlDecoderOptions::default();
+        let decoder = JxlDecoder::<states::Initialized>::new(options);
+
+        let mut chunk_input = &input[0..0];
+        let decoder_with_image_info;
+        {
+            let mut d = decoder;
+            loop {
+                chunk_input = &input[..(chunk_input.len().saturating_add(4096)).min(input.len())];
+                let available_before = chunk_input.len();
+                let process_result = d.process(&mut chunk_input);
+                input = &input[(available_before - chunk_input.len())..];
+                match process_result.unwrap() {
+                    ProcessingResult::Complete { result } => {
+                        decoder_with_image_info = result;
+                        break;
+                    }
+                    ProcessingResult::NeedsMoreInput { fallback, .. } => {
+                        d = fallback;
+                    }
+                }
+            }
+        }
+
+        let basic_info = decoder_with_image_info.basic_info().clone();
+        let (buffer_width, buffer_height) = basic_info.size;
+        let pixel_format = decoder_with_image_info.current_pixel_format().clone();
+        let num_channels = pixel_format.color_type.samples_per_pixel();
+
+        let mut decoder_with_frame_info;
+        {
+            let mut d = decoder_with_image_info;
+            loop {
+                chunk_input = &input[..(chunk_input.len().saturating_add(4096)).min(input.len())];
+                let available_before = chunk_input.len();
+                let process_result = d.process(&mut chunk_input);
+                input = &input[(available_before - chunk_input.len())..];
+                match process_result.unwrap() {
+                    ProcessingResult::Complete { result } => {
+                        decoder_with_frame_info = result;
+                        break;
+                    }
+                    ProcessingResult::NeedsMoreInput { fallback, .. } => {
+                        d = fallback;
+                    }
+                }
+            }
+        }
+
+        let mut buffer =
+            Image::new_with_value((buffer_width * num_channels, buffer_height), f32::NAN).unwrap();
+
+        let api_buffer = JxlOutputBuffer::from_image_rect_mut(
+            buffer
+                .get_rect_mut(Rect {
+                    origin: (0, 0),
+                    size: buffer.size(),
+                })
+                .into_raw(),
+        );
+
+        let result = decoder_with_frame_info.flush_pixels(&mut [api_buffer]);
+        assert!(result.is_ok(), "flush_pixels should work with modular images");
+    }
+
+    /// Test that flush_pixels returns consistent results - calling it twice without
+    /// new data should not change the buffer.
+    #[test]
+    fn test_flush_pixels_idempotent() {
+        let file = std::fs::read("resources/test/green_queen_vardct_e3.jxl").unwrap();
+        let mut input = &file[..];
+        let options = JxlDecoderOptions::default();
+        let decoder = JxlDecoder::<states::Initialized>::new(options);
+
+        let mut chunk_input = &input[0..0];
+        let decoder_with_image_info;
+        {
+            let mut d = decoder;
+            loop {
+                chunk_input = &input[..(chunk_input.len().saturating_add(4096)).min(input.len())];
+                let available_before = chunk_input.len();
+                let process_result = d.process(&mut chunk_input);
+                input = &input[(available_before - chunk_input.len())..];
+                match process_result.unwrap() {
+                    ProcessingResult::Complete { result } => {
+                        decoder_with_image_info = result;
+                        break;
+                    }
+                    ProcessingResult::NeedsMoreInput { fallback, .. } => {
+                        d = fallback;
+                    }
+                }
+            }
+        }
+
+        let basic_info = decoder_with_image_info.basic_info().clone();
+        let (buffer_width, buffer_height) = basic_info.size;
+        let pixel_format = decoder_with_image_info.current_pixel_format().clone();
+        let num_channels = pixel_format.color_type.samples_per_pixel();
+
+        let mut decoder_with_frame_info;
+        {
+            let mut d = decoder_with_image_info;
+            loop {
+                chunk_input = &input[..(chunk_input.len().saturating_add(4096)).min(input.len())];
+                let available_before = chunk_input.len();
+                let process_result = d.process(&mut chunk_input);
+                input = &input[(available_before - chunk_input.len())..];
+                match process_result.unwrap() {
+                    ProcessingResult::Complete { result } => {
+                        decoder_with_frame_info = result;
+                        break;
+                    }
+                    ProcessingResult::NeedsMoreInput { fallback, .. } => {
+                        d = fallback;
+                    }
+                }
+            }
+        }
+
+        let mut buffer1 =
+            Image::new_with_value((buffer_width * num_channels, buffer_height), 0.0f32).unwrap();
+        let mut buffer2 =
+            Image::new_with_value((buffer_width * num_channels, buffer_height), 0.0f32).unwrap();
+
+        // First flush
+        {
+            let api_buffer = JxlOutputBuffer::from_image_rect_mut(
+                buffer1
+                    .get_rect_mut(Rect {
+                        origin: (0, 0),
+                        size: buffer1.size(),
+                    })
+                    .into_raw(),
+            );
+            decoder_with_frame_info
+                .flush_pixels(&mut [api_buffer])
+                .unwrap();
+        }
+
+        // Second flush to different buffer
+        {
+            let api_buffer = JxlOutputBuffer::from_image_rect_mut(
+                buffer2
+                    .get_rect_mut(Rect {
+                        origin: (0, 0),
+                        size: buffer2.size(),
+                    })
+                    .into_raw(),
+            );
+            decoder_with_frame_info
+                .flush_pixels(&mut [api_buffer])
+                .unwrap();
+        }
+
+        // Both buffers should have identical content
+        let (xs, ys) = buffer1.size();
+        for y in 0..ys {
+            for x in 0..xs {
+                let v1 = buffer1.row(y)[x];
+                let v2 = buffer2.row(y)[x];
+                // Both should be equal (either both NaN or both same value)
+                assert!(
+                    (v1.is_nan() && v2.is_nan()) || (v1 - v2).abs() < 1e-10,
+                    "flush_pixels should be idempotent: at ({x}, {y}): {v1} != {v2}"
+                );
+            }
+        }
+    }
 }

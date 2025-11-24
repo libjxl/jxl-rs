@@ -118,6 +118,17 @@ impl CodestreamParser {
             .set_use_simple_pipeline(u);
     }
 
+    /// Flushes any pending rendered data to the output buffers.
+    /// This is used for progressive decoding to output partially decoded pixels.
+    pub(super) fn flush_pixels(&mut self, buffers: &mut [JxlOutputBuffer<'_>]) -> Result<()> {
+        if let Some(frame) = &mut self.frame {
+            if let Some(pixel_format) = &self.pixel_format {
+                frame.flush_to_buffers(buffers, pixel_format)?;
+            }
+        }
+        Ok(())
+    }
+
     pub(super) fn process<In: JxlBitstreamInput>(
         &mut self,
         box_parser: &mut BoxParser,

@@ -466,6 +466,21 @@ impl RenderPipeline for LowMemoryRenderPipeline {
         Box::new(stage)
     }
 
+    fn flush(&mut self, buffer_splitter: &mut BufferSplitter) -> Result<()> {
+        // Attempt to render all groups that have made progress.
+        for g in 0..self.input_buffers.len() {
+            let ready_passes = self.shared.group_chan_ready_passes[g]
+                .iter()
+                .copied()
+                .min()
+                .unwrap();
+            if self.input_buffers[g].completed_passes < ready_passes {
+                self.render_with_new_group(g, buffer_splitter)?;
+            }
+        }
+        Ok(())
+    }
+
     fn box_inplace_stage<S: super::RenderPipelineInPlaceStage>(
         stage: S,
     ) -> Box<dyn RunInPlaceStage<Self::Buffer>> {

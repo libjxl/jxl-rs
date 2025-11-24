@@ -206,6 +206,10 @@ impl RenderPipeline for SimpleRenderPipeline {
         Box::new(stage)
     }
 
+    fn flush(&mut self, buffer_splitter: &mut BufferSplitter) -> Result<()> {
+        self.do_render(buffer_splitter)
+    }
+
     fn box_inplace_stage<S: RenderPipelineInPlaceStage>(
         stage: S,
     ) -> Box<dyn super::RunInPlaceStage<Self::Buffer>> {

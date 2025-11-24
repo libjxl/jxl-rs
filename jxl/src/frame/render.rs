@@ -478,6 +478,73 @@ impl Frame {
         pipeline.build()
     }
 
+    /// Flushes any pending rendered data to the output buffers.
+    /// This is used for progressive decoding to output partially decoded pixels.
+    pub fn flush_to_buffers(
+        &mut self,
+        api_buffers: &mut [JxlOutputBuffer<'_>],
+        pixel_format: &JxlPixelFormat,
+    ) -> Result<()> {
+        if self.render_pipeline.is_none() {
+            // No pipeline yet, nothing to flush
+            return Ok(());
+        }
+
+        let mut buffers: Vec<Option<JxlOutputBuffer>> = Vec::new();
+
+        let mut api_buffers_iter = api_buffers.iter_mut();
+        if pixel_format.color_data_format.is_some() {
+            buffers.push(Some(JxlOutputBuffer::reborrow(
+                api_buffers_iter.next().unwrap(),
+            )));
+        }
+        for fmt in &pixel_format.extra_channel_format {
+            if fmt.is_some() {
+                buffers.push(Some(JxlOutputBuffer::reborrow(
+                    api_buffers_iter.next().unwrap(),
+                )));
+            }
+        }
+
+        // Temporarily remove the reference/lf frames to be saved; we will move them back once
+        // flushing is done.
+        let mut reference_frame_data = std::mem::take(&mut self.reference_frame_data);
+        let mut lf_frame_data = std::mem::take(&mut self.lf_frame_data);
+
+        if let Some(ref_images) = &mut reference_frame_data {
+            buffers.extend(ref_images.iter_mut().map(|img| {
+                let rect = Rect {
+                    size: img.size(),
+                    origin: (0, 0),
+                };
+                Some(JxlOutputBuffer::from_image_rect_mut(
+                    img.get_rect_mut(rect).into_raw(),
+                ))
+            }));
+        };
+
+        if let Some(lf_images) = &mut lf_frame_data {
+            buffers.extend(lf_images.iter_mut().map(|img| {
+                let rect = Rect {
+                    size: img.size(),
+                    origin: (0, 0),
+                };
+                Some(JxlOutputBuffer::from_image_rect_mut(
+                    img.get_rect_mut(rect).into_raw(),
+                ))
+            }));
+        };
+
+        let mut buffer_splitter = BufferSplitter::new(&mut buffers[..]);
+
+        pipeline!(self, p, p.flush(&mut buffer_splitter)?);
+
+        self.reference_frame_data = reference_frame_data;
+        self.lf_frame_data = lf_frame_data;
+
+        Ok(())
+    }
+
     pub fn prepare_render_pipeline(
         &mut self,
         pixel_format: &JxlPixelFormat,
