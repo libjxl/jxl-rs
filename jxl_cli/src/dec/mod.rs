@@ -9,7 +9,7 @@ use color_eyre::eyre::{Result, eyre};
 use jxl::{
     api::{
         JxlAnimation, JxlBitDepth, JxlColorProfile, JxlColorType, JxlDecoder, JxlDecoderOptions,
-        JxlOutputBuffer, states::WithImageInfo,
+        JxlOutputBuffer, ProcessingResult, states::WithImageInfo,
     },
     image::{Image, ImageDataType, Rect},
 };
@@ -33,19 +33,11 @@ pub fn decode_header(
     input_buffer: &mut &[u8],
     decoder_options: JxlDecoderOptions,
 ) -> Result<JxlDecoder<WithImageInfo>> {
-    let mut initialized_decoder = JxlDecoder::<jxl::api::states::Initialized>::new(decoder_options);
+    let initialized_decoder = JxlDecoder::<jxl::api::states::Initialized>::new(decoder_options);
 
-    // Process until we have image info
-    loop {
-        match initialized_decoder.process(input_buffer)? {
-            jxl::api::ProcessingResult::Complete { result } => break Ok(result),
-            jxl::api::ProcessingResult::NeedsMoreInput { fallback, .. } => {
-                if input_buffer.is_empty() {
-                    break Err(eyre!("Source file truncated"));
-                }
-                initialized_decoder = fallback;
-            }
-        }
+    match initialized_decoder.process(input_buffer)? {
+        ProcessingResult::Complete { result } => Ok(result),
+        ProcessingResult::NeedsMoreInput { .. } => Err(eyre!("Source file truncated")),
     }
 }
 
@@ -81,17 +73,10 @@ pub fn decode_bytes(
     };
 
     loop {
-        let mut decoder_with_frame_info = loop {
-            match decoder_with_image_info.process(&mut input_buffer)? {
-                jxl::api::ProcessingResult::Complete { result } => break Ok(result),
-                jxl::api::ProcessingResult::NeedsMoreInput { fallback, .. } => {
-                    if input_buffer.is_empty() {
-                        break Err(eyre!("Source file truncated"));
-                    }
-                    decoder_with_image_info = fallback;
-                }
-            }
-        }?;
+        let decoder_with_frame_info = match decoder_with_image_info.process(&mut input_buffer)? {
+            ProcessingResult::Complete { result } => result,
+            ProcessingResult::NeedsMoreInput { .. } => return Err(eyre!("Source file truncated")),
+        };
 
         let frame_header = decoder_with_frame_info.frame_header();
 
@@ -115,17 +100,12 @@ pub fn decode_bytes(
             })
             .collect();
 
-        decoder_with_image_info = loop {
-            match decoder_with_frame_info.process(&mut input_buffer, &mut output_bufs)? {
-                jxl::api::ProcessingResult::Complete { result } => break Ok(result),
-                jxl::api::ProcessingResult::NeedsMoreInput { fallback, .. } => {
-                    if input_buffer.is_empty() {
-                        break Err(eyre!("Source file truncated"));
-                    }
-                    decoder_with_frame_info = fallback;
-                }
-            }
-        }?;
+        decoder_with_image_info = match decoder_with_frame_info
+            .process(&mut input_buffer, &mut output_bufs)?
+        {
+            ProcessingResult::Complete { result } => result,
+            ProcessingResult::NeedsMoreInput { .. } => return Err(eyre!("Source file truncated")),
+        };
 
         image_data.frames.push(ImageFrame {
             duration: frame_header.duration.unwrap_or(0.0),
