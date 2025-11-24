@@ -1,3 +1,8 @@
+// Copyright (c) the JPEG XL Project Authors. All rights reserved.
+//
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
 //! Tests for alpha channel handling at group boundaries.
 //!
 //! Tests boundary positions (x=256, 512) using dice.jxl which has alpha
