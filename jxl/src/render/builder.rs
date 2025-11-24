@@ -8,7 +8,6 @@ use crate::error::{Error, Result};
 use crate::headers::Orientation;
 use crate::render::internal::ChannelInfo;
 use crate::render::save::SaveStage;
-use crate::render::stages::{ConvertF32ToU8Stage, ConvertF32ToU16Stage};
 use crate::util::{ShiftRightCeil, tracing_wrappers::*};
 
 use super::internal::{RenderPipelineShared, Stage};
@@ -133,58 +132,13 @@ impl<Pipeline: RenderPipeline> RenderPipelineBuilder<Pipeline> {
 
     #[instrument(skip_all, err)]
     pub fn add_save_stage(
-        mut self,
+        self,
         channels: &[usize],
         orientation: Orientation,
         output_buffer_index: usize,
         color_type: JxlColorType,
         data_format: JxlDataFormat,
     ) -> Result<Self> {
-        // Add format conversion stages for each channel if output format is U8 or U16
-        // and the channel is still in f32 format.
-        // The pipeline processes data as f32, so we need to convert before saving.
-
-        // Collect channel types upfront to avoid borrow checker issues
-        let channel_types: Vec<_> = channels
-            .iter()
-            .map(|&ch| {
-                self.shared
-                    .channel_info
-                    .last()
-                    .and_then(|info| info.get(ch))
-                    .and_then(|info| info.ty)
-            })
-            .collect();
-
-        match data_format {
-            JxlDataFormat::U8 { bit_depth } => {
-                for (i, &channel) in channels.iter().enumerate() {
-                    // Only add conversion if channel is still f32 (or unknown)
-                    let needs_conversion =
-                        channel_types[i].is_none_or(|ty| ty == crate::image::DataTypeTag::F32);
-
-                    if needs_conversion {
-                        self =
-                            self.add_inout_stage(ConvertF32ToU8Stage::new(channel, bit_depth))?;
-                    }
-                }
-            }
-            JxlDataFormat::U16 { bit_depth, .. } => {
-                for (i, &channel) in channels.iter().enumerate() {
-                    // Only add conversion if channel is still f32 (or unknown)
-                    let needs_conversion =
-                        channel_types[i].is_none_or(|ty| ty == crate::image::DataTypeTag::F32);
-
-                    if needs_conversion {
-                        self =
-                            self.add_inout_stage(ConvertF32ToU16Stage::new(channel, bit_depth))?;
-                    }
-                }
-            }
-            // F16 and F32 don't need conversion - the pipeline already uses f32
-            JxlDataFormat::F16 { .. } | JxlDataFormat::F32 { .. } => {}
-        }
-
         let stage = SaveStage::new(
             channels,
             orientation,

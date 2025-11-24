@@ -321,6 +321,48 @@ impl RenderPipelineInOutStage for ConvertF32ToU16Stage {
     }
 }
 
+/// Stage that converts f32 values to f16 (half-precision float) values.
+pub struct ConvertF32ToF16Stage {
+    channel: usize,
+}
+
+impl ConvertF32ToF16Stage {
+    pub fn new(channel: usize) -> ConvertF32ToF16Stage {
+        ConvertF32ToF16Stage { channel }
+    }
+}
+
+impl std::fmt::Display for ConvertF32ToF16Stage {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "convert F32 to F16 in channel {}", self.channel)
+    }
+}
+
+impl RenderPipelineInOutStage for ConvertF32ToF16Stage {
+    type InputT = f32;
+    type OutputT = crate::util::f16;
+    const SHIFT: (u8, u8) = (0, 0);
+    const BORDER: (u8, u8) = (0, 0);
+
+    fn uses_channel(&self, c: usize) -> bool {
+        c == self.channel
+    }
+
+    fn process_row_chunk(
+        &self,
+        _position: (usize, usize),
+        xsize: usize,
+        input_rows: &[&[&[f32]]],
+        output_rows: &mut [&mut [&mut [crate::util::f16]]],
+        _state: Option<&mut dyn std::any::Any>,
+    ) {
+        let input = input_rows[0];
+        for i in 0..xsize {
+            output_rows[0][0][i] = crate::util::f16::from_f32(input[0][i]);
+        }
+    }
+}
+
 #[cfg(test)]
 mod test {
     use super::*;
@@ -348,5 +390,10 @@ mod test {
             (500, 500),
             1,
         )
+    }
+
+    #[test]
+    fn f32_to_f16_consistency() -> Result<()> {
+        crate::render::test::test_stage_consistency(|| ConvertF32ToF16Stage::new(0), (500, 500), 1)
     }
 }

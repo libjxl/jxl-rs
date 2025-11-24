@@ -52,6 +52,41 @@ macro_rules! pipeline {
 pub(crate) use pipeline;
 
 impl Frame {
+    /// Add conversion stages for non-float output formats.
+    /// This is needed before saving to U8/U16/F16 formats to convert from the pipeline's f32.
+    fn add_conversion_stages<P: RenderPipeline>(
+        mut pipeline: RenderPipelineBuilder<P>,
+        channels: &[usize],
+        data_format: JxlDataFormat,
+    ) -> Result<RenderPipelineBuilder<P>> {
+        use crate::render::stages::{
+            ConvertF32ToF16Stage, ConvertF32ToU8Stage, ConvertF32ToU16Stage,
+        };
+
+        match data_format {
+            JxlDataFormat::U8 { bit_depth } => {
+                for &channel in channels {
+                    pipeline =
+                        pipeline.add_inout_stage(ConvertF32ToU8Stage::new(channel, bit_depth))?;
+                }
+            }
+            JxlDataFormat::U16 { bit_depth, .. } => {
+                for &channel in channels {
+                    pipeline =
+                        pipeline.add_inout_stage(ConvertF32ToU16Stage::new(channel, bit_depth))?;
+                }
+            }
+            JxlDataFormat::F16 { .. } => {
+                for &channel in channels {
+                    pipeline = pipeline.add_inout_stage(ConvertF32ToF16Stage::new(channel))?;
+                }
+            }
+            // F32 doesn't need conversion - the pipeline already uses f32
+            JxlDataFormat::F32 { .. } => {}
+        }
+        Ok(pipeline)
+    }
+
     pub fn decode_and_render_hf_groups(
         &mut self,
         api_buffers: &mut Option<&mut [JxlOutputBuffer<'_>]>,
@@ -456,6 +491,8 @@ impl Frame {
                     (false, Some(c)) => &[0, 1, 2, c],
                 };
             if let Some(df) = &pixel_format.color_data_format {
+                // Add conversion stages for non-float output formats
+                pipeline = Self::add_conversion_stages(pipeline, color_source_channels, *df)?;
                 pipeline = pipeline.add_save_stage(
                     color_source_channels,
                     metadata.orientation,
@@ -466,6 +503,8 @@ impl Frame {
             }
             for i in 0..frame_header.num_extra_channels as usize {
                 if let Some(df) = &pixel_format.extra_channel_format[i] {
+                    // Add conversion stages for non-float output formats
+                    pipeline = Self::add_conversion_stages(pipeline, &[3 + i], *df)?;
                     pipeline = pipeline.add_save_stage(
                         &[3 + i],
                         metadata.orientation,
