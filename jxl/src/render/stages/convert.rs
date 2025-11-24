@@ -225,6 +225,102 @@ impl RenderPipelineInOutStage for ConvertModularToF32Stage {
     }
 }
 
+/// Stage that converts f32 values in [0, 1] range to u8 values.
+pub struct ConvertF32ToU8Stage {
+    channel: usize,
+    bit_depth: u8,
+}
+
+impl ConvertF32ToU8Stage {
+    pub fn new(channel: usize, bit_depth: u8) -> ConvertF32ToU8Stage {
+        ConvertF32ToU8Stage { channel, bit_depth }
+    }
+}
+
+impl std::fmt::Display for ConvertF32ToU8Stage {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "convert F32 to U8 in channel {} with bit depth {}",
+            self.channel, self.bit_depth
+        )
+    }
+}
+
+impl RenderPipelineInOutStage for ConvertF32ToU8Stage {
+    type InputT = f32;
+    type OutputT = u8;
+    const SHIFT: (u8, u8) = (0, 0);
+    const BORDER: (u8, u8) = (0, 0);
+
+    fn uses_channel(&self, c: usize) -> bool {
+        c == self.channel
+    }
+
+    fn process_row_chunk(
+        &self,
+        _position: (usize, usize),
+        xsize: usize,
+        input_rows: &[&[&[f32]]],
+        output_rows: &mut [&mut [&mut [u8]]],
+        _state: Option<&mut dyn std::any::Any>,
+    ) {
+        let input = input_rows[0];
+        let max = ((1u32 << self.bit_depth) - 1) as f32;
+        for i in 0..xsize {
+            output_rows[0][0][i] = (input[0][i].clamp(0.0, 1.0) * max).round() as u8;
+        }
+    }
+}
+
+/// Stage that converts f32 values in [0, 1] range to u16 values.
+pub struct ConvertF32ToU16Stage {
+    channel: usize,
+    bit_depth: u8,
+}
+
+impl ConvertF32ToU16Stage {
+    pub fn new(channel: usize, bit_depth: u8) -> ConvertF32ToU16Stage {
+        ConvertF32ToU16Stage { channel, bit_depth }
+    }
+}
+
+impl std::fmt::Display for ConvertF32ToU16Stage {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "convert F32 to U16 in channel {} with bit depth {}",
+            self.channel, self.bit_depth
+        )
+    }
+}
+
+impl RenderPipelineInOutStage for ConvertF32ToU16Stage {
+    type InputT = f32;
+    type OutputT = u16;
+    const SHIFT: (u8, u8) = (0, 0);
+    const BORDER: (u8, u8) = (0, 0);
+
+    fn uses_channel(&self, c: usize) -> bool {
+        c == self.channel
+    }
+
+    fn process_row_chunk(
+        &self,
+        _position: (usize, usize),
+        xsize: usize,
+        input_rows: &[&[&[f32]]],
+        output_rows: &mut [&mut [&mut [u16]]],
+        _state: Option<&mut dyn std::any::Any>,
+    ) {
+        let input = input_rows[0];
+        let max = ((1u32 << self.bit_depth) - 1) as f32;
+        for i in 0..xsize {
+            output_rows[0][0][i] = (input[0][i].clamp(0.0, 1.0) * max).round() as u16;
+        }
+    }
+}
+
 #[cfg(test)]
 mod test {
     use super::*;
@@ -234,5 +330,23 @@ mod test {
     #[test]
     fn u8_consistency() -> Result<()> {
         crate::render::test::test_stage_consistency(|| ConvertU8F32Stage::new(0), (500, 500), 1)
+    }
+
+    #[test]
+    fn f32_to_u8_consistency() -> Result<()> {
+        crate::render::test::test_stage_consistency(
+            || ConvertF32ToU8Stage::new(0, 8),
+            (500, 500),
+            1,
+        )
+    }
+
+    #[test]
+    fn f32_to_u16_consistency() -> Result<()> {
+        crate::render::test::test_stage_consistency(
+            || ConvertF32ToU16Stage::new(0, 16),
+            (500, 500),
+            1,
+        )
     }
 }

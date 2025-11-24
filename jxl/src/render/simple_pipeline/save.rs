@@ -49,11 +49,15 @@ impl SaveStage {
                     }
 
                     match self.data_format {
-                        JxlDataFormat::U8 { .. } => {
-                            write_pixel!(px as u8, Endianness::LittleEndian);
+                        JxlDataFormat::U8 { bit_depth } => {
+                            let max = ((1u32 << bit_depth) - 1) as f64;
+                            let val = (px.clamp(0.0, 1.0) * max).round() as u8;
+                            write_pixel!(val, Endianness::LittleEndian);
                         }
-                        JxlDataFormat::U16 { endianness, .. } => {
-                            write_pixel!(px as u16, endianness);
+                        JxlDataFormat::U16 { endianness, bit_depth } => {
+                            let max = ((1u32 << bit_depth) - 1) as f64;
+                            let val = (px.clamp(0.0, 1.0) * max).round() as u16;
+                            write_pixel!(val, endianness);
                         }
                         JxlDataFormat::F32 { endianness } => {
                             write_pixel!(px as f32, endianness);
@@ -75,7 +79,7 @@ mod test {
     use crate::{
         api::JxlColorType,
         headers::Orientation,
-        image::{ImageDataType, Rect},
+        image::Rect,
         util::test::assert_almost_eq,
     };
     use rand::SeedableRng;
@@ -108,7 +112,9 @@ mod test {
 
         for y in 0..128 {
             for x in 0..128 {
-                assert_eq!(u8::from_f64(src[0].row(y)[x]), dst.row(y)[x]);
+                // Values are in [0, 1] range and should be scaled to [0, 255]
+                let expected = (src[0].row(y)[x].clamp(0.0, 1.0) * 255.0).round() as u8;
+                assert_eq!(expected, dst.row(y)[x]);
             }
         }
 

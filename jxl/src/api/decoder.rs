@@ -253,8 +253,6 @@ pub(crate) mod tests {
         assert!(buffer_height > 0);
 
         // Get pixel format info
-        // TODO(veluca): this relies on the default pixel format using floats. We should not do
-        // this, and instead call set_pixel_format, but that is currently not implemented.
         let pixel_format = decoder_with_image_info.current_pixel_format().clone();
 
         let num_channels = pixel_format.color_type.samples_per_pixel();
