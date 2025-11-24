@@ -924,7 +924,7 @@ impl JxlColorEncoding {
                     size_unpadded: a2b0_size,
                 });
 
-                // Create B2A0 tag (no-op, required by Safari)
+                // Create B2A0 tag (no-op, required by Apple software including Safari/Preview)
                 let b2a0_start = tags_data.len() as u32;
                 create_icc_noop_btoa_tag(&mut tags_data)?;
                 pad_to_4_byte_boundary(&mut tags_data);
