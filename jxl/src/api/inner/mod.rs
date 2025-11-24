@@ -87,7 +87,8 @@ impl JxlDecoderInner {
                 .animation
                 .as_ref()
                 .map(|anim| frame_header.duration(anim)),
-            size: (frame_header.width as usize, frame_header.height as usize),
+            // Use size_upsampled() to match the render pipeline's output dimensions
+            size: frame_header.size_upsampled(),
         })
     }
     /// Number of passes we have full data for.
