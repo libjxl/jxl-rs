@@ -69,4 +69,5 @@ pub struct JxlBasicInfo {
     pub animation: Option<JxlAnimation>,
     pub uses_original_profile: bool,
     pub tone_mapping: ToneMapping,
+    pub preview_size: Option<(usize, usize)>,
 }

@@ -60,6 +60,10 @@ pub(super) struct CodestreamParser {
     skip_sections: bool,
     // True when we need to process frames without copying them to output buffers, e.g. reference frames
     process_without_output: bool,
+    // True once the preview frame has been processed (if there is one)
+    preview_done: bool,
+    // Saved file header for recreating decoder state after preview frame
+    saved_file_header: Option<crate::headers::FileHeader>,
 
     section_state: SectionState,
     available_sections: Vec<SectionBuffer>,
@@ -92,6 +96,8 @@ impl CodestreamParser {
             ready_section_data: 0,
             skip_sections: false,
             process_without_output: false,
+            preview_done: false,
+            saved_file_header: None,
             section_state: SectionState::new(0, 0),
             available_sections: vec![],
             has_more_frames: true,
@@ -232,8 +238,11 @@ impl CodestreamParser {
                 }
                 if self.sections.is_empty() {
                     // Go back to parsing a new frame header, if any.
+                    // Only return if this was a regular visible frame that was actually decoded
+                    // (not a frame we were skipping like a preview frame)
+                    let was_skipping = self.process_without_output;
                     self.process_without_output = false;
-                    if regular_frame {
+                    if regular_frame && !was_skipping {
                         return Ok(());
                     }
                     continue;
@@ -282,6 +291,20 @@ impl CodestreamParser {
                     return Ok(());
                 }
                 if self.frame.is_some() {
+                    // Check if this is a preview frame that should be skipped
+                    let is_preview_frame = !self.preview_done
+                        && self
+                            .basic_info
+                            .as_ref()
+                            .is_some_and(|info| info.preview_size.is_some());
+                    if is_preview_frame {
+                        self.preview_done = true;
+                        if decode_options.skip_preview {
+                            self.process_without_output = true;
+                            continue;
+                        }
+                    }
+
                     if self.has_visible_frame() {
                         // Return to caller if we found visible frame info.
                         return Ok(());

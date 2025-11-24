@@ -9,7 +9,7 @@ use jxl::api::{JxlColorType, JxlDecoderOptions};
 use jxl::image::Image;
 use jxl_cli::{dec, enc};
 use std::fs::File;
-use std::io::{BufReader, BufWriter, Read, Write};
+use std::io::{BufReader, BufWriter, Read, Seek, Write};
 use std::path::PathBuf;
 use std::time::Duration;
 use std::{fs, mem};
@@ -63,7 +63,7 @@ struct Opt {
     input: PathBuf,
 
     /// Output image file, should end in .ppm, .pgm, .png or .npy
-    #[clap(required_unless_present = "speedtest")]
+    #[clap(required_unless_present_any = ["speedtest", "info"])]
     output: Option<PathBuf>,
 
     /// Print measured decoding speed..
@@ -85,6 +85,14 @@ struct Opt {
     /// If specified, takes precedence over the bit depth in the input metadata
     #[clap(long)]
     override_bitdepth: Option<u32>,
+
+    /// Extract the preview frame instead of the main image
+    #[clap(long, action)]
+    preview: bool,
+
+    /// Print image information without decoding
+    #[clap(long, short, action)]
+    info: bool,
 }
 
 // Extract RGB channels from interleaved RGB buffer
@@ -127,15 +135,53 @@ fn main() -> Result<()> {
         Some(path) => (path.ends_with(".npy"), path.ends_with(".exr")),
         None => (false, false),
     };
-    let options = || {
+    let options = |skip_preview: bool| {
         let mut options = JxlDecoderOptions::default();
         options.xyb_output_linear = numpy_output || exr_output;
         options.render_spot_colors = !numpy_output;
+        options.skip_preview = skip_preview;
         options
     };
 
+    // Handle --info flag: print image info and exit
+    if opt.info {
+        let mut reader = BufReader::new(&mut file);
+        let decoder = dec::decode_header(&mut reader, options(true))?;
+        let info = decoder.basic_info();
+        println!("Image size: {}x{}", info.size.0, info.size.1);
+        println!("Bit depth: {:?}", info.bit_depth);
+        println!("Orientation: {:?}", info.orientation);
+        if let Some(preview_size) = info.preview_size {
+            println!("Preview size: {}x{}", preview_size.0, preview_size.1);
+        } else {
+            println!("Preview: none");
+        }
+        if let Some(anim) = &info.animation {
+            println!(
+                "Animation: {} loops, {}/{} tps",
+                anim.num_loops, anim.tps_numerator, anim.tps_denominator
+            );
+        }
+        println!("Extra channels: {}", info.extra_channels.len());
+        return Ok(());
+    }
+
+    // Handle --preview flag: check if preview exists
+    if opt.preview {
+        let mut reader = BufReader::new(&mut file);
+        let decoder = dec::decode_header(&mut reader, options(true))?;
+        let info = decoder.basic_info();
+        if info.preview_size.is_none() {
+            return Err(eyre!("This file does not contain a preview frame"));
+        }
+        // Seek back to start for actual decoding
+        file.seek(std::io::SeekFrom::Start(0))?;
+    }
+
     let reps = opt.num_reps.unwrap_or(1);
     let mut duration_sum = Duration::new(0, 0);
+    // When extracting preview, don't skip it; otherwise skip preview by default
+    let skip_preview = !opt.preview;
 
     let mut image_data = if reps > 1 {
         // For multiple repetitions (benchmarking), read into memory to avoid I/O variability
@@ -144,17 +190,43 @@ fn main() -> Result<()> {
         (0..reps)
             .try_fold(None, |_, _| -> Result<Option<dec::DecodeOutput<f32>>> {
                 let mut input = input_bytes.as_slice();
-                let (iteration_image_data, iteration_duration) =
-                    dec::decode_frames(&mut input, options())?;
+                let (mut iteration_image_data, iteration_duration) =
+                    dec::decode_frames(&mut input, options(skip_preview))?;
                 duration_sum += iteration_duration;
+                // When extracting preview, only keep the first frame (the preview)
+                if opt.preview {
+                    iteration_image_data.frames.truncate(1);
+                    if let Some(frame) = iteration_image_data.frames.first() {
+                        let samples = if frame.color_type == JxlColorType::Grayscale {
+                            1
+                        } else {
+                            3
+                        };
+                        let (w, h) = frame.channels[0].size();
+                        iteration_image_data.size = (w / samples, h);
+                    }
+                }
                 Ok(Some(iteration_image_data))
             })?
             .unwrap()
     } else {
         // For single decode, stream from file
         let mut reader = BufReader::new(file);
-        let (image_data, duration) = dec::decode_frames(&mut reader, options())?;
+        let (mut image_data, duration) = dec::decode_frames(&mut reader, options(skip_preview))?;
         duration_sum = duration;
+        // When extracting preview, only keep the first frame (the preview)
+        if opt.preview {
+            image_data.frames.truncate(1);
+            if let Some(frame) = image_data.frames.first() {
+                let samples = if frame.color_type == JxlColorType::Grayscale {
+                    1
+                } else {
+                    3
+                };
+                let (w, h) = frame.channels[0].size();
+                image_data.size = (w / samples, h);
+            }
+        }
         image_data
     };
 

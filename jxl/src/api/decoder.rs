@@ -385,4 +385,34 @@ pub(crate) mod tests {
     }
 
     for_each_test_file!(compare_pipelines);
+
+    #[test]
+    fn test_preview_size_none_for_regular_files() {
+        let file = std::fs::read("resources/test/basic.jxl").unwrap();
+        let options = JxlDecoderOptions::default();
+        let mut decoder = JxlDecoder::<states::Initialized>::new(options);
+        let mut input = file.as_slice();
+        let decoder = loop {
+            match decoder.process(&mut input).unwrap() {
+                ProcessingResult::Complete { result } => break result,
+                ProcessingResult::NeedsMoreInput { fallback, .. } => decoder = fallback,
+            }
+        };
+        assert!(decoder.basic_info().preview_size.is_none());
+    }
+
+    #[test]
+    fn test_preview_size_some_for_preview_files() {
+        let file = std::fs::read("resources/test/with_preview.jxl").unwrap();
+        let options = JxlDecoderOptions::default();
+        let mut decoder = JxlDecoder::<states::Initialized>::new(options);
+        let mut input = file.as_slice();
+        let decoder = loop {
+            match decoder.process(&mut input).unwrap() {
+                ProcessingResult::Complete { result } => break result,
+                ProcessingResult::NeedsMoreInput { fallback, .. } => decoder = fallback,
+            }
+        };
+        assert_eq!(decoder.basic_info().preview_size, Some((16, 16)));
+    }
 }

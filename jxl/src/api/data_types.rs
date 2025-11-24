@@ -151,4 +151,6 @@ pub struct JxlAnimation {
 pub struct JxlFrameHeader {
     pub name: String,
     pub duration: Option<f64>,
+    /// Frame size (width, height)
+    pub size: (usize, usize),
 }

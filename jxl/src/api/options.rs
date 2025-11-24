@@ -35,7 +35,7 @@ impl Default for JxlDecoderOptions {
             unpremultiply_alpha: false,
             render_spot_colors: true,
             coalescing: true,
-            skip_preview: false,
+            skip_preview: true,
             desired_intensity_target: None,
             progressive_mode: JxlProgressiveMode::Pass,
             xyb_output_linear: true,

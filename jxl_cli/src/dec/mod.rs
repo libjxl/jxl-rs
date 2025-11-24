@@ -81,14 +81,15 @@ pub fn decode_frames<In: JxlBitstreamInput>(
         };
 
         let frame_header = decoder_with_frame_info.frame_header();
+        let frame_size = frame_header.size;
 
         let mut outputs = vec![Image::<f32>::new((
-            image_data.size.0 * samples_per_pixel,
-            image_data.size.1,
+            frame_size.0 * samples_per_pixel,
+            frame_size.1,
         ))?];
 
         for _ in 0..extra_channels {
-            outputs.push(Image::<f32>::new(image_data.size)?);
+            outputs.push(Image::<f32>::new(frame_size)?);
         }
 
         let mut output_bufs: Vec<JxlOutputBuffer<'_>> = outputs

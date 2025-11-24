@@ -81,6 +81,10 @@ impl CodestreamParser {
                     relative_to_max_display: data.tone_mapping.relative_to_max_display,
                     linear_below: data.tone_mapping.linear_below,
                 },
+                preview_size: data
+                    .preview
+                    .as_ref()
+                    .map(|p| (p.xsize() as usize, p.ysize() as usize)),
             });
             self.file_header = Some(file_header);
             let bits = br.total_bits_read();
@@ -200,12 +204,19 @@ impl CodestreamParser {
             // TODO(veluca): do we need to make this incremental?
             let mut br = BitReader::new(&self.non_section_buf);
             br.skip_bits(self.non_section_bit_offset as usize)?;
-            let mut frame_header = FrameHeader::read_unconditional(
-                &(),
-                &mut br,
-                &decoder_state.file_header.frame_header_nonserialized(),
-            )?;
-            frame_header.postprocess(&decoder_state.file_header.frame_header_nonserialized());
+
+            // For preview frames, use the preview dimensions instead of main image dimensions
+            let nonserialized = if !self.preview_done {
+                decoder_state
+                    .file_header
+                    .preview_frame_header_nonserialized()
+                    .unwrap_or_else(|| decoder_state.file_header.frame_header_nonserialized())
+            } else {
+                decoder_state.file_header.frame_header_nonserialized()
+            };
+
+            let mut frame_header = FrameHeader::read_unconditional(&(), &mut br, &nonserialized)?;
+            frame_header.postprocess(&nonserialized);
             self.frame_header = Some(frame_header);
             let bits = br.total_bits_read();
             self.non_section_buf.consume(bits / 8);
@@ -243,6 +254,9 @@ impl CodestreamParser {
             self.non_section_bit_offset = (bits % 8) as u8;
             self.toc_parser.take().unwrap().finalize()
         };
+
+        // Save file_header before creating frame (for preview frame recovery)
+        self.saved_file_header = self.decoder_state.as_ref().map(|ds| ds.file_header.clone());
 
         let frame = Frame::from_header_and_toc(
             self.frame_header.take().unwrap(),

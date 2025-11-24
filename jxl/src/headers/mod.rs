@@ -52,6 +52,19 @@ where
 
 impl FileHeader {
     pub fn frame_header_nonserialized(&self) -> FrameHeaderNonserialized {
+        self.frame_header_nonserialized_with_size(self.size.xsize(), self.size.ysize())
+    }
+
+    pub fn preview_frame_header_nonserialized(&self) -> Option<FrameHeaderNonserialized> {
+        let preview = self.image_metadata.preview.as_ref()?;
+        Some(self.frame_header_nonserialized_with_size(preview.xsize(), preview.ysize()))
+    }
+
+    fn frame_header_nonserialized_with_size(
+        &self,
+        img_width: u32,
+        img_height: u32,
+    ) -> FrameHeaderNonserialized {
         let have_timecode = match self.image_metadata.animation {
             Some(ref animation) => animation.have_timecodes,
             None => false,
@@ -62,8 +75,8 @@ impl FileHeader {
             extra_channel_info: self.image_metadata.extra_channel_info.clone(),
             have_animation: self.image_metadata.animation.is_some(),
             have_timecode,
-            img_width: self.size.xsize(),
-            img_height: self.size.ysize(),
+            img_width,
+            img_height,
         }
     }
 }
