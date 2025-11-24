@@ -1116,7 +1116,7 @@ impl JxlColorProfile {
     /// Returns the ICC profile, panicking if unavailable.
     ///
     /// # Panics
-    /// Panics if the color encoding cannot generate an ICC profile (e.g., HDR content).
+    /// Panics if the color encoding cannot generate an ICC profile.
     /// Consider using `try_as_icc` for fallible conversion.
     pub fn as_icc(&self) -> Cow<'_, Vec<u8>> {
         match self {
@@ -1127,9 +1127,7 @@ impl JxlColorProfile {
 
     /// Attempts to get an ICC profile, returning None if unavailable.
     ///
-    /// Returns `None` for color encodings that cannot generate ICC profiles,
-    /// such as HDR content (PQ/HLG transfer functions) which require tone mapping
-    /// tags that are not yet implemented.
+    /// Returns `None` for color encodings that cannot generate ICC profiles.
     pub fn try_as_icc(&self) -> Option<Cow<'_, Vec<u8>>> {
         match self {
             Self::Icc(x) => Some(Cow::Borrowed(x)),
