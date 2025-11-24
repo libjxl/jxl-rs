@@ -191,9 +191,26 @@ impl CodestreamParser {
             self.decoded_frames += 1;
         }
 
+        // Check if this might be a preview frame (skipped frame with preview enabled)
+        let has_preview = self
+            .basic_info
+            .as_ref()
+            .is_some_and(|info| info.preview_size.is_some());
+        let might_be_preview = self.process_without_output && has_preview;
+
         let decoder_state = self.frame.take().unwrap().finalize()?;
         if let Some(state) = decoder_state {
             self.decoder_state = Some(state);
+        } else if might_be_preview {
+            // Preview frame has is_last=true but the main frame follows.
+            // Recreate decoder state from saved file header for the main frame.
+            if let Some(fh) = self.saved_file_header.take() {
+                let mut new_state = crate::frame::DecoderState::new(fh);
+                new_state.xyb_output_linear = decode_options.xyb_output_linear;
+                new_state.render_spotcolors = decode_options.render_spot_colors;
+                new_state.enable_output = decode_options.enable_output;
+                self.decoder_state = Some(new_state);
+            }
         } else {
             self.has_more_frames = false;
         }
