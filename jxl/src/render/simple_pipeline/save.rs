@@ -50,9 +50,11 @@ impl SaveStage {
 
                     match self.data_format {
                         JxlDataFormat::U8 { .. } => {
+                            // Conversion stages already handle bit depth scaling
                             write_pixel!(px as u8, Endianness::LittleEndian);
                         }
                         JxlDataFormat::U16 { endianness, .. } => {
+                            // Conversion stages already handle bit depth scaling
                             write_pixel!(px as u16, endianness);
                         }
                         JxlDataFormat::F32 { endianness } => {
@@ -73,10 +75,7 @@ impl SaveStage {
 mod test {
     use super::*;
     use crate::{
-        api::JxlColorType,
-        headers::Orientation,
-        image::{ImageDataType, Rect},
-        util::test::assert_almost_eq,
+        api::JxlColorType, headers::Orientation, image::Rect, util::test::assert_almost_eq,
     };
     use rand::SeedableRng;
     use rand_xorshift::XorShiftRng;
@@ -108,7 +107,9 @@ mod test {
 
         for y in 0..128 {
             for x in 0..128 {
-                assert_eq!(u8::from_f64(src[0].row(y)[x]), dst.row(y)[x]);
+                // Conversion stages handle bit depth scaling, save stage just casts
+                let expected = src[0].row(y)[x] as u8;
+                assert_eq!(expected, dst.row(y)[x]);
             }
         }
 
