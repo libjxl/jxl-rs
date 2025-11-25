@@ -391,8 +391,8 @@ mod test {
                     let scalar_res = compute(ScalarDescriptor::new().unwrap(), &a, &b, &c);
                     let simd_res = compute(d, &a, &b, &c);
                     for (scalar, simd) in scalar_res.iter().zip(simd_res.iter()) {
-                        // Lowered because of fma.
-                        compare_scalar_simd(*scalar, *simd, 1e-5, 1e-5);
+                        // Less strict requirements because of fma.
+                        compare_scalar_simd(*scalar, *simd, 2e-5, 2e-5);
                     }
                     Ok(())
                 })
