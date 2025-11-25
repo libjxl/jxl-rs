@@ -4,8 +4,8 @@
 // license that can be found in the LICENSE file.
 
 use super::{
-    JxlBasicInfo, JxlBitstreamInput, JxlColorProfile, JxlDecoderInner, JxlDecoderOptions,
-    JxlOutputBuffer, JxlPixelFormat, ProcessingResult,
+    JxlBasicInfo, JxlBitstreamInput, JxlColorProfile, JxlDataFormat, JxlDecoderInner,
+    JxlDecoderOptions, JxlOutputBuffer, JxlPixelFormat, ProcessingResult,
 };
 #[cfg(test)]
 use crate::frame::Frame;
@@ -252,7 +252,20 @@ pub(crate) mod tests {
         assert!(buffer_width > 0);
         assert!(buffer_height > 0);
 
-        // Get pixel format info
+        // Explicitly request F32 pixel format (test helper returns Image<f32>)
+        let default_format = decoder_with_image_info.current_pixel_format();
+        let requested_format = JxlPixelFormat {
+            color_type: default_format.color_type,
+            color_data_format: Some(JxlDataFormat::f32()),
+            extra_channel_format: default_format
+                .extra_channel_format
+                .iter()
+                .map(|_| Some(JxlDataFormat::f32()))
+                .collect(),
+        };
+        decoder_with_image_info.set_pixel_format(requested_format);
+
+        // Get the configured pixel format
         let pixel_format = decoder_with_image_info.current_pixel_format().clone();
 
         let num_channels = pixel_format.color_type.samples_per_pixel();
