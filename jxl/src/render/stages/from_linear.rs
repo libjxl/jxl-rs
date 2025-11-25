@@ -67,7 +67,10 @@ fn from_linear_process(tf: &TransferFunction, xsize: usize, row: &mut [&mut [f32
     match *tf {
         TransferFunction::Bt709 => {
             for row in row {
-                tf::linear_to_bt709(&mut row[..xsize]);
+                tf::linear_to_bt709_simd(
+                    d,
+                    &mut row[..xsize.next_multiple_of(D::F32Vec::LEN)],
+                );
             }
         }
         TransferFunction::Srgb => {

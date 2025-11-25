@@ -183,6 +183,29 @@ pub fn linear_to_bt709(samples: &mut [f32]) {
     }
 }
 
+/// Converts the linear samples with the BT.709 transfer curve (SIMD version).
+#[inline(always)]
+pub fn linear_to_bt709_simd<D: SimdDescriptor>(d: D, samples: &mut [f32]) {
+    let threshold = D::F32Vec::splat(d, 0.018);
+    let linear_scale = D::F32Vec::splat(d, 4.5);
+    let exp = D::F32Vec::splat(d, 0.45);
+    let gamma_scale = D::F32Vec::splat(d, 1.099);
+    let gamma_offset = D::F32Vec::splat(d, -0.099);
+
+    for vec in samples.chunks_exact_mut(D::F32Vec::LEN) {
+        let x = D::F32Vec::load(d, vec);
+        let a = x.abs();
+        let is_small = threshold.gt(a);
+        let small_result = a * linear_scale;
+        let large_result =
+            crate::util::fast_powf_simd(d, a, exp).mul_add(gamma_scale, gamma_offset);
+        is_small
+            .if_then_else_f32(small_result, large_result)
+            .copysign(x)
+            .store(vec);
+    }
+}
+
 /// Converts samples in BT.709 transfer curve to linear. Inverse of `linear_to_bt709`.
 pub fn bt709_to_linear(samples: &mut [f32]) {
     for s in samples {
@@ -526,6 +549,19 @@ mod test {
             linear_to_bt709(&mut output);
             bt709_to_linear(&mut output);
             assert_all_almost_abs_eq(&output, &samples, 5e-6);
+            Ok(())
+        });
+    }
+
+    #[test]
+    fn linear_to_bt709_simd_arb() {
+        arbtest::arbtest(|u| {
+            let mut samples = arb_samples(u)?;
+            let mut simd = samples.clone();
+
+            linear_to_bt709(&mut samples);
+            linear_to_bt709_simd(jxl_simd::ScalarDescriptor::new().unwrap(), &mut simd);
+            assert_all_almost_abs_eq(&samples, &simd, 1e-6);
             Ok(())
         });
     }
