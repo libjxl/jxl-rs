@@ -4,8 +4,8 @@
 // license that can be found in the LICENSE file.
 
 use super::{
-    JxlBasicInfo, JxlBitstreamInput, JxlColorProfile, JxlDataFormat, JxlDecoderInner,
-    JxlDecoderOptions, JxlOutputBuffer, JxlPixelFormat, ProcessingResult,
+    JxlBasicInfo, JxlBitstreamInput, JxlColorProfile, JxlDecoderInner, JxlDecoderOptions,
+    JxlOutputBuffer, JxlPixelFormat, ProcessingResult,
 };
 #[cfg(test)]
 use crate::frame::Frame;
@@ -181,7 +181,7 @@ impl JxlDecoder<WithFrameInfo> {
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
-    use crate::api::JxlDecoderOptions;
+    use crate::api::{JxlDataFormat, JxlDecoderOptions};
     use crate::error::Error;
     use crate::image::{Image, Rect};
     use crate::util::test::assert_almost_abs_eq_coords;
