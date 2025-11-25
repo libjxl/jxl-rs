@@ -124,6 +124,7 @@ pub struct DecoderState {
     pub use_simple_pipeline: bool,
     pub visible_frame_index: usize,
     pub nonvisible_frame_index: usize,
+    pub high_precision: bool,
 }
 
 impl DecoderState {
@@ -140,6 +141,7 @@ impl DecoderState {
             use_simple_pipeline: false,
             visible_frame_index: 0,
             nonvisible_frame_index: 0,
+            high_precision: false,
         }
     }
 

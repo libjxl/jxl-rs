@@ -285,6 +285,7 @@ impl Frame {
                 lf_global.splines.clone().unwrap(),
                 frame_header.size(),
                 &lf_global.color_correlation_params.unwrap_or_default(),
+                decoder_state.high_precision,
             ))?
         }
 

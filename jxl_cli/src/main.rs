@@ -93,6 +93,10 @@ struct Opt {
     /// Print image information without decoding
     #[clap(long, short, action)]
     info: bool,
+
+    /// Use high precision mode for decoding
+    #[clap(long)]
+    high_precision: bool,
 }
 
 // Extract RGB channels from interleaved RGB buffer
@@ -135,11 +139,13 @@ fn main() -> Result<()> {
         Some(path) => (path.ends_with(".npy"), path.ends_with(".exr")),
         None => (false, false),
     };
+    let high_precision = opt.high_precision;
     let options = |skip_preview: bool| {
         let mut options = JxlDecoderOptions::default();
         options.xyb_output_linear = numpy_output || exr_output;
         options.render_spot_colors = !numpy_output;
         options.skip_preview = skip_preview;
+        options.high_precision = high_precision;
         options
     };
 
