@@ -6,71 +6,8 @@
 use crate::util::{eval_rational_poly, eval_rational_poly_simd};
 use jxl_simd::{F32SimdVec, SimdDescriptor, SimdMask};
 
-const SRGB_POWTABLE_UPPER: [u8; 16] = [
-    0x00, 0x0a, 0x19, 0x26, 0x32, 0x41, 0x4d, 0x5c, 0x68, 0x75, 0x83, 0x8f, 0xa0, 0xaa, 0xb9, 0xc6,
-];
-
-const SRGB_POWTABLE_LOWER: [u8; 16] = [
-    0x00, 0xb7, 0x04, 0x0d, 0xcb, 0xe7, 0x41, 0x68, 0x51, 0xd1, 0xeb, 0xf2, 0x00, 0xb7, 0x04, 0x0d,
-];
-
-/// Converts the linear samples with the sRGB transfer curve.
-// Fast linear to sRGB conversion, ported from libjxl. Max error ~1.7e-4
-pub fn linear_to_srgb_fast(samples: &mut [f32]) {
-    for s in samples {
-        let v = s.to_bits() & 0x7fff_ffff;
-        let v_adj = f32::from_bits((v | 0x3e80_0000) & 0x3eff_ffff);
-        let pow = 0.059914046f32;
-        let pow = pow * v_adj - 0.10889456;
-        let pow = pow * v_adj + 0.107963754;
-        let pow = pow * v_adj + 0.018092343;
-
-        // `mul` won't be used when `v` is small.
-        let idx = (v >> 23).wrapping_sub(118) as usize & 0xf;
-        let mul = 0x4000_0000
-            | (u32::from(SRGB_POWTABLE_UPPER[idx]) << 18)
-            | (u32::from(SRGB_POWTABLE_LOWER[idx]) << 10);
-
-        let v = f32::from_bits(v);
-        let small = v * 12.92;
-        let acc = pow * f32::from_bits(mul) - 0.055;
-
-        *s = if v <= 0.0031308 { small } else { acc }.copysign(*s);
-    }
-}
-
-/// Converts the linear samples with the sRGB transfer curve.
+/// Converts the linear samples with the sRGB transfer curve (SIMD version).
 // Max error ~5e-7
-pub fn linear_to_srgb(samples: &mut [f32]) {
-    #[allow(clippy::excessive_precision)]
-    const P: [f32; 5] = [
-        -5.135152395e-4,
-        5.287254571e-3,
-        3.903842876e-1,
-        1.474205315,
-        7.352629620e-1,
-    ];
-
-    #[allow(clippy::excessive_precision)]
-    const Q: [f32; 5] = [
-        1.004519624e-2,
-        3.036675394e-1,
-        1.340816930,
-        9.258482155e-1,
-        2.424867759e-2,
-    ];
-
-    for x in samples {
-        let a = x.abs();
-        *x = if a <= 0.0031308 {
-            a * 12.92
-        } else {
-            eval_rational_poly(a.sqrt(), P, Q)
-        }
-        .copysign(*x);
-    }
-}
-
 #[inline(always)]
 pub fn linear_to_srgb_simd<D: SimdDescriptor>(d: D, samples: &mut [f32]) {
     #[allow(clippy::excessive_precision)]
@@ -170,43 +107,46 @@ pub fn srgb_to_linear_simd<D: SimdDescriptor>(d: D, samples: &mut [f32]) {
     }
 }
 
-/// Converts the linear samples with the BT.709 transfer curve.
-pub fn linear_to_bt709(samples: &mut [f32]) {
-    for s in samples {
-        let a = s.abs();
-        *s = if a <= 0.018 {
-            a * 4.5
-        } else {
-            crate::util::fast_powf(a, 0.45).mul_add(1.099, -0.099)
-        }
-        .copysign(*s);
-    }
-}
-
 /// Converts the linear samples with the BT.709 transfer curve (SIMD version).
+// Rational polynomial approximation of 1.099 * x^0.45 - 0.099 on sqrt(x).
+// Max error ~3e-7
 #[inline(always)]
 pub fn linear_to_bt709_simd<D: SimdDescriptor>(d: D, samples: &mut [f32]) {
-    let threshold = D::F32Vec::splat(d, 0.018);
-    let linear_scale = D::F32Vec::splat(d, 4.5);
-    let exp = D::F32Vec::splat(d, 0.45);
-    let gamma_scale = D::F32Vec::splat(d, 1.099);
-    let gamma_offset = D::F32Vec::splat(d, -0.099);
+    // Coefficients for rational polynomial P(y)/Q(y) where y = sqrt(x)
+    // Approximates 1.099 * y^0.9 - 0.099 on [sqrt(0.018), 1]
+    #[allow(clippy::excessive_precision)]
+    const P: [f32; 5] = [
+        -9.625309705734253e-2,
+        -2.2635456919670105e-1,
+        1.935774803161621e1,
+        5.897886276245117e1,
+        2.3947298049926758e1,
+    ];
+
+    #[allow(clippy::excessive_precision)]
+    const Q: [f32; 5] = [
+        1.0,
+        1.877663230895996e1,
+        5.5292449951171875e1,
+        2.6565317153930664e1,
+        3.269049823284149e-1,
+    ];
 
     for vec in samples.chunks_exact_mut(D::F32Vec::LEN) {
         let x = D::F32Vec::load(d, vec);
         let a = x.abs();
-        let is_small = threshold.gt(a);
-        let small_result = a * linear_scale;
-        let large_result =
-            crate::util::fast_powf_simd(d, a, exp).mul_add(gamma_scale, gamma_offset);
-        is_small
-            .if_then_else_f32(small_result, large_result)
+        D::F32Vec::splat(d, 0.018)
+            .gt(a)
+            .if_then_else_f32(
+                a * D::F32Vec::splat(d, 4.5),
+                eval_rational_poly_simd(d, a.sqrt(), P, Q),
+            )
             .copysign(x)
             .store(vec);
     }
 }
 
-/// Converts samples in BT.709 transfer curve to linear. Inverse of `linear_to_bt709`.
+/// Converts samples in BT.709 transfer curve to linear. Inverse of `linear_to_bt709_simd`.
 pub fn bt709_to_linear(samples: &mut [f32]) {
     for s in samples {
         let a = s.abs();
@@ -527,13 +467,39 @@ mod test {
         Ok(samples)
     }
 
+    /// Naive linear to sRGB using actual pow for testing.
+    fn linear_to_srgb_naive(samples: &mut [f32]) {
+        for x in samples {
+            let a = x.abs();
+            *x = if a <= 0.0031308 {
+                a * 12.92
+            } else {
+                a.powf(1.0 / 2.4).mul_add(1.055, -0.055)
+            }
+            .copysign(*x);
+        }
+    }
+
+    /// Naive linear to BT.709 using actual pow for testing.
+    fn linear_to_bt709_naive(samples: &mut [f32]) {
+        for x in samples {
+            let a = x.abs();
+            *x = if a <= 0.018 {
+                a * 4.5
+            } else {
+                a.powf(0.45).mul_add(1.099, -0.099)
+            }
+            .copysign(*x);
+        }
+    }
+
     #[test]
     fn srgb_roundtrip_arb() {
         arbtest::arbtest(|u| {
             let samples = arb_samples(u)?;
             let mut output = samples.clone();
 
-            linear_to_srgb(&mut output);
+            linear_to_srgb_simd(jxl_simd::ScalarDescriptor::new().unwrap(), &mut output);
             srgb_to_linear(&mut output);
             assert_all_almost_abs_eq(&output, &samples, 2e-6);
             Ok(())
@@ -546,9 +512,22 @@ mod test {
             let samples = arb_samples(u)?;
             let mut output = samples.clone();
 
-            linear_to_bt709(&mut output);
+            linear_to_bt709_simd(jxl_simd::ScalarDescriptor::new().unwrap(), &mut output);
             bt709_to_linear(&mut output);
             assert_all_almost_abs_eq(&output, &samples, 5e-6);
+            Ok(())
+        });
+    }
+
+    #[test]
+    fn linear_to_srgb_simd_arb() {
+        arbtest::arbtest(|u| {
+            let mut samples = arb_samples(u)?;
+            let mut simd = samples.clone();
+
+            linear_to_srgb_naive(&mut samples);
+            linear_to_srgb_simd(jxl_simd::ScalarDescriptor::new().unwrap(), &mut simd);
+            assert_all_almost_abs_eq(&samples, &simd, 1e-6);
             Ok(())
         });
     }
@@ -559,22 +538,9 @@ mod test {
             let mut samples = arb_samples(u)?;
             let mut simd = samples.clone();
 
-            linear_to_bt709(&mut samples);
+            linear_to_bt709_naive(&mut samples);
             linear_to_bt709_simd(jxl_simd::ScalarDescriptor::new().unwrap(), &mut simd);
             assert_all_almost_abs_eq(&samples, &simd, 1e-6);
-            Ok(())
-        });
-    }
-
-    #[test]
-    fn linear_to_srgb_fast_arb() {
-        arbtest::arbtest(|u| {
-            let mut samples = arb_samples(u)?;
-            let mut fast = samples.clone();
-
-            linear_to_srgb(&mut samples);
-            linear_to_srgb_fast(&mut fast);
-            assert_all_almost_abs_eq(&samples, &fast, 1.7e-4);
             Ok(())
         });
     }
