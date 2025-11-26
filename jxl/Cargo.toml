@@ -10,6 +10,8 @@ repository = "https://github.com/libjxl/jxl-rs"
 edition = "2024"
 license = "BSD-3-Clause"
 
+exclude = ["resources/"]
+
 [dependencies]
 jxl_transforms = { path = "../jxl_transforms", version = "0.1.2" }
 thiserror = "2.0"
