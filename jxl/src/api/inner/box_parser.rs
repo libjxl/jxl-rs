@@ -97,7 +97,8 @@ impl BoxParser {
                     // Read all gain map data from box_buffer
                     if !self.box_buffer.is_empty() {
                         let to_copy = remaining.min(self.box_buffer.len() as u64) as usize;
-                        self.gain_map_data.extend_from_slice(&self.box_buffer[..to_copy]);
+                        self.gain_map_data
+                            .extend_from_slice(&self.box_buffer[..to_copy]);
                         self.box_buffer.consume(to_copy);
                         remaining -= to_copy as u64;
                     }

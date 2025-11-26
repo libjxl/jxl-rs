@@ -288,11 +288,23 @@ mod tests {
         let bytes = bundle.write_to_bytes().unwrap();
 
         // Test various truncations that should fail
-        assert!(GainMapBundle::from_bytes(&bytes[..0]).is_err(), "Empty input should fail");
-        assert!(GainMapBundle::from_bytes(&bytes[..1]).is_err(), "Missing metadata size");
-        assert!(GainMapBundle::from_bytes(&bytes[..3]).is_err(), "Missing metadata");
+        assert!(
+            GainMapBundle::from_bytes(&bytes[..0]).is_err(),
+            "Empty input should fail"
+        );
+        assert!(
+            GainMapBundle::from_bytes(&bytes[..1]).is_err(),
+            "Missing metadata size"
+        );
+        assert!(
+            GainMapBundle::from_bytes(&bytes[..3]).is_err(),
+            "Missing metadata"
+        );
 
         // Full parse should succeed
-        assert!(GainMapBundle::from_bytes(&bytes).is_ok(), "Full input should succeed");
+        assert!(
+            GainMapBundle::from_bytes(&bytes).is_ok(),
+            "Full input should succeed"
+        );
     }
 }

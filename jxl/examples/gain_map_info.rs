@@ -50,7 +50,10 @@ fn main() -> Result<(), Error> {
             println!("✓ Gain map found!");
             println!();
             println!("  Version: {}", gain_map.jhgm_version);
-            println!("  Metadata size: {} bytes", gain_map.gain_map_metadata.len());
+            println!(
+                "  Metadata size: {} bytes",
+                gain_map.gain_map_metadata.len()
+            );
 
             if !gain_map.alt_icc.is_empty() {
                 println!("  ICC profile size: {} bytes", gain_map.alt_icc.len());
@@ -60,12 +63,17 @@ fn main() -> Result<(), Error> {
                 println!("  Color encoding: present");
             }
 
-            println!("  Gain map codestream size: {} bytes", gain_map.gain_map.len());
+            println!(
+                "  Gain map codestream size: {} bytes",
+                gain_map.gain_map.len()
+            );
             println!();
 
             // Display ISO 21496-1 metadata as hex (first 64 bytes)
-            println!("  ISO 21496-1 metadata (first {} bytes):",
-                     gain_map.gain_map_metadata.len().min(64));
+            println!(
+                "  ISO 21496-1 metadata (first {} bytes):",
+                gain_map.gain_map_metadata.len().min(64)
+            );
             print!("  ");
             for (i, byte) in gain_map.gain_map_metadata.iter().take(64).enumerate() {
                 if i > 0 && i % 16 == 0 {
@@ -76,8 +84,10 @@ fn main() -> Result<(), Error> {
             println!();
 
             if gain_map.gain_map_metadata.len() > 64 {
-                println!("  ... ({} more bytes)",
-                         gain_map.gain_map_metadata.len() - 64);
+                println!(
+                    "  ... ({} more bytes)",
+                    gain_map.gain_map_metadata.len() - 64
+                );
             }
         }
         None => {

@@ -20,7 +20,8 @@ fn test_parse_gain_map_bundle_from_libjxl_format() {
     bundle_data.extend_from_slice(&[0x00, 0x58]);
 
     // metadata (88 bytes)
-    let metadata = b"placeholder gain map metadata, fill with actual example after (ISO 21496-1) is finalized";
+    let metadata =
+        b"placeholder gain map metadata, fill with actual example after (ISO 21496-1) is finalized";
     bundle_data.extend_from_slice(metadata);
 
     // color_encoding_size (0 = not present)
@@ -56,7 +57,7 @@ fn test_gain_map_round_trip() {
         gain_map_metadata: b"test metadata for ISO 21496-1".to_vec(),
         color_encoding: None,
         alt_icc: vec![],
-        gain_map: vec![0xff, 0x0a, 0x01, 0x02, 0x03],  // Fake JXL codestream
+        gain_map: vec![0xff, 0x0a, 0x01, 0x02, 0x03], // Fake JXL codestream
     };
 
     // Serialize
