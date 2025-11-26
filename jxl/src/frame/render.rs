@@ -104,8 +104,19 @@ impl Frame {
 
         macro_rules! buffers_from_api {
             ($get_next: expr) => {
-                if pixel_format.color_data_format.is_some() {
-                    buffers.push($get_next);
+                if pixel_format.color_type.is_xyb() {
+                    if pixel_format.color_data_format.is_some() {
+                        buffers.push($get_next);
+                        buffers.push($get_next);
+                        buffers.push($get_next);
+                        if pixel_format.color_type.has_alpha() {
+                            buffers.push($get_next);
+                        }
+                    }
+                } else {
+                    if pixel_format.color_data_format.is_some() {
+                        buffers.push($get_next);
+                    }
                 }
 
                 for fmt in &pixel_format.extra_channel_format {
@@ -205,6 +216,10 @@ impl Frame {
         epf_sigma: &Option<Arc<Image<f32>>>,
         pixel_format: &JxlPixelFormat,
     ) -> Result<Box<T>> {
+        if pixel_format.color_type.is_xyb() && frame_header.needs_blending() {
+            return Err(Error::UnsupportedXybPlanarWithBlending);
+        }
+
         let num_channels = frame_header.num_extra_channels as usize + 3;
         let num_temp_channels = if frame_header.has_noise() { 3 } else { 0 };
         let metadata = &decoder_state.file_header.image_metadata;
@@ -389,12 +404,15 @@ impl Frame {
         if frame_header.do_ycbcr {
             pipeline = pipeline.add_inplace_stage(YcbcrToRgbStage::new(0))?;
         } else if decoder_state.file_header.image_metadata.xyb_encoded {
-            pipeline = pipeline.add_inplace_stage(XybStage::new(0, output_color_info.clone()))?;
-            if decoder_state.xyb_output_linear {
-                linear = true;
-            } else {
-                pipeline = pipeline
-                    .add_inplace_stage(FromLinearStage::new(0, output_color_info.tf.clone()))?;
+            if !pixel_format.color_type.is_xyb() {
+                pipeline =
+                    pipeline.add_inplace_stage(XybStage::new(0, output_color_info.clone()))?;
+                if decoder_state.xyb_output_linear {
+                    linear = true;
+                } else {
+                    pipeline = pipeline
+                        .add_inplace_stage(FromLinearStage::new(0, output_color_info.tf.clone()))?;
+                }
             }
         }
 
@@ -483,32 +501,77 @@ impl Frame {
                 pipeline = pipeline
                     .add_inplace_stage(ToLinearStage::new(0, output_color_info.tf.clone()))?;
             }
-            let color_source_channels: &[usize] =
-                match (pixel_format.color_type.is_grayscale(), alpha_in_color) {
-                    (true, None) => &[0],
-                    (true, Some(c)) => &[0, c],
-                    (false, None) => &[0, 1, 2],
-                    (false, Some(c)) => &[0, 1, 2, c],
-                };
-            if let Some(df) = &pixel_format.color_data_format {
-                // Add conversion stages for non-float output formats
-                pipeline = Self::add_conversion_stages(pipeline, color_source_channels, *df)?;
-                pipeline = pipeline.add_save_stage(
-                    color_source_channels,
-                    metadata.orientation,
-                    0,
-                    pixel_format.color_type,
-                    *df,
-                )?;
-            }
+            let xyb_buffer_count = if pixel_format.color_type.is_xyb() {
+                if let Some(df) = &pixel_format.color_data_format {
+                    pipeline = Self::add_conversion_stages(pipeline, &[0], *df)?;
+                    pipeline = pipeline.add_save_stage(
+                        &[0],
+                        metadata.orientation,
+                        0,
+                        JxlColorType::Grayscale,
+                        *df,
+                    )?;
+                    pipeline = Self::add_conversion_stages(pipeline, &[1], *df)?;
+                    pipeline = pipeline.add_save_stage(
+                        &[1],
+                        metadata.orientation,
+                        1,
+                        JxlColorType::Grayscale,
+                        *df,
+                    )?;
+                    pipeline = Self::add_conversion_stages(pipeline, &[2], *df)?;
+                    pipeline = pipeline.add_save_stage(
+                        &[2],
+                        metadata.orientation,
+                        2,
+                        JxlColorType::Grayscale,
+                        *df,
+                    )?;
+                    if let Some(alpha_channel) = alpha_in_color {
+                        pipeline = Self::add_conversion_stages(pipeline, &[alpha_channel], *df)?;
+                        pipeline = pipeline.add_save_stage(
+                            &[alpha_channel],
+                            metadata.orientation,
+                            3,
+                            JxlColorType::Grayscale,
+                            *df,
+                        )?;
+                        4
+                    } else {
+                        3
+                    }
+                } else {
+                    0
+                }
+            } else {
+                let color_source_channels: &[usize] =
+                    match (pixel_format.color_type.is_grayscale(), alpha_in_color) {
+                        (true, None) => &[0],
+                        (true, Some(c)) => &[0, c],
+                        (false, None) => &[0, 1, 2],
+                        (false, Some(c)) => &[0, 1, 2, c],
+                    };
+                if let Some(df) = &pixel_format.color_data_format {
+                    pipeline = Self::add_conversion_stages(pipeline, color_source_channels, *df)?;
+                    pipeline = pipeline.add_save_stage(
+                        color_source_channels,
+                        metadata.orientation,
+                        0,
+                        pixel_format.color_type,
+                        *df,
+                    )?;
+                    1
+                } else {
+                    0
+                }
+            };
             for i in 0..frame_header.num_extra_channels as usize {
                 if let Some(df) = &pixel_format.extra_channel_format[i] {
-                    // Add conversion stages for non-float output formats
                     pipeline = Self::add_conversion_stages(pipeline, &[3 + i], *df)?;
                     pipeline = pipeline.add_save_stage(
                         &[3 + i],
                         metadata.orientation,
-                        1 + i,
+                        xyb_buffer_count + i,
                         JxlColorType::Grayscale,
                         *df,
                     )?;
