@@ -1,4 +1,9 @@
 #!/usr/bin/env python3
+# Copyright (c) the JPEG XL Project Authors. All rights reserved.
+#
+# Use of this source code is governed by a BSD-style
+# license that can be found in the LICENSE file.
+
 """
 Create a minimal JPEG XL file with a gain map (jhgm box) for testing.
 
