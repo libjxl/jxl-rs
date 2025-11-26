@@ -6,7 +6,8 @@
 use crate::error::{Error, Result};
 
 use crate::api::{
-    JxlBitstreamInput, JxlSignatureType, check_signature_internal, inner::process::SmallBuffer,
+    GainMapBundle, JxlBitstreamInput, JxlSignatureType, check_signature_internal,
+    inner::process::SmallBuffer,
 };
 
 #[derive(Clone)]
@@ -15,6 +16,7 @@ enum ParseState {
     BoxNeeded,
     CodestreamBox(u64),
     SkippableBox(u64),
+    GainMapBox(u64),
 }
 
 enum CodestreamBoxType {
@@ -28,6 +30,8 @@ pub(super) struct BoxParser {
     pub(super) box_buffer: SmallBuffer<128>,
     state: ParseState,
     box_type: CodestreamBoxType,
+    pub(super) gain_map_data: Vec<u8>,
+    pub(super) gain_map: Option<GainMapBundle>,
 }
 
 impl BoxParser {
@@ -36,6 +40,8 @@ impl BoxParser {
             box_buffer: SmallBuffer::new(),
             state: ParseState::SignatureNeeded,
             box_type: CodestreamBoxType::None,
+            gain_map_data: Vec::new(),
+            gain_map: None,
         }
     }
 
@@ -86,6 +92,32 @@ impl BoxParser {
                     } else {
                         self.state = ParseState::SkippableBox(s);
                     }
+                }
+                ParseState::GainMapBox(mut remaining) => {
+                    // Read all gain map data from box_buffer
+                    if !self.box_buffer.is_empty() {
+                        let to_copy = remaining.min(self.box_buffer.len() as u64) as usize;
+                        self.gain_map_data.extend_from_slice(&self.box_buffer[..to_copy]);
+                        self.box_buffer.consume(to_copy);
+                        remaining -= to_copy as u64;
+                    }
+
+                    // If still need more data, request it
+                    if remaining > 0 {
+                        return Err(Error::OutOfBounds(remaining as usize));
+                    }
+
+                    // All data collected, parse the gain map
+                    match GainMapBundle::from_bytes(&self.gain_map_data) {
+                        Ok(bundle) => {
+                            self.gain_map = Some(bundle);
+                        }
+                        Err(_) => {
+                            // Invalid gain map data, ignore it
+                        }
+                    }
+                    self.gain_map_data.clear(); // Free memory
+                    self.state = ParseState::BoxNeeded;
                 }
                 ParseState::BoxNeeded => {
                     self.box_buffer.refill(|b| input.read(b), None)?;
@@ -151,6 +183,10 @@ impl BoxParser {
                                 CodestreamBoxType::Jxlp(idx)
                             };
                             self.state = ParseState::CodestreamBox(content_len);
+                        }
+                        b"jhgm" => {
+                            // Gain map box - collect the data
+                            self.state = ParseState::GainMapBox(content_len);
                         }
                         _ => {
                             self.state = ParseState::SkippableBox(content_len);

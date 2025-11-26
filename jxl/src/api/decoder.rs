@@ -124,6 +124,27 @@ impl JxlDecoder<WithImageInfo> {
         self.inner.set_pixel_format(pixel_format);
     }
 
+    /// Retrieves the gain map bundle, if present in the file.
+    ///
+    /// The gain map allows converting between SDR and HDR representations of the image
+    /// as defined by ISO 21496-1. Returns `None` if the file does not contain a gain map.
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// # use jxl::api::*;
+    /// # fn example(mut decoder: JxlDecoder<WithImageInfo>) {
+    /// if let Some(gain_map) = decoder.gain_map() {
+    ///     println!("Gain map version: {}", gain_map.jhgm_version);
+    ///     println!("Metadata size: {} bytes", gain_map.gain_map_metadata.len());
+    ///     println!("Gain map codestream size: {} bytes", gain_map.gain_map.len());
+    /// }
+    /// # }
+    /// ```
+    pub fn gain_map(&self) -> Option<&super::GainMapBundle> {
+        self.inner.gain_map()
+    }
+
     pub fn process(
         mut self,
         input: &mut impl JxlBitstreamInput,
