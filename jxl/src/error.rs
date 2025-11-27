@@ -147,10 +147,10 @@ pub enum Error {
     PatchesInvalidAlphaChannel(usize, usize),
     #[error("Invalid patch blend mode: {0}, limit is {1}")]
     PatchesInvalidBlendMode(u8, u8),
-    #[error("Invalid Patch: negative {0}-coordinate: {1} base {0},  {2} delta {0}")]
+    #[error("Invalid Patch: negative delta for {0}-coordinate: base={1}, delta={2}")]
     PatchesInvalidDelta(String, usize, i32),
     #[error(
-        "Invalid position specified in reference frame in {0}-coordinate: {0}0 + {0}size = {1} + {2} > {3} = reference_frame {0}size"
+        "Invalid position specified in reference frame in {0}-coordinate: {0}0({1}) + {0}size({2}) > reference_frame.{0}size({3})"
     )]
     PatchesInvalidPosition(String, usize, usize, usize),
     #[error("Patches invalid reference frame at index {0}")]
