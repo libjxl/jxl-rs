@@ -279,7 +279,8 @@ pub fn make_grids(
                         buffer_info,
                     );
                     let offsets = match predictor {
-                        Predictor::Zero => [].as_slice(),
+                        Predictor::Zero => &[][..],
+                        Predictor::WestWest => &[(-2, 0), (0, -1), (-1, 0), (-1, -1)],
                         _ => &[(0, -1), (-1, 0), (-1, -1)],
                     };
                     for (dx, dy) in offsets {
