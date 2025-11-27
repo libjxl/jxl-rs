@@ -214,7 +214,7 @@ pub fn perform_blending<T: AsRef<[f32]>, V: AsMut<[f32]>>(
         PatchBlendMode::BlendBelow => {
             if !has_alpha {
                 for c in 0..3 {
-                    tmp[c].copy_from_slice(bg[c].as_mut());
+                    tmp[c].copy_from_slice(fg[c].as_ref());
                 }
             } else if extra_channel_info[alpha].alpha_associated() {
                 for x in 0..xsize {
@@ -778,6 +778,43 @@ mod tests {
             assert_eq!(bg_r.len(), 0);
             assert_eq!(bg_g.len(), 0);
             assert_eq!(bg_b.len(), 0);
+        }
+
+        #[test]
+        fn test_no_alpha_channel_blend_below_is_like_replace() {
+            let mut bg_r = [0.1];
+            let mut bg_g = [0.2];
+            let mut bg_b = [0.3];
+            let fg_r = [0.7];
+            let fg_g = [0.8];
+            let fg_b = [0.9];
+
+            let mut bg_channels: [&mut [f32]; 3] = [&mut bg_r, &mut bg_g, &mut bg_b];
+            let fg_channels: [&[f32]; 3] = [&fg_r, &fg_g, &fg_b];
+
+            let color_blending = PatchBlending {
+                mode: PatchBlendMode::BlendBelow,
+                alpha_channel: 0, // Irrelevant as no alpha EIs
+                clamp: false,
+            };
+
+            let ec_blending: [PatchBlending; 0] = [];
+            // No ExtraChannelInfo means has_alpha will be false.
+            let extra_channel_info: [ExtraChannelInfo; 0] = [];
+
+            perform_blending(
+                &mut bg_channels,
+                &fg_channels,
+                &color_blending,
+                &ec_blending,
+                &extra_channel_info,
+            );
+
+            // C++ implementation copies fg, so we follow that.
+            // Expected: output color is fg color due to fallback
+            assert_all_almost_abs_eq(&bg_r, &fg_r, ABS_DELTA);
+            assert_all_almost_abs_eq(&bg_g, &fg_g, ABS_DELTA);
+            assert_all_almost_abs_eq(&bg_b, &fg_b, ABS_DELTA);
         }
     }
 }
