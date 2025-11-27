@@ -398,13 +398,25 @@ fn draw_centripetal_catmull_rom_spline(points: &[Point]) -> Result<Vec<Point>> {
                 let mut a = [Point::default(); 3];
                 for k in 0..3 {
                     // TODO(from libjxl): Reciprocal multiplication would be faster.
-                    a[k] = p[k].0 + (p[k + 1].0 - p[k].0) * ((tt - t[k]) / p[k].1);
+                    let delta = p[k + 1].0 - p[k].0;
+                    let frac = if p[k].1 == 0.0 {
+                        0.0
+                    } else {
+                        (tt - t[k]) / p[k].1
+                    };
+                    a[k] = p[k].0 + delta * frac;
                 }
                 let mut b = [Point::default(); 2];
                 for k in 0..2 {
-                    b[k] = a[k] + (a[k + 1] - a[k]) * ((tt - t[k]) / (p[k].1 + p[k + 1].1));
+                    let delta = a[k + 1] - a[k];
+                    let den = p[k].1 + p[k + 1].1;
+                    let frac = if den == 0.0 { 0.0 } else { (tt - t[k]) / den };
+                    b[k] = a[k] + delta * frac;
                 }
-                *window_point = b[0] + (b[1] - b[0]) * ((tt - t[1]) / p[1].1);
+                let delta = b[1] - b[0];
+                let den = p[1].1;
+                let frac = if den == 0.0 { 0.0 } else { (tt - t[1]) / den };
+                *window_point = b[0] + delta * frac;
             }
             window_result
         })
@@ -1893,5 +1905,12 @@ mod test_splines {
             verify_segment_almost_equal(&segment, &splines.segments[index]);
         }
         Ok(())
+    }
+
+    #[test]
+    fn catmull_rom_with_coincident_points() {
+        let control_points = vec![Point::new(1.0, 2.0), Point::new(1.0, 2.0)];
+        let result = draw_centripetal_catmull_rom_spline(&control_points);
+        assert!(result.is_ok());
     }
 }
