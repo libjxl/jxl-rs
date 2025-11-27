@@ -251,7 +251,7 @@ impl AnsHistogram {
                     Bucket {
                         dist: bucket.dist,
                         alias_symbol: bucket.alias_symbol as u8,
-                        alias_offset: bucket.alias_offset - bucket.alias_cutoff,
+                        alias_offset: bucket.alias_offset.wrapping_sub(bucket.alias_cutoff),
                         alias_cutoff: bucket.alias_cutoff as u8,
                         alias_dist_xor: bucket.dist ^ buckets[bucket.alias_symbol as usize].dist,
                     }
