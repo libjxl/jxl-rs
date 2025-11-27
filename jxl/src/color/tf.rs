@@ -431,7 +431,7 @@ pub fn hlg_to_scene(samples: &mut [f32]) {
             // TODO(OneDeuxTriSeiGo): replace raw constant with the below equation
             // when std::f64::exp() can is available as a const fn.
             //
-            // Equation: ((-HLG_B / HLG_A).exp() / 12.0)
+            // Equation: ((-HLG_C / HLG_A).exp() / 12.0)
             // Constant: 0.003_639_807_079_052_639
             const MUL: f32 = 0.003_639_807;
 
