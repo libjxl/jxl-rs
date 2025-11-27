@@ -75,8 +75,9 @@ pub(super) fn precompute_references(
                 vleft
             };
             let vpredicted = clamped_gradient(vleft as i64, vtop as i64, vtopleft as i64);
-            ref_row[offset + 2] = abs(v as i64 - vpredicted) as i32;
-            ref_row[offset + 3] = (v as i64 - vpredicted) as i32;
+            let diff = v as i64 - vpredicted;
+            ref_row[offset + 2] = abs(diff).clamp(0, i32::MAX as i64) as i32;
+            ref_row[offset + 3] = diff.clamp(i32::MIN as i64, i32::MAX as i64) as i32;
         }
         offset += 4;
     }
@@ -111,5 +112,34 @@ mod tests {
         let mul = 2;
         let dec = -1;
         assert_eq!(make_pixel(dec, mul, guess), i32::MIN);
+    }
+
+    #[test]
+    fn test_precompute_references_overflow() {
+        use crate::frame::modular::ModularChannel;
+        use crate::headers::bit_depth::BitDepth;
+        use crate::image::Image;
+
+        let mut chan0_data = Image::<i32>::new((1, 2)).unwrap();
+        chan0_data.row_mut(0)[0] = i32::MIN; // prev row, for vtop
+        chan0_data.row_mut(1)[0] = i32::MAX; // current row, for v
+        let mut chan0 = ModularChannel::new((1, 2), BitDepth::integer_samples(32)).unwrap();
+        chan0.data = chan0_data;
+
+        let chan1 = ModularChannel::new((1, 2), BitDepth::integer_samples(32)).unwrap(); // dummy
+
+        let mut buffers_storage = [chan0, chan1];
+        let mut buffers: Vec<&mut ModularChannel> = buffers_storage.iter_mut().collect();
+
+        let mut references = Image::<i32>::new((4, 1)).unwrap();
+
+        // This should not panic in debug build with overflow checks.
+        // chan=1, y=1. references chan=0.
+        // At x=0, v=MAX, vtop=MIN. With vleft=0, vtopleft=0, vpredicted will be vtop=MIN.
+        // diff = MAX - MIN, overflows i32.
+        super::precompute_references(&mut buffers, 1, 1, &mut references);
+
+        assert_eq!(references.row(0)[2], i32::MAX);
+        assert_eq!(references.row(0)[3], i32::MAX);
     }
 }
