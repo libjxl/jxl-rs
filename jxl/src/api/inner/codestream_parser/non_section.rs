@@ -16,7 +16,7 @@ use crate::{
     frame::{DecoderState, Frame, Section},
     headers::{
         FileHeader, JxlHeader, color_encoding::ColorSpace, encodings::UnconditionalCoder,
-        frame_header::FrameHeader, toc::IncrementalTocReader,
+        frame_header::{FrameHeader, Encoding}, toc::IncrementalTocReader,
     },
     icc::IncrementalIccReader,
 };
@@ -283,7 +283,10 @@ impl CodestreamParser {
         };
 
         if sections.len() > 1 {
-            let base_sections = [Section::LfGlobal, Section::HfGlobal];
+            let mut base_sections = vec![Section::LfGlobal];
+            if frame.header().encoding == Encoding::VarDCT {
+                base_sections.push(Section::HfGlobal);
+            }
             let lf_sections = (0..frame.header().num_lf_groups()).map(|x| Section::Lf { group: x });
             let hf_sections = (0..frame.header().passes.num_passes).flat_map(|p| {
                 (0..frame.header().num_groups()).map(move |g| Section::Hf {
