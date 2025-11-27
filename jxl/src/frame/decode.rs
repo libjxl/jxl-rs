@@ -412,7 +412,7 @@ impl Frame {
                             } else {
                                 (batch[k] & 0xFFFFFFFF) as u32
                             };
-                            row[x] = bits_to_float(bits);
+                            row[x] = bits_to_float(bits) - 1.0;
                         }
                     }
                 }
