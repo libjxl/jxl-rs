@@ -29,7 +29,10 @@ fn inverse_move_to_front(v: &mut [u8]) {
 }
 
 fn verify_context_map(ctx_map: &[u8]) -> Result<(), Error> {
-    let num_histograms = *ctx_map.iter().max().unwrap() as u32 + 1;
+    if ctx_map.is_empty() {
+        return Ok(());
+    }
+    let num_histograms = (*ctx_map.iter().max().unwrap() + 1) as u32;
     let distinct_histograms = ctx_map.iter().collect::<HashSet<_>>().len() as u32;
     if distinct_histograms != num_histograms {
         return Err(Error::InvalidContextMapHole(
@@ -53,7 +56,7 @@ pub fn decode_context_map(num_contexts: usize, br: &mut BitReader) -> Result<Vec
         }
     } else {
         let use_mtf = br.read(1)? != 0;
-        let histograms = Histograms::decode(1, br, /*allow_lz77=*/ num_contexts > 2)?;
+        let histograms = Histograms::decode(1, br, /*allow_lz77=*/ false)?;
         let mut reader = SymbolReader::new(&histograms, br, None)?;
 
         let mut ctx_map: Vec<u8> = (0..num_contexts)
