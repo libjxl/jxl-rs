@@ -83,5 +83,33 @@ pub(super) fn precompute_references(
 }
 
 pub(super) fn make_pixel(dec: i32, mul: u32, guess: i64) -> i32 {
-    (guess + (mul as i64) * (dec as i64)) as i32
+    (guess + (mul as i64) * (dec as i64)).clamp(i32::MIN as i64, i32::MAX as i64) as i32
+}
+
+#[cfg(test)]
+mod tests {
+    use super::make_pixel;
+
+    #[test]
+    fn test_make_pixel_overflow() {
+        let guess = i32::MAX as i64;
+        let mul = 1;
+        let dec = 1;
+        assert_eq!(make_pixel(dec, mul, guess), i32::MAX);
+
+        let guess = (i32::MAX - 1) as i64;
+        let mul = 2;
+        let dec = 1;
+        assert_eq!(make_pixel(dec, mul, guess), i32::MAX);
+
+        let guess = i32::MIN as i64;
+        let mul = 1;
+        let dec = -1;
+        assert_eq!(make_pixel(dec, mul, guess), i32::MIN);
+
+        let guess = (i32::MIN + 1) as i64;
+        let mul = 2;
+        let dec = -1;
+        assert_eq!(make_pixel(dec, mul, guess), i32::MIN);
+    }
 }

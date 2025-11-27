@@ -395,7 +395,7 @@ impl WeightedPredictorState {
             (xsize + 2, 0)
         };
         let val = add_bits(correct_val);
-        self.error[cur_row + pos.0] = (self.pred - val) as i32;
+        self.error[cur_row + pos.0] = (self.pred - val).clamp(i32::MIN as i64, i32::MAX as i64) as i32;
         for (i, pred_err) in self.pred_errors.iter_mut().enumerate() {
             let err =
                 (((self.prediction[i] - val).abs() + PREDICTION_ROUND) >> PRED_EXTRA_BITS) as u32;
@@ -474,7 +474,7 @@ impl WeightedPredictorState {
             let mn = w.min(ne.min(n));
             self.pred = mn.max(mx.min(self.pred));
         }
-        ((self.pred + PREDICTION_ROUND) >> PRED_EXTRA_BITS, p as i32)
+        ((self.pred + PREDICTION_ROUND) >> PRED_EXTRA_BITS, p.clamp(i32::MIN as i64, i32::MAX as i64) as i32)
     }
 }
 
