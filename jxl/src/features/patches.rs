@@ -358,9 +358,10 @@ impl PatchesDictionary {
         br: &mut BitReader,
         xsize: usize,
         ysize: usize,
-        num_extra_channels: usize,
+        extra_channel_info: &[ExtraChannelInfo],
         reference_frames: &[Option<ReferenceFrame>],
     ) -> Result<PatchesDictionary> {
+        let num_extra_channels = extra_channel_info.len();
         let blendings_stride = num_extra_channels + 1;
         let patches_histograms = Histograms::decode(PatchContext::NUM, br, true)?;
         let mut patches_reader = SymbolReader::new(&patches_histograms, br, None)?;
@@ -421,28 +422,43 @@ impl PatchesDictionary {
             ) as usize
                 + 1;
             let reference_frame = &reference_frames[reference];
-            // TODO(firsching): make sure this check is correct in the presence of downsampled extra channels (also in libjxl).
             match reference_frame {
                 None => return Err(Error::PatchesInvalidReference(reference)),
                 Some(reference) => {
                     if !reference.saved_before_color_transform {
                         return Err(Error::PatchesPostColorTransform());
                     }
-                    if x0 + ref_pos_xsize > reference.frame[0].size().0 {
-                        return Err(Error::PatchesInvalidPosition(
-                            "x".to_string(),
-                            x0,
-                            ref_pos_xsize,
-                            reference.frame[0].size().0,
-                        ));
-                    }
-                    if y0 + ref_pos_ysize > reference.frame[0].size().1 {
-                        return Err(Error::PatchesInvalidPosition(
-                            "y".to_string(),
-                            y0,
-                            ref_pos_ysize,
-                            reference.frame[0].size().1,
-                        ));
+                    for (idx, channel) in reference.frame.iter().enumerate() {
+                        let (width, height) = channel.size();
+                        let shift = if idx >= 3 {
+                            let ec_info = &extra_channel_info[idx - 3];
+                            ec_info.dim_shift()
+                        } else {
+                            0
+                        };
+
+                        if ref_pos_xsize > 0 {
+                            let last_x = x0 + ref_pos_xsize - 1;
+                            if (last_x >> shift) >= width {
+                                return Err(Error::PatchesInvalidPosition(
+                                    "x".to_string(),
+                                    x0,
+                                    ref_pos_xsize,
+                                    width << shift,
+                                ));
+                            }
+                        }
+                        if ref_pos_ysize > 0 {
+                            let last_y = y0 + ref_pos_ysize - 1;
+                            if (last_y >> shift) >= height {
+                                return Err(Error::PatchesInvalidPosition(
+                                    "y".to_string(),
+                                    y0,
+                                    ref_pos_ysize,
+                                    height << shift,
+                                ));
+                            }
+                        }
                     }
                 }
             }
@@ -754,6 +770,8 @@ impl PatchesDictionary {
 mod tests {
 
     mod read_patches_tests {
+        use crate::headers::{bit_depth::BitDepth, extra_channels::ExtraChannel};
+
         use super::super::*;
         use test_log::test;
 
@@ -764,7 +782,7 @@ mod tests {
                 &mut br,
                 1024,
                 1024,
-                0,
+                &[],
                 &[Some(ReferenceFrame::blank(1024, 1024, 1, true).unwrap())],
             )?;
             let want_dict = PatchesDictionary {
@@ -808,11 +826,33 @@ mod tests {
             let mut br = BitReader::new(&[
                 0x12, 0xc6, 0x26, 0x3f, 0x08, 0x4e, 0xb6, 0x0d, 0xf2, 0xde, 0xb6, 0x6d,
             ]);
+            let ec_info = [
+                ExtraChannelInfo::new(
+                    false,
+                    ExtraChannel::Alpha,
+                    BitDepth::f32(),
+                    0,
+                    String::new(),
+                    false,
+                    None,
+                    None,
+                ),
+                ExtraChannelInfo::new(
+                    false,
+                    ExtraChannel::SpotColor,
+                    BitDepth::f32(),
+                    0,
+                    String::new(),
+                    false,
+                    None,
+                    None,
+                ),
+            ];
             let got_dict = PatchesDictionary::read(
                 &mut br,
                 1024,
                 1024,
-                2,
+                &ec_info,
                 &[Some(ReferenceFrame::blank(1024, 1024, 1, true).unwrap())],
             )?;
             let want_dict = PatchesDictionary {
@@ -906,11 +946,21 @@ mod tests {
             let mut br = BitReader::new(&[
                 0x12, 0x4e, 0x50, 0x76, 0xeb, 0x41, 0x0d, 0x7e, 0xe5, 0x8e, 0xd2, 0x5d, 0x01,
             ]);
+            let ec_info = [ExtraChannelInfo::new(
+                false,
+                ExtraChannel::Alpha,
+                BitDepth::f32(),
+                0,
+                String::new(),
+                false,
+                None,
+                None,
+            )];
             let got_dict = PatchesDictionary::read(
                 &mut br,
                 1024,
                 1024,
-                1,
+                &ec_info,
                 &[Some(ReferenceFrame::blank(1024, 1024, 1, true).unwrap())],
             )?;
             let want_dict = PatchesDictionary {
@@ -970,7 +1020,7 @@ mod tests {
                 &mut br,
                 1024,
                 1024,
-                0,
+                &[],
                 &[Some(ReferenceFrame::blank(1024, 1024, 1, true).unwrap())],
             )?;
             let want_dict = PatchesDictionary {
@@ -1014,7 +1064,7 @@ mod tests {
                 &mut br,
                 1024,
                 1024,
-                0,
+                &[],
                 &[Some(ReferenceFrame::blank(1024, 1024, 1, true).unwrap())],
             )?;
             let want_dict = PatchesDictionary {
@@ -1701,7 +1751,7 @@ mod tests {
             let ref_ec0_alpha_val = 0.5;
 
             let ec_info = vec![ExtraChannelInfo::new(
-                true,
+                false,
                 ExtraChannel::Alpha,
                 BitDepth::f32(),
                 0,
@@ -1815,7 +1865,7 @@ mod tests {
             let ref_ec0_alpha_val = 0.5; // Patch alpha
 
             let ec_info = vec![ExtraChannelInfo::new(
-                true,
+                false,
                 ExtraChannel::Alpha,
                 BitDepth::f32(),
                 0,

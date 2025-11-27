@@ -175,7 +175,7 @@ impl Frame {
                 br,
                 self.header.size_padded().0,
                 self.header.size_padded().1,
-                self.decoder_state.extra_channel_info().len(),
+                self.decoder_state.extra_channel_info(),
                 &self.decoder_state.reference_frames[..],
             )?)
         } else {
