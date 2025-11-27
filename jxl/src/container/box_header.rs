@@ -52,6 +52,9 @@ impl ContainerBoxHeader {
             }
             [s0, s1, s2, s3, t0, t1, t2, t3, ..] => {
                 let sbox = u32::from_be_bytes([s0, s1, s2, s3]);
+                if sbox == 1 {
+                    return Ok(HeaderParseResult::NeedMoreData);
+                }
                 let tbox = ContainerBoxType([t0, t1, t2, t3]);
                 let sbox = if sbox == 0 {
                     None
@@ -110,4 +113,16 @@ impl ContainerBoxType {
     pub const CODESTREAM: Self = Self(*b"jxlc");
     pub const PARTIAL_CODESTREAM: Self = Self(*b"jxlp");
     pub const JPEG_RECONSTRUCTION: Self = Self(*b"jbrd");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_truncated_large_box() {
+        let buf = &[0, 0, 0, 1, b't', b'y', b'p', b'e', 0, 0, 0, 0, 0, 0, 0]; // 15 bytes
+        let result = ContainerBoxHeader::parse(buf).unwrap();
+        assert!(matches!(result, HeaderParseResult::NeedMoreData));
+    }
 }
