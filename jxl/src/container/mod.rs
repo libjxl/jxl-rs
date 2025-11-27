@@ -184,4 +184,22 @@ mod test {
             Ok(())
         });
     }
+
+    #[test]
+    fn parse_jxlp_invalid_small_box() {
+        let mut container = HEADER.to_vec();
+        container.extend_from_slice(&11u32.to_be_bytes()); // box size = 11
+        container.extend_from_slice(b"jxlp");
+        container.extend_from_slice(&[0, 0, 0]); // box content, size = 3
+
+        let mut parser = ContainerParser::new();
+        let mut result = Ok(());
+        for event in parser.process_bytes(&container) {
+            if event.is_err() {
+                result = event.map(|_| ());
+                break;
+            }
+        }
+        assert!(result.is_err());
+    }
 }

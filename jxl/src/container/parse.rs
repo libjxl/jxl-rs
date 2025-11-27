@@ -96,10 +96,10 @@ impl<'inner, 'buf> ParseEvents<'inner, 'buf> {
                                 bytes_left: header.box_size().map(|x| x as usize),
                             };
                         } else if tbox == ContainerBoxType::PARTIAL_CODESTREAM {
-                            if let Some(box_size) = header.box_size()
-                                && box_size < 4
-                            {
-                                return Err(Error::InvalidBox);
+                            if let Some(box_size) = header.box_size() {
+                                if box_size < 4 {
+                                    return Err(Error::InvalidBox);
+                                }
                             }
 
                             match jxlp_index_state {
