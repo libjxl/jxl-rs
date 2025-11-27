@@ -61,7 +61,9 @@ impl HybridUint {
         let bits_in_token = self.lsb_in_token + self.msb_in_token;
         let nbits =
             self.split_exponent - bits_in_token + ((symbol - self.split_token) >> bits_in_token);
-        // TODO(tirr-c): Assert `nbits <= 31`.
+        // In debug builds, `1 << 32` on a u32 panics.
+        // In valid streams, nbits should not be this large.
+        let nbits = nbits & 31;
         let low = symbol & ((1 << self.lsb_in_token) - 1);
         let symbol_nolow = symbol >> self.lsb_in_token;
         let bits = br.read_optimistic(nbits as usize) as u32;
@@ -79,5 +81,25 @@ impl HybridUint {
             msb_in_token,
             lsb_in_token,
         }
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use super::HybridUint;
+    use crate::bit_reader::BitReader;
+
+    #[test]
+    fn read_nbits_clamp() {
+        let hu = HybridUint::new(0, 0, 0);
+        let data = [0xff; 10];
+        let mut br = BitReader::new(&data);
+        // With symbol = 33, nbits will be 32.
+        let pos_before = br.total_bits_read();
+        let _ = hu.read(33, &mut br);
+        let pos_after = br.total_bits_read();
+        // Without clamping, it would try to read 32 bits.
+        // With clamping, it should read 0 bits.
+        assert_eq!(pos_after - pos_before, 0);
     }
 }
