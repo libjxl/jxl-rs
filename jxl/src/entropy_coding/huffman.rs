@@ -81,7 +81,7 @@ impl Table {
             }
             *symbol = sym as u16;
         }
-        if (0..num_symbols - 1).any(|i| symbols[..i].contains(&symbols[i + 1])) {
+        if (1..num_symbols).any(|i| symbols[..i].contains(&symbols[i])) {
             return Err(Error::InvalidHuffman);
         }
 
@@ -521,6 +521,23 @@ impl HuffmanCodes {
 mod test {
     use super::*;
     use test_log::test;
+
+    #[test]
+    fn invalid_simple_huffman_duplicate_symbols() {
+        // Construct a bitstream for a simple Huffman code with 2 symbols, both with value 1.
+        // This should be rejected as symbols must be unique.
+        // Format:
+        // - 2 bits: simple_code_or_skip = 1
+        // - 2 bits: num_symbols = 2 (coded as 1)
+        // - 2 bits: symbol 1 = 1
+        // - 2 bits: symbol 2 = 1
+        // Bitstream: 01 01 01 01, which is 0x55
+        let data = [0x55];
+        let mut br = BitReader::new(&data);
+        // Alphabet size of 4 means symbols are encoded with 2 bits.
+        let result = Table::decode(4, &mut br);
+        assert!(result.is_err());
+    }
 
     #[test]
     fn byte_histogram() {
