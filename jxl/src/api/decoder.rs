@@ -132,14 +132,28 @@ impl JxlDecoder<WithImageInfo> {
     /// # Example
     ///
     /// ```no_run
-    /// # use jxl::api::*;
-    /// # fn example(mut decoder: JxlDecoder<WithImageInfo>) {
-    /// if let Some(gain_map) = decoder.gain_map() {
-    ///     println!("Gain map version: {}", gain_map.jhgm_version);
-    ///     println!("Metadata size: {} bytes", gain_map.gain_map_metadata.len());
-    ///     println!("Gain map codestream size: {} bytes", gain_map.gain_map.len());
+    /// use jxl::api::{JxlDecoder, JxlDecoderOptions, ProcessingResult};
+    /// use jxl::error::Error;
+    ///
+    /// fn example(data: &[u8]) -> Result<(), Error> {
+    ///     let decoder = JxlDecoder::new(JxlDecoderOptions::default());
+    ///     let mut input = data;
+    ///     let decoder = loop {
+    ///         match decoder.process(&mut input)? {
+    ///             ProcessingResult::Complete { result } => break result,
+    ///             ProcessingResult::NeedsMoreInput { .. } => {
+    ///                 return Err(Error::OutOfBounds(0));
+    ///             }
+    ///         }
+    ///     };
+    ///
+    ///     if let Some(gain_map) = decoder.gain_map() {
+    ///         println!("Gain map version: {}", gain_map.jhgm_version);
+    ///         println!("Metadata size: {} bytes", gain_map.gain_map_metadata.len());
+    ///         println!("Gain map codestream size: {} bytes", gain_map.gain_map.len());
+    ///     }
+    ///     Ok(())
     /// }
-    /// # }
     /// ```
     pub fn gain_map(&self) -> Option<&super::GainMapBundle> {
         self.inner.gain_map()
