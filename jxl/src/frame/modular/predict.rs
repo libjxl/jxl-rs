@@ -332,13 +332,13 @@ fn add_bits(x: i32) -> i64 {
     (x as i64) << PRED_EXTRA_BITS
 }
 
-fn error_weight(x: u32, maxweight: u32) -> u32 {
-    let shift = floor_log2_nonzero(x + 1) as i32 - 5;
+fn error_weight(x: u64, maxweight: u32) -> u32 {
+    let mut shift = floor_log2_nonzero(x + 1) as i32 - 5;
     if shift < 0 {
-        4u32 + maxweight * DIVLOOKUP[x as usize & 63]
-    } else {
-        4u32 + ((maxweight * DIVLOOKUP[(x as usize >> shift) & 63]) >> shift)
+        shift = 0;
     }
+    let shift = shift as u32;
+    4 + ((maxweight * DIVLOOKUP[(x >> shift) as usize]) >> shift)
 }
 
 fn weighted_average(pixels: &[i64; NUM_PREDICTORS], weights: &mut [u32; NUM_PREDICTORS]) -> i64 {
@@ -423,9 +423,9 @@ impl WeightedPredictorState {
         let mut weights = [0u32; NUM_PREDICTORS];
         for (i, weight) in weights.iter_mut().enumerate() {
             *weight = error_weight(
-                self.pred_errors[i][pos_n]
-                    .wrapping_add(self.pred_errors[i][pos_ne])
-                    .wrapping_add(self.pred_errors[i][pos_nw]),
+                self.pred_errors[i][pos_n] as u64
+                    + self.pred_errors[i][pos_ne] as u64
+                    + self.pred_errors[i][pos_nw] as u64,
                 self.wp_header.w(i).unwrap(),
             );
         }
@@ -551,5 +551,27 @@ mod tests {
         assert_eq!(step(&mut rng, &mut state, xsize, ysize), (110i64, -60i32));
         assert_eq!(step(&mut rng, &mut state, xsize, ysize), (165i64, 0i32));
         assert_eq!(step(&mut rng, &mut state, xsize, ysize), (153i64, -60i32));
+    }
+
+    #[test]
+    fn error_sum_overflow() {
+        let mut header = WeightedHeader::default();
+        header.w0 = 15;
+        let xsize = 8;
+        let mut state = WeightedPredictorState::new(&header, xsize);
+
+        let prev_row_base = xsize + 2;
+        state.pred_errors[0][prev_row_base] = u32::MAX;
+        state.pred_errors[0][prev_row_base + 1] = 1;
+
+        let pos = (0, 1);
+        let data = PredictionData {
+            top: 128,
+            left: 128,
+            ..Default::default()
+        };
+
+        let (pred, _prop) = state.predict_and_property(pos, xsize, &data);
+        assert_eq!(pred, 128);
     }
 }
