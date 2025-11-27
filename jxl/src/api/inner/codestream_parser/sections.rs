@@ -16,7 +16,7 @@ pub(super) struct SectionState {
     lf_global_done: bool,
     remaining_lf: usize,
     hf_global_done: bool,
-    completed_passes: Vec<u8>,
+    completed_passes: Vec<u32>,
 }
 
 impl SectionState {
@@ -31,8 +31,8 @@ impl SectionState {
 
     /// Returns the number of passes that are fully completed across all groups.
     /// A pass is fully completed when all groups have decoded that pass.
-    pub(super) fn num_completed_passes(&self) -> usize {
-        self.completed_passes.iter().copied().min().unwrap_or(0) as usize
+    pub(super) fn num_completed_passes(&self) -> u32 {
+        self.completed_passes.iter().copied().min().unwrap_or(0)
     }
 }
 
@@ -126,7 +126,7 @@ impl CodestreamParser {
                     }
                     Section::Hf { group, pass } => {
                         if !self.section_state.hf_global_done
-                            || self.section_state.completed_passes[group] != pass as u8
+                            || self.section_state.completed_passes[group] != pass as u32
                         {
                             Some(sec)
                         } else {
