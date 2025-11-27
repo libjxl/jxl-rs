@@ -417,7 +417,9 @@ impl SymbolReader {
                         .len()
                         .min((1 << Lz77State::LOG_WINDOW_SIZE) - start);
                     window[..first_len].copy_from_slice(&window_first[..first_len]);
-                    window[N - end..].copy_from_slice(&lz77_state.window[..end]);
+                    if end > 0 {
+                        window[N - end..].copy_from_slice(&lz77_state.window[..end]);
+                    }
                 }
                 StateCheckpoint::Lz77 {
                     num_to_copy: lz77_state.num_to_copy,
