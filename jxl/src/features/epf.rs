@@ -52,7 +52,7 @@ pub fn create_sigma_image(
                 for iy in 0..cy {
                     for ix in 0..cx {
                         let sharpness = hf_meta.epf_map.row(by + iy)[bx + ix] as usize;
-                        let sigma = (sigma_quant * rf.epf_sharp_lut[sharpness]).min(-1e-4);
+                        let sigma = sigma_quant * rf.epf_sharp_lut[sharpness];
                         sigma_image.row_mut(by + iy)[bx + ix] = 1.0 / sigma;
                     }
                 }
