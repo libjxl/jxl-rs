@@ -816,28 +816,6 @@ pub fn meta_apply_local_transforms<'a, 'b>(
 
     debug!(?transform_steps);
 
-    // Since RCT steps will try to transfer buffers from the source channels to the destination
-    // channels, make sure we do the reverse transformation here (to have the caller-provided
-    // buffers be used for writing temporary data).
-    for ts in transform_steps.iter() {
-        if let TransformStep::Rct {
-            buf_in, buf_out, ..
-        } = ts
-        {
-            for c in 0..3 {
-                assert_eq!(
-                    buffer_storage[buf_in[c]].channel_info(),
-                    buffer_storage[buf_out[c]].channel_info()
-                );
-                assert!(matches!(
-                    buffer_storage[buf_in[c]],
-                    LocalTransformBuffer::Placeholder(_)
-                ));
-                buffer_storage.swap(buf_in[c], buf_out[c]);
-            }
-        }
-    }
-
     debug!(?channels, ?buffer_storage, "RCT-adjusted channels");
 
     // Allocate all the coded channels if they aren't yet.
