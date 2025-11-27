@@ -38,8 +38,8 @@ impl SectionState {
 
 // No guarantees on the order of calls to f, or the order of retained elements in vec.
 fn retain_by_value<T>(vec: &mut Vec<T>, mut f: impl FnMut(T) -> Option<T>) {
-    for pos in (0..vec.len()).rev() {
-        let element_to_test = vec.swap_remove(pos);
+    let old_vec = std::mem::take(vec);
+    for element_to_test in old_vec {
         if let Some(v) = f(element_to_test) {
             vec.push(v);
         }
