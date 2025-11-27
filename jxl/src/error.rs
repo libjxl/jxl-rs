@@ -203,6 +203,8 @@ pub enum Error {
     InvalidRCT(u32),
     #[error("Invalid channel range: {0}..{1}, {2} total channels")]
     InvalidChannelRange(usize, usize, usize),
+    #[error("Duplicate channel index {0} provided")]
+    DuplicateChannelIndex(usize),
     #[error("Invalid transform: mixing different channels (different shape or different shift)")]
     MixingDifferentChannels,
     #[error("Invalid transform: squeezing meta-channels needs an in-place transform")]
