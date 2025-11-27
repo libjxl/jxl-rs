@@ -26,9 +26,12 @@ pub trait JxlBitstreamInput {
         let mut skipped = 0;
         while bytes > 0 {
             let num = bytes.min(BUF_SIZE);
-            self.read(&mut [IoSliceMut::new(&mut skip_buf[..num])])?;
-            bytes -= num;
-            skipped += num;
+            let count = self.read(&mut [IoSliceMut::new(&mut skip_buf[..num])])?;
+            if count == 0 {
+                break;
+            }
+            bytes -= count;
+            skipped += count;
         }
         Ok(skipped)
     }
