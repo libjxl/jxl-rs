@@ -1,3 +1,4 @@
+
 use jxl::api::{JxlDecoder, ProcessingResult};
 
 #[test]
