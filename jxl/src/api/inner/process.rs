@@ -34,8 +34,7 @@ impl<const SIZE: usize> SmallBuffer<SIZE> {
             if self.range.start >= SIZE / 2 {
                 let start = self.range.start;
                 let len = self.range.len();
-                let (pre, post) = self.buf.split_at_mut(start);
-                pre[0..len].copy_from_slice(&post[0..len]);
+                self.buf.copy_within(start..start + len, 0);
                 self.range.start -= start;
                 self.range.end -= start;
             }
