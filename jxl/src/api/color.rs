@@ -974,8 +974,8 @@ impl JxlColorEncoding {
                             create_icc_curv_para_tag(&mut tags_data, &PARAMS, 3)?
                         }
                         JxlTransferFunction::HLG | JxlTransferFunction::PQ => {
-                            let params = create_table_curve(64, transfer_function, false)?;
-                            create_icc_curv_para_tag(&mut tags_data, params.as_slice(), 3)?
+                            let table = create_table_curve(4096, transfer_function, false)?;
+                            create_icc_curv_table_tag(&mut tags_data, &table)?
                         }
                     };
                     pad_to_4_byte_boundary(&mut tags_data);
@@ -1041,17 +1041,6 @@ impl JxlColorEncoding {
             // let padded_size = tag_info.size_unpadded.next_multiple_of(4);
             // tag_table_bytes.extend_from_slice(&padded_size.to_be_bytes());
         }
-
-        // Assemble the final ICC profile parts: header + tag_table + tags_data
-        let mut final_icc_profile_data: Vec<u8> =
-            Vec::with_capacity(header.len() + tag_table_bytes.len() + tags_data.len());
-        final_icc_profile_data.extend_from_slice(&header);
-        final_icc_profile_data.extend_from_slice(&tag_table_bytes);
-        final_icc_profile_data.extend_from_slice(&tags_data);
-
-        // Update the profile size in the header (at offset 0)
-        let total_profile_size = final_icc_profile_data.len() as u32;
-        write_u32_be(&mut final_icc_profile_data, 0, total_profile_size)?;
 
         // Assemble the final ICC profile parts: header + tag_table + tags_data
         let mut final_icc_profile_data: Vec<u8> =
@@ -1365,6 +1354,24 @@ fn create_icc_curv_para_tag(
     Ok((tags_data.len() - start_offset) as u32)
 }
 
+fn create_icc_curv_table_tag(
+    tags_data: &mut Vec<u8>,
+    table: &[u16],
+) -> Result<u32, Error> {
+    let start_offset = tags_data.len();
+    // Tag type 'curv' (4 bytes)
+    tags_data.extend_from_slice(b"curv");
+    // Reserved, must be 0 (4 bytes)
+    tags_data.extend_from_slice(&0u32.to_be_bytes());
+    // Number of entries (u32, 4 bytes)
+    tags_data.extend_from_slice(&(table.len() as u32).to_be_bytes());
+    // Table data (u16 each)
+    for &value in table {
+        tags_data.extend_from_slice(&value.to_be_bytes());
+    }
+    Ok((tags_data.len() - start_offset) as u32)
+}
+
 fn display_from_encoded_pq(display_intensity_target: f32, mut e: f64) -> f64 {
     const M1: f64 = 2610.0 / 16384.0;
     const M2: f64 = (2523.0 / 4096.0) * 128.0;
@@ -1508,7 +1515,7 @@ fn create_table_curve(
     n: usize,
     tf: &JxlTransferFunction,
     tone_map: bool,
-) -> Result<Vec<f32>, Error> {
+) -> Result<Vec<u16>, Error> {
     // ICC Specification (v4.4, section 10.6) for `curveType` with `curv`
     // processing elements states the table can have at most 4096 entries.
     if n > 4096 {
@@ -1556,8 +1563,7 @@ fn create_table_curve(
         // particularly important for HLG, which can exceed 1.0.
         let y_clamped = y.clamp(0.0, 1.0);
 
-        // table.push((y_clamped * 65535.0).round() as u16);
-        table.push(y_clamped as f32);
+        table.push((y_clamped * 65535.0).round() as u16);
     }
 
     Ok(table)
@@ -2321,6 +2327,43 @@ mod test {
         assert!(
             profile.windows(4).any(|w| w == b"A2B0"),
             "Should have A2B0 tag"
+        );
+    }
+
+    #[test]
+    fn test_hlg_custom_primaries_icc_profile_generation() {
+        let encoding = JxlColorEncoding::RgbColorSpace {
+            white_point: JxlWhitePoint::D65,
+            primaries: JxlPrimaries::Chromaticities {
+                rx: 0.708,
+                ry: 0.292,
+                gx: 0.170,
+                gy: 0.797,
+                bx: 0.131,
+                by: 0.046,
+            }, // BT.2100 primaries, but custom
+            transfer_function: JxlTransferFunction::HLG,
+            rendering_intent: RenderingIntent::Relative,
+        };
+
+        assert!(!encoding.can_tone_map_for_icc());
+
+        let result = encoding.maybe_create_profile();
+        assert!(result.is_ok(), "Profile creation should succeed");
+        let profile_opt = result.unwrap();
+        assert!(
+            profile_opt.is_some(),
+            "Profile should be generated for HLG with custom primaries"
+        );
+
+        let profile = profile_opt.unwrap();
+        // Check that the profile size is large enough to contain the HLG table.
+        // The old incorrect code would generate a smaller profile.
+        // Old size would be around a few hundred bytes for the trc tag.
+        // New size should be > 8KB.
+        assert!(
+            profile.len() > 8000,
+            "Profile size should be > 8KB for HLG with table"
         );
     }
 }
