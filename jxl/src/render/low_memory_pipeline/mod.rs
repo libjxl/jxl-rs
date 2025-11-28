@@ -235,11 +235,13 @@ impl RenderPipeline for LowMemoryRenderPipeline {
 
         let mut initial_buffers = vec![];
         for chan in 0..nc {
+            // NOTE: Use chunk_size directly WITHOUT downsampling because input_buffers
+            // contain full-resolution data. Downsampling happens in later pipeline stages.
             initial_buffers.push(RowBuffer::new(
                 shared.channel_info[0][chan].ty.unwrap(),
                 next_border_and_cur_downsample[0][chan].0 as usize,
                 0,
-                shared.chunk_size >> shared.channel_info[0][chan].downsample.0,
+                shared.chunk_size,
             )?);
         }
         let mut row_buffers = vec![initial_buffers];

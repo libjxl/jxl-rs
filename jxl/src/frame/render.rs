@@ -257,7 +257,7 @@ impl Frame {
                         pipeline!(
                             self,
                             p,
-                            p.set_buffer_for_group(c, *group, 1, &img, &mut buffer_splitter)?
+                            p.set_buffer_for_group(c, *group, 1, img, &mut buffer_splitter)?
                         );
                     }
                 }
