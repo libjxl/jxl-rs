@@ -211,18 +211,14 @@ impl Frame {
         #[cfg(feature = "parallel")]
         #[allow(unsafe_code)]
         if use_parallel {
-            // Phase 2: Pre-allocated result slots for parallel VarDCT decoding
+            // Phase 3A Quick Win: Use map_init for thread-local caches (eliminates mutex overhead)
+            use rayon::prelude::*;
+
             let num_groups = group_passes.len();
 
             // Pre-allocate result vector - each group gets its own slot
             let results: Vec<std::sync::Mutex<Option<[Image<f32>; 3]>>> = (0..num_groups)
                 .map(|_| std::sync::Mutex::new(None))
-                .collect();
-
-            // Create per-thread caches
-            let num_threads = rayon::current_num_threads();
-            let caches: Vec<std::sync::Mutex<super::group_cache::GroupDecodeCache>> = (0..num_threads)
-                .map(|_| std::sync::Mutex::new(super::group_cache::GroupDecodeCache::new()))
                 .collect();
 
             // Use raw pointer address to self to bypass Sync requirement
@@ -232,28 +228,24 @@ impl Frame {
             // 3. Internal mutability in LfGlobalState/HfGlobalState is synchronized
             let frame_addr = self as *const Frame as usize;
 
-            // Parallel decoding phase
-            rayon::scope(|s| {
-                for (idx, (group, pass, br)) in group_passes.iter().enumerate() {
-                    let results_ref = &results;
-                    let caches_ref = &caches;
-
-                    s.spawn(move |_| {
-                        // Get a cache for this thread
-                        let thread_id = rayon::current_thread_index().unwrap_or(0) % num_threads;
-                        let mut cache = caches_ref[thread_id].lock().unwrap();
-
+            // Parallel decoding phase using par_iter + map_init for thread-local caches
+            group_passes
+                .par_iter()
+                .enumerate()
+                .map_init(
+                    || super::group_cache::GroupDecodeCache::new(),  // Thread-local cache!
+                    |cache, (idx, (group, pass, br))| {
                         // Decode the group using Frame's decode_vardct_core method
                         // SAFETY: Frame pointer is valid for the entire scope, and each group is independent
                         let frame_ref = unsafe { &*(frame_addr as *const Frame) };
-                        let pixels = frame_ref.decode_vardct_core(*group, *pass, br.clone(), &mut cache)
+                        let pixels = frame_ref.decode_vardct_core(*group, *pass, br.clone(), cache)
                             .expect("VarDCT decode failed");
 
                         // Write to dedicated result slot - no contention!
-                        *results_ref[idx].lock().unwrap() = Some(pixels);
-                    });
-                }
-            });
+                        *results[idx].lock().unwrap() = Some(pixels);
+                    }
+                )
+                .collect::<Vec<()>>();  // Force evaluation
 
             // Sequential output phase - write results to pipeline in order
             for (idx, (group, _, _)) in group_passes.iter().enumerate() {

@@ -363,6 +363,7 @@ impl Frame {
     /// Returns the decoded pixels for a single group/pass.
     #[cfg(feature = "parallel")]
     #[allow(unsafe_code, invalid_reference_casting)]
+    #[inline]  // Phase 3A: Inline hot path
     pub fn decode_vardct_core(
         &self,
         group: usize,
