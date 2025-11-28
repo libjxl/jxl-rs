@@ -207,7 +207,7 @@ impl Frame {
                 && !self.header.has_noise()  // Sequential fallback for noise
                 && self.header.passes.num_passes == 1  // Single-pass only
                 && self.hf_global.as_ref().map(|hf| hf.hf_coefficients.is_none()).unwrap_or(false) // No progressive images
-                && self.decoder_state.file_header.image_metadata.extra_channel_info.is_empty()  // No extra channels (e.g., alpha)
+                && self.decoder_state.file_header.image_metadata.extra_channel_info.is_empty() // No extra channels (e.g., alpha)
         };
 
         #[cfg(feature = "parallel")]
