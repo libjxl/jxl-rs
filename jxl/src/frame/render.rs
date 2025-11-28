@@ -6,6 +6,11 @@
 use std::any::Any;
 use std::sync::Arc;
 
+#[cfg(feature = "parallel")]
+use std::sync::Mutex;
+#[cfg(feature = "parallel")]
+use rayon::prelude::*;
+
 use crate::api::JxlCms;
 use crate::api::JxlColorType;
 use crate::api::JxlDataFormat;
@@ -185,9 +190,97 @@ impl Frame {
             }
         }
 
+        // Collect all group/pass/BitReader tuples for processing
+        let mut group_passes: Vec<(usize, usize, BitReader)> = Vec::new();
         for (group, passes) in groups {
-            // TODO(veluca): render all the available passes at once.
             for (pass, br) in passes {
+                group_passes.push((group, pass, br));
+            }
+        }
+
+        // Check if we can use parallel VarDCT decoding (Phase 2)
+        #[cfg(feature = "parallel")]
+        let use_parallel = {
+            self.header.encoding == Encoding::VarDCT
+                && group_passes.len() >= 4  // At least 4 groups worth parallelizing
+                && !self.header.has_noise()  // Sequential fallback for noise
+                && self.header.passes.num_passes == 1  // Single-pass only
+                && self.hf_global.as_ref().map(|hf| hf.hf_coefficients.is_none()).unwrap_or(false)  // No progressive images
+        };
+
+        #[cfg(feature = "parallel")]
+        #[allow(unsafe_code)]
+        if use_parallel {
+            // Phase 2: Pre-allocated result slots for parallel VarDCT decoding
+            let num_groups = group_passes.len();
+
+            // Pre-allocate result vector - each group gets its own slot
+            let results: Vec<std::sync::Mutex<Option<[Image<f32>; 3]>>> = (0..num_groups)
+                .map(|_| std::sync::Mutex::new(None))
+                .collect();
+
+            // Create per-thread caches
+            let num_threads = rayon::current_num_threads();
+            let caches: Vec<std::sync::Mutex<super::group_cache::GroupDecodeCache>> = (0..num_threads)
+                .map(|_| std::sync::Mutex::new(super::group_cache::GroupDecodeCache::new()))
+                .collect();
+
+            // Use raw pointer address to self to bypass Sync requirement
+            // This is safe because:
+            // 1. Each thread decodes a different group (no data races)
+            // 2. The Frame reference is valid for the entire parallel scope
+            // 3. Internal mutability in LfGlobalState/HfGlobalState is synchronized
+            let frame_addr = self as *const Frame as usize;
+
+            // Parallel decoding phase
+            rayon::scope(|s| {
+                for (idx, (group, pass, br)) in group_passes.iter().enumerate() {
+                    let results_ref = &results;
+                    let caches_ref = &caches;
+
+                    s.spawn(move |_| {
+                        // Get a cache for this thread
+                        let thread_id = rayon::current_thread_index().unwrap_or(0) % num_threads;
+                        let mut cache = caches_ref[thread_id].lock().unwrap();
+
+                        // Decode the group using Frame's decode_vardct_core method
+                        // SAFETY: Frame pointer is valid for the entire scope, and each group is independent
+                        let frame_ref = unsafe { &*(frame_addr as *const Frame) };
+                        let pixels = frame_ref.decode_vardct_core(*group, *pass, br.clone(), &mut cache)
+                            .expect("VarDCT decode failed");
+
+                        // Write to dedicated result slot - no contention!
+                        *results_ref[idx].lock().unwrap() = Some(pixels);
+                    });
+                }
+            });
+
+            // Sequential output phase - write results to pipeline in order
+            for (idx, (group, _, _)) in group_passes.iter().enumerate() {
+                let pixels = results[idx].lock().unwrap().take()
+                    .expect("Group decode result should be present");
+
+                if self.decoder_state.enable_output {
+                    for (c, img) in pixels.into_iter().enumerate() {
+                        pipeline!(
+                            self,
+                            p,
+                            p.set_buffer_for_group(c, *group, 1, &img, &mut buffer_splitter)?
+                        );
+                    }
+                }
+            }
+        } else {
+            // Sequential fallback (non-parallel feature or conditions not met)
+            for (group, pass, br) in group_passes {
+                self.decode_hf_group(group, pass, br, &mut buffer_splitter)?;
+            }
+        }
+
+        #[cfg(not(feature = "parallel"))]
+        {
+            // Sequential-only build
+            for (group, pass, br) in group_passes {
                 self.decode_hf_group(group, pass, br, &mut buffer_splitter)?;
             }
         }
