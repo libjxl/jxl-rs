@@ -203,6 +203,7 @@ impl Frame {
         let use_parallel = {
             self.header.encoding == Encoding::VarDCT
                 && group_passes.len() >= 4  // At least 4 groups worth parallelizing
+                && group_passes.len() <= 32  // Avoid stack overflow with too many groups
                 && !self.header.has_noise()  // Sequential fallback for noise
                 && self.header.passes.num_passes == 1  // Single-pass only
                 && self.hf_global.as_ref().map(|hf| hf.hf_coefficients.is_none()).unwrap_or(false) // No progressive images
@@ -216,16 +217,13 @@ impl Frame {
 
             let num_groups = group_passes.len();
 
-            // Pre-allocate correctly-sized buffers for each group using pipeline's get_buffer
-            // This ensures downsampled channels get the right size
-            let mut pre_allocated_buffers: Vec<[Image<f32>; 3]> = Vec::with_capacity(num_groups);
-            for _ in 0..num_groups {
-                pre_allocated_buffers.push([
-                    pipeline!(self, p, p.get_buffer(0))?,
-                    pipeline!(self, p, p.get_buffer(1))?,
-                    pipeline!(self, p, p.get_buffer(2))?,
-                ]);
-            }
+            // Get buffer sizes from pipeline for correctly handling downsampled channels
+            // We create one buffer to get the sizes, then allocate in the parallel loop
+            let buffer_sizes = [
+                pipeline!(self, p, p.get_buffer::<f32>(0)).map(|img| img.size())?,
+                pipeline!(self, p, p.get_buffer::<f32>(1)).map(|img| img.size())?,
+                pipeline!(self, p, p.get_buffer::<f32>(2)).map(|img| img.size())?,
+            ];
 
             // Pre-allocate result vector - each group gets its own slot
             let results: Vec<std::sync::Mutex<Option<[Image<f32>; 3]>>> = (0..num_groups)
@@ -246,26 +244,29 @@ impl Frame {
                 .map_init(
                     || super::group_cache::GroupDecodeCache::new(), // Thread-local cache!
                     |cache, (idx, (group, pass, br))| {
-                        // Decode the group using Frame's decode_vardct_core method with pre-allocated buffers
+                        // Decode the group using Frame's decode_vardct_core method
                         // SAFETY: Frame pointer is valid for the entire scope, and each group is independent
                         let frame_ref = unsafe { &*(frame_addr as *const Frame) };
-                        let mut pixels = [
-                            pre_allocated_buffers[idx][0].try_clone().unwrap(),
-                            pre_allocated_buffers[idx][1].try_clone().unwrap(),
-                            pre_allocated_buffers[idx][2].try_clone().unwrap(),
-                        ];
+
+                        // Create buffers with correct sizes for this group on the heap to avoid stack overflow
+                        let mut pixels = Box::new([
+                            Image::new(buffer_sizes[0]).unwrap(),
+                            Image::new(buffer_sizes[1]).unwrap(),
+                            Image::new(buffer_sizes[2]).unwrap(),
+                        ]);
+
                         frame_ref
                             .decode_vardct_core_with_buffers(
                                 *group,
                                 *pass,
                                 br.clone(),
                                 cache,
-                                &mut pixels,
+                                &mut *pixels,
                             )
                             .expect("VarDCT decode failed");
 
                         // Write to dedicated result slot - no contention!
-                        *results[idx].lock().unwrap() = Some(pixels);
+                        *results[idx].lock().unwrap() = Some(*pixels);
                     },
                 )
                 .collect::<Vec<()>>(); // Force evaluation
