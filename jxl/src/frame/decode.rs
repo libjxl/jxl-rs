@@ -360,39 +360,23 @@ impl Frame {
     }
 
     /// Core VarDCT decoding logic that can be called from parallel threads.
-    /// Returns the decoded pixels for a single group/pass.
+    /// Takes pre-allocated buffers to ensure correct sizing for downsampled channels.
     #[cfg(feature = "parallel")]
     #[allow(unsafe_code, invalid_reference_casting)]
     #[inline]  // Phase 3A: Inline hot path
-    pub fn decode_vardct_core(
+    pub fn decode_vardct_core_with_buffers(
         &self,
         group: usize,
         pass: usize,
         mut br: BitReader,
         cache: &mut super::group_cache::GroupDecodeCache,
-    ) -> Result<[Image<f32>; 3]> {
+        pixels: &mut [Image<f32>; 3],
+    ) -> Result<()> {
         use super::group::decode_vardct_group;
 
         let lf_global = self.lf_global.as_ref().unwrap();
         let hf_global = self.hf_global.as_ref().unwrap();
         let hf_meta = self.hf_meta.as_ref().unwrap();
-
-        // Create output buffers for this group
-        let group_dim = self.header.group_dim() as usize;
-        let xsize_groups = self.header.size_groups().0;
-        let gx = group % xsize_groups;
-        let gy = group / xsize_groups;
-        let x0 = gx * group_dim;
-        let y0 = gy * group_dim;
-        let x1 = (x0 + group_dim).min(self.header.width as usize);
-        let y1 = (y0 + group_dim).min(self.header.height as usize);
-        let group_size = (x1 - x0, y1 - y0);
-
-        let mut pixels = [
-            Image::new(group_size)?,
-            Image::new(group_size)?,
-            Image::new(group_size)?,
-        ];
 
         // Call the existing decode_vardct_group function
         // Note: We need to cast away the mut requirement on lf_global and hf_global
@@ -420,11 +404,11 @@ impl Frame {
                 .transform_data
                 .opsin_inverse_matrix
                 .quant_biases,
-            &mut pixels,
+            pixels,
             &mut br,
         )?;
 
-        Ok(pixels)
+        Ok(())
     }
 
     #[instrument(level = "debug", skip(self, br, buffer_splitter))]

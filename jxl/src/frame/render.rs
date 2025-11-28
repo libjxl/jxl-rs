@@ -216,6 +216,17 @@ impl Frame {
 
             let num_groups = group_passes.len();
 
+            // Pre-allocate correctly-sized buffers for each group using pipeline's get_buffer
+            // This ensures downsampled channels get the right size
+            let mut pre_allocated_buffers: Vec<[Image<f32>; 3]> = Vec::with_capacity(num_groups);
+            for _ in 0..num_groups {
+                pre_allocated_buffers.push([
+                    pipeline!(self, p, p.get_buffer(0))?,
+                    pipeline!(self, p, p.get_buffer(1))?,
+                    pipeline!(self, p, p.get_buffer(2))?,
+                ]);
+            }
+
             // Pre-allocate result vector - each group gets its own slot
             let results: Vec<std::sync::Mutex<Option<[Image<f32>; 3]>>> = (0..num_groups)
                 .map(|_| std::sync::Mutex::new(None))
@@ -235,10 +246,15 @@ impl Frame {
                 .map_init(
                     || super::group_cache::GroupDecodeCache::new(),  // Thread-local cache!
                     |cache, (idx, (group, pass, br))| {
-                        // Decode the group using Frame's decode_vardct_core method
+                        // Decode the group using Frame's decode_vardct_core method with pre-allocated buffers
                         // SAFETY: Frame pointer is valid for the entire scope, and each group is independent
                         let frame_ref = unsafe { &*(frame_addr as *const Frame) };
-                        let pixels = frame_ref.decode_vardct_core(*group, *pass, br.clone(), cache)
+                        let mut pixels = [
+                            pre_allocated_buffers[idx][0].try_clone().unwrap(),
+                            pre_allocated_buffers[idx][1].try_clone().unwrap(),
+                            pre_allocated_buffers[idx][2].try_clone().unwrap(),
+                        ];
+                        frame_ref.decode_vardct_core_with_buffers(*group, *pass, br.clone(), cache, &mut pixels)
                             .expect("VarDCT decode failed");
 
                         // Write to dedicated result slot - no contention!
