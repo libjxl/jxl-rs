@@ -7,9 +7,9 @@ use std::any::Any;
 use std::sync::Arc;
 
 #[cfg(feature = "parallel")]
-use std::sync::Mutex;
-#[cfg(feature = "parallel")]
 use rayon::prelude::*;
+#[cfg(feature = "parallel")]
+use std::sync::Mutex;
 
 use crate::api::JxlCms;
 use crate::api::JxlColorType;
@@ -205,7 +205,7 @@ impl Frame {
                 && group_passes.len() >= 4  // At least 4 groups worth parallelizing
                 && !self.header.has_noise()  // Sequential fallback for noise
                 && self.header.passes.num_passes == 1  // Single-pass only
-                && self.hf_global.as_ref().map(|hf| hf.hf_coefficients.is_none()).unwrap_or(false)  // No progressive images
+                && self.hf_global.as_ref().map(|hf| hf.hf_coefficients.is_none()).unwrap_or(false) // No progressive images
         };
 
         #[cfg(feature = "parallel")]
@@ -244,7 +244,7 @@ impl Frame {
                 .par_iter()
                 .enumerate()
                 .map_init(
-                    || super::group_cache::GroupDecodeCache::new(),  // Thread-local cache!
+                    || super::group_cache::GroupDecodeCache::new(), // Thread-local cache!
                     |cache, (idx, (group, pass, br))| {
                         // Decode the group using Frame's decode_vardct_core method with pre-allocated buffers
                         // SAFETY: Frame pointer is valid for the entire scope, and each group is independent
@@ -254,18 +254,28 @@ impl Frame {
                             pre_allocated_buffers[idx][1].try_clone().unwrap(),
                             pre_allocated_buffers[idx][2].try_clone().unwrap(),
                         ];
-                        frame_ref.decode_vardct_core_with_buffers(*group, *pass, br.clone(), cache, &mut pixels)
+                        frame_ref
+                            .decode_vardct_core_with_buffers(
+                                *group,
+                                *pass,
+                                br.clone(),
+                                cache,
+                                &mut pixels,
+                            )
                             .expect("VarDCT decode failed");
 
                         // Write to dedicated result slot - no contention!
                         *results[idx].lock().unwrap() = Some(pixels);
-                    }
+                    },
                 )
-                .collect::<Vec<()>>();  // Force evaluation
+                .collect::<Vec<()>>(); // Force evaluation
 
             // Sequential output phase - write results to pipeline in order
             for (idx, (group, _, _)) in group_passes.iter().enumerate() {
-                let pixels = results[idx].lock().unwrap().take()
+                let pixels = results[idx]
+                    .lock()
+                    .unwrap()
+                    .take()
                     .expect("Group decode result should be present");
 
                 if self.decoder_state.enable_output {

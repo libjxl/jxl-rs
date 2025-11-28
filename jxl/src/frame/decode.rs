@@ -363,7 +363,7 @@ impl Frame {
     /// Takes pre-allocated buffers to ensure correct sizing for downsampled channels.
     #[cfg(feature = "parallel")]
     #[allow(unsafe_code, invalid_reference_casting)]
-    #[inline]  // Phase 3A: Inline hot path
+    #[inline] // Phase 3A: Inline hot path
     pub fn decode_vardct_core_with_buffers(
         &self,
         group: usize,
@@ -382,12 +382,8 @@ impl Frame {
         // Note: We need to cast away the mut requirement on lf_global and hf_global
         // This is safe because decode_vardct_group only mutates the histograms' LZ77 state
         // which is protected by internal synchronization
-        let lf_global_mut = unsafe {
-            &mut *std::ptr::from_ref(lf_global).cast_mut()
-        };
-        let hf_global_mut = unsafe {
-            &mut *std::ptr::from_ref(hf_global).cast_mut()
-        };
+        let lf_global_mut = unsafe { &mut *std::ptr::from_ref(lf_global).cast_mut() };
+        let hf_global_mut = unsafe { &mut *std::ptr::from_ref(hf_global).cast_mut() };
 
         decode_vardct_group(
             group,
