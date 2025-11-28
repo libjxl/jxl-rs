@@ -73,6 +73,38 @@ function JXLImage({ src }: { src: string }) {
 }
 ```
 
+## Polyfill (Auto Mode)
+
+Automatically handle all JXL images on your page:
+
+```html
+<script type="module" src="polyfill.js"></script>
+
+<!-- Use JXL images normally -->
+<img src="image.jxl" alt="My image">
+```
+
+Features:
+- Scans existing `<img src="*.jxl">` tags
+- Watches for dynamically added images
+- Patches `new Image()` constructor
+- Caches decoded images
+- Shows loading state
+
+Options:
+```javascript
+import { JXLPolyfill } from './polyfill.js';
+
+const polyfill = new JXLPolyfill({
+  patchImageConstructor: true,  // Intercept new Image()
+  showLoadingState: true,        // Blur while decoding
+  cacheDecoded: true,            // Cache PNG blobs
+  verbose: false                 // Debug logging
+});
+
+polyfill.start();
+```
+
 ## API
 
 ### `decode_jxl_to_png(jxl_data: Uint8Array): Uint8Array`
