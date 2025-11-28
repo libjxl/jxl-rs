@@ -369,7 +369,7 @@ impl Frame {
         group: usize,
         pass: usize,
         mut br: BitReader,
-        cache: &mut super::group_cache::GroupDecodeCache,
+        _cache: &mut super::group_cache::GroupDecodeCache,
         pixels: &mut [Image<f32>; 3],
     ) -> Result<()> {
         use super::group::decode_vardct_group;
@@ -378,18 +378,19 @@ impl Frame {
         let hf_global = self.hf_global.as_ref().unwrap();
         let hf_meta = self.hf_meta.as_ref().unwrap();
 
-        // Call the existing decode_vardct_group function
-        // Note: We need to cast away the mut requirement on lf_global and hf_global
-        // This is safe because decode_vardct_group only mutates the histograms' LZ77 state
-        // which is protected by internal synchronization
-        let lf_global_mut = unsafe { &mut *std::ptr::from_ref(lf_global).cast_mut() };
-        let hf_global_mut = unsafe { &mut *std::ptr::from_ref(hf_global).cast_mut() };
+        // Call decode_vardct_group with parallel-safe mode.
+        // We need mutable access to hf_global for the function signature, but we use
+        // force_local_coeffs=true to ensure all mutations happen to thread-local buffers.
+        // SAFETY: Each thread decodes a different group, so there are no data races.
+        // The only shared mutable access is to hf_global, which is only used for reading
+        // when force_local_coeffs=true (all writes go to local coefficient buffers).
+        let hf_global_mut = unsafe { &mut *(hf_global as *const _ as *mut _) };
 
         decode_vardct_group(
             group,
             pass,
             &self.header,
-            lf_global_mut,
+            lf_global,
             hf_global_mut,
             hf_meta,
             &self.lf_image,
@@ -402,6 +403,7 @@ impl Frame {
                 .quant_biases,
             pixels,
             &mut br,
+            true, // force_local_coeffs: parallel-safe mode
         )?;
 
         Ok(())
@@ -499,6 +501,7 @@ impl Frame {
                     .quant_biases,
                 &mut pixels,
                 &mut br,
+                false, // Sequential path: use shared coefficients if available
             )?;
             if self.decoder_state.enable_output
                 && pass + 1 == self.header.passes.num_passes as usize

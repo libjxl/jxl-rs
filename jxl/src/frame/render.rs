@@ -6,11 +6,6 @@
 use std::any::Any;
 use std::sync::Arc;
 
-#[cfg(feature = "parallel")]
-use rayon::prelude::*;
-#[cfg(feature = "parallel")]
-use std::sync::Mutex;
-
 use crate::api::JxlCms;
 use crate::api::JxlColorType;
 use crate::api::JxlDataFormat;
@@ -198,7 +193,7 @@ impl Frame {
             }
         }
 
-        // Check if we can use parallel VarDCT decoding (Phase 2)
+        // Check if we can use parallel VarDCT decoding (Phase 2).
         #[cfg(feature = "parallel")]
         let use_parallel = {
             self.header.encoding == Encoding::VarDCT
@@ -213,43 +208,43 @@ impl Frame {
         #[cfg(feature = "parallel")]
         #[allow(unsafe_code)]
         if use_parallel {
-            // Phase 3A Quick Win: Use map_init for thread-local caches (eliminates mutex overhead)
+            // Phase 3A Quick Win: Use map_init for thread-local caches (eliminates mutex overhead).
             use rayon::prelude::*;
 
             let num_groups = group_passes.len();
 
-            // Get buffer sizes from pipeline for correctly handling downsampled channels
-            // We create one buffer to get the sizes, then allocate in the parallel loop
+            // Get buffer sizes from pipeline for correctly handling downsampled channels.
+            // We create one buffer to get the sizes, then allocate in the parallel loop.
             let buffer_sizes = [
                 pipeline!(self, p, p.get_buffer::<f32>(0)).map(|img| img.size())?,
                 pipeline!(self, p, p.get_buffer::<f32>(1)).map(|img| img.size())?,
                 pipeline!(self, p, p.get_buffer::<f32>(2)).map(|img| img.size())?,
             ];
 
-            // Pre-allocate result vector - each group gets its own slot
+            // Pre-allocate result vector - each group gets its own slot.
             let results: Vec<std::sync::Mutex<Option<[Image<f32>; 3]>>> = (0..num_groups)
                 .map(|_| std::sync::Mutex::new(None))
                 .collect();
 
-            // Use raw pointer address to self to bypass Sync requirement
+            // Use raw pointer address to self to bypass Sync requirement.
             // This is safe because:
-            // 1. Each thread decodes a different group (no data races)
-            // 2. The Frame reference is valid for the entire parallel scope
-            // 3. Internal mutability in LfGlobalState/HfGlobalState is synchronized
+            // 1. Each thread decodes a different group (no data races).
+            // 2. The Frame reference is valid for the entire parallel scope.
+            // 3. Internal mutability in LfGlobalState/HfGlobalState is synchronized.
             let frame_addr = self as *const Frame as usize;
 
-            // Parallel decoding phase using par_iter + map_init for thread-local caches
+            // Parallel decoding phase using par_iter + map_init for thread-local caches.
             group_passes
                 .par_iter()
                 .enumerate()
                 .map_init(
                     || super::group_cache::GroupDecodeCache::new(), // Thread-local cache!
                     |cache, (idx, (group, pass, br))| {
-                        // Decode the group using Frame's decode_vardct_core method
-                        // SAFETY: Frame pointer is valid for the entire scope, and each group is independent
+                        // Decode the group using Frame's decode_vardct_core method.
+                        // SAFETY: Frame pointer is valid for the entire scope, and each group is independent.
                         let frame_ref = unsafe { &*(frame_addr as *const Frame) };
 
-                        // Create buffers with correct sizes for this group on the heap to avoid stack overflow
+                        // Create buffers with correct sizes for this group on the heap to avoid stack overflow.
                         let mut pixels = Box::new([
                             Image::new(buffer_sizes[0]).unwrap(),
                             Image::new(buffer_sizes[1]).unwrap(),
@@ -266,13 +261,13 @@ impl Frame {
                             )
                             .expect("VarDCT decode failed");
 
-                        // Write to dedicated result slot - no contention!
+                        // Write to dedicated result slot - no contention.
                         *results[idx].lock().unwrap() = Some(*pixels);
                     },
                 )
                 .collect::<Vec<()>>(); // Force evaluation
 
-            // Sequential output phase - write results to pipeline in order
+            // Sequential output phase - write results to pipeline in order.
             for (idx, (group, _, _)) in group_passes.iter().enumerate() {
                 let pixels = results[idx]
                     .lock()
@@ -291,7 +286,7 @@ impl Frame {
                 }
             }
         } else {
-            // Sequential fallback (non-parallel feature or conditions not met)
+            // Sequential fallback (non-parallel feature or conditions not met).
             for (group, pass, br) in group_passes {
                 self.decode_hf_group(group, pass, br, &mut buffer_splitter)?;
             }
@@ -299,7 +294,7 @@ impl Frame {
 
         #[cfg(not(feature = "parallel"))]
         {
-            // Sequential-only build
+            // Sequential-only build.
             for (group, pass, br) in group_passes {
                 self.decode_hf_group(group, pass, br, &mut buffer_splitter)?;
             }

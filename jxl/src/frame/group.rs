@@ -274,7 +274,7 @@ pub fn decode_vardct_group(
     group: usize,
     pass: usize,
     frame_header: &FrameHeader,
-    lf_global: &mut LfGlobalState,
+    lf_global: &LfGlobalState,
     hf_global: &mut HfGlobalState,
     hf_meta: &HfMetadata,
     lf_image: &Option<[Image<f32>; 3]>,
@@ -282,6 +282,7 @@ pub fn decode_vardct_group(
     quant_biases: &[f32; 4],
     pixels: &mut [Image<f32>; 3],
     br: &mut BitReader,
+    force_local_coeffs: bool,
 ) -> Result<(), Error> {
     let x_dm_multiplier = (1.0 / (1.25)).powf(frame_header.x_qm_scale as f32 - 2.0);
     let b_dm_multiplier = (1.0 / (1.25)).powf(frame_header.b_qm_scale as f32 - 2.0);
@@ -325,20 +326,28 @@ pub fn decode_vardct_group(
         ))?,
     ];
     let quant_lf_rect = quant_lf.get_rect(block_group_rect);
-    let block_context_map = lf_global.block_context_map.as_mut().unwrap();
+    let block_context_map = lf_global.block_context_map.as_ref().unwrap();
     let context_offset = histogram_index * block_context_map.num_ac_contexts();
     let mut coeffs_storage;
-    let coeffs = match hf_global.hf_coefficients.as_mut() {
-        Some(hf_coefficients) => [
-            hf_coefficients.0.row_mut(group),
-            hf_coefficients.1.row_mut(group),
-            hf_coefficients.2.row_mut(group),
-        ],
-        None => {
-            coeffs_storage = vec![0; 3 * GROUP_DIM * GROUP_DIM];
-            let (coeffs_x, coeffs_y_b) = coeffs_storage.split_at_mut(GROUP_DIM * GROUP_DIM);
-            let (coeffs_y, coeffs_b) = coeffs_y_b.split_at_mut(GROUP_DIM * GROUP_DIM);
-            [coeffs_x, coeffs_y, coeffs_b]
+    let coeffs = if force_local_coeffs {
+        // Parallel-safe path: always use local coefficient buffers.
+        coeffs_storage = vec![0; 3 * GROUP_DIM * GROUP_DIM];
+        let (coeffs_x, coeffs_y_b) = coeffs_storage.split_at_mut(GROUP_DIM * GROUP_DIM);
+        let (coeffs_y, coeffs_b) = coeffs_y_b.split_at_mut(GROUP_DIM * GROUP_DIM);
+        [coeffs_x, coeffs_y, coeffs_b]
+    } else {
+        match hf_global.hf_coefficients.as_mut() {
+            Some(hf_coefficients) => [
+                hf_coefficients.0.row_mut(group),
+                hf_coefficients.1.row_mut(group),
+                hf_coefficients.2.row_mut(group),
+            ],
+            None => {
+                coeffs_storage = vec![0; 3 * GROUP_DIM * GROUP_DIM];
+                let (coeffs_x, coeffs_y_b) = coeffs_storage.split_at_mut(GROUP_DIM * GROUP_DIM);
+                let (coeffs_y, coeffs_b) = coeffs_y_b.split_at_mut(GROUP_DIM * GROUP_DIM);
+                [coeffs_x, coeffs_y, coeffs_b]
+            }
         }
     };
     let shift_for_pass = if pass < frame_header.passes.shift.len() {
