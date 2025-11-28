@@ -189,18 +189,20 @@ fn decode_jxl_internal(jxl_data: &[u8]) -> Result<DecodeOutput, JsValue> {
     };
 
     let info = decoder_with_image_info.basic_info();
+    let image_size = info.size;
     let output_profile = decoder_with_image_info.output_color_profile().clone();
     let num_loops = info.animation.as_ref().map(|a| a.num_loops).unwrap_or(0);
+    let extra_channels = info.extra_channels.len();
+    let original_bit_depth = info.bit_depth.clone();
 
     let mut image_data = DecodeOutput {
-        size: info.size,
+        size: image_size,
         frames: Vec::new(),
-        original_bit_depth: info.bit_depth.clone(),
+        original_bit_depth,
         output_profile,
         num_loops,
     };
 
-    let extra_channels = info.extra_channels.len();
     let pixel_format = decoder_with_image_info.current_pixel_format().clone();
     let color_type = pixel_format.color_type;
     let samples_per_pixel = if color_type == JxlColorType::Grayscale {
@@ -219,7 +221,7 @@ fn decode_jxl_internal(jxl_data: &[u8]) -> Result<DecodeOutput, JsValue> {
         };
 
         let frame_header = decoder_with_frame_info.frame_header();
-        let frame_size = frame_header.size;
+        let frame_size = image_size;
 
         let mut outputs = vec![Image::<f32>::new((
             frame_size.0 * samples_per_pixel,
