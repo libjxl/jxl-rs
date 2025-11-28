@@ -1,0 +1,553 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>JXL WASM Decoder Demo</title>
+    <style>
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+
+        body {
+            font-family: Roboto, Arial, sans-serif;
+            background: #f5f5f5;
+            min-height: 100vh;
+            padding: 20px;
+            color: #212121;
+        }
+
+        .container {
+            max-width: 1000px;
+            margin: 0 auto;
+            background: white;
+            border-radius: 2px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            padding: 24px;
+        }
+
+        h1 {
+            color: #1976d2;
+            margin-bottom: 8px;
+            font-size: 2em;
+            font-weight: 400;
+        }
+
+        .subtitle {
+            color: #757575;
+            margin-bottom: 32px;
+            font-size: 1em;
+        }
+
+        .drop-zone {
+            border: 2px dashed #bdbdbd;
+            border-radius: 2px;
+            padding: 60px 20px;
+            text-align: center;
+            background: #fafafa;
+            cursor: pointer;
+            transition: all 0.2s ease;
+            margin-bottom: 24px;
+        }
+
+        .drop-zone:hover,
+        .drop-zone.drag-over {
+            background: #e3f2fd;
+            border-color: #1976d2;
+        }
+
+        .drop-zone-icon {
+            font-size: 3em;
+            margin-bottom: 16px;
+            color: #757575;
+        }
+
+        .drop-zone-text {
+            font-size: 1.1em;
+            color: #424242;
+            font-weight: 500;
+            margin-bottom: 8px;
+        }
+
+        .drop-zone-subtext {
+            color: #9e9e9e;
+            font-size: 0.9em;
+        }
+
+        #file-input {
+            display: none;
+        }
+
+        .button {
+            background: #1976d2;
+            color: white;
+            border: none;
+            padding: 10px 24px;
+            border-radius: 2px;
+            font-size: 0.95em;
+            cursor: pointer;
+            transition: background 0.2s, box-shadow 0.2s;
+            margin: 8px 4px;
+            text-transform: uppercase;
+            font-weight: 500;
+            letter-spacing: 0.5px;
+        }
+
+        .button:hover {
+            background: #1565c0;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.2);
+        }
+
+        .button:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+            background: #9e9e9e;
+        }
+
+        .gallery {
+            margin-top: 24px;
+        }
+
+        .gallery-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 16px;
+        }
+
+        .gallery-header h3 {
+            color: #424242;
+            font-weight: 500;
+            font-size: 1.1em;
+            margin: 0;
+        }
+
+        .image-card {
+            background: white;
+            border-radius: 2px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            margin-bottom: 16px;
+            overflow: hidden;
+        }
+
+        .image-card-header {
+            background: #fafafa;
+            padding: 12px 16px;
+            border-bottom: 1px solid #e0e0e0;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .image-card-title {
+            font-weight: 500;
+            color: #424242;
+            font-size: 0.95em;
+        }
+
+        .image-card-body {
+            padding: 16px;
+        }
+
+        .info-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+            gap: 12px;
+            margin-bottom: 16px;
+        }
+
+        .info-item {
+            background: #fafafa;
+            padding: 12px;
+            border-radius: 2px;
+        }
+
+        .info-label {
+            font-size: 0.75em;
+            color: #757575;
+            margin-bottom: 4px;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+
+        .info-value {
+            font-size: 1.2em;
+            font-weight: 400;
+            color: #212121;
+        }
+
+        .image-preview {
+            text-align: center;
+            margin-top: 12px;
+        }
+
+        .image-preview img {
+            max-width: 100%;
+            border-radius: 2px;
+            box-shadow: 0 1px 3px rgba(0, 0, 0, 0.12);
+        }
+
+        .card-actions {
+            padding: 12px 16px;
+            background: #fafafa;
+            border-top: 1px solid #e0e0e0;
+            text-align: right;
+        }
+
+        .button-small {
+            background: #1976d2;
+            color: white;
+            border: none;
+            padding: 6px 16px;
+            border-radius: 2px;
+            font-size: 0.85em;
+            cursor: pointer;
+            transition: background 0.2s;
+            text-transform: uppercase;
+            font-weight: 500;
+            letter-spacing: 0.5px;
+            margin-left: 8px;
+        }
+
+        .button-small:hover {
+            background: #1565c0;
+        }
+
+        .button-small.danger {
+            background: #d32f2f;
+        }
+
+        .button-small.danger:hover {
+            background: #c62828;
+        }
+
+        .stats {
+            display: flex;
+            justify-content: space-around;
+            margin-top: 16px;
+            padding: 16px;
+            background: #fafafa;
+            border-radius: 2px;
+        }
+
+        .stat-item {
+            text-align: center;
+        }
+
+        .stat-value {
+            font-size: 2em;
+            font-weight: 400;
+            color: #1976d2;
+        }
+
+        .stat-label {
+            font-size: 0.85em;
+            color: #757575;
+            margin-top: 4px;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+
+        .loading {
+            text-align: center;
+            padding: 32px;
+            display: none;
+        }
+
+        .loading.show {
+            display: block;
+        }
+
+        .spinner {
+            border: 3px solid #e0e0e0;
+            border-top: 3px solid #1976d2;
+            border-radius: 50%;
+            width: 40px;
+            height: 40px;
+            animation: spin 0.8s linear infinite;
+            margin: 0 auto 16px;
+        }
+
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+
+        .error {
+            background: #ffebee;
+            border-left: 4px solid #d32f2f;
+            padding: 16px;
+            margin: 16px 0;
+            border-radius: 2px;
+            color: #c62828;
+            display: none;
+        }
+
+        .error.show {
+            display: block;
+        }
+
+        .controls {
+            text-align: center;
+            margin: 16px 0;
+        }
+
+        footer {
+            margin-top: 32px;
+            text-align: center;
+            color: #757575;
+            font-size: 0.9em;
+            padding: 16px 0;
+        }
+
+        footer a {
+            color: #1976d2;
+            text-decoration: none;
+        }
+
+        footer a:hover {
+            text-decoration: underline;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>JXL WASM Decoder</h1>
+        <p class="subtitle">Decode JPEG XL images directly in your browser</p>
+
+        <div class="drop-zone" id="drop-zone">
+            <div class="drop-zone-icon">📁</div>
+            <div class="drop-zone-text">Drop your JXL files here</div>
+            <div class="drop-zone-subtext">or click to browse (supports multiple files)</div>
+        </div>
+
+        <input type="file" id="file-input" accept=".jxl,image/jxl" multiple>
+
+        <div class="loading" id="loading">
+            <div class="spinner"></div>
+            <p>Decoding JXL image...</p>
+        </div>
+
+        <div class="error" id="error"></div>
+
+        <div class="gallery" id="gallery" style="display: none;">
+            <div class="gallery-header">
+                <h3>Decoded Images (<span id="image-count">0</span>)</h3>
+                <button class="button-small danger" id="clear-all-btn">Clear All</button>
+            </div>
+            <div id="gallery-content"></div>
+        </div>
+    </div>
+
+    <footer>
+        <p>Powered by <a href="https://github.com/libjxl/jxl-rs" target="_blank">jxl-rs</a></p>
+        <p>JPEG XL is a royalty-free raster image format</p>
+    </footer>
+
+    <script type="module">
+        import init, { decode_jxl_to_png, init_panic_hook } from './pkg/jxl_wasm.js';
+
+        const dropZone = document.getElementById('drop-zone');
+        const fileInput = document.getElementById('file-input');
+        const loading = document.getElementById('loading');
+        const error = document.getElementById('error');
+        const gallery = document.getElementById('gallery');
+        const galleryContent = document.getElementById('gallery-content');
+        const imageCount = document.getElementById('image-count');
+        const clearAllBtn = document.getElementById('clear-all-btn');
+
+        let imageCounter = 0;
+        const decodedImages = new Map(); // cardId -> {blob, filename}
+
+        // Initialize WASM module
+        async function initWasm() {
+            try {
+                await init();
+                init_panic_hook();
+                console.log('WASM module initialized');
+            } catch (err) {
+                showError('Failed to initialize WASM module: ' + err.message);
+            }
+        }
+
+        function showError(message) {
+            error.textContent = message;
+            error.classList.add('show');
+            setTimeout(() => hideError(), 5000);
+        }
+
+        function hideError() {
+            error.classList.remove('show');
+        }
+
+        function formatBytes(bytes) {
+            if (bytes === 0) return '0 Bytes';
+            const k = 1024;
+            const sizes = ['Bytes', 'KB', 'MB', 'GB'];
+            const i = Math.floor(Math.log(bytes) / Math.log(k));
+            return Math.round((bytes / Math.pow(k, i)) * 100) / 100 + ' ' + sizes[i];
+        }
+
+        function updateImageCount() {
+            imageCount.textContent = decodedImages.size;
+            gallery.style.display = decodedImages.size > 0 ? 'block' : 'none';
+        }
+
+        function createImageCard(cardId, filename, dimensions, originalSize, pngSize, decodeTime, imageUrl, blob) {
+            const card = document.createElement('div');
+            card.className = 'image-card';
+            card.id = `card-${cardId}`;
+
+            card.innerHTML = `
+                <div class="image-card-header">
+                    <div class="image-card-title">${filename}</div>
+                </div>
+                <div class="image-card-body">
+                    <div class="info-grid">
+                        <div class="info-item">
+                            <div class="info-label">Dimensions</div>
+                            <div class="info-value">${dimensions}</div>
+                        </div>
+                        <div class="info-item">
+                            <div class="info-label">JXL Size</div>
+                            <div class="info-value">${originalSize}</div>
+                        </div>
+                        <div class="info-item">
+                            <div class="info-label">PNG Size</div>
+                            <div class="info-value">${pngSize}</div>
+                        </div>
+                        <div class="info-item">
+                            <div class="info-label">Decode Time</div>
+                            <div class="info-value">${decodeTime} ms</div>
+                        </div>
+                    </div>
+                    <div class="image-preview">
+                        <img src="${imageUrl}" alt="${filename}">
+                    </div>
+                </div>
+                <div class="card-actions">
+                    <button class="button-small" onclick="downloadImage(${cardId})">Download PNG</button>
+                    <button class="button-small danger" onclick="removeImage(${cardId})">Remove</button>
+                </div>
+            `;
+
+            galleryContent.insertBefore(card, galleryContent.firstChild);
+            decodedImages.set(cardId, { blob, filename: filename.replace(/\.[^/.]+$/, '') });
+            updateImageCount();
+        }
+
+        async function processFile(file) {
+            hideError();
+            loading.classList.add('show');
+
+            try {
+                const arrayBuffer = await file.arrayBuffer();
+                const uint8Array = new Uint8Array(arrayBuffer);
+
+                const startTime = performance.now();
+                const pngData = decode_jxl_to_png(uint8Array);
+                const endTime = performance.now();
+                const decodeTime = (endTime - startTime).toFixed(2);
+
+                const blob = new Blob([pngData], { type: 'image/png' });
+                const url = URL.createObjectURL(blob);
+
+                const img = new Image();
+                img.onload = () => {
+                    const cardId = ++imageCounter;
+                    createImageCard(
+                        cardId,
+                        file.name,
+                        `${img.width} × ${img.height}`,
+                        formatBytes(file.size),
+                        formatBytes(pngData.length),
+                        decodeTime,
+                        url,
+                        blob
+                    );
+                    loading.classList.remove('show');
+                };
+
+                img.onerror = () => {
+                    showError(`Failed to load decoded image: ${file.name}`);
+                    loading.classList.remove('show');
+                };
+
+                img.src = url;
+
+            } catch (err) {
+                showError(`Decoding failed for ${file.name}: ${err.message}`);
+                loading.classList.remove('show');
+                console.error(err);
+            }
+        }
+
+        async function processFiles(files) {
+            for (const file of files) {
+                if (file.type === 'image/jxl' || file.name.endsWith('.jxl')) {
+                    await processFile(file);
+                }
+            }
+        }
+
+        window.downloadImage = (cardId) => {
+            const imageData = decodedImages.get(cardId);
+            if (imageData) {
+                const url = URL.createObjectURL(imageData.blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = imageData.filename + '.png';
+                document.body.appendChild(a);
+                a.click();
+                document.body.removeChild(a);
+                URL.revokeObjectURL(url);
+            }
+        };
+
+        window.removeImage = (cardId) => {
+            const card = document.getElementById(`card-${cardId}`);
+            if (card) {
+                card.remove();
+                decodedImages.delete(cardId);
+                updateImageCount();
+            }
+        };
+
+        clearAllBtn.addEventListener('click', () => {
+            galleryContent.innerHTML = '';
+            decodedImages.clear();
+            updateImageCount();
+            fileInput.value = '';
+        });
+
+        dropZone.addEventListener('click', () => {
+            fileInput.click();
+        });
+
+        dropZone.addEventListener('dragover', (e) => {
+            e.preventDefault();
+            dropZone.classList.add('drag-over');
+        });
+
+        dropZone.addEventListener('dragleave', () => {
+            dropZone.classList.remove('drag-over');
+        });
+
+        dropZone.addEventListener('drop', (e) => {
+            e.preventDefault();
+            dropZone.classList.remove('drag-over');
+            const files = Array.from(e.dataTransfer.files);
+            processFiles(files);
+        });
+
+        fileInput.addEventListener('change', (e) => {
+            const files = Array.from(e.target.files);
+            processFiles(files);
+        });
+
+        initWasm();
+    </script>
+</body>
+</html>
