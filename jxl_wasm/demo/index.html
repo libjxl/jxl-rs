@@ -181,12 +181,25 @@
         .image-preview {
             text-align: center;
             margin-top: 12px;
+            min-height: 100px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
         }
 
         .image-preview img {
             max-width: 100%;
             border-radius: 2px;
             box-shadow: 0 1px 3px rgba(0, 0, 0, 0.12);
+        }
+
+        .card-spinner {
+            border: 3px solid #e0e0e0;
+            border-top: 3px solid #1976d2;
+            border-radius: 50%;
+            width: 40px;
+            height: 40px;
+            animation: spin 0.8s linear infinite;
         }
 
         .card-actions {
@@ -395,10 +408,39 @@
             gallery.style.display = decodedImages.size > 0 ? 'block' : 'none';
         }
 
-        function createImageCard(cardId, filename, dimensions, originalSize, pngSize, decodeTime, imageUrl, blob) {
+        function createPlaceholderCard(cardId, filename, originalSize) {
             const card = document.createElement('div');
             card.className = 'image-card';
             card.id = `card-${cardId}`;
+
+            card.innerHTML = `
+                <div class="image-card-header">
+                    <div class="image-card-title">${filename}</div>
+                </div>
+                <div class="image-card-body">
+                    <div class="info-grid">
+                        <div class="info-item">
+                            <div class="info-label">JXL Size</div>
+                            <div class="info-value">${originalSize}</div>
+                        </div>
+                        <div class="info-item">
+                            <div class="info-label">Status</div>
+                            <div class="info-value">Decoding...</div>
+                        </div>
+                    </div>
+                    <div class="image-preview">
+                        <div class="card-spinner"></div>
+                    </div>
+                </div>
+            `;
+
+            galleryContent.insertBefore(card, galleryContent.firstChild);
+            gallery.style.display = 'block';
+        }
+
+        function updateImageCard(cardId, dimensions, pngSize, decodeTime, imageUrl, blob, filename, originalSize) {
+            const card = document.getElementById(`card-${cardId}`);
+            if (!card) return;
 
             card.innerHTML = `
                 <div class="image-card-header">
@@ -433,14 +475,15 @@
                 </div>
             `;
 
-            galleryContent.insertBefore(card, galleryContent.firstChild);
             decodedImages.set(cardId, { blob, filename: filename.replace(/\.[^/.]+$/, '') });
             updateImageCount();
         }
 
         async function processFile(file) {
             hideError();
-            loading.classList.add('show');
+
+            const cardId = ++imageCounter;
+            createPlaceholderCard(cardId, file.name, formatBytes(file.size));
 
             try {
                 const arrayBuffer = await file.arrayBuffer();
@@ -451,35 +494,35 @@
                 const endTime = performance.now();
                 const decodeTime = (endTime - startTime).toFixed(2);
 
-                const blob = new Blob([pngData], { type: 'image/png' });
-                const url = URL.createObjectURL(blob);
+                const pngBlob = new Blob([pngData], { type: 'image/png' });
+                const url = URL.createObjectURL(pngBlob);
 
                 const img = new Image();
                 img.onload = () => {
-                    const cardId = ++imageCounter;
-                    createImageCard(
+                    updateImageCard(
                         cardId,
-                        file.name,
                         `${img.width} × ${img.height}`,
-                        formatBytes(file.size),
                         formatBytes(pngData.length),
                         decodeTime,
                         url,
-                        blob
+                        pngBlob,
+                        file.name,
+                        formatBytes(file.size)
                     );
-                    loading.classList.remove('show');
                 };
 
                 img.onerror = () => {
                     showError(`Failed to load decoded image: ${file.name}`);
-                    loading.classList.remove('show');
+                    const card = document.getElementById(`card-${cardId}`);
+                    if (card) card.remove();
                 };
 
                 img.src = url;
 
             } catch (err) {
                 showError(`Decoding failed for ${file.name}: ${err.message}`);
-                loading.classList.remove('show');
+                const card = document.getElementById(`card-${cardId}`);
+                if (card) card.remove();
                 console.error(err);
             }
         }
