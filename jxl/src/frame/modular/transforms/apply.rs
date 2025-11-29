@@ -3,7 +3,7 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-use std::{cell::Ref, fmt::Debug};
+use std::fmt::Debug;
 
 use num_traits::FromPrimitive;
 
@@ -11,7 +11,7 @@ use crate::{
     error::{Error, Result},
     frame::modular::{
         ChannelInfo, ModularBufferInfo, ModularChannel, ModularGridKind, Predictor,
-        borrowed_buffers::with_buffers,
+        borrowed_buffers::{collect_buffers, with_buffers},
     },
     headers::{
         self,
@@ -21,9 +21,6 @@ use crate::{
     image::Rect,
     util::tracing_wrappers::*,
 };
-use std::cell::RefMut;
-use std::ops::Deref;
-use std::ops::DerefMut;
 
 use super::{RctOp, RctPermutation};
 
@@ -112,7 +109,7 @@ impl TransformStepChunk {
                     // Optimistically move the buffers to the output if possible.
                     // If not, creates buffers in the output that are a copy of the input buffers.
                     // This should be rare.
-                    *buffers[buf_out[i]].buffer_grid[out_grid].data.borrow_mut() =
+                    buffers[buf_out[i]].buffer_grid[out_grid].data =
                         Some(buffers[buf_in[i]].buffer_grid[out_grid].get_buffer()?);
                 }
                 with_buffers(buffers, buf_out, out_grid, false, |mut bufs| {
@@ -146,16 +143,12 @@ impl TransformStepChunk {
                 assert_eq!(out_size, buffers[*buf_in].info.size);
 
                 {
-                    let img_in =
-                        Ref::map(buffers[*buf_in].buffer_grid[out_grid].data.borrow(), |x| {
-                            x.as_ref().unwrap()
-                        });
-                    let img_pal = Ref::map(buffers[*buf_pal].buffer_grid[0].data.borrow(), |x| {
-                        x.as_ref().unwrap()
-                    });
-                    // Ensure that the output buffers are present.
-                    // TODO(szabadka): Extend the callback to support many grid points.
-                    with_buffers(buffers, buf_out, out_grid, false, |_| Ok(()))?;
+                    let mut indices_and_grids = Vec::new();
+                    let mut indices_and_grids_mut = Vec::new();
+                    let out_grids = [out_grid];
+                    indices_and_grids.push((*buf_in, out_grids.as_ref()));
+                    indices_and_grids.push((*buf_pal, &[0]));
+
                     let grid_shape = buffers[buf_out[0]].grid_shape;
                     let grid_x = out_grid % grid_shape.0;
                     let grid_y = out_grid / grid_shape.0;
@@ -164,23 +157,35 @@ impl TransformStepChunk {
                     let grid_y0 = grid_y.saturating_sub(border);
                     let grid_x1 = grid_x + 1;
                     let grid_y1 = grid_y + 1;
-                    let mut out_bufs = vec![];
-                    for i in buf_out {
-                        for gy in grid_y0..grid_y1 {
-                            for gx in grid_x0..grid_x1 {
-                                let grid = gy * grid_shape.0 + gx;
-                                let buf = &buffers[*i];
-                                let b = &buf.buffer_grid[grid];
-                                let data = b.data.borrow_mut();
-                                out_bufs.push(RefMut::map(data, |x| x.as_mut().unwrap()));
-                            }
+                    let mut required_out_grids = Vec::new();
+                    for gy in grid_y0..grid_y1 {
+                        for gx in grid_x0..grid_x1 {
+                            let grid = gy * grid_shape.0 + gx;
+                            required_out_grids.push(grid);
                         }
                     }
-                    let mut out_buf_refs: Vec<&mut ModularChannel> =
-                        out_bufs.iter_mut().map(|x| x.deref_mut()).collect();
+                    for i in buf_out {
+                        indices_and_grids_mut.push((*i, &*required_out_grids));
+                    }
+
+                    let collected_buffers = collect_buffers(
+                        buffers,
+                        &indices_and_grids,
+                        &indices_and_grids_mut,
+                        false,
+                    )?;
+                    let mut in_buffers = collected_buffers.immutable_grids.into_iter();
+                    let img_in = in_buffers.next().unwrap().pop().unwrap();
+                    let img_pal = in_buffers.next().unwrap().pop().unwrap();
+                    let mut out_buf_refs: Vec<_> = collected_buffers
+                        .mutable_grids
+                        .into_iter()
+                        .flatten()
+                        .collect();
+
                     super::palette::do_palette_step_one_group(
-                        &img_in,
-                        &img_pal,
+                        img_in,
+                        img_pal,
                         &mut out_buf_refs,
                         grid_x - grid_x0,
                         grid_y - grid_y0,
@@ -213,39 +218,43 @@ impl TransformStepChunk {
                     let grid_y = out_grid / grid_shape.0;
                     let grid_y0 = grid_y.saturating_sub(1);
                     let grid_y1 = grid_y + 1;
-                    let mut in_bufs = vec![];
-                    for grid_x in 0..grid_shape.0 {
-                        let grid = grid_y * grid_shape.0 + grid_x;
-                        in_bufs.push(Ref::map(
-                            buffers[*buf_in].buffer_grid[grid].data.borrow(),
-                            |x| x.as_ref().unwrap(),
-                        ));
-                        // Ensure that the output buffers are present.
-                        // TODO(szabadka): Extend the callback to support many grid points.
-                        with_buffers(buffers, buf_out, out_grid + grid_x, false, |_| Ok(()))?;
-                    }
-                    let in_buf_refs: Vec<&ModularChannel> =
-                        in_bufs.iter().map(|x| x.deref()).collect();
-                    let img_pal = Ref::map(buffers[*buf_pal].buffer_grid[0].data.borrow(), |x| {
-                        x.as_ref().unwrap()
-                    });
-                    let mut out_bufs = vec![];
-                    for i in buf_out {
-                        for grid_y in grid_y0..grid_y1 {
-                            for grid_x in 0..grid_shape.0 {
-                                let grid = grid_y * grid_shape.0 + grid_x;
-                                let buf = &buffers[*i];
-                                let b = &buf.buffer_grid[grid];
-                                let data = b.data.borrow_mut();
-                                out_bufs.push(RefMut::map(data, |x| x.as_mut().unwrap()));
-                            }
+
+                    let mut indices_and_grids = Vec::new();
+                    let mut indices_and_grids_mut = Vec::new();
+                    let required_in_grids: Vec<_> = (0..grid_shape.0)
+                        .map(|grid_x| grid_y * grid_shape.0 + grid_x)
+                        .collect();
+                    indices_and_grids.push((*buf_in, &*required_in_grids));
+                    indices_and_grids.push((*buf_pal, &[0]));
+                    let mut required_out_grids = Vec::new();
+                    for grid_y in grid_y0..grid_y1 {
+                        for grid_x in 0..grid_shape.0 {
+                            let grid = grid_y * grid_shape.0 + grid_x;
+                            required_out_grids.push(grid);
                         }
                     }
-                    let mut out_buf_refs: Vec<&mut ModularChannel> =
-                        out_bufs.iter_mut().map(|x| x.deref_mut()).collect();
+                    for i in buf_out {
+                        indices_and_grids_mut.push((*i, &*required_out_grids));
+                    }
+
+                    let collected_buffers = collect_buffers(
+                        buffers,
+                        &indices_and_grids,
+                        &indices_and_grids_mut,
+                        false,
+                    )?;
+                    let mut in_buffers = collected_buffers.immutable_grids.into_iter();
+                    let in_buf_refs: Vec<_> = in_buffers.next().unwrap().into_iter().collect();
+                    let img_pal = in_buffers.next().unwrap().pop().unwrap();
+                    let mut out_buf_refs: Vec<_> = collected_buffers
+                        .mutable_grids
+                        .into_iter()
+                        .flatten()
+                        .collect();
+
                     super::palette::do_palette_step_group_row(
                         &in_buf_refs,
-                        &img_pal,
+                        img_pal,
                         &mut out_buf_refs,
                         grid_y - grid_y0,
                         grid_shape.0,
@@ -265,130 +274,135 @@ impl TransformStepChunk {
                 Ok(generated_chunks)
             }
             TransformStep::HSqueeze { buf_in, buf_out } => {
+                trace!(
+                    "HSqueeze {:?} -> {:?}, grid {out_grid} grid pos {:?}",
+                    buf_in, buf_out, self.grid_pos
+                );
+                let (gx, gy) = self.grid_pos;
+
                 let buf_avg = &buffers[buf_in[0]];
                 let buf_res = &buffers[buf_in[1]];
                 let in_grid = buf_avg.get_grid_idx(out_grid_kind, self.grid_pos);
                 let res_grid = buf_res.get_grid_idx(out_grid_kind, self.grid_pos);
-                {
-                    trace!(
-                        "HSqueeze {:?} -> {:?}, grid {out_grid} grid pos {:?}",
-                        buf_in, buf_out, self.grid_pos
-                    );
-                    let (gx, gy) = self.grid_pos;
-                    let in_avg = Ref::map(buf_avg.buffer_grid[in_grid].data.borrow(), |x| {
-                        x.as_ref().unwrap()
-                    });
-                    let has_next = gx + 1 < buffers[*buf_out].grid_shape.0;
-                    let gx_next = if has_next { gx + 1 } else { gx };
-                    let next_avg_grid = buf_avg.get_grid_idx(out_grid_kind, (gx_next, gy));
-                    let in_next_avg =
-                        Ref::map(buf_avg.buffer_grid[next_avg_grid].data.borrow(), |x| {
-                            x.as_ref().unwrap()
-                        });
-                    let in_next_avg_rect = if has_next {
-                        Some(in_next_avg.data.get_rect(buf_avg.get_grid_rect(
-                            frame_header,
-                            out_grid_kind,
-                            (gx_next, gy),
-                        )))
-                    } else {
-                        None
-                    };
-                    let in_res = Ref::map(buf_res.buffer_grid[res_grid].data.borrow(), |x| {
-                        x.as_ref().unwrap()
-                    });
-                    let out_prev = if gx == 0 {
-                        None
-                    } else {
-                        let prev_out_grid =
-                            buffers[*buf_out].get_grid_idx(out_grid_kind, (gx - 1, gy));
-                        Some(Ref::map(
-                            buffers[*buf_out].buffer_grid[prev_out_grid].data.borrow(),
-                            |x| x.as_ref().unwrap(),
-                        ))
-                    };
 
-                    with_buffers(buffers, &[*buf_out], out_grid, false, |mut bufs| {
-                        super::squeeze::do_hsqueeze_step(
-                            &in_avg.data.get_rect(buf_avg.get_grid_rect(
-                                frame_header,
-                                out_grid_kind,
-                                (gx, gy),
-                            )),
-                            &in_res.data.get_rect(buf_res.get_grid_rect(
-                                frame_header,
-                                out_grid_kind,
-                                (gx, gy),
-                            )),
-                            &in_next_avg_rect,
-                            &out_prev,
-                            &mut bufs,
-                        );
-                        Ok(())
-                    })?;
+                let avg_grid_rect = buf_avg.get_grid_rect(frame_header, out_grid_kind, (gx, gy));
+                let res_grid_rect = buf_res.get_grid_rect(frame_header, out_grid_kind, (gx, gy));
+                let has_next = gx + 1 < buffers[*buf_out].grid_shape.0;
+                let gx_next = if has_next { gx + 1 } else { gx };
+                let next_avg_grid_rect =
+                    buf_avg.get_grid_rect(frame_header, out_grid_kind, (gx_next, gy));
+
+                let mut in_grids = vec![in_grid];
+                let res_grids = [res_grid];
+                let mut out_grids = vec![out_grid];
+
+                if has_next {
+                    let next_avg_grid = buf_avg.get_grid_idx(out_grid_kind, (gx_next, gy));
+                    in_grids.push(next_avg_grid);
                 }
+
+                if gx != 0 {
+                    let prev_out_grid = buffers[*buf_out].get_grid_idx(out_grid_kind, (gx - 1, gy));
+                    out_grids.push(prev_out_grid);
+                }
+
+                let indices_and_grids = [
+                    (buf_in[0], in_grids.as_ref()),
+                    (buf_in[1], res_grids.as_ref()),
+                ];
+                let indices_and_grids_mut = [(*buf_out, out_grids.as_ref())];
+                let collected_buffers =
+                    collect_buffers(buffers, &indices_and_grids, &indices_and_grids_mut, false)?;
+                let mut in_buffers = collected_buffers.immutable_grids.into_iter();
+                let mut out_buffers = collected_buffers.mutable_grids.into_iter();
+
+                let mut in_grids = in_buffers.next().unwrap().into_iter();
+                let in_avg = in_grids.next().unwrap();
+                let in_next_avg = in_grids.next();
+                let in_res = in_buffers.next().unwrap().pop().unwrap();
+                let mut out_grids = out_buffers.next().unwrap().into_iter();
+                let bufs = out_grids.next().unwrap();
+                let out_prev = out_grids.next();
+                let out_prev = out_prev.as_deref();
+
+                let in_next_avg_rect =
+                    in_next_avg.map(|in_next_avg| in_next_avg.data.get_rect(next_avg_grid_rect));
+
+                super::squeeze::do_hsqueeze_step(
+                    &in_avg.data.get_rect(avg_grid_rect),
+                    &in_res.data.get_rect(res_grid_rect),
+                    &in_next_avg_rect,
+                    out_prev,
+                    bufs,
+                );
+
                 buffers[buf_in[0]].buffer_grid[in_grid].mark_used();
                 buffers[buf_in[1]].buffer_grid[res_grid].mark_used();
                 Ok(vec![(*buf_out, out_grid)])
             }
             TransformStep::VSqueeze { buf_in, buf_out } => {
+                trace!(
+                    "VSqueeze {:?} -> {:?} grid: {out_grid:?} grid pos: {:?}",
+                    buf_in, buf_out, self.grid_pos
+                );
+                let (gx, gy) = self.grid_pos;
+
                 let buf_avg = &buffers[buf_in[0]];
                 let buf_res = &buffers[buf_in[1]];
                 let in_grid = buf_avg.get_grid_idx(out_grid_kind, self.grid_pos);
                 let res_grid = buf_res.get_grid_idx(out_grid_kind, self.grid_pos);
-                {
-                    trace!(
-                        "VSqueeze {:?} -> {:?} grid: {out_grid:?} grid pos: {:?}",
-                        buf_in, buf_out, self.grid_pos
-                    );
-                    let (gx, gy) = self.grid_pos;
-                    let in_avg = Ref::map(buf_avg.buffer_grid[in_grid].data.borrow(), |x| {
-                        x.as_ref().unwrap()
-                    });
-                    let has_next = gy + 1 < buffers[*buf_out].grid_shape.1;
-                    let gy_next = if has_next { gy + 1 } else { gy };
+
+                let avg_grid_rect = buf_avg.get_grid_rect(frame_header, out_grid_kind, (gx, gy));
+                let res_grid_rect = buf_res.get_grid_rect(frame_header, out_grid_kind, (gx, gy));
+                let has_next = gy + 1 < buffers[*buf_out].grid_shape.1;
+                let gy_next = if has_next { gy + 1 } else { gy };
+                let next_avg_grid_rect =
+                    buf_avg.get_grid_rect(frame_header, out_grid_kind, (gx, gy_next));
+
+                let mut in_grids = vec![in_grid];
+                let res_grids = [res_grid];
+                let mut out_grids = vec![out_grid];
+
+                if has_next {
                     let next_avg_grid = buf_avg.get_grid_idx(out_grid_kind, (gx, gy_next));
-                    let in_next_avg =
-                        Ref::map(buf_avg.buffer_grid[next_avg_grid].data.borrow(), |x| {
-                            x.as_ref().unwrap()
-                        });
-                    let in_next_avg_rect = if has_next {
-                        Some(in_next_avg.data.get_rect(buf_avg.get_grid_rect(
-                            frame_header,
-                            out_grid_kind,
-                            (gx, gy_next),
-                        )))
-                    } else {
-                        None
-                    };
-                    let in_res = Ref::map(buf_res.buffer_grid[res_grid].data.borrow(), |x| {
-                        x.as_ref().unwrap()
-                    });
-                    let out_prev = if gy == 0 {
-                        None
-                    } else {
-                        let prev_out_grid =
-                            buffers[*buf_out].get_grid_idx(out_grid_kind, (gx, gy - 1));
-                        Some(Ref::map(
-                            buffers[*buf_out].buffer_grid[prev_out_grid].data.borrow(),
-                            |x| x.as_ref().unwrap(),
-                        ))
-                    };
-                    let avg_grid_rect =
-                        buf_avg.get_grid_rect(frame_header, out_grid_kind, (gx, gy));
-                    let res_grid_rect =
-                        buf_res.get_grid_rect(frame_header, out_grid_kind, (gx, gy));
-                    with_buffers(buffers, &[*buf_out], out_grid, false, |mut bufs| {
-                        super::squeeze::do_vsqueeze_step(
-                            &in_avg.data.get_rect(avg_grid_rect),
-                            &in_res.data.get_rect(res_grid_rect),
-                            &in_next_avg_rect,
-                            &out_prev,
-                            &mut bufs,
-                        );
-                        Ok(())
-                    })?;
+                    in_grids.push(next_avg_grid);
                 }
+
+                if gy != 0 {
+                    let prev_out_grid = buffers[*buf_out].get_grid_idx(out_grid_kind, (gx, gy - 1));
+                    out_grids.push(prev_out_grid);
+                }
+
+                let indices_and_grids = [
+                    (buf_in[0], in_grids.as_ref()),
+                    (buf_in[1], res_grids.as_ref()),
+                ];
+                let indices_and_grids_mut = [(*buf_out, out_grids.as_ref())];
+                let collected_buffers =
+                    collect_buffers(buffers, &indices_and_grids, &indices_and_grids_mut, false)?;
+                let mut in_buffers = collected_buffers.immutable_grids.into_iter();
+                let mut out_buffers = collected_buffers.mutable_grids.into_iter();
+
+                let mut in_grids = in_buffers.next().unwrap().into_iter();
+                let in_avg = in_grids.next().unwrap();
+                let in_next_avg = in_grids.next();
+                let in_res = in_buffers.next().unwrap().pop().unwrap();
+                let mut out_grids = out_buffers.next().unwrap().into_iter();
+                let bufs = out_grids.next().unwrap();
+                let out_prev = out_grids.next();
+                let out_prev = out_prev.as_deref();
+
+                let in_next_avg_rect =
+                    in_next_avg.map(|in_next_avg| in_next_avg.data.get_rect(next_avg_grid_rect));
+
+                super::squeeze::do_vsqueeze_step(
+                    &in_avg.data.get_rect(avg_grid_rect),
+                    &in_res.data.get_rect(res_grid_rect),
+                    &in_next_avg_rect,
+                    out_prev,
+                    bufs,
+                );
+
                 buffers[buf_in[0]].buffer_grid[in_grid].mark_used();
                 buffers[buf_in[1]].buffer_grid[res_grid].mark_used();
                 Ok(vec![(*buf_out, out_grid)])
@@ -937,7 +951,7 @@ impl TransformStep {
                 let mut in_avg = buffers[buf_in[0]].take();
                 let mut in_res = buffers[buf_in[1]].take();
                 {
-                    let mut bufs: Vec<_> = vec![out_buf.borrow_mut()];
+                    let bufs = out_buf.borrow_mut();
                     let in_avg = &in_avg.borrow_mut().data;
                     let in_res = &in_res.borrow_mut().data;
                     super::squeeze::do_hsqueeze_step(
@@ -950,8 +964,8 @@ impl TransformStep {
                             origin: (0, 0),
                         }),
                         &None,
-                        &None,
-                        &mut bufs,
+                        None,
+                        bufs,
                     );
                 }
                 buffers[*buf_out] = out_buf;
@@ -962,7 +976,7 @@ impl TransformStep {
                 let mut in_avg = buffers[buf_in[0]].take();
                 let mut in_res = buffers[buf_in[1]].take();
                 {
-                    let mut bufs: Vec<_> = vec![out_buf.borrow_mut()];
+                    let bufs = out_buf.borrow_mut();
                     let in_avg = &in_avg.borrow_mut().data;
                     let in_res = &in_res.borrow_mut().data;
                     super::squeeze::do_vsqueeze_step(
@@ -975,8 +989,8 @@ impl TransformStep {
                             origin: (0, 0),
                         }),
                         &None,
-                        &None,
-                        &mut bufs,
+                        None,
+                        bufs,
                     );
                 }
                 buffers[*buf_out] = out_buf;

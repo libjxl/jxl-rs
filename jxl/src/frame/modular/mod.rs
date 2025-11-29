@@ -3,7 +3,7 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-use std::{cell::RefCell, cmp::min, fmt::Debug};
+use std::{cmp::min, fmt::Debug};
 
 use crate::{
     bit_reader::BitReader,
@@ -174,7 +174,7 @@ impl ModularChannel {
 // probably not worth it.
 #[derive(Debug)]
 struct ModularBuffer {
-    data: RefCell<Option<ModularChannel>>,
+    data: Option<ModularChannel>,
     // Number of times this buffer will be used, *including* when it is used for output.
     remaining_uses: usize,
     used_by_transforms: Vec<usize>,
@@ -187,11 +187,10 @@ impl ModularBuffer {
     fn get_buffer(&mut self) -> Result<ModularChannel> {
         self.remaining_uses = self.remaining_uses.checked_sub(1).unwrap();
         if self.remaining_uses == 0 {
-            Ok(self.data.borrow_mut().take().unwrap())
+            Ok(self.data.take().unwrap())
         } else {
             Ok(self
                 .data
-                .borrow()
                 .as_ref()
                 .map(ModularChannel::try_clone)
                 .transpose()?
@@ -202,7 +201,7 @@ impl ModularBuffer {
     fn mark_used(&mut self) {
         self.remaining_uses = self.remaining_uses.checked_sub(1).unwrap();
         if self.remaining_uses == 0 {
-            *self.data.borrow_mut() = None;
+            self.data = None;
         }
     }
 }
@@ -474,15 +473,21 @@ impl FullModularImage {
             trace!("Transform {i}: {ts:?}");
         }
 
-        with_buffers(&buffer_info, &section_buffer_indices[0], 0, true, |bufs| {
-            decode_modular_subbitstream(
-                bufs,
-                ModularStreamId::GlobalData.get_id(frame_header),
-                Some(header),
-                global_tree,
-                br,
-            )
-        })?;
+        with_buffers(
+            &mut buffer_info,
+            &section_buffer_indices[0],
+            0,
+            true,
+            |bufs| {
+                decode_modular_subbitstream(
+                    bufs,
+                    ModularStreamId::GlobalData.get_id(frame_header),
+                    Some(header),
+                    global_tree,
+                    br,
+                )
+            },
+        )?;
 
         Ok(FullModularImage {
             buffer_info,
@@ -516,7 +521,7 @@ impl FullModularImage {
         };
 
         with_buffers(
-            &self.buffer_info,
+            &mut self.buffer_info,
             &self.section_buffer_indices[section_id],
             grid,
             true,
