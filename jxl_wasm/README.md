@@ -85,6 +85,7 @@ Automatically handle all JXL images on your page:
 ```
 
 Features:
+- Detects native JXL support (skips polyfill if supported)
 - Scans existing `<img src="*.jxl">` tags
 - Watches for dynamically added images
 - Patches `new Image()` constructor
