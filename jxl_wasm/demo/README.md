@@ -51,6 +51,7 @@ Add `?jxl-debug` to URL for verbose logging.
 
 ### Features
 
+- Detects native JXL support (skips polyfill if browser supports JXL)
 - Scans existing `<img src="*.jxl">` tags
 - Watches for dynamically added images (MutationObserver)
 - Patches `new Image()` constructor
