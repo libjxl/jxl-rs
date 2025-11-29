@@ -282,13 +282,39 @@ class JXLPolyfill {
     }
 }
 
-// Auto-start by default
-const polyfill = new JXLPolyfill({
-    verbose: new URLSearchParams(window.location.search).has('jxl-debug')
+// Check for native JXL support before starting polyfill
+async function checkNativeJXLSupport() {
+    // Create a 1x1 JXL image (smallest valid JXL)
+    const jxlData = 'data:image/jxl;base64,/woIELASCAgQAFzgBzgBPAk=';
+
+    return new Promise((resolve) => {
+        const img = new Image();
+        img.onload = () => resolve(true);
+        img.onerror = () => resolve(false);
+        img.src = jxlData;
+
+        // Timeout after 100ms
+        setTimeout(() => resolve(false), 100);
+    });
+}
+
+// Auto-start only if native support is not available
+checkNativeJXLSupport().then(hasNativeSupport => {
+    if (hasNativeSupport) {
+        console.log('[JXL Polyfill] Native JXL support detected, polyfill not needed');
+        return;
+    }
+
+    console.log('[JXL Polyfill] No native support, loading polyfill');
+    const polyfill = new JXLPolyfill({
+        verbose: new URLSearchParams(window.location.search).has('jxl-debug')
+    });
+
+    polyfill.start();
+
+    // Export for manual control
+    window.jxlPolyfill = polyfill;
 });
 
-polyfill.start();
-
 // Export for manual control
-export default polyfill;
 export { JXLPolyfill };

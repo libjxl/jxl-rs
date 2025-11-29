@@ -163,10 +163,27 @@
     </div>
 
     <script type="module">
-        import polyfill from './polyfill.js';
+        // Wait for polyfill to initialize
+        function waitForPolyfill() {
+            return new Promise((resolve) => {
+                const check = () => {
+                    if (window.jxlPolyfill !== undefined) {
+                        resolve(window.jxlPolyfill);
+                    } else {
+                        setTimeout(check, 50);
+                    }
+                };
+                check();
+            });
+        }
 
-        // Update status
-        document.getElementById('status').textContent = 'Polyfill loaded and active';
+        // Update status after polyfill loads
+        setTimeout(() => {
+            const status = window.jxlPolyfill
+                ? 'Polyfill loaded and active'
+                : 'Native JXL support detected';
+            document.getElementById('status').textContent = status;
+        }, 200);
 
         // Test images from jpegxl.info
         const TEST_IMAGES = [
@@ -268,24 +285,36 @@
 
         // Clear cache
         document.getElementById('clear-cache-btn').addEventListener('click', () => {
-            polyfill.clearCache();
+            if (!window.jxlPolyfill) {
+                alert('Polyfill not active (native JXL support detected)');
+                return;
+            }
+            window.jxlPolyfill.clearCache();
             alert('Cache cleared!');
             updateStats();
         });
 
         // Toggle verbose
         document.getElementById('toggle-verbose-btn').addEventListener('click', () => {
-            polyfill.options.verbose = !polyfill.options.verbose;
-            alert(`Verbose logging: ${polyfill.options.verbose ? 'ON' : 'OFF'}`);
+            if (!window.jxlPolyfill) {
+                alert('Polyfill not active (native JXL support detected)');
+                return;
+            }
+            window.jxlPolyfill.options.verbose = !window.jxlPolyfill.options.verbose;
+            alert(`Verbose logging: ${window.jxlPolyfill.options.verbose ? 'ON' : 'OFF'}`);
         });
 
         // Update stats
         function updateStats() {
             const stats = document.getElementById('stats');
+            if (!window.jxlPolyfill) {
+                stats.innerHTML = `<p><em>Polyfill not active (native JXL support detected)</em></p>`;
+                return;
+            }
             stats.innerHTML = `
-                <p><strong>Cache size:</strong> ${polyfill.cache.size} images</p>
-                <p><strong>Currently processing:</strong> ${polyfill.processing.size} images</p>
-                <p><strong>Initialized:</strong> ${polyfill.initialized ? 'Yes' : 'No'}</p>
+                <p><strong>Cache size:</strong> ${window.jxlPolyfill.cache.size} images</p>
+                <p><strong>Currently processing:</strong> ${window.jxlPolyfill.processing.size} images</p>
+                <p><strong>Initialized:</strong> ${window.jxlPolyfill.initialized ? 'Yes' : 'No'}</p>
             `;
         }
 
