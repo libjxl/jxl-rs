@@ -81,15 +81,32 @@ jobs:
       matrix:
         os: [ubuntu-24.04-arm, ubuntu-latest]
         simd: [none]
+        parallel: [true, false]
         include:
           - os: ubuntu-latest
             simd: sse42
+            parallel: true
+          - os: ubuntu-latest
+            simd: sse42
+            parallel: false
           - os: ubuntu-latest
             simd: avx
+            parallel: true
+          - os: ubuntu-latest
+            simd: avx
+            parallel: false
           - os: ubuntu-latest
             simd: avx512
+            parallel: true
+          - os: ubuntu-latest
+            simd: avx512
+            parallel: false
           - os: ubuntu-24.04-arm
             simd: neon
+            parallel: true
+          - os: ubuntu-24.04-arm
+            simd: neon
+            parallel: false
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -102,15 +119,23 @@ jobs:
       - name: Rust cache
         uses: Swatinem/rust-cache@v2.8.0
         with:
-          prefix-key: ${{ matrix.os }}-test-${{ matrix.simd }}
+          prefix-key: ${{ matrix.os }}-test-${{ matrix.simd }}-${{ matrix.parallel }}
 
 
-      - name: Tests with SIMD feature ${{ matrix.simd }}
-        if: ${{ matrix.simd != 'none' }}
+      - name: Tests with SIMD ${{ matrix.simd }} and parallel
+        if: ${{ matrix.simd != 'none' && matrix.parallel == true }}
+        run: cargo test --release --all --no-fail-fast --no-default-features --features ${{ matrix.simd }},parallel
+
+      - name: Tests with SIMD ${{ matrix.simd }} without parallel
+        if: ${{ matrix.simd != 'none' && matrix.parallel == false }}
         run: cargo test --release --all --no-fail-fast --no-default-features --features ${{ matrix.simd }}
 
+      - name: Tests with parallel, no SIMD
+        if: ${{ matrix.simd == 'none' && matrix.parallel == true }}
+        run: cargo test --release --all --no-fail-fast --no-default-features --features parallel
+
       - name: Tests with no features
-        if: ${{ matrix.simd == 'none' }}
+        if: ${{ matrix.simd == 'none' && matrix.parallel == false }}
         run: cargo test --release --all --no-fail-fast --no-default-features
 
   coverage:

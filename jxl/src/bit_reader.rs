@@ -55,6 +55,16 @@ impl<'a> BitReader<'a> {
         self.bit_buf & ((1u64 << num) - 1)
     }
 
+    /// Peek bits without checking for refill.
+    /// SAFETY: Caller must ensure that at least `num` bits are available in the buffer.
+    /// This is guaranteed after calling refill() when num <= 16.
+    #[inline(always)]
+    pub fn peek_unchecked(&self, num: usize) -> u64 {
+        debug_assert!(num <= MAX_BITS_PER_CALL);
+        debug_assert!(self.bits_in_buf >= num);
+        self.bit_buf & ((1u64 << num) - 1)
+    }
+
     /// Advances by `num` bits. Similar to `skip_bits`, but bits must be in the buffer.
     pub fn consume(&mut self, num: usize) -> Result<(), Error> {
         if self.bits_in_buf < num {
@@ -196,8 +206,9 @@ impl<'a> BitReader<'a> {
     }
 
     #[inline]
-    fn refill(&mut self) {
+    pub fn refill(&mut self) {
         // See Refill() in C++ code.
+        // This is now public for use in hot loops like ANS symbol reading.
         if self.data.len() >= 8 {
             let bits = LittleEndian::read_u64(self.data);
             self.bit_buf |= bits << self.bits_in_buf;

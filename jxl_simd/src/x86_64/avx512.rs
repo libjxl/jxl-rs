@@ -114,6 +114,223 @@ impl F32SimdVec for F32VecAvx512 {
         unsafe { _mm512_storeu_ps(mem.as_mut_ptr(), self.0) }
     }
 
+    fn scatter_strided(&self, base: &mut [f32], offset: usize, stride: usize) {
+        // AVX-512 HAS NATIVE SCATTER! 🚀
+        // Build index vector: [offset, offset+stride, offset+2*stride, ..., offset+15*stride]
+        unsafe {
+            let indices = _mm512_set_epi32(
+                (offset + 15 * stride) as i32,
+                (offset + 14 * stride) as i32,
+                (offset + 13 * stride) as i32,
+                (offset + 12 * stride) as i32,
+                (offset + 11 * stride) as i32,
+                (offset + 10 * stride) as i32,
+                (offset + 9 * stride) as i32,
+                (offset + 8 * stride) as i32,
+                (offset + 7 * stride) as i32,
+                (offset + 6 * stride) as i32,
+                (offset + 5 * stride) as i32,
+                (offset + 4 * stride) as i32,
+                (offset + 3 * stride) as i32,
+                (offset + 2 * stride) as i32,
+                (offset + stride) as i32,
+                offset as i32,
+            );
+            // NATIVE SCATTER INSTRUCTION!
+            _mm512_i32scatter_ps(base.as_mut_ptr(), indices, self.0, 4);
+        }
+    }
+
+    fn gather_strided(_d: Self::Descriptor, base: &[f32], offset: usize, stride: usize) -> Self {
+        // AVX-512 HAS NATIVE GATHER! 🚀
+        unsafe {
+            let indices = _mm512_set_epi32(
+                (offset + 15 * stride) as i32,
+                (offset + 14 * stride) as i32,
+                (offset + 13 * stride) as i32,
+                (offset + 12 * stride) as i32,
+                (offset + 11 * stride) as i32,
+                (offset + 10 * stride) as i32,
+                (offset + 9 * stride) as i32,
+                (offset + 8 * stride) as i32,
+                (offset + 7 * stride) as i32,
+                (offset + 6 * stride) as i32,
+                (offset + 5 * stride) as i32,
+                (offset + 4 * stride) as i32,
+                (offset + 3 * stride) as i32,
+                (offset + 2 * stride) as i32,
+                (offset + stride) as i32,
+                offset as i32,
+            );
+            // NATIVE GATHER INSTRUCTION!
+            F32VecAvx512(_mm512_i32gather_ps(indices, base.as_ptr(), 4), _d)
+        }
+    }
+
+    #[inline(always)]
+    fn store_interleaved_2(a: Self, b: Self, base: &mut [f32], offset: usize) {
+        // AVX-512: LEN=16, interleave 2 vectors using shuffle intrinsics
+        // a=[a0,...,a15], b=[b0,...,b15]
+        // output=[a0,b0,a1,b1,...,a15,b15]
+        unsafe {
+            // unpacklo/hi work on 128-bit lanes independently
+            let lo = _mm512_unpacklo_ps(a.0, b.0); // [a0,b0,a1,b1, a4,b4,a5,b5, a8,b8,a9,b9, a12,b12,a13,b13]
+            let hi = _mm512_unpackhi_ps(a.0, b.0); // [a2,b2,a3,b3, a6,b6,a7,b7, a10,b10,a11,b11, a14,b14,a15,b15]
+
+            // Rearrange 128-bit lanes using permute to get final order
+            // We need: [0-3 from lo][0-3 from hi][4-7 from lo][4-7 from hi]...
+            let idx_lo = _mm512_setr_epi32(0, 1, 16, 17, 2, 3, 18, 19, 4, 5, 20, 21, 6, 7, 22, 23);
+            let idx_hi =
+                _mm512_setr_epi32(8, 9, 24, 25, 10, 11, 26, 27, 12, 13, 28, 29, 14, 15, 30, 31);
+
+            let out0 = _mm512_permutex2var_ps(lo, idx_lo, hi); // first 16 interleaved
+            let out1 = _mm512_permutex2var_ps(lo, idx_hi, hi); // second 16 interleaved
+
+            _mm512_storeu_ps(base.as_mut_ptr().add(offset), out0);
+            _mm512_storeu_ps(base.as_mut_ptr().add(offset + 16), out1);
+        }
+    }
+
+    #[inline(always)]
+    fn store_interleaved_4(a: Self, b: Self, c: Self, d: Self, base: &mut [f32], offset: usize) {
+        // AVX-512: LEN=16, interleave 4 vectors using shuffle intrinsics
+        // a=[a0..a15], b=[b0..b15], c=[c0..c15], d=[d0..d15]
+        // output=[a0,b0,c0,d0, a1,b1,c1,d1, ..., a15,b15,c15,d15]
+        unsafe {
+            // Stage 1: Interleave pairs within 128-bit lanes
+            let lo_ab = _mm512_unpacklo_ps(a.0, b.0); // [a0,b0,a1,b1, a4,b4,a5,b5, ...]
+            let hi_ab = _mm512_unpackhi_ps(a.0, b.0); // [a2,b2,a3,b3, a6,b6,a7,b7, ...]
+            let lo_cd = _mm512_unpacklo_ps(c.0, d.0); // [c0,d0,c1,d1, c4,d4,c5,d5, ...]
+            let hi_cd = _mm512_unpackhi_ps(c.0, d.0); // [c2,d2,c3,d3, c6,d6,c7,d7, ...]
+
+            // Stage 2: Interleave 64-bit pairs (treat as pd for unpack)
+            let t0 = _mm512_castpd_ps(_mm512_unpacklo_pd(
+                _mm512_castps_pd(lo_ab),
+                _mm512_castps_pd(lo_cd),
+            )); // [a0,b0,c0,d0, a4,b4,c4,d4, a8,b8,c8,d8, a12,b12,c12,d12]
+            let t1 = _mm512_castpd_ps(_mm512_unpackhi_pd(
+                _mm512_castps_pd(lo_ab),
+                _mm512_castps_pd(lo_cd),
+            )); // [a1,b1,c1,d1, a5,b5,c5,d5, a9,b9,c9,d9, a13,b13,c13,d13]
+            let t2 = _mm512_castpd_ps(_mm512_unpacklo_pd(
+                _mm512_castps_pd(hi_ab),
+                _mm512_castps_pd(hi_cd),
+            )); // [a2,b2,c2,d2, a6,b6,c6,d6, a10,b10,c10,d10, a14,b14,c14,d14]
+            let t3 = _mm512_castpd_ps(_mm512_unpackhi_pd(
+                _mm512_castps_pd(hi_ab),
+                _mm512_castps_pd(hi_cd),
+            )); // [a3,b3,c3,d3, a7,b7,c7,d7, a11,b11,c11,d11, a15,b15,c15,d15]
+
+            // Stage 3: Rearrange 128-bit lanes using permute indices
+            let idx0 = _mm512_setr_epi32(0, 1, 2, 3, 16, 17, 18, 19, 4, 5, 6, 7, 20, 21, 22, 23);
+            let idx1 =
+                _mm512_setr_epi32(8, 9, 10, 11, 24, 25, 26, 27, 12, 13, 14, 15, 28, 29, 30, 31);
+
+            let out0 = _mm512_permutex2var_ps(t0, idx0, t1); // [a0..d0, a1..d1, a4..d4, a5..d5]
+            let out1 = _mm512_permutex2var_ps(t2, idx0, t3); // [a2..d2, a3..d3, a6..d6, a7..d7]
+            let out2 = _mm512_permutex2var_ps(t0, idx1, t1); // [a8..d8, a9..d9, a12..d12, a13..d13]
+            let out3 = _mm512_permutex2var_ps(t2, idx1, t3); // [a10..d10, a11..d11, a14..d14, a15..d15]
+
+            // Final rearrange to get sequential output
+            let final0 = _mm512_permutex2var_ps(out0, idx0, out1);
+            let final1 = _mm512_permutex2var_ps(out0, idx1, out1);
+            let final2 = _mm512_permutex2var_ps(out2, idx0, out3);
+            let final3 = _mm512_permutex2var_ps(out2, idx1, out3);
+
+            _mm512_storeu_ps(base.as_mut_ptr().add(offset), final0);
+            _mm512_storeu_ps(base.as_mut_ptr().add(offset + 16), final1);
+            _mm512_storeu_ps(base.as_mut_ptr().add(offset + 32), final2);
+            _mm512_storeu_ps(base.as_mut_ptr().add(offset + 48), final3);
+        }
+    }
+
+    #[inline(always)]
+    fn store_interleaved_8(
+        a: Self,
+        b: Self,
+        c: Self,
+        d: Self,
+        e: Self,
+        f: Self,
+        g: Self,
+        h: Self,
+        base: &mut [f32],
+        offset: usize,
+    ) {
+        // AVX-512: LEN=16, interleave 8 vectors using shuffle intrinsics
+        // This is a partial 16x8 transpose pattern
+        unsafe {
+            // Stage 1: Unpack pairs
+            let t0 = _mm512_unpacklo_ps(a.0, b.0);
+            let t1 = _mm512_unpackhi_ps(a.0, b.0);
+            let t2 = _mm512_unpacklo_ps(c.0, d.0);
+            let t3 = _mm512_unpackhi_ps(c.0, d.0);
+            let t4 = _mm512_unpacklo_ps(e.0, f.0);
+            let t5 = _mm512_unpackhi_ps(e.0, f.0);
+            let t6 = _mm512_unpacklo_ps(g.0, h.0);
+            let t7 = _mm512_unpackhi_ps(g.0, h.0);
+
+            // Stage 2: 64-bit unpack
+            let s0 = _mm512_castpd_ps(_mm512_unpacklo_pd(
+                _mm512_castps_pd(t0),
+                _mm512_castps_pd(t2),
+            ));
+            let s1 = _mm512_castpd_ps(_mm512_unpackhi_pd(
+                _mm512_castps_pd(t0),
+                _mm512_castps_pd(t2),
+            ));
+            let s2 = _mm512_castpd_ps(_mm512_unpacklo_pd(
+                _mm512_castps_pd(t1),
+                _mm512_castps_pd(t3),
+            ));
+            let s3 = _mm512_castpd_ps(_mm512_unpackhi_pd(
+                _mm512_castps_pd(t1),
+                _mm512_castps_pd(t3),
+            ));
+            let s4 = _mm512_castpd_ps(_mm512_unpacklo_pd(
+                _mm512_castps_pd(t4),
+                _mm512_castps_pd(t6),
+            ));
+            let s5 = _mm512_castpd_ps(_mm512_unpackhi_pd(
+                _mm512_castps_pd(t4),
+                _mm512_castps_pd(t6),
+            ));
+            let s6 = _mm512_castpd_ps(_mm512_unpacklo_pd(
+                _mm512_castps_pd(t5),
+                _mm512_castps_pd(t7),
+            ));
+            let s7 = _mm512_castpd_ps(_mm512_unpackhi_pd(
+                _mm512_castps_pd(t5),
+                _mm512_castps_pd(t7),
+            ));
+
+            // Stage 3: 128-bit permutes to combine halves
+            let idx_lo = _mm512_setr_epi32(0, 1, 2, 3, 16, 17, 18, 19, 4, 5, 6, 7, 20, 21, 22, 23);
+            let idx_hi =
+                _mm512_setr_epi32(8, 9, 10, 11, 24, 25, 26, 27, 12, 13, 14, 15, 28, 29, 30, 31);
+
+            let c0 = _mm512_permutex2var_ps(s0, idx_lo, s4);
+            let c1 = _mm512_permutex2var_ps(s1, idx_lo, s5);
+            let c2 = _mm512_permutex2var_ps(s2, idx_lo, s6);
+            let c3 = _mm512_permutex2var_ps(s3, idx_lo, s7);
+            let c4 = _mm512_permutex2var_ps(s0, idx_hi, s4);
+            let c5 = _mm512_permutex2var_ps(s1, idx_hi, s5);
+            let c6 = _mm512_permutex2var_ps(s2, idx_hi, s6);
+            let c7 = _mm512_permutex2var_ps(s3, idx_hi, s7);
+
+            // Store all 8 output vectors (128 floats total)
+            let ptr = base.as_mut_ptr().add(offset);
+            _mm512_storeu_ps(ptr, c0);
+            _mm512_storeu_ps(ptr.add(16), c1);
+            _mm512_storeu_ps(ptr.add(32), c2);
+            _mm512_storeu_ps(ptr.add(48), c3);
+            _mm512_storeu_ps(ptr.add(64), c4);
+            _mm512_storeu_ps(ptr.add(80), c5);
+            _mm512_storeu_ps(ptr.add(96), c6);
+            _mm512_storeu_ps(ptr.add(112), c7);
+        }
+    }
+
     fn_avx!(this: F32VecAvx512, fn mul_add(mul: F32VecAvx512, add: F32VecAvx512) -> F32VecAvx512 {
         F32VecAvx512(_mm512_fmadd_ps(this.0, mul.0, add.0), this.1)
     });
@@ -169,6 +386,10 @@ impl F32SimdVec for F32VecAvx512 {
 
     fn_avx!(this: F32VecAvx512, fn max(other: F32VecAvx512) -> F32VecAvx512 {
         F32VecAvx512(_mm512_max_ps(this.0, other.0), this.1)
+    });
+
+    fn_avx!(this: F32VecAvx512, fn min(other: F32VecAvx512) -> F32VecAvx512 {
+        F32VecAvx512(_mm512_min_ps(this.0, other.0), this.1)
     });
 
     fn_avx!(this: F32VecAvx512, fn gt(other: F32VecAvx512) -> MaskAvx512 {

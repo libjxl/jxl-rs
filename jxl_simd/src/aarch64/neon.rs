@@ -121,6 +121,97 @@ impl F32SimdVec for F32VecNeon {
         unsafe { vst1q_f32(mem.as_mut_ptr(), self.0) }
     }
 
+    fn scatter_strided(&self, base: &mut [f32], offset: usize, stride: usize) {
+        // NEON doesn't have native scatter, emulate with scalar loop
+        let mut temp = [0.0f32; 4];
+        unsafe {
+            vst1q_f32(temp.as_mut_ptr(), self.0);
+        }
+        for i in 0..4 {
+            base[offset + i * stride] = temp[i];
+        }
+    }
+
+    fn gather_strided(_d: Self::Descriptor, base: &[f32], offset: usize, stride: usize) -> Self {
+        // NEON doesn't have native gather, emulate with scalar loop
+        let mut temp = [0.0f32; 4];
+        for i in 0..4 {
+            temp[i] = base[offset + i * stride];
+        }
+        unsafe { F32VecNeon(vld1q_f32(temp.as_ptr()), _d) }
+    }
+
+    #[inline(always)]
+    fn store_interleaved_2(a: Self, b: Self, base: &mut [f32], offset: usize) {
+        // NEON: LEN=4, interleave 2 vectors using vst2q_f32
+        // a=[a0,a1,a2,a3], b=[b0,b1,b2,b3] -> output=[a0,b0,a1,b1,a2,b2,a3,b3]
+        unsafe {
+            vst2q_f32(base.as_mut_ptr().add(offset), float32x4x2_t(a.0, b.0));
+        }
+    }
+
+    #[inline(always)]
+    fn store_interleaved_4(a: Self, b: Self, c: Self, d: Self, base: &mut [f32], offset: usize) {
+        // NEON: LEN=4, interleave 4 vectors using vst4q_f32
+        // a=[a0,a1,a2,a3], b=[b0,b1,b2,b3], c=[c0,c1,c2,c3], d=[d0,d1,d2,d3]
+        // output=[a0,b0,c0,d0, a1,b1,c1,d1, a2,b2,c2,d2, a3,b3,c3,d3]
+        unsafe {
+            vst4q_f32(
+                base.as_mut_ptr().add(offset),
+                float32x4x4_t(a.0, b.0, c.0, d.0),
+            );
+        }
+    }
+
+    #[inline(always)]
+    fn store_interleaved_8(
+        a: Self,
+        b: Self,
+        c: Self,
+        d: Self,
+        e: Self,
+        f: Self,
+        g: Self,
+        h: Self,
+        base: &mut [f32],
+        offset: usize,
+    ) {
+        // NEON: LEN=4, interleave 8 vectors using two 4x4 transposes + vst2q_f32
+        // output=[a0,b0,c0,d0,e0,f0,g0,h0, a1,b1,c1,d1,e1,f1,g1,h1, ...]
+        unsafe {
+            // Transpose first group (a,b,c,d) using NEON transpose intrinsics
+            let tr0 = vreinterpretq_f64_f32(vtrn1q_f32(a.0, b.0));
+            let tr1 = vreinterpretq_f64_f32(vtrn2q_f32(a.0, b.0));
+            let tr2 = vreinterpretq_f64_f32(vtrn1q_f32(c.0, d.0));
+            let tr3 = vreinterpretq_f64_f32(vtrn2q_f32(c.0, d.0));
+            let t0 = vreinterpretq_f32_f64(vzip1q_f64(tr0, tr2)); // [a0,b0,c0,d0]
+            let t1 = vreinterpretq_f32_f64(vzip1q_f64(tr1, tr3)); // [a1,b1,c1,d1]
+            let t2 = vreinterpretq_f32_f64(vzip2q_f64(tr0, tr2)); // [a2,b2,c2,d2]
+            let t3 = vreinterpretq_f32_f64(vzip2q_f64(tr1, tr3)); // [a3,b3,c3,d3]
+
+            // Transpose second group (e,f,g,h)
+            let tr4 = vreinterpretq_f64_f32(vtrn1q_f32(e.0, f.0));
+            let tr5 = vreinterpretq_f64_f32(vtrn2q_f32(e.0, f.0));
+            let tr6 = vreinterpretq_f64_f32(vtrn1q_f32(g.0, h.0));
+            let tr7 = vreinterpretq_f64_f32(vtrn2q_f32(g.0, h.0));
+            let t4 = vreinterpretq_f32_f64(vzip1q_f64(tr4, tr6)); // [e0,f0,g0,h0]
+            let t5 = vreinterpretq_f32_f64(vzip1q_f64(tr5, tr7)); // [e1,f1,g1,h1]
+            let t6 = vreinterpretq_f32_f64(vzip2q_f64(tr4, tr6)); // [e2,f2,g2,h2]
+            let t7 = vreinterpretq_f32_f64(vzip2q_f64(tr5, tr7)); // [e3,f3,g3,h3]
+
+            // Store interleaved pairs using vst2q_f32 for optimal performance
+            let ptr = base.as_mut_ptr().add(offset);
+            vst1q_f32(ptr, t0); // [a0,b0,c0,d0]
+            vst1q_f32(ptr.add(4), t4); // [e0,f0,g0,h0]
+            vst1q_f32(ptr.add(8), t1); // [a1,b1,c1,d1]
+            vst1q_f32(ptr.add(12), t5); // [e1,f1,g1,h1]
+            vst1q_f32(ptr.add(16), t2); // [a2,b2,c2,d2]
+            vst1q_f32(ptr.add(20), t6); // [e2,f2,g2,h2]
+            vst1q_f32(ptr.add(24), t3); // [a3,b3,c3,d3]
+            vst1q_f32(ptr.add(28), t7); // [e3,f3,g3,h3]
+        }
+    }
+
     #[inline(always)]
     fn transpose_square(d: NeonDescriptor, data: &mut [[f32; 4]], stride: usize) {
         #[target_feature(enable = "neon")]
@@ -216,6 +307,10 @@ impl F32SimdVec for F32VecNeon {
 
         fn max(this: F32VecNeon, other: F32VecNeon) -> F32VecNeon {
             F32VecNeon(vmaxq_f32(this.0, other.0), this.1)
+        }
+
+        fn min(this: F32VecNeon, other: F32VecNeon) -> F32VecNeon {
+            F32VecNeon(vminq_f32(this.0, other.0), this.1)
         }
 
         fn gt(this: F32VecNeon, other: F32VecNeon) -> MaskNeon {

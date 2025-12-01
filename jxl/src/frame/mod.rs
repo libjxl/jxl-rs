@@ -34,6 +34,8 @@ mod coeff_order;
 pub mod color_correlation_map;
 pub mod decode;
 mod group;
+#[cfg(feature = "parallel")]
+pub mod group_cache;
 pub mod modular;
 mod quant_weights;
 pub mod quantizer;
@@ -49,7 +51,7 @@ pub enum Section {
 
 pub struct LfGlobalState {
     patches: Option<Arc<PatchesDictionary>>,
-    splines: Option<Splines>,
+    splines: Option<Arc<Splines>>,
     noise: Option<Noise>,
     lf_quant: LfQuantFactors,
     pub quant_params: Option<QuantizerParams>,

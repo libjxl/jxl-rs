@@ -10,6 +10,7 @@ use crate::{
     frame::color_correlation_map::ColorCorrelationParams,
     render::{RenderPipelineInOutStage, RenderPipelineInPlaceStage},
 };
+use jxl_simd::{F32SimdVec, I32SimdVec, SimdMask, simd_function};
 
 pub struct ConvolveNoiseStage {
     channel: usize,
@@ -20,6 +21,69 @@ impl ConvolveNoiseStage {
         ConvolveNoiseStage { channel }
     }
 }
+
+// SIMD implementation matching C++ stage_noise.cc lines 272-289
+simd_function!(
+    convolve_noise_simd_dispatch,
+    d: D,
+    fn convolve_noise_simd(
+        input: &[&[f32]],
+        output: &mut [f32],
+        xsize: usize,
+    ) {
+        let simd_width = D::F32Vec::LEN;
+
+        // Precompute constants
+        let c016 = D::F32Vec::splat(d, 0.16);
+        let cn384 = D::F32Vec::splat(d, -3.84);
+
+        // Process in SIMD chunks
+        let mut x = 0;
+        while x + simd_width <= xsize {
+            // Load center pixel (row 2, offset +2)
+            let p00 = D::F32Vec::load(d, &input[2][x + 2..]);
+
+            // Accumulate surrounding pixels (matching C++ pattern)
+            let mut others = D::F32Vec::splat(d, 0.0);
+
+            // Add all 5 rows × 5 offsets (except center)
+            for i in 0..5 {
+                others = others + D::F32Vec::load(d, &input[0][x + i..]);
+                others = others + D::F32Vec::load(d, &input[1][x + i..]);
+                others = others + D::F32Vec::load(d, &input[3][x + i..]);
+                others = others + D::F32Vec::load(d, &input[4][x + i..]);
+            }
+
+            // Add row 2 neighbors (offset 0, 1, 3, 4 - skip center at offset 2)
+            others = others + D::F32Vec::load(d, &input[2][x..]);
+            others = others + D::F32Vec::load(d, &input[2][x + 1..]);
+            others = others + D::F32Vec::load(d, &input[2][x + 3..]);
+            others = others + D::F32Vec::load(d, &input[2][x + 4..]);
+
+            // Compute: others * 0.16 + center * -3.84
+            let result = others.mul_add(c016, p00 * cn384);
+
+            result.store(&mut output[x..]);
+            x += simd_width;
+        }
+
+        // Scalar tail
+        for x in x..xsize {
+            let mut others = 0.0;
+            for i in 0..5 {
+                others += input[0][x + i];
+                others += input[1][x + i];
+                others += input[3][x + i];
+                others += input[4][x + i];
+            }
+            others += input[2][x];
+            others += input[2][x + 1];
+            others += input[2][x + 3];
+            others += input[2][x + 4];
+            output[x] = others * 0.16 + input[2][x + 2] * -3.84;
+        }
+    }
+);
 
 impl std::fmt::Display for ConvolveNoiseStage {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -46,21 +110,7 @@ impl RenderPipelineInOutStage for ConvolveNoiseStage {
         _state: Option<&mut dyn std::any::Any>,
     ) {
         let input = input_rows[0];
-        for x in 0..xsize {
-            let mut others = 0.0;
-            for i in 0..5 {
-                let offset = (x as i32 + i) as usize;
-                others += input[0][offset];
-                others += input[1][offset];
-                others += input[3][offset];
-                others += input[4][offset];
-            }
-            others += input[2][x];
-            others += input[2][x + 1];
-            others += input[2][x + 3];
-            others += input[2][x + 4];
-            output_rows[0][0][x] = others * 0.16 + input[2][x + 2] * -3.84;
-        }
+        convolve_noise_simd_dispatch(input, output_rows[0][0], xsize);
     }
 }
 
@@ -85,6 +135,190 @@ impl AddNoiseStage {
         }
     }
 }
+
+// SIMD implementation matching C++ stage_noise.cc lines 170-246
+// Optimized with pre-broadcast constants and SIMD noise strength calculation
+simd_function!(
+    add_noise_simd_dispatch,
+    d: D,
+    fn add_noise_simd(
+        row: &mut [&mut [f32]],
+        xsize: usize,
+        noise: &Noise,
+        ytox: f32,
+        ytob: f32,
+    ) {
+        let simd_width = D::F32Vec::LEN;
+
+        // Pre-broadcast all constants outside the loop
+        let norm_const = D::F32Vec::splat(d, 0.22);
+        let half = D::F32Vec::splat(d, 0.5);
+        let k_rg_corr = D::F32Vec::splat(d, 0.9921875);
+        let k_rgn_corr = D::F32Vec::splat(d, 0.0078125);
+        let ytox_v = D::F32Vec::splat(d, ytox);
+        let ytob_v = D::F32Vec::splat(d, ytob);
+
+        // Pre-broadcast LUT values for SIMD interpolation (only 8 values)
+        let lut = &noise.lut;
+        let lut0 = D::F32Vec::splat(d, lut[0]);
+        let lut1 = D::F32Vec::splat(d, lut[1]);
+        let lut2 = D::F32Vec::splat(d, lut[2]);
+        let lut3 = D::F32Vec::splat(d, lut[3]);
+        let lut4 = D::F32Vec::splat(d, lut[4]);
+        let lut5 = D::F32Vec::splat(d, lut[5]);
+        let lut6 = D::F32Vec::splat(d, lut[6]);
+        let lut7 = D::F32Vec::splat(d, lut[7]);
+
+        // Constants for SIMD noise strength calculation
+        let k_scale = D::F32Vec::splat(d, 6.0); // lut.len() - 2 = 8 - 2 = 6
+        let zero = D::F32Vec::splat(d, 0.0);
+        let one_v = D::F32Vec::splat(d, 1.0);
+
+        // Integer constants for index comparison
+        let zero_i = D::I32Vec::splat(d, 0);
+        let one_i = D::I32Vec::splat(d, 1);
+        let two_i = D::I32Vec::splat(d, 2);
+        let three_i = D::I32Vec::splat(d, 3);
+        let four_i = D::I32Vec::splat(d, 4);
+        let five_i = D::I32Vec::splat(d, 5);
+
+        // Process in SIMD chunks
+        let mut x = 0;
+        while x + simd_width <= xsize {
+            // Load random noise channels
+            let row_rnd_r = D::F32Vec::load(d, &row[3][x..]);
+            let row_rnd_g = D::F32Vec::load(d, &row[4][x..]);
+            let row_rnd_c = D::F32Vec::load(d, &row[5][x..]);
+
+            // Load color channels
+            let vx = D::F32Vec::load(d, &row[0][x..]);
+            let vy = D::F32Vec::load(d, &row[1][x..]);
+
+            // Compute in_g and in_r
+            let in_g = vy - vx;
+            let in_r = vy + vx;
+
+            // Compute noise strengths using SIMD (inlined for both g and r)
+            let in_g_half = in_g * half;
+            let in_r_half = in_r * half;
+
+            // === SIMD noise strength for green ===
+            let scaled_g = (in_g_half * k_scale).max(zero);
+            let floor_g = scaled_g.floor().min(k_scale);
+            let frac_g = (scaled_g - floor_g).min(one_v);
+            let idx_g = floor_g.as_i32();
+
+            // Select LUT values using cascading conditionals (outer-to-inner for correct indexing)
+            // idx can be 0-6, we need: low=lut[idx], hi=lut[idx+1]
+            let ge_6_g = idx_g.gt(five_i);  // idx > 5, so idx == 6
+            let ge_5_g = idx_g.gt(four_i);  // idx > 4, so idx >= 5
+            let ge_4_g = idx_g.gt(three_i); // idx > 3, so idx >= 4
+            let ge_3_g = idx_g.gt(two_i);   // idx > 2, so idx >= 3
+            let ge_2_g = idx_g.gt(one_i);   // idx > 1, so idx >= 2
+            let ge_1_g = idx_g.gt(zero_i);  // idx > 0, so idx >= 1
+
+            // low_g = lut[idx]: cascade from high to low index
+            let low_g = ge_6_g.if_then_else_f32(lut6,
+                ge_5_g.if_then_else_f32(lut5,
+                    ge_4_g.if_then_else_f32(lut4,
+                        ge_3_g.if_then_else_f32(lut3,
+                            ge_2_g.if_then_else_f32(lut2,
+                                ge_1_g.if_then_else_f32(lut1, lut0))))));
+
+            // hi_g = lut[idx+1]: cascade from high to low index
+            let hi_g = ge_6_g.if_then_else_f32(lut7,
+                ge_5_g.if_then_else_f32(lut6,
+                    ge_4_g.if_then_else_f32(lut5,
+                        ge_3_g.if_then_else_f32(lut4,
+                            ge_2_g.if_then_else_f32(lut3,
+                                ge_1_g.if_then_else_f32(lut2, lut1))))));
+
+            let noise_strength_g = ((hi_g - low_g) * frac_g + low_g).max(zero).min(one_v);
+
+            // === SIMD noise strength for red ===
+            let scaled_r = (in_r_half * k_scale).max(zero);
+            let floor_r = scaled_r.floor().min(k_scale);
+            let frac_r = (scaled_r - floor_r).min(one_v);
+            let idx_r = floor_r.as_i32();
+
+            // Select LUT values for red channel (same structure as green)
+            let ge_6_r = idx_r.gt(five_i);
+            let ge_5_r = idx_r.gt(four_i);
+            let ge_4_r = idx_r.gt(three_i);
+            let ge_3_r = idx_r.gt(two_i);
+            let ge_2_r = idx_r.gt(one_i);
+            let ge_1_r = idx_r.gt(zero_i);
+
+            // low_r = lut[idx]: cascade from high to low index
+            let low_r = ge_6_r.if_then_else_f32(lut6,
+                ge_5_r.if_then_else_f32(lut5,
+                    ge_4_r.if_then_else_f32(lut4,
+                        ge_3_r.if_then_else_f32(lut3,
+                            ge_2_r.if_then_else_f32(lut2,
+                                ge_1_r.if_then_else_f32(lut1, lut0))))));
+
+            // hi_r = lut[idx+1]: cascade from high to low index
+            let hi_r = ge_6_r.if_then_else_f32(lut7,
+                ge_5_r.if_then_else_f32(lut6,
+                    ge_4_r.if_then_else_f32(lut5,
+                        ge_3_r.if_then_else_f32(lut4,
+                            ge_2_r.if_then_else_f32(lut3,
+                                ge_1_r.if_then_else_f32(lut2, lut1))))));
+
+            let noise_strength_r = ((hi_r - low_r) * frac_r + low_r).max(zero).min(one_v);
+
+            // Compute noise contributions
+            let addit_rnd_noise_red = row_rnd_r * norm_const;
+            let addit_rnd_noise_green = row_rnd_g * norm_const;
+            let addit_rnd_noise_correlated = row_rnd_c * norm_const;
+
+            // Compute red and green noise using FMA
+            let red_noise = noise_strength_r * addit_rnd_noise_red.mul_add(k_rgn_corr, addit_rnd_noise_correlated * k_rg_corr);
+            let green_noise = noise_strength_g * addit_rnd_noise_green.mul_add(k_rgn_corr, addit_rnd_noise_correlated * k_rg_corr);
+
+            let rg_noise = red_noise + green_noise;
+
+            // Update channels using FMA
+            let row0 = D::F32Vec::load(d, &row[0][x..]);
+            let row1 = D::F32Vec::load(d, &row[1][x..]);
+            let row2 = D::F32Vec::load(d, &row[2][x..]);
+
+            let new_row0 = row0 + rg_noise.mul_add(ytox_v, red_noise - green_noise);
+            let new_row1 = row1 + rg_noise;
+            let new_row2 = row2 + (ytob_v * rg_noise);
+
+            new_row0.store(&mut row[0][x..]);
+            new_row1.store(&mut row[1][x..]);
+            new_row2.store(&mut row[2][x..]);
+
+            x += simd_width;
+        }
+
+        // Scalar tail
+        for x in x..xsize {
+            let row_rnd_r = row[3][x];
+            let row_rnd_g = row[4][x];
+            let row_rnd_c = row[5][x];
+            let vx = row[0][x];
+            let vy = row[1][x];
+            let in_g = vy - vx;
+            let in_r = vy + vx;
+            let noise_strength_g = noise.strength(in_g * 0.5);
+            let noise_strength_r = noise.strength(in_r * 0.5);
+            let addit_rnd_noise_red = row_rnd_r * 0.22;
+            let addit_rnd_noise_green = row_rnd_g * 0.22;
+            let addit_rnd_noise_correlated = row_rnd_c * 0.22;
+            let red_noise = noise_strength_r
+                * (0.0078125 * addit_rnd_noise_red + 0.9921875 * addit_rnd_noise_correlated);
+            let green_noise = noise_strength_g
+                * (0.0078125 * addit_rnd_noise_green + 0.9921875 * addit_rnd_noise_correlated);
+            let rg_noise = red_noise + green_noise;
+            row[0][x] += ytox * rg_noise + red_noise - green_noise;
+            row[1][x] += rg_noise;
+            row[2][x] += ytob * rg_noise;
+        }
+    }
+);
 
 impl std::fmt::Display for AddNoiseStage {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -112,33 +346,9 @@ impl RenderPipelineInPlaceStage for AddNoiseStage {
         row: &mut [&mut [f32]],
         _state: Option<&mut dyn std::any::Any>,
     ) {
-        let norm_const = 0.22;
         let ytox = self.color_correlation.y_to_x_lf();
         let ytob = self.color_correlation.y_to_b_lf();
-        for x in 0..xsize {
-            let row_rnd_r = row[3][x];
-            let row_rnd_g = row[4][x];
-            let row_rnd_c = row[5][x];
-            let vx = row[0][x];
-            let vy = row[1][x];
-            let in_g = vy - vx;
-            let in_r = vy + vx;
-            let noise_strength_g = self.noise.strength(in_g * 0.5);
-            let noise_strength_r = self.noise.strength(in_r * 0.5);
-            let addit_rnd_noise_red = row_rnd_r * norm_const;
-            let addit_rnd_noise_green = row_rnd_g * norm_const;
-            let addit_rnd_noise_correlated = row_rnd_c * norm_const;
-            let k_rg_corr = 0.9921875;
-            let k_rgn_corr = 0.0078125;
-            let red_noise = noise_strength_r
-                * (k_rgn_corr * addit_rnd_noise_red + k_rg_corr * addit_rnd_noise_correlated);
-            let green_noise = noise_strength_g
-                * (k_rgn_corr * addit_rnd_noise_green + k_rg_corr * addit_rnd_noise_correlated);
-            let rg_noise = red_noise + green_noise;
-            row[0][x] += ytox * rg_noise + red_noise - green_noise;
-            row[1][x] += rg_noise;
-            row[2][x] += ytob * rg_noise;
-        }
+        add_noise_simd_dispatch(row, xsize, &self.noise, ytox, ytob);
     }
 }
 

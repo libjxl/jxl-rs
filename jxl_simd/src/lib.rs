@@ -102,6 +102,38 @@ pub trait F32SimdVec:
 
     fn store_array(&self, mem: &mut Self::UnderlyingArray);
 
+    /// Scatter with constant stride: Store vector lanes to memory at regularly-spaced positions.
+    /// Stores `self[i]` to `base[offset + i * stride]` for each lane i.
+    /// This is crucial for upsampling where outputs are stride-N apart!
+    fn scatter_strided(&self, base: &mut [f32], offset: usize, stride: usize);
+
+    /// Gather with constant stride: Load vector lanes from regularly-spaced positions.
+    /// Loads `base[offset + i * stride]` into lane i.
+    fn gather_strided(d: Self::Descriptor, base: &[f32], offset: usize, stride: usize) -> Self;
+
+    /// Store 2 vectors in interleaved fashion: [a0,b0, a1,b1, a2,b2, ...]
+    /// For upsampling: stores N=2 upsampled values per input pixel
+    fn store_interleaved_2(a: Self, b: Self, base: &mut [f32], offset: usize);
+
+    /// Store 4 vectors in interleaved fashion: [a0,b0,c0,d0, a1,b1,c1,d1, ...]
+    /// For upsampling: stores N=4 upsampled values per input pixel
+    fn store_interleaved_4(a: Self, b: Self, c: Self, d: Self, base: &mut [f32], offset: usize);
+
+    /// Store 8 vectors in interleaved fashion: [a0,b0,c0,d0,e0,f0,g0,h0, a1,b1,c1,d1,e1,f1,g1,h1, ...]
+    /// For upsampling: stores N=8 upsampled values per input pixel
+    fn store_interleaved_8(
+        a: Self,
+        b: Self,
+        c: Self,
+        d: Self,
+        e: Self,
+        f: Self,
+        g: Self,
+        h: Self,
+        base: &mut [f32],
+        offset: usize,
+    );
+
     fn abs(self) -> Self;
 
     fn floor(self) -> Self;
@@ -115,6 +147,8 @@ pub trait F32SimdVec:
     fn copysign(self, sign: Self) -> Self;
 
     fn max(self, other: Self) -> Self;
+
+    fn min(self, other: Self) -> Self;
 
     fn gt(self, other: Self) -> <<Self as F32SimdVec>::Descriptor as SimdDescriptor>::Mask;
 

@@ -23,14 +23,15 @@ struct AnsHistogram {
 }
 
 // log_alphabet_size <= 8 and log_bucket_size <= 7, so u8 is sufficient for symbols and cutoffs.
+// Field order matches C++ AliasTable::Entry for little-endian u64 load optimization
 #[derive(Debug, Copy, Clone)]
 #[repr(C)]
 struct Bucket {
-    alias_symbol: u8,
-    alias_cutoff: u8,
-    dist: u16,
-    alias_offset: u16,
-    alias_dist_xor: u16,
+    alias_cutoff: u8,    // byte 0 (matches C++ cutoff)
+    alias_symbol: u8,    // byte 1 (matches C++ right_value)
+    dist: u16,           // bytes 2-3 (matches C++ freq0)
+    alias_offset: u16,   // bytes 4-5 (matches C++ offsets1)
+    alias_dist_xor: u16, // bytes 6-7 (matches C++ freq1_xor_freq0)
 }
 
 impl AnsHistogram {
@@ -351,30 +352,103 @@ impl AnsHistogram {
 impl AnsHistogram {
     #[inline]
     pub fn read(&self, br: &mut BitReader, state: &mut u32) -> u32 {
+        // Phase 3H: UNCONDITIONAL refill BEFORE symbol read
+        // This matches libjxl's strategy (dec_ans.h:215) and eliminates branch misprediction
+        // in the tight decoding loop. libjxl does: br->Refill() before ReadSymbolWithoutRefill()
+        br.refill();
+
         let idx = *state & 0xfff;
         let i = (idx >> self.log_bucket_size) as usize;
         let pos = idx & self.bucket_mask;
 
         debug_assert!(self.buckets.len().is_power_of_two());
-        let bucket = self.buckets[i & (self.buckets.len() - 1)];
-        let alias_symbol = bucket.alias_symbol as u32;
-        let alias_cutoff = bucket.alias_cutoff as u32;
-        let dist = bucket.dist as u32;
 
-        let map_to_alias = (pos >= alias_cutoff) as u32;
-        let offset = (bucket.alias_offset as u32) * map_to_alias;
-        let dist_xor = (bucket.alias_dist_xor as u32) * map_to_alias;
+        // Optimized like C++: load entire bucket as u64 on little-endian systems
+        // This matches C++ memcpy optimization (lines 109-110 in ans_common.h)
+        #[cfg(target_endian = "little")]
+        {
+            let bucket_ptr =
+                &self.buckets[i & (self.buckets.len() - 1)] as *const Bucket as *const u64;
+            #[allow(unsafe_code)]
+            let entry = unsafe { bucket_ptr.read_unaligned() };
 
-        let dist = dist ^ dist_xor;
-        let symbol = (alias_symbol * map_to_alias) | (i as u32 * (1 - map_to_alias));
-        let offset = offset + pos;
+            // Phase 3I: Software prefetch for next symbol (matches libjxl dec_ans.h:194)
+            // Prefetch the bucket we're likely to need next iteration
+            // This can provide 1-3% overall improvement by hiding memory latency
+            #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+            {
+                // Speculatively compute next bucket index
+                // We don't know the exact next state, but we can make a reasonable guess
+                // based on the current state pattern
+                let next_idx_guess = ((*state >> 12) + 1) & 0xfff;
+                let next_i = (next_idx_guess >> self.log_bucket_size) as usize;
+                let next_bucket_idx = next_i & (self.buckets.len() - 1);
 
-        let next_state = (*state >> LOG_SUM_PROBS) * dist + offset;
-        let select_appended = (next_state < (1 << 16)) as u32;
-        let appended_state = (next_state << 16) | (br.peek(16) as u32);
-        *state = (appended_state * select_appended) | (next_state * (1 - select_appended));
-        br.consume_optimistic((16 * select_appended) as usize);
-        symbol
+                // Note: _mm_prefetch requires SSE target feature
+                #[allow(unsafe_code)]
+                unsafe {
+                    #[cfg(target_arch = "x86")]
+                    use std::arch::x86::{_MM_HINT_T0, _mm_prefetch};
+                    #[cfg(target_arch = "x86_64")]
+                    use std::arch::x86_64::{_MM_HINT_T0, _mm_prefetch};
+
+                    let next_bucket_ptr =
+                        &self.buckets[next_bucket_idx] as *const Bucket as *const i8;
+                    _mm_prefetch(next_bucket_ptr, _MM_HINT_T0);
+                }
+            }
+
+            // Extract fields via bitshifts (matches C++ lines 111-119)
+            let alias_cutoff = (entry & 0xFF) as u32;
+            let alias_symbol = ((entry >> 8) & 0xFF) as u32;
+            let dist = ((entry >> 16) & 0xFFFF) as u32;
+
+            let map_to_alias = (pos >= alias_cutoff) as u32;
+
+            // Conditional load using CMOV-like pattern (matches C++ line 124)
+            let conditional = if map_to_alias != 0 { entry } else { 0 };
+            let alias_offset = ((conditional >> 32) & 0xFFFF) as u32;
+            let alias_dist_xor = (conditional >> 48) as u32;
+
+            let dist = dist ^ alias_dist_xor;
+            let symbol = (alias_symbol * map_to_alias) | (i as u32 * (1 - map_to_alias));
+            let offset = alias_offset + pos;
+
+            let next_state = (*state >> LOG_SUM_PROBS) * dist + offset;
+            let select_appended = (next_state < (1 << 16)) as u32;
+            // Phase 3I: Use unchecked peek since we just did unconditional refill above
+            // This saves a conditional check in the hot path
+            let appended_state = (next_state << 16) | (br.peek_unchecked(16) as u32);
+            *state = (appended_state * select_appended) | (next_state * (1 - select_appended));
+            br.consume_optimistic((16 * select_appended) as usize);
+            symbol
+        }
+
+        #[cfg(not(target_endian = "little"))]
+        {
+            // Fall back to field-by-field access on big-endian systems
+            let bucket = self.buckets[i & (self.buckets.len() - 1)];
+            let alias_cutoff = bucket.alias_cutoff as u32;
+            let alias_symbol = bucket.alias_symbol as u32;
+            let dist = bucket.dist as u32;
+
+            let map_to_alias = (pos >= alias_cutoff) as u32;
+            let offset = (bucket.alias_offset as u32) * map_to_alias;
+            let dist_xor = (bucket.alias_dist_xor as u32) * map_to_alias;
+
+            let dist = dist ^ dist_xor;
+            let symbol = (alias_symbol * map_to_alias) | (i as u32 * (1 - map_to_alias));
+            let offset = offset + pos;
+
+            let next_state = (*state >> LOG_SUM_PROBS) * dist + offset;
+            let select_appended = (next_state < (1 << 16)) as u32;
+            // Phase 3I: Use unchecked peek since we just did unconditional refill above
+            // This saves a conditional check in the hot path
+            let appended_state = (next_state << 16) | (br.peek_unchecked(16) as u32);
+            *state = (appended_state * select_appended) | (next_state * (1 - select_appended));
+            br.consume_optimistic((16 * select_appended) as usize);
+            symbol
+        }
     }
 
     // For optimizing fast-lossless case.

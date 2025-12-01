@@ -15,7 +15,7 @@ use crate::{
             specialized_trees::{TreeSpecialCase, specialize_tree},
         },
         predict::{PredictionData, WeightedPredictorState},
-        tree::{NUM_NONREF_PROPERTIES, PROPERTIES_PER_PREVCHAN, predict},
+        tree::{NUM_NONREF_PROPERTIES, PROPERTIES_PER_PREVCHAN, predict_flat},
     },
     headers::modular::GroupHeader,
     image::Image,
@@ -47,9 +47,13 @@ fn decode_modular_channel_small(
 
     const { assert!(IMAGE_OFFSET.1 == 2) };
 
+    // Pre-allocate property buffer outside loop to avoid per-row allocation
+    let mut property_buffer: Vec<i32> = vec![0; num_properties];
+
     for y in 0..size.1 {
         precompute_references(buffers, chan, y, &mut references);
-        let mut property_buffer: Vec<i32> = vec![0; num_properties];
+        // Reuse the same buffer, just reset the values
+        property_buffer.fill(0);
         property_buffer[0] = chan as i32;
         property_buffer[1] = stream_id as i32;
         let [row, row_top, row_toptop] =
@@ -59,8 +63,8 @@ fn decode_modular_channel_small(
         let row_toptop = &mut row_toptop[IMAGE_OFFSET.0..IMAGE_OFFSET.0 + size.0];
         for x in 0..size.0 {
             let prediction_data = PredictionData::get_rows(row, row_top, row_toptop, x, y);
-            let prediction_result = predict(
-                &tree.nodes,
+            let prediction_result = predict_flat(
+                tree.flat_tree(),
                 prediction_data,
                 size.0,
                 Some(&mut wp_state),

@@ -133,10 +133,13 @@ impl JxlBitDepth {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct JxlExtraChannel {
     pub ec_type: ExtraChannel,
     pub alpha_associated: bool,
+    pub name: String,
+    /// Spot color values [R, G, B, solidity] for SpotColor extra channels
+    pub spot_color: Option<[f32; 4]>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]

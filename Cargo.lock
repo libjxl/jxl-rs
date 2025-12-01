@@ -558,6 +558,7 @@ dependencies = [
  "paste",
  "rand",
  "rand_xorshift",
+ "rayon",
  "test-log",
  "thiserror",
  "tracing",
@@ -576,6 +577,7 @@ dependencies = [
  "jxl_macros",
  "lcms2",
  "png",
+ "serde_json",
  "tracing-subscriber",
 ]
 

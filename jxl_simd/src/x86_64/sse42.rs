@@ -109,6 +109,111 @@ impl F32SimdVec for F32VecSse42 {
         unsafe { _mm_storeu_ps(mem.as_mut_ptr(), self.0) }
     }
 
+    fn scatter_strided(&self, base: &mut [f32], offset: usize, stride: usize) {
+        // SSE4.2 doesn't have native scatter, emulate with scalar loop
+        let mut temp = [0.0f32; 4];
+        unsafe {
+            _mm_storeu_ps(temp.as_mut_ptr(), self.0);
+        }
+        for i in 0..4 {
+            base[offset + i * stride] = temp[i];
+        }
+    }
+
+    fn gather_strided(_d: Self::Descriptor, base: &[f32], offset: usize, stride: usize) -> Self {
+        // SSE4.2 doesn't have native gather, emulate with scalar loop
+        let mut temp = [0.0f32; 4];
+        for i in 0..4 {
+            temp[i] = base[offset + i * stride];
+        }
+        unsafe { F32VecSse42(_mm_loadu_ps(temp.as_ptr()), _d) }
+    }
+
+    #[inline(always)]
+    fn store_interleaved_2(a: Self, b: Self, base: &mut [f32], offset: usize) {
+        // SSE4.2: LEN=4, interleave 2 vectors using unpack intrinsics
+        // a=[a0,a1,a2,a3], b=[b0,b1,b2,b3] -> output=[a0,b0,a1,b1,a2,b2,a3,b3]
+        unsafe {
+            let lo = _mm_unpacklo_ps(a.0, b.0); // [a0,b0,a1,b1]
+            let hi = _mm_unpackhi_ps(a.0, b.0); // [a2,b2,a3,b3]
+            _mm_storeu_ps(base.as_mut_ptr().add(offset), lo);
+            _mm_storeu_ps(base.as_mut_ptr().add(offset + 4), hi);
+        }
+    }
+
+    #[inline(always)]
+    fn store_interleaved_4(a: Self, b: Self, c: Self, d: Self, base: &mut [f32], offset: usize) {
+        // SSE4.2: LEN=4, interleave 4 vectors using 4x4 matrix transpose
+        // a=[a0,a1,a2,a3], b=[b0,b1,b2,b3], c=[c0,c1,c2,c3], d=[d0,d1,d2,d3]
+        // output=[a0,b0,c0,d0, a1,b1,c1,d1, a2,b2,c2,d2, a3,b3,c3,d3]
+        unsafe {
+            // Stage 1: unpack pairs
+            let q0 = _mm_unpacklo_ps(a.0, c.0); // [a0,c0,a1,c1]
+            let q1 = _mm_unpacklo_ps(b.0, d.0); // [b0,d0,b1,d1]
+            let q2 = _mm_unpackhi_ps(a.0, c.0); // [a2,c2,a3,c3]
+            let q3 = _mm_unpackhi_ps(b.0, d.0); // [b2,d2,b3,d3]
+
+            // Stage 2: final transpose
+            let out0 = _mm_unpacklo_ps(q0, q1); // [a0,b0,c0,d0]
+            let out1 = _mm_unpackhi_ps(q0, q1); // [a1,b1,c1,d1]
+            let out2 = _mm_unpacklo_ps(q2, q3); // [a2,b2,c2,d2]
+            let out3 = _mm_unpackhi_ps(q2, q3); // [a3,b3,c3,d3]
+
+            _mm_storeu_ps(base.as_mut_ptr().add(offset), out0);
+            _mm_storeu_ps(base.as_mut_ptr().add(offset + 4), out1);
+            _mm_storeu_ps(base.as_mut_ptr().add(offset + 8), out2);
+            _mm_storeu_ps(base.as_mut_ptr().add(offset + 12), out3);
+        }
+    }
+
+    #[inline(always)]
+    fn store_interleaved_8(
+        a: Self,
+        b: Self,
+        c: Self,
+        d: Self,
+        e: Self,
+        f: Self,
+        g: Self,
+        h: Self,
+        base: &mut [f32],
+        offset: usize,
+    ) {
+        // SSE4.2: LEN=4, interleave 8 vectors using two 4x4 matrix transposes
+        // output=[a0,b0,c0,d0,e0,f0,g0,h0, a1,b1,c1,d1,e1,f1,g1,h1, ...]
+        unsafe {
+            // Transpose first group (a,b,c,d)
+            let q0 = _mm_unpacklo_ps(a.0, c.0);
+            let q1 = _mm_unpacklo_ps(b.0, d.0);
+            let q2 = _mm_unpackhi_ps(a.0, c.0);
+            let q3 = _mm_unpackhi_ps(b.0, d.0);
+            let t0 = _mm_unpacklo_ps(q0, q1); // [a0,b0,c0,d0]
+            let t1 = _mm_unpackhi_ps(q0, q1); // [a1,b1,c1,d1]
+            let t2 = _mm_unpacklo_ps(q2, q3); // [a2,b2,c2,d2]
+            let t3 = _mm_unpackhi_ps(q2, q3); // [a3,b3,c3,d3]
+
+            // Transpose second group (e,f,g,h)
+            let r0 = _mm_unpacklo_ps(e.0, g.0);
+            let r1 = _mm_unpacklo_ps(f.0, h.0);
+            let r2 = _mm_unpackhi_ps(e.0, g.0);
+            let r3 = _mm_unpackhi_ps(f.0, h.0);
+            let t4 = _mm_unpacklo_ps(r0, r1); // [e0,f0,g0,h0]
+            let t5 = _mm_unpackhi_ps(r0, r1); // [e1,f1,g1,h1]
+            let t6 = _mm_unpacklo_ps(r2, r3); // [e2,f2,g2,h2]
+            let t7 = _mm_unpackhi_ps(r2, r3); // [e3,f3,g3,h3]
+
+            // Store interleaved: row 0 from both groups, then row 1, etc.
+            _mm_storeu_ps(base.as_mut_ptr().add(offset), t0); // [a0,b0,c0,d0]
+            _mm_storeu_ps(base.as_mut_ptr().add(offset + 4), t4); // [e0,f0,g0,h0]
+            _mm_storeu_ps(base.as_mut_ptr().add(offset + 8), t1); // [a1,b1,c1,d1]
+            _mm_storeu_ps(base.as_mut_ptr().add(offset + 12), t5); // [e1,f1,g1,h1]
+            _mm_storeu_ps(base.as_mut_ptr().add(offset + 16), t2); // [a2,b2,c2,d2]
+            _mm_storeu_ps(base.as_mut_ptr().add(offset + 20), t6); // [e2,f2,g2,h2]
+            _mm_storeu_ps(base.as_mut_ptr().add(offset + 24), t3); // [a3,b3,c3,d3]
+            _mm_storeu_ps(base.as_mut_ptr().add(offset + 28), t7); // [e3,f3,g3,h3]
+        }
+    }
+
     fn_sse42!(this: F32VecSse42, fn mul_add(mul: F32VecSse42, add: F32VecSse42) -> F32VecSse42 {
         this * mul + add
     });
@@ -168,6 +273,10 @@ impl F32SimdVec for F32VecSse42 {
 
     fn_sse42!(this: F32VecSse42, fn max(other: F32VecSse42) -> F32VecSse42 {
         F32VecSse42(_mm_max_ps(this.0, other.0), this.1)
+    });
+
+    fn_sse42!(this: F32VecSse42, fn min(other: F32VecSse42) -> F32VecSse42 {
+        F32VecSse42(_mm_min_ps(this.0, other.0), this.1)
     });
 
     fn_sse42!(this: F32VecSse42, fn gt(other: F32VecSse42) -> MaskSse42 {

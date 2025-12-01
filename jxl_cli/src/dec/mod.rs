@@ -9,7 +9,8 @@ use color_eyre::eyre::{Result, eyre};
 use jxl::{
     api::{
         JxlAnimation, JxlBitDepth, JxlBitstreamInput, JxlColorProfile, JxlColorType, JxlDecoder,
-        JxlDecoderOptions, JxlOutputBuffer, ProcessingResult, states::WithImageInfo,
+        JxlDecoderOptions, JxlExtraChannel, JxlOutputBuffer, ProcessingResult,
+        states::WithImageInfo,
     },
     image::{Image, ImageDataType, Rect},
 };
@@ -18,6 +19,7 @@ pub struct ImageFrame<T: ImageDataType> {
     pub channels: Vec<Image<T>>,
     pub duration: f64,
     pub color_type: JxlColorType,
+    pub name: String,
 }
 
 pub struct DecodeOutput<T: ImageDataType> {
@@ -27,6 +29,7 @@ pub struct DecodeOutput<T: ImageDataType> {
     pub output_profile: JxlColorProfile,
     pub embedded_profile: JxlColorProfile,
     pub jxl_animation: Option<JxlAnimation>,
+    pub extra_channels: Vec<JxlExtraChannel>,
 }
 
 pub fn decode_header<In: JxlBitstreamInput>(
@@ -62,6 +65,7 @@ pub fn decode_frames<In: JxlBitstreamInput>(
         output_profile,
         embedded_profile,
         jxl_animation: info.animation.clone(),
+        extra_channels: info.extra_channels.clone(),
     };
 
     let extra_channels = info.extra_channels.len();
@@ -112,6 +116,7 @@ pub fn decode_frames<In: JxlBitstreamInput>(
             duration: frame_header.duration.unwrap_or(0.0),
             channels: outputs,
             color_type,
+            name: frame_header.name.clone(),
         });
 
         if !decoder_with_image_info.has_more_frames() {

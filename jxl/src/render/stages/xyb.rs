@@ -246,6 +246,11 @@ impl RenderPipelineInPlaceStage for XybStage {
             );
         };
 
+        // Note: Grayscale fast path removed - XYB-encoded grayscale still needs
+        // full color conversion to get correct luminance values.
+        // The standard XYB->RGB conversion will produce equal R=G=B values
+        // for grayscale content, which the save stage can then use.
+
         xyb_process_dispatch(
             &self.output_color_info.opsin,
             self.output_color_info.intensity_target,

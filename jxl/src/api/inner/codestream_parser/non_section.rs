@@ -63,6 +63,8 @@ impl CodestreamParser {
                     .map(|info| JxlExtraChannel {
                         ec_type: info.ec_type,
                         alpha_associated: info.alpha_associated(),
+                        name: info.name().to_string(),
+                        spot_color: info.spot_color,
                     })
                     .collect(),
                 animation: data
