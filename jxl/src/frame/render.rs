@@ -424,11 +424,11 @@ impl Frame {
         }
 
         if frame_header.has_splines() {
-            pipeline = pipeline.add_inplace_stage(SplinesStage::new(
+            // Use new_initialized since splines draw cache is pre-initialized during LfGlobal parsing.
+            // Arc::clone is cheap (just increments reference count), unlike the previous clone that
+            // copied all spline data and then re-initialized the draw cache for every frame.
+            pipeline = pipeline.add_inplace_stage(SplinesStage::new_initialized(
                 lf_global.splines.clone().unwrap(),
-                frame_header.size(),
-                &lf_global.color_correlation_params.unwrap_or_default(),
-                decoder_state.high_precision,
             ))?
         }
 

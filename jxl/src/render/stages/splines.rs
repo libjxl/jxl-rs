@@ -3,17 +3,28 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-use crate::{
-    features::spline::Splines, frame::color_correlation_map::ColorCorrelationParams,
-    render::RenderPipelineInPlaceStage,
-};
+use std::sync::Arc;
+
+use crate::{features::spline::Splines, render::RenderPipelineInPlaceStage};
+
+#[cfg(test)]
+use crate::frame::color_correlation_map::ColorCorrelationParams;
 
 pub struct SplinesStage {
-    splines: Splines,
+    splines: Arc<Splines>,
 }
 
 impl SplinesStage {
-    // TODO(veluca): should this return a Result?
+    /// Create a new SplinesStage from a pre-initialized Arc<Splines>.
+    /// This is the efficient path used by the decoder - splines are initialized once
+    /// during LfGlobal parsing and shared across all frames via Arc.
+    pub fn new_initialized(splines: Arc<Splines>) -> Self {
+        SplinesStage { splines }
+    }
+
+    /// Create a new SplinesStage by initializing the splines draw cache.
+    /// This is primarily used for testing.
+    #[cfg(test)]
     pub fn new(
         mut splines: Splines,
         frame_size: (usize, usize),
@@ -28,7 +39,7 @@ impl SplinesStage {
                 high_precision,
             )
             .unwrap();
-        SplinesStage { splines }
+        SplinesStage { splines: Arc::new(splines) }
     }
 }
 

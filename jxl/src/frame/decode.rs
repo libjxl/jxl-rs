@@ -223,6 +223,21 @@ impl Frame {
         };
         debug!(?color_correlation_params);
 
+        // Pre-initialize splines draw cache now that we have color_correlation_params.
+        // This is done once here instead of per-frame in SplinesStage::new() for better performance.
+        let splines = if let Some(mut s) = splines {
+            let frame_size = self.header.size();
+            s.initialize_draw_cache(
+                frame_size.0 as u64,
+                frame_size.1 as u64,
+                &color_correlation_params.clone().unwrap_or_default(),
+                self.decoder_state.high_precision,
+            )?;
+            Some(Arc::new(s))
+        } else {
+            None
+        };
+
         let tree = if br.read(1)? == 1 {
             let size_limit = (1024
                 + self.header.width as usize

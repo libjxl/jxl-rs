@@ -588,8 +588,31 @@ pub fn decode_vardct_group_parallel(
     let mut reader = SymbolReader::new(&hf_global.passes[pass].histograms, br, None)?;
     let block_group_rect = frame_header.block_group_rect(group);
     debug!(?block_group_rect);
-    // Get all cached buffers at once to avoid borrow checker issues
-    let (scratch, coeffs, transform_buffer) = cache.get_all_buffers();
+
+    // Calculate num_nzeros sizes
+    let nzeros_sizes = [
+        (
+            block_group_rect.size.0 >> frame_header.hshift(0),
+            block_group_rect.size.1 >> frame_header.vshift(0),
+        ),
+        (
+            block_group_rect.size.0 >> frame_header.hshift(1),
+            block_group_rect.size.1 >> frame_header.vshift(1),
+        ),
+        (
+            block_group_rect.size.0 >> frame_header.hshift(2),
+            block_group_rect.size.1 >> frame_header.vshift(2),
+        ),
+    ];
+
+    // Get all VarDCT decode buffers from cache (reused across frames/groups).
+    // This allocates buffers only once per thread and reuses them for subsequent groups.
+    let buffers = cache.get_vardct_buffers(nzeros_sizes)?;
+    let scratch = buffers.scratch;
+    let coeffs = [buffers.coeffs_x, buffers.coeffs_y, buffers.coeffs_b];
+    let transform_buffer = buffers.transform_buffer;
+    let num_nzeros = buffers.num_nzeros;
+
     let color_correlation_params = lf_global.color_correlation_params.as_ref().unwrap();
     let cmap_rect = Rect {
         origin: (
@@ -607,25 +630,9 @@ pub fn decode_vardct_group_parallel(
     let ytob_map = hf_meta.ytob_map.get_rect(cmap_rect);
     let transform_map = hf_meta.transform_map.get_rect(block_group_rect);
     let raw_quant_map = hf_meta.raw_quant_map.get_rect(block_group_rect);
-    let mut num_nzeros: [Image<u32>; 3] = [
-        Image::new((
-            block_group_rect.size.0 >> frame_header.hshift(0),
-            block_group_rect.size.1 >> frame_header.vshift(0),
-        ))?,
-        Image::new((
-            block_group_rect.size.0 >> frame_header.hshift(1),
-            block_group_rect.size.1 >> frame_header.vshift(1),
-        ))?,
-        Image::new((
-            block_group_rect.size.0 >> frame_header.hshift(2),
-            block_group_rect.size.1 >> frame_header.vshift(2),
-        ))?,
-    ];
     let quant_lf_rect = quant_lf.get_rect(block_group_rect);
     let block_context_map = lf_global.block_context_map.as_ref().unwrap();
     let context_offset = histogram_index * block_context_map.num_ac_contexts();
-
-    // coeffs and transform_buffer already obtained from cache.get_all_buffers() above
 
     let shift_for_pass = if pass < frame_header.passes.shift.len() {
         frame_header.passes.shift[pass]
