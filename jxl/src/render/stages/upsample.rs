@@ -102,6 +102,20 @@ simd_function!(
         let r3 = input[3];
         let r4 = input[4];
 
+        // Pre-broadcast all kernel weights to SIMD vectors (Highway optimization)
+        // This avoids repeated splat operations in the inner loop
+        // Max kernels: 8x8 = 64, each with 25 weights
+        let mut kernel_vecs = [[D::F32Vec::splat(d, 0.0); 25]; 64];
+        for oy in 0..n {
+            for ox in 0..n {
+                let k = &flat_kernels[oy][ox];
+                let idx = oy * 8 + ox;
+                for i in 0..25 {
+                    kernel_vecs[idx][i] = D::F32Vec::splat(d, k[i]);
+                }
+            }
+        }
+
         // Temp buffers for two-pass min/max (stack allocated, fits in L1)
         // col_min/col_max: column-wise min/max (needs len + 4 for overlap)
         // mins/maxs: final min/max values
@@ -197,39 +211,40 @@ simd_function!(
                     let mut results = [D::F32Vec::splat(d, 0.0); 8]; // Max N=8
 
                     for ox in 0..n {
-                        let k = &flat_kernels[oy][ox];
+                        let kv = &kernel_vecs[oy * 8 + ox];
 
                         // Compute 5x5 kernel using FMA with 3-way ILP
+                        // Using pre-broadcast kernel vectors (Highway optimization)
                         // Row 0
-                        let mut acc0 = D::F32Vec::load(d, &r0[x..]) * D::F32Vec::splat(d, k[0]);
-                        let mut acc1 = D::F32Vec::load(d, &r0[x+1..]) * D::F32Vec::splat(d, k[1]);
-                        let mut acc2 = D::F32Vec::load(d, &r0[x+2..]) * D::F32Vec::splat(d, k[2]);
-                        acc0 = D::F32Vec::load(d, &r0[x+3..]).mul_add(D::F32Vec::splat(d, k[3]), acc0);
-                        acc1 = D::F32Vec::load(d, &r0[x+4..]).mul_add(D::F32Vec::splat(d, k[4]), acc1);
+                        let mut acc0 = D::F32Vec::load(d, &r0[x..]) * kv[0];
+                        let mut acc1 = D::F32Vec::load(d, &r0[x+1..]) * kv[1];
+                        let mut acc2 = D::F32Vec::load(d, &r0[x+2..]) * kv[2];
+                        acc0 = D::F32Vec::load(d, &r0[x+3..]).mul_add(kv[3], acc0);
+                        acc1 = D::F32Vec::load(d, &r0[x+4..]).mul_add(kv[4], acc1);
                         // Row 1
-                        acc2 = D::F32Vec::load(d, &r1[x..]).mul_add(D::F32Vec::splat(d, k[5]), acc2);
-                        acc0 = D::F32Vec::load(d, &r1[x+1..]).mul_add(D::F32Vec::splat(d, k[6]), acc0);
-                        acc1 = D::F32Vec::load(d, &r1[x+2..]).mul_add(D::F32Vec::splat(d, k[7]), acc1);
-                        acc2 = D::F32Vec::load(d, &r1[x+3..]).mul_add(D::F32Vec::splat(d, k[8]), acc2);
-                        acc0 = D::F32Vec::load(d, &r1[x+4..]).mul_add(D::F32Vec::splat(d, k[9]), acc0);
+                        acc2 = D::F32Vec::load(d, &r1[x..]).mul_add(kv[5], acc2);
+                        acc0 = D::F32Vec::load(d, &r1[x+1..]).mul_add(kv[6], acc0);
+                        acc1 = D::F32Vec::load(d, &r1[x+2..]).mul_add(kv[7], acc1);
+                        acc2 = D::F32Vec::load(d, &r1[x+3..]).mul_add(kv[8], acc2);
+                        acc0 = D::F32Vec::load(d, &r1[x+4..]).mul_add(kv[9], acc0);
                         // Row 2
-                        acc1 = D::F32Vec::load(d, &r2[x..]).mul_add(D::F32Vec::splat(d, k[10]), acc1);
-                        acc2 = D::F32Vec::load(d, &r2[x+1..]).mul_add(D::F32Vec::splat(d, k[11]), acc2);
-                        acc0 = D::F32Vec::load(d, &r2[x+2..]).mul_add(D::F32Vec::splat(d, k[12]), acc0);
-                        acc1 = D::F32Vec::load(d, &r2[x+3..]).mul_add(D::F32Vec::splat(d, k[13]), acc1);
-                        acc2 = D::F32Vec::load(d, &r2[x+4..]).mul_add(D::F32Vec::splat(d, k[14]), acc2);
+                        acc1 = D::F32Vec::load(d, &r2[x..]).mul_add(kv[10], acc1);
+                        acc2 = D::F32Vec::load(d, &r2[x+1..]).mul_add(kv[11], acc2);
+                        acc0 = D::F32Vec::load(d, &r2[x+2..]).mul_add(kv[12], acc0);
+                        acc1 = D::F32Vec::load(d, &r2[x+3..]).mul_add(kv[13], acc1);
+                        acc2 = D::F32Vec::load(d, &r2[x+4..]).mul_add(kv[14], acc2);
                         // Row 3
-                        acc0 = D::F32Vec::load(d, &r3[x..]).mul_add(D::F32Vec::splat(d, k[15]), acc0);
-                        acc1 = D::F32Vec::load(d, &r3[x+1..]).mul_add(D::F32Vec::splat(d, k[16]), acc1);
-                        acc2 = D::F32Vec::load(d, &r3[x+2..]).mul_add(D::F32Vec::splat(d, k[17]), acc2);
-                        acc0 = D::F32Vec::load(d, &r3[x+3..]).mul_add(D::F32Vec::splat(d, k[18]), acc0);
-                        acc1 = D::F32Vec::load(d, &r3[x+4..]).mul_add(D::F32Vec::splat(d, k[19]), acc1);
+                        acc0 = D::F32Vec::load(d, &r3[x..]).mul_add(kv[15], acc0);
+                        acc1 = D::F32Vec::load(d, &r3[x+1..]).mul_add(kv[16], acc1);
+                        acc2 = D::F32Vec::load(d, &r3[x+2..]).mul_add(kv[17], acc2);
+                        acc0 = D::F32Vec::load(d, &r3[x+3..]).mul_add(kv[18], acc0);
+                        acc1 = D::F32Vec::load(d, &r3[x+4..]).mul_add(kv[19], acc1);
                         // Row 4
-                        acc2 = D::F32Vec::load(d, &r4[x..]).mul_add(D::F32Vec::splat(d, k[20]), acc2);
-                        acc0 = D::F32Vec::load(d, &r4[x+1..]).mul_add(D::F32Vec::splat(d, k[21]), acc0);
-                        acc1 = D::F32Vec::load(d, &r4[x+2..]).mul_add(D::F32Vec::splat(d, k[22]), acc1);
-                        acc2 = D::F32Vec::load(d, &r4[x+3..]).mul_add(D::F32Vec::splat(d, k[23]), acc2);
-                        acc0 = D::F32Vec::load(d, &r4[x+4..]).mul_add(D::F32Vec::splat(d, k[24]), acc0);
+                        acc2 = D::F32Vec::load(d, &r4[x..]).mul_add(kv[20], acc2);
+                        acc0 = D::F32Vec::load(d, &r4[x+1..]).mul_add(kv[21], acc0);
+                        acc1 = D::F32Vec::load(d, &r4[x+2..]).mul_add(kv[22], acc1);
+                        acc2 = D::F32Vec::load(d, &r4[x+3..]).mul_add(kv[23], acc2);
+                        acc0 = D::F32Vec::load(d, &r4[x+4..]).mul_add(kv[24], acc0);
 
                         // Combine accumulators and clamp using precomputed min/max
                         results[ox] = (acc0 + acc1 + acc2).max(minval).min(maxval);
