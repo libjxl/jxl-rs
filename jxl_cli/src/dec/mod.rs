@@ -9,7 +9,7 @@ use color_eyre::eyre::{Result, eyre};
 use jxl::{
     api::{
         JxlAnimation, JxlBitDepth, JxlBitstreamInput, JxlColorProfile, JxlColorType, JxlDecoder,
-        JxlDecoderOptions, JxlOutputBuffer, ProcessingResult, states::WithImageInfo,
+        JxlDecoderOptions, JxlExtraChannel, JxlOutputBuffer, ProcessingResult, states::WithImageInfo,
     },
     image::{Image, ImageDataType, Rect},
 };
@@ -28,6 +28,7 @@ pub struct DecodeOutput<T: ImageDataType> {
     pub output_profile: JxlColorProfile,
     pub embedded_profile: JxlColorProfile,
     pub jxl_animation: Option<JxlAnimation>,
+    pub extra_channels: Vec<JxlExtraChannel>,
 }
 
 pub fn decode_header<In: JxlBitstreamInput>(
@@ -63,6 +64,7 @@ pub fn decode_frames<In: JxlBitstreamInput>(
         output_profile,
         embedded_profile,
         jxl_animation: info.animation.clone(),
+        extra_channels: info.extra_channels.clone(),
     };
 
     let extra_channels = info.extra_channels.len();

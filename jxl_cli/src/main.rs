@@ -25,6 +25,8 @@ fn save_metadata(
     image_data: &dec::DecodeOutput<f32>,
     metadata_filename: Option<&PathBuf>,
 ) -> Result<()> {
+    use jxl::headers::extra_channels::ExtraChannel;
+
     metadata_filename.map_or(Ok(()), |path| {
         let frames: Vec<serde_json::Value> = image_data
             .frames
@@ -36,7 +38,34 @@ fn save_metadata(
                 })
             })
             .collect();
-        let metadata = serde_json::json!({ "frames": frames });
+
+        // Include extra channel information, particularly spot color names
+        let extra_channels: Vec<serde_json::Value> = image_data
+            .extra_channels
+            .iter()
+            .map(|ec| {
+                let mut obj = serde_json::json!({
+                    "type": format!("{:?}", ec.ec_type),
+                    "name": ec.name,
+                });
+                if ec.ec_type == ExtraChannel::SpotColor {
+                    if let Some(spot) = &ec.spot_color {
+                        obj["spot_color"] = serde_json::json!({
+                            "r": spot[0],
+                            "g": spot[1],
+                            "b": spot[2],
+                            "solidity": spot[3],
+                        });
+                    }
+                }
+                obj
+            })
+            .collect();
+
+        let metadata = serde_json::json!({
+            "frames": frames,
+            "extra_channels": extra_channels,
+        });
         let json_str = serde_json::to_string_pretty(&metadata)
             .wrap_err("Failed to serialize metadata")?;
         std::fs::write(path, json_str)
