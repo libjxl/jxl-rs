@@ -369,7 +369,7 @@ impl Frame {
         group: usize,
         pass: usize,
         mut br: BitReader,
-        _cache: &mut super::group_cache::GroupDecodeCache,
+        cache: &mut super::group_cache::GroupDecodeCache,
         pixels: &mut [Image<f32>; 3],
     ) -> Result<()> {
         use super::group::decode_vardct_group_parallel;
@@ -379,8 +379,7 @@ impl Frame {
         let hf_meta = self.hf_meta.as_ref().unwrap();
 
         // Use the parallel-safe variant that takes immutable references.
-        // This variant always uses thread-local coefficient buffers, making it safe
-        // to call from multiple threads with shared references.
+        // This variant uses cached buffers to eliminate allocations.
         decode_vardct_group_parallel(
             group,
             pass,
@@ -398,6 +397,7 @@ impl Frame {
                 .quant_biases,
             pixels,
             &mut br,
+            cache,
         )?;
 
         Ok(())

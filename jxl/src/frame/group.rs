@@ -22,6 +22,9 @@ use crate::{
 };
 use jxl_simd::{F32SimdVec, I32SimdVec, SimdDescriptor, SimdMask, simd_function};
 
+#[cfg(feature = "parallel")]
+use super::group_cache::GroupDecodeCache;
+
 const LF_BUFFER_SIZE: usize = 32 * 32;
 
 #[inline]
@@ -559,6 +562,7 @@ pub fn decode_vardct_group(
 /// Parallel-safe variant of decode_vardct_group that takes an immutable reference to HfGlobalState.
 /// This function always uses thread-local coefficient buffers, making it safe to call from multiple
 /// threads with a shared reference to hf_global.
+#[cfg(feature = "parallel")]
 #[allow(clippy::too_many_arguments)]
 #[allow(clippy::type_complexity)]
 pub fn decode_vardct_group_parallel(
@@ -573,6 +577,7 @@ pub fn decode_vardct_group_parallel(
     quant_biases: &[f32; 4],
     pixels: &mut [Image<f32>; 3],
     br: &mut BitReader,
+    cache: &mut GroupDecodeCache,
 ) -> Result<(), Error> {
     let x_dm_multiplier = (1.0 / (1.25)).powf(frame_header.x_qm_scale as f32 - 2.0);
     let b_dm_multiplier = (1.0 / (1.25)).powf(frame_header.b_qm_scale as f32 - 2.0);
@@ -583,7 +588,8 @@ pub fn decode_vardct_group_parallel(
     let mut reader = SymbolReader::new(&hf_global.passes[pass].histograms, br, None)?;
     let block_group_rect = frame_header.block_group_rect(group);
     debug!(?block_group_rect);
-    let mut scratch = vec![0.0; LF_BUFFER_SIZE];
+    // Get all cached buffers at once to avoid borrow checker issues
+    let (scratch, coeffs, transform_buffer) = cache.get_all_buffers();
     let color_correlation_params = lf_global.color_correlation_params.as_ref().unwrap();
     let cmap_rect = Rect {
         origin: (
@@ -619,11 +625,7 @@ pub fn decode_vardct_group_parallel(
     let block_context_map = lf_global.block_context_map.as_ref().unwrap();
     let context_offset = histogram_index * block_context_map.num_ac_contexts();
 
-    // Parallel-safe: always use local coefficient buffers
-    let mut coeffs_storage = vec![0; 3 * GROUP_DIM * GROUP_DIM];
-    let (coeffs_x, coeffs_y_b) = coeffs_storage.split_at_mut(GROUP_DIM * GROUP_DIM);
-    let (coeffs_y, coeffs_b) = coeffs_y_b.split_at_mut(GROUP_DIM * GROUP_DIM);
-    let coeffs = [coeffs_x, coeffs_y, coeffs_b];
+    // coeffs and transform_buffer already obtained from cache.get_all_buffers() above
 
     let shift_for_pass = if pass < frame_header.passes.shift.len() {
         frame_header.passes.shift[pass]
@@ -631,14 +633,6 @@ pub fn decode_vardct_group_parallel(
         0
     };
     let mut coeffs_offset = 0;
-    // Pre-sized transform buffers - no need for thread_local since we need ownership
-    // But we can resize to actual needs instead of MAX_COEFF_AREA
-    let actual_size = MAX_COEFF_AREA; // Could be optimized based on actual transform size
-    let mut transform_buffer: [Vec<f32>; 3] = [
-        vec![0.0; actual_size],
-        vec![0.0; actual_size],
-        vec![0.0; actual_size],
-    ];
 
     let hshift = [
         frame_header.hshift(0),
@@ -795,9 +789,9 @@ pub fn decode_vardct_group_parallel(
                 x_dm_multiplier,
                 b_dm_multiplier,
                 pixels,
-                &mut scratch,
+                scratch,
                 inv_global_scale,
-                &mut transform_buffer,
+                transform_buffer,
                 hshift,
                 vshift,
                 by,
