@@ -89,11 +89,12 @@ impl GroupDecodeCache {
             ]);
         }
 
-        // Zero out the used portion of each image
+        // Zero out the entire image to avoid stale data from previous frames
         let imgs = self.num_nzeros.as_mut().unwrap();
-        for (i, &(w, h)) in sizes.iter().enumerate() {
+        for img in imgs.iter_mut() {
+            let (w, h) = img.size();
             for y in 0..h {
-                let row = imgs[i].row_mut(y);
+                let row = img.row_mut(y);
                 row[..w].fill(0);
             }
         }
@@ -166,11 +167,12 @@ impl GroupDecodeCache {
             ]);
         }
 
-        // Zero out the used portion of each image
+        // Zero out the entire image to avoid stale data from previous frames
         let imgs = self.num_nzeros.as_mut().unwrap();
-        for (i, &(w, h)) in sizes.iter().enumerate() {
+        for img in imgs.iter_mut() {
+            let (w, h) = img.size();
             for y in 0..h {
-                let row = imgs[i].row_mut(y);
+                let row = img.row_mut(y);
                 row[..w].fill(0);
             }
         }
@@ -319,11 +321,12 @@ impl GroupDecodeCache {
             ]);
         }
 
-        // Zero out the used portion of num_nzeros
+        // Zero out the entire num_nzeros images to avoid stale data from previous frames
         let nzeros = self.num_nzeros.as_mut().unwrap();
-        for (i, &(w, h)) in nzeros_sizes.iter().enumerate() {
+        for img in nzeros.iter_mut() {
+            let (w, h) = img.size();
             for y in 0..h {
-                let row = nzeros[i].row_mut(y);
+                let row = img.row_mut(y);
                 row[..w].fill(0);
             }
         }
