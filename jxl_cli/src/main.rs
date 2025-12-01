@@ -66,8 +66,8 @@ fn save_metadata(
             "frames": frames,
             "extra_channels": extra_channels,
         });
-        let json_str = serde_json::to_string_pretty(&metadata)
-            .wrap_err("Failed to serialize metadata")?;
+        let json_str =
+            serde_json::to_string_pretty(&metadata).wrap_err("Failed to serialize metadata")?;
         std::fs::write(path, json_str)
             .wrap_err_with(|| format!("Failed to write metadata to {:?}", path))
     })

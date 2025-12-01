@@ -180,7 +180,8 @@ impl F32SimdVec for F32VecAvx512 {
             // Rearrange 128-bit lanes using permute to get final order
             // We need: [0-3 from lo][0-3 from hi][4-7 from lo][4-7 from hi]...
             let idx_lo = _mm512_setr_epi32(0, 1, 16, 17, 2, 3, 18, 19, 4, 5, 20, 21, 6, 7, 22, 23);
-            let idx_hi = _mm512_setr_epi32(8, 9, 24, 25, 10, 11, 26, 27, 12, 13, 28, 29, 14, 15, 30, 31);
+            let idx_hi =
+                _mm512_setr_epi32(8, 9, 24, 25, 10, 11, 26, 27, 12, 13, 28, 29, 14, 15, 30, 31);
 
             let out0 = _mm512_permutex2var_ps(lo, idx_lo, hi); // first 16 interleaved
             let out1 = _mm512_permutex2var_ps(lo, idx_hi, hi); // second 16 interleaved
@@ -222,7 +223,8 @@ impl F32SimdVec for F32VecAvx512 {
 
             // Stage 3: Rearrange 128-bit lanes using permute indices
             let idx0 = _mm512_setr_epi32(0, 1, 2, 3, 16, 17, 18, 19, 4, 5, 6, 7, 20, 21, 22, 23);
-            let idx1 = _mm512_setr_epi32(8, 9, 10, 11, 24, 25, 26, 27, 12, 13, 14, 15, 28, 29, 30, 31);
+            let idx1 =
+                _mm512_setr_epi32(8, 9, 10, 11, 24, 25, 26, 27, 12, 13, 14, 15, 28, 29, 30, 31);
 
             let out0 = _mm512_permutex2var_ps(t0, idx0, t1); // [a0..d0, a1..d1, a4..d4, a5..d5]
             let out1 = _mm512_permutex2var_ps(t2, idx0, t3); // [a2..d2, a3..d3, a6..d6, a7..d7]
@@ -269,18 +271,43 @@ impl F32SimdVec for F32VecAvx512 {
             let t7 = _mm512_unpackhi_ps(g.0, h.0);
 
             // Stage 2: 64-bit unpack
-            let s0 = _mm512_castpd_ps(_mm512_unpacklo_pd(_mm512_castps_pd(t0), _mm512_castps_pd(t2)));
-            let s1 = _mm512_castpd_ps(_mm512_unpackhi_pd(_mm512_castps_pd(t0), _mm512_castps_pd(t2)));
-            let s2 = _mm512_castpd_ps(_mm512_unpacklo_pd(_mm512_castps_pd(t1), _mm512_castps_pd(t3)));
-            let s3 = _mm512_castpd_ps(_mm512_unpackhi_pd(_mm512_castps_pd(t1), _mm512_castps_pd(t3)));
-            let s4 = _mm512_castpd_ps(_mm512_unpacklo_pd(_mm512_castps_pd(t4), _mm512_castps_pd(t6)));
-            let s5 = _mm512_castpd_ps(_mm512_unpackhi_pd(_mm512_castps_pd(t4), _mm512_castps_pd(t6)));
-            let s6 = _mm512_castpd_ps(_mm512_unpacklo_pd(_mm512_castps_pd(t5), _mm512_castps_pd(t7)));
-            let s7 = _mm512_castpd_ps(_mm512_unpackhi_pd(_mm512_castps_pd(t5), _mm512_castps_pd(t7)));
+            let s0 = _mm512_castpd_ps(_mm512_unpacklo_pd(
+                _mm512_castps_pd(t0),
+                _mm512_castps_pd(t2),
+            ));
+            let s1 = _mm512_castpd_ps(_mm512_unpackhi_pd(
+                _mm512_castps_pd(t0),
+                _mm512_castps_pd(t2),
+            ));
+            let s2 = _mm512_castpd_ps(_mm512_unpacklo_pd(
+                _mm512_castps_pd(t1),
+                _mm512_castps_pd(t3),
+            ));
+            let s3 = _mm512_castpd_ps(_mm512_unpackhi_pd(
+                _mm512_castps_pd(t1),
+                _mm512_castps_pd(t3),
+            ));
+            let s4 = _mm512_castpd_ps(_mm512_unpacklo_pd(
+                _mm512_castps_pd(t4),
+                _mm512_castps_pd(t6),
+            ));
+            let s5 = _mm512_castpd_ps(_mm512_unpackhi_pd(
+                _mm512_castps_pd(t4),
+                _mm512_castps_pd(t6),
+            ));
+            let s6 = _mm512_castpd_ps(_mm512_unpacklo_pd(
+                _mm512_castps_pd(t5),
+                _mm512_castps_pd(t7),
+            ));
+            let s7 = _mm512_castpd_ps(_mm512_unpackhi_pd(
+                _mm512_castps_pd(t5),
+                _mm512_castps_pd(t7),
+            ));
 
             // Stage 3: 128-bit permutes to combine halves
             let idx_lo = _mm512_setr_epi32(0, 1, 2, 3, 16, 17, 18, 19, 4, 5, 6, 7, 20, 21, 22, 23);
-            let idx_hi = _mm512_setr_epi32(8, 9, 10, 11, 24, 25, 26, 27, 12, 13, 14, 15, 28, 29, 30, 31);
+            let idx_hi =
+                _mm512_setr_epi32(8, 9, 10, 11, 24, 25, 26, 27, 12, 13, 14, 15, 28, 29, 30, 31);
 
             let c0 = _mm512_permutex2var_ps(s0, idx_lo, s4);
             let c1 = _mm512_permutex2var_ps(s1, idx_lo, s5);

@@ -201,14 +201,14 @@ impl F32SimdVec for F32VecNeon {
 
             // Store interleaved pairs using vst2q_f32 for optimal performance
             let ptr = base.as_mut_ptr().add(offset);
-            vst1q_f32(ptr, t0);           // [a0,b0,c0,d0]
-            vst1q_f32(ptr.add(4), t4);    // [e0,f0,g0,h0]
-            vst1q_f32(ptr.add(8), t1);    // [a1,b1,c1,d1]
-            vst1q_f32(ptr.add(12), t5);   // [e1,f1,g1,h1]
-            vst1q_f32(ptr.add(16), t2);   // [a2,b2,c2,d2]
-            vst1q_f32(ptr.add(20), t6);   // [e2,f2,g2,h2]
-            vst1q_f32(ptr.add(24), t3);   // [a3,b3,c3,d3]
-            vst1q_f32(ptr.add(28), t7);   // [e3,f3,g3,h3]
+            vst1q_f32(ptr, t0); // [a0,b0,c0,d0]
+            vst1q_f32(ptr.add(4), t4); // [e0,f0,g0,h0]
+            vst1q_f32(ptr.add(8), t1); // [a1,b1,c1,d1]
+            vst1q_f32(ptr.add(12), t5); // [e1,f1,g1,h1]
+            vst1q_f32(ptr.add(16), t2); // [a2,b2,c2,d2]
+            vst1q_f32(ptr.add(20), t6); // [e2,f2,g2,h2]
+            vst1q_f32(ptr.add(24), t3); // [a3,b3,c3,d3]
+            vst1q_f32(ptr.add(28), t7); // [e3,f3,g3,h3]
         }
     }
 

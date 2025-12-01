@@ -9,7 +9,8 @@ use color_eyre::eyre::{Result, eyre};
 use jxl::{
     api::{
         JxlAnimation, JxlBitDepth, JxlBitstreamInput, JxlColorProfile, JxlColorType, JxlDecoder,
-        JxlDecoderOptions, JxlExtraChannel, JxlOutputBuffer, ProcessingResult, states::WithImageInfo,
+        JxlDecoderOptions, JxlExtraChannel, JxlOutputBuffer, ProcessingResult,
+        states::WithImageInfo,
     },
     image::{Image, ImageDataType, Rect},
 };

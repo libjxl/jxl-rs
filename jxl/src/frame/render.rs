@@ -499,8 +499,7 @@ impl Frame {
         } else if decoder_state.file_header.image_metadata.xyb_encoded {
             // Full XYB conversion for both grayscale and color output
             // (grayscale XYB still needs full color conversion for correct luminance)
-            pipeline =
-                pipeline.add_inplace_stage(XybStage::new(0, output_color_info.clone()))?;
+            pipeline = pipeline.add_inplace_stage(XybStage::new(0, output_color_info.clone()))?;
             if decoder_state.xyb_output_linear {
                 linear = true;
             } else {

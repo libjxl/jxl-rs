@@ -203,9 +203,9 @@ impl F32SimdVec for F32VecSse42 {
             let t7 = _mm_unpackhi_ps(r2, r3); // [e3,f3,g3,h3]
 
             // Store interleaved: row 0 from both groups, then row 1, etc.
-            _mm_storeu_ps(base.as_mut_ptr().add(offset), t0);      // [a0,b0,c0,d0]
-            _mm_storeu_ps(base.as_mut_ptr().add(offset + 4), t4);  // [e0,f0,g0,h0]
-            _mm_storeu_ps(base.as_mut_ptr().add(offset + 8), t1);  // [a1,b1,c1,d1]
+            _mm_storeu_ps(base.as_mut_ptr().add(offset), t0); // [a0,b0,c0,d0]
+            _mm_storeu_ps(base.as_mut_ptr().add(offset + 4), t4); // [e0,f0,g0,h0]
+            _mm_storeu_ps(base.as_mut_ptr().add(offset + 8), t1); // [a1,b1,c1,d1]
             _mm_storeu_ps(base.as_mut_ptr().add(offset + 12), t5); // [e1,f1,g1,h1]
             _mm_storeu_ps(base.as_mut_ptr().add(offset + 16), t2); // [a2,b2,c2,d2]
             _mm_storeu_ps(base.as_mut_ptr().add(offset + 20), t6); // [e2,f2,g2,h2]

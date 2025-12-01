@@ -493,7 +493,9 @@ impl PrecomputedCosines {
     #[inline]
     fn new(t: f32) -> Self {
         let tandhalf = t + 0.5;
-        PrecomputedCosines(core::array::from_fn(|i| fast_cos(DCT_MULTIPLIERS[i] * tandhalf)))
+        PrecomputedCosines(core::array::from_fn(|i| {
+            fast_cos(DCT_MULTIPLIERS[i] * tandhalf)
+        }))
     }
 }
 

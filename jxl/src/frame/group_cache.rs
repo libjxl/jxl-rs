@@ -3,8 +3,8 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-use crate::image::Image;
 use crate::GROUP_DIM;
+use crate::image::Image;
 use jxl_transforms::transform_map::MAX_COEFF_AREA;
 
 /// Size of the LF scratch buffer (32x32 block).
@@ -78,9 +78,18 @@ impl GroupDecodeCache {
         if need_alloc {
             // Allocate with maximum size to handle future requests
             let max_sizes = [
-                (sizes[0].0.max(MAX_NUM_NZEROS_DIM), sizes[0].1.max(MAX_NUM_NZEROS_DIM)),
-                (sizes[1].0.max(MAX_NUM_NZEROS_DIM), sizes[1].1.max(MAX_NUM_NZEROS_DIM)),
-                (sizes[2].0.max(MAX_NUM_NZEROS_DIM), sizes[2].1.max(MAX_NUM_NZEROS_DIM)),
+                (
+                    sizes[0].0.max(MAX_NUM_NZEROS_DIM),
+                    sizes[0].1.max(MAX_NUM_NZEROS_DIM),
+                ),
+                (
+                    sizes[1].0.max(MAX_NUM_NZEROS_DIM),
+                    sizes[1].1.max(MAX_NUM_NZEROS_DIM),
+                ),
+                (
+                    sizes[2].0.max(MAX_NUM_NZEROS_DIM),
+                    sizes[2].1.max(MAX_NUM_NZEROS_DIM),
+                ),
             ];
             self.num_nzeros = Some([
                 Image::new(max_sizes[0])?,
@@ -116,11 +125,7 @@ impl GroupDecodeCache {
         };
 
         if need_alloc {
-            self.pixel_buffers = Some([
-                Image::new(size)?,
-                Image::new(size)?,
-                Image::new(size)?,
-            ]);
+            self.pixel_buffers = Some([Image::new(size)?, Image::new(size)?, Image::new(size)?]);
             self.pixel_buffer_size = size;
         }
 
@@ -156,9 +161,18 @@ impl GroupDecodeCache {
         if need_alloc {
             // Allocate with maximum size to handle future requests
             let max_sizes = [
-                (sizes[0].0.max(MAX_NUM_NZEROS_DIM), sizes[0].1.max(MAX_NUM_NZEROS_DIM)),
-                (sizes[1].0.max(MAX_NUM_NZEROS_DIM), sizes[1].1.max(MAX_NUM_NZEROS_DIM)),
-                (sizes[2].0.max(MAX_NUM_NZEROS_DIM), sizes[2].1.max(MAX_NUM_NZEROS_DIM)),
+                (
+                    sizes[0].0.max(MAX_NUM_NZEROS_DIM),
+                    sizes[0].1.max(MAX_NUM_NZEROS_DIM),
+                ),
+                (
+                    sizes[1].0.max(MAX_NUM_NZEROS_DIM),
+                    sizes[1].1.max(MAX_NUM_NZEROS_DIM),
+                ),
+                (
+                    sizes[2].0.max(MAX_NUM_NZEROS_DIM),
+                    sizes[2].1.max(MAX_NUM_NZEROS_DIM),
+                ),
             ];
             self.num_nzeros = Some([
                 Image::new(max_sizes[0])?,
@@ -183,7 +197,9 @@ impl GroupDecodeCache {
     /// Get a reference to the num_nzeros images (must call init_num_nzeros first).
     #[inline]
     pub fn num_nzeros(&mut self) -> &mut [Image<u32>; 3] {
-        self.num_nzeros.as_mut().expect("init_num_nzeros must be called first")
+        self.num_nzeros
+            .as_mut()
+            .expect("init_num_nzeros must be called first")
     }
 
     /// Get a mutable reference to the scratch buffer, ensuring it has the required capacity.

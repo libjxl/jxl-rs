@@ -39,7 +39,9 @@ impl SplinesStage {
                 high_precision,
             )
             .unwrap();
-        SplinesStage { splines: Arc::new(splines) }
+        SplinesStage {
+            splines: Arc::new(splines),
+        }
     }
 }
 
