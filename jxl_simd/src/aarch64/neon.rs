@@ -143,40 +143,23 @@ impl F32SimdVec for F32VecNeon {
 
     #[inline(always)]
     fn store_interleaved_2(a: Self, b: Self, base: &mut [f32], offset: usize) {
-        // NEON: LEN=4, interleave 2 vectors
+        // NEON: LEN=4, interleave 2 vectors using vst2q_f32
         // a=[a0,a1,a2,a3], b=[b0,b1,b2,b3] -> output=[a0,b0,a1,b1,a2,b2,a3,b3]
-        // Use temp buffer for simplicity (can optimize later)
-        let mut temp_a = [0.0f32; 4];
-        let mut temp_b = [0.0f32; 4];
         unsafe {
-            vst1q_f32(temp_a.as_mut_ptr(), a.0);
-            vst1q_f32(temp_b.as_mut_ptr(), b.0);
-        }
-        for i in 0..4 {
-            base[offset + i * 2] = temp_a[i];
-            base[offset + i * 2 + 1] = temp_b[i];
+            vst2q_f32(base.as_mut_ptr().add(offset), float32x4x2_t(a.0, b.0));
         }
     }
 
     #[inline(always)]
     fn store_interleaved_4(a: Self, b: Self, c: Self, d: Self, base: &mut [f32], offset: usize) {
-        // NEON: LEN=4, interleave 4 vectors
-        // Use temp buffer for simplicity (can optimize later)
-        let mut temp_a = [0.0f32; 4];
-        let mut temp_b = [0.0f32; 4];
-        let mut temp_c = [0.0f32; 4];
-        let mut temp_d = [0.0f32; 4];
+        // NEON: LEN=4, interleave 4 vectors using vst4q_f32
+        // a=[a0,a1,a2,a3], b=[b0,b1,b2,b3], c=[c0,c1,c2,c3], d=[d0,d1,d2,d3]
+        // output=[a0,b0,c0,d0, a1,b1,c1,d1, a2,b2,c2,d2, a3,b3,c3,d3]
         unsafe {
-            vst1q_f32(temp_a.as_mut_ptr(), a.0);
-            vst1q_f32(temp_b.as_mut_ptr(), b.0);
-            vst1q_f32(temp_c.as_mut_ptr(), c.0);
-            vst1q_f32(temp_d.as_mut_ptr(), d.0);
-        }
-        for i in 0..4 {
-            base[offset + i * 4] = temp_a[i];
-            base[offset + i * 4 + 1] = temp_b[i];
-            base[offset + i * 4 + 2] = temp_c[i];
-            base[offset + i * 4 + 3] = temp_d[i];
+            vst4q_f32(
+                base.as_mut_ptr().add(offset),
+                float32x4x4_t(a.0, b.0, c.0, d.0),
+            );
         }
     }
 
@@ -193,35 +176,39 @@ impl F32SimdVec for F32VecNeon {
         base: &mut [f32],
         offset: usize,
     ) {
-        // NEON: LEN=4, interleave 8 vectors
-        // Use temp buffer for simplicity (can optimize later)
-        let mut temp_a = [0.0f32; 4];
-        let mut temp_b = [0.0f32; 4];
-        let mut temp_c = [0.0f32; 4];
-        let mut temp_d = [0.0f32; 4];
-        let mut temp_e = [0.0f32; 4];
-        let mut temp_f = [0.0f32; 4];
-        let mut temp_g = [0.0f32; 4];
-        let mut temp_h = [0.0f32; 4];
+        // NEON: LEN=4, interleave 8 vectors using two 4x4 transposes + vst2q_f32
+        // output=[a0,b0,c0,d0,e0,f0,g0,h0, a1,b1,c1,d1,e1,f1,g1,h1, ...]
         unsafe {
-            vst1q_f32(temp_a.as_mut_ptr(), a.0);
-            vst1q_f32(temp_b.as_mut_ptr(), b.0);
-            vst1q_f32(temp_c.as_mut_ptr(), c.0);
-            vst1q_f32(temp_d.as_mut_ptr(), d.0);
-            vst1q_f32(temp_e.as_mut_ptr(), e.0);
-            vst1q_f32(temp_f.as_mut_ptr(), f.0);
-            vst1q_f32(temp_g.as_mut_ptr(), g.0);
-            vst1q_f32(temp_h.as_mut_ptr(), h.0);
-        }
-        for i in 0..4 {
-            base[offset + i * 8] = temp_a[i];
-            base[offset + i * 8 + 1] = temp_b[i];
-            base[offset + i * 8 + 2] = temp_c[i];
-            base[offset + i * 8 + 3] = temp_d[i];
-            base[offset + i * 8 + 4] = temp_e[i];
-            base[offset + i * 8 + 5] = temp_f[i];
-            base[offset + i * 8 + 6] = temp_g[i];
-            base[offset + i * 8 + 7] = temp_h[i];
+            // Transpose first group (a,b,c,d) using NEON transpose intrinsics
+            let tr0 = vreinterpretq_f64_f32(vtrn1q_f32(a.0, b.0));
+            let tr1 = vreinterpretq_f64_f32(vtrn2q_f32(a.0, b.0));
+            let tr2 = vreinterpretq_f64_f32(vtrn1q_f32(c.0, d.0));
+            let tr3 = vreinterpretq_f64_f32(vtrn2q_f32(c.0, d.0));
+            let t0 = vreinterpretq_f32_f64(vzip1q_f64(tr0, tr2)); // [a0,b0,c0,d0]
+            let t1 = vreinterpretq_f32_f64(vzip1q_f64(tr1, tr3)); // [a1,b1,c1,d1]
+            let t2 = vreinterpretq_f32_f64(vzip2q_f64(tr0, tr2)); // [a2,b2,c2,d2]
+            let t3 = vreinterpretq_f32_f64(vzip2q_f64(tr1, tr3)); // [a3,b3,c3,d3]
+
+            // Transpose second group (e,f,g,h)
+            let tr4 = vreinterpretq_f64_f32(vtrn1q_f32(e.0, f.0));
+            let tr5 = vreinterpretq_f64_f32(vtrn2q_f32(e.0, f.0));
+            let tr6 = vreinterpretq_f64_f32(vtrn1q_f32(g.0, h.0));
+            let tr7 = vreinterpretq_f64_f32(vtrn2q_f32(g.0, h.0));
+            let t4 = vreinterpretq_f32_f64(vzip1q_f64(tr4, tr6)); // [e0,f0,g0,h0]
+            let t5 = vreinterpretq_f32_f64(vzip1q_f64(tr5, tr7)); // [e1,f1,g1,h1]
+            let t6 = vreinterpretq_f32_f64(vzip2q_f64(tr4, tr6)); // [e2,f2,g2,h2]
+            let t7 = vreinterpretq_f32_f64(vzip2q_f64(tr5, tr7)); // [e3,f3,g3,h3]
+
+            // Store interleaved pairs using vst2q_f32 for optimal performance
+            let ptr = base.as_mut_ptr().add(offset);
+            vst1q_f32(ptr, t0);           // [a0,b0,c0,d0]
+            vst1q_f32(ptr.add(4), t4);    // [e0,f0,g0,h0]
+            vst1q_f32(ptr.add(8), t1);    // [a1,b1,c1,d1]
+            vst1q_f32(ptr.add(12), t5);   // [e1,f1,g1,h1]
+            vst1q_f32(ptr.add(16), t2);   // [a2,b2,c2,d2]
+            vst1q_f32(ptr.add(20), t6);   // [e2,f2,g2,h2]
+            vst1q_f32(ptr.add(24), t3);   // [a3,b3,c3,d3]
+            vst1q_f32(ptr.add(28), t7);   // [e3,f3,g3,h3]
         }
     }
 

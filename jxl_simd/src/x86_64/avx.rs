@@ -137,41 +137,61 @@ impl F32SimdVec for F32VecAvx {
 
     #[inline(always)]
     fn store_interleaved_2(a: Self, b: Self, base: &mut [f32], offset: usize) {
-        // AVX: LEN=8, interleave 2 vectors
+        // AVX: LEN=8, interleave 2 vectors using shuffle intrinsics
         // a=[a0,a1,a2,a3,a4,a5,a6,a7], b=[b0,b1,b2,b3,b4,b5,b6,b7]
         // output=[a0,b0,a1,b1,a2,b2,a3,b3,a4,b4,a5,b5,a6,b6,a7,b7]
-        // Use temp buffer for simplicity (can optimize later)
-        let mut temp_a = [0.0f32; 8];
-        let mut temp_b = [0.0f32; 8];
         unsafe {
-            _mm256_storeu_ps(temp_a.as_mut_ptr(), a.0);
-            _mm256_storeu_ps(temp_b.as_mut_ptr(), b.0);
-        }
-        for i in 0..8 {
-            base[offset + i * 2] = temp_a[i];
-            base[offset + i * 2 + 1] = temp_b[i];
+            // unpacklo/hi work on 128-bit lanes independently
+            let lo = _mm256_unpacklo_ps(a.0, b.0); // [a0,b0,a1,b1, a4,b4,a5,b5]
+            let hi = _mm256_unpackhi_ps(a.0, b.0); // [a2,b2,a3,b3, a6,b6,a7,b7]
+            // Rearrange 128-bit lanes to get final order
+            let p0 = _mm256_permute2f128_ps(lo, hi, 0x20); // [a0,b0,a1,b1, a2,b2,a3,b3]
+            let p1 = _mm256_permute2f128_ps(lo, hi, 0x31); // [a4,b4,a5,b5, a6,b6,a7,b7]
+            _mm256_storeu_ps(base.as_mut_ptr().add(offset), p0);
+            _mm256_storeu_ps(base.as_mut_ptr().add(offset + 8), p1);
         }
     }
 
     #[inline(always)]
     fn store_interleaved_4(a: Self, b: Self, c: Self, d: Self, base: &mut [f32], offset: usize) {
-        // AVX: LEN=8, interleave 4 vectors
-        // Use temp buffer for simplicity (can optimize later)
-        let mut temp_a = [0.0f32; 8];
-        let mut temp_b = [0.0f32; 8];
-        let mut temp_c = [0.0f32; 8];
-        let mut temp_d = [0.0f32; 8];
+        // AVX: LEN=8, interleave 4 vectors using shuffle intrinsics
+        // a=[a0..a7], b=[b0..b7], c=[c0..c7], d=[d0..d7]
+        // output=[a0,b0,c0,d0, a1,b1,c1,d1, ..., a7,b7,c7,d7]
         unsafe {
-            _mm256_storeu_ps(temp_a.as_mut_ptr(), a.0);
-            _mm256_storeu_ps(temp_b.as_mut_ptr(), b.0);
-            _mm256_storeu_ps(temp_c.as_mut_ptr(), c.0);
-            _mm256_storeu_ps(temp_d.as_mut_ptr(), d.0);
-        }
-        for i in 0..8 {
-            base[offset + i * 4] = temp_a[i];
-            base[offset + i * 4 + 1] = temp_b[i];
-            base[offset + i * 4 + 2] = temp_c[i];
-            base[offset + i * 4 + 3] = temp_d[i];
+            // Step 1: Interleave pairs within 128-bit lanes
+            let lo_ab = _mm256_unpacklo_ps(a.0, b.0); // [a0,b0,a1,b1, a4,b4,a5,b5]
+            let hi_ab = _mm256_unpackhi_ps(a.0, b.0); // [a2,b2,a3,b3, a6,b6,a7,b7]
+            let lo_cd = _mm256_unpacklo_ps(c.0, d.0); // [c0,d0,c1,d1, c4,d4,c5,d5]
+            let hi_cd = _mm256_unpackhi_ps(c.0, d.0); // [c2,d2,c3,d3, c6,d6,c7,d7]
+
+            // Step 2: Interleave 64-bit pairs (treat as pd for unpack)
+            let t0 = _mm256_castpd_ps(_mm256_unpacklo_pd(
+                _mm256_castps_pd(lo_ab),
+                _mm256_castps_pd(lo_cd),
+            )); // [a0,b0,c0,d0, a4,b4,c4,d4]
+            let t1 = _mm256_castpd_ps(_mm256_unpackhi_pd(
+                _mm256_castps_pd(lo_ab),
+                _mm256_castps_pd(lo_cd),
+            )); // [a1,b1,c1,d1, a5,b5,c5,d5]
+            let t2 = _mm256_castpd_ps(_mm256_unpacklo_pd(
+                _mm256_castps_pd(hi_ab),
+                _mm256_castps_pd(hi_cd),
+            )); // [a2,b2,c2,d2, a6,b6,c6,d6]
+            let t3 = _mm256_castpd_ps(_mm256_unpackhi_pd(
+                _mm256_castps_pd(hi_ab),
+                _mm256_castps_pd(hi_cd),
+            )); // [a3,b3,c3,d3, a7,b7,c7,d7]
+
+            // Step 3: Cross-lane permute to get final order
+            let out0 = _mm256_permute2f128_ps(t0, t1, 0x20); // [a0,b0,c0,d0, a1,b1,c1,d1]
+            let out1 = _mm256_permute2f128_ps(t2, t3, 0x20); // [a2,b2,c2,d2, a3,b3,c3,d3]
+            let out2 = _mm256_permute2f128_ps(t0, t1, 0x31); // [a4,b4,c4,d4, a5,b5,c5,d5]
+            let out3 = _mm256_permute2f128_ps(t2, t3, 0x31); // [a6,b6,c6,d6, a7,b7,c7,d7]
+
+            _mm256_storeu_ps(base.as_mut_ptr().add(offset), out0);
+            _mm256_storeu_ps(base.as_mut_ptr().add(offset + 8), out1);
+            _mm256_storeu_ps(base.as_mut_ptr().add(offset + 16), out2);
+            _mm256_storeu_ps(base.as_mut_ptr().add(offset + 24), out3);
         }
     }
 
@@ -188,35 +208,72 @@ impl F32SimdVec for F32VecAvx {
         base: &mut [f32],
         offset: usize,
     ) {
-        // AVX: LEN=8, interleave 8 vectors
-        // Use temp buffer for simplicity (can optimize later)
-        let mut temp_a = [0.0f32; 8];
-        let mut temp_b = [0.0f32; 8];
-        let mut temp_c = [0.0f32; 8];
-        let mut temp_d = [0.0f32; 8];
-        let mut temp_e = [0.0f32; 8];
-        let mut temp_f = [0.0f32; 8];
-        let mut temp_g = [0.0f32; 8];
-        let mut temp_h = [0.0f32; 8];
+        // AVX: LEN=8, interleave 8 vectors using 8x8 matrix transpose
+        // Input: 8 vectors of 8 elements each (rows)
+        // Output: transposed to column-major (interleaved)
         unsafe {
-            _mm256_storeu_ps(temp_a.as_mut_ptr(), a.0);
-            _mm256_storeu_ps(temp_b.as_mut_ptr(), b.0);
-            _mm256_storeu_ps(temp_c.as_mut_ptr(), c.0);
-            _mm256_storeu_ps(temp_d.as_mut_ptr(), d.0);
-            _mm256_storeu_ps(temp_e.as_mut_ptr(), e.0);
-            _mm256_storeu_ps(temp_f.as_mut_ptr(), f.0);
-            _mm256_storeu_ps(temp_g.as_mut_ptr(), g.0);
-            _mm256_storeu_ps(temp_h.as_mut_ptr(), h.0);
-        }
-        for i in 0..8 {
-            base[offset + i * 8] = temp_a[i];
-            base[offset + i * 8 + 1] = temp_b[i];
-            base[offset + i * 8 + 2] = temp_c[i];
-            base[offset + i * 8 + 3] = temp_d[i];
-            base[offset + i * 8 + 4] = temp_e[i];
-            base[offset + i * 8 + 5] = temp_f[i];
-            base[offset + i * 8 + 6] = temp_g[i];
-            base[offset + i * 8 + 7] = temp_h[i];
+            // Stage 1: Unpack low/high pairs (within 128-bit lanes)
+            let t0 = _mm256_unpacklo_ps(a.0, b.0); // [a0,b0,a1,b1, a4,b4,a5,b5]
+            let t1 = _mm256_unpackhi_ps(a.0, b.0); // [a2,b2,a3,b3, a6,b6,a7,b7]
+            let t2 = _mm256_unpacklo_ps(c.0, d.0);
+            let t3 = _mm256_unpackhi_ps(c.0, d.0);
+            let t4 = _mm256_unpacklo_ps(e.0, f.0);
+            let t5 = _mm256_unpackhi_ps(e.0, f.0);
+            let t6 = _mm256_unpacklo_ps(g.0, h.0);
+            let t7 = _mm256_unpackhi_ps(g.0, h.0);
+
+            // Stage 2: Shuffle to group 32-bit elements (64-bit unpack)
+            let s0 = _mm256_castpd_ps(_mm256_unpacklo_pd(
+                _mm256_castps_pd(t0),
+                _mm256_castps_pd(t2),
+            )); // [a0,b0,c0,d0, a4,b4,c4,d4]
+            let s1 = _mm256_castpd_ps(_mm256_unpackhi_pd(
+                _mm256_castps_pd(t0),
+                _mm256_castps_pd(t2),
+            )); // [a1,b1,c1,d1, a5,b5,c5,d5]
+            let s2 = _mm256_castpd_ps(_mm256_unpacklo_pd(
+                _mm256_castps_pd(t1),
+                _mm256_castps_pd(t3),
+            )); // [a2,b2,c2,d2, a6,b6,c6,d6]
+            let s3 = _mm256_castpd_ps(_mm256_unpackhi_pd(
+                _mm256_castps_pd(t1),
+                _mm256_castps_pd(t3),
+            )); // [a3,b3,c3,d3, a7,b7,c7,d7]
+            let s4 = _mm256_castpd_ps(_mm256_unpacklo_pd(
+                _mm256_castps_pd(t4),
+                _mm256_castps_pd(t6),
+            )); // [e0,f0,g0,h0, e4,f4,g4,h4]
+            let s5 = _mm256_castpd_ps(_mm256_unpackhi_pd(
+                _mm256_castps_pd(t4),
+                _mm256_castps_pd(t6),
+            )); // [e1,f1,g1,h1, e5,f5,g5,h5]
+            let s6 = _mm256_castpd_ps(_mm256_unpacklo_pd(
+                _mm256_castps_pd(t5),
+                _mm256_castps_pd(t7),
+            )); // [e2,f2,g2,h2, e6,f6,g6,h6]
+            let s7 = _mm256_castpd_ps(_mm256_unpackhi_pd(
+                _mm256_castps_pd(t5),
+                _mm256_castps_pd(t7),
+            )); // [e3,f3,g3,h3, e7,f7,g7,h7]
+
+            // Stage 3: 128-bit permute to finalize transpose
+            let out0 = _mm256_permute2f128_ps(s0, s4, 0x20); // [a0,b0,c0,d0, e0,f0,g0,h0]
+            let out1 = _mm256_permute2f128_ps(s1, s5, 0x20); // [a1,b1,c1,d1, e1,f1,g1,h1]
+            let out2 = _mm256_permute2f128_ps(s2, s6, 0x20); // [a2,b2,c2,d2, e2,f2,g2,h2]
+            let out3 = _mm256_permute2f128_ps(s3, s7, 0x20); // [a3,b3,c3,d3, e3,f3,g3,h3]
+            let out4 = _mm256_permute2f128_ps(s0, s4, 0x31); // [a4,b4,c4,d4, e4,f4,g4,h4]
+            let out5 = _mm256_permute2f128_ps(s1, s5, 0x31); // [a5,b5,c5,d5, e5,f5,g5,h5]
+            let out6 = _mm256_permute2f128_ps(s2, s6, 0x31); // [a6,b6,c6,d6, e6,f6,g6,h6]
+            let out7 = _mm256_permute2f128_ps(s3, s7, 0x31); // [a7,b7,c7,d7, e7,f7,g7,h7]
+
+            _mm256_storeu_ps(base.as_mut_ptr().add(offset), out0);
+            _mm256_storeu_ps(base.as_mut_ptr().add(offset + 8), out1);
+            _mm256_storeu_ps(base.as_mut_ptr().add(offset + 16), out2);
+            _mm256_storeu_ps(base.as_mut_ptr().add(offset + 24), out3);
+            _mm256_storeu_ps(base.as_mut_ptr().add(offset + 32), out4);
+            _mm256_storeu_ps(base.as_mut_ptr().add(offset + 40), out5);
+            _mm256_storeu_ps(base.as_mut_ptr().add(offset + 48), out6);
+            _mm256_storeu_ps(base.as_mut_ptr().add(offset + 56), out7);
         }
     }
 
