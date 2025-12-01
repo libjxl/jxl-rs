@@ -558,6 +558,7 @@ dependencies = [
  "paste",
  "rand",
  "rand_xorshift",
+ "smallvec",
  "test-log",
  "thiserror",
  "tracing",

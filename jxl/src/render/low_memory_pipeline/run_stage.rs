@@ -5,6 +5,8 @@
 
 use std::any::Any;
 
+use smallvec::SmallVec;
+
 use crate::{
     render::{
         RunInPlaceStage,
@@ -56,7 +58,7 @@ impl<T: RenderPipelineInPlaceStage> RunInPlaceStage<RowBuffer> for T {
         let xpre = if is_first_xgroup { 0 } else { out_extra_x };
         let xstart = x0 - xpre;
         let xend = x0 + xsize + if is_last_xgroup { 0 } else { out_extra_x };
-        let mut rows: Vec<_> = buffers
+        let mut rows: SmallVec<[_; 4]> = buffers
             .iter_mut()
             .map(|x| &mut x.get_row_mut::<T::Type>(current_row)[xstart..])
             .collect();
@@ -102,7 +104,7 @@ impl<T: RenderPipelineInOutStage> RunInOutStage<RowBuffer> for T {
             } else {
                 out_extra_x.shrc(T::SHIFT.0)
             };
-        let input_rows: Vec<_> = input_buffers
+        let input_rows: SmallVec<[_; 4]> = input_buffers
             .iter()
             .map(|x| {
                 (-ibordery..=ibordery)
@@ -110,10 +112,10 @@ impl<T: RenderPipelineInOutStage> RunInOutStage<RowBuffer> for T {
                         &x.get_row::<T::InputT>(mirror(current_row as isize + iy, image_height))
                             [xstart - Self::BORDER.0 as usize..]
                     })
-                    .collect::<Vec<_>>()
+                    .collect::<SmallVec<[_; 20]>>()
             })
             .collect();
-        let mut output_rows: Vec<_> = output_buffers
+        let mut output_rows: SmallVec<[_; 4]> = output_buffers
             .iter_mut()
             .map(|x| {
                 x.get_rows_mut::<T::OutputT>(
@@ -123,8 +125,8 @@ impl<T: RenderPipelineInOutStage> RunInOutStage<RowBuffer> for T {
             })
             .collect();
 
-        let input_rows: Vec<_> = input_rows.iter().map(|x| &x[..]).collect();
-        let mut output_rows: Vec<_> = output_rows.iter_mut().map(|x| &mut x[..]).collect();
+        let input_rows: SmallVec<[_; 4]> = input_rows.iter().map(|x| &x[..]).collect();
+        let mut output_rows: SmallVec<[_; 4]> = output_rows.iter_mut().map(|x| &mut x[..]).collect();
 
         self.process_row_chunk(
             (group_x0 - xpre, current_row),

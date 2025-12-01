@@ -14,6 +14,7 @@ exclude = ["resources/"]
 
 [dependencies]
 jxl_transforms = { path = "../jxl_transforms", version = "0.1.2" }
+smallvec = "1.13"
 thiserror = "2.0"
 byteorder = "1.4.3"
 num-derive = "0.4"

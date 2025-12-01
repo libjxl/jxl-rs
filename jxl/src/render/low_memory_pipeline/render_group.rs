@@ -5,6 +5,8 @@
 
 use std::ops::Range;
 
+use smallvec::SmallVec;
+
 use crate::{
     api::JxlOutputBuffer,
     error::Result,
@@ -201,7 +203,7 @@ impl LowMemoryRenderPipeline {
 
                 match stage {
                     Stage::InPlace(s) => {
-                        let buffer_indices: Vec<_> = (0..num_channels)
+                        let buffer_indices: SmallVec<[_; 4]> = (0..num_channels)
                             .filter(|c| s.uses_channel(*c))
                             .map(|x| self.stage_input_buffer_index[i][x])
                             .collect();
@@ -223,7 +225,7 @@ impl LowMemoryRenderPipeline {
                     }
                     Stage::Save(s) => {
                         // Find buffers for channels that will be saved.
-                        let input_data: Vec<_> = s
+                        let input_data: SmallVec<[_; 4]> = s
                             .channels
                             .iter()
                             .map(|c| {
@@ -289,14 +291,14 @@ impl LowMemoryRenderPipeline {
                         }
                         let (inb, outb) = self.row_buffers.split_at_mut(i + 1);
                         // Prepare pointers to input and output buffers.
-                        let input_data: Vec<_> = (0..num_channels)
+                        let input_data: SmallVec<[_; 4]> = (0..num_channels)
                             .filter(|c| s.uses_channel(*c))
                             .map(|c| {
                                 let (si, ci) = self.stage_input_buffer_index[i][c];
                                 &inb[si][ci]
                             })
                             .collect();
-                        let mut outb: Vec<_> = outb[0].iter_mut().collect();
+                        let mut outb: SmallVec<[_; 4]> = outb[0].iter_mut().collect();
                         s.run_stage_on(
                             ExtraInfo {
                                 xsize: shifted_xsize,
@@ -350,7 +352,7 @@ impl LowMemoryRenderPipeline {
 
                 match stage {
                     Stage::InPlace(s) => {
-                        let buffer_indices: Vec<_> = (0..num_channels)
+                        let buffer_indices: SmallVec<[_; 4]> = (0..num_channels)
                             .filter(|c| s.uses_channel(*c))
                             .map(|x| self.stage_input_buffer_index[i][x])
                             .collect();
@@ -372,7 +374,7 @@ impl LowMemoryRenderPipeline {
                     }
                     Stage::Save(s) => {
                         // Find buffers for channels that will be saved.
-                        let input_data: Vec<_> = s
+                        let input_data: SmallVec<[_; 4]> = s
                             .channels
                             .iter()
                             .map(|c| {
@@ -397,14 +399,14 @@ impl LowMemoryRenderPipeline {
                         assert_eq!(s.border(), (0, 0));
                         let (inb, outb) = self.row_buffers.split_at_mut(i + 1);
                         // Prepare pointers to input and output buffers.
-                        let input_data: Vec<_> = (0..num_channels)
+                        let input_data: SmallVec<[_; 4]> = (0..num_channels)
                             .filter(|c| s.uses_channel(*c))
                             .map(|c| {
                                 let (si, ci) = self.stage_input_buffer_index[i][c];
                                 &inb[si][ci]
                             })
                             .collect();
-                        let mut outb: Vec<_> = outb[0].iter_mut().collect();
+                        let mut outb: SmallVec<[_; 4]> = outb[0].iter_mut().collect();
                         s.run_stage_on(
                             ExtraInfo {
                                 xsize,
