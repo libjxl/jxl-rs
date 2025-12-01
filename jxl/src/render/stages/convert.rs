@@ -7,6 +7,7 @@ use crate::{
     frame::quantizer::LfQuantFactors, headers::bit_depth::BitDepth,
     render::RenderPipelineInOutStage,
 };
+use jxl_simd::{F32SimdVec, simd_function};
 
 pub struct ConvertU8F32Stage {
     channel: usize,
@@ -247,6 +248,73 @@ impl std::fmt::Display for ConvertF32ToU8Stage {
     }
 }
 
+// SIMD F32 to U8 conversion
+simd_function!(
+    f32_to_u8_simd_dispatch,
+    d: D,
+    fn f32_to_u8_simd(
+        input: &[f32],
+        output: &mut [u8],
+        max: f32,
+        xsize: usize,
+    ) {
+        let simd_width = D::F32Vec::LEN;
+
+        let zero = D::F32Vec::splat(d, 0.0);
+        let one = D::F32Vec::splat(d, 1.0);
+        let max_vec = D::F32Vec::splat(d, max);
+
+        // Phase 3J: Process 2x SIMD vectors at once for better pipelining
+        let mut temp = [0.0f32; 32]; // Double buffer for 2x processing
+
+        let mut x = 0;
+
+        // Process 2 SIMD vectors at a time
+        while x + simd_width * 2 <= xsize {
+            // Load and process first vector
+            let val1 = D::F32Vec::load(d, &input[x..]);
+            let clamped1 = val1.max(zero).min(one);
+            let scaled1 = clamped1 * max_vec;
+
+            // Load and process second vector (interleaved for better pipelining)
+            let val2 = D::F32Vec::load(d, &input[x + simd_width..]);
+            let clamped2 = val2.max(zero).min(one);
+            let scaled2 = clamped2 * max_vec;
+
+            // Store both vectors
+            scaled1.store(&mut temp[0..]);
+            scaled2.store(&mut temp[simd_width..]);
+
+            // Convert both vectors with unrolled loop
+            for i in 0..simd_width {
+                output[x + i] = temp[i].round() as u8;
+                output[x + simd_width + i] = temp[simd_width + i].round() as u8;
+            }
+
+            x += simd_width * 2;
+        }
+
+        // Handle single vector remainder
+        while x + simd_width <= xsize {
+            let val = D::F32Vec::load(d, &input[x..]);
+            let clamped = val.max(zero).min(one);
+            let scaled = clamped * max_vec;
+            scaled.store(&mut temp);
+
+            for i in 0..simd_width {
+                output[x + i] = temp[i].round() as u8;
+            }
+
+            x += simd_width;
+        }
+
+        // Scalar remainder
+        for i in x..xsize {
+            output[i] = (input[i].clamp(0.0, 1.0) * max).round() as u8;
+        }
+    }
+);
+
 impl RenderPipelineInOutStage for ConvertF32ToU8Stage {
     type InputT = f32;
     type OutputT = u8;
@@ -265,11 +333,10 @@ impl RenderPipelineInOutStage for ConvertF32ToU8Stage {
         output_rows: &mut [&mut [&mut [u8]]],
         _state: Option<&mut dyn std::any::Any>,
     ) {
-        let input = input_rows[0];
+        let input = input_rows[0][0];
+        let output = &mut output_rows[0][0];
         let max = ((1u32 << self.bit_depth) - 1) as f32;
-        for i in 0..xsize {
-            output_rows[0][0][i] = (input[0][i].clamp(0.0, 1.0) * max).round() as u8;
-        }
+        f32_to_u8_simd_dispatch(input, output, max, xsize);
     }
 }
 

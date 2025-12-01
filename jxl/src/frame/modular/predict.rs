@@ -3,8 +3,6 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-use std::array::from_fn;
-
 use crate::{
     error::{Error, Result},
     headers::modular::WeightedHeader,
@@ -360,7 +358,9 @@ fn weighted_average(pixels: &[i64; NUM_PREDICTORS], weights: &mut [u32; NUM_PRED
 pub struct WeightedPredictorState {
     prediction: [i64; NUM_PREDICTORS],
     pred: i64,
-    pred_errors: [Vec<u32>; NUM_PREDICTORS],
+    // Use single contiguous buffer for all predictor errors (better cache locality)
+    pred_errors_buffer: Vec<u32>,
+    num_errors: usize,
     error: Vec<i32>,
     wp_header: WeightedHeader,
 }
@@ -371,10 +371,25 @@ impl WeightedPredictorState {
         WeightedPredictorState {
             prediction: [0; NUM_PREDICTORS],
             pred: 0,
-            pred_errors: from_fn(|_| vec![0; num_errors]),
+            // Single allocation for all predictors - better cache locality
+            pred_errors_buffer: vec![0; NUM_PREDICTORS * num_errors],
+            num_errors,
             error: vec![0; num_errors],
             wp_header: wp_header.clone(),
         }
+    }
+
+    #[inline(always)]
+    fn get_pred_errors(&self, predictor: usize) -> &[u32] {
+        let start = predictor * self.num_errors;
+        &self.pred_errors_buffer[start..start + self.num_errors]
+    }
+
+    #[inline(always)]
+    fn get_pred_errors_mut(&mut self, predictor: usize) -> &mut [u32] {
+        let start = predictor * self.num_errors;
+        let end = start + self.num_errors;
+        &mut self.pred_errors_buffer[start..end]
     }
 
     pub fn save_state(&self, wp_image: &mut Image<i32>, xsize: usize) {
@@ -396,9 +411,10 @@ impl WeightedPredictorState {
         };
         let val = add_bits(correct_val);
         self.error[cur_row + pos.0] = (self.pred - val) as i32;
-        for (i, pred_err) in self.pred_errors.iter_mut().enumerate() {
-            let err =
-                (((self.prediction[i] - val).abs() + PREDICTION_ROUND) >> PRED_EXTRA_BITS) as u32;
+        for i in 0..NUM_PREDICTORS {
+            let prediction = self.prediction[i];
+            let err = (((prediction - val).abs() + PREDICTION_ROUND) >> PRED_EXTRA_BITS) as u32;
+            let pred_err = self.get_pred_errors_mut(i);
             pred_err[cur_row + pos.0] = err;
             let idx = prev_row + pos.0 + 1;
             pred_err[idx] = pred_err[idx].wrapping_add(err);
@@ -422,10 +438,11 @@ impl WeightedPredictorState {
         let pos_nw = if pos.0 > 0 { pos_n - 1 } else { pos_n };
         let mut weights = [0u32; NUM_PREDICTORS];
         for (i, weight) in weights.iter_mut().enumerate() {
+            let pred_errors = self.get_pred_errors(i);
             *weight = error_weight(
-                self.pred_errors[i][pos_n]
-                    .wrapping_add(self.pred_errors[i][pos_ne])
-                    .wrapping_add(self.pred_errors[i][pos_nw]),
+                pred_errors[pos_n]
+                    .wrapping_add(pred_errors[pos_ne])
+                    .wrapping_add(pred_errors[pos_nw]),
                 self.wp_header.w(i).unwrap(),
             );
         }

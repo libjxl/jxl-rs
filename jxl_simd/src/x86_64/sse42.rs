@@ -109,6 +109,107 @@ impl F32SimdVec for F32VecSse42 {
         unsafe { _mm_storeu_ps(mem.as_mut_ptr(), self.0) }
     }
 
+    fn scatter_strided(&self, base: &mut [f32], offset: usize, stride: usize) {
+        // SSE4.2 doesn't have native scatter, emulate with scalar loop
+        let mut temp = [0.0f32; 4];
+        unsafe {
+            _mm_storeu_ps(temp.as_mut_ptr(), self.0);
+        }
+        for i in 0..4 {
+            base[offset + i * stride] = temp[i];
+        }
+    }
+
+    fn gather_strided(_d: Self::Descriptor, base: &[f32], offset: usize, stride: usize) -> Self {
+        // SSE4.2 doesn't have native gather, emulate with scalar loop
+        let mut temp = [0.0f32; 4];
+        for i in 0..4 {
+            temp[i] = base[offset + i * stride];
+        }
+        unsafe { F32VecSse42(_mm_loadu_ps(temp.as_ptr()), _d) }
+    }
+
+    #[inline(always)]
+    fn store_interleaved_2(a: Self, b: Self, base: &mut [f32], offset: usize) {
+        // SSE4.2: LEN=4, interleave 2 vectors using unpack intrinsics
+        // a=[a0,a1,a2,a3], b=[b0,b1,b2,b3] -> output=[a0,b0,a1,b1,a2,b2,a3,b3]
+        unsafe {
+            let lo = _mm_unpacklo_ps(a.0, b.0); // [a0,b0,a1,b1]
+            let hi = _mm_unpackhi_ps(a.0, b.0); // [a2,b2,a3,b3]
+            _mm_storeu_ps(base.as_mut_ptr().add(offset), lo);
+            _mm_storeu_ps(base.as_mut_ptr().add(offset + 4), hi);
+        }
+    }
+
+    #[inline(always)]
+    fn store_interleaved_4(a: Self, b: Self, c: Self, d: Self, base: &mut [f32], offset: usize) {
+        // SSE4.2: LEN=4, interleave 4 vectors
+        // a=[a0,a1,a2,a3], b=[b0,b1,b2,b3], c=[c0,c1,c2,c3], d=[d0,d1,d2,d3]
+        // output=[a0,b0,c0,d0,a1,b1,c1,d1,a2,b2,c2,d2,a3,b3,c3,d3]
+        // Use temp buffer for simplicity (can optimize later)
+        let mut temp_a = [0.0f32; 4];
+        let mut temp_b = [0.0f32; 4];
+        let mut temp_c = [0.0f32; 4];
+        let mut temp_d = [0.0f32; 4];
+        unsafe {
+            _mm_storeu_ps(temp_a.as_mut_ptr(), a.0);
+            _mm_storeu_ps(temp_b.as_mut_ptr(), b.0);
+            _mm_storeu_ps(temp_c.as_mut_ptr(), c.0);
+            _mm_storeu_ps(temp_d.as_mut_ptr(), d.0);
+        }
+        for i in 0..4 {
+            base[offset + i * 4] = temp_a[i];
+            base[offset + i * 4 + 1] = temp_b[i];
+            base[offset + i * 4 + 2] = temp_c[i];
+            base[offset + i * 4 + 3] = temp_d[i];
+        }
+    }
+
+    #[inline(always)]
+    fn store_interleaved_8(
+        a: Self,
+        b: Self,
+        c: Self,
+        d: Self,
+        e: Self,
+        f: Self,
+        g: Self,
+        h: Self,
+        base: &mut [f32],
+        offset: usize,
+    ) {
+        // SSE4.2: LEN=4, interleave 8 vectors
+        // Use temp buffer for simplicity (can optimize later)
+        let mut temp_a = [0.0f32; 4];
+        let mut temp_b = [0.0f32; 4];
+        let mut temp_c = [0.0f32; 4];
+        let mut temp_d = [0.0f32; 4];
+        let mut temp_e = [0.0f32; 4];
+        let mut temp_f = [0.0f32; 4];
+        let mut temp_g = [0.0f32; 4];
+        let mut temp_h = [0.0f32; 4];
+        unsafe {
+            _mm_storeu_ps(temp_a.as_mut_ptr(), a.0);
+            _mm_storeu_ps(temp_b.as_mut_ptr(), b.0);
+            _mm_storeu_ps(temp_c.as_mut_ptr(), c.0);
+            _mm_storeu_ps(temp_d.as_mut_ptr(), d.0);
+            _mm_storeu_ps(temp_e.as_mut_ptr(), e.0);
+            _mm_storeu_ps(temp_f.as_mut_ptr(), f.0);
+            _mm_storeu_ps(temp_g.as_mut_ptr(), g.0);
+            _mm_storeu_ps(temp_h.as_mut_ptr(), h.0);
+        }
+        for i in 0..4 {
+            base[offset + i * 8] = temp_a[i];
+            base[offset + i * 8 + 1] = temp_b[i];
+            base[offset + i * 8 + 2] = temp_c[i];
+            base[offset + i * 8 + 3] = temp_d[i];
+            base[offset + i * 8 + 4] = temp_e[i];
+            base[offset + i * 8 + 5] = temp_f[i];
+            base[offset + i * 8 + 6] = temp_g[i];
+            base[offset + i * 8 + 7] = temp_h[i];
+        }
+    }
+
     fn_sse42!(this: F32VecSse42, fn mul_add(mul: F32VecSse42, add: F32VecSse42) -> F32VecSse42 {
         this * mul + add
     });
@@ -168,6 +269,10 @@ impl F32SimdVec for F32VecSse42 {
 
     fn_sse42!(this: F32VecSse42, fn max(other: F32VecSse42) -> F32VecSse42 {
         F32VecSse42(_mm_max_ps(this.0, other.0), this.1)
+    });
+
+    fn_sse42!(this: F32VecSse42, fn min(other: F32VecSse42) -> F32VecSse42 {
+        F32VecSse42(_mm_min_ps(this.0, other.0), this.1)
     });
 
     fn_sse42!(this: F32VecSse42, fn gt(other: F32VecSse42) -> MaskSse42 {

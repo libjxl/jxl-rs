@@ -6,9 +6,12 @@
 #![allow(clippy::needless_range_loop)]
 
 use crate::{headers::CustomTransformData, render::RenderPipelineInOutStage};
+use jxl_simd::{F32SimdVec, simd_function};
 
 pub struct Upsample<const N: usize, const SHIFT: u8> {
-    kernel: [[[[f32; 5]; 5]; N]; N],
+    // Precomputed flattened kernels for SIMD optimization
+    // Use Vec to avoid stack allocation during initialization
+    flat_kernels: Vec<[[f32; 25]; N]>,
     channel: usize,
 }
 
@@ -44,7 +47,27 @@ impl<const N: usize, const SHIFT: u8> Upsample<N, SHIFT> {
             }
         }
 
-        Self { kernel, channel }
+        // Precompute flattened kernels for SIMD optimization
+        // Use Vec to avoid large stack allocations
+        let mut flat_kernels = Vec::with_capacity(N);
+        for di in 0..N {
+            let mut row = Vec::with_capacity(N);
+            for dj in 0..N {
+                let mut flat_kernel = [0.0f32; 25];
+                for i in 0..5 {
+                    for j in 0..5 {
+                        flat_kernel[i * 5 + j] = kernel[di][dj][i][j];
+                    }
+                }
+                row.push(flat_kernel);
+            }
+            flat_kernels.push(row.try_into().unwrap());
+        }
+
+        Self {
+            flat_kernels,
+            channel,
+        }
     }
 }
 
@@ -52,6 +75,154 @@ impl<const N: usize, const SHIFT: u8> std::fmt::Display for Upsample<N, SHIFT> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{N}x{N} upsampling of channel {}", self.channel)
     }
+}
+
+// C++-style SIMD upsampling that matches libjxl algorithm structure
+simd_function!(
+    upsample_simd_dispatch,
+    d: D,
+    fn upsample_simd(
+        input: &[&[f32]],
+        xsize: usize,
+        flat_kernels: &[&[[f32; 25]]],
+        n: usize,
+        output: &mut [&mut [f32]],
+    ) {
+        let simd_width = D::F32Vec::LEN;
+
+        // Process in chunks of SIMD_WIDTH input pixels
+        let mut x = 0;
+        while x + simd_width <= xsize {
+            // Precompute min/max for clamping across 5x5 region
+            let mut minval = D::F32Vec::load(d, &input[0][x..]);
+            let mut maxval = minval;
+            for i in 0..5 {
+                for j in 0..5 {
+                    let val = D::F32Vec::load(d, &input[i][x + j..]);
+                    minval = minval.min(val);
+                    maxval = maxval.max(val);
+                }
+            }
+
+            // For each output row offset (oy)
+            for oy in 0..n {
+                // Compute N output values (one per ox)
+                let mut results = [D::F32Vec::splat(d, 0.0); 8]; // Max N=8
+
+                for ox in 0..n {
+                    let kernel = &flat_kernels[oy][ox];
+
+                    // Compute 5x5 kernel with 3-way ILP (matches C++)
+                    let mut acc0 = D::F32Vec::load(d, &input[0][x..]) * D::F32Vec::splat(d, kernel[0]);
+                    let mut acc1 = D::F32Vec::load(d, &input[0][x+1..]) * D::F32Vec::splat(d, kernel[1]);
+                    let mut acc2 = D::F32Vec::load(d, &input[0][x+2..]) * D::F32Vec::splat(d, kernel[2]);
+
+                    // Loop over remaining 22 kernel elements (3 at a time)
+                    for i in 3..24 {
+                        let row = i / 5;
+                        let col = i % 5;
+                        let val = D::F32Vec::load(d, &input[row][x + col..]);
+                        let weight = D::F32Vec::splat(d, kernel[i]);
+
+                        match i % 3 {
+                            0 => acc0 = acc0 + val * weight,
+                            1 => acc1 = acc1 + val * weight,
+                            _ => acc2 = acc2 + val * weight,
+                        }
+                    }
+
+                    // Final element
+                    acc0 = acc0 + D::F32Vec::load(d, &input[4][x+4..]) * D::F32Vec::splat(d, kernel[24]);
+
+                    // Combine accumulators and clamp
+                    let result = (acc0 + acc1 + acc2).max(minval).min(maxval);
+                    results[ox] = result;
+                }
+
+                // Store all N results using interleaved store (matches C++ StoreInterleaved)
+                let dst_row = &mut output[oy];
+                let out_offset = x * n;
+
+                match n {
+                    2 => D::F32Vec::store_interleaved_2(results[0], results[1], dst_row, out_offset),
+                    4 => D::F32Vec::store_interleaved_4(results[0], results[1], results[2], results[3], dst_row, out_offset),
+                    8 => D::F32Vec::store_interleaved_8(results[0], results[1], results[2], results[3],
+                                                         results[4], results[5], results[6], results[7], dst_row, out_offset),
+                    _ => unreachable!(),
+                }
+            }
+
+            x += simd_width;
+        }
+
+        // Scalar remainder (fallback to simple implementation)
+        while x < xsize {
+            let mut minval = input[0][x];
+            let mut maxval = minval;
+            for i in 0..5 {
+                for j in 0..5 {
+                    let val = input[i][x + j];
+                    minval = val.min(minval);
+                    maxval = val.max(maxval);
+                }
+            }
+
+            for oy in 0..n {
+                for ox in 0..n {
+                    let kernel = &flat_kernels[oy][ox];
+                    let mut sum = 0.0f32;
+                    for i in 0..25 {
+                        let row = i / 5;
+                        let col = i % 5;
+                        sum += input[row][x + col] * kernel[i];
+                    }
+                    output[oy][ox + n * x] = sum.clamp(minval, maxval);
+                }
+            }
+
+            x += 1;
+        }
+    }
+);
+
+// Optimized kernel convolution - simplified for compiler auto-vectorization
+#[inline(always)]
+fn upsample_kernel(input: &[&[f32]], kernel_slice: &[f32; 25], x: usize) -> f32 {
+    // Process 5x5 kernel with simple loops that the compiler can auto-vectorize
+    let mut sum = 0.0f32;
+
+    // Fully unroll the kernel rows for better performance
+    sum += input[0][x] * kernel_slice[0]
+        + input[0][x + 1] * kernel_slice[1]
+        + input[0][x + 2] * kernel_slice[2]
+        + input[0][x + 3] * kernel_slice[3]
+        + input[0][x + 4] * kernel_slice[4];
+
+    sum += input[1][x] * kernel_slice[5]
+        + input[1][x + 1] * kernel_slice[6]
+        + input[1][x + 2] * kernel_slice[7]
+        + input[1][x + 3] * kernel_slice[8]
+        + input[1][x + 4] * kernel_slice[9];
+
+    sum += input[2][x] * kernel_slice[10]
+        + input[2][x + 1] * kernel_slice[11]
+        + input[2][x + 2] * kernel_slice[12]
+        + input[2][x + 3] * kernel_slice[13]
+        + input[2][x + 4] * kernel_slice[14];
+
+    sum += input[3][x] * kernel_slice[15]
+        + input[3][x + 1] * kernel_slice[16]
+        + input[3][x + 2] * kernel_slice[17]
+        + input[3][x + 3] * kernel_slice[18]
+        + input[3][x + 4] * kernel_slice[19];
+
+    sum += input[4][x] * kernel_slice[20]
+        + input[4][x + 1] * kernel_slice[21]
+        + input[4][x + 2] * kernel_slice[22]
+        + input[4][x + 3] * kernel_slice[23]
+        + input[4][x + 4] * kernel_slice[24];
+
+    sum
 }
 
 impl<const N: usize, const SHIFT: u8> RenderPipelineInOutStage for Upsample<N, SHIFT> {
@@ -65,6 +236,7 @@ impl<const N: usize, const SHIFT: u8> RenderPipelineInOutStage for Upsample<N, S
     }
     /// Processes a chunk of a row, applying NxN upsampling using a 5x5 kernel.
     /// Each input value expands into a NxN region in the output, based on neighboring inputs.
+    /// Uses C++-style SIMD with interleaved stores for maximum performance!
     fn process_row_chunk(
         &self,
         _position: (usize, usize),
@@ -75,27 +247,11 @@ impl<const N: usize, const SHIFT: u8> RenderPipelineInOutStage for Upsample<N, S
     ) {
         let input = input_rows[0];
 
-        for x in 0..xsize {
-            // Upsample this input value into a NxN region in the output
-            let mut minval = input[0][x];
-            let mut maxval = minval;
-            for di in 0..N {
-                for dj in 0..N {
-                    // Iterate over the input rows and columns
-                    let mut output_val = 0.0;
-                    #[allow(clippy::needless_range_loop)]
-                    for i in 0..5 {
-                        for j in 0..5 {
-                            let input_value = input[i][j + x];
-                            output_val += input_value * self.kernel[di][dj][i % 5][j % 5];
-                            minval = input_value.min(minval);
-                            maxval = input_value.max(maxval);
-                        }
-                    }
-                    output_rows[0][di][dj + N * x] = output_val.clamp(minval, maxval);
-                }
-            }
-        }
+        // Convert flat_kernels to slice of refs for the dispatcher
+        let kernels: Vec<&[[f32; 25]]> = self.flat_kernels.iter().map(|k| k.as_slice()).collect();
+
+        // Use C++-style SIMD upsampling with interleaved stores
+        upsample_simd_dispatch(input, xsize, &kernels, N, output_rows[0]);
     }
 }
 

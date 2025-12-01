@@ -21,6 +21,29 @@ fn save_icc(icc_bytes: &[u8], icc_filename: Option<&PathBuf>) -> Result<()> {
     })
 }
 
+fn save_metadata(
+    image_data: &dec::DecodeOutput<f32>,
+    metadata_filename: Option<&PathBuf>,
+) -> Result<()> {
+    metadata_filename.map_or(Ok(()), |path| {
+        let frames: Vec<serde_json::Value> = image_data
+            .frames
+            .iter()
+            .map(|f| {
+                serde_json::json!({
+                    "name": f.name,
+                    "duration": f.duration,
+                })
+            })
+            .collect();
+        let metadata = serde_json::json!({ "frames": frames });
+        let json_str = serde_json::to_string_pretty(&metadata)
+            .wrap_err("Failed to serialize metadata")?;
+        std::fs::write(path, json_str)
+            .wrap_err_with(|| format!("Failed to write metadata to {:?}", path))
+    })
+}
+
 fn save_image(
     image_data: &dec::DecodeOutput<f32>,
     bit_depth: u32,
@@ -81,6 +104,10 @@ struct Opt {
     ///  Likewise but for the ICC profile of the original colorspace
     #[clap(long)]
     original_icc_out: Option<PathBuf>,
+
+    /// If specified, writes frame metadata (names, durations) to a JSON file
+    #[clap(long)]
+    metadata_out: Option<PathBuf>,
 
     /// If specified, takes precedence over the bit depth in the input metadata
     #[clap(long)]
@@ -244,6 +271,7 @@ fn main() -> Result<()> {
         image_data.embedded_profile.as_icc().as_slice(),
         opt.original_icc_out.as_ref(),
     );
+    let metadata_result = save_metadata(&image_data, opt.metadata_out.as_ref());
 
     for frame in image_data.frames.iter_mut() {
         if frame.color_type != JxlColorType::Grayscale {
@@ -278,6 +306,9 @@ fn main() -> Result<()> {
         if let Err(err) = &data_icc_result {
             println!("Failed to save data ICC profile: {err}");
         }
+        if let Err(err) = &metadata_result {
+            println!("Failed to save metadata: {err}");
+        }
         if let Err(ref err) = image_result {
             println!("Failed to save image: {err}");
         }
@@ -286,6 +317,7 @@ fn main() -> Result<()> {
 
     original_icc_result?;
     data_icc_result?;
+    metadata_result?;
 
     image_result.unwrap_or(Ok(()))?;
 

@@ -16,6 +16,7 @@ use crate::{
 use jxl_transforms::transform_map::*;
 
 use std::mem;
+use std::sync::OnceLock;
 
 pub const NUM_ORDERS: usize = 13;
 
@@ -36,6 +37,27 @@ pub const TRANSFORM_TYPE_LUT: [HfTransformType; NUM_ORDERS] = [
 ];
 
 pub const NUM_PERMUTATION_CONTEXTS: usize = 8;
+
+/// Cached natural coefficient orders for all transform types.
+/// Computed once on first access to avoid recomputation.
+static NATURAL_COEFF_ORDERS: OnceLock<[Vec<u32>; NUM_ORDERS]> = OnceLock::new();
+
+/// Get cached natural coefficient order for a transform type.
+/// Uses OnceLock to compute all orders exactly once on first access.
+fn get_natural_coeff_order(transform: HfTransformType) -> &'static Vec<u32> {
+    let orders = NATURAL_COEFF_ORDERS.get_or_init(|| {
+        // Compute all natural orders once
+        std::array::from_fn(|i| natural_coeff_order(TRANSFORM_TYPE_LUT[i]))
+    });
+
+    // Find the index of this transform type
+    let idx = TRANSFORM_TYPE_LUT
+        .iter()
+        .position(|&t| t == transform)
+        .expect("transform type should be in TRANSFORM_TYPE_LUT");
+
+    &orders[idx]
+}
 
 pub fn natural_coeff_order(transform: HfTransformType) -> Vec<u32> {
     let cx = covered_blocks_x(transform) as usize;
@@ -94,10 +116,10 @@ pub fn natural_coeff_order(transform: HfTransformType) -> Vec<u32> {
 }
 
 pub fn decode_coeff_orders(used_orders: u32, br: &mut BitReader) -> Result<Vec<Permutation>> {
-    // TODO(szabadka): Compute natural coefficient orders only for those transform that are used.
+    // Use cached natural coefficient orders instead of recomputing
     let all_component_orders = 3 * NUM_ORDERS;
     let mut permutations: Vec<Permutation> = (0..all_component_orders)
-        .map(|o| Permutation(natural_coeff_order(TRANSFORM_TYPE_LUT[o / 3])))
+        .map(|o| Permutation(get_natural_coeff_order(TRANSFORM_TYPE_LUT[o / 3]).clone()))
         .collect();
     if used_orders == 0 {
         return Ok(permutations);

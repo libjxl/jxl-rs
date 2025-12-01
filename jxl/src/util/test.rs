@@ -222,6 +222,27 @@ pub fn check_equal_images<T: ImageDataType>(a: &Image<T>, b: &Image<T>) {
     }
 }
 
+/// Check that two images are approximately equal within a tolerance.
+/// This is useful for cross-platform tests where different SIMD implementations
+/// (e.g., AVX2 vs NEON) may produce slightly different floating-point results.
+pub fn check_almost_equal_images(a: &Image<f32>, b: &Image<f32>, tolerance: f32) {
+    assert_eq!(a.size(), b.size(), "Image sizes must match");
+    for y in 0..a.size().1 {
+        for x in 0..a.size().0 {
+            let a_val = a.row(y)[x];
+            let b_val = b.row(y)[x];
+            // Use the same assertion helper that's already in the codebase
+            assert_almost_abs_eq_coords(
+                a_val,
+                b_val,
+                tolerance,
+                (x, y),
+                0, // channel 0 for error message
+            );
+        }
+    }
+}
+
 pub fn read_headers_and_toc(image: &[u8]) -> Result<(FileHeader, FrameHeader, Toc), JXLError> {
     let codestream = ContainerParser::collect_codestream(image).unwrap();
     let mut br = BitReader::new(&codestream);

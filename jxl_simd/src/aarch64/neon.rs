@@ -121,6 +121,110 @@ impl F32SimdVec for F32VecNeon {
         unsafe { vst1q_f32(mem.as_mut_ptr(), self.0) }
     }
 
+    fn scatter_strided(&self, base: &mut [f32], offset: usize, stride: usize) {
+        // NEON doesn't have native scatter, emulate with scalar loop
+        let mut temp = [0.0f32; 4];
+        unsafe {
+            vst1q_f32(temp.as_mut_ptr(), self.0);
+        }
+        for i in 0..4 {
+            base[offset + i * stride] = temp[i];
+        }
+    }
+
+    fn gather_strided(_d: Self::Descriptor, base: &[f32], offset: usize, stride: usize) -> Self {
+        // NEON doesn't have native gather, emulate with scalar loop
+        let mut temp = [0.0f32; 4];
+        for i in 0..4 {
+            temp[i] = base[offset + i * stride];
+        }
+        unsafe { F32VecNeon(vld1q_f32(temp.as_ptr()), _d) }
+    }
+
+    #[inline(always)]
+    fn store_interleaved_2(a: Self, b: Self, base: &mut [f32], offset: usize) {
+        // NEON: LEN=4, interleave 2 vectors
+        // a=[a0,a1,a2,a3], b=[b0,b1,b2,b3] -> output=[a0,b0,a1,b1,a2,b2,a3,b3]
+        // Use temp buffer for simplicity (can optimize later)
+        let mut temp_a = [0.0f32; 4];
+        let mut temp_b = [0.0f32; 4];
+        unsafe {
+            vst1q_f32(temp_a.as_mut_ptr(), a.0);
+            vst1q_f32(temp_b.as_mut_ptr(), b.0);
+        }
+        for i in 0..4 {
+            base[offset + i * 2] = temp_a[i];
+            base[offset + i * 2 + 1] = temp_b[i];
+        }
+    }
+
+    #[inline(always)]
+    fn store_interleaved_4(a: Self, b: Self, c: Self, d: Self, base: &mut [f32], offset: usize) {
+        // NEON: LEN=4, interleave 4 vectors
+        // Use temp buffer for simplicity (can optimize later)
+        let mut temp_a = [0.0f32; 4];
+        let mut temp_b = [0.0f32; 4];
+        let mut temp_c = [0.0f32; 4];
+        let mut temp_d = [0.0f32; 4];
+        unsafe {
+            vst1q_f32(temp_a.as_mut_ptr(), a.0);
+            vst1q_f32(temp_b.as_mut_ptr(), b.0);
+            vst1q_f32(temp_c.as_mut_ptr(), c.0);
+            vst1q_f32(temp_d.as_mut_ptr(), d.0);
+        }
+        for i in 0..4 {
+            base[offset + i * 4] = temp_a[i];
+            base[offset + i * 4 + 1] = temp_b[i];
+            base[offset + i * 4 + 2] = temp_c[i];
+            base[offset + i * 4 + 3] = temp_d[i];
+        }
+    }
+
+    #[inline(always)]
+    fn store_interleaved_8(
+        a: Self,
+        b: Self,
+        c: Self,
+        d: Self,
+        e: Self,
+        f: Self,
+        g: Self,
+        h: Self,
+        base: &mut [f32],
+        offset: usize,
+    ) {
+        // NEON: LEN=4, interleave 8 vectors
+        // Use temp buffer for simplicity (can optimize later)
+        let mut temp_a = [0.0f32; 4];
+        let mut temp_b = [0.0f32; 4];
+        let mut temp_c = [0.0f32; 4];
+        let mut temp_d = [0.0f32; 4];
+        let mut temp_e = [0.0f32; 4];
+        let mut temp_f = [0.0f32; 4];
+        let mut temp_g = [0.0f32; 4];
+        let mut temp_h = [0.0f32; 4];
+        unsafe {
+            vst1q_f32(temp_a.as_mut_ptr(), a.0);
+            vst1q_f32(temp_b.as_mut_ptr(), b.0);
+            vst1q_f32(temp_c.as_mut_ptr(), c.0);
+            vst1q_f32(temp_d.as_mut_ptr(), d.0);
+            vst1q_f32(temp_e.as_mut_ptr(), e.0);
+            vst1q_f32(temp_f.as_mut_ptr(), f.0);
+            vst1q_f32(temp_g.as_mut_ptr(), g.0);
+            vst1q_f32(temp_h.as_mut_ptr(), h.0);
+        }
+        for i in 0..4 {
+            base[offset + i * 8] = temp_a[i];
+            base[offset + i * 8 + 1] = temp_b[i];
+            base[offset + i * 8 + 2] = temp_c[i];
+            base[offset + i * 8 + 3] = temp_d[i];
+            base[offset + i * 8 + 4] = temp_e[i];
+            base[offset + i * 8 + 5] = temp_f[i];
+            base[offset + i * 8 + 6] = temp_g[i];
+            base[offset + i * 8 + 7] = temp_h[i];
+        }
+    }
+
     #[inline(always)]
     fn transpose_square(d: NeonDescriptor, data: &mut [[f32; 4]], stride: usize) {
         #[target_feature(enable = "neon")]
@@ -216,6 +320,10 @@ impl F32SimdVec for F32VecNeon {
 
         fn max(this: F32VecNeon, other: F32VecNeon) -> F32VecNeon {
             F32VecNeon(vmaxq_f32(this.0, other.0), this.1)
+        }
+
+        fn min(this: F32VecNeon, other: F32VecNeon) -> F32VecNeon {
+            F32VecNeon(vminq_f32(this.0, other.0), this.1)
         }
 
         fn gt(this: F32VecNeon, other: F32VecNeon) -> MaskNeon {

@@ -18,6 +18,7 @@ pub struct ImageFrame<T: ImageDataType> {
     pub channels: Vec<Image<T>>,
     pub duration: f64,
     pub color_type: JxlColorType,
+    pub name: String,
 }
 
 pub struct DecodeOutput<T: ImageDataType> {
@@ -112,6 +113,7 @@ pub fn decode_frames<In: JxlBitstreamInput>(
             duration: frame_header.duration.unwrap_or(0.0),
             channels: outputs,
             color_type,
+            name: frame_header.name.clone(),
         });
 
         if !decoder_with_image_info.has_more_frames() {

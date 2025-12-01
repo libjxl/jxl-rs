@@ -359,6 +359,50 @@ impl Frame {
         Ok(())
     }
 
+    /// Core VarDCT decoding logic that can be called from parallel threads.
+    /// Takes pre-allocated buffers to ensure correct sizing for downsampled channels.
+    #[cfg(feature = "parallel")]
+    #[allow(unsafe_code, invalid_reference_casting)]
+    #[inline] // Phase 3A: Inline hot path
+    pub fn decode_vardct_core_with_buffers(
+        &self,
+        group: usize,
+        pass: usize,
+        mut br: BitReader,
+        _cache: &mut super::group_cache::GroupDecodeCache,
+        pixels: &mut [Image<f32>; 3],
+    ) -> Result<()> {
+        use super::group::decode_vardct_group_parallel;
+
+        let lf_global = self.lf_global.as_ref().unwrap();
+        let hf_global = self.hf_global.as_ref().unwrap();
+        let hf_meta = self.hf_meta.as_ref().unwrap();
+
+        // Use the parallel-safe variant that takes immutable references.
+        // This variant always uses thread-local coefficient buffers, making it safe
+        // to call from multiple threads with shared references.
+        decode_vardct_group_parallel(
+            group,
+            pass,
+            &self.header,
+            lf_global,
+            hf_global,
+            hf_meta,
+            &self.lf_image,
+            &self.quant_lf,
+            &self
+                .decoder_state
+                .file_header
+                .transform_data
+                .opsin_inverse_matrix
+                .quant_biases,
+            pixels,
+            &mut br,
+        )?;
+
+        Ok(())
+    }
+
     #[instrument(level = "debug", skip(self, br, buffer_splitter))]
     pub fn decode_hf_group(
         &mut self,
@@ -451,6 +495,7 @@ impl Frame {
                     .quant_biases,
                 &mut pixels,
                 &mut br,
+                false, // Sequential path: use shared coefficients if available
             )?;
             if self.decoder_state.enable_output
                 && pass + 1 == self.header.passes.num_passes as usize

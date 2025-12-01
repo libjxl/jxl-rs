@@ -114,6 +114,144 @@ impl F32SimdVec for F32VecAvx512 {
         unsafe { _mm512_storeu_ps(mem.as_mut_ptr(), self.0) }
     }
 
+    fn scatter_strided(&self, base: &mut [f32], offset: usize, stride: usize) {
+        // AVX-512 HAS NATIVE SCATTER! 🚀
+        // Build index vector: [offset, offset+stride, offset+2*stride, ..., offset+15*stride]
+        unsafe {
+            let indices = _mm512_set_epi32(
+                (offset + 15 * stride) as i32,
+                (offset + 14 * stride) as i32,
+                (offset + 13 * stride) as i32,
+                (offset + 12 * stride) as i32,
+                (offset + 11 * stride) as i32,
+                (offset + 10 * stride) as i32,
+                (offset + 9 * stride) as i32,
+                (offset + 8 * stride) as i32,
+                (offset + 7 * stride) as i32,
+                (offset + 6 * stride) as i32,
+                (offset + 5 * stride) as i32,
+                (offset + 4 * stride) as i32,
+                (offset + 3 * stride) as i32,
+                (offset + 2 * stride) as i32,
+                (offset + stride) as i32,
+                offset as i32,
+            );
+            // NATIVE SCATTER INSTRUCTION!
+            _mm512_i32scatter_ps(base.as_mut_ptr(), indices, self.0, 4);
+        }
+    }
+
+    fn gather_strided(_d: Self::Descriptor, base: &[f32], offset: usize, stride: usize) -> Self {
+        // AVX-512 HAS NATIVE GATHER! 🚀
+        unsafe {
+            let indices = _mm512_set_epi32(
+                (offset + 15 * stride) as i32,
+                (offset + 14 * stride) as i32,
+                (offset + 13 * stride) as i32,
+                (offset + 12 * stride) as i32,
+                (offset + 11 * stride) as i32,
+                (offset + 10 * stride) as i32,
+                (offset + 9 * stride) as i32,
+                (offset + 8 * stride) as i32,
+                (offset + 7 * stride) as i32,
+                (offset + 6 * stride) as i32,
+                (offset + 5 * stride) as i32,
+                (offset + 4 * stride) as i32,
+                (offset + 3 * stride) as i32,
+                (offset + 2 * stride) as i32,
+                (offset + stride) as i32,
+                offset as i32,
+            );
+            // NATIVE GATHER INSTRUCTION!
+            F32VecAvx512(_mm512_i32gather_ps(indices, base.as_ptr(), 4), _d)
+        }
+    }
+
+    #[inline(always)]
+    fn store_interleaved_2(a: Self, b: Self, base: &mut [f32], offset: usize) {
+        // AVX-512: LEN=16, interleave 2 vectors
+        // a=[a0,...,a15], b=[b0,...,b15]
+        // output=[a0,b0,a1,b1,...,a15,b15]
+        // Use temp buffer for simplicity (can optimize later)
+        let mut temp_a = [0.0f32; 16];
+        let mut temp_b = [0.0f32; 16];
+        unsafe {
+            _mm512_storeu_ps(temp_a.as_mut_ptr(), a.0);
+            _mm512_storeu_ps(temp_b.as_mut_ptr(), b.0);
+        }
+        for i in 0..16 {
+            base[offset + i * 2] = temp_a[i];
+            base[offset + i * 2 + 1] = temp_b[i];
+        }
+    }
+
+    #[inline(always)]
+    fn store_interleaved_4(a: Self, b: Self, c: Self, d: Self, base: &mut [f32], offset: usize) {
+        // AVX-512: LEN=16, interleave 4 vectors
+        // Use temp buffer for simplicity (can optimize later)
+        let mut temp_a = [0.0f32; 16];
+        let mut temp_b = [0.0f32; 16];
+        let mut temp_c = [0.0f32; 16];
+        let mut temp_d = [0.0f32; 16];
+        unsafe {
+            _mm512_storeu_ps(temp_a.as_mut_ptr(), a.0);
+            _mm512_storeu_ps(temp_b.as_mut_ptr(), b.0);
+            _mm512_storeu_ps(temp_c.as_mut_ptr(), c.0);
+            _mm512_storeu_ps(temp_d.as_mut_ptr(), d.0);
+        }
+        for i in 0..16 {
+            base[offset + i * 4] = temp_a[i];
+            base[offset + i * 4 + 1] = temp_b[i];
+            base[offset + i * 4 + 2] = temp_c[i];
+            base[offset + i * 4 + 3] = temp_d[i];
+        }
+    }
+
+    #[inline(always)]
+    fn store_interleaved_8(
+        a: Self,
+        b: Self,
+        c: Self,
+        d: Self,
+        e: Self,
+        f: Self,
+        g: Self,
+        h: Self,
+        base: &mut [f32],
+        offset: usize,
+    ) {
+        // AVX-512: LEN=16, interleave 8 vectors
+        // Use temp buffer for simplicity (can optimize later)
+        let mut temp_a = [0.0f32; 16];
+        let mut temp_b = [0.0f32; 16];
+        let mut temp_c = [0.0f32; 16];
+        let mut temp_d = [0.0f32; 16];
+        let mut temp_e = [0.0f32; 16];
+        let mut temp_f = [0.0f32; 16];
+        let mut temp_g = [0.0f32; 16];
+        let mut temp_h = [0.0f32; 16];
+        unsafe {
+            _mm512_storeu_ps(temp_a.as_mut_ptr(), a.0);
+            _mm512_storeu_ps(temp_b.as_mut_ptr(), b.0);
+            _mm512_storeu_ps(temp_c.as_mut_ptr(), c.0);
+            _mm512_storeu_ps(temp_d.as_mut_ptr(), d.0);
+            _mm512_storeu_ps(temp_e.as_mut_ptr(), e.0);
+            _mm512_storeu_ps(temp_f.as_mut_ptr(), f.0);
+            _mm512_storeu_ps(temp_g.as_mut_ptr(), g.0);
+            _mm512_storeu_ps(temp_h.as_mut_ptr(), h.0);
+        }
+        for i in 0..16 {
+            base[offset + i * 8] = temp_a[i];
+            base[offset + i * 8 + 1] = temp_b[i];
+            base[offset + i * 8 + 2] = temp_c[i];
+            base[offset + i * 8 + 3] = temp_d[i];
+            base[offset + i * 8 + 4] = temp_e[i];
+            base[offset + i * 8 + 5] = temp_f[i];
+            base[offset + i * 8 + 6] = temp_g[i];
+            base[offset + i * 8 + 7] = temp_h[i];
+        }
+    }
+
     fn_avx!(this: F32VecAvx512, fn mul_add(mul: F32VecAvx512, add: F32VecAvx512) -> F32VecAvx512 {
         F32VecAvx512(_mm512_fmadd_ps(this.0, mul.0, add.0), this.1)
     });
@@ -169,6 +307,10 @@ impl F32SimdVec for F32VecAvx512 {
 
     fn_avx!(this: F32VecAvx512, fn max(other: F32VecAvx512) -> F32VecAvx512 {
         F32VecAvx512(_mm512_max_ps(this.0, other.0), this.1)
+    });
+
+    fn_avx!(this: F32VecAvx512, fn min(other: F32VecAvx512) -> F32VecAvx512 {
+        F32VecAvx512(_mm512_min_ps(this.0, other.0), this.1)
     });
 
     fn_avx!(this: F32VecAvx512, fn gt(other: F32VecAvx512) -> MaskAvx512 {

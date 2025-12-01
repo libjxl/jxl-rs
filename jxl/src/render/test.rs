@@ -11,7 +11,7 @@ use crate::{
     render::{SimpleRenderPipeline, buffer_splitter::BufferSplitter},
     util::{
         ShiftRightCeil,
-        test::check_equal_images,
+        test::{check_almost_equal_images, check_equal_images},
         tracing_wrappers::{instrument, trace},
     },
 };
@@ -232,7 +232,20 @@ pub(super) fn test_stage_consistency<S: RenderPipelineTestableStage<V>, V>(
         .unwrap_or_else(|_| panic!("error running pipeline with chunk size {chunk_size}"));
 
         for (o, bo) in output.iter().zip(base_output.iter()) {
-            check_equal_images(bo, o);
+            // For floating-point images, use approximate comparison to handle
+            // cross-platform differences (e.g., AVX2 vs NEON SIMD implementations)
+            if S::OutputT::DATA_TYPE_ID == DataTypeTag::F32 {
+                // SAFETY: We just checked that the type is f32
+                #[allow(unsafe_code)]
+                let bo_f32 = unsafe { std::mem::transmute::<&Image<S::OutputT>, &Image<f32>>(bo) };
+                #[allow(unsafe_code)]
+                let o_f32 = unsafe { std::mem::transmute::<&Image<S::OutputT>, &Image<f32>>(o) };
+                // Use 1e-5 tolerance for cross-platform floating-point consistency
+                check_almost_equal_images(bo_f32, o_f32, 1e-5_f32);
+            } else {
+                // For non-floating-point types, use exact comparison
+                check_equal_images(bo, o);
+            }
         }
 
         Ok(())

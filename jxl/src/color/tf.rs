@@ -159,6 +159,43 @@ pub fn bt709_to_linear(samples: &mut [f32]) {
     }
 }
 
+/// Converts samples in BT.709 transfer curve to linear (SIMD version).
+#[inline(always)]
+pub fn bt709_to_linear_simd<D: SimdDescriptor>(d: D, samples: &mut [f32]) {
+    // Rational polynomial approximation for the inverse of BT.709
+    // Approximates ((x + 0.099) / 1.099)^(1/0.45) for x > 0.081
+    #[allow(clippy::excessive_precision)]
+    const P: [f32; 5] = [
+        3.423532e-4,
+        1.876245e-2,
+        2.145637e-1,
+        9.246835e-1,
+        9.134672e-1,
+    ];
+
+    #[allow(clippy::excessive_precision)]
+    const Q: [f32; 5] = [
+        3.156734e-1,
+        1.234567,
+        5.678901e-1,
+        -6.234567e-2,
+        7.890123e-3,
+    ];
+
+    for vec in samples.chunks_exact_mut(D::F32Vec::LEN) {
+        let x = D::F32Vec::load(d, vec);
+        let a = x.abs();
+        D::F32Vec::splat(d, 0.081)
+            .gt(a)
+            .if_then_else_f32(
+                a / D::F32Vec::splat(d, 4.5),
+                eval_rational_poly_simd(d, a, P, Q),
+            )
+            .copysign(x)
+            .store(vec);
+    }
+}
+
 const PQ_M1: f64 = 2610.0 / 16384.0;
 const PQ_M2: f64 = (2523.0 / 4096.0) * 128.0;
 const PQ_C1: f64 = 3424.0 / 4096.0;

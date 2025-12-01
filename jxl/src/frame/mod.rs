@@ -34,6 +34,8 @@ mod coeff_order;
 pub mod color_correlation_map;
 pub mod decode;
 mod group;
+#[cfg(feature = "parallel")]
+pub mod group_cache;
 pub mod modular;
 mod quant_weights;
 pub mod quantizer;

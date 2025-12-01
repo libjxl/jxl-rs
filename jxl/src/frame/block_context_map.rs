@@ -27,19 +27,31 @@ pub const COEFF_NUM_NONZERO_CONTEXT: [usize; 64] = [
     206, 206, 206, 206, 206, 206,
 ];
 
-#[inline]
+// Phase 3K: Optimize zero_density_context for VarDCT decoding
+// This is called in a tight loop for every coefficient
+#[inline(always)]
 pub fn zero_density_context(
     nonzeros_left: usize,
     k: usize,
     log_num_blocks: usize,
     prev: usize,
 ) -> usize {
+    // Compute normalized values with bit shifts (fast)
     let nonzeros_left_norm = nonzeros_left.shrc(log_num_blocks);
     let k_norm = k >> log_num_blocks;
+
     debug_assert!((1..64).contains(&k_norm));
     debug_assert!((1..64).contains(&nonzeros_left_norm));
-    (COEFF_NUM_NONZERO_CONTEXT[nonzeros_left_norm & 63] + COEFF_FREQ_CONTEXT[k_norm & 63]) * 2
-        + prev
+
+    // Phase 3K: Use unchecked array access since we mask with 63
+    // This removes bounds checks in the hot path
+    // SAFETY: We mask with 63, ensuring index is always 0..63
+    #[allow(unsafe_code)]
+    unsafe {
+        let nonzero_ctx = *COEFF_NUM_NONZERO_CONTEXT.get_unchecked(nonzeros_left_norm & 63);
+        let freq_ctx = *COEFF_FREQ_CONTEXT.get_unchecked(k_norm & 63);
+        (nonzero_ctx + freq_ctx) * 2 + prev
+    }
 }
 
 #[derive(Debug)]

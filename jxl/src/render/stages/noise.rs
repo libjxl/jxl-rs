@@ -10,6 +10,7 @@ use crate::{
     frame::color_correlation_map::ColorCorrelationParams,
     render::{RenderPipelineInOutStage, RenderPipelineInPlaceStage},
 };
+use jxl_simd::{F32SimdVec, simd_function};
 
 pub struct ConvolveNoiseStage {
     channel: usize,
@@ -20,6 +21,69 @@ impl ConvolveNoiseStage {
         ConvolveNoiseStage { channel }
     }
 }
+
+// SIMD implementation matching C++ stage_noise.cc lines 272-289
+simd_function!(
+    convolve_noise_simd_dispatch,
+    d: D,
+    fn convolve_noise_simd(
+        input: &[&[f32]],
+        output: &mut [f32],
+        xsize: usize,
+    ) {
+        let simd_width = D::F32Vec::LEN;
+
+        // Precompute constants
+        let c016 = D::F32Vec::splat(d, 0.16);
+        let cn384 = D::F32Vec::splat(d, -3.84);
+
+        // Process in SIMD chunks
+        let mut x = 0;
+        while x + simd_width <= xsize {
+            // Load center pixel (row 2, offset +2)
+            let p00 = D::F32Vec::load(d, &input[2][x + 2..]);
+
+            // Accumulate surrounding pixels (matching C++ pattern)
+            let mut others = D::F32Vec::splat(d, 0.0);
+
+            // Add all 5 rows × 5 offsets (except center)
+            for i in 0..5 {
+                others = others + D::F32Vec::load(d, &input[0][x + i..]);
+                others = others + D::F32Vec::load(d, &input[1][x + i..]);
+                others = others + D::F32Vec::load(d, &input[3][x + i..]);
+                others = others + D::F32Vec::load(d, &input[4][x + i..]);
+            }
+
+            // Add row 2 neighbors (offset 0, 1, 3, 4 - skip center at offset 2)
+            others = others + D::F32Vec::load(d, &input[2][x..]);
+            others = others + D::F32Vec::load(d, &input[2][x + 1..]);
+            others = others + D::F32Vec::load(d, &input[2][x + 3..]);
+            others = others + D::F32Vec::load(d, &input[2][x + 4..]);
+
+            // Compute: others * 0.16 + center * -3.84
+            let result = others.mul_add(c016, p00 * cn384);
+
+            result.store(&mut output[x..]);
+            x += simd_width;
+        }
+
+        // Scalar tail
+        for x in x..xsize {
+            let mut others = 0.0;
+            for i in 0..5 {
+                others += input[0][x + i];
+                others += input[1][x + i];
+                others += input[3][x + i];
+                others += input[4][x + i];
+            }
+            others += input[2][x];
+            others += input[2][x + 1];
+            others += input[2][x + 3];
+            others += input[2][x + 4];
+            output[x] = others * 0.16 + input[2][x + 2] * -3.84;
+        }
+    }
+);
 
 impl std::fmt::Display for ConvolveNoiseStage {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -46,21 +110,7 @@ impl RenderPipelineInOutStage for ConvolveNoiseStage {
         _state: Option<&mut dyn std::any::Any>,
     ) {
         let input = input_rows[0];
-        for x in 0..xsize {
-            let mut others = 0.0;
-            for i in 0..5 {
-                let offset = (x as i32 + i) as usize;
-                others += input[0][offset];
-                others += input[1][offset];
-                others += input[3][offset];
-                others += input[4][offset];
-            }
-            others += input[2][x];
-            others += input[2][x + 1];
-            others += input[2][x + 3];
-            others += input[2][x + 4];
-            output_rows[0][0][x] = others * 0.16 + input[2][x + 2] * -3.84;
-        }
+        convolve_noise_simd_dispatch(input, output_rows[0][0], xsize);
     }
 }
 
@@ -85,6 +135,119 @@ impl AddNoiseStage {
         }
     }
 }
+
+// SIMD implementation matching C++ stage_noise.cc lines 170-246
+simd_function!(
+    add_noise_simd_dispatch,
+    d: D,
+    fn add_noise_simd(
+        row: &mut [&mut [f32]],
+        xsize: usize,
+        noise: &Noise,
+        ytox: f32,
+        ytob: f32,
+    ) {
+        let simd_width = D::F32Vec::LEN;
+
+        let norm_const = D::F32Vec::splat(d, 0.22);
+        let half = D::F32Vec::splat(d, 0.5);
+        let k_rg_corr = D::F32Vec::splat(d, 0.9921875);
+        let k_rgn_corr = D::F32Vec::splat(d, 0.0078125);
+        let ytox_v = D::F32Vec::splat(d, ytox);
+        let ytob_v = D::F32Vec::splat(d, ytob);
+
+        // Process in SIMD chunks
+        let mut x = 0;
+        while x + simd_width <= xsize {
+            // Load random noise channels
+            let row_rnd_r = D::F32Vec::load(d, &row[3][x..]);
+            let row_rnd_g = D::F32Vec::load(d, &row[4][x..]);
+            let row_rnd_c = D::F32Vec::load(d, &row[5][x..]);
+
+            // Load color channels
+            let vx = D::F32Vec::load(d, &row[0][x..]);
+            let vy = D::F32Vec::load(d, &row[1][x..]);
+
+            // Compute in_g and in_r (matching C++ lines 211-212)
+            let in_g = vy - vx;
+            let in_r = vy + vx;
+
+            // Compute noise strengths (matching C++ lines 213-214)
+            let in_g_half = in_g * half;
+            let in_r_half = in_r * half;
+
+            // For SIMD, we need to process noise strength calculation
+            // C++ uses NoiseStrength function with table lookup
+            // For now, use scalar fallback for table lookup
+            let mut noise_strength_g_arr = [0.0f32; 16]; // Max SIMD lanes
+            let mut noise_strength_r_arr = [0.0f32; 16];
+
+            // Store to temp arrays for scalar processing
+            let mut in_g_half_arr = [0.0f32; 16];
+            let mut in_r_half_arr = [0.0f32; 16];
+            in_g_half.store(&mut in_g_half_arr);
+            in_r_half.store(&mut in_r_half_arr);
+
+            for i in 0..simd_width {
+                noise_strength_g_arr[i] = noise.strength(in_g_half_arr[i]);
+                noise_strength_r_arr[i] = noise.strength(in_r_half_arr[i]);
+            }
+
+            let noise_strength_g = D::F32Vec::load(d, &noise_strength_g_arr);
+            let noise_strength_r = D::F32Vec::load(d, &noise_strength_r_arr);
+
+            // Compute noise contributions (matching C++ lines 221-224)
+            let addit_rnd_noise_red = row_rnd_r * norm_const;
+            let addit_rnd_noise_green = row_rnd_g * norm_const;
+            let addit_rnd_noise_correlated = row_rnd_c * norm_const;
+
+            // Compute red and green noise (matching C++ lines 233-236)
+            let red_noise = noise_strength_r * ((k_rgn_corr * addit_rnd_noise_red) + (k_rg_corr * addit_rnd_noise_correlated));
+            let green_noise = noise_strength_g * ((k_rgn_corr * addit_rnd_noise_green) + (k_rg_corr * addit_rnd_noise_correlated));
+
+            let rg_noise = red_noise + green_noise;
+
+            // Update channels (matching C++ AddNoiseToRGB)
+            let row0 = D::F32Vec::load(d, &row[0][x..]);
+            let row1 = D::F32Vec::load(d, &row[1][x..]);
+            let row2 = D::F32Vec::load(d, &row[2][x..]);
+
+            let new_row0 = row0 + ((ytox_v * rg_noise) + (red_noise - green_noise));
+            let new_row1 = row1 + rg_noise;
+            let new_row2 = row2 + (ytob_v * rg_noise);
+
+            new_row0.store(&mut row[0][x..]);
+            new_row1.store(&mut row[1][x..]);
+            new_row2.store(&mut row[2][x..]);
+
+            x += simd_width;
+        }
+
+        // Scalar tail
+        for x in x..xsize {
+            let row_rnd_r = row[3][x];
+            let row_rnd_g = row[4][x];
+            let row_rnd_c = row[5][x];
+            let vx = row[0][x];
+            let vy = row[1][x];
+            let in_g = vy - vx;
+            let in_r = vy + vx;
+            let noise_strength_g = noise.strength(in_g * 0.5);
+            let noise_strength_r = noise.strength(in_r * 0.5);
+            let addit_rnd_noise_red = row_rnd_r * 0.22;
+            let addit_rnd_noise_green = row_rnd_g * 0.22;
+            let addit_rnd_noise_correlated = row_rnd_c * 0.22;
+            let red_noise = noise_strength_r
+                * (0.0078125 * addit_rnd_noise_red + 0.9921875 * addit_rnd_noise_correlated);
+            let green_noise = noise_strength_g
+                * (0.0078125 * addit_rnd_noise_green + 0.9921875 * addit_rnd_noise_correlated);
+            let rg_noise = red_noise + green_noise;
+            row[0][x] += ytox * rg_noise + red_noise - green_noise;
+            row[1][x] += rg_noise;
+            row[2][x] += ytob * rg_noise;
+        }
+    }
+);
 
 impl std::fmt::Display for AddNoiseStage {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -112,33 +275,9 @@ impl RenderPipelineInPlaceStage for AddNoiseStage {
         row: &mut [&mut [f32]],
         _state: Option<&mut dyn std::any::Any>,
     ) {
-        let norm_const = 0.22;
         let ytox = self.color_correlation.y_to_x_lf();
         let ytob = self.color_correlation.y_to_b_lf();
-        for x in 0..xsize {
-            let row_rnd_r = row[3][x];
-            let row_rnd_g = row[4][x];
-            let row_rnd_c = row[5][x];
-            let vx = row[0][x];
-            let vy = row[1][x];
-            let in_g = vy - vx;
-            let in_r = vy + vx;
-            let noise_strength_g = self.noise.strength(in_g * 0.5);
-            let noise_strength_r = self.noise.strength(in_r * 0.5);
-            let addit_rnd_noise_red = row_rnd_r * norm_const;
-            let addit_rnd_noise_green = row_rnd_g * norm_const;
-            let addit_rnd_noise_correlated = row_rnd_c * norm_const;
-            let k_rg_corr = 0.9921875;
-            let k_rgn_corr = 0.0078125;
-            let red_noise = noise_strength_r
-                * (k_rgn_corr * addit_rnd_noise_red + k_rg_corr * addit_rnd_noise_correlated);
-            let green_noise = noise_strength_g
-                * (k_rgn_corr * addit_rnd_noise_green + k_rg_corr * addit_rnd_noise_correlated);
-            let rg_noise = red_noise + green_noise;
-            row[0][x] += ytox * rg_noise + red_noise - green_noise;
-            row[1][x] += rg_noise;
-            row[2][x] += ytob * rg_noise;
-        }
+        add_noise_simd_dispatch(row, xsize, &self.noise, ytox, ytob);
     }
 }
 
