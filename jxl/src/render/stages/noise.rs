@@ -208,34 +208,30 @@ simd_function!(
             let frac_g = (scaled_g - floor_g).min(one_v);
             let idx_g = floor_g.as_i32();
 
-            // Select LUT values using cascading conditionals
-            let ge_5_g = idx_g.gt(four_i);
-            let ge_4_g = idx_g.gt(three_i);
-            let ge_3_g = idx_g.gt(two_i);
-            let ge_2_g = idx_g.gt(one_i);
-            let ge_1_g = idx_g.gt(zero_i);
+            // Select LUT values using cascading conditionals (outer-to-inner for correct indexing)
+            // idx can be 0-6, we need: low=lut[idx], hi=lut[idx+1]
+            let ge_6_g = idx_g.gt(five_i);  // idx > 5, so idx == 6
+            let ge_5_g = idx_g.gt(four_i);  // idx > 4, so idx >= 5
+            let ge_4_g = idx_g.gt(three_i); // idx > 3, so idx >= 4
+            let ge_3_g = idx_g.gt(two_i);   // idx > 2, so idx >= 3
+            let ge_2_g = idx_g.gt(one_i);   // idx > 1, so idx >= 2
+            let ge_1_g = idx_g.gt(zero_i);  // idx > 0, so idx >= 1
 
-            let low_g = ge_1_g.if_then_else_f32(
-                ge_2_g.if_then_else_f32(
-                    ge_3_g.if_then_else_f32(
-                        ge_4_g.if_then_else_f32(
-                            ge_5_g.if_then_else_f32(lut6, lut5),
-                            lut4),
-                        lut3),
-                    lut2),
-                lut1);
-            let low_g = ge_1_g.if_then_else_f32(low_g, lut0);
+            // low_g = lut[idx]: cascade from high to low index
+            let low_g = ge_6_g.if_then_else_f32(lut6,
+                ge_5_g.if_then_else_f32(lut5,
+                    ge_4_g.if_then_else_f32(lut4,
+                        ge_3_g.if_then_else_f32(lut3,
+                            ge_2_g.if_then_else_f32(lut2,
+                                ge_1_g.if_then_else_f32(lut1, lut0))))));
 
-            let hi_g = ge_1_g.if_then_else_f32(
-                ge_2_g.if_then_else_f32(
-                    ge_3_g.if_then_else_f32(
-                        ge_4_g.if_then_else_f32(
-                            ge_5_g.if_then_else_f32(lut7, lut6),
-                            lut5),
-                        lut4),
-                    lut3),
-                lut2);
-            let hi_g = ge_1_g.if_then_else_f32(hi_g, lut1);
+            // hi_g = lut[idx+1]: cascade from high to low index
+            let hi_g = ge_6_g.if_then_else_f32(lut7,
+                ge_5_g.if_then_else_f32(lut6,
+                    ge_4_g.if_then_else_f32(lut5,
+                        ge_3_g.if_then_else_f32(lut4,
+                            ge_2_g.if_then_else_f32(lut3,
+                                ge_1_g.if_then_else_f32(lut2, lut1))))));
 
             let noise_strength_g = ((hi_g - low_g) * frac_g + low_g).max(zero).min(one_v);
 
@@ -245,33 +241,29 @@ simd_function!(
             let frac_r = (scaled_r - floor_r).min(one_v);
             let idx_r = floor_r.as_i32();
 
+            // Select LUT values for red channel (same structure as green)
+            let ge_6_r = idx_r.gt(five_i);
             let ge_5_r = idx_r.gt(four_i);
             let ge_4_r = idx_r.gt(three_i);
             let ge_3_r = idx_r.gt(two_i);
             let ge_2_r = idx_r.gt(one_i);
             let ge_1_r = idx_r.gt(zero_i);
 
-            let low_r = ge_1_r.if_then_else_f32(
-                ge_2_r.if_then_else_f32(
-                    ge_3_r.if_then_else_f32(
-                        ge_4_r.if_then_else_f32(
-                            ge_5_r.if_then_else_f32(lut6, lut5),
-                            lut4),
-                        lut3),
-                    lut2),
-                lut1);
-            let low_r = ge_1_r.if_then_else_f32(low_r, lut0);
+            // low_r = lut[idx]: cascade from high to low index
+            let low_r = ge_6_r.if_then_else_f32(lut6,
+                ge_5_r.if_then_else_f32(lut5,
+                    ge_4_r.if_then_else_f32(lut4,
+                        ge_3_r.if_then_else_f32(lut3,
+                            ge_2_r.if_then_else_f32(lut2,
+                                ge_1_r.if_then_else_f32(lut1, lut0))))));
 
-            let hi_r = ge_1_r.if_then_else_f32(
-                ge_2_r.if_then_else_f32(
-                    ge_3_r.if_then_else_f32(
-                        ge_4_r.if_then_else_f32(
-                            ge_5_r.if_then_else_f32(lut7, lut6),
-                            lut5),
-                        lut4),
-                    lut3),
-                lut2);
-            let hi_r = ge_1_r.if_then_else_f32(hi_r, lut1);
+            // hi_r = lut[idx+1]: cascade from high to low index
+            let hi_r = ge_6_r.if_then_else_f32(lut7,
+                ge_5_r.if_then_else_f32(lut6,
+                    ge_4_r.if_then_else_f32(lut5,
+                        ge_3_r.if_then_else_f32(lut4,
+                            ge_2_r.if_then_else_f32(lut3,
+                                ge_1_r.if_then_else_f32(lut2, lut1))))));
 
             let noise_strength_r = ((hi_r - low_r) * frac_r + low_r).max(zero).min(one_v);
 
