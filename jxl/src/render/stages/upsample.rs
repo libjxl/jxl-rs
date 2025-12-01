@@ -77,7 +77,12 @@ impl<const N: usize, const SHIFT: u8> std::fmt::Display for Upsample<N, SHIFT> {
     }
 }
 
-// C++-style SIMD upsampling that matches libjxl algorithm structure
+// Chunk size for processing - matches libjxl kChunkSize
+const CHUNK_SIZE: usize = 1024;
+
+// Two-pass SIMD upsampling matching libjxl algorithm exactly
+// Pass 1: Precompute min/max to temp buffers (better cache behavior)
+// Pass 2: Kernel convolution using precomputed min/max
 simd_function!(
     upsample_simd_dispatch,
     d: D,
@@ -90,80 +95,186 @@ simd_function!(
     ) {
         let simd_width = D::F32Vec::LEN;
 
-        // Process in chunks of SIMD_WIDTH input pixels
-        let mut x = 0;
-        while x + simd_width <= xsize {
-            // Precompute min/max for clamping across 5x5 region
-            let mut minval = D::F32Vec::load(d, &input[0][x..]);
-            let mut maxval = minval;
-            for i in 0..5 {
-                for j in 0..5 {
-                    let val = D::F32Vec::load(d, &input[i][x + j..]);
-                    minval = minval.min(val);
-                    maxval = maxval.max(val);
+        // Get base slices for each input row
+        let r0 = input[0];
+        let r1 = input[1];
+        let r2 = input[2];
+        let r3 = input[3];
+        let r4 = input[4];
+
+        // Temp buffers for two-pass min/max (stack allocated, fits in L1)
+        // col_min/col_max: column-wise min/max (needs len + 4 for overlap)
+        // mins/maxs: final min/max values
+        let mut col_min = [0.0f32; CHUNK_SIZE + 16]; // +16 for SIMD alignment
+        let mut col_max = [0.0f32; CHUNK_SIZE + 16];
+        let mut mins = [0.0f32; CHUNK_SIZE + 16];
+        let mut maxs = [0.0f32; CHUNK_SIZE + 16];
+
+        // Process in chunks for better cache locality
+        let mut chunk_start = 0;
+        while chunk_start < xsize {
+            let chunk_end = (chunk_start + CHUNK_SIZE).min(xsize);
+            let chunk_len = chunk_end - chunk_start;
+
+            // === PASS 1: Precompute min/max to temp buffers ===
+            // Step 1a: Compute column-wise min/max (vertical reduction across 5 rows)
+            // Need to fill col_min/col_max[0..chunk_len+4] to support the sliding window
+            let col_fill_len = chunk_len + 4;
+            let mut cx = 0;
+            while cx < col_fill_len {
+                let x = chunk_start + cx;
+                // Handle boundary - only process valid positions
+                if cx + simd_width > col_fill_len {
+                    // Scalar fallback for the tail
+                    for i in cx..col_fill_len {
+                        let xi = chunk_start + i;
+                        let v0 = r0[xi]; let v1 = r1[xi]; let v2 = r2[xi]; let v3 = r3[xi]; let v4 = r4[xi];
+                        col_min[i] = v0.min(v1).min(v2).min(v3).min(v4);
+                        col_max[i] = v0.max(v1).max(v2).max(v3).max(v4);
+                    }
+                    break;
                 }
+                // Load from all 5 rows at this x position
+                let v0 = D::F32Vec::load(d, &r0[x..]);
+                let v1 = D::F32Vec::load(d, &r1[x..]);
+                let v2 = D::F32Vec::load(d, &r2[x..]);
+                let v3 = D::F32Vec::load(d, &r3[x..]);
+                let v4 = D::F32Vec::load(d, &r4[x..]);
+
+                // Column min/max (reduction across 5 rows)
+                let col_min_v = v0.min(v1).min(v2).min(v3).min(v4);
+                let col_max_v = v0.max(v1).max(v2).max(v3).max(v4);
+
+                // Store to temp buffers
+                col_min_v.store(&mut col_min[cx..]);
+                col_max_v.store(&mut col_max[cx..]);
+
+                cx += simd_width;
             }
 
-            // For each output row offset (oy)
-            for oy in 0..n {
-                // Compute N output values (one per ox)
-                let mut results = [D::F32Vec::splat(d, 0.0); 8]; // Max N=8
+            // Step 1b: Compute row-wise min/max from column temps (horizontal 5-wide window)
+            let mut cx = 0;
+            while cx < chunk_len {
+                // Handle tail with scalar
+                if cx + simd_width > chunk_len {
+                    for i in cx..chunk_len {
+                        mins[i] = col_min[i].min(col_min[i+1]).min(col_min[i+2]).min(col_min[i+3]).min(col_min[i+4]);
+                        maxs[i] = col_max[i].max(col_max[i+1]).max(col_max[i+2]).max(col_max[i+3]).max(col_max[i+4]);
+                    }
+                    break;
+                }
+                // Load 5 consecutive positions from col_min/col_max
+                let m0 = D::F32Vec::load(d, &col_min[cx..]);
+                let m1 = D::F32Vec::load(d, &col_min[cx + 1..]);
+                let m2 = D::F32Vec::load(d, &col_min[cx + 2..]);
+                let m3 = D::F32Vec::load(d, &col_min[cx + 3..]);
+                let m4 = D::F32Vec::load(d, &col_min[cx + 4..]);
+                let min_v = m0.min(m1).min(m2).min(m3).min(m4);
+                min_v.store(&mut mins[cx..]);
 
-                for ox in 0..n {
-                    let kernel = &flat_kernels[oy][ox];
+                let m0 = D::F32Vec::load(d, &col_max[cx..]);
+                let m1 = D::F32Vec::load(d, &col_max[cx + 1..]);
+                let m2 = D::F32Vec::load(d, &col_max[cx + 2..]);
+                let m3 = D::F32Vec::load(d, &col_max[cx + 3..]);
+                let m4 = D::F32Vec::load(d, &col_max[cx + 4..]);
+                let max_v = m0.max(m1).max(m2).max(m3).max(m4);
+                max_v.store(&mut maxs[cx..]);
 
-                    // Compute 5x5 kernel with 3-way ILP (matches C++)
-                    let mut acc0 = D::F32Vec::load(d, &input[0][x..]) * D::F32Vec::splat(d, kernel[0]);
-                    let mut acc1 = D::F32Vec::load(d, &input[0][x+1..]) * D::F32Vec::splat(d, kernel[1]);
-                    let mut acc2 = D::F32Vec::load(d, &input[0][x+2..]) * D::F32Vec::splat(d, kernel[2]);
+                cx += simd_width;
+            }
 
-                    // Loop over remaining 22 kernel elements (3 at a time)
-                    for i in 3..24 {
-                        let row = i / 5;
-                        let col = i % 5;
-                        let val = D::F32Vec::load(d, &input[row][x + col..]);
-                        let weight = D::F32Vec::splat(d, kernel[i]);
+            // === PASS 2: Kernel convolution with precomputed min/max ===
+            let mut cx = 0;
+            while cx + simd_width <= chunk_len {
+                let x = chunk_start + cx;
 
-                        match i % 3 {
-                            0 => acc0 = acc0 + val * weight,
-                            1 => acc1 = acc1 + val * weight,
-                            _ => acc2 = acc2 + val * weight,
-                        }
+                // Load precomputed min/max from temp buffers
+                let minval = D::F32Vec::load(d, &mins[cx..]);
+                let maxval = D::F32Vec::load(d, &maxs[cx..]);
+
+                // For each output row offset (oy)
+                for oy in 0..n {
+                    let mut results = [D::F32Vec::splat(d, 0.0); 8]; // Max N=8
+
+                    for ox in 0..n {
+                        let k = &flat_kernels[oy][ox];
+
+                        // Compute 5x5 kernel using FMA with 3-way ILP
+                        // Row 0
+                        let mut acc0 = D::F32Vec::load(d, &r0[x..]) * D::F32Vec::splat(d, k[0]);
+                        let mut acc1 = D::F32Vec::load(d, &r0[x+1..]) * D::F32Vec::splat(d, k[1]);
+                        let mut acc2 = D::F32Vec::load(d, &r0[x+2..]) * D::F32Vec::splat(d, k[2]);
+                        acc0 = D::F32Vec::load(d, &r0[x+3..]).mul_add(D::F32Vec::splat(d, k[3]), acc0);
+                        acc1 = D::F32Vec::load(d, &r0[x+4..]).mul_add(D::F32Vec::splat(d, k[4]), acc1);
+                        // Row 1
+                        acc2 = D::F32Vec::load(d, &r1[x..]).mul_add(D::F32Vec::splat(d, k[5]), acc2);
+                        acc0 = D::F32Vec::load(d, &r1[x+1..]).mul_add(D::F32Vec::splat(d, k[6]), acc0);
+                        acc1 = D::F32Vec::load(d, &r1[x+2..]).mul_add(D::F32Vec::splat(d, k[7]), acc1);
+                        acc2 = D::F32Vec::load(d, &r1[x+3..]).mul_add(D::F32Vec::splat(d, k[8]), acc2);
+                        acc0 = D::F32Vec::load(d, &r1[x+4..]).mul_add(D::F32Vec::splat(d, k[9]), acc0);
+                        // Row 2
+                        acc1 = D::F32Vec::load(d, &r2[x..]).mul_add(D::F32Vec::splat(d, k[10]), acc1);
+                        acc2 = D::F32Vec::load(d, &r2[x+1..]).mul_add(D::F32Vec::splat(d, k[11]), acc2);
+                        acc0 = D::F32Vec::load(d, &r2[x+2..]).mul_add(D::F32Vec::splat(d, k[12]), acc0);
+                        acc1 = D::F32Vec::load(d, &r2[x+3..]).mul_add(D::F32Vec::splat(d, k[13]), acc1);
+                        acc2 = D::F32Vec::load(d, &r2[x+4..]).mul_add(D::F32Vec::splat(d, k[14]), acc2);
+                        // Row 3
+                        acc0 = D::F32Vec::load(d, &r3[x..]).mul_add(D::F32Vec::splat(d, k[15]), acc0);
+                        acc1 = D::F32Vec::load(d, &r3[x+1..]).mul_add(D::F32Vec::splat(d, k[16]), acc1);
+                        acc2 = D::F32Vec::load(d, &r3[x+2..]).mul_add(D::F32Vec::splat(d, k[17]), acc2);
+                        acc0 = D::F32Vec::load(d, &r3[x+3..]).mul_add(D::F32Vec::splat(d, k[18]), acc0);
+                        acc1 = D::F32Vec::load(d, &r3[x+4..]).mul_add(D::F32Vec::splat(d, k[19]), acc1);
+                        // Row 4
+                        acc2 = D::F32Vec::load(d, &r4[x..]).mul_add(D::F32Vec::splat(d, k[20]), acc2);
+                        acc0 = D::F32Vec::load(d, &r4[x+1..]).mul_add(D::F32Vec::splat(d, k[21]), acc0);
+                        acc1 = D::F32Vec::load(d, &r4[x+2..]).mul_add(D::F32Vec::splat(d, k[22]), acc1);
+                        acc2 = D::F32Vec::load(d, &r4[x+3..]).mul_add(D::F32Vec::splat(d, k[23]), acc2);
+                        acc0 = D::F32Vec::load(d, &r4[x+4..]).mul_add(D::F32Vec::splat(d, k[24]), acc0);
+
+                        // Combine accumulators and clamp using precomputed min/max
+                        results[ox] = (acc0 + acc1 + acc2).max(minval).min(maxval);
                     }
 
-                    // Final element
-                    acc0 = acc0 + D::F32Vec::load(d, &input[4][x+4..]) * D::F32Vec::splat(d, kernel[24]);
+                    // Store all N results using interleaved store
+                    let dst_row = &mut output[oy];
+                    let out_offset = x * n;
 
-                    // Combine accumulators and clamp
-                    let result = (acc0 + acc1 + acc2).max(minval).min(maxval);
-                    results[ox] = result;
+                    match n {
+                        2 => D::F32Vec::store_interleaved_2(results[0], results[1], dst_row, out_offset),
+                        4 => D::F32Vec::store_interleaved_4(results[0], results[1], results[2], results[3], dst_row, out_offset),
+                        8 => D::F32Vec::store_interleaved_8(results[0], results[1], results[2], results[3],
+                                                             results[4], results[5], results[6], results[7], dst_row, out_offset),
+                        _ => unreachable!(),
+                    }
                 }
 
-                // Store all N results using interleaved store (matches C++ StoreInterleaved)
-                let dst_row = &mut output[oy];
-                let out_offset = x * n;
-
-                match n {
-                    2 => D::F32Vec::store_interleaved_2(results[0], results[1], dst_row, out_offset),
-                    4 => D::F32Vec::store_interleaved_4(results[0], results[1], results[2], results[3], dst_row, out_offset),
-                    8 => D::F32Vec::store_interleaved_8(results[0], results[1], results[2], results[3],
-                                                         results[4], results[5], results[6], results[7], dst_row, out_offset),
-                    _ => unreachable!(),
-                }
+                cx += simd_width;
             }
 
-            x += simd_width;
+            chunk_start = chunk_end;
         }
 
-        // Scalar remainder (fallback to simple implementation)
+        // Scalar remainder for any pixels not covered by SIMD chunks
+        // Calculate the last x position that was processed by SIMD
+        let simd_processed = (xsize / simd_width) * simd_width;
+        let mut x = simd_processed;
         while x < xsize {
-            let mut minval = input[0][x];
-            let mut maxval = minval;
+            // Preload all 25 values
+            let vals: [[f32; 5]; 5] = [
+                [input[0][x], input[0][x+1], input[0][x+2], input[0][x+3], input[0][x+4]],
+                [input[1][x], input[1][x+1], input[1][x+2], input[1][x+3], input[1][x+4]],
+                [input[2][x], input[2][x+1], input[2][x+2], input[2][x+3], input[2][x+4]],
+                [input[3][x], input[3][x+1], input[3][x+2], input[3][x+3], input[3][x+4]],
+                [input[4][x], input[4][x+1], input[4][x+2], input[4][x+3], input[4][x+4]],
+            ];
+
+            // Compute min/max from preloaded values
+            let mut minval = vals[0][0];
+            let mut maxval = vals[0][0];
             for i in 0..5 {
                 for j in 0..5 {
-                    let val = input[i][x + j];
-                    minval = val.min(minval);
-                    maxval = val.max(maxval);
+                    minval = minval.min(vals[i][j]);
+                    maxval = maxval.max(vals[i][j]);
                 }
             }
 
@@ -171,10 +282,10 @@ simd_function!(
                 for ox in 0..n {
                     let kernel = &flat_kernels[oy][ox];
                     let mut sum = 0.0f32;
-                    for i in 0..25 {
-                        let row = i / 5;
-                        let col = i % 5;
-                        sum += input[row][x + col] * kernel[i];
+                    for i in 0..5 {
+                        for j in 0..5 {
+                            sum += vals[i][j] * kernel[i * 5 + j];
+                        }
                     }
                     output[oy][ox + n * x] = sum.clamp(minval, maxval);
                 }
