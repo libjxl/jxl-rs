@@ -3,7 +3,7 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-use crate::render::RenderPipelineInOutStage;
+use crate::render::{Channels, ChannelsMut, RenderPipelineInOutStage};
 
 pub struct HorizontalChromaUpsample {
     channel: usize,
@@ -39,11 +39,11 @@ impl RenderPipelineInOutStage for HorizontalChromaUpsample {
         &self,
         _position: (usize, usize),
         xsize: usize,
-        input_rows: &[&[&[f32]]],
-        output_rows: &mut [&mut [&mut [f32]]],
+        input_rows: &Channels<f32>,
+        output_rows: &mut ChannelsMut<f32>,
         _state: Option<&mut dyn std::any::Any>,
     ) {
-        let input = input_rows[0];
+        let input = &input_rows[0];
         for i in 0..xsize {
             let scaled_cur = input[0][i + 1] * 0.75;
             let prev = input[0][i];
@@ -86,11 +86,11 @@ impl RenderPipelineInOutStage for VerticalChromaUpsample {
         &self,
         _position: (usize, usize),
         xsize: usize,
-        input_rows: &[&[&[f32]]],
-        output_rows: &mut [&mut [&mut [f32]]],
+        input_rows: &Channels<f32>,
+        output_rows: &mut ChannelsMut<f32>,
         _state: Option<&mut dyn std::any::Any>,
     ) {
-        let input = input_rows[0];
+        let input = &input_rows[0];
         let output = &mut output_rows[0];
         for i in 0..xsize {
             let scaled_cur = input[1][i] * 0.75;

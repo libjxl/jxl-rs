@@ -156,22 +156,43 @@ impl<T: RenderPipelineInOutStage> RunInOutStage<Image<f64>> for T {
                         }
                     }
                 }
-                let buffer_in_ref: Vec<Vec<_>> = buffer_in
-                    .iter()
-                    .map(|x| x.iter().map(|x| x as &[_]).collect())
-                    .collect();
-                let mut buffer_out_ref: Vec<Vec<_>> = buffer_out
-                    .iter_mut()
-                    .map(|x| x.iter_mut().map(|x| x as &mut [_]).collect::<Vec<_>>())
-                    .collect();
-                let in_rows: Vec<_> = buffer_in_ref.iter().map(|x| x as &[_]).collect();
-                let mut out_rows: Vec<_> =
-                    buffer_out_ref.iter_mut().map(|x| x as &mut [_]).collect();
+                // Build flat input rows: all rows for all channels in one Vec
+                let num_input_channels = buffer_in.len();
+                let input_rows_per_channel = buffer_in[0].len();
+                let mut input_row_data =
+                    Vec::with_capacity(num_input_channels * input_rows_per_channel);
+                for ch_buf in buffer_in.iter() {
+                    for row in ch_buf.iter() {
+                        input_row_data.push(row as &[_]);
+                    }
+                }
+                let input_rows = crate::render::Channels::new(
+                    input_row_data,
+                    num_input_channels,
+                    input_rows_per_channel,
+                );
+
+                // Build flat output rows: all rows for all channels in one Vec
+                let num_output_channels = buffer_out.len();
+                let output_rows_per_channel = buffer_out[0].len();
+                let mut output_row_data =
+                    Vec::with_capacity(num_output_channels * output_rows_per_channel);
+                for ch_buf in buffer_out.iter_mut() {
+                    for row in ch_buf.iter_mut() {
+                        output_row_data.push(row as &mut [_]);
+                    }
+                }
+                let mut output_rows = crate::render::ChannelsMut::new(
+                    output_row_data,
+                    num_output_channels,
+                    output_rows_per_channel,
+                );
+
                 self.process_row_chunk(
                     (x, y),
                     xsize,
-                    &in_rows,
-                    &mut out_rows,
+                    &input_rows,
+                    &mut output_rows,
                     state.as_deref_mut(),
                 );
                 let stripe_xsize =

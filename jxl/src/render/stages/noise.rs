@@ -8,7 +8,7 @@
 use crate::{
     features::noise::Noise,
     frame::color_correlation_map::ColorCorrelationParams,
-    render::{RenderPipelineInOutStage, RenderPipelineInPlaceStage},
+    render::{Channels, ChannelsMut, RenderPipelineInOutStage, RenderPipelineInPlaceStage},
 };
 
 pub struct ConvolveNoiseStage {
@@ -41,11 +41,11 @@ impl RenderPipelineInOutStage for ConvolveNoiseStage {
         &self,
         _position: (usize, usize),
         xsize: usize,
-        input_rows: &[&[&[f32]]],
-        output_rows: &mut [&mut [&mut [f32]]],
+        input_rows: &Channels<f32>,
+        output_rows: &mut ChannelsMut<f32>,
         _state: Option<&mut dyn std::any::Any>,
     ) {
-        let input = input_rows[0];
+        let input = &input_rows[0];
         for x in 0..xsize {
             let mut others = 0.0;
             for i in 0..5 {

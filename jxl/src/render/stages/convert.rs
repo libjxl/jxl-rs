@@ -4,8 +4,9 @@
 // license that can be found in the LICENSE file.
 
 use crate::{
-    frame::quantizer::LfQuantFactors, headers::bit_depth::BitDepth,
-    render::RenderPipelineInOutStage,
+    frame::quantizer::LfQuantFactors,
+    headers::bit_depth::BitDepth,
+    render::{Channels, ChannelsMut, RenderPipelineInOutStage},
 };
 
 pub struct ConvertU8F32Stage {
@@ -38,11 +39,11 @@ impl RenderPipelineInOutStage for ConvertU8F32Stage {
         &self,
         _position: (usize, usize),
         xsize: usize,
-        input_rows: &[&[&[u8]]],
-        output_rows: &mut [&mut [&mut [f32]]],
+        input_rows: &Channels<u8>,
+        output_rows: &mut ChannelsMut<f32>,
         _state: Option<&mut dyn std::any::Any>,
     ) {
-        let input = input_rows[0];
+        let input = &input_rows[0];
         for i in 0..xsize {
             output_rows[0][0][i] = input[0][i] as f32 * (1.0 / 255.0);
         }
@@ -89,19 +90,21 @@ impl RenderPipelineInOutStage for ConvertModularXYBToF32Stage {
         &self,
         _position: (usize, usize),
         xsize: usize,
-        input_rows: &[&[&[i32]]],
-        output_rows: &mut [&mut [&mut [f32]]],
+        input_rows: &Channels<i32>,
+        output_rows: &mut ChannelsMut<f32>,
         _state: Option<&mut dyn std::any::Any>,
     ) {
         let [scale_x, scale_y, scale_b] = self.scale;
-        let ([input_y, input_x, input_b], [output_x, output_y, output_b]) =
-            (input_rows, output_rows)
-        else {
-            panic!(
-                "incorrect number of channels; expected 3, found {}",
-                input_rows.len()
-            );
-        };
+        assert_eq!(
+            input_rows.len(),
+            3,
+            "incorrect number of channels; expected 3, found {}",
+            input_rows.len()
+        );
+        // Input channels: [Y, X, B] (modular XYB order)
+        // Output channels: [X, Y, B] (standard XYB order)
+        let (input_y, input_x, input_b) = (&input_rows[0], &input_rows[1], &input_rows[2]);
+        let (output_x, output_y, output_b) = output_rows.split_first_3_mut();
         for i in 0..xsize {
             output_x[0][i] = input_x[0][i] as f32 * scale_x;
             output_y[0][i] = input_y[0][i] as f32 * scale_y;
@@ -205,11 +208,11 @@ impl RenderPipelineInOutStage for ConvertModularToF32Stage {
         &self,
         _position: (usize, usize),
         xsize: usize,
-        input_rows: &[&[&[i32]]],
-        output_rows: &mut [&mut [&mut [f32]]],
+        input_rows: &Channels<i32>,
+        output_rows: &mut ChannelsMut<f32>,
         _state: Option<&mut dyn std::any::Any>,
     ) {
-        let input = input_rows[0];
+        let input = &input_rows[0];
         if self.bit_depth.floating_point_sample() {
             int_to_float(
                 &input[0][..xsize],
@@ -261,11 +264,11 @@ impl RenderPipelineInOutStage for ConvertF32ToU8Stage {
         &self,
         _position: (usize, usize),
         xsize: usize,
-        input_rows: &[&[&[f32]]],
-        output_rows: &mut [&mut [&mut [u8]]],
+        input_rows: &Channels<f32>,
+        output_rows: &mut ChannelsMut<u8>,
         _state: Option<&mut dyn std::any::Any>,
     ) {
-        let input = input_rows[0];
+        let input = &input_rows[0];
         let max = ((1u32 << self.bit_depth) - 1) as f32;
         for i in 0..xsize {
             output_rows[0][0][i] = (input[0][i].clamp(0.0, 1.0) * max).round() as u8;
@@ -309,11 +312,11 @@ impl RenderPipelineInOutStage for ConvertF32ToU16Stage {
         &self,
         _position: (usize, usize),
         xsize: usize,
-        input_rows: &[&[&[f32]]],
-        output_rows: &mut [&mut [&mut [u16]]],
+        input_rows: &Channels<f32>,
+        output_rows: &mut ChannelsMut<u16>,
         _state: Option<&mut dyn std::any::Any>,
     ) {
-        let input = input_rows[0];
+        let input = &input_rows[0];
         let max = ((1u32 << self.bit_depth) - 1) as f32;
         for i in 0..xsize {
             output_rows[0][0][i] = (input[0][i].clamp(0.0, 1.0) * max).round() as u16;
@@ -352,11 +355,11 @@ impl RenderPipelineInOutStage for ConvertF32ToF16Stage {
         &self,
         _position: (usize, usize),
         xsize: usize,
-        input_rows: &[&[&[f32]]],
-        output_rows: &mut [&mut [&mut [crate::util::f16]]],
+        input_rows: &Channels<f32>,
+        output_rows: &mut ChannelsMut<crate::util::f16>,
         _state: Option<&mut dyn std::any::Any>,
     ) {
-        let input = input_rows[0];
+        let input = &input_rows[0];
         for i in 0..xsize {
             output_rows[0][0][i] = crate::util::f16::from_f32(input[0][i]);
         }
