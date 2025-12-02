@@ -129,10 +129,10 @@ impl CodestreamParser {
             .set_use_simple_pipeline(u);
     }
 
-    pub(super) fn process<In: JxlBitstreamInput>(
+    pub(super) fn process(
         &mut self,
         box_parser: &mut BoxParser,
-        input: &mut In,
+        input: &mut dyn JxlBitstreamInput,
         decode_options: &JxlDecoderOptions,
         mut output_buffers: Option<&mut [JxlOutputBuffer]>,
     ) -> Result<()> {

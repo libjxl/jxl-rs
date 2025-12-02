@@ -47,6 +47,7 @@ impl DctQuantWeightParams {
     const LOG2_MAX_DISTANCE_BANDS: usize = 4;
     const MAX_DISTANCE_BANDS: usize = 1 + (1 << Self::LOG2_MAX_DISTANCE_BANDS);
 
+    #[inline(never)]
     pub fn from_array<const N: usize>(values: &[[f32; N]; 3]) -> Self {
         let mut result = Self {
             params: [[0.0; Self::MAX_DISTANCE_BANDS]; 3],
@@ -58,6 +59,7 @@ impl DctQuantWeightParams {
         result
     }
 
+    #[inline(never)]
     pub fn decode(br: &mut BitReader) -> Result<Self> {
         let num_bands = br.read(Self::LOG2_MAX_DISTANCE_BANDS)? as usize + 1;
         let mut params = [[0.0; Self::MAX_DISTANCE_BANDS]; 3];

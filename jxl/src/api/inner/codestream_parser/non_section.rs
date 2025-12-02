@@ -25,6 +25,7 @@ use super::{CodestreamParser, SectionBuffer};
 use crate::api::ToneMapping;
 
 impl CodestreamParser {
+    #[cold]
     pub(super) fn process_non_section(&mut self, decode_options: &JxlDecoderOptions) -> Result<()> {
         if self.decoder_state.is_none() && self.file_header.is_none() {
             // We don't have a file header yet. Try parsing that.
