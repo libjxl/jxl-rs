@@ -24,6 +24,39 @@ use jxl_simd::{F32SimdVec, I32SimdVec, SimdDescriptor, SimdMask, simd_function};
 
 const LF_BUFFER_SIZE: usize = 32 * 32;
 
+/// Reusable buffers for VarDCT group decoding to avoid repeated allocations.
+pub struct VarDctBuffers {
+    pub scratch: Vec<f32>,
+    pub transform_buffer: [Vec<f32>; 3],
+}
+
+impl VarDctBuffers {
+    pub fn new() -> Self {
+        Self {
+            scratch: vec![0.0; LF_BUFFER_SIZE],
+            transform_buffer: [
+                vec![0.0; MAX_COEFF_AREA],
+                vec![0.0; MAX_COEFF_AREA],
+                vec![0.0; MAX_COEFF_AREA],
+            ],
+        }
+    }
+
+    /// Reset buffers to zero for reuse.
+    pub fn reset(&mut self) {
+        self.scratch.fill(0.0);
+        for buf in &mut self.transform_buffer {
+            buf.fill(0.0);
+        }
+    }
+}
+
+impl Default for VarDctBuffers {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 #[inline]
 fn predict_num_nonzeros(nzeros_map: &Image<u32>, bx: usize, by: usize) -> usize {
     if bx == 0 {
@@ -282,6 +315,7 @@ pub fn decode_vardct_group(
     quant_biases: &[f32; 4],
     pixels: &mut [Image<f32>; 3],
     br: &mut BitReader,
+    buffers: &mut VarDctBuffers,
 ) -> Result<(), Error> {
     let x_dm_multiplier = (1.0 / (1.25)).powf(frame_header.x_qm_scale as f32 - 2.0);
     let b_dm_multiplier = (1.0 / (1.25)).powf(frame_header.b_qm_scale as f32 - 2.0);
@@ -292,7 +326,9 @@ pub fn decode_vardct_group(
     let mut reader = SymbolReader::new(&hf_global.passes[pass].histograms, br, None)?;
     let block_group_rect = frame_header.block_group_rect(group);
     debug!(?block_group_rect);
-    let mut scratch = vec![0.0; LF_BUFFER_SIZE];
+    // Reset and use pooled buffers
+    buffers.reset();
+    let scratch = &mut buffers.scratch;
     let color_correlation_params = lf_global.color_correlation_params.as_ref().unwrap();
     let cmap_rect = Rect {
         origin: (
@@ -347,11 +383,7 @@ pub fn decode_vardct_group(
         0
     };
     let mut coeffs_offset = 0;
-    let mut transform_buffer: [Vec<f32>; 3] = [
-        vec![0.0; MAX_COEFF_AREA],
-        vec![0.0; MAX_COEFF_AREA],
-        vec![0.0; MAX_COEFF_AREA],
-    ];
+    let transform_buffer = &mut buffers.transform_buffer;
 
     let hshift = [
         frame_header.hshift(0),
@@ -504,9 +536,9 @@ pub fn decode_vardct_group(
                 x_dm_multiplier,
                 b_dm_multiplier,
                 pixels,
-                &mut scratch,
+                scratch,
                 inv_global_scale,
-                &mut transform_buffer,
+                transform_buffer,
                 hshift,
                 vshift,
                 by,

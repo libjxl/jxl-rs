@@ -183,6 +183,8 @@ pub struct Frame {
     lf_frame_data: Option<[Image<f32>; 3]>,
     use_simple_pipeline: bool,
     lf_global_was_rendered: bool,
+    /// Reusable buffers for VarDCT group decoding.
+    vardct_buffers: Option<group::VarDctBuffers>,
 }
 
 impl Frame {

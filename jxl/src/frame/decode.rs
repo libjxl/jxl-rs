@@ -10,7 +10,7 @@ use super::{
     block_context_map::BlockContextMap,
     coeff_order::decode_coeff_orders,
     color_correlation_map::ColorCorrelationParams,
-    group::decode_vardct_group,
+    group::{VarDctBuffers, decode_vardct_group},
     modular::{FullModularImage, ModularStreamId, Tree, decode_hf_metadata, decode_vardct_lf},
     quant_weights::DequantMatrices,
     quantizer::{LfQuantFactors, QuantizerParams},
@@ -138,6 +138,7 @@ impl Frame {
             reference_frame_data,
             lf_frame_data,
             lf_global_was_rendered: false,
+            vardct_buffers: None,
         })
     }
     /// Given a bit reader pointing at the end of the TOC, returns a vector of `BitReader`s, each
@@ -434,6 +435,7 @@ impl Frame {
                 pipeline!(self, p, p.get_buffer(1))?,
                 pipeline!(self, p, p.get_buffer(2))?,
             ];
+            let buffers = self.vardct_buffers.get_or_insert_with(VarDctBuffers::new);
             decode_vardct_group(
                 group,
                 pass,
@@ -451,6 +453,7 @@ impl Frame {
                     .quant_biases,
                 &mut pixels,
                 &mut br,
+                buffers,
             )?;
             if self.decoder_state.enable_output
                 && pass + 1 == self.header.passes.num_passes as usize
