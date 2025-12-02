@@ -5,8 +5,6 @@
 
 use std::{cell::Ref, fmt::Debug};
 
-use num_traits::FromPrimitive;
-
 use crate::{
     error::{Error, Result},
     frame::modular::{

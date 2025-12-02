@@ -3,9 +3,6 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-use num_derive::FromPrimitive;
-use num_traits::FromPrimitive;
-
 use crate::{
     bit_reader::BitReader,
     entropy_coding::decode::Histograms,
@@ -38,7 +35,7 @@ impl PatchContext {
 }
 
 /// Blend modes
-#[derive(Debug, PartialEq, Eq, Clone, Copy, FromPrimitive)]
+#[derive(Debug, PartialEq, Eq, Clone, Copy)]
 #[repr(u8)]
 pub enum PatchBlendMode {
     // The new values are the old ones. Useful to skip some channels.
@@ -78,22 +75,23 @@ pub enum PatchBlendMode {
 impl PatchBlendMode {
     pub const NUM_BLEND_MODES: u8 = 8;
 
+    pub fn from_u8(i: u8) -> Option<PatchBlendMode> {
+        match i {
+            0 => Some(PatchBlendMode::None),
+            1 => Some(PatchBlendMode::Replace),
+            2 => Some(PatchBlendMode::Add),
+            3 => Some(PatchBlendMode::Mul),
+            4 => Some(PatchBlendMode::BlendAbove),
+            5 => Some(PatchBlendMode::BlendBelow),
+            6 => Some(PatchBlendMode::AlphaWeightedAddAbove),
+            7 => Some(PatchBlendMode::AlphaWeightedAddBelow),
+            _ => None,
+        }
+    }
+
     #[cfg(test)]
     fn try_from(i: u8) -> Result<PatchBlendMode> {
-        match i {
-            0 => Ok(PatchBlendMode::None),
-            1 => Ok(PatchBlendMode::Replace),
-            2 => Ok(PatchBlendMode::Add),
-            3 => Ok(PatchBlendMode::Mul),
-            4 => Ok(PatchBlendMode::BlendAbove),
-            5 => Ok(PatchBlendMode::BlendBelow),
-            6 => Ok(PatchBlendMode::AlphaWeightedAddAbove),
-            7 => Ok(PatchBlendMode::AlphaWeightedAddBelow),
-            _ => Err(Error::PatchesInvalidBlendMode(
-                i,
-                PatchBlendMode::NUM_BLEND_MODES,
-            )),
-        }
+        Self::from_u8(i).ok_or(Error::PatchesInvalidBlendMode(i, Self::NUM_BLEND_MODES))
     }
 
     #[cfg(test)]

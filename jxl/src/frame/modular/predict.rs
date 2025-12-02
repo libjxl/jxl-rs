@@ -11,11 +11,9 @@ use crate::{
     image::Image,
     util::floor_log2_nonzero,
 };
-use num_derive::FromPrimitive;
-use num_traits::FromPrimitive;
 
 #[repr(u8)]
-#[derive(Debug, FromPrimitive, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Predictor {
     Zero = 0,
     West = 1,
@@ -42,6 +40,26 @@ impl Predictor {
                 | Predictor::AverageNorthAndNorthEast
                 | Predictor::AverageAll
         )
+    }
+
+    pub fn from_u32(value: u32) -> Option<Self> {
+        match value {
+            0 => Some(Self::Zero),
+            1 => Some(Self::West),
+            2 => Some(Self::North),
+            3 => Some(Self::AverageWestAndNorth),
+            4 => Some(Self::Select),
+            5 => Some(Self::Gradient),
+            6 => Some(Self::Weighted),
+            7 => Some(Self::NorthEast),
+            8 => Some(Self::NorthWest),
+            9 => Some(Self::WestWest),
+            10 => Some(Self::AverageWestAndNorthWest),
+            11 => Some(Self::AverageNorthAndNorthWest),
+            12 => Some(Self::AverageNorthAndNorthEast),
+            13 => Some(Self::AverageAll),
+            _ => None,
+        }
     }
 }
 

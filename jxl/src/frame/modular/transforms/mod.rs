@@ -7,7 +7,6 @@ use std::cell::RefCell;
 
 use apply::TransformStep;
 pub use apply::TransformStepChunk;
-use num_derive::FromPrimitive;
 
 use crate::frame::modular::ModularBuffer;
 use crate::headers::frame_header::FrameHeader;
@@ -20,7 +19,7 @@ mod palette;
 mod rct;
 mod squeeze;
 
-#[derive(Debug, FromPrimitive, PartialEq, Clone, Copy)]
+#[derive(Debug, PartialEq, Clone, Copy)]
 pub enum RctPermutation {
     Rgb = 0,
     Gbr = 1,
@@ -30,7 +29,21 @@ pub enum RctPermutation {
     Bgr = 5,
 }
 
-#[derive(Debug, FromPrimitive, PartialEq, Clone, Copy)]
+impl RctPermutation {
+    pub fn from_u32(value: u32) -> Option<Self> {
+        match value {
+            0 => Some(Self::Rgb),
+            1 => Some(Self::Gbr),
+            2 => Some(Self::Brg),
+            3 => Some(Self::Rbg),
+            4 => Some(Self::Grb),
+            5 => Some(Self::Bgr),
+            _ => None,
+        }
+    }
+}
+
+#[derive(Debug, PartialEq, Clone, Copy)]
 pub enum RctOp {
     Noop = 0,
     AddFirstToThird = 1,
@@ -39,6 +52,21 @@ pub enum RctOp {
     AddAvgToSecond = 4,
     AddFirstToThirdAndAvgToSecond = 5,
     YCoCg = 6,
+}
+
+impl RctOp {
+    pub fn from_u32(value: u32) -> Option<Self> {
+        match value {
+            0 => Some(Self::Noop),
+            1 => Some(Self::AddFirstToThird),
+            2 => Some(Self::AddFirstToSecond),
+            3 => Some(Self::AddFirstToSecondAndThird),
+            4 => Some(Self::AddAvgToSecond),
+            5 => Some(Self::AddFirstToThirdAndAvgToSecond),
+            6 => Some(Self::YCoCg),
+            _ => None,
+        }
+    }
 }
 
 #[instrument(level = "trace", skip_all, ret)]

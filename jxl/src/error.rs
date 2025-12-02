@@ -163,8 +163,6 @@ pub enum Error {
     PatchesTooMany(String, usize, usize),
     #[error("Reference too large: {0}, limit is {1}")]
     PatchesRefTooLarge(usize, usize),
-    #[error("Point list is empty")]
-    PointListEmpty,
     #[error("Too large area for spline: {0}, limit is {1}")]
     SplinesAreaTooLarge(u64, u64),
     #[error("Too large manhattan_distance reached: {0}, limit is {1}")]
