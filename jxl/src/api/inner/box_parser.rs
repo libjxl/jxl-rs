@@ -45,11 +45,8 @@ impl BoxParser {
     // Returns the number of codestream bytes that will be available to be read after this call,
     // including any bytes in self.box_buffer.
     // Might return `u64::MAX`, indicating that the rest of the file is codestream.
-    pub(super) fn get_more_codestream(
-        &mut self,
-        input: &mut impl JxlBitstreamInput,
-    ) -> Result<u64> {
-        // TODO(veluca): consider moving most of this function into a function that is not generic.
+    #[inline(never)]
+    pub(super) fn get_more_codestream(&mut self, input: &mut dyn JxlBitstreamInput) -> Result<u64> {
         loop {
             match self.state.clone() {
                 ParseState::SignatureNeeded => {

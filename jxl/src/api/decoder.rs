@@ -83,9 +83,20 @@ impl JxlDecoder<Initialized> {
         Self::wrap_inner(JxlDecoderInner::new(options))
     }
 
+    /// Generic wrapper that delegates to non-generic implementation
+    #[inline(always)]
     pub fn process(
         mut self,
         input: &mut impl JxlBitstreamInput,
+    ) -> Result<ProcessingResult<JxlDecoder<WithImageInfo>, Self>> {
+        self.process_dyn(input)
+    }
+
+    /// Non-generic implementation to avoid monomorphization bloat
+    #[inline(never)]
+    fn process_dyn(
+        mut self,
+        input: &mut dyn JxlBitstreamInput,
     ) -> Result<ProcessingResult<JxlDecoder<WithImageInfo>, Self>> {
         let inner_result = self.inner.process(input, None)?;
         Ok(self.map_inner_processing_result(inner_result))
@@ -124,9 +135,20 @@ impl JxlDecoder<WithImageInfo> {
         self.inner.set_pixel_format(pixel_format);
     }
 
+    /// Generic wrapper that delegates to non-generic implementation
+    #[inline(always)]
     pub fn process(
         mut self,
         input: &mut impl JxlBitstreamInput,
+    ) -> Result<ProcessingResult<JxlDecoder<WithFrameInfo>, Self>> {
+        self.process_dyn(input)
+    }
+
+    /// Non-generic implementation to avoid monomorphization bloat
+    #[inline(never)]
+    fn process_dyn(
+        mut self,
+        input: &mut dyn JxlBitstreamInput,
     ) -> Result<ProcessingResult<JxlDecoder<WithFrameInfo>, Self>> {
         let inner_result = self.inner.process(input, None)?;
         Ok(self.map_inner_processing_result(inner_result))
@@ -144,9 +166,18 @@ impl JxlDecoder<WithImageInfo> {
 
 impl JxlDecoder<WithFrameInfo> {
     /// Skip the current frame.
+    #[inline(always)]
     pub fn skip_frame(
         mut self,
         input: &mut impl JxlBitstreamInput,
+    ) -> Result<ProcessingResult<JxlDecoder<WithImageInfo>, Self>> {
+        self.skip_frame_dyn(input)
+    }
+
+    #[inline(never)]
+    fn skip_frame_dyn(
+        mut self,
+        input: &mut dyn JxlBitstreamInput,
     ) -> Result<ProcessingResult<JxlDecoder<WithImageInfo>, Self>> {
         let inner_result = self.inner.process(input, None)?;
         Ok(self.map_inner_processing_result(inner_result))
@@ -168,9 +199,19 @@ impl JxlDecoder<WithFrameInfo> {
 
     /// Guarantees to populate exactly the appropriate part of the buffers.
     /// Wants one buffer for each non-ignored pixel type, i.e. color channels and each extra channel.
-    pub fn process<In: JxlBitstreamInput>(
+    #[inline(always)]
+    pub fn process(
         mut self,
-        input: &mut In,
+        input: &mut impl JxlBitstreamInput,
+        buffers: &mut [JxlOutputBuffer<'_>],
+    ) -> Result<ProcessingResult<JxlDecoder<WithImageInfo>, Self>> {
+        self.process_dyn(input, buffers)
+    }
+
+    #[inline(never)]
+    fn process_dyn(
+        mut self,
+        input: &mut dyn JxlBitstreamInput,
         buffers: &mut [JxlOutputBuffer<'_>],
     ) -> Result<ProcessingResult<JxlDecoder<WithImageInfo>, Self>> {
         let inner_result = self.inner.process(input, Some(buffers))?;

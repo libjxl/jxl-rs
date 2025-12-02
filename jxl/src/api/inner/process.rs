@@ -100,9 +100,10 @@ impl JxlDecoderInner {
     /// file/frame header, or finished decoding a frame).
     /// If called when decoding a frame with `None` for buffers, the frame will still be read,
     /// but pixel data will not be produced.
-    pub fn process<In: JxlBitstreamInput>(
+    #[inline(never)]
+    pub fn process(
         &mut self,
-        input: &mut In,
+        input: &mut dyn JxlBitstreamInput,
         buffers: Option<&mut [JxlOutputBuffer]>,
     ) -> Result<ProcessingResult<(), ()>> {
         ProcessingResult::new(self.codestream_parser.process(
