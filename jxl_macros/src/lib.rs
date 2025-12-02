@@ -625,6 +625,8 @@ fn derive_struct(input: &DeriveInput) -> TokenStream2 {
         #impl_default
         impl crate::headers::encodings::UnconditionalCoder<()> for #name {
             type Nonserialized = #nonserialized;
+            #[cold]
+            #[inline(never)]
             fn read_unconditional(_: &(), br: &mut BitReader, nonserialized: &Self::Nonserialized) -> Result<#name, Error> {
                 use crate::headers::encodings::UnconditionalCoder;
                 use crate::headers::encodings::ConditionalCoder;

@@ -28,7 +28,7 @@ pub mod states {
 
 /// High level API using the typestate pattern to forbid invalid usage.
 pub struct JxlDecoder<State: JxlState> {
-    inner: JxlDecoderInner,
+    inner: Box<JxlDecoderInner>,
     _state: PhantomData<State>,
 }
 
@@ -36,7 +36,7 @@ pub struct JxlDecoder<State: JxlState> {
 pub type FrameCallback = dyn FnMut(&Frame, usize) -> Result<()>;
 
 impl<S: JxlState> JxlDecoder<S> {
-    fn wrap_inner(inner: JxlDecoderInner) -> Self {
+    fn wrap_inner(inner: Box<JxlDecoderInner>) -> Self {
         Self {
             inner,
             _state: PhantomData,
@@ -80,7 +80,7 @@ impl<S: JxlState> JxlDecoder<S> {
 
 impl JxlDecoder<Initialized> {
     pub fn new(options: JxlDecoderOptions) -> Self {
-        Self::wrap_inner(JxlDecoderInner::new(options))
+        Self::wrap_inner(Box::new(JxlDecoderInner::new(options)))
     }
 
     pub fn process(
