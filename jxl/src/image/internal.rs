@@ -25,7 +25,7 @@ pub(super) struct RawImageBuffer {
     //    `buf[i*bytes_between_rows..i*bytes_between_rows+bytes_per_row]` for all values of `i`
     //    from `0` to `num_rows-1`.
     //  - all the bytes in those ranges (and in between) are part of the same allocated object.
-    //  - `num_rows > 0`, `bytes_per_row > 0`, `bytes_per_row <= bytes_between_rows`.
+    //  - if `num_rows > 0`, then `bytes_per_row > 0`, `bytes_per_row <= bytes_between_rows`.
     //  - The computation `E = bytes_between_rows * (num_rows-1) + bytes_per_row` does not
     //    overflow and has a result that is at most `isize::MAX`, or num_rows is 0.
     // We will call the bytes in the range above the "accessible bytes" of a RawImageBuffer.
@@ -203,22 +203,22 @@ impl RawImageBuffer {
     /// The returned RawImageBuffer owns the memory it references, which belongs to a single
     /// allocation of size minimum_allocation_size().
     pub(super) fn try_allocate(byte_size: (usize, usize), uninit: bool) -> Result<RawImageBuffer> {
-        let (xsize, ysize) = byte_size;
+        let (bytes_per_row, num_rows) = byte_size;
         // To simplify modular transform logic, we allow empty images, because some modular
-        // meta-images can have 0 xsize or ysize (e.g. delta-palette, reference property image).
-        if xsize == 0 || ysize == 0 {
+        // meta-images can have 0 bytes_per_row or num_rows (e.g. delta-palette, reference property image).
+        if bytes_per_row == 0 || num_rows == 0 {
             return Ok(RawImageBuffer::empty());
         }
         // These limits let us not worry about overflows.
-        if xsize as u64 >= i64::MAX as u64 / 4 || ysize as u64 >= i64::MAX as u64 / 4 {
-            return Err(Error::ImageSizeTooLarge(xsize, ysize));
+        if bytes_per_row as u64 >= i64::MAX as u64 / 4 || num_rows as u64 >= i64::MAX as u64 / 4 {
+            return Err(Error::ImageSizeTooLarge(bytes_per_row, num_rows));
         }
         debug!("trying to allocate image");
-        let bytes_per_row = xsize;
+        let bytes_per_row = bytes_per_row;
         let bytes_between_rows =
             bytes_per_row.div_ceil(CACHE_LINE_BYTE_SIZE) * CACHE_LINE_BYTE_SIZE;
         // Note: matches RawImageBuffer::minimum_allocation_size.
-        let allocation_len = (ysize - 1)
+        let allocation_len = (num_rows - 1)
             .checked_mul(bytes_between_rows)
             .unwrap()
             .checked_add(bytes_per_row)
@@ -234,14 +234,14 @@ impl RawImageBuffer {
             }
         };
         if memory.is_null() {
-            return Err(Error::ImageOutOfMemory(xsize, ysize));
+            return Err(Error::ImageOutOfMemory(bytes_per_row, num_rows));
         }
         // SAFETY: `memory` points to a contiguous array of size minimum_allocation_size(), and we
         // transfer ownership so the validity requirements are satisfied.
         Ok(unsafe {
             RawImageBuffer::new_from_ptr(
                 memory as *mut MaybeUninit<u8>,
-                ysize,
+                num_rows,
                 bytes_per_row,
                 bytes_between_rows,
             )

@@ -122,10 +122,11 @@ impl<T: ImageDataType> Image<T> {
     #[inline(always)]
     pub fn row(&self, row: usize) -> &[T] {
         let row = self.raw.row(row);
-        // SAFETY: Since self.raw.data.is_aligned(T::DATA_TYPE_ID.size()), the returned slice is
-        // aligned to T::DATA_TYPE_ID.size(), and sizeof(T) == T::DATA_TYPE_ID.size()
-        // by the requirements of ImageDataType; moreover ImageDataType requires T to be a
-        // bag-of-bits type with no padding, so the implicit transmute is not an issue.
+        // SAFETY: Since self.raw.data.is_aligned(T::DATA_TYPE_ID.size()) by the safety invariant
+        // on `self`, the returned slice is aligned to T::DATA_TYPE_ID.size(), and sizeof(T) ==
+        // T::DATA_TYPE_ID.size() by the requirements of ImageDataType; moreover, ImageDataType
+        // requires T to be a bag-of-bits type with no padding, so the implicit transmute is not
+        // an issue.
         unsafe {
             std::slice::from_raw_parts(row.as_ptr() as *const T, row.len() / T::DATA_TYPE_ID.size())
         }
@@ -134,10 +135,11 @@ impl<T: ImageDataType> Image<T> {
     #[inline(always)]
     pub fn row_mut(&mut self, row: usize) -> &mut [T] {
         let row = self.raw.row_mut(row);
-        // SAFETY: Since self.raw.data.is_aligned(T::DATA_TYPE_ID.size()), the returned slice is
-        // aligned to T::DATA_TYPE_ID.size(), and sizeof(T) == T::DATA_TYPE_ID.size()
-        // by the requirements of ImageDataType; moreover ImageDataType requires T to be a
-        // bag-of-bits type with no padding, so the implicit transmute is not an issue.
+        // SAFETY: Since self.raw.data.is_aligned(T::DATA_TYPE_ID.size()) by the safety invariant
+        // on `self`, the returned slice is aligned to T::DATA_TYPE_ID.size(), and sizeof(T) ==
+        // T::DATA_TYPE_ID.size() by the requirements of ImageDataType; moreover, ImageDataType
+        // requires T to be a bag-of-bits type with no padding, so the implicit transmute is not
+        // an issue.
         unsafe {
             std::slice::from_raw_parts_mut(
                 row.as_mut_ptr() as *mut T,
@@ -154,11 +156,11 @@ impl<T: ImageDataType> Image<T> {
         // SAFETY: we don't write uninit data to the returned `rows`, and `self.raw` has ownership
         // of the accessible bytes of `self.raw.data`.
         let rows = unsafe { self.raw.data.distinct_rows_mut(rows) };
-        // SAFETY: Since self.raw.data.is_aligned(T::DATA_TYPE_ID.size()), the returned slices are
-        // aligned to T::DATA_TYPE_ID.size(), and sizeof(T) == T::DATA_TYPE_ID.size() by the
-        // requirements of ImageDataType; moreover ImageDataType requires T to be a bag-of-bits
-        // type with no padding and `self.raw` guarantees its accessible bytes are initialized, so
-        // the transmute is not an issue.
+        // SAFETY: Since self.raw.data.is_aligned(T::DATA_TYPE_ID.size()) by the safety invariant
+        // on `self`, the returned slices are aligned to T::DATA_TYPE_ID.size(), and sizeof(T)
+        // == T::DATA_TYPE_ID.size() by the requirements of ImageDataType; moreover, ImageDataType
+        // requires T to be a bag-of-bits type with no padding and `self.raw` guarantees its
+        // accessible bytes are initialized, so the transmute is not an issue.
         unsafe { I::transmute_rows(rows) }
     }
 }
@@ -185,10 +187,11 @@ impl<'a, T: ImageDataType> ImageRect<'a, T> {
     #[inline(always)]
     pub fn row(&self, row: usize) -> &'a [T] {
         let row = self.raw.row(row);
-        // SAFETY: Since self.raw.data.is_aligned(T::DATA_TYPE_ID.size()), the returned slice is
-        // aligned to T::DATA_TYPE_ID.size(), and sizeof(T) == T::DATA_TYPE_ID.size()
-        // by the requirements of ImageDataType; moreover ImageDataType requires T to be a
-        // bag-of-bits type with no padding, so the implicit transmute is not an issue.
+        // SAFETY: Since self.raw.data.is_aligned(T::DATA_TYPE_ID.size()) by the safety invariant
+        // on `self`, the returned slice is aligned to T::DATA_TYPE_ID.size(), and sizeof(T) ==
+        // T::DATA_TYPE_ID.size() by the requirements of ImageDataType; moreover, ImageDataType
+        // requires T to be a bag-of-bits type with no padding, so the implicit transmute is not
+        // an issue.
         unsafe {
             std::slice::from_raw_parts(row.as_ptr() as *const T, row.len() / T::DATA_TYPE_ID.size())
         }
@@ -234,10 +237,11 @@ impl<'a, T: ImageDataType> ImageRectMut<'a, T> {
     #[inline(always)]
     pub fn row(&mut self, row: usize) -> &mut [T] {
         let row = self.raw.row(row);
-        // SAFETY: Since self.raw.data.is_aligned(T::DATA_TYPE_ID.size()), the returned slice is
-        // aligned to T::DATA_TYPE_ID.size(), and sizeof(T) == T::DATA_TYPE_ID.size()
-        // by the requirements of ImageDataType; moreover ImageDataType requires T to be a
-        // bag-of-bits type with no padding, so the implicit transmute is not an issue.
+        // SAFETY: Since self.raw.data.is_aligned(T::DATA_TYPE_ID.size()) by the safety invariant
+        // on `self`, the returned slice is aligned to T::DATA_TYPE_ID.size(), and sizeof(T) ==
+        // T::DATA_TYPE_ID.size() by the requirements of ImageDataType; moreover, ImageDataType
+        // requires T to be a bag-of-bits type with no padding, so the implicit transmute is not
+        // an issue.
         unsafe {
             std::slice::from_raw_parts_mut(
                 row.as_mut_ptr() as *mut T,
