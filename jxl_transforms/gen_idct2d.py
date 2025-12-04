@@ -11,8 +11,6 @@ HEADER = """\
 // license that can be found in the LICENSE file.
 """
 
-INLINE_UP_TO = 32
-
 SIZES = [
     (2, 2),
     (4, 4),
@@ -27,15 +25,6 @@ SIZES = [
     (32, 8),
     (32, 16),
     (32, 32),
-    (32, 64),
-    (64, 32),
-    (64, 64),
-    (64, 128),
-    (128, 64),
-    (128, 128),
-    (128, 256),
-    (256, 128),
-    (256, 256),
 ]
 
 print(HEADER)
@@ -45,10 +34,7 @@ print("use crate::*;")
 
 
 def maybe_wrap(n, call):
-    if n <= INLINE_UP_TO:
-        print("%s;" % call)
-    else:
-        print("d.call(#[inline(always)] |_| %s);" % call)
+    print("%s;" % call)
 
 
 def impl_r_less_c(ROWS, COLS):

@@ -59,6 +59,7 @@ impl SimdDescriptor for Avx512Descriptor {
 
     fn call<R>(self, f: impl FnOnce(Self) -> R) -> R {
         #[target_feature(enable = "avx512f")]
+        #[inline(never)]
         unsafe fn inner<R>(d: Avx512Descriptor, f: impl FnOnce(Avx512Descriptor) -> R) -> R {
             f(d)
         }

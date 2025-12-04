@@ -7,8 +7,6 @@
 import sys
 import math
 
-INLINE_UP_TO_REC = 16
-
 n = int(sys.argv[1])
 
 assert n > 1
@@ -120,15 +118,9 @@ def idct(variables):
         ret = forward_even_odd(variables)
         first_half = ret[: n // 2]
         second_half = ret[n // 2 :]
-        if n // 2 <= INLINE_UP_TO_REC:
-            first_half = idct(first_half)
-        else:
-            d_call_idct(first_half)
+        first_half = idct(first_half)
         second_half = b_transpose(second_half)
-        if n // 2 <= INLINE_UP_TO_REC:
-            second_half = idct(second_half)
-        else:
-            d_call_idct(second_half)
+        second_half = idct(second_half)
         ret = first_half + second_half
         ret = multiply_and_add(ret)
 
