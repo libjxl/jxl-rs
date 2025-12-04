@@ -3,7 +3,6 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-use std::any::Any;
 use std::sync::Arc;
 
 use crate::api::JxlCms;
@@ -16,10 +15,10 @@ use crate::features::epf::create_sigma_image;
 use crate::headers::frame_header::Encoding;
 use crate::headers::{Orientation, color_encoding::ColorSpace, extra_channels::ExtraChannel};
 use crate::image::Rect;
+#[cfg(test)]
+use crate::render::SimpleRenderPipeline;
 use crate::render::buffer_splitter::BufferSplitter;
-use crate::render::{
-    LowMemoryRenderPipeline, RenderPipeline, RenderPipelineBuilder, SimpleRenderPipeline, stages::*,
-};
+use crate::render::{LowMemoryRenderPipeline, RenderPipeline, RenderPipelineBuilder, stages::*};
 use crate::{
     api::JxlPixelFormat,
     frame::{DecoderState, Frame, LfGlobalState},
@@ -27,6 +26,7 @@ use crate::{
     image::Image,
 };
 
+#[cfg(test)]
 macro_rules! pipeline {
     ($frame: expr, $pipeline: ident, $op: expr) => {
         if $frame.use_simple_pipeline {
@@ -38,6 +38,7 @@ macro_rules! pipeline {
                 .unwrap();
             $op
         } else {
+            use crate::render::LowMemoryRenderPipeline;
             let $pipeline = $frame
                 .render_pipeline
                 .as_mut()
@@ -47,6 +48,14 @@ macro_rules! pipeline {
             $op
         }
     };
+}
+
+#[cfg(not(test))]
+macro_rules! pipeline {
+    ($frame: expr, $pipeline: ident, $op: expr) => {{
+        let $pipeline = $frame.render_pipeline.as_mut().unwrap();
+        $op
+    }};
 }
 
 pub(crate) use pipeline;
@@ -531,6 +540,7 @@ impl Frame {
             None
         };
 
+        #[cfg(test)]
         let render_pipeline = if self.use_simple_pipeline {
             Self::build_render_pipeline::<SimpleRenderPipeline>(
                 &self.decoder_state,
@@ -538,7 +548,7 @@ impl Frame {
                 lf_global,
                 &epf_sigma,
                 pixel_format,
-            )? as Box<dyn Any>
+            )? as Box<dyn std::any::Any>
         } else {
             Self::build_render_pipeline::<LowMemoryRenderPipeline>(
                 &self.decoder_state,
@@ -546,8 +556,16 @@ impl Frame {
                 lf_global,
                 &epf_sigma,
                 pixel_format,
-            )? as Box<dyn Any>
+            )? as Box<dyn std::any::Any>
         };
+        #[cfg(not(test))]
+        let render_pipeline = Self::build_render_pipeline::<LowMemoryRenderPipeline>(
+            &self.decoder_state,
+            &self.header,
+            lf_global,
+            &epf_sigma,
+            pixel_format,
+        )?;
         self.render_pipeline = Some(render_pipeline);
         self.lf_global_was_rendered = false;
         Ok(())

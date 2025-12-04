@@ -18,6 +18,7 @@ mod builder;
 mod internal;
 mod low_memory_pipeline;
 mod save;
+#[cfg(test)]
 mod simple_pipeline;
 pub mod stages;
 #[cfg(test)]
@@ -35,6 +36,7 @@ const MAX_BORDER: usize = 9;
 
 pub(crate) use builder::RenderPipelineBuilder;
 pub(crate) use low_memory_pipeline::LowMemoryRenderPipeline;
+#[cfg(test)]
 pub(crate) use simple_pipeline::SimpleRenderPipeline;
 
 /// Modifies channels in-place.

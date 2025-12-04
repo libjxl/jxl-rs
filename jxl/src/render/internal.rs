@@ -43,6 +43,7 @@ impl<Buffer: 'static> Stage<Buffer> {
         }
     }
 
+    #[cfg(test)]
     pub(super) fn new_size(&self, size: (usize, usize)) -> (usize, usize) {
         match self {
             Stage::Extend(e) => e.image_size,

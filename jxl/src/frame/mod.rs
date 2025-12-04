@@ -3,7 +3,7 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-use std::{any::Any, sync::Arc};
+use std::sync::Arc;
 
 use crate::{
     bit_reader::BitReader,
@@ -121,6 +121,7 @@ pub struct DecoderState {
     // buffers, and it's not clear to me what use the decoder can make of it.
     pub enable_output: bool,
     pub render_spotcolors: bool,
+    #[cfg(test)]
     pub use_simple_pipeline: bool,
     pub visible_frame_index: usize,
     pub nonvisible_frame_index: usize,
@@ -138,6 +139,7 @@ impl DecoderState {
             xyb_output_linear: true,
             enable_output: true,
             render_spotcolors: true,
+            #[cfg(test)]
             use_simple_pipeline: false,
             visible_frame_index: 0,
             nonvisible_frame_index: 0,
@@ -154,6 +156,7 @@ impl DecoderState {
         self.reference_frames[i].as_ref()
     }
 
+    #[cfg(test)]
     pub fn set_use_simple_pipeline(&mut self, u: bool) {
         self.use_simple_pipeline = u;
     }
@@ -178,10 +181,14 @@ pub struct Frame {
     quant_lf: Image<u8>,
     hf_meta: Option<HfMetadata>,
     decoder_state: DecoderState,
-    render_pipeline: Option<Box<dyn Any>>,
+    #[cfg(test)]
+    use_simple_pipeline: bool,
+    #[cfg(test)]
+    render_pipeline: Option<Box<dyn std::any::Any>>,
+    #[cfg(not(test))]
+    render_pipeline: Option<Box<crate::render::LowMemoryRenderPipeline>>,
     reference_frame_data: Option<Vec<Image<f32>>>,
     lf_frame_data: Option<[Image<f32>; 3]>,
-    use_simple_pipeline: bool,
     lf_global_was_rendered: bool,
     /// Reusable buffers for VarDCT group decoding.
     vardct_buffers: Option<group::VarDctBuffers>,
