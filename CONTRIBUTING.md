@@ -9,7 +9,7 @@ and [PATENTS](PATENTS) files. Before we can accept your contributions, even for
 small changes, there are just a few small guidelines you need to follow:
 
 Please fill out either the individual or corporate Contributor License Agreement
-(CLA) with Google. JPEG XL Project is an an effort by multiple individuals and
+(CLA) with Google. JPEG XL Project is an effort by multiple individuals and
 companies, including the initial contributors Cloudinary and Google, but Google
 is the legal entity in charge of receiving these CLA and relicensing this
 software:
