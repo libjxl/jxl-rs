@@ -17,6 +17,7 @@ pub fn with_buffers<T>(
     buffers: &[ModularBufferInfo],
     indices: &[usize],
     grid: usize,
+    skip_empty: bool,
     f: impl FnOnce(Vec<&mut ModularChannel>) -> Result<T>,
 ) -> Result<T> {
     let mut bufs = vec![];
@@ -32,6 +33,13 @@ pub fn with_buffers<T>(
                 shift: buf.info.shift,
                 bit_depth: buf.info.bit_depth,
             });
+        }
+
+        // Skip zero-sized buffers when decoding - they don't contribute to the bitstream.
+        // This matches libjxl's behavior in DecodeGroup where zero-sized rects are skipped.
+        // The buffer is still allocated above so transforms can access it.
+        if skip_empty && (b.size.0 == 0 || b.size.1 == 0) {
+            continue;
         }
 
         bufs.push(RefMut::map(data, |x| x.as_mut().unwrap()));
