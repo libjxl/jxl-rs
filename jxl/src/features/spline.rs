@@ -447,49 +447,72 @@ fn for_each_equally_spaced_point<F: FnMut(Point, f32)>(
     f(points[points.len() - 1], accumulated_distance);
 }
 
+/// Precomputed multipliers for DCT: PI / 32.0 * i for i in 0..32
+const DCT_MULTIPLIERS: [f32; 32] = [
+    PI / 32.0 * 0.0,
+    PI / 32.0 * 1.0,
+    PI / 32.0 * 2.0,
+    PI / 32.0 * 3.0,
+    PI / 32.0 * 4.0,
+    PI / 32.0 * 5.0,
+    PI / 32.0 * 6.0,
+    PI / 32.0 * 7.0,
+    PI / 32.0 * 8.0,
+    PI / 32.0 * 9.0,
+    PI / 32.0 * 10.0,
+    PI / 32.0 * 11.0,
+    PI / 32.0 * 12.0,
+    PI / 32.0 * 13.0,
+    PI / 32.0 * 14.0,
+    PI / 32.0 * 15.0,
+    PI / 32.0 * 16.0,
+    PI / 32.0 * 17.0,
+    PI / 32.0 * 18.0,
+    PI / 32.0 * 19.0,
+    PI / 32.0 * 20.0,
+    PI / 32.0 * 21.0,
+    PI / 32.0 * 22.0,
+    PI / 32.0 * 23.0,
+    PI / 32.0 * 24.0,
+    PI / 32.0 * 25.0,
+    PI / 32.0 * 26.0,
+    PI / 32.0 * 27.0,
+    PI / 32.0 * 28.0,
+    PI / 32.0 * 29.0,
+    PI / 32.0 * 30.0,
+    PI / 32.0 * 31.0,
+];
+
+/// Precomputed cosine values for DCT at a given t value.
+/// Computed once and reused for all 4 DCT evaluations (3 color channels + sigma).
+struct PrecomputedCosines([f32; 32]);
+
+impl PrecomputedCosines {
+    /// Precompute cosines for a given t value.
+    /// Call this once per point, then use with continuous_idct_fast for each DCT.
+    #[inline]
+    fn new(t: f32) -> Self {
+        let tandhalf = t + 0.5;
+        PrecomputedCosines(core::array::from_fn(|i| {
+            fast_cos(DCT_MULTIPLIERS[i] * tandhalf)
+        }))
+    }
+}
+
 #[derive(Default, Clone, Copy, Debug)]
 struct Dct32([f32; 32]);
 
 impl Dct32 {
-    fn continuous_idct(&self, t: f32) -> f32 {
-        const MULTIPLIERS: [f32; 32] = [
-            PI / 32.0 * 0.0,
-            PI / 32.0 * 1.0,
-            PI / 32.0 * 2.0,
-            PI / 32.0 * 3.0,
-            PI / 32.0 * 4.0,
-            PI / 32.0 * 5.0,
-            PI / 32.0 * 6.0,
-            PI / 32.0 * 7.0,
-            PI / 32.0 * 8.0,
-            PI / 32.0 * 9.0,
-            PI / 32.0 * 10.0,
-            PI / 32.0 * 11.0,
-            PI / 32.0 * 12.0,
-            PI / 32.0 * 13.0,
-            PI / 32.0 * 14.0,
-            PI / 32.0 * 15.0,
-            PI / 32.0 * 16.0,
-            PI / 32.0 * 17.0,
-            PI / 32.0 * 18.0,
-            PI / 32.0 * 19.0,
-            PI / 32.0 * 20.0,
-            PI / 32.0 * 21.0,
-            PI / 32.0 * 22.0,
-            PI / 32.0 * 23.0,
-            PI / 32.0 * 24.0,
-            PI / 32.0 * 25.0,
-            PI / 32.0 * 26.0,
-            PI / 32.0 * 27.0,
-            PI / 32.0 * 28.0,
-            PI / 32.0 * 29.0,
-            PI / 32.0 * 30.0,
-            PI / 32.0 * 31.0,
-        ];
-        let tandhalf = t + 0.5;
-        zip(MULTIPLIERS, self.0)
-            .map(|(multiplier, coeff)| SQRT_2 * coeff * fast_cos(multiplier * tandhalf))
-            .sum()
+    /// Fast continuous IDCT using precomputed cosines.
+    /// This avoids recomputing 32 cosines for each of the 4 DCT calls per point.
+    #[inline]
+    fn continuous_idct_fast(&self, precomputed: &PrecomputedCosines) -> f32 {
+        // Compute dot product of coeffs and precomputed cosines
+        // Using iterator for auto-vectorization
+        zip(self.0, precomputed.0)
+            .map(|(coeff, cos)| coeff * cos)
+            .sum::<f32>()
+            * SQRT_2
     }
 }
 
@@ -616,11 +639,18 @@ impl Splines {
         let inv_length = 1.0 / length;
         for (point_index, (point, multiplier)) in points_to_draw.iter().enumerate() {
             let progress = (point_index as f32 * desired_distance * inv_length).min(1.0);
+            let t = (32.0 - 1.0) * progress;
+
+            // Precompute cosines once for this point (saves 3x cosine computations)
+            let precomputed = PrecomputedCosines::new(t);
+
+            // Use precomputed cosines for all 4 DCT evaluations
             let mut color = [0.0; 3];
             for (index, coeffs) in spline.color_dct.iter().enumerate() {
-                color[index] = coeffs.continuous_idct((32.0 - 1.0) * progress);
+                color[index] = coeffs.continuous_idct_fast(&precomputed);
             }
-            let sigma = spline.sigma_dct.continuous_idct((32.0 - 1.0) * progress);
+            let sigma = spline.sigma_dct.continuous_idct_fast(&precomputed);
+
             self.add_segment(
                 point,
                 *multiplier,
@@ -806,9 +836,21 @@ mod test_splines {
     };
 
     use super::{
-        DESIRED_RENDERING_DISTANCE, Dct32, Point, QuantizedSpline, Spline, Splines,
-        draw_centripetal_catmull_rom_spline, for_each_equally_spaced_point,
+        DCT_MULTIPLIERS, DESIRED_RENDERING_DISTANCE, Dct32, Point, PrecomputedCosines,
+        QuantizedSpline, Spline, Splines, draw_centripetal_catmull_rom_spline,
+        for_each_equally_spaced_point,
     };
+    use crate::util::fast_cos;
+
+    impl Dct32 {
+        /// Original continuous_idct for testing - validates correctness against golden values.
+        fn continuous_idct(&self, t: f32) -> f32 {
+            let tandhalf = t + 0.5;
+            zip(DCT_MULTIPLIERS, self.0)
+                .map(|(multiplier, coeff)| SQRT_2 * coeff * fast_cos(multiplier * tandhalf))
+                .sum()
+        }
+    }
 
     #[test]
     fn dequantize() -> Result<(), Error> {
@@ -1580,6 +1622,23 @@ mod test_splines {
             assert_almost_abs_eq(got_out, *want, 1e-4);
         }
         Ok(())
+    }
+
+    #[test]
+    fn dct32_fast_matches_original() {
+        // Verify that continuous_idct_fast produces the same results as continuous_idct
+        let mut dct = Dct32::default();
+        for (i, coeff) in dct.0.iter_mut().enumerate() {
+            *coeff = 0.05f32 * i as f32;
+        }
+
+        for t in 0..32 {
+            let t_val = t as f32;
+            let original = dct.continuous_idct(t_val);
+            let precomputed = PrecomputedCosines::new(t_val);
+            let fast = dct.continuous_idct_fast(&precomputed);
+            assert_almost_abs_eq(fast, original, 1e-5);
+        }
     }
 
     fn verify_segment_almost_equal(seg1: &SplineSegment, seg2: &SplineSegment) {
