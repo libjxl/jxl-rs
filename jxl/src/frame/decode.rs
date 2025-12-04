@@ -16,8 +16,9 @@ use super::{
     quantizer::{LfQuantFactors, QuantizerParams},
 };
 use crate::error::Error;
+#[cfg(test)]
+use crate::render::SimpleRenderPipeline;
 use crate::render::buffer_splitter::BufferSplitter;
-use crate::render::{LowMemoryRenderPipeline, SimpleRenderPipeline};
 use crate::{
     GROUP_DIM,
     bit_reader::BitReader,
@@ -124,6 +125,7 @@ impl Frame {
         };
 
         Ok(Self {
+            #[cfg(test)]
             use_simple_pipeline: decoder_state.use_simple_pipeline,
             header: frame_header,
             color_channels,
