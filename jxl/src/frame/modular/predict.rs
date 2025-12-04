@@ -3,8 +3,6 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-use std::array::from_fn;
-
 use crate::{
     error::{Error, Result},
     headers::modular::WeightedHeader,
@@ -360,7 +358,9 @@ fn weighted_average(pixels: &[i64; NUM_PREDICTORS], weights: &mut [u32; NUM_PRED
 pub struct WeightedPredictorState {
     prediction: [i64; NUM_PREDICTORS],
     pred: i64,
-    pred_errors: [Vec<u32>; NUM_PREDICTORS],
+    // Position-major layout: errors for same position are contiguous
+    // Layout: [pos0: p0,p1,p2,p3] [pos1: p0,p1,p2,p3] ...
+    pred_errors_buffer: Vec<u32>,
     error: Vec<i32>,
     wp_header: WeightedHeader,
 }
@@ -371,10 +371,31 @@ impl WeightedPredictorState {
         WeightedPredictorState {
             prediction: [0; NUM_PREDICTORS],
             pred: 0,
-            pred_errors: from_fn(|_| vec![0; num_errors]),
+            // Position-major layout: errors for same position are contiguous
+            // Layout: [pos0: p0,p1,p2,p3] [pos1: p0,p1,p2,p3] ...
+            // This gives better cache locality when accessing all predictors for a position
+            pred_errors_buffer: vec![0; num_errors * NUM_PREDICTORS],
             error: vec![0; num_errors],
             wp_header: wp_header.clone(),
         }
+    }
+
+    /// Get all predictor errors for a given position (contiguous in memory)
+    #[inline(always)]
+    fn get_errors_at_pos(&self, pos: usize) -> &[u32; NUM_PREDICTORS] {
+        let start = pos * NUM_PREDICTORS;
+        self.pred_errors_buffer[start..start + NUM_PREDICTORS]
+            .try_into()
+            .unwrap()
+    }
+
+    /// Get mutable reference to all predictor errors for a given position
+    #[inline(always)]
+    fn get_errors_at_pos_mut(&mut self, pos: usize) -> &mut [u32; NUM_PREDICTORS] {
+        let start = pos * NUM_PREDICTORS;
+        (&mut self.pred_errors_buffer[start..start + NUM_PREDICTORS])
+            .try_into()
+            .unwrap()
     }
 
     pub fn save_state(&self, wp_image: &mut Image<i32>, xsize: usize) {
@@ -396,12 +417,21 @@ impl WeightedPredictorState {
         };
         let val = add_bits(correct_val);
         self.error[cur_row + pos.0] = (self.pred - val) as i32;
-        for (i, pred_err) in self.pred_errors.iter_mut().enumerate() {
-            let err =
+
+        // Compute errors for all predictors
+        let mut errs = [0u32; NUM_PREDICTORS];
+        for i in 0..NUM_PREDICTORS {
+            errs[i] =
                 (((self.prediction[i] - val).abs() + PREDICTION_ROUND) >> PRED_EXTRA_BITS) as u32;
-            pred_err[cur_row + pos.0] = err;
-            let idx = prev_row + pos.0 + 1;
-            pred_err[idx] = pred_err[idx].wrapping_add(err);
+        }
+
+        // Write to current position (contiguous access)
+        *self.get_errors_at_pos_mut(cur_row + pos.0) = errs;
+
+        // Update previous row position (contiguous access)
+        let prev_errors = self.get_errors_at_pos_mut(prev_row + pos.0 + 1);
+        for i in 0..NUM_PREDICTORS {
+            prev_errors[i] = prev_errors[i].wrapping_add(errs[i]);
         }
     }
 
@@ -420,12 +450,17 @@ impl WeightedPredictorState {
         let pos_n = prev_row + pos.0;
         let pos_ne = if pos.0 < xsize - 1 { pos_n + 1 } else { pos_n };
         let pos_nw = if pos.0 > 0 { pos_n - 1 } else { pos_n };
+        // Get errors at the 3 neighboring positions (contiguous access per position)
+        let errors_n = self.get_errors_at_pos(pos_n);
+        let errors_ne = self.get_errors_at_pos(pos_ne);
+        let errors_nw = self.get_errors_at_pos(pos_nw);
+
         let mut weights = [0u32; NUM_PREDICTORS];
-        for (i, weight) in weights.iter_mut().enumerate() {
-            *weight = error_weight(
-                self.pred_errors[i][pos_n]
-                    .wrapping_add(self.pred_errors[i][pos_ne])
-                    .wrapping_add(self.pred_errors[i][pos_nw]),
+        for i in 0..NUM_PREDICTORS {
+            weights[i] = error_weight(
+                errors_n[i]
+                    .wrapping_add(errors_ne[i])
+                    .wrapping_add(errors_nw[i]),
                 self.wp_header.w(i).unwrap(),
             );
         }
