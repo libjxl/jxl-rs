@@ -241,15 +241,15 @@ jobs:
     - name: Select a few test images
       id: select-images
       run: |
-        mkdir $HOME/tmp/testimages
-        cp jxl/resources/test/conformance_test_images/cafe.jxl $HOME/tmp/testimages
-        cp jxl/resources/test/conformance_test_images/bike.jxl $HOME/tmp/testimages
+        mkdir testimages
+        cp jxl/resources/test/conformance_test_images/cafe.jxl testimages
+        cp jxl/resources/test/conformance_test_images/bike.jxl testimages
 
     - name: Run performance benchmark
       id: benchmark
       continue-on-error: true  # Never fail the PR
       run: |
-        jxl-perfhistory -r 5 -g "$HOME/tmp/testimages/*.jxl" -c 0.99 -e 0.03 --ignore-noisy-system 2>&1 | tee benchmark.txt
+        jxl-perfhistory -r 5 -g "testimages/*.jxl" -c 0.99 -e 0.03 --ignore-noisy-system 2>&1 | tee benchmark.txt
         # Extract just the results section for the comment
         echo "BENCHMARK_OUTPUT<<EOF" >> $GITHUB_OUTPUT
         cat benchmark.txt >> $GITHUB_OUTPUT
