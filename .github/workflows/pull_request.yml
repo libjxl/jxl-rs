@@ -280,7 +280,7 @@ jobs:
       run: |
         echo "## Performance Benchmark" >> $GITHUB_STEP_SUMMARY
         echo "" >> $GITHUB_STEP_SUMMARY
-        echo '```' >> $GITHUB_STEP_SUMMARY
+        echo '```text' >> $GITHUB_STEP_SUMMARY
         cat benchmark.txt >> $GITHUB_STEP_SUMMARY || echo "Benchmark did not complete" >> $GITHUB_STEP_SUMMARY
         echo "" >> $GITHUB_STEP_SUMMARY
         echo '```' >> $GITHUB_STEP_SUMMARY
