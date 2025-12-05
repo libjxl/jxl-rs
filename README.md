@@ -7,3 +7,4 @@ implementation `djxl` (from [`libjxl`](https://github.com/libjxl/libjxl)) but is
 please report it by [opening an issue](https://github.com/libjxl/jxl-rs/issues/new).
 
 For more information, including contributing instructions, refer to the [libjxl repository](https://github.com/libjxl/libjxl).
+
