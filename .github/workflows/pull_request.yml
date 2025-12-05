@@ -279,14 +279,13 @@ jobs:
     - name: Add to step summary
       if: always()
       run: |
-        echo "<CAPTURED BENCHMARK RESULTS>"
-        cat benchmark.txt
-        echo "</CAPTURED BENCHMARK RESULTS>"        
         echo "## Performance Benchmark" >> $GITHUB_STEP_SUMMARY
         echo "" >> $GITHUB_STEP_SUMMARY
         echo '```' >> $GITHUB_STEP_SUMMARY
         cat benchmark.txt >> $GITHUB_STEP_SUMMARY || echo "Benchmark did not complete" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
         echo '```' >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
 
     - name: Upload benchmark results
       if: always()
