@@ -9,7 +9,7 @@ use crate::{
     BLOCK_DIM, MIN_SIGMA,
     image::Image,
     render::{
-        RenderPipelineInOutStage,
+        Channels, ChannelsMut, RenderPipelineInOutStage,
         stages::epf::common::{get_sigma, prepare_sad_mul_storage},
     },
 };
@@ -59,8 +59,8 @@ fn epf1_process_row_chunk(
     stage: &Epf1Stage,
     pos: (usize, usize),
     xsize: usize,
-    input_rows: &[&[&[f32]]],
-    output_rows: &mut[&mut[&mut[f32]]],
+    input_rows: &Channels<f32>,
+    output_rows: &mut ChannelsMut<f32>,
 ) {
     let (xpos, ypos) = pos;
     assert_eq!(input_rows.len(), 3);
@@ -161,8 +161,8 @@ impl RenderPipelineInOutStage for Epf1Stage {
         &self,
         (xpos, ypos): (usize, usize),
         xsize: usize,
-        input_rows: &[&[&[f32]]],
-        output_rows: &mut [&mut [&mut [f32]]],
+        input_rows: &Channels<f32>,
+        output_rows: &mut ChannelsMut<f32>,
         _state: Option<&mut dyn std::any::Any>,
     ) {
         epf1_process_row_chunk_dispatch(self, (xpos, ypos), xsize, input_rows, output_rows);

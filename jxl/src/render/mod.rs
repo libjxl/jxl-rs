@@ -15,6 +15,7 @@ use crate::{
 
 pub mod buffer_splitter;
 mod builder;
+mod channels;
 mod internal;
 mod low_memory_pipeline;
 mod save;
@@ -35,6 +36,7 @@ mod test;
 const MAX_BORDER: usize = 9;
 
 pub(crate) use builder::RenderPipelineBuilder;
+pub(crate) use channels::{Channels, ChannelsMut};
 pub(crate) use low_memory_pipeline::LowMemoryRenderPipeline;
 #[cfg(test)]
 pub(crate) use simple_pipeline::SimpleRenderPipeline;
@@ -83,9 +85,9 @@ pub trait RenderPipelineInOutStage: Any + std::fmt::Display {
         position: (usize, usize),
         xsize: usize,
         // channel, row, column
-        input_rows: &[&[&[Self::InputT]]],
+        input_rows: &Channels<Self::InputT>,
         // channel, row, column
-        output_rows: &mut [&mut [&mut [Self::OutputT]]],
+        output_rows: &mut ChannelsMut<Self::OutputT>,
         state: Option<&mut dyn Any>,
     );
 

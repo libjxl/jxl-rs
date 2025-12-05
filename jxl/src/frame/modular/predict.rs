@@ -420,9 +420,8 @@ impl WeightedPredictorState {
 
         // Compute errors for all predictors
         let mut errs = [0u32; NUM_PREDICTORS];
-        for i in 0..NUM_PREDICTORS {
-            errs[i] =
-                (((self.prediction[i] - val).abs() + PREDICTION_ROUND) >> PRED_EXTRA_BITS) as u32;
+        for (err, &pred) in errs.iter_mut().zip(self.prediction.iter()) {
+            *err = (((pred - val).abs() + PREDICTION_ROUND) >> PRED_EXTRA_BITS) as u32;
         }
 
         // Write to current position (contiguous access)

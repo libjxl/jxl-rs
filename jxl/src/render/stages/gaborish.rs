@@ -3,7 +3,7 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-use crate::render::RenderPipelineInOutStage;
+use crate::render::{Channels, ChannelsMut, RenderPipelineInOutStage};
 use jxl_simd::{F32SimdVec, simd_function};
 
 /// Apply Gabor-like filter to a channel.
@@ -39,8 +39,8 @@ simd_function!(
     fn gaborish_process(
         stage: &GaborishStage,
         xsize: usize,
-        input_rows: &[&[&[f32]]],
-        output_rows: &mut [&mut [&mut [f32]]],
+        input_rows: &Channels<f32>,
+        output_rows: &mut ChannelsMut<f32>,
     ) {
         let row_out = &mut output_rows[0][0];
 
@@ -101,8 +101,8 @@ impl RenderPipelineInOutStage for GaborishStage {
         &self,
         _position: (usize, usize),
         xsize: usize,
-        input_rows: &[&[&[f32]]],
-        output_rows: &mut [&mut [&mut [f32]]],
+        input_rows: &Channels<f32>,
+        output_rows: &mut ChannelsMut<f32>,
         _state: Option<&mut dyn std::any::Any>,
     ) {
         gaborish_process_dispatch(self, xsize, input_rows, output_rows);

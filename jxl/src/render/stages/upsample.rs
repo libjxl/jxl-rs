@@ -5,7 +5,10 @@
 
 #![allow(clippy::needless_range_loop)]
 
-use crate::{headers::CustomTransformData, render::RenderPipelineInOutStage};
+use crate::{
+    headers::CustomTransformData,
+    render::{Channels, ChannelsMut, RenderPipelineInOutStage},
+};
 
 pub struct Upsample<const N: usize, const SHIFT: u8> {
     kernel: [[[[f32; 5]; 5]; N]; N],
@@ -69,11 +72,11 @@ impl<const N: usize, const SHIFT: u8> RenderPipelineInOutStage for Upsample<N, S
         &self,
         _position: (usize, usize),
         xsize: usize,
-        input_rows: &[&[&[f32]]],
-        output_rows: &mut [&mut [&mut [f32]]],
+        input_rows: &Channels<f32>,
+        output_rows: &mut ChannelsMut<f32>,
         _state: Option<&mut dyn std::any::Any>,
     ) {
-        let input = input_rows[0];
+        let input = &input_rows[0];
 
         for x in 0..xsize {
             // Upsample this input value into a NxN region in the output
