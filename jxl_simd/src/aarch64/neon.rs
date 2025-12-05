@@ -159,20 +159,32 @@ impl F32SimdVec for F32VecNeon {
         offset: usize,
     ) {
         assert!(base.len() >= offset + 8 * Self::LEN);
-        // NEON doesn't have vst8, so we use manual interleaving
-        // For 4-wide vectors, output is 32 elements: [a0,b0,c0,d0,e0,f0,g0,h0, a1,...]
-        unsafe {
-            let ptr = base.as_mut_ptr().add(offset);
+
+        #[target_feature(enable = "neon")]
+        #[inline]
+        unsafe fn store_interleaved_8_impl(
+            a: float32x4_t,
+            b: float32x4_t,
+            c: float32x4_t,
+            d: float32x4_t,
+            e: float32x4_t,
+            f: float32x4_t,
+            g: float32x4_t,
+            h: float32x4_t,
+            ptr: *mut f32,
+        ) {
+            // NEON doesn't have vst8, so we use manual interleaving
+            // For 4-wide vectors, output is 32 elements: [a0,b0,c0,d0,e0,f0,g0,h0, a1,...]
 
             // Use zip to interleave pairs
-            let ae_lo = vzip1q_f32(a.0, e.0); // [a0, e0, a1, e1]
-            let ae_hi = vzip2q_f32(a.0, e.0); // [a2, e2, a3, e3]
-            let bf_lo = vzip1q_f32(b.0, f.0);
-            let bf_hi = vzip2q_f32(b.0, f.0);
-            let cg_lo = vzip1q_f32(c.0, g.0);
-            let cg_hi = vzip2q_f32(c.0, g.0);
-            let dh_lo = vzip1q_f32(d.0, h.0);
-            let dh_hi = vzip2q_f32(d.0, h.0);
+            let ae_lo = vzip1q_f32(a, e); // [a0, e0, a1, e1]
+            let ae_hi = vzip2q_f32(a, e); // [a2, e2, a3, e3]
+            let bf_lo = vzip1q_f32(b, f);
+            let bf_hi = vzip2q_f32(b, f);
+            let cg_lo = vzip1q_f32(c, g);
+            let cg_hi = vzip2q_f32(c, g);
+            let dh_lo = vzip1q_f32(d, h);
+            let dh_hi = vzip2q_f32(d, h);
 
             // Now interleave ae with bf, and cg with dh
             let aebf_0 = vzip1q_f32(ae_lo, bf_lo); // [a0, b0, e0, f0]
@@ -226,6 +238,21 @@ impl F32SimdVec for F32VecNeon {
             vst1q_f32(ptr.add(20), out5);
             vst1q_f32(ptr.add(24), out6);
             vst1q_f32(ptr.add(28), out7);
+        }
+
+        // SAFETY: bounds checked above, neon available from safety invariant on descriptor
+        unsafe {
+            store_interleaved_8_impl(
+                a.0,
+                b.0,
+                c.0,
+                d.0,
+                e.0,
+                f.0,
+                g.0,
+                h.0,
+                base.as_mut_ptr().add(offset),
+            );
         }
     }
 
