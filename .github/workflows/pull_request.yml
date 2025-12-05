@@ -255,6 +255,7 @@ jobs:
       id: benchmark
       continue-on-error: true  # Never fail the PR
       run: |
+        mkdir -p benchmark-binaries
         jxl-perfhistory -r 5 -b benchmark-binaries -g "testimages/*.jxl" -c 0.99 -e 0.03 --ignore-noisy-system 2>&1 | tee benchmark.txt
         # Extract just the results section for the comment
         echo "BENCHMARK_OUTPUT<<EOF" >> $GITHUB_OUTPUT
