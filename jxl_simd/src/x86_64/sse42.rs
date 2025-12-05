@@ -54,6 +54,7 @@ impl SimdDescriptor for Sse42Descriptor {
 
     fn call<R>(self, f: impl FnOnce(Self) -> R) -> R {
         #[target_feature(enable = "sse4.2")]
+        #[inline(never)]
         unsafe fn inner<R>(d: Sse42Descriptor, f: impl FnOnce(Sse42Descriptor) -> R) -> R {
             f(d)
         }

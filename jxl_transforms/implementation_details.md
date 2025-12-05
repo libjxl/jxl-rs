@@ -7,12 +7,15 @@ reinterpreting-DCTs.
 The 4x1/1x4 reinterpreting-DCTs are very small and don't need special
 considerations.
 
+Large transforms use the same implementation strategy, but avoid increasing code
+size by using size-generic code.
+
 ## Code generation
 Code is generated with python scripts. The following bash snippet
 generates the relevant files:
 
 ```bash
-for i in 2 4 8 16 32 64 128 256
+for i in 2 4 8 16 32
 do
     python3 gen_idct.py $i > src/idct$i.rs
 done 
@@ -35,10 +38,6 @@ both sizes of the transform.
 ## DCT/IDCT Implementation
 Both the DCT and the IDCT use the same recursive algorithm used in libjxl to
 compute a vector worth of DCTs/IDCTs.
-
-If this is a large DCT (N >= 64), instead of expanding an inline call to a
-half-size DCT we write an explicit (non-#[inline(always)]) call to a half-size
-DCT.
 
 ## 2d transforms
 The code is written to minimize transposition cost while still ensuring we load
