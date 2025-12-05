@@ -4,6 +4,7 @@
 // license that can be found in the LICENSE file.
 
 use crate::render::{Channels, ChannelsMut, RenderPipelineInOutStage};
+use jxl_simd::{F32SimdVec, simd_function};
 
 pub struct HorizontalChromaUpsample {
     channel: usize,
@@ -25,6 +26,59 @@ impl std::fmt::Display for HorizontalChromaUpsample {
     }
 }
 
+// SIMD horizontal chroma upsampling
+simd_function!(
+    hchroma_upsample_simd_dispatch,
+    d: D,
+    fn hchroma_upsample_simd(input: &[f32], output: &mut [f32], xsize: usize) {
+        let simd_width = D::F32Vec::LEN;
+
+        // Precompute constants
+        let c025 = D::F32Vec::splat(d, 0.25);
+        let c075 = D::F32Vec::splat(d, 0.75);
+
+        // Temporary buffer for storing SIMD results before interleaving
+        let mut left_buf = [0.0f32; 16];
+        let mut right_buf = [0.0f32; 16];
+
+        // SIMD loop
+        let mut x = 0;
+        while x + simd_width <= xsize {
+            // Load: prev, cur, next (with +1 offset for border)
+            let prev_vec = D::F32Vec::load(d, &input[x..]);
+            let cur_vec = D::F32Vec::load(d, &input[x + 1..]);
+            let next_vec = D::F32Vec::load(d, &input[x + 2..]);
+
+            // Compute: left = 0.25 * prev + 0.75 * cur
+            let left = prev_vec.mul_add(c025, cur_vec * c075);
+
+            // Compute: right = 0.25 * next + 0.75 * cur
+            let right = next_vec.mul_add(c025, cur_vec * c075);
+
+            // Store to temp buffers
+            left.store(&mut left_buf[..simd_width]);
+            right.store(&mut right_buf[..simd_width]);
+
+            // Interleave manually: [left0, right0, left1, right1, ...]
+            for i in 0..simd_width {
+                output[2 * (x + i)] = left_buf[i];
+                output[2 * (x + i) + 1] = right_buf[i];
+            }
+
+            x += simd_width;
+        }
+
+        // Scalar remainder
+        for i in x..xsize {
+            let scaled_cur = input[i + 1] * 0.75;
+            let prev = input[i];
+            let next = input[i + 2];
+            output[2 * i] = 0.25 * prev + scaled_cur;
+            output[2 * i + 1] = 0.25 * next + scaled_cur;
+        }
+    }
+);
+
 impl RenderPipelineInOutStage for HorizontalChromaUpsample {
     type InputT = f32;
     type OutputT = f32;
@@ -44,15 +98,8 @@ impl RenderPipelineInOutStage for HorizontalChromaUpsample {
         _state: Option<&mut dyn std::any::Any>,
     ) {
         let input = &input_rows[0];
-        for i in 0..xsize {
-            let scaled_cur = input[0][i + 1] * 0.75;
-            let prev = input[0][i];
-            let next = input[0][i + 2];
-            let left = 0.25 * prev + scaled_cur;
-            let right = 0.25 * next + scaled_cur;
-            output_rows[0][0][2 * i] = left;
-            output_rows[0][0][2 * i + 1] = right;
-        }
+        let output = &mut output_rows[0];
+        hchroma_upsample_simd_dispatch(input[0], output[0], xsize);
     }
 }
 
@@ -71,6 +118,55 @@ impl std::fmt::Display for VerticalChromaUpsample {
         write!(f, "chroma upsample of channel {}, vertically", self.channel)
     }
 }
+
+// SIMD vertical chroma upsampling
+simd_function!(
+    vchroma_upsample_simd_dispatch,
+    d: D,
+    fn vchroma_upsample_simd(
+        input_prev: &[f32],
+        input_cur: &[f32],
+        input_next: &[f32],
+        output_up: &mut [f32],
+        output_down: &mut [f32],
+        xsize: usize,
+    ) {
+        let simd_width = D::F32Vec::LEN;
+
+        // Precompute constants
+        let c025 = D::F32Vec::splat(d, 0.25);
+        let c075 = D::F32Vec::splat(d, 0.75);
+
+        // SIMD loop
+        let mut x = 0;
+        while x + simd_width <= xsize {
+            let prev_vec = D::F32Vec::load(d, &input_prev[x..]);
+            let cur_vec = D::F32Vec::load(d, &input_cur[x..]);
+            let next_vec = D::F32Vec::load(d, &input_next[x..]);
+
+            // Compute: up = 0.25 * prev + 0.75 * cur
+            let up = prev_vec.mul_add(c025, cur_vec * c075);
+
+            // Compute: down = 0.25 * next + 0.75 * cur
+            let down = next_vec.mul_add(c025, cur_vec * c075);
+
+            // Store results
+            up.store(&mut output_up[x..]);
+            down.store(&mut output_down[x..]);
+
+            x += simd_width;
+        }
+
+        // Scalar remainder
+        for i in x..xsize {
+            let scaled_cur = input_cur[i] * 0.75;
+            let prev = input_prev[i];
+            let next = input_next[i];
+            output_up[i] = 0.25 * prev + scaled_cur;
+            output_down[i] = 0.25 * next + scaled_cur;
+        }
+    }
+);
 
 impl RenderPipelineInOutStage for VerticalChromaUpsample {
     type InputT = f32;
@@ -92,15 +188,15 @@ impl RenderPipelineInOutStage for VerticalChromaUpsample {
     ) {
         let input = &input_rows[0];
         let output = &mut output_rows[0];
-        for i in 0..xsize {
-            let scaled_cur = input[1][i] * 0.75;
-            let prev = input[0][i];
-            let next = input[2][i];
-            let up = 0.25 * prev + scaled_cur;
-            let down = 0.25 * next + scaled_cur;
-            output[0][i] = up;
-            output[1][i] = down;
-        }
+        let (output_up, output_down) = output.split_at_mut(1);
+        vchroma_upsample_simd_dispatch(
+            input[0],
+            input[1],
+            input[2],
+            output_up[0],
+            output_down[0],
+            xsize,
+        );
     }
 }
 
