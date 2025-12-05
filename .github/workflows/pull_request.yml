@@ -244,6 +244,8 @@ jobs:
         mkdir testimages
         cp jxl/resources/test/conformance_test_images/sunset_logo.jxl testimages
         cp jxl/resources/test/conformance_test_images/bike.jxl testimages
+        cp jxl/resources/test/green_queen_modular_e3.jxl testimages
+        cp jxl/resources/test/green_queen_vardct_e3.jxl testimages
 
     - name: Cache benchmark binaries
       uses: actions/cache@v4
