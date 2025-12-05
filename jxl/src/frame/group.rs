@@ -307,7 +307,7 @@ pub fn decode_vardct_group(
     group: usize,
     pass: usize,
     frame_header: &FrameHeader,
-    lf_global: &mut LfGlobalState,
+    lf_global: &LfGlobalState,
     hf_global: &mut HfGlobalState,
     hf_meta: &HfMetadata,
     lf_image: &Option<[Image<f32>; 3]>,
@@ -361,7 +361,7 @@ pub fn decode_vardct_group(
         ))?,
     ];
     let quant_lf_rect = quant_lf.get_rect(block_group_rect);
-    let block_context_map = lf_global.block_context_map.as_mut().unwrap();
+    let block_context_map = lf_global.block_context_map.as_ref().unwrap();
     let context_offset = histogram_index * block_context_map.num_ac_contexts();
     let mut coeffs_storage;
     let coeffs = match hf_global.hf_coefficients.as_mut() {

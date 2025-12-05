@@ -194,9 +194,160 @@ impl Frame {
             }
         }
 
-        for (group, passes) in groups {
-            // TODO(veluca): render all the available passes at once.
-            for (pass, br) in passes {
+        // Flatten groups into (group, pass, br) tuples for easier parallel processing.
+        let group_passes: Vec<(usize, usize, BitReader)> = groups
+            .into_iter()
+            .flat_map(|(group, passes)| passes.into_iter().map(move |(pass, br)| (group, pass, br)))
+            .collect();
+
+        // Determine if parallel decoding is beneficial.
+        // Requirements for parallel VarDCT decoding:
+        // - VarDCT encoding (not modular)
+        // - Enough groups to justify parallelization overhead
+        // - Single pass (multi-pass progressive needs sequential coefficient accumulation)
+        // - No extra channels (simplifies buffer management)
+        // - No noise (noise generation uses shared state)
+        #[cfg(feature = "parallel")]
+        let use_parallel = {
+            self.header.encoding == Encoding::VarDCT
+                && group_passes.len() >= 4
+                && self.header.passes.num_passes == 1
+                && self
+                    .hf_global
+                    .as_ref()
+                    .is_some_and(|hf| hf.hf_coefficients.is_none())
+                && self
+                    .decoder_state
+                    .file_header
+                    .image_metadata
+                    .extra_channel_info
+                    .is_empty()
+                && !self.header.has_noise()
+        };
+
+        #[cfg(feature = "parallel")]
+        #[allow(unsafe_code)]
+        if use_parallel {
+            use rayon::prelude::*;
+
+            let num_groups = group_passes.len();
+
+            // Get buffer sizes from pipeline for correctly sized output images.
+            let buffer_sizes = [
+                pipeline!(self, p, p.get_buffer::<f32>(0)).map(|img| img.size())?,
+                pipeline!(self, p, p.get_buffer::<f32>(1)).map(|img| img.size())?,
+                pipeline!(self, p, p.get_buffer::<f32>(2)).map(|img| img.size())?,
+            ];
+
+            // Pre-allocate result slots - each group gets its own Mutex-protected slot.
+            let results: Vec<std::sync::Mutex<Option<[Image<f32>; 3]>>> = (0..num_groups)
+                .map(|_| std::sync::Mutex::new(None))
+                .collect();
+
+            // Store pointer addresses as usize to bypass Sync requirement on raw pointers.
+            // SAFETY: These pointers remain valid for the entire parallel scope.
+            // We've verified:
+            // 1. hf_coefficients.is_none() - no mutable shared state in hf_global
+            // 2. Each thread operates on different groups independently
+            // 3. The Frame reference is valid for the entire scope
+            let hf_global_addr =
+                self.hf_global.as_mut().unwrap() as *mut super::HfGlobalState as usize;
+            let lf_global_addr =
+                self.lf_global.as_ref().unwrap() as *const super::LfGlobalState as usize;
+            let hf_meta_addr = self.hf_meta.as_ref().unwrap() as *const super::HfMetadata as usize;
+            let header_addr = &self.header as *const _ as usize;
+            let lf_image_addr = &self.lf_image as *const _ as usize;
+            let quant_lf_addr = &self.quant_lf as *const _ as usize;
+            let quant_biases_addr = &self
+                .decoder_state
+                .file_header
+                .transform_data
+                .opsin_inverse_matrix
+                .quant_biases as *const _ as usize;
+
+            // Parallel decoding phase using par_iter + map_init for thread-local caches.
+            group_passes
+                .par_iter()
+                .enumerate()
+                .map_init(
+                    super::group_cache::GroupDecodeCache::new,
+                    |_cache, (idx, (group, pass, br))| {
+                        // Allocate output buffers on heap to avoid stack overflow.
+                        let mut pixels = Box::new([
+                            Image::new(buffer_sizes[0]).unwrap(),
+                            Image::new(buffer_sizes[1]).unwrap(),
+                            Image::new(buffer_sizes[2]).unwrap(),
+                        ]);
+
+                        // Use a local VarDctBuffers wrapper for the decode function.
+                        let mut local_buffers = super::group::VarDctBuffers::new();
+
+                        // SAFETY: We've verified hf_coefficients.is_none(), so no actual
+                        // mutable shared state access occurs. Each thread operates on
+                        // different groups independently.
+                        let hf_global_ref =
+                            unsafe { &mut *(hf_global_addr as *mut super::HfGlobalState) };
+                        let lf_global_ref =
+                            unsafe { &*(lf_global_addr as *const super::LfGlobalState) };
+                        let hf_meta_ref = unsafe { &*(hf_meta_addr as *const super::HfMetadata) };
+                        let header_ref = unsafe {
+                            &*(header_addr as *const crate::headers::frame_header::FrameHeader)
+                        };
+                        let lf_image_ref =
+                            unsafe { &*(lf_image_addr as *const Option<[Image<f32>; 3]>) };
+                        let quant_lf_ref = unsafe { &*(quant_lf_addr as *const Image<u8>) };
+                        let quant_biases_ref = unsafe { &*(quant_biases_addr as *const [f32; 4]) };
+
+                        super::group::decode_vardct_group(
+                            *group,
+                            *pass,
+                            header_ref,
+                            lf_global_ref,
+                            hf_global_ref,
+                            hf_meta_ref,
+                            lf_image_ref,
+                            quant_lf_ref,
+                            quant_biases_ref,
+                            &mut *pixels,
+                            &mut br.clone(),
+                            &mut local_buffers,
+                        )
+                        .expect("VarDCT decode failed");
+
+                        // Write result to dedicated slot - no contention.
+                        *results[idx].lock().unwrap() = Some(*pixels);
+                    },
+                )
+                .collect::<Vec<()>>();
+
+            // Sequential output phase - write results to pipeline in order.
+            for (idx, (group, _, _)) in group_passes.iter().enumerate() {
+                let pixels = results[idx]
+                    .lock()
+                    .unwrap()
+                    .take()
+                    .expect("Group decode result should be present");
+
+                if self.decoder_state.enable_output {
+                    for (c, img) in pixels.into_iter().enumerate() {
+                        pipeline!(
+                            self,
+                            p,
+                            p.set_buffer_for_group(c, *group, 1, img, &mut buffer_splitter)?
+                        );
+                    }
+                }
+            }
+        } else {
+            // Sequential fallback when parallel is disabled or conditions not met.
+            for (group, pass, br) in group_passes {
+                self.decode_hf_group(group, pass, br, &mut buffer_splitter)?;
+            }
+        }
+
+        #[cfg(not(feature = "parallel"))]
+        {
+            for (group, pass, br) in group_passes {
                 self.decode_hf_group(group, pass, br, &mut buffer_splitter)?;
             }
         }
@@ -325,11 +476,10 @@ impl Frame {
         }
 
         if frame_header.has_splines() {
-            pipeline = pipeline.add_inplace_stage(SplinesStage::new(
+            // Use new_initialized since splines draw cache is pre-initialized during LfGlobal parsing.
+            // Arc::clone is cheap (just increments reference count).
+            pipeline = pipeline.add_inplace_stage(SplinesStage::new_initialized(
                 lf_global.splines.clone().unwrap(),
-                frame_header.size(),
-                &lf_global.color_correlation_params.unwrap_or_default(),
-                decoder_state.high_precision,
             ))?
         }
 

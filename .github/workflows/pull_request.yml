@@ -90,6 +90,11 @@ jobs:
             simd: avx512
           - os: ubuntu-24.04-arm
             simd: neon
+          # Test with default features (includes parallel)
+          - os: ubuntu-latest
+            simd: default
+          - os: ubuntu-24.04-arm
+            simd: default
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -106,12 +111,16 @@ jobs:
 
 
       - name: Tests with SIMD feature ${{ matrix.simd }}
-        if: ${{ matrix.simd != 'none' }}
+        if: ${{ matrix.simd != 'none' && matrix.simd != 'default' }}
         run: cargo test --release --all --no-fail-fast --no-default-features --features ${{ matrix.simd }}
 
       - name: Tests with no features
         if: ${{ matrix.simd == 'none' }}
         run: cargo test --release --all --no-fail-fast --no-default-features
+
+      - name: Tests with default features (parallel)
+        if: ${{ matrix.simd == 'default' }}
+        run: cargo test --release --all --no-fail-fast
 
   coverage:
     runs-on: ubuntu-latest

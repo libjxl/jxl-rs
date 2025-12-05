@@ -3,13 +3,15 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
+use std::sync::Arc;
+
 use crate::{
     features::spline::Splines, frame::color_correlation_map::ColorCorrelationParams,
     render::RenderPipelineInPlaceStage,
 };
 
 pub struct SplinesStage {
-    splines: Splines,
+    splines: Arc<Splines>,
 }
 
 impl SplinesStage {
@@ -28,6 +30,14 @@ impl SplinesStage {
                 high_precision,
             )
             .unwrap();
+        SplinesStage {
+            splines: Arc::new(splines),
+        }
+    }
+
+    /// Create a SplinesStage from pre-initialized splines.
+    /// Use this when the splines draw cache was already initialized during parsing.
+    pub fn new_initialized(splines: Arc<Splines>) -> Self {
         SplinesStage { splines }
     }
 }

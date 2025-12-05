@@ -22,6 +22,7 @@ array-init = "2.0.0"
 tracing = { version = "0.1.40", optional = true }
 jxl_macros = { path = "../jxl_macros", version = "=0.1.3" }
 jxl_simd = { path = "../jxl_simd", version = "=0.1.3" }
+rayon = { version = "1.10", optional = true }
 
 [dev-dependencies]
 arbtest = "0.3.2"
@@ -32,6 +33,8 @@ test-log = { version = "0.2.16", features = ["trace"] }
 jxl_macros = { path = "../jxl_macros", version = "=0.1.3", features = ["test"] }
 
 [features]
+default = ["parallel"]
+parallel = ["dep:rayon"]
 all-simd = ["jxl_simd/all-simd"]
 sse42 = ["jxl_simd/sse42"]
 avx = ["jxl_simd/avx"]

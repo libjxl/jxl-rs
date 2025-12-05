@@ -185,7 +185,7 @@ impl Frame {
             None
         };
 
-        let splines = if self.header.has_splines() {
+        let mut splines = if self.header.has_splines() {
             info!("decoding splines");
             Some(Splines::read(br, self.header.width * self.header.height)?)
         } else {
@@ -225,6 +225,20 @@ impl Frame {
             None
         };
         debug!(?color_correlation_params);
+
+        // Pre-initialize splines draw cache for thread-safe reuse during rendering.
+        // This must happen after color_correlation_params is parsed.
+        let splines = if let Some(ref mut s) = splines {
+            s.initialize_draw_cache(
+                self.header.width as u64,
+                self.header.height as u64,
+                &color_correlation_params.clone().unwrap_or_default(),
+                self.decoder_state.high_precision,
+            )?;
+            Some(Arc::new(std::mem::take(s)))
+        } else {
+            None
+        };
 
         let tree = if br.read(1)? == 1 {
             let size_limit = (1024
@@ -427,11 +441,11 @@ impl Frame {
             }
         }
 
-        let lf_global = self.lf_global.as_mut().unwrap();
         if self.header.encoding == Encoding::VarDCT {
             info!("Decoding VarDCT group {group}, pass {pass}");
+            let lf_global = self.lf_global.as_ref().unwrap();
             let hf_global = self.hf_global.as_mut().unwrap();
-            let hf_meta = self.hf_meta.as_mut().unwrap();
+            let hf_meta = self.hf_meta.as_ref().unwrap();
             let mut pixels = [
                 pipeline!(self, p, p.get_buffer(0))?,
                 pipeline!(self, p, p.get_buffer(1))?,
@@ -469,6 +483,7 @@ impl Frame {
                 }
             }
         }
+        let lf_global = self.lf_global.as_mut().unwrap();
         lf_global.modular_global.read_stream(
             ModularStreamId::ModularHF { group, pass },
             &self.header,
