@@ -214,7 +214,6 @@ impl RawImageBuffer {
             return Err(Error::ImageSizeTooLarge(bytes_per_row, num_rows));
         }
         debug!("trying to allocate image");
-        let bytes_per_row = bytes_per_row;
         let bytes_between_rows =
             bytes_per_row.div_ceil(CACHE_LINE_BYTE_SIZE) * CACHE_LINE_BYTE_SIZE;
         // Note: matches RawImageBuffer::minimum_allocation_size.

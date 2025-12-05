@@ -7,7 +7,7 @@ use std::any::Any;
 
 use crate::{
     render::{
-        RunInPlaceStage,
+        Channels, ChannelsMut, RunInPlaceStage,
         internal::{PipelineBuffer, RunInOutStage},
         low_memory_pipeline::helpers::mirror,
     },
@@ -102,35 +102,43 @@ impl<T: RenderPipelineInOutStage> RunInOutStage<RowBuffer> for T {
             } else {
                 out_extra_x.shrc(T::SHIFT.0)
             };
-        let input_rows: Vec<_> = input_buffers
-            .iter()
-            .map(|x| {
-                (-ibordery..=ibordery)
-                    .map(|iy| {
-                        &x.get_row::<T::InputT>(mirror(current_row as isize + iy, image_height))
-                            [xstart - Self::BORDER.0 as usize..]
-                    })
-                    .collect::<Vec<_>>()
-            })
-            .collect();
-        let mut output_rows: Vec<_> = output_buffers
-            .iter_mut()
-            .map(|x| {
-                x.get_rows_mut::<T::OutputT>(
-                    (current_row << T::SHIFT.1)..((current_row + 1) << T::SHIFT.1),
-                    RowBuffer::x0_offset::<T::OutputT>() - (xpre << T::SHIFT.0),
-                )
-            })
-            .collect();
 
-        let input_rows: Vec<_> = input_rows.iter().map(|x| &x[..]).collect();
-        let mut output_rows: Vec<_> = output_rows.iter_mut().map(|x| &mut x[..]).collect();
+        // Build flat input rows: all rows for all channels in one Vec
+        let input_rows_per_channel = (2 * Self::BORDER.1 + 1) as usize;
+        let num_channels = input_buffers.len();
+        let mut input_row_data = Vec::with_capacity(num_channels * input_rows_per_channel);
+        for x in input_buffers.iter() {
+            for iy in -ibordery..=ibordery {
+                input_row_data.push(
+                    &x.get_row::<T::InputT>(mirror(current_row as isize + iy, image_height))
+                        [xstart - Self::BORDER.0 as usize..],
+                );
+            }
+        }
+        let input_rows = Channels::new(input_row_data, num_channels, input_rows_per_channel);
+
+        // Build flat output rows: all rows for all channels in one Vec
+        let output_rows_per_channel = 1 << T::SHIFT.1;
+        let num_output_channels = output_buffers.len();
+        let mut output_row_data = Vec::with_capacity(num_output_channels * output_rows_per_channel);
+        for x in output_buffers.iter_mut() {
+            let rows = x.get_rows_mut::<T::OutputT>(
+                (current_row << T::SHIFT.1)..((current_row + 1) << T::SHIFT.1),
+                RowBuffer::x0_offset::<T::OutputT>() - (xpre << T::SHIFT.0),
+            );
+            output_row_data.extend(rows);
+        }
+        let mut output_rows = ChannelsMut::new(
+            output_row_data,
+            num_output_channels,
+            output_rows_per_channel,
+        );
 
         self.process_row_chunk(
             (group_x0 - xpre, current_row),
             xend - xstart,
-            &input_rows[..],
-            &mut output_rows[..],
+            &input_rows,
+            &mut output_rows,
             state,
         );
     }
