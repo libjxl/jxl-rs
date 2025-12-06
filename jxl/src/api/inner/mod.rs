@@ -10,7 +10,7 @@ use crate::{
     error::{Error, Result},
 };
 
-use super::{JxlBasicInfo, JxlColorProfile, JxlDecoderOptions, JxlPixelFormat};
+use super::{GainMapBundle, JxlBasicInfo, JxlColorProfile, JxlDecoderOptions, JxlPixelFormat};
 use box_parser::BoxParser;
 use codestream_parser::CodestreamParser;
 
@@ -110,6 +110,14 @@ impl JxlDecoderInner {
 
     pub fn has_more_frames(&self) -> bool {
         self.codestream_parser.has_more_frames
+    }
+
+    /// Retrieves the gain map bundle, if present in the file.
+    ///
+    /// The gain map allows converting between SDR and HDR representations of the image
+    /// as defined by ISO 21496-1.
+    pub fn gain_map(&self) -> Option<&GainMapBundle> {
+        self.box_parser.gain_map.as_ref()
     }
 
     #[cfg(test)]
