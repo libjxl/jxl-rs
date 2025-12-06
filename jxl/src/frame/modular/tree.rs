@@ -32,8 +32,33 @@ pub enum TreeNode {
     },
 }
 
+/// Flattened tree node for optimized traversal (matches C++ FlatDecisionNode).
+/// Stores parent + info about both children to evaluate 3 nodes per iteration.
+#[derive(Debug, Clone, Copy)]
+pub(super) struct FlatTreeNode {
+    property0: i32,                    // Property to test, -1 if leaf
+    splitval0_or_predictor: i32,       // Split value, or predictor if leaf
+    splitvals_or_multiplier: [i32; 2], // Child splitvals, or multiplier if leaf
+    child_id: u32,                     // Index to first grandchild, or context if leaf
+    properties_or_offset: [i16; 2],    // Child properties, or offset if leaf
+}
+
+impl FlatTreeNode {
+    #[inline]
+    fn leaf(predictor: Predictor, offset: i32, multiplier: u32, context: u32) -> Self {
+        Self {
+            property0: -1,
+            splitval0_or_predictor: predictor as i32,
+            splitvals_or_multiplier: [multiplier as i32, 0],
+            child_id: context,
+            properties_or_offset: [offset as i16, 0],
+        }
+    }
+}
+
 pub struct Tree {
     pub nodes: Vec<TreeNode>,
+    flat_nodes: Vec<FlatTreeNode>,
     pub histograms: Histograms,
 }
 
@@ -65,10 +90,11 @@ const NUM_TREE_CONTEXTS: usize = 6;
 // previous values available for computing the local gradient property.
 // Also, the first two properties (the static properties) should be already set by the caller.
 // All other properties should be 0 on the first call in a row.
+#[cfg(test)]
 #[inline]
 #[instrument(level = "trace", ret)]
 #[allow(clippy::too_many_arguments)]
-pub(super) fn predict(
+fn predict(
     tree: &[TreeNode],
     prediction_data: PredictionData,
     xsize: usize,
@@ -170,6 +196,97 @@ pub(super) fn predict(
         guess: pred + offset as i64,
         multiplier,
         context: id,
+    }
+}
+
+/// Optimized prediction using flat tree (matches C++ context_predict.h:351-371).
+#[inline]
+#[allow(clippy::too_many_arguments)]
+pub(super) fn predict_flat(
+    flat_tree: &[FlatTreeNode],
+    prediction_data: PredictionData,
+    xsize: usize,
+    wp_state: Option<&mut WeightedPredictorState>,
+    x: usize,
+    y: usize,
+    references: &Image<i32>,
+    property_buffer: &mut [i32],
+) -> PredictionResult {
+    let PredictionData {
+        left,
+        top,
+        toptop,
+        topleft,
+        topright,
+        leftleft,
+        toprightright: _toprightright,
+    } = prediction_data;
+
+    // Property buffer computation (same as original)
+    property_buffer[2] = y as i32;
+    property_buffer[3] = x as i32;
+    property_buffer[4] = top.abs();
+    property_buffer[5] = left.abs();
+    property_buffer[6] = top;
+    property_buffer[7] = left;
+    property_buffer[8] = left.wrapping_sub(property_buffer[9]);
+    property_buffer[9] = left.wrapping_add(top).wrapping_sub(topleft);
+    property_buffer[10] = left.wrapping_sub(topleft);
+    property_buffer[11] = topleft.wrapping_sub(top);
+    property_buffer[12] = top.wrapping_sub(topright);
+    property_buffer[13] = top.wrapping_sub(toptop);
+    property_buffer[14] = left.wrapping_sub(leftleft);
+
+    let wp_pred;
+    (wp_pred, property_buffer[15]) = wp_state
+        .map(|wp_state| wp_state.predict_and_property((x, y), xsize, &prediction_data))
+        .unwrap_or((0, 0));
+
+    let num_refs = references.size().0;
+    if num_refs != 0 {
+        let ref_properties = &mut property_buffer[NUM_NONREF_PROPERTIES..];
+        ref_properties[..num_refs].copy_from_slice(&references.row(x)[..num_refs]);
+    }
+
+    // Flat tree traversal
+    let mut pos = 0;
+    loop {
+        let node = &flat_tree[pos];
+
+        if node.property0 < 0 {
+            // Leaf node
+            let predictor = Predictor::try_from(node.splitval0_or_predictor as u32).unwrap();
+            let offset = node.properties_or_offset[0] as i32;
+            let multiplier = node.splitvals_or_multiplier[0] as u32;
+            let context = node.child_id;
+
+            let pred = predictor.predict_one(prediction_data, wp_pred);
+
+            return PredictionResult {
+                guess: pred + offset as i64,
+                multiplier,
+                context,
+            };
+        }
+
+        // Split node: C++ logic from context_predict.h:361-365
+        let p0 = property_buffer[node.property0 as usize] <= node.splitval0_or_predictor;
+        let off0 = if property_buffer[node.properties_or_offset[0] as usize]
+            <= node.splitvals_or_multiplier[0]
+        {
+            1
+        } else {
+            0
+        };
+        let off1 = 2 | if property_buffer[node.properties_or_offset[1] as usize]
+            <= node.splitvals_or_multiplier[1]
+        {
+            1
+        } else {
+            0
+        };
+
+        pos = (node.child_id + if p0 { off1 } else { off0 }) as usize;
     }
 }
 
@@ -293,10 +410,90 @@ impl Tree {
 
         let histograms = Histograms::decode(tree.len().div_ceil(2), br, true)?;
 
+        let flat_nodes = Self::build_flat_tree(&tree)?;
+
         Ok(Tree {
             nodes: tree,
+            flat_nodes,
             histograms,
         })
+    }
+
+    /// Build flat tree using BFS traversal (matches C++ encoding.cc:81-144).
+    /// Each flat node stores parent + both children info to reduce branches.
+    pub(super) fn build_flat_tree(nodes: &[TreeNode]) -> Result<Vec<FlatTreeNode>> {
+        use std::collections::VecDeque;
+
+        if nodes.is_empty() {
+            return Ok(vec![]);
+        }
+
+        let mut flat_nodes = Vec::new_with_capacity(nodes.len())?;
+        let mut queue: VecDeque<usize> = VecDeque::new();
+        queue.push_back(0); // Start with root
+
+        while let Some(cur_idx) = queue.pop_front() {
+            match &nodes[cur_idx] {
+                TreeNode::Leaf {
+                    predictor,
+                    offset,
+                    multiplier,
+                    id,
+                } => {
+                    flat_nodes.push(FlatTreeNode::leaf(*predictor, *offset, *multiplier, *id));
+                }
+                TreeNode::Split {
+                    property,
+                    val,
+                    left,
+                    right,
+                } => {
+                    // childID points to first of 4 grandchildren in output
+                    let child_id = (flat_nodes.len() + queue.len() + 1) as u32;
+
+                    let mut flat = FlatTreeNode {
+                        property0: *property as i32,
+                        splitval0_or_predictor: *val,
+                        splitvals_or_multiplier: [0, 0],
+                        child_id,
+                        properties_or_offset: [0, 0],
+                    };
+
+                    // Process left (i=0) and right (i=1) children
+                    for (i, &child_idx) in [*left as usize, *right as usize].iter().enumerate() {
+                        match &nodes[child_idx] {
+                            TreeNode::Leaf { .. } => {
+                                // Child is leaf: set property=0 and enqueue leaf twice
+                                flat.properties_or_offset[i] = 0;
+                                flat.splitvals_or_multiplier[i] = 0;
+                                queue.push_back(child_idx);
+                                queue.push_back(child_idx);
+                            }
+                            TreeNode::Split {
+                                property: cp,
+                                val: cv,
+                                left: cl,
+                                right: cr,
+                            } => {
+                                // Child is split: store property/splitval and enqueue grandchildren
+                                flat.properties_or_offset[i] = *cp as i16;
+                                flat.splitvals_or_multiplier[i] = *cv;
+                                queue.push_back(*cl as usize);
+                                queue.push_back(*cr as usize);
+                            }
+                        }
+                    }
+
+                    flat_nodes.push(flat);
+                }
+            }
+        }
+
+        Ok(flat_nodes)
+    }
+
+    pub(super) fn flat_tree(&self) -> &[FlatTreeNode] {
+        &self.flat_nodes
     }
 
     pub fn max_property_count(&self) -> usize {
