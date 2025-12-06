@@ -159,6 +159,28 @@ pub fn bt709_to_linear(samples: &mut [f32]) {
     }
 }
 
+/// Converts samples in BT.709 transfer curve to linear (SIMD version).
+#[inline(always)]
+pub fn bt709_to_linear_simd<D: SimdDescriptor>(d: D, samples: &mut [f32]) {
+    let threshold = D::F32Vec::splat(d, 0.081);
+    let inv_4_5 = D::F32Vec::splat(d, 1.0 / 4.5);
+    let scale = D::F32Vec::splat(d, 1.0 / 1.099);
+    let offset = D::F32Vec::splat(d, 0.099 / 1.099);
+    let exp = D::F32Vec::splat(d, 1.0 / 0.45);
+
+    for vec in samples.chunks_exact_mut(D::F32Vec::LEN) {
+        let x = D::F32Vec::load(d, vec);
+        let a = x.abs();
+        let linear_part = a * inv_4_5;
+        let gamma_part = crate::util::fast_powf_simd(d, a.mul_add(scale, offset), exp);
+        threshold
+            .gt(a)
+            .if_then_else_f32(linear_part, gamma_part)
+            .copysign(x)
+            .store(vec);
+    }
+}
+
 const PQ_M1: f64 = 2610.0 / 16384.0;
 const PQ_M2: f64 = (2523.0 / 4096.0) * 128.0;
 const PQ_C1: f64 = 3424.0 / 4096.0;
@@ -257,6 +279,27 @@ pub fn linear_to_pq(intensity_target: f32, samples: &mut [f32]) {
     }
 }
 
+/// Converts linear sample to PQ signal using PQ inverse EOTF (SIMD version).
+#[inline(always)]
+pub fn linear_to_pq_simd<D: SimdDescriptor>(d: D, intensity_target: f32, samples: &mut [f32]) {
+    let y_mult = D::F32Vec::splat(d, intensity_target * 10000f32.recip());
+    let threshold = D::F32Vec::splat(d, 1e-4);
+
+    for vec in samples.chunks_exact_mut(D::F32Vec::LEN) {
+        let s = D::F32Vec::load(d, vec);
+        let a = s.abs();
+        let a_scaled = a * y_mult;
+        let a_1_4 = a_scaled.sqrt().sqrt();
+
+        // Use small polynomial for a < 1e-4, regular polynomial otherwise
+        let y_small = eval_rational_poly_simd(d, a_1_4, PQ_INV_EOTF_P_SMALL, PQ_INV_EOTF_Q_SMALL);
+        let y_large = eval_rational_poly_simd(d, a_1_4, PQ_INV_EOTF_P, PQ_INV_EOTF_Q);
+        let y = threshold.gt(a).if_then_else_f32(y_small, y_large);
+
+        y.copysign(s).store(vec);
+    }
+}
+
 /// Converts PQ signal to linear sample using PQ EOTF, where linear sample value of 1.0 represents
 /// `intensity_target` display nits.
 ///
@@ -271,6 +314,21 @@ pub fn pq_to_linear(intensity_target: f32, samples: &mut [f32]) {
         let x = a.mul_add(a, a);
         let y = eval_rational_poly(x, PQ_EOTF_P, PQ_EOTF_Q);
         *s = (y * y_mult).copysign(*s);
+    }
+}
+
+/// Converts PQ signal to linear sample using PQ EOTF (SIMD version).
+#[inline(always)]
+pub fn pq_to_linear_simd<D: SimdDescriptor>(d: D, intensity_target: f32, samples: &mut [f32]) {
+    let y_mult = D::F32Vec::splat(d, 10000.0 / intensity_target);
+
+    for vec in samples.chunks_exact_mut(D::F32Vec::LEN) {
+        let s = D::F32Vec::load(d, vec);
+        let a = s.abs();
+        // a + a * a
+        let x = a.mul_add(a, a);
+        let y = eval_rational_poly_simd(d, x, PQ_EOTF_P, PQ_EOTF_Q);
+        (y * y_mult).copysign(s).store(vec);
     }
 }
 
@@ -570,6 +628,55 @@ mod test {
             pq_to_linear(intensity_target, &mut samples);
             pq_to_linear_precise(intensity_target, &mut precise);
             assert_all_almost_abs_eq(&samples, &precise, 3e-6);
+            Ok(())
+        });
+    }
+
+    #[test]
+    fn bt709_to_linear_simd_arb() {
+        arbtest::arbtest(|u| {
+            let mut samples = arb_samples(u)?;
+            let mut simd = samples.clone();
+
+            bt709_to_linear(&mut samples);
+            bt709_to_linear_simd(jxl_simd::ScalarDescriptor::new().unwrap(), &mut simd);
+            assert_all_almost_abs_eq(&samples, &simd, 1e-5);
+            Ok(())
+        });
+    }
+
+    #[test]
+    fn pq_to_linear_simd_arb() {
+        arbtest::arbtest(|u| {
+            let intensity_target = u.int_in_range(9900..=10100)? as f32;
+            let mut samples = arb_samples(u)?;
+            let mut simd = samples.clone();
+
+            pq_to_linear(intensity_target, &mut samples);
+            pq_to_linear_simd(
+                jxl_simd::ScalarDescriptor::new().unwrap(),
+                intensity_target,
+                &mut simd,
+            );
+            assert_all_almost_abs_eq(&samples, &simd, 2e-5);
+            Ok(())
+        });
+    }
+
+    #[test]
+    fn linear_to_pq_simd_arb() {
+        arbtest::arbtest(|u| {
+            let intensity_target = u.int_in_range(9900..=10100)? as f32;
+            let mut samples = arb_samples(u)?;
+            let mut simd = samples.clone();
+
+            linear_to_pq(intensity_target, &mut samples);
+            linear_to_pq_simd(
+                jxl_simd::ScalarDescriptor::new().unwrap(),
+                intensity_target,
+                &mut simd,
+            );
+            assert_all_almost_abs_eq(&samples, &simd, 2e-5);
             Ok(())
         });
     }
