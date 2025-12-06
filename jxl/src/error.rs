@@ -259,6 +259,10 @@ pub enum Error {
     InvalidOutputBufferSize(usize, usize, usize, usize, JxlColorType, JxlDataFormat),
     #[error("Attempting to save channels with different downsample amounts: {0:?} and {1:?}")]
     SaveDifferentDownsample((u8, u8), (u8, u8)),
+    #[error(
+        "XYB planar output is not supported for images that require blending (e.g., animations)"
+    )]
+    UnsupportedXybPlanarWithBlending,
 }
 
 pub type Result<T, E = Error> = std::result::Result<T, E>;

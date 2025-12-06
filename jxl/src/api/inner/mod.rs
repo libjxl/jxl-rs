@@ -83,7 +83,6 @@ impl JxlDecoderInner {
         // The render pipeline always adds ExtendToImageDimensionsStage which extends
         // frames to the full image size. So the output size is always the image size,
         // not the frame's upsampled size.
-        let size = self.codestream_parser.basic_info.as_ref()?.size;
         Some(JxlFrameHeader {
             name: frame_header.name.clone(),
             duration: self
@@ -91,7 +90,6 @@ impl JxlDecoderInner {
                 .animation
                 .as_ref()
                 .map(|anim| frame_header.duration(anim)),
-            size,
         })
     }
 

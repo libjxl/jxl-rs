@@ -13,6 +13,8 @@ pub enum JxlColorType {
     Rgba,
     Bgr,
     Bgra,
+    Xyb,
+    XybAlpha,
 }
 
 impl JxlColorType {
@@ -22,6 +24,8 @@ impl JxlColorType {
             Self::GrayscaleAlpha => true,
             Self::Rgb | Self::Bgr => false,
             Self::Rgba | Self::Bgra => true,
+            Self::Xyb => false,
+            Self::XybAlpha => true,
         }
     }
     pub fn samples_per_pixel(&self) -> usize {
@@ -30,6 +34,8 @@ impl JxlColorType {
             Self::GrayscaleAlpha => 2,
             Self::Rgb | Self::Bgr => 3,
             Self::Rgba | Self::Bgra => 4,
+            Self::Xyb => 3,
+            Self::XybAlpha => 4,
         }
     }
     pub fn is_grayscale(&self) -> bool {
@@ -38,7 +44,12 @@ impl JxlColorType {
             Self::GrayscaleAlpha => true,
             Self::Rgb | Self::Bgr => false,
             Self::Rgba | Self::Bgra => false,
+            Self::Xyb | Self::XybAlpha => false,
         }
+    }
+
+    pub fn is_xyb(&self) -> bool {
+        matches!(self, Self::Xyb | Self::XybAlpha)
     }
 }
 
@@ -151,6 +162,4 @@ pub struct JxlAnimation {
 pub struct JxlFrameHeader {
     pub name: String,
     pub duration: Option<f64>,
-    /// Frame size (width, height)
-    pub size: (usize, usize),
 }

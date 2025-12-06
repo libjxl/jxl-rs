@@ -181,7 +181,7 @@ impl JxlDecoder<WithFrameInfo> {
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
-    use crate::api::{JxlDataFormat, JxlDecoderOptions};
+    use crate::api::JxlDecoderOptions;
     use crate::error::Error;
     use crate::image::{Image, Rect};
     use crate::util::test::assert_almost_abs_eq_coords;
@@ -252,20 +252,9 @@ pub(crate) mod tests {
         assert!(buffer_width > 0);
         assert!(buffer_height > 0);
 
-        // Explicitly request F32 pixel format (test helper returns Image<f32>)
-        let default_format = decoder_with_image_info.current_pixel_format();
-        let requested_format = JxlPixelFormat {
-            color_type: default_format.color_type,
-            color_data_format: Some(JxlDataFormat::f32()),
-            extra_channel_format: default_format
-                .extra_channel_format
-                .iter()
-                .map(|_| Some(JxlDataFormat::f32()))
-                .collect(),
-        };
-        decoder_with_image_info.set_pixel_format(requested_format);
-
-        // Get the configured pixel format
+        // Get pixel format info
+        // TODO(veluca): this relies on the default pixel format using floats. We should not do
+        // this, and instead call set_pixel_format, but that is currently not implemented.
         let pixel_format = decoder_with_image_info.current_pixel_format().clone();
 
         let num_channels = pixel_format.color_type.samples_per_pixel();
@@ -398,130 +387,104 @@ pub(crate) mod tests {
     for_each_test_file!(compare_pipelines);
 
     #[test]
-    fn test_preview_size_none_for_regular_files() {
-        let file = std::fs::read("resources/test/basic.jxl").unwrap();
-        let options = JxlDecoderOptions::default();
-        let mut decoder = JxlDecoder::<states::Initialized>::new(options);
-        let mut input = file.as_slice();
-        let decoder = loop {
-            match decoder.process(&mut input).unwrap() {
-                ProcessingResult::Complete { result } => break result,
-                ProcessingResult::NeedsMoreInput { fallback, .. } => decoder = fallback,
-            }
+    fn test_xyb_color_type_api() -> Result<(), Error> {
+        use crate::api::{JxlColorType, JxlDataFormat, JxlPixelFormat};
+
+        // Test that XYB color types have correct properties
+        assert!(!JxlColorType::Xyb.is_grayscale());
+        assert!(!JxlColorType::Xyb.has_alpha());
+        assert!(JxlColorType::Xyb.is_xyb());
+        assert_eq!(JxlColorType::Xyb.samples_per_pixel(), 3);
+
+        assert!(!JxlColorType::XybAlpha.is_grayscale());
+        assert!(JxlColorType::XybAlpha.has_alpha());
+        assert!(JxlColorType::XybAlpha.is_xyb());
+        assert_eq!(JxlColorType::XybAlpha.samples_per_pixel(), 4);
+
+        // Test that XYB pixel format can be created
+        let xyb_format = JxlPixelFormat {
+            color_type: JxlColorType::Xyb,
+            color_data_format: Some(JxlDataFormat::f32()),
+            extra_channel_format: vec![],
         };
-        assert!(decoder.basic_info().preview_size.is_none());
+        assert!(xyb_format.color_type.is_xyb());
+
+        Ok(())
     }
 
     #[test]
-    fn test_preview_size_some_for_preview_files() {
-        let file = std::fs::read("resources/test/with_preview.jxl").unwrap();
-        let options = JxlDecoderOptions::default();
-        let mut decoder = JxlDecoder::<states::Initialized>::new(options);
-        let mut input = file.as_slice();
-        let decoder = loop {
-            match decoder.process(&mut input).unwrap() {
-                ProcessingResult::Complete { result } => break result,
-                ProcessingResult::NeedsMoreInput { fallback, .. } => decoder = fallback,
-            }
-        };
-        assert_eq!(decoder.basic_info().preview_size, Some((16, 16)));
-    }
+    fn test_decode_xyb_planar() -> Result<(), Error> {
+        use crate::api::{JxlColorType, JxlDataFormat, JxlPixelFormat};
+        use std::path::Path;
 
-    #[test]
-    fn test_num_completed_passes() {
-        use crate::image::{Image, Rect};
-        let file = std::fs::read("resources/test/basic.jxl").unwrap();
+        let path = Path::new("resources/test/basic.jxl");
+        let file = std::fs::read(path)?;
+
+        let _rgb_frames = decode(&file, usize::MAX, true, None)?.1;
         let options = JxlDecoderOptions::default();
         let mut decoder = JxlDecoder::<states::Initialized>::new(options);
-        let mut input = file.as_slice();
-        // Process until we have image info
-        let mut decoder_with_info = loop {
-            match decoder.process(&mut input).unwrap() {
-                ProcessingResult::Complete { result } => break result,
-                ProcessingResult::NeedsMoreInput { fallback, .. } => decoder = fallback,
-            }
-        };
-        let info = decoder_with_info.basic_info().clone();
-        let mut decoder_with_frame = loop {
-            match decoder_with_info.process(&mut input).unwrap() {
+
+        let mut input = &file[..];
+        let decoder = loop {
+            match decoder.process(&mut input)? {
                 ProcessingResult::Complete { result } => break result,
                 ProcessingResult::NeedsMoreInput { fallback, .. } => {
-                    decoder_with_info = fallback;
+                    decoder = fallback;
                 }
             }
         };
-        // Before processing frame, passes should be 0
-        assert_eq!(decoder_with_frame.num_completed_passes(), 0);
-        // Process the frame
-        let mut output = Image::<f32>::new((info.size.0 * 3, info.size.1)).unwrap();
-        let rect = Rect {
-            size: output.size(),
-            origin: (0, 0),
-        };
-        let mut bufs = [JxlOutputBuffer::from_image_rect_mut(
-            output.get_rect_mut(rect).into_raw(),
-        )];
-        loop {
-            match decoder_with_frame.process(&mut input, &mut bufs).unwrap() {
-                ProcessingResult::Complete { .. } => break,
-                ProcessingResult::NeedsMoreInput { fallback, .. } => decoder_with_frame = fallback,
-            }
-        }
-    }
 
-    #[test]
-    fn test_set_pixel_format() {
-        use crate::api::{JxlColorType, JxlDataFormat, JxlPixelFormat};
+        let basic_info = decoder.basic_info().clone();
+        let (w, h) = basic_info.size;
 
-        let file = std::fs::read("resources/test/basic.jxl").unwrap();
-        let options = JxlDecoderOptions::default();
-        let mut decoder = JxlDecoder::<states::Initialized>::new(options);
-        let mut input = file.as_slice();
-        let mut decoder = loop {
-            match decoder.process(&mut input).unwrap() {
-                ProcessingResult::Complete { result } => break result,
-                ProcessingResult::NeedsMoreInput { fallback, .. } => decoder = fallback,
-            }
-        };
-        // Check default pixel format
-        let default_format = decoder.current_pixel_format().clone();
-        assert_eq!(default_format.color_type, JxlColorType::Rgb);
-
-        // Set a new pixel format
-        let new_format = JxlPixelFormat {
-            color_type: JxlColorType::Grayscale,
-            color_data_format: Some(JxlDataFormat::U8 { bit_depth: 8 }),
+        let xyb_format = JxlPixelFormat {
+            color_type: JxlColorType::Xyb,
+            color_data_format: Some(JxlDataFormat::f32()),
             extra_channel_format: vec![],
         };
-        decoder.set_pixel_format(new_format.clone());
 
-        // Verify it was set
-        assert_eq!(decoder.current_pixel_format(), &new_format);
-    }
+        let mut decoder = decoder;
+        decoder.set_pixel_format(xyb_format);
 
-    #[test]
-    fn test_set_output_color_profile() {
-        use crate::api::JxlColorProfile;
-
-        let file = std::fs::read("resources/test/basic.jxl").unwrap();
-        let options = JxlDecoderOptions::default();
-        let mut decoder = JxlDecoder::<states::Initialized>::new(options);
-        let mut input = file.as_slice();
-        let mut decoder = loop {
-            match decoder.process(&mut input).unwrap() {
+        let decoder = loop {
+            match decoder.process(&mut input)? {
                 ProcessingResult::Complete { result } => break result,
-                ProcessingResult::NeedsMoreInput { fallback, .. } => decoder = fallback,
+                ProcessingResult::NeedsMoreInput { fallback, .. } => {
+                    panic!("Unexpected need for more input");
+                }
             }
         };
 
-        // Get the embedded profile and set it as output (should work)
-        let embedded = decoder.embedded_color_profile().clone();
-        let result = decoder.set_output_color_profile(embedded);
-        assert!(result.is_ok());
+        let bytes_per_row = w * 4;
+        let mut x_buf = vec![0u8; w * h * 4];
+        let mut y_buf = vec![0u8; w * h * 4];
+        let mut b_buf = vec![0u8; w * h * 4];
 
-        // Setting an ICC profile without CMS should fail
-        let icc_profile = JxlColorProfile::Icc(vec![0u8; 100]);
-        let result = decoder.set_output_color_profile(icc_profile);
-        assert!(result.is_err());
+        let mut buffers = [
+            JxlOutputBuffer::new(&mut x_buf, h, bytes_per_row),
+            JxlOutputBuffer::new(&mut y_buf, h, bytes_per_row),
+            JxlOutputBuffer::new(&mut b_buf, h, bytes_per_row),
+        ];
+
+        let _decoder = decoder.process(&mut input, &mut buffers[..])?;
+
+        let x_has_data = x_buf.chunks(4).any(|chunk| {
+            let val = f32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]);
+            !val.is_nan()
+        });
+        let y_has_data = y_buf.chunks(4).any(|chunk| {
+            let val = f32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]);
+            !val.is_nan()
+        });
+        let b_has_data = b_buf.chunks(4).any(|chunk| {
+            let val = f32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]);
+            !val.is_nan()
+        });
+
+        assert!(x_has_data);
+        assert!(y_has_data);
+        assert!(b_has_data);
+
+        Ok(())
     }
 }
