@@ -8,22 +8,17 @@ mod reinterpreting_dct2d;
 pub mod transform;
 pub mod transform_map;
 
-mod idct128;
 mod idct16;
 mod idct2;
-mod idct256;
 mod idct32;
 mod idct4;
-mod idct64;
 mod idct8;
+mod idct_large;
 
-use idct128::*;
 use idct16::*;
 use idct2::*;
-use idct256::*;
 use idct32::*;
 use idct4::*;
-use idct64::*;
 use idct8::*;
 
 mod reinterpreting_dct16;
@@ -39,6 +34,7 @@ use reinterpreting_dct4::*;
 use reinterpreting_dct8::*;
 
 pub use idct2d::*;
+pub use idct_large::*;
 pub use reinterpreting_dct2d::*;
 
 #[cfg(test)]

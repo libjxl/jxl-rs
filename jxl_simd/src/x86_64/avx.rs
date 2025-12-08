@@ -60,6 +60,7 @@ impl SimdDescriptor for AvxDescriptor {
 
     fn call<R>(self, f: impl FnOnce(Self) -> R) -> R {
         #[target_feature(enable = "avx2,fma")]
+        #[inline(never)]
         unsafe fn inner<R>(d: AvxDescriptor, f: impl FnOnce(AvxDescriptor) -> R) -> R {
             f(d)
         }

@@ -1,0 +1,42 @@
+# Copyright (c) the JPEG XL Project Authors. All rights reserved.
+#
+# Use of this source code is governed by a BSD-style
+# license that can be found in the LICENSE file.
+
+# Workflow to run after successful pull_request workflow
+
+name: Post benchmark results
+on:
+  workflow_run:
+    workflows: ["PR"]
+    types: [completed]
+
+jobs:
+  comment:
+    runs-on: ubuntu-latest
+    if: github.event.workflow_run.event == 'pull_request' && github.event.workflow_run.conclusion == 'success'
+    permissions:
+      pull-requests: write
+    steps:
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: benchmark-results
+          run-id: ${{ github.event.workflow_run.id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Post comment
+        run: |
+          PR_NUMBER=$(cat pr_number.txt)
+          HEAD_SHA=$(cat head_sha.txt)
+
+          gh pr comment "$PR_NUMBER" --body-file - <<EOF
+          ## Benchmark @ ${HEAD_SHA:0:7}
+
+          \`\`\`
+          $(cat benchmark.txt)
+          \`\`\`
+          EOF
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
