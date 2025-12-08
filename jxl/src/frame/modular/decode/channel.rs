@@ -47,9 +47,11 @@ fn decode_modular_channel_small(
 
     const { assert!(IMAGE_OFFSET.1 == 2) };
 
+    let mut property_buffer: Vec<i32> = vec![0; num_properties];
+
     for y in 0..size.1 {
         precompute_references(buffers, chan, y, &mut references);
-        let mut property_buffer: Vec<i32> = vec![0; num_properties];
+        property_buffer.fill(0);
         property_buffer[0] = chan as i32;
         property_buffer[1] = stream_id as i32;
         let [row, row_top, row_toptop] =

@@ -358,9 +358,10 @@ fn weighted_average(pixels: &[i64; NUM_PREDICTORS], weights: &mut [u32; NUM_PRED
 pub struct WeightedPredictorState {
     prediction: [i64; NUM_PREDICTORS],
     pred: i64,
-    // Position-major layout: errors for same position are contiguous
-    // Layout: [pos0: p0,p1,p2,p3] [pos1: p0,p1,p2,p3] ...
-    pred_errors_buffer: Vec<u32>,
+    // Position-major layout: each element is a 4-predictor error array for one position
+    // Layout: [[p0,p1,p2,p3], [p0,p1,p2,p3], ...]
+    // This gives better cache locality and eliminates bounds checks vs flat Vec<u32>
+    pred_errors_buffer: Vec<[u32; NUM_PREDICTORS]>,
     error: Vec<i32>,
     wp_header: WeightedHeader,
 }
@@ -371,31 +372,23 @@ impl WeightedPredictorState {
         WeightedPredictorState {
             prediction: [0; NUM_PREDICTORS],
             pred: 0,
-            // Position-major layout: errors for same position are contiguous
-            // Layout: [pos0: p0,p1,p2,p3] [pos1: p0,p1,p2,p3] ...
-            // This gives better cache locality when accessing all predictors for a position
-            pred_errors_buffer: vec![0; num_errors * NUM_PREDICTORS],
+            // Each position gets its own [u32; 4] array
+            pred_errors_buffer: vec![[0; NUM_PREDICTORS]; num_errors],
             error: vec![0; num_errors],
             wp_header: wp_header.clone(),
         }
     }
 
-    /// Get all predictor errors for a given position (contiguous in memory)
+    /// Get all predictor errors for a given position
     #[inline(always)]
     fn get_errors_at_pos(&self, pos: usize) -> &[u32; NUM_PREDICTORS] {
-        let start = pos * NUM_PREDICTORS;
-        self.pred_errors_buffer[start..start + NUM_PREDICTORS]
-            .try_into()
-            .unwrap()
+        &self.pred_errors_buffer[pos]
     }
 
     /// Get mutable reference to all predictor errors for a given position
     #[inline(always)]
     fn get_errors_at_pos_mut(&mut self, pos: usize) -> &mut [u32; NUM_PREDICTORS] {
-        let start = pos * NUM_PREDICTORS;
-        (&mut self.pred_errors_buffer[start..start + NUM_PREDICTORS])
-            .try_into()
-            .unwrap()
+        &mut self.pred_errors_buffer[pos]
     }
 
     pub fn save_state(&self, wp_image: &mut Image<i32>, xsize: usize) {
