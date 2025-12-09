@@ -58,7 +58,6 @@ impl FlatTreeNode {
 
 pub struct Tree {
     pub nodes: Vec<TreeNode>,
-    flat_nodes: Vec<FlatTreeNode>,
     pub histograms: Histograms,
 }
 
@@ -90,12 +89,11 @@ const NUM_TREE_CONTEXTS: usize = 6;
 // previous values available for computing the local gradient property.
 // Also, the first two properties (the static properties) should be already set by the caller.
 // All other properties should be 0 on the first call in a row.
-#[cfg(test)]
+
+/// Computes properties for tree traversal. Shared between flat and non-flat prediction.
+/// Returns the weighted predictor prediction value.
 #[inline]
-#[instrument(level = "trace", ret)]
-#[allow(clippy::too_many_arguments)]
-fn predict(
-    tree: &[TreeNode],
+fn compute_properties(
     prediction_data: PredictionData,
     xsize: usize,
     wp_state: Option<&mut WeightedPredictorState>,
@@ -103,7 +101,7 @@ fn predict(
     y: usize,
     references: &Image<i32>,
     property_buffer: &mut [i32],
-) -> PredictionResult {
+) -> i64 {
     let PredictionData {
         left,
         top,
@@ -111,13 +109,8 @@ fn predict(
         topleft,
         topright,
         leftleft,
-        toprightright: _toprightright,
+        toprightright: _,
     } = prediction_data;
-
-    trace!(
-        left,
-        top, topleft, topright, leftleft, toptop, _toprightright
-    );
 
     // Position
     property_buffer[2] = y as i32;
@@ -141,10 +134,10 @@ fn predict(
     property_buffer[14] = left.wrapping_sub(leftleft);
 
     // Weighted predictor property.
-    let wp_pred;
-    (wp_pred, property_buffer[15]) = wp_state
+    let (wp_pred, wp_prop) = wp_state
         .map(|wp_state| wp_state.predict_and_property((x, y), xsize, &prediction_data))
         .unwrap_or((0, 0));
+    property_buffer[15] = wp_prop;
 
     // Reference properties.
     let num_refs = references.size().0;
@@ -152,6 +145,34 @@ fn predict(
         let ref_properties = &mut property_buffer[NUM_NONREF_PROPERTIES..];
         ref_properties[..num_refs].copy_from_slice(&references.row(x)[..num_refs]);
     }
+
+    wp_pred
+}
+
+/// Prediction using standard tree traversal.
+/// Used for small channels where building a flat tree isn't worth it.
+#[inline]
+#[instrument(level = "trace", ret)]
+#[allow(clippy::too_many_arguments)]
+pub(super) fn predict(
+    tree: &[TreeNode],
+    prediction_data: PredictionData,
+    xsize: usize,
+    wp_state: Option<&mut WeightedPredictorState>,
+    x: usize,
+    y: usize,
+    references: &Image<i32>,
+    property_buffer: &mut [i32],
+) -> PredictionResult {
+    let wp_pred = compute_properties(
+        prediction_data,
+        xsize,
+        wp_state,
+        x,
+        y,
+        references,
+        property_buffer,
+    );
 
     trace!(?property_buffer, "new properties");
 
@@ -212,41 +233,15 @@ pub(super) fn predict_flat(
     references: &Image<i32>,
     property_buffer: &mut [i32],
 ) -> PredictionResult {
-    let PredictionData {
-        left,
-        top,
-        toptop,
-        topleft,
-        topright,
-        leftleft,
-        toprightright: _toprightright,
-    } = prediction_data;
-
-    // Property buffer computation (same as original)
-    property_buffer[2] = y as i32;
-    property_buffer[3] = x as i32;
-    property_buffer[4] = top.abs();
-    property_buffer[5] = left.abs();
-    property_buffer[6] = top;
-    property_buffer[7] = left;
-    property_buffer[8] = left.wrapping_sub(property_buffer[9]);
-    property_buffer[9] = left.wrapping_add(top).wrapping_sub(topleft);
-    property_buffer[10] = left.wrapping_sub(topleft);
-    property_buffer[11] = topleft.wrapping_sub(top);
-    property_buffer[12] = top.wrapping_sub(topright);
-    property_buffer[13] = top.wrapping_sub(toptop);
-    property_buffer[14] = left.wrapping_sub(leftleft);
-
-    let wp_pred;
-    (wp_pred, property_buffer[15]) = wp_state
-        .map(|wp_state| wp_state.predict_and_property((x, y), xsize, &prediction_data))
-        .unwrap_or((0, 0));
-
-    let num_refs = references.size().0;
-    if num_refs != 0 {
-        let ref_properties = &mut property_buffer[NUM_NONREF_PROPERTIES..];
-        ref_properties[..num_refs].copy_from_slice(&references.row(x)[..num_refs]);
-    }
+    let wp_pred = compute_properties(
+        prediction_data,
+        xsize,
+        wp_state,
+        x,
+        y,
+        references,
+        property_buffer,
+    );
 
     // Flat tree traversal
     let mut pos = 0;
@@ -410,11 +405,8 @@ impl Tree {
 
         let histograms = Histograms::decode(tree.len().div_ceil(2), br, true)?;
 
-        let flat_nodes = Self::build_flat_tree(&tree)?;
-
         Ok(Tree {
             nodes: tree,
-            flat_nodes,
             histograms,
         })
     }
@@ -490,10 +482,6 @@ impl Tree {
         }
 
         Ok(flat_nodes)
-    }
-
-    pub(super) fn flat_tree(&self) -> &[FlatTreeNode] {
-        &self.flat_nodes
     }
 
     pub fn max_property_count(&self) -> usize {
