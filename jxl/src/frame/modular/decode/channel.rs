@@ -15,7 +15,7 @@ use crate::{
             specialized_trees::{TreeSpecialCase, specialize_tree},
         },
         predict::{PredictionData, WeightedPredictorState},
-        tree::{NUM_NONREF_PROPERTIES, PROPERTIES_PER_PREVCHAN, predict_flat},
+        tree::{NUM_NONREF_PROPERTIES, PROPERTIES_PER_PREVCHAN, predict},
     },
     headers::modular::GroupHeader,
     image::Image,
@@ -59,8 +59,8 @@ fn decode_modular_channel_small(
         let row_toptop = &mut row_toptop[IMAGE_OFFSET.0..IMAGE_OFFSET.0 + size.0];
         for x in 0..size.0 {
             let prediction_data = PredictionData::get_rows(row, row_top, row_toptop, x, y);
-            let prediction_result = predict_flat(
-                tree.flat_tree(),
+            let prediction_result = predict(
+                &tree.nodes,
                 prediction_data,
                 size.0,
                 Some(&mut wp_state),
