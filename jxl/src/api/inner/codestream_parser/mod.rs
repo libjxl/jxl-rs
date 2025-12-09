@@ -138,10 +138,16 @@ impl CodestreamParser {
     ) -> Result<()> {
         if let Some(output_buffers) = &output_buffers {
             let px = self.pixel_format.as_ref().unwrap();
-            let expected_len = std::iter::once(&px.color_data_format)
-                .chain(px.extra_channel_format.iter())
-                .filter(|x| x.is_some())
-                .count();
+            let color_buffers = if px.color_type.is_xyb() && px.color_data_format.is_some() {
+                if px.color_type.has_alpha() { 4 } else { 3 }
+            } else {
+                if px.color_data_format.is_some() { 1 } else { 0 }
+            };
+            let expected_len = color_buffers
+                + px.extra_channel_format
+                    .iter()
+                    .filter(|x| x.is_some())
+                    .count();
             if output_buffers.len() != expected_len {
                 return Err(Error::WrongBufferCount(output_buffers.len(), expected_len));
             }
