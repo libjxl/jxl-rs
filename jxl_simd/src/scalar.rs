@@ -53,6 +53,43 @@ impl F32SimdVec for f32 {
     }
 
     #[inline(always)]
+    fn store_interleaved_2(a: Self, b: Self, base: &mut [f32], offset: usize) {
+        base[offset] = a;
+        base[offset + 1] = b;
+    }
+
+    #[inline(always)]
+    fn store_interleaved_4(a: Self, b: Self, c: Self, d: Self, base: &mut [f32], offset: usize) {
+        base[offset] = a;
+        base[offset + 1] = b;
+        base[offset + 2] = c;
+        base[offset + 3] = d;
+    }
+
+    #[inline(always)]
+    fn store_interleaved_8(
+        a: Self,
+        b: Self,
+        c: Self,
+        d: Self,
+        e: Self,
+        f: Self,
+        g: Self,
+        h: Self,
+        base: &mut [f32],
+        offset: usize,
+    ) {
+        base[offset] = a;
+        base[offset + 1] = b;
+        base[offset + 2] = c;
+        base[offset + 3] = d;
+        base[offset + 4] = e;
+        base[offset + 5] = f;
+        base[offset + 6] = g;
+        base[offset + 7] = h;
+    }
+
+    #[inline(always)]
     fn mul_add(self, mul: Self, add: Self) -> Self {
         (self * mul) + add
     }
