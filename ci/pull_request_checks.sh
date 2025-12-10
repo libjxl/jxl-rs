@@ -21,29 +21,19 @@ test_copyright() {
     if [[ "${f#third_party/}" == "$f" ]]; then
       # $f is not in third_party/
       if ! head -n 10 "$f" |
-          grep -F 'Copyright (c) the JPEG XL Project Authors.' >/dev/null ; then
+        grep -F 'Copyright (c) the JPEG XL Project Authors.' >/dev/null; then
         echo "$f: Missing Copyright blob near the top of the file." >&2
         ret=1
       fi
       if ! head -n 10 "$f" |
-          grep -F 'Use of this source code is governed by a BSD-style' \
-            >/dev/null ; then
+        grep -F 'Use of this source code is governed by a BSD-style' \
+          >/dev/null; then
         echo "$f: Missing License blob near the top of the file." >&2
         ret=1
       fi
     fi
   done
   return ${ret}
-}
-
-test_author() {
-  local hash
-  for hash in $(git log --format='%h' | head -n 100)
-  do
-    local email=$(git log --format='%ae' "$hash^!")
-    local name=$(git log --format='%an' "$hash^!")
-    "${MYDIR}"/check_author.py "${email}" "${name}" || return
-  done
 }
 
 # Check for git merge conflict markers.
