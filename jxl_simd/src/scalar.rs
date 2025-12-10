@@ -3,7 +3,7 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-use crate::{U32SimdVec, impl_f32_array_interface};
+use crate::{U32SimdVec, U8SimdVec, impl_f32_array_interface};
 
 use super::{F32SimdVec, I32SimdVec, SimdDescriptor, SimdMask};
 
@@ -14,6 +14,7 @@ impl SimdDescriptor for ScalarDescriptor {
     type F32Vec = f32;
     type I32Vec = i32;
     type U32Vec = u32;
+    type U8Vec = u8;
     type Mask = bool;
 
     type Descriptor256 = Self;
@@ -214,6 +215,27 @@ impl U32SimdVec for u32 {
     #[inline(always)]
     fn shr<const AMOUNT_U: u32, const AMOUNT_I: i32>(self) -> Self {
         self >> AMOUNT_U
+    }
+}
+
+impl U8SimdVec for u8 {
+    type Descriptor = ScalarDescriptor;
+
+    const LEN: usize = 1;
+
+    #[inline(always)]
+    fn pack_from_f32(_d: Self::Descriptor, v: f32) -> Self {
+        (v.clamp(0.0, 1.0) * 255.0).round() as u8
+    }
+
+    #[inline(always)]
+    fn store(&self, mem: &mut [u8]) {
+        mem[0] = *self;
+    }
+
+    #[inline(always)]
+    fn load(_d: Self::Descriptor, mem: &[u8]) -> Self {
+        mem[0]
     }
 }
 

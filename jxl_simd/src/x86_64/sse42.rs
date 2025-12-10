@@ -3,7 +3,7 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-use crate::{U32SimdVec, impl_f32_array_interface};
+use crate::{U32SimdVec, U8SimdVec, impl_f32_array_interface};
 
 use super::super::{F32SimdVec, I32SimdVec, SimdDescriptor, SimdMask};
 use std::{
@@ -30,6 +30,7 @@ impl SimdDescriptor for Sse42Descriptor {
     type F32Vec = F32VecSse42;
     type I32Vec = I32VecSse42;
     type U32Vec = U32VecSse42;
+    type U8Vec = U8VecSse42;
     type Mask = MaskSse42;
 
     type Descriptor256 = Self;
@@ -470,6 +471,80 @@ impl U32SimdVec for U32VecSse42 {
     fn shr<const AMOUNT_U: u32, const AMOUNT_I: i32>(self) -> Self {
         // SAFETY: We know sse2 is available from the safety invariant on `self.1`.
         unsafe { Self(_mm_srli_epi32::<AMOUNT_I>(self.0), self.1) }
+    }
+}
+
+/// U8 SIMD vector for SSE4.2.
+/// Contains 4 u8 values packed in the lower 32 bits of a __m128i.
+#[derive(Clone, Copy, Debug)]
+#[repr(transparent)]
+pub struct U8VecSse42(__m128i, Sse42Descriptor);
+
+impl U8SimdVec for U8VecSse42 {
+    type Descriptor = Sse42Descriptor;
+
+    // We process 4 f32 -> 4 u8 at a time (same as F32Vec::LEN)
+    const LEN: usize = 4;
+
+    #[inline(always)]
+    fn pack_from_f32(d: Self::Descriptor, v: F32VecSse42) -> Self {
+        #[target_feature(enable = "sse4.2")]
+        #[inline]
+        unsafe fn inner(d: Sse42Descriptor, v: F32VecSse42) -> U8VecSse42 {
+            // Multiply by 255 and add 0.5 for rounding
+            let scale = _mm_set1_ps(255.0);
+            let half = _mm_set1_ps(0.5);
+            let zero = _mm_setzero_ps();
+
+            // Clamp to [0, 1], multiply by 255, add 0.5 for rounding
+            let clamped = _mm_min_ps(_mm_max_ps(v.0, zero), _mm_set1_ps(1.0));
+            let scaled = _mm_add_ps(_mm_mul_ps(clamped, scale), half);
+
+            // Convert to i32
+            let i32_vals = _mm_cvttps_epi32(scaled);
+
+            // Clamp the result to [0, 255] in i32 before packing
+            let zero_i = _mm_setzero_si128();
+            let max_i = _mm_set1_epi32(255);
+            let clamped_i = _mm_min_epi32(_mm_max_epi32(i32_vals, zero_i), max_i);
+
+            // Pack i32 -> i16 -> u8 with saturation
+            // _mm_packus_epi32: pack 4 i32 into 4 u16 (lower 64 bits)
+            // _mm_packus_epi16: pack 8 i16 into 8 u8 (lower 64 bits)
+            let packed_16 = _mm_packus_epi32(clamped_i, zero_i);
+            let packed_8 = _mm_packus_epi16(packed_16, _mm_setzero_si128());
+
+            U8VecSse42(packed_8, d)
+        }
+        // SAFETY: d guarantees sse4.2 is available
+        unsafe { inner(d, v) }
+    }
+
+    #[inline(always)]
+    fn store(&self, mem: &mut [u8]) {
+        assert!(mem.len() >= Self::LEN);
+        // SAFETY: we just checked that `mem` has enough space.
+        // The 4 u8 values are in the lower 32 bits of the __m128i.
+        unsafe {
+            let val = _mm_cvtsi128_si32(self.0) as u32;
+            mem[0] = (val & 0xFF) as u8;
+            mem[1] = ((val >> 8) & 0xFF) as u8;
+            mem[2] = ((val >> 16) & 0xFF) as u8;
+            mem[3] = ((val >> 24) & 0xFF) as u8;
+        }
+    }
+
+    #[inline(always)]
+    fn load(d: Self::Descriptor, mem: &[u8]) -> Self {
+        assert!(mem.len() >= Self::LEN);
+        // SAFETY: we just checked that `mem` has enough space.
+        unsafe {
+            let val = (mem[0] as u32)
+                | ((mem[1] as u32) << 8)
+                | ((mem[2] as u32) << 16)
+                | ((mem[3] as u32) << 24);
+            Self(_mm_cvtsi32_si128(val as i32), d)
+        }
     }
 }
 

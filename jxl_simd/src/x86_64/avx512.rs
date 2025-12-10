@@ -4,7 +4,7 @@
 // license that can be found in the LICENSE file.
 
 use super::super::{AvxDescriptor, F32SimdVec, I32SimdVec, SimdDescriptor, SimdMask};
-use crate::{Sse42Descriptor, U32SimdVec, impl_f32_array_interface};
+use crate::{Sse42Descriptor, U32SimdVec, U8SimdVec, impl_f32_array_interface};
 use std::{
     arch::x86_64::*,
     ops::{
@@ -35,6 +35,7 @@ impl SimdDescriptor for Avx512Descriptor {
     type F32Vec = F32VecAvx512;
     type I32Vec = I32VecAvx512;
     type U32Vec = U32VecAvx512;
+    type U8Vec = U8VecAvx512;
     type Mask = MaskAvx512;
 
     type Descriptor256 = AvxDescriptor;
@@ -612,6 +613,66 @@ impl U32SimdVec for U32VecAvx512 {
     fn shr<const AMOUNT_U: u32, const AMOUNT_I: i32>(self) -> Self {
         // SAFETY: We know avx512f is available from the safety invariant on `self.1`.
         unsafe { Self(_mm512_srli_epi32::<AMOUNT_U>(self.0), self.1) }
+    }
+}
+
+/// U8 SIMD vector for AVX-512.
+/// Contains 16 u8 values packed in a __m128i (stored in lower 128 bits).
+#[derive(Clone, Copy, Debug)]
+#[repr(transparent)]
+pub struct U8VecAvx512(__m128i, Avx512Descriptor);
+
+impl U8SimdVec for U8VecAvx512 {
+    type Descriptor = Avx512Descriptor;
+
+    // We process 16 f32 -> 16 u8 at a time (same as F32Vec::LEN)
+    const LEN: usize = 16;
+
+    #[inline(always)]
+    fn pack_from_f32(d: Self::Descriptor, v: F32VecAvx512) -> Self {
+        #[target_feature(enable = "avx512f")]
+        #[inline]
+        unsafe fn inner(d: Avx512Descriptor, v: F32VecAvx512) -> U8VecAvx512 {
+            // Multiply by 255 and add 0.5 for rounding
+            let scale = _mm512_set1_ps(255.0);
+            let half = _mm512_set1_ps(0.5);
+            let zero = _mm512_setzero_ps();
+
+            // Clamp to [0, 1], multiply by 255, add 0.5 for rounding
+            let clamped = _mm512_min_ps(_mm512_max_ps(v.0, zero), _mm512_set1_ps(1.0));
+            let scaled = _mm512_add_ps(_mm512_mul_ps(clamped, scale), half);
+
+            // Convert to i32
+            let i32_vals = _mm512_cvttps_epi32(scaled);
+
+            // Clamp the result to [0, 255] in i32 before packing
+            let zero_i = _mm512_setzero_epi32();
+            let max_i = _mm512_set1_epi32(255);
+            let clamped_i = _mm512_min_epi32(_mm512_max_epi32(i32_vals, zero_i), max_i);
+
+            // AVX-512 has _mm512_cvtepi32_epi8 which does exactly what we need
+            let packed = _mm512_cvtepi32_epi8(clamped_i);
+
+            U8VecAvx512(packed, d)
+        }
+        // SAFETY: d guarantees avx512f is available
+        unsafe { inner(d, v) }
+    }
+
+    #[inline(always)]
+    fn store(&self, mem: &mut [u8]) {
+        assert!(mem.len() >= Self::LEN);
+        // SAFETY: we just checked that `mem` has enough space.
+        unsafe {
+            _mm_storeu_si128(mem.as_mut_ptr() as *mut __m128i, self.0);
+        }
+    }
+
+    #[inline(always)]
+    fn load(d: Self::Descriptor, mem: &[u8]) -> Self {
+        assert!(mem.len() >= Self::LEN);
+        // SAFETY: we just checked that `mem` has enough space.
+        unsafe { Self(_mm_loadu_si128(mem.as_ptr() as *const __m128i), d) }
     }
 }
 

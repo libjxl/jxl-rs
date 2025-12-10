@@ -38,6 +38,8 @@ pub trait SimdDescriptor: Sized + Copy + Debug + Send + Sync {
 
     type U32Vec: U32SimdVec<Descriptor = Self>;
 
+    type U8Vec: U8SimdVec<Descriptor = Self>;
+
     type Mask: SimdMask<Descriptor = Self>;
 
     type Descriptor256: SimdDescriptor<Descriptor256 = Self::Descriptor256>;
@@ -201,6 +203,33 @@ pub trait U32SimdVec: Sized + Copy + Debug + Send + Sync {
     fn bitcast_to_i32(self) -> <<Self as U32SimdVec>::Descriptor as SimdDescriptor>::I32Vec;
 
     fn shr<const AMOUNT_U: u32, const AMOUNT_I: i32>(self) -> Self;
+}
+
+/// Trait for SIMD operations on u8 vectors.
+///
+/// This trait provides operations for packing f32 values into u8, which is
+/// particularly useful for efficient image format conversion.
+pub trait U8SimdVec: Sized + Copy + Debug + Send + Sync {
+    type Descriptor: SimdDescriptor;
+
+    /// Number of u8 elements in this vector (typically equal to F32Vec::LEN since
+    /// we convert one f32 lane to one u8).
+    const LEN: usize;
+
+    /// Convert f32 vector to u8 by multiplying by 255, clamping to [0, 255], and rounding.
+    /// This is the core operation for f32 [0.0, 1.0] to u8 [0, 255] conversion.
+    fn pack_from_f32(
+        d: Self::Descriptor,
+        v: <<Self as U8SimdVec>::Descriptor as SimdDescriptor>::F32Vec,
+    ) -> Self;
+
+    /// Store the u8 values to memory.
+    /// Requires `mem.len() >= Self::LEN` or it will panic.
+    fn store(&self, mem: &mut [u8]);
+
+    /// Load u8 values from memory.
+    /// Requires `mem.len() >= Self::LEN` or it will panic.
+    fn load(d: Self::Descriptor, mem: &[u8]) -> Self;
 }
 
 #[macro_export]

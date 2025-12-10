@@ -100,6 +100,116 @@ impl JxlDecoder<WithImageInfo> {
         self.inner.basic_info().unwrap()
     }
 
+    /// Returns the recommended output data format for this image.
+    ///
+    /// This returns the most efficient format that preserves full quality:
+    /// - `JxlDataFormat::U8` for standard 8-bit images with sRGB transfer function
+    /// - `JxlDataFormat::U16` for 9-16 bit images or non-sRGB transfer functions
+    /// - `JxlDataFormat::F32` for HDR (PQ/HLG), wide gamut, or >16-bit images
+    pub fn recommended_data_format(&self) -> super::JxlDataFormat {
+        use super::{
+            Endianness, JxlBitDepth, JxlColorEncoding, JxlColorProfile, JxlDataFormat,
+            JxlTransferFunction,
+        };
+
+        let info = self.basic_info();
+        let profile = self.output_color_profile();
+
+        let bits = info.bit_depth.bits_per_sample();
+        let is_float = matches!(info.bit_depth, JxlBitDepth::Float { .. });
+
+        // Extract transfer function from the color profile if it's a simple encoding
+        let transfer_function = match profile {
+            JxlColorProfile::Simple(JxlColorEncoding::RgbColorSpace {
+                transfer_function, ..
+            }) => Some(transfer_function),
+            JxlColorProfile::Simple(JxlColorEncoding::GrayscaleColorSpace {
+                transfer_function,
+                ..
+            }) => Some(transfer_function),
+            _ => None,
+        };
+
+        // Check if we have an HDR transfer function
+        let is_hdr = transfer_function
+            .map(|tf| matches!(tf, JxlTransferFunction::PQ | JxlTransferFunction::HLG))
+            .unwrap_or(false);
+
+        // Check if we have sRGB transfer function
+        let is_srgb_tf = transfer_function
+            .map(|tf| matches!(tf, JxlTransferFunction::SRGB | JxlTransferFunction::BT709))
+            .unwrap_or(false);
+
+        if is_hdr || is_float || bits > 16 {
+            // HDR, float, or >16-bit needs f32
+            JxlDataFormat::F32 {
+                endianness: Endianness::native(),
+            }
+        } else if bits <= 8 && is_srgb_tf {
+            // 8-bit sRGB can use u8
+            JxlDataFormat::U8 { bit_depth: 8 }
+        } else if bits <= 16 {
+            // 9-16 bit or non-sRGB needs u16
+            JxlDataFormat::U16 {
+                endianness: Endianness::native(),
+                bit_depth: bits as u8,
+            }
+        } else {
+            // Fallback to f32
+            JxlDataFormat::F32 {
+                endianness: Endianness::native(),
+            }
+        }
+    }
+
+    /// Checks whether the image can be output in the given format without quality loss.
+    ///
+    /// Returns `true` if:
+    /// - `U8`: bits_per_sample <= 8 AND transfer function is sRGB/BT709
+    /// - `U16`: bits_per_sample <= 16 AND not HDR (PQ/HLG)
+    /// - `F16`: bits_per_sample <= 16
+    /// - `F32`: always true
+    pub fn supports_data_format(&self, format: &super::JxlDataFormat) -> bool {
+        use super::{JxlBitDepth, JxlColorEncoding, JxlColorProfile, JxlDataFormat, JxlTransferFunction};
+
+        let info = self.basic_info();
+        let profile = self.output_color_profile();
+
+        let bits = info.bit_depth.bits_per_sample();
+        let is_float = matches!(info.bit_depth, JxlBitDepth::Float { .. });
+
+        // Extract transfer function from the color profile if it's a simple encoding
+        let transfer_function = match profile {
+            JxlColorProfile::Simple(JxlColorEncoding::RgbColorSpace {
+                transfer_function, ..
+            }) => Some(transfer_function),
+            JxlColorProfile::Simple(JxlColorEncoding::GrayscaleColorSpace {
+                transfer_function,
+                ..
+            }) => Some(transfer_function),
+            _ => None,
+        };
+
+        // Check if we have an HDR transfer function
+        let is_hdr = transfer_function
+            .map(|tf| matches!(tf, JxlTransferFunction::PQ | JxlTransferFunction::HLG))
+            .unwrap_or(false);
+
+        // Check if we have sRGB transfer function
+        let is_srgb_tf = transfer_function
+            .map(|tf| matches!(tf, JxlTransferFunction::SRGB | JxlTransferFunction::BT709))
+            .unwrap_or(false);
+
+        match format {
+            JxlDataFormat::U8 { .. } => bits <= 8 && is_srgb_tf && !is_float,
+            JxlDataFormat::U16 { bit_depth, .. } => {
+                bits <= (*bit_depth as u32) && !is_hdr && !is_float
+            }
+            JxlDataFormat::F16 { .. } => bits <= 16,
+            JxlDataFormat::F32 { .. } => true,
+        }
+    }
+
     /// Retrieves the file's color profile.
     pub fn embedded_color_profile(&self) -> &JxlColorProfile {
         self.inner.embedded_color_profile().unwrap()

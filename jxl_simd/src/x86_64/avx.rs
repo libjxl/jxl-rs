@@ -3,7 +3,7 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-use crate::{U32SimdVec, impl_f32_array_interface, x86_64::sse42::Sse42Descriptor};
+use crate::{U32SimdVec, U8SimdVec, impl_f32_array_interface, x86_64::sse42::Sse42Descriptor};
 
 use super::super::{F32SimdVec, I32SimdVec, SimdDescriptor, SimdMask};
 use std::{
@@ -36,6 +36,7 @@ impl SimdDescriptor for AvxDescriptor {
     type F32Vec = F32VecAvx;
     type I32Vec = I32VecAvx;
     type U32Vec = U32VecAvx;
+    type U8Vec = U8VecAvx;
     type Mask = MaskAvx;
 
     type Descriptor256 = Self;
@@ -529,6 +530,104 @@ impl U32SimdVec for U32VecAvx {
     fn shr<const AMOUNT_U: u32, const AMOUNT_I: i32>(self) -> Self {
         // SAFETY: We know avx2 is available from the safety invariant on `self.1`.
         unsafe { Self(_mm256_srli_epi32::<AMOUNT_I>(self.0), self.1) }
+    }
+}
+
+/// U8 SIMD vector for AVX2.
+/// Contains 8 u8 values packed in the lower 64 bits of a __m256i.
+#[derive(Clone, Copy, Debug)]
+#[repr(transparent)]
+pub struct U8VecAvx(__m256i, AvxDescriptor);
+
+impl U8SimdVec for U8VecAvx {
+    type Descriptor = AvxDescriptor;
+
+    // We process 8 f32 -> 8 u8 at a time (same as F32Vec::LEN)
+    const LEN: usize = 8;
+
+    #[inline(always)]
+    fn pack_from_f32(d: Self::Descriptor, v: F32VecAvx) -> Self {
+        #[target_feature(enable = "avx2,fma")]
+        #[inline]
+        unsafe fn inner(d: AvxDescriptor, v: F32VecAvx) -> U8VecAvx {
+            // Multiply by 255 and add 0.5 for rounding
+            let scale = _mm256_set1_ps(255.0);
+            let half = _mm256_set1_ps(0.5);
+            let zero = _mm256_setzero_ps();
+
+            // Clamp to [0, 1], multiply by 255, add 0.5 for rounding
+            let clamped = _mm256_min_ps(_mm256_max_ps(v.0, zero), _mm256_set1_ps(1.0));
+            let scaled = _mm256_add_ps(_mm256_mul_ps(clamped, scale), half);
+
+            // Convert to i32
+            let i32_vals = _mm256_cvttps_epi32(scaled);
+
+            // Clamp the result to [0, 255] in i32 before packing
+            let zero_i = _mm256_setzero_si256();
+            let max_i = _mm256_set1_epi32(255);
+            let clamped_i = _mm256_min_epi32(_mm256_max_epi32(i32_vals, zero_i), max_i);
+
+            // Pack i32 -> i16 -> u8 with saturation
+            // For AVX2, we need to be careful about the lane arrangement
+            // _mm256_packus_epi32 packs within 128-bit lanes
+            let packed_16 = _mm256_packus_epi32(clamped_i, zero_i);
+            // Result: [a0,a1,a2,a3, 0,0,0,0, a4,a5,a6,a7, 0,0,0,0] as i16
+
+            let packed_8 = _mm256_packus_epi16(packed_16, _mm256_setzero_si256());
+            // Result: [a0,a1,a2,a3, 0,0,0,0, 0,0,0,0,0,0,0,0, a4,a5,a6,a7, 0,0,0,0, 0,0,0,0,0,0,0,0] as u8
+
+            // Permute to get all values contiguous in lower 64 bits
+            // Extract lower 128-bit lane which has [a0,a1,a2,a3, 0,0,0,0, 0,0,0,0,0,0,0,0]
+            // and upper 128-bit lane which has [a4,a5,a6,a7, 0,0,0,0, 0,0,0,0,0,0,0,0]
+            let low = _mm256_castsi256_si128(packed_8);
+            let high = _mm256_extracti128_si256::<1>(packed_8);
+
+            // Combine: low has a0-a3, high has a4-a7
+            // Use unpacklo to interleave the 32-bit chunks
+            let combined = _mm_unpacklo_epi32(low, high);
+            // Result: [a0,a1,a2,a3, a4,a5,a6,a7, 0,0,0,0, 0,0,0,0]
+
+            U8VecAvx(_mm256_castsi128_si256(combined), d)
+        }
+        // SAFETY: d guarantees avx2 is available
+        unsafe { inner(d, v) }
+    }
+
+    #[inline(always)]
+    fn store(&self, mem: &mut [u8]) {
+        assert!(mem.len() >= Self::LEN);
+        // SAFETY: we just checked that `mem` has enough space.
+        // The 8 u8 values are in the lower 64 bits of the __m256i.
+        unsafe {
+            let low = _mm256_castsi256_si128(self.0);
+            let val = _mm_cvtsi128_si64(low) as u64;
+            mem[0] = (val & 0xFF) as u8;
+            mem[1] = ((val >> 8) & 0xFF) as u8;
+            mem[2] = ((val >> 16) & 0xFF) as u8;
+            mem[3] = ((val >> 24) & 0xFF) as u8;
+            mem[4] = ((val >> 32) & 0xFF) as u8;
+            mem[5] = ((val >> 40) & 0xFF) as u8;
+            mem[6] = ((val >> 48) & 0xFF) as u8;
+            mem[7] = ((val >> 56) & 0xFF) as u8;
+        }
+    }
+
+    #[inline(always)]
+    fn load(d: Self::Descriptor, mem: &[u8]) -> Self {
+        assert!(mem.len() >= Self::LEN);
+        // SAFETY: we just checked that `mem` has enough space.
+        unsafe {
+            let val = (mem[0] as u64)
+                | ((mem[1] as u64) << 8)
+                | ((mem[2] as u64) << 16)
+                | ((mem[3] as u64) << 24)
+                | ((mem[4] as u64) << 32)
+                | ((mem[5] as u64) << 40)
+                | ((mem[6] as u64) << 48)
+                | ((mem[7] as u64) << 56);
+            let low = _mm_cvtsi64_si128(val as i64);
+            Self(_mm256_castsi128_si256(low), d)
+        }
     }
 }
 

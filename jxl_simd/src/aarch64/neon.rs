@@ -9,7 +9,7 @@ use std::ops::{
     Mul, MulAssign, Neg, Sub, SubAssign,
 };
 
-use crate::U32SimdVec;
+use crate::{U32SimdVec, U8SimdVec};
 
 use super::super::{F32SimdVec, I32SimdVec, SimdDescriptor, SimdMask};
 
@@ -31,6 +31,8 @@ impl SimdDescriptor for NeonDescriptor {
     type I32Vec = I32VecNeon;
 
     type U32Vec = U32VecNeon;
+
+    type U8Vec = U8VecNeon;
 
     type Mask = MaskNeon;
 
@@ -517,6 +519,70 @@ impl U32SimdVec for U32VecNeon {
     fn shr<const AMOUNT_U: u32, const AMOUNT_I: i32>(self) -> Self {
         // SAFETY: We know neon is available from the safety invariant on `self.1`.
         unsafe { Self(vshrq_n_u32::<AMOUNT_I>(self.0), self.1) }
+    }
+}
+
+/// U8 SIMD vector for NEON.
+/// Contains 4 u8 values packed in the lower 32 bits of a uint8x16_t.
+#[derive(Clone, Copy, Debug)]
+#[repr(transparent)]
+pub struct U8VecNeon(uint8x8_t, NeonDescriptor);
+
+impl U8SimdVec for U8VecNeon {
+    type Descriptor = NeonDescriptor;
+
+    // We process 4 f32 -> 4 u8 at a time (same as F32Vec::LEN)
+    const LEN: usize = 4;
+
+    #[inline(always)]
+    fn pack_from_f32(d: Self::Descriptor, v: F32VecNeon) -> Self {
+        #[target_feature(enable = "neon")]
+        #[inline]
+        unsafe fn inner(d: NeonDescriptor, v: F32VecNeon) -> U8VecNeon {
+            // Multiply by 255 and add 0.5 for rounding
+            let scale = vdupq_n_f32(255.0);
+            let half = vdupq_n_f32(0.5);
+            let zero = vdupq_n_f32(0.0);
+            let one = vdupq_n_f32(1.0);
+
+            // Clamp to [0, 1], multiply by 255, add 0.5 for rounding
+            let clamped = vminq_f32(vmaxq_f32(v.0, zero), one);
+            let scaled = vaddq_f32(vmulq_f32(clamped, scale), half);
+
+            // Convert to i32 (truncate towards zero)
+            let i32_vals = vcvtq_s32_f32(scaled);
+
+            // Clamp to [0, 255] using saturating narrow
+            // First narrow i32 -> i16 with saturation
+            let i16_vals = vqmovn_s32(i32_vals);
+            // Then narrow i16 -> u8 with saturation (unsigned)
+            let u8_vals = vqmovun_s16(vcombine_s16(i16_vals, i16_vals));
+
+            // Result: lower 4 bytes contain our u8 values
+            U8VecNeon(u8_vals, d)
+        }
+        // SAFETY: d guarantees neon is available
+        unsafe { inner(d, v) }
+    }
+
+    #[inline(always)]
+    fn store(&self, mem: &mut [u8]) {
+        assert!(mem.len() >= Self::LEN);
+        // SAFETY: we just checked that `mem` has enough space.
+        // Store only the lower 4 bytes
+        unsafe {
+            vst1_lane_u32::<0>(mem.as_mut_ptr() as *mut u32, vreinterpret_u32_u8(self.0));
+        }
+    }
+
+    #[inline(always)]
+    fn load(d: Self::Descriptor, mem: &[u8]) -> Self {
+        assert!(mem.len() >= Self::LEN);
+        // SAFETY: we just checked that `mem` has enough space.
+        unsafe {
+            let val = vld1_lane_u32::<0>(mem.as_ptr() as *const u32, vdup_n_u32(0));
+            Self(vreinterpret_u8_u32(val), d)
+        }
     }
 }
 
