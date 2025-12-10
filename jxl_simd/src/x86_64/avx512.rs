@@ -116,15 +116,16 @@ impl F32SimdVec for F32VecAvx512 {
     }
 
     #[inline(always)]
-    fn store_interleaved_2(a: Self, b: Self, base: &mut [f32], offset: usize) {
-        assert!(base.len() >= offset + 2 * Self::LEN);
-        // SAFETY: we just checked that `base` has enough space.
-        unsafe {
-            let ptr = base.as_mut_ptr().add(offset);
+    fn store_interleaved_2(a: Self, b: Self, dest: &mut [f32]) {
+        assert!(dest.len() >= 2 * Self::LEN);
+
+        #[target_feature(enable = "avx512f")]
+        #[inline]
+        fn store_interleaved_2_impl(a: __m512, b: __m512, dest: &mut [f32]) {
             // a = [a0..a15], b = [b0..b15]
             // Output: [a0, b0, a1, b1, ..., a15, b15]
-            let lo = _mm512_unpacklo_ps(a.0, b.0);
-            let hi = _mm512_unpackhi_ps(a.0, b.0);
+            let lo = _mm512_unpacklo_ps(a, b);
+            let hi = _mm512_unpackhi_ps(a, b);
 
             // Permute to fix lane crossing
             let idx_lo = _mm512_setr_epi32(0, 1, 16, 17, 2, 3, 18, 19, 4, 5, 20, 21, 6, 7, 22, 23);
@@ -134,22 +135,29 @@ impl F32SimdVec for F32VecAvx512 {
             let out0 = _mm512_permutex2var_ps(lo, idx_lo, hi);
             let out1 = _mm512_permutex2var_ps(lo, idx_hi, hi);
 
-            _mm512_storeu_ps(ptr, out0);
-            _mm512_storeu_ps(ptr.add(16), out1);
+            // SAFETY: dest is guaranteed to have enough space by the caller's assert.
+            unsafe {
+                _mm512_storeu_ps(dest.as_mut_ptr(), out0);
+                _mm512_storeu_ps(dest.as_mut_ptr().add(16), out1);
+            }
         }
+
+        // SAFETY: avx512f is available from the safety invariant on the descriptor.
+        unsafe { store_interleaved_2_impl(a.0, b.0, dest) }
     }
 
     #[inline(always)]
-    fn store_interleaved_4(a: Self, b: Self, c: Self, d: Self, base: &mut [f32], offset: usize) {
-        assert!(base.len() >= offset + 4 * Self::LEN);
-        // SAFETY: we just checked that `base` has enough space.
-        unsafe {
-            let ptr = base.as_mut_ptr().add(offset);
+    fn store_interleaved_4(a: Self, b: Self, c: Self, d: Self, dest: &mut [f32]) {
+        assert!(dest.len() >= 4 * Self::LEN);
+
+        #[target_feature(enable = "avx512f")]
+        #[inline]
+        fn store_interleaved_4_impl(a: __m512, b: __m512, c: __m512, d: __m512, dest: &mut [f32]) {
             // First interleave pairs
-            let ab_lo = _mm512_unpacklo_ps(a.0, b.0);
-            let ab_hi = _mm512_unpackhi_ps(a.0, b.0);
-            let cd_lo = _mm512_unpacklo_ps(c.0, d.0);
-            let cd_hi = _mm512_unpackhi_ps(c.0, d.0);
+            let ab_lo = _mm512_unpacklo_ps(a, b);
+            let ab_hi = _mm512_unpackhi_ps(a, b);
+            let cd_lo = _mm512_unpacklo_ps(c, d);
+            let cd_hi = _mm512_unpackhi_ps(c, d);
 
             // Cast to pd for 64-bit interleave
             let abcd_0 = _mm512_castpd_ps(_mm512_unpacklo_pd(
@@ -179,11 +187,17 @@ impl F32SimdVec for F32VecAvx512 {
             let out2 = _mm512_permutex2var_ps(abcd_0, idx1, abcd_1);
             let out3 = _mm512_permutex2var_ps(abcd_2, idx1, abcd_3);
 
-            _mm512_storeu_ps(ptr, out0);
-            _mm512_storeu_ps(ptr.add(16), out1);
-            _mm512_storeu_ps(ptr.add(32), out2);
-            _mm512_storeu_ps(ptr.add(48), out3);
+            // SAFETY: dest is guaranteed to have enough space by the caller's assert.
+            unsafe {
+                _mm512_storeu_ps(dest.as_mut_ptr(), out0);
+                _mm512_storeu_ps(dest.as_mut_ptr().add(16), out1);
+                _mm512_storeu_ps(dest.as_mut_ptr().add(32), out2);
+                _mm512_storeu_ps(dest.as_mut_ptr().add(48), out3);
+            }
         }
+
+        // SAFETY: avx512f is available from the safety invariant on the descriptor.
+        unsafe { store_interleaved_4_impl(a.0, b.0, c.0, d.0, dest) }
     }
 
     #[inline(always)]
@@ -196,23 +210,33 @@ impl F32SimdVec for F32VecAvx512 {
         f: Self,
         g: Self,
         h: Self,
-        base: &mut [f32],
-        offset: usize,
+        dest: &mut [f32],
     ) {
-        assert!(base.len() >= offset + 8 * Self::LEN);
-        // SAFETY: we just checked that `base` has enough space.
-        // For 16-wide vectors storing 8 interleaved, output is 128 elements
-        unsafe {
-            let ptr = base.as_mut_ptr().add(offset);
+        assert!(dest.len() >= 8 * Self::LEN);
+
+        #[target_feature(enable = "avx512f")]
+        #[inline]
+        fn store_interleaved_8_impl(
+            a: __m512,
+            b: __m512,
+            c: __m512,
+            d: __m512,
+            e: __m512,
+            f: __m512,
+            g: __m512,
+            h: __m512,
+            dest: &mut [f32],
+        ) {
+            // For 16-wide vectors storing 8 interleaved, output is 128 elements
             // Stage 1: Unpack pairs
-            let ab_lo = _mm512_unpacklo_ps(a.0, b.0);
-            let ab_hi = _mm512_unpackhi_ps(a.0, b.0);
-            let cd_lo = _mm512_unpacklo_ps(c.0, d.0);
-            let cd_hi = _mm512_unpackhi_ps(c.0, d.0);
-            let ef_lo = _mm512_unpacklo_ps(e.0, f.0);
-            let ef_hi = _mm512_unpackhi_ps(e.0, f.0);
-            let gh_lo = _mm512_unpacklo_ps(g.0, h.0);
-            let gh_hi = _mm512_unpackhi_ps(g.0, h.0);
+            let ab_lo = _mm512_unpacklo_ps(a, b);
+            let ab_hi = _mm512_unpackhi_ps(a, b);
+            let cd_lo = _mm512_unpacklo_ps(c, d);
+            let cd_hi = _mm512_unpackhi_ps(c, d);
+            let ef_lo = _mm512_unpacklo_ps(e, f);
+            let ef_hi = _mm512_unpackhi_ps(e, f);
+            let gh_lo = _mm512_unpacklo_ps(g, h);
+            let gh_hi = _mm512_unpackhi_ps(g, h);
 
             // Stage 2: 64-bit shuffles
             let abcd_0 = _mm512_castpd_ps(_mm512_unpacklo_pd(
@@ -293,15 +317,22 @@ impl F32SimdVec for F32VecAvx512 {
                 _mm512_castps_pd(efgh_3),
             ));
 
-            _mm512_storeu_ps(ptr, row0);
-            _mm512_storeu_ps(ptr.add(16), row1);
-            _mm512_storeu_ps(ptr.add(32), row2);
-            _mm512_storeu_ps(ptr.add(48), row3);
-            _mm512_storeu_ps(ptr.add(64), row4);
-            _mm512_storeu_ps(ptr.add(80), row5);
-            _mm512_storeu_ps(ptr.add(96), row6);
-            _mm512_storeu_ps(ptr.add(112), row7);
+            // SAFETY: dest is guaranteed to have enough space by the caller's assert.
+            unsafe {
+                let ptr = dest.as_mut_ptr();
+                _mm512_storeu_ps(ptr, row0);
+                _mm512_storeu_ps(ptr.add(16), row1);
+                _mm512_storeu_ps(ptr.add(32), row2);
+                _mm512_storeu_ps(ptr.add(48), row3);
+                _mm512_storeu_ps(ptr.add(64), row4);
+                _mm512_storeu_ps(ptr.add(80), row5);
+                _mm512_storeu_ps(ptr.add(96), row6);
+                _mm512_storeu_ps(ptr.add(112), row7);
+            }
         }
+
+        // SAFETY: avx512f is available from the safety invariant on the descriptor.
+        unsafe { store_interleaved_8_impl(a.0, b.0, c.0, d.0, e.0, f.0, g.0, h.0, dest) }
     }
 
     fn_avx!(this: F32VecAvx512, fn mul_add(mul: F32VecAvx512, add: F32VecAvx512) -> F32VecAvx512 {
