@@ -71,6 +71,65 @@ pub(super) fn store(
                 0
             }
         }
+        (4, 4, true) => {
+            // RGBA f32
+            #[cfg(target_arch = "x86_64")]
+            {
+                let [a, b, c, d] = input_buf else { unreachable!() };
+                super::x86_64::interleave4_32b(
+                    &[
+                        &a.get_row(input_y)[byte_start..byte_end],
+                        &b.get_row(input_y)[byte_start..byte_end],
+                        &c.get_row(input_y)[byte_start..byte_end],
+                        &d.get_row(input_y)[byte_start..byte_end],
+                    ],
+                    output_buf,
+                )
+            }
+            #[cfg(not(target_arch = "x86_64"))]
+            {
+                0
+            }
+        }
+        (3, 1, true) => {
+            // RGB u8
+            #[cfg(target_arch = "x86_64")]
+            {
+                let [a, b, c] = input_buf else { unreachable!() };
+                super::x86_64::interleave3_8b(
+                    &[
+                        &a.get_row(input_y)[byte_start..byte_end],
+                        &b.get_row(input_y)[byte_start..byte_end],
+                        &c.get_row(input_y)[byte_start..byte_end],
+                    ],
+                    output_buf,
+                )
+            }
+            #[cfg(not(target_arch = "x86_64"))]
+            {
+                0
+            }
+        }
+        (4, 1, true) => {
+            // RGBA u8
+            #[cfg(target_arch = "x86_64")]
+            {
+                let [a, b, c, d] = input_buf else { unreachable!() };
+                super::x86_64::interleave4_8b(
+                    &[
+                        &a.get_row(input_y)[byte_start..byte_end],
+                        &b.get_row(input_y)[byte_start..byte_end],
+                        &c.get_row(input_y)[byte_start..byte_end],
+                        &d.get_row(input_y)[byte_start..byte_end],
+                    ],
+                    output_buf,
+                )
+            }
+            #[cfg(not(target_arch = "x86_64"))]
+            {
+                0
+            }
+        }
         _ => 0,
     }
 }
