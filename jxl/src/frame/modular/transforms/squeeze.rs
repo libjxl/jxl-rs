@@ -3,8 +3,6 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-use std::cell::Ref;
-
 use jxl_simd::{
     F32SimdVec, I32SimdVec, SimdDescriptor, SimdMask, U32SimdVec, shl, shr, simd_function,
 };
@@ -205,7 +203,7 @@ fn hsqueeze_impl<D: SimdDescriptor>(
     in_avg: &ImageRect<'_, i32>,
     in_res: &ImageRect<'_, i32>,
     in_next_avg: &Option<ImageRect<'_, i32>>,
-    out_prev: &Option<Ref<'_, ModularChannel>>,
+    out_prev: Option<&ModularChannel>,
     out: &mut Image<i32>,
 ) {
     const {
@@ -398,7 +396,7 @@ fn hsqueeze_scalar(
     in_avg: &ImageRect<'_, i32>,
     in_res: &ImageRect<'_, i32>,
     in_next_avg: &Option<ImageRect<'_, i32>>,
-    out_prev: &Option<Ref<'_, ModularChannel>>,
+    out_prev: Option<&ModularChannel>,
     out: &mut Image<i32>,
 ) {
     let (w, h) = in_res.size();
@@ -447,7 +445,7 @@ simd_function!(
         in_avg: &ImageRect<'_, i32>,
         in_res: &ImageRect<'_, i32>,
         in_next_avg: &Option<ImageRect<'_, i32>>,
-        out_prev: &Option<Ref<'_, ModularChannel>>,
+        out_prev: Option<&ModularChannel>,
         out: &mut Image<i32>,
     ) {
         hsqueeze_impl(d, 0, in_avg, in_res, in_next_avg, out_prev, out)
@@ -458,11 +456,10 @@ pub fn do_hsqueeze_step(
     in_avg: &ImageRect<'_, i32>,
     in_res: &ImageRect<'_, i32>,
     in_next_avg: &Option<ImageRect<'_, i32>>,
-    out_prev: &Option<Ref<'_, ModularChannel>>,
-    buffers: &mut [&mut ModularChannel],
+    out_prev: Option<&ModularChannel>,
+    out: &mut ModularChannel,
 ) {
     trace!("hsqueeze step in_avg: {in_avg:?} in_res: {in_res:?} in_next_avg: {in_next_avg:?}");
-    let out = buffers.first_mut().unwrap();
     // Shortcut: guarantees that row is at least 1px in the main loop
     if out.data.size().0 == 0 {
         return;
@@ -487,7 +484,7 @@ fn vsqueeze_impl<D: SimdDescriptor>(
     in_avg: &ImageRect<'_, i32>,
     in_res: &ImageRect<'_, i32>,
     in_next_avg: &Option<ImageRect<'_, i32>>,
-    out_prev: &Option<Ref<'_, ModularChannel>>,
+    out_prev: Option<&ModularChannel>,
     out: &mut Image<i32>,
 ) {
     const { assert!(D::I32Vec::LEN.is_power_of_two()) };
@@ -578,7 +575,7 @@ fn vsqueeze_scalar(
     in_avg: &ImageRect<'_, i32>,
     in_res: &ImageRect<'_, i32>,
     in_next_avg: &Option<ImageRect<'_, i32>>,
-    out_prev: &Option<Ref<'_, ModularChannel>>,
+    out_prev: Option<&ModularChannel>,
     out: &mut Image<i32>,
 ) {
     let (w, h) = in_res.size();
@@ -642,7 +639,7 @@ simd_function!(
         in_avg: &ImageRect<'_, i32>,
         in_res: &ImageRect<'_, i32>,
         in_next_avg: &Option<ImageRect<'_, i32>>,
-        out_prev: &Option<Ref<'_, ModularChannel>>,
+        out_prev: Option<&ModularChannel>,
         out: &mut Image<i32>,
     ) {
         vsqueeze_impl(d, 0, in_avg, in_res, in_next_avg, out_prev, out)
@@ -653,11 +650,11 @@ pub fn do_vsqueeze_step(
     in_avg: &ImageRect<'_, i32>,
     in_res: &ImageRect<'_, i32>,
     in_next_avg: &Option<ImageRect<'_, i32>>,
-    out_prev: &Option<Ref<'_, ModularChannel>>,
-    buffers: &mut [&mut ModularChannel],
+    out_prev: Option<&ModularChannel>,
+    out: &mut ModularChannel,
 ) {
     trace!("vsqueeze step in_avg: {in_avg:?} in_res: {in_res:?} in_next_avg: {in_next_avg:?}");
-    let out = &mut buffers.first_mut().unwrap().data;
+    let out = &mut out.data;
     // Shortcut: guarantees that there at least 1 output row
     if out.size().1 == 0 {
         return;
