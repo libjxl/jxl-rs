@@ -259,6 +259,7 @@ simd_function!(
         let simd_width = D::F32Vec::LEN;
 
         let zero = D::F32Vec::splat(d, 0.0);
+        let half = D::F32Vec::splat(d, 0.5);
         let max_vec = D::F32Vec::splat(d, max);
 
         // Temporary buffer for storing SIMD results before converting to u8
@@ -274,10 +275,12 @@ simd_function!(
             // min(a, b) = b - max(0, b - a)
             let diff = max_vec - scaled;
             let clamped = max_vec - diff.max(zero);
-            clamped.store(&mut temp[..simd_width]);
+            // Add 0.5 for rounding via truncation (values are non-negative after clamping)
+            let rounded = clamped + half;
+            rounded.store(&mut temp[..simd_width]);
 
             for i in 0..simd_width {
-                output[x + i] = temp[i].round() as u8;
+                output[x + i] = temp[i] as u8;
             }
 
             x += simd_width;
@@ -285,7 +288,7 @@ simd_function!(
 
         // Scalar remainder
         for i in x..xsize {
-            output[i] = (input[i].clamp(0.0, 1.0) * max).round() as u8;
+            output[i] = (input[i].clamp(0.0, 1.0) * max + 0.5) as u8;
         }
     }
 );
