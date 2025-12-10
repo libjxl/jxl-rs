@@ -123,25 +123,22 @@ impl F32SimdVec for F32VecNeon {
     }
 
     #[inline(always)]
-    fn store_interleaved_2(a: Self, b: Self, base: &mut [f32], offset: usize) {
-        assert!(base.len() >= offset + 2 * Self::LEN);
-        // SAFETY: we just checked that `base` has enough space.
+    fn store_interleaved_2(a: Self, b: Self, dest: &mut [f32]) {
+        assert!(dest.len() >= 2 * Self::LEN);
+        // SAFETY: we just checked that `dest` has enough space, and neon is available
+        // from the safety invariant on the descriptor stored in `a`.
         unsafe {
-            // vst2q_f32 stores two vectors interleaved
-            vst2q_f32(base.as_mut_ptr().add(offset), float32x4x2_t(a.0, b.0));
+            vst2q_f32(dest.as_mut_ptr(), float32x4x2_t(a.0, b.0));
         }
     }
 
     #[inline(always)]
-    fn store_interleaved_4(a: Self, b: Self, c: Self, d: Self, base: &mut [f32], offset: usize) {
-        assert!(base.len() >= offset + 4 * Self::LEN);
-        // SAFETY: we just checked that `base` has enough space.
+    fn store_interleaved_4(a: Self, b: Self, c: Self, d: Self, dest: &mut [f32]) {
+        assert!(dest.len() >= 4 * Self::LEN);
+        // SAFETY: we just checked that `dest` has enough space, and neon is available
+        // from the safety invariant on the descriptor stored in `a`.
         unsafe {
-            // vst4q_f32 stores four vectors interleaved
-            vst4q_f32(
-                base.as_mut_ptr().add(offset),
-                float32x4x4_t(a.0, b.0, c.0, d.0),
-            );
+            vst4q_f32(dest.as_mut_ptr(), float32x4x4_t(a.0, b.0, c.0, d.0));
         }
     }
 
@@ -155,14 +152,13 @@ impl F32SimdVec for F32VecNeon {
         f: Self,
         g: Self,
         h: Self,
-        base: &mut [f32],
-        offset: usize,
+        dest: &mut [f32],
     ) {
-        assert!(base.len() >= offset + 8 * Self::LEN);
+        assert!(dest.len() >= 8 * Self::LEN);
 
         #[target_feature(enable = "neon")]
         #[inline]
-        unsafe fn store_interleaved_8_impl(
+        fn store_interleaved_8_impl(
             a: float32x4_t,
             b: float32x4_t,
             c: float32x4_t,
@@ -171,7 +167,7 @@ impl F32SimdVec for F32VecNeon {
             f: float32x4_t,
             g: float32x4_t,
             h: float32x4_t,
-            ptr: *mut f32,
+            dest: &mut [f32],
         ) {
             // NEON doesn't have vst8, so we use manual interleaving
             // For 4-wide vectors, output is 32 elements: [a0,b0,c0,d0,e0,f0,g0,h0, a1,...]
@@ -230,30 +226,22 @@ impl F32SimdVec for F32VecNeon {
                 vreinterpretq_f64_f32(cgdh_3),
             ));
 
-            vst1q_f32(ptr, out0);
-            vst1q_f32(ptr.add(4), out1);
-            vst1q_f32(ptr.add(8), out2);
-            vst1q_f32(ptr.add(12), out3);
-            vst1q_f32(ptr.add(16), out4);
-            vst1q_f32(ptr.add(20), out5);
-            vst1q_f32(ptr.add(24), out6);
-            vst1q_f32(ptr.add(28), out7);
+            // SAFETY: dest is guaranteed to have enough space by the caller's assert.
+            unsafe {
+                let ptr = dest.as_mut_ptr();
+                vst1q_f32(ptr, out0);
+                vst1q_f32(ptr.add(4), out1);
+                vst1q_f32(ptr.add(8), out2);
+                vst1q_f32(ptr.add(12), out3);
+                vst1q_f32(ptr.add(16), out4);
+                vst1q_f32(ptr.add(20), out5);
+                vst1q_f32(ptr.add(24), out6);
+                vst1q_f32(ptr.add(28), out7);
+            }
         }
 
-        // SAFETY: bounds checked above, neon available from safety invariant on descriptor
-        unsafe {
-            store_interleaved_8_impl(
-                a.0,
-                b.0,
-                c.0,
-                d.0,
-                e.0,
-                f.0,
-                g.0,
-                h.0,
-                base.as_mut_ptr().add(offset),
-            );
-        }
+        // SAFETY: neon is available from the safety invariant on the descriptor stored in `a`.
+        unsafe { store_interleaved_8_impl(a.0, b.0, c.0, d.0, e.0, f.0, g.0, h.0, dest) }
     }
 
     #[inline(always)]

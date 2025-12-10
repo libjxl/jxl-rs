@@ -19,7 +19,7 @@ use std::{
 /// Used by both store_interleaved_8 and transpose_square.
 #[target_feature(enable = "avx2")]
 #[inline]
-unsafe fn transpose_8x8_core(
+fn transpose_8x8_core(
     r0: __m256,
     r1: __m256,
     r2: __m256,
@@ -165,34 +165,42 @@ impl F32SimdVec for F32VecAvx {
     }
 
     #[inline(always)]
-    fn store_interleaved_2(a: Self, b: Self, base: &mut [f32], offset: usize) {
-        assert!(base.len() >= offset + 2 * Self::LEN);
-        // SAFETY: we just checked that `base` has enough space.
-        unsafe {
-            let ptr = base.as_mut_ptr().add(offset);
+    fn store_interleaved_2(a: Self, b: Self, dest: &mut [f32]) {
+        assert!(dest.len() >= 2 * Self::LEN);
+
+        #[target_feature(enable = "avx2")]
+        #[inline]
+        fn store_interleaved_2_impl(a: __m256, b: __m256, dest: &mut [f32]) {
             // a = [a0, a1, a2, a3, a4, a5, a6, a7], b = [b0, b1, b2, b3, b4, b5, b6, b7]
             // Output: [a0, b0, a1, b1, a2, b2, a3, b3, a4, b4, a5, b5, a6, b6, a7, b7]
-            let lo = _mm256_unpacklo_ps(a.0, b.0); // [a0, b0, a1, b1, a4, b4, a5, b5]
-            let hi = _mm256_unpackhi_ps(a.0, b.0); // [a2, b2, a3, b3, a6, b6, a7, b7]
+            let lo = _mm256_unpacklo_ps(a, b); // [a0, b0, a1, b1, a4, b4, a5, b5]
+            let hi = _mm256_unpackhi_ps(a, b); // [a2, b2, a3, b3, a6, b6, a7, b7]
             // Need to permute to get correct order
             let out0 = _mm256_permute2f128_ps::<0x20>(lo, hi); // lower halves: [a0,b0,a1,b1, a2,b2,a3,b3]
             let out1 = _mm256_permute2f128_ps::<0x31>(lo, hi); // upper halves: [a4,b4,a5,b5, a6,b6,a7,b7]
-            _mm256_storeu_ps(ptr, out0);
-            _mm256_storeu_ps(ptr.add(8), out1);
+            // SAFETY: dest is guaranteed to have enough space by the caller's assert.
+            unsafe {
+                _mm256_storeu_ps(dest.as_mut_ptr(), out0);
+                _mm256_storeu_ps(dest.as_mut_ptr().add(8), out1);
+            }
         }
+
+        // SAFETY: avx2 is available from the safety invariant on the descriptor.
+        unsafe { store_interleaved_2_impl(a.0, b.0, dest) }
     }
 
     #[inline(always)]
-    fn store_interleaved_4(a: Self, b: Self, c: Self, d: Self, base: &mut [f32], offset: usize) {
-        assert!(base.len() >= offset + 4 * Self::LEN);
-        // SAFETY: we just checked that `base` has enough space.
-        unsafe {
-            let ptr = base.as_mut_ptr().add(offset);
+    fn store_interleaved_4(a: Self, b: Self, c: Self, d: Self, dest: &mut [f32]) {
+        assert!(dest.len() >= 4 * Self::LEN);
+
+        #[target_feature(enable = "avx2")]
+        #[inline]
+        fn store_interleaved_4_impl(a: __m256, b: __m256, c: __m256, d: __m256, dest: &mut [f32]) {
             // First interleave pairs
-            let ab_lo = _mm256_unpacklo_ps(a.0, b.0);
-            let ab_hi = _mm256_unpackhi_ps(a.0, b.0);
-            let cd_lo = _mm256_unpacklo_ps(c.0, d.0);
-            let cd_hi = _mm256_unpackhi_ps(c.0, d.0);
+            let ab_lo = _mm256_unpacklo_ps(a, b);
+            let ab_hi = _mm256_unpackhi_ps(a, b);
+            let cd_lo = _mm256_unpacklo_ps(c, d);
+            let cd_hi = _mm256_unpackhi_ps(c, d);
 
             // Cast to pd for 64-bit interleave
             let abcd_0 = _mm256_castpd_ps(_mm256_unpacklo_pd(
@@ -218,11 +226,17 @@ impl F32SimdVec for F32VecAvx {
             let out2 = _mm256_permute2f128_ps::<0x31>(abcd_0, abcd_1);
             let out3 = _mm256_permute2f128_ps::<0x31>(abcd_2, abcd_3);
 
-            _mm256_storeu_ps(ptr, out0);
-            _mm256_storeu_ps(ptr.add(8), out1);
-            _mm256_storeu_ps(ptr.add(16), out2);
-            _mm256_storeu_ps(ptr.add(24), out3);
+            // SAFETY: dest is guaranteed to have enough space by the caller's assert.
+            unsafe {
+                _mm256_storeu_ps(dest.as_mut_ptr(), out0);
+                _mm256_storeu_ps(dest.as_mut_ptr().add(8), out1);
+                _mm256_storeu_ps(dest.as_mut_ptr().add(16), out2);
+                _mm256_storeu_ps(dest.as_mut_ptr().add(24), out3);
+            }
         }
+
+        // SAFETY: avx2 is available from the safety invariant on the descriptor.
+        unsafe { store_interleaved_4_impl(a.0, b.0, c.0, d.0, dest) }
     }
 
     #[inline(always)]
@@ -235,14 +249,13 @@ impl F32SimdVec for F32VecAvx {
         f: Self,
         g: Self,
         h: Self,
-        base: &mut [f32],
-        offset: usize,
+        dest: &mut [f32],
     ) {
-        assert!(base.len() >= offset + 8 * Self::LEN);
+        assert!(dest.len() >= 8 * Self::LEN);
 
         #[target_feature(enable = "avx2")]
         #[inline]
-        unsafe fn store_interleaved_8_impl(
+        fn store_interleaved_8_impl(
             r0: __m256,
             r1: __m256,
             r2: __m256,
@@ -251,39 +264,27 @@ impl F32SimdVec for F32VecAvx {
             r5: __m256,
             r6: __m256,
             r7: __m256,
-            ptr: *mut f32,
+            dest: &mut [f32],
         ) {
             // This is essentially an 8x8 transpose, same algorithm as transpose_square
-            // SAFETY: caller guarantees avx2 is available
-            unsafe {
-                let (c0, c1, c2, c3, c4, c5, c6, c7) =
-                    transpose_8x8_core(r0, r1, r2, r3, r4, r5, r6, r7);
+            let (c0, c1, c2, c3, c4, c5, c6, c7) =
+                transpose_8x8_core(r0, r1, r2, r3, r4, r5, r6, r7);
 
-                _mm256_storeu_ps(ptr, c0);
-                _mm256_storeu_ps(ptr.add(8), c1);
-                _mm256_storeu_ps(ptr.add(16), c2);
-                _mm256_storeu_ps(ptr.add(24), c3);
-                _mm256_storeu_ps(ptr.add(32), c4);
-                _mm256_storeu_ps(ptr.add(40), c5);
-                _mm256_storeu_ps(ptr.add(48), c6);
-                _mm256_storeu_ps(ptr.add(56), c7);
+            // SAFETY: dest is guaranteed to have enough space by the caller's assert.
+            unsafe {
+                _mm256_storeu_ps(dest.as_mut_ptr(), c0);
+                _mm256_storeu_ps(dest.as_mut_ptr().add(8), c1);
+                _mm256_storeu_ps(dest.as_mut_ptr().add(16), c2);
+                _mm256_storeu_ps(dest.as_mut_ptr().add(24), c3);
+                _mm256_storeu_ps(dest.as_mut_ptr().add(32), c4);
+                _mm256_storeu_ps(dest.as_mut_ptr().add(40), c5);
+                _mm256_storeu_ps(dest.as_mut_ptr().add(48), c6);
+                _mm256_storeu_ps(dest.as_mut_ptr().add(56), c7);
             }
         }
 
-        // SAFETY: bounds checked above, avx2 available from safety invariant on descriptor
-        unsafe {
-            store_interleaved_8_impl(
-                a.0,
-                b.0,
-                c.0,
-                d.0,
-                e.0,
-                f.0,
-                g.0,
-                h.0,
-                base.as_mut_ptr().add(offset),
-            );
-        }
+        // SAFETY: avx2 is available from the safety invariant on the descriptor.
+        unsafe { store_interleaved_8_impl(a.0, b.0, c.0, d.0, e.0, f.0, g.0, h.0, dest) }
     }
 
     fn_avx!(this: F32VecAvx, fn mul_add(mul: F32VecAvx, add: F32VecAvx) -> F32VecAvx {

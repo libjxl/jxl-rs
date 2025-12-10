@@ -103,15 +103,15 @@ pub trait F32SimdVec:
     fn store_array(&self, mem: &mut Self::UnderlyingArray);
 
     /// Stores two vectors interleaved: [a0, b0, a1, b1, a2, b2, ...].
-    /// Requires `base.len() >= offset + 2 * Self::LEN` or it will panic.
-    fn store_interleaved_2(a: Self, b: Self, base: &mut [f32], offset: usize);
+    /// Requires `dest.len() >= 2 * Self::LEN` or it will panic.
+    fn store_interleaved_2(a: Self, b: Self, dest: &mut [f32]);
 
     /// Stores four vectors interleaved: [a0, b0, c0, d0, a1, b1, c1, d1, ...].
-    /// Requires `base.len() >= offset + 4 * Self::LEN` or it will panic.
-    fn store_interleaved_4(a: Self, b: Self, c: Self, d: Self, base: &mut [f32], offset: usize);
+    /// Requires `dest.len() >= 4 * Self::LEN` or it will panic.
+    fn store_interleaved_4(a: Self, b: Self, c: Self, d: Self, dest: &mut [f32]);
 
     /// Stores eight vectors interleaved: [a0, b0, c0, d0, e0, f0, g0, h0, a1, ...].
-    /// Requires `base.len() >= offset + 8 * Self::LEN` or it will panic.
+    /// Requires `dest.len() >= 8 * Self::LEN` or it will panic.
     fn store_interleaved_8(
         a: Self,
         b: Self,
@@ -121,8 +121,7 @@ pub trait F32SimdVec:
         f: Self,
         g: Self,
         h: Self,
-        base: &mut [f32],
-        offset: usize,
+        dest: &mut [f32],
     );
 
     fn abs(self) -> Self;
@@ -597,7 +596,7 @@ mod test {
 
         let a_vec = D::F32Vec::load(d, &a);
         let b_vec = D::F32Vec::load(d, &b);
-        D::F32Vec::store_interleaved_2(a_vec, b_vec, &mut output, 0);
+        D::F32Vec::store_interleaved_2(a_vec, b_vec, &mut output);
 
         // Verify interleaved output: [a0, b0, a1, b1, ...]
         for i in 0..len {
@@ -635,7 +634,7 @@ mod test {
         let b_vec = D::F32Vec::load(d, &b);
         let c_vec = D::F32Vec::load(d, &c);
         let d_vec = D::F32Vec::load(d, &e);
-        D::F32Vec::store_interleaved_4(a_vec, b_vec, c_vec, d_vec, &mut output, 0);
+        D::F32Vec::store_interleaved_4(a_vec, b_vec, c_vec, d_vec, &mut output);
 
         // Verify interleaved output: [a0, b0, c0, d0, a1, b1, c1, d1, ...]
         for i in 0..len {
@@ -699,7 +698,7 @@ mod test {
         let f = D::F32Vec::load(d, &arr_f);
         let g = D::F32Vec::load(d, &arr_g);
         let h = D::F32Vec::load(d, &arr_h);
-        D::F32Vec::store_interleaved_8(a, b, c, dv, e, f, g, h, &mut output, 0);
+        D::F32Vec::store_interleaved_8(a, b, c, dv, e, f, g, h, &mut output);
 
         // Verify interleaved output: [a0, b0, c0, d0, e0, f0, g0, h0, a1, ...]
         let arrays = [
