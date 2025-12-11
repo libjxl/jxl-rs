@@ -10,7 +10,10 @@ use crate::{
     error::{Error, Result},
 };
 
-use super::{JxlBasicInfo, JxlColorProfile, JxlDecoderOptions, JxlOutputBuffer, JxlPixelFormat, ProcessingResult};
+use super::{
+    JxlBasicInfo, JxlColorProfile, JxlDecoderOptions, JxlOutputBuffer, JxlPixelFormat,
+    ProcessingResult,
+};
 use box_parser::BoxParser;
 use codestream_parser::CodestreamParser;
 
