@@ -12,7 +12,6 @@ mod inner;
 mod input;
 mod options;
 mod signature;
-mod simple;
 
 pub use crate::image::JxlOutputBuffer;
 pub use color::*;
@@ -22,7 +21,6 @@ pub use inner::*;
 pub use input::*;
 pub use options::*;
 pub use signature::*;
-pub use simple::*;
 
 use crate::headers::image_metadata::Orientation;
 
