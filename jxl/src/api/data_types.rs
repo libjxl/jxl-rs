@@ -87,6 +87,27 @@ impl JxlDataFormat {
         }
     }
 
+    /// Creates a U8 format with 8-bit depth.
+    pub fn u8() -> Self {
+        Self::U8 { bit_depth: 8 }
+    }
+
+    /// Creates a U16 format with native endianness and 16-bit depth.
+    pub fn u16() -> Self {
+        Self::U16 {
+            endianness: Endianness::native(),
+            bit_depth: 16,
+        }
+    }
+
+    /// Creates an F16 format with native endianness.
+    pub fn f16() -> Self {
+        Self::F16 {
+            endianness: Endianness::native(),
+        }
+    }
+
+    /// Creates an F32 format with native endianness.
     pub fn f32() -> Self {
         Self::F32 {
             endianness: Endianness::native(),
@@ -109,6 +130,82 @@ pub struct JxlPixelFormat {
     // None -> ignore
     pub color_data_format: Option<JxlDataFormat>,
     pub extra_channel_format: Vec<Option<JxlDataFormat>>,
+}
+
+impl JxlPixelFormat {
+    /// Creates an RGBA8 pixel format.
+    ///
+    /// The alpha channel (if present) is interleaved with RGB. Any additional
+    /// extra channels are ignored.
+    ///
+    /// `num_extra_channels` should match `basic_info.extra_channels.len()`.
+    pub fn rgba8(num_extra_channels: usize) -> Self {
+        Self {
+            color_type: JxlColorType::Rgba,
+            color_data_format: Some(JxlDataFormat::u8()),
+            extra_channel_format: vec![None; num_extra_channels],
+        }
+    }
+
+    /// Creates an RGBA16 pixel format with native endianness.
+    ///
+    /// The alpha channel (if present) is interleaved with RGB. Any additional
+    /// extra channels are ignored.
+    ///
+    /// `num_extra_channels` should match `basic_info.extra_channels.len()`.
+    pub fn rgba16(num_extra_channels: usize) -> Self {
+        Self {
+            color_type: JxlColorType::Rgba,
+            color_data_format: Some(JxlDataFormat::u16()),
+            extra_channel_format: vec![None; num_extra_channels],
+        }
+    }
+
+    /// Creates an RGBA F32 pixel format with native endianness.
+    ///
+    /// The alpha channel (if present) is interleaved with RGB. Any additional
+    /// extra channels are ignored.
+    ///
+    /// `num_extra_channels` should match `basic_info.extra_channels.len()`.
+    pub fn rgba_f32(num_extra_channels: usize) -> Self {
+        Self {
+            color_type: JxlColorType::Rgba,
+            color_data_format: Some(JxlDataFormat::f32()),
+            extra_channel_format: vec![None; num_extra_channels],
+        }
+    }
+
+    /// Creates a BGRA8 pixel format (for native Windows/Skia format).
+    ///
+    /// The alpha channel (if present) is interleaved with BGR. Any additional
+    /// extra channels are ignored.
+    ///
+    /// `num_extra_channels` should match `basic_info.extra_channels.len()`.
+    pub fn bgra8(num_extra_channels: usize) -> Self {
+        Self {
+            color_type: JxlColorType::Bgra,
+            color_data_format: Some(JxlDataFormat::u8()),
+            extra_channel_format: vec![None; num_extra_channels],
+        }
+    }
+
+    /// Creates an RGB8 pixel format (no alpha).
+    ///
+    /// `num_extra_channels` should match `basic_info.extra_channels.len()`.
+    pub fn rgb8(num_extra_channels: usize) -> Self {
+        Self {
+            color_type: JxlColorType::Rgb,
+            color_data_format: Some(JxlDataFormat::u8()),
+            extra_channel_format: vec![None; num_extra_channels],
+        }
+    }
+
+    /// Returns the number of bytes per pixel for this format.
+    pub fn bytes_per_pixel(&self) -> Option<usize> {
+        self.color_data_format
+            .as_ref()
+            .map(|df| df.bytes_per_sample() * self.color_type.samples_per_pixel())
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]

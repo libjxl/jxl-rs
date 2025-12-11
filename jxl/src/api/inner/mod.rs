@@ -102,10 +102,27 @@ impl JxlDecoderInner {
     }
 
     /// Rewinds a decoder to the start of the file, allowing past frames to be displayed again.
+    ///
+    /// This fully resets the decoder. For animation loop playback, consider using
+    /// [`rewind_for_animation`](Self::rewind_for_animation) instead.
     pub fn rewind(&mut self) {
         // TODO(veluca): keep track of frame offsets for skipping.
         self.box_parser = BoxParser::new();
         self.codestream_parser = CodestreamParser::new();
+    }
+
+    /// Rewinds for animation loop replay, keeping pixel_format setting.
+    ///
+    /// This resets the decoder but preserves the pixel_format configuration,
+    /// so the caller doesn't need to re-set it after rewinding.
+    ///
+    /// After calling this, provide input from the beginning of the file.
+    /// Headers will be re-parsed, then frames can be decoded again.
+    ///
+    /// Returns `true` if pixel_format was preserved, `false` if none was set.
+    pub fn rewind_for_animation(&mut self) -> bool {
+        self.box_parser = BoxParser::new();
+        self.codestream_parser.rewind_for_animation().is_some()
     }
 
     pub fn has_more_frames(&self) -> bool {

@@ -55,6 +55,9 @@ impl<S: JxlState> JxlDecoder<S> {
     }
 
     /// Rewinds a decoder to the start of the file, allowing past frames to be displayed again.
+    ///
+    /// This fully resets the decoder. For animation loop playback, consider using
+    /// [`rewind_for_animation`](JxlDecoder::<WithImageInfo>::rewind_for_animation) instead.
     pub fn rewind(mut self) -> JxlDecoder<Initialized> {
         self.inner.rewind();
         JxlDecoder::wrap_inner(self.inner)
@@ -94,6 +97,20 @@ impl JxlDecoder<Initialized> {
 
 impl JxlDecoder<WithImageInfo> {
     // TODO(veluca): once frame skipping is implemented properly, expose that in the API.
+
+    /// Rewinds for animation loop replay, keeping pixel_format setting.
+    ///
+    /// This resets the decoder but preserves the pixel_format configuration,
+    /// so the caller doesn't need to re-set it after rewinding.
+    ///
+    /// After calling this, provide input from the beginning of the file.
+    /// Headers will be re-parsed, then frames can be decoded again.
+    ///
+    /// Returns `JxlDecoder<Initialized>` since headers need re-parsing.
+    pub fn rewind_for_animation(mut self) -> JxlDecoder<Initialized> {
+        self.inner.rewind_for_animation();
+        JxlDecoder::wrap_inner(self.inner)
+    }
 
     /// Obtains the image's basic information.
     pub fn basic_info(&self) -> &JxlBasicInfo {
@@ -176,12 +193,49 @@ impl JxlDecoder<WithFrameInfo> {
         let inner_result = self.inner.process(input, Some(buffers))?;
         Ok(self.map_inner_processing_result(inner_result))
     }
+
+    /// Convenience method to decode directly into a flat byte buffer.
+    ///
+    /// This is equivalent to calling `process()` with a single `JxlOutputBuffer`,
+    /// but handles the buffer setup automatically.
+    ///
+    /// The pixel format must have been set via `set_pixel_format()` in the
+    /// `WithImageInfo` state. The buffer size must match exactly what is required
+    /// for the configured format - use `JxlBasicInfo::buffer_size()` to calculate.
+    ///
+    /// # Example
+    /// ```ignore
+    /// // In WithImageInfo state:
+    /// let info = decoder.basic_info().clone();
+    /// let format = JxlPixelFormat::rgba8(info.num_extra_channels());
+    /// decoder.set_pixel_format(format.clone());
+    ///
+    /// // Process to WithFrameInfo state, then:
+    /// let mut buffer = vec![0u8; info.buffer_size(&format).unwrap()];
+    /// let decoder = decoder.decode_to_buffer(&mut input, &mut buffer)?;
+    /// ```
+    pub fn decode_to_buffer<In: JxlBitstreamInput>(
+        self,
+        input: &mut In,
+        buffer: &mut [u8],
+    ) -> Result<ProcessingResult<JxlDecoder<WithImageInfo>, Self>> {
+        let frame_header = self.frame_header();
+        let (width, height) = frame_header.size;
+        let pixel_format = self.inner.current_pixel_format().unwrap();
+        let bytes_per_pixel = pixel_format
+            .bytes_per_pixel()
+            .expect("pixel format must have color output");
+        let bytes_per_row = width * bytes_per_pixel;
+
+        let output_buffer = JxlOutputBuffer::new(buffer, height, bytes_per_row);
+        self.process(input, &mut [output_buffer])
+    }
 }
 
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
-    use crate::api::{JxlDataFormat, JxlDecoderOptions};
+    use crate::api::{JxlColorType, JxlDataFormat, JxlDecoderOptions, JxlPixelFormat};
     use crate::error::Error;
     use crate::image::{Image, Rect};
     use crate::util::test::assert_almost_abs_eq_coords;
@@ -523,5 +577,224 @@ pub(crate) mod tests {
         let icc_profile = JxlColorProfile::Icc(vec![0u8; 100]);
         let result = decoder.set_output_color_profile(icc_profile);
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_decode_to_buffer_rgb8() {
+        // basic.jxl is an RGB image without alpha
+        let file = std::fs::read("resources/test/basic.jxl").unwrap();
+        let options = JxlDecoderOptions::default();
+        let mut decoder = JxlDecoder::<states::Initialized>::new(options);
+        let mut input = file.as_slice();
+
+        // Process until we have image info
+        let mut decoder = loop {
+            match decoder.process(&mut input).unwrap() {
+                ProcessingResult::Complete { result } => break result,
+                ProcessingResult::NeedsMoreInput { fallback, .. } => decoder = fallback,
+            }
+        };
+
+        // Get basic info and set up RGB8 format
+        let info = decoder.basic_info().clone();
+        let format = JxlPixelFormat::rgb8(info.num_extra_channels());
+        decoder.set_pixel_format(format.clone());
+
+        // Process until we have frame info
+        let decoder = loop {
+            match decoder.process(&mut input).unwrap() {
+                ProcessingResult::Complete { result } => break result,
+                ProcessingResult::NeedsMoreInput { fallback, .. } => decoder = fallback,
+            }
+        };
+
+        // Calculate buffer size and decode
+        let buffer_size = info.buffer_size(&format).unwrap();
+        let mut buffer = vec![0u8; buffer_size];
+
+        let _decoder = loop {
+            match decoder.decode_to_buffer(&mut input, &mut buffer).unwrap() {
+                ProcessingResult::Complete { result } => break result,
+                ProcessingResult::NeedsMoreInput { fallback, .. } => {
+                    panic!(
+                        "Unexpected need for more input: {:?}",
+                        fallback.frame_header()
+                    );
+                }
+            }
+        };
+
+        // Verify buffer was filled (not all zeros)
+        assert!(
+            buffer.iter().any(|&b| b != 0),
+            "Buffer should contain non-zero pixels"
+        );
+
+        // Verify buffer size matches expected (RGB = 3 bytes per pixel)
+        let (width, height) = info.size;
+        assert_eq!(buffer.len(), width * height * 3);
+    }
+
+    #[test]
+    fn test_decode_to_buffer_rgba8_with_alpha() {
+        // dice.jxl has an alpha channel (800x600)
+        let file = std::fs::read("resources/test/dice.jxl").unwrap();
+        let options = JxlDecoderOptions::default();
+        let mut decoder = JxlDecoder::<states::Initialized>::new(options);
+        let mut input = file.as_slice();
+
+        // Process until we have image info
+        let mut decoder = loop {
+            match decoder.process(&mut input).unwrap() {
+                ProcessingResult::Complete { result } => break result,
+                ProcessingResult::NeedsMoreInput { fallback, .. } => decoder = fallback,
+            }
+        };
+
+        // Get basic info and set up RGBA8 format
+        let info = decoder.basic_info().clone();
+        assert!(
+            info.num_extra_channels() > 0,
+            "Test file should have extra channels (alpha)"
+        );
+
+        let format = JxlPixelFormat::rgba8(info.num_extra_channels());
+        decoder.set_pixel_format(format.clone());
+
+        // Process until we have frame info
+        let decoder = loop {
+            match decoder.process(&mut input).unwrap() {
+                ProcessingResult::Complete { result } => break result,
+                ProcessingResult::NeedsMoreInput { fallback, .. } => decoder = fallback,
+            }
+        };
+
+        // Calculate buffer size and decode
+        let buffer_size = info.buffer_size(&format).unwrap();
+        let mut buffer = vec![0u8; buffer_size];
+
+        let _decoder = loop {
+            match decoder.decode_to_buffer(&mut input, &mut buffer).unwrap() {
+                ProcessingResult::Complete { result } => break result,
+                ProcessingResult::NeedsMoreInput { fallback, .. } => {
+                    panic!(
+                        "Unexpected need for more input: {:?}",
+                        fallback.frame_header()
+                    );
+                }
+            }
+        };
+
+        // Verify buffer was filled (not all zeros)
+        assert!(
+            buffer.iter().any(|&b| b != 0),
+            "Buffer should contain non-zero pixels"
+        );
+
+        // Verify buffer size matches expected (RGBA = 4 bytes per pixel)
+        let (width, height) = info.size;
+        assert_eq!(buffer.len(), width * height * 4);
+    }
+
+    #[test]
+    fn test_decode_to_buffer_rgba8_without_alpha() {
+        // basic.jxl is an RGB image without alpha - test that requesting RGBA
+        // fills the alpha channel with opaque (255) values.
+        let file = std::fs::read("resources/test/basic.jxl").unwrap();
+        let options = JxlDecoderOptions::default();
+        let mut decoder = JxlDecoder::<states::Initialized>::new(options);
+        let mut input = file.as_slice();
+
+        // Process until we have image info
+        let mut decoder = loop {
+            match decoder.process(&mut input).unwrap() {
+                ProcessingResult::Complete { result } => break result,
+                ProcessingResult::NeedsMoreInput { fallback, .. } => decoder = fallback,
+            }
+        };
+
+        // Get basic info and set up RGBA8 format (even though image has no alpha)
+        let info = decoder.basic_info().clone();
+        assert_eq!(
+            info.num_extra_channels(),
+            0,
+            "Test file should not have extra channels"
+        );
+
+        let format = JxlPixelFormat::rgba8(info.num_extra_channels());
+        decoder.set_pixel_format(format.clone());
+
+        // Process until we have frame info
+        let decoder = loop {
+            match decoder.process(&mut input).unwrap() {
+                ProcessingResult::Complete { result } => break result,
+                ProcessingResult::NeedsMoreInput { fallback, .. } => decoder = fallback,
+            }
+        };
+
+        // Calculate buffer size and decode
+        let buffer_size = info.buffer_size(&format).unwrap();
+        let mut buffer = vec![0u8; buffer_size];
+
+        let _decoder = loop {
+            match decoder.decode_to_buffer(&mut input, &mut buffer).unwrap() {
+                ProcessingResult::Complete { result } => break result,
+                ProcessingResult::NeedsMoreInput { fallback, .. } => {
+                    panic!(
+                        "Unexpected need for more input: {:?}",
+                        fallback.frame_header()
+                    );
+                }
+            }
+        };
+
+        // Verify buffer was filled (not all zeros)
+        assert!(
+            buffer.iter().any(|&b| b != 0),
+            "Buffer should contain non-zero pixels"
+        );
+
+        // Verify buffer size matches expected (RGBA = 4 bytes per pixel)
+        let (width, height) = info.size;
+        assert_eq!(buffer.len(), width * height * 4);
+
+        // Verify all alpha values are 255 (opaque)
+        let alpha_values: Vec<u8> = buffer.iter().skip(3).step_by(4).copied().collect();
+        assert!(
+            alpha_values.iter().all(|&a| a == 255),
+            "All alpha values should be 255 (opaque) when image has no alpha channel"
+        );
+    }
+
+    #[test]
+    fn test_pixel_format_convenience_constructors() {
+        // Test RGBA8
+        let format = JxlPixelFormat::rgba8(2);
+        assert_eq!(format.color_type, JxlColorType::Rgba);
+        assert_eq!(format.bytes_per_pixel(), Some(4));
+        assert_eq!(format.extra_channel_format.len(), 2);
+
+        // Test RGBA16
+        let format = JxlPixelFormat::rgba16(1);
+        assert_eq!(format.color_type, JxlColorType::Rgba);
+        assert_eq!(format.bytes_per_pixel(), Some(8));
+
+        // Test BGRA8
+        let format = JxlPixelFormat::bgra8(0);
+        assert_eq!(format.color_type, JxlColorType::Bgra);
+        assert_eq!(format.bytes_per_pixel(), Some(4));
+
+        // Test RGB8
+        let format = JxlPixelFormat::rgb8(0);
+        assert_eq!(format.color_type, JxlColorType::Rgb);
+        assert_eq!(format.bytes_per_pixel(), Some(3));
+    }
+
+    #[test]
+    fn test_data_format_convenience_constructors() {
+        assert_eq!(JxlDataFormat::u8().bytes_per_sample(), 1);
+        assert_eq!(JxlDataFormat::u16().bytes_per_sample(), 2);
+        assert_eq!(JxlDataFormat::f16().bytes_per_sample(), 2);
+        assert_eq!(JxlDataFormat::f32().bytes_per_sample(), 4);
     }
 }

@@ -16,6 +16,8 @@ pub struct SaveStage {
     pub(super) output_buffer_index: usize,
     pub(super) color_type: JxlColorType,
     pub(super) data_format: JxlDataFormat,
+    /// If true, add opaque alpha (1.0) when color_type has alpha but channels doesn't include it.
+    pub(super) fill_opaque_alpha: bool,
 }
 
 impl SaveStage {
@@ -35,12 +37,29 @@ impl SaveStage {
             color_type = JxlColorType::Rgba;
             channels.swap(0, 2);
         }
+
+        // Check if we need to fill opaque alpha:
+        // - color_type has alpha (RGBA, GrayscaleAlpha, BGRA)
+        // - but channels doesn't include an alpha source
+        let fill_opaque_alpha =
+            color_type.has_alpha() && channels.len() < color_type.samples_per_pixel();
+
         Self {
             channels,
             orientation,
             output_buffer_index,
             color_type,
             data_format,
+            fill_opaque_alpha,
+        }
+    }
+
+    /// Returns the number of output channels (may be more than source channels if filling opaque alpha).
+    pub fn output_channels(&self) -> usize {
+        if self.fill_opaque_alpha {
+            self.color_type.samples_per_pixel()
+        } else {
+            self.channels.len()
         }
     }
 
@@ -62,7 +81,7 @@ impl SaveStage {
         };
         let osize = self.orientation.map_size(size);
 
-        let expected_w = self.channels.len() * self.data_format.bytes_per_sample() * osize.0;
+        let expected_w = self.output_channels() * self.data_format.bytes_per_sample() * osize.0;
 
         if buf.byte_size() != (expected_w, osize.1) {
             return Err(Error::InvalidOutputBufferSize(

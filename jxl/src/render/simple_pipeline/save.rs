@@ -28,12 +28,14 @@ impl SaveStage {
 
         self.check_buffer_size(size, Some(buf))?;
 
+        let output_channels = self.output_channels();
+
         for (c, &chan) in self.channels.iter().enumerate() {
             for y in 0..size.1 {
                 let src_row = data[chan].row(y);
                 for (x, &px) in src_row.iter().enumerate() {
                     let (dx, dy) = self.orientation.display_pixel((x, y), size);
-                    let dx = dx * self.channels.len() + c;
+                    let dx = dx * output_channels + c;
                     let bps = self.data_format.bytes_per_sample();
 
                     macro_rules! write_pixel {
@@ -67,6 +69,45 @@ impl SaveStage {
                 }
             }
         }
+
+        // Fill opaque alpha if needed (when RGBA requested but image has no alpha)
+        if self.fill_opaque_alpha {
+            let alpha_channel = self.channels.len(); // alpha is after the source channels
+            for y in 0..size.1 {
+                for x in 0..size.0 {
+                    let (dx, dy) = self.orientation.display_pixel((x, y), size);
+                    let dx = dx * output_channels + alpha_channel;
+                    let bps = self.data_format.bytes_per_sample();
+
+                    macro_rules! write_opaque {
+                        ($opaque: expr, $endianness: expr) => {
+                            let px_bytes = if $endianness == Endianness::LittleEndian {
+                                $opaque.to_le_bytes()
+                            } else {
+                                $opaque.to_be_bytes()
+                            };
+                            buf.write_bytes(dy, dx * bps, &px_bytes);
+                        };
+                    }
+
+                    match self.data_format {
+                        JxlDataFormat::U8 { .. } => {
+                            write_opaque!(255u8, Endianness::LittleEndian);
+                        }
+                        JxlDataFormat::U16 { endianness, .. } => {
+                            write_opaque!(65535u16, endianness);
+                        }
+                        JxlDataFormat::F32 { endianness } => {
+                            write_opaque!(1.0f32, endianness);
+                        }
+                        JxlDataFormat::F16 { endianness } => {
+                            write_opaque!(f16::from_f64(1.0), endianness);
+                        }
+                    }
+                }
+            }
+        }
+
         Ok(())
     }
 }
