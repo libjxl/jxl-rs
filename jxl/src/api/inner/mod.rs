@@ -161,14 +161,18 @@ impl JxlDecoderInner {
     ///
     /// This fully resets the decoder. For animation loop playback, consider using
     /// [`rewind_for_animation`](Self::rewind_for_animation) instead.
+    ///
+    /// Note: This preserves the input buffer but resets the read position to 0,
+    /// allowing the same data to be re-processed from the beginning.
     pub fn rewind(&mut self) {
         // TODO(veluca): keep track of frame offsets for skipping.
         self.box_parser = BoxParser::new();
         self.codestream_parser = CodestreamParser::new();
         self.state = DecoderState::Initialized;
-        self.input_buffer.clear();
+        // Don't clear input_buffer - just reset the read position so we can
+        // re-process the same data from the beginning.
         self.input_consumed = 0;
-        self.all_input_received = false;
+        // Keep all_input_received as-is - if we had all data before, we still do.
     }
 
     /// Rewinds for animation loop replay, keeping pixel_format setting.
