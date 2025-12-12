@@ -463,7 +463,7 @@ impl HuffmanCodes {
             .map(|_| Ok(decode_varint16(br)? + 1))
             .collect::<Result<_>>()?;
         let max = *alphabet_sizes.iter().max().unwrap();
-        if max as usize > (1 << HUFFMAN_MAX_BITS) {
+        if max as usize >= (1 << HUFFMAN_MAX_BITS) {
             return Err(Error::AlphabetTooLargeHuff(max as usize));
         }
         let tables = alphabet_sizes
