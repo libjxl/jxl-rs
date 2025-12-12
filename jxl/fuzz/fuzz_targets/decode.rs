@@ -17,7 +17,8 @@ fn as_complete<T, U, E>(result: Result<ProcessingResult<T, U>, E>) -> Result<T, 
 
 // Note: This is adapted from jxl_cli/src/dec/mod.rs
 fn fuzz_decode(mut data: &[u8]) -> Result<(), ()> {
-    let decoder_options = JxlDecoderOptions::default();
+    let mut decoder_options = JxlDecoderOptions::default();
+    decoder_options.pixel_limit = Some(1 << 27);
     let initialized_decoder = JxlDecoder::<states::Initialized>::new(decoder_options);
     let mut decoder_with_image_info = as_complete(initialized_decoder.process(&mut data))?;
 

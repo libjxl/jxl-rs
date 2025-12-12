@@ -36,6 +36,28 @@ impl CodestreamParser {
             let mut br = BitReader::new(&self.non_section_buf);
             br.skip_bits(self.non_section_bit_offset as usize)?;
             let file_header = FileHeader::read(&mut br)?;
+            if let Some(limit) = decode_options.pixel_limit {
+                if (file_header.size.ysize() as usize)
+                    .checked_mul(file_header.size.xsize() as usize)
+                    .is_none_or(|x| x >= limit)
+                {
+                    return Err(Error::ImageSizeTooLarge(
+                        file_header.size.xsize() as usize,
+                        file_header.size.ysize() as usize,
+                    ));
+                }
+                if let Some(preview) = &file_header.image_metadata.preview {
+                    if (preview.ysize() as usize)
+                        .checked_mul(preview.xsize() as usize)
+                        .is_none_or(|x| x >= limit)
+                    {
+                        return Err(Error::ImageSizeTooLarge(
+                            file_header.size.xsize() as usize,
+                            file_header.size.ysize() as usize,
+                        ));
+                    }
+                }
+            }
             let data = &file_header.image_metadata;
             self.animation = data.animation.clone();
             self.basic_info = Some(JxlBasicInfo {
@@ -227,6 +249,17 @@ impl CodestreamParser {
 
             let mut frame_header = FrameHeader::read_unconditional(&(), &mut br, &nonserialized)?;
             frame_header.postprocess(&nonserialized);
+            if let Some(limit) = decode_options.pixel_limit {
+                if (frame_header.size().0)
+                    .checked_mul(frame_header.size().1)
+                    .is_none_or(|x| x >= limit)
+                {
+                    return Err(Error::ImageSizeTooLarge(
+                        frame_header.size().0,
+                        frame_header.size().1,
+                    ));
+                }
+            }
             self.frame_header = Some(frame_header);
             let bits = br.total_bits_read();
             self.non_section_buf.consume(bits / 8);
