@@ -560,4 +560,17 @@ mod test {
         ];
         assert!(Table::build(TABLE_BITS, &CODE).is_ok());
     }
+
+    #[test]
+    #[cfg(debug_assertions)]
+    #[should_panic = "attempt to subtract with overflow"]
+    // FIXME: This is a fuzz-bug from #527 and should be fixed.
+    fn fixme_huffman_code_lengths() {
+        let mut br = BitReader::new(&[0xff, 0xff, 0x7f, 0x7a]);
+        let _ = Table::decode_huffman_code_lengths(
+            [2, 0, 0, 0, 0, 4, 3, 4, 3, 0, 0, 4, 4, 4, 0, 0, 4, 3],
+            1791,
+            &mut br,
+        );
+    }
 }
