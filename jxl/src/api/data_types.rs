@@ -161,6 +161,20 @@ impl JxlPixelFormat {
         }
     }
 
+    /// Creates an RGBA F16 pixel format with native endianness.
+    ///
+    /// The alpha channel (if present) is interleaved with RGB. Any additional
+    /// extra channels are ignored.
+    ///
+    /// `num_extra_channels` should match `basic_info.extra_channels.len()`.
+    pub fn rgba_f16(num_extra_channels: usize) -> Self {
+        Self {
+            color_type: JxlColorType::Rgba,
+            color_data_format: Some(JxlDataFormat::f16()),
+            extra_channel_format: vec![None; num_extra_channels],
+        }
+    }
+
     /// Creates an RGBA F32 pixel format with native endianness.
     ///
     /// The alpha channel (if present) is interleaved with RGB. Any additional

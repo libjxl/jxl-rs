@@ -10,6 +10,7 @@ use std::ops::Range;
 use crate::{
     api::{Endianness, JxlDataFormat, JxlOutputBuffer},
     render::low_memory_pipeline::row_buffers::RowBuffer,
+    util::f16,
 };
 
 /// Store pixels with identity orientation, optionally filling opaque alpha.
@@ -161,6 +162,91 @@ fn store_impl(
                     *out_ptr.add(i * 4 + 1) = g_row[start + i];
                     *out_ptr.add(i * 4 + 2) = b_row[start + i];
                     *out_ptr.add(i * 4 + 3) = 1.0;
+                }
+            }
+            num_pixels
+        }
+        // RGBA F32 (4 channels with actual alpha)
+        (4, 4, true, false) => {
+            let [r, g, b, a] = input_buf else { unreachable!() };
+            let r_row = r.get_row::<f32>(input_y);
+            let g_row = g.get_row::<f32>(input_y);
+            let b_row = b.get_row::<f32>(input_y);
+            let a_row = a.get_row::<f32>(input_y);
+            let start = byte_start / 4;
+
+            // SAFETY: output_row has exactly num_pixels * 16 bytes (4 f32s per pixel)
+            let out_ptr = output_row.as_mut_ptr() as *mut f32;
+            for i in 0..num_pixels {
+                unsafe {
+                    *out_ptr.add(i * 4) = r_row[start + i];
+                    *out_ptr.add(i * 4 + 1) = g_row[start + i];
+                    *out_ptr.add(i * 4 + 2) = b_row[start + i];
+                    *out_ptr.add(i * 4 + 3) = a_row[start + i];
+                }
+            }
+            num_pixels
+        }
+        // RGBA U8 (4 channels with actual alpha)
+        (4, 1, true, false) => {
+            let [r, g, b, a] = input_buf else { unreachable!() };
+            let r_row = &r.get_row::<u8>(input_y)[byte_start..byte_end];
+            let g_row = &g.get_row::<u8>(input_y)[byte_start..byte_end];
+            let b_row = &b.get_row::<u8>(input_y)[byte_start..byte_end];
+            let a_row = &a.get_row::<u8>(input_y)[byte_start..byte_end];
+
+            // SAFETY: output_row has exactly num_pixels * 4 bytes
+            let out_ptr = output_row.as_mut_ptr() as *mut u8;
+            for i in 0..num_pixels {
+                unsafe {
+                    *out_ptr.add(i * 4) = r_row[i];
+                    *out_ptr.add(i * 4 + 1) = g_row[i];
+                    *out_ptr.add(i * 4 + 2) = b_row[i];
+                    *out_ptr.add(i * 4 + 3) = a_row[i];
+                }
+            }
+            num_pixels
+        }
+        // RGB F16 -> RGBA F16 with opaque alpha
+        (3, 2, true, true) => {
+            let [r, g, b] = input_buf else { unreachable!() };
+            let r_row = r.get_row::<f32>(input_y);
+            let g_row = g.get_row::<f32>(input_y);
+            let b_row = b.get_row::<f32>(input_y);
+            // Note: input is f32, we convert to f16 for output
+            let start = byte_start / 4; // f32 input uses 4 bytes per sample
+
+            // SAFETY: output_row has exactly num_pixels * 8 bytes (4 f16s per pixel)
+            let out_ptr = output_row.as_mut_ptr() as *mut u16;
+            let one_f16 = f16::from_f32(1.0).to_bits();
+            for i in 0..num_pixels {
+                unsafe {
+                    *out_ptr.add(i * 4) = f16::from_f32(r_row[start + i]).to_bits();
+                    *out_ptr.add(i * 4 + 1) = f16::from_f32(g_row[start + i]).to_bits();
+                    *out_ptr.add(i * 4 + 2) = f16::from_f32(b_row[start + i]).to_bits();
+                    *out_ptr.add(i * 4 + 3) = one_f16;
+                }
+            }
+            num_pixels
+        }
+        // RGBA F16 (4 channels with actual alpha)
+        (4, 2, true, false) => {
+            let [r, g, b, a] = input_buf else { unreachable!() };
+            let r_row = r.get_row::<f32>(input_y);
+            let g_row = g.get_row::<f32>(input_y);
+            let b_row = b.get_row::<f32>(input_y);
+            let a_row = a.get_row::<f32>(input_y);
+            // Note: input is f32, we convert to f16 for output
+            let start = byte_start / 4; // f32 input uses 4 bytes per sample
+
+            // SAFETY: output_row has exactly num_pixels * 8 bytes (4 f16s per pixel)
+            let out_ptr = output_row.as_mut_ptr() as *mut u16;
+            for i in 0..num_pixels {
+                unsafe {
+                    *out_ptr.add(i * 4) = f16::from_f32(r_row[start + i]).to_bits();
+                    *out_ptr.add(i * 4 + 1) = f16::from_f32(g_row[start + i]).to_bits();
+                    *out_ptr.add(i * 4 + 2) = f16::from_f32(b_row[start + i]).to_bits();
+                    *out_ptr.add(i * 4 + 3) = f16::from_f32(a_row[start + i]).to_bits();
                 }
             }
             num_pixels
