@@ -524,12 +524,4 @@ pub(crate) mod tests {
         let result = decoder.set_output_color_profile(icc_profile);
         assert!(result.is_err());
     }
-
-    #[test]
-    #[should_panic = "al_size < 1 << HUFFMAN_MAX_BITS"]
-    // FIXME: This is a fuzz-bug from #527 and should be fixed.
-    fn fixme_invalid_huffman_table() {
-        let data = [255, 10, 75, 10, 75, 161, 254, 255, 255];
-        let _ = decode(&data, usize::MAX, false, None);
-    }
 }
