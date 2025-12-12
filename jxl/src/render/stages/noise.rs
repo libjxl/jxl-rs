@@ -10,6 +10,7 @@ use crate::{
     frame::color_correlation_map::ColorCorrelationParams,
     render::{Channels, ChannelsMut, RenderPipelineInOutStage, RenderPipelineInPlaceStage},
 };
+use jxl_simd::{F32SimdVec, simd_function};
 
 pub struct ConvolveNoiseStage {
     channel: usize,
@@ -26,6 +27,65 @@ impl std::fmt::Display for ConvolveNoiseStage {
         write!(f, "convolve noise for channel {}", self.channel,)
     }
 }
+
+// SIMD noise convolution (5x5 kernel)
+simd_function!(
+    convolve_noise_simd_dispatch,
+    d: D,
+    fn convolve_noise_simd(input: &[&[f32]], output: &mut [f32], xsize: usize) {
+        let simd_width = D::F32Vec::LEN;
+
+        // Precompute constants
+        let c016 = D::F32Vec::splat(d, 0.16);
+        let cn384 = D::F32Vec::splat(d, -3.84);
+
+        // Process in SIMD chunks
+        let mut x = 0;
+        while x + simd_width <= xsize {
+            // Load center pixel (row 2, offset +2)
+            let p00 = D::F32Vec::load(d, &input[2][x + 2..]);
+
+            // Accumulate surrounding pixels
+            let mut others = D::F32Vec::splat(d, 0.0);
+
+            // Add all 5 rows × 5 offsets (except center row 2)
+            for i in 0..5 {
+                others = others + D::F32Vec::load(d, &input[0][x + i..]);
+                others = others + D::F32Vec::load(d, &input[1][x + i..]);
+                others = others + D::F32Vec::load(d, &input[3][x + i..]);
+                others = others + D::F32Vec::load(d, &input[4][x + i..]);
+            }
+
+            // Add row 2 neighbors (offset 0, 1, 3, 4 - skip center at offset 2)
+            others = others + D::F32Vec::load(d, &input[2][x..]);
+            others = others + D::F32Vec::load(d, &input[2][x + 1..]);
+            others = others + D::F32Vec::load(d, &input[2][x + 3..]);
+            others = others + D::F32Vec::load(d, &input[2][x + 4..]);
+
+            // Compute: others * 0.16 + center * -3.84
+            let result = others.mul_add(c016, p00 * cn384);
+
+            result.store(&mut output[x..]);
+            x += simd_width;
+        }
+
+        // Scalar tail
+        for x in x..xsize {
+            let mut others = 0.0;
+            for i in 0..5 {
+                others += input[0][x + i];
+                others += input[1][x + i];
+                others += input[3][x + i];
+                others += input[4][x + i];
+            }
+            others += input[2][x];
+            others += input[2][x + 1];
+            others += input[2][x + 3];
+            others += input[2][x + 4];
+            output[x] = others * 0.16 + input[2][x + 2] * -3.84;
+        }
+    }
+);
 
 impl RenderPipelineInOutStage for ConvolveNoiseStage {
     type InputT = f32;
@@ -46,21 +106,7 @@ impl RenderPipelineInOutStage for ConvolveNoiseStage {
         _state: Option<&mut dyn std::any::Any>,
     ) {
         let input = &input_rows[0];
-        for x in 0..xsize {
-            let mut others = 0.0;
-            for i in 0..5 {
-                let offset = (x as i32 + i) as usize;
-                others += input[0][offset];
-                others += input[1][offset];
-                others += input[3][offset];
-                others += input[4][offset];
-            }
-            others += input[2][x];
-            others += input[2][x + 1];
-            others += input[2][x + 3];
-            others += input[2][x + 4];
-            output_rows[0][0][x] = others * 0.16 + input[2][x + 2] * -3.84;
-        }
+        convolve_noise_simd_dispatch(input, output_rows[0][0], xsize);
     }
 }
 
