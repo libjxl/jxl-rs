@@ -104,6 +104,8 @@ pub enum Error {
     // FrameHeader format errors
     #[error("Invalid extra channel upsampling: upsampling: {0} dim_shift: {1} ec_upsampling: {2}")]
     InvalidEcUpsampling(u32, u32, u32),
+    #[error("Invalid lf level in UseLFFrame frame: {0}")]
+    InvalidLfLevel(u32),
     #[error("Num_ds: {0} should be smaller than num_passes: {1}")]
     NumPassesTooLarge(u32, u32),
     #[error("Non-patch reference frame with a crop")]

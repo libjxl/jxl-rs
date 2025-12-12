@@ -681,6 +681,10 @@ impl FrameHeader {
             ));
         }
 
+        if self.has_lf_frame() && self.lf_level >= 4 {
+            return Err(Error::InvalidLfLevel(self.lf_level));
+        }
+
         if self.passes.num_ds >= self.passes.num_passes {
             return Err(Error::NumPassesTooLarge(
                 self.passes.num_ds,
