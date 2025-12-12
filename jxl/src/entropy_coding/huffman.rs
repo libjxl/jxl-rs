@@ -214,7 +214,7 @@ impl Table {
         let mut prev_code_len = DEFAULT_CODE_LENGTH;
         let mut repeat = 0u16;
         let mut repeat_code_len = 0;
-        let mut space = 1 << 15;
+        let mut space = 1usize << 15;
 
         let mut code_lengths = vec![0u8; al_size];
 
@@ -228,7 +228,9 @@ impl Table {
                 symbol += 1;
                 if code_len != 0 {
                     prev_code_len = code_len;
-                    space -= 32768usize >> code_len;
+                    space = space
+                        .checked_sub(32768usize >> code_len)
+                        .ok_or(Error::InvalidHuffman)?;
                 }
             } else {
                 let extra_bits = code_len - 14;
@@ -257,7 +259,9 @@ impl Table {
                 }
                 symbol += repeat_delta as usize;
                 if repeat_code_len != 0 {
-                    space -= (repeat_delta as usize) << (15 - repeat_code_len);
+                    space = space
+                        .checked_sub((repeat_delta as usize) << (15 - repeat_code_len))
+                        .ok_or(Error::InvalidHuffman)?;
                 }
             }
         }
@@ -562,10 +566,7 @@ mod test {
     }
 
     #[test]
-    #[cfg(debug_assertions)]
-    #[should_panic = "attempt to subtract with overflow"]
-    // FIXME: This is a fuzz-bug from #527 and should be fixed.
-    fn fixme_huffman_code_lengths() {
+    fn test_huffman_code_lengths_underflow() {
         let mut br = BitReader::new(&[0xff, 0xff, 0x7f, 0x7a]);
         let _ = Table::decode_huffman_code_lengths(
             [2, 0, 0, 0, 0, 4, 3, 4, 3, 0, 0, 4, 4, 4, 0, 0, 4, 3],
