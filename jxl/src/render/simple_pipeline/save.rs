@@ -21,7 +21,12 @@ impl SaveStage {
         for i in self.channels.iter().skip(1) {
             assert_eq!(data[self.channels[0]].size(), data[*i].size());
         }
-        let Some(buf) = buffers[self.output_buffer_index].as_mut() else {
+        // Skip if buffer index is out of range (e.g., for reference frame buffers
+        // that aren't provided by the caller).
+        let Some(buf) = buffers
+            .get_mut(self.output_buffer_index)
+            .and_then(|b| b.as_mut())
+        else {
             return Ok(());
         };
         let size = data[0].size();

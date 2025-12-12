@@ -380,6 +380,12 @@ impl RenderPipeline for LowMemoryRenderPipeline {
             match s {
                 Stage::Extend(e) => size = e.image_size,
                 Stage::Save(s) => {
+                    // Skip bounds check if the buffer index is out of range.
+                    // This can happen for Save stages that write to reference frame
+                    // buffers which may not be provided by the caller.
+                    if s.output_buffer_index >= buffers.len() {
+                        continue;
+                    }
                     let (dx, dy) = self.downsampling_for_stage[i];
                     s.check_buffer_size(
                         (size.0 >> dx, size.1 >> dy),
