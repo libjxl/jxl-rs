@@ -532,12 +532,4 @@ pub(crate) mod tests {
         let data = [255, 10, 75, 10, 75, 161, 254, 255, 255];
         let _ = decode(&data, usize::MAX, false, None);
     }
-
-    #[test]
-    #[should_panic = "internal error: entered unreachable code"]
-    // FIXME: This is a fuzz-bug from #527 and should be fixed.
-    fn fixme_xyb_color_encoding() {
-        let data = [255, 10, 98, 0, 0, 10, 37, 141, 0, 255];
-        let _ = decode(&data, usize::MAX, false, None);
-    }
 }

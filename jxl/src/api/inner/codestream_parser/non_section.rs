@@ -8,15 +8,18 @@ use std::io::IoSliceMut;
 use crate::{
     api::{
         Endianness, JxlBasicInfo, JxlBitDepth, JxlColorEncoding, JxlColorProfile, JxlColorType,
-        JxlDataFormat, JxlDecoderOptions, JxlExtraChannel, JxlPixelFormat, JxlTransferFunction,
-        inner::codestream_parser::SectionState,
+        JxlDataFormat, JxlDecoderOptions, JxlExtraChannel, JxlPixelFormat, JxlPrimaries,
+        JxlTransferFunction, JxlWhitePoint, inner::codestream_parser::SectionState,
     },
     bit_reader::BitReader,
     error::{Error, Result},
     frame::{DecoderState, Frame, Section},
     headers::{
-        FileHeader, JxlHeader, color_encoding::ColorSpace, encodings::UnconditionalCoder,
-        frame_header::FrameHeader, toc::IncrementalTocReader,
+        FileHeader, JxlHeader,
+        color_encoding::{ColorSpace, RenderingIntent},
+        encodings::UnconditionalCoder,
+        frame_header::FrameHeader,
+        toc::IncrementalTocReader,
     },
     icc::IncrementalIccReader,
 };
@@ -154,7 +157,12 @@ impl CodestreamParser {
                             transfer_function: JxlTransferFunction::Linear,
                             rendering_intent,
                         },
-                        JxlColorEncoding::XYB { .. } => unreachable!(),
+                        JxlColorEncoding::XYB { .. } => JxlColorEncoding::RgbColorSpace {
+                            transfer_function: JxlTransferFunction::Linear,
+                            white_point: JxlWhitePoint::D65,
+                            primaries: JxlPrimaries::SRGB,
+                            rendering_intent: RenderingIntent::Relative,
+                        },
                     }
                 } else {
                     nonlinear_output_color_profile
