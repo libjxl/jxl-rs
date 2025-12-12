@@ -81,3 +81,19 @@ impl HybridUint {
         }
     }
 }
+
+#[cfg(test)]
+mod test {
+    #[test]
+    #[cfg(debug_assertions)]
+    #[should_panic = "assertion failed: num <= MAX_BITS_PER_CALL"]
+    // FIXME: This is a fuzz-bug from #527 and should be fixed.
+    fn fixme_hybrid_uint_decode() {
+        use super::*;
+        let mut br = BitReader::new(&[10, 75, 10, 75, 168, 139, 132, 255, 244]);
+        br.skip_bits(1).unwrap();
+        if let Ok(uint) = HybridUint::decode(15, &mut br) {
+            uint.read(1022, &mut br);
+        }
+    }
+}
