@@ -463,16 +463,16 @@ pub struct HuffmanCodes {
 
 impl HuffmanCodes {
     pub fn decode(num: usize, br: &mut BitReader) -> Result<HuffmanCodes> {
-        let alphabet_sizes: Vec<u16> = (0..num)
-            .map(|_| Ok(decode_varint16(br)? + 1))
+        let alphabet_sizes: Vec<usize> = (0..num)
+            .map(|_| Ok(decode_varint16(br)? as usize + 1))
             .collect::<Result<_>>()?;
         let max = *alphabet_sizes.iter().max().unwrap();
-        if max as usize >= (1 << HUFFMAN_MAX_BITS) {
+        if max >= (1 << HUFFMAN_MAX_BITS) {
             return Err(Error::AlphabetTooLargeHuff(max as usize));
         }
         let tables = alphabet_sizes
             .iter()
-            .map(|sz| Table::decode(*sz as usize, br))
+            .map(|sz| Table::decode(*sz, br))
             .collect::<Result<_>>()?;
         Ok(HuffmanCodes { tables })
     }
