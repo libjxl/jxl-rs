@@ -340,6 +340,13 @@ pub(crate) mod tests {
 
     for_each_test_file!(decode_test_file);
 
+    fn decode_test_file_chunks(path: &Path) -> Result<(), Error> {
+        decode(&std::fs::read(path)?, 1, false, None)?;
+        Ok(())
+    }
+
+    for_each_test_file!(decode_test_file_chunks);
+
     fn compare_pipelines(path: &Path) -> Result<(), Error> {
         let file = std::fs::read(path)?;
         let simple_frames = decode(&file, usize::MAX, true, None)?.1;
