@@ -108,6 +108,12 @@ pub enum Error {
     InvalidLfLevel(u32),
     #[error("Num_ds: {0} should be smaller than num_passes: {1}")]
     NumPassesTooLarge(u32, u32),
+    #[error("Passes::downsample is non-decreasing")]
+    PassesDownsampleNonDecreasing,
+    #[error("Passes::last_pass is non-increasing")]
+    PassesLastPassNonIncreasing,
+    #[error("Passes::last_pass has too large elements")]
+    PassesLastPassTooLarge,
     #[error("Non-patch reference frame with a crop")]
     NonPatchReferenceWithCrop,
     #[error("Non-444 chroma subsampling is not allowed when adaptive DC smoothing is enabled")]
