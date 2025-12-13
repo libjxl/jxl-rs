@@ -188,7 +188,7 @@ pub enum Error {
     )]
     SplinesPointOutOfRange(Point, i32, std::ops::Range<i32>),
     #[error("Spline coordinates out of bounds: {0}, limit is {1}")]
-    SplinesCoordinatesLimit(i32, i32),
+    SplinesCoordinatesLimit(isize, isize),
     #[error("Spline delta-delta is out of bounds: {0}, limit is {1}")]
     SplinesDeltaLimit(i64, i64),
     #[error("Modular tree too large: {0}, limit is {1}")]
