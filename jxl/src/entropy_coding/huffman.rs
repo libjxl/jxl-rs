@@ -212,7 +212,7 @@ impl Table {
 
         let mut symbol = 0;
         let mut prev_code_len = DEFAULT_CODE_LENGTH;
-        let mut repeat = 0u16;
+        let mut repeat = 0usize;
         let mut repeat_code_len = 0;
         let mut space = 1usize << 15;
 
@@ -249,18 +249,18 @@ impl Table {
                     repeat -= 2;
                     repeat <<= extra_bits;
                 }
-                repeat += br.read(extra_bits as usize)? as u16 + 3;
+                repeat += br.read(extra_bits as usize)? as usize + 3;
                 let repeat_delta = repeat - old_repeat;
-                if symbol + repeat_delta as usize > al_size {
+                if symbol + repeat_delta > al_size {
                     return Err(Error::InvalidHuffman);
                 }
                 for i in 0..repeat_delta {
-                    code_lengths[symbol + i as usize] = repeat_code_len;
+                    code_lengths[symbol + i] = repeat_code_len;
                 }
-                symbol += repeat_delta as usize;
+                symbol += repeat_delta;
                 if repeat_code_len != 0 {
                     space = space
-                        .checked_sub((repeat_delta as usize) << (15 - repeat_code_len))
+                        .checked_sub(repeat_delta << (15 - repeat_code_len))
                         .ok_or(Error::InvalidHuffman)?;
                 }
             }
@@ -468,7 +468,7 @@ impl HuffmanCodes {
             .collect::<Result<_>>()?;
         let max = *alphabet_sizes.iter().max().unwrap();
         if max >= (1 << HUFFMAN_MAX_BITS) {
-            return Err(Error::AlphabetTooLargeHuff(max as usize));
+            return Err(Error::AlphabetTooLargeHuff(max));
         }
         let tables = alphabet_sizes
             .iter()
