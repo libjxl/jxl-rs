@@ -115,6 +115,195 @@ impl F32SimdVec for F32VecAvx512 {
         unsafe { _mm512_storeu_ps(mem.as_mut_ptr(), self.0) }
     }
 
+    #[inline(always)]
+    fn store_interleaved_2(a: Self, b: Self, base: &mut [f32], offset: usize) {
+        assert!(base.len() >= offset + 2 * Self::LEN);
+        // SAFETY: we just checked that `base` has enough space.
+        unsafe {
+            let ptr = base.as_mut_ptr().add(offset);
+            // a = [a0..a15], b = [b0..b15]
+            // Output: [a0, b0, a1, b1, ..., a15, b15]
+            let lo = _mm512_unpacklo_ps(a.0, b.0);
+            let hi = _mm512_unpackhi_ps(a.0, b.0);
+
+            // Permute to fix lane crossing
+            let idx_lo = _mm512_setr_epi32(0, 1, 16, 17, 2, 3, 18, 19, 4, 5, 20, 21, 6, 7, 22, 23);
+            let idx_hi =
+                _mm512_setr_epi32(8, 9, 24, 25, 10, 11, 26, 27, 12, 13, 28, 29, 14, 15, 30, 31);
+
+            let out0 = _mm512_permutex2var_ps(lo, idx_lo, hi);
+            let out1 = _mm512_permutex2var_ps(lo, idx_hi, hi);
+
+            _mm512_storeu_ps(ptr, out0);
+            _mm512_storeu_ps(ptr.add(16), out1);
+        }
+    }
+
+    #[inline(always)]
+    fn store_interleaved_4(a: Self, b: Self, c: Self, d: Self, base: &mut [f32], offset: usize) {
+        assert!(base.len() >= offset + 4 * Self::LEN);
+        // SAFETY: we just checked that `base` has enough space.
+        unsafe {
+            let ptr = base.as_mut_ptr().add(offset);
+            // First interleave pairs
+            let ab_lo = _mm512_unpacklo_ps(a.0, b.0);
+            let ab_hi = _mm512_unpackhi_ps(a.0, b.0);
+            let cd_lo = _mm512_unpacklo_ps(c.0, d.0);
+            let cd_hi = _mm512_unpackhi_ps(c.0, d.0);
+
+            // Cast to pd for 64-bit interleave
+            let abcd_0 = _mm512_castpd_ps(_mm512_unpacklo_pd(
+                _mm512_castps_pd(ab_lo),
+                _mm512_castps_pd(cd_lo),
+            ));
+            let abcd_1 = _mm512_castpd_ps(_mm512_unpackhi_pd(
+                _mm512_castps_pd(ab_lo),
+                _mm512_castps_pd(cd_lo),
+            ));
+            let abcd_2 = _mm512_castpd_ps(_mm512_unpacklo_pd(
+                _mm512_castps_pd(ab_hi),
+                _mm512_castps_pd(cd_hi),
+            ));
+            let abcd_3 = _mm512_castpd_ps(_mm512_unpackhi_pd(
+                _mm512_castps_pd(ab_hi),
+                _mm512_castps_pd(cd_hi),
+            ));
+
+            // Use permute to fix lane ordering
+            let idx0 = _mm512_setr_epi32(0, 1, 2, 3, 16, 17, 18, 19, 4, 5, 6, 7, 20, 21, 22, 23);
+            let idx1 =
+                _mm512_setr_epi32(8, 9, 10, 11, 24, 25, 26, 27, 12, 13, 14, 15, 28, 29, 30, 31);
+
+            let out0 = _mm512_permutex2var_ps(abcd_0, idx0, abcd_1);
+            let out1 = _mm512_permutex2var_ps(abcd_2, idx0, abcd_3);
+            let out2 = _mm512_permutex2var_ps(abcd_0, idx1, abcd_1);
+            let out3 = _mm512_permutex2var_ps(abcd_2, idx1, abcd_3);
+
+            _mm512_storeu_ps(ptr, out0);
+            _mm512_storeu_ps(ptr.add(16), out1);
+            _mm512_storeu_ps(ptr.add(32), out2);
+            _mm512_storeu_ps(ptr.add(48), out3);
+        }
+    }
+
+    #[inline(always)]
+    fn store_interleaved_8(
+        a: Self,
+        b: Self,
+        c: Self,
+        d: Self,
+        e: Self,
+        f: Self,
+        g: Self,
+        h: Self,
+        base: &mut [f32],
+        offset: usize,
+    ) {
+        assert!(base.len() >= offset + 8 * Self::LEN);
+        // SAFETY: we just checked that `base` has enough space.
+        // For 16-wide vectors storing 8 interleaved, output is 128 elements
+        unsafe {
+            let ptr = base.as_mut_ptr().add(offset);
+            // Stage 1: Unpack pairs
+            let ab_lo = _mm512_unpacklo_ps(a.0, b.0);
+            let ab_hi = _mm512_unpackhi_ps(a.0, b.0);
+            let cd_lo = _mm512_unpacklo_ps(c.0, d.0);
+            let cd_hi = _mm512_unpackhi_ps(c.0, d.0);
+            let ef_lo = _mm512_unpacklo_ps(e.0, f.0);
+            let ef_hi = _mm512_unpackhi_ps(e.0, f.0);
+            let gh_lo = _mm512_unpacklo_ps(g.0, h.0);
+            let gh_hi = _mm512_unpackhi_ps(g.0, h.0);
+
+            // Stage 2: 64-bit shuffles
+            let abcd_0 = _mm512_castpd_ps(_mm512_unpacklo_pd(
+                _mm512_castps_pd(ab_lo),
+                _mm512_castps_pd(cd_lo),
+            ));
+            let abcd_1 = _mm512_castpd_ps(_mm512_unpackhi_pd(
+                _mm512_castps_pd(ab_lo),
+                _mm512_castps_pd(cd_lo),
+            ));
+            let abcd_2 = _mm512_castpd_ps(_mm512_unpacklo_pd(
+                _mm512_castps_pd(ab_hi),
+                _mm512_castps_pd(cd_hi),
+            ));
+            let abcd_3 = _mm512_castpd_ps(_mm512_unpackhi_pd(
+                _mm512_castps_pd(ab_hi),
+                _mm512_castps_pd(cd_hi),
+            ));
+            let efgh_0 = _mm512_castpd_ps(_mm512_unpacklo_pd(
+                _mm512_castps_pd(ef_lo),
+                _mm512_castps_pd(gh_lo),
+            ));
+            let efgh_1 = _mm512_castpd_ps(_mm512_unpackhi_pd(
+                _mm512_castps_pd(ef_lo),
+                _mm512_castps_pd(gh_lo),
+            ));
+            let efgh_2 = _mm512_castpd_ps(_mm512_unpacklo_pd(
+                _mm512_castps_pd(ef_hi),
+                _mm512_castps_pd(gh_hi),
+            ));
+            let efgh_3 = _mm512_castpd_ps(_mm512_unpackhi_pd(
+                _mm512_castps_pd(ef_hi),
+                _mm512_castps_pd(gh_hi),
+            ));
+
+            // Stage 3: 128-bit shuffles to combine abcd and efgh
+            let idx_lo = _mm512_setr_epi64(0, 1, 8, 9, 2, 3, 10, 11);
+            let idx_hi = _mm512_setr_epi64(4, 5, 12, 13, 6, 7, 14, 15);
+
+            let row0 = _mm512_castpd_ps(_mm512_permutex2var_pd(
+                _mm512_castps_pd(abcd_0),
+                idx_lo,
+                _mm512_castps_pd(efgh_0),
+            ));
+            let row1 = _mm512_castpd_ps(_mm512_permutex2var_pd(
+                _mm512_castps_pd(abcd_1),
+                idx_lo,
+                _mm512_castps_pd(efgh_1),
+            ));
+            let row2 = _mm512_castpd_ps(_mm512_permutex2var_pd(
+                _mm512_castps_pd(abcd_2),
+                idx_lo,
+                _mm512_castps_pd(efgh_2),
+            ));
+            let row3 = _mm512_castpd_ps(_mm512_permutex2var_pd(
+                _mm512_castps_pd(abcd_3),
+                idx_lo,
+                _mm512_castps_pd(efgh_3),
+            ));
+            let row4 = _mm512_castpd_ps(_mm512_permutex2var_pd(
+                _mm512_castps_pd(abcd_0),
+                idx_hi,
+                _mm512_castps_pd(efgh_0),
+            ));
+            let row5 = _mm512_castpd_ps(_mm512_permutex2var_pd(
+                _mm512_castps_pd(abcd_1),
+                idx_hi,
+                _mm512_castps_pd(efgh_1),
+            ));
+            let row6 = _mm512_castpd_ps(_mm512_permutex2var_pd(
+                _mm512_castps_pd(abcd_2),
+                idx_hi,
+                _mm512_castps_pd(efgh_2),
+            ));
+            let row7 = _mm512_castpd_ps(_mm512_permutex2var_pd(
+                _mm512_castps_pd(abcd_3),
+                idx_hi,
+                _mm512_castps_pd(efgh_3),
+            ));
+
+            _mm512_storeu_ps(ptr, row0);
+            _mm512_storeu_ps(ptr.add(16), row1);
+            _mm512_storeu_ps(ptr.add(32), row2);
+            _mm512_storeu_ps(ptr.add(48), row3);
+            _mm512_storeu_ps(ptr.add(64), row4);
+            _mm512_storeu_ps(ptr.add(80), row5);
+            _mm512_storeu_ps(ptr.add(96), row6);
+            _mm512_storeu_ps(ptr.add(112), row7);
+        }
+    }
+
     fn_avx!(this: F32VecAvx512, fn mul_add(mul: F32VecAvx512, add: F32VecAvx512) -> F32VecAvx512 {
         F32VecAvx512(_mm512_fmadd_ps(this.0, mul.0, add.0), this.1)
     });

@@ -110,6 +110,94 @@ impl F32SimdVec for F32VecSse42 {
         unsafe { _mm_storeu_ps(mem.as_mut_ptr(), self.0) }
     }
 
+    #[inline(always)]
+    fn store_interleaved_2(a: Self, b: Self, base: &mut [f32], offset: usize) {
+        assert!(base.len() >= offset + 2 * Self::LEN);
+        // SAFETY: we just checked that `base` has enough space.
+        unsafe {
+            let ptr = base.as_mut_ptr().add(offset);
+            // a = [a0, a1, a2, a3], b = [b0, b1, b2, b3]
+            // lo = [a0, b0, a1, b1], hi = [a2, b2, a3, b3]
+            let lo = _mm_unpacklo_ps(a.0, b.0);
+            let hi = _mm_unpackhi_ps(a.0, b.0);
+            _mm_storeu_ps(ptr, lo);
+            _mm_storeu_ps(ptr.add(4), hi);
+        }
+    }
+
+    #[inline(always)]
+    fn store_interleaved_4(a: Self, b: Self, c: Self, d: Self, base: &mut [f32], offset: usize) {
+        assert!(base.len() >= offset + 4 * Self::LEN);
+        // SAFETY: we just checked that `base` has enough space.
+        unsafe {
+            let ptr = base.as_mut_ptr().add(offset);
+            // First interleave pairs: ab and cd
+            let ab_lo = _mm_unpacklo_ps(a.0, b.0); // [a0, b0, a1, b1]
+            let ab_hi = _mm_unpackhi_ps(a.0, b.0); // [a2, b2, a3, b3]
+            let cd_lo = _mm_unpacklo_ps(c.0, d.0); // [c0, d0, c1, d1]
+            let cd_hi = _mm_unpackhi_ps(c.0, d.0); // [c2, d2, c3, d3]
+
+            // Then interleave the pairs to get final layout
+            let out0 = _mm_castpd_ps(_mm_unpacklo_pd(_mm_castps_pd(ab_lo), _mm_castps_pd(cd_lo))); // [a0, b0, c0, d0]
+            let out1 = _mm_castpd_ps(_mm_unpackhi_pd(_mm_castps_pd(ab_lo), _mm_castps_pd(cd_lo))); // [a1, b1, c1, d1]
+            let out2 = _mm_castpd_ps(_mm_unpacklo_pd(_mm_castps_pd(ab_hi), _mm_castps_pd(cd_hi))); // [a2, b2, c2, d2]
+            let out3 = _mm_castpd_ps(_mm_unpackhi_pd(_mm_castps_pd(ab_hi), _mm_castps_pd(cd_hi))); // [a3, b3, c3, d3]
+
+            _mm_storeu_ps(ptr, out0);
+            _mm_storeu_ps(ptr.add(4), out1);
+            _mm_storeu_ps(ptr.add(8), out2);
+            _mm_storeu_ps(ptr.add(12), out3);
+        }
+    }
+
+    #[inline(always)]
+    fn store_interleaved_8(
+        a: Self,
+        b: Self,
+        c: Self,
+        d: Self,
+        e: Self,
+        f: Self,
+        g: Self,
+        h: Self,
+        base: &mut [f32],
+        offset: usize,
+    ) {
+        assert!(base.len() >= offset + 8 * Self::LEN);
+        // For 4-wide vectors storing 8 interleaved, we need 32 elements output
+        // Output: [a0,b0,c0,d0,e0,f0,g0,h0, a1,b1,c1,d1,e1,f1,g1,h1, ...]
+        unsafe {
+            let ptr = base.as_mut_ptr().add(offset);
+            // Interleave abcd and efgh separately first
+            let ab_lo = _mm_unpacklo_ps(a.0, b.0);
+            let ab_hi = _mm_unpackhi_ps(a.0, b.0);
+            let cd_lo = _mm_unpacklo_ps(c.0, d.0);
+            let cd_hi = _mm_unpackhi_ps(c.0, d.0);
+            let ef_lo = _mm_unpacklo_ps(e.0, f.0);
+            let ef_hi = _mm_unpackhi_ps(e.0, f.0);
+            let gh_lo = _mm_unpacklo_ps(g.0, h.0);
+            let gh_hi = _mm_unpackhi_ps(g.0, h.0);
+
+            let abcd_0 = _mm_castpd_ps(_mm_unpacklo_pd(_mm_castps_pd(ab_lo), _mm_castps_pd(cd_lo)));
+            let abcd_1 = _mm_castpd_ps(_mm_unpackhi_pd(_mm_castps_pd(ab_lo), _mm_castps_pd(cd_lo)));
+            let abcd_2 = _mm_castpd_ps(_mm_unpacklo_pd(_mm_castps_pd(ab_hi), _mm_castps_pd(cd_hi)));
+            let abcd_3 = _mm_castpd_ps(_mm_unpackhi_pd(_mm_castps_pd(ab_hi), _mm_castps_pd(cd_hi)));
+            let efgh_0 = _mm_castpd_ps(_mm_unpacklo_pd(_mm_castps_pd(ef_lo), _mm_castps_pd(gh_lo)));
+            let efgh_1 = _mm_castpd_ps(_mm_unpackhi_pd(_mm_castps_pd(ef_lo), _mm_castps_pd(gh_lo)));
+            let efgh_2 = _mm_castpd_ps(_mm_unpacklo_pd(_mm_castps_pd(ef_hi), _mm_castps_pd(gh_hi)));
+            let efgh_3 = _mm_castpd_ps(_mm_unpackhi_pd(_mm_castps_pd(ef_hi), _mm_castps_pd(gh_hi)));
+
+            _mm_storeu_ps(ptr, abcd_0);
+            _mm_storeu_ps(ptr.add(4), efgh_0);
+            _mm_storeu_ps(ptr.add(8), abcd_1);
+            _mm_storeu_ps(ptr.add(12), efgh_1);
+            _mm_storeu_ps(ptr.add(16), abcd_2);
+            _mm_storeu_ps(ptr.add(20), efgh_2);
+            _mm_storeu_ps(ptr.add(24), abcd_3);
+            _mm_storeu_ps(ptr.add(28), efgh_3);
+        }
+    }
+
     fn_sse42!(this: F32VecSse42, fn mul_add(mul: F32VecSse42, add: F32VecSse42) -> F32VecSse42 {
         this * mul + add
     });
