@@ -75,7 +75,8 @@ impl ChannelInfo {
     }
 
     fn is_shift_in_range(&self, min: usize, max: usize) -> bool {
-        assert!(min <= max);
+        // This might be called with max < min, in which case we just return false.
+        // This matches libjxl behaviour.
         self.shift.is_some_and(|(a, b)| {
             let shift = a.min(b);
             min <= shift && shift <= max

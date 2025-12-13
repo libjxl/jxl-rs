@@ -403,42 +403,51 @@ impl RenderPipeline for LowMemoryRenderPipeline {
         let Stage::Extend(e) = &self.shared.stages[e] else {
             unreachable!("extend stage is not an extend stage");
         };
+        let frame_end = (
+            e.frame_origin.0 + self.shared.input_size.0 as isize,
+            e.frame_origin.1 + self.shared.input_size.1 as isize,
+        );
         // Split the full image area in 4 strips: left and right of the frame, and above and below.
         // We divide each part further in strips of width self.shared.chunk_size.
         let mut strips = vec![];
-        if e.frame_origin.0 > 0 {
-            let xend = e.frame_origin.0 as usize;
+        // Above (including left and right)
+        if e.frame_origin.1 > 0 {
+            let xend = e.image_size.0;
+            let yend = (e.frame_origin.1 as usize).min(e.image_size.1);
             for x in (0..xend).step_by(self.shared.chunk_size) {
                 let xe = (x + self.shared.chunk_size).min(xend);
-                strips.push((x..xe, 0..e.image_size.1));
+                strips.push((x..xe, 0..yend));
             }
         }
-        if e.frame_origin.1 > 0 {
-            let xstart = e.frame_origin.0.max(0) as usize;
-            let xend = ((e.frame_origin.0 + self.shared.input_size.0 as isize) as usize)
-                .min(e.image_size.0);
-            for x in (xstart..xend).step_by(self.shared.chunk_size) {
-                let xe = (x + self.shared.chunk_size).min(xend);
-                strips.push((x..xe, 0..e.frame_origin.1 as usize));
-            }
-        }
-        if e.frame_origin.1 + (self.shared.input_size.1 as isize) < e.image_size.1 as isize {
-            let ystart = (e.frame_origin.1 + (self.shared.input_size.1 as isize)).max(0) as usize;
+        // Below
+        if frame_end.1 < e.image_size.1 as isize {
+            let ystart = frame_end.1.max(0) as usize;
             let yend = e.image_size.1;
-            let xstart = e.frame_origin.0.max(0) as usize;
-            let xend = ((e.frame_origin.0 + self.shared.input_size.0 as isize) as usize)
-                .min(e.image_size.0);
-            for x in (xstart..xend).step_by(self.shared.chunk_size) {
+            let xend = e.image_size.0;
+            for x in (0..xend).step_by(self.shared.chunk_size) {
                 let xe = (x + self.shared.chunk_size).min(xend);
                 strips.push((x..xe, ystart..yend));
             }
         }
-        if e.frame_origin.0 + (self.shared.input_size.0 as isize) < e.image_size.0 as isize {
-            let xstart = (e.frame_origin.0 + (self.shared.input_size.0 as isize)).max(0) as usize;
+        // Left
+        if e.frame_origin.0 > 0 {
+            let ystart = e.frame_origin.1.max(0) as usize;
+            let yend = (frame_end.1 as usize).min(e.image_size.1);
+            let xend = (e.frame_origin.0 as usize).min(e.image_size.0);
+            for x in (0..xend).step_by(self.shared.chunk_size) {
+                let xe = (x + self.shared.chunk_size).min(xend);
+                strips.push((x..xe, ystart..yend));
+            }
+        }
+        // Right
+        if frame_end.0 < e.image_size.0 as isize {
+            let xstart = frame_end.0.max(0) as usize;
             let xend = e.image_size.0;
+            let ystart = e.frame_origin.1.max(0) as usize;
+            let yend = (frame_end.1 as usize).min(e.image_size.1);
             for x in (xstart..xend).step_by(self.shared.chunk_size) {
                 let xe = (x + self.shared.chunk_size).min(xend);
-                strips.push((x..xe, 0..e.image_size.1));
+                strips.push((x..xe, ystart..yend));
             }
         }
         let full_image_size = e.image_size;
@@ -447,6 +456,9 @@ impl RenderPipeline for LowMemoryRenderPipeline {
                 origin: (xrange.start, yrange.start),
                 size: (xrange.clone().count(), yrange.clone().count()),
             };
+            if rect_to_render.size.0 == 0 || rect_to_render.size.1 == 0 {
+                continue;
+            }
             let mut local_buffers = buffer_splitter.get_local_buffers(
                 &self.save_buffer_info,
                 rect_to_render,
