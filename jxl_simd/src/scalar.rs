@@ -103,6 +103,11 @@ impl F32SimdVec for f32 {
     }
 
     #[inline(always)]
+    fn min(self, other: Self) -> Self {
+        self.min(other)
+    }
+
+    #[inline(always)]
     fn gt(self, other: Self) -> bool {
         self > other
     }

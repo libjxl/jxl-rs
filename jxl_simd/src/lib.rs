@@ -116,6 +116,8 @@ pub trait F32SimdVec:
 
     fn max(self, other: Self) -> Self;
 
+    fn min(self, other: Self) -> Self;
+
     fn gt(self, other: Self) -> <<Self as F32SimdVec>::Descriptor as SimdDescriptor>::Mask;
 
     fn as_i32(self) -> <<Self as F32SimdVec>::Descriptor as SimdDescriptor>::I32Vec;
@@ -476,6 +478,7 @@ mod test {
 
     test_instruction!(abs, |a: Floats| { a.abs() });
     test_instruction!(max, |a: Floats, b: Floats| { a.max(b) });
+    test_instruction!(min, |a: Floats, b: Floats| { a.min(b) });
 
     // Test that the call method works, compiles, and can capture arguments
     fn test_call<D: SimdDescriptor>(d: D) {

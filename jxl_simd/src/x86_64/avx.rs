@@ -167,6 +167,10 @@ impl F32SimdVec for F32VecAvx {
         F32VecAvx(_mm256_max_ps(this.0, other.0), this.1)
     });
 
+    fn_avx!(this: F32VecAvx, fn min(other: F32VecAvx) -> F32VecAvx {
+        F32VecAvx(_mm256_min_ps(this.0, other.0), this.1)
+    });
+
     fn_avx!(this: F32VecAvx, fn gt(other: F32VecAvx) -> MaskAvx {
         MaskAvx(_mm256_cmp_ps::<{_CMP_GT_OQ}>(this.0, other.0), this.1)
     });

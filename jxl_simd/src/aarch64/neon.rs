@@ -219,6 +219,10 @@ impl F32SimdVec for F32VecNeon {
             F32VecNeon(vmaxq_f32(this.0, other.0), this.1)
         }
 
+        fn min(this: F32VecNeon, other: F32VecNeon) -> F32VecNeon {
+            F32VecNeon(vminq_f32(this.0, other.0), this.1)
+        }
+
         fn gt(this: F32VecNeon, other: F32VecNeon) -> MaskNeon {
             MaskNeon(vcgtq_f32(this.0, other.0), this.1)
         }

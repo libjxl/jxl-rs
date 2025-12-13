@@ -171,6 +171,10 @@ impl F32SimdVec for F32VecSse42 {
         F32VecSse42(_mm_max_ps(this.0, other.0), this.1)
     });
 
+    fn_sse42!(this: F32VecSse42, fn min(other: F32VecSse42) -> F32VecSse42 {
+        F32VecSse42(_mm_min_ps(this.0, other.0), this.1)
+    });
+
     fn_sse42!(this: F32VecSse42, fn gt(other: F32VecSse42) -> MaskSse42 {
         MaskSse42(_mm_cmpgt_ps(this.0, other.0), this.1)
     });
