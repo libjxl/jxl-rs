@@ -362,7 +362,11 @@ impl Frame {
                 ))?;
         }
 
-        let num_regular_output_buffers = frame_header.num_extra_channels as usize + 1;
+        // Calculate actual number of regular output buffers based on pixel format,
+        // not just frame header. The API might not provide buffers for all extra channels
+        // (e.g., rgba8() includes alpha in color output but doesn't output it separately).
+        let num_regular_output_buffers = (if pixel_format.color_data_format.is_some() { 1 } else { 0 })
+            + pixel_format.extra_channel_format.iter().filter(|f| f.is_some()).count();
         assert_eq!(
             pixel_format.extra_channel_format.len(),
             frame_header.num_extra_channels as usize

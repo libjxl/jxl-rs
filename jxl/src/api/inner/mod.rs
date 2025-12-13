@@ -10,7 +10,10 @@ use crate::{
     error::{Error, Result},
 };
 
-use super::{JxlBasicInfo, JxlColorProfile, JxlDecoderOptions, JxlPixelFormat};
+use super::{
+    JxlBasicInfo, JxlColorProfile, JxlDecoderOptions, JxlOutputBuffer, JxlPixelFormat,
+    ProcessingResult,
+};
 use box_parser::BoxParser;
 use codestream_parser::CodestreamParser;
 
@@ -18,11 +21,31 @@ mod box_parser;
 mod codestream_parser;
 mod process;
 
-/// Low-level, less-type-safe API.
+/// The current state of the decoder.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DecoderState {
+    /// Initial state, waiting for image header.
+    Initialized,
+    /// Image header decoded, waiting for frame header.
+    WithImageInfo,
+    /// Frame header decoded, ready to decode frame data.
+    WithFrameInfo,
+}
+
+/// FFI-friendly decoder API without typestate constraints.
+///
+/// This decoder uses runtime state checking instead of compile-time typestate,
+/// making it easier to use from C/C++ FFI bindings.
+///
+/// State transitions:
+/// - `Initialized` → (process) → `WithImageInfo`
+/// - `WithImageInfo` → (process) → `WithFrameInfo`
+/// - `WithFrameInfo` → (decode_frame/skip_frame) → `WithImageInfo`
 pub struct JxlDecoderInner {
     options: JxlDecoderOptions,
     box_parser: BoxParser,
     codestream_parser: CodestreamParser,
+    state: DecoderState,
 }
 
 impl JxlDecoderInner {
@@ -32,7 +55,13 @@ impl JxlDecoderInner {
             options,
             box_parser: BoxParser::new(),
             codestream_parser: CodestreamParser::new(),
+            state: DecoderState::Initialized,
         }
+    }
+
+    /// Returns the current decoder state.
+    pub fn state(&self) -> DecoderState {
+        self.state
     }
 
     #[cfg(test)]
@@ -102,14 +131,121 @@ impl JxlDecoderInner {
     }
 
     /// Rewinds a decoder to the start of the file, allowing past frames to be displayed again.
+    ///
+    /// This fully resets the decoder. For animation loop playback, consider using
+    /// [`rewind_for_animation`](Self::rewind_for_animation) instead.
+    ///
+    /// After calling this, the caller should provide input from the beginning of the file.
     pub fn rewind(&mut self) {
         // TODO(veluca): keep track of frame offsets for skipping.
         self.box_parser = BoxParser::new();
         self.codestream_parser = CodestreamParser::new();
+        self.state = DecoderState::Initialized;
+    }
+
+    /// Rewinds for animation loop replay, keeping pixel_format setting.
+    ///
+    /// This resets the decoder but preserves the pixel_format configuration,
+    /// so the caller doesn't need to re-set it after rewinding.
+    ///
+    /// After calling this, the caller should provide input from the beginning of the file.
+    /// Headers will be re-parsed, then frames can be decoded again.
+    ///
+    /// Returns `true` if pixel_format was preserved, `false` if none was set.
+    pub fn rewind_for_animation(&mut self) -> bool {
+        self.box_parser = BoxParser::new();
+        let had_pixel_format = self.codestream_parser.rewind_for_animation().is_some();
+        self.state = DecoderState::Initialized;
+        had_pixel_format
     }
 
     pub fn has_more_frames(&self) -> bool {
         self.codestream_parser.has_more_frames
+    }
+
+    /// Process input, advancing the decoder state.
+    ///
+    /// The input slice is consumed as needed. After this call, the caller can check
+    /// how many bytes were consumed by examining the slice length change.
+    ///
+    /// Returns `Ok(true)` when the state has advanced, `Ok(false)` when more input is needed.
+    pub fn process_with_input(&mut self, input: &mut &[u8]) -> Result<bool> {
+        if self.state == DecoderState::WithFrameInfo {
+            return Err(Error::InvalidDecoderState(
+                "Use decode_frame() in WithFrameInfo state",
+            ));
+        }
+
+        match self.process(input, None)? {
+            ProcessingResult::Complete { .. } => {
+                self.state = match self.state {
+                    DecoderState::Initialized => DecoderState::WithImageInfo,
+                    DecoderState::WithImageInfo => DecoderState::WithFrameInfo,
+                    DecoderState::WithFrameInfo => unreachable!(),
+                };
+                Ok(true)
+            }
+            ProcessingResult::NeedsMoreInput { .. } => Ok(false),
+        }
+    }
+
+    /// Decode the current frame from the provided input.
+    ///
+    /// Must be called when state is `WithFrameInfo`. After successful decoding,
+    /// state transitions back to `WithImageInfo`.
+    ///
+    /// The input slice is consumed as needed. After this call, the caller can check
+    /// how many bytes were consumed by examining the slice length change.
+    pub fn decode_frame(&mut self, input: &mut &[u8], buffer: &mut [u8]) -> Result<bool> {
+        if self.state != DecoderState::WithFrameInfo {
+            return Err(Error::InvalidDecoderState(
+                "decode_frame() requires WithFrameInfo state",
+            ));
+        }
+
+        let frame_header = self
+            .frame_header()
+            .ok_or(Error::InvalidDecoderState("Frame header not available"))?;
+        let (width, height) = frame_header.size;
+        let pixel_format = self
+            .current_pixel_format()
+            .ok_or(Error::InvalidDecoderState("Pixel format not set"))?;
+        let bytes_per_pixel = pixel_format
+            .bytes_per_pixel()
+            .ok_or(Error::InvalidDecoderState(
+                "Pixel format has no color output",
+            ))?;
+        let bytes_per_row = width * bytes_per_pixel;
+
+        let output_buffer = JxlOutputBuffer::new(buffer, height, bytes_per_row);
+
+        match self.process(input, Some(&mut [output_buffer]))? {
+            ProcessingResult::Complete { .. } => {
+                self.state = DecoderState::WithImageInfo;
+                Ok(true)
+            }
+            ProcessingResult::NeedsMoreInput { .. } => Ok(false),
+        }
+    }
+
+    /// Skip the current frame.
+    ///
+    /// The input slice is consumed as needed. After this call, the caller can check
+    /// how many bytes were consumed by examining the slice length change.
+    pub fn skip_frame(&mut self, input: &mut &[u8]) -> Result<bool> {
+        if self.state != DecoderState::WithFrameInfo {
+            return Err(Error::InvalidDecoderState(
+                "skip_frame() requires WithFrameInfo state",
+            ));
+        }
+
+        match self.process(input, None)? {
+            ProcessingResult::Complete { .. } => {
+                self.state = DecoderState::WithImageInfo;
+                Ok(true)
+            }
+            ProcessingResult::NeedsMoreInput { .. } => Ok(false),
+        }
     }
 
     #[cfg(test)]

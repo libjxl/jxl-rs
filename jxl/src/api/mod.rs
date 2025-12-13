@@ -71,3 +71,36 @@ pub struct JxlBasicInfo {
     pub tone_mapping: ToneMapping,
     pub preview_size: Option<(usize, usize)>,
 }
+
+impl JxlBasicInfo {
+    /// Returns the required buffer size in bytes for the given pixel format.
+    ///
+    /// Returns `None` if the pixel format ignores color output.
+    pub fn buffer_size(&self, pixel_format: &JxlPixelFormat) -> Option<usize> {
+        let bytes_per_pixel = pixel_format.bytes_per_pixel()?;
+        let (width, height) = self.size;
+        Some(width * height * bytes_per_pixel)
+    }
+
+    /// Returns the number of extra channels in the image.
+    pub fn num_extra_channels(&self) -> usize {
+        self.extra_channels.len()
+    }
+
+    /// Returns true if the image has an alpha channel.
+    pub fn has_alpha(&self) -> bool {
+        use crate::headers::extra_channels::ExtraChannel;
+        self.extra_channels
+            .iter()
+            .any(|ec| matches!(ec.ec_type, ExtraChannel::Alpha))
+    }
+
+    /// Returns animation timing info: (loop_count, tps_numerator, tps_denominator).
+    ///
+    /// Returns `None` for non-animated images.
+    pub fn animation_timing(&self) -> Option<(u32, u32, u32)> {
+        self.animation
+            .as_ref()
+            .map(|a| (a.num_loops, a.tps_numerator, a.tps_denominator))
+    }
+}

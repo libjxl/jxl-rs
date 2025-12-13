@@ -33,7 +33,12 @@ impl SaveStage {
         full_image_size: (usize, usize),
         frame_origin: (isize, isize),
     ) -> Result<()> {
-        let Some(buf) = buffers[self.output_buffer_index].as_mut() else {
+        // Skip if buffer index is out of range (e.g., for reference frame buffers
+        // that aren't provided by the caller).
+        let Some(buf) = buffers
+            .get_mut(self.output_buffer_index)
+            .and_then(|b| b.as_mut())
+        else {
             return Ok(());
         };
 
@@ -72,15 +77,30 @@ impl SaveStage {
 
         let save_size = (save_end.0 - save_start.0, save_end.1 - save_start.1);
 
+        // Use fast path for identity orientation
         let num_fast = match self.orientation {
-            Orientation::Identity => identity::store(
-                data,
-                frame_y,
-                save_start.0..save_end.0,
-                buf,
-                relative_y,
-                self.data_format,
-            ),
+            Orientation::Identity => {
+                if self.fill_opaque_alpha {
+                    // Use RGB->RGBA fast path with opaque alpha fill
+                    identity::store_rgb_as_rgba(
+                        data,
+                        frame_y,
+                        save_start.0..save_end.0,
+                        buf,
+                        relative_y,
+                        self.data_format,
+                    )
+                } else {
+                    identity::store(
+                        data,
+                        frame_y,
+                        save_start.0..save_end.0,
+                        buf,
+                        relative_y,
+                        self.data_format,
+                    )
+                }
+            }
             _ => 0,
         };
 
@@ -98,8 +118,8 @@ impl SaveStage {
             };
         }
 
+        let nc = self.output_channels();
         for (c, d) in data.iter().enumerate() {
-            let nc = self.channels.len();
             let (x0, y0) = self.orientation.display_pixel((0, relative_y), save_size);
             let (x1, y1) = self.orientation.display_pixel((1, relative_y), save_size);
             let x0 = x0 as isize;
@@ -136,6 +156,50 @@ impl SaveStage {
                 }
             }
         }
+
+        // Fill opaque alpha if needed (when RGBA requested but image has no alpha)
+        // Skip if fast path already handled everything (including alpha)
+        if self.fill_opaque_alpha && num_fast < save_end.0 - save_start.0 {
+            let alpha_c = self.channels.len(); // alpha is the last channel
+            let (x0, y0) = self.orientation.display_pixel((0, relative_y), save_size);
+            let (x1, y1) = self.orientation.display_pixel((1, relative_y), save_size);
+            let x0 = x0 as isize;
+            let y0 = y0 as isize;
+            let dx = x1 as isize - x0;
+            let dy = y1 as isize - y0;
+            match self.data_format {
+                JxlDataFormat::U8 { .. } => {
+                    for ix in (save_start.0..save_end.0).skip(num_fast) {
+                        let y = (y0 + (dy * (ix - save_start.0) as isize)) as usize;
+                        let x = (x0 + (dx * (ix - save_start.0) as isize)) as usize;
+                        write_pixel!(255u8, Endianness::LittleEndian, y, x * nc + alpha_c);
+                    }
+                }
+                JxlDataFormat::U16 { endianness, .. } => {
+                    for ix in (save_start.0..save_end.0).skip(num_fast) {
+                        let y = (y0 + (dy * (ix - save_start.0) as isize)) as usize;
+                        let x = (x0 + (dx * (ix - save_start.0) as isize)) as usize;
+                        write_pixel!(65535u16, endianness, y, (x * nc + alpha_c) * 2);
+                    }
+                }
+                JxlDataFormat::F16 { endianness, .. } => {
+                    use crate::util::f16;
+                    for ix in (save_start.0..save_end.0).skip(num_fast) {
+                        let y = (y0 + (dy * (ix - save_start.0) as isize)) as usize;
+                        let x = (x0 + (dx * (ix - save_start.0) as isize)) as usize;
+                        write_pixel!(f16::from_f64(1.0), endianness, y, (x * nc + alpha_c) * 2);
+                    }
+                }
+                JxlDataFormat::F32 { endianness, .. } => {
+                    for ix in (save_start.0..save_end.0).skip(num_fast) {
+                        let y = (y0 + (dy * (ix - save_start.0) as isize)) as usize;
+                        let x = (x0 + (dx * (ix - save_start.0) as isize)) as usize;
+                        write_pixel!(1.0f32, endianness, y, (x * nc + alpha_c) * 4);
+                    }
+                }
+            }
+        }
+
         Ok(())
     }
 }

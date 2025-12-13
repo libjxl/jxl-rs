@@ -1138,6 +1138,17 @@ impl JxlColorProfile {
                 .map(Cow::Owned),
         }
     }
+
+    /// Returns the embedded ICC profile bytes if this is an ICC profile.
+    ///
+    /// Returns `None` for simple color encodings. Use `as_icc()` to get
+    /// an ICC profile for any color encoding (which may involve generation).
+    pub fn icc_bytes(&self) -> Option<&[u8]> {
+        match self {
+            Self::Icc(x) => Some(x.as_slice()),
+            Self::Simple(_) => None,
+        }
+    }
 }
 
 impl fmt::Display for JxlColorProfile {

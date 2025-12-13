@@ -122,11 +122,12 @@ impl RenderPipelineInPlaceStage for BlendingStage {
 
         for (c, fg_ptr) in fg.iter_mut().enumerate().take(3) {
             if self.reference_frames[self.blending_info.source as usize].is_some() {
-                *fg_ptr = &(self.reference_frames[self.blending_info.source as usize]
+                let ref_frame = &self.reference_frames[self.blending_info.source as usize]
                     .as_ref()
                     .unwrap()
-                    .frame[c]
-                    .row(fg_y0)[fg_x0..fg_x1]);
+                    .frame[c];
+                let row_data = ref_frame.row(fg_y0);
+                *fg_ptr = &row_data[fg_x0..fg_x1];
             }
         }
         for i in 0..num_ec {

@@ -129,6 +129,26 @@ impl CodestreamParser {
             .set_use_simple_pipeline(u);
     }
 
+    /// Resets for animation loop replay, keeping pixel_format setting.
+    ///
+    /// This resets the decoder but preserves the pixel_format, so the caller
+    /// doesn't need to re-configure it. Headers will be re-parsed when
+    /// input is provided again.
+    ///
+    /// Returns the pixel_format that was set (if any), which will be
+    /// restored after header re-parsing.
+    pub(super) fn rewind_for_animation(&mut self) -> Option<JxlPixelFormat> {
+        let pixel_format = self.pixel_format.take();
+
+        // Full reset
+        *self = Self::new();
+
+        // Keep the pixel format setting
+        self.pixel_format = pixel_format.clone();
+
+        pixel_format
+    }
+
     pub(super) fn process(
         &mut self,
         box_parser: &mut BoxParser,
