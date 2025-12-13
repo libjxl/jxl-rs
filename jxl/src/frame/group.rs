@@ -28,6 +28,8 @@ const LF_BUFFER_SIZE: usize = 32 * 32;
 pub struct VarDctBuffers {
     pub scratch: Vec<f32>,
     pub transform_buffer: [Vec<f32>; 3],
+    /// Coefficient storage for single-pass decoding (when hf_coefficients is None)
+    pub coeffs_storage: Vec<i32>,
 }
 
 impl VarDctBuffers {
@@ -39,6 +41,7 @@ impl VarDctBuffers {
                 vec![0.0; MAX_COEFF_AREA],
                 vec![0.0; MAX_COEFF_AREA],
             ],
+            coeffs_storage: vec![0; 3 * GROUP_DIM * GROUP_DIM],
         }
     }
 
@@ -48,6 +51,7 @@ impl VarDctBuffers {
         for buf in &mut self.transform_buffer {
             buf.fill(0.0);
         }
+        self.coeffs_storage.fill(0);
     }
 }
 
@@ -363,7 +367,6 @@ pub fn decode_vardct_group(
     let quant_lf_rect = quant_lf.get_rect(block_group_rect);
     let block_context_map = lf_global.block_context_map.as_mut().unwrap();
     let context_offset = histogram_index * block_context_map.num_ac_contexts();
-    let mut coeffs_storage;
     let coeffs = match hf_global.hf_coefficients.as_mut() {
         Some(hf_coefficients) => [
             hf_coefficients.0.row_mut(group),
@@ -371,8 +374,8 @@ pub fn decode_vardct_group(
             hf_coefficients.2.row_mut(group),
         ],
         None => {
-            coeffs_storage = vec![0; 3 * GROUP_DIM * GROUP_DIM];
-            let (coeffs_x, coeffs_y_b) = coeffs_storage.split_at_mut(GROUP_DIM * GROUP_DIM);
+            // Use pooled buffer (already reset to zero in buffers.reset() above)
+            let (coeffs_x, coeffs_y_b) = buffers.coeffs_storage.split_at_mut(GROUP_DIM * GROUP_DIM);
             let (coeffs_y, coeffs_b) = coeffs_y_b.split_at_mut(GROUP_DIM * GROUP_DIM);
             [coeffs_x, coeffs_y, coeffs_b]
         }
