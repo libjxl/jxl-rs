@@ -62,10 +62,12 @@ impl CodestreamParser {
             self.ready_section_data -= s.len;
             self.available_sections.push(s);
         }
+        let data_for_next_section = self
+            .sections
+            .front()
+            .map(|s| s.len - self.ready_section_data);
         if self.available_sections.is_empty() {
-            return Ok(Some(
-                self.sections.front().unwrap().len - self.ready_section_data,
-            ));
+            return Ok(Some(data_for_next_section.unwrap()));
         }
         let frame = self.frame.as_mut().unwrap();
         let frame_header = frame.header();
@@ -97,6 +99,8 @@ impl CodestreamParser {
             for _ in 0..frame_header.num_groups() {
                 sorted_sections_for_each_group.push(vec![]);
             }
+
+            let mut can_process_section = false;
 
             loop {
                 let initial_sz = self.available_sections.len();
@@ -139,6 +143,13 @@ impl CodestreamParser {
                 if self.available_sections.len() == initial_sz {
                     break;
                 }
+                can_process_section = true;
+            }
+
+            // If we didn't find a section that we can process, ask the caller to provide
+            // data to finish up the next section in the file.
+            if !can_process_section {
+                return Ok(Some(data_for_next_section.unwrap()));
             }
 
             if let Some(lf_global) = lf_global_section {
