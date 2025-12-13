@@ -53,6 +53,42 @@ impl F32SimdVec for f32 {
     }
 
     #[inline(always)]
+    fn store_interleaved_2(a: Self, b: Self, dest: &mut [f32]) {
+        dest[0] = a;
+        dest[1] = b;
+    }
+
+    #[inline(always)]
+    fn store_interleaved_4(a: Self, b: Self, c: Self, d: Self, dest: &mut [f32]) {
+        dest[0] = a;
+        dest[1] = b;
+        dest[2] = c;
+        dest[3] = d;
+    }
+
+    #[inline(always)]
+    fn store_interleaved_8(
+        a: Self,
+        b: Self,
+        c: Self,
+        d: Self,
+        e: Self,
+        f: Self,
+        g: Self,
+        h: Self,
+        dest: &mut [f32],
+    ) {
+        dest[0] = a;
+        dest[1] = b;
+        dest[2] = c;
+        dest[3] = d;
+        dest[4] = e;
+        dest[5] = f;
+        dest[6] = g;
+        dest[7] = h;
+    }
+
+    #[inline(always)]
     fn mul_add(self, mul: Self, add: Self) -> Self {
         (self * mul) + add
     }
@@ -100,6 +136,11 @@ impl F32SimdVec for f32 {
     #[inline(always)]
     fn max(self, other: Self) -> Self {
         self.max(other)
+    }
+
+    #[inline(always)]
+    fn min(self, other: Self) -> Self {
+        self.min(other)
     }
 
     #[inline(always)]
