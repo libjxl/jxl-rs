@@ -711,7 +711,7 @@ impl Splines {
                 DESIRED_RENDERING_DISTANCE,
                 |p, d| points_to_draw.push((p, d)),
             );
-            let length = (points_to_draw.len() - 2) as f32 * DESIRED_RENDERING_DISTANCE
+            let length = (points_to_draw.len() as isize - 2) as f32 * DESIRED_RENDERING_DISTANCE
                 + points_to_draw[points_to_draw.len() - 1].1;
             if length <= 0.0 {
                 continue;
