@@ -330,7 +330,7 @@ impl Frame {
                 frame_header.size(),
                 &lf_global.color_correlation_params.unwrap_or_default(),
                 decoder_state.high_precision,
-            ))?
+            )?)?
         }
 
         if frame_header.upsampling > 1 {
