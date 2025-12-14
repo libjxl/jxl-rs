@@ -10,6 +10,7 @@ use crate::{
     image::DataTypeTag,
 };
 
+#[derive(Debug)]
 pub struct SaveStage {
     pub(super) channels: Vec<usize>,
     pub(super) orientation: Orientation,
