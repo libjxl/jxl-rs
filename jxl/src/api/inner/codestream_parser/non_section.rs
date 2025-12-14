@@ -262,6 +262,15 @@ impl CodestreamParser {
                 frame_header.size(),
                 frame_header.num_extra_channels as usize,
             )?;
+
+            // Initialize storage buffers for available sections.
+            self.lf_global_section = None;
+            self.lf_sections.clear();
+            self.hf_global_section = None;
+            self.hf_sections = (0..frame_header.num_groups())
+                .map(|_| (0..frame_header.passes.num_passes).map(|_| None).collect())
+                .collect();
+
             self.frame_header = Some(frame_header);
             let bits = br.total_bits_read();
             self.non_section_buf.consume(bits / 8);
@@ -361,7 +370,6 @@ impl CodestreamParser {
 
         self.section_state =
             SectionState::new(frame.header().num_lf_groups(), frame.header().num_groups());
-        assert!(self.available_sections.is_empty());
 
         self.frame = Some(frame);
 

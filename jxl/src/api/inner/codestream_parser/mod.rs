@@ -66,7 +66,13 @@ pub(super) struct CodestreamParser {
     saved_file_header: Option<crate::headers::FileHeader>,
 
     section_state: SectionState,
-    available_sections: Vec<SectionBuffer>,
+
+    // Or only section if in single section special case.
+    lf_global_section: Option<SectionBuffer>,
+    lf_sections: Vec<SectionBuffer>,
+    hf_global_section: Option<SectionBuffer>,
+    // indexed by group, then by pass.
+    hf_sections: Vec<Vec<Option<SectionBuffer>>>,
 
     pub(super) has_more_frames: bool,
 
@@ -99,7 +105,10 @@ impl CodestreamParser {
             preview_done: false,
             saved_file_header: None,
             section_state: SectionState::new(0, 0),
-            available_sections: vec![],
+            lf_global_section: None,
+            lf_sections: vec![],
+            hf_global_section: None,
+            hf_sections: vec![],
             has_more_frames: true,
             #[cfg(test)]
             frame_callback: None,
