@@ -652,8 +652,7 @@ pub(crate) mod tests {
             }
         };
 
-        // Set RGB format with no extra channels - this means num_api_buffers = 1
-        // Reference frame save stages will target indices beyond this
+        // Set RGB format with no extra channels
         let rgb_format = JxlPixelFormat {
             color_type: JxlColorType::Rgb,
             color_data_format: Some(JxlDataFormat::f32()),
