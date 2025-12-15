@@ -55,6 +55,9 @@ pub struct LowMemoryRenderPipeline {
     downsampling_for_stage: Vec<(usize, usize)>,
     // Local states of each stage, if any.
     local_states: Vec<Option<Box<dyn Any>>>,
+    // Pre-filled opaque alpha buffers for stages that need fill_opaque_alpha.
+    // Indexed by stage index; None if stage doesn't need alpha fill.
+    opaque_alpha_buffers: Vec<Option<RowBuffer>>,
 }
 
 impl LowMemoryRenderPipeline {
@@ -274,7 +277,7 @@ impl RenderPipeline for LowMemoryRenderPipeline {
                     let info = SaveStageBufferInfo {
                         downsample: ci.downsample,
                         orientation: s.orientation,
-                        byte_size: s.data_format.bytes_per_sample() * s.channels.len(),
+                        byte_size: s.data_format.bytes_per_sample() * s.output_channels(),
                         after_extend: shared.extend_stage_index.is_some_and(|e| i > e),
                     };
                     while save_buffer_info.len() <= s.output_buffer_index {
@@ -307,7 +310,7 @@ impl RenderPipeline for LowMemoryRenderPipeline {
 
         assert!(border_pixels_per_stage[0].0 <= MAX_BORDER);
 
-        let downsampling_for_stage = shared
+        let downsampling_for_stage: Vec<_> = shared
             .stages
             .iter()
             .zip(shared.channel_info.iter())
@@ -328,6 +331,25 @@ impl RenderPipeline for LowMemoryRenderPipeline {
             })
             .collect();
 
+        // Create opaque alpha buffers for save stages that need fill_opaque_alpha
+        let mut opaque_alpha_buffers = vec![];
+        for (i, stage) in shared.stages.iter().enumerate() {
+            if let Stage::Save(s) = stage {
+                if s.fill_opaque_alpha {
+                    let (dx, _dy) = downsampling_for_stage[i];
+                    let row_len = shared.chunk_size >> dx;
+                    let fill_pattern = s.data_format.opaque_alpha_bytes();
+                    let buf =
+                        RowBuffer::new_filled(s.data_format.data_type(), row_len, &fill_pattern)?;
+                    opaque_alpha_buffers.push(Some(buf));
+                } else {
+                    opaque_alpha_buffers.push(None);
+                }
+            } else {
+                opaque_alpha_buffers.push(None);
+            }
+        }
+
         Ok(Self {
             input_buffers,
             stage_input_buffer_index,
@@ -344,6 +366,7 @@ impl RenderPipeline for LowMemoryRenderPipeline {
                 .collect::<Result<_>>()?,
             shared,
             downsampling_for_stage,
+            opaque_alpha_buffers,
         })
     }
 

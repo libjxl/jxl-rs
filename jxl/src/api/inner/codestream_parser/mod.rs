@@ -138,6 +138,14 @@ impl CodestreamParser {
             .set_use_simple_pipeline(u);
     }
 
+    /// Rewinds for animation loop replay, keeping pixel_format setting.
+    pub(super) fn rewind(&mut self) -> Option<JxlPixelFormat> {
+        let pixel_format = self.pixel_format.take();
+        *self = Self::new();
+        self.pixel_format = pixel_format.clone();
+        pixel_format
+    }
+
     pub(super) fn process(
         &mut self,
         box_parser: &mut BoxParser,
