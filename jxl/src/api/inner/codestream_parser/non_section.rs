@@ -202,24 +202,27 @@ impl CodestreamParser {
             };
             self.embedded_color_profile = Some(embedded_color_profile);
             self.output_color_profile = Some(output_color_profile);
-            self.pixel_format = Some(JxlPixelFormat {
-                color_type: if file_header.image_metadata.color_encoding.color_space
-                    == ColorSpace::Gray
-                {
-                    JxlColorType::Grayscale
-                } else {
-                    JxlColorType::Rgb
-                },
-                color_data_format: Some(JxlDataFormat::F32 {
-                    endianness: Endianness::native(),
-                }),
-                extra_channel_format: vec![
-                    Some(JxlDataFormat::F32 {
-                        endianness: Endianness::native()
-                    });
-                    file_header.image_metadata.extra_channel_info.len()
-                ],
-            });
+            // Only set default pixel_format if not already configured (e.g. via rewind)
+            if self.pixel_format.is_none() {
+                self.pixel_format = Some(JxlPixelFormat {
+                    color_type: if file_header.image_metadata.color_encoding.color_space
+                        == ColorSpace::Gray
+                    {
+                        JxlColorType::Grayscale
+                    } else {
+                        JxlColorType::Rgb
+                    },
+                    color_data_format: Some(JxlDataFormat::F32 {
+                        endianness: Endianness::native(),
+                    }),
+                    extra_channel_format: vec![
+                        Some(JxlDataFormat::F32 {
+                            endianness: Endianness::native()
+                        });
+                        file_header.image_metadata.extra_channel_info.len()
+                    ],
+                });
+            }
 
             let mut br = BitReader::new(&self.non_section_buf);
             br.skip_bits(self.non_section_bit_offset as usize)?;
