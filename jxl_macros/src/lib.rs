@@ -221,7 +221,7 @@ impl Coder {
         match self {
             Coder::WithoutConfig => quote! {()},
             Coder::U32(..) => quote! {U32Coder},
-            Coder::Select(..) => quote! {SelectCoder<U32Coder>},
+            Coder::Select(..) => quote! {U32Coder},
             Coder::Vector(_, value_coder) => {
                 let value_coder_ty = value_coder.ty();
                 quote! {VectorCoder<#value_coder_ty>}
@@ -236,7 +236,7 @@ impl Coder {
             Coder::Select(condition, U32 { coder: coder_true }, U32 { coder: coder_false }) => {
                 let cnd = condition.get_expr(all_default_field).unwrap();
                 quote! {
-                    SelectCoder{use_true: #cnd, coder_true: #coder_true, coder_false: #coder_false}
+                    if #cnd { #coder_true } else { #coder_false }
                 }
             }
             Coder::Vector(U32 { coder }, value_coder) => {

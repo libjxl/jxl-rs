@@ -19,8 +19,8 @@ pub enum U32 {
 impl U32 {
     pub fn read(&self, br: &mut BitReader) -> Result<u32, Error> {
         match *self {
-            U32::Bits(n) => Ok(br.read(n)? as u32),
-            U32::BitsOffset { n, off } => Ok(br.read(n)? as u32 + off),
+            U32::Bits(n) => Ok(br.read_noinline(n)? as u32),
+            U32::BitsOffset { n, off } => Ok(br.read_noinline(n)? as u32 + off),
             U32::Val(val) => Ok(val),
         }
     }
@@ -53,7 +53,7 @@ impl UnconditionalCoder<()> for bool {
         br: &mut BitReader,
         _: &Self::Nonserialized,
     ) -> Result<bool, Error> {
-        Ok(br.read(1)? != 0)
+        Ok(br.read_noinline(1)? != 0)
     }
 }
 
@@ -65,7 +65,7 @@ impl UnconditionalCoder<()> for f32 {
         _: &Self::Nonserialized,
     ) -> Result<f32, Error> {
         use crate::util::f16;
-        let ret = f16::from_bits(br.read(16)? as u16);
+        let ret = f16::from_bits(br.read_noinline(16)? as u16);
         if !ret.is_finite() {
             Err(Error::FloatNaNOrInf)
         } else {
@@ -81,18 +81,19 @@ impl UnconditionalCoder<U32Coder> for u32 {
         br: &mut BitReader,
         _: &Self::Nonserialized,
     ) -> Result<u32, Error> {
-        match config {
-            U32Coder::Direct(u) => u.read(br),
+        let u = match config {
+            U32Coder::Direct(u) => u,
             U32Coder::Select(u0, u1, u2, u3) => {
-                let selector = br.read(2)?;
+                let selector = br.read_noinline(2)?;
                 match selector {
-                    0 => u0.read(br),
-                    1 => u1.read(br),
-                    2 => u2.read(br),
-                    _ => u3.read(br),
+                    0 => u0,
+                    1 => u1,
+                    2 => u2,
+                    _ => u3,
                 }
             }
-        }
+        };
+        u.read(br)
     }
 }
 
@@ -115,19 +116,19 @@ impl UnconditionalCoder<()> for u64 {
         br: &mut BitReader,
         _: &Self::Nonserialized,
     ) -> Result<u64, Error> {
-        match br.read(2)? {
+        match br.read_noinline(2)? {
             0 => Ok(0),
-            1 => Ok(1 + br.read(4)?),
-            2 => Ok(17 + br.read(8)?),
+            1 => Ok(1 + br.read_noinline(4)?),
+            2 => Ok(17 + br.read_noinline(8)?),
             _ => {
-                let mut result: u64 = br.read(12)?;
+                let mut result: u64 = br.read_noinline(12)?;
                 let mut shift = 12;
-                while br.read(1)? == 1 {
+                while br.read_noinline(1)? == 1 {
                     if shift >= 60 {
                         assert_eq!(shift, 60);
-                        return Ok(result | (br.read(4)? << shift));
+                        return Ok(result | (br.read_noinline(4)? << shift));
                     }
-                    result |= br.read(8)? << shift;
+                    result |= br.read_noinline(8)? << shift;
                     shift += 8;
                 }
                 Ok(result)
@@ -156,7 +157,7 @@ impl UnconditionalCoder<()> for String {
         let mut ret = String::new();
         ret.reserve(len as usize);
         for _ in 0..len {
-            match br.read(8) {
+            match br.read_noinline(8) {
                 Ok(c) => ret.push(c as u8 as char),
                 Err(Error::OutOfBounds(n)) => {
                     return Err(Error::OutOfBounds(len as usize - ret.len() - 1 + n));
@@ -226,33 +227,6 @@ impl<Config, T: UnconditionalCoder<Config>> UnconditionalCoder<VectorCoder<Confi
             )?);
         }
         Ok(ret)
-    }
-}
-
-pub struct SelectCoder<T: Sized> {
-    pub use_true: bool,
-    pub coder_true: T,
-    pub coder_false: T,
-}
-
-// Marker trait to avoid conflicting declarations for [T; N].
-pub trait Selectable {}
-impl Selectable for u32 {}
-
-impl<Config, T: UnconditionalCoder<Config> + Selectable> UnconditionalCoder<SelectCoder<Config>>
-    for T
-{
-    type Nonserialized = <T as UnconditionalCoder<Config>>::Nonserialized;
-    fn read_unconditional(
-        config: &SelectCoder<Config>,
-        br: &mut BitReader,
-        nonserialized: &Self::Nonserialized,
-    ) -> Result<T, Error> {
-        if config.use_true {
-            T::read_unconditional(&config.coder_true, br, nonserialized)
-        } else {
-            T::read_unconditional(&config.coder_false, br, nonserialized)
-        }
     }
 }
 

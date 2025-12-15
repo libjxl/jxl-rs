@@ -402,9 +402,8 @@ impl F32SimdVec for F32VecAvx {
             let r6 = F32VecAvx::load_array(d, &data[6 * stride]).0;
             let r7 = F32VecAvx::load_array(d, &data[7 * stride]).0;
 
-            // SAFETY: caller guarantees avx2 is available
             let (c0, c1, c2, c3, c4, c5, c6, c7) =
-                unsafe { transpose_8x8_core(r0, r1, r2, r3, r4, r5, r6, r7) };
+                transpose_8x8_core(r0, r1, r2, r3, r4, r5, r6, r7);
 
             F32VecAvx(c0, d).store_array(&mut data[0]);
             F32VecAvx(c1, d).store_array(&mut data[1 * stride]);

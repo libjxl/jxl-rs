@@ -6,17 +6,15 @@
 use std::sync::Arc;
 
 use crate::{
-    bit_reader::BitReader,
     entropy_coding::decode::Histograms,
     error::Result,
     features::{noise::Noise, patches::PatchesDictionary, spline::Splines},
     headers::{
         FileHeader,
-        encodings::UnconditionalCoder,
         extra_channels::ExtraChannelInfo,
         frame_header::{Encoding, FrameHeader},
         permutation::Permutation,
-        toc::{Toc, TocNonserialized},
+        toc::Toc,
     },
     image::Image,
     util::tracing_wrappers::*,
@@ -195,26 +193,6 @@ pub struct Frame {
 }
 
 impl Frame {
-    pub fn new(br: &mut BitReader, decoder_state: DecoderState) -> Result<Self> {
-        let mut frame_header = FrameHeader::read_unconditional(
-            &(),
-            br,
-            &decoder_state.file_header.frame_header_nonserialized(),
-        )?;
-        frame_header.postprocess(&decoder_state.file_header.frame_header_nonserialized());
-        let num_toc_entries = frame_header.num_toc_entries();
-        let toc = Toc::read_unconditional(
-            &(),
-            br,
-            &TocNonserialized {
-                num_entries: num_toc_entries as u32,
-            },
-        )
-        .unwrap();
-        br.jump_to_byte_boundary()?;
-        Self::from_header_and_toc(frame_header, toc, decoder_state)
-    }
-
     pub fn toc(&self) -> &Toc {
         &self.toc
     }
