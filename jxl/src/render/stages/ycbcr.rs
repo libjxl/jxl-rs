@@ -48,11 +48,18 @@ simd_function!(
         let cb_to_b = D::F32Vec::splat(d, 1.772);
 
         // SIMD loop processing SIMD_WIDTH pixels at once
-        for x in (0..xsize).step_by(D::F32Vec::LEN) {
+        let iter_cb = row_cb.chunks_exact_mut(D::F32Vec::LEN);
+        let iter_y = row_y.chunks_exact_mut(D::F32Vec::LEN);
+        let iter_cr = row_cr.chunks_exact_mut(D::F32Vec::LEN);
+        for ((cb_chunk, y_chunk), cr_chunk) in iter_cb
+            .zip(iter_y)
+            .zip(iter_cr)
+            .take(xsize.div_ceil(D::F32Vec::LEN))
+        {
             // Load Y, Cb, Cr vectors
-            let y_vec = D::F32Vec::load(d, &row_y[x..]) + c128;
-            let cb_vec = D::F32Vec::load(d, &row_cb[x..]);
-            let cr_vec = D::F32Vec::load(d, &row_cr[x..]);
+            let y_vec = D::F32Vec::load(d, y_chunk) + c128;
+            let cb_vec = D::F32Vec::load(d, cb_chunk);
+            let cr_vec = D::F32Vec::load(d, cr_chunk);
 
             // Compute RGB using FMA (fused multiply-add)
             // R = Y + 1.402 * Cr
@@ -65,9 +72,9 @@ simd_function!(
             let b_vec = cb_vec.mul_add(cb_to_b, y_vec);
 
             // Store back to channels (R→Cb, G→Y, B→Cr to match layout)
-            r_vec.store(&mut row_cb[x..]);
-            g_vec.store(&mut row_y[x..]);
-            b_vec.store(&mut row_cr[x..]);
+            r_vec.store(cb_chunk);
+            g_vec.store(y_chunk);
+            b_vec.store(cr_chunk);
         }
     }
 );
