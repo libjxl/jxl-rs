@@ -199,11 +199,10 @@ impl F32SimdVec for F32VecAvx {
 
     #[inline(always)]
     fn store_interleaved_2(a: Self, b: Self, dest: &mut [f32]) {
-        assert!(dest.len() >= 2 * Self::LEN);
-
         #[target_feature(enable = "avx2")]
         #[inline]
         fn store_interleaved_2_impl(a: __m256, b: __m256, dest: &mut [f32]) {
+            assert!(dest.len() >= 2 * F32VecAvx::LEN);
             // a = [a0, a1, a2, a3, a4, a5, a6, a7], b = [b0, b1, b2, b3, b4, b5, b6, b7]
             // Output: [a0, b0, a1, b1, a2, b2, a3, b3, a4, b4, a5, b5, a6, b6, a7, b7]
             let lo = _mm256_unpacklo_ps(a, b); // [a0, b0, a1, b1, a4, b4, a5, b5]
@@ -211,7 +210,7 @@ impl F32SimdVec for F32VecAvx {
             // Need to permute to get correct order
             let out0 = _mm256_permute2f128_ps::<0x20>(lo, hi); // lower halves: [a0,b0,a1,b1, a2,b2,a3,b3]
             let out1 = _mm256_permute2f128_ps::<0x31>(lo, hi); // upper halves: [a4,b4,a5,b5, a6,b6,a7,b7]
-            // SAFETY: dest is guaranteed to have enough space by the caller's assert.
+            // SAFETY: we just checked that dest has enough space.
             unsafe {
                 _mm256_storeu_ps(dest.as_mut_ptr(), out0);
                 _mm256_storeu_ps(dest.as_mut_ptr().add(8), out1);
@@ -224,11 +223,10 @@ impl F32SimdVec for F32VecAvx {
 
     #[inline(always)]
     fn store_interleaved_4(a: Self, b: Self, c: Self, d: Self, dest: &mut [f32]) {
-        assert!(dest.len() >= 4 * Self::LEN);
-
         #[target_feature(enable = "avx2")]
         #[inline]
         fn store_interleaved_4_impl(a: __m256, b: __m256, c: __m256, d: __m256, dest: &mut [f32]) {
+            assert!(dest.len() >= 4 * F32VecAvx::LEN);
             // First interleave pairs
             let ab_lo = _mm256_unpacklo_ps(a, b);
             let ab_hi = _mm256_unpackhi_ps(a, b);
@@ -259,7 +257,7 @@ impl F32SimdVec for F32VecAvx {
             let out2 = _mm256_permute2f128_ps::<0x31>(abcd_0, abcd_1);
             let out3 = _mm256_permute2f128_ps::<0x31>(abcd_2, abcd_3);
 
-            // SAFETY: dest is guaranteed to have enough space by the caller's assert.
+            // SAFETY: we just checked that dest has enough space.
             unsafe {
                 _mm256_storeu_ps(dest.as_mut_ptr(), out0);
                 _mm256_storeu_ps(dest.as_mut_ptr().add(8), out1);
@@ -284,8 +282,6 @@ impl F32SimdVec for F32VecAvx {
         h: Self,
         dest: &mut [f32],
     ) {
-        assert!(dest.len() >= 8 * Self::LEN);
-
         #[target_feature(enable = "avx2")]
         #[inline]
         fn store_interleaved_8_impl(
@@ -299,11 +295,12 @@ impl F32SimdVec for F32VecAvx {
             r7: __m256,
             dest: &mut [f32],
         ) {
+            assert!(dest.len() >= 8 * F32VecAvx::LEN);
             // This is essentially an 8x8 transpose, same algorithm as transpose_square
             let (c0, c1, c2, c3, c4, c5, c6, c7) =
                 transpose_8x8_core(r0, r1, r2, r3, r4, r5, r6, r7);
 
-            // SAFETY: dest is guaranteed to have enough space by the caller's assert.
+            // SAFETY: we just checked that dest has enough space.
             unsafe {
                 _mm256_storeu_ps(dest.as_mut_ptr(), c0);
                 _mm256_storeu_ps(dest.as_mut_ptr().add(8), c1);

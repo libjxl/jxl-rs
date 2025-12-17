@@ -112,16 +112,15 @@ impl F32SimdVec for F32VecSse42 {
 
     #[inline(always)]
     fn store_interleaved_2(a: Self, b: Self, dest: &mut [f32]) {
-        assert!(dest.len() >= 2 * Self::LEN);
-
         #[target_feature(enable = "sse4.2")]
         #[inline]
         fn store_interleaved_2_impl(a: __m128, b: __m128, dest: &mut [f32]) {
+            assert!(dest.len() >= 2 * F32VecSse42::LEN);
             // a = [a0, a1, a2, a3], b = [b0, b1, b2, b3]
             // lo = [a0, b0, a1, b1], hi = [a2, b2, a3, b3]
             let lo = _mm_unpacklo_ps(a, b);
             let hi = _mm_unpackhi_ps(a, b);
-            // SAFETY: dest is guaranteed to have enough space by the caller's assert.
+            // SAFETY: we just checked that dest has enough space.
             unsafe {
                 _mm_storeu_ps(dest.as_mut_ptr(), lo);
                 _mm_storeu_ps(dest.as_mut_ptr().add(4), hi);
@@ -134,11 +133,10 @@ impl F32SimdVec for F32VecSse42 {
 
     #[inline(always)]
     fn store_interleaved_4(a: Self, b: Self, c: Self, d: Self, dest: &mut [f32]) {
-        assert!(dest.len() >= 4 * Self::LEN);
-
         #[target_feature(enable = "sse4.2")]
         #[inline]
         fn store_interleaved_4_impl(a: __m128, b: __m128, c: __m128, d: __m128, dest: &mut [f32]) {
+            assert!(dest.len() >= 4 * F32VecSse42::LEN);
             // First interleave pairs: ab and cd
             let ab_lo = _mm_unpacklo_ps(a, b); // [a0, b0, a1, b1]
             let ab_hi = _mm_unpackhi_ps(a, b); // [a2, b2, a3, b3]
@@ -151,7 +149,7 @@ impl F32SimdVec for F32VecSse42 {
             let out2 = _mm_castpd_ps(_mm_unpacklo_pd(_mm_castps_pd(ab_hi), _mm_castps_pd(cd_hi))); // [a2, b2, c2, d2]
             let out3 = _mm_castpd_ps(_mm_unpackhi_pd(_mm_castps_pd(ab_hi), _mm_castps_pd(cd_hi))); // [a3, b3, c3, d3]
 
-            // SAFETY: dest is guaranteed to have enough space by the caller's assert.
+            // SAFETY: we just checked that dest has enough space.
             unsafe {
                 _mm_storeu_ps(dest.as_mut_ptr(), out0);
                 _mm_storeu_ps(dest.as_mut_ptr().add(4), out1);
@@ -176,8 +174,6 @@ impl F32SimdVec for F32VecSse42 {
         h: Self,
         dest: &mut [f32],
     ) {
-        assert!(dest.len() >= 8 * Self::LEN);
-
         #[target_feature(enable = "sse4.2")]
         #[inline]
         fn store_interleaved_8_impl(
@@ -191,6 +187,7 @@ impl F32SimdVec for F32VecSse42 {
             h: __m128,
             dest: &mut [f32],
         ) {
+            assert!(dest.len() >= 8 * F32VecSse42::LEN);
             // For 4-wide vectors storing 8 interleaved, we need 32 elements output
             // Output: [a0,b0,c0,d0,e0,f0,g0,h0, a1,b1,c1,d1,e1,f1,g1,h1, ...]
             let ab_lo = _mm_unpacklo_ps(a, b);
@@ -211,7 +208,7 @@ impl F32SimdVec for F32VecSse42 {
             let efgh_2 = _mm_castpd_ps(_mm_unpacklo_pd(_mm_castps_pd(ef_hi), _mm_castps_pd(gh_hi)));
             let efgh_3 = _mm_castpd_ps(_mm_unpackhi_pd(_mm_castps_pd(ef_hi), _mm_castps_pd(gh_hi)));
 
-            // SAFETY: dest is guaranteed to have enough space by the caller's assert.
+            // SAFETY: we just checked that dest has enough space.
             unsafe {
                 let ptr = dest.as_mut_ptr();
                 _mm_storeu_ps(ptr, abcd_0);

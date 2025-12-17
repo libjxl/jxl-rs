@@ -154,8 +154,6 @@ impl F32SimdVec for F32VecNeon {
         h: Self,
         dest: &mut [f32],
     ) {
-        assert!(dest.len() >= 8 * Self::LEN);
-
         #[target_feature(enable = "neon")]
         #[inline]
         fn store_interleaved_8_impl(
@@ -169,6 +167,7 @@ impl F32SimdVec for F32VecNeon {
             h: float32x4_t,
             dest: &mut [f32],
         ) {
+            assert!(dest.len() >= 8 * F32VecNeon::LEN);
             // NEON doesn't have vst8, so we use manual interleaving
             // For 4-wide vectors, output is 32 elements: [a0,b0,c0,d0,e0,f0,g0,h0, a1,...]
 
@@ -226,7 +225,7 @@ impl F32SimdVec for F32VecNeon {
                 vreinterpretq_f64_f32(cgdh_3),
             ));
 
-            // SAFETY: dest is guaranteed to have enough space by the caller's assert.
+            // SAFETY: we just checked that dest has enough space.
             unsafe {
                 let ptr = dest.as_mut_ptr();
                 vst1q_f32(ptr, out0);

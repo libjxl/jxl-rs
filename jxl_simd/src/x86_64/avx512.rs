@@ -117,11 +117,10 @@ impl F32SimdVec for F32VecAvx512 {
 
     #[inline(always)]
     fn store_interleaved_2(a: Self, b: Self, dest: &mut [f32]) {
-        assert!(dest.len() >= 2 * Self::LEN);
-
         #[target_feature(enable = "avx512f")]
         #[inline]
         fn store_interleaved_2_impl(a: __m512, b: __m512, dest: &mut [f32]) {
+            assert!(dest.len() >= 2 * F32VecAvx512::LEN);
             // a = [a0..a15], b = [b0..b15]
             // Output: [a0, b0, a1, b1, ..., a15, b15]
             // unpacklo within each 128-bit lane: lane0=[a0,b0,a1,b1], lane1=[a4,b4,a5,b5], etc.
@@ -139,7 +138,7 @@ impl F32SimdVec for F32VecAvx512 {
             let out0 = _mm512_permutex2var_ps(lo, idx_lo, hi);
             let out1 = _mm512_permutex2var_ps(lo, idx_hi, hi);
 
-            // SAFETY: dest is guaranteed to have enough space by the caller's assert.
+            // SAFETY: we just checked that dest has enough space.
             unsafe {
                 _mm512_storeu_ps(dest.as_mut_ptr(), out0);
                 _mm512_storeu_ps(dest.as_mut_ptr().add(16), out1);
@@ -152,11 +151,10 @@ impl F32SimdVec for F32VecAvx512 {
 
     #[inline(always)]
     fn store_interleaved_4(a: Self, b: Self, c: Self, d: Self, dest: &mut [f32]) {
-        assert!(dest.len() >= 4 * Self::LEN);
-
         #[target_feature(enable = "avx512f")]
         #[inline]
         fn store_interleaved_4_impl(a: __m512, b: __m512, c: __m512, d: __m512, dest: &mut [f32]) {
+            assert!(dest.len() >= 4 * F32VecAvx512::LEN);
             // a = [a0..a15], b = [b0..b15], c = [c0..c15], d = [d0..d15]
             // Output: [a0,b0,c0,d0, a1,b1,c1,d1, ..., a15,b15,c15,d15]
 
@@ -225,7 +223,7 @@ impl F32SimdVec for F32VecAvx512 {
             let out1 = _mm512_permutex2var_ps(pair01_13, idx_0, pair23_13);
             let out3 = _mm512_permutex2var_ps(pair01_13, idx_1, pair23_13);
 
-            // SAFETY: dest is guaranteed to have enough space by the caller's assert.
+            // SAFETY: we just checked that dest has enough space.
             unsafe {
                 _mm512_storeu_ps(dest.as_mut_ptr(), out0);
                 _mm512_storeu_ps(dest.as_mut_ptr().add(16), out1);
@@ -250,8 +248,6 @@ impl F32SimdVec for F32VecAvx512 {
         h: Self,
         dest: &mut [f32],
     ) {
-        assert!(dest.len() >= 8 * Self::LEN);
-
         #[target_feature(enable = "avx512f")]
         #[inline]
         fn store_interleaved_8_impl(
@@ -265,6 +261,7 @@ impl F32SimdVec for F32VecAvx512 {
             h: __m512,
             dest: &mut [f32],
         ) {
+            assert!(dest.len() >= 8 * F32VecAvx512::LEN);
             // a..h each have 16 elements. Output is 128 elements interleaved:
             // [a0,b0,c0,d0,e0,f0,g0,h0, a1,b1,c1,d1,e1,f1,g1,h1, ..., a15,b15,...,h15]
             // Each output vector is 16 floats = 2 groups of 8.
@@ -362,7 +359,7 @@ impl F32SimdVec for F32VecAvx512 {
             let out6 = _mm512_permutex2var_ps(full_0_13, idx_hi, full_1_13);
             let out7 = _mm512_permutex2var_ps(full_2_13, idx_hi, full_3_13);
 
-            // SAFETY: dest is guaranteed to have enough space by the caller's assert.
+            // SAFETY: we just checked that dest has enough space.
             unsafe {
                 let ptr = dest.as_mut_ptr();
                 _mm512_storeu_ps(ptr, out0);
