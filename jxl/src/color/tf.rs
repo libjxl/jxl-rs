@@ -161,14 +161,17 @@ pub fn bt709_to_linear(samples: &mut [f32]) {
 
 /// Converts samples in BT.709 transfer curve to linear (SIMD version).
 #[inline(always)]
-pub fn bt709_to_linear_simd<D: SimdDescriptor>(d: D, samples: &mut [f32]) {
+pub fn bt709_to_linear_simd<D: SimdDescriptor>(d: D, xsize: usize, samples: &mut [f32]) {
     let threshold = D::F32Vec::splat(d, 0.081);
     let inv_4_5 = D::F32Vec::splat(d, 1.0 / 4.5);
     let scale = D::F32Vec::splat(d, 1.0 / 1.099);
     let offset = D::F32Vec::splat(d, 0.099 / 1.099);
     let exp = D::F32Vec::splat(d, 1.0 / 0.45);
 
-    for vec in samples.chunks_exact_mut(D::F32Vec::LEN) {
+    for vec in samples
+        .chunks_exact_mut(D::F32Vec::LEN)
+        .take(xsize.div_ceil(D::F32Vec::LEN))
+    {
         let x = D::F32Vec::load(d, vec);
         let a = x.abs();
         let linear_part = a * inv_4_5;
@@ -281,11 +284,19 @@ pub fn linear_to_pq(intensity_target: f32, samples: &mut [f32]) {
 
 /// Converts linear sample to PQ signal using PQ inverse EOTF (SIMD version).
 #[inline(always)]
-pub fn linear_to_pq_simd<D: SimdDescriptor>(d: D, intensity_target: f32, samples: &mut [f32]) {
+pub fn linear_to_pq_simd<D: SimdDescriptor>(
+    d: D,
+    intensity_target: f32,
+    xsize: usize,
+    samples: &mut [f32],
+) {
     let y_mult = D::F32Vec::splat(d, intensity_target * 10000f32.recip());
     let threshold = D::F32Vec::splat(d, 1e-4);
 
-    for vec in samples.chunks_exact_mut(D::F32Vec::LEN) {
+    for vec in samples
+        .chunks_exact_mut(D::F32Vec::LEN)
+        .take(xsize.div_ceil(D::F32Vec::LEN))
+    {
         let s = D::F32Vec::load(d, vec);
         let a = s.abs();
         let a_scaled = a * y_mult;
@@ -319,10 +330,18 @@ pub fn pq_to_linear(intensity_target: f32, samples: &mut [f32]) {
 
 /// Converts PQ signal to linear sample using PQ EOTF (SIMD version).
 #[inline(always)]
-pub fn pq_to_linear_simd<D: SimdDescriptor>(d: D, intensity_target: f32, samples: &mut [f32]) {
+pub fn pq_to_linear_simd<D: SimdDescriptor>(
+    d: D,
+    intensity_target: f32,
+    xsize: usize,
+    samples: &mut [f32],
+) {
     let y_mult = D::F32Vec::splat(d, 10000.0 / intensity_target);
 
-    for vec in samples.chunks_exact_mut(D::F32Vec::LEN) {
+    for vec in samples
+        .chunks_exact_mut(D::F32Vec::LEN)
+        .take(xsize.div_ceil(D::F32Vec::LEN))
+    {
         let s = D::F32Vec::load(d, vec);
         let a = s.abs();
         // a + a * a
@@ -637,9 +656,10 @@ mod test {
         arbtest::arbtest(|u| {
             let mut samples = arb_samples(u)?;
             let mut simd = samples.clone();
+            let xsize = samples.len();
 
             bt709_to_linear(&mut samples);
-            bt709_to_linear_simd(jxl_simd::ScalarDescriptor::new().unwrap(), &mut simd);
+            bt709_to_linear_simd(jxl_simd::ScalarDescriptor::new().unwrap(), xsize, &mut simd);
             assert_all_almost_abs_eq(&samples, &simd, 1e-5);
             Ok(())
         });
@@ -651,11 +671,13 @@ mod test {
             let intensity_target = u.int_in_range(9900..=10100)? as f32;
             let mut samples = arb_samples(u)?;
             let mut simd = samples.clone();
+            let xsize = samples.len();
 
             pq_to_linear(intensity_target, &mut samples);
             pq_to_linear_simd(
                 jxl_simd::ScalarDescriptor::new().unwrap(),
                 intensity_target,
+                xsize,
                 &mut simd,
             );
             assert_all_almost_abs_eq(&samples, &simd, 2e-5);
@@ -669,11 +691,13 @@ mod test {
             let intensity_target = u.int_in_range(9900..=10100)? as f32;
             let mut samples = arb_samples(u)?;
             let mut simd = samples.clone();
+            let xsize = samples.len();
 
             linear_to_pq(intensity_target, &mut samples);
             linear_to_pq_simd(
                 jxl_simd::ScalarDescriptor::new().unwrap(),
                 intensity_target,
+                xsize,
                 &mut simd,
             );
             assert_all_almost_abs_eq(&samples, &simd, 2e-5);
