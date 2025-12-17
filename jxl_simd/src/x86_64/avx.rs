@@ -28,7 +28,16 @@ fn transpose_8x8_core(
     r5: __m256,
     r6: __m256,
     r7: __m256,
-) -> (__m256, __m256, __m256, __m256, __m256, __m256, __m256, __m256) {
+) -> (
+    __m256,
+    __m256,
+    __m256,
+    __m256,
+    __m256,
+    __m256,
+    __m256,
+    __m256,
+) {
     // Stage 1: Unpack low/high pairs
     let t0 = _mm256_unpacklo_ps(r0, r1);
     let t1 = _mm256_unpackhi_ps(r0, r1);
@@ -40,14 +49,38 @@ fn transpose_8x8_core(
     let t7 = _mm256_unpackhi_ps(r6, r7);
 
     // Stage 2: Shuffle to group 32-bit elements using 64-bit unpacks
-    let s0 = _mm256_castpd_ps(_mm256_unpacklo_pd(_mm256_castps_pd(t0), _mm256_castps_pd(t2)));
-    let s1 = _mm256_castpd_ps(_mm256_unpackhi_pd(_mm256_castps_pd(t0), _mm256_castps_pd(t2)));
-    let s2 = _mm256_castpd_ps(_mm256_unpacklo_pd(_mm256_castps_pd(t1), _mm256_castps_pd(t3)));
-    let s3 = _mm256_castpd_ps(_mm256_unpackhi_pd(_mm256_castps_pd(t1), _mm256_castps_pd(t3)));
-    let s4 = _mm256_castpd_ps(_mm256_unpacklo_pd(_mm256_castps_pd(t4), _mm256_castps_pd(t6)));
-    let s5 = _mm256_castpd_ps(_mm256_unpackhi_pd(_mm256_castps_pd(t4), _mm256_castps_pd(t6)));
-    let s6 = _mm256_castpd_ps(_mm256_unpacklo_pd(_mm256_castps_pd(t5), _mm256_castps_pd(t7)));
-    let s7 = _mm256_castpd_ps(_mm256_unpackhi_pd(_mm256_castps_pd(t5), _mm256_castps_pd(t7)));
+    let s0 = _mm256_castpd_ps(_mm256_unpacklo_pd(
+        _mm256_castps_pd(t0),
+        _mm256_castps_pd(t2),
+    ));
+    let s1 = _mm256_castpd_ps(_mm256_unpackhi_pd(
+        _mm256_castps_pd(t0),
+        _mm256_castps_pd(t2),
+    ));
+    let s2 = _mm256_castpd_ps(_mm256_unpacklo_pd(
+        _mm256_castps_pd(t1),
+        _mm256_castps_pd(t3),
+    ));
+    let s3 = _mm256_castpd_ps(_mm256_unpackhi_pd(
+        _mm256_castps_pd(t1),
+        _mm256_castps_pd(t3),
+    ));
+    let s4 = _mm256_castpd_ps(_mm256_unpacklo_pd(
+        _mm256_castps_pd(t4),
+        _mm256_castps_pd(t6),
+    ));
+    let s5 = _mm256_castpd_ps(_mm256_unpackhi_pd(
+        _mm256_castps_pd(t4),
+        _mm256_castps_pd(t6),
+    ));
+    let s6 = _mm256_castpd_ps(_mm256_unpacklo_pd(
+        _mm256_castps_pd(t5),
+        _mm256_castps_pd(t7),
+    ));
+    let s7 = _mm256_castpd_ps(_mm256_unpackhi_pd(
+        _mm256_castps_pd(t5),
+        _mm256_castps_pd(t7),
+    ));
 
     // Stage 3: 128-bit permute to finalize transpose
     let c0 = _mm256_permute2f128_ps::<0x20>(s0, s4);
