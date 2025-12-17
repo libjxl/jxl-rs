@@ -15,6 +15,7 @@ use crate::{
 
 use jxl_transforms::transform_map::*;
 
+use std::borrow::Cow;
 use std::mem;
 use std::sync::OnceLock;
 
@@ -123,7 +124,7 @@ pub fn decode_coeff_orders(used_orders: u32, br: &mut BitReader) -> Result<Vec<P
     // Use cached natural coefficient orders instead of recomputing
     let all_component_orders = 3 * NUM_ORDERS;
     let mut permutations: Vec<Permutation> = (0..all_component_orders)
-        .map(|o| Permutation(get_natural_coeff_order(o / 3).clone()))
+        .map(|o| Permutation(Cow::Borrowed(get_natural_coeff_order(o / 3))))
         .collect();
     if used_orders == 0 {
         return Ok(permutations);

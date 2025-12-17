@@ -3,14 +3,16 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
+use std::borrow::Cow;
+
 use crate::bit_reader::BitReader;
 use crate::entropy_coding::decode::Histograms;
 use crate::entropy_coding::decode::SymbolReader;
 use crate::error::{Error, Result};
 use crate::util::{CeilLog2, NewWithCapacity, tracing_wrappers::instrument, value_of_lowest_1_bit};
 
-#[derive(Debug, PartialEq, Default)]
-pub struct Permutation(pub Vec<u32>);
+#[derive(Debug, PartialEq, Default, Clone)]
+pub struct Permutation(pub Cow<'static, [u32]>);
 
 impl std::ops::Deref for Permutation {
     type Target = [u32];
@@ -76,7 +78,7 @@ impl Permutation {
         // Ensure the permutation has the correct size
         assert_eq!(permutation.len(), size as usize);
 
-        Ok(Self(permutation))
+        Ok(Self(Cow::Owned(permutation)))
     }
 
     pub fn compose(&mut self, other: &Permutation) {
@@ -85,7 +87,7 @@ impl Permutation {
         for (i, val) in tmp.iter_mut().enumerate().take(self.0.len()) {
             *val = self.0[other.0[i] as usize]
         }
-        self.0.copy_from_slice(&tmp[..]);
+        self.0.to_mut().copy_from_slice(&tmp[..]);
     }
 }
 
