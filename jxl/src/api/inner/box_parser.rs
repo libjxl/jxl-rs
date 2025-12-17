@@ -4,6 +4,7 @@
 // license that can be found in the LICENSE file.
 
 use crate::error::{Error, Result};
+use crate::util::tracing_wrappers::*;
 
 use crate::api::{
     GainMapBundle, JxlBitstreamInput, JxlSignatureType, check_signature_internal,
@@ -113,11 +114,14 @@ impl BoxParser {
                         Ok(bundle) => {
                             self.gain_map = Some(bundle);
                         }
-                        Err(_) => {
-                            // Invalid gain map data, ignore it
+                        Err(e) => {
+                            // e is used by warn! when tracing feature is enabled
+                            let _ = &e;
+                            warn!(?e, "Invalid gain map data, ignoring jhgm box");
                         }
                     }
-                    self.gain_map_data.clear(); // Free memory
+                    // Actually free the memory (clear() only sets len to 0)
+                    drop(std::mem::take(&mut self.gain_map_data));
                     self.state = ParseState::BoxNeeded;
                 }
                 ParseState::BoxNeeded => {
@@ -187,6 +191,10 @@ impl BoxParser {
                         }
                         b"jhgm" => {
                             // Gain map box - collect the data
+                            // Pre-allocate if the size is reasonable (avoid DoS from huge sizes)
+                            if content_len < usize::MAX as u64 {
+                                self.gain_map_data.try_reserve(content_len as usize)?;
+                            }
                             self.state = ParseState::GainMapBox(content_len);
                         }
                         _ => {

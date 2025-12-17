@@ -23,23 +23,18 @@ def write_box(box_type, content):
 
 def create_minimal_jxl_codestream():
     """
-    Create a minimal valid JPEG XL naked codestream for a 1x1 pixel image.
-    This is a very simplified version just for testing purposes.
+    Create a minimal valid JPEG XL naked codestream.
+    This is the smallest valid JXL codestream (12 bytes), from:
+    https://github.com/mathiasbynens/small/pull/125
+
+    It encodes a 1x1 grayscale image.
     """
-    # JXL signature for naked codestream
-    sig = bytes([0xff, 0x0a])
-
-    # Extremely minimal bitstream for 1x1 image
-    # This is a simplified representation - a real encoder would be more complex
-    # For testing, we'll use a known-good minimal codestream
-    minimal_stream = sig + bytes([
-        # Size header (1x1)
-        0x00,  # Small size
-        # Very basic image header
-        0x88, 0x40, 0x00, 0x10,
+    # Smallest valid JXL codestream (12 bytes)
+    # Source: https://github.com/mathiasbynens/small
+    return bytes([
+        0xff, 0x0a,  # JXL signature
+        0x00, 0x90, 0x01, 0x00, 0x12, 0x88, 0x02, 0x00, 0xd4, 0x00
     ])
-
-    return minimal_stream
 
 def create_gain_map_bundle():
     """
@@ -135,19 +130,8 @@ def create_realistic_jxl_with_gain_map(output_path):
     ])
     ftyp_box = write_box(b'ftyp', ftyp_content)
 
-    # Use an actual minimal JXL codestream (1x1 black pixel, VarDCT mode)
-    # This is from a real minimal JXL file
-    codestream = bytes([
-        0xff, 0x0a,  # JXL signature
-        # Image header for 1x1 image
-        0x00,  # Size: small (1x1 fits in first size category)
-        0x20,  # Bit depth: 8 bits
-        0x00, 0x50,  # All default
-        # Frame header
-        0x01,  # Frame type: regular frame
-        # Minimal VarDCT data for 1x1 black pixel
-        0x00, 0x00,
-    ])
+    # Use the smallest valid JXL codestream (12 bytes)
+    codestream = create_minimal_jxl_codestream()
     jxlc_box = write_box(b'jxlc', codestream)
 
     # Gain map box

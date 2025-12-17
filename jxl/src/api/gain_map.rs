@@ -8,8 +8,10 @@
 //! Gain maps allow encoding HDR images with an SDR fallback, where the gain map
 //! describes how to convert from SDR to HDR representation.
 
+use crate::bit_reader::BitReader;
 use crate::error::{Error, Result};
 use crate::headers::color_encoding::ColorEncoding;
+use crate::headers::encodings::{Empty, UnconditionalCoder};
 
 /// A gain map bundle as defined by ISO 21496-1.
 ///
@@ -33,15 +35,21 @@ pub struct GainMapBundle {
     /// If None, the gain map uses the same color encoding as the base image.
     pub color_encoding: Option<ColorEncoding>,
 
-    /// Alternative ICC profile for the gain map (may be Brotli-compressed).
+    /// Alternative ICC profile for the gain map.
+    ///
+    /// This uses the same JXL-specific ICC compression as in the image header
+    /// (not Brotli). The `alt_icc` field stores the already-compressed
+    /// representation of the ICC profile.
     ///
     /// This is used when the color encoding cannot be fully described by the
     /// JPEG XL ColorEncoding structure.
     pub alt_icc: Vec<u8>,
 
-    /// The gain map image data as a JPEG XL naked codestream.
+    /// The gain map image data as a JPEG XL codestream or container.
     ///
-    /// This is a complete JPEG XL image bitstream that can be decoded independently.
+    /// This can be either a naked JPEG XL codestream or a full JPEG XL container
+    /// (but it is not allowed to itself contain a gain map box). Using a container
+    /// allows the gain map to include `jbrd` for JPEG bitstream reconstruction.
     pub gain_map: Vec<u8>,
 }
 
@@ -180,10 +188,15 @@ impl GainMapBundle {
                 return Err(Error::OutOfBounds(color_encoding_size));
             }
 
-            // TODO: Phase 4 - parse ColorEncoding from bitstream
-            // For now, skip the bytes
+            let color_encoding_bytes = &data[offset..offset + color_encoding_size];
+            let mut br = BitReader::new(color_encoding_bytes);
+            let parsed =
+                ColorEncoding::read_unconditional(&(), &mut br, &Empty {}).map_err(|_| {
+                    // If parsing fails, this is an invalid color encoding
+                    Error::InvalidBox
+                })?;
             offset += color_encoding_size;
-            None
+            Some(parsed)
         } else {
             None
         };
@@ -306,5 +319,38 @@ mod tests {
             GainMapBundle::from_bytes(&bytes).is_ok(),
             "Full input should succeed"
         );
+    }
+
+    #[test]
+    fn test_parse_color_encoding() {
+        use crate::headers::color_encoding::{ColorSpace, RenderingIntent, TransferFunction};
+
+        // Test data from libjxl's gain_map_test.cc:
+        // color_encoding = {0x50, 0xb4, 0x00} which represents a valid ColorEncoding
+        // This is the bitstream encoding for sRGB color space
+        let color_encoding_bytes = vec![0x50, 0xb4, 0x00];
+
+        // Create a bundle with the color encoding
+        let mut bundle_bytes = vec![];
+        bundle_bytes.push(0x00); // jhgm_version
+        bundle_bytes.extend_from_slice(&[0x00, 0x04]); // metadata_size = 4
+        bundle_bytes.extend_from_slice(&[0x01, 0x02, 0x03, 0x04]); // metadata
+        bundle_bytes.push(color_encoding_bytes.len() as u8); // color_encoding_size = 3
+        bundle_bytes.extend_from_slice(&color_encoding_bytes); // color_encoding
+        bundle_bytes.extend_from_slice(&[0x00, 0x00, 0x00, 0x00]); // icc_size = 0
+        bundle_bytes.extend_from_slice(&[0xff, 0x0a]); // gain_map (minimal JXL signature)
+
+        let bundle = GainMapBundle::from_bytes(&bundle_bytes).unwrap();
+
+        // Verify the color encoding was parsed
+        assert!(bundle.color_encoding.is_some());
+        let ce = bundle.color_encoding.unwrap();
+
+        // The bytes 0x50 0xb4 0x00 decode to a valid ColorEncoding
+        // The exact values depend on bit packing, but we verify the parsing works
+        assert_eq!(ce.color_space, ColorSpace::RGB);
+        assert!(!ce.want_icc);
+        assert_eq!(ce.tf.transfer_function, TransferFunction::Linear);
+        assert_eq!(ce.rendering_intent, RenderingIntent::Relative);
     }
 }
