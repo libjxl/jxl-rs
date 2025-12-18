@@ -175,6 +175,16 @@ unsafe impl F32SimdVec for f32 {
         self.to_bits() as i32
     }
 
+    #[inline(always)]
+    fn round_store_u8(self, dest: &mut [u8]) {
+        dest[0] = self.round() as u8;
+    }
+
+    #[inline(always)]
+    fn round_store_u16(self, dest: &mut [u16]) {
+        dest[0] = self.round() as u16;
+    }
+
     impl_f32_array_interface!();
 
     #[inline(always)]

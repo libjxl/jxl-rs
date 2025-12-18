@@ -184,6 +184,16 @@ pub unsafe trait F32SimdVec:
         dest: &mut [f32],
     );
 
+    /// Rounds to nearest integer and stores as u8.
+    /// Behavior is unspecified if values would overflow u8.
+    /// Requires `dest.len() >= Self::LEN` or it will panic.
+    fn round_store_u8(self, dest: &mut [u8]);
+
+    /// Rounds to nearest integer and stores as u16.
+    /// Behavior is unspecified if values would overflow u16.
+    /// Requires `dest.len() >= Self::LEN` or it will panic.
+    fn round_store_u16(self, dest: &mut [u16]);
+
     fn abs(self) -> Self;
 
     fn floor(self) -> Self;
