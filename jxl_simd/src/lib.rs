@@ -102,6 +102,28 @@ pub trait F32SimdVec:
 
     fn store_array(&self, mem: &mut Self::UnderlyingArray);
 
+    /// Stores two vectors interleaved: [a0, b0, a1, b1, a2, b2, ...].
+    /// Requires `dest.len() >= 2 * Self::LEN` or it will panic.
+    fn store_interleaved_2(a: Self, b: Self, dest: &mut [f32]);
+
+    /// Stores four vectors interleaved: [a0, b0, c0, d0, a1, b1, c1, d1, ...].
+    /// Requires `dest.len() >= 4 * Self::LEN` or it will panic.
+    fn store_interleaved_4(a: Self, b: Self, c: Self, d: Self, dest: &mut [f32]);
+
+    /// Stores eight vectors interleaved: [a0, b0, c0, d0, e0, f0, g0, h0, a1, ...].
+    /// Requires `dest.len() >= 8 * Self::LEN` or it will panic.
+    fn store_interleaved_8(
+        a: Self,
+        b: Self,
+        c: Self,
+        d: Self,
+        e: Self,
+        f: Self,
+        g: Self,
+        h: Self,
+        dest: &mut [f32],
+    );
+
     fn abs(self) -> Self;
 
     fn floor(self) -> Self;
@@ -115,6 +137,8 @@ pub trait F32SimdVec:
     fn copysign(self, sign: Self) -> Self;
 
     fn max(self, other: Self) -> Self;
+
+    fn min(self, other: Self) -> Self;
 
     fn gt(self, other: Self) -> <<Self as F32SimdVec>::Descriptor as SimdDescriptor>::Mask;
 
@@ -476,6 +500,7 @@ mod test {
 
     test_instruction!(abs, |a: Floats| { a.abs() });
     test_instruction!(max, |a: Floats, b: Floats| { a.max(b) });
+    test_instruction!(min, |a: Floats, b: Floats| { a.min(b) });
 
     // Test that the call method works, compiles, and can capture arguments
     fn test_call<D: SimdDescriptor>(d: D) {
@@ -562,4 +587,137 @@ mod test {
         }
     }
     test_all_instruction_sets!(test_transpose_square);
+
+    fn test_store_interleaved_2<D: SimdDescriptor>(d: D) {
+        let len = D::F32Vec::LEN;
+        let a: Vec<f32> = (0..len).map(|i| i as f32).collect();
+        let b: Vec<f32> = (0..len).map(|i| (i + 100) as f32).collect();
+        let mut output = vec![0.0f32; 2 * len];
+
+        let a_vec = D::F32Vec::load(d, &a);
+        let b_vec = D::F32Vec::load(d, &b);
+        D::F32Vec::store_interleaved_2(a_vec, b_vec, &mut output);
+
+        // Verify interleaved output: [a0, b0, a1, b1, ...]
+        for i in 0..len {
+            assert_eq!(
+                output[2 * i],
+                a[i],
+                "store_interleaved_2 failed at position {}: expected a[{}]={}, got {}",
+                2 * i,
+                i,
+                a[i],
+                output[2 * i]
+            );
+            assert_eq!(
+                output[2 * i + 1],
+                b[i],
+                "store_interleaved_2 failed at position {}: expected b[{}]={}, got {}",
+                2 * i + 1,
+                i,
+                b[i],
+                output[2 * i + 1]
+            );
+        }
+    }
+    test_all_instruction_sets!(test_store_interleaved_2);
+
+    fn test_store_interleaved_4<D: SimdDescriptor>(d: D) {
+        let len = D::F32Vec::LEN;
+        let a: Vec<f32> = (0..len).map(|i| i as f32).collect();
+        let b: Vec<f32> = (0..len).map(|i| (i + 100) as f32).collect();
+        let c: Vec<f32> = (0..len).map(|i| (i + 200) as f32).collect();
+        let e: Vec<f32> = (0..len).map(|i| (i + 300) as f32).collect();
+        let mut output = vec![0.0f32; 4 * len];
+
+        let a_vec = D::F32Vec::load(d, &a);
+        let b_vec = D::F32Vec::load(d, &b);
+        let c_vec = D::F32Vec::load(d, &c);
+        let d_vec = D::F32Vec::load(d, &e);
+        D::F32Vec::store_interleaved_4(a_vec, b_vec, c_vec, d_vec, &mut output);
+
+        // Verify interleaved output: [a0, b0, c0, d0, a1, b1, c1, d1, ...]
+        for i in 0..len {
+            assert_eq!(
+                output[4 * i],
+                a[i],
+                "store_interleaved_4 failed at position {}: expected a[{}]={}, got {}",
+                4 * i,
+                i,
+                a[i],
+                output[4 * i]
+            );
+            assert_eq!(
+                output[4 * i + 1],
+                b[i],
+                "store_interleaved_4 failed at position {}: expected b[{}]={}, got {}",
+                4 * i + 1,
+                i,
+                b[i],
+                output[4 * i + 1]
+            );
+            assert_eq!(
+                output[4 * i + 2],
+                c[i],
+                "store_interleaved_4 failed at position {}: expected c[{}]={}, got {}",
+                4 * i + 2,
+                i,
+                c[i],
+                output[4 * i + 2]
+            );
+            assert_eq!(
+                output[4 * i + 3],
+                e[i],
+                "store_interleaved_4 failed at position {}: expected d[{}]={}, got {}",
+                4 * i + 3,
+                i,
+                e[i],
+                output[4 * i + 3]
+            );
+        }
+    }
+    test_all_instruction_sets!(test_store_interleaved_4);
+
+    fn test_store_interleaved_8<D: SimdDescriptor>(d: D) {
+        let len = D::F32Vec::LEN;
+        let arr_a: Vec<f32> = (0..len).map(|i| i as f32).collect();
+        let arr_b: Vec<f32> = (0..len).map(|i| (i + 100) as f32).collect();
+        let arr_c: Vec<f32> = (0..len).map(|i| (i + 200) as f32).collect();
+        let arr_d: Vec<f32> = (0..len).map(|i| (i + 300) as f32).collect();
+        let arr_e: Vec<f32> = (0..len).map(|i| (i + 400) as f32).collect();
+        let arr_f: Vec<f32> = (0..len).map(|i| (i + 500) as f32).collect();
+        let arr_g: Vec<f32> = (0..len).map(|i| (i + 600) as f32).collect();
+        let arr_h: Vec<f32> = (0..len).map(|i| (i + 700) as f32).collect();
+        let mut output = vec![0.0f32; 8 * len];
+
+        let a = D::F32Vec::load(d, &arr_a);
+        let b = D::F32Vec::load(d, &arr_b);
+        let c = D::F32Vec::load(d, &arr_c);
+        let dv = D::F32Vec::load(d, &arr_d);
+        let e = D::F32Vec::load(d, &arr_e);
+        let f = D::F32Vec::load(d, &arr_f);
+        let g = D::F32Vec::load(d, &arr_g);
+        let h = D::F32Vec::load(d, &arr_h);
+        D::F32Vec::store_interleaved_8(a, b, c, dv, e, f, g, h, &mut output);
+
+        // Verify interleaved output: [a0, b0, c0, d0, e0, f0, g0, h0, a1, ...]
+        let arrays = [
+            &arr_a, &arr_b, &arr_c, &arr_d, &arr_e, &arr_f, &arr_g, &arr_h,
+        ];
+        for i in 0..len {
+            for (j, arr) in arrays.iter().enumerate() {
+                assert_eq!(
+                    output[8 * i + j],
+                    arr[i],
+                    "store_interleaved_8 failed at position {}: expected {}[{}]={}, got {}",
+                    8 * i + j,
+                    ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h'][j],
+                    i,
+                    arr[i],
+                    output[8 * i + j]
+                );
+            }
+        }
+    }
+    test_all_instruction_sets!(test_store_interleaved_8);
 }

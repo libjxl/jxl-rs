@@ -115,6 +115,268 @@ impl F32SimdVec for F32VecAvx512 {
         unsafe { _mm512_storeu_ps(mem.as_mut_ptr(), self.0) }
     }
 
+    #[inline(always)]
+    fn store_interleaved_2(a: Self, b: Self, dest: &mut [f32]) {
+        #[target_feature(enable = "avx512f")]
+        #[inline]
+        fn store_interleaved_2_impl(a: __m512, b: __m512, dest: &mut [f32]) {
+            assert!(dest.len() >= 2 * F32VecAvx512::LEN);
+            // a = [a0..a15], b = [b0..b15]
+            // Output: [a0, b0, a1, b1, ..., a15, b15]
+            // unpacklo within each 128-bit lane: lane0=[a0,b0,a1,b1], lane1=[a4,b4,a5,b5], etc.
+            let lo = _mm512_unpacklo_ps(a, b);
+            // unpackhi within each 128-bit lane: lane0=[a2,b2,a3,b3], lane1=[a6,b6,a7,b7], etc.
+            let hi = _mm512_unpackhi_ps(a, b);
+
+            // Permute to interleave 128-bit chunks from lo and hi
+            // out0 needs: lo lanes 0,1 interleaved with hi lanes 0,1
+            let idx_lo = _mm512_setr_epi32(0, 1, 2, 3, 16, 17, 18, 19, 4, 5, 6, 7, 20, 21, 22, 23);
+            // out1 needs: lo lanes 2,3 interleaved with hi lanes 2,3
+            let idx_hi =
+                _mm512_setr_epi32(8, 9, 10, 11, 24, 25, 26, 27, 12, 13, 14, 15, 28, 29, 30, 31);
+
+            let out0 = _mm512_permutex2var_ps(lo, idx_lo, hi);
+            let out1 = _mm512_permutex2var_ps(lo, idx_hi, hi);
+
+            // SAFETY: we just checked that dest has enough space.
+            unsafe {
+                _mm512_storeu_ps(dest.as_mut_ptr(), out0);
+                _mm512_storeu_ps(dest.as_mut_ptr().add(16), out1);
+            }
+        }
+
+        // SAFETY: avx512f is available from the safety invariant on the descriptor.
+        unsafe { store_interleaved_2_impl(a.0, b.0, dest) }
+    }
+
+    #[inline(always)]
+    fn store_interleaved_4(a: Self, b: Self, c: Self, d: Self, dest: &mut [f32]) {
+        #[target_feature(enable = "avx512f")]
+        #[inline]
+        fn store_interleaved_4_impl(a: __m512, b: __m512, c: __m512, d: __m512, dest: &mut [f32]) {
+            assert!(dest.len() >= 4 * F32VecAvx512::LEN);
+            // a = [a0..a15], b = [b0..b15], c = [c0..c15], d = [d0..d15]
+            // Output: [a0,b0,c0,d0, a1,b1,c1,d1, ..., a15,b15,c15,d15]
+
+            // Stage 1: Interleave pairs within 128-bit lanes
+            // ab_lo lane k: [a[4k], b[4k], a[4k+1], b[4k+1]]
+            let ab_lo = _mm512_unpacklo_ps(a, b);
+            // ab_hi lane k: [a[4k+2], b[4k+2], a[4k+3], b[4k+3]]
+            let ab_hi = _mm512_unpackhi_ps(a, b);
+            let cd_lo = _mm512_unpacklo_ps(c, d);
+            let cd_hi = _mm512_unpackhi_ps(c, d);
+
+            // Stage 2: 64-bit interleave to get 4 elements together
+            // abcd_0 lane k: [a[4k], b[4k], c[4k], d[4k]]
+            let abcd_0 = _mm512_castpd_ps(_mm512_unpacklo_pd(
+                _mm512_castps_pd(ab_lo),
+                _mm512_castps_pd(cd_lo),
+            ));
+            // abcd_1 lane k: [a[4k+1], b[4k+1], c[4k+1], d[4k+1]]
+            let abcd_1 = _mm512_castpd_ps(_mm512_unpackhi_pd(
+                _mm512_castps_pd(ab_lo),
+                _mm512_castps_pd(cd_lo),
+            ));
+            // abcd_2 lane k: [a[4k+2], b[4k+2], c[4k+2], d[4k+2]]
+            let abcd_2 = _mm512_castpd_ps(_mm512_unpacklo_pd(
+                _mm512_castps_pd(ab_hi),
+                _mm512_castps_pd(cd_hi),
+            ));
+            // abcd_3 lane k: [a[4k+3], b[4k+3], c[4k+3], d[4k+3]]
+            let abcd_3 = _mm512_castpd_ps(_mm512_unpackhi_pd(
+                _mm512_castps_pd(ab_hi),
+                _mm512_castps_pd(cd_hi),
+            ));
+
+            // Stage 3: We need to output where each output vector collects same-index
+            // elements from all 4 lanes. This is essentially a 4x4 transpose of 128-bit blocks.
+            // out0 = [abcd_0 lane 0, abcd_1 lane 0, abcd_2 lane 0, abcd_3 lane 0]
+            // out1 = [abcd_0 lane 1, abcd_1 lane 1, abcd_2 lane 1, abcd_3 lane 1]
+            // etc.
+
+            // Step 3a: First combine pairs (0,1) and (2,3) selecting same lane from each
+            // pair01_lane0 = [abcd_0 lane 0, abcd_1 lane 0, abcd_0 lane 2, abcd_1 lane 2]
+            let idx_even =
+                _mm512_setr_epi32(0, 1, 2, 3, 16, 17, 18, 19, 8, 9, 10, 11, 24, 25, 26, 27);
+            // pair01_lane1 = [abcd_0 lane 1, abcd_1 lane 1, abcd_0 lane 3, abcd_1 lane 3]
+            let idx_odd =
+                _mm512_setr_epi32(4, 5, 6, 7, 20, 21, 22, 23, 12, 13, 14, 15, 28, 29, 30, 31);
+
+            let pair01_02 = _mm512_permutex2var_ps(abcd_0, idx_even, abcd_1);
+            let pair01_13 = _mm512_permutex2var_ps(abcd_0, idx_odd, abcd_1);
+            let pair23_02 = _mm512_permutex2var_ps(abcd_2, idx_even, abcd_3);
+            let pair23_13 = _mm512_permutex2var_ps(abcd_2, idx_odd, abcd_3);
+
+            // Step 3b: Now combine pairs to get final output
+            // out0 needs lanes 0 from pair01_02 and pair23_02
+            // out1 needs lanes 1 from pair01_13 and pair23_13
+            // But pair01_02 has: [abcd_0 lane 0, abcd_1 lane 0, abcd_0 lane 2, abcd_1 lane 2]
+            // And pair23_02 has: [abcd_2 lane 0, abcd_3 lane 0, abcd_2 lane 2, abcd_3 lane 2]
+            // out0 = [abcd_0 lane 0, abcd_1 lane 0, abcd_2 lane 0, abcd_3 lane 0]
+            //      = [pair01_02 lane 0, pair01_02 lane 1, pair23_02 lane 0, pair23_02 lane 1]
+            let idx_0 = _mm512_setr_epi32(0, 1, 2, 3, 4, 5, 6, 7, 16, 17, 18, 19, 20, 21, 22, 23);
+            let idx_1 =
+                _mm512_setr_epi32(8, 9, 10, 11, 12, 13, 14, 15, 24, 25, 26, 27, 28, 29, 30, 31);
+
+            let out0 = _mm512_permutex2var_ps(pair01_02, idx_0, pair23_02);
+            let out2 = _mm512_permutex2var_ps(pair01_02, idx_1, pair23_02);
+            let out1 = _mm512_permutex2var_ps(pair01_13, idx_0, pair23_13);
+            let out3 = _mm512_permutex2var_ps(pair01_13, idx_1, pair23_13);
+
+            // SAFETY: we just checked that dest has enough space.
+            unsafe {
+                _mm512_storeu_ps(dest.as_mut_ptr(), out0);
+                _mm512_storeu_ps(dest.as_mut_ptr().add(16), out1);
+                _mm512_storeu_ps(dest.as_mut_ptr().add(32), out2);
+                _mm512_storeu_ps(dest.as_mut_ptr().add(48), out3);
+            }
+        }
+
+        // SAFETY: avx512f is available from the safety invariant on the descriptor.
+        unsafe { store_interleaved_4_impl(a.0, b.0, c.0, d.0, dest) }
+    }
+
+    #[inline(always)]
+    fn store_interleaved_8(
+        a: Self,
+        b: Self,
+        c: Self,
+        d: Self,
+        e: Self,
+        f: Self,
+        g: Self,
+        h: Self,
+        dest: &mut [f32],
+    ) {
+        #[target_feature(enable = "avx512f")]
+        #[inline]
+        fn store_interleaved_8_impl(
+            a: __m512,
+            b: __m512,
+            c: __m512,
+            d: __m512,
+            e: __m512,
+            f: __m512,
+            g: __m512,
+            h: __m512,
+            dest: &mut [f32],
+        ) {
+            assert!(dest.len() >= 8 * F32VecAvx512::LEN);
+            // a..h each have 16 elements. Output is 128 elements interleaved:
+            // [a0,b0,c0,d0,e0,f0,g0,h0, a1,b1,c1,d1,e1,f1,g1,h1, ..., a15,b15,...,h15]
+            // Each output vector is 16 floats = 2 groups of 8.
+
+            // Stage 1: Unpack pairs within 128-bit lanes
+            // ab_lo lane k: [a[4k], b[4k], a[4k+1], b[4k+1]]
+            let ab_lo = _mm512_unpacklo_ps(a, b);
+            let ab_hi = _mm512_unpackhi_ps(a, b);
+            let cd_lo = _mm512_unpacklo_ps(c, d);
+            let cd_hi = _mm512_unpackhi_ps(c, d);
+            let ef_lo = _mm512_unpacklo_ps(e, f);
+            let ef_hi = _mm512_unpackhi_ps(e, f);
+            let gh_lo = _mm512_unpacklo_ps(g, h);
+            let gh_hi = _mm512_unpackhi_ps(g, h);
+
+            // Stage 2: 64-bit interleave to get 4-element groups
+            // abcd_0 lane k: [a[4k], b[4k], c[4k], d[4k]]
+            let abcd_0 = _mm512_castpd_ps(_mm512_unpacklo_pd(
+                _mm512_castps_pd(ab_lo),
+                _mm512_castps_pd(cd_lo),
+            ));
+            let abcd_1 = _mm512_castpd_ps(_mm512_unpackhi_pd(
+                _mm512_castps_pd(ab_lo),
+                _mm512_castps_pd(cd_lo),
+            ));
+            let abcd_2 = _mm512_castpd_ps(_mm512_unpacklo_pd(
+                _mm512_castps_pd(ab_hi),
+                _mm512_castps_pd(cd_hi),
+            ));
+            let abcd_3 = _mm512_castpd_ps(_mm512_unpackhi_pd(
+                _mm512_castps_pd(ab_hi),
+                _mm512_castps_pd(cd_hi),
+            ));
+            let efgh_0 = _mm512_castpd_ps(_mm512_unpacklo_pd(
+                _mm512_castps_pd(ef_lo),
+                _mm512_castps_pd(gh_lo),
+            ));
+            let efgh_1 = _mm512_castpd_ps(_mm512_unpackhi_pd(
+                _mm512_castps_pd(ef_lo),
+                _mm512_castps_pd(gh_lo),
+            ));
+            let efgh_2 = _mm512_castpd_ps(_mm512_unpacklo_pd(
+                _mm512_castps_pd(ef_hi),
+                _mm512_castps_pd(gh_hi),
+            ));
+            let efgh_3 = _mm512_castpd_ps(_mm512_unpackhi_pd(
+                _mm512_castps_pd(ef_hi),
+                _mm512_castps_pd(gh_hi),
+            ));
+
+            // Stage 3: Combine abcd_i with efgh_i to get 8-element groups per lane
+            // full_0 = [abcd_0 lane 0, efgh_0 lane 0, abcd_0 lane 1, efgh_0 lane 1,
+            //           abcd_0 lane 2, efgh_0 lane 2, abcd_0 lane 3, efgh_0 lane 3]
+            // But we need output like:
+            // out0 = [all channels at index 0, all channels at index 1]
+            //      = [abcd_0 lane 0 ++ efgh_0 lane 0, abcd_1 lane 0 ++ efgh_1 lane 0]
+
+            // Interleave 128-bit blocks from abcd and efgh within each vector
+            let idx_02 =
+                _mm512_setr_epi32(0, 1, 2, 3, 16, 17, 18, 19, 8, 9, 10, 11, 24, 25, 26, 27);
+            let idx_13 =
+                _mm512_setr_epi32(4, 5, 6, 7, 20, 21, 22, 23, 12, 13, 14, 15, 28, 29, 30, 31);
+
+            // full_0_02 = [abcd_0 lane 0, efgh_0 lane 0, abcd_0 lane 2, efgh_0 lane 2]
+            let full_0_02 = _mm512_permutex2var_ps(abcd_0, idx_02, efgh_0);
+            let full_0_13 = _mm512_permutex2var_ps(abcd_0, idx_13, efgh_0);
+            let full_1_02 = _mm512_permutex2var_ps(abcd_1, idx_02, efgh_1);
+            let full_1_13 = _mm512_permutex2var_ps(abcd_1, idx_13, efgh_1);
+            let full_2_02 = _mm512_permutex2var_ps(abcd_2, idx_02, efgh_2);
+            let full_2_13 = _mm512_permutex2var_ps(abcd_2, idx_13, efgh_2);
+            let full_3_02 = _mm512_permutex2var_ps(abcd_3, idx_02, efgh_3);
+            let full_3_13 = _mm512_permutex2var_ps(abcd_3, idx_13, efgh_3);
+
+            // Stage 4: Now we need to combine across the _0/_1/_2/_3 indices
+            // full_i_02 has: [idx 4*lane, idx 4*lane+1 at (abcd,efgh) for lanes 0,2]
+            // We need output vectors that have consecutive indices from all channels
+
+            // out0 = [idx 0 all 8 ch, idx 1 all 8 ch] = [full_0_02 lanes 0,1, full_1_02 lanes 0,1]
+            // out1 = [idx 2 all 8 ch, idx 3 all 8 ch] = [full_2_02 lanes 0,1, full_3_02 lanes 0,1]
+            // out2 = [idx 4 all 8 ch, idx 5 all 8 ch] = [full_0_13 lanes 0,1, full_1_13 lanes 0,1]
+            // out3 = [idx 6 all 8 ch, idx 7 all 8 ch] = [full_2_13 lanes 0,1, full_3_13 lanes 0,1]
+            // out4 = [idx 8 all 8 ch, idx 9 all 8 ch] = [full_0_02 lanes 2,3, full_1_02 lanes 2,3]
+            // etc.
+
+            let idx_lo = _mm512_setr_epi32(0, 1, 2, 3, 4, 5, 6, 7, 16, 17, 18, 19, 20, 21, 22, 23);
+            let idx_hi =
+                _mm512_setr_epi32(8, 9, 10, 11, 12, 13, 14, 15, 24, 25, 26, 27, 28, 29, 30, 31);
+
+            let out0 = _mm512_permutex2var_ps(full_0_02, idx_lo, full_1_02);
+            let out1 = _mm512_permutex2var_ps(full_2_02, idx_lo, full_3_02);
+            let out2 = _mm512_permutex2var_ps(full_0_13, idx_lo, full_1_13);
+            let out3 = _mm512_permutex2var_ps(full_2_13, idx_lo, full_3_13);
+            let out4 = _mm512_permutex2var_ps(full_0_02, idx_hi, full_1_02);
+            let out5 = _mm512_permutex2var_ps(full_2_02, idx_hi, full_3_02);
+            let out6 = _mm512_permutex2var_ps(full_0_13, idx_hi, full_1_13);
+            let out7 = _mm512_permutex2var_ps(full_2_13, idx_hi, full_3_13);
+
+            // SAFETY: we just checked that dest has enough space.
+            unsafe {
+                let ptr = dest.as_mut_ptr();
+                _mm512_storeu_ps(ptr, out0);
+                _mm512_storeu_ps(ptr.add(16), out1);
+                _mm512_storeu_ps(ptr.add(32), out2);
+                _mm512_storeu_ps(ptr.add(48), out3);
+                _mm512_storeu_ps(ptr.add(64), out4);
+                _mm512_storeu_ps(ptr.add(80), out5);
+                _mm512_storeu_ps(ptr.add(96), out6);
+                _mm512_storeu_ps(ptr.add(112), out7);
+            }
+        }
+
+        // SAFETY: avx512f is available from the safety invariant on the descriptor.
+        unsafe { store_interleaved_8_impl(a.0, b.0, c.0, d.0, e.0, f.0, g.0, h.0, dest) }
+    }
+
     fn_avx!(this: F32VecAvx512, fn mul_add(mul: F32VecAvx512, add: F32VecAvx512) -> F32VecAvx512 {
         F32VecAvx512(_mm512_fmadd_ps(this.0, mul.0, add.0), this.1)
     });
@@ -170,6 +432,10 @@ impl F32SimdVec for F32VecAvx512 {
 
     fn_avx!(this: F32VecAvx512, fn max(other: F32VecAvx512) -> F32VecAvx512 {
         F32VecAvx512(_mm512_max_ps(this.0, other.0), this.1)
+    });
+
+    fn_avx!(this: F32VecAvx512, fn min(other: F32VecAvx512) -> F32VecAvx512 {
+        F32VecAvx512(_mm512_min_ps(this.0, other.0), this.1)
     });
 
     fn_avx!(this: F32VecAvx512, fn gt(other: F32VecAvx512) -> MaskAvx512 {

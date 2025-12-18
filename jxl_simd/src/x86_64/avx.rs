@@ -14,6 +14,87 @@ use std::{
     },
 };
 
+/// Core 8x8 transpose algorithm for AVX2.
+/// Takes 8 __m256 vectors representing rows and returns 8 transposed vectors.
+/// Used by both store_interleaved_8 and transpose_square.
+#[target_feature(enable = "avx2")]
+#[inline]
+fn transpose_8x8_core(
+    r0: __m256,
+    r1: __m256,
+    r2: __m256,
+    r3: __m256,
+    r4: __m256,
+    r5: __m256,
+    r6: __m256,
+    r7: __m256,
+) -> (
+    __m256,
+    __m256,
+    __m256,
+    __m256,
+    __m256,
+    __m256,
+    __m256,
+    __m256,
+) {
+    // Stage 1: Unpack low/high pairs
+    let t0 = _mm256_unpacklo_ps(r0, r1);
+    let t1 = _mm256_unpackhi_ps(r0, r1);
+    let t2 = _mm256_unpacklo_ps(r2, r3);
+    let t3 = _mm256_unpackhi_ps(r2, r3);
+    let t4 = _mm256_unpacklo_ps(r4, r5);
+    let t5 = _mm256_unpackhi_ps(r4, r5);
+    let t6 = _mm256_unpacklo_ps(r6, r7);
+    let t7 = _mm256_unpackhi_ps(r6, r7);
+
+    // Stage 2: Shuffle to group 32-bit elements using 64-bit unpacks
+    let s0 = _mm256_castpd_ps(_mm256_unpacklo_pd(
+        _mm256_castps_pd(t0),
+        _mm256_castps_pd(t2),
+    ));
+    let s1 = _mm256_castpd_ps(_mm256_unpackhi_pd(
+        _mm256_castps_pd(t0),
+        _mm256_castps_pd(t2),
+    ));
+    let s2 = _mm256_castpd_ps(_mm256_unpacklo_pd(
+        _mm256_castps_pd(t1),
+        _mm256_castps_pd(t3),
+    ));
+    let s3 = _mm256_castpd_ps(_mm256_unpackhi_pd(
+        _mm256_castps_pd(t1),
+        _mm256_castps_pd(t3),
+    ));
+    let s4 = _mm256_castpd_ps(_mm256_unpacklo_pd(
+        _mm256_castps_pd(t4),
+        _mm256_castps_pd(t6),
+    ));
+    let s5 = _mm256_castpd_ps(_mm256_unpackhi_pd(
+        _mm256_castps_pd(t4),
+        _mm256_castps_pd(t6),
+    ));
+    let s6 = _mm256_castpd_ps(_mm256_unpacklo_pd(
+        _mm256_castps_pd(t5),
+        _mm256_castps_pd(t7),
+    ));
+    let s7 = _mm256_castpd_ps(_mm256_unpackhi_pd(
+        _mm256_castps_pd(t5),
+        _mm256_castps_pd(t7),
+    ));
+
+    // Stage 3: 128-bit permute to finalize transpose
+    let c0 = _mm256_permute2f128_ps::<0x20>(s0, s4);
+    let c1 = _mm256_permute2f128_ps::<0x20>(s1, s5);
+    let c2 = _mm256_permute2f128_ps::<0x20>(s2, s6);
+    let c3 = _mm256_permute2f128_ps::<0x20>(s3, s7);
+    let c4 = _mm256_permute2f128_ps::<0x31>(s0, s4);
+    let c5 = _mm256_permute2f128_ps::<0x31>(s1, s5);
+    let c6 = _mm256_permute2f128_ps::<0x31>(s2, s6);
+    let c7 = _mm256_permute2f128_ps::<0x31>(s3, s7);
+
+    (c0, c1, c2, c3, c4, c5, c6, c7)
+}
+
 // Safety invariant: this type is only ever constructed if avx2 and fma are available.
 #[derive(Clone, Copy, Debug)]
 pub struct AvxDescriptor(());
@@ -116,6 +197,126 @@ impl F32SimdVec for F32VecAvx {
         unsafe { _mm256_storeu_ps(mem.as_mut_ptr(), self.0) }
     }
 
+    #[inline(always)]
+    fn store_interleaved_2(a: Self, b: Self, dest: &mut [f32]) {
+        #[target_feature(enable = "avx2")]
+        #[inline]
+        fn store_interleaved_2_impl(a: __m256, b: __m256, dest: &mut [f32]) {
+            assert!(dest.len() >= 2 * F32VecAvx::LEN);
+            // a = [a0, a1, a2, a3, a4, a5, a6, a7], b = [b0, b1, b2, b3, b4, b5, b6, b7]
+            // Output: [a0, b0, a1, b1, a2, b2, a3, b3, a4, b4, a5, b5, a6, b6, a7, b7]
+            let lo = _mm256_unpacklo_ps(a, b); // [a0, b0, a1, b1, a4, b4, a5, b5]
+            let hi = _mm256_unpackhi_ps(a, b); // [a2, b2, a3, b3, a6, b6, a7, b7]
+            // Need to permute to get correct order
+            let out0 = _mm256_permute2f128_ps::<0x20>(lo, hi); // lower halves: [a0,b0,a1,b1, a2,b2,a3,b3]
+            let out1 = _mm256_permute2f128_ps::<0x31>(lo, hi); // upper halves: [a4,b4,a5,b5, a6,b6,a7,b7]
+            // SAFETY: we just checked that dest has enough space.
+            unsafe {
+                _mm256_storeu_ps(dest.as_mut_ptr(), out0);
+                _mm256_storeu_ps(dest.as_mut_ptr().add(8), out1);
+            }
+        }
+
+        // SAFETY: avx2 is available from the safety invariant on the descriptor.
+        unsafe { store_interleaved_2_impl(a.0, b.0, dest) }
+    }
+
+    #[inline(always)]
+    fn store_interleaved_4(a: Self, b: Self, c: Self, d: Self, dest: &mut [f32]) {
+        #[target_feature(enable = "avx2")]
+        #[inline]
+        fn store_interleaved_4_impl(a: __m256, b: __m256, c: __m256, d: __m256, dest: &mut [f32]) {
+            assert!(dest.len() >= 4 * F32VecAvx::LEN);
+            // First interleave pairs
+            let ab_lo = _mm256_unpacklo_ps(a, b);
+            let ab_hi = _mm256_unpackhi_ps(a, b);
+            let cd_lo = _mm256_unpacklo_ps(c, d);
+            let cd_hi = _mm256_unpackhi_ps(c, d);
+
+            // Cast to pd for 64-bit interleave
+            let abcd_0 = _mm256_castpd_ps(_mm256_unpacklo_pd(
+                _mm256_castps_pd(ab_lo),
+                _mm256_castps_pd(cd_lo),
+            ));
+            let abcd_1 = _mm256_castpd_ps(_mm256_unpackhi_pd(
+                _mm256_castps_pd(ab_lo),
+                _mm256_castps_pd(cd_lo),
+            ));
+            let abcd_2 = _mm256_castpd_ps(_mm256_unpacklo_pd(
+                _mm256_castps_pd(ab_hi),
+                _mm256_castps_pd(cd_hi),
+            ));
+            let abcd_3 = _mm256_castpd_ps(_mm256_unpackhi_pd(
+                _mm256_castps_pd(ab_hi),
+                _mm256_castps_pd(cd_hi),
+            ));
+
+            // Permute to get correct order across lanes
+            let out0 = _mm256_permute2f128_ps::<0x20>(abcd_0, abcd_1);
+            let out1 = _mm256_permute2f128_ps::<0x20>(abcd_2, abcd_3);
+            let out2 = _mm256_permute2f128_ps::<0x31>(abcd_0, abcd_1);
+            let out3 = _mm256_permute2f128_ps::<0x31>(abcd_2, abcd_3);
+
+            // SAFETY: we just checked that dest has enough space.
+            unsafe {
+                _mm256_storeu_ps(dest.as_mut_ptr(), out0);
+                _mm256_storeu_ps(dest.as_mut_ptr().add(8), out1);
+                _mm256_storeu_ps(dest.as_mut_ptr().add(16), out2);
+                _mm256_storeu_ps(dest.as_mut_ptr().add(24), out3);
+            }
+        }
+
+        // SAFETY: avx2 is available from the safety invariant on the descriptor.
+        unsafe { store_interleaved_4_impl(a.0, b.0, c.0, d.0, dest) }
+    }
+
+    #[inline(always)]
+    fn store_interleaved_8(
+        a: Self,
+        b: Self,
+        c: Self,
+        d: Self,
+        e: Self,
+        f: Self,
+        g: Self,
+        h: Self,
+        dest: &mut [f32],
+    ) {
+        #[target_feature(enable = "avx2")]
+        #[inline]
+        fn store_interleaved_8_impl(
+            r0: __m256,
+            r1: __m256,
+            r2: __m256,
+            r3: __m256,
+            r4: __m256,
+            r5: __m256,
+            r6: __m256,
+            r7: __m256,
+            dest: &mut [f32],
+        ) {
+            assert!(dest.len() >= 8 * F32VecAvx::LEN);
+            // This is essentially an 8x8 transpose, same algorithm as transpose_square
+            let (c0, c1, c2, c3, c4, c5, c6, c7) =
+                transpose_8x8_core(r0, r1, r2, r3, r4, r5, r6, r7);
+
+            // SAFETY: we just checked that dest has enough space.
+            unsafe {
+                _mm256_storeu_ps(dest.as_mut_ptr(), c0);
+                _mm256_storeu_ps(dest.as_mut_ptr().add(8), c1);
+                _mm256_storeu_ps(dest.as_mut_ptr().add(16), c2);
+                _mm256_storeu_ps(dest.as_mut_ptr().add(24), c3);
+                _mm256_storeu_ps(dest.as_mut_ptr().add(32), c4);
+                _mm256_storeu_ps(dest.as_mut_ptr().add(40), c5);
+                _mm256_storeu_ps(dest.as_mut_ptr().add(48), c6);
+                _mm256_storeu_ps(dest.as_mut_ptr().add(56), c7);
+            }
+        }
+
+        // SAFETY: avx2 is available from the safety invariant on the descriptor.
+        unsafe { store_interleaved_8_impl(a.0, b.0, c.0, d.0, e.0, f.0, g.0, h.0, dest) }
+    }
+
     fn_avx!(this: F32VecAvx, fn mul_add(mul: F32VecAvx, add: F32VecAvx) -> F32VecAvx {
         F32VecAvx(_mm256_fmadd_ps(this.0, mul.0, add.0), this.1)
     });
@@ -167,6 +368,10 @@ impl F32SimdVec for F32VecAvx {
         F32VecAvx(_mm256_max_ps(this.0, other.0), this.1)
     });
 
+    fn_avx!(this: F32VecAvx, fn min(other: F32VecAvx) -> F32VecAvx {
+        F32VecAvx(_mm256_min_ps(this.0, other.0), this.1)
+    });
+
     fn_avx!(this: F32VecAvx, fn gt(other: F32VecAvx) -> MaskAvx {
         MaskAvx(_mm256_cmp_ps::<{_CMP_GT_OQ}>(this.0, other.0), this.1)
     });
@@ -185,19 +390,7 @@ impl F32SimdVec for F32VecAvx {
     fn transpose_square(d: Self::Descriptor, data: &mut [Self::UnderlyingArray], stride: usize) {
         #[target_feature(enable = "avx2")]
         #[inline]
-        fn unpacklo_pd(a: __m256, b: __m256) -> __m256 {
-            _mm256_castpd_ps(_mm256_unpacklo_pd(_mm256_castps_pd(a), _mm256_castps_pd(b)))
-        }
-
-        #[target_feature(enable = "avx2")]
-        #[inline]
-        fn unpackhi_pd(a: __m256, b: __m256) -> __m256 {
-            _mm256_castpd_ps(_mm256_unpackhi_pd(_mm256_castps_pd(a), _mm256_castps_pd(b)))
-        }
-
-        #[target_feature(enable = "avx2")]
-        #[inline]
-        fn transpose8x8f32(d: AvxDescriptor, data: &mut [[f32; 8]], stride: usize) {
+        unsafe fn transpose8x8f32(d: AvxDescriptor, data: &mut [[f32; 8]], stride: usize) {
             assert!(data.len() > stride * 7);
 
             let r0 = F32VecAvx::load_array(d, &data[0]).0;
@@ -209,35 +402,9 @@ impl F32SimdVec for F32VecAvx {
             let r6 = F32VecAvx::load_array(d, &data[6 * stride]).0;
             let r7 = F32VecAvx::load_array(d, &data[7 * stride]).0;
 
-            // Stage 1: Unpack low/high pairs
-            let t0 = _mm256_unpacklo_ps(r0, r1);
-            let t1 = _mm256_unpackhi_ps(r0, r1);
-            let t2 = _mm256_unpacklo_ps(r2, r3);
-            let t3 = _mm256_unpackhi_ps(r2, r3);
-            let t4 = _mm256_unpacklo_ps(r4, r5);
-            let t5 = _mm256_unpackhi_ps(r4, r5);
-            let t6 = _mm256_unpacklo_ps(r6, r7);
-            let t7 = _mm256_unpackhi_ps(r6, r7);
-
-            // Stage 2: Shuffle to group 32-bit elements
-            let s0 = unpacklo_pd(t0, t2);
-            let s1 = unpackhi_pd(t0, t2);
-            let s2 = unpacklo_pd(t1, t3);
-            let s3 = unpackhi_pd(t1, t3);
-            let s4 = unpacklo_pd(t4, t6);
-            let s5 = unpackhi_pd(t4, t6);
-            let s6 = unpacklo_pd(t5, t7);
-            let s7 = unpackhi_pd(t5, t7);
-
-            // Stage 3: 128-bit permute to finalize transpose
-            let c0 = _mm256_permute2f128_ps::<0x20>(s0, s4);
-            let c1 = _mm256_permute2f128_ps::<0x20>(s1, s5);
-            let c2 = _mm256_permute2f128_ps::<0x20>(s2, s6);
-            let c3 = _mm256_permute2f128_ps::<0x20>(s3, s7);
-            let c4 = _mm256_permute2f128_ps::<0x31>(s0, s4);
-            let c5 = _mm256_permute2f128_ps::<0x31>(s1, s5);
-            let c6 = _mm256_permute2f128_ps::<0x31>(s2, s6);
-            let c7 = _mm256_permute2f128_ps::<0x31>(s3, s7);
+            // SAFETY: caller guarantees avx2 is available
+            let (c0, c1, c2, c3, c4, c5, c6, c7) =
+                unsafe { transpose_8x8_core(r0, r1, r2, r3, r4, r5, r6, r7) };
 
             F32VecAvx(c0, d).store_array(&mut data[0]);
             F32VecAvx(c1, d).store_array(&mut data[1 * stride]);
