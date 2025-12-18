@@ -33,56 +33,48 @@ simd_function!(
     convolve_noise_simd_dispatch,
     d: D,
     fn convolve_noise_simd(input: &[&[f32]], output: &mut [f32], xsize: usize) {
-        let simd_width = D::F32Vec::LEN;
-
         // Precompute constants
         let c016 = D::F32Vec::splat(d, 0.16);
         let cn384 = D::F32Vec::splat(d, -3.84);
 
-        // Process in SIMD chunks
-        let mut x = 0;
-        while x + simd_width <= xsize {
+        // Windows of size LEN+4 from each row (for offsets 0..5), stepping by LEN
+        let iter0 = input[0].windows(D::F32Vec::LEN + 4).step_by(D::F32Vec::LEN);
+        let iter1 = input[1].windows(D::F32Vec::LEN + 4).step_by(D::F32Vec::LEN);
+        let iter2 = input[2].windows(D::F32Vec::LEN + 4).step_by(D::F32Vec::LEN);
+        let iter3 = input[3].windows(D::F32Vec::LEN + 4).step_by(D::F32Vec::LEN);
+        let iter4 = input[4].windows(D::F32Vec::LEN + 4).step_by(D::F32Vec::LEN);
+        let out_iter = output.chunks_exact_mut(D::F32Vec::LEN);
+
+        for ((((w0, w1), w2), w3), (w4, out)) in iter0
+            .zip(iter1)
+            .zip(iter2)
+            .zip(iter3)
+            .zip(iter4.zip(out_iter))
+            .take(xsize.div_ceil(D::F32Vec::LEN))
+        {
             // Load center pixel (row 2, offset +2)
-            let p00 = D::F32Vec::load(d, &input[2][x + 2..]);
+            let p00 = D::F32Vec::load(d, &w2[2..]);
 
             // Accumulate surrounding pixels
             let mut others = D::F32Vec::splat(d, 0.0);
 
-            // Add all 5 rows × 5 offsets (except center row 2)
+            // Add all 5 offsets for rows 0, 1, 3, 4
             for i in 0..5 {
-                others = others + D::F32Vec::load(d, &input[0][x + i..]);
-                others = others + D::F32Vec::load(d, &input[1][x + i..]);
-                others = others + D::F32Vec::load(d, &input[3][x + i..]);
-                others = others + D::F32Vec::load(d, &input[4][x + i..]);
+                others = others + D::F32Vec::load(d, &w0[i..]);
+                others = others + D::F32Vec::load(d, &w1[i..]);
+                others = others + D::F32Vec::load(d, &w3[i..]);
+                others = others + D::F32Vec::load(d, &w4[i..]);
             }
 
-            // Add row 2 neighbors (offset 0, 1, 3, 4 - skip center at offset 2)
-            others = others + D::F32Vec::load(d, &input[2][x..]);
-            others = others + D::F32Vec::load(d, &input[2][x + 1..]);
-            others = others + D::F32Vec::load(d, &input[2][x + 3..]);
-            others = others + D::F32Vec::load(d, &input[2][x + 4..]);
+            // Add row 2 neighbors (skip center at offset 2)
+            others = others + D::F32Vec::load(d, &w2[0..]);
+            others = others + D::F32Vec::load(d, &w2[1..]);
+            others = others + D::F32Vec::load(d, &w2[3..]);
+            others = others + D::F32Vec::load(d, &w2[4..]);
 
             // Compute: others * 0.16 + center * -3.84
             let result = others.mul_add(c016, p00 * cn384);
-
-            result.store(&mut output[x..]);
-            x += simd_width;
-        }
-
-        // Scalar tail
-        for x in x..xsize {
-            let mut others = 0.0;
-            for i in 0..5 {
-                others += input[0][x + i];
-                others += input[1][x + i];
-                others += input[3][x + i];
-                others += input[4][x + i];
-            }
-            others += input[2][x];
-            others += input[2][x + 1];
-            others += input[2][x + 3];
-            others += input[2][x + 4];
-            output[x] = others * 0.16 + input[2][x + 2] * -3.84;
+            result.store(out);
         }
     }
 );
