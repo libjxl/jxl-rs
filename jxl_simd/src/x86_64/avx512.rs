@@ -7,6 +7,7 @@ use super::super::{AvxDescriptor, F32SimdVec, I32SimdVec, SimdDescriptor, SimdMa
 use crate::{Sse42Descriptor, U32SimdVec, impl_f32_array_interface};
 use std::{
     arch::x86_64::*,
+    mem::MaybeUninit,
     ops::{
         Add, AddAssign, BitAnd, BitAndAssign, BitOr, BitOrAssign, BitXor, BitXorAssign, Div,
         DivAssign, Mul, MulAssign, Neg, Shl, ShlAssign, Shr, ShrAssign, Sub, SubAssign,
@@ -94,7 +95,9 @@ pub struct F32VecAvx512(__m512, Avx512Descriptor);
 #[repr(transparent)]
 pub struct MaskAvx512(__mmask16, Avx512Descriptor);
 
-impl F32SimdVec for F32VecAvx512 {
+// SAFETY: The methods in this implementation that write to `MaybeUninit` (store_interleaved_*)
+// ensure that they write valid data to the output slice without reading uninitialized memory.
+unsafe impl F32SimdVec for F32VecAvx512 {
     type Descriptor = Avx512Descriptor;
 
     const LEN: usize = 16;
@@ -116,10 +119,10 @@ impl F32SimdVec for F32VecAvx512 {
     }
 
     #[inline(always)]
-    fn store_interleaved_2(a: Self, b: Self, dest: &mut [f32]) {
+    fn store_interleaved_2_uninit(a: Self, b: Self, dest: &mut [MaybeUninit<f32>]) {
         #[target_feature(enable = "avx512f")]
         #[inline]
-        fn store_interleaved_2_impl(a: __m512, b: __m512, dest: &mut [f32]) {
+        fn store_interleaved_2_impl(a: __m512, b: __m512, dest: &mut [MaybeUninit<f32>]) {
             assert!(dest.len() >= 2 * F32VecAvx512::LEN);
             // a = [a0..a15], b = [b0..b15]
             // Output: [a0, b0, a1, b1, ..., a15, b15]
@@ -138,10 +141,11 @@ impl F32SimdVec for F32VecAvx512 {
             let out0 = _mm512_permutex2var_ps(lo, idx_lo, hi);
             let out1 = _mm512_permutex2var_ps(lo, idx_hi, hi);
 
-            // SAFETY: we just checked that dest has enough space.
+            // SAFETY: `dest` has enough space and writing to `MaybeUninit<f32>` through `*mut f32` is valid.
             unsafe {
-                _mm512_storeu_ps(dest.as_mut_ptr(), out0);
-                _mm512_storeu_ps(dest.as_mut_ptr().add(16), out1);
+                let dest_ptr = dest.as_mut_ptr() as *mut f32;
+                _mm512_storeu_ps(dest_ptr, out0);
+                _mm512_storeu_ps(dest_ptr.add(16), out1);
             }
         }
 
@@ -150,10 +154,66 @@ impl F32SimdVec for F32VecAvx512 {
     }
 
     #[inline(always)]
-    fn store_interleaved_4(a: Self, b: Self, c: Self, d: Self, dest: &mut [f32]) {
+    fn store_interleaved_3_uninit(a: Self, b: Self, c: Self, dest: &mut [MaybeUninit<f32>]) {
         #[target_feature(enable = "avx512f")]
         #[inline]
-        fn store_interleaved_4_impl(a: __m512, b: __m512, c: __m512, d: __m512, dest: &mut [f32]) {
+        fn store_interleaved_3_impl(
+            a: __m512,
+            b: __m512,
+            c: __m512,
+            dest: &mut [MaybeUninit<f32>],
+        ) {
+            assert!(dest.len() >= 3 * F32VecAvx512::LEN);
+
+            let idx_ab0 = _mm512_setr_epi32(0, 16, 0, 1, 17, 0, 2, 18, 0, 3, 19, 0, 4, 20, 0, 5);
+            let idx_c0 = _mm512_setr_epi32(0, 0, 0, 0, 0, 1, 0, 0, 2, 0, 0, 3, 0, 0, 4, 0);
+
+            let idx_ab1 = _mm512_setr_epi32(21, 0, 6, 22, 0, 7, 23, 0, 8, 24, 0, 9, 25, 0, 10, 26);
+            let idx_c1 = _mm512_setr_epi32(0, 5, 0, 0, 6, 0, 0, 7, 0, 0, 8, 0, 0, 9, 0, 0);
+
+            let idx_ab2 =
+                _mm512_setr_epi32(0, 11, 27, 0, 12, 28, 0, 13, 29, 0, 14, 30, 0, 15, 31, 0);
+            let idx_c2 = _mm512_setr_epi32(10, 0, 0, 11, 0, 0, 12, 0, 0, 13, 0, 0, 14, 0, 0, 15);
+
+            let out0 = _mm512_permutex2var_ps(a, idx_ab0, b);
+            let out0 = _mm512_mask_permutexvar_ps(out0, 0b0100100100100100, idx_c0, c);
+
+            let out1 = _mm512_permutex2var_ps(a, idx_ab1, b);
+            let out1 = _mm512_mask_permutexvar_ps(out1, 0b0010010010010010, idx_c1, c);
+
+            let out2 = _mm512_permutex2var_ps(a, idx_ab2, b);
+            let out2 = _mm512_mask_permutexvar_ps(out2, 0b1001001001001001, idx_c2, c);
+
+            // SAFETY: `dest` has enough space and writing to `MaybeUninit<f32>` through `*mut f32` is valid.
+            unsafe {
+                let dest_ptr = dest.as_mut_ptr() as *mut f32;
+                _mm512_storeu_ps(dest_ptr, out0);
+                _mm512_storeu_ps(dest_ptr.add(16), out1);
+                _mm512_storeu_ps(dest_ptr.add(32), out2);
+            }
+        }
+
+        // SAFETY: avx512f is available from the safety invariant on the descriptor.
+        unsafe { store_interleaved_3_impl(a.0, b.0, c.0, dest) }
+    }
+
+    #[inline(always)]
+    fn store_interleaved_4_uninit(
+        a: Self,
+        b: Self,
+        c: Self,
+        d: Self,
+        dest: &mut [MaybeUninit<f32>],
+    ) {
+        #[target_feature(enable = "avx512f")]
+        #[inline]
+        fn store_interleaved_4_impl(
+            a: __m512,
+            b: __m512,
+            c: __m512,
+            d: __m512,
+            dest: &mut [MaybeUninit<f32>],
+        ) {
             assert!(dest.len() >= 4 * F32VecAvx512::LEN);
             // a = [a0..a15], b = [b0..b15], c = [c0..c15], d = [d0..d15]
             // Output: [a0,b0,c0,d0, a1,b1,c1,d1, ..., a15,b15,c15,d15]
@@ -223,12 +283,13 @@ impl F32SimdVec for F32VecAvx512 {
             let out1 = _mm512_permutex2var_ps(pair01_13, idx_0, pair23_13);
             let out3 = _mm512_permutex2var_ps(pair01_13, idx_1, pair23_13);
 
-            // SAFETY: we just checked that dest has enough space.
+            // SAFETY: `dest` has enough space and writing to `MaybeUninit<f32>` through `*mut f32` is valid.
             unsafe {
-                _mm512_storeu_ps(dest.as_mut_ptr(), out0);
-                _mm512_storeu_ps(dest.as_mut_ptr().add(16), out1);
-                _mm512_storeu_ps(dest.as_mut_ptr().add(32), out2);
-                _mm512_storeu_ps(dest.as_mut_ptr().add(48), out3);
+                let dest_ptr = dest.as_mut_ptr() as *mut f32;
+                _mm512_storeu_ps(dest_ptr, out0);
+                _mm512_storeu_ps(dest_ptr.add(16), out1);
+                _mm512_storeu_ps(dest_ptr.add(32), out2);
+                _mm512_storeu_ps(dest_ptr.add(48), out3);
             }
         }
 

@@ -3,8 +3,11 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
+#![allow(clippy::too_many_arguments)]
+
 use std::{
     fmt::Debug,
+    mem::MaybeUninit,
     ops::{
         Add, AddAssign, BitAnd, BitAndAssign, BitOr, BitOrAssign, BitXor, BitXorAssign, Div,
         DivAssign, Mul, MulAssign, Neg, Sub, SubAssign,
@@ -59,7 +62,11 @@ pub trait SimdDescriptor: Sized + Copy + Debug + Send + Sync {
     fn call<R>(self, f: impl FnOnce(Self) -> R) -> R;
 }
 
-pub trait F32SimdVec:
+/// # Safety
+///
+/// Implementors are required to respect the safety promises of the methods in this trait.
+/// Specifically, this applies to the store_*_uninit methods.
+pub unsafe trait F32SimdVec:
     Sized
     + Copy
     + Debug
@@ -104,11 +111,64 @@ pub trait F32SimdVec:
 
     /// Stores two vectors interleaved: [a0, b0, a1, b1, a2, b2, ...].
     /// Requires `dest.len() >= 2 * Self::LEN` or it will panic.
-    fn store_interleaved_2(a: Self, b: Self, dest: &mut [f32]);
+    #[inline(always)]
+    fn store_interleaved_2(a: Self, b: Self, dest: &mut [f32]) {
+        // SAFETY: f32 and MaybeUninit<f32> have the same layout.
+        // We are writing to initialized memory, so treating it as uninit for writing is fine.
+        let dest = unsafe {
+            std::slice::from_raw_parts_mut(dest.as_mut_ptr() as *mut MaybeUninit<f32>, dest.len())
+        };
+        Self::store_interleaved_2_uninit(a, b, dest);
+    }
+
+    /// Stores three vectors interleaved: [a0, b0, c0, a1, b1, c1, ...].
+    /// Requires `dest.len() >= 3 * Self::LEN` or it will panic.
+    #[inline(always)]
+    fn store_interleaved_3(a: Self, b: Self, c: Self, dest: &mut [f32]) {
+        // SAFETY: f32 and MaybeUninit<f32> have the same layout.
+        // We are writing to initialized memory, so treating it as uninit for writing is fine.
+        let dest = unsafe {
+            std::slice::from_raw_parts_mut(dest.as_mut_ptr() as *mut MaybeUninit<f32>, dest.len())
+        };
+        Self::store_interleaved_3_uninit(a, b, c, dest);
+    }
 
     /// Stores four vectors interleaved: [a0, b0, c0, d0, a1, b1, c1, d1, ...].
     /// Requires `dest.len() >= 4 * Self::LEN` or it will panic.
-    fn store_interleaved_4(a: Self, b: Self, c: Self, d: Self, dest: &mut [f32]);
+    #[inline(always)]
+    fn store_interleaved_4(a: Self, b: Self, c: Self, d: Self, dest: &mut [f32]) {
+        // SAFETY: f32 and MaybeUninit<f32> have the same layout.
+        // We are writing to initialized memory, so treating it as uninit for writing is fine.
+        let dest = unsafe {
+            std::slice::from_raw_parts_mut(dest.as_mut_ptr() as *mut MaybeUninit<f32>, dest.len())
+        };
+        Self::store_interleaved_4_uninit(a, b, c, d, dest);
+    }
+
+    /// Stores two vectors interleaved: [a0, b0, a1, b1, a2, b2, ...].
+    /// Requires `dest.len() >= 2 * Self::LEN` or it will panic.
+    ///
+    /// Safety note:
+    /// Does not write uninitialized data into `dest`.
+    fn store_interleaved_2_uninit(a: Self, b: Self, dest: &mut [MaybeUninit<f32>]);
+
+    /// Stores three vectors interleaved: [a0, b0, c0, a1, b1, c1, ...].
+    /// Requires `dest.len() >= 3 * Self::LEN` or it will panic.
+    /// Safety note:
+    /// Does not write uninitialized data into `dest`.
+    fn store_interleaved_3_uninit(a: Self, b: Self, c: Self, dest: &mut [MaybeUninit<f32>]);
+
+    /// Stores four vectors interleaved: [a0, b0, c0, d0, a1, b1, c1, d1, ...].
+    /// Requires `dest.len() >= 4 * Self::LEN` or it will panic.
+    /// Safety note:
+    /// Does not write uninitialized data into `dest`.
+    fn store_interleaved_4_uninit(
+        a: Self,
+        b: Self,
+        c: Self,
+        d: Self,
+        dest: &mut [MaybeUninit<f32>],
+    );
 
     /// Stores eight vectors interleaved: [a0, b0, c0, d0, e0, f0, g0, h0, a1, ...].
     /// Requires `dest.len() >= 8 * Self::LEN` or it will panic.
@@ -621,6 +681,51 @@ mod test {
         }
     }
     test_all_instruction_sets!(test_store_interleaved_2);
+
+    fn test_store_interleaved_3<D: SimdDescriptor>(d: D) {
+        let len = D::F32Vec::LEN;
+        let a: Vec<f32> = (0..len).map(|i| i as f32).collect();
+        let b: Vec<f32> = (0..len).map(|i| (i + 100) as f32).collect();
+        let c: Vec<f32> = (0..len).map(|i| (i + 200) as f32).collect();
+        let mut output = vec![0.0f32; 3 * len];
+
+        let a_vec = D::F32Vec::load(d, &a);
+        let b_vec = D::F32Vec::load(d, &b);
+        let c_vec = D::F32Vec::load(d, &c);
+        D::F32Vec::store_interleaved_3(a_vec, b_vec, c_vec, &mut output);
+
+        // Verify interleaved output: [a0, b0, c0, a1, b1, c1, ...]
+        for i in 0..len {
+            assert_eq!(
+                output[3 * i],
+                a[i],
+                "store_interleaved_3 failed at position {}: expected a[{}]={}, got {}",
+                3 * i,
+                i,
+                a[i],
+                output[3 * i]
+            );
+            assert_eq!(
+                output[3 * i + 1],
+                b[i],
+                "store_interleaved_3 failed at position {}: expected b[{}]={}, got {}",
+                3 * i + 1,
+                i,
+                b[i],
+                output[3 * i + 1]
+            );
+            assert_eq!(
+                output[3 * i + 2],
+                c[i],
+                "store_interleaved_3 failed at position {}: expected c[{}]={}, got {}",
+                3 * i + 2,
+                i,
+                c[i],
+                output[3 * i + 2]
+            );
+        }
+    }
+    test_all_instruction_sets!(test_store_interleaved_3);
 
     fn test_store_interleaved_4<D: SimdDescriptor>(d: D) {
         let len = D::F32Vec::LEN;

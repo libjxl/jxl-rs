@@ -8,6 +8,7 @@ use crate::{U32SimdVec, impl_f32_array_interface};
 use super::super::{F32SimdVec, I32SimdVec, SimdDescriptor, SimdMask};
 use std::{
     arch::x86_64::*,
+    mem::MaybeUninit,
     ops::{
         Add, AddAssign, BitAnd, BitAndAssign, BitOr, BitOrAssign, BitXor, BitXorAssign, Div,
         DivAssign, Mul, MulAssign, Neg, Sub, SubAssign,
@@ -89,7 +90,9 @@ pub struct F32VecSse42(__m128, Sse42Descriptor);
 #[repr(transparent)]
 pub struct MaskSse42(__m128, Sse42Descriptor);
 
-impl F32SimdVec for F32VecSse42 {
+// SAFETY: The methods in this implementation that write to `MaybeUninit` (store_interleaved_*)
+// ensure that they write valid data to the output slice without reading uninitialized memory.
+unsafe impl F32SimdVec for F32VecSse42 {
     type Descriptor = Sse42Descriptor;
 
     const LEN: usize = 4;
@@ -111,19 +114,20 @@ impl F32SimdVec for F32VecSse42 {
     }
 
     #[inline(always)]
-    fn store_interleaved_2(a: Self, b: Self, dest: &mut [f32]) {
+    fn store_interleaved_2_uninit(a: Self, b: Self, dest: &mut [MaybeUninit<f32>]) {
         #[target_feature(enable = "sse4.2")]
         #[inline]
-        fn store_interleaved_2_impl(a: __m128, b: __m128, dest: &mut [f32]) {
+        fn store_interleaved_2_impl(a: __m128, b: __m128, dest: &mut [MaybeUninit<f32>]) {
             assert!(dest.len() >= 2 * F32VecSse42::LEN);
             // a = [a0, a1, a2, a3], b = [b0, b1, b2, b3]
             // lo = [a0, b0, a1, b1], hi = [a2, b2, a3, b3]
             let lo = _mm_unpacklo_ps(a, b);
             let hi = _mm_unpackhi_ps(a, b);
-            // SAFETY: we just checked that dest has enough space.
+            // SAFETY: `dest` has enough space and writing to `MaybeUninit<f32>` through `*mut f32` is valid.
             unsafe {
-                _mm_storeu_ps(dest.as_mut_ptr(), lo);
-                _mm_storeu_ps(dest.as_mut_ptr().add(4), hi);
+                let dest_ptr = dest.as_mut_ptr() as *mut f32;
+                _mm_storeu_ps(dest_ptr, lo);
+                _mm_storeu_ps(dest_ptr.add(4), hi);
             }
         }
 
@@ -132,10 +136,76 @@ impl F32SimdVec for F32VecSse42 {
     }
 
     #[inline(always)]
-    fn store_interleaved_4(a: Self, b: Self, c: Self, d: Self, dest: &mut [f32]) {
+    fn store_interleaved_3_uninit(a: Self, b: Self, c: Self, dest: &mut [MaybeUninit<f32>]) {
         #[target_feature(enable = "sse4.2")]
         #[inline]
-        fn store_interleaved_4_impl(a: __m128, b: __m128, c: __m128, d: __m128, dest: &mut [f32]) {
+        fn store_interleaved_3_impl(
+            a: __m128,
+            b: __m128,
+            c: __m128,
+            dest: &mut [MaybeUninit<f32>],
+        ) {
+            assert!(dest.len() >= 3 * F32VecSse42::LEN);
+            // Input vectors:
+            // a = [a0, a1, a2, a3]
+            // b = [b0, b1, b2, b3]
+            // c = [c0, c1, c2, c3]
+
+            // Desired interleaved output stored in 3 __m128 registers:
+            // out0 = [a0, b0, c0, a1]
+            // out1 = [b1, c1, a2, b2]
+            // out2 = [c2, a3, b3, c3]
+
+            // Intermediate interleavings of input pairs
+            let p_ab_lo = _mm_unpacklo_ps(a, b); // [a0, b0, a1, b1]
+            let p_ab_hi = _mm_unpackhi_ps(a, b); // [a2, b2, a3, b3]
+
+            let p_ca_lo = _mm_unpacklo_ps(c, a); // [c0, a0, c1, a1]
+            let p_ca_hi = _mm_unpackhi_ps(c, a); // [c2, a2, c3, a3]
+
+            let p_bc_hi = _mm_unpackhi_ps(b, c); // [b2, c2, b3, c3]
+
+            // Construct out0 = [a0, b0, c0, a1]
+            let out0 = _mm_shuffle_ps::<0xC4>(p_ab_lo, p_ca_lo);
+
+            // Construct out1 = [b1, c1, a2, b2]
+            let out1_tmp1 = _mm_shuffle_ps::<0xAF>(p_ab_lo, p_ca_lo); // [b1, b1, c1, c1]
+            let out1 = _mm_shuffle_ps::<0x48>(out1_tmp1, p_ab_hi);
+
+            // Construct out2 = [c2, a3, b3, c3]
+            let out2 = _mm_shuffle_ps::<0xEC>(p_ca_hi, p_bc_hi);
+
+            // Store the results
+            // SAFETY: `dest` has enough space and writing to `MaybeUninit<f32>` through `*mut f32` is valid.
+            unsafe {
+                let dest_ptr = dest.as_mut_ptr() as *mut f32;
+                _mm_storeu_ps(dest_ptr, out0);
+                _mm_storeu_ps(dest_ptr.add(4), out1);
+                _mm_storeu_ps(dest_ptr.add(8), out2);
+            }
+        }
+
+        // SAFETY: sse4.2 is available from the safety invariant on the descriptor.
+        unsafe { store_interleaved_3_impl(a.0, b.0, c.0, dest) }
+    }
+
+    #[inline(always)]
+    fn store_interleaved_4_uninit(
+        a: Self,
+        b: Self,
+        c: Self,
+        d: Self,
+        dest: &mut [MaybeUninit<f32>],
+    ) {
+        #[target_feature(enable = "sse4.2")]
+        #[inline]
+        fn store_interleaved_4_impl(
+            a: __m128,
+            b: __m128,
+            c: __m128,
+            d: __m128,
+            dest: &mut [MaybeUninit<f32>],
+        ) {
             assert!(dest.len() >= 4 * F32VecSse42::LEN);
             // First interleave pairs: ab and cd
             let ab_lo = _mm_unpacklo_ps(a, b); // [a0, b0, a1, b1]
@@ -149,12 +219,13 @@ impl F32SimdVec for F32VecSse42 {
             let out2 = _mm_castpd_ps(_mm_unpacklo_pd(_mm_castps_pd(ab_hi), _mm_castps_pd(cd_hi))); // [a2, b2, c2, d2]
             let out3 = _mm_castpd_ps(_mm_unpackhi_pd(_mm_castps_pd(ab_hi), _mm_castps_pd(cd_hi))); // [a3, b3, c3, d3]
 
-            // SAFETY: we just checked that dest has enough space.
+            // SAFETY: `dest` has enough space and writing to `MaybeUninit<f32>` through `*mut f32` is valid.
             unsafe {
-                _mm_storeu_ps(dest.as_mut_ptr(), out0);
-                _mm_storeu_ps(dest.as_mut_ptr().add(4), out1);
-                _mm_storeu_ps(dest.as_mut_ptr().add(8), out2);
-                _mm_storeu_ps(dest.as_mut_ptr().add(12), out3);
+                let dest_ptr = dest.as_mut_ptr() as *mut f32;
+                _mm_storeu_ps(dest_ptr, out0);
+                _mm_storeu_ps(dest_ptr.add(4), out1);
+                _mm_storeu_ps(dest_ptr.add(8), out2);
+                _mm_storeu_ps(dest_ptr.add(12), out3);
             }
         }
 

@@ -3,6 +3,8 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
+use std::mem::MaybeUninit;
+
 use crate::{U32SimdVec, impl_f32_array_interface};
 
 use super::{F32SimdVec, I32SimdVec, SimdDescriptor, SimdMask};
@@ -37,7 +39,9 @@ impl SimdDescriptor for ScalarDescriptor {
     }
 }
 
-impl F32SimdVec for f32 {
+// SAFETY: This implementation only write initialized data in the
+// `&mut [MaybeUninit<f32>]` arguments to *_uninit methods.
+unsafe impl F32SimdVec for f32 {
     type Descriptor = ScalarDescriptor;
 
     const LEN: usize = 1;
@@ -53,17 +57,30 @@ impl F32SimdVec for f32 {
     }
 
     #[inline(always)]
-    fn store_interleaved_2(a: Self, b: Self, dest: &mut [f32]) {
-        dest[0] = a;
-        dest[1] = b;
+    fn store_interleaved_2_uninit(a: Self, b: Self, dest: &mut [MaybeUninit<f32>]) {
+        dest[0].write(a);
+        dest[1].write(b);
     }
 
     #[inline(always)]
-    fn store_interleaved_4(a: Self, b: Self, c: Self, d: Self, dest: &mut [f32]) {
-        dest[0] = a;
-        dest[1] = b;
-        dest[2] = c;
-        dest[3] = d;
+    fn store_interleaved_3_uninit(a: Self, b: Self, c: Self, dest: &mut [MaybeUninit<f32>]) {
+        dest[0].write(a);
+        dest[1].write(b);
+        dest[2].write(c);
+    }
+
+    #[inline(always)]
+    fn store_interleaved_4_uninit(
+        a: Self,
+        b: Self,
+        c: Self,
+        d: Self,
+        dest: &mut [MaybeUninit<f32>],
+    ) {
+        dest[0].write(a);
+        dest[1].write(b);
+        dest[2].write(c);
+        dest[3].write(d);
     }
 
     #[inline(always)]

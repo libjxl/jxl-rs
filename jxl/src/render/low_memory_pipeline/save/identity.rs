@@ -5,12 +5,112 @@
 
 #![allow(unsafe_code)]
 
+use std::mem::MaybeUninit;
 use std::ops::Range;
+
+use jxl_simd::{F32SimdVec, SimdDescriptor, simd_function};
 
 use crate::{
     api::{Endianness, JxlDataFormat, JxlOutputBuffer},
     render::low_memory_pipeline::row_buffers::RowBuffer,
 };
+
+#[inline(always)]
+fn run_interleaved_2<D: SimdDescriptor>(
+    d: D,
+    a: &[f32],
+    b: &[f32],
+    out: &mut [MaybeUninit<f32>],
+) -> usize {
+    let len = D::F32Vec::LEN;
+    let mut n = 0;
+
+    for ((chunk_a, chunk_b), chunk_out) in a
+        .chunks_exact(len)
+        .zip(b.chunks_exact(len))
+        .zip(out.chunks_exact_mut(len * 2))
+    {
+        let va = D::F32Vec::load(d, chunk_a);
+        let vb = D::F32Vec::load(d, chunk_b);
+        D::F32Vec::store_interleaved_2_uninit(va, vb, chunk_out);
+        n += len;
+    }
+
+    n
+}
+
+#[inline(always)]
+fn run_interleaved_3<D: SimdDescriptor>(
+    d: D,
+    a: &[f32],
+    b: &[f32],
+    c: &[f32],
+    out: &mut [MaybeUninit<f32>],
+) -> usize {
+    let len = D::F32Vec::LEN;
+    let mut n = 0;
+
+    for (((chunk_a, chunk_b), chunk_c), chunk_out) in a
+        .chunks_exact(len)
+        .zip(b.chunks_exact(len))
+        .zip(c.chunks_exact(len))
+        .zip(out.chunks_exact_mut(len * 3))
+    {
+        let va = D::F32Vec::load(d, chunk_a);
+        let vb = D::F32Vec::load(d, chunk_b);
+        let vc = D::F32Vec::load(d, chunk_c);
+        D::F32Vec::store_interleaved_3_uninit(va, vb, vc, chunk_out);
+        n += len;
+    }
+
+    n
+}
+
+#[inline(always)]
+fn run_interleaved_4<D: SimdDescriptor>(
+    d: D,
+    a: &[f32],
+    b: &[f32],
+    c: &[f32],
+    e: &[f32],
+    out: &mut [MaybeUninit<f32>],
+) -> usize {
+    let len = D::F32Vec::LEN;
+    let mut n = 0;
+
+    for ((((chunk_a, chunk_b), chunk_c), chunk_e), chunk_out) in a
+        .chunks_exact(len)
+        .zip(b.chunks_exact(len))
+        .zip(c.chunks_exact(len))
+        .zip(e.chunks_exact(len))
+        .zip(out.chunks_exact_mut(len * 4))
+    {
+        let va = D::F32Vec::load(d, chunk_a);
+        let vb = D::F32Vec::load(d, chunk_b);
+        let vc = D::F32Vec::load(d, chunk_c);
+        let ve = D::F32Vec::load(d, chunk_e);
+        D::F32Vec::store_interleaved_4_uninit(va, vb, vc, ve, chunk_out);
+        n += len;
+    }
+
+    n
+}
+
+simd_function!(
+    store_interleaved,
+    d: D,
+    fn store_interleaved_impl(
+        inputs: &[&[f32]],
+        output: &mut [MaybeUninit<f32>]
+    ) -> usize {
+        match inputs.len() {
+            2 => run_interleaved_2(d, inputs[0], inputs[1], output),
+            3 => run_interleaved_3(d, inputs[0], inputs[1], inputs[2], output),
+            4 => run_interleaved_4(d, inputs[0], inputs[1], inputs[2], inputs[3], output),
+            _ => 0,
+        }
+    }
+);
 
 pub(super) fn store(
     input_buf: &[&RowBuffer],
@@ -53,21 +153,32 @@ pub(super) fn store(
             }
             input_buf.len() / data_format.bytes_per_sample()
         }
-        (3, 4, true) => {
-            #[cfg(target_arch = "x86_64")]
-            {
-                let [a, b, c] = input_buf else { unreachable!() };
-                super::x86_64::interleave3_32b(
-                    &[
-                        &a.get_row(input_y)[byte_start..byte_end],
-                        &b.get_row(input_y)[byte_start..byte_end],
-                        &c.get_row(input_y)[byte_start..byte_end],
-                    ],
-                    output_buf,
-                )
-            }
-            #[cfg(not(target_arch = "x86_64"))]
-            {
+        (channels, 4, true) if (2..=4).contains(&channels) => {
+            let ptr = output_buf.as_mut_ptr();
+            if ptr.align_offset(std::mem::align_of::<f32>()) == 0 {
+                let len_f32 = output_buf.len() / std::mem::size_of::<f32>();
+                // SAFETY: we checked alignment above, and the size is correct by definition
+                // (note that it is guaranteed that MaybeUninit<T> has the same size and align
+                // of T for any T).
+                let output_f32 = unsafe {
+                    std::slice::from_raw_parts_mut(
+                        output_buf.as_mut_ptr() as *mut MaybeUninit<f32>,
+                        len_f32,
+                    )
+                };
+
+                let start_f32 = byte_start / 4;
+                let end_f32 = byte_end / 4;
+
+                let mut slices = [&[] as &[f32]; 4];
+                for (i, buf) in input_buf.iter().enumerate() {
+                    slices[i] = &buf.get_row::<f32>(input_y)[start_f32..end_f32];
+                }
+
+                // Note that, by the conditions on the *_uninit methods on F32Vec, this function
+                // never writes uninitialized memory.
+                store_interleaved(&slices[..channels], output_f32)
+            } else {
                 0
             }
         }

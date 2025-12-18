@@ -8,6 +8,7 @@ use crate::{U32SimdVec, impl_f32_array_interface, x86_64::sse42::Sse42Descriptor
 use super::super::{F32SimdVec, I32SimdVec, SimdDescriptor, SimdMask};
 use std::{
     arch::x86_64::*,
+    mem::MaybeUninit,
     ops::{
         Add, AddAssign, BitAnd, BitAndAssign, BitOr, BitOrAssign, BitXor, BitXorAssign, Div,
         DivAssign, Mul, MulAssign, Neg, Shl, ShlAssign, Shr, ShrAssign, Sub, SubAssign,
@@ -176,7 +177,9 @@ pub struct F32VecAvx(__m256, AvxDescriptor);
 #[repr(transparent)]
 pub struct MaskAvx(__m256, AvxDescriptor);
 
-impl F32SimdVec for F32VecAvx {
+// SAFETY: The methods in this implementation that write to `MaybeUninit` (store_interleaved_*)
+// ensure that they write valid data to the output slice without reading uninitialized memory.
+unsafe impl F32SimdVec for F32VecAvx {
     type Descriptor = AvxDescriptor;
 
     const LEN: usize = 8;
@@ -198,10 +201,10 @@ impl F32SimdVec for F32VecAvx {
     }
 
     #[inline(always)]
-    fn store_interleaved_2(a: Self, b: Self, dest: &mut [f32]) {
+    fn store_interleaved_2_uninit(a: Self, b: Self, dest: &mut [MaybeUninit<f32>]) {
         #[target_feature(enable = "avx2")]
         #[inline]
-        fn store_interleaved_2_impl(a: __m256, b: __m256, dest: &mut [f32]) {
+        fn store_interleaved_2_impl(a: __m256, b: __m256, dest: &mut [MaybeUninit<f32>]) {
             assert!(dest.len() >= 2 * F32VecAvx::LEN);
             // a = [a0, a1, a2, a3, a4, a5, a6, a7], b = [b0, b1, b2, b3, b4, b5, b6, b7]
             // Output: [a0, b0, a1, b1, a2, b2, a3, b3, a4, b4, a5, b5, a6, b6, a7, b7]
@@ -210,10 +213,11 @@ impl F32SimdVec for F32VecAvx {
             // Need to permute to get correct order
             let out0 = _mm256_permute2f128_ps::<0x20>(lo, hi); // lower halves: [a0,b0,a1,b1, a2,b2,a3,b3]
             let out1 = _mm256_permute2f128_ps::<0x31>(lo, hi); // upper halves: [a4,b4,a5,b5, a6,b6,a7,b7]
-            // SAFETY: we just checked that dest has enough space.
+            // SAFETY: `dest` has enough space and writing to `MaybeUninit<f32>` through `*mut f32` is valid.
             unsafe {
-                _mm256_storeu_ps(dest.as_mut_ptr(), out0);
-                _mm256_storeu_ps(dest.as_mut_ptr().add(8), out1);
+                let dest_ptr = dest.as_mut_ptr() as *mut f32;
+                _mm256_storeu_ps(dest_ptr, out0);
+                _mm256_storeu_ps(dest_ptr.add(8), out1);
             }
         }
 
@@ -222,10 +226,74 @@ impl F32SimdVec for F32VecAvx {
     }
 
     #[inline(always)]
-    fn store_interleaved_4(a: Self, b: Self, c: Self, d: Self, dest: &mut [f32]) {
+    fn store_interleaved_3_uninit(a: Self, b: Self, c: Self, dest: &mut [MaybeUninit<f32>]) {
         #[target_feature(enable = "avx2")]
         #[inline]
-        fn store_interleaved_4_impl(a: __m256, b: __m256, c: __m256, d: __m256, dest: &mut [f32]) {
+        fn store_interleaved_3_impl(
+            a: __m256,
+            b: __m256,
+            c: __m256,
+            dest: &mut [MaybeUninit<f32>],
+        ) {
+            assert!(dest.len() >= 3 * F32VecAvx::LEN);
+
+            let idx_a0 = _mm256_setr_epi32(0, 0, 0, 1, 0, 0, 2, 0);
+            let idx_b0 = _mm256_setr_epi32(0, 0, 0, 0, 1, 0, 0, 2);
+            let idx_c0 = _mm256_setr_epi32(0, 0, 0, 0, 0, 1, 0, 0);
+
+            let two = _mm256_set1_epi32(2);
+            let three = _mm256_set1_epi32(3);
+            let five = _mm256_set1_epi32(5);
+            let six = _mm256_set1_epi32(6);
+
+            let a0 = _mm256_permutevar8x32_ps(a, idx_a0);
+            let b0 = _mm256_permutevar8x32_ps(b, idx_b0);
+            let c0 = _mm256_permutevar8x32_ps(c, idx_c0);
+            let out0 = _mm256_blend_ps::<0b10010010>(a0, b0);
+            let out0 = _mm256_blend_ps::<0b00100100>(out0, c0);
+
+            let a1 = _mm256_permutevar8x32_ps(a, _mm256_add_epi32(idx_b0, three));
+            let b1 = _mm256_permutevar8x32_ps(b, _mm256_add_epi32(idx_c0, three));
+            let c1 = _mm256_permutevar8x32_ps(c, _mm256_add_epi32(idx_a0, two));
+            let out1 = _mm256_blend_ps::<0b00100100>(a1, b1);
+            let out1 = _mm256_blend_ps::<0b01001001>(out1, c1);
+
+            let a2 = _mm256_permutevar8x32_ps(a, _mm256_add_epi32(idx_c0, six));
+            let b2 = _mm256_permutevar8x32_ps(b, _mm256_add_epi32(idx_a0, five));
+            let c2 = _mm256_permutevar8x32_ps(c, _mm256_add_epi32(idx_b0, five));
+            let out2 = _mm256_blend_ps::<0b01001001>(a2, b2);
+            let out2 = _mm256_blend_ps::<0b10010010>(out2, c2);
+
+            // SAFETY: `dest` has enough space and writing to `MaybeUninit<f32>` through `*mut f32` is valid.
+            unsafe {
+                let dest_ptr = dest.as_mut_ptr() as *mut f32;
+                _mm256_storeu_ps(dest_ptr, out0);
+                _mm256_storeu_ps(dest_ptr.add(8), out1);
+                _mm256_storeu_ps(dest_ptr.add(16), out2);
+            }
+        }
+
+        // SAFETY: avx2 is available from the safety invariant on the descriptor.
+        unsafe { store_interleaved_3_impl(a.0, b.0, c.0, dest) }
+    }
+
+    #[inline(always)]
+    fn store_interleaved_4_uninit(
+        a: Self,
+        b: Self,
+        c: Self,
+        d: Self,
+        dest: &mut [MaybeUninit<f32>],
+    ) {
+        #[target_feature(enable = "avx2")]
+        #[inline]
+        fn store_interleaved_4_impl(
+            a: __m256,
+            b: __m256,
+            c: __m256,
+            d: __m256,
+            dest: &mut [MaybeUninit<f32>],
+        ) {
             assert!(dest.len() >= 4 * F32VecAvx::LEN);
             // First interleave pairs
             let ab_lo = _mm256_unpacklo_ps(a, b);
@@ -257,12 +325,13 @@ impl F32SimdVec for F32VecAvx {
             let out2 = _mm256_permute2f128_ps::<0x31>(abcd_0, abcd_1);
             let out3 = _mm256_permute2f128_ps::<0x31>(abcd_2, abcd_3);
 
-            // SAFETY: we just checked that dest has enough space.
+            // SAFETY: `dest` has enough space and writing to `MaybeUninit<f32>` through `*mut f32` is valid.
             unsafe {
-                _mm256_storeu_ps(dest.as_mut_ptr(), out0);
-                _mm256_storeu_ps(dest.as_mut_ptr().add(8), out1);
-                _mm256_storeu_ps(dest.as_mut_ptr().add(16), out2);
-                _mm256_storeu_ps(dest.as_mut_ptr().add(24), out3);
+                let dest_ptr = dest.as_mut_ptr() as *mut f32;
+                _mm256_storeu_ps(dest_ptr, out0);
+                _mm256_storeu_ps(dest_ptr.add(8), out1);
+                _mm256_storeu_ps(dest_ptr.add(16), out2);
+                _mm256_storeu_ps(dest_ptr.add(24), out3);
             }
         }
 
