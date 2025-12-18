@@ -25,7 +25,7 @@ enum CodestreamBoxType {
 }
 
 pub(super) struct BoxParser {
-    pub(super) box_buffer: SmallBuffer<128>,
+    pub(super) box_buffer: SmallBuffer,
     state: ParseState,
     box_type: CodestreamBoxType,
 }
@@ -33,7 +33,7 @@ pub(super) struct BoxParser {
 impl BoxParser {
     pub(super) fn new() -> Self {
         BoxParser {
-            box_buffer: SmallBuffer::new(),
+            box_buffer: SmallBuffer::new(128),
             state: ParseState::SignatureNeeded,
             box_type: CodestreamBoxType::None,
         }

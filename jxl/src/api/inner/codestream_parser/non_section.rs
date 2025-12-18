@@ -47,7 +47,6 @@ impl CodestreamParser {
     pub(super) fn process_non_section(&mut self, decode_options: &JxlDecoderOptions) -> Result<()> {
         if self.decoder_state.is_none() && self.file_header.is_none() {
             // We don't have a file header yet. Try parsing that.
-            // TODO(veluca): make this incremental, as a file header might be multiple megabytes.
             let mut br = BitReader::new(&self.non_section_buf);
             br.skip_bits(self.non_section_bit_offset as usize)?;
             let file_header = FileHeader::read(&mut br)?;
@@ -244,7 +243,6 @@ impl CodestreamParser {
 
         if self.frame_header.is_none() {
             // We don't have a frame header yet. Try parsing that.
-            // TODO(veluca): do we need to make this incremental?
             let mut br = BitReader::new(&self.non_section_buf);
             br.skip_bits(self.non_section_bit_offset as usize)?;
 

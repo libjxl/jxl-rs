@@ -30,10 +30,6 @@ struct SectionBuffer {
     section: Section,
 }
 
-// This number should be big enough to guarantee that we can always make progress by reading
-// fragments of size at most *half* of it, if not reading a section.
-const NON_SECTION_CHUNK_SIZE: usize = 4096;
-
 pub(super) struct CodestreamParser {
     // TODO(veluca): this would probably be cleaner with some kind of state enum.
     pub(super) file_header: Option<FileHeader>,
@@ -53,7 +49,7 @@ pub(super) struct CodestreamParser {
     pub(super) frame: Option<Frame>,
 
     // Buffers.
-    non_section_buf: SmallBuffer<NON_SECTION_CHUNK_SIZE>,
+    non_section_buf: SmallBuffer,
     non_section_bit_offset: u8,
     sections: VecDeque<SectionBuffer>,
     ready_section_data: usize,
@@ -76,6 +72,8 @@ pub(super) struct CodestreamParser {
 
     pub(super) has_more_frames: bool,
 
+    header_needed_bytes: Option<u64>,
+
     #[cfg(test)]
     pub frame_callback: Option<Box<FrameCallback>>,
     #[cfg(test)]
@@ -96,7 +94,7 @@ impl CodestreamParser {
             frame_header: None,
             toc_parser: None,
             frame: None,
-            non_section_buf: SmallBuffer::new(),
+            non_section_buf: SmallBuffer::new(4096),
             non_section_bit_offset: 0,
             sections: VecDeque::new(),
             ready_section_data: 0,
@@ -110,6 +108,7 @@ impl CodestreamParser {
             hf_global_section: None,
             hf_sections: vec![],
             has_more_frames: true,
+            header_needed_bytes: None,
             #[cfg(test)]
             frame_callback: None,
             #[cfg(test)]
@@ -291,12 +290,41 @@ impl CodestreamParser {
                             }
                         },
                         Some(available_codestream),
-                    )?;
-                    box_parser.consume_codestream(c as u64);
+                    )? as u64;
+                    box_parser.consume_codestream(c);
+
+                    // If we know that non-section parsing will require more bytes than what
+                    // we added to the codestream, don't even try to parse non-section data.
+                    if let Some(needed) = self.header_needed_bytes.as_mut() {
+                        *needed = needed.saturating_sub(c);
+                        if *needed > 0 {
+                            if !self.non_section_buf.can_read_more() {
+                                self.non_section_buf.enlarge();
+                            }
+                            // Check if input still has data - if so, refill and retry
+                            if input.available_bytes().unwrap_or(0) > 0 {
+                                continue;
+                            } else {
+                                return Err(Error::OutOfBounds(*needed as usize));
+                            }
+                        }
+                    }
+
+                    let range = self.non_section_buf.range();
 
                     match self.process_non_section(decode_options) {
-                        Ok(()) => break,
+                        Ok(()) => {
+                            self.header_needed_bytes = None;
+                            break;
+                        }
                         Err(Error::OutOfBounds(n)) => {
+                            let new_range = self.non_section_buf.range();
+                            // If non-section parsing consumed no bytes, and the non-section buffer
+                            // cannot accept more bytes, enlarge the buffer to allow to make progress.
+                            if new_range == range && !self.non_section_buf.can_read_more() {
+                                self.non_section_buf.enlarge();
+                            }
+                            self.header_needed_bytes = Some(n as u64);
                             // Check if input still has data - if so, refill and retry
                             if input.available_bytes().unwrap_or(0) > 0 {
                                 continue;

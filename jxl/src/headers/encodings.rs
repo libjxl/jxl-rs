@@ -156,7 +156,13 @@ impl UnconditionalCoder<()> for String {
         let mut ret = String::new();
         ret.reserve(len as usize);
         for _ in 0..len {
-            ret.push(br.read(8)? as u8 as char);
+            match br.read(8) {
+                Ok(c) => ret.push(c as u8 as char),
+                Err(Error::OutOfBounds(n)) => {
+                    return Err(Error::OutOfBounds(len as usize - ret.len() - 1 + n));
+                }
+                Err(e) => return Err(e),
+            }
         }
         Ok(ret)
     }
