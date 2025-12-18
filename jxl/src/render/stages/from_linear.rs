@@ -77,7 +77,7 @@ fn from_linear_process(tf: &TransferFunction, xsize: usize, row: &mut [&mut [f32
         }
         TransferFunction::Pq { intensity_target } => {
             for row in row {
-                tf::linear_to_pq(intensity_target, &mut row[..xsize]);
+                tf::linear_to_pq_simd(d, intensity_target, xsize, row);
             }
         }
         TransferFunction::Hlg {
