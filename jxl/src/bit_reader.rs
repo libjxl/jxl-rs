@@ -91,6 +91,12 @@ impl<'a> BitReader<'a> {
         Ok(ret)
     }
 
+    /// inline(never) wrapper around read, for cold code paths.
+    #[inline(never)]
+    pub fn read_noinline(&mut self, num: usize) -> Result<u64, Error> {
+        self.read(num)
+    }
+
     #[inline]
     pub fn read_optimistic(&mut self, num: usize) -> u64 {
         let ret = self.peek(num);
