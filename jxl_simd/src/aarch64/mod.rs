@@ -113,10 +113,12 @@ macro_rules! bench_all_instruction_sets {
     ) => {
         use $crate::SimdDescriptor;
         // `simd_function_body_*` does early return; wrap it with an immediately-invoked closure
-        (|| $crate::simd_function_body_neon!(
-            $name($criterion: &mut ::criterion::BenchmarkGroup<'_, impl ::criterion::measurement::Measurement>);
-            ($criterion, "neon")
-        ))();
+        (|| {
+            $crate::simd_function_body_neon!(
+                $name($criterion: &mut ::criterion::BenchmarkGroup<'_, impl ::criterion::measurement::Measurement>);
+                ($criterion, "neon")
+            );
+        })();
         $name(
             $crate::ScalarDescriptor::new().unwrap(),
             $criterion,

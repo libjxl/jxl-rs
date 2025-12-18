@@ -138,8 +138,12 @@ impl CodestreamParser {
 
                 for (g, grp) in self.hf_sections.iter_mut().enumerate() {
                     let mut sections = vec![];
-                    for pass in self.section_state.completed_passes[g] as usize..grp.len() {
-                        let Some(s) = &grp[pass] else {
+                    for (pass, grp) in grp
+                        .iter()
+                        .enumerate()
+                        .skip(self.section_state.completed_passes[g] as usize)
+                    {
+                        let Some(s) = &grp else {
                             break;
                         };
                         self.section_state.completed_passes[g] += 1;

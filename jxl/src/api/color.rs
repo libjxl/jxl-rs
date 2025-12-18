@@ -93,7 +93,7 @@ pub fn compute_md5(data: &[u8]) -> [u8; 16] {
             a = d;
             d = c;
             c = b;
-            b = b.wrapping_add((f << SHIFT[j]) | (f >> (32 - SHIFT[j])));
+            b = b.wrapping_add(f.rotate_left(SHIFT[j]));
         }
 
         a0 = a0.wrapping_add(a);
