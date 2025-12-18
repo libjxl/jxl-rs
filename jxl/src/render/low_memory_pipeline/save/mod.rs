@@ -14,11 +14,6 @@ use super::row_buffers::RowBuffer;
 
 mod identity;
 
-// TODO(veluca): at the moment, integrating the interleaving logic in crate::simd seems more hassle
-// than is worth. Consider re-evaluating later.
-#[cfg(target_arch = "x86_64")]
-mod x86_64;
-
 // Placeholder slow implementation.
 impl SaveStage {
     // Takes as input only those channels that are *actually* saved.

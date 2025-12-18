@@ -162,12 +162,19 @@ impl JxlDecoder<WithFrameInfo> {
     }
 
     /// Draws all the pixels we have data for.
+    ///
+    /// Note: see `process` for alignment requirements for the buffer data.
     pub fn flush_pixels(&mut self, buffers: &mut [JxlOutputBuffer<'_>]) -> Result<()> {
         self.inner.flush_pixels(buffers)
     }
 
     /// Guarantees to populate exactly the appropriate part of the buffers.
     /// Wants one buffer for each non-ignored pixel type, i.e. color channels and each extra channel.
+    ///
+    /// Note: the data in `buffers` should have alignment requirements that are compatible with the
+    /// requested pixel format. This means that, if we are asking for 2-byte or 4-byte output (i.e.
+    /// u16/f16 and f32 respectively), each row in the provided buffers must be aligned to 2 or 4
+    /// bytes respectively. If that is not the case, the library may panic.
     pub fn process<In: JxlBitstreamInput>(
         mut self,
         input: &mut In,

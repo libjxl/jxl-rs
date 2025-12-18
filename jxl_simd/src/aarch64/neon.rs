@@ -3,10 +3,13 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-use std::arch::aarch64::*;
-use std::ops::{
-    Add, AddAssign, BitAnd, BitAndAssign, BitOr, BitOrAssign, BitXor, BitXorAssign, Div, DivAssign,
-    Mul, MulAssign, Neg, Sub, SubAssign,
+use std::{
+    arch::aarch64::*,
+    mem::MaybeUninit,
+    ops::{
+        Add, AddAssign, BitAnd, BitAndAssign, BitOr, BitOrAssign, BitXor, BitXorAssign, Div,
+        DivAssign, Mul, MulAssign, Neg, Sub, SubAssign,
+    },
 };
 
 use crate::U32SimdVec;
@@ -89,7 +92,9 @@ macro_rules! fn_neon {
 #[repr(transparent)]
 pub struct F32VecNeon(float32x4_t, NeonDescriptor);
 
-impl F32SimdVec for F32VecNeon {
+// SAFETY: The methods in this implementation that write to `MaybeUninit` (store_interleaved_*)
+// ensure that they write valid data to the output slice without reading uninitialized memory.
+unsafe impl F32SimdVec for F32VecNeon {
     type Descriptor = NeonDescriptor;
 
     const LEN: usize = 4;
@@ -123,22 +128,40 @@ impl F32SimdVec for F32VecNeon {
     }
 
     #[inline(always)]
-    fn store_interleaved_2(a: Self, b: Self, dest: &mut [f32]) {
+    fn store_interleaved_2_uninit(a: Self, b: Self, dest: &mut [MaybeUninit<f32>]) {
         assert!(dest.len() >= 2 * Self::LEN);
         // SAFETY: we just checked that `dest` has enough space, and neon is available
         // from the safety invariant on the descriptor stored in `a`.
         unsafe {
-            vst2q_f32(dest.as_mut_ptr(), float32x4x2_t(a.0, b.0));
+            let dest_ptr = dest.as_mut_ptr() as *mut f32;
+            vst2q_f32(dest_ptr, float32x4x2_t(a.0, b.0));
         }
     }
 
     #[inline(always)]
-    fn store_interleaved_4(a: Self, b: Self, c: Self, d: Self, dest: &mut [f32]) {
+    fn store_interleaved_3_uninit(a: Self, b: Self, c: Self, dest: &mut [MaybeUninit<f32>]) {
+        assert!(dest.len() >= 3 * Self::LEN);
+        // SAFETY: `dest` has enough space and writing to `MaybeUninit<f32>` through `*mut f32` is valid.
+        unsafe {
+            let dest_ptr = dest.as_mut_ptr() as *mut f32;
+            vst3q_f32(dest_ptr, float32x4x3_t(a.0, b.0, c.0));
+        }
+    }
+
+    #[inline(always)]
+    fn store_interleaved_4_uninit(
+        a: Self,
+        b: Self,
+        c: Self,
+        d: Self,
+        dest: &mut [MaybeUninit<f32>],
+    ) {
         assert!(dest.len() >= 4 * Self::LEN);
         // SAFETY: we just checked that `dest` has enough space, and neon is available
         // from the safety invariant on the descriptor stored in `a`.
         unsafe {
-            vst4q_f32(dest.as_mut_ptr(), float32x4x4_t(a.0, b.0, c.0, d.0));
+            let dest_ptr = dest.as_mut_ptr() as *mut f32;
+            vst4q_f32(dest_ptr, float32x4x4_t(a.0, b.0, c.0, d.0));
         }
     }
 
