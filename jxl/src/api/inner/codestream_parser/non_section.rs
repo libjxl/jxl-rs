@@ -271,6 +271,7 @@ impl CodestreamParser {
             self.hf_sections = (0..frame_header.num_groups())
                 .map(|_| (0..frame_header.passes.num_passes).map(|_| None).collect())
                 .collect();
+            self.candidate_hf_sections.clear();
 
             self.frame_header = Some(frame_header);
             let bits = br.total_bits_read();

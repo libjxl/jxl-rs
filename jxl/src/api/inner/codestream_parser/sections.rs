@@ -66,6 +66,7 @@ impl CodestreamParser {
                 }
                 Section::Hf { group, pass } => {
                     self.hf_sections[group][pass] = Some(s);
+                    self.candidate_hf_sections.insert(group);
                 }
             }
         }
@@ -136,9 +137,9 @@ impl CodestreamParser {
                 let mut group_readers = vec![];
                 let mut processed_groups = vec![];
 
-                for (g, grp) in self.hf_sections.iter_mut().enumerate() {
+                let mut check_group = |g: usize| {
                     let mut sections = vec![];
-                    for (pass, grp) in grp
+                    for (pass, grp) in self.hf_sections[g]
                         .iter()
                         .enumerate()
                         .skip(self.section_state.completed_passes[g] as usize)
@@ -153,6 +154,22 @@ impl CodestreamParser {
                         group_readers.push((g, sections));
                         processed_groups.push(g);
                     }
+                };
+
+                if self.candidate_hf_sections.len() * 4 < self.hf_sections.len() {
+                    for g in self.candidate_hf_sections.drain() {
+                        check_group(g)
+                    }
+                    // Processing sections in order is more efficient because it lets us flush
+                    // the pipeline faster.
+                    group_readers.sort_by_key(|x| x.0);
+                } else {
+                    for g in 0..self.hf_sections.len() {
+                        if self.candidate_hf_sections.contains(&g) {
+                            check_group(g);
+                        }
+                    }
+                    self.candidate_hf_sections.clear();
                 }
 
                 frame.decode_and_render_hf_groups(output_buffers, pixel_format, group_readers)?;

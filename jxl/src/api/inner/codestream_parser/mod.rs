@@ -3,7 +3,10 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-use std::{collections::VecDeque, io::IoSliceMut};
+use std::{
+    collections::{HashSet, VecDeque},
+    io::IoSliceMut,
+};
 
 use sections::SectionState;
 
@@ -69,6 +72,8 @@ pub(super) struct CodestreamParser {
     hf_global_section: Option<SectionBuffer>,
     // indexed by group, then by pass.
     hf_sections: Vec<Vec<Option<SectionBuffer>>>,
+    // group indices that *might* have new renderable data.
+    candidate_hf_sections: HashSet<usize>,
 
     pub(super) has_more_frames: bool,
 
@@ -107,6 +112,7 @@ impl CodestreamParser {
             lf_sections: vec![],
             hf_global_section: None,
             hf_sections: vec![],
+            candidate_hf_sections: HashSet::new(),
             has_more_frames: true,
             header_needed_bytes: None,
             #[cfg(test)]
