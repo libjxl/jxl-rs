@@ -34,6 +34,8 @@ pub enum TreeNode {
 
 /// Flattened tree node for optimized traversal (matches C++ FlatDecisionNode).
 /// Stores parent + info about both children to evaluate 3 nodes per iteration.
+// TODO(hjanuschka): investigate performance of using a Rust enum here, and whether
+// separating internal nodes and leaves into two arrays could save a branch.
 #[derive(Debug, Clone, Copy)]
 pub(super) struct FlatTreeNode {
     property0: i32,                    // Property to test, -1 if leaf
@@ -273,12 +275,12 @@ pub(super) fn predict_flat(
         } else {
             0
         };
-        let off1 = 2 | if property_buffer[node.properties_or_offset[1] as usize]
+        let off1 = if property_buffer[node.properties_or_offset[1] as usize]
             <= node.splitvals_or_multiplier[1]
         {
-            1
+            3
         } else {
-            0
+            2
         };
 
         pos = (node.child_id + if p0 { off1 } else { off0 }) as usize;
