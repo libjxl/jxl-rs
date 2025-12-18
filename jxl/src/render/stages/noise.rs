@@ -60,17 +60,17 @@ simd_function!(
 
             // Add all 5 offsets for rows 0, 1, 3, 4
             for i in 0..5 {
-                others = others + D::F32Vec::load(d, &w0[i..]);
-                others = others + D::F32Vec::load(d, &w1[i..]);
-                others = others + D::F32Vec::load(d, &w3[i..]);
-                others = others + D::F32Vec::load(d, &w4[i..]);
+                others += D::F32Vec::load(d, &w0[i..]);
+                others += D::F32Vec::load(d, &w1[i..]);
+                others += D::F32Vec::load(d, &w3[i..]);
+                others += D::F32Vec::load(d, &w4[i..]);
             }
 
             // Add row 2 neighbors (skip center at offset 2)
-            others = others + D::F32Vec::load(d, &w2[0..]);
-            others = others + D::F32Vec::load(d, &w2[1..]);
-            others = others + D::F32Vec::load(d, &w2[3..]);
-            others = others + D::F32Vec::load(d, &w2[4..]);
+            others += D::F32Vec::load(d, &w2[0..]);
+            others += D::F32Vec::load(d, &w2[1..]);
+            others += D::F32Vec::load(d, &w2[3..]);
+            others += D::F32Vec::load(d, &w2[4..]);
 
             // Compute: others * 0.16 + center * -3.84
             let result = others.mul_add(c016, p00 * cn384);

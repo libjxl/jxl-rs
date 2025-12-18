@@ -142,7 +142,7 @@ pub fn fast_powf_simd<D: SimdDescriptor>(d: D, base: D::F32Vec, exp: D::F32Vec) 
 }
 
 pub fn floor_log2_nonzero(x: u64) -> u32 {
-    (size_of::<u64>() * 8 - 1) as u32 ^ x.leading_zeros()
+    (u64::BITS as usize - 1) as u32 ^ x.leading_zeros()
 }
 
 #[cfg(test)]
