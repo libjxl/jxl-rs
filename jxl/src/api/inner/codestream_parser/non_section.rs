@@ -19,7 +19,7 @@ use crate::{
         color_encoding::{ColorSpace, RenderingIntent},
         encodings::UnconditionalCoder,
         frame_header::FrameHeader,
-        toc::IncrementalTocReader,
+        toc::{Toc, TocNonserialized},
     },
     icc::IncrementalIccReader,
 };
@@ -279,37 +279,17 @@ impl CodestreamParser {
             self.non_section_bit_offset = (bits % 8) as u8;
         }
 
-        let toc = {
-            let mut br = BitReader::new(&self.non_section_buf);
-            br.skip_bits(self.non_section_bit_offset as usize)?;
-            if self.toc_parser.is_none() {
-                let num_toc_entries = self.frame_header.as_ref().unwrap().num_toc_entries();
-                self.toc_parser = Some(IncrementalTocReader::new(num_toc_entries as u32, &mut br)?);
-            }
-
-            let toc_parser = self.toc_parser.as_mut().unwrap();
-            let mut bits = br.total_bits_read();
-            while !toc_parser.is_complete() {
-                match toc_parser.read_step(&mut br) {
-                    Ok(()) => bits = br.total_bits_read(),
-                    Err(Error::OutOfBounds(c)) => {
-                        self.non_section_buf.consume(bits / 8);
-                        self.non_section_bit_offset = (bits % 8) as u8;
-                        // Estimate >= 16 bits per remaining entry to read.
-                        return Err(Error::OutOfBounds(
-                            c + toc_parser.remaining_entries() as usize * 2,
-                        ));
-                    }
-                    Err(e) => return Err(e),
-                }
-            }
-            br.jump_to_byte_boundary()?;
-
-            bits = br.total_bits_read();
-            self.non_section_buf.consume(bits / 8);
-            self.non_section_bit_offset = (bits % 8) as u8;
-            self.toc_parser.take().unwrap().finalize()
-        };
+        let mut br = BitReader::new(&self.non_section_buf);
+        br.skip_bits(self.non_section_bit_offset as usize)?;
+        let num_toc_entries = self.frame_header.as_ref().unwrap().num_toc_entries();
+        let toc = Toc::read_unconditional(
+            &(),
+            &mut br,
+            &TocNonserialized {
+                num_entries: num_toc_entries as u32,
+            },
+        )?;
+        br.jump_to_byte_boundary()?;
 
         // Save file_header before creating frame (for preview frame recovery)
         self.saved_file_header = self.decoder_state.as_ref().map(|ds| ds.file_header.clone());
@@ -319,6 +299,9 @@ impl CodestreamParser {
             toc,
             self.decoder_state.take().unwrap(),
         )?;
+        let bits = br.total_bits_read();
+        self.non_section_buf.consume(bits / 8);
+        self.non_section_bit_offset = (bits % 8) as u8;
 
         let mut sections: Vec<_> = frame
             .toc()
