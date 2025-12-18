@@ -16,16 +16,16 @@ use crate::{
             common::{make_pixel, precompute_references},
         },
         predict::{PredictionData, WeightedPredictorState},
-        tree::{NUM_NONREF_PROPERTIES, PROPERTIES_PER_PREVCHAN, TreeNode, predict},
+        tree::{
+            FlatTreeNode, NUM_NONREF_PROPERTIES, PROPERTIES_PER_PREVCHAN, TreeNode, predict_flat,
+        },
     },
     headers::modular::GroupHeader,
     image::Image,
 };
 
-// TODO(veluca): we probably want to make flatter trees eventually.
-
 pub struct NoWpTree {
-    nodes: Vec<TreeNode>,
+    flat_nodes: Vec<FlatTreeNode>,
     references: Image<i32>,
     property_buffer: Vec<i32>,
 }
@@ -48,8 +48,10 @@ impl NoWpTree {
         property_buffer[0] = channel as i32;
         property_buffer[1] = stream as i32;
 
+        let flat_nodes = Tree::build_flat_tree(&nodes)?;
+
         Ok(Self {
-            nodes,
+            flat_nodes,
             references,
             property_buffer,
         })
@@ -74,8 +76,8 @@ impl ModularChannelDecoder for NoWpTree {
         br: &mut BitReader,
         histograms: &Histograms,
     ) -> i32 {
-        let prediction_result = predict(
-            &self.nodes,
+        let prediction_result = predict_flat(
+            &self.flat_nodes,
             prediction_data,
             xsize,
             None,
@@ -128,8 +130,8 @@ impl ModularChannelDecoder for GeneralTree {
         br: &mut BitReader,
         histograms: &Histograms,
     ) -> i32 {
-        let prediction_result = predict(
-            &self.no_wp_tree.nodes,
+        let prediction_result = predict_flat(
+            &self.no_wp_tree.flat_nodes,
             prediction_data,
             xsize,
             Some(&mut self.wp_state),
