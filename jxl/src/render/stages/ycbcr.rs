@@ -4,6 +4,7 @@
 // license that can be found in the LICENSE file.
 
 use crate::render::RenderPipelineInPlaceStage;
+use jxl_simd::{F32SimdVec, simd_function};
 
 /// Convert YCbCr to RGB
 pub struct YcbcrToRgbStage {
@@ -29,6 +30,55 @@ impl std::fmt::Display for YcbcrToRgbStage {
     }
 }
 
+// SIMD YCbCr to RGB conversion
+simd_function!(
+    ycbcr_to_rgb_simd_dispatch,
+    d: D,
+    fn ycbcr_to_rgb_simd(
+        row_cb: &mut [f32],
+        row_y: &mut [f32],
+        row_cr: &mut [f32],
+        xsize: usize,
+    ) {
+        // Precompute constants as SIMD vectors
+        let c128 = D::F32Vec::splat(d, 128.0 / 255.0);
+        let cr_to_r = D::F32Vec::splat(d, 1.402);
+        let cr_to_g = D::F32Vec::splat(d, -0.299 * 1.402 / 0.587);
+        let cb_to_g = D::F32Vec::splat(d, -0.114 * 1.772 / 0.587);
+        let cb_to_b = D::F32Vec::splat(d, 1.772);
+
+        // SIMD loop processing SIMD_WIDTH pixels at once
+        let iter_cb = row_cb.chunks_exact_mut(D::F32Vec::LEN);
+        let iter_y = row_y.chunks_exact_mut(D::F32Vec::LEN);
+        let iter_cr = row_cr.chunks_exact_mut(D::F32Vec::LEN);
+        for ((cb_chunk, y_chunk), cr_chunk) in iter_cb
+            .zip(iter_y)
+            .zip(iter_cr)
+            .take(xsize.div_ceil(D::F32Vec::LEN))
+        {
+            // Load Y, Cb, Cr vectors
+            let y_vec = D::F32Vec::load(d, y_chunk) + c128;
+            let cb_vec = D::F32Vec::load(d, cb_chunk);
+            let cr_vec = D::F32Vec::load(d, cr_chunk);
+
+            // Compute RGB using FMA (fused multiply-add)
+            // R = Y + 1.402 * Cr
+            let r_vec = cr_vec.mul_add(cr_to_r, y_vec);
+
+            // G = Y - 0.299*1.402/0.587 * Cr - 0.114*1.772/0.587 * Cb
+            let g_vec = cr_vec.mul_add(cr_to_g, cb_vec.mul_add(cb_to_g, y_vec));
+
+            // B = Y + 1.772 * Cb
+            let b_vec = cb_vec.mul_add(cb_to_b, y_vec);
+
+            // Store back to channels (R→Cb, G→Y, B→Cr to match layout)
+            r_vec.store(cb_chunk);
+            g_vec.store(y_chunk);
+            b_vec.store(cr_chunk);
+        }
+    }
+);
+
 impl RenderPipelineInPlaceStage for YcbcrToRgbStage {
     type Type = f32;
 
@@ -52,20 +102,11 @@ impl RenderPipelineInPlaceStage for YcbcrToRgbStage {
         };
 
         assert!(xsize <= row_cb.len() && xsize <= row_y.len() && xsize <= row_cr.len());
-        for idx in 0..xsize {
-            let y = row_y[idx] + 128.0 / 255.0; // shift Y from [-0.5, 0.5] to [0, 1], matching JPEG spec
-            let cb = row_cb[idx];
-            let cr = row_cr[idx];
 
-            // Full-range BT.601 as defined by JFIF Clause 7:
-            // https://www.itu.int/rec/T-REC-T.871-201105-I/en
-            row_cb[idx] = cr.mul_add(1.402, y);
-            row_y[idx] = cr.mul_add(
-                -0.299 * 1.402 / 0.587,
-                cb.mul_add(-0.114 * 1.772 / 0.587, y),
-            );
-            row_cr[idx] = cb.mul_add(1.772, y);
-        }
+        // Use SIMD for YCbCr to RGB conversion
+        // Full-range BT.601 as defined by JFIF Clause 7:
+        // https://www.itu.int/rec/T-REC-T.871-201105-I/en
+        ycbcr_to_rgb_simd_dispatch(row_cb, row_y, row_cr, xsize);
     }
 }
 
