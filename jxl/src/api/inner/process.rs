@@ -18,12 +18,12 @@ use crate::api::{JxlBitstreamInput, JxlDecoderInner, JxlOutputBuffer, Processing
 // When the start of the populated range in `buf` goes past half of its length,
 // the data in the buffer is moved back to the beginning.
 
-pub(super) struct SmallBuffer<const SIZE: usize> {
-    buf: [u8; SIZE],
+pub(super) struct SmallBuffer {
+    buf: Vec<u8>,
     range: Range<usize>,
 }
 
-impl<const SIZE: usize> SmallBuffer<SIZE> {
+impl SmallBuffer {
     pub(super) fn refill(
         &mut self,
         mut get_input: impl FnMut(&mut [IoSliceMut]) -> Result<usize, std::io::Error>,
@@ -31,7 +31,7 @@ impl<const SIZE: usize> SmallBuffer<SIZE> {
     ) -> Result<usize> {
         let mut total = 0;
         loop {
-            if self.range.start >= SIZE / 2 {
+            if self.range.start >= self.buf.len() / 2 {
                 let start = self.range.start;
                 let len = self.range.len();
                 let (pre, post) = self.buf.split_at_mut(start);
@@ -39,13 +39,13 @@ impl<const SIZE: usize> SmallBuffer<SIZE> {
                 self.range.start -= start;
                 self.range.end -= start;
             }
-            if self.range.len() >= SIZE / 2 {
+            if self.range.len() >= self.buf.len() / 2 {
                 break;
             }
             let stop = if let Some(max) = max {
-                (self.range.end + max.saturating_sub(total)).min(SIZE)
+                (self.range.end + max.saturating_sub(total)).min(self.buf.len())
             } else {
-                SIZE
+                self.buf.len()
             };
             let num = get_input(&mut [IoSliceMut::new(&mut self.buf[self.range.end..stop])])?;
             total += num;
@@ -79,15 +79,28 @@ impl<const SIZE: usize> SmallBuffer<SIZE> {
         amount
     }
 
-    pub(super) fn new() -> Self {
+    pub(super) fn new(initial_size: usize) -> Self {
         Self {
-            buf: [0; SIZE],
+            buf: vec![0; initial_size],
             range: 0..0,
         }
     }
+
+    pub(super) fn range(&self) -> Range<usize> {
+        self.range.clone()
+    }
+
+    pub(super) fn enlarge(&mut self) {
+        // Note: we need a *4 here because doubling the buffer size might still not allow refill() to make progress.
+        self.buf.resize(self.buf.len() * 4, 0);
+    }
+
+    pub(super) fn can_read_more(&self) -> bool {
+        self.buf.len() > self.len() * 2 && self.range.end < self.buf.len()
+    }
 }
 
-impl<const SIZE: usize> Deref for SmallBuffer<SIZE> {
+impl Deref for SmallBuffer {
     type Target = [u8];
     fn deref(&self) -> &Self::Target {
         &self.buf[self.range.clone()]
