@@ -659,8 +659,10 @@ pub(crate) mod tests {
             premultiply: bool,
             use_simple: bool,
         ) -> (Image<f32>, usize, usize) {
-            let mut options = JxlDecoderOptions::default();
-            options.premultiply_output = premultiply;
+            let options = JxlDecoderOptions {
+                premultiply_output: premultiply,
+                ..Default::default()
+            };
             let decoder = JxlDecoder::<states::Initialized>::new(options);
             let mut input = file;
 
@@ -830,8 +832,10 @@ pub(crate) mod tests {
             premultiply: bool,
             use_simple: bool,
         ) -> (Image<f32>, usize, usize) {
-            let mut options = JxlDecoderOptions::default();
-            options.premultiply_output = premultiply;
+            let options = JxlDecoderOptions {
+                premultiply_output: premultiply,
+                ..Default::default()
+            };
             let decoder = JxlDecoder::<states::Initialized>::new(options);
             let mut input = file;
 
