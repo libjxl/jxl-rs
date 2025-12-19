@@ -374,6 +374,52 @@ unsafe impl F32SimdVec for F32VecSse42 {
         I32VecSse42(_mm_castps_si128(this.0), this.1)
     });
 
+    #[inline(always)]
+    fn round_store_u8(self, dest: &mut [u8]) {
+        #[target_feature(enable = "sse4.2")]
+        #[inline]
+        fn round_store_u8_impl(v: __m128, dest: &mut [u8]) {
+            assert!(dest.len() >= F32VecSse42::LEN);
+            // Round to nearest integer
+            let rounded = _mm_round_ps::<{ _MM_FROUND_TO_NEAREST_INT | _MM_FROUND_NO_EXC }>(v);
+            // Convert to i32
+            let i32s = _mm_cvtps_epi32(rounded);
+            // Pack i32 -> u16 -> u8 (use same vector twice, take lower half each time)
+            let u16s = _mm_packus_epi32(i32s, i32s);
+            let u8s = _mm_packus_epi16(u16s, u16s);
+            // Store lower 4 bytes
+            // SAFETY: we checked dest has enough space
+            unsafe {
+                let ptr = dest.as_mut_ptr() as *mut i32;
+                *ptr = _mm_cvtsi128_si32(u8s);
+            }
+        }
+        // SAFETY: sse4.2 is available from the safety invariant on the descriptor.
+        unsafe { round_store_u8_impl(self.0, dest) }
+    }
+
+    #[inline(always)]
+    fn round_store_u16(self, dest: &mut [u16]) {
+        #[target_feature(enable = "sse4.2")]
+        #[inline]
+        fn round_store_u16_impl(v: __m128, dest: &mut [u16]) {
+            assert!(dest.len() >= F32VecSse42::LEN);
+            // Round to nearest integer
+            let rounded = _mm_round_ps::<{ _MM_FROUND_TO_NEAREST_INT | _MM_FROUND_NO_EXC }>(v);
+            // Convert to i32
+            let i32s = _mm_cvtps_epi32(rounded);
+            // Pack i32 -> u16 (use same vector twice, take lower half)
+            let u16s = _mm_packus_epi32(i32s, i32s);
+            // Store lower 8 bytes (4 u16s)
+            // SAFETY: we checked dest has enough space
+            unsafe {
+                _mm_storel_epi64(dest.as_mut_ptr() as *mut __m128i, u16s);
+            }
+        }
+        // SAFETY: sse4.2 is available from the safety invariant on the descriptor.
+        unsafe { round_store_u16_impl(self.0, dest) }
+    }
+
     impl_f32_array_interface!();
 
     #[inline(always)]

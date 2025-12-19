@@ -453,6 +453,58 @@ unsafe impl F32SimdVec for F32VecAvx {
         I32VecAvx(_mm256_castps_si256(this.0), this.1)
     });
 
+    #[inline(always)]
+    fn round_store_u8(self, dest: &mut [u8]) {
+        #[target_feature(enable = "avx2")]
+        #[inline]
+        fn round_store_u8_impl(v: __m256, dest: &mut [u8]) {
+            assert!(dest.len() >= F32VecAvx::LEN);
+            // Round to nearest integer
+            let rounded = _mm256_round_ps::<{ _MM_FROUND_TO_NEAREST_INT | _MM_FROUND_NO_EXC }>(v);
+            // Convert to i32
+            let i32s = _mm256_cvtps_epi32(rounded);
+            // Extract 128-bit halves and pack
+            let lo = _mm256_castsi256_si128(i32s);
+            let hi = _mm256_extracti128_si256::<1>(i32s);
+            // Pack 4+4 i32s to 8 u16s
+            let u16s = _mm_packus_epi32(lo, hi);
+            // Pack 8 u16s to 8 u8s (use same vector twice, take lower half)
+            let u8s = _mm_packus_epi16(u16s, u16s);
+            // Store lower 8 bytes
+            // SAFETY: we checked dest has enough space
+            unsafe {
+                _mm_storel_epi64(dest.as_mut_ptr() as *mut __m128i, u8s);
+            }
+        }
+        // SAFETY: avx2 is available from the safety invariant on the descriptor.
+        unsafe { round_store_u8_impl(self.0, dest) }
+    }
+
+    #[inline(always)]
+    fn round_store_u16(self, dest: &mut [u16]) {
+        #[target_feature(enable = "avx2")]
+        #[inline]
+        fn round_store_u16_impl(v: __m256, dest: &mut [u16]) {
+            assert!(dest.len() >= F32VecAvx::LEN);
+            // Round to nearest integer
+            let rounded = _mm256_round_ps::<{ _MM_FROUND_TO_NEAREST_INT | _MM_FROUND_NO_EXC }>(v);
+            // Convert to i32
+            let i32s = _mm256_cvtps_epi32(rounded);
+            // Extract 128-bit halves and pack
+            let lo = _mm256_castsi256_si128(i32s);
+            let hi = _mm256_extracti128_si256::<1>(i32s);
+            // Pack 4+4 i32s to 8 u16s
+            let u16s = _mm_packus_epi32(lo, hi);
+            // Store 8 u16s (16 bytes)
+            // SAFETY: we checked dest has enough space
+            unsafe {
+                _mm_storeu_si128(dest.as_mut_ptr() as *mut __m128i, u16s);
+            }
+        }
+        // SAFETY: avx2 is available from the safety invariant on the descriptor.
+        unsafe { round_store_u16_impl(self.0, dest) }
+    }
+
     impl_f32_array_interface!();
 
     #[inline(always)]

@@ -14,14 +14,14 @@ use std::{
     },
 };
 
-// Safety invariant: this type is only ever constructed if avx512f is available.
+// Safety invariant: this type is only ever constructed if avx512f and avx512bw are available.
 #[derive(Clone, Copy, Debug)]
 pub struct Avx512Descriptor(());
 
 #[allow(unused)]
 impl Avx512Descriptor {
     /// # Safety
-    /// The caller must guarantee that the "avx512f" target feature is available.
+    /// The caller must guarantee that "avx512f" and "avx512bw" target features are available.
     pub unsafe fn new_unchecked() -> Self {
         Self(())
     }
@@ -50,8 +50,8 @@ impl SimdDescriptor for Avx512Descriptor {
     }
 
     fn new() -> Option<Self> {
-        if is_x86_feature_detected!("avx512f") {
-            // SAFETY: we just checked avx512f.
+        if is_x86_feature_detected!("avx512f") && is_x86_feature_detected!("avx512bw") {
+            // SAFETY: we just checked avx512f and avx512bw.
             Some(Self(()))
         } else {
             None
@@ -510,6 +510,50 @@ unsafe impl F32SimdVec for F32VecAvx512 {
     fn_avx!(this: F32VecAvx512, fn bitcast_to_i32() -> I32VecAvx512 {
         I32VecAvx512(_mm512_castps_si512(this.0), this.1)
     });
+
+    #[inline(always)]
+    fn round_store_u8(self, dest: &mut [u8]) {
+        #[target_feature(enable = "avx512f", enable = "avx512bw")]
+        #[inline]
+        fn round_store_u8_impl(v: __m512, dest: &mut [u8]) {
+            assert!(dest.len() >= F32VecAvx512::LEN);
+            // Round to nearest integer
+            let rounded = _mm512_roundscale_ps::<{ _MM_FROUND_TO_NEAREST_INT }>(v);
+            // Convert to i32
+            let i32s = _mm512_cvtps_epi32(rounded);
+            // Use pmovusdb: saturating conversion from 32-bit to 8-bit unsigned
+            let u8s = _mm512_cvtusepi32_epi8(i32s);
+            // Store 16 bytes
+            // SAFETY: we checked dest has enough space
+            unsafe {
+                _mm_storeu_si128(dest.as_mut_ptr() as *mut __m128i, u8s);
+            }
+        }
+        // SAFETY: avx512f and avx512bw are available from the safety invariant on the descriptor.
+        unsafe { round_store_u8_impl(self.0, dest) }
+    }
+
+    #[inline(always)]
+    fn round_store_u16(self, dest: &mut [u16]) {
+        #[target_feature(enable = "avx512f", enable = "avx512bw")]
+        #[inline]
+        fn round_store_u16_impl(v: __m512, dest: &mut [u16]) {
+            assert!(dest.len() >= F32VecAvx512::LEN);
+            // Round to nearest integer
+            let rounded = _mm512_roundscale_ps::<{ _MM_FROUND_TO_NEAREST_INT }>(v);
+            // Convert to i32
+            let i32s = _mm512_cvtps_epi32(rounded);
+            // Use pmovusdw: saturating conversion from 32-bit to 16-bit unsigned
+            let u16s = _mm512_cvtusepi32_epi16(i32s);
+            // Store 16 u16s (32 bytes)
+            // SAFETY: we checked dest has enough space
+            unsafe {
+                _mm256_storeu_si256(dest.as_mut_ptr() as *mut __m256i, u16s);
+            }
+        }
+        // SAFETY: avx512f and avx512bw are available from the safety invariant on the descriptor.
+        unsafe { round_store_u16_impl(self.0, dest) }
+    }
 
     impl_f32_array_interface!();
 

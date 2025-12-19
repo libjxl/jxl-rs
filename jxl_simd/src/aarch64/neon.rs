@@ -378,6 +378,35 @@ unsafe impl F32SimdVec for F32VecNeon {
         fn bitcast_to_i32(this: F32VecNeon) -> I32VecNeon {
             I32VecNeon(vreinterpretq_s32_f32(this.0), this.1)
         }
+
+        fn round_store_u8(this: F32VecNeon, dest: &mut [u8]) {
+            assert!(dest.len() >= F32VecNeon::LEN);
+            // Round to nearest integer
+            let rounded = vrndnq_f32(this.0);
+            // Convert to i32, then to u16, then to u8
+            let i32s = vcvtq_s32_f32(rounded);
+            let u16s = vqmovun_s32(i32s);
+            let u8s = vqmovn_u16(vcombine_u16(u16s, u16s));
+            // Store lower 4 bytes
+            // SAFETY: we checked dest has enough space
+            unsafe {
+                vst1_lane_u32::<0>(dest.as_mut_ptr() as *mut u32, vreinterpret_u32_u8(u8s));
+            }
+        }
+
+        fn round_store_u16(this: F32VecNeon, dest: &mut [u16]) {
+            assert!(dest.len() >= F32VecNeon::LEN);
+            // Round to nearest integer
+            let rounded = vrndnq_f32(this.0);
+            // Convert to i32, then to u16
+            let i32s = vcvtq_s32_f32(rounded);
+            let u16s = vqmovun_s32(i32s);
+            // Store 4 u16s (8 bytes)
+            // SAFETY: we checked dest has enough space
+            unsafe {
+                vst1_u16(dest.as_mut_ptr(), u16s);
+            }
+        }
     }
 }
 
