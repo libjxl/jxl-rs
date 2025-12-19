@@ -4,6 +4,7 @@
 // license that can be found in the LICENSE file.
 
 #![allow(clippy::needless_range_loop)]
+#![allow(clippy::too_many_arguments)]
 
 use std::any::Any;
 
