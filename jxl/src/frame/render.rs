@@ -385,6 +385,7 @@ impl Frame {
                     JxlColorType::Grayscale,
                     JxlDataFormat::f32(),
                     false,
+                    false,
                 )?;
             }
         }
@@ -396,6 +397,7 @@ impl Frame {
                     num_api_buffers + i,
                     JxlColorType::Grayscale,
                     JxlDataFormat::f32(),
+                    false,
                     false,
                 )?;
             }
@@ -449,6 +451,7 @@ impl Frame {
                     JxlColorType::Grayscale,
                     JxlDataFormat::f32(),
                     false,
+                    false,
                 )?;
             }
         }
@@ -479,7 +482,8 @@ impl Frame {
             } else {
                 3
             };
-            let alpha_in_color = if pixel_format.color_type.has_alpha() {
+            // Find the alpha channel info (index and metadata) if the color type requires alpha
+            let alpha_channel_info = if pixel_format.color_type.has_alpha() {
                 decoder_state
                     .file_header
                     .image_metadata
@@ -487,10 +491,13 @@ impl Frame {
                     .iter()
                     .enumerate()
                     .find(|x| x.1.ec_type == ExtraChannel::Alpha)
-                    .map(|x| x.0 + 3)
             } else {
                 None
             };
+            let alpha_in_color = alpha_channel_info.map(|x| x.0 + 3);
+            // Check if the source alpha is already premultiplied (alpha_associated)
+            let source_alpha_associated =
+                alpha_channel_info.is_some_and(|(_, info)| info.alpha_associated());
             if pixel_format.color_type.is_grayscale() && num_color_channels == 3 {
                 return Err(Error::NotGrayscale);
             }
@@ -505,6 +512,14 @@ impl Frame {
             // - color_type requests alpha (has_alpha() is true)
             // - but no actual alpha channel exists in the image (alpha_in_color is None)
             let fill_opaque_alpha = pixel_format.color_type.has_alpha() && alpha_in_color.is_none();
+
+            // Determine if we should premultiply:
+            // - premultiply_output is requested
+            // - there is an alpha channel in the output
+            // - source is not already premultiplied (to avoid double-premultiplication)
+            let should_premultiply = decoder_state.premultiply_output
+                && alpha_in_color.is_some()
+                && !source_alpha_associated;
 
             let color_source_channels: &[usize] =
                 match (pixel_format.color_type.is_grayscale(), alpha_in_color) {
@@ -523,6 +538,7 @@ impl Frame {
                     pixel_format.color_type,
                     *df,
                     fill_opaque_alpha,
+                    should_premultiply,
                 )?;
             }
             for i in 0..frame_header.num_extra_channels as usize {
@@ -535,6 +551,7 @@ impl Frame {
                         1 + i,
                         JxlColorType::Grayscale,
                         *df,
+                        false,
                         false,
                     )?;
                 }

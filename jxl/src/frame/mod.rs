@@ -124,6 +124,7 @@ pub struct DecoderState {
     pub visible_frame_index: usize,
     pub nonvisible_frame_index: usize,
     pub high_precision: bool,
+    pub premultiply_output: bool,
 }
 
 impl DecoderState {
@@ -142,6 +143,7 @@ impl DecoderState {
             visible_frame_index: 0,
             nonvisible_frame_index: 0,
             high_precision: false,
+            premultiply_output: false,
         }
     }
 

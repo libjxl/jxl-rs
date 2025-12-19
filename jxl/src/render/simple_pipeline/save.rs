@@ -30,10 +30,33 @@ impl SaveStage {
 
         let output_channels = self.output_channels();
 
+        // Determine if we need to premultiply and which channel is alpha
+        // When premultiplying, the last channel in self.channels is the alpha channel
+        let alpha_channel_idx = if self.premultiply_output && self.channels.len() > 1 {
+            Some(*self.channels.last().unwrap())
+        } else {
+            None
+        };
+
         for (c, &chan) in self.channels.iter().enumerate() {
+            // Determine if this is a color channel that needs premultiplication
+            // (all channels except the last one when alpha is present)
+            let is_color_channel = alpha_channel_idx.is_some() && c < self.channels.len() - 1;
+
             for y in 0..size.1 {
                 let src_row = data[chan].row(y);
+                // Get alpha row if we need to premultiply
+                let alpha_row = alpha_channel_idx.map(|idx| data[idx].row(y));
+
                 for (x, &px) in src_row.iter().enumerate() {
+                    // Apply premultiplication if this is a color channel
+                    let px = if is_color_channel {
+                        let alpha = alpha_row.unwrap()[x];
+                        px * alpha
+                    } else {
+                        px
+                    };
+
                     let (dx, dy) = self.orientation.display_pixel((x, y), size);
                     let dx = dx * output_channels + c;
                     let bps = self.data_format.bytes_per_sample();
@@ -107,6 +130,7 @@ mod test {
             JxlColorType::Grayscale,
             JxlDataFormat::U8 { bit_depth: 8 },
             false,
+            false,
         );
         let mut rng = XorShiftRng::seed_from_u64(0);
         let src = [Image::<f64>::new_random((128, 128), &mut rng)?];
@@ -154,6 +178,7 @@ mod test {
             0,
             JxlColorType::Grayscale,
             JxlDataFormat::f32(),
+            false,
             false,
         );
 

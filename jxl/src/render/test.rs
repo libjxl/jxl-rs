@@ -129,6 +129,7 @@ fn make_and_run_simple_pipeline_impl<InputT: ImageDataType, OutputT: ImageDataTy
             JxlColorType::Grayscale,
             jxl_data_type,
             false,
+            false,
         )?;
     }
     let mut pipeline = pipeline.build()?;

@@ -632,6 +632,298 @@ pub(crate) mod tests {
         }
     }
 
+    /// Test that premultiply_output=true produces premultiplied alpha output
+    /// from a source with straight (non-premultiplied) alpha.
+    #[test]
+    fn test_premultiply_output_straight_alpha() {
+        use crate::api::{JxlColorType, JxlDataFormat, JxlPixelFormat};
+        use crate::image::{Image, Rect};
+
+        // Use alpha_nonpremultiplied.jxl which has straight alpha (alpha_associated=false)
+        let file =
+            std::fs::read("resources/test/conformance_test_images/alpha_nonpremultiplied.jxl")
+                .unwrap();
+
+        // Alpha is included in RGBA, so we set extra_channel_format to None
+        // to indicate no separate buffer for the alpha extra channel
+        let rgba_format = JxlPixelFormat {
+            color_type: JxlColorType::Rgba,
+            color_data_format: Some(JxlDataFormat::f32()),
+            extra_channel_format: vec![None],
+        };
+
+        // Helper function to decode with given options
+        fn decode_image(
+            file: &[u8],
+            rgba_format: &JxlPixelFormat,
+            premultiply: bool,
+            use_simple: bool,
+        ) -> (Image<f32>, usize, usize) {
+            let mut options = JxlDecoderOptions::default();
+            options.premultiply_output = premultiply;
+            let decoder = JxlDecoder::<states::Initialized>::new(options);
+            let mut input = file;
+
+            // Advance to image info
+            let mut decoder = decoder;
+            let mut decoder = loop {
+                match decoder.process(&mut input).unwrap() {
+                    ProcessingResult::Complete { result } => break result,
+                    ProcessingResult::NeedsMoreInput { fallback, .. } => {
+                        if input.is_empty() {
+                            panic!("Unexpected end of input");
+                        }
+                        decoder = fallback;
+                    }
+                }
+            };
+            decoder.set_use_simple_pipeline(use_simple);
+            decoder.set_pixel_format(rgba_format.clone());
+
+            let basic_info = decoder.basic_info().clone();
+            let (width, height) = basic_info.size;
+
+            // Advance to frame info
+            let mut decoder = loop {
+                match decoder.process(&mut input).unwrap() {
+                    ProcessingResult::Complete { result } => break result,
+                    ProcessingResult::NeedsMoreInput { fallback, .. } => {
+                        if input.is_empty() {
+                            panic!("Unexpected end of input");
+                        }
+                        decoder = fallback;
+                    }
+                }
+            };
+
+            let mut buffer = Image::<f32>::new((width * 4, height)).unwrap();
+            let mut buffers: Vec<_> = vec![JxlOutputBuffer::from_image_rect_mut(
+                buffer
+                    .get_rect_mut(Rect {
+                        origin: (0, 0),
+                        size: (width * 4, height),
+                    })
+                    .into_raw(),
+            )];
+
+            // Decode
+            loop {
+                match decoder.process(&mut input, &mut buffers).unwrap() {
+                    ProcessingResult::Complete { .. } => break,
+                    ProcessingResult::NeedsMoreInput { fallback, .. } => {
+                        if input.is_empty() {
+                            panic!("Unexpected end of input");
+                        }
+                        decoder = fallback;
+                    }
+                }
+            }
+
+            (buffer, width, height)
+        }
+
+        // Test both pipelines
+        for use_simple in [true, false] {
+            let (straight_buffer, width, height) =
+                decode_image(&file, &rgba_format, false, use_simple);
+            let (premul_buffer, _, _) = decode_image(&file, &rgba_format, true, use_simple);
+
+            // Verify premultiplied values: premul_rgb should equal straight_rgb * alpha
+            let mut found_semitransparent = false;
+            for y in 0..height {
+                let straight_row = straight_buffer.row(y);
+                let premul_row = premul_buffer.row(y);
+                for x in 0..width {
+                    let sr = straight_row[x * 4];
+                    let sg = straight_row[x * 4 + 1];
+                    let sb = straight_row[x * 4 + 2];
+                    let sa = straight_row[x * 4 + 3];
+
+                    let pr = premul_row[x * 4];
+                    let pg = premul_row[x * 4 + 1];
+                    let pb = premul_row[x * 4 + 2];
+                    let pa = premul_row[x * 4 + 3];
+
+                    // Alpha should be unchanged
+                    assert!(
+                        (sa - pa).abs() < 1e-5,
+                        "Alpha mismatch at ({},{}): straight={}, premul={} (use_simple={})",
+                        x,
+                        y,
+                        sa,
+                        pa,
+                        use_simple
+                    );
+
+                    // Check premultiplication: premul = straight * alpha
+                    let expected_r = sr * sa;
+                    let expected_g = sg * sa;
+                    let expected_b = sb * sa;
+
+                    // Allow 1% tolerance for precision differences between pipelines
+                    let tol = 0.01;
+                    assert!(
+                        (expected_r - pr).abs() < tol,
+                        "R mismatch at ({},{}): expected={}, got={} (use_simple={})",
+                        x,
+                        y,
+                        expected_r,
+                        pr,
+                        use_simple
+                    );
+                    assert!(
+                        (expected_g - pg).abs() < tol,
+                        "G mismatch at ({},{}): expected={}, got={} (use_simple={})",
+                        x,
+                        y,
+                        expected_g,
+                        pg,
+                        use_simple
+                    );
+                    assert!(
+                        (expected_b - pb).abs() < tol,
+                        "B mismatch at ({},{}): expected={}, got={} (use_simple={})",
+                        x,
+                        y,
+                        expected_b,
+                        pb,
+                        use_simple
+                    );
+
+                    if sa > 0.01 && sa < 0.99 {
+                        found_semitransparent = true;
+                    }
+                }
+            }
+
+            // Ensure the test image actually has some semi-transparent pixels
+            assert!(
+                found_semitransparent,
+                "Test image should have semi-transparent pixels (use_simple={})",
+                use_simple
+            );
+        }
+    }
+
+    /// Test that premultiply_output=true doesn't double-premultiply
+    /// when the source already has premultiplied alpha (alpha_associated=true).
+    #[test]
+    fn test_premultiply_output_already_premultiplied() {
+        use crate::api::{JxlColorType, JxlDataFormat, JxlPixelFormat};
+        use crate::image::{Image, Rect};
+
+        // Use alpha_premultiplied.jxl which has alpha_associated=true
+        let file = std::fs::read("resources/test/conformance_test_images/alpha_premultiplied.jxl")
+            .unwrap();
+
+        // Alpha is included in RGBA, so we set extra_channel_format to None
+        let rgba_format = JxlPixelFormat {
+            color_type: JxlColorType::Rgba,
+            color_data_format: Some(JxlDataFormat::f32()),
+            extra_channel_format: vec![None],
+        };
+
+        // Helper function to decode with given options
+        fn decode_image(
+            file: &[u8],
+            rgba_format: &JxlPixelFormat,
+            premultiply: bool,
+            use_simple: bool,
+        ) -> (Image<f32>, usize, usize) {
+            let mut options = JxlDecoderOptions::default();
+            options.premultiply_output = premultiply;
+            let decoder = JxlDecoder::<states::Initialized>::new(options);
+            let mut input = file;
+
+            // Advance to image info
+            let mut decoder = decoder;
+            let mut decoder = loop {
+                match decoder.process(&mut input).unwrap() {
+                    ProcessingResult::Complete { result } => break result,
+                    ProcessingResult::NeedsMoreInput { fallback, .. } => {
+                        if input.is_empty() {
+                            panic!("Unexpected end of input");
+                        }
+                        decoder = fallback;
+                    }
+                }
+            };
+            decoder.set_use_simple_pipeline(use_simple);
+            decoder.set_pixel_format(rgba_format.clone());
+
+            let basic_info = decoder.basic_info().clone();
+            let (width, height) = basic_info.size;
+
+            // Advance to frame info
+            let mut decoder = loop {
+                match decoder.process(&mut input).unwrap() {
+                    ProcessingResult::Complete { result } => break result,
+                    ProcessingResult::NeedsMoreInput { fallback, .. } => {
+                        if input.is_empty() {
+                            panic!("Unexpected end of input");
+                        }
+                        decoder = fallback;
+                    }
+                }
+            };
+
+            let mut buffer = Image::<f32>::new((width * 4, height)).unwrap();
+            let mut buffers: Vec<_> = vec![JxlOutputBuffer::from_image_rect_mut(
+                buffer
+                    .get_rect_mut(Rect {
+                        origin: (0, 0),
+                        size: (width * 4, height),
+                    })
+                    .into_raw(),
+            )];
+
+            // Decode
+            loop {
+                match decoder.process(&mut input, &mut buffers).unwrap() {
+                    ProcessingResult::Complete { .. } => break,
+                    ProcessingResult::NeedsMoreInput { fallback, .. } => {
+                        if input.is_empty() {
+                            panic!("Unexpected end of input");
+                        }
+                        decoder = fallback;
+                    }
+                }
+            }
+
+            (buffer, width, height)
+        }
+
+        // Test both pipelines
+        for use_simple in [true, false] {
+            let (without_flag_buffer, width, height) =
+                decode_image(&file, &rgba_format, false, use_simple);
+            let (with_flag_buffer, _, _) = decode_image(&file, &rgba_format, true, use_simple);
+
+            // Both outputs should be identical since source is already premultiplied
+            // and we shouldn't double-premultiply
+            for y in 0..height {
+                let without_row = without_flag_buffer.row(y);
+                let with_row = with_flag_buffer.row(y);
+                for x in 0..width {
+                    for c in 0..4 {
+                        let without_val = without_row[x * 4 + c];
+                        let with_val = with_row[x * 4 + c];
+                        assert!(
+                            (without_val - with_val).abs() < 1e-5,
+                            "Mismatch at ({},{}) channel {}: without_flag={}, with_flag={} (use_simple={})",
+                            x,
+                            y,
+                            c,
+                            without_val,
+                            with_val,
+                            use_simple
+                        );
+                    }
+                }
+            }
+        }
+    }
+
     /// Test that animations with reference frames work correctly.
     /// This exercises the buffer index calculation fix where reference frame
     /// save stages use indices beyond the API-provided buffer array.

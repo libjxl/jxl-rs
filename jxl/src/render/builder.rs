@@ -139,6 +139,7 @@ impl<Pipeline: RenderPipeline> RenderPipelineBuilder<Pipeline> {
         color_type: JxlColorType,
         data_format: JxlDataFormat,
         fill_opaque_alpha: bool,
+        premultiply_output: bool,
     ) -> Result<Self> {
         let stage = SaveStage::new(
             channels,
@@ -147,6 +148,7 @@ impl<Pipeline: RenderPipeline> RenderPipelineBuilder<Pipeline> {
             color_type,
             data_format,
             fill_opaque_alpha,
+            premultiply_output,
         );
         self.add_stage_internal(Stage::Save(stage))
     }

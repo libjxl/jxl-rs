@@ -20,6 +20,10 @@ pub struct SaveStage {
     /// When true, fill alpha channel with opaque (1.0) values.
     /// Used when RGBA output is requested but image has no alpha channel.
     pub(super) fill_opaque_alpha: bool,
+    /// When true, multiply RGB by alpha before writing to output buffer.
+    /// Note: The caller is responsible for ensuring this is only set when the source
+    /// alpha is NOT already premultiplied (alpha_associated == false).
+    pub(super) premultiply_output: bool,
 }
 
 impl SaveStage {
@@ -30,6 +34,7 @@ impl SaveStage {
         mut color_type: JxlColorType,
         data_format: JxlDataFormat,
         fill_opaque_alpha: bool,
+        premultiply_output: bool,
     ) -> SaveStage {
         let mut channels = channels.to_vec();
         if color_type == JxlColorType::Bgr {
@@ -47,6 +52,7 @@ impl SaveStage {
             color_type,
             data_format,
             fill_opaque_alpha,
+            premultiply_output,
         }
     }
 
