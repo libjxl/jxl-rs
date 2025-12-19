@@ -131,6 +131,7 @@ impl<Pipeline: RenderPipeline> RenderPipelineBuilder<Pipeline> {
     }
 
     #[instrument(skip_all, err)]
+    #[allow(clippy::too_many_arguments)]
     pub fn add_save_stage(
         self,
         channels: &[usize],
