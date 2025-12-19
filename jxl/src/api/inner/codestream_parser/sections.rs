@@ -86,6 +86,12 @@ impl CodestreamParser {
                 frame.prepare_render_pipeline(
                     self.pixel_format.as_ref().unwrap(),
                     decode_options.cms.as_deref(),
+                    self.embedded_color_profile
+                        .as_ref()
+                        .expect("embedded_color_profile should be set before pipeline preparation"),
+                    self.output_color_profile
+                        .as_ref()
+                        .expect("output_color_profile should be set before pipeline preparation"),
                 )?;
                 frame.finalize_lf()?;
                 frame.decode_and_render_hf_groups(
@@ -123,6 +129,12 @@ impl CodestreamParser {
                     frame.prepare_render_pipeline(
                         self.pixel_format.as_ref().unwrap(),
                         decode_options.cms.as_deref(),
+                        self.embedded_color_profile
+                            .as_ref()
+                            .expect("embedded_color_profile should be set before pipeline preparation"),
+                        self.output_color_profile
+                            .as_ref()
+                            .expect("output_color_profile should be set before pipeline preparation"),
                     )?;
                     frame.finalize_lf()?;
                     self.section_state.hf_global_done = true;
