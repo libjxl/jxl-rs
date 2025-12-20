@@ -101,7 +101,6 @@ impl SaveStage {
             let y0 = y0 as isize;
             let dx = x1 as isize - x0;
             let dy = y1 as isize - y0;
-
             match self.data_format {
                 JxlDataFormat::U8 { .. } => {
                     let src_row = d.get_row::<u8>(frame_y);
