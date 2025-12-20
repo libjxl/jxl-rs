@@ -3,12 +3,13 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-use std::{cell::RefMut, ops::DerefMut};
+use std::ops::DerefMut;
 
 use crate::{
     error::Result,
     frame::modular::{IMAGE_OFFSET, IMAGE_PADDING},
     image::Image,
+    util::AtomicRefMut,
 };
 
 use super::{ModularBufferInfo, ModularChannel};
@@ -42,7 +43,7 @@ pub fn with_buffers<T>(
             continue;
         }
 
-        bufs.push(RefMut::map(data, |x| x.as_mut().unwrap()));
+        bufs.push(AtomicRefMut::map(data, |x| x.as_mut().unwrap()));
     }
     f(bufs.iter_mut().map(|x| x.deref_mut()).collect())
 }

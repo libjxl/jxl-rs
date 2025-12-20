@@ -3,7 +3,7 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-use std::{cell::RefCell, cmp::min, fmt::Debug};
+use std::{cmp::min, fmt::Debug};
 
 use crate::{
     bit_reader::BitReader,
@@ -18,7 +18,7 @@ use crate::{
         modular::GroupHeader,
     },
     image::{Image, Rect},
-    util::{CeilLog2, tracing_wrappers::*},
+    util::{AtomicRefCell, CeilLog2, tracing_wrappers::*},
 };
 use jxl_transforms::transform_map::*;
 
@@ -175,7 +175,7 @@ impl ModularChannel {
 // probably not worth it.
 #[derive(Debug)]
 struct ModularBuffer {
-    data: RefCell<Option<ModularChannel>>,
+    data: AtomicRefCell<Option<ModularChannel>>,
     // Number of times this buffer will be used, *including* when it is used for output.
     remaining_uses: usize,
     used_by_transforms: Vec<usize>,

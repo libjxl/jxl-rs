@@ -3,7 +3,7 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-use std::{cell::Ref, fmt::Debug};
+use std::fmt::Debug;
 
 use num_traits::FromPrimitive;
 
@@ -19,9 +19,8 @@ use crate::{
         modular::{TransformId, WeightedHeader},
     },
     image::Rect,
-    util::tracing_wrappers::*,
+    util::{AtomicRef, AtomicRefMut, tracing_wrappers::*},
 };
-use std::cell::RefMut;
 use std::ops::Deref;
 use std::ops::DerefMut;
 
@@ -147,12 +146,13 @@ impl TransformStepChunk {
 
                 {
                     let img_in =
-                        Ref::map(buffers[*buf_in].buffer_grid[out_grid].data.borrow(), |x| {
+                        AtomicRef::map(buffers[*buf_in].buffer_grid[out_grid].data.borrow(), |x| {
                             x.as_ref().unwrap()
                         });
-                    let img_pal = Ref::map(buffers[*buf_pal].buffer_grid[0].data.borrow(), |x| {
-                        x.as_ref().unwrap()
-                    });
+                    let img_pal =
+                        AtomicRef::map(buffers[*buf_pal].buffer_grid[0].data.borrow(), |x| {
+                            x.as_ref().unwrap()
+                        });
                     // Ensure that the output buffers are present.
                     // TODO(szabadka): Extend the callback to support many grid points.
                     with_buffers(buffers, buf_out, out_grid, false, |_| Ok(()))?;
@@ -172,7 +172,7 @@ impl TransformStepChunk {
                                 let buf = &buffers[*i];
                                 let b = &buf.buffer_grid[grid];
                                 let data = b.data.borrow_mut();
-                                out_bufs.push(RefMut::map(data, |x| x.as_mut().unwrap()));
+                                out_bufs.push(AtomicRefMut::map(data, |x| x.as_mut().unwrap()));
                             }
                         }
                     }
@@ -216,7 +216,7 @@ impl TransformStepChunk {
                     let mut in_bufs = vec![];
                     for grid_x in 0..grid_shape.0 {
                         let grid = grid_y * grid_shape.0 + grid_x;
-                        in_bufs.push(Ref::map(
+                        in_bufs.push(AtomicRef::map(
                             buffers[*buf_in].buffer_grid[grid].data.borrow(),
                             |x| x.as_ref().unwrap(),
                         ));
@@ -226,9 +226,10 @@ impl TransformStepChunk {
                     }
                     let in_buf_refs: Vec<&ModularChannel> =
                         in_bufs.iter().map(|x| x.deref()).collect();
-                    let img_pal = Ref::map(buffers[*buf_pal].buffer_grid[0].data.borrow(), |x| {
-                        x.as_ref().unwrap()
-                    });
+                    let img_pal =
+                        AtomicRef::map(buffers[*buf_pal].buffer_grid[0].data.borrow(), |x| {
+                            x.as_ref().unwrap()
+                        });
                     let mut out_bufs = vec![];
                     for i in buf_out {
                         for grid_y in grid_y0..grid_y1 {
@@ -237,7 +238,7 @@ impl TransformStepChunk {
                                 let buf = &buffers[*i];
                                 let b = &buf.buffer_grid[grid];
                                 let data = b.data.borrow_mut();
-                                out_bufs.push(RefMut::map(data, |x| x.as_mut().unwrap()));
+                                out_bufs.push(AtomicRefMut::map(data, |x| x.as_mut().unwrap()));
                             }
                         }
                     }
@@ -275,14 +276,14 @@ impl TransformStepChunk {
                         buf_in, buf_out, self.grid_pos
                     );
                     let (gx, gy) = self.grid_pos;
-                    let in_avg = Ref::map(buf_avg.buffer_grid[in_grid].data.borrow(), |x| {
+                    let in_avg = AtomicRef::map(buf_avg.buffer_grid[in_grid].data.borrow(), |x| {
                         x.as_ref().unwrap()
                     });
                     let has_next = gx + 1 < buffers[*buf_out].grid_shape.0;
                     let gx_next = if has_next { gx + 1 } else { gx };
                     let next_avg_grid = buf_avg.get_grid_idx(out_grid_kind, (gx_next, gy));
                     let in_next_avg =
-                        Ref::map(buf_avg.buffer_grid[next_avg_grid].data.borrow(), |x| {
+                        AtomicRef::map(buf_avg.buffer_grid[next_avg_grid].data.borrow(), |x| {
                             x.as_ref().unwrap()
                         });
                     let in_next_avg_rect = if has_next {
@@ -294,7 +295,7 @@ impl TransformStepChunk {
                     } else {
                         None
                     };
-                    let in_res = Ref::map(buf_res.buffer_grid[res_grid].data.borrow(), |x| {
+                    let in_res = AtomicRef::map(buf_res.buffer_grid[res_grid].data.borrow(), |x| {
                         x.as_ref().unwrap()
                     });
                     let out_prev = if gx == 0 {
@@ -302,7 +303,7 @@ impl TransformStepChunk {
                     } else {
                         let prev_out_grid =
                             buffers[*buf_out].get_grid_idx(out_grid_kind, (gx - 1, gy));
-                        Some(Ref::map(
+                        Some(AtomicRef::map(
                             buffers[*buf_out].buffer_grid[prev_out_grid].data.borrow(),
                             |x| x.as_ref().unwrap(),
                         ))
@@ -342,14 +343,14 @@ impl TransformStepChunk {
                         buf_in, buf_out, self.grid_pos
                     );
                     let (gx, gy) = self.grid_pos;
-                    let in_avg = Ref::map(buf_avg.buffer_grid[in_grid].data.borrow(), |x| {
+                    let in_avg = AtomicRef::map(buf_avg.buffer_grid[in_grid].data.borrow(), |x| {
                         x.as_ref().unwrap()
                     });
                     let has_next = gy + 1 < buffers[*buf_out].grid_shape.1;
                     let gy_next = if has_next { gy + 1 } else { gy };
                     let next_avg_grid = buf_avg.get_grid_idx(out_grid_kind, (gx, gy_next));
                     let in_next_avg =
-                        Ref::map(buf_avg.buffer_grid[next_avg_grid].data.borrow(), |x| {
+                        AtomicRef::map(buf_avg.buffer_grid[next_avg_grid].data.borrow(), |x| {
                             x.as_ref().unwrap()
                         });
                     let in_next_avg_rect = if has_next {
@@ -361,7 +362,7 @@ impl TransformStepChunk {
                     } else {
                         None
                     };
-                    let in_res = Ref::map(buf_res.buffer_grid[res_grid].data.borrow(), |x| {
+                    let in_res = AtomicRef::map(buf_res.buffer_grid[res_grid].data.borrow(), |x| {
                         x.as_ref().unwrap()
                     });
                     let out_prev = if gy == 0 {
@@ -369,7 +370,7 @@ impl TransformStepChunk {
                     } else {
                         let prev_out_grid =
                             buffers[*buf_out].get_grid_idx(out_grid_kind, (gx, gy - 1));
-                        Some(Ref::map(
+                        Some(AtomicRef::map(
                             buffers[*buf_out].buffer_grid[prev_out_grid].data.borrow(),
                             |x| x.as_ref().unwrap(),
                         ))
