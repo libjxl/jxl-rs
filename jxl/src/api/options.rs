@@ -17,7 +17,6 @@ pub enum JxlProgressiveMode {
 #[non_exhaustive]
 pub struct JxlDecoderOptions {
     pub adjust_orientation: bool,
-    pub unpremultiply_alpha: bool,
     pub render_spot_colors: bool,
     pub coalescing: bool,
     pub desired_intensity_target: Option<f32>,
@@ -38,13 +37,16 @@ pub struct JxlDecoderOptions {
     /// This affects multiple decoder decisions including spline rendering precision
     /// and potentially intermediate buffer storage (e.g., using f32 vs f16).
     pub high_precision: bool,
+    /// If true, multiply RGB by alpha before writing to output buffer.
+    /// This produces premultiplied alpha output, which is useful for compositing.
+    /// Default: false (output straight alpha)
+    pub premultiply_output: bool,
 }
 
 impl Default for JxlDecoderOptions {
     fn default() -> Self {
         Self {
             adjust_orientation: true,
-            unpremultiply_alpha: false,
             render_spot_colors: true,
             coalescing: true,
             skip_preview: true,
@@ -55,6 +57,7 @@ impl Default for JxlDecoderOptions {
             cms: None,
             pixel_limit: None,
             high_precision: false,
+            premultiply_output: false,
         }
     }
 }

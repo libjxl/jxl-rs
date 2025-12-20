@@ -479,7 +479,8 @@ impl Frame {
             } else {
                 3
             };
-            let alpha_in_color = if pixel_format.color_type.has_alpha() {
+            // Find the alpha channel info (index and metadata) if the color type requires alpha
+            let alpha_channel_info = if pixel_format.color_type.has_alpha() {
                 decoder_state
                     .file_header
                     .image_metadata
@@ -487,10 +488,13 @@ impl Frame {
                     .iter()
                     .enumerate()
                     .find(|x| x.1.ec_type == ExtraChannel::Alpha)
-                    .map(|x| x.0 + 3)
             } else {
                 None
             };
+            let alpha_in_color = alpha_channel_info.map(|x| x.0 + 3);
+            // Check if the source alpha is already premultiplied (alpha_associated)
+            let source_alpha_associated =
+                alpha_channel_info.is_some_and(|(_, info)| info.alpha_associated());
             if pixel_format.color_type.is_grayscale() && num_color_channels == 3 {
                 return Err(Error::NotGrayscale);
             }
@@ -506,6 +510,14 @@ impl Frame {
             // - but no actual alpha channel exists in the image (alpha_in_color is None)
             let fill_opaque_alpha = pixel_format.color_type.has_alpha() && alpha_in_color.is_none();
 
+            // Determine if we should premultiply:
+            // - premultiply_output is requested
+            // - there is an alpha channel in the output
+            // - source is not already premultiplied (to avoid double-premultiplication)
+            let should_premultiply = decoder_state.premultiply_output
+                && alpha_in_color.is_some()
+                && !source_alpha_associated;
+
             let color_source_channels: &[usize] =
                 match (pixel_format.color_type.is_grayscale(), alpha_in_color) {
                     (true, None) => &[0],
@@ -514,6 +526,14 @@ impl Frame {
                     (false, Some(c)) => &[0, 1, 2, c],
                 };
             if let Some(df) = &pixel_format.color_data_format {
+                // Add premultiply stage if needed (before conversion to output format)
+                if should_premultiply && let Some(alpha_channel) = alpha_in_color {
+                    pipeline = pipeline.add_inplace_stage(PremultiplyAlphaStage::new(
+                        0,
+                        num_color_channels,
+                        alpha_channel,
+                    ))?;
+                }
                 // Add conversion stages for non-float output formats
                 pipeline = Self::add_conversion_stages(pipeline, color_source_channels, *df)?;
                 pipeline = pipeline.add_save_stage(

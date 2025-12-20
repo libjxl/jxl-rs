@@ -33,6 +33,7 @@ impl SaveStage {
         for (c, &chan) in self.channels.iter().enumerate() {
             for y in 0..size.1 {
                 let src_row = data[chan].row(y);
+
                 for (x, &px) in src_row.iter().enumerate() {
                     let (dx, dy) = self.orientation.display_pixel((x, y), size);
                     let dx = dx * output_channels + c;
