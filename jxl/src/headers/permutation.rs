@@ -53,7 +53,15 @@ impl Permutation {
 
         let mut prev_val = 0u32;
         for idx in skip..(skip + end) {
-            let val = read(get_context(prev_val))?;
+            let val = match read(get_context(prev_val)) {
+                Ok(val) => val,
+                Err(Error::OutOfBounds(_)) => {
+                    // Estimate 1.5 bits for each remaining code
+                    let bits = (((skip + end) - idx) as usize).saturating_mul(3) / 2;
+                    return Err(Error::OutOfBounds(bits));
+                }
+                Err(e) => return Err(e),
+            };
             if val >= size - idx {
                 return Err(Error::InvalidPermutationLehmerCode {
                     size,
