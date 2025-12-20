@@ -8,7 +8,6 @@ use crate::{
     error::Result,
     headers::Orientation,
     render::save::SaveStage,
-    util::f16,
 };
 
 use super::row_buffers::RowBuffer;
@@ -68,22 +67,16 @@ impl SaveStage {
 
         let save_size = (save_end.0 - save_start.0, save_end.1 - save_start.1);
 
-        // Fast path for identity orientation when not premultiplying
-        // (premultiplication requires per-pixel alpha access which the fast path doesn't support)
-        let num_fast = if self.premultiply_output {
-            0
-        } else {
-            match self.orientation {
-                Orientation::Identity => identity::store(
-                    data,
-                    frame_y,
-                    save_start.0..save_end.0,
-                    buf,
-                    relative_y,
-                    self.data_format,
-                ),
-                _ => 0,
-            }
+        let num_fast = match self.orientation {
+            Orientation::Identity => identity::store(
+                data,
+                frame_y,
+                save_start.0..save_end.0,
+                buf,
+                relative_y,
+                self.data_format,
+            ),
+            _ => 0,
         };
 
         // TODO(veluca): this is very slow, implement more fast paths.
@@ -100,14 +93,6 @@ impl SaveStage {
             };
         }
 
-        // Determine if we need to premultiply and which channel index is alpha
-        // When premultiplying, the last channel in data is the alpha channel
-        let alpha_channel = if self.premultiply_output && data.len() > 1 {
-            Some(data.len() - 1)
-        } else {
-            None
-        };
-
         for (c, d) in data.iter().enumerate() {
             let nc = self.output_channels();
             let (x0, y0) = self.orientation.display_pixel((0, relative_y), save_size);
@@ -117,53 +102,20 @@ impl SaveStage {
             let dx = x1 as isize - x0;
             let dy = y1 as isize - y0;
 
-            // Check if this is a color channel that needs premultiplication
-            // (all channels except the last one when alpha is present)
-            let is_color_channel = alpha_channel.is_some() && c < data.len() - 1;
-
             match self.data_format {
                 JxlDataFormat::U8 { .. } => {
                     let src_row = d.get_row::<u8>(frame_y);
-                    let alpha_row = alpha_channel.map(|ac| data[ac].get_row::<u8>(frame_y));
                     for ix in (save_start.0..save_end.0).skip(num_fast) {
-                        let mut px = src_row[RowBuffer::x0_offset::<u8>() + ix];
-                        if is_color_channel {
-                            let alpha = alpha_row.unwrap()[RowBuffer::x0_offset::<u8>() + ix];
-                            // Premultiply: scale by alpha/255
-                            px = ((px as u32 * alpha as u32 + 127) / 255) as u8;
-                        }
+                        let px = src_row[RowBuffer::x0_offset::<u8>() + ix];
                         let y = (y0 + (dy * (ix - save_start.0) as isize)) as usize;
                         let x = (x0 + (dx * (ix - save_start.0) as isize)) as usize;
                         write_pixel!(px, Endianness::LittleEndian, y, x * nc + c);
                     }
                 }
-                JxlDataFormat::U16 { endianness, .. } => {
+                JxlDataFormat::U16 { endianness, .. } | JxlDataFormat::F16 { endianness, .. } => {
                     let src_row = d.get_row::<u16>(frame_y);
-                    let alpha_row = alpha_channel.map(|ac| data[ac].get_row::<u16>(frame_y));
                     for ix in (save_start.0..save_end.0).skip(num_fast) {
-                        let mut px = src_row[RowBuffer::x0_offset::<u16>() + ix];
-                        if is_color_channel {
-                            let alpha = alpha_row.unwrap()[RowBuffer::x0_offset::<u16>() + ix];
-                            // Premultiply: scale by alpha/65535
-                            px = ((px as u64 * alpha as u64 + 32767) / 65535) as u16;
-                        }
-                        let y = (y0 + (dy * (ix - save_start.0) as isize)) as usize;
-                        let x = (x0 + (dx * (ix - save_start.0) as isize)) as usize;
-                        write_pixel!(px, endianness, y, (x * nc + c) * 2);
-                    }
-                }
-                JxlDataFormat::F16 { endianness, .. } => {
-                    let src_row = d.get_row::<u16>(frame_y);
-                    let alpha_row = alpha_channel.map(|ac| data[ac].get_row::<u16>(frame_y));
-                    for ix in (save_start.0..save_end.0).skip(num_fast) {
-                        let mut px = src_row[RowBuffer::x0_offset::<u16>() + ix];
-                        if is_color_channel {
-                            let alpha = alpha_row.unwrap()[RowBuffer::x0_offset::<u16>() + ix];
-                            // Premultiply f16: convert to f64, multiply, convert back
-                            let px_f64 = f16::from_bits(px).to_f64();
-                            let alpha_f64 = f16::from_bits(alpha).to_f64();
-                            px = f16::from_f64(px_f64 * alpha_f64).to_bits();
-                        }
+                        let px = src_row[RowBuffer::x0_offset::<u16>() + ix];
                         let y = (y0 + (dy * (ix - save_start.0) as isize)) as usize;
                         let x = (x0 + (dx * (ix - save_start.0) as isize)) as usize;
                         write_pixel!(px, endianness, y, (x * nc + c) * 2);
@@ -171,13 +123,8 @@ impl SaveStage {
                 }
                 JxlDataFormat::F32 { endianness, .. } => {
                     let src_row = d.get_row::<f32>(frame_y);
-                    let alpha_row = alpha_channel.map(|ac| data[ac].get_row::<f32>(frame_y));
                     for ix in (save_start.0..save_end.0).skip(num_fast) {
-                        let mut px = src_row[RowBuffer::x0_offset::<f32>() + ix];
-                        if is_color_channel {
-                            let alpha = alpha_row.unwrap()[RowBuffer::x0_offset::<f32>() + ix];
-                            px *= alpha;
-                        }
+                        let px = src_row[RowBuffer::x0_offset::<f32>() + ix];
                         let y = (y0 + (dy * (ix - save_start.0) as isize)) as usize;
                         let x = (x0 + (dx * (ix - save_start.0) as isize)) as usize;
                         write_pixel!(px, endianness, y, (x * nc + c) * 4);

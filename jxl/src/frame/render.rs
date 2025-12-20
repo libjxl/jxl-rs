@@ -385,7 +385,6 @@ impl Frame {
                     JxlColorType::Grayscale,
                     JxlDataFormat::f32(),
                     false,
-                    false,
                 )?;
             }
         }
@@ -397,7 +396,6 @@ impl Frame {
                     num_api_buffers + i,
                     JxlColorType::Grayscale,
                     JxlDataFormat::f32(),
-                    false,
                     false,
                 )?;
             }
@@ -450,7 +448,6 @@ impl Frame {
                     num_api_buffers + i,
                     JxlColorType::Grayscale,
                     JxlDataFormat::f32(),
-                    false,
                     false,
                 )?;
             }
@@ -529,6 +526,16 @@ impl Frame {
                     (false, Some(c)) => &[0, 1, 2, c],
                 };
             if let Some(df) = &pixel_format.color_data_format {
+                // Add premultiply stage if needed (before conversion to output format)
+                if should_premultiply
+                    && let Some(alpha_channel) = alpha_in_color
+                {
+                    pipeline = pipeline.add_inplace_stage(PremultiplyAlphaStage::new(
+                        0,
+                        num_color_channels,
+                        alpha_channel,
+                    ))?;
+                }
                 // Add conversion stages for non-float output formats
                 pipeline = Self::add_conversion_stages(pipeline, color_source_channels, *df)?;
                 pipeline = pipeline.add_save_stage(
@@ -538,7 +545,6 @@ impl Frame {
                     pixel_format.color_type,
                     *df,
                     fill_opaque_alpha,
-                    should_premultiply,
                 )?;
             }
             for i in 0..frame_header.num_extra_channels as usize {
@@ -551,7 +557,6 @@ impl Frame {
                         1 + i,
                         JxlColorType::Grayscale,
                         *df,
-                        false,
                         false,
                     )?;
                 }
