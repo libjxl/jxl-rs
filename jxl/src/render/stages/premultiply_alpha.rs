@@ -29,7 +29,11 @@ impl std::fmt::Display for PremultiplyAlphaStage {
 }
 
 impl PremultiplyAlphaStage {
-    pub fn new(first_color_channel: usize, num_color_channels: usize, alpha_channel: usize) -> Self {
+    pub fn new(
+        first_color_channel: usize,
+        num_color_channels: usize,
+        alpha_channel: usize,
+    ) -> Self {
         Self {
             first_color_channel,
             num_color_channels,

@@ -527,9 +527,7 @@ impl Frame {
                 };
             if let Some(df) = &pixel_format.color_data_format {
                 // Add premultiply stage if needed (before conversion to output format)
-                if should_premultiply
-                    && let Some(alpha_channel) = alpha_in_color
-                {
+                if should_premultiply && let Some(alpha_channel) = alpha_in_color {
                     pipeline = pipeline.add_inplace_stage(PremultiplyAlphaStage::new(
                         0,
                         num_color_channels,
