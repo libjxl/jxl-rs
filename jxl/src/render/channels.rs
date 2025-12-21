@@ -3,6 +3,8 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
+use crate::util::SmallVec;
+
 /// Multi-row channel accessor for immutable access.
 ///
 /// Provides 2D indexing where `channels[ch]` returns `&[&[T]]` (all rows for a channel),
@@ -10,7 +12,8 @@
 ///
 /// This eliminates nested Vec collections while maintaining the same indexing syntax.
 pub struct Channels<'a, T> {
-    pub(crate) row_data: Vec<&'a [T]>,
+    // The number of input rows should be maximized by the EPF0 stage, which has 21.
+    pub(crate) row_data: SmallVec<&'a [T], 32>,
     num_channels: usize,
     pub(crate) rows_per_channel: usize,
 }
@@ -22,7 +25,11 @@ impl<'a, T> Channels<'a, T> {
     /// * `row_data` - Flat vector of all rows for all channels (length = num_channels * rows_per_channel)
     /// * `num_channels` - Number of channels
     /// * `rows_per_channel` - Number of rows per channel (typically 2*BORDER+1)
-    pub fn new(row_data: Vec<&'a [T]>, num_channels: usize, rows_per_channel: usize) -> Self {
+    pub fn new(
+        row_data: SmallVec<&'a [T], 32>,
+        num_channels: usize,
+        rows_per_channel: usize,
+    ) -> Self {
         debug_assert_eq!(
             row_data.len(),
             num_channels * rows_per_channel,
@@ -66,7 +73,8 @@ impl<'a, T> std::ops::Index<usize> for Channels<'a, T> {
 /// Provides 2D indexing where `channels[ch]` returns `&[&mut [T]]` or `&mut [&mut [T]]`,
 /// and `channels[ch][row]` returns `&mut [T]` (pixels for a specific row).
 pub struct ChannelsMut<'a, T> {
-    pub(crate) row_data: Vec<&'a mut [T]>,
+    // The number of output rows should be maximized by the Upsample8 stage, which has 8.
+    pub(crate) row_data: SmallVec<&'a mut [T], 8>,
     num_channels: usize,
     pub(crate) rows_per_channel: usize,
 }
@@ -78,7 +86,11 @@ impl<'a, T> ChannelsMut<'a, T> {
     /// * `row_data` - Flat vector of all mutable rows for all channels
     /// * `num_channels` - Number of channels
     /// * `rows_per_channel` - Number of rows per channel (typically 1 << SHIFT)
-    pub fn new(row_data: Vec<&'a mut [T]>, num_channels: usize, rows_per_channel: usize) -> Self {
+    pub fn new(
+        row_data: SmallVec<&'a mut [T], 8>,
+        num_channels: usize,
+        rows_per_channel: usize,
+    ) -> Self {
         debug_assert_eq!(
             row_data.len(),
             num_channels * rows_per_channel,
