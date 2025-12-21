@@ -39,7 +39,7 @@ pub struct LowMemoryRenderPipeline {
     save_buffer_info: Vec<Option<SaveStageBufferInfo>>,
     // The input buffer that each channel of each stage should use.
     // This is indexed both by stage index (0 corresponds to input data, 1 to stage[0], etc) and by
-    // channel index (as only used channels have a buffer).
+    // index *of those channels that are used*.
     stage_input_buffer_index: Vec<Vec<(usize, usize)>>,
     // Tracks whether we already rendered the padding around the core frame (if any).
     padding_was_rendered: bool,
@@ -58,6 +58,10 @@ pub struct LowMemoryRenderPipeline {
     // Pre-filled opaque alpha buffers for stages that need fill_opaque_alpha.
     // Indexed by stage index; None if stage doesn't need alpha fill.
     opaque_alpha_buffers: Vec<Option<RowBuffer>>,
+    // Sorted indices to call get_distinct_indices.
+    sorted_buffer_indices: Vec<Vec<(usize, usize, usize)>>,
+    // For each channel, buffers that could be reused to store group data for that channel.
+    scratch_channel_buffers: Vec<Vec<OwnedRawImage>>,
 }
 
 impl LowMemoryRenderPipeline {
@@ -184,8 +188,10 @@ impl LowMemoryRenderPipeline {
                 }
             }
             if self.shared.num_passes <= neigh_complete_passes {
-                for b in self.input_buffers[g].data.iter_mut() {
-                    *b = None;
+                for (c, b) in self.input_buffers[g].data.iter_mut().enumerate() {
+                    if let Some(b) = std::mem::take(b) {
+                        self.scratch_channel_buffers[c].push(b);
+                    }
                 }
             }
         }
@@ -350,6 +356,28 @@ impl RenderPipeline for LowMemoryRenderPipeline {
             }
         }
 
+        for (s, ibi) in stage_input_buffer_index.iter_mut().enumerate() {
+            let mut filtered = vec![];
+            for c in 0..nc {
+                if shared.stages[s].uses_channel(c) {
+                    filtered.push(ibi[c]);
+                }
+            }
+            *ibi = filtered;
+        }
+
+        let sorted_buffer_indices = (0..shared.stages.len())
+            .map(|s| {
+                let mut v: Vec<_> = stage_input_buffer_index[s]
+                    .iter()
+                    .enumerate()
+                    .map(|(i, (outer, inner))| (*outer, *inner, i))
+                    .collect();
+                v.sort();
+                v
+            })
+            .collect();
+
         Ok(Self {
             input_buffers,
             stage_input_buffer_index,
@@ -367,11 +395,16 @@ impl RenderPipeline for LowMemoryRenderPipeline {
             shared,
             downsampling_for_stage,
             opaque_alpha_buffers,
+            sorted_buffer_indices,
+            scratch_channel_buffers: (0..nc).map(|_| vec![]).collect(),
         })
     }
 
     #[instrument(skip_all, err)]
     fn get_buffer<T: ImageDataType>(&mut self, channel: usize) -> Result<Image<T>> {
+        if let Some(b) = self.scratch_channel_buffers[channel].pop() {
+            return Ok(Image::from_raw(b));
+        }
         let sz = self.shared.group_size_for_channel(channel, T::DATA_TYPE_ID);
         Image::<T>::new(sz)
     }

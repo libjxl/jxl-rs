@@ -13,7 +13,7 @@ use crate::{
         RenderPipelineInOutStage, RenderPipelineInPlaceStage, RunInOutStage, RunInPlaceStage,
         internal::PipelineBuffer,
     },
-    util::{round_up_size_to_cache_line, tracing_wrappers::*},
+    util::{SmallVec, round_up_size_to_cache_line, tracing_wrappers::*},
 };
 
 impl PipelineBuffer for Image<f64> {
@@ -71,7 +71,7 @@ impl<T: RenderPipelineInOutStage> RunInOutStage<Image<f64>> for T {
         &self,
         chunk_size: usize,
         input_buffers: &[&Image<f64>],
-        output_buffers: &mut [&mut Image<f64>],
+        output_buffers: &mut [Image<f64>],
         mut state: Option<&mut dyn Any>,
     ) {
         assert_ne!(chunk_size, 0);
@@ -156,45 +156,47 @@ impl<T: RenderPipelineInOutStage> RunInOutStage<Image<f64>> for T {
                         }
                     }
                 }
-                // Build flat input rows: all rows for all channels in one Vec
-                let num_input_channels = buffer_in.len();
-                let input_rows_per_channel = buffer_in[0].len();
-                let mut input_row_data =
-                    Vec::with_capacity(num_input_channels * input_rows_per_channel);
-                for ch_buf in buffer_in.iter() {
-                    for row in ch_buf.iter() {
-                        input_row_data.push(row as &[_]);
-                    }
-                }
-                let input_rows = crate::render::Channels::new(
-                    input_row_data,
-                    num_input_channels,
-                    input_rows_per_channel,
-                );
 
-                // Build flat output rows: all rows for all channels in one Vec
-                let num_output_channels = buffer_out.len();
-                let output_rows_per_channel = buffer_out[0].len();
-                let mut output_row_data =
-                    Vec::with_capacity(num_output_channels * output_rows_per_channel);
-                for ch_buf in buffer_out.iter_mut() {
-                    for row in ch_buf.iter_mut() {
-                        output_row_data.push(row as &mut [_]);
+                {
+                    // Build flat input rows: all rows for all channels in one Vec
+                    let num_input_channels = buffer_in.len();
+                    let input_rows_per_channel = buffer_in[0].len();
+                    let mut input_row_data = SmallVec::new();
+                    for ch_buf in buffer_in.iter() {
+                        for row in ch_buf.iter() {
+                            input_row_data.push(row as &[_]);
+                        }
                     }
-                }
-                let mut output_rows = crate::render::ChannelsMut::new(
-                    output_row_data,
-                    num_output_channels,
-                    output_rows_per_channel,
-                );
+                    let input_rows = crate::render::Channels::new(
+                        input_row_data,
+                        num_input_channels,
+                        input_rows_per_channel,
+                    );
 
-                self.process_row_chunk(
-                    (x, y),
-                    xsize,
-                    &input_rows,
-                    &mut output_rows,
-                    state.as_deref_mut(),
-                );
+                    // Build flat output rows: all rows for all channels in one Vec
+                    let num_output_channels = buffer_out.len();
+                    let output_rows_per_channel = buffer_out[0].len();
+                    let mut output_row_data = SmallVec::new();
+                    for ch_buf in buffer_out.iter_mut() {
+                        for row in ch_buf.iter_mut() {
+                            output_row_data.push(row as &mut [_]);
+                        }
+                    }
+                    let mut output_rows = crate::render::ChannelsMut::new(
+                        output_row_data,
+                        num_output_channels,
+                        output_rows_per_channel,
+                    );
+
+                    self.process_row_chunk(
+                        (x, y),
+                        xsize,
+                        &input_rows,
+                        &mut output_rows,
+                        state.as_deref_mut(),
+                    );
+                }
+
                 let stripe_xsize =
                     (xsize << Self::SHIFT.0).min(output_size.0 - (x << Self::SHIFT.0));
                 let stripe_ysize =

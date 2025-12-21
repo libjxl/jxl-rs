@@ -79,12 +79,14 @@ impl SimpleRenderPipeline {
                         .filter(|x| stage.uses_channel(x.0))
                         .map(|x| x.1)
                         .collect();
-                    let mut output_buf: Vec<_> = output_buffers
-                        .iter_mut()
-                        .enumerate()
-                        .filter(|x| stage.uses_channel(x.0))
-                        .map(|x| x.1)
-                        .collect();
+                    let mut output_buf = vec![];
+                    for (c, buf) in output_buffers.iter_mut().enumerate() {
+                        if stage.uses_channel(c) {
+                            let mut tmp = Image::new((0, 0)).unwrap();
+                            std::mem::swap(&mut tmp, buf);
+                            output_buf.push(tmp);
+                        }
+                    }
                     let mut state = stage.init_local_state()?;
                     stage.run_stage_on(
                         self.shared.chunk_size,
@@ -92,6 +94,12 @@ impl SimpleRenderPipeline {
                         &mut output_buf,
                         state.as_deref_mut(),
                     );
+                    let repl_iter = (0..self.shared.num_channels())
+                        .filter(|c| stage.uses_channel(*c))
+                        .zip(output_buf.into_iter());
+                    for (c, chan) in repl_iter {
+                        output_buffers[c] = chan;
+                    }
                 }
                 Stage::InPlace(stage) => {
                     let mut output_buf: Vec<_> = output_buffers

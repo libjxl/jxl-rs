@@ -16,10 +16,14 @@ use crate::{
             run_stage::ExtraInfo,
         },
     },
-    util::{ShiftRightCeil, tracing_wrappers::*},
+    util::{ShiftRightCeil, SmallVec, tracing_wrappers::*},
 };
 
 use super::{LowMemoryRenderPipeline, row_buffers::RowBuffer};
+
+// Most images have at most 7 channels (RGBA + noise extra channels).
+// 8 gives a bit extra leeway and makes the size a power of two.
+pub(super) type ChannelVec<T> = SmallVec<T, 8>;
 
 fn apply_x_padding(
     input_type: DataTypeTag,
@@ -201,12 +205,10 @@ impl LowMemoryRenderPipeline {
 
                 match stage {
                     Stage::InPlace(s) => {
-                        let buffer_indices: Vec<_> = (0..num_channels)
-                            .filter(|c| s.uses_channel(*c))
-                            .map(|x| self.stage_input_buffer_index[i][x])
-                            .collect();
-                        let mut buffers =
-                            get_distinct_indices(&mut self.row_buffers, &buffer_indices);
+                        let mut buffers = get_distinct_indices(
+                            &mut self.row_buffers,
+                            &self.sorted_buffer_indices[i],
+                        );
                         s.run_stage_on(
                             ExtraInfo {
                                 xsize: shifted_xsize,
@@ -223,13 +225,9 @@ impl LowMemoryRenderPipeline {
                     }
                     Stage::Save(s) => {
                         // Find buffers for channels that will be saved.
-                        let mut input_data: Vec<_> = s
-                            .channels
+                        let mut input_data: ChannelVec<_> = self.stage_input_buffer_index[i]
                             .iter()
-                            .map(|c| {
-                                let (si, ci) = self.stage_input_buffer_index[i][*c];
-                                &self.row_buffers[si][ci]
-                            })
+                            .map(|(si, ci)| &self.row_buffers[*si][*ci])
                             .collect();
                         // Append opaque alpha buffer if fill_opaque_alpha is set
                         if let Some(ref alpha_buf) = self.opaque_alpha_buffers[i] {
@@ -254,16 +252,12 @@ impl LowMemoryRenderPipeline {
                         let bordery = s.border().1 as isize;
                         // Apply x padding.
                         if gx == 0 && borderx != 0 {
-                            for c in 0..num_channels {
-                                if !s.uses_channel(c) {
-                                    continue;
-                                }
-                                let (si, ci) = self.stage_input_buffer_index[i][c];
+                            for (si, ci) in self.stage_input_buffer_index[i].iter() {
                                 for iy in -bordery..=bordery {
                                     let y = mirror(y as isize + iy, shifted_ysize);
                                     apply_x_padding(
                                         s.input_type(),
-                                        self.row_buffers[si][ci].get_row_mut::<u8>(y),
+                                        self.row_buffers[*si][*ci].get_row_mut::<u8>(y),
                                         -(borderx as isize)..0,
                                         // Either xsize is the actual size of the image, or it is
                                         // much larger than borderx, so this works out either way.
@@ -273,16 +267,12 @@ impl LowMemoryRenderPipeline {
                             }
                         }
                         if gx + 1 == self.shared.group_count.0 && borderx != 0 {
-                            for c in 0..num_channels {
-                                if !s.uses_channel(c) {
-                                    continue;
-                                }
-                                let (si, ci) = self.stage_input_buffer_index[i][c];
+                            for (si, ci) in self.stage_input_buffer_index[i].iter() {
                                 for iy in -bordery..=bordery {
                                     let y = mirror(y as isize + iy, shifted_ysize);
                                     apply_x_padding(
                                         s.input_type(),
-                                        self.row_buffers[si][ci].get_row_mut::<u8>(y),
+                                        self.row_buffers[*si][*ci].get_row_mut::<u8>(y),
                                         shifted_xsize as isize..(shifted_xsize + borderx) as isize,
                                         // borderx..0 is either data from the neighbouring group or
                                         // data that was filled in by the iteration above.
@@ -293,14 +283,10 @@ impl LowMemoryRenderPipeline {
                         }
                         let (inb, outb) = self.row_buffers.split_at_mut(i + 1);
                         // Prepare pointers to input and output buffers.
-                        let input_data: Vec<_> = (0..num_channels)
-                            .filter(|c| s.uses_channel(*c))
-                            .map(|c| {
-                                let (si, ci) = self.stage_input_buffer_index[i][c];
-                                &inb[si][ci]
-                            })
+                        let input_data: ChannelVec<_> = self.stage_input_buffer_index[i]
+                            .iter()
+                            .map(|(si, ci)| &inb[*si][*ci])
                             .collect();
-                        let mut outb: Vec<_> = outb[0].iter_mut().collect();
                         s.run_stage_on(
                             ExtraInfo {
                                 xsize: shifted_xsize,
@@ -312,7 +298,7 @@ impl LowMemoryRenderPipeline {
                                 image_height: shifted_ysize,
                             },
                             &input_data,
-                            &mut outb[..],
+                            &mut outb[0][..],
                             self.local_states[i].as_deref_mut(),
                         );
                     }
@@ -354,12 +340,10 @@ impl LowMemoryRenderPipeline {
 
                 match stage {
                     Stage::InPlace(s) => {
-                        let buffer_indices: Vec<_> = (0..num_channels)
-                            .filter(|c| s.uses_channel(*c))
-                            .map(|x| self.stage_input_buffer_index[i][x])
-                            .collect();
-                        let mut buffers =
-                            get_distinct_indices(&mut self.row_buffers, &buffer_indices);
+                        let mut buffers = get_distinct_indices(
+                            &mut self.row_buffers,
+                            &self.sorted_buffer_indices[i],
+                        );
                         s.run_stage_on(
                             ExtraInfo {
                                 xsize,
@@ -376,13 +360,9 @@ impl LowMemoryRenderPipeline {
                     }
                     Stage::Save(s) => {
                         // Find buffers for channels that will be saved.
-                        let mut input_data: Vec<_> = s
-                            .channels
+                        let mut input_data: ChannelVec<_> = self.stage_input_buffer_index[i]
                             .iter()
-                            .map(|c| {
-                                let (si, ci) = self.stage_input_buffer_index[i][*c];
-                                &self.row_buffers[si][ci]
-                            })
+                            .map(|(si, ci)| &self.row_buffers[*si][*ci])
                             .collect();
                         // Append opaque alpha buffer if fill_opaque_alpha is set
                         if let Some(ref alpha_buf) = self.opaque_alpha_buffers[i] {
@@ -405,14 +385,10 @@ impl LowMemoryRenderPipeline {
                         assert_eq!(s.border(), (0, 0));
                         let (inb, outb) = self.row_buffers.split_at_mut(i + 1);
                         // Prepare pointers to input and output buffers.
-                        let input_data: Vec<_> = (0..num_channels)
-                            .filter(|c| s.uses_channel(*c))
-                            .map(|c| {
-                                let (si, ci) = self.stage_input_buffer_index[i][c];
-                                &inb[si][ci]
-                            })
+                        let input_data: ChannelVec<_> = self.stage_input_buffer_index[i]
+                            .iter()
+                            .map(|(si, ci)| &inb[*si][*ci])
                             .collect();
-                        let mut outb: Vec<_> = outb[0].iter_mut().collect();
                         s.run_stage_on(
                             ExtraInfo {
                                 xsize,
@@ -424,7 +400,7 @@ impl LowMemoryRenderPipeline {
                                 image_height: self.shared.input_size.1,
                             },
                             &input_data,
-                            &mut outb[..],
+                            &mut outb[0][..],
                             self.local_states[i].as_deref_mut(),
                         );
                     }

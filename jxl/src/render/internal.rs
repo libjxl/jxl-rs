@@ -144,8 +144,10 @@ impl<Buffer> RenderPipelineShared<Buffer> {
             );
         }
         (
-            1 << (self.log_group_size - downsample.0 as usize),
-            1 << (self.log_group_size - downsample.1 as usize),
+            (1 << (self.log_group_size - downsample.0 as usize))
+                .min(self.input_size.0.next_multiple_of(8)),
+            (1 << (self.log_group_size - downsample.1 as usize))
+                .min(self.input_size.1.next_multiple_of(8)),
         )
     }
 
@@ -221,7 +223,7 @@ pub trait RunInOutStage<Buffer: PipelineBuffer>: InOutStage {
         &self,
         info: Buffer::InOutExtraInfo,
         input_buffers: &[&Buffer],
-        output_buffers: &mut [&mut Buffer],
+        output_buffers: &mut [Buffer],
         state: Option<&mut dyn Any>,
     );
 }

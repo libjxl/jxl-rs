@@ -9,9 +9,9 @@ use crate::{
     render::{
         Channels, ChannelsMut, RunInPlaceStage,
         internal::{PipelineBuffer, RunInOutStage},
-        low_memory_pipeline::helpers::mirror,
+        low_memory_pipeline::{helpers::mirror, render_group::ChannelVec},
     },
-    util::{ShiftRightCeil, tracing_wrappers::*},
+    util::{ShiftRightCeil, SmallVec, tracing_wrappers::*},
 };
 
 use super::{
@@ -56,7 +56,7 @@ impl<T: RenderPipelineInPlaceStage> RunInPlaceStage<RowBuffer> for T {
         let xpre = if is_first_xgroup { 0 } else { out_extra_x };
         let xstart = x0 - xpre;
         let xend = x0 + xsize + if is_last_xgroup { 0 } else { out_extra_x };
-        let mut rows: Vec<_> = buffers
+        let mut rows: ChannelVec<_> = buffers
             .iter_mut()
             .map(|x| &mut x.get_row_mut::<T::Type>(current_row)[xstart..])
             .collect();
@@ -84,7 +84,7 @@ impl<T: RenderPipelineInOutStage> RunInOutStage<RowBuffer> for T {
             is_last_xgroup,
         }: ExtraInfo,
         input_buffers: &[&RowBuffer],
-        output_buffers: &mut [&mut RowBuffer],
+        output_buffers: &mut [RowBuffer],
         state: Option<&mut dyn Any>,
     ) {
         let ibordery = Self::BORDER.1 as isize;
@@ -106,7 +106,7 @@ impl<T: RenderPipelineInOutStage> RunInOutStage<RowBuffer> for T {
         // Build flat input rows: all rows for all channels in one Vec
         let input_rows_per_channel = (2 * Self::BORDER.1 + 1) as usize;
         let num_channels = input_buffers.len();
-        let mut input_row_data = Vec::with_capacity(num_channels * input_rows_per_channel);
+        let mut input_row_data = SmallVec::new();
         for x in input_buffers.iter() {
             for iy in -ibordery..=ibordery {
                 input_row_data.push(
@@ -120,13 +120,21 @@ impl<T: RenderPipelineInOutStage> RunInOutStage<RowBuffer> for T {
         // Build flat output rows: all rows for all channels in one Vec
         let output_rows_per_channel = 1 << T::SHIFT.1;
         let num_output_channels = output_buffers.len();
-        let mut output_row_data = Vec::with_capacity(num_output_channels * output_rows_per_channel);
-        for x in output_buffers.iter_mut() {
-            let rows = x.get_rows_mut::<T::OutputT>(
-                (current_row << T::SHIFT.1)..((current_row + 1) << T::SHIFT.1),
-                RowBuffer::x0_offset::<T::OutputT>() - (xpre << T::SHIFT.0),
-            );
-            output_row_data.extend(rows);
+        let mut output_row_data = SmallVec::new();
+        // optimize for the common case of a single output row per channel.
+        if output_rows_per_channel == 1 {
+            for x in output_buffers.iter_mut() {
+                let row = x.get_row_mut::<T::OutputT>(current_row);
+                output_row_data.push(&mut row[xstart..]);
+            }
+        } else {
+            for x in output_buffers.iter_mut() {
+                let rows = x.get_rows_mut::<T::OutputT>(
+                    (current_row << T::SHIFT.1)..((current_row + 1) << T::SHIFT.1),
+                    RowBuffer::x0_offset::<T::OutputT>() - (xpre << T::SHIFT.0),
+                );
+                output_row_data.extend_sv(rows);
+            }
         }
         let mut output_rows = ChannelsMut::new(
             output_row_data,

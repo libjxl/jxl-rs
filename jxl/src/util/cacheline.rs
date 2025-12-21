@@ -34,6 +34,7 @@ impl Default for CacheLine {
     }
 }
 
+#[inline(always)]
 pub fn slice_from_cachelines<T: ImageDataType>(slice: &[CacheLine]) -> &[T] {
     const { assert!(64usize.is_multiple_of(std::mem::align_of::<T>())) };
     const { assert!(CACHE_LINE_BYTE_SIZE.is_multiple_of(std::mem::size_of::<T>())) };
@@ -50,6 +51,7 @@ pub fn slice_from_cachelines<T: ImageDataType>(slice: &[CacheLine]) -> &[T] {
     }
 }
 
+#[inline(always)]
 pub fn slice_from_cachelines_mut<T: ImageDataType>(slice: &mut [CacheLine]) -> &mut [T] {
     const { assert!(64usize.is_multiple_of(std::mem::align_of::<T>())) };
     const { assert!(CACHE_LINE_BYTE_SIZE.is_multiple_of(std::mem::size_of::<T>())) };
