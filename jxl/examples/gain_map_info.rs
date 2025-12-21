@@ -31,12 +31,10 @@ fn main() -> Result<(), Error> {
 
     // Process the file to get image info
     let mut input = &data[..];
-    let decoder = loop {
-        match decoder.process(&mut input)? {
-            ProcessingResult::Complete { result } => break result,
-            ProcessingResult::NeedsMoreInput { .. } => {
-                return Err(Error::OutOfBounds(0));
-            }
+    let decoder = match decoder.process(&mut input)? {
+        ProcessingResult::Complete { result } => result,
+        ProcessingResult::NeedsMoreInput { .. } => {
+            return Err(Error::OutOfBounds(0));
         }
     };
 
