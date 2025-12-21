@@ -41,6 +41,11 @@ pub struct JxlDecoderOptions {
     /// This produces premultiplied alpha output, which is useful for compositing.
     /// Default: false (output straight alpha)
     pub premultiply_output: bool,
+    /// If true, enable flush_pixels() to render partially-decoded data.
+    /// This enables progressive rendering where intermediate results can be
+    /// displayed before decoding is complete.
+    /// Default: false (flush_pixels() returns Ok(()) without rendering)
+    pub enable_flush_pixels: bool,
 }
 
 impl Default for JxlDecoderOptions {
@@ -58,6 +63,7 @@ impl Default for JxlDecoderOptions {
             pixel_limit: None,
             high_precision: false,
             premultiply_output: false,
+            enable_flush_pixels: false,
         }
     }
 }

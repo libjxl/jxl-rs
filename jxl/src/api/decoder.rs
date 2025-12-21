@@ -484,6 +484,192 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn test_flush_pixels_disabled_by_default() {
+        use crate::image::{Image, Rect};
+        // Test that flush_pixels returns Ok(()) when disabled (default)
+        let file = std::fs::read("resources/test/conformance_test_images/progressive_5.jxl").unwrap();
+        let options = JxlDecoderOptions::default(); // enable_flush_pixels defaults to false
+        let mut decoder = JxlDecoder::<states::Initialized>::new(options);
+        let mut input = file.as_slice();
+
+        let mut decoder_with_info = loop {
+            match decoder.process(&mut input).unwrap() {
+                ProcessingResult::Complete { result } => break result,
+                ProcessingResult::NeedsMoreInput { fallback, .. } => decoder = fallback,
+            }
+        };
+        let info = decoder_with_info.basic_info().clone();
+        let mut decoder_with_frame = loop {
+            match decoder_with_info.process(&mut input).unwrap() {
+                ProcessingResult::Complete { result } => break result,
+                ProcessingResult::NeedsMoreInput { fallback, .. } => decoder_with_info = fallback,
+            }
+        };
+
+        let mut output = Image::<f32>::new((info.size.0 * 3, info.size.1)).unwrap();
+        let rect = Rect {
+            size: output.size(),
+            origin: (0, 0),
+        };
+        let mut bufs = [JxlOutputBuffer::from_image_rect_mut(
+            output.get_rect_mut(rect).into_raw(),
+        )];
+
+        // flush_pixels should return Ok(()) without doing anything when disabled
+        assert!(decoder_with_frame.flush_pixels(&mut bufs).is_ok());
+    }
+
+    #[test]
+    fn test_flush_pixels_enabled() {
+        use crate::image::{Image, Rect};
+        // Test progressive decoding with flush_pixels enabled
+        let file = std::fs::read("resources/test/conformance_test_images/progressive_5.jxl").unwrap();
+        let mut options = JxlDecoderOptions::default();
+        options.enable_flush_pixels = true;
+        let mut decoder = JxlDecoder::<states::Initialized>::new(options);
+
+        let chunk_size = 16 * 1024; // 16KB chunks
+        let mut input = file.as_slice();
+        let mut chunk_input = &input[0..0];
+
+        // Macro for chunked processing
+        macro_rules! advance_decoder {
+            ($decoder:ident $(, $extra_arg:expr)?) => {{
+                loop {
+                    chunk_input = &input[..(chunk_input.len().saturating_add(chunk_size)).min(input.len())];
+                    let available_before = chunk_input.len();
+                    let process_result = $decoder.process(&mut chunk_input $(, $extra_arg)?);
+                    input = &input[(available_before - chunk_input.len())..];
+                    match process_result.unwrap() {
+                        ProcessingResult::Complete { result } => break result,
+                        ProcessingResult::NeedsMoreInput { fallback, .. } => {
+                            if input.is_empty() {
+                                panic!("Unexpected end of input");
+                            }
+                            $decoder = fallback;
+                        }
+                    }
+                }
+            }};
+        }
+
+        let mut decoder_with_info = advance_decoder!(decoder);
+        let info = decoder_with_info.basic_info().clone();
+        let mut decoder_with_frame = advance_decoder!(decoder_with_info);
+
+        let mut output = Image::<f32>::new((info.size.0 * 3, info.size.1)).unwrap();
+        let rect = Rect {
+            size: output.size(),
+            origin: (0, 0),
+        };
+        let mut bufs = [JxlOutputBuffer::from_image_rect_mut(
+            output.get_rect_mut(rect).into_raw(),
+        )];
+
+        let mut flush_count = 0;
+        let mut last_passes = 0;
+
+        // Process with chunked input and flush periodically
+        loop {
+            chunk_input = &input[..(chunk_input.len().saturating_add(chunk_size)).min(input.len())];
+            let available_before = chunk_input.len();
+            let process_result = decoder_with_frame.process(&mut chunk_input, &mut bufs);
+            input = &input[(available_before - chunk_input.len())..];
+
+            match process_result.unwrap() {
+                ProcessingResult::Complete { .. } => break,
+                ProcessingResult::NeedsMoreInput { fallback, .. } => {
+                    decoder_with_frame = fallback;
+
+                    let passes = decoder_with_frame.num_completed_passes();
+                    if passes > last_passes {
+                        // flush_pixels should succeed when enabled
+                        assert!(decoder_with_frame.flush_pixels(&mut bufs).is_ok());
+                        flush_count += 1;
+                        last_passes = passes;
+                    }
+
+                    if input.is_empty() {
+                        panic!("Unexpected end of input");
+                    }
+                }
+            }
+        }
+
+        // Should have flushed at least once for a progressive file
+        assert!(flush_count >= 1, "Expected at least 1 flush, got {}", flush_count);
+    }
+
+    #[test]
+    fn test_flush_pixels_with_premultiply() {
+        use crate::api::{JxlColorType, JxlDataFormat, JxlPixelFormat};
+        use crate::image::{Image, Rect};
+        // Test that flush_pixels works correctly with premultiply_output enabled
+        // Use alpha_nonpremultiplied which has straight alpha
+        let file = std::fs::read("resources/test/conformance_test_images/alpha_nonpremultiplied.jxl").unwrap();
+        let mut options = JxlDecoderOptions::default();
+        options.enable_flush_pixels = true;
+        options.premultiply_output = true;
+        let mut decoder = JxlDecoder::<states::Initialized>::new(options);
+        let mut input = file.as_slice();
+
+        let mut decoder_with_info = loop {
+            match decoder.process(&mut input).unwrap() {
+                ProcessingResult::Complete { result } => break result,
+                ProcessingResult::NeedsMoreInput { fallback, .. } => decoder = fallback,
+            }
+        };
+
+        // Set RGBA output format - vec![None] means alpha is in RGBA, no separate buffer
+        let rgba_format = JxlPixelFormat {
+            color_type: JxlColorType::Rgba,
+            color_data_format: Some(JxlDataFormat::f32()),
+            extra_channel_format: vec![None],
+        };
+        decoder_with_info.set_pixel_format(rgba_format);
+
+        let info = decoder_with_info.basic_info().clone();
+        let mut decoder_with_frame = loop {
+            match decoder_with_info.process(&mut input).unwrap() {
+                ProcessingResult::Complete { result } => break result,
+                ProcessingResult::NeedsMoreInput { fallback, .. } => decoder_with_info = fallback,
+            }
+        };
+
+        // RGBA = 4 channels
+        let mut output = Image::<f32>::new((info.size.0 * 4, info.size.1)).unwrap();
+        let rect = Rect {
+            size: output.size(),
+            origin: (0, 0),
+        };
+        let mut bufs = [JxlOutputBuffer::from_image_rect_mut(
+            output.get_rect_mut(rect).into_raw(),
+        )];
+
+        // flush_pixels should work with premultiply enabled (returns Ok even if no data yet)
+        assert!(decoder_with_frame.flush_pixels(&mut bufs).is_ok());
+
+        // Complete the decode
+        loop {
+            match decoder_with_frame.process(&mut input, &mut bufs).unwrap() {
+                ProcessingResult::Complete { .. } => break,
+                ProcessingResult::NeedsMoreInput { fallback, .. } => decoder_with_frame = fallback,
+            }
+        }
+
+        // Verify we got valid output after full decode
+        let mut has_nonzero = false;
+        for y in 0..info.size.1 {
+            let row = output.row(y);
+            if row.iter().any(|&x| x != 0.0) {
+                has_nonzero = true;
+                break;
+            }
+        }
+        assert!(has_nonzero, "Output should contain non-zero pixel data after decode");
+    }
+
+    #[test]
     fn test_set_pixel_format() {
         use crate::api::{JxlColorType, JxlDataFormat, JxlPixelFormat};
 

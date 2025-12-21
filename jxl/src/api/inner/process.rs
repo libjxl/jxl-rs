@@ -128,7 +128,45 @@ impl JxlDecoderInner {
     }
 
     /// Draws all the pixels we have data for.
-    pub fn flush_pixels(&mut self, _buffers: &mut [JxlOutputBuffer]) -> Result<()> {
-        todo!()
+    ///
+    /// This method renders any partially-decoded pixel data to the output buffers,
+    /// enabling progressive rendering. Call this after `num_completed_passes()`
+    /// indicates new passes are available to display intermediate results.
+    ///
+    /// **Note**: This method only works when `enable_flush_pixels` is set to `true`
+    /// in `JxlDecoderOptions`. When disabled (default), this returns `Ok(())` without
+    /// rendering anything.
+    ///
+    /// The method is idempotent - calling it multiple times with no new data
+    /// decoded in between will produce the same result.
+    pub fn flush_pixels(&mut self, buffers: &mut [JxlOutputBuffer]) -> Result<()> {
+        // Check if flush_pixels is enabled in options
+        if !self.options.enable_flush_pixels {
+            return Ok(()); // Progressive flush disabled
+        }
+
+        // Get the current frame being decoded
+        let frame = match self.codestream_parser.frame.as_mut() {
+            Some(f) => f,
+            None => return Ok(()), // No frame to flush
+        };
+
+        // Get pixel format for buffer validation and rendering
+        let pixel_format = match self.codestream_parser.pixel_format.as_ref() {
+            Some(pf) => pf.clone(),
+            None => return Ok(()), // No pixel format set
+        };
+
+        // Call decode_and_render_hf_groups with EMPTY group list
+        // This triggers rendering of already-decoded data without consuming new input.
+        // The method handles:
+        // - Buffer setup from api_buffers
+        // - Rendering outside-frame padding
+        // - Flushing any pending pipeline data
+        frame.decode_and_render_hf_groups(
+            &mut Some(buffers),
+            &pixel_format,
+            vec![], // Empty - no new groups to decode, just flush existing
+        )
     }
 }
