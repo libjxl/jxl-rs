@@ -27,7 +27,7 @@ def create_minimal_jxl_codestream():
     This is the smallest valid JXL codestream (12 bytes), from:
     https://github.com/mathiasbynens/small/pull/125
 
-    It encodes a 1x1 grayscale image.
+    It encodes a 512x256 RGB image (the smallest possible valid JXL).
     """
     # Smallest valid JXL codestream (12 bytes)
     # Source: https://github.com/mathiasbynens/small

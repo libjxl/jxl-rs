@@ -12,6 +12,7 @@ use crate::bit_reader::BitReader;
 use crate::error::{Error, Result};
 use crate::headers::color_encoding::ColorEncoding;
 use crate::headers::encodings::{Empty, UnconditionalCoder};
+use crate::util::tracing_wrappers::warn;
 
 /// A gain map bundle as defined by ISO 21496-1.
 ///
@@ -67,14 +68,8 @@ impl GainMapBundle {
         size += 2 + self.gain_map_metadata.len();
 
         // color_encoding_size (1 byte)
+        // Note: color_encoding serialization not implemented, always written as 0
         size += 1;
-
-        // color_encoding (if present)
-        if self.color_encoding.is_some() {
-            // TODO: compute actual size when we have BitWriter
-            // For now, estimate conservatively
-            size += 128; // Conservative estimate for color encoding
-        }
 
         // alt_icc_size (4 bytes BE) + alt_icc
         size += 4 + self.alt_icc.len();
@@ -102,7 +97,9 @@ impl GainMapBundle {
     /// Returns an error if:
     /// - Metadata is too large (> 65535 bytes)
     /// - ICC profile is too large (> 2^32 - 1 bytes)
-    /// - Color encoding serialization fails (Phase 4 TODO)
+    ///
+    /// Note: ColorEncoding serialization is not yet implemented (requires BitWriter).
+    /// If `color_encoding` is set, it will be silently dropped (written as size 0).
     pub fn write_to_bytes(&self) -> Result<Vec<u8>> {
         if self.gain_map_metadata.len() > u16::MAX as usize {
             return Err(Error::InvalidBox);
@@ -123,13 +120,12 @@ impl GainMapBundle {
         output.extend_from_slice(&self.gain_map_metadata);
 
         // Write color_encoding
-        if let Some(_color_encoding) = &self.color_encoding {
-            // TODO: Phase 4 - implement ColorEncoding serialization with BitWriter
-            // For now, write 0 to indicate no color encoding
-            output.push(0);
-        } else {
-            output.push(0);
+        // Note: ColorEncoding serialization requires a BitWriter which is not yet implemented.
+        // For now, we write 0 to indicate no color encoding. Parsing works fine.
+        if self.color_encoding.is_some() {
+            warn!("ColorEncoding serialization not implemented, dropping color_encoding");
         }
+        output.push(0);
 
         // Write alt_icc_size and alt_icc
         let icc_size = self.alt_icc.len() as u32;
