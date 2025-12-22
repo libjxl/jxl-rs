@@ -216,6 +216,18 @@ pub unsafe trait F32SimdVec:
 
     fn bitcast_to_i32(self) -> <<Self as F32SimdVec>::Descriptor as SimdDescriptor>::I32Vec;
 
+    /// Gathers f32 values from `base` at the offsets specified by `indices`.
+    /// Each element i of the result is `base[indices[i]]`.
+    /// Indices must be valid (in bounds for base) or behavior is undefined.
+    ///
+    /// # Safety
+    /// All indices must be valid indices into `base`.
+    unsafe fn gather(
+        d: Self::Descriptor,
+        base: *const f32,
+        indices: <<Self as F32SimdVec>::Descriptor as SimdDescriptor>::I32Vec,
+    ) -> Self;
+
     /// Converts a slice of f32 into a slice of Self::UnderlyingArray. If slice.len() is not a
     /// multiple of `Self::LEN` this will panic.
     fn make_array_slice(slice: &[f32]) -> &[Self::UnderlyingArray];
@@ -375,7 +387,9 @@ pub(crate) use impl_f32_array_interface;
 mod test {
     use arbtest::arbitrary::Unstructured;
 
-    use crate::{F32SimdVec, ScalarDescriptor, SimdDescriptor, test_all_instruction_sets};
+    use crate::{
+        F32SimdVec, I32SimdVec, ScalarDescriptor, SimdDescriptor, test_all_instruction_sets,
+    };
 
     enum Distribution {
         Floats,
@@ -835,4 +849,31 @@ mod test {
         }
     }
     test_all_instruction_sets!(test_store_interleaved_8);
+
+    fn test_gather<D: SimdDescriptor>(d: D) {
+        // Create a lookup table with known values
+        let lut: Vec<f32> = (0..64).map(|i| (i * 10) as f32).collect();
+        let len = D::F32Vec::LEN;
+
+        // Create indices that are valid for the LUT
+        let indices: Vec<i32> = (0..len).map(|i| (i * 3 % 64) as i32).collect();
+        let expected: Vec<f32> = indices.iter().map(|&i| lut[i as usize]).collect();
+
+        // Perform gather
+        let indices_vec = D::I32Vec::load(d, &indices);
+        let result = unsafe { D::F32Vec::gather(d, lut.as_ptr(), indices_vec) };
+
+        let mut output = vec![0.0f32; len];
+        result.store(&mut output);
+
+        // Verify results
+        for i in 0..len {
+            assert_eq!(
+                output[i], expected[i],
+                "gather failed at position {}: expected {}, got {}",
+                i, expected[i], output[i]
+            );
+        }
+    }
+    test_all_instruction_sets!(test_gather);
 }

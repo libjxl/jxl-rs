@@ -375,6 +375,31 @@ unsafe impl F32SimdVec for F32VecSse42 {
     });
 
     #[inline(always)]
+    unsafe fn gather(d: Sse42Descriptor, base: *const f32, indices: I32VecSse42) -> Self {
+        // SSE doesn't have native gather, use scalar fallback
+        #[target_feature(enable = "sse4.2")]
+        #[inline]
+        unsafe fn gather_impl(base: *const f32, indices: __m128i) -> __m128 {
+            // SAFETY: caller guarantees indices are valid
+            unsafe {
+                // Extract indices and gather manually
+                let i0 = _mm_extract_epi32::<0>(indices) as isize;
+                let i1 = _mm_extract_epi32::<1>(indices) as isize;
+                let i2 = _mm_extract_epi32::<2>(indices) as isize;
+                let i3 = _mm_extract_epi32::<3>(indices) as isize;
+                _mm_set_ps(
+                    *base.offset(i3),
+                    *base.offset(i2),
+                    *base.offset(i1),
+                    *base.offset(i0),
+                )
+            }
+        }
+        // SAFETY: sse4.2 is available from the safety invariant on the descriptor
+        F32VecSse42(unsafe { gather_impl(base, indices.0) }, d)
+    }
+
+    #[inline(always)]
     fn round_store_u8(self, dest: &mut [u8]) {
         #[target_feature(enable = "sse4.2")]
         #[inline]
