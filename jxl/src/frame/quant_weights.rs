@@ -384,6 +384,29 @@ pub struct DequantMatrices {
     encodings: Vec<QuantEncoding>,
 }
 
+/// Cached library quantization encodings per table type.
+/// Each entry is computed lazily on first access, avoiding computation
+/// of encodings for large transforms that are never used.
+static LIBRARY_QUANTS: [OnceLock<QuantEncoding>; QuantTable::CARDINALITY] = [
+    OnceLock::new(),
+    OnceLock::new(),
+    OnceLock::new(),
+    OnceLock::new(),
+    OnceLock::new(),
+    OnceLock::new(),
+    OnceLock::new(),
+    OnceLock::new(),
+    OnceLock::new(),
+    OnceLock::new(),
+    OnceLock::new(),
+    OnceLock::new(),
+    OnceLock::new(),
+    OnceLock::new(),
+    OnceLock::new(),
+    OnceLock::new(),
+    OnceLock::new(),
+];
+
 #[allow(clippy::excessive_precision)]
 impl DequantMatrices {
     fn dct() -> QuantEncoding {
@@ -866,29 +889,29 @@ impl DequantMatrices {
         }
     }
 
-    pub fn library() -> &'static [QuantEncoding; QuantTable::CARDINALITY] {
-        static QUANTS: OnceLock<[QuantEncoding; QuantTable::CARDINALITY]> = OnceLock::new();
-        QUANTS.get_or_init(|| {
-            [
-                DequantMatrices::dct(),
-                DequantMatrices::id(),
-                DequantMatrices::dct2x2(),
-                DequantMatrices::dct4x4(),
-                DequantMatrices::dct16x16(),
-                DequantMatrices::dct32x32(),
-                DequantMatrices::dct8x16(),
-                DequantMatrices::dct8x32(),
-                DequantMatrices::dct16x32(),
-                DequantMatrices::dct4x8(),
-                DequantMatrices::afv0(),
-                DequantMatrices::dct64x64(),
-                DequantMatrices::dct32x64(),
-                // Same default for large transforms (128+) as for 64x* transforms.
-                DequantMatrices::dct128x128(),
-                DequantMatrices::dct64x128(),
-                DequantMatrices::dct256x256(),
-                DequantMatrices::dct128x256(),
-            ]
+    /// Get cached library quantization encoding for a table type index.
+    /// Computes the encoding lazily on first access.
+    pub fn get_library(idx: usize) -> &'static QuantEncoding {
+        LIBRARY_QUANTS[idx].get_or_init(|| match idx {
+            0 => DequantMatrices::dct(),
+            1 => DequantMatrices::id(),
+            2 => DequantMatrices::dct2x2(),
+            3 => DequantMatrices::dct4x4(),
+            4 => DequantMatrices::dct16x16(),
+            5 => DequantMatrices::dct32x32(),
+            6 => DequantMatrices::dct8x16(),
+            7 => DequantMatrices::dct8x32(),
+            8 => DequantMatrices::dct16x32(),
+            9 => DequantMatrices::dct4x8(),
+            10 => DequantMatrices::afv0(),
+            11 => DequantMatrices::dct64x64(),
+            12 => DequantMatrices::dct32x64(),
+            // Same default for large transforms (128+) as for 64x* transforms.
+            13 => DequantMatrices::dct128x128(),
+            14 => DequantMatrices::dct64x128(),
+            15 => DequantMatrices::dct256x256(),
+            16 => DequantMatrices::dct128x256(),
+            _ => unreachable!(),
         })
     }
 
@@ -1008,7 +1031,7 @@ impl DequantMatrices {
         offset: usize,
     ) -> Result<usize> {
         let encoding = if library {
-            &DequantMatrices::library()[table_num]
+            DequantMatrices::get_library(table_num)
         } else {
             &self.encodings[table_num]
         };
