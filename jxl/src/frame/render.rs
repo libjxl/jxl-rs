@@ -9,7 +9,7 @@ use crate::api::JxlDataFormat;
 use crate::api::JxlOutputBuffer;
 use crate::bit_reader::BitReader;
 use crate::error::{Error, Result};
-use crate::features::epf::{SigmaSource, create_sigma_source};
+use crate::features::epf::SigmaSource;
 use crate::headers::frame_header::Encoding;
 use crate::headers::{Orientation, color_encoding::ColorSpace, extra_channels::ExtraChannel};
 use crate::image::Rect;
@@ -567,7 +567,7 @@ impl Frame {
     ) -> Result<()> {
         let lf_global = self.lf_global.as_mut().unwrap();
         let epf_sigma = if self.header.restoration_filter.epf_iters > 0 {
-            Some(create_sigma_source(&self.header, lf_global, &self.hf_meta)?)
+            Some(SigmaSource::new(&self.header, lf_global, &self.hf_meta)?)
         } else {
             None
         };
