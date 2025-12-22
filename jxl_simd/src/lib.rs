@@ -861,6 +861,8 @@ mod test {
 
         // Perform gather
         let indices_vec = D::I32Vec::load(d, &indices);
+        // SAFETY: indices are in range [0, 64) due to the modulo operation above,
+        // and lut has exactly 64 elements, so all gathered elements are valid.
         let result = unsafe { D::F32Vec::gather(d, lut.as_ptr(), indices_vec) };
 
         let mut output = vec![0.0f32; len];
