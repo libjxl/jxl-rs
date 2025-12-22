@@ -3,11 +3,9 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-use std::sync::Arc;
-
 use crate::{
     BLOCK_DIM, MIN_SIGMA,
-    image::Image,
+    features::epf::SigmaSource,
     render::{
         Channels, ChannelsMut, RenderPipelineInOutStage,
         stages::epf::common::{get_sigma, prepare_sad_mul_storage},
@@ -23,7 +21,7 @@ pub struct Epf0Stage {
     /// (inverse) multiplier for sigma on borders
     border_sad_mul: f32,
     channel_scale: [f32; 3],
-    sigma: Arc<Image<f32>>,
+    sigma: SigmaSource,
 }
 
 impl std::fmt::Display for Epf0Stage {
@@ -41,7 +39,7 @@ impl Epf0Stage {
         sigma_scale: f32,
         border_sad_mul: f32,
         channel_scale: [f32; 3],
-        sigma: Arc<Image<f32>>,
+        sigma: SigmaSource,
     ) -> Self {
         Self {
             sigma,

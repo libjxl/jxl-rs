@@ -3,6 +3,8 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
+use std::sync::Arc;
+
 use crate::{
     error::{Error, Result},
     frame::{HfMetadata, LfGlobalState},
@@ -12,23 +14,36 @@ use crate::{
 
 use jxl_transforms::transform_map::*;
 
-pub fn create_sigma_image(
+/// Source of sigma values for EPF (Edge Preserving Filter).
+/// For VarDCT encoding, sigma varies per-block based on quantization.
+/// For Modular encoding, sigma is constant across the entire image.
+#[derive(Clone)]
+pub enum SigmaSource {
+    /// Variable sigma per block (VarDCT encoding)
+    Variable(Arc<Image<f32>>),
+    /// Constant sigma for entire image (Modular encoding)
+    Constant(f32),
+}
+
+pub fn create_sigma_source(
     frame_header: &FrameHeader,
     lf_global: &LfGlobalState,
     hf_meta: &Option<HfMetadata>,
-) -> Result<Image<f32>> {
-    let size_blocks = frame_header.size_blocks();
+) -> Result<SigmaSource> {
     let rf = &frame_header.restoration_filter;
-    let sigma_xsize = size_blocks.0;
-    let sigma_ysize = size_blocks.1;
-    // We might over-read the sigma row slightly when applying EPF, so ensure that there is enough
-    // space to avoid having the out-of-bounds read from the row causing a panic (the value does
-    // not affect any pixels that are actually visualized, so we don't need to set it to anything
-    // special below).
-    let mut sigma_image = Image::<f32>::new((sigma_xsize + 2, sigma_ysize))?;
     #[allow(clippy::excessive_precision)]
     const INV_SIGMA_NUM: f32 = -1.1715728752538099024;
+
     if frame_header.encoding == Encoding::VarDCT {
+        let size_blocks = frame_header.size_blocks();
+        let sigma_xsize = size_blocks.0;
+        let sigma_ysize = size_blocks.1;
+        // We might over-read the sigma row slightly when applying EPF, so ensure that there is enough
+        // space to avoid having the out-of-bounds read from the row causing a panic (the value does
+        // not affect any pixels that are actually visualized, so we don't need to set it to anything
+        // special below).
+        let mut sigma_image = Image::<f32>::new((sigma_xsize + 2, sigma_ysize))?;
+
         let hf_meta = hf_meta.as_ref().unwrap();
         let quant_params = lf_global.quant_params.as_ref().unwrap();
         let quant_scale = 1.0 / quant_params.inv_global_scale();
@@ -58,11 +73,10 @@ pub fn create_sigma_image(
                 }
             }
         }
+        Ok(SigmaSource::Variable(Arc::new(sigma_image)))
     } else {
-        // TODO(szabadka): Instead of allocating an image, return an enum with image and f32
-        // variants.
+        // For Modular encoding, sigma is constant - no need to allocate an image
         let sigma = INV_SIGMA_NUM / rf.epf_sigma_for_modular;
-        sigma_image.fill(sigma);
+        Ok(SigmaSource::Constant(sigma))
     }
-    Ok(sigma_image)
 }
