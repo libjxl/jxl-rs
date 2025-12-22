@@ -371,35 +371,10 @@ impl QuantTable {
 }
 
 pub struct DequantMatrices {
-    computed_mask: u32,
     /// 17 separate tables, one per QuantTable type.
     /// Uses Cow to allow zero-copy borrowing from static cache for library tables.
-    tables: [Option<Cow<'static, [f32]>>; QuantTable::CARDINALITY],
-    encodings: Vec<QuantEncoding>,
+    tables: [Cow<'static, [f32]>; QuantTable::CARDINALITY],
 }
-
-/// Cached library quantization encodings per table type.
-/// Each entry is computed lazily on first access, avoiding computation
-/// of encodings for large transforms that are never used.
-static LIBRARY_QUANTS: [OnceLock<QuantEncoding>; QuantTable::CARDINALITY] = [
-    OnceLock::new(),
-    OnceLock::new(),
-    OnceLock::new(),
-    OnceLock::new(),
-    OnceLock::new(),
-    OnceLock::new(),
-    OnceLock::new(),
-    OnceLock::new(),
-    OnceLock::new(),
-    OnceLock::new(),
-    OnceLock::new(),
-    OnceLock::new(),
-    OnceLock::new(),
-    OnceLock::new(),
-    OnceLock::new(),
-    OnceLock::new(),
-    OnceLock::new(),
-];
 
 /// Cached computed library tables per QuantTable type.
 /// Each entry contains the computed f32 weights for all 3 channels.
@@ -906,38 +881,37 @@ impl DequantMatrices {
         }
     }
 
-    /// Get cached library quantization encoding for a table type index.
-    /// Computes the encoding lazily on first access.
-    fn get_library(idx: usize) -> &'static QuantEncoding {
-        LIBRARY_QUANTS[idx].get_or_init(|| match idx {
-            0 => DequantMatrices::dct(),
-            1 => DequantMatrices::id(),
-            2 => DequantMatrices::dct2x2(),
-            3 => DequantMatrices::dct4x4(),
-            4 => DequantMatrices::dct16x16(),
-            5 => DequantMatrices::dct32x32(),
-            6 => DequantMatrices::dct8x16(),
-            7 => DequantMatrices::dct8x32(),
-            8 => DequantMatrices::dct16x32(),
-            9 => DequantMatrices::dct4x8(),
-            10 => DequantMatrices::afv0(),
-            11 => DequantMatrices::dct64x64(),
-            12 => DequantMatrices::dct32x64(),
+    /// Get library quantization encoding for a table type index.
+    fn get_library_encoding(idx: usize) -> QuantEncoding {
+        match idx {
+            0 => Self::dct(),
+            1 => Self::id(),
+            2 => Self::dct2x2(),
+            3 => Self::dct4x4(),
+            4 => Self::dct16x16(),
+            5 => Self::dct32x32(),
+            6 => Self::dct8x16(),
+            7 => Self::dct8x32(),
+            8 => Self::dct16x32(),
+            9 => Self::dct4x8(),
+            10 => Self::afv0(),
+            11 => Self::dct64x64(),
+            12 => Self::dct32x64(),
             // Same default for large transforms (128+) as for 64x* transforms.
-            13 => DequantMatrices::dct128x128(),
-            14 => DequantMatrices::dct64x128(),
-            15 => DequantMatrices::dct256x256(),
-            16 => DequantMatrices::dct128x256(),
+            13 => Self::dct128x128(),
+            14 => Self::dct64x128(),
+            15 => Self::dct256x256(),
+            16 => Self::dct128x256(),
             _ => unreachable!(),
-        })
+        }
     }
 
     /// Get cached computed library table for a QuantTable type index.
     /// Computes the table lazily on first access.
     fn get_library_table(idx: usize) -> &'static [f32] {
         LIBRARY_TABLES[idx].get_or_init(|| {
-            let encoding = Self::get_library(idx);
-            Self::compute_table(encoding, idx).expect("library table computation should not fail")
+            let encoding = Self::get_library_encoding(idx);
+            Self::compute_table(&encoding, idx).expect("library table computation should not fail")
         })
     }
 
@@ -1120,23 +1094,19 @@ impl DequantMatrices {
                 }
             }
         }
-        // Convert weights to the final table format (1.0 / weight)
-        let mut table = vec![0f32; 3 * num];
-        for (i, weight) in weights.iter().enumerate() {
+        // Convert weights in place to the final table format (1.0 / weight)
+        for weight in &mut weights {
             if !(ALMOST_ZERO..=1.0 / ALMOST_ZERO).contains(weight) {
                 return Err(InvalidQuantizationTableWeight(*weight));
             }
-            table[i] = 1f32 / weight;
+            *weight = 1f32 / *weight;
         }
-        Ok(table.into_boxed_slice())
+        Ok(weights.into_boxed_slice())
     }
 
     pub fn matrix(&self, quant_kind: HfTransformType, c: usize) -> &[f32] {
-        assert_ne!((1 << quant_kind as u32) & self.computed_mask, 0);
         let qt_idx = QuantTable::for_strategy(quant_kind) as usize;
-        let table = self.tables[qt_idx]
-            .as_ref()
-            .expect("table should be computed");
+        let table = &self.tables[qt_idx];
         let num = Self::REQUIRED_SIZE_X[qt_idx] * Self::REQUIRED_SIZE_Y[qt_idx] * BLOCK_SIZE;
         &table[c * num..]
     }
@@ -1147,32 +1117,38 @@ impl DequantMatrices {
         br: &mut BitReader,
     ) -> Result<Self> {
         let all_default = br.read(1)? == 1;
-        let mut encodings = Vec::with_capacity(QuantTable::CARDINALITY);
-        if all_default {
-            for _ in 0..QuantTable::CARDINALITY {
-                encodings.push(QuantEncoding::Library)
-            }
+
+        // Compute all tables during decode
+        let tables: [Cow<'static, [f32]>; QuantTable::CARDINALITY] = if all_default {
+            // All library tables - borrow from static cache (zero-copy)
+            std::array::from_fn(|idx| Cow::Borrowed(Self::get_library_table(idx)))
         } else {
+            // Decode and compute each table
+            let mut tables_vec: Vec<Cow<'static, [f32]>> =
+                Vec::with_capacity(QuantTable::CARDINALITY);
             for (i, (&required_size_x, required_size_y)) in Self::REQUIRED_SIZE_X
                 .iter()
                 .zip(Self::REQUIRED_SIZE_Y)
                 .enumerate()
             {
-                encodings.push(QuantEncoding::decode(
+                let encoding = QuantEncoding::decode(
                     required_size_x,
                     required_size_y,
                     i,
                     header,
                     lf_global,
                     br,
-                )?);
+                )?;
+                let table = match encoding {
+                    QuantEncoding::Library => Cow::Borrowed(Self::get_library_table(i)),
+                    _ => Cow::Owned(Self::compute_table(&encoding, i)?.into_vec()),
+                };
+                tables_vec.push(table);
             }
-        }
-        Ok(Self {
-            computed_mask: 0,
-            tables: [const { None }; QuantTable::CARDINALITY],
-            encodings,
-        })
+            tables_vec.try_into().unwrap()
+        };
+
+        Ok(Self { tables })
     }
 
     pub const REQUIRED_SIZE_X: [usize; QuantTable::CARDINALITY] =
@@ -1183,53 +1159,6 @@ impl DequantMatrices {
 
     #[cfg(test)]
     const SUM_REQUIRED_X_Y: usize = 2056;
-
-    pub fn ensure_computed(&mut self, acs_mask: u32) -> Result<()> {
-        // Convert HfTransformType mask to QuantTable mask
-        let mut kind_mask = 0u32;
-        for i in 0..HfTransformType::CARDINALITY {
-            if acs_mask & (1u32 << i) != 0 {
-                kind_mask |= 1u32 << QuantTable::for_strategy(HfTransformType::VALUES[i]) as u32;
-            }
-        }
-
-        // Figure out which QuantTables are already computed
-        let mut computed_kind_mask = 0u32;
-        for i in 0..HfTransformType::CARDINALITY {
-            if self.computed_mask & (1u32 << i) != 0 {
-                computed_kind_mask |=
-                    1u32 << QuantTable::for_strategy(HfTransformType::VALUES[i]) as u32;
-            }
-        }
-
-        // Compute tables that are needed but not yet computed
-        for table_idx in 0..QuantTable::CARDINALITY {
-            // Skip if already computed
-            if (1u32 << table_idx) & computed_kind_mask != 0 {
-                continue;
-            }
-            // Skip if not needed
-            if (1u32 << table_idx) & kind_mask == 0 {
-                continue;
-            }
-
-            // Populate the table
-            match self.encodings[table_idx] {
-                QuantEncoding::Library => {
-                    // Borrow from static cache (zero-copy)
-                    self.tables[table_idx] =
-                        Some(Cow::Borrowed(Self::get_library_table(table_idx)));
-                }
-                _ => {
-                    // Compute custom table
-                    let computed = Self::compute_table(&self.encodings[table_idx], table_idx)?;
-                    self.tables[table_idx] = Some(Cow::Owned(computed.into_vec()));
-                }
-            };
-        }
-        self.computed_mask |= acs_mask;
-        Ok(())
-    }
 }
 
 fn get_quant_weights(
@@ -1317,14 +1246,12 @@ mod test {
 
     #[test]
     fn check_dequant_matrix_correctness() -> Result<()> {
-        let mut matrices = DequantMatrices {
-            computed_mask: 0,
-            tables: [const { None }; QuantTable::CARDINALITY],
-            encodings: (0..QuantTable::CARDINALITY)
-                .map(|_| QuantEncoding::Library)
-                .collect(),
+        // All library tables
+        let matrices = DequantMatrices {
+            tables: std::array::from_fn(|idx| {
+                Cow::Borrowed(DequantMatrices::get_library_table(idx))
+            }),
         };
-        matrices.ensure_computed(!0)?;
 
         // Golden data produced by libjxl.
         let target_table = [
