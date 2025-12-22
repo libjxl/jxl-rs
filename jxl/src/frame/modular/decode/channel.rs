@@ -47,11 +47,13 @@ fn decode_modular_channel_small(
 
     const { assert!(IMAGE_OFFSET.1 == 2) };
 
+    // Allocate property buffer once and reuse across all rows.
+    let mut property_buffer: Vec<i32> = vec![0; num_properties];
+    property_buffer[0] = chan as i32;
+    property_buffer[1] = stream_id as i32;
+
     for y in 0..size.1 {
         precompute_references(buffers, chan, y, &mut references);
-        let mut property_buffer: Vec<i32> = vec![0; num_properties];
-        property_buffer[0] = chan as i32;
-        property_buffer[1] = stream_id as i32;
         let [row, row_top, row_toptop] =
             buffers[chan].data.distinct_full_rows_mut([y + 2, y + 1, y]);
         let row = &mut row[IMAGE_OFFSET.0..IMAGE_OFFSET.0 + size.0];
