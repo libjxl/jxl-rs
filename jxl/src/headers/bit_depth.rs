@@ -65,6 +65,14 @@ impl BitDepth {
             exponent_bits_per_sample: 8,
         }
     }
+    #[cfg(test)]
+    pub fn f16() -> BitDepth {
+        BitDepth {
+            floating_point_sample: true,
+            bits_per_sample: 16,
+            exponent_bits_per_sample: 5,
+        }
+    }
     pub fn bits_per_sample(&self) -> u32 {
         self.bits_per_sample
     }
