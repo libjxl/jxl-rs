@@ -512,6 +512,20 @@ unsafe impl F32SimdVec for F32VecAvx512 {
     });
 
     #[inline(always)]
+    unsafe fn gather(d: Avx512Descriptor, base: *const f32, indices: I32VecAvx512) -> Self {
+        // AVX512 has native gather support
+        #[target_feature(enable = "avx512f")]
+        #[inline]
+        unsafe fn gather_impl(base: *const f32, indices: __m512i) -> __m512 {
+            // Scale of 4 because we're gathering f32 (4 bytes each)
+            // SAFETY: caller guarantees indices are valid
+            unsafe { _mm512_i32gather_ps::<4>(indices, base) }
+        }
+        // SAFETY: avx512f is available from the safety invariant on the descriptor
+        F32VecAvx512(unsafe { gather_impl(base, indices.0) }, d)
+    }
+
+    #[inline(always)]
     fn round_store_u8(self, dest: &mut [u8]) {
         #[target_feature(enable = "avx512f", enable = "avx512bw")]
         #[inline]

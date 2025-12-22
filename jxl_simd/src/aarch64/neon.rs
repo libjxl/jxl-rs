@@ -379,6 +379,22 @@ unsafe impl F32SimdVec for F32VecNeon {
             I32VecNeon(vreinterpretq_s32_f32(this.0), this.1)
         }
 
+        // NEON doesn't have native gather, use scalar fallback
+        unsafe fn gather(d: NeonDescriptor, base: *const f32, indices: I32VecNeon) -> F32VecNeon {
+            // Extract indices and gather manually
+            let i0 = vgetq_lane_s32::<0>(indices.0) as isize;
+            let i1 = vgetq_lane_s32::<1>(indices.0) as isize;
+            let i2 = vgetq_lane_s32::<2>(indices.0) as isize;
+            let i3 = vgetq_lane_s32::<3>(indices.0) as isize;
+            let arr = [
+                *base.offset(i0),
+                *base.offset(i1),
+                *base.offset(i2),
+                *base.offset(i3),
+            ];
+            F32VecNeon(vld1q_f32(arr.as_ptr()), d)
+        }
+
         fn round_store_u8(this: F32VecNeon, dest: &mut [u8]) {
             assert!(dest.len() >= F32VecNeon::LEN);
             // Round to nearest integer

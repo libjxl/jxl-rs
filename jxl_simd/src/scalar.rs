@@ -176,6 +176,12 @@ unsafe impl F32SimdVec for f32 {
     }
 
     #[inline(always)]
+    unsafe fn gather(_d: Self::Descriptor, base: *const f32, indices: i32) -> Self {
+        // SAFETY: Caller guarantees indices are valid offsets into base.
+        unsafe { *base.offset(indices as isize) }
+    }
+
+    #[inline(always)]
     fn round_store_u8(self, dest: &mut [u8]) {
         dest[0] = self.round() as u8;
     }
