@@ -379,22 +379,6 @@ unsafe impl F32SimdVec for F32VecNeon {
             I32VecNeon(vreinterpretq_s32_f32(this.0), this.1)
         }
 
-        // NEON doesn't have native gather, use scalar fallback
-        unsafe fn gather(d: NeonDescriptor, base: *const f32, indices: I32VecNeon) -> F32VecNeon {
-            // Extract indices and gather manually
-            let i0 = vgetq_lane_s32::<0>(indices.0) as isize;
-            let i1 = vgetq_lane_s32::<1>(indices.0) as isize;
-            let i2 = vgetq_lane_s32::<2>(indices.0) as isize;
-            let i3 = vgetq_lane_s32::<3>(indices.0) as isize;
-            let arr = [
-                *base.offset(i0),
-                *base.offset(i1),
-                *base.offset(i2),
-                *base.offset(i3),
-            ];
-            F32VecNeon(vld1q_f32(arr.as_ptr()), d)
-        }
-
         fn round_store_u8(this: F32VecNeon, dest: &mut [u8]) {
             assert!(dest.len() >= F32VecNeon::LEN);
             // Round to nearest integer
@@ -423,6 +407,32 @@ unsafe impl F32SimdVec for F32VecNeon {
                 vst1_u16(dest.as_mut_ptr(), u16s);
             }
         }
+    }
+
+    // NEON doesn't have native gather, use scalar fallback
+    // This is outside fn_neon! because it needs to be an unsafe fn
+    #[inline(always)]
+    unsafe fn gather(d: NeonDescriptor, base: *const f32, indices: I32VecNeon) -> F32VecNeon {
+        #[target_feature(enable = "neon")]
+        #[inline]
+        unsafe fn gather_impl(base: *const f32, indices: int32x4_t) -> float32x4_t {
+            // SAFETY: caller guarantees indices are valid
+            unsafe {
+                let i0 = vgetq_lane_s32::<0>(indices) as isize;
+                let i1 = vgetq_lane_s32::<1>(indices) as isize;
+                let i2 = vgetq_lane_s32::<2>(indices) as isize;
+                let i3 = vgetq_lane_s32::<3>(indices) as isize;
+                let arr = [
+                    *base.offset(i0),
+                    *base.offset(i1),
+                    *base.offset(i2),
+                    *base.offset(i3),
+                ];
+                vld1q_f32(arr.as_ptr())
+            }
+        }
+        // SAFETY: neon is available from the safety invariant on the descriptor
+        F32VecNeon(unsafe { gather_impl(base, indices.0) }, d)
     }
 }
 
