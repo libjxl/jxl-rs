@@ -736,9 +736,9 @@ mod test {
         // Smallest subnormal: 2^-24 ≈ 5.96e-8
         // Largest subnormal: (2^10 - 1) * 2^-24 ≈ 6.10e-5
         let test_cases: Vec<(u16, f32)> = vec![
-            (0x0001, 5.960464477539063e-8),  // smallest positive subnormal
-            (0x03FF, 6.097555160522461e-5),  // largest positive subnormal
-            (0x8001, -5.960464477539063e-8), // smallest negative subnormal
+            (0x0001, 5.960_464_5e-8),  // smallest positive subnormal
+            (0x03FF, 6.097_555e-5),    // largest positive subnormal
+            (0x8001, -5.960_464_5e-8), // smallest negative subnormal
         ];
 
         // First test the scalar function directly
