@@ -234,7 +234,10 @@ fn dequant_and_transform_to_pixels<D: SimdDescriptor>(
                 block_rect.origin.0 >> hshift[c],
                 block_rect.origin.1 >> vshift[c],
             ),
-            size: block_rect.size,
+            size: (
+                block_rect.size.0 >> hshift[c],
+                block_rect.size.1 >> vshift[c],
+            ),
         };
         let mut output_rect = pixels[c].get_rect_mut(downsampled_rect);
         for i in 0..downsampled_rect.size.1 {

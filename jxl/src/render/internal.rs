@@ -143,11 +143,18 @@ impl<Buffer> RenderPipelineShared<Buffer> {
                 requested_data_type
             );
         }
+        // Round up to 32-pixel multiples to accommodate largest VarDCT transforms (DCT32x8/DCT8x32)
         (
-            (1 << (self.log_group_size - downsample.0 as usize))
-                .min(self.input_size.0.next_multiple_of(8)),
-            (1 << (self.log_group_size - downsample.1 as usize))
-                .min(self.input_size.1.next_multiple_of(8)),
+            (1 << (self.log_group_size - downsample.0 as usize)).min(
+                (self.input_size.0 >> downsample.0 as usize)
+                    .next_multiple_of(32)
+                    .max(32),
+            ),
+            (1 << (self.log_group_size - downsample.1 as usize)).min(
+                (self.input_size.1 >> downsample.1 as usize)
+                    .next_multiple_of(32)
+                    .max(32),
+            ),
         )
     }
 
