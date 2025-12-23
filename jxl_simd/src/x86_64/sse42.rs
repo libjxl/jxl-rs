@@ -375,28 +375,20 @@ unsafe impl F32SimdVec for F32VecSse42 {
     });
 
     #[inline(always)]
-    unsafe fn gather(d: Sse42Descriptor, base: *const f32, indices: I32VecSse42) -> Self {
-        // SSE doesn't have native gather, use scalar fallback
+    fn table_lookup_8(d: Sse42Descriptor, table: &[f32; 8], indices: I32VecSse42) -> Self {
+        // Use scalar lookup - simple and correct
+        // The table is small (8 entries) so this is efficient
         #[target_feature(enable = "sse4.2")]
         #[inline]
-        unsafe fn gather_impl(base: *const f32, indices: __m128i) -> __m128 {
-            // SAFETY: caller guarantees indices are valid
-            unsafe {
-                // Extract indices and gather manually
-                let i0 = _mm_extract_epi32::<0>(indices) as isize;
-                let i1 = _mm_extract_epi32::<1>(indices) as isize;
-                let i2 = _mm_extract_epi32::<2>(indices) as isize;
-                let i3 = _mm_extract_epi32::<3>(indices) as isize;
-                _mm_set_ps(
-                    *base.offset(i3),
-                    *base.offset(i2),
-                    *base.offset(i1),
-                    *base.offset(i0),
-                )
-            }
+        unsafe fn table_lookup_impl(table: &[f32; 8], indices: __m128i) -> __m128 {
+            let i0 = _mm_extract_epi32::<0>(indices) as usize;
+            let i1 = _mm_extract_epi32::<1>(indices) as usize;
+            let i2 = _mm_extract_epi32::<2>(indices) as usize;
+            let i3 = _mm_extract_epi32::<3>(indices) as usize;
+            _mm_set_ps(table[i3], table[i2], table[i1], table[i0])
         }
         // SAFETY: sse4.2 is available from the safety invariant on the descriptor
-        F32VecSse42(unsafe { gather_impl(base, indices.0) }, d)
+        F32VecSse42(unsafe { table_lookup_impl(table, indices.0) }, d)
     }
 
     #[inline(always)]
