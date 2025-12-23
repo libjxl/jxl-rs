@@ -14,6 +14,7 @@ mod options;
 mod signature;
 
 pub use crate::image::JxlOutputBuffer;
+pub use crate::jpeg::JpegReconstructionData;
 pub use color::*;
 pub use data_types::*;
 pub use decoder::*;

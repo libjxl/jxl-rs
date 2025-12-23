@@ -8,6 +8,7 @@ use crate::api::FrameCallback;
 use crate::{
     api::JxlFrameHeader,
     error::{Error, Result},
+    jpeg::JpegReconstructionData,
 };
 
 use super::{JxlBasicInfo, JxlColorProfile, JxlDecoderOptions, JxlPixelFormat};
@@ -129,6 +130,19 @@ impl JxlDecoderInner {
 
     pub fn has_more_frames(&self) -> bool {
         self.codestream_parser.has_more_frames
+    }
+
+    /// Returns the JPEG reconstruction data if present in the file.
+    ///
+    /// This data is available after reading a jbrd box from a JXL file
+    /// that was created by losslessly recompressing a JPEG.
+    pub fn jpeg_reconstruction_data(&self) -> Option<&JpegReconstructionData> {
+        self.box_parser.jpeg_reconstruction.as_ref()
+    }
+
+    /// Returns true if the file contains JPEG reconstruction data.
+    pub fn has_jpeg_reconstruction(&self) -> bool {
+        self.box_parser.jpeg_reconstruction.is_some()
     }
 
     #[cfg(test)]
