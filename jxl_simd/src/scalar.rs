@@ -176,9 +176,8 @@ unsafe impl F32SimdVec for f32 {
     }
 
     #[inline(always)]
-    unsafe fn gather(_d: Self::Descriptor, base: *const f32, indices: i32) -> Self {
-        // SAFETY: Caller guarantees indices are valid offsets into base.
-        unsafe { *base.offset(indices as isize) }
+    fn table_lookup_8(_d: Self::Descriptor, table: &[f32; 8], indices: i32) -> Self {
+        table[indices as usize]
     }
 
     #[inline(always)]

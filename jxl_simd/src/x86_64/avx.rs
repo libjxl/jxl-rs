@@ -454,17 +454,29 @@ unsafe impl F32SimdVec for F32VecAvx {
     });
 
     #[inline(always)]
-    unsafe fn gather(d: AvxDescriptor, base: *const f32, indices: I32VecAvx) -> Self {
-        // AVX2 has native gather support
+    fn table_lookup_8(d: AvxDescriptor, table: &[f32; 8], indices: I32VecAvx) -> Self {
+        // Use scalar lookup - simple and correct
         #[target_feature(enable = "avx2")]
         #[inline]
-        unsafe fn gather_impl(base: *const f32, indices: __m256i) -> __m256 {
-            // Scale of 4 because we're gathering f32 (4 bytes each)
-            // SAFETY: caller guarantees indices are valid
-            unsafe { _mm256_i32gather_ps::<4>(base, indices) }
+        unsafe fn table_lookup_impl(table: &[f32; 8], indices: __m256i) -> __m256 {
+            // SAFETY: avx2 intrinsics are available from target_feature
+            unsafe {
+                let mut result = [0.0f32; 8];
+                let indices_lo = _mm256_castsi256_si128(indices);
+                let indices_hi = _mm256_extracti128_si256::<1>(indices);
+                result[0] = table[_mm_extract_epi32::<0>(indices_lo) as usize];
+                result[1] = table[_mm_extract_epi32::<1>(indices_lo) as usize];
+                result[2] = table[_mm_extract_epi32::<2>(indices_lo) as usize];
+                result[3] = table[_mm_extract_epi32::<3>(indices_lo) as usize];
+                result[4] = table[_mm_extract_epi32::<0>(indices_hi) as usize];
+                result[5] = table[_mm_extract_epi32::<1>(indices_hi) as usize];
+                result[6] = table[_mm_extract_epi32::<2>(indices_hi) as usize];
+                result[7] = table[_mm_extract_epi32::<3>(indices_hi) as usize];
+                _mm256_loadu_ps(result.as_ptr())
+            }
         }
         // SAFETY: avx2 is available from the safety invariant on the descriptor
-        F32VecAvx(unsafe { gather_impl(base, indices.0) }, d)
+        F32VecAvx(unsafe { table_lookup_impl(table, indices.0) }, d)
     }
 
     #[inline(always)]

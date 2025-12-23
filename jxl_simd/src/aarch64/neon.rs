@@ -409,30 +409,24 @@ unsafe impl F32SimdVec for F32VecNeon {
         }
     }
 
-    // NEON doesn't have native gather, use scalar fallback
-    // This is outside fn_neon! because it needs to be an unsafe fn
+    // Table lookup - use scalar for simplicity and correctness
     #[inline(always)]
-    unsafe fn gather(d: NeonDescriptor, base: *const f32, indices: I32VecNeon) -> F32VecNeon {
+    fn table_lookup_8(d: NeonDescriptor, table: &[f32; 8], indices: I32VecNeon) -> F32VecNeon {
         #[target_feature(enable = "neon")]
         #[inline]
-        unsafe fn gather_impl(base: *const f32, indices: int32x4_t) -> float32x4_t {
-            // SAFETY: caller guarantees indices are valid
+        unsafe fn table_lookup_impl(table: &[f32; 8], indices: int32x4_t) -> float32x4_t {
+            // SAFETY: neon intrinsics are available from target_feature
             unsafe {
-                let i0 = vgetq_lane_s32::<0>(indices) as isize;
-                let i1 = vgetq_lane_s32::<1>(indices) as isize;
-                let i2 = vgetq_lane_s32::<2>(indices) as isize;
-                let i3 = vgetq_lane_s32::<3>(indices) as isize;
-                let arr = [
-                    *base.offset(i0),
-                    *base.offset(i1),
-                    *base.offset(i2),
-                    *base.offset(i3),
-                ];
-                vld1q_f32(arr.as_ptr())
+                let i0 = vgetq_lane_s32::<0>(indices) as usize;
+                let i1 = vgetq_lane_s32::<1>(indices) as usize;
+                let i2 = vgetq_lane_s32::<2>(indices) as usize;
+                let i3 = vgetq_lane_s32::<3>(indices) as usize;
+                let result = [table[i0], table[i1], table[i2], table[i3]];
+                vld1q_f32(result.as_ptr())
             }
         }
         // SAFETY: neon is available from the safety invariant on the descriptor
-        F32VecNeon(unsafe { gather_impl(base, indices.0) }, d)
+        F32VecNeon(unsafe { table_lookup_impl(table, indices.0) }, d)
     }
 }
 

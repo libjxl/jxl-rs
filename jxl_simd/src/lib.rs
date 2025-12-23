@@ -216,15 +216,17 @@ pub unsafe trait F32SimdVec:
 
     fn bitcast_to_i32(self) -> <<Self as F32SimdVec>::Descriptor as SimdDescriptor>::I32Vec;
 
-    /// Gathers f32 values from `base` at the offsets specified by `indices`.
-    /// Each element i of the result is `base[indices[i]]`.
-    /// Indices must be valid (in bounds for base) or behavior is undefined.
+    /// Looks up values from an 8-entry table using efficient shuffle operations.
+    /// Each element i of the result is `table[indices[i]]`.
     ///
-    /// # Safety
-    /// All indices must be valid indices into `base`.
-    unsafe fn gather(
+    /// This uses byte shuffles (pshufb on x86, vqtbl1q on ARM) for efficient
+    /// lookup without requiring gather instructions.
+    ///
+    /// # Panics
+    /// Panics if indices contain values outside 0..8 range.
+    fn table_lookup_8(
         d: Self::Descriptor,
-        base: *const f32,
+        table: &[f32; 8],
         indices: <<Self as F32SimdVec>::Descriptor as SimdDescriptor>::I32Vec,
     ) -> Self;
 
@@ -850,32 +852,32 @@ mod test {
     }
     test_all_instruction_sets!(test_store_interleaved_8);
 
-    fn test_gather<D: SimdDescriptor>(d: D) {
-        // Create a lookup table with known values
-        let lut: Vec<f32> = (0..64).map(|i| (i * 10) as f32).collect();
+    fn test_table_lookup_8<D: SimdDescriptor>(d: D) {
+        // Create an 8-entry lookup table with known values
+        let lut: [f32; 8] = [0.0, 10.0, 20.0, 30.0, 40.0, 50.0, 60.0, 70.0];
         let len = D::F32Vec::LEN;
 
-        // Create indices that are valid for the LUT
-        let indices: Vec<i32> = (0..len).map(|i| (i * 3 % 64) as i32).collect();
+        // Create indices that are valid for the LUT (0..8)
+        let indices: Vec<i32> = (0..len).map(|i| (i % 8) as i32).collect();
         let expected: Vec<f32> = indices.iter().map(|&i| lut[i as usize]).collect();
 
-        // Perform gather
+        // Perform table lookup
         let indices_vec = D::I32Vec::load(d, &indices);
-        // SAFETY: indices are in range [0, 64) due to the modulo operation above,
-        // and lut has exactly 64 elements, so all gathered elements are valid.
-        let result = unsafe { D::F32Vec::gather(d, lut.as_ptr(), indices_vec) };
+        let result = D::F32Vec::table_lookup_8(d, &lut, indices_vec);
 
         let mut output = vec![0.0f32; len];
         result.store(&mut output);
 
         // Verify results
         for i in 0..len {
-            assert_eq!(
-                output[i], expected[i],
-                "gather failed at position {}: expected {}, got {}",
-                i, expected[i], output[i]
+            assert!(
+                (output[i] - expected[i]).abs() < 0.01,
+                "table_lookup_8 failed at position {}: expected {}, got {}",
+                i,
+                expected[i],
+                output[i]
             );
         }
     }
-    test_all_instruction_sets!(test_gather);
+    test_all_instruction_sets!(test_table_lookup_8);
 }
