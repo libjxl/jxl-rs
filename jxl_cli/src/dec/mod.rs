@@ -8,10 +8,12 @@ use std::time::{Duration, Instant};
 use color_eyre::eyre::{Result, eyre};
 use jxl::{
     api::{
-        JxlAnimation, JxlBitDepth, JxlBitstreamInput, JxlColorProfile, JxlColorType, JxlDecoder,
-        JxlDecoderOptions, JxlOutputBuffer, ProcessingResult, states::WithImageInfo,
+        Endianness, JxlAnimation, JxlBitDepth, JxlBitstreamInput, JxlColorProfile, JxlColorType,
+        JxlDataFormat, JxlDecoder, JxlDecoderOptions, JxlOutputBuffer, JxlPixelFormat,
+        ProcessingResult, states::WithImageInfo,
     },
     image::{Image, ImageDataType, Rect},
+    util::f16,
 };
 
 pub struct ImageFrame<T: ImageDataType> {
@@ -120,4 +122,199 @@ pub fn decode_frames<In: JxlBitstreamInput>(
     }
 
     Ok((image_data, start.elapsed()))
+}
+
+/// Output data type for decoding.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum OutputDataType {
+    U8,
+    U16,
+    F16,
+    F32,
+}
+
+impl OutputDataType {
+    /// Parse from string (case-insensitive).
+    pub fn parse(s: &str) -> Option<Self> {
+        match s.to_lowercase().as_str() {
+            "u8" => Some(Self::U8),
+            "u16" => Some(Self::U16),
+            "f16" => Some(Self::F16),
+            "f32" => Some(Self::F32),
+            _ => None,
+        }
+    }
+
+    /// Get the JxlDataFormat for this type.
+    pub fn to_data_format(self) -> JxlDataFormat {
+        match self {
+            Self::U8 => JxlDataFormat::U8 { bit_depth: 8 },
+            Self::U16 => JxlDataFormat::U16 {
+                endianness: Endianness::native(),
+                bit_depth: 16,
+            },
+            Self::F16 => JxlDataFormat::F16 {
+                endianness: Endianness::native(),
+            },
+            Self::F32 => JxlDataFormat::f32(),
+        }
+    }
+}
+
+/// Decode a JXL image with a specific output data type.
+/// The result is converted to f32 for compatibility with existing encoders.
+/// This allows benchmarking the decoder's conversion stages for different output types.
+pub fn decode_frames_with_type<In: JxlBitstreamInput>(
+    input: &mut In,
+    decoder_options: JxlDecoderOptions,
+    output_type: OutputDataType,
+) -> Result<(DecodeOutput<f32>, Duration)> {
+    match output_type {
+        OutputDataType::U8 => decode_frames_typed::<u8, _>(input, decoder_options, output_type),
+        OutputDataType::U16 => decode_frames_typed::<u16, _>(input, decoder_options, output_type),
+        OutputDataType::F16 => decode_frames_typed::<f16, _>(input, decoder_options, output_type),
+        OutputDataType::F32 => decode_frames(input, decoder_options),
+    }
+}
+
+/// Generic decoder that decodes to type T and converts to f32.
+fn decode_frames_typed<T: ImageDataType + ConvertToF32, In: JxlBitstreamInput>(
+    input: &mut In,
+    decoder_options: JxlDecoderOptions,
+    output_type: OutputDataType,
+) -> Result<(DecodeOutput<f32>, Duration)> {
+    let start = Instant::now();
+
+    let mut decoder_with_image_info = decode_header(input, decoder_options)?;
+
+    // Get info and clone what we need before mutating the decoder
+    let info = decoder_with_image_info.basic_info().clone();
+    let embedded_profile = decoder_with_image_info.embedded_color_profile().clone();
+    let output_profile = decoder_with_image_info.output_color_profile().clone();
+
+    // Set the pixel format to the requested data type
+    let current_format = decoder_with_image_info.current_pixel_format().clone();
+    let new_format = JxlPixelFormat {
+        color_type: current_format.color_type,
+        color_data_format: Some(output_type.to_data_format()),
+        extra_channel_format: current_format
+            .extra_channel_format
+            .iter()
+            .map(|f| f.as_ref().map(|_| output_type.to_data_format()))
+            .collect(),
+    };
+    decoder_with_image_info.set_pixel_format(new_format);
+
+    let mut image_data = DecodeOutput {
+        size: info.size,
+        frames: Vec::new(),
+        original_bit_depth: info.bit_depth.clone(),
+        output_profile,
+        embedded_profile,
+        jxl_animation: info.animation.clone(),
+    };
+
+    let extra_channels = info.extra_channels.len();
+    let pixel_format = decoder_with_image_info.current_pixel_format().clone();
+    let color_type = pixel_format.color_type;
+    let samples_per_pixel = if color_type == JxlColorType::Grayscale {
+        1
+    } else {
+        3
+    };
+
+    loop {
+        let decoder_with_frame_info = match decoder_with_image_info.process(input)? {
+            ProcessingResult::Complete { result } => result,
+            ProcessingResult::NeedsMoreInput { .. } => return Err(eyre!("Source file truncated")),
+        };
+
+        let frame_header = decoder_with_frame_info.frame_header();
+        let frame_size = frame_header.size;
+
+        // Create typed output buffers
+        let mut typed_outputs = vec![Image::<T>::new((
+            frame_size.0 * samples_per_pixel,
+            frame_size.1,
+        ))?];
+
+        for _ in 0..extra_channels {
+            typed_outputs.push(Image::<T>::new(frame_size)?);
+        }
+
+        let mut output_bufs: Vec<JxlOutputBuffer<'_>> = typed_outputs
+            .iter_mut()
+            .map(|x| {
+                let rect = Rect {
+                    size: x.size(),
+                    origin: (0, 0),
+                };
+                JxlOutputBuffer::from_image_rect_mut(x.get_rect_mut(rect).into_raw())
+            })
+            .collect();
+
+        decoder_with_image_info = match decoder_with_frame_info.process(input, &mut output_bufs)? {
+            ProcessingResult::Complete { result } => result,
+            ProcessingResult::NeedsMoreInput { .. } => return Err(eyre!("Source file truncated")),
+        };
+
+        // Convert typed outputs to f32
+        let f32_outputs: Vec<Image<f32>> = typed_outputs
+            .into_iter()
+            .map(|img| convert_image_to_f32(img))
+            .collect::<Result<_, _>>()?;
+
+        image_data.frames.push(ImageFrame {
+            duration: frame_header.duration.unwrap_or(0.0),
+            channels: f32_outputs,
+            color_type,
+        });
+
+        if !decoder_with_image_info.has_more_frames() {
+            break;
+        }
+    }
+
+    Ok((image_data, start.elapsed()))
+}
+
+/// Trait for converting a value to f32.
+trait ConvertToF32: Copy {
+    fn to_f32_normalized(self) -> f32;
+}
+
+impl ConvertToF32 for u8 {
+    fn to_f32_normalized(self) -> f32 {
+        self as f32 / 255.0
+    }
+}
+
+impl ConvertToF32 for u16 {
+    fn to_f32_normalized(self) -> f32 {
+        self as f32 / 65535.0
+    }
+}
+
+impl ConvertToF32 for f16 {
+    fn to_f32_normalized(self) -> f32 {
+        self.to_f32()
+    }
+}
+
+/// Convert an image from type T to f32.
+fn convert_image_to_f32<T: ImageDataType + ConvertToF32>(
+    src: Image<T>,
+) -> Result<Image<f32>, jxl::error::Error> {
+    let size = src.size();
+    let mut dst = Image::<f32>::new(size)?;
+
+    for y in 0..size.1 {
+        let src_row = src.row(y);
+        let dst_row = dst.row_mut(y);
+        for x in 0..size.0 {
+            dst_row[x] = src_row[x].to_f32_normalized();
+        }
+    }
+
+    Ok(dst)
 }
