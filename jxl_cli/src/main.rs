@@ -97,6 +97,11 @@ struct Opt {
     /// Use high precision mode for decoding
     #[clap(long)]
     high_precision: bool,
+
+    /// Output data type for decoder (u8, u16, f16, f32). Used for benchmarking
+    /// the decoder's conversion pipeline. Default: f32
+    #[clap(long, default_value = "f32")]
+    data_type: String,
 }
 
 // Extract RGB channels from interleaved RGB buffer
@@ -189,6 +194,14 @@ fn main() -> Result<()> {
     // When extracting preview, don't skip it; otherwise skip preview by default
     let skip_preview = !opt.preview;
 
+    // Parse the output data type
+    let output_type = dec::OutputDataType::parse(&opt.data_type).ok_or_else(|| {
+        eyre!(
+            "Invalid data type '{}'. Must be u8, u16, f16, or f32",
+            opt.data_type
+        )
+    })?;
+
     let mut image_data = if reps > 1 {
         // For multiple repetitions (benchmarking), read into memory to avoid I/O variability
         let mut input_bytes = Vec::<u8>::new();
@@ -197,7 +210,7 @@ fn main() -> Result<()> {
             .try_fold(None, |_, _| -> Result<Option<dec::DecodeOutput<f32>>> {
                 let mut input = input_bytes.as_slice();
                 let (mut iteration_image_data, iteration_duration) =
-                    dec::decode_frames(&mut input, options(skip_preview))?;
+                    dec::decode_frames_with_type(&mut input, options(skip_preview), output_type)?;
                 duration_sum += iteration_duration;
                 // When extracting preview, only keep the first frame (the preview)
                 if opt.preview {
@@ -218,7 +231,8 @@ fn main() -> Result<()> {
     } else {
         // For single decode, stream from file
         let mut reader = BufReader::new(file);
-        let (mut image_data, duration) = dec::decode_frames(&mut reader, options(skip_preview))?;
+        let (mut image_data, duration) =
+            dec::decode_frames_with_type(&mut reader, options(skip_preview), output_type)?;
         duration_sum = duration;
         // When extracting preview, only keep the first frame (the preview)
         if opt.preview {
