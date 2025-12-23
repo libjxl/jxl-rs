@@ -1,0 +1,517 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>JXL Polyfill Demo</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 20px;
+            background: #f5f5f5;
+        }
+
+        h1 {
+            color: #1976d2;
+        }
+
+        .section {
+            background: white;
+            padding: 20px;
+            margin: 20px 0;
+            border-radius: 4px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+
+        .section h2 {
+            margin-top: 0;
+            color: #424242;
+        }
+
+        .image-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+            gap: 16px;
+            margin-top: 16px;
+        }
+
+        .image-card {
+            border: 1px solid #e0e0e0;
+            border-radius: 4px;
+            padding: 8px;
+            background: #fafafa;
+        }
+
+        .image-card img {
+            width: 100%;
+            height: auto;
+            border-radius: 2px;
+        }
+
+        .image-card p {
+            margin: 8px 0 0;
+            font-size: 12px;
+            color: #757575;
+        }
+
+        button {
+            background: #1976d2;
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            border-radius: 4px;
+            cursor: pointer;
+            margin: 5px;
+        }
+
+        button:hover {
+            background: #1565c0;
+        }
+
+        code {
+            background: #f5f5f5;
+            padding: 2px 6px;
+            border-radius: 2px;
+            font-family: monospace;
+        }
+
+        pre {
+            background: #263238;
+            color: #aed581;
+            padding: 16px;
+            border-radius: 4px;
+            overflow-x: auto;
+        }
+
+        .status {
+            padding: 8px 12px;
+            background: #e3f2fd;
+            border-left: 4px solid #1976d2;
+            border-radius: 2px;
+            margin: 10px 0;
+        }
+
+        /* CSS Background demo styles */
+        .bg-demo-box {
+            width: 200px;
+            height: 150px;
+            background-size: cover;
+            background-position: center;
+            border-radius: 4px;
+            display: inline-block;
+            margin: 8px;
+            border: 2px solid #e0e0e0;
+        }
+
+        /* SVG demo styles */
+        .svg-demo {
+            border: 1px solid #e0e0e0;
+            border-radius: 4px;
+            background: #fafafa;
+            padding: 8px;
+        }
+
+        .feature-list {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+            gap: 12px;
+            margin-top: 16px;
+        }
+
+        .feature-item {
+            display: flex;
+            align-items: center;
+            padding: 12px;
+            background: #e8f5e9;
+            border-radius: 4px;
+            border-left: 4px solid #4caf50;
+        }
+
+        .feature-item.new {
+            background: #fff3e0;
+            border-left-color: #ff9800;
+        }
+
+        .feature-item span {
+            margin-left: 8px;
+        }
+    </style>
+</head>
+<body>
+    <h1>JXL Polyfill Demo</h1>
+
+    <div class="status">
+        <strong>Status:</strong> <span id="status">Initializing...</span>
+    </div>
+
+    <div class="section">
+        <h2>What is this?</h2>
+        <p>
+            This polyfill automatically detects and converts JXL images to PNG in browsers
+            that don't have native JXL support. It works transparently across multiple contexts:
+        </p>
+        <div class="feature-list">
+            <div class="feature-item">
+                <span><code>&lt;img src="*.jxl"&gt;</code> - Standard image tags</span>
+            </div>
+            <div class="feature-item">
+                <span><code>new Image()</code> - JavaScript Image constructor</span>
+            </div>
+            <div class="feature-item new">
+                <span><code>background-image: url(*.jxl)</code> - CSS backgrounds</span>
+            </div>
+            <div class="feature-item new">
+                <span><code>&lt;source srcset="*.jxl"&gt;</code> - Picture element sources</span>
+            </div>
+            <div class="feature-item new">
+                <span><code>&lt;image href="*.jxl"&gt;</code> - SVG image elements</span>
+            </div>
+            <div class="feature-item new">
+                <span><code>&lt;feImage href="*.jxl"&gt;</code> - SVG filter images</span>
+            </div>
+        </div>
+    </div>
+
+    <div class="section">
+        <h2>Usage</h2>
+        <pre>&lt;!-- Just include the polyfill --&gt;
+&lt;script type="module" src="polyfill.js"&gt;&lt;/script&gt;
+
+&lt;!-- Use JXL images normally in any context --&gt;
+&lt;img src="photo.jxl" alt="My image"&gt;
+
+&lt;!-- CSS backgrounds work too --&gt;
+&lt;div style="background-image: url('bg.jxl')"&gt;&lt;/div&gt;
+
+&lt;!-- Picture element with JXL source --&gt;
+&lt;picture&gt;
+  &lt;source srcset="image.jxl" type="image/jxl"&gt;
+  &lt;img src="fallback.png"&gt;
+&lt;/picture&gt;
+
+&lt;!-- SVG images --&gt;
+&lt;svg&gt;&lt;image href="graphic.jxl" /&gt;&lt;/svg&gt;</pre>
+    </div>
+
+    <div class="section">
+        <h2>Test 1: Static &lt;img&gt; Elements</h2>
+        <p>These images are in the HTML on page load:</p>
+        <div class="image-grid" id="static-images">
+            <!-- Images will be added dynamically for testing -->
+        </div>
+    </div>
+
+    <div class="section">
+        <h2>Test 2: CSS Background Images</h2>
+        <p>Elements with <code>background-image: url(*.jxl)</code>:</p>
+        <div id="bg-demo-container">
+            <!-- Background demo boxes will be added here -->
+        </div>
+    </div>
+
+    <div class="section">
+        <h2>Test 3: &lt;picture&gt; with &lt;source srcset&gt;</h2>
+        <p>Using the <code>&lt;picture&gt;</code> element with JXL sources:</p>
+        <div class="image-grid" id="picture-demo">
+            <!-- Picture elements will be added here -->
+        </div>
+    </div>
+
+    <div class="section">
+        <h2>Test 4: SVG &lt;image&gt; Elements</h2>
+        <p>SVG elements using JXL images via <code>href</code> attribute:</p>
+        <div class="svg-demo" id="svg-demo">
+            <!-- SVG will be added here -->
+        </div>
+    </div>
+
+    <div class="section">
+        <h2>Test 5: Dynamic Operations</h2>
+        <button id="add-image-btn">Add &lt;img&gt; Dynamically</button>
+        <button id="add-image-js-btn">Add via new Image()</button>
+        <button id="add-bg-btn">Add CSS Background</button>
+        <button id="add-picture-btn">Add &lt;picture&gt; Element</button>
+        <div class="image-grid" id="dynamic-images"></div>
+    </div>
+
+    <div class="section">
+        <h2>Test 6: Change src Attribute</h2>
+        <button id="change-src-btn">Change Image Source</button>
+        <div class="image-grid">
+            <div class="image-card">
+                <img id="changeable-img" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" alt="Changeable">
+                <p>Click button to load JXL</p>
+            </div>
+        </div>
+    </div>
+
+    <div class="section">
+        <h2>Controls</h2>
+        <button id="clear-cache-btn">Clear Cache</button>
+        <button id="toggle-verbose-btn">Toggle Verbose Logging</button>
+        <p><small>Add <code>?jxl-debug</code> to URL for automatic verbose mode</small></p>
+    </div>
+
+    <div class="section">
+        <h2>Stats</h2>
+        <div id="stats"></div>
+    </div>
+
+    <script type="module">
+        // Wait for polyfill to initialize
+        function waitForPolyfill() {
+            return new Promise((resolve) => {
+                const check = () => {
+                    if (window.jxlPolyfill !== undefined) {
+                        resolve(window.jxlPolyfill);
+                    } else {
+                        setTimeout(check, 50);
+                    }
+                };
+                check();
+            });
+        }
+
+        // Update status after polyfill loads
+        setTimeout(() => {
+            const status = window.jxlPolyfill
+                ? 'Polyfill loaded and active'
+                : 'Native JXL support detected';
+            document.getElementById('status').textContent = status;
+        }, 200);
+
+        // Test images from jpegxl.info
+        const TEST_IMAGES = [
+            'https://jpegxl.info/images/dice.jxl',
+            'https://jpegxl.info/images/zoltan-tasi-CLJeQCr2F_A-unsplash.jxl',
+            'https://jpegxl.info/images/Webkit-logo-P3.jxl',
+            'https://jpegxl.info/images/anim-icos.jxl',
+        ];
+
+        // ==================== Test 1: Static Images ====================
+        const staticImagesDiv = document.getElementById('static-images');
+        if (TEST_IMAGES.length === 0) {
+            staticImagesDiv.innerHTML = `
+                <p style="color: #757575; font-style: italic;">
+                    No test images configured. Add JXL URLs to TEST_IMAGES array in the HTML.
+                </p>
+            `;
+        } else {
+            TEST_IMAGES.slice(0, 2).forEach((url, i) => {
+                staticImagesDiv.innerHTML += `
+                    <div class="image-card">
+                        <img src="${url}" alt="Test ${i + 1}">
+                        <p>Static &lt;img&gt; ${i + 1}</p>
+                    </div>
+                `;
+            });
+        }
+
+        // ==================== Test 2: CSS Backgrounds ====================
+        const bgContainer = document.getElementById('bg-demo-container');
+        if (TEST_IMAGES.length > 0) {
+            TEST_IMAGES.slice(0, 2).forEach((url, i) => {
+                const div = document.createElement('div');
+                div.className = 'bg-demo-box';
+                div.style.backgroundImage = `url("${url}")`;
+                div.title = `Background ${i + 1}: ${url}`;
+                bgContainer.appendChild(div);
+            });
+        } else {
+            bgContainer.innerHTML = '<p style="color: #757575;">No test images configured.</p>';
+        }
+
+        // ==================== Test 3: Picture Elements ====================
+        const pictureDemo = document.getElementById('picture-demo');
+        if (TEST_IMAGES.length > 0) {
+            TEST_IMAGES.slice(0, 2).forEach((url, i) => {
+                pictureDemo.innerHTML += `
+                    <div class="image-card">
+                        <picture>
+                            <source srcset="${url}" type="image/jxl">
+                            <img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" alt="Picture ${i + 1}">
+                        </picture>
+                        <p>&lt;picture&gt; with &lt;source&gt; ${i + 1}</p>
+                    </div>
+                `;
+            });
+        }
+
+        // ==================== Test 4: SVG Images ====================
+        const svgDemo = document.getElementById('svg-demo');
+        if (TEST_IMAGES.length > 0) {
+            svgDemo.innerHTML = `
+                <svg width="220" height="170" xmlns="http://www.w3.org/2000/svg">
+                    <rect width="220" height="170" fill="#f0f0f0" rx="4"/>
+                    <image href="${TEST_IMAGES[0]}" x="10" y="10" width="200" height="150" />
+                </svg>
+                <p style="margin-top: 8px; font-size: 12px; color: #757575;">
+                    SVG &lt;image&gt; element with JXL href
+                </p>
+            `;
+        }
+
+        // ==================== Dynamic Tests ====================
+        let dynamicCounter = 0;
+
+        // Add image dynamically (DOM)
+        document.getElementById('add-image-btn').addEventListener('click', () => {
+            if (TEST_IMAGES.length === 0) {
+                alert('Add JXL URLs to TEST_IMAGES array first');
+                return;
+            }
+
+            const container = document.getElementById('dynamic-images');
+            const url = TEST_IMAGES[dynamicCounter % TEST_IMAGES.length];
+
+            const card = document.createElement('div');
+            card.className = 'image-card';
+            card.innerHTML = `
+                <img src="${url}" alt="Dynamic ${++dynamicCounter}">
+                <p>Added via DOM (${new Date().toLocaleTimeString()})</p>
+            `;
+            container.appendChild(card);
+        });
+
+        // Add image via new Image()
+        document.getElementById('add-image-js-btn').addEventListener('click', () => {
+            if (TEST_IMAGES.length === 0) {
+                alert('Add JXL URLs to TEST_IMAGES array first');
+                return;
+            }
+
+            const container = document.getElementById('dynamic-images');
+            const url = TEST_IMAGES[dynamicCounter % TEST_IMAGES.length];
+
+            const card = document.createElement('div');
+            card.className = 'image-card';
+
+            const img = new Image();
+            img.src = url;
+            img.alt = `JS ${++dynamicCounter}`;
+
+            const p = document.createElement('p');
+            p.textContent = `Added via new Image() (${new Date().toLocaleTimeString()})`;
+
+            card.appendChild(img);
+            card.appendChild(p);
+            container.appendChild(card);
+        });
+
+        // Add CSS background dynamically
+        document.getElementById('add-bg-btn').addEventListener('click', () => {
+            if (TEST_IMAGES.length === 0) {
+                alert('Add JXL URLs to TEST_IMAGES array first');
+                return;
+            }
+
+            const container = document.getElementById('dynamic-images');
+            const url = TEST_IMAGES[dynamicCounter % TEST_IMAGES.length];
+
+            const card = document.createElement('div');
+            card.className = 'image-card';
+
+            const box = document.createElement('div');
+            box.className = 'bg-demo-box';
+            box.style.backgroundImage = `url("${url}")`;
+            box.style.width = '100%';
+            box.style.height = '150px';
+            box.style.margin = '0';
+
+            const p = document.createElement('p');
+            p.textContent = `CSS background (${new Date().toLocaleTimeString()})`;
+
+            card.appendChild(box);
+            card.appendChild(p);
+            container.appendChild(card);
+            dynamicCounter++;
+        });
+
+        // Add picture element dynamically
+        document.getElementById('add-picture-btn').addEventListener('click', () => {
+            if (TEST_IMAGES.length === 0) {
+                alert('Add JXL URLs to TEST_IMAGES array first');
+                return;
+            }
+
+            const container = document.getElementById('dynamic-images');
+            const url = TEST_IMAGES[dynamicCounter % TEST_IMAGES.length];
+
+            const card = document.createElement('div');
+            card.className = 'image-card';
+            card.innerHTML = `
+                <picture>
+                    <source srcset="${url}" type="image/jxl">
+                    <img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" alt="Dynamic picture">
+                </picture>
+                <p>&lt;picture&gt; element (${new Date().toLocaleTimeString()})</p>
+            `;
+            container.appendChild(card);
+            dynamicCounter++;
+        });
+
+        // Change src attribute
+        let srcToggle = false;
+        document.getElementById('change-src-btn').addEventListener('click', () => {
+            if (TEST_IMAGES.length === 0) {
+                alert('Add JXL URLs to TEST_IMAGES array first');
+                return;
+            }
+
+            const img = document.getElementById('changeable-img');
+            srcToggle = !srcToggle;
+
+            if (srcToggle) {
+                img.src = TEST_IMAGES[0];
+            } else {
+                img.src = 'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7';
+            }
+        });
+
+        // Clear cache
+        document.getElementById('clear-cache-btn').addEventListener('click', () => {
+            if (!window.jxlPolyfill) {
+                alert('Polyfill not active (native JXL support detected)');
+                return;
+            }
+            window.jxlPolyfill.clearCache();
+            alert('Cache cleared!');
+            updateStats();
+        });
+
+        // Toggle verbose
+        document.getElementById('toggle-verbose-btn').addEventListener('click', () => {
+            if (!window.jxlPolyfill) {
+                alert('Polyfill not active (native JXL support detected)');
+                return;
+            }
+            window.jxlPolyfill.options.verbose = !window.jxlPolyfill.options.verbose;
+            alert(`Verbose logging: ${window.jxlPolyfill.options.verbose ? 'ON' : 'OFF'}`);
+        });
+
+        // Update stats
+        function updateStats() {
+            const stats = document.getElementById('stats');
+            if (!window.jxlPolyfill) {
+                stats.innerHTML = `<p><em>Polyfill not active (native JXL support detected)</em></p>`;
+                return;
+            }
+            const s = window.jxlPolyfill.getStats();
+            stats.innerHTML = `
+                <p><strong>Cache size:</strong> ${s.cacheSize} images</p>
+                <p><strong>Currently processing:</strong> ${s.processingCount} images</p>
+                <p><strong>Initialized:</strong> ${s.initialized ? 'Yes' : 'No'}</p>
+            `;
+        }
+
+        // Update stats every second
+        setInterval(updateStats, 1000);
+        updateStats();
+    </script>
+
+    <!-- Include the polyfill -->
+    <script type="module" src="polyfill.js"></script>
+</body>
+</html>
