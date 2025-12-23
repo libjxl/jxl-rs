@@ -161,28 +161,145 @@ impl OutputDataType {
     }
 }
 
+/// Typed decode output that preserves the original output type.
+/// The caller is responsible for converting to f32 when needed for saving.
+pub enum TypedDecodeOutput {
+    U8(DecodeOutput<u8>),
+    U16(DecodeOutput<u16>),
+    F16(DecodeOutput<f16>),
+    F32(DecodeOutput<f32>),
+}
+
+impl TypedDecodeOutput {
+    /// Get the image size.
+    pub fn size(&self) -> (usize, usize) {
+        match self {
+            Self::U8(d) => d.size,
+            Self::U16(d) => d.size,
+            Self::F16(d) => d.size,
+            Self::F32(d) => d.size,
+        }
+    }
+
+    /// Get the output color profile.
+    pub fn output_profile(&self) -> &JxlColorProfile {
+        match self {
+            Self::U8(d) => &d.output_profile,
+            Self::U16(d) => &d.output_profile,
+            Self::F16(d) => &d.output_profile,
+            Self::F32(d) => &d.output_profile,
+        }
+    }
+
+    /// Get the embedded color profile.
+    pub fn embedded_profile(&self) -> &JxlColorProfile {
+        match self {
+            Self::U8(d) => &d.embedded_profile,
+            Self::U16(d) => &d.embedded_profile,
+            Self::F16(d) => &d.embedded_profile,
+            Self::F32(d) => &d.embedded_profile,
+        }
+    }
+
+    /// Get the original bit depth.
+    pub fn original_bit_depth(&self) -> &JxlBitDepth {
+        match self {
+            Self::U8(d) => &d.original_bit_depth,
+            Self::U16(d) => &d.original_bit_depth,
+            Self::F16(d) => &d.original_bit_depth,
+            Self::F32(d) => &d.original_bit_depth,
+        }
+    }
+
+    /// Convert to f32 output for saving to encoders.
+    pub fn to_f32(self) -> Result<DecodeOutput<f32>> {
+        match self {
+            Self::U8(d) => convert_decode_output_to_f32(d),
+            Self::U16(d) => convert_decode_output_to_f32(d),
+            Self::F16(d) => convert_decode_output_to_f32(d),
+            Self::F32(d) => Ok(d),
+        }
+    }
+
+    /// Truncate to keep only first N frames.
+    pub fn truncate_frames(&mut self, len: usize) {
+        match self {
+            Self::U8(d) => d.frames.truncate(len),
+            Self::U16(d) => d.frames.truncate(len),
+            Self::F16(d) => d.frames.truncate(len),
+            Self::F32(d) => d.frames.truncate(len),
+        }
+    }
+
+    /// Get the first frame's color type and channel size (for preview handling).
+    pub fn first_frame_info(&self) -> Option<(JxlColorType, (usize, usize))> {
+        match self {
+            Self::U8(d) => d
+                .frames
+                .first()
+                .map(|f| (f.color_type, f.channels[0].size())),
+            Self::U16(d) => d
+                .frames
+                .first()
+                .map(|f| (f.color_type, f.channels[0].size())),
+            Self::F16(d) => d
+                .frames
+                .first()
+                .map(|f| (f.color_type, f.channels[0].size())),
+            Self::F32(d) => d
+                .frames
+                .first()
+                .map(|f| (f.color_type, f.channels[0].size())),
+        }
+    }
+
+    /// Update the size field.
+    pub fn set_size(&mut self, size: (usize, usize)) {
+        match self {
+            Self::U8(d) => d.size = size,
+            Self::U16(d) => d.size = size,
+            Self::F16(d) => d.size = size,
+            Self::F32(d) => d.size = size,
+        }
+    }
+}
+
 /// Decode a JXL image with a specific output data type.
-/// The result is converted to f32 for compatibility with existing encoders.
-/// This allows benchmarking the decoder's conversion stages for different output types.
+/// Returns the raw typed output without conversion, so benchmark timing is accurate.
 pub fn decode_frames_with_type<In: JxlBitstreamInput>(
     input: &mut In,
     decoder_options: JxlDecoderOptions,
     output_type: OutputDataType,
-) -> Result<(DecodeOutput<f32>, Duration)> {
+) -> Result<(TypedDecodeOutput, Duration)> {
     match output_type {
-        OutputDataType::U8 => decode_frames_typed::<u8, _>(input, decoder_options, output_type),
-        OutputDataType::U16 => decode_frames_typed::<u16, _>(input, decoder_options, output_type),
-        OutputDataType::F16 => decode_frames_typed::<f16, _>(input, decoder_options, output_type),
-        OutputDataType::F32 => decode_frames(input, decoder_options),
+        OutputDataType::U8 => {
+            let (output, duration) =
+                decode_frames_typed::<u8, _>(input, decoder_options, output_type)?;
+            Ok((TypedDecodeOutput::U8(output), duration))
+        }
+        OutputDataType::U16 => {
+            let (output, duration) =
+                decode_frames_typed::<u16, _>(input, decoder_options, output_type)?;
+            Ok((TypedDecodeOutput::U16(output), duration))
+        }
+        OutputDataType::F16 => {
+            let (output, duration) =
+                decode_frames_typed::<f16, _>(input, decoder_options, output_type)?;
+            Ok((TypedDecodeOutput::F16(output), duration))
+        }
+        OutputDataType::F32 => {
+            let (output, duration) = decode_frames(input, decoder_options)?;
+            Ok((TypedDecodeOutput::F32(output), duration))
+        }
     }
 }
 
-/// Generic decoder that decodes to type T and converts to f32.
-fn decode_frames_typed<T: ImageDataType + ConvertToF32, In: JxlBitstreamInput>(
+/// Generic decoder that decodes to type T.
+fn decode_frames_typed<T: ImageDataType, In: JxlBitstreamInput>(
     input: &mut In,
     decoder_options: JxlDecoderOptions,
     output_type: OutputDataType,
-) -> Result<(DecodeOutput<f32>, Duration)> {
+) -> Result<(DecodeOutput<T>, Duration)> {
     let start = Instant::now();
 
     let mut decoder_with_image_info = decode_header(input, decoder_options)?;
@@ -258,15 +375,9 @@ fn decode_frames_typed<T: ImageDataType + ConvertToF32, In: JxlBitstreamInput>(
             ProcessingResult::NeedsMoreInput { .. } => return Err(eyre!("Source file truncated")),
         };
 
-        // Convert typed outputs to f32
-        let f32_outputs: Vec<Image<f32>> = typed_outputs
-            .into_iter()
-            .map(|img| convert_image_to_f32(img))
-            .collect::<Result<_, _>>()?;
-
         image_data.frames.push(ImageFrame {
             duration: frame_header.duration.unwrap_or(0.0),
-            channels: f32_outputs,
+            channels: typed_outputs,
             color_type,
         });
 
@@ -301,10 +412,37 @@ impl ConvertToF32 for f16 {
     }
 }
 
+/// Convert a DecodeOutput from type T to f32.
+fn convert_decode_output_to_f32<T: ImageDataType + ConvertToF32>(
+    src: DecodeOutput<T>,
+) -> Result<DecodeOutput<f32>> {
+    let mut frames = Vec::with_capacity(src.frames.len());
+    for frame in src.frames {
+        let channels: Vec<Image<f32>> = frame
+            .channels
+            .into_iter()
+            .map(|img| convert_image_to_f32(img))
+            .collect::<std::result::Result<_, _>>()?;
+        frames.push(ImageFrame {
+            channels,
+            duration: frame.duration,
+            color_type: frame.color_type,
+        });
+    }
+    Ok(DecodeOutput {
+        size: src.size,
+        frames,
+        original_bit_depth: src.original_bit_depth,
+        output_profile: src.output_profile,
+        embedded_profile: src.embedded_profile,
+        jxl_animation: src.jxl_animation,
+    })
+}
+
 /// Convert an image from type T to f32.
 fn convert_image_to_f32<T: ImageDataType + ConvertToF32>(
     src: Image<T>,
-) -> Result<Image<f32>, jxl::error::Error> {
+) -> std::result::Result<Image<f32>, jxl::error::Error> {
     let size = src.size();
     let mut dst = Image::<f32>::new(size)?;
 

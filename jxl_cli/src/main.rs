@@ -202,62 +202,64 @@ fn main() -> Result<()> {
         )
     })?;
 
-    let mut image_data = if reps > 1 {
+    // Decode to typed output (timing excludes f32 conversion)
+    let typed_output = if reps > 1 {
         // For multiple repetitions (benchmarking), read into memory to avoid I/O variability
         let mut input_bytes = Vec::<u8>::new();
         file.read_to_end(&mut input_bytes)?;
         (0..reps)
-            .try_fold(None, |_, _| -> Result<Option<dec::DecodeOutput<f32>>> {
+            .try_fold(None, |_, _| -> Result<Option<dec::TypedDecodeOutput>> {
                 let mut input = input_bytes.as_slice();
-                let (mut iteration_image_data, iteration_duration) =
+                let (mut iteration_output, iteration_duration) =
                     dec::decode_frames_with_type(&mut input, options(skip_preview), output_type)?;
                 duration_sum += iteration_duration;
                 // When extracting preview, only keep the first frame (the preview)
                 if opt.preview {
-                    iteration_image_data.frames.truncate(1);
-                    if let Some(frame) = iteration_image_data.frames.first() {
-                        let samples = if frame.color_type == JxlColorType::Grayscale {
+                    iteration_output.truncate_frames(1);
+                    if let Some((color_type, (w, h))) = iteration_output.first_frame_info() {
+                        let samples = if color_type == JxlColorType::Grayscale {
                             1
                         } else {
                             3
                         };
-                        let (w, h) = frame.channels[0].size();
-                        iteration_image_data.size = (w / samples, h);
+                        iteration_output.set_size((w / samples, h));
                     }
                 }
-                Ok(Some(iteration_image_data))
+                Ok(Some(iteration_output))
             })?
             .unwrap()
     } else {
         // For single decode, stream from file
         let mut reader = BufReader::new(file);
-        let (mut image_data, duration) =
+        let (mut typed_output, duration) =
             dec::decode_frames_with_type(&mut reader, options(skip_preview), output_type)?;
         duration_sum = duration;
         // When extracting preview, only keep the first frame (the preview)
         if opt.preview {
-            image_data.frames.truncate(1);
-            if let Some(frame) = image_data.frames.first() {
-                let samples = if frame.color_type == JxlColorType::Grayscale {
+            typed_output.truncate_frames(1);
+            if let Some((color_type, (w, h))) = typed_output.first_frame_info() {
+                let samples = if color_type == JxlColorType::Grayscale {
                     1
                 } else {
                     3
                 };
-                let (w, h) = frame.channels[0].size();
-                image_data.size = (w / samples, h);
+                typed_output.set_size((w / samples, h));
             }
         }
-        image_data
+        typed_output
     };
 
-    let data_icc_result = save_icc(
-        image_data.output_profile.as_icc().as_slice(),
-        opt.icc_out.as_ref(),
-    );
-    let original_icc_result = save_icc(
-        image_data.embedded_profile.as_icc().as_slice(),
-        opt.original_icc_out.as_ref(),
-    );
+    // Get metadata from typed output before converting
+    let output_icc = typed_output.output_profile().as_icc().to_vec();
+    let embedded_icc = typed_output.embedded_profile().as_icc().to_vec();
+    let image_size = typed_output.size();
+    let original_bit_depth = typed_output.original_bit_depth().clone();
+
+    // Convert to f32 for saving (this happens AFTER timing is captured)
+    let mut image_data = typed_output.to_f32()?;
+
+    let data_icc_result = save_icc(&output_icc, opt.icc_out.as_ref());
+    let original_icc_result = save_icc(&embedded_icc, opt.original_icc_out.as_ref());
 
     for frame in image_data.frames.iter_mut() {
         if frame.color_type != JxlColorType::Grayscale {
@@ -268,7 +270,7 @@ fn main() -> Result<()> {
     }
 
     if opt.speedtest {
-        let num_pixels = image_data.size.0 * image_data.size.1;
+        let num_pixels = image_size.0 * image_size.1;
         let duration_seconds = duration_sum.as_nanos() as f64 / 1e9;
         let avg_seconds = duration_seconds / reps as f64;
         println!(
@@ -281,7 +283,7 @@ fn main() -> Result<()> {
 
     let image_result: Option<Result<()>> = opt.output.map(|path| {
         let output_bit_depth = match opt.override_bitdepth {
-            None => image_data.original_bit_depth.bits_per_sample(),
+            None => original_bit_depth.bits_per_sample(),
             Some(num_bits) => num_bits,
         };
         let image_result = save_image(&image_data, output_bit_depth, &path);
