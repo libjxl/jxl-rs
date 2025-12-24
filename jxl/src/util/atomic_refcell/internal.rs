@@ -212,10 +212,10 @@ impl<'a, T: ?Sized> AtomicRefMut<'a, T> {
 
     #[inline]
     pub fn map<U: ?Sized>(mut orig: Self, f: impl FnOnce(&mut T) -> &mut U) -> AtomicRefMut<'a, U> {
-        // Safety note: `f(&*orig)` is derived from `orig.ptr` (via `DerefMut` impl), therefore
+        // Safety note: `f(&mut *orig)` is derived from `orig.ptr` (via `DerefMut` impl), therefore
         // `ptr` is derived from the same `AtomicRefCell` that `orig.token` is obtained from.
         AtomicRefMut {
-            ptr: NonNull::from_ref(f(&mut *orig)),
+            ptr: NonNull::from_mut(f(&mut *orig)),
             token: orig.token,
             _phantom: PhantomData,
         }

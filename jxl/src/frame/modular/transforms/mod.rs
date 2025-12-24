@@ -3,14 +3,13 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-use std::cell::RefCell;
-
 use apply::TransformStep;
 pub use apply::TransformStepChunk;
 use num_derive::FromPrimitive;
 
 use crate::frame::modular::ModularBuffer;
 use crate::headers::frame_header::FrameHeader;
+use crate::util::AtomicRefCell;
 use crate::util::tracing_wrappers::*;
 
 use super::{ModularBufferInfo, ModularGridKind, Predictor};
@@ -116,7 +115,7 @@ pub fn make_grids(
         let is_output = g.info.output_channel_idx >= 0;
         g.buffer_grid = get_grid_indices(g.grid_shape)
             .map(|(x, y)| ModularBuffer {
-                data: RefCell::new(None),
+                data: AtomicRefCell::new(None),
                 remaining_uses: if is_output { 1 } else { 0 },
                 used_by_transforms: vec![],
                 size: g
