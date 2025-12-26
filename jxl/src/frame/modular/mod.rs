@@ -709,7 +709,9 @@ pub fn decode_vardct_lf(
     lf_image: &mut [Image<f32>; 3],
     quant_lf: &mut Image<u8>,
     br: &mut BitReader,
-    #[cfg(feature = "jpeg-reconstruction")] jpeg_dc_coeffs: Option<&mut crate::jpeg::JpegDctCoefficients>,
+    #[cfg(feature = "jpeg-reconstruction")] jpeg_dc_coeffs: Option<
+        &mut crate::jpeg::JpegDctCoefficients,
+    >,
 ) -> Result<()> {
     let extra_precision = br.read(2)?;
     debug!(?extra_precision);
@@ -758,7 +760,13 @@ pub fn decode_vardct_lf(
 
             let buffer = &buffers[buf_idx].data;
             // The hshift/vshift correspond to the VarDCT channel index used in shrink_rect
-            let vardct_channel = if buf_idx == 0 { 1 } else if buf_idx == 1 { 0 } else { 2 };
+            let vardct_channel = if buf_idx == 0 {
+                1
+            } else if buf_idx == 1 {
+                0
+            } else {
+                2
+            };
             let hshift = frame_header.hshift(vardct_channel);
             let vshift = frame_header.vshift(vardct_channel);
 
@@ -773,7 +781,6 @@ pub fn decode_vardct_lf(
                 }
             }
         }
-
     }
 
     dequant_lf(

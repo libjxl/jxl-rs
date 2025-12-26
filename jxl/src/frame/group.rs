@@ -7,6 +7,8 @@ use num_traits::Float;
 
 use jxl_transforms::{transform::*, transform_map::*};
 
+#[cfg(feature = "jpeg-reconstruction")]
+use crate::jpeg::JpegDctCoefficients;
 use crate::{
     BLOCK_DIM, BLOCK_SIZE, GROUP_DIM,
     bit_reader::BitReader,
@@ -20,8 +22,6 @@ use crate::{
     image::{Image, ImageRect, Rect},
     util::{CeilLog2, ShiftRightCeil, SmallVec, tracing_wrappers::*},
 };
-#[cfg(feature = "jpeg-reconstruction")]
-use crate::jpeg::JpegDctCoefficients;
 use jxl_simd::{F32SimdVec, I32SimdVec, SimdDescriptor, SimdMask, simd_function};
 
 const LF_BUFFER_SIZE: usize = 32 * 32;
@@ -591,9 +591,24 @@ pub fn decode_vardct_group(
             #[cfg(feature = "jpeg-reconstruction")]
             if let Some(ref mut jpeg_storage) = jpeg_coeffs {
                 if transform_type == HfTransformType::DCT {
-                    let channel_map = [1usize, 0, 2];
-                    for jpeg_comp in 0..jpeg_storage.num_components.min(3) {
-                        let vardct_chan = channel_map[jpeg_comp];
+                    // For JPEG, channel mapping is:
+                    // XYB channel 0 (X) -> JPEG Cb (component 1)
+                    // XYB channel 1 (Y) -> JPEG Y (component 0)
+                    // XYB channel 2 (B) -> JPEG Cr (component 2)
+                    // But for lossless JPEG recompression, the coefficients are stored
+                    // in the original order, so we use direct mapping.
+                    // Store coefficients for each component
+                    // Channel order in VarDCT: 1, 0, 2 (Y, X, B)
+                    // For JPEG YCbCr: component 0=Y, 1=Cb, 2=Cr
+                    // Mapping: VarDCT channel 1 -> JPEG 0 (Y)
+                    //          VarDCT channel 0 -> JPEG 1 (Cb)
+                    //          VarDCT channel 2 -> JPEG 2 (Cr)
+                    let channel_map = [1usize, 0, 2]; // JPEG component -> VarDCT channel
+                    for (jpeg_comp, &vardct_chan) in channel_map
+                        .iter()
+                        .enumerate()
+                        .take(jpeg_storage.num_components.min(3))
+                    {
                         if (sbx[vardct_chan] << hshift[vardct_chan]) != bx
                             || (sby[vardct_chan] << vshift[vardct_chan]) != by
                         {

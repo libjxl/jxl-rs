@@ -245,6 +245,10 @@ impl Frame {
             lf_global_was_rendered: false,
             vardct_buffers: None,
             groups_to_flush: BTreeSet::new(),
+            #[cfg(feature = "jpeg-reconstruction")]
+            jpeg_coefficients: None,
+            #[cfg(feature = "jpeg-reconstruction")]
+            preserve_jpeg_coefficients: false,
         })
     }
 
@@ -390,6 +394,12 @@ impl Frame {
         let lf_global = self.lf_global.as_mut().unwrap();
         if self.header.encoding == Encoding::VarDCT && !self.header.has_lf_frame() {
             info!("decoding VarDCT LF with group id {}", group);
+            #[cfg(feature = "jpeg-reconstruction")]
+            let jpeg_dc_coeffs = if self.preserve_jpeg_coefficients {
+                self.jpeg_coefficients.as_mut()
+            } else {
+                None
+            };
             decode_vardct_lf(
                 group,
                 &self.header,
@@ -402,6 +412,8 @@ impl Frame {
                 self.lf_image.as_mut().unwrap(),
                 &mut self.quant_lf,
                 br,
+                #[cfg(feature = "jpeg-reconstruction")]
+                jpeg_dc_coeffs,
             )?;
         }
         lf_global.modular_global.read_stream(
@@ -643,6 +655,13 @@ impl Frame {
                 None
             };
             let buffers = self.vardct_buffers.get_or_insert_with(VarDctBuffers::new);
+            #[cfg(feature = "jpeg-reconstruction")]
+            let jpeg_coeffs = if self.preserve_jpeg_coefficients {
+                self.jpeg_coefficients.as_mut()
+            } else {
+                None
+            };
+
             if pass_to_render.is_none() && do_render {
                 upsample_lf_group(
                     group,
@@ -669,6 +688,8 @@ impl Frame {
                         .quant_biases,
                     &mut pixels,
                     buffers,
+                    #[cfg(feature = "jpeg-reconstruction")]
+                    jpeg_coeffs,
                 )?;
             }
             if let Some(pixels) = pixels {

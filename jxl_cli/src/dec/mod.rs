@@ -19,6 +19,9 @@ use jxl::{
     image::{OwnedRawImage, Rect},
 };
 
+#[cfg(feature = "jpeg-reconstruction")]
+use jxl::api::JpegReconstructionData;
+
 pub struct ImageFrame {
     pub channels: Vec<OwnedRawImage>,
     pub duration: f64,
@@ -33,6 +36,8 @@ pub struct DecodeOutput {
     pub output_profile: JxlColorProfile,
     pub embedded_profile: JxlColorProfile,
     pub jxl_animation: Option<JxlAnimation>,
+    #[cfg(feature = "jpeg-reconstruction")]
+    pub jpeg_reconstruction_data: Option<JpegReconstructionData>,
 }
 
 pub fn decode_header<In: JxlBitstreamInput>(
@@ -182,6 +187,8 @@ pub fn decode_frames<In: JxlBitstreamInput>(
         output_profile,
         embedded_profile,
         jxl_animation: info.animation.clone(),
+        #[cfg(feature = "jpeg-reconstruction")]
+        jpeg_reconstruction_data: None,
     };
 
     let extra_channels = info.extra_channels.len() - if interleave_alpha { 1 } else { 0 };
@@ -253,6 +260,13 @@ pub fn decode_frames<In: JxlBitstreamInput>(
         if !decoder_with_image_info.has_more_frames() {
             break;
         }
+    }
+
+    // Extract JPEG reconstruction data if available
+    #[cfg(feature = "jpeg-reconstruction")]
+    {
+        image_data.jpeg_reconstruction_data =
+            decoder_with_image_info.jpeg_reconstruction_data().cloned();
     }
 
     Ok((image_data, start.elapsed()))
