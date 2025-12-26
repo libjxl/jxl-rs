@@ -24,6 +24,8 @@ use block_context_map::BlockContextMap;
 use color_correlation_map::ColorCorrelationParams;
 use modular::{FullModularImage, Tree};
 use quant_weights::DequantMatrices;
+#[cfg(feature = "jpeg-reconstruction")]
+use quant_weights::QuantEncoding;
 use quantizer::{LfQuantFactors, QuantizerParams};
 
 mod adaptive_lf_smoothing;
@@ -165,6 +167,10 @@ pub struct HfMetadata {
     used_hf_types: u32,
 }
 
+// Re-export JpegDctCoefficients for JPEG reconstruction
+#[cfg(feature = "jpeg-reconstruction")]
+pub use crate::jpeg::JpegDctCoefficients;
+
 pub struct Frame {
     header: FrameHeader,
     toc: Toc,
@@ -190,6 +196,12 @@ pub struct Frame {
     last_rendered_pass: Vec<Option<usize>>,
     // Groups that should be rendered on the next call to flush().
     groups_to_flush: BTreeSet<usize>,
+    /// Storage for raw DCT coefficients (for JPEG reconstruction)
+    #[cfg(feature = "jpeg-reconstruction")]
+    pub jpeg_coefficients: Option<JpegDctCoefficients>,
+    /// Whether to preserve DCT coefficients for JPEG reconstruction
+    #[cfg(feature = "jpeg-reconstruction")]
+    preserve_jpeg_coefficients: bool,
 }
 
 impl Frame {
@@ -203,6 +215,67 @@ impl Frame {
 
     pub fn total_bytes_in_toc(&self) -> usize {
         self.toc.entries.iter().map(|x| *x as usize).sum()
+    }
+
+    /// Enable coefficient preservation for JPEG reconstruction.
+    /// This also initializes the coefficient storage if not already done.
+    #[cfg(feature = "jpeg-reconstruction")]
+    pub fn set_preserve_jpeg_coefficients(&mut self, preserve: bool) {
+        eprintln!("DEBUG: set_preserve_jpeg_coefficients({})", preserve);
+        self.preserve_jpeg_coefficients = preserve;
+        if preserve && self.jpeg_coefficients.is_none() {
+            self.init_jpeg_coefficients();
+        }
+    }
+
+    /// Initialize JPEG coefficient storage based on frame dimensions.
+    #[cfg(feature = "jpeg-reconstruction")]
+    fn init_jpeg_coefficients(&mut self) {
+        let (width, height) = self.header.size_upsampled();
+        let num_components = if self.color_channels == 1 { 1 } else { 3 };
+        eprintln!("DEBUG: init_jpeg_coefficients: {}x{}, {} components", width, height, num_components);
+        let component_map = if num_components == 1 { [1usize, 1, 1] } else { [1usize, 0, 2] };
+        let mut component_blocks = Vec::with_capacity(num_components);
+        for &vardct_chan in component_map.iter().take(num_components) {
+            let hshift = self.header.hshift(vardct_chan);
+            let vshift = self.header.vshift(vardct_chan);
+            let denom_x = 8usize << hshift;
+            let denom_y = 8usize << vshift;
+            let blocks_x = (width + denom_x - 1) / denom_x;
+            let blocks_y = (height + denom_y - 1) / denom_y;
+            component_blocks.push((blocks_x, blocks_y));
+        }
+
+        self.jpeg_coefficients =
+            Some(JpegDctCoefficients::new(width, height, &component_blocks));
+    }
+
+    /// Check if coefficient preservation is enabled.
+    #[cfg(feature = "jpeg-reconstruction")]
+    pub fn preserve_jpeg_coefficients(&self) -> bool {
+        self.preserve_jpeg_coefficients
+    }
+
+    /// Get the stored JPEG coefficients (if any).
+    #[cfg(feature = "jpeg-reconstruction")]
+    pub fn jpeg_coefficients(&self) -> Option<&JpegDctCoefficients> {
+        self.jpeg_coefficients.as_ref()
+    }
+
+    /// Take ownership of the stored JPEG coefficients.
+    #[cfg(feature = "jpeg-reconstruction")]
+    pub fn take_jpeg_coefficients(&mut self) -> Option<JpegDctCoefficients> {
+        self.jpeg_coefficients.take()
+    }
+
+    #[cfg(feature = "jpeg-reconstruction")]
+    pub fn jpeg_raw_quant_table(&self) -> Option<(&[i32], f32)> {
+        let hf_global = self.hf_global.as_ref()?;
+        let encoding = hf_global.dequant_matrices.encodings().get(0)?;
+        match encoding {
+            QuantEncoding::Raw { qtable, qtable_den } => Some((qtable.as_slice(), *qtable_den)),
+            _ => None,
+        }
     }
 
     #[instrument(level = "debug", skip(self), ret)]

@@ -20,6 +20,8 @@ use crate::{
     image::{Image, ImageRect, Rect},
     util::{CeilLog2, ShiftRightCeil, SmallVec, tracing_wrappers::*},
 };
+#[cfg(feature = "jpeg-reconstruction")]
+use crate::jpeg::JpegDctCoefficients;
 use jxl_simd::{F32SimdVec, I32SimdVec, SimdDescriptor, SimdMask, simd_function};
 
 const LF_BUFFER_SIZE: usize = 32 * 32;
@@ -377,6 +379,7 @@ pub fn decode_vardct_group(
     quant_biases: &[f32; 4],
     pixels: &mut Option<[Image<f32>; 3]>,
     buffers: &mut VarDctBuffers,
+    #[cfg(feature = "jpeg-reconstruction")] mut jpeg_coeffs: Option<&mut JpegDctCoefficients>,
 ) -> Result<(), Error> {
     let x_dm_multiplier = (1.0 / (1.25)).powf(frame_header.x_qm_scale as f32 - 2.0);
     let b_dm_multiplier = (1.0 / (1.25)).powf(frame_header.b_qm_scale as f32 - 2.0);
@@ -578,12 +581,39 @@ pub fn decode_vardct_group(
                     }
                 }
             }
+            let qblock = [
+                &coeffs[0][coeffs_offset..],
+                &coeffs[1][coeffs_offset..],
+                &coeffs[2][coeffs_offset..],
+            ];
+
+            // Extract JPEG coefficients if requested (only for 8x8 DCT blocks)
+            #[cfg(feature = "jpeg-reconstruction")]
+            if let Some(ref mut jpeg_storage) = jpeg_coeffs {
+                if transform_type == HfTransformType::DCT {
+                    let channel_map = [1usize, 0, 2];
+                    for jpeg_comp in 0..jpeg_storage.num_components.min(3) {
+                        let vardct_chan = channel_map[jpeg_comp];
+                        if (sbx[vardct_chan] << hshift[vardct_chan]) != bx
+                            || (sby[vardct_chan] << vshift[vardct_chan]) != by
+                        {
+                            continue;
+                        }
+                        let comp_bx =
+                            (block_group_rect.origin.0 >> hshift[vardct_chan]) + sbx[vardct_chan];
+                        let comp_by =
+                            (block_group_rect.origin.1 >> vshift[vardct_chan]) + sby[vardct_chan];
+                        jpeg_storage.store_block(
+                            jpeg_comp,
+                            comp_bx,
+                            comp_by,
+                            &qblock[vardct_chan][..64],
+                        );
+                    }
+                }
+            }
+
             if let Some(pixels) = pixels {
-                let qblock = [
-                    &coeffs[0][coeffs_offset..],
-                    &coeffs[1][coeffs_offset..],
-                    &coeffs[2][coeffs_offset..],
-                ];
                 let dequant_matrices = &hf_global.dequant_matrices;
                 dequant_and_transform_to_pixels_dispatch(
                     quant_biases,
