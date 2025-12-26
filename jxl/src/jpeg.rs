@@ -96,9 +96,8 @@ pub struct JpegHuffmanCode {
 impl JpegHuffmanCode {
     fn dht_counts_and_values_len(&self) -> ([u8; 16], usize) {
         let total_count: usize = self.counts.iter().map(|&c| c as usize).sum();
-        let has_sentinel = total_count > 0
-            && self.values.last() == Some(&256)
-            && self.values.len() == total_count;
+        let has_sentinel =
+            total_count > 0 && self.values.last() == Some(&256) && self.values.len() == total_count;
         let mut counts = self.counts;
         let mut values_len = self.values.len();
         if has_sentinel {
@@ -263,15 +262,13 @@ impl JpegDctCoefficients {
 
         // Store AC coefficients only (skip index 0 which is DC)
         // DC is stored separately from LF group via store_dc()
-        for i in 1..64 {
-            let zigzag_idx = JPEG_NATURAL_ORDER[i];
+        for (i, &zigzag_idx) in JPEG_NATURAL_ORDER.iter().enumerate().skip(1) {
             let x = zigzag_idx % 8;
             let y = zigzag_idx / 8;
             let transposed_idx = x * 8 + y;
             self.coefficients[component][offset + i] =
                 coeffs[transposed_idx].clamp(-32768, 32767) as i16;
         }
-
     }
 
     /// Get coefficients for a block in zigzag order.
@@ -376,12 +373,12 @@ impl JpegReconstructionData {
         }
 
         // Count APP and COM markers from the marker_order
-        let num_app_markers = result.marker_order.iter()
+        let num_app_markers = result
+            .marker_order
+            .iter()
             .filter(|&&m| (0xE0..=0xEF).contains(&m))
             .count();
-        let num_com_markers = result.marker_order.iter()
-            .filter(|&&m| m == 0xFE)
-            .count();
+        let num_com_markers = result.marker_order.iter().filter(|&&m| m == 0xFE).count();
 
         // 3. For each APP marker: read type AND length together
         // libjxl loops: for each app { read type; read 16-bit length }
@@ -391,7 +388,9 @@ impl JpegReconstructionData {
             // Type: U32(Val(0), Val(1), BitsOffset(1, 2), BitsOffset(2, 4))
             let bits_before = reader.total_bits_read();
             let marker_type = Self::read_u32_app_type(&mut reader)?;
-            result.app_marker_types.push(AppMarkerType::try_from(marker_type as u8)?);
+            result
+                .app_marker_types
+                .push(AppMarkerType::try_from(marker_type as u8)?);
 
             // Length: 16 bits (stored as length - 1)
             let len = reader.read(16)? as usize + 1;
@@ -434,9 +433,10 @@ impl JpegReconstructionData {
 
         // Determine number of components
         let num_components = match component_type {
-            0 => 1,  // kGray
-            1 | 2 => 3,  // kYCbCr or kRGB
-            3 => {  // kCustom
+            0 => 1,     // kGray
+            1 | 2 => 3, // kYCbCr or kRGB
+            3 => {
+                // kCustom
                 let n = Self::read_u32_general(&mut reader)? as usize;
                 if n != 1 && n != 3 {
                     return Err(Error::InvalidJpegReconstructionData);
@@ -461,10 +461,10 @@ impl JpegReconstructionData {
         for i in 0..num_components {
             // Determine component ID based on type
             let id = match component_type {
-                0 => 1,  // kGray
-                1 => (i + 1) as u8,  // kYCbCr: 1, 2, 3
-                2 => [b'R', b'G', b'B'][i],  // kRGB
-                3 => custom_ids[i],  // kCustom
+                0 => 1,                     // kGray
+                1 => (i + 1) as u8,         // kYCbCr: 1, 2, 3
+                2 => [b'R', b'G', b'B'][i], // kRGB
+                3 => custom_ids[i],         // kCustom
                 _ => return Err(Error::InvalidJpegReconstructionData),
             };
 
@@ -473,8 +473,8 @@ impl JpegReconstructionData {
 
             let component = JpegComponent {
                 id,
-                h_samp_factor: 1,  // Default, set from JPEG header during reconstruction
-                v_samp_factor: 1,  // Default, set from JPEG header during reconstruction
+                h_samp_factor: 1, // Default, set from JPEG header during reconstruction
+                v_samp_factor: 1, // Default, set from JPEG header during reconstruction
                 quant_idx,
             };
             let _ = i; // silence unused warning
@@ -490,7 +490,7 @@ impl JpegReconstructionData {
             // libjxl: is_ac (Bool), id (2 bits)
             let is_ac = reader.read(1)? != 0;
             let id = reader.read(2)? as u8;
-            code.slot_id = id;  // slot_id is just the 2-bit id, not combined with table_class
+            code.slot_id = id; // slot_id is just the 2-bit id, not combined with table_class
             code.table_class = if is_ac { 1 } else { 0 };
             code.is_last = reader.read(1)? != 0;
 
@@ -502,7 +502,7 @@ impl JpegReconstructionData {
             for j in 0..17 {
                 let count = Self::read_u32_huffman_count(&mut reader)? as u8;
                 if j > 0 && j <= 16 {
-                    code.counts[j - 1] = count;  // jbrd index j -> DHT counts[j-1]
+                    code.counts[j - 1] = count; // jbrd index j -> DHT counts[j-1]
                     num_symbols += count as usize;
                 }
             }
@@ -568,7 +568,10 @@ impl JpegReconstructionData {
                 let delta = Self::read_u32_block_idx(&mut reader)?;
                 let block_idx = (last_block_idx + 1) as u32 + delta;
                 last_block_idx = block_idx as i32;
-                result.scan_info[s].reset_points.push(JpegResetPoint { mcu: block_idx, last_dc: Vec::new() });
+                result.scan_info[s].reset_points.push(JpegResetPoint {
+                    mcu: block_idx,
+                    last_dc: Vec::new(),
+                });
             }
         }
 
@@ -582,13 +585,15 @@ impl JpegReconstructionData {
                 let delta = Self::read_u32_block_idx(&mut reader)?;
                 let block_idx = (last_block_idx + 1) as u32 + delta;
                 last_block_idx = block_idx as i32;
-                result.scan_info[s].extra_zero_runs.push((block_idx, num_zeros));
+                result.scan_info[s]
+                    .extra_zero_runs
+                    .push((block_idx, num_zeros));
             }
         }
 
         // 9. restart_interval - only read if has_dri marker (DRI = 0xDD)
         // Check if any marker is DRI (0xDD)
-        let has_dri = result.marker_order.iter().any(|&m| m == 0xDD);
+        let has_dri = result.marker_order.contains(&0xDD);
         if has_dri {
             result.restart_interval = reader.read(16)? as u32;
         } else {
@@ -714,7 +719,9 @@ impl JpegReconstructionData {
             if offset + size > decompressed.len() {
                 return Err(Error::InvalidJpegReconstructionData);
             }
-            result.com_data.push(decompressed[offset..offset + size].to_vec());
+            result
+                .com_data
+                .push(decompressed[offset..offset + size].to_vec());
             offset += size;
         }
 
@@ -727,7 +734,9 @@ impl JpegReconstructionData {
                 if offset + size > decompressed.len() {
                     return Err(Error::InvalidJpegReconstructionData);
                 }
-                result.inter_marker_data.push(decompressed[offset..offset + size].to_vec());
+                result
+                    .inter_marker_data
+                    .push(decompressed[offset..offset + size].to_vec());
                 offset += size;
             }
         }
@@ -825,7 +834,6 @@ impl JpegReconstructionData {
         }
     }
 
-
     /// Read U32(Val(1), Val(2), Val(3), Val(4)) for num_components
     fn read_u32_num_components(reader: &mut BitReader) -> Result<u32> {
         let selector = reader.read(2)?;
@@ -910,7 +918,6 @@ impl JpegReconstructionData {
         }
     }
 
-
     /// Check if this structure contains valid JPEG reconstruction data.
     /// Note: width/height come from the codestream, so we don't check them here.
     pub fn is_valid(&self) -> bool {
@@ -942,9 +949,8 @@ impl JpegReconstructionData {
         };
 
         let mut qt_set = 0u32;
-        for c in 0..num_components.min(3) {
+        for (c, &mapped_comp) in jpeg_c_map.iter().enumerate().take(num_components.min(3)) {
             let quant_c = if is_gray { 1 } else { c };
-            let mapped_comp = jpeg_c_map[c];
             if mapped_comp >= self.components.len() {
                 return Err(Error::InvalidJpegReconstructionData);
             }
@@ -1039,56 +1045,70 @@ impl JpegReconstructionData {
         self.is_gray = is_gray;
 
         // Create standard quantization tables
-        let mut lum_quant = JpegQuantTable::default();
-        lum_quant.index = 0;
-        lum_quant.is_last = is_gray;
-        lum_quant.values = STD_LUMINANCE_QUANT_TBL;
+        let lum_quant = JpegQuantTable {
+            index: 0,
+            is_last: is_gray,
+            values: STD_LUMINANCE_QUANT_TBL,
+            ..Default::default()
+        };
         self.quant_tables.push(lum_quant);
 
         if !is_gray {
-            let mut chrom_quant = JpegQuantTable::default();
-            chrom_quant.index = 1;
-            chrom_quant.is_last = true;
-            chrom_quant.values = STD_CHROMINANCE_QUANT_TBL;
+            let chrom_quant = JpegQuantTable {
+                index: 1,
+                is_last: true,
+                values: STD_CHROMINANCE_QUANT_TBL,
+                ..Default::default()
+            };
             self.quant_tables.push(chrom_quant);
         }
 
         // Create standard Huffman codes
         // DC Luminance
-        let mut dc_lum = JpegHuffmanCode::default();
-        dc_lum.table_class = 0;
-        dc_lum.slot_id = 0;
-        dc_lum.is_last = false;
-        dc_lum.counts = STD_DC_LUMINANCE_NRCODES;
-        dc_lum.values = STD_DC_LUMINANCE_VALUES.iter().map(|&v| v as u16).collect();
+        let dc_lum = JpegHuffmanCode {
+            table_class: 0,
+            slot_id: 0,
+            is_last: false,
+            counts: STD_DC_LUMINANCE_NRCODES,
+            values: STD_DC_LUMINANCE_VALUES.iter().map(|&v| v as u16).collect(),
+        };
         self.huffman_codes.push(dc_lum);
 
         // AC Luminance
-        let mut ac_lum = JpegHuffmanCode::default();
-        ac_lum.table_class = 1;
-        ac_lum.slot_id = 0;
-        ac_lum.is_last = is_gray;
-        ac_lum.counts = STD_AC_LUMINANCE_NRCODES;
-        ac_lum.values = STD_AC_LUMINANCE_VALUES.iter().map(|&v| v as u16).collect();
+        let ac_lum = JpegHuffmanCode {
+            table_class: 1,
+            slot_id: 0,
+            is_last: is_gray,
+            counts: STD_AC_LUMINANCE_NRCODES,
+            values: STD_AC_LUMINANCE_VALUES.iter().map(|&v| v as u16).collect(),
+        };
         self.huffman_codes.push(ac_lum);
 
         if !is_gray {
             // DC Chrominance
-            let mut dc_chrom = JpegHuffmanCode::default();
-            dc_chrom.table_class = 0;
-            dc_chrom.slot_id = 1;
-            dc_chrom.is_last = false;
-            dc_chrom.counts = STD_DC_CHROMINANCE_NRCODES;
-            dc_chrom.values = STD_DC_CHROMINANCE_VALUES.iter().map(|&v| v as u16).collect();
+            let dc_chrom = JpegHuffmanCode {
+                table_class: 0,
+                slot_id: 1,
+                is_last: false,
+                counts: STD_DC_CHROMINANCE_NRCODES,
+                values: STD_DC_CHROMINANCE_VALUES
+                    .iter()
+                    .map(|&v| v as u16)
+                    .collect(),
+            };
             self.huffman_codes.push(dc_chrom);
 
             // AC Chrominance
-            let mut ac_chrom = JpegHuffmanCode::default();
-            ac_chrom.table_class = 1;
-            ac_chrom.slot_id = 1;
-            ac_chrom.is_last = true;
-            ac_chrom.counts = STD_AC_CHROMINANCE_NRCODES;
-            ac_chrom.values = STD_AC_CHROMINANCE_VALUES.iter().map(|&v| v as u16).collect();
+            let ac_chrom = JpegHuffmanCode {
+                table_class: 1,
+                slot_id: 1,
+                is_last: true,
+                counts: STD_AC_CHROMINANCE_NRCODES,
+                values: STD_AC_CHROMINANCE_VALUES
+                    .iter()
+                    .map(|&v| v as u16)
+                    .collect(),
+            };
             self.huffman_codes.push(ac_chrom);
         }
 
@@ -1123,8 +1143,10 @@ impl JpegReconstructionData {
         }
 
         // Create scan info
-        let mut scan = JpegScanInfo::default();
-        scan.num_components = if is_gray { 1 } else { 3 };
+        let mut scan = JpegScanInfo {
+            num_components: if is_gray { 1 } else { 3 },
+            ..Default::default()
+        };
         for i in 0..scan.num_components as usize {
             scan.component_idx[i] = i as u8;
             scan.dc_tbl_idx[i] = if i == 0 { 0 } else { 1 };
@@ -1155,7 +1177,9 @@ impl JpegReconstructionData {
     /// This method uses the DCT coefficients stored in `self.dct_coefficients`
     /// for bit-exact reconstruction. Returns an error if no coefficients are stored.
     pub fn reconstruct_jpeg_from_stored(&self) -> Result<Vec<u8>> {
-        let coeffs = self.dct_coefficients.as_ref()
+        let coeffs = self
+            .dct_coefficients
+            .as_ref()
             .ok_or(Error::InvalidJpegReconstructionData)?;
 
         if coeffs.coefficients.is_empty() {
@@ -1175,7 +1199,8 @@ impl JpegReconstructionData {
 
     /// Check if this structure has stored DCT coefficients for reconstruction.
     pub fn has_stored_coefficients(&self) -> bool {
-        self.dct_coefficients.as_ref()
+        self.dct_coefficients
+            .as_ref()
             .is_some_and(|c| !c.coefficients.is_empty())
     }
 
@@ -1184,7 +1209,12 @@ impl JpegReconstructionData {
     /// Takes grayscale or RGB pixel data (as f32 values in 0.0-1.0 range) and encodes to JPEG.
     /// For grayscale, pixels should be a single slice.
     /// For RGB, pixels should be interleaved RGB values.
-    pub fn encode_from_pixels(&self, pixels: &[f32], width: usize, height: usize) -> Result<Vec<u8>> {
+    pub fn encode_from_pixels(
+        &self,
+        pixels: &[f32],
+        width: usize,
+        height: usize,
+    ) -> Result<Vec<u8>> {
         let mut encoder = JpegEncoder::new(self);
         encoder.encode(pixels, width, height)
     }
@@ -1199,26 +1229,16 @@ const JPEG_NATURAL_ORDER: [usize; 64] = [
 
 /// Standard JPEG luminance quantization table.
 const STD_LUMINANCE_QUANT_TBL: [u16; 64] = [
-    16, 11, 10, 16, 24, 40, 51, 61,
-    12, 12, 14, 19, 26, 58, 60, 55,
-    14, 13, 16, 24, 40, 57, 69, 56,
-    14, 17, 22, 29, 51, 87, 80, 62,
-    18, 22, 37, 56, 68, 109, 103, 77,
-    24, 35, 55, 64, 81, 104, 113, 92,
-    49, 64, 78, 87, 103, 121, 120, 101,
-    72, 92, 95, 98, 112, 100, 103, 99,
+    16, 11, 10, 16, 24, 40, 51, 61, 12, 12, 14, 19, 26, 58, 60, 55, 14, 13, 16, 24, 40, 57, 69, 56,
+    14, 17, 22, 29, 51, 87, 80, 62, 18, 22, 37, 56, 68, 109, 103, 77, 24, 35, 55, 64, 81, 104, 113,
+    92, 49, 64, 78, 87, 103, 121, 120, 101, 72, 92, 95, 98, 112, 100, 103, 99,
 ];
 
 /// Standard JPEG chrominance quantization table.
 const STD_CHROMINANCE_QUANT_TBL: [u16; 64] = [
-    17, 18, 24, 47, 99, 99, 99, 99,
-    18, 21, 26, 66, 99, 99, 99, 99,
-    24, 26, 56, 99, 99, 99, 99, 99,
-    47, 66, 99, 99, 99, 99, 99, 99,
-    99, 99, 99, 99, 99, 99, 99, 99,
-    99, 99, 99, 99, 99, 99, 99, 99,
-    99, 99, 99, 99, 99, 99, 99, 99,
-    99, 99, 99, 99, 99, 99, 99, 99,
+    17, 18, 24, 47, 99, 99, 99, 99, 18, 21, 26, 66, 99, 99, 99, 99, 24, 26, 56, 99, 99, 99, 99, 99,
+    47, 66, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99,
+    99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99,
 ];
 
 /// Standard JPEG DC luminance Huffman table - bit counts.
@@ -1311,7 +1331,7 @@ impl JpegWriter {
 
     fn build_single_huffman_table(counts: &[u8; 16], values: &[u16]) -> [(u16, u8); 256] {
         let mut table = [(0u16, 0u8); 256];
-        let mut code = 0u32;  // Use u32 to avoid overflow
+        let mut code = 0u32; // Use u32 to avoid overflow
         let mut val_idx = 0;
         let values_len = match values.last() {
             Some(&256) => values.len().saturating_sub(1),
@@ -1382,7 +1402,11 @@ impl JpegWriter {
     }
 
     /// Write a complete JPEG file from reconstruction data.
-    fn write_jpeg(&mut self, data: &JpegReconstructionData, coefficients: &[Vec<i16>]) -> Result<Vec<u8>> {
+    fn write_jpeg(
+        &mut self,
+        data: &JpegReconstructionData,
+        coefficients: &[Vec<i16>],
+    ) -> Result<Vec<u8>> {
         // Build Huffman tables from jbrd data
         self.build_huffman_tables(data);
 
@@ -1414,7 +1438,8 @@ impl JpegWriter {
                         let app_data = &data.app_data[app_idx];
                         // app_data format from Brotli: [marker_type_byte, length_hi, length_lo, content...]
                         // Skip markers with all-zero content (placeholder data not filled)
-                        let has_content = app_data.len() > 3 && app_data[3..].iter().any(|&b| b != 0);
+                        let has_content =
+                            app_data.len() > 3 && app_data[3..].iter().any(|&b| b != 0);
                         if has_content {
                             self.write_marker(marker);
                             // Skip the marker type byte and write: [length_hi, length_lo, content...]
@@ -1532,9 +1557,9 @@ impl JpegWriter {
                 let value = if all_zeros {
                     // Use standard JPEG quant tables as fallback
                     if table.index == 0 {
-                        STD_LUMINANCE_QUANT_TBL[k] as u16
+                        STD_LUMINANCE_QUANT_TBL[k]
                     } else {
-                        STD_CHROMINANCE_QUANT_TBL[k] as u16
+                        STD_CHROMINANCE_QUANT_TBL[k]
                     }
                 } else {
                     table.values[k]
@@ -1614,7 +1639,8 @@ impl JpegWriter {
         // Component info
         for comp in &data.components {
             self.output.push(comp.id);
-            self.output.push((comp.h_samp_factor << 4) | comp.v_samp_factor);
+            self.output
+                .push((comp.h_samp_factor << 4) | comp.v_samp_factor);
             self.output.push(comp.quant_idx);
         }
     }
@@ -1642,7 +1668,8 @@ impl JpegWriter {
             } else {
                 self.output.push((i + 1) as u8);
             }
-            self.output.push((scan.dc_tbl_idx[i] << 4) | scan.ac_tbl_idx[i]);
+            self.output
+                .push((scan.dc_tbl_idx[i] << 4) | scan.ac_tbl_idx[i]);
         }
 
         self.output.push(scan.ss);
@@ -1661,7 +1688,12 @@ impl JpegWriter {
     /// 1 = DC chrominance (class=0, slot=1)
     /// 2 = AC luminance (class=1, slot=0)
     /// 3 = AC chrominance (class=1, slot=1)
-    fn find_huff_table(&self, _data: &JpegReconstructionData, table_class: u8, slot_id: u8) -> Option<usize> {
+    fn find_huff_table(
+        &self,
+        _data: &JpegReconstructionData,
+        table_class: u8,
+        slot_id: u8,
+    ) -> Option<usize> {
         let idx = match (table_class, slot_id) {
             (0, 0) => 0, // DC luminance
             (0, 1) => 1, // DC chrominance
@@ -1689,8 +1721,8 @@ impl JpegWriter {
 
         let mcu_width = max_h as usize * 8;
         let mcu_height = max_v as usize * 8;
-        let mcus_x = (data.width as usize + mcu_width - 1) / mcu_width;
-        let mcus_y = (data.height as usize + mcu_height - 1) / mcu_height;
+        let mcus_x = (data.width as usize).div_ceil(mcu_width);
+        let mcus_y = (data.height as usize).div_ceil(mcu_height);
 
         // Track last DC values for differential encoding
         let mut last_dc = vec![0i16; scan.num_components as usize];
@@ -1708,7 +1740,11 @@ impl JpegWriter {
         for mcu_y in 0..mcus_y {
             for mcu_x in 0..mcus_x {
                 // Encode each component in the scan
-                for scan_comp_idx in 0..scan.num_components as usize {
+                for (scan_comp_idx, last_dc_value) in last_dc
+                    .iter_mut()
+                    .enumerate()
+                    .take(scan.num_components as usize)
+                {
                     let comp_idx = scan.component_idx[scan_comp_idx] as usize;
                     if comp_idx >= data.components.len() || comp_idx >= coefficients.len() {
                         continue;
@@ -1719,8 +1755,10 @@ impl JpegWriter {
                     let v_factor = comp.v_samp_factor as usize;
 
                     // Get Huffman tables for this component
-                    let dc_table_idx = self.find_huff_table(data, 0, scan.dc_tbl_idx[scan_comp_idx]);
-                    let ac_table_idx = self.find_huff_table(data, 1, scan.ac_tbl_idx[scan_comp_idx]);
+                    let dc_table_idx =
+                        self.find_huff_table(data, 0, scan.dc_tbl_idx[scan_comp_idx]);
+                    let ac_table_idx =
+                        self.find_huff_table(data, 1, scan.ac_tbl_idx[scan_comp_idx]);
 
                     if dc_table_idx.is_none() || ac_table_idx.is_none() {
                         continue;
@@ -1730,8 +1768,8 @@ impl JpegWriter {
                     let ac_table_idx = ac_table_idx.unwrap();
 
                     // Calculate blocks per row for this component
-                    let comp_blocks_x = (data.width as usize * h_factor + max_h as usize * 8 - 1)
-                        / (max_h as usize * 8);
+                    let comp_blocks_x =
+                        (data.width as usize * h_factor).div_ceil(max_h as usize * 8);
 
                     // Encode each block in the MCU for this component
                     for v in 0..v_factor {
@@ -1744,11 +1782,12 @@ impl JpegWriter {
                                 continue;
                             }
 
-                            let block_coeffs = &coefficients[comp_idx][block_idx * 64..(block_idx + 1) * 64];
+                            let block_coeffs =
+                                &coefficients[comp_idx][block_idx * 64..(block_idx + 1) * 64];
 
                             self.encode_block(
                                 block_coeffs,
-                                &mut last_dc[scan_comp_idx],
+                                last_dc_value,
                                 dc_table_idx,
                                 ac_table_idx,
                             );
@@ -1770,7 +1809,10 @@ impl JpegWriter {
         dc_table_idx: usize,
         ac_table_idx: usize,
     ) {
-        if coeffs.len() < 64 || dc_table_idx >= self.huff_tables.len() || ac_table_idx >= self.huff_tables.len() {
+        if coeffs.len() < 64
+            || dc_table_idx >= self.huff_tables.len()
+            || ac_table_idx >= self.huff_tables.len()
+        {
             return;
         }
 
@@ -1795,8 +1837,7 @@ impl JpegWriter {
 
         // Encode AC coefficients
         let mut zero_count = 0u8;
-        for i in 1..64 {
-            let ac = coeffs[i];
+        for &ac in coeffs.iter().take(64).skip(1) {
             if ac == 0 {
                 zero_count += 1;
             } else {
@@ -1863,16 +1904,20 @@ impl<'a> JpegEncoder<'a> {
 
         // Fall back to standard tables for any not found
         if !found[0] {
-            huff_tables[0] = Self::build_huffman_table(&STD_DC_LUMINANCE_NRCODES, &STD_DC_LUMINANCE_VALUES);
+            huff_tables[0] =
+                Self::build_huffman_table(&STD_DC_LUMINANCE_NRCODES, &STD_DC_LUMINANCE_VALUES);
         }
         if !found[1] {
-            huff_tables[1] = Self::build_huffman_table(&STD_DC_CHROMINANCE_NRCODES, &STD_DC_CHROMINANCE_VALUES);
+            huff_tables[1] =
+                Self::build_huffman_table(&STD_DC_CHROMINANCE_NRCODES, &STD_DC_CHROMINANCE_VALUES);
         }
         if !found[2] {
-            huff_tables[2] = Self::build_huffman_table(&STD_AC_LUMINANCE_NRCODES, &STD_AC_LUMINANCE_VALUES);
+            huff_tables[2] =
+                Self::build_huffman_table(&STD_AC_LUMINANCE_NRCODES, &STD_AC_LUMINANCE_VALUES);
         }
         if !found[3] {
-            huff_tables[3] = Self::build_huffman_table(&STD_AC_CHROMINANCE_NRCODES, &STD_AC_CHROMINANCE_VALUES);
+            huff_tables[3] =
+                Self::build_huffman_table(&STD_AC_CHROMINANCE_NRCODES, &STD_AC_CHROMINANCE_VALUES);
         }
 
         Self {
@@ -1982,7 +2027,8 @@ impl<'a> JpegEncoder<'a> {
 
         for comp in &self.data.components {
             self.output.push(comp.id);
-            self.output.push((comp.h_samp_factor << 4) | comp.v_samp_factor);
+            self.output
+                .push((comp.h_samp_factor << 4) | comp.v_samp_factor);
             self.output.push(comp.quant_idx);
         }
         Ok(())
@@ -2025,8 +2071,8 @@ impl<'a> JpegEncoder<'a> {
 
         // Encode image data
         let is_gray = self.data.is_gray;
-        let blocks_x = (width + 7) / 8;
-        let blocks_y = (height + 7) / 8;
+        let blocks_x = width.div_ceil(8);
+        let blocks_y = height.div_ceil(8);
 
         let mut last_dc = [0i16; 3];
 
@@ -2057,7 +2103,14 @@ impl<'a> JpegEncoder<'a> {
         Ok(())
     }
 
-    fn extract_gray_block(&self, pixels: &[f32], width: usize, height: usize, bx: usize, by: usize) -> [f32; 64] {
+    fn extract_gray_block(
+        &self,
+        pixels: &[f32],
+        width: usize,
+        height: usize,
+        bx: usize,
+        by: usize,
+    ) -> [f32; 64] {
         let mut block = [0.0f32; 64];
         for y in 0..8 {
             for x in 0..8 {
@@ -2119,8 +2172,10 @@ impl<'a> JpegEncoder<'a> {
                 let mut sum = 0.0f32;
                 for y in 0..8 {
                     for x in 0..8 {
-                        let cos_x = ((2 * x + 1) as f32 * u as f32 * std::f32::consts::PI / 16.0).cos();
-                        let cos_y = ((2 * y + 1) as f32 * v as f32 * std::f32::consts::PI / 16.0).cos();
+                        let cos_x =
+                            ((2 * x + 1) as f32 * u as f32 * std::f32::consts::PI / 16.0).cos();
+                        let cos_y =
+                            ((2 * y + 1) as f32 * v as f32 * std::f32::consts::PI / 16.0).cos();
                         sum += block[y * 8 + x] * cos_x * cos_y;
                     }
                 }
@@ -2168,8 +2223,7 @@ impl<'a> JpegEncoder<'a> {
 
         // Encode AC coefficients
         let mut zero_count = 0u8;
-        for i in 1..64 {
-            let ac = coeffs[i];
+        for &ac in coeffs.iter().skip(1) {
             if ac == 0 {
                 zero_count += 1;
             } else {
@@ -2196,7 +2250,7 @@ impl<'a> JpegEncoder<'a> {
 
     fn encode_dc(&mut self, dc_diff: i16, huff_table: &[(u16, u8); 256]) -> Result<()> {
         let (size, value) = Self::get_value_bits(dc_diff);
-        self.write_huffman(size as u8, huff_table)?;
+        self.write_huffman(size, huff_table)?;
         if size > 0 {
             self.write_bits(value as u16, size)?;
         }

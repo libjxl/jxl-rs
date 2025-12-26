@@ -3,15 +3,12 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-use crate::{
-    api::JxlDecoderOptions,
-    api::JxlOutputBuffer,
-    bit_reader::BitReader,
-    error::Result,
-    frame::Section,
-};
 #[cfg(feature = "jpeg-reconstruction")]
 use crate::api::inner::box_parser::BoxParser;
+use crate::{
+    api::JxlDecoderOptions, api::JxlOutputBuffer, bit_reader::BitReader, error::Result,
+    frame::Section,
+};
 
 use super::CodestreamParser;
 
@@ -216,43 +213,51 @@ impl CodestreamParser {
 
         // Extract JPEG coefficients before finalizing the frame
         #[cfg(feature = "jpeg-reconstruction")]
-        if let Some(frame) = self.frame.as_mut() {
-            if let Some(coeffs) = frame.take_jpeg_coefficients() {
-                // Merge coefficients into the jpeg_reconstruction data
-                if let Some(ref mut jpeg_data) = box_parser.jpeg_reconstruction {
-                    jpeg_data.dct_coefficients = Some(coeffs);
-                    if let Some((qtable, qtable_den)) = frame.jpeg_raw_quant_table() {
-                        jpeg_data.update_quant_tables_from_raw(qtable, qtable_den, do_ycbcr)?;
+        if let Some(frame) = self.frame.as_mut()
+            && let Some(coeffs) = frame.take_jpeg_coefficients()
+        {
+            // Merge coefficients into the jpeg_reconstruction data
+            if let Some(ref mut jpeg_data) = box_parser.jpeg_reconstruction {
+                jpeg_data.dct_coefficients = Some(coeffs);
+                if let Some((qtable, qtable_den)) = frame.jpeg_raw_quant_table() {
+                    jpeg_data.update_quant_tables_from_raw(qtable, qtable_den, do_ycbcr)?;
+                }
+                {
+                    let header = frame.header();
+                    let is_gray = jpeg_data.is_gray || jpeg_data.components.len() == 1;
+                    let component_map = if is_gray {
+                        [1usize, 1, 1]
+                    } else {
+                        [1usize, 0, 2]
+                    };
+                    let mut max_hshift = 0usize;
+                    let mut max_vshift = 0usize;
+                    let chans = if is_gray {
+                        &[1usize][..]
+                    } else {
+                        &[0usize, 1, 2][..]
+                    };
+                    for &c in chans {
+                        max_hshift = max_hshift.max(header.hshift(c));
+                        max_vshift = max_vshift.max(header.vshift(c));
                     }
+                    for (jpeg_idx, &vardct_chan) in component_map
+                        .iter()
+                        .enumerate()
+                        .take(jpeg_data.components.len())
                     {
-                        let header = frame.header();
-                        let is_gray = jpeg_data.is_gray || jpeg_data.components.len() == 1;
-                        let component_map = if is_gray { [1usize, 1, 1] } else { [1usize, 0, 2] };
-                        let mut max_hshift = 0usize;
-                        let mut max_vshift = 0usize;
-                        let chans = if is_gray { &[1usize][..] } else { &[0usize, 1, 2][..] };
-                        for &c in chans {
-                            max_hshift = max_hshift.max(header.hshift(c));
-                            max_vshift = max_vshift.max(header.vshift(c));
-                        }
-                        for (jpeg_idx, &vardct_chan) in component_map
-                            .iter()
-                            .enumerate()
-                            .take(jpeg_data.components.len())
-                        {
-                            let hshift = header.hshift(vardct_chan);
-                            let vshift = header.vshift(vardct_chan);
-                            jpeg_data.components[jpeg_idx].h_samp_factor =
-                                1u8 << (max_hshift.saturating_sub(hshift) as u8);
-                            jpeg_data.components[jpeg_idx].v_samp_factor =
-                                1u8 << (max_vshift.saturating_sub(vshift) as u8);
-                        }
+                        let hshift = header.hshift(vardct_chan);
+                        let vshift = header.vshift(vardct_chan);
+                        jpeg_data.components[jpeg_idx].h_samp_factor =
+                            1u8 << (max_hshift.saturating_sub(hshift) as u8);
+                        jpeg_data.components[jpeg_idx].v_samp_factor =
+                            1u8 << (max_vshift.saturating_sub(vshift) as u8);
                     }
-                    if let Some(profile) = self.embedded_color_profile.as_ref() {
-                        if let Some(icc) = profile.try_as_icc() {
-                            jpeg_data.fill_icc_app_markers(icc.as_ref())?;
-                        }
-                    }
+                }
+                if let Some(profile) = self.embedded_color_profile.as_ref()
+                    && let Some(icc) = profile.try_as_icc()
+                {
+                    jpeg_data.fill_icc_app_markers(icc.as_ref())?;
                 }
             }
         }

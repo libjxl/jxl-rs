@@ -5,10 +5,11 @@
 
 #[cfg(test)]
 use crate::api::FrameCallback;
+#[cfg(feature = "jpeg-reconstruction")]
+use crate::jpeg::JpegReconstructionData;
 use crate::{
     api::JxlFrameHeader,
     error::{Error, Result},
-    jpeg::JpegReconstructionData,
 };
 
 use super::{JxlBasicInfo, JxlColorProfile, JxlDecoderOptions, JxlPixelFormat};
@@ -136,11 +137,13 @@ impl JxlDecoderInner {
     ///
     /// This data is available after reading a jbrd box from a JXL file
     /// that was created by losslessly recompressing a JPEG.
+    #[cfg(feature = "jpeg-reconstruction")]
     pub fn jpeg_reconstruction_data(&self) -> Option<&JpegReconstructionData> {
         self.box_parser.jpeg_reconstruction.as_ref()
     }
 
     /// Returns true if the file contains JPEG reconstruction data.
+    #[cfg(feature = "jpeg-reconstruction")]
     pub fn has_jpeg_reconstruction(&self) -> bool {
         self.box_parser.jpeg_reconstruction.is_some()
     }

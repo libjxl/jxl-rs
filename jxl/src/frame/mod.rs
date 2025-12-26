@@ -234,20 +234,23 @@ impl Frame {
     fn init_jpeg_coefficients(&mut self) {
         let (width, height) = self.header.size_upsampled();
         let num_components = if self.color_channels == 1 { 1 } else { 3 };
-        let component_map = if num_components == 1 { [1usize, 1, 1] } else { [1usize, 0, 2] };
+        let component_map = if num_components == 1 {
+            [1usize, 1, 1]
+        } else {
+            [1usize, 0, 2]
+        };
         let mut component_blocks = Vec::with_capacity(num_components);
         for &vardct_chan in component_map.iter().take(num_components) {
             let hshift = self.header.hshift(vardct_chan);
             let vshift = self.header.vshift(vardct_chan);
             let denom_x = 8usize << hshift;
             let denom_y = 8usize << vshift;
-            let blocks_x = (width + denom_x - 1) / denom_x;
-            let blocks_y = (height + denom_y - 1) / denom_y;
+            let blocks_x = width.div_ceil(denom_x);
+            let blocks_y = height.div_ceil(denom_y);
             component_blocks.push((blocks_x, blocks_y));
         }
 
-        self.jpeg_coefficients =
-            Some(JpegDctCoefficients::new(width, height, &component_blocks));
+        self.jpeg_coefficients = Some(JpegDctCoefficients::new(width, height, &component_blocks));
     }
 
     /// Check if coefficient preservation is enabled.
@@ -271,7 +274,7 @@ impl Frame {
     #[cfg(feature = "jpeg-reconstruction")]
     pub fn jpeg_raw_quant_table(&self) -> Option<(&[i32], f32)> {
         let hf_global = self.hf_global.as_ref()?;
-        let encoding = hf_global.dequant_matrices.encodings().get(0)?;
+        let encoding = hf_global.dequant_matrices.encodings().first()?;
         match encoding {
             QuantEncoding::Raw { qtable, qtable_den } => Some((qtable.as_slice(), *qtable_den)),
             _ => None,

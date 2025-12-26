@@ -141,6 +141,10 @@ impl Frame {
             lf_frame_data,
             lf_global_was_rendered: false,
             vardct_buffers: None,
+            #[cfg(feature = "jpeg-reconstruction")]
+            jpeg_coefficients: None,
+            #[cfg(feature = "jpeg-reconstruction")]
+            preserve_jpeg_coefficients: false,
         })
     }
     /// Given a bit reader pointing at the end of the TOC, returns a vector of `BitReader`s, each
@@ -267,6 +271,12 @@ impl Frame {
         let lf_global = self.lf_global.as_mut().unwrap();
         if self.header.encoding == Encoding::VarDCT && !self.header.has_lf_frame() {
             info!("decoding VarDCT LF with group id {}", group);
+            #[cfg(feature = "jpeg-reconstruction")]
+            let jpeg_dc_coeffs = if self.preserve_jpeg_coefficients {
+                self.jpeg_coefficients.as_mut()
+            } else {
+                None
+            };
             decode_vardct_lf(
                 group,
                 &self.header,
@@ -279,6 +289,8 @@ impl Frame {
                 self.lf_image.as_mut().unwrap(),
                 &mut self.quant_lf,
                 br,
+                #[cfg(feature = "jpeg-reconstruction")]
+                jpeg_dc_coeffs,
             )?;
         }
         lf_global.modular_global.read_stream(
@@ -438,6 +450,12 @@ impl Frame {
                 pipeline!(self, p, p.get_buffer(2))?,
             ];
             let buffers = self.vardct_buffers.get_or_insert_with(VarDctBuffers::new);
+            #[cfg(feature = "jpeg-reconstruction")]
+            let jpeg_coeffs = if self.preserve_jpeg_coefficients {
+                self.jpeg_coefficients.as_mut()
+            } else {
+                None
+            };
             decode_vardct_group(
                 group,
                 pass,
@@ -456,6 +474,8 @@ impl Frame {
                 &mut pixels,
                 &mut br,
                 buffers,
+                #[cfg(feature = "jpeg-reconstruction")]
+                jpeg_coeffs,
             )?;
             if self.decoder_state.enable_output
                 && pass + 1 == self.header.passes.num_passes as usize

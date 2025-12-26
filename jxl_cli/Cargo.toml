@@ -24,6 +24,7 @@ criterion = { version = "0.7.0", features = ["html_reports"] }
 [features]
 tracing-subscriber = ["dep:tracing-subscriber", "jxl/tracing"]
 exr = ["dep:exr"]
+jpeg-reconstruction = ["jxl/jpeg-reconstruction"]
 default = ["exr", "all-simd"]
 
 all-simd = ["jxl/all-simd"]
