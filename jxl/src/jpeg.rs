@@ -250,7 +250,6 @@ impl JpegDctCoefficients {
     /// - `coeffs`: 64 DCT coefficients in natural order (will be converted to zigzag)
     pub fn store_block(&mut self, component: usize, bx: usize, by: usize, coeffs: &[i32]) {
         if component >= self.num_components || coeffs.len() < 64 {
-            eprintln!("DEBUG store_block: bad component={} >= {} or coeffs.len()={}", component, self.num_components, coeffs.len());
             return;
         }
 
@@ -259,8 +258,6 @@ impl JpegDctCoefficients {
         let offset = block_idx * 64;
 
         if offset + 64 > self.coefficients[component].len() {
-            eprintln!("DEBUG store_block: out of bounds: offset={} + 64 > len={} (bx={}, by={}, blocks_x={})",
-                     offset, self.coefficients[component].len(), bx, by, blocks_x);
             return;
         }
 
@@ -275,15 +272,6 @@ impl JpegDctCoefficients {
                 coeffs[transposed_idx].clamp(-32768, 32767) as i16;
         }
 
-        // Debug: show first few blocks' values
-        static STORE_COUNT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
-        let count = STORE_COUNT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        if count < 10 {
-            // Note: coeffs[0] is the HF DC which should be 0, real DC comes from store_dc
-            eprintln!("DEBUG store_block: comp={} bx={} by={} HF_DC(should be 0)={} first_5_AC={:?}",
-                component, bx, by, coeffs[0],
-                &coeffs[1..6].iter().map(|x| *x as i16).collect::<Vec<_>>());
-        }
     }
 
     /// Get coefficients for a block in zigzag order.
@@ -331,13 +319,6 @@ impl JpegDctCoefficients {
         self.coefficients.iter().any(|c| c.iter().any(|&v| v != 0))
     }
 }
-
-// ICC profile signature
-const ICC_SIGNATURE: &[u8] = b"ICC_PROFILE\0";
-// EXIF signature
-const EXIF_SIGNATURE: &[u8] = b"Exif\0\0";
-// XMP signature
-const XMP_SIGNATURE: &[u8] = b"http://ns.adobe.com/xap/1.0/\0";
 
 impl JpegReconstructionData {
     /// Create a simple representation showing that jbrd data is present.
@@ -1203,16 +1184,11 @@ impl JpegReconstructionData {
             return Err(Error::InvalidJpegReconstructionData);
         }
 
-        eprintln!("DEBUG reconstruct_jpeg_from_stored: {} components, {} coeffs each",
-            coeffs.coefficients.len(),
-            coeffs.coefficients.iter().map(|c| c.len()).collect::<Vec<_>>().iter().map(|x| x.to_string()).collect::<Vec<_>>().join(", "));
-
         // Create a modified copy with dimensions from the coefficients if needed
         let mut data = self.clone();
         if data.width == 0 || data.height == 0 {
             data.width = coeffs.width as u32;
             data.height = coeffs.height as u32;
-            eprintln!("DEBUG: Using dimensions from coefficients: {}x{}", data.width, data.height);
         }
 
         let mut writer = JpegWriter::new();
@@ -1349,27 +1325,9 @@ impl JpegWriter {
                 (0, 1) => 1, // DC chrominance
                 (1, 0) => 2, // AC luminance
                 (1, 1) => 3, // AC chrominance
-                _ => {
-                    eprintln!("DEBUG: Unknown Huffman table: class={}, slot={}", code.table_class, code.slot_id);
-                    continue;
-                }
+                _ => continue,
             };
-            eprintln!("DEBUG build_huffman_tables: class={}, slot={} -> idx={}, {} values",
-                code.table_class, code.slot_id, idx, code.values.len());
-            eprintln!("DEBUG   counts: {:?}", &code.counts[..]);
-            eprintln!("DEBUG   first 10 values: {:?}", &code.values[..code.values.len().min(10)]);
-            // Check for duplicate 0 values
-            let zero_positions: Vec<usize> = code.values.iter().enumerate()
-                .filter(|&(_, v)| *v == 0)
-                .map(|(i, _)| i)
-                .collect();
-            if !zero_positions.is_empty() {
-                eprintln!("DEBUG   symbol 0 at positions: {:?}", zero_positions);
-            }
             self.huff_tables[idx] = Self::build_single_huffman_table(&code.counts, &code.values);
-            // Debug: show what EOB (0x00) got assigned
-            let (eob_code, eob_bits) = self.huff_tables[idx][0x00];
-            eprintln!("DEBUG   table[0x00] (EOB) = ({:#06x}, {} bits)", eob_code, eob_bits);
         }
     }
 
@@ -1447,9 +1405,6 @@ impl JpegWriter {
 
     /// Write a complete JPEG file from reconstruction data.
     fn write_jpeg(&mut self, data: &JpegReconstructionData, coefficients: &[Vec<i16>]) -> Result<Vec<u8>> {
-        eprintln!("DEBUG write_jpeg: marker_order={:02X?}", data.marker_order);
-        eprintln!("DEBUG write_jpeg: {} scans, {} coefficients", data.scan_info.len(), coefficients.iter().map(|c| c.len()).sum::<usize>());
-
         // Build Huffman tables from jbrd data
         self.build_huffman_tables(data);
 
@@ -1465,7 +1420,6 @@ impl JpegWriter {
         let mut inter_marker_idx = 0;
 
         for &marker in &data.marker_order {
-            eprintln!("DEBUG write_jpeg: processing marker 0x{:02X}, output size so far: {}", marker, self.output.len());
             // Write any inter-marker data before this marker
             if inter_marker_idx < data.inter_marker_data.len() {
                 let inter_data = &data.inter_marker_data[inter_marker_idx];
@@ -1747,18 +1701,6 @@ impl JpegWriter {
         scan: &JpegScanInfo,
         coefficients: &[Vec<i16>],
     ) -> Result<()> {
-        eprintln!("DEBUG encode_scan_data: scan has {} components", scan.num_components);
-        eprintln!("DEBUG encode_scan_data: data has {} components", data.components.len());
-        eprintln!("DEBUG encode_scan_data: coefficients has {} components", coefficients.len());
-        eprintln!("DEBUG encode_scan_data: dc_tbl_idx={:?}, ac_tbl_idx={:?}",
-            &scan.dc_tbl_idx[..scan.num_components as usize],
-            &scan.ac_tbl_idx[..scan.num_components as usize]);
-        eprintln!(
-            "DEBUG encode_scan_data: reset_points={}, extra_zero_runs={}",
-            scan.reset_points.len(),
-            scan.extra_zero_runs.len()
-        );
-
         // Calculate MCU dimensions
         let mut max_h = 1u8;
         let mut max_v = 1u8;
@@ -1772,15 +1714,11 @@ impl JpegWriter {
         let mcus_x = (data.width as usize + mcu_width - 1) / mcu_width;
         let mcus_y = (data.height as usize + mcu_height - 1) / mcu_height;
 
-        eprintln!("DEBUG encode_scan_data: max_h={}, max_v={}, mcu_width={}, mcu_height={}, mcus_x={}, mcus_y={}",
-            max_h, max_v, mcu_width, mcu_height, mcus_x, mcus_y);
-
         // Track last DC values for differential encoding
         let mut last_dc = vec![0i16; scan.num_components as usize];
 
         // For baseline JPEG (ss=0, se=63, ah=0, al=0), encode all coefficients
         let is_baseline = scan.ss == 0 && scan.se == 63 && scan.ah == 0 && scan.al == 0;
-        eprintln!("DEBUG encode_scan_data: ss={}, se={}, ah={}, al={}, is_baseline={}", scan.ss, scan.se, scan.ah, scan.al, is_baseline);
 
         if !is_baseline {
             // Progressive JPEG not fully supported yet - just flush bits
@@ -1789,17 +1727,12 @@ impl JpegWriter {
         }
 
         // Encode each MCU
-        let mut blocks_encoded = 0usize;
         for mcu_y in 0..mcus_y {
             for mcu_x in 0..mcus_x {
                 // Encode each component in the scan
                 for scan_comp_idx in 0..scan.num_components as usize {
                     let comp_idx = scan.component_idx[scan_comp_idx] as usize;
                     if comp_idx >= data.components.len() || comp_idx >= coefficients.len() {
-                        if blocks_encoded == 0 {
-                            eprintln!("DEBUG: comp_idx {} out of range (data: {}, coeffs: {})",
-                                comp_idx, data.components.len(), coefficients.len());
-                        }
                         continue;
                     }
 
@@ -1812,12 +1745,6 @@ impl JpegWriter {
                     let ac_table_idx = self.find_huff_table(data, 1, scan.ac_tbl_idx[scan_comp_idx]);
 
                     if dc_table_idx.is_none() || ac_table_idx.is_none() {
-                        if blocks_encoded == 0 {
-                            eprintln!("DEBUG: Huffman table not found for comp {}: dc_slot={}, ac_slot={}",
-                                scan_comp_idx, scan.dc_tbl_idx[scan_comp_idx], scan.ac_tbl_idx[scan_comp_idx]);
-                            eprintln!("DEBUG: Available tables: {:?}",
-                                data.huffman_codes.iter().map(|c| (c.table_class, c.slot_id)).collect::<Vec<_>>());
-                        }
                         continue;
                     }
 
@@ -1847,21 +1774,10 @@ impl JpegWriter {
                                 dc_table_idx,
                                 ac_table_idx,
                             );
-                            blocks_encoded += 1;
                         }
                     }
                 }
             }
-        }
-
-        eprintln!("DEBUG encode_scan_data: encoded {} blocks, output size now {}", blocks_encoded, self.output.len());
-
-        // Debug: show first few DC coefficients from each component
-        for (comp_idx, comp_coeffs) in coefficients.iter().enumerate().take(3) {
-            let dc_values: Vec<i16> = (0..10).filter_map(|i| {
-                comp_coeffs.get(i * 64).copied()
-            }).collect();
-            eprintln!("DEBUG: Component {} first 10 DC values: {:?}", comp_idx, dc_values);
         }
 
         self.flush_bits();
@@ -1876,9 +1792,6 @@ impl JpegWriter {
         dc_table_idx: usize,
         ac_table_idx: usize,
     ) {
-        static BLOCK_COUNT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
-        let block_num = BLOCK_COUNT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-
         if coeffs.len() < 64 || dc_table_idx >= self.huff_tables.len() || ac_table_idx >= self.huff_tables.len() {
             return;
         }
@@ -1895,24 +1808,15 @@ impl JpegWriter {
         let (dc_size, dc_value) = Self::get_value_bits(dc_diff);
         let (dc_code, dc_bits) = dc_table[dc_size as usize];
 
-        if block_num < 5 {
-            eprintln!("DEBUG encode_block {}: DC={}, diff={}, size={}, code={:#06x}/{} bits",
-                block_num, dc, dc_diff, dc_size, dc_code, dc_bits);
-        }
-
         if dc_bits > 0 {
             self.write_bits(dc_code, dc_bits);
             if dc_size > 0 {
                 self.write_bits(dc_value as u16, dc_size);
             }
-        } else if block_num < 5 {
-            eprintln!("WARNING: No Huffman code for DC size {} in table {}", dc_size, dc_table_idx);
         }
 
         // Encode AC coefficients
         let mut zero_count = 0u8;
-        let mut ac_debug_count = 0;
-
         for i in 1..64 {
             let ac = coeffs[i];
             if ac == 0 {
@@ -1921,9 +1825,6 @@ impl JpegWriter {
                 // Emit ZRL symbols for runs of 16 zeros
                 while zero_count >= 16 {
                     let (zrl_code, zrl_bits) = ac_table[0xF0];
-                    if block_num < 3 && ac_debug_count < 5 {
-                        eprintln!("DEBUG block {} ZRL: code={:#06x}/{} bits", block_num, zrl_code, zrl_bits);
-                    }
                     if zrl_bits > 0 {
                         self.write_bits(zrl_code, zrl_bits);
                     }
@@ -1934,16 +1835,9 @@ impl JpegWriter {
                 let (ac_size, ac_value) = Self::get_value_bits(ac);
                 let symbol = (zero_count << 4) | ac_size;
                 let (ac_code, ac_bits) = ac_table[symbol as usize];
-                if block_num < 3 && ac_debug_count < 5 {
-                    eprintln!("DEBUG block {} AC[{}]: val={}, zeros={}, size={}, sym={:#04x}, code={:#06x}/{} bits",
-                        block_num, i, ac, zero_count, ac_size, symbol, ac_code, ac_bits);
-                    ac_debug_count += 1;
-                }
                 if ac_bits > 0 {
                     self.write_bits(ac_code, ac_bits);
                     self.write_bits(ac_value as u16, ac_size);
-                } else if block_num < 3 {
-                    eprintln!("WARNING: No Huffman code for AC symbol {:#04x} in table {}", symbol, ac_table_idx);
                 }
                 zero_count = 0;
             }
@@ -1952,9 +1846,6 @@ impl JpegWriter {
         // If we have trailing zeros, emit EOB
         if zero_count > 0 {
             let (eob_code, eob_bits) = ac_table[0x00];
-            if block_num < 3 {
-                eprintln!("DEBUG block {} EOB: zeros={}, code={:#06x}/{} bits", block_num, zero_count, eob_code, eob_bits);
-            }
             if eob_bits > 0 {
                 self.write_bits(eob_code, eob_bits);
             }
