@@ -825,17 +825,6 @@ impl JpegReconstructionData {
         }
     }
 
-    /// Read U32(Val(1), Bits(2), BitsOffset(4, 4), BitsOffset(8, 20)) for num_scans
-    fn read_u32_scan(reader: &mut BitReader) -> Result<u32> {
-        let selector = reader.read(2)?;
-        match selector {
-            0 => Ok(1),
-            1 => Ok(reader.read(2)? as u32),
-            2 => Ok(reader.read(4)? as u32 + 4),
-            3 => Ok(reader.read(8)? as u32 + 20),
-            _ => unreachable!(),
-        }
-    }
 
     /// Read U32(Val(1), Val(2), Val(3), Val(4)) for num_components
     fn read_u32_num_components(reader: &mut BitReader) -> Result<u32> {
@@ -921,17 +910,6 @@ impl JpegReconstructionData {
         }
     }
 
-    /// Read U32(Bits(8), BitsOffset(11, 256), BitsOffset(14, 2304), BitsOffset(18, 18688)) for dimensions
-    fn read_u32_size(reader: &mut BitReader) -> Result<u32> {
-        let selector = reader.read(2)?;
-        match selector {
-            0 => Ok(reader.read(8)? as u32),
-            1 => Ok(reader.read(11)? as u32 + 256),
-            2 => Ok(reader.read(14)? as u32 + 2304),
-            3 => Ok(reader.read(18)? as u32 + 18688),
-            _ => unreachable!(),
-        }
-    }
 
     /// Check if this structure contains valid JPEG reconstruction data.
     /// Note: width/height come from the codestream, so we don't check them here.
