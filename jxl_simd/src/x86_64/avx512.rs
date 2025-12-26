@@ -513,38 +513,22 @@ unsafe impl F32SimdVec for F32VecAvx512 {
 
     #[inline(always)]
     fn table_lookup_8(d: Avx512Descriptor, table: &[f32; 8], indices: I32VecAvx512) -> Self {
-        // Use scalar lookup - simple and correct
+        // Use vpermps (permutexvar) for efficient 8-entry table lookup
         #[target_feature(enable = "avx512f")]
         #[inline]
         unsafe fn table_lookup_impl(table: &[f32; 8], indices: __m512i) -> __m512 {
             // SAFETY: avx512f intrinsics are available from target_feature
             unsafe {
-                let mut result = [0.0f32; 16];
-                // Extract indices via 256-bit halves
-                let indices_256_lo = _mm512_castsi512_si256(indices);
-                let indices_256_hi = _mm512_extracti64x4_epi64::<1>(indices);
-                let indices_0 = _mm256_castsi256_si128(indices_256_lo);
-                let indices_1 = _mm256_extracti128_si256::<1>(indices_256_lo);
-                let indices_2 = _mm256_castsi256_si128(indices_256_hi);
-                let indices_3 = _mm256_extracti128_si256::<1>(indices_256_hi);
-
-                result[0] = table[_mm_extract_epi32::<0>(indices_0) as usize];
-                result[1] = table[_mm_extract_epi32::<1>(indices_0) as usize];
-                result[2] = table[_mm_extract_epi32::<2>(indices_0) as usize];
-                result[3] = table[_mm_extract_epi32::<3>(indices_0) as usize];
-                result[4] = table[_mm_extract_epi32::<0>(indices_1) as usize];
-                result[5] = table[_mm_extract_epi32::<1>(indices_1) as usize];
-                result[6] = table[_mm_extract_epi32::<2>(indices_1) as usize];
-                result[7] = table[_mm_extract_epi32::<3>(indices_1) as usize];
-                result[8] = table[_mm_extract_epi32::<0>(indices_2) as usize];
-                result[9] = table[_mm_extract_epi32::<1>(indices_2) as usize];
-                result[10] = table[_mm_extract_epi32::<2>(indices_2) as usize];
-                result[11] = table[_mm_extract_epi32::<3>(indices_2) as usize];
-                result[12] = table[_mm_extract_epi32::<0>(indices_3) as usize];
-                result[13] = table[_mm_extract_epi32::<1>(indices_3) as usize];
-                result[14] = table[_mm_extract_epi32::<2>(indices_3) as usize];
-                result[15] = table[_mm_extract_epi32::<3>(indices_3) as usize];
-                _mm512_loadu_ps(result.as_ptr())
+                // Load the 8-entry table into a 256-bit register
+                let table_256 = _mm256_loadu_ps(table.as_ptr());
+                // Broadcast to 512-bit by duplicating the 8 entries
+                let table_512 = _mm512_insertf32x8::<1>(
+                    _mm512_castps256_ps512(table_256),
+                    table_256,
+                );
+                // Use vpermps to permute based on indices (uses lower 4 bits of each index)
+                // Since our table has 8 entries (indices 0-7), the lower 4 bits work correctly
+                _mm512_permutexvar_ps(indices, table_512)
             }
         }
         // SAFETY: avx512f is available from the safety invariant on the descriptor

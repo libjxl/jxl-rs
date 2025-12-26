@@ -216,14 +216,19 @@ pub unsafe trait F32SimdVec:
 
     fn bitcast_to_i32(self) -> <<Self as F32SimdVec>::Descriptor as SimdDescriptor>::I32Vec;
 
-    /// Looks up values from an 8-entry table using efficient shuffle operations.
-    /// Each element i of the result is `table[indices[i]]`.
+    /// Looks up values from an 8-entry table using efficient SIMD operations.
+    /// Each element i of the result is approximately `table[indices[i]]`.
     ///
-    /// This uses byte shuffles (pshufb on x86, vqtbl1q on ARM) for efficient
-    /// lookup without requiring gather instructions.
+    /// # Implementation Details
+    ///
+    /// - **AVX2/AVX512**: Uses `vpermps` for exact f32 lookup (no precision loss).
+    /// - **SSE4.2/NEON**: Uses byte shuffles with BF16 storage for efficiency.
+    ///   Values are converted to BF16 (truncating lower 16 mantissa bits) and back,
+    ///   which provides approximate results. This is suitable for LUTs where small
+    ///   precision loss is acceptable (e.g., noise tables).
     ///
     /// # Panics
-    /// Panics if indices contain values outside 0..8 range.
+    /// May panic or produce undefined results if indices contain values outside 0..8 range.
     fn table_lookup_8(
         d: Self::Descriptor,
         table: &[f32; 8],

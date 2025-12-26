@@ -376,16 +376,62 @@ unsafe impl F32SimdVec for F32VecSse42 {
 
     #[inline(always)]
     fn table_lookup_8(d: Sse42Descriptor, table: &[f32; 8], indices: I32VecSse42) -> Self {
-        // Use scalar lookup - simple and correct
-        // The table is small (8 entries) so this is efficient
+        // Use pshufb (shuffle bytes) with BF16 storage for efficient table lookup.
+        // This is approximate (loses precision in bf16 conversion) but very fast.
+        // BF16 is the high 16 bits of f32, converted back by zero-extending to f32.
         #[target_feature(enable = "sse4.2")]
         #[inline]
         unsafe fn table_lookup_impl(table: &[f32; 8], indices: __m128i) -> __m128 {
-            let i0 = _mm_extract_epi32::<0>(indices) as usize;
-            let i1 = _mm_extract_epi32::<1>(indices) as usize;
-            let i2 = _mm_extract_epi32::<2>(indices) as usize;
-            let i3 = _mm_extract_epi32::<3>(indices) as usize;
-            _mm_set_ps(table[i3], table[i2], table[i1], table[i0])
+            // Convert f32 table to BF16 packed in 128 bits (16 bytes for 8 entries)
+            // BF16 is the high 16 bits of f32
+            let table_lo = _mm_loadu_ps(table.as_ptr());
+            let table_hi = _mm_loadu_ps(table.as_ptr().add(4));
+            let table_lo_i32 = _mm_castps_si128(table_lo);
+            let table_hi_i32 = _mm_castps_si128(table_hi);
+
+            // Extract high 16 bits (bf16) from each f32 using shuffle
+            // f32 bytes: [b0, b1, b2, b3] -> bf16 bytes: [b2, b3]
+            let bf16_extract = _mm_setr_epi8(
+                2, 3, 6, 7, 10, 11, 14, 15, -1, -1, -1, -1, -1, -1, -1, -1,
+            );
+            let bf16_lo = _mm_shuffle_epi8(table_lo_i32, bf16_extract);
+            let bf16_hi = _mm_shuffle_epi8(table_hi_i32, bf16_extract);
+            // Combine: bf16_lo has bytes 0-7, bf16_hi has bytes 0-7
+            // Result: [bf16_0..bf16_3, bf16_4..bf16_7]
+            let bf16_table = _mm_unpacklo_epi64(bf16_lo, bf16_hi);
+
+            // Build shuffle mask from indices
+            // Each i32 index (0-7) needs to select a 2-byte bf16 value
+            // Output f32 layout: [0x00, 0x00, bf16_lo, bf16_hi] per lane
+
+            // Step 1: Extract low byte of each i32 index
+            let extract_mask =
+                _mm_setr_epi8(0, 4, 8, 12, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1);
+            let idx_bytes = _mm_shuffle_epi8(indices, extract_mask);
+
+            // Step 2: Duplicate each byte [i0, i1, i2, i3] -> [i0, i0, i1, i1, i2, i2, i3, i3]
+            let dup_mask =
+                _mm_setr_epi8(0, 0, 1, 1, 2, 2, 3, 3, -1, -1, -1, -1, -1, -1, -1, -1);
+            let dup_bytes = _mm_shuffle_epi8(idx_bytes, dup_mask);
+
+            // Step 3: Multiply by 2 (byte indices into bf16 table)
+            let doubled = _mm_add_epi8(dup_bytes, dup_bytes);
+
+            // Step 4: Add [0, 1, 0, 1, ...] to get byte pairs [2*i, 2*i+1]
+            let add_pattern =
+                _mm_setr_epi8(0, 1, 0, 1, 0, 1, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0);
+            let byte_indices = _mm_add_epi8(doubled, add_pattern);
+
+            // Step 5: Interleave with 0x80 for zero-padding (bf16 high bytes of f32)
+            // Output: [0x80, 0x80, 2*i0, 2*i0+1, 0x80, 0x80, 2*i1, 2*i1+1, ...]
+            let zeros = _mm_set1_epi8(-128i8);
+            let shuffle_mask = _mm_unpacklo_epi16(zeros, byte_indices);
+
+            // Shuffle the bf16 table to get the values
+            let result = _mm_shuffle_epi8(bf16_table, shuffle_mask);
+
+            // Result has bf16 in high 16 bits of each 32-bit lane = valid f32
+            _mm_castsi128_ps(result)
         }
         // SAFETY: sse4.2 is available from the safety invariant on the descriptor
         F32VecSse42(unsafe { table_lookup_impl(table, indices.0) }, d)

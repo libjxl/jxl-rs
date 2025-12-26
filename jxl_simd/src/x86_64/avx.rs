@@ -455,24 +455,16 @@ unsafe impl F32SimdVec for F32VecAvx {
 
     #[inline(always)]
     fn table_lookup_8(d: AvxDescriptor, table: &[f32; 8], indices: I32VecAvx) -> Self {
-        // Use scalar lookup - simple and correct
+        // Use vpermps (permutevar8x32) for efficient 8-entry table lookup
         #[target_feature(enable = "avx2")]
         #[inline]
         unsafe fn table_lookup_impl(table: &[f32; 8], indices: __m256i) -> __m256 {
             // SAFETY: avx2 intrinsics are available from target_feature
             unsafe {
-                let mut result = [0.0f32; 8];
-                let indices_lo = _mm256_castsi256_si128(indices);
-                let indices_hi = _mm256_extracti128_si256::<1>(indices);
-                result[0] = table[_mm_extract_epi32::<0>(indices_lo) as usize];
-                result[1] = table[_mm_extract_epi32::<1>(indices_lo) as usize];
-                result[2] = table[_mm_extract_epi32::<2>(indices_lo) as usize];
-                result[3] = table[_mm_extract_epi32::<3>(indices_lo) as usize];
-                result[4] = table[_mm_extract_epi32::<0>(indices_hi) as usize];
-                result[5] = table[_mm_extract_epi32::<1>(indices_hi) as usize];
-                result[6] = table[_mm_extract_epi32::<2>(indices_hi) as usize];
-                result[7] = table[_mm_extract_epi32::<3>(indices_hi) as usize];
-                _mm256_loadu_ps(result.as_ptr())
+                // Load the 8-entry table into a 256-bit register
+                let table_vec = _mm256_loadu_ps(table.as_ptr());
+                // Use vpermps to permute based on indices
+                _mm256_permutevar8x32_ps(table_vec, indices)
             }
         }
         // SAFETY: avx2 is available from the safety invariant on the descriptor
