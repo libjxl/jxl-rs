@@ -181,6 +181,12 @@ unsafe impl F32SimdVec for f32 {
     }
 
     #[inline(always)]
+    fn table_lookup_8_approx(_d: Self::Descriptor, table: &[f32; 8], indices: i32) -> Self {
+        // For scalar, approximate is the same as exact
+        table[indices as usize]
+    }
+
+    #[inline(always)]
     fn round_store_u8(self, dest: &mut [u8]) {
         dest[0] = self.round() as u8;
     }

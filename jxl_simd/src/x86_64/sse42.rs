@@ -376,6 +376,22 @@ unsafe impl F32SimdVec for F32VecSse42 {
 
     #[inline(always)]
     fn table_lookup_8(d: Sse42Descriptor, table: &[f32; 8], indices: I32VecSse42) -> Self {
+        // Use scalar lookup for exact results
+        #[target_feature(enable = "sse4.2")]
+        #[inline]
+        unsafe fn table_lookup_impl(table: &[f32; 8], indices: __m128i) -> __m128 {
+            let i0 = _mm_extract_epi32::<0>(indices) as usize;
+            let i1 = _mm_extract_epi32::<1>(indices) as usize;
+            let i2 = _mm_extract_epi32::<2>(indices) as usize;
+            let i3 = _mm_extract_epi32::<3>(indices) as usize;
+            _mm_set_ps(table[i3], table[i2], table[i1], table[i0])
+        }
+        // SAFETY: sse4.2 is available from the safety invariant on the descriptor
+        F32VecSse42(unsafe { table_lookup_impl(table, indices.0) }, d)
+    }
+
+    #[inline(always)]
+    fn table_lookup_8_approx(d: Sse42Descriptor, table: &[f32; 8], indices: I32VecSse42) -> Self {
         // Use pshufb (shuffle bytes) with BF16 storage for efficient table lookup.
         // This is approximate (loses precision in bf16 conversion) but very fast.
         // BF16 is the high 16 bits of f32, converted back by zero-extending to f32.

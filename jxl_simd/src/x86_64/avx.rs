@@ -455,7 +455,7 @@ unsafe impl F32SimdVec for F32VecAvx {
 
     #[inline(always)]
     fn table_lookup_8(d: AvxDescriptor, table: &[f32; 8], indices: I32VecAvx) -> Self {
-        // Use vpermps (permutevar8x32) for efficient 8-entry table lookup
+        // Use vpermps (permutevar8x32) for efficient exact 8-entry table lookup
         #[target_feature(enable = "avx2")]
         #[inline]
         unsafe fn table_lookup_impl(table: &[f32; 8], indices: __m256i) -> __m256 {
@@ -469,6 +469,12 @@ unsafe impl F32SimdVec for F32VecAvx {
         }
         // SAFETY: avx2 is available from the safety invariant on the descriptor
         F32VecAvx(unsafe { table_lookup_impl(table, indices.0) }, d)
+    }
+
+    #[inline(always)]
+    fn table_lookup_8_approx(d: AvxDescriptor, table: &[f32; 8], indices: I32VecAvx) -> Self {
+        // For AVX2, vpermps is both fast and exact - no need for approximation
+        Self::table_lookup_8(d, table, indices)
     }
 
     #[inline(always)]
