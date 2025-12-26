@@ -572,15 +572,8 @@ pub fn decode_vardct_group(
                             &qblock[vardct_chan][..64],
                         );
                     }
-                    // Debug: count stored blocks
-                    static STORED_COUNT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
-                    let count = STORED_COUNT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                    if count < 5 || count % 10000 == 0 {
-                        eprintln!("DEBUG: Stored block {} at ({}, {})", count, bx, by);
-                    }
                 } else {
                     // Non-DCT8x8 block - coefficient extraction not supported
-                    eprintln!("DEBUG: Non-DCT8x8 block at ({}, {}), type {:?}", bx, by, transform_type);
                 }
             }
 

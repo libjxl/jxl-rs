@@ -223,7 +223,6 @@ impl Frame {
     /// This also initializes the coefficient storage if not already done.
     #[cfg(feature = "jpeg-reconstruction")]
     pub fn set_preserve_jpeg_coefficients(&mut self, preserve: bool) {
-        eprintln!("DEBUG: set_preserve_jpeg_coefficients({})", preserve);
         self.preserve_jpeg_coefficients = preserve;
         if preserve && self.jpeg_coefficients.is_none() {
             self.init_jpeg_coefficients();
@@ -235,7 +234,6 @@ impl Frame {
     fn init_jpeg_coefficients(&mut self) {
         let (width, height) = self.header.size_upsampled();
         let num_components = if self.color_channels == 1 { 1 } else { 3 };
-        eprintln!("DEBUG: init_jpeg_coefficients: {}x{}, {} components", width, height, num_components);
         let component_map = if num_components == 1 { [1usize, 1, 1] } else { [1usize, 0, 2] };
         let mut component_blocks = Vec::with_capacity(num_components);
         for &vardct_chan in component_map.iter().take(num_components) {

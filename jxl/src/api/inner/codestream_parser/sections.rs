@@ -217,12 +217,9 @@ impl CodestreamParser {
         // Extract JPEG coefficients before finalizing the frame
         #[cfg(feature = "jpeg-reconstruction")]
         if let Some(frame) = self.frame.as_mut() {
-            eprintln!("DEBUG sections: frame exists, checking for coefficients");
             if let Some(coeffs) = frame.take_jpeg_coefficients() {
-                eprintln!("DEBUG sections: got {} coefficients", coeffs.coefficients.iter().map(|c| c.len()).sum::<usize>());
                 // Merge coefficients into the jpeg_reconstruction data
                 if let Some(ref mut jpeg_data) = box_parser.jpeg_reconstruction {
-                    eprintln!("DEBUG sections: merging into jpeg_reconstruction");
                     jpeg_data.dct_coefficients = Some(coeffs);
                     if let Some((qtable, qtable_den)) = frame.jpeg_raw_quant_table() {
                         jpeg_data.update_quant_tables_from_raw(qtable, qtable_den, do_ycbcr)?;
@@ -256,11 +253,7 @@ impl CodestreamParser {
                             jpeg_data.fill_icc_app_markers(icc.as_ref())?;
                         }
                     }
-                } else {
-                    eprintln!("DEBUG sections: NO jpeg_reconstruction to merge into!");
                 }
-            } else {
-                eprintln!("DEBUG sections: no coefficients in frame");
             }
         }
 
