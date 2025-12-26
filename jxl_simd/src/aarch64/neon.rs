@@ -409,10 +409,30 @@ unsafe impl F32SimdVec for F32VecNeon {
         }
     }
 
+    // Table lookup using scalar for exact results
+    #[inline(always)]
+    fn table_lookup_8(d: NeonDescriptor, table: &[f32; 8], indices: I32VecNeon) -> F32VecNeon {
+        #[target_feature(enable = "neon")]
+        #[inline]
+        unsafe fn table_lookup_impl(table: &[f32; 8], indices: int32x4_t) -> float32x4_t {
+            // SAFETY: neon intrinsics are available from target_feature
+            unsafe {
+                let i0 = vgetq_lane_s32::<0>(indices) as usize;
+                let i1 = vgetq_lane_s32::<1>(indices) as usize;
+                let i2 = vgetq_lane_s32::<2>(indices) as usize;
+                let i3 = vgetq_lane_s32::<3>(indices) as usize;
+                let result = [table[i0], table[i1], table[i2], table[i3]];
+                vld1q_f32(result.as_ptr())
+            }
+        }
+        // SAFETY: neon is available from the safety invariant on the descriptor
+        F32VecNeon(unsafe { table_lookup_impl(table, indices.0) }, d)
+    }
+
     // Table lookup using vqtbl1q_u8 with BF16 storage for efficiency.
     // This is approximate (loses precision in bf16 conversion) but very fast.
     #[inline(always)]
-    fn table_lookup_8(d: NeonDescriptor, table: &[f32; 8], indices: I32VecNeon) -> F32VecNeon {
+    fn table_lookup_8_approx(d: NeonDescriptor, table: &[f32; 8], indices: I32VecNeon) -> F32VecNeon {
         #[target_feature(enable = "neon")]
         #[inline]
         unsafe fn table_lookup_impl(table: &[f32; 8], indices: int32x4_t) -> float32x4_t {
