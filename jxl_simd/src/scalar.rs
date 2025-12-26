@@ -17,6 +17,7 @@ impl SimdDescriptor for ScalarDescriptor {
     type I32Vec = i32;
     type U32Vec = u32;
     type Mask = bool;
+    type Bf16Table8 = [f32; 8];
 
     type Descriptor256 = Self;
     type Descriptor128 = Self;
@@ -183,6 +184,17 @@ unsafe impl F32SimdVec for f32 {
     #[inline(always)]
     fn table_lookup_8_approx(_d: Self::Descriptor, table: &[f32; 8], indices: i32) -> Self {
         // For scalar, approximate is the same as exact
+        table[indices as usize]
+    }
+
+    #[inline(always)]
+    fn prepare_table_bf16_8(_d: Self::Descriptor, table: &[f32; 8]) -> [f32; 8] {
+        // For scalar, just copy the table
+        *table
+    }
+
+    #[inline(always)]
+    fn table_lookup_bf16_8(_d: Self::Descriptor, table: [f32; 8], indices: i32) -> Self {
         table[indices as usize]
     }
 
