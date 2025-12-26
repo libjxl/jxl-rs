@@ -44,7 +44,6 @@ impl CodestreamParser {
         #[cfg(feature = "jpeg-reconstruction")] box_parser: &mut BoxParser,
     ) -> Result<Option<usize>> {
         let frame = self.frame.as_mut().unwrap();
-        let do_ycbcr = frame.header().do_ycbcr;
 
         // Dequeue ready sections.
         while self
@@ -216,6 +215,7 @@ impl CodestreamParser {
         if let Some(frame) = self.frame.as_mut()
             && let Some(coeffs) = frame.take_jpeg_coefficients()
         {
+            let do_ycbcr = frame.header().do_ycbcr;
             // Merge coefficients into the jpeg_reconstruction data
             if let Some(ref mut jpeg_data) = box_parser.jpeg_reconstruction {
                 jpeg_data.dct_coefficients = Some(coeffs);

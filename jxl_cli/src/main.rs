@@ -172,15 +172,16 @@ fn main() -> Result<()> {
     let mut file = fs::File::open(opt.input.clone())
         .wrap_err_with(|| format!("Failed to read source image from {:?}", opt.input))?;
 
-    let (numpy_output, exr_output, jpeg_output) =
-        match &opt.output.as_ref().map(|p| p.to_string_lossy()) {
-            Some(path) => (
-                path.ends_with(".npy"),
-                path.ends_with(".exr"),
-                is_jpeg_output(std::path::Path::new(path.as_ref())),
-            ),
-            None => (false, false, false),
-        };
+    let output_path = opt.output.as_ref().map(|p| p.to_string_lossy());
+    let (numpy_output, exr_output) = match &output_path {
+        Some(path) => (path.ends_with(".npy"), path.ends_with(".exr")),
+        None => (false, false),
+    };
+    #[cfg(feature = "jpeg-reconstruction")]
+    let jpeg_output = match &output_path {
+        Some(path) => is_jpeg_output(std::path::Path::new(path.as_ref())),
+        None => false,
+    };
     let high_precision = opt.high_precision;
     let options = |skip_preview: bool| {
         let mut options = JxlDecoderOptions::default();
