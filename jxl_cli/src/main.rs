@@ -179,15 +179,16 @@ fn main() -> Result<()> {
         .map(|f| OutputFormat::from_output_filename(&f.to_string_lossy()))
         .transpose()?;
 
-    let (numpy_output, exr_output, jpeg_output) =
-        match &opt.output.as_ref().map(|p| p.to_string_lossy()) {
-            Some(path) => (
-                path.ends_with(".npy"),
-                path.ends_with(".exr"),
-                is_jpeg_output(std::path::Path::new(path.as_ref())),
-            ),
-            None => (false, false, false),
-        };
+    let output_path = opt.output.as_ref().map(|p| p.to_string_lossy());
+    let (numpy_output, exr_output) = match &output_path {
+        Some(path) => (path.ends_with(".npy"), path.ends_with(".exr")),
+        None => (false, false),
+    };
+    #[cfg(feature = "jpeg-reconstruction")]
+    let jpeg_output = match &output_path {
+        Some(path) => is_jpeg_output(std::path::Path::new(path.as_ref())),
+        None => false,
+    };
     let high_precision = opt.high_precision;
     let options = |skip_preview: bool| {
         let mut options = JxlDecoderOptions::default();

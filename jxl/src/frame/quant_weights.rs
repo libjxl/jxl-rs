@@ -1059,6 +1059,7 @@ impl DequantMatrices {
         &self.table[self.table_offsets[quant_kind as usize * 3 + c]..]
     }
 
+    #[cfg(feature = "jpeg-reconstruction")]
     pub fn encodings(&self) -> &[QuantEncoding] {
         &self.encodings
     }
