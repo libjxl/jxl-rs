@@ -114,11 +114,18 @@ impl AvxDescriptor {
     }
 }
 
+/// Prepared 8-entry lookup table for AVX2.
+/// For AVX2, vpermps is both fast and exact, so we just store f32 values directly.
+#[derive(Clone, Copy, Debug)]
+#[repr(transparent)]
+pub struct Bf16Table8Avx(__m256);
+
 impl SimdDescriptor for AvxDescriptor {
     type F32Vec = F32VecAvx;
     type I32Vec = I32VecAvx;
     type U32Vec = U32VecAvx;
     type Mask = MaskAvx;
+    type Bf16Table8 = Bf16Table8Avx;
 
     type Descriptor256 = Self;
     type Descriptor128 = Sse42Descriptor;
@@ -475,6 +482,20 @@ unsafe impl F32SimdVec for F32VecAvx {
     fn table_lookup_8_approx(d: AvxDescriptor, table: &[f32; 8], indices: I32VecAvx) -> Self {
         // For AVX2, vpermps is both fast and exact - no need for approximation
         Self::table_lookup_8(d, table, indices)
+    }
+
+    #[inline(always)]
+    fn prepare_table_bf16_8(_d: AvxDescriptor, table: &[f32; 8]) -> Bf16Table8Avx {
+        // For AVX2, vpermps is exact and fast, so we just load the table as-is
+        // SAFETY: avx2 is available from the safety invariant on the descriptor
+        Bf16Table8Avx(unsafe { _mm256_loadu_ps(table.as_ptr()) })
+    }
+
+    #[inline(always)]
+    fn table_lookup_bf16_8(d: AvxDescriptor, table: Bf16Table8Avx, indices: I32VecAvx) -> Self {
+        // For AVX2, use vpermps which is both fast and exact
+        // SAFETY: avx2 is available from the safety invariant on the descriptor
+        F32VecAvx(unsafe { _mm256_permutevar8x32_ps(table.0, indices.0) }, d)
     }
 
     #[inline(always)]
