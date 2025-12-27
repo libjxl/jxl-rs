@@ -3074,6 +3074,105 @@ impl JpegDecoder {
         (value.clamp(0.0, 1.0) * self.sample_max()).round() as u16
     }
 
+    fn expand_nearest_row(&self, src: &[f32], dst: &mut [f32]) {
+        let out_len = dst.len();
+        for (i, &val) in src.iter().enumerate() {
+            let base = i * 2;
+            if base >= out_len {
+                break;
+            }
+            dst[base] = val;
+            if base + 1 < out_len {
+                dst[base + 1] = val;
+            }
+        }
+    }
+
+    fn upsample_h2v1_row(&self, src: &[f32], dst: &mut [f32], max_sample: f32) {
+        let len = src.len();
+        let out_len = dst.len();
+        for in_x in 0..len {
+            let cur = src[in_x] * max_sample;
+            let left = if in_x == 0 {
+                cur
+            } else {
+                src[in_x - 1] * max_sample
+            };
+            let right = if in_x + 1 < len {
+                src[in_x + 1] * max_sample
+            } else {
+                cur
+            };
+            let even = if in_x == 0 {
+                cur
+            } else {
+                (cur * 3.0 + left + 1.0) * 0.25
+            };
+            let odd = if in_x + 1 >= len {
+                cur
+            } else {
+                (cur * 3.0 + right + 2.0) * 0.25
+            };
+
+            let base = in_x * 2;
+            if base < out_len {
+                dst[base] = (even / max_sample).clamp(0.0, 1.0);
+            }
+            if base + 1 < out_len {
+                dst[base + 1] = (odd / max_sample).clamp(0.0, 1.0);
+            }
+        }
+    }
+
+    fn upsample_h1v2_row(
+        &self,
+        row0: &[f32],
+        row1: &[f32],
+        dst: &mut [f32],
+        max_sample: f32,
+        bias: f32,
+    ) {
+        for (i, out) in dst.iter_mut().enumerate() {
+            let cur = row0[i] * max_sample;
+            let neighbor = row1[i] * max_sample;
+            let val = (cur * 3.0 + neighbor + bias) * 0.25;
+            *out = (val / max_sample).clamp(0.0, 1.0);
+        }
+    }
+
+    fn upsample_h2v2_row(&self, row0: &[f32], row1: &[f32], dst: &mut [f32], max_sample: f32) {
+        let len = row0.len();
+        let out_len = dst.len();
+        for in_x in 0..len {
+            let cur0 = row0[in_x] * max_sample;
+            let cur1 = row1[in_x] * max_sample;
+            let thiscolsum = cur0 * 3.0 + cur1;
+            let last_idx = if in_x == 0 { 0 } else { in_x - 1 };
+            let next_idx = if in_x + 1 < len { in_x + 1 } else { in_x };
+            let lastcolsum = row0[last_idx] * 3.0 * max_sample + row1[last_idx] * max_sample;
+            let nextcolsum = row0[next_idx] * 3.0 * max_sample + row1[next_idx] * max_sample;
+
+            let even = if in_x == 0 {
+                (thiscolsum * 4.0 + 8.0) / 16.0
+            } else {
+                (thiscolsum * 3.0 + lastcolsum + 8.0) / 16.0
+            };
+            let odd = if in_x + 1 >= len {
+                (thiscolsum * 4.0 + 7.0) / 16.0
+            } else {
+                (thiscolsum * 3.0 + nextcolsum + 7.0) / 16.0
+            };
+
+            let base = in_x * 2;
+            if base < out_len {
+                dst[base] = (even / max_sample).clamp(0.0, 1.0);
+            }
+            if base + 1 < out_len {
+                dst[base + 1] = (odd / max_sample).clamp(0.0, 1.0);
+            }
+        }
+    }
+
     fn use_ycbcr(&self) -> bool {
         if self.num_components != 3 {
             return false;
@@ -4510,32 +4609,163 @@ impl JpegDecoder {
             && output_layout.crop_x == 0
             && output_layout.crop_y == 0
             && self.num_components == 3
-            && comp_layout.max_h == 1
-            && comp_layout.max_v == 1
             && output_layout.out_width == comp_layout.width
             && output_layout.out_height == comp_layout.height
             && format == JpegOutputFormat::Bgra8
         {
-            let stride = comp_strides[0];
-            for y in 0..output_layout.out_height {
-                let row_start = y * stride;
-                let row_end = row_start + output_layout.out_width;
-                let out_start = y * row_stride;
-                let out_end = out_start + output_layout.out_width * 4;
+            if comp_layout.max_h == 1 && comp_layout.max_v == 1 {
+                let stride = comp_strides[0];
+                for y in 0..output_layout.out_height {
+                    let row_start = y * stride;
+                    let row_end = row_start + output_layout.out_width;
+                    let out_start = y * row_stride;
+                    let out_end = out_start + output_layout.out_width * 4;
 
-                let row0 = &comp_data[0][row_start..row_end];
-                let row1 = &comp_data[1][row_start..row_end];
-                let row2 = &comp_data[2][row_start..row_end];
-                let out_row = &mut output[out_start..out_end];
+                    let row0 = &comp_data[0][row_start..row_end];
+                    let row1 = &comp_data[1][row_start..row_end];
+                    let row2 = &comp_data[2][row_start..row_end];
+                    let out_row = &mut output[out_start..out_end];
 
-                if use_ycbcr {
-                    jpeg_ycbcr_to_bgra_row_dispatch(row0, row1, row2, out_row, max_sample, offset);
-                } else {
-                    jpeg_rgb_to_bgra_row_dispatch(row0, row1, row2, out_row);
+                    if use_ycbcr {
+                        jpeg_ycbcr_to_bgra_row_dispatch(row0, row1, row2, out_row, max_sample, offset);
+                    } else {
+                        jpeg_rgb_to_bgra_row_dispatch(row0, row1, row2, out_row);
+                    }
                 }
+
+                return Ok(());
             }
 
-            return Ok(());
+            if use_ycbcr && self.components.len() >= 3 {
+                let c_h_ratio = comp_layout.max_h / self.components[1].h_samp as usize;
+                let c_v_ratio = comp_layout.max_v / self.components[1].v_samp as usize;
+                let c_h_ratio2 = comp_layout.max_h / self.components[2].h_samp as usize;
+                let c_v_ratio2 = comp_layout.max_v / self.components[2].v_samp as usize;
+
+                if c_h_ratio == c_h_ratio2 && c_v_ratio == c_v_ratio2 {
+                    let out_width = output_layout.out_width;
+                    let out_height = output_layout.out_height;
+                    let y_stride = comp_strides[0];
+                    let c_stride = comp_strides[1];
+                    let c_height = comp_heights[1];
+
+                    if c_h_ratio == 2 && c_v_ratio == 1 {
+                        let fancy = c_stride > 2;
+                        let mut cb_row = vec![0.0f32; out_width];
+                        let mut cr_row = vec![0.0f32; out_width];
+
+                        for y in 0..out_height {
+                            let y_row_start = y * y_stride;
+                            let y_row_end = y_row_start + out_width;
+                            let out_start = y * row_stride;
+                            let out_end = out_start + out_width * 4;
+                            let c_row_start = y * c_stride;
+
+                            let y_row = &comp_data[0][y_row_start..y_row_end];
+                            let cb_src = &comp_data[1][c_row_start..c_row_start + c_stride];
+                            let cr_src = &comp_data[2][c_row_start..c_row_start + c_stride];
+                            let out_row = &mut output[out_start..out_end];
+
+                            if fancy {
+                                self.upsample_h2v1_row(cb_src, &mut cb_row, max_sample);
+                                self.upsample_h2v1_row(cr_src, &mut cr_row, max_sample);
+                            } else {
+                                self.expand_nearest_row(cb_src, &mut cb_row);
+                                self.expand_nearest_row(cr_src, &mut cr_row);
+                            }
+
+                            jpeg_ycbcr_to_bgra_row_dispatch(y_row, &cb_row, &cr_row, out_row, max_sample, offset);
+                        }
+
+                        return Ok(());
+                    }
+
+                    if c_h_ratio == 2 && c_v_ratio == 2 {
+                        let fancy = c_stride > 2 && c_height > 1;
+                        let mut cb_row = vec![0.0f32; out_width];
+                        let mut cr_row = vec![0.0f32; out_width];
+
+                        for y in 0..out_height {
+                            let y_row_start = y * y_stride;
+                            let y_row_end = y_row_start + out_width;
+                            let out_start = y * row_stride;
+                            let out_end = out_start + out_width * 4;
+                            let in_y = y / 2;
+                            let row1_idx = if y % 2 == 0 {
+                                if in_y == 0 { in_y } else { in_y - 1 }
+                            } else if in_y + 1 < c_height {
+                                in_y + 1
+                            } else {
+                                in_y
+                            };
+                            let c_row_start0 = in_y * c_stride;
+                            let c_row_start1 = row1_idx * c_stride;
+
+                            let y_row = &comp_data[0][y_row_start..y_row_end];
+                            let cb_row0 = &comp_data[1][c_row_start0..c_row_start0 + c_stride];
+                            let cb_row1 = &comp_data[1][c_row_start1..c_row_start1 + c_stride];
+                            let cr_row0 = &comp_data[2][c_row_start0..c_row_start0 + c_stride];
+                            let cr_row1 = &comp_data[2][c_row_start1..c_row_start1 + c_stride];
+                            let out_row = &mut output[out_start..out_end];
+
+                            if fancy {
+                                self.upsample_h2v2_row(cb_row0, cb_row1, &mut cb_row, max_sample);
+                                self.upsample_h2v2_row(cr_row0, cr_row1, &mut cr_row, max_sample);
+                            } else {
+                                self.expand_nearest_row(cb_row0, &mut cb_row);
+                                self.expand_nearest_row(cr_row0, &mut cr_row);
+                            }
+
+                            jpeg_ycbcr_to_bgra_row_dispatch(y_row, &cb_row, &cr_row, out_row, max_sample, offset);
+                        }
+
+                        return Ok(());
+                    }
+
+                    if c_h_ratio == 1 && c_v_ratio == 2 {
+                        let fancy = c_height > 1;
+                        let mut cb_row = vec![0.0f32; out_width];
+                        let mut cr_row = vec![0.0f32; out_width];
+
+                        for y in 0..out_height {
+                            let y_row_start = y * y_stride;
+                            let y_row_end = y_row_start + out_width;
+                            let out_start = y * row_stride;
+                            let out_end = out_start + out_width * 4;
+                            let in_y = y / 2;
+                            let row1_idx = if y % 2 == 0 {
+                                if in_y == 0 { in_y } else { in_y - 1 }
+                            } else if in_y + 1 < c_height {
+                                in_y + 1
+                            } else {
+                                in_y
+                            };
+                            let c_row_start0 = in_y * c_stride;
+                            let c_row_start1 = row1_idx * c_stride;
+
+                            let y_row = &comp_data[0][y_row_start..y_row_end];
+                            let cb_row0 = &comp_data[1][c_row_start0..c_row_start0 + c_stride];
+                            let cb_row1 = &comp_data[1][c_row_start1..c_row_start1 + c_stride];
+                            let cr_row0 = &comp_data[2][c_row_start0..c_row_start0 + c_stride];
+                            let cr_row1 = &comp_data[2][c_row_start1..c_row_start1 + c_stride];
+                            let out_row = &mut output[out_start..out_end];
+
+                            if fancy {
+                                let bias = if y % 2 == 0 { 1.0 } else { 2.0 };
+                                self.upsample_h1v2_row(cb_row0, cb_row1, &mut cb_row, max_sample, bias);
+                                self.upsample_h1v2_row(cr_row0, cr_row1, &mut cr_row, max_sample, bias);
+                            } else {
+                                cb_row.copy_from_slice(&cb_row0[..out_width]);
+                                cr_row.copy_from_slice(&cr_row0[..out_width]);
+                            }
+
+                            jpeg_ycbcr_to_bgra_row_dispatch(y_row, &cb_row, &cr_row, out_row, max_sample, offset);
+                        }
+
+                        return Ok(());
+                    }
+                }
+            }
         }
 
         for src_y in 0..comp_layout.height {
@@ -5930,6 +6160,7 @@ mod jpeg_file_tests {
     const QUALITY_50: &[u8] = include_bytes!("../resources/test/jpeg/quality50_16x16.jpg");
     const RESTART_8X8: &[u8] = include_bytes!("../resources/test/jpeg/restart_8x8.jpg");
     const SUBSAMPLED_420: &[u8] = include_bytes!("../resources/test/jpeg/subsampled_420_8x8.jpg");
+    const SUBSAMPLED_422: &[u8] = include_bytes!("../resources/test/jpeg/subsampled_422_8x8.jpg");
     const SUBSAMPLED_444: &[u8] = include_bytes!("../resources/test/jpeg/subsampled_444_8x8.jpg");
     const WITH_EXIF_8X8: &[u8] = include_bytes!("../resources/test/jpeg/with_exif_8x8.jpg");
     const RGB_12BIT: &[u8] = include_bytes!("../resources/test/jpeg/testorig12.jpg");
@@ -6226,6 +6457,24 @@ mod jpeg_file_tests {
     }
 
     #[test]
+    fn test_decode_into_subsampled_422_matches_decode() {
+        let decoder = JpegDecoder::new(SUBSAMPLED_422).expect("Failed to create decoder");
+        let options = JpegDecodeOptions::default();
+
+        let mut output = vec![0u8; 8 * 8 * 4];
+        decoder
+            .decode_into(SUBSAMPLED_422, &options, JpegOutputFormat::Bgra8, &mut output, 8 * 4)
+            .expect("decode_into failed");
+
+        let image = decoder.decode(SUBSAMPLED_422).expect("decode failed");
+        let expected = rgb_to_bgra_bytes(&image);
+        assert_eq!(output.len(), expected.len());
+        for (a, b) in output.iter().zip(expected.iter()) {
+            assert!((*a as i32 - *b as i32).abs() <= 1);
+        }
+    }
+
+    #[test]
     fn test_all_files_parse() {
         let test_files: &[(&str, &[u8])] = &[
             ("cmyk_16x16", CMYK_16X16),
@@ -6238,6 +6487,7 @@ mod jpeg_file_tests {
             ("quality50_16x16", QUALITY_50),
             ("restart_8x8", RESTART_8X8),
             ("subsampled_420", SUBSAMPLED_420),
+            ("subsampled_422", SUBSAMPLED_422),
             ("subsampled_444", SUBSAMPLED_444),
             ("with_exif_8x8", WITH_EXIF_8X8),
             ("rgb_12bit", RGB_12BIT),
