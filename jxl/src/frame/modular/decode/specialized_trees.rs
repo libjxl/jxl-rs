@@ -250,11 +250,44 @@ impl ModularChannelDecoder for WpOnlyLookup {
     }
 }
 
-pub struct SingleGradientOnly {
+/// Fast path for single-leaf tree with Zero predictor (used for LZ77/progressive lossless).
+/// No prediction calculation needed, no neighbor access required.
+pub struct SingleZero {
     ctx: usize,
+    multiplier: u32,
+    offset: i32,
 }
 
-impl ModularChannelDecoder for SingleGradientOnly {
+impl ModularChannelDecoder for SingleZero {
+    const NEEDS_TOP: bool = false;
+    const NEEDS_TOPTOP: bool = false;
+
+    fn init_row(&mut self, _: &mut [&mut ModularChannel], _: usize, _: usize) {}
+
+    #[inline(always)]
+    fn decode_one(
+        &mut self,
+        _prediction_data: PredictionData,
+        _: (usize, usize),
+        _: usize,
+        reader: &mut SymbolReader,
+        br: &mut BitReader,
+        histograms: &Histograms,
+    ) -> i32 {
+        let dec = reader.read_signed(histograms, br, self.ctx);
+        make_pixel(dec, self.multiplier, self.offset as i64)
+    }
+}
+
+/// Fast path for single-leaf tree with Gradient predictor.
+/// Only needs top row, not toptop.
+pub struct SingleGradient {
+    ctx: usize,
+    multiplier: u32,
+    offset: i32,
+}
+
+impl ModularChannelDecoder for SingleGradient {
     const NEEDS_TOP: bool = true;
     const NEEDS_TOPTOP: bool = false;
 
@@ -272,7 +305,100 @@ impl ModularChannelDecoder for SingleGradientOnly {
     ) -> i32 {
         let pred = Predictor::Gradient.predict_one(prediction_data, 0);
         let dec = reader.read_signed(histograms, br, self.ctx);
-        make_pixel(dec, 1, pred)
+        make_pixel(dec, self.multiplier, pred + self.offset as i64)
+    }
+}
+
+/// Fast path for single-leaf tree with West or WestWest predictor.
+/// Only uses left/leftleft pixel, no top row needed.
+pub struct SingleWest {
+    predictor: Predictor,
+    ctx: usize,
+    multiplier: u32,
+    offset: i32,
+}
+
+impl ModularChannelDecoder for SingleWest {
+    const NEEDS_TOP: bool = false;
+    const NEEDS_TOPTOP: bool = false;
+
+    fn init_row(&mut self, _: &mut [&mut ModularChannel], _: usize, _: usize) {}
+
+    #[inline(always)]
+    fn decode_one(
+        &mut self,
+        prediction_data: PredictionData,
+        _: (usize, usize),
+        _: usize,
+        reader: &mut SymbolReader,
+        br: &mut BitReader,
+        histograms: &Histograms,
+    ) -> i32 {
+        let pred = self.predictor.predict_one(prediction_data, 0);
+        let dec = reader.read_signed(histograms, br, self.ctx);
+        make_pixel(dec, self.multiplier, pred + self.offset as i64)
+    }
+}
+
+/// Fast path for single-leaf tree with predictors that need top row but not toptop.
+/// Covers: North, Select, NorthEast, NorthWest, AverageWestAndNorth, etc.
+pub struct SingleNodeTopOnly {
+    predictor: Predictor,
+    ctx: usize,
+    multiplier: u32,
+    offset: i32,
+}
+
+impl ModularChannelDecoder for SingleNodeTopOnly {
+    const NEEDS_TOP: bool = true;
+    const NEEDS_TOPTOP: bool = false;
+
+    fn init_row(&mut self, _: &mut [&mut ModularChannel], _: usize, _: usize) {}
+
+    #[inline(always)]
+    fn decode_one(
+        &mut self,
+        prediction_data: PredictionData,
+        _: (usize, usize),
+        _: usize,
+        reader: &mut SymbolReader,
+        br: &mut BitReader,
+        histograms: &Histograms,
+    ) -> i32 {
+        let pred = self.predictor.predict_one(prediction_data, 0);
+        let dec = reader.read_signed(histograms, br, self.ctx);
+        make_pixel(dec, self.multiplier, pred + self.offset as i64)
+    }
+}
+
+/// Fast path for single-leaf tree with AverageAll predictor.
+/// Needs both top and toptop rows.
+pub struct SingleNodeFull {
+    predictor: Predictor,
+    ctx: usize,
+    multiplier: u32,
+    offset: i32,
+}
+
+impl ModularChannelDecoder for SingleNodeFull {
+    const NEEDS_TOP: bool = true;
+    const NEEDS_TOPTOP: bool = true;
+
+    fn init_row(&mut self, _: &mut [&mut ModularChannel], _: usize, _: usize) {}
+
+    #[inline(always)]
+    fn decode_one(
+        &mut self,
+        prediction_data: PredictionData,
+        _: (usize, usize),
+        _: usize,
+        reader: &mut SymbolReader,
+        br: &mut BitReader,
+        histograms: &Histograms,
+    ) -> i32 {
+        let pred = self.predictor.predict_one(prediction_data, 0);
+        let dec = reader.read_signed(histograms, br, self.ctx);
+        make_pixel(dec, self.multiplier, pred + self.offset as i64)
     }
 }
 
@@ -280,7 +406,11 @@ impl ModularChannelDecoder for SingleGradientOnly {
 pub enum TreeSpecialCase {
     NoWp(NoWpTree),
     WpOnly(WpOnlyLookup),
-    SingleGradientOnly(SingleGradientOnly),
+    SingleZero(SingleZero),
+    SingleGradient(SingleGradient),
+    SingleWest(SingleWest),
+    SingleNodeTopOnly(SingleNodeTopOnly),
+    SingleNodeFull(SingleNodeFull),
     General(GeneralTree),
 }
 
@@ -344,18 +474,66 @@ pub fn specialize_tree(
         }
     }
 
+    // Check for single-leaf trees - these get specialized fast paths
     if let [
         TreeNode::Leaf {
-            predictor: Predictor::Gradient,
-            multiplier: 1,
-            offset: 0,
+            predictor,
+            multiplier,
+            offset,
             id,
         },
     ] = &*pruned_tree
     {
-        return Ok(TreeSpecialCase::SingleGradientOnly(SingleGradientOnly {
-            ctx: *id as usize,
-        }));
+        let ctx = *id as usize;
+        let multiplier = *multiplier;
+        let offset = *offset;
+        match predictor {
+            // Zero predictor: no prediction, no neighbor access (fastest for LZ77)
+            Predictor::Zero => {
+                return Ok(TreeSpecialCase::SingleZero(SingleZero {
+                    ctx,
+                    multiplier,
+                    offset,
+                }));
+            }
+            // Gradient predictor: only needs top row
+            Predictor::Gradient => {
+                return Ok(TreeSpecialCase::SingleGradient(SingleGradient {
+                    ctx,
+                    multiplier,
+                    offset,
+                }));
+            }
+            // West/WestWest: only uses left pixels, no top row needed
+            Predictor::West | Predictor::WestWest => {
+                return Ok(TreeSpecialCase::SingleWest(SingleWest {
+                    predictor: *predictor,
+                    ctx,
+                    multiplier,
+                    offset,
+                }));
+            }
+            // AverageAll needs both top and toptop rows
+            Predictor::AverageAll => {
+                return Ok(TreeSpecialCase::SingleNodeFull(SingleNodeFull {
+                    predictor: *predictor,
+                    ctx,
+                    multiplier,
+                    offset,
+                }));
+            }
+            // Weighted predictor needs full WP state - fall through to general case
+            Predictor::Weighted => {}
+            // All other predictors need top row but not toptop
+            _ => {
+                return Ok(TreeSpecialCase::SingleNodeTopOnly(SingleNodeTopOnly {
+                    predictor: *predictor,
+                    ctx,
+                    multiplier,
+                    offset,
+                }));
+            }
+        }
     }
 
     if !uses_non_wp
