@@ -4,8 +4,28 @@
 // license that can be found in the LICENSE file.
 
 use crate::BLOCK_DIM;
+use crate::features::epf::SigmaSource;
 
 use jxl_simd::{F32SimdVec, I32SimdVec, SimdDescriptor, SimdMask};
+
+/// Sigma row source for EPF processing.
+/// Either a slice from the variable sigma image, or a constant value.
+#[derive(Clone, Copy)]
+pub(super) enum SigmaRow<'a> {
+    Variable(&'a [f32]),
+    Constant(f32),
+}
+
+impl SigmaSource {
+    /// Get the sigma row for a given y position.
+    #[inline(always)]
+    pub(super) fn row(&self, y: usize) -> SigmaRow<'_> {
+        match self {
+            SigmaSource::Variable(image) => SigmaRow::Variable(image.row(y)),
+            SigmaSource::Constant(sigma) => SigmaRow::Constant(*sigma),
+        }
+    }
+}
 
 #[inline(always)]
 pub(super) fn prepare_sad_mul_storage(x: usize, y: usize, sm: f32, bsm: f32) -> [f32; 24] {
@@ -21,7 +41,15 @@ pub(super) fn prepare_sad_mul_storage(x: usize, y: usize, sm: f32, bsm: f32) -> 
 }
 
 #[inline(always)]
-pub(super) fn get_sigma<D: SimdDescriptor>(d: D, x: usize, row_sigma: &[f32]) -> D::F32Vec {
+pub(super) fn get_sigma<D: SimdDescriptor>(d: D, x: usize, row_sigma: SigmaRow<'_>) -> D::F32Vec {
+    match row_sigma {
+        SigmaRow::Constant(sigma) => D::F32Vec::splat(d, sigma),
+        SigmaRow::Variable(row_sigma) => get_sigma_from_row(d, x, row_sigma),
+    }
+}
+
+#[inline(always)]
+fn get_sigma_from_row<D: SimdDescriptor>(d: D, x: usize, row_sigma: &[f32]) -> D::F32Vec {
     const { assert!(BLOCK_DIM == 8) }
     const { assert!(D::F32Vec::LEN <= 16) }
     let iota = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15];
