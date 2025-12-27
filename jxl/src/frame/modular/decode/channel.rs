@@ -195,7 +195,19 @@ pub(super) fn decode_modular_channel(
         TreeSpecialCase::WpOnly(t) => {
             decode_modular_channel_impl(buffers, chan, t, reader, br, &tree.histograms)
         }
-        TreeSpecialCase::SingleGradientOnly(t) => {
+        TreeSpecialCase::SingleZero(t) => {
+            decode_modular_channel_impl(buffers, chan, t, reader, br, &tree.histograms)
+        }
+        TreeSpecialCase::SingleGradient(t) => {
+            decode_modular_channel_impl(buffers, chan, t, reader, br, &tree.histograms)
+        }
+        TreeSpecialCase::SingleWest(t) => {
+            decode_modular_channel_impl(buffers, chan, t, reader, br, &tree.histograms)
+        }
+        TreeSpecialCase::SingleNodeTopOnly(t) => {
+            decode_modular_channel_impl(buffers, chan, t, reader, br, &tree.histograms)
+        }
+        TreeSpecialCase::SingleNodeFull(t) => {
             decode_modular_channel_impl(buffers, chan, t, reader, br, &tree.histograms)
         }
         TreeSpecialCase::General(t) => {
