@@ -271,6 +271,8 @@ pub enum Error {
     TooManyExtraChannels(usize),
     #[error("Invalid JPEG reconstruction data in jbrd box")]
     InvalidJpegReconstructionData,
+    #[error("Invalid JPEG data")]
+    InvalidJpegData,
 }
 
 pub type Result<T, E = Error> = std::result::Result<T, E>;
