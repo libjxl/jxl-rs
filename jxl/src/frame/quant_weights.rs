@@ -897,6 +897,11 @@ impl DequantMatrices {
         &self.table[self.table_offsets[quant_kind as usize * 3 + c]..]
     }
 
+    #[cfg(feature = "jpeg-reconstruction")]
+    pub fn encodings(&self) -> &[QuantEncoding] {
+        &self.encodings
+    }
+
     // TODO(veluca): figure out if this should actually be unused.
     #[allow(dead_code)]
     pub fn inv_matrix(&self, quant_kind: HfTransformType, c: usize) -> &[f32] {

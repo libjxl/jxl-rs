@@ -269,6 +269,8 @@ pub enum Error {
     SaveDifferentDownsample((u8, u8), (u8, u8)),
     #[error("Image has {0} extra channels, more than the maximum of 256")]
     TooManyExtraChannels(usize),
+    #[error("Invalid JPEG reconstruction data in jbrd box")]
+    InvalidJpegReconstructionData,
 }
 
 pub type Result<T, E = Error> = std::result::Result<T, E>;
