@@ -11,7 +11,7 @@
 
 use crate::bit_reader::BitReader;
 use crate::error::{Error, Result};
-use jxl_simd::{shr, simd_function, F32SimdVec, I32SimdVec, SimdMask};
+use jxl_simd::{shl, shr, simd_function, F32SimdVec, I32SimdVec, SimdMask};
 
 /// Type of APP marker in JPEG file.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -6291,17 +6291,6 @@ simd_function!(
             return;
         }
         let max_sample_i = max_sample.round() as i32;
-        if max_sample_i > 4095 {
-            for j in 0..len {
-                let (r, g, b) = ycbcr_to_rgb(y[j], cb[j], cr[j], max_sample, offset);
-                let dst = j * 4;
-                out[dst] = (b.clamp(0.0, 1.0) * 255.0).round() as u8;
-                out[dst + 1] = (g.clamp(0.0, 1.0) * 255.0).round() as u8;
-                out[dst + 2] = (r.clamp(0.0, 1.0) * 255.0).round() as u8;
-                out[dst + 3] = 255;
-            }
-            return;
-        }
         let vec_len = D::F32Vec::LEN;
         debug_assert!(vec_len <= 16);
         let max_v = D::F32Vec::splat(d, max_sample);
@@ -6312,7 +6301,6 @@ simd_function!(
         let half_v = D::F32Vec::splat(d, 0.5);
         let zero_i = D::I32Vec::splat(d, 0);
         let max_i = D::I32Vec::splat(d, max_sample_i);
-        let one_half = D::I32Vec::splat(d, JPEG_YCC_ONE_HALF as i32);
         let coeff_r = D::I32Vec::splat(d, JPEG_YCC_FIX_1_40200 as i32);
         let coeff_gb = D::I32Vec::splat(d, -(JPEG_YCC_FIX_0_34414 as i32));
         let coeff_gr = D::I32Vec::splat(d, -(JPEG_YCC_FIX_0_71414 as i32));
@@ -6321,6 +6309,39 @@ simd_function!(
             let abs = v.abs();
             let rounded = (abs + half_v).floor().copysign(v);
             rounded.as_i32()
+        };
+        let mask_ffff = D::I32Vec::splat(d, 0xFFFF);
+        let mask_7fff = D::I32Vec::splat(d, 0x7FFF);
+        let one = D::I32Vec::splat(d, 1);
+        let half = D::I32Vec::splat(d, JPEG_YCC_ONE_HALF as i32);
+        let mul_hi_lo = |a: D::I32Vec, b: D::I32Vec| {
+            let a_hi = shr!(a, 16);
+            let b_hi = shr!(b, 16);
+            let a_lo = a & mask_ffff;
+            let b_lo = b & mask_ffff;
+
+            let a0 = a_lo & mask_7fff;
+            let b0 = b_lo & mask_7fff;
+            let a1 = shr!(a_lo, 15);
+            let b1 = shr!(b_lo, 15);
+
+            let p0 = a0 * b0;
+            let p1 = a0 * b1 + a1 * b0;
+            let p2 = a1 * b1;
+
+            let p0_hi = shr!(p0, 16);
+            let p0_lo = p0 & mask_ffff;
+            let p1_lo = p1 & one;
+            let low16 = p0_lo + shl!(p1_lo, 15);
+            let carry0 = shr!(low16, 16);
+            let low16 = low16 & mask_ffff;
+            let high_lo = p0_hi + shr!(p1, 1) + carry0 + shl!(p2, 14);
+
+            let term_hi = shl!(a_hi * b_hi, 16);
+            let term_mid = a_hi * b_lo + a_lo * b_hi;
+            let hi = term_hi + term_mid + high_lo;
+
+            (hi, low16)
         };
 
         let mut i = 0usize;
@@ -6333,9 +6354,18 @@ simd_function!(
             let cb_i = round_to_i32(cbv);
             let cr_i = round_to_i32(crv);
 
-            let r = y_i + shr!(coeff_r * cr_i + one_half, 16);
-            let g = y_i + shr!(coeff_gb * cb_i + coeff_gr * cr_i + one_half, 16);
-            let b = y_i + shr!(coeff_b * cb_i + one_half, 16);
+            let (r_hi, r_lo) = mul_hi_lo(coeff_r, cr_i);
+            let (b_hi, b_lo) = mul_hi_lo(coeff_b, cb_i);
+            let (g_hi0, g_lo0) = mul_hi_lo(coeff_gb, cb_i);
+            let (g_hi1, g_lo1) = mul_hi_lo(coeff_gr, cr_i);
+
+            let r = y_i + r_hi + shr!(r_lo + half, 16);
+            let b = y_i + b_hi + shr!(b_lo + half, 16);
+            let g_lo = g_lo0 + g_lo1;
+            let g_carry = shr!(g_lo, 16);
+            let g_lo = g_lo & mask_ffff;
+            let g_hi = g_hi0 + g_hi1 + g_carry;
+            let g = y_i + g_hi + shr!(g_lo + half, 16);
 
             let r = r.lt_zero().if_then_else_i32(zero_i, r);
             let g = g.lt_zero().if_then_else_i32(zero_i, g);
@@ -7064,14 +7094,27 @@ mod jpeg_file_tests {
             let y_vals = [0i32, 1, max_sample_i / 4, max_sample_i / 2, max_sample_i - 1, max_sample_i];
             let cb_vals = [0i32, max_sample_i / 4, max_sample_i / 2, max_sample_i / 2 + 1, max_sample_i];
             let cr_vals = [max_sample_i, max_sample_i / 2 + 1, max_sample_i / 2, max_sample_i / 4, 0];
-            let len = 32usize;
+            let len = 256usize;
             let mut y = vec![0.0f32; len];
             let mut cb = vec![0.0f32; len];
             let mut cr = vec![0.0f32; len];
+            let mut seed = 0x1234_5678u32;
             for i in 0..len {
-                y[i] = y_vals[i % y_vals.len()] as f32 / max_sample;
-                cb[i] = cb_vals[i % cb_vals.len()] as f32 / max_sample;
-                cr[i] = cr_vals[i % cr_vals.len()] as f32 / max_sample;
+                if i < y_vals.len() {
+                    y[i] = y_vals[i] as f32 / max_sample;
+                    cb[i] = cb_vals[i % cb_vals.len()] as f32 / max_sample;
+                    cr[i] = cr_vals[i % cr_vals.len()] as f32 / max_sample;
+                } else {
+                    seed = seed.wrapping_mul(1664525).wrapping_add(1013904223);
+                    let y_val = (seed % (max_sample_i as u32 + 1)) as i32;
+                    seed = seed.wrapping_mul(1664525).wrapping_add(1013904223);
+                    let cb_val = (seed % (max_sample_i as u32 + 1)) as i32;
+                    seed = seed.wrapping_mul(1664525).wrapping_add(1013904223);
+                    let cr_val = (seed % (max_sample_i as u32 + 1)) as i32;
+                    y[i] = y_val as f32 / max_sample;
+                    cb[i] = cb_val as f32 / max_sample;
+                    cr[i] = cr_val as f32 / max_sample;
+                }
             }
 
             let mut out = vec![0u8; len * 4];
