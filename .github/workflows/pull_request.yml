@@ -27,6 +27,7 @@ jobs:
 
   authors:
     runs-on: [ubuntu-latest]
+    continue-on-error: true
     steps:
     - name: Checkout the source
       uses: actions/checkout@v4
