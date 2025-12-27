@@ -2,4 +2,6 @@
 *.swp
 perf.data
 perf.data.old
-/samples/
+/samples/*
+!/samples/chromium_integration/
+!/samples/chromium_integration/**
