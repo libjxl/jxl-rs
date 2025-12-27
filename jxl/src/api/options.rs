@@ -41,6 +41,11 @@ pub struct JxlDecoderOptions {
     /// This produces premultiplied alpha output, which is useful for compositing.
     /// Default: false (output straight alpha)
     pub premultiply_output: bool,
+    /// If true, preserve quantized DCT coefficients for JPEG reconstruction.
+    /// This is only applicable for VarDCT frames with 8x8 DCT blocks.
+    /// Default: false
+    #[cfg(feature = "jpeg-reconstruction")]
+    pub preserve_jpeg_coefficients: bool,
 }
 
 impl Default for JxlDecoderOptions {
@@ -58,6 +63,8 @@ impl Default for JxlDecoderOptions {
             pixel_limit: None,
             high_precision: false,
             premultiply_output: false,
+            #[cfg(feature = "jpeg-reconstruction")]
+            preserve_jpeg_coefficients: false,
         }
     }
 }
