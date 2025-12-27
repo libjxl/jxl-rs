@@ -223,7 +223,7 @@ pub(super) fn predict(
 }
 
 /// Optimized prediction using flat tree (matches C++ context_predict.h:351-371).
-#[inline]
+#[inline(always)]
 #[allow(clippy::too_many_arguments)]
 pub(super) fn predict_flat(
     flat_tree: &[FlatTreeNode],
@@ -235,6 +235,20 @@ pub(super) fn predict_flat(
     references: &Image<i32>,
     property_buffer: &mut [i32],
 ) -> PredictionResult {
+    #[allow(unsafe_code)]
+    #[inline(always)]
+    fn predictor_from_u8(value: u8) -> Predictor {
+        // SAFETY: predictor values are encoded by the tree builder and guaranteed valid.
+        unsafe { std::mem::transmute::<u8, Predictor>(value) }
+    }
+
+    #[allow(unsafe_code)]
+    #[inline(always)]
+    fn load_property(ptr: *const i32, index: usize) -> i32 {
+        // SAFETY: property_buffer has stable layout and the indices come from a validated tree.
+        unsafe { *ptr.add(index) }
+    }
+
     let wp_pred = compute_properties(
         prediction_data,
         xsize,
@@ -245,6 +259,8 @@ pub(super) fn predict_flat(
         property_buffer,
     );
 
+    let property_ptr = property_buffer.as_ptr();
+
     // Flat tree traversal
     let mut pos = 0;
     loop {
@@ -252,7 +268,11 @@ pub(super) fn predict_flat(
 
         if node.property0 < 0 {
             // Leaf node
-            let predictor = Predictor::try_from(node.splitval0_or_predictor as u32).unwrap();
+            debug_assert!(
+                (node.splitval0_or_predictor as u32) < Predictor::NUM_PREDICTORS,
+                "invalid predictor id in flat tree"
+            );
+            let predictor = predictor_from_u8(node.splitval0_or_predictor as u8);
             let offset = node.properties_or_offset[0] as i32;
             let multiplier = node.splitvals_or_multiplier[0] as u32;
             let context = node.child_id;
@@ -267,23 +287,18 @@ pub(super) fn predict_flat(
         }
 
         // Split node: C++ logic from context_predict.h:361-365
-        let p0 = property_buffer[node.property0 as usize] <= node.splitval0_or_predictor;
-        let off0 = if property_buffer[node.properties_or_offset[0] as usize]
-            <= node.splitvals_or_multiplier[0]
-        {
-            1
-        } else {
-            0
-        };
-        let off1 = if property_buffer[node.properties_or_offset[1] as usize]
-            <= node.splitvals_or_multiplier[1]
-        {
-            3
-        } else {
-            2
-        };
+        let prop0 = load_property(property_ptr, node.property0 as usize);
+        let prop1 = load_property(property_ptr, node.properties_or_offset[0] as usize);
+        let prop2 = load_property(property_ptr, node.properties_or_offset[1] as usize);
+        let off0 = (prop1 <= node.splitvals_or_multiplier[0]) as u32;
+        let off1 = 2 + (prop2 <= node.splitvals_or_multiplier[1]) as u32;
 
-        pos = (node.child_id + if p0 { off1 } else { off0 }) as usize;
+        pos = (node.child_id
+            + if prop0 <= node.splitval0_or_predictor {
+                off1
+            } else {
+                off0
+            }) as usize;
     }
 }
 

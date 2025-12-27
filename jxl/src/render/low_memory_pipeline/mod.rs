@@ -15,7 +15,7 @@ use crate::image::{Image, ImageDataType, OwnedRawImage, Rect};
 use crate::render::MAX_BORDER;
 use crate::render::buffer_splitter::{BufferSplitter, SaveStageBufferInfo};
 use crate::render::internal::Stage;
-use crate::util::{ShiftRightCeil, tracing_wrappers::*};
+use crate::util::{ShiftRightCeil, SmallVec, tracing_wrappers::*};
 
 use super::RenderPipeline;
 use super::internal::{RenderPipelineShared, RunInOutStage, RunInPlaceStage};
@@ -30,6 +30,14 @@ struct InputBuffer {
     // One buffer per channel.
     data: Vec<Option<OwnedRawImage>>,
     completed_passes: usize,
+}
+
+#[derive(Clone, Copy)]
+struct GroupNeighborBounds {
+    x0: usize,
+    x1: usize,
+    y0: usize,
+    y1: usize,
 }
 
 pub struct LowMemoryRenderPipeline {
@@ -62,6 +70,8 @@ pub struct LowMemoryRenderPipeline {
     sorted_buffer_indices: Vec<Vec<(usize, usize, usize)>>,
     // For each channel, buffers that could be reused to store group data for that channel.
     scratch_channel_buffers: Vec<Vec<OwnedRawImage>>,
+    // For each group, precomputed bounds for nearby groups (5x5 neighborhood).
+    possible_group_bounds: Vec<GroupNeighborBounds>,
 }
 
 impl LowMemoryRenderPipeline {
@@ -72,22 +82,13 @@ impl LowMemoryRenderPipeline {
         new_group_id: usize,
         buffer_splitter: &mut BufferSplitter,
     ) -> Result<()> {
-        let (gx, gy) = self.shared.group_position(new_group_id);
-
-        // We put groups that are 2 afar here, because even if they could not have become
-        // renderable, they might have become freeable.
-        let mut possible_groups = vec![];
-        for dy in -2..=2 {
-            let igy = gy as isize + dy;
-            if igy < 0 || igy >= self.shared.group_count.1 as isize {
-                continue;
-            }
-            for dx in -2..=2 {
-                let igx = gx as isize + dx;
-                if igx < 0 || igx >= self.shared.group_count.0 as isize {
-                    continue;
-                }
-                possible_groups.push(igy as usize * self.shared.group_count.0 + igx as usize);
+        let bounds = self.possible_group_bounds[new_group_id];
+        let group_width = self.shared.group_count.0;
+        let mut possible_groups = SmallVec::<usize, 25>::new();
+        for gy in bounds.y0..=bounds.y1 {
+            let base = gy * group_width;
+            for gx in bounds.x0..=bounds.x1 {
+                possible_groups.push(base + gx);
             }
         }
 
@@ -214,6 +215,17 @@ impl RenderPipeline for LowMemoryRenderPipeline {
             }
         }
         let nc = shared.channel_info[0].len();
+        let group_count = shared.group_count;
+        let mut possible_group_bounds = Vec::with_capacity(group_count.0 * group_count.1);
+        for gy in 0..group_count.1 {
+            for gx in 0..group_count.0 {
+                let x0 = gx.saturating_sub(2);
+                let y0 = gy.saturating_sub(2);
+                let x1 = (gx + 2).min(group_count.0 - 1);
+                let y1 = (gy + 2).min(group_count.1 - 1);
+                possible_group_bounds.push(GroupNeighborBounds { x0, x1, y0, y1 });
+            }
+        }
         let mut previous_inout: Vec<_> = (0..nc).map(|x| (0usize, x)).collect();
         let mut stage_input_buffer_index = vec![];
         let mut next_border_and_cur_downsample = vec![vec![]];
@@ -404,6 +416,7 @@ impl RenderPipeline for LowMemoryRenderPipeline {
             opaque_alpha_buffers,
             sorted_buffer_indices,
             scratch_channel_buffers: (0..nc).map(|_| vec![]).collect(),
+            possible_group_bounds,
         })
     }
 
