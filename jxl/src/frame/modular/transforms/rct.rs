@@ -3,7 +3,7 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-use jxl_simd::{I32SimdVec, ScalarDescriptor, SimdDescriptor, shr, simd_function};
+use jxl_simd::{simd_function, shr, I32SimdVec, SimdDescriptor};
 
 use crate::{
     frame::modular::{
@@ -75,6 +75,50 @@ fn rct_row_impl<D: SimdDescriptor, const OP: u32>(d: D, rgb: [&mut [i32]; 3]) ->
 }
 
 #[inline(always)]
+fn rct_impl_scalar<const OP: u32>(v0: i32, v1: i32, v2: i32) -> (i32, i32, i32) {
+    const { assert!(OP <= 6) };
+
+    match OP {
+        0 => (v0, v1, v2),
+        1 => (v0, v1, v2.wrapping_add(v0)),
+        2 => (v0, v1.wrapping_add(v0), v2),
+        3 => (v0, v1.wrapping_add(v0), v2.wrapping_add(v0)),
+        4 => {
+            let avg = v0.wrapping_add(v2) >> 1;
+            (v0, v1.wrapping_add(avg), v2)
+        }
+        5 => {
+            let v2 = v0.wrapping_add(v2);
+            let avg = v0.wrapping_add(v2) >> 1;
+            (v0, v1.wrapping_add(avg), v2)
+        }
+        6 => {
+            let (y, co, cg) = (v0, v1, v2);
+            let y = y.wrapping_sub(cg >> 1);
+            let g = cg.wrapping_add(y);
+            let y = y.wrapping_sub(co >> 1);
+            let r = y.wrapping_add(co);
+            (r, g, y)
+        }
+        _ => unreachable!(),
+    }
+}
+
+#[inline(always)]
+fn rct_row_impl_scalar<const OP: u32>(rgb: [&mut [i32]; 3]) {
+    const { assert!(OP <= 6) };
+
+    let len = rgb[0].len().min(rgb[1].len()).min(rgb[2].len());
+    for idx in 0..len {
+        let (v0, v1, v2) = (rgb[0][idx], rgb[1][idx], rgb[2][idx]);
+        let (w0, w1, w2) = rct_impl_scalar::<OP>(v0, v1, v2);
+        rgb[0][idx] = w0;
+        rgb[1][idx] = w1;
+        rgb[2][idx] = w2;
+    }
+}
+
+#[inline(always)]
 fn rct_loop_impl<D: SimdDescriptor, const OP: u32>(
     d: D,
     r: &mut Image<i32>,
@@ -84,6 +128,13 @@ fn rct_loop_impl<D: SimdDescriptor, const OP: u32>(
     const { assert!(OP <= 6) };
 
     let h = r.size().1;
+    if D::I32Vec::LEN == 1 {
+        for pos_y in 0..h {
+            let rgb = [&mut *r, &mut *g, &mut *b].map(|x| x.row_mut(pos_y));
+            rct_row_impl_scalar::<OP>(rgb);
+        }
+        return;
+    }
 
     for pos_y in 0..h {
         let mut rgb = [&mut *r, &mut *g, &mut *b].map(|x| x.row_mut(pos_y));
@@ -96,7 +147,7 @@ fn rct_loop_impl<D: SimdDescriptor, const OP: u32>(
             rgb = rct_row_impl::<_, OP>(d.maybe_downgrade_128bit(), rgb);
         }
         if D::I32Vec::LEN > 1 {
-            rct_row_impl::<_, OP>(ScalarDescriptor::new().unwrap(), rgb);
+            rct_row_impl_scalar::<OP>(rgb);
         }
     }
 }
