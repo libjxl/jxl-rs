@@ -12,7 +12,6 @@
 use crate::bit_reader::BitReader;
 use crate::error::{Error, Result};
 use jxl_simd::{simd_function, F32SimdVec};
-use jxl_transforms::{idct2d_2_2, idct2d_4_4, idct2d_8_8};
 
 /// Type of APP marker in JPEG file.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -2889,6 +2888,36 @@ const STD_AC_CHROMA_VALS: [u8; 162] = [
     0xF3, 0xF4, 0xF5, 0xF6, 0xF7, 0xF8, 0xF9, 0xFA,
 ];
 
+const JPEG_IDCT_CONST_BITS: i32 = 13;
+const JPEG_IDCT_FIX_0_298631336: i64 = 2446;
+const JPEG_IDCT_FIX_0_390180644: i64 = 3196;
+const JPEG_IDCT_FIX_0_541196100: i64 = 4433;
+const JPEG_IDCT_FIX_0_720959822: i64 = 5906;
+const JPEG_IDCT_FIX_0_765366865: i64 = 6270;
+const JPEG_IDCT_FIX_0_850430095: i64 = 6967;
+const JPEG_IDCT_FIX_0_899976223: i64 = 7373;
+const JPEG_IDCT_FIX_1_061594337: i64 = 8697;
+const JPEG_IDCT_FIX_1_175875602: i64 = 9633;
+const JPEG_IDCT_FIX_1_272758580: i64 = 10426;
+const JPEG_IDCT_FIX_1_451774981: i64 = 11893;
+const JPEG_IDCT_FIX_1_501321110: i64 = 12299;
+const JPEG_IDCT_FIX_1_847759065: i64 = 15137;
+const JPEG_IDCT_FIX_1_961570560: i64 = 16069;
+const JPEG_IDCT_FIX_2_053119869: i64 = 16819;
+const JPEG_IDCT_FIX_2_172734803: i64 = 17799;
+const JPEG_IDCT_FIX_2_562915447: i64 = 20995;
+const JPEG_IDCT_FIX_3_072711026: i64 = 25172;
+const JPEG_IDCT_FIX_3_624509785: i64 = 29692;
+const JPEG_IDCT_FIX_0_211164243: i64 = 1730;
+const JPEG_IDCT_FIX_0_509795579: i64 = 4176;
+const JPEG_IDCT_FIX_0_601344887: i64 = 4926;
+const JPEG_YCC_SCALE_BITS: i32 = 16;
+const JPEG_YCC_ONE_HALF: i64 = 1 << (JPEG_YCC_SCALE_BITS - 1);
+const JPEG_YCC_FIX_1_40200: i64 = 91881;
+const JPEG_YCC_FIX_1_77200: i64 = 116130;
+const JPEG_YCC_FIX_0_71414: i64 = 46802;
+const JPEG_YCC_FIX_0_34414: i64 = 22554;
+
 /// Bit reader for JPEG data with byte stuffing handling.
 struct JpegBitReader<'a> {
     data: &'a [u8],
@@ -3091,35 +3120,29 @@ impl JpegDecoder {
     fn upsample_h2v1_row(&self, src: &[f32], dst: &mut [f32], max_sample: f32) {
         let len = src.len();
         let out_len = dst.len();
+        let max_sample_f = max_sample;
+        let to_int = |v: f32| (v * max_sample_f).round() as i64;
         for in_x in 0..len {
-            let cur = src[in_x] * max_sample;
-            let left = if in_x == 0 {
-                cur
-            } else {
-                src[in_x - 1] * max_sample
-            };
-            let right = if in_x + 1 < len {
-                src[in_x + 1] * max_sample
-            } else {
-                cur
-            };
+            let cur = to_int(src[in_x]);
+            let left = if in_x == 0 { cur } else { to_int(src[in_x - 1]) };
+            let right = if in_x + 1 < len { to_int(src[in_x + 1]) } else { cur };
             let even = if in_x == 0 {
                 cur
             } else {
-                (cur * 3.0 + left + 1.0) * 0.25
+                (cur * 3 + left + 1) >> 2
             };
             let odd = if in_x + 1 >= len {
                 cur
             } else {
-                (cur * 3.0 + right + 2.0) * 0.25
+                (cur * 3 + right + 2) >> 2
             };
 
             let base = in_x * 2;
             if base < out_len {
-                dst[base] = (even / max_sample).clamp(0.0, 1.0);
+                dst[base] = (even as f32 / max_sample_f).clamp(0.0, 1.0);
             }
             if base + 1 < out_len {
-                dst[base + 1] = (odd / max_sample).clamp(0.0, 1.0);
+                dst[base + 1] = (odd as f32 / max_sample_f).clamp(0.0, 1.0);
             }
         }
     }
@@ -3132,43 +3155,48 @@ impl JpegDecoder {
         max_sample: f32,
         bias: f32,
     ) {
+        let max_sample_f = max_sample;
+        let bias_i = bias.round() as i64;
+        let to_int = |v: f32| (v * max_sample_f).round() as i64;
         for (i, out) in dst.iter_mut().enumerate() {
-            let cur = row0[i] * max_sample;
-            let neighbor = row1[i] * max_sample;
-            let val = (cur * 3.0 + neighbor + bias) * 0.25;
-            *out = (val / max_sample).clamp(0.0, 1.0);
+            let cur = to_int(row0[i]);
+            let neighbor = to_int(row1[i]);
+            let val = (cur * 3 + neighbor + bias_i) >> 2;
+            *out = (val as f32 / max_sample_f).clamp(0.0, 1.0);
         }
     }
 
     fn upsample_h2v2_row(&self, row0: &[f32], row1: &[f32], dst: &mut [f32], max_sample: f32) {
         let len = row0.len();
         let out_len = dst.len();
+        let max_sample_f = max_sample;
+        let to_int = |v: f32| (v * max_sample_f).round() as i64;
         for in_x in 0..len {
-            let cur0 = row0[in_x] * max_sample;
-            let cur1 = row1[in_x] * max_sample;
-            let thiscolsum = cur0 * 3.0 + cur1;
+            let cur0 = to_int(row0[in_x]);
+            let cur1 = to_int(row1[in_x]);
+            let thiscolsum = cur0 * 3 + cur1;
             let last_idx = if in_x == 0 { 0 } else { in_x - 1 };
             let next_idx = if in_x + 1 < len { in_x + 1 } else { in_x };
-            let lastcolsum = row0[last_idx] * 3.0 * max_sample + row1[last_idx] * max_sample;
-            let nextcolsum = row0[next_idx] * 3.0 * max_sample + row1[next_idx] * max_sample;
+            let lastcolsum = to_int(row0[last_idx]) * 3 + to_int(row1[last_idx]);
+            let nextcolsum = to_int(row0[next_idx]) * 3 + to_int(row1[next_idx]);
 
             let even = if in_x == 0 {
-                (thiscolsum * 4.0 + 8.0) / 16.0
+                (thiscolsum * 4 + 8) >> 4
             } else {
-                (thiscolsum * 3.0 + lastcolsum + 8.0) / 16.0
+                (thiscolsum * 3 + lastcolsum + 8) >> 4
             };
             let odd = if in_x + 1 >= len {
-                (thiscolsum * 4.0 + 7.0) / 16.0
+                (thiscolsum * 4 + 7) >> 4
             } else {
-                (thiscolsum * 3.0 + nextcolsum + 7.0) / 16.0
+                (thiscolsum * 3 + nextcolsum + 7) >> 4
             };
 
             let base = in_x * 2;
             if base < out_len {
-                dst[base] = (even / max_sample).clamp(0.0, 1.0);
+                dst[base] = (even as f32 / max_sample_f).clamp(0.0, 1.0);
             }
             if base + 1 < out_len {
-                dst[base + 1] = (odd / max_sample).clamp(0.0, 1.0);
+                dst[base + 1] = (odd as f32 / max_sample_f).clamp(0.0, 1.0);
             }
         }
     }
@@ -4266,67 +4294,487 @@ impl JpegDecoder {
         self.components_into_output_u16(&comp_data, comp_layout, layout, format, output, row_stride)
     }
 
-    fn idct_8x8(&self, input: &[i64; 64], output: &mut [f32; 64]) {
-        let mut block = [0.0f32; 64];
-        for i in 0..64 {
-            block[i] = input[i] as f32;
-        }
+    fn idct_pass1_bits(&self) -> i32 {
+        if self.data_precision > 8 { 1 } else { 2 }
+    }
 
-        jpeg_idct_8x8_dispatch(&mut block);
+    fn idct_sample_params(&self) -> (i32, i64, i64, f32) {
+        let precision = self.data_precision.max(1).min(16) as i32;
+        let pass1_bits = self.idct_pass1_bits();
+        let max_sample = (1_i64 << precision) - 1;
+        let level_shift = 1_i64 << (precision - 1);
+        (pass1_bits, max_sample, level_shift, max_sample as f32)
+    }
 
-        let max_sample = self.sample_max();
-        let level_shift = self.level_shift();
-        for (dst, src) in output.iter_mut().zip(block.iter()) {
-            *dst = ((*src * 0.125) + level_shift) / max_sample;
+    fn descale(value: i64, shift: i32) -> i64 {
+        if shift <= 0 {
+            value
+        } else {
+            (value + (1_i64 << (shift - 1))) >> shift
         }
     }
 
+    fn clamp_sample(value: i64, max_sample: i64) -> i64 {
+        if value < 0 {
+            0
+        } else if value > max_sample {
+            max_sample
+        } else {
+            value
+        }
+    }
+
+    fn store_sample(
+        output: &mut [f32],
+        idx: usize,
+        value: i64,
+        level_shift: i64,
+        max_sample: i64,
+        max_sample_f: f32,
+    ) {
+        let sample = Self::clamp_sample(value + level_shift, max_sample);
+        output[idx] = sample as f32 / max_sample_f;
+    }
+
+    fn idct_8x8_integer(&self, input: &[i64; 64], output: &mut [f32]) {
+        debug_assert!(output.len() >= 64);
+        let (pass1_bits, max_sample, level_shift, max_sample_f) = self.idct_sample_params();
+        let mut workspace = [0i64; 64];
+
+        for col in 0..8 {
+            if input[8 * 1 + col] == 0
+                && input[8 * 2 + col] == 0
+                && input[8 * 3 + col] == 0
+                && input[8 * 4 + col] == 0
+                && input[8 * 5 + col] == 0
+                && input[8 * 6 + col] == 0
+                && input[8 * 7 + col] == 0
+            {
+                let dcval = input[col] << pass1_bits;
+                for row in 0..8 {
+                    workspace[row * 8 + col] = dcval;
+                }
+                continue;
+            }
+
+            let z2 = input[8 * 2 + col];
+            let z3 = input[8 * 6 + col];
+
+            let z1 = (z2 + z3) * JPEG_IDCT_FIX_0_541196100;
+            let tmp2 = z1 + z3 * -JPEG_IDCT_FIX_1_847759065;
+            let tmp3 = z1 + z2 * JPEG_IDCT_FIX_0_765366865;
+
+            let z2 = input[8 * 0 + col];
+            let z3 = input[8 * 4 + col];
+            let tmp0 = (z2 + z3) << JPEG_IDCT_CONST_BITS;
+            let tmp1 = (z2 - z3) << JPEG_IDCT_CONST_BITS;
+
+            let tmp10 = tmp0 + tmp3;
+            let tmp13 = tmp0 - tmp3;
+            let tmp11 = tmp1 + tmp2;
+            let tmp12 = tmp1 - tmp2;
+
+            let tmp0 = input[8 * 7 + col];
+            let tmp1 = input[8 * 5 + col];
+            let tmp2 = input[8 * 3 + col];
+            let tmp3 = input[8 * 1 + col];
+
+            let z1 = tmp0 + tmp3;
+            let z2 = tmp1 + tmp2;
+            let z3 = tmp0 + tmp2;
+            let z4 = tmp1 + tmp3;
+            let z5 = (z3 + z4) * JPEG_IDCT_FIX_1_175875602;
+
+            let tmp0 = tmp0 * JPEG_IDCT_FIX_0_298631336;
+            let tmp1 = tmp1 * JPEG_IDCT_FIX_2_053119869;
+            let tmp2 = tmp2 * JPEG_IDCT_FIX_3_072711026;
+            let tmp3 = tmp3 * JPEG_IDCT_FIX_1_501321110;
+            let z1 = z1 * -JPEG_IDCT_FIX_0_899976223;
+            let z2 = z2 * -JPEG_IDCT_FIX_2_562915447;
+            let z3 = z3 * -JPEG_IDCT_FIX_1_961570560;
+            let z4 = z4 * -JPEG_IDCT_FIX_0_390180644;
+
+            let z3 = z3 + z5;
+            let z4 = z4 + z5;
+
+            let tmp0 = tmp0 + z1 + z3;
+            let tmp1 = tmp1 + z2 + z4;
+            let tmp2 = tmp2 + z2 + z3;
+            let tmp3 = tmp3 + z1 + z4;
+
+            workspace[8 * 0 + col] =
+                Self::descale(tmp10 + tmp3, JPEG_IDCT_CONST_BITS - pass1_bits);
+            workspace[8 * 7 + col] =
+                Self::descale(tmp10 - tmp3, JPEG_IDCT_CONST_BITS - pass1_bits);
+            workspace[8 * 1 + col] =
+                Self::descale(tmp11 + tmp2, JPEG_IDCT_CONST_BITS - pass1_bits);
+            workspace[8 * 6 + col] =
+                Self::descale(tmp11 - tmp2, JPEG_IDCT_CONST_BITS - pass1_bits);
+            workspace[8 * 2 + col] =
+                Self::descale(tmp12 + tmp1, JPEG_IDCT_CONST_BITS - pass1_bits);
+            workspace[8 * 5 + col] =
+                Self::descale(tmp12 - tmp1, JPEG_IDCT_CONST_BITS - pass1_bits);
+            workspace[8 * 3 + col] =
+                Self::descale(tmp13 + tmp0, JPEG_IDCT_CONST_BITS - pass1_bits);
+            workspace[8 * 4 + col] =
+                Self::descale(tmp13 - tmp0, JPEG_IDCT_CONST_BITS - pass1_bits);
+        }
+
+        for row in 0..8 {
+            let base = row * 8;
+            if workspace[base + 1] == 0
+                && workspace[base + 2] == 0
+                && workspace[base + 3] == 0
+                && workspace[base + 4] == 0
+                && workspace[base + 5] == 0
+                && workspace[base + 6] == 0
+                && workspace[base + 7] == 0
+            {
+                let dcval = Self::descale(workspace[base], pass1_bits + 3);
+                let sample = Self::clamp_sample(dcval + level_shift, max_sample) as f32 / max_sample_f;
+                for x in 0..8 {
+                    output[base + x] = sample;
+                }
+                continue;
+            }
+
+            let z2 = workspace[base + 2];
+            let z3 = workspace[base + 6];
+
+            let z1 = (z2 + z3) * JPEG_IDCT_FIX_0_541196100;
+            let tmp2 = z1 + z3 * -JPEG_IDCT_FIX_1_847759065;
+            let tmp3 = z1 + z2 * JPEG_IDCT_FIX_0_765366865;
+
+            let tmp0 = (workspace[base + 0] + workspace[base + 4]) << JPEG_IDCT_CONST_BITS;
+            let tmp1 = (workspace[base + 0] - workspace[base + 4]) << JPEG_IDCT_CONST_BITS;
+
+            let tmp10 = tmp0 + tmp3;
+            let tmp13 = tmp0 - tmp3;
+            let tmp11 = tmp1 + tmp2;
+            let tmp12 = tmp1 - tmp2;
+
+            let tmp0 = workspace[base + 7];
+            let tmp1 = workspace[base + 5];
+            let tmp2 = workspace[base + 3];
+            let tmp3 = workspace[base + 1];
+
+            let z1 = tmp0 + tmp3;
+            let z2 = tmp1 + tmp2;
+            let z3 = tmp0 + tmp2;
+            let z4 = tmp1 + tmp3;
+            let z5 = (z3 + z4) * JPEG_IDCT_FIX_1_175875602;
+
+            let tmp0 = tmp0 * JPEG_IDCT_FIX_0_298631336;
+            let tmp1 = tmp1 * JPEG_IDCT_FIX_2_053119869;
+            let tmp2 = tmp2 * JPEG_IDCT_FIX_3_072711026;
+            let tmp3 = tmp3 * JPEG_IDCT_FIX_1_501321110;
+            let z1 = z1 * -JPEG_IDCT_FIX_0_899976223;
+            let z2 = z2 * -JPEG_IDCT_FIX_2_562915447;
+            let z3 = z3 * -JPEG_IDCT_FIX_1_961570560;
+            let z4 = z4 * -JPEG_IDCT_FIX_0_390180644;
+
+            let z3 = z3 + z5;
+            let z4 = z4 + z5;
+
+            let tmp0 = tmp0 + z1 + z3;
+            let tmp1 = tmp1 + z2 + z4;
+            let tmp2 = tmp2 + z2 + z3;
+            let tmp3 = tmp3 + z1 + z4;
+
+            Self::store_sample(
+                output,
+                base + 0,
+                Self::descale(tmp10 + tmp3, JPEG_IDCT_CONST_BITS + pass1_bits + 3),
+                level_shift,
+                max_sample,
+                max_sample_f,
+            );
+            Self::store_sample(
+                output,
+                base + 7,
+                Self::descale(tmp10 - tmp3, JPEG_IDCT_CONST_BITS + pass1_bits + 3),
+                level_shift,
+                max_sample,
+                max_sample_f,
+            );
+            Self::store_sample(
+                output,
+                base + 1,
+                Self::descale(tmp11 + tmp2, JPEG_IDCT_CONST_BITS + pass1_bits + 3),
+                level_shift,
+                max_sample,
+                max_sample_f,
+            );
+            Self::store_sample(
+                output,
+                base + 6,
+                Self::descale(tmp11 - tmp2, JPEG_IDCT_CONST_BITS + pass1_bits + 3),
+                level_shift,
+                max_sample,
+                max_sample_f,
+            );
+            Self::store_sample(
+                output,
+                base + 2,
+                Self::descale(tmp12 + tmp1, JPEG_IDCT_CONST_BITS + pass1_bits + 3),
+                level_shift,
+                max_sample,
+                max_sample_f,
+            );
+            Self::store_sample(
+                output,
+                base + 5,
+                Self::descale(tmp12 - tmp1, JPEG_IDCT_CONST_BITS + pass1_bits + 3),
+                level_shift,
+                max_sample,
+                max_sample_f,
+            );
+            Self::store_sample(
+                output,
+                base + 3,
+                Self::descale(tmp13 + tmp0, JPEG_IDCT_CONST_BITS + pass1_bits + 3),
+                level_shift,
+                max_sample,
+                max_sample_f,
+            );
+            Self::store_sample(
+                output,
+                base + 4,
+                Self::descale(tmp13 - tmp0, JPEG_IDCT_CONST_BITS + pass1_bits + 3),
+                level_shift,
+                max_sample,
+                max_sample_f,
+            );
+        }
+    }
+
+    fn idct_4x4_integer(&self, input: &[i64; 64], output: &mut [f32]) {
+        debug_assert!(output.len() >= 16);
+        let (pass1_bits, max_sample, level_shift, max_sample_f) = self.idct_sample_params();
+        let mut workspace = [0i64; 32];
+
+        for col in 0..8 {
+            if col == 4 {
+                continue;
+            }
+            if input[8 * 1 + col] == 0
+                && input[8 * 2 + col] == 0
+                && input[8 * 3 + col] == 0
+                && input[8 * 5 + col] == 0
+                && input[8 * 6 + col] == 0
+                && input[8 * 7 + col] == 0
+            {
+                let dcval = input[col] << pass1_bits;
+                for row in 0..4 {
+                    workspace[row * 8 + col] = dcval;
+                }
+                continue;
+            }
+
+            let mut tmp0 = input[8 * 0 + col] << (JPEG_IDCT_CONST_BITS + 1);
+            let z2 = input[8 * 2 + col];
+            let z3 = input[8 * 6 + col];
+            let tmp2 = z2 * JPEG_IDCT_FIX_1_847759065 + z3 * -JPEG_IDCT_FIX_0_765366865;
+
+            let tmp10 = tmp0 + tmp2;
+            let tmp12 = tmp0 - tmp2;
+
+            let z1 = input[8 * 7 + col];
+            let z2 = input[8 * 5 + col];
+            let z3 = input[8 * 3 + col];
+            let z4 = input[8 * 1 + col];
+
+            tmp0 = z1 * -JPEG_IDCT_FIX_0_211164243
+                + z2 * JPEG_IDCT_FIX_1_451774981
+                + z3 * -JPEG_IDCT_FIX_2_172734803
+                + z4 * JPEG_IDCT_FIX_1_061594337;
+
+            let tmp2 = z1 * -JPEG_IDCT_FIX_0_509795579
+                + z2 * -JPEG_IDCT_FIX_0_601344887
+                + z3 * JPEG_IDCT_FIX_0_899976223
+                + z4 * JPEG_IDCT_FIX_2_562915447;
+
+            workspace[8 * 0 + col] =
+                Self::descale(tmp10 + tmp2, JPEG_IDCT_CONST_BITS - pass1_bits + 1);
+            workspace[8 * 3 + col] =
+                Self::descale(tmp10 - tmp2, JPEG_IDCT_CONST_BITS - pass1_bits + 1);
+            workspace[8 * 1 + col] =
+                Self::descale(tmp12 + tmp0, JPEG_IDCT_CONST_BITS - pass1_bits + 1);
+            workspace[8 * 2 + col] =
+                Self::descale(tmp12 - tmp0, JPEG_IDCT_CONST_BITS - pass1_bits + 1);
+        }
+
+        for row in 0..4 {
+            let base = row * 8;
+            let out_base = row * 4;
+            if workspace[base + 1] == 0
+                && workspace[base + 2] == 0
+                && workspace[base + 3] == 0
+                && workspace[base + 5] == 0
+                && workspace[base + 6] == 0
+                && workspace[base + 7] == 0
+            {
+                let dcval = Self::descale(workspace[base], pass1_bits + 3);
+                let sample = Self::clamp_sample(dcval + level_shift, max_sample) as f32 / max_sample_f;
+                for x in 0..4 {
+                    output[out_base + x] = sample;
+                }
+                continue;
+            }
+
+            let mut tmp0 = workspace[base + 0] << (JPEG_IDCT_CONST_BITS + 1);
+            let z2 = workspace[base + 2];
+            let z3 = workspace[base + 6];
+            let tmp2 = z2 * JPEG_IDCT_FIX_1_847759065 + z3 * -JPEG_IDCT_FIX_0_765366865;
+
+            let tmp10 = tmp0 + tmp2;
+            let tmp12 = tmp0 - tmp2;
+
+            let z1 = workspace[base + 7];
+            let z2 = workspace[base + 5];
+            let z3 = workspace[base + 3];
+            let z4 = workspace[base + 1];
+
+            tmp0 = z1 * -JPEG_IDCT_FIX_0_211164243
+                + z2 * JPEG_IDCT_FIX_1_451774981
+                + z3 * -JPEG_IDCT_FIX_2_172734803
+                + z4 * JPEG_IDCT_FIX_1_061594337;
+
+            let tmp2 = z1 * -JPEG_IDCT_FIX_0_509795579
+                + z2 * -JPEG_IDCT_FIX_0_601344887
+                + z3 * JPEG_IDCT_FIX_0_899976223
+                + z4 * JPEG_IDCT_FIX_2_562915447;
+
+            Self::store_sample(
+                output,
+                out_base + 0,
+                Self::descale(tmp10 + tmp2, JPEG_IDCT_CONST_BITS + pass1_bits + 3 + 1),
+                level_shift,
+                max_sample,
+                max_sample_f,
+            );
+            Self::store_sample(
+                output,
+                out_base + 3,
+                Self::descale(tmp10 - tmp2, JPEG_IDCT_CONST_BITS + pass1_bits + 3 + 1),
+                level_shift,
+                max_sample,
+                max_sample_f,
+            );
+            Self::store_sample(
+                output,
+                out_base + 1,
+                Self::descale(tmp12 + tmp0, JPEG_IDCT_CONST_BITS + pass1_bits + 3 + 1),
+                level_shift,
+                max_sample,
+                max_sample_f,
+            );
+            Self::store_sample(
+                output,
+                out_base + 2,
+                Self::descale(tmp12 - tmp0, JPEG_IDCT_CONST_BITS + pass1_bits + 3 + 1),
+                level_shift,
+                max_sample,
+                max_sample_f,
+            );
+        }
+    }
+
+    fn idct_2x2_integer(&self, input: &[i64; 64], output: &mut [f32]) {
+        debug_assert!(output.len() >= 4);
+        let (pass1_bits, max_sample, level_shift, max_sample_f) = self.idct_sample_params();
+        let mut workspace = [0i64; 16];
+
+        for col in 0..8 {
+            if col == 2 || col == 4 || col == 6 {
+                continue;
+            }
+            if input[8 * 1 + col] == 0
+                && input[8 * 3 + col] == 0
+                && input[8 * 5 + col] == 0
+                && input[8 * 7 + col] == 0
+            {
+                let dcval = input[col] << pass1_bits;
+                workspace[8 * 0 + col] = dcval;
+                workspace[8 * 1 + col] = dcval;
+                continue;
+            }
+
+            let tmp10 = input[8 * 0 + col] << (JPEG_IDCT_CONST_BITS + 2);
+
+            let tmp0 = input[8 * 7 + col] * -JPEG_IDCT_FIX_0_720959822
+                + input[8 * 5 + col] * JPEG_IDCT_FIX_0_850430095
+                + input[8 * 3 + col] * -JPEG_IDCT_FIX_1_272758580
+                + input[8 * 1 + col] * JPEG_IDCT_FIX_3_624509785;
+
+            workspace[8 * 0 + col] =
+                Self::descale(tmp10 + tmp0, JPEG_IDCT_CONST_BITS - pass1_bits + 2);
+            workspace[8 * 1 + col] =
+                Self::descale(tmp10 - tmp0, JPEG_IDCT_CONST_BITS - pass1_bits + 2);
+        }
+
+        for row in 0..2 {
+            let base = row * 8;
+            let out_base = row * 2;
+            if workspace[base + 1] == 0
+                && workspace[base + 3] == 0
+                && workspace[base + 5] == 0
+                && workspace[base + 7] == 0
+            {
+                let dcval = Self::descale(workspace[base], pass1_bits + 3);
+                let sample = Self::clamp_sample(dcval + level_shift, max_sample) as f32 / max_sample_f;
+                output[out_base] = sample;
+                output[out_base + 1] = sample;
+                continue;
+            }
+
+            let tmp10 = workspace[base + 0] << (JPEG_IDCT_CONST_BITS + 2);
+            let tmp0 = workspace[base + 7] * -JPEG_IDCT_FIX_0_720959822
+                + workspace[base + 5] * JPEG_IDCT_FIX_0_850430095
+                + workspace[base + 3] * -JPEG_IDCT_FIX_1_272758580
+                + workspace[base + 1] * JPEG_IDCT_FIX_3_624509785;
+
+            Self::store_sample(
+                output,
+                out_base + 0,
+                Self::descale(tmp10 + tmp0, JPEG_IDCT_CONST_BITS + pass1_bits + 3 + 2),
+                level_shift,
+                max_sample,
+                max_sample_f,
+            );
+            Self::store_sample(
+                output,
+                out_base + 1,
+                Self::descale(tmp10 - tmp0, JPEG_IDCT_CONST_BITS + pass1_bits + 3 + 2),
+                level_shift,
+                max_sample,
+                max_sample_f,
+            );
+        }
+    }
+
+    fn idct_1x1_integer(&self, input: &[i64; 64], output: &mut [f32]) {
+        let (_pass1_bits, max_sample, level_shift, max_sample_f) = self.idct_sample_params();
+        let dcval = Self::descale(input[0], 3);
+        let sample = Self::clamp_sample(dcval + level_shift, max_sample);
+        output[0] = sample as f32 / max_sample_f;
+    }
+
+    fn idct_8x8(&self, input: &[i64; 64], output: &mut [f32; 64]) {
+        self.idct_8x8_integer(input, output);
+    }
+
     fn idct_block_scaled(&self, input: &[i64; 64], dct_size: usize, output: &mut [f32]) -> Result<()> {
-        let max_sample = self.sample_max();
-        let level_shift = self.level_shift();
         let expected = dct_size * dct_size;
         if output.len() < expected {
             return Err(Error::InvalidJpegData);
         }
 
         match dct_size {
-            8 => {
-                let mut block = [0.0f32; 64];
-                for i in 0..64 {
-                    block[i] = input[i] as f32;
-                }
-                jpeg_idct_8x8_dispatch(&mut block);
-                for i in 0..64 {
-                    output[i] = ((block[i] * 0.125) + level_shift) / max_sample;
-                }
-            }
-            4 => {
-                let mut block = [0.0f32; 16];
-                for y in 0..4 {
-                    for x in 0..4 {
-                        block[y * 4 + x] = input[y * 8 + x] as f32;
-                    }
-                }
-                jpeg_idct_4x4_dispatch(&mut block);
-                for i in 0..16 {
-                    output[i] = ((block[i] * 0.125) + level_shift) / max_sample;
-                }
-            }
-            2 => {
-                let mut block = [0.0f32; 4];
-                for y in 0..2 {
-                    for x in 0..2 {
-                        block[y * 2 + x] = input[y * 8 + x] as f32;
-                    }
-                }
-                jpeg_idct_2x2_dispatch(&mut block);
-                for i in 0..4 {
-                    output[i] = ((block[i] * 0.125) + level_shift) / max_sample;
-                }
-            }
-            1 => {
-                output[0] = ((input[0] as f32 * 0.125) + level_shift) / max_sample;
-            }
+            8 => self.idct_8x8_integer(input, output),
+            4 => self.idct_4x4_integer(input, &mut output[..16]),
+            2 => self.idct_2x2_integer(input, &mut output[..4]),
+            1 => self.idct_1x1_integer(input, output),
             _ => return Err(Error::InvalidJpegData),
         }
 
@@ -4351,100 +4799,107 @@ impl JpegDecoder {
         let h_ratio = max_h / comp.h_samp as usize;
         let v_ratio = max_v / comp.v_samp as usize;
         let max_sample = self.sample_max();
+        let max_sample_f = max_sample;
+        let to_int = |v: f32| (v * max_sample_f).round() as i64;
+        let comp_width = (self.width as usize + h_ratio - 1) / h_ratio;
+        let comp_height_eff = (self.height as usize + v_ratio - 1) / v_ratio;
+        if comp_width == 0 || comp_height_eff == 0 {
+            return 0.0;
+        }
 
         if h_ratio == 1 && v_ratio == 1 {
             let idx = y.saturating_mul(comp_stride).saturating_add(x);
             return plane.get(idx).copied().unwrap_or(0.0);
         }
 
-        let comp_width = comp_stride;
+        let comp_height_eff = comp_height_eff.min(comp_height);
         let fancy_h2v1 = comp_width > 2;
-        let fancy_h1v2 = comp_height > 1;
-        let fancy_h2v2 = comp_width > 2 && comp_height > 1;
+        let fancy_h1v2 = comp_height_eff > 1;
+        let fancy_h2v2 = comp_width > 2 && comp_height_eff > 1;
 
         if h_ratio == 2 && v_ratio == 1 && fancy_h2v1 {
-            let comp_y = y.min(comp_height - 1);
+            let comp_y = y.min(comp_height_eff - 1);
             let row = &plane[comp_y * comp_stride..(comp_y + 1) * comp_stride];
             let in_x = (x / 2).min(comp_width - 1);
-            let cur = row[in_x] * max_sample;
+            let cur = to_int(row[in_x]);
 
             let out = if x % 2 == 0 {
                 if in_x == 0 {
                     cur
                 } else {
-                    let left = row[in_x - 1] * max_sample;
-                    (cur * 3.0 + left + 1.0) * 0.25
+                    let left = to_int(row[in_x - 1]);
+                    ((cur * 3 + left + 1) >> 2) as i64
                 }
             } else if in_x + 1 >= comp_width {
                 cur
             } else {
-                let right = row[in_x + 1] * max_sample;
-                (cur * 3.0 + right + 2.0) * 0.25
+                let right = to_int(row[in_x + 1]);
+                ((cur * 3 + right + 2) >> 2) as i64
             };
 
-            return (out / max_sample).clamp(0.0, 1.0);
+            return (out as f32 / max_sample_f).clamp(0.0, 1.0);
         }
 
         if h_ratio == 1 && v_ratio == 2 && fancy_h1v2 {
-            let in_y = (y / 2).min(comp_height - 1);
+            let in_y = (y / 2).min(comp_height_eff - 1);
             let cur_row = &plane[in_y * comp_stride..(in_y + 1) * comp_stride];
             let col = x.min(comp_width - 1);
-            let cur = cur_row[col] * max_sample;
+            let cur = to_int(cur_row[col]);
 
             let (neighbor_row, bias) = if y % 2 == 0 {
                 let above = if in_y == 0 { in_y } else { in_y - 1 };
                 (
                     &plane[above * comp_stride..(above + 1) * comp_stride],
-                    1.0,
+                    1i64,
                 )
             } else {
-                let below = if in_y + 1 < comp_height { in_y + 1 } else { in_y };
+                let below = if in_y + 1 < comp_height_eff { in_y + 1 } else { in_y };
                 (
                     &plane[below * comp_stride..(below + 1) * comp_stride],
-                    2.0,
+                    2i64,
                 )
             };
 
-            let neighbor = neighbor_row[col] * max_sample;
-            let out = (cur * 3.0 + neighbor + bias) * 0.25;
-            return (out / max_sample).clamp(0.0, 1.0);
+            let neighbor = to_int(neighbor_row[col]);
+            let out = (cur * 3 + neighbor + bias) >> 2;
+            return (out as f32 / max_sample_f).clamp(0.0, 1.0);
         }
 
         if h_ratio == 2 && v_ratio == 2 && fancy_h2v2 {
-            let in_y = (y / 2).min(comp_height - 1);
+            let in_y = (y / 2).min(comp_height_eff - 1);
             let in_x = (x / 2).min(comp_width - 1);
             let row0 = &plane[in_y * comp_stride..(in_y + 1) * comp_stride];
             let row1 = if y % 2 == 0 {
                 let above = if in_y == 0 { in_y } else { in_y - 1 };
                 &plane[above * comp_stride..(above + 1) * comp_stride]
             } else {
-                let below = if in_y + 1 < comp_height { in_y + 1 } else { in_y };
+                let below = if in_y + 1 < comp_height_eff { in_y + 1 } else { in_y };
                 &plane[below * comp_stride..(below + 1) * comp_stride]
             };
 
-            let thiscolsum = row0[in_x] * 3.0 * max_sample + row1[in_x] * max_sample;
+            let thiscolsum = to_int(row0[in_x]) * 3 + to_int(row1[in_x]);
             let last_idx = if in_x == 0 { 0 } else { in_x - 1 };
             let next_idx = if in_x + 1 < comp_width { in_x + 1 } else { in_x };
-            let lastcolsum = row0[last_idx] * 3.0 * max_sample + row1[last_idx] * max_sample;
-            let nextcolsum = row0[next_idx] * 3.0 * max_sample + row1[next_idx] * max_sample;
+            let lastcolsum = to_int(row0[last_idx]) * 3 + to_int(row1[last_idx]);
+            let nextcolsum = to_int(row0[next_idx]) * 3 + to_int(row1[next_idx]);
 
             let out = if x % 2 == 0 {
                 if in_x == 0 {
-                    (thiscolsum * 4.0 + 8.0) / 16.0
+                    (thiscolsum * 4 + 8) >> 4
                 } else {
-                    (thiscolsum * 3.0 + lastcolsum + 8.0) / 16.0
+                    (thiscolsum * 3 + lastcolsum + 8) >> 4
                 }
             } else if in_x + 1 >= comp_width {
-                (thiscolsum * 4.0 + 7.0) / 16.0
+                (thiscolsum * 4 + 7) >> 4
             } else {
-                (thiscolsum * 3.0 + nextcolsum + 7.0) / 16.0
+                (thiscolsum * 3 + nextcolsum + 7) >> 4
             };
 
-            return (out / max_sample).clamp(0.0, 1.0);
+            return (out as f32 / max_sample_f).clamp(0.0, 1.0);
         }
 
         let comp_x = (x / h_ratio).min(comp_width - 1);
-        let comp_y = (y / v_ratio).min(comp_height - 1);
+        let comp_y = (y / v_ratio).min(comp_height_eff - 1);
         let idx = comp_y * comp_stride + comp_x;
         plane.get(idx).copied().unwrap_or(0.0)
     }
@@ -4647,10 +5102,13 @@ impl JpegDecoder {
                     let out_height = output_layout.out_height;
                     let y_stride = comp_strides[0];
                     let c_stride = comp_strides[1];
-                    let c_height = comp_heights[1];
+                    let c_height_full = comp_heights[1];
+                    let c_width = (out_width + c_h_ratio - 1) / c_h_ratio;
+                    let c_height = (out_height + c_v_ratio - 1) / c_v_ratio;
+                    let c_height = c_height.min(c_height_full);
 
                     if c_h_ratio == 2 && c_v_ratio == 1 {
-                        let fancy = c_stride > 2;
+                        let fancy = c_width > 2;
                         let mut cb_row = vec![0.0f32; out_width];
                         let mut cr_row = vec![0.0f32; out_width];
 
@@ -4662,8 +5120,10 @@ impl JpegDecoder {
                             let c_row_start = y * c_stride;
 
                             let y_row = &comp_data[0][y_row_start..y_row_end];
-                            let cb_src = &comp_data[1][c_row_start..c_row_start + c_stride];
-                            let cr_src = &comp_data[2][c_row_start..c_row_start + c_stride];
+                            let cb_src_full = &comp_data[1][c_row_start..c_row_start + c_stride];
+                            let cr_src_full = &comp_data[2][c_row_start..c_row_start + c_stride];
+                            let cb_src = &cb_src_full[..c_width];
+                            let cr_src = &cr_src_full[..c_width];
                             let out_row = &mut output[out_start..out_end];
 
                             if fancy {
@@ -4681,7 +5141,7 @@ impl JpegDecoder {
                     }
 
                     if c_h_ratio == 2 && c_v_ratio == 2 {
-                        let fancy = c_stride > 2 && c_height > 1;
+                        let fancy = c_width > 2 && c_height > 1;
                         let mut cb_row = vec![0.0f32; out_width];
                         let mut cr_row = vec![0.0f32; out_width];
 
@@ -4702,10 +5162,14 @@ impl JpegDecoder {
                             let c_row_start1 = row1_idx * c_stride;
 
                             let y_row = &comp_data[0][y_row_start..y_row_end];
-                            let cb_row0 = &comp_data[1][c_row_start0..c_row_start0 + c_stride];
-                            let cb_row1 = &comp_data[1][c_row_start1..c_row_start1 + c_stride];
-                            let cr_row0 = &comp_data[2][c_row_start0..c_row_start0 + c_stride];
-                            let cr_row1 = &comp_data[2][c_row_start1..c_row_start1 + c_stride];
+                            let cb_row0_full = &comp_data[1][c_row_start0..c_row_start0 + c_stride];
+                            let cb_row1_full = &comp_data[1][c_row_start1..c_row_start1 + c_stride];
+                            let cr_row0_full = &comp_data[2][c_row_start0..c_row_start0 + c_stride];
+                            let cr_row1_full = &comp_data[2][c_row_start1..c_row_start1 + c_stride];
+                            let cb_row0 = &cb_row0_full[..c_width];
+                            let cb_row1 = &cb_row1_full[..c_width];
+                            let cr_row0 = &cr_row0_full[..c_width];
+                            let cr_row1 = &cr_row1_full[..c_width];
                             let out_row = &mut output[out_start..out_end];
 
                             if fancy {
@@ -4744,10 +5208,14 @@ impl JpegDecoder {
                             let c_row_start1 = row1_idx * c_stride;
 
                             let y_row = &comp_data[0][y_row_start..y_row_end];
-                            let cb_row0 = &comp_data[1][c_row_start0..c_row_start0 + c_stride];
-                            let cb_row1 = &comp_data[1][c_row_start1..c_row_start1 + c_stride];
-                            let cr_row0 = &comp_data[2][c_row_start0..c_row_start0 + c_stride];
-                            let cr_row1 = &comp_data[2][c_row_start1..c_row_start1 + c_stride];
+                            let cb_row0_full = &comp_data[1][c_row_start0..c_row_start0 + c_stride];
+                            let cb_row1_full = &comp_data[1][c_row_start1..c_row_start1 + c_stride];
+                            let cr_row0_full = &comp_data[2][c_row_start0..c_row_start0 + c_stride];
+                            let cr_row1_full = &comp_data[2][c_row_start1..c_row_start1 + c_stride];
+                            let cb_row0 = &cb_row0_full[..c_width];
+                            let cb_row1 = &cb_row1_full[..c_width];
+                            let cr_row0 = &cr_row0_full[..c_width];
+                            let cr_row1 = &cr_row1_full[..c_width];
                             let out_row = &mut output[out_start..out_end];
 
                             if fancy {
@@ -5760,14 +6228,32 @@ fn rgb_to_ycbcr(r: f32, g: f32, b: f32, max_sample: f32, offset: f32) -> (f32, f
 
 /// YCbCr to RGB conversion.
 fn ycbcr_to_rgb(y: f32, cb: f32, cr: f32, max_sample: f32, offset: f32) -> (f32, f32, f32) {
-    let y_scaled = y * max_sample;
-    let cb_scaled = (cb * max_sample) - offset;
-    let cr_scaled = (cr * max_sample) - offset;
+    let max_sample_i = max_sample.round() as i64;
+    let offset_i = offset.round() as i64;
+    let y_i = (y * max_sample).round() as i64;
+    let cb_i = (cb * max_sample).round() as i64 - offset_i;
+    let cr_i = (cr * max_sample).round() as i64 - offset_i;
+    let clamp = |v: i64| {
+        if v < 0 {
+            0
+        } else if v > max_sample_i {
+            max_sample_i
+        } else {
+            v
+        }
+    };
 
-    let r = (y_scaled + 1.402 * cr_scaled).clamp(0.0, max_sample) / max_sample;
-    let g = (y_scaled - 0.344136 * cb_scaled - 0.714136 * cr_scaled).clamp(0.0, max_sample) / max_sample;
-    let b = (y_scaled + 1.772 * cb_scaled).clamp(0.0, max_sample) / max_sample;
-    (r, g, b)
+    let r = y_i + ((JPEG_YCC_FIX_1_40200 * cr_i + JPEG_YCC_ONE_HALF) >> JPEG_YCC_SCALE_BITS);
+    let b = y_i + ((JPEG_YCC_FIX_1_77200 * cb_i + JPEG_YCC_ONE_HALF) >> JPEG_YCC_SCALE_BITS);
+    let g = y_i
+        + ((-JPEG_YCC_FIX_0_34414 * cb_i - JPEG_YCC_FIX_0_71414 * cr_i + JPEG_YCC_ONE_HALF)
+            >> JPEG_YCC_SCALE_BITS);
+
+    (
+        clamp(r) as f32 / max_sample,
+        clamp(g) as f32 / max_sample,
+        clamp(b) as f32 / max_sample,
+    )
 }
 
 /// YCCK to RGB conversion.
@@ -5788,30 +6274,6 @@ fn cmyk_to_ycck(c: f32, m: f32, y: f32, k: f32, max_sample: f32, offset: f32) ->
     let (yy, cb, cr) = rgb_to_ycbcr(r, g, b, max_sample, offset);
     (yy, cb, cr, k)
 }
-
-simd_function!(
-    jpeg_idct_8x8_dispatch,
-    d: D,
-    fn jpeg_idct_8x8(block: &mut [f32; 64]) {
-        idct2d_8_8(d, block);
-    }
-);
-
-simd_function!(
-    jpeg_idct_4x4_dispatch,
-    d: D,
-    fn jpeg_idct_4x4(block: &mut [f32; 16]) {
-        idct2d_4_4(d, block);
-    }
-);
-
-simd_function!(
-    jpeg_idct_2x2_dispatch,
-    d: D,
-    fn jpeg_idct_2x2(block: &mut [f32; 4]) {
-        idct2d_2_2(d, block);
-    }
-);
 
 simd_function!(
     jpeg_ycbcr_to_bgra_row_dispatch,
@@ -6189,6 +6651,90 @@ mod jpeg_file_tests {
         (r, g, b)
     }
 
+    fn parse_pnm(data: &[u8]) -> (u8, usize, usize, &[u8]) {
+        fn next_token<'a>(data: &'a [u8], idx: &mut usize) -> &'a [u8] {
+            while *idx < data.len() && data[*idx].is_ascii_whitespace() {
+                *idx += 1;
+            }
+            if *idx < data.len() && data[*idx] == b'#' {
+                while *idx < data.len() && data[*idx] != b'\n' {
+                    *idx += 1;
+                }
+                return next_token(data, idx);
+            }
+            let start = *idx;
+            while *idx < data.len() && !data[*idx].is_ascii_whitespace() {
+                *idx += 1;
+            }
+            &data[start..*idx]
+        }
+
+        let mut idx = 0usize;
+        let magic = next_token(data, &mut idx);
+        let width = next_token(data, &mut idx);
+        let height = next_token(data, &mut idx);
+        let maxval = next_token(data, &mut idx);
+
+        let channels = match magic {
+            b"P5" => 1,
+            b"P6" => 3,
+            _ => 0,
+        };
+        assert!(channels != 0, "unsupported PNM magic");
+        let width: usize = std::str::from_utf8(width).unwrap().parse().unwrap();
+        let height: usize = std::str::from_utf8(height).unwrap().parse().unwrap();
+        let maxval: usize = std::str::from_utf8(maxval).unwrap().parse().unwrap();
+        assert_eq!(maxval, 255);
+
+        while idx < data.len() && data[idx].is_ascii_whitespace() {
+            idx += 1;
+        }
+
+        (channels, width, height, &data[idx..])
+    }
+
+    fn assert_within_tolerance(
+        name: &str,
+        got: &[u8],
+        expected: &[u8],
+        channels: usize,
+        tolerance: u8,
+    ) {
+        assert_eq!(got.len(), expected.len(), "size mismatch for {}", name);
+        let mut max_diff = 0u8;
+        let mut max_idx = 0usize;
+        let mut max_g = 0u8;
+        let mut max_e = 0u8;
+        for (i, (&g, &e)) in got.iter().zip(expected.iter()).enumerate() {
+            let diff = if g > e { g - e } else { e - g };
+            if diff > max_diff {
+                max_diff = diff;
+                max_idx = i;
+                max_g = g;
+                max_e = e;
+            }
+        }
+        if max_diff > tolerance {
+            let pixel = if channels > 0 { max_idx / channels } else { 0 };
+            let channel = if channels > 0 { max_idx % channels } else { 0 };
+            let preview_len = got.len().min(12);
+            let got_preview = &got[..preview_len];
+            let expected_preview = &expected[..preview_len];
+            panic!(
+                "libjpeg-turbo mismatch for {}: max diff {} > {} at pixel {} channel {} (got {}, expected {}), got {:?}, expected {:?}",
+                name,
+                max_diff,
+                tolerance,
+                pixel,
+                channel,
+                max_g,
+                max_e,
+                got_preview,
+                expected_preview
+            );
+        }
+    }
+
     #[test]
     fn test_parse_grayscale_8x8() {
         let decoder = JpegDecoder::new(GRAYSCALE_8X8).expect("Failed to create decoder");
@@ -6471,6 +7017,79 @@ mod jpeg_file_tests {
         assert_eq!(output.len(), expected.len());
         for (a, b) in output.iter().zip(expected.iter()) {
             assert!((*a as i32 - *b as i32).abs() <= 1);
+        }
+    }
+
+    #[test]
+    fn test_libjpeg_turbo_checksums() {
+        let rgb_cases: &[(&str, &[u8], &[u8])] = &[
+            (
+                "rgb_8x8",
+                RGB_8X8,
+                include_bytes!("../resources/test/jpeg/libjpeg_rgb_8x8.pnm"),
+            ),
+            (
+                "subsampled_420",
+                SUBSAMPLED_420,
+                include_bytes!("../resources/test/jpeg/libjpeg_subsampled_420.pnm"),
+            ),
+            (
+                "subsampled_422",
+                SUBSAMPLED_422,
+                include_bytes!("../resources/test/jpeg/libjpeg_subsampled_422.pnm"),
+            ),
+            (
+                "subsampled_444",
+                SUBSAMPLED_444,
+                include_bytes!("../resources/test/jpeg/libjpeg_subsampled_444.pnm"),
+            ),
+            (
+                "progressive_8x8",
+                PROGRESSIVE_8X8,
+                include_bytes!("../resources/test/jpeg/libjpeg_progressive_8x8.pnm"),
+            ),
+            (
+                "restart_8x8",
+                RESTART_8X8,
+                include_bytes!("../resources/test/jpeg/libjpeg_restart_8x8.pnm"),
+            ),
+        ];
+
+        for &(name, data, reference) in rgb_cases {
+            let (channels, width, height, pixels) = parse_pnm(reference);
+            assert_eq!(channels, 3, "reference must be RGB for {}", name);
+            let decoder = JpegDecoder::new(data).expect("Failed to create decoder");
+            let options = JpegDecodeOptions::default();
+            let mut output = vec![0u8; width * height * 3];
+            decoder
+                .decode_into(data, &options, JpegOutputFormat::Rgb8, &mut output, width * 3)
+                .expect("decode_into failed");
+            assert_within_tolerance(name, &output, pixels, 3, 1);
+        }
+
+        let gray_cases: &[(&str, &[u8], &[u8])] = &[
+            (
+                "grayscale_8x8",
+                GRAYSCALE_8X8,
+                include_bytes!("../resources/test/jpeg/libjpeg_grayscale_8x8.pnm"),
+            ),
+            (
+                "gradient_32x32",
+                GRADIENT_32X32,
+                include_bytes!("../resources/test/jpeg/libjpeg_gradient_32x32.pnm"),
+            ),
+        ];
+
+        for &(name, data, reference) in gray_cases {
+            let (channels, width, height, pixels) = parse_pnm(reference);
+            assert_eq!(channels, 1, "reference must be grayscale for {}", name);
+            let decoder = JpegDecoder::new(data).expect("Failed to create decoder");
+            let options = JpegDecodeOptions::default();
+            let mut output = vec![0u8; width * height];
+            decoder
+                .decode_into(data, &options, JpegOutputFormat::Gray8, &mut output, width)
+                .expect("decode_into failed");
+            assert_within_tolerance(name, &output, pixels, 1, 1);
         }
     }
 
