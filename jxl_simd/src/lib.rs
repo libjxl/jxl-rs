@@ -43,6 +43,11 @@ pub trait SimdDescriptor: Sized + Copy + Debug + Send + Sync {
 
     type Mask: SimdMask<Descriptor = Self>;
 
+    /// Prepared 8-entry BF16 lookup table for fast approximate lookups.
+    /// Use `F32SimdVec::prepare_table_bf16_8` to create and
+    /// `F32SimdVec::table_lookup_bf16_8` to use.
+    type Bf16Table8: Copy;
+
     type Descriptor256: SimdDescriptor<Descriptor256 = Self::Descriptor256>;
     type Descriptor128: SimdDescriptor<Descriptor128 = Self::Descriptor128>;
 
@@ -216,6 +221,29 @@ pub unsafe trait F32SimdVec:
 
     fn bitcast_to_i32(self) -> <<Self as F32SimdVec>::Descriptor as SimdDescriptor>::I32Vec;
 
+    /// Prepares an 8-entry f32 table for fast approximate lookups.
+    /// Values are converted to BF16 format (loses lower 16 mantissa bits).
+    ///
+    /// Use this when you need to perform multiple lookups with the same table.
+    /// The prepared table can be reused with [`table_lookup_bf16_8`].
+    fn prepare_table_bf16_8(
+        d: Self::Descriptor,
+        table: &[f32; 8],
+    ) -> <<Self as F32SimdVec>::Descriptor as SimdDescriptor>::Bf16Table8;
+
+    /// Performs fast approximate table lookup using a prepared BF16 table.
+    ///
+    /// This is the fastest lookup method when the same table is used multiple times.
+    /// Use [`prepare_table_bf16_8`] to create the prepared table.
+    ///
+    /// # Panics
+    /// May panic or produce undefined results if indices contain values outside 0..8 range.
+    fn table_lookup_bf16_8(
+        d: Self::Descriptor,
+        table: <<Self as F32SimdVec>::Descriptor as SimdDescriptor>::Bf16Table8,
+        indices: <<Self as F32SimdVec>::Descriptor as SimdDescriptor>::I32Vec,
+    ) -> Self;
+
     /// Converts a slice of f32 into a slice of Self::UnderlyingArray. If slice.len() is not a
     /// multiple of `Self::LEN` this will panic.
     fn make_array_slice(slice: &[f32]) -> &[Self::UnderlyingArray];
@@ -375,7 +403,9 @@ pub(crate) use impl_f32_array_interface;
 mod test {
     use arbtest::arbitrary::Unstructured;
 
-    use crate::{F32SimdVec, ScalarDescriptor, SimdDescriptor, test_all_instruction_sets};
+    use crate::{
+        F32SimdVec, I32SimdVec, ScalarDescriptor, SimdDescriptor, test_all_instruction_sets,
+    };
 
     enum Distribution {
         Floats,
@@ -835,4 +865,43 @@ mod test {
         }
     }
     test_all_instruction_sets!(test_store_interleaved_8);
+
+    fn test_prepare_table_bf16_8<D: SimdDescriptor>(d: D) {
+        // Create an 8-entry lookup table with known values
+        // Use integer values that are exactly representable in BF16
+        let lut: [f32; 8] = [0.0, 10.0, 20.0, 30.0, 40.0, 50.0, 60.0, 70.0];
+        let len = D::F32Vec::LEN;
+
+        // Prepare the table once
+        let prepared = D::F32Vec::prepare_table_bf16_8(d, &lut);
+
+        // Create indices that are valid for the LUT (0..8)
+        let indices: Vec<i32> = (0..len).map(|i| (i % 8) as i32).collect();
+        let expected: Vec<f32> = indices.iter().map(|&i| lut[i as usize]).collect();
+
+        // Perform table lookup with prepared table
+        let indices_vec = D::I32Vec::load(d, &indices);
+        let result = D::F32Vec::table_lookup_bf16_8(d, prepared, indices_vec);
+
+        let mut output = vec![0.0f32; len];
+        result.store(&mut output);
+
+        // Verify results - prepared lookup may have BF16 precision loss
+        // BF16 has ~0.4% relative error for typical values
+        for i in 0..len {
+            let tolerance = if expected[i] == 0.0 {
+                0.01
+            } else {
+                expected[i].abs() * 0.01
+            };
+            assert!(
+                (output[i] - expected[i]).abs() < tolerance,
+                "table_lookup_bf16_8 failed at position {}: expected {}, got {}",
+                i,
+                expected[i],
+                output[i]
+            );
+        }
+    }
+    test_all_instruction_sets!(test_prepare_table_bf16_8);
 }
