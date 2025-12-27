@@ -8,7 +8,6 @@ This folder contains sample code for integrating jxl-rs into Chromium's image de
 
 ### Rust CXX Wrappers
 
-- `jxl_wrapper.rs` - CXX bridge wrapper for JXL decoding
 - `jpeg_wrapper.rs` - CXX bridge wrapper for JPEG decoding
 
 These files use the `cxx` crate to expose Rust APIs to C++. They should be placed in a Chromium-side crate that depends on `jxl`.
