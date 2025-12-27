@@ -3,7 +3,7 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-use jxl_simd::{simd_function, shr, I32SimdVec, SimdDescriptor};
+use jxl_simd::{I32SimdVec, SimdDescriptor, shr, simd_function};
 
 use crate::{
     frame::modular::{

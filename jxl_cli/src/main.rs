@@ -17,7 +17,6 @@ use std::{fs, mem};
 #[cfg(feature = "jpeg-reconstruction")]
 use jxl::api::JpegReconstructionData;
 
-
 fn save_icc(icc_bytes: &[u8], icc_filename: Option<&PathBuf>) -> Result<()> {
     icc_filename.map_or(Ok(()), |path| {
         std::fs::write(path, icc_bytes)
@@ -111,8 +110,8 @@ fn is_jpeg_input(path: &std::path::Path, data: &[u8]) -> bool {
 fn decode_jpeg_file(data: &[u8]) -> Result<dec::DecodeOutput<f32>> {
     use jxl::api::{JxlBitDepth, JxlColorEncoding, JxlColorProfile};
 
-    let decoded = jxl::jpeg::decode_jpeg(data)
-        .map_err(|e| eyre!("Failed to decode JPEG: {:?}", e))?;
+    let decoded =
+        jxl::jpeg::decode_jpeg(data).map_err(|e| eyre!("Failed to decode JPEG: {:?}", e))?;
 
     let width = decoded.width;
     let height = decoded.height;
