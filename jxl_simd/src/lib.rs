@@ -221,44 +221,6 @@ pub unsafe trait F32SimdVec:
 
     fn bitcast_to_i32(self) -> <<Self as F32SimdVec>::Descriptor as SimdDescriptor>::I32Vec;
 
-    /// Looks up values from an 8-entry table with exact precision.
-    /// Each element i of the result is exactly `table[indices[i]]`.
-    ///
-    /// # Implementation Details
-    ///
-    /// - **AVX2/AVX512**: Uses `vpermps` for efficient exact lookup.
-    /// - **SSE4.2/NEON**: Uses scalar fallback for correctness.
-    ///
-    /// For performance-critical code where small precision loss is acceptable
-    /// (e.g., noise tables), consider using [`table_lookup_8_approx`] instead.
-    ///
-    /// # Panics
-    /// May panic or produce undefined results if indices contain values outside 0..8 range.
-    fn table_lookup_8(
-        d: Self::Descriptor,
-        table: &[f32; 8],
-        indices: <<Self as F32SimdVec>::Descriptor as SimdDescriptor>::I32Vec,
-    ) -> Self;
-
-    /// Looks up values from an 8-entry table with approximate precision (fast path).
-    /// Each element i of the result is approximately `table[indices[i]]`.
-    ///
-    /// # Implementation Details
-    ///
-    /// - **AVX2/AVX512**: Uses `vpermps` for exact lookup (no approximation needed).
-    /// - **SSE4.2/NEON**: Uses byte shuffles with BF16 storage for efficiency.
-    ///   Values are converted to BF16 (truncating lower 16 mantissa bits) and back.
-    ///   This is suitable for LUTs where small precision loss is acceptable
-    ///   (e.g., noise tables with ~0.4% relative error).
-    ///
-    /// # Panics
-    /// May panic or produce undefined results if indices contain values outside 0..8 range.
-    fn table_lookup_8_approx(
-        d: Self::Descriptor,
-        table: &[f32; 8],
-        indices: <<Self as F32SimdVec>::Descriptor as SimdDescriptor>::I32Vec,
-    ) -> Self;
-
     /// Prepares an 8-entry f32 table for fast approximate lookups.
     /// Values are converted to BF16 format (loses lower 16 mantissa bits).
     ///
@@ -903,71 +865,6 @@ mod test {
         }
     }
     test_all_instruction_sets!(test_store_interleaved_8);
-
-    fn test_table_lookup_8<D: SimdDescriptor>(d: D) {
-        // Create an 8-entry lookup table with known values
-        let lut: [f32; 8] = [0.0, 10.0, 20.0, 30.0, 40.0, 50.0, 60.0, 70.0];
-        let len = D::F32Vec::LEN;
-
-        // Create indices that are valid for the LUT (0..8)
-        let indices: Vec<i32> = (0..len).map(|i| (i % 8) as i32).collect();
-        let expected: Vec<f32> = indices.iter().map(|&i| lut[i as usize]).collect();
-
-        // Perform table lookup
-        let indices_vec = D::I32Vec::load(d, &indices);
-        let result = D::F32Vec::table_lookup_8(d, &lut, indices_vec);
-
-        let mut output = vec![0.0f32; len];
-        result.store(&mut output);
-
-        // Verify results - exact lookup should be precise
-        for i in 0..len {
-            assert!(
-                (output[i] - expected[i]).abs() < 0.01,
-                "table_lookup_8 failed at position {}: expected {}, got {}",
-                i,
-                expected[i],
-                output[i]
-            );
-        }
-    }
-    test_all_instruction_sets!(test_table_lookup_8);
-
-    fn test_table_lookup_8_approx<D: SimdDescriptor>(d: D) {
-        // Create an 8-entry lookup table with known values
-        // Use integer values that are exactly representable in BF16
-        let lut: [f32; 8] = [0.0, 10.0, 20.0, 30.0, 40.0, 50.0, 60.0, 70.0];
-        let len = D::F32Vec::LEN;
-
-        // Create indices that are valid for the LUT (0..8)
-        let indices: Vec<i32> = (0..len).map(|i| (i % 8) as i32).collect();
-        let expected: Vec<f32> = indices.iter().map(|&i| lut[i as usize]).collect();
-
-        // Perform approximate table lookup
-        let indices_vec = D::I32Vec::load(d, &indices);
-        let result = D::F32Vec::table_lookup_8_approx(d, &lut, indices_vec);
-
-        let mut output = vec![0.0f32; len];
-        result.store(&mut output);
-
-        // Verify results - approximate lookup may have BF16 precision loss
-        // BF16 has ~0.4% relative error for typical values
-        for i in 0..len {
-            let tolerance = if expected[i] == 0.0 {
-                0.01
-            } else {
-                expected[i].abs() * 0.01
-            };
-            assert!(
-                (output[i] - expected[i]).abs() < tolerance,
-                "table_lookup_8_approx failed at position {}: expected {}, got {}",
-                i,
-                expected[i],
-                output[i]
-            );
-        }
-    }
-    test_all_instruction_sets!(test_table_lookup_8_approx);
 
     fn test_prepare_table_bf16_8<D: SimdDescriptor>(d: D) {
         // Create an 8-entry lookup table with known values
