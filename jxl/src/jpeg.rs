@@ -11,6 +11,8 @@
 
 use crate::bit_reader::BitReader;
 use crate::error::{Error, Result};
+use jxl_simd::{simd_function, F32SimdVec};
+use jxl_transforms::{idct2d_2_2, idct2d_4_4, idct2d_8_8};
 
 /// Type of APP marker in JPEG file.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -2624,6 +2626,58 @@ pub struct JpegDecodedImage {
     pub pixels: Vec<f32>,
 }
 
+/// Output pixel format for direct JPEG decoding.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum JpegOutputFormat {
+    Gray8,
+    Rgb8,
+    Bgr8,
+    Rgba8,
+    Bgra8,
+    Cmyk8,
+    Ycbcr8,
+    Ycck8,
+}
+
+impl JpegOutputFormat {
+    fn bytes_per_pixel(self) -> usize {
+        match self {
+            JpegOutputFormat::Gray8 => 1,
+            JpegOutputFormat::Rgb8 | JpegOutputFormat::Bgr8 | JpegOutputFormat::Ycbcr8 => 3,
+            JpegOutputFormat::Rgba8
+            | JpegOutputFormat::Bgra8
+            | JpegOutputFormat::Cmyk8
+            | JpegOutputFormat::Ycck8 => 4,
+        }
+    }
+}
+
+/// Output pixel format for 16-bit JPEG decoding.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum JpegOutputFormat16 {
+    Gray16,
+    Rgb16,
+    Bgr16,
+    Rgba16,
+    Bgra16,
+    Cmyk16,
+    Ycbcr16,
+    Ycck16,
+}
+
+impl JpegOutputFormat16 {
+    fn samples_per_pixel(self) -> usize {
+        match self {
+            JpegOutputFormat16::Gray16 => 1,
+            JpegOutputFormat16::Rgb16 | JpegOutputFormat16::Bgr16 | JpegOutputFormat16::Ycbcr16 => 3,
+            JpegOutputFormat16::Rgba16
+            | JpegOutputFormat16::Bgra16
+            | JpegOutputFormat16::Cmyk16
+            | JpegOutputFormat16::Ycck16 => 4,
+        }
+    }
+}
+
 /// JPEG metadata extracted during decoding.
 #[derive(Debug, Clone, Default)]
 pub struct JpegMetadata {
@@ -2642,10 +2696,12 @@ pub struct JpegMetadata {
 /// JPEG decoder for decoding standard JPEG files.
 ///
 /// Supports baseline DCT (SOF0) and progressive DCT (SOF2) JPEG files.
+#[derive(Clone)]
 pub struct JpegDecoder {
     width: u16,
     height: u16,
     num_components: u8,
+    data_precision: u8,
     components: Vec<JpegDecoderComponent>,
     quant_tables: [[u16; 64]; 4],
     dc_huff_tables: [HuffmanTable; 4],
@@ -2653,6 +2709,10 @@ pub struct JpegDecoder {
     restart_interval: u16,
     is_progressive: bool,
     metadata: JpegMetadata,
+    saw_jfif: bool,
+    adobe_transform: Option<u8>,
+    icc_segments: Vec<Option<Vec<u8>>>,
+    icc_expected_segments: Option<usize>,
 }
 
 #[derive(Clone, Default)]
@@ -2663,6 +2723,38 @@ struct JpegDecoderComponent {
     quant_table_id: u8,
     dc_table_id: u8,
     ac_table_id: u8,
+}
+
+#[derive(Clone, Copy)]
+struct JpegScanHeader {
+    num_components: usize,
+    component_ids: [u8; 4],
+    dc_table_id: [u8; 4],
+    ac_table_id: [u8; 4],
+    ss: u8,
+    se: u8,
+    ah: u8,
+    al: u8,
+}
+
+#[derive(Clone, Copy)]
+struct JpegOutputLayout {
+    out_width: usize,
+    out_height: usize,
+    crop_x: usize,
+    crop_y: usize,
+    denom: usize,
+}
+
+#[derive(Clone, Copy)]
+struct JpegComponentLayout {
+    width: usize,
+    height: usize,
+    max_h: usize,
+    max_v: usize,
+    mcus_x: usize,
+    mcus_y: usize,
+    dct_size: usize,
 }
 
 #[derive(Clone)]
@@ -2754,6 +2846,48 @@ impl HuffmanTable {
         table
     }
 }
+
+const STD_DC_LUMA_BITS: [u8; 16] = [0, 1, 5, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0];
+const STD_DC_LUMA_VALS: [u8; 12] = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11];
+const STD_DC_CHROMA_BITS: [u8; 16] = [0, 3, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0];
+const STD_DC_CHROMA_VALS: [u8; 12] = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11];
+
+const STD_AC_LUMA_BITS: [u8; 16] = [
+    0, 2, 1, 3, 3, 2, 4, 3, 5, 5, 4, 4, 0, 0, 1, 0x7d,
+];
+const STD_AC_LUMA_VALS: [u8; 162] = [
+    0x01, 0x02, 0x03, 0x00, 0x04, 0x11, 0x05, 0x12, 0x21, 0x31, 0x41, 0x06, 0x13, 0x51,
+    0x61, 0x07, 0x22, 0x71, 0x14, 0x32, 0x81, 0x91, 0xA1, 0x08, 0x23, 0x42, 0xB1,
+    0xC1, 0x15, 0x52, 0xD1, 0xF0, 0x24, 0x33, 0x62, 0x72, 0x82, 0x09, 0x0A, 0x16,
+    0x17, 0x18, 0x19, 0x1A, 0x25, 0x26, 0x27, 0x28, 0x29, 0x2A, 0x34, 0x35, 0x36,
+    0x37, 0x38, 0x39, 0x3A, 0x43, 0x44, 0x45, 0x46, 0x47, 0x48, 0x49, 0x4A, 0x53,
+    0x54, 0x55, 0x56, 0x57, 0x58, 0x59, 0x5A, 0x63, 0x64, 0x65, 0x66, 0x67, 0x68,
+    0x69, 0x6A, 0x73, 0x74, 0x75, 0x76, 0x77, 0x78, 0x79, 0x7A, 0x83, 0x84, 0x85,
+    0x86, 0x87, 0x88, 0x89, 0x8A, 0x92, 0x93, 0x94, 0x95, 0x96, 0x97, 0x98, 0x99,
+    0x9A, 0xA2, 0xA3, 0xA4, 0xA5, 0xA6, 0xA7, 0xA8, 0xA9, 0xAA, 0xB2, 0xB3, 0xB4,
+    0xB5, 0xB6, 0xB7, 0xB8, 0xB9, 0xBA, 0xC2, 0xC3, 0xC4, 0xC5, 0xC6, 0xC7, 0xC8,
+    0xC9, 0xCA, 0xD2, 0xD3, 0xD4, 0xD5, 0xD6, 0xD7, 0xD8, 0xD9, 0xDA, 0xE1, 0xE2,
+    0xE3, 0xE4, 0xE5, 0xE6, 0xE7, 0xE8, 0xE9, 0xEA, 0xF1, 0xF2, 0xF3, 0xF4, 0xF5,
+    0xF6, 0xF7, 0xF8, 0xF9, 0xFA,
+];
+
+const STD_AC_CHROMA_BITS: [u8; 16] = [
+    0, 2, 1, 2, 4, 4, 3, 4, 7, 5, 4, 4, 0, 1, 2, 0x77,
+];
+const STD_AC_CHROMA_VALS: [u8; 162] = [
+    0x00, 0x01, 0x02, 0x03, 0x11, 0x04, 0x05, 0x21, 0x31, 0x06, 0x12, 0x41, 0x51, 0x07,
+    0x61, 0x71, 0x13, 0x22, 0x32, 0x81, 0x08, 0x14, 0x42, 0x91, 0xA1, 0xB1, 0xC1, 0x09,
+    0x23, 0x33, 0x52, 0xF0, 0x15, 0x62, 0x72, 0xD1, 0x0A, 0x16, 0x24, 0x34, 0xE1, 0x25,
+    0xF1, 0x17, 0x18, 0x19, 0x1A, 0x26, 0x27, 0x28, 0x29, 0x2A, 0x35, 0x36, 0x37, 0x38,
+    0x39, 0x3A, 0x43, 0x44, 0x45, 0x46, 0x47, 0x48, 0x49, 0x4A, 0x53, 0x54, 0x55, 0x56,
+    0x57, 0x58, 0x59, 0x5A, 0x63, 0x64, 0x65, 0x66, 0x67, 0x68, 0x69, 0x6A, 0x73, 0x74,
+    0x75, 0x76, 0x77, 0x78, 0x79, 0x7A, 0x82, 0x83, 0x84, 0x85, 0x86, 0x87, 0x88, 0x89,
+    0x8A, 0x92, 0x93, 0x94, 0x95, 0x96, 0x97, 0x98, 0x99, 0x9A, 0xA2, 0xA3, 0xA4, 0xA5,
+    0xA6, 0xA7, 0xA8, 0xA9, 0xAA, 0xB2, 0xB3, 0xB4, 0xB5, 0xB6, 0xB7, 0xB8, 0xB9, 0xBA,
+    0xC2, 0xC3, 0xC4, 0xC5, 0xC6, 0xC7, 0xC8, 0xC9, 0xCA, 0xD2, 0xD3, 0xD4, 0xD5, 0xD6,
+    0xD7, 0xD8, 0xD9, 0xDA, 0xE2, 0xE3, 0xE4, 0xE5, 0xE6, 0xE7, 0xE8, 0xE9, 0xEA, 0xF2,
+    0xF3, 0xF4, 0xF5, 0xF6, 0xF7, 0xF8, 0xF9, 0xFA,
+];
 
 /// Bit reader for JPEG data with byte stuffing handling.
 struct JpegBitReader<'a> {
@@ -2869,6 +3003,7 @@ impl JpegDecoder {
             width: 0,
             height: 0,
             num_components: 0,
+            data_precision: 8,
             components: Vec::new(),
             quant_tables: [[0; 64]; 4],
             dc_huff_tables: Default::default(),
@@ -2876,6 +3011,10 @@ impl JpegDecoder {
             restart_interval: 0,
             is_progressive: false,
             metadata: JpegMetadata::default(),
+            saw_jfif: false,
+            adobe_transform: None,
+            icc_segments: Vec::new(),
+            icc_expected_segments: None,
         };
 
         decoder.parse_headers(data)?;
@@ -2897,6 +3036,11 @@ impl JpegDecoder {
         self.num_components as usize
     }
 
+    /// Get bits per sample.
+    pub fn bits_per_sample(&self) -> u8 {
+        self.data_precision
+    }
+
     /// Check if this is a progressive JPEG.
     pub fn is_progressive(&self) -> bool {
         self.is_progressive
@@ -2910,6 +3054,69 @@ impl JpegDecoder {
     /// Extract and return owned metadata (for CXX bridge compatibility).
     pub fn extract_metadata(&self) -> JpegMetadata {
         self.metadata.clone()
+    }
+
+    fn sample_max(&self) -> f32 {
+        let precision = self.data_precision.max(1).min(16) as u32;
+        ((1u32 << precision) - 1) as f32
+    }
+
+    fn level_shift(&self) -> f32 {
+        let precision = self.data_precision.max(1).min(16) as u32;
+        (1u32 << (precision - 1)) as f32
+    }
+
+    fn quantize_to_u8(&self, value: f32) -> u8 {
+        (value.clamp(0.0, 1.0) * 255.0).round() as u8
+    }
+
+    fn quantize_to_u16(&self, value: f32) -> u16 {
+        (value.clamp(0.0, 1.0) * self.sample_max()).round() as u16
+    }
+
+    fn use_ycbcr(&self) -> bool {
+        if self.num_components != 3 {
+            return false;
+        }
+
+        if self.saw_jfif {
+            return true;
+        }
+
+        if let Some(transform) = self.adobe_transform {
+            return match transform {
+                0 => false,
+                1 => true,
+                _ => true,
+            };
+        }
+
+        if self.components.len() >= 3 {
+            let cid0 = self.components[0].id;
+            let cid1 = self.components[1].id;
+            let cid2 = self.components[2].id;
+
+            if cid0 == 1 && cid1 == 2 && cid2 == 3 {
+                return true;
+            }
+            if cid0 == 82 && cid1 == 71 && cid2 == 66 {
+                return false;
+            }
+        }
+
+        true
+    }
+
+    fn use_ycck(&self) -> bool {
+        if self.num_components != 4 {
+            return false;
+        }
+        match self.adobe_transform {
+            Some(2) => true,
+            Some(0) => false,
+            Some(_) => true,
+            None => false,
+        }
     }
 
     fn parse_headers(&mut self, data: &[u8]) -> Result<()> {
@@ -2927,7 +3134,18 @@ impl JpegDecoder {
             match marker {
                 0xD8 => {} // SOI - ignore
                 0xD9 => break, // EOI
-                0xDA => break, // SOS - start of scan, stop parsing headers
+                0xDA => {
+                    // SOS - parse scan header to get Huffman table selectors, then stop.
+                    if pos + 2 > data.len() {
+                        return Err(Error::InvalidJpegData);
+                    }
+                    let length = u16::from_be_bytes([data[pos], data[pos + 1]]) as usize;
+                    if pos + length > data.len() {
+                        return Err(Error::InvalidJpegData);
+                    }
+                    let _ = self.parse_sos(&data[pos..pos + length])?;
+                    break;
+                }
                 0x00 | 0xFF => {} // Padding or fill bytes
                 0xD0..=0xD7 => {} // RST markers
                 _ => {
@@ -2944,9 +3162,11 @@ impl JpegDecoder {
                         0xC4 => self.parse_dht(&data[pos..pos + length])?,
                         0xDB => self.parse_dqt(&data[pos..pos + length])?,
                         0xDD => self.parse_dri(&data[pos..pos + length])?,
+                        0xDC => self.parse_dnl(&data[pos..pos + length])?,
                         0xE0 => self.parse_app0(&data[pos..pos + length])?,
                         0xE1 => self.parse_app1(&data[pos..pos + length])?,
                         0xE2 => self.parse_app2(&data[pos..pos + length])?,
+                        0xEE => self.parse_app14(&data[pos..pos + length])?,
                         0xFE => self.parse_com(&data[pos..pos + length])?,
                         _ => {} // Skip unknown markers
                     }
@@ -2965,14 +3185,15 @@ impl JpegDecoder {
         }
 
         let precision = data[2];
-        if precision != 8 {
-            return Err(Error::InvalidJpegData); // Only 8-bit supported for now
+        if precision != 8 && precision != 12 && precision != 16 {
+            return Err(Error::InvalidJpegData);
         }
 
         self.height = u16::from_be_bytes([data[3], data[4]]);
         self.width = u16::from_be_bytes([data[5], data[6]]);
         self.num_components = data[7];
         self.is_progressive = progressive;
+        self.data_precision = precision;
 
         if data.len() < 8 + self.num_components as usize * 3 {
             return Err(Error::InvalidJpegData);
@@ -3075,9 +3296,20 @@ impl JpegDecoder {
         Ok(())
     }
 
+    fn parse_dnl(&mut self, data: &[u8]) -> Result<()> {
+        if data.len() >= 4 {
+            let height = u16::from_be_bytes([data[2], data[3]]);
+            if height > 0 {
+                self.height = height;
+            }
+        }
+        Ok(())
+    }
+
     fn parse_app0(&mut self, data: &[u8]) -> Result<()> {
         if data.len() >= 14 && &data[2..7] == b"JFIF\0" {
             self.metadata.jfif_version = Some((data[7], data[8]));
+            self.saw_jfif = true;
         }
         Ok(())
     }
@@ -3093,12 +3325,41 @@ impl JpegDecoder {
 
     fn parse_app2(&mut self, data: &[u8]) -> Result<()> {
         if data.len() >= 14 && &data[2..14] == b"ICC_PROFILE\0" {
-            // Simple handling - just store the profile data
-            if self.metadata.icc_profile.is_none() {
-                self.metadata.icc_profile = Some(data[16..].to_vec());
-            } else if let Some(ref mut icc) = self.metadata.icc_profile {
-                icc.extend_from_slice(&data[16..]);
+            if data.len() < 16 {
+                return Ok(());
             }
+
+            let seq = data[14] as usize;
+            let total = data[15] as usize;
+            if seq == 0 || total == 0 {
+                return Ok(());
+            }
+
+            if self.icc_expected_segments.is_none() {
+                self.icc_expected_segments = Some(total);
+                self.icc_segments = vec![None; total];
+            }
+
+            if self.icc_expected_segments == Some(total) && seq <= total {
+                self.icc_segments[seq - 1] = Some(data[16..].to_vec());
+
+                if self.icc_segments.iter().all(|seg| seg.is_some()) {
+                    let mut icc = Vec::new();
+                    for seg in &self.icc_segments {
+                        if let Some(bytes) = seg {
+                            icc.extend_from_slice(bytes);
+                        }
+                    }
+                    self.metadata.icc_profile = Some(icc);
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn parse_app14(&mut self, data: &[u8]) -> Result<()> {
+        if data.len() >= 14 && &data[2..7] == b"Adobe" {
+            self.adobe_transform = data.get(13).copied();
         }
         Ok(())
     }
@@ -3112,20 +3373,104 @@ impl JpegDecoder {
         Ok(())
     }
 
-    /// Decode the JPEG image and return pixel data.
-    pub fn decode(&self, data: &[u8]) -> Result<JpegDecodedImage> {
-        // Find SOS marker
-        let sos_pos = self.find_sos(data)?;
-        let scan_data = &data[sos_pos..];
-
-        if self.is_progressive {
-            self.decode_progressive(data, sos_pos)
-        } else {
-            self.decode_baseline(scan_data)
+    fn ensure_default_huffman_tables(&mut self) {
+        if !self.dc_huff_tables[0].valid {
+            self.dc_huff_tables[0] = HuffmanTable::build(&STD_DC_LUMA_BITS, &STD_DC_LUMA_VALS);
+        }
+        if !self.ac_huff_tables[0].valid {
+            self.ac_huff_tables[0] = HuffmanTable::build(&STD_AC_LUMA_BITS, &STD_AC_LUMA_VALS);
+        }
+        if !self.dc_huff_tables[1].valid {
+            self.dc_huff_tables[1] = HuffmanTable::build(&STD_DC_CHROMA_BITS, &STD_DC_CHROMA_VALS);
+        }
+        if !self.ac_huff_tables[1].valid {
+            self.ac_huff_tables[1] = HuffmanTable::build(&STD_AC_CHROMA_BITS, &STD_AC_CHROMA_VALS);
         }
     }
 
-    fn find_sos(&self, data: &[u8]) -> Result<usize> {
+    fn update_height_from_dnl(&mut self, data: &[u8]) {
+        if self.height != 0 {
+            return;
+        }
+        let mut pos = 2;
+        while pos + 3 < data.len() {
+            if data[pos] == 0xFF && data[pos + 1] == 0xDC {
+                let length = u16::from_be_bytes([data[pos + 2], data[pos + 3]]) as usize;
+                if pos + 2 + length <= data.len() && length >= 4 {
+                    let height = u16::from_be_bytes([data[pos + 4], data[pos + 5]]);
+                    if height > 0 {
+                        self.height = height;
+                        return;
+                    }
+                }
+            }
+            pos += 1;
+        }
+    }
+
+    fn parse_sos(&mut self, data: &[u8]) -> Result<JpegScanHeader> {
+        if data.len() < 6 {
+            return Err(Error::InvalidJpegData);
+        }
+
+        let num_components = data[2] as usize;
+        let required = 3 + num_components * 2 + 3;
+        if data.len() < required {
+            return Err(Error::InvalidJpegData);
+        }
+
+        let mut component_ids = [0u8; 4];
+        let mut dc_table_id = [0u8; 4];
+        let mut ac_table_id = [0u8; 4];
+
+        for i in 0..num_components {
+            let comp_id = data[3 + i * 2];
+            let table_sel = data[4 + i * 2];
+            let dc_id = table_sel >> 4;
+            let ac_id = table_sel & 0x0F;
+
+            component_ids[i] = comp_id;
+            dc_table_id[i] = dc_id;
+            ac_table_id[i] = ac_id;
+
+            if let Some(comp) = self.components.iter_mut().find(|c| c.id == comp_id) {
+                comp.dc_table_id = dc_id;
+                comp.ac_table_id = ac_id;
+            }
+        }
+
+        let ss = data[3 + num_components * 2];
+        let se = data[4 + num_components * 2];
+        let ah_al = data[5 + num_components * 2];
+
+        Ok(JpegScanHeader {
+            num_components,
+            component_ids,
+            dc_table_id,
+            ac_table_id,
+            ss,
+            se,
+            ah: ah_al >> 4,
+            al: ah_al & 0x0F,
+        })
+    }
+
+    /// Decode the JPEG image and return pixel data.
+    pub fn decode(&self, data: &[u8]) -> Result<JpegDecodedImage> {
+        let mut decoder = self.clone();
+        decoder.ensure_default_huffman_tables();
+        decoder.update_height_from_dnl(data);
+
+        if decoder.is_progressive {
+            decoder.decode_progressive(data)
+        } else {
+            let (_scan_header, scan_start, scan_end) = decoder.find_sos_segment(data)?;
+            let scan_data = &data[scan_start..scan_end];
+            decoder.decode_baseline(scan_data)
+        }
+    }
+
+    fn find_sos_segment(&mut self, data: &[u8]) -> Result<(JpegScanHeader, usize, usize)> {
         let mut pos = 2;
         while pos + 2 <= data.len() {
             if data[pos] == 0xFF && data[pos + 1] == 0xDA {
@@ -3134,48 +3479,101 @@ impl JpegDecoder {
                     return Err(Error::InvalidJpegData);
                 }
                 let length = u16::from_be_bytes([data[pos], data[pos + 1]]) as usize;
-                return Ok(pos + length);
+                if pos + length > data.len() {
+                    return Err(Error::InvalidJpegData);
+                }
+                let header = self.parse_sos(&data[pos..pos + length])?;
+                let scan_start = pos + length;
+                let scan_end = self.find_scan_end(data, scan_start)?;
+                return Ok((header, scan_start, scan_end));
             }
             pos += 1;
         }
         Err(Error::InvalidJpegData)
     }
 
-    fn decode_baseline(&self, scan_data: &[u8]) -> Result<JpegDecodedImage> {
+    fn find_scan_end(&self, data: &[u8], mut pos: usize) -> Result<usize> {
+        while pos + 1 < data.len() {
+            if data[pos] == 0xFF {
+                let marker = data[pos + 1];
+                if marker == 0x00 || marker == 0xFF {
+                    pos += 2;
+                    continue;
+                }
+                if (0xD0..=0xD7).contains(&marker) {
+                    pos += 2;
+                    continue;
+                }
+                return Ok(pos);
+            }
+            pos += 1;
+        }
+        Ok(data.len())
+    }
+
+    fn component_layout(&self) -> Result<JpegComponentLayout> {
         let width = self.width as usize;
         let height = self.height as usize;
-
         if width == 0 || height == 0 {
             return Err(Error::InvalidJpegData);
         }
 
         let max_h = self.components.iter().map(|c| c.h_samp).max().unwrap_or(1) as usize;
         let max_v = self.components.iter().map(|c| c.v_samp).max().unwrap_or(1) as usize;
-
         let mcu_width = max_h * 8;
         let mcu_height = max_v * 8;
         let mcus_x = (width + mcu_width - 1) / mcu_width;
         let mcus_y = (height + mcu_height - 1) / mcu_height;
 
+        Ok(JpegComponentLayout {
+            width,
+            height,
+            max_h,
+            max_v,
+            mcus_x,
+            mcus_y,
+            dct_size: 8,
+        })
+    }
+
+    fn component_layout_scaled(&self, denom: usize) -> Result<JpegComponentLayout> {
+        let mut layout = self.component_layout()?;
+        let denom = denom.max(1);
+        let dct_size = 8 / denom;
+        if dct_size == 0 {
+            return Err(Error::InvalidJpegData);
+        }
+        if denom > 1 {
+            layout.width = (layout.width + denom - 1) / denom;
+            layout.height = (layout.height + denom - 1) / denom;
+            layout.dct_size = dct_size;
+        }
+        Ok(layout)
+    }
+
+    fn decode_baseline_components(&self, scan_data: &[u8], layout: JpegComponentLayout) -> Result<Vec<Vec<f32>>> {
         let mut reader = JpegBitReader::new(scan_data);
         let mut dc_pred = vec![0i32; self.num_components as usize];
 
-        // Allocate component buffers
-        let mut comp_data: Vec<Vec<f32>> = self.components.iter().map(|c| {
-            let comp_w = mcus_x * c.h_samp as usize * 8;
-            let comp_h = mcus_y * c.v_samp as usize * 8;
-            vec![0.0f32; comp_w * comp_h]
-        }).collect();
+        let mut comp_data: Vec<Vec<f32>> = self
+            .components
+            .iter()
+            .map(|c| {
+                let comp_w = layout.mcus_x * c.h_samp as usize * layout.dct_size;
+                let comp_h = layout.mcus_y * c.v_samp as usize * layout.dct_size;
+                vec![0.0f32; comp_w * comp_h]
+            })
+            .collect();
 
-        let mut mcu_count = 0;
+        let mut mcu_count = 0usize;
 
-        // Decode MCUs
-        for mcu_y in 0..mcus_y {
-            for mcu_x in 0..mcus_x {
-                // Check for restart marker
-                if self.restart_interval > 0 && mcu_count > 0 && mcu_count % self.restart_interval as usize == 0 {
+        for mcu_y in 0..layout.mcus_y {
+            for mcu_x in 0..layout.mcus_x {
+                if self.restart_interval > 0
+                    && mcu_count > 0
+                    && mcu_count % self.restart_interval as usize == 0
+                {
                     reader.align_to_byte();
-                    // Skip restart marker
                     while reader.pos < reader.data.len() {
                         if reader.data[reader.pos] == 0xFF {
                             let marker = reader.data.get(reader.pos + 1).copied().unwrap_or(0);
@@ -3189,7 +3587,6 @@ impl JpegDecoder {
                     dc_pred.fill(0);
                 }
 
-                // Decode each component in this MCU
                 for (comp_idx, comp) in self.components.iter().enumerate() {
                     let dc_table = &self.dc_huff_tables[comp.dc_table_id as usize];
                     let ac_table = &self.ac_huff_tables[comp.ac_table_id as usize];
@@ -3197,130 +3594,13 @@ impl JpegDecoder {
 
                     for v in 0..comp.v_samp as usize {
                         for h in 0..comp.h_samp as usize {
-                            let mut block = [0i32; 64];
+                            let mut block = [0i64; 64];
 
-                            // Decode DC coefficient
                             let dc_category = reader.decode_huffman(dc_table)?;
                             let dc_diff = reader.receive_extend(dc_category);
                             dc_pred[comp_idx] += dc_diff;
-                            block[0] = dc_pred[comp_idx] * quant[0] as i32;
+                            block[0] = dc_pred[comp_idx] as i64 * quant[0] as i64;
 
-                            // Decode AC coefficients
-                            let mut k = 1;
-                            while k < 64 {
-                                let rs = reader.decode_huffman(ac_table)?;
-                                let r = rs >> 4;
-                                let s = rs & 0x0F;
-
-                                if s == 0 {
-                                    if r == 15 {
-                                        k += 16; // Skip 16 zeros
-                                    } else {
-                                        break; // EOB
-                                    }
-                                } else {
-                                    k += r as usize;
-                                    if k >= 64 {
-                                        break;
-                                    }
-                                    let zz_idx = JPEG_NATURAL_ORDER[k];
-                                    block[zz_idx] = reader.receive_extend(s) * quant[zz_idx] as i32;
-                                    k += 1;
-                                }
-                            }
-
-                            // Perform IDCT
-                            let mut float_block = [0.0f32; 64];
-                            self.idct_8x8(&block, &mut float_block);
-
-                            // Store in component buffer
-                            let block_x = mcu_x * comp.h_samp as usize + h;
-                            let block_y = mcu_y * comp.v_samp as usize + v;
-                            let comp_stride = mcus_x * comp.h_samp as usize * 8;
-
-                            for y in 0..8 {
-                                for x in 0..8 {
-                                    let px = block_x * 8 + x;
-                                    let py = block_y * 8 + y;
-                                    let idx = py * comp_stride + px;
-                                    if idx < comp_data[comp_idx].len() {
-                                        comp_data[comp_idx][idx] = float_block[y * 8 + x];
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-
-                mcu_count += 1;
-            }
-        }
-
-        // Convert to output format
-        self.components_to_rgb(&comp_data, width, height, mcus_x, max_h, max_v)
-    }
-
-    fn decode_progressive(&self, data: &[u8], first_sos_pos: usize) -> Result<JpegDecodedImage> {
-        let width = self.width as usize;
-        let height = self.height as usize;
-
-        if width == 0 || height == 0 {
-            return Err(Error::InvalidJpegData);
-        }
-
-        let max_h = self.components.iter().map(|c| c.h_samp).max().unwrap_or(1) as usize;
-        let max_v = self.components.iter().map(|c| c.v_samp).max().unwrap_or(1) as usize;
-
-        let mcus_x = (width + max_h * 8 - 1) / (max_h * 8);
-        let mcus_y = (height + max_v * 8 - 1) / (max_v * 8);
-
-        // Allocate coefficient storage for progressive decoding
-        let mut coefficients: Vec<Vec<i32>> = self.components.iter().map(|c| {
-            let blocks_x = mcus_x * c.h_samp as usize;
-            let blocks_y = mcus_y * c.v_samp as usize;
-            vec![0i32; blocks_x * blocks_y * 64]
-        }).collect();
-
-        // Parse all scans
-        let mut pos = first_sos_pos;
-
-        // Back up to find the SOS marker
-        while pos > 4 {
-            if data[pos - 2] == 0xFF && data[pos - 1] == 0xDA {
-                break;
-            }
-            pos -= 1;
-        }
-
-        // Simple progressive: just use baseline for now if progressive is complex
-        // For a full implementation, we'd need to handle spectral selection and successive approximation
-        // Fall back to baseline-style decoding for now
-        let scan_data = &data[first_sos_pos..];
-        let mut reader = JpegBitReader::new(scan_data);
-        let mut dc_pred = vec![0i32; self.num_components as usize];
-
-        // Similar to baseline but store coefficients first
-        for mcu_y in 0..mcus_y {
-            for mcu_x in 0..mcus_x {
-                for (comp_idx, comp) in self.components.iter().enumerate() {
-                    let dc_table = &self.dc_huff_tables[comp.dc_table_id as usize];
-                    let ac_table = &self.ac_huff_tables[comp.ac_table_id as usize];
-                    let blocks_x = mcus_x * comp.h_samp as usize;
-
-                    for v in 0..comp.v_samp as usize {
-                        for h in 0..comp.h_samp as usize {
-                            let block_x = mcu_x * comp.h_samp as usize + h;
-                            let block_y = mcu_y * comp.v_samp as usize + v;
-                            let block_idx = block_y * blocks_x + block_x;
-                            let coef_offset = block_idx * 64;
-
-                            // Decode DC
-                            let dc_category = reader.decode_huffman(dc_table)?;
-                            let dc_diff = reader.receive_extend(dc_category);
-                            dc_pred[comp_idx] += dc_diff;
-                            coefficients[comp_idx][coef_offset] = dc_pred[comp_idx];
-
-                            // Decode AC
                             let mut k = 1;
                             while k < 64 {
                                 let rs = reader.decode_huffman(ac_table)?;
@@ -3338,9 +3618,406 @@ impl JpegDecoder {
                                     if k >= 64 {
                                         break;
                                     }
-                                    coefficients[comp_idx][coef_offset + JPEG_NATURAL_ORDER[k]] =
-                                        reader.receive_extend(s);
+                                    let zz_idx = JPEG_NATURAL_ORDER[k];
+                                    block[zz_idx] =
+                                        reader.receive_extend(s) as i64 * quant[zz_idx] as i64;
                                     k += 1;
+                                }
+                            }
+
+                            let mut float_block = [0.0f32; 64];
+                            let out = &mut float_block[..layout.dct_size * layout.dct_size];
+                            self.idct_block_scaled(&block, layout.dct_size, out)?;
+
+                            let block_x = mcu_x * comp.h_samp as usize + h;
+                            let block_y = mcu_y * comp.v_samp as usize + v;
+                            let comp_stride = layout.mcus_x * comp.h_samp as usize * layout.dct_size;
+
+                            for by in 0..layout.dct_size {
+                                let dst_row = (block_y * layout.dct_size + by) * comp_stride;
+                                let src_row = by * layout.dct_size;
+                                let dst = &mut comp_data[comp_idx]
+                                    [dst_row + block_x * layout.dct_size..dst_row + block_x * layout.dct_size + layout.dct_size];
+                                dst.copy_from_slice(&float_block[src_row..src_row + layout.dct_size]);
+                            }
+                        }
+                    }
+                }
+
+                mcu_count += 1;
+            }
+        }
+
+        Ok(comp_data)
+    }
+
+    fn coefficients_to_components(
+        &self,
+        coefficients: &[Vec<i32>],
+        layout: JpegComponentLayout,
+    ) -> Result<Vec<Vec<f32>>> {
+        let mut comp_data: Vec<Vec<f32>> = Vec::with_capacity(self.components.len());
+
+        for (comp_idx, comp) in self.components.iter().enumerate() {
+            let blocks_x = layout.mcus_x * comp.h_samp as usize;
+            let blocks_y = layout.mcus_y * comp.v_samp as usize;
+            let quant = &self.quant_tables[comp.quant_table_id as usize];
+            let mut output = vec![0.0f32; blocks_x * blocks_y * layout.dct_size * layout.dct_size];
+
+            for by in 0..blocks_y {
+                for bx in 0..blocks_x {
+                    let block_idx = by * blocks_x + bx;
+                    let coef_offset = block_idx * 64;
+
+                    let mut block = [0i64; 64];
+                    for i in 0..64 {
+                        block[i] =
+                            coefficients[comp_idx][coef_offset + i] as i64 * quant[i] as i64;
+                    }
+
+                    let mut float_block = [0.0f32; 64];
+                    let out = &mut float_block[..layout.dct_size * layout.dct_size];
+                    self.idct_block_scaled(&block, layout.dct_size, out)?;
+
+                    let out_stride = blocks_x * layout.dct_size;
+                    for y in 0..layout.dct_size {
+                        let dst_row = (by * layout.dct_size + y) * out_stride;
+                        let src_row = y * layout.dct_size;
+                        let dst = &mut output
+                            [dst_row + bx * layout.dct_size..dst_row + bx * layout.dct_size + layout.dct_size];
+                        dst.copy_from_slice(&float_block[src_row..src_row + layout.dct_size]);
+                    }
+                }
+            }
+
+            comp_data.push(output);
+        }
+
+        Ok(comp_data)
+    }
+
+    fn decode_baseline(&self, scan_data: &[u8]) -> Result<JpegDecodedImage> {
+        let layout = self.component_layout()?;
+        let comp_data = self.decode_baseline_components(scan_data, layout)?;
+        self.components_to_rgb(
+            &comp_data,
+            layout.width,
+            layout.height,
+            layout.mcus_x,
+            layout.max_h,
+            layout.max_v,
+        )
+    }
+
+    fn decode_baseline_into(
+        &self,
+        scan_data: &[u8],
+        format: JpegOutputFormat,
+        output: &mut [u8],
+        row_stride: usize,
+        layout: JpegOutputLayout,
+    ) -> Result<()> {
+        let (comp_layout, render_layout) = if matches!(layout.denom, 2 | 4 | 8) {
+            let comp_layout = self.component_layout_scaled(layout.denom)?;
+            let render_layout = JpegOutputLayout {
+                denom: 1,
+                ..layout
+            };
+            (comp_layout, render_layout)
+        } else {
+            (self.component_layout()?, layout)
+        };
+
+        let comp_data = self.decode_baseline_components(scan_data, comp_layout)?;
+        self.components_into_output(&comp_data, comp_layout, render_layout, format, output, row_stride)
+    }
+
+    fn decode_baseline_into_u16(
+        &self,
+        scan_data: &[u8],
+        format: JpegOutputFormat16,
+        output: &mut [u16],
+        row_stride: usize,
+        layout: JpegOutputLayout,
+    ) -> Result<()> {
+        let (comp_layout, render_layout) = if matches!(layout.denom, 2 | 4 | 8) {
+            let comp_layout = self.component_layout_scaled(layout.denom)?;
+            let render_layout = JpegOutputLayout {
+                denom: 1,
+                ..layout
+            };
+            (comp_layout, render_layout)
+        } else {
+            (self.component_layout()?, layout)
+        };
+
+        let comp_data = self.decode_baseline_components(scan_data, comp_layout)?;
+        self.components_into_output_u16(&comp_data, comp_layout, render_layout, format, output, row_stride)
+    }
+
+    fn decode_progressive_scans(
+        &mut self,
+        data: &[u8],
+        coefficients: &mut [Vec<i32>],
+    ) -> Result<()> {
+        let mut pos = 2;
+        while pos + 1 < data.len() {
+            if data[pos] != 0xFF {
+                pos += 1;
+                continue;
+            }
+
+            let marker = data[pos + 1];
+            pos += 2;
+
+            match marker {
+                0xD8 => {} // SOI
+                0xD9 => break, // EOI
+                0xDA => {
+                    if pos + 2 > data.len() {
+                        return Err(Error::InvalidJpegData);
+                    }
+                    let length = u16::from_be_bytes([data[pos], data[pos + 1]]) as usize;
+                    if pos + length > data.len() {
+                        return Err(Error::InvalidJpegData);
+                    }
+                    let scan_header = self.parse_sos(&data[pos..pos + length])?;
+                    let scan_start = pos + length;
+                    let scan_end = self.find_scan_end(data, scan_start)?;
+                    let scan_data = &data[scan_start..scan_end];
+                    self.decode_progressive_scan(&scan_header, scan_data, coefficients)?;
+                    pos = scan_end;
+                }
+                0x00 | 0xFF | 0x01 => {} // Padding or TEM
+                0xD0..=0xD7 => {} // RST markers
+                _ => {
+                    if pos + 2 > data.len() {
+                        break;
+                    }
+                    let length = u16::from_be_bytes([data[pos], data[pos + 1]]) as usize;
+                    if pos + length > data.len() {
+                        return Err(Error::InvalidJpegData);
+                    }
+
+                    match marker {
+                        0xC4 => self.parse_dht(&data[pos..pos + length])?,
+                        0xDB => self.parse_dqt(&data[pos..pos + length])?,
+                        0xDD => self.parse_dri(&data[pos..pos + length])?,
+                        0xDC => self.parse_dnl(&data[pos..pos + length])?,
+                        0xE0 => self.parse_app0(&data[pos..pos + length])?,
+                        0xE1 => self.parse_app1(&data[pos..pos + length])?,
+                        0xE2 => self.parse_app2(&data[pos..pos + length])?,
+                        0xEE => self.parse_app14(&data[pos..pos + length])?,
+                        0xFE => self.parse_com(&data[pos..pos + length])?,
+                        _ => {}
+                    }
+
+                    pos += length;
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    fn decode_progressive_scan(
+        &self,
+        scan_header: &JpegScanHeader,
+        scan_data: &[u8],
+        coefficients: &mut [Vec<i32>],
+    ) -> Result<()> {
+        let width = self.width as usize;
+        let height = self.height as usize;
+        let mut reader = JpegBitReader::new(scan_data);
+        let mut eob_run: u32 = 0;
+        let mut dc_pred = vec![0i32; self.num_components as usize];
+
+        let max_h = self
+            .components
+            .iter()
+            .filter(|c| scan_header.component_ids[..scan_header.num_components].contains(&c.id))
+            .map(|c| c.h_samp)
+            .max()
+            .unwrap_or(1) as usize;
+        let max_v = self
+            .components
+            .iter()
+            .filter(|c| scan_header.component_ids[..scan_header.num_components].contains(&c.id))
+            .map(|c| c.v_samp)
+            .max()
+            .unwrap_or(1) as usize;
+
+        let mcu_width = max_h * 8;
+        let mcu_height = max_v * 8;
+        let mcus_x = (width + mcu_width - 1) / mcu_width;
+        let mcus_y = (height + mcu_height - 1) / mcu_height;
+
+        let is_dc_scan = scan_header.ss == 0 && scan_header.se == 0;
+        let is_first = scan_header.ah == 0;
+
+        for mcu_y in 0..mcus_y {
+            for mcu_x in 0..mcus_x {
+                if self.restart_interval > 0
+                    && (mcu_y * mcus_x + mcu_x) > 0
+                    && (mcu_y * mcus_x + mcu_x) % self.restart_interval as usize == 0
+                {
+                    reader.align_to_byte();
+                    while reader.pos + 1 < reader.data.len() {
+                        if reader.data[reader.pos] == 0xFF {
+                            let marker = reader.data.get(reader.pos + 1).copied().unwrap_or(0);
+                            if (0xD0..=0xD7).contains(&marker) {
+                                reader.pos += 2;
+                                break;
+                            }
+                        }
+                        reader.pos += 1;
+                    }
+                    dc_pred.fill(0);
+                    eob_run = 0;
+                }
+
+                for scan_comp_idx in 0..scan_header.num_components {
+                    let comp_id = scan_header.component_ids[scan_comp_idx];
+                    let comp_idx = self
+                        .components
+                        .iter()
+                        .position(|c| c.id == comp_id)
+                        .ok_or(Error::InvalidJpegData)?;
+                    let comp = &self.components[comp_idx];
+                    let dc_table = &self.dc_huff_tables[scan_header.dc_table_id[scan_comp_idx] as usize];
+                    let ac_table = &self.ac_huff_tables[scan_header.ac_table_id[scan_comp_idx] as usize];
+                    let blocks_x = mcus_x * comp.h_samp as usize;
+
+                    for v in 0..comp.v_samp as usize {
+                        for h in 0..comp.h_samp as usize {
+                            let block_x = mcu_x * comp.h_samp as usize + h;
+                            let block_y = mcu_y * comp.v_samp as usize + v;
+                            let block_idx = block_y * blocks_x + block_x;
+                            let coef_offset = block_idx * 64;
+
+                            if is_dc_scan {
+                                if is_first {
+                                    let dc_category = reader.decode_huffman(dc_table)?;
+                                    let dc_diff = reader.receive_extend(dc_category);
+                                    dc_pred[comp_idx] += dc_diff;
+                                    coefficients[comp_idx][coef_offset] =
+                                        dc_pred[comp_idx] << scan_header.al;
+                                } else {
+                                    let bit = reader.read_bits(1) as i32;
+                                    if bit != 0 {
+                                        coefficients[comp_idx][coef_offset] += 1 << scan_header.al;
+                                    }
+                                }
+                            } else {
+                                let mut k = scan_header.ss as usize;
+                                let end = scan_header.se as usize;
+
+                                if is_first {
+                                    if eob_run > 0 {
+                                        eob_run -= 1;
+                                        continue;
+                                    }
+
+                                    while k <= end {
+                                        let rs = reader.decode_huffman(ac_table)?;
+                                        let r = (rs >> 4) as usize;
+                                        let s = (rs & 0x0F) as u8;
+
+                                        if s == 0 {
+                                            if r == 15 {
+                                                k += 16;
+                                            } else {
+                                                let extra = if r > 0 {
+                                                    reader.read_bits(r as u8)
+                                                } else {
+                                                    0
+                                                };
+                                                eob_run = (1u32 << r) + extra;
+                                                eob_run = eob_run.saturating_sub(1);
+                                                break;
+                                            }
+                                        } else {
+                                            k += r;
+                                            if k > end {
+                                                break;
+                                            }
+                                            let coef = reader.receive_extend(s) << scan_header.al;
+                                            coefficients[comp_idx][coef_offset + JPEG_NATURAL_ORDER[k]] = coef;
+                                            k += 1;
+                                        }
+                                    }
+                                } else {
+                                    let bit_mask = 1 << scan_header.al;
+                                    if eob_run > 0 {
+                                        for idx in k..=end {
+                                            let zz = JPEG_NATURAL_ORDER[idx];
+                                            let val = &mut coefficients[comp_idx][coef_offset + zz];
+                                            if *val != 0 {
+                                                let bit = reader.read_bits(1) as i32;
+                                                if bit != 0 {
+                                                    *val += if *val > 0 { bit_mask } else { -bit_mask };
+                                                }
+                                            }
+                                        }
+                                        eob_run -= 1;
+                                        continue;
+                                    }
+
+                                    while k <= end {
+                                        let rs = reader.decode_huffman(ac_table)?;
+                                        let r = (rs >> 4) as usize;
+                                        let s = (rs & 0x0F) as u8;
+
+                                        if s == 0 {
+                                            if r == 15 {
+                                                let mut zeros = 16;
+                                                while zeros > 0 && k <= end {
+                                                    let zz = JPEG_NATURAL_ORDER[k];
+                                                    let val = &mut coefficients[comp_idx][coef_offset + zz];
+                                                    if *val != 0 {
+                                                        let bit = reader.read_bits(1) as i32;
+                                                        if bit != 0 {
+                                                            *val += if *val > 0 { bit_mask } else { -bit_mask };
+                                                        }
+                                                    } else {
+                                                        zeros -= 1;
+                                                    }
+                                                    k += 1;
+                                                }
+                                            } else {
+                                                let extra = if r > 0 {
+                                                    reader.read_bits(r as u8)
+                                                } else {
+                                                    0
+                                                };
+                                                eob_run = (1u32 << r) + extra;
+                                                eob_run = eob_run.saturating_sub(1);
+                                                break;
+                                            }
+                                        } else {
+                                            let mut zeros = r;
+                                            while zeros > 0 && k <= end {
+                                                let zz = JPEG_NATURAL_ORDER[k];
+                                                let val = &mut coefficients[comp_idx][coef_offset + zz];
+                                                if *val != 0 {
+                                                    let bit = reader.read_bits(1) as i32;
+                                                    if bit != 0 {
+                                                        *val += if *val > 0 { bit_mask } else { -bit_mask };
+                                                    }
+                                                } else {
+                                                    zeros -= 1;
+                                                }
+                                                k += 1;
+                                            }
+                                            if k > end {
+                                                break;
+                                            }
+                                            let bit = reader.read_bits(1) as i32;
+                                            let new_val = if bit != 0 { bit_mask } else { -bit_mask };
+                                            coefficients[comp_idx][coef_offset + JPEG_NATURAL_ORDER[k]] = new_val;
+                                            k += 1;
+                                        }
+                                    }
                                 }
                             }
                         }
@@ -3349,164 +4026,328 @@ impl JpegDecoder {
             }
         }
 
-        // Now dequantize and IDCT all blocks
-        let mut comp_data: Vec<Vec<f32>> = self.components.iter().enumerate().map(|(comp_idx, comp)| {
-            let blocks_x = mcus_x * comp.h_samp as usize;
-            let blocks_y = mcus_y * comp.v_samp as usize;
-            let quant = &self.quant_tables[comp.quant_table_id as usize];
-            let mut output = vec![0.0f32; blocks_x * blocks_y * 64];
+        Ok(())
+    }
 
-            for by in 0..blocks_y {
-                for bx in 0..blocks_x {
-                    let block_idx = by * blocks_x + bx;
-                    let coef_offset = block_idx * 64;
+    fn decode_progressive(&mut self, data: &[u8]) -> Result<JpegDecodedImage> {
+        let layout = self.component_layout()?;
+        let width = layout.width;
+        let height = layout.height;
+        let max_h = layout.max_h;
+        let max_v = layout.max_v;
+        let mcus_x = layout.mcus_x;
+        let mcus_y = layout.mcus_y;
 
-                    // Dequantize
-                    let mut block = [0i32; 64];
-                    for i in 0..64 {
-                        block[i] = coefficients[comp_idx][coef_offset + i] * quant[i] as i32;
-                    }
-
-                    // IDCT
-                    let mut float_block = [0.0f32; 64];
-                    self.idct_8x8(&block, &mut float_block);
-
-                    // Store
-                    let out_stride = blocks_x * 8;
-                    for y in 0..8 {
-                        for x in 0..8 {
-                            let px = bx * 8 + x;
-                            let py = by * 8 + y;
-                            output[py * out_stride + px] = float_block[y * 8 + x];
-                        }
-                    }
-                }
-            }
-
-            output
+        // Allocate coefficient storage for progressive decoding
+        let mut coefficients: Vec<Vec<i32>> = self.components.iter().map(|c| {
+            let blocks_x = mcus_x * c.h_samp as usize;
+            let blocks_y = mcus_y * c.v_samp as usize;
+            vec![0i32; blocks_x * blocks_y * 64]
         }).collect();
 
+        self.decode_progressive_scans(data, &mut coefficients)?;
+
+        let comp_data = self.coefficients_to_components(&coefficients, layout)?;
         self.components_to_rgb(&comp_data, width, height, mcus_x, max_h, max_v)
     }
 
-    fn idct_8x8(&self, input: &[i32; 64], output: &mut [f32; 64]) {
-        // Constants for IDCT
-        const C1: f32 = 0.9807852804;
-        const C2: f32 = 0.9238795325;
-        const C3: f32 = 0.8314696123;
-        const C4: f32 = 0.7071067812;
-        const C5: f32 = 0.5555702330;
-        const C6: f32 = 0.3826834324;
-        const C7: f32 = 0.1950903220;
-
-        let mut temp = [0.0f32; 64];
-
-        // Column pass
-        for x in 0..8 {
-            let s0 = input[x] as f32;
-            let s1 = input[x + 8] as f32;
-            let s2 = input[x + 16] as f32;
-            let s3 = input[x + 24] as f32;
-            let s4 = input[x + 32] as f32;
-            let s5 = input[x + 40] as f32;
-            let s6 = input[x + 48] as f32;
-            let s7 = input[x + 56] as f32;
-
-            let p1 = (s2 + s6) * C6;
-            let p2 = (s0 + s4) * C4;
-            let p3 = (s0 - s4) * C4;
-            let p4 = p1 + s6 * (-C6 - C2);
-            let p5 = p1 + s2 * (C2 - C6);
-
-            let t0 = p2 + p5;
-            let t1 = p3 + p4;
-            let t2 = p3 - p4;
-            let t3 = p2 - p5;
-
-            let p1 = s1 + s7;
-            let p2 = s3 + s5;
-            let p3 = s1 + s5;
-            let p4 = s3 + s7;
-            let p5 = (p3 + p4) * 1.175875602;
-
-            let s1 = s1 * 0.298631336;
-            let s3 = s3 * 2.053119869;
-            let s5 = s5 * 3.072711026;
-            let s7 = s7 * 1.501321110;
-            let p1 = p1 * (-0.899976223);
-            let p2 = p2 * (-2.562915447);
-            let p3 = p3 * (-1.961570560) + p5;
-            let p4 = p4 * (-0.390180644) + p5;
-
-            let t4 = s1 + p1 + p3;
-            let t5 = s3 + p2 + p4;
-            let t6 = s5 + p2 + p3;
-            let t7 = s7 + p1 + p4;
-
-            temp[x] = t0 + t7;
-            temp[x + 8] = t1 + t6;
-            temp[x + 16] = t2 + t5;
-            temp[x + 24] = t3 + t4;
-            temp[x + 32] = t3 - t4;
-            temp[x + 40] = t2 - t5;
-            temp[x + 48] = t1 - t6;
-            temp[x + 56] = t0 - t7;
+    fn decode_progressive_into(
+        &mut self,
+        data: &[u8],
+        format: JpegOutputFormat,
+        output: &mut [u8],
+        row_stride: usize,
+        layout: JpegOutputLayout,
+    ) -> Result<()> {
+        let width = self.width as usize;
+        let height = self.height as usize;
+        if width == 0 || height == 0 {
+            return Err(Error::InvalidJpegData);
         }
 
-        // Row pass
-        for y in 0..8 {
-            let row = y * 8;
-            let s0 = temp[row];
-            let s1 = temp[row + 1];
-            let s2 = temp[row + 2];
-            let s3 = temp[row + 3];
-            let s4 = temp[row + 4];
-            let s5 = temp[row + 5];
-            let s6 = temp[row + 6];
-            let s7 = temp[row + 7];
+        let max_h = self.components.iter().map(|c| c.h_samp).max().unwrap_or(1) as usize;
+        let max_v = self.components.iter().map(|c| c.v_samp).max().unwrap_or(1) as usize;
+        let mcus_x = (width + max_h * 8 - 1) / (max_h * 8);
+        let mcus_y = (height + max_v * 8 - 1) / (max_v * 8);
 
-            let p1 = (s2 + s6) * C6;
-            let p2 = (s0 + s4) * C4;
-            let p3 = (s0 - s4) * C4;
-            let p4 = p1 + s6 * (-C6 - C2);
-            let p5 = p1 + s2 * (C2 - C6);
+        let mut coefficients: Vec<Vec<i32>> = self
+            .components
+            .iter()
+            .map(|c| {
+                let blocks_x = mcus_x * c.h_samp as usize;
+                let blocks_y = mcus_y * c.v_samp as usize;
+                vec![0i32; blocks_x * blocks_y * 64]
+            })
+            .collect();
 
-            let t0 = p2 + p5;
-            let t1 = p3 + p4;
-            let t2 = p3 - p4;
-            let t3 = p2 - p5;
+        self.decode_progressive_scans(data, &mut coefficients)?;
 
-            let p1 = s1 + s7;
-            let p2 = s3 + s5;
-            let p3 = s1 + s5;
-            let p4 = s3 + s7;
-            let p5 = (p3 + p4) * 1.175875602;
+        let (comp_layout, render_layout) = if matches!(layout.denom, 2 | 4 | 8) {
+            let comp_layout = self.component_layout_scaled(layout.denom)?;
+            let render_layout = JpegOutputLayout {
+                denom: 1,
+                ..layout
+            };
+            (comp_layout, render_layout)
+        } else {
+            (self.component_layout()?, layout)
+        };
 
-            let s1 = s1 * 0.298631336;
-            let s3 = s3 * 2.053119869;
-            let s5 = s5 * 3.072711026;
-            let s7 = s7 * 1.501321110;
-            let p1 = p1 * (-0.899976223);
-            let p2 = p2 * (-2.562915447);
-            let p3 = p3 * (-1.961570560) + p5;
-            let p4 = p4 * (-0.390180644) + p5;
+        self.render_coefficients_into(&coefficients, comp_layout, format, output, row_stride, render_layout)
+    }
 
-            let t4 = s1 + p1 + p3;
-            let t5 = s3 + p2 + p4;
-            let t6 = s5 + p2 + p3;
-            let t7 = s7 + p1 + p4;
-
-            // Scale and level shift
-            let scale = 0.125 * 0.125;
-            output[row] = ((t0 + t7) * scale + 128.0) / 255.0;
-            output[row + 1] = ((t1 + t6) * scale + 128.0) / 255.0;
-            output[row + 2] = ((t2 + t5) * scale + 128.0) / 255.0;
-            output[row + 3] = ((t3 + t4) * scale + 128.0) / 255.0;
-            output[row + 4] = ((t3 - t4) * scale + 128.0) / 255.0;
-            output[row + 5] = ((t2 - t5) * scale + 128.0) / 255.0;
-            output[row + 6] = ((t1 - t6) * scale + 128.0) / 255.0;
-            output[row + 7] = ((t0 - t7) * scale + 128.0) / 255.0;
+    fn decode_progressive_into_u16(
+        &mut self,
+        data: &[u8],
+        format: JpegOutputFormat16,
+        output: &mut [u16],
+        row_stride: usize,
+        layout: JpegOutputLayout,
+    ) -> Result<()> {
+        let width = self.width as usize;
+        let height = self.height as usize;
+        if width == 0 || height == 0 {
+            return Err(Error::InvalidJpegData);
         }
+
+        let max_h = self.components.iter().map(|c| c.h_samp).max().unwrap_or(1) as usize;
+        let max_v = self.components.iter().map(|c| c.v_samp).max().unwrap_or(1) as usize;
+        let mcus_x = (width + max_h * 8 - 1) / (max_h * 8);
+        let mcus_y = (height + max_v * 8 - 1) / (max_v * 8);
+
+        let mut coefficients: Vec<Vec<i32>> = self
+            .components
+            .iter()
+            .map(|c| {
+                let blocks_x = mcus_x * c.h_samp as usize;
+                let blocks_y = mcus_y * c.v_samp as usize;
+                vec![0i32; blocks_x * blocks_y * 64]
+            })
+            .collect();
+
+        self.decode_progressive_scans(data, &mut coefficients)?;
+
+        let (comp_layout, render_layout) = if matches!(layout.denom, 2 | 4 | 8) {
+            let comp_layout = self.component_layout_scaled(layout.denom)?;
+            let render_layout = JpegOutputLayout {
+                denom: 1,
+                ..layout
+            };
+            (comp_layout, render_layout)
+        } else {
+            (self.component_layout()?, layout)
+        };
+
+        self.render_coefficients_into_u16(&coefficients, comp_layout, format, output, row_stride, render_layout)
+    }
+
+    fn render_coefficients_into(
+        &self,
+        coefficients: &[Vec<i32>],
+        comp_layout: JpegComponentLayout,
+        format: JpegOutputFormat,
+        output: &mut [u8],
+        row_stride: usize,
+        layout: JpegOutputLayout,
+    ) -> Result<()> {
+        let comp_data = self.coefficients_to_components(coefficients, comp_layout)?;
+        self.components_into_output(&comp_data, comp_layout, layout, format, output, row_stride)
+    }
+
+    fn render_coefficients_into_u16(
+        &self,
+        coefficients: &[Vec<i32>],
+        comp_layout: JpegComponentLayout,
+        format: JpegOutputFormat16,
+        output: &mut [u16],
+        row_stride: usize,
+        layout: JpegOutputLayout,
+    ) -> Result<()> {
+        let comp_data = self.coefficients_to_components(coefficients, comp_layout)?;
+        self.components_into_output_u16(&comp_data, comp_layout, layout, format, output, row_stride)
+    }
+
+    fn idct_8x8(&self, input: &[i64; 64], output: &mut [f32; 64]) {
+        let mut block = [0.0f32; 64];
+        for i in 0..64 {
+            block[i] = input[i] as f32;
+        }
+
+        jpeg_idct_8x8_dispatch(&mut block);
+
+        let max_sample = self.sample_max();
+        let level_shift = self.level_shift();
+        for (dst, src) in output.iter_mut().zip(block.iter()) {
+            *dst = ((*src * 0.125) + level_shift) / max_sample;
+        }
+    }
+
+    fn idct_block_scaled(&self, input: &[i64; 64], dct_size: usize, output: &mut [f32]) -> Result<()> {
+        let max_sample = self.sample_max();
+        let level_shift = self.level_shift();
+        let expected = dct_size * dct_size;
+        if output.len() < expected {
+            return Err(Error::InvalidJpegData);
+        }
+
+        match dct_size {
+            8 => {
+                let mut block = [0.0f32; 64];
+                for i in 0..64 {
+                    block[i] = input[i] as f32;
+                }
+                jpeg_idct_8x8_dispatch(&mut block);
+                for i in 0..64 {
+                    output[i] = ((block[i] * 0.125) + level_shift) / max_sample;
+                }
+            }
+            4 => {
+                let mut block = [0.0f32; 16];
+                for y in 0..4 {
+                    for x in 0..4 {
+                        block[y * 4 + x] = input[y * 8 + x] as f32;
+                    }
+                }
+                jpeg_idct_4x4_dispatch(&mut block);
+                for i in 0..16 {
+                    output[i] = ((block[i] * 0.125) + level_shift) / max_sample;
+                }
+            }
+            2 => {
+                let mut block = [0.0f32; 4];
+                for y in 0..2 {
+                    for x in 0..2 {
+                        block[y * 2 + x] = input[y * 8 + x] as f32;
+                    }
+                }
+                jpeg_idct_2x2_dispatch(&mut block);
+                for i in 0..4 {
+                    output[i] = ((block[i] * 0.125) + level_shift) / max_sample;
+                }
+            }
+            1 => {
+                output[0] = ((input[0] as f32 * 0.125) + level_shift) / max_sample;
+            }
+            _ => return Err(Error::InvalidJpegData),
+        }
+
+        Ok(())
+    }
+
+    fn sample_component_value(
+        &self,
+        comp: &JpegDecoderComponent,
+        plane: &[f32],
+        comp_stride: usize,
+        comp_height: usize,
+        max_h: usize,
+        max_v: usize,
+        x: usize,
+        y: usize,
+    ) -> f32 {
+        if comp_stride == 0 || comp_height == 0 {
+            return 0.0;
+        }
+
+        let h_ratio = max_h / comp.h_samp as usize;
+        let v_ratio = max_v / comp.v_samp as usize;
+        let max_sample = self.sample_max();
+
+        if h_ratio == 1 && v_ratio == 1 {
+            let idx = y.saturating_mul(comp_stride).saturating_add(x);
+            return plane.get(idx).copied().unwrap_or(0.0);
+        }
+
+        let comp_width = comp_stride;
+        let fancy_h2v1 = comp_width > 2;
+        let fancy_h1v2 = comp_height > 1;
+        let fancy_h2v2 = comp_width > 2 && comp_height > 1;
+
+        if h_ratio == 2 && v_ratio == 1 && fancy_h2v1 {
+            let comp_y = y.min(comp_height - 1);
+            let row = &plane[comp_y * comp_stride..(comp_y + 1) * comp_stride];
+            let in_x = (x / 2).min(comp_width - 1);
+            let cur = row[in_x] * max_sample;
+
+            let out = if x % 2 == 0 {
+                if in_x == 0 {
+                    cur
+                } else {
+                    let left = row[in_x - 1] * max_sample;
+                    (cur * 3.0 + left + 1.0) * 0.25
+                }
+            } else if in_x + 1 >= comp_width {
+                cur
+            } else {
+                let right = row[in_x + 1] * max_sample;
+                (cur * 3.0 + right + 2.0) * 0.25
+            };
+
+            return (out / max_sample).clamp(0.0, 1.0);
+        }
+
+        if h_ratio == 1 && v_ratio == 2 && fancy_h1v2 {
+            let in_y = (y / 2).min(comp_height - 1);
+            let cur_row = &plane[in_y * comp_stride..(in_y + 1) * comp_stride];
+            let col = x.min(comp_width - 1);
+            let cur = cur_row[col] * max_sample;
+
+            let (neighbor_row, bias) = if y % 2 == 0 {
+                let above = if in_y == 0 { in_y } else { in_y - 1 };
+                (
+                    &plane[above * comp_stride..(above + 1) * comp_stride],
+                    1.0,
+                )
+            } else {
+                let below = if in_y + 1 < comp_height { in_y + 1 } else { in_y };
+                (
+                    &plane[below * comp_stride..(below + 1) * comp_stride],
+                    2.0,
+                )
+            };
+
+            let neighbor = neighbor_row[col] * max_sample;
+            let out = (cur * 3.0 + neighbor + bias) * 0.25;
+            return (out / max_sample).clamp(0.0, 1.0);
+        }
+
+        if h_ratio == 2 && v_ratio == 2 && fancy_h2v2 {
+            let in_y = (y / 2).min(comp_height - 1);
+            let in_x = (x / 2).min(comp_width - 1);
+            let row0 = &plane[in_y * comp_stride..(in_y + 1) * comp_stride];
+            let row1 = if y % 2 == 0 {
+                let above = if in_y == 0 { in_y } else { in_y - 1 };
+                &plane[above * comp_stride..(above + 1) * comp_stride]
+            } else {
+                let below = if in_y + 1 < comp_height { in_y + 1 } else { in_y };
+                &plane[below * comp_stride..(below + 1) * comp_stride]
+            };
+
+            let thiscolsum = row0[in_x] * 3.0 * max_sample + row1[in_x] * max_sample;
+            let last_idx = if in_x == 0 { 0 } else { in_x - 1 };
+            let next_idx = if in_x + 1 < comp_width { in_x + 1 } else { in_x };
+            let lastcolsum = row0[last_idx] * 3.0 * max_sample + row1[last_idx] * max_sample;
+            let nextcolsum = row0[next_idx] * 3.0 * max_sample + row1[next_idx] * max_sample;
+
+            let out = if x % 2 == 0 {
+                if in_x == 0 {
+                    (thiscolsum * 4.0 + 8.0) / 16.0
+                } else {
+                    (thiscolsum * 3.0 + lastcolsum + 8.0) / 16.0
+                }
+            } else if in_x + 1 >= comp_width {
+                (thiscolsum * 4.0 + 7.0) / 16.0
+            } else {
+                (thiscolsum * 3.0 + nextcolsum + 7.0) / 16.0
+            };
+
+            return (out / max_sample).clamp(0.0, 1.0);
+        }
+
+        let comp_x = (x / h_ratio).min(comp_width - 1);
+        let comp_y = (y / v_ratio).min(comp_height - 1);
+        let idx = comp_y * comp_stride + comp_x;
+        plane.get(idx).copied().unwrap_or(0.0)
     }
 
     fn components_to_rgb(
@@ -3519,16 +4360,34 @@ impl JpegDecoder {
         max_v: usize,
     ) -> Result<JpegDecodedImage> {
         let num_components = self.num_components as usize;
+        let mcus_y = (height + max_v * 8 - 1) / (max_v * 8);
+        let mut comp_strides = Vec::with_capacity(self.components.len());
+        let mut comp_heights = Vec::with_capacity(self.components.len());
+        let max_sample = self.sample_max();
+        let offset = self.level_shift();
+        for comp in &self.components {
+            comp_strides.push(mcus_x * comp.h_samp as usize * 8);
+            comp_heights.push(mcus_y * comp.v_samp as usize * 8);
+        }
 
         if num_components == 1 {
-            // Grayscale
             let mut pixels = vec![0.0f32; width * height];
-            let stride = mcus_x * max_h * 8;
+            let comp_stride = comp_strides[0];
+            let comp_height = comp_heights[0];
 
             for y in 0..height {
                 for x in 0..width {
-                    let idx = y * stride + x;
-                    pixels[y * width + x] = comp_data[0].get(idx).copied().unwrap_or(0.0).clamp(0.0, 1.0);
+                    let val = self.sample_component_value(
+                        &self.components[0],
+                        &comp_data[0],
+                        comp_stride,
+                        comp_height,
+                        max_h,
+                        max_v,
+                        x,
+                        y,
+                    );
+                    pixels[y * width + x] = val.clamp(0.0, 1.0);
                 }
             }
 
@@ -3539,41 +4398,32 @@ impl JpegDecoder {
                 pixels,
             })
         } else if num_components == 3 {
-            // YCbCr to RGB
+            let use_ycbcr = self.use_ycbcr();
             let mut pixels = vec![0.0f32; width * height * 3];
 
             for y in 0..height {
                 for x in 0..width {
-                    // Handle subsampling
-                    let mut y_val = 0.0f32;
-                    let mut cb_val = 0.0f32;
-                    let mut cr_val = 0.0f32;
-
-                    for (comp_idx, comp) in self.components.iter().enumerate() {
-                        let h_ratio = max_h / comp.h_samp as usize;
-                        let v_ratio = max_v / comp.v_samp as usize;
-                        let comp_x = x / h_ratio;
-                        let comp_y = y / v_ratio;
-                        let stride = mcus_x * comp.h_samp as usize * 8;
-                        let idx = comp_y * stride + comp_x;
-                        let val = comp_data[comp_idx].get(idx).copied().unwrap_or(0.5);
-
-                        match comp_idx {
-                            0 => y_val = val,
-                            1 => cb_val = val,
-                            2 => cr_val = val,
-                            _ => {}
-                        }
+                    let mut comps = [0.0f32; 3];
+                    for (comp_idx, comp) in self.components.iter().enumerate().take(3) {
+                        let comp_stride = comp_strides[comp_idx];
+                        let comp_height = comp_heights[comp_idx];
+                        comps[comp_idx] = self.sample_component_value(
+                            comp,
+                            &comp_data[comp_idx],
+                            comp_stride,
+                            comp_height,
+                            max_h,
+                            max_v,
+                            x,
+                            y,
+                        );
                     }
 
-                    // YCbCr to RGB conversion
-                    let y_scaled = y_val * 255.0;
-                    let cb_scaled = (cb_val * 255.0) - 128.0;
-                    let cr_scaled = (cr_val * 255.0) - 128.0;
-
-                    let r = (y_scaled + 1.402 * cr_scaled).clamp(0.0, 255.0) / 255.0;
-                    let g = (y_scaled - 0.344136 * cb_scaled - 0.714136 * cr_scaled).clamp(0.0, 255.0) / 255.0;
-                    let b = (y_scaled + 1.772 * cb_scaled).clamp(0.0, 255.0) / 255.0;
+                    let (r, g, b) = if use_ycbcr {
+                        ycbcr_to_rgb(comps[0], comps[1], comps[2], max_sample, offset)
+                    } else {
+                        (comps[0], comps[1], comps[2])
+                    };
 
                     let out_idx = (y * width + x) * 3;
                     pixels[out_idx] = r;
@@ -3588,9 +4438,419 @@ impl JpegDecoder {
                 num_components: 3,
                 pixels,
             })
+        } else if num_components == 4 {
+            let use_ycck = self.use_ycck();
+            let mut pixels = vec![0.0f32; width * height * 3];
+
+            for y in 0..height {
+                for x in 0..width {
+                    let mut comps = [0.0f32; 4];
+
+                    for (comp_idx, comp) in self.components.iter().enumerate().take(4) {
+                        let comp_stride = comp_strides[comp_idx];
+                        let comp_height = comp_heights[comp_idx];
+                        comps[comp_idx] = self.sample_component_value(
+                            comp,
+                            &comp_data[comp_idx],
+                            comp_stride,
+                            comp_height,
+                            max_h,
+                            max_v,
+                            x,
+                            y,
+                        );
+                    }
+
+                    let (r, g, b) = if use_ycck {
+                        ycck_to_rgb(comps[0], comps[1], comps[2], comps[3], max_sample, offset)
+                    } else {
+                        cmyk_to_rgb(comps[0], comps[1], comps[2], comps[3])
+                    };
+
+                    let out_idx = (y * width + x) * 3;
+                    pixels[out_idx] = r.clamp(0.0, 1.0);
+                    pixels[out_idx + 1] = g.clamp(0.0, 1.0);
+                    pixels[out_idx + 2] = b.clamp(0.0, 1.0);
+                }
+            }
+
+            Ok(JpegDecodedImage {
+                width,
+                height,
+                num_components: 3,
+                pixels,
+            })
         } else {
             Err(Error::InvalidJpegData)
         }
+    }
+
+    fn components_into_output(
+        &self,
+        comp_data: &[Vec<f32>],
+        comp_layout: JpegComponentLayout,
+        output_layout: JpegOutputLayout,
+        format: JpegOutputFormat,
+        output: &mut [u8],
+        row_stride: usize,
+    ) -> Result<()> {
+        let bpp = format.bytes_per_pixel();
+        let use_ycbcr = self.use_ycbcr();
+        let use_ycck = self.use_ycck();
+        let max_sample = self.sample_max();
+        let offset = self.level_shift();
+        let mut comp_strides = Vec::with_capacity(self.components.len());
+        let mut comp_heights = Vec::with_capacity(self.components.len());
+        for comp in &self.components {
+            comp_strides.push(comp_layout.mcus_x * comp.h_samp as usize * comp_layout.dct_size);
+            comp_heights.push(comp_layout.mcus_y * comp.v_samp as usize * comp_layout.dct_size);
+        }
+
+        if output_layout.denom == 1
+            && output_layout.crop_x == 0
+            && output_layout.crop_y == 0
+            && self.num_components == 3
+            && comp_layout.max_h == 1
+            && comp_layout.max_v == 1
+            && output_layout.out_width == comp_layout.width
+            && output_layout.out_height == comp_layout.height
+            && format == JpegOutputFormat::Bgra8
+        {
+            let stride = comp_strides[0];
+            for y in 0..output_layout.out_height {
+                let row_start = y * stride;
+                let row_end = row_start + output_layout.out_width;
+                let out_start = y * row_stride;
+                let out_end = out_start + output_layout.out_width * 4;
+
+                let row0 = &comp_data[0][row_start..row_end];
+                let row1 = &comp_data[1][row_start..row_end];
+                let row2 = &comp_data[2][row_start..row_end];
+                let out_row = &mut output[out_start..out_end];
+
+                if use_ycbcr {
+                    jpeg_ycbcr_to_bgra_row_dispatch(row0, row1, row2, out_row, max_sample, offset);
+                } else {
+                    jpeg_rgb_to_bgra_row_dispatch(row0, row1, row2, out_row);
+                }
+            }
+
+            return Ok(());
+        }
+
+        for src_y in 0..comp_layout.height {
+            if output_layout.denom > 1 && (src_y % output_layout.denom) != 0 {
+                continue;
+            }
+            let scaled_y = src_y / output_layout.denom;
+            if scaled_y < output_layout.crop_y
+                || scaled_y >= output_layout.crop_y + output_layout.out_height
+            {
+                continue;
+            }
+            let out_y = scaled_y - output_layout.crop_y;
+            let row_base = out_y * row_stride;
+
+            for src_x in 0..comp_layout.width {
+                if output_layout.denom > 1 && (src_x % output_layout.denom) != 0 {
+                    continue;
+                }
+                let scaled_x = src_x / output_layout.denom;
+                if scaled_x < output_layout.crop_x
+                    || scaled_x >= output_layout.crop_x + output_layout.out_width
+                {
+                    continue;
+                }
+                let out_x = scaled_x - output_layout.crop_x;
+                let out_idx = row_base + out_x * bpp;
+
+                let mut comps = [0.0f32; 4];
+                for (comp_idx, comp) in self.components.iter().enumerate() {
+                    let comp_stride = comp_strides[comp_idx];
+                    let comp_height = comp_heights[comp_idx];
+                    comps[comp_idx] = self.sample_component_value(
+                        comp,
+                        &comp_data[comp_idx],
+                        comp_stride,
+                        comp_height,
+                        comp_layout.max_h,
+                        comp_layout.max_v,
+                        src_x,
+                        src_y,
+                    );
+                }
+
+                let (r, g, b, gray) = match self.num_components {
+                    1 => (comps[0], comps[0], comps[0], comps[0]),
+                    3 => {
+                        if use_ycbcr {
+                            let (r, g, b) = ycbcr_to_rgb(comps[0], comps[1], comps[2], max_sample, offset);
+                            (r, g, b, comps[0])
+                        } else {
+                            (
+                                comps[0],
+                                comps[1],
+                                comps[2],
+                                0.299 * comps[0] + 0.587 * comps[1] + 0.114 * comps[2],
+                            )
+                        }
+                    }
+                    4 => {
+                        if use_ycck {
+                            let (r, g, b) = ycck_to_rgb(comps[0], comps[1], comps[2], comps[3], max_sample, offset);
+                            (r, g, b, 0.299 * r + 0.587 * g + 0.114 * b)
+                        } else {
+                            let (r, g, b) = cmyk_to_rgb(comps[0], comps[1], comps[2], comps[3]);
+                            (r, g, b, 0.299 * r + 0.587 * g + 0.114 * b)
+                        }
+                    }
+                    _ => return Err(Error::InvalidJpegData),
+                };
+
+                match format {
+                    JpegOutputFormat::Gray8 => {
+                        output[out_idx] = self.quantize_to_u8(gray);
+                    }
+                    JpegOutputFormat::Rgb8 => {
+                        output[out_idx] = self.quantize_to_u8(r);
+                        output[out_idx + 1] = self.quantize_to_u8(g);
+                        output[out_idx + 2] = self.quantize_to_u8(b);
+                    }
+                    JpegOutputFormat::Bgr8 => {
+                        output[out_idx] = self.quantize_to_u8(b);
+                        output[out_idx + 1] = self.quantize_to_u8(g);
+                        output[out_idx + 2] = self.quantize_to_u8(r);
+                    }
+                    JpegOutputFormat::Rgba8 => {
+                        output[out_idx] = self.quantize_to_u8(r);
+                        output[out_idx + 1] = self.quantize_to_u8(g);
+                        output[out_idx + 2] = self.quantize_to_u8(b);
+                        output[out_idx + 3] = 255;
+                    }
+                    JpegOutputFormat::Bgra8 => {
+                        output[out_idx] = self.quantize_to_u8(b);
+                        output[out_idx + 1] = self.quantize_to_u8(g);
+                        output[out_idx + 2] = self.quantize_to_u8(r);
+                        output[out_idx + 3] = 255;
+                    }
+                    JpegOutputFormat::Cmyk8 => {
+                        if self.num_components != 4 {
+                            return Err(Error::InvalidJpegData);
+                        }
+                        if use_ycck {
+                            let (c, m, y, k) = ycck_to_cmyk(comps[0], comps[1], comps[2], comps[3], max_sample, offset);
+                            output[out_idx] = self.quantize_to_u8(c);
+                            output[out_idx + 1] = self.quantize_to_u8(m);
+                            output[out_idx + 2] = self.quantize_to_u8(y);
+                            output[out_idx + 3] = self.quantize_to_u8(k);
+                        } else {
+                            output[out_idx] = self.quantize_to_u8(comps[0]);
+                            output[out_idx + 1] = self.quantize_to_u8(comps[1]);
+                            output[out_idx + 2] = self.quantize_to_u8(comps[2]);
+                            output[out_idx + 3] = self.quantize_to_u8(comps[3]);
+                        }
+                    }
+                    JpegOutputFormat::Ycbcr8 => {
+                        let (y, cb, cr) = if self.num_components == 3 && use_ycbcr {
+                            (comps[0], comps[1], comps[2])
+                        } else if self.num_components == 3 {
+                            rgb_to_ycbcr(comps[0], comps[1], comps[2], max_sample, offset)
+                        } else {
+                            return Err(Error::InvalidJpegData);
+                        };
+                        output[out_idx] = self.quantize_to_u8(y);
+                        output[out_idx + 1] = self.quantize_to_u8(cb);
+                        output[out_idx + 2] = self.quantize_to_u8(cr);
+                    }
+                    JpegOutputFormat::Ycck8 => {
+                        if self.num_components != 4 {
+                            return Err(Error::InvalidJpegData);
+                        }
+                        let (y, cb, cr, k) = if use_ycck {
+                            (comps[0], comps[1], comps[2], comps[3])
+                        } else {
+                            cmyk_to_ycck(comps[0], comps[1], comps[2], comps[3], max_sample, offset)
+                        };
+                        output[out_idx] = self.quantize_to_u8(y);
+                        output[out_idx + 1] = self.quantize_to_u8(cb);
+                        output[out_idx + 2] = self.quantize_to_u8(cr);
+                        output[out_idx + 3] = self.quantize_to_u8(k);
+                    }
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    fn components_into_output_u16(
+        &self,
+        comp_data: &[Vec<f32>],
+        comp_layout: JpegComponentLayout,
+        output_layout: JpegOutputLayout,
+        format: JpegOutputFormat16,
+        output: &mut [u16],
+        row_stride: usize,
+    ) -> Result<()> {
+        let spp = format.samples_per_pixel();
+        let use_ycbcr = self.use_ycbcr();
+        let use_ycck = self.use_ycck();
+        let max_sample = self.sample_max();
+        let offset = self.level_shift();
+        let alpha = max_sample.round() as u16;
+        let mut comp_strides = Vec::with_capacity(self.components.len());
+        let mut comp_heights = Vec::with_capacity(self.components.len());
+        for comp in &self.components {
+            comp_strides.push(comp_layout.mcus_x * comp.h_samp as usize * comp_layout.dct_size);
+            comp_heights.push(comp_layout.mcus_y * comp.v_samp as usize * comp_layout.dct_size);
+        }
+
+        for src_y in 0..comp_layout.height {
+            if output_layout.denom > 1 && (src_y % output_layout.denom) != 0 {
+                continue;
+            }
+            let scaled_y = src_y / output_layout.denom;
+            if scaled_y < output_layout.crop_y
+                || scaled_y >= output_layout.crop_y + output_layout.out_height
+            {
+                continue;
+            }
+            let out_y = scaled_y - output_layout.crop_y;
+            let row_base = out_y * row_stride;
+
+            for src_x in 0..comp_layout.width {
+                if output_layout.denom > 1 && (src_x % output_layout.denom) != 0 {
+                    continue;
+                }
+                let scaled_x = src_x / output_layout.denom;
+                if scaled_x < output_layout.crop_x
+                    || scaled_x >= output_layout.crop_x + output_layout.out_width
+                {
+                    continue;
+                }
+                let out_x = scaled_x - output_layout.crop_x;
+                let out_idx = row_base + out_x * spp;
+
+                let mut comps = [0.0f32; 4];
+                for (comp_idx, comp) in self.components.iter().enumerate() {
+                    let comp_stride = comp_strides[comp_idx];
+                    let comp_height = comp_heights[comp_idx];
+                    comps[comp_idx] = self.sample_component_value(
+                        comp,
+                        &comp_data[comp_idx],
+                        comp_stride,
+                        comp_height,
+                        comp_layout.max_h,
+                        comp_layout.max_v,
+                        src_x,
+                        src_y,
+                    );
+                }
+
+                let (r, g, b, gray) = match self.num_components {
+                    1 => (comps[0], comps[0], comps[0], comps[0]),
+                    3 => {
+                        if use_ycbcr {
+                            let (r, g, b) =
+                                ycbcr_to_rgb(comps[0], comps[1], comps[2], max_sample, offset);
+                            (r, g, b, comps[0])
+                        } else {
+                            (
+                                comps[0],
+                                comps[1],
+                                comps[2],
+                                0.299 * comps[0] + 0.587 * comps[1] + 0.114 * comps[2],
+                            )
+                        }
+                    }
+                    4 => {
+                        if use_ycck {
+                            let (r, g, b) =
+                                ycck_to_rgb(comps[0], comps[1], comps[2], comps[3], max_sample, offset);
+                            (r, g, b, 0.299 * r + 0.587 * g + 0.114 * b)
+                        } else {
+                            let (r, g, b) = cmyk_to_rgb(comps[0], comps[1], comps[2], comps[3]);
+                            (r, g, b, 0.299 * r + 0.587 * g + 0.114 * b)
+                        }
+                    }
+                    _ => return Err(Error::InvalidJpegData),
+                };
+
+                match format {
+                    JpegOutputFormat16::Gray16 => {
+                        output[out_idx] = self.quantize_to_u16(gray);
+                    }
+                    JpegOutputFormat16::Rgb16 => {
+                        output[out_idx] = self.quantize_to_u16(r);
+                        output[out_idx + 1] = self.quantize_to_u16(g);
+                        output[out_idx + 2] = self.quantize_to_u16(b);
+                    }
+                    JpegOutputFormat16::Bgr16 => {
+                        output[out_idx] = self.quantize_to_u16(b);
+                        output[out_idx + 1] = self.quantize_to_u16(g);
+                        output[out_idx + 2] = self.quantize_to_u16(r);
+                    }
+                    JpegOutputFormat16::Rgba16 => {
+                        output[out_idx] = self.quantize_to_u16(r);
+                        output[out_idx + 1] = self.quantize_to_u16(g);
+                        output[out_idx + 2] = self.quantize_to_u16(b);
+                        output[out_idx + 3] = alpha;
+                    }
+                    JpegOutputFormat16::Bgra16 => {
+                        output[out_idx] = self.quantize_to_u16(b);
+                        output[out_idx + 1] = self.quantize_to_u16(g);
+                        output[out_idx + 2] = self.quantize_to_u16(r);
+                        output[out_idx + 3] = alpha;
+                    }
+                    JpegOutputFormat16::Cmyk16 => {
+                        if self.num_components != 4 {
+                            return Err(Error::InvalidJpegData);
+                        }
+                        if use_ycck {
+                            let (c, m, y, k) =
+                                ycck_to_cmyk(comps[0], comps[1], comps[2], comps[3], max_sample, offset);
+                            output[out_idx] = self.quantize_to_u16(c);
+                            output[out_idx + 1] = self.quantize_to_u16(m);
+                            output[out_idx + 2] = self.quantize_to_u16(y);
+                            output[out_idx + 3] = self.quantize_to_u16(k);
+                        } else {
+                            output[out_idx] = self.quantize_to_u16(comps[0]);
+                            output[out_idx + 1] = self.quantize_to_u16(comps[1]);
+                            output[out_idx + 2] = self.quantize_to_u16(comps[2]);
+                            output[out_idx + 3] = self.quantize_to_u16(comps[3]);
+                        }
+                    }
+                    JpegOutputFormat16::Ycbcr16 => {
+                        let (y, cb, cr) = if self.num_components == 3 && use_ycbcr {
+                            (comps[0], comps[1], comps[2])
+                        } else if self.num_components == 3 {
+                            rgb_to_ycbcr(comps[0], comps[1], comps[2], max_sample, offset)
+                        } else {
+                            return Err(Error::InvalidJpegData);
+                        };
+                        output[out_idx] = self.quantize_to_u16(y);
+                        output[out_idx + 1] = self.quantize_to_u16(cb);
+                        output[out_idx + 2] = self.quantize_to_u16(cr);
+                    }
+                    JpegOutputFormat16::Ycck16 => {
+                        if self.num_components != 4 {
+                            return Err(Error::InvalidJpegData);
+                        }
+                        let (y, cb, cr, k) = if use_ycck {
+                            (comps[0], comps[1], comps[2], comps[3])
+                        } else {
+                            cmyk_to_ycck(comps[0], comps[1], comps[2], comps[3], max_sample, offset)
+                        };
+                        output[out_idx] = self.quantize_to_u16(y);
+                        output[out_idx + 1] = self.quantize_to_u16(cb);
+                        output[out_idx + 2] = self.quantize_to_u16(cr);
+                        output[out_idx + 3] = self.quantize_to_u16(k);
+                    }
+                }
+            }
+        }
+
+        Ok(())
     }
 
     /// Get the image dimensions.
@@ -3733,6 +4993,10 @@ impl IdctScale {
             IdctScale::Scale1_4 => 2,
             IdctScale::Scale1_8 => 1,
         }
+    }
+
+    pub fn denom(&self) -> usize {
+        8 / self.numerator()
     }
 }
 
@@ -3974,11 +5238,14 @@ impl JpegDecoder {
         // Apply colorspace conversion if needed
         let converted = self.convert_colorspace(&image, options.colorspace)?;
 
+        // Apply scaling
+        let scaled = self.scale_image(&converted, options.scale)?;
+
         // Apply cropping if specified
         if let Some((x, y, w, h)) = options.crop {
-            self.crop_image(&converted, x, y, w, h)
+            self.crop_image(&scaled, x, y, w, h)
         } else {
-            Ok(converted)
+            Ok(scaled)
         }
     }
 
@@ -4097,6 +5364,145 @@ impl JpegDecoder {
             pixels,
         })
     }
+
+    fn scale_image(&self, image: &JpegDecodedImage, scale: IdctScale) -> Result<JpegDecodedImage> {
+        if scale == IdctScale::Full {
+            return Ok(image.clone());
+        }
+
+        let numerator = scale.numerator();
+        let new_width = (image.width * numerator + 7) / 8;
+        let new_height = (image.height * numerator + 7) / 8;
+
+        if new_width == 0 || new_height == 0 {
+            return Err(Error::InvalidJpegData);
+        }
+
+        let nc = image.num_components;
+        let mut pixels = vec![0.0f32; new_width * new_height * nc];
+
+        for y in 0..new_height {
+            let src_y = (y * 8) / numerator;
+            let src_y = src_y.min(image.height - 1);
+            for x in 0..new_width {
+                let src_x = (x * 8) / numerator;
+                let src_x = src_x.min(image.width - 1);
+                let src_idx = (src_y * image.width + src_x) * nc;
+                let dst_idx = (y * new_width + x) * nc;
+                pixels[dst_idx..dst_idx + nc]
+                    .copy_from_slice(&image.pixels[src_idx..src_idx + nc]);
+            }
+        }
+
+        Ok(JpegDecodedImage {
+            width: new_width,
+            height: new_height,
+            num_components: nc,
+            pixels,
+        })
+    }
+
+    fn compute_output_layout(&self, options: &JpegDecodeOptions) -> Result<JpegOutputLayout> {
+        let denom = options.scale.denom().max(1);
+        let scaled_width = (self.width as usize + denom - 1) / denom;
+        let scaled_height = (self.height as usize + denom - 1) / denom;
+
+        if let Some((x, y, w, h)) = options.crop {
+            if x + w > scaled_width || y + h > scaled_height {
+                return Err(Error::InvalidJpegData);
+            }
+            Ok(JpegOutputLayout {
+                out_width: w,
+                out_height: h,
+                crop_x: x,
+                crop_y: y,
+                denom,
+            })
+        } else {
+            Ok(JpegOutputLayout {
+                out_width: scaled_width,
+                out_height: scaled_height,
+                crop_x: 0,
+                crop_y: 0,
+                denom,
+            })
+        }
+    }
+
+    /// Decode directly into the caller-provided output buffer.
+    pub fn decode_into(
+        &self,
+        data: &[u8],
+        options: &JpegDecodeOptions,
+        format: JpegOutputFormat,
+        output: &mut [u8],
+        row_stride: usize,
+    ) -> Result<(usize, usize)> {
+        let mut decoder = self.clone();
+        decoder.ensure_default_huffman_tables();
+        decoder.update_height_from_dnl(data);
+
+        if decoder.data_precision > 8 {
+            return Err(Error::InvalidJpegData);
+        }
+
+        let layout = decoder.compute_output_layout(options)?;
+        let bpp = format.bytes_per_pixel();
+        if layout.out_height == 0 || layout.out_width == 0 {
+            return Err(Error::InvalidJpegData);
+        }
+
+        let required = row_stride * (layout.out_height - 1) + layout.out_width * bpp;
+        if output.len() < required {
+            return Err(Error::InvalidJpegData);
+        }
+
+        if decoder.is_progressive {
+            decoder.decode_progressive_into(data, format, output, row_stride, layout)?;
+        } else {
+            let (_scan_header, scan_start, scan_end) = decoder.find_sos_segment(data)?;
+            let scan_data = &data[scan_start..scan_end];
+            decoder.decode_baseline_into(scan_data, format, output, row_stride, layout)?;
+        }
+
+        Ok((layout.out_width, layout.out_height))
+    }
+
+    /// Decode directly into the caller-provided 16-bit output buffer.
+    /// `row_stride` is measured in samples (u16s), not bytes.
+    pub fn decode_into_u16(
+        &self,
+        data: &[u8],
+        options: &JpegDecodeOptions,
+        format: JpegOutputFormat16,
+        output: &mut [u16],
+        row_stride: usize,
+    ) -> Result<(usize, usize)> {
+        let mut decoder = self.clone();
+        decoder.ensure_default_huffman_tables();
+        decoder.update_height_from_dnl(data);
+
+        let layout = decoder.compute_output_layout(options)?;
+        let spp = format.samples_per_pixel();
+        if layout.out_height == 0 || layout.out_width == 0 {
+            return Err(Error::InvalidJpegData);
+        }
+
+        let required = row_stride * (layout.out_height - 1) + layout.out_width * spp;
+        if output.len() < required {
+            return Err(Error::InvalidJpegData);
+        }
+
+        if decoder.is_progressive {
+            decoder.decode_progressive_into_u16(data, format, output, row_stride, layout)?;
+        } else {
+            let (_scan_header, scan_start, scan_end) = decoder.find_sos_segment(data)?;
+            let scan_data = &data[scan_start..scan_end];
+            decoder.decode_baseline_into_u16(scan_data, format, output, row_stride, layout)?;
+        }
+
+        Ok((layout.out_width, layout.out_height))
+    }
 }
 
 /// CMYK to RGB conversion.
@@ -4107,20 +5513,191 @@ fn cmyk_to_rgb(c: f32, m: f32, y: f32, k: f32) -> (f32, f32, f32) {
     (r, g, b)
 }
 
-/// YCCK to RGB conversion.
-fn ycck_to_rgb(y: f32, cb: f32, cr: f32, k: f32) -> (f32, f32, f32) {
-    // First convert YCbCr to CMY
-    let y_scaled = y * 255.0;
-    let cb_scaled = (cb * 255.0) - 128.0;
-    let cr_scaled = (cr * 255.0) - 128.0;
-
-    let c = 1.0 - ((y_scaled + 1.402 * cr_scaled) / 255.0).clamp(0.0, 1.0);
-    let m = 1.0 - ((y_scaled - 0.344136 * cb_scaled - 0.714136 * cr_scaled) / 255.0).clamp(0.0, 1.0);
-    let y_cmy = 1.0 - ((y_scaled + 1.772 * cb_scaled) / 255.0).clamp(0.0, 1.0);
-
-    // Then CMYK to RGB
-    cmyk_to_rgb(c, m, y_cmy, k)
+/// RGB to YCbCr conversion.
+fn rgb_to_ycbcr(r: f32, g: f32, b: f32, max_sample: f32, offset: f32) -> (f32, f32, f32) {
+    let r = r * max_sample;
+    let g = g * max_sample;
+    let b = b * max_sample;
+    let y = 0.299 * r + 0.587 * g + 0.114 * b;
+    let cb = offset - 0.168736 * r - 0.331264 * g + 0.5 * b;
+    let cr = offset + 0.5 * r - 0.418688 * g - 0.081312 * b;
+    (
+        (y / max_sample).clamp(0.0, 1.0),
+        (cb / max_sample).clamp(0.0, 1.0),
+        (cr / max_sample).clamp(0.0, 1.0),
+    )
 }
+
+/// YCbCr to RGB conversion.
+fn ycbcr_to_rgb(y: f32, cb: f32, cr: f32, max_sample: f32, offset: f32) -> (f32, f32, f32) {
+    let y_scaled = y * max_sample;
+    let cb_scaled = (cb * max_sample) - offset;
+    let cr_scaled = (cr * max_sample) - offset;
+
+    let r = (y_scaled + 1.402 * cr_scaled).clamp(0.0, max_sample) / max_sample;
+    let g = (y_scaled - 0.344136 * cb_scaled - 0.714136 * cr_scaled).clamp(0.0, max_sample) / max_sample;
+    let b = (y_scaled + 1.772 * cb_scaled).clamp(0.0, max_sample) / max_sample;
+    (r, g, b)
+}
+
+/// YCCK to RGB conversion.
+fn ycck_to_rgb(y: f32, cb: f32, cr: f32, k: f32, max_sample: f32, offset: f32) -> (f32, f32, f32) {
+    let (r, g, b) = ycbcr_to_rgb(y, cb, cr, max_sample, offset);
+    cmyk_to_rgb(1.0 - r, 1.0 - g, 1.0 - b, k)
+}
+
+/// YCCK to CMYK conversion.
+fn ycck_to_cmyk(y: f32, cb: f32, cr: f32, k: f32, max_sample: f32, offset: f32) -> (f32, f32, f32, f32) {
+    let (r, g, b) = ycck_to_rgb(y, cb, cr, k, max_sample, offset);
+    (1.0 - r, 1.0 - g, 1.0 - b, k)
+}
+
+/// CMYK to YCCK conversion.
+fn cmyk_to_ycck(c: f32, m: f32, y: f32, k: f32, max_sample: f32, offset: f32) -> (f32, f32, f32, f32) {
+    let (r, g, b) = cmyk_to_rgb(c, m, y, k);
+    let (yy, cb, cr) = rgb_to_ycbcr(r, g, b, max_sample, offset);
+    (yy, cb, cr, k)
+}
+
+simd_function!(
+    jpeg_idct_8x8_dispatch,
+    d: D,
+    fn jpeg_idct_8x8(block: &mut [f32; 64]) {
+        idct2d_8_8(d, block);
+    }
+);
+
+simd_function!(
+    jpeg_idct_4x4_dispatch,
+    d: D,
+    fn jpeg_idct_4x4(block: &mut [f32; 16]) {
+        idct2d_4_4(d, block);
+    }
+);
+
+simd_function!(
+    jpeg_idct_2x2_dispatch,
+    d: D,
+    fn jpeg_idct_2x2(block: &mut [f32; 4]) {
+        idct2d_2_2(d, block);
+    }
+);
+
+simd_function!(
+    jpeg_ycbcr_to_bgra_row_dispatch,
+    d: D,
+    fn jpeg_ycbcr_to_bgra_row_impl(
+        y: &[f32],
+        cb: &[f32],
+        cr: &[f32],
+        out: &mut [u8],
+        max_sample: f32,
+        offset: f32,
+    ) {
+        let len = y.len().min(cb.len()).min(cr.len());
+        let vec_len = D::F32Vec::LEN;
+        debug_assert!(vec_len <= 16);
+        let max_v = D::F32Vec::splat(d, max_sample);
+        let offset_v = D::F32Vec::splat(d, offset);
+        let scale_v = D::F32Vec::splat(d, 255.0 / max_sample);
+        let zero = D::F32Vec::zero(d);
+        let max_byte = D::F32Vec::splat(d, 255.0);
+        let coeff_r = D::F32Vec::splat(d, 1.402);
+        let coeff_gb = D::F32Vec::splat(d, -0.344136);
+        let coeff_gr = D::F32Vec::splat(d, -0.714136);
+        let coeff_b = D::F32Vec::splat(d, 1.772);
+
+        let mut i = 0usize;
+        while i + vec_len <= len {
+            let yv = D::F32Vec::load(d, &y[i..]) * max_v;
+            let cbv = D::F32Vec::load(d, &cb[i..]) * max_v - offset_v;
+            let crv = D::F32Vec::load(d, &cr[i..]) * max_v - offset_v;
+
+            let r = (yv + crv * coeff_r) * scale_v;
+            let g = (yv + cbv * coeff_gb + crv * coeff_gr) * scale_v;
+            let b = (yv + cbv * coeff_b) * scale_v;
+
+            let r = r.max(zero).min(max_byte);
+            let g = g.max(zero).min(max_byte);
+            let b = b.max(zero).min(max_byte);
+
+            let mut r_buf = [0u8; 16];
+            let mut g_buf = [0u8; 16];
+            let mut b_buf = [0u8; 16];
+            r.round_store_u8(&mut r_buf[..vec_len]);
+            g.round_store_u8(&mut g_buf[..vec_len]);
+            b.round_store_u8(&mut b_buf[..vec_len]);
+
+            for lane in 0..vec_len {
+                let dst = (i + lane) * 4;
+                out[dst] = b_buf[lane];
+                out[dst + 1] = g_buf[lane];
+                out[dst + 2] = r_buf[lane];
+                out[dst + 3] = 255;
+            }
+
+            i += vec_len;
+        }
+
+        for j in i..len {
+            let (r, g, b) = ycbcr_to_rgb(y[j], cb[j], cr[j], max_sample, offset);
+            let dst = j * 4;
+            out[dst] = (b.clamp(0.0, 1.0) * 255.0).round() as u8;
+            out[dst + 1] = (g.clamp(0.0, 1.0) * 255.0).round() as u8;
+            out[dst + 2] = (r.clamp(0.0, 1.0) * 255.0).round() as u8;
+            out[dst + 3] = 255;
+        }
+    }
+);
+
+simd_function!(
+    jpeg_rgb_to_bgra_row_dispatch,
+    d: D,
+    fn jpeg_rgb_to_bgra_row_impl(r: &[f32], g: &[f32], b: &[f32], out: &mut [u8]) {
+        let len = r.len().min(g.len()).min(b.len());
+        let vec_len = D::F32Vec::LEN;
+        debug_assert!(vec_len <= 16);
+        let scale_v = D::F32Vec::splat(d, 255.0);
+        let zero = D::F32Vec::zero(d);
+        let max_byte = D::F32Vec::splat(d, 255.0);
+
+        let mut i = 0usize;
+        while i + vec_len <= len {
+            let rv = D::F32Vec::load(d, &r[i..]) * scale_v;
+            let gv = D::F32Vec::load(d, &g[i..]) * scale_v;
+            let bv = D::F32Vec::load(d, &b[i..]) * scale_v;
+
+            let rv = rv.max(zero).min(max_byte);
+            let gv = gv.max(zero).min(max_byte);
+            let bv = bv.max(zero).min(max_byte);
+
+            let mut r_buf = [0u8; 16];
+            let mut g_buf = [0u8; 16];
+            let mut b_buf = [0u8; 16];
+            rv.round_store_u8(&mut r_buf[..vec_len]);
+            gv.round_store_u8(&mut g_buf[..vec_len]);
+            bv.round_store_u8(&mut b_buf[..vec_len]);
+
+            for lane in 0..vec_len {
+                let dst = (i + lane) * 4;
+                out[dst] = b_buf[lane];
+                out[dst + 1] = g_buf[lane];
+                out[dst + 2] = r_buf[lane];
+                out[dst + 3] = 255;
+            }
+
+            i += vec_len;
+        }
+
+        for j in i..len {
+            let dst = j * 4;
+            out[dst] = (b[j].clamp(0.0, 1.0) * 255.0).round() as u8;
+            out[dst + 1] = (g[j].clamp(0.0, 1.0) * 255.0).round() as u8;
+            out[dst + 2] = (r[j].clamp(0.0, 1.0) * 255.0).round() as u8;
+            out[dst + 3] = 255;
+        }
+    }
+);
 
 // ============================================================================
 // JPEG DECODER TESTS
@@ -4202,6 +5779,116 @@ mod decoder_tests {
         assert_eq!(table.huffval.len(), 12);
     }
 
+    fn decoder_with_component_ids(ids: &[u8]) -> JpegDecoder {
+        let components = ids
+            .iter()
+            .map(|&id| JpegDecoderComponent {
+                id,
+                h_samp: 1,
+                v_samp: 1,
+                quant_table_id: 0,
+                dc_table_id: 0,
+                ac_table_id: 0,
+            })
+            .collect();
+
+        JpegDecoder {
+            width: 1,
+            height: 1,
+            num_components: ids.len() as u8,
+            data_precision: 8,
+            components,
+            quant_tables: [[0; 64]; 4],
+            dc_huff_tables: Default::default(),
+            ac_huff_tables: Default::default(),
+            restart_interval: 0,
+            is_progressive: false,
+            metadata: JpegMetadata::default(),
+            saw_jfif: false,
+            adobe_transform: None,
+            icc_segments: Vec::new(),
+            icc_expected_segments: None,
+        }
+    }
+
+    #[test]
+    fn test_use_ycbcr_guess_component_ids() {
+        let decoder = decoder_with_component_ids(&[1, 2, 3]);
+        assert!(decoder.use_ycbcr());
+    }
+
+    #[test]
+    fn test_use_ycbcr_rgb_ids() {
+        let decoder = decoder_with_component_ids(&[82, 71, 66]);
+        assert!(!decoder.use_ycbcr());
+    }
+
+    #[test]
+    fn test_use_ycbcr_jfif_overrides_adobe() {
+        let mut decoder = decoder_with_component_ids(&[1, 2, 3]);
+        decoder.saw_jfif = true;
+        decoder.adobe_transform = Some(0);
+        assert!(decoder.use_ycbcr());
+    }
+
+    #[test]
+    fn test_idct_dc_only() {
+        let decoder = JpegDecoder {
+            width: 0,
+            height: 0,
+            num_components: 0,
+            data_precision: 8,
+            components: Vec::new(),
+            quant_tables: [[0; 64]; 4],
+            dc_huff_tables: Default::default(),
+            ac_huff_tables: Default::default(),
+            restart_interval: 0,
+            is_progressive: false,
+            metadata: JpegMetadata::default(),
+            saw_jfif: false,
+            adobe_transform: None,
+            icc_segments: Vec::new(),
+            icc_expected_segments: None,
+        };
+        let mut input = [0i64; 64];
+        input[0] = 80;
+        let mut output = [0.0f32; 64];
+        decoder.idct_8x8(&input, &mut output);
+        let expected = (80.0 / 8.0 + 128.0) / 255.0;
+        for val in &output {
+            assert!((val - expected).abs() < 1e-3, "val {} expected {}", val, expected);
+        }
+    }
+
+    #[test]
+    fn test_idct_dc_only_16bit() {
+        let decoder = JpegDecoder {
+            width: 0,
+            height: 0,
+            num_components: 0,
+            data_precision: 16,
+            components: Vec::new(),
+            quant_tables: [[0; 64]; 4],
+            dc_huff_tables: Default::default(),
+            ac_huff_tables: Default::default(),
+            restart_interval: 0,
+            is_progressive: false,
+            metadata: JpegMetadata::default(),
+            saw_jfif: false,
+            adobe_transform: None,
+            icc_segments: Vec::new(),
+            icc_expected_segments: None,
+        };
+        let mut input = [0i64; 64];
+        input[0] = 80;
+        let mut output = [0.0f32; 64];
+        decoder.idct_8x8(&input, &mut output);
+        let expected = (80.0 / 8.0 + 32768.0) / 65535.0;
+        for val in &output {
+            assert!((val - expected).abs() < 1e-6, "val {} expected {}", val, expected);
+        }
+    }
+
     #[test]
     fn test_jpeg_decoded_image() {
         let image = JpegDecodedImage {
@@ -4233,6 +5920,7 @@ mod jpeg_file_tests {
     use super::*;
 
     // Embed test JPEG files
+    const CMYK_16X16: &[u8] = include_bytes!("../resources/test/jpeg/cmyk_16x16.jpg");
     const GRAYSCALE_8X8: &[u8] = include_bytes!("../resources/test/jpeg/grayscale_8x8.jpg");
     const RGB_8X8: &[u8] = include_bytes!("../resources/test/jpeg/rgb_8x8.jpg");
     const PROGRESSIVE_8X8: &[u8] = include_bytes!("../resources/test/jpeg/progressive_8x8.jpg");
@@ -4240,8 +5928,35 @@ mod jpeg_file_tests {
     const GRADIENT_32X32: &[u8] = include_bytes!("../resources/test/jpeg/gradient_32x32.jpg");
     const QUALITY_100: &[u8] = include_bytes!("../resources/test/jpeg/quality100_16x16.jpg");
     const QUALITY_50: &[u8] = include_bytes!("../resources/test/jpeg/quality50_16x16.jpg");
+    const RESTART_8X8: &[u8] = include_bytes!("../resources/test/jpeg/restart_8x8.jpg");
     const SUBSAMPLED_420: &[u8] = include_bytes!("../resources/test/jpeg/subsampled_420_8x8.jpg");
     const SUBSAMPLED_444: &[u8] = include_bytes!("../resources/test/jpeg/subsampled_444_8x8.jpg");
+    const WITH_EXIF_8X8: &[u8] = include_bytes!("../resources/test/jpeg/with_exif_8x8.jpg");
+    const RGB_12BIT: &[u8] = include_bytes!("../resources/test/jpeg/testorig12.jpg");
+
+    fn rgb_to_bgra_bytes(image: &JpegDecodedImage) -> Vec<u8> {
+        let mut out = Vec::with_capacity(image.width * image.height * 4);
+        for i in (0..image.pixels.len()).step_by(3) {
+            let r = (image.pixels[i].clamp(0.0, 1.0) * 255.0).round() as u8;
+            let g = (image.pixels[i + 1].clamp(0.0, 1.0) * 255.0).round() as u8;
+            let b = (image.pixels[i + 2].clamp(0.0, 1.0) * 255.0).round() as u8;
+            out.push(b);
+            out.push(g);
+            out.push(r);
+            out.push(255);
+        }
+        out
+    }
+
+    fn ycbcr_to_rgb_u8(y: u8, cb: u8, cr: u8) -> (u8, u8, u8) {
+        let y = y as f32;
+        let cb = cb as f32 - 128.0;
+        let cr = cr as f32 - 128.0;
+        let r = (y + 1.402 * cr).clamp(0.0, 255.0).round() as u8;
+        let g = (y - 0.344136 * cb - 0.714136 * cr).clamp(0.0, 255.0).round() as u8;
+        let b = (y + 1.772 * cb).clamp(0.0, 255.0).round() as u8;
+        (r, g, b)
+    }
 
     #[test]
     fn test_parse_grayscale_8x8() {
@@ -4253,11 +5968,62 @@ mod jpeg_file_tests {
     }
 
     #[test]
+    fn test_parse_cmyk_16x16() {
+        let decoder = JpegDecoder::new(CMYK_16X16).expect("Failed to create decoder");
+        assert_eq!(decoder.width(), 16);
+        assert_eq!(decoder.height(), 16);
+        assert_eq!(decoder.num_components(), 4);
+    }
+
+    #[test]
     fn test_parse_rgb_8x8() {
         let decoder = JpegDecoder::new(RGB_8X8).expect("Failed to create decoder");
         assert_eq!(decoder.width(), 8);
         assert_eq!(decoder.height(), 8);
         assert_eq!(decoder.num_components(), 3);
+    }
+
+    #[test]
+    fn test_parse_12bit_rgb() {
+        let decoder = JpegDecoder::new(RGB_12BIT).expect("Failed to create decoder");
+        assert_eq!(decoder.bits_per_sample(), 12);
+        assert_eq!(decoder.num_components(), 3);
+    }
+
+    #[test]
+    fn test_decode_into_u16_12bit() {
+        let decoder = JpegDecoder::new(RGB_12BIT).expect("Failed to create decoder");
+        let options = JpegDecodeOptions::default();
+        let width = decoder.width();
+        let height = decoder.height();
+        let mut output = vec![0u16; width * height * 3];
+        let (w, h) = decoder
+            .decode_into_u16(
+                RGB_12BIT,
+                &options,
+                JpegOutputFormat16::Rgb16,
+                &mut output,
+                width * 3,
+            )
+            .expect("Failed to decode 12-bit JPEG into u16");
+        assert_eq!(w, width);
+        assert_eq!(h, height);
+        assert!(output.iter().any(|&v| v > 255));
+    }
+
+    #[test]
+    fn test_decode_into_u8_rejects_12bit() {
+        let decoder = JpegDecoder::new(RGB_12BIT).expect("Failed to create decoder");
+        let options = JpegDecodeOptions::default();
+        let mut output = vec![0u8; decoder.width() * decoder.height() * 3];
+        let result = decoder.decode_into(
+            RGB_12BIT,
+            &options,
+            JpegOutputFormat::Rgb8,
+            &mut output,
+            decoder.width() * 3,
+        );
+        assert!(result.is_err());
     }
 
     #[test]
@@ -4313,6 +6079,13 @@ mod jpeg_file_tests {
     }
 
     #[test]
+    fn test_metadata_exif_present() {
+        let decoder = JpegDecoder::new(WITH_EXIF_8X8).expect("Failed to create decoder");
+        let metadata = decoder.metadata();
+        assert!(metadata.exif_data.is_some(), "Expected EXIF metadata");
+    }
+
+    #[test]
     fn test_dimensions_method() {
         let decoder = JpegDecoder::new(RGB_64X64).expect("Failed to create decoder");
         let (w, h) = decoder.dimensions();
@@ -4334,8 +6107,128 @@ mod jpeg_file_tests {
     }
 
     #[test]
+    fn test_decode_restart_marker() {
+        let decoder = JpegDecoder::new(RESTART_8X8).expect("Failed to create decoder");
+        let image = decoder.decode(RESTART_8X8).expect("Failed to decode restart JPEG");
+        assert_eq!(image.width, 8);
+        assert_eq!(image.height, 8);
+    }
+
+    #[test]
+    fn test_decode_cmyk() {
+        let decoder = JpegDecoder::new(CMYK_16X16).expect("Failed to create decoder");
+        let image = decoder.decode(CMYK_16X16).expect("Failed to decode CMYK JPEG");
+        assert_eq!(image.width, 16);
+        assert_eq!(image.height, 16);
+        assert_eq!(image.num_components, 3);
+        assert_eq!(image.pixels.len(), 16 * 16 * 3);
+    }
+
+    #[test]
+    fn test_decode_into_bgra() {
+        let decoder = JpegDecoder::new(RGB_8X8).expect("Failed to create decoder");
+        let options = JpegDecodeOptions::default();
+        let mut output = vec![0u8; 8 * 8 * 4];
+        let (w, h) = decoder
+            .decode_into(RGB_8X8, &options, JpegOutputFormat::Bgra8, &mut output, 8 * 4)
+            .expect("Failed to decode into BGRA");
+        assert_eq!(w, 8);
+        assert_eq!(h, 8);
+    }
+
+    #[test]
+    fn test_decode_into_cmyk() {
+        let decoder = JpegDecoder::new(CMYK_16X16).expect("Failed to create decoder");
+        let options = JpegDecodeOptions::default();
+        let mut output = vec![0u8; 16 * 16 * 4];
+        let (w, h) = decoder
+            .decode_into(CMYK_16X16, &options, JpegOutputFormat::Cmyk8, &mut output, 16 * 4)
+            .expect("Failed to decode into CMYK");
+        assert_eq!(w, 16);
+        assert_eq!(h, 16);
+    }
+
+    #[test]
+    fn test_decode_into_scaled_half() {
+        let decoder = JpegDecoder::new(RGB_64X64).expect("Failed to create decoder");
+        let options = JpegDecodeOptions {
+            scale: IdctScale::Scale1_2,
+            ..Default::default()
+        };
+        let mut output = vec![0u8; 32 * 32 * 4];
+        let (w, h) = decoder
+            .decode_into(RGB_64X64, &options, JpegOutputFormat::Bgra8, &mut output, 32 * 4)
+            .expect("Failed to decode into scaled BGRA");
+        assert_eq!(w, 32);
+        assert_eq!(h, 32);
+    }
+
+    #[test]
+    fn test_decode_scaled_half() {
+        let decoder = JpegDecoder::new(RGB_64X64).expect("Failed to create decoder");
+        let options = JpegDecodeOptions {
+            scale: IdctScale::Scale1_2,
+            ..Default::default()
+        };
+        let image = decoder
+            .decode_with_options(RGB_64X64, &options)
+            .expect("Failed to decode scaled JPEG");
+        assert_eq!(image.width, 32);
+        assert_eq!(image.height, 32);
+        assert_eq!(image.pixels.len(), 32 * 32 * 3);
+    }
+
+    #[test]
+    fn test_decode_into_ycbcr_roundtrip() {
+        let decoder = JpegDecoder::new(RGB_8X8).expect("Failed to create decoder");
+        let options = JpegDecodeOptions::default();
+
+        let mut ycbcr = vec![0u8; 8 * 8 * 3];
+        decoder
+            .decode_into(RGB_8X8, &options, JpegOutputFormat::Ycbcr8, &mut ycbcr, 8 * 3)
+            .expect("YCbCr decode failed");
+
+        let mut rgb_direct = vec![0u8; 8 * 8 * 3];
+        decoder
+            .decode_into(RGB_8X8, &options, JpegOutputFormat::Rgb8, &mut rgb_direct, 8 * 3)
+            .expect("RGB decode failed");
+
+        for i in 0..(8 * 8) {
+            let y = ycbcr[i * 3];
+            let cb = ycbcr[i * 3 + 1];
+            let cr = ycbcr[i * 3 + 2];
+            let (r, g, b) = ycbcr_to_rgb_u8(y, cb, cr);
+            let dr = rgb_direct[i * 3];
+            let dg = rgb_direct[i * 3 + 1];
+            let db = rgb_direct[i * 3 + 2];
+            assert!((r as i32 - dr as i32).abs() <= 1);
+            assert!((g as i32 - dg as i32).abs() <= 1);
+            assert!((b as i32 - db as i32).abs() <= 1);
+        }
+    }
+
+    #[test]
+    fn test_decode_into_subsampled_matches_decode() {
+        let decoder = JpegDecoder::new(SUBSAMPLED_420).expect("Failed to create decoder");
+        let options = JpegDecodeOptions::default();
+
+        let mut output = vec![0u8; 8 * 8 * 4];
+        decoder
+            .decode_into(SUBSAMPLED_420, &options, JpegOutputFormat::Bgra8, &mut output, 8 * 4)
+            .expect("decode_into failed");
+
+        let image = decoder.decode(SUBSAMPLED_420).expect("decode failed");
+        let expected = rgb_to_bgra_bytes(&image);
+        assert_eq!(output.len(), expected.len());
+        for (a, b) in output.iter().zip(expected.iter()) {
+            assert!((*a as i32 - *b as i32).abs() <= 1);
+        }
+    }
+
+    #[test]
     fn test_all_files_parse() {
         let test_files: &[(&str, &[u8])] = &[
+            ("cmyk_16x16", CMYK_16X16),
             ("grayscale_8x8", GRAYSCALE_8X8),
             ("rgb_8x8", RGB_8X8),
             ("progressive_8x8", PROGRESSIVE_8X8),
@@ -4343,8 +6236,11 @@ mod jpeg_file_tests {
             ("gradient_32x32", GRADIENT_32X32),
             ("quality100_16x16", QUALITY_100),
             ("quality50_16x16", QUALITY_50),
+            ("restart_8x8", RESTART_8X8),
             ("subsampled_420", SUBSAMPLED_420),
             ("subsampled_444", SUBSAMPLED_444),
+            ("with_exif_8x8", WITH_EXIF_8X8),
+            ("rgb_12bit", RGB_12BIT),
         ];
 
         for (name, data) in test_files {

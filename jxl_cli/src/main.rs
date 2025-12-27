@@ -17,6 +17,7 @@ use std::{fs, mem};
 #[cfg(feature = "jpeg-reconstruction")]
 use jxl::api::JpegReconstructionData;
 
+
 fn save_icc(icc_bytes: &[u8], icc_filename: Option<&PathBuf>) -> Result<()> {
     icc_filename.map_or(Ok(()), |path| {
         std::fs::write(path, icc_bytes)
@@ -92,6 +93,82 @@ fn print_jpeg_info(jpeg_data: &JpegReconstructionData) {
 fn is_jpeg_output(path: &std::path::Path) -> bool {
     let path_str = path.to_string_lossy().to_lowercase();
     path_str.ends_with(".jpg") || path_str.ends_with(".jpeg")
+}
+
+/// Check if the input is a JPEG file (by extension or signature)
+fn is_jpeg_input(path: &std::path::Path, data: &[u8]) -> bool {
+    // Check extension
+    let path_str = path.to_string_lossy().to_lowercase();
+    if path_str.ends_with(".jpg") || path_str.ends_with(".jpeg") {
+        return true;
+    }
+    // Check signature (FFD8)
+    data.len() >= 2 && data[0] == 0xFF && data[1] == 0xD8
+}
+
+/// Decode a JPEG file and convert to DecodeOutput format
+#[cfg(feature = "jpeg-reconstruction")]
+fn decode_jpeg_file(data: &[u8]) -> Result<dec::DecodeOutput<f32>> {
+    use jxl::api::{JxlBitDepth, JxlColorEncoding, JxlColorProfile};
+
+    let decoded = jxl::jpeg::decode_jpeg(data)
+        .map_err(|e| eyre!("Failed to decode JPEG: {:?}", e))?;
+
+    let width = decoded.width;
+    let height = decoded.height;
+    let is_gray = decoded.num_components == 1;
+
+    // Create Image from decoded pixels
+    let channels = if is_gray {
+        let mut img = Image::<f32>::new((width, height))
+            .map_err(|e| eyre!("Failed to create image: {:?}", e))?;
+        for y in 0..height {
+            let row = img.row_mut(y);
+            let src_offset = y * width;
+            row.copy_from_slice(&decoded.pixels[src_offset..src_offset + width]);
+        }
+        vec![img]
+    } else {
+        // Create interleaved RGB image (width*3, height)
+        let mut img = Image::<f32>::new((width * 3, height))
+            .map_err(|e| eyre!("Failed to create image: {:?}", e))?;
+        for y in 0..height {
+            let row = img.row_mut(y);
+            let src_offset = y * width * 3;
+            row.copy_from_slice(&decoded.pixels[src_offset..src_offset + width * 3]);
+        }
+        vec![img]
+    };
+
+    let color_type = if is_gray {
+        JxlColorType::Grayscale
+    } else {
+        JxlColorType::Rgb
+    };
+
+    let frame = dec::ImageFrame {
+        color_type,
+        channels,
+        duration: 0.0,
+    };
+
+    // Create a default bit depth for 8-bit JPEG
+    let bit_depth = JxlBitDepth::Int { bits_per_sample: 8 };
+
+    // Create sRGB color profile
+    let srgb_encoding = JxlColorEncoding::srgb(is_gray);
+    let srgb_profile = JxlColorProfile::Simple(srgb_encoding);
+
+    Ok(dec::DecodeOutput {
+        size: (width, height),
+        original_bit_depth: bit_depth,
+        output_profile: srgb_profile.clone(),
+        embedded_profile: srgb_profile,
+        frames: vec![frame],
+        jxl_animation: None,
+        #[cfg(feature = "jpeg-reconstruction")]
+        jpeg_reconstruction_data: None,
+    })
 }
 
 #[derive(Parser)]
@@ -326,10 +403,41 @@ fn main() -> Result<()> {
     // When extracting preview, don't skip it; otherwise skip preview by default
     let skip_preview = !opt.preview;
 
-    let mut image_data = if reps > 1 {
-        // For multiple repetitions (benchmarking), read into memory to avoid I/O variability
-        let mut input_bytes = Vec::<u8>::new();
-        file.read_to_end(&mut input_bytes)?;
+    // Read input file to check format
+    let mut input_bytes = Vec::<u8>::new();
+    file.read_to_end(&mut input_bytes)?;
+
+    // Check if input is a JPEG file
+    #[cfg(feature = "jpeg-reconstruction")]
+    let is_jpeg = is_jpeg_input(&opt.input, &input_bytes);
+    #[cfg(not(feature = "jpeg-reconstruction"))]
+    let is_jpeg = false;
+
+    let mut image_data = if is_jpeg {
+        #[cfg(feature = "jpeg-reconstruction")]
+        {
+            // Decode JPEG input
+            let start = std::time::Instant::now();
+            let mut result = decode_jpeg_file(&input_bytes)?;
+            duration_sum = start.elapsed();
+
+            // Handle multiple repetitions for benchmarking
+            for _ in 1..reps {
+                let start = std::time::Instant::now();
+                result = decode_jpeg_file(&input_bytes)?;
+                duration_sum += start.elapsed();
+            }
+            result
+        }
+        #[cfg(not(feature = "jpeg-reconstruction"))]
+        {
+            return Err(eyre!(
+                "JPEG input requires the 'jpeg-reconstruction' feature.\n\
+                 Rebuild with: cargo build --features jpeg-reconstruction"
+            ));
+        }
+    } else if reps > 1 {
+        // For multiple repetitions (benchmarking), already read into memory
         (0..reps)
             .try_fold(None, |_, _| -> Result<Option<dec::DecodeOutput<f32>>> {
                 let mut input = input_bytes.as_slice();
@@ -353,9 +461,9 @@ fn main() -> Result<()> {
             })?
             .unwrap()
     } else {
-        // For single decode, stream from file
-        let mut reader = BufReader::new(file);
-        let (mut image_data, duration) = dec::decode_frames(&mut reader, options(skip_preview))?;
+        // For single decode from memory
+        let mut input = input_bytes.as_slice();
+        let (mut image_data, duration) = dec::decode_frames(&mut input, options(skip_preview))?;
         duration_sum = duration;
         // When extracting preview, only keep the first frame (the preview)
         if opt.preview {
