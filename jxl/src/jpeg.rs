@@ -11,7 +11,7 @@
 
 use crate::bit_reader::BitReader;
 use crate::error::{Error, Result};
-use jxl_simd::{shl, shr, simd_function, F32SimdVec, I32SimdVec, SimdMask};
+use jxl_simd::{shl, shr, simd_function, F32SimdVec, I32SimdVec, SimdDescriptor, SimdMask};
 
 /// Type of APP marker in JPEG file.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -2918,6 +2918,573 @@ const JPEG_YCC_FIX_1_77200: i64 = 116130;
 const JPEG_YCC_FIX_0_71414: i64 = 46802;
 const JPEG_YCC_FIX_0_34414: i64 = 22554;
 
+fn jpeg_idct_8x8_simd_pass1_1<D: SimdDescriptor>(
+    d: D,
+    input: &[i32; 64],
+    output: &mut [f32],
+    max_sample: i32,
+    level_shift: i32,
+    max_sample_f: f32,
+) {
+    if D::I32Vec::LEN > 8 {
+        return jpeg_idct_8x8_simd_pass1_1(
+            d.maybe_downgrade_256bit(),
+            input,
+            output,
+            max_sample,
+            level_shift,
+            max_sample_f,
+        );
+    }
+
+    let vec_len = D::I32Vec::LEN;
+    debug_assert!(8 % vec_len == 0);
+    let mut workspace = [0i32; 64];
+
+    let fix_0_298 = D::I32Vec::splat(d, JPEG_IDCT_FIX_0_298631336 as i32);
+    let fix_0_390 = D::I32Vec::splat(d, -(JPEG_IDCT_FIX_0_390180644 as i32));
+    let fix_0_541 = D::I32Vec::splat(d, JPEG_IDCT_FIX_0_541196100 as i32);
+    let fix_0_765 = D::I32Vec::splat(d, JPEG_IDCT_FIX_0_765366865 as i32);
+    let fix_0_899 = D::I32Vec::splat(d, -(JPEG_IDCT_FIX_0_899976223 as i32));
+    let fix_1_175 = D::I32Vec::splat(d, JPEG_IDCT_FIX_1_175875602 as i32);
+    let fix_1_501 = D::I32Vec::splat(d, JPEG_IDCT_FIX_1_501321110 as i32);
+    let fix_1_847 = D::I32Vec::splat(d, -(JPEG_IDCT_FIX_1_847759065 as i32));
+    let fix_1_961 = D::I32Vec::splat(d, -(JPEG_IDCT_FIX_1_961570560 as i32));
+    let fix_2_053 = D::I32Vec::splat(d, JPEG_IDCT_FIX_2_053119869 as i32);
+    let fix_2_562 = D::I32Vec::splat(d, -(JPEG_IDCT_FIX_2_562915447 as i32));
+    let fix_3_072 = D::I32Vec::splat(d, JPEG_IDCT_FIX_3_072711026 as i32);
+
+    let round12 = D::I32Vec::splat(d, 1 << 11);
+    let descale12 = |v: D::I32Vec| shr!(v + round12, 12);
+
+    for col_base in (0..8).step_by(vec_len) {
+        let row0 = D::I32Vec::load(d, &input[col_base..]);
+        let row1 = D::I32Vec::load(d, &input[8 + col_base..]);
+        let row2 = D::I32Vec::load(d, &input[16 + col_base..]);
+        let row3 = D::I32Vec::load(d, &input[24 + col_base..]);
+        let row4 = D::I32Vec::load(d, &input[32 + col_base..]);
+        let row5 = D::I32Vec::load(d, &input[40 + col_base..]);
+        let row6 = D::I32Vec::load(d, &input[48 + col_base..]);
+        let row7 = D::I32Vec::load(d, &input[56 + col_base..]);
+
+        let dc_mask = row1.eq_zero()
+            & row2.eq_zero()
+            & row3.eq_zero()
+            & row4.eq_zero()
+            & row5.eq_zero()
+            & row6.eq_zero()
+            & row7.eq_zero();
+        let dcval = shl!(row0, 1);
+
+        let z2 = row2;
+        let z3 = row6;
+        let z1 = (z2 + z3) * fix_0_541;
+        let tmp2 = z1 + z3 * fix_1_847;
+        let tmp3 = z1 + z2 * fix_0_765;
+
+        let z2 = row0;
+        let z3 = row4;
+        let tmp0 = shl!(z2 + z3, 13);
+        let tmp1 = shl!(z2 - z3, 13);
+
+        let tmp10 = tmp0 + tmp3;
+        let tmp13 = tmp0 - tmp3;
+        let tmp11 = tmp1 + tmp2;
+        let tmp12 = tmp1 - tmp2;
+
+        let tmp0 = row7;
+        let tmp1 = row5;
+        let tmp2 = row3;
+        let tmp3 = row1;
+
+        let z1 = tmp0 + tmp3;
+        let z2 = tmp1 + tmp2;
+        let z3 = tmp0 + tmp2;
+        let z4 = tmp1 + tmp3;
+        let z5 = (z3 + z4) * fix_1_175;
+
+        let tmp0 = tmp0 * fix_0_298;
+        let tmp1 = tmp1 * fix_2_053;
+        let tmp2 = tmp2 * fix_3_072;
+        let tmp3 = tmp3 * fix_1_501;
+        let z1 = z1 * fix_0_899;
+        let z2 = z2 * fix_2_562;
+        let z3 = z3 * fix_1_961;
+        let z4 = z4 * fix_0_390;
+
+        let z3 = z3 + z5;
+        let z4 = z4 + z5;
+
+        let tmp0 = tmp0 + z1 + z3;
+        let tmp1 = tmp1 + z2 + z4;
+        let tmp2 = tmp2 + z2 + z3;
+        let tmp3 = tmp3 + z1 + z4;
+
+        let mut ws0 = descale12(tmp10 + tmp3);
+        let mut ws7 = descale12(tmp10 - tmp3);
+        let mut ws1 = descale12(tmp11 + tmp2);
+        let mut ws6 = descale12(tmp11 - tmp2);
+        let mut ws2 = descale12(tmp12 + tmp1);
+        let mut ws5 = descale12(tmp12 - tmp1);
+        let mut ws3 = descale12(tmp13 + tmp0);
+        let mut ws4 = descale12(tmp13 - tmp0);
+
+        ws0 = dc_mask.if_then_else_i32(dcval, ws0);
+        ws1 = dc_mask.if_then_else_i32(dcval, ws1);
+        ws2 = dc_mask.if_then_else_i32(dcval, ws2);
+        ws3 = dc_mask.if_then_else_i32(dcval, ws3);
+        ws4 = dc_mask.if_then_else_i32(dcval, ws4);
+        ws5 = dc_mask.if_then_else_i32(dcval, ws5);
+        ws6 = dc_mask.if_then_else_i32(dcval, ws6);
+        ws7 = dc_mask.if_then_else_i32(dcval, ws7);
+
+        ws0.store(&mut workspace[col_base..]);
+        ws1.store(&mut workspace[8 + col_base..]);
+        ws2.store(&mut workspace[16 + col_base..]);
+        ws3.store(&mut workspace[24 + col_base..]);
+        ws4.store(&mut workspace[32 + col_base..]);
+        ws5.store(&mut workspace[40 + col_base..]);
+        ws6.store(&mut workspace[48 + col_base..]);
+        ws7.store(&mut workspace[56 + col_base..]);
+    }
+
+    let scale_v = D::F32Vec::splat(d, 1.0 / max_sample_f);
+    let zero_i = D::I32Vec::splat(d, 0);
+    let max_i = D::I32Vec::splat(d, max_sample);
+    let level_shift_i = D::I32Vec::splat(d, level_shift);
+    let round17 = D::I32Vec::splat(d, 1 << 16);
+    let descale17 = |v: D::I32Vec| shr!(v + round17, 17);
+    let round4 = D::I32Vec::splat(d, 1 << 3);
+    let descale4 = |v: D::I32Vec| shr!(v + round4, 4);
+    let clamp_to_f32 = |v: D::I32Vec| {
+        let v = v + level_shift_i;
+        let v = v.lt_zero().if_then_else_i32(zero_i, v);
+        let v = v.gt(max_i).if_then_else_i32(max_i, v);
+        v.as_f32() * scale_v
+    };
+
+    let mut col0 = [0i32; 16];
+    let mut col1 = [0i32; 16];
+    let mut col2 = [0i32; 16];
+    let mut col3 = [0i32; 16];
+    let mut col4 = [0i32; 16];
+    let mut col5 = [0i32; 16];
+    let mut col6 = [0i32; 16];
+    let mut col7 = [0i32; 16];
+
+    for row_base in (0..8).step_by(vec_len) {
+        for lane in 0..vec_len {
+            let row = row_base + lane;
+            col0[lane] = workspace[row * 8 + 0];
+            col1[lane] = workspace[row * 8 + 1];
+            col2[lane] = workspace[row * 8 + 2];
+            col3[lane] = workspace[row * 8 + 3];
+            col4[lane] = workspace[row * 8 + 4];
+            col5[lane] = workspace[row * 8 + 5];
+            col6[lane] = workspace[row * 8 + 6];
+            col7[lane] = workspace[row * 8 + 7];
+        }
+
+        let v0 = D::I32Vec::load(d, &col0[..]);
+        let v1 = D::I32Vec::load(d, &col1[..]);
+        let v2 = D::I32Vec::load(d, &col2[..]);
+        let v3 = D::I32Vec::load(d, &col3[..]);
+        let v4 = D::I32Vec::load(d, &col4[..]);
+        let v5 = D::I32Vec::load(d, &col5[..]);
+        let v6 = D::I32Vec::load(d, &col6[..]);
+        let v7 = D::I32Vec::load(d, &col7[..]);
+
+        let dc_mask =
+            v1.eq_zero() & v2.eq_zero() & v3.eq_zero() & v4.eq_zero() & v5.eq_zero() & v6.eq_zero()
+                & v7.eq_zero();
+        let dcval = descale4(v0);
+        let dc_sample = clamp_to_f32(dcval);
+
+        let z2 = v2;
+        let z3 = v6;
+        let z1 = (z2 + z3) * fix_0_541;
+        let tmp2 = z1 + z3 * fix_1_847;
+        let tmp3 = z1 + z2 * fix_0_765;
+
+        let tmp0 = shl!(v0 + v4, 13);
+        let tmp1 = shl!(v0 - v4, 13);
+
+        let tmp10 = tmp0 + tmp3;
+        let tmp13 = tmp0 - tmp3;
+        let tmp11 = tmp1 + tmp2;
+        let tmp12 = tmp1 - tmp2;
+
+        let tmp0 = v7;
+        let tmp1 = v5;
+        let tmp2 = v3;
+        let tmp3 = v1;
+
+        let z1 = tmp0 + tmp3;
+        let z2 = tmp1 + tmp2;
+        let z3 = tmp0 + tmp2;
+        let z4 = tmp1 + tmp3;
+        let z5 = (z3 + z4) * fix_1_175;
+
+        let tmp0 = tmp0 * fix_0_298;
+        let tmp1 = tmp1 * fix_2_053;
+        let tmp2 = tmp2 * fix_3_072;
+        let tmp3 = tmp3 * fix_1_501;
+        let z1 = z1 * fix_0_899;
+        let z2 = z2 * fix_2_562;
+        let z3 = z3 * fix_1_961;
+        let z4 = z4 * fix_0_390;
+
+        let z3 = z3 + z5;
+        let z4 = z4 + z5;
+
+        let tmp0 = tmp0 + z1 + z3;
+        let tmp1 = tmp1 + z2 + z4;
+        let tmp2 = tmp2 + z2 + z3;
+        let tmp3 = tmp3 + z1 + z4;
+
+        let out0 = clamp_to_f32(descale17(tmp10 + tmp3));
+        let out7 = clamp_to_f32(descale17(tmp10 - tmp3));
+        let out1 = clamp_to_f32(descale17(tmp11 + tmp2));
+        let out6 = clamp_to_f32(descale17(tmp11 - tmp2));
+        let out2 = clamp_to_f32(descale17(tmp12 + tmp1));
+        let out5 = clamp_to_f32(descale17(tmp12 - tmp1));
+        let out3 = clamp_to_f32(descale17(tmp13 + tmp0));
+        let out4 = clamp_to_f32(descale17(tmp13 - tmp0));
+
+        let out0 = dc_mask.if_then_else_f32(dc_sample, out0);
+        let out1 = dc_mask.if_then_else_f32(dc_sample, out1);
+        let out2 = dc_mask.if_then_else_f32(dc_sample, out2);
+        let out3 = dc_mask.if_then_else_f32(dc_sample, out3);
+        let out4 = dc_mask.if_then_else_f32(dc_sample, out4);
+        let out5 = dc_mask.if_then_else_f32(dc_sample, out5);
+        let out6 = dc_mask.if_then_else_f32(dc_sample, out6);
+        let out7 = dc_mask.if_then_else_f32(dc_sample, out7);
+
+        let mut out0_buf = [0.0f32; 16];
+        let mut out1_buf = [0.0f32; 16];
+        let mut out2_buf = [0.0f32; 16];
+        let mut out3_buf = [0.0f32; 16];
+        let mut out4_buf = [0.0f32; 16];
+        let mut out5_buf = [0.0f32; 16];
+        let mut out6_buf = [0.0f32; 16];
+        let mut out7_buf = [0.0f32; 16];
+        out0.store(&mut out0_buf[..]);
+        out1.store(&mut out1_buf[..]);
+        out2.store(&mut out2_buf[..]);
+        out3.store(&mut out3_buf[..]);
+        out4.store(&mut out4_buf[..]);
+        out5.store(&mut out5_buf[..]);
+        out6.store(&mut out6_buf[..]);
+        out7.store(&mut out7_buf[..]);
+
+        for lane in 0..vec_len {
+            let row = row_base + lane;
+            let base = row * 8;
+            output[base] = out0_buf[lane];
+            output[base + 1] = out1_buf[lane];
+            output[base + 2] = out2_buf[lane];
+            output[base + 3] = out3_buf[lane];
+            output[base + 4] = out4_buf[lane];
+            output[base + 5] = out5_buf[lane];
+            output[base + 6] = out6_buf[lane];
+            output[base + 7] = out7_buf[lane];
+        }
+    }
+}
+
+fn jpeg_idct_8x8_simd_pass1_2<D: SimdDescriptor>(
+    d: D,
+    input: &[i32; 64],
+    output: &mut [f32],
+    max_sample: i32,
+    level_shift: i32,
+    max_sample_f: f32,
+) {
+    if D::I32Vec::LEN > 8 {
+        return jpeg_idct_8x8_simd_pass1_2(
+            d.maybe_downgrade_256bit(),
+            input,
+            output,
+            max_sample,
+            level_shift,
+            max_sample_f,
+        );
+    }
+
+    let vec_len = D::I32Vec::LEN;
+    debug_assert!(8 % vec_len == 0);
+    let mut workspace = [0i32; 64];
+
+    let fix_0_298 = D::I32Vec::splat(d, JPEG_IDCT_FIX_0_298631336 as i32);
+    let fix_0_390 = D::I32Vec::splat(d, -(JPEG_IDCT_FIX_0_390180644 as i32));
+    let fix_0_541 = D::I32Vec::splat(d, JPEG_IDCT_FIX_0_541196100 as i32);
+    let fix_0_765 = D::I32Vec::splat(d, JPEG_IDCT_FIX_0_765366865 as i32);
+    let fix_0_899 = D::I32Vec::splat(d, -(JPEG_IDCT_FIX_0_899976223 as i32));
+    let fix_1_175 = D::I32Vec::splat(d, JPEG_IDCT_FIX_1_175875602 as i32);
+    let fix_1_501 = D::I32Vec::splat(d, JPEG_IDCT_FIX_1_501321110 as i32);
+    let fix_1_847 = D::I32Vec::splat(d, -(JPEG_IDCT_FIX_1_847759065 as i32));
+    let fix_1_961 = D::I32Vec::splat(d, -(JPEG_IDCT_FIX_1_961570560 as i32));
+    let fix_2_053 = D::I32Vec::splat(d, JPEG_IDCT_FIX_2_053119869 as i32);
+    let fix_2_562 = D::I32Vec::splat(d, -(JPEG_IDCT_FIX_2_562915447 as i32));
+    let fix_3_072 = D::I32Vec::splat(d, JPEG_IDCT_FIX_3_072711026 as i32);
+
+    let round11 = D::I32Vec::splat(d, 1 << 10);
+    let descale11 = |v: D::I32Vec| shr!(v + round11, 11);
+
+    for col_base in (0..8).step_by(vec_len) {
+        let row0 = D::I32Vec::load(d, &input[col_base..]);
+        let row1 = D::I32Vec::load(d, &input[8 + col_base..]);
+        let row2 = D::I32Vec::load(d, &input[16 + col_base..]);
+        let row3 = D::I32Vec::load(d, &input[24 + col_base..]);
+        let row4 = D::I32Vec::load(d, &input[32 + col_base..]);
+        let row5 = D::I32Vec::load(d, &input[40 + col_base..]);
+        let row6 = D::I32Vec::load(d, &input[48 + col_base..]);
+        let row7 = D::I32Vec::load(d, &input[56 + col_base..]);
+
+        let dc_mask = row1.eq_zero()
+            & row2.eq_zero()
+            & row3.eq_zero()
+            & row4.eq_zero()
+            & row5.eq_zero()
+            & row6.eq_zero()
+            & row7.eq_zero();
+        let dcval = shl!(row0, 2);
+
+        let z2 = row2;
+        let z3 = row6;
+        let z1 = (z2 + z3) * fix_0_541;
+        let tmp2 = z1 + z3 * fix_1_847;
+        let tmp3 = z1 + z2 * fix_0_765;
+
+        let z2 = row0;
+        let z3 = row4;
+        let tmp0 = shl!(z2 + z3, 13);
+        let tmp1 = shl!(z2 - z3, 13);
+
+        let tmp10 = tmp0 + tmp3;
+        let tmp13 = tmp0 - tmp3;
+        let tmp11 = tmp1 + tmp2;
+        let tmp12 = tmp1 - tmp2;
+
+        let tmp0 = row7;
+        let tmp1 = row5;
+        let tmp2 = row3;
+        let tmp3 = row1;
+
+        let z1 = tmp0 + tmp3;
+        let z2 = tmp1 + tmp2;
+        let z3 = tmp0 + tmp2;
+        let z4 = tmp1 + tmp3;
+        let z5 = (z3 + z4) * fix_1_175;
+
+        let tmp0 = tmp0 * fix_0_298;
+        let tmp1 = tmp1 * fix_2_053;
+        let tmp2 = tmp2 * fix_3_072;
+        let tmp3 = tmp3 * fix_1_501;
+        let z1 = z1 * fix_0_899;
+        let z2 = z2 * fix_2_562;
+        let z3 = z3 * fix_1_961;
+        let z4 = z4 * fix_0_390;
+
+        let z3 = z3 + z5;
+        let z4 = z4 + z5;
+
+        let tmp0 = tmp0 + z1 + z3;
+        let tmp1 = tmp1 + z2 + z4;
+        let tmp2 = tmp2 + z2 + z3;
+        let tmp3 = tmp3 + z1 + z4;
+
+        let mut ws0 = descale11(tmp10 + tmp3);
+        let mut ws7 = descale11(tmp10 - tmp3);
+        let mut ws1 = descale11(tmp11 + tmp2);
+        let mut ws6 = descale11(tmp11 - tmp2);
+        let mut ws2 = descale11(tmp12 + tmp1);
+        let mut ws5 = descale11(tmp12 - tmp1);
+        let mut ws3 = descale11(tmp13 + tmp0);
+        let mut ws4 = descale11(tmp13 - tmp0);
+
+        ws0 = dc_mask.if_then_else_i32(dcval, ws0);
+        ws1 = dc_mask.if_then_else_i32(dcval, ws1);
+        ws2 = dc_mask.if_then_else_i32(dcval, ws2);
+        ws3 = dc_mask.if_then_else_i32(dcval, ws3);
+        ws4 = dc_mask.if_then_else_i32(dcval, ws4);
+        ws5 = dc_mask.if_then_else_i32(dcval, ws5);
+        ws6 = dc_mask.if_then_else_i32(dcval, ws6);
+        ws7 = dc_mask.if_then_else_i32(dcval, ws7);
+
+        ws0.store(&mut workspace[col_base..]);
+        ws1.store(&mut workspace[8 + col_base..]);
+        ws2.store(&mut workspace[16 + col_base..]);
+        ws3.store(&mut workspace[24 + col_base..]);
+        ws4.store(&mut workspace[32 + col_base..]);
+        ws5.store(&mut workspace[40 + col_base..]);
+        ws6.store(&mut workspace[48 + col_base..]);
+        ws7.store(&mut workspace[56 + col_base..]);
+    }
+
+    let scale_v = D::F32Vec::splat(d, 1.0 / max_sample_f);
+    let zero_i = D::I32Vec::splat(d, 0);
+    let max_i = D::I32Vec::splat(d, max_sample);
+    let level_shift_i = D::I32Vec::splat(d, level_shift);
+    let round18 = D::I32Vec::splat(d, 1 << 17);
+    let descale18 = |v: D::I32Vec| shr!(v + round18, 18);
+    let round5 = D::I32Vec::splat(d, 1 << 4);
+    let descale5 = |v: D::I32Vec| shr!(v + round5, 5);
+    let clamp_to_f32 = |v: D::I32Vec| {
+        let v = v + level_shift_i;
+        let v = v.lt_zero().if_then_else_i32(zero_i, v);
+        let v = v.gt(max_i).if_then_else_i32(max_i, v);
+        v.as_f32() * scale_v
+    };
+
+    let mut col0 = [0i32; 16];
+    let mut col1 = [0i32; 16];
+    let mut col2 = [0i32; 16];
+    let mut col3 = [0i32; 16];
+    let mut col4 = [0i32; 16];
+    let mut col5 = [0i32; 16];
+    let mut col6 = [0i32; 16];
+    let mut col7 = [0i32; 16];
+
+    for row_base in (0..8).step_by(vec_len) {
+        for lane in 0..vec_len {
+            let row = row_base + lane;
+            col0[lane] = workspace[row * 8 + 0];
+            col1[lane] = workspace[row * 8 + 1];
+            col2[lane] = workspace[row * 8 + 2];
+            col3[lane] = workspace[row * 8 + 3];
+            col4[lane] = workspace[row * 8 + 4];
+            col5[lane] = workspace[row * 8 + 5];
+            col6[lane] = workspace[row * 8 + 6];
+            col7[lane] = workspace[row * 8 + 7];
+        }
+
+        let v0 = D::I32Vec::load(d, &col0[..]);
+        let v1 = D::I32Vec::load(d, &col1[..]);
+        let v2 = D::I32Vec::load(d, &col2[..]);
+        let v3 = D::I32Vec::load(d, &col3[..]);
+        let v4 = D::I32Vec::load(d, &col4[..]);
+        let v5 = D::I32Vec::load(d, &col5[..]);
+        let v6 = D::I32Vec::load(d, &col6[..]);
+        let v7 = D::I32Vec::load(d, &col7[..]);
+
+        let dc_mask =
+            v1.eq_zero() & v2.eq_zero() & v3.eq_zero() & v4.eq_zero() & v5.eq_zero() & v6.eq_zero()
+                & v7.eq_zero();
+        let dcval = descale5(v0);
+        let dc_sample = clamp_to_f32(dcval);
+
+        let z2 = v2;
+        let z3 = v6;
+        let z1 = (z2 + z3) * fix_0_541;
+        let tmp2 = z1 + z3 * fix_1_847;
+        let tmp3 = z1 + z2 * fix_0_765;
+
+        let tmp0 = shl!(v0 + v4, 13);
+        let tmp1 = shl!(v0 - v4, 13);
+
+        let tmp10 = tmp0 + tmp3;
+        let tmp13 = tmp0 - tmp3;
+        let tmp11 = tmp1 + tmp2;
+        let tmp12 = tmp1 - tmp2;
+
+        let tmp0 = v7;
+        let tmp1 = v5;
+        let tmp2 = v3;
+        let tmp3 = v1;
+
+        let z1 = tmp0 + tmp3;
+        let z2 = tmp1 + tmp2;
+        let z3 = tmp0 + tmp2;
+        let z4 = tmp1 + tmp3;
+        let z5 = (z3 + z4) * fix_1_175;
+
+        let tmp0 = tmp0 * fix_0_298;
+        let tmp1 = tmp1 * fix_2_053;
+        let tmp2 = tmp2 * fix_3_072;
+        let tmp3 = tmp3 * fix_1_501;
+        let z1 = z1 * fix_0_899;
+        let z2 = z2 * fix_2_562;
+        let z3 = z3 * fix_1_961;
+        let z4 = z4 * fix_0_390;
+
+        let z3 = z3 + z5;
+        let z4 = z4 + z5;
+
+        let tmp0 = tmp0 + z1 + z3;
+        let tmp1 = tmp1 + z2 + z4;
+        let tmp2 = tmp2 + z2 + z3;
+        let tmp3 = tmp3 + z1 + z4;
+
+        let out0 = clamp_to_f32(descale18(tmp10 + tmp3));
+        let out7 = clamp_to_f32(descale18(tmp10 - tmp3));
+        let out1 = clamp_to_f32(descale18(tmp11 + tmp2));
+        let out6 = clamp_to_f32(descale18(tmp11 - tmp2));
+        let out2 = clamp_to_f32(descale18(tmp12 + tmp1));
+        let out5 = clamp_to_f32(descale18(tmp12 - tmp1));
+        let out3 = clamp_to_f32(descale18(tmp13 + tmp0));
+        let out4 = clamp_to_f32(descale18(tmp13 - tmp0));
+
+        let out0 = dc_mask.if_then_else_f32(dc_sample, out0);
+        let out1 = dc_mask.if_then_else_f32(dc_sample, out1);
+        let out2 = dc_mask.if_then_else_f32(dc_sample, out2);
+        let out3 = dc_mask.if_then_else_f32(dc_sample, out3);
+        let out4 = dc_mask.if_then_else_f32(dc_sample, out4);
+        let out5 = dc_mask.if_then_else_f32(dc_sample, out5);
+        let out6 = dc_mask.if_then_else_f32(dc_sample, out6);
+        let out7 = dc_mask.if_then_else_f32(dc_sample, out7);
+
+        let mut out0_buf = [0.0f32; 16];
+        let mut out1_buf = [0.0f32; 16];
+        let mut out2_buf = [0.0f32; 16];
+        let mut out3_buf = [0.0f32; 16];
+        let mut out4_buf = [0.0f32; 16];
+        let mut out5_buf = [0.0f32; 16];
+        let mut out6_buf = [0.0f32; 16];
+        let mut out7_buf = [0.0f32; 16];
+        out0.store(&mut out0_buf[..]);
+        out1.store(&mut out1_buf[..]);
+        out2.store(&mut out2_buf[..]);
+        out3.store(&mut out3_buf[..]);
+        out4.store(&mut out4_buf[..]);
+        out5.store(&mut out5_buf[..]);
+        out6.store(&mut out6_buf[..]);
+        out7.store(&mut out7_buf[..]);
+
+        for lane in 0..vec_len {
+            let row = row_base + lane;
+            let base = row * 8;
+            output[base] = out0_buf[lane];
+            output[base + 1] = out1_buf[lane];
+            output[base + 2] = out2_buf[lane];
+            output[base + 3] = out3_buf[lane];
+            output[base + 4] = out4_buf[lane];
+            output[base + 5] = out5_buf[lane];
+            output[base + 6] = out6_buf[lane];
+            output[base + 7] = out7_buf[lane];
+        }
+    }
+}
+
+simd_function!(
+    jpeg_idct_8x8_dispatch,
+    d: D,
+    fn jpeg_idct_8x8_impl(
+        input: &[i32; 64],
+        output: &mut [f32],
+        pass1_bits: i32,
+        max_sample: i32,
+        level_shift: i32,
+        max_sample_f: f32,
+    ) {
+        match pass1_bits {
+            1 => jpeg_idct_8x8_simd_pass1_1(d, input, output, max_sample, level_shift, max_sample_f),
+            2 => jpeg_idct_8x8_simd_pass1_2(d, input, output, max_sample, level_shift, max_sample_f),
+            _ => {}
+        }
+    }
+);
+
 /// Bit reader for JPEG data with byte stuffing handling.
 struct JpegBitReader<'a> {
     data: &'a [u8],
@@ -4336,8 +4903,43 @@ impl JpegDecoder {
         output[idx] = sample as f32 / max_sample_f;
     }
 
+    fn idct_8x8_integer_simd(&self, input: &[i64; 64], output: &mut [f32]) -> bool {
+        if self.data_precision > 12 {
+            return false;
+        }
+
+        let mut input_i32 = [0i32; 64];
+        for (idx, &value) in input.iter().enumerate() {
+            if value < i32::MIN as i64 || value > i32::MAX as i64 {
+                return false;
+            }
+            input_i32[idx] = value as i32;
+        }
+
+        let precision = self.data_precision.max(1).min(12) as i32;
+        let max_sample = (1_i32 << precision) - 1;
+        let level_shift = 1_i32 << (precision - 1);
+        let pass1_bits = self.idct_pass1_bits();
+        if pass1_bits != 1 && pass1_bits != 2 {
+            return false;
+        }
+
+        jpeg_idct_8x8_dispatch(
+            &input_i32,
+            output,
+            pass1_bits,
+            max_sample,
+            level_shift,
+            max_sample as f32,
+        );
+        true
+    }
+
     fn idct_8x8_integer(&self, input: &[i64; 64], output: &mut [f32]) {
         debug_assert!(output.len() >= 64);
+        if self.idct_8x8_integer_simd(input, output) {
+            return;
+        }
         let (pass1_bits, max_sample, level_shift, max_sample_f) = self.idct_sample_params();
         let mut workspace = [0i64; 64];
 
