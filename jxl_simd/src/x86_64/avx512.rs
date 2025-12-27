@@ -520,34 +520,6 @@ unsafe impl F32SimdVec for F32VecAvx512 {
     });
 
     #[inline(always)]
-    fn table_lookup_8(d: Avx512Descriptor, table: &[f32; 8], indices: I32VecAvx512) -> Self {
-        // Use vpermps (permutexvar) for efficient exact 8-entry table lookup
-        #[target_feature(enable = "avx512f")]
-        #[inline]
-        unsafe fn table_lookup_impl(table: &[f32; 8], indices: __m512i) -> __m512 {
-            // SAFETY: avx512f intrinsics are available from target_feature
-            unsafe {
-                // Load the 8-entry table into a 256-bit register
-                let table_256 = _mm256_loadu_ps(table.as_ptr());
-                // Broadcast to 512-bit by duplicating the 8 entries
-                let table_512 =
-                    _mm512_insertf32x8::<1>(_mm512_castps256_ps512(table_256), table_256);
-                // Use vpermps to permute based on indices (uses lower 4 bits of each index)
-                // Since our table has 8 entries (indices 0-7), the lower 4 bits work correctly
-                _mm512_permutexvar_ps(indices, table_512)
-            }
-        }
-        // SAFETY: avx512f is available from the safety invariant on the descriptor
-        F32VecAvx512(unsafe { table_lookup_impl(table, indices.0) }, d)
-    }
-
-    #[inline(always)]
-    fn table_lookup_8_approx(d: Avx512Descriptor, table: &[f32; 8], indices: I32VecAvx512) -> Self {
-        // For AVX512, vpermps is both fast and exact - no need for approximation
-        Self::table_lookup_8(d, table, indices)
-    }
-
-    #[inline(always)]
     fn prepare_table_bf16_8(_d: Avx512Descriptor, table: &[f32; 8]) -> Bf16Table8Avx512 {
         #[target_feature(enable = "avx512f")]
         #[inline]
