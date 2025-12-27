@@ -11,7 +11,7 @@
 
 use crate::bit_reader::BitReader;
 use crate::error::{Error, Result};
-use jxl_simd::{simd_function, F32SimdVec};
+use jxl_simd::{shr, simd_function, F32SimdVec, I32SimdVec, SimdMask};
 
 /// Type of APP marker in JPEG file.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -6287,17 +6287,41 @@ simd_function!(
         offset: f32,
     ) {
         let len = y.len().min(cb.len()).min(cr.len());
+        if len == 0 {
+            return;
+        }
+        let max_sample_i = max_sample.round() as i32;
+        if max_sample_i > 4095 {
+            for j in 0..len {
+                let (r, g, b) = ycbcr_to_rgb(y[j], cb[j], cr[j], max_sample, offset);
+                let dst = j * 4;
+                out[dst] = (b.clamp(0.0, 1.0) * 255.0).round() as u8;
+                out[dst + 1] = (g.clamp(0.0, 1.0) * 255.0).round() as u8;
+                out[dst + 2] = (r.clamp(0.0, 1.0) * 255.0).round() as u8;
+                out[dst + 3] = 255;
+            }
+            return;
+        }
         let vec_len = D::F32Vec::LEN;
         debug_assert!(vec_len <= 16);
         let max_v = D::F32Vec::splat(d, max_sample);
         let offset_v = D::F32Vec::splat(d, offset);
         let scale_v = D::F32Vec::splat(d, 255.0 / max_sample);
-        let zero = D::F32Vec::zero(d);
+        let zero_f = D::F32Vec::zero(d);
         let max_byte = D::F32Vec::splat(d, 255.0);
-        let coeff_r = D::F32Vec::splat(d, 1.402);
-        let coeff_gb = D::F32Vec::splat(d, -0.344136);
-        let coeff_gr = D::F32Vec::splat(d, -0.714136);
-        let coeff_b = D::F32Vec::splat(d, 1.772);
+        let half_v = D::F32Vec::splat(d, 0.5);
+        let zero_i = D::I32Vec::splat(d, 0);
+        let max_i = D::I32Vec::splat(d, max_sample_i);
+        let one_half = D::I32Vec::splat(d, JPEG_YCC_ONE_HALF as i32);
+        let coeff_r = D::I32Vec::splat(d, JPEG_YCC_FIX_1_40200 as i32);
+        let coeff_gb = D::I32Vec::splat(d, -(JPEG_YCC_FIX_0_34414 as i32));
+        let coeff_gr = D::I32Vec::splat(d, -(JPEG_YCC_FIX_0_71414 as i32));
+        let coeff_b = D::I32Vec::splat(d, JPEG_YCC_FIX_1_77200 as i32);
+        let round_to_i32 = |v: D::F32Vec| {
+            let abs = v.abs();
+            let rounded = (abs + half_v).floor().copysign(v);
+            rounded.as_i32()
+        };
 
         let mut i = 0usize;
         while i + vec_len <= len {
@@ -6305,13 +6329,24 @@ simd_function!(
             let cbv = D::F32Vec::load(d, &cb[i..]) * max_v - offset_v;
             let crv = D::F32Vec::load(d, &cr[i..]) * max_v - offset_v;
 
-            let r = (yv + crv * coeff_r) * scale_v;
-            let g = (yv + cbv * coeff_gb + crv * coeff_gr) * scale_v;
-            let b = (yv + cbv * coeff_b) * scale_v;
+            let y_i = round_to_i32(yv);
+            let cb_i = round_to_i32(cbv);
+            let cr_i = round_to_i32(crv);
 
-            let r = r.max(zero).min(max_byte);
-            let g = g.max(zero).min(max_byte);
-            let b = b.max(zero).min(max_byte);
+            let r = y_i + shr!(coeff_r * cr_i + one_half, 16);
+            let g = y_i + shr!(coeff_gb * cb_i + coeff_gr * cr_i + one_half, 16);
+            let b = y_i + shr!(coeff_b * cb_i + one_half, 16);
+
+            let r = r.lt_zero().if_then_else_i32(zero_i, r);
+            let g = g.lt_zero().if_then_else_i32(zero_i, g);
+            let b = b.lt_zero().if_then_else_i32(zero_i, b);
+            let r = r.gt(max_i).if_then_else_i32(max_i, r);
+            let g = g.gt(max_i).if_then_else_i32(max_i, g);
+            let b = b.gt(max_i).if_then_else_i32(max_i, b);
+
+            let r = (r.as_f32() * scale_v).max(zero_f).min(max_byte);
+            let g = (g.as_f32() * scale_v).max(zero_f).min(max_byte);
+            let b = (b.as_f32() * scale_v).max(zero_f).min(max_byte);
 
             let mut r_buf = [0u8; 16];
             let mut g_buf = [0u8; 16];
@@ -7017,6 +7052,42 @@ mod jpeg_file_tests {
         assert_eq!(output.len(), expected.len());
         for (a, b) in output.iter().zip(expected.iter()) {
             assert!((*a as i32 - *b as i32).abs() <= 1);
+        }
+    }
+
+    #[test]
+    fn test_ycbcr_to_bgra_simd_matches_scalar() {
+        let max_samples = [255i32, 4095, 65535];
+        for &max_sample_i in &max_samples {
+            let max_sample = max_sample_i as f32;
+            let offset = ((max_sample_i + 1) / 2) as f32;
+            let y_vals = [0i32, 1, max_sample_i / 4, max_sample_i / 2, max_sample_i - 1, max_sample_i];
+            let cb_vals = [0i32, max_sample_i / 4, max_sample_i / 2, max_sample_i / 2 + 1, max_sample_i];
+            let cr_vals = [max_sample_i, max_sample_i / 2 + 1, max_sample_i / 2, max_sample_i / 4, 0];
+            let len = 32usize;
+            let mut y = vec![0.0f32; len];
+            let mut cb = vec![0.0f32; len];
+            let mut cr = vec![0.0f32; len];
+            for i in 0..len {
+                y[i] = y_vals[i % y_vals.len()] as f32 / max_sample;
+                cb[i] = cb_vals[i % cb_vals.len()] as f32 / max_sample;
+                cr[i] = cr_vals[i % cr_vals.len()] as f32 / max_sample;
+            }
+
+            let mut out = vec![0u8; len * 4];
+            jpeg_ycbcr_to_bgra_row_dispatch(&y, &cb, &cr, &mut out, max_sample, offset);
+
+            let mut expected = vec![0u8; len * 4];
+            for j in 0..len {
+                let (r, g, b) = ycbcr_to_rgb(y[j], cb[j], cr[j], max_sample, offset);
+                let dst = j * 4;
+                expected[dst] = (b.clamp(0.0, 1.0) * 255.0).round() as u8;
+                expected[dst + 1] = (g.clamp(0.0, 1.0) * 255.0).round() as u8;
+                expected[dst + 2] = (r.clamp(0.0, 1.0) * 255.0).round() as u8;
+                expected[dst + 3] = 255;
+            }
+
+            assert_eq!(out, expected, "max_sample {} mismatch", max_sample_i);
         }
     }
 
