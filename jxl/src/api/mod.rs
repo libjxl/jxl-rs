@@ -14,6 +14,8 @@ mod options;
 mod signature;
 
 pub use crate::image::JxlOutputBuffer;
+#[cfg(feature = "jpeg-reconstruction")]
+pub use crate::jpeg::{JpegDctCoefficients, JpegReconstructionData};
 pub use color::*;
 pub use data_types::*;
 pub use decoder::*;

@@ -315,7 +315,8 @@ impl CodestreamParser {
         // Save file_header before creating frame (for preview frame recovery)
         self.saved_file_header = self.decoder_state.as_ref().map(|ds| ds.file_header.clone());
 
-        let frame = Frame::from_header_and_toc(
+        #[cfg_attr(not(feature = "jpeg-reconstruction"), allow(unused_mut))]
+        let mut frame = Frame::from_header_and_toc(
             self.frame_header.take().unwrap(),
             toc,
             self.decoder_state.take().unwrap(),
@@ -373,6 +374,12 @@ impl CodestreamParser {
 
         self.section_state =
             SectionState::new(frame.header().num_lf_groups(), frame.header().num_groups());
+
+        // Enable JPEG coefficient preservation if requested
+        #[cfg(feature = "jpeg-reconstruction")]
+        if decode_options.preserve_jpeg_coefficients {
+            frame.set_preserve_jpeg_coefficients(true);
+        }
 
         self.frame = Some(frame);
 
