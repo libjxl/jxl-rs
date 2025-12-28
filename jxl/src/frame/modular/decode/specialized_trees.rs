@@ -15,7 +15,7 @@ use crate::{
             channel::ModularChannelDecoder,
             common::{make_pixel, precompute_references},
         },
-        predict::{PredictionData, WeightedPredictorState},
+        predict::{PredictionData, WeightedPredictorState, clamped_gradient},
         tree::{
             FlatTreeNode, NUM_NONREF_PROPERTIES, PROPERTIES_PER_PREVCHAN, TreeNode, predict_flat,
         },
@@ -250,6 +250,135 @@ impl ModularChannelDecoder for WpOnlyLookup {
     }
 }
 
+/// Fast path for trees that split only on property 9 (gradient: left + top - topleft)
+/// with Gradient predictor, offset=0, multiplier=1.
+/// Maps property 9 values directly to cluster IDs via a LUT.
+/// This targets libjxl effort 2 encoding.
+pub struct GradientTableLookup {
+    lut: Box<[u8]>,
+    value_base: i32,
+}
+
+/// Property 9 is the "gradient property": left + top - topleft
+const GRADIENT_PROPERTY: u8 = 9;
+
+fn make_gradient_lut(tree: &[TreeNode], histograms: &Histograms) -> Option<GradientTableLookup> {
+    struct RangeAndNode {
+        range: Range<i32>,
+        node: u32,
+    }
+
+    // Find min/max split values to determine LUT size
+    let mut min_val = i32::MAX;
+    let mut max_val = i32::MIN;
+
+    for node in tree {
+        if let TreeNode::Split { property, val, .. } = node {
+            // All splits must be on property 9
+            if *property != GRADIENT_PROPERTY {
+                return None;
+            }
+            min_val = min_val.min(*val);
+            max_val = max_val.max(*val);
+        }
+    }
+
+    if min_val > max_val {
+        // No splits found - single leaf, handled by other fast paths
+        return None;
+    }
+
+    // Build LUT: value_base..value_base+lut_size maps to cluster IDs
+    let value_base = min_val;
+    let lut_size = (max_val - min_val + 2) as usize;
+
+    let mut lut = vec![0u8; lut_size];
+
+    let mut stack = vec![RangeAndNode {
+        range: 0..(lut_size as i32),
+        node: 0,
+    }];
+
+    while let Some(RangeAndNode { range, node }) = stack.pop() {
+        let v = tree.get(node as usize)?;
+        match v {
+            TreeNode::Split {
+                property,
+                val,
+                left,
+                right,
+            } => {
+                debug_assert_eq!(*property, GRADIENT_PROPERTY);
+
+                let split_point = val - value_base + 1;
+                if split_point <= range.start || split_point >= range.end {
+                    return None;
+                }
+                stack.push(RangeAndNode {
+                    range: split_point..range.end,
+                    node: *left,
+                });
+                stack.push(RangeAndNode {
+                    range: range.start..split_point,
+                    node: *right,
+                });
+            }
+            TreeNode::Leaf {
+                predictor,
+                offset,
+                multiplier,
+                id,
+            } => {
+                if *predictor != Predictor::Gradient || *offset != 0 || *multiplier != 1 {
+                    return None;
+                }
+                let cluster = histograms.map_context_to_cluster(*id as usize) as u8;
+                lut[range.start as usize..range.end as usize].fill(cluster);
+            }
+        }
+    }
+
+    Some(GradientTableLookup {
+        lut: lut.into_boxed_slice(),
+        value_base,
+    })
+}
+
+impl ModularChannelDecoder for GradientTableLookup {
+    const NEEDS_TOP: bool = true;
+    const NEEDS_TOPTOP: bool = false;
+
+    fn init_row(&mut self, _: &mut [&mut ModularChannel], _: usize, _: usize) {}
+
+    #[inline(always)]
+    fn decode_one(
+        &mut self,
+        prediction_data: PredictionData,
+        _: (usize, usize),
+        _: usize,
+        reader: &mut SymbolReader,
+        br: &mut BitReader,
+        histograms: &Histograms,
+    ) -> i32 {
+        let prop9 = prediction_data
+            .left
+            .wrapping_add(prediction_data.top)
+            .wrapping_sub(prediction_data.topleft);
+
+        let index = (prop9 - self.value_base).clamp(0, self.lut.len() as i32 - 1) as usize;
+        let cluster = self.lut[index];
+
+        let pred = clamped_gradient(
+            prediction_data.left as i64,
+            prediction_data.top as i64,
+            prediction_data.topleft as i64,
+        );
+
+        let dec = reader.read_signed_clustered(histograms, br, cluster as usize);
+        dec.wrapping_add(pred as i32)
+    }
+}
+
 /// Fast path for single-leaf tree with Zero predictor (used for LZ77/progressive lossless).
 /// No prediction calculation needed, no neighbor access required.
 pub struct SingleZero {
@@ -406,6 +535,7 @@ impl ModularChannelDecoder for SingleNodeFull {
 pub enum TreeSpecialCase {
     NoWp(NoWpTree),
     WpOnly(WpOnlyLookup),
+    GradientTable(GradientTableLookup),
     SingleZero(SingleZero),
     SingleGradient(SingleGradient),
     SingleWest(SingleWest),
@@ -534,6 +664,12 @@ pub fn specialize_tree(
                 }));
             }
         }
+    }
+
+    // Check for gradient table LUT (property 9 only, gradient predictor)
+    // This targets libjxl effort 2 encoding
+    if !uses_wp && let Some(gt) = make_gradient_lut(&pruned_tree, &tree.histograms) {
+        return Ok(TreeSpecialCase::GradientTable(gt));
     }
 
     if !uses_non_wp
