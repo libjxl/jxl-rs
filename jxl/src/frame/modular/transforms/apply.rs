@@ -145,6 +145,9 @@ impl TransformStepChunk {
                 assert_eq!(out_size, buffers[*buf_in].info.size);
 
                 {
+                    // Ensure data is in i32 format (may have been decoded as i16)
+                    buffers[*buf_in].buffer_grid[out_grid].ensure_i32()?;
+                    buffers[*buf_pal].buffer_grid[0].ensure_i32()?;
                     let img_in =
                         AtomicRef::map(buffers[*buf_in].buffer_grid[out_grid].data.borrow(), |x| {
                             x.as_ref().unwrap()
@@ -213,6 +216,13 @@ impl TransformStepChunk {
                     let grid_y = out_grid / grid_shape.0;
                     let grid_y0 = grid_y.saturating_sub(1);
                     let grid_y1 = grid_y + 1;
+                    // Ensure data is in i32 format (may have been decoded as i16)
+                    // Must call ensure_i32 for ALL buffers BEFORE any borrows
+                    buffers[*buf_pal].buffer_grid[0].ensure_i32()?;
+                    for grid_x in 0..grid_shape.0 {
+                        let grid = grid_y * grid_shape.0 + grid_x;
+                        buffers[*buf_in].buffer_grid[grid].ensure_i32()?;
+                    }
                     let mut in_bufs = vec![];
                     for grid_x in 0..grid_shape.0 {
                         let grid = grid_y * grid_shape.0 + grid_x;
@@ -270,18 +280,33 @@ impl TransformStepChunk {
                 let buf_res = &buffers[buf_in[1]];
                 let in_grid = buf_avg.get_grid_idx(out_grid_kind, self.grid_pos);
                 let res_grid = buf_res.get_grid_idx(out_grid_kind, self.grid_pos);
+                let (gx, gy) = self.grid_pos;
+                let has_next = gx + 1 < buffers[*buf_out].grid_shape.0;
+                let gx_next = if has_next { gx + 1 } else { gx };
+                let next_avg_grid = buf_avg.get_grid_idx(out_grid_kind, (gx_next, gy));
+                let prev_out_grid = if gx == 0 {
+                    None
+                } else {
+                    Some(buffers[*buf_out].get_grid_idx(out_grid_kind, (gx - 1, gy)))
+                };
+                // Ensure data is in i32 format (may have been decoded as i16)
+                // Must call ensure_i32 for ALL buffers BEFORE any borrows
+                buffers[buf_in[0]].buffer_grid[in_grid].ensure_i32()?;
+                buffers[buf_in[0]].buffer_grid[next_avg_grid].ensure_i32()?;
+                buffers[buf_in[1]].buffer_grid[res_grid].ensure_i32()?;
+                if let Some(prev_grid) = prev_out_grid {
+                    buffers[*buf_out].buffer_grid[prev_grid].ensure_i32()?;
+                }
                 {
                     trace!(
                         "HSqueeze {:?} -> {:?}, grid {out_grid} grid pos {:?}",
                         buf_in, buf_out, self.grid_pos
                     );
-                    let (gx, gy) = self.grid_pos;
+                    let buf_avg = &buffers[buf_in[0]];
+                    let buf_res = &buffers[buf_in[1]];
                     let in_avg = AtomicRef::map(buf_avg.buffer_grid[in_grid].data.borrow(), |x| {
                         x.as_ref().unwrap()
                     });
-                    let has_next = gx + 1 < buffers[*buf_out].grid_shape.0;
-                    let gx_next = if has_next { gx + 1 } else { gx };
-                    let next_avg_grid = buf_avg.get_grid_idx(out_grid_kind, (gx_next, gy));
                     let in_next_avg =
                         AtomicRef::map(buf_avg.buffer_grid[next_avg_grid].data.borrow(), |x| {
                             x.as_ref().unwrap()
@@ -298,16 +323,12 @@ impl TransformStepChunk {
                     let in_res = AtomicRef::map(buf_res.buffer_grid[res_grid].data.borrow(), |x| {
                         x.as_ref().unwrap()
                     });
-                    let out_prev = if gx == 0 {
-                        None
-                    } else {
-                        let prev_out_grid =
-                            buffers[*buf_out].get_grid_idx(out_grid_kind, (gx - 1, gy));
-                        Some(AtomicRef::map(
-                            buffers[*buf_out].buffer_grid[prev_out_grid].data.borrow(),
+                    let out_prev = prev_out_grid.map(|prev_grid| {
+                        AtomicRef::map(
+                            buffers[*buf_out].buffer_grid[prev_grid].data.borrow(),
                             |x| x.as_ref().unwrap(),
-                        ))
-                    };
+                        )
+                    });
 
                     with_buffers(buffers, &[*buf_out], out_grid, false, |mut bufs| {
                         super::squeeze::do_hsqueeze_step(
@@ -337,18 +358,33 @@ impl TransformStepChunk {
                 let buf_res = &buffers[buf_in[1]];
                 let in_grid = buf_avg.get_grid_idx(out_grid_kind, self.grid_pos);
                 let res_grid = buf_res.get_grid_idx(out_grid_kind, self.grid_pos);
+                let (gx, gy) = self.grid_pos;
+                let has_next = gy + 1 < buffers[*buf_out].grid_shape.1;
+                let gy_next = if has_next { gy + 1 } else { gy };
+                let next_avg_grid = buf_avg.get_grid_idx(out_grid_kind, (gx, gy_next));
+                let prev_out_grid = if gy == 0 {
+                    None
+                } else {
+                    Some(buffers[*buf_out].get_grid_idx(out_grid_kind, (gx, gy - 1)))
+                };
+                // Ensure data is in i32 format (may have been decoded as i16)
+                // Must call ensure_i32 for ALL buffers BEFORE any borrows
+                buffers[buf_in[0]].buffer_grid[in_grid].ensure_i32()?;
+                buffers[buf_in[0]].buffer_grid[next_avg_grid].ensure_i32()?;
+                buffers[buf_in[1]].buffer_grid[res_grid].ensure_i32()?;
+                if let Some(prev_grid) = prev_out_grid {
+                    buffers[*buf_out].buffer_grid[prev_grid].ensure_i32()?;
+                }
                 {
                     trace!(
                         "VSqueeze {:?} -> {:?} grid: {out_grid:?} grid pos: {:?}",
                         buf_in, buf_out, self.grid_pos
                     );
-                    let (gx, gy) = self.grid_pos;
+                    let buf_avg = &buffers[buf_in[0]];
+                    let buf_res = &buffers[buf_in[1]];
                     let in_avg = AtomicRef::map(buf_avg.buffer_grid[in_grid].data.borrow(), |x| {
                         x.as_ref().unwrap()
                     });
-                    let has_next = gy + 1 < buffers[*buf_out].grid_shape.1;
-                    let gy_next = if has_next { gy + 1 } else { gy };
-                    let next_avg_grid = buf_avg.get_grid_idx(out_grid_kind, (gx, gy_next));
                     let in_next_avg =
                         AtomicRef::map(buf_avg.buffer_grid[next_avg_grid].data.borrow(), |x| {
                             x.as_ref().unwrap()
@@ -365,16 +401,12 @@ impl TransformStepChunk {
                     let in_res = AtomicRef::map(buf_res.buffer_grid[res_grid].data.borrow(), |x| {
                         x.as_ref().unwrap()
                     });
-                    let out_prev = if gy == 0 {
-                        None
-                    } else {
-                        let prev_out_grid =
-                            buffers[*buf_out].get_grid_idx(out_grid_kind, (gx, gy - 1));
-                        Some(AtomicRef::map(
-                            buffers[*buf_out].buffer_grid[prev_out_grid].data.borrow(),
+                    let out_prev = prev_out_grid.map(|prev_grid| {
+                        AtomicRef::map(
+                            buffers[*buf_out].buffer_grid[prev_grid].data.borrow(),
                             |x| x.as_ref().unwrap(),
-                        ))
-                    };
+                        )
+                    });
                     let avg_grid_rect =
                         buf_avg.get_grid_rect(frame_header, out_grid_kind, (gx, gy));
                     let res_grid_rect =

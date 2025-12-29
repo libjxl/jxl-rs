@@ -168,6 +168,20 @@ impl<T: ModularSample> PredictionDataGeneric<T> {
             toprightright: self.toprightright.to_i64(),
         }
     }
+
+    /// Convert to i32 values (for tree prediction which uses i32)
+    #[inline]
+    pub fn to_i32(self) -> PredictionData {
+        PredictionData {
+            left: self.left.to_i32(),
+            top: self.top.to_i32(),
+            toptop: self.toptop.to_i32(),
+            topleft: self.topleft.to_i32(),
+            topright: self.topright.to_i32(),
+            leftleft: self.leftleft.to_i32(),
+            toprightright: self.toprightright.to_i32(),
+        }
+    }
 }
 
 /// PredictionData with i64 values for prediction calculations

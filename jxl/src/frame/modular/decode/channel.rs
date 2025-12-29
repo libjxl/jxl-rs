@@ -9,12 +9,12 @@ use crate::{
     entropy_coding::decode::{Histograms, SymbolReader},
     error::Result,
     frame::modular::{
-        IMAGE_OFFSET, IMAGE_PADDING, ModularChannel, Tree,
+        IMAGE_OFFSET, IMAGE_PADDING, ModularChannel, ModularChannelI16, Tree,
         decode::{
             common::make_pixel,
             specialized_trees::{TreeSpecialCase, specialize_tree},
         },
-        predict::{PredictionData, WeightedPredictorState},
+        predict::{PredictionData, PredictionDataGeneric, WeightedPredictorState},
         tree::{NUM_NONREF_PROPERTIES, PROPERTIES_PER_PREVCHAN, predict},
     },
     headers::modular::GroupHeader,
@@ -205,6 +205,115 @@ pub(super) fn decode_modular_channel(
         }
         TreeSpecialCase::General(t) => {
             decode_modular_channel_impl(buffers, chan, t, reader, br, &tree.histograms)
+        }
+    }
+}
+
+// i16 version of make_pixel
+fn make_pixel_i16(dec: i32, mul: u32, guess: i64) -> i16 {
+    make_pixel::<i16>(dec, mul, guess)
+}
+
+/// Decode a channel directly to i16 buffers.
+/// This is used when there are no transforms and bit depth <= 16.
+/// Uses a simpler code path since transforms are not supported.
+#[allow(clippy::too_many_arguments)]
+#[instrument(level = "debug", skip(buffers, reader, tree))]
+pub(super) fn decode_modular_channel_i16(
+    buffers: &mut [&mut ModularChannelI16],
+    chan: usize,
+    stream_id: usize,
+    header: &GroupHeader,
+    tree: &Tree,
+    reader: &mut SymbolReader,
+    br: &mut BitReader,
+) -> Result<()> {
+    debug!("reading i16 channel");
+    let size = buffers[chan].data.size();
+
+    // For i16, we use the small channel decoder logic for all sizes
+    // since we don't need specialized tree handling (no transforms)
+    let mut wp_state = WeightedPredictorState::new(&header.wp_header, size.0);
+    let mut num_ref_props = tree
+        .max_property_count()
+        .saturating_sub(NUM_NONREF_PROPERTIES);
+    num_ref_props = num_ref_props.div_ceil(PROPERTIES_PER_PREVCHAN) * PROPERTIES_PER_PREVCHAN;
+    let mut references = Image::<i32>::new((num_ref_props, size.0))?;
+    let num_properties = NUM_NONREF_PROPERTIES + num_ref_props;
+
+    const { assert!(IMAGE_OFFSET.1 == 2) };
+
+    for y in 0..size.1 {
+        precompute_references_i16(buffers, chan, y, &mut references);
+        let mut property_buffer: Vec<i32> = vec![0; num_properties];
+        property_buffer[0] = chan as i32;
+        property_buffer[1] = stream_id as i32;
+        let [row, row_top, row_toptop] =
+            buffers[chan].data.distinct_full_rows_mut([y + 2, y + 1, y]);
+        let row = &mut row[IMAGE_OFFSET.0..IMAGE_OFFSET.0 + size.0];
+        let row_top = &mut row_top[IMAGE_OFFSET.0..IMAGE_OFFSET.0 + size.0];
+        let row_toptop = &mut row_toptop[IMAGE_OFFSET.0..IMAGE_OFFSET.0 + size.0];
+        for x in 0..size.0 {
+            let prediction_data = PredictionDataGeneric::get_rows(row, row_top, row_toptop, x, y);
+            let prediction_result = predict(
+                &tree.nodes,
+                prediction_data.to_i32(),
+                size.0,
+                Some(&mut wp_state),
+                x,
+                y,
+                &references,
+                &mut property_buffer,
+            );
+            let dec = reader.read_signed(&tree.histograms, br, prediction_result.context as usize);
+            let val = make_pixel_i16(dec, prediction_result.multiplier, prediction_result.guess);
+            row[x] = val;
+            wp_state.update_errors(val as i32, (x, y), size.0);
+        }
+    }
+
+    Ok(())
+}
+
+/// Precompute reference properties for i16 buffers.
+/// Converts i16 values to i32 for the reference property computation.
+fn precompute_references_i16(
+    buffers: &[&mut ModularChannelI16],
+    chan: usize,
+    y: usize,
+    references: &mut Image<i32>,
+) {
+    let (num_ref_props, xsize) = references.size();
+    if num_ref_props == 0 {
+        return;
+    }
+    let row = references.row_mut(0);
+    for x in 0..xsize {
+        for (ref_idx, buffer) in buffers.iter().enumerate().take(chan) {
+            let base = ref_idx * PROPERTIES_PER_PREVCHAN;
+            if base >= num_ref_props {
+                break;
+            }
+            let (rw, rh) = buffer.data.size();
+            let rx = x.min(rw.saturating_sub(1));
+            let ry = y.min(rh.saturating_sub(1));
+            let buf_row = buffer.data.row(ry + IMAGE_OFFSET.1);
+            let val = buf_row[rx + IMAGE_OFFSET.0] as i32;
+            row[base] = val;
+            if base + 1 < num_ref_props {
+                row[base + 1] = val.abs();
+            }
+            if base + 2 < num_ref_props {
+                // Previous row value
+                let prev_y = if ry > 0 { ry - 1 } else { ry };
+                let prev_row = buffer.data.row(prev_y + IMAGE_OFFSET.1);
+                row[base + 2] = prev_row[rx + IMAGE_OFFSET.0] as i32;
+            }
+            if base + 3 < num_ref_props {
+                // Left value
+                let prev_x = if rx > 0 { rx - 1 } else { rx };
+                row[base + 3] = buf_row[prev_x + IMAGE_OFFSET.0] as i32;
+            }
         }
     }
 }

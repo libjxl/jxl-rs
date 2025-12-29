@@ -116,6 +116,7 @@ pub fn make_grids(
         g.buffer_grid = get_grid_indices(g.grid_shape)
             .map(|(x, y)| ModularBuffer {
                 data: AtomicRefCell::new(None),
+                data_i16: AtomicRefCell::new(None),
                 remaining_uses: if is_output { 1 } else { 0 },
                 used_by_transforms: vec![],
                 size: g
