@@ -25,6 +25,7 @@ use jxl_transforms::transform_map::*;
 mod borrowed_buffers;
 pub(crate) mod decode;
 mod predict;
+pub(crate) mod sample;
 mod transforms;
 mod tree;
 
@@ -32,6 +33,7 @@ use borrowed_buffers::with_buffers;
 pub use decode::ModularStreamId;
 use decode::decode_modular_subbitstream;
 pub use predict::Predictor;
+pub use sample::ModularSample;
 use transforms::{TransformStepChunk, make_grids};
 pub use tree::Tree;
 
