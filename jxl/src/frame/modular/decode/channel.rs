@@ -195,6 +195,9 @@ pub(super) fn decode_modular_channel(
         TreeSpecialCase::WpOnly(t) => {
             decode_modular_channel_impl(buffers, chan, t, reader, br, &tree.histograms)
         }
+        TreeSpecialCase::SingleProperty(t) => {
+            decode_modular_channel_impl(buffers, chan, t, reader, br, &tree.histograms)
+        }
         TreeSpecialCase::SingleGradientOnly(t) => {
             decode_modular_channel_impl(buffers, chan, t, reader, br, &tree.histograms)
         }
