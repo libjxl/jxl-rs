@@ -237,8 +237,8 @@ impl Frame {
             }
         }
         for i in 3..num_channels {
-            pipeline =
-                pipeline.add_inout_stage(ConvertModularToF32Stage::new(i, metadata.bit_depth))?;
+            let ec_bit_depth = metadata.extra_channel_info[i - 3].bit_depth();
+            pipeline = pipeline.add_inout_stage(ConvertModularToF32Stage::new(i, ec_bit_depth))?;
         }
 
         for c in 0..3 {
