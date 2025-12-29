@@ -369,10 +369,13 @@ impl PatchesDictionary {
             br,
             PatchContext::NumRefPatch as usize,
         ) as usize;
-        let num_pixels = xsize * ysize;
-        let max_ref_patches = 1024 + num_pixels / 4;
-        let max_patches = max_ref_patches * 4;
-        let max_blending_infos = max_patches * 4;
+        // Use checked arithmetic to prevent overflow attacks
+        let num_pixels = xsize
+            .checked_mul(ysize)
+            .ok_or(Error::ImageSizeTooLarge(xsize, ysize))?;
+        let max_ref_patches = 1024usize.saturating_add(num_pixels / 4);
+        let max_patches = max_ref_patches.saturating_mul(4);
+        let max_blending_infos = max_patches.saturating_mul(4);
         if num_ref_patch > max_ref_patches {
             return Err(Error::PatchesTooMany(
                 "reference patches".to_string(),
@@ -474,7 +477,8 @@ impl PatchesDictionary {
                 next_size *= 2;
                 next_size = std::cmp::min(next_size, max_patches);
             }
-            if next_size * blendings_stride > max_blending_infos {
+            // Use saturating_mul to prevent overflow attack bypassing the limit check
+            if next_size.saturating_mul(blendings_stride) > max_blending_infos {
                 return Err(Error::PatchesTooMany(
                     "blending_info".to_string(),
                     total_patches,
@@ -483,7 +487,8 @@ impl PatchesDictionary {
             }
             positions.try_reserve(next_size.saturating_sub(positions.len()))?;
             blendings.try_reserve(
-                (next_size * PatchBlendMode::NUM_BLEND_MODES as usize)
+                next_size
+                    .saturating_mul(PatchBlendMode::NUM_BLEND_MODES as usize)
                     .saturating_sub(blendings.len()),
             )?;
 

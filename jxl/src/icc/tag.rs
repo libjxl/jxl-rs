@@ -50,8 +50,11 @@ pub(super) fn read_tag_list(
             _ => return Err(Error::InvalidIccStream),
         };
 
+        // Use checked arithmetic to prevent overflow attacks
         let tagstart = if command & 64 == 0 {
-            prev_tagstart + prev_tagsize
+            prev_tagstart
+                .checked_add(prev_tagsize)
+                .ok_or(Error::InvalidIccStream)?
         } else {
             read_varint_from_reader(commands_stream)? as u32
         };
@@ -68,6 +71,14 @@ pub(super) fn read_tag_list(
         prev_tagstart = tagstart;
         prev_tagsize = tagsize;
 
+        // Pre-compute offsets with overflow checking for tagcode == 3
+        let tagstart_plus_size = tagstart
+            .checked_add(tagsize)
+            .ok_or(Error::InvalidIccStream)?;
+        let tagstart_plus_size_x2 = tagstart
+            .checked_add(tagsize.checked_mul(2).ok_or(Error::InvalidIccStream)?)
+            .ok_or(Error::InvalidIccStream)?;
+
         let write_result = (|| -> std::io::Result<()> {
             decoded_profile.write_all(&tag)?;
             decoded_profile.write_u32::<BigEndian>(tagstart)?;
@@ -81,10 +92,10 @@ pub(super) fn read_tag_list(
                 decoded_profile.write_u32::<BigEndian>(tagsize)?;
             } else if tagcode == 3 {
                 decoded_profile.write_all(b"gXYZ")?;
-                decoded_profile.write_u32::<BigEndian>(tagstart + tagsize)?;
+                decoded_profile.write_u32::<BigEndian>(tagstart_plus_size)?;
                 decoded_profile.write_u32::<BigEndian>(tagsize)?;
                 decoded_profile.write_all(b"bXYZ")?;
-                decoded_profile.write_u32::<BigEndian>(tagstart + tagsize * 2)?;
+                decoded_profile.write_u32::<BigEndian>(tagstart_plus_size_x2)?;
                 decoded_profile.write_u32::<BigEndian>(tagsize)?;
             }
             Ok(())
