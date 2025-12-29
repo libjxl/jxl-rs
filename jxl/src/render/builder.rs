@@ -27,14 +27,20 @@ impl<Pipeline: RenderPipeline> RenderPipelineBuilder<Pipeline> {
         mut log_group_size: usize,
         num_passes: usize,
         chunk_size: usize,
-    ) -> Self {
+    ) -> Result<Self> {
         info!("creating render pipeline");
         assert!(chunk_size <= u16::MAX as usize);
         assert_ne!(chunk_size, 0);
         // The number of pixels that a group encompasses in the final, upsampled image along one
         // dimension is effectively multiplied by the upsampling factor.
         log_group_size += downsampling_shift;
-        Self {
+        // Use checked_mul to prevent overflow with malicious image dimensions
+        let group_count = size
+            .0
+            .shrc(log_group_size)
+            .checked_mul(size.1.shrc(log_group_size))
+            .ok_or(Error::ImageSizeTooLarge(size.0, size.1))?;
+        Ok(Self {
             shared: RenderPipelineShared {
                 channel_info: vec![vec![
                     ChannelInfo {
@@ -47,16 +53,12 @@ impl<Pipeline: RenderPipeline> RenderPipelineBuilder<Pipeline> {
                 log_group_size,
                 group_count: (size.0.shrc(log_group_size), size.1.shrc(log_group_size)),
                 stages: vec![],
-                group_chan_ready_passes: vec![
-                    vec![0; num_channels];
-                    size.0.shrc(log_group_size)
-                        * size.1.shrc(log_group_size)
-                ],
+                group_chan_ready_passes: vec![vec![0; num_channels]; group_count],
                 num_passes,
                 chunk_size,
                 extend_stage_index: None,
             },
-        }
+        })
     }
 
     pub(super) fn add_stage_internal(mut self, stage: Stage<Pipeline::Buffer>) -> Result<Self> {
@@ -119,7 +121,7 @@ impl<Pipeline: RenderPipeline> RenderPipelineBuilder<Pipeline> {
         downsampling_shift: usize,
         log_group_size: usize,
         num_passes: usize,
-    ) -> Self {
+    ) -> Result<Self> {
         Self::new_with_chunk_size(
             num_channels,
             size,
