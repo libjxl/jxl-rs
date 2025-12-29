@@ -28,8 +28,8 @@ pub trait ModularSample:
     /// Maximum representable value
     const MAX: Self;
 
-    /// Convert from i64 (saturating)
-    fn from_i64_saturating(v: i64) -> Self;
+    /// Convert from i64 (wrapping for i32, saturating for i16)
+    fn from_i64(v: i64) -> Self;
 
     /// Convert to i64
     fn to_i64(self) -> i64;
@@ -56,8 +56,9 @@ impl ModularSample for i32 {
     const MAX: Self = i32::MAX;
 
     #[inline(always)]
-    fn from_i64_saturating(v: i64) -> Self {
-        v.clamp(i32::MIN as i64, i32::MAX as i64) as i32
+    fn from_i64(v: i64) -> Self {
+        // Direct cast (wrapping) - matches original behavior
+        v as i32
     }
 
     #[inline(always)]
@@ -97,7 +98,8 @@ impl ModularSample for i16 {
     const MAX: Self = i16::MAX;
 
     #[inline(always)]
-    fn from_i64_saturating(v: i64) -> Self {
+    fn from_i64(v: i64) -> Self {
+        // Saturating for i16 to prevent overflow for values outside range
         v.clamp(i16::MIN as i64, i16::MAX as i64) as i16
     }
 
@@ -138,9 +140,10 @@ mod tests {
 
     #[test]
     fn test_i32_sample() {
-        assert_eq!(i32::from_i64_saturating(100), 100i32);
-        assert_eq!(i32::from_i64_saturating(i64::MAX), i32::MAX);
-        assert_eq!(i32::from_i64_saturating(i64::MIN), i32::MIN);
+        assert_eq!(i32::from_i64(100), 100i32);
+        // i32 uses direct cast (wrapping), so large values wrap
+        assert_eq!(i32::from_i64(i32::MAX as i64), i32::MAX);
+        assert_eq!(i32::from_i64(i32::MIN as i64), i32::MIN);
         assert_eq!(5i32.wrapping_add(3), 8);
         assert_eq!(5i32.wrapping_sub(3), 2);
         assert_eq!((-5i32).wrapping_abs(), 5);
@@ -148,9 +151,10 @@ mod tests {
 
     #[test]
     fn test_i16_sample() {
-        assert_eq!(i16::from_i64_saturating(100), 100i16);
-        assert_eq!(i16::from_i64_saturating(i64::MAX), i16::MAX);
-        assert_eq!(i16::from_i64_saturating(i64::MIN), i16::MIN);
+        assert_eq!(i16::from_i64(100), 100i16);
+        // i16 uses saturating conversion
+        assert_eq!(i16::from_i64(i64::MAX), i16::MAX);
+        assert_eq!(i16::from_i64(i64::MIN), i16::MIN);
         assert_eq!(i16::from_i32(40000), i16::MAX);
         assert_eq!(i16::from_i32(-40000), i16::MIN);
         assert_eq!(5i16.wrapping_add(3), 8);

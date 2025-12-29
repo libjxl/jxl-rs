@@ -5,7 +5,7 @@
 
 use crate::{
     frame::{
-        modular::{ModularChannel, predict::clamped_gradient},
+        modular::{ModularChannel, predict::clamped_gradient, sample::ModularSample},
         quantizer::NUM_QUANT_TABLES,
     },
     headers::frame_header::FrameHeader,
@@ -82,6 +82,9 @@ pub(super) fn precompute_references(
     }
 }
 
-pub(super) fn make_pixel(dec: i32, mul: u32, guess: i64) -> i32 {
-    (guess + (mul as i64) * (dec as i64)) as i32
+/// Combine decoded residual with prediction to get final pixel value.
+/// Generic over sample type T for i16/i32 support.
+#[inline(always)]
+pub(super) fn make_pixel<T: ModularSample>(dec: i32, mul: u32, guess: i64) -> T {
+    T::from_i64(guess + (mul as i64) * (dec as i64))
 }

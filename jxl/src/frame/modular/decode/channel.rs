@@ -22,6 +22,11 @@ use crate::{
     util::tracing_wrappers::*,
 };
 
+// Re-export make_pixel with i32 for existing code
+fn make_pixel_i32(dec: i32, mul: u32, guess: i64) -> i32 {
+    make_pixel::<i32>(dec, mul, guess)
+}
+
 const SMALL_CHANNEL_THRESHOLD: usize = 64;
 
 // General case decoder, for small buffers for which it's not worth trying to detect tree special cases.
@@ -70,7 +75,7 @@ fn decode_modular_channel_small(
                 &mut property_buffer,
             );
             let dec = reader.read_signed(&tree.histograms, br, prediction_result.context as usize);
-            let val = make_pixel(dec, prediction_result.multiplier, prediction_result.guess);
+            let val = make_pixel_i32(dec, prediction_result.multiplier, prediction_result.guess);
             row[x] = val;
             wp_state.update_errors(val, (x, y), size.0);
         }
