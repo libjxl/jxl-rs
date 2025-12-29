@@ -119,19 +119,23 @@ impl ModularGridKind {
 }
 
 // All the information on a specific buffer needed by Modular decoding.
+// Generic over sample type T (i16 or i32) for memory bandwidth optimization.
 #[derive(Debug)]
-pub(crate) struct ModularChannel {
+pub(crate) struct ModularChannelGeneric<T: sample::ModularSample> {
     // Actual pixel buffer.
-    pub data: Image<i32>,
+    pub data: Image<T>,
     // Holds additional information such as the weighted predictor's error channel's last row for
     // the transform chunk that produced this buffer.
-    auxiliary_data: Option<Image<i32>>,
+    auxiliary_data: Option<Image<i32>>, // Always i32 for WP error tracking
     // Shift of the channel (None if this is a meta-channel).
     shift: Option<(usize, usize)>,
     bit_depth: BitDepth,
 }
 
-impl ModularChannel {
+// Type alias for backward compatibility - most code uses i32
+pub(crate) type ModularChannel = ModularChannelGeneric<i32>;
+
+impl<T: sample::ModularSample> ModularChannelGeneric<T> {
     pub fn new(size: (usize, usize), bit_depth: BitDepth) -> Result<Self> {
         Self::new_with_shift(size, Some((0, 0)), bit_depth)
     }
@@ -141,7 +145,7 @@ impl ModularChannel {
         shift: Option<(usize, usize)>,
         bit_depth: BitDepth,
     ) -> Result<Self> {
-        Ok(ModularChannel {
+        Ok(ModularChannelGeneric {
             data: Image::new_with_padding(size, IMAGE_OFFSET, IMAGE_PADDING)?,
             auxiliary_data: None,
             shift,
@@ -150,7 +154,7 @@ impl ModularChannel {
     }
 
     fn try_clone(&self) -> Result<Self> {
-        Ok(ModularChannel {
+        Ok(ModularChannelGeneric {
             data: self.data.try_clone()?,
             auxiliary_data: self
                 .auxiliary_data

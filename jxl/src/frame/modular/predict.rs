@@ -5,6 +5,7 @@
 
 use crate::{
     error::{Error, Result},
+    frame::modular::sample::ModularSample,
     headers::modular::WeightedHeader,
     image::Image,
     util::floor_log2_nonzero,
@@ -51,28 +52,46 @@ impl TryFrom<u32> for Predictor {
     }
 }
 
-#[derive(Debug, Clone, Copy, Default)]
-pub struct PredictionData {
-    pub left: i32,
-    pub top: i32,
-    pub toptop: i32,
-    pub topleft: i32,
-    pub topright: i32,
-    pub leftleft: i32,
-    pub toprightright: i32,
+/// Neighbor pixel data for prediction, generic over sample type.
+#[derive(Debug, Clone, Copy)]
+pub struct PredictionDataGeneric<T: ModularSample> {
+    pub left: T,
+    pub top: T,
+    pub toptop: T,
+    pub topleft: T,
+    pub topright: T,
+    pub leftleft: T,
+    pub toprightright: T,
 }
 
-impl PredictionData {
+/// Type alias for backward compatibility - most code uses i32
+pub type PredictionData = PredictionDataGeneric<i32>;
+
+impl<T: ModularSample> Default for PredictionDataGeneric<T> {
+    fn default() -> Self {
+        Self {
+            left: T::ZERO,
+            top: T::ZERO,
+            toptop: T::ZERO,
+            topleft: T::ZERO,
+            topright: T::ZERO,
+            leftleft: T::ZERO,
+            toprightright: T::ZERO,
+        }
+    }
+}
+
+impl<T: ModularSample> PredictionDataGeneric<T> {
     #[inline]
     pub fn update_for_interior_row(
         self,
-        row_top: &[i32],
-        row_toptop: &[i32],
+        row_top: &[T],
+        row_toptop: &[T],
         x: usize,
-        cur: i32,
+        cur: T,
         needs_top: bool,
         needs_toptop: bool,
-    ) -> PredictionData {
+    ) -> PredictionDataGeneric<T> {
         debug_assert!(x > 1);
         debug_assert!(x + 2 < row_top.len());
         let left = cur;
@@ -80,8 +99,8 @@ impl PredictionData {
         let topleft = self.top;
         let topright = self.toprightright;
         let leftleft = self.left;
-        let toptop = if needs_toptop { row_toptop[x] } else { 0 };
-        let toprightright = if needs_top { row_top[x + 2] } else { 0 };
+        let toptop = if needs_toptop { row_toptop[x] } else { T::ZERO };
+        let toprightright = if needs_top { row_top[x + 2] } else { T::ZERO };
         Self {
             left,
             top,
@@ -93,13 +112,13 @@ impl PredictionData {
         }
     }
 
-    pub fn get_rows(row: &[i32], row_top: &[i32], row_toptop: &[i32], x: usize, y: usize) -> Self {
+    pub fn get_rows(row: &[T], row_top: &[T], row_toptop: &[T], x: usize, y: usize) -> Self {
         let left = if x > 0 {
             row[x - 1]
         } else if y > 0 {
             row_top[0]
         } else {
-            0
+            T::ZERO
         };
         let top = if y > 0 { row_top[x] } else { left };
         let topleft = if x > 0 && y > 0 { row_top[x - 1] } else { left };
@@ -126,7 +145,7 @@ impl PredictionData {
         }
     }
 
-    pub fn get(rect: &Image<i32>, x: usize, y: usize) -> Self {
+    pub fn get(rect: &Image<T>, x: usize, y: usize) -> Self {
         Self::get_rows(
             rect.row(y),
             rect.row(y.saturating_sub(1)),
@@ -136,6 +155,35 @@ impl PredictionData {
         )
     }
 
+    /// Convert to i64 values for prediction calculation
+    #[inline]
+    pub fn to_i64(self) -> PredictionDataI64 {
+        PredictionDataI64 {
+            left: self.left.to_i64(),
+            top: self.top.to_i64(),
+            toptop: self.toptop.to_i64(),
+            topleft: self.topleft.to_i64(),
+            topright: self.topright.to_i64(),
+            leftleft: self.leftleft.to_i64(),
+            toprightright: self.toprightright.to_i64(),
+        }
+    }
+}
+
+/// PredictionData with i64 values for prediction calculations
+#[derive(Debug, Clone, Copy, Default)]
+pub struct PredictionDataI64 {
+    pub left: i64,
+    pub top: i64,
+    pub toptop: i64,
+    pub topleft: i64,
+    pub topright: i64,
+    pub leftleft: i64,
+    pub toprightright: i64,
+}
+
+// i32-specific methods for neighbor handling (used in transforms)
+impl PredictionData {
     #[allow(clippy::too_many_arguments)]
     pub fn get_with_neighbors(
         rect: &Image<i32>,
