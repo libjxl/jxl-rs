@@ -12,9 +12,7 @@ use crate::{
 
 use super::row_buffers::RowBuffer;
 
-mod flip_horizontal;
 mod identity;
-mod transpose;
 
 // Placeholder slow implementation.
 impl SaveStage {
@@ -86,59 +84,7 @@ impl SaveStage {
                 save_size.1 - 1 - relative_y,
                 self.data_format,
             ),
-            Orientation::FlipHorizontal => flip_horizontal::store(
-                data,
-                frame_y,
-                save_start.0..save_end.0,
-                buf,
-                relative_y,
-                self.data_format,
-            ),
-            Orientation::Rotate180 => flip_horizontal::store(
-                data,
-                frame_y,
-                save_start.0..save_end.0,
-                buf,
-                save_size.1 - 1 - relative_y,
-                self.data_format,
-            ),
-            // Transposing orientations: input row becomes output column
-            Orientation::Transpose => transpose::store(
-                data,
-                frame_y,
-                save_start.0..save_end.0,
-                buf,
-                relative_y, // output_x = relative_y
-                true,       // y_forward: output_y = input_x
-                self.data_format,
-            ),
-            Orientation::Rotate90Cw => transpose::store(
-                data,
-                frame_y,
-                save_start.0..save_end.0,
-                buf,
-                save_size.1 - 1 - relative_y, // output_x = save_size.1 - 1 - relative_y
-                true,                         // y_forward: output_y = input_x
-                self.data_format,
-            ),
-            Orientation::Rotate90Ccw => transpose::store(
-                data,
-                frame_y,
-                save_start.0..save_end.0,
-                buf,
-                relative_y, // output_x = relative_y
-                false,      // y_backward: output_y = save_size.0 - 1 - input_x
-                self.data_format,
-            ),
-            Orientation::AntiTranspose => transpose::store(
-                data,
-                frame_y,
-                save_start.0..save_end.0,
-                buf,
-                save_size.1 - 1 - relative_y, // output_x = save_size.1 - 1 - relative_y
-                false,                        // y_backward: output_y = save_size.0 - 1 - input_x
-                self.data_format,
-            ),
+            _ => 0,
         };
 
         macro_rules! write_pixel {
