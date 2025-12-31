@@ -469,7 +469,6 @@ unsafe impl F32SimdVec for F32VecAvx {
 
     #[inline(always)]
     fn table_lookup_bf16_8(d: AvxDescriptor, table: Bf16Table8Avx, indices: I32VecAvx) -> Self {
-        // For AVX2, use vpermps which is both fast and exact
         // SAFETY: avx2 is available from the safety invariant on the descriptor
         F32VecAvx(unsafe { _mm256_permutevar8x32_ps(table.0, indices.0) }, d)
     }

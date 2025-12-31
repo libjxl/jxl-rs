@@ -523,14 +523,11 @@ unsafe impl F32SimdVec for F32VecAvx512 {
     fn prepare_table_bf16_8(_d: Avx512Descriptor, table: &[f32; 8]) -> Bf16Table8Avx512 {
         #[target_feature(enable = "avx512f")]
         #[inline]
-        unsafe fn prepare_impl(table: &[f32; 8]) -> __m512 {
-            // SAFETY: avx512f intrinsics are available from target_feature
-            unsafe {
-                // Load the 8-entry table into a 256-bit register
-                let table_256 = _mm256_loadu_ps(table.as_ptr());
-                // Duplicate to 512-bit for vpermutexvar_ps
-                _mm512_insertf32x8::<1>(_mm512_castps256_ps512(table_256), table_256)
-            }
+        fn prepare_impl(table: &[f32; 8]) -> __m512 {
+            // SAFETY: avx512f is available from target_feature
+            let table_256 = unsafe { _mm256_loadu_ps(table.as_ptr()) };
+            // Zero-extend to 512-bit; vpermutexvar with indices 0-7 only reads first 256 bits
+            _mm512_castps256_ps512(table_256)
         }
         // SAFETY: avx512f is available from the safety invariant on the descriptor
         Bf16Table8Avx512(unsafe { prepare_impl(table) })
@@ -542,7 +539,6 @@ unsafe impl F32SimdVec for F32VecAvx512 {
         table: Bf16Table8Avx512,
         indices: I32VecAvx512,
     ) -> Self {
-        // For AVX512, use vpermutexvar_ps which is both fast and exact
         // SAFETY: avx512f is available from the safety invariant on the descriptor
         F32VecAvx512(unsafe { _mm512_permutexvar_ps(indices.0, table.0) }, d)
     }

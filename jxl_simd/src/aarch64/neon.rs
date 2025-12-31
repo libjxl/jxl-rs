@@ -423,7 +423,7 @@ unsafe impl F32SimdVec for F32VecNeon {
         fn prepare_impl(table: &[f32; 8]) -> uint8x16_t {
             // Convert f32 table to BF16 packed in 128 bits (16 bytes for 8 entries)
             // BF16 is the high 16 bits of f32
-            // SAFETY: table has exactly 8 elements and neon is available from target_feature
+            // SAFETY: neon is available from target_feature
             let (table_lo, table_hi) =
                 unsafe { (vld1q_f32(table.as_ptr()), vld1q_f32(table.as_ptr().add(4))) };
 
@@ -431,13 +431,9 @@ unsafe impl F32SimdVec for F32VecNeon {
             let table_lo_u32 = vreinterpretq_u32_f32(table_lo);
             let table_hi_u32 = vreinterpretq_u32_f32(table_hi);
 
-            // Shift right by 16 to get BF16 in low 16 bits
-            let bf16_lo_u32 = vshrq_n_u32::<16>(table_lo_u32);
-            let bf16_hi_u32 = vshrq_n_u32::<16>(table_hi_u32);
-
-            // Narrow to 16-bit (take low 16 bits of each 32-bit lane)
-            let bf16_lo_u16 = vmovn_u32(bf16_lo_u32);
-            let bf16_hi_u16 = vmovn_u32(bf16_hi_u32);
+            // Shift right by 16 AND narrow to 16-bit in one instruction
+            let bf16_lo_u16 = vshrn_n_u32::<16>(table_lo_u32);
+            let bf16_hi_u16 = vshrn_n_u32::<16>(table_hi_u32);
 
             // Combine into 8 x u16 = 16 bytes
             let bf16_table_u16 = vcombine_u16(bf16_lo_u16, bf16_hi_u16);
