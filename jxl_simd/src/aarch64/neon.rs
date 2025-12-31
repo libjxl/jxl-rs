@@ -28,6 +28,12 @@ impl NeonDescriptor {
     }
 }
 
+/// Prepared 8-entry BF16 lookup table for NEON.
+/// Contains 8 BF16 values packed into 16 bytes (uint8x16_t).
+#[derive(Clone, Copy, Debug)]
+#[repr(transparent)]
+pub struct Bf16Table8Neon(uint8x16_t);
+
 impl SimdDescriptor for NeonDescriptor {
     type F32Vec = F32VecNeon;
 
@@ -36,6 +42,7 @@ impl SimdDescriptor for NeonDescriptor {
     type U32Vec = U32VecNeon;
 
     type Mask = MaskNeon;
+    type Bf16Table8 = Bf16Table8Neon;
 
     type Descriptor256 = Self;
     type Descriptor128 = Self;
@@ -407,6 +414,63 @@ unsafe impl F32SimdVec for F32VecNeon {
                 vst1_u16(dest.as_mut_ptr(), u16s);
             }
         }
+    }
+
+    #[inline(always)]
+    fn prepare_table_bf16_8(_d: NeonDescriptor, table: &[f32; 8]) -> Bf16Table8Neon {
+        #[target_feature(enable = "neon")]
+        #[inline]
+        fn prepare_impl(table: &[f32; 8]) -> uint8x16_t {
+            // Convert f32 table to BF16 packed in 128 bits (16 bytes for 8 entries)
+            // BF16 is the high 16 bits of f32
+            // SAFETY: neon is available from target_feature
+            let (table_lo, table_hi) =
+                unsafe { (vld1q_f32(table.as_ptr()), vld1q_f32(table.as_ptr().add(4))) };
+
+            // Reinterpret as u32 to extract high 16 bits
+            let table_lo_u32 = vreinterpretq_u32_f32(table_lo);
+            let table_hi_u32 = vreinterpretq_u32_f32(table_hi);
+
+            // Shift right by 16 AND narrow to 16-bit in one instruction
+            let bf16_lo_u16 = vshrn_n_u32::<16>(table_lo_u32);
+            let bf16_hi_u16 = vshrn_n_u32::<16>(table_hi_u32);
+
+            // Combine into 8 x u16 = 16 bytes
+            let bf16_table_u16 = vcombine_u16(bf16_lo_u16, bf16_hi_u16);
+            vreinterpretq_u8_u16(bf16_table_u16)
+        }
+        // SAFETY: neon is available from the safety invariant on the descriptor
+        Bf16Table8Neon(unsafe { prepare_impl(table) })
+    }
+
+    #[inline(always)]
+    fn table_lookup_bf16_8(d: NeonDescriptor, table: Bf16Table8Neon, indices: I32VecNeon) -> Self {
+        #[target_feature(enable = "neon")]
+        #[inline]
+        fn lookup_impl(bf16_table: uint8x16_t, indices: int32x4_t) -> float32x4_t {
+            // Build shuffle mask efficiently using arithmetic on 32-bit indices.
+            // For each index i (0-7), we need to select bytes [2*i, 2*i+1] from bf16_table
+            // and place them in the high 16 bits of each 32-bit f32 lane (bytes 2,3),
+            // with bytes 0,1 set to zero (using 0x80 which gives 0 in vqtbl1q).
+            //
+            // Output byte pattern per lane (little-endian): [0x80, 0x80, 2*i, 2*i+1]
+            // As a 32-bit value: 0x80 | (0x80 << 8) | (2*i << 16) | ((2*i+1) << 24)
+            //                  = 0x8080 | (i << 17) | (i << 25) | (1 << 24)
+            //                  = (i << 17) | (i << 25) | 0x01008080
+            let indices_u32 = vreinterpretq_u32_s32(indices);
+            let shl17 = vshlq_n_u32::<17>(indices_u32);
+            let shl25 = vshlq_n_u32::<25>(indices_u32);
+            let base = vdupq_n_u32(0x01008080);
+            let shuffle_mask = vorrq_u32(vorrq_u32(shl17, shl25), base);
+
+            // Perform the table lookup (out of range indices give 0)
+            let result = vqtbl1q_u8(bf16_table, vreinterpretq_u8_u32(shuffle_mask));
+
+            // Result has bf16 in high 16 bits of each 32-bit lane = valid f32
+            vreinterpretq_f32_u8(result)
+        }
+        // SAFETY: neon is available from the safety invariant on the descriptor
+        F32VecNeon(unsafe { lookup_impl(table.0, indices.0) }, d)
     }
 }
 
