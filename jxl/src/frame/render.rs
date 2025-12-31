@@ -3,15 +3,13 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-use std::sync::Arc;
-
 use crate::api::JxlCms;
 use crate::api::JxlColorType;
 use crate::api::JxlDataFormat;
 use crate::api::JxlOutputBuffer;
 use crate::bit_reader::BitReader;
 use crate::error::{Error, Result};
-use crate::features::epf::create_sigma_image;
+use crate::features::epf::SigmaSource;
 use crate::headers::frame_header::Encoding;
 use crate::headers::{Orientation, color_encoding::ColorSpace, extra_channels::ExtraChannel};
 use crate::image::Rect;
@@ -23,7 +21,6 @@ use crate::{
     api::JxlPixelFormat,
     frame::{DecoderState, Frame, LfGlobalState},
     headers::frame_header::FrameHeader,
-    image::Image,
 };
 
 #[cfg(test)]
@@ -211,7 +208,7 @@ impl Frame {
         decoder_state: &DecoderState,
         frame_header: &FrameHeader,
         lf_global: &LfGlobalState,
-        epf_sigma: &Option<Arc<Image<f32>>>,
+        epf_sigma: &Option<SigmaSource>,
         pixel_format: &JxlPixelFormat,
     ) -> Result<Box<T>> {
         let num_channels = frame_header.num_extra_channels as usize + 3;
@@ -276,7 +273,7 @@ impl Frame {
                 rf.epf_pass0_sigma_scale,
                 rf.epf_border_sad_mul,
                 rf.epf_channel_scale,
-                epf_sigma.as_ref().unwrap().clone(),
+                epf_sigma.clone().unwrap(),
             ))?
         }
         if rf.epf_iters >= 1 {
@@ -284,7 +281,7 @@ impl Frame {
                 1.0,
                 rf.epf_border_sad_mul,
                 rf.epf_channel_scale,
-                epf_sigma.as_ref().unwrap().clone(),
+                epf_sigma.clone().unwrap(),
             ))?
         }
         if rf.epf_iters >= 2 {
@@ -292,7 +289,7 @@ impl Frame {
                 rf.epf_pass2_sigma_scale,
                 rf.epf_border_sad_mul,
                 rf.epf_channel_scale,
-                epf_sigma.as_ref().unwrap().clone(),
+                epf_sigma.clone().unwrap(),
             ))?
         }
 
@@ -570,8 +567,7 @@ impl Frame {
     ) -> Result<()> {
         let lf_global = self.lf_global.as_mut().unwrap();
         let epf_sigma = if self.header.restoration_filter.epf_iters > 0 {
-            let sigma_image = create_sigma_image(&self.header, lf_global, &self.hf_meta)?;
-            Some(Arc::new(sigma_image))
+            Some(SigmaSource::new(&self.header, lf_global, &self.hf_meta)?)
         } else {
             None
         };
