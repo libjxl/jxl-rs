@@ -250,168 +250,69 @@ impl ModularChannelDecoder for WpOnlyLookup {
     }
 }
 
-/// Fast path for trees that split only on a single property (not WP property 15).
-/// All leaves must have the same predictor with offset=0, multiplier=1.
-/// Maps property values directly to cluster IDs via LUT.
-pub struct SinglePropertyLookup {
-    lut: Box<[u8]>,
-    property: u8,
-    predictor: Predictor,
-    value_base: i32,
+/// Fast path for trees that split only on property 9 (gradient: left + top - topleft)
+/// with Gradient predictor, offset=0, multiplier=1.
+/// Maps property 9 values directly to cluster IDs via a LUT.
+/// This targets libjxl effort 2 encoding.
+pub struct GradientLookup {
+    lut: [u8; LUT_TABLE_SIZE],
 }
 
-/// Compute a property value from prediction data.
-/// Properties 2-14 are non-WP properties that can be computed without weighted predictor state.
-#[inline(always)]
-fn compute_property(
-    property: u8,
-    data: &PredictionData,
-    pos: (usize, usize),
-    prev_prop9: i32,
-) -> i32 {
-    match property {
-        2 => pos.1 as i32, // y
-        3 => pos.0 as i32, // x
-        4 => data.top.wrapping_abs(),
-        5 => data.left.wrapping_abs(),
-        6 => data.top,
-        7 => data.left,
-        8 => data.left.wrapping_sub(prev_prop9), // local gradient delta
-        9 => data.left.wrapping_add(data.top).wrapping_sub(data.topleft), // gradient
-        10 => data.left.wrapping_sub(data.topleft),
-        11 => data.topleft.wrapping_sub(data.top),
-        12 => data.top.wrapping_sub(data.topright),
-        13 => data.top.wrapping_sub(data.toptop),
-        14 => data.left.wrapping_sub(data.leftleft),
-        _ => 0,
-    }
-}
+/// Property 9 is the "gradient property": left + top - topleft
+const GRADIENT_PROPERTY: u8 = 9;
 
-fn make_single_property_lut(
-    tree: &[TreeNode],
-    histograms: &Histograms,
-) -> Option<SinglePropertyLookup> {
-    // First pass: find the property and predictor, verify constraints
-    let mut split_property: Option<u8> = None;
-    let mut leaf_predictor: Option<Predictor> = None;
-
+fn make_gradient_lut(tree: &[TreeNode], histograms: &Histograms) -> Option<GradientLookup> {
+    // Verify all splits are on property 9 and all leaves have Gradient predictor
     for node in tree {
         match node {
             TreeNode::Split { property, .. } => {
-                // Property 15 is WP - use WpOnlyLookup instead
-                if *property == 15 {
+                if *property != GRADIENT_PROPERTY {
                     return None;
-                }
-                // All splits must be on the same property
-                match split_property {
-                    None => split_property = Some(*property),
-                    Some(p) if p != *property => return None,
-                    _ => {}
                 }
             }
-            TreeNode::Leaf {
-                predictor,
-                offset,
-                multiplier,
-                ..
-            } => {
-                // All leaves must have offset=0, multiplier=1
-                if *offset != 0 || *multiplier != 1 {
+            TreeNode::Leaf { predictor, .. } => {
+                if *predictor != Predictor::Gradient {
                     return None;
-                }
-                // All leaves must have the same predictor (and not Weighted)
-                if *predictor == Predictor::Weighted {
-                    return None;
-                }
-                match leaf_predictor {
-                    None => leaf_predictor = Some(*predictor),
-                    Some(p) if p != *predictor => return None,
-                    _ => {}
                 }
             }
         }
     }
 
-    let property = split_property?;
-    let predictor = leaf_predictor?;
-
-    // Second pass: find the range of property values
-    struct RangeAndNode {
-        range: Range<i32>,
-        node: u32,
-    }
-    let mut stack = vec![RangeAndNode {
-        range: LUT_MIN_SPLITVAL..LUT_MAX_SPLITVAL + 1,
-        node: 0,
-    }];
-
-    let mut lut = vec![0u8; LUT_TABLE_SIZE];
-    while let Some(RangeAndNode { range, node }) = stack.pop() {
-        match tree[node as usize] {
-            TreeNode::Split {
-                val, left, right, ..
-            } => {
-                let first_left = val + 1;
-                if first_left >= range.end || first_left <= range.start {
-                    return None;
-                }
-                stack.push(RangeAndNode {
-                    range: first_left..range.end,
-                    node: left,
-                });
-                stack.push(RangeAndNode {
-                    range: range.start..first_left,
-                    node: right,
-                });
-            }
-            TreeNode::Leaf { id, .. } => {
-                let start = (range.start - LUT_MIN_SPLITVAL) as usize;
-                let end = (range.end - LUT_MIN_SPLITVAL) as usize;
-                lut[start..end].fill(histograms.map_context_to_cluster(id as usize) as u8);
-            }
-        }
-    }
-
-    Some(SinglePropertyLookup {
-        lut: lut.into_boxed_slice(),
-        property,
-        predictor,
-        value_base: LUT_MIN_SPLITVAL,
-    })
+    // Use existing make_lut which handles offset=0, multiplier=1 checks
+    let lut = make_lut(tree, histograms)?;
+    Some(GradientLookup { lut })
 }
 
-impl ModularChannelDecoder for SinglePropertyLookup {
+impl ModularChannelDecoder for GradientLookup {
     const NEEDS_TOP: bool = true;
-    const NEEDS_TOPTOP: bool = true;
+    const NEEDS_TOPTOP: bool = false;
 
-    fn init_row(&mut self, _buffers: &mut [&mut ModularChannel], _chan: usize, _y: usize) {
-        // nothing to do
-    }
+    fn init_row(&mut self, _: &mut [&mut ModularChannel], _: usize, _: usize) {}
 
     #[inline(always)]
     fn decode_one(
         &mut self,
         prediction_data: PredictionData,
-        pos: (usize, usize),
-        _xsize: usize,
+        _: (usize, usize),
+        _: usize,
         reader: &mut SymbolReader,
         br: &mut BitReader,
         histograms: &Histograms,
     ) -> i32 {
-        let prop_val = compute_property(self.property, &prediction_data, pos, 0);
-        let index = (prop_val - self.value_base).clamp(0, self.lut.len() as i32 - 1) as usize;
+        let prop9 = prediction_data
+            .left
+            .wrapping_add(prediction_data.top)
+            .wrapping_sub(prediction_data.topleft);
+
+        let index =
+            (prop9 as i64 - LUT_MIN_SPLITVAL as i64).clamp(0, LUT_TABLE_SIZE as i64 - 1) as usize;
         let cluster = self.lut[index];
 
-        // Compute prediction
-        let pred = if self.predictor == Predictor::Gradient {
-            clamped_gradient(
-                prediction_data.left as i64,
-                prediction_data.top as i64,
-                prediction_data.topleft as i64,
-            )
-        } else {
-            self.predictor.predict_one(prediction_data, 0)
-        };
+        let pred = clamped_gradient(
+            prediction_data.left as i64,
+            prediction_data.top as i64,
+            prediction_data.topleft as i64,
+        );
 
         let dec = reader.read_signed_clustered(histograms, br, cluster as usize);
         dec.wrapping_add(pred as i32)
@@ -448,7 +349,7 @@ impl ModularChannelDecoder for SingleGradientOnly {
 pub enum TreeSpecialCase {
     NoWp(NoWpTree),
     WpOnly(WpOnlyLookup),
-    SingleProperty(SinglePropertyLookup),
+    GradientLookup(GradientLookup),
     SingleGradientOnly(SingleGradientOnly),
     General(GeneralTree),
 }
@@ -533,10 +434,10 @@ pub fn specialize_tree(
         return Ok(TreeSpecialCase::WpOnly(wp));
     }
 
-    // Try single-property LUT for non-WP trees
+    // Try gradient LUT for non-WP trees (targets effort 2 encoding)
     if !uses_wp {
-        if let Some(sp) = make_single_property_lut(&pruned_tree, &tree.histograms) {
-            return Ok(TreeSpecialCase::SingleProperty(sp));
+        if let Some(gl) = make_gradient_lut(&pruned_tree, &tree.histograms) {
+            return Ok(TreeSpecialCase::GradientLookup(gl));
         }
         return Ok(TreeSpecialCase::NoWp(NoWpTree::new(
             pruned_tree,
