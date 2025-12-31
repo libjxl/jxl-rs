@@ -3,7 +3,7 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-use std::{f32::consts::SQRT_2, sync::OnceLock};
+use std::{borrow::Cow, f32::consts::SQRT_2, sync::OnceLock};
 
 use crate::util::f16;
 
@@ -344,12 +344,6 @@ impl QuantTable {
         // QuantTable::Dct256x128,
         QuantTable::Dct128x256,
     ];
-    pub fn from_usize(idx: usize) -> Result<QuantTable> {
-        match QuantTable::VALUES.get(idx) {
-            Some(table) => Ok(*table),
-            None => Err(InvalidQuantEncodingMode),
-        }
-    }
     fn for_strategy(strategy: HfTransformType) -> QuantTable {
         match strategy {
             HfTransformType::DCT => QuantTable::Dct,
@@ -377,12 +371,33 @@ impl QuantTable {
 }
 
 pub struct DequantMatrices {
-    computed_mask: u32,
-    table: Vec<f32>,
-    inv_table: Vec<f32>,
-    table_offsets: [usize; HfTransformType::CARDINALITY * 3],
-    encodings: Vec<QuantEncoding>,
+    /// 17 separate tables, one per QuantTable type.
+    /// Uses Cow to allow zero-copy borrowing from static cache for library tables.
+    tables: [Cow<'static, [f32]>; QuantTable::CARDINALITY],
 }
+
+/// Cached computed library tables per QuantTable type.
+/// Each entry contains the computed f32 weights for all 3 channels.
+/// Computed lazily on first access.
+static LIBRARY_TABLES: [OnceLock<Box<[f32]>>; QuantTable::CARDINALITY] = [
+    OnceLock::new(),
+    OnceLock::new(),
+    OnceLock::new(),
+    OnceLock::new(),
+    OnceLock::new(),
+    OnceLock::new(),
+    OnceLock::new(),
+    OnceLock::new(),
+    OnceLock::new(),
+    OnceLock::new(),
+    OnceLock::new(),
+    OnceLock::new(),
+    OnceLock::new(),
+    OnceLock::new(),
+    OnceLock::new(),
+    OnceLock::new(),
+    OnceLock::new(),
+];
 
 #[allow(clippy::excessive_precision)]
 impl DequantMatrices {
@@ -866,161 +881,50 @@ impl DequantMatrices {
         }
     }
 
-    pub fn library() -> &'static [QuantEncoding; QuantTable::CARDINALITY] {
-        static QUANTS: OnceLock<[QuantEncoding; QuantTable::CARDINALITY]> = OnceLock::new();
-        QUANTS.get_or_init(|| {
-            [
-                DequantMatrices::dct(),
-                DequantMatrices::id(),
-                DequantMatrices::dct2x2(),
-                DequantMatrices::dct4x4(),
-                DequantMatrices::dct16x16(),
-                DequantMatrices::dct32x32(),
-                DequantMatrices::dct8x16(),
-                DequantMatrices::dct8x32(),
-                DequantMatrices::dct16x32(),
-                DequantMatrices::dct4x8(),
-                DequantMatrices::afv0(),
-                DequantMatrices::dct64x64(),
-                DequantMatrices::dct32x64(),
-                // Same default for large transforms (128+) as for 64x* transforms.
-                DequantMatrices::dct128x128(),
-                DequantMatrices::dct64x128(),
-                DequantMatrices::dct256x256(),
-                DequantMatrices::dct128x256(),
-            ]
+    /// Get library quantization encoding for a table type index.
+    fn get_library_encoding(idx: usize) -> QuantEncoding {
+        match idx {
+            0 => Self::dct(),
+            1 => Self::id(),
+            2 => Self::dct2x2(),
+            3 => Self::dct4x4(),
+            4 => Self::dct16x16(),
+            5 => Self::dct32x32(),
+            6 => Self::dct8x16(),
+            7 => Self::dct8x32(),
+            8 => Self::dct16x32(),
+            9 => Self::dct4x8(),
+            10 => Self::afv0(),
+            11 => Self::dct64x64(),
+            12 => Self::dct32x64(),
+            // Same default for large transforms (128+) as for 64x* transforms.
+            13 => Self::dct128x128(),
+            14 => Self::dct64x128(),
+            15 => Self::dct256x256(),
+            16 => Self::dct128x256(),
+            _ => unreachable!(),
+        }
+    }
+
+    /// Get cached computed library table for a QuantTable type index.
+    /// Computes the table lazily on first access.
+    fn get_library_table(idx: usize) -> &'static [f32] {
+        LIBRARY_TABLES[idx].get_or_init(|| {
+            let encoding = Self::get_library_encoding(idx);
+            Self::compute_table(&encoding, idx).expect("library table computation should not fail")
         })
     }
 
-    pub fn matrix(&self, quant_kind: HfTransformType, c: usize) -> &[f32] {
-        assert_ne!((1 << quant_kind as u32) & self.computed_mask, 0);
-        &self.table[self.table_offsets[quant_kind as usize * 3 + c]..]
-    }
-
-    // TODO(veluca): figure out if this should actually be unused.
-    #[allow(dead_code)]
-    pub fn inv_matrix(&self, quant_kind: HfTransformType, c: usize) -> &[f32] {
-        assert_ne!((1 << quant_kind as u32) & self.computed_mask, 0);
-        &self.inv_table[self.table_offsets[quant_kind as usize * 3 + c]..]
-    }
-
-    pub fn decode(
-        header: &FrameHeader,
-        lf_global: &LfGlobalState,
-        br: &mut BitReader,
-    ) -> Result<Self> {
-        let all_default = br.read(1)? == 1;
-        let mut encodings = Vec::with_capacity(QuantTable::CARDINALITY);
-        if all_default {
-            for _ in 0..QuantTable::CARDINALITY {
-                encodings.push(QuantEncoding::Library)
-            }
-        } else {
-            for (i, (&required_size_x, required_size_y)) in Self::REQUIRED_SIZE_X
-                .iter()
-                .zip(Self::REQUIRED_SIZE_Y)
-                .enumerate()
-            {
-                encodings.push(QuantEncoding::decode(
-                    required_size_x,
-                    required_size_y,
-                    i,
-                    header,
-                    lf_global,
-                    br,
-                )?);
-            }
-        }
-        Ok(Self {
-            computed_mask: 0,
-            table: vec![0.0; Self::TOTAL_TABLE_SIZE],
-            inv_table: vec![0.0; Self::TOTAL_TABLE_SIZE],
-            table_offsets: [0; HfTransformType::CARDINALITY * 3],
-            encodings,
-        })
-    }
-
-    pub const REQUIRED_SIZE_X: [usize; QuantTable::CARDINALITY] =
-        [1, 1, 1, 1, 2, 4, 1, 1, 2, 1, 1, 8, 4, 16, 8, 32, 16];
-
-    pub const REQUIRED_SIZE_Y: [usize; QuantTable::CARDINALITY] =
-        [1, 1, 1, 1, 2, 4, 2, 4, 4, 1, 1, 8, 8, 16, 16, 32, 32];
-
-    pub const SUM_REQUIRED_X_Y: usize = 2056;
-
-    pub const TOTAL_TABLE_SIZE: usize = Self::SUM_REQUIRED_X_Y * BLOCK_SIZE * 3;
-
-    pub fn ensure_computed(&mut self, acs_mask: u32) -> Result<()> {
-        let mut offsets = [0usize; QuantTable::CARDINALITY * 3];
-        let mut pos = 0usize;
-        for i in 0..QuantTable::CARDINALITY {
-            let num = DequantMatrices::REQUIRED_SIZE_X[i]
-                * DequantMatrices::REQUIRED_SIZE_Y[i]
-                * BLOCK_SIZE;
-            for c in 0..3 {
-                offsets[3 * i + c] = pos + c * num;
-            }
-            pos += 3 * num;
-        }
-        for i in 0..HfTransformType::CARDINALITY {
-            for c in 0..3 {
-                self.table_offsets[i * 3 + c] =
-                    offsets[QuantTable::for_strategy(HfTransformType::from_usize(i).unwrap())
-                        as usize
-                        * 3
-                        + c];
-            }
-        }
-        let mut kind_mask = 0u32;
-        for i in 0..HfTransformType::CARDINALITY {
-            if acs_mask & (1u32 << i) != 0 {
-                kind_mask |= 1u32 << QuantTable::for_strategy(HfTransformType::VALUES[i]) as u32;
-            }
-        }
-        let mut computed_kind_mask = 0u32;
-        for i in 0..HfTransformType::CARDINALITY {
-            if self.computed_mask & (1u32 << i) != 0 {
-                computed_kind_mask |=
-                    1u32 << QuantTable::for_strategy(HfTransformType::VALUES[i]) as u32;
-            }
-        }
-        for table in 0..QuantTable::CARDINALITY {
-            if (1u32 << table) & computed_kind_mask != 0 {
-                continue;
-            }
-            if (1u32 << table) & !kind_mask != 0 {
-                continue;
-            }
-            match self.encodings[table] {
-                QuantEncoding::Library => {
-                    self.compute_quant_table(true, table, offsets[table * 3])?
-                }
-                _ => self.compute_quant_table(false, table, offsets[table * 3])?,
-            };
-        }
-        self.computed_mask |= acs_mask;
-        Ok(())
-    }
-    fn compute_quant_table(
-        &mut self,
-        library: bool,
-        table_num: usize,
-        offset: usize,
-    ) -> Result<usize> {
-        let encoding = if library {
-            &DequantMatrices::library()[table_num]
-        } else {
-            &self.encodings[table_num]
-        };
-        let quant_table_idx = QuantTable::from_usize(table_num)? as usize;
-        let wrows = 8 * DequantMatrices::REQUIRED_SIZE_X[quant_table_idx];
-        let wcols = 8 * DequantMatrices::REQUIRED_SIZE_Y[quant_table_idx];
+    /// Compute a single quant table from an encoding.
+    /// Returns the computed weights as a boxed slice for all 3 channels.
+    fn compute_table(encoding: &QuantEncoding, table_idx: usize) -> Result<Box<[f32]>> {
+        let wrows = 8 * Self::REQUIRED_SIZE_X[table_idx];
+        let wcols = 8 * Self::REQUIRED_SIZE_Y[table_idx];
         let num = wrows * wcols;
         let mut weights = vec![0f32; 3 * num];
         match encoding {
             QuantEncoding::Library => {
-                // Library and copy quant encoding should get replaced by the actual
-                // parameters by the caller.
+                // Library encoding should be resolved by the caller.
                 return Err(InvalidQuantEncodingMode);
             }
             QuantEncoding::Identity { xyb_weights } => {
@@ -1190,34 +1094,71 @@ impl DequantMatrices {
                 }
             }
         }
-        for (i, weight) in weights.iter().enumerate() {
+        // Convert weights in place to the final table format (1.0 / weight)
+        for weight in &mut weights {
             if !(ALMOST_ZERO..=1.0 / ALMOST_ZERO).contains(weight) {
                 return Err(InvalidQuantizationTableWeight(*weight));
             }
-            self.table[offset + i] = 1f32 / weight;
-            self.inv_table[offset + i] = *weight;
+            *weight = 1f32 / *weight;
         }
-        let (xs, ys) = coefficient_layout(
-            DequantMatrices::REQUIRED_SIZE_X[quant_table_idx],
-            DequantMatrices::REQUIRED_SIZE_Y[quant_table_idx],
-        );
-        for c in 0..3 {
-            for y in 0..ys {
-                for x in 0..xs {
-                    self.inv_table[offset + c * ys * xs * BLOCK_SIZE + y * BLOCK_DIM * xs + x] =
-                        0f32;
-                }
-            }
-        }
-        Ok(0)
+        Ok(weights.into_boxed_slice())
     }
-}
 
-fn coefficient_layout(rows: usize, cols: usize) -> (usize, usize) {
-    (
-        if rows < cols { rows } else { cols },
-        if rows < cols { cols } else { rows },
-    )
+    pub fn matrix(&self, quant_kind: HfTransformType, c: usize) -> &[f32] {
+        let qt_idx = QuantTable::for_strategy(quant_kind) as usize;
+        let table = &self.tables[qt_idx];
+        let num = Self::REQUIRED_SIZE_X[qt_idx] * Self::REQUIRED_SIZE_Y[qt_idx] * BLOCK_SIZE;
+        &table[c * num..]
+    }
+
+    pub fn decode(
+        header: &FrameHeader,
+        lf_global: &LfGlobalState,
+        br: &mut BitReader,
+    ) -> Result<Self> {
+        let all_default = br.read(1)? == 1;
+
+        // Compute all tables during decode
+        let tables: [Cow<'static, [f32]>; QuantTable::CARDINALITY] = if all_default {
+            // All library tables - borrow from static cache (zero-copy)
+            std::array::from_fn(|idx| Cow::Borrowed(Self::get_library_table(idx)))
+        } else {
+            // Decode and compute each table
+            let mut tables_vec: Vec<Cow<'static, [f32]>> =
+                Vec::with_capacity(QuantTable::CARDINALITY);
+            for (i, (&required_size_x, required_size_y)) in Self::REQUIRED_SIZE_X
+                .iter()
+                .zip(Self::REQUIRED_SIZE_Y)
+                .enumerate()
+            {
+                let encoding = QuantEncoding::decode(
+                    required_size_x,
+                    required_size_y,
+                    i,
+                    header,
+                    lf_global,
+                    br,
+                )?;
+                let table = match encoding {
+                    QuantEncoding::Library => Cow::Borrowed(Self::get_library_table(i)),
+                    _ => Cow::Owned(Self::compute_table(&encoding, i)?.into_vec()),
+                };
+                tables_vec.push(table);
+            }
+            tables_vec.try_into().unwrap()
+        };
+
+        Ok(Self { tables })
+    }
+
+    pub const REQUIRED_SIZE_X: [usize; QuantTable::CARDINALITY] =
+        [1, 1, 1, 1, 2, 4, 1, 1, 2, 1, 1, 8, 4, 16, 8, 32, 16];
+
+    pub const REQUIRED_SIZE_Y: [usize; QuantTable::CARDINALITY] =
+        [1, 1, 1, 1, 2, 4, 2, 4, 4, 1, 1, 8, 8, 16, 16, 32, 32];
+
+    #[cfg(test)]
+    const SUM_REQUIRED_X_Y: usize = 2056;
 }
 
 fn get_quant_weights(
@@ -1289,7 +1230,7 @@ mod test {
     use super::*;
     use crate::error::Result;
     use crate::frame::quant_weights::DequantMatrices;
-    use crate::util::test::{assert_all_almost_abs_eq, assert_almost_abs_eq, assert_almost_eq};
+    use crate::util::test::assert_almost_abs_eq;
 
     #[test]
     fn check_required_x_y() {
@@ -1305,27 +1246,12 @@ mod test {
 
     #[test]
     fn check_dequant_matrix_correctness() -> Result<()> {
-        let mut matrices = DequantMatrices {
-            computed_mask: 0,
-            table: vec![0.0; DequantMatrices::TOTAL_TABLE_SIZE],
-            inv_table: vec![0.0; DequantMatrices::TOTAL_TABLE_SIZE],
-            table_offsets: [0; HfTransformType::CARDINALITY * 3],
-            encodings: (0..QuantTable::CARDINALITY)
-                .map(|_| QuantEncoding::Library)
-                .collect(),
+        // All library tables
+        let matrices = DequantMatrices {
+            tables: std::array::from_fn(|idx| {
+                Cow::Borrowed(DequantMatrices::get_library_table(idx))
+            }),
         };
-        matrices.ensure_computed(!0)?;
-
-        // Golden data produced by libjxl.
-        let target_offsets: [usize; 81] = [
-            0, 64, 128, 192, 256, 320, 384, 448, 512, 576, 640, 704, 768, 1024, 1280, 1536, 2560,
-            3584, 4608, 4736, 4864, 4608, 4736, 4864, 4992, 5248, 5504, 4992, 5248, 5504, 5760,
-            6272, 6784, 5760, 6272, 6784, 7296, 7360, 7424, 7296, 7360, 7424, 7488, 7552, 7616,
-            7488, 7552, 7616, 7488, 7552, 7616, 7488, 7552, 7616, 7680, 11776, 15872, 19968, 22016,
-            24064, 19968, 22016, 24064, 26112, 42496, 58880, 75264, 83456, 91648, 75264, 83456,
-            91648, 99840, 165376, 230912, 296448, 329216, 361984, 296448, 329216, 361984,
-        ];
-        assert_all_almost_abs_eq(matrices.table_offsets, target_offsets, 0);
 
         // Golden data produced by libjxl.
         let target_table = [
@@ -2223,928 +2149,16 @@ mod test {
         ];
         let mut target_table_index = 0;
         for i in 0..HfTransformType::CARDINALITY {
-            let qt_idx = QuantTable::for_strategy(HfTransformType::from_usize(i).unwrap()) as usize;
+            let hf_type = HfTransformType::from_usize(i).unwrap();
+            let qt_idx = QuantTable::for_strategy(hf_type) as usize;
             let size = DequantMatrices::REQUIRED_SIZE_X[qt_idx]
                 * DequantMatrices::REQUIRED_SIZE_Y[qt_idx]
                 * BLOCK_SIZE;
             for c in 0..3 {
-                let start = matrices.table_offsets[3 * i + c];
-                for j in (start..start + size).step_by(size / 10) {
-                    assert_almost_abs_eq(matrices.table[j], target_table[target_table_index], 1e-5);
+                let table = matrices.matrix(hf_type, c);
+                for j in (0..size).step_by(size / 10) {
+                    assert_almost_abs_eq(table[j], target_table[target_table_index], 1e-5);
                     target_table_index += 1;
-                }
-            }
-        }
-        // Golden data produced by libjxl.
-        let target_inv_table = [
-            0.000000f32,
-            1_590.757_8_f32,
-            2_188.414_6_f32,
-            2_726.993_f32,
-            2_648.627_7_f32,
-            1_410.374_f32,
-            1_686.279_4_f32,
-            1_765.964_1_f32,
-            1_590.757_8_f32,
-            838.702_15_f32,
-            1_060.592_9_f32,
-            0.000000f32,
-            328.723_8_f32,
-            421.547_42_f32,
-            500.443_73_f32,
-            489.194_1_f32,
-            299.277_44_f32,
-            344.016_4_f32,
-            356.627_56_f32,
-            328.723_8_f32,
-            236.484_7_f32,
-            250.119_8_f32,
-            0.000000f32,
-            83.550804f32,
-            85.333_32_f32,
-            126.804_84_f32,
-            119.412384f32,
-            65.203_81_f32,
-            85.333_23_f32,
-            85.333244f32,
-            83.550804f32,
-            31.172384f32,
-            39.419487f32,
-            0.000000f32,
-            280.000000f32,
-            280.000000f32,
-            280.000000f32,
-            280.000000f32,
-            280.000000f32,
-            280.000000f32,
-            280.000000f32,
-            280.000000f32,
-            280.000000f32,
-            280.000000f32,
-            0.000000f32,
-            60.000000f32,
-            60.000000f32,
-            60.000000f32,
-            60.000000f32,
-            60.000000f32,
-            60.000000f32,
-            60.000000f32,
-            60.000000f32,
-            60.000000f32,
-            60.000000f32,
-            0.000000f32,
-            18.000000f32,
-            18.000000f32,
-            18.000000f32,
-            18.000000f32,
-            18.000000f32,
-            18.000000f32,
-            18.000000f32,
-            18.000000f32,
-            18.000000f32,
-            18.000000f32,
-            0.000000f32,
-            480.000000f32,
-            480.000000f32,
-            640.000000f32,
-            1280.000000f32,
-            480.000000f32,
-            300.000000f32,
-            480.000000f32,
-            480.000000f32,
-            300.000000f32,
-            300.000000f32,
-            0.000000f32,
-            140.000000f32,
-            140.000000f32,
-            180.000000f32,
-            320.000000f32,
-            140.000000f32,
-            120.000000f32,
-            140.000000f32,
-            140.000000f32,
-            120.000000f32,
-            120.000000f32,
-            0.000000f32,
-            32.000000f32,
-            32.000000f32,
-            64.000000f32,
-            128.000000f32,
-            32.000000f32,
-            16.000000f32,
-            32.000000f32,
-            32.000000f32,
-            16.000000f32,
-            16.000000f32,
-            0.000000f32,
-            2_199.999_5_f32,
-            2_199.998_8_f32,
-            2_199.997_f32,
-            2_199.997_8_f32,
-            2_199.999_3_f32,
-            2_199.997_f32,
-            2_199.998_3_f32,
-            2_199.999_5_f32,
-            2_199.997_f32,
-            2_199.998_3_f32,
-            0.000000f32,
-            391.999_94_f32,
-            391.999_76_f32,
-            391.999_45_f32,
-            391.999_63_f32,
-            391.999_85_f32,
-            391.999_45_f32,
-            391.999_7_f32,
-            391.999_94_f32,
-            391.999_45_f32,
-            391.999_7_f32,
-            0.000000f32,
-            68.239_35_f32,
-            81.689606f32,
-            89.600_1_f32,
-            95.651_69_f32,
-            65.137_18_f32,
-            71.680_09_f32,
-            78.702_8_f32,
-            68.239_35_f32,
-            47.786777f32,
-            57.363_38_f32,
-            0.000000f32,
-            2_134.025_f32,
-            3_880.564_5_f32,
-            1_561.426_1_f32,
-            2_580.273_2_f32,
-            993.463_3_f32,
-            1_766.659_2_f32,
-            531.866_15_f32,
-            1_057.315_1_f32,
-            1_129.141_7_f32,
-            531.866_15_f32,
-            0.000000f32,
-            856.371_03_f32,
-            1_884.007_1_f32,
-            661.633_f32,
-            1_039.256_2_f32,
-            510.514_92_f32,
-            714.580_6_f32,
-            395.167_5_f32,
-            524.174_9_f32,
-            540.578_f32,
-            395.167_5_f32,
-            0.000000f32,
-            125.492_86_f32,
-            372.602_72_f32,
-            93.867_99_f32,
-            155.421_52_f32,
-            62.573_67_f32,
-            102.638_92_f32,
-            24.780632f32,
-            68.345_99_f32,
-            74.248_6_f32,
-            24.780632f32,
-            0.000000f32,
-            7_394.222_7_f32,
-            3_578.031_f32,
-            1_919.217_f32,
-            1_315.414_7_f32,
-            873.481_14_f32,
-            1_993.637_6_f32,
-            1_544.639_8_f32,
-            1_097.804_9_f32,
-            777.788_7_f32,
-            593.406_25_f32,
-            0.000000f32,
-            3_889.284_f32,
-            2_156.401_9_f32,
-            1_353.482_9_f32,
-            888.446_17_f32,
-            607.867_1_f32,
-            1_416.747_f32,
-            1_042.852_7_f32,
-            753.371_15_f32,
-            543.717_3_f32,
-            415.901_12_f32,
-            0.000000f32,
-            865.445_74_f32,
-            263.145_42_f32,
-            92.775_6_f32,
-            59.736_86_f32,
-            41.660606f32,
-            97.485_29_f32,
-            69.935_29_f32,
-            51.259308f32,
-            37.279_94_f32,
-            28.132723f32,
-            0.000000f32,
-            1_943.121_3_f32,
-            2_353.786_9_f32,
-            3_003.803_7_f32,
-            2_759.090_6_f32,
-            1_787.990_7_f32,
-            1_970.900_4_f32,
-            2_000.403_2_f32,
-            1_859.104_f32,
-            1_456.708_3_f32,
-            1_501.485_4_f32,
-            0.000000f32,
-            399.333_1_f32,
-            560.170_4_f32,
-            739.322_3_f32,
-            692.840_9_f32,
-            367.452_f32,
-            405.042_f32,
-            411.105_13_f32,
-            382.066_6_f32,
-            299.369_78_f32,
-            308.571_96_f32,
-            0.000000f32,
-            100.000015f32,
-            153.171_57_f32,
-            187.309_95_f32,
-            181.919_97_f32,
-            83.107_42_f32,
-            103.207_18_f32,
-            106.674_48_f32,
-            90.637794f32,
-            32.030476f32,
-            37.294_44_f32,
-            0.000000f32,
-            1_943.121_3_f32,
-            2_353.786_9_f32,
-            3_003.803_7_f32,
-            2_759.090_6_f32,
-            1_787.990_7_f32,
-            1_970.900_4_f32,
-            2_000.403_2_f32,
-            1_859.104_f32,
-            1_456.708_3_f32,
-            1_501.485_4_f32,
-            0.000000f32,
-            399.333_1_f32,
-            560.170_4_f32,
-            739.322_3_f32,
-            692.840_9_f32,
-            367.452_f32,
-            405.042_f32,
-            411.105_13_f32,
-            382.066_6_f32,
-            299.369_78_f32,
-            308.571_96_f32,
-            0.000000f32,
-            100.000015f32,
-            153.171_57_f32,
-            187.309_95_f32,
-            181.919_97_f32,
-            83.107_42_f32,
-            103.207_18_f32,
-            106.674_48_f32,
-            90.637794f32,
-            32.030476f32,
-            37.294_44_f32,
-            0.000000f32,
-            593.167_f32,
-            1_123.533_1_f32,
-            1_855.866_1_f32,
-            1_908.905_2_f32,
-            326.994_14_f32,
-            450.258_58_f32,
-            511.279_08_f32,
-            469.570_34_f32,
-            356.047_f32,
-            126.164_13_f32,
-            0.000000f32,
-            1_362.585_8_f32,
-            2_208.564_f32,
-            2_662.055_2_f32,
-            2_690.115_7_f32,
-            871.264_95_f32,
-            1_103.732_8_f32,
-            1_216.298_7_f32,
-            1_139.726_f32,
-            922.482_9_f32,
-            485.887_88_f32,
-            0.000000f32,
-            593.843_3_f32,
-            1_146.650_3_f32,
-            1_669.026_5_f32,
-            1_704.578_1_f32,
-            276.873_93_f32,
-            414.831_3_f32,
-            489.748_35_f32,
-            438.224_15_f32,
-            305.274_23_f32,
-            103.268776f32,
-            0.000000f32,
-            593.167_f32,
-            1_123.533_1_f32,
-            1_855.866_1_f32,
-            1_908.905_2_f32,
-            326.994_14_f32,
-            450.258_58_f32,
-            511.279_08_f32,
-            469.570_34_f32,
-            356.047_f32,
-            126.164_13_f32,
-            0.000000f32,
-            1_362.585_8_f32,
-            2_208.564_f32,
-            2_662.055_2_f32,
-            2_690.115_7_f32,
-            871.264_95_f32,
-            1_103.732_8_f32,
-            1_216.298_7_f32,
-            1_139.726_f32,
-            922.482_9_f32,
-            485.887_88_f32,
-            0.000000f32,
-            593.843_3_f32,
-            1_146.650_3_f32,
-            1_669.026_5_f32,
-            1_704.578_1_f32,
-            276.873_93_f32,
-            414.831_3_f32,
-            489.748_35_f32,
-            438.224_15_f32,
-            305.274_23_f32,
-            103.268776f32,
-            0.000000f32,
-            2_951.45_f32,
-            5_803.090_3_f32,
-            2_333.720_7_f32,
-            3_250.279_3_f32,
-            1_812.437_7_f32,
-            2_367.215_3_f32,
-            2_575.901_6_f32,
-            1_794.716_f32,
-            2_014.430_4_f32,
-            1_070.065_2_f32,
-            0.000000f32,
-            894.280_7_f32,
-            2_366.964_4_f32,
-            667.591_43_f32,
-            1_044.054_9_f32,
-            468.918_46_f32,
-            683.237_6_f32,
-            763.157_1_f32,
-            464.274_26_f32,
-            525.577_7_f32,
-            355.034_94_f32,
-            0.000000f32,
-            213.711_44_f32,
-            609.947_6_f32,
-            115.928_83_f32,
-            250.111_22_f32,
-            65.055_44_f32,
-            120.410_9_f32,
-            150.171_69_f32,
-            64.008_35_f32,
-            78.361_82_f32,
-            37.872444f32,
-            0.000000f32,
-            2_951.45_f32,
-            5_803.090_3_f32,
-            2_333.720_7_f32,
-            3_250.279_3_f32,
-            1_812.437_7_f32,
-            2_367.215_3_f32,
-            2_575.901_6_f32,
-            1_794.716_f32,
-            2_014.430_4_f32,
-            1_070.065_2_f32,
-            0.000000f32,
-            894.280_7_f32,
-            2_366.964_4_f32,
-            667.591_43_f32,
-            1_044.054_9_f32,
-            468.918_46_f32,
-            683.237_6_f32,
-            763.157_1_f32,
-            464.274_26_f32,
-            525.577_7_f32,
-            355.034_94_f32,
-            0.000000f32,
-            213.711_44_f32,
-            609.947_6_f32,
-            115.928_83_f32,
-            250.111_22_f32,
-            65.055_44_f32,
-            120.410_9_f32,
-            150.171_69_f32,
-            64.008_35_f32,
-            78.361_82_f32,
-            37.872444f32,
-            0.000000f32,
-            704.524_2_f32,
-            993.091_86_f32,
-            1_173.002_2_f32,
-            1_364.454_1_f32,
-            653.527_9_f32,
-            687.044_7_f32,
-            825.446_53_f32,
-            597.922_5_f32,
-            426.046_05_f32,
-            508.395_4_f32,
-            0.000000f32,
-            228.070_65_f32,
-            343.725_7_f32,
-            415.080_72_f32,
-            480.806_3_f32,
-            208.487_34_f32,
-            221.326_13_f32,
-            275.591_58_f32,
-            195.755_52_f32,
-            165.941_71_f32,
-            180.871_83_f32,
-            0.000000f32,
-            102.945_56_f32,
-            177.209_15_f32,
-            227.986_3_f32,
-            278.956_88_f32,
-            91.407_4_f32,
-            98.934_02_f32,
-            132.264_72_f32,
-            77.957184f32,
-            41.162014f32,
-            57.426_7_f32,
-            0.000000f32,
-            704.524_2_f32,
-            993.091_86_f32,
-            1_173.002_2_f32,
-            1_364.454_1_f32,
-            653.527_9_f32,
-            687.044_7_f32,
-            825.446_53_f32,
-            597.922_5_f32,
-            426.046_05_f32,
-            508.395_4_f32,
-            0.000000f32,
-            228.070_65_f32,
-            343.725_7_f32,
-            415.080_72_f32,
-            480.806_3_f32,
-            208.487_34_f32,
-            221.326_13_f32,
-            275.591_58_f32,
-            195.755_52_f32,
-            165.941_71_f32,
-            180.871_83_f32,
-            0.000000f32,
-            102.945_56_f32,
-            177.209_15_f32,
-            227.986_3_f32,
-            278.956_88_f32,
-            91.407_4_f32,
-            98.934_02_f32,
-            132.264_72_f32,
-            77.957184f32,
-            41.162014f32,
-            57.426_7_f32,
-            0.000000f32,
-            413.999_94_f32,
-            993.091_86_f32,
-            256.000000f32,
-            1_364.454_1_f32,
-            653.527_9_f32,
-            413.999_66_f32,
-            825.446_53_f32,
-            413.999_73_f32,
-            413.999_42_f32,
-            508.395_4_f32,
-            0.000000f32,
-            57.999_99_f32,
-            343.725_7_f32,
-            50.000000f32,
-            480.806_3_f32,
-            208.487_34_f32,
-            57.999954f32,
-            275.591_58_f32,
-            57.999_96_f32,
-            57.999_92_f32,
-            180.871_83_f32,
-            0.000000f32,
-            17.133793f32,
-            177.209_15_f32,
-            12.000000f32,
-            278.956_88_f32,
-            91.407_4_f32,
-            15.428568f32,
-            132.264_72_f32,
-            19.905685f32,
-            11.264012f32,
-            57.426_7_f32,
-            0.000000f32,
-            413.999_94_f32,
-            993.091_86_f32,
-            256.000000f32,
-            1_364.454_1_f32,
-            653.527_9_f32,
-            413.999_66_f32,
-            825.446_53_f32,
-            413.999_73_f32,
-            413.999_42_f32,
-            508.395_4_f32,
-            0.000000f32,
-            57.999_99_f32,
-            343.725_7_f32,
-            50.000000f32,
-            480.806_3_f32,
-            208.487_34_f32,
-            57.999954f32,
-            275.591_58_f32,
-            57.999_96_f32,
-            57.999_92_f32,
-            180.871_83_f32,
-            0.000000f32,
-            17.133793f32,
-            177.209_15_f32,
-            12.000000f32,
-            278.956_88_f32,
-            91.407_4_f32,
-            15.428568f32,
-            132.264_72_f32,
-            19.905685f32,
-            11.264012f32,
-            57.426_7_f32,
-            0.000000f32,
-            413.999_94_f32,
-            993.091_86_f32,
-            256.000000f32,
-            1_364.454_1_f32,
-            653.527_9_f32,
-            413.999_66_f32,
-            825.446_53_f32,
-            413.999_73_f32,
-            413.999_42_f32,
-            508.395_4_f32,
-            0.000000f32,
-            57.999_99_f32,
-            343.725_7_f32,
-            50.000000f32,
-            480.806_3_f32,
-            208.487_34_f32,
-            57.999954f32,
-            275.591_58_f32,
-            57.999_96_f32,
-            57.999_92_f32,
-            180.871_83_f32,
-            0.000000f32,
-            17.133793f32,
-            177.209_15_f32,
-            12.000000f32,
-            278.956_88_f32,
-            91.407_4_f32,
-            15.428568f32,
-            132.264_72_f32,
-            19.905685f32,
-            11.264012f32,
-            57.426_7_f32,
-            0.000000f32,
-            413.999_94_f32,
-            993.091_86_f32,
-            256.000000f32,
-            1_364.454_1_f32,
-            653.527_9_f32,
-            413.999_66_f32,
-            825.446_53_f32,
-            413.999_73_f32,
-            413.999_42_f32,
-            508.395_4_f32,
-            0.000000f32,
-            57.999_99_f32,
-            343.725_7_f32,
-            50.000000f32,
-            480.806_3_f32,
-            208.487_34_f32,
-            57.999954f32,
-            275.591_58_f32,
-            57.999_96_f32,
-            57.999_92_f32,
-            180.871_83_f32,
-            0.000000f32,
-            17.133793f32,
-            177.209_15_f32,
-            12.000000f32,
-            278.956_88_f32,
-            91.407_4_f32,
-            15.428568f32,
-            132.264_72_f32,
-            19.905685f32,
-            11.264012f32,
-            57.426_7_f32,
-            0.000000f32,
-            6_582.816_4_f32,
-            3_359.388_7_f32,
-            7_791.875_5_f32,
-            3_729.601_3_f32,
-            2_454.834_f32,
-            3_725.529_f32,
-            2_744.766_4_f32,
-            3_349.231_4_f32,
-            2_634.738_8_f32,
-            1_604.219_2_f32,
-            0.000000f32,
-            4_684.622_6_f32,
-            2_554.650_4_f32,
-            5_132.672_f32,
-            3_046.984_1_f32,
-            1_750.527_1_f32,
-            3_041.338_1_f32,
-            1_903.525_6_f32,
-            2_542.798_3_f32,
-            1_845.962_4_f32,
-            1_245.448_2_f32,
-            0.000000f32,
-            917.482_67_f32,
-            297.010_62_f32,
-            1_153.165_4_f32,
-            407.573_73_f32,
-            157.246_46_f32,
-            406.220_34_f32,
-            174.986_19_f32,
-            294.497_8_f32,
-            168.263_95_f32,
-            94.887_52_f32,
-            0.000000f32,
-            7_337.233_f32,
-            4_022.487_3_f32,
-            2_505.753_7_f32,
-            2_076.849_f32,
-            1_622.844_2_f32,
-            2_538.46_f32,
-            2_227.385_5_f32,
-            1_893.945_9_f32,
-            1_428.085_7_f32,
-            1_059.229_1_f32,
-            0.000000f32,
-            4_215.989_f32,
-            3_039.568_4_f32,
-            2_205.074_5_f32,
-            1_614.652_6_f32,
-            1_196.811_4_f32,
-            2_254.153_8_f32,
-            1_805.539_f32,
-            1_401.511_f32,
-            1_087.307_5_f32,
-            853.323_6_f32,
-            0.000000f32,
-            1_268.412_f32,
-            563.855_9_f32,
-            305.841_95_f32,
-            174.499_47_f32,
-            105.278_36_f32,
-            318.157_75_f32,
-            213.698_53_f32,
-            134.729_1_f32,
-            93.148544f32,
-            64.359_23_f32,
-            0.000000f32,
-            7_337.233_f32,
-            4_022.487_3_f32,
-            2_505.753_7_f32,
-            2_076.849_f32,
-            1_622.844_2_f32,
-            2_538.46_f32,
-            2_227.385_5_f32,
-            1_893.945_9_f32,
-            1_428.085_7_f32,
-            1_059.229_1_f32,
-            0.000000f32,
-            4_215.989_f32,
-            3_039.568_4_f32,
-            2_205.074_5_f32,
-            1_614.652_6_f32,
-            1_196.811_4_f32,
-            2_254.153_8_f32,
-            1_805.539_f32,
-            1_401.511_f32,
-            1_087.307_5_f32,
-            853.323_6_f32,
-            0.000000f32,
-            1_268.412_f32,
-            563.855_9_f32,
-            305.841_95_f32,
-            174.499_47_f32,
-            105.278_36_f32,
-            318.157_75_f32,
-            213.698_53_f32,
-            134.729_1_f32,
-            93.148544f32,
-            64.359_23_f32,
-            0.000000f32,
-            6_766.112_f32,
-            7_894.433_6_f32,
-            10_627.11_f32,
-            12_049.799_f32,
-            4_716.169_f32,
-            5_715.242_f32,
-            6_145.953_6_f32,
-            6_284.098_6_f32,
-            6_085.547_f32,
-            3_040.497_3_f32,
-            0.000000f32,
-            5_164.680_7_f32,
-            6_709.773_f32,
-            8_223.506_f32,
-            8_877.354_5_f32,
-            3_396.971_2_f32,
-            3_985.426_5_f32,
-            4_455.855_5_f32,
-            4_610.580_6_f32,
-            4_388.779_f32,
-            2_379.244_9_f32,
-            0.000000f32,
-            605.837_65_f32,
-            968.753_9_f32,
-            1_427.095_5_f32,
-            1_653.824_2_f32,
-            302.614_8_f32,
-            377.299_22_f32,
-            462.613_9_f32,
-            492.384_12_f32,
-            449.969_45_f32,
-            175.714_2_f32,
-            0.000000f32,
-            8_341.217_f32,
-            4_268.698_f32,
-            9_660.034_f32,
-            4_689.038_f32,
-            2_994.779_5_f32,
-            4_679.943_f32,
-            3_301.692_6_f32,
-            4_245.340_3_f32,
-            3_177.615_5_f32,
-            1_918.587_6_f32,
-            0.000000f32,
-            6_214.485_4_f32,
-            3_367.615_5_f32,
-            6_734.941_4_f32,
-            3_939.316_2_f32,
-            2_253.354_2_f32,
-            3_926.354_7_f32,
-            2_424.556_6_f32,
-            3_339.36_f32,
-            2_355.843_5_f32,
-            1_568.312_6_f32,
-            0.000000f32,
-            1_176.600_6_f32,
-            376.791_66_f32,
-            1_432.170_2_f32,
-            499.566_1_f32,
-            194.944_96_f32,
-            496.622_07_f32,
-            214.034_21_f32,
-            371.035_58_f32,
-            206.326_42_f32,
-            111.690674f32,
-            0.000000f32,
-            8_341.217_f32,
-            4_268.698_f32,
-            9_660.034_f32,
-            4_689.038_f32,
-            2_994.779_5_f32,
-            4_679.943_f32,
-            3_301.692_6_f32,
-            4_245.340_3_f32,
-            3_177.615_5_f32,
-            1_918.587_6_f32,
-            0.000000f32,
-            6_214.485_4_f32,
-            3_367.615_5_f32,
-            6_734.941_4_f32,
-            3_939.316_2_f32,
-            2_253.354_2_f32,
-            3_926.354_7_f32,
-            2_424.556_6_f32,
-            3_339.36_f32,
-            2_355.843_5_f32,
-            1_568.312_6_f32,
-            0.000000f32,
-            1_176.600_6_f32,
-            376.791_66_f32,
-            1_432.170_2_f32,
-            499.566_1_f32,
-            194.944_96_f32,
-            496.622_07_f32,
-            214.034_21_f32,
-            371.035_58_f32,
-            206.326_42_f32,
-            111.690674f32,
-            0.000000f32,
-            16_091.596_f32,
-            37_886.605_f32,
-            13_018.401_f32,
-            18_061.066_f32,
-            9_417.376_f32,
-            13_138.253_f32,
-            14_536.568_f32,
-            9_251.921_f32,
-            11_539.108_f32,
-            6_057.114_3_f32,
-            0.000000f32,
-            13_859.232_f32,
-            22_801.957_f32,
-            9_733.233_f32,
-            14_894.771_f32,
-            6_785.853_f32,
-            9_871.179_f32,
-            11_663.131_f32,
-            6_696.171_4_f32,
-            8_087.468_3_f32,
-            4_742.546_f32,
-            0.000000f32,
-            2_052.832_f32,
-            6_023.987_f32,
-            1_086.971_4_f32,
-            2_357.806_6_f32,
-            604.310_36_f32,
-            1_115.282_2_f32,
-            1_506.556_9_f32,
-            594.140_56_f32,
-            774.890_87_f32,
-            349.454_04_f32,
-            0.000000f32,
-            8_696.038_f32,
-            10_137.892_f32,
-            13_662.467_f32,
-            15_456.473_f32,
-            6_081.469_f32,
-            7_342.178_f32,
-            7_888.129_4_f32,
-            8_059.175_3_f32,
-            7_800.867_f32,
-            3_911.675_f32,
-            0.000000f32,
-            6_930.828_6_f32,
-            8_992.589_f32,
-            11_005.801_f32,
-            11_864.501_f32,
-            4_558.516_6_f32,
-            5_342.787_6_f32,
-            5_964.875_5_f32,
-            6_164.648_f32,
-            5_863.846_7_f32,
-            3_188.496_8_f32,
-            0.000000f32,
-            793.949_34_f32,
-            1_266.555_7_f32,
-            1_861.544_6_f32,
-            2_151.571_5_f32,
-            395.616_76_f32,
-            493.578_8_f32,
-            603.603_2_f32,
-            641.048_8_f32,
-            585.055_24_f32,
-            229.617_22_f32,
-            0.000000f32,
-            8_696.038_f32,
-            10_137.892_f32,
-            13_662.467_f32,
-            15_456.473_f32,
-            6_081.469_f32,
-            7_342.178_f32,
-            7_888.129_4_f32,
-            8_059.175_3_f32,
-            7_800.867_f32,
-            3_911.675_f32,
-            0.000000f32,
-            6_930.828_6_f32,
-            8_992.589_f32,
-            11_005.801_f32,
-            11_864.501_f32,
-            4_558.516_6_f32,
-            5_342.787_6_f32,
-            5_964.875_5_f32,
-            6_164.648_f32,
-            5_863.846_7_f32,
-            3_188.496_8_f32,
-            0.000000f32,
-            793.949_34_f32,
-            1_266.555_7_f32,
-            1_861.544_6_f32,
-            2_151.571_5_f32,
-            395.616_76_f32,
-            493.578_8_f32,
-            603.603_2_f32,
-            641.048_8_f32,
-            585.055_24_f32,
-            229.617_22_f32,
-        ];
-        let mut target_inv_table_index = 0;
-        for i in 0..HfTransformType::CARDINALITY {
-            let qt_idx = QuantTable::for_strategy(HfTransformType::from_usize(i).unwrap()) as usize;
-            let size = DequantMatrices::REQUIRED_SIZE_X[qt_idx]
-                * DequantMatrices::REQUIRED_SIZE_Y[qt_idx]
-                * BLOCK_SIZE;
-            for c in 0..3 {
-                let start = matrices.table_offsets[3 * i + c];
-                for j in (start..start + size).step_by(size / 10) {
-                    assert_almost_eq(
-                        matrices.inv_table[j],
-                        target_inv_table[target_inv_table_index],
-                        1f32,
-                        1e-3,
-                    );
-                    target_inv_table_index += 1;
                 }
             }
         }
