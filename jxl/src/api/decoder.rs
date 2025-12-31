@@ -637,7 +637,6 @@ pub(crate) mod tests {
     #[test]
     fn test_premultiply_output_straight_alpha() {
         use crate::api::{JxlColorType, JxlDataFormat, JxlPixelFormat};
-        use crate::image::{Image, Rect};
 
         // Use alpha_nonpremultiplied.jxl which has straight alpha (alpha_associated=false)
         let file =
@@ -652,83 +651,12 @@ pub(crate) mod tests {
             extra_channel_format: vec![None],
         };
 
-        // Helper function to decode with given options
-        fn decode_image(
-            file: &[u8],
-            rgba_format: &JxlPixelFormat,
-            premultiply: bool,
-            use_simple: bool,
-        ) -> (Image<f32>, usize, usize) {
-            let options = JxlDecoderOptions {
-                premultiply_output: premultiply,
-                ..Default::default()
-            };
-            let decoder = JxlDecoder::<states::Initialized>::new(options);
-            let mut input = file;
-
-            // Advance to image info
-            let mut decoder = decoder;
-            let mut decoder = loop {
-                match decoder.process(&mut input).unwrap() {
-                    ProcessingResult::Complete { result } => break result,
-                    ProcessingResult::NeedsMoreInput { fallback, .. } => {
-                        if input.is_empty() {
-                            panic!("Unexpected end of input");
-                        }
-                        decoder = fallback;
-                    }
-                }
-            };
-            decoder.set_use_simple_pipeline(use_simple);
-            decoder.set_pixel_format(rgba_format.clone());
-
-            let basic_info = decoder.basic_info().clone();
-            let (width, height) = basic_info.size;
-
-            // Advance to frame info
-            let mut decoder = loop {
-                match decoder.process(&mut input).unwrap() {
-                    ProcessingResult::Complete { result } => break result,
-                    ProcessingResult::NeedsMoreInput { fallback, .. } => {
-                        if input.is_empty() {
-                            panic!("Unexpected end of input");
-                        }
-                        decoder = fallback;
-                    }
-                }
-            };
-
-            let mut buffer = Image::<f32>::new((width * 4, height)).unwrap();
-            let mut buffers: Vec<_> = vec![JxlOutputBuffer::from_image_rect_mut(
-                buffer
-                    .get_rect_mut(Rect {
-                        origin: (0, 0),
-                        size: (width * 4, height),
-                    })
-                    .into_raw(),
-            )];
-
-            // Decode
-            loop {
-                match decoder.process(&mut input, &mut buffers).unwrap() {
-                    ProcessingResult::Complete { .. } => break,
-                    ProcessingResult::NeedsMoreInput { fallback, .. } => {
-                        if input.is_empty() {
-                            panic!("Unexpected end of input");
-                        }
-                        decoder = fallback;
-                    }
-                }
-            }
-
-            (buffer, width, height)
-        }
-
         // Test both pipelines
         for use_simple in [true, false] {
             let (straight_buffer, width, height) =
-                decode_image(&file, &rgba_format, false, use_simple);
-            let (premul_buffer, _, _) = decode_image(&file, &rgba_format, true, use_simple);
+                decode_with_format::<f32>(&file, &rgba_format, use_simple, false);
+            let (premul_buffer, _, _) =
+                decode_with_format::<f32>(&file, &rgba_format, use_simple, true);
 
             // Verify premultiplied values: premul_rgb should equal straight_rgb * alpha
             let mut found_semitransparent = false;
@@ -812,7 +740,6 @@ pub(crate) mod tests {
     #[test]
     fn test_premultiply_output_already_premultiplied() {
         use crate::api::{JxlColorType, JxlDataFormat, JxlPixelFormat};
-        use crate::image::{Image, Rect};
 
         // Use alpha_premultiplied.jxl which has alpha_associated=true
         let file = std::fs::read("resources/test/conformance_test_images/alpha_premultiplied.jxl")
@@ -825,83 +752,12 @@ pub(crate) mod tests {
             extra_channel_format: vec![None],
         };
 
-        // Helper function to decode with given options
-        fn decode_image(
-            file: &[u8],
-            rgba_format: &JxlPixelFormat,
-            premultiply: bool,
-            use_simple: bool,
-        ) -> (Image<f32>, usize, usize) {
-            let options = JxlDecoderOptions {
-                premultiply_output: premultiply,
-                ..Default::default()
-            };
-            let decoder = JxlDecoder::<states::Initialized>::new(options);
-            let mut input = file;
-
-            // Advance to image info
-            let mut decoder = decoder;
-            let mut decoder = loop {
-                match decoder.process(&mut input).unwrap() {
-                    ProcessingResult::Complete { result } => break result,
-                    ProcessingResult::NeedsMoreInput { fallback, .. } => {
-                        if input.is_empty() {
-                            panic!("Unexpected end of input");
-                        }
-                        decoder = fallback;
-                    }
-                }
-            };
-            decoder.set_use_simple_pipeline(use_simple);
-            decoder.set_pixel_format(rgba_format.clone());
-
-            let basic_info = decoder.basic_info().clone();
-            let (width, height) = basic_info.size;
-
-            // Advance to frame info
-            let mut decoder = loop {
-                match decoder.process(&mut input).unwrap() {
-                    ProcessingResult::Complete { result } => break result,
-                    ProcessingResult::NeedsMoreInput { fallback, .. } => {
-                        if input.is_empty() {
-                            panic!("Unexpected end of input");
-                        }
-                        decoder = fallback;
-                    }
-                }
-            };
-
-            let mut buffer = Image::<f32>::new((width * 4, height)).unwrap();
-            let mut buffers: Vec<_> = vec![JxlOutputBuffer::from_image_rect_mut(
-                buffer
-                    .get_rect_mut(Rect {
-                        origin: (0, 0),
-                        size: (width * 4, height),
-                    })
-                    .into_raw(),
-            )];
-
-            // Decode
-            loop {
-                match decoder.process(&mut input, &mut buffers).unwrap() {
-                    ProcessingResult::Complete { .. } => break,
-                    ProcessingResult::NeedsMoreInput { fallback, .. } => {
-                        if input.is_empty() {
-                            panic!("Unexpected end of input");
-                        }
-                        decoder = fallback;
-                    }
-                }
-            }
-
-            (buffer, width, height)
-        }
-
         // Test both pipelines
         for use_simple in [true, false] {
             let (without_flag_buffer, width, height) =
-                decode_image(&file, &rgba_format, false, use_simple);
-            let (with_flag_buffer, _, _) = decode_image(&file, &rgba_format, true, use_simple);
+                decode_with_format::<f32>(&file, &rgba_format, use_simple, false);
+            let (with_flag_buffer, _, _) =
+                decode_with_format::<f32>(&file, &rgba_format, use_simple, true);
 
             // Both outputs should be identical since source is already premultiplied
             // and we shouldn't double-premultiply
@@ -1044,8 +900,9 @@ pub(crate) mod tests {
             // Test both pipelines
             for use_simple in [true, false] {
                 let (f32_buffer, width, height) =
-                    decode_with_format::<f32>(&file, &f32_format, use_simple);
-                let (u8_buffer, _, _) = decode_with_format::<u8>(&file, &u8_format, use_simple);
+                    decode_with_format::<f32>(&file, &f32_format, use_simple, false);
+                let (u8_buffer, _, _) =
+                    decode_with_format::<u8>(&file, &u8_format, use_simple, false);
 
                 // Compare values: u8 / 255.0 should match f32
                 // Tolerance: quantization error of ±0.5/255 ≈ 0.00196 plus small rounding
@@ -1103,8 +960,9 @@ pub(crate) mod tests {
 
             for use_simple in [true, false] {
                 let (f32_buffer, width, height) =
-                    decode_with_format::<f32>(&file, &f32_format, use_simple);
-                let (u16_buffer, _, _) = decode_with_format::<u16>(&file, &u16_format, use_simple);
+                    decode_with_format::<f32>(&file, &f32_format, use_simple, false);
+                let (u16_buffer, _, _) =
+                    decode_with_format::<u16>(&file, &u16_format, use_simple, false);
 
                 // Tolerance: quantization error of ±0.5/65535 plus small rounding
                 let tolerance = 0.0001;
@@ -1159,8 +1017,9 @@ pub(crate) mod tests {
 
             for use_simple in [true, false] {
                 let (f32_buffer, width, height) =
-                    decode_with_format::<f32>(&file, &f32_format, use_simple);
-                let (f16_buffer, _, _) = decode_with_format::<f16>(&file, &f16_format, use_simple);
+                    decode_with_format::<f32>(&file, &f32_format, use_simple, false);
+                let (f16_buffer, _, _) =
+                    decode_with_format::<f16>(&file, &f16_format, use_simple, false);
 
                 // f16 has about 3 decimal digits of precision
                 // For values in [0,1], the relative error is about 0.001
@@ -1195,8 +1054,12 @@ pub(crate) mod tests {
         file: &[u8],
         pixel_format: &JxlPixelFormat,
         use_simple: bool,
+        premultiply: bool,
     ) -> (Image<T>, usize, usize) {
-        let options = JxlDecoderOptions::default();
+        let options = JxlDecoderOptions {
+            premultiply_output: premultiply,
+            ..Default::default()
+        };
         let mut decoder = JxlDecoder::<states::Initialized>::new(options);
         let mut input = file;
 
