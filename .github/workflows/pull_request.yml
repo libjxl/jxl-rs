@@ -237,6 +237,9 @@ jobs:
       with:
         fetch-depth: 0  # Full history needed for jxl-perfhistory
 
+    - name: Fetch base branch
+      run: git fetch origin ${{ github.base_ref }}
+
     - name: Install latest rust toolchain
       uses: dtolnay/rust-toolchain@stable
 
