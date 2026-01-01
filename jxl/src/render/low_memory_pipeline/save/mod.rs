@@ -76,10 +76,16 @@ impl SaveStage {
                 relative_y,
                 self.data_format,
             ),
+            Orientation::FlipVertical => identity::store(
+                data,
+                frame_y,
+                save_start.0..save_end.0,
+                buf,
+                save_size.1 - 1 - relative_y,
+                self.data_format,
+            ),
             _ => 0,
         };
-
-        // TODO(veluca): this is very slow, implement more fast paths.
 
         macro_rules! write_pixel {
             ($px: expr, $endianness: expr, $y: expr, $x: expr) => {
