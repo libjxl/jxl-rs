@@ -172,7 +172,11 @@ fn validate_spline_point_pos<T: num_traits::ToPrimitive>(x: T, y: T) -> Result<(
 const CHANNEL_WEIGHT: [f32; 4] = [0.0042, 0.075, 0.07, 0.3333];
 
 fn area_limit(image_size: u64) -> u64 {
-    (1024 * image_size + (1u64 << 32)).min(1u64 << 42)
+    // Use saturating arithmetic to prevent overflow
+    1024u64
+        .saturating_mul(image_size)
+        .saturating_add(1u64 << 32)
+        .min(1u64 << 42)
 }
 
 impl QuantizedSpline {
@@ -671,14 +675,16 @@ impl Splines {
     ) -> Result<()> {
         let mut total_estimated_area_reached = 0u64;
         let mut splines = Vec::new();
-        let area_limit = area_limit(image_xsize * image_ysize);
+        // Use saturating_mul to prevent overflow with malicious image dimensions
+        let image_area = image_xsize.saturating_mul(image_ysize);
+        let area_limit = area_limit(image_area);
         for (index, qspline) in self.splines.iter().enumerate() {
             let spline = qspline.dequantize(
                 &self.starting_points[index],
                 self.quantization_adjustment,
                 color_correlation_params.y_to_x_lf(),
                 color_correlation_params.y_to_b_lf(),
-                image_xsize * image_ysize,
+                image_area,
             )?;
             total_estimated_area_reached += spline.estimated_area_reached;
             if total_estimated_area_reached > area_limit {
