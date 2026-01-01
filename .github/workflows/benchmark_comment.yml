@@ -33,9 +33,7 @@ jobs:
           gh pr comment "$PR_NUMBER" --create-if-none --edit-last --body-file - <<EOF
           ## Benchmark @ ${HEAD_SHA:0:7}
 
-          \`\`\`
           $(cat benchmark.txt)
-          \`\`\`
           EOF
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
