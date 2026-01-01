@@ -271,7 +271,7 @@ jobs:
       continue-on-error: true  # Never fail the PR
       run: |
         mkdir -p benchmark-binaries
-        (jxl-perfhistory -r 5 -b benchmark-binaries -g "testimages/*.jxl" -c 0.99 -e 0.03 --ignore-noisy-system --pr-comment || echo "Benchmark failed") > benchmark.txt
+        (jxl-perfhistory -b benchmark-binaries -g "testimages/*.jxl" -c 0.99 -e 0.03 --ignore-noisy-system --pr-comment || echo "Benchmark failed") > benchmark.txt
 
     - name: Save PR context
       run: |
@@ -283,10 +283,7 @@ jobs:
       run: |
         echo "## Performance Benchmark" >> $GITHUB_STEP_SUMMARY
         echo "" >> $GITHUB_STEP_SUMMARY
-        echo '```' >> $GITHUB_STEP_SUMMARY
         cat benchmark.txt >> $GITHUB_STEP_SUMMARY
-        echo "" >> $GITHUB_STEP_SUMMARY
-        echo '```' >> $GITHUB_STEP_SUMMARY
         echo "" >> $GITHUB_STEP_SUMMARY
 
     - uses: actions/upload-artifact@v4
