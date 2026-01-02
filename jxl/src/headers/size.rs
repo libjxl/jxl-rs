@@ -110,3 +110,72 @@ impl Preview {
         })
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Test that aspect ratio calculations handle large ysize values correctly.
+    ///
+    /// This test demonstrates integer overflow vulnerabilities in the current
+    /// implementation. With large ysize values, the aspect ratio calculations
+    /// either overflow (Ratio2Over1) or truncate (other ratios that calculate
+    /// in u64 then cast to u32).
+    ///
+    /// Expected behavior: calculations should not wrap/truncate, and should
+    /// either return correct u64 values or reject invalid dimensions early.
+    #[test]
+    fn test_aspect_ratio_large_values_no_overflow() {
+        // Test Ratio2Over1 with value that would overflow u32
+        // ysize * 2 where ysize > 2^31 will wrap in release, panic in debug
+        let large_ysize: u32 = 0x8000_0000; // 2^31
+        let size = Size {
+            small: false,
+            ysize_div8: None,
+            ysize: Some(large_ysize),
+            ratio: AspectRatio::Ratio2Over1,
+            xsize_div8: None,
+            xsize: None,
+        };
+
+        // The mathematically correct result is 2^32 = 4294967296
+        // But the current implementation does ysize * 2 which wraps to 0
+        let xsize = size.xsize();
+
+        // This assertion will FAIL on current code (xsize wraps to 0)
+        // After fix, xsize() should return u64 and this test needs updating
+        assert!(
+            xsize >= large_ysize,
+            "xsize ({}) should be >= ysize ({}) for Ratio2Over1, but wrapped due to overflow",
+            xsize,
+            large_ysize
+        );
+    }
+
+    /// Test that Ratio16Over9 doesn't truncate for large values.
+    #[test]
+    fn test_aspect_ratio_16_9_no_truncation() {
+        // For ysize near u32::MAX, the result of ysize * 16 / 9 exceeds u32::MAX
+        let large_ysize: u32 = 3_000_000_000;
+        let size = Size {
+            small: false,
+            ysize_div8: None,
+            ysize: Some(large_ysize),
+            ratio: AspectRatio::Ratio16Over9,
+            xsize_div8: None,
+            xsize: None,
+        };
+
+        // Correct result: 3_000_000_000 * 16 / 9 = 5_333_333_333 (exceeds u32::MAX)
+        // Current code: (3_000_000_000u64 * 16 / 9) as u32 = truncated value
+        let xsize = size.xsize();
+        let expected = (large_ysize as u64) * 16 / 9;
+
+        // This will FAIL because xsize is truncated to u32
+        assert_eq!(
+            xsize as u64, expected,
+            "xsize should be {} but was {} (truncated from u64 to u32)",
+            expected, xsize
+        );
+    }
+}
