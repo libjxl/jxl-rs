@@ -1113,15 +1113,17 @@ pub enum JxlColorProfile {
 }
 
 impl JxlColorProfile {
-    /// Returns the ICC profile, panicking if unavailable.
+    /// Returns the ICC profile, or an error if creation fails.
     ///
-    /// # Panics
-    /// Panics if the color encoding cannot generate an ICC profile.
-    /// Consider using `try_as_icc` for fallible conversion.
-    pub fn as_icc(&self) -> Cow<'_, Vec<u8>> {
+    /// For color encodings that cannot generate ICC profiles (e.g., malformed
+    /// color parameters), this returns an error instead of panicking.
+    pub fn as_icc(&self) -> Result<Cow<'_, Vec<u8>>, Error> {
         match self {
-            Self::Icc(x) => Cow::Borrowed(x),
-            Self::Simple(encoding) => Cow::Owned(encoding.maybe_create_profile().unwrap().unwrap()),
+            Self::Icc(x) => Ok(Cow::Borrowed(x)),
+            Self::Simple(encoding) => encoding
+                .maybe_create_profile()?
+                .map(Cow::Owned)
+                .ok_or(Error::IccProfileCreationFailed),
         }
     }
 
@@ -1129,14 +1131,7 @@ impl JxlColorProfile {
     ///
     /// Returns `None` for color encodings that cannot generate ICC profiles.
     pub fn try_as_icc(&self) -> Option<Cow<'_, Vec<u8>>> {
-        match self {
-            Self::Icc(x) => Some(Cow::Borrowed(x)),
-            Self::Simple(encoding) => encoding
-                .maybe_create_profile()
-                .ok()
-                .flatten()
-                .map(Cow::Owned),
-        }
+        self.as_icc().ok()
     }
 }
 

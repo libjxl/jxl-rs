@@ -253,6 +253,8 @@ pub enum Error {
     MatrixInversionFailed(f64),
     #[error("Unsupported transfer function when writing ICC")]
     IccUnsupportedTransferFunction,
+    #[error("ICC profile creation returned None")]
+    IccProfileCreationFailed,
     #[error("Table size too large when writing ICC: {0}")]
     IccTableSizeExceeded(usize),
     #[error("Invalid CMS configuration: requested ICC but no CMS is configured")]

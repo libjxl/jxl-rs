@@ -250,8 +250,8 @@ fn main() -> Result<()> {
     };
 
     // Get metadata from typed output before converting
-    let output_icc = typed_output.output_profile().as_icc().to_vec();
-    let embedded_icc = typed_output.embedded_profile().as_icc().to_vec();
+    let output_icc = typed_output.output_profile().as_icc()?.to_vec();
+    let embedded_icc = typed_output.embedded_profile().as_icc()?.to_vec();
     let image_size = typed_output.size();
     let original_bit_depth = typed_output.original_bit_depth().clone();
 
