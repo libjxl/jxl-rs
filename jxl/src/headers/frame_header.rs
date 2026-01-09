@@ -701,7 +701,7 @@ impl FrameHeader {
 
         for w in self.passes.last_pass.windows(2) {
             let [last_lp, lp] = w else { unreachable!() };
-            if lp >= last_lp {
+            if lp <= last_lp {
                 return Err(Error::PassesLastPassNonIncreasing);
             }
         }
