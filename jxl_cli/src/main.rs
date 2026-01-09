@@ -271,13 +271,13 @@ fn main() -> Result<()> {
 
     if opt.speedtest {
         let num_pixels = image_size.0 * image_size.1;
-        let duration_seconds = duration_sum.as_nanos() as f64 / 1e9;
+        let duration_seconds = duration_sum.as_secs_f64();
         let avg_seconds = duration_seconds / reps as f64;
         println!(
-            "Decoded {} pixels in {} seconds: {} pixels/s",
+            "Decoded {} pixels in {:.3} seconds: {:.3} MP/s",
             reps as usize * num_pixels,
             duration_seconds,
-            num_pixels as f64 / avg_seconds
+            (num_pixels as f64 / avg_seconds) / 1e6
         );
     }
 
