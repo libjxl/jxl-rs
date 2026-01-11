@@ -1106,7 +1106,7 @@ impl JxlColorEncoding {
     }
 }
 
-#[derive(Clone)]
+#[derive(Clone, PartialEq)]
 pub enum JxlColorProfile {
     Icc(Vec<u8>),
     Simple(JxlColorEncoding),
@@ -1176,7 +1176,7 @@ pub trait JxlCms {
         input: JxlColorProfile,
         output: JxlColorProfile,
         intensity_target: f32,
-    ) -> Result<(usize, Vec<Box<dyn JxlCmsTransformer>>)>;
+    ) -> Result<(usize, Vec<Box<dyn JxlCmsTransformer + Send>>)>;
 }
 
 /// Writes a u32 value in big-endian format to the slice at the given position.
