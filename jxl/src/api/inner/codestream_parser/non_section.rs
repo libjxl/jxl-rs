@@ -365,7 +365,10 @@ impl CodestreamParser {
             if self.non_section_buf.is_empty() {
                 break;
             }
-            buf.data = vec![0; buf.len];
+            let mut data = Vec::new();
+            data.try_reserve_exact(buf.len)?;
+            data.resize(buf.len, 0);
+            buf.data = data;
             self.ready_section_data += self
                 .non_section_buf
                 .take(&mut [IoSliceMut::new(&mut buf.data)]);
