@@ -19,6 +19,7 @@ mod channels;
 mod internal;
 mod low_memory_pipeline;
 mod save;
+mod simd_utils;
 #[cfg(test)]
 mod simple_pipeline;
 pub mod stages;
@@ -54,7 +55,7 @@ pub trait RenderPipelineInPlaceStage: Any + std::fmt::Display {
         state: Option<&mut dyn Any>,
     );
 
-    fn init_local_state(&self) -> Result<Option<Box<dyn Any>>> {
+    fn init_local_state(&self, _thread_index: usize) -> Result<Option<Box<dyn Any>>> {
         Ok(None)
     }
 
@@ -91,7 +92,7 @@ pub trait RenderPipelineInOutStage: Any + std::fmt::Display {
         state: Option<&mut dyn Any>,
     );
 
-    fn init_local_state(&self) -> Result<Option<Box<dyn Any>>> {
+    fn init_local_state(&self, _thread_index: usize) -> Result<Option<Box<dyn Any>>> {
         Ok(None)
     }
 

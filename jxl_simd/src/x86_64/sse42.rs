@@ -303,6 +303,123 @@ unsafe impl F32SimdVec for F32VecSse42 {
         unsafe { store_interleaved_8_impl(a.0, b.0, c.0, d.0, e.0, f.0, g.0, h.0, dest) }
     }
 
+    #[inline(always)]
+    fn load_deinterleaved_2(d: Self::Descriptor, src: &[f32]) -> (Self, Self) {
+        #[target_feature(enable = "sse4.2")]
+        #[inline]
+        fn load_deinterleaved_2_impl(src: &[f32]) -> (__m128, __m128) {
+            assert!(src.len() >= 2 * F32VecSse42::LEN);
+            // Input: [a0, b0, a1, b1, a2, b2, a3, b3]
+            // Output: a = [a0, a1, a2, a3], b = [b0, b1, b2, b3]
+            // SAFETY: we just checked that src has enough space.
+            let (in0, in1) = unsafe {
+                (
+                    _mm_loadu_ps(src.as_ptr()),        // [a0, b0, a1, b1]
+                    _mm_loadu_ps(src.as_ptr().add(4)), // [a2, b2, a3, b3]
+                )
+            };
+
+            // Shuffle to separate a and b components
+            let a = _mm_shuffle_ps::<0x88>(in0, in1); // [a0, a1, a2, a3]
+            let b = _mm_shuffle_ps::<0xDD>(in0, in1); // [b0, b1, b2, b3]
+
+            (a, b)
+        }
+
+        // SAFETY: sse4.2 is available from the safety invariant on the descriptor.
+        let (a, b) = unsafe { load_deinterleaved_2_impl(src) };
+        (Self(a, d), Self(b, d))
+    }
+
+    #[inline(always)]
+    fn load_deinterleaved_3(d: Self::Descriptor, src: &[f32]) -> (Self, Self, Self) {
+        #[target_feature(enable = "sse4.2")]
+        #[inline]
+        fn load_deinterleaved_3_impl(src: &[f32]) -> (__m128, __m128, __m128) {
+            assert!(src.len() >= 3 * F32VecSse42::LEN);
+            // Input: [a0, b0, c0, a1, b1, c1, a2, b2, c2, a3, b3, c3]
+            // Output: a = [a0, a1, a2, a3], b = [b0, b1, b2, b3], c = [c0, c1, c2, c3]
+
+            // SAFETY: we just checked that src has enough space.
+            let (in0, in1, in2) = unsafe {
+                (
+                    _mm_loadu_ps(src.as_ptr()),        // [a0, b0, c0, a1]
+                    _mm_loadu_ps(src.as_ptr().add(4)), // [b1, c1, a2, b2]
+                    _mm_loadu_ps(src.as_ptr().add(8)), // [c2, a3, b3, c3]
+                )
+            };
+
+            // Extract using shuffles.
+            // _mm_shuffle_ps(a, b, imm8): result[0:1] from a, result[2:3] from b
+            // imm8 bits: [1:0]=A, [3:2]=B select from a; [5:4]=C, [7:6]=D select from b
+            //
+            // Element positions in input:
+            // a: a0=in0[0], a1=in0[3], a2=in1[2], a3=in2[1]
+            // b: b0=in0[1], b1=in1[0], b2=in1[3], b3=in2[2]
+            // c: c0=in0[2], c1=in1[1], c2=in2[0], c3=in2[3]
+
+            // Channel a: gather a0,a1 and a2,a3, then combine
+            let a_lo = _mm_shuffle_ps::<0xC0>(in0, in0); // [a0, a0, a0, a1]
+            let a_hi = _mm_shuffle_ps::<0x98>(in1, in2); // [b1, a2, a3, b3]
+            let a = _mm_shuffle_ps::<0x9C>(a_lo, a_hi); // [a0, a1, a2, a3]
+
+            // Channel b: gather b0,b1 and b2,b3, then combine
+            let b_lo = _mm_shuffle_ps::<0x01>(in0, in1); // [b0, a0, b1, b1]
+            let b_hi = _mm_shuffle_ps::<0x2C>(in1, in2); // [b1, b2, b3, c2]
+            let b = _mm_shuffle_ps::<0x98>(b_lo, b_hi); // [b0, b1, b2, b3]
+
+            // Channel c: gather c0,c1 and c2,c3, then combine
+            let c_lo = _mm_shuffle_ps::<0x12>(in0, in1); // [c0, a0, c1, b1]
+            let c_hi = _mm_shuffle_ps::<0x30>(in2, in2); // [c2, c2, c3, c2]
+            let c = _mm_shuffle_ps::<0x98>(c_lo, c_hi); // [c0, c1, c2, c3]
+
+            (a, b, c)
+        }
+
+        // SAFETY: sse4.2 is available from the safety invariant on the descriptor.
+        let (a, b, c) = unsafe { load_deinterleaved_3_impl(src) };
+        (Self(a, d), Self(b, d), Self(c, d))
+    }
+
+    #[inline(always)]
+    fn load_deinterleaved_4(d: Self::Descriptor, src: &[f32]) -> (Self, Self, Self, Self) {
+        #[target_feature(enable = "sse4.2")]
+        #[inline]
+        fn load_deinterleaved_4_impl(src: &[f32]) -> (__m128, __m128, __m128, __m128) {
+            assert!(src.len() >= 4 * F32VecSse42::LEN);
+            // Input: [a0, b0, c0, d0, a1, b1, c1, d1, a2, b2, c2, d2, a3, b3, c3, d3]
+            // Output: a = [a0, a1, a2, a3], b = [b0, b1, b2, b3], c = [c0, c1, c2, c3], d = [d0, d1, d2, d3]
+            // SAFETY: we just checked that src has enough space.
+            let (in0, in1, in2, in3) = unsafe {
+                (
+                    _mm_loadu_ps(src.as_ptr()),         // [a0, b0, c0, d0]
+                    _mm_loadu_ps(src.as_ptr().add(4)),  // [a1, b1, c1, d1]
+                    _mm_loadu_ps(src.as_ptr().add(8)),  // [a2, b2, c2, d2]
+                    _mm_loadu_ps(src.as_ptr().add(12)), // [a3, b3, c3, d3]
+                )
+            };
+
+            // This is effectively a 4x4 matrix transpose
+            // First interleave pairs
+            let t0 = _mm_unpacklo_ps(in0, in1); // [a0, a1, b0, b1]
+            let t1 = _mm_unpackhi_ps(in0, in1); // [c0, c1, d0, d1]
+            let t2 = _mm_unpacklo_ps(in2, in3); // [a2, a3, b2, b3]
+            let t3 = _mm_unpackhi_ps(in2, in3); // [c2, c3, d2, d3]
+
+            // Then combine
+            let a = _mm_castpd_ps(_mm_unpacklo_pd(_mm_castps_pd(t0), _mm_castps_pd(t2))); // [a0, a1, a2, a3]
+            let b = _mm_castpd_ps(_mm_unpackhi_pd(_mm_castps_pd(t0), _mm_castps_pd(t2))); // [b0, b1, b2, b3]
+            let c = _mm_castpd_ps(_mm_unpacklo_pd(_mm_castps_pd(t1), _mm_castps_pd(t3))); // [c0, c1, c2, c3]
+            let dv = _mm_castpd_ps(_mm_unpackhi_pd(_mm_castps_pd(t1), _mm_castps_pd(t3))); // [d0, d1, d2, d3]
+
+            (a, b, c, dv)
+        }
+
+        // SAFETY: sse4.2 is available from the safety invariant on the descriptor.
+        let (a, b, c, dv) = unsafe { load_deinterleaved_4_impl(src) };
+        (Self(a, d), Self(b, d), Self(c, d), Self(dv, d))
+    }
+
     fn_sse42!(this: F32VecSse42, fn mul_add(mul: F32VecSse42, add: F32VecSse42) -> F32VecSse42 {
         this * mul + add
     });

@@ -403,7 +403,7 @@ impl<const N: usize, const SHIFT: u8> RenderPipelineInOutStage for Upsample<N, S
         c == self.channel
     }
 
-    fn init_local_state(&self) -> crate::error::Result<Option<Box<dyn Any>>> {
+    fn init_local_state(&self, _thread_index: usize) -> crate::error::Result<Option<Box<dyn Any>>> {
         Ok(Some(Box::new(UpsampleState::new()) as Box<dyn Any>))
     }
 

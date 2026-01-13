@@ -4,6 +4,7 @@
 // license that can be found in the LICENSE file.
 
 use crate::api::JxlCms;
+use crate::api::JxlColorProfile;
 use crate::api::JxlColorType;
 use crate::api::JxlDataFormat;
 use crate::api::JxlOutputBuffer;
@@ -204,12 +205,16 @@ impl Frame {
         Ok(())
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn build_render_pipeline<T: RenderPipeline>(
         decoder_state: &DecoderState,
         frame_header: &FrameHeader,
         lf_global: &LfGlobalState,
         epf_sigma: &Option<SigmaSource>,
         pixel_format: &JxlPixelFormat,
+        cms: Option<&dyn JxlCms>,
+        input_profile: &JxlColorProfile,
+        output_profile: &JxlColorProfile,
     ) -> Result<Box<T>> {
         let num_channels = frame_header.num_extra_channels as usize + 3;
         let num_temp_channels = if frame_header.has_noise() { 3 } else { 0 };
@@ -407,6 +412,28 @@ impl Frame {
             if decoder_state.xyb_output_linear {
                 linear = true;
             } else {
+                // Insert CMS stage if profiles differ and internal conversion cannot handle it
+                if let Some(cms) = cms
+                    && input_profile != output_profile
+                    && !input_profile.can_convert_internally(output_profile)
+                {
+                    let max_pixels = 1 << frame_header.log_group_dim();
+                    let (out_channels, transformers) = cms.initialize_transforms(
+                        1, // num transforms (1 for single-threaded)
+                        max_pixels,
+                        input_profile.clone(),
+                        output_profile.clone(),
+                        output_color_info.intensity_target,
+                    )?;
+                    if !transformers.is_empty() {
+                        pipeline = pipeline.add_inplace_stage(CmsStage::new(
+                            transformers,
+                            0,
+                            out_channels,
+                            max_pixels,
+                        ))?;
+                    }
+                }
                 pipeline = pipeline
                     .add_inplace_stage(FromLinearStage::new(0, output_color_info.tf.clone()))?;
             }
@@ -563,7 +590,9 @@ impl Frame {
     pub fn prepare_render_pipeline(
         &mut self,
         pixel_format: &JxlPixelFormat,
-        _cms: Option<&dyn JxlCms>,
+        cms: Option<&dyn JxlCms>,
+        input_profile: &JxlColorProfile,
+        output_profile: &JxlColorProfile,
     ) -> Result<()> {
         let lf_global = self.lf_global.as_mut().unwrap();
         let epf_sigma = if self.header.restoration_filter.epf_iters > 0 {
@@ -580,6 +609,9 @@ impl Frame {
                 lf_global,
                 &epf_sigma,
                 pixel_format,
+                cms,
+                input_profile,
+                output_profile,
             )? as Box<dyn std::any::Any>
         } else {
             Self::build_render_pipeline::<LowMemoryRenderPipeline>(
@@ -588,6 +620,9 @@ impl Frame {
                 lf_global,
                 &epf_sigma,
                 pixel_format,
+                cms,
+                input_profile,
+                output_profile,
             )? as Box<dyn std::any::Any>
         };
         #[cfg(not(test))]
@@ -597,6 +632,9 @@ impl Frame {
             lf_global,
             &epf_sigma,
             pixel_format,
+            cms,
+            input_profile,
+            output_profile,
         )?;
         self.render_pipeline = Some(render_pipeline);
         self.lf_global_was_rendered = false;

@@ -397,7 +397,7 @@ impl RenderPipeline for LowMemoryRenderPipeline {
             local_states: shared
                 .stages
                 .iter()
-                .map(|x| x.init_local_state())
+                .map(|x| x.init_local_state(0)) // Thread index 0 for single-threaded execution
                 .collect::<Result<_>>()?,
             shared,
             downsampling_for_stage,

@@ -5,6 +5,7 @@
 
 mod blending;
 mod chroma_upsample;
+mod cms;
 mod convert;
 mod epf;
 mod extend;
@@ -25,6 +26,7 @@ mod nearest_neighbor;
 
 pub use blending::*;
 pub use chroma_upsample::*;
+pub use cms::*;
 pub use convert::*;
 pub use epf::*;
 pub use extend::*;
