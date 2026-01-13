@@ -152,6 +152,10 @@ pub enum Error {
     #[error("Invalid modular mode property: {0}")]
     InvalidProperty(u32),
     #[error("Invalid alpha channel for blending: {0}, limit is {1}")]
+    InvalidBlendingAlphaChannel(usize, usize),
+    #[error("Invalid blending info count: {0}, expected {1}")]
+    InvalidBlendingInfoCount(usize, usize),
+    #[error("Invalid alpha channel for blending: {0}, limit is {1}")]
     PatchesInvalidAlphaChannel(usize, usize),
     #[error("Invalid patch blend mode: {0}, limit is {1}")]
     PatchesInvalidBlendMode(u8, u8),

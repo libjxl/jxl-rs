@@ -681,6 +681,40 @@ impl FrameHeader {
             ));
         }
 
+        let num_extra_channels = nonserialized.extra_channel_info.len();
+        let uses_alpha = |mode| {
+            matches!(mode, BlendingMode::Blend | BlendingMode::AlphaWeightedAdd)
+        };
+
+        if self.ec_blending_info.len() != num_extra_channels {
+            return Err(Error::InvalidBlendingInfoCount(
+                self.ec_blending_info.len(),
+                num_extra_channels,
+            ));
+        }
+
+        if num_extra_channels > 0
+            && uses_alpha(self.blending_info.mode)
+            && self.blending_info.alpha_channel as usize >= num_extra_channels
+        {
+            return Err(Error::InvalidBlendingAlphaChannel(
+                self.blending_info.alpha_channel as usize,
+                num_extra_channels,
+            ));
+        }
+
+        for info in &self.ec_blending_info {
+            if num_extra_channels > 0
+                && uses_alpha(info.mode)
+                && info.alpha_channel as usize >= num_extra_channels
+            {
+                return Err(Error::InvalidBlendingAlphaChannel(
+                    info.alpha_channel as usize,
+                    num_extra_channels,
+                ));
+            }
+        }
+
         if self.has_lf_frame() && self.lf_level >= 4 {
             return Err(Error::InvalidLfLevel(self.lf_level));
         }
