@@ -681,6 +681,34 @@ impl FrameHeader {
             ));
         }
 
+        let num_extra_channels = nonserialized.extra_channel_info.len();
+        let uses_alpha =
+            |mode| matches!(mode, BlendingMode::Blend | BlendingMode::AlphaWeightedAdd);
+
+        debug_assert_eq!(self.ec_blending_info.len(), num_extra_channels);
+
+        if num_extra_channels > 0
+            && uses_alpha(self.blending_info.mode)
+            && self.blending_info.alpha_channel as usize >= num_extra_channels
+        {
+            return Err(Error::InvalidBlendingAlphaChannel(
+                self.blending_info.alpha_channel as usize,
+                num_extra_channels,
+            ));
+        }
+
+        for info in &self.ec_blending_info {
+            if num_extra_channels > 0
+                && uses_alpha(info.mode)
+                && info.alpha_channel as usize >= num_extra_channels
+            {
+                return Err(Error::InvalidBlendingAlphaChannel(
+                    info.alpha_channel as usize,
+                    num_extra_channels,
+                ));
+            }
+        }
+
         if self.has_lf_frame() && self.lf_level >= 4 {
             return Err(Error::InvalidLfLevel(self.lf_level));
         }
@@ -777,6 +805,19 @@ mod test_frame_header {
         assert_eq!(frame_header.name, String::from(""));
         assert_eq!(frame_header.restoration_filter.epf_iters, 0);
         assert!(!frame_header.restoration_filter.gab);
+    }
+
+    #[test]
+    fn test_invalid_blending_alpha_channel() {
+        let (file_header, mut frame_header, _) =
+            read_headers_and_toc(include_bytes!("../../resources/test/extra_channels.jxl"))
+                .unwrap();
+        let nonserialized = file_header.frame_header_nonserialized();
+        frame_header.blending_info.mode = BlendingMode::Blend;
+        frame_header.blending_info.alpha_channel = nonserialized.extra_channel_info.len() as u32;
+
+        let err = frame_header.check(&nonserialized).unwrap_err();
+        assert!(matches!(err, Error::InvalidBlendingAlphaChannel(_, _)));
     }
 
     #[test]
