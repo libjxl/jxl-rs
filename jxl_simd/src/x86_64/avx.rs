@@ -403,9 +403,10 @@ unsafe impl F32SimdVec for F32VecAvx {
             // Output: a = [a0, a1, a2, a3, a4, a5, a6, a7], b = [b0, b1, b2, b3, b4, b5, b6, b7]
             // SAFETY: we just checked that src has enough space.
             let (in0, in1) = unsafe {
-                let in0 = _mm256_loadu_ps(src.as_ptr()); // [a0,b0,a1,b1, a2,b2,a3,b3]
-                let in1 = _mm256_loadu_ps(src.as_ptr().add(8)); // [a4,b4,a5,b5, a6,b6,a7,b7]
-                (in0, in1)
+                (
+                    _mm256_loadu_ps(src.as_ptr()),        // [a0,b0,a1,b1, a2,b2,a3,b3]
+                    _mm256_loadu_ps(src.as_ptr().add(8)), // [a4,b4,a5,b5, a6,b6,a7,b7]
+                )
             };
 
             // Reverse the store_interleaved_2 operation
@@ -427,19 +428,64 @@ unsafe impl F32SimdVec for F32VecAvx {
 
     #[inline(always)]
     fn load_deinterleaved_3(d: Self::Descriptor, src: &[f32]) -> (Self, Self, Self) {
-        assert!(src.len() >= 3 * Self::LEN);
-        // Input: [a0,b0,c0, a1,b1,c1, a2,b2,c2, a3,b3,c3, a4,b4,c4, a5,b5,c5, a6,b6,c6, a7,b7,c7]
-        // Output: a = [a0..a7], b = [b0..b7], c = [c0..c7]
-        // 3-way deinterleave doesn't have efficient SIMD support on x86, use scalar
-        let mut a = [0.0f32; 8];
-        let mut b = [0.0f32; 8];
-        let mut c = [0.0f32; 8];
-        for i in 0..8 {
-            a[i] = src[i * 3];
-            b[i] = src[i * 3 + 1];
-            c[i] = src[i * 3 + 2];
+        #[target_feature(enable = "avx2")]
+        #[inline]
+        fn load_deinterleaved_3_impl(src: &[f32]) -> (__m256, __m256, __m256) {
+            assert!(src.len() >= 3 * F32VecAvx::LEN);
+            // Input layout (24 floats):
+            // in0: [a0, b0, c0, a1, b1, c1, a2, b2]
+            // in1: [c2, a3, b3, c3, a4, b4, c4, a5]
+            // in2: [b5, c5, a6, b6, c6, a7, b7, c7]
+            // Output: a = [a0..a7], b = [b0..b7], c = [c0..c7]
+
+            // SAFETY: we just checked that src has enough space.
+            let (in0, in1, in2) = unsafe {
+                (
+                    _mm256_loadu_ps(src.as_ptr()),
+                    _mm256_loadu_ps(src.as_ptr().add(8)),
+                    _mm256_loadu_ps(src.as_ptr().add(16)),
+                )
+            };
+
+            // Use permutevar8x32 to gather elements into correct positions, then blend.
+            // permutevar8x32(src, idx): output[i] = src[idx[i]]
+
+            // a: a0=in0[0], a1=in0[3], a2=in0[6], a3=in1[1], a4=in1[4], a5=in1[7], a6=in2[2], a7=in2[5]
+            let perm_a0 = _mm256_setr_epi32(0, 3, 6, 0, 0, 0, 0, 0);
+            let perm_a1 = _mm256_setr_epi32(0, 0, 0, 1, 4, 7, 0, 0);
+            let perm_a2 = _mm256_setr_epi32(0, 0, 0, 0, 0, 0, 2, 5);
+            let a0 = _mm256_permutevar8x32_ps(in0, perm_a0);
+            let a1 = _mm256_permutevar8x32_ps(in1, perm_a1);
+            let a2 = _mm256_permutevar8x32_ps(in2, perm_a2);
+            let a_out = _mm256_blend_ps::<0b00111000>(a0, a1); // positions 3,4,5 from a1
+            let a_out = _mm256_blend_ps::<0b11000000>(a_out, a2); // positions 6,7 from a2
+
+            // b: b0=in0[1], b1=in0[4], b2=in0[7], b3=in1[2], b4=in1[5], b5=in2[0], b6=in2[3], b7=in2[6]
+            let perm_b0 = _mm256_setr_epi32(1, 4, 7, 0, 0, 0, 0, 0);
+            let perm_b1 = _mm256_setr_epi32(0, 0, 0, 2, 5, 0, 0, 0);
+            let perm_b2 = _mm256_setr_epi32(0, 0, 0, 0, 0, 0, 3, 6);
+            let b0 = _mm256_permutevar8x32_ps(in0, perm_b0);
+            let b1 = _mm256_permutevar8x32_ps(in1, perm_b1);
+            let b2 = _mm256_permutevar8x32_ps(in2, perm_b2);
+            let b_out = _mm256_blend_ps::<0b00011000>(b0, b1); // positions 3,4 from b1
+            let b_out = _mm256_blend_ps::<0b11100000>(b_out, b2); // positions 5,6,7 from b2
+
+            // c: c0=in0[2], c1=in0[5], c2=in1[0], c3=in1[3], c4=in1[6], c5=in2[1], c6=in2[4], c7=in2[7]
+            let perm_c0 = _mm256_setr_epi32(2, 5, 0, 0, 0, 0, 0, 0);
+            let perm_c1 = _mm256_setr_epi32(0, 0, 0, 3, 6, 0, 0, 0);
+            let perm_c2 = _mm256_setr_epi32(0, 0, 0, 0, 0, 1, 4, 7);
+            let c0 = _mm256_permutevar8x32_ps(in0, perm_c0);
+            let c1 = _mm256_permutevar8x32_ps(in1, perm_c1);
+            let c2 = _mm256_permutevar8x32_ps(in2, perm_c2);
+            let c_out = _mm256_blend_ps::<0b00011100>(c0, c1); // positions 2,3,4 from c1
+            let c_out = _mm256_blend_ps::<0b11100000>(c_out, c2); // positions 5,6,7 from c2
+
+            (a_out, b_out, c_out)
         }
-        (Self::load(d, &a), Self::load(d, &b), Self::load(d, &c))
+
+        // SAFETY: avx2 is available from the safety invariant on the descriptor.
+        let (a, b, c) = unsafe { load_deinterleaved_3_impl(src) };
+        (Self(a, d), Self(b, d), Self(c, d))
     }
 
     #[inline(always)]
@@ -452,11 +498,12 @@ unsafe impl F32SimdVec for F32VecAvx {
             // Output: a = [a0..a7], b = [b0..b7], c = [c0..c7], d = [d0..d7]
             // SAFETY: we just checked that src has enough space.
             let (in0, in1, in2, in3) = unsafe {
-                let in0 = _mm256_loadu_ps(src.as_ptr()); // [a0,b0,c0,d0, a1,b1,c1,d1]
-                let in1 = _mm256_loadu_ps(src.as_ptr().add(8)); // [a2,b2,c2,d2, a3,b3,c3,d3]
-                let in2 = _mm256_loadu_ps(src.as_ptr().add(16)); // [a4,b4,c4,d4, a5,b5,c5,d5]
-                let in3 = _mm256_loadu_ps(src.as_ptr().add(24)); // [a6,b6,c6,d6, a7,b7,c7,d7]
-                (in0, in1, in2, in3)
+                (
+                    _mm256_loadu_ps(src.as_ptr()),         // [a0,b0,c0,d0, a1,b1,c1,d1]
+                    _mm256_loadu_ps(src.as_ptr().add(8)),  // [a2,b2,c2,d2, a3,b3,c3,d3]
+                    _mm256_loadu_ps(src.as_ptr().add(16)), // [a4,b4,c4,d4, a5,b5,c5,d5]
+                    _mm256_loadu_ps(src.as_ptr().add(24)), // [a6,b6,c6,d6, a7,b7,c7,d7]
+                )
             };
 
             // This is essentially an 8x4 to 4x8 transpose

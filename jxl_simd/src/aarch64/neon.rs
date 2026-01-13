@@ -278,10 +278,8 @@ unsafe impl F32SimdVec for F32VecNeon {
         assert!(src.len() >= 2 * Self::LEN);
         // SAFETY: we just checked that `src` has enough space, and neon is available
         // from the safety invariant on `d`.
-        unsafe {
-            let float32x4x2_t(a, b) = vld2q_f32(src.as_ptr());
-            (Self(a, d), Self(b, d))
-        }
+        let float32x4x2_t(a, b) = unsafe { vld2q_f32(src.as_ptr()) };
+        (Self(a, d), Self(b, d))
     }
 
     #[inline(always)]
@@ -289,10 +287,8 @@ unsafe impl F32SimdVec for F32VecNeon {
         assert!(src.len() >= 3 * Self::LEN);
         // SAFETY: we just checked that `src` has enough space, and neon is available
         // from the safety invariant on `d`.
-        unsafe {
-            let float32x4x3_t(a, b, c) = vld3q_f32(src.as_ptr());
-            (Self(a, d), Self(b, d), Self(c, d))
-        }
+        let float32x4x3_t(a, b, c) = unsafe { vld3q_f32(src.as_ptr()) };
+        (Self(a, d), Self(b, d), Self(c, d))
     }
 
     #[inline(always)]
@@ -300,10 +296,8 @@ unsafe impl F32SimdVec for F32VecNeon {
         assert!(src.len() >= 4 * Self::LEN);
         // SAFETY: we just checked that `src` has enough space, and neon is available
         // from the safety invariant on `d`.
-        unsafe {
-            let float32x4x4_t(a, b, c, e) = vld4q_f32(src.as_ptr());
-            (Self(a, d), Self(b, d), Self(c, d), Self(e, d))
-        }
+        let float32x4x4_t(a, b, c, e) = unsafe { vld4q_f32(src.as_ptr()) };
+        (Self(a, d), Self(b, d), Self(c, d), Self(e, d))
     }
 
     #[inline(always)]

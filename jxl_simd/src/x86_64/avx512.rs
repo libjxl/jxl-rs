@@ -456,14 +456,17 @@ unsafe impl F32SimdVec for F32VecAvx512 {
             // Output: a = [a0..a15], b = [b0..b15]
             // SAFETY: we just checked that src has enough space.
             let (in0, in1) = unsafe {
-                let in0 = _mm512_loadu_ps(src.as_ptr());
-                let in1 = _mm512_loadu_ps(src.as_ptr().add(16));
-                (in0, in1)
+                (
+                    _mm512_loadu_ps(src.as_ptr()),
+                    _mm512_loadu_ps(src.as_ptr().add(16)),
+                )
             };
 
             // Use permutex2var to gather even/odd indices
-            let idx_a = _mm512_setr_epi32(0, 2, 4, 6, 8, 10, 12, 14, 16, 18, 20, 22, 24, 26, 28, 30);
-            let idx_b = _mm512_setr_epi32(1, 3, 5, 7, 9, 11, 13, 15, 17, 19, 21, 23, 25, 27, 29, 31);
+            let idx_a =
+                _mm512_setr_epi32(0, 2, 4, 6, 8, 10, 12, 14, 16, 18, 20, 22, 24, 26, 28, 30);
+            let idx_b =
+                _mm512_setr_epi32(1, 3, 5, 7, 9, 11, 13, 15, 17, 19, 21, 23, 25, 27, 29, 31);
 
             let a = _mm512_permutex2var_ps(in0, idx_a, in1);
             let b = _mm512_permutex2var_ps(in0, idx_b, in1);
@@ -478,17 +481,59 @@ unsafe impl F32SimdVec for F32VecAvx512 {
 
     #[inline(always)]
     fn load_deinterleaved_3(d: Self::Descriptor, src: &[f32]) -> (Self, Self, Self) {
-        assert!(src.len() >= 3 * Self::LEN);
-        // 3-way deinterleave doesn't have efficient SIMD support on x86, use scalar
-        let mut a = [0.0f32; 16];
-        let mut b = [0.0f32; 16];
-        let mut c = [0.0f32; 16];
-        for i in 0..16 {
-            a[i] = src[i * 3];
-            b[i] = src[i * 3 + 1];
-            c[i] = src[i * 3 + 2];
+        #[target_feature(enable = "avx512f")]
+        #[inline]
+        fn load_deinterleaved_3_impl(src: &[f32]) -> (__m512, __m512, __m512) {
+            assert!(src.len() >= 3 * F32VecAvx512::LEN);
+            // Input layout (48 floats in 3x16-float vectors):
+            // in0: [a0,b0,c0,a1,b1,c1,a2,b2,c2,a3,b3,c3,a4,b4,c4,a5]
+            // in1: [b5,c5,a6,b6,c6,a7,b7,c7,a8,b8,c8,a9,b9,c9,a10,b10]
+            // in2: [c10,a11,b11,c11,a12,b12,c12,a13,b13,c13,a14,b14,c14,a15,b15,c15]
+            // Output: a = [a0..a15], b = [b0..b15], c = [c0..c15]
+
+            // SAFETY: we just checked that src has enough space.
+            let (in0, in1, in2) = unsafe {
+                (
+                    _mm512_loadu_ps(src.as_ptr()),
+                    _mm512_loadu_ps(src.as_ptr().add(16)),
+                    _mm512_loadu_ps(src.as_ptr().add(32)),
+                )
+            };
+
+            // Use permutex2var to gather elements from pairs of vectors, then blend.
+            // For 'a': positions 0,3,6,9,12,15 from in0; 2,5,8,11,14 from in1; 1,4,7,10,13 from in2
+            // a[0..5] from in0, a[6..10] from in1, a[11..15] from in2
+
+            // Gather indices for each channel from in0+in1 (first 32 elements)
+            let idx_a_01 = _mm512_setr_epi32(0, 3, 6, 9, 12, 15, 18, 21, 24, 27, 30, 0, 0, 0, 0, 0);
+            let idx_b_01 =
+                _mm512_setr_epi32(1, 4, 7, 10, 13, 16, 19, 22, 25, 28, 31, 0, 0, 0, 0, 0);
+            let idx_c_01 = _mm512_setr_epi32(2, 5, 8, 11, 14, 17, 20, 23, 26, 29, 0, 0, 0, 0, 0, 0);
+
+            // Gather indices for remaining elements from in1+in2 (last 32 elements)
+            let idx_a_12 = _mm512_setr_epi32(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 17, 20, 23, 26, 29);
+            let idx_b_12 = _mm512_setr_epi32(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 18, 21, 24, 27, 30);
+            let idx_c_12 = _mm512_setr_epi32(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 16, 19, 22, 25, 28, 31);
+
+            // Gather from in0+in1 for first ~11 elements, in1+in2 for last ~5
+            let a_01 = _mm512_permutex2var_ps(in0, idx_a_01, in1);
+            let a_12 = _mm512_permutex2var_ps(in1, idx_a_12, in2);
+            let a = _mm512_mask_blend_ps(0xF800, a_01, a_12); // positions 11-15 from a_12
+
+            let b_01 = _mm512_permutex2var_ps(in0, idx_b_01, in1);
+            let b_12 = _mm512_permutex2var_ps(in1, idx_b_12, in2);
+            let b = _mm512_mask_blend_ps(0xF800, b_01, b_12); // positions 11-15 from b_12
+
+            let c_01 = _mm512_permutex2var_ps(in0, idx_c_01, in1);
+            let c_12 = _mm512_permutex2var_ps(in1, idx_c_12, in2);
+            let c = _mm512_mask_blend_ps(0xFC00, c_01, c_12); // positions 10-15 from c_12
+
+            (a, b, c)
         }
-        (Self::load(d, &a), Self::load(d, &b), Self::load(d, &c))
+
+        // SAFETY: avx512f is available from the safety invariant on the descriptor.
+        let (a, b, c) = unsafe { load_deinterleaved_3_impl(src) };
+        (Self(a, d), Self(b, d), Self(c, d))
     }
 
     #[inline(always)]
@@ -501,18 +546,21 @@ unsafe impl F32SimdVec for F32VecAvx512 {
             // Output: a = [a0..a15], b = [b0..b15], c = [c0..c15], d = [d0..d15]
             // SAFETY: we just checked that src has enough space.
             let (in0, in1, in2, in3) = unsafe {
-                let in0 = _mm512_loadu_ps(src.as_ptr());
-                let in1 = _mm512_loadu_ps(src.as_ptr().add(16));
-                let in2 = _mm512_loadu_ps(src.as_ptr().add(32));
-                let in3 = _mm512_loadu_ps(src.as_ptr().add(48));
-                (in0, in1, in2, in3)
+                (
+                    _mm512_loadu_ps(src.as_ptr()),
+                    _mm512_loadu_ps(src.as_ptr().add(16)),
+                    _mm512_loadu_ps(src.as_ptr().add(32)),
+                    _mm512_loadu_ps(src.as_ptr().add(48)),
+                )
             };
 
             // Use permutex2var to gather every 4th element
             let idx_a = _mm512_setr_epi32(0, 4, 8, 12, 16, 20, 24, 28, 0, 4, 8, 12, 16, 20, 24, 28);
             let idx_b = _mm512_setr_epi32(1, 5, 9, 13, 17, 21, 25, 29, 1, 5, 9, 13, 17, 21, 25, 29);
-            let idx_c = _mm512_setr_epi32(2, 6, 10, 14, 18, 22, 26, 30, 2, 6, 10, 14, 18, 22, 26, 30);
-            let idx_d = _mm512_setr_epi32(3, 7, 11, 15, 19, 23, 27, 31, 3, 7, 11, 15, 19, 23, 27, 31);
+            let idx_c =
+                _mm512_setr_epi32(2, 6, 10, 14, 18, 22, 26, 30, 2, 6, 10, 14, 18, 22, 26, 30);
+            let idx_d =
+                _mm512_setr_epi32(3, 7, 11, 15, 19, 23, 27, 31, 3, 7, 11, 15, 19, 23, 27, 31);
 
             // Gather from in0+in1 for first 8 elements, in2+in3 for last 8
             let a01 = _mm512_permutex2var_ps(in0, idx_a, in1);

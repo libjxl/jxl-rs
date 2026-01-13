@@ -4,15 +4,15 @@
 // license that can be found in the LICENSE file.
 
 use std::any::Any;
-use std::sync::Mutex;
 
 use crate::api::JxlCmsTransformer;
 use crate::error::Result;
+use crate::render::RenderPipelineInPlaceStage;
 use crate::render::simd_utils::{
     deinterleave_2_dispatch, deinterleave_3_dispatch, deinterleave_4_dispatch,
     interleave_2_dispatch, interleave_3_dispatch, interleave_4_dispatch,
 };
-use crate::render::RenderPipelineInPlaceStage;
+use crate::util::AtomicRefCell;
 
 /// Thread-local state for CMS transform.
 struct CmsLocalState {
@@ -22,7 +22,7 @@ struct CmsLocalState {
 
 /// Applies CMS color transform between color profiles.
 pub struct CmsStage {
-    transformers: Vec<Mutex<Box<dyn JxlCmsTransformer + Send>>>,
+    transformers: Vec<AtomicRefCell<Box<dyn JxlCmsTransformer + Send>>>,
     first_channel: usize,
     num_channels: usize,
     buffer_size: usize,
@@ -35,11 +35,13 @@ impl CmsStage {
         num_channels: usize,
         max_pixels: usize,
     ) -> Self {
+        // Pad buffer to SIMD alignment (max vector length is 16)
+        let padded_pixels = max_pixels.next_multiple_of(16);
         Self {
-            transformers: transformers.into_iter().map(Mutex::new).collect(),
+            transformers: transformers.into_iter().map(AtomicRefCell::new).collect(),
             first_channel,
             num_channels,
-            buffer_size: max_pixels
+            buffer_size: padded_pixels
                 .checked_mul(num_channels)
                 .expect("CMS buffer size overflow"),
         }
@@ -87,34 +89,42 @@ impl RenderPipelineInPlaceStage for CmsStage {
         let state: &mut CmsLocalState = state.downcast_mut().unwrap();
         let nc = self.num_channels;
 
-        // Interleave planar -> packed using SIMD where available
+        // Single channel: transform directly in place without copying
+        if nc == 1 {
+            let mut transformer = self.transformers[state.transformer_idx].borrow_mut();
+            transformer
+                .do_transform_inplace(&mut row[0][..xsize])
+                .expect("CMS transform failed");
+            return;
+        }
+
+        // Pad to SIMD alignment (pipeline rows are already padded)
+        let xsize_padded = xsize.next_multiple_of(16);
+
+        // Interleave planar -> packed using SIMD
         match nc {
-            1 => {
-                // No interleaving needed for single channel
-                state.buffer[..xsize].copy_from_slice(&row[0][..xsize]);
-            }
             2 if row.len() >= 2 => {
                 interleave_2_dispatch(
-                    &row[0][..xsize],
-                    &row[1][..xsize],
-                    &mut state.buffer[..xsize * 2],
+                    &row[0][..xsize_padded],
+                    &row[1][..xsize_padded],
+                    &mut state.buffer[..xsize_padded * 2],
                 );
             }
             3 if row.len() >= 3 => {
                 interleave_3_dispatch(
-                    &row[0][..xsize],
-                    &row[1][..xsize],
-                    &row[2][..xsize],
-                    &mut state.buffer[..xsize * 3],
+                    &row[0][..xsize_padded],
+                    &row[1][..xsize_padded],
+                    &row[2][..xsize_padded],
+                    &mut state.buffer[..xsize_padded * 3],
                 );
             }
             4 if row.len() >= 4 => {
                 interleave_4_dispatch(
-                    &row[0][..xsize],
-                    &row[1][..xsize],
-                    &row[2][..xsize],
-                    &row[3][..xsize],
-                    &mut state.buffer[..xsize * 4],
+                    &row[0][..xsize_padded],
+                    &row[1][..xsize_padded],
+                    &row[2][..xsize_padded],
+                    &row[3][..xsize_padded],
+                    &mut state.buffer[..xsize_padded * 4],
                 );
             }
             _ => {
@@ -127,36 +137,30 @@ impl RenderPipelineInPlaceStage for CmsStage {
             }
         }
 
-        // Apply transform via mutex-guarded transformer
-        let mut transformer = self.transformers[state.transformer_idx]
-            .lock()
-            .expect("CMS transformer mutex poisoned");
+        // Apply transform (only on actual pixels, not padding)
+        let mut transformer = self.transformers[state.transformer_idx].borrow_mut();
         transformer
             .do_transform_inplace(&mut state.buffer[..xsize * nc])
             .expect("CMS transform failed");
 
-        // De-interleave packed -> planar using SIMD where available
+        // De-interleave packed -> planar using SIMD
         match nc {
-            1 => {
-                // No deinterleaving needed for single channel
-                row[0][..xsize].copy_from_slice(&state.buffer[..xsize]);
-            }
             2 if row.len() >= 2 => {
                 let (r0, r1) = row.split_at_mut(1);
                 deinterleave_2_dispatch(
-                    &state.buffer[..xsize * 2],
-                    &mut r0[0][..xsize],
-                    &mut r1[0][..xsize],
+                    &state.buffer[..xsize_padded * 2],
+                    &mut r0[0][..xsize_padded],
+                    &mut r1[0][..xsize_padded],
                 );
             }
             3 if row.len() >= 3 => {
                 let (r0, rest) = row.split_at_mut(1);
                 let (r1, r2) = rest.split_at_mut(1);
                 deinterleave_3_dispatch(
-                    &state.buffer[..xsize * 3],
-                    &mut r0[0][..xsize],
-                    &mut r1[0][..xsize],
-                    &mut r2[0][..xsize],
+                    &state.buffer[..xsize_padded * 3],
+                    &mut r0[0][..xsize_padded],
+                    &mut r1[0][..xsize_padded],
+                    &mut r2[0][..xsize_padded],
                 );
             }
             4 if row.len() >= 4 => {
@@ -164,11 +168,11 @@ impl RenderPipelineInPlaceStage for CmsStage {
                 let (r1, rest) = rest.split_at_mut(1);
                 let (r2, r3) = rest.split_at_mut(1);
                 deinterleave_4_dispatch(
-                    &state.buffer[..xsize * 4],
-                    &mut r0[0][..xsize],
-                    &mut r1[0][..xsize],
-                    &mut r2[0][..xsize],
-                    &mut r3[0][..xsize],
+                    &state.buffer[..xsize_padded * 4],
+                    &mut r0[0][..xsize_padded],
+                    &mut r1[0][..xsize_padded],
+                    &mut r2[0][..xsize_padded],
+                    &mut r3[0][..xsize_padded],
                 );
             }
             _ => {
