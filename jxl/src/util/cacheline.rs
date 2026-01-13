@@ -45,7 +45,7 @@ pub fn slice_from_cachelines<T: ImageDataType>(slice: &[CacheLine]) -> &[T] {
     // slice.
     unsafe {
         std::slice::from_raw_parts(
-            slice.as_ptr() as *const T,
+            slice.as_ptr().cast::<T>(),
             slice.len() * (CACHE_LINE_BYTE_SIZE / std::mem::size_of::<T>()),
         )
     }
@@ -62,7 +62,7 @@ pub fn slice_from_cachelines_mut<T: ImageDataType>(slice: &mut [CacheLine]) -> &
     // slice.
     unsafe {
         std::slice::from_raw_parts_mut(
-            slice.as_mut_ptr() as *mut T,
+            slice.as_mut_ptr().cast::<T>(),
             slice.len() * (CACHE_LINE_BYTE_SIZE / std::mem::size_of::<T>()),
         )
     }

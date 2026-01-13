@@ -33,7 +33,7 @@ impl<T, const N: usize> Deref for SmallVec<T, N> {
                 let data = &data[..*len];
                 // SAFETY: the safety invariant on `self` guarantees that the elements are
                 // initialized, and T and MaybeUninit<T> have the same size and alignment.
-                unsafe { slice::from_raw_parts(data.as_ptr() as *const T, data.len()) }
+                unsafe { slice::from_raw_parts(data.as_ptr().cast::<T>(), data.len()) }
             }
             SmallVec::Heap(v) => &v[..],
         }
@@ -47,7 +47,7 @@ impl<T, const N: usize> DerefMut for SmallVec<T, N> {
                 let data = &mut data[..*len];
                 // SAFETY: the safety invariant on `self` guarantees that the elements are
                 // initialized, and T and MaybeUninit<T> have the same size and alignment.
-                unsafe { slice::from_raw_parts_mut(data.as_mut_ptr() as *mut T, data.len()) }
+                unsafe { slice::from_raw_parts_mut(data.as_mut_ptr().cast::<T>(), data.len()) }
             }
             SmallVec::Heap(v) => &mut v[..],
         }

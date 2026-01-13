@@ -162,7 +162,7 @@ pub(super) fn store(
                 // of T for any T).
                 let output_f32 = unsafe {
                     std::slice::from_raw_parts_mut(
-                        output_buf.as_mut_ptr() as *mut MaybeUninit<f32>,
+                        output_buf.as_mut_ptr().cast::<MaybeUninit<f32>>(),
                         len_f32,
                     )
                 };

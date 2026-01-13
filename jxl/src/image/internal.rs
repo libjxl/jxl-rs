@@ -355,7 +355,7 @@ impl<const S: usize> DistinctRowsIndexes for [usize; S] {
             // SAFETY: The caller guarantees the transmute is safe and proper alignment.
             unsafe {
                 std::slice::from_raw_parts_mut(
-                    row.as_mut_ptr() as *mut T,
+                    row.as_mut_ptr().cast::<T>(),
                     row.len() / std::mem::size_of::<T>(),
                 )
             }
