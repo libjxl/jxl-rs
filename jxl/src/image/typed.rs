@@ -128,7 +128,7 @@ impl<T: ImageDataType> Image<T> {
         // requires T to be a bag-of-bits type with no padding, so the implicit transmute is not
         // an issue.
         unsafe {
-            std::slice::from_raw_parts(row.as_ptr() as *const T, row.len() / T::DATA_TYPE_ID.size())
+            std::slice::from_raw_parts(row.as_ptr().cast::<T>(), row.len() / T::DATA_TYPE_ID.size())
         }
     }
 
@@ -142,7 +142,7 @@ impl<T: ImageDataType> Image<T> {
         // an issue.
         unsafe {
             std::slice::from_raw_parts_mut(
-                row.as_mut_ptr() as *mut T,
+                row.as_mut_ptr().cast::<T>(),
                 row.len() / T::DATA_TYPE_ID.size(),
             )
         }
@@ -193,7 +193,7 @@ impl<'a, T: ImageDataType> ImageRect<'a, T> {
         // requires T to be a bag-of-bits type with no padding, so the implicit transmute is not
         // an issue.
         unsafe {
-            std::slice::from_raw_parts(row.as_ptr() as *const T, row.len() / T::DATA_TYPE_ID.size())
+            std::slice::from_raw_parts(row.as_ptr().cast::<T>(), row.len() / T::DATA_TYPE_ID.size())
         }
     }
 
@@ -244,7 +244,7 @@ impl<'a, T: ImageDataType> ImageRectMut<'a, T> {
         // an issue.
         unsafe {
             std::slice::from_raw_parts_mut(
-                row.as_mut_ptr() as *mut T,
+                row.as_mut_ptr().cast::<T>(),
                 row.len() / T::DATA_TYPE_ID.size(),
             )
         }
