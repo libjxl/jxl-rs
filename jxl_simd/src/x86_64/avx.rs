@@ -724,7 +724,7 @@ impl Sub<I32VecAvx> for I32VecAvx {
 impl Mul<I32VecAvx> for I32VecAvx {
     type Output = I32VecAvx;
     fn_avx!(this: I32VecAvx, fn mul(rhs: I32VecAvx) -> I32VecAvx {
-        I32VecAvx(_mm256_mul_epi32(this.0, rhs.0), this.1)
+        I32VecAvx(_mm256_mullo_epi32(this.0, rhs.0), this.1)
     });
 }
 
@@ -784,7 +784,7 @@ impl SubAssign<I32VecAvx> for I32VecAvx {
 
 impl MulAssign<I32VecAvx> for I32VecAvx {
     fn_avx!(this: &mut I32VecAvx, fn mul_assign(rhs: I32VecAvx) {
-        this.0 = _mm256_mul_epi32(this.0, rhs.0)
+        this.0 = _mm256_mullo_epi32(this.0, rhs.0)
     });
 }
 
