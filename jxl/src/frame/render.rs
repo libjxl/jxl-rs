@@ -205,6 +205,7 @@ impl Frame {
         Ok(())
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn build_render_pipeline<T: RenderPipeline>(
         decoder_state: &DecoderState,
         frame_header: &FrameHeader,
