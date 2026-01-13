@@ -904,4 +904,36 @@ mod test {
         }
     }
     test_all_instruction_sets!(test_prepare_table_bf16_8);
+
+    /// Test that I32 multiplication operates on all elements, not just alternating lanes.
+    /// This catches the bug where _mm_mul_epi32 was used instead of _mm_mullo_epi32.
+    fn test_i32_mul_all_elements<D: SimdDescriptor>(d: D) {
+        let len = D::I32Vec::LEN;
+
+        // Create input vectors where each lane has a unique value
+        let mut a_data = vec![0i32; len];
+        let mut b_data = vec![0i32; len];
+        for i in 0..len {
+            a_data[i] = (i + 1) as i32; // [1, 2, 3, 4, ...]
+            b_data[i] = (i + 10) as i32; // [10, 11, 12, 13, ...]
+        }
+
+        let a = D::I32Vec::load(d, &a_data);
+        let b = D::I32Vec::load(d, &b_data);
+        let result = a * b;
+
+        let mut result_data = vec![0i32; len];
+        result.store(&mut result_data);
+
+        // Verify EVERY element was multiplied correctly
+        for i in 0..len {
+            let expected = a_data[i] * b_data[i];
+            assert_eq!(
+                result_data[i], expected,
+                "I32 mul failed at index {}: {} * {} = {}, got {}",
+                i, a_data[i], b_data[i], expected, result_data[i]
+            );
+        }
+    }
+    test_all_instruction_sets!(test_i32_mul_all_elements);
 }

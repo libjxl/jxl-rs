@@ -691,7 +691,7 @@ impl Sub<I32VecSse42> for I32VecSse42 {
 impl Mul<I32VecSse42> for I32VecSse42 {
     type Output = I32VecSse42;
     fn_sse42!(this: I32VecSse42, fn mul(rhs: I32VecSse42) -> I32VecSse42 {
-        I32VecSse42(_mm_mul_epi32(this.0, rhs.0), this.1)
+        I32VecSse42(_mm_mullo_epi32(this.0, rhs.0), this.1)
     });
 }
 
@@ -737,7 +737,7 @@ impl SubAssign<I32VecSse42> for I32VecSse42 {
 
 impl MulAssign<I32VecSse42> for I32VecSse42 {
     fn_sse42!(this: &mut I32VecSse42, fn mul_assign(rhs: I32VecSse42) {
-        this.0 = _mm_mul_epi32(this.0, rhs.0)
+        this.0 = _mm_mullo_epi32(this.0, rhs.0)
     });
 }
 
