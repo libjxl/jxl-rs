@@ -189,6 +189,21 @@ pub unsafe trait F32SimdVec:
         dest: &mut [f32],
     );
 
+    /// Loads two vectors from interleaved data: [a0, b0, a1, b1, a2, b2, ...].
+    /// Returns (a, b) where a = [a0, a1, a2, ...] and b = [b0, b1, b2, ...].
+    /// Requires `src.len() >= 2 * Self::LEN` or it will panic.
+    fn load_deinterleaved_2(d: Self::Descriptor, src: &[f32]) -> (Self, Self);
+
+    /// Loads three vectors from interleaved data: [a0, b0, c0, a1, b1, c1, ...].
+    /// Returns (a, b, c) where a = [a0, a1, ...], b = [b0, b1, ...], c = [c0, c1, ...].
+    /// Requires `src.len() >= 3 * Self::LEN` or it will panic.
+    fn load_deinterleaved_3(d: Self::Descriptor, src: &[f32]) -> (Self, Self, Self);
+
+    /// Loads four vectors from interleaved data: [a0, b0, c0, d0, a1, b1, c1, d1, ...].
+    /// Returns (a, b, c, d) where each vector contains the deinterleaved components.
+    /// Requires `src.len() >= 4 * Self::LEN` or it will panic.
+    fn load_deinterleaved_4(d: Self::Descriptor, src: &[f32]) -> (Self, Self, Self, Self);
+
     /// Rounds to nearest integer and stores as u8.
     /// Behavior is unspecified if values would overflow u8.
     /// Requires `dest.len() >= Self::LEN` or it will panic.
@@ -865,6 +880,217 @@ mod test {
         }
     }
     test_all_instruction_sets!(test_store_interleaved_8);
+
+    fn test_load_deinterleaved_2<D: SimdDescriptor>(d: D) {
+        let len = D::F32Vec::LEN;
+        // Create interleaved input: [a0, b0, a1, b1, ...]
+        let mut interleaved = vec![0.0f32; 2 * len];
+        let expected_a: Vec<f32> = (0..len).map(|i| i as f32).collect();
+        let expected_b: Vec<f32> = (0..len).map(|i| (i + 100) as f32).collect();
+        for i in 0..len {
+            interleaved[2 * i] = expected_a[i];
+            interleaved[2 * i + 1] = expected_b[i];
+        }
+
+        let (a_vec, b_vec) = D::F32Vec::load_deinterleaved_2(d, &interleaved);
+
+        let mut out_a = vec![0.0f32; len];
+        let mut out_b = vec![0.0f32; len];
+        a_vec.store(&mut out_a);
+        b_vec.store(&mut out_b);
+
+        for i in 0..len {
+            assert_eq!(
+                out_a[i], expected_a[i],
+                "load_deinterleaved_2 failed for channel a at {}: expected {}, got {}",
+                i, expected_a[i], out_a[i]
+            );
+            assert_eq!(
+                out_b[i], expected_b[i],
+                "load_deinterleaved_2 failed for channel b at {}: expected {}, got {}",
+                i, expected_b[i], out_b[i]
+            );
+        }
+    }
+    test_all_instruction_sets!(test_load_deinterleaved_2);
+
+    fn test_load_deinterleaved_3<D: SimdDescriptor>(d: D) {
+        let len = D::F32Vec::LEN;
+        // Create interleaved input: [a0, b0, c0, a1, b1, c1, ...]
+        let mut interleaved = vec![0.0f32; 3 * len];
+        let expected_a: Vec<f32> = (0..len).map(|i| i as f32).collect();
+        let expected_b: Vec<f32> = (0..len).map(|i| (i + 100) as f32).collect();
+        let expected_c: Vec<f32> = (0..len).map(|i| (i + 200) as f32).collect();
+        for i in 0..len {
+            interleaved[3 * i] = expected_a[i];
+            interleaved[3 * i + 1] = expected_b[i];
+            interleaved[3 * i + 2] = expected_c[i];
+        }
+
+        let (a_vec, b_vec, c_vec) = D::F32Vec::load_deinterleaved_3(d, &interleaved);
+
+        let mut out_a = vec![0.0f32; len];
+        let mut out_b = vec![0.0f32; len];
+        let mut out_c = vec![0.0f32; len];
+        a_vec.store(&mut out_a);
+        b_vec.store(&mut out_b);
+        c_vec.store(&mut out_c);
+
+        for i in 0..len {
+            assert_eq!(
+                out_a[i], expected_a[i],
+                "load_deinterleaved_3 failed for channel a at {}: expected {}, got {}",
+                i, expected_a[i], out_a[i]
+            );
+            assert_eq!(
+                out_b[i], expected_b[i],
+                "load_deinterleaved_3 failed for channel b at {}: expected {}, got {}",
+                i, expected_b[i], out_b[i]
+            );
+            assert_eq!(
+                out_c[i], expected_c[i],
+                "load_deinterleaved_3 failed for channel c at {}: expected {}, got {}",
+                i, expected_c[i], out_c[i]
+            );
+        }
+    }
+    test_all_instruction_sets!(test_load_deinterleaved_3);
+
+    fn test_load_deinterleaved_4<D: SimdDescriptor>(d: D) {
+        let len = D::F32Vec::LEN;
+        // Create interleaved input: [a0, b0, c0, d0, a1, b1, c1, d1, ...]
+        let mut interleaved = vec![0.0f32; 4 * len];
+        let expected_a: Vec<f32> = (0..len).map(|i| i as f32).collect();
+        let expected_b: Vec<f32> = (0..len).map(|i| (i + 100) as f32).collect();
+        let expected_c: Vec<f32> = (0..len).map(|i| (i + 200) as f32).collect();
+        let expected_d: Vec<f32> = (0..len).map(|i| (i + 300) as f32).collect();
+        for i in 0..len {
+            interleaved[4 * i] = expected_a[i];
+            interleaved[4 * i + 1] = expected_b[i];
+            interleaved[4 * i + 2] = expected_c[i];
+            interleaved[4 * i + 3] = expected_d[i];
+        }
+
+        let (a_vec, b_vec, c_vec, d_vec) = D::F32Vec::load_deinterleaved_4(d, &interleaved);
+
+        let mut out_a = vec![0.0f32; len];
+        let mut out_b = vec![0.0f32; len];
+        let mut out_c = vec![0.0f32; len];
+        let mut out_d = vec![0.0f32; len];
+        a_vec.store(&mut out_a);
+        b_vec.store(&mut out_b);
+        c_vec.store(&mut out_c);
+        d_vec.store(&mut out_d);
+
+        for i in 0..len {
+            assert_eq!(
+                out_a[i], expected_a[i],
+                "load_deinterleaved_4 failed for channel a at {}: expected {}, got {}",
+                i, expected_a[i], out_a[i]
+            );
+            assert_eq!(
+                out_b[i], expected_b[i],
+                "load_deinterleaved_4 failed for channel b at {}: expected {}, got {}",
+                i, expected_b[i], out_b[i]
+            );
+            assert_eq!(
+                out_c[i], expected_c[i],
+                "load_deinterleaved_4 failed for channel c at {}: expected {}, got {}",
+                i, expected_c[i], out_c[i]
+            );
+            assert_eq!(
+                out_d[i], expected_d[i],
+                "load_deinterleaved_4 failed for channel d at {}: expected {}, got {}",
+                i, expected_d[i], out_d[i]
+            );
+        }
+    }
+    test_all_instruction_sets!(test_load_deinterleaved_4);
+
+    // Roundtrip tests: verify store_interleaved + load_deinterleaved returns original data
+    fn test_interleave_roundtrip_2<D: SimdDescriptor>(d: D) {
+        let len = D::F32Vec::LEN;
+        let a: Vec<f32> = (0..len).map(|i| (i * 7 + 3) as f32).collect();
+        let b: Vec<f32> = (0..len).map(|i| (i * 11 + 5) as f32).collect();
+
+        let a_vec = D::F32Vec::load(d, &a);
+        let b_vec = D::F32Vec::load(d, &b);
+
+        let mut interleaved = vec![0.0f32; 2 * len];
+        D::F32Vec::store_interleaved_2(a_vec, b_vec, &mut interleaved);
+
+        let (a_out, b_out) = D::F32Vec::load_deinterleaved_2(d, &interleaved);
+
+        let mut out_a = vec![0.0f32; len];
+        let mut out_b = vec![0.0f32; len];
+        a_out.store(&mut out_a);
+        b_out.store(&mut out_b);
+
+        assert_eq!(out_a, a, "interleave_roundtrip_2 failed for channel a");
+        assert_eq!(out_b, b, "interleave_roundtrip_2 failed for channel b");
+    }
+    test_all_instruction_sets!(test_interleave_roundtrip_2);
+
+    fn test_interleave_roundtrip_3<D: SimdDescriptor>(d: D) {
+        let len = D::F32Vec::LEN;
+        let a: Vec<f32> = (0..len).map(|i| (i * 7 + 3) as f32).collect();
+        let b: Vec<f32> = (0..len).map(|i| (i * 11 + 5) as f32).collect();
+        let c: Vec<f32> = (0..len).map(|i| (i * 13 + 9) as f32).collect();
+
+        let a_vec = D::F32Vec::load(d, &a);
+        let b_vec = D::F32Vec::load(d, &b);
+        let c_vec = D::F32Vec::load(d, &c);
+
+        let mut interleaved = vec![0.0f32; 3 * len];
+        D::F32Vec::store_interleaved_3(a_vec, b_vec, c_vec, &mut interleaved);
+
+        let (a_out, b_out, c_out) = D::F32Vec::load_deinterleaved_3(d, &interleaved);
+
+        let mut out_a = vec![0.0f32; len];
+        let mut out_b = vec![0.0f32; len];
+        let mut out_c = vec![0.0f32; len];
+        a_out.store(&mut out_a);
+        b_out.store(&mut out_b);
+        c_out.store(&mut out_c);
+
+        assert_eq!(out_a, a, "interleave_roundtrip_3 failed for channel a");
+        assert_eq!(out_b, b, "interleave_roundtrip_3 failed for channel b");
+        assert_eq!(out_c, c, "interleave_roundtrip_3 failed for channel c");
+    }
+    test_all_instruction_sets!(test_interleave_roundtrip_3);
+
+    fn test_interleave_roundtrip_4<D: SimdDescriptor>(d: D) {
+        let len = D::F32Vec::LEN;
+        let a: Vec<f32> = (0..len).map(|i| (i * 7 + 3) as f32).collect();
+        let b: Vec<f32> = (0..len).map(|i| (i * 11 + 5) as f32).collect();
+        let c: Vec<f32> = (0..len).map(|i| (i * 13 + 9) as f32).collect();
+        let e: Vec<f32> = (0..len).map(|i| (i * 17 + 1) as f32).collect();
+
+        let a_vec = D::F32Vec::load(d, &a);
+        let b_vec = D::F32Vec::load(d, &b);
+        let c_vec = D::F32Vec::load(d, &c);
+        let d_vec = D::F32Vec::load(d, &e);
+
+        let mut interleaved = vec![0.0f32; 4 * len];
+        D::F32Vec::store_interleaved_4(a_vec, b_vec, c_vec, d_vec, &mut interleaved);
+
+        let (a_out, b_out, c_out, d_out) = D::F32Vec::load_deinterleaved_4(d, &interleaved);
+
+        let mut out_a = vec![0.0f32; len];
+        let mut out_b = vec![0.0f32; len];
+        let mut out_c = vec![0.0f32; len];
+        let mut out_d = vec![0.0f32; len];
+        a_out.store(&mut out_a);
+        b_out.store(&mut out_b);
+        c_out.store(&mut out_c);
+        d_out.store(&mut out_d);
+
+        assert_eq!(out_a, a, "interleave_roundtrip_4 failed for channel a");
+        assert_eq!(out_b, b, "interleave_roundtrip_4 failed for channel b");
+        assert_eq!(out_c, c, "interleave_roundtrip_4 failed for channel c");
+        assert_eq!(out_d, e, "interleave_roundtrip_4 failed for channel d");
+    }
+    test_all_instruction_sets!(test_interleave_roundtrip_4);
 
     fn test_prepare_table_bf16_8<D: SimdDescriptor>(d: D) {
         // Create an 8-entry lookup table with known values

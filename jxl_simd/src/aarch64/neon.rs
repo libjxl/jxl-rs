@@ -274,6 +274,39 @@ unsafe impl F32SimdVec for F32VecNeon {
     }
 
     #[inline(always)]
+    fn load_deinterleaved_2(d: Self::Descriptor, src: &[f32]) -> (Self, Self) {
+        assert!(src.len() >= 2 * Self::LEN);
+        // SAFETY: we just checked that `src` has enough space, and neon is available
+        // from the safety invariant on `d`.
+        unsafe {
+            let float32x4x2_t(a, b) = vld2q_f32(src.as_ptr());
+            (Self(a, d), Self(b, d))
+        }
+    }
+
+    #[inline(always)]
+    fn load_deinterleaved_3(d: Self::Descriptor, src: &[f32]) -> (Self, Self, Self) {
+        assert!(src.len() >= 3 * Self::LEN);
+        // SAFETY: we just checked that `src` has enough space, and neon is available
+        // from the safety invariant on `d`.
+        unsafe {
+            let float32x4x3_t(a, b, c) = vld3q_f32(src.as_ptr());
+            (Self(a, d), Self(b, d), Self(c, d))
+        }
+    }
+
+    #[inline(always)]
+    fn load_deinterleaved_4(d: Self::Descriptor, src: &[f32]) -> (Self, Self, Self, Self) {
+        assert!(src.len() >= 4 * Self::LEN);
+        // SAFETY: we just checked that `src` has enough space, and neon is available
+        // from the safety invariant on `d`.
+        unsafe {
+            let float32x4x4_t(a, b, c, e) = vld4q_f32(src.as_ptr());
+            (Self(a, d), Self(b, d), Self(c, d), Self(e, d))
+        }
+    }
+
+    #[inline(always)]
     fn transpose_square(d: NeonDescriptor, data: &mut [[f32; 4]], stride: usize) {
         #[target_feature(enable = "neon")]
         #[inline]

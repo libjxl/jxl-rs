@@ -393,6 +393,100 @@ unsafe impl F32SimdVec for F32VecAvx {
         unsafe { store_interleaved_8_impl(a.0, b.0, c.0, d.0, e.0, f.0, g.0, h.0, dest) }
     }
 
+    #[inline(always)]
+    fn load_deinterleaved_2(d: Self::Descriptor, src: &[f32]) -> (Self, Self) {
+        #[target_feature(enable = "avx2")]
+        #[inline]
+        fn load_deinterleaved_2_impl(src: &[f32]) -> (__m256, __m256) {
+            assert!(src.len() >= 2 * F32VecAvx::LEN);
+            // Input: [a0, b0, a1, b1, a2, b2, a3, b3, a4, b4, a5, b5, a6, b6, a7, b7]
+            // Output: a = [a0, a1, a2, a3, a4, a5, a6, a7], b = [b0, b1, b2, b3, b4, b5, b6, b7]
+            // SAFETY: we just checked that src has enough space.
+            let (in0, in1) = unsafe {
+                let in0 = _mm256_loadu_ps(src.as_ptr()); // [a0,b0,a1,b1, a2,b2,a3,b3]
+                let in1 = _mm256_loadu_ps(src.as_ptr().add(8)); // [a4,b4,a5,b5, a6,b6,a7,b7]
+                (in0, in1)
+            };
+
+            // Reverse the store_interleaved_2 operation
+            // First, undo the permute2f128
+            let lo = _mm256_permute2f128_ps::<0x20>(in0, in1); // [a0,b0,a1,b1, a4,b4,a5,b5]
+            let hi = _mm256_permute2f128_ps::<0x31>(in0, in1); // [a2,b2,a3,b3, a6,b6,a7,b7]
+
+            // Then undo the unpack - use shuffle to separate a and b
+            let a_lo = _mm256_shuffle_ps::<0x88>(lo, hi); // [a0, a1, a2, a3, a4, a5, a6, a7]
+            let b_lo = _mm256_shuffle_ps::<0xDD>(lo, hi); // [b0, b1, b2, b3, b4, b5, b6, b7]
+
+            (a_lo, b_lo)
+        }
+
+        // SAFETY: avx2 is available from the safety invariant on the descriptor.
+        let (a, b) = unsafe { load_deinterleaved_2_impl(src) };
+        (Self(a, d), Self(b, d))
+    }
+
+    #[inline(always)]
+    fn load_deinterleaved_3(d: Self::Descriptor, src: &[f32]) -> (Self, Self, Self) {
+        assert!(src.len() >= 3 * Self::LEN);
+        // Input: [a0,b0,c0, a1,b1,c1, a2,b2,c2, a3,b3,c3, a4,b4,c4, a5,b5,c5, a6,b6,c6, a7,b7,c7]
+        // Output: a = [a0..a7], b = [b0..b7], c = [c0..c7]
+        // 3-way deinterleave doesn't have efficient SIMD support on x86, use scalar
+        let mut a = [0.0f32; 8];
+        let mut b = [0.0f32; 8];
+        let mut c = [0.0f32; 8];
+        for i in 0..8 {
+            a[i] = src[i * 3];
+            b[i] = src[i * 3 + 1];
+            c[i] = src[i * 3 + 2];
+        }
+        (Self::load(d, &a), Self::load(d, &b), Self::load(d, &c))
+    }
+
+    #[inline(always)]
+    fn load_deinterleaved_4(d: Self::Descriptor, src: &[f32]) -> (Self, Self, Self, Self) {
+        #[target_feature(enable = "avx2")]
+        #[inline]
+        fn load_deinterleaved_4_impl(src: &[f32]) -> (__m256, __m256, __m256, __m256) {
+            assert!(src.len() >= 4 * F32VecAvx::LEN);
+            // Input: [a0,b0,c0,d0, a1,b1,c1,d1, a2,b2,c2,d2, a3,b3,c3,d3, ...]
+            // Output: a = [a0..a7], b = [b0..b7], c = [c0..c7], d = [d0..d7]
+            // SAFETY: we just checked that src has enough space.
+            let (in0, in1, in2, in3) = unsafe {
+                let in0 = _mm256_loadu_ps(src.as_ptr()); // [a0,b0,c0,d0, a1,b1,c1,d1]
+                let in1 = _mm256_loadu_ps(src.as_ptr().add(8)); // [a2,b2,c2,d2, a3,b3,c3,d3]
+                let in2 = _mm256_loadu_ps(src.as_ptr().add(16)); // [a4,b4,c4,d4, a5,b5,c5,d5]
+                let in3 = _mm256_loadu_ps(src.as_ptr().add(24)); // [a6,b6,c6,d6, a7,b7,c7,d7]
+                (in0, in1, in2, in3)
+            };
+
+            // This is essentially an 8x4 to 4x8 transpose
+            // First, unpack pairs
+            let t0 = _mm256_unpacklo_ps(in0, in1); // [a0,a2,b0,b2, a1,a3,b1,b3]
+            let t1 = _mm256_unpackhi_ps(in0, in1); // [c0,c2,d0,d2, c1,c3,d1,d3]
+            let t2 = _mm256_unpacklo_ps(in2, in3); // [a4,a6,b4,b6, a5,a7,b5,b7]
+            let t3 = _mm256_unpackhi_ps(in2, in3); // [c4,c6,d4,d6, c5,c7,d5,d7]
+
+            // Second level unpack
+            let u0 = _mm256_unpacklo_ps(t0, t2); // [a0,a4,a2,a6, a1,a5,a3,a7]
+            let u1 = _mm256_unpackhi_ps(t0, t2); // [b0,b4,b2,b6, b1,b5,b3,b7]
+            let u2 = _mm256_unpacklo_ps(t1, t3); // [c0,c4,c2,c6, c1,c5,c3,c7]
+            let u3 = _mm256_unpackhi_ps(t1, t3); // [d0,d4,d2,d6, d1,d5,d3,d7]
+
+            // Permute to get correct order
+            let perm = _mm256_setr_epi32(0, 4, 2, 6, 1, 5, 3, 7);
+            let a = _mm256_permutevar8x32_ps(u0, perm);
+            let b = _mm256_permutevar8x32_ps(u1, perm);
+            let c = _mm256_permutevar8x32_ps(u2, perm);
+            let dv = _mm256_permutevar8x32_ps(u3, perm);
+
+            (a, b, c, dv)
+        }
+
+        // SAFETY: avx2 is available from the safety invariant on the descriptor.
+        let (a, b, c, dv) = unsafe { load_deinterleaved_4_impl(src) };
+        (Self(a, d), Self(b, d), Self(c, d), Self(dv, d))
+    }
+
     fn_avx!(this: F32VecAvx, fn mul_add(mul: F32VecAvx, add: F32VecAvx) -> F32VecAvx {
         F32VecAvx(_mm256_fmadd_ps(this.0, mul.0, add.0), this.1)
     });

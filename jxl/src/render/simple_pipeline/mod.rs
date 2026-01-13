@@ -87,7 +87,7 @@ impl SimpleRenderPipeline {
                             output_buf.push(tmp);
                         }
                     }
-                    let mut state = stage.init_local_state()?;
+                    let mut state = stage.init_local_state(0)?;
                     stage.run_stage_on(
                         self.shared.chunk_size,
                         &input_buf,
@@ -108,7 +108,7 @@ impl SimpleRenderPipeline {
                         .filter(|x| stage.uses_channel(x.0))
                         .map(|x| x.1)
                         .collect();
-                    let mut state = stage.init_local_state()?;
+                    let mut state = stage.init_local_state(0)?;
                     stage.run_stage_on(
                         self.shared.chunk_size,
                         &mut output_buf,

@@ -411,9 +411,10 @@ impl Frame {
             if decoder_state.xyb_output_linear {
                 linear = true;
             } else {
-                // Insert CMS stage if profiles differ and CMS provided
+                // Insert CMS stage if profiles differ and internal conversion cannot handle it
                 if let Some(cms) = cms
                     && input_profile != output_profile
+                    && !input_profile.can_convert_internally(output_profile)
                 {
                     let max_pixels = 1 << frame_header.log_group_dim();
                     let (out_channels, transformers) = cms.initialize_transforms(

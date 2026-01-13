@@ -48,7 +48,7 @@ impl RenderPipelineInPlaceStage for PatchesStage {
         );
     }
 
-    fn init_local_state(&self) -> crate::error::Result<Option<Box<dyn Any>>> {
+    fn init_local_state(&self, _thread_index: usize) -> crate::error::Result<Option<Box<dyn Any>>> {
         let patches_for_row_result = Vec::<usize>::new_with_capacity(self.patches.positions.len())?;
         Ok(Some(Box::new(patches_for_row_result) as Box<dyn Any>))
     }

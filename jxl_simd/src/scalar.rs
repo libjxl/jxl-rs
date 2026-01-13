@@ -107,6 +107,21 @@ unsafe impl F32SimdVec for f32 {
     }
 
     #[inline(always)]
+    fn load_deinterleaved_2(_d: Self::Descriptor, src: &[f32]) -> (Self, Self) {
+        (src[0], src[1])
+    }
+
+    #[inline(always)]
+    fn load_deinterleaved_3(_d: Self::Descriptor, src: &[f32]) -> (Self, Self, Self) {
+        (src[0], src[1], src[2])
+    }
+
+    #[inline(always)]
+    fn load_deinterleaved_4(_d: Self::Descriptor, src: &[f32]) -> (Self, Self, Self, Self) {
+        (src[0], src[1], src[2], src[3])
+    }
+
+    #[inline(always)]
     fn mul_add(self, mul: Self, add: Self) -> Self {
         (self * mul) + add
     }
