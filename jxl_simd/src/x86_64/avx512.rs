@@ -1004,7 +1004,7 @@ pub struct U32VecAvx512(__m512i, Avx512Descriptor);
 impl U32SimdVec for U32VecAvx512 {
     type Descriptor = Avx512Descriptor;
 
-    const LEN: usize = 8;
+    const LEN: usize = 16;
 
     #[inline(always)]
     fn bitcast_to_i32(self) -> I32VecAvx512 {
