@@ -3,6 +3,8 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
+#![allow(unsafe_code)]
+
 use std::any::Any;
 
 use crate::api::JxlCmsTransformer;
@@ -12,7 +14,19 @@ use crate::render::simd_utils::{
     deinterleave_2_dispatch, deinterleave_3_dispatch, deinterleave_4_dispatch,
     interleave_2_dispatch, interleave_3_dispatch, interleave_4_dispatch,
 };
-use crate::util::AtomicRefCell;
+
+/// Trampoline function pointer type.
+type TransformFn = fn(*const (), &mut [f32]) -> std::result::Result<(), String>;
+
+/// Trampoline that calls through the double-boxed trait object.
+/// Using a function pointer prevents LLVM from analyzing the vtable
+/// and affecting optimization of unrelated code paths.
+fn cms_trampoline(ptr: *const (), buf: &mut [f32]) -> std::result::Result<(), String> {
+    // SAFETY: ptr was created from a valid Box<Box<dyn JxlCmsTransformer + Send>>
+    // and the Box is kept alive by CmsStage._owned
+    let boxed = unsafe { &mut *(ptr as *mut Box<dyn JxlCmsTransformer + Send>) };
+    boxed.do_transform_inplace(buf).map_err(|e| e.to_string())
+}
 
 /// Thread-local state for CMS transform.
 struct CmsLocalState {
@@ -20,9 +34,26 @@ struct CmsLocalState {
     buffer: Vec<f32>,
 }
 
+/// Opaque handle to a transformer, stored as thin pointer + function pointer.
+struct OpaqueTransformer {
+    ptr: *const (),
+    call: TransformFn,
+}
+
+// SAFETY: The pointer points to a Box<dyn JxlCmsTransformer + Send> which is Send.
+// The data is owned by CmsStage._owned and outlives the OpaqueTransformer.
+unsafe impl Send for OpaqueTransformer {}
+// SAFETY: Access is synchronized via the pipeline's thread-local state assignment.
+// Each thread gets a unique transformer_idx, so no concurrent mutable access occurs.
+unsafe impl Sync for OpaqueTransformer {}
+
 /// Applies CMS color transform between color profiles.
 pub struct CmsStage {
-    transformers: Vec<AtomicRefCell<Box<dyn JxlCmsTransformer + Send>>>,
+    transformers: Vec<OpaqueTransformer>,
+    // Double-boxed to get thin pointers. The outer Box is what we point to.
+    // This indirection is intentional - it gives us a thin pointer to the inner fat pointer.
+    #[allow(clippy::vec_box)]
+    _owned: Vec<Box<Box<dyn JxlCmsTransformer + Send>>>,
     first_channel: usize,
     num_channels: usize,
     buffer_size: usize,
@@ -37,8 +68,24 @@ impl CmsStage {
     ) -> Self {
         // Pad buffer to SIMD alignment (max vector length is 16)
         let padded_pixels = max_pixels.next_multiple_of(16);
+
+        // Double-box each transformer to get thin pointers.
+        // The inner Box is a fat pointer (dyn Trait), the outer Box gives us a thin pointer.
+        let mut owned: Vec<Box<Box<dyn JxlCmsTransformer + Send>>> =
+            transformers.into_iter().map(Box::new).collect();
+
+        // Create opaque handles pointing to the inner Box
+        let opaque: Vec<OpaqueTransformer> = owned
+            .iter_mut()
+            .map(|b| OpaqueTransformer {
+                ptr: (&mut **b) as *mut Box<dyn JxlCmsTransformer + Send> as *const (),
+                call: cms_trampoline,
+            })
+            .collect();
+
         Self {
-            transformers: transformers.into_iter().map(AtomicRefCell::new).collect(),
+            transformers: opaque,
+            _owned: owned,
             first_channel,
             num_channels,
             buffer_size: padded_pixels
@@ -91,10 +138,8 @@ impl RenderPipelineInPlaceStage for CmsStage {
 
         // Single channel: transform directly in place without copying
         if nc == 1 {
-            let mut transformer = self.transformers[state.transformer_idx].borrow_mut();
-            transformer
-                .do_transform_inplace(&mut row[0][..xsize])
-                .expect("CMS transform failed");
+            let t = &self.transformers[state.transformer_idx];
+            (t.call)(t.ptr, &mut row[0][..xsize]).expect("CMS transform failed");
             return;
         }
 
@@ -138,10 +183,8 @@ impl RenderPipelineInPlaceStage for CmsStage {
         }
 
         // Apply transform (only on actual pixels, not padding)
-        let mut transformer = self.transformers[state.transformer_idx].borrow_mut();
-        transformer
-            .do_transform_inplace(&mut state.buffer[..xsize * nc])
-            .expect("CMS transform failed");
+        let t = &self.transformers[state.transformer_idx];
+        (t.call)(t.ptr, &mut state.buffer[..xsize * nc]).expect("CMS transform failed");
 
         // De-interleave packed -> planar using SIMD
         match nc {
