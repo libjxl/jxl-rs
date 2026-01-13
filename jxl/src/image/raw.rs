@@ -86,7 +86,7 @@ impl OwnedRawImage {
         let row = &mut unsafe { self.data.row_mut(row + offset.1) }[offset.0..end];
         // SAFETY: MaybeUninit<u8> and u8 have the same size and layout, and our safety invariant
         // guarantees the data is initialized.
-        unsafe { std::slice::from_raw_parts_mut(row.as_mut_ptr() as *mut u8, row.len()) }
+        unsafe { std::slice::from_raw_parts_mut(row.as_mut_ptr().cast::<u8>(), row.len()) }
     }
 
     #[inline(always)]
@@ -97,7 +97,7 @@ impl OwnedRawImage {
         let row = &unsafe { self.data.row(row + offset.1) }[offset.0..end];
         // SAFETY: MaybeUninit<u8> and u8 have the same size and layout, and our safety invariant
         // guarantees the data is initialized.
-        unsafe { std::slice::from_raw_parts(row.as_ptr() as *const u8, row.len()) }
+        unsafe { std::slice::from_raw_parts(row.as_ptr().cast::<u8>(), row.len()) }
     }
 
     pub fn byte_size(&self) -> (usize, usize) {
@@ -149,7 +149,7 @@ impl<'a> RawImageRect<'a> {
         let row = unsafe { self.data.row(row) };
         // SAFETY: MaybeUninit<u8> and u8 have the same size and layout, and our safety invariant
         // guarantees the data is initialized.
-        unsafe { std::slice::from_raw_parts(row.as_ptr() as *const u8, row.len()) }
+        unsafe { std::slice::from_raw_parts(row.as_ptr().cast::<u8>(), row.len()) }
     }
 
     pub fn rect(&self, rect: Rect) -> RawImageRect<'a> {
@@ -181,7 +181,7 @@ impl<'a> RawImageRectMut<'a> {
         let row = unsafe { self.data.row_mut(row) };
         // SAFETY: MaybeUninit<u8> and u8 have the same size and layout, and our safety invariant
         // guarantees the data is initialized.
-        unsafe { std::slice::from_raw_parts_mut(row.as_mut_ptr() as *mut u8, row.len()) }
+        unsafe { std::slice::from_raw_parts_mut(row.as_mut_ptr().cast::<u8>(), row.len()) }
     }
 
     pub fn rect_mut(&'_ mut self, rect: Rect) -> RawImageRectMut<'_> {
