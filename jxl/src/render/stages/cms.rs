@@ -8,6 +8,7 @@ use std::any::Any;
 use crate::api::JxlCmsTransformer;
 use crate::error::Result;
 use crate::render::RenderPipelineInPlaceStage;
+
 use crate::render::simd_utils::{
     deinterleave_2_dispatch, deinterleave_3_dispatch, deinterleave_4_dispatch,
     interleave_2_dispatch, interleave_3_dispatch, interleave_4_dispatch,
@@ -26,6 +27,34 @@ pub struct CmsStage {
     first_channel: usize,
     num_channels: usize,
     buffer_size: usize,
+}
+
+/// Wrapper to prevent LLVM from pessimizing unrelated code paths.
+///
+/// Without this wrapper, the mere presence of the dyn trait call causes a ~20% performance
+/// regression in the modular decoder's `process_output` function, even when CMS is never
+/// invoked (no CMS provider configured). The regression appears to be caused by LLVM's
+/// interprocedural analysis of the dyn trait vtable affecting code generation elsewhere.
+///
+/// Things we tried that did NOT fix the regression:
+/// - `#[cold]` on various functions
+/// - `#[inline(never)]` on `process_output` and functions it calls
+/// - `std::hint::black_box` around the transformer
+/// - Moving SIMD code to separate modules/crates
+/// - Returning `()` or `Result<()>` from this wrapper
+///
+/// Things that DO fix the regression:
+/// - `#[inline(never)]` wrapper returning `bool` or `Option<()>` (this solution)
+/// - `extern "C"` ABI boundary
+/// - Global `lto = "thin"` or `codegen-units = 1`
+///
+/// Theory: LLVM's analysis of the dyn trait vtable (even when never executed) influences
+/// register allocation or instruction selection in distant hot paths. Isolating the dyn
+/// call in a non-inlined function with a non-trivial return type creates enough of an
+/// optimization barrier to prevent this cross-function interference.
+#[inline(never)]
+fn call_cms_transform(transformer: &mut dyn JxlCmsTransformer, buf: &mut [f32]) -> Option<()> {
+    transformer.do_transform_inplace(buf).ok()
 }
 
 impl CmsStage {
@@ -92,8 +121,7 @@ impl RenderPipelineInPlaceStage for CmsStage {
         // Single channel: transform directly in place without copying
         if nc == 1 {
             let mut transformer = self.transformers[state.transformer_idx].borrow_mut();
-            transformer
-                .do_transform_inplace(&mut row[0][..xsize])
+            call_cms_transform(&mut **transformer, &mut row[0][..xsize])
                 .expect("CMS transform failed");
             return;
         }
@@ -139,8 +167,7 @@ impl RenderPipelineInPlaceStage for CmsStage {
 
         // Apply transform (only on actual pixels, not padding)
         let mut transformer = self.transformers[state.transformer_idx].borrow_mut();
-        transformer
-            .do_transform_inplace(&mut state.buffer[..xsize * nc])
+        call_cms_transform(&mut **transformer, &mut state.buffer[..xsize * nc])
             .expect("CMS transform failed");
 
         // De-interleave packed -> planar using SIMD
