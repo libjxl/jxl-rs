@@ -405,6 +405,7 @@ impl Frame {
 
         let mut linear = false;
         let output_color_info = OutputColorInfo::from_header(&decoder_state.file_header)?;
+
         if frame_header.do_ycbcr {
             pipeline = pipeline.add_inplace_stage(YcbcrToRgbStage::new(0))?;
         } else if decoder_state.file_header.image_metadata.xyb_encoded {
@@ -418,6 +419,8 @@ impl Frame {
                     && !input_profile.can_convert_internally(output_profile)
                 {
                     let max_pixels = 1 << frame_header.log_group_dim();
+                    // After XybStage, we have 3 linear RGB channels
+                    let in_channel_indices: Vec<usize> = vec![0, 1, 2];
                     let (out_channels, transformers) = cms.initialize_transforms(
                         1, // num transforms (1 for single-threaded)
                         max_pixels,
@@ -425,10 +428,17 @@ impl Frame {
                         output_profile.clone(),
                         output_color_info.intensity_target,
                     )?;
+                    // CMS cannot add channels - reject transforms that would
+                    if out_channels > in_channel_indices.len() {
+                        return Err(Error::CmsChannelCountIncrease {
+                            in_channels: in_channel_indices.len(),
+                            out_channels,
+                        });
+                    }
                     if !transformers.is_empty() {
                         pipeline = pipeline.add_inplace_stage(CmsStage::new(
                             transformers,
-                            0,
+                            in_channel_indices,
                             out_channels,
                             max_pixels,
                         ))?;
@@ -436,6 +446,75 @@ impl Frame {
                 }
                 pipeline = pipeline
                     .add_inplace_stage(FromLinearStage::new(0, output_color_info.tf.clone()))?;
+            }
+        } else if let Some(cms) = cms
+            && input_profile != output_profile
+            && !input_profile.can_convert_internally(output_profile)
+        {
+            // Non-XYB, non-YCbCr image that needs CMS conversion (e.g., CMYK to RGB)
+            let max_pixels = 1 << frame_header.log_group_dim();
+            // Find the Black (K) extra channel for CMYK images.
+            // In JXL, CMYK is stored as 3 color channels (CMY) + K as extra channel.
+            let black_channel_info = decoder_state
+                .file_header
+                .image_metadata
+                .extra_channel_info
+                .iter()
+                .enumerate()
+                .find(|x| x.1.ec_type == ExtraChannel::Black);
+            // Build channel indices: CMY (0, 1, 2) + K if present
+            // K channel is at pipeline index = extra_channel_index + 3
+            let in_channel_indices: Vec<usize> = if let Some((k_idx, _)) = black_channel_info {
+                vec![0, 1, 2, k_idx + 3]
+            } else {
+                vec![0, 1, 2]
+            };
+            let (out_channels, transformers) = cms.initialize_transforms(
+                1, // num transforms (1 for single-threaded)
+                max_pixels,
+                input_profile.clone(),
+                output_profile.clone(),
+                output_color_info.intensity_target,
+            )?;
+            // CMS cannot add channels - reject transforms that would
+            if out_channels > in_channel_indices.len() {
+                return Err(Error::CmsChannelCountIncrease {
+                    in_channels: in_channel_indices.len(),
+                    out_channels,
+                });
+            }
+            // Check if user requested output of any channel consumed by CMS
+            // Consumed channels are those in in_channel_indices[out_channels..] that are extra channels
+            for &pipeline_idx in in_channel_indices.iter().skip(out_channels) {
+                if pipeline_idx >= 3 {
+                    // This is an extra channel (pipeline index 3+ = extra channel 0+)
+                    let ec_idx = pipeline_idx - 3;
+                    if pixel_format
+                        .extra_channel_format
+                        .get(ec_idx)
+                        .is_some_and(|f| f.is_some())
+                    {
+                        let ec_type = decoder_state
+                            .file_header
+                            .image_metadata
+                            .extra_channel_info
+                            .get(ec_idx)
+                            .map(|ec| format!("{:?}", ec.ec_type))
+                            .unwrap_or_else(|| "Unknown".to_string());
+                        return Err(Error::CmsConsumedChannelRequested {
+                            channel_index: ec_idx,
+                            channel_type: ec_type,
+                        });
+                    }
+                }
+            }
+            if !transformers.is_empty() {
+                pipeline = pipeline.add_inplace_stage(CmsStage::new(
+                    transformers,
+                    in_channel_indices,
+                    out_channels,
+                    max_pixels,
+                ))?;
             }
         }
 
