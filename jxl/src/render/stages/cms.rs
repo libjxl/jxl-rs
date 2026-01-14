@@ -26,15 +26,20 @@ struct CmsLocalState {
 
 /// Applies CMS color transform between color profiles.
 ///
-/// Supports non-contiguous channel indices, e.g., CMYK with K at a non-adjacent index.
+/// The stage receives channels re-indexed from 0 in `process_row_chunk`:
+/// - row[0], row[1], row[2] are color channels (always present)
+/// - row[3] is the black (K) channel if `black_channel` is `Some`
+///
+/// Output is written to row[0..out_channels].
 pub struct CmsStage {
     transformers: Vec<AtomicRefCell<Box<dyn JxlCmsTransformer + Send>>>,
-    /// Indices of input channels to read from (can be non-contiguous).
-    /// E.g., [0, 1, 2] for RGB or [0, 1, 2, 5] for CMYK where K is at index 5.
-    in_channel_indices: Vec<usize>,
-    /// Number of output channels. Output is written to the first `out_channels`
-    /// indices from `in_channel_indices`.
+    /// Number of input channels (3 for RGB, 4 for CMYK).
+    in_channels: usize,
+    /// Number of output channels (typically 3 for RGB output).
     out_channels: usize,
+    /// Pipeline index of the black (K) channel, if present.
+    /// Used by `uses_channel` to request the K channel from the pipeline.
+    black_channel: Option<usize>,
     input_buffer_size: usize,
     output_buffer_size: usize,
 }
@@ -72,7 +77,7 @@ fn call_cms_transform_inplace(
 
 /// Wrapper for separate-buffer transform to prevent LLVM from pessimizing unrelated code paths.
 ///
-/// See module-level documentation for details on why this wrapper is needed.
+/// See `call_cms_transform_inplace` for details on why this wrapper is needed.
 #[inline(never)]
 fn call_cms_transform(
     transformer: &mut dyn JxlCmsTransformer,
@@ -83,43 +88,57 @@ fn call_cms_transform(
 }
 
 impl CmsStage {
-    /// Creates a new CMS stage with explicit channel indices.
+    /// Creates a new CMS stage.
     ///
     /// # Arguments
     /// * `transformers` - CMS transformer instances (one per thread recommended)
-    /// * `in_channel_indices` - Indices of input channels (can be non-contiguous)
-    /// * `out_channels` - Number of output channels (must be <= in_channel_indices.len())
+    /// * `in_channels` - Number of input channels (3 for RGB, 4 for CMYK)
+    /// * `out_channels` - Number of output channels (must be <= in_channels)
+    /// * `black_channel` - Pipeline index of K channel if present (for CMYK)
     /// * `max_pixels` - Maximum pixels per row chunk
     ///
-    /// Output is written to the first `out_channels` indices from `in_channel_indices`.
     /// When input and output channel counts match, uses in-place transform.
     /// When they differ, uses separate input/output buffers.
     ///
     /// # Example
     /// ```ignore
     /// // RGB -> RGB (in-place)
-    /// CmsStage::new(transformers, vec![0, 1, 2], 3, max_pixels);
+    /// CmsStage::new(transformers, 3, 3, None, max_pixels);
     ///
     /// // CMYK -> RGB where K is at pipeline channel 5
-    /// CmsStage::new(transformers, vec![0, 1, 2, 5], 3, max_pixels);
+    /// CmsStage::new(transformers, 4, 3, Some(5), max_pixels);
     /// ```
     pub fn new(
         transformers: Vec<Box<dyn JxlCmsTransformer + Send>>,
-        in_channel_indices: Vec<usize>,
+        in_channels: usize,
         out_channels: usize,
+        black_channel: Option<usize>,
         max_pixels: usize,
     ) -> Self {
-        let in_channels = in_channel_indices.len();
+        // Validate ranges first for clearer error messages
+        assert!(
+            (1..=4).contains(&in_channels),
+            "CMS stage only supports 1-4 input channels, got {in_channels}"
+        );
+        assert!(
+            (1..=4).contains(&out_channels),
+            "CMS stage only supports 1-4 output channels, got {out_channels}"
+        );
         assert!(
             out_channels <= in_channels,
             "out_channels ({out_channels}) must be <= in_channels ({in_channels})"
+        );
+        assert!(
+            black_channel.is_some() == (in_channels == 4),
+            "black_channel must be Some iff in_channels == 4"
         );
         // Pad buffer to SIMD alignment (max vector length is 16)
         let padded_pixels = max_pixels.next_multiple_of(16);
         Self {
             transformers: transformers.into_iter().map(AtomicRefCell::new).collect(),
-            in_channel_indices,
+            in_channels,
             out_channels,
+            black_channel,
             input_buffer_size: padded_pixels
                 .checked_mul(in_channels)
                 .expect("CMS input buffer size overflow"),
@@ -132,13 +151,19 @@ impl CmsStage {
 
 impl std::fmt::Display for CmsStage {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(
-            f,
-            "CMS transform: {} channels {:?} -> {} channels",
-            self.in_channel_indices.len(),
-            self.in_channel_indices,
-            self.out_channels
-        )
+        if let Some(k) = self.black_channel {
+            write!(
+                f,
+                "CMS transform: {} channels (K at {}) -> {} channels",
+                self.in_channels, k, self.out_channels
+            )
+        } else {
+            write!(
+                f,
+                "CMS transform: {} channels -> {} channels",
+                self.in_channels, self.out_channels
+            )
+        }
     }
 }
 
@@ -146,7 +171,8 @@ impl RenderPipelineInPlaceStage for CmsStage {
     type Type = f32;
 
     fn uses_channel(&self, c: usize) -> bool {
-        self.in_channel_indices.contains(&c)
+        // Color channels (0..min(in_channels, 3)) plus black channel if present
+        c < self.in_channels.min(3) || self.black_channel == Some(c)
     }
 
     fn init_local_state(&self, thread_index: usize) -> Result<Option<Box<dyn Any>>> {
@@ -155,11 +181,10 @@ impl RenderPipelineInPlaceStage for CmsStage {
         }
         // Use thread index modulo transformer count to assign transformer to this thread
         let idx = thread_index % self.transformers.len();
-        let in_nc = self.in_channel_indices.len();
 
         // When channel counts differ, we need separate input and output buffers.
         // When they're the same, we use in-place transform (output_buffer unused).
-        let output_buffer = if in_nc != self.out_channels {
+        let output_buffer = if self.in_channels != self.out_channels {
             vec![0.0f32; self.output_buffer_size]
         } else {
             Vec::new()
@@ -181,16 +206,18 @@ impl RenderPipelineInPlaceStage for CmsStage {
     ) {
         let Some(state) = state else { return };
         let state: &mut CmsLocalState = state.downcast_mut().unwrap();
-        let indices = &self.in_channel_indices;
-        let in_nc = indices.len();
-        let out_nc = self.out_channels;
-        let same_channels = in_nc == out_nc;
+        let same_channels = self.in_channels == self.out_channels;
 
-        // Single channel input and output: transform directly in place without copying
-        if in_nc == 1 && out_nc == 1 {
-            let ch_idx = indices[0];
+        debug_assert!(
+            xsize * self.in_channels <= state.input_buffer.len(),
+            "xsize {} exceeds buffer capacity",
+            xsize
+        );
+
+        // Single channel: transform directly in place without interleaving
+        if self.in_channels == 1 && self.out_channels == 1 {
             let mut transformer = self.transformers[state.transformer_idx].borrow_mut();
-            call_cms_transform_inplace(&mut **transformer, &mut row[ch_idx][..xsize])
+            call_cms_transform_inplace(&mut **transformer, &mut row[0][..xsize])
                 .expect("CMS transform failed");
             return;
         }
@@ -199,41 +226,33 @@ impl RenderPipelineInPlaceStage for CmsStage {
         let xsize_padded = xsize.next_multiple_of(16);
 
         // Interleave planar -> packed using SIMD
-        // Index into row using channel indices to support non-contiguous channels
-        match in_nc {
+        // row[0..in_channels] are our input channels (re-indexed from 0 by pipeline)
+        match self.in_channels {
             2 => {
                 interleave_2_dispatch(
-                    &row[indices[0]][..xsize_padded],
-                    &row[indices[1]][..xsize_padded],
+                    &row[0][..xsize_padded],
+                    &row[1][..xsize_padded],
                     &mut state.input_buffer[..xsize_padded * 2],
                 );
             }
             3 => {
                 interleave_3_dispatch(
-                    &row[indices[0]][..xsize_padded],
-                    &row[indices[1]][..xsize_padded],
-                    &row[indices[2]][..xsize_padded],
+                    &row[0][..xsize_padded],
+                    &row[1][..xsize_padded],
+                    &row[2][..xsize_padded],
                     &mut state.input_buffer[..xsize_padded * 3],
                 );
             }
             4 => {
                 interleave_4_dispatch(
-                    &row[indices[0]][..xsize_padded],
-                    &row[indices[1]][..xsize_padded],
-                    &row[indices[2]][..xsize_padded],
-                    &row[indices[3]][..xsize_padded],
+                    &row[0][..xsize_padded],
+                    &row[1][..xsize_padded],
+                    &row[2][..xsize_padded],
+                    &row[3][..xsize_padded],
                     &mut state.input_buffer[..xsize_padded * 4],
                 );
             }
-            _ => {
-                // Scalar fallback for other channel counts
-                #[allow(clippy::needless_range_loop)]
-                for x in 0..xsize {
-                    for (i, &ch_idx) in indices.iter().enumerate() {
-                        state.input_buffer[x * in_nc + i] = row[ch_idx][x];
-                    }
-                }
-            }
+            _ => unreachable!("CMS stage only supports 2-4 input channels here"),
         }
 
         // Apply transform (only on actual pixels, not padding)
@@ -242,15 +261,15 @@ impl RenderPipelineInPlaceStage for CmsStage {
             // In-place transform when channel counts match
             call_cms_transform_inplace(
                 &mut **transformer,
-                &mut state.input_buffer[..xsize * in_nc],
+                &mut state.input_buffer[..xsize * self.in_channels],
             )
             .expect("CMS transform failed");
         } else {
             // Separate buffer transform when channel counts differ
             call_cms_transform(
                 &mut **transformer,
-                &state.input_buffer[..xsize * in_nc],
-                &mut state.output_buffer[..xsize * out_nc],
+                &state.input_buffer[..xsize * self.in_channels],
+                &mut state.output_buffer[..xsize * self.out_channels],
             )
             .expect("CMS transform failed");
         }
@@ -263,9 +282,13 @@ impl RenderPipelineInPlaceStage for CmsStage {
         };
 
         // De-interleave packed -> planar
-        // Output always goes to contiguous channels 0, 1, 2, ... (color channels)
-        match out_nc {
-            2 if row.len() >= 2 => {
+        // Output goes to row[0..out_channels]
+        match self.out_channels {
+            1 => {
+                // Single output channel: copy directly from output buffer (no deinterleaving)
+                row[0][..xsize].copy_from_slice(&output_buf[..xsize]);
+            }
+            2 => {
                 let (r0, r1) = row.split_at_mut(1);
                 deinterleave_2_dispatch(
                     &output_buf[..xsize_padded * 2],
@@ -273,7 +296,7 @@ impl RenderPipelineInPlaceStage for CmsStage {
                     &mut r1[0][..xsize_padded],
                 );
             }
-            3 if row.len() >= 3 => {
+            3 => {
                 let (r0, rest) = row.split_at_mut(1);
                 let (r1, r2) = rest.split_at_mut(1);
                 deinterleave_3_dispatch(
@@ -283,7 +306,7 @@ impl RenderPipelineInPlaceStage for CmsStage {
                     &mut r2[0][..xsize_padded],
                 );
             }
-            4 if row.len() >= 4 => {
+            4 => {
                 let (r0, rest) = row.split_at_mut(1);
                 let (r1, rest) = rest.split_at_mut(1);
                 let (r2, r3) = rest.split_at_mut(1);
@@ -295,15 +318,7 @@ impl RenderPipelineInPlaceStage for CmsStage {
                     &mut r3[0][..xsize_padded],
                 );
             }
-            _ => {
-                // Scalar fallback for >4 output channels
-                #[allow(clippy::needless_range_loop)]
-                for x in 0..xsize {
-                    for c in 0..out_nc {
-                        row[c][x] = output_buf[x * out_nc + c];
-                    }
-                }
-            }
+            _ => unreachable!("CMS stage only supports 1-4 output channels"),
         }
     }
 }
@@ -371,10 +386,10 @@ mod tests {
     }
 
     #[test]
-    fn test_cms_stage_same_channels_inplace() {
+    fn test_cms_stage_rgb_inplace() {
         // Test 3->3 channel transform (uses in-place)
         let transformers: Vec<Box<dyn JxlCmsTransformer + Send>> = vec![Box::new(ScaleTransformer)];
-        let stage = CmsStage::new(transformers, vec![0, 1, 2], 3, 16);
+        let stage = CmsStage::new(transformers, 3, 3, None, 16);
 
         // Initialize state for thread 0
         let state = stage.init_local_state(0).unwrap().unwrap();
@@ -401,19 +416,19 @@ mod tests {
     }
 
     #[test]
-    fn test_cms_stage_different_channels() {
-        // Test 4->3 channel transform (CMYK to RGB style) with contiguous channels
+    fn test_cms_stage_cmyk_to_rgb() {
+        // Test 4->3 channel transform (CMYK to RGB)
+        // The pipeline passes row[0..4] as CMY + K (re-indexed from 0)
         let transformers: Vec<Box<dyn JxlCmsTransformer + Send>> =
             vec![Box::new(FourToThreeTransformer)];
-        let stage = CmsStage::new(transformers, vec![0, 1, 2, 3], 3, 16);
+        // K is at pipeline index 5, but we get it as row[3]
+        let stage = CmsStage::new(transformers, 4, 3, Some(5), 16);
 
-        // Initialize state for thread 0
         let state = stage.init_local_state(0).unwrap().unwrap();
         let mut state_ref: Box<dyn Any> = state;
 
-        // Create test data: 4 channels (CMYK), 2 pixels
-        // C=0.2, M=0.3, Y=0.4, K=0.1 for first pixel
-        // C=0.5, M=0.5, Y=0.5, K=0.5 for second pixel
+        // Create test data: 4 channels as the pipeline would pass them (re-indexed)
+        // row[0]=C, row[1]=M, row[2]=Y, row[3]=K
         let mut ch0 = vec![0.2, 0.5]; // C
         let mut ch1 = vec![0.3, 0.5]; // M
         let mut ch2 = vec![0.4, 0.5]; // Y
@@ -429,59 +444,16 @@ mod tests {
         stage.process_row_chunk((0, 0), 2, &mut rows, Some(state_ref.as_mut()));
 
         // Output should be RGB: R = 1-C, G = 1-M, B = 1-Y
-        // First pixel: R = 0.8, G = 0.7, B = 0.6
         assert!((ch0[0] - 0.8).abs() < 0.001);
         assert!((ch1[0] - 0.7).abs() < 0.001);
         assert!((ch2[0] - 0.6).abs() < 0.001);
-        // Second pixel: R = 0.5, G = 0.5, B = 0.5
-        assert!((ch0[1] - 0.5).abs() < 0.001);
-        assert!((ch1[1] - 0.5).abs() < 0.001);
-        assert!((ch2[1] - 0.5).abs() < 0.001);
-        // K channel (ch3) is not modified by deinterleave since out_channels=3
-    }
-
-    #[test]
-    fn test_cms_stage_non_contiguous_channels() {
-        // Test 4->3 channel transform with non-contiguous channels (K at index 5)
-        let transformers: Vec<Box<dyn JxlCmsTransformer + Send>> =
-            vec![Box::new(FourToThreeTransformer)];
-        // CMY at 0,1,2 and K at index 5 (simulating other extra channels before K)
-        let stage = CmsStage::new(transformers, vec![0, 1, 2, 5], 3, 16);
-
-        let state = stage.init_local_state(0).unwrap().unwrap();
-        let mut state_ref: Box<dyn Any> = state;
-
-        // Create test data: 6 channels total, only using 0,1,2,5
-        let mut ch0 = vec![0.2, 0.5]; // C
-        let mut ch1 = vec![0.3, 0.5]; // M
-        let mut ch2 = vec![0.4, 0.5]; // Y
-        let mut ch3 = vec![9.9, 9.9]; // unused (e.g., alpha)
-        let mut ch4 = vec![8.8, 8.8]; // unused (e.g., depth)
-        let mut ch5 = vec![0.1, 0.5]; // K
-
-        // Pad to 16 for SIMD alignment
-        for ch in [&mut ch0, &mut ch1, &mut ch2, &mut ch3, &mut ch4, &mut ch5] {
-            ch.resize(16, 0.0);
-        }
-
-        let mut rows: Vec<&mut [f32]> =
-            vec![&mut ch0, &mut ch1, &mut ch2, &mut ch3, &mut ch4, &mut ch5];
-        stage.process_row_chunk((0, 0), 2, &mut rows, Some(state_ref.as_mut()));
-
-        // Output should be RGB: R = 1-C, G = 1-M, B = 1-Y
-        assert!((ch0[0] - 0.8).abs() < 0.001);
-        assert!((ch1[0] - 0.7).abs() < 0.001);
-        assert!((ch2[0] - 0.6).abs() < 0.001);
-        // Unused channels should be unchanged
-        assert!((ch3[0] - 9.9).abs() < 0.001);
-        assert!((ch4[0] - 8.8).abs() < 0.001);
     }
 
     #[test]
     fn test_cms_stage_single_channel() {
         // Test 1->1 channel transform (grayscale)
         let transformers: Vec<Box<dyn JxlCmsTransformer + Send>> = vec![Box::new(ScaleTransformer)];
-        let stage = CmsStage::new(transformers, vec![0], 1, 16);
+        let stage = CmsStage::new(transformers, 1, 1, None, 16);
 
         let state = stage.init_local_state(0).unwrap().unwrap();
         let mut state_ref: Box<dyn Any> = state;
@@ -503,7 +475,7 @@ mod tests {
     fn test_cms_stage_no_transformers() {
         // Test with empty transformers - should do nothing
         let transformers: Vec<Box<dyn JxlCmsTransformer + Send>> = vec![];
-        let stage = CmsStage::new(transformers, vec![0, 1, 2], 3, 16);
+        let stage = CmsStage::new(transformers, 3, 3, None, 16);
 
         // init_local_state should return None when no transformers
         let state = stage.init_local_state(0).unwrap();
@@ -525,25 +497,52 @@ mod tests {
     fn test_cms_stage_display() {
         let transformers: Vec<Box<dyn JxlCmsTransformer + Send>> =
             vec![Box::new(IdentityTransformer)];
-        let stage = CmsStage::new(transformers, vec![0, 1, 2, 3], 3, 16);
-        let display = format!("{}", stage);
+        let stage_rgb = CmsStage::new(transformers, 3, 3, None, 16);
+        let display = format!("{}", stage_rgb);
+        assert!(display.contains("3 channels -> 3 channels"));
+
+        let transformers: Vec<Box<dyn JxlCmsTransformer + Send>> =
+            vec![Box::new(IdentityTransformer)];
+        let stage_cmyk = CmsStage::new(transformers, 4, 3, Some(5), 16);
+        let display = format!("{}", stage_cmyk);
         assert!(display.contains("4 channels"));
-        assert!(display.contains("3 channels"));
+        assert!(display.contains("K at 5"));
+        assert!(display.contains("-> 3 channels"));
     }
 
     #[test]
     fn test_cms_stage_uses_channel() {
+        // RGB only (no black channel)
         let transformers: Vec<Box<dyn JxlCmsTransformer + Send>> =
             vec![Box::new(IdentityTransformer)];
-        // Non-contiguous channels: 0, 1, 2, 5
-        let stage = CmsStage::new(transformers, vec![0, 1, 2, 5], 3, 16);
+        let stage_rgb = CmsStage::new(transformers, 3, 3, None, 16);
+        assert!(stage_rgb.uses_channel(0));
+        assert!(stage_rgb.uses_channel(1));
+        assert!(stage_rgb.uses_channel(2));
+        assert!(!stage_rgb.uses_channel(3));
+        assert!(!stage_rgb.uses_channel(5));
 
-        assert!(stage.uses_channel(0));
-        assert!(stage.uses_channel(1));
-        assert!(stage.uses_channel(2));
-        assert!(!stage.uses_channel(3)); // Not in indices
-        assert!(!stage.uses_channel(4)); // Not in indices
-        assert!(stage.uses_channel(5));
-        assert!(!stage.uses_channel(6));
+        // CMYK with K at pipeline index 5
+        let transformers: Vec<Box<dyn JxlCmsTransformer + Send>> =
+            vec![Box::new(IdentityTransformer)];
+        let stage_cmyk = CmsStage::new(transformers, 4, 3, Some(5), 16);
+        assert!(stage_cmyk.uses_channel(0));
+        assert!(stage_cmyk.uses_channel(1));
+        assert!(stage_cmyk.uses_channel(2));
+        assert!(!stage_cmyk.uses_channel(3)); // Not K
+        assert!(!stage_cmyk.uses_channel(4)); // Not K
+        assert!(stage_cmyk.uses_channel(5)); // K channel
+        assert!(!stage_cmyk.uses_channel(6));
+    }
+
+    #[test]
+    fn test_stage_consistency_cms() -> crate::error::Result<()> {
+        // Test consistency for RGB -> RGB (3-channel identity transform)
+        // max_pixels must be >= test image width (500)
+        crate::render::test::test_stage_consistency(
+            || CmsStage::new(vec![Box::new(IdentityTransformer)], 3, 3, None, 512),
+            (500, 500),
+            3,
+        )
     }
 }

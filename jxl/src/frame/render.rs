@@ -420,7 +420,7 @@ impl Frame {
                 {
                     let max_pixels = 1 << frame_header.log_group_dim();
                     // After XybStage, we have 3 linear RGB channels
-                    let in_channel_indices: Vec<usize> = vec![0, 1, 2];
+                    let in_channels = 3;
                     let (out_channels, transformers) = cms.initialize_transforms(
                         1, // num transforms (1 for single-threaded)
                         max_pixels,
@@ -429,17 +429,18 @@ impl Frame {
                         output_color_info.intensity_target,
                     )?;
                     // CMS cannot add channels - reject transforms that would
-                    if out_channels > in_channel_indices.len() {
+                    if out_channels > in_channels {
                         return Err(Error::CmsChannelCountIncrease {
-                            in_channels: in_channel_indices.len(),
+                            in_channels,
                             out_channels,
                         });
                     }
                     if !transformers.is_empty() {
                         pipeline = pipeline.add_inplace_stage(CmsStage::new(
                             transformers,
-                            in_channel_indices,
+                            in_channels,
                             out_channels,
+                            None, // no black channel for XYB
                             max_pixels,
                         ))?;
                     }
@@ -455,20 +456,16 @@ impl Frame {
             let max_pixels = 1 << frame_header.log_group_dim();
             // Find the Black (K) extra channel for CMYK images.
             // In JXL, CMYK is stored as 3 color channels (CMY) + K as extra channel.
-            let black_channel_info = decoder_state
+            // Pipeline index of K = extra_channel_index + 3
+            let black_channel: Option<usize> = decoder_state
                 .file_header
                 .image_metadata
                 .extra_channel_info
                 .iter()
                 .enumerate()
-                .find(|x| x.1.ec_type == ExtraChannel::Black);
-            // Build channel indices: CMY (0, 1, 2) + K if present
-            // K channel is at pipeline index = extra_channel_index + 3
-            let in_channel_indices: Vec<usize> = if let Some((k_idx, _)) = black_channel_info {
-                vec![0, 1, 2, k_idx + 3]
-            } else {
-                vec![0, 1, 2]
-            };
+                .find(|x| x.1.ec_type == ExtraChannel::Black)
+                .map(|(k_idx, _)| k_idx + 3);
+            let in_channels = if black_channel.is_some() { 4 } else { 3 };
             let (out_channels, transformers) = cms.initialize_transforms(
                 1, // num transforms (1 for single-threaded)
                 max_pixels,
@@ -477,42 +474,35 @@ impl Frame {
                 output_color_info.intensity_target,
             )?;
             // CMS cannot add channels - reject transforms that would
-            if out_channels > in_channel_indices.len() {
+            if out_channels > in_channels {
                 return Err(Error::CmsChannelCountIncrease {
-                    in_channels: in_channel_indices.len(),
+                    in_channels,
                     out_channels,
                 });
             }
-            // Check if user requested output of any channel consumed by CMS
-            // Consumed channels are those in in_channel_indices[out_channels..] that are extra channels
-            for &pipeline_idx in in_channel_indices.iter().skip(out_channels) {
-                if pipeline_idx >= 3 {
-                    // This is an extra channel (pipeline index 3+ = extra channel 0+)
-                    let ec_idx = pipeline_idx - 3;
-                    if pixel_format
-                        .extra_channel_format
-                        .get(ec_idx)
-                        .is_some_and(|f| f.is_some())
-                    {
-                        let ec_type = decoder_state
-                            .file_header
-                            .image_metadata
-                            .extra_channel_info
-                            .get(ec_idx)
-                            .map(|ec| format!("{:?}", ec.ec_type))
-                            .unwrap_or_else(|| "Unknown".to_string());
-                        return Err(Error::CmsConsumedChannelRequested {
-                            channel_index: ec_idx,
-                            channel_type: ec_type,
-                        });
-                    }
+            // Check if user requested output of the black channel which is consumed by CMS
+            if let Some(k_pipeline_idx) = black_channel
+                && out_channels < in_channels
+            {
+                // K channel is consumed (4->3 conversion)
+                let k_ec_idx = k_pipeline_idx - 3;
+                if pixel_format
+                    .extra_channel_format
+                    .get(k_ec_idx)
+                    .is_some_and(|f| f.is_some())
+                {
+                    return Err(Error::CmsConsumedChannelRequested {
+                        channel_index: k_ec_idx,
+                        channel_type: "Black".to_string(),
+                    });
                 }
             }
             if !transformers.is_empty() {
                 pipeline = pipeline.add_inplace_stage(CmsStage::new(
                     transformers,
-                    in_channel_indices,
+                    in_channels,
                     out_channels,
+                    black_channel,
                     max_pixels,
                 ))?;
             }
