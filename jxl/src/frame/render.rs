@@ -94,6 +94,32 @@ impl Frame {
         Ok(pipeline)
     }
 
+    /// Check if CMS will consume a black channel that the user requested in the output.
+    fn check_cms_consumed_black_channel(
+        black_channel: Option<usize>,
+        in_channels: usize,
+        out_channels: usize,
+        pixel_format: &JxlPixelFormat,
+    ) -> Result<()> {
+        if let Some(k_pipeline_idx) = black_channel
+            && out_channels < in_channels
+        {
+            // K channel is consumed (4->3 conversion)
+            let k_ec_idx = k_pipeline_idx - 3;
+            if pixel_format
+                .extra_channel_format
+                .get(k_ec_idx)
+                .is_some_and(|f| f.is_some())
+            {
+                return Err(Error::CmsConsumedChannelRequested {
+                    channel_index: k_ec_idx,
+                    channel_type: "Black".to_string(),
+                });
+            }
+        }
+        Ok(())
+    }
+
     pub fn decode_and_render_hf_groups(
         &mut self,
         api_buffers: &mut Option<&mut [JxlOutputBuffer<'_>]>,
@@ -406,6 +432,18 @@ impl Frame {
         let mut linear = false;
         let output_color_info = OutputColorInfo::from_header(&decoder_state.file_header)?;
 
+        // Find the Black (K) extra channel if present.
+        // In JXL, CMYK is stored as 3 color channels (CMY) + K as extra channel.
+        // Pipeline index of K = extra_channel_index + 3
+        let black_channel: Option<usize> = decoder_state
+            .file_header
+            .image_metadata
+            .extra_channel_info
+            .iter()
+            .enumerate()
+            .find(|x| x.1.ec_type == ExtraChannel::Black)
+            .map(|(k_idx, _)| k_idx + 3);
+
         if frame_header.do_ycbcr {
             pipeline = pipeline.add_inplace_stage(YcbcrToRgbStage::new(0))?;
         } else if decoder_state.file_header.image_metadata.xyb_encoded {
@@ -419,8 +457,8 @@ impl Frame {
                     && !input_profile.can_convert_internally(output_profile)
                 {
                     let max_pixels = 1 << frame_header.log_group_dim();
-                    // After XybStage, we have 3 linear RGB channels
-                    let in_channels = 3;
+                    // After XybStage, we have 3 linear RGB channels, plus K if present
+                    let in_channels = if black_channel.is_some() { 4 } else { 3 };
                     let (out_channels, transformers) = cms.initialize_transforms(
                         1, // num transforms (1 for single-threaded)
                         max_pixels,
@@ -435,12 +473,18 @@ impl Frame {
                             out_channels,
                         });
                     }
+                    Self::check_cms_consumed_black_channel(
+                        black_channel,
+                        in_channels,
+                        out_channels,
+                        pixel_format,
+                    )?;
                     if !transformers.is_empty() {
                         pipeline = pipeline.add_inplace_stage(CmsStage::new(
                             transformers,
                             in_channels,
                             out_channels,
-                            None, // no black channel for XYB
+                            black_channel,
                             max_pixels,
                         ))?;
                     }
@@ -454,17 +498,6 @@ impl Frame {
         {
             // Non-XYB, non-YCbCr image that needs CMS conversion (e.g., CMYK to RGB)
             let max_pixels = 1 << frame_header.log_group_dim();
-            // Find the Black (K) extra channel for CMYK images.
-            // In JXL, CMYK is stored as 3 color channels (CMY) + K as extra channel.
-            // Pipeline index of K = extra_channel_index + 3
-            let black_channel: Option<usize> = decoder_state
-                .file_header
-                .image_metadata
-                .extra_channel_info
-                .iter()
-                .enumerate()
-                .find(|x| x.1.ec_type == ExtraChannel::Black)
-                .map(|(k_idx, _)| k_idx + 3);
             let in_channels = if black_channel.is_some() { 4 } else { 3 };
             let (out_channels, transformers) = cms.initialize_transforms(
                 1, // num transforms (1 for single-threaded)
@@ -480,23 +513,12 @@ impl Frame {
                     out_channels,
                 });
             }
-            // Check if user requested output of the black channel which is consumed by CMS
-            if let Some(k_pipeline_idx) = black_channel
-                && out_channels < in_channels
-            {
-                // K channel is consumed (4->3 conversion)
-                let k_ec_idx = k_pipeline_idx - 3;
-                if pixel_format
-                    .extra_channel_format
-                    .get(k_ec_idx)
-                    .is_some_and(|f| f.is_some())
-                {
-                    return Err(Error::CmsConsumedChannelRequested {
-                        channel_index: k_ec_idx,
-                        channel_type: "Black".to_string(),
-                    });
-                }
-            }
+            Self::check_cms_consumed_black_channel(
+                black_channel,
+                in_channels,
+                out_channels,
+                pixel_format,
+            )?;
             if !transformers.is_empty() {
                 pipeline = pipeline.add_inplace_stage(CmsStage::new(
                     transformers,
