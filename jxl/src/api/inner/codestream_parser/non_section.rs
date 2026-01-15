@@ -200,7 +200,10 @@ impl CodestreamParser {
                 embedded_color_profile.clone()
             };
             self.embedded_color_profile = Some(embedded_color_profile);
-            self.output_color_profile = Some(output_color_profile);
+            // Only set default output_color_profile if not already configured by user
+            if self.output_color_profile.is_none() {
+                self.output_color_profile = Some(output_color_profile);
+            }
             // Only set default pixel_format if not already configured (e.g. via rewind)
             if self.pixel_format.is_none() {
                 self.pixel_format = Some(JxlPixelFormat {
