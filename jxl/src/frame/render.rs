@@ -432,6 +432,18 @@ impl Frame {
         let mut linear = false;
         let output_color_info = OutputColorInfo::from_header(&decoder_state.file_header)?;
 
+        // Determine output TF: use output profile's TF if available, else fall back to embedded
+        let output_tf = output_profile
+            .transfer_function()
+            .map(|tf| {
+                TransferFunction::from_api_tf(
+                    tf,
+                    output_color_info.intensity_target,
+                    output_color_info.luminances,
+                )
+            })
+            .unwrap_or_else(|| output_color_info.tf.clone());
+
         // Find the Black (K) extra channel if present.
         // In JXL, CMYK is stored as 3 color channels (CMY) + K as extra channel.
         // Pipeline index of K = extra_channel_index + 3
@@ -497,14 +509,13 @@ impl Frame {
 
         // XYB output is linear, so apply transfer function (unless outputting raw linear)
         if xyb_encoded && !linear {
-            pipeline = pipeline
-                .add_inplace_stage(FromLinearStage::new(0, output_color_info.tf.clone()))?;
+            pipeline = pipeline.add_inplace_stage(FromLinearStage::new(0, output_tf.clone()))?;
         }
 
         if frame_header.needs_blending() {
             if linear {
-                pipeline = pipeline
-                    .add_inplace_stage(FromLinearStage::new(0, output_color_info.tf.clone()))?;
+                pipeline =
+                    pipeline.add_inplace_stage(FromLinearStage::new(0, output_tf.clone()))?;
                 linear = false;
             }
             pipeline = pipeline.add_inplace_stage(BlendingStage::new(
@@ -523,8 +534,8 @@ impl Frame {
 
         if frame_header.can_be_referenced && !frame_header.save_before_ct {
             if linear {
-                pipeline = pipeline
-                    .add_inplace_stage(FromLinearStage::new(0, output_color_info.tf.clone()))?;
+                pipeline =
+                    pipeline.add_inplace_stage(FromLinearStage::new(0, output_tf.clone()))?;
                 linear = false;
             }
             for i in 0..num_channels {
@@ -588,8 +599,7 @@ impl Frame {
                 && decoder_state.xyb_output_linear
                 && !linear
             {
-                pipeline = pipeline
-                    .add_inplace_stage(ToLinearStage::new(0, output_color_info.tf.clone()))?;
+                pipeline = pipeline.add_inplace_stage(ToLinearStage::new(0, output_tf.clone()))?;
             }
             // Determine if we need to fill opaque alpha:
             // - color_type requests alpha (has_alpha() is true)

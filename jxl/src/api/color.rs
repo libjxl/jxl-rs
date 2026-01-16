@@ -1104,6 +1104,54 @@ impl JxlColorEncoding {
             }
         }
     }
+
+    /// Creates linear sRGB color encoding (sRGB primaries with linear transfer function).
+    /// This is the fallback output color space for XYB images when the embedded
+    /// color profile cannot be output to without a CMS.
+    pub fn linear_srgb(grayscale: bool) -> Self {
+        if grayscale {
+            JxlColorEncoding::GrayscaleColorSpace {
+                white_point: JxlWhitePoint::D65,
+                transfer_function: JxlTransferFunction::Linear,
+                rendering_intent: RenderingIntent::Relative,
+            }
+        } else {
+            JxlColorEncoding::RgbColorSpace {
+                white_point: JxlWhitePoint::D65,
+                primaries: JxlPrimaries::SRGB,
+                transfer_function: JxlTransferFunction::Linear,
+                rendering_intent: RenderingIntent::Relative,
+            }
+        }
+    }
+
+    /// Returns a copy of this encoding with linear transfer function.
+    /// For XYB encoding, returns linear sRGB as fallback.
+    pub fn with_linear_tf(&self) -> Self {
+        match self {
+            JxlColorEncoding::RgbColorSpace {
+                white_point,
+                primaries,
+                rendering_intent,
+                ..
+            } => JxlColorEncoding::RgbColorSpace {
+                white_point: white_point.clone(),
+                primaries: primaries.clone(),
+                transfer_function: JxlTransferFunction::Linear,
+                rendering_intent: *rendering_intent,
+            },
+            JxlColorEncoding::GrayscaleColorSpace {
+                white_point,
+                rendering_intent,
+                ..
+            } => JxlColorEncoding::GrayscaleColorSpace {
+                white_point: white_point.clone(),
+                transfer_function: JxlTransferFunction::Linear,
+                rendering_intent: *rendering_intent,
+            },
+            JxlColorEncoding::XYB { .. } => Self::linear_srgb(false),
+        }
+    }
 }
 
 #[derive(Clone, PartialEq)]
@@ -1175,6 +1223,40 @@ impl JxlColorProfile {
             }
             // ICC profiles require CMS
             _ => false,
+        }
+    }
+
+    /// Returns the transfer function if this is a simple color profile.
+    /// Returns None for ICC profiles or XYB.
+    pub fn transfer_function(&self) -> Option<&JxlTransferFunction> {
+        match self {
+            Self::Simple(JxlColorEncoding::RgbColorSpace {
+                transfer_function, ..
+            }) => Some(transfer_function),
+            Self::Simple(JxlColorEncoding::GrayscaleColorSpace {
+                transfer_function, ..
+            }) => Some(transfer_function),
+            _ => None,
+        }
+    }
+
+    /// Returns true if the decoder can output to this color profile without a CMS.
+    ///
+    /// This is the equivalent of libjxl's `CanOutputToColorEncoding`. Output is possible
+    /// when the profile is a simple encoding (not ICC) with a natively-supported transfer
+    /// function. For grayscale, the white point must be D65.
+    pub fn can_output_to(&self) -> bool {
+        match self {
+            Self::Icc(_) => false,
+            Self::Simple(JxlColorEncoding::RgbColorSpace { .. }) => true,
+            Self::Simple(JxlColorEncoding::GrayscaleColorSpace { white_point, .. }) => {
+                // libjxl requires D65 white point for grayscale output without CMS
+                *white_point == JxlWhitePoint::D65
+            }
+            Self::Simple(JxlColorEncoding::XYB { .. }) => {
+                // XYB as output doesn't make sense without further conversion
+                false
+            }
         }
     }
 }
