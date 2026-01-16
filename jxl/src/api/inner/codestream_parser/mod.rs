@@ -172,7 +172,14 @@ impl CodestreamParser {
         loop {
             if !self.sections.is_empty() {
                 let regular_frame = self.has_visible_frame();
-                if !self.process_without_output && output_buffers.is_none() {
+                // Only skip sections if we don't need the frame data. Frames that can be
+                // referenced must be decoded because they serve as sources for patches,
+                // blending, or frame extension in subsequent frames.
+                let can_be_referenced = self
+                    .frame
+                    .as_ref()
+                    .is_some_and(|f| f.header().can_be_referenced);
+                if !self.process_without_output && output_buffers.is_none() && !can_be_referenced {
                     self.skip_sections = true;
                 }
 
