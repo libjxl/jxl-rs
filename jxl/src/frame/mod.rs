@@ -245,12 +245,17 @@ impl Frame {
         // First, drop the render pipeline to ensure that no other references to the reference
         // frames are around.
         self.render_pipeline = None;
-        if self.header.can_be_referenced {
+        // Save reference frame if this frame can be referenced and was actually decoded.
+        // If reference_frame_data is None (frame was skipped), we don't save it.
+        // Subsequent frames referencing this slot may fail.
+        if self.header.can_be_referenced
+            && let Some(frame_data) = self.reference_frame_data
+        {
             info!("Saving frame in slot {}", self.header.save_as_reference);
             let rf = Arc::get_mut(&mut self.decoder_state.reference_frames)
                 .expect("remaining references to reference_frames");
             rf[self.header.save_as_reference as usize] = Some(ReferenceFrame {
-                frame: self.reference_frame_data.unwrap(),
+                frame: frame_data,
                 saved_before_color_transform: self.header.save_before_ct,
             });
         }
@@ -264,16 +269,6 @@ impl Frame {
             Some(self.decoder_state)
         };
         Ok(decoder_state)
-    }
-
-    /// Finalize a skipped frame. Unlike `finalize()`, this doesn't save reference frames
-    /// since the frame data wasn't decoded. Returns the decoder state for the next frame.
-    pub fn skip_finalize(self) -> Option<DecoderState> {
-        if self.header.is_last {
-            None
-        } else {
-            Some(self.decoder_state)
-        }
     }
 
     fn modular_color_channels(&self) -> usize {

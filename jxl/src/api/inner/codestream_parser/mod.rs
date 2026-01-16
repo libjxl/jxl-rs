@@ -266,7 +266,7 @@ impl CodestreamParser {
                             .frame
                             .take()
                             .expect("frame must be set when skip_sections is true");
-                        if let Some(decoder_state) = frame.skip_finalize() {
+                        if let Some(decoder_state) = frame.finalize()? {
                             self.decoder_state = Some(decoder_state);
                         } else {
                             self.has_more_frames = false;
