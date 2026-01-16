@@ -245,12 +245,17 @@ impl Frame {
         // First, drop the render pipeline to ensure that no other references to the reference
         // frames are around.
         self.render_pipeline = None;
-        if self.header.can_be_referenced {
+        // Save reference frame if this frame can be referenced and was actually decoded.
+        // If reference_frame_data is None (frame was skipped), we don't save it.
+        // Subsequent frames referencing this slot may fail.
+        if self.header.can_be_referenced
+            && let Some(frame_data) = self.reference_frame_data
+        {
             info!("Saving frame in slot {}", self.header.save_as_reference);
             let rf = Arc::get_mut(&mut self.decoder_state.reference_frames)
                 .expect("remaining references to reference_frames");
             rf[self.header.save_as_reference as usize] = Some(ReferenceFrame {
-                frame: self.reference_frame_data.unwrap(),
+                frame: frame_data,
                 saved_before_color_transform: self.header.save_before_ct,
             });
         }
