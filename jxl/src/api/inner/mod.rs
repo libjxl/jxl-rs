@@ -92,6 +92,7 @@ impl JxlDecoderInner {
                 .as_ref()
                 .map(|anim| frame_header.duration(anim)),
             size,
+            is_visible: frame_header.is_visible(),
         })
     }
 

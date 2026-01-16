@@ -256,4 +256,7 @@ pub struct JxlFrameHeader {
     pub duration: Option<f64>,
     /// Frame size (width, height)
     pub size: (usize, usize),
+    /// Whether this frame should be displayed.
+    /// False for reference-only frames (used for blending but not shown).
+    pub is_visible: bool,
 }
