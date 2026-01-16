@@ -874,6 +874,102 @@ pub(crate) mod tests {
         );
     }
 
+    #[test]
+    fn test_skip_frame_then_decode_next() {
+        use crate::api::{JxlColorType, JxlDataFormat, JxlPixelFormat};
+        use crate::image::{Image, Rect};
+
+        // Use animation_spline.jxl which has multiple frames
+        let file =
+            std::fs::read("resources/test/conformance_test_images/animation_spline.jxl").unwrap();
+
+        let options = JxlDecoderOptions::default();
+        let decoder = JxlDecoder::<states::Initialized>::new(options);
+        let mut input = file.as_slice();
+
+        // Advance to image info
+        let mut decoder = decoder;
+        let mut decoder = loop {
+            match decoder.process(&mut input).unwrap() {
+                ProcessingResult::Complete { result } => break result,
+                ProcessingResult::NeedsMoreInput { fallback, .. } => {
+                    decoder = fallback;
+                }
+            }
+        };
+
+        // Set RGB format
+        let rgb_format = JxlPixelFormat {
+            color_type: JxlColorType::Rgb,
+            color_data_format: Some(JxlDataFormat::f32()),
+            extra_channel_format: vec![],
+        };
+        decoder.set_pixel_format(rgb_format);
+
+        let basic_info = decoder.basic_info().clone();
+        let (width, height) = basic_info.size;
+
+        // Advance to frame info for first frame
+        let mut decoder_frame = loop {
+            match decoder.process(&mut input).unwrap() {
+                ProcessingResult::Complete { result } => break result,
+                ProcessingResult::NeedsMoreInput { fallback, .. } => {
+                    decoder = fallback;
+                }
+            }
+        };
+
+        // Skip the first frame (this is where the bug would leave stale frame state)
+        let mut decoder = loop {
+            match decoder_frame.skip_frame(&mut input).unwrap() {
+                ProcessingResult::Complete { result } => break result,
+                ProcessingResult::NeedsMoreInput { fallback, .. } => {
+                    decoder_frame = fallback;
+                }
+            }
+        };
+
+        assert!(
+            decoder.has_more_frames(),
+            "Animation should have more frames"
+        );
+
+        // Advance to frame info for second frame
+        // Without the fix, this would panic at assert!(self.frame.is_none())
+        let mut decoder_frame = loop {
+            match decoder.process(&mut input).unwrap() {
+                ProcessingResult::Complete { result } => break result,
+                ProcessingResult::NeedsMoreInput { fallback, .. } => {
+                    decoder = fallback;
+                }
+            }
+        };
+
+        // Decode the second frame to verify everything works
+        let mut color_buffer = Image::<f32>::new((width * 3, height)).unwrap();
+        let mut buffers: Vec<_> = vec![JxlOutputBuffer::from_image_rect_mut(
+            color_buffer
+                .get_rect_mut(Rect {
+                    origin: (0, 0),
+                    size: (width * 3, height),
+                })
+                .into_raw(),
+        )];
+
+        let decoder = loop {
+            match decoder_frame.process(&mut input, &mut buffers).unwrap() {
+                ProcessingResult::Complete { result } => break result,
+                ProcessingResult::NeedsMoreInput { fallback, .. } => {
+                    decoder_frame = fallback;
+                }
+            }
+        };
+
+        // If we got here without panicking, the fix works
+        // Optionally verify we can continue with more frames
+        let _ = decoder.has_more_frames();
+    }
+
     /// Test that u8 output matches f32 output within quantization tolerance.
     /// This test would catch bugs like the offset miscalculation in PR #586
     /// that caused black bars in u8 output.

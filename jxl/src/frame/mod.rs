@@ -266,6 +266,16 @@ impl Frame {
         Ok(decoder_state)
     }
 
+    /// Finalize a skipped frame. Unlike `finalize()`, this doesn't save reference frames
+    /// since the frame data wasn't decoded. Returns the decoder state for the next frame.
+    pub fn skip_finalize(self) -> Option<DecoderState> {
+        if self.header.is_last {
+            None
+        } else {
+            Some(self.decoder_state)
+        }
+    }
+
     fn modular_color_channels(&self) -> usize {
         if self.header.encoding == Encoding::VarDCT {
             0

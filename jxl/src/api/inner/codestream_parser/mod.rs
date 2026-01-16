@@ -261,6 +261,17 @@ impl CodestreamParser {
                         return Err(Error::OutOfBounds(total_size - self.ready_section_data));
                     } else {
                         self.sections.clear();
+                        // Finalize the skipped frame, mirroring what process_sections does
+                        let frame = self
+                            .frame
+                            .take()
+                            .expect("frame must be set when skip_sections is true");
+                        if let Some(decoder_state) = frame.skip_finalize() {
+                            self.decoder_state = Some(decoder_state);
+                        } else {
+                            self.has_more_frames = false;
+                        }
+                        self.skip_sections = false;
                     }
                 }
                 if self.sections.is_empty() {
