@@ -610,6 +610,28 @@ unsafe impl F32SimdVec for F32VecSse42 {
     impl_f32_array_interface!();
 
     #[inline(always)]
+    fn load_f16_bits(d: Self::Descriptor, mem: &[u16]) -> Self {
+        assert!(mem.len() >= Self::LEN);
+        // SSE4.2 doesn't have F16C, use scalar conversion
+        let mut result = [0.0f32; 4];
+        for i in 0..4 {
+            result[i] = crate::scalar::f16_to_f32(mem[i]);
+        }
+        Self::load(d, &result)
+    }
+
+    #[inline(always)]
+    fn store_f16(self, dest: &mut [u16]) {
+        assert!(dest.len() >= Self::LEN);
+        // SSE4.2 doesn't have F16C, use scalar conversion
+        let mut tmp = [0.0f32; 4];
+        self.store(&mut tmp);
+        for i in 0..4 {
+            dest[i] = crate::scalar::f32_to_f16(tmp[i]);
+        }
+    }
+
+    #[inline(always)]
     fn transpose_square(d: Self::Descriptor, data: &mut [Self::UnderlyingArray], stride: usize) {
         #[target_feature(enable = "sse4.2")]
         #[inline]

@@ -669,6 +669,57 @@ unsafe impl F32SimdVec for F32VecAvx {
     impl_f32_array_interface!();
 
     #[inline(always)]
+    fn load_f16_bits(d: Self::Descriptor, mem: &[u16]) -> Self {
+        assert!(mem.len() >= Self::LEN);
+        // Check for F16C at runtime and use hardware conversion if available
+        if is_x86_feature_detected!("f16c") {
+            #[target_feature(enable = "avx2,f16c")]
+            #[inline]
+            unsafe fn load_f16_f16c(d: AvxDescriptor, mem: &[u16]) -> F32VecAvx {
+                unsafe {
+                    let bits = _mm_loadu_si128(mem.as_ptr() as *const __m128i);
+                    F32VecAvx(_mm256_cvtph_ps(bits), d)
+                }
+            }
+            // SAFETY: we just checked f16c is available
+            unsafe { load_f16_f16c(d, mem) }
+        } else {
+            // Fallback to scalar conversion
+            let mut result = [0.0f32; 8];
+            for i in 0..8 {
+                result[i] = crate::scalar::f16_to_f32(mem[i]);
+            }
+            Self::load(d, &result)
+        }
+    }
+
+    #[inline(always)]
+    fn store_f16(self, dest: &mut [u16]) {
+        assert!(dest.len() >= Self::LEN);
+        // Check for F16C at runtime and use hardware conversion if available
+        if is_x86_feature_detected!("f16c") {
+            #[target_feature(enable = "avx2,f16c")]
+            #[inline]
+            unsafe fn store_f16_f16c(v: __m256, dest: &mut [u16]) {
+                unsafe {
+                    // _MM_FROUND_TO_NEAREST_INT | _MM_FROUND_NO_EXC = 0
+                    let bits = _mm256_cvtps_ph::<0>(v);
+                    _mm_storeu_si128(dest.as_mut_ptr() as *mut __m128i, bits);
+                }
+            }
+            // SAFETY: we just checked f16c is available
+            unsafe { store_f16_f16c(self.0, dest) }
+        } else {
+            // Fallback to scalar conversion
+            let mut tmp = [0.0f32; 8];
+            self.store(&mut tmp);
+            for i in 0..8 {
+                dest[i] = crate::scalar::f32_to_f16(tmp[i]);
+            }
+        }
+    }
+
+    #[inline(always)]
     fn transpose_square(d: Self::Descriptor, data: &mut [Self::UnderlyingArray], stride: usize) {
         #[target_feature(enable = "avx2")]
         #[inline]

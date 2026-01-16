@@ -8,7 +8,7 @@ use crate::{
     headers::bit_depth::BitDepth,
     render::{Channels, ChannelsMut, RenderPipelineInOutStage},
 };
-use jxl_simd::{F32SimdVec, I32SimdVec, SimdMask, shl, simd_function};
+use jxl_simd::{F32SimdVec, I32SimdVec, simd_function};
 
 pub struct ConvertU8F32Stage {
     channel: usize,
@@ -162,129 +162,39 @@ simd_function!(
 );
 
 // SIMD 16-bit float (half-precision) to 32-bit float conversion
-// This handles IEEE 754 binary16 format: 1 sign bit, 5 exponent bits, 10 mantissa bits
+// Uses hardware F16C/NEON instructions when available via F32Vec::load_f16_bits()
 simd_function!(
     int_to_float_16bit_simd_dispatch,
     d: D,
     fn int_to_float_16bit_simd(input: &[i32], output: &mut [f32], xsize: usize) {
-        let simd_width = D::I32Vec::LEN;
+        let simd_width = D::F32Vec::LEN;
         let num_full_chunks = xsize / simd_width;
 
-        // Constants for 16-bit float (exp_bits=5, mant_bits=10)
-        let abs_mask = D::I32Vec::splat(d, 0x7FFF);                   // Mask for absolute value
-        let exp_mask = D::I32Vec::splat(d, 0x7C00);                   // Exponent bits in f16
-        let mant_mask = D::I32Vec::splat(d, 0x03FF);                  // Mantissa bits in f16
-        let exp_max = D::I32Vec::splat(d, 0x7C00);                    // Max exponent (inf/nan)
-        let exp_bias_adjust = D::I32Vec::splat(d, (127 - 15) << 23);  // Bias adjustment shifted
-        let f32_inf_exp = D::I32Vec::splat(d, 0x7F80_0000_u32 as i32);
+        // Temporary buffer for converting i32 -> u16
+        // Stack-allocated for common SIMD widths (up to 16 elements for AVX-512)
+        let mut u16_buf = [0u16; 16];
 
         for (in_chunk, out_chunk) in input
             .chunks_exact(simd_width)
             .zip(output.chunks_exact_mut(simd_width))
             .take(num_full_chunks)
         {
-            let val = D::I32Vec::load(d, in_chunk);
-
-            // Extract components
-            let abs_val = val & abs_mask;                  // Absolute value (exp + mantissa)
-            let exp_bits = val & exp_mask;                 // Exponent bits
-            let mant_bits = val & mant_mask;               // Mantissa bits
-
-            // Check for zero
-            let is_zero = abs_val.eq_zero();
-
-            // Check for inf/nan (exponent all 1s)
-            let is_inf_nan = exp_bits.eq(exp_max);
-
-            // Check for subnormal (exponent is 0 but mantissa non-zero)
-            // Use andnot: !mant_is_zero & exp_is_zero
-            let exp_is_zero = exp_bits.eq_zero();
-            let mant_is_zero = mant_bits.eq_zero();
-            // is_subnormal = exp_is_zero AND NOT mant_is_zero
-            let is_subnormal = mant_is_zero.andnot(exp_is_zero);
-
-            // Normal case: shift exponent and mantissa, adjust bias
-            // Sign bit at position 15 goes to position 31: shift left by 16
-            // f16 exponent at bits 10-14 goes to f32 exponent at bits 23-30
-            // f16 mantissa at bits 0-9 goes to f32 mantissa at bits 13-22 (shift left by 13)
-            let sign_shifted = shl!(val, 16) & D::I32Vec::splat(d, 0x8000_0000_u32 as i32);
-            let normal_exp = shl!(exp_bits, 13);
-            let normal_mant = shl!(mant_bits, 13);
-            let normal_result = sign_shifted | (normal_exp + exp_bias_adjust) | normal_mant;
-
-            // Inf/NaN case: preserve mantissa pattern, set f32 inf exponent
-            let inf_nan_result = sign_shifted | f32_inf_exp | normal_mant;
-
-            // Zero case: just the sign bit
-            let zero_result = sign_shifted;
-
-            // Select result based on conditions
-            // Start with normal result, then override special cases
-            let result = is_inf_nan.if_then_else_i32(inf_nan_result, normal_result);
-            let result = is_zero.if_then_else_i32(zero_result, result);
-
-            // For subnormals, fall back to scalar (rare case)
-            // maskz_i32 returns 0 where mask is true, so if any subnormal exists,
-            // there will be a 0 in subnormal_check, meaning eq_zero().all() would be true
-            // only if ALL elements are subnormal. We want to check if ANY are subnormal.
-            // So we check the inverse: if NOT eq_zero for all (meaning no subnormals), use SIMD.
-            let subnormal_check = is_subnormal.maskz_i32(D::I32Vec::splat(d, 1));
-            // subnormal_check is 0 where is_subnormal=true, 1 where is_subnormal=false
-            // If all elements are 1 (no subnormals), eq(splat(1)).all() is true
-            let no_subnormals = subnormal_check.eq(D::I32Vec::splat(d, 1));
-            if no_subnormals.all() {
-                // No subnormals - use SIMD result
-                result.bitcast_to_f32().store(out_chunk);
-            } else {
-                // At least one subnormal - process this chunk scalar
-                for (&in_val, out_val) in in_chunk.iter().zip(out_chunk.iter_mut()) {
-                    *out_val = int_to_float_16bit_scalar(in_val);
-                }
+            // Convert i32 values to u16 (f16 bit patterns are in lower 16 bits)
+            for (i, &val) in in_chunk.iter().enumerate() {
+                u16_buf[i] = val as u16;
             }
+            // Use hardware f16->f32 conversion
+            let result = D::F32Vec::load_f16_bits(d, &u16_buf[..simd_width]);
+            result.store(out_chunk);
         }
 
         // Handle remainder with scalar
         let remainder_start = num_full_chunks * simd_width;
         for i in remainder_start..xsize {
-            output[i] = int_to_float_16bit_scalar(input[i]);
+            output[i] = jxl_simd::scalar::f16_to_f32(input[i] as u16);
         }
     }
 );
-
-// Scalar fallback for 16-bit float conversion (handles subnormals)
-#[inline]
-fn int_to_float_16bit_scalar(in_val: i32) -> f32 {
-    let mut f = in_val as u32;
-    let signbit = (f >> 15) != 0;
-    f &= 0x7FFF;
-    if f == 0 {
-        return if signbit { -0.0 } else { 0.0 };
-    }
-    let mut exp = (f >> 10) as i32;
-    let mut mantissa = f & 0x3FF;
-    if exp == 31 {
-        // NaN or infinity
-        f = if signbit { 0x80000000 } else { 0 };
-        f |= 0xFF << 23;
-        f |= mantissa << 13;
-        return f32::from_bits(f);
-    }
-    mantissa <<= 13;
-    if exp == 0 {
-        // subnormal number - normalize
-        while (mantissa & 0x800000) == 0 {
-            mantissa <<= 1;
-            exp -= 1;
-        }
-        exp += 1;
-        mantissa &= 0x7fffff;
-    }
-    exp = exp - 15 + 127;
-    f = if signbit { 0x80000000 } else { 0 };
-    f |= (exp as u32) << 23;
-    f |= mantissa;
-    f32::from_bits(f)
-}
 
 // Converts custom [bits]-bit float (with [exp_bits] exponent bits) stored as
 // int back to binary32 float.
@@ -743,7 +653,7 @@ mod test {
 
         // First test the scalar function directly
         for (bits, expected) in &test_cases {
-            let scalar_result = int_to_float_16bit_scalar(*bits as i32);
+            let scalar_result = jxl_simd::scalar::f16_to_f32(*bits);
             let rel_err = ((expected - scalar_result) / expected).abs();
             assert!(
                 rel_err < 1e-6,

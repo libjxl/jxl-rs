@@ -441,6 +441,30 @@ unsafe impl F32SimdVec for F32VecNeon {
                 vst1_u16(dest.as_mut_ptr(), u16s);
             }
         }
+
+        fn store_f16(this: F32VecNeon, dest: &mut [u16]) {
+            assert!(dest.len() >= F32VecNeon::LEN);
+            // TODO: Use vcvt_f16_f32 once Rust stdarch fix lands
+            // For now, use scalar conversion
+            let mut tmp = [0.0f32; 4];
+            this.store(&mut tmp);
+            for i in 0..4 {
+                dest[i] = crate::scalar::f32_to_f16(tmp[i]);
+            }
+        }
+    }
+
+    #[inline(always)]
+    fn load_f16_bits(d: Self::Descriptor, mem: &[u16]) -> Self {
+        assert!(mem.len() >= Self::LEN);
+        // TODO: Use vcvt_f32_f16 once Rust stdarch fix lands
+        // (currently requires fp16 target feature incorrectly)
+        // For now, use scalar conversion
+        let mut result = [0.0f32; 4];
+        for i in 0..4 {
+            result[i] = crate::scalar::f16_to_f32(mem[i]);
+        }
+        Self::load(d, &result)
     }
 
     #[inline(always)]
