@@ -463,7 +463,19 @@ impl Frame {
             && !input_profile.can_convert_internally(output_profile)
         {
             let max_pixels = 1 << frame_header.log_group_dim();
-            let in_channels = if black_channel.is_some() { 4 } else { 3 };
+            // XYB and YCbCr transforms always output 3 channels.
+            // Otherwise use actual color space (1 for grayscale, 3 for RGB).
+            let color_channels =
+                if xyb_encoded || frame_header.do_ycbcr {
+                    3
+                } else if decoder_state.file_header.image_metadata.color_encoding.color_space
+                    == ColorSpace::Gray
+                {
+                    1
+                } else {
+                    3
+                };
+            let in_channels = color_channels + black_channel.is_some() as usize;
             let (out_channels, transformers) = cms.initialize_transforms(
                 1, // num transforms (1 for single-threaded)
                 max_pixels,
