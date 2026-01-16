@@ -160,7 +160,12 @@ impl UnconditionalCoder<()> for String {
             match br.read_noinline(8) {
                 Ok(c) => ret.push(c as u8 as char),
                 Err(Error::OutOfBounds(n)) => {
-                    return Err(Error::OutOfBounds(len as usize - ret.len() - 1 + n));
+                    // Use saturating arithmetic to prevent underflow on malformed input
+                    // ret.len()+1 cannot overflow since ret.len() <= isize::MAX
+                    let remaining = (len as usize)
+                        .saturating_add(n)
+                        .saturating_sub(ret.len() + 1);
+                    return Err(Error::OutOfBounds(remaining));
                 }
                 Err(e) => return Err(e),
             }
