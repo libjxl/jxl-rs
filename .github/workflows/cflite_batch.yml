@@ -4,7 +4,10 @@ on:
     # Run every 6 hours
     - cron: '0 */6 * * *'
   workflow_dispatch:
-permissions: read-all
+permissions:
+  contents: read
+  security-events: write
+  issues: write
 jobs:
   BatchFuzzing:
     runs-on: ubuntu-latest
@@ -30,3 +33,10 @@ jobs:
           mode: 'batch'
           sanitizer: ${{ matrix.sanitizer }}
           output-sarif: true
+      - name: Upload SARIF results
+        if: always()
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: cifuzz-sarif/results.sarif
+          checkout_path: cifuzz-sarif
+        continue-on-error: true

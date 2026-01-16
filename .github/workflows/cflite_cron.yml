@@ -4,7 +4,9 @@ on:
     # Run daily at midnight UTC for pruning
     - cron: '0 0 * * *'
   workflow_dispatch:
-permissions: read-all
+permissions:
+  contents: read
+  security-events: write
 jobs:
   Pruning:
     runs-on: ubuntu-latest
