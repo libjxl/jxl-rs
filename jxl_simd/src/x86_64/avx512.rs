@@ -737,6 +737,7 @@ unsafe impl F32SimdVec for F32VecAvx512 {
         #[target_feature(enable = "avx512f")]
         #[inline]
         unsafe fn load_f16_impl(d: Avx512Descriptor, mem: &[u16]) -> F32VecAvx512 {
+            // SAFETY: mem.len() >= 16 is checked by caller, and avx512f is available
             unsafe {
                 let bits = _mm256_loadu_si256(mem.as_ptr() as *const __m256i);
                 F32VecAvx512(_mm512_cvtph_ps(bits), d)
@@ -753,6 +754,7 @@ unsafe impl F32SimdVec for F32VecAvx512 {
         #[target_feature(enable = "avx512f")]
         #[inline]
         unsafe fn store_f16_impl(v: __m512, dest: &mut [u16]) {
+            // SAFETY: dest.len() >= 16 is checked by caller, and avx512f is available
             unsafe {
                 // _MM_FROUND_TO_NEAREST_INT | _MM_FROUND_NO_EXC = 0
                 let bits = _mm512_cvtps_ph::<0>(v);

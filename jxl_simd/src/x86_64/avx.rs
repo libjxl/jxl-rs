@@ -676,6 +676,7 @@ unsafe impl F32SimdVec for F32VecAvx {
             #[target_feature(enable = "avx2,f16c")]
             #[inline]
             unsafe fn load_f16_f16c(d: AvxDescriptor, mem: &[u16]) -> F32VecAvx {
+                // SAFETY: mem.len() >= 8 is checked by caller, and f16c is available
                 unsafe {
                     let bits = _mm_loadu_si128(mem.as_ptr() as *const __m128i);
                     F32VecAvx(_mm256_cvtph_ps(bits), d)
@@ -701,6 +702,7 @@ unsafe impl F32SimdVec for F32VecAvx {
             #[target_feature(enable = "avx2,f16c")]
             #[inline]
             unsafe fn store_f16_f16c(v: __m256, dest: &mut [u16]) {
+                // SAFETY: dest.len() >= 8 is checked by caller, and f16c is available
                 unsafe {
                     // _MM_FROUND_TO_NEAREST_INT | _MM_FROUND_NO_EXC = 0
                     let bits = _mm256_cvtps_ph::<0>(v);
