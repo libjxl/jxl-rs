@@ -1,0 +1,53 @@
+# Copyright (c) the JPEG XL Project Authors. All rights reserved.
+#
+# Use of this source code is governed by a BSD-style
+# license that can be found in the LICENSE file.
+
+name: ClusterFuzzLite cron tasks
+on:
+  schedule:
+    # Run daily at midnight UTC for pruning
+    - cron: '0 0 * * *'
+  workflow_dispatch:
+permissions:
+  contents: read
+  security-events: write
+jobs:
+  Pruning:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Build Fuzzers
+        id: build
+        uses: google/clusterfuzzlite/actions/build_fuzzers@v1
+        with:
+          language: rust
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          sanitizer: address
+      - name: Run Corpus Pruning
+        id: prune
+        uses: google/clusterfuzzlite/actions/run_fuzzers@v1
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          fuzz-seconds: 600
+          mode: 'prune'
+          sanitizer: address
+
+  Coverage:
+    runs-on: ubuntu-latest
+    needs: Pruning
+    steps:
+      - name: Build Fuzzers
+        id: build
+        uses: google/clusterfuzzlite/actions/build_fuzzers@v1
+        with:
+          language: rust
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          sanitizer: coverage
+      - name: Run Coverage
+        id: coverage
+        uses: google/clusterfuzzlite/actions/run_fuzzers@v1
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          fuzz-seconds: 600
+          mode: 'coverage'
+          sanitizer: coverage
