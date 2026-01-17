@@ -294,6 +294,16 @@ impl I32SimdVec for i32 {
     fn mul_wide_take_high(self, rhs: Self) -> Self {
         ((self as i64 * rhs as i64) >> 32) as i32
     }
+
+    #[inline(always)]
+    fn wrapping_add(self, rhs: Self) -> Self {
+        self.wrapping_add(rhs)
+    }
+
+    #[inline(always)]
+    fn wrapping_sub(self, rhs: Self) -> Self {
+        self.wrapping_sub(rhs)
+    }
 }
 
 impl U32SimdVec for u32 {
