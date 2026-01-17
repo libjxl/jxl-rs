@@ -25,24 +25,24 @@ fn rct_impl<D: SimdDescriptor, const OP: u32>(
 
     match OP {
         0 => (v0, v1, v2),
-        1 => (v0, v1, v2 + v0),
-        2 => (v0, v1 + v0, v2),
-        3 => (v0, v1 + v0, v2 + v0),
+        1 => (v0, v1, v2.wrapping_add(v0)),
+        2 => (v0, v1.wrapping_add(v0), v2),
+        3 => (v0, v1.wrapping_add(v0), v2.wrapping_add(v0)),
         4 => {
-            let avg = shr!(v0 + v2, 1);
-            (v0, v1 + avg, v2)
+            let avg = shr!(v0.wrapping_add(v2), 1);
+            (v0, v1.wrapping_add(avg), v2)
         }
         5 => {
-            let v2 = v0 + v2;
-            let avg = shr!(v0 + v2, 1);
-            (v0, v1 + avg, v2)
+            let v2 = v0.wrapping_add(v2);
+            let avg = shr!(v0.wrapping_add(v2), 1);
+            (v0, v1.wrapping_add(avg), v2)
         }
         6 => {
             let (y, co, cg) = (v0, v1, v2);
-            let y = y - shr!(cg, 1);
-            let g = cg + y;
-            let y = y - shr!(co, 1);
-            let r = y + co;
+            let y = y.wrapping_sub(shr!(cg, 1));
+            let g = cg.wrapping_add(y);
+            let y = y.wrapping_sub(shr!(co, 1));
+            let r = y.wrapping_add(co);
             (r, g, y)
         }
         _ => unreachable!(),
