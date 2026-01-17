@@ -25,13 +25,15 @@ use jxl_transforms::transform_map::*;
 mod borrowed_buffers;
 pub(crate) mod decode;
 mod predict;
+pub(crate) mod sample;
 mod transforms;
 mod tree;
 
-use borrowed_buffers::with_buffers;
+use borrowed_buffers::{can_use_i16, with_buffers, with_buffers_i16};
 pub use decode::ModularStreamId;
-use decode::decode_modular_subbitstream;
+use decode::{decode_modular_subbitstream, decode_modular_subbitstream_i16};
 pub use predict::Predictor;
+pub use sample::ModularSample;
 use transforms::{TransformStepChunk, make_grids};
 pub use tree::Tree;
 
@@ -117,19 +119,25 @@ impl ModularGridKind {
 }
 
 // All the information on a specific buffer needed by Modular decoding.
+// Generic over sample type T (i16 or i32) for memory bandwidth optimization.
 #[derive(Debug)]
-pub(crate) struct ModularChannel {
+pub(crate) struct ModularChannelGeneric<T: sample::ModularSample> {
     // Actual pixel buffer.
-    pub data: Image<i32>,
+    pub data: Image<T>,
     // Holds additional information such as the weighted predictor's error channel's last row for
     // the transform chunk that produced this buffer.
-    auxiliary_data: Option<Image<i32>>,
+    auxiliary_data: Option<Image<i32>>, // Always i32 for WP error tracking
     // Shift of the channel (None if this is a meta-channel).
     shift: Option<(usize, usize)>,
     bit_depth: BitDepth,
 }
 
-impl ModularChannel {
+// Type alias for backward compatibility - most code uses i32
+pub(crate) type ModularChannel = ModularChannelGeneric<i32>;
+// i16 variant for 8-16 bit images - 50% memory bandwidth reduction
+pub(crate) type ModularChannelI16 = ModularChannelGeneric<i16>;
+
+impl<T: sample::ModularSample> ModularChannelGeneric<T> {
     pub fn new(size: (usize, usize), bit_depth: BitDepth) -> Result<Self> {
         Self::new_with_shift(size, Some((0, 0)), bit_depth)
     }
@@ -139,7 +147,7 @@ impl ModularChannel {
         shift: Option<(usize, usize)>,
         bit_depth: BitDepth,
     ) -> Result<Self> {
-        Ok(ModularChannel {
+        Ok(ModularChannelGeneric {
             data: Image::new_with_padding(size, IMAGE_OFFSET, IMAGE_PADDING)?,
             auxiliary_data: None,
             shift,
@@ -148,7 +156,7 @@ impl ModularChannel {
     }
 
     fn try_clone(&self) -> Result<Self> {
-        Ok(ModularChannel {
+        Ok(ModularChannelGeneric {
             data: self.data.try_clone()?,
             auxiliary_data: self
                 .auxiliary_data
@@ -176,6 +184,8 @@ impl ModularChannel {
 #[derive(Debug)]
 struct ModularBuffer {
     data: AtomicRefCell<Option<ModularChannel>>,
+    // i16 variant for 8-16 bit images when no transforms are applied
+    data_i16: AtomicRefCell<Option<ModularChannelI16>>,
     // Number of times this buffer will be used, *including* when it is used for output.
     remaining_uses: usize,
     used_by_transforms: Vec<usize>,
@@ -183,10 +193,39 @@ struct ModularBuffer {
 }
 
 impl ModularBuffer {
+    /// Ensures data is available in i32 format, converting from i16 if needed.
+    /// This must be called before accessing .data.borrow() when i16 decode path may have been used.
+    pub fn ensure_i32(&self) -> Result<()> {
+        let mut data = self.data.borrow_mut();
+        if data.is_none()
+            && let Some(i16_data) = self.data_i16.borrow_mut().take()
+        {
+            // Convert i16 to i32
+            let size = i16_data.data.size();
+            let mut i32_image = Image::new_with_padding(size, IMAGE_OFFSET, IMAGE_PADDING)?;
+            for y in 0..size.1 {
+                let src_row = i16_data.data.row(y);
+                let dst_row = i32_image.row_mut(y);
+                for x in 0..size.0 {
+                    dst_row[x] = src_row[x] as i32;
+                }
+            }
+            *data = Some(ModularChannel {
+                data: i32_image,
+                auxiliary_data: i16_data.auxiliary_data,
+                shift: i16_data.shift,
+                bit_depth: i16_data.bit_depth,
+            });
+        }
+        Ok(())
+    }
+
     // Gives out a copy of the buffer + auxiliary buffer, marking the buffer as used.
     // If this was the last usage of the buffer, does not actually copy the buffer.
     fn get_buffer(&mut self) -> Result<ModularChannel> {
         self.remaining_uses = self.remaining_uses.checked_sub(1).unwrap();
+        // Ensure data is in i32 format (may have been decoded as i16)
+        self.ensure_i32()?;
         if self.remaining_uses == 0 {
             Ok(self.data.borrow_mut().take().unwrap())
         } else {
@@ -204,6 +243,7 @@ impl ModularBuffer {
         self.remaining_uses = self.remaining_uses.checked_sub(1).unwrap();
         if self.remaining_uses == 0 {
             *self.data.borrow_mut() = None;
+            *self.data_i16.borrow_mut() = None;
         }
     }
 }
@@ -516,21 +556,56 @@ impl FullModularImage {
             }
         };
 
-        with_buffers(
-            &self.buffer_info,
-            &self.section_buffer_indices[section_id],
-            grid,
-            true,
-            |bufs| {
+        let indices = &self.section_buffer_indices[section_id];
+
+        // Check if we can use i16 path:
+        // 1. No global transforms (transform_steps is empty)
+        // 2. All buffer bit depths fit in i16
+        let can_try_i16 =
+            self.transform_steps.is_empty() && can_use_i16(&self.buffer_info, indices, grid);
+
+        if can_try_i16 {
+            // Check if all buffers are empty - if so, skip entirely without reading header
+            // This matches the original behavior where decode_modular_subbitstream
+            // checks for empty buffers BEFORE reading the header
+            let all_empty = indices.iter().all(|i| {
+                let b = &self.buffer_info[*i].buffer_grid[grid];
+                b.size.0 == 0 || b.size.1 == 0
+            });
+            if all_empty {
+                return Ok(());
+            }
+
+            // Read header first to check if it has local transforms
+            let header = GroupHeader::read(br)?;
+            if header.transforms.is_empty() {
+                // Use i16 path - no transforms, bit depths fit
+                return with_buffers_i16(&self.buffer_info, indices, grid, true, |bufs| {
+                    decode_modular_subbitstream_i16(
+                        bufs,
+                        stream.get_id(frame_header),
+                        &header,
+                        global_tree,
+                        br,
+                    )
+                });
+            }
+            // Header has transforms, fall back to i32 path with already-read header
+            return with_buffers(&self.buffer_info, indices, grid, true, |bufs| {
                 decode_modular_subbitstream(
                     bufs,
                     stream.get_id(frame_header),
-                    None,
+                    Some(header),
                     global_tree,
                     br,
                 )
-            },
-        )?;
+            });
+        }
+
+        // Default i32 path
+        with_buffers(&self.buffer_info, indices, grid, true, |bufs| {
+            decode_modular_subbitstream(bufs, stream.get_id(frame_header), None, global_tree, br)
+        })?;
         Ok(())
     }
 
