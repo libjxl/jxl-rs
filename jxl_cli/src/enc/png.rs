@@ -181,19 +181,20 @@ pub fn to_png<Writer: Write>(
     } else {
         png::BitDepth::Sixteen
     });
-    if let Some(anim) = &image_data.jxl_animation {
-        if image_data.frames.len() > 1 {
-            encoder.set_animated(image_data.frames.len() as u32, anim.num_loops)?;
-        }
-    } else if image_data.frames.len() > 1 {
-        encoder.set_animated(image_data.frames.len() as u32, 0)?;
+    let animated = image_data.frames.len() > 1;
+    if animated {
+        let loops = image_data
+            .jxl_animation
+            .as_ref()
+            .map_or(0, |anim| anim.num_loops);
+        encoder.set_animated(image_data.frames.len() as u32, loops)?;
     }
     let mut writer = encoder.write_header()?;
 
     let num_pixels = height * width * num_channels;
     if eight_bits {
         let mut data: Vec<u8> = vec![0; num_pixels];
-        for (index, frame) in image_data.frames.iter().enumerate() {
+        for frame in &image_data.frames {
             for y in 0..height {
                 for x in 0..width {
                     for c in 0..num_channels {
@@ -203,16 +204,16 @@ pub fn to_png<Writer: Write>(
                     }
                 }
             }
-            writer.write_image_data(&data)?;
-            if index + 1 < image_data.frames.len() && image_data.frames.len() > 1 {
+            if animated {
                 let (delay_num, delay_den) = calculate_apng_delay(frame.duration)?;
                 writer.set_frame_delay(delay_num, delay_den)?;
             }
+            writer.write_image_data(&data)?;
         }
     } else {
         // 16-bit
         let mut data: Vec<u8> = vec![0; 2 * num_pixels];
-        for (index, frame) in image_data.frames.iter().enumerate() {
+        for frame in &image_data.frames {
             for y in 0..height {
                 for x in 0..width {
                     for c in 0..num_channels {
@@ -225,11 +226,11 @@ pub fn to_png<Writer: Write>(
                     }
                 }
             }
-            writer.write_image_data(&data)?;
-            if index + 1 < image_data.frames.len() && image_data.frames.len() > 1 {
+            if animated {
                 let (delay_num, delay_den) = calculate_apng_delay(frame.duration)?;
                 writer.set_frame_delay(delay_num, delay_den)?;
             }
+            writer.write_image_data(&data)?;
         }
     }
     Ok(())
