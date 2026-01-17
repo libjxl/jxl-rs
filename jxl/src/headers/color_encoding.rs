@@ -17,6 +17,16 @@ pub enum ColorSpace {
     Unknown,
 }
 
+impl ColorSpace {
+    /// Returns the number of color channels (1 for grayscale, 3 for RGB/XYB).
+    pub fn channels(self) -> usize {
+        match self {
+            Self::Gray => 1,
+            Self::RGB | Self::XYB | Self::Unknown => 3,
+        }
+    }
+}
+
 impl fmt::Display for ColorSpace {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(

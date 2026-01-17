@@ -12,7 +12,7 @@ use crate::bit_reader::BitReader;
 use crate::error::{Error, Result};
 use crate::features::epf::SigmaSource;
 use crate::headers::frame_header::Encoding;
-use crate::headers::{Orientation, color_encoding::ColorSpace, extra_channels::ExtraChannel};
+use crate::headers::{Orientation, extra_channels::ExtraChannel};
 use crate::image::Rect;
 #[cfg(test)]
 use crate::render::SimpleRenderPipeline;
@@ -469,10 +469,17 @@ impl Frame {
 
         // Insert CMS stage if profiles differ and internal conversion cannot handle it.
         // Skip if outputting raw linear XYB (linear == true).
+        // Skip if channel counts differ (grayscale↔RGB) - like libjxl's not_mixing_color_and_grey.
+        // Exception: CMYK (4) → RGB (3) is allowed via CMS.
+        let src_channels = input_profile.channels();
+        let dst_channels = output_profile.channels();
+        let channel_counts_compatible =
+            src_channels == dst_channels || (src_channels == 4 && dst_channels == 3);
         if !linear
             && let Some(cms) = cms
             && input_profile != output_profile
             && !input_profile.can_convert_internally(output_profile)
+            && channel_counts_compatible
         {
             let max_pixels = 1 << frame_header.log_group_dim();
             let in_channels = if black_channel.is_some() { 4 } else { 3 };
@@ -566,16 +573,12 @@ impl Frame {
         }
 
         if frame_header.is_visible() {
-            let color_space = decoder_state
+            let num_color_channels = decoder_state
                 .file_header
                 .image_metadata
                 .color_encoding
-                .color_space;
-            let num_color_channels = if color_space == ColorSpace::Gray {
-                1
-            } else {
-                3
-            };
+                .color_space
+                .channels();
             // Find the alpha channel info (index and metadata) if the color type requires alpha
             let alpha_channel_info = if pixel_format.color_type.has_alpha() {
                 decoder_state

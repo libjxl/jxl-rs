@@ -521,6 +521,14 @@ impl JxlColorEncoding {
         }
     }
 
+    /// Returns the number of color channels (1 for grayscale, 3 for RGB/XYB).
+    pub fn channels(&self) -> usize {
+        match self {
+            Self::RgbColorSpace { .. } | Self::XYB { .. } => 3,
+            Self::GrayscaleColorSpace { .. } => 1,
+        }
+    }
+
     fn create_icc_cicp_tag_data(&self, tags_data: &mut Vec<u8>) -> Result<Option<TagInfo>, Error> {
         let JxlColorEncoding::RgbColorSpace {
             white_point,
@@ -1237,6 +1245,30 @@ impl JxlColorProfile {
                 transfer_function, ..
             }) => Some(transfer_function),
             _ => None,
+        }
+    }
+
+    /// Returns the number of color channels (1 for grayscale, 3 for RGB, 4 for CMYK).
+    ///
+    /// For ICC profiles, this parses the profile header to determine the color space.
+    /// Falls back to 3 (RGB) if the ICC profile cannot be parsed.
+    pub fn channels(&self) -> usize {
+        match self {
+            Self::Simple(enc) => enc.channels(),
+            Self::Icc(icc_data) => {
+                // ICC color space signature is at bytes 16-19 in the header
+                if icc_data.len() >= 20 {
+                    let color_space = &icc_data[16..20];
+                    match color_space {
+                        b"GRAY" => 1,
+                        b"RGB " => 3,
+                        b"CMYK" => 4,
+                        _ => 3, // Default to RGB for unknown color spaces
+                    }
+                } else {
+                    3 // Default to RGB if profile is too short
+                }
+            }
         }
     }
 
