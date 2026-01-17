@@ -44,7 +44,7 @@ fn save_image(
         }
     } else if fn_str.ends_with(".npy") {
         enc::numpy::to_numpy(image_data, &mut writer)?;
-    } else if fn_str.ends_with(".png") {
+    } else if fn_str.ends_with(".png") || fn_str.ends_with(".apng") {
         enc::png::to_png(image_data, bit_depth, &mut writer)?;
     } else {
         return Err(eyre!(
@@ -62,7 +62,7 @@ struct Opt {
     /// Input JXL file
     input: PathBuf,
 
-    /// Output image file, should end in .ppm, .pgm, .png or .npy
+    /// Output image file, should end in .ppm, .pgm, .png, .apng or .npy
     #[clap(required_unless_present_any = ["speedtest", "info"])]
     output: Option<PathBuf>,
 
