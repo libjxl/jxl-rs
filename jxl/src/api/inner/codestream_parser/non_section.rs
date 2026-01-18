@@ -66,7 +66,14 @@ impl CodestreamParser {
                 )?;
             }
             let data = &file_header.image_metadata;
-            self.animation = data.animation.clone();
+            // Filter out tps=1/1 animation metadata (see comment below for rationale)
+            self.animation = data.animation.as_ref().and_then(|anim| {
+                if anim.tps_numerator == 1 && anim.tps_denominator == 1 {
+                    None
+                } else {
+                    Some(anim.clone())
+                }
+            });
             self.basic_info = Some(JxlBasicInfo {
                 size: if data.orientation.is_transposing() {
                     (
@@ -98,15 +105,22 @@ impl CodestreamParser {
                         alpha_associated: info.alpha_associated(),
                     })
                     .collect(),
-                animation: data
-                    .animation
-                    .as_ref()
-                    .map(|anim| crate::api::JxlAnimation {
-                        tps_numerator: anim.tps_numerator,
-                        tps_denominator: anim.tps_denominator,
-                        num_loops: anim.num_loops,
-                        have_timecodes: anim.have_timecodes,
-                    }),
+                // Workaround for malformed files: tps=1/1 (1 tick per second) is
+                // unusable for real animations and indicates the file is actually
+                // a still image with bogus animation metadata. Don't expose
+                // animation info for such files.
+                animation: data.animation.as_ref().and_then(|anim| {
+                    if anim.tps_numerator == 1 && anim.tps_denominator == 1 {
+                        None
+                    } else {
+                        Some(crate::api::JxlAnimation {
+                            tps_numerator: anim.tps_numerator,
+                            tps_denominator: anim.tps_denominator,
+                            num_loops: anim.num_loops,
+                            have_timecodes: anim.have_timecodes,
+                        })
+                    }
+                }),
                 uses_original_profile: !data.xyb_encoded,
                 tone_mapping: ToneMapping {
                     intensity_target: data.tone_mapping.intensity_target,
