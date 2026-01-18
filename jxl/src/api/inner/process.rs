@@ -43,7 +43,10 @@ impl SmallBuffer {
                 break;
             }
             let stop = if let Some(max) = max {
-                (self.range.end + max.saturating_sub(total)).min(self.buf.len())
+                self.range
+                    .end
+                    .saturating_add(max.saturating_sub(total))
+                    .min(self.buf.len())
             } else {
                 self.buf.len()
             };
