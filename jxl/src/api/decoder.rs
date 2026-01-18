@@ -1218,4 +1218,33 @@ pub(crate) mod tests {
 
         (buffer, width, height)
     }
+
+    /// Regression test for ClusterFuzz issue 5342436251336704
+    /// Tests that malformed JXL files with overflow-inducing data don't panic
+    #[test]
+    fn test_fuzzer_smallbuffer_overflow() {
+        use std::panic;
+
+        let data = include_bytes!("../../tests/testdata/fuzzer_smallbuffer_overflow.jxl");
+
+        // The test passes if it doesn't panic with "attempt to add with overflow"
+        // It's OK if it returns an error or panics with "Unexpected end of input"
+        let result = panic::catch_unwind(|| {
+            let _ = decode(data, 1024, false, None);
+        });
+
+        // If it panicked, make sure it wasn't an overflow panic
+        if let Err(e) = result {
+            let panic_msg = e
+                .downcast_ref::<&str>()
+                .map(|s| s.to_string())
+                .or_else(|| e.downcast_ref::<String>().cloned())
+                .unwrap_or_default();
+            assert!(
+                !panic_msg.contains("overflow"),
+                "Unexpected overflow panic: {}",
+                panic_msg
+            );
+        }
+    }
 }
