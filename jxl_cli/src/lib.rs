@@ -3,12 +3,13 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
+pub mod cms;
 pub mod dec;
 pub mod enc;
 
 #[cfg(test)]
 mod tests {
-    use crate::dec::{OutputDataType, decode_frames_with_type};
+    use crate::dec::{LinearOutput, OutputDataType, decode_frames_with_type};
     use jxl::api::JxlDecoderOptions;
 
     /// Test that decoding with all output data types produces consistent results.
@@ -33,6 +34,7 @@ mod tests {
                 &mut input,
                 JxlDecoderOptions::default(),
                 OutputDataType::F32,
+                LinearOutput::No,
             )
             .unwrap();
             let f32_output = f32_typed_output.to_f32().unwrap();
@@ -45,9 +47,13 @@ mod tests {
                 (OutputDataType::F16, 0.001, "f16", false), // f16 precision, no clamping
             ] {
                 let mut input = file.as_slice();
-                let (typed_output, _) =
-                    decode_frames_with_type(&mut input, JxlDecoderOptions::default(), data_type)
-                        .unwrap();
+                let (typed_output, _) = decode_frames_with_type(
+                    &mut input,
+                    JxlDecoderOptions::default(),
+                    data_type,
+                    LinearOutput::No,
+                )
+                .unwrap();
                 // Convert to f32 for comparison
                 let converted_output = typed_output.to_f32().unwrap();
 
@@ -132,16 +138,24 @@ mod tests {
 
         // Decode as f32 (reference)
         let mut input = file.as_slice();
-        let (f32_typed_output, _) =
-            decode_frames_with_type(&mut input, high_precision_options(), OutputDataType::F32)
-                .unwrap();
+        let (f32_typed_output, _) = decode_frames_with_type(
+            &mut input,
+            high_precision_options(),
+            OutputDataType::F32,
+            LinearOutput::No,
+        )
+        .unwrap();
         let f32_output = f32_typed_output.to_f32().unwrap();
 
         // Test u8 with high precision
         let mut input = file.as_slice();
-        let (u8_typed_output, _) =
-            decode_frames_with_type(&mut input, high_precision_options(), OutputDataType::U8)
-                .unwrap();
+        let (u8_typed_output, _) = decode_frames_with_type(
+            &mut input,
+            high_precision_options(),
+            OutputDataType::U8,
+            LinearOutput::No,
+        )
+        .unwrap();
         let u8_output = u8_typed_output.to_f32().unwrap();
 
         // Verify both produce valid output

@@ -259,6 +259,8 @@ pub enum Error {
     IccTableSizeExceeded(usize),
     #[error("Invalid CMS configuration: requested ICC but no CMS is configured")]
     ICCOutputNoCMS,
+    #[error("Non-XYB image requires CMS to convert to different output color profile")]
+    NonXybOutputNoCMS,
     #[error("I/O error: {0}")]
     IOError(#[from] std::io::Error),
     #[error("Wrong buffer count: {0} buffers given, {1} buffers expected")]
@@ -285,6 +287,8 @@ pub enum Error {
         channel_index: usize,
         channel_type: String,
     },
+    #[error("CMS error: {0}")]
+    CmsError(String),
 }
 
 pub type Result<T, E = Error> = std::result::Result<T, E>;

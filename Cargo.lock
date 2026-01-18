@@ -567,6 +567,7 @@ dependencies = [
 name = "jxl_cli"
 version = "0.2.2"
 dependencies = [
+ "bytemuck",
  "clap",
  "color-eyre",
  "criterion",

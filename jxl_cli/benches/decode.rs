@@ -5,7 +5,7 @@
 
 use criterion::{BenchmarkId, Criterion, SamplingMode, criterion_group, criterion_main};
 use jxl::api::JxlDecoderOptions;
-use jxl_cli::dec::{decode_frames, decode_header};
+use jxl_cli::dec::{LinearOutput, OutputDataType, decode_frames_with_type, decode_header};
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -52,7 +52,13 @@ fn decode_benches(c: &mut Criterion) {
             |b, bytes| {
                 b.iter(|| {
                     let mut input = bytes.as_slice();
-                    decode_frames(&mut input, JxlDecoderOptions::default()).unwrap();
+                    decode_frames_with_type(
+                        &mut input,
+                        JxlDecoderOptions::default(),
+                        OutputDataType::F32,
+                        LinearOutput::No,
+                    )
+                    .unwrap();
                 })
             },
         );

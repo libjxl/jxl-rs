@@ -7,7 +7,7 @@ use clap::Parser;
 use color_eyre::eyre::{Result, WrapErr, eyre};
 use jxl::api::{JxlColorType, JxlDecoderOptions};
 use jxl::image::Image;
-use jxl_cli::{dec, enc};
+use jxl_cli::{cms::Lcms2Cms, dec, enc};
 use std::fs::File;
 use std::io::{BufReader, BufWriter, Read, Seek, Write};
 use std::path::PathBuf;
@@ -145,12 +145,19 @@ fn main() -> Result<()> {
         None => (false, false),
     };
     let high_precision = opt.high_precision;
+    // EXR needs linear output (like djxl forces RGB_D65_SRG_Rel_Lin for EXR),
+    // but npy should use original encoding like djxl does.
+    let linear_output = if exr_output {
+        dec::LinearOutput::Yes
+    } else {
+        dec::LinearOutput::No
+    };
     let options = |skip_preview: bool| {
         let mut options = JxlDecoderOptions::default();
-        options.xyb_output_linear = numpy_output || exr_output;
         options.render_spot_colors = !numpy_output;
         options.skip_preview = skip_preview;
         options.high_precision = high_precision;
+        options.cms = Some(Box::new(Lcms2Cms));
         options
     };
 
@@ -210,8 +217,12 @@ fn main() -> Result<()> {
         (0..reps)
             .try_fold(None, |_, _| -> Result<Option<dec::TypedDecodeOutput>> {
                 let mut input = input_bytes.as_slice();
-                let (mut iteration_output, iteration_duration) =
-                    dec::decode_frames_with_type(&mut input, options(skip_preview), output_type)?;
+                let (mut iteration_output, iteration_duration) = dec::decode_frames_with_type(
+                    &mut input,
+                    options(skip_preview),
+                    output_type,
+                    linear_output,
+                )?;
                 duration_sum += iteration_duration;
                 // When extracting preview, only keep the first frame (the preview)
                 if opt.preview {
@@ -231,8 +242,12 @@ fn main() -> Result<()> {
     } else {
         // For single decode, stream from file
         let mut reader = BufReader::new(file);
-        let (mut typed_output, duration) =
-            dec::decode_frames_with_type(&mut reader, options(skip_preview), output_type)?;
+        let (mut typed_output, duration) = dec::decode_frames_with_type(
+            &mut reader,
+            options(skip_preview),
+            output_type,
+            linear_output,
+        )?;
         duration_sum = duration;
         // When extracting preview, only keep the first frame (the preview)
         if opt.preview {

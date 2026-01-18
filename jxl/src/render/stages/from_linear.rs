@@ -143,6 +143,37 @@ pub enum TransferFunction {
     Gamma(f32),
 }
 
+impl TransferFunction {
+    /// Returns true if this transfer function is linear (i.e., Gamma(1.0)).
+    /// When linear, FromLinearStage can be skipped as it would be a no-op.
+    pub fn is_linear(&self) -> bool {
+        matches!(self, Self::Gamma(g) if (*g - 1.0).abs() < f32::EPSILON)
+    }
+
+    /// Create a TransferFunction from a JxlTransferFunction for use in FromLinearStage.
+    /// For PQ/HLG, requires intensity_target and luminances from tone mapping info.
+    /// Note: JxlTransferFunction::Gamma stores the encoding exponent (e.g., 1/2.2 for gamma 2.2).
+    pub fn from_api_tf(
+        api_tf: &crate::api::JxlTransferFunction,
+        intensity_target: f32,
+        luminances: [f32; 3],
+    ) -> Self {
+        use crate::api::JxlTransferFunction;
+        match api_tf {
+            JxlTransferFunction::BT709 => Self::Bt709,
+            JxlTransferFunction::Linear => Self::Gamma(1.0),
+            JxlTransferFunction::SRGB => Self::Srgb,
+            JxlTransferFunction::PQ => Self::Pq { intensity_target },
+            JxlTransferFunction::DCI => Self::Gamma(2.6_f32.recip()),
+            JxlTransferFunction::HLG => Self::Hlg {
+                intensity_target,
+                luminance_rgb: luminances,
+            },
+            JxlTransferFunction::Gamma(g) => Self::Gamma(*g),
+        }
+    }
+}
+
 impl TryFrom<CustomTransferFunction> for TransferFunction {
     type Error = ();
 
