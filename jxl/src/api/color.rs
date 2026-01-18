@@ -1104,6 +1104,64 @@ impl JxlColorEncoding {
             }
         }
     }
+
+    /// Creates linear sRGB color encoding (sRGB primaries with linear transfer function).
+    /// This is the fallback output color space for XYB images when the embedded
+    /// color profile cannot be output to without a CMS.
+    pub fn linear_srgb(grayscale: bool) -> Self {
+        if grayscale {
+            JxlColorEncoding::GrayscaleColorSpace {
+                white_point: JxlWhitePoint::D65,
+                transfer_function: JxlTransferFunction::Linear,
+                rendering_intent: RenderingIntent::Relative,
+            }
+        } else {
+            JxlColorEncoding::RgbColorSpace {
+                white_point: JxlWhitePoint::D65,
+                primaries: JxlPrimaries::SRGB,
+                transfer_function: JxlTransferFunction::Linear,
+                rendering_intent: RenderingIntent::Relative,
+            }
+        }
+    }
+
+    /// Returns a copy of this encoding with linear transfer function.
+    /// For XYB encoding, returns linear sRGB as fallback.
+    pub fn with_linear_tf(&self) -> Self {
+        match self {
+            JxlColorEncoding::RgbColorSpace {
+                white_point,
+                primaries,
+                rendering_intent,
+                ..
+            } => JxlColorEncoding::RgbColorSpace {
+                white_point: white_point.clone(),
+                primaries: primaries.clone(),
+                transfer_function: JxlTransferFunction::Linear,
+                rendering_intent: *rendering_intent,
+            },
+            JxlColorEncoding::GrayscaleColorSpace {
+                white_point,
+                rendering_intent,
+                ..
+            } => JxlColorEncoding::GrayscaleColorSpace {
+                white_point: white_point.clone(),
+                transfer_function: JxlTransferFunction::Linear,
+                rendering_intent: *rendering_intent,
+            },
+            JxlColorEncoding::XYB { .. } => Self::linear_srgb(false),
+        }
+    }
+
+    /// Returns the number of color channels for this encoding.
+    /// RGB/XYB = 3, Grayscale = 1.
+    pub fn channels(&self) -> usize {
+        match self {
+            JxlColorEncoding::RgbColorSpace { .. } => 3,
+            JxlColorEncoding::GrayscaleColorSpace { .. } => 1,
+            JxlColorEncoding::XYB { .. } => 3,
+        }
+    }
 }
 
 #[derive(Clone, PartialEq)]
@@ -1139,12 +1197,12 @@ impl JxlColorProfile {
         }
     }
 
-    /// Returns true if conversion can be handled internally without CMS.
+    /// Returns true if both profiles represent the same color encoding.
     ///
-    /// Internal handling is possible when both profiles are simple color
-    /// encodings with matching primaries and white point, differing only
-    /// in transfer function (which FromLinearStage handles).
-    pub fn can_convert_internally(&self, other: &Self) -> bool {
+    /// Two profiles are the same if they are both simple color encodings
+    /// with matching color space (primaries, white point) and transfer function.
+    /// ICC profiles are never considered the same (even if identical bytes).
+    pub fn same_color_encoding(&self, other: &Self) -> bool {
         match (self, other) {
             (Self::Simple(a), Self::Simple(b)) => {
                 use JxlColorEncoding::*;
@@ -1153,28 +1211,120 @@ impl JxlColorProfile {
                         RgbColorSpace {
                             white_point: wp_a,
                             primaries: prim_a,
+                            transfer_function: tf_a,
                             ..
                         },
                         RgbColorSpace {
                             white_point: wp_b,
                             primaries: prim_b,
+                            transfer_function: tf_b,
                             ..
                         },
-                    ) => wp_a == wp_b && prim_a == prim_b,
+                    ) => wp_a == wp_b && prim_a == prim_b && tf_a == tf_b,
                     (
                         GrayscaleColorSpace {
-                            white_point: wp_a, ..
+                            white_point: wp_a,
+                            transfer_function: tf_a,
+                            ..
                         },
                         GrayscaleColorSpace {
-                            white_point: wp_b, ..
+                            white_point: wp_b,
+                            transfer_function: tf_b,
+                            ..
                         },
-                    ) => wp_a == wp_b,
-                    // XYB requires CMS for conversion
+                    ) => wp_a == wp_b && tf_a == tf_b,
+                    // Different color space types (RGB vs Gray vs XYB)
                     _ => false,
                 }
             }
             // ICC profiles require CMS
             _ => false,
+        }
+    }
+
+    /// Returns the transfer function if this is a simple color profile.
+    /// Returns None for ICC profiles or XYB.
+    pub fn transfer_function(&self) -> Option<&JxlTransferFunction> {
+        match self {
+            Self::Simple(JxlColorEncoding::RgbColorSpace {
+                transfer_function, ..
+            }) => Some(transfer_function),
+            Self::Simple(JxlColorEncoding::GrayscaleColorSpace {
+                transfer_function, ..
+            }) => Some(transfer_function),
+            _ => None,
+        }
+    }
+
+    /// Returns true if the decoder can output to this color profile without a CMS.
+    ///
+    /// This is the equivalent of libjxl's `CanOutputToColorEncoding`. Output is possible
+    /// when the profile is a simple encoding (not ICC) with a natively-supported transfer
+    /// function. For grayscale, the white point must be D65.
+    pub fn can_output_to(&self) -> bool {
+        match self {
+            Self::Icc(_) => false,
+            Self::Simple(JxlColorEncoding::RgbColorSpace { .. }) => true,
+            Self::Simple(JxlColorEncoding::GrayscaleColorSpace { white_point, .. }) => {
+                // libjxl requires D65 white point for grayscale output without CMS
+                *white_point == JxlWhitePoint::D65
+            }
+            Self::Simple(JxlColorEncoding::XYB { .. }) => {
+                // XYB as output doesn't make sense without further conversion
+                false
+            }
+        }
+    }
+
+    /// Returns a copy of this profile with linear transfer function.
+    /// For ICC profiles, returns None since we can't modify embedded ICC profiles.
+    /// This is used to create the CMS input profile for XYB images where XybStage
+    /// outputs linear data.
+    pub fn with_linear_tf(&self) -> Option<Self> {
+        match self {
+            Self::Icc(_) => None,
+            Self::Simple(encoding) => Some(Self::Simple(encoding.with_linear_tf())),
+        }
+    }
+
+    /// Returns the number of color channels (1 for grayscale, 3 for RGB, 4 for CMYK).
+    ///
+    /// For ICC profiles, this parses the profile header to determine the color space.
+    /// Falls back to 3 (RGB) if the ICC profile cannot be parsed.
+    pub fn channels(&self) -> usize {
+        match self {
+            Self::Simple(enc) => enc.channels(),
+            Self::Icc(icc_data) => {
+                // ICC color space signature is at bytes 16-19 in the header
+                if icc_data.len() >= 20 {
+                    match &icc_data[16..20] {
+                        b"GRAY" => 1,
+                        b"RGB " => 3,
+                        b"CMYK" => 4,
+                        _ => 3, // Default to RGB for unknown color spaces
+                    }
+                } else {
+                    3 // Default to RGB if profile is too short
+                }
+            }
+        }
+    }
+
+    /// Returns true if this profile is for a CMYK color space.
+    ///
+    /// For ICC profiles, this parses the profile header to check the color space.
+    /// Simple color encodings are never CMYK.
+    pub fn is_cmyk(&self) -> bool {
+        match self {
+            Self::Simple(_) => false, // Simple encodings are never CMYK
+            Self::Icc(icc_data) => {
+                // ICC color space signature is at bytes 16-19 in the header
+                if icc_data.len() >= 20 {
+                    &icc_data[16..20] == b"CMYK"
+                } else {
+                    false
+                }
+            }
         }
     }
 }
@@ -2364,8 +2514,26 @@ mod test {
     }
 
     #[test]
-    fn test_can_convert_internally_same_rgb_different_transfer() {
-        // Same primaries and white point, different transfer function → can convert internally
+    fn test_same_color_encoding_identical() {
+        // Identical encodings → same
+        let srgb1 = JxlColorProfile::Simple(JxlColorEncoding::RgbColorSpace {
+            white_point: JxlWhitePoint::D65,
+            primaries: JxlPrimaries::SRGB,
+            transfer_function: JxlTransferFunction::SRGB,
+            rendering_intent: RenderingIntent::Relative,
+        });
+        let srgb2 = JxlColorProfile::Simple(JxlColorEncoding::RgbColorSpace {
+            white_point: JxlWhitePoint::D65,
+            primaries: JxlPrimaries::SRGB,
+            transfer_function: JxlTransferFunction::SRGB,
+            rendering_intent: RenderingIntent::Relative,
+        });
+        assert!(srgb1.same_color_encoding(&srgb2));
+    }
+
+    #[test]
+    fn test_same_color_encoding_different_transfer() {
+        // Same primaries and white point, different transfer function → NOT same
         let srgb_gamma = JxlColorProfile::Simple(JxlColorEncoding::RgbColorSpace {
             white_point: JxlWhitePoint::D65,
             primaries: JxlPrimaries::SRGB,
@@ -2378,13 +2546,13 @@ mod test {
             transfer_function: JxlTransferFunction::Linear,
             rendering_intent: RenderingIntent::Relative,
         });
-        assert!(srgb_gamma.can_convert_internally(&srgb_linear));
-        assert!(srgb_linear.can_convert_internally(&srgb_gamma));
+        assert!(!srgb_gamma.same_color_encoding(&srgb_linear));
+        assert!(!srgb_linear.same_color_encoding(&srgb_gamma));
     }
 
     #[test]
-    fn test_can_convert_internally_different_primaries() {
-        // Different primaries → cannot convert internally (needs CMS)
+    fn test_same_color_encoding_different_primaries() {
+        // Different primaries → NOT same
         let srgb = JxlColorProfile::Simple(JxlColorEncoding::RgbColorSpace {
             white_point: JxlWhitePoint::D65,
             primaries: JxlPrimaries::SRGB,
@@ -2397,13 +2565,13 @@ mod test {
             transfer_function: JxlTransferFunction::SRGB,
             rendering_intent: RenderingIntent::Relative,
         });
-        assert!(!srgb.can_convert_internally(&p3));
-        assert!(!p3.can_convert_internally(&srgb));
+        assert!(!srgb.same_color_encoding(&p3));
+        assert!(!p3.same_color_encoding(&srgb));
     }
 
     #[test]
-    fn test_can_convert_internally_different_white_point() {
-        // Different white point → cannot convert internally
+    fn test_same_color_encoding_different_white_point() {
+        // Different white point → NOT same
         let d65 = JxlColorProfile::Simple(JxlColorEncoding::RgbColorSpace {
             white_point: JxlWhitePoint::D65,
             primaries: JxlPrimaries::SRGB,
@@ -2416,12 +2584,12 @@ mod test {
             transfer_function: JxlTransferFunction::SRGB,
             rendering_intent: RenderingIntent::Relative,
         });
-        assert!(!d65.can_convert_internally(&dci));
+        assert!(!d65.same_color_encoding(&dci));
     }
 
     #[test]
-    fn test_can_convert_internally_grayscale() {
-        // Grayscale with same white point, different transfer → can convert internally
+    fn test_same_color_encoding_grayscale() {
+        // Grayscale with same white point, different transfer → NOT same
         let gray_srgb = JxlColorProfile::Simple(JxlColorEncoding::GrayscaleColorSpace {
             white_point: JxlWhitePoint::D65,
             transfer_function: JxlTransferFunction::SRGB,
@@ -2432,12 +2600,19 @@ mod test {
             transfer_function: JxlTransferFunction::Linear,
             rendering_intent: RenderingIntent::Relative,
         });
-        assert!(gray_srgb.can_convert_internally(&gray_linear));
+        assert!(!gray_srgb.same_color_encoding(&gray_linear));
+        // But identical grayscale encodings are same
+        let gray_srgb2 = JxlColorProfile::Simple(JxlColorEncoding::GrayscaleColorSpace {
+            white_point: JxlWhitePoint::D65,
+            transfer_function: JxlTransferFunction::SRGB,
+            rendering_intent: RenderingIntent::Relative,
+        });
+        assert!(gray_srgb.same_color_encoding(&gray_srgb2));
     }
 
     #[test]
-    fn test_can_convert_internally_icc_profile() {
-        // ICC profiles always require CMS
+    fn test_same_color_encoding_icc_profile() {
+        // ICC profiles are never considered same (even with themselves)
         let srgb = JxlColorProfile::Simple(JxlColorEncoding::RgbColorSpace {
             white_point: JxlWhitePoint::D65,
             primaries: JxlPrimaries::SRGB,
@@ -2445,14 +2620,14 @@ mod test {
             rendering_intent: RenderingIntent::Relative,
         });
         let icc = JxlColorProfile::Icc(vec![0u8; 100]); // Dummy ICC profile
-        assert!(!srgb.can_convert_internally(&icc));
-        assert!(!icc.can_convert_internally(&srgb));
-        assert!(!icc.can_convert_internally(&icc));
+        assert!(!srgb.same_color_encoding(&icc));
+        assert!(!icc.same_color_encoding(&srgb));
+        assert!(!icc.same_color_encoding(&icc));
     }
 
     #[test]
-    fn test_can_convert_internally_rgb_vs_grayscale() {
-        // RGB vs Grayscale → cannot convert internally
+    fn test_same_color_encoding_rgb_vs_grayscale() {
+        // RGB vs Grayscale → NOT same
         let rgb = JxlColorProfile::Simple(JxlColorEncoding::RgbColorSpace {
             white_point: JxlWhitePoint::D65,
             primaries: JxlPrimaries::SRGB,
@@ -2464,7 +2639,7 @@ mod test {
             transfer_function: JxlTransferFunction::SRGB,
             rendering_intent: RenderingIntent::Relative,
         });
-        assert!(!rgb.can_convert_internally(&gray));
-        assert!(!gray.can_convert_internally(&rgb));
+        assert!(!rgb.same_color_encoding(&gray));
+        assert!(!gray.same_color_encoding(&rgb));
     }
 }

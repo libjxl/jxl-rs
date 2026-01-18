@@ -68,7 +68,7 @@ fn numpy_bytes<Writer: Write>(
         for y in 0..height {
             for x in 0..width {
                 for channel in frame.channels.iter() {
-                    writer.write_all(&channel.row(y)[x].clamp(0.0, 1.0).to_le_bytes())?;
+                    writer.write_all(&channel.row(y)[x].to_le_bytes())?;
                 }
             }
         }

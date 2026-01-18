@@ -4,6 +4,7 @@
 // license that can be found in the LICENSE file.
 
 use crate::api::JxlCms;
+use crate::api::JxlColorEncoding;
 use crate::api::JxlColorProfile;
 use crate::api::JxlColorType;
 use crate::api::JxlDataFormat;
@@ -429,8 +430,19 @@ impl Frame {
             }
         }
 
-        let mut linear = false;
         let output_color_info = OutputColorInfo::from_header(&decoder_state.file_header)?;
+
+        // Determine output TF: use output profile's TF if available, else fall back to embedded
+        let output_tf = output_profile
+            .transfer_function()
+            .map(|tf| {
+                TransferFunction::from_api_tf(
+                    tf,
+                    output_color_info.intensity_target,
+                    output_color_info.luminances,
+                )
+            })
+            .unwrap_or_else(|| output_color_info.tf.clone());
 
         // Find the Black (K) extra channel if present.
         // In JXL, CMYK is stored as 3 color channels (CMY) + K as extra channel.
@@ -450,24 +462,59 @@ impl Frame {
             pipeline = pipeline.add_inplace_stage(YcbcrToRgbStage::new(0))?;
         } else if xyb_encoded {
             pipeline = pipeline.add_inplace_stage(XybStage::new(0, output_color_info.clone()))?;
-            if decoder_state.xyb_output_linear {
-                linear = true;
-            }
         }
 
-        // Insert CMS stage if profiles differ and internal conversion cannot handle it.
-        // Skip if outputting raw linear XYB (linear == true).
-        if !linear
+        // Insert CMS stage if profiles differ.
+        // Following libjxl: use EITHER CMS OR FromLinearStage, never both.
+        // - If output matches original encoding: only FromLinearStage is needed
+        // - If output differs: CMS handles everything including TF conversion
+        //
+        // For XYB images, XybStage outputs LINEAR data in the embedded profile's primaries,
+        // so the CMS input should be the LINEAR version of the embedded profile.
+        // For ICC embedded profiles with XYB, XybStage outputs linear sRGB (see xyb.rs).
+        let cms_input_profile = if xyb_encoded {
+            // XYB outputs linear, so use linear version of input profile for CMS
+            input_profile.with_linear_tf().or_else(|| {
+                // For ICC profiles with XYB, XybStage outputs linear sRGB
+                Some(JxlColorProfile::Simple(JxlColorEncoding::linear_srgb(
+                    false,
+                )))
+            })
+        } else {
+            // Non-XYB: data is in the embedded profile's space including TF
+            Some(input_profile.clone())
+        };
+
+        // Compare ORIGINAL input profile (not linearized cms_input_profile) with output.
+        // This matches libjxl's dec_xyb.cc:184:
+        //   color_encoding_is_original = orig_color_encoding.SameColorEncoding(c_desired);
+        let color_encoding_is_original = input_profile.same_color_encoding(output_profile);
+        let mut cms_used = false;
+
+        // Skip CMS if channel counts differ (grayscale↔RGB) - like libjxl's not_mixing_color_and_grey.
+        // Exception: CMYK (4) → RGB (3) is allowed via CMS.
+        let src_channels = cms_input_profile
+            .as_ref()
+            .map(|p| p.channels())
+            .unwrap_or(3);
+        let dst_channels = output_profile.channels();
+        let channel_counts_compatible =
+            src_channels == dst_channels || (src_channels == 4 && dst_channels == 3);
+
+        if !color_encoding_is_original
+            && channel_counts_compatible
             && let Some(cms) = cms
-            && input_profile != output_profile
-            && !input_profile.can_convert_internally(output_profile)
+            && let Some(cms_input) = cms_input_profile
         {
-            let max_pixels = 1 << frame_header.log_group_dim();
-            let in_channels = if black_channel.is_some() { 4 } else { 3 };
+            // Use frame width as max_pixels since rows can be that wide
+            let max_pixels = frame_header.size_upsampled().0;
+            // Use CMS input profile's channel count, matching libjxl's c_src_.Channels()
+            // For CMYK, channels() returns 4; for RGB, 3; for grayscale, 1.
+            let in_channels = cms_input.channels();
             let (out_channels, transformers) = cms.initialize_transforms(
                 1, // num transforms (1 for single-threaded)
                 max_pixels,
-                input_profile.clone(),
+                cms_input,
                 output_profile.clone(),
                 output_color_info.intensity_target,
             )?;
@@ -478,8 +525,15 @@ impl Frame {
                     out_channels,
                 });
             }
+            // Only pass black_channel to CmsStage if CMS is actually processing CMYK input.
+            // For XYB images, even if original was CMYK, CMS input is linear RGB.
+            let cms_black_channel = if in_channels == 4 {
+                black_channel
+            } else {
+                None
+            };
             Self::check_cms_consumed_black_channel(
-                black_channel,
+                cms_black_channel,
                 in_channels,
                 out_channels,
                 pixel_format,
@@ -489,24 +543,21 @@ impl Frame {
                     transformers,
                     in_channels,
                     out_channels,
-                    black_channel,
+                    cms_black_channel,
                     max_pixels,
                 ))?;
+                cms_used = true;
             }
         }
 
-        // XYB output is linear, so apply transfer function (unless outputting raw linear)
-        if xyb_encoded && !linear {
-            pipeline = pipeline
-                .add_inplace_stage(FromLinearStage::new(0, output_color_info.tf.clone()))?;
+        // XYB output is linear, so apply transfer function:
+        // - Only if output is non-linear AND
+        // - CMS was not used (CMS already handles the full conversion including TF)
+        if xyb_encoded && !output_tf.is_linear() && !cms_used {
+            pipeline = pipeline.add_inplace_stage(FromLinearStage::new(0, output_tf.clone()))?;
         }
 
         if frame_header.needs_blending() {
-            if linear {
-                pipeline = pipeline
-                    .add_inplace_stage(FromLinearStage::new(0, output_color_info.tf.clone()))?;
-                linear = false;
-            }
             pipeline = pipeline.add_inplace_stage(BlendingStage::new(
                 frame_header,
                 &decoder_state.file_header,
@@ -522,11 +573,6 @@ impl Frame {
         }
 
         if frame_header.can_be_referenced && !frame_header.save_before_ct {
-            if linear {
-                pipeline = pipeline
-                    .add_inplace_stage(FromLinearStage::new(0, output_color_info.tf.clone()))?;
-                linear = false;
-            }
             for i in 0..num_channels {
                 pipeline = pipeline.add_save_stage(
                     &[i],
@@ -583,13 +629,6 @@ impl Frame {
                 alpha_channel_info.is_some_and(|(_, info)| info.alpha_associated());
             if pixel_format.color_type.is_grayscale() && num_color_channels == 3 {
                 return Err(Error::NotGrayscale);
-            }
-            if decoder_state.file_header.image_metadata.xyb_encoded
-                && decoder_state.xyb_output_linear
-                && !linear
-            {
-                pipeline = pipeline
-                    .add_inplace_stage(ToLinearStage::new(0, output_color_info.tf.clone()))?;
             }
             // Determine if we need to fill opaque alpha:
             // - color_type requests alpha (has_alpha() is true)
