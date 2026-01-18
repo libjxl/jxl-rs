@@ -20,7 +20,7 @@ mod x86_64;
 #[cfg(target_arch = "aarch64")]
 mod aarch64;
 
-mod scalar;
+pub mod scalar;
 
 #[cfg(all(target_arch = "x86_64", feature = "avx"))]
 pub use x86_64::avx::AvxDescriptor;
@@ -270,6 +270,16 @@ pub unsafe trait F32SimdVec:
     /// Transposes the Self::LEN x Self::LEN matrix formed by array elements
     /// `data[stride * i]` for i = 0..Self::LEN.
     fn transpose_square(d: Self::Descriptor, data: &mut [Self::UnderlyingArray], stride: usize);
+
+    /// Loads f16 values (stored as u16 bit patterns) and converts them to f32.
+    /// Uses hardware conversion instructions when available (F16C on x86, NEON fp16 on ARM).
+    /// Requires `mem.len() >= Self::LEN` or it will panic.
+    fn load_f16_bits(d: Self::Descriptor, mem: &[u16]) -> Self;
+
+    /// Converts f32 values to f16 and stores as u16 bit patterns.
+    /// Uses hardware conversion instructions when available (F16C on x86, NEON fp16 on ARM).
+    /// Requires `dest.len() >= Self::LEN` or it will panic.
+    fn store_f16(self, dest: &mut [u16]);
 }
 
 pub trait I32SimdVec:
