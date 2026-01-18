@@ -110,4 +110,5 @@ impl ContainerBoxType {
     pub const CODESTREAM: Self = Self(*b"jxlc");
     pub const PARTIAL_CODESTREAM: Self = Self(*b"jxlp");
     pub const JPEG_RECONSTRUCTION: Self = Self(*b"jbrd");
+    pub const GAIN_MAP: Self = Self(*b"jhgm");
 }
