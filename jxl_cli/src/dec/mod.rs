@@ -52,16 +52,6 @@ pub enum OutputDataType {
     F32,
 }
 
-/// Whether to output linear light values.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub enum LinearOutput {
-    /// Apply the transfer function (e.g., sRGB gamma).
-    #[default]
-    No,
-    /// Output linear light values (for formats like EXR or numpy).
-    Yes,
-}
-
 impl OutputDataType {
     /// Parse from string (case-insensitive).
     pub fn parse(s: &str) -> Option<Self> {
@@ -199,7 +189,7 @@ pub fn decode_frames_with_type<In: JxlBitstreamInput>(
     input: &mut In,
     decoder_options: JxlDecoderOptions,
     output_type: OutputDataType,
-    linear_output: LinearOutput,
+    linear_output: bool,
 ) -> Result<(TypedDecodeOutput, Duration)> {
     match output_type {
         OutputDataType::U8 => {
@@ -230,7 +220,7 @@ fn decode_frames_typed<T: ImageDataType, In: JxlBitstreamInput>(
     input: &mut In,
     decoder_options: JxlDecoderOptions,
     output_type: OutputDataType,
-    linear_output: LinearOutput,
+    linear_output: bool,
 ) -> Result<(DecodeOutput<T>, Duration)> {
     let start = Instant::now();
 
@@ -241,7 +231,7 @@ fn decode_frames_typed<T: ImageDataType, In: JxlBitstreamInput>(
     let embedded_profile = decoder_with_image_info.embedded_color_profile().clone();
 
     // If linear output is requested, modify the output profile
-    if linear_output == LinearOutput::Yes
+    if linear_output
         && let JxlColorProfile::Simple(enc) = decoder_with_image_info.output_color_profile().clone()
     {
         decoder_with_image_info

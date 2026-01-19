@@ -145,13 +145,6 @@ fn main() -> Result<()> {
         None => (false, false),
     };
     let high_precision = opt.high_precision;
-    // EXR needs linear output (like djxl forces RGB_D65_SRG_Rel_Lin for EXR),
-    // but npy should use original encoding like djxl does.
-    let linear_output = if exr_output {
-        dec::LinearOutput::Yes
-    } else {
-        dec::LinearOutput::No
-    };
     let options = |skip_preview: bool| {
         let mut options = JxlDecoderOptions::default();
         options.render_spot_colors = !numpy_output;
@@ -221,7 +214,7 @@ fn main() -> Result<()> {
                     &mut input,
                     options(skip_preview),
                     output_type,
-                    linear_output,
+                    exr_output,
                 )?;
                 duration_sum += iteration_duration;
                 // When extracting preview, only keep the first frame (the preview)
@@ -246,7 +239,7 @@ fn main() -> Result<()> {
             &mut reader,
             options(skip_preview),
             output_type,
-            linear_output,
+            exr_output,
         )?;
         duration_sum = duration;
         // When extracting preview, only keep the first frame (the preview)

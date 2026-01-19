@@ -488,7 +488,7 @@ impl Frame {
         };
 
         // Compare ORIGINAL input profile (not linearized cms_input_profile) with output.
-        // This matches libjxl's dec_xyb.cc:184:
+        // This matches libjxl (53042ec5) dec_xyb.cc:184:
         //   color_encoding_is_original = orig_color_encoding.SameColorEncoding(c_desired);
         let color_encoding_is_original = input_profile.same_color_encoding(output_profile);
         let mut cms_used = false;
