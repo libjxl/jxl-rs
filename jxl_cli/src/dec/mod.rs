@@ -43,87 +43,6 @@ pub fn decode_header<In: JxlBitstreamInput>(
     }
 }
 
-/// Decode a JXL image from any input that implements JxlBitstreamInput.
-/// This works with both byte slices (`&mut &[u8]`) and buffered readers (`&mut BufReader<File>`).
-pub fn decode_frames<In: JxlBitstreamInput>(
-    input: &mut In,
-    decoder_options: JxlDecoderOptions,
-) -> Result<(DecodeOutput<f32>, Duration)> {
-    let start = Instant::now();
-
-    let mut decoder_with_image_info = decode_header(input, decoder_options)?;
-
-    let info = decoder_with_image_info.basic_info();
-    let embedded_profile = decoder_with_image_info.embedded_color_profile().clone();
-    let output_profile = decoder_with_image_info.output_color_profile().clone();
-
-    let mut image_data = DecodeOutput {
-        size: info.size,
-        frames: Vec::new(),
-        original_bit_depth: info.bit_depth.clone(),
-        output_profile,
-        embedded_profile,
-        jxl_animation: info.animation.clone(),
-    };
-
-    let extra_channels = info.extra_channels.len();
-    let pixel_format = decoder_with_image_info.current_pixel_format().clone();
-    let color_type = pixel_format.color_type;
-    // TODO(zond): This is the way the API works right now, let's improve it when the API is cleverer.
-    let samples_per_pixel = if color_type == JxlColorType::Grayscale {
-        1
-    } else {
-        3
-    };
-
-    loop {
-        let decoder_with_frame_info = match decoder_with_image_info.process(input)? {
-            ProcessingResult::Complete { result } => result,
-            ProcessingResult::NeedsMoreInput { .. } => return Err(eyre!("Source file truncated")),
-        };
-
-        let frame_header = decoder_with_frame_info.frame_header();
-        let frame_size = frame_header.size;
-
-        let mut outputs = vec![Image::<f32>::new((
-            frame_size.0 * samples_per_pixel,
-            frame_size.1,
-        ))?];
-
-        for _ in 0..extra_channels {
-            outputs.push(Image::<f32>::new(frame_size)?);
-        }
-
-        let mut output_bufs: Vec<JxlOutputBuffer<'_>> = outputs
-            .iter_mut()
-            .map(|x| {
-                let rect = Rect {
-                    size: x.size(),
-                    origin: (0, 0),
-                };
-                JxlOutputBuffer::from_image_rect_mut(x.get_rect_mut(rect).into_raw())
-            })
-            .collect();
-
-        decoder_with_image_info = match decoder_with_frame_info.process(input, &mut output_bufs)? {
-            ProcessingResult::Complete { result } => result,
-            ProcessingResult::NeedsMoreInput { .. } => return Err(eyre!("Source file truncated")),
-        };
-
-        image_data.frames.push(ImageFrame {
-            duration: frame_header.duration.unwrap_or(0.0),
-            channels: outputs,
-            color_type,
-        });
-
-        if !decoder_with_image_info.has_more_frames() {
-            break;
-        }
-    }
-
-    Ok((image_data, start.elapsed()))
-}
-
 /// Output data type for decoding.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum OutputDataType {
@@ -270,25 +189,27 @@ pub fn decode_frames_with_type<In: JxlBitstreamInput>(
     input: &mut In,
     decoder_options: JxlDecoderOptions,
     output_type: OutputDataType,
+    linear_output: bool,
 ) -> Result<(TypedDecodeOutput, Duration)> {
     match output_type {
         OutputDataType::U8 => {
             let (output, duration) =
-                decode_frames_typed::<u8, _>(input, decoder_options, output_type)?;
+                decode_frames_typed::<u8, _>(input, decoder_options, output_type, linear_output)?;
             Ok((TypedDecodeOutput::U8(output), duration))
         }
         OutputDataType::U16 => {
             let (output, duration) =
-                decode_frames_typed::<u16, _>(input, decoder_options, output_type)?;
+                decode_frames_typed::<u16, _>(input, decoder_options, output_type, linear_output)?;
             Ok((TypedDecodeOutput::U16(output), duration))
         }
         OutputDataType::F16 => {
             let (output, duration) =
-                decode_frames_typed::<f16, _>(input, decoder_options, output_type)?;
+                decode_frames_typed::<f16, _>(input, decoder_options, output_type, linear_output)?;
             Ok((TypedDecodeOutput::F16(output), duration))
         }
         OutputDataType::F32 => {
-            let (output, duration) = decode_frames(input, decoder_options)?;
+            let (output, duration) =
+                decode_frames_typed::<f32, _>(input, decoder_options, output_type, linear_output)?;
             Ok((TypedDecodeOutput::F32(output), duration))
         }
     }
@@ -299,6 +220,7 @@ fn decode_frames_typed<T: ImageDataType, In: JxlBitstreamInput>(
     input: &mut In,
     decoder_options: JxlDecoderOptions,
     output_type: OutputDataType,
+    linear_output: bool,
 ) -> Result<(DecodeOutput<T>, Duration)> {
     let start = Instant::now();
 
@@ -307,6 +229,14 @@ fn decode_frames_typed<T: ImageDataType, In: JxlBitstreamInput>(
     // Get info and clone what we need before mutating the decoder
     let info = decoder_with_image_info.basic_info().clone();
     let embedded_profile = decoder_with_image_info.embedded_color_profile().clone();
+
+    // If linear output is requested, modify the output profile
+    if linear_output
+        && let JxlColorProfile::Simple(enc) = decoder_with_image_info.output_color_profile().clone()
+    {
+        decoder_with_image_info
+            .set_output_color_profile(JxlColorProfile::Simple(enc.with_linear_tf()))?;
+    }
     let output_profile = decoder_with_image_info.output_color_profile().clone();
 
     // Set the pixel format to the requested data type

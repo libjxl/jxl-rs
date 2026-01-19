@@ -204,7 +204,9 @@ impl RenderPipelineInPlaceStage for CmsStage {
         row: &mut [&mut [f32]],
         state: Option<&mut dyn Any>,
     ) {
-        let Some(state) = state else { return };
+        let Some(state) = state else {
+            return;
+        };
         let state: &mut CmsLocalState = state.downcast_mut().unwrap();
         let same_channels = self.in_channels == self.out_channels;
 

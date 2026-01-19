@@ -114,7 +114,6 @@ pub struct DecoderState {
     pub(super) file_header: FileHeader,
     pub(super) reference_frames: Arc<[Option<ReferenceFrame>; Self::MAX_STORED_FRAMES]>,
     pub(super) lf_frames: [Option<[Image<f32>; 3]>; 4],
-    pub xyb_output_linear: bool,
     // TODO(veluca): do we really need this? ISTM it could be achieved by passing None for all the
     // buffers, and it's not clear to me what use the decoder can make of it.
     pub enable_output: bool,
@@ -135,7 +134,6 @@ impl DecoderState {
             file_header,
             reference_frames: Arc::new([None, None, None, None]),
             lf_frames: [None, None, None, None],
-            xyb_output_linear: true,
             enable_output: true,
             render_spotcolors: true,
             #[cfg(test)]

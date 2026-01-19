@@ -8,18 +8,15 @@ use std::io::IoSliceMut;
 use crate::{
     api::{
         Endianness, JxlBasicInfo, JxlBitDepth, JxlColorEncoding, JxlColorProfile, JxlColorType,
-        JxlDataFormat, JxlDecoderOptions, JxlExtraChannel, JxlPixelFormat, JxlPrimaries,
-        JxlTransferFunction, JxlWhitePoint, inner::codestream_parser::SectionState,
+        JxlDataFormat, JxlDecoderOptions, JxlExtraChannel, JxlPixelFormat,
+        inner::codestream_parser::SectionState,
     },
     bit_reader::BitReader,
     error::{Error, Result},
     frame::{DecoderState, Frame, Section},
     headers::{
-        FileHeader, JxlHeader,
-        color_encoding::{ColorSpace, RenderingIntent},
-        encodings::UnconditionalCoder,
-        frame_header::FrameHeader,
-        toc::IncrementalTocReader,
+        FileHeader, JxlHeader, color_encoding::ColorSpace, encodings::UnconditionalCoder,
+        frame_header::FrameHeader, toc::IncrementalTocReader,
     },
     icc::IncrementalIccReader,
 };
@@ -157,52 +154,43 @@ impl CodestreamParser {
                     &file_header.image_metadata.color_encoding,
                 )?)
             };
+            // Determine default output color profile following libjxl logic:
+            // - For XYB: use embedded if can_output_to(), else linear sRGB fallback
+            // - For non-XYB: use embedded color profile
             let output_color_profile = if file_header.image_metadata.xyb_encoded {
-                let nonlinear_output_color_profile = match &embedded_color_profile {
-                    JxlColorProfile::Icc(_) => JxlColorEncoding::srgb(
-                        file_header.image_metadata.color_encoding.color_space == ColorSpace::Gray,
-                    ),
-                    JxlColorProfile::Simple(encoding) => encoding.clone(),
-                };
-                JxlColorProfile::Simple(if decode_options.xyb_output_linear {
-                    match nonlinear_output_color_profile {
-                        JxlColorEncoding::RgbColorSpace {
-                            white_point,
-                            primaries,
-                            transfer_function: _,
-                            rendering_intent,
-                        } => JxlColorEncoding::RgbColorSpace {
-                            white_point,
-                            primaries,
-                            transfer_function: JxlTransferFunction::Linear,
-                            rendering_intent,
-                        },
-                        JxlColorEncoding::GrayscaleColorSpace {
-                            white_point,
-                            transfer_function: _,
-                            rendering_intent,
-                        } => JxlColorEncoding::GrayscaleColorSpace {
-                            white_point,
-                            transfer_function: JxlTransferFunction::Linear,
-                            rendering_intent,
-                        },
-                        JxlColorEncoding::XYB { .. } => JxlColorEncoding::RgbColorSpace {
-                            transfer_function: JxlTransferFunction::Linear,
-                            white_point: JxlWhitePoint::D65,
-                            primaries: JxlPrimaries::SRGB,
-                            rendering_intent: RenderingIntent::Relative,
-                        },
+                let is_gray =
+                    file_header.image_metadata.color_encoding.color_space == ColorSpace::Gray;
+
+                // Use embedded if we can output to it, otherwise fall back to linear sRGB
+                let base_encoding = if embedded_color_profile.can_output_to() {
+                    match &embedded_color_profile {
+                        JxlColorProfile::Simple(enc) => enc.clone(),
+                        JxlColorProfile::Icc(_) => {
+                            unreachable!("can_output_to returns false for ICC")
+                        }
                     }
                 } else {
-                    nonlinear_output_color_profile
-                })
+                    JxlColorEncoding::linear_srgb(is_gray)
+                };
+
+                JxlColorProfile::Simple(base_encoding)
             } else {
                 embedded_color_profile.clone()
             };
-            self.embedded_color_profile = Some(embedded_color_profile);
+            self.embedded_color_profile = Some(embedded_color_profile.clone());
             // Only set default output_color_profile if not already configured by user
             if self.output_color_profile.is_none() {
                 self.output_color_profile = Some(output_color_profile);
+            } else {
+                // Validate user's output color profile choice (libjxl compatibility)
+                // For non-XYB without CMS: only same encoding as embedded is allowed
+                let user_profile = self.output_color_profile.as_ref().unwrap();
+                if !file_header.image_metadata.xyb_encoded
+                    && decode_options.cms.is_none()
+                    && *user_profile != embedded_color_profile
+                {
+                    return Err(Error::NonXybOutputNoCMS);
+                }
             }
             // Only set default pixel_format if not already configured (e.g. via rewind)
             if self.pixel_format.is_none() {
@@ -233,7 +221,6 @@ impl CodestreamParser {
 
             // We now have image information.
             let mut decoder_state = DecoderState::new(self.file_header.take().unwrap());
-            decoder_state.xyb_output_linear = decode_options.xyb_output_linear;
             decoder_state.render_spotcolors = decode_options.render_spot_colors;
             decoder_state.high_precision = decode_options.high_precision;
             decoder_state.premultiply_output = decode_options.premultiply_output;
