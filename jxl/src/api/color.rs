@@ -1248,8 +1248,8 @@ impl JxlColorProfile {
         match self {
             Self::Simple(JxlColorEncoding::RgbColorSpace {
                 transfer_function, ..
-            }) => Some(transfer_function),
-            Self::Simple(JxlColorEncoding::GrayscaleColorSpace {
+            })
+            | Self::Simple(JxlColorEncoding::GrayscaleColorSpace {
                 transfer_function, ..
             }) => Some(transfer_function),
             _ => None,
