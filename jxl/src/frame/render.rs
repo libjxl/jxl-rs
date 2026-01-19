@@ -432,7 +432,9 @@ impl Frame {
 
         let output_color_info = OutputColorInfo::from_header(&decoder_state.file_header)?;
 
-        // Determine output TF: use output profile's TF if available, else fall back to embedded
+        // Determine output TF: use output profile's TF if available, else fall back to embedded profile's TF.
+        // Note: output_color_info (luminances, opsin matrix) always comes from the embedded profile;
+        // CMS handles any primaries conversion if the output profile differs.
         let output_tf = output_profile
             .transfer_function()
             .map(|tf| {
