@@ -9,7 +9,7 @@ pub mod enc;
 
 #[cfg(test)]
 mod tests {
-    use crate::dec::{LinearOutput, OutputDataType, decode_frames_with_type};
+    use crate::dec::{OutputDataType, decode_frames_with_type};
     use jxl::api::JxlDecoderOptions;
 
     /// Test that decoding with all output data types produces consistent results.
@@ -34,7 +34,7 @@ mod tests {
                 &mut input,
                 JxlDecoderOptions::default(),
                 OutputDataType::F32,
-                LinearOutput::No,
+                false,
             )
             .unwrap();
             let f32_output = f32_typed_output.to_f32().unwrap();
@@ -51,7 +51,7 @@ mod tests {
                     &mut input,
                     JxlDecoderOptions::default(),
                     data_type,
-                    LinearOutput::No,
+                    false,
                 )
                 .unwrap();
                 // Convert to f32 for comparison
@@ -142,7 +142,7 @@ mod tests {
             &mut input,
             high_precision_options(),
             OutputDataType::F32,
-            LinearOutput::No,
+            false,
         )
         .unwrap();
         let f32_output = f32_typed_output.to_f32().unwrap();
@@ -153,7 +153,7 @@ mod tests {
             &mut input,
             high_precision_options(),
             OutputDataType::U8,
-            LinearOutput::No,
+            false,
         )
         .unwrap();
         let u8_output = u8_typed_output.to_f32().unwrap();
