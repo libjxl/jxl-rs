@@ -673,7 +673,6 @@ unsafe impl F32SimdVec for F32VecAvx {
 
     #[inline(always)]
     fn load_f16_bits(d: Self::Descriptor, mem: &[u16]) -> Self {
-        // f16c is guaranteed by the safety invariant on AvxDescriptor
         #[target_feature(enable = "avx2,f16c")]
         #[inline]
         fn load_f16_impl(d: AvxDescriptor, mem: &[u16]) -> F32VecAvx {
@@ -688,7 +687,6 @@ unsafe impl F32SimdVec for F32VecAvx {
 
     #[inline(always)]
     fn store_f16(self, dest: &mut [u16]) {
-        // f16c is guaranteed by the safety invariant on AvxDescriptor
         #[target_feature(enable = "avx2,f16c")]
         #[inline]
         fn store_f16_impl(v: __m256, dest: &mut [u16]) {
