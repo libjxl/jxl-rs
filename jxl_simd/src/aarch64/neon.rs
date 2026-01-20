@@ -444,12 +444,18 @@ unsafe impl F32SimdVec for F32VecNeon {
 
         fn store_f16(this: F32VecNeon, dest: &mut [u16]) {
             assert!(dest.len() >= F32VecNeon::LEN);
-            // TODO: Use vcvt_f16_f32 once Rust stdarch fix lands
-            // For now, use scalar conversion
-            let mut tmp = [0.0f32; 4];
-            this.store(&mut tmp);
-            for i in 0..4 {
-                dest[i] = crate::scalar::f32_to_f16(tmp[i]);
+            // Use inline asm because Rust stdarch incorrectly requires fp16 target feature
+            // for vcvt_f16_f32 (fixed in https://github.com/rust-lang/stdarch/pull/1978)
+            let f16_bits: uint16x4_t;
+            // SAFETY: NEON is available (guaranteed by descriptor), dest has enough space
+            unsafe {
+                std::arch::asm!(
+                    "fcvtn {out:v}.4h, {inp:v}.4s",
+                    inp = in(vreg) this.0,
+                    out = out(vreg) f16_bits,
+                    options(pure, nomem, nostack),
+                );
+                vst1_u16(dest.as_mut_ptr(), f16_bits);
             }
         }
     }
@@ -457,14 +463,20 @@ unsafe impl F32SimdVec for F32VecNeon {
     #[inline(always)]
     fn load_f16_bits(d: Self::Descriptor, mem: &[u16]) -> Self {
         assert!(mem.len() >= Self::LEN);
-        // TODO: Use vcvt_f32_f16 once Rust stdarch fix lands
-        // (currently requires fp16 target feature incorrectly)
-        // For now, use scalar conversion
-        let mut result = [0.0f32; 4];
-        for i in 0..4 {
-            result[i] = crate::scalar::f16_to_f32(mem[i]);
+        // Use inline asm because Rust stdarch incorrectly requires fp16 target feature
+        // for vcvt_f32_f16 (fixed in https://github.com/rust-lang/stdarch/pull/1978)
+        let result: float32x4_t;
+        // SAFETY: NEON is available (guaranteed by descriptor), mem has enough space
+        unsafe {
+            let f16_bits = vld1_u16(mem.as_ptr());
+            std::arch::asm!(
+                "fcvtl {out:v}.4s, {inp:v}.4h",
+                inp = in(vreg) f16_bits,
+                out = out(vreg) result,
+                options(pure, nomem, nostack),
+            );
         }
-        Self::load(d, &result)
+        F32VecNeon(result, d)
     }
 
     #[inline(always)]

@@ -96,13 +96,13 @@ fn transpose_8x8_core(
     (c0, c1, c2, c3, c4, c5, c6, c7)
 }
 
-// Safety invariant: this type is only ever constructed if avx2 and fma are available.
+// Safety invariant: this type is only ever constructed if avx2, fma, and f16c are available.
 #[derive(Clone, Copy, Debug)]
 pub struct AvxDescriptor(());
 
 impl AvxDescriptor {
     /// # Safety
-    /// The caller must guarantee that the "avx2" and "fma" target features are available.
+    /// The caller must guarantee that the "avx2", "fma", and "f16c" target features are available.
     pub unsafe fn new_unchecked() -> Self {
         Self(())
     }
@@ -139,8 +139,11 @@ impl SimdDescriptor for AvxDescriptor {
     }
 
     fn new() -> Option<Self> {
-        if is_x86_feature_detected!("avx2") && is_x86_feature_detected!("fma") {
-            // SAFETY: we just checked avx2 and fma.
+        if is_x86_feature_detected!("avx2")
+            && is_x86_feature_detected!("fma")
+            && is_x86_feature_detected!("f16c")
+        {
+            // SAFETY: we just checked avx2, fma, and f16c.
             Some(unsafe { Self::new_unchecked() })
         } else {
             None
@@ -148,12 +151,12 @@ impl SimdDescriptor for AvxDescriptor {
     }
 
     fn call<R>(self, f: impl FnOnce(Self) -> R) -> R {
-        #[target_feature(enable = "avx2,fma")]
+        #[target_feature(enable = "avx2,fma,f16c")]
         #[inline(never)]
         unsafe fn inner<R>(d: AvxDescriptor, f: impl FnOnce(AvxDescriptor) -> R) -> R {
             f(d)
         }
-        // SAFETY: the safety invariant on `self` guarantees avx2 and fma.
+        // SAFETY: the safety invariant on `self` guarantees avx2, fma, and f16c.
         unsafe { inner(self, f) }
     }
 }
@@ -165,12 +168,12 @@ macro_rules! fn_avx {
         fn $name:ident($($arg:ident: $ty:ty),* $(,)?) $(-> $ret:ty )? $body: block) => {
         #[inline(always)]
         fn $name(self: $self_ty, $($arg: $ty),*) $(-> $ret)? {
-            #[target_feature(enable = "fma,avx2")]
+            #[target_feature(enable = "fma,avx2,f16c")]
             #[inline]
             fn inner($this: $self_ty, $($arg: $ty),*) $(-> $ret)? {
                 $body
             }
-            // SAFETY: `self.1` is constructed iff avx2 and fma are available.
+            // SAFETY: `self.1` is constructed iff avx2, fma, and f16c are available.
             unsafe { inner(self, $($arg),*) }
         }
     };
@@ -671,54 +674,31 @@ unsafe impl F32SimdVec for F32VecAvx {
     #[inline(always)]
     fn load_f16_bits(d: Self::Descriptor, mem: &[u16]) -> Self {
         assert!(mem.len() >= Self::LEN);
-        // Check for F16C at runtime and use hardware conversion if available
-        if is_x86_feature_detected!("f16c") {
-            #[target_feature(enable = "avx2,f16c")]
-            #[inline]
-            unsafe fn load_f16_f16c(d: AvxDescriptor, mem: &[u16]) -> F32VecAvx {
-                // SAFETY: mem.len() >= 8 is checked by caller, and f16c is available
-                unsafe {
-                    let bits = _mm_loadu_si128(mem.as_ptr() as *const __m128i);
-                    F32VecAvx(_mm256_cvtph_ps(bits), d)
-                }
-            }
-            // SAFETY: we just checked f16c is available
-            unsafe { load_f16_f16c(d, mem) }
-        } else {
-            // Fallback to scalar conversion
-            let mut result = [0.0f32; 8];
-            for i in 0..8 {
-                result[i] = crate::scalar::f16_to_f32(mem[i]);
-            }
-            Self::load(d, &result)
+        // f16c is guaranteed by the safety invariant on AvxDescriptor
+        #[target_feature(enable = "avx2,f16c")]
+        #[inline]
+        fn load_f16_impl(d: AvxDescriptor, mem: &[u16]) -> F32VecAvx {
+            // SAFETY: mem.len() >= 8 is checked by caller
+            let bits = unsafe { _mm_loadu_si128(mem.as_ptr() as *const __m128i) };
+            F32VecAvx(_mm256_cvtph_ps(bits), d)
         }
+        // SAFETY: f16c is available from the safety invariant on the descriptor
+        unsafe { load_f16_impl(d, mem) }
     }
 
     #[inline(always)]
     fn store_f16(self, dest: &mut [u16]) {
         assert!(dest.len() >= Self::LEN);
-        // Check for F16C at runtime and use hardware conversion if available
-        if is_x86_feature_detected!("f16c") {
-            #[target_feature(enable = "avx2,f16c")]
-            #[inline]
-            unsafe fn store_f16_f16c(v: __m256, dest: &mut [u16]) {
-                // SAFETY: dest.len() >= 8 is checked by caller, and f16c is available
-                unsafe {
-                    // _MM_FROUND_TO_NEAREST_INT | _MM_FROUND_NO_EXC = 0
-                    let bits = _mm256_cvtps_ph::<0>(v);
-                    _mm_storeu_si128(dest.as_mut_ptr() as *mut __m128i, bits);
-                }
-            }
-            // SAFETY: we just checked f16c is available
-            unsafe { store_f16_f16c(self.0, dest) }
-        } else {
-            // Fallback to scalar conversion
-            let mut tmp = [0.0f32; 8];
-            self.store(&mut tmp);
-            for i in 0..8 {
-                dest[i] = crate::scalar::f32_to_f16(tmp[i]);
-            }
+        // f16c is guaranteed by the safety invariant on AvxDescriptor
+        #[target_feature(enable = "avx2,f16c")]
+        #[inline]
+        fn store_f16_impl(v: __m256, dest: &mut [u16]) {
+            let bits = _mm256_cvtps_ph::<{ _MM_FROUND_TO_NEAREST_INT | _MM_FROUND_NO_EXC }>(v);
+            // SAFETY: dest.len() >= 8 is checked by caller
+            unsafe { _mm_storeu_si128(dest.as_mut_ptr() as *mut __m128i, bits) };
         }
+        // SAFETY: f16c is available from the safety invariant on the descriptor
+        unsafe { store_f16_impl(self.0, dest) }
     }
 
     #[inline(always)]

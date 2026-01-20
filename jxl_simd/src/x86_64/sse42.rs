@@ -615,7 +615,7 @@ unsafe impl F32SimdVec for F32VecSse42 {
         // SSE4.2 doesn't have F16C, use scalar conversion
         let mut result = [0.0f32; 4];
         for i in 0..4 {
-            result[i] = crate::scalar::f16_to_f32(mem[i]);
+            result[i] = crate::f16::from_bits(mem[i]).to_f32();
         }
         Self::load(d, &result)
     }
@@ -627,7 +627,7 @@ unsafe impl F32SimdVec for F32VecSse42 {
         let mut tmp = [0.0f32; 4];
         self.store(&mut tmp);
         for i in 0..4 {
-            dest[i] = crate::scalar::f32_to_f16(tmp[i]);
+            dest[i] = crate::f16::from_f32(tmp[i]).to_bits();
         }
     }
 

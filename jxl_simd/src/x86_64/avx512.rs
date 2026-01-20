@@ -732,16 +732,14 @@ unsafe impl F32SimdVec for F32VecAvx512 {
 
     #[inline(always)]
     fn load_f16_bits(d: Self::Descriptor, mem: &[u16]) -> Self {
-        assert!(mem.len() >= Self::LEN);
         // AVX512 implies F16C, so we can always use hardware conversion
         #[target_feature(enable = "avx512f")]
         #[inline]
-        unsafe fn load_f16_impl(d: Avx512Descriptor, mem: &[u16]) -> F32VecAvx512 {
-            // SAFETY: mem.len() >= 16 is checked by caller, and avx512f is available
-            unsafe {
-                let bits = _mm256_loadu_si256(mem.as_ptr() as *const __m256i);
-                F32VecAvx512(_mm512_cvtph_ps(bits), d)
-            }
+        fn load_f16_impl(d: Avx512Descriptor, mem: &[u16]) -> F32VecAvx512 {
+            assert!(mem.len() >= F32VecAvx512::LEN);
+            // SAFETY: mem.len() >= 16 is checked above
+            let bits = unsafe { _mm256_loadu_si256(mem.as_ptr() as *const __m256i) };
+            F32VecAvx512(_mm512_cvtph_ps(bits), d)
         }
         // SAFETY: avx512f is available from the safety invariant on the descriptor
         unsafe { load_f16_impl(d, mem) }
@@ -749,17 +747,14 @@ unsafe impl F32SimdVec for F32VecAvx512 {
 
     #[inline(always)]
     fn store_f16(self, dest: &mut [u16]) {
-        assert!(dest.len() >= Self::LEN);
         // AVX512 implies F16C, so we can always use hardware conversion
         #[target_feature(enable = "avx512f")]
         #[inline]
-        unsafe fn store_f16_impl(v: __m512, dest: &mut [u16]) {
-            // SAFETY: dest.len() >= 16 is checked by caller, and avx512f is available
-            unsafe {
-                // _MM_FROUND_TO_NEAREST_INT | _MM_FROUND_NO_EXC = 0
-                let bits = _mm512_cvtps_ph::<0>(v);
-                _mm256_storeu_si256(dest.as_mut_ptr() as *mut __m256i, bits);
-            }
+        fn store_f16_impl(v: __m512, dest: &mut [u16]) {
+            assert!(dest.len() >= F32VecAvx512::LEN);
+            let bits = _mm512_cvtps_ph::<{ _MM_FROUND_TO_NEAREST_INT | _MM_FROUND_NO_EXC }>(v);
+            // SAFETY: dest.len() >= 16 is checked above
+            unsafe { _mm256_storeu_si256(dest.as_mut_ptr() as *mut __m256i, bits) };
         }
         // SAFETY: avx512f is available from the safety invariant on the descriptor
         unsafe { store_f16_impl(self.0, dest) }

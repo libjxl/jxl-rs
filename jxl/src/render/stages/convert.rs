@@ -191,7 +191,7 @@ simd_function!(
         // Handle remainder with scalar
         let remainder_start = num_full_chunks * simd_width;
         for i in remainder_start..xsize {
-            output[i] = jxl_simd::scalar::f16_to_f32(input[i] as u16);
+            output[i] = jxl_simd::f16::from_bits(input[i] as u16).to_f32();
         }
     }
 );
@@ -653,7 +653,7 @@ mod test {
 
         // First test the scalar function directly
         for (bits, expected) in &test_cases {
-            let scalar_result = jxl_simd::scalar::f16_to_f32(*bits);
+            let scalar_result = jxl_simd::f16::from_bits(*bits).to_f32();
             let rel_err = ((expected - scalar_result) / expected).abs();
             assert!(
                 rel_err < 1e-6,

@@ -20,7 +20,10 @@ mod x86_64;
 #[cfg(target_arch = "aarch64")]
 mod aarch64;
 
+pub mod float16;
 pub mod scalar;
+
+pub use float16::f16;
 
 #[cfg(all(target_arch = "x86_64", feature = "avx"))]
 pub use x86_64::avx::AvxDescriptor;

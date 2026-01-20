@@ -6,89 +6,9 @@
 use std::mem::MaybeUninit;
 use std::num::Wrapping;
 
-use crate::{U32SimdVec, impl_f32_array_interface};
+use crate::{U32SimdVec, f16, impl_f32_array_interface};
 
 use super::{F32SimdVec, I32SimdVec, SimdDescriptor, SimdMask};
-
-/// Convert f16 bits (as u16) to f32.
-#[inline(always)]
-pub fn f16_to_f32(bits: u16) -> f32 {
-    let sign = ((bits >> 15) & 1) as u32;
-    let exp = ((bits >> 10) & 0x1F) as i32;
-    let mant = (bits & 0x3FF) as u32;
-
-    if exp == 0 {
-        if mant == 0 {
-            // Zero (positive or negative)
-            f32::from_bits(sign << 31)
-        } else {
-            // Subnormal: normalize
-            let mut m = mant;
-            let mut e = -14i32;
-            while (m & 0x400) == 0 {
-                m <<= 1;
-                e -= 1;
-            }
-            m &= 0x3FF;
-            let f32_exp = ((e + 127) as u32) << 23;
-            let f32_mant = m << 13;
-            f32::from_bits((sign << 31) | f32_exp | f32_mant)
-        }
-    } else if exp == 31 {
-        // Inf or NaN
-        let f32_mant = mant << 13;
-        f32::from_bits((sign << 31) | 0x7F800000 | f32_mant)
-    } else {
-        // Normal number
-        let f32_exp = ((exp - 15 + 127) as u32) << 23;
-        let f32_mant = mant << 13;
-        f32::from_bits((sign << 31) | f32_exp | f32_mant)
-    }
-}
-
-/// Convert f32 to f16 bits (as u16).
-#[inline(always)]
-pub fn f32_to_f16(val: f32) -> u16 {
-    let bits = val.to_bits();
-    let sign = ((bits >> 31) & 1) as u16;
-    let exp = ((bits >> 23) & 0xFF) as i32;
-    let mant = bits & 0x7FFFFF;
-
-    if exp == 0 {
-        // Zero or subnormal f32 -> zero in f16
-        sign << 15
-    } else if exp == 255 {
-        // Inf or NaN
-        if mant == 0 {
-            // Infinity
-            (sign << 15) | 0x7C00
-        } else {
-            // NaN - preserve some mantissa bits
-            (sign << 15) | 0x7C00 | ((mant >> 13) as u16).max(1)
-        }
-    } else {
-        // Normal number
-        let new_exp = exp - 127 + 15;
-        if new_exp >= 31 {
-            // Overflow -> infinity
-            (sign << 15) | 0x7C00
-        } else if new_exp <= 0 {
-            // Underflow -> subnormal or zero
-            if new_exp < -10 {
-                // Too small -> zero
-                sign << 15
-            } else {
-                // Subnormal
-                let m = (mant | 0x800000) >> (1 - new_exp + 13);
-                (sign << 15) | (m as u16)
-            }
-        } else {
-            // Normal f16
-            let f16_mant = (mant >> 13) as u16;
-            (sign << 15) | ((new_exp as u16) << 10) | f16_mant
-        }
-    }
-}
 
 #[derive(Clone, Copy, Debug)]
 pub struct ScalarDescriptor;
@@ -295,12 +215,12 @@ unsafe impl F32SimdVec for f32 {
 
     #[inline(always)]
     fn load_f16_bits(_d: Self::Descriptor, mem: &[u16]) -> Self {
-        f16_to_f32(mem[0])
+        f16::from_bits(mem[0]).to_f32()
     }
 
     #[inline(always)]
     fn store_f16(self, dest: &mut [u16]) {
-        dest[0] = f32_to_f16(self);
+        dest[0] = f16::from_f32(self).to_bits();
     }
 
     impl_f32_array_interface!();
