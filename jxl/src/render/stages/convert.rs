@@ -208,6 +208,7 @@ fn int_to_float(input: &[i32], output: &mut [f32], bit_depth: &BitDepth) {
 }
 
 // Generic scalar conversion for arbitrary bit-depth floats
+// TODO: SIMD optimization for custom float formats
 fn int_to_float_generic(input: &[i32], output: &mut [f32], bits: u32, exp_bits: u32) {
     let exp_bias = (1 << (exp_bits - 1)) - 1;
     let sign_shift = bits - 1;
