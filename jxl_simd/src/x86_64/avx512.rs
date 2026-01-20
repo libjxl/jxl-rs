@@ -746,18 +746,18 @@ unsafe impl F32SimdVec for F32VecAvx512 {
     }
 
     #[inline(always)]
-    fn store_f16(self, dest: &mut [u16]) {
+    fn store_f16_bits(self, dest: &mut [u16]) {
         // AVX512 implies F16C, so we can always use hardware conversion
         #[target_feature(enable = "avx512f")]
         #[inline]
-        fn store_f16_impl(v: __m512, dest: &mut [u16]) {
+        fn store_f16_bits_impl(v: __m512, dest: &mut [u16]) {
             assert!(dest.len() >= F32VecAvx512::LEN);
             let bits = _mm512_cvtps_ph::<{ _MM_FROUND_TO_NEAREST_INT | _MM_FROUND_NO_EXC }>(v);
             // SAFETY: dest.len() >= 16 is checked above
             unsafe { _mm256_storeu_si256(dest.as_mut_ptr() as *mut __m256i, bits) };
         }
         // SAFETY: avx512f is available from the safety invariant on the descriptor
-        unsafe { store_f16_impl(self.0, dest) }
+        unsafe { store_f16_bits_impl(self.0, dest) }
     }
 
     #[inline(always)]

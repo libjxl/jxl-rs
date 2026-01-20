@@ -442,7 +442,7 @@ unsafe impl F32SimdVec for F32VecNeon {
             }
         }
 
-        fn store_f16(this: F32VecNeon, dest: &mut [u16]) {
+        fn store_f16_bits(this: F32VecNeon, dest: &mut [u16]) {
             assert!(dest.len() >= F32VecNeon::LEN);
             // Use inline asm because Rust stdarch incorrectly requires fp16 target feature
             // for vcvt_f16_f32 (fixed in https://github.com/rust-lang/stdarch/pull/1978)

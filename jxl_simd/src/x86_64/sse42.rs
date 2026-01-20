@@ -621,7 +621,7 @@ unsafe impl F32SimdVec for F32VecSse42 {
     }
 
     #[inline(always)]
-    fn store_f16(self, dest: &mut [u16]) {
+    fn store_f16_bits(self, dest: &mut [u16]) {
         assert!(dest.len() >= Self::LEN);
         // SSE4.2 doesn't have F16C, use scalar conversion
         let mut tmp = [0.0f32; 4];

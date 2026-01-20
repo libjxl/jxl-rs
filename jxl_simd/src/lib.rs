@@ -282,7 +282,7 @@ pub unsafe trait F32SimdVec:
     /// Converts f32 values to f16 and stores as u16 bit patterns.
     /// Uses hardware conversion instructions when available (F16C on x86, NEON fp16 on ARM).
     /// Requires `dest.len() >= Self::LEN` or it will panic.
-    fn store_f16(self, dest: &mut [u16]);
+    fn store_f16_bits(self, dest: &mut [u16]);
 }
 
 pub trait I32SimdVec:

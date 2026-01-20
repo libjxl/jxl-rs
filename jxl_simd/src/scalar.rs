@@ -219,7 +219,7 @@ unsafe impl F32SimdVec for f32 {
     }
 
     #[inline(always)]
-    fn store_f16(self, dest: &mut [u16]) {
+    fn store_f16_bits(self, dest: &mut [u16]) {
         dest[0] = f16::from_f32(self).to_bits();
     }
 
