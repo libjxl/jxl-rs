@@ -449,69 +449,6 @@ mod test {
         crate::render::test::test_stage_consistency(|| ConvertF32ToF16Stage::new(0), (500, 500), 1)
     }
 
-    /// Test that modular-to-f32 conversion scale depends on bit depth.
-    ///
-    /// This test verifies the core math that ConvertModularToF32Stage uses:
-    /// - 8-bit:  scale = 1/255,   so max value 255 → 1.0
-    /// - 16-bit: scale = 1/65535, so value 255 → ~0.00389
-    ///
-    /// If the render pipeline passes the wrong bit_depth to ConvertModularToF32Stage
-    /// (e.g., using the image's bit_depth instead of the extra channel's bit_depth),
-    /// the output values would be catastrophically wrong (~257x too small).
-    #[test]
-    fn test_modular_to_f32_bit_depth_matters() {
-        // This tests the same scale calculation used in ConvertModularToF32Stage::process_row_chunk
-        fn conversion_scale(bits: u32) -> f32 {
-            1.0 / ((1u64 << bits) - 1) as f32
-        }
-
-        let scale_8bit = conversion_scale(8);
-        let scale_16bit = conversion_scale(16);
-
-        // Test values
-        let test_values: Vec<i32> = vec![0, 127, 255];
-
-        // 8-bit conversion
-        let results_8bit: Vec<f32> = test_values.iter().map(|&v| v as f32 * scale_8bit).collect();
-
-        assert!(
-            (results_8bit[0] - 0.0).abs() < 1e-6,
-            "8-bit: 0 should convert to 0.0, got {}",
-            results_8bit[0]
-        );
-        assert!(
-            (results_8bit[1] - 0.498).abs() < 0.01,
-            "8-bit: 127 should convert to ~0.498, got {}",
-            results_8bit[1]
-        );
-        assert!(
-            (results_8bit[2] - 1.0).abs() < 1e-6,
-            "8-bit: 255 should convert to 1.0, got {}",
-            results_8bit[2]
-        );
-
-        // 16-bit conversion of same values (demonstrates the bug impact)
-        let results_16bit: Vec<f32> = test_values
-            .iter()
-            .map(|&v| v as f32 * scale_16bit)
-            .collect();
-
-        // With wrong (16-bit) scale, 255 converts to 255/65535 ≈ 0.00389
-        assert!(
-            (results_16bit[2] - 0.00389).abs() < 0.0001,
-            "16-bit scale: 255 should convert to ~0.00389, got {}",
-            results_16bit[2]
-        );
-
-        // CRITICAL: Using wrong bit depth causes ~257x error!
-        let ratio = results_8bit[2] / results_16bit[2];
-        assert!(
-            ratio > 250.0,
-            "Using wrong bit depth causes ~257x error, ratio was {}",
-            ratio
-        );
-    }
-
     /// Test ConvertModularToF32Stage consistency with different bit depths.
     #[test]
     fn modular_to_f32_8bit_consistency() -> Result<()> {
