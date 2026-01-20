@@ -37,17 +37,15 @@ impl ExtendToImageDimensionsStage {
         file_header: &FileHeader,
         reference_frames: Arc<[Option<ReferenceFrame>; 4]>,
     ) -> Result<ExtendToImageDimensionsStage> {
+        let xsize = file_header.size.xsize()? as usize;
         Ok(ExtendToImageDimensionsStage {
             frame_origin: (frame_header.x0 as isize, frame_header.y0 as isize),
-            image_size: (
-                file_header.size.xsize() as usize,
-                file_header.size.ysize() as usize,
-            ),
+            image_size: (xsize, file_header.size.ysize() as usize),
             blending_info: frame_header.blending_info.clone(),
             ec_blending_info: frame_header.ec_blending_info.clone(),
             extra_channels: file_header.image_metadata.extra_channel_info.clone(),
             reference_frames,
-            zeros: vec![0f32; file_header.size.xsize() as usize],
+            zeros: vec![0f32; xsize],
         })
     }
 }

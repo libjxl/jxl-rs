@@ -47,18 +47,17 @@ impl CodestreamParser {
             let mut br = BitReader::new(&self.non_section_buf);
             br.skip_bits(self.non_section_bit_offset as usize)?;
             let file_header = FileHeader::read(&mut br)?;
+            let xsize = file_header.size.xsize()? as usize;
+            let ysize = file_header.size.ysize() as usize;
             check_size_limit(
                 decode_options.pixel_limit,
-                (
-                    file_header.size.xsize() as usize,
-                    file_header.size.ysize() as usize,
-                ),
+                (xsize, ysize),
                 file_header.image_metadata.extra_channel_info.len(),
             )?;
             if let Some(preview) = &file_header.image_metadata.preview {
                 check_size_limit(
                     decode_options.pixel_limit,
-                    (preview.xsize() as usize, preview.ysize() as usize),
+                    (preview.xsize()? as usize, preview.ysize() as usize),
                     file_header.image_metadata.extra_channel_info.len(),
                 )?;
             }
@@ -66,15 +65,9 @@ impl CodestreamParser {
             self.animation = data.animation.clone();
             self.basic_info = Some(JxlBasicInfo {
                 size: if data.orientation.is_transposing() {
-                    (
-                        file_header.size.ysize() as usize,
-                        file_header.size.xsize() as usize,
-                    )
+                    (ysize, xsize)
                 } else {
-                    (
-                        file_header.size.xsize() as usize,
-                        file_header.size.ysize() as usize,
-                    )
+                    (xsize, ysize)
                 },
                 bit_depth: if data.bit_depth.floating_point_sample() {
                     JxlBitDepth::Float {
@@ -114,7 +107,8 @@ impl CodestreamParser {
                 preview_size: data
                     .preview
                     .as_ref()
-                    .map(|p| (p.xsize() as usize, p.ysize() as usize)),
+                    .map(|p| Ok::<_, Error>((p.xsize()? as usize, p.ysize() as usize)))
+                    .transpose()?,
             });
             self.file_header = Some(file_header);
             let bits = br.total_bits_read();
@@ -241,10 +235,10 @@ impl CodestreamParser {
             let nonserialized = if !self.preview_done {
                 decoder_state
                     .file_header
-                    .preview_frame_header_nonserialized()
-                    .unwrap_or_else(|| decoder_state.file_header.frame_header_nonserialized())
+                    .preview_frame_header_nonserialized()?
+                    .unwrap_or(decoder_state.file_header.frame_header_nonserialized()?)
             } else {
-                decoder_state.file_header.frame_header_nonserialized()
+                decoder_state.file_header.frame_header_nonserialized()?
             };
 
             let mut frame_header = FrameHeader::read_unconditional(&(), &mut br, &nonserialized)?;

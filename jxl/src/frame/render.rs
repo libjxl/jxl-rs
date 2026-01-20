@@ -252,7 +252,7 @@ impl Frame {
             frame_header.upsampling.ilog2() as usize,
             frame_header.log_group_dim(),
             frame_header.passes.num_passes as usize,
-        )?;
+        );
 
         if frame_header.encoding == Encoding::Modular {
             if decoder_state.file_header.image_metadata.xyb_encoded {

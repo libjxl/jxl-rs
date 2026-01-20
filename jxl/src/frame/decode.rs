@@ -95,7 +95,7 @@ impl Frame {
 
         let reference_frame_data = if frame_header.can_be_referenced {
             let image_size = &decoder_state.file_header.size;
-            let image_size = (image_size.xsize() as usize, image_size.ysize() as usize);
+            let image_size = (image_size.xsize()? as usize, image_size.ysize() as usize);
             let sz = if frame_header.save_before_ct {
                 frame_header.size_upsampled()
             } else {
