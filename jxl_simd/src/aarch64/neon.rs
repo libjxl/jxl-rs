@@ -689,6 +689,17 @@ impl I32SimdVec for I32VecNeon {
         // SAFETY: We know neon is available from the safety invariant on `self.1`.
         unsafe { Self(vshrq_n_s32::<AMOUNT_I>(self.0), self.1) }
     }
+
+    #[inline(always)]
+    fn store_u16(self, dest: &mut [u16]) {
+        assert!(dest.len() >= Self::LEN);
+        // SAFETY: We know neon is available from the safety invariant on `self.1`.
+        unsafe {
+            // vmovn narrows i32 to i16 by taking the lower 16 bits
+            let narrowed = vmovn_s32(self.0);
+            vst1_u16(dest.as_mut_ptr(), vreinterpret_u16_s16(narrowed));
+        }
+    }
 }
 
 impl Add<I32VecNeon> for I32VecNeon {

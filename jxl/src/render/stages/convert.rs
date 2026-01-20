@@ -141,22 +141,15 @@ simd_function!(
     d: D,
     fn int_to_float_32bit_simd(input: &[i32], output: &mut [f32], xsize: usize) {
         let simd_width = D::I32Vec::LEN;
-        let num_full_chunks = xsize / simd_width;
 
-        // Process full SIMD chunks
+        // Process SIMD vectors using div_ceil (buffers are padded)
         for (in_chunk, out_chunk) in input
             .chunks_exact(simd_width)
             .zip(output.chunks_exact_mut(simd_width))
-            .take(num_full_chunks)
+            .take(xsize.div_ceil(simd_width))
         {
             let val = D::I32Vec::load(d, in_chunk);
             val.bitcast_to_f32().store(out_chunk);
-        }
-
-        // Handle remainder with scalar
-        let remainder_start = num_full_chunks * simd_width;
-        for i in remainder_start..xsize {
-            output[i] = f32::from_bits(input[i] as u32);
         }
     }
 );
@@ -168,30 +161,23 @@ simd_function!(
     d: D,
     fn int_to_float_16bit_simd(input: &[i32], output: &mut [f32], xsize: usize) {
         let simd_width = D::F32Vec::LEN;
-        let num_full_chunks = xsize / simd_width;
 
-        // Temporary buffer for converting i32 -> u16
+        // Temporary buffer for i32->u16 conversion via SIMD
         // Stack-allocated for common SIMD widths (up to 16 elements for AVX-512)
         let mut u16_buf = [0u16; 16];
 
+        // Process SIMD vectors using div_ceil (buffers are padded)
         for (in_chunk, out_chunk) in input
             .chunks_exact(simd_width)
             .zip(output.chunks_exact_mut(simd_width))
-            .take(num_full_chunks)
+            .take(xsize.div_ceil(simd_width))
         {
-            // Convert i32 values to u16 (f16 bit patterns are in lower 16 bits)
-            for (i, &val) in in_chunk.iter().enumerate() {
-                u16_buf[i] = val as u16;
-            }
+            // Use SIMD to extract lower 16 bits from each i32 lane
+            let i32_vec = D::I32Vec::load(d, in_chunk);
+            i32_vec.store_u16(&mut u16_buf[..simd_width]);
             // Use hardware f16->f32 conversion
             let result = D::F32Vec::load_f16_bits(d, &u16_buf[..simd_width]);
             result.store(out_chunk);
-        }
-
-        // Handle remainder with scalar
-        let remainder_start = num_full_chunks * simd_width;
-        for i in remainder_start..xsize {
-            output[i] = jxl_simd::f16::from_bits(input[i] as u16).to_f32();
         }
     }
 );

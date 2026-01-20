@@ -1055,6 +1055,23 @@ impl I32SimdVec for I32VecAvx512 {
         let idx = _mm512_setr_epi32(1, 17, 3, 19, 5, 21, 7, 23, 9, 25, 11, 27, 13, 29, 15, 31);
         I32VecAvx512(_mm512_permutex2var_epi32(l, idx, h), this.1)
     });
+
+    #[inline(always)]
+    fn store_u16(self, dest: &mut [u16]) {
+        assert!(dest.len() >= Self::LEN);
+        #[target_feature(enable = "avx512f")]
+        #[inline]
+        fn store_u16_impl(v: __m512i, dest: &mut [u16]) {
+            let mut tmp = [0i32; 16];
+            // SAFETY: tmp has 16 elements, matching LEN
+            unsafe { _mm512_storeu_si512(tmp.as_mut_ptr() as *mut __m512i, v) };
+            for i in 0..16 {
+                dest[i] = tmp[i] as u16;
+            }
+        }
+        // SAFETY: avx512f is available from the safety invariant on the descriptor.
+        unsafe { store_u16_impl(self.0, dest) }
+    }
 }
 
 impl Add<I32VecAvx512> for I32VecAvx512 {

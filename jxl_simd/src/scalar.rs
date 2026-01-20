@@ -305,6 +305,11 @@ impl I32SimdVec for Wrapping<i32> {
     fn mul_wide_take_high(self, rhs: Self) -> Self {
         Wrapping(((self.0 as i64 * rhs.0 as i64) >> 32) as i32)
     }
+
+    #[inline(always)]
+    fn store_u16(self, dest: &mut [u16]) {
+        dest[0] = self.0 as u16;
+    }
 }
 
 impl U32SimdVec for Wrapping<u32> {

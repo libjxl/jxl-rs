@@ -879,6 +879,23 @@ impl I32SimdVec for I32VecAvx {
         let p1 = _mm256_unpackhi_epi32(l, h);
         I32VecAvx(_mm256_unpackhi_epi64(p0, p1), this.1)
     });
+
+    #[inline(always)]
+    fn store_u16(self, dest: &mut [u16]) {
+        assert!(dest.len() >= Self::LEN);
+        #[target_feature(enable = "avx2")]
+        #[inline]
+        fn store_u16_impl(v: __m256i, dest: &mut [u16]) {
+            let mut tmp = [0i32; 8];
+            // SAFETY: tmp has 8 elements, matching LEN
+            unsafe { _mm256_storeu_si256(tmp.as_mut_ptr() as *mut __m256i, v) };
+            for i in 0..8 {
+                dest[i] = tmp[i] as u16;
+            }
+        }
+        // SAFETY: avx2 is available from the safety invariant on the descriptor.
+        unsafe { store_u16_impl(self.0, dest) }
+    }
 }
 
 impl Add<I32VecAvx> for I32VecAvx {

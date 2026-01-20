@@ -340,6 +340,10 @@ pub trait I32SimdVec:
     fn shr<const AMOUNT_U: u32, const AMOUNT_I: i32>(self) -> Self;
 
     fn mul_wide_take_high(self, rhs: Self) -> Self;
+
+    /// Stores the lower 16 bits of each i32 lane as u16 values.
+    /// Requires `dest.len() >= Self::LEN` or it will panic.
+    fn store_u16(self, dest: &mut [u16]);
 }
 
 pub trait U32SimdVec: Sized + Copy + Debug + Send + Sync {
