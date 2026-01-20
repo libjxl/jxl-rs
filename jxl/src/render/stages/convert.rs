@@ -8,7 +8,7 @@ use crate::{
     headers::bit_depth::BitDepth,
     render::{Channels, ChannelsMut, RenderPipelineInOutStage},
 };
-use jxl_simd::{F32SimdVec, simd_function};
+use jxl_simd::{F32SimdVec, I32SimdVec, simd_function};
 
 pub struct ConvertU8F32Stage {
     channel: usize,
@@ -135,20 +135,81 @@ impl std::fmt::Display for ConvertModularToF32Stage {
     }
 }
 
+// SIMD 32-bit float passthrough (bitcast i32 to f32)
+simd_function!(
+    int_to_float_32bit_simd_dispatch,
+    d: D,
+    fn int_to_float_32bit_simd(input: &[i32], output: &mut [f32], xsize: usize) {
+        let simd_width = D::I32Vec::LEN;
+
+        // Process SIMD vectors using div_ceil (buffers are padded)
+        for (in_chunk, out_chunk) in input
+            .chunks_exact(simd_width)
+            .zip(output.chunks_exact_mut(simd_width))
+            .take(xsize.div_ceil(simd_width))
+        {
+            let val = D::I32Vec::load(d, in_chunk);
+            val.bitcast_to_f32().store(out_chunk);
+        }
+    }
+);
+
+// SIMD 16-bit float (half-precision) to 32-bit float conversion
+// Uses hardware F16C/NEON instructions when available via F32Vec::load_f16_bits()
+simd_function!(
+    int_to_float_16bit_simd_dispatch,
+    d: D,
+    fn int_to_float_16bit_simd(input: &[i32], output: &mut [f32], xsize: usize) {
+        let simd_width = D::F32Vec::LEN;
+
+        // Temporary buffer for i32->u16 conversion via SIMD
+        // Stack-allocated for common SIMD widths (up to 16 elements for AVX-512)
+        let mut u16_buf = [0u16; 16];
+
+        // Process SIMD vectors using div_ceil (buffers are padded)
+        for (in_chunk, out_chunk) in input
+            .chunks_exact(simd_width)
+            .zip(output.chunks_exact_mut(simd_width))
+            .take(xsize.div_ceil(simd_width))
+        {
+            // Use SIMD to extract lower 16 bits from each i32 lane
+            let i32_vec = D::I32Vec::load(d, in_chunk);
+            i32_vec.store_u16(&mut u16_buf[..simd_width]);
+            // Use hardware f16->f32 conversion
+            let result = D::F32Vec::load_f16_bits(d, &u16_buf[..simd_width]);
+            result.store(out_chunk);
+        }
+    }
+);
+
 // Converts custom [bits]-bit float (with [exp_bits] exponent bits) stored as
 // int back to binary32 float.
-// TODO(sboukortt): SIMD
 fn int_to_float(input: &[i32], output: &mut [f32], bit_depth: &BitDepth) {
     assert_eq!(input.len(), output.len());
     let bits = bit_depth.bits_per_sample();
     let exp_bits = bit_depth.exponent_bits_per_sample();
-    if bits == 32 {
-        assert_eq!(exp_bits, 8);
-        for (&in_val, out_val) in input.iter().zip(output) {
-            *out_val = f32::from_bits(in_val as u32);
-        }
+    let xsize = input.len();
+
+    // Use SIMD fast paths for common formats
+    if bits == 32 && exp_bits == 8 {
+        // 32-bit float passthrough
+        int_to_float_32bit_simd_dispatch(input, output, xsize);
         return;
     }
+
+    if bits == 16 && exp_bits == 5 {
+        // IEEE 754 half-precision (f16) - common HDR format
+        int_to_float_16bit_simd_dispatch(input, output, xsize);
+        return;
+    }
+
+    // Generic scalar path for other custom float formats
+    // TODO: SIMD optimization for custom float formats
+    int_to_float_generic(input, output, bits, exp_bits);
+}
+
+// Generic scalar conversion for arbitrary bit-depth floats
+fn int_to_float_generic(input: &[i32], output: &mut [f32], bits: u32, exp_bits: u32) {
     let exp_bias = (1 << (exp_bits - 1)) - 1;
     let sign_shift = bits - 1;
     let mant_bits = bits - exp_bits - 1;

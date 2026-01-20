@@ -12,7 +12,7 @@ use std::{
     },
 };
 
-use crate::U32SimdVec;
+use crate::{F16, U32SimdVec};
 
 use super::super::{F32SimdVec, I32SimdVec, SimdDescriptor, SimdMask};
 
@@ -499,6 +499,31 @@ unsafe impl F32SimdVec for F32VecNeon {
         // SAFETY: neon is available from the safety invariant on the descriptor
         F32VecNeon(unsafe { lookup_impl(table.0, indices.0) }, d)
     }
+
+    #[inline(always)]
+    fn load_f16_bits(d: Self::Descriptor, mem: &[u16]) -> Self {
+        assert!(mem.len() >= Self::LEN);
+        // Use software conversion (NEON FP16 is a separate extension not guaranteed)
+        let f0 = F16::from_bits(mem[0]).to_f32();
+        let f1 = F16::from_bits(mem[1]).to_f32();
+        let f2 = F16::from_bits(mem[2]).to_f32();
+        let f3 = F16::from_bits(mem[3]).to_f32();
+        let buf = [f0, f1, f2, f3];
+        // SAFETY: neon is available from the safety invariant on d
+        Self(unsafe { vld1q_f32(buf.as_ptr()) }, d)
+    }
+
+    #[inline(always)]
+    fn store_f16(&self, mem: &mut [u16]) {
+        assert!(mem.len() >= Self::LEN);
+        // Use software conversion
+        let mut buf = [0.0f32; Self::LEN];
+        self.store(&mut buf);
+        mem[0] = F16::from_f32(buf[0]).to_bits();
+        mem[1] = F16::from_f32(buf[1]).to_bits();
+        mem[2] = F16::from_f32(buf[2]).to_bits();
+        mem[3] = F16::from_f32(buf[3]).to_bits();
+    }
 }
 
 impl Add<F32VecNeon> for F32VecNeon {
@@ -652,6 +677,24 @@ impl I32SimdVec for I32VecNeon {
     fn shr<const AMOUNT_U: u32, const AMOUNT_I: i32>(self) -> Self {
         // SAFETY: We know neon is available from the safety invariant on `self.1`.
         unsafe { Self(vshrq_n_s32::<AMOUNT_I>(self.0), self.1) }
+    }
+
+    #[inline(always)]
+    fn store_u16(&self, mem: &mut [u16]) {
+        #[target_feature(enable = "neon")]
+        #[inline]
+        fn store_u16_impl(v: int32x4_t, mem: &mut [u16]) {
+            assert!(mem.len() >= I32VecNeon::LEN);
+            // Narrow i32 to u16 with unsigned saturation
+            let u16s = vqmovun_s32(v);
+            // Store 4 u16s (8 bytes)
+            // SAFETY: we checked mem has enough space
+            unsafe {
+                vst1_u16(mem.as_mut_ptr(), u16s);
+            }
+        }
+        // SAFETY: neon is available from the safety invariant on self.1
+        unsafe { store_u16_impl(self.0, mem) }
     }
 }
 

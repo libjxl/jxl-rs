@@ -3,7 +3,7 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-use crate::{U32SimdVec, impl_f32_array_interface, x86_64::sse42::Sse42Descriptor};
+use crate::{F16, U32SimdVec, impl_f32_array_interface, x86_64::sse42::Sse42Descriptor};
 
 use super::super::{F32SimdVec, I32SimdVec, SimdDescriptor, SimdMask};
 use std::{
@@ -615,6 +615,38 @@ unsafe impl F32SimdVec for F32VecAvx {
     }
 
     #[inline(always)]
+    fn load_f16_bits(d: Self::Descriptor, mem: &[u16]) -> Self {
+        assert!(mem.len() >= Self::LEN);
+        // Use software conversion (F16C is not guaranteed with AVX2)
+        let f0 = F16::from_bits(mem[0]).to_f32();
+        let f1 = F16::from_bits(mem[1]).to_f32();
+        let f2 = F16::from_bits(mem[2]).to_f32();
+        let f3 = F16::from_bits(mem[3]).to_f32();
+        let f4 = F16::from_bits(mem[4]).to_f32();
+        let f5 = F16::from_bits(mem[5]).to_f32();
+        let f6 = F16::from_bits(mem[6]).to_f32();
+        let f7 = F16::from_bits(mem[7]).to_f32();
+        // SAFETY: avx2 is available from the safety invariant on d
+        Self(unsafe { _mm256_setr_ps(f0, f1, f2, f3, f4, f5, f6, f7) }, d)
+    }
+
+    #[inline(always)]
+    fn store_f16(&self, mem: &mut [u16]) {
+        assert!(mem.len() >= Self::LEN);
+        // Use software conversion (F16C is not guaranteed with AVX2)
+        let mut buf = [0.0f32; Self::LEN];
+        self.store(&mut buf);
+        mem[0] = F16::from_f32(buf[0]).to_bits();
+        mem[1] = F16::from_f32(buf[1]).to_bits();
+        mem[2] = F16::from_f32(buf[2]).to_bits();
+        mem[3] = F16::from_f32(buf[3]).to_bits();
+        mem[4] = F16::from_f32(buf[4]).to_bits();
+        mem[5] = F16::from_f32(buf[5]).to_bits();
+        mem[6] = F16::from_f32(buf[6]).to_bits();
+        mem[7] = F16::from_f32(buf[7]).to_bits();
+    }
+
+    #[inline(always)]
     fn round_store_u8(self, dest: &mut [u8]) {
         #[target_feature(enable = "avx2")]
         #[inline]
@@ -846,6 +878,27 @@ impl I32SimdVec for I32VecAvx {
         let p1 = _mm256_unpackhi_epi32(l, h);
         I32VecAvx(_mm256_unpackhi_epi64(p0, p1), this.1)
     });
+
+    #[inline(always)]
+    fn store_u16(&self, mem: &mut [u16]) {
+        #[target_feature(enable = "avx2")]
+        #[inline]
+        fn store_u16_impl(v: __m256i, mem: &mut [u16]) {
+            assert!(mem.len() >= I32VecAvx::LEN);
+            // Extract 128-bit halves
+            let lo = _mm256_castsi256_si128(v);
+            let hi = _mm256_extracti128_si256::<1>(v);
+            // Pack 4+4 i32s to 8 u16s with unsigned saturation
+            let packed = _mm_packus_epi32(lo, hi);
+            // Store 8 u16s (16 bytes)
+            // SAFETY: we checked mem has enough space
+            unsafe {
+                _mm_storeu_si128(mem.as_mut_ptr() as *mut __m128i, packed);
+            }
+        }
+        // SAFETY: avx2 is available from the safety invariant on self.1
+        unsafe { store_u16_impl(self.0, mem) }
+    }
 }
 
 impl Add<I32VecAvx> for I32VecAvx {

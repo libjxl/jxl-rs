@@ -3,7 +3,7 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-use crate::{U32SimdVec, impl_f32_array_interface};
+use crate::{F16, U32SimdVec, impl_f32_array_interface};
 
 use super::super::{F32SimdVec, I32SimdVec, SimdDescriptor, SimdMask};
 use std::{
@@ -562,6 +562,30 @@ unsafe impl F32SimdVec for F32VecSse42 {
     }
 
     #[inline(always)]
+    fn load_f16_bits(d: Self::Descriptor, mem: &[u16]) -> Self {
+        assert!(mem.len() >= Self::LEN);
+        // SSE4.2 doesn't have F16C, use software conversion
+        let f0 = F16::from_bits(mem[0]).to_f32();
+        let f1 = F16::from_bits(mem[1]).to_f32();
+        let f2 = F16::from_bits(mem[2]).to_f32();
+        let f3 = F16::from_bits(mem[3]).to_f32();
+        // SAFETY: sse4.2 is available from the safety invariant on d
+        Self(unsafe { _mm_setr_ps(f0, f1, f2, f3) }, d)
+    }
+
+    #[inline(always)]
+    fn store_f16(&self, mem: &mut [u16]) {
+        assert!(mem.len() >= Self::LEN);
+        // SSE4.2 doesn't have F16C, use software conversion
+        let mut buf = [0.0f32; Self::LEN];
+        self.store(&mut buf);
+        mem[0] = F16::from_f32(buf[0]).to_bits();
+        mem[1] = F16::from_f32(buf[1]).to_bits();
+        mem[2] = F16::from_f32(buf[2]).to_bits();
+        mem[3] = F16::from_f32(buf[3]).to_bits();
+    }
+
+    #[inline(always)]
     fn round_store_u8(self, dest: &mut [u8]) {
         #[target_feature(enable = "sse4.2")]
         #[inline]
@@ -789,6 +813,24 @@ impl I32SimdVec for I32VecSse42 {
         let p1 = _mm_unpackhi_epi32(l, h);
         I32VecSse42(_mm_unpackhi_epi64(p0, p1), this.1)
     });
+
+    #[inline(always)]
+    fn store_u16(&self, mem: &mut [u16]) {
+        #[target_feature(enable = "sse4.2")]
+        #[inline]
+        fn store_u16_impl(v: __m128i, mem: &mut [u16]) {
+            assert!(mem.len() >= I32VecSse42::LEN);
+            // Pack i32 to u16, taking lower 16 bits (with unsigned saturation, but our values fit)
+            let packed = _mm_packus_epi32(v, v);
+            // Store lower 8 bytes (4 u16s)
+            // SAFETY: we checked mem has enough space
+            unsafe {
+                _mm_storel_epi64(mem.as_mut_ptr() as *mut __m128i, packed);
+            }
+        }
+        // SAFETY: sse4.2 is available from the safety invariant on self.1
+        unsafe { store_u16_impl(self.0, mem) }
+    }
 }
 
 impl Add<I32VecSse42> for I32VecSse42 {

@@ -4,7 +4,7 @@
 // license that can be found in the LICENSE file.
 
 use super::super::{AvxDescriptor, F32SimdVec, I32SimdVec, SimdDescriptor, SimdMask};
-use crate::{Sse42Descriptor, U32SimdVec, impl_f32_array_interface};
+use crate::{F16, Sse42Descriptor, U32SimdVec, impl_f32_array_interface};
 use std::{
     arch::x86_64::*,
     mem::MaybeUninit,
@@ -685,6 +685,29 @@ unsafe impl F32SimdVec for F32VecAvx512 {
     }
 
     #[inline(always)]
+    fn load_f16_bits(d: Self::Descriptor, mem: &[u16]) -> Self {
+        assert!(mem.len() >= Self::LEN);
+        // Use software conversion (F16C only converts 8 at a time, AVX-512 FP16 is a separate extension)
+        let mut buf = [0.0f32; Self::LEN];
+        for i in 0..Self::LEN {
+            buf[i] = F16::from_bits(mem[i]).to_f32();
+        }
+        // SAFETY: avx512f is available from the safety invariant on d
+        Self(unsafe { _mm512_loadu_ps(buf.as_ptr()) }, d)
+    }
+
+    #[inline(always)]
+    fn store_f16(&self, mem: &mut [u16]) {
+        assert!(mem.len() >= Self::LEN);
+        // Use software conversion
+        let mut buf = [0.0f32; Self::LEN];
+        self.store(&mut buf);
+        for i in 0..Self::LEN {
+            mem[i] = F16::from_f32(buf[i]).to_bits();
+        }
+    }
+
+    #[inline(always)]
     fn round_store_u8(self, dest: &mut [u8]) {
         #[target_feature(enable = "avx512f", enable = "avx512bw")]
         #[inline]
@@ -1025,6 +1048,24 @@ impl I32SimdVec for I32VecAvx512 {
         let idx = _mm512_setr_epi32(1, 17, 3, 19, 5, 21, 7, 23, 9, 25, 11, 27, 13, 29, 15, 31);
         I32VecAvx512(_mm512_permutex2var_epi32(l, idx, h), this.1)
     });
+
+    #[inline(always)]
+    fn store_u16(&self, mem: &mut [u16]) {
+        #[target_feature(enable = "avx512f", enable = "avx512bw")]
+        #[inline]
+        fn store_u16_impl(v: __m512i, mem: &mut [u16]) {
+            assert!(mem.len() >= I32VecAvx512::LEN);
+            // Use pmovusdw: saturating conversion from 32-bit to 16-bit unsigned
+            let u16s = _mm512_cvtusepi32_epi16(v);
+            // Store 16 u16s (32 bytes)
+            // SAFETY: we checked mem has enough space
+            unsafe {
+                _mm256_storeu_si256(mem.as_mut_ptr() as *mut __m256i, u16s);
+            }
+        }
+        // SAFETY: avx512f and avx512bw are available from the safety invariant on self.1
+        unsafe { store_u16_impl(self.0, mem) }
+    }
 }
 
 impl Add<I32VecAvx512> for I32VecAvx512 {

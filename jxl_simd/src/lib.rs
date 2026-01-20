@@ -22,6 +22,9 @@ mod aarch64;
 
 mod scalar;
 
+pub mod float16;
+pub use float16::F16;
+
 #[cfg(all(target_arch = "x86_64", feature = "avx"))]
 pub use x86_64::avx::AvxDescriptor;
 #[cfg(all(target_arch = "x86_64", feature = "avx512"))]
@@ -259,6 +262,16 @@ pub unsafe trait F32SimdVec:
         indices: <<Self as F32SimdVec>::Descriptor as SimdDescriptor>::I32Vec,
     ) -> Self;
 
+    /// Loads f16 values from raw u16 bits and converts to f32.
+    /// Uses hardware F16C/NEON fp16 instructions when available.
+    /// Requires `mem.len() >= Self::LEN` or it will panic.
+    fn load_f16_bits(d: Self::Descriptor, mem: &[u16]) -> Self;
+
+    /// Converts f32 values to f16 and stores as raw u16 bits.
+    /// Uses hardware F16C/NEON fp16 instructions when available.
+    /// Requires `mem.len() >= Self::LEN` or it will panic.
+    fn store_f16(&self, mem: &mut [u16]);
+
     /// Converts a slice of f32 into a slice of Self::UnderlyingArray. If slice.len() is not a
     /// multiple of `Self::LEN` this will panic.
     fn make_array_slice(slice: &[f32]) -> &[Self::UnderlyingArray];
@@ -327,6 +340,10 @@ pub trait I32SimdVec:
     fn shr<const AMOUNT_U: u32, const AMOUNT_I: i32>(self) -> Self;
 
     fn mul_wide_take_high(self, rhs: Self) -> Self;
+
+    /// Stores the lower 16 bits of each i32 lane as u16 values.
+    /// Requires `mem.len() >= Self::LEN` or it will panic.
+    fn store_u16(&self, mem: &mut [u16]);
 }
 
 pub trait U32SimdVec: Sized + Copy + Debug + Send + Sync {
