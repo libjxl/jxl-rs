@@ -228,7 +228,7 @@ pub fn read_headers_and_toc(image: &[u8]) -> Result<(FileHeader, FrameHeader, To
     let file_header = FileHeader::read(&mut br)?;
 
     let frame_header =
-        FrameHeader::read_unconditional(&(), &mut br, &file_header.frame_header_nonserialized()?)?;
+        FrameHeader::read_unconditional(&(), &mut br, &file_header.frame_header_nonserialized())?;
     let num_toc_entries = frame_header.num_toc_entries();
     let toc = Toc::read_unconditional(
         &(),

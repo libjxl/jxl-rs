@@ -50,7 +50,7 @@ impl BlendingStage {
         file_header: &FileHeader,
         reference_frames: Arc<[Option<ReferenceFrame>; 4]>,
     ) -> Result<BlendingStage> {
-        let xsize = file_header.size.xsize()?;
+        let xsize = file_header.size.xsize();
         Ok(BlendingStage {
             frame_origin: (frame_header.x0 as isize, frame_header.y0 as isize),
             image_size: (xsize as isize, file_header.size.ysize() as isize),

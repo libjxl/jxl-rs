@@ -3,7 +3,11 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-use crate::{bit_reader::BitReader, error::Error, headers::encodings::*};
+use crate::{
+    bit_reader::BitReader,
+    error::Error,
+    headers::encodings::{self, *},
+};
 use jxl_macros::UnconditionalCoder;
 use num_derive::FromPrimitive;
 
@@ -21,6 +25,7 @@ enum AspectRatio {
 }
 
 #[derive(UnconditionalCoder, Debug, Clone, Default)]
+#[validate]
 pub struct Size {
     small: bool,
     #[condition(small)]
@@ -40,6 +45,7 @@ pub struct Size {
 }
 
 #[derive(UnconditionalCoder, Debug, Clone)]
+#[validate]
 pub struct Preview {
     div8: bool,
     #[condition(div8)]
@@ -80,7 +86,7 @@ impl Size {
         }
     }
 
-    pub fn xsize(&self) -> Result<u32, Error> {
+    fn compute_xsize(&self) -> Result<u32, Error> {
         let x = map_aspect_ratio(self.ysize(), self.ratio, /* fallback */ || {
             if self.small {
                 self.xsize_div8.unwrap() as u64 * 8
@@ -89,6 +95,17 @@ impl Size {
             }
         });
         u32::try_from(x).map_err(|_| Error::ImageDimensionTooLarge(x))
+    }
+
+    fn check(&self, _: &encodings::Empty) -> Result<(), Error> {
+        self.compute_xsize()?;
+        Ok(())
+    }
+
+    pub fn xsize(&self) -> u32 {
+        // Validation happens during struct decoding via #[validate].
+        // If we reach here, compute_xsize() is guaranteed to succeed.
+        self.compute_xsize().unwrap()
     }
 }
 
@@ -101,7 +118,7 @@ impl Preview {
         }
     }
 
-    pub fn xsize(&self) -> Result<u32, Error> {
+    fn compute_xsize(&self) -> Result<u32, Error> {
         let x = map_aspect_ratio(self.ysize(), self.ratio, /* fallback */ || {
             if self.div8 {
                 self.xsize_div8.unwrap() as u64 * 8
@@ -110,5 +127,16 @@ impl Preview {
             }
         });
         u32::try_from(x).map_err(|_| Error::ImageDimensionTooLarge(x))
+    }
+
+    fn check(&self, _: &encodings::Empty) -> Result<(), Error> {
+        self.compute_xsize()?;
+        Ok(())
+    }
+
+    pub fn xsize(&self) -> u32 {
+        // Validation happens during struct decoding via #[validate].
+        // If we reach here, compute_xsize() is guaranteed to succeed.
+        self.compute_xsize().unwrap()
     }
 }

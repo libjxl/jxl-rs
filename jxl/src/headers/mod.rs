@@ -51,21 +51,13 @@ where
 }
 
 impl FileHeader {
-    pub fn frame_header_nonserialized(&self) -> Result<FrameHeaderNonserialized, Error> {
-        Ok(self.frame_header_nonserialized_with_size(self.size.xsize()?, self.size.ysize()))
+    pub fn frame_header_nonserialized(&self) -> FrameHeaderNonserialized {
+        self.frame_header_nonserialized_with_size(self.size.xsize(), self.size.ysize())
     }
 
-    pub fn preview_frame_header_nonserialized(
-        &self,
-    ) -> Result<Option<FrameHeaderNonserialized>, Error> {
-        let preview = match self.image_metadata.preview.as_ref() {
-            Some(p) => p,
-            None => return Ok(None),
-        };
-        Ok(Some(self.frame_header_nonserialized_with_size(
-            preview.xsize()?,
-            preview.ysize(),
-        )))
+    pub fn preview_frame_header_nonserialized(&self) -> Option<FrameHeaderNonserialized> {
+        let preview = self.image_metadata.preview.as_ref()?;
+        Some(self.frame_header_nonserialized_with_size(preview.xsize(), preview.ysize()))
     }
 
     fn frame_header_nonserialized_with_size(

@@ -37,7 +37,7 @@ impl ExtendToImageDimensionsStage {
         file_header: &FileHeader,
         reference_frames: Arc<[Option<ReferenceFrame>; 4]>,
     ) -> Result<ExtendToImageDimensionsStage> {
-        let xsize = file_header.size.xsize()? as usize;
+        let xsize = file_header.size.xsize() as usize;
         Ok(ExtendToImageDimensionsStage {
             frame_origin: (frame_header.x0 as isize, frame_header.y0 as isize),
             image_size: (xsize, file_header.size.ysize() as usize),

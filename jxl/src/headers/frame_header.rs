@@ -812,7 +812,7 @@ mod test_frame_header {
         let (file_header, mut frame_header, _) =
             read_headers_and_toc(include_bytes!("../../resources/test/extra_channels.jxl"))
                 .unwrap();
-        let nonserialized = file_header.frame_header_nonserialized().unwrap();
+        let nonserialized = file_header.frame_header_nonserialized();
         frame_header.blending_info.mode = BlendingMode::Blend;
         frame_header.blending_info.alpha_channel = nonserialized.extra_channel_info.len() as u32;
 
