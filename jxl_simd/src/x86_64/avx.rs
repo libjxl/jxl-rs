@@ -673,12 +673,12 @@ unsafe impl F32SimdVec for F32VecAvx {
 
     #[inline(always)]
     fn load_f16_bits(d: Self::Descriptor, mem: &[u16]) -> Self {
-        assert!(mem.len() >= Self::LEN);
         // f16c is guaranteed by the safety invariant on AvxDescriptor
         #[target_feature(enable = "avx2,f16c")]
         #[inline]
         fn load_f16_impl(d: AvxDescriptor, mem: &[u16]) -> F32VecAvx {
-            // SAFETY: mem.len() >= 8 is checked by caller
+            assert!(mem.len() >= F32VecAvx::LEN);
+            // SAFETY: mem.len() >= 8 is checked above
             let bits = unsafe { _mm_loadu_si128(mem.as_ptr() as *const __m128i) };
             F32VecAvx(_mm256_cvtph_ps(bits), d)
         }
@@ -688,13 +688,13 @@ unsafe impl F32SimdVec for F32VecAvx {
 
     #[inline(always)]
     fn store_f16(self, dest: &mut [u16]) {
-        assert!(dest.len() >= Self::LEN);
         // f16c is guaranteed by the safety invariant on AvxDescriptor
         #[target_feature(enable = "avx2,f16c")]
         #[inline]
         fn store_f16_impl(v: __m256, dest: &mut [u16]) {
+            assert!(dest.len() >= F32VecAvx::LEN);
             let bits = _mm256_cvtps_ph::<{ _MM_FROUND_TO_NEAREST_INT | _MM_FROUND_NO_EXC }>(v);
-            // SAFETY: dest.len() >= 8 is checked by caller
+            // SAFETY: dest.len() >= 8 is checked above
             unsafe { _mm_storeu_si128(dest.as_mut_ptr() as *mut __m128i, bits) };
         }
         // SAFETY: f16c is available from the safety invariant on the descriptor
