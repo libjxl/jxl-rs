@@ -327,14 +327,6 @@ pub trait I32SimdVec:
     fn shr<const AMOUNT_U: u32, const AMOUNT_I: i32>(self) -> Self;
 
     fn mul_wide_take_high(self, rhs: Self) -> Self;
-
-    /// Wrapping (modular) addition. Computes `self + rhs`, wrapping around at the boundary
-    /// of the type instead of panicking on overflow.
-    fn wrapping_add(self, rhs: Self) -> Self;
-
-    /// Wrapping (modular) subtraction. Computes `self - rhs`, wrapping around at the boundary
-    /// of the type instead of panicking on overflow.
-    fn wrapping_sub(self, rhs: Self) -> Self;
 }
 
 pub trait U32SimdVec: Sized + Copy + Debug + Send + Sync {

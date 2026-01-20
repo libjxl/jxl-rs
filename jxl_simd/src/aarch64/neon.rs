@@ -653,18 +653,6 @@ impl I32SimdVec for I32VecNeon {
         // SAFETY: We know neon is available from the safety invariant on `self.1`.
         unsafe { Self(vshrq_n_s32::<AMOUNT_I>(self.0), self.1) }
     }
-
-    fn_neon! {
-        fn wrapping_add(this: I32VecNeon, rhs: I32VecNeon) -> I32VecNeon {
-            // SIMD integer addition is inherently wrapping
-            I32VecNeon(vaddq_s32(this.0, rhs.0), this.1)
-        }
-
-        fn wrapping_sub(this: I32VecNeon, rhs: I32VecNeon) -> I32VecNeon {
-            // SIMD integer subtraction is inherently wrapping
-            I32VecNeon(vsubq_s32(this.0, rhs.0), this.1)
-        }
-    }
 }
 
 impl Add<I32VecNeon> for I32VecNeon {

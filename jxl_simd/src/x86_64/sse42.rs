@@ -789,16 +789,6 @@ impl I32SimdVec for I32VecSse42 {
         let p1 = _mm_unpackhi_epi32(l, h);
         I32VecSse42(_mm_unpackhi_epi64(p0, p1), this.1)
     });
-
-    fn_sse42!(this: I32VecSse42, fn wrapping_add(rhs: I32VecSse42) -> I32VecSse42 {
-        // SIMD integer addition is inherently wrapping
-        I32VecSse42(_mm_add_epi32(this.0, rhs.0), this.1)
-    });
-
-    fn_sse42!(this: I32VecSse42, fn wrapping_sub(rhs: I32VecSse42) -> I32VecSse42 {
-        // SIMD integer subtraction is inherently wrapping
-        I32VecSse42(_mm_sub_epi32(this.0, rhs.0), this.1)
-    });
 }
 
 impl Add<I32VecSse42> for I32VecSse42 {

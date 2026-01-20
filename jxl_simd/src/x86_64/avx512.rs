@@ -1025,16 +1025,6 @@ impl I32SimdVec for I32VecAvx512 {
         let idx = _mm512_setr_epi32(1, 17, 3, 19, 5, 21, 7, 23, 9, 25, 11, 27, 13, 29, 15, 31);
         I32VecAvx512(_mm512_permutex2var_epi32(l, idx, h), this.1)
     });
-
-    fn_avx!(this: I32VecAvx512, fn wrapping_add(rhs: I32VecAvx512) -> I32VecAvx512 {
-        // SIMD integer addition is inherently wrapping
-        I32VecAvx512(_mm512_add_epi32(this.0, rhs.0), this.1)
-    });
-
-    fn_avx!(this: I32VecAvx512, fn wrapping_sub(rhs: I32VecAvx512) -> I32VecAvx512 {
-        // SIMD integer subtraction is inherently wrapping
-        I32VecAvx512(_mm512_sub_epi32(this.0, rhs.0), this.1)
-    });
 }
 
 impl Add<I32VecAvx512> for I32VecAvx512 {
