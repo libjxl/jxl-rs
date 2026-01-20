@@ -142,14 +142,19 @@ simd_function!(
     fn int_to_float_32bit_simd(input: &[i32], output: &mut [f32], xsize: usize) {
         let simd_width = D::I32Vec::LEN;
 
-        // Process SIMD vectors using div_ceil (buffers are padded)
+        // Process complete SIMD vectors
         for (in_chunk, out_chunk) in input
             .chunks_exact(simd_width)
             .zip(output.chunks_exact_mut(simd_width))
-            .take(xsize.div_ceil(simd_width))
         {
             let val = D::I32Vec::load(d, in_chunk);
             val.bitcast_to_f32().store(out_chunk);
+        }
+
+        // Handle remainder with scalar fallback
+        let processed = (xsize / simd_width) * simd_width;
+        for i in processed..xsize {
+            output[i] = f32::from_bits(input[i] as u32);
         }
     }
 );
@@ -163,14 +168,15 @@ simd_function!(
         let simd_width = D::F32Vec::LEN;
 
         // Temporary buffer for i32->u16 conversion via SIMD
-        // Stack-allocated for common SIMD widths (up to 16 elements for AVX-512)
+        // Note: Using constant 16 (max AVX-512 width) because D::F32Vec::LEN
+        // cannot be used as array size in Rust (const generics limitation)
+        const { assert!(D::F32Vec::LEN <= 16) }
         let mut u16_buf = [0u16; 16];
 
-        // Process SIMD vectors using div_ceil (buffers are padded)
+        // Process complete SIMD vectors
         for (in_chunk, out_chunk) in input
             .chunks_exact(simd_width)
             .zip(output.chunks_exact_mut(simd_width))
-            .take(xsize.div_ceil(simd_width))
         {
             // Use SIMD to extract lower 16 bits from each i32 lane
             let i32_vec = D::I32Vec::load(d, in_chunk);
@@ -178,6 +184,12 @@ simd_function!(
             // Use hardware f16->f32 conversion
             let result = D::F32Vec::load_f16_bits(d, &u16_buf[..simd_width]);
             result.store(out_chunk);
+        }
+
+        // Handle remainder with scalar f16 conversion
+        let processed = (xsize / simd_width) * simd_width;
+        for i in processed..xsize {
+            output[i] = jxl_simd::f16::from_bits(input[i] as u16).to_f32();
         }
     }
 );
