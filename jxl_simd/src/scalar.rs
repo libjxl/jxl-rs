@@ -4,6 +4,7 @@
 // license that can be found in the LICENSE file.
 
 use std::mem::MaybeUninit;
+use std::num::Wrapping;
 
 use crate::{U32SimdVec, impl_f32_array_interface};
 
@@ -14,8 +15,8 @@ pub struct ScalarDescriptor;
 
 impl SimdDescriptor for ScalarDescriptor {
     type F32Vec = f32;
-    type I32Vec = i32;
-    type U32Vec = u32;
+    type I32Vec = Wrapping<i32>;
+    type U32Vec = Wrapping<u32>;
     type Mask = bool;
     type Bf16Table8 = [f32; 8];
 
@@ -182,13 +183,13 @@ unsafe impl F32SimdVec for f32 {
     }
 
     #[inline(always)]
-    fn as_i32(self) -> i32 {
-        self as i32
+    fn as_i32(self) -> Wrapping<i32> {
+        Wrapping(self as i32)
     }
 
     #[inline(always)]
-    fn bitcast_to_i32(self) -> i32 {
-        self.to_bits() as i32
+    fn bitcast_to_i32(self) -> Wrapping<i32> {
+        Wrapping(self.to_bits() as i32)
     }
 
     #[inline(always)]
@@ -198,8 +199,8 @@ unsafe impl F32SimdVec for f32 {
     }
 
     #[inline(always)]
-    fn table_lookup_bf16_8(_d: Self::Descriptor, table: [f32; 8], indices: i32) -> Self {
-        table[indices as usize]
+    fn table_lookup_bf16_8(_d: Self::Descriptor, table: [f32; 8], indices: Wrapping<i32>) -> Self {
+        table[indices.0 as usize]
     }
 
     #[inline(always)]
@@ -220,95 +221,95 @@ unsafe impl F32SimdVec for f32 {
     }
 }
 
-impl I32SimdVec for i32 {
+impl I32SimdVec for Wrapping<i32> {
     type Descriptor = ScalarDescriptor;
 
     const LEN: usize = 1;
 
     #[inline(always)]
     fn splat(_d: Self::Descriptor, v: i32) -> Self {
-        v
+        Wrapping(v)
     }
 
     #[inline(always)]
     fn load(_d: Self::Descriptor, mem: &[i32]) -> Self {
-        mem[0]
+        Wrapping(mem[0])
     }
 
     #[inline(always)]
     fn store(&self, mem: &mut [i32]) {
-        mem[0] = *self;
+        mem[0] = self.0;
     }
 
     #[inline(always)]
     fn abs(self) -> Self {
-        self.abs()
+        Wrapping(self.0.abs())
     }
 
     #[inline(always)]
     fn as_f32(self) -> f32 {
-        self as f32
+        self.0 as f32
     }
 
     #[inline(always)]
     fn bitcast_to_f32(self) -> f32 {
-        f32::from_bits(self as u32)
+        f32::from_bits(self.0 as u32)
     }
 
     #[inline(always)]
-    fn bitcast_to_u32(self) -> u32 {
-        self as u32
+    fn bitcast_to_u32(self) -> Wrapping<u32> {
+        Wrapping(self.0 as u32)
     }
 
     #[inline(always)]
     fn gt(self, other: Self) -> bool {
-        self > other
+        self.0 > other.0
     }
 
     #[inline(always)]
     fn lt_zero(self) -> bool {
-        self < 0
+        self.0 < 0
     }
 
     #[inline(always)]
     fn eq(self, other: Self) -> bool {
-        self == other
+        self.0 == other.0
     }
 
     #[inline(always)]
     fn eq_zero(self) -> bool {
-        self == 0
+        self.0 == 0
     }
 
     #[inline(always)]
     fn shl<const AMOUNT_U: u32, const AMOUNT_I: i32>(self) -> Self {
-        self << AMOUNT_U
+        Wrapping(self.0 << AMOUNT_U)
     }
 
     #[inline(always)]
     fn shr<const AMOUNT_U: u32, const AMOUNT_I: i32>(self) -> Self {
-        self >> AMOUNT_U
+        Wrapping(self.0 >> AMOUNT_U)
     }
 
     #[inline(always)]
     fn mul_wide_take_high(self, rhs: Self) -> Self {
-        ((self as i64 * rhs as i64) >> 32) as i32
+        Wrapping(((self.0 as i64 * rhs.0 as i64) >> 32) as i32)
     }
 }
 
-impl U32SimdVec for u32 {
+impl U32SimdVec for Wrapping<u32> {
     type Descriptor = ScalarDescriptor;
 
     const LEN: usize = 1;
 
     #[inline(always)]
-    fn bitcast_to_i32(self) -> i32 {
-        self as i32
+    fn bitcast_to_i32(self) -> Wrapping<i32> {
+        Wrapping(self.0 as i32)
     }
 
     #[inline(always)]
     fn shr<const AMOUNT_U: u32, const AMOUNT_I: i32>(self) -> Self {
-        self >> AMOUNT_U
+        Wrapping(self.0 >> AMOUNT_U)
     }
 }
 
@@ -321,13 +322,13 @@ impl SimdMask for bool {
     }
 
     #[inline(always)]
-    fn if_then_else_i32(self, if_true: i32, if_false: i32) -> i32 {
+    fn if_then_else_i32(self, if_true: Wrapping<i32>, if_false: Wrapping<i32>) -> Wrapping<i32> {
         if self { if_true } else { if_false }
     }
 
     #[inline(always)]
-    fn maskz_i32(self, v: i32) -> i32 {
-        if self { 0 } else { v }
+    fn maskz_i32(self, v: Wrapping<i32>) -> Wrapping<i32> {
+        if self { Wrapping(0) } else { v }
     }
 
     #[inline(always)]
