@@ -448,4 +448,23 @@ mod test {
     fn f32_to_f16_consistency() -> Result<()> {
         crate::render::test::test_stage_consistency(|| ConvertF32ToF16Stage::new(0), (500, 500), 1)
     }
+
+    /// Test ConvertModularToF32Stage consistency with different bit depths.
+    #[test]
+    fn modular_to_f32_8bit_consistency() -> Result<()> {
+        crate::render::test::test_stage_consistency(
+            || ConvertModularToF32Stage::new(0, BitDepth::integer_samples(8)),
+            (500, 500),
+            1,
+        )
+    }
+
+    #[test]
+    fn modular_to_f32_16bit_consistency() -> Result<()> {
+        crate::render::test::test_stage_consistency(
+            || ConvertModularToF32Stage::new(0, BitDepth::integer_samples(16)),
+            (500, 500),
+            1,
+        )
+    }
 }
