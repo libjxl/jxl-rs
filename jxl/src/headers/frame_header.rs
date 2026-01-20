@@ -44,6 +44,8 @@ impl Flags {
     pub const SKIP_ADAPTIVE_LF_SMOOTHING: u64 = 0x80;
 }
 
+pub const MAX_NUM_PASSES: usize = 11;
+
 #[derive(UnconditionalCoder, Debug, PartialEq)]
 pub struct Passes {
     #[coder(u2S(1, 2, 3, Bits(3) + 4))]

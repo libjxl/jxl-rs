@@ -74,7 +74,8 @@ fn epf1_process_row_chunk(
         let sigma = get_sigma(d, x + xpos, row_sigma);
         let sad_mul = D::F32Vec::load(d, &sad_mul_storage[x % 8..]);
 
-        if D::F32Vec::splat(d, MIN_SIGMA).gt(sigma).all() {
+        let sigma_mask = D::F32Vec::splat(d, MIN_SIGMA).gt(sigma);
+        if sigma_mask.all() {
             for (input_c, output_c) in input_rows.iter().zip(output_rows.iter_mut()) {
                 D::F32Vec::load(d, &input_c[2][2 + x..]).store(&mut output_c[0][x..]);
             }
@@ -140,7 +141,10 @@ fn epf1_process_row_chunk(
             ] {
                 out = D::F32Vec::load(d, &input_c[row_idx][col_idx..]).mul_add(sads[sad_idx], out);
             }
-            (out * inv_w).store(&mut output_c[0][x..]);
+            out *= inv_w;
+            let p22 = D::F32Vec::load(d, &input_c[2][2 + x..]);
+            let out = sigma_mask.if_then_else_f32(p22, out);
+            out.store(&mut output_c[0][x..]);
         }
     }
 });

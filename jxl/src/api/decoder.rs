@@ -191,7 +191,6 @@ pub(crate) mod tests {
     use crate::api::{JxlDataFormat, JxlDecoderOptions};
     use crate::error::Error;
     use crate::image::{Image, Rect};
-    use crate::util::test::assert_almost_abs_eq_coords;
     use jxl_macros::for_each_test_file;
     use std::path::Path;
 
@@ -375,10 +374,6 @@ pub(crate) mod tests {
                     sb.size(),
                     "Channel {c} in frame {fc} has different sizes",
                 );
-                // TODO(veluca): This check actually succeeds if we disable SIMD.
-                // With SIMD, the exact output of computations in epf.rs appear to depend on the
-                // lane that the computation was done in (???). We should investigate this.
-                // b.as_rect().check_equal(sb.as_rect());
                 let sz = b.size();
                 if false {
                     let f = std::fs::File::create(Path::new("/tmp/").join(format!(
@@ -401,7 +396,11 @@ pub(crate) mod tests {
                 }
                 for y in 0..sz.1 {
                     for x in 0..sz.0 {
-                        assert_almost_abs_eq_coords(b.row(y)[x], sb.row(y)[x], 1e-5, (x, y), c);
+                        assert_eq!(
+                            b.row(y)[x],
+                            sb.row(y)[x],
+                            "Pixels differ at position ({x}, {y}), channel {c}"
+                        );
                     }
                 }
             }
