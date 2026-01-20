@@ -74,6 +74,10 @@ struct Opt {
     #[clap(long, short)]
     num_reps: Option<u32>,
 
+    /// Number of warmup decodes before measuring (only valid with --speedtest).
+    #[clap(long, default_value = "1", requires = "speedtest")]
+    warmup_reps: u32,
+
     ///  If specified, writes the ICC profile of the decoded image
     #[clap(long)]
     icc_out: Option<PathBuf>,
@@ -203,10 +207,24 @@ fn main() -> Result<()> {
     })?;
 
     // Decode to typed output (timing excludes f32 conversion)
-    let typed_output = if reps > 1 {
-        // For multiple repetitions (benchmarking), read into memory to avoid I/O variability
+    // For benchmarking (speedtest or multiple reps), always read into memory to avoid I/O variability
+    let typed_output = if reps > 1 || opt.speedtest {
         let mut input_bytes = Vec::<u8>::new();
         file.read_to_end(&mut input_bytes)?;
+
+        // Warmup decodes for speedtest to ensure CPU caches and branch predictors are hot
+        if opt.speedtest {
+            for _ in 0..opt.warmup_reps {
+                let mut input = input_bytes.as_slice();
+                let _ = dec::decode_frames_with_type(
+                    &mut input,
+                    options(skip_preview),
+                    output_type,
+                    exr_output,
+                )?;
+            }
+        }
+
         (0..reps)
             .try_fold(None, |_, _| -> Result<Option<dec::TypedDecodeOutput>> {
                 let mut input = input_bytes.as_slice();
@@ -233,7 +251,7 @@ fn main() -> Result<()> {
             })?
             .unwrap()
     } else {
-        // For single decode, stream from file
+        // For single decode without speedtest, stream from file
         let mut reader = BufReader::new(file);
         let (mut typed_output, duration) = dec::decode_frames_with_type(
             &mut reader,
