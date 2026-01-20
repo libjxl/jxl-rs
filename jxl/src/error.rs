@@ -126,6 +126,8 @@ pub enum Error {
     ImageOutOfMemory(usize, usize),
     #[error("Image size too large: {0}x{1}")]
     ImageSizeTooLarge(usize, usize),
+    #[error("Image dimension too large: {0}")]
+    ImageDimensionTooLarge(u64),
     #[error("Invalid image size: {0}x{1}")]
     InvalidImageSize(usize, usize),
     // Generic arithmetic overflow. Prefer using other errors if possible.
