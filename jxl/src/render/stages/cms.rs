@@ -44,49 +44,6 @@ pub struct CmsStage {
     output_buffer_size: usize,
 }
 
-/// Wrapper to prevent LLVM from pessimizing unrelated code paths.
-///
-/// Without this wrapper, the mere presence of the dyn trait call causes a ~20% performance
-/// regression in the modular decoder's `process_output` function, even when CMS is never
-/// invoked (no CMS provider configured). The regression appears to be caused by LLVM's
-/// interprocedural analysis of the dyn trait vtable affecting code generation elsewhere.
-///
-/// Things we tried that did NOT fix the regression:
-/// - `#[cold]` on various functions
-/// - `#[inline(never)]` on `process_output` and functions it calls
-/// - `std::hint::black_box` around the transformer
-/// - Moving SIMD code to separate modules/crates
-/// - Returning `()` or `Result<()>` from this wrapper
-///
-/// Things that DO fix the regression:
-/// - `#[inline(never)]` wrapper returning `bool` or `Option<()>` (this solution)
-/// - `extern "C"` ABI boundary
-/// - Global `lto = "thin"` or `codegen-units = 1`
-///
-/// Theory: LLVM's analysis of the dyn trait vtable (even when never executed) influences
-/// register allocation or instruction selection in distant hot paths. Isolating the dyn
-/// call in a non-inlined function with a non-trivial return type creates enough of an
-/// optimization barrier to prevent this cross-function interference.
-#[inline(never)]
-fn call_cms_transform_inplace(
-    transformer: &mut dyn JxlCmsTransformer,
-    buf: &mut [f32],
-) -> Option<()> {
-    transformer.do_transform_inplace(buf).ok()
-}
-
-/// Wrapper for separate-buffer transform to prevent LLVM from pessimizing unrelated code paths.
-///
-/// See `call_cms_transform_inplace` for details on why this wrapper is needed.
-#[inline(never)]
-fn call_cms_transform(
-    transformer: &mut dyn JxlCmsTransformer,
-    input: &[f32],
-    output: &mut [f32],
-) -> Option<()> {
-    transformer.do_transform(input, output).ok()
-}
-
 impl CmsStage {
     /// Creates a new CMS stage.
     ///
@@ -219,7 +176,8 @@ impl RenderPipelineInPlaceStage for CmsStage {
         // Single channel: transform directly in place without interleaving
         if self.in_channels == 1 && self.out_channels == 1 {
             let mut transformer = self.transformers[state.transformer_idx].borrow_mut();
-            call_cms_transform_inplace(&mut **transformer, &mut row[0][..xsize])
+            transformer
+                .do_transform_inplace(&mut row[0][..xsize])
                 .expect("CMS transform failed");
             return;
         }
@@ -261,19 +219,17 @@ impl RenderPipelineInPlaceStage for CmsStage {
         let mut transformer = self.transformers[state.transformer_idx].borrow_mut();
         if same_channels {
             // In-place transform when channel counts match
-            call_cms_transform_inplace(
-                &mut **transformer,
-                &mut state.input_buffer[..xsize * self.in_channels],
-            )
-            .expect("CMS transform failed");
+            transformer
+                .do_transform_inplace(&mut state.input_buffer[..xsize * self.in_channels])
+                .expect("CMS transform failed");
         } else {
             // Separate buffer transform when channel counts differ
-            call_cms_transform(
-                &mut **transformer,
-                &state.input_buffer[..xsize * self.in_channels],
-                &mut state.output_buffer[..xsize * self.out_channels],
-            )
-            .expect("CMS transform failed");
+            transformer
+                .do_transform(
+                    &state.input_buffer[..xsize * self.in_channels],
+                    &mut state.output_buffer[..xsize * self.out_channels],
+                )
+                .expect("CMS transform failed");
         }
 
         // Select source buffer for deinterleaving
