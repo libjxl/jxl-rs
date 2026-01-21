@@ -20,7 +20,10 @@ mod x86_64;
 #[cfg(target_arch = "aarch64")]
 mod aarch64;
 
-mod scalar;
+pub mod float16;
+pub mod scalar;
+
+pub use float16::f16;
 
 #[cfg(all(target_arch = "x86_64", feature = "avx"))]
 pub use x86_64::avx::AvxDescriptor;
@@ -270,6 +273,16 @@ pub unsafe trait F32SimdVec:
     /// Transposes the Self::LEN x Self::LEN matrix formed by array elements
     /// `data[stride * i]` for i = 0..Self::LEN.
     fn transpose_square(d: Self::Descriptor, data: &mut [Self::UnderlyingArray], stride: usize);
+
+    /// Loads f16 values (stored as u16 bit patterns) and converts them to f32.
+    /// Uses hardware conversion instructions when available (F16C on x86, NEON fp16 on ARM).
+    /// Requires `mem.len() >= Self::LEN` or it will panic.
+    fn load_f16_bits(d: Self::Descriptor, mem: &[u16]) -> Self;
+
+    /// Converts f32 values to f16 and stores as u16 bit patterns.
+    /// Uses hardware conversion instructions when available (F16C on x86, NEON fp16 on ARM).
+    /// Requires `dest.len() >= Self::LEN` or it will panic.
+    fn store_f16_bits(self, dest: &mut [u16]);
 }
 
 pub trait I32SimdVec:
@@ -327,6 +340,10 @@ pub trait I32SimdVec:
     fn shr<const AMOUNT_U: u32, const AMOUNT_I: i32>(self) -> Self;
 
     fn mul_wide_take_high(self, rhs: Self) -> Self;
+
+    /// Stores the lower 16 bits of each i32 lane as u16 values.
+    /// Requires `dest.len() >= Self::LEN` or it will panic.
+    fn store_u16(self, dest: &mut [u16]);
 }
 
 pub trait U32SimdVec: Sized + Copy + Debug + Send + Sync {
@@ -1162,4 +1179,40 @@ mod test {
         }
     }
     test_all_instruction_sets!(test_i32_mul_all_elements);
+
+    fn test_store_u16<D: SimdDescriptor>(d: D) {
+        let data = [
+            0xbabau32 as i32,
+            0x1234u32 as i32,
+            0xdeadbabau32 as i32,
+            0xdead1234u32 as i32,
+            0x1111babau32 as i32,
+            0x11111234u32 as i32,
+            0x76543210u32 as i32,
+            0x01234567u32 as i32,
+            0x00000000u32 as i32,
+            0xffffffffu32 as i32,
+            0x23949289u32 as i32,
+            0xf9371913u32 as i32,
+            0xdeadbeefu32 as i32,
+            0xbeefdeadu32 as i32,
+            0xaaaaaaaau32 as i32,
+            0xbbbbbbbbu32 as i32,
+        ];
+        let mut output = [0u16; 16];
+        for i in (0..16).step_by(D::I32Vec::LEN) {
+            let vec = D::I32Vec::load(d, &data[i..]);
+            vec.store_u16(&mut output[i..]);
+        }
+
+        for i in 0..16 {
+            let expected = data[i] as u16;
+            assert_eq!(
+                output[i], expected,
+                "store_u16 failed at index {}: expected {}, got {}",
+                i, expected, output[i]
+            );
+        }
+    }
+    test_all_instruction_sets!(test_store_u16);
 }

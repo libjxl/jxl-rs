@@ -96,13 +96,13 @@ fn transpose_8x8_core(
     (c0, c1, c2, c3, c4, c5, c6, c7)
 }
 
-// Safety invariant: this type is only ever constructed if avx2 and fma are available.
+// Safety invariant: this type is only ever constructed if avx2, fma, and f16c are available.
 #[derive(Clone, Copy, Debug)]
 pub struct AvxDescriptor(());
 
 impl AvxDescriptor {
     /// # Safety
-    /// The caller must guarantee that the "avx2" and "fma" target features are available.
+    /// The caller must guarantee that the "avx2", "fma", and "f16c" target features are available.
     pub unsafe fn new_unchecked() -> Self {
         Self(())
     }
@@ -139,8 +139,11 @@ impl SimdDescriptor for AvxDescriptor {
     }
 
     fn new() -> Option<Self> {
-        if is_x86_feature_detected!("avx2") && is_x86_feature_detected!("fma") {
-            // SAFETY: we just checked avx2 and fma.
+        if is_x86_feature_detected!("avx2")
+            && is_x86_feature_detected!("fma")
+            && is_x86_feature_detected!("f16c")
+        {
+            // SAFETY: we just checked avx2, fma, and f16c.
             Some(unsafe { Self::new_unchecked() })
         } else {
             None
@@ -148,12 +151,12 @@ impl SimdDescriptor for AvxDescriptor {
     }
 
     fn call<R>(self, f: impl FnOnce(Self) -> R) -> R {
-        #[target_feature(enable = "avx2,fma")]
+        #[target_feature(enable = "avx2,fma,f16c")]
         #[inline(never)]
         unsafe fn inner<R>(d: AvxDescriptor, f: impl FnOnce(AvxDescriptor) -> R) -> R {
             f(d)
         }
-        // SAFETY: the safety invariant on `self` guarantees avx2 and fma.
+        // SAFETY: the safety invariant on `self` guarantees avx2, fma, and f16c.
         unsafe { inner(self, f) }
     }
 }
@@ -165,12 +168,12 @@ macro_rules! fn_avx {
         fn $name:ident($($arg:ident: $ty:ty),* $(,)?) $(-> $ret:ty )? $body: block) => {
         #[inline(always)]
         fn $name(self: $self_ty, $($arg: $ty),*) $(-> $ret)? {
-            #[target_feature(enable = "fma,avx2")]
+            #[target_feature(enable = "fma,avx2,f16c")]
             #[inline]
             fn inner($this: $self_ty, $($arg: $ty),*) $(-> $ret)? {
                 $body
             }
-            // SAFETY: `self.1` is constructed iff avx2 and fma are available.
+            // SAFETY: `self.1` is constructed iff avx2, fma, and f16c are available.
             unsafe { inner(self, $($arg),*) }
         }
     };
@@ -604,7 +607,8 @@ unsafe impl F32SimdVec for F32VecAvx {
     #[inline(always)]
     fn prepare_table_bf16_8(_d: AvxDescriptor, table: &[f32; 8]) -> Bf16Table8Avx {
         // For AVX2, vpermps is exact and fast, so we just load the table as-is
-        // SAFETY: avx2 is available from the safety invariant on the descriptor
+        // SAFETY: avx2 is available from the safety invariant on the descriptor,
+        // and `table` has 8 elements, exactly as many as we load.
         Bf16Table8Avx(unsafe { _mm256_loadu_ps(table.as_ptr()) })
     }
 
@@ -667,6 +671,34 @@ unsafe impl F32SimdVec for F32VecAvx {
     }
 
     impl_f32_array_interface!();
+
+    #[inline(always)]
+    fn load_f16_bits(d: Self::Descriptor, mem: &[u16]) -> Self {
+        #[target_feature(enable = "avx2,f16c")]
+        #[inline]
+        fn load_f16_impl(d: AvxDescriptor, mem: &[u16]) -> F32VecAvx {
+            assert!(mem.len() >= F32VecAvx::LEN);
+            // SAFETY: mem.len() >= 8 is checked above
+            let bits = unsafe { _mm_loadu_si128(mem.as_ptr() as *const __m128i) };
+            F32VecAvx(_mm256_cvtph_ps(bits), d)
+        }
+        // SAFETY: avx2 and f16c are available from the safety invariant on the descriptor
+        unsafe { load_f16_impl(d, mem) }
+    }
+
+    #[inline(always)]
+    fn store_f16_bits(self, dest: &mut [u16]) {
+        #[target_feature(enable = "avx2,f16c")]
+        #[inline]
+        fn store_f16_bits_impl(v: __m256, dest: &mut [u16]) {
+            assert!(dest.len() >= F32VecAvx::LEN);
+            let bits = _mm256_cvtps_ph::<{ _MM_FROUND_TO_NEAREST_INT | _MM_FROUND_NO_EXC }>(v);
+            // SAFETY: dest.len() >= 8 is checked above
+            unsafe { _mm_storeu_si128(dest.as_mut_ptr() as *mut __m128i, bits) };
+        }
+        // SAFETY: avx2 and f16c are available from the safety invariant on the descriptor
+        unsafe { store_f16_bits_impl(self.0, dest) }
+    }
 
     #[inline(always)]
     fn transpose_square(d: Self::Descriptor, data: &mut [Self::UnderlyingArray], stride: usize) {
@@ -846,6 +878,29 @@ impl I32SimdVec for I32VecAvx {
         let p1 = _mm256_unpackhi_epi32(l, h);
         I32VecAvx(_mm256_unpackhi_epi64(p0, p1), this.1)
     });
+
+    #[inline(always)]
+    fn store_u16(self, dest: &mut [u16]) {
+        #[target_feature(enable = "avx2")]
+        #[inline]
+        fn store_u16_impl(v: __m256i, dest: &mut [u16]) {
+            assert!(dest.len() >= I32VecAvx::LEN);
+            let tmp = _mm256_shuffle_epi8(
+                v,
+                _mm256_setr_epi8(
+                    0, 1, 4, 5, 8, 9, 12, 13, 2, 3, 6, 7, 10, 11, 14, 15, //
+                    0, 1, 4, 5, 8, 9, 12, 13, 2, 3, 6, 7, 10, 11, 14, 15,
+                ),
+            );
+            let tmp = _mm256_permute4x64_epi64(tmp, 0xD8);
+            // SAFETY: we just checked that `dest` has enough space.
+            unsafe {
+                _mm_storeu_si128(dest.as_mut_ptr().cast(), _mm256_extracti128_si256::<0>(tmp))
+            };
+        }
+        // SAFETY: avx2 is available from the safety invariant on the descriptor.
+        unsafe { store_u16_impl(self.0, dest) }
+    }
 }
 
 impl Add<I32VecAvx> for I32VecAvx {

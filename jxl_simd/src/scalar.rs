@@ -6,7 +6,7 @@
 use std::mem::MaybeUninit;
 use std::num::Wrapping;
 
-use crate::{U32SimdVec, impl_f32_array_interface};
+use crate::{U32SimdVec, f16, impl_f32_array_interface};
 
 use super::{F32SimdVec, I32SimdVec, SimdDescriptor, SimdMask};
 
@@ -213,6 +213,16 @@ unsafe impl F32SimdVec for f32 {
         dest[0] = self.round() as u16;
     }
 
+    #[inline(always)]
+    fn load_f16_bits(_d: Self::Descriptor, mem: &[u16]) -> Self {
+        f16::from_bits(mem[0]).to_f32()
+    }
+
+    #[inline(always)]
+    fn store_f16_bits(self, dest: &mut [u16]) {
+        dest[0] = f16::from_f32(self).to_bits();
+    }
+
     impl_f32_array_interface!();
 
     #[inline(always)]
@@ -294,6 +304,11 @@ impl I32SimdVec for Wrapping<i32> {
     #[inline(always)]
     fn mul_wide_take_high(self, rhs: Self) -> Self {
         Wrapping(((self.0 as i64 * rhs.0 as i64) >> 32) as i32)
+    }
+
+    #[inline(always)]
+    fn store_u16(self, dest: &mut [u16]) {
+        dest[0] = self.0 as u16;
     }
 }
 

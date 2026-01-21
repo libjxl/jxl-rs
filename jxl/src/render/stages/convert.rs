@@ -8,7 +8,7 @@ use crate::{
     headers::bit_depth::BitDepth,
     render::{Channels, ChannelsMut, RenderPipelineInOutStage},
 };
-use jxl_simd::{F32SimdVec, simd_function};
+use jxl_simd::{F32SimdVec, I32SimdVec, simd_function};
 
 pub struct ConvertU8F32Stage {
     channel: usize,
@@ -135,20 +135,82 @@ impl std::fmt::Display for ConvertModularToF32Stage {
     }
 }
 
+// SIMD 32-bit float passthrough (bitcast i32 to f32)
+simd_function!(
+    int_to_float_32bit_simd_dispatch,
+    d: D,
+    fn int_to_float_32bit_simd(input: &[i32], output: &mut [f32], xsize: usize) {
+        let simd_width = D::I32Vec::LEN;
+
+        // Process complete SIMD vectors
+        for (in_chunk, out_chunk) in input
+            .chunks_exact(simd_width)
+            .zip(output.chunks_exact_mut(simd_width))
+            .take(xsize.div_ceil(simd_width))
+        {
+            let val = D::I32Vec::load(d, in_chunk);
+            val.bitcast_to_f32().store(out_chunk);
+        }
+    }
+);
+
+// SIMD 16-bit float (half-precision) to 32-bit float conversion
+// Uses hardware F16C/NEON instructions when available via F32Vec::load_f16_bits()
+simd_function!(
+    int_to_float_16bit_simd_dispatch,
+    d: D,
+    fn int_to_float_16bit_simd(input: &[i32], output: &mut [f32], xsize: usize) {
+        let simd_width = D::F32Vec::LEN;
+
+        // Temporary buffer for i32->u16 conversion via SIMD
+        // Note: Using constant 16 (max AVX-512 width) because D::F32Vec::LEN
+        // cannot be used as array size in Rust (const generics limitation)
+        const { assert!(D::F32Vec::LEN <= 16) }
+        let mut u16_buf = [0u16; 16];
+
+        // Process complete SIMD vectors
+        for (in_chunk, out_chunk) in input
+            .chunks_exact(simd_width)
+            .zip(output.chunks_exact_mut(simd_width))
+            .take(xsize.div_ceil(simd_width))
+        {
+            // Use SIMD to extract lower 16 bits from each i32 lane
+            let i32_vec = D::I32Vec::load(d, in_chunk);
+            i32_vec.store_u16(&mut u16_buf[..simd_width]);
+            // Use hardware f16->f32 conversion
+            let result = D::F32Vec::load_f16_bits(d, &u16_buf[..simd_width]);
+            result.store(out_chunk);
+        }
+    }
+);
+
 // Converts custom [bits]-bit float (with [exp_bits] exponent bits) stored as
 // int back to binary32 float.
-// TODO(sboukortt): SIMD
-fn int_to_float(input: &[i32], output: &mut [f32], bit_depth: &BitDepth) {
+fn int_to_float(input: &[i32], output: &mut [f32], bit_depth: &BitDepth, xsize: usize) {
     assert_eq!(input.len(), output.len());
     let bits = bit_depth.bits_per_sample();
     let exp_bits = bit_depth.exponent_bits_per_sample();
-    if bits == 32 {
-        assert_eq!(exp_bits, 8);
-        for (&in_val, out_val) in input.iter().zip(output) {
-            *out_val = f32::from_bits(in_val as u32);
-        }
+
+    // Use SIMD fast paths for common formats
+    if bits == 32 && exp_bits == 8 {
+        // 32-bit float passthrough
+        int_to_float_32bit_simd_dispatch(input, output, xsize);
         return;
     }
+
+    if bits == 16 && exp_bits == 5 {
+        // IEEE 754 half-precision (f16) - common HDR format
+        int_to_float_16bit_simd_dispatch(input, output, xsize);
+        return;
+    }
+
+    // Generic scalar path for other custom float formats
+    int_to_float_generic(input, output, bits, exp_bits);
+}
+
+// Generic scalar conversion for arbitrary bit-depth floats
+// TODO: SIMD optimization for custom float formats
+fn int_to_float_generic(input: &[i32], output: &mut [f32], bits: u32, exp_bits: u32) {
     let exp_bias = (1 << (exp_bits - 1)) - 1;
     let sign_shift = bits - 1;
     let mant_bits = bits - exp_bits - 1;
@@ -215,12 +277,9 @@ impl RenderPipelineInOutStage for ConvertModularToF32Stage {
     ) {
         let input = &input_rows[0];
         if self.bit_depth.floating_point_sample() {
-            int_to_float(
-                &input[0][..xsize],
-                &mut output_rows[0][0][..xsize],
-                &self.bit_depth,
-            );
+            int_to_float(input[0], output_rows[0][0], &self.bit_depth, xsize);
         } else {
+            // TODO(veluca): SIMDfy this code.
             let scale = 1.0 / ((1u64 << self.bit_depth.bits_per_sample()) - 1) as f32;
             for i in 0..xsize {
                 output_rows[0][0][i] = input[0][i] as f32 * scale;
@@ -419,6 +478,7 @@ impl RenderPipelineInOutStage for ConvertF32ToF16Stage {
 mod test {
     use super::*;
     use crate::error::Result;
+    use crate::headers::bit_depth::BitDepth;
     use test_log::test;
 
     #[test]
@@ -466,5 +526,87 @@ mod test {
             (500, 500),
             1,
         )
+    }
+
+    #[test]
+    fn test_int_to_float_32bit() {
+        // Test 32-bit float passthrough
+        let bit_depth = BitDepth::f32();
+        let test_values: Vec<f32> = vec![
+            0.0,
+            1.0,
+            -1.0,
+            0.5,
+            -0.5,
+            f32::INFINITY,
+            f32::NEG_INFINITY,
+            1e-30,
+            1e30,
+        ];
+        let input: Vec<i32> = test_values
+            .iter()
+            .map(|&f| f.to_bits() as i32)
+            .chain(std::iter::repeat(0))
+            .take(16)
+            .collect();
+        let mut output = vec![0.0f32; 16];
+
+        int_to_float(&input, &mut output, &bit_depth, test_values.len());
+
+        for (i, (&expected, &actual)) in test_values.iter().zip(output.iter()).enumerate() {
+            if expected.is_nan() {
+                assert!(actual.is_nan(), "index {}: expected NaN, got {}", i, actual);
+            } else {
+                assert_eq!(expected, actual, "index {}: mismatch", i);
+            }
+        }
+    }
+
+    #[test]
+    fn test_int_to_float_16bit() {
+        // Test 16-bit float (f16) conversion for normal values
+        let bit_depth = BitDepth::f16();
+
+        // f16 format: 1 sign, 5 exp, 10 mantissa
+        // Test cases: (f16_bits, expected_f32)
+        let test_cases: Vec<(u16, f32)> = vec![
+            (0x0000, 0.0),               // +0
+            (0x8000, -0.0),              // -0
+            (0x3C00, 1.0),               // 1.0
+            (0xBC00, -1.0),              // -1.0
+            (0x3800, 0.5),               // 0.5
+            (0x4000, 2.0),               // 2.0
+            (0x4400, 4.0),               // 4.0
+            (0x7BFF, 65504.0),           // max normal f16
+            (0x7C00, f32::INFINITY),     // +inf
+            (0xFC00, f32::NEG_INFINITY), // -inf
+            (0x0001, 5.960_464_5e-8),    // smallest positive subnormal
+            (0x03FF, 6.097_555e-5),      // largest positive subnormal
+            (0x8001, -5.960_464_5e-8),   // smallest negative subnormal
+        ];
+
+        let input: Vec<i32> = test_cases
+            .iter()
+            .map(|(bits, _)| *bits as i32)
+            .chain(std::iter::repeat(0))
+            .take(16)
+            .collect();
+        let mut output = vec![0.0f32; 16];
+
+        int_to_float(&input, &mut output, &bit_depth, test_cases.len());
+
+        for (i, (&(_, expected), &actual)) in test_cases.iter().zip(output.iter()).enumerate() {
+            assert!(
+                (expected - actual).abs() < 1e-6
+                    || expected == actual
+                    || (expected.is_sign_negative() == actual.is_sign_negative()
+                        && expected == 0.0
+                        && actual == 0.0),
+                "index {}: expected {}, got {}",
+                i,
+                expected,
+                actual
+            );
+        }
     }
 }

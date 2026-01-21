@@ -441,6 +441,42 @@ unsafe impl F32SimdVec for F32VecNeon {
                 vst1_u16(dest.as_mut_ptr(), u16s);
             }
         }
+
+        fn store_f16_bits(this: F32VecNeon, dest: &mut [u16]) {
+            assert!(dest.len() >= F32VecNeon::LEN);
+            // Use inline asm because Rust stdarch incorrectly requires fp16 target feature
+            // for vcvt_f16_f32 (fixed in https://github.com/rust-lang/stdarch/pull/1978)
+            let f16_bits: uint16x4_t;
+            // SAFETY: NEON is available (guaranteed by descriptor), dest has enough space
+            unsafe {
+                std::arch::asm!(
+                    "fcvtn {out:v}.4h, {inp:v}.4s",
+                    inp = in(vreg) this.0,
+                    out = out(vreg) f16_bits,
+                    options(pure, nomem, nostack),
+                );
+                vst1_u16(dest.as_mut_ptr(), f16_bits);
+            }
+        }
+    }
+
+    #[inline(always)]
+    fn load_f16_bits(d: Self::Descriptor, mem: &[u16]) -> Self {
+        assert!(mem.len() >= Self::LEN);
+        // Use inline asm because Rust stdarch incorrectly requires fp16 target feature
+        // for vcvt_f32_f16 (fixed in https://github.com/rust-lang/stdarch/pull/1978)
+        let result: float32x4_t;
+        // SAFETY: NEON is available (guaranteed by descriptor), mem has enough space
+        unsafe {
+            let f16_bits = vld1_u16(mem.as_ptr());
+            std::arch::asm!(
+                "fcvtl {out:v}.4s, {inp:v}.4h",
+                inp = in(vreg) f16_bits,
+                out = out(vreg) result,
+                options(pure, nomem, nostack),
+            );
+        }
+        F32VecNeon(result, d)
     }
 
     #[inline(always)]
@@ -450,7 +486,8 @@ unsafe impl F32SimdVec for F32VecNeon {
         fn prepare_impl(table: &[f32; 8]) -> uint8x16_t {
             // Convert f32 table to BF16 packed in 128 bits (16 bytes for 8 entries)
             // BF16 is the high 16 bits of f32
-            // SAFETY: neon is available from target_feature
+            // SAFETY: neon is available from target_feature, and `table` is large
+            // enough for the loads.
             let (table_lo, table_hi) =
                 unsafe { (vld1q_f32(table.as_ptr()), vld1q_f32(table.as_ptr().add(4))) };
 
@@ -652,6 +689,18 @@ impl I32SimdVec for I32VecNeon {
     fn shr<const AMOUNT_U: u32, const AMOUNT_I: i32>(self) -> Self {
         // SAFETY: We know neon is available from the safety invariant on `self.1`.
         unsafe { Self(vshrq_n_s32::<AMOUNT_I>(self.0), self.1) }
+    }
+
+    #[inline(always)]
+    fn store_u16(self, dest: &mut [u16]) {
+        assert!(dest.len() >= Self::LEN);
+        // SAFETY: We know neon is available from the safety invariant on `self.1`,
+        // and we just checked that `dest` has enough space.
+        unsafe {
+            // vmovn narrows i32 to i16 by taking the lower 16 bits
+            let narrowed = vmovn_s32(self.0);
+            vst1_u16(dest.as_mut_ptr(), vreinterpret_u16_s16(narrowed));
+        }
     }
 }
 

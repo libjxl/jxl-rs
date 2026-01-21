@@ -610,6 +610,28 @@ unsafe impl F32SimdVec for F32VecSse42 {
     impl_f32_array_interface!();
 
     #[inline(always)]
+    fn load_f16_bits(d: Self::Descriptor, mem: &[u16]) -> Self {
+        assert!(mem.len() >= Self::LEN);
+        // SSE4.2 doesn't have F16C, use scalar conversion
+        let mut result = [0.0f32; 4];
+        for i in 0..4 {
+            result[i] = crate::f16::from_bits(mem[i]).to_f32();
+        }
+        Self::load(d, &result)
+    }
+
+    #[inline(always)]
+    fn store_f16_bits(self, dest: &mut [u16]) {
+        assert!(dest.len() >= Self::LEN);
+        // SSE4.2 doesn't have F16C, use scalar conversion
+        let mut tmp = [0.0f32; 4];
+        self.store(&mut tmp);
+        for i in 0..4 {
+            dest[i] = crate::f16::from_f32(tmp[i]).to_bits();
+        }
+    }
+
+    #[inline(always)]
     fn transpose_square(d: Self::Descriptor, data: &mut [Self::UnderlyingArray], stride: usize) {
         #[target_feature(enable = "sse4.2")]
         #[inline]
@@ -789,6 +811,26 @@ impl I32SimdVec for I32VecSse42 {
         let p1 = _mm_unpackhi_epi32(l, h);
         I32VecSse42(_mm_unpackhi_epi64(p0, p1), this.1)
     });
+
+    #[inline(always)]
+    fn store_u16(self, dest: &mut [u16]) {
+        // Pack i32 to i16 with signed saturation, then store lower 64 bits
+        // _mm_packs_epi32 saturates i32 to i16, which preserves low 16 bits for values in range
+        #[target_feature(enable = "sse4.2")]
+        #[inline]
+        fn store_u16_impl(v: __m128i, dest: &mut [u16]) {
+            assert!(dest.len() >= I32VecSse42::LEN);
+            // Use scalar loop since _mm_packs_epi32 would saturate incorrectly for unsigned values
+            let mut tmp = [0i32; 4];
+            // SAFETY: tmp has 4 elements, matching LEN
+            unsafe { _mm_storeu_si128(tmp.as_mut_ptr() as *mut __m128i, v) };
+            for i in 0..4 {
+                dest[i] = tmp[i] as u16;
+            }
+        }
+        // SAFETY: sse4.2 is available from the safety invariant on the descriptor.
+        unsafe { store_u16_impl(self.0, dest) }
+    }
 }
 
 impl Add<I32VecSse42> for I32VecSse42 {

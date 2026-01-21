@@ -165,8 +165,7 @@ impl RawImageBuffer {
         // invariant.
         let start = unsafe { self.buf.add(start) };
         // SAFETY: due to the struct safety invariant, we know the entire slice is in a range of
-        // memory valid for writes. Moreover, the caller promises not to write uninitialized data
-        // in the returned slice. Finally, the caller guarantees aliasing rules will not be violated.
+        // memory valid for reads. The caller guarantees aliasing rules will not be violated.
         unsafe { std::slice::from_raw_parts(start, self.bytes_per_row) }
     }
 
