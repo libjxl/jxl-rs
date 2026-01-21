@@ -326,10 +326,12 @@ const DIVLOOKUP: [u32; 64] = [
     289262, 284359, 279620, 275036, 270600, 266305, 262144,
 ];
 
+#[inline(always)]
 fn add_bits(x: i32) -> i64 {
     (x as i64) << PRED_EXTRA_BITS
 }
 
+#[inline(always)]
 fn error_weight(x: u32, maxweight: u32) -> u32 {
     let shift = floor_log2_nonzero(x as u64 + 1) as i32 - 5;
     if shift < 0 {
@@ -339,6 +341,7 @@ fn error_weight(x: u32, maxweight: u32) -> u32 {
     }
 }
 
+#[inline(always)]
 fn weighted_average(pixels: &[i64; NUM_PREDICTORS], weights: &mut [u32; NUM_PREDICTORS]) -> i64 {
     let log_weight = floor_log2_nonzero(weights.iter().fold(0u64, |sum, el| sum + *el as u64));
     let weight_sum = weights.iter_mut().fold(0, |sum, el| {
