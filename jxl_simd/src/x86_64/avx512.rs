@@ -665,7 +665,8 @@ unsafe impl F32SimdVec for F32VecAvx512 {
         #[target_feature(enable = "avx512f")]
         #[inline]
         fn prepare_impl(table: &[f32; 8]) -> __m512 {
-            // SAFETY: avx512f is available from target_feature
+            // SAFETY: avx512f is available from target_feature, and we load 8 elements,
+            // exactly as many as are present in `table`.
             let table_256 = unsafe { _mm256_loadu_ps(table.as_ptr()) };
             // Zero-extend to 512-bit; vpermutexvar with indices 0-7 only reads first 256 bits
             _mm512_castps256_ps512(table_256)
@@ -1058,16 +1059,13 @@ impl I32SimdVec for I32VecAvx512 {
 
     #[inline(always)]
     fn store_u16(self, dest: &mut [u16]) {
-        assert!(dest.len() >= Self::LEN);
         #[target_feature(enable = "avx512f")]
         #[inline]
         fn store_u16_impl(v: __m512i, dest: &mut [u16]) {
-            let mut tmp = [0i32; 16];
-            // SAFETY: tmp has 16 elements, matching LEN
-            unsafe { _mm512_storeu_si512(tmp.as_mut_ptr() as *mut __m512i, v) };
-            for i in 0..16 {
-                dest[i] = tmp[i] as u16;
-            }
+            assert!(dest.len() >= I32VecAvx512::LEN);
+            let tmp = _mm512_cvtepi32_epi16(v);
+            // SAFETY: We just checked `dst` has enough space.
+            unsafe { _mm256_storeu_epi32(dest.as_mut_ptr().cast(), tmp) };
         }
         // SAFETY: avx512f is available from the safety invariant on the descriptor.
         unsafe { store_u16_impl(self.0, dest) }

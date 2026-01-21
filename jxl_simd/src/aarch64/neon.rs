@@ -486,7 +486,8 @@ unsafe impl F32SimdVec for F32VecNeon {
         fn prepare_impl(table: &[f32; 8]) -> uint8x16_t {
             // Convert f32 table to BF16 packed in 128 bits (16 bytes for 8 entries)
             // BF16 is the high 16 bits of f32
-            // SAFETY: neon is available from target_feature
+            // SAFETY: neon is available from target_feature, and `table` is large
+            // enough for the loads.
             let (table_lo, table_hi) =
                 unsafe { (vld1q_f32(table.as_ptr()), vld1q_f32(table.as_ptr().add(4))) };
 
@@ -693,7 +694,8 @@ impl I32SimdVec for I32VecNeon {
     #[inline(always)]
     fn store_u16(self, dest: &mut [u16]) {
         assert!(dest.len() >= Self::LEN);
-        // SAFETY: We know neon is available from the safety invariant on `self.1`.
+        // SAFETY: We know neon is available from the safety invariant on `self.1`,
+        // and we just checked that `dest` has enough space.
         unsafe {
             // vmovn narrows i32 to i16 by taking the lower 16 bits
             let narrowed = vmovn_s32(self.0);

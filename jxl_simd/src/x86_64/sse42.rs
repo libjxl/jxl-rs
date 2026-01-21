@@ -814,12 +814,12 @@ impl I32SimdVec for I32VecSse42 {
 
     #[inline(always)]
     fn store_u16(self, dest: &mut [u16]) {
-        assert!(dest.len() >= Self::LEN);
         // Pack i32 to i16 with signed saturation, then store lower 64 bits
         // _mm_packs_epi32 saturates i32 to i16, which preserves low 16 bits for values in range
         #[target_feature(enable = "sse4.2")]
         #[inline]
         fn store_u16_impl(v: __m128i, dest: &mut [u16]) {
+            assert!(dest.len() >= I32VecSse42::LEN);
             // Use scalar loop since _mm_packs_epi32 would saturate incorrectly for unsigned values
             let mut tmp = [0i32; 4];
             // SAFETY: tmp has 4 elements, matching LEN

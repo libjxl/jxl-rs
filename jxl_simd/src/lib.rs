@@ -1179,4 +1179,40 @@ mod test {
         }
     }
     test_all_instruction_sets!(test_i32_mul_all_elements);
+
+    fn test_store_u16<D: SimdDescriptor>(d: D) {
+        let data = [
+            0xbabau32 as i32,
+            0x1234u32 as i32,
+            0xdeadbabau32 as i32,
+            0xdead1234u32 as i32,
+            0x1111babau32 as i32,
+            0x11111234u32 as i32,
+            0x76543210u32 as i32,
+            0x01234567u32 as i32,
+            0x00000000u32 as i32,
+            0xffffffffu32 as i32,
+            0x23949289u32 as i32,
+            0xf9371913u32 as i32,
+            0xdeadbeefu32 as i32,
+            0xbeefdeadu32 as i32,
+            0xaaaaaaaau32 as i32,
+            0xbbbbbbbbu32 as i32,
+        ];
+        let mut output = [0u16; 16];
+        for i in (0..16).step_by(D::I32Vec::LEN) {
+            let vec = D::I32Vec::load(d, &data[i..]);
+            vec.store_u16(&mut output[i..]);
+        }
+
+        for i in 0..16 {
+            let expected = data[i] as u16;
+            assert_eq!(
+                output[i], expected,
+                "store_u16 failed at index {}: expected {}, got {}",
+                i, expected, output[i]
+            );
+        }
+    }
+    test_all_instruction_sets!(test_store_u16);
 }

@@ -607,7 +607,8 @@ unsafe impl F32SimdVec for F32VecAvx {
     #[inline(always)]
     fn prepare_table_bf16_8(_d: AvxDescriptor, table: &[f32; 8]) -> Bf16Table8Avx {
         // For AVX2, vpermps is exact and fast, so we just load the table as-is
-        // SAFETY: avx2 is available from the safety invariant on the descriptor
+        // SAFETY: avx2 is available from the safety invariant on the descriptor,
+        // and `table` has 8 elements, exactly as many as we load.
         Bf16Table8Avx(unsafe { _mm256_loadu_ps(table.as_ptr()) })
     }
 
@@ -681,7 +682,7 @@ unsafe impl F32SimdVec for F32VecAvx {
             let bits = unsafe { _mm_loadu_si128(mem.as_ptr() as *const __m128i) };
             F32VecAvx(_mm256_cvtph_ps(bits), d)
         }
-        // SAFETY: f16c is available from the safety invariant on the descriptor
+        // SAFETY: avx2 and f16c are available from the safety invariant on the descriptor
         unsafe { load_f16_impl(d, mem) }
     }
 
@@ -695,7 +696,7 @@ unsafe impl F32SimdVec for F32VecAvx {
             // SAFETY: dest.len() >= 8 is checked above
             unsafe { _mm_storeu_si128(dest.as_mut_ptr() as *mut __m128i, bits) };
         }
-        // SAFETY: f16c is available from the safety invariant on the descriptor
+        // SAFETY: avx2 and f16c are available from the safety invariant on the descriptor
         unsafe { store_f16_bits_impl(self.0, dest) }
     }
 
@@ -880,16 +881,22 @@ impl I32SimdVec for I32VecAvx {
 
     #[inline(always)]
     fn store_u16(self, dest: &mut [u16]) {
-        assert!(dest.len() >= Self::LEN);
         #[target_feature(enable = "avx2")]
         #[inline]
         fn store_u16_impl(v: __m256i, dest: &mut [u16]) {
-            let mut tmp = [0i32; 8];
-            // SAFETY: tmp has 8 elements, matching LEN
-            unsafe { _mm256_storeu_si256(tmp.as_mut_ptr() as *mut __m256i, v) };
-            for i in 0..8 {
-                dest[i] = tmp[i] as u16;
-            }
+            assert!(dest.len() >= I32VecAvx::LEN);
+            let tmp = _mm256_shuffle_epi8(
+                v,
+                _mm256_setr_epi8(
+                    0, 1, 4, 5, 8, 9, 12, 13, 2, 3, 6, 7, 10, 11, 14, 15, //
+                    0, 1, 4, 5, 8, 9, 12, 13, 2, 3, 6, 7, 10, 11, 14, 15,
+                ),
+            );
+            let tmp = _mm256_permute4x64_epi64(tmp, 0xD8);
+            // SAFETY: we just checked that `dest` has enough space.
+            unsafe {
+                _mm_storeu_si128(dest.as_mut_ptr().cast(), _mm256_extracti128_si256::<0>(tmp))
+            };
         }
         // SAFETY: avx2 is available from the safety invariant on the descriptor.
         unsafe { store_u16_impl(self.0, dest) }
