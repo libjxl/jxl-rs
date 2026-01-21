@@ -51,6 +51,16 @@ where
 }
 
 impl FileHeader {
+    /// Validate Size and Preview dimensions to prevent integer overflow.
+    /// Must be called once after decoding the FileHeader.
+    pub fn validate(&self) -> Result<(), Error> {
+        self.size.validate()?;
+        if let Some(preview) = &self.image_metadata.preview {
+            preview.validate()?;
+        }
+        Ok(())
+    }
+
     pub fn frame_header_nonserialized(&self) -> FrameHeaderNonserialized {
         self.frame_header_nonserialized_with_size(self.size.xsize(), self.size.ysize())
     }

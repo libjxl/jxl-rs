@@ -47,6 +47,7 @@ impl CodestreamParser {
             let mut br = BitReader::new(&self.non_section_buf);
             br.skip_bits(self.non_section_bit_offset as usize)?;
             let file_header = FileHeader::read(&mut br)?;
+            file_header.validate()?;
             let xsize = file_header.size.xsize() as usize;
             let ysize = file_header.size.ysize() as usize;
             check_size_limit(
