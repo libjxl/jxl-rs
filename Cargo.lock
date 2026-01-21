@@ -545,7 +545,7 @@ dependencies = [
 
 [[package]]
 name = "jxl"
-version = "0.2.2"
+version = "0.3.0"
 dependencies = [
  "arbtest",
  "array-init",
@@ -565,7 +565,7 @@ dependencies = [
 
 [[package]]
 name = "jxl_cli"
-version = "0.2.2"
+version = "0.3.0"
 dependencies = [
  "bytemuck",
  "clap",
@@ -582,7 +582,7 @@ dependencies = [
 
 [[package]]
 name = "jxl_macros"
-version = "0.2.2"
+version = "0.3.0"
 dependencies = [
  "proc-macro-error2",
  "proc-macro2",
@@ -592,7 +592,7 @@ dependencies = [
 
 [[package]]
 name = "jxl_simd"
-version = "0.2.2"
+version = "0.3.0"
 dependencies = [
  "arbtest",
  "paste",
@@ -600,7 +600,7 @@ dependencies = [
 
 [[package]]
 name = "jxl_transforms"
-version = "0.2.2"
+version = "0.3.0"
 dependencies = [
  "criterion",
  "jxl_simd",
