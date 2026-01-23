@@ -172,18 +172,17 @@ impl CodestreamParser {
             };
             self.embedded_color_profile = Some(embedded_color_profile.clone());
             // Only set default output_color_profile if not already configured by user
-            if self.output_color_profile.is_none() {
-                self.output_color_profile = Some(output_color_profile);
-            } else {
+            if let Some(user_profile) = &self.output_color_profile {
                 // Validate user's output color profile choice (libjxl compatibility)
                 // For non-XYB without CMS: only same encoding as embedded is allowed
-                let user_profile = self.output_color_profile.as_ref().unwrap();
                 if !file_header.image_metadata.xyb_encoded
                     && decode_options.cms.is_none()
                     && *user_profile != embedded_color_profile
                 {
                     return Err(Error::NonXybOutputNoCMS);
                 }
+            } else {
+                self.output_color_profile = Some(output_color_profile);
             }
             // Only set default pixel_format if not already configured (e.g. via rewind)
             if self.pixel_format.is_none() {
