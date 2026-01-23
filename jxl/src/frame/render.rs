@@ -458,6 +458,20 @@ impl Frame {
             .find(|x| x.1.ec_type == ExtraChannel::Black)
             .map(|(k_idx, _)| k_idx + 3);
 
+        // For CMYK images with blending, CMS conversion must happen AFTER blending.
+        // Blending in CMYK space produces different results than blending in RGB space
+        // because the channel semantics change (4 channels → 3 channels).
+        // The correct order is: blend in CMYK space, then convert to RGB.
+        //
+        // Note: For RGB images with different primaries (e.g., linear Rec2020 → sRGB),
+        // blending theoretically should also happen in the image's native space.
+        // However, for XYB images, XybStage outputs linear sRGB which is the canonical
+        // blending space, and conformance tests verify this behavior. Further investigation
+        // may be needed for non-XYB images with custom primaries.
+        let needs_deferred_cms = black_channel.is_some()
+            && (frame_header.needs_blending()
+                || (frame_header.can_be_referenced && !frame_header.save_before_ct));
+
         let xyb_encoded = decoder_state.file_header.image_metadata.xyb_encoded;
 
         if frame_header.do_ycbcr {
@@ -503,32 +517,27 @@ impl Frame {
         let channel_counts_compatible =
             src_channels == dst_channels || (src_channels == 4 && dst_channels == 3);
 
-        if !color_encoding_is_original
+        // Prepare CMS stage if needed
+        let cms_stage = if !color_encoding_is_original
             && channel_counts_compatible
-            && let Some(cms) = cms
+            && let Some(cms_ref) = cms
             && let Some(cms_input) = cms_input_profile
         {
-            // Use frame width as max_pixels since rows can be that wide
             let max_pixels = frame_header.size_upsampled().0;
-            // Use CMS input profile's channel count, matching libjxl's c_src_.Channels()
-            // For CMYK, channels() returns 4; for RGB, 3; for grayscale, 1.
             let in_channels = cms_input.channels();
-            let (out_channels, transformers) = cms.initialize_transforms(
-                1, // num transforms (1 for single-threaded)
+            let (out_channels, transformers) = cms_ref.initialize_transforms(
+                1,
                 max_pixels,
                 cms_input,
                 output_profile.clone(),
                 output_color_info.intensity_target,
             )?;
-            // CMS cannot add channels - reject transforms that would
             if out_channels > in_channels {
                 return Err(Error::CmsChannelCountIncrease {
                     in_channels,
                     out_channels,
                 });
             }
-            // Only pass black_channel to CmsStage if CMS is actually processing CMYK input.
-            // For XYB images, even if original was CMYK, CMS input is linear RGB.
             let cms_black_channel = if in_channels == 4 {
                 black_channel
             } else {
@@ -541,13 +550,31 @@ impl Frame {
                 pixel_format,
             )?;
             if !transformers.is_empty() {
-                pipeline = pipeline.add_inplace_stage(CmsStage::new(
+                Some(CmsStage::new(
                     transformers,
                     in_channels,
                     out_channels,
                     cms_black_channel,
                     max_pixels,
-                ))?;
+                ))
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+
+        let has_cms_stage = cms_stage.is_some();
+
+        // Apply CMS now unless we need to defer it for CMYK blending
+        let mut deferred_cms_stage = None;
+        if let Some(stage) = cms_stage {
+            if needs_deferred_cms {
+                // Defer CMS until after blending for CMYK
+                deferred_cms_stage = Some(stage);
+            } else {
+                // Apply CMS immediately
+                pipeline = pipeline.add_inplace_stage(stage)?;
                 cms_used = true;
             }
         }
@@ -555,7 +582,8 @@ impl Frame {
         // XYB output is linear, so apply transfer function:
         // - Only if output is non-linear AND
         // - CMS was not used (CMS already handles the full conversion including TF)
-        if xyb_encoded && !output_tf.is_linear() && !cms_used {
+        // - CMS is not deferred (will be applied later)
+        if xyb_encoded && !output_tf.is_linear() && !cms_used && !has_cms_stage {
             pipeline = pipeline.add_inplace_stage(FromLinearStage::new(0, output_tf.clone()))?;
         }
 
@@ -574,6 +602,7 @@ impl Frame {
             )?)?;
         }
 
+        // For CMYK: save reference frame in CMYK space (before CMS) for correct blending
         if frame_header.can_be_referenced && !frame_header.save_before_ct {
             for i in 0..num_channels {
                 pipeline = pipeline.add_save_stage(
@@ -585,6 +614,17 @@ impl Frame {
                     false,
                 )?;
             }
+        }
+
+        // Apply deferred CMS for CMYK after blending and saving reference frames
+        if let Some(stage) = deferred_cms_stage {
+            pipeline = pipeline.add_inplace_stage(stage)?;
+            cms_used = true;
+        }
+
+        // For deferred CMS with XYB, apply transfer function after CMS
+        if needs_deferred_cms && xyb_encoded && !output_tf.is_linear() && !cms_used {
+            pipeline = pipeline.add_inplace_stage(FromLinearStage::new(0, output_tf.clone()))?;
         }
 
         if decoder_state.render_spotcolors {
