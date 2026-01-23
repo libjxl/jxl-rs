@@ -276,8 +276,17 @@ fn main() -> Result<()> {
     };
 
     // Get metadata from typed output before converting
-    let output_icc = typed_output.output_profile().as_icc().to_vec();
-    let embedded_icc = typed_output.embedded_profile().as_icc().to_vec();
+    // Use try_as_icc() to gracefully handle malformed color profiles
+    let output_icc = typed_output
+        .output_profile()
+        .try_as_icc()
+        .map(|c| c.into_owned())
+        .unwrap_or_default();
+    let embedded_icc = typed_output
+        .embedded_profile()
+        .try_as_icc()
+        .map(|c| c.into_owned())
+        .unwrap_or_default();
     let image_size = typed_output.size();
     let original_bit_depth = typed_output.original_bit_depth().clone();
 
