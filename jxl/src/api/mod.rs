@@ -10,6 +10,7 @@ mod data_types;
 mod decoder;
 mod inner;
 mod input;
+mod limits;
 mod options;
 mod signature;
 
@@ -19,6 +20,7 @@ pub use data_types::*;
 pub use decoder::*;
 pub use inner::*;
 pub use input::*;
+pub use limits::*;
 pub use options::*;
 pub use signature::*;
 

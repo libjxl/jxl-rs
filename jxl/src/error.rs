@@ -291,6 +291,14 @@ pub enum Error {
     },
     #[error("CMS error: {0}")]
     CmsError(String),
+    #[error("Limit exceeded for {resource}: {actual} exceeds limit of {limit}")]
+    LimitExceeded {
+        resource: &'static str,
+        actual: u64,
+        limit: u64,
+    },
+    #[error("Decode operation was cancelled")]
+    Cancelled,
 }
 
 pub type Result<T, E = Error> = std::result::Result<T, E>;

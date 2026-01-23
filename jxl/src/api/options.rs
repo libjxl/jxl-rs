@@ -3,7 +3,7 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-use crate::api::JxlCms;
+use crate::api::{CancellationToken, JxlCms, JxlDecoderLimits};
 
 pub enum JxlProgressiveMode {
     /// Renders all pixels in every call to Process.
@@ -40,6 +40,14 @@ pub struct JxlDecoderOptions {
     /// This produces premultiplied alpha output, which is useful for compositing.
     /// Default: false (output straight alpha)
     pub premultiply_output: bool,
+    /// Security limits for the decoder.
+    /// Default: unlimited (for backwards compatibility).
+    /// Use `JxlDecoderLimits::default_safe()` for recommended security limits.
+    pub limits: JxlDecoderLimits,
+    /// Optional cancellation token for cooperative cancellation.
+    /// When set, the decoder will check this token periodically and abort
+    /// if cancellation has been requested.
+    pub cancellation_token: Option<CancellationToken>,
 }
 
 impl Default for JxlDecoderOptions {
@@ -56,6 +64,8 @@ impl Default for JxlDecoderOptions {
             pixel_limit: None,
             high_precision: false,
             premultiply_output: false,
+            limits: JxlDecoderLimits::default(),
+            cancellation_token: None,
         }
     }
 }
