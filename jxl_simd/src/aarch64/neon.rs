@@ -14,7 +14,7 @@ use std::{
 
 use crate::U32SimdVec;
 
-use super::super::{F32SimdVec, I32SimdVec, SimdDescriptor, SimdMask};
+use super::super::{F32SimdVec, I32SimdVec, SimdDescriptor, SimdMask, U8SimdVec, U16SimdVec};
 
 // Safety invariant: this type is only ever constructed if neon is available.
 #[derive(Clone, Copy, Debug)]
@@ -40,6 +40,10 @@ impl SimdDescriptor for NeonDescriptor {
     type I32Vec = I32VecNeon;
 
     type U32Vec = U32VecNeon;
+
+    type U16Vec = U16VecNeon;
+
+    type U8Vec = U8VecNeon;
 
     type Mask = MaskNeon;
     type Bf16Table8 = Bf16Table8Neon;
@@ -834,6 +838,150 @@ impl U32SimdVec for U32VecNeon {
     fn shr<const AMOUNT_U: u32, const AMOUNT_I: i32>(self) -> Self {
         // SAFETY: We know neon is available from the safety invariant on `self.1`.
         unsafe { Self(vshrq_n_u32::<AMOUNT_I>(self.0), self.1) }
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+#[repr(transparent)]
+pub struct U8VecNeon(uint8x16_t, NeonDescriptor);
+
+// SAFETY: The methods in this implementation that write to `MaybeUninit` (store_interleaved_*)
+// ensure that they write valid data to the output slice without reading uninitialized memory.
+unsafe impl U8SimdVec for U8VecNeon {
+    type Descriptor = NeonDescriptor;
+    const LEN: usize = 16;
+
+    #[inline(always)]
+    fn load(d: Self::Descriptor, mem: &[u8]) -> Self {
+        assert!(mem.len() >= Self::LEN);
+        // SAFETY: we just checked that `mem` has enough space. Moreover, we know neon is available
+        // from the safety invariant on `d`.
+        Self(unsafe { vld1q_u8(mem.as_ptr()) }, d)
+    }
+
+    #[inline(always)]
+    fn splat(d: Self::Descriptor, v: u8) -> Self {
+        // SAFETY: We know neon is available from the safety invariant on `d`.
+        Self(unsafe { vdupq_n_u8(v) }, d)
+    }
+
+    #[inline(always)]
+    fn store(&self, mem: &mut [u8]) {
+        assert!(mem.len() >= Self::LEN);
+        // SAFETY: we just checked that `mem` has enough space. Moreover, we know neon is available
+        // from the safety invariant on `d`.
+        unsafe { vst1q_u8(mem.as_mut_ptr(), self.0) }
+    }
+
+    #[inline(always)]
+    fn store_interleaved_2_uninit(a: Self, b: Self, dest: &mut [MaybeUninit<u8>]) {
+        assert!(dest.len() >= 2 * Self::LEN);
+        // SAFETY: we just checked that `dest` has enough space, and neon is available
+        // from the safety invariant on the descriptor stored in `a`.
+        unsafe {
+            let dest_ptr = dest.as_mut_ptr() as *mut u8;
+            vst2q_u8(dest_ptr, uint8x16x2_t(a.0, b.0));
+        }
+    }
+
+    #[inline(always)]
+    fn store_interleaved_3_uninit(a: Self, b: Self, c: Self, dest: &mut [MaybeUninit<u8>]) {
+        assert!(dest.len() >= 3 * Self::LEN);
+        // SAFETY: we just checked that `dest` has enough space, and neon is available
+        // from the safety invariant on the descriptor stored in `a`.
+        unsafe {
+            let dest_ptr = dest.as_mut_ptr() as *mut u8;
+            vst3q_u8(dest_ptr, uint8x16x3_t(a.0, b.0, c.0));
+        }
+    }
+
+    #[inline(always)]
+    fn store_interleaved_4_uninit(
+        a: Self,
+        b: Self,
+        c: Self,
+        d: Self,
+        dest: &mut [MaybeUninit<u8>],
+    ) {
+        assert!(dest.len() >= 4 * Self::LEN);
+        // SAFETY: we just checked that `dest` has enough space, and neon is available
+        // from the safety invariant on the descriptor stored in `a`.
+        unsafe {
+            let dest_ptr = dest.as_mut_ptr() as *mut u8;
+            vst4q_u8(dest_ptr, uint8x16x4_t(a.0, b.0, c.0, d.0));
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+#[repr(transparent)]
+pub struct U16VecNeon(uint16x8_t, NeonDescriptor);
+
+// SAFETY: The methods in this implementation that write to `MaybeUninit` (store_interleaved_*)
+// ensure that they write valid data to the output slice without reading uninitialized memory.
+unsafe impl U16SimdVec for U16VecNeon {
+    type Descriptor = NeonDescriptor;
+    const LEN: usize = 8;
+
+    #[inline(always)]
+    fn load(d: Self::Descriptor, mem: &[u16]) -> Self {
+        assert!(mem.len() >= Self::LEN);
+        // SAFETY: we just checked that `mem` has enough space. Moreover, we know neon is available
+        // from the safety invariant on `d`.
+        Self(unsafe { vld1q_u16(mem.as_ptr()) }, d)
+    }
+
+    #[inline(always)]
+    fn splat(d: Self::Descriptor, v: u16) -> Self {
+        // SAFETY: We know neon is available from the safety invariant on `d`.
+        Self(unsafe { vdupq_n_u16(v) }, d)
+    }
+
+    #[inline(always)]
+    fn store(&self, mem: &mut [u16]) {
+        assert!(mem.len() >= Self::LEN);
+        // SAFETY: we just checked that `mem` has enough space. Moreover, we know neon is available
+        // from the safety invariant on `d`.
+        unsafe { vst1q_u16(mem.as_mut_ptr(), self.0) }
+    }
+
+    #[inline(always)]
+    fn store_interleaved_2_uninit(a: Self, b: Self, dest: &mut [MaybeUninit<u16>]) {
+        assert!(dest.len() >= 2 * Self::LEN);
+        // SAFETY: we just checked that `dest` has enough space, and neon is available
+        // from the safety invariant on the descriptor stored in `a`.
+        unsafe {
+            let dest_ptr = dest.as_mut_ptr() as *mut u16;
+            vst2q_u16(dest_ptr, uint16x8x2_t(a.0, b.0));
+        }
+    }
+
+    #[inline(always)]
+    fn store_interleaved_3_uninit(a: Self, b: Self, c: Self, dest: &mut [MaybeUninit<u16>]) {
+        assert!(dest.len() >= 3 * Self::LEN);
+        // SAFETY: we just checked that `dest` has enough space, and neon is available
+        // from the safety invariant on the descriptor stored in `a`.
+        unsafe {
+            let dest_ptr = dest.as_mut_ptr() as *mut u16;
+            vst3q_u16(dest_ptr, uint16x8x3_t(a.0, b.0, c.0));
+        }
+    }
+
+    #[inline(always)]
+    fn store_interleaved_4_uninit(
+        a: Self,
+        b: Self,
+        c: Self,
+        d: Self,
+        dest: &mut [MaybeUninit<u16>],
+    ) {
+        assert!(dest.len() >= 4 * Self::LEN);
+        // SAFETY: we just checked that `dest` has enough space, and neon is available
+        // from the safety invariant on the descriptor stored in `a`.
+        unsafe {
+            let dest_ptr = dest.as_mut_ptr() as *mut u16;
+            vst4q_u16(dest_ptr, uint16x8x4_t(a.0, b.0, c.0, d.0));
+        }
     }
 }
 

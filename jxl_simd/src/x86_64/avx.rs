@@ -5,7 +5,7 @@
 
 use crate::{U32SimdVec, impl_f32_array_interface, x86_64::sse42::Sse42Descriptor};
 
-use super::super::{F32SimdVec, I32SimdVec, SimdDescriptor, SimdMask};
+use super::super::{F32SimdVec, I32SimdVec, SimdDescriptor, SimdMask, U8SimdVec, U16SimdVec};
 use std::{
     arch::x86_64::*,
     mem::MaybeUninit,
@@ -124,6 +124,8 @@ impl SimdDescriptor for AvxDescriptor {
     type F32Vec = F32VecAvx;
     type I32Vec = I32VecAvx;
     type U32Vec = U32VecAvx;
+    type U8Vec = U8VecAvx;
+    type U16Vec = U16VecAvx;
     type Mask = MaskAvx;
     type Bf16Table8 = Bf16Table8Avx;
 
@@ -1032,6 +1034,414 @@ impl U32SimdVec for U32VecAvx {
     fn shr<const AMOUNT_U: u32, const AMOUNT_I: i32>(self) -> Self {
         // SAFETY: We know avx2 is available from the safety invariant on `self.1`.
         unsafe { Self(_mm256_srli_epi32::<AMOUNT_I>(self.0), self.1) }
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+#[repr(transparent)]
+pub struct U8VecAvx(__m256i, AvxDescriptor);
+
+// SAFETY: The methods in this implementation that write to `MaybeUninit` (store_interleaved_*)
+// ensure that they write valid data to the output slice without reading uninitialized memory.
+unsafe impl U8SimdVec for U8VecAvx {
+    type Descriptor = AvxDescriptor;
+    const LEN: usize = 32;
+
+    #[inline(always)]
+    fn load(d: Self::Descriptor, mem: &[u8]) -> Self {
+        assert!(mem.len() >= U8VecAvx::LEN);
+        // SAFETY: we just checked that `mem` has enough space. Moreover, we know avx2 is available
+        // from the safety invariant on `d`.
+        unsafe { Self(_mm256_loadu_si256(mem.as_ptr() as *const _), d) }
+    }
+
+    #[inline(always)]
+    fn splat(d: Self::Descriptor, v: u8) -> Self {
+        // SAFETY: We know avx2 is available from the safety invariant on `self.1`.
+        unsafe { Self(_mm256_set1_epi8(v as i8), d) }
+    }
+
+    #[inline(always)]
+    fn store(&self, mem: &mut [u8]) {
+        assert!(mem.len() >= U8VecAvx::LEN);
+        // SAFETY: we just checked that `mem` has enough space. Moreover, we know avx2 is available
+        // from the safety invariant on `d`.
+        unsafe { _mm256_storeu_si256(mem.as_mut_ptr() as *mut _, self.0) }
+    }
+
+    #[inline(always)]
+    fn store_interleaved_2_uninit(a: Self, b: Self, dest: &mut [MaybeUninit<u8>]) {
+        #[target_feature(enable = "avx2")]
+        #[inline]
+        fn store_interleaved_2_impl(a: __m256i, b: __m256i, dest: &mut [MaybeUninit<u8>]) {
+            assert!(dest.len() >= 2 * U8VecAvx::LEN);
+            // a = [A0..A15 | A16..A31]
+            // b = [B0..B15 | B16..B31]
+            let lo = _mm256_unpacklo_epi8(a, b); // [A0 B0..A7 B7 | A16 B16..A23 B23]
+            let hi = _mm256_unpackhi_epi8(a, b); // [A8 B8..A15 B15 | A24 B24..A31 B31]
+
+            // R0 = [A0 B0..A7 B7 | A8 B8..A15 B15]
+            let out0 = _mm256_permute2x128_si256::<0x20>(lo, hi);
+            // R1 = [A16 B16..A23 B23 | A24 B24..A31 B31]
+            let out1 = _mm256_permute2x128_si256::<0x31>(lo, hi);
+
+            // SAFETY: `dest` has enough space and writing to `MaybeUninit<u8>` through `*mut __m256i` is valid.
+            unsafe {
+                let dest_ptr = dest.as_mut_ptr() as *mut __m256i;
+                _mm256_storeu_si256(dest_ptr, out0);
+                _mm256_storeu_si256(dest_ptr.add(1), out1);
+            }
+        }
+        // SAFETY: avx2 is available from the safety invariant on the descriptor.
+        unsafe { store_interleaved_2_impl(a.0, b.0, dest) }
+    }
+
+    #[inline(always)]
+    fn store_interleaved_3_uninit(a: Self, b: Self, c: Self, dest: &mut [MaybeUninit<u8>]) {
+        #[target_feature(enable = "avx2")]
+        #[inline]
+        fn store_interleaved_3_impl(
+            a: __m256i,
+            b: __m256i,
+            c: __m256i,
+            dest: &mut [MaybeUninit<u8>],
+        ) {
+            assert!(dest.len() >= 3 * U8VecAvx::LEN);
+
+            // U8 Masks
+            let mask_a0 = _mm256_setr_epi8(
+                0, -1, -1, 1, -1, -1, 2, -1, -1, 3, -1, -1, 4, -1, -1, 5, -1, -1, 6, -1, -1, 7, -1,
+                -1, 8, -1, -1, 9, -1, -1, 10, -1,
+            );
+            let mask_a1 = _mm256_setr_epi8(
+                -1, 11, -1, -1, 12, -1, -1, 13, -1, -1, 14, -1, -1, 15, -1, -1, 0, -1, -1, 1, -1,
+                -1, 2, -1, -1, 3, -1, -1, 4, -1, -1, 5,
+            );
+            let mask_a2 = _mm256_setr_epi8(
+                -1, -1, 6, -1, -1, 7, -1, -1, 8, -1, -1, 9, -1, -1, 10, -1, -1, 11, -1, -1, 12, -1,
+                -1, 13, -1, -1, 14, -1, -1, 15, -1, -1,
+            );
+            let mask_b0 = _mm256_setr_epi8(
+                -1, 0, -1, -1, 1, -1, -1, 2, -1, -1, 3, -1, -1, 4, -1, -1, 5, -1, -1, 6, -1, -1, 7,
+                -1, -1, 8, -1, -1, 9, -1, -1, 10,
+            );
+            let mask_b1 = _mm256_setr_epi8(
+                -1, -1, 11, -1, -1, 12, -1, -1, 13, -1, -1, 14, -1, -1, 15, -1, -1, 0, -1, -1, 1,
+                -1, -1, 2, -1, -1, 3, -1, -1, 4, -1, -1,
+            );
+            let mask_b2 = _mm256_setr_epi8(
+                5, -1, -1, 6, -1, -1, 7, -1, -1, 8, -1, -1, 9, -1, -1, 10, -1, -1, 11, -1, -1, 12,
+                -1, -1, 13, -1, -1, 14, -1, -1, 15, -1,
+            );
+            let mask_c0 = _mm256_setr_epi8(
+                -1, -1, 0, -1, -1, 1, -1, -1, 2, -1, -1, 3, -1, -1, 4, -1, -1, 5, -1, -1, 6, -1,
+                -1, 7, -1, -1, 8, -1, -1, 9, -1, -1,
+            );
+            let mask_c1 = _mm256_setr_epi8(
+                10, -1, -1, 11, -1, -1, 12, -1, -1, 13, -1, -1, 14, -1, -1, 15, -1, -1, 0, -1, -1,
+                1, -1, -1, 2, -1, -1, 3, -1, -1, 4, -1,
+            );
+            let mask_c2 = _mm256_setr_epi8(
+                -1, 5, -1, -1, 6, -1, -1, 7, -1, -1, 8, -1, -1, 9, -1, -1, 10, -1, -1, 11, -1, -1,
+                12, -1, -1, 13, -1, -1, 14, -1, -1, 15,
+            );
+
+            // Create duplicated vectors for lane swizzling
+            let a_dup_lo = _mm256_permute2x128_si256::<0x00>(a, a);
+            let b_dup_lo = _mm256_permute2x128_si256::<0x00>(b, b);
+            let c_dup_lo = _mm256_permute2x128_si256::<0x00>(c, c);
+
+            let a_dup_hi = _mm256_permute2x128_si256::<0x11>(a, a);
+            let b_dup_hi = _mm256_permute2x128_si256::<0x11>(b, b);
+            let c_dup_hi = _mm256_permute2x128_si256::<0x11>(c, c);
+
+            let out0 = _mm256_or_si256(
+                _mm256_or_si256(
+                    _mm256_shuffle_epi8(a_dup_lo, mask_a0),
+                    _mm256_shuffle_epi8(b_dup_lo, mask_b0),
+                ),
+                _mm256_shuffle_epi8(c_dup_lo, mask_c0),
+            );
+
+            let out1 = _mm256_or_si256(
+                _mm256_or_si256(
+                    _mm256_shuffle_epi8(a, mask_a1),
+                    _mm256_shuffle_epi8(b, mask_b1),
+                ),
+                _mm256_shuffle_epi8(c, mask_c1),
+            );
+
+            let out2 = _mm256_or_si256(
+                _mm256_or_si256(
+                    _mm256_shuffle_epi8(a_dup_hi, mask_a2),
+                    _mm256_shuffle_epi8(b_dup_hi, mask_b2),
+                ),
+                _mm256_shuffle_epi8(c_dup_hi, mask_c2),
+            );
+
+            // SAFETY: `dest` has enough space and writing to `MaybeUninit<u8>` through `*mut __m256i` is valid.
+            unsafe {
+                let dest_ptr = dest.as_mut_ptr() as *mut __m256i;
+                _mm256_storeu_si256(dest_ptr, out0);
+                _mm256_storeu_si256(dest_ptr.add(1), out1);
+                _mm256_storeu_si256(dest_ptr.add(2), out2);
+            }
+        }
+        // SAFETY: avx2 is available from the safety invariant on the descriptor.
+        unsafe { store_interleaved_3_impl(a.0, b.0, c.0, dest) }
+    }
+
+    #[inline(always)]
+    fn store_interleaved_4_uninit(
+        a: Self,
+        b: Self,
+        c: Self,
+        d: Self,
+        dest: &mut [MaybeUninit<u8>],
+    ) {
+        #[target_feature(enable = "avx2")]
+        #[inline]
+        fn store_interleaved_4_impl(
+            a: __m256i,
+            b: __m256i,
+            c: __m256i,
+            d: __m256i,
+            dest: &mut [MaybeUninit<u8>],
+        ) {
+            assert!(dest.len() >= 4 * U8VecAvx::LEN);
+            // First interleave pairs: ab and cd
+            let ab_lo = _mm256_unpacklo_epi8(a, b);
+            let ab_hi = _mm256_unpackhi_epi8(a, b);
+            let cd_lo = _mm256_unpacklo_epi8(c, d);
+            let cd_hi = _mm256_unpackhi_epi8(c, d);
+
+            // Then interleave the pairs to get 4-byte chunks
+            let out0_p = _mm256_unpacklo_epi16(ab_lo, cd_lo);
+            let out1_p = _mm256_unpackhi_epi16(ab_lo, cd_lo);
+            let out2_p = _mm256_unpacklo_epi16(ab_hi, cd_hi);
+            let out3_p = _mm256_unpackhi_epi16(ab_hi, cd_hi);
+
+            // Reorder lanes
+            let out0 = _mm256_permute2x128_si256::<0x20>(out0_p, out1_p);
+            let out1 = _mm256_permute2x128_si256::<0x20>(out2_p, out3_p);
+            let out2 = _mm256_permute2x128_si256::<0x31>(out0_p, out1_p);
+            let out3 = _mm256_permute2x128_si256::<0x31>(out2_p, out3_p);
+
+            // SAFETY: `dest` has enough space and writing to `MaybeUninit<u8>` through `*mut __m256i` is valid.
+            unsafe {
+                let dest_ptr = dest.as_mut_ptr() as *mut __m256i;
+                _mm256_storeu_si256(dest_ptr, out0);
+                _mm256_storeu_si256(dest_ptr.add(1), out1);
+                _mm256_storeu_si256(dest_ptr.add(2), out2);
+                _mm256_storeu_si256(dest_ptr.add(3), out3);
+            }
+        }
+        // SAFETY: avx2 is available from the safety invariant on the descriptor.
+        unsafe { store_interleaved_4_impl(a.0, b.0, c.0, d.0, dest) }
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+#[repr(transparent)]
+pub struct U16VecAvx(__m256i, AvxDescriptor);
+
+// SAFETY: The methods in this implementation that write to `MaybeUninit` (store_interleaved_*)
+// ensure that they write valid data to the output slice without reading uninitialized memory.
+unsafe impl U16SimdVec for U16VecAvx {
+    type Descriptor = AvxDescriptor;
+    const LEN: usize = 16;
+
+    #[inline(always)]
+    fn load(d: Self::Descriptor, mem: &[u16]) -> Self {
+        assert!(mem.len() >= U16VecAvx::LEN);
+        // SAFETY: we just checked that `mem` has enough space. Moreover, we know avx2 is available
+        // from the safety invariant on `d`.
+        unsafe { Self(_mm256_loadu_si256(mem.as_ptr() as *const _), d) }
+    }
+
+    #[inline(always)]
+    fn splat(d: Self::Descriptor, v: u16) -> Self {
+        // SAFETY: avx2 is available from the safety invariant on the descriptor.
+        unsafe { Self(_mm256_set1_epi16(v as i16), d) }
+    }
+
+    #[inline(always)]
+    fn store(&self, mem: &mut [u16]) {
+        assert!(mem.len() >= U16VecAvx::LEN);
+        // SAFETY: we just checked that `mem` has enough space. Moreover, we know avx2 is available
+        // from the safety invariant on `d`.
+        unsafe { _mm256_storeu_si256(mem.as_mut_ptr() as *mut _, self.0) }
+    }
+
+    #[inline(always)]
+    fn store_interleaved_2_uninit(a: Self, b: Self, dest: &mut [MaybeUninit<u16>]) {
+        #[target_feature(enable = "avx2")]
+        #[inline]
+        fn store_interleaved_2_impl(a: __m256i, b: __m256i, dest: &mut [MaybeUninit<u16>]) {
+            assert!(dest.len() >= 2 * U16VecAvx::LEN);
+            // a = [A0..A7 | A8..A15]
+            // b = [B0..B7 | B8..B15]
+            let lo = _mm256_unpacklo_epi16(a, b); // [A0 B0..A3 B3 | A8 B8..A11 B11]
+            let hi = _mm256_unpackhi_epi16(a, b); // [A4 B4..A7 B7 | A12 B12..A15 B15]
+
+            // R0 = [A0 B0..A7 B7]
+            let out0 = _mm256_permute2x128_si256::<0x20>(lo, hi);
+            // R1 = [A8 B8..A15 B15]
+            let out1 = _mm256_permute2x128_si256::<0x31>(lo, hi);
+
+            // SAFETY: `dest` has enough space and writing to `MaybeUninit<u16>` through `*mut __m256i` is valid.
+            unsafe {
+                let dest_ptr = dest.as_mut_ptr() as *mut __m256i;
+                _mm256_storeu_si256(dest_ptr, out0);
+                _mm256_storeu_si256(dest_ptr.add(1), out1);
+            }
+        }
+        // SAFETY: avx2 is available from the safety invariant on the descriptor.
+        unsafe { store_interleaved_2_impl(a.0, b.0, dest) }
+    }
+
+    #[inline(always)]
+    fn store_interleaved_3_uninit(a: Self, b: Self, c: Self, dest: &mut [MaybeUninit<u16>]) {
+        #[target_feature(enable = "avx2")]
+        #[inline]
+        fn store_interleaved_3_impl(
+            a: __m256i,
+            b: __m256i,
+            c: __m256i,
+            dest: &mut [MaybeUninit<u16>],
+        ) {
+            assert!(dest.len() >= 3 * U16VecAvx::LEN);
+
+            // U16 Masks
+            let mask_a0 = _mm256_setr_epi8(
+                0, 1, -1, -1, -1, -1, 2, 3, -1, -1, -1, -1, 4, 5, -1, -1, -1, -1, 6, 7, -1, -1, -1,
+                -1, 8, 9, -1, -1, -1, -1, 10, 11,
+            );
+            let mask_a1 = _mm256_setr_epi8(
+                -1, -1, -1, -1, 12, 13, -1, -1, -1, -1, 14, 15, -1, -1, -1, -1, 0, 1, -1, -1, -1,
+                -1, 2, 3, -1, -1, -1, -1, 4, 5, -1, -1,
+            );
+            let mask_a2 = _mm256_setr_epi8(
+                -1, -1, 6, 7, -1, -1, -1, -1, 8, 9, -1, -1, -1, -1, 10, 11, -1, -1, -1, -1, 12, 13,
+                -1, -1, -1, -1, 14, 15, -1, -1, -1, -1,
+            );
+            let mask_b0 = _mm256_setr_epi8(
+                -1, -1, 0, 1, -1, -1, -1, -1, 2, 3, -1, -1, -1, -1, 4, 5, -1, -1, -1, -1, 6, 7, -1,
+                -1, -1, -1, 8, 9, -1, -1, -1, -1,
+            );
+            let mask_b1 = _mm256_setr_epi8(
+                10, 11, -1, -1, -1, -1, 12, 13, -1, -1, -1, -1, 14, 15, -1, -1, -1, -1, 0, 1, -1,
+                -1, -1, -1, 2, 3, -1, -1, -1, -1, 4, 5,
+            );
+            let mask_b2 = _mm256_setr_epi8(
+                -1, -1, -1, -1, 6, 7, -1, -1, -1, -1, 8, 9, -1, -1, -1, -1, 10, 11, -1, -1, -1, -1,
+                12, 13, -1, -1, -1, -1, 14, 15, -1, -1,
+            );
+            let mask_c0 = _mm256_setr_epi8(
+                -1, -1, -1, -1, 0, 1, -1, -1, -1, -1, 2, 3, -1, -1, -1, -1, 4, 5, -1, -1, -1, -1,
+                6, 7, -1, -1, -1, -1, 8, 9, -1, -1,
+            );
+            let mask_c1 = _mm256_setr_epi8(
+                -1, -1, 10, 11, -1, -1, -1, -1, 12, 13, -1, -1, -1, -1, 14, 15, -1, -1, -1, -1, 0,
+                1, -1, -1, -1, -1, 2, 3, -1, -1, -1, -1,
+            );
+            let mask_c2 = _mm256_setr_epi8(
+                4, 5, -1, -1, -1, -1, 6, 7, -1, -1, -1, -1, 8, 9, -1, -1, -1, -1, 10, 11, -1, -1,
+                -1, -1, 12, 13, -1, -1, -1, -1, 14, 15,
+            );
+
+            // Create duplicated vectors for lane swizzling
+            let a_dup_lo = _mm256_permute2x128_si256::<0x00>(a, a);
+            let b_dup_lo = _mm256_permute2x128_si256::<0x00>(b, b);
+            let c_dup_lo = _mm256_permute2x128_si256::<0x00>(c, c);
+
+            let a_dup_hi = _mm256_permute2x128_si256::<0x11>(a, a);
+            let b_dup_hi = _mm256_permute2x128_si256::<0x11>(b, b);
+            let c_dup_hi = _mm256_permute2x128_si256::<0x11>(c, c);
+
+            let out0 = _mm256_or_si256(
+                _mm256_or_si256(
+                    _mm256_shuffle_epi8(a_dup_lo, mask_a0),
+                    _mm256_shuffle_epi8(b_dup_lo, mask_b0),
+                ),
+                _mm256_shuffle_epi8(c_dup_lo, mask_c0),
+            );
+
+            let out1 = _mm256_or_si256(
+                _mm256_or_si256(
+                    _mm256_shuffle_epi8(a, mask_a1),
+                    _mm256_shuffle_epi8(b, mask_b1),
+                ),
+                _mm256_shuffle_epi8(c, mask_c1),
+            );
+
+            let out2 = _mm256_or_si256(
+                _mm256_or_si256(
+                    _mm256_shuffle_epi8(a_dup_hi, mask_a2),
+                    _mm256_shuffle_epi8(b_dup_hi, mask_b2),
+                ),
+                _mm256_shuffle_epi8(c_dup_hi, mask_c2),
+            );
+
+            // SAFETY: `dest` has enough space and writing to `MaybeUninit<u16>` through `*mut __m256i` is valid.
+            unsafe {
+                let dest_ptr = dest.as_mut_ptr() as *mut __m256i;
+                _mm256_storeu_si256(dest_ptr, out0);
+                _mm256_storeu_si256(dest_ptr.add(1), out1);
+                _mm256_storeu_si256(dest_ptr.add(2), out2);
+            }
+        }
+        // SAFETY: avx2 is available from the safety invariant on the descriptor.
+        unsafe { store_interleaved_3_impl(a.0, b.0, c.0, dest) }
+    }
+
+    #[inline(always)]
+    fn store_interleaved_4_uninit(
+        a: Self,
+        b: Self,
+        c: Self,
+        d: Self,
+        dest: &mut [MaybeUninit<u16>],
+    ) {
+        #[target_feature(enable = "avx2")]
+        #[inline]
+        fn store_interleaved_4_impl(
+            a: __m256i,
+            b: __m256i,
+            c: __m256i,
+            d: __m256i,
+            dest: &mut [MaybeUninit<u16>],
+        ) {
+            assert!(dest.len() >= 4 * U16VecAvx::LEN);
+            // First interleave pairs: ab and cd
+            let ab_lo = _mm256_unpacklo_epi16(a, b);
+            let ab_hi = _mm256_unpackhi_epi16(a, b);
+            let cd_lo = _mm256_unpacklo_epi16(c, d);
+            let cd_hi = _mm256_unpackhi_epi16(c, d);
+
+            // Then interleave the pairs to get 4-u16 chunks (8 bytes)
+            let out0_p = _mm256_unpacklo_epi32(ab_lo, cd_lo);
+            let out1_p = _mm256_unpackhi_epi32(ab_lo, cd_lo);
+            let out2_p = _mm256_unpacklo_epi32(ab_hi, cd_hi);
+            let out3_p = _mm256_unpackhi_epi32(ab_hi, cd_hi);
+
+            // Reorder lanes
+            let out0 = _mm256_permute2x128_si256::<0x20>(out0_p, out1_p);
+            let out1 = _mm256_permute2x128_si256::<0x20>(out2_p, out3_p);
+            let out2 = _mm256_permute2x128_si256::<0x31>(out0_p, out1_p);
+            let out3 = _mm256_permute2x128_si256::<0x31>(out2_p, out3_p);
+
+            // SAFETY: `dest` has enough space and writing to `MaybeUninit<u16>` through `*mut __m256i` is valid.
+            unsafe {
+                let dest_ptr = dest.as_mut_ptr() as *mut __m256i;
+                _mm256_storeu_si256(dest_ptr, out0);
+                _mm256_storeu_si256(dest_ptr.add(1), out1);
+                _mm256_storeu_si256(dest_ptr.add(2), out2);
+                _mm256_storeu_si256(dest_ptr.add(3), out3);
+            }
+        }
+        // SAFETY: avx2 is available from the safety invariant on the descriptor.
+        unsafe { store_interleaved_4_impl(a.0, b.0, c.0, d.0, dest) }
     }
 }
 
