@@ -135,7 +135,7 @@ impl LowMemoryRenderPipeline {
                 return Ok(());
             }
             buf.ready_channels = 0;
-            *self.shared.group_chan_ready_passes[g].iter().min().unwrap()
+            *self.shared.group_chan_ready_passes[g].iter().min().unwrap() - 1
         };
 
         let (gx, gy) = self.shared.group_position(g);
