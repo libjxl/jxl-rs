@@ -539,6 +539,55 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn test_default_output_tf_by_pixel_format() {
+        use crate::api::{JxlColorEncoding, JxlTransferFunction};
+
+        // Using test image with ICC profile to trigger default transfer function path
+        let file = std::fs::read("resources/test/lossy_with_icc.jxl").unwrap();
+        let options = JxlDecoderOptions::default();
+        let mut decoder = JxlDecoder::<states::Initialized>::new(options);
+        let mut input = file.as_slice();
+        let mut decoder = loop {
+            match decoder.process(&mut input).unwrap() {
+                ProcessingResult::Complete { result } => break result,
+                ProcessingResult::NeedsMoreInput { fallback, .. } => decoder = fallback,
+            }
+        };
+
+        // Output data format will default to F32, so output color profile will be linear sRGB
+        assert_eq!(
+            *decoder.output_color_profile().transfer_function().unwrap(),
+            JxlTransferFunction::Linear,
+        );
+
+        // Integer data format will set output color profile to sRGB
+        decoder.set_pixel_format(JxlPixelFormat::rgba8(0));
+        assert_eq!(
+            *decoder.output_color_profile().transfer_function().unwrap(),
+            JxlTransferFunction::SRGB,
+        );
+
+        decoder.set_pixel_format(JxlPixelFormat::rgba_f16(0));
+        assert_eq!(
+            *decoder.output_color_profile().transfer_function().unwrap(),
+            JxlTransferFunction::Linear,
+        );
+
+        decoder.set_pixel_format(JxlPixelFormat::rgba16(0));
+        assert_eq!(
+            *decoder.output_color_profile().transfer_function().unwrap(),
+            JxlTransferFunction::SRGB,
+        );
+
+        // Once output color profile is set by user, it will remain as is regardless of what pixel
+        // format is set
+        let profile = JxlColorProfile::Simple(JxlColorEncoding::srgb(false));
+        decoder.set_output_color_profile(profile.clone()).unwrap();
+        decoder.set_pixel_format(JxlPixelFormat::rgba_f16(0));
+        assert!(decoder.output_color_profile() == &profile);
+    }
+
+    #[test]
     fn test_fill_opaque_alpha_both_pipelines() {
         use crate::api::{JxlColorType, JxlDataFormat, JxlPixelFormat};
         use crate::image::{Image, Rect};
