@@ -116,10 +116,15 @@ impl JxlDecoder<WithImageInfo> {
         self.inner.set_output_color_profile(profile)
     }
 
+    /// Retrieves the current pixel format for output buffers.
     pub fn current_pixel_format(&self) -> &JxlPixelFormat {
         self.inner.current_pixel_format().unwrap()
     }
 
+    /// Specifies pixel format for output buffers.
+    ///
+    /// Setting this may also change output color profile in some cases, if the profile was not set
+    /// manually before.
     pub fn set_pixel_format(&mut self, pixel_format: JxlPixelFormat) {
         self.inner.set_pixel_format(pixel_format);
     }
