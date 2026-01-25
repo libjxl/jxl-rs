@@ -67,6 +67,7 @@ impl JxlDecoderInner {
             return Err(Error::ICCOutputNoCMS);
         }
         self.codestream_parser.output_color_profile = Some(profile);
+        self.codestream_parser.output_color_profile_set_by_user = true;
         Ok(())
     }
 
@@ -78,6 +79,7 @@ impl JxlDecoderInner {
         // TODO(veluca): return an error if we are asking for both planar and
         // interleaved-in-color alpha.
         self.codestream_parser.pixel_format = Some(pixel_format);
+        self.codestream_parser.update_default_output_color_profile();
     }
 
     pub fn frame_header(&self) -> Option<JxlFrameHeader> {

@@ -147,49 +147,17 @@ impl CodestreamParser {
                     &file_header.image_metadata.color_encoding,
                 )?)
             };
-            // Determine default output color profile following libjxl logic:
-            // - For XYB: use embedded if can_output_to(), else linear sRGB fallback
-            // - For non-XYB: use embedded color profile
-            let output_color_profile = if file_header.image_metadata.xyb_encoded {
-                let is_gray =
-                    file_header.image_metadata.color_encoding.color_space == ColorSpace::Gray;
-
-                // Use embedded if we can output to it, otherwise fall back to linear sRGB
-                let base_encoding = if embedded_color_profile.can_output_to() {
-                    match &embedded_color_profile {
-                        JxlColorProfile::Simple(enc) => enc.clone(),
-                        JxlColorProfile::Icc(_) => {
-                            unreachable!("can_output_to returns false for ICC")
-                        }
-                    }
-                } else {
-                    JxlColorEncoding::linear_srgb(is_gray)
-                };
-
-                JxlColorProfile::Simple(base_encoding)
-            } else {
-                embedded_color_profile.clone()
-            };
             self.embedded_color_profile = Some(embedded_color_profile.clone());
-            // Only set default output_color_profile if not already configured by user
-            if let Some(user_profile) = &self.output_color_profile {
-                // Validate user's output color profile choice (libjxl compatibility)
-                // For non-XYB without CMS: only same encoding as embedded is allowed
-                if !file_header.image_metadata.xyb_encoded
-                    && decode_options.cms.is_none()
-                    && *user_profile != embedded_color_profile
-                {
-                    return Err(Error::NonXybOutputNoCMS);
-                }
-            } else {
-                self.output_color_profile = Some(output_color_profile);
-            }
+
+            let xyb_encoded = file_header.image_metadata.xyb_encoded;
+            let is_gray = file_header.image_metadata.color_encoding.color_space == ColorSpace::Gray;
+            self.xyb_encoded = xyb_encoded;
+            self.is_gray = is_gray;
+
             // Only set default pixel_format if not already configured (e.g. via rewind)
             if self.pixel_format.is_none() {
                 self.pixel_format = Some(JxlPixelFormat {
-                    color_type: if file_header.image_metadata.color_encoding.color_space
-                        == ColorSpace::Gray
-                    {
+                    color_type: if is_gray {
                         JxlColorType::Grayscale
                     } else {
                         JxlColorType::Rgb
@@ -204,6 +172,19 @@ impl CodestreamParser {
                         file_header.image_metadata.extra_channel_info.len()
                     ],
                 });
+            }
+
+            if let Some(user_profile) = &self.output_color_profile {
+                // Validate user's output color profile choice (libjxl compatibility)
+                // For non-XYB without CMS: only same encoding as embedded is allowed
+                if !xyb_encoded
+                    && decode_options.cms.is_none()
+                    && *user_profile != embedded_color_profile
+                {
+                    return Err(Error::NonXybOutputNoCMS);
+                }
+            } else {
+                self.update_default_output_color_profile();
             }
 
             let mut br = BitReader::new(&self.non_section_buf);

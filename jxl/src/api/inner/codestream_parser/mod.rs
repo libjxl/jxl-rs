@@ -14,8 +14,8 @@ use sections::SectionState;
 use crate::api::FrameCallback;
 use crate::{
     api::{
-        JxlBasicInfo, JxlBitstreamInput, JxlColorProfile, JxlDecoderOptions, JxlOutputBuffer,
-        JxlPixelFormat,
+        JxlBasicInfo, JxlBitstreamInput, JxlColorEncoding, JxlColorProfile, JxlDataFormat,
+        JxlDecoderOptions, JxlOutputBuffer, JxlPixelFormat,
         inner::{box_parser::BoxParser, process::SmallBuffer},
     },
     error::{Error, Result},
@@ -44,6 +44,9 @@ pub(super) struct CodestreamParser {
     pub(super) embedded_color_profile: Option<JxlColorProfile>,
     pub(super) output_color_profile: Option<JxlColorProfile>,
     pub(super) pixel_format: Option<JxlPixelFormat>,
+    xyb_encoded: bool,
+    is_gray: bool,
+    pub(super) output_color_profile_set_by_user: bool,
 
     // These fields are populated when starting to decode a frame, and cleared once
     // the frame is done.
@@ -96,6 +99,9 @@ impl CodestreamParser {
             embedded_color_profile: None,
             output_color_profile: None,
             pixel_format: None,
+            xyb_encoded: false,
+            is_gray: false,
+            output_color_profile_set_by_user: false,
             frame_header: None,
             toc_parser: None,
             frame: None,
@@ -389,5 +395,50 @@ impl CodestreamParser {
                 }
             }
         }
+    }
+
+    pub(super) fn update_default_output_color_profile(&mut self) {
+        // Only set default output_color_profile if not already configured by user
+        if self.output_color_profile_set_by_user {
+            return;
+        }
+
+        let embedded_color_profile = self.embedded_color_profile.as_ref().unwrap();
+        let pixel_format = self.pixel_format.as_ref().unwrap();
+
+        // Determine default output color profile following libjxl logic:
+        // - For XYB: use embedded if can_output_to(), else:
+        //   - if float samples are requested: linear sRGB,
+        //   - else: sRGB
+        // - For non-XYB: use embedded color profile
+        let output_color_profile = if self.xyb_encoded {
+            // Use embedded if we can output to it, otherwise fall back to sRGB
+            let base_encoding = if embedded_color_profile.can_output_to() {
+                match &embedded_color_profile {
+                    JxlColorProfile::Simple(enc) => enc.clone(),
+                    JxlColorProfile::Icc(_) => {
+                        unreachable!("can_output_to returns false for ICC")
+                    }
+                }
+            } else {
+                let data_format = pixel_format
+                    .color_data_format
+                    .unwrap_or(JxlDataFormat::U8 { bit_depth: 8 });
+                let is_float = matches!(
+                    data_format,
+                    JxlDataFormat::F32 { .. } | JxlDataFormat::F16 { .. }
+                );
+                if is_float {
+                    JxlColorEncoding::linear_srgb(self.is_gray)
+                } else {
+                    JxlColorEncoding::srgb(self.is_gray)
+                }
+            };
+
+            JxlColorProfile::Simple(base_encoding)
+        } else {
+            embedded_color_profile.clone()
+        };
+        self.output_color_profile = Some(output_color_profile);
     }
 }
