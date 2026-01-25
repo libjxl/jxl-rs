@@ -5,7 +5,7 @@
 
 use criterion::{BenchmarkId, Criterion, SamplingMode, criterion_group, criterion_main};
 use jxl::api::JxlDecoderOptions;
-use jxl_cli::dec::{OutputDataType, decode_frames_with_type, decode_header};
+use jxl_cli::dec::{OutputDataType, decode_frames, decode_header};
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -16,7 +16,8 @@ fn decode_benches(c: &mut Criterion) {
     let paths: Vec<PathBuf> = std::env::var("JXL_FILES").map_or_else(
         |_| {
             let root_test_dir = Path::new(env!("CARGO_MANIFEST_DIR"))
-                .join("..")
+                .parent()
+                .unwrap()
                 .join("jxl")
                 .join("resources")
                 .join("test");
@@ -52,10 +53,18 @@ fn decode_benches(c: &mut Criterion) {
             |b, bytes| {
                 b.iter(|| {
                     let mut input = bytes.as_slice();
-                    decode_frames_with_type(
+                    decode_frames(
                         &mut input,
                         JxlDecoderOptions::default(),
-                        OutputDataType::F32,
+                        None,
+                        None,
+                        &[
+                            OutputDataType::U8,
+                            OutputDataType::U16,
+                            OutputDataType::F16,
+                            OutputDataType::F32,
+                        ],
+                        true,
                         false,
                     )
                     .unwrap();

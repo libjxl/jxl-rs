@@ -9,158 +9,175 @@ pub mod enc;
 
 #[cfg(test)]
 mod tests {
-    use crate::dec::{OutputDataType, decode_frames_with_type};
+    use crate::dec::{DecodeOutput, OutputDataType, decode_frames};
     use jxl::api::JxlDecoderOptions;
+    use std::path::PathBuf;
 
-    /// Test that decoding with all output data types produces consistent results.
-    /// This catches bugs in the f32→u8, f32→u16, f32→f16 conversion stages.
+    fn get_test_file(name: &str) -> PathBuf {
+        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        root.parent().unwrap().join("jxl/resources/test").join(name)
+    }
+
+    fn extract_f32_frames(output: &DecodeOutput) -> Vec<Vec<Vec<f32>>> {
+        output
+            .frames
+            .iter()
+            .map(|frame| {
+                frame
+                    .channels
+                    .iter()
+                    .map(|channel| {
+                        let (_, height) = channel.byte_size();
+                        // channel.byte_size().0 is width in bytes
+                        let bpp = output.data_type.bits_per_sample() / 8;
+                        let width_px = channel.byte_size().0 / bpp;
+
+                        let mut pixels = Vec::with_capacity(width_px * height);
+                        for y in 0..height {
+                            let row_bytes = channel.row(y);
+                            for i in 0..width_px {
+                                let val = match output.data_type {
+                                    OutputDataType::U8 => row_bytes[i] as f32 / 255.0,
+                                    OutputDataType::U16 => {
+                                        let b = [row_bytes[i * 2], row_bytes[i * 2 + 1]];
+                                        u16::from_ne_bytes(b) as f32 / 65535.0
+                                    }
+                                    OutputDataType::F16 => {
+                                        let b = [row_bytes[i * 2], row_bytes[i * 2 + 1]];
+                                        half::f16::from_bits(u16::from_ne_bytes(b)).to_f32()
+                                    }
+                                    OutputDataType::F32 => {
+                                        let start = i * 4;
+                                        let b = [
+                                            row_bytes[start],
+                                            row_bytes[start + 1],
+                                            row_bytes[start + 2],
+                                            row_bytes[start + 3],
+                                        ];
+                                        f32::from_ne_bytes(b)
+                                    }
+                                };
+                                pixels.push(val);
+                            }
+                        }
+                        pixels
+                    })
+                    .collect()
+            })
+            .collect()
+    }
+
+    fn do_decode(mut input: &[u8], ty: OutputDataType) -> DecodeOutput {
+        decode_frames(
+            &mut input,
+            JxlDecoderOptions::default(),
+            None,
+            None,
+            &[ty],
+            true,
+            false,
+        )
+        .unwrap()
+        .0
+    }
+
     #[test]
     fn test_output_formats_consistency() {
         let test_files = [
-            "../jxl/resources/test/conformance_test_images/bicycles.jxl",
-            "../jxl/resources/test/conformance_test_images/bike.jxl",
-            "../jxl/resources/test/zoltan_tasi_unsplash.jxl", // Failed in PR #586
+            "conformance_test_images/bicycles.jxl",
+            "conformance_test_images/bike.jxl",
+            "zoltan_tasi_unsplash.jxl",
         ];
 
-        for test_file in test_files {
-            let file = match std::fs::read(test_file) {
-                Ok(f) => f,
-                Err(_) => continue, // Skip if file not found
-            };
+        for filename in test_files {
+            let path = get_test_file(filename);
+            if !path.exists() {
+                eprintln!("Skipping {} (not found)", filename);
+                continue;
+            }
+            let file = std::fs::read(&path).unwrap();
 
             // Decode as f32 (reference)
-            let mut input = file.as_slice();
-            let (f32_typed_output, _) = decode_frames_with_type(
-                &mut input,
-                JxlDecoderOptions::default(),
-                OutputDataType::F32,
-                false,
-            )
-            .unwrap();
-            let f32_output = f32_typed_output.to_f32().unwrap();
+            let input = file.as_slice();
+            let f32_output = do_decode(input, OutputDataType::F32);
+            let f32_pixels = extract_f32_frames(&f32_output);
 
-            // Test each data type
-            // clamps_values: true for integer formats that clamp to [0,1]
             for (data_type, tolerance, name, clamps_values) in [
-                (OutputDataType::U8, 0.003, "u8", true), // ~0.5/255 + margin
-                (OutputDataType::U16, 0.0001, "u16", true), // ~0.5/65535 + margin
-                (OutputDataType::F16, 0.001, "f16", false), // f16 precision, no clamping
+                (OutputDataType::U8, 0.003, "u8", true),
+                (OutputDataType::U16, 0.0001, "u16", true),
+                (OutputDataType::F16, 0.001, "f16", false),
             ] {
-                let mut input = file.as_slice();
-                let (typed_output, _) = decode_frames_with_type(
-                    &mut input,
-                    JxlDecoderOptions::default(),
-                    data_type,
-                    false,
-                )
-                .unwrap();
-                // Convert to f32 for comparison
-                let converted_output = typed_output.to_f32().unwrap();
+                let input = file.as_slice();
+                let output = do_decode(input, data_type);
+                let pixels = extract_f32_frames(&output);
 
-                assert_eq!(
-                    f32_output.frames.len(),
-                    converted_output.frames.len(),
-                    "{test_file}: frame count mismatch for {name}"
-                );
+                assert_eq!(f32_pixels.len(), pixels.len(), "Frame count mismatch");
 
-                for (frame_idx, (f32_frame, typed_frame)) in f32_output
-                    .frames
-                    .iter()
-                    .zip(converted_output.frames.iter())
-                    .enumerate()
+                for (frame_idx, (ref_frame, test_frame)) in
+                    f32_pixels.iter().zip(pixels.iter()).enumerate()
                 {
                     assert_eq!(
-                        f32_frame.channels.len(),
-                        typed_frame.channels.len(),
-                        "{test_file}: channel count mismatch for {name} frame {frame_idx}"
+                        ref_frame.len(),
+                        test_frame.len(),
+                        "Channel count mismatch frame {}",
+                        frame_idx
                     );
-
-                    for (ch_idx, (f32_ch, typed_ch)) in f32_frame
-                        .channels
-                        .iter()
-                        .zip(typed_frame.channels.iter())
-                        .enumerate()
+                    for (ch_idx, (ref_ch, test_ch)) in
+                        ref_frame.iter().zip(test_frame.iter()).enumerate()
                     {
                         assert_eq!(
-                            f32_ch.size(),
-                            typed_ch.size(),
-                            "{test_file}: size mismatch for {name} frame {frame_idx} channel {ch_idx}"
+                            ref_ch.len(),
+                            test_ch.len(),
+                            "Pixel count mismatch frame {} ch {}",
+                            frame_idx,
+                            ch_idx
                         );
 
-                        let size = f32_ch.size();
                         let mut max_diff: f32 = 0.0;
-
-                        for y in 0..size.1 {
-                            let f32_row = f32_ch.row(y);
-                            let typed_row = typed_ch.row(y);
-                            for x in 0..size.0 {
-                                // Clamp f32 to [0,1] for integer formats that clamp output
-                                let f32_val = if clamps_values {
-                                    f32_row[x].clamp(0.0, 1.0)
-                                } else {
-                                    f32_row[x]
-                                };
-                                let typed_val = typed_row[x];
-                                let diff = (f32_val - typed_val).abs();
-                                max_diff = max_diff.max(diff);
-                                assert!(
-                                    diff <= tolerance,
-                                    "{test_file}: {name} mismatch at ({x},{y}): \
-                                     f32={f32_val}, {name}={typed_val}, diff={diff}"
+                        for (i, (&ref_val, &test_val)) in
+                            ref_ch.iter().zip(test_ch.iter()).enumerate()
+                        {
+                            let ref_val_clamped = if clamps_values {
+                                ref_val.clamp(0.0, 1.0)
+                            } else {
+                                ref_val
+                            };
+                            let diff = (ref_val_clamped - test_val).abs();
+                            max_diff = max_diff.max(diff);
+                            if diff > tolerance {
+                                panic!(
+                                    "{}: {} mismatch at frame {} ch {} idx {}: ref={}, test={}, diff={}",
+                                    filename,
+                                    name,
+                                    frame_idx,
+                                    ch_idx,
+                                    i,
+                                    ref_val_clamped,
+                                    test_val,
+                                    diff
                                 );
                             }
                         }
-
-                        // Verify we actually processed pixels
-                        assert!(size.0 > 0 && size.1 > 0);
-                        // Log max diff for informational purposes
-                        let _ = max_diff;
                     }
                 }
             }
         }
     }
 
-    /// Test that the high precision mode works with all output formats.
     #[test]
     fn test_output_formats_high_precision() {
-        let test_file = "../jxl/resources/test/conformance_test_images/bicycles.jxl";
-        let file = match std::fs::read(test_file) {
-            Ok(f) => f,
-            Err(_) => return, // Skip if file not found
-        };
+        let filename = "conformance_test_images/bicycles.jxl";
+        let path = get_test_file(filename);
+        if !path.exists() {
+            return;
+        }
+        let file = std::fs::read(&path).unwrap();
 
-        let high_precision_options = || {
+        for ty in OutputDataType::ALL {
             let mut options = JxlDecoderOptions::default();
             options.high_precision = true;
-            options
-        };
-
-        // Decode as f32 (reference)
-        let mut input = file.as_slice();
-        let (f32_typed_output, _) = decode_frames_with_type(
-            &mut input,
-            high_precision_options(),
-            OutputDataType::F32,
-            false,
-        )
-        .unwrap();
-        let f32_output = f32_typed_output.to_f32().unwrap();
-
-        // Test u8 with high precision
-        let mut input = file.as_slice();
-        let (u8_typed_output, _) = decode_frames_with_type(
-            &mut input,
-            high_precision_options(),
-            OutputDataType::U8,
-            false,
-        )
-        .unwrap();
-        let u8_output = u8_typed_output.to_f32().unwrap();
-
-        // Verify both produce valid output
-        assert!(!f32_output.frames.is_empty());
-        assert!(!u8_output.frames.is_empty());
-        assert_eq!(f32_output.frames.len(), u8_output.frames.len());
+            let mut input = file.as_slice();
+            decode_frames(&mut input, options, None, None, &[*ty], true, false).unwrap();
+        }
     }
 }

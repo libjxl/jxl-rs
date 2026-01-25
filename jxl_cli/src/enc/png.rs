@@ -7,9 +7,8 @@ use jxl::api::{
     JxlColorEncoding, JxlColorProfile, JxlPrimaries, JxlTransferFunction, JxlWhitePoint,
 };
 
-use crate::dec::DecodeOutput;
-use color_eyre::eyre::{Result, WrapErr, eyre};
-use jxl::error::Error;
+use crate::dec::{DecodeOutput, OutputDataType};
+use color_eyre::eyre::{Result, eyre};
 use jxl::headers::color_encoding::RenderingIntent;
 
 use std::borrow::Cow;
@@ -100,35 +99,13 @@ fn make_cicp(encoding: &JxlColorEncoding) -> Option<png::CodingIndependentCodePo
     })
 }
 
-pub fn to_png<Writer: Write>(
-    image_data: &DecodeOutput<f32>,
-    bit_depth: u32,
-    buf: &mut Writer,
-) -> Result<()> {
-    if image_data.frames.is_empty()
-        || image_data.frames[0].channels.is_empty()
-        || image_data.size.0 == 0
-        || image_data.size.1 == 0
-    {
-        return Err(Error::NoFrames).wrap_err("Invalid JXL image");
+pub fn to_png<Writer: Write>(image_data: &DecodeOutput, buf: &mut Writer) -> Result<()> {
+    if image_data.frames[0].channels.len() > 1 {
+        eprintln!("Warning: Ignoring non-alpha extra channels.");
     }
-    let (width, height) = image_data.size;
-    let num_channels = image_data.frames[0].channels.len();
 
-    for (i, frame) in image_data.frames.iter().enumerate() {
-        assert_eq!(
-            frame.channels.len(),
-            num_channels,
-            "Frame {i} num channels mismatch"
-        );
-        for (c, channel) in frame.channels.iter().enumerate() {
-            assert_eq!(
-                channel.size(),
-                image_data.size,
-                "Frame {i} channel {c} size mismatch"
-            );
-        }
-    }
+    let (width, height) = image_data.size;
+    let num_channels = image_data.frames[0].color_type.samples_per_pixel();
 
     let mut info = png::Info::with_size(width as u32, height as u32);
     match &image_data.output_profile {
@@ -175,7 +152,8 @@ pub fn to_png<Writer: Write>(
     }
     let mut encoder = png::Encoder::with_info(buf, info).unwrap();
     encoder.set_color(png_color(num_channels)?);
-    let eight_bits = bit_depth <= 8;
+    encoder.set_compression(png::Compression::Fast);
+    let eight_bits = image_data.data_type == OutputDataType::U8;
     encoder.set_depth(if eight_bits {
         png::BitDepth::Eight
     } else {
@@ -191,46 +169,40 @@ pub fn to_png<Writer: Write>(
     }
     let mut writer = encoder.write_header()?;
 
-    let num_pixels = height * width * num_channels;
     if eight_bits {
-        let mut data: Vec<u8> = vec![0; num_pixels];
         for frame in &image_data.frames {
-            for y in 0..height {
-                for x in 0..width {
-                    for c in 0..num_channels {
-                        // + 0.5 instead of round is fine since we clamp to non-negative
-                        data[(y * width + x) * num_channels + c] =
-                            ((frame.channels[c].row(y)[x] * 255.0).clamp(0.0, 255.0) + 0.5) as u8;
-                    }
-                }
-            }
             if animated {
                 let (delay_num, delay_den) = calculate_apng_delay(frame.duration)?;
                 writer.set_frame_delay(delay_num, delay_den)?;
             }
-            writer.write_image_data(&data)?;
+            let mut ww = writer.stream_writer()?;
+            for y in 0..height {
+                ww.write_all(frame.channels[0].row(y))?;
+            }
         }
     } else {
         // 16-bit
-        let mut data: Vec<u8> = vec![0; 2 * num_pixels];
+        let mut buffer: Vec<u8> = vec![0; 2 * width * num_channels];
         for frame in &image_data.frames {
-            for y in 0..height {
-                for x in 0..width {
-                    for c in 0..num_channels {
-                        // + 0.5 instead of round is fine since we clamp to non-negative
-                        let pixel = ((frame.channels[c].row(y)[x] * 65535.0).clamp(0.0, 65535.0)
-                            + 0.5) as u16;
-                        let index = 2 * ((y * width + x) * num_channels + c);
-                        data[index] = (pixel >> 8) as u8;
-                        data[index + 1] = (pixel & 0xFF) as u8;
-                    }
-                }
-            }
             if animated {
                 let (delay_num, delay_den) = calculate_apng_delay(frame.duration)?;
                 writer.set_frame_delay(delay_num, delay_den)?;
             }
-            writer.write_image_data(&data)?;
+            let mut ww = writer.stream_writer()?;
+            for y in 0..height {
+                let row = frame.channels[0].row(y);
+                if cfg!(target_endian = "big") {
+                    ww.write_all(row)?;
+                } else {
+                    for x in 0..width * num_channels {
+                        buffer[x * 2..][..2].copy_from_slice(
+                            &u16::from_ne_bytes(row[x * 2..][..2].try_into().unwrap())
+                                .to_be_bytes(),
+                        );
+                    }
+                    ww.write_all(&buffer)?;
+                }
+            }
         }
     }
     Ok(())

@@ -5,57 +5,14 @@
 
 use clap::Parser;
 use color_eyre::eyre::{Result, WrapErr, eyre};
-use jxl::api::{JxlColorType, JxlDecoderOptions};
-use jxl::image::Image;
-use jxl_cli::{cms::Lcms2Cms, dec, enc};
-use std::fs::File;
-use std::io::{BufReader, BufWriter, Read, Seek, Write};
+use jxl::api::JxlDecoderOptions;
+use jxl_cli::dec::OutputDataType;
+use jxl_cli::enc::OutputFormat;
+use jxl_cli::{cms::Lcms2Cms, dec};
+use std::fs;
+use std::io::{BufReader, Read, Seek};
 use std::path::PathBuf;
 use std::time::Duration;
-use std::{fs, mem};
-
-fn save_icc(icc_bytes: &[u8], icc_filename: Option<&PathBuf>) -> Result<()> {
-    icc_filename.map_or(Ok(()), |path| {
-        std::fs::write(path, icc_bytes)
-            .wrap_err_with(|| format!("Failed to write ICC profile to {:?}", path))
-    })
-}
-
-fn save_image(
-    image_data: &dec::DecodeOutput<f32>,
-    bit_depth: u32,
-    output_filename: &PathBuf,
-) -> Result<()> {
-    let fn_str = output_filename.to_string_lossy();
-    let mut writer = BufWriter::new(File::create(output_filename)?);
-    if fn_str.ends_with(".exr") {
-        enc::exr::to_exr(image_data, bit_depth, &mut writer)?;
-    } else if fn_str.ends_with(".ppm") {
-        if image_data.frames.len() == 1
-            && let [r, g, b] = &image_data.frames[0].channels[..]
-        {
-            enc::pnm::to_ppm_as_8bit([r, g, b], &mut writer)?;
-        }
-    } else if fn_str.ends_with(".pgm") {
-        if image_data.frames.len() == 1
-            && let [g] = &image_data.frames[0].channels[..]
-        {
-            enc::pnm::to_pgm_as_8bit(g, &mut writer)?;
-        }
-    } else if fn_str.ends_with(".npy") {
-        enc::numpy::to_numpy(image_data, &mut writer)?;
-    } else if fn_str.ends_with(".png") || fn_str.ends_with(".apng") {
-        enc::png::to_png(image_data, bit_depth, &mut writer)?;
-    } else {
-        return Err(eyre!(
-            "Output format not supported for {:?}",
-            output_filename
-        ));
-    }
-    writer
-        .flush()
-        .wrap_err_with(|| format!("Failed to write decoded image to {:?}", &output_filename))
-}
 
 #[derive(Parser)]
 struct Opt {
@@ -66,17 +23,17 @@ struct Opt {
     #[clap(required_unless_present_any = ["speedtest", "info"])]
     output: Option<PathBuf>,
 
-    /// Print measured decoding speed..
+    /// Print measured decoding speed.
     #[clap(long, short, action)]
     speedtest: bool,
 
-    /// Number of times to repeat the decoding.
-    #[clap(long, short)]
-    num_reps: Option<u32>,
+    /// Number of times to repeat the decoding (only valid with --speedtest).
+    #[clap(long, short, default_value_t = 1, requires = "speedtest")]
+    num_reps: usize,
 
     /// Number of warmup decodes before measuring (only valid with --speedtest).
-    #[clap(long, default_value = "1", requires = "speedtest")]
-    warmup_reps: u32,
+    #[clap(long, default_value_t = 1, requires = "speedtest")]
+    warmup_reps: usize,
 
     ///  If specified, writes the ICC profile of the decoded image
     #[clap(long)]
@@ -88,7 +45,7 @@ struct Opt {
 
     /// If specified, takes precedence over the bit depth in the input metadata
     #[clap(long)]
-    override_bitdepth: Option<u32>,
+    override_bitdepth: Option<usize>,
 
     /// Extract the preview frame instead of the main image
     #[clap(long, action)]
@@ -103,31 +60,17 @@ struct Opt {
     high_precision: bool,
 
     /// Output data type for decoder (u8, u16, f16, f32). Used for benchmarking
-    /// the decoder's conversion pipeline. Default: f32
-    #[clap(long, default_value = "f32")]
-    data_type: String,
+    /// the decoder's conversion pipeline. Default: pick based on bit depth
+    /// and output format.
+    #[clap(long)]
+    data_type: Option<OutputDataType>,
 }
 
-// Extract RGB channels from interleaved RGB buffer
-fn planes_from_interleaved(interleaved: &Image<f32>) -> Result<Vec<Image<f32>>> {
-    let size = interleaved.size();
-    let size = (size.0 / 3, size.1);
-    let mut r_image = Image::<f32>::new(size)?;
-    let mut g_image = Image::<f32>::new(size)?;
-    let mut b_image = Image::<f32>::new(size)?;
-
-    for y in 0..size.1 {
-        let r_row = r_image.row_mut(y);
-        let g_row = g_image.row_mut(y);
-        let b_row = b_image.row_mut(y);
-        let src_row = interleaved.row(y);
-        for x in 0..size.0 {
-            r_row[x] = src_row[3 * x];
-            g_row[x] = src_row[3 * x + 1];
-            b_row[x] = src_row[3 * x + 2];
-        }
-    }
-    Ok(vec![r_image, g_image, b_image])
+fn save_icc(icc_bytes: &[u8], icc_filename: Option<&PathBuf>) -> Result<()> {
+    icc_filename.map_or(Ok(()), |path| {
+        std::fs::write(path, icc_bytes)
+            .wrap_err_with(|| format!("Failed to write ICC profile to {:?}", path))
+    })
 }
 
 fn main() -> Result<()> {
@@ -144,14 +87,16 @@ fn main() -> Result<()> {
     let mut file = fs::File::open(opt.input.clone())
         .wrap_err_with(|| format!("Failed to read source image from {:?}", opt.input))?;
 
-    let (numpy_output, exr_output) = match &opt.output.as_ref().map(|p| p.to_string_lossy()) {
-        Some(path) => (path.ends_with(".npy"), path.ends_with(".exr")),
-        None => (false, false),
-    };
+    let output_format = opt
+        .output
+        .as_ref()
+        .map(|f| OutputFormat::from_output_filename(&f.to_string_lossy()))
+        .transpose()?;
+
     let high_precision = opt.high_precision;
     let options = |skip_preview: bool| {
         let mut options = JxlDecoderOptions::default();
-        options.render_spot_colors = !numpy_output;
+        options.render_spot_colors = !matches!(output_format, Some(OutputFormat::Npy));
         options.skip_preview = skip_preview;
         options.high_precision = high_precision;
         options.cms = Some(Box::new(Lcms2Cms));
@@ -193,143 +138,84 @@ fn main() -> Result<()> {
         file.seek(std::io::SeekFrom::Start(0))?;
     }
 
-    let reps = opt.num_reps.unwrap_or(1);
     let mut duration_sum = Duration::new(0, 0);
     // When extracting preview, don't skip it; otherwise skip preview by default
     let skip_preview = !opt.preview;
 
-    // Parse the output data type
-    let output_type = dec::OutputDataType::parse(&opt.data_type).ok_or_else(|| {
-        eyre!(
-            "Invalid data type '{}'. Must be u8, u16, f16, or f32",
-            opt.data_type
-        )
-    })?;
+    macro_rules! run_decoder {
+        ($input: expr) => {{
+            #[cfg(feature = "exr")]
+            let linear_output = matches!(output_format, Some(OutputFormat::Exr));
+            #[cfg(not(feature = "exr"))]
+            let linear_output = false;
+            let (mut output, duration) = dec::decode_frames(
+                $input,
+                options(skip_preview),
+                opt.override_bitdepth,
+                opt.data_type,
+                output_format
+                    .map(|x| x.supported_output_data_types())
+                    .unwrap_or(OutputDataType::ALL),
+                output_format.is_none_or(|x| x.should_fold_alpha()),
+                linear_output,
+            )?;
+            if opt.preview {
+                output.frames.truncate(1);
+                let ctype = output.frames[0].color_type;
+                let bsize = output.frames[0].channels[0].byte_size();
+                let bytes_per_pixel =
+                    ctype.samples_per_pixel() * output.data_type.bits_per_sample() / 8;
+                output.size = (bsize.0 / bytes_per_pixel, bsize.1);
+            }
+            (output, duration)
+        }};
+    }
 
-    // Decode to typed output (timing excludes f32 conversion)
-    // For benchmarking (speedtest or multiple reps), always read into memory to avoid I/O variability
-    let typed_output = if reps > 1 || opt.speedtest {
+    // For benchmarking, always read into memory to avoid I/O variability
+    let output = if opt.speedtest {
         let mut input_bytes = Vec::<u8>::new();
         file.read_to_end(&mut input_bytes)?;
 
-        // Warmup decodes for speedtest to ensure CPU caches and branch predictors are hot
-        if opt.speedtest {
-            for _ in 0..opt.warmup_reps {
-                let mut input = input_bytes.as_slice();
-                let _ = dec::decode_frames_with_type(
-                    &mut input,
-                    options(skip_preview),
-                    output_type,
-                    exr_output,
-                )?;
-            }
+        for _ in 0..opt.warmup_reps {
+            run_decoder!(&mut input_bytes.as_slice());
         }
 
-        (0..reps)
-            .try_fold(None, |_, _| -> Result<Option<dec::TypedDecodeOutput>> {
-                let mut input = input_bytes.as_slice();
-                let (mut iteration_output, iteration_duration) = dec::decode_frames_with_type(
-                    &mut input,
-                    options(skip_preview),
-                    output_type,
-                    exr_output,
-                )?;
-                duration_sum += iteration_duration;
-                // When extracting preview, only keep the first frame (the preview)
-                if opt.preview {
-                    iteration_output.truncate_frames(1);
-                    if let Some((color_type, (w, h))) = iteration_output.first_frame_info() {
-                        let samples = if color_type == JxlColorType::Grayscale {
-                            1
-                        } else {
-                            3
-                        };
-                        iteration_output.set_size((w / samples, h));
-                    }
-                }
-                Ok(Some(iteration_output))
-            })?
-            .unwrap()
+        let mut last_output = None;
+
+        for _ in 0..opt.num_reps {
+            let (output, duration) = run_decoder!(&mut input_bytes.as_slice());
+            duration_sum += duration;
+            last_output = Some(output);
+        }
+        last_output.unwrap()
     } else {
         // For single decode without speedtest, stream from file
-        let mut reader = BufReader::new(file);
-        let (mut typed_output, duration) = dec::decode_frames_with_type(
-            &mut reader,
-            options(skip_preview),
-            output_type,
-            exr_output,
-        )?;
-        duration_sum = duration;
-        // When extracting preview, only keep the first frame (the preview)
-        if opt.preview {
-            typed_output.truncate_frames(1);
-            if let Some((color_type, (w, h))) = typed_output.first_frame_info() {
-                let samples = if color_type == JxlColorType::Grayscale {
-                    1
-                } else {
-                    3
-                };
-                typed_output.set_size((w / samples, h));
-            }
-        }
-        typed_output
+        run_decoder!(&mut BufReader::new(file)).0
     };
 
     // Get metadata from typed output before converting
-    let output_icc = typed_output.output_profile().as_icc().to_vec();
-    let embedded_icc = typed_output.embedded_profile().as_icc().to_vec();
-    let image_size = typed_output.size();
-    let original_bit_depth = typed_output.original_bit_depth().clone();
-
-    // Convert to f32 for saving (this happens AFTER timing is captured)
-    let mut image_data = typed_output.to_f32()?;
-
-    let data_icc_result = save_icc(&output_icc, opt.icc_out.as_ref());
-    let original_icc_result = save_icc(&embedded_icc, opt.original_icc_out.as_ref());
-
-    for frame in image_data.frames.iter_mut() {
-        if frame.color_type != JxlColorType::Grayscale {
-            let mut new_channels = planes_from_interleaved(&frame.channels[0])?;
-            new_channels.extend(mem::take(&mut frame.channels).into_iter().skip(1));
-            frame.channels = new_channels;
-        }
-    }
+    let output_icc = output.output_profile.as_icc().to_vec();
+    let embedded_icc = output.embedded_profile.as_icc().to_vec();
+    let image_size = output.size;
 
     if opt.speedtest {
         let num_pixels = image_size.0 * image_size.1;
         let duration_seconds = duration_sum.as_secs_f64();
-        let avg_seconds = duration_seconds / reps as f64;
+        let avg_seconds = duration_seconds / opt.num_reps as f64;
         println!(
             "Decoded {} pixels in {:.3} seconds: {:.3} MP/s",
-            reps as usize * num_pixels,
+            opt.num_reps * num_pixels,
             duration_seconds,
             (num_pixels as f64 / avg_seconds) / 1e6
         );
     }
 
-    let image_result: Option<Result<()>> = opt.output.map(|path| {
-        let output_bit_depth = match opt.override_bitdepth {
-            None => original_bit_depth.bits_per_sample(),
-            Some(num_bits) => num_bits,
-        };
-        let image_result = save_image(&image_data, output_bit_depth, &path);
+    if let Some(output_format) = output_format {
+        output_format.save_image(&output, opt.output.as_ref().unwrap())?;
+    }
 
-        if let Err(err) = &original_icc_result {
-            println!("Failed to save original ICC profile: {err}");
-        }
-        if let Err(err) = &data_icc_result {
-            println!("Failed to save data ICC profile: {err}");
-        }
-        if let Err(ref err) = image_result {
-            println!("Failed to save image: {err}");
-        }
-        image_result
-    });
-
-    original_icc_result?;
-    data_icc_result?;
-
-    image_result.unwrap_or(Ok(()))?;
+    save_icc(&output_icc, opt.icc_out.as_ref())?;
+    save_icc(&embedded_icc, opt.original_icc_out.as_ref())?;
 
     Ok(())
 }

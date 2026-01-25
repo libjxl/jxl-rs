@@ -75,6 +75,8 @@ impl JxlDecoderInner {
     }
 
     pub fn set_pixel_format(&mut self, pixel_format: JxlPixelFormat) {
+        // TODO(veluca): return an error if we are asking for both planar and
+        // interleaved-in-color alpha.
         self.codestream_parser.pixel_format = Some(pixel_format);
     }
 

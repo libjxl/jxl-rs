@@ -4,7 +4,7 @@
 // license that can be found in the LICENSE file.
 
 use crate::dec::DecodeOutput;
-use jxl::error::{Error, Result};
+use jxl::error::Result;
 use std::io::Write;
 
 fn numpy_header<Writer: Write>(
@@ -52,23 +52,35 @@ fn numpy_header<Writer: Write>(
     Ok(())
 }
 
-fn numpy_bytes<Writer: Write>(
-    image_data: &DecodeOutput<f32>,
-    num_channels: usize,
-    writer: &mut Writer,
-) -> Result<()> {
+fn numpy_bytes<Writer: Write>(image_data: &DecodeOutput, writer: &mut Writer) -> Result<()> {
     let (width, height) = image_data.size;
 
     for frame in &image_data.frames {
-        assert_eq!(frame.channels.len(), num_channels);
-        for channel in &frame.channels {
-            assert_eq!(channel.size(), image_data.size);
+        // Special-case the common case of having a single channel buffer in little endian floats.
+        if frame.channels.len() == 1 && cfg!(target_endian = "little") {
+            for y in 0..height {
+                writer.write_all(frame.channels[0].row(y))?;
+            }
+            continue;
         }
-
+        let ch0 = frame.color_type.samples_per_pixel();
         for y in 0..height {
             for x in 0..width {
-                for channel in frame.channels.iter() {
-                    writer.write_all(&channel.row(y)[x].to_le_bytes())?;
+                for c in 0..ch0 {
+                    writer.write_all(
+                        &f32::from_ne_bytes(
+                            frame.channels[0].row(y)[(x * ch0 + c) * 4..][..4]
+                                .try_into()
+                                .unwrap(),
+                        )
+                        .to_le_bytes(),
+                    )?;
+                }
+                for channel in frame.channels.iter().skip(1) {
+                    writer.write_all(
+                        &f32::from_ne_bytes(channel.row(y)[x * 4..][..4].try_into().unwrap())
+                            .to_le_bytes(),
+                    )?;
                 }
             }
         }
@@ -80,22 +92,15 @@ fn numpy_bytes<Writer: Write>(
 /// The data will be represented as little-endian 32-bit floats ('<f4').
 /// The shape of the NumPy array will be (num_frames, height, width, num_channels).
 ///
-pub fn to_numpy<Writer: Write>(image_data: &DecodeOutput<f32>, writer: &mut Writer) -> Result<()> {
-    if image_data.frames.is_empty()
-        || image_data.frames[0].channels.is_empty()
-        || image_data.size.0 == 0
-        || image_data.size.1 == 0
-    {
-        return Err(Error::NoFrames);
-    }
+pub fn to_numpy<Writer: Write>(image_data: &DecodeOutput, writer: &mut Writer) -> Result<()> {
     let size = image_data.size;
     let (width, height) = size;
     let num_frames = image_data.frames.len();
-    let num_channels = image_data.frames[0].channels.len();
+    let num_channels = image_data.frames[0].channels.len() - 1
+        + image_data.frames[0].color_type.samples_per_pixel();
 
     numpy_header(width, height, num_channels, num_frames, writer)?;
-    // Consistent channel sizes are checked inside the call to `to_numpy_bytes`.
-    numpy_bytes(image_data, num_channels, writer)?;
+    numpy_bytes(image_data, writer)?;
 
     Ok(())
 }
