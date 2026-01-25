@@ -1411,7 +1411,7 @@ unsafe impl U16SimdVec for U16VecAvx512 {
 
     #[inline(always)]
     fn load(d: Self::Descriptor, mem: &[u16]) -> Self {
-        assert!(mem.len() > Self::LEN);
+        assert!(mem.len() >= Self::LEN);
         // SAFETY: we just checked that `mem` has enough space. Moreover, we know avx512f is available
         // from the safety invariant on `d`.
         unsafe { Self(_mm512_loadu_si512(mem.as_ptr() as *const _), d) }
@@ -1425,7 +1425,7 @@ unsafe impl U16SimdVec for U16VecAvx512 {
 
     #[inline(always)]
     fn store(&self, mem: &mut [u16]) {
-        assert!(mem.len() > Self::LEN);
+        assert!(mem.len() >= Self::LEN);
         // SAFETY: we just checked that `mem` has enough space. Moreover, we know avx512f is available
         // from the safety invariant on `d`.
         unsafe { _mm512_storeu_si512(mem.as_mut_ptr() as *mut _, self.0) }
