@@ -76,6 +76,7 @@ mod tests {
             &[ty],
             true,
             false,
+            false,
         )
         .unwrap()
         .0
@@ -177,7 +178,7 @@ mod tests {
             let mut options = JxlDecoderOptions::default();
             options.high_precision = true;
             let mut input = file.as_slice();
-            decode_frames(&mut input, options, None, None, &[*ty], true, false).unwrap();
+            decode_frames(&mut input, options, None, None, &[*ty], true, false, false).unwrap();
         }
     }
 }

@@ -64,6 +64,10 @@ struct Opt {
     /// and output format.
     #[clap(long)]
     data_type: Option<OutputDataType>,
+
+    /// Allow partial files (flush pixels on EOF)
+    #[clap(long)]
+    allow_partial_files: bool,
 }
 
 fn save_icc(icc_bytes: &[u8], icc_filename: Option<&PathBuf>) -> Result<()> {
@@ -158,6 +162,7 @@ fn main() -> Result<()> {
                     .unwrap_or(OutputDataType::ALL),
                 output_format.is_none_or(|x| x.should_fold_alpha()),
                 linear_output,
+                opt.allow_partial_files,
             )?;
             if opt.preview {
                 output.frames.truncate(1);
