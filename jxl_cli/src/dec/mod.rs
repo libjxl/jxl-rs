@@ -98,6 +98,7 @@ impl OutputDataType {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn decode_frames<In: JxlBitstreamInput>(
     input: &mut In,
     decoder_options: JxlDecoderOptions,
@@ -106,6 +107,7 @@ pub fn decode_frames<In: JxlBitstreamInput>(
     accepted_output_types: &[OutputDataType],
     interleave_alpha: bool,
     linear_output: bool,
+    allow_partial_files: bool,
 ) -> Result<(DecodeOutput, Duration)> {
     let start = Instant::now();
 
@@ -190,7 +192,12 @@ pub fn decode_frames<In: JxlBitstreamInput>(
     loop {
         let decoder_with_frame_info = match decoder_with_image_info.process(input)? {
             ProcessingResult::Complete { result } => result,
-            ProcessingResult::NeedsMoreInput { .. } => return Err(eyre!("Source file truncated")),
+            ProcessingResult::NeedsMoreInput { .. } => {
+                if allow_partial_files && !image_data.frames.is_empty() {
+                    break;
+                }
+                return Err(eyre!("Source file truncated"));
+            }
         };
 
         let frame_header = decoder_with_frame_info.frame_header();
@@ -223,7 +230,18 @@ pub fn decode_frames<In: JxlBitstreamInput>(
 
         decoder_with_image_info = match decoder_with_frame_info.process(input, &mut output_bufs)? {
             ProcessingResult::Complete { result } => result,
-            ProcessingResult::NeedsMoreInput { .. } => return Err(eyre!("Source file truncated")),
+            ProcessingResult::NeedsMoreInput { mut fallback, .. } => {
+                if allow_partial_files {
+                    fallback.flush_pixels(&mut output_bufs)?;
+                    image_data.frames.push(ImageFrame {
+                        duration: frame_header.duration.unwrap_or(0.0),
+                        channels: outputs,
+                        color_type,
+                    });
+                    break;
+                }
+                return Err(eyre!("Source file truncated"));
+            }
         };
 
         image_data.frames.push(ImageFrame {
