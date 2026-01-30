@@ -117,6 +117,16 @@ impl CodestreamParser {
 
         if self.decoder_state.is_none() && self.embedded_color_profile.is_none() {
             let file_header = self.file_header.as_ref().unwrap();
+
+            // Validate: want_icc with XYB or Unknown color space is invalid (matches libjxl)
+            // An embedded ICC profile cannot represent XYB or Unknown color spaces.
+            if file_header.image_metadata.color_encoding.want_icc
+                && (file_header.image_metadata.color_encoding.color_space == ColorSpace::XYB
+                    || file_header.image_metadata.color_encoding.color_space == ColorSpace::Unknown)
+            {
+                return Err(Error::InvalidColorEncoding);
+            }
+
             // Parse (or extract from file header) the ICC profile.
             let mut br = BitReader::new(&self.non_section_buf);
             br.skip_bits(self.non_section_bit_offset as usize)?;
