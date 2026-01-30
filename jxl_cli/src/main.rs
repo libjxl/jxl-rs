@@ -14,7 +14,15 @@ use std::io::{BufReader, Read, Seek};
 use std::path::PathBuf;
 use std::time::Duration;
 
+const VERSION_STRING: &str = concat!(
+    env!("VERGEN_GIT_DESCRIBE"),
+    " (rustc ",
+    env!("VERGEN_RUSTC_SEMVER"),
+    ")"
+);
+
 #[derive(Parser)]
+#[command(version = VERSION_STRING)]
 struct Opt {
     /// Input JXL file
     input: PathBuf,
