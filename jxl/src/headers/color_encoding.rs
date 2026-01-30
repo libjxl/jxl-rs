@@ -192,6 +192,10 @@ pub struct ColorEncoding {
 
 impl ColorEncoding {
     pub fn check(&self, _: &Empty) -> Result<(), Error> {
+        // XYB color space is not supported as an output color space
+        if self.color_space == ColorSpace::XYB {
+            return Err(Error::XybColorSpaceNotSupported);
+        }
         if !self.want_icc
             && (self.color_space == ColorSpace::Unknown
                 || self.tf.transfer_function == TransferFunction::Unknown)
