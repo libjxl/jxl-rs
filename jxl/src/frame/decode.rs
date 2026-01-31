@@ -3,6 +3,7 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
+use std::collections::BTreeSet;
 use std::sync::Arc;
 
 use super::render::pipeline;
@@ -20,6 +21,7 @@ use crate::frame::block_context_map::{ZERO_DENSITY_CONTEXT_COUNT, ZERO_DENSITY_C
 #[cfg(test)]
 use crate::render::SimpleRenderPipeline;
 use crate::render::buffer_splitter::BufferSplitter;
+use crate::util::SmallVec;
 use crate::{
     GROUP_DIM,
     bit_reader::BitReader,
@@ -128,6 +130,7 @@ impl Frame {
         Ok(Self {
             #[cfg(test)]
             use_simple_pipeline: decoder_state.use_simple_pipeline,
+            last_rendered_pass: vec![None; frame_header.num_groups()],
             header: frame_header,
             color_channels,
             toc,
@@ -142,8 +145,25 @@ impl Frame {
             lf_frame_data,
             lf_global_was_rendered: false,
             vardct_buffers: None,
+            groups_to_flush: BTreeSet::new(),
         })
     }
+
+    pub fn allow_rendering_before_last_pass(&self) -> bool {
+        // TODO(veluca): consider figuring out how to be more permissive here.
+        if self.header.has_patches() {
+            return false;
+        }
+        // TODO(veluca): implement logic to handle these cases.
+        if self.header.num_extra_channels != 0 {
+            return false;
+        }
+        if self.header.encoding == Encoding::Modular {
+            return false;
+        }
+        true
+    }
+
     /// Given a bit reader pointing at the end of the TOC, returns a vector of `BitReader`s, each
     /// of which reads a specific section.
     pub fn sections<'a>(&self, br: &'a mut BitReader) -> Result<Vec<BitReader<'a>>> {
@@ -365,16 +385,43 @@ impl Frame {
         Ok(())
     }
 
-    #[instrument(level = "debug", skip(self, br, buffer_splitter))]
+    // Returns `true` if data was effectively rendered.
+    #[instrument(level = "debug", skip(self, passes, buffer_splitter))]
     pub fn decode_hf_group(
         &mut self,
         group: usize,
-        pass: usize,
-        mut br: BitReader,
+        passes: &mut [(usize, BitReader)],
         buffer_splitter: &mut BufferSplitter,
-    ) -> Result<()> {
-        debug!(section_size = br.total_bits_available());
-        if self.header.has_noise() {
+        force_render: bool,
+    ) -> Result<bool> {
+        let last_pass_in_file = self.header.passes.num_passes as usize - 1;
+
+        if passes.is_empty() {
+            assert!(force_render);
+            assert_ne!(self.last_rendered_pass[group], Some(last_pass_in_file));
+        }
+
+        if let Some((p, _)) = passes.last() {
+            self.last_rendered_pass[group] = Some(*p);
+        };
+        let pass_to_render = self.last_rendered_pass[group];
+        let complete = pass_to_render.is_some_and(|p| p >= last_pass_in_file);
+
+        // Render if we are decoding the last pass, or if we are requesting a eager render and
+        // we can handle this case of eager renders.
+        let do_render = if complete {
+            true
+        } else if force_render {
+            self.allow_rendering_before_last_pass()
+        } else {
+            false
+        };
+
+        if !do_render && passes.is_empty() {
+            return Ok(false);
+        }
+
+        if self.header.has_noise() && do_render {
             // TODO(sboukortt): consider making this a dedicated stage
             let num_channels = self.header.num_extra_channels as usize + 3;
 
@@ -465,34 +512,39 @@ impl Frame {
             pipeline!(
                 self,
                 p,
-                p.set_buffer_for_group(num_channels, group, 1, buf0, buffer_splitter)?
+                p.set_buffer_for_group(num_channels, group, complete, buf0, buffer_splitter)?
             );
             pipeline!(
                 self,
                 p,
-                p.set_buffer_for_group(num_channels + 1, group, 1, buf1, buffer_splitter)?
+                p.set_buffer_for_group(num_channels + 1, group, complete, buf1, buffer_splitter)?
             );
             pipeline!(
                 self,
                 p,
-                p.set_buffer_for_group(num_channels + 2, group, 1, buf2, buffer_splitter)?
+                p.set_buffer_for_group(num_channels + 2, group, complete, buf2, buffer_splitter)?
             );
         }
 
         let lf_global = self.lf_global.as_mut().unwrap();
         if self.header.encoding == Encoding::VarDCT {
-            info!("Decoding VarDCT group {group}, pass {pass}");
+            info!("Decoding VarDCT group {group}");
             let hf_global = self.hf_global.as_mut().unwrap();
             let hf_meta = self.hf_meta.as_mut().unwrap();
-            let mut pixels = [
-                pipeline!(self, p, p.get_buffer(0))?,
-                pipeline!(self, p, p.get_buffer(1))?,
-                pipeline!(self, p, p.get_buffer(2))?,
-            ];
+            let mut pixels = if do_render {
+                Some([
+                    pipeline!(self, p, p.get_buffer(0))?,
+                    pipeline!(self, p, p.get_buffer(1))?,
+                    pipeline!(self, p, p.get_buffer(2))?,
+                ])
+            } else {
+                None
+            };
             let buffers = self.vardct_buffers.get_or_insert_with(VarDctBuffers::new);
+            // TODO(veluca): if `pass_to_render` is None, upsample LF with a nonseparable upsampler instead.
             decode_vardct_group(
                 group,
-                pass,
+                passes,
                 &self.header,
                 lf_global,
                 hf_global,
@@ -506,40 +558,41 @@ impl Frame {
                     .opsin_inverse_matrix
                     .quant_biases,
                 &mut pixels,
-                &mut br,
                 buffers,
             )?;
-            if self.decoder_state.enable_output
-                && pass + 1 == self.header.passes.num_passes as usize
-            {
+            if let Some(pixels) = pixels {
                 for (c, img) in pixels.into_iter().enumerate() {
                     pipeline!(
                         self,
                         p,
-                        p.set_buffer_for_group(c, group, 1, img, buffer_splitter)?
+                        p.set_buffer_for_group(c, group, complete, img, buffer_splitter)?
                     );
                 }
             }
         }
-        lf_global.modular_global.read_stream(
-            ModularStreamId::ModularHF { group, pass },
-            &self.header,
-            &lf_global.tree,
-            &mut br,
-        )?;
+
+        for (pass, br) in passes.iter_mut() {
+            lf_global.modular_global.read_stream(
+                ModularStreamId::ModularHF { group, pass: *pass },
+                &self.header,
+                &lf_global.tree,
+                br,
+            )?;
+        }
+        let sections: SmallVec<_, 4> = passes.iter().map(|x| x.0 + 2).collect();
         lf_global.modular_global.process_output(
-            2 + pass,
+            &sections,
             group,
             &self.header,
-            &mut |chan, group, num_passes, image| {
+            &mut |chan, group, image| {
                 pipeline!(
                     self,
                     p,
-                    p.set_buffer_for_group(chan, group, num_passes, image, buffer_splitter)?
+                    p.set_buffer_for_group(chan, group, true, image, buffer_splitter)?
                 );
                 Ok(())
             },
         )?;
-        Ok(())
+        Ok(do_render)
     }
 }

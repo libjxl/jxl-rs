@@ -121,17 +121,13 @@ impl LowMemoryRenderPipeline {
         g: usize,
         buffer_splitter: &mut BufferSplitter,
     ) -> Result<()> {
-        let pass = {
-            let buf = &mut self.input_buffers[g];
-            if buf.ready_channels != buf.data.len() {
-                return Ok(());
-            }
-            buf.ready_channels = 0;
-            *self.shared.group_chan_ready_passes[g].iter().min().unwrap() - 1
-        };
-
+        let buf = &mut self.input_buffers[g];
+        if buf.ready_channels != buf.data.len() {
+            return Ok(());
+        }
+        buf.ready_channels = 0;
         let (gx, gy) = self.shared.group_position(g);
-        debug!("new data ready for group {gx},{gy}, pass {pass}");
+        debug!("new data ready for group {gx},{gy}");
 
         // Prepare output buffers for the group.
         let (origin, size) = if let Some(e) = self.shared.extend_stage_index {
@@ -287,8 +283,8 @@ impl LowMemoryRenderPipeline {
 
         // Clear border buffers that will not be used again.
         // This is certainly the case if *all* the groups in the 3x3 group area around
-        // the current group have had all their passes rendered.
-        if pass + 1 == self.shared.num_passes {
+        // the current group are complete.
+        if self.shared.group_chan_complete[g].iter().all(|x| *x) {
             for g in [
                 gym1 * gw + gxm1,
                 gym1 * gw + gx,

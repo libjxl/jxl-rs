@@ -103,7 +103,6 @@ fn make_and_run_simple_pipeline_impl<InputT: ImageDataType, OutputT: ImageDataTy
         image_size,
         downsampling_shift,
         LOG_GROUP_SIZE,
-        1,
         chunk_size,
     )
     .add_stage_internal(stage)?;
@@ -168,7 +167,7 @@ fn make_and_run_simple_pipeline_impl<InputT: ImageDataType, OutputT: ImageDataTy
             pipeline.set_buffer_for_group(
                 c,
                 g,
-                1,
+                true,
                 extract_group_rect(&input_images[c], g, log_group_size)?,
                 &mut buffer_splitter,
             )?;

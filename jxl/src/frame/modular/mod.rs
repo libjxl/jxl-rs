@@ -535,10 +535,10 @@ impl FullModularImage {
 
     pub fn process_output(
         &mut self,
-        section_id: usize,
+        section_ids: &[usize],
         grid: usize,
         frame_header: &FrameHeader,
-        pass_to_pipeline: &mut dyn FnMut(usize, usize, usize, Image<i32>) -> Result<()>,
+        pass_to_pipeline: &mut dyn FnMut(usize, usize, Image<i32>) -> Result<()>,
     ) -> Result<()> {
         let mut maybe_output = |bi: &mut ModularBufferInfo, grid: usize| -> Result<()> {
             if bi.info.output_channel_idx >= 0 {
@@ -548,24 +548,26 @@ impl FullModularImage {
                 // TODO(veluca): figure out what to do with passes here.
                 if chan == 0 && self.modular_color_channels == 1 {
                     for i in 0..2 {
-                        pass_to_pipeline(i, grid, 1, buf.data.try_clone()?)?;
+                        pass_to_pipeline(i, grid, buf.data.try_clone()?)?;
                     }
-                    pass_to_pipeline(2, grid, 1, buf.data)?;
+                    pass_to_pipeline(2, grid, buf.data)?;
                 } else {
-                    pass_to_pipeline(chan, grid, 1, buf.data)?;
+                    pass_to_pipeline(chan, grid, buf.data)?;
                 }
             }
             Ok(())
         };
 
         let mut new_ready_transform_chunks = vec![];
-        for buf in self.section_buffer_indices[section_id].iter().copied() {
-            maybe_output(&mut self.buffer_info[buf], grid)?;
-            let new_chunks = self.buffer_info[buf].buffer_grid[grid]
-                .used_by_transforms
-                .to_vec();
-            trace!("Buffer {buf} grid position {grid} used by chunks {new_chunks:?}");
-            new_ready_transform_chunks.extend(new_chunks);
+        for section_id in section_ids {
+            for buf in self.section_buffer_indices[*section_id].iter().copied() {
+                maybe_output(&mut self.buffer_info[buf], grid)?;
+                let new_chunks = self.buffer_info[buf].buffer_grid[grid]
+                    .used_by_transforms
+                    .to_vec();
+                trace!("Buffer {buf} grid position {grid} used by chunks {new_chunks:?}");
+                new_ready_transform_chunks.extend(new_chunks);
+            }
         }
 
         trace!(?new_ready_transform_chunks);

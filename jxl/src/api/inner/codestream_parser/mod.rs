@@ -163,6 +163,7 @@ impl CodestreamParser {
         input: &mut dyn JxlBitstreamInput,
         decode_options: &JxlDecoderOptions,
         mut output_buffers: Option<&mut [JxlOutputBuffer]>,
+        do_flush: bool,
     ) -> Result<()> {
         if let Some(output_buffers) = &output_buffers {
             let px = self.pixel_format.as_ref().unwrap();
@@ -244,7 +245,7 @@ impl CodestreamParser {
                             break;
                         }
                     }
-                    match self.process_sections(decode_options, &mut output_buffers) {
+                    match self.process_sections(decode_options, &mut output_buffers, do_flush) {
                         Ok(None) => Ok(()),
                         Ok(Some(missing)) => Err(Error::OutOfBounds(missing)),
                         Err(Error::OutOfBounds(_)) => Err(Error::SectionTooShort),
