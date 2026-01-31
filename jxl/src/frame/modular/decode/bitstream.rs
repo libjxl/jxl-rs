@@ -80,6 +80,12 @@ pub fn decode_modular_subbitstream(
     let mut reader = SymbolReader::new(&tree.histograms, br, Some(image_width))?;
 
     for i in 0..buffers.len() {
+        // Keep channel numbering stable, but skip actually decoding empty channels.
+        // This matches libjxl, which continues the loop without renumbering.
+        let (w, h) = buffers[i].data.size();
+        if w == 0 || h == 0 {
+            continue;
+        }
         decode_modular_channel(&mut buffers, i, stream_id, &header, tree, &mut reader, br)?;
     }
 
