@@ -51,8 +51,6 @@ pub enum Error {
     InvalidColorEncoding,
     #[error("Invalid color space: should be one of RGB, Gray or XYB")]
     InvalidColorSpace,
-    #[error("XYB color space is not supported")]
-    XybColorSpaceNotSupported,
     #[error("Only perceptual rendering intent implemented for XYB ICC profile.")]
     InvalidRenderingIntent,
     #[error("Invalid intensity_target: {0}")]

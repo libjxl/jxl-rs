@@ -1303,10 +1303,8 @@ pub(crate) mod tests {
 
     /// Regression test for Chromium ClusterFuzz issue 474401148.
     #[test]
-    #[allow(clippy::collapsible_if)]
     fn test_fuzzer_xyb_icc_no_panic() {
         use crate::api::ProcessingResult;
-        use std::panic;
 
         #[rustfmt::skip]
         let data: &[u8] = &[
@@ -1314,32 +1312,17 @@ pub(crate) mod tests {
             0x00, 0x00, 0x00, 0x00, 0x00, 0x11, 0x25, 0x00,
         ];
 
-        let result = panic::catch_unwind(|| {
-            let opts = JxlDecoderOptions {
-                pixel_limit: Some(1024 * 1024 * 1024),
-                ..Default::default()
-            };
-            let mut decoder = JxlDecoderInner::new(opts);
-            let mut input = data;
+        let opts = JxlDecoderOptions {
+            pixel_limit: Some(1024 * 1024 * 1024),
+            ..Default::default()
+        };
+        let mut decoder = JxlDecoderInner::new(opts);
+        let mut input = data;
 
-            if let Ok(ProcessingResult::Complete { .. }) = decoder.process(&mut input, None) {
-                if let Some(profile) = decoder.output_color_profile() {
-                    let _ = profile.try_as_icc();
-                }
-            }
-        });
-
-        if let Err(e) = result {
-            let panic_msg = e
-                .downcast_ref::<&str>()
-                .map(|s| s.to_string())
-                .or_else(|| e.downcast_ref::<String>().cloned())
-                .unwrap_or_default();
-            assert!(
-                !panic_msg.contains("not yet implemented"),
-                "Unexpected panic: {}",
-                panic_msg
-            );
+        if let Ok(ProcessingResult::Complete { .. }) = decoder.process(&mut input, None)
+            && let Some(profile) = decoder.output_color_profile()
+        {
+            let _ = profile.try_as_icc();
         }
     }
 }
