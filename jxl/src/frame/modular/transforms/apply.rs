@@ -114,7 +114,7 @@ impl TransformStepChunk {
                     *buffers[buf_out[i]].buffer_grid[out_grid].data.borrow_mut() =
                         Some(buffers[buf_in[i]].buffer_grid[out_grid].get_buffer()?);
                 }
-                with_buffers(buffers, buf_out, out_grid, false, |mut bufs| {
+                with_buffers(buffers, buf_out, out_grid, |mut bufs| {
                     super::rct::do_rct_step(&mut bufs, *op, *perm);
                     Ok(())
                 })?;
@@ -129,7 +129,7 @@ impl TransformStepChunk {
                 // Nothing to do, just bookkeeping.
                 buffers[*buf_in].buffer_grid[out_grid].mark_used();
                 buffers[*buf_pal].buffer_grid[0].mark_used();
-                with_buffers(buffers, buf_out, out_grid, false, |_| Ok(()))?;
+                with_buffers(buffers, buf_out, out_grid, |_| Ok(()))?;
                 Ok(buf_out.iter().map(|x| (*x, out_grid)).collect())
             }
             TransformStep::Palette {
@@ -155,7 +155,7 @@ impl TransformStepChunk {
                         });
                     // Ensure that the output buffers are present.
                     // TODO(szabadka): Extend the callback to support many grid points.
-                    with_buffers(buffers, buf_out, out_grid, false, |_| Ok(()))?;
+                    with_buffers(buffers, buf_out, out_grid, |_| Ok(()))?;
                     let grid_shape = buffers[buf_out[0]].grid_shape;
                     let grid_x = out_grid % grid_shape.0;
                     let grid_y = out_grid / grid_shape.0;
@@ -222,7 +222,7 @@ impl TransformStepChunk {
                         ));
                         // Ensure that the output buffers are present.
                         // TODO(szabadka): Extend the callback to support many grid points.
-                        with_buffers(buffers, buf_out, out_grid + grid_x, false, |_| Ok(()))?;
+                        with_buffers(buffers, buf_out, out_grid + grid_x, |_| Ok(()))?;
                     }
                     let in_buf_refs: Vec<&ModularChannel> =
                         in_bufs.iter().map(|x| x.deref()).collect();
@@ -309,7 +309,7 @@ impl TransformStepChunk {
                         ))
                     };
 
-                    with_buffers(buffers, &[*buf_out], out_grid, false, |mut bufs| {
+                    with_buffers(buffers, &[*buf_out], out_grid, |mut bufs| {
                         super::squeeze::do_hsqueeze_step(
                             &in_avg.data.get_rect(buf_avg.get_grid_rect(
                                 frame_header,
@@ -379,7 +379,7 @@ impl TransformStepChunk {
                         buf_avg.get_grid_rect(frame_header, out_grid_kind, (gx, gy));
                     let res_grid_rect =
                         buf_res.get_grid_rect(frame_header, out_grid_kind, (gx, gy));
-                    with_buffers(buffers, &[*buf_out], out_grid, false, |mut bufs| {
+                    with_buffers(buffers, &[*buf_out], out_grid, |mut bufs| {
                         super::squeeze::do_vsqueeze_step(
                             &in_avg.data.get_rect(avg_grid_rect),
                             &in_res.data.get_rect(res_grid_rect),
