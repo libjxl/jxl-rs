@@ -1300,4 +1300,29 @@ pub(crate) mod tests {
             );
         }
     }
+
+    /// Regression test for Chromium ClusterFuzz issue 474401148.
+    #[test]
+    fn test_fuzzer_xyb_icc_no_panic() {
+        use crate::api::ProcessingResult;
+
+        #[rustfmt::skip]
+        let data: &[u8] = &[
+            0xff, 0x0a, 0x01, 0x00, 0x00, 0x04, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x11, 0x25, 0x00,
+        ];
+
+        let opts = JxlDecoderOptions {
+            pixel_limit: Some(1024 * 1024 * 1024),
+            ..Default::default()
+        };
+        let mut decoder = JxlDecoderInner::new(opts);
+        let mut input = data;
+
+        if let Ok(ProcessingResult::Complete { .. }) = decoder.process(&mut input, None)
+            && let Some(profile) = decoder.output_color_profile()
+        {
+            let _ = profile.try_as_icc();
+        }
+    }
 }

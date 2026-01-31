@@ -117,6 +117,7 @@ impl CodestreamParser {
 
         if self.decoder_state.is_none() && self.embedded_color_profile.is_none() {
             let file_header = self.file_header.as_ref().unwrap();
+
             // Parse (or extract from file header) the ICC profile.
             let mut br = BitReader::new(&self.non_section_buf);
             br.skip_bits(self.non_section_bit_offset as usize)?;
