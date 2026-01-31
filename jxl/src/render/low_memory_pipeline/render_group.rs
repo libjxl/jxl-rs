@@ -111,20 +111,18 @@ impl LowMemoryRenderPipeline {
 
         let base_gid = igy * self.shared.group_count.0 + gx;
 
-        let pass = self.input_buffers[gy * self.shared.group_count.0 + gx].current_pass;
-
         // Previous group horizontally, if needed.
         if copy_x0 < group_x0 {
             let (input_buf, xs) = if is_topbottom {
                 (
-                    self.input_buffers[base_gid - 1].topbottom[pass][c]
+                    self.input_buffers[base_gid - 1].topbottom[c]
                         .as_ref()
                         .unwrap(),
                     group_xsize,
                 )
             } else {
                 (
-                    self.input_buffers[base_gid - 1].leftright[pass][c]
+                    self.input_buffers[base_gid - 1].leftright[c]
                         .as_ref()
                         .unwrap(),
                     4 * (bx >> dx),
@@ -140,9 +138,7 @@ impl LowMemoryRenderPipeline {
             copy_byte_offset += to_copy;
         }
         let input_buf = if is_topbottom {
-            self.input_buffers[base_gid].topbottom[pass][c]
-                .as_ref()
-                .unwrap()
+            self.input_buffers[base_gid].topbottom[c].as_ref().unwrap()
         } else {
             self.input_buffers[base_gid].data[c].as_ref().unwrap()
         };
@@ -156,11 +152,11 @@ impl LowMemoryRenderPipeline {
         // Next group horizontally, if any.
         if copy_x1 > group_x1 {
             let input_buf = if is_topbottom {
-                self.input_buffers[base_gid + 1].topbottom[pass][c]
+                self.input_buffers[base_gid + 1].topbottom[c]
                     .as_ref()
                     .unwrap()
             } else {
-                self.input_buffers[base_gid + 1].leftright[pass][c]
+                self.input_buffers[base_gid + 1].leftright[c]
                     .as_ref()
                     .unwrap()
             };
