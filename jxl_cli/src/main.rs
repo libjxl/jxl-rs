@@ -28,6 +28,7 @@ struct Opt {
     input: PathBuf,
 
     /// Output image file, should end in .ppm, .pgm, .png, .apng or .npy
+    /// (optional with --speedtest or --info)
     #[clap(required_unless_present_any = ["speedtest", "info"])]
     output: Option<PathBuf>,
 
