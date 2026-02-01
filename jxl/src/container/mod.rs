@@ -108,6 +108,9 @@ impl ContainerParser {
                 ParseEvent::Codestream(buf) => {
                     codestream.extend_from_slice(buf);
                 }
+                ParseEvent::AuxBox { .. } => {
+                    // Ignore auxiliary boxes when collecting codestream
+                }
             }
         }
         Ok(codestream)
