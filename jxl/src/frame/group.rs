@@ -328,6 +328,7 @@ pub fn decode_vardct_group(
     let histogram_index: usize = br.read(num_histo_bits as usize)? as usize;
     debug!(?histogram_index);
     let mut reader = SymbolReader::new(&hf_global.passes[pass].histograms, br, None)?;
+
     let block_group_rect = frame_header.block_group_rect(group);
     debug!(?block_group_rect);
     // Reset and use pooled buffers
@@ -489,8 +490,10 @@ pub fn decode_vardct_group(
                 let nonzero_context = block_context_map
                     .nonzero_context(predicted_nzeros, block_context)
                     + context_offset;
+
                 let mut nonzeros =
                     reader.read_unsigned(&pass_info.histograms, br, nonzero_context) as usize;
+
                 trace!(
                     "block ({},{},{c}) predicted_nzeros: {predicted_nzeros} \
                        nzero_ctx: {nonzero_context} (offset: {context_offset}) \
@@ -511,6 +514,7 @@ pub fn decode_vardct_group(
                 let mut prev = if nonzeros > num_coeffs / 16 { 0 } else { 1 };
                 let permutation = &pass_info.coeff_orders[shape_id * 3 + c];
                 let current_coeffs = &mut coeffs[c][coeffs_offset..coeffs_offset + num_coeffs];
+
                 for k in num_blocks..num_coeffs {
                     if nonzeros == 0 {
                         break;
@@ -524,6 +528,7 @@ pub fn decode_vardct_group(
                     let coeff_index = permutation[k] as usize;
                     current_coeffs[coeff_index] += coeff;
                 }
+
                 if nonzeros != 0 {
                     return Err(Error::EndOfBlockResidualNonZeros(nonzeros));
                 }

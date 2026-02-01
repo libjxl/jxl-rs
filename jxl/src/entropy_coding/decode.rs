@@ -393,6 +393,38 @@ impl SymbolReader {
         unpack_signed(unsigned)
     }
 
+    /// Specialized fast path for when all HybridUint configs are 420.
+    /// SAFETY: This method assumes no LZ77 is active (only handles SymbolReaderState::None).
+    /// The caller must ensure histograms.can_use_config_420_fast_path() is true before using this.
+    #[inline(always)]
+    pub fn read_unsigned_clustered_config_420(
+        &mut self,
+        histograms: &Histograms,
+        br: &mut BitReader,
+        cluster: usize,
+    ) -> u32 {
+        debug_assert!(matches!(self.state, SymbolReaderState::None));
+        debug_assert!(histograms.can_use_config_420_fast_path());
+
+        let token = match &histograms.codes {
+            Codes::Huffman(hc) => hc.read(br, cluster),
+            Codes::Ans(ans) => self.ans_reader.read(ans, br, cluster),
+        };
+        HybridUint::read_config_420(token, br)
+    }
+
+    /// Specialized fast path for signed reads when all configs are 420
+    #[inline(always)]
+    pub fn read_signed_clustered_config_420(
+        &mut self,
+        histograms: &Histograms,
+        br: &mut BitReader,
+        cluster: usize,
+    ) -> i32 {
+        let unsigned = self.read_unsigned_clustered_config_420(histograms, br, cluster);
+        unpack_signed(unsigned)
+    }
+
     pub fn check_final_state(self, histograms: &Histograms, br: &mut BitReader) -> Result<()> {
         self.errors.check_for_error()?;
         br.check_for_error()?;
@@ -556,6 +588,13 @@ impl Histograms {
 
     pub fn resize(&mut self, num_contexts: usize) {
         self.context_map.resize(num_contexts, 0);
+    }
+
+    /// Returns true if the config 420 fast path can be safely used.
+    /// Config 420: split_exponent=4, msb_in_token=2, lsb_in_token=0 (common pattern)
+    /// Requires: all configs are 420 AND LZ77 is disabled
+    pub fn can_use_config_420_fast_path(&self) -> bool {
+        !self.lz77_params.enabled && self.uint_configs.iter().all(|cfg| cfg.is_config_420())
     }
 }
 

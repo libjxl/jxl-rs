@@ -356,7 +356,24 @@ impl AnsHistogram {
         let pos = idx & self.bucket_mask;
 
         debug_assert!(self.buckets.len().is_power_of_two());
-        let bucket = self.buckets[i & (self.buckets.len() - 1)];
+        debug_assert!(
+            i < self.buckets.len(),
+            "bucket index {} out of bounds (len = {})",
+            i,
+            self.buckets.len()
+        );
+        // SAFETY: i < buckets.len() is guaranteed by the following invariants:
+        //   - idx = state & 0xfff, so 0 <= idx <= 4095 = 2^12 - 1
+        //   - i = idx >> log_bucket_size
+        //   - log_bucket_size = LOG_SUM_PROBS - log_alpha_size = 12 - log_alpha_size
+        //   - buckets.len() = dist.len() = table_size = 2^log_alpha_size
+        //   - Therefore: max(i) = (2^12 - 1) >> (12 - log_alpha_size)
+        //                       = 2^log_alpha_size - 1
+        //                       = buckets.len() - 1
+        #[allow(unsafe_code)]
+        let bucket = unsafe { *self.buckets.get_unchecked(i) };
+        // Safe version: (~3% slower for e2 lossless decoding)
+        // let bucket = self.buckets[i & (self.buckets.len() - 1)];
         let alias_symbol = bucket.alias_symbol as u32;
         let alias_cutoff = bucket.alias_cutoff as u32;
         let dist = bucket.dist as u32;
