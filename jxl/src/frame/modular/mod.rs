@@ -475,7 +475,7 @@ impl FullModularImage {
             trace!("Transform {i}: {ts:?}");
         }
 
-        with_buffers(&buffer_info, &section_buffer_indices[0], 0, true, |bufs| {
+        with_buffers(&buffer_info, &section_buffer_indices[0], 0, |bufs| {
             decode_modular_subbitstream(
                 bufs,
                 ModularStreamId::GlobalData.get_id(frame_header),
@@ -520,7 +520,6 @@ impl FullModularImage {
             &self.buffer_info,
             &self.section_buffer_indices[section_id],
             grid,
-            true,
             |bufs| {
                 decode_modular_subbitstream(
                     bufs,
