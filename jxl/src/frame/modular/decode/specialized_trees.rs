@@ -87,7 +87,7 @@ impl ModularChannelDecoder for NoWpTree {
             &mut self.property_buffer,
         );
         let dec = reader.read_signed(histograms, br, prediction_result.context as usize);
-        make_pixel(dec, prediction_result.multiplier, prediction_result.guess)
+        make_pixel::<i32>(dec, prediction_result.multiplier, prediction_result.guess)
     }
 }
 
@@ -141,7 +141,7 @@ impl ModularChannelDecoder for GeneralTree {
             &mut self.no_wp_tree.property_buffer,
         );
         let dec = reader.read_signed(histograms, br, prediction_result.context as usize);
-        let val = make_pixel(dec, prediction_result.multiplier, prediction_result.guess);
+        let val = make_pixel::<i32>(dec, prediction_result.multiplier, prediction_result.guess);
         self.wp_state.update_errors(val, pos, xsize);
         val
     }
@@ -341,7 +341,7 @@ impl ModularChannelDecoder for SingleGradientOnly {
     ) -> i32 {
         let pred = Predictor::Gradient.predict_one(prediction_data, 0);
         let dec = reader.read_signed(histograms, br, self.ctx);
-        make_pixel(dec, 1, pred)
+        make_pixel::<i32>(dec, 1, pred)
     }
 }
 
