@@ -71,7 +71,8 @@ impl HybridUint {
             return symbol;
         }
 
-        let nbits = 2 + ((symbol - 16) >> 2);
+        // Equivalent to: 2 + ((symbol - 16) >> 2)
+        let nbits = (symbol >> 2) - 2;
         let nbits = nbits & 31;
         let bits = br.read_optimistic(nbits as usize) as u32;
         let hi = (symbol & 3) | 4;
