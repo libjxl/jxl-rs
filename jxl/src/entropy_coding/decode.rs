@@ -553,6 +553,10 @@ impl Histograms {
     pub fn num_histograms(&self) -> usize {
         *self.context_map.iter().max().unwrap() as usize + 1
     }
+
+    pub fn resize(&mut self, num_contexts: usize) {
+        self.context_map.resize(num_contexts, 0);
+    }
 }
 
 #[cfg(test)]

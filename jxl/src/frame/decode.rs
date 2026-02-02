@@ -16,6 +16,7 @@ use super::{
     quantizer::{LfQuantFactors, QuantizerParams},
 };
 use crate::error::Error;
+use crate::frame::block_context_map::{ZERO_DENSITY_CONTEXT_COUNT, ZERO_DENSITY_CONTEXT_LIMIT};
 #[cfg(test)]
 use crate::render::SimpleRenderPipeline;
 use crate::render::buffer_splitter::BufferSplitter;
@@ -334,7 +335,10 @@ impl Frame {
                 "Deconding histograms for pass {} with {} contexts",
                 i, num_contexts
             );
-            let histograms = Histograms::decode(num_contexts, br, true)?;
+            let mut histograms = Histograms::decode(num_contexts, br, true)?;
+            // Pad the context map to avoid index out of bounds in decode_vardct_group (group.rs#L514@752e6a4).
+            let padding = ZERO_DENSITY_CONTEXT_LIMIT - ZERO_DENSITY_CONTEXT_COUNT;
+            histograms.resize(num_contexts + padding);
             debug!("Found {} histograms", histograms.num_histograms());
             passes.push(PassState {
                 coeff_orders,
