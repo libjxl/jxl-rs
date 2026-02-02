@@ -394,8 +394,10 @@ impl SymbolReader {
     }
 
     /// Specialized fast path for when all HybridUint configs are 420.
-    /// SAFETY: This method assumes no LZ77 is active (only handles SymbolReaderState::None).
-    /// The caller must ensure histograms.can_use_config_420_fast_path() is true before using this.
+    ///
+    /// # Preconditions
+    /// - `histograms.can_use_config_420_fast_path()` must be true (no LZ77, all configs are 420)
+    /// - This assumes `SymbolReaderState::None` (verified by debug_assert)
     #[inline(always)]
     pub fn read_unsigned_clustered_config_420(
         &mut self,
@@ -413,7 +415,8 @@ impl SymbolReader {
         HybridUint::read_config_420(token, br)
     }
 
-    /// Specialized fast path for signed reads when all configs are 420
+    /// Specialized fast path for signed reads when all configs are 420.
+    /// See [`read_unsigned_clustered_config_420`] for preconditions.
     #[inline(always)]
     pub fn read_signed_clustered_config_420(
         &mut self,
