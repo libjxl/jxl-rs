@@ -6,7 +6,7 @@
 use crate::{
     api::{JxlDecoderOptions, JxlOutputBuffer},
     bit_reader::BitReader,
-    error::Result,
+    error::{Error, Result},
     frame::Section,
 };
 
@@ -42,6 +42,42 @@ impl CodestreamParser {
         decode_options: &JxlDecoderOptions,
         output_buffers: &mut Option<&mut [JxlOutputBuffer<'_>]>,
     ) -> Result<Option<usize>> {
+        let pixel_limit = decode_options.pixel_limit;
+        let (xs, ys) = self
+            .basic_info
+            .as_ref()
+            .map(|info| info.size)
+            .unwrap_or((0, 0));
+        let output_channels = self
+            .pixel_format
+            .as_ref()
+            .map(|pf| {
+                let mut channels = 0usize;
+                if pf.color_data_format.is_some() {
+                    channels = channels.saturating_add(pf.color_type.samples_per_pixel());
+                }
+                channels.saturating_add(
+                    pf.extra_channel_format
+                        .iter()
+                        .filter(|x| x.is_some())
+                        .count(),
+                )
+            })
+            .unwrap_or(0);
+        let check_output_pixel_limit = || -> Result<()> {
+            let Some(limit) = pixel_limit else {
+                return Ok(());
+            };
+            if xs == 0 || ys == 0 || output_channels == 0 {
+                return Ok(());
+            }
+            let total_samples = xs.saturating_mul(ys).saturating_mul(output_channels);
+            if total_samples >= limit {
+                return Err(Error::ImageSizeTooLarge(xs, ys));
+            }
+            Ok(())
+        };
+
         let frame = self.frame.as_mut().unwrap();
         let frame_header = frame.header();
 
@@ -84,6 +120,7 @@ impl CodestreamParser {
                 frame.decode_lf_global(&mut br)?;
                 frame.decode_lf_group(0, &mut br)?;
                 frame.decode_hf_global(&mut br)?;
+                check_output_pixel_limit()?;
                 frame.prepare_render_pipeline(
                     self.pixel_format.as_ref().unwrap(),
                     decode_options.cms.as_deref(),
@@ -127,6 +164,7 @@ impl CodestreamParser {
 
                 if let Some(hf_global) = self.hf_global_section.take() {
                     frame.decode_hf_global(&mut BitReader::new(&hf_global.data))?;
+                    check_output_pixel_limit()?;
                     frame.prepare_render_pipeline(
                         self.pixel_format.as_ref().unwrap(),
                         decode_options.cms.as_deref(),
