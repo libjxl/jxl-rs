@@ -132,6 +132,7 @@ impl JxlDecoderInner {
 
     /// Draws all the pixels we have data for.
     pub fn flush_pixels(&mut self, _buffers: &mut [JxlOutputBuffer]) -> Result<()> {
-        todo!()
+        // TODO(veluca): actually implement this.
+        Ok(())
     }
 }
