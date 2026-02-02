@@ -512,7 +512,7 @@ pub fn decode_vardct_group(
                 let permutation = &pass_info.coeff_orders[shape_id * 3 + c];
                 let current_coeffs = &mut coeffs[c][coeffs_offset..coeffs_offset + num_coeffs];
                 for k in num_blocks..num_coeffs {
-                    if nonzeros == 0 {
+                    if nonzeros == 0 || nonzeros + k > num_coeffs {
                         break;
                     }
                     let ctx =
