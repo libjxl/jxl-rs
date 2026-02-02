@@ -18,7 +18,6 @@ struct AnsHistogram {
     // Safety invariant: buckets.len() = 2^(LOG_SUM_PROBS - log_bucket_size)
     // This relationship ensures that for any ANS state (12 bits), the bucket index
     // computed as (state & 0xfff) >> log_bucket_size is always < buckets.len()
-    // This invariant is verified in the decode() constructor.
     buckets: Vec<Bucket>,
     log_bucket_size: usize,
     bucket_mask: u32,
@@ -309,8 +308,8 @@ impl AnsHistogram {
         }
 
         let buckets = Self::build_alias_map(alphabet_size, log_bucket_size, &dist);
-        // Verify safety invariant: buckets.len() = 2^(LOG_SUM_PROBS - log_bucket_size)
-        debug_assert_eq!(buckets.len(), 1 << (LOG_SUM_PROBS - log_bucket_size));
+        assert_eq!(buckets.len(), 1 << (LOG_SUM_PROBS - log_bucket_size));
+        // Safety note: we just checked that buckets.len() = 2^(LOG_SUM_PROBS - log_bucket_size)
         Ok(Self {
             buckets,
             log_bucket_size,
