@@ -18,10 +18,11 @@ use super::{
 };
 use crate::error::Error;
 use crate::frame::block_context_map::{ZERO_DENSITY_CONTEXT_COUNT, ZERO_DENSITY_CONTEXT_LIMIT};
+use crate::headers::frame_header::FrameType;
 #[cfg(test)]
 use crate::render::SimpleRenderPipeline;
 use crate::render::buffer_splitter::BufferSplitter;
-use crate::util::SmallVec;
+use crate::util::{SmallVec, mirror};
 use crate::{
     GROUP_DIM,
     bit_reader::BitReader,
@@ -41,6 +42,104 @@ use crate::{
     util::{CeilLog2, Xorshift128Plus, tracing_wrappers::*},
 };
 use jxl_transforms::transform_map::*;
+
+use crate::headers::CustomTransformData;
+use crate::render::RenderPipelineInOutStage;
+use crate::render::stages::Upsample8x;
+use crate::render::{Channels, ChannelsMut};
+
+fn upsample_lf_group(
+    group: usize,
+    pixels: &mut [Image<f32>; 3],
+    lf_image: &[Image<f32>; 3],
+    header: &FrameHeader,
+    factors: &CustomTransformData,
+) -> Result<()> {
+    let group_dim = header.group_dim();
+    let lf_group_dim = group_dim / 8;
+    let (width_groups, _) = header.size_groups();
+    let gx = group % width_groups;
+    let gy = group / width_groups;
+    let lf_x0 = gx * lf_group_dim;
+    let lf_y0 = gy * lf_group_dim;
+
+    let (lf_width, lf_height) = lf_image[0].size();
+    let (out_width, out_height) = pixels[0].size();
+
+    let start_x = lf_x0.saturating_sub(2);
+    let lf_x1 = (lf_x0 + lf_group_dim).min(lf_width);
+    let end_x = (lf_x1 + 2).min(lf_width);
+    let copy_width = end_x - start_x;
+
+    let upsample = Upsample8x::new(factors, 0);
+    let mut state = upsample.init_local_state(0)?.unwrap();
+
+    // Temporary buffer for 8 output rows
+    // We reuse this buffer for each iteration to minimize allocation
+    let mut temp_out_buf: [_; 8] = std::array::from_fn(|_| vec![0.0f32; out_width + 128]);
+
+    let mut input_rows_storage: [_; 5] = std::array::from_fn(|_| vec![0.0; lf_width + 20]);
+
+    for c in 0..3 {
+        let lf_img = &lf_image[c];
+        let out_img = &mut pixels[c];
+
+        for y in 0..lf_group_dim {
+            let cy = lf_y0 + y;
+
+            for dy in -2..=2 {
+                let iy = cy as isize + dy;
+                let iy = mirror(iy, lf_height);
+
+                let storage = &mut input_rows_storage[(dy + 2) as usize];
+
+                let save_start = if start_x == lf_x0 { 2 } else { 0 };
+                let save_end = save_start + copy_width;
+
+                storage[save_start..save_end]
+                    .copy_from_slice(&lf_img.row(iy)[start_x..start_x + copy_width]);
+
+                if start_x == lf_x0 {
+                    storage[0] = storage[2 + mirror(-2, end_x - start_x)];
+                    storage[1] = storage[2 + mirror(-1, end_x - start_x)];
+                }
+                if end_x == lf_x1 {
+                    storage[save_end + 1] =
+                        storage[save_start + mirror(save_end as isize + 1, save_end)];
+                    storage[save_end + 2] =
+                        storage[save_start + mirror(save_end as isize + 2, save_end)];
+                }
+            }
+
+            let input_rows_refs = input_rows_storage.iter().map(|x| &x[..]).collect();
+            let input_channels = Channels::new(input_rows_refs, 1, 5);
+
+            {
+                // Prepare output refs
+                let output_rows_refs = temp_out_buf.iter_mut().map(|x| &mut x[..]).collect();
+                let mut output_channels = ChannelsMut::new(output_rows_refs, 1, 8);
+
+                upsample.process_row_chunk(
+                    (0, 0),
+                    lf_group_dim,
+                    &input_channels,
+                    &mut output_channels,
+                    Some(state.as_mut()),
+                );
+            }
+
+            // Copy back to out_img
+            let base_y = y * 8;
+            for (i, buf) in temp_out_buf.iter().enumerate() {
+                let out_y = base_y + i;
+                if out_y < out_height {
+                    out_img.row_mut(out_y).copy_from_slice(&buf[..out_width]);
+                }
+            }
+        }
+    }
+    Ok(())
+}
 
 impl Frame {
     pub fn from_header_and_toc(
@@ -159,6 +258,9 @@ impl Frame {
             return false;
         }
         if self.header.encoding == Encoding::Modular {
+            return false;
+        }
+        if self.header.frame_type != FrameType::RegularFrame {
             return false;
         }
         true
@@ -541,25 +643,34 @@ impl Frame {
                 None
             };
             let buffers = self.vardct_buffers.get_or_insert_with(VarDctBuffers::new);
-            // TODO(veluca): if `pass_to_render` is None, upsample LF with a nonseparable upsampler instead.
-            decode_vardct_group(
-                group,
-                passes,
-                &self.header,
-                lf_global,
-                hf_global,
-                hf_meta,
-                &self.lf_image,
-                &self.quant_lf,
-                &self
-                    .decoder_state
-                    .file_header
-                    .transform_data
-                    .opsin_inverse_matrix
-                    .quant_biases,
-                &mut pixels,
-                buffers,
-            )?;
+            if pass_to_render.is_none() && do_render {
+                upsample_lf_group(
+                    group,
+                    pixels.as_mut().unwrap(),
+                    self.lf_image.as_ref().unwrap(),
+                    &self.header,
+                    &self.decoder_state.file_header.transform_data,
+                )?;
+            } else {
+                decode_vardct_group(
+                    group,
+                    passes,
+                    &self.header,
+                    lf_global,
+                    hf_global,
+                    hf_meta,
+                    &self.lf_image,
+                    &self.quant_lf,
+                    &self
+                        .decoder_state
+                        .file_header
+                        .transform_data
+                        .opsin_inverse_matrix
+                        .quant_biases,
+                    &mut pixels,
+                    buffers,
+                )?;
+            }
             if let Some(pixels) = pixels {
                 for (c, img) in pixels.into_iter().enumerate() {
                     pipeline!(

@@ -11,12 +11,9 @@ use crate::{
     image::{DataTypeTag, Rect},
     render::{
         internal::{ChannelInfo, Stage},
-        low_memory_pipeline::{
-            helpers::{get_distinct_indices, mirror},
-            run_stage::ExtraInfo,
-        },
+        low_memory_pipeline::{helpers::get_distinct_indices, run_stage::ExtraInfo},
     },
-    util::{ShiftRightCeil, SmallVec, tracing_wrappers::*},
+    util::{ShiftRightCeil, SmallVec, mirror, tracing_wrappers::*},
 };
 
 use super::{LowMemoryRenderPipeline, row_buffers::RowBuffer};
