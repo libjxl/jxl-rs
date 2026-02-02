@@ -152,11 +152,6 @@ const LUT_MIN_SPLITVAL: i32 = -1024;
 const LUT_TABLE_SIZE: usize = (LUT_MAX_SPLITVAL - LUT_MIN_SPLITVAL + 1) as usize;
 const _: () = assert!(LUT_TABLE_SIZE.is_power_of_two());
 
-pub struct WpOnlyLookup {
-    lut: [u8; LUT_TABLE_SIZE], // Lookup (wp value -> *clustered* context id)
-    wp_state: WeightedPredictorState,
-}
-
 fn make_lut(tree: &[TreeNode], histograms: &Histograms) -> Option<[u8; LUT_TABLE_SIZE]> {
     struct RangeAndNode {
         range: Range<i32>,
@@ -205,19 +200,6 @@ fn make_lut(tree: &[TreeNode], histograms: &Histograms) -> Option<[u8; LUT_TABLE
     }
 
     Some(ans)
-}
-
-impl WpOnlyLookup {
-    fn new(
-        tree: &[TreeNode],
-        histograms: &Histograms,
-        header: &GroupHeader,
-        xsize: usize,
-    ) -> Option<Self> {
-        let wp_state = WeightedPredictorState::new(&header.wp_header, xsize);
-        let lut = make_lut(tree, histograms)?;
-        Some(Self { lut, wp_state })
-    }
 }
 
 /// Specialized WpOnlyLookup for when all HybridUint configs are 420
@@ -274,106 +256,10 @@ impl ModularChannelDecoder for WpOnlyLookupConfig420 {
     }
 }
 
-impl ModularChannelDecoder for WpOnlyLookup {
-    const NEEDS_TOP: bool = true;
-    const NEEDS_TOPTOP: bool = true;
-
-    fn init_row(&mut self, _buffers: &mut [&mut ModularChannel], _chan: usize, _y: usize) {
-        // nothing to do
-    }
-
-    #[inline(always)]
-    fn decode_one(
-        &mut self,
-        prediction_data: PredictionData,
-        pos: (usize, usize),
-        xsize: usize,
-        reader: &mut SymbolReader,
-        br: &mut BitReader,
-        histograms: &Histograms,
-    ) -> i32 {
-        let (wp_pred, property) = self
-            .wp_state
-            .predict_and_property(pos, xsize, &prediction_data);
-        let ctx = self.lut[(property as i64 - LUT_MIN_SPLITVAL as i64)
-            .clamp(0, LUT_TABLE_SIZE as i64 - 1) as usize];
-        let dec = reader.read_signed_clustered(histograms, br, ctx as usize);
-        let val = dec.wrapping_add(wp_pred as i32);
-        self.wp_state.update_errors(val, pos, xsize);
-        val
-    }
-}
-
-/// Fast path for trees that split only on property 9 (gradient: left + top - topleft)
-/// with Gradient predictor, offset=0, multiplier=1.
-/// Maps property 9 values directly to cluster IDs via a LUT.
-/// This targets libjxl effort 2 encoding.
-pub struct GradientLookup {
-    lut: [u8; LUT_TABLE_SIZE],
-}
-
 /// Property 9 is the "gradient property": left + top - topleft
 const GRADIENT_PROPERTY: u8 = 9;
 
-fn make_gradient_lut(tree: &[TreeNode], histograms: &Histograms) -> Option<GradientLookup> {
-    // Verify all splits are on property 9 and all leaves have Gradient predictor
-    for node in tree {
-        match node {
-            TreeNode::Split { property, .. } => {
-                if *property != GRADIENT_PROPERTY {
-                    return None;
-                }
-            }
-            TreeNode::Leaf { predictor, .. } => {
-                if *predictor != Predictor::Gradient {
-                    return None;
-                }
-            }
-        }
-    }
-
-    // Use existing make_lut which handles offset=0, multiplier=1 checks
-    let lut = make_lut(tree, histograms)?;
-    Some(GradientLookup { lut })
-}
-
-impl ModularChannelDecoder for GradientLookup {
-    const NEEDS_TOP: bool = true;
-    const NEEDS_TOPTOP: bool = false;
-
-    fn init_row(&mut self, _: &mut [&mut ModularChannel], _: usize, _: usize) {}
-
-    #[inline(always)]
-    fn decode_one(
-        &mut self,
-        prediction_data: PredictionData,
-        _: (usize, usize),
-        _: usize,
-        reader: &mut SymbolReader,
-        br: &mut BitReader,
-        histograms: &Histograms,
-    ) -> i32 {
-        let prop9 = prediction_data
-            .left
-            .wrapping_add(prediction_data.top)
-            .wrapping_sub(prediction_data.topleft);
-
-        let index =
-            (prop9 as i64 - LUT_MIN_SPLITVAL as i64).clamp(0, LUT_TABLE_SIZE as i64 - 1) as usize;
-        let cluster = self.lut[index];
-
-        let pred = clamped_gradient(
-            prediction_data.left as i64,
-            prediction_data.top as i64,
-            prediction_data.topleft as i64,
-        );
-
-        let dec = reader.read_signed_clustered(histograms, br, cluster as usize);
-        dec.wrapping_add(pred as i32)
-    }
-}
-
-/// Config 420 specialized version of GradientLookup.
+/// Config 420 specialized version of gradient lookup for trees that split only on property 9.
 /// This uses the specialized entropy decoder for config 420 + no LZ77.
 pub struct GradientLookupConfig420 {
     lut: [u8; LUT_TABLE_SIZE],
@@ -472,9 +358,7 @@ impl ModularChannelDecoder for SingleGradientOnly {
 #[allow(clippy::large_enum_variant)]
 pub enum TreeSpecialCase {
     NoWp(NoWpTree),
-    WpOnly(WpOnlyLookup),
     WpOnlyConfig420(WpOnlyLookupConfig420),
-    GradientLookup(GradientLookup),
     GradientLookupConfig420(GradientLookupConfig420),
     SingleGradientOnly(SingleGradientOnly),
     General(GeneralTree),
@@ -555,26 +439,18 @@ pub fn specialize_tree(
     }
 
     if !uses_non_wp {
-        // Try the specialized 420 config version first (fastest path for e3 images)
+        // Try the specialized 420 config version (fast path for effort 3 encoded images)
         if let Some(wp) = WpOnlyLookupConfig420::new(&pruned_tree, &tree.histograms, header, xsize)
         {
             return Ok(TreeSpecialCase::WpOnlyConfig420(wp));
         }
-        // Fall back to generic WpOnly
-        if let Some(wp) = WpOnlyLookup::new(&pruned_tree, &tree.histograms, header, xsize) {
-            return Ok(TreeSpecialCase::WpOnly(wp));
-        }
     }
 
-    // Try gradient LUT for non-WP trees (targets effort 2 encoding)
+    // Non-WP trees (includes effort 2 encoding and some groups in effort > 3)
     if !uses_wp {
-        // Try config 420 specialized version first
+        // Try config 420 specialized gradient LUT version (fast path for effort 2 encoded images)
         if let Some(gl) = make_gradient_lut_config_420(&pruned_tree, &tree.histograms) {
             return Ok(TreeSpecialCase::GradientLookupConfig420(gl));
-        }
-        // Fall back to generic gradient lookup
-        if let Some(gl) = make_gradient_lut(&pruned_tree, &tree.histograms) {
-            return Ok(TreeSpecialCase::GradientLookup(gl));
         }
         return Ok(TreeSpecialCase::NoWp(NoWpTree::new(
             pruned_tree,
