@@ -15,6 +15,10 @@ const RLE_MARKER_SYM: u16 = LOG_SUM_PROBS as u16 + 1;
 
 #[derive(Debug)]
 struct AnsHistogram {
+    // Safety invariant: buckets.len() = 2^(LOG_SUM_PROBS - log_bucket_size)
+    // This relationship ensures that for any ANS state (12 bits), the bucket index
+    // computed as (state & 0xfff) >> log_bucket_size is always < buckets.len()
+    // This invariant is verified in the decode() constructor.
     buckets: Vec<Bucket>,
     log_bucket_size: usize,
     bucket_mask: u32,
@@ -283,7 +287,7 @@ impl AnsHistogram {
         };
 
         if let Some(single_sym_idx) = dist.iter().position(|&d| d == SUM_PROBS) {
-            let buckets = dist
+            let buckets: Vec<Bucket> = dist
                 .into_iter()
                 .enumerate()
                 .map(|(i, dist)| Bucket {
@@ -294,6 +298,8 @@ impl AnsHistogram {
                     alias_dist_xor: dist ^ SUM_PROBS,
                 })
                 .collect();
+            // Verify safety invariant: buckets.len() = 2^(LOG_SUM_PROBS - log_bucket_size)
+            debug_assert_eq!(buckets.len(), 1 << (LOG_SUM_PROBS - log_bucket_size));
             return Ok(Self {
                 buckets,
                 log_bucket_size,
@@ -302,8 +308,11 @@ impl AnsHistogram {
             });
         }
 
+        let buckets = Self::build_alias_map(alphabet_size, log_bucket_size, &dist);
+        // Verify safety invariant: buckets.len() = 2^(LOG_SUM_PROBS - log_bucket_size)
+        debug_assert_eq!(buckets.len(), 1 << (LOG_SUM_PROBS - log_bucket_size));
         Ok(Self {
-            buckets: Self::build_alias_map(alphabet_size, log_bucket_size, &dist),
+            buckets,
             log_bucket_size,
             bucket_mask,
             single_symbol: None,
@@ -362,14 +371,9 @@ impl AnsHistogram {
             i,
             self.buckets.len()
         );
-        // SAFETY: i < buckets.len() is guaranteed by the following invariants:
-        //   - idx = state & 0xfff, so 0 <= idx <= 4095 = 2^12 - 1
-        //   - i = idx >> log_bucket_size
-        //   - log_bucket_size = LOG_SUM_PROBS - log_alpha_size = 12 - log_alpha_size
-        //   - buckets.len() = dist.len() = table_size = 2^log_alpha_size
-        //   - Therefore: max(i) = (2^12 - 1) >> (12 - log_alpha_size)
-        //                       = 2^log_alpha_size - 1
-        //                       = buckets.len() - 1
+        // SAFETY: The struct-level safety invariant (see AnsHistogram::buckets) ensures that
+        // buckets.len() = 2^(LOG_SUM_PROBS - log_bucket_size). Since idx = state & 0xfff
+        // (12 bits) and i = idx >> log_bucket_size, we have i < buckets.len() always.
         #[allow(unsafe_code)]
         let bucket = unsafe { *self.buckets.get_unchecked(i) };
         // Safe version: (~3% slower for e2 lossless decoding)
