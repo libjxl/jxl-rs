@@ -297,8 +297,8 @@ impl AnsHistogram {
                     alias_dist_xor: dist ^ SUM_PROBS,
                 })
                 .collect();
-            // Verify safety invariant: buckets.len() = 2^(LOG_SUM_PROBS - log_bucket_size)
-            debug_assert_eq!(buckets.len(), 1 << (LOG_SUM_PROBS - log_bucket_size));
+            assert_eq!(buckets.len(), 1 << (LOG_SUM_PROBS - log_bucket_size));
+            // Safety note: we just checked that buckets.len() = 2^(LOG_SUM_PROBS - log_bucket_size)
             return Ok(Self {
                 buckets,
                 log_bucket_size,
