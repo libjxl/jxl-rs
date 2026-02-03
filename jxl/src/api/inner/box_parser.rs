@@ -7,8 +7,8 @@ use crate::error::{Error, Result};
 use std::io::IoSliceMut;
 
 use crate::api::{
-    JxlBitstreamInput, JxlSignatureType, MetadataCaptureOptions, check_signature_internal,
-    inner::process::SmallBuffer, JxlMetadataBox,
+    JxlBitstreamInput, JxlMetadataBox, JxlSignatureType, MetadataCaptureOptions,
+    check_signature_internal, inner::process::SmallBuffer,
 };
 
 /// Type of metadata box being captured.

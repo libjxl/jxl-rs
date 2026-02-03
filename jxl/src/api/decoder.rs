@@ -5,7 +5,7 @@
 
 use super::{
     JxlBasicInfo, JxlBitstreamInput, JxlColorProfile, JxlDecoderInner, JxlDecoderOptions,
-    JxlOutputBuffer, JxlPixelFormat, ProcessingResult, JxlMetadataBox
+    JxlMetadataBox, JxlOutputBuffer, JxlPixelFormat, ProcessingResult,
 };
 #[cfg(test)]
 use crate::frame::Frame;
@@ -1382,19 +1382,45 @@ pub(crate) mod tests {
     fn extract_exif_image_description(exif_data: &[u8]) -> Option<String> {
         let d = exif_data.get(4..)?; // Skip 4-byte TIFF offset (JXL-specific prefix)
         let le = d.get(0..2)? == [0x49, 0x49]; // "II" = Intel = little-endian
-        let u16_at = |o: usize| d.get(o..o + 2).map(|b| if le { u16::from_le_bytes([b[0], b[1]]) } else { u16::from_be_bytes([b[0], b[1]]) });
-        let u32_at = |o: usize| d.get(o..o + 4).map(|b| if le { u32::from_le_bytes([b[0], b[1], b[2], b[3]]) } else { u32::from_be_bytes([b[0], b[1], b[2], b[3]]) });
+        let u16_at = |o: usize| {
+            d.get(o..o + 2).map(|b| {
+                if le {
+                    u16::from_le_bytes([b[0], b[1]])
+                } else {
+                    u16::from_be_bytes([b[0], b[1]])
+                }
+            })
+        };
+        let u32_at = |o: usize| {
+            d.get(o..o + 4).map(|b| {
+                if le {
+                    u32::from_le_bytes([b[0], b[1], b[2], b[3]])
+                } else {
+                    u32::from_be_bytes([b[0], b[1], b[2], b[3]])
+                }
+            })
+        };
 
-        if u16_at(2)? != 42 { return None; } // TIFF magic number
+        if u16_at(2)? != 42 {
+            return None;
+        } // TIFF magic number
         let ifd = u32_at(4)? as usize; // IFD0 offset
         let count = u16_at(ifd)? as usize; // Number of directory entries
 
         for i in 0..count {
             let e = ifd + 2 + i * 12; // Each IFD entry is 12 bytes
-            if u16_at(e)? != 0x010E { continue; } // ImageDescription tag
-            if u16_at(e + 2)? != 2 { return None; } // Type 2 = ASCII string
+            if u16_at(e)? != 0x010E {
+                continue;
+            } // ImageDescription tag
+            if u16_at(e + 2)? != 2 {
+                return None;
+            } // Type 2 = ASCII string
             let len = u32_at(e + 4)? as usize; // String length including null
-            let off = if len <= 4 { e + 8 } else { u32_at(e + 8)? as usize }; // Inline if ≤4 bytes, else offset
+            let off = if len <= 4 {
+                e + 8
+            } else {
+                u32_at(e + 8)? as usize
+            }; // Inline if ≤4 bytes, else offset
             let s = d.get(off..off + len)?;
             let s = s.strip_suffix(&[0]).unwrap_or(s); // Remove null terminator
             return std::str::from_utf8(s).ok().map(|s| s.to_string());
@@ -1424,9 +1450,9 @@ pub(crate) mod tests {
             };
             let decoder = decode_to_image_info(file, options);
             // Bare codestream has no container, metadata capture returns Some but empty
-            assert!(decoder.exif_boxes().map_or(true, |b| b.is_empty()));
-            assert!(decoder.xml_boxes().map_or(true, |b| b.is_empty()));
-            assert!(decoder.jumbf_boxes().map_or(true, |b| b.is_empty()));
+            assert!(decoder.exif_boxes().is_none_or(|b| b.is_empty()));
+            assert!(decoder.xml_boxes().is_none_or(|b| b.is_empty()));
+            assert!(decoder.jumbf_boxes().is_none_or(|b| b.is_empty()));
         }
 
         #[test]
@@ -1482,7 +1508,10 @@ pub(crate) mod tests {
             assert_eq!(boxes.len(), 1);
 
             let xml_str = std::str::from_utf8(&boxes[0].data).unwrap();
-            assert_eq!(xml_str, XMP_TEMPLATE.replace("{DESCRIPTION}", "Test XMP content"));
+            assert_eq!(
+                xml_str,
+                XMP_TEMPLATE.replace("{DESCRIPTION}", "Test XMP content")
+            );
         }
 
         #[test]
@@ -1511,7 +1540,12 @@ pub(crate) mod tests {
             let decoder = decode_to_image_info(file, options);
 
             let boxes = decoder.exif_boxes().expect("EXIF should be captured");
-            assert_eq!(boxes.len(), 2, "Expected exactly 2 boxes, got {}", boxes.len());
+            assert_eq!(
+                boxes.len(),
+                2,
+                "Expected exactly 2 boxes, got {}",
+                boxes.len()
+            );
 
             assert_eq!(
                 extract_exif_image_description(&boxes[0].data),
@@ -1533,7 +1567,12 @@ pub(crate) mod tests {
             let decoder = decode_to_image_info(file, options);
 
             let boxes = decoder.xml_boxes().expect("XML should be captured");
-            assert_eq!(boxes.len(), 2, "Expected exactly 2 boxes, got {}", boxes.len());
+            assert_eq!(
+                boxes.len(),
+                2,
+                "Expected exactly 2 boxes, got {}",
+                boxes.len()
+            );
 
             let xml0 = std::str::from_utf8(&boxes[0].data).unwrap();
             let xml1 = std::str::from_utf8(&boxes[1].data).unwrap();
@@ -1551,7 +1590,12 @@ pub(crate) mod tests {
             let decoder = decode_to_image_info(file, options);
 
             let boxes = decoder.jumbf_boxes().expect("JUMBF should be captured");
-            assert_eq!(boxes.len(), 2, "Expected exactly 2 boxes, got {}", boxes.len());
+            assert_eq!(
+                boxes.len(),
+                2,
+                "Expected exactly 2 boxes, got {}",
+                boxes.len()
+            );
 
             let jumbf0 = std::str::from_utf8(&boxes[0].data).unwrap();
             let jumbf1 = std::str::from_utf8(&boxes[1].data).unwrap();
@@ -1603,7 +1647,10 @@ pub(crate) mod tests {
             };
             let decoder = decode_to_image_info(file, options);
 
-            assert!(decoder.exif_boxes().is_none(), "EXIF should not be captured");
+            assert!(
+                decoder.exif_boxes().is_none(),
+                "EXIF should not be captured"
+            );
         }
 
         #[test]
@@ -1773,7 +1820,8 @@ pub(crate) mod tests {
 
         #[test]
         fn single_exif_box() {
-            let file = include_bytes!("../../resources/test/metadata_test_images/single_exif_brob.jxl");
+            let file =
+                include_bytes!("../../resources/test/metadata_test_images/single_exif_brob.jxl");
             let options = JxlDecoderOptions {
                 metadata_capture: MetadataCaptureOptions::capture_all_with_limits(),
                 ..Default::default()
@@ -1795,7 +1843,8 @@ pub(crate) mod tests {
 
         #[test]
         fn single_xml_box() {
-            let file = include_bytes!("../../resources/test/metadata_test_images/single_xmp_brob.jxl");
+            let file =
+                include_bytes!("../../resources/test/metadata_test_images/single_xmp_brob.jxl");
             let options = JxlDecoderOptions {
                 metadata_capture: MetadataCaptureOptions::capture_all_with_limits(),
                 ..Default::default()
@@ -1812,12 +1861,16 @@ pub(crate) mod tests {
             // Decompress and verify content
             let decompressed = brotli_decompress(&boxes[0].data);
             let xml_str = std::str::from_utf8(&decompressed).unwrap();
-            assert_eq!(xml_str, XMP_TEMPLATE.replace("{DESCRIPTION}", "Test XMP content"));
+            assert_eq!(
+                xml_str,
+                XMP_TEMPLATE.replace("{DESCRIPTION}", "Test XMP content")
+            );
         }
 
         #[test]
         fn single_jumbf_box() {
-            let file = include_bytes!("../../resources/test/metadata_test_images/single_jumbf_brob.jxl");
+            let file =
+                include_bytes!("../../resources/test/metadata_test_images/single_jumbf_brob.jxl");
             let options = JxlDecoderOptions {
                 metadata_capture: MetadataCaptureOptions::capture_all_with_limits(),
                 ..Default::default()
@@ -1839,7 +1892,8 @@ pub(crate) mod tests {
 
         #[test]
         fn multiple_exif_boxes() {
-            let file = include_bytes!("../../resources/test/metadata_test_images/multi_exif_brob.jxl");
+            let file =
+                include_bytes!("../../resources/test/metadata_test_images/multi_exif_brob.jxl");
             let options = JxlDecoderOptions {
                 metadata_capture: MetadataCaptureOptions::capture_all_with_limits(),
                 ..Default::default()
@@ -1847,11 +1901,22 @@ pub(crate) mod tests {
             let decoder = decode_to_image_info(file, options);
 
             let boxes = decoder.exif_boxes().expect("EXIF should be captured");
-            assert_eq!(boxes.len(), 2, "Expected exactly 2 boxes, got {}", boxes.len());
+            assert_eq!(
+                boxes.len(),
+                2,
+                "Expected exactly 2 boxes, got {}",
+                boxes.len()
+            );
 
             // Both should be compressed
-            assert!(boxes[0].is_brotli_compressed, "First box should be compressed");
-            assert!(boxes[1].is_brotli_compressed, "Second box should be compressed");
+            assert!(
+                boxes[0].is_brotli_compressed,
+                "First box should be compressed"
+            );
+            assert!(
+                boxes[1].is_brotli_compressed,
+                "Second box should be compressed"
+            );
 
             // Decompress and verify content
             let desc0 = extract_exif_image_description(&brotli_decompress(&boxes[0].data));
@@ -1862,7 +1927,8 @@ pub(crate) mod tests {
 
         #[test]
         fn mixed_compression() {
-            let file = include_bytes!("../../resources/test/metadata_test_images/mixed_compression.jxl");
+            let file =
+                include_bytes!("../../resources/test/metadata_test_images/mixed_compression.jxl");
             let options = JxlDecoderOptions {
                 metadata_capture: MetadataCaptureOptions::capture_all_with_limits(),
                 ..Default::default()
@@ -1870,7 +1936,12 @@ pub(crate) mod tests {
             let decoder = decode_to_image_info(file, options);
 
             let boxes = decoder.exif_boxes().expect("EXIF should be captured");
-            assert_eq!(boxes.len(), 2, "Expected exactly 2 boxes, got {}", boxes.len());
+            assert_eq!(
+                boxes.len(),
+                2,
+                "Expected exactly 2 boxes, got {}",
+                boxes.len()
+            );
 
             // First should be uncompressed, second should be compressed
             assert!(
@@ -1891,7 +1962,8 @@ pub(crate) mod tests {
 
         #[test]
         fn all_metadata_types() {
-            let file = include_bytes!("../../resources/test/metadata_test_images/all_metadata_brob.jxl");
+            let file =
+                include_bytes!("../../resources/test/metadata_test_images/all_metadata_brob.jxl");
             let options = JxlDecoderOptions {
                 metadata_capture: MetadataCaptureOptions::capture_all_with_limits(),
                 ..Default::default()
