@@ -192,10 +192,10 @@ pub(super) fn decode_modular_channel(
         TreeSpecialCase::NoWp(t) => {
             decode_modular_channel_impl(buffers, chan, t, reader, br, &tree.histograms)
         }
-        TreeSpecialCase::WpOnly(t) => {
+        TreeSpecialCase::WpOnlyConfig420(t) => {
             decode_modular_channel_impl(buffers, chan, t, reader, br, &tree.histograms)
         }
-        TreeSpecialCase::GradientLookup(t) => {
+        TreeSpecialCase::GradientLookupConfig420(t) => {
             decode_modular_channel_impl(buffers, chan, t, reader, br, &tree.histograms)
         }
         TreeSpecialCase::SingleGradientOnly(t) => {

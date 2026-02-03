@@ -31,7 +31,7 @@ pub const COEFF_NUM_NONZERO_CONTEXT: [usize; 64] = [
     206, 206, 206, 206, 206, 206,
 ];
 
-#[inline]
+#[inline(always)]
 pub fn zero_density_context(
     nonzeros_left: usize,
     k: usize,
