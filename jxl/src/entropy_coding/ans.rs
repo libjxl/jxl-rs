@@ -269,6 +269,7 @@ impl AnsHistogram {
         let table_size = (1u16 << log_alpha_size) as usize;
         // 4 <= log_bucket_size <= 7
         let log_bucket_size = LOG_SUM_PROBS - log_alpha_size;
+        assert!(log_bucket_size <= LOG_SUM_PROBS);
         let bucket_size = 1u16 << log_bucket_size;
         let bucket_mask = bucket_size as u32 - 1;
 
