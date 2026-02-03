@@ -10,7 +10,7 @@ use crate::{
     error::{Error, Result},
 };
 
-use super::{JxlBasicInfo, JxlColorProfile, JxlDecoderOptions, JxlPixelFormat};
+use super::{JxlBasicInfo, JxlColorProfile, JxlDecoderOptions, JxlPixelFormat, JxlMetadataBox};
 use box_parser::BoxParser;
 use codestream_parser::CodestreamParser;
 
@@ -28,9 +28,10 @@ pub struct JxlDecoderInner {
 impl JxlDecoderInner {
     /// Creates a new decoder with the given options and, optionally, CMS.
     pub fn new(options: JxlDecoderOptions) -> Self {
+        let box_parser = BoxParser::new(&options.metadata_capture);
         JxlDecoderInner {
             options,
-            box_parser: BoxParser::new(),
+            box_parser,
             codestream_parser: CodestreamParser::new(),
         }
     }
@@ -113,7 +114,7 @@ impl JxlDecoderInner {
     /// After calling this, the caller should provide input from the beginning of the file.
     pub fn reset(&mut self) {
         // TODO(veluca): keep track of frame offsets for skipping.
-        self.box_parser = BoxParser::new();
+        self.box_parser = BoxParser::new(&self.options.metadata_capture);
         self.codestream_parser = CodestreamParser::new();
     }
 
@@ -127,12 +128,35 @@ impl JxlDecoderInner {
     ///
     /// Returns `true` if pixel_format was preserved, `false` if none was set.
     pub fn rewind(&mut self) -> bool {
-        self.box_parser = BoxParser::new();
+        self.box_parser = BoxParser::new(&self.options.metadata_capture);
         self.codestream_parser.rewind().is_some()
     }
 
     pub fn has_more_frames(&self) -> bool {
         self.codestream_parser.has_more_frames
+    }
+
+    /// Returns captured EXIF boxes from the container.
+    ///
+    /// Each box's data includes the 4-byte TIFF offset followed by TIFF/EXIF data.
+    /// Returns `None` if capture was disabled, `Some(...)` if enabled (empty slice if no boxes found).
+    pub fn exif_boxes(&self) -> Option<&[JxlMetadataBox]> {
+        self.box_parser.exif_boxes()
+    }
+
+    /// Returns captured XML/XMP boxes from the container.
+    ///
+    /// Returns `None` if capture was disabled, `Some(...)` if enabled (empty slice if no boxes found).
+    pub fn xml_boxes(&self) -> Option<&[JxlMetadataBox]> {
+        self.box_parser.xml_boxes()
+    }
+
+    /// Returns captured JUMBF boxes from the container.
+    ///
+    /// JUMBF (JPEG Universal Metadata Box Format) is used for C2PA content credentials.
+    /// Returns `None` if capture was disabled, `Some(...)` if enabled (empty slice if no boxes found).
+    pub fn jumbf_boxes(&self) -> Option<&[JxlMetadataBox]> {
+        self.box_parser.jumbf_boxes()
     }
 
     #[cfg(test)]
