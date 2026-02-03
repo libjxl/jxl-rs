@@ -8,6 +8,7 @@
 pub mod box_header;
 pub mod parse;
 
+pub use box_header::ContainerBoxType;
 use box_header::*;
 pub use parse::ParseEvent;
 use parse::*;
@@ -27,7 +28,6 @@ enum DetectState {
     WaitingBoxHeader,
     WaitingJxlpIndex(ContainerBoxHeader),
     InAuxBox {
-        #[allow(unused)]
         header: ContainerBoxHeader,
         bytes_left: Option<usize>,
     },
@@ -107,6 +107,9 @@ impl ContainerParser {
                 ParseEvent::BitstreamKind(_) => {}
                 ParseEvent::Codestream(buf) => {
                     codestream.extend_from_slice(buf);
+                }
+                ParseEvent::AuxiliaryBox { .. } => {
+                    // Ignore auxiliary boxes when collecting codestream
                 }
             }
         }

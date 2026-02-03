@@ -264,3 +264,13 @@ pub struct JxlFrameHeader {
     /// Frame size (width, height)
     pub size: (usize, usize),
 }
+
+/// Captured metadata box from a JXL container.
+#[derive(Clone, Debug)]
+pub struct JxlMetadataBox {
+    /// Raw box content bytes.
+    pub data: Vec<u8>,
+    /// True if this was a Brotli-compressed (brob) box.
+    /// Caller must decompress if needed.
+    pub is_brotli_compressed: bool,
+}
