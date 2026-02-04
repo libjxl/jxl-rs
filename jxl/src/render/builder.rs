@@ -25,7 +25,6 @@ impl<Pipeline: RenderPipeline> RenderPipelineBuilder<Pipeline> {
         size: (usize, usize),
         downsampling_shift: usize,
         mut log_group_size: usize,
-        num_passes: usize,
         chunk_size: usize,
     ) -> Self {
         info!("creating render pipeline");
@@ -47,12 +46,10 @@ impl<Pipeline: RenderPipeline> RenderPipelineBuilder<Pipeline> {
                 log_group_size,
                 group_count: (size.0.shrc(log_group_size), size.1.shrc(log_group_size)),
                 stages: vec![],
-                group_chan_ready_passes: vec![
-                    vec![0; num_channels];
-                    size.0.shrc(log_group_size)
-                        * size.1.shrc(log_group_size)
+                group_chan_complete: vec![
+                    vec![false; num_channels];
+                    size.0.shrc(log_group_size) * size.1.shrc(log_group_size)
                 ],
-                num_passes,
                 chunk_size,
                 extend_stage_index: None,
             },
@@ -118,14 +115,12 @@ impl<Pipeline: RenderPipeline> RenderPipelineBuilder<Pipeline> {
         size: (usize, usize),
         downsampling_shift: usize,
         log_group_size: usize,
-        num_passes: usize,
     ) -> Self {
         Self::new_with_chunk_size(
             num_channels,
             size,
             downsampling_shift,
             log_group_size,
-            num_passes,
             1 << (log_group_size + downsampling_shift),
         )
     }

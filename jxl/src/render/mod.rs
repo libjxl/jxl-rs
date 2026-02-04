@@ -111,14 +111,13 @@ pub(crate) trait RenderPipeline: Sized {
     /// pass, a new buffer, or a re-used buffer from i.e. previously decoded frames.
     fn get_buffer<T: ImageDataType>(&mut self, channel: usize) -> Result<Image<T>>;
 
-    /// Gives back the buffer for a channel and group to the render pipeline, marking that
-    /// `num_passes` additional passes (wrt. the previous call to this method for the same channel
-    /// and group, or 0 if no previous call happend) were rendered into the input buffer.
+    /// Gives back the buffer for a channel and group to the render pipeline, marking whether
+    /// this will be the last time that this function is called for this group.
     fn set_buffer_for_group<T: ImageDataType>(
         &mut self,
         channel: usize,
         group_id: usize,
-        num_passes: usize,
+        complete: bool,
         buf: Image<T>,
         buffer_splitter: &mut BufferSplitter,
     ) -> Result<()>;
@@ -130,6 +129,9 @@ pub(crate) trait RenderPipeline: Sized {
     /// set_buffer_for_group. Can be called multiple times - it is up to the pipeline
     /// implementation to ensure rendering only happens once.
     fn render_outside_frame(&mut self, buffer_splitter: &mut BufferSplitter) -> Result<()>;
+
+    // Marks a group for being re-rendered later.
+    fn mark_group_to_rerender(&mut self, g: usize);
 
     fn box_inout_stage<S: RenderPipelineInOutStage>(
         stage: S,

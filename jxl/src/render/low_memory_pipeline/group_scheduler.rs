@@ -3,11 +3,9 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-use std::array;
 use std::ops::Range;
 
 use crate::error::Result;
-use crate::headers::frame_header::MAX_NUM_PASSES;
 use crate::image::{OwnedRawImage, Rect};
 use crate::render::LowMemoryRenderPipeline;
 use crate::render::buffer_splitter::BufferSplitter;
@@ -17,14 +15,13 @@ use crate::util::tracing_wrappers::*;
 pub(super) struct InputBuffer {
     // One buffer per channel.
     pub(super) data: Vec<Option<OwnedRawImage>>,
-    // Storage for left/right borders (one per pass). Includes corners.
-    pub(super) leftright: [Vec<Option<OwnedRawImage>>; MAX_NUM_PASSES],
-    // Storage for top/bottom borders (one per pass). Includes corners.
-    pub(super) topbottom: [Vec<Option<OwnedRawImage>>; MAX_NUM_PASSES],
+    // Storage for left/right borders. Includes corners.
+    pub(super) leftright: Vec<Option<OwnedRawImage>>,
+    // Storage for top/bottom borders. Includes corners.
+    pub(super) topbottom: Vec<Option<OwnedRawImage>>,
     // Number of ready channels in the current pass.
     ready_channels: usize,
-    pass_is_ready: [bool; MAX_NUM_PASSES],
-    pub(super) current_pass: usize,
+    pub(super) is_ready: bool,
     num_completed_groups_3x3: usize,
 }
 
@@ -39,17 +36,12 @@ impl InputBuffer {
         let b = || (0..num_channels).map(|_| None).collect();
         Self {
             data: b(),
-            leftright: array::from_fn(|_| b()),
-            topbottom: array::from_fn(|_| b()),
+            leftright: b(),
+            topbottom: b(),
             ready_channels: 0,
-            pass_is_ready: [false; MAX_NUM_PASSES],
-            current_pass: 0,
+            is_ready: false,
             num_completed_groups_3x3: 0,
         }
-    }
-
-    fn is_ready(&self, pass: usize) -> bool {
-        self.pass_is_ready[pass]
     }
 }
 
@@ -129,17 +121,13 @@ impl LowMemoryRenderPipeline {
         g: usize,
         buffer_splitter: &mut BufferSplitter,
     ) -> Result<()> {
-        let pass = {
-            let buf = &mut self.input_buffers[g];
-            if buf.ready_channels != buf.data.len() {
-                return Ok(());
-            }
-            buf.ready_channels = 0;
-            *self.shared.group_chan_ready_passes[g].iter().min().unwrap() - 1
-        };
-
+        let buf = &mut self.input_buffers[g];
+        if buf.ready_channels != buf.data.len() {
+            return Ok(());
+        }
+        buf.ready_channels = 0;
         let (gx, gy) = self.shared.group_position(g);
-        debug!("new data ready for group {gx},{gy}, pass {pass}");
+        debug!("new data ready for group {gx},{gy}");
 
         // Prepare output buffers for the group.
         let (origin, size) = if let Some(e) = self.shared.extend_stage_index {
@@ -168,14 +156,18 @@ impl LowMemoryRenderPipeline {
                 let ty = ty.unwrap();
                 let bx = bx >> dx;
                 let by = by >> dy;
-                let mut topbottom = if let Some(b) = self.maybe_get_scratch_buffer(c, 1) {
+                let mut topbottom = if let Some(b) = self.input_buffers[g].topbottom[c].take() {
+                    b
+                } else if let Some(b) = self.maybe_get_scratch_buffer(c, 1) {
                     b
                 } else {
                     let height = 4 * by;
                     let width = (1 << self.shared.log_group_size) * ty.size();
                     OwnedRawImage::new_zeroed_with_padding((width, height), (0, 0), (0, 0))?
                 };
-                let mut leftright = if let Some(b) = self.maybe_get_scratch_buffer(c, 2) {
+                let mut leftright = if let Some(b) = self.input_buffers[g].leftright[c].take() {
+                    b
+                } else if let Some(b) = self.maybe_get_scratch_buffer(c, 2) {
                     b
                 } else {
                     let height = 1 << self.shared.log_group_size;
@@ -199,11 +191,10 @@ impl LowMemoryRenderPipeline {
                         row_out[4 * bx * ty.size() - cs..].copy_from_slice(&row_in[sx - cs..]);
                     }
                 }
-                self.input_buffers[g].leftright[pass][c] = Some(leftright);
-                self.input_buffers[g].topbottom[pass][c] = Some(topbottom);
+                self.input_buffers[g].leftright[c] = Some(leftright);
+                self.input_buffers[g].topbottom[c] = Some(topbottom);
             }
-            self.input_buffers[g].current_pass = pass;
-            self.input_buffers[g].pass_is_ready[pass] = true;
+            self.input_buffers[g].is_ready = true;
         }
 
         let gxm1 = gx.saturating_sub(1);
@@ -213,15 +204,15 @@ impl LowMemoryRenderPipeline {
         let gw = self.shared.group_count.0;
         // TODO(veluca): this code probably needs to be adapted for multithreading.
         let mut ready_mask = [
-            self.input_buffers[gym1 * gw + gxm1].is_ready(pass),
-            self.input_buffers[gym1 * gw + gx].is_ready(pass),
-            self.input_buffers[gym1 * gw + gxp1].is_ready(pass),
-            self.input_buffers[gy * gw + gxm1].is_ready(pass),
-            self.input_buffers[gy * gw + gx].is_ready(pass), // should be guaranteed to be 1.
-            self.input_buffers[gy * gw + gxp1].is_ready(pass),
-            self.input_buffers[gyp1 * gw + gxm1].is_ready(pass),
-            self.input_buffers[gyp1 * gw + gx].is_ready(pass),
-            self.input_buffers[gyp1 * gw + gxp1].is_ready(pass),
+            self.input_buffers[gym1 * gw + gxm1].is_ready,
+            self.input_buffers[gym1 * gw + gx].is_ready,
+            self.input_buffers[gym1 * gw + gxp1].is_ready,
+            self.input_buffers[gy * gw + gxm1].is_ready,
+            self.input_buffers[gy * gw + gx].is_ready, // should be guaranteed to be 1.
+            self.input_buffers[gy * gw + gxp1].is_ready,
+            self.input_buffers[gyp1 * gw + gxm1].is_ready,
+            self.input_buffers[gyp1 * gw + gx].is_ready,
+            self.input_buffers[gyp1 * gw + gxp1].is_ready,
         ];
         // We can only render a corner if we have all the 4 adjacent groups. Thus, mask out corners if
         // the corresponding side buffers are not ready.
@@ -292,8 +283,8 @@ impl LowMemoryRenderPipeline {
 
         // Clear border buffers that will not be used again.
         // This is certainly the case if *all* the groups in the 3x3 group area around
-        // the current group have had all their passes rendered.
-        if pass + 1 == self.shared.num_passes {
+        // the current group are complete.
+        if self.shared.group_chan_complete[g].iter().all(|x| *x) {
             for g in [
                 gym1 * gw + gxm1,
                 gym1 * gw + gx,
@@ -310,15 +301,11 @@ impl LowMemoryRenderPipeline {
                     continue;
                 }
                 for c in 0..self.input_buffers[g].data.len() {
-                    for p in 0..self.shared.num_passes {
-                        if let Some(b) = std::mem::take(&mut self.input_buffers[g].topbottom[p][c])
-                        {
-                            self.store_scratch_buffer(c, 1, b);
-                        }
-                        if let Some(b) = std::mem::take(&mut self.input_buffers[g].leftright[p][c])
-                        {
-                            self.store_scratch_buffer(c, 2, b);
-                        }
+                    if let Some(b) = std::mem::take(&mut self.input_buffers[g].topbottom[c]) {
+                        self.store_scratch_buffer(c, 1, b);
+                    }
+                    if let Some(b) = std::mem::take(&mut self.input_buffers[g].leftright[c]) {
+                        self.store_scratch_buffer(c, 2, b);
                     }
                 }
             }

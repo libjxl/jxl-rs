@@ -126,6 +126,7 @@ impl Frame {
         api_buffers: &mut Option<&mut [JxlOutputBuffer<'_>]>,
         pixel_format: &JxlPixelFormat,
         groups: Vec<(usize, Vec<(usize, BitReader)>)>,
+        do_flush: bool,
     ) -> Result<()> {
         if self.render_pipeline.is_none() {
             assert_eq!(groups.iter().map(|x| x.1.len()).sum::<usize>(), 0);
@@ -198,31 +199,48 @@ impl Frame {
         if !self.lf_global_was_rendered {
             self.lf_global_was_rendered = true;
             let lf_global = self.lf_global.as_mut().unwrap();
-            let mut pass_to_pipeline = |chan, group, num_passes, image| {
+            let mut pass_to_pipeline = |chan, group, image| {
                 pipeline!(
                     self,
                     p,
-                    p.set_buffer_for_group(chan, group, num_passes, image, &mut buffer_splitter)?
+                    p.set_buffer_for_group(chan, group, true, image, &mut buffer_splitter)?
                 );
                 Ok(())
             };
-            lf_global
-                .modular_global
-                .process_output(0, 0, &self.header, &mut pass_to_pipeline)?;
+            lf_global.modular_global.process_output(
+                &[0],
+                0,
+                &self.header,
+                &mut pass_to_pipeline,
+            )?;
             for group in 0..self.header.num_lf_groups() {
                 lf_global.modular_global.process_output(
-                    1,
+                    &[1],
                     group,
                     &self.header,
                     &mut pass_to_pipeline,
                 )?;
             }
+            self.groups_to_flush.extend(0..self.header.num_groups());
         }
 
-        for (group, passes) in groups {
-            // TODO(veluca): render all the available passes at once.
-            for (pass, br) in passes {
-                self.decode_hf_group(group, pass, br, &mut buffer_splitter)?;
+        // TODO(veluca): keep track of groups that should be flushed, and groups that have had nothing rendered yet.
+
+        for (g, _) in groups.iter() {
+            pipeline!(self, p, p.mark_group_to_rerender(*g));
+        }
+
+        for (group, mut passes) in groups {
+            if !self.decode_hf_group(group, &mut passes, &mut buffer_splitter, do_flush)? {
+                self.groups_to_flush.insert(group);
+            } else {
+                self.groups_to_flush.remove(&group);
+            }
+        }
+
+        if do_flush {
+            for g in std::mem::take(&mut self.groups_to_flush) {
+                self.decode_hf_group(g, &mut [], &mut buffer_splitter, true)?;
             }
         }
 
@@ -251,7 +269,6 @@ impl Frame {
             frame_header.size_upsampled(),
             frame_header.upsampling.ilog2() as usize,
             frame_header.log_group_dim(),
-            frame_header.passes.num_passes as usize,
         );
 
         if frame_header.encoding == Encoding::Modular {

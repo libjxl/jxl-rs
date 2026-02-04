@@ -3,7 +3,7 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-use std::sync::Arc;
+use std::{collections::BTreeSet, sync::Arc};
 
 use crate::{
     entropy_coding::decode::Histograms,
@@ -114,9 +114,6 @@ pub struct DecoderState {
     pub(super) file_header: FileHeader,
     pub(super) reference_frames: Arc<[Option<ReferenceFrame>; Self::MAX_STORED_FRAMES]>,
     pub(super) lf_frames: [Option<[Image<f32>; 3]>; 4],
-    // TODO(veluca): do we really need this? ISTM it could be achieved by passing None for all the
-    // buffers, and it's not clear to me what use the decoder can make of it.
-    pub enable_output: bool,
     pub render_spotcolors: bool,
     #[cfg(test)]
     pub use_simple_pipeline: bool,
@@ -134,7 +131,6 @@ impl DecoderState {
             file_header,
             reference_frames: Arc::new([None, None, None, None]),
             lf_frames: [None, None, None, None],
-            enable_output: true,
             render_spotcolors: true,
             #[cfg(test)]
             use_simple_pipeline: false,
@@ -190,6 +186,10 @@ pub struct Frame {
     lf_global_was_rendered: bool,
     /// Reusable buffers for VarDCT group decoding.
     vardct_buffers: Option<group::VarDctBuffers>,
+    // Last pass rendered so far for each HF group.
+    last_rendered_pass: Vec<Option<usize>>,
+    // Groups that should be rendered on the next call to flush().
+    groups_to_flush: BTreeSet<usize>,
 }
 
 impl Frame {
