@@ -41,6 +41,7 @@ impl CodestreamParser {
         &mut self,
         decode_options: &JxlDecoderOptions,
         output_buffers: &mut Option<&mut [JxlOutputBuffer<'_>]>,
+        do_flush: bool,
     ) -> Result<Option<usize>> {
         let frame = self.frame.as_mut().unwrap();
         let frame_header = frame.header();
@@ -99,6 +100,7 @@ impl CodestreamParser {
                     output_buffers,
                     pixel_format,
                     vec![(0, vec![(0, br)])],
+                    do_flush,
                 )?;
                 processed_section = true;
             } else {
@@ -184,7 +186,12 @@ impl CodestreamParser {
                     self.candidate_hf_sections.clear();
                 }
 
-                frame.decode_and_render_hf_groups(output_buffers, pixel_format, group_readers)?;
+                frame.decode_and_render_hf_groups(
+                    output_buffers,
+                    pixel_format,
+                    group_readers,
+                    do_flush,
+                )?;
 
                 for g in processed_groups.into_iter() {
                     for i in 0..self.section_state.completed_passes[g] {
@@ -230,7 +237,6 @@ impl CodestreamParser {
             if let Some(fh) = self.saved_file_header.take() {
                 let mut new_state = crate::frame::DecoderState::new(fh);
                 new_state.render_spotcolors = decode_options.render_spot_colors;
-                new_state.enable_output = decode_options.enable_output;
                 self.decoder_state = Some(new_state);
             }
         } else {

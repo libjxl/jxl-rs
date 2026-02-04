@@ -68,10 +68,10 @@ impl RenderPipeline for LowMemoryRenderPipeline {
 
     fn new_from_shared(shared: RenderPipelineShared<Self::Buffer>) -> Result<Self> {
         let mut input_buffers = vec![];
-        for _ in 0..shared.group_chan_ready_passes.len() {
-            input_buffers.push(InputBuffer::new(shared.group_chan_ready_passes[0].len()));
+        let nc = shared.num_channels();
+        for _ in 0..shared.group_chan_complete.len() {
+            input_buffers.push(InputBuffer::new(nc));
         }
-        let nc = shared.channel_info[0].len();
         let mut previous_inout: Vec<_> = (0..nc).map(|x| (0usize, x)).collect();
         let mut stage_input_buffer_index = vec![];
         let mut next_border_and_cur_downsample = vec![vec![]];
@@ -296,7 +296,7 @@ impl RenderPipeline for LowMemoryRenderPipeline {
         &mut self,
         channel: usize,
         group_id: usize,
-        num_passes: usize,
+        complete: bool,
         buf: Image<T>,
         buffer_splitter: &mut BufferSplitter,
     ) -> Result<()> {
@@ -307,7 +307,7 @@ impl RenderPipeline for LowMemoryRenderPipeline {
             T::DATA_TYPE_ID,
         );
         self.input_buffers[group_id].set_buffer(channel, buf.into_raw());
-        self.shared.group_chan_ready_passes[group_id][channel] += num_passes;
+        self.shared.group_chan_complete[group_id][channel] = complete;
 
         self.render_with_new_group(group_id, buffer_splitter)
     }
@@ -409,6 +409,10 @@ impl RenderPipeline for LowMemoryRenderPipeline {
             self.render_outside_frame(xrange, yrange, &mut local_buffers)?;
         }
         Ok(())
+    }
+
+    fn mark_group_to_rerender(&mut self, g: usize) {
+        self.input_buffers[g].is_ready = false;
     }
 
     fn box_inout_stage<S: super::RenderPipelineInOutStage>(

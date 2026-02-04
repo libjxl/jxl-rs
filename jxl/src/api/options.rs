@@ -22,7 +22,6 @@ pub struct JxlDecoderOptions {
     pub desired_intensity_target: Option<f32>,
     pub skip_preview: bool,
     pub progressive_mode: JxlProgressiveMode,
-    pub enable_output: bool,
     pub cms: Option<Box<dyn JxlCms>>,
     /// Fail decoding images with more than this number of pixels, or with frames with
     /// more than this number of pixels. The limit counts the product of pixels and
@@ -51,7 +50,6 @@ impl Default for JxlDecoderOptions {
             skip_preview: true,
             desired_intensity_target: None,
             progressive_mode: JxlProgressiveMode::Pass,
-            enable_output: true,
             cms: None,
             pixel_limit: None,
             high_precision: false,
