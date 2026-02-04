@@ -509,7 +509,7 @@ impl Frame {
         let pass_to_render = self.last_rendered_pass[group];
         let complete = pass_to_render.is_some_and(|p| p >= last_pass_in_file);
 
-        // Render if we are decoding the last pass, or if we are requesting a eager render and
+        // Render if we are decoding the last pass, or if we are requesting an eager render and
         // we can handle this case of eager renders.
         let do_render = if complete {
             true
