@@ -155,6 +155,16 @@ impl OutputDataType {
     }
 }
 
+/// Configuration for progressive decoding
+pub struct ProgressiveDecodeConfig<'a> {
+    pub override_bitdepth: Option<usize>,
+    pub data_type: Option<OutputDataType>,
+    pub supported_data_types: &'a [OutputDataType],
+    pub interleave_alpha: bool,
+    pub linear_output: bool,
+    pub allow_partial_files: bool,
+}
+
 #[allow(clippy::too_many_arguments)]
 pub fn decode_frames<In: JxlBitstreamInput>(
     input: &mut In,
@@ -332,21 +342,6 @@ fn parse_step_size(step_str: &str, total_size: usize) -> Result<usize> {
     }
 }
 
-/// Decode frames progressively, saving intermediate results
-///
-/// NOTE: This currently creates a fresh decoder instance for each chunk, which tests
-/// "flush with partial data" but NOT "resume decoding after flush". We're essentially
-/// doing multiple independent truncated file decodes, not streaming the bitstream to
-/// a single decoder instance in chunks. This is a limitation for testing progressive
-/// streaming, but it's useful for debugging the simpler case of flush behavior with
-/// incomplete data. To properly test progressive streaming, we would need to:
-/// 1. Create one decoder instance
-/// 2. Feed it chunk 1, call flush_pixels(), save result
-/// 3. Feed it chunk 2 (additional data), call flush_pixels(), save result
-/// 4. Continue until complete
-/// This would test that the decoder can resume correctly after flush without losing
-/// previously decoded data.
-
 // Progressive decode with single decoder instance (incremental data)
 // This is true streaming decoding: one decoder, feed data incrementally, flush at each step
 pub fn decode_frames_progressive<F>(
@@ -354,12 +349,7 @@ pub fn decode_frames_progressive<F>(
     output_path: &Path,
     step_size_str: &str,
     make_decoder_options: F,
-    override_bitdepth: Option<usize>,
-    data_type: Option<OutputDataType>,
-    supported_data_types: &[OutputDataType],
-    interleave_alpha: bool,
-    linear_output: bool,
-    allow_partial_files: bool,
+    config: &ProgressiveDecodeConfig,
 ) -> Result<(DecodeOutput, Duration)>
 where
     F: Fn() -> JxlDecoderOptions,
@@ -400,19 +390,19 @@ where
     let info = decoder_with_image_info.basic_info().clone();
     let embedded_profile = decoder_with_image_info.embedded_color_profile().clone();
 
-    let output_type = if let Some(ot) = data_type
-        && supported_data_types.contains(&ot)
+    let output_type = if let Some(ot) = config.data_type
+        && config.supported_data_types.contains(&ot)
     {
         ot
     } else {
-        if data_type.is_some() {
+        if config.data_type.is_some() {
             eprintln!("Warning: requested output type is not compatible with output format");
         }
-        let bit_depth = override_bitdepth.unwrap_or(info.bit_depth.bits_per_sample() as usize);
-        *supported_data_types
+        let bit_depth = config.override_bitdepth.unwrap_or(info.bit_depth.bits_per_sample() as usize);
+        *config.supported_data_types
             .iter()
             .find(|x| x.bits_per_sample() >= bit_depth)
-            .unwrap_or(supported_data_types.last().unwrap())
+            .unwrap_or(config.supported_data_types.last().unwrap())
     };
 
     let main_alpha_channel = info
@@ -422,7 +412,7 @@ where
         .find(|x| x.1.ec_type == ExtraChannel::Alpha)
         .map(|x| x.0);
 
-    let interleave_alpha = interleave_alpha && main_alpha_channel.is_some();
+    let interleave_alpha = config.interleave_alpha && main_alpha_channel.is_some();
 
     // Set the pixel format
     let current_format = decoder_with_image_info.current_pixel_format().clone();
@@ -449,7 +439,7 @@ where
     decoder_with_image_info.set_pixel_format(new_format);
 
     // If linear output is requested, modify the output profile
-    if linear_output
+    if config.linear_output
         && let JxlColorProfile::Simple(enc) = decoder_with_image_info.output_color_profile().clone()
     {
         decoder_with_image_info
@@ -481,12 +471,12 @@ where
                         let (final_output, _) = decode_frames(
                             &mut full_data,
                             make_decoder_options(),
-                            override_bitdepth,
-                            data_type,
-                            supported_data_types,
-                            interleave_alpha,
-                            linear_output,
-                            allow_partial_files,
+                            config.override_bitdepth,
+                            config.data_type,
+                            config.supported_data_types,
+                            config.interleave_alpha,
+                            config.linear_output,
+                            config.allow_partial_files,
                         )?;
                         return Ok((final_output, total_duration));
                     }
@@ -737,12 +727,12 @@ where
     let (final_output, _) = decode_frames(
         &mut full_data,
         make_decoder_options(),
-        override_bitdepth,
-        data_type,
-        supported_data_types,
-        interleave_alpha,
-        linear_output,
-        allow_partial_files,
+        config.override_bitdepth,
+        config.data_type,
+        config.supported_data_types,
+        config.interleave_alpha,
+        config.linear_output,
+        config.allow_partial_files,
     )?;
     let single_time = single_start.elapsed();
     println!(

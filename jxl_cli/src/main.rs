@@ -6,7 +6,7 @@
 use clap::Parser;
 use color_eyre::eyre::{Result, WrapErr, eyre};
 use jxl::api::JxlDecoderOptions;
-use jxl_cli::dec::OutputDataType;
+use jxl_cli::dec::{OutputDataType, ProgressiveDecodeConfig};
 use jxl_cli::enc::OutputFormat;
 use jxl_cli::{cms::Lcms2Cms, dec};
 use std::fs;
@@ -214,19 +214,22 @@ fn main() -> Result<()> {
         #[cfg(not(feature = "exr"))]
         let linear_output = false;
 
+        let config = ProgressiveDecodeConfig {
+            override_bitdepth: opt.override_bitdepth,
+            data_type: opt.data_type,
+            supported_data_types: output_format
+                .map(|x| x.supported_output_data_types())
+                .unwrap_or(OutputDataType::ALL),
+            interleave_alpha: output_format.is_none_or(|x| x.should_fold_alpha()),
+            linear_output,
+            allow_partial_files: opt.allow_partial_files,
+        };
         let (output, duration) = dec::decode_frames_progressive(
             &input_bytes,
             output_path,
             step_size,
             || options(skip_preview),
-            opt.override_bitdepth,
-            opt.data_type,
-            output_format
-                .map(|x| x.supported_output_data_types())
-                .unwrap_or(OutputDataType::ALL),
-            output_format.is_none_or(|x| x.should_fold_alpha()),
-            linear_output,
-            opt.allow_partial_files,
+            &config,
         )?;
         duration_sum = duration;
         output
