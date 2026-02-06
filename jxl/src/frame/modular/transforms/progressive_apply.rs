@@ -76,16 +76,6 @@ impl TransformStepChunk {
             self.step, self.grid_pos
         );
 
-        // Determine output buffer and grid
-        let buf_out: &[usize] = match &self.step {
-            TransformStep::Rct { buf_out, .. } => buf_out,
-            TransformStep::Palette { buf_out, .. } => buf_out,
-            TransformStep::HSqueeze { buf_out, .. } | TransformStep::VSqueeze { buf_out, .. } => {
-                std::slice::from_ref(buf_out)
-            }
-        };
-        let out_grid = buffers[buf_out[0]].get_grid_idx(out_grid_kind, self.grid_pos);
-
         // Execute transform based on type
         match &self.step {
             TransformStep::HSqueeze { buf_in, buf_out } => {
@@ -94,7 +84,6 @@ impl TransformStepChunk {
                     buffers,
                     temp_outputs,
                     out_grid_kind,
-                    out_grid,
                     buf_in,
                     *buf_out,
                 )?;
@@ -111,7 +100,6 @@ impl TransformStepChunk {
                     buffers,
                     temp_outputs,
                     out_grid_kind,
-                    out_grid,
                     buf_in,
                     *buf_out,
                 )?;
@@ -157,7 +145,6 @@ impl TransformStepChunk {
         buffers: &[ModularBufferInfo],
         temp_outputs: &[Option<ModularChannel>],
         out_grid_kind: ModularGridKind,
-        out_grid: usize,
         buf_in: &[usize; 2],
         buf_out: usize,
     ) -> Result<Vec<(usize, ModularChannel)>> {
@@ -165,6 +152,7 @@ impl TransformStepChunk {
         let buf_res = &buffers[buf_in[1]];
         let in_grid = buf_avg.get_grid_idx(out_grid_kind, self.grid_pos);
         let res_grid = buf_res.get_grid_idx(out_grid_kind, self.grid_pos);
+        let out_grid = buffers[buf_out].get_grid_idx(out_grid_kind, self.grid_pos);
 
         // Check if required input channels are available
         if !self.has_input_channel(buf_in[0], in_grid, buffers, temp_outputs) {
@@ -338,7 +326,6 @@ impl TransformStepChunk {
         buffers: &[ModularBufferInfo],
         temp_outputs: &[Option<ModularChannel>],
         out_grid_kind: ModularGridKind,
-        out_grid: usize,
         buf_in: &[usize; 2],
         buf_out: usize,
     ) -> Result<Vec<(usize, ModularChannel)>> {
@@ -346,6 +333,7 @@ impl TransformStepChunk {
         let buf_res = &buffers[buf_in[1]];
         let in_grid = buf_avg.get_grid_idx(out_grid_kind, self.grid_pos);
         let res_grid = buf_res.get_grid_idx(out_grid_kind, self.grid_pos);
+        let out_grid = buffers[buf_out].get_grid_idx(out_grid_kind, self.grid_pos);
 
         // Check if required input channels are available
         if !self.has_input_channel(buf_in[0], in_grid, buffers, temp_outputs) {
