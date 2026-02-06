@@ -157,6 +157,40 @@ impl CodestreamParser {
         pixel_format
     }
 
+    fn check_output_pixel_limit(&self, decode_options: &JxlDecoderOptions) -> Result<()> {
+        let Some(limit) = decode_options.pixel_limit else {
+            return Ok(());
+        };
+        let Some(info) = self.basic_info.as_ref() else {
+            return Ok(());
+        };
+        let Some(pixel_format) = self.pixel_format.as_ref() else {
+            return Ok(());
+        };
+
+        let mut channels = 0usize;
+        if pixel_format.color_data_format.is_some() {
+            channels = channels.saturating_add(pixel_format.color_type.samples_per_pixel());
+        }
+        channels = channels.saturating_add(
+            pixel_format
+                .extra_channel_format
+                .iter()
+                .filter(|x| x.is_some())
+                .count(),
+        );
+        if channels == 0 {
+            return Ok(());
+        }
+
+        let (xs, ys) = info.size;
+        let total_samples = xs.saturating_mul(ys).saturating_mul(channels);
+        if total_samples >= limit {
+            return Err(Error::ImageSizeTooLarge(xs, ys));
+        }
+        Ok(())
+    }
+
     pub(super) fn process(
         &mut self,
         box_parser: &mut BoxParser,
@@ -165,6 +199,9 @@ impl CodestreamParser {
         mut output_buffers: Option<&mut [JxlOutputBuffer]>,
         do_flush: bool,
     ) -> Result<()> {
+        // Enforce pixel_limit based on the requested output format.
+        self.check_output_pixel_limit(decode_options)?;
+
         if let Some(output_buffers) = &output_buffers {
             let px = self.pixel_format.as_ref().unwrap();
             let expected_len = std::iter::once(&px.color_data_format)
