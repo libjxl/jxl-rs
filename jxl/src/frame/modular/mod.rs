@@ -635,7 +635,7 @@ impl FullModularImage {
             //
             // Invariant: All outputs from a single transform have the same grid_kind and grid_pos,
             // so they all map to the same grid_idx. Therefore we only need buf_idx as the key.
-            let mut temp_outputs: Vec<Option<ModularChannel>> = 
+            let mut temp_outputs: Vec<Option<ModularChannel>> =
                 (0..self.buffer_info.len()).map(|_| None).collect();
 
             // Track which buffers need rendering (output channels only)

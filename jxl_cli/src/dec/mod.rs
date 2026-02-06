@@ -398,8 +398,11 @@ where
         if config.data_type.is_some() {
             eprintln!("Warning: requested output type is not compatible with output format");
         }
-        let bit_depth = config.override_bitdepth.unwrap_or(info.bit_depth.bits_per_sample() as usize);
-        *config.supported_data_types
+        let bit_depth = config
+            .override_bitdepth
+            .unwrap_or(info.bit_depth.bits_per_sample() as usize);
+        *config
+            .supported_data_types
             .iter()
             .find(|x| x.bits_per_sample() >= bit_depth)
             .unwrap_or(config.supported_data_types.last().unwrap())
@@ -569,10 +572,8 @@ where
                         drop(output_bufs); // Release borrow
 
                         // Save final incomplete frame
-                        let intermediate_path = output_dir.join(format!(
-                            "{}-{:03}.{}",
-                            output_stem, step_number, output_ext
-                        ));
+                        let intermediate_path = output_dir
+                            .join(format!("{}-{:03}.{}", output_stem, step_number, output_ext));
                         println!(
                             "Saving final incomplete frame to: {}",
                             intermediate_path.display()
@@ -637,10 +638,8 @@ where
                     drop(output_bufs); // Release borrow to allow cloning
 
                     // Save intermediate result
-                    let intermediate_path = output_dir.join(format!(
-                        "{}-{:03}.{}",
-                        output_stem, step_number, output_ext
-                    ));
+                    let intermediate_path = output_dir
+                        .join(format!("{}-{:03}.{}", output_stem, step_number, output_ext));
                     println!(
                         "  Saving intermediate result to: {}",
                         intermediate_path.display()
