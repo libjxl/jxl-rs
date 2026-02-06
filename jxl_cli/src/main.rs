@@ -6,7 +6,7 @@
 use clap::Parser;
 use color_eyre::eyre::{Result, WrapErr, eyre};
 use jxl::api::JxlDecoderOptions;
-use jxl_cli::dec::OutputDataType;
+use jxl_cli::dec::{OutputDataType, ProgressiveDecodeConfig};
 use jxl_cli::enc::OutputFormat;
 use jxl_cli::{cms::Lcms2Cms, dec};
 use std::fs;
@@ -30,6 +30,7 @@ struct Opt {
     /// Output image file, should end in .ppm, .pgm, .png, .apng or .npy
     /// (optional with --speedtest or --info)
     #[clap(required_unless_present_any = ["speedtest", "info"])]
+    #[clap(required_if_eq("progressive_step_size", "true"))]
     output: Option<PathBuf>,
 
     /// Print measured decoding speed.
@@ -77,6 +78,12 @@ struct Opt {
     /// Allow partial files (flush pixels on EOF)
     #[clap(long)]
     allow_partial_files: bool,
+
+    /// Progressive step size: feed bitstream in chunks and save intermediate results.
+    /// Can be a number of bytes (e.g. "30000") or a percentage (e.g. "10%").
+    /// Intermediate files are saved as [output]-at_pos_N.[ext]
+    #[clap(long)]
+    progressive_step_size: Option<String>,
 }
 
 fn save_icc(icc_bytes: &[u8], icc_filename: Option<&PathBuf>) -> Result<()> {
@@ -185,8 +192,49 @@ fn main() -> Result<()> {
         }};
     }
 
-    // For benchmarking, always read into memory to avoid I/O variability
-    let output = if opt.speedtest {
+    // Handle progressive decoding if --progressive-step-size is specified
+    let output = if let Some(ref step_size) = opt.progressive_step_size {
+        if opt.speedtest {
+            return Err(eyre!(
+                "--progressive-step-size cannot be used with --speedtest"
+            ));
+        }
+
+        // Read entire file into memory for progressive decoding
+        let mut input_bytes = Vec::<u8>::new();
+        file.read_to_end(&mut input_bytes)?;
+
+        let output_path = opt
+            .output
+            .as_ref()
+            .ok_or_else(|| eyre!("Output path required for progressive decoding"))?;
+
+        #[cfg(feature = "exr")]
+        let linear_output = matches!(output_format, Some(OutputFormat::Exr));
+        #[cfg(not(feature = "exr"))]
+        let linear_output = false;
+
+        let config = ProgressiveDecodeConfig {
+            override_bitdepth: opt.override_bitdepth,
+            data_type: opt.data_type,
+            supported_data_types: output_format
+                .map(|x| x.supported_output_data_types())
+                .unwrap_or(OutputDataType::ALL),
+            interleave_alpha: output_format.is_none_or(|x| x.should_fold_alpha()),
+            linear_output,
+            allow_partial_files: opt.allow_partial_files,
+        };
+        let (output, duration) = dec::decode_frames_progressive(
+            &input_bytes,
+            output_path,
+            step_size,
+            || options(skip_preview),
+            &config,
+        )?;
+        duration_sum = duration;
+        output
+    } else if opt.speedtest {
+        // For benchmarking, always read into memory to avoid I/O variability
         let mut input_bytes = Vec::<u8>::new();
         file.read_to_end(&mut input_bytes)?;
 
