@@ -32,7 +32,7 @@ use borrowed_buffers::with_buffers;
 pub use decode::ModularStreamId;
 use decode::decode_modular_subbitstream;
 pub use predict::Predictor;
-use transforms::{TransformStepChunk, make_grids};
+use transforms::{TransformStep, TransformStepChunk, make_grids};
 pub use tree::Tree;
 
 // Two rows on top, two pixels to the left, two pixels to the right.
@@ -89,7 +89,7 @@ impl ChannelInfo {
 }
 
 #[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Clone, Copy)]
-enum ModularGridKind {
+pub(super) enum ModularGridKind {
     // Single big channel.
     None,
     // 2048x2048 image-pixels (if modular_group_shift == 1).
@@ -533,27 +533,34 @@ impl FullModularImage {
         Ok(())
     }
 
-    pub fn process_output(
+    pub(super) fn process_output(
         &mut self,
         section_ids: &[usize],
         grid: usize,
+        grid_kind: ModularGridKind,
         frame_header: &FrameHeader,
         pass_to_pipeline: &mut dyn FnMut(usize, usize, Image<i32>) -> Result<()>,
-    ) -> Result<()> {
+        do_flush: bool,
+    ) -> Result<bool> {
+        // Helper to render a channel's data to the pipeline
+        let mut render_channel = |chan: usize, grid_idx: usize, data: Image<i32>| -> Result<()> {
+            if chan == 0 && self.modular_color_channels == 1 {
+                // Grayscale: output to all 3 channels
+                for i in 0..2 {
+                    pass_to_pipeline(i, grid_idx, data.try_clone()?)?;
+                }
+                pass_to_pipeline(2, grid_idx, data)
+            } else {
+                pass_to_pipeline(chan, grid_idx, data)
+            }
+        };
+
         let mut maybe_output = |bi: &mut ModularBufferInfo, grid: usize| -> Result<()> {
             if bi.info.output_channel_idx >= 0 {
                 let chan = bi.info.output_channel_idx as usize;
                 debug!("Rendering channel {chan:?}, grid position {grid}");
                 let buf = bi.buffer_grid[grid].get_buffer()?;
-                // TODO(veluca): figure out what to do with passes here.
-                if chan == 0 && self.modular_color_channels == 1 {
-                    for i in 0..2 {
-                        pass_to_pipeline(i, grid, buf.data.try_clone()?)?;
-                    }
-                    pass_to_pipeline(2, grid, buf.data)?;
-                } else {
-                    pass_to_pipeline(chan, grid, buf.data)?;
-                }
+                render_channel(chan, grid, buf.data)?;
             }
             Ok(())
         };
@@ -586,7 +593,113 @@ impl FullModularImage {
             }
         }
 
-        Ok(())
+        // If not in flush mode, we're done
+        if !do_flush {
+            return Ok(true);
+        }
+
+        // Find transforms for this grid that still have incomplete dependencies
+        let mut transforms_to_process = Vec::new();
+        for (tfm_idx, tfm_step) in self.transform_steps.iter().enumerate() {
+            // Skip if already complete (processed in normal mode above)
+            if tfm_step.incomplete_deps() == 0 {
+                continue;
+            }
+
+            // Check if this transform outputs to our grid
+            let output_buffers: &[usize] = match tfm_step.step() {
+                TransformStep::Rct { buf_out, .. } => buf_out,
+                TransformStep::Palette { buf_out, .. } => buf_out,
+                TransformStep::HSqueeze { buf_out, .. }
+                | TransformStep::VSqueeze { buf_out, .. } => std::slice::from_ref(buf_out),
+            };
+
+            // Check if any output buffer maps to our grid
+            let outputs_to_this_grid = output_buffers.iter().any(|&buf_idx| {
+                self.buffer_info[buf_idx].get_grid_idx(grid_kind, tfm_step.grid_pos()) == grid
+            });
+
+            if outputs_to_this_grid {
+                transforms_to_process.push(tfm_idx);
+            }
+        }
+
+        if transforms_to_process.is_empty() {
+            return Ok(true); // All transforms for this grid are complete
+        }
+
+        // Now handle incomplete transforms non-destructively
+        {
+            // Flush mode: non-destructive rendering with force_execute()
+            // All outputs stored in temp_outputs, decoder state untouched
+            //
+            // Invariant: All outputs from a single transform have the same grid_kind and grid_pos,
+            // so they all map to the same grid_idx. Therefore we only need buf_idx as the key.
+            let mut temp_outputs: Vec<Option<ModularChannel>> = 
+                (0..self.buffer_info.len()).map(|_| None).collect();
+
+            // Track which buffers need rendering (output channels only)
+            let mut outputs_to_render: Vec<usize> = Vec::new();
+
+            // Process transforms in reverse order (same as normal decoding)
+            // Transforms are stored in encoding order, so we reverse for decoding
+            transforms_to_process.reverse();
+
+            // Process transforms in reverse order (same as normal decoding)
+            // We can stop at first failure since later transforms in the chain depend on earlier ones
+            for &tfm_idx in &transforms_to_process {
+                debug!("Attempting to force-execute transform {tfm_idx}");
+
+                // Try to execute without modifying decoder state
+                match self.transform_steps[tfm_idx].force_execute(
+                    frame_header,
+                    &self.buffer_info,
+                    &temp_outputs,
+                    grid_kind,
+                ) {
+                    Ok(Some(outputs)) => {
+                        // Success! Store outputs
+                        trace!("Force-execute produced {} outputs", outputs.len());
+
+                        for (buf_idx, channel) in outputs {
+                            temp_outputs[buf_idx] = Some(channel);
+
+                            // Track outputs that need rendering
+                            if self.buffer_info[buf_idx].info.output_channel_idx >= 0 {
+                                outputs_to_render.push(buf_idx);
+                            }
+                        }
+                    }
+                    Ok(None) => {
+                        // Can't execute yet (not enough data)
+                        // Remaining transforms in the chain depend on this one
+                        debug!(
+                            "Cannot execute transform {tfm_idx}, stopping (remaining depend on it)"
+                        );
+                        break;
+                    }
+                    Err(e) => {
+                        // Actual error occurred
+                        return Err(e);
+                    }
+                }
+            }
+
+            // Now render all outputs (after all temp_outputs are populated)
+            // Invariant: All outputs from transforms for this grid belong to this grid
+            for buf_idx in outputs_to_render {
+                let chan = self.buffer_info[buf_idx].info.output_channel_idx as usize;
+
+                if let Some(channel) = temp_outputs[buf_idx].take() {
+                    debug!("Rendering temp channel {chan} at grid {grid}");
+                    render_channel(chan, grid, channel.data)?;
+                }
+            }
+
+            // Temp outputs automatically dropped here, decoder state unchanged
+            debug!("Flush complete: rendered temp outputs, decoder state preserved");
+            Ok(false) // Group incomplete, may need re-rendering
+        }
     }
 }
 

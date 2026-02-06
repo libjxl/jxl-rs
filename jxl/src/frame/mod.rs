@@ -190,6 +190,13 @@ pub struct Frame {
     last_rendered_pass: Vec<Option<usize>>,
     // Groups that should be rendered on the next call to flush().
     groups_to_flush: BTreeSet<usize>,
+    // Track which HF groups have been rendered with COMPLETE data (all passes).
+    // These should never be flushed again because their inputs are consumed.
+    groups_rendered_complete: Vec<bool>,
+    // Track which HF groups have been flushed with their current data (no new sections since last flush).
+    // When a group receives new data, it's set to false.
+    // This prevents redundant re-flushing of groups that haven't changed.
+    groups_flushed_at_current_state: Vec<bool>,
 }
 
 impl Frame {

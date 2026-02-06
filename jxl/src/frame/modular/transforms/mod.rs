@@ -3,7 +3,7 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-use apply::TransformStep;
+pub use apply::TransformStep;
 pub use apply::TransformStepChunk;
 use num_derive::FromPrimitive;
 
@@ -16,6 +16,7 @@ use super::{ModularBufferInfo, ModularGridKind, Predictor};
 
 pub(super) mod apply;
 mod palette;
+pub(super) mod progressive_apply;
 mod rct;
 mod squeeze;
 

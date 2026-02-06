@@ -189,7 +189,7 @@ fn unsqueeze_impl<D: SimdDescriptor>(
 }
 
 #[inline(always)]
-fn unsqueeze_scalar(avg: i32, res: i32, next_avg: i32, prev: i32) -> (i32, i32) {
+pub fn unsqueeze_scalar(avg: i32, res: i32, next_avg: i32, prev: i32) -> (i32, i32) {
     let tendency = smooth_tendency_scalar(prev as i64, avg as i64, next_avg as i64);
     let diff = (res as i64) + tendency;
     let a = (avg as i64) + (diff / 2);

@@ -321,6 +321,24 @@ impl CodestreamParser {
             }
         }
 
+        // Log section offsets and encoding type for debugging
+        /*
+        {
+            eprintln!("[FRAME_INFO] Encoding: {:?}, Groups: {}, LF Groups: {}, Passes: {}",
+                frame.header().encoding, frame.header().num_groups(),
+                frame.header().num_lf_groups(), frame.header().passes.num_passes);
+
+            let mut cumulative_offset = 0usize;
+            eprintln!("[SECTION_MAP] Total sections: {}", sections.len());
+            for (idx, sec) in sections.iter().enumerate() {
+                eprintln!("[SECTION] idx={} type={:?} offset={} length={}",
+                    idx, sec.section, cumulative_offset, sec.len);
+                cumulative_offset += sec.len;
+            }
+            eprintln!("[SECTION_MAP] Total frame data size: {}", cumulative_offset);
+        }
+        */
+
         self.sections = sections.into_iter().collect();
         self.ready_section_data = 0;
 
