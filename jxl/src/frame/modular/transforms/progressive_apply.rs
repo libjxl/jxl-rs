@@ -116,14 +116,8 @@ impl TransformStepChunk {
                 op,
                 perm,
             } => {
-                let result = self.force_execute_rct(
-                    buffers,
-                    temp_outputs,
-                    buf_in,
-                    buf_out,
-                    *op,
-                    *perm,
-                )?;
+                let result =
+                    self.force_execute_rct(buffers, temp_outputs, buf_in, buf_out, *op, *perm)?;
                 // Empty vec means "can't execute yet" (input not available)
                 Ok(if result.is_empty() {
                     None
@@ -205,36 +199,49 @@ impl TransformStepChunk {
             temp_ch.data.get_rect(in_rect)
         } else {
             _avg_guard = buf_avg.buffer_grid[in_grid].data.borrow();
-            let channel = _avg_guard.as_ref().expect("avg availability checked by has_input_channel");
+            let channel = _avg_guard
+                .as_ref()
+                .expect("avg availability checked by has_input_channel");
             channel.data.get_rect(in_rect)
         };
 
         // Build edges: get next/prev columns from neighbors or fallback to current grid edges
-        let next_col = (gx + 1 < buffers[buf_out].grid_shape.0).then(|| {
-            let next_grid_pos = (gx + 1, gy);
-            let next_in_grid = buf_avg.get_grid_idx(out_grid_kind, next_grid_pos);
-            let next_rect = buf_avg.get_grid_rect(frame_header, out_grid_kind, next_grid_pos);
-            let borrowed = buf_avg.buffer_grid[next_in_grid].data.borrow();
-            borrowed.as_ref().map(|ch| {
-                let data = ch.data.get_rect(next_rect);
-                (0..data.size().1).map(|y| data.row(y)[0]).collect::<Vec<i32>>()
+        let next_col = (gx + 1 < buffers[buf_out].grid_shape.0)
+            .then(|| {
+                let next_grid_pos = (gx + 1, gy);
+                let next_in_grid = buf_avg.get_grid_idx(out_grid_kind, next_grid_pos);
+                let next_rect = buf_avg.get_grid_rect(frame_header, out_grid_kind, next_grid_pos);
+                let borrowed = buf_avg.buffer_grid[next_in_grid].data.borrow();
+                borrowed.as_ref().map(|ch| {
+                    let data = ch.data.get_rect(next_rect);
+                    (0..data.size().1)
+                        .map(|y| data.row(y)[0])
+                        .collect::<Vec<i32>>()
+                })
             })
-        }).flatten().unwrap_or_else(|| {
-            (0..avg_data.size().1).map(|y| avg_data.row(y)[avg_data.size().0 - 1]).collect()
-        });
+            .flatten()
+            .unwrap_or_else(|| {
+                (0..avg_data.size().1)
+                    .map(|y| avg_data.row(y)[avg_data.size().0 - 1])
+                    .collect()
+            });
 
-        let prev_col = (gx > 0).then(|| {
-            let prev_grid_pos = (gx - 1, gy);
-            let prev_out_grid = buffers[buf_out].get_grid_idx(out_grid_kind, prev_grid_pos);
-            let prev_rect = buffers[buf_out].get_grid_rect(frame_header, out_grid_kind, prev_grid_pos);
-            let borrowed = buffers[buf_out].buffer_grid[prev_out_grid].data.borrow();
-            borrowed.as_ref().map(|ch| {
-                let data = ch.data.get_rect(prev_rect);
-                (0..data.size().1).map(|y| data.row(y)[data.size().0 - 1]).collect::<Vec<i32>>()
+        let prev_col = (gx > 0)
+            .then(|| {
+                let prev_grid_pos = (gx - 1, gy);
+                let prev_out_grid = buffers[buf_out].get_grid_idx(out_grid_kind, prev_grid_pos);
+                let prev_rect =
+                    buffers[buf_out].get_grid_rect(frame_header, out_grid_kind, prev_grid_pos);
+                let borrowed = buffers[buf_out].buffer_grid[prev_out_grid].data.borrow();
+                borrowed.as_ref().map(|ch| {
+                    let data = ch.data.get_rect(prev_rect);
+                    (0..data.size().1)
+                        .map(|y| data.row(y)[data.size().0 - 1])
+                        .collect::<Vec<i32>>()
+                })
             })
-        }).flatten().unwrap_or_else(|| {
-            (0..avg_data.size().1).map(|y| avg_data.row(y)[0]).collect()
-        });
+            .flatten()
+            .unwrap_or_else(|| (0..avg_data.size().1).map(|y| avg_data.row(y)[0]).collect());
 
         // Get res data (borrow from temp_outputs or real buffer)
         let res_rect = buf_res.get_grid_rect(frame_header, out_grid_kind, self.grid_pos);
@@ -243,13 +250,20 @@ impl TransformStepChunk {
             temp_ch.data.get_rect(res_rect)
         } else {
             _res_guard = buf_res.buffer_grid[res_grid].data.borrow();
-            let channel = _res_guard.as_ref().expect("res availability checked by has_input_channel");
+            let channel = _res_guard
+                .as_ref()
+                .expect("res availability checked by has_input_channel");
             channel.data.get_rect(res_rect)
         };
 
         // Process unsqueeze with all data loaded and guards kept alive
         let out_width = output_channel.data.size().0;
-        for y in 0..avg_data.size().1.min(res_data.size().1).min(output_channel.data.size().1) {
+        for y in 0..avg_data
+            .size()
+            .1
+            .min(res_data.size().1)
+            .min(output_channel.data.size().1)
+        {
             let in_row = avg_data.row(y);
             let res_row = res_data.row(y);
             let out_row = output_channel.data.row_mut(y);
@@ -363,14 +377,24 @@ impl TransformStepChunk {
             // Get input data from either temp_outputs or real buffer
             if let Some(temp_ch) = temp_outputs[buf_in[0]].as_ref() {
                 let in_data = temp_ch.data.get_rect(in_rect);
-                Self::process_vsqueeze_triangle_filter(&in_data, &mut output_channel, out_width, out_height);
+                Self::process_vsqueeze_triangle_filter(
+                    &in_data,
+                    &mut output_channel,
+                    out_width,
+                    out_height,
+                );
             } else {
                 let borrowed = buf_avg.buffer_grid[in_grid].data.borrow();
                 let channel = borrowed
                     .as_ref()
                     .expect("avg availability checked by has_input_channel");
                 let in_data = channel.data.get_rect(in_rect);
-                Self::process_vsqueeze_triangle_filter(&in_data, &mut output_channel, out_width, out_height);
+                Self::process_vsqueeze_triangle_filter(
+                    &in_data,
+                    &mut output_channel,
+                    out_width,
+                    out_height,
+                );
             }
 
             return Ok(vec![(buf_out, output_channel)]);
@@ -386,36 +410,41 @@ impl TransformStepChunk {
             temp_ch.data.get_rect(in_rect)
         } else {
             _avg_guard = buf_avg.buffer_grid[in_grid].data.borrow();
-            let channel = _avg_guard.as_ref().expect("avg availability checked by has_input_channel");
+            let channel = _avg_guard
+                .as_ref()
+                .expect("avg availability checked by has_input_channel");
             channel.data.get_rect(in_rect)
         };
 
         // Build edges: get next/prev rows from neighbors or fallback to current grid edges
-        let next_row = (gy + 1 < buffers[buf_out].grid_shape.1).then(|| {
-            let next_grid_pos = (gx, gy + 1);
-            let next_in_grid = buf_avg.get_grid_idx(out_grid_kind, next_grid_pos);
-            let next_rect = buf_avg.get_grid_rect(frame_header, out_grid_kind, next_grid_pos);
-            let borrowed = buf_avg.buffer_grid[next_in_grid].data.borrow();
-            borrowed.as_ref().map(|ch| {
-                let data = ch.data.get_rect(next_rect);
-                data.row(0).to_vec()
+        let next_row = (gy + 1 < buffers[buf_out].grid_shape.1)
+            .then(|| {
+                let next_grid_pos = (gx, gy + 1);
+                let next_in_grid = buf_avg.get_grid_idx(out_grid_kind, next_grid_pos);
+                let next_rect = buf_avg.get_grid_rect(frame_header, out_grid_kind, next_grid_pos);
+                let borrowed = buf_avg.buffer_grid[next_in_grid].data.borrow();
+                borrowed.as_ref().map(|ch| {
+                    let data = ch.data.get_rect(next_rect);
+                    data.row(0).to_vec()
+                })
             })
-        }).flatten().unwrap_or_else(|| {
-            avg_data.row(avg_data.size().1 - 1).to_vec()
-        });
+            .flatten()
+            .unwrap_or_else(|| avg_data.row(avg_data.size().1 - 1).to_vec());
 
-        let prev_row = (gy > 0).then(|| {
-            let prev_grid_pos = (gx, gy - 1);
-            let prev_out_grid = buffers[buf_out].get_grid_idx(out_grid_kind, prev_grid_pos);
-            let prev_rect = buffers[buf_out].get_grid_rect(frame_header, out_grid_kind, prev_grid_pos);
-            let borrowed = buffers[buf_out].buffer_grid[prev_out_grid].data.borrow();
-            borrowed.as_ref().map(|ch| {
-                let data = ch.data.get_rect(prev_rect);
-                data.row(data.size().1 - 1).to_vec()
+        let prev_row = (gy > 0)
+            .then(|| {
+                let prev_grid_pos = (gx, gy - 1);
+                let prev_out_grid = buffers[buf_out].get_grid_idx(out_grid_kind, prev_grid_pos);
+                let prev_rect =
+                    buffers[buf_out].get_grid_rect(frame_header, out_grid_kind, prev_grid_pos);
+                let borrowed = buffers[buf_out].buffer_grid[prev_out_grid].data.borrow();
+                borrowed.as_ref().map(|ch| {
+                    let data = ch.data.get_rect(prev_rect);
+                    data.row(data.size().1 - 1).to_vec()
+                })
             })
-        }).flatten().unwrap_or_else(|| {
-            avg_data.row(0).to_vec()
-        });
+            .flatten()
+            .unwrap_or_else(|| avg_data.row(0).to_vec());
 
         // Get res data (borrow from temp_outputs or real buffer)
         let res_rect = buf_res.get_grid_rect(frame_header, out_grid_kind, self.grid_pos);
@@ -424,7 +453,9 @@ impl TransformStepChunk {
             temp_ch.data.get_rect(res_rect)
         } else {
             _res_guard = buf_res.buffer_grid[res_grid].data.borrow();
-            let channel = _res_guard.as_ref().expect("res availability checked by has_input_channel");
+            let channel = _res_guard
+                .as_ref()
+                .expect("res availability checked by has_input_channel");
             channel.data.get_rect(res_rect)
         };
 
