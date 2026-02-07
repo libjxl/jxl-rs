@@ -144,11 +144,11 @@ impl JxlDecoderInner {
         self.box_parser.exif_boxes()
     }
 
-    /// Returns captured XML/XMP boxes from the container.
+    /// Returns captured XMP boxes from the container.
     ///
     /// Returns `None` if capture was disabled, `Some(...)` if enabled (empty slice if no boxes found).
-    pub fn xml_boxes(&self) -> Option<&[JxlMetadataBox]> {
-        self.box_parser.xml_boxes()
+    pub fn xmp_boxes(&self) -> Option<&[JxlMetadataBox]> {
+        self.box_parser.xmp_boxes()
     }
 
     /// Returns captured JUMBF boxes from the container.

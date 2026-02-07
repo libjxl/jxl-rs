@@ -272,12 +272,12 @@ pub enum ParseEvent<'buf> {
     /// Returned data may be partial. Complete codestream can be obtained by concatenating all data
     /// of `Codestream` events.
     Codestream(&'buf [u8]),
-    /// Auxiliary box data is read (EXIF, XML, JUMBF, etc.).
+    /// Auxiliary box data is read (EXIF, XMP, JUMBF, etc.).
     ///
     /// Returned data may be partial. Complete box data can be obtained by concatenating all data
     /// of `AuxiliaryBox` events with the same box type.
     AuxiliaryBox {
-        /// The type of the auxiliary box (e.g., EXIF, XML, JUMBF).
+        /// The type of the auxiliary box (e.g., EXIF, XMP, JUMBF).
         box_type: ContainerBoxType,
         /// The data payload of this chunk.
         data: &'buf [u8],
