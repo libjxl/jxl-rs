@@ -70,6 +70,18 @@ impl JxlMetadataCaptureOptions {
         }
     }
 
+    /// Create options with all metadata capture enabled and no size limits.
+    pub fn capture_all() -> Self {
+        Self {
+            capture_exif: true,
+            capture_xmp: true,
+            capture_jumbf: true,
+            exif_size_limit: None,
+            xmp_size_limit: None,
+            jumbf_size_limit: None,
+        }
+    }
+
     /// Create options with all metadata capture disabled
     pub fn no_capture() -> Self {
         Self {

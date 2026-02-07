@@ -5,9 +5,10 @@
 
 use clap::Parser;
 use color_eyre::eyre::{Result, WrapErr, eyre};
-use jxl::api::JxlDecoderOptions;
+use jxl::api::{JxlDecoderOptions, JxlMetadataBox, JxlMetadataCaptureOptions, ProcessingResult};
 use jxl_cli::dec::OutputDataType;
 use jxl_cli::enc::OutputFormat;
+use jxl_cli::metadata::{print_metadata_info, save_metadata_boxes};
 use jxl_cli::{cms::Lcms2Cms, dec};
 use std::fs;
 use std::io::{BufReader, Read, Seek};
@@ -29,7 +30,7 @@ struct Opt {
 
     /// Output image file, should end in .ppm, .pgm, .png, .apng or .npy
     /// (optional with --speedtest or --info)
-    #[clap(required_unless_present_any = ["speedtest", "info"])]
+    #[clap(required_unless_present_any = ["speedtest", "info", "exif_out", "xmp_out", "jumbf_out", "metadata_out"])]
     output: Option<PathBuf>,
 
     /// Print measured decoding speed.
@@ -51,6 +52,22 @@ struct Opt {
     ///  Likewise but for the ICC profile of the original colorspace
     #[clap(long)]
     original_icc_out: Option<PathBuf>,
+
+    /// If specified, writes EXIF metadata boxes to files based on this path
+    #[clap(long)]
+    exif_out: Option<PathBuf>,
+
+    /// If specified, writes XMP metadata boxes to files based on this path
+    #[clap(long)]
+    xmp_out: Option<PathBuf>,
+
+    /// If specified, writes JUMBF metadata boxes to files based on this path
+    #[clap(long)]
+    jumbf_out: Option<PathBuf>,
+
+    /// If specified, writes all metadata boxes to the given directory
+    #[clap(long)]
+    metadata_out: Option<PathBuf>,
 
     /// If specified, takes precedence over the bit depth in the input metadata
     #[clap(long)]
@@ -90,6 +107,27 @@ fn save_icc(icc_bytes: &[u8], icc_filename: Option<&PathBuf>) -> Result<()> {
     })
 }
 
+/// Save all metadata boxes according to CLI options.
+fn save_all_metadata(
+    opt: &Opt,
+    exif: &Option<Vec<JxlMetadataBox>>,
+    xmp: &Option<Vec<JxlMetadataBox>>,
+    jumbf: &Option<Vec<JxlMetadataBox>>,
+) -> Result<()> {
+    save_metadata_boxes(opt.exif_out.as_ref(), exif, true)?;
+    save_metadata_boxes(opt.xmp_out.as_ref(), xmp, false)?;
+    save_metadata_boxes(opt.jumbf_out.as_ref(), jumbf, false)?;
+
+    if let Some(dir) = &opt.metadata_out {
+        fs::create_dir_all(dir)
+            .wrap_err_with(|| format!("Failed to create metadata output directory {:?}", dir))?;
+        save_metadata_boxes(Some(&dir.join("metadata_exif.exif")), exif, true)?;
+        save_metadata_boxes(Some(&dir.join("metadata_xmp.xml")), xmp, false)?;
+        save_metadata_boxes(Some(&dir.join("metadata_jumbf.bin")), jumbf, false)?;
+    }
+    Ok(())
+}
+
 fn main() -> Result<()> {
     #[cfg(feature = "tracing-subscriber")]
     {
@@ -111,16 +149,28 @@ fn main() -> Result<()> {
         .transpose()?;
 
     let high_precision = opt.high_precision;
+    let wants_metadata = opt.metadata_out.is_some()
+        || opt.exif_out.is_some()
+        || opt.xmp_out.is_some()
+        || opt.jumbf_out.is_some();
+
+    let metadata_capture = JxlMetadataCaptureOptions {
+        capture_exif: wants_metadata || opt.exif_out.is_some(),
+        capture_xmp: wants_metadata || opt.xmp_out.is_some(),
+        capture_jumbf: wants_metadata || opt.jumbf_out.is_some(),
+        ..JxlMetadataCaptureOptions::capture_all()
+    };
     let options = |skip_preview: bool| {
         let mut options = JxlDecoderOptions::default();
         options.render_spot_colors = !matches!(output_format, Some(OutputFormat::Npy));
         options.skip_preview = skip_preview;
         options.high_precision = high_precision;
         options.cms = Some(Box::new(Lcms2Cms));
+        options.metadata_capture = metadata_capture.clone();
         options
     };
 
-    // Handle --info flag: print image info and exit
+    // Handle --info flag: print image info and exit (unless metadata extraction is also requested)
     if opt.info {
         let mut reader = BufReader::new(&mut file);
         let decoder = dec::decode_header(&mut reader, options(true))?;
@@ -140,6 +190,59 @@ fn main() -> Result<()> {
             );
         }
         println!("Extra channels: {}", info.extra_channels.len());
+        if !wants_metadata {
+            return Ok(());
+        }
+        // Seek back to start so the metadata-only path can re-read the file
+        file.seek(std::io::SeekFrom::Start(0))?;
+    }
+
+    // Fast path: metadata extraction without pixel decoding
+    if opt.output.is_none() && !opt.speedtest && wants_metadata {
+        let mut reader = BufReader::new(file);
+        let mut decoder = dec::decode_header(&mut reader, options(true))?;
+
+        // Skip through all frames to consume the codestream and discover
+        // any trailing metadata boxes (e.g. EXIF/XMP after codestream data)
+        let mut exif = None;
+        let mut xmp = None;
+        let mut jumbf = None;
+        loop {
+            let frame_decoder = match decoder.process(&mut reader)? {
+                ProcessingResult::Complete { result } => result,
+                ProcessingResult::NeedsMoreInput { fallback, .. } => {
+                    exif = fallback.exif_boxes().map(|b| b.to_vec());
+                    xmp = fallback.xmp_boxes().map(|b| b.to_vec());
+                    jumbf = fallback.jumbf_boxes().map(|b| b.to_vec());
+                    break;
+                }
+            };
+            decoder = match frame_decoder.skip_frame(&mut reader)? {
+                ProcessingResult::Complete { result } => result,
+                ProcessingResult::NeedsMoreInput { .. } => break,
+            };
+            if !decoder.has_more_frames() {
+                exif = decoder.exif_boxes().map(|b| b.to_vec());
+                xmp = decoder.xmp_boxes().map(|b| b.to_vec());
+                jumbf = decoder.jumbf_boxes().map(|b| b.to_vec());
+                break;
+            }
+        }
+
+        if opt.info {
+            if metadata_capture.capture_exif {
+                print_metadata_info("EXIF", &exif);
+            }
+            if metadata_capture.capture_xmp {
+                print_metadata_info("XMP", &xmp);
+            }
+            if metadata_capture.capture_jumbf {
+                print_metadata_info("JUMBF", &jumbf);
+            }
+        }
+
+        save_all_metadata(&opt, &exif, &xmp, &jumbf)?;
+
         return Ok(());
     }
 
@@ -239,6 +342,13 @@ fn main() -> Result<()> {
 
     save_icc(&output_icc, opt.icc_out.as_ref())?;
     save_icc(&embedded_icc, opt.original_icc_out.as_ref())?;
+
+    save_all_metadata(
+        &opt,
+        &output.exif_boxes,
+        &output.xmp_boxes,
+        &output.jumbf_boxes,
+    )?;
 
     Ok(())
 }

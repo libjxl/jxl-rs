@@ -6,11 +6,12 @@
 pub mod cms;
 pub mod dec;
 pub mod enc;
+pub mod metadata;
 
 #[cfg(test)]
 mod tests {
     use crate::dec::{DecodeOutput, OutputDataType, decode_frames};
-    use jxl::api::JxlDecoderOptions;
+    use jxl::api::{JxlDecoderOptions, JxlMetadataCaptureOptions};
     use std::path::PathBuf;
 
     fn get_test_file(name: &str) -> PathBuf {
@@ -192,5 +193,101 @@ mod tests {
             )
             .unwrap();
         }
+    }
+
+    fn do_decode_with_metadata(
+        mut input: &[u8],
+        metadata_capture: JxlMetadataCaptureOptions,
+    ) -> DecodeOutput {
+        let mut options = JxlDecoderOptions::default();
+        options.metadata_capture = metadata_capture;
+        decode_frames(
+            &mut input,
+            options,
+            None,
+            None,
+            &[OutputDataType::U8],
+            true,
+            false,
+            false,
+        )
+        .unwrap()
+        .0
+    }
+
+    fn get_metadata_test_file(name: &str) -> PathBuf {
+        get_test_file(&format!("metadata_test_images/{}", name))
+    }
+
+    #[test]
+    fn test_metadata_capture_disabled() {
+        let path = get_metadata_test_file("single_exif.jxl");
+        if !path.exists() {
+            eprintln!("Skipping (metadata test images not found)");
+            return;
+        }
+        let file = std::fs::read(&path).unwrap();
+        let output = do_decode_with_metadata(&file, JxlMetadataCaptureOptions::no_capture());
+        assert!(output.exif_boxes.is_none());
+        assert!(output.xmp_boxes.is_none());
+        assert!(output.jumbf_boxes.is_none());
+    }
+
+    #[test]
+    fn test_single_exif_capture() {
+        let path = get_metadata_test_file("single_exif.jxl");
+        if !path.exists() {
+            eprintln!("Skipping (metadata test images not found)");
+            return;
+        }
+        let file = std::fs::read(&path).unwrap();
+        let output = do_decode_with_metadata(&file, JxlMetadataCaptureOptions::capture_all());
+        let exif = output.exif_boxes.unwrap();
+        assert_eq!(exif.len(), 1);
+        assert!(!exif[0].data.is_empty());
+    }
+
+    #[test]
+    fn test_multi_exif_capture() {
+        let path = get_metadata_test_file("multi_exif.jxl");
+        if !path.exists() {
+            eprintln!("Skipping (metadata test images not found)");
+            return;
+        }
+        let file = std::fs::read(&path).unwrap();
+        let output = do_decode_with_metadata(&file, JxlMetadataCaptureOptions::capture_all());
+        let exif = output.exif_boxes.unwrap();
+        assert_eq!(exif.len(), 2);
+        assert!(!exif[0].data.is_empty());
+        assert!(!exif[1].data.is_empty());
+    }
+
+    #[test]
+    fn test_all_metadata_capture() {
+        let path = get_metadata_test_file("all_metadata.jxl");
+        if !path.exists() {
+            eprintln!("Skipping (metadata test images not found)");
+            return;
+        }
+        let file = std::fs::read(&path).unwrap();
+        let output = do_decode_with_metadata(&file, JxlMetadataCaptureOptions::capture_all());
+        assert!(!output.exif_boxes.unwrap().is_empty());
+        assert!(!output.xmp_boxes.unwrap().is_empty());
+        assert!(!output.jumbf_boxes.unwrap().is_empty());
+    }
+
+    #[test]
+    fn test_metadata_brotli_compressed() {
+        let path = get_metadata_test_file("single_exif_brob.jxl");
+        if !path.exists() {
+            eprintln!("Skipping (metadata test images not found)");
+            return;
+        }
+        let file = std::fs::read(&path).unwrap();
+        let output = do_decode_with_metadata(&file, JxlMetadataCaptureOptions::capture_all());
+        let exif = output.exif_boxes.unwrap();
+        assert_eq!(exif.len(), 1);
+        assert!(exif[0].is_brotli_compressed);
+        assert!(!exif[0].data.is_empty());
     }
 }
