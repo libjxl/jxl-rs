@@ -9,9 +9,9 @@ use crate::api::JxlCms;
 /// Typical EXIF data is 10-64KB.
 pub const DEFAULT_EXIF_SIZE_LIMIT: u64 = 1024 * 1024;
 
-/// Default maximum aggregate size for XML/XMP metadata (1MB).
+/// Default maximum aggregate size for XMP metadata (1MB).
 /// Typical XMP data is 1-100KB.
-pub const DEFAULT_XML_SIZE_LIMIT: u64 = 1024 * 1024;
+pub const DEFAULT_XMP_SIZE_LIMIT: u64 = 1024 * 1024;
 
 /// Default maximum aggregate size for JUMBF metadata (16MB).
 /// JUMBF can be larger due to C2PA embedded images.
@@ -29,13 +29,13 @@ pub enum JxlProgressiveMode {
 /// Options for capturing metadata boxes during container parsing.
 /// All capture flags default to false (opt-in) to avoid memory overhead.
 #[derive(Debug, Clone, Default)]
-pub struct MetadataCaptureOptions {
+pub struct JxlMetadataCaptureOptions {
     /// Whether to capture EXIF metadata boxes during container parsing.
     /// When enabled, EXIF boxes can be retrieved via `exif_boxes()` after parsing.
     pub capture_exif: bool,
-    /// Whether to capture XML/XMP metadata boxes during container parsing.
-    /// When enabled, XML boxes can be retrieved via `xml_boxes()` after parsing.
-    pub capture_xml: bool,
+    /// Whether to capture XMP metadata boxes during container parsing.
+    /// When enabled, XMP boxes can be retrieved via `xmp_boxes()` after parsing.
+    pub capture_xmp: bool,
     /// Whether to capture JUMBF metadata boxes during container parsing.
     /// JUMBF (JPEG Universal Metadata Box Format) is used for C2PA content credentials.
     /// When enabled, JUMBF boxes can be retrieved via `jumbf_boxes()` after parsing.
@@ -45,11 +45,11 @@ pub struct MetadataCaptureOptions {
     /// Set to `None` to disable the limit.
     /// Default: 1MB ([`DEFAULT_EXIF_SIZE_LIMIT`])
     pub exif_size_limit: Option<u64>,
-    /// Maximum aggregate size in bytes for all XML/XMP boxes combined.
-    /// Once this limit is reached, additional XML boxes are skipped.
+    /// Maximum aggregate size in bytes for all XMP boxes combined.
+    /// Once this limit is reached, additional XMP boxes are skipped.
     /// Set to `None` to disable the limit.
-    /// Default: 1MB ([`DEFAULT_XML_SIZE_LIMIT`])
-    pub xml_size_limit: Option<u64>,
+    /// Default: 1MB ([`DEFAULT_XMP_SIZE_LIMIT`])
+    pub xmp_size_limit: Option<u64>,
     /// Maximum aggregate size in bytes for all JUMBF boxes combined.
     /// Once this limit is reached, additional JUMBF boxes are skipped.
     /// Set to `None` to disable the limit.
@@ -57,15 +57,15 @@ pub struct MetadataCaptureOptions {
     pub jumbf_size_limit: Option<u64>,
 }
 
-impl MetadataCaptureOptions {
+impl JxlMetadataCaptureOptions {
     /// Create options with all metadata capture enabled and default size limits.
     pub fn capture_all_with_limits() -> Self {
         Self {
             capture_exif: true,
-            capture_xml: true,
+            capture_xmp: true,
             capture_jumbf: true,
             exif_size_limit: Some(DEFAULT_EXIF_SIZE_LIMIT),
-            xml_size_limit: Some(DEFAULT_XML_SIZE_LIMIT),
+            xmp_size_limit: Some(DEFAULT_XMP_SIZE_LIMIT),
             jumbf_size_limit: Some(DEFAULT_JUMBF_SIZE_LIMIT),
         }
     }
@@ -74,10 +74,10 @@ impl MetadataCaptureOptions {
     pub fn no_capture() -> Self {
         Self {
             capture_exif: false,
-            capture_xml: false,
+            capture_xmp: false,
             capture_jumbf: false,
             exif_size_limit: Some(0),
-            xml_size_limit: Some(0),
+            xmp_size_limit: Some(0),
             jumbf_size_limit: Some(0),
         }
     }
@@ -108,8 +108,8 @@ pub struct JxlDecoderOptions {
     /// This produces premultiplied alpha output, which is useful for compositing.
     /// Default: false (output straight alpha)
     pub premultiply_output: bool,
-    /// Options for capturing metadata boxes (EXIF, XML/XMP, JUMBF) during container parsing.
-    pub metadata_capture: MetadataCaptureOptions,
+    /// Options for capturing metadata boxes (EXIF, XMP, JUMBF) during container parsing.
+    pub metadata_capture: JxlMetadataCaptureOptions,
 }
 
 impl Default for JxlDecoderOptions {
@@ -125,7 +125,7 @@ impl Default for JxlDecoderOptions {
             pixel_limit: None,
             high_precision: false,
             premultiply_output: false,
-            metadata_capture: MetadataCaptureOptions::no_capture(),
+            metadata_capture: JxlMetadataCaptureOptions::no_capture(),
         }
     }
 }

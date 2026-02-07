@@ -149,11 +149,11 @@ impl JxlDecoder<WithImageInfo> {
         self.inner.exif_boxes()
     }
 
-    /// Returns captured XML/XMP boxes from the container.
+    /// Returns captured XMP boxes from the container.
     ///
     /// Returns `None` if capture was disabled, `Some(...)` if enabled (empty slice if no boxes found).
-    pub fn xml_boxes(&self) -> Option<&[JxlMetadataBox]> {
-        self.inner.xml_boxes()
+    pub fn xmp_boxes(&self) -> Option<&[JxlMetadataBox]> {
+        self.inner.xmp_boxes()
     }
 
     /// Returns captured JUMBF boxes from the container.
@@ -216,7 +216,7 @@ impl JxlDecoder<WithFrameInfo> {
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
-    use crate::api::{JxlDataFormat, JxlDecoderOptions, MetadataCaptureOptions};
+    use crate::api::{JxlDataFormat, JxlDecoderOptions, JxlMetadataCaptureOptions};
     use crate::error::Error;
     use crate::image::{Image, Rect};
     use jxl_macros::for_each_test_file;
@@ -1445,13 +1445,13 @@ pub(crate) mod tests {
         fn empty_for_bare_codestream() {
             let file = include_bytes!("../../resources/test/basic.jxl");
             let options = JxlDecoderOptions {
-                metadata_capture: MetadataCaptureOptions::capture_all_with_limits(),
+                metadata_capture: JxlMetadataCaptureOptions::capture_all_with_limits(),
                 ..Default::default()
             };
             let decoder = decode_to_image_info(file, options);
             // Bare codestream has no container, metadata capture returns Some but empty
             assert!(decoder.exif_boxes().is_none_or(|b| b.is_empty()));
-            assert!(decoder.xml_boxes().is_none_or(|b| b.is_empty()));
+            assert!(decoder.xmp_boxes().is_none_or(|b| b.is_empty()));
             assert!(decoder.jumbf_boxes().is_none_or(|b| b.is_empty()));
         }
 
@@ -1459,7 +1459,7 @@ pub(crate) mod tests {
         fn empty_for_container_without_metadata() {
             let file = include_bytes!("../../resources/test/has_permutation_with_container.jxl");
             let options = JxlDecoderOptions {
-                metadata_capture: MetadataCaptureOptions::capture_all_with_limits(),
+                metadata_capture: JxlMetadataCaptureOptions::capture_all_with_limits(),
                 ..Default::default()
             };
             let decoder = decode_to_image_info(file, options);
@@ -1475,7 +1475,7 @@ pub(crate) mod tests {
             let decoder = decode_to_image_info(file, options);
             // Default has capture disabled, so returns None
             assert!(decoder.exif_boxes().is_none());
-            assert!(decoder.xml_boxes().is_none());
+            assert!(decoder.xmp_boxes().is_none());
             assert!(decoder.jumbf_boxes().is_none());
         }
 
@@ -1483,7 +1483,7 @@ pub(crate) mod tests {
         fn single_exif_box_content() {
             let file = include_bytes!("../../resources/test/metadata_test_images/single_exif.jxl");
             let options = JxlDecoderOptions {
-                metadata_capture: MetadataCaptureOptions::capture_all_with_limits(),
+                metadata_capture: JxlMetadataCaptureOptions::capture_all_with_limits(),
                 ..Default::default()
             };
             let decoder = decode_to_image_info(file, options);
@@ -1496,20 +1496,20 @@ pub(crate) mod tests {
         }
 
         #[test]
-        fn single_xml_box_content() {
+        fn single_xmp_box_content() {
             let file = include_bytes!("../../resources/test/metadata_test_images/single_xmp.jxl");
             let options = JxlDecoderOptions {
-                metadata_capture: MetadataCaptureOptions::capture_all_with_limits(),
+                metadata_capture: JxlMetadataCaptureOptions::capture_all_with_limits(),
                 ..Default::default()
             };
             let decoder = decode_to_image_info(file, options);
 
-            let boxes = decoder.xml_boxes().expect("XML should be captured");
+            let boxes = decoder.xmp_boxes().expect("XMP should be captured");
             assert_eq!(boxes.len(), 1);
 
-            let xml_str = std::str::from_utf8(&boxes[0].data).unwrap();
+            let xmp_str = std::str::from_utf8(&boxes[0].data).unwrap();
             assert_eq!(
-                xml_str,
+                xmp_str,
                 XMP_TEMPLATE.replace("{DESCRIPTION}", "Test XMP content")
             );
         }
@@ -1518,7 +1518,7 @@ pub(crate) mod tests {
         fn single_jumbf_box_content() {
             let file = include_bytes!("../../resources/test/metadata_test_images/single_jumbf.jxl");
             let options = JxlDecoderOptions {
-                metadata_capture: MetadataCaptureOptions::capture_all_with_limits(),
+                metadata_capture: JxlMetadataCaptureOptions::capture_all_with_limits(),
                 ..Default::default()
             };
             let decoder = decode_to_image_info(file, options);
@@ -1534,7 +1534,7 @@ pub(crate) mod tests {
         fn multiple_exif_boxes_content() {
             let file = include_bytes!("../../resources/test/metadata_test_images/multi_exif.jxl");
             let options = JxlDecoderOptions {
-                metadata_capture: MetadataCaptureOptions::capture_all_with_limits(),
+                metadata_capture: JxlMetadataCaptureOptions::capture_all_with_limits(),
                 ..Default::default()
             };
             let decoder = decode_to_image_info(file, options);
@@ -1558,15 +1558,15 @@ pub(crate) mod tests {
         }
 
         #[test]
-        fn multiple_xml_boxes_content() {
+        fn multiple_xmp_boxes_content() {
             let file = include_bytes!("../../resources/test/metadata_test_images/multi_xmp.jxl");
             let options = JxlDecoderOptions {
-                metadata_capture: MetadataCaptureOptions::capture_all_with_limits(),
+                metadata_capture: JxlMetadataCaptureOptions::capture_all_with_limits(),
                 ..Default::default()
             };
             let decoder = decode_to_image_info(file, options);
 
-            let boxes = decoder.xml_boxes().expect("XML should be captured");
+            let boxes = decoder.xmp_boxes().expect("XMP should be captured");
             assert_eq!(
                 boxes.len(),
                 2,
@@ -1574,17 +1574,17 @@ pub(crate) mod tests {
                 boxes.len()
             );
 
-            let xml0 = std::str::from_utf8(&boxes[0].data).unwrap();
-            let xml1 = std::str::from_utf8(&boxes[1].data).unwrap();
-            assert_eq!(xml0, XMP_TEMPLATE.replace("{DESCRIPTION}", "First XMP"));
-            assert_eq!(xml1, XMP_TEMPLATE.replace("{DESCRIPTION}", "Second XMP"));
+            let xmp0 = std::str::from_utf8(&boxes[0].data).unwrap();
+            let xmp1 = std::str::from_utf8(&boxes[1].data).unwrap();
+            assert_eq!(xmp0, XMP_TEMPLATE.replace("{DESCRIPTION}", "First XMP"));
+            assert_eq!(xmp1, XMP_TEMPLATE.replace("{DESCRIPTION}", "Second XMP"));
         }
 
         #[test]
         fn multiple_jumbf_boxes_content() {
             let file = include_bytes!("../../resources/test/metadata_test_images/multi_jumbf.jxl");
             let options = JxlDecoderOptions {
-                metadata_capture: MetadataCaptureOptions::capture_all_with_limits(),
+                metadata_capture: JxlMetadataCaptureOptions::capture_all_with_limits(),
                 ..Default::default()
             };
             let decoder = decode_to_image_info(file, options);
@@ -1607,7 +1607,7 @@ pub(crate) mod tests {
         fn all_metadata_types_content() {
             let file = include_bytes!("../../resources/test/metadata_test_images/all_metadata.jxl");
             let options = JxlDecoderOptions {
-                metadata_capture: MetadataCaptureOptions::capture_all_with_limits(),
+                metadata_capture: JxlMetadataCaptureOptions::capture_all_with_limits(),
                 ..Default::default()
             };
             let decoder = decode_to_image_info(file, options);
@@ -1620,11 +1620,11 @@ pub(crate) mod tests {
                 Some("EXIF data".to_string())
             );
 
-            // XML
-            let xml = decoder.xml_boxes().expect("XML should be captured");
-            assert!(!xml.is_empty(), "Should have XML");
-            let xml_str = std::str::from_utf8(&xml[0].data).unwrap();
-            assert_eq!(xml_str, XMP_TEMPLATE.replace("{DESCRIPTION}", "XMP data"));
+            // XMP
+            let xmp = decoder.xmp_boxes().expect("XMP should be captured");
+            assert!(!xmp.is_empty(), "Should have XMP");
+            let xmp_str = std::str::from_utf8(&xmp[0].data).unwrap();
+            assert_eq!(xmp_str, XMP_TEMPLATE.replace("{DESCRIPTION}", "XMP data"));
 
             // JUMBF
             let jumbf = decoder.jumbf_boxes().expect("JUMBF should be captured");
@@ -1637,11 +1637,11 @@ pub(crate) mod tests {
         fn exif_capture_disabled() {
             let file = include_bytes!("../../resources/test/metadata_test_images/single_exif.jxl");
             let options = JxlDecoderOptions {
-                metadata_capture: MetadataCaptureOptions {
+                metadata_capture: JxlMetadataCaptureOptions {
                     capture_exif: false,
-                    capture_xml: true,
+                    capture_xmp: true,
                     capture_jumbf: true,
-                    ..MetadataCaptureOptions::capture_all_with_limits()
+                    ..JxlMetadataCaptureOptions::capture_all_with_limits()
                 },
                 ..Default::default()
             };
@@ -1654,31 +1654,31 @@ pub(crate) mod tests {
         }
 
         #[test]
-        fn xml_capture_disabled() {
+        fn xmp_capture_disabled() {
             let file = include_bytes!("../../resources/test/metadata_test_images/single_xmp.jxl");
             let options = JxlDecoderOptions {
-                metadata_capture: MetadataCaptureOptions {
+                metadata_capture: JxlMetadataCaptureOptions {
                     capture_exif: true,
-                    capture_xml: false,
+                    capture_xmp: false,
                     capture_jumbf: true,
-                    ..MetadataCaptureOptions::capture_all_with_limits()
+                    ..JxlMetadataCaptureOptions::capture_all_with_limits()
                 },
                 ..Default::default()
             };
             let decoder = decode_to_image_info(file, options);
 
-            assert!(decoder.xml_boxes().is_none(), "XML should not be captured");
+            assert!(decoder.xmp_boxes().is_none(), "XMP should not be captured");
         }
 
         #[test]
         fn jumbf_capture_disabled() {
             let file = include_bytes!("../../resources/test/metadata_test_images/single_jumbf.jxl");
             let options = JxlDecoderOptions {
-                metadata_capture: MetadataCaptureOptions {
+                metadata_capture: JxlMetadataCaptureOptions {
                     capture_exif: true,
-                    capture_xml: true,
+                    capture_xmp: true,
                     capture_jumbf: false,
-                    ..MetadataCaptureOptions::capture_all_with_limits()
+                    ..JxlMetadataCaptureOptions::capture_all_with_limits()
                 },
                 ..Default::default()
             };
@@ -1694,13 +1694,13 @@ pub(crate) mod tests {
         fn all_capture_disabled() {
             let file = include_bytes!("../../resources/test/metadata_test_images/all_metadata.jxl");
             let options = JxlDecoderOptions {
-                metadata_capture: MetadataCaptureOptions::no_capture(),
+                metadata_capture: JxlMetadataCaptureOptions::no_capture(),
                 ..Default::default()
             };
             let decoder = decode_to_image_info(file, options);
 
             assert!(decoder.exif_boxes().is_none());
-            assert!(decoder.xml_boxes().is_none());
+            assert!(decoder.xmp_boxes().is_none());
             assert!(decoder.jumbf_boxes().is_none());
         }
 
@@ -1709,7 +1709,7 @@ pub(crate) mod tests {
             // large_exif.jxl has EXIF > 200 bytes
             let file = include_bytes!("../../resources/test/metadata_test_images/large_exif.jxl");
             let options = JxlDecoderOptions {
-                metadata_capture: MetadataCaptureOptions {
+                metadata_capture: JxlMetadataCaptureOptions {
                     capture_exif: true,
                     exif_size_limit: Some(50), // Too small
                     ..Default::default()
@@ -1726,7 +1726,7 @@ pub(crate) mod tests {
         fn exif_size_limit_allows() {
             let file = include_bytes!("../../resources/test/metadata_test_images/single_exif.jxl");
             let options = JxlDecoderOptions {
-                metadata_capture: MetadataCaptureOptions {
+                metadata_capture: JxlMetadataCaptureOptions {
                     capture_exif: true,
                     exif_size_limit: Some(10000), // Generous
                     ..Default::default()
@@ -1744,28 +1744,28 @@ pub(crate) mod tests {
         }
 
         #[test]
-        fn xml_size_limit_exceeded() {
-            // single_xmp.jxl has XML > 300 bytes
+        fn xmp_size_limit_exceeded() {
+            // single_xmp.jxl has XMP > 300 bytes
             let file = include_bytes!("../../resources/test/metadata_test_images/single_xmp.jxl");
             let options = JxlDecoderOptions {
-                metadata_capture: MetadataCaptureOptions {
-                    capture_xml: true,
-                    xml_size_limit: Some(50), // Too small
+                metadata_capture: JxlMetadataCaptureOptions {
+                    capture_xmp: true,
+                    xmp_size_limit: Some(50), // Too small
                     ..Default::default()
                 },
                 ..Default::default()
             };
             let decoder = decode_to_image_info(file, options);
 
-            let boxes = decoder.xml_boxes().expect("XML capture enabled");
-            assert!(boxes.is_empty(), "XML should be skipped due to size limit");
+            let boxes = decoder.xmp_boxes().expect("XMP capture enabled");
+            assert!(boxes.is_empty(), "XMP should be skipped due to size limit");
         }
 
         #[test]
         fn jumbf_size_limit_exceeded() {
             let file = include_bytes!("../../resources/test/metadata_test_images/single_jumbf.jxl");
             let options = JxlDecoderOptions {
-                metadata_capture: MetadataCaptureOptions {
+                metadata_capture: JxlMetadataCaptureOptions {
                     capture_jumbf: true,
                     jumbf_size_limit: Some(10), // Too small
                     ..Default::default()
@@ -1788,7 +1788,7 @@ pub(crate) mod tests {
 
             // Set limit that allows first box but not both
             let options = JxlDecoderOptions {
-                metadata_capture: MetadataCaptureOptions {
+                metadata_capture: JxlMetadataCaptureOptions {
                     capture_exif: true,
                     exif_size_limit: Some(60), // Allows ~1 box
                     ..Default::default()
@@ -1823,7 +1823,7 @@ pub(crate) mod tests {
             let file =
                 include_bytes!("../../resources/test/metadata_test_images/single_exif_brob.jxl");
             let options = JxlDecoderOptions {
-                metadata_capture: MetadataCaptureOptions::capture_all_with_limits(),
+                metadata_capture: JxlMetadataCaptureOptions::capture_all_with_limits(),
                 ..Default::default()
             };
             let decoder = decode_to_image_info(file, options);
@@ -1842,27 +1842,27 @@ pub(crate) mod tests {
         }
 
         #[test]
-        fn single_xml_box() {
+        fn single_xmp_box() {
             let file =
                 include_bytes!("../../resources/test/metadata_test_images/single_xmp_brob.jxl");
             let options = JxlDecoderOptions {
-                metadata_capture: MetadataCaptureOptions::capture_all_with_limits(),
+                metadata_capture: JxlMetadataCaptureOptions::capture_all_with_limits(),
                 ..Default::default()
             };
             let decoder = decode_to_image_info(file, options);
 
-            let boxes = decoder.xml_boxes().expect("XML should be captured");
+            let boxes = decoder.xmp_boxes().expect("XMP should be captured");
             assert_eq!(boxes.len(), 1);
             assert!(
                 boxes[0].is_brotli_compressed,
-                "XML box should be marked as brotli-compressed"
+                "XMP box should be marked as brotli-compressed"
             );
 
             // Decompress and verify content
             let decompressed = brotli_decompress(&boxes[0].data);
-            let xml_str = std::str::from_utf8(&decompressed).unwrap();
+            let xmp_str = std::str::from_utf8(&decompressed).unwrap();
             assert_eq!(
-                xml_str,
+                xmp_str,
                 XMP_TEMPLATE.replace("{DESCRIPTION}", "Test XMP content")
             );
         }
@@ -1872,7 +1872,7 @@ pub(crate) mod tests {
             let file =
                 include_bytes!("../../resources/test/metadata_test_images/single_jumbf_brob.jxl");
             let options = JxlDecoderOptions {
-                metadata_capture: MetadataCaptureOptions::capture_all_with_limits(),
+                metadata_capture: JxlMetadataCaptureOptions::capture_all_with_limits(),
                 ..Default::default()
             };
             let decoder = decode_to_image_info(file, options);
@@ -1895,7 +1895,7 @@ pub(crate) mod tests {
             let file =
                 include_bytes!("../../resources/test/metadata_test_images/multi_exif_brob.jxl");
             let options = JxlDecoderOptions {
-                metadata_capture: MetadataCaptureOptions::capture_all_with_limits(),
+                metadata_capture: JxlMetadataCaptureOptions::capture_all_with_limits(),
                 ..Default::default()
             };
             let decoder = decode_to_image_info(file, options);
@@ -1930,7 +1930,7 @@ pub(crate) mod tests {
             let file =
                 include_bytes!("../../resources/test/metadata_test_images/mixed_compression.jxl");
             let options = JxlDecoderOptions {
-                metadata_capture: MetadataCaptureOptions::capture_all_with_limits(),
+                metadata_capture: JxlMetadataCaptureOptions::capture_all_with_limits(),
                 ..Default::default()
             };
             let decoder = decode_to_image_info(file, options);
@@ -1965,7 +1965,7 @@ pub(crate) mod tests {
             let file =
                 include_bytes!("../../resources/test/metadata_test_images/all_metadata_brob.jxl");
             let options = JxlDecoderOptions {
-                metadata_capture: MetadataCaptureOptions::capture_all_with_limits(),
+                metadata_capture: JxlMetadataCaptureOptions::capture_all_with_limits(),
                 ..Default::default()
             };
             let decoder = decode_to_image_info(file, options);
@@ -1979,13 +1979,13 @@ pub(crate) mod tests {
                 Some("EXIF data".to_string())
             );
 
-            // XML
-            let xml = decoder.xml_boxes().expect("XML should be captured");
-            assert!(!xml.is_empty(), "Should have XML");
-            assert!(xml[0].is_brotli_compressed, "XML should be compressed");
-            let xml_decompressed = brotli_decompress(&xml[0].data);
-            let xml_str = std::str::from_utf8(&xml_decompressed).unwrap();
-            assert_eq!(xml_str, XMP_TEMPLATE.replace("{DESCRIPTION}", "XMP data"));
+            // XMP
+            let xmp = decoder.xmp_boxes().expect("XMP should be captured");
+            assert!(!xmp.is_empty(), "Should have XMP");
+            assert!(xmp[0].is_brotli_compressed, "XMP should be compressed");
+            let xmp_decompressed = brotli_decompress(&xmp[0].data);
+            let xmp_str = std::str::from_utf8(&xmp_decompressed).unwrap();
+            assert_eq!(xmp_str, XMP_TEMPLATE.replace("{DESCRIPTION}", "XMP data"));
 
             // JUMBF
             let jumbf = decoder.jumbf_boxes().expect("JUMBF should be captured");
@@ -2001,7 +2001,7 @@ pub(crate) mod tests {
             // Verify that uncompressed boxes have is_brotli_compressed = false
             let file = include_bytes!("../../resources/test/metadata_test_images/single_exif.jxl");
             let options = JxlDecoderOptions {
-                metadata_capture: MetadataCaptureOptions::capture_all_with_limits(),
+                metadata_capture: JxlMetadataCaptureOptions::capture_all_with_limits(),
                 ..Default::default()
             };
             let decoder = decode_to_image_info(file, options);

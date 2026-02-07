@@ -7,7 +7,7 @@ use crate::error::{Error, Result};
 use std::io::IoSliceMut;
 
 use crate::api::{
-    JxlBitstreamInput, JxlMetadataBox, JxlSignatureType, MetadataCaptureOptions,
+    JxlBitstreamInput, JxlMetadataBox, JxlSignatureType, JxlMetadataCaptureOptions,
     check_signature_internal, inner::process::SmallBuffer,
 };
 
@@ -15,7 +15,7 @@ use crate::api::{
 #[derive(Clone, Copy)]
 enum MetadataBoxType {
     Exif,
-    Xml,
+    Xmp,
     Jumbf,
 }
 
@@ -25,7 +25,7 @@ enum ParseState {
     BoxNeeded,
     CodestreamBox(u64),
     SkippableBox(u64),
-    /// Reading metadata box content (EXIF, XML, or JUMBF)
+    /// Reading metadata box content (EXIF, XMP, or JUMBF)
     MetadataBox {
         box_type: MetadataBoxType,
         bytes_left: u64,
@@ -53,40 +53,40 @@ pub(super) struct BoxParser {
 
     // Captured metadata boxes
     pub(super) exif_boxes: Vec<JxlMetadataBox>,
-    pub(super) xml_boxes: Vec<JxlMetadataBox>,
+    pub(super) xmp_boxes: Vec<JxlMetadataBox>,
     pub(super) jumbf_boxes: Vec<JxlMetadataBox>,
 
     // Aggregate sizes for limit tracking
     exif_total_size: u64,
-    xml_total_size: u64,
+    xmp_total_size: u64,
     jumbf_total_size: u64,
 
     // Capture options
     capture_exif: bool,
-    capture_xml: bool,
+    capture_xmp: bool,
     capture_jumbf: bool,
     exif_size_limit: Option<u64>,
-    xml_size_limit: Option<u64>,
+    xmp_size_limit: Option<u64>,
     jumbf_size_limit: Option<u64>,
 }
 
 impl BoxParser {
-    pub(super) fn new(opts: &MetadataCaptureOptions) -> Self {
+    pub(super) fn new(opts: &JxlMetadataCaptureOptions) -> Self {
         BoxParser {
             box_buffer: SmallBuffer::new(128),
             state: ParseState::SignatureNeeded,
             box_type: CodestreamBoxType::None,
             exif_boxes: Vec::new(),
-            xml_boxes: Vec::new(),
+            xmp_boxes: Vec::new(),
             jumbf_boxes: Vec::new(),
             exif_total_size: 0,
-            xml_total_size: 0,
+            xmp_total_size: 0,
             jumbf_total_size: 0,
             capture_exif: opts.capture_exif,
-            capture_xml: opts.capture_xml,
+            capture_xmp: opts.capture_xmp,
             capture_jumbf: opts.capture_jumbf,
             exif_size_limit: opts.exif_size_limit,
-            xml_size_limit: opts.xml_size_limit,
+            xmp_size_limit: opts.xmp_size_limit,
             jumbf_size_limit: opts.jumbf_size_limit,
         }
     }
@@ -170,9 +170,9 @@ impl BoxParser {
                                 self.exif_total_size += box_size;
                                 self.exif_boxes.push(metadata_box);
                             }
-                            MetadataBoxType::Xml => {
-                                self.xml_total_size += box_size;
-                                self.xml_boxes.push(metadata_box);
+                            MetadataBoxType::Xmp => {
+                                self.xmp_total_size += box_size;
+                                self.xmp_boxes.push(metadata_box);
                             }
                             MetadataBoxType::Jumbf => {
                                 self.jumbf_total_size += box_size;
@@ -208,10 +208,10 @@ impl BoxParser {
                             self.exif_total_size,
                         ),
                         b"xml " => (
-                            self.capture_xml,
-                            MetadataBoxType::Xml,
-                            self.xml_size_limit,
-                            self.xml_total_size,
+                            self.capture_xmp,
+                            MetadataBoxType::Xmp,
+                            self.xmp_size_limit,
+                            self.xmp_total_size,
                         ),
                         b"jumb" => (
                             self.capture_jumbf,
@@ -324,18 +324,18 @@ impl BoxParser {
                             }
                         }
                         b"xml " => {
-                            // Capture XML/XMP metadata box if enabled and within aggregate limit
+                            // Capture XMP metadata box if enabled and within aggregate limit
                             let within_limit = self
-                                .xml_size_limit
+                                .xmp_size_limit
                                 .map(|limit| {
-                                    self.xml_total_size.saturating_add(content_len) <= limit
+                                    self.xmp_total_size.saturating_add(content_len) <= limit
                                 })
                                 .unwrap_or(true);
                             // u64::MAX is a sentinel for unbounded boxes (extends to EOF)
                             let is_bounded = content_len < u64::MAX;
-                            if self.capture_xml && is_bounded && within_limit {
+                            if self.capture_xmp && is_bounded && within_limit {
                                 self.state = ParseState::MetadataBox {
-                                    box_type: MetadataBoxType::Xml,
+                                    box_type: MetadataBoxType::Xmp,
                                     bytes_left: content_len,
                                     buffer: Vec::with_capacity(content_len.min(65536) as usize),
                                     is_brotli_compressed: false,
@@ -403,8 +403,8 @@ impl BoxParser {
         self.capture_exif.then_some(&self.exif_boxes[..])
     }
 
-    pub(super) fn xml_boxes(&self) -> Option<&[JxlMetadataBox]> {
-        self.capture_xml.then_some(&self.xml_boxes[..])
+    pub(super) fn xmp_boxes(&self) -> Option<&[JxlMetadataBox]> {
+        self.capture_xmp.then_some(&self.xmp_boxes[..])
     }
 
     pub(super) fn jumbf_boxes(&self) -> Option<&[JxlMetadataBox]> {
