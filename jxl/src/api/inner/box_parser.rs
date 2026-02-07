@@ -3,11 +3,14 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-use crate::error::{Error, Result};
+use crate::{
+    container::ContainerBoxType,
+    error::{Error, Result},
+};
 use std::io::IoSliceMut;
 
 use crate::api::{
-    JxlBitstreamInput, JxlMetadataBox, JxlSignatureType, JxlMetadataCaptureOptions,
+    JxlBitstreamInput, JxlMetadataBox, JxlMetadataCaptureOptions, JxlSignatureType,
     check_signature_internal, inner::process::SmallBuffer,
 };
 
@@ -195,25 +198,25 @@ impl BoxParser {
                     if self.box_buffer.len() < 4 {
                         return Err(Error::OutOfBounds(4 - self.box_buffer.len()));
                     }
-                    let inner_ty: [u8; 4] = self.box_buffer[0..4].try_into().unwrap();
+                    let inner_ty = ContainerBoxType(self.box_buffer[0..4].try_into().unwrap());
                     self.box_buffer.consume(4);
                     let content_len = bytes_left - 4;
 
                     // Check if we should capture this brob based on inner type
-                    let (should_capture, box_type, size_limit, current_size) = match &inner_ty {
-                        b"Exif" => (
+                    let (should_capture, box_type, size_limit, current_size) = match inner_ty {
+                        ContainerBoxType::EXIF => (
                             self.capture_exif,
                             MetadataBoxType::Exif,
                             self.exif_size_limit,
                             self.exif_total_size,
                         ),
-                        b"xml " => (
+                        ContainerBoxType::XML => (
                             self.capture_xmp,
                             MetadataBoxType::Xmp,
                             self.xmp_size_limit,
                             self.xmp_total_size,
                         ),
-                        b"jumb" => (
+                        ContainerBoxType::JUMBF => (
                             self.capture_jumbf,
                             MetadataBoxType::Jumbf,
                             self.jumbf_size_limit,
@@ -246,8 +249,12 @@ impl BoxParser {
                     if self.box_buffer.len() <= min_len {
                         return Err(Error::OutOfBounds(min_len - self.box_buffer.len()));
                     }
-                    let ty: [_; 4] = self.box_buffer[4..8].try_into().unwrap();
-                    let extra_len = if &ty == b"jxlp" { 4 } else { 0 };
+                    let ty = ContainerBoxType(self.box_buffer[4..8].try_into().unwrap());
+                    let extra_len = if ty == ContainerBoxType::PARTIAL_CODESTREAM {
+                        4
+                    } else {
+                        0
+                    };
                     if self.box_buffer.len() <= min_len + extra_len {
                         return Err(Error::OutOfBounds(
                             min_len + extra_len - self.box_buffer.len(),
@@ -260,7 +267,10 @@ impl BoxParser {
                         _ => u32::from_be_bytes(self.box_buffer[0..4].try_into().unwrap()) as u64,
                     };
                     // Per JXL spec: jxlc box with length 0 has special meaning "extends to EOF"
-                    let content_len = if box_len == 0 && (&ty == b"jxlp" || &ty == b"jxlc") {
+                    let content_len = if box_len == 0
+                        && (ty == ContainerBoxType::PARTIAL_CODESTREAM
+                            || ty == ContainerBoxType::CODESTREAM)
+                    {
                         u64::MAX
                     } else {
                         if box_len <= (min_len + extra_len) as u64 {
@@ -268,8 +278,8 @@ impl BoxParser {
                         }
                         box_len - min_len as u64 - extra_len as u64
                     };
-                    match &ty {
-                        b"jxlc" => {
+                    match ty {
+                        ContainerBoxType::CODESTREAM => {
                             if matches!(
                                 self.box_type,
                                 CodestreamBoxType::Jxlp(..) | CodestreamBoxType::LastJxlp
@@ -279,7 +289,7 @@ impl BoxParser {
                             self.box_type = CodestreamBoxType::Jxlc;
                             self.state = ParseState::CodestreamBox(content_len);
                         }
-                        b"jxlp" => {
+                        ContainerBoxType::PARTIAL_CODESTREAM => {
                             let index = u32::from_be_bytes(
                                 self.box_buffer[min_len..min_len + 4].try_into().unwrap(),
                             );
@@ -302,7 +312,7 @@ impl BoxParser {
                             };
                             self.state = ParseState::CodestreamBox(content_len);
                         }
-                        b"Exif" => {
+                        ContainerBoxType::EXIF => {
                             // Capture EXIF metadata box if enabled and within aggregate limit
                             let within_limit = self
                                 .exif_size_limit
@@ -323,7 +333,7 @@ impl BoxParser {
                                 self.state = ParseState::SkippableBox(content_len);
                             }
                         }
-                        b"xml " => {
+                        ContainerBoxType::XML => {
                             // Capture XMP metadata box if enabled and within aggregate limit
                             let within_limit = self
                                 .xmp_size_limit
@@ -344,7 +354,7 @@ impl BoxParser {
                                 self.state = ParseState::SkippableBox(content_len);
                             }
                         }
-                        b"jumb" => {
+                        ContainerBoxType::JUMBF => {
                             // Capture JUMBF metadata box if enabled and within aggregate limit
                             let within_limit = self
                                 .jumbf_size_limit
@@ -365,7 +375,7 @@ impl BoxParser {
                                 self.state = ParseState::SkippableBox(content_len);
                             }
                         }
-                        b"brob" => {
+                        ContainerBoxType::BROTLI_COMPRESSED => {
                             // Brotli-compressed box - read 4-byte inner type to decide action
                             // u64::MAX is a sentinel for unbounded boxes (extends to EOF)
                             let is_bounded = content_len < u64::MAX;
