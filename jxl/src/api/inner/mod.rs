@@ -11,6 +11,7 @@ use crate::{
 };
 
 use super::{JxlBasicInfo, JxlColorProfile, JxlDecoderOptions, JxlPixelFormat};
+use crate::container::frame_index::FrameIndexBox;
 use box_parser::BoxParser;
 use codestream_parser::CodestreamParser;
 
@@ -133,6 +134,11 @@ impl JxlDecoderInner {
 
     pub fn has_more_frames(&self) -> bool {
         self.codestream_parser.has_more_frames
+    }
+
+    /// Returns the parsed frame index box, if the file contained one.
+    pub fn frame_index(&self) -> Option<&FrameIndexBox> {
+        self.box_parser.frame_index.as_ref()
     }
 
     #[cfg(test)]

@@ -9,7 +9,7 @@ use super::{
 };
 #[cfg(test)]
 use crate::frame::Frame;
-use crate::{api::JxlFrameHeader, error::Result};
+use crate::{api::JxlFrameHeader, container::frame_index::FrameIndexBox, error::Result};
 use states::*;
 use std::marker::PhantomData;
 
@@ -52,6 +52,15 @@ impl<S: JxlState> JxlDecoder<S> {
     #[cfg(test)]
     pub fn decoded_frames(&self) -> usize {
         self.inner.decoded_frames()
+    }
+
+    /// Returns the parsed frame index box, if the file contained one.
+    ///
+    /// The frame index box (`jxli`) is an optional part of the JXL container
+    /// format that provides a seek table for animated files, listing keyframe
+    /// byte offsets, timestamps, and frame counts.
+    pub fn frame_index(&self) -> Option<&FrameIndexBox> {
+        self.inner.frame_index()
     }
 
     /// Rewinds a decoder to the start of the file, allowing past frames to be displayed again.
@@ -1299,6 +1308,133 @@ pub(crate) mod tests {
                 panic_msg
             );
         }
+    }
+
+    /// Helper to wrap a bare codestream in a JXL container with a jxli frame index box.
+    fn wrap_with_frame_index(
+        codestream: &[u8],
+        tnum: u32,
+        tden: u32,
+        entries: &[(u64, u64, u64)], // (OFF_delta, T, F)
+    ) -> Vec<u8> {
+        fn encode_varint(mut value: u64) -> Vec<u8> {
+            let mut result = Vec::new();
+            loop {
+                let mut byte = (value & 0x7f) as u8;
+                value >>= 7;
+                if value > 0 {
+                    byte |= 0x80;
+                }
+                result.push(byte);
+                if value == 0 {
+                    break;
+                }
+            }
+            result
+        }
+
+        fn make_box(ty: &[u8; 4], content: &[u8]) -> Vec<u8> {
+            let len = (8 + content.len()) as u32;
+            let mut buf = Vec::new();
+            buf.extend(len.to_be_bytes());
+            buf.extend(ty);
+            buf.extend(content);
+            buf
+        }
+
+        // Build jxli content
+        let mut jxli_content = Vec::new();
+        jxli_content.extend(encode_varint(entries.len() as u64));
+        jxli_content.extend(tnum.to_be_bytes());
+        jxli_content.extend(tden.to_be_bytes());
+        for &(off, t, f) in entries {
+            jxli_content.extend(encode_varint(off));
+            jxli_content.extend(encode_varint(t));
+            jxli_content.extend(encode_varint(f));
+        }
+
+        // JXL signature box
+        let sig = [
+            0x00, 0x00, 0x00, 0x0c, 0x4a, 0x58, 0x4c, 0x20, 0x0d, 0x0a, 0x87, 0x0a,
+        ];
+        // ftyp box
+        let ftyp = make_box(b"ftyp", b"jxl \x00\x00\x00\x00jxl ");
+        let jxli = make_box(b"jxli", &jxli_content);
+        let jxlc = make_box(b"jxlc", codestream);
+
+        let mut container = Vec::new();
+        container.extend(&sig);
+        container.extend(&ftyp);
+        container.extend(&jxli);
+        container.extend(&jxlc);
+        container
+    }
+
+    #[test]
+    fn test_frame_index_parsed_from_container() {
+        // Read a bare animation codestream and wrap it in a container with a jxli box.
+        let codestream =
+            std::fs::read("resources/test/conformance_test_images/animation_icos4d_5.jxl").unwrap();
+
+        // Create synthetic frame index entries (delta offsets).
+        // These are synthetic -- we don't know real frame offsets, but we can verify parsing.
+        let entries = vec![
+            (0u64, 100u64, 1u64), // Frame 0 at offset 0
+            (500, 100, 1),        // Frame 1 at offset 500
+            (600, 100, 1),        // Frame 2 at offset 1100
+        ];
+
+        let container = wrap_with_frame_index(&codestream, 1, 1000, &entries);
+
+        // Decode with a large chunk size so the jxli box is fully consumed.
+        let options = JxlDecoderOptions::default();
+        let mut dec = JxlDecoder::<states::Initialized>::new(options);
+        let mut input: &[u8] = &container;
+        let dec = loop {
+            match dec.process(&mut input).unwrap() {
+                ProcessingResult::Complete { result } => break result,
+                ProcessingResult::NeedsMoreInput { fallback, .. } => {
+                    if input.is_empty() {
+                        panic!("Unexpected end of input");
+                    }
+                    dec = fallback;
+                }
+            }
+        };
+
+        // Check that frame index was parsed.
+        let fi = dec.frame_index().expect("frame_index should be Some");
+        assert_eq!(fi.num_frames(), 3);
+        assert_eq!(fi.tnum, 1);
+        assert_eq!(fi.tden, 1000);
+        // Verify absolute offsets (accumulated from deltas)
+        assert_eq!(fi.entries[0].codestream_offset, 0);
+        assert_eq!(fi.entries[1].codestream_offset, 500);
+        assert_eq!(fi.entries[2].codestream_offset, 1100);
+        assert_eq!(fi.entries[0].duration_ticks, 100);
+        assert_eq!(fi.entries[2].frame_count, 1);
+    }
+
+    #[test]
+    fn test_frame_index_none_for_bare_codestream() {
+        // A bare codestream has no container, so no frame index.
+        let data =
+            std::fs::read("resources/test/conformance_test_images/animation_icos4d_5.jxl").unwrap();
+        let options = JxlDecoderOptions::default();
+        let mut dec = JxlDecoder::<states::Initialized>::new(options);
+        let mut input: &[u8] = &data;
+        let dec = loop {
+            match dec.process(&mut input).unwrap() {
+                ProcessingResult::Complete { result } => break result,
+                ProcessingResult::NeedsMoreInput { fallback, .. } => {
+                    if input.is_empty() {
+                        panic!("Unexpected end of input");
+                    }
+                    dec = fallback;
+                }
+            }
+        };
+        assert!(dec.frame_index().is_none());
     }
 
     /// Regression test for Chromium ClusterFuzz issue 474401148.
