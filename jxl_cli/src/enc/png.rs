@@ -99,7 +99,11 @@ fn make_cicp(encoding: &JxlColorEncoding) -> Option<png::CodingIndependentCodePo
     })
 }
 
-pub fn to_png<Writer: Write>(image_data: &DecodeOutput, buf: &mut Writer) -> Result<()> {
+pub fn to_png<Writer: Write>(
+    image_data: &DecodeOutput,
+    buf: &mut Writer,
+    partial_render: Option<usize>,
+) -> Result<()> {
     if image_data.frames[0].channels.len() > 1 {
         eprintln!("Warning: Ignoring non-alpha extra channels.");
     }
@@ -176,8 +180,13 @@ pub fn to_png<Writer: Write>(image_data: &DecodeOutput, buf: &mut Writer) -> Res
                 writer.set_frame_delay(delay_num, delay_den)?;
             }
             let mut ww = writer.stream_writer()?;
+            let chan = if let Some(p) = partial_render {
+                &frame.partial_renders[p][0]
+            } else {
+                &frame.channels[0]
+            };
             for y in 0..height {
-                ww.write_all(frame.channels[0].row(y))?;
+                ww.write_all(chan.row(y))?;
             }
         }
     } else {
@@ -189,8 +198,13 @@ pub fn to_png<Writer: Write>(image_data: &DecodeOutput, buf: &mut Writer) -> Res
                 writer.set_frame_delay(delay_num, delay_den)?;
             }
             let mut ww = writer.stream_writer()?;
+            let chan = if let Some(p) = partial_render {
+                &frame.partial_renders[p][0]
+            } else {
+                &frame.channels[0]
+            };
             for y in 0..height {
-                let row = frame.channels[0].row(y);
+                let row = chan.row(y);
                 if cfg!(target_endian = "big") {
                     ww.write_all(row)?;
                 } else {

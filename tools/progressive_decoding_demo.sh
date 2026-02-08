@@ -8,10 +8,15 @@ set -e
 
 INPUT="$1"
 OUTPUT_DIR="$2"
+PERCENT="$3"
 
 if [ -z "$INPUT" ] || [ -z "$OUTPUT_DIR" ]; then
-  echo "Usage: $0 <input_jxl> <output_dir>"
+  echo "Usage: $0 <input_jxl> <output_dir> [percent]"
   exit 1
+fi
+
+if [ -z "$PERCENT" ]; then
+  PERCENT=1
 fi
 
 echo "Building jxl_cli..."
@@ -44,21 +49,10 @@ echo "Input file: $INPUT"
 echo "File size: $FILE_SIZE bytes"
 echo "Output directory: $OUTPUT_DIR"
 
-for i in $(seq 5 5 100); do
-  PERCENT=$i
-  SIZE=$((FILE_SIZE * PERCENT / 100))
-  if [ "$SIZE" -lt 1 ]; then SIZE=1; fi
+CHUNK_SIZE=$(bc <<<"$FILE_SIZE * $PERCENT / 100")
 
-  echo "Processing $PERCENT% ($SIZE bytes)..."
-
-  TRUNCATED_FILE="$OUTPUT_DIR/truncated_$PERCENT.jxl"
-  OUTPUT_IMG="$OUTPUT_DIR/frame_$(printf "%03d" $i).png"
-
-  head -c "$SIZE" "$INPUT" >"$TRUNCATED_FILE"
-
-  "$BINARY" "$TRUNCATED_FILE" "$OUTPUT_IMG" --allow-partial-files
-done
+"$BINARY" "$INPUT" "$OUTPUT_DIR/frame.png" --render-interval "$CHUNK_SIZE"
 
 echo "Creating video..."
 VIDEO_OUTPUT="$OUTPUT_DIR/progressive.mp4"
-ffmpeg -y -framerate 2 -pattern_type glob -i "$OUTPUT_DIR/frame_*.png" -vf "scale='2*trunc(min(3840,iw)/2)':-2" -c:v libx264 -pix_fmt yuv420p "$VIDEO_OUTPUT"
+ffmpeg -y -framerate 2 -pattern_type glob -i "$OUTPUT_DIR/frame.partial*.png" -vf "scale='2*trunc(min(3840,iw)/2)':-2" -c:v libx264 -pix_fmt yuv420p "$VIDEO_OUTPUT"

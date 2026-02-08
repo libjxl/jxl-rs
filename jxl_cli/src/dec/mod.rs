@@ -4,6 +4,7 @@
 // license that can be found in the LICENSE file.
 
 use std::{
+    io::BufReader,
     str::FromStr,
     time::{Duration, Instant},
 };
@@ -20,6 +21,7 @@ use jxl::{
 };
 
 pub struct ImageFrame {
+    pub partial_renders: Vec<Vec<OwnedRawImage>>,
     pub channels: Vec<OwnedRawImage>,
     pub duration: f64,
     pub color_type: JxlColorType,
@@ -98,8 +100,36 @@ impl OutputDataType {
     }
 }
 
+pub trait JxlBitstreamInputExt: JxlBitstreamInput {
+    fn with_capped_size<T, F: FnOnce(&mut Self) -> T>(&mut self, size: Option<usize>, f: F) -> T;
+}
+
+impl JxlBitstreamInputExt for &[u8] {
+    fn with_capped_size<T, F: FnOnce(&mut Self) -> T>(&mut self, size: Option<usize>, f: F) -> T {
+        let size = size.unwrap_or(0);
+        if size == 0 {
+            return f(self);
+        }
+        let mut slice = &self[..size.min(self.len())];
+        let cur = slice.len();
+        let r = f(&mut slice);
+        *self = &self[cur - slice.len()..];
+        r
+    }
+}
+
+impl<R> JxlBitstreamInputExt for BufReader<R>
+where
+    BufReader<R>: JxlBitstreamInput,
+{
+    // noop implementation
+    fn with_capped_size<T, F: FnOnce(&mut Self) -> T>(&mut self, _size: Option<usize>, f: F) -> T {
+        f(self)
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
-pub fn decode_frames<In: JxlBitstreamInput>(
+pub fn decode_frames<In: JxlBitstreamInputExt>(
     input: &mut In,
     decoder_options: JxlDecoderOptions,
     requested_bit_depth: Option<usize>,
@@ -107,6 +137,7 @@ pub fn decode_frames<In: JxlBitstreamInput>(
     accepted_output_types: &[OutputDataType],
     interleave_alpha: bool,
     linear_output: bool,
+    render_interval: Option<usize>,
     allow_partial_files: bool,
 ) -> Result<(DecodeOutput, Duration)> {
     let start = Instant::now();
@@ -189,8 +220,8 @@ pub fn decode_frames<In: JxlBitstreamInput>(
     let color_type = pixel_format.color_type;
     let samples_per_pixel = pixel_format.color_type.samples_per_pixel();
 
-    loop {
-        let decoder_with_frame_info = match decoder_with_image_info.process(input)? {
+    'frame: loop {
+        let mut decoder_with_frame_info = match decoder_with_image_info.process(input)? {
             ProcessingResult::Complete { result } => result,
             ProcessingResult::NeedsMoreInput { .. } => {
                 if allow_partial_files && !image_data.frames.is_empty() {
@@ -217,34 +248,56 @@ pub fn decode_frames<In: JxlBitstreamInput>(
             outputs.push(OwnedRawImage::new(frame_size)?);
         }
 
-        let mut output_bufs: Vec<JxlOutputBuffer<'_>> = outputs
-            .iter_mut()
-            .map(|x| {
-                let rect = Rect {
-                    size: x.byte_size(),
-                    origin: (0, 0),
-                };
-                JxlOutputBuffer::from_image_rect_mut(x.get_rect_mut(rect))
-            })
-            .collect();
+        let mut partial_renders = vec![];
 
-        decoder_with_image_info = match decoder_with_frame_info.process(input, &mut output_bufs)? {
-            ProcessingResult::Complete { result } => result,
-            ProcessingResult::NeedsMoreInput { mut fallback, .. } => {
-                if allow_partial_files {
-                    fallback.flush_pixels(&mut output_bufs)?;
-                    image_data.frames.push(ImageFrame {
-                        duration: frame_header.duration.unwrap_or(0.0),
-                        channels: outputs,
-                        color_type,
-                    });
-                    break;
+        decoder_with_image_info = 'partial: loop {
+            let mut output_bufs: Vec<JxlOutputBuffer<'_>> = outputs
+                .iter_mut()
+                .map(|x| {
+                    let rect = Rect {
+                        size: x.byte_size(),
+                        origin: (0, 0),
+                    };
+                    JxlOutputBuffer::from_image_rect_mut(x.get_rect_mut(rect))
+                })
+                .collect();
+
+            match input.with_capped_size(render_interval, |inp| {
+                decoder_with_frame_info.process(inp, &mut output_bufs)
+            })? {
+                ProcessingResult::Complete { result } => {
+                    break 'partial result;
                 }
-                return Err(eyre!("Source file truncated"));
-            }
+                ProcessingResult::NeedsMoreInput { mut fallback, .. } => {
+                    // If we have more data but we're feeding it slowly, save the partial
+                    // render and retry.
+                    if render_interval.is_some() && input.available_bytes()? > 0 {
+                        fallback.flush_pixels(&mut output_bufs)?;
+                        partial_renders.push(
+                            outputs
+                                .iter()
+                                .map(|x| x.try_clone())
+                                .collect::<Result<_, _>>()?,
+                        );
+                        decoder_with_frame_info = fallback;
+                        continue 'partial;
+                    } else if allow_partial_files {
+                        fallback.flush_pixels(&mut output_bufs)?;
+                        image_data.frames.push(ImageFrame {
+                            partial_renders,
+                            duration: frame_header.duration.unwrap_or(0.0),
+                            channels: outputs,
+                            color_type,
+                        });
+                        break 'frame;
+                    }
+                    return Err(eyre!("Source file truncated"));
+                }
+            };
         };
 
         image_data.frames.push(ImageFrame {
+            partial_renders,
             duration: frame_header.duration.unwrap_or(0.0),
             channels: outputs,
             color_type,
