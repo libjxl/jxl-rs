@@ -191,6 +191,9 @@ pub fn decode_frames<In: JxlBitstreamInput>(
         jpeg_reconstruction_data: None,
     };
 
+    #[cfg(feature = "jpeg-reconstruction")]
+    let mut jpeg_reconstruction_data = None;
+
     let extra_channels = info.extra_channels.len() - if interleave_alpha { 1 } else { 0 };
     let pixel_format = decoder_with_image_info.current_pixel_format().clone();
     let color_type = pixel_format.color_type;
@@ -257,16 +260,19 @@ pub fn decode_frames<In: JxlBitstreamInput>(
             color_type,
         });
 
+        #[cfg(feature = "jpeg-reconstruction")]
+        {
+            jpeg_reconstruction_data = decoder_with_image_info.jpeg_reconstruction_data().cloned();
+        }
+
         if !decoder_with_image_info.has_more_frames() {
             break;
         }
     }
 
-    // Extract JPEG reconstruction data if available
     #[cfg(feature = "jpeg-reconstruction")]
     {
-        image_data.jpeg_reconstruction_data =
-            decoder_with_image_info.jpeg_reconstruction_data().cloned();
+        image_data.jpeg_reconstruction_data = jpeg_reconstruction_data;
     }
 
     Ok((image_data, start.elapsed()))

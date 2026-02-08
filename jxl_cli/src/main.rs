@@ -11,6 +11,8 @@ use jxl_cli::enc::OutputFormat;
 use jxl_cli::{cms::Lcms2Cms, dec};
 use std::fs;
 use std::io::{BufReader, Read, Seek};
+#[cfg(feature = "jpeg-reconstruction")]
+use std::io::{BufWriter, Write};
 use std::path::PathBuf;
 use std::time::Duration;
 
@@ -29,42 +31,6 @@ fn save_icc(icc_bytes: &[u8], icc_filename: Option<&PathBuf>) -> Result<()> {
         std::fs::write(path, icc_bytes)
             .wrap_err_with(|| format!("Failed to write ICC profile to {:?}", path))
     })
-}
-
-fn save_image(
-    image_data: &dec::DecodeOutput<f32>,
-    bit_depth: u32,
-    output_filename: &PathBuf,
-) -> Result<()> {
-    let fn_str = output_filename.to_string_lossy();
-    let mut writer = BufWriter::new(File::create(output_filename)?);
-    if fn_str.ends_with(".exr") {
-        enc::exr::to_exr(image_data, bit_depth, &mut writer)?;
-    } else if fn_str.ends_with(".ppm") {
-        if image_data.frames.len() == 1
-            && let [r, g, b] = &image_data.frames[0].channels[..]
-        {
-            enc::pnm::to_ppm_as_8bit([r, g, b], &mut writer)?;
-        }
-    } else if fn_str.ends_with(".pgm") {
-        if image_data.frames.len() == 1
-            && let [g] = &image_data.frames[0].channels[..]
-        {
-            enc::pnm::to_pgm_as_8bit(g, &mut writer)?;
-        }
-    } else if fn_str.ends_with(".npy") {
-        enc::numpy::to_numpy(image_data, &mut writer)?;
-    } else if fn_str.ends_with(".png") {
-        enc::png::to_png(image_data, bit_depth, &mut writer)?;
-    } else {
-        return Err(eyre!(
-            "Output format not supported for {:?}",
-            output_filename
-        ));
-    }
-    writer
-        .flush()
-        .wrap_err_with(|| format!("Failed to write decoded image to {:?}", &output_filename))
 }
 
 /// Print JPEG reconstruction data info
@@ -179,11 +145,8 @@ fn main() -> Result<()> {
         .map(|f| OutputFormat::from_output_filename(&f.to_string_lossy()))
         .transpose()?;
 
+    #[cfg(feature = "jpeg-reconstruction")]
     let output_path = opt.output.as_ref().map(|p| p.to_string_lossy());
-    let (numpy_output, exr_output) = match &output_path {
-        Some(path) => (path.ends_with(".npy"), path.ends_with(".exr")),
-        None => (false, false),
-    };
     #[cfg(feature = "jpeg-reconstruction")]
     let jpeg_output = match &output_path {
         Some(path) => is_jpeg_output(std::path::Path::new(path.as_ref())),
@@ -238,7 +201,16 @@ fn main() -> Result<()> {
         {
             // Decode the image - this reads all boxes including jbrd
             let mut reader = BufReader::new(&mut file);
-            let (image_data, _) = dec::decode_frames(&mut reader, options(true))?;
+            let (image_data, _) = dec::decode_frames(
+                &mut reader,
+                options(true),
+                opt.override_bitdepth,
+                Some(OutputDataType::F32),
+                &[OutputDataType::F32],
+                false,
+                false,
+                opt.allow_partial_files,
+            )?;
 
             // Check for JPEG reconstruction data (now available after full decode)
             // If parsing failed or no jbrd box, create default JPEG data
@@ -266,22 +238,42 @@ fn main() -> Result<()> {
                 // Fall back to pixel-based encoding
                 println!("  Using pixel-based JPEG encoding (not bit-exact)");
 
-                // Get pixel data - extract row by row
+                // Get pixel data - extract row by row (f32 data)
                 let pixels: Vec<f32> = if is_gray {
                     let img = &frame.channels[0];
-                    let (w, h) = img.size();
-                    let mut data = Vec::with_capacity(w * h);
+                    let (row_bytes, h) = img.byte_size();
+                    let width = row_bytes / std::mem::size_of::<f32>();
+                    let mut data = Vec::with_capacity(width * h);
                     for y in 0..h {
-                        data.extend_from_slice(img.row(y));
+                        let row = img.row(y);
+                        // SAFETY: decode_frames was called with OutputDataType::F32, so rows
+                        // contain f32 values in native endianness and are aligned.
+                        let row_f32 = unsafe {
+                            std::slice::from_raw_parts(
+                                row.as_ptr() as *const f32,
+                                row.len() / std::mem::size_of::<f32>(),
+                            )
+                        };
+                        data.extend_from_slice(row_f32);
                     }
                     data
                 } else {
                     // Interleaved RGB - first channel contains interleaved data
                     let img = &frame.channels[0];
-                    let (total_w, h) = img.size();
-                    let mut data = Vec::with_capacity(total_w * h);
+                    let (row_bytes, h) = img.byte_size();
+                    let width = row_bytes / std::mem::size_of::<f32>();
+                    let mut data = Vec::with_capacity(width * h);
                     for y in 0..h {
-                        data.extend_from_slice(img.row(y));
+                        let row = img.row(y);
+                        // SAFETY: decode_frames was called with OutputDataType::F32, so rows
+                        // contain f32 values in native endianness and are aligned.
+                        let row_f32 = unsafe {
+                            std::slice::from_raw_parts(
+                                row.as_ptr() as *const f32,
+                                row.len() / std::mem::size_of::<f32>(),
+                            )
+                        };
+                        data.extend_from_slice(row_f32);
                     }
                     data
                 };
@@ -296,7 +288,7 @@ fn main() -> Result<()> {
             };
 
             // Write output
-            let mut writer = BufWriter::new(File::create(output_path)?);
+            let mut writer = BufWriter::new(fs::File::create(output_path)?);
             writer.write_all(&jpeg_bytes)?;
             writer.flush()?;
 

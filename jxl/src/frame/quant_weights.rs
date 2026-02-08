@@ -374,6 +374,9 @@ pub struct DequantMatrices {
     /// 17 separate tables, one per QuantTable type.
     /// Uses Cow to allow zero-copy borrowing from static cache for library tables.
     tables: [Cow<'static, [f32]>; QuantTable::CARDINALITY],
+    /// Original quantization encodings (for JPEG reconstruction).
+    #[cfg(feature = "jpeg-reconstruction")]
+    encodings: Vec<QuantEncoding>,
 }
 
 /// Cached computed library tables per QuantTable type.
@@ -978,269 +981,6 @@ impl DequantMatrices {
                                 weights4x4[c * 16 + (y / 2) * 4 + (x / 2)];
                         }
                     }
-                }
-                apply_xyb_weights(&mut weights, xyb_mul)?;
-            }
-            QuantEncoding::Dct4X8 { params, xyb_mul } => {
-                let mut weights4x8 = [0f32; 3 * 4 * 8];
-                get_quant_weights(4, 8, params, &mut weights4x8)?;
-                for c in 0..3 {
-                    for y in 0..BLOCK_DIM {
-                        for x in 0..BLOCK_DIM {
-                            weights[c * num + y * BLOCK_DIM + x] =
-                                weights4x8[c * 32 + (y / 2) * 8 + (x / 2)];
-                        }
-                    }
-                }
-                apply_xyb_weights(&mut weights, xyb_mul)?;
-            }
-            QuantEncoding::Dct8X8 { params, xyb_mul } => {
-                get_quant_weights(8, 8, params, &mut weights)?;
-                apply_xyb_weights(&mut weights, xyb_mul)?;
-            }
-            QuantEncoding::Dct8X16 { params, xyb_mul } => {
-                get_quant_weights(8, 16, params, &mut weights)?;
-                apply_xyb_weights(&mut weights, xyb_mul)?;
-            }
-            QuantEncoding::Dct16X16 { params, xyb_mul } => {
-                get_quant_weights(16, 16, params, &mut weights)?;
-                apply_xyb_weights(&mut weights, xyb_mul)?;
-            }
-            QuantEncoding::Dct16X32 { params, xyb_mul } => {
-                get_quant_weights(16, 32, params, &mut weights)?;
-                apply_xyb_weights(&mut weights, xyb_mul)?;
-            }
-            QuantEncoding::Dct32X32 { params, xyb_mul } => {
-                get_quant_weights(32, 32, params, &mut weights)?;
-                apply_xyb_weights(&mut weights, xyb_mul)?;
-            }
-            QuantEncoding::Dct32X64 { params, xyb_mul } => {
-                get_quant_weights(32, 64, params, &mut weights)?;
-                apply_xyb_weights(&mut weights, xyb_mul)?;
-            }
-            QuantEncoding::Dct64X64 { params, xyb_mul } => {
-                get_quant_weights(64, 64, params, &mut weights)?;
-                apply_xyb_weights(&mut weights, xyb_mul)?;
-            }
-            QuantEncoding::Dct64X128 { params, xyb_mul } => {
-                get_quant_weights(64, 128, params, &mut weights)?;
-                apply_xyb_weights(&mut weights, xyb_mul)?;
-            }
-            QuantEncoding::Dct128X128 { params, xyb_mul } => {
-                get_quant_weights(128, 128, params, &mut weights)?;
-                apply_xyb_weights(&mut weights, xyb_mul)?;
-            }
-            QuantEncoding::Dct128X256 { params, xyb_mul } => {
-                get_quant_weights(128, 256, params, &mut weights)?;
-                apply_xyb_weights(&mut weights, xyb_mul)?;
-            }
-            QuantEncoding::Dct256X256 { params, xyb_mul } => {
-                get_quant_weights(256, 256, params, &mut weights)?;
-                apply_xyb_weights(&mut weights, xyb_mul)?;
-            }
-            QuantEncoding::AFV { params, xyb_mul } => {
-                get_quant_weights(4, 4, params, &mut weights)?;
-                apply_xyb_weights(&mut weights, xyb_mul)?;
-            }
-            QuantEncoding::Dct4X4 { params, xyb_mul } => {
-                get_quant_weights(4, 4, params, &mut weights)?;
-                apply_xyb_weights(&mut weights, xyb_mul)?;
-            }
-            QuantEncoding::Dct2X2 { params, xyb_mul } => {
-                get_quant_weights(2, 2, params, &mut weights)?;
-                apply_xyb_weights(&mut weights, xyb_mul)?;
-            }
-        }
-        Ok(weights.into_boxed_slice())
-    }
-
-    pub fn matrix(&self, quant_kind: HfTransformType, c: usize) -> &[f32] {
-        assert_ne!((1 << quant_kind as u32) & self.computed_mask, 0);
-        &self.table[self.table_offsets[quant_kind as usize * 3 + c]..]
-    }
-
-    #[cfg(feature = "jpeg-reconstruction")]
-    pub fn encodings(&self) -> &[QuantEncoding] {
-        &self.encodings
-    }
-
-    // TODO(veluca): figure out if this should actually be unused.
-    #[allow(dead_code)]
-    pub fn inv_matrix(&self, quant_kind: HfTransformType, c: usize) -> &[f32] {
-        assert_ne!((1 << quant_kind as u32) & self.computed_mask, 0);
-        &self.inv_table[self.table_offsets[quant_kind as usize * 3 + c]..]
-    }
-
-    pub fn decode(
-pub fn decode(
-        header: &FrameHeader,
-        lf_global: &LfGlobalState,
-        br: &mut BitReader,
-    ) -> Result<Self> {
-        let all_default = br.read(1)? == 1;
-        let mut encodings = Vec::with_capacity(QuantTable::CARDINALITY);
-        if all_default {
-            for _ in 0..QuantTable::CARDINALITY {
-                encodings.push(QuantEncoding::Library)
-            }
-        } else {
-            for (i, (&required_size_x, required_size_y)) in Self::REQUIRED_SIZE_X
-                .iter()
-                .zip(Self::REQUIRED_SIZE_Y)
-                .enumerate()
-            {
-                encodings.push(QuantEncoding::decode(
-                    required_size_x,
-                    required_size_y,
-                    i,
-                    header,
-                    lf_global,
-                    br,
-                )?);
-            }
-        }
-        Ok(Self {
-            computed_mask: 0,
-            table: vec![0.0; Self::TOTAL_TABLE_SIZE],
-            inv_table: vec![0.0; Self::TOTAL_TABLE_SIZE],
-            table_offsets: [0; HfTransformType::CARDINALITY * 3],
-            encodings,
-        })
-    }
-
-    pub const REQUIRED_SIZE_X: [usize; QuantTable::CARDINALITY] =
-        [1, 1, 1, 1, 2, 4, 1, 1, 2, 1, 1, 8, 4, 16, 8, 32, 16];
-
-    pub const REQUIRED_SIZE_Y: [usize; QuantTable::CARDINALITY] =
-        [1, 1, 1, 1, 2, 4, 2, 4, 4, 1, 1, 8, 8, 16, 16, 32, 32];
-
-    pub const SUM_REQUIRED_X_Y: usize = 2056;
-
-    pub const TOTAL_TABLE_SIZE: usize = Self::SUM_REQUIRED_X_Y * BLOCK_SIZE * 3;
-
-    pub fn ensure_computed(&mut self, acs_mask: u32) -> Result<()> {
-        let mut offsets = [0usize; QuantTable::CARDINALITY * 3];
-        let mut pos = 0usize;
-        for i in 0..QuantTable::CARDINALITY {
-            let num = DequantMatrices::REQUIRED_SIZE_X[i]
-                * DequantMatrices::REQUIRED_SIZE_Y[i]
-                * BLOCK_SIZE;
-            for c in 0..3 {
-                offsets[3 * i + c] = pos + c * num;
-            }
-            pos += 3 * num;
-        }
-        for i in 0..HfTransformType::CARDINALITY {
-            for c in 0..3 {
-                self.table_offsets[i * 3 + c] =
-                    offsets[QuantTable::for_strategy(HfTransformType::from_usize(i).unwrap())
-                        as usize
-                        * 3
-                        + c];
-            }
-        }
-        let mut kind_mask = 0u32;
-        for i in 0..HfTransformType::CARDINALITY {
-            if acs_mask & (1u32 << i) != 0 {
-                kind_mask |= 1u32 << QuantTable::for_strategy(HfTransformType::VALUES[i]) as u32;
-            }
-        }
-        let mut computed_kind_mask = 0u32;
-        for i in 0..HfTransformType::CARDINALITY {
-            if self.computed_mask & (1u32 << i) != 0 {
-                computed_kind_mask |=
-                    1u32 << QuantTable::for_strategy(HfTransformType::VALUES[i]) as u32;
-            }
-        }
-        for table in 0..QuantTable::CARDINALITY {
-            if (1u32 << table) & computed_kind_mask != 0 {
-                continue;
-            }
-            if (1u32 << table) & !kind_mask != 0 {
-                continue;
-            }
-            match self.encodings[table] {
-                QuantEncoding::Library => {
-                    self.compute_quant_table(true, table, offsets[table * 3])?
-                }
-                _ => self.compute_quant_table(false, table, offsets[table * 3])?,
-            };
-        }
-        self.computed_mask |= acs_mask;
-        Ok(())
-    }
-    fn compute_quant_table(
-        &mut self,
-        library: bool,
-        table_num: usize,
-        offset: usize,
-    ) -> Result<usize> {
-        let encoding = if library {
-            &DequantMatrices::library()[table_num]
-        } else {
-            &self.encodings[table_num]
-        };
-        let quant_table_idx = QuantTable::from_usize(table_num)? as usize;
-        let wrows = 8 * DequantMatrices::REQUIRED_SIZE_X[quant_table_idx];
-        let wcols = 8 * DequantMatrices::REQUIRED_SIZE_Y[quant_table_idx];
-        let num = wrows * wcols;
-        let mut weights = vec![0f32; 3 * num];
-        match encoding {
-            QuantEncoding::Library => {
-                // Library encoding should be resolved by the caller.
-                return Err(InvalidQuantEncodingMode);
-            }
-            QuantEncoding::Identity { xyb_weights } => {
-                for c in 0..3 {
-                    for i in 0..64 {
-                        weights[64 * c + i] = xyb_weights[c][0];
-                    }
-                    weights[64 * c + 1] = xyb_weights[c][1];
-                    weights[64 * c + 8] = xyb_weights[c][1];
-                    weights[64 * c + 9] = xyb_weights[c][2];
-                }
-            }
-            QuantEncoding::Dct2 { xyb_weights } => {
-                for (c, xyb_weight) in xyb_weights.iter().enumerate() {
-                    let start = c * 64;
-                    weights[start] = 0xBAD as f32;
-                    weights[start + 1] = xyb_weight[0];
-                    weights[start + 8] = xyb_weight[0];
-                    weights[start + 9] = xyb_weight[1];
-                    for y in 0..2 {
-                        for x in 0..2 {
-                            weights[start + y * 8 + x + 2] = xyb_weight[2];
-                            weights[start + (y + 2) * 8 + x] = xyb_weight[2];
-                        }
-                    }
-                    for y in 0..2 {
-                        for x in 0..2 {
-                            weights[start + (y + 2) * 8 + x + 2] = xyb_weight[3];
-                        }
-                    }
-                    for y in 0..4 {
-                        for x in 0..4 {
-                            weights[start + y * 8 + x + 4] = xyb_weight[4];
-                            weights[start + (y + 4) * 8 + x] = xyb_weight[4];
-                        }
-                    }
-                    for y in 0..4 {
-                        for x in 0..4 {
-                            weights[start + (y + 4) * 8 + x + 4] = xyb_weight[5];
-                        }
-                    }
-                }
-            }
-            QuantEncoding::Dct4 { params, xyb_mul } => {
-                let mut weights4x4 = [0f32; 3 * 4 * 4];
-                get_quant_weights(4, 4, params, &mut weights4x4)?;
-                for c in 0..3 {
-                    for y in 0..BLOCK_DIM {
-                        for x in 0..BLOCK_DIM {
-                            weights[c * num + y * BLOCK_DIM + x] =
-                                weights4x4[c * 16 + (y / 2) * 4 + (x / 2)];
-                        }
-                    }
                     weights[c * num + 1] /= xyb_mul[c][0];
                     weights[c * num + BLOCK_DIM] /= xyb_mul[c][0];
                     weights[c * num + BLOCK_DIM + 1] /= xyb_mul[c][1];
@@ -1374,6 +1114,11 @@ pub fn decode(
         &table[c * num..]
     }
 
+    #[cfg(feature = "jpeg-reconstruction")]
+    pub fn encodings(&self) -> &[QuantEncoding] {
+        &self.encodings
+    }
+
     pub fn decode(
         header: &FrameHeader,
         lf_global: &LfGlobalState,
@@ -1381,8 +1126,15 @@ pub fn decode(
     ) -> Result<Self> {
         let all_default = br.read(1)? == 1;
 
+        #[cfg(feature = "jpeg-reconstruction")]
+        let mut encodings = Vec::with_capacity(QuantTable::CARDINALITY);
+
         // Compute all tables during decode
         let tables: [Cow<'static, [f32]>; QuantTable::CARDINALITY] = if all_default {
+            #[cfg(feature = "jpeg-reconstruction")]
+            for _ in 0..QuantTable::CARDINALITY {
+                encodings.push(QuantEncoding::Library);
+            }
             // All library tables - borrow from static cache (zero-copy)
             std::array::from_fn(|idx| Cow::Borrowed(Self::get_library_table(idx)))
         } else {
@@ -1406,12 +1158,21 @@ pub fn decode(
                     QuantEncoding::Library => Cow::Borrowed(Self::get_library_table(i)),
                     _ => Cow::Owned(Self::compute_table(&encoding, i)?.into_vec()),
                 };
+                #[cfg(feature = "jpeg-reconstruction")]
+                encodings.push(encoding);
                 tables_vec.push(table);
             }
             tables_vec.try_into().unwrap()
         };
 
-        Ok(Self { tables })
+        #[cfg(feature = "jpeg-reconstruction")]
+        {
+            Ok(Self { tables, encodings })
+        }
+        #[cfg(not(feature = "jpeg-reconstruction"))]
+        {
+            Ok(Self { tables })
+        }
     }
 
     pub const REQUIRED_SIZE_X: [usize; QuantTable::CARDINALITY] =
@@ -1510,10 +1271,19 @@ mod test {
     #[test]
     fn check_dequant_matrix_correctness() -> Result<()> {
         // All library tables
+        #[cfg(feature = "jpeg-reconstruction")]
+        let mut encodings = Vec::with_capacity(QuantTable::CARDINALITY);
+        #[cfg(feature = "jpeg-reconstruction")]
+        for _ in 0..QuantTable::CARDINALITY {
+            encodings.push(QuantEncoding::Library);
+        }
+
         let matrices = DequantMatrices {
             tables: std::array::from_fn(|idx| {
                 Cow::Borrowed(DequantMatrices::get_library_table(idx))
             }),
+            #[cfg(feature = "jpeg-reconstruction")]
+            encodings,
         };
 
         // Golden data produced by libjxl.
