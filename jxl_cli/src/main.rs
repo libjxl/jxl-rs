@@ -214,30 +214,26 @@ fn main() -> Result<()> {
 
         // Skip through all frames to consume the codestream and discover
         // any trailing metadata boxes (e.g. EXIF/XMP after codestream data)
-        let mut exif = None;
-        let mut xmp = None;
-        let mut jumbf = None;
         loop {
             let frame_decoder = match decoder.process(&mut reader)? {
                 ProcessingResult::Complete { result } => result,
-                ProcessingResult::NeedsMoreInput { fallback, .. } => {
-                    exif = fallback.exif_boxes().map(|b| b.to_vec());
-                    xmp = fallback.xmp_boxes().map(|b| b.to_vec());
-                    jumbf = fallback.jumbf_boxes().map(|b| b.to_vec());
-                    break;
+                ProcessingResult::NeedsMoreInput { .. } => {
+                    return Err(eyre!("Source file truncated"));
                 }
             };
             decoder = match frame_decoder.skip_frame(&mut reader)? {
                 ProcessingResult::Complete { result } => result,
-                ProcessingResult::NeedsMoreInput { .. } => break,
+                ProcessingResult::NeedsMoreInput { .. } => {
+                    return Err(eyre!("Source file truncated"));
+                }
             };
             if !decoder.has_more_frames() {
-                exif = decoder.exif_boxes().map(|b| b.to_vec());
-                xmp = decoder.xmp_boxes().map(|b| b.to_vec());
-                jumbf = decoder.jumbf_boxes().map(|b| b.to_vec());
                 break;
             }
         }
+        let exif = decoder.exif_boxes().map(|b| b.to_vec());
+        let xmp = decoder.xmp_boxes().map(|b| b.to_vec());
+        let jumbf = decoder.jumbf_boxes().map(|b| b.to_vec());
 
         if opt.info {
             if metadata_capture.capture_exif {
