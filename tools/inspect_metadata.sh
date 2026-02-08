@@ -56,6 +56,12 @@ if [ -f "$OUTPUT_DIR/metadata_exif.exif" ]; then
   exiftool "$OUTPUT_DIR/metadata_exif.exif"
 fi
 
+if [ -f "$OUTPUT_DIR/metadata_xmp.xmp" ]; then
+  echo ""
+  echo "=== exiftool (extracted XMP) ==="
+  exiftool "$OUTPUT_DIR/metadata_xmp.xmp"
+fi
+
 if [ -n "$CLEANUP_DIR" ]; then
   rm -rf "$CLEANUP_DIR"
 fi
