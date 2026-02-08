@@ -12,8 +12,8 @@ use color_eyre::eyre::{Result, eyre};
 use jxl::{
     api::{
         Endianness, JxlAnimation, JxlBitDepth, JxlBitstreamInput, JxlColorProfile, JxlColorType,
-        JxlDataFormat, JxlDecoder, JxlDecoderOptions, JxlOutputBuffer, JxlPixelFormat,
-        ProcessingResult, states::WithImageInfo,
+        JxlDataFormat, JxlDecoder, JxlDecoderOptions, JxlMetadataBox, JxlOutputBuffer,
+        JxlPixelFormat, ProcessingResult, states::WithImageInfo,
     },
     headers::extra_channels::ExtraChannel,
     image::{OwnedRawImage, Rect},
@@ -33,6 +33,9 @@ pub struct DecodeOutput {
     pub output_profile: JxlColorProfile,
     pub embedded_profile: JxlColorProfile,
     pub jxl_animation: Option<JxlAnimation>,
+    pub exif_boxes: Option<Vec<JxlMetadataBox>>,
+    pub xmp_boxes: Option<Vec<JxlMetadataBox>>,
+    pub jumbf_boxes: Option<Vec<JxlMetadataBox>>,
 }
 
 pub fn decode_header<In: JxlBitstreamInput>(
@@ -182,6 +185,9 @@ pub fn decode_frames<In: JxlBitstreamInput>(
         output_profile,
         embedded_profile,
         jxl_animation: info.animation.clone(),
+        exif_boxes: None,
+        xmp_boxes: None,
+        jumbf_boxes: None,
     };
 
     let extra_channels = info.extra_channels.len() - if interleave_alpha { 1 } else { 0 };
@@ -251,6 +257,9 @@ pub fn decode_frames<In: JxlBitstreamInput>(
         });
 
         if !decoder_with_image_info.has_more_frames() {
+            image_data.exif_boxes = decoder_with_image_info.exif_boxes().map(|b| b.to_vec());
+            image_data.xmp_boxes = decoder_with_image_info.xmp_boxes().map(|b| b.to_vec());
+            image_data.jumbf_boxes = decoder_with_image_info.jumbf_boxes().map(|b| b.to_vec());
             break;
         }
     }
