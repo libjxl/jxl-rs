@@ -645,7 +645,6 @@ impl Frame {
         // At this point data is in the image's native color space; CMS converts to output.
         if let Some(stage) = deferred_cms_stage {
             pipeline = pipeline.add_inplace_stage(stage)?;
-            cms_used = true;
         }
 
         if decoder_state.render_spotcolors {
