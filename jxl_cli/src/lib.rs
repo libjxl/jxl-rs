@@ -209,6 +209,7 @@ mod tests {
             &[OutputDataType::U8],
             true,
             false,
+            None,
             false,
         )
         .unwrap()

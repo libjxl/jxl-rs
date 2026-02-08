@@ -8,7 +8,7 @@ use color_eyre::eyre::{Result, WrapErr, eyre};
 use jxl::api::{JxlDecoderOptions, JxlMetadataBox, JxlMetadataCaptureOptions, ProcessingResult};
 use jxl_cli::dec::OutputDataType;
 use jxl_cli::enc::OutputFormat;
-use jxl_cli::metadata::{print_metadata_info, save_metadata_boxes};
+use jxl_cli::metadata::{compress_metadata_boxes, print_metadata_info, save_metadata_boxes};
 use jxl_cli::{cms::Lcms2Cms, dec};
 use std::fs;
 use std::io::{BufReader, Read, Seek};
@@ -30,7 +30,7 @@ struct Opt {
 
     /// Output image file, should end in .ppm, .pgm, .png, .apng or .npy
     /// (optional with --speedtest or --info)
-    #[clap(required_unless_present_any = ["speedtest", "info", "exif_out", "xmp_out", "jumbf_out", "metadata_out"])]
+    #[clap(required_unless_present_any = ["speedtest", "info", "exif_out", "xmp_out", "jumbf_out", "metadata_out", "compress_metadata"])]
     output: Option<PathBuf>,
 
     /// Print measured decoding speed.
@@ -98,6 +98,10 @@ struct Opt {
     /// Force a partial render every `render_interval` bytes.
     #[clap(long)]
     render_interval: Option<usize>,
+
+    /// Brotli-compress metadata boxes (Exif, XMP, JUMBF) and write to output path
+    #[clap(long)]
+    compress_metadata: Option<PathBuf>,
 }
 
 fn save_icc(icc_bytes: &[u8], icc_filename: Option<&PathBuf>) -> Result<()> {
@@ -122,7 +126,7 @@ fn save_all_metadata(
         fs::create_dir_all(dir)
             .wrap_err_with(|| format!("Failed to create metadata output directory {:?}", dir))?;
         save_metadata_boxes(Some(&dir.join("metadata_exif.exif")), exif, true)?;
-        save_metadata_boxes(Some(&dir.join("metadata_xmp.xml")), xmp, false)?;
+        save_metadata_boxes(Some(&dir.join("metadata_xmp.xmp")), xmp, false)?;
         save_metadata_boxes(Some(&dir.join("metadata_jumbf.bin")), jumbf, false)?;
     }
     Ok(())
@@ -139,6 +143,12 @@ fn main() -> Result<()> {
     }
 
     let opt = Opt::parse();
+
+    // Handle --compress-metadata mode (no decoding needed)
+    if let Some(output_path) = &opt.compress_metadata {
+        return compress_metadata_boxes(&opt.input, output_path);
+    }
+
     let mut file = fs::File::open(opt.input.clone())
         .wrap_err_with(|| format!("Failed to read source image from {:?}", opt.input))?;
 
