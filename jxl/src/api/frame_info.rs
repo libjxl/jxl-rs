@@ -15,7 +15,8 @@
 
 use crate::api::decoder::states;
 use crate::api::{
-    JxlDecoder, JxlDecoderOptions, JxlOutputBuffer, JxlPixelFormat, ProcessingResult,
+    JxlDecoder, JxlDecoderOptions, JxlExtraChannel, JxlOutputBuffer, JxlPixelFormat,
+    ProcessingResult,
 };
 use crate::bit_reader::BitReader;
 use crate::container::frame_index::FrameIndexBox;
@@ -311,34 +312,151 @@ pub struct DecodedFrame {
     pub info: FrameInfo,
 }
 
+/// Metadata for a decoded frame with caller-provided buffers.
+#[derive(Debug, Clone)]
+pub struct DecodedFrameInfo {
+    /// Frame width in pixels.
+    pub width: usize,
+    /// Frame height in pixels.
+    pub height: usize,
+    /// Bytes per pixel in the output (e.g. 4 for RGBA u8, 8 for RGBA u16/f16, 16 for RGBA f32).
+    pub bytes_per_pixel: usize,
+    /// Frame info (index, duration, etc.).
+    pub info: FrameInfo,
+}
+
+/// Output buffer layout for a frame.
+#[derive(Debug, Clone)]
+pub struct FrameOutputLayout {
+    pub width: usize,
+    pub height: usize,
+    pub color_bytes_per_row: usize,
+    pub color_buffer_size: usize,
+    pub extra_channel_bytes_per_row: Vec<usize>,
+    pub extra_channel_buffer_sizes: Vec<usize>,
+}
+
+/// Compute the output buffer layout for a frame.
+pub fn frame_output_layout(
+    size: (usize, usize),
+    pixel_format: &JxlPixelFormat,
+) -> FrameOutputLayout {
+    let (width, height) = size;
+    let color_bytes_per_row = width * compute_bytes_per_pixel(pixel_format);
+    let color_buffer_size = color_bytes_per_row * height;
+
+    let mut extra_channel_bytes_per_row = Vec::new();
+    let mut extra_channel_buffer_sizes = Vec::new();
+
+    for format in pixel_format
+        .extra_channel_format
+        .iter()
+        .filter_map(|f| f.as_ref())
+    {
+        let bytes_per_row = width * format.bytes_per_sample();
+        extra_channel_bytes_per_row.push(bytes_per_row);
+        extra_channel_buffer_sizes.push(bytes_per_row * height);
+    }
+
+    FrameOutputLayout {
+        width,
+        height,
+        color_bytes_per_row,
+        color_buffer_size,
+        extra_channel_bytes_per_row,
+        extra_channel_buffer_sizes,
+    }
+}
+
+/// Read basic info needed for buffer layout without decoding pixels.
+fn basic_info_for_layout(data: &[u8]) -> Result<(usize, usize, Vec<JxlExtraChannel>)> {
+    let (codestream, _) = extract_codestream_and_index(data)?;
+    let mut br = BitReader::new(codestream);
+    let file_header = FileHeader::read(&mut br)?;
+
+    let xsize = file_header.size.xsize() as usize;
+    let ysize = file_header.size.ysize() as usize;
+    let size = if file_header.image_metadata.orientation.is_transposing() {
+        (ysize, xsize)
+    } else {
+        (xsize, ysize)
+    };
+
+    let extra_channels = file_header
+        .image_metadata
+        .extra_channel_info
+        .iter()
+        .map(|info| JxlExtraChannel {
+            ec_type: info.ec_type,
+            alpha_associated: info.alpha_associated(),
+        })
+        .collect();
+
+    Ok((size.0, size.1, extra_channels))
+}
+
 /// Decode a single frame by index from a JXL file.
 ///
 /// The caller specifies the output pixel format and decoder options.
 /// Frames before `frame_index` are skipped (not rendered) for efficiency.
-///
-/// # Example
-///
-/// ```no_run
-/// use jxl::api::frame_info::decode_frame;
-/// use jxl::api::{JxlPixelFormat, JxlDecoderOptions};
-///
-/// let data = std::fs::read("animation.jxl").unwrap();
-///
-/// // Decode frame 3 as RGBA u8
-/// let frame = decode_frame(
-///     &data, 3,
-///     JxlPixelFormat::rgba8(0),
-///     JxlDecoderOptions::default(),
-/// ).unwrap();
-/// println!("{}x{}, {} bytes", frame.width, frame.height, frame.data.len());
-/// ```
 pub fn decode_frame(
     data: &[u8],
     frame_index: usize,
     pixel_format: JxlPixelFormat,
     options: JxlDecoderOptions,
 ) -> Result<DecodedFrame> {
-    // First, scan to get frame info and validate the index.
+    let summary = scan_frame_info(data)?;
+    if frame_index >= summary.num_frames {
+        return Err(Error::OutOfBounds(frame_index));
+    }
+
+    // Set up buffers based on the frame layout.
+    let (width, height, extra_channels) = basic_info_for_layout(data)?;
+    let pixel_format = adjust_pixel_format_for_image(pixel_format, extra_channels.as_slice());
+    let layout = frame_output_layout((width, height), &pixel_format);
+
+    let mut output = vec![0u8; layout.color_buffer_size];
+    let mut extra_buffers: Vec<Vec<u8>> = layout
+        .extra_channel_buffer_sizes
+        .iter()
+        .map(|&size| vec![0u8; size])
+        .collect();
+    let mut extra_slices: Vec<&mut [u8]> =
+        extra_buffers.iter_mut().map(|b| b.as_mut_slice()).collect();
+
+    let frame_info = decode_frame_into(
+        data,
+        frame_index,
+        pixel_format,
+        options,
+        &mut output,
+        &mut extra_slices,
+    )?;
+
+    Ok(DecodedFrame {
+        data: output,
+        width: frame_info.width,
+        height: frame_info.height,
+        bytes_per_pixel: frame_info.bytes_per_pixel,
+        info: frame_info.info,
+    })
+}
+
+/// Decode a single frame into caller-provided buffers.
+///
+/// The caller provides an output buffer for the color channels, plus one buffer
+/// for each non-ignored extra channel (entries where `extra_channel_format` is `Some`).
+/// Use [`frame_output_layout`] to compute the required buffer sizes.
+///
+/// This is useful for FFI or for avoiding large allocations in the decoder.
+pub fn decode_frame_into(
+    data: &[u8],
+    frame_index: usize,
+    pixel_format: JxlPixelFormat,
+    options: JxlDecoderOptions,
+    color_buffer: &mut [u8],
+    extra_buffers: &mut [&mut [u8]],
+) -> Result<DecodedFrameInfo> {
     let summary = scan_frame_info(data)?;
     if frame_index >= summary.num_frames {
         return Err(Error::OutOfBounds(frame_index));
@@ -351,37 +469,53 @@ pub fn decode_frame(
 
     let (width, height) = dec.basic_info().size;
     let pixel_format =
-        adjust_pixel_format_for_image(pixel_format, dec.basic_info().extra_channels.len());
+        adjust_pixel_format_for_image(pixel_format, dec.basic_info().extra_channels.as_slice());
     dec.set_pixel_format(pixel_format.clone());
 
     let bytes_per_pixel = compute_bytes_per_pixel(&pixel_format);
-    let bytes_per_row = width * bytes_per_pixel;
-    let buf_size = bytes_per_row * height;
+    let layout = frame_output_layout((width, height), &pixel_format);
+
+    if color_buffer.len() < layout.color_buffer_size {
+        return Err(Error::OutOfBounds(layout.color_buffer_size));
+    }
+
     let num_extra_buffers = pixel_format
         .extra_channel_format
         .iter()
         .filter(|f| f.is_some())
         .count();
 
-    // Decode frames, skipping until we reach the target.
+    if extra_buffers.len() < num_extra_buffers {
+        return Err(Error::OutOfBounds(num_extra_buffers));
+    }
+
+    for (idx, buf) in extra_buffers.iter_mut().enumerate().take(num_extra_buffers) {
+        let needed = layout.extra_channel_buffer_sizes[idx];
+        if buf.len() < needed {
+            return Err(Error::OutOfBounds(needed));
+        }
+    }
+
     let mut visible_idx = 0usize;
     loop {
         let dec_frame = advance_to_frame(dec, &mut input)?;
 
         if visible_idx == frame_index {
-            let mut pixel_buf = vec![0u8; buf_size];
-            let mut extra_bufs: Vec<Vec<u8>> = (0..num_extra_buffers)
-                .map(|_| vec![0u8; width * height * 4]) // conservative size
-                .collect();
-            let mut out: Vec<JxlOutputBuffer<'_>> =
-                vec![JxlOutputBuffer::new(&mut pixel_buf, height, bytes_per_row)];
-            for eb in extra_bufs.iter_mut() {
-                out.push(JxlOutputBuffer::new(eb, height, width * 4));
+            let mut out: Vec<JxlOutputBuffer<'_>> = vec![JxlOutputBuffer::new(
+                color_buffer,
+                height,
+                layout.color_bytes_per_row,
+            )];
+            for (i, extra) in extra_buffers.iter_mut().enumerate().take(num_extra_buffers) {
+                out.push(JxlOutputBuffer::new(
+                    extra,
+                    height,
+                    layout.extra_channel_bytes_per_row[i],
+                ));
             }
             let _ = decode_frame_pixels(dec_frame, &mut input, &mut out)?;
 
-            return Ok(DecodedFrame {
-                data: pixel_buf,
+            return Ok(DecodedFrameInfo {
                 width,
                 height,
                 bytes_per_pixel,
@@ -394,26 +528,9 @@ pub fn decode_frame(
     }
 }
 
-/// Decode all frames from a JXL file.
+/// Decode all frames from a JXL file. from a JXL file.
 ///
 /// The caller specifies the output pixel format and decoder options.
-///
-/// # Example
-///
-/// ```no_run
-/// use jxl::api::frame_info::decode_all_frames;
-/// use jxl::api::{JxlPixelFormat, JxlDecoderOptions};
-///
-/// let data = std::fs::read("animation.jxl").unwrap();
-/// let frames = decode_all_frames(
-///     &data,
-///     JxlPixelFormat::rgba8(0),
-///     JxlDecoderOptions::default(),
-/// ).unwrap();
-/// for f in &frames {
-///     println!("frame {}: {}x{}, {:.0}ms", f.info.index, f.width, f.height, f.info.duration_ms);
-/// }
-/// ```
 pub fn decode_all_frames(
     data: &[u8],
     pixel_format: JxlPixelFormat,
@@ -426,29 +543,36 @@ pub fn decode_all_frames(
 
     let (width, height) = dec.basic_info().size;
     let pixel_format =
-        adjust_pixel_format_for_image(pixel_format, dec.basic_info().extra_channels.len());
+        adjust_pixel_format_for_image(pixel_format, dec.basic_info().extra_channels.as_slice());
     dec.set_pixel_format(pixel_format.clone());
 
     let bytes_per_pixel = compute_bytes_per_pixel(&pixel_format);
-    let bytes_per_row = width * bytes_per_pixel;
-    let buf_size = bytes_per_row * height;
+    let layout = frame_output_layout((width, height), &pixel_format);
     let num_extra_buffers = pixel_format
         .extra_channel_format
         .iter()
         .filter(|f| f.is_some())
         .count();
+
     let mut frames = Vec::with_capacity(summary.num_frames);
 
     for frame_info in &summary.frames {
         let dec_frame = advance_to_frame(dec, &mut input)?;
-        let mut pixel_buf = vec![0u8; buf_size];
+        let mut pixel_buf = vec![0u8; layout.color_buffer_size];
         let mut extra_bufs: Vec<Vec<u8>> = (0..num_extra_buffers)
-            .map(|_| vec![0u8; width * height * 4])
+            .map(|i| vec![0u8; layout.extra_channel_buffer_sizes[i]])
             .collect();
-        let mut out: Vec<JxlOutputBuffer<'_>> =
-            vec![JxlOutputBuffer::new(&mut pixel_buf, height, bytes_per_row)];
-        for eb in extra_bufs.iter_mut() {
-            out.push(JxlOutputBuffer::new(eb, height, width * 4));
+        let mut out: Vec<JxlOutputBuffer<'_>> = vec![JxlOutputBuffer::new(
+            &mut pixel_buf,
+            height,
+            layout.color_bytes_per_row,
+        )];
+        for (i, eb) in extra_bufs.iter_mut().enumerate() {
+            out.push(JxlOutputBuffer::new(
+                eb,
+                height,
+                layout.extra_channel_bytes_per_row[i],
+            ));
         }
         dec = decode_frame_pixels(dec_frame, &mut input, &mut out)?;
 
@@ -467,7 +591,6 @@ pub fn decode_all_frames(
 
     Ok(frames)
 }
-
 /// Compute bytes per pixel for the color channels of a pixel format.
 fn compute_bytes_per_pixel(pixel_format: &JxlPixelFormat) -> usize {
     let samples = pixel_format.color_type.samples_per_pixel();
@@ -484,9 +607,20 @@ fn compute_bytes_per_pixel(pixel_format: &JxlPixelFormat) -> usize {
 /// we pad with `None` (ignore). If they provided too many, we truncate.
 fn adjust_pixel_format_for_image(
     mut format: JxlPixelFormat,
-    num_extra_channels: usize,
+    extra_channels: &[JxlExtraChannel],
 ) -> JxlPixelFormat {
+    let num_extra_channels = extra_channels.len();
     format.extra_channel_format.resize(num_extra_channels, None);
+
+    // If color_type includes alpha, map alpha extra channels to None (interleaved).
+    if format.color_type.has_alpha() {
+        for (idx, ec) in extra_channels.iter().enumerate() {
+            if ec.ec_type == crate::headers::extra_channels::ExtraChannel::Alpha {
+                format.extra_channel_format[idx] = None;
+            }
+        }
+    }
+
     format
 }
 
