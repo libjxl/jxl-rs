@@ -528,9 +528,11 @@ pub fn decode_frame_into(
     }
 }
 
-/// Decode all frames from a JXL file. from a JXL file.
+/// Decode all frames from a JXL file.
 ///
 /// The caller specifies the output pixel format and decoder options.
+/// For caller-managed buffers, use [`decode_frame_into`] in a loop with
+/// [`scan_frame_info`] and [`frame_output_layout`].
 pub fn decode_all_frames(
     data: &[u8],
     pixel_format: JxlPixelFormat,
