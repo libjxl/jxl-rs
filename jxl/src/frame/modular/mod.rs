@@ -709,6 +709,9 @@ pub fn decode_vardct_lf(
     lf_image: &mut [Image<f32>; 3],
     quant_lf: &mut Image<u8>,
     br: &mut BitReader,
+    #[cfg(feature = "jpeg-reconstruction")] jpeg_dc_coeffs: Option<
+        &mut crate::jpeg::JpegDctCoefficients,
+    >,
 ) -> Result<()> {
     let extra_precision = br.read(2)?;
     debug!(?extra_precision);
@@ -735,6 +738,51 @@ pub fn decode_vardct_lf(
         global_tree,
         br,
     )?;
+
+    // Extract DC coefficients for JPEG reconstruction before dequantization
+    #[cfg(feature = "jpeg-reconstruction")]
+    if let Some(jpeg_storage) = jpeg_dc_coeffs {
+        // Channel mapping in buffers:
+        // buffers[0] created with shrink_rect(r.size, 1) = VarDCT channel 1 = Y
+        // buffers[1] created with shrink_rect(r.size, 0) = VarDCT channel 0 = X
+        // buffers[2] created with shrink_rect(r.size, 2) = VarDCT channel 2 = B
+        //
+        // For JPEG YCbCr:
+        // JPEG comp 0 = Y  <- buffers[0] (VarDCT Y)
+        // JPEG comp 1 = Cb <- buffers[1] (VarDCT X)
+        // JPEG comp 2 = Cr <- buffers[2] (VarDCT B)
+        let channel_map = [(0usize, 0usize), (1, 1), (2, 2)]; // (buffer_idx, jpeg_component)
+
+        for &(buf_idx, jpeg_comp) in &channel_map {
+            if jpeg_comp >= jpeg_storage.num_components {
+                continue;
+            }
+
+            let buffer = &buffers[buf_idx].data;
+            // The hshift/vshift correspond to the VarDCT channel index used in shrink_rect
+            let vardct_channel = if buf_idx == 0 {
+                1
+            } else if buf_idx == 1 {
+                0
+            } else {
+                2
+            };
+            let hshift = frame_header.hshift(vardct_channel);
+            let vshift = frame_header.vshift(vardct_channel);
+
+            // Iterate over each block position in the LF group
+            for by in 0..buffer.size().1 {
+                for bx in 0..buffer.size().0 {
+                    let dc_value = buffer.row(by)[bx];
+                    // Global block coordinates
+                    let global_bx = (r.origin.0 >> hshift) + bx;
+                    let global_by = (r.origin.1 >> vshift) + by;
+                    jpeg_storage.store_dc(jpeg_comp, global_bx, global_by, dc_value);
+                }
+            }
+        }
+    }
+
     dequant_lf(
         r,
         lf_image,

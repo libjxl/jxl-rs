@@ -245,7 +245,18 @@ impl CodestreamParser {
                             break;
                         }
                     }
-                    match self.process_sections(decode_options, &mut output_buffers, do_flush) {
+                    #[cfg(feature = "jpeg-reconstruction")]
+                    let result = self.process_sections(
+                        decode_options,
+                        &mut output_buffers,
+                        do_flush,
+                        box_parser,
+                    );
+                    #[cfg(not(feature = "jpeg-reconstruction"))]
+                    let result =
+                        self.process_sections(decode_options, &mut output_buffers, do_flush);
+
+                    match result {
                         Ok(None) => Ok(()),
                         Ok(Some(missing)) => Err(Error::OutOfBounds(missing)),
                         Err(Error::OutOfBounds(_)) => Err(Error::SectionTooShort),

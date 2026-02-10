@@ -29,6 +29,7 @@ vergen-gitcl = { version = "9.1.0", features = ["rustc"] }
 [features]
 tracing-subscriber = ["dep:tracing-subscriber", "jxl/tracing"]
 exr = ["dep:exr"]
+jpeg-reconstruction = ["jxl/jpeg-reconstruction"]
 default = ["exr", "all-simd"]
 
 all-simd = ["jxl/all-simd"]

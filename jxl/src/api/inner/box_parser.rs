@@ -4,10 +4,14 @@
 // license that can be found in the LICENSE file.
 
 use crate::error::{Error, Result};
+#[cfg(feature = "jpeg-reconstruction")]
+use crate::jpeg::JpegReconstructionData;
 
 use crate::api::{
     JxlBitstreamInput, JxlSignatureType, check_signature_internal, inner::process::SmallBuffer,
 };
+#[cfg(feature = "jpeg-reconstruction")]
+use std::io::IoSliceMut;
 
 #[derive(Clone)]
 enum ParseState {
@@ -15,6 +19,8 @@ enum ParseState {
     BoxNeeded,
     CodestreamBox(u64),
     SkippableBox(u64),
+    #[cfg(feature = "jpeg-reconstruction")]
+    JbrdBox(u64),
 }
 
 enum CodestreamBoxType {
@@ -28,6 +34,12 @@ pub(super) struct BoxParser {
     pub(super) box_buffer: SmallBuffer,
     state: ParseState,
     box_type: CodestreamBoxType,
+    /// Buffer for accumulating jbrd box data
+    #[cfg(feature = "jpeg-reconstruction")]
+    jbrd_buffer: Vec<u8>,
+    /// Parsed JPEG reconstruction data (available after jbrd box is fully read)
+    #[cfg(feature = "jpeg-reconstruction")]
+    pub(super) jpeg_reconstruction: Option<JpegReconstructionData>,
 }
 
 impl BoxParser {
@@ -36,6 +48,10 @@ impl BoxParser {
             box_buffer: SmallBuffer::new(128),
             state: ParseState::SignatureNeeded,
             box_type: CodestreamBoxType::None,
+            #[cfg(feature = "jpeg-reconstruction")]
+            jbrd_buffer: Vec::new(),
+            #[cfg(feature = "jpeg-reconstruction")]
+            jpeg_reconstruction: None,
         }
     }
 
@@ -81,6 +97,48 @@ impl BoxParser {
                         self.state = ParseState::BoxNeeded;
                     } else {
                         self.state = ParseState::SkippableBox(s);
+                    }
+                }
+                #[cfg(feature = "jpeg-reconstruction")]
+                ParseState::JbrdBox(mut remaining) => {
+                    // Accumulate jbrd box data for parsing
+                    let num = remaining.min(usize::MAX as u64) as usize;
+                    let read_count = if !self.box_buffer.is_empty() {
+                        let to_read = num.min(self.box_buffer.len());
+                        self.jbrd_buffer
+                            .extend_from_slice(&self.box_buffer[..to_read]);
+                        self.box_buffer.consume(to_read);
+                        to_read
+                    } else {
+                        // Read data into jbrd_buffer using IoSliceMut
+                        let start = self.jbrd_buffer.len();
+                        self.jbrd_buffer.resize(start + num, 0);
+                        let read =
+                            input.read(&mut [IoSliceMut::new(&mut self.jbrd_buffer[start..])])?;
+                        if read < num {
+                            self.jbrd_buffer.truncate(start + read);
+                        }
+                        read
+                    };
+                    if read_count == 0 {
+                        return Err(Error::OutOfBounds(num));
+                    }
+                    remaining -= read_count as u64;
+                    if remaining == 0 {
+                        // Parse the jbrd data
+                        match JpegReconstructionData::parse(&self.jbrd_buffer) {
+                            Ok(data) => {
+                                self.jpeg_reconstruction = Some(data);
+                            }
+                            Err(_e) => {
+                                // Parsing failed - leave jpeg_reconstruction as None
+                            }
+                        }
+                        self.jbrd_buffer.clear();
+                        self.jbrd_buffer.shrink_to_fit();
+                        self.state = ParseState::BoxNeeded;
+                    } else {
+                        self.state = ParseState::JbrdBox(remaining);
                     }
                 }
                 ParseState::BoxNeeded => {
@@ -147,6 +205,12 @@ impl BoxParser {
                                 CodestreamBoxType::Jxlp(idx)
                             };
                             self.state = ParseState::CodestreamBox(content_len);
+                        }
+                        #[cfg(feature = "jpeg-reconstruction")]
+                        b"jbrd" => {
+                            // JPEG reconstruction data box - accumulate for later parsing
+                            self.jbrd_buffer.clear();
+                            self.state = ParseState::JbrdBox(content_len);
                         }
                         _ => {
                             self.state = ParseState::SkippableBox(content_len);

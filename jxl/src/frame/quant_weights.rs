@@ -374,6 +374,9 @@ pub struct DequantMatrices {
     /// 17 separate tables, one per QuantTable type.
     /// Uses Cow to allow zero-copy borrowing from static cache for library tables.
     tables: [Cow<'static, [f32]>; QuantTable::CARDINALITY],
+    /// Original quantization encodings (for JPEG reconstruction).
+    #[cfg(feature = "jpeg-reconstruction")]
+    encodings: Vec<QuantEncoding>,
 }
 
 /// Cached computed library tables per QuantTable type.
@@ -1111,6 +1114,11 @@ impl DequantMatrices {
         &table[c * num..]
     }
 
+    #[cfg(feature = "jpeg-reconstruction")]
+    pub fn encodings(&self) -> &[QuantEncoding] {
+        &self.encodings
+    }
+
     pub fn decode(
         header: &FrameHeader,
         lf_global: &LfGlobalState,
@@ -1118,8 +1126,15 @@ impl DequantMatrices {
     ) -> Result<Self> {
         let all_default = br.read(1)? == 1;
 
+        #[cfg(feature = "jpeg-reconstruction")]
+        let mut encodings = Vec::with_capacity(QuantTable::CARDINALITY);
+
         // Compute all tables during decode
         let tables: [Cow<'static, [f32]>; QuantTable::CARDINALITY] = if all_default {
+            #[cfg(feature = "jpeg-reconstruction")]
+            for _ in 0..QuantTable::CARDINALITY {
+                encodings.push(QuantEncoding::Library);
+            }
             // All library tables - borrow from static cache (zero-copy)
             std::array::from_fn(|idx| Cow::Borrowed(Self::get_library_table(idx)))
         } else {
@@ -1143,12 +1158,21 @@ impl DequantMatrices {
                     QuantEncoding::Library => Cow::Borrowed(Self::get_library_table(i)),
                     _ => Cow::Owned(Self::compute_table(&encoding, i)?.into_vec()),
                 };
+                #[cfg(feature = "jpeg-reconstruction")]
+                encodings.push(encoding);
                 tables_vec.push(table);
             }
             tables_vec.try_into().unwrap()
         };
 
-        Ok(Self { tables })
+        #[cfg(feature = "jpeg-reconstruction")]
+        {
+            Ok(Self { tables, encodings })
+        }
+        #[cfg(not(feature = "jpeg-reconstruction"))]
+        {
+            Ok(Self { tables })
+        }
     }
 
     pub const REQUIRED_SIZE_X: [usize; QuantTable::CARDINALITY] =
@@ -1247,10 +1271,19 @@ mod test {
     #[test]
     fn check_dequant_matrix_correctness() -> Result<()> {
         // All library tables
+        #[cfg(feature = "jpeg-reconstruction")]
+        let mut encodings = Vec::with_capacity(QuantTable::CARDINALITY);
+        #[cfg(feature = "jpeg-reconstruction")]
+        for _ in 0..QuantTable::CARDINALITY {
+            encodings.push(QuantEncoding::Library);
+        }
+
         let matrices = DequantMatrices {
             tables: std::array::from_fn(|idx| {
                 Cow::Borrowed(DequantMatrices::get_library_table(idx))
             }),
+            #[cfg(feature = "jpeg-reconstruction")]
+            encodings,
         };
 
         // Golden data produced by libjxl.

@@ -11,6 +11,8 @@ use jxl_cli::enc::OutputFormat;
 use jxl_cli::{cms::Lcms2Cms, dec};
 use std::fs;
 use std::io::{BufReader, Read, Seek};
+#[cfg(feature = "jpeg-reconstruction")]
+use std::io::{BufWriter, Write};
 use std::path::PathBuf;
 use std::time::Duration;
 
@@ -20,6 +22,50 @@ const VERSION_STRING: &str = concat!(
     env!("VERGEN_RUSTC_SEMVER"),
     ")"
 );
+
+#[cfg(feature = "jpeg-reconstruction")]
+use jxl::api::JpegReconstructionData;
+
+fn save_icc(icc_bytes: &[u8], icc_filename: Option<&PathBuf>) -> Result<()> {
+    icc_filename.map_or(Ok(()), |path| {
+        std::fs::write(path, icc_bytes)
+            .wrap_err_with(|| format!("Failed to write ICC profile to {:?}", path))
+    })
+}
+
+/// Print JPEG reconstruction data info
+#[cfg(feature = "jpeg-reconstruction")]
+fn print_jpeg_info(jpeg_data: &JpegReconstructionData) {
+    println!("JPEG reconstruction data present:");
+    if jpeg_data.is_valid() {
+        println!("  Dimensions: {}x{}", jpeg_data.width, jpeg_data.height);
+        println!("  Grayscale: {}", jpeg_data.is_gray);
+        println!("  Components: {}", jpeg_data.components.len());
+        println!("  Quantization tables: {}", jpeg_data.quant_tables.len());
+        println!("  Huffman codes: {}", jpeg_data.huffman_codes.len());
+        println!("  Scans: {}", jpeg_data.scan_info.len());
+        println!("  APP markers: {}", jpeg_data.app_data.len());
+        println!("  COM markers: {}", jpeg_data.com_data.len());
+        if jpeg_data.restart_interval > 0 {
+            println!("  Restart interval: {}", jpeg_data.restart_interval);
+        }
+    } else {
+        // All-default Bundle case
+        println!("  (Bundle uses default values - metadata in codestream)");
+    }
+    if !jpeg_data.tail_data.is_empty() {
+        println!("  Decompressed data: {} bytes", jpeg_data.tail_data.len());
+    }
+    if !jpeg_data.marker_order.is_empty() {
+        println!("  Marker order: {} markers", jpeg_data.marker_order.len());
+    }
+}
+
+/// Check if the output path is a JPEG file
+fn is_jpeg_output(path: &std::path::Path) -> bool {
+    let path_str = path.to_string_lossy().to_lowercase();
+    path_str.ends_with(".jpg") || path_str.ends_with(".jpeg")
+}
 
 #[derive(Parser)]
 #[command(version = VERSION_STRING)]
@@ -83,13 +129,6 @@ struct Opt {
     render_interval: Option<usize>,
 }
 
-fn save_icc(icc_bytes: &[u8], icc_filename: Option<&PathBuf>) -> Result<()> {
-    icc_filename.map_or(Ok(()), |path| {
-        std::fs::write(path, icc_bytes)
-            .wrap_err_with(|| format!("Failed to write ICC profile to {:?}", path))
-    })
-}
-
 fn main() -> Result<()> {
     #[cfg(feature = "tracing-subscriber")]
     {
@@ -110,6 +149,13 @@ fn main() -> Result<()> {
         .map(|f| OutputFormat::from_output_filename(&f.to_string_lossy()))
         .transpose()?;
 
+    #[cfg(feature = "jpeg-reconstruction")]
+    let output_path = opt.output.as_ref().map(|p| p.to_string_lossy());
+    #[cfg(feature = "jpeg-reconstruction")]
+    let jpeg_output = match &output_path {
+        Some(path) => is_jpeg_output(std::path::Path::new(path.as_ref())),
+        None => false,
+    };
     let high_precision = opt.high_precision;
     let options = |skip_preview: bool| {
         let mut options = JxlDecoderOptions::default();
@@ -117,6 +163,10 @@ fn main() -> Result<()> {
         options.skip_preview = skip_preview;
         options.high_precision = high_precision;
         options.cms = Some(Box::new(Lcms2Cms));
+        #[cfg(feature = "jpeg-reconstruction")]
+        {
+            options.preserve_jpeg_coefficients = jpeg_output;
+        }
         options
     };
 
@@ -140,7 +190,126 @@ fn main() -> Result<()> {
             );
         }
         println!("Extra channels: {}", info.extra_channels.len());
+        #[cfg(feature = "jpeg-reconstruction")]
+        if let Some(jpeg_data) = decoder.jpeg_reconstruction_data() {
+            print_jpeg_info(jpeg_data);
+        }
         return Ok(());
+    }
+
+    // Handle JPEG output: requires jpeg-reconstruction feature and jbrd data
+    if let Some(ref output_path) = opt.output
+        && is_jpeg_output(output_path)
+    {
+        #[cfg(feature = "jpeg-reconstruction")]
+        {
+            // Decode the image - this reads all boxes including jbrd
+            let mut reader = BufReader::new(&mut file);
+            let (image_data, _) = dec::decode_frames(
+                &mut reader,
+                options(true),
+                opt.override_bitdepth,
+                Some(OutputDataType::F32),
+                &[OutputDataType::F32],
+                false,
+                false,
+                opt.allow_partial_files,
+            )?;
+
+            // Check for JPEG reconstruction data (now available after full decode)
+            // If parsing failed or no jbrd box, create default JPEG data
+            let mut jpeg_data = image_data
+                .jpeg_reconstruction_data
+                .clone()
+                .unwrap_or_else(JpegReconstructionData::default);
+
+            let (width, height) = image_data.size;
+            let frame = image_data
+                .frames
+                .first()
+                .ok_or_else(|| eyre!("No frames in image"))?;
+
+            // Determine if grayscale
+            let is_gray = frame.color_type == jxl::api::JxlColorType::Grayscale;
+
+            print_jpeg_info(&jpeg_data);
+
+            // Try bit-exact reconstruction first if we have stored DCT coefficients
+            let jpeg_bytes = if jpeg_data.has_stored_coefficients() {
+                println!("  Using bit-exact reconstruction from stored DCT coefficients");
+                jpeg_data.reconstruct_jpeg_from_stored()?
+            } else {
+                // Fall back to pixel-based encoding
+                println!("  Using pixel-based JPEG encoding (not bit-exact)");
+
+                // Get pixel data - extract row by row (f32 data)
+                let pixels: Vec<f32> = if is_gray {
+                    let img = &frame.channels[0];
+                    let (row_bytes, h) = img.byte_size();
+                    let width = row_bytes / std::mem::size_of::<f32>();
+                    let mut data = Vec::with_capacity(width * h);
+                    for y in 0..h {
+                        let row = img.row(y);
+                        // SAFETY: decode_frames was called with OutputDataType::F32, so rows
+                        // contain f32 values in native endianness and are aligned.
+                        let row_f32 = unsafe {
+                            std::slice::from_raw_parts(
+                                row.as_ptr() as *const f32,
+                                row.len() / std::mem::size_of::<f32>(),
+                            )
+                        };
+                        data.extend_from_slice(row_f32);
+                    }
+                    data
+                } else {
+                    // Interleaved RGB - first channel contains interleaved data
+                    let img = &frame.channels[0];
+                    let (row_bytes, h) = img.byte_size();
+                    let width = row_bytes / std::mem::size_of::<f32>();
+                    let mut data = Vec::with_capacity(width * h);
+                    for y in 0..h {
+                        let row = img.row(y);
+                        // SAFETY: decode_frames was called with OutputDataType::F32, so rows
+                        // contain f32 values in native endianness and are aligned.
+                        let row_f32 = unsafe {
+                            std::slice::from_raw_parts(
+                                row.as_ptr() as *const f32,
+                                row.len() / std::mem::size_of::<f32>(),
+                            )
+                        };
+                        data.extend_from_slice(row_f32);
+                    }
+                    data
+                };
+
+                // If all_default or not valid, populate with standard tables
+                if jpeg_data.is_all_default || !jpeg_data.is_valid() {
+                    jpeg_data.populate_defaults(width as u32, height as u32, is_gray);
+                }
+
+                // Encode pixels to JPEG
+                jpeg_data.encode_from_pixels(&pixels, width, height)?
+            };
+
+            // Write output
+            let mut writer = BufWriter::new(fs::File::create(output_path)?);
+            writer.write_all(&jpeg_bytes)?;
+            writer.flush()?;
+
+            println!(
+                "\nWrote JPEG to {:?} ({} bytes)",
+                output_path,
+                jpeg_bytes.len()
+            );
+            return Ok(());
+        }
+        #[cfg(not(feature = "jpeg-reconstruction"))]
+        {
+            return Err(eyre!(
+                "JPEG output requires the 'jpeg-reconstruction' feature.\n\
+                 Rebuild with: cargo build --features jpeg-reconstruction"
+            ));
+        }
     }
 
     // Handle --preview flag: check if preview exists

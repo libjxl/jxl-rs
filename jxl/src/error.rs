@@ -289,6 +289,8 @@ pub enum Error {
     },
     #[error("CMS error: {0}")]
     CmsError(String),
+    #[error("Invalid JPEG reconstruction data in jbrd box")]
+    InvalidJpegReconstructionData,
 }
 
 pub type Result<T, E = Error> = std::result::Result<T, E>;

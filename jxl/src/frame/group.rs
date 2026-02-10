@@ -7,6 +7,8 @@ use num_traits::Float;
 
 use jxl_transforms::{transform::*, transform_map::*};
 
+#[cfg(feature = "jpeg-reconstruction")]
+use crate::jpeg::JpegDctCoefficients;
 use crate::{
     BLOCK_DIM, BLOCK_SIZE, GROUP_DIM,
     bit_reader::BitReader,
@@ -377,6 +379,7 @@ pub fn decode_vardct_group(
     quant_biases: &[f32; 4],
     pixels: &mut Option<[Image<f32>; 3]>,
     buffers: &mut VarDctBuffers,
+    #[cfg(feature = "jpeg-reconstruction")] mut jpeg_coeffs: Option<&mut JpegDctCoefficients>,
 ) -> Result<(), Error> {
     let x_dm_multiplier = (1.0 / (1.25)).powf(frame_header.x_qm_scale as f32 - 2.0);
     let b_dm_multiplier = (1.0 / (1.25)).powf(frame_header.b_qm_scale as f32 - 2.0);
@@ -578,12 +581,54 @@ pub fn decode_vardct_group(
                     }
                 }
             }
+            let qblock = [
+                &coeffs[0][coeffs_offset..],
+                &coeffs[1][coeffs_offset..],
+                &coeffs[2][coeffs_offset..],
+            ];
+
+            // Extract JPEG coefficients if requested (only for 8x8 DCT blocks)
+            #[cfg(feature = "jpeg-reconstruction")]
+            if let Some(ref mut jpeg_storage) = jpeg_coeffs
+                && transform_type == HfTransformType::DCT
+            {
+                // For JPEG, channel mapping is:
+                // XYB channel 0 (X) -> JPEG Cb (component 1)
+                // XYB channel 1 (Y) -> JPEG Y (component 0)
+                // XYB channel 2 (B) -> JPEG Cr (component 2)
+                // But for lossless JPEG recompression, the coefficients are stored
+                // in the original order, so we use direct mapping.
+                // Store coefficients for each component
+                // Channel order in VarDCT: 1, 0, 2 (Y, X, B)
+                // For JPEG YCbCr: component 0=Y, 1=Cb, 2=Cr
+                // Mapping: VarDCT channel 1 -> JPEG 0 (Y)
+                //          VarDCT channel 0 -> JPEG 1 (Cb)
+                //          VarDCT channel 2 -> JPEG 2 (Cr)
+                let channel_map = [1usize, 0, 2]; // JPEG component -> VarDCT channel
+                for (jpeg_comp, &vardct_chan) in channel_map
+                    .iter()
+                    .enumerate()
+                    .take(jpeg_storage.num_components.min(3))
+                {
+                    if (sbx[vardct_chan] << hshift[vardct_chan]) != bx
+                        || (sby[vardct_chan] << vshift[vardct_chan]) != by
+                    {
+                        continue;
+                    }
+                    let comp_bx =
+                        (block_group_rect.origin.0 >> hshift[vardct_chan]) + sbx[vardct_chan];
+                    let comp_by =
+                        (block_group_rect.origin.1 >> vshift[vardct_chan]) + sby[vardct_chan];
+                    jpeg_storage.store_block(
+                        jpeg_comp,
+                        comp_bx,
+                        comp_by,
+                        &qblock[vardct_chan][..64],
+                    );
+                }
+            }
+
             if let Some(pixels) = pixels {
-                let qblock = [
-                    &coeffs[0][coeffs_offset..],
-                    &coeffs[1][coeffs_offset..],
-                    &coeffs[2][coeffs_offset..],
-                ];
                 let dequant_matrices = &hf_global.dequant_matrices;
                 dequant_and_transform_to_pixels_dispatch(
                     quant_biases,

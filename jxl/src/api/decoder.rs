@@ -9,6 +9,8 @@ use super::{
 };
 #[cfg(test)]
 use crate::frame::Frame;
+#[cfg(feature = "jpeg-reconstruction")]
+use crate::jpeg::JpegReconstructionData;
 use crate::{api::JxlFrameHeader, error::Result};
 use states::*;
 use std::marker::PhantomData;
@@ -139,6 +141,21 @@ impl JxlDecoder<WithImageInfo> {
 
     pub fn has_more_frames(&self) -> bool {
         self.inner.has_more_frames()
+    }
+
+    /// Returns the JPEG reconstruction data if present in the file.
+    ///
+    /// This data is available after reading a jbrd box from a JXL file
+    /// that was created by losslessly recompressing a JPEG.
+    #[cfg(feature = "jpeg-reconstruction")]
+    pub fn jpeg_reconstruction_data(&self) -> Option<&JpegReconstructionData> {
+        self.inner.jpeg_reconstruction_data()
+    }
+
+    /// Returns true if the file contains JPEG reconstruction data.
+    #[cfg(feature = "jpeg-reconstruction")]
+    pub fn has_jpeg_reconstruction(&self) -> bool {
+        self.inner.has_jpeg_reconstruction()
     }
 
     #[cfg(test)]
