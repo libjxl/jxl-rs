@@ -8,6 +8,7 @@
 mod color;
 mod data_types;
 mod decoder;
+pub mod frame_info;
 mod inner;
 mod input;
 mod options;
