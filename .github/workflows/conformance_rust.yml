@@ -1,0 +1,114 @@
+# Copyright (c) the JPEG XL Project Authors. All rights reserved.
+#
+# Use of this source code is governed by a BSD-style
+# license that can be found in the LICENSE file.
+
+# Workflow to run Rust-based conformance tests.
+# These tests compare decoder output against libjxl/conformance reference images.
+# Results are reported but failures don't block the PR.
+
+name: Conformance (Rust)
+on:
+  pull_request:
+    types: [opened, reopened, synchronize]
+  push:
+    branches: [main]
+  workflow_dispatch:  # Allow manual trigger
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
+jobs:
+  conformance_rust:
+    runs-on: ubuntu-latest
+    continue-on-error: true  # Don't fail the workflow on test failures
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Cache conformance data
+        id: cache-conformance
+        uses: actions/cache@v4
+        with:
+          path: target/conformance
+          key: conformance-data-v1
+
+      - name: Fetch conformance test data
+        if: steps.cache-conformance.outputs.cache-hit != 'true'
+        run: |
+          mkdir -p target/conformance
+          git clone --depth 1 https://github.com/libjxl/conformance target/conformance
+          cd target/conformance
+          bash scripts/download_and_symlink_using_curl.sh
+
+      - name: Install latest rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Rust cache
+        uses: Swatinem/rust-cache@v2.8.0
+        with:
+          prefix-key: conformance-rust
+
+      - name: Build tests
+        run: cargo build --release -p jxl --lib
+
+      - name: Run conformance tests
+        id: conformance
+        continue-on-error: true
+        run: |
+          # Run tests and capture output
+          cargo test --release -p jxl conformance -- --ignored --nocapture 2>&1 | tee conformance_output.txt
+
+          # Extract summary line
+          SUMMARY=$(grep -E "^Passed: [0-9]+/[0-9]+" conformance_output.txt || echo "No summary found")
+          echo "summary=$SUMMARY" >> $GITHUB_OUTPUT
+
+          # Count results
+          PASSED=$(echo "$SUMMARY" | grep -oP "Passed: \K[0-9]+" || echo "0")
+          TOTAL=$(echo "$SUMMARY" | grep -oP "/\K[0-9]+" || echo "0")
+          echo "passed=$PASSED" >> $GITHUB_OUTPUT
+          echo "total=$TOTAL" >> $GITHUB_OUTPUT
+
+      - name: Generate step summary
+        if: always()
+        run: |
+          echo "## Rust Conformance Test Results" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          if [ -f conformance_output.txt ]; then
+            # Extract the summary section
+            echo "### Summary" >> $GITHUB_STEP_SUMMARY
+            grep -E "^(Passed|Failed):" conformance_output.txt >> $GITHUB_STEP_SUMMARY || true
+            echo "" >> $GITHUB_STEP_SUMMARY
+
+            # List failures if any
+            if grep -q "^Failures:" conformance_output.txt; then
+              echo "### Failures" >> $GITHUB_STEP_SUMMARY
+              echo '```' >> $GITHUB_STEP_SUMMARY
+              sed -n '/^Failures:/,/^$/p' conformance_output.txt >> $GITHUB_STEP_SUMMARY
+              echo '```' >> $GITHUB_STEP_SUMMARY
+            fi
+
+            # List individual test results
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "<details>" >> $GITHUB_STEP_SUMMARY
+            echo "<summary>Full Test Output</summary>" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo '```' >> $GITHUB_STEP_SUMMARY
+            cat conformance_output.txt >> $GITHUB_STEP_SUMMARY
+            echo '```' >> $GITHUB_STEP_SUMMARY
+            echo "</details>" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "No conformance output found" >> $GITHUB_STEP_SUMMARY
+          fi
+
+      - name: Upload test output
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: conformance-rust-output
+          path: conformance_output.txt
+          if-no-files-found: ignore
