@@ -77,6 +77,10 @@ struct Opt {
     /// Allow partial files (flush pixels on EOF)
     #[clap(long)]
     allow_partial_files: bool,
+
+    /// Force a partial render every `render_interval` bytes.
+    #[clap(long)]
+    render_interval: Option<usize>,
 }
 
 fn save_icc(icc_bytes: &[u8], icc_filename: Option<&PathBuf>) -> Result<()> {
@@ -171,6 +175,7 @@ fn main() -> Result<()> {
                     .unwrap_or(OutputDataType::ALL),
                 output_format.is_none_or(|x| x.should_fold_alpha()),
                 linear_output,
+                opt.render_interval,
                 opt.allow_partial_files,
             )?;
             if opt.preview {
@@ -202,6 +207,10 @@ fn main() -> Result<()> {
             last_output = Some(output);
         }
         last_output.unwrap()
+    } else if opt.render_interval.is_some() {
+        let mut input_bytes = Vec::<u8>::new();
+        file.read_to_end(&mut input_bytes)?;
+        run_decoder!(&mut input_bytes.as_slice()).0
     } else {
         // For single decode without speedtest, stream from file
         run_decoder!(&mut BufReader::new(file)).0

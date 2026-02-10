@@ -15,7 +15,7 @@ pub mod numpy;
 pub mod png;
 pub mod pnm;
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 pub enum OutputFormat {
     Ppm,
     Pgm,
@@ -66,12 +66,36 @@ impl OutputFormat {
     }
 
     pub fn save_image(&self, image_data: &DecodeOutput, output_filename: &PathBuf) -> Result<()> {
+        let has_partial_renders = image_data
+            .frames
+            .iter()
+            .any(|x| !x.partial_renders.is_empty());
+        if has_partial_renders {
+            if image_data.frames.len() != 1 {
+                eprintln!("Warning: Ignoring partial renders in animations.");
+            } else if *self != Self::Png {
+                eprintln!("Warning: Ignoring partial renders with non-PNG output.");
+            } else {
+                let num_partials = image_data.frames[0].partial_renders.len();
+                for i in 0..=num_partials {
+                    let dir = output_filename.parent().unwrap();
+                    let stem = output_filename.file_stem().unwrap().to_string_lossy();
+                    let fname = dir.join(format!("{stem}.partial{i:05}.png"));
+                    let mut writer = BufWriter::new(File::create(fname)?);
+                    png::to_png(
+                        image_data,
+                        &mut writer,
+                        if i < num_partials { Some(i) } else { None },
+                    )?
+                }
+            }
+        }
         let mut writer = BufWriter::new(File::create(output_filename)?);
         match self {
             Self::Ppm => pnm::to_ppm(image_data, &mut writer)?,
             Self::Pgm => pnm::to_pgm(image_data, &mut writer)?,
             Self::Npy => numpy::to_numpy(image_data, &mut writer)?,
-            Self::Png => png::to_png(image_data, &mut writer)?,
+            Self::Png => png::to_png(image_data, &mut writer, None)?,
             #[cfg(feature = "exr")]
             Self::Exr => exr::to_exr(image_data, &mut writer)?,
         };
