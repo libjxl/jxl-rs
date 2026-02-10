@@ -21,7 +21,7 @@ use crate::render::buffer_splitter::BufferSplitter;
 use crate::render::{LowMemoryRenderPipeline, RenderPipeline, RenderPipelineBuilder, stages::*};
 use crate::{
     api::JxlPixelFormat,
-    frame::{DecoderState, Frame, LfGlobalState},
+    frame::{DecoderState, Frame, LfGlobalState, modular::ModularGridKind},
     headers::frame_header::FrameHeader,
 };
 
@@ -210,15 +210,19 @@ impl Frame {
             lf_global.modular_global.process_output(
                 &[0],
                 0,
+                ModularGridKind::None,
                 &self.header,
                 &mut pass_to_pipeline,
+                do_flush, // Pass do_flush for progressive modular rendering
             )?;
             for group in 0..self.header.num_lf_groups() {
                 lf_global.modular_global.process_output(
                     &[1],
                     group,
+                    ModularGridKind::Lf,
                     &self.header,
                     &mut pass_to_pipeline,
+                    do_flush, // Pass do_flush for progressive modular rendering
                 )?;
             }
             self.groups_to_flush.extend(0..self.header.num_groups());
@@ -689,6 +693,7 @@ impl Frame {
                     fill_opaque_alpha,
                 )?;
             }
+            let mut buffer_index = 1; // Start after the color buffer (index 0)
             for i in 0..frame_header.num_extra_channels as usize {
                 if let Some(df) = &pixel_format.extra_channel_format[i] {
                     // Add conversion stages for non-float output formats
@@ -696,11 +701,12 @@ impl Frame {
                     pipeline = pipeline.add_save_stage(
                         &[3 + i],
                         metadata.orientation,
-                        1 + i,
+                        buffer_index,
                         JxlColorType::Grayscale,
                         *df,
                         false,
                     )?;
+                    buffer_index += 1; // Only increment for channels that actually have buffers
                 }
             }
         }

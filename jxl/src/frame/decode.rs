@@ -12,7 +12,10 @@ use super::{
     coeff_order::decode_coeff_orders,
     color_correlation_map::ColorCorrelationParams,
     group::{VarDctBuffers, decode_vardct_group},
-    modular::{FullModularImage, ModularStreamId, Tree, decode_hf_metadata, decode_vardct_lf},
+    modular::{
+        FullModularImage, ModularGridKind, ModularStreamId, Tree, decode_hf_metadata,
+        decode_vardct_lf,
+    },
     quant_weights::DequantMatrices,
     quantizer::{LfQuantFactors, QuantizerParams},
 };
@@ -226,10 +229,12 @@ impl Frame {
             None
         };
 
+        let num_groups = frame_header.num_groups();
+
         Ok(Self {
             #[cfg(test)]
             use_simple_pipeline: decoder_state.use_simple_pipeline,
-            last_rendered_pass: vec![None; frame_header.num_groups()],
+            last_rendered_pass: vec![None; num_groups],
             header: frame_header,
             color_channels,
             toc,
@@ -245,21 +250,12 @@ impl Frame {
             lf_global_was_rendered: false,
             vardct_buffers: None,
             groups_to_flush: BTreeSet::new(),
+            groups_rendered_complete: vec![false; num_groups],
+            groups_flushed_at_current_state: vec![false; num_groups],
         })
     }
 
     pub fn allow_rendering_before_last_pass(&self) -> bool {
-        // TODO(veluca): consider figuring out how to be more permissive here.
-        if self.header.has_patches() {
-            return false;
-        }
-        // TODO(veluca): implement logic to handle these cases.
-        if self.header.num_extra_channels != 0 {
-            return false;
-        }
-        if self.header.encoding == Encoding::Modular {
-            return false;
-        }
         if self.header.frame_type != FrameType::RegularFrame {
             return false;
         }
@@ -500,7 +496,13 @@ impl Frame {
 
         if passes.is_empty() {
             assert!(force_render);
-            assert_ne!(self.last_rendered_pass[group], Some(last_pass_in_file));
+            // In VarDCT, HF groups only depend on LF, not on other HF groups.
+            // So if all passes are decoded, the group must be complete.
+            // In Modular, groups can depend on neighbor groups, so a group with all passes
+            // can still be incomplete due to missing neighbor data.
+            if self.header.encoding == Encoding::VarDCT && self.header.num_extra_channels == 0 {
+                assert_ne!(self.last_rendered_pass[group], Some(last_pass_in_file));
+            }
         }
 
         if let Some((p, _)) = passes.last() {
@@ -682,6 +684,7 @@ impl Frame {
             }
         }
 
+        // Decode any new passes
         for (pass, br) in passes.iter_mut() {
             lf_global.modular_global.read_stream(
                 ModularStreamId::ModularHF { group, pass: *pass },
@@ -690,10 +693,29 @@ impl Frame {
                 br,
             )?;
         }
-        let sections: SmallVec<_, 4> = passes.iter().map(|x| x.0 + 2).collect();
-        lf_global.modular_global.process_output(
+
+        // Determine sections to process
+        let sections: SmallVec<_, 4> = if !passes.is_empty() {
+            // Group received new data - mark it as needing a fresh flush
+            self.groups_flushed_at_current_state[group] = false;
+            passes.iter().map(|x| x.0 + 2).collect()
+        } else if force_render {
+            // During flush with no new data, check if we've already flushed this group
+            if self.groups_flushed_at_current_state[group] {
+                return Ok(false); // Already flushed, nothing new to show
+            }
+            // This triggers transform execution on whatever data is available
+            SmallVec::new()
+        } else {
+            // Normal decode with no passes - nothing to do
+            return Ok(false);
+        };
+
+        // Process output with do_flush flag
+        let data_was_complete = lf_global.modular_global.process_output(
             &sections,
             group,
+            ModularGridKind::Hf,
             &self.header,
             &mut |chan, group, image| {
                 pipeline!(
@@ -703,7 +725,24 @@ impl Frame {
                 );
                 Ok(())
             },
+            force_render, // Pass force_render as do_flush
         )?;
-        Ok(do_render)
+
+        // Only return true (rendered and complete) if:
+        // - We actually rendered (do_render is true)
+        // - AND either we're not in flush mode, OR the data was complete
+        let result = do_render && (!force_render || data_was_complete);
+
+        // If we rendered with complete data (not in flush mode and rendered), mark this group as complete
+        if result && !force_render {
+            self.groups_rendered_complete[group] = true;
+        }
+
+        // If we flushed (force_render) and rendered something, mark as flushed at current state
+        if force_render && do_render {
+            self.groups_flushed_at_current_state[group] = true;
+        }
+
+        Ok(result)
     }
 }
