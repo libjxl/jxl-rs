@@ -187,29 +187,43 @@ impl<'inner, 'buf> ParseEvents<'inner, 'buf> {
                     return Ok(Some(ParseEvent::Codestream(payload)));
                 }
                 DetectState::InAuxBox {
-                    header: _,
+                    header,
                     bytes_left: None,
                 } => {
-                    let _payload = *buf;
+                    let payload = *buf;
+                    let box_type = header.box_type();
                     *buf = &[];
-                    // FIXME: emit auxiliary box event
+                    if !payload.is_empty() {
+                        return Ok(Some(ParseEvent::AuxiliaryBox {
+                            box_type,
+                            data: payload,
+                            is_last: false, // unbounded box - we don't know when it ends
+                        }));
+                    }
                 }
                 DetectState::InAuxBox {
-                    header: _,
+                    header,
                     bytes_left: Some(bytes_left),
                 } => {
-                    let _payload = if buf.len() >= *bytes_left {
+                    let box_type = header.box_type();
+                    let (payload, is_last) = if buf.len() >= *bytes_left {
                         let (payload, remaining) = buf.split_at(*bytes_left);
                         *state = DetectState::WaitingBoxHeader;
                         *buf = remaining;
-                        payload
+                        (payload, true)
                     } else {
                         let payload = *buf;
                         *bytes_left -= buf.len();
                         *buf = &[];
-                        payload
+                        (payload, false)
                     };
-                    // FIXME: emit auxiliary box event
+                    if !payload.is_empty() || is_last {
+                        return Ok(Some(ParseEvent::AuxiliaryBox {
+                            box_type,
+                            data: payload,
+                            is_last,
+                        }));
+                    }
                 }
             }
         }
@@ -258,6 +272,18 @@ pub enum ParseEvent<'buf> {
     /// Returned data may be partial. Complete codestream can be obtained by concatenating all data
     /// of `Codestream` events.
     Codestream(&'buf [u8]),
+    /// Auxiliary box data is read (EXIF, XMP, JUMBF, etc.).
+    ///
+    /// Returned data may be partial. Complete box data can be obtained by concatenating all data
+    /// of `AuxiliaryBox` events with the same box type.
+    AuxiliaryBox {
+        /// The type of the auxiliary box (e.g., EXIF, XMP, JUMBF).
+        box_type: ContainerBoxType,
+        /// The data payload of this chunk.
+        data: &'buf [u8],
+        /// True if this is the final chunk of data for this box.
+        is_last: bool,
+    },
 }
 
 impl std::fmt::Debug for ParseEvent<'_> {
@@ -267,6 +293,16 @@ impl std::fmt::Debug for ParseEvent<'_> {
             Self::Codestream(buf) => f
                 .debug_tuple("Codestream")
                 .field(&format_args!("{} byte(s)", buf.len()))
+                .finish(),
+            Self::AuxiliaryBox {
+                box_type,
+                data,
+                is_last,
+            } => f
+                .debug_struct("AuxiliaryBox")
+                .field("box_type", box_type)
+                .field("data", &format_args!("{} byte(s)", data.len()))
+                .field("is_last", is_last)
                 .finish(),
         }
     }
