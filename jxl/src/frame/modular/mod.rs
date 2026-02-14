@@ -3,7 +3,7 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-use std::{cmp::min, fmt::Debug};
+use std::{cmp::min, collections::BTreeSet, fmt::Debug};
 
 use crate::{
     bit_reader::BitReader,
@@ -14,8 +14,10 @@ use crate::{
         quantizer::{self, LfQuantFactors, QuantizerParams},
     },
     headers::{
-        ImageMetadata, JxlHeader, bit_depth::BitDepth, frame_header::FrameHeader,
-        modular::GroupHeader,
+        ImageMetadata, JxlHeader,
+        bit_depth::BitDepth,
+        frame_header::FrameHeader,
+        modular::{GroupHeader, TransformId},
     },
     image::{Image, Rect},
     util::{AtomicRefCell, CeilLog2, tracing_wrappers::*},
@@ -178,15 +180,25 @@ struct ModularBuffer {
     data: AtomicRefCell<Option<ModularChannel>>,
     // Number of times this buffer will be used, *including* when it is used for output.
     remaining_uses: usize,
-    used_by_transforms: Vec<usize>,
+    // Transform steps that "strongly" or "weakly" use the image data in this buffer.
+    // A "strong" usage always triggers a re-render if the image data changes.
+    // A "weak" usage only triggers a re-render if the buffer is final, or if the
+    // current re-render was not only caused by weak re-renders.
+    used_by_transforms_strong: Vec<usize>,
+    used_by_transforms_weak: Vec<usize>,
     size: (usize, usize),
+    is_final: bool,
+    has_been_rendered: bool,
 }
 
 impl ModularBuffer {
     // Gives out a copy of the buffer + auxiliary buffer, marking the buffer as used.
     // If this was the last usage of the buffer, does not actually copy the buffer.
-    fn get_buffer(&mut self) -> Result<ModularChannel> {
-        self.remaining_uses = self.remaining_uses.checked_sub(1).unwrap();
+    fn get_buffer(&mut self, can_consume: bool) -> Result<ModularChannel> {
+        self.remaining_uses = self
+            .remaining_uses
+            .checked_sub(if can_consume { 1 } else { 0 })
+            .unwrap();
         if self.remaining_uses == 0 {
             Ok(self.data.borrow_mut().take().unwrap())
         } else {
@@ -200,11 +212,30 @@ impl ModularBuffer {
         }
     }
 
-    fn mark_used(&mut self) {
-        self.remaining_uses = self.remaining_uses.checked_sub(1).unwrap();
+    fn mark_used(&mut self, use_by_final: bool) {
+        self.remaining_uses = self
+            .remaining_uses
+            .checked_sub(if use_by_final { 1 } else { 0 })
+            .unwrap();
         if self.remaining_uses == 0 {
             *self.data.borrow_mut() = None;
         }
+    }
+
+    fn should_include_weak_deps(&self, weak_render: bool) -> bool {
+        !weak_render || self.is_final || !self.has_been_rendered
+    }
+
+    fn used_by_transforms(&self, include_weak: bool) -> impl Iterator<Item = (usize, bool)> {
+        let strong_iter = self.used_by_transforms_strong.iter();
+        let weak_iter = if include_weak {
+            self.used_by_transforms_weak.iter()
+        } else {
+            [].iter()
+        };
+        strong_iter
+            .map(|x| (*x, true))
+            .chain(weak_iter.map(|x| (*x, false)))
     }
 }
 
@@ -237,6 +268,7 @@ impl ModularBufferInfo {
         };
         self.grid_shape.0 * grid_pos.1 + grid_pos.0
     }
+
     fn get_grid_rect(
         &self,
         frame_header: &FrameHeader,
@@ -296,9 +328,19 @@ pub struct FullModularImage {
     // In order, LfGlobal, LfGroup, HfGroup(pass 0), ..., HfGroup(last pass).
     section_buffer_indices: Vec<Vec<usize>>,
     modular_color_channels: usize,
+    can_do_partial_render: bool,
+    buffers_for_channels: Vec<usize>,
+    // Buffers to _start rendering from_ on the next call to process_output.
+    // This is initially set to LF global and LF buffers, and populated with HF buffers
+    // just before we start decoding them.
+    ready_buffers: BTreeSet<(usize, usize)>,
 }
 
 impl FullModularImage {
+    pub fn can_do_partial_render(&self) -> bool {
+        self.can_do_partial_render
+    }
+
     #[instrument(level = "debug", skip_all)]
     pub fn read(
         frame_header: &FrameHeader,
@@ -350,11 +392,19 @@ impl FullModularImage {
                 transform_steps: vec![],
                 section_buffer_indices: vec![vec![]; 2 + frame_header.passes.num_passes as usize],
                 modular_color_channels,
+                can_do_partial_render: true,
+                buffers_for_channels: vec![],
+                ready_buffers: BTreeSet::new(),
             });
         }
 
         trace!("reading modular header");
         let header = GroupHeader::read(br)?;
+
+        let has_palette_transform = header
+            .transforms
+            .iter()
+            .any(|x| x.id == TransformId::Palette);
 
         let (mut buffer_info, transform_steps) =
             transforms::apply::meta_apply_transforms(&channels, &header)?;
@@ -460,12 +510,13 @@ impl FullModularImage {
             );
             for (pos, buf) in bi.buffer_grid.iter().enumerate() {
                 trace!(
-                    "Channel {i} grid {pos} ({}, {})  size: {:?}, uses: {}, used_by: {:?}",
+                    "Channel {i} grid {pos} ({}, {})  size: {:?}, uses: {}, used_by: s {:?} a {:?}",
                     pos % bi.grid_shape.0,
                     pos / bi.grid_shape.0,
                     buf.size,
                     buf.remaining_uses,
-                    buf.used_by_transforms
+                    buf.used_by_transforms(false).collect::<Vec<_>>(),
+                    buf.used_by_transforms(true).collect::<Vec<_>>(),
                 );
             }
         }
@@ -473,6 +524,18 @@ impl FullModularImage {
         #[cfg(feature = "tracing")]
         for (i, ts) in transform_steps.iter().enumerate() {
             trace!("Transform {i}: {ts:?}");
+        }
+
+        let mut buffers_for_channels = vec![];
+
+        for (i, c) in buffer_info.iter().enumerate() {
+            if c.info.output_channel_idx >= 0 {
+                let c = c.info.output_channel_idx as usize;
+                if buffers_for_channels.len() <= c {
+                    buffers_for_channels.resize(c + 1, 0);
+                }
+                buffers_for_channels[c] = i;
+            }
         }
 
         with_buffers(&buffer_info, &section_buffer_indices[0], 0, |bufs| {
@@ -485,15 +548,25 @@ impl FullModularImage {
             )
         })?;
 
+        let mut ready_buffers = BTreeSet::new();
+
+        for b in section_buffer_indices[0].iter() {
+            ready_buffers.insert((*b, 0));
+            buffer_info[*b].buffer_grid[0].has_been_rendered = true;
+            buffer_info[*b].buffer_grid[0].is_final = true;
+        }
+
         Ok(FullModularImage {
             buffer_info,
             transform_steps,
             section_buffer_indices,
             modular_color_channels,
+            can_do_partial_render: !has_palette_transform,
+            buffers_for_channels,
+            ready_buffers,
         })
     }
 
-    #[allow(clippy::type_complexity)]
     #[instrument(level = "debug", skip(self, frame_header, global_tree, br), ret)]
     pub fn read_stream(
         &mut self,
@@ -530,13 +603,18 @@ impl FullModularImage {
                 )
             },
         )?;
+
+        for b in self.section_buffer_indices[section_id].iter() {
+            self.ready_buffers.insert((*b, grid));
+            self.buffer_info[*b].buffer_grid[grid].has_been_rendered = true;
+            self.buffer_info[*b].buffer_grid[grid].is_final = true;
+        }
+
         Ok(())
     }
 
     pub fn process_output(
         &mut self,
-        section_ids: &[usize],
-        grid: usize,
         frame_header: &FrameHeader,
         pass_to_pipeline: &mut dyn FnMut(usize, usize, Image<i32>) -> Result<()>,
     ) -> Result<()> {
@@ -544,8 +622,9 @@ impl FullModularImage {
             if bi.info.output_channel_idx >= 0 {
                 let chan = bi.info.output_channel_idx as usize;
                 debug!("Rendering channel {chan:?}, grid position {grid}");
-                let buf = bi.buffer_grid[grid].get_buffer()?;
-                // TODO(veluca): figure out what to do with passes here.
+                // TODO: figure out if all the channels in this group will have their final render
+                // here.
+                let buf = bi.buffer_grid[grid].get_buffer(false)?;
                 if chan == 0 && self.modular_color_channels == 1 {
                     for i in 0..2 {
                         pass_to_pipeline(i, grid, buf.data.try_clone()?)?;
@@ -559,30 +638,100 @@ impl FullModularImage {
         };
 
         let mut new_ready_transform_chunks = vec![];
-        for section_id in section_ids {
-            for buf in self.section_buffer_indices[*section_id].iter().copied() {
-                maybe_output(&mut self.buffer_info[buf], grid)?;
-                let new_chunks = self.buffer_info[buf].buffer_grid[grid]
-                    .used_by_transforms
-                    .to_vec();
-                trace!("Buffer {buf} grid position {grid} used by chunks {new_chunks:?}");
-                new_ready_transform_chunks.extend(new_chunks);
-            }
+        for (b, g) in std::mem::take(&mut self.ready_buffers) {
+            maybe_output(&mut self.buffer_info[b], g)?;
+            new_ready_transform_chunks
+                .extend(self.buffer_info[b].buffer_grid[g].used_by_transforms(true));
         }
 
         trace!(?new_ready_transform_chunks);
 
-        while let Some(tfm) = new_ready_transform_chunks.pop() {
+        while let Some((tfm, weak)) = new_ready_transform_chunks.pop() {
             trace!("tfm = {tfm} chunk = {:?}", self.transform_steps[tfm]);
             for (new_buf, new_grid) in
                 self.transform_steps[tfm].dep_ready(frame_header, &mut self.buffer_info)?
             {
+                let include_weak =
+                    self.buffer_info[new_buf].buffer_grid[new_grid].should_include_weak_deps(weak);
+                self.buffer_info[new_buf].buffer_grid[new_grid].has_been_rendered = true;
                 maybe_output(&mut self.buffer_info[new_buf], new_grid)?;
-                let new_chunks = self.buffer_info[new_buf].buffer_grid[new_grid]
-                    .used_by_transforms
-                    .to_vec();
-                trace!("Buffer {new_buf} grid position {new_grid} used by chunks {new_chunks:?}");
-                new_ready_transform_chunks.extend(new_chunks);
+                new_ready_transform_chunks.extend(
+                    self.buffer_info[new_buf].buffer_grid[new_grid]
+                        .used_by_transforms(include_weak),
+                );
+            }
+        }
+
+        Ok(())
+    }
+
+    pub fn prepare_for_rerender(
+        &mut self,
+        groups: &[(usize, Vec<(usize, BitReader)>)],
+        group_to_flush: &mut BTreeSet<usize>,
+    ) {
+        if !self.can_do_partial_render() {
+            return;
+        }
+        let mut updated_buffers = vec![];
+        for (g, passes) in groups {
+            for (pass, _) in passes {
+                for b in self.section_buffer_indices[2 + *pass].iter() {
+                    self.buffer_info[*b].buffer_grid[*g].is_final = true;
+                    updated_buffers.push((*b, *g, true));
+                }
+            }
+        }
+        while let Some((b, g, is_weak)) = updated_buffers.pop() {
+            if self.buffer_info[b].info.output_channel_idx >= 0 {
+                // TODO(veluca): more precise tracking for knowing if all channels are finalized?
+                group_to_flush.insert(g);
+            }
+
+            if !self.buffer_info[b].buffer_grid[g].has_been_rendered {
+                continue;
+            }
+
+            let used: Vec<_> = self.buffer_info[b].buffer_grid[g]
+                .used_by_transforms(is_weak)
+                .collect();
+            for (tfm, weak) in used {
+                let output_is_final = self.transform_steps[tfm]
+                    .deps
+                    .iter()
+                    .all(|(b, g)| self.buffer_info[*b].buffer_grid[*g].is_final);
+                for (new_buf, new_grid) in self.transform_steps[tfm].unmark(&self.buffer_info) {
+                    self.buffer_info[new_buf].buffer_grid[new_grid].is_final = output_is_final;
+                    let include_weak = self.buffer_info[new_buf].buffer_grid[new_grid]
+                        .should_include_weak_deps(weak);
+                    updated_buffers.push((new_buf, new_grid, include_weak));
+                }
+            }
+        }
+    }
+
+    pub fn zero_fill_empty_channels(&mut self, num_passes: usize, num_groups: usize) -> Result<()> {
+        if !self.can_do_partial_render() {
+            return Ok(());
+        }
+        if self.buffer_info.is_empty() {
+            return Ok(());
+        }
+        for pass in 0..num_passes {
+            for grid in 0..num_groups {
+                // TODO(veluca): consider filling these buffers with placeholders instead of real images.
+                with_buffers(
+                    &self.buffer_info,
+                    &self.section_buffer_indices[pass + 2],
+                    grid,
+                    |_| Ok(()),
+                )?;
+                for b in self.section_buffer_indices[pass + 2].iter() {
+                    if !self.buffer_info[*b].buffer_grid[grid].has_been_rendered {
+                        self.ready_buffers.insert((*b, grid));
+                    }
+                    self.buffer_info[*b].buffer_grid[grid].has_been_rendered = true;
+                }
             }
         }
 

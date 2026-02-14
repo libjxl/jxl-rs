@@ -63,6 +63,8 @@ pub struct TransformStepChunk {
     pub(super) grid_pos: (usize, usize),
     // Number of inputs that are not yet available.
     pub(super) incomplete_deps: usize,
+    // Dependencies of this transform step, as (buffer, grid) pairs.
+    pub(in super::super) deps: Vec<(usize, usize)>,
 }
 
 impl TransformStepChunk {
@@ -97,6 +99,7 @@ impl TransformStepChunk {
             assert_eq!(out_grid_kind, buffers[*bo].grid_kind);
             assert_eq!(out_size, buffers[*bo].info.size);
         }
+        let out_is_final = buffers[buf_out[0]].buffer_grid[out_grid].is_final;
 
         match &self.step {
             TransformStep::Rct {
@@ -112,7 +115,7 @@ impl TransformStepChunk {
                     // If not, creates buffers in the output that are a copy of the input buffers.
                     // This should be rare.
                     *buffers[buf_out[i]].buffer_grid[out_grid].data.borrow_mut() =
-                        Some(buffers[buf_in[i]].buffer_grid[out_grid].get_buffer()?);
+                        Some(buffers[buf_in[i]].buffer_grid[out_grid].get_buffer(out_is_final)?);
                 }
                 with_buffers(buffers, buf_out, out_grid, |mut bufs| {
                     super::rct::do_rct_step(&mut bufs, *op, *perm);
@@ -127,8 +130,8 @@ impl TransformStepChunk {
                 ..
             } if buffers[*buf_in].info.size.0 == 0 => {
                 // Nothing to do, just bookkeeping.
-                buffers[*buf_in].buffer_grid[out_grid].mark_used();
-                buffers[*buf_pal].buffer_grid[0].mark_used();
+                buffers[*buf_in].buffer_grid[out_grid].mark_used(out_is_final);
+                buffers[*buf_pal].buffer_grid[0].mark_used(out_is_final);
                 with_buffers(buffers, buf_out, out_grid, |_| Ok(()))?;
                 Ok(buf_out.iter().map(|x| (*x, out_grid)).collect())
             }
@@ -191,8 +194,8 @@ impl TransformStepChunk {
                         *predictor,
                     );
                 }
-                buffers[*buf_in].buffer_grid[out_grid].mark_used();
-                buffers[*buf_pal].buffer_grid[0].mark_used();
+                buffers[*buf_in].buffer_grid[out_grid].mark_used(out_is_final);
+                buffers[*buf_pal].buffer_grid[0].mark_used(out_is_final);
                 Ok(buf_out.iter().map(|x| (*x, out_grid)).collect())
             }
             TransformStep::Palette {
@@ -256,9 +259,9 @@ impl TransformStepChunk {
                         wp_header,
                     )?;
                 }
-                buffers[*buf_pal].buffer_grid[0].mark_used();
+                buffers[*buf_pal].buffer_grid[0].mark_used(out_is_final);
                 for grid_x in 0..grid_shape.0 {
-                    buffers[*buf_in].buffer_grid[out_grid + grid_x].mark_used();
+                    buffers[*buf_in].buffer_grid[out_grid + grid_x].mark_used(out_is_final);
                     for buf in buf_out {
                         generated_chunks.push((*buf, out_grid + grid_x));
                     }
@@ -328,8 +331,8 @@ impl TransformStepChunk {
                         Ok(())
                     })?;
                 }
-                buffers[buf_in[0]].buffer_grid[in_grid].mark_used();
-                buffers[buf_in[1]].buffer_grid[res_grid].mark_used();
+                buffers[buf_in[0]].buffer_grid[in_grid].mark_used(out_is_final);
+                buffers[buf_in[1]].buffer_grid[res_grid].mark_used(out_is_final);
                 Ok(vec![(*buf_out, out_grid)])
             }
             TransformStep::VSqueeze { buf_in, buf_out } => {
@@ -390,10 +393,38 @@ impl TransformStepChunk {
                         Ok(())
                     })?;
                 }
-                buffers[buf_in[0]].buffer_grid[in_grid].mark_used();
-                buffers[buf_in[1]].buffer_grid[res_grid].mark_used();
+                buffers[buf_in[0]].buffer_grid[in_grid].mark_used(out_is_final);
+                buffers[buf_in[1]].buffer_grid[res_grid].mark_used(out_is_final);
                 Ok(vec![(*buf_out, out_grid)])
             }
+        }
+    }
+
+    #[instrument(level = "trace", skip_all)]
+    pub fn unmark(&mut self, buffers: &[ModularBufferInfo]) -> Vec<(usize, usize)> {
+        self.incomplete_deps += 1;
+        if self.incomplete_deps != 1 {
+            trace!("skipping undoing transform chunk because incomplete_deps was not 0");
+            return vec![];
+        }
+        // TODO(veluca): refactor this with `dep_ready`?
+        let buf_out: &[usize] = match &self.step {
+            TransformStep::Rct { buf_out, .. } => buf_out,
+            TransformStep::Palette { buf_out, .. } => buf_out,
+            TransformStep::HSqueeze { buf_out, .. } | TransformStep::VSqueeze { buf_out, .. } => {
+                &[*buf_out]
+            }
+        };
+
+        let out_grid_kind = buffers[buf_out[0]].grid_kind;
+        let out_grid = buffers[buf_out[0]].get_grid_idx(out_grid_kind, self.grid_pos);
+
+        match &self.step {
+            TransformStep::Rct { buf_out, .. } => buf_out.iter().map(|x| (*x, out_grid)).collect(),
+            TransformStep::HSqueeze { buf_out, .. } | TransformStep::VSqueeze { buf_out, .. } => {
+                vec![(*buf_out, out_grid)]
+            }
+            TransformStep::Palette { .. } => unreachable!("cannot do partial renders with palette"),
         }
     }
 }

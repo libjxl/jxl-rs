@@ -195,48 +195,61 @@ impl Frame {
 
         pipeline!(self, p, p.render_outside_frame(&mut buffer_splitter)?);
 
-        // Render data from the lf global section, if we didn't do so already, before rendering HF.
-        if !self.lf_global_was_rendered {
-            self.lf_global_was_rendered = true;
-            let lf_global = self.lf_global.as_mut().unwrap();
-            let mut pass_to_pipeline = |chan, group, image| {
+        // STEP 1: prepare modular data for re-rendering. While doing so, also compute which
+        // groups will have their modular data re-rendered, and pass that information to
+        // mark_group_to_rerender.
+        let modular_global = &mut self.lf_global.as_mut().unwrap().modular_global;
+        if self.partial_render_done {
+            modular_global.prepare_for_rerender(&groups, &mut self.groups_to_flush);
+        }
+
+        for (g, _) in groups.iter() {
+            self.groups_to_flush.insert(*g);
+        }
+
+        // STEP 2: if we are requesting a flush, and did not flush before, mark modular channels
+        // as having been decoded as 0.
+        if !self.partial_render_done && do_flush {
+            self.partial_render_done = true;
+            self.groups_to_flush.extend(0..self.header.num_groups());
+            modular_global.zero_fill_empty_channels(
+                self.header.passes.num_passes as usize,
+                self.header.num_groups(),
+            )?;
+        }
+
+        for g in self.groups_to_flush.iter() {
+            pipeline!(self, p, p.mark_group_to_rerender(*g));
+        }
+
+        // STEP 3: decode the groups, eagerly rendering VarDCT channels and noise.
+        for (group, mut passes) in groups {
+            if !self.decode_hf_group(group, &mut passes, &mut buffer_splitter, do_flush)? {
+                self.groups_to_flush.insert(group);
+            } else {
+                // TODO
+                self.groups_to_flush.remove(&group);
+            }
+        }
+
+        // STEP 4: process all modular transforms that can now be processed,
+        // flushing buffers that will not be used again.
+        self.lf_global
+            .as_mut()
+            .unwrap()
+            .modular_global
+            .process_output(&self.header, &mut |chan, group, image| {
                 pipeline!(
                     self,
                     p,
                     p.set_buffer_for_group(chan, group, true, image, &mut buffer_splitter)?
                 );
                 Ok(())
-            };
-            lf_global.modular_global.process_output(
-                &[0],
-                0,
-                &self.header,
-                &mut pass_to_pipeline,
-            )?;
-            for group in 0..self.header.num_lf_groups() {
-                lf_global.modular_global.process_output(
-                    &[1],
-                    group,
-                    &self.header,
-                    &mut pass_to_pipeline,
-                )?;
-            }
-            self.groups_to_flush.extend(0..self.header.num_groups());
-        }
+            })?;
 
-        // TODO(veluca): keep track of groups that should be flushed, and groups that have had nothing rendered yet.
-
-        for (g, _) in groups.iter() {
-            pipeline!(self, p, p.mark_group_to_rerender(*g));
-        }
-
-        for (group, mut passes) in groups {
-            if !self.decode_hf_group(group, &mut passes, &mut buffer_splitter, do_flush)? {
-                self.groups_to_flush.insert(group);
-            } else {
-                self.groups_to_flush.remove(&group);
-            }
-        }
+        // STEP 5: re-render VarDCT/noise data in rendered groups for which it was
+        // not rendered, or re-send to pipeline modular channels that were not
+        // updated in those groups.
 
         if do_flush {
             for g in std::mem::take(&mut self.groups_to_flush) {
@@ -757,7 +770,7 @@ impl Frame {
             output_profile,
         )?;
         self.render_pipeline = Some(render_pipeline);
-        self.lf_global_was_rendered = false;
+        self.partial_render_done = false;
         Ok(())
     }
 }

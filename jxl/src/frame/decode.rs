@@ -22,7 +22,7 @@ use crate::headers::frame_header::FrameType;
 #[cfg(test)]
 use crate::render::SimpleRenderPipeline;
 use crate::render::buffer_splitter::BufferSplitter;
-use crate::util::{SmallVec, mirror};
+use crate::util::mirror;
 use crate::{
     GROUP_DIM,
     bit_reader::BitReader,
@@ -242,24 +242,21 @@ impl Frame {
             render_pipeline: None,
             reference_frame_data,
             lf_frame_data,
-            lf_global_was_rendered: false,
+            partial_render_done: false,
             vardct_buffers: None,
             groups_to_flush: BTreeSet::new(),
         })
     }
 
     pub fn allow_rendering_before_last_pass(&self) -> bool {
-        // TODO(veluca): consider figuring out how to be more permissive here.
-        if self.header.has_patches() {
+        if self
+            .lf_global
+            .as_ref()
+            .is_none_or(|x| !x.modular_global.can_do_partial_render())
+        {
             return false;
         }
-        // TODO(veluca): implement logic to handle these cases.
-        if self.header.num_extra_channels != 0 {
-            return false;
-        }
-        if self.header.encoding == Encoding::Modular {
-            return false;
-        }
+        // TODO(veluca): implement logic to handle LF frames.
         if self.header.frame_type != FrameType::RegularFrame {
             return false;
         }
@@ -289,6 +286,7 @@ impl Frame {
         }
         Ok(shuffled_ret)
     }
+
     #[instrument(level = "debug", skip_all)]
     pub fn decode_lf_global(&mut self, br: &mut BitReader) -> Result<()> {
         debug!(section_size = br.total_bits_available());
@@ -454,7 +452,7 @@ impl Frame {
             assert_eq!(coeff_orders.len(), 3 * coeff_order::NUM_ORDERS);
             let num_contexts = num_histograms as usize * block_context_map.num_ac_contexts();
             info!(
-                "Deconding histograms for pass {} with {} contexts",
+                "Decoding histograms for pass {} with {} contexts",
                 i, num_contexts
             );
             let mut histograms = Histograms::decode(num_contexts, br, true)?;
@@ -487,6 +485,119 @@ impl Frame {
         Ok(())
     }
 
+    pub fn render_noise_for_group(
+        &mut self,
+        group: usize,
+        complete: bool,
+        buffer_splitter: &mut BufferSplitter,
+    ) -> Result<()> {
+        // TODO(sboukortt): consider making this a dedicated stage
+        // TODO(veluca): SIMD.
+        let num_channels = self.header.num_extra_channels as usize + 3;
+
+        let group_dim = self.header.group_dim() as u32;
+        let xsize_groups = self.header.size_groups().0;
+        let gx = (group % xsize_groups) as u32;
+        let gy = (group / xsize_groups) as u32;
+        let upsampling = self.header.upsampling;
+        let upsampled_size = self.header.size_upsampled();
+
+        // Total buffer covers the upsampled region for this group
+        let buf_x1 = ((gx + 1) * upsampling * group_dim) as usize;
+        let buf_y1 = ((gy + 1) * upsampling * group_dim) as usize;
+        let buf_xsize = buf_x1.min(upsampled_size.0) - (gx * upsampling * group_dim) as usize;
+        let buf_ysize = buf_y1.min(upsampled_size.1) - (gy * upsampling * group_dim) as usize;
+
+        let bits_to_float = |bits: u32| f32::from_bits((bits >> 9) | 0x3F800000);
+
+        // Get all 3 noise channel buffers upfront
+        let mut bufs = [
+            pipeline!(self, p, p.get_buffer(num_channels)?),
+            pipeline!(self, p, p.get_buffer(num_channels + 1)?),
+            pipeline!(self, p, p.get_buffer(num_channels + 2)?),
+        ];
+
+        const FLOATS_PER_BATCH: usize =
+            Xorshift128Plus::N * std::mem::size_of::<u64>() / std::mem::size_of::<f32>();
+        let mut batch = [0u64; Xorshift128Plus::N];
+
+        // libjxl iterates through upsampling subdivisions with separate RNG seeds.
+        // For each subregion, a single RNG is shared across all 3 channels.
+        for iy in 0..upsampling {
+            for ix in 0..upsampling {
+                // Seed coordinates for this subregion (matches libjxl)
+                let x0 = (gx * upsampling + ix) * group_dim;
+                let y0 = (gy * upsampling + iy) * group_dim;
+
+                // Create RNG with this subregion's seed - shared across all 3 channels
+                let mut rng = Xorshift128Plus::new_with_seeds(
+                    self.decoder_state.visible_frame_index as u32,
+                    self.decoder_state.nonvisible_frame_index as u32,
+                    x0,
+                    y0,
+                );
+
+                // Subregion boundaries within the buffer
+                let sub_x0 = (ix * group_dim) as usize;
+                let sub_y0 = (iy * group_dim) as usize;
+                let sub_x1 = ((ix + 1) * group_dim) as usize;
+                let sub_y1 = ((iy + 1) * group_dim) as usize;
+
+                // Clamp to actual buffer size
+                let sub_xsize = sub_x1.min(buf_xsize).saturating_sub(sub_x0);
+                let sub_ysize = sub_y1.min(buf_ysize).saturating_sub(sub_y0);
+
+                // Skip if this subregion is entirely outside the buffer
+                if sub_xsize == 0 || sub_ysize == 0 {
+                    continue;
+                }
+
+                // Fill all 3 channels with this subregion's noise, sharing the RNG
+                for buf in &mut bufs {
+                    for y in 0..sub_ysize {
+                        let row = buf.row_mut(sub_y0 + y);
+                        for batch_index in 0..sub_xsize.div_ceil(FLOATS_PER_BATCH) {
+                            rng.fill(&mut batch);
+                            let batch_size =
+                                (sub_xsize - batch_index * FLOATS_PER_BATCH).min(FLOATS_PER_BATCH);
+                            for i in 0..batch_size {
+                                let x = sub_x0 + FLOATS_PER_BATCH * batch_index + i;
+                                let k = i / 2;
+                                let high_bytes = i % 2 != 0;
+                                let bits = if high_bytes {
+                                    ((batch[k] & 0xFFFFFFFF00000000) >> 32) as u32
+                                } else {
+                                    (batch[k] & 0xFFFFFFFF) as u32
+                                };
+                                row[x] = bits_to_float(bits);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // Set all buffers after filling
+        let [buf0, buf1, buf2] = bufs;
+        pipeline!(
+            self,
+            p,
+            p.set_buffer_for_group(num_channels, group, complete, buf0, buffer_splitter)?
+        );
+        pipeline!(
+            self,
+            p,
+            p.set_buffer_for_group(num_channels + 1, group, complete, buf1, buffer_splitter)?
+        );
+        pipeline!(
+            self,
+            p,
+            p.set_buffer_for_group(num_channels + 2, group, complete, buf2, buffer_splitter)?
+        );
+        Ok(())
+    }
+
+    // TODO: this now only renders VarDCT, update doc.
     // Returns `true` if data was effectively rendered.
     #[instrument(level = "debug", skip(self, passes, buffer_splitter))]
     pub fn decode_hf_group(
@@ -524,108 +635,7 @@ impl Frame {
         }
 
         if self.header.has_noise() && do_render {
-            // TODO(sboukortt): consider making this a dedicated stage
-            let num_channels = self.header.num_extra_channels as usize + 3;
-
-            let group_dim = self.header.group_dim() as u32;
-            let xsize_groups = self.header.size_groups().0;
-            let gx = (group % xsize_groups) as u32;
-            let gy = (group / xsize_groups) as u32;
-            let upsampling = self.header.upsampling;
-            let upsampled_size = self.header.size_upsampled();
-
-            // Total buffer covers the upsampled region for this group
-            let buf_x1 = ((gx + 1) * upsampling * group_dim) as usize;
-            let buf_y1 = ((gy + 1) * upsampling * group_dim) as usize;
-            let buf_xsize = buf_x1.min(upsampled_size.0) - (gx * upsampling * group_dim) as usize;
-            let buf_ysize = buf_y1.min(upsampled_size.1) - (gy * upsampling * group_dim) as usize;
-
-            let bits_to_float = |bits: u32| f32::from_bits((bits >> 9) | 0x3F800000);
-
-            // Get all 3 noise channel buffers upfront
-            let mut bufs = [
-                pipeline!(self, p, p.get_buffer(num_channels)?),
-                pipeline!(self, p, p.get_buffer(num_channels + 1)?),
-                pipeline!(self, p, p.get_buffer(num_channels + 2)?),
-            ];
-
-            const FLOATS_PER_BATCH: usize =
-                Xorshift128Plus::N * std::mem::size_of::<u64>() / std::mem::size_of::<f32>();
-            let mut batch = [0u64; Xorshift128Plus::N];
-
-            // libjxl iterates through upsampling subdivisions with separate RNG seeds.
-            // For each subregion, a single RNG is shared across all 3 channels.
-            for iy in 0..upsampling {
-                for ix in 0..upsampling {
-                    // Seed coordinates for this subregion (matches libjxl)
-                    let x0 = (gx * upsampling + ix) * group_dim;
-                    let y0 = (gy * upsampling + iy) * group_dim;
-
-                    // Create RNG with this subregion's seed - shared across all 3 channels
-                    let mut rng = Xorshift128Plus::new_with_seeds(
-                        self.decoder_state.visible_frame_index as u32,
-                        self.decoder_state.nonvisible_frame_index as u32,
-                        x0,
-                        y0,
-                    );
-
-                    // Subregion boundaries within the buffer
-                    let sub_x0 = (ix * group_dim) as usize;
-                    let sub_y0 = (iy * group_dim) as usize;
-                    let sub_x1 = ((ix + 1) * group_dim) as usize;
-                    let sub_y1 = ((iy + 1) * group_dim) as usize;
-
-                    // Clamp to actual buffer size
-                    let sub_xsize = sub_x1.min(buf_xsize).saturating_sub(sub_x0);
-                    let sub_ysize = sub_y1.min(buf_ysize).saturating_sub(sub_y0);
-
-                    // Skip if this subregion is entirely outside the buffer
-                    if sub_xsize == 0 || sub_ysize == 0 {
-                        continue;
-                    }
-
-                    // Fill all 3 channels with this subregion's noise, sharing the RNG
-                    for buf in &mut bufs {
-                        for y in 0..sub_ysize {
-                            let row = buf.row_mut(sub_y0 + y);
-                            for batch_index in 0..sub_xsize.div_ceil(FLOATS_PER_BATCH) {
-                                rng.fill(&mut batch);
-                                let batch_size = (sub_xsize - batch_index * FLOATS_PER_BATCH)
-                                    .min(FLOATS_PER_BATCH);
-                                for i in 0..batch_size {
-                                    let x = sub_x0 + FLOATS_PER_BATCH * batch_index + i;
-                                    let k = i / 2;
-                                    let high_bytes = i % 2 != 0;
-                                    let bits = if high_bytes {
-                                        ((batch[k] & 0xFFFFFFFF00000000) >> 32) as u32
-                                    } else {
-                                        (batch[k] & 0xFFFFFFFF) as u32
-                                    };
-                                    row[x] = bits_to_float(bits);
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-
-            // Set all buffers after filling
-            let [buf0, buf1, buf2] = bufs;
-            pipeline!(
-                self,
-                p,
-                p.set_buffer_for_group(num_channels, group, complete, buf0, buffer_splitter)?
-            );
-            pipeline!(
-                self,
-                p,
-                p.set_buffer_for_group(num_channels + 1, group, complete, buf1, buffer_splitter)?
-            );
-            pipeline!(
-                self,
-                p,
-                p.set_buffer_for_group(num_channels + 2, group, complete, buf2, buffer_splitter)?
-            );
+            self.render_noise_for_group(group, complete, buffer_splitter)?;
         }
 
         let lf_global = self.lf_global.as_mut().unwrap();
@@ -690,20 +700,6 @@ impl Frame {
                 br,
             )?;
         }
-        let sections: SmallVec<_, 4> = passes.iter().map(|x| x.0 + 2).collect();
-        lf_global.modular_global.process_output(
-            &sections,
-            group,
-            &self.header,
-            &mut |chan, group, image| {
-                pipeline!(
-                    self,
-                    p,
-                    p.set_buffer_for_group(chan, group, true, image, buffer_splitter)?
-                );
-                Ok(())
-            },
-        )?;
         Ok(do_render)
     }
 }
