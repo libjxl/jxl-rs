@@ -22,7 +22,7 @@ use crate::headers::frame_header::FrameType;
 #[cfg(test)]
 use crate::render::SimpleRenderPipeline;
 use crate::render::buffer_splitter::BufferSplitter;
-use crate::util::{SmallVec, mirror};
+use crate::util::{ShiftRightCeil, SmallVec, mirror};
 use crate::{
     GROUP_DIM,
     bit_reader::BitReader,
@@ -60,31 +60,40 @@ fn upsample_lf_group(
     let (width_groups, _) = header.size_groups();
     let gx = group % width_groups;
     let gy = group / width_groups;
-    let lf_x0 = gx * lf_group_dim;
-    let lf_y0 = gy * lf_group_dim;
-
-    let (lf_width, lf_height) = lf_image[0].size();
-    let (out_width, out_height) = pixels[0].size();
-
-    let start_x = lf_x0.saturating_sub(2);
-    let lf_x1 = (lf_x0 + lf_group_dim).min(lf_width);
-    let end_x = (lf_x1 + 2).min(lf_width);
-    let copy_width = end_x - start_x;
 
     let upsample = Upsample8x::new(factors, 0);
     let mut state = upsample.init_local_state(0)?.unwrap();
 
+    let max_width = pixels.iter().map(|x| x.size().0).max().unwrap();
+
     // Temporary buffer for 8 output rows
     // We reuse this buffer for each iteration to minimize allocation
-    let mut temp_out_buf: [_; 8] = std::array::from_fn(|_| vec![0.0f32; out_width + 128]);
+    let mut temp_out_buf: [_; 8] = std::array::from_fn(|_| vec![0.0f32; max_width + 128]);
 
-    let mut input_rows_storage: [_; 5] = std::array::from_fn(|_| vec![0.0; lf_width + 20]);
+    let mut input_rows_storage: [_; 5] = std::array::from_fn(|_| vec![0.0; max_width / 8 + 32]);
 
     for c in 0..3 {
         let lf_img = &lf_image[c];
         let out_img = &mut pixels[c];
+        let (out_width, out_height) = out_img.size();
 
-        for y in 0..lf_group_dim {
+        let vs = header.vshift(c);
+        let hs = header.hshift(c);
+
+        let lf_group_dim_x = lf_group_dim >> hs;
+        let lf_group_dim_y = lf_group_dim >> vs;
+        let lf_x0 = gx * lf_group_dim_x;
+        let lf_y0 = gy * lf_group_dim_y;
+
+        let lf_width = lf_img.size().0.shrc(hs);
+        let lf_height = lf_img.size().1.shrc(hs);
+
+        let start_x = lf_x0.saturating_sub(2);
+        let lf_x1 = (lf_x0 + lf_group_dim_x).min(lf_width);
+        let end_x = (lf_x1 + 2).min(lf_width);
+        let copy_width = end_x - start_x;
+
+        for y in 0..lf_group_dim_y {
             let cy = lf_y0 + y;
 
             for dy in -2..=2 {
@@ -96,18 +105,16 @@ fn upsample_lf_group(
                 let save_start = if start_x == lf_x0 { 2 } else { 0 };
                 let save_end = save_start + copy_width;
 
-                storage[save_start..save_end]
-                    .copy_from_slice(&lf_img.row(iy)[start_x..start_x + copy_width]);
+                storage[save_start..save_end].copy_from_slice(&lf_img.row(iy)[start_x..end_x]);
 
                 if start_x == lf_x0 {
-                    storage[0] = storage[2 + mirror(-2, end_x - start_x)];
-                    storage[1] = storage[2 + mirror(-1, end_x - start_x)];
+                    storage[0] = storage[2 + mirror(-2, copy_width)];
+                    storage[1] = storage[2 + mirror(-1, copy_width)];
                 }
                 if end_x == lf_x1 {
+                    storage[save_end] = storage[save_start + mirror(save_end as isize, save_end)];
                     storage[save_end + 1] =
                         storage[save_start + mirror(save_end as isize + 1, save_end)];
-                    storage[save_end + 2] =
-                        storage[save_start + mirror(save_end as isize + 2, save_end)];
                 }
             }
 
@@ -121,7 +128,7 @@ fn upsample_lf_group(
 
                 upsample.process_row_chunk(
                     (0, 0),
-                    lf_group_dim,
+                    lf_x1 - lf_x0,
                     &input_channels,
                     &mut output_channels,
                     Some(state.as_mut()),
@@ -133,7 +140,7 @@ fn upsample_lf_group(
             for (i, buf) in temp_out_buf.iter().enumerate() {
                 let out_y = base_y + i;
                 if out_y < out_height {
-                    out_img.row_mut(out_y).copy_from_slice(&buf[..out_width]);
+                    out_img.row_mut(out_y)[..out_width].copy_from_slice(&buf[..out_width]);
                 }
             }
         }
