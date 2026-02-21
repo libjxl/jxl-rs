@@ -112,7 +112,7 @@ pub fn make_grids(
 
     // Create grids.
     for g in buffer_info.iter_mut() {
-        let is_output = g.info.output_channel_idx >= 0;
+        let is_output = g.info.output_channel_idx.is_some();
         g.buffer_grid = get_grid_indices(g.grid_shape)
             .map(|(x, y)| ModularBuffer {
                 data: AtomicRefCell::new(None),

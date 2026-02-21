@@ -445,7 +445,7 @@ fn meta_apply_single_transform(
             for i in 0..3 {
                 let c = &mut channels[begin_channel + i];
                 let mut info = c.1;
-                info.output_channel_idx = -1;
+                info.output_channel_idx = None;
                 c.0 = add_transform_buffer(
                     info,
                     format!(
@@ -503,7 +503,7 @@ fn meta_apply_single_transform(
                         ((w, h.div_ceil(2)), (w, h - h.div_ceil(2)))
                     };
                     let new_0 = ChannelInfo {
-                        output_channel_idx: -1,
+                        output_channel_idx: None,
                         shift: new_shift,
                         size: new_size_0,
                         bit_depth: chan.bit_depth,
@@ -513,7 +513,7 @@ fn meta_apply_single_transform(
                         format!("Squeezed channel, original channel {}", begin_channel + ic),
                     );
                     let new_1 = ChannelInfo {
-                        output_channel_idx: -1,
+                        output_channel_idx: None,
                         shift: new_shift,
                         size: new_size_1,
                         bit_depth: chan.bit_depth,
@@ -551,7 +551,7 @@ fn meta_apply_single_transform(
             // equal in the line above.
             let bit_depth = channels[begin_channel].1.bit_depth;
             let pchan_info = ChannelInfo {
-                output_channel_idx: -1,
+                output_channel_idx: None,
                 shift: None,
                 size: (num_colors + num_deltas, num_channels),
                 bit_depth,
@@ -564,7 +564,7 @@ fn meta_apply_single_transform(
                 ),
             );
             let mut inchan_info = channels[begin_channel].1;
-            inchan_info.output_channel_idx = -1;
+            inchan_info.output_channel_idx = None;
             let inchan = add_transform_buffer(
                 inchan_info,
                 format!(

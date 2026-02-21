@@ -41,8 +41,8 @@ const IMAGE_OFFSET: (usize, usize) = (2, 2);
 
 #[derive(Clone, PartialEq, Eq, Copy)]
 struct ChannelInfo {
-    // The index of the output channel in the render pipeline, or -1 for non-output channels.
-    output_channel_idx: isize,
+    // The index of the output channel in the render pipeline.
+    output_channel_idx: Option<usize>,
     // width, height
     size: (usize, usize),
     shift: Option<(usize, usize)>, // None for meta-channels
@@ -58,8 +58,8 @@ impl Debug for ChannelInfo {
             write!(f, "(meta)")?;
         }
         write!(f, "{:?}", self.bit_depth)?;
-        if self.output_channel_idx >= 0 {
-            write!(f, "(output channel {})", self.output_channel_idx)?;
+        if let Some(oc) = self.output_channel_idx {
+            write!(f, "(output channel {})", oc)?;
         }
         Ok(())
     }
@@ -162,7 +162,7 @@ impl ModularChannel {
 
     fn channel_info(&self) -> ChannelInfo {
         ChannelInfo {
-            output_channel_idx: -1,
+            output_channel_idx: None,
             size: self.data.size(),
             shift: self.shift,
             bit_depth: self.bit_depth,
@@ -237,6 +237,7 @@ impl ModularBufferInfo {
         };
         self.grid_shape.0 * grid_pos.1 + grid_pos.0
     }
+
     fn get_grid_rect(
         &self,
         frame_header: &FrameHeader,
@@ -312,7 +313,7 @@ impl FullModularImage {
             let shift = (frame_header.hshift(c), frame_header.vshift(c));
             let size = frame_header.size();
             channels.push(ChannelInfo {
-                output_channel_idx: c as isize,
+                output_channel_idx: Some(c),
                 size: (size.0.div_ceil(1 << shift.0), size.1.div_ceil(1 << shift.1)),
                 shift: Some(shift),
                 bit_depth: image_metadata.bit_depth,
@@ -332,7 +333,7 @@ impl FullModularImage {
                 size.1.div_ceil(*ecups as usize),
             );
             channels.push(ChannelInfo {
-                output_channel_idx: 3 + idx as isize,
+                output_channel_idx: Some(3 + idx),
                 size,
                 shift: Some((shift, shift)),
                 bit_depth: image_metadata.bit_depth,
@@ -541,8 +542,7 @@ impl FullModularImage {
         pass_to_pipeline: &mut dyn FnMut(usize, usize, Image<i32>) -> Result<()>,
     ) -> Result<()> {
         let mut maybe_output = |bi: &mut ModularBufferInfo, grid: usize| -> Result<()> {
-            if bi.info.output_channel_idx >= 0 {
-                let chan = bi.info.output_channel_idx as usize;
+            if let Some(chan) = bi.info.output_channel_idx {
                 debug!("Rendering channel {chan:?}, grid position {grid}");
                 let buf = bi.buffer_grid[grid].get_buffer()?;
                 // TODO(veluca): figure out what to do with passes here.
