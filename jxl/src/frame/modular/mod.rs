@@ -5,7 +5,9 @@
 
 use std::{
     cmp::min,
+    collections::BTreeSet,
     fmt::Debug,
+    ops::Range,
     sync::atomic::{AtomicUsize, Ordering},
 };
 
@@ -18,8 +20,10 @@ use crate::{
         quantizer::{self, LfQuantFactors, QuantizerParams},
     },
     headers::{
-        ImageMetadata, JxlHeader, bit_depth::BitDepth, frame_header::FrameHeader,
-        modular::GroupHeader,
+        ImageMetadata, JxlHeader,
+        bit_depth::BitDepth,
+        frame_header::FrameHeader,
+        modular::{GroupHeader, TransformId},
     },
     image::{Image, Rect},
     util::{AtomicRefCell, CeilLog2, tracing_wrappers::*},
@@ -332,9 +336,20 @@ pub struct FullModularImage {
     // In order, LfGlobal, LfGroup, HfGroup(pass 0), ..., HfGroup(last pass).
     section_buffer_indices: Vec<Vec<usize>>,
     modular_color_channels: usize,
+    can_do_partial_render: bool,
+    buffers_for_channels: Vec<usize>,
+    // Buffers to _start rendering from_ on the next call to process_output.
+    // This is initially set to LF global and LF buffers, and populated with HF buffers
+    // just before we start decoding them.
+    ready_buffers: BTreeSet<(usize, usize)>,
 }
 
 impl FullModularImage {
+    pub fn can_do_partial_render(&self) -> bool {
+        // XXX: FIX
+        self.can_do_partial_render && false
+    }
+
     #[instrument(level = "debug", skip_all)]
     pub fn read(
         frame_header: &FrameHeader,
@@ -386,11 +401,19 @@ impl FullModularImage {
                 transform_steps: vec![],
                 section_buffer_indices: vec![vec![]; 2 + frame_header.passes.num_passes as usize],
                 modular_color_channels,
+                can_do_partial_render: true,
+                buffers_for_channels: vec![],
+                ready_buffers: BTreeSet::new(),
             });
         }
 
         trace!("reading modular header");
         let header = GroupHeader::read(br)?;
+
+        let has_palette_transform = header
+            .transforms
+            .iter()
+            .any(|x| x.id == TransformId::Palette);
 
         let (mut buffer_info, transform_steps) =
             transforms::apply::meta_apply_transforms(&channels, &header)?;
@@ -512,6 +535,17 @@ impl FullModularImage {
             trace!("Transform {i}: {ts:?}");
         }
 
+        let mut buffers_for_channels = vec![];
+
+        for (i, c) in buffer_info.iter().enumerate() {
+            if let Some(c) = c.info.output_channel_idx {
+                if buffers_for_channels.len() <= c {
+                    buffers_for_channels.resize(c + 1, 0);
+                }
+                buffers_for_channels[c] = i;
+            }
+        }
+
         with_buffers(&buffer_info, &section_buffer_indices[0], 0, |bufs| {
             decode_modular_subbitstream(
                 bufs,
@@ -522,11 +556,19 @@ impl FullModularImage {
             )
         })?;
 
+        let mut ready_buffers = BTreeSet::new();
+        for b in section_buffer_indices[0].iter() {
+            ready_buffers.insert((*b, 0));
+        }
+
         Ok(FullModularImage {
             buffer_info,
             transform_steps,
             section_buffer_indices,
             modular_color_channels,
+            can_do_partial_render: !has_palette_transform,
+            buffers_for_channels,
+            ready_buffers,
         })
     }
 
@@ -567,49 +609,54 @@ impl FullModularImage {
                 )
             },
         )?;
+
+        for b in self.section_buffer_indices[section_id].iter() {
+            self.ready_buffers.insert((*b, grid));
+        }
+
+        Ok(())
+    }
+
+    fn maybe_output(
+        &self,
+        buf: usize,
+        grid: usize,
+        pass_to_pipeline: &mut dyn FnMut(usize, usize, bool, Image<i32>) -> Result<()>,
+    ) -> Result<()> {
+        if let Some(chan) = self.buffer_info[buf].info.output_channel_idx {
+            debug!("Rendering channel {chan:?}, grid position {grid}");
+            let buf = self.buffer_info[buf].buffer_grid[grid].get_buffer()?;
+            if chan == 0 && self.modular_color_channels == 1 {
+                for i in 0..2 {
+                    pass_to_pipeline(i, grid, true, buf.data.try_clone()?)?;
+                }
+                pass_to_pipeline(2, grid, true, buf.data)?;
+            } else {
+                pass_to_pipeline(chan, grid, true, buf.data)?;
+            }
+        }
         Ok(())
     }
 
     pub fn process_output(
         &mut self,
-        section_ids: &[usize],
-        grid: usize,
         frame_header: &FrameHeader,
-        pass_to_pipeline: &mut dyn FnMut(usize, usize, Image<i32>) -> Result<()>,
+        pass_to_pipeline: &mut dyn FnMut(usize, usize, bool, Image<i32>) -> Result<()>,
     ) -> Result<()> {
-        let mut maybe_output = |bi: &ModularBufferInfo, grid: usize| -> Result<()> {
-            if let Some(chan) = bi.info.output_channel_idx {
-                debug!("Rendering channel {chan:?}, grid position {grid}");
-                let buf = bi.buffer_grid[grid].get_buffer()?;
-                // TODO(veluca): figure out what to do with passes here.
-                if chan == 0 && self.modular_color_channels == 1 {
-                    for i in 0..2 {
-                        pass_to_pipeline(i, grid, buf.data.try_clone()?)?;
-                    }
-                    pass_to_pipeline(2, grid, buf.data)?;
-                } else {
-                    pass_to_pipeline(chan, grid, buf.data)?;
-                }
-            }
-            Ok(())
-        };
-
         let mut new_ready_transform_chunks = vec![];
-        for section_id in section_ids {
-            for buf in self.section_buffer_indices[*section_id].iter().copied() {
-                maybe_output(&self.buffer_info[buf], grid)?;
-                let new_chunks = self.buffer_info[buf].buffer_grid[grid]
-                    .used_by_transforms_weak
-                    .iter()
-                    .chain(
-                        self.buffer_info[buf].buffer_grid[grid]
-                            .used_by_transforms_strong
-                            .iter(),
-                    )
-                    .cloned();
-                trace!("Buffer {buf} grid position {grid} used by chunks {new_chunks:?}");
-                new_ready_transform_chunks.extend(new_chunks);
-            }
+        for (buf, grid) in std::mem::take(&mut self.ready_buffers) {
+            self.maybe_output(buf, grid, pass_to_pipeline)?;
+            let new_chunks = self.buffer_info[buf].buffer_grid[grid]
+                .used_by_transforms_weak
+                .iter()
+                .chain(
+                    self.buffer_info[buf].buffer_grid[grid]
+                        .used_by_transforms_strong
+                        .iter(),
+                )
+                .cloned();
+            trace!("Buffer {buf} grid position {grid} used by chunks {new_chunks:?}");
+            new_ready_transform_chunks.extend(new_chunks);
         }
 
         trace!(?new_ready_transform_chunks);
@@ -618,7 +665,7 @@ impl FullModularImage {
             trace!("tfm = {tfm} chunk = {:?}", self.transform_steps[tfm]);
             if self.transform_steps[tfm].dep_ready(frame_header, &self.buffer_info)? {
                 self.transform_steps[tfm].try_for_each_output(&self.buffer_info, |new_buf, new_grid| {
-                    maybe_output(&self.buffer_info[new_buf], new_grid)?;
+                    self.maybe_output(new_buf, new_grid, pass_to_pipeline)?;
                     let new_chunks = self.buffer_info[new_buf].buffer_grid[new_grid]
                         .used_by_transforms_weak
                         .iter()
@@ -636,6 +683,27 @@ impl FullModularImage {
         }
 
         Ok(())
+    }
+
+    pub fn channel_range(&self) -> Range<usize> {
+        if self.modular_color_channels != 0 {
+            0..self.buffers_for_channels.len()
+        } else {
+            // VarDCT image.
+            3..self.buffers_for_channels.len()
+        }
+    }
+
+    pub fn flush_output(
+        &mut self,
+        group: usize,
+        chan: usize,
+        pass_to_pipeline: &mut dyn FnMut(usize, usize, bool, Image<i32>) -> Result<()>,
+    ) -> Result<()> {
+        if !self.can_do_partial_render() {
+            return Ok(());
+        }
+        self.maybe_output(self.buffers_for_channels[chan], group, pass_to_pipeline)
     }
 }
 

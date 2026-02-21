@@ -165,6 +165,12 @@ pub struct HfMetadata {
     used_hf_types: u32,
 }
 
+#[derive(PartialEq, Eq, PartialOrd, Ord)]
+pub enum RenderUnit {
+    VarDCT,
+    Modular(usize),
+}
+
 pub struct Frame {
     header: FrameHeader,
     toc: Toc,
@@ -183,13 +189,15 @@ pub struct Frame {
     render_pipeline: Option<Box<crate::render::LowMemoryRenderPipeline>>,
     reference_frame_data: Option<Vec<Image<f32>>>,
     lf_frame_data: Option<[Image<f32>; 3]>,
-    lf_global_was_rendered: bool,
+    was_flushed_once: bool,
     /// Reusable buffers for VarDCT group decoding.
     vardct_buffers: Option<group::VarDctBuffers>,
     // Last pass rendered so far for each HF group.
     last_rendered_pass: Vec<Option<usize>>,
     // Groups that should be rendered on the next call to flush().
     groups_to_flush: BTreeSet<usize>,
+    changed_since_last_flush: BTreeSet<(usize, RenderUnit)>,
+    incomplete_groups: usize,
 }
 
 impl Frame {

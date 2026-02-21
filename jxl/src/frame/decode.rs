@@ -22,7 +22,7 @@ use crate::headers::frame_header::FrameType;
 #[cfg(test)]
 use crate::render::SimpleRenderPipeline;
 use crate::render::buffer_splitter::BufferSplitter;
-use crate::util::{ShiftRightCeil, SmallVec, mirror};
+use crate::util::{ShiftRightCeil, mirror};
 use crate::{
     GROUP_DIM,
     bit_reader::BitReader,
@@ -237,6 +237,7 @@ impl Frame {
             #[cfg(test)]
             use_simple_pipeline: decoder_state.use_simple_pipeline,
             last_rendered_pass: vec![None; frame_header.num_groups()],
+            incomplete_groups: frame_header.num_groups(),
             header: frame_header,
             color_channels,
             toc,
@@ -249,24 +250,22 @@ impl Frame {
             render_pipeline: None,
             reference_frame_data,
             lf_frame_data,
-            lf_global_was_rendered: false,
+            was_flushed_once: false,
             vardct_buffers: None,
             groups_to_flush: BTreeSet::new(),
+            changed_since_last_flush: BTreeSet::new(),
         })
     }
 
     pub fn allow_rendering_before_last_pass(&self) -> bool {
-        // TODO(veluca): consider figuring out how to be more permissive here.
-        if self.header.has_patches() {
+        if self
+            .lf_global
+            .as_ref()
+            .is_none_or(|x| !x.modular_global.can_do_partial_render())
+        {
             return false;
         }
-        // TODO(veluca): implement logic to handle these cases.
-        if self.header.num_extra_channels != 0 {
-            return false;
-        }
-        if self.header.encoding == Encoding::Modular {
-            return false;
-        }
+
         if self.header.frame_type != FrameType::RegularFrame {
             return false;
         }
@@ -616,18 +615,22 @@ impl Frame {
         buffer_splitter: &mut BufferSplitter,
         force_render: bool,
     ) -> Result<bool> {
-        let last_pass_in_file = self.header.passes.num_passes as usize - 1;
-
         if passes.is_empty() {
             assert!(force_render);
-            assert_ne!(self.last_rendered_pass[group], Some(last_pass_in_file));
         }
+
+        let last_pass_in_file = self.header.passes.num_passes as usize - 1;
+        let was_complete = self.last_rendered_pass[group].is_some_and(|p| p >= last_pass_in_file);
 
         if let Some((p, _)) = passes.last() {
             self.last_rendered_pass[group] = Some(*p);
         };
         let pass_to_render = self.last_rendered_pass[group];
         let complete = pass_to_render.is_some_and(|p| p >= last_pass_in_file);
+
+        if complete && !was_complete {
+            self.incomplete_groups = self.incomplete_groups.checked_sub(1).unwrap();
+        }
 
         // Render if we are decoding the last pass, or if we are requesting an eager render and
         // we can handle this case of eager renders.
@@ -709,20 +712,6 @@ impl Frame {
                 br,
             )?;
         }
-        let sections: SmallVec<_, 4> = passes.iter().map(|x| x.0 + 2).collect();
-        lf_global.modular_global.process_output(
-            &sections,
-            group,
-            &self.header,
-            &mut |chan, group, image| {
-                pipeline!(
-                    self,
-                    p,
-                    p.set_buffer_for_group(chan, group, true, image, buffer_splitter)?
-                );
-                Ok(())
-            },
-        )?;
         Ok(do_render)
     }
 }
