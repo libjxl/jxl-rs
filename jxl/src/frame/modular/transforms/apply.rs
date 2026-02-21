@@ -3,7 +3,10 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-use std::fmt::Debug;
+use std::{
+    fmt::Debug,
+    sync::atomic::{AtomicUsize, Ordering},
+};
 
 use num_traits::FromPrimitive;
 
@@ -62,34 +65,35 @@ pub struct TransformStepChunk {
     // transforms with position (x, y) with x > 0).
     pub(super) grid_pos: (usize, usize),
     // Number of inputs that are not yet available.
-    pub(super) incomplete_deps: usize,
+    pub(super) waiting_deps: AtomicUsize,
 }
 
 impl TransformStepChunk {
-    // Marks that one dependency of this transform is ready, and potentially runs the transform,
-    // returning the new buffers that are now ready.
-    #[instrument(level = "trace", skip_all)]
-    pub fn dep_ready(
-        &mut self,
-        frame_header: &FrameHeader,
-        buffers: &mut [ModularBufferInfo],
-    ) -> Result<Vec<(usize, usize)>> {
-        self.incomplete_deps = self.incomplete_deps.checked_sub(1).unwrap();
-        if self.incomplete_deps > 0 {
-            trace!(
-                "skipping transform chunk because incomplete_deps = {}",
-                self.incomplete_deps
-            );
-            return Ok(vec![]);
-        }
-        let buf_out: &[usize] = match &self.step {
+    fn buf_out(&self) -> &[usize] {
+        match &self.step {
             TransformStep::Rct { buf_out, .. } => buf_out,
             TransformStep::Palette { buf_out, .. } => buf_out,
             TransformStep::HSqueeze { buf_out, .. } | TransformStep::VSqueeze { buf_out, .. } => {
-                &[*buf_out]
+                std::slice::from_ref(buf_out)
             }
-        };
+        }
+    }
 
+    // Marks that one dependency of this transform is ready, and potentially runs the transform.
+    // Returns whether the transform was run.
+    #[instrument(level = "trace", skip_all)]
+    pub fn dep_ready(
+        &self,
+        frame_header: &FrameHeader,
+        buffers: &[ModularBufferInfo],
+    ) -> Result<bool> {
+        let previous_deps = self.waiting_deps.fetch_sub(1, Ordering::Relaxed);
+        assert_ne!(previous_deps, 0);
+        if previous_deps != 1 {
+            return Ok(false);
+        }
+
+        let buf_out = self.buf_out();
         let out_grid_kind = buffers[buf_out[0]].grid_kind;
         let out_grid = buffers[buf_out[0]].get_grid_idx(out_grid_kind, self.grid_pos);
         let out_size = buffers[buf_out[0]].info.size;
@@ -118,7 +122,6 @@ impl TransformStepChunk {
                     super::rct::do_rct_step(&mut bufs, *op, *perm);
                     Ok(())
                 })?;
-                Ok(buf_out.iter().map(|x| (*x, out_grid)).collect())
             }
             TransformStep::Palette {
                 buf_in,
@@ -130,7 +133,6 @@ impl TransformStepChunk {
                 buffers[*buf_in].buffer_grid[out_grid].mark_used();
                 buffers[*buf_pal].buffer_grid[0].mark_used();
                 with_buffers(buffers, buf_out, out_grid, |_| Ok(()))?;
-                Ok(buf_out.iter().map(|x| (*x, out_grid)).collect())
             }
             TransformStep::Palette {
                 buf_in,
@@ -193,7 +195,6 @@ impl TransformStepChunk {
                 }
                 buffers[*buf_in].buffer_grid[out_grid].mark_used();
                 buffers[*buf_pal].buffer_grid[0].mark_used();
-                Ok(buf_out.iter().map(|x| (*x, out_grid)).collect())
             }
             TransformStep::Palette {
                 buf_in,
@@ -206,7 +207,6 @@ impl TransformStepChunk {
             } => {
                 assert_eq!(out_grid_kind, buffers[*buf_in].grid_kind);
                 assert_eq!(out_size, buffers[*buf_in].info.size);
-                let mut generated_chunks = Vec::<(usize, usize)>::new();
                 let grid_shape = buffers[buf_out[0]].grid_shape;
                 {
                     assert_eq!(out_grid % grid_shape.0, 0);
@@ -259,11 +259,7 @@ impl TransformStepChunk {
                 buffers[*buf_pal].buffer_grid[0].mark_used();
                 for grid_x in 0..grid_shape.0 {
                     buffers[*buf_in].buffer_grid[out_grid + grid_x].mark_used();
-                    for buf in buf_out {
-                        generated_chunks.push((*buf, out_grid + grid_x));
-                    }
                 }
-                Ok(generated_chunks)
             }
             TransformStep::HSqueeze { buf_in, buf_out } => {
                 let buf_avg = &buffers[buf_in[0]];
@@ -330,7 +326,6 @@ impl TransformStepChunk {
                 }
                 buffers[buf_in[0]].buffer_grid[in_grid].mark_used();
                 buffers[buf_in[1]].buffer_grid[res_grid].mark_used();
-                Ok(vec![(*buf_out, out_grid)])
             }
             TransformStep::VSqueeze { buf_in, buf_out } => {
                 let buf_avg = &buffers[buf_in[0]];
@@ -392,9 +387,46 @@ impl TransformStepChunk {
                 }
                 buffers[buf_in[0]].buffer_grid[in_grid].mark_used();
                 buffers[buf_in[1]].buffer_grid[res_grid].mark_used();
-                Ok(vec![(*buf_out, out_grid)])
             }
-        }
+        };
+        Ok(true)
+    }
+
+    // Iterates over the list of outputs for this transform.
+    pub fn try_for_each_output(
+        &self,
+        buffers: &[ModularBufferInfo],
+        mut f: impl FnMut(usize, usize) -> Result<()>,
+    ) -> Result<()> {
+        let buf_out = self.buf_out();
+        let out_grid_kind = buffers[buf_out[0]].grid_kind;
+        let out_grid = buffers[buf_out[0]].get_grid_idx(out_grid_kind, self.grid_pos);
+
+        match &self.step {
+            TransformStep::Rct { buf_out, .. } => {
+                buf_out.iter().try_for_each(|x| f(*x, out_grid))?
+            }
+            TransformStep::HSqueeze { buf_out, .. } | TransformStep::VSqueeze { buf_out, .. } => {
+                f(*buf_out, out_grid)?
+            }
+            TransformStep::Palette {
+                buf_in,
+                buf_out,
+                predictor,
+                ..
+            } if buffers[*buf_in].info.size.0 == 0 || !predictor.requires_full_row() => {
+                buf_out.iter().try_for_each(|x| f(*x, out_grid))?
+            }
+            TransformStep::Palette { buf_out, .. } => {
+                let grid_shape = buffers[buf_out[0]].grid_shape;
+                for grid_x in 0..grid_shape.0 {
+                    for buf in buf_out {
+                        f(*buf, out_grid + grid_x)?;
+                    }
+                }
+            }
+        };
+        Ok(())
     }
 }
 

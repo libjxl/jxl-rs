@@ -616,21 +616,22 @@ impl FullModularImage {
 
         while let Some(tfm) = new_ready_transform_chunks.pop() {
             trace!("tfm = {tfm} chunk = {:?}", self.transform_steps[tfm]);
-            for (new_buf, new_grid) in
-                self.transform_steps[tfm].dep_ready(frame_header, &mut self.buffer_info)?
-            {
-                maybe_output(&self.buffer_info[new_buf], new_grid)?;
-                let new_chunks = self.buffer_info[new_buf].buffer_grid[new_grid]
-                    .used_by_transforms_weak
-                    .iter()
-                    .chain(
-                        self.buffer_info[new_buf].buffer_grid[new_grid]
-                            .used_by_transforms_strong
-                            .iter(),
-                    )
-                    .cloned();
-                trace!("Buffer {new_buf} grid position {new_grid} used by chunks {new_chunks:?}");
-                new_ready_transform_chunks.extend(new_chunks);
+            if self.transform_steps[tfm].dep_ready(frame_header, &self.buffer_info)? {
+                self.transform_steps[tfm].try_for_each_output(&self.buffer_info, |new_buf, new_grid| {
+                    maybe_output(&self.buffer_info[new_buf], new_grid)?;
+                    let new_chunks = self.buffer_info[new_buf].buffer_grid[new_grid]
+                        .used_by_transforms_weak
+                        .iter()
+                        .chain(
+                            self.buffer_info[new_buf].buffer_grid[new_grid]
+                                .used_by_transforms_strong
+                                .iter(),
+                        )
+                        .cloned();
+                    trace!("Buffer {new_buf} grid position {new_grid} used by chunks {new_chunks:?}");
+                    new_ready_transform_chunks.extend(new_chunks);
+                    Ok(())
+                })?
             }
         }
 

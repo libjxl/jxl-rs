@@ -139,7 +139,7 @@ pub fn make_grids(
             grid_transform_steps.push(TransformStepChunk {
                 step: transform.clone(),
                 grid_pos: (grid_pos.0 as usize, grid_pos.1 as usize),
-                incomplete_deps: 0,
+                waiting_deps: AtomicUsize::new(0),
             });
             ts
         };
@@ -169,7 +169,9 @@ pub fn make_grids(
             && !grid.used_by_transforms_strong.contains(&ts)
         {
             grid.remaining_uses.fetch_add(1, Ordering::Relaxed);
-            grid_transform_steps[ts].incomplete_deps += 1;
+            grid_transform_steps[ts]
+                .waiting_deps
+                .fetch_add(1, Ordering::Relaxed);
             if is_weak {
                 grid.used_by_transforms_weak.push(ts);
             } else {
