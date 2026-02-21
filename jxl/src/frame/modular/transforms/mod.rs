@@ -10,6 +10,7 @@ use apply::TransformStep;
 pub use apply::TransformStepChunk;
 use num_derive::FromPrimitive;
 
+use crate::frame::modular::BUFFER_STATUS_NOT_RENDERED;
 use crate::frame::modular::ModularBuffer;
 use crate::headers::frame_header::FrameHeader;
 use crate::util::AtomicRefCell;
@@ -125,6 +126,7 @@ pub fn make_grids(
                 size: g
                     .get_grid_rect(frame_header, g.grid_kind, (x as usize, y as usize))
                     .size,
+                status: AtomicUsize::new(BUFFER_STATUS_NOT_RENDERED),
             })
             .collect();
     }
@@ -139,7 +141,8 @@ pub fn make_grids(
             grid_transform_steps.push(TransformStepChunk {
                 step: transform.clone(),
                 grid_pos: (grid_pos.0 as usize, grid_pos.1 as usize),
-                waiting_deps: AtomicUsize::new(0),
+                deps: vec![],
+                layer: 0,
             });
             ts
         };
@@ -170,8 +173,8 @@ pub fn make_grids(
         {
             grid.remaining_uses.fetch_add(1, Ordering::Relaxed);
             grid_transform_steps[ts]
-                .waiting_deps
-                .fetch_add(1, Ordering::Relaxed);
+                .deps
+                .push((input_buffer_idx, input_grid_pos));
             if is_weak {
                 grid.used_by_transforms_weak.push(ts);
             } else {
@@ -397,6 +400,46 @@ pub fn make_grids(
                 }
             }
         }
+    }
+
+    // Compute the layer of each transform step.
+    // TODO(veluca): for parallelization purposes, it might make sense to try to ensure that
+    // transforms in the same layer are as similar in runtime as possible.
+    let mut transforms_needed_by = vec![vec![]; grid_transform_steps.len()];
+    let mut enabled_transforms = vec![vec![]; grid_transform_steps.len()];
+    for (i, s) in grid_transform_steps.iter().enumerate() {
+        for (b, g) in s.outputs(&buffer_info) {
+            for (t, _) in buffer_info[b].buffer_grid[g].users(true) {
+                transforms_needed_by[t].push(i);
+                enabled_transforms[i].push(t);
+            }
+        }
+    }
+
+    let mut missing_prerequisites: Vec<_> = transforms_needed_by.iter().map(|x| x.len()).collect();
+
+    let mut stack = vec![];
+    for (i, m) in missing_prerequisites.iter().enumerate() {
+        if *m == 0 {
+            stack.push(i);
+        }
+    }
+
+    while let Some(i) = stack.pop() {
+        assert_eq!(missing_prerequisites[i], 0);
+        for e in enabled_transforms[i].iter() {
+            missing_prerequisites[*e] = missing_prerequisites[*e].checked_sub(1).unwrap();
+            if missing_prerequisites[*e] == 0 {
+                stack.push(*e);
+            }
+        }
+
+        grid_transform_steps[i].layer = transforms_needed_by[i]
+            .iter()
+            .map(|x| grid_transform_steps[*x].layer)
+            .max()
+            .unwrap_or(0)
+            + 1;
     }
 
     trace!(?grid_transform_steps, ?buffer_info);

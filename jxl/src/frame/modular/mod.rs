@@ -5,7 +5,7 @@
 
 use std::{
     cmp::min,
-    collections::BTreeSet,
+    collections::{BTreeMap, BTreeSet},
     fmt::Debug,
     ops::Range,
     sync::atomic::{AtomicUsize, Ordering},
@@ -17,6 +17,7 @@ use crate::{
     frame::{
         ColorCorrelationParams, HfMetadata,
         block_context_map::BlockContextMap,
+        modular::transforms::apply::RunKind,
         quantizer::{self, LfQuantFactors, QuantizerParams},
     },
     headers::{
@@ -178,6 +179,10 @@ impl ModularChannel {
     }
 }
 
+const BUFFER_STATUS_NOT_RENDERED: usize = 0;
+const BUFFER_STATUS_PARTIAL_RENDER: usize = 1;
+const BUFFER_STATUS_FINAL_RENDER: usize = 2;
+
 // Note: this type uses interior mutability to get mutable references to multiple buffers at once.
 // In principle, this is not needed, but the overhead should be minimal so using `unsafe` here is
 // probably not worth it.
@@ -193,12 +198,37 @@ struct ModularBuffer {
     used_by_transforms_strong: Vec<usize>,
     used_by_transforms_weak: Vec<usize>,
     size: (usize, usize),
+    status: AtomicUsize,
 }
 
 impl ModularBuffer {
+    fn get_status(&self) -> usize {
+        self.status.load(Ordering::Relaxed)
+    }
+
+    fn set_status(&self, val: usize) {
+        self.status.store(val, Ordering::Relaxed);
+    }
+
+    // Iterator over (transform_id, is_strong_use)
+    fn users(&self, include_weak: bool) -> impl Iterator<Item = (usize, bool)> {
+        let strong = self.used_by_transforms_strong.iter().map(|x| (*x, true));
+        let weak = if include_weak {
+            &self.used_by_transforms_weak[..]
+        } else {
+            &[]
+        }
+        .iter()
+        .map(|x| (*x, false));
+        strong.chain(weak)
+    }
+
     // Gives out a copy of the buffer + auxiliary buffer, marking the buffer as used.
     // If this was the last usage of the buffer, does not actually copy the buffer.
-    fn get_buffer(&self) -> Result<ModularChannel> {
+    fn get_buffer(&self, can_consume: bool) -> Result<ModularChannel> {
+        if !can_consume {
+            return ModularChannel::try_clone(self.data.borrow().as_ref().unwrap());
+        }
         let mut ret = None;
         let mut remaining_pre = self.remaining_uses.load(Ordering::Acquire);
         loop {
@@ -232,7 +262,10 @@ impl ModularBuffer {
         Ok(ret.unwrap())
     }
 
-    fn mark_used(&self) {
+    fn mark_used(&self, can_consume: bool) {
+        if !can_consume {
+            return;
+        }
         let _ = self.remaining_uses.fetch_update(
             Ordering::Relaxed,
             Ordering::Acquire,
@@ -558,6 +591,7 @@ impl FullModularImage {
 
         let mut ready_buffers = BTreeSet::new();
         for b in section_buffer_indices[0].iter() {
+            buffer_info[*b].buffer_grid[0].set_status(BUFFER_STATUS_FINAL_RENDER);
             ready_buffers.insert((*b, 0));
         }
 
@@ -611,6 +645,7 @@ impl FullModularImage {
         )?;
 
         for b in self.section_buffer_indices[section_id].iter() {
+            self.buffer_info[*b].buffer_grid[grid].set_status(BUFFER_STATUS_FINAL_RENDER);
             self.ready_buffers.insert((*b, grid));
         }
 
@@ -625,14 +660,19 @@ impl FullModularImage {
     ) -> Result<()> {
         if let Some(chan) = self.buffer_info[buf].info.output_channel_idx {
             debug!("Rendering channel {chan:?}, grid position {grid}");
-            let buf = self.buffer_info[buf].buffer_grid[grid].get_buffer()?;
+            let is_final =
+                self.buffer_info[buf].buffer_grid[grid].get_status() == BUFFER_STATUS_FINAL_RENDER;
+            let all_final = self.buffers_for_channels.iter().all(|x| {
+                self.buffer_info[*x].buffer_grid[grid].get_status() == BUFFER_STATUS_FINAL_RENDER
+            });
+            let buf = self.buffer_info[buf].buffer_grid[grid].get_buffer(all_final)?;
             if chan == 0 && self.modular_color_channels == 1 {
                 for i in 0..2 {
-                    pass_to_pipeline(i, grid, true, buf.data.try_clone()?)?;
+                    pass_to_pipeline(i, grid, is_final, buf.data.try_clone()?)?;
                 }
-                pass_to_pipeline(2, grid, true, buf.data)?;
+                pass_to_pipeline(2, grid, is_final, buf.data)?;
             } else {
-                pass_to_pipeline(chan, grid, true, buf.data)?;
+                pass_to_pipeline(chan, grid, is_final, buf.data)?;
             }
         }
         Ok(())
@@ -643,43 +683,59 @@ impl FullModularImage {
         frame_header: &FrameHeader,
         pass_to_pipeline: &mut dyn FnMut(usize, usize, bool, Image<i32>) -> Result<()>,
     ) -> Result<()> {
-        let mut new_ready_transform_chunks = vec![];
+        // layer -> (transform -> is_strong)
+        let mut to_process_by_layer = BTreeMap::<usize, BTreeMap<usize, bool>>::new();
+        let mut buffers_to_output = vec![];
+
         for (buf, grid) in std::mem::take(&mut self.ready_buffers) {
-            self.maybe_output(buf, grid, pass_to_pipeline)?;
-            let new_chunks = self.buffer_info[buf].buffer_grid[grid]
-                .used_by_transforms_weak
-                .iter()
-                .chain(
-                    self.buffer_info[buf].buffer_grid[grid]
-                        .used_by_transforms_strong
-                        .iter(),
-                )
-                .cloned();
-            trace!("Buffer {buf} grid position {grid} used by chunks {new_chunks:?}");
-            new_ready_transform_chunks.extend(new_chunks);
+            if self.buffer_info[buf].info.output_channel_idx.is_some() {
+                buffers_to_output.push((buf, grid));
+            }
+            for (t, is_strong_dep) in self.buffer_info[buf].buffer_grid[grid].users(true) {
+                let layer = self.transform_steps[t].layer;
+                let layer = to_process_by_layer.entry(layer).or_default();
+                let is_strong = layer.entry(t).or_default();
+                *is_strong = *is_strong | is_strong_dep;
+            }
         }
 
-        trace!(?new_ready_transform_chunks);
-
-        while let Some(tfm) = new_ready_transform_chunks.pop() {
-            trace!("tfm = {tfm} chunk = {:?}", self.transform_steps[tfm]);
-            if self.transform_steps[tfm].dep_ready(frame_header, &self.buffer_info)? {
-                self.transform_steps[tfm].try_for_each_output(&self.buffer_info, |new_buf, new_grid| {
-                    self.maybe_output(new_buf, new_grid, pass_to_pipeline)?;
-                    let new_chunks = self.buffer_info[new_buf].buffer_grid[new_grid]
-                        .used_by_transforms_weak
-                        .iter()
-                        .chain(
-                            self.buffer_info[new_buf].buffer_grid[new_grid]
-                                .used_by_transforms_strong
-                                .iter(),
-                        )
-                        .cloned();
-                    trace!("Buffer {new_buf} grid position {new_grid} used by chunks {new_chunks:?}");
-                    new_ready_transform_chunks.extend(new_chunks);
-                    Ok(())
-                })?
+        let mut new_dirty_transforms = vec![];
+        while let Some((_, transforms)) = to_process_by_layer.pop_first() {
+            trace!("{transforms:?}");
+            for (t, is_strong) in transforms {
+                trace!("{:?}", self.transform_steps[t]);
+                let run_kind = self.transform_steps[t].try_run(frame_header, &self.buffer_info)?;
+                if run_kind == RunKind::NoRun {
+                    continue;
+                }
+                // If this was the first _or_ the last render, trigger a re-render across weak edges
+                // even if the render was caused by a weak edge.
+                // This is necessary to finish drawing those renders correctly.
+                let is_strong = is_strong
+                    || (run_kind == RunKind::FirstRender || run_kind == RunKind::LastRender);
+                for (buf, grid) in self.transform_steps[t].outputs(&self.buffer_info) {
+                    if self.buffer_info[buf].info.output_channel_idx.is_some() {
+                        buffers_to_output.push((buf, grid));
+                    }
+                    for (t, is_strong_dep) in
+                        self.buffer_info[buf].buffer_grid[grid].users(is_strong)
+                    {
+                        new_dirty_transforms.push((t, is_strong_dep));
+                    }
+                }
             }
+
+            for (t, is_strong_dep) in new_dirty_transforms.drain(..) {
+                let layer = self.transform_steps[t].layer;
+                let layer = to_process_by_layer.entry(layer).or_default();
+                let is_strong = layer.entry(t).or_default();
+                *is_strong = *is_strong | is_strong_dep;
+            }
+        }
+
+        // Pass all the output buffers to the render pipeline.
+        for (buf, grid) in buffers_to_output {
+            self.maybe_output(buf, grid, pass_to_pipeline)?;
         }
 
         Ok(())
