@@ -3,7 +3,11 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-use std::{cmp::min, fmt::Debug};
+use std::{
+    cmp::min,
+    fmt::Debug,
+    sync::atomic::{AtomicUsize, Ordering},
+};
 
 use crate::{
     bit_reader::BitReader,
@@ -177,34 +181,65 @@ impl ModularChannel {
 struct ModularBuffer {
     data: AtomicRefCell<Option<ModularChannel>>,
     // Number of times this buffer will be used, *including* when it is used for output.
-    remaining_uses: usize,
-    used_by_transforms: Vec<usize>,
+    remaining_uses: AtomicUsize,
+    // Transform steps that "strongly" or "weakly" use the image data in this buffer.
+    // A "strong" usage always triggers a re-render if the image data changes.
+    // A "weak" usage only triggers a re-render if the buffer is final, or if the
+    // current re-render was not only caused by weak re-renders.
+    used_by_transforms_strong: Vec<usize>,
+    used_by_transforms_weak: Vec<usize>,
     size: (usize, usize),
 }
 
 impl ModularBuffer {
     // Gives out a copy of the buffer + auxiliary buffer, marking the buffer as used.
     // If this was the last usage of the buffer, does not actually copy the buffer.
-    fn get_buffer(&mut self) -> Result<ModularChannel> {
-        self.remaining_uses = self.remaining_uses.checked_sub(1).unwrap();
-        if self.remaining_uses == 0 {
-            Ok(self.data.borrow_mut().take().unwrap())
-        } else {
-            Ok(self
-                .data
-                .borrow()
-                .as_ref()
-                .map(ModularChannel::try_clone)
-                .transpose()?
-                .unwrap())
+    fn get_buffer(&self) -> Result<ModularChannel> {
+        let mut ret = None;
+        let mut remaining_pre = self.remaining_uses.load(Ordering::Acquire);
+        loop {
+            let remaining = remaining_pre.checked_sub(1).unwrap();
+            if ret.is_none() {
+                if remaining == 0 {
+                    ret = Some(self.data.borrow_mut().take().unwrap())
+                } else {
+                    ret = Some(
+                        self.data
+                            .borrow()
+                            .as_ref()
+                            .map(ModularChannel::try_clone)
+                            .transpose()?
+                            .unwrap(),
+                    );
+                }
+            } else if remaining == 0 {
+                *self.data.borrow_mut() = None;
+            }
+            match self.remaining_uses.compare_exchange_weak(
+                remaining_pre,
+                remaining,
+                Ordering::Release,
+                Ordering::Acquire,
+            ) {
+                Ok(_) => break,
+                Err(e) => remaining_pre = e,
+            }
         }
+        Ok(ret.unwrap())
     }
 
-    fn mark_used(&mut self) {
-        self.remaining_uses = self.remaining_uses.checked_sub(1).unwrap();
-        if self.remaining_uses == 0 {
-            *self.data.borrow_mut() = None;
-        }
+    fn mark_used(&self) {
+        let _ = self.remaining_uses.fetch_update(
+            Ordering::Relaxed,
+            Ordering::Acquire,
+            |remaining_pre: usize| {
+                let remaining = remaining_pre.checked_sub(1).unwrap();
+                if remaining == 0 {
+                    *self.data.borrow_mut() = None;
+                }
+                Some(remaining)
+            },
+        );
     }
 }
 
@@ -461,12 +496,13 @@ impl FullModularImage {
             );
             for (pos, buf) in bi.buffer_grid.iter().enumerate() {
                 trace!(
-                    "Channel {i} grid {pos} ({}, {})  size: {:?}, uses: {}, used_by: {:?}",
+                    "Channel {i} grid {pos} ({}, {})  size: {:?}, uses: {}, used_by: s {:?} a {:?}",
                     pos % bi.grid_shape.0,
                     pos / bi.grid_shape.0,
                     buf.size,
                     buf.remaining_uses,
-                    buf.used_by_transforms
+                    buf.used_by_transforms(false).collect::<Vec<_>>(),
+                    buf.used_by_transforms(true).collect::<Vec<_>>(),
                 );
             }
         }
@@ -541,7 +577,7 @@ impl FullModularImage {
         frame_header: &FrameHeader,
         pass_to_pipeline: &mut dyn FnMut(usize, usize, Image<i32>) -> Result<()>,
     ) -> Result<()> {
-        let mut maybe_output = |bi: &mut ModularBufferInfo, grid: usize| -> Result<()> {
+        let mut maybe_output = |bi: &ModularBufferInfo, grid: usize| -> Result<()> {
             if let Some(chan) = bi.info.output_channel_idx {
                 debug!("Rendering channel {chan:?}, grid position {grid}");
                 let buf = bi.buffer_grid[grid].get_buffer()?;
@@ -561,10 +597,16 @@ impl FullModularImage {
         let mut new_ready_transform_chunks = vec![];
         for section_id in section_ids {
             for buf in self.section_buffer_indices[*section_id].iter().copied() {
-                maybe_output(&mut self.buffer_info[buf], grid)?;
+                maybe_output(&self.buffer_info[buf], grid)?;
                 let new_chunks = self.buffer_info[buf].buffer_grid[grid]
-                    .used_by_transforms
-                    .to_vec();
+                    .used_by_transforms_weak
+                    .iter()
+                    .chain(
+                        self.buffer_info[buf].buffer_grid[grid]
+                            .used_by_transforms_strong
+                            .iter(),
+                    )
+                    .cloned();
                 trace!("Buffer {buf} grid position {grid} used by chunks {new_chunks:?}");
                 new_ready_transform_chunks.extend(new_chunks);
             }
@@ -577,10 +619,16 @@ impl FullModularImage {
             for (new_buf, new_grid) in
                 self.transform_steps[tfm].dep_ready(frame_header, &mut self.buffer_info)?
             {
-                maybe_output(&mut self.buffer_info[new_buf], new_grid)?;
+                maybe_output(&self.buffer_info[new_buf], new_grid)?;
                 let new_chunks = self.buffer_info[new_buf].buffer_grid[new_grid]
-                    .used_by_transforms
-                    .to_vec();
+                    .used_by_transforms_weak
+                    .iter()
+                    .chain(
+                        self.buffer_info[new_buf].buffer_grid[new_grid]
+                            .used_by_transforms_strong
+                            .iter(),
+                    )
+                    .cloned();
                 trace!("Buffer {new_buf} grid position {new_grid} used by chunks {new_chunks:?}");
                 new_ready_transform_chunks.extend(new_chunks);
             }

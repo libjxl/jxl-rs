@@ -3,6 +3,9 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
+use std::sync::atomic::AtomicUsize;
+use std::sync::atomic::Ordering;
+
 use apply::TransformStep;
 pub use apply::TransformStepChunk;
 use num_derive::FromPrimitive;
@@ -116,8 +119,9 @@ pub fn make_grids(
         g.buffer_grid = get_grid_indices(g.grid_shape)
             .map(|(x, y)| ModularBuffer {
                 data: AtomicRefCell::new(None),
-                remaining_uses: if is_output { 1 } else { 0 },
-                used_by_transforms: vec![],
+                remaining_uses: AtomicUsize::new(if is_output { 1 } else { 0 }),
+                used_by_transforms_weak: vec![],
+                used_by_transforms_strong: vec![],
                 size: g
                     .get_grid_rect(frame_header, g.grid_kind, (x as usize, y as usize))
                     .size,
@@ -145,6 +149,7 @@ pub fn make_grids(
                         output_grid_kind: ModularGridKind,
                         output_grid_shape: (usize, usize),
                         output_grid_pos: (isize, isize),
+                        is_weak: bool,
                         grid_transform_steps: &mut Vec<TransformStepChunk>,
                         buffer_info: &mut Vec<ModularBufferInfo>| {
         let output_grid_size = (output_grid_shape.0 as isize, output_grid_shape.1 as isize);
@@ -159,15 +164,17 @@ pub fn make_grids(
         let output_grid_pos = (output_grid_pos.0 as usize, output_grid_pos.1 as usize);
         let input_grid_pos =
             buffer_info[input_buffer_idx].get_grid_idx(output_grid_kind, output_grid_pos);
-        if !buffer_info[input_buffer_idx].buffer_grid[input_grid_pos]
-            .used_by_transforms
-            .contains(&ts)
+        let grid = &mut buffer_info[input_buffer_idx].buffer_grid[input_grid_pos];
+        if !grid.used_by_transforms_weak.contains(&ts)
+            && !grid.used_by_transforms_strong.contains(&ts)
         {
-            buffer_info[input_buffer_idx].buffer_grid[input_grid_pos].remaining_uses += 1;
-            buffer_info[input_buffer_idx].buffer_grid[input_grid_pos]
-                .used_by_transforms
-                .push(ts);
+            grid.remaining_uses.fetch_add(1, Ordering::Relaxed);
             grid_transform_steps[ts].incomplete_deps += 1;
+            if is_weak {
+                grid.used_by_transforms_weak.push(ts);
+            } else {
+                grid.used_by_transforms_strong.push(ts);
+            }
         }
     };
 
@@ -191,6 +198,7 @@ pub fn make_grids(
                             out_kind,
                             out_shape,
                             (x, y),
+                            false,
                             &mut grid_transform_steps,
                             buffer_info,
                         );
@@ -219,6 +227,7 @@ pub fn make_grids(
                             out_kind,
                             out_shape,
                             (x, y),
+                            false,
                             &mut grid_transform_steps,
                             buffer_info,
                         );
@@ -229,6 +238,7 @@ pub fn make_grids(
                         out_kind,
                         out_shape,
                         (x, y),
+                        false,
                         &mut grid_transform_steps,
                         buffer_info,
                     );
@@ -239,6 +249,7 @@ pub fn make_grids(
                             out_kind,
                             out_shape,
                             (x, y - 1),
+                            false,
                             &mut grid_transform_steps,
                             buffer_info,
                         );
@@ -265,6 +276,7 @@ pub fn make_grids(
                         out_kind,
                         out_shape,
                         (x, y),
+                        false,
                         &mut grid_transform_steps,
                         buffer_info,
                     );
@@ -274,6 +286,7 @@ pub fn make_grids(
                         out_kind,
                         out_shape,
                         (x, y),
+                        false,
                         &mut grid_transform_steps,
                         buffer_info,
                     );
@@ -289,6 +302,7 @@ pub fn make_grids(
                                 out_kind,
                                 out_shape,
                                 (x + dx, y + dy),
+                                false,
                                 &mut grid_transform_steps,
                                 buffer_info,
                             );
@@ -309,6 +323,7 @@ pub fn make_grids(
                             out_kind,
                             out_shape,
                             (x, y),
+                            false,
                             &mut grid_transform_steps,
                             buffer_info,
                         );
@@ -320,6 +335,7 @@ pub fn make_grids(
                         out_kind,
                         out_shape,
                         (x + 1, y),
+                        true,
                         &mut grid_transform_steps,
                         buffer_info,
                     );
@@ -330,6 +346,7 @@ pub fn make_grids(
                         out_kind,
                         out_shape,
                         (x - 1, y),
+                        true,
                         &mut grid_transform_steps,
                         buffer_info,
                     );
@@ -348,6 +365,7 @@ pub fn make_grids(
                             out_kind,
                             out_shape,
                             (x, y),
+                            false,
                             &mut grid_transform_steps,
                             buffer_info,
                         );
@@ -359,6 +377,7 @@ pub fn make_grids(
                         out_kind,
                         out_shape,
                         (x, y + 1),
+                        true,
                         &mut grid_transform_steps,
                         buffer_info,
                     );
@@ -369,6 +388,7 @@ pub fn make_grids(
                         out_kind,
                         out_shape,
                         (x, y - 1),
+                        true,
                         &mut grid_transform_steps,
                         buffer_info,
                     );
