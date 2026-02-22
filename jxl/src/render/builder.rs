@@ -52,6 +52,7 @@ impl<Pipeline: RenderPipeline> RenderPipelineBuilder<Pipeline> {
                 ],
                 chunk_size,
                 extend_stage_index: None,
+                channel_is_used: vec![],
             },
         }
     }
@@ -110,6 +111,38 @@ impl<Pipeline: RenderPipeline> RenderPipelineBuilder<Pipeline> {
 
     #[instrument(skip_all, err)]
     pub fn build(mut self) -> Result<Box<Pipeline>> {
+        let mut stage_is_used = vec![false; self.shared.stages.len()];
+        let num_channels = self.shared.num_channels();
+        self.shared.channel_is_used = vec![false; self.shared.num_channels()];
+        // Prune unused stages.
+        for (i, stage) in self.shared.stages.iter().enumerate().rev() {
+            if matches!(stage, Stage::Save(_)) {
+                for c in 0..num_channels {
+                    if stage.uses_channel(c) {
+                        self.shared.channel_is_used[c] = true;
+                    }
+                }
+            }
+            for c in 0..num_channels {
+                if stage.uses_channel(c) {
+                    stage_is_used[i] |= self.shared.channel_is_used[c];
+                }
+            }
+            if stage_is_used[i] {
+                for c in 0..num_channels {
+                    if stage.uses_channel(c) {
+                        self.shared.channel_is_used[c] = true;
+                    }
+                }
+            }
+        }
+        self.shared.stages = self
+            .shared
+            .stages
+            .into_iter()
+            .zip(stage_is_used.into_iter())
+            .filter_map(|(s, used)| used.then_some(s))
+            .collect();
         for (i, stage) in self.shared.stages.iter().enumerate() {
             let input_type = stage.input_type();
             let output_type = stage.output_type();
@@ -163,7 +196,6 @@ impl<Pipeline: RenderPipeline> RenderPipelineBuilder<Pipeline> {
         }
 
         let channel_info = &mut self.shared.channel_info;
-        let num_channels = channel_info[0].len();
         let mut cur_downsamples = vec![(0u8, 0u8); num_channels];
         for (s, stage) in self.shared.stages.iter().enumerate().rev() {
             let [current_info, next_info, ..] = &mut channel_info[s..] else {
@@ -226,11 +258,9 @@ impl<Pipeline: RenderPipeline> RenderPipelineBuilder<Pipeline> {
             );
         }
 
-        // Ensure all channels have been used, so that we know the types of all buffers at all
-        // stages.
         for (c, chinfo) in channel_info.iter().flat_map(|x| x.iter().enumerate()) {
             if chinfo.ty.is_none() {
-                return Err(Error::PipelineChannelUnused(c));
+                assert!(!self.shared.channel_is_used[c]);
             }
         }
 

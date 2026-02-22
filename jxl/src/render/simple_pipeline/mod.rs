@@ -167,19 +167,21 @@ impl RenderPipeline for SimpleRenderPipeline {
             channel,
             T::DATA_TYPE_ID,
         );
-        let sz = self.shared.group_size_for_channel(channel, T::DATA_TYPE_ID);
-        let goffset = self.shared.group_offset(group_id);
-        let ChannelInfo { ty, downsample } = self.shared.channel_info[0][channel];
-        let off = (goffset.0 >> downsample.0, goffset.1 >> downsample.1);
-        debug!(?sz, input_buffers_sz=?self.input_buffers[channel].size(), offset=?off, ?downsample, ?goffset);
-        let ty = ty.unwrap();
-        assert_eq!(ty, T::DATA_TYPE_ID);
-        let total_sz = self.input_buffers[channel].size();
-        for y in 0..sz.1.min(total_sz.1 - off.1) {
-            let row_in = buf.row(y);
-            let row_out = self.input_buffers[channel].row_mut(y + off.1);
-            for x in 0..sz.0.min(total_sz.0 - off.0) {
-                row_out[x + off.0] = row_in[x].to_f64();
+        if self.shared.channel_is_used[channel] {
+            let sz = self.shared.group_size_for_channel(channel, T::DATA_TYPE_ID);
+            let goffset = self.shared.group_offset(group_id);
+            let ChannelInfo { ty, downsample } = self.shared.channel_info[0][channel];
+            let off = (goffset.0 >> downsample.0, goffset.1 >> downsample.1);
+            debug!(?sz, input_buffers_sz=?self.input_buffers[channel].size(), offset=?off, ?downsample, ?goffset);
+            let ty = ty.unwrap();
+            assert_eq!(ty, T::DATA_TYPE_ID);
+            let total_sz = self.input_buffers[channel].size();
+            for y in 0..sz.1.min(total_sz.1 - off.1) {
+                let row_in = buf.row(y);
+                let row_out = self.input_buffers[channel].row_mut(y + off.1);
+                for x in 0..sz.0.min(total_sz.0 - off.0) {
+                    row_out[x + off.0] = row_in[x].to_f64();
+                }
             }
         }
         self.shared.group_chan_complete[group_id][channel] = complete;
