@@ -11,7 +11,7 @@ use row_buffers::RowBuffer;
 
 use crate::api::JxlOutputBuffer;
 use crate::error::Result;
-use crate::image::{Image, ImageDataType, OwnedRawImage, Rect};
+use crate::image::{DataTypeTag, Image, ImageDataType, OwnedRawImage, Rect};
 use crate::render::MAX_BORDER;
 use crate::render::buffer_splitter::{BufferSplitter, SaveStageBufferInfo};
 use crate::render::internal::Stage;
@@ -103,7 +103,7 @@ impl RenderPipeline for LowMemoryRenderPipeline {
         let mut initial_buffers = vec![];
         for chan in 0..nc {
             initial_buffers.push(RowBuffer::new(
-                shared.channel_info[0][chan].ty.unwrap(),
+                shared.channel_info[0][chan].ty.unwrap_or(DataTypeTag::U8),
                 next_border_and_cur_downsample[0][chan].0 as usize,
                 0,
                 0,

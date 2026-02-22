@@ -147,6 +147,9 @@ impl LowMemoryRenderPipeline {
 
         {
             for c in 0..self.shared.num_channels() {
+                if !self.shared.channel_is_used[c] {
+                    continue;
+                }
                 let (bx, by) = self.border_size;
                 let (sx, sy) = self.input_buffers[g].data[c].as_ref().unwrap().byte_size();
                 let ChannelInfo {

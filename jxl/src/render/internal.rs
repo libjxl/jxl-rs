@@ -102,6 +102,7 @@ pub struct RenderPipelineShared<Buffer> {
     pub chunk_size: usize,
     pub stages: Vec<Stage<Buffer>>,
     pub extend_stage_index: Option<usize>,
+    pub channel_is_used: Vec<bool>,
 }
 
 impl<Buffer> RenderPipelineShared<Buffer> {

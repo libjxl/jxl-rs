@@ -74,6 +74,9 @@ impl LowMemoryRenderPipeline {
         (x0, xsize): (usize, usize),
         (gx, gy): (usize, usize),
     ) {
+        if !self.shared.channel_is_used[c] {
+            return;
+        }
         let ChannelInfo {
             ty,
             downsample: (dx, dy),
