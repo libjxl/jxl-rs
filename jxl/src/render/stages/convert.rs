@@ -257,6 +257,27 @@ fn int_to_float_generic(input: &[i32], output: &mut [f32], bits: u32, exp_bits: 
     }
 }
 
+// SIMD modular to 32 bit float conversion
+simd_function!(
+    modular_to_float_32bit_simd_dispatch,
+    d: D,
+    fn modular_to_float_32bit_simd(input: &[i32], output: &mut [f32], scale: f32, xsize: usize) {
+        let simd_width = D::I32Vec::LEN;
+
+        let scale = D::F32Vec::splat(d, scale);
+
+        // Process complete SIMD vectors
+        for (in_chunk, out_chunk) in input
+            .chunks_exact(simd_width)
+            .zip(output.chunks_exact_mut(simd_width))
+            .take(xsize.div_ceil(simd_width))
+        {
+            let val = D::I32Vec::load(d, in_chunk);
+            (val.as_f32() * scale).store(out_chunk);
+        }
+    }
+);
+
 impl RenderPipelineInOutStage for ConvertModularToF32Stage {
     type InputT = i32;
     type OutputT = f32;
@@ -279,11 +300,8 @@ impl RenderPipelineInOutStage for ConvertModularToF32Stage {
         if self.bit_depth.floating_point_sample() {
             int_to_float(input[0], output_rows[0][0], &self.bit_depth, xsize);
         } else {
-            // TODO(veluca): SIMDfy this code.
             let scale = 1.0 / ((1u64 << self.bit_depth.bits_per_sample()) - 1) as f32;
-            for i in 0..xsize {
-                output_rows[0][0][i] = input[0][i] as f32 * scale;
-            }
+            modular_to_float_32bit_simd_dispatch(input[0], output_rows[0][0], scale, xsize);
         }
     }
 }
