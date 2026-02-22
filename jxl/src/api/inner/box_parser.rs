@@ -3,6 +3,9 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
+use std::io::IoSliceMut;
+
+use crate::container::frame_index::FrameIndexBox;
 use crate::error::{Error, Result};
 
 use crate::api::{
@@ -15,6 +18,8 @@ enum ParseState {
     BoxNeeded,
     CodestreamBox(u64),
     SkippableBox(u64),
+    /// Buffering a jxli box: (remaining bytes, accumulated content).
+    BufferingFrameIndex(u64, Vec<u8>),
 }
 
 enum CodestreamBoxType {
@@ -28,6 +33,8 @@ pub(super) struct BoxParser {
     pub(super) box_buffer: SmallBuffer,
     state: ParseState,
     box_type: CodestreamBoxType,
+    /// Parsed frame index box, if present in the file.
+    pub(super) frame_index: Option<FrameIndexBox>,
 }
 
 impl BoxParser {
@@ -36,6 +43,7 @@ impl BoxParser {
             box_buffer: SmallBuffer::new(128),
             state: ParseState::SignatureNeeded,
             box_type: CodestreamBoxType::None,
+            frame_index: None,
         }
     }
 
@@ -81,6 +89,31 @@ impl BoxParser {
                         self.state = ParseState::BoxNeeded;
                     } else {
                         self.state = ParseState::SkippableBox(s);
+                    }
+                }
+                ParseState::BufferingFrameIndex(mut remaining, mut buf) => {
+                    let num = remaining.min(usize::MAX as u64) as usize;
+                    if !self.box_buffer.is_empty() {
+                        let take = num.min(self.box_buffer.len());
+                        buf.extend_from_slice(&self.box_buffer[..take]);
+                        self.box_buffer.consume(take);
+                        remaining -= take as u64;
+                    } else {
+                        let old_len = buf.len();
+                        buf.resize(old_len + num, 0);
+                        let read = input.read(&mut [IoSliceMut::new(&mut buf[old_len..])])?;
+                        if read == 0 {
+                            return Err(Error::OutOfBounds(num));
+                        }
+                        buf.truncate(old_len + read);
+                        remaining -= read as u64;
+                    }
+                    if remaining == 0 {
+                        // Parse the buffered frame index box.
+                        self.frame_index = Some(FrameIndexBox::parse(&buf)?);
+                        self.state = ParseState::BoxNeeded;
+                    } else {
+                        self.state = ParseState::BufferingFrameIndex(remaining, buf);
                     }
                 }
                 ParseState::BoxNeeded => {
@@ -147,6 +180,20 @@ impl BoxParser {
                                 CodestreamBoxType::Jxlp(idx)
                             };
                             self.state = ParseState::CodestreamBox(content_len);
+                        }
+                        b"jxli" => {
+                            if content_len == u64::MAX {
+                                return Err(Error::InvalidBox);
+                            }
+                            // Reasonable size limit for a frame index box (16 MB).
+                            if content_len > 16 * 1024 * 1024 {
+                                self.state = ParseState::SkippableBox(content_len);
+                            } else {
+                                self.state = ParseState::BufferingFrameIndex(
+                                    content_len,
+                                    Vec::with_capacity(content_len as usize),
+                                );
+                            }
                         }
                         _ => {
                             self.state = ParseState::SkippableBox(content_len);
