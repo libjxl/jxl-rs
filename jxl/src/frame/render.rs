@@ -199,19 +199,19 @@ impl Frame {
 
         pipeline!(self, p, p.render_outside_frame(&mut buffer_splitter)?);
 
+        let modular_global = &mut self.lf_global.as_mut().unwrap().modular_global;
+
+        modular_global.set_pipeline_used_channels(pipeline!(self, p, p.used_channel_mask()));
+
         // STEP 1: if we are requesting a flush, and did not flush before, mark modular channels
         // as having been decoded as 0.
         if !self.was_flushed_once && do_flush {
             self.was_flushed_once = true;
             self.groups_to_flush.extend(0..self.header.num_groups());
-            self.lf_global
-                .as_mut()
-                .unwrap()
-                .modular_global
-                .zero_fill_empty_channels(
-                    self.header.passes.num_passes as usize,
-                    self.header.num_groups(),
-                )?;
+            modular_global.zero_fill_empty_channels(
+                self.header.passes.num_passes as usize,
+                self.header.num_groups(),
+            )?;
         }
 
         // STEP 2: ensure that groups that will be re-rendered are marked as such.

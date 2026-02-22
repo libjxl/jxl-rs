@@ -52,7 +52,7 @@ impl<Pipeline: RenderPipeline> RenderPipelineBuilder<Pipeline> {
                 ],
                 chunk_size,
                 extend_stage_index: None,
-                channel_is_used: vec![],
+                channel_is_used: vec![false; num_channels],
             },
         }
     }
@@ -113,7 +113,6 @@ impl<Pipeline: RenderPipeline> RenderPipelineBuilder<Pipeline> {
     pub fn build(mut self) -> Result<Box<Pipeline>> {
         let mut stage_is_used = vec![false; self.shared.stages.len()];
         let num_channels = self.shared.num_channels();
-        self.shared.channel_is_used = vec![false; self.shared.num_channels()];
         // Prune unused stages.
         for (i, stage) in self.shared.stages.iter().enumerate().rev() {
             if matches!(stage, Stage::Save(_)) {
@@ -261,6 +260,9 @@ impl<Pipeline: RenderPipeline> RenderPipelineBuilder<Pipeline> {
         for (c, chinfo) in channel_info.iter().flat_map(|x| x.iter().enumerate()) {
             if chinfo.ty.is_none() {
                 assert!(!self.shared.channel_is_used[c]);
+                for g in self.shared.group_chan_complete.iter_mut() {
+                    g[c] = true;
+                }
             }
         }
 

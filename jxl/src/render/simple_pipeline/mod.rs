@@ -183,8 +183,8 @@ impl RenderPipeline for SimpleRenderPipeline {
                     row_out[x + off.0] = row_in[x].to_f64();
                 }
             }
+            self.shared.group_chan_complete[group_id][channel] = complete;
         }
-        self.shared.group_chan_complete[group_id][channel] = complete;
 
         self.do_render(buffer_splitter)
     }
@@ -211,5 +211,9 @@ impl RenderPipeline for SimpleRenderPipeline {
         stage: S,
     ) -> Box<dyn super::RunInPlaceStage<Self::Buffer>> {
         Box::new(stage)
+    }
+
+    fn used_channel_mask(&self) -> &[bool] {
+        &self.shared.channel_is_used
     }
 }
