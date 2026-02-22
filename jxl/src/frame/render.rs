@@ -528,6 +528,23 @@ impl Frame {
             .find(|x| x.1.ec_type == ExtraChannel::Black)
             .map(|(k_idx, _)| k_idx + 3);
 
+        // For multi-layer images, blending must happen in the image's native color space,
+        // not in the output/decode color space. This applies to all images, not just CMYK:
+        //
+        // For example, if an image is tagged as sRGB, encoded with XYB, and we're decoding
+        // to Linear P3, the correct flow is:
+        //   1. Decode frame in XYB
+        //   2. Convert to image space (sRGB) via XybStage + FromLinearStage
+        //   3. Blend in sRGB (image space)
+        //   4. Save reference frame in sRGB
+        //   5. Convert to Linear P3 (output space) via CMS
+        //
+        // This ensures blending results are independent of the requested output space,
+        // matching the behavior of formats like GIF, APNG, XCF, and PSD which all
+        // define blending in image space.
+        let needs_deferred_cms = frame_header.needs_blending()
+            || (frame_header.can_be_referenced && !frame_header.save_before_ct);
+
         let xyb_encoded = decoder_state.file_header.image_metadata.xyb_encoded;
 
         if frame_header.do_ycbcr {
@@ -541,17 +558,23 @@ impl Frame {
         // - If output matches original encoding: only FromLinearStage is needed
         // - If output differs: CMS handles everything including TF conversion
         //
-        // For XYB images, XybStage outputs LINEAR data in the embedded profile's primaries,
-        // so the CMS input should be the LINEAR version of the embedded profile.
-        // For ICC embedded profiles with XYB, XybStage outputs linear sRGB (see xyb.rs).
+        // For XYB images, XybStage outputs LINEAR data in the embedded profile's primaries.
+        // When CMS is deferred (for blending), FromLinearStage converts to the image's
+        // non-linear space first, so CMS input is the non-linear image profile.
+        // When CMS is applied immediately, it receives linear data directly.
         let cms_input_profile = if xyb_encoded {
-            // XYB outputs linear, so use linear version of input profile for CMS
-            input_profile.with_linear_tf().or_else(|| {
-                // For ICC profiles with XYB, XybStage outputs linear sRGB
-                Some(JxlColorProfile::Simple(JxlColorEncoding::linear_srgb(
-                    false,
-                )))
-            })
+            if needs_deferred_cms {
+                // CMS will run after FromLinearStage + blending, so input is non-linear
+                Some(input_profile.clone())
+            } else {
+                // CMS runs right after XybStage, so input is linear
+                input_profile.with_linear_tf().or_else(|| {
+                    // For ICC profiles with XYB, XybStage outputs linear sRGB
+                    Some(JxlColorProfile::Simple(JxlColorEncoding::linear_srgb(
+                        false,
+                    )))
+                })
+            }
         } else {
             // Non-XYB: data is in the embedded profile's space including TF
             Some(input_profile.clone())
@@ -573,32 +596,27 @@ impl Frame {
         let channel_counts_compatible =
             src_channels == dst_channels || (src_channels == 4 && dst_channels == 3);
 
-        if !color_encoding_is_original
+        // Prepare CMS stage if needed
+        let cms_stage = if !color_encoding_is_original
             && channel_counts_compatible
-            && let Some(cms) = cms
+            && let Some(cms_ref) = cms
             && let Some(cms_input) = cms_input_profile
         {
-            // Use frame width as max_pixels since rows can be that wide
             let max_pixels = frame_header.size_upsampled().0;
-            // Use CMS input profile's channel count, matching libjxl's c_src_.Channels()
-            // For CMYK, channels() returns 4; for RGB, 3; for grayscale, 1.
             let in_channels = cms_input.channels();
-            let (out_channels, transformers) = cms.initialize_transforms(
-                1, // num transforms (1 for single-threaded)
+            let (out_channels, transformers) = cms_ref.initialize_transforms(
+                1,
                 max_pixels,
                 cms_input,
                 output_profile.clone(),
                 output_color_info.intensity_target,
             )?;
-            // CMS cannot add channels - reject transforms that would
             if out_channels > in_channels {
                 return Err(Error::CmsChannelCountIncrease {
                     in_channels,
                     out_channels,
                 });
             }
-            // Only pass black_channel to CmsStage if CMS is actually processing CMYK input.
-            // For XYB images, even if original was CMYK, CMS input is linear RGB.
             let cms_black_channel = if in_channels == 4 {
                 black_channel
             } else {
@@ -611,22 +629,56 @@ impl Frame {
                 pixel_format,
             )?;
             if !transformers.is_empty() {
-                pipeline = pipeline.add_inplace_stage(CmsStage::new(
+                Some(CmsStage::new(
                     transformers,
                     in_channels,
                     out_channels,
                     cms_black_channel,
                     max_pixels,
-                ))?;
+                ))
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+
+        let has_cms_stage = cms_stage.is_some();
+
+        // Apply CMS now unless we need to defer it for blending in image space
+        let mut deferred_cms_stage = None;
+        if let Some(stage) = cms_stage {
+            if needs_deferred_cms {
+                // Defer CMS until after blending and saving reference frames.
+                // For XYB, we'll apply FromLinearStage with the image's TF first
+                // so blending happens in the image's non-linear color space.
+                deferred_cms_stage = Some(stage);
+            } else {
+                // Apply CMS immediately (no blending needed)
+                pipeline = pipeline.add_inplace_stage(stage)?;
                 cms_used = true;
             }
         }
 
-        // XYB output is linear, so apply transfer function:
-        // - Only if output is non-linear AND
-        // - CMS was not used (CMS already handles the full conversion including TF)
-        if xyb_encoded && !output_tf.is_linear() && !cms_used {
-            pipeline = pipeline.add_inplace_stage(FromLinearStage::new(0, output_tf.clone()))?;
+        // XYB output is linear, so apply transfer function to convert to non-linear space.
+        // Three cases:
+        // 1. CMS applied immediately: CMS handles TF, skip FromLinearStage
+        // 2. CMS deferred: apply IMAGE TF (output_color_info.tf) to get to image space
+        //    for correct blending, CMS will convert to output space later
+        // 3. No CMS needed: apply output TF (same as image TF when output == image)
+        if xyb_encoded && !cms_used {
+            if has_cms_stage {
+                // CMS is deferred - convert to image space using image's TF for blending
+                let image_tf = &output_color_info.tf;
+                if !image_tf.is_linear() {
+                    pipeline =
+                        pipeline.add_inplace_stage(FromLinearStage::new(0, image_tf.clone()))?;
+                }
+            } else if !output_tf.is_linear() {
+                // No CMS - apply output TF (which equals image TF)
+                pipeline =
+                    pipeline.add_inplace_stage(FromLinearStage::new(0, output_tf.clone()))?;
+            }
         }
 
         if frame_header.needs_blending() {
@@ -644,6 +696,8 @@ impl Frame {
             )?)?;
         }
 
+        // Save reference frame in image space (before CMS) for correct blending.
+        // This ensures future frames blend in the image's native color space.
         if frame_header.can_be_referenced && !frame_header.save_before_ct {
             for i in 0..num_channels {
                 pipeline = pipeline.add_save_stage(
@@ -655,6 +709,12 @@ impl Frame {
                     false,
                 )?;
             }
+        }
+
+        // Apply deferred CMS after blending and saving reference frames.
+        // At this point data is in the image's native color space; CMS converts to output.
+        if let Some(stage) = deferred_cms_stage {
+            pipeline = pipeline.add_inplace_stage(stage)?;
         }
 
         if decoder_state.render_spotcolors {
