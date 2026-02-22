@@ -86,7 +86,7 @@ impl ModularChannelDecoder for NoWpTree {
             &self.references,
             &mut self.property_buffer,
         );
-        let dec = reader.read_signed(histograms, br, prediction_result.context as usize);
+        let dec = reader.read_signed_clustered(histograms, br, prediction_result.context as usize);
         make_pixel(dec, prediction_result.multiplier, prediction_result.guess)
     }
 }
@@ -140,7 +140,7 @@ impl ModularChannelDecoder for GeneralTree {
             &self.no_wp_tree.references,
             &mut self.no_wp_tree.property_buffer,
         );
-        let dec = reader.read_signed(histograms, br, prediction_result.context as usize);
+        let dec = reader.read_signed_clustered(histograms, br, prediction_result.context as usize);
         let val = make_pixel(dec, prediction_result.multiplier, prediction_result.guess);
         self.wp_state.update_errors(val, pos, xsize);
         val
@@ -152,7 +152,7 @@ const LUT_MIN_SPLITVAL: i32 = -1024;
 const LUT_TABLE_SIZE: usize = (LUT_MAX_SPLITVAL - LUT_MIN_SPLITVAL + 1) as usize;
 const _: () = assert!(LUT_TABLE_SIZE.is_power_of_two());
 
-fn make_lut(tree: &[TreeNode], histograms: &Histograms) -> Option<[u8; LUT_TABLE_SIZE]> {
+fn make_lut(tree: &[TreeNode]) -> Option<[u8; LUT_TABLE_SIZE]> {
     struct RangeAndNode {
         range: Range<i32>,
         node: u32,
@@ -193,8 +193,7 @@ fn make_lut(tree: &[TreeNode], histograms: &Histograms) -> Option<[u8; LUT_TABLE
                 }
                 let start = range.start - LUT_MIN_SPLITVAL;
                 let end = range.end - LUT_MIN_SPLITVAL;
-                ans[start as usize..end as usize]
-                    .fill(histograms.map_context_to_cluster(id as usize) as u8);
+                ans[start as usize..end as usize].fill(id as u8);
             }
         }
     }
@@ -220,7 +219,7 @@ impl WpOnlyLookupConfig420 {
             return None;
         }
         let wp_state = WeightedPredictorState::new(&header.wp_header, xsize);
-        let lut = make_lut(tree, histograms)?;
+        let lut = make_lut(tree)?;
         Some(Self { lut, wp_state })
     }
 }
@@ -288,7 +287,7 @@ fn make_gradient_lut_config_420(
         }
     }
 
-    let lut = make_lut(tree, histograms)?;
+    let lut = make_lut(tree)?;
     Some(GradientLookupConfig420 { lut })
 }
 
@@ -330,7 +329,7 @@ impl ModularChannelDecoder for GradientLookupConfig420 {
 }
 
 pub struct SingleGradientOnly {
-    ctx: usize,
+    clustered_ctx: usize,
 }
 
 impl ModularChannelDecoder for SingleGradientOnly {
@@ -350,13 +349,13 @@ impl ModularChannelDecoder for SingleGradientOnly {
         histograms: &Histograms,
     ) -> i32 {
         let pred = Predictor::Gradient.predict_one(prediction_data, 0);
-        let dec = reader.read_signed(histograms, br, self.ctx);
+        let dec = reader.read_signed_clustered_inline(histograms, br, self.clustered_ctx);
         make_pixel(dec, 1, pred)
     }
 }
 
 pub struct NoTree {
-    ctx: usize,
+    clustered_ctx: usize,
 }
 
 impl ModularChannelDecoder for NoTree {
@@ -375,7 +374,7 @@ impl ModularChannelDecoder for NoTree {
         br: &mut BitReader,
         histograms: &Histograms,
     ) -> i32 {
-        let dec = reader.read_signed(histograms, br, self.ctx);
+        let dec = reader.read_signed_clustered_inline(histograms, br, self.clustered_ctx);
         make_pixel(dec, 1, 0)
     }
 }
@@ -408,9 +407,10 @@ pub fn specialize_tree(
     let mut uses_non_wp = false;
 
     // Obtain a pruned tree without nodes that are not relevant in the current channel and stream.
-    // Proceed in BFS order, so that we know that the children of  anode will be adjacent.
+    // Proceed in BFS order, so that we know that the children of a node will be adjacent.
+    // Also re-maps context IDs to cluster IDs.
     while let Some(v) = queue.pop_front() {
-        let node = tree.nodes[v as usize];
+        let mut node = tree.nodes[v as usize];
         match node {
             TreeNode::Split {
                 property,
@@ -445,6 +445,10 @@ pub fn specialize_tree(
             TreeNode::Leaf { predictor, .. } => {
                 uses_wp |= predictor == Predictor::Weighted;
                 uses_non_wp |= predictor != Predictor::Weighted;
+                let TreeNode::Leaf { id, .. } = &mut node else {
+                    unreachable!()
+                };
+                *id = tree.histograms.map_context_to_cluster(*id as usize) as u32;
                 pruned_tree.push(node);
             }
         }
@@ -459,7 +463,9 @@ pub fn specialize_tree(
         },
     ] = &*pruned_tree
     {
-        return Ok(TreeSpecialCase::NoTree(NoTree { ctx: *id as usize }));
+        return Ok(TreeSpecialCase::NoTree(NoTree {
+            clustered_ctx: *id as usize,
+        }));
     }
 
     if let [
@@ -472,7 +478,7 @@ pub fn specialize_tree(
     ] = &*pruned_tree
     {
         return Ok(TreeSpecialCase::SingleGradientOnly(SingleGradientOnly {
-            ctx: *id as usize,
+            clustered_ctx: *id as usize,
         }));
     }
 

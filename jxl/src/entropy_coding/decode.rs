@@ -278,30 +278,50 @@ impl SymbolReader {
 }
 
 impl SymbolReader {
-    #[inline]
-    pub fn read_unsigned(
+    #[inline(always)]
+    pub fn read_unsigned_inline(
         &mut self,
         histograms: &Histograms,
         br: &mut BitReader,
         context: usize,
     ) -> u32 {
         let cluster = histograms.map_context_to_cluster(context);
-        self.read_unsigned_clustered(histograms, br, cluster)
+        self.read_unsigned_clustered_inline(histograms, br, cluster)
+    }
+
+    #[inline(never)]
+    pub fn read_unsigned(
+        &mut self,
+        histograms: &Histograms,
+        br: &mut BitReader,
+        context: usize,
+    ) -> u32 {
+        self.read_unsigned_inline(histograms, br, context)
     }
 
     #[inline(always)]
+    pub fn read_signed_inline(
+        &mut self,
+        histograms: &Histograms,
+        br: &mut BitReader,
+        context: usize,
+    ) -> i32 {
+        let unsigned = self.read_unsigned_inline(histograms, br, context);
+        unpack_signed(unsigned)
+    }
+
+    #[inline(never)]
     pub fn read_signed(
         &mut self,
         histograms: &Histograms,
         br: &mut BitReader,
         context: usize,
     ) -> i32 {
-        let unsigned = self.read_unsigned(histograms, br, context);
-        unpack_signed(unsigned)
+        self.read_signed_inline(histograms, br, context)
     }
 
-    #[inline]
-    pub fn read_unsigned_clustered(
+    #[inline(always)]
+    pub fn read_unsigned_clustered_inline(
         &mut self,
         histograms: &Histograms,
         br: &mut BitReader,
@@ -382,15 +402,35 @@ impl SymbolReader {
         }
     }
 
+    #[inline(never)]
+    pub fn read_unsigned_clustered(
+        &mut self,
+        histograms: &Histograms,
+        br: &mut BitReader,
+        cluster: usize,
+    ) -> u32 {
+        self.read_unsigned_clustered_inline(histograms, br, cluster)
+    }
+
     #[inline(always)]
+    pub fn read_signed_clustered_inline(
+        &mut self,
+        histograms: &Histograms,
+        br: &mut BitReader,
+        cluster: usize,
+    ) -> i32 {
+        let unsigned = self.read_unsigned_clustered_inline(histograms, br, cluster);
+        unpack_signed(unsigned)
+    }
+
+    #[inline(never)]
     pub fn read_signed_clustered(
         &mut self,
         histograms: &Histograms,
         br: &mut BitReader,
         cluster: usize,
     ) -> i32 {
-        let unsigned = self.read_unsigned_clustered(histograms, br, cluster);
-        unpack_signed(unsigned)
+        self.read_signed_clustered_inline(histograms, br, cluster)
     }
 
     /// Specialized fast path for when all HybridUint configs are 420.

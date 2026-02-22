@@ -540,7 +540,8 @@ pub fn decode_vardct_group(
                         .nonzero_context(predicted_nzeros, block_context)
                         + context_offset;
                     let mut nonzeros =
-                        reader.read_unsigned(&pass_info.histograms, br, nonzero_context) as usize;
+                        reader.read_unsigned_inline(&pass_info.histograms, br, nonzero_context)
+                            as usize;
                     trace!(
                         "block ({},{},{c}) predicted_nzeros: {predicted_nzeros} \
                        nzero_ctx: {nonzero_context} (offset: {context_offset}) \
@@ -567,7 +568,8 @@ pub fn decode_vardct_group(
                         }
                         let ctx =
                             histo_offset + zero_density_context(nonzeros, k, log_num_blocks, prev);
-                        let coeff = reader.read_signed(&pass_info.histograms, br, ctx) << *shift;
+                        let coeff =
+                            reader.read_signed_inline(&pass_info.histograms, br, ctx) << *shift;
                         prev = if coeff != 0 { 1 } else { 0 };
                         nonzeros -= prev;
                         let coeff_index = permutation[k] as usize;
