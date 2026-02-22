@@ -69,7 +69,7 @@ impl Frame {
         mut pipeline: RenderPipelineBuilder<P>,
         channels: &[usize],
         data_format: JxlDataFormat,
-    ) -> Result<RenderPipelineBuilder<P>> {
+    ) -> RenderPipelineBuilder<P> {
         use crate::render::stages::{
             ConvertF32ToF16Stage, ConvertF32ToU8Stage, ConvertF32ToU16Stage,
         };
@@ -78,24 +78,24 @@ impl Frame {
             JxlDataFormat::U8 { bit_depth } => {
                 for &channel in channels {
                     pipeline =
-                        pipeline.add_inout_stage(ConvertF32ToU8Stage::new(channel, bit_depth))?;
+                        pipeline.add_inout_stage(ConvertF32ToU8Stage::new(channel, bit_depth));
                 }
             }
             JxlDataFormat::U16 { bit_depth, .. } => {
                 for &channel in channels {
                     pipeline =
-                        pipeline.add_inout_stage(ConvertF32ToU16Stage::new(channel, bit_depth))?;
+                        pipeline.add_inout_stage(ConvertF32ToU16Stage::new(channel, bit_depth));
                 }
             }
             JxlDataFormat::F16 { .. } => {
                 for &channel in channels {
-                    pipeline = pipeline.add_inout_stage(ConvertF32ToF16Stage::new(channel))?;
+                    pipeline = pipeline.add_inout_stage(ConvertF32ToF16Stage::new(channel));
                 }
             }
             // F32 doesn't need conversion - the pipeline already uses f32
             JxlDataFormat::F32 { .. } => {}
         }
-        Ok(pipeline)
+        pipeline
     }
 
     /// Check if CMS will consume a black channel that the user requested in the output.
@@ -347,25 +347,25 @@ impl Frame {
         if frame_header.encoding == Encoding::Modular {
             if decoder_state.file_header.image_metadata.xyb_encoded {
                 pipeline = pipeline
-                    .add_inout_stage(ConvertModularXYBToF32Stage::new(0, &lf_global.lf_quant))?
+                    .add_inout_stage(ConvertModularXYBToF32Stage::new(0, &lf_global.lf_quant))
             } else {
                 for i in 0..3 {
                     pipeline = pipeline
-                        .add_inout_stage(ConvertModularToF32Stage::new(i, metadata.bit_depth))?;
+                        .add_inout_stage(ConvertModularToF32Stage::new(i, metadata.bit_depth));
                 }
             }
         }
         for i in 3..num_channels {
             let ec_bit_depth = metadata.extra_channel_info[i - 3].bit_depth();
-            pipeline = pipeline.add_inout_stage(ConvertModularToF32Stage::new(i, ec_bit_depth))?;
+            pipeline = pipeline.add_inout_stage(ConvertModularToF32Stage::new(i, ec_bit_depth));
         }
 
         for c in 0..3 {
             if frame_header.hshift(c) != 0 {
-                pipeline = pipeline.add_inout_stage(HorizontalChromaUpsample::new(c))?;
+                pipeline = pipeline.add_inout_stage(HorizontalChromaUpsample::new(c));
             }
             if frame_header.vshift(c) != 0 {
-                pipeline = pipeline.add_inout_stage(VerticalChromaUpsample::new(c))?;
+                pipeline = pipeline.add_inout_stage(VerticalChromaUpsample::new(c));
             }
         }
 
@@ -376,17 +376,17 @@ impl Frame {
                     0,
                     filters.gab_x_weight1,
                     filters.gab_x_weight2,
-                ))?
+                ))
                 .add_inout_stage(GaborishStage::new(
                     1,
                     filters.gab_y_weight1,
                     filters.gab_y_weight2,
-                ))?
+                ))
                 .add_inout_stage(GaborishStage::new(
                     2,
                     filters.gab_b_weight1,
                     filters.gab_b_weight2,
-                ))?;
+                ));
         }
 
         let rf = &frame_header.restoration_filter;
@@ -396,7 +396,7 @@ impl Frame {
                 rf.epf_border_sad_mul,
                 rf.epf_channel_scale,
                 epf_sigma.clone().unwrap(),
-            ))?
+            ))
         }
         if rf.epf_iters >= 1 {
             pipeline = pipeline.add_inout_stage(Epf1Stage::new(
@@ -404,7 +404,7 @@ impl Frame {
                 rf.epf_border_sad_mul,
                 rf.epf_channel_scale,
                 epf_sigma.clone().unwrap(),
-            ))?
+            ))
         }
         if rf.epf_iters >= 2 {
             pipeline = pipeline.add_inout_stage(Epf2Stage::new(
@@ -412,7 +412,7 @@ impl Frame {
                 rf.epf_border_sad_mul,
                 rf.epf_channel_scale,
                 epf_sigma.clone().unwrap(),
-            ))?
+            ))
         }
 
         let late_ec_upsample = frame_header.upsampling > 1
@@ -430,7 +430,7 @@ impl Frame {
                         4 => pipeline.add_inout_stage(Upsample4x::new(transform_data, 3 + ec)),
                         8 => pipeline.add_inout_stage(Upsample8x::new(transform_data, 3 + ec)),
                         _ => unreachable!(),
-                    }?;
+                    };
                 }
             }
         }
@@ -440,7 +440,7 @@ impl Frame {
                 patches: lf_global.patches.clone().unwrap(),
                 extra_channels: metadata.extra_channel_info.clone(),
                 decoder_state: decoder_state.reference_frames.clone(),
-            })?
+            })
         }
 
         if frame_header.has_splines() {
@@ -449,7 +449,7 @@ impl Frame {
                 frame_header.size(),
                 &lf_global.color_correlation_params.unwrap_or_default(),
                 decoder_state.high_precision,
-            )?)?
+            )?)
         }
 
         if frame_header.upsampling > 1 {
@@ -465,20 +465,20 @@ impl Frame {
                     4 => pipeline.add_inout_stage(Upsample4x::new(transform_data, c)),
                     8 => pipeline.add_inout_stage(Upsample8x::new(transform_data, c)),
                     _ => unreachable!(),
-                }?;
+                };
             }
         }
 
         if frame_header.has_noise() {
             pipeline = pipeline
-                .add_inout_stage(ConvolveNoiseStage::new(num_channels))?
-                .add_inout_stage(ConvolveNoiseStage::new(num_channels + 1))?
-                .add_inout_stage(ConvolveNoiseStage::new(num_channels + 2))?
+                .add_inout_stage(ConvolveNoiseStage::new(num_channels))
+                .add_inout_stage(ConvolveNoiseStage::new(num_channels + 1))
+                .add_inout_stage(ConvolveNoiseStage::new(num_channels + 2))
                 .add_inplace_stage(AddNoiseStage::new(
                     *lf_global.noise.as_ref().unwrap(),
                     lf_global.color_correlation_params.unwrap_or_default(),
                     num_channels,
-                ))?;
+                ));
         }
 
         // Calculate the actual number of API-provided buffers based on pixel_format.
@@ -504,7 +504,7 @@ impl Frame {
                     JxlColorType::Grayscale,
                     JxlDataFormat::f32(),
                     false,
-                )?;
+                );
             }
         }
         if frame_header.can_be_referenced && frame_header.save_before_ct {
@@ -516,7 +516,7 @@ impl Frame {
                     JxlColorType::Grayscale,
                     JxlDataFormat::f32(),
                     false,
-                )?;
+                );
             }
         }
 
@@ -551,9 +551,9 @@ impl Frame {
         let xyb_encoded = decoder_state.file_header.image_metadata.xyb_encoded;
 
         if frame_header.do_ycbcr {
-            pipeline = pipeline.add_inplace_stage(YcbcrToRgbStage::new(0))?;
+            pipeline = pipeline.add_inplace_stage(YcbcrToRgbStage::new(0));
         } else if xyb_encoded {
-            pipeline = pipeline.add_inplace_stage(XybStage::new(0, output_color_info.clone()))?;
+            pipeline = pipeline.add_inplace_stage(XybStage::new(0, output_color_info.clone()));
         }
 
         // Insert CMS stage if profiles differ.
@@ -637,7 +637,7 @@ impl Frame {
                     out_channels,
                     cms_black_channel,
                     max_pixels,
-                ))?;
+                ));
                 cms_used = true;
             }
         }
@@ -646,7 +646,7 @@ impl Frame {
         // - Only if output is non-linear AND
         // - CMS was not used (CMS already handles the full conversion including TF)
         if xyb_encoded && !output_tf.is_linear() && !cms_used {
-            pipeline = pipeline.add_inplace_stage(FromLinearStage::new(0, output_tf.clone()))?;
+            pipeline = pipeline.add_inplace_stage(FromLinearStage::new(0, output_tf.clone()));
         }
 
         if frame_header.needs_blending() {
@@ -654,14 +654,14 @@ impl Frame {
                 frame_header,
                 &decoder_state.file_header,
                 decoder_state.reference_frames.clone(),
-            )?)?;
+            )?);
             // TODO(veluca): we might not need to add an extend stage if the image size is
             // compatible with the frame size.
             pipeline = pipeline.add_extend_stage(ExtendToImageDimensionsStage::new(
                 frame_header,
                 &decoder_state.file_header,
                 decoder_state.reference_frames.clone(),
-            )?)?;
+            )?);
         }
 
         if frame_header.can_be_referenced && !frame_header.save_before_ct {
@@ -673,7 +673,7 @@ impl Frame {
                     JxlColorType::Grayscale,
                     JxlDataFormat::f32(),
                     false,
-                )?;
+                );
             }
         }
 
@@ -687,7 +687,7 @@ impl Frame {
             {
                 if info.ec_type == ExtraChannel::SpotColor {
                     pipeline = pipeline
-                        .add_inplace_stage(SpotColorStage::new(i, info.spot_color.unwrap()))?;
+                        .add_inplace_stage(SpotColorStage::new(i, info.spot_color.unwrap()));
                 }
             }
         }
@@ -749,10 +749,10 @@ impl Frame {
                         0,
                         num_color_channels,
                         alpha_channel,
-                    ))?;
+                    ));
                 }
                 // Add conversion stages for non-float output formats
-                pipeline = Self::add_conversion_stages(pipeline, color_source_channels, *df)?;
+                pipeline = Self::add_conversion_stages(pipeline, color_source_channels, *df);
                 pipeline = pipeline.add_save_stage(
                     color_source_channels,
                     metadata.orientation,
@@ -760,12 +760,12 @@ impl Frame {
                     pixel_format.color_type,
                     *df,
                     fill_opaque_alpha,
-                )?;
+                );
             }
             for i in 0..frame_header.num_extra_channels as usize {
                 if let Some(df) = &pixel_format.extra_channel_format[i] {
                     // Add conversion stages for non-float output formats
-                    pipeline = Self::add_conversion_stages(pipeline, &[3 + i], *df)?;
+                    pipeline = Self::add_conversion_stages(pipeline, &[3 + i], *df);
                     pipeline = pipeline.add_save_stage(
                         &[3 + i],
                         metadata.orientation,
@@ -773,7 +773,7 @@ impl Frame {
                         JxlColorType::Grayscale,
                         *df,
                         false,
-                    )?;
+                    );
                 }
             }
         }
