@@ -1365,4 +1365,45 @@ pub(crate) mod tests {
             let _ = profile.try_as_icc();
         }
     }
+
+    /// Regression test for Chromium ClusterFuzz issue 480111853.
+    #[test]
+    fn test_clusterfuzz_480111853_respects_output_channel_pixel_limit() {
+        use crate::api::{JxlDecoder, JxlPixelFormat, ProcessingResult, states};
+        use crate::error::Error;
+
+        // Minimized ClusterFuzz input (centipede / blink_jxl_decoder_fuzzer).
+        #[rustfmt::skip]
+        let data: &[u8] = &[
+            0xff, 0x0a, 0x10, 0x8b, 0x9d, 0x41, 0x1e, 0x00, 0x00, 0x01, 0x76, 0x00,
+            0x54, 0x00, 0x12, 0x46, 0x20, 0x05, 0x00, 0x00, 0x05, 0xb9, 0x1e, 0x1b,
+            0xf7, 0x00, 0xfb, 0xfd, 0x42, 0x00, 0x12, 0x01, 0x12, 0x23, 0xbf, 0x27,
+            0x00, 0x7f, 0x20, 0x05, 0x00, 0x00, 0x00, 0x00, 0x76, 0x00, 0x54, 0x00,
+            0x12, 0x01, 0x00, 0xfb, 0xfd, 0x42, 0xfd, 0xfb, 0xfd, 0x42, 0xfd, 0x83,
+            0xdf, 0xdf, 0xdf, 0xdf, 0x27, 0x01,
+        ];
+
+        let opts = JxlDecoderOptions {
+            pixel_limit: Some(1024 * 1024 * 1024),
+            ..Default::default()
+        };
+
+        // Parse header, then request RGBA output.
+        let mut input = data;
+        let decoder = JxlDecoder::<states::Initialized>::new(opts);
+        let mut decoder_with_image_info = match decoder.process(&mut input).unwrap() {
+            ProcessingResult::Complete { result } => result,
+            ProcessingResult::NeedsMoreInput { .. } => panic!("unexpected NeedsMoreInput"),
+        };
+        decoder_with_image_info
+            .set_pixel_format(JxlPixelFormat::rgba8(/*num_extra_channels=*/ 0));
+
+        match decoder_with_image_info.process(&mut input) {
+            Err(Error::ImageSizeTooLarge(xs, ys)) => {
+                assert_eq!((xs, ys), (991439, 355));
+            }
+            Err(other) => panic!("unexpected error: {other:?}"),
+            Ok(_) => panic!("decoder unexpectedly succeeded"),
+        }
+    }
 }

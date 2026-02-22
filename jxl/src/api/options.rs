@@ -23,10 +23,7 @@ pub struct JxlDecoderOptions {
     pub skip_preview: bool,
     pub progressive_mode: JxlProgressiveMode,
     pub cms: Option<Box<dyn JxlCms>>,
-    /// Fail decoding images with more than this number of pixels, or with frames with
-    /// more than this number of pixels. The limit counts the product of pixels and
-    /// channels, so for example an image with 1 extra channel of size 1024x1024 has 4
-    /// million pixels.
+    /// Upper bound on decoded samples (width * height * channels) for the requested output.
     pub pixel_limit: Option<usize>,
     /// Use high precision mode for decoding.
     /// When false (default), uses lower precision settings that match libjxl's default.
