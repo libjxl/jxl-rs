@@ -355,8 +355,34 @@ impl ModularChannelDecoder for SingleGradientOnly {
     }
 }
 
+pub struct NoTree {
+    ctx: usize,
+}
+
+impl ModularChannelDecoder for NoTree {
+    const NEEDS_TOP: bool = false;
+    const NEEDS_TOPTOP: bool = false;
+
+    fn init_row(&mut self, _: &mut [&mut ModularChannel], _: usize, _: usize) {}
+
+    #[inline(always)]
+    fn decode_one(
+        &mut self,
+        _: PredictionData,
+        _: (usize, usize),
+        _: usize,
+        reader: &mut SymbolReader,
+        br: &mut BitReader,
+        histograms: &Histograms,
+    ) -> i32 {
+        let dec = reader.read_signed(histograms, br, self.ctx);
+        make_pixel(dec, 1, 0)
+    }
+}
+
 #[allow(clippy::large_enum_variant)]
 pub enum TreeSpecialCase {
+    NoTree(NoTree),
     NoWp(NoWpTree),
     WpOnlyConfig420(WpOnlyLookupConfig420),
     GradientLookupConfig420(GradientLookupConfig420),
@@ -422,6 +448,18 @@ pub fn specialize_tree(
                 pruned_tree.push(node);
             }
         }
+    }
+
+    if let [
+        TreeNode::Leaf {
+            predictor: Predictor::Zero,
+            multiplier: 1,
+            offset: 0,
+            id,
+        },
+    ] = &*pruned_tree
+    {
+        return Ok(TreeSpecialCase::NoTree(NoTree { ctx: *id as usize }));
     }
 
     if let [
