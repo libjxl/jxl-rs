@@ -128,7 +128,7 @@ pub unsafe trait F32SimdVec:
         // SAFETY: f32 and MaybeUninit<f32> have the same layout.
         // We are writing to initialized memory, so treating it as uninit for writing is fine.
         let dest = unsafe {
-            std::slice::from_raw_parts_mut(dest.as_mut_ptr() as *mut MaybeUninit<f32>, dest.len())
+            std::slice::from_raw_parts_mut(dest.as_mut_ptr().cast::<MaybeUninit<f32>>(), dest.len())
         };
         Self::store_interleaved_2_uninit(a, b, dest);
     }
@@ -140,7 +140,7 @@ pub unsafe trait F32SimdVec:
         // SAFETY: f32 and MaybeUninit<f32> have the same layout.
         // We are writing to initialized memory, so treating it as uninit for writing is fine.
         let dest = unsafe {
-            std::slice::from_raw_parts_mut(dest.as_mut_ptr() as *mut MaybeUninit<f32>, dest.len())
+            std::slice::from_raw_parts_mut(dest.as_mut_ptr().cast::<MaybeUninit<f32>>(), dest.len())
         };
         Self::store_interleaved_3_uninit(a, b, c, dest);
     }
@@ -152,7 +152,7 @@ pub unsafe trait F32SimdVec:
         // SAFETY: f32 and MaybeUninit<f32> have the same layout.
         // We are writing to initialized memory, so treating it as uninit for writing is fine.
         let dest = unsafe {
-            std::slice::from_raw_parts_mut(dest.as_mut_ptr() as *mut MaybeUninit<f32>, dest.len())
+            std::slice::from_raw_parts_mut(dest.as_mut_ptr().cast::<MaybeUninit<f32>>(), dest.len())
         };
         Self::store_interleaved_4_uninit(a, b, c, d, dest);
     }
@@ -348,6 +348,10 @@ pub trait I32SimdVec:
     /// Stores the lower 16 bits of each i32 lane as u16 values.
     /// Requires `dest.len() >= Self::LEN` or it will panic.
     fn store_u16(self, dest: &mut [u16]);
+
+    /// Stores the lower 8 bits of each i32 lane as u8 values.
+    /// Requires `dest.len() >= Self::LEN` or it will panic.
+    fn store_u8(self, dest: &mut [u8]);
 }
 
 pub trait U32SimdVec: Sized + Copy + Debug + Send + Sync {
@@ -381,7 +385,7 @@ pub unsafe trait U8SimdVec: Sized + Copy + Debug + Send + Sync {
         // SAFETY: u8 and MaybeUninit<u8> have the same layout.
         // We are writing to initialized memory, so treating it as uninit for writing is fine.
         let dest = unsafe {
-            std::slice::from_raw_parts_mut(dest.as_mut_ptr() as *mut MaybeUninit<u8>, dest.len())
+            std::slice::from_raw_parts_mut(dest.as_mut_ptr().cast::<MaybeUninit<u8>>(), dest.len())
         };
         Self::store_interleaved_2_uninit(a, b, dest);
     }
@@ -393,7 +397,7 @@ pub unsafe trait U8SimdVec: Sized + Copy + Debug + Send + Sync {
         // SAFETY: u8 and MaybeUninit<u8> have the same layout.
         // We are writing to initialized memory, so treating it as uninit for writing is fine.
         let dest = unsafe {
-            std::slice::from_raw_parts_mut(dest.as_mut_ptr() as *mut MaybeUninit<u8>, dest.len())
+            std::slice::from_raw_parts_mut(dest.as_mut_ptr().cast::<MaybeUninit<u8>>(), dest.len())
         };
         Self::store_interleaved_3_uninit(a, b, c, dest);
     }
@@ -405,7 +409,7 @@ pub unsafe trait U8SimdVec: Sized + Copy + Debug + Send + Sync {
         // SAFETY: u8 and MaybeUninit<u8> have the same layout.
         // We are writing to initialized memory, so treating it as uninit for writing is fine.
         let dest = unsafe {
-            std::slice::from_raw_parts_mut(dest.as_mut_ptr() as *mut MaybeUninit<u8>, dest.len())
+            std::slice::from_raw_parts_mut(dest.as_mut_ptr().cast::<MaybeUninit<u8>>(), dest.len())
         };
         Self::store_interleaved_4_uninit(a, b, c, d, dest);
     }
@@ -450,7 +454,7 @@ pub unsafe trait U16SimdVec: Sized + Copy + Debug + Send + Sync {
         // SAFETY: u16 and MaybeUninit<u16> have the same layout.
         // We are writing to initialized memory, so treating it as uninit for writing is fine.
         let dest = unsafe {
-            std::slice::from_raw_parts_mut(dest.as_mut_ptr() as *mut MaybeUninit<u16>, dest.len())
+            std::slice::from_raw_parts_mut(dest.as_mut_ptr().cast::<MaybeUninit<u16>>(), dest.len())
         };
         Self::store_interleaved_2_uninit(a, b, dest);
     }
@@ -462,7 +466,7 @@ pub unsafe trait U16SimdVec: Sized + Copy + Debug + Send + Sync {
         // SAFETY: u16 and MaybeUninit<u16> have the same layout.
         // We are writing to initialized memory, so treating it as uninit for writing is fine.
         let dest = unsafe {
-            std::slice::from_raw_parts_mut(dest.as_mut_ptr() as *mut MaybeUninit<u16>, dest.len())
+            std::slice::from_raw_parts_mut(dest.as_mut_ptr().cast::<MaybeUninit<u16>>(), dest.len())
         };
         Self::store_interleaved_3_uninit(a, b, c, dest);
     }
@@ -474,7 +478,7 @@ pub unsafe trait U16SimdVec: Sized + Copy + Debug + Send + Sync {
         // SAFETY: u16 and MaybeUninit<u16> have the same layout.
         // We are writing to initialized memory, so treating it as uninit for writing is fine.
         let dest = unsafe {
-            std::slice::from_raw_parts_mut(dest.as_mut_ptr() as *mut MaybeUninit<u16>, dest.len())
+            std::slice::from_raw_parts_mut(dest.as_mut_ptr().cast::<MaybeUninit<u16>>(), dest.len())
         };
         Self::store_interleaved_4_uninit(a, b, c, d, dest);
     }
@@ -1484,4 +1488,40 @@ mod test {
         }
     }
     test_all_instruction_sets!(test_store_interleaved_4_u16);
+
+    fn test_store_u8<D: SimdDescriptor>(d: D) {
+        let data = [
+            0xba_i32,
+            0x12345678_i32,
+            0xdeadbabeu32 as i32,
+            0x76543210_i32,
+            0x11111111_i32,
+            0x00000000_i32,
+            0xffffffffu32 as i32,
+            0x12345678_i32,
+            0x87654321u32 as i32,
+            0xabcdef01u32 as i32,
+            0x10203040_i32,
+            0x50607080_i32,
+            0x01020304_i32,
+            0x05060708_i32,
+            0x090a0b0c_i32,
+            0x0d0e0f00_i32,
+        ];
+        let mut output = [0u8; 16];
+        for i in (0..16).step_by(D::I32Vec::LEN) {
+            let vec = D::I32Vec::load(d, &data[i..]);
+            vec.store_u8(&mut output[i..]);
+        }
+
+        for i in 0..16 {
+            let expected = (data[i] & 0xff) as u8;
+            assert_eq!(
+                output[i], expected,
+                "store_u8 failed at index {}: expected 0x{:02x}, got 0x{:02x}",
+                i, expected, output[i]
+            );
+        }
+    }
+    test_all_instruction_sets!(test_store_u8);
 }
