@@ -187,18 +187,22 @@ impl<'inner, 'buf> ParseEvents<'inner, 'buf> {
                     return Ok(Some(ParseEvent::Codestream(payload)));
                 }
                 DetectState::InAuxBox {
-                    header: _,
+                    header,
                     bytes_left: None,
                 } => {
-                    let _payload = *buf;
+                    let payload = *buf;
                     *buf = &[];
-                    // FIXME: emit auxiliary box event
+                    return Ok(Some(ParseEvent::AuxBox {
+                        box_type: header.box_type(),
+                        payload,
+                    }));
                 }
                 DetectState::InAuxBox {
-                    header: _,
+                    header,
                     bytes_left: Some(bytes_left),
                 } => {
-                    let _payload = if buf.len() >= *bytes_left {
+                    let box_type = header.box_type();
+                    let payload = if buf.len() >= *bytes_left {
                         let (payload, remaining) = buf.split_at(*bytes_left);
                         *state = DetectState::WaitingBoxHeader;
                         *buf = remaining;
@@ -209,7 +213,7 @@ impl<'inner, 'buf> ParseEvents<'inner, 'buf> {
                         *buf = &[];
                         payload
                     };
-                    // FIXME: emit auxiliary box event
+                    return Ok(Some(ParseEvent::AuxBox { box_type, payload }));
                 }
             }
         }
@@ -258,6 +262,14 @@ pub enum ParseEvent<'buf> {
     /// Returned data may be partial. Complete codestream can be obtained by concatenating all data
     /// of `Codestream` events.
     Codestream(&'buf [u8]),
+    /// Auxiliary box data is read.
+    ///
+    /// This includes boxes like EXIF, XML, gain maps, etc. The complete box payload can be
+    /// obtained by concatenating all data of `AuxBox` events with the same box type.
+    AuxBox {
+        box_type: ContainerBoxType,
+        payload: &'buf [u8],
+    },
 }
 
 impl std::fmt::Debug for ParseEvent<'_> {
@@ -267,6 +279,11 @@ impl std::fmt::Debug for ParseEvent<'_> {
             Self::Codestream(buf) => f
                 .debug_tuple("Codestream")
                 .field(&format_args!("{} byte(s)", buf.len()))
+                .finish(),
+            Self::AuxBox { box_type, payload } => f
+                .debug_struct("AuxBox")
+                .field("box_type", box_type)
+                .field("payload", &format_args!("{} byte(s)", payload.len()))
                 .finish(),
         }
     }
