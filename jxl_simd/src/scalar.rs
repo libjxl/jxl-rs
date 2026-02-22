@@ -312,6 +312,11 @@ impl I32SimdVec for Wrapping<i32> {
     fn store_u16(self, dest: &mut [u16]) {
         dest[0] = self.0 as u16;
     }
+
+    #[inline(always)]
+    fn store_u8(self, dest: &mut [u8]) {
+        dest[0] = self.0 as u8;
+    }
 }
 
 impl U32SimdVec for Wrapping<u32> {

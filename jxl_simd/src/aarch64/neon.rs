@@ -126,7 +126,7 @@ unsafe impl F32SimdVec for F32VecNeon {
     fn load(d: Self::Descriptor, mem: &[f32]) -> Self {
         assert!(mem.len() >= Self::LEN);
         // SAFETY: we just checked that `mem` has enough space. Moreover, we know neon is available
-        // from the safety invariant on `d`.
+        // from the safety invariant on `d`. vld1q_f32 supports unaligned loads.
         Self(unsafe { vld1q_f32(mem.as_ptr()) }, d)
     }
 
@@ -134,7 +134,7 @@ unsafe impl F32SimdVec for F32VecNeon {
     fn store(&self, mem: &mut [f32]) {
         assert!(mem.len() >= Self::LEN);
         // SAFETY: we just checked that `mem` has enough space. Moreover, we know neon is available
-        // from the safety invariant on `d`.
+        // from the safety invariant on `d`. vst1q_f32 supports unaligned stores.
         unsafe { vst1q_f32(mem.as_mut_ptr(), self.0) }
     }
 
@@ -142,9 +142,9 @@ unsafe impl F32SimdVec for F32VecNeon {
     fn store_interleaved_2_uninit(a: Self, b: Self, dest: &mut [MaybeUninit<f32>]) {
         assert!(dest.len() >= 2 * Self::LEN);
         // SAFETY: we just checked that `dest` has enough space, and neon is available
-        // from the safety invariant on the descriptor stored in `a`.
+        // from the safety invariant on the descriptor stored in `a`. vst2q_f32 supports unaligned stores.
         unsafe {
-            let dest_ptr = dest.as_mut_ptr() as *mut f32;
+            let dest_ptr = dest.as_mut_ptr().cast::<f32>();
             vst2q_f32(dest_ptr, float32x4x2_t(a.0, b.0));
         }
     }
@@ -152,9 +152,9 @@ unsafe impl F32SimdVec for F32VecNeon {
     #[inline(always)]
     fn store_interleaved_3_uninit(a: Self, b: Self, c: Self, dest: &mut [MaybeUninit<f32>]) {
         assert!(dest.len() >= 3 * Self::LEN);
-        // SAFETY: `dest` has enough space and writing to `MaybeUninit<f32>` through `*mut f32` is valid.
+        // SAFETY: `dest` has enough space and writing to `MaybeUninit<f32>` through `*mut f32` is valid. vst3q_f32 supports unaligned stores.
         unsafe {
-            let dest_ptr = dest.as_mut_ptr() as *mut f32;
+            let dest_ptr = dest.as_mut_ptr().cast::<f32>();
             vst3q_f32(dest_ptr, float32x4x3_t(a.0, b.0, c.0));
         }
     }
@@ -169,9 +169,9 @@ unsafe impl F32SimdVec for F32VecNeon {
     ) {
         assert!(dest.len() >= 4 * Self::LEN);
         // SAFETY: we just checked that `dest` has enough space, and neon is available
-        // from the safety invariant on the descriptor stored in `a`.
+        // from the safety invariant on the descriptor stored in `a`. vst4q_f32 supports unaligned stores.
         unsafe {
-            let dest_ptr = dest.as_mut_ptr() as *mut f32;
+            let dest_ptr = dest.as_mut_ptr().cast::<f32>();
             vst4q_f32(dest_ptr, float32x4x4_t(a.0, b.0, c.0, d.0));
         }
     }
@@ -281,7 +281,7 @@ unsafe impl F32SimdVec for F32VecNeon {
     fn load_deinterleaved_2(d: Self::Descriptor, src: &[f32]) -> (Self, Self) {
         assert!(src.len() >= 2 * Self::LEN);
         // SAFETY: we just checked that `src` has enough space, and neon is available
-        // from the safety invariant on `d`.
+        // from the safety invariant on `d`. vld2q_f32 supports unaligned loads.
         let float32x4x2_t(a, b) = unsafe { vld2q_f32(src.as_ptr()) };
         (Self(a, d), Self(b, d))
     }
@@ -290,7 +290,7 @@ unsafe impl F32SimdVec for F32VecNeon {
     fn load_deinterleaved_3(d: Self::Descriptor, src: &[f32]) -> (Self, Self, Self) {
         assert!(src.len() >= 3 * Self::LEN);
         // SAFETY: we just checked that `src` has enough space, and neon is available
-        // from the safety invariant on `d`.
+        // from the safety invariant on `d`. vld3q_f32 supports unaligned loads.
         let float32x4x3_t(a, b, c) = unsafe { vld3q_f32(src.as_ptr()) };
         (Self(a, d), Self(b, d), Self(c, d))
     }
@@ -299,7 +299,7 @@ unsafe impl F32SimdVec for F32VecNeon {
     fn load_deinterleaved_4(d: Self::Descriptor, src: &[f32]) -> (Self, Self, Self, Self) {
         assert!(src.len() >= 4 * Self::LEN);
         // SAFETY: we just checked that `src` has enough space, and neon is available
-        // from the safety invariant on `d`.
+        // from the safety invariant on `d`. vld4q_f32 supports unaligned loads.
         let float32x4x4_t(a, b, c, e) = unsafe { vld4q_f32(src.as_ptr()) };
         (Self(a, d), Self(b, d), Self(c, d), Self(e, d))
     }
@@ -341,7 +341,7 @@ unsafe impl F32SimdVec for F32VecNeon {
             assert!(data.len() > 3);
 
             // Transposed load
-            // SAFETY: input is verified to be large enough for this pointer.
+            // SAFETY: input is verified to be large enough for this pointer. vld4q_f32 supports unaligned loads.
             let float32x4x4_t(p0, p1, p2, p3) = unsafe { vld4q_f32(data.as_ptr().cast()) };
 
             F32VecNeon(p0, d).store_array(&mut data[0]);
@@ -426,9 +426,9 @@ unsafe impl F32SimdVec for F32VecNeon {
             let u16s = vqmovun_s32(i32s);
             let u8s = vqmovn_u16(vcombine_u16(u16s, u16s));
             // Store lower 4 bytes
-            // SAFETY: we checked dest has enough space
+            // SAFETY: we checked dest has enough space. vst1_lane_u32 supports unaligned stores.
             unsafe {
-                vst1_lane_u32::<0>(dest.as_mut_ptr() as *mut u32, vreinterpret_u32_u8(u8s));
+                vst1_lane_u32::<0>(dest.as_mut_ptr().cast(), vreinterpret_u32_u8(u8s));
             }
         }
 
@@ -440,7 +440,7 @@ unsafe impl F32SimdVec for F32VecNeon {
             let i32s = vcvtq_s32_f32(rounded);
             let u16s = vqmovun_s32(i32s);
             // Store 4 u16s (8 bytes)
-            // SAFETY: we checked dest has enough space
+            // SAFETY: we checked dest has enough space. vst1_u16 supports unaligned stores.
             unsafe {
                 vst1_u16(dest.as_mut_ptr(), u16s);
             }
@@ -451,7 +451,8 @@ unsafe impl F32SimdVec for F32VecNeon {
             // Use inline asm because Rust stdarch incorrectly requires fp16 target feature
             // for vcvt_f16_f32 (fixed in https://github.com/rust-lang/stdarch/pull/1978)
             let f16_bits: uint16x4_t;
-            // SAFETY: NEON is available (guaranteed by descriptor), dest has enough space
+            // SAFETY: NEON is available (guaranteed by descriptor), dest has enough space,
+            // vst1_u16 supports unaligned stores.
             unsafe {
                 std::arch::asm!(
                     "fcvtn {out:v}.4h, {inp:v}.4s",
@@ -470,7 +471,8 @@ unsafe impl F32SimdVec for F32VecNeon {
         // Use inline asm because Rust stdarch incorrectly requires fp16 target feature
         // for vcvt_f32_f16 (fixed in https://github.com/rust-lang/stdarch/pull/1978)
         let result: float32x4_t;
-        // SAFETY: NEON is available (guaranteed by descriptor), mem has enough space
+        // SAFETY: NEON is available (guaranteed by descriptor), mem has enough space.
+        // vld1_u16 supports unaligned loads.
         unsafe {
             let f16_bits = vld1_u16(mem.as_ptr());
             std::arch::asm!(
@@ -491,7 +493,7 @@ unsafe impl F32SimdVec for F32VecNeon {
             // Convert f32 table to BF16 packed in 128 bits (16 bytes for 8 entries)
             // BF16 is the high 16 bits of f32
             // SAFETY: neon is available from target_feature, and `table` is large
-            // enough for the loads.
+            // enough for the loads. vld1q_f32 supports unaligned loads.
             let (table_lo, table_hi) =
                 unsafe { (vld1q_f32(table.as_ptr()), vld1q_f32(table.as_ptr().add(4))) };
 
@@ -699,11 +701,26 @@ impl I32SimdVec for I32VecNeon {
     fn store_u16(self, dest: &mut [u16]) {
         assert!(dest.len() >= Self::LEN);
         // SAFETY: We know neon is available from the safety invariant on `self.1`,
-        // and we just checked that `dest` has enough space.
+        // and we just checked that `dest` has enough space. vst1_u16 supports unaligned
+        // stores.
         unsafe {
             // vmovn narrows i32 to i16 by taking the lower 16 bits
             let narrowed = vmovn_s32(self.0);
             vst1_u16(dest.as_mut_ptr(), vreinterpret_u16_s16(narrowed));
+        }
+    }
+
+    #[inline(always)]
+    fn store_u8(self, dest: &mut [u8]) {
+        assert!(dest.len() >= Self::LEN);
+        // SAFETY: We know neon is available from the safety invariant on `self.1`,
+        // and we just checked that `dest` has enough space. vst1_lane_u32 supports unaligned stores.
+        unsafe {
+            // vmovn narrows i32 -> i16 -> i8
+            let narrowed_i16 = vmovn_s32(self.0);
+            let combined_i16 = vcombine_s16(narrowed_i16, narrowed_i16);
+            let narrowed_i8 = vmovn_s16(combined_i16);
+            vst1_lane_u32::<0>(dest.as_mut_ptr().cast(), vreinterpret_u32_s8(narrowed_i8));
         }
     }
 }
@@ -855,7 +872,7 @@ unsafe impl U8SimdVec for U8VecNeon {
     fn load(d: Self::Descriptor, mem: &[u8]) -> Self {
         assert!(mem.len() >= Self::LEN);
         // SAFETY: we just checked that `mem` has enough space. Moreover, we know neon is available
-        // from the safety invariant on `d`.
+        // from the safety invariant on `d`. vld1q_u8 supports unaligned loads.
         Self(unsafe { vld1q_u8(mem.as_ptr()) }, d)
     }
 
@@ -869,7 +886,7 @@ unsafe impl U8SimdVec for U8VecNeon {
     fn store(&self, mem: &mut [u8]) {
         assert!(mem.len() >= Self::LEN);
         // SAFETY: we just checked that `mem` has enough space. Moreover, we know neon is available
-        // from the safety invariant on `d`.
+        // from the safety invariant on `d`. vst1q_u8 supports unaligned stores.
         unsafe { vst1q_u8(mem.as_mut_ptr(), self.0) }
     }
 
@@ -877,9 +894,9 @@ unsafe impl U8SimdVec for U8VecNeon {
     fn store_interleaved_2_uninit(a: Self, b: Self, dest: &mut [MaybeUninit<u8>]) {
         assert!(dest.len() >= 2 * Self::LEN);
         // SAFETY: we just checked that `dest` has enough space, and neon is available
-        // from the safety invariant on the descriptor stored in `a`.
+        // from the safety invariant on the descriptor stored in `a`. vst2q_u8 supports unaligned stores.
         unsafe {
-            let dest_ptr = dest.as_mut_ptr() as *mut u8;
+            let dest_ptr = dest.as_mut_ptr().cast::<u8>();
             vst2q_u8(dest_ptr, uint8x16x2_t(a.0, b.0));
         }
     }
@@ -888,9 +905,9 @@ unsafe impl U8SimdVec for U8VecNeon {
     fn store_interleaved_3_uninit(a: Self, b: Self, c: Self, dest: &mut [MaybeUninit<u8>]) {
         assert!(dest.len() >= 3 * Self::LEN);
         // SAFETY: we just checked that `dest` has enough space, and neon is available
-        // from the safety invariant on the descriptor stored in `a`.
+        // from the safety invariant on the descriptor stored in `a`. vst3q_u8 supports unaligned stores.
         unsafe {
-            let dest_ptr = dest.as_mut_ptr() as *mut u8;
+            let dest_ptr = dest.as_mut_ptr().cast::<u8>();
             vst3q_u8(dest_ptr, uint8x16x3_t(a.0, b.0, c.0));
         }
     }
@@ -905,9 +922,9 @@ unsafe impl U8SimdVec for U8VecNeon {
     ) {
         assert!(dest.len() >= 4 * Self::LEN);
         // SAFETY: we just checked that `dest` has enough space, and neon is available
-        // from the safety invariant on the descriptor stored in `a`.
+        // from the safety invariant on the descriptor stored in `a`. vst4q_u8 supports unaligned stores.
         unsafe {
-            let dest_ptr = dest.as_mut_ptr() as *mut u8;
+            let dest_ptr = dest.as_mut_ptr().cast::<u8>();
             vst4q_u8(dest_ptr, uint8x16x4_t(a.0, b.0, c.0, d.0));
         }
     }
@@ -927,8 +944,8 @@ unsafe impl U16SimdVec for U16VecNeon {
     fn load(d: Self::Descriptor, mem: &[u16]) -> Self {
         assert!(mem.len() >= Self::LEN);
         // SAFETY: we just checked that `mem` has enough space. Moreover, we know neon is available
-        // from the safety invariant on `d`.
-        Self(unsafe { vld1q_u16(mem.as_ptr()) }, d)
+        // from the safety invariant on `d`. vld1q_u16 supports unaligned loads.
+        Self(unsafe { vld1q_u16(mem.as_ptr().cast()) }, d)
     }
 
     #[inline(always)]
@@ -941,17 +958,17 @@ unsafe impl U16SimdVec for U16VecNeon {
     fn store(&self, mem: &mut [u16]) {
         assert!(mem.len() >= Self::LEN);
         // SAFETY: we just checked that `mem` has enough space. Moreover, we know neon is available
-        // from the safety invariant on `d`.
-        unsafe { vst1q_u16(mem.as_mut_ptr(), self.0) }
+        // from the safety invariant on `d`. vst1q_u16 supports unaligned stores.
+        unsafe { vst1q_u16(mem.as_mut_ptr().cast(), self.0) }
     }
 
     #[inline(always)]
     fn store_interleaved_2_uninit(a: Self, b: Self, dest: &mut [MaybeUninit<u16>]) {
         assert!(dest.len() >= 2 * Self::LEN);
         // SAFETY: we just checked that `dest` has enough space, and neon is available
-        // from the safety invariant on the descriptor stored in `a`.
+        // from the safety invariant on the descriptor stored in `a`. vst2q_u16 supports unaligned stores.
         unsafe {
-            let dest_ptr = dest.as_mut_ptr() as *mut u16;
+            let dest_ptr = dest.as_mut_ptr().cast::<u16>();
             vst2q_u16(dest_ptr, uint16x8x2_t(a.0, b.0));
         }
     }
@@ -960,9 +977,9 @@ unsafe impl U16SimdVec for U16VecNeon {
     fn store_interleaved_3_uninit(a: Self, b: Self, c: Self, dest: &mut [MaybeUninit<u16>]) {
         assert!(dest.len() >= 3 * Self::LEN);
         // SAFETY: we just checked that `dest` has enough space, and neon is available
-        // from the safety invariant on the descriptor stored in `a`.
+        // from the safety invariant on the descriptor stored in `a`. vst3q_u16 supports unaligned stores.
         unsafe {
-            let dest_ptr = dest.as_mut_ptr() as *mut u16;
+            let dest_ptr = dest.as_mut_ptr().cast::<u16>();
             vst3q_u16(dest_ptr, uint16x8x3_t(a.0, b.0, c.0));
         }
     }
@@ -977,9 +994,9 @@ unsafe impl U16SimdVec for U16VecNeon {
     ) {
         assert!(dest.len() >= 4 * Self::LEN);
         // SAFETY: we just checked that `dest` has enough space, and neon is available
-        // from the safety invariant on the descriptor stored in `a`.
+        // from the safety invariant on the descriptor stored in `a`. vst4q_u16 supports unaligned stores.
         unsafe {
-            let dest_ptr = dest.as_mut_ptr() as *mut u16;
+            let dest_ptr = dest.as_mut_ptr().cast::<u16>();
             vst4q_u16(dest_ptr, uint16x8x4_t(a.0, b.0, c.0, d.0));
         }
     }
