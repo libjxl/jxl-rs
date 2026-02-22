@@ -408,7 +408,7 @@ pub fn make_grids(
     let mut transforms_needed_by = vec![vec![]; grid_transform_steps.len()];
     let mut enabled_transforms = vec![vec![]; grid_transform_steps.len()];
     for (i, s) in grid_transform_steps.iter().enumerate() {
-        for (b, g) in s.outputs(&buffer_info) {
+        for (b, g) in s.outputs(buffer_info) {
             for (t, _) in buffer_info[b].buffer_grid[g].users(true) {
                 transforms_needed_by[t].push(i);
                 enabled_transforms[i].push(t);

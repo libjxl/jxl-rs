@@ -474,7 +474,20 @@ impl Frame {
                 histograms,
             });
         }
-        let hf_coefficients = if passes.len() <= 1 {
+        // Note that, if we have extra channels that can be rendered progressively,
+        // we might end up re-drawing some VarDCT groups. In that case, we need to
+        // keep around the coefficients, so allocate coefficients under those conditions
+        // too.
+        // TODO(veluca): evaluate whether we can make this check more precise.
+        let hf_coefficients = if passes.len() <= 1
+            && !(self
+                .lf_global
+                .as_mut()
+                .unwrap()
+                .modular_global
+                .can_do_partial_render()
+                && self.header.num_extra_channels > 0)
+        {
             None
         } else {
             let xs = GROUP_DIM * GROUP_DIM;

@@ -165,9 +165,11 @@ pub struct HfMetadata {
     used_hf_types: u32,
 }
 
-#[derive(PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub enum RenderUnit {
+    /// VarDCT data
     VarDCT,
+    /// Modular channel with the given index
     Modular(usize),
 }
 

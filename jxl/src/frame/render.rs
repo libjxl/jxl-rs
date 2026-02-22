@@ -15,6 +15,7 @@ use crate::features::epf::SigmaSource;
 use crate::frame::RenderUnit;
 use crate::headers::frame_header::Encoding;
 use crate::headers::{Orientation, color_encoding::ColorSpace, extra_channels::ExtraChannel};
+use crate::image::Image;
 use crate::image::Rect;
 #[cfg(test)]
 use crate::render::SimpleRenderPipeline;
@@ -196,38 +197,41 @@ impl Frame {
 
         pipeline!(self, p, p.render_outside_frame(&mut buffer_splitter)?);
 
-        // let modular_global = &mut self.lf_global.as_mut().unwrap().modular_global;
         // STEP 1: if we are requesting a flush, and did not flush before, mark modular channels
         // as having been decoded as 0.
         if !self.was_flushed_once && do_flush {
             self.was_flushed_once = true;
             self.groups_to_flush.extend(0..self.header.num_groups());
-            /*
-            // TODO
-            modular_global.zero_fill_empty_channels(
-                self.header.passes.num_passes as usize,
-                self.header.num_groups(),
-            )?;
-            */
+            self.lf_global
+                .as_mut()
+                .unwrap()
+                .modular_global
+                .zero_fill_empty_channels(
+                    self.header.passes.num_passes as usize,
+                    self.header.num_groups(),
+                )?;
         }
 
-        /*
-        // STEP 2: prepare modular data for rendering. While doing so, also compute which
-        // groups will have their modular data re-rendered, and pass that information to
-        // mark_group_to_rerender.
-        modular_global.prepare_render(&groups, |g, b| {
-            println!("will rerender: {g} {b}");
-            self.changed_since_last_flush
-                .insert((g, RenderUnit::Modular(b)));
-            self.groups_to_flush.insert(g);
-            pipeline!(self, p, p.mark_group_to_rerender(g));
-        });
-        */
-
+        // STEP 2: ensure that groups that will be re-rendered are marked as such.
         // VarDCT data to be rendered.
         for (g, _) in groups.iter() {
             self.groups_to_flush.insert(*g);
             pipeline!(self, p, p.mark_group_to_rerender(*g));
+        }
+        // Modular data to be re-rendered.
+        {
+            let modular_global = &mut self.lf_global.as_mut().unwrap().modular_global;
+            for (group, passes) in groups.iter() {
+                for (pass, _) in passes.iter() {
+                    modular_global.mark_group_to_be_read(2 + *pass, *group);
+                }
+            }
+            let mut pass_to_pipeline = |_, group, _, _| {
+                self.groups_to_flush.insert(group);
+                pipeline!(self, p, p.mark_group_to_rerender(group));
+                Ok(())
+            };
+            modular_global.process_output(&self.header, true, &mut pass_to_pipeline)?;
         }
 
         // STEP 3: decode the groups, eagerly rendering VarDCT channels and noise.
@@ -243,23 +247,27 @@ impl Frame {
         // or we are done with the file.
         if self.incomplete_groups == 0 || do_flush {
             let modular_global = &mut self.lf_global.as_mut().unwrap().modular_global;
-            let mut pass_to_pipeline = |chan, group, complete, image| {
+            let mut pass_to_pipeline = |chan, group, complete, image: Option<Image<i32>>| {
                 self.changed_since_last_flush
                     .insert((group, RenderUnit::Modular(chan)));
                 pipeline!(
                     self,
                     p,
-                    p.set_buffer_for_group(chan, group, complete, image, &mut buffer_splitter)?
+                    p.set_buffer_for_group(
+                        chan,
+                        group,
+                        complete,
+                        image.unwrap(),
+                        &mut buffer_splitter
+                    )?
                 );
                 Ok(())
             };
-            modular_global.process_output(&self.header, &mut pass_to_pipeline)?;
-        }
+            modular_global.process_output(&self.header, false, &mut pass_to_pipeline)?;
 
-        // STEP 5: re-render VarDCT/noise data in rendered groups for which it was
-        // not rendered, or re-send to pipeline modular channels that were not
-        // updated in those groups.
-        if do_flush {
+            // STEP 5: re-render VarDCT/noise data in rendered groups for which it was
+            // not rendered, or re-send to pipeline modular channels that were not
+            // updated in those groups.
             for g in std::mem::take(&mut self.groups_to_flush) {
                 if self
                     .changed_since_last_flush

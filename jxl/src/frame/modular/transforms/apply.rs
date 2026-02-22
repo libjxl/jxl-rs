@@ -10,8 +10,8 @@ use num_traits::FromPrimitive;
 use crate::{
     error::{Error, Result},
     frame::modular::{
-        BUFFER_STATUS_FINAL_RENDER, BUFFER_STATUS_NOT_RENDERED, ChannelInfo, ModularBufferInfo,
-        ModularChannel, ModularGridKind, Predictor, borrowed_buffers::with_buffers,
+        ChannelInfo, ModularBufferInfo, ModularChannel, ModularGridKind, Predictor,
+        borrowed_buffers::with_buffers,
     },
     headers::{
         self,
@@ -64,7 +64,7 @@ pub struct TransformStepChunk {
     pub(super) grid_pos: (usize, usize),
 
     // List of (buffer, grid) that this transform depends on.
-    pub(super) deps: Vec<(usize, usize)>,
+    pub(in super::super) deps: Vec<(usize, usize)>,
 
     // Processing layer that this transform belongs to. Layer 0 are transforms
     // that only depend on coded channels, layer 1 are transforms that only
@@ -72,14 +72,6 @@ pub struct TransformStepChunk {
     // in the same layer have no inter-dependencies, they can be run at the
     // same time.
     pub(in super::super) layer: usize,
-}
-
-#[derive(Debug, PartialEq, Eq)]
-pub enum RunKind {
-    NoRun,
-    FirstRender,
-    PartialUpdate,
-    LastRender,
 }
 
 impl TransformStepChunk {
@@ -93,38 +85,14 @@ impl TransformStepChunk {
         }
     }
 
-    // Tries to run this transform, setting the correct status of the output buffers and
-    // returning information about the render that happened (if any).
+    // Runs this transform. This function *will* crash if the transform is not ready.
     #[instrument(level = "trace", skip_all)]
-    pub fn try_run(
+    pub fn do_run(
         &self,
         frame_header: &FrameHeader,
         buffers: &[ModularBufferInfo],
-    ) -> Result<RunKind> {
-        let dependency_status = self
-            .deps
-            .iter()
-            .map(|(b, g)| buffers[*b].buffer_grid[*g].get_status())
-            .min()
-            .unwrap_or(BUFFER_STATUS_FINAL_RENDER);
-
-        if dependency_status == BUFFER_STATUS_NOT_RENDERED {
-            return Ok(RunKind::NoRun);
-        }
-
-        let is_final = dependency_status == BUFFER_STATUS_FINAL_RENDER;
-
-        let mut previous_output_status = None;
-        for (b, g) in self.outputs(buffers) {
-            let buf = &buffers[b].buffer_grid[g];
-            if previous_output_status.is_none() {
-                previous_output_status = Some(buf.get_status());
-            }
-            assert_eq!(Some(buf.get_status()), previous_output_status);
-            buf.set_status(dependency_status);
-        }
-        let previous_output_status = previous_output_status.unwrap();
-
+        is_final: bool,
+    ) -> Result<()> {
         let buf_out = self.buf_out();
         let out_grid_kind = buffers[buf_out[0]].grid_kind;
         let out_grid = buffers[buf_out[0]].get_grid_idx(out_grid_kind, self.grid_pos);
@@ -422,13 +390,7 @@ impl TransformStepChunk {
             }
         };
 
-        if previous_output_status == BUFFER_STATUS_NOT_RENDERED {
-            Ok(RunKind::FirstRender)
-        } else if dependency_status == BUFFER_STATUS_FINAL_RENDER {
-            Ok(RunKind::LastRender)
-        } else {
-            Ok(RunKind::PartialUpdate)
-        }
+        Ok(())
     }
 
     // Iterates over the list of outputs for this transform.
@@ -436,21 +398,21 @@ impl TransformStepChunk {
         let buf_out = self.buf_out();
         let out_grid_kind = buffers[buf_out[0]].grid_kind;
         let out_grid = buffers[buf_out[0]].get_grid_idx(out_grid_kind, self.grid_pos);
-        let grid_offset = match &self.step {
+        let grid_offset_up = match &self.step {
             TransformStep::Palette {
                 buf_in,
                 buf_out,
                 predictor,
                 ..
             } if buffers[*buf_in].info.size.0 != 0 && predictor.requires_full_row() => {
-                0..buffers[buf_out[0]].grid_shape.0
+                buffers[buf_out[0]].grid_shape.0
             }
-            _ => 0..1,
+            _ => 1,
         };
 
         buf_out
             .iter()
-            .flat_map(move |x| (grid_offset.clone()).map(move |y| (*x, out_grid + y)))
+            .flat_map(move |x| (0..grid_offset_up).map(move |y| (*x, out_grid + y)))
     }
 }
 

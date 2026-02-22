@@ -366,6 +366,56 @@ pub(crate) mod tests {
 
     for_each_test_file!(decode_test_file_chunks);
 
+    fn compare_frames(
+        path: &Path,
+        fc: usize,
+        f: &[Image<f32>],
+        sf: &[Image<f32>],
+    ) -> Result<(), Error> {
+        assert_eq!(
+            f.len(),
+            sf.len(),
+            "Frame {fc} has different channels counts",
+        );
+        for (c, (b, sb)) in f.iter().zip(sf.iter()).enumerate() {
+            assert_eq!(
+                b.size(),
+                sb.size(),
+                "Channel {c} in frame {fc} has different sizes",
+            );
+            let sz = b.size();
+            if false {
+                let f = std::fs::File::create(Path::new("/tmp/").join(format!(
+                    "{}_diff_chan{c}.pbm",
+                    path.as_os_str().to_string_lossy().replace("/", "_")
+                )))?;
+                use std::io::Write;
+                let mut f = std::io::BufWriter::new(f);
+                writeln!(f, "P1\n{} {}", sz.0, sz.1)?;
+                for y in 0..sz.1 {
+                    for x in 0..sz.0 {
+                        if (b.row(y)[x] - sb.row(y)[x]).abs() > 1e-8 {
+                            write!(f, "1")?;
+                        } else {
+                            write!(f, "0")?;
+                        }
+                    }
+                }
+                drop(f);
+            }
+            for y in 0..sz.1 {
+                for x in 0..sz.0 {
+                    assert_eq!(
+                        b.row(y)[x],
+                        sb.row(y)[x],
+                        "Pixels differ at position ({x}, {y}), channel {c}"
+                    );
+                }
+            }
+        }
+        Ok(())
+    }
+
     fn compare_pipelines(path: &Path) -> Result<(), Error> {
         let file = std::fs::read(path)?;
         let simple_frames = decode(&file, usize::MAX, true, false, None)?.1;
@@ -376,47 +426,7 @@ pub(crate) mod tests {
             .zip(simple_frames.into_iter())
             .enumerate()
         {
-            assert_eq!(
-                f.len(),
-                sf.len(),
-                "Frame {fc} has different channels counts",
-            );
-            for (c, (b, sb)) in f.into_iter().zip(sf.into_iter()).enumerate() {
-                assert_eq!(
-                    b.size(),
-                    sb.size(),
-                    "Channel {c} in frame {fc} has different sizes",
-                );
-                let sz = b.size();
-                if false {
-                    let f = std::fs::File::create(Path::new("/tmp/").join(format!(
-                        "{}_diff_chan{c}.pbm",
-                        path.as_os_str().to_string_lossy().replace("/", "_")
-                    )))?;
-                    use std::io::Write;
-                    let mut f = std::io::BufWriter::new(f);
-                    writeln!(f, "P1\n{} {}", sz.0, sz.1)?;
-                    for y in 0..sz.1 {
-                        for x in 0..sz.0 {
-                            if (b.row(y)[x] - sb.row(y)[x]).abs() > 1e-8 {
-                                write!(f, "1")?;
-                            } else {
-                                write!(f, "0")?;
-                            }
-                        }
-                    }
-                    drop(f);
-                }
-                for y in 0..sz.1 {
-                    for x in 0..sz.0 {
-                        assert_eq!(
-                            b.row(y)[x],
-                            sb.row(y)[x],
-                            "Pixels differ at position ({x}, {y}), channel {c}"
-                        );
-                    }
-                }
-            }
+            compare_frames(path, fc, &f, &sf)?;
         }
         Ok(())
     }
@@ -437,29 +447,7 @@ pub(crate) mod tests {
             .zip(one_shot_frames.into_iter())
             .enumerate()
         {
-            assert_eq!(
-                f.len(),
-                sf.len(),
-                "Frame {fc} has different channels counts"
-            );
-            for (c, (b, sb)) in f.into_iter().zip(sf.into_iter()).enumerate() {
-                assert_eq!(
-                    b.size(),
-                    sb.size(),
-                    "Channel {c} in frame {fc} has different sizes"
-                );
-                let sz = b.size();
-                for y in 0..sz.1 {
-                    let row = b.row(y);
-                    let s_row = sb.row(y);
-                    for x in 0..sz.0 {
-                        assert_eq!(
-                            row[x], s_row[x],
-                            "Pixels differ at position ({x}, {y}), channel {c}, frame {fc}"
-                        );
-                    }
-                }
-            }
+            compare_frames(path, fc, &f, &sf)?;
         }
 
         Ok(())
