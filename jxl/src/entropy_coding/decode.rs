@@ -12,6 +12,7 @@ use crate::entropy_coding::huffman::*;
 use crate::entropy_coding::hybrid_uint::*;
 use crate::error::{Error, Result};
 use crate::headers::encodings::*;
+use crate::util::NewWithCapacity;
 use crate::util::tracing_wrappers::*;
 
 pub fn decode_varint16(br: &mut BitReader) -> Result<u16> {
@@ -259,7 +260,7 @@ impl SymbolReader {
                     min_symbol,
                     min_length,
                     dist_multiplier,
-                    window: Vec::new(),
+                    window: Vec::new_with_capacity(1 << Lz77State::LOG_WINDOW_SIZE)?,
                     num_to_copy: 0,
                     copy_pos: 0,
                     num_decoded: 0,
