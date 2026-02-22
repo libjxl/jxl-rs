@@ -105,7 +105,7 @@ fn make_and_run_simple_pipeline_impl<InputT: ImageDataType, OutputT: ImageDataTy
         LOG_GROUP_SIZE,
         chunk_size,
     )
-    .add_stage_internal(stage)?;
+    .add_stage_internal(stage);
 
     let jxl_data_type = match OutputT::DATA_TYPE_ID {
         DataTypeTag::U8 | DataTypeTag::I8 => JxlDataFormat::U8 { bit_depth: 8 },
@@ -128,7 +128,7 @@ fn make_and_run_simple_pipeline_impl<InputT: ImageDataType, OutputT: ImageDataTy
             JxlColorType::Grayscale,
             jxl_data_type,
             false,
-        )?;
+        );
     }
     let mut pipeline = pipeline.build()?;
 

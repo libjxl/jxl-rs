@@ -56,58 +56,9 @@ impl<Pipeline: RenderPipeline> RenderPipelineBuilder<Pipeline> {
         }
     }
 
-    pub(super) fn add_stage_internal(mut self, stage: Stage<Pipeline::Buffer>) -> Result<Self> {
-        let input_type = stage.input_type();
-        let output_type = stage.output_type();
-        let shift = stage.shift();
-        let border = stage.border();
-        let is_extend = matches!(stage, Stage::Extend(_));
-        let current_info = self.shared.channel_info.last().unwrap().clone();
-        debug!(
-            last_stage_channel_info = ?current_info,
-            extend_stage_index= ?self.shared.extend_stage_index,
-            "adding stage '{stage}'",
-        );
-        let mut after_info = vec![];
-        for (c, info) in current_info.iter().enumerate() {
-            if !stage.uses_channel(c) {
-                after_info.push(ChannelInfo {
-                    ty: info.ty,
-                    downsample: (0, 0),
-                });
-            } else {
-                if let Some(ty) = info.ty
-                    && ty != input_type
-                {
-                    return Err(Error::PipelineChannelTypeMismatch(
-                        stage.to_string(),
-                        c,
-                        input_type,
-                        ty,
-                    ));
-                }
-                after_info.push(ChannelInfo {
-                    ty: Some(output_type.unwrap_or(input_type)),
-                    downsample: shift,
-                });
-            }
-        }
-        if self.shared.extend_stage_index.is_some()
-            && (shift != (0, 0) || border != (0, 0) || is_extend)
-        {
-            return Err(Error::PipelineInvalidStageAfterExtend(stage.to_string()));
-        }
-        if is_extend {
-            self.shared.extend_stage_index = Some(self.shared.stages.len());
-        }
-        debug!(
-            new_channel_info = ?after_info,
-            extend_stage_index= ?self.shared.extend_stage_index,
-            "added stage '{stage}'",
-        );
-        self.shared.channel_info.push(after_info);
+    pub(super) fn add_stage_internal(mut self, stage: Stage<Pipeline::Buffer>) -> Self {
         self.shared.stages.push(stage);
-        Ok(self)
+        self
     }
 
     pub fn new(
@@ -125,7 +76,6 @@ impl<Pipeline: RenderPipeline> RenderPipelineBuilder<Pipeline> {
         )
     }
 
-    #[instrument(skip_all, err)]
     pub fn add_save_stage(
         self,
         channels: &[usize],
@@ -134,7 +84,7 @@ impl<Pipeline: RenderPipeline> RenderPipelineBuilder<Pipeline> {
         color_type: JxlColorType,
         data_format: JxlDataFormat,
         fill_opaque_alpha: bool,
-    ) -> Result<Self> {
+    ) -> Self {
         let stage = SaveStage::new(
             channels,
             orientation,
@@ -146,23 +96,72 @@ impl<Pipeline: RenderPipeline> RenderPipelineBuilder<Pipeline> {
         self.add_stage_internal(Stage::Save(stage))
     }
 
-    #[instrument(skip_all, err)]
-    pub fn add_extend_stage(self, extend: ExtendToImageDimensionsStage) -> Result<Self> {
+    pub fn add_extend_stage(self, extend: ExtendToImageDimensionsStage) -> Self {
         self.add_stage_internal(Stage::Extend(extend))
     }
 
-    #[instrument(skip_all, err)]
-    pub fn add_inplace_stage<S: RenderPipelineInPlaceStage>(self, stage: S) -> Result<Self> {
+    pub fn add_inplace_stage<S: RenderPipelineInPlaceStage>(self, stage: S) -> Self {
         self.add_stage_internal(Stage::InPlace(Pipeline::box_inplace_stage(stage)))
     }
 
-    #[instrument(skip_all, err)]
-    pub fn add_inout_stage<S: RenderPipelineInOutStage>(self, stage: S) -> Result<Self> {
+    pub fn add_inout_stage<S: RenderPipelineInOutStage>(self, stage: S) -> Self {
         self.add_stage_internal(Stage::InOut(Pipeline::box_inout_stage(stage)))
     }
 
     #[instrument(skip_all, err)]
     pub fn build(mut self) -> Result<Box<Pipeline>> {
+        for (i, stage) in self.shared.stages.iter().enumerate() {
+            let input_type = stage.input_type();
+            let output_type = stage.output_type();
+            let shift = stage.shift();
+            let border = stage.border();
+            let is_extend = matches!(stage, Stage::Extend(_));
+            let current_info = self.shared.channel_info.last().unwrap().clone();
+            debug!(
+                last_stage_channel_info = ?current_info,
+                extend_stage_index= ?self.shared.extend_stage_index,
+                "adding stage '{stage}'",
+            );
+            let mut after_info = vec![];
+            for (c, info) in current_info.iter().enumerate() {
+                if !stage.uses_channel(c) {
+                    after_info.push(ChannelInfo {
+                        ty: info.ty,
+                        downsample: (0, 0),
+                    });
+                } else {
+                    if let Some(ty) = info.ty
+                        && ty != input_type
+                    {
+                        return Err(Error::PipelineChannelTypeMismatch(
+                            stage.to_string(),
+                            c,
+                            input_type,
+                            ty,
+                        ));
+                    }
+                    after_info.push(ChannelInfo {
+                        ty: Some(output_type.unwrap_or(input_type)),
+                        downsample: shift,
+                    });
+                }
+            }
+            if self.shared.extend_stage_index.is_some()
+                && (shift != (0, 0) || border != (0, 0) || is_extend)
+            {
+                return Err(Error::PipelineInvalidStageAfterExtend(stage.to_string()));
+            }
+            if is_extend {
+                self.shared.extend_stage_index = Some(i);
+            }
+            debug!(
+                new_channel_info = ?after_info,
+                extend_stage_index= ?self.shared.extend_stage_index,
+                "added stage '{stage}'",
+            );
+            self.shared.channel_info.push(after_info);
+        }
+
         let channel_info = &mut self.shared.channel_info;
         let num_channels = channel_info[0].len();
         let mut cur_downsamples = vec![(0u8, 0u8); num_channels];
