@@ -206,6 +206,7 @@ pub(crate) mod tests {
                 &std::fs::read("resources/test/green_queen_vardct_e3.jxl").unwrap(),
                 u.arbitrary::<u8>().unwrap() as usize + 1,
                 false,
+                false,
                 None,
             )
             .unwrap();
@@ -218,6 +219,7 @@ pub(crate) mod tests {
         mut input: &[u8],
         chunk_size: usize,
         use_simple_pipeline: bool,
+        do_flush: bool,
         callback: Option<Box<dyn FnMut(&Frame, usize) -> Result<(), Error>>>,
     ) -> Result<(usize, Vec<Vec<Image<f32>>>), Error> {
         let options = JxlDecoderOptions::default();
@@ -240,6 +242,12 @@ pub(crate) mod tests {
                     match process_result.unwrap() {
                         ProcessingResult::Complete { result } => break result,
                         ProcessingResult::NeedsMoreInput { fallback, .. } => {
+                            $(
+                                let mut fallback = fallback;
+                                if do_flush && !input.is_empty() {
+                                    fallback.flush_pixels($extra_arg)?;
+                                }
+                            )?
                             if input.is_empty() {
                                 panic!("Unexpected end of input");
                             }
@@ -345,75 +353,107 @@ pub(crate) mod tests {
     }
 
     fn decode_test_file(path: &Path) -> Result<(), Error> {
-        decode(&std::fs::read(path)?, usize::MAX, false, None)?;
+        decode(&std::fs::read(path)?, usize::MAX, false, false, None)?;
         Ok(())
     }
 
     for_each_test_file!(decode_test_file);
 
     fn decode_test_file_chunks(path: &Path) -> Result<(), Error> {
-        decode(&std::fs::read(path)?, 1, false, None)?;
+        decode(&std::fs::read(path)?, 1, false, false, None)?;
         Ok(())
     }
 
     for_each_test_file!(decode_test_file_chunks);
 
-    fn compare_pipelines(path: &Path) -> Result<(), Error> {
-        let file = std::fs::read(path)?;
-        let simple_frames = decode(&file, usize::MAX, true, None)?.1;
-        let frames = decode(&file, usize::MAX, false, None)?.1;
-        assert_eq!(frames.len(), simple_frames.len());
-        for (fc, (f, sf)) in frames
-            .into_iter()
-            .zip(simple_frames.into_iter())
-            .enumerate()
-        {
+    fn compare_frames(
+        path: &Path,
+        fc: usize,
+        f: &[Image<f32>],
+        sf: &[Image<f32>],
+    ) -> Result<(), Error> {
+        assert_eq!(
+            f.len(),
+            sf.len(),
+            "Frame {fc} has different channels counts",
+        );
+        for (c, (b, sb)) in f.iter().zip(sf.iter()).enumerate() {
             assert_eq!(
-                f.len(),
-                sf.len(),
-                "Frame {fc} has different channels counts",
+                b.size(),
+                sb.size(),
+                "Channel {c} in frame {fc} has different sizes",
             );
-            for (c, (b, sb)) in f.into_iter().zip(sf.into_iter()).enumerate() {
-                assert_eq!(
-                    b.size(),
-                    sb.size(),
-                    "Channel {c} in frame {fc} has different sizes",
-                );
-                let sz = b.size();
-                if false {
-                    let f = std::fs::File::create(Path::new("/tmp/").join(format!(
-                        "{}_diff_chan{c}.pbm",
-                        path.as_os_str().to_string_lossy().replace("/", "_")
-                    )))?;
-                    use std::io::Write;
-                    let mut f = std::io::BufWriter::new(f);
-                    writeln!(f, "P1\n{} {}", sz.0, sz.1)?;
-                    for y in 0..sz.1 {
-                        for x in 0..sz.0 {
-                            if (b.row(y)[x] - sb.row(y)[x]).abs() > 1e-8 {
-                                write!(f, "1")?;
-                            } else {
-                                write!(f, "0")?;
-                            }
-                        }
-                    }
-                    drop(f);
-                }
+            let sz = b.size();
+            if false {
+                let f = std::fs::File::create(Path::new("/tmp/").join(format!(
+                    "{}_diff_chan{c}.pbm",
+                    path.as_os_str().to_string_lossy().replace("/", "_")
+                )))?;
+                use std::io::Write;
+                let mut f = std::io::BufWriter::new(f);
+                writeln!(f, "P1\n{} {}", sz.0, sz.1)?;
                 for y in 0..sz.1 {
                     for x in 0..sz.0 {
-                        assert_eq!(
-                            b.row(y)[x],
-                            sb.row(y)[x],
-                            "Pixels differ at position ({x}, {y}), channel {c}"
-                        );
+                        if (b.row(y)[x] - sb.row(y)[x]).abs() > 1e-8 {
+                            write!(f, "1")?;
+                        } else {
+                            write!(f, "0")?;
+                        }
                     }
+                }
+                drop(f);
+            }
+            for y in 0..sz.1 {
+                for x in 0..sz.0 {
+                    assert_eq!(
+                        b.row(y)[x],
+                        sb.row(y)[x],
+                        "Pixels differ at position ({x}, {y}), channel {c}"
+                    );
                 }
             }
         }
         Ok(())
     }
 
+    fn compare_pipelines(path: &Path) -> Result<(), Error> {
+        let file = std::fs::read(path)?;
+        let simple_frames = decode(&file, usize::MAX, true, false, None)?.1;
+        let frames = decode(&file, usize::MAX, false, false, None)?.1;
+        assert_eq!(frames.len(), simple_frames.len());
+        for (fc, (f, sf)) in frames
+            .into_iter()
+            .zip(simple_frames.into_iter())
+            .enumerate()
+        {
+            compare_frames(path, fc, &f, &sf)?;
+        }
+        Ok(())
+    }
+
     for_each_test_file!(compare_pipelines);
+
+    fn compare_incremental(path: &Path) -> Result<(), Error> {
+        let file = std::fs::read(path).unwrap();
+        // One-shot decode
+        let (_, one_shot_frames) = decode(&file, usize::MAX, false, false, None)?;
+        // Incremental decode with arbitrary flushes.
+        let (_, frames) = decode(&file, 123, false, true, None)?;
+
+        // Compare one_shot_frames and frames
+        assert_eq!(one_shot_frames.len(), frames.len());
+        for (fc, (f, sf)) in frames
+            .into_iter()
+            .zip(one_shot_frames.into_iter())
+            .enumerate()
+        {
+            compare_frames(path, fc, &f, &sf)?;
+        }
+
+        Ok(())
+    }
+
+    for_each_test_file!(compare_incremental);
 
     #[test]
     fn test_preview_size_none_for_regular_files() {
@@ -1283,7 +1323,7 @@ pub(crate) mod tests {
         // The test passes if it doesn't panic with "attempt to add with overflow"
         // It's OK if it returns an error or panics with "Unexpected end of input"
         let result = panic::catch_unwind(|| {
-            let _ = decode(data, 1024, false, None);
+            let _ = decode(data, 1024, false, false, None);
         });
 
         // If it panicked, make sure it wasn't an overflow panic

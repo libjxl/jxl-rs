@@ -165,6 +165,14 @@ pub struct HfMetadata {
     used_hf_types: u32,
 }
 
+#[derive(Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub enum RenderUnit {
+    /// VarDCT data
+    VarDCT,
+    /// Modular channel with the given index
+    Modular(usize),
+}
+
 pub struct Frame {
     header: FrameHeader,
     toc: Toc,
@@ -183,13 +191,15 @@ pub struct Frame {
     render_pipeline: Option<Box<crate::render::LowMemoryRenderPipeline>>,
     reference_frame_data: Option<Vec<Image<f32>>>,
     lf_frame_data: Option<[Image<f32>; 3]>,
-    lf_global_was_rendered: bool,
+    was_flushed_once: bool,
     /// Reusable buffers for VarDCT group decoding.
     vardct_buffers: Option<group::VarDctBuffers>,
     // Last pass rendered so far for each HF group.
     last_rendered_pass: Vec<Option<usize>>,
     // Groups that should be rendered on the next call to flush().
     groups_to_flush: BTreeSet<usize>,
+    changed_since_last_flush: BTreeSet<(usize, RenderUnit)>,
+    incomplete_groups: usize,
 }
 
 impl Frame {
@@ -295,7 +305,8 @@ mod test {
         bytes: &[u8],
         verify: impl Fn(&Frame, usize) -> Result<()> + 'static,
     ) -> Result<usize> {
-        crate::api::tests::decode(bytes, usize::MAX, false, Some(Box::new(verify))).map(|x| x.0)
+        crate::api::tests::decode(bytes, usize::MAX, false, false, Some(Box::new(verify)))
+            .map(|x| x.0)
     }
 
     #[test]

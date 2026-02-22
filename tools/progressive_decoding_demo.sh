@@ -55,4 +55,4 @@ CHUNK_SIZE=$(bc <<<"$FILE_SIZE * $PERCENT / 100")
 
 echo "Creating video..."
 VIDEO_OUTPUT="$OUTPUT_DIR/progressive.mp4"
-ffmpeg -y -framerate 2 -pattern_type glob -i "$OUTPUT_DIR/frame.partial*.png" -vf "scale='2*trunc(min(3840,iw)/2)':-2" -c:v libx264 -pix_fmt yuv420p "$VIDEO_OUTPUT"
+ffmpeg -y -framerate 2 -pattern_type glob -i "$OUTPUT_DIR/frame.partial*.png" -vf "scale='2*trunc(min(3840,iw)/2)':-2,format=rgba,split[v][alpha];[v]drawbox=c=black:t=fill[bg];[bg][alpha]overlay" -c:v libx264 -pix_fmt yuv420p "$VIDEO_OUTPUT"

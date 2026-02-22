@@ -12,8 +12,10 @@ use crate::api::JxlOutputBuffer;
 use crate::bit_reader::BitReader;
 use crate::error::{Error, Result};
 use crate::features::epf::SigmaSource;
+use crate::frame::RenderUnit;
 use crate::headers::frame_header::Encoding;
 use crate::headers::{Orientation, color_encoding::ColorSpace, extra_channels::ExtraChannel};
+use crate::image::Image;
 use crate::image::Rect;
 #[cfg(test)]
 use crate::render::SimpleRenderPipeline;
@@ -195,52 +197,103 @@ impl Frame {
 
         pipeline!(self, p, p.render_outside_frame(&mut buffer_splitter)?);
 
-        // Render data from the lf global section, if we didn't do so already, before rendering HF.
-        if !self.lf_global_was_rendered {
-            self.lf_global_was_rendered = true;
-            let lf_global = self.lf_global.as_mut().unwrap();
-            let mut pass_to_pipeline = |chan, group, image| {
+        // STEP 1: if we are requesting a flush, and did not flush before, mark modular channels
+        // as having been decoded as 0.
+        if !self.was_flushed_once && do_flush {
+            self.was_flushed_once = true;
+            self.groups_to_flush.extend(0..self.header.num_groups());
+            self.lf_global
+                .as_mut()
+                .unwrap()
+                .modular_global
+                .zero_fill_empty_channels(
+                    self.header.passes.num_passes as usize,
+                    self.header.num_groups(),
+                )?;
+        }
+
+        // STEP 2: ensure that groups that will be re-rendered are marked as such.
+        // VarDCT data to be rendered.
+        for (g, _) in groups.iter() {
+            self.groups_to_flush.insert(*g);
+            pipeline!(self, p, p.mark_group_to_rerender(*g));
+        }
+        // Modular data to be re-rendered.
+        {
+            let modular_global = &mut self.lf_global.as_mut().unwrap().modular_global;
+            for (group, passes) in groups.iter() {
+                for (pass, _) in passes.iter() {
+                    modular_global.mark_group_to_be_read(2 + *pass, *group);
+                }
+            }
+            let mut pass_to_pipeline = |_, group, _, _| {
+                self.groups_to_flush.insert(group);
+                pipeline!(self, p, p.mark_group_to_rerender(group));
+                Ok(())
+            };
+            modular_global.process_output(&self.header, true, &mut pass_to_pipeline)?;
+        }
+
+        // STEP 3: decode the groups, eagerly rendering VarDCT channels and noise.
+        for (group, mut passes) in groups {
+            if self.decode_hf_group(group, &mut passes, &mut buffer_splitter, do_flush)? {
+                self.changed_since_last_flush
+                    .insert((group, RenderUnit::VarDCT));
+            }
+        }
+
+        // STEP 4: process all modular transforms that can now be processed,
+        // flushing buffers that will not be used again, if either we are forcing a render now
+        // or we are done with the file.
+        if self.incomplete_groups == 0 || do_flush {
+            let modular_global = &mut self.lf_global.as_mut().unwrap().modular_global;
+            let mut pass_to_pipeline = |chan, group, complete, image: Option<Image<i32>>| {
+                self.changed_since_last_flush
+                    .insert((group, RenderUnit::Modular(chan)));
                 pipeline!(
                     self,
                     p,
-                    p.set_buffer_for_group(chan, group, true, image, &mut buffer_splitter)?
+                    p.set_buffer_for_group(
+                        chan,
+                        group,
+                        complete,
+                        image.unwrap(),
+                        &mut buffer_splitter
+                    )?
                 );
                 Ok(())
             };
-            lf_global.modular_global.process_output(
-                &[0],
-                0,
-                &self.header,
-                &mut pass_to_pipeline,
-            )?;
-            for group in 0..self.header.num_lf_groups() {
-                lf_global.modular_global.process_output(
-                    &[1],
-                    group,
-                    &self.header,
-                    &mut pass_to_pipeline,
-                )?;
-            }
-            self.groups_to_flush.extend(0..self.header.num_groups());
-        }
+            modular_global.process_output(&self.header, false, &mut pass_to_pipeline)?;
 
-        // TODO(veluca): keep track of groups that should be flushed, and groups that have had nothing rendered yet.
-
-        for (g, _) in groups.iter() {
-            pipeline!(self, p, p.mark_group_to_rerender(*g));
-        }
-
-        for (group, mut passes) in groups {
-            if !self.decode_hf_group(group, &mut passes, &mut buffer_splitter, do_flush)? {
-                self.groups_to_flush.insert(group);
-            } else {
-                self.groups_to_flush.remove(&group);
-            }
-        }
-
-        if do_flush {
+            // STEP 5: re-render VarDCT/noise data in rendered groups for which it was
+            // not rendered, or re-send to pipeline modular channels that were not
+            // updated in those groups.
             for g in std::mem::take(&mut self.groups_to_flush) {
-                self.decode_hf_group(g, &mut [], &mut buffer_splitter, true)?;
+                if self
+                    .changed_since_last_flush
+                    .take(&(g, RenderUnit::VarDCT))
+                    .is_none()
+                {
+                    self.decode_hf_group(g, &mut [], &mut buffer_splitter, true)?;
+                }
+                let modular_global = &mut self.lf_global.as_mut().unwrap().modular_global;
+                let mut pass_to_pipeline = |chan, group, complete, image| {
+                    pipeline!(
+                        self,
+                        p,
+                        p.set_buffer_for_group(chan, group, complete, image, &mut buffer_splitter)?
+                    );
+                    Ok(())
+                };
+                for c in modular_global.channel_range() {
+                    if self
+                        .changed_since_last_flush
+                        .take(&(g, RenderUnit::Modular(c)))
+                        .is_none()
+                    {
+                        modular_global.flush_output(g, c, &mut pass_to_pipeline)?;
+                    }
+                }
             }
         }
 
@@ -757,7 +810,7 @@ impl Frame {
             output_profile,
         )?;
         self.render_pipeline = Some(render_pipeline);
-        self.lf_global_was_rendered = false;
+        self.was_flushed_once = false;
         Ok(())
     }
 }
