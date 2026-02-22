@@ -42,6 +42,11 @@ pub(crate) use low_memory_pipeline::LowMemoryRenderPipeline;
 #[cfg(test)]
 pub(crate) use simple_pipeline::SimpleRenderPipeline;
 
+pub enum StageSpecialCase {
+    F32ToU8 { channel: usize, bit_depth: u8 },
+    ModularToF32 { channel: usize, bit_depth: u8 },
+}
+
 /// Modifies channels in-place.
 pub trait RenderPipelineInPlaceStage: Any + std::fmt::Display {
     type Type: ImageDataType;
@@ -60,6 +65,10 @@ pub trait RenderPipelineInPlaceStage: Any + std::fmt::Display {
     }
 
     fn uses_channel(&self, c: usize) -> bool;
+
+    fn is_special_case(&self) -> Option<StageSpecialCase> {
+        None
+    }
 }
 
 /// Modifies data and writes it to a new buffer, of possibly different type.
@@ -97,6 +106,10 @@ pub trait RenderPipelineInOutStage: Any + std::fmt::Display {
     }
 
     fn uses_channel(&self, c: usize) -> bool;
+
+    fn is_special_case(&self) -> Option<StageSpecialCase> {
+        None
+    }
 }
 
 // TODO(veluca): find a way to reduce the generated code due to having two builders, to integrate
