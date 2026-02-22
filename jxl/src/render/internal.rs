@@ -8,6 +8,7 @@ use std::fmt::Display;
 
 use crate::error::Result;
 use crate::image::{DataTypeTag, ImageDataType};
+use crate::render::StageSpecialCase;
 use crate::util::ShiftRightCeil;
 
 use super::save::SaveStage;
@@ -71,6 +72,13 @@ impl<Buffer: 'static> Stage<Buffer> {
     pub(super) fn output_type(&self) -> Option<DataTypeTag> {
         match self {
             Stage::InOut(s) => Some(s.output_type()),
+            _ => None,
+        }
+    }
+    pub(super) fn is_special_case(&self) -> Option<StageSpecialCase> {
+        match self {
+            Stage::InOut(s) => s.is_special_case(),
+            Stage::InPlace(s) => s.is_special_case(),
             _ => None,
         }
     }
@@ -175,6 +183,7 @@ pub trait InPlaceStage: Any + Display {
     fn init_local_state(&self, thread_index: usize) -> Result<Option<Box<dyn Any>>>;
     fn uses_channel(&self, c: usize) -> bool;
     fn ty(&self) -> DataTypeTag;
+    fn is_special_case(&self) -> Option<StageSpecialCase>;
 }
 
 pub trait RunInPlaceStage<Buffer: PipelineBuffer>: InPlaceStage {
@@ -196,6 +205,9 @@ impl<T: RenderPipelineInPlaceStage> InPlaceStage for T {
     fn ty(&self) -> DataTypeTag {
         T::Type::DATA_TYPE_ID
     }
+    fn is_special_case(&self) -> Option<StageSpecialCase> {
+        self.is_special_case()
+    }
 }
 
 pub trait InOutStage: Any + Display {
@@ -205,6 +217,7 @@ pub trait InOutStage: Any + Display {
     fn uses_channel(&self, c: usize) -> bool;
     fn input_type(&self) -> DataTypeTag;
     fn output_type(&self) -> DataTypeTag;
+    fn is_special_case(&self) -> Option<StageSpecialCase>;
 }
 
 impl<T: RenderPipelineInOutStage> InOutStage for T {
@@ -225,6 +238,9 @@ impl<T: RenderPipelineInOutStage> InOutStage for T {
     }
     fn output_type(&self) -> DataTypeTag {
         T::OutputT::DATA_TYPE_ID
+    }
+    fn is_special_case(&self) -> Option<StageSpecialCase> {
+        self.is_special_case()
     }
 }
 

@@ -6,8 +6,10 @@
 use crate::api::{JxlColorType, JxlDataFormat};
 use crate::error::{Error, Result};
 use crate::headers::Orientation;
+use crate::render::StageSpecialCase;
 use crate::render::internal::ChannelInfo;
 use crate::render::save::SaveStage;
+use crate::render::stages::ConvertI32ToU8Stage;
 use crate::util::{ShiftRightCeil, tracing_wrappers::*};
 
 use super::internal::{RenderPipelineShared, Stage};
@@ -113,12 +115,15 @@ impl<Pipeline: RenderPipeline> RenderPipelineBuilder<Pipeline> {
     pub fn build(mut self) -> Result<Box<Pipeline>> {
         let mut stage_is_used = vec![false; self.shared.stages.len()];
         let num_channels = self.shared.num_channels();
+        let mut channel_next_use = vec![None; num_channels];
         // Prune unused stages.
-        for (i, stage) in self.shared.stages.iter().enumerate().rev() {
+        for i in (0..self.shared.stages.len()).rev() {
+            let stage = &self.shared.stages[i];
             if matches!(stage, Stage::Save(_)) {
-                for c in 0..num_channels {
+                for (c, next_use) in channel_next_use.iter_mut().enumerate() {
                     if stage.uses_channel(c) {
                         self.shared.channel_is_used[c] = true;
+                        *next_use = Some(i);
                     }
                 }
             }
@@ -128,9 +133,33 @@ impl<Pipeline: RenderPipeline> RenderPipelineBuilder<Pipeline> {
                 }
             }
             if stage_is_used[i] {
-                for c in 0..num_channels {
-                    if stage.uses_channel(c) {
+                match self.shared.stages[i].is_special_case() {
+                    None => (),
+                    Some(StageSpecialCase::F32ToU8 { .. }) => (),
+                    Some(StageSpecialCase::ModularToF32 { channel, bit_depth }) => {
+                        let n = channel_next_use[channel].unwrap();
+                        if let Some(StageSpecialCase::F32ToU8 {
+                            channel: c,
+                            bit_depth: b,
+                        }) = self.shared.stages[n].is_special_case()
+                        {
+                            assert_eq!(c, channel);
+                            if b % bit_depth == 0 {
+                                let mult = ((1 << b) - 1) / ((1 << bit_depth) - 1);
+                                // Remove the next stage, and replace the current stage with I32 -> I8
+                                // conversion.
+                                stage_is_used[n] = false;
+                                self.shared.stages[i] = Stage::InOut(Pipeline::box_inout_stage(
+                                    ConvertI32ToU8Stage::new(c, mult, (1 << b) - 1),
+                                ));
+                            }
+                        }
+                    }
+                }
+                for (c, next_use) in channel_next_use.iter_mut().enumerate() {
+                    if self.shared.stages[i].uses_channel(c) {
                         self.shared.channel_is_used[c] = true;
+                        *next_use = Some(i);
                     }
                 }
             }
@@ -139,7 +168,7 @@ impl<Pipeline: RenderPipeline> RenderPipelineBuilder<Pipeline> {
             .shared
             .stages
             .into_iter()
-            .zip(stage_is_used.into_iter())
+            .zip(stage_is_used)
             .filter_map(|(s, used)| used.then_some(s))
             .collect();
         for (i, stage) in self.shared.stages.iter().enumerate() {
