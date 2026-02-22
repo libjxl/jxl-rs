@@ -229,36 +229,24 @@ impl ModularBuffer {
             return ModularChannel::try_clone(self.data.borrow().as_ref().unwrap());
         }
         let mut ret = None;
-        let mut remaining_pre = self.remaining_uses.load(Ordering::Acquire);
-        loop {
-            let remaining = remaining_pre.checked_sub(1).unwrap();
-            if ret.is_none() {
-                if remaining == 0 {
-                    ret = Some(self.data.borrow_mut().take().unwrap())
-                } else {
-                    ret = Some(
-                        self.data
-                            .borrow()
-                            .as_ref()
-                            .map(ModularChannel::try_clone)
-                            .transpose()?
-                            .unwrap(),
-                    );
+        let _ = self.remaining_uses.fetch_update(
+            Ordering::Release,
+            Ordering::Acquire,
+            |remaining_pre| {
+                let remaining = remaining_pre.checked_sub(1).unwrap();
+                if ret.is_none() {
+                    if remaining == 0 {
+                        ret = Some(Ok(self.data.borrow_mut().take().unwrap()))
+                    } else {
+                        ret = self.data.borrow().as_ref().map(ModularChannel::try_clone);
+                    }
+                } else if remaining == 0 {
+                    *self.data.borrow_mut() = None;
                 }
-            } else if remaining == 0 {
-                *self.data.borrow_mut() = None;
-            }
-            match self.remaining_uses.compare_exchange_weak(
-                remaining_pre,
-                remaining,
-                Ordering::Release,
-                Ordering::Acquire,
-            ) {
-                Ok(_) => break,
-                Err(e) => remaining_pre = e,
-            }
-        }
-        Ok(ret.unwrap())
+                Some(remaining)
+            },
+        );
+        Ok(ret.transpose()?.unwrap())
     }
 
     fn mark_used(&self, can_consume: bool) {
