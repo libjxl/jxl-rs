@@ -122,7 +122,8 @@ impl LowMemoryRenderPipeline {
         buffer_splitter: &mut BufferSplitter,
     ) -> Result<()> {
         let buf = &mut self.input_buffers[g];
-        if buf.ready_channels != buf.data.len() {
+        assert!(buf.ready_channels <= self.shared.num_used_channels());
+        if buf.ready_channels != self.shared.num_used_channels() {
             return Ok(());
         }
         buf.ready_channels = 0;

@@ -26,7 +26,7 @@ use crate::{
         modular::{GroupHeader, TransformId},
     },
     image::{Image, Rect},
-    util::{AtomicRefCell, CeilLog2, tracing_wrappers::*},
+    util::{AtomicRefCell, CeilLog2, SmallVec, tracing_wrappers::*},
 };
 use jxl_transforms::transform_map::*;
 
@@ -363,11 +363,20 @@ pub struct FullModularImage {
     // just before we start decoding them.
     ready_buffers_dry_run: BTreeSet<(usize, usize)>,
     ready_buffers: BTreeSet<(usize, usize)>,
+    // Whether each channel is used or not by the render pipeline.
+    pipeline_used_channels: Vec<bool>,
 }
 
 impl FullModularImage {
     pub fn can_do_partial_render(&self) -> bool {
         self.can_do_partial_render
+    }
+
+    pub fn set_pipeline_used_channels(&mut self, used: &[bool]) {
+        if !self.pipeline_used_channels.is_empty() {
+            return;
+        }
+        self.pipeline_used_channels = used.to_vec();
     }
 
     #[instrument(level = "debug", skip_all)]
@@ -425,6 +434,7 @@ impl FullModularImage {
                 buffers_for_channels: vec![],
                 ready_buffers_dry_run: BTreeSet::new(),
                 ready_buffers: BTreeSet::new(),
+                pipeline_used_channels: vec![],
             });
         }
 
@@ -594,6 +604,7 @@ impl FullModularImage {
             buffers_for_channels,
             ready_buffers_dry_run: ready_buffers,
             ready_buffers: BTreeSet::new(),
+            pipeline_used_channels: vec![],
         })
     }
 
@@ -663,25 +674,28 @@ impl FullModularImage {
             let all_final = self.buffers_for_channels.iter().all(|x| {
                 self.buffer_info[*x].buffer_grid[grid].get_status() == BUFFER_STATUS_FINAL_RENDER
             });
+            let channels: SmallVec<usize, 3> = if chan == 0 && self.modular_color_channels == 1 {
+                (0..3).filter(|x| self.pipeline_used_channels[*x]).collect()
+            } else {
+                self.pipeline_used_channels[chan]
+                    .then_some(chan)
+                    .into_iter()
+                    .collect()
+            };
+            if channels.is_empty() {
+                return Ok(());
+            }
             if dry_run {
-                if chan == 0 && self.modular_color_channels == 1 {
-                    for i in 0..3 {
-                        pass_to_pipeline(i, grid, is_final, None)?;
-                    }
-                } else {
-                    pass_to_pipeline(chan, grid, is_final, None)?;
+                for c in channels.iter() {
+                    pass_to_pipeline(*c, grid, is_final, None)?;
                 }
             } else {
                 debug!("Rendering channel {chan:?}, grid position {grid}");
                 let buf = self.buffer_info[buf].buffer_grid[grid].get_buffer(all_final)?;
-                if chan == 0 && self.modular_color_channels == 1 {
-                    for i in 0..2 {
-                        pass_to_pipeline(i, grid, is_final, Some(buf.data.try_clone()?))?;
-                    }
-                    pass_to_pipeline(2, grid, is_final, Some(buf.data))?;
-                } else {
-                    pass_to_pipeline(chan, grid, is_final, Some(buf.data))?;
+                for c in channels[1..].iter() {
+                    pass_to_pipeline(*c, grid, is_final, Some(buf.data.try_clone()?))?;
                 }
+                pass_to_pipeline(channels[0], grid, is_final, Some(buf.data))?;
             }
         }
         Ok(())
@@ -697,6 +711,9 @@ impl FullModularImage {
         dry_run: bool,
         pass_to_pipeline: &mut dyn FnMut(usize, usize, bool, Option<Image<i32>>) -> Result<()>,
     ) -> Result<()> {
+        // TODO(veluca): consider using `used_channel_mask` to avoid running transforms that produce
+        // channels that are not used.
+
         // layer -> (transform -> is_strong)
         let mut to_process_by_layer = BTreeMap::<usize, BTreeMap<usize, bool>>::new();
         let mut buffers_to_output = vec![];

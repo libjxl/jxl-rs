@@ -302,16 +302,19 @@ impl RenderPipeline for LowMemoryRenderPipeline {
         buf: Image<T>,
         buffer_splitter: &mut BufferSplitter,
     ) -> Result<()> {
-        debug!(
-            "filling data for group {}, channel {}, using type {:?}",
-            group_id,
-            channel,
-            T::DATA_TYPE_ID,
-        );
-        self.input_buffers[group_id].set_buffer(channel, buf.into_raw());
-        self.shared.group_chan_complete[group_id][channel] = complete;
+        if self.shared.channel_is_used[channel] {
+            debug!(
+                "filling data for group {}, channel {}, using type {:?}",
+                group_id,
+                channel,
+                T::DATA_TYPE_ID,
+            );
+            self.input_buffers[group_id].set_buffer(channel, buf.into_raw());
+            self.shared.group_chan_complete[group_id][channel] = complete;
 
-        self.render_with_new_group(group_id, buffer_splitter)
+            self.render_with_new_group(group_id, buffer_splitter)?;
+        }
+        Ok(())
     }
 
     fn check_buffer_sizes(&self, buffers: &mut [Option<JxlOutputBuffer>]) -> Result<()> {
@@ -427,5 +430,9 @@ impl RenderPipeline for LowMemoryRenderPipeline {
         stage: S,
     ) -> Box<dyn RunInPlaceStage<Self::Buffer>> {
         Box::new(stage)
+    }
+
+    fn used_channel_mask(&self) -> &[bool] {
+        &self.shared.channel_is_used
     }
 }

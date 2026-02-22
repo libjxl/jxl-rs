@@ -158,7 +158,11 @@ impl<Buffer> RenderPipelineShared<Buffer> {
     }
 
     pub fn num_channels(&self) -> usize {
-        self.channel_info[0].len()
+        self.channel_is_used.len()
+    }
+
+    pub fn num_used_channels(&self) -> usize {
+        self.channel_is_used.iter().filter(|x| **x).count()
     }
 }
 

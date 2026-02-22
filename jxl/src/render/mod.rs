@@ -140,4 +140,6 @@ pub(crate) trait RenderPipeline: Sized {
     fn box_inplace_stage<S: RenderPipelineInPlaceStage>(
         stage: S,
     ) -> Box<dyn RunInPlaceStage<Self::Buffer>>;
+
+    fn used_channel_mask(&self) -> &[bool];
 }
