@@ -1357,21 +1357,7 @@ pub(crate) mod tests {
         tden: u32,
         entries: &[(u64, u64, u64)], // (OFF_delta, T, F)
     ) -> Vec<u8> {
-        fn encode_varint(mut value: u64) -> Vec<u8> {
-            let mut result = Vec::new();
-            loop {
-                let mut byte = (value & 0x7f) as u8;
-                value >>= 7;
-                if value > 0 {
-                    byte |= 0x80;
-                }
-                result.push(byte);
-                if value == 0 {
-                    break;
-                }
-            }
-            result
-        }
+        use crate::util::test::build_frame_index_content;
 
         fn make_box(ty: &[u8; 4], content: &[u8]) -> Vec<u8> {
             let len = (8 + content.len()) as u32;
@@ -1382,16 +1368,7 @@ pub(crate) mod tests {
             buf
         }
 
-        // Build jxli content
-        let mut jxli_content = Vec::new();
-        jxli_content.extend(encode_varint(entries.len() as u64));
-        jxli_content.extend(tnum.to_be_bytes());
-        jxli_content.extend(tden.to_be_bytes());
-        for &(off, t, f) in entries {
-            jxli_content.extend(encode_varint(off));
-            jxli_content.extend(encode_varint(t));
-            jxli_content.extend(encode_varint(f));
-        }
+        let jxli_content = build_frame_index_content(tnum, tden, entries);
 
         // JXL signature box
         let sig = [
@@ -1446,7 +1423,7 @@ pub(crate) mod tests {
         let fi = dec.frame_index().expect("frame_index should be Some");
         assert_eq!(fi.num_frames(), 3);
         assert_eq!(fi.tnum, 1);
-        assert_eq!(fi.tden, 1000);
+        assert_eq!(fi.tden.get(), 1000);
         // Verify absolute offsets (accumulated from deltas)
         assert_eq!(fi.entries[0].codestream_offset, 0);
         assert_eq!(fi.entries[1].codestream_offset, 500);

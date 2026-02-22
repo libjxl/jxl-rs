@@ -10,7 +10,12 @@
 //! listing keyframe byte offsets in the codestream, timestamps, and
 //! frame counts.
 
+use std::num::NonZero;
+
+use byteorder::{BigEndian, ReadBytesExt};
+
 use crate::error::{Error, Result};
+use crate::icc::read_varint_from_reader;
 
 /// A single entry in the frame index.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -31,8 +36,8 @@ pub struct FrameIndexEntry {
 pub struct FrameIndexBox {
     /// Tick numerator. A tick lasts `tnum / tden` seconds.
     pub tnum: u32,
-    /// Tick denominator.
-    pub tden: u32,
+    /// Tick denominator (non-zero per spec).
+    pub tden: NonZero<u32>,
     /// Indexed frame entries.
     pub entries: Vec<FrameIndexEntry>,
 }
@@ -45,7 +50,7 @@ impl FrameIndexBox {
 
     /// Returns the duration of one tick in seconds.
     pub fn tick_duration_secs(&self) -> f64 {
-        self.tnum as f64 / self.tden as f64
+        self.tnum as f64 / self.tden.get() as f64
     }
 
     /// Finds the index entry for the keyframe at or before the given
@@ -64,28 +69,31 @@ impl FrameIndexBox {
 
     /// Parse a frame index box from its raw content bytes (after the box header).
     pub fn parse(data: &[u8]) -> Result<Self> {
-        let mut cursor = Cursor::new(data);
+        let mut reader = data;
 
-        let nf = cursor.read_varint()?;
+        let nf = read_varint_from_reader(&mut reader)?;
         if nf > u32::MAX as u64 {
             return Err(Error::InvalidBox);
         }
         let nf = nf as usize;
 
-        let tnum = cursor.read_u32_be()?;
-        let tden = cursor.read_u32_be()?;
-
-        if tden == 0 {
-            return Err(Error::InvalidBox);
-        }
+        let tnum = reader
+            .read_u32::<BigEndian>()
+            .map_err(|_| Error::InvalidBox)?;
+        let tden = NonZero::new(
+            reader
+                .read_u32::<BigEndian>()
+                .map_err(|_| Error::InvalidBox)?,
+        )
+        .ok_or(Error::InvalidBox)?;
 
         let mut entries = Vec::with_capacity(nf);
         let mut absolute_offset: u64 = 0;
 
         for _ in 0..nf {
-            let off_delta = cursor.read_varint()?;
-            let duration_ticks = cursor.read_varint()?;
-            let frame_count = cursor.read_varint()?;
+            let off_delta = read_varint_from_reader(&mut reader)?;
+            let duration_ticks = read_varint_from_reader(&mut reader)?;
+            let frame_count = read_varint_from_reader(&mut reader)?;
 
             absolute_offset = absolute_offset
                 .checked_add(off_delta)
@@ -106,88 +114,13 @@ impl FrameIndexBox {
     }
 }
 
-/// Simple cursor over a byte slice for reading varints and fixed-width integers.
-struct Cursor<'a> {
-    data: &'a [u8],
-    pos: usize,
-}
-
-impl<'a> Cursor<'a> {
-    fn new(data: &'a [u8]) -> Self {
-        Self { data, pos: 0 }
-    }
-
-    fn read_byte(&mut self) -> Result<u8> {
-        if self.pos >= self.data.len() {
-            return Err(Error::OutOfBounds(1));
-        }
-        let b = self.data[self.pos];
-        self.pos += 1;
-        Ok(b)
-    }
-
-    fn read_u32_be(&mut self) -> Result<u32> {
-        if self.pos + 4 > self.data.len() {
-            return Err(Error::OutOfBounds(4));
-        }
-        let val = u32::from_be_bytes(self.data[self.pos..self.pos + 4].try_into().unwrap());
-        self.pos += 4;
-        Ok(val)
-    }
-
-    /// Read a Varint:
-    /// LEB128, 7 bits per byte, high bit means "more", up to 63 bits total.
-    fn read_varint(&mut self) -> Result<u64> {
-        let mut value: u64 = 0;
-        let mut shift: u32 = 0;
-        loop {
-            if shift > 56 {
-                return Err(Error::InvalidBox);
-            }
-            let b = self.read_byte()?;
-            value += ((b & 0x7f) as u64) << shift;
-            if b <= 0x7f {
-                break;
-            }
-            shift += 7;
-        }
-        Ok(value)
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::util::test::{build_frame_index_content, encode_varint};
 
-    /// Helper to encode a varint (LEB128).
-    fn encode_varint(mut value: u64) -> Vec<u8> {
-        let mut result = Vec::new();
-        loop {
-            let mut byte = (value & 0x7f) as u8;
-            value >>= 7;
-            if value > 0 {
-                byte |= 0x80;
-            }
-            result.push(byte);
-            if value == 0 {
-                break;
-            }
-        }
-        result
-    }
-
-    /// Helper to build a jxli box content buffer.
     fn build_frame_index(tnum: u32, tden: u32, entries: &[(u64, u64, u64)]) -> Vec<u8> {
-        let mut buf = Vec::new();
-        buf.extend(encode_varint(entries.len() as u64));
-        buf.extend(tnum.to_be_bytes());
-        buf.extend(tden.to_be_bytes());
-        for &(off, ti, fi) in entries {
-            buf.extend(encode_varint(off));
-            buf.extend(encode_varint(ti));
-            buf.extend(encode_varint(fi));
-        }
-        buf
+        build_frame_index_content(tnum, tden, entries)
     }
 
     #[test]
@@ -196,7 +129,7 @@ mod tests {
         let index = FrameIndexBox::parse(&data).unwrap();
         assert_eq!(index.num_frames(), 0);
         assert_eq!(index.tnum, 1);
-        assert_eq!(index.tden, 1000);
+        assert_eq!(index.tden.get(), 1000);
     }
 
     #[test]
