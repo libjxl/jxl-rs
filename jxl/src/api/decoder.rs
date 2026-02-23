@@ -146,6 +146,13 @@ impl JxlDecoder<WithImageInfo> {
         Ok(self.map_inner_processing_result(inner_result))
     }
 
+    /// Draws all the pixels we have data for. This is useful for i.e. previewing LF frames.
+    ///
+    /// Note: see `process` for alignment requirements for the buffer data.
+    pub fn flush_pixels(&mut self, buffers: &mut [JxlOutputBuffer<'_>]) -> Result<()> {
+        self.inner.flush_pixels(buffers)
+    }
+
     pub fn has_more_frames(&self) -> bool {
         self.inner.has_more_frames()
     }
@@ -241,7 +248,7 @@ pub(crate) mod tests {
         let mut chunk_input = &input[0..0];
 
         macro_rules! advance_decoder {
-            ($decoder: ident $(, $extra_arg: expr)?) => {
+            ($decoder: ident $(, $extra_arg: expr)? $(; $flush_arg: expr)?) => {
                 loop {
                     chunk_input =
                         &input[..(chunk_input.len().saturating_add(chunk_size)).min(input.len())];
@@ -254,7 +261,7 @@ pub(crate) mod tests {
                             $(
                                 let mut fallback = fallback;
                                 if do_flush && !input.is_empty() {
-                                    fallback.flush_pixels($extra_arg)?;
+                                    fallback.flush_pixels($flush_arg)?;
                                 }
                             )?
                             if input.is_empty() {
@@ -302,9 +309,6 @@ pub(crate) mod tests {
         let mut frames = vec![];
 
         loop {
-            // Process until we have frame info
-            let mut decoder_with_frame_info = advance_decoder!(decoder_with_image_info);
-
             // First channel is interleaved.
             let mut buffers = vec![Image::new_with_value(
                 (buffer_width * num_channels, buffer_height),
@@ -334,7 +338,11 @@ pub(crate) mod tests {
                 })
                 .collect();
 
-            decoder_with_image_info = advance_decoder!(decoder_with_frame_info, &mut api_buffers);
+            // Process until we have frame info
+            let mut decoder_with_frame_info =
+                advance_decoder!(decoder_with_image_info; &mut api_buffers);
+            decoder_with_image_info =
+                advance_decoder!(decoder_with_frame_info, &mut api_buffers; &mut api_buffers);
 
             // All pixels should have been overwritten, so they should no longer be NaNs.
             for buf in buffers.iter() {

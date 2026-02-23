@@ -221,34 +221,70 @@ pub fn decode_frames<In: JxlBitstreamInputExt>(
     let samples_per_pixel = pixel_format.color_type.samples_per_pixel();
 
     'frame: loop {
-        let mut decoder_with_frame_info = match decoder_with_image_info.process(input)? {
-            ProcessingResult::Complete { result } => result,
-            ProcessingResult::NeedsMoreInput { .. } => {
-                if allow_partial_files && !image_data.frames.is_empty() {
-                    break;
+        let image_size = info.size;
+        let byte_size = (
+            image_size.0 * output_type.bits_per_sample() / 8,
+            image_size.1,
+        );
+
+        let mut outputs = vec![OwnedRawImage::new((
+            byte_size.0 * samples_per_pixel,
+            byte_size.1,
+        ))?];
+
+        for _ in 0..extra_channels {
+            outputs.push(OwnedRawImage::new(byte_size)?);
+        }
+
+        let mut partial_renders = vec![];
+
+        let mut decoder_with_frame_info = 'partial: loop {
+            match input
+                .with_capped_size(render_interval, |inp| decoder_with_image_info.process(inp))?
+            {
+                ProcessingResult::Complete { result } => {
+                    break 'partial result;
                 }
-                return Err(eyre!("Source file truncated"));
+                ProcessingResult::NeedsMoreInput { mut fallback, .. } => {
+                    let mut output_bufs: Vec<JxlOutputBuffer<'_>> = outputs
+                        .iter_mut()
+                        .map(|x| {
+                            let rect = Rect {
+                                size: x.byte_size(),
+                                origin: (0, 0),
+                            };
+                            JxlOutputBuffer::from_image_rect_mut(x.get_rect_mut(rect))
+                        })
+                        .collect();
+
+                    // If we have more data but we're feeding it slowly, save the partial
+                    // render and retry.
+                    if render_interval.is_some() && input.available_bytes()? > 0 {
+                        fallback.flush_pixels(&mut output_bufs)?;
+                        partial_renders.push(
+                            outputs
+                                .iter()
+                                .map(|x| x.try_clone())
+                                .collect::<Result<_, _>>()?,
+                        );
+                        decoder_with_image_info = fallback;
+                        continue 'partial;
+                    } else if allow_partial_files {
+                        fallback.flush_pixels(&mut output_bufs)?;
+                        image_data.frames.push(ImageFrame {
+                            partial_renders,
+                            duration: 0.0,
+                            channels: outputs,
+                            color_type,
+                        });
+                        break 'frame;
+                    }
+                    return Err(eyre!("Source file truncated"));
+                }
             }
         };
 
         let frame_header = decoder_with_frame_info.frame_header();
-        let frame_size = frame_header.size;
-        let frame_size = (
-            frame_size.0 * output_type.bits_per_sample() / 8,
-            frame_size.1,
-        );
-
-        // Create typed output buffers
-        let mut outputs = vec![OwnedRawImage::new((
-            frame_size.0 * samples_per_pixel,
-            frame_size.1,
-        ))?];
-
-        for _ in 0..extra_channels {
-            outputs.push(OwnedRawImage::new(frame_size)?);
-        }
-
-        let mut partial_renders = vec![];
 
         decoder_with_image_info = 'partial: loop {
             let mut output_bufs: Vec<JxlOutputBuffer<'_>> = outputs
