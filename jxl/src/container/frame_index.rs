@@ -16,6 +16,7 @@ use byteorder::{BigEndian, ReadBytesExt};
 
 use crate::error::{Error, Result};
 use crate::icc::read_varint_from_reader;
+use crate::util::NewWithCapacity;
 
 /// A single entry in the frame index.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -87,7 +88,10 @@ impl FrameIndexBox {
         )
         .ok_or(Error::InvalidBox)?;
 
-        let mut entries = Vec::with_capacity(nf);
+        // Each entry requires at least 3 bytes (three varints, min 1 byte each).
+        // Cap the pre-allocation to avoid OOM from a crafted NF value.
+        // Use new_with_capacity to return Err on allocation failure instead of aborting.
+        let mut entries = Vec::new_with_capacity(nf.min(reader.len() / 3))?;
         let mut absolute_offset: u64 = 0;
 
         for _ in 0..nf {
@@ -208,6 +212,18 @@ mod tests {
     fn test_truncated_data() {
         // Just NF=1, no TNUM/TDEN
         let data = encode_varint(1);
+        assert!(FrameIndexBox::parse(&data).is_err());
+    }
+
+    #[test]
+    fn test_huge_nf_no_oom() {
+        // Crafted input: NF claims billions of entries but the data is tiny.
+        // This must not OOM -- Vec::with_capacity should be bounded by data length.
+        let mut data = Vec::new();
+        data.extend(encode_varint(u32::MAX as u64)); // NF = 4 billion
+        data.extend(1u32.to_be_bytes()); // TNUM
+        data.extend(1000u32.to_be_bytes()); // TDEN
+        // No actual entry data -- parse should fail gracefully, not OOM.
         assert!(FrameIndexBox::parse(&data).is_err());
     }
 
