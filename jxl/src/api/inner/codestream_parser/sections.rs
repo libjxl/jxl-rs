@@ -44,6 +44,21 @@ impl CodestreamParser {
         do_flush: bool,
     ) -> Result<Option<usize>> {
         let frame = self.frame.as_mut().unwrap();
+
+        let output_profile = self
+            .output_color_profile
+            .as_ref()
+            .expect("output_color_profile should be set before pipeline preparation");
+
+        if do_flush && let Some(buf) = output_buffers {
+            frame.maybe_preview_lf_frame(
+                self.pixel_format.as_ref().unwrap(),
+                buf,
+                None,
+                output_profile,
+            )?;
+        }
+
         let frame_header = frame.header();
 
         // Dequeue ready sections.
@@ -91,9 +106,7 @@ impl CodestreamParser {
                     self.embedded_color_profile
                         .as_ref()
                         .expect("embedded_color_profile should be set before pipeline preparation"),
-                    self.output_color_profile
-                        .as_ref()
-                        .expect("output_color_profile should be set before pipeline preparation"),
+                    output_profile,
                 )?;
                 frame.finalize_lf()?;
                 frame.decode_and_render_hf_groups(
@@ -101,6 +114,7 @@ impl CodestreamParser {
                     pixel_format,
                     vec![(0, vec![(0, br)])],
                     do_flush,
+                    output_profile,
                 )?;
                 processed_section = true;
             } else {
@@ -191,6 +205,7 @@ impl CodestreamParser {
                     pixel_format,
                     group_readers,
                     do_flush,
+                    output_profile,
                 )?;
 
                 for g in processed_groups.into_iter() {

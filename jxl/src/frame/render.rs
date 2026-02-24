@@ -14,6 +14,7 @@ use crate::error::{Error, Result};
 use crate::features::epf::SigmaSource;
 use crate::frame::RenderUnit;
 use crate::headers::frame_header::Encoding;
+use crate::headers::frame_header::FrameType;
 use crate::headers::{Orientation, color_encoding::ColorSpace, extra_channels::ExtraChannel};
 use crate::image::Image;
 use crate::image::Rect;
@@ -129,6 +130,7 @@ impl Frame {
         pixel_format: &JxlPixelFormat,
         groups: Vec<(usize, Vec<(usize, BitReader)>)>,
         do_flush: bool,
+        output_profile: &JxlColorProfile,
     ) -> Result<()> {
         if self.render_pipeline.is_none() {
             assert_eq!(groups.iter().map(|x| x.1.len()).sum::<usize>(), 0);
@@ -297,8 +299,26 @@ impl Frame {
             }
         }
 
+        let regions = buffer_splitter.into_changed_regions();
+
         self.reference_frame_data = reference_frame_data;
         self.lf_frame_data = lf_frame_data;
+
+        if self.header.frame_type == FrameType::LFFrame && self.header.lf_level == 1 {
+            if do_flush && let Some(buffers) = api_buffers {
+                self.maybe_preview_lf_frame(
+                    pixel_format,
+                    buffers,
+                    Some(&regions[..]),
+                    output_profile,
+                )?;
+            } else if self.incomplete_groups == 0 {
+                // If we are not requesting another flush at the end of the LF frame, we
+                // probably have a partial render. Ensure we re-render the LF frame when
+                // decoding the actual frame.
+                self.decoder_state.lf_frame_was_rendered = false;
+            }
+        }
 
         Ok(())
     }
