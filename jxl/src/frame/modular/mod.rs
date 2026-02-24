@@ -431,10 +431,12 @@ impl FullModularImage {
         trace!("reading modular header");
         let header = GroupHeader::read(br)?;
 
-        let has_palette_transform = header
-            .transforms
-            .iter()
-            .any(|x| x.id == TransformId::Palette);
+        // Disallow progressive rendering with multi-channel palette transforms
+        // or delta-palette.
+        let has_problematic_palette_transform = header.transforms.iter().any(|x| {
+            x.id == TransformId::Palette
+                && (x.num_channels > 1 || x.predictor_id != Predictor::Zero as u32)
+        });
 
         let (mut buffer_info, transform_steps) =
             transforms::apply::meta_apply_transforms(&channels, &header)?;
@@ -588,7 +590,7 @@ impl FullModularImage {
             transform_steps,
             section_buffer_indices,
             modular_color_channels,
-            can_do_partial_render: !has_palette_transform,
+            can_do_partial_render: !has_problematic_palette_transform,
             buffers_for_channels,
             ready_buffers_dry_run: ready_buffers,
             ready_buffers: BTreeSet::new(),
