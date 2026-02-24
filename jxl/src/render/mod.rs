@@ -17,8 +17,8 @@ pub mod buffer_splitter;
 mod builder;
 mod channels;
 mod internal;
-mod low_memory_pipeline;
-mod save;
+pub mod low_memory_pipeline;
+pub mod save;
 mod simd_utils;
 #[cfg(test)]
 mod simple_pipeline;

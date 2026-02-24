@@ -32,6 +32,7 @@ mod coeff_order;
 pub mod color_correlation_map;
 pub mod decode;
 mod group;
+pub mod lf_preview;
 pub mod modular;
 mod quant_weights;
 pub mod quantizer;
@@ -121,6 +122,10 @@ pub struct DecoderState {
     pub nonvisible_frame_index: usize,
     pub high_precision: bool,
     pub premultiply_output: bool,
+    // Whether the latest level 1 LF frame was fully rendered.
+    // If this is set to `true`, early flushing in the main frame
+    // (before HF is available) will do nothing.
+    pub lf_frame_was_rendered: bool,
 }
 
 impl DecoderState {
@@ -138,6 +143,7 @@ impl DecoderState {
             nonvisible_frame_index: 0,
             high_precision: false,
             premultiply_output: false,
+            lf_frame_was_rendered: false,
         }
     }
 

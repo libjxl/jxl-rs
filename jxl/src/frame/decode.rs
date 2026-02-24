@@ -160,6 +160,9 @@ impl Frame {
         } else {
             decoder_state.nonvisible_frame_index += 1;
         }
+        if frame_header.frame_type == FrameType::LFFrame && frame_header.lf_level == 1 {
+            decoder_state.lf_frame_was_rendered = false;
+        }
         let image_metadata = &decoder_state.file_header.image_metadata;
         let is_gray = !frame_header.do_ycbcr
             && !image_metadata.xyb_encoded
@@ -266,10 +269,11 @@ impl Frame {
             return false;
         }
 
-        if self.header.frame_type != FrameType::RegularFrame {
-            return false;
-        }
-        true
+        self.header.frame_type == FrameType::RegularFrame
+            || (self.header.frame_type == FrameType::LFFrame
+                && self.header.lf_level == 1
+                // TODO(veluca): this should probably be "there is no alpha".
+                && self.header.num_extra_channels == 0)
     }
 
     /// Given a bit reader pointing at the end of the TOC, returns a vector of `BitReader`s, each
