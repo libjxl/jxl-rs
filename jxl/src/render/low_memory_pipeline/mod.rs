@@ -106,6 +106,7 @@ impl RenderPipeline for LowMemoryRenderPipeline {
                 shared.channel_info[0][chan].ty.unwrap(),
                 next_border_and_cur_downsample[0][chan].0 as usize,
                 0,
+                0,
                 shared.chunk_size >> shared.channel_info[0][chan].downsample.0,
             )?);
         }
@@ -119,6 +120,7 @@ impl RenderPipeline for LowMemoryRenderPipeline {
                     stage.output_type().unwrap(),
                     *next_y_border as usize,
                     stage.shift().1 as usize,
+                    stage.shift().0 as usize,
                     shared.chunk_size >> *dsx,
                 )?);
             }

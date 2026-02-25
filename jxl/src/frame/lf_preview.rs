@@ -87,22 +87,22 @@ impl Frame {
         let from_linear_stage = FromLinearStage::new(0, output_tf.clone());
 
         let mut lf_rows = [
-            RowBuffer::new(DataTypeTag::F32, 2, 0, len)?,
-            RowBuffer::new(DataTypeTag::F32, 2, 0, len)?,
-            RowBuffer::new(DataTypeTag::F32, 2, 0, len)?,
+            RowBuffer::new(DataTypeTag::F32, 2, 0, 0, len)?,
+            RowBuffer::new(DataTypeTag::F32, 2, 0, 0, len)?,
+            RowBuffer::new(DataTypeTag::F32, 2, 0, 0, len)?,
         ];
 
         // Converted to RGB in place.
         let mut upsampled_rows = [
-            RowBuffer::new(DataTypeTag::F32, 0, 3, ulen)?,
-            RowBuffer::new(DataTypeTag::F32, 0, 3, ulen)?,
-            RowBuffer::new(DataTypeTag::F32, 0, 3, ulen)?,
+            RowBuffer::new(DataTypeTag::F32, 0, 3, 3, ulen)?,
+            RowBuffer::new(DataTypeTag::F32, 0, 3, 3, ulen)?,
+            RowBuffer::new(DataTypeTag::F32, 0, 3, 3, ulen)?,
         ];
 
         let mut output_rows = [
-            RowBuffer::new(data_format.data_type(), 0, 0, ulen)?,
-            RowBuffer::new(data_format.data_type(), 0, 0, ulen)?,
-            RowBuffer::new(data_format.data_type(), 0, 0, ulen)?,
+            RowBuffer::new(data_format.data_type(), 0, 0, 0, ulen)?,
+            RowBuffer::new(data_format.data_type(), 0, 0, 0, ulen)?,
+            RowBuffer::new(data_format.data_type(), 0, 0, 0, ulen)?,
         ];
 
         let src = if self.header.frame_type == FrameType::RegularFrame {
