@@ -203,6 +203,9 @@ jobs:
     - name: Install Python dependencies
       run: pip install numpy apng pypng
 
+    - name: Update apt
+      run: sudo apt update
+
     - name: Install binary dependencies
       run: sudo apt install imagemagick
 
