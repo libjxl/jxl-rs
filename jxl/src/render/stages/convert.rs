@@ -3,23 +3,29 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
+use std::sync::Arc;
+
 use crate::{
     frame::quantizer::LfQuantFactors,
     headers::bit_depth::BitDepth,
     render::{Channels, ChannelsMut, RenderPipelineInOutStage, StageSpecialCase},
+    util::AtomicRefCell,
 };
 use jxl_simd::{F32SimdVec, I32SimdVec, SimdMask, simd_function};
 
 pub struct ConvertModularXYBToF32Stage {
     first_channel: usize,
-    scale: [f32; 3],
+    lf_quant: Arc<AtomicRefCell<LfQuantFactors>>,
 }
 
 impl ConvertModularXYBToF32Stage {
-    pub fn new(first_channel: usize, lf_quant: &LfQuantFactors) -> ConvertModularXYBToF32Stage {
+    pub fn new(
+        first_channel: usize,
+        lf_quant: Arc<AtomicRefCell<LfQuantFactors>>,
+    ) -> ConvertModularXYBToF32Stage {
         ConvertModularXYBToF32Stage {
             first_channel,
-            scale: lf_quant.quant_factors,
+            lf_quant,
         }
     }
 }
@@ -28,10 +34,9 @@ impl std::fmt::Display for ConvertModularXYBToF32Stage {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
-            "convert modular xyb data to F32 in channels {}..{} with scales {:?}",
+            "convert modular xyb data to F32 in channels {}..{}",
             self.first_channel,
             self.first_channel + 2,
-            self.scale
         )
     }
 }
@@ -54,7 +59,8 @@ impl RenderPipelineInOutStage for ConvertModularXYBToF32Stage {
         output_rows: &mut ChannelsMut<f32>,
         _state: Option<&mut dyn std::any::Any>,
     ) {
-        let [scale_x, scale_y, scale_b] = self.scale;
+        let lf_quant = self.lf_quant.borrow();
+        let [scale_x, scale_y, scale_b] = lf_quant.quant_factors;
         assert_eq!(
             input_rows.len(),
             3,
