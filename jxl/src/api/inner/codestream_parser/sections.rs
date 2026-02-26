@@ -100,14 +100,6 @@ impl CodestreamParser {
                 frame.decode_lf_global(&mut br)?;
                 frame.decode_lf_group(0, &mut br)?;
                 frame.decode_hf_global(&mut br)?;
-                frame.prepare_render_pipeline(
-                    self.pixel_format.as_ref().unwrap(),
-                    decode_options.cms.as_deref(),
-                    self.embedded_color_profile
-                        .as_ref()
-                        .expect("embedded_color_profile should be set before pipeline preparation"),
-                    output_profile,
-                )?;
                 frame.finalize_lf()?;
                 frame.decode_and_render_hf_groups(
                     output_buffers,
@@ -143,16 +135,6 @@ impl CodestreamParser {
 
                 if let Some(hf_global) = self.hf_global_section.take() {
                     frame.decode_hf_global(&mut BitReader::new(&hf_global.data))?;
-                    frame.prepare_render_pipeline(
-                        self.pixel_format.as_ref().unwrap(),
-                        decode_options.cms.as_deref(),
-                        self.embedded_color_profile.as_ref().expect(
-                            "embedded_color_profile should be set before pipeline preparation",
-                        ),
-                        self.output_color_profile.as_ref().expect(
-                            "output_color_profile should be set before pipeline preparation",
-                        ),
-                    )?;
                     frame.finalize_lf()?;
                     self.section_state.hf_global_done = true;
                     processed_section = true;
