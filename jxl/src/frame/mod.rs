@@ -26,6 +26,9 @@ use modular::{FullModularImage, Tree};
 use quant_weights::DequantMatrices;
 use quantizer::{LfQuantFactors, QuantizerParams};
 
+use crate::features::epf::SigmaSource;
+use crate::util::AtomicRefCell;
+
 mod adaptive_lf_smoothing;
 mod block_context_map;
 mod coeff_order;
@@ -47,9 +50,6 @@ pub enum Section {
 }
 
 pub struct LfGlobalState {
-    patches: Option<Arc<PatchesDictionary>>,
-    splines: Option<Splines>,
-    noise: Option<Noise>,
     lf_quant: LfQuantFactors,
     pub quant_params: Option<QuantizerParams>,
     block_context_map: Option<BlockContextMap>,
@@ -206,6 +206,12 @@ pub struct Frame {
     groups_to_flush: BTreeSet<usize>,
     changed_since_last_flush: BTreeSet<(usize, RenderUnit)>,
     incomplete_groups: usize,
+    patches: Arc<AtomicRefCell<PatchesDictionary>>,
+    splines: Arc<AtomicRefCell<Splines>>,
+    noise: Arc<AtomicRefCell<Noise>>,
+    lf_quant: Arc<AtomicRefCell<LfQuantFactors>>,
+    color_correlation_params: Arc<AtomicRefCell<ColorCorrelationParams>>,
+    epf_sigma: Arc<AtomicRefCell<SigmaSource>>,
 }
 
 impl Frame {
@@ -318,8 +324,7 @@ mod test {
     #[test]
     fn splines() -> Result<(), Error> {
         let verify_frame = move |frame: &Frame, _| {
-            let lf_global = frame.lf_global.as_ref().unwrap();
-            let splines = lf_global.splines.as_ref().unwrap();
+            let splines = frame.splines.borrow();
             assert_eq!(splines.quantization_adjustment, 0);
             let expected_starting_points = [Point { x: 9.0, y: 54.0 }].to_vec();
             assert_eq!(splines.starting_points, expected_starting_points);
@@ -378,8 +383,7 @@ mod test {
     #[test]
     fn noise() -> Result<(), Error> {
         let verify_frame = |frame: &Frame, _| {
-            let lf_global = frame.lf_global.as_ref().unwrap();
-            let noise = lf_global.noise.as_ref().unwrap();
+            let noise = frame.noise.borrow();
             let want_noise = [
                 0.000000, 0.000977, 0.002930, 0.003906, 0.005859, 0.006836, 0.008789, 0.010742,
             ];
