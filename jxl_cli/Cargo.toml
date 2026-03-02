@@ -7,12 +7,12 @@ default-run = "jxl_cli"
 
 [dependencies]
 jxl = { path = "../jxl", version = "=0.3.0", default-features = false }
+jxl_cms = { path = "../jxl_cms", version = "=0.3.0" }
 clap = { version = "4.5.18", features = ["derive"] }
 tracing-subscriber = { version = "0.3.18", features = [
   "env-filter",
 ], optional = true }
-lcms2 = { version = "6.1.0", features=["static"] }
-bytemuck = "1.14"
+lcms2 = { version = "6.1.0", features = ["static"] }
 half = "2.4.1"
 png = "0.18.0"
 exr = { version = "1.73.0", optional = true }

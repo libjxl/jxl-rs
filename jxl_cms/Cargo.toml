@@ -1,0 +1,12 @@
+[package]
+name = "jxl_cms"
+version = "0.3.0"
+edition = "2024"
+
+[dependencies]
+jxl = { path = "../jxl", version = "0.3.0" }
+lcms2 = { version = "6.1.0", features = ["static"] }
+bytemuck = "1.24.0"
+
+[lints]
+workspace = true
