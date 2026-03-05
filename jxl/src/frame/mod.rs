@@ -12,7 +12,7 @@ use crate::{
     headers::{
         FileHeader,
         extra_channels::ExtraChannelInfo,
-        frame_header::{Encoding, FrameHeader},
+        frame_header::{Encoding, FrameHeader, FrameType},
         permutation::Permutation,
         toc::Toc,
     },
@@ -49,6 +49,7 @@ pub enum Section {
     Hf { group: usize, pass: usize },
 }
 
+#[derive(Debug)]
 pub struct LfGlobalState {
     lf_quant: LfQuantFactors,
     pub quant_params: Option<QuantizerParams>,
@@ -241,6 +242,25 @@ impl Frame {
                 }
             }
         }
+    }
+
+    pub fn can_do_early_rendering(&self) -> bool {
+        if matches!(
+            self.header.frame_type,
+            FrameType::ReferenceOnly | FrameType::SkipProgressive
+        ) {
+            return false;
+        }
+        if self.header.has_lf_frame() {
+            return true;
+        }
+        if self.header.encoding == Encoding::VarDCT {
+            return false;
+        }
+        self.lf_global
+            .as_ref()
+            .map(|x| x.modular_global.can_do_early_partial_render())
+            .unwrap_or_default()
     }
 
     pub fn finalize_lf(&mut self) -> Result<()> {
