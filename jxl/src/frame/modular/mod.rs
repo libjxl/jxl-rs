@@ -357,6 +357,7 @@ pub struct FullModularImage {
     section_buffer_indices: Vec<Vec<usize>>,
     modular_color_channels: usize,
     can_do_partial_render: bool,
+    can_do_early_partial_render: bool,
     buffers_for_channels: Vec<usize>,
     // Buffers to _start rendering from_ on the next call to process_output.
     // This is initially set to LF global and LF buffers, and populated with HF buffers
@@ -370,6 +371,10 @@ pub struct FullModularImage {
 impl FullModularImage {
     pub fn can_do_partial_render(&self) -> bool {
         self.can_do_partial_render
+    }
+
+    pub fn can_do_early_partial_render(&self) -> bool {
+        self.can_do_early_partial_render
     }
 
     pub fn set_pipeline_used_channels(&mut self, used: &[bool]) {
@@ -431,6 +436,7 @@ impl FullModularImage {
                 section_buffer_indices: vec![vec![]; 2 + frame_header.passes.num_passes as usize],
                 modular_color_channels,
                 can_do_partial_render: true,
+                can_do_early_partial_render: false,
                 buffers_for_channels: vec![],
                 ready_buffers_dry_run: BTreeSet::new(),
                 ready_buffers: BTreeSet::new(),
@@ -447,6 +453,11 @@ impl FullModularImage {
             x.id == TransformId::Palette
                 && (x.num_channels > 1 || x.predictor_id != Predictor::Zero as u32)
         });
+
+        let has_squeeze_transform = header
+            .transforms
+            .iter()
+            .any(|x| x.id == TransformId::Squeeze);
 
         let (mut buffer_info, transform_steps) =
             transforms::apply::meta_apply_transforms(&channels, &header)?;
@@ -601,6 +612,8 @@ impl FullModularImage {
             section_buffer_indices,
             modular_color_channels,
             can_do_partial_render: !has_problematic_palette_transform,
+            can_do_early_partial_render: !has_problematic_palette_transform
+                && has_squeeze_transform,
             buffers_for_channels,
             ready_buffers_dry_run: ready_buffers,
             ready_buffers: BTreeSet::new(),
@@ -652,11 +665,6 @@ impl FullModularImage {
                 )
             },
         )?;
-
-        // TODO(veluca): consider removing this from here and moving it to some appropriate place.
-        if section_id == 1 {
-            self.mark_group_to_be_read(section_id, grid);
-        }
 
         Ok(())
     }
@@ -853,31 +861,41 @@ impl FullModularImage {
         )
     }
 
-    pub fn zero_fill_empty_channels(&mut self, num_passes: usize, num_groups: usize) -> Result<()> {
+    pub fn zero_fill_empty_channels(
+        &mut self,
+        num_passes: usize,
+        num_groups: usize,
+        num_lf_groups: usize,
+    ) -> Result<()> {
         if !self.can_do_partial_render() {
             return Ok(());
         }
         if self.buffer_info.is_empty() {
             return Ok(());
         }
+        let mut fill_buffer = |section: usize, grid| -> Result<()> {
+            // TODO(veluca): consider filling these buffers with placeholders instead of real images.
+            with_buffers(
+                &self.buffer_info,
+                &self.section_buffer_indices[section],
+                grid,
+                |_| Ok(()),
+            )?;
+            for b in self.section_buffer_indices[section].iter() {
+                if self.buffer_info[*b].buffer_grid[grid].get_status() == BUFFER_STATUS_NOT_RENDERED
+                {
+                    self.buffer_info[*b].buffer_grid[grid].set_status(BUFFER_STATUS_PARTIAL_RENDER);
+                    self.ready_buffers.insert((*b, grid));
+                }
+            }
+            Ok(())
+        };
+        for grid in 0..num_lf_groups {
+            fill_buffer(1, grid)?;
+        }
         for pass in 0..num_passes {
             for grid in 0..num_groups {
-                // TODO(veluca): consider filling these buffers with placeholders instead of real images.
-                with_buffers(
-                    &self.buffer_info,
-                    &self.section_buffer_indices[pass + 2],
-                    grid,
-                    |_| Ok(()),
-                )?;
-                for b in self.section_buffer_indices[pass + 2].iter() {
-                    if self.buffer_info[*b].buffer_grid[grid].get_status()
-                        == BUFFER_STATUS_NOT_RENDERED
-                    {
-                        self.buffer_info[*b].buffer_grid[grid]
-                            .set_status(BUFFER_STATUS_PARTIAL_RENDER);
-                        self.ready_buffers.insert((*b, grid));
-                    }
-                }
+                fill_buffer(2 + pass, grid)?;
             }
         }
 

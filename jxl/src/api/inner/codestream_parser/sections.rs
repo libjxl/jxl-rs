@@ -12,6 +12,7 @@ use crate::{
 
 use super::CodestreamParser;
 
+#[derive(Debug)]
 pub(super) struct SectionState {
     lf_global_done: bool,
     remaining_lf: usize,
@@ -50,15 +51,6 @@ impl CodestreamParser {
             .as_ref()
             .expect("output_color_profile should be set before pipeline preparation");
 
-        if do_flush && let Some(buf) = output_buffers {
-            frame.maybe_preview_lf_frame(
-                self.pixel_format.as_ref().unwrap(),
-                buf,
-                None,
-                output_profile,
-            )?;
-        }
-
         let frame_header = frame.header();
 
         // Dequeue ready sections.
@@ -88,6 +80,7 @@ impl CodestreamParser {
         }
 
         let mut processed_section = false;
+        let mut called_render_hf = false;
         let pixel_format = self.pixel_format.as_ref().unwrap();
         'process: {
             if frame_header.num_groups() == 1 && frame_header.passes.num_passes == 1 {
@@ -108,6 +101,7 @@ impl CodestreamParser {
                     do_flush,
                     output_profile,
                 )?;
+                called_render_hf = true;
                 processed_section = true;
             } else {
                 if let Some(lf_global) = self.lf_global_section.take() {
@@ -189,6 +183,7 @@ impl CodestreamParser {
                     do_flush,
                     output_profile,
                 )?;
+                called_render_hf = true;
 
                 for g in processed_groups.into_iter() {
                     for i in 0..self.section_state.completed_passes[g] {
@@ -197,6 +192,16 @@ impl CodestreamParser {
                     processed_section = true;
                 }
             }
+        }
+
+        if do_flush && !called_render_hf && frame.can_do_early_rendering() {
+            frame.decode_and_render_hf_groups(
+                output_buffers,
+                pixel_format,
+                vec![],
+                do_flush,
+                output_profile,
+            )?;
         }
 
         if !processed_section {

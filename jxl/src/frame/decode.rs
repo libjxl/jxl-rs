@@ -426,6 +426,9 @@ impl Frame {
                 br,
             )?;
         }
+
+        lf_global.modular_global.mark_group_to_be_read(1, group);
+
         lf_global.modular_global.read_stream(
             ModularStreamId::ModularLF(group),
             &self.header,
@@ -688,9 +691,6 @@ impl Frame {
 
         let lf_global = self.lf_global.as_mut().unwrap();
         if self.header.encoding == Encoding::VarDCT {
-            info!("Decoding VarDCT group {group}");
-            let hf_global = self.hf_global.as_mut().unwrap();
-            let hf_meta = self.hf_meta.as_mut().unwrap();
             let mut pixels = if do_render {
                 Some([
                     pipeline!(self, p, p.get_buffer(0))?,
@@ -700,8 +700,8 @@ impl Frame {
             } else {
                 None
             };
-            let buffers = self.vardct_buffers.get_or_insert_with(VarDctBuffers::new);
             if pass_to_render.is_none() && do_render {
+                info!("Upsampling LF for group {group}");
                 upsample_lf_group(
                     group,
                     pixels.as_mut().unwrap(),
@@ -710,6 +710,10 @@ impl Frame {
                     &self.decoder_state.file_header.transform_data,
                 )?;
             } else {
+                info!("Decoding VarDCT group {group}");
+                let hf_global = self.hf_global.as_mut().unwrap();
+                let hf_meta = self.hf_meta.as_mut().unwrap();
+                let buffers = self.vardct_buffers.get_or_insert_with(VarDctBuffers::new);
                 decode_vardct_group(
                     group,
                     passes,
