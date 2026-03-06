@@ -315,93 +315,107 @@ impl Frame {
     }
 
     #[instrument(level = "debug", skip_all)]
-    pub fn decode_lf_global(&mut self, br: &mut BitReader) -> Result<()> {
+    pub fn decode_lf_global(&mut self, br: &mut BitReader, allow_partial: bool) -> Result<()> {
         debug!(section_size = br.total_bits_available());
-        assert!(self.lf_global.is_none());
-        trace!(pos = br.total_bits_read());
 
-        if self.header.has_patches() {
-            info!("decoding patches");
-            let p = PatchesDictionary::read(
+        if let Some(lfg) = &self.lf_global {
+            br.skip_bits(lfg.total_bits_read)?;
+        } else {
+            trace!(pos = br.total_bits_read());
+
+            if self.header.has_patches() {
+                info!("decoding patches");
+                let p = PatchesDictionary::read(
+                    br,
+                    self.header.size_padded().0,
+                    self.header.size_padded().1,
+                    self.decoder_state.extra_channel_info().len(),
+                    &self.decoder_state.reference_frames[..],
+                )?;
+                *self.patches.borrow_mut() = p;
+            }
+
+            if self.header.has_splines() {
+                info!("decoding splines");
+                let s = Splines::read(br, self.header.width * self.header.height)?;
+                *self.splines.borrow_mut() = s;
+            }
+
+            if self.header.has_noise() {
+                info!("decoding noise");
+                let n = Noise::read(br)?;
+                *self.noise.borrow_mut() = n;
+            }
+
+            let lf_quant = LfQuantFactors::new(br)?;
+            *self.lf_quant.borrow_mut() = lf_quant.clone();
+            debug!(?lf_quant);
+
+            let quant_params = if self.header.encoding == Encoding::VarDCT {
+                info!("decoding VarDCT quantizer params");
+                Some(QuantizerParams::read(br)?)
+            } else {
+                None
+            };
+            debug!(?quant_params);
+
+            let block_context_map = if self.header.encoding == Encoding::VarDCT {
+                info!("decoding block context map");
+                Some(BlockContextMap::read(br)?)
+            } else {
+                None
+            };
+            debug!(?block_context_map);
+
+            let color_correlation_params = if self.header.encoding == Encoding::VarDCT {
+                info!("decoding color correlation params");
+                let ccp = ColorCorrelationParams::read(br)?;
+                *self.color_correlation_params.borrow_mut() = ccp;
+                Some(ccp)
+            } else {
+                None
+            };
+            debug!(?color_correlation_params);
+
+            let tree = if br.read(1)? == 1 {
+                let size_limit = (1024
+                    + self.header.width as usize
+                        * self.header.height as usize
+                        * (self.color_channels + self.decoder_state.extra_channel_info().len())
+                        / 16)
+                    .min(1 << 22);
+                Some(Tree::read(br, size_limit)?)
+            } else {
+                None
+            };
+
+            let modular_global = FullModularImage::read(
+                &self.header,
+                &self.decoder_state.file_header.image_metadata,
+                self.modular_color_channels(),
                 br,
-                self.header.size_padded().0,
-                self.header.size_padded().1,
-                self.decoder_state.extra_channel_info().len(),
-                &self.decoder_state.reference_frames[..],
             )?;
-            *self.patches.borrow_mut() = p;
+
+            // Ensure that, if we call this function again, we resume from just after
+            // reading modular global data (excluding section 0 channels).
+            let total_bits_read = br.total_bits_read();
+
+            self.lf_global = Some(LfGlobalState {
+                lf_quant,
+                quant_params,
+                block_context_map,
+                color_correlation_params,
+                tree,
+                modular_global,
+                total_bits_read,
+            });
         }
 
-        if self.header.has_splines() {
-            info!("decoding splines");
-            let s = Splines::read(br, self.header.width * self.header.height)?;
-            *self.splines.borrow_mut() = s;
-        }
+        let lf_global = self.lf_global.as_mut().unwrap();
 
-        if self.header.has_noise() {
-            info!("decoding noise");
-            let n = Noise::read(br)?;
-            *self.noise.borrow_mut() = n;
-        }
-
-        let lf_quant = LfQuantFactors::new(br)?;
-        *self.lf_quant.borrow_mut() = lf_quant.clone();
-        debug!(?lf_quant);
-
-        let quant_params = if self.header.encoding == Encoding::VarDCT {
-            info!("decoding VarDCT quantizer params");
-            Some(QuantizerParams::read(br)?)
-        } else {
-            None
-        };
-        debug!(?quant_params);
-
-        let block_context_map = if self.header.encoding == Encoding::VarDCT {
-            info!("decoding block context map");
-            Some(BlockContextMap::read(br)?)
-        } else {
-            None
-        };
-        debug!(?block_context_map);
-
-        let color_correlation_params = if self.header.encoding == Encoding::VarDCT {
-            info!("decoding color correlation params");
-            let ccp = ColorCorrelationParams::read(br)?;
-            *self.color_correlation_params.borrow_mut() = ccp;
-            Some(ccp)
-        } else {
-            None
-        };
-        debug!(?color_correlation_params);
-
-        let tree = if br.read(1)? == 1 {
-            let size_limit = (1024
-                + self.header.width as usize
-                    * self.header.height as usize
-                    * (self.color_channels + self.decoder_state.extra_channel_info().len())
-                    / 16)
-                .min(1 << 22);
-            Some(Tree::read(br, size_limit)?)
-        } else {
-            None
-        };
-
-        let modular_global = FullModularImage::read(
-            &self.header,
-            &self.decoder_state.file_header.image_metadata,
-            self.modular_color_channels(),
-            &tree,
-            br,
-        )?;
-
-        self.lf_global = Some(LfGlobalState {
-            lf_quant,
-            quant_params,
-            block_context_map,
-            color_correlation_params,
-            tree,
-            modular_global,
-        });
+        lf_global
+            .modular_global
+            .read_section0(&self.header, &lf_global.tree, br, allow_partial)?;
 
         Ok(())
     }

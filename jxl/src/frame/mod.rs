@@ -57,6 +57,7 @@ pub struct LfGlobalState {
     color_correlation_params: Option<ColorCorrelationParams>,
     tree: Option<Tree>,
     modular_global: FullModularImage,
+    total_bits_read: usize,
 }
 
 pub struct PassState {
