@@ -32,6 +32,8 @@ test-log = { version = "0.2.16", features = ["trace"] }
 jxl_macros = { path = "../jxl_macros", version = "=0.3.0", features = ["test"] }
 
 [features]
+default = ["all-simd"]
+
 all-simd = ["jxl_simd/all-simd"]
 sse42 = ["jxl_simd/sse42"]
 avx = ["jxl_simd/avx"]

@@ -6,7 +6,7 @@ license = "BSD-3-Clause"
 default-run = "jxl_cli"
 
 [dependencies]
-jxl = { path = "../jxl", version = "=0.3.0" }
+jxl = { path = "../jxl", version = "=0.3.0", default-features = false }
 clap = { version = "4.5.18", features = ["derive"] }
 tracing-subscriber = { version = "0.3.18", features = [
   "env-filter",
