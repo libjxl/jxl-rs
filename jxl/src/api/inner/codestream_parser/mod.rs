@@ -302,7 +302,12 @@ impl CodestreamParser {
             } else {
                 // Trying to read a frame or a file header.
                 assert!(self.frame.is_none());
-                assert!(self.has_more_frames);
+                if !self.has_more_frames {
+                    // If this is a flush request and the file is complete, we are done.
+                    // Otherwise, this is an API usage error.
+                    assert!(do_flush);
+                    return Ok(());
+                }
 
                 // Loop to handle incremental parsing (e.g. large ICC profiles) that may need
                 // multiple buffer refills to complete.
