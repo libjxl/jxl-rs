@@ -207,5 +207,6 @@ pub(super) fn decode_modular_channel(
         TreeSpecialCase::General(t) => {
             decode_modular_channel_impl(buffers, chan, t, reader, br, &tree.histograms)
         }
-    }
+    }?;
+    br.check_for_error()
 }

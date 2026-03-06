@@ -774,6 +774,11 @@ impl Frame {
                     fill_opaque_alpha,
                 );
             }
+            let mut save_idx = if pixel_format.color_data_format.is_some() {
+                1
+            } else {
+                0
+            };
             for i in 0..frame_header.num_extra_channels as usize {
                 if let Some(df) = &pixel_format.extra_channel_format[i] {
                     // Add conversion stages for non-float output formats
@@ -781,11 +786,12 @@ impl Frame {
                     pipeline = pipeline.add_save_stage(
                         &[3 + i],
                         metadata.orientation,
-                        1 + i,
+                        save_idx,
                         JxlColorType::Grayscale,
                         *df,
                         false,
                     );
+                    save_idx += 1;
                 }
             }
         }
