@@ -102,8 +102,6 @@ impl JxlDecoder<Initialized> {
 }
 
 impl JxlDecoder<WithImageInfo> {
-    // TODO(veluca): once frame skipping is implemented properly, expose that in the API.
-
     /// Obtains the image's basic information.
     pub fn basic_info(&self) -> &JxlBasicInfo {
         self.inner.basic_info().unwrap()
@@ -157,6 +155,35 @@ impl JxlDecoder<WithImageInfo> {
         self.inner.has_more_frames()
     }
 
+    /// Resets frame-level decoder state to prepare for decoding a new frame.
+    ///
+    /// This clears intermediate buffers (frame header, TOC, section data) while
+    /// preserving image-level state (file header, color profiles, pixel format,
+    /// reference frames). After calling this, the next `process()` call will
+    /// attempt to parse a new frame header from the input.
+    ///
+    /// This is intended for animation seeking: use
+    /// [`FrameInfoDecoder`](super::frame_scan::FrameInfoDecoder) to scan frame
+    /// offsets, then call `start_new_frame()` and provide input starting from
+    /// the target frame's codestream offset (or its `decode_start_offset` if
+    /// reference frames need to be decoded first).
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// // 1. Scan frame info to get offsets.
+    /// let mut scanner = FrameInfoDecoder::new();
+    /// scanner.feed(&data).unwrap();
+    ///
+    /// // 2. Seek to frame N.
+    /// let target = &scanner.frames()[n];
+    /// decoder.start_new_frame();
+    /// // 3. Provide input from target.decode_start_offset and process().
+    /// ```
+    pub fn start_new_frame(&mut self) {
+        self.inner.start_new_frame();
+    }
+
     #[cfg(test)]
     pub(crate) fn set_use_simple_pipeline(&mut self, u: bool) {
         self.inner.set_use_simple_pipeline(u);
@@ -164,7 +191,16 @@ impl JxlDecoder<WithImageInfo> {
 }
 
 impl JxlDecoder<WithFrameInfo> {
-    /// Skip the current frame.
+    /// Skip the current frame without decoding pixels.
+    ///
+    /// This reads section data from the input to advance past the frame, but
+    /// does not render pixels. Reference frames that may be needed by later
+    /// frames are still decoded internally.
+    ///
+    /// For efficient frame seeking in animations, prefer using
+    /// [`FrameInfoDecoder`](super::frame_scan::FrameInfoDecoder) to scan frame
+    /// offsets, then [`start_new_frame`](JxlDecoder::start_new_frame) to jump
+    /// directly to a target frame.
     pub fn skip_frame(
         mut self,
         input: &mut impl JxlBitstreamInput,

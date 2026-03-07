@@ -141,6 +141,20 @@ impl JxlDecoderInner {
         self.box_parser.frame_index.as_ref()
     }
 
+    /// Resets frame-level state to prepare for decoding a new frame.
+    ///
+    /// Preserves image-level state (file header, decoder state including
+    /// reference frames, color profiles, pixel format). Clears frame header,
+    /// TOC, section buffers, and the box parser position so that the next
+    /// `process()` call starts parsing a new frame header.
+    ///
+    /// The caller must provide input starting from the target frame's
+    /// codestream position.
+    pub fn start_new_frame(&mut self) {
+        self.box_parser = BoxParser::new();
+        self.codestream_parser.start_new_frame();
+    }
+
     #[cfg(test)]
     pub(crate) fn set_use_simple_pipeline(&mut self, u: bool) {
         self.codestream_parser.set_use_simple_pipeline(u);
