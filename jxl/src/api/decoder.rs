@@ -1534,11 +1534,12 @@ pub(crate) mod tests {
         let decoder = JxlDecoder::<states::Initialized>::new(options);
         let mut input = data.as_slice();
 
-        let mut decoder = loop {
-            match decoder.process(&mut input).unwrap() {
-                ProcessingResult::Complete { result } => break result,
-                ProcessingResult::NeedsMoreInput { .. } => unreachable!(),
-            }
+        // Full data available -- process completes in one call.
+        let ProcessingResult::Complete {
+            result: mut decoder,
+        } = decoder.process(&mut input).unwrap()
+        else {
+            panic!("expected Complete with full data");
         };
 
         let basic_info = decoder.basic_info().clone();
