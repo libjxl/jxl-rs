@@ -16,6 +16,7 @@ use crate::{
     api::{
         JxlBasicInfo, JxlBitstreamInput, JxlColorEncoding, JxlColorProfile, JxlDataFormat,
         JxlDecoderOptions, JxlOutputBuffer, JxlPixelFormat,
+        frame_scan::VisibleFrameInfo,
         inner::{box_parser::BoxParser, process::SmallBuffer},
     },
     error::{Error, Result},
@@ -82,6 +83,20 @@ pub(super) struct CodestreamParser {
 
     header_needed_bytes: Option<u64>,
 
+    // --- Frame info tracking (for frame scanning) ---
+    /// Collected visible frame info entries.
+    pub(super) scanned_frames: Vec<VisibleFrameInfo>,
+    /// Zero-based visible frame index counter.
+    visible_frame_index: usize,
+    /// Codestream offset of the most recent keyframe (for decode_start_offset).
+    last_keyframe_offset: usize,
+    /// Codestream byte offset where the current frame header parse started.
+    /// Set when we begin parsing a frame header.
+    current_frame_codestream_offset: usize,
+    /// Remaining codestream bytes in the current box at frame start.
+    /// Captured alongside `current_frame_codestream_offset`.
+    current_frame_remaining_in_box: u64,
+
     #[cfg(test)]
     pub frame_callback: Option<Box<FrameCallback>>,
     #[cfg(test)]
@@ -121,6 +136,11 @@ impl CodestreamParser {
             candidate_hf_sections: HashSet::new(),
             has_more_frames: true,
             header_needed_bytes: None,
+            scanned_frames: Vec::new(),
+            visible_frame_index: 0,
+            last_keyframe_offset: 0,
+            current_frame_codestream_offset: 0,
+            current_frame_remaining_in_box: u64::MAX,
             #[cfg(test)]
             frame_callback: None,
             #[cfg(test)]
@@ -134,6 +154,64 @@ impl CodestreamParser {
         } else {
             false
         }
+    }
+
+    /// Record frame info for the just-parsed frame.
+    /// Called after process_non_section() creates a Frame, for frame scanning.
+    fn record_frame_info(&mut self) {
+        let frame = match self.frame.as_ref() {
+            Some(f) => f,
+            None => return,
+        };
+        let header = frame.header();
+
+        if !header.is_visible() {
+            return;
+        }
+
+        // A visible frame is a keyframe when:
+        // 1. It's the first visible frame, OR
+        // 2. It uses Replace blending for all channels, covers the full
+        //    frame (!needs_blending), and does not use patches.
+        let is_keyframe = if self.visible_frame_index == 0 {
+            true
+        } else {
+            !header.needs_blending() && !header.has_patches()
+        };
+
+        if is_keyframe {
+            self.last_keyframe_offset = self.current_frame_codestream_offset;
+        }
+
+        let duration_ticks = header.duration;
+        let duration_ms = if let Some(ref anim) = self.animation {
+            if anim.tps_numerator > 0 {
+                (duration_ticks as f64) * 1000.0 * (anim.tps_denominator as f64)
+                    / (anim.tps_numerator as f64)
+            } else {
+                0.0
+            }
+        } else {
+            0.0
+        };
+
+        self.scanned_frames.push(VisibleFrameInfo {
+            index: self.visible_frame_index,
+            duration_ms,
+            duration_ticks,
+            codestream_offset: self.current_frame_codestream_offset,
+            is_last: header.is_last,
+            is_keyframe,
+            decode_start_offset: if is_keyframe {
+                self.current_frame_codestream_offset
+            } else {
+                self.last_keyframe_offset
+            },
+            remaining_in_box: self.current_frame_remaining_in_box,
+            name: header.name.clone(),
+        });
+
+        self.visible_frame_index += 1;
     }
 
     /// Returns the number of passes that are fully completed across all groups.
@@ -337,6 +415,39 @@ impl CodestreamParser {
                     return Ok(());
                 }
 
+                // Record codestream offset and box state at frame header start
+                // for scanning and seeking.
+                // total_codestream_consumed counts bytes passed from BoxParser;
+                // non_section_buf.len() is bytes buffered but not yet parsed.
+                if self.decoder_state.is_some() && self.frame_header.is_none() {
+                    self.current_frame_codestream_offset =
+                        (box_parser.total_codestream_consumed as usize)
+                            .saturating_sub(self.non_section_buf.len());
+
+                    // Capture remaining-in-box at the frame's file position.
+                    // BoxParser's remaining_in_codestream_box() gives remaining
+                    // AFTER bytes were consumed into non_section_buf and
+                    // box_buffer.  Add those back since they come from the
+                    // current box and haven't been "read from the file" from
+                    // the frame start perspective.
+                    //
+                    // For bare codestream the initial remaining is u64::MAX
+                    // (sentinel for "rest of file").  Detect this by checking
+                    // whether the value is still very large after consumption
+                    // (no real box can exceed u64::MAX / 2).
+                    self.current_frame_remaining_in_box = box_parser
+                        .remaining_in_codestream_box()
+                        .map(|r| {
+                            if r > u64::MAX / 2 {
+                                u64::MAX
+                            } else {
+                                r.saturating_add(self.non_section_buf.len() as u64)
+                                    .saturating_add(box_parser.box_buffer.len() as u64)
+                            }
+                        })
+                        .unwrap_or(u64::MAX);
+                }
+
                 // Loop to handle incremental parsing (e.g. large ICC profiles) that may need
                 // multiple buffer refills to complete.
                 loop {
@@ -417,6 +528,11 @@ impl CodestreamParser {
                             self.process_without_output = true;
                             continue;
                         }
+                    }
+
+                    // Record frame info for scanning (after preview check).
+                    if !is_preview_frame {
+                        self.record_frame_info();
                     }
 
                     if self.has_visible_frame() {
