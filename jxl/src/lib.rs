@@ -18,6 +18,9 @@ pub mod image;
 pub mod render;
 pub mod util;
 
+#[cfg(test)]
+mod tests;
+
 // TODO: Move these to a more appropriate location.
 const GROUP_DIM: usize = 256;
 const BLOCK_DIM: usize = 8;
