@@ -279,7 +279,7 @@ impl CodestreamParser {
         // Save file_header before creating frame (for preview frame recovery)
         self.saved_file_header = self.decoder_state.as_ref().map(|ds| ds.file_header.clone());
 
-        let frame = Frame::from_header_and_toc(
+        let mut frame = Frame::from_header_and_toc(
             self.frame_header.take().unwrap(),
             toc,
             self.decoder_state.take().unwrap(),
@@ -340,6 +340,17 @@ impl CodestreamParser {
 
         self.section_state =
             SectionState::new(frame.header().num_lf_groups(), frame.header().num_groups());
+
+        frame.prepare_render_pipeline(
+            self.pixel_format.as_ref().unwrap(),
+            decode_options.cms.as_deref(),
+            self.embedded_color_profile
+                .as_ref()
+                .expect("embedded_color_profile should be set before pipeline preparation"),
+            self.output_color_profile
+                .as_ref()
+                .expect("output_color_profile should be set before pipeline preparation"),
+        )?;
 
         self.frame = Some(frame);
 

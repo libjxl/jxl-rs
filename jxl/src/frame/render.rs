@@ -12,19 +12,27 @@ use crate::api::JxlOutputBuffer;
 use crate::bit_reader::BitReader;
 use crate::error::{Error, Result};
 use crate::features::epf::SigmaSource;
+use crate::features::noise::Noise;
+use crate::features::patches::PatchesDictionary;
+use crate::features::spline::Splines;
 use crate::frame::RenderUnit;
+use crate::frame::color_correlation_map::ColorCorrelationParams;
+use crate::frame::quantizer::LfQuantFactors;
 use crate::headers::frame_header::Encoding;
 use crate::headers::frame_header::FrameType;
 use crate::headers::{Orientation, color_encoding::ColorSpace, extra_channels::ExtraChannel};
 use crate::image::Image;
 use crate::image::Rect;
+use crate::util::AtomicRefCell;
+use std::sync::Arc;
+
 #[cfg(test)]
 use crate::render::SimpleRenderPipeline;
 use crate::render::buffer_splitter::BufferSplitter;
 use crate::render::{LowMemoryRenderPipeline, RenderPipeline, RenderPipelineBuilder, stages::*};
 use crate::{
     api::JxlPixelFormat,
-    frame::{DecoderState, Frame, LfGlobalState},
+    frame::{DecoderState, Frame},
     headers::frame_header::FrameHeader,
 };
 
@@ -132,7 +140,7 @@ impl Frame {
         do_flush: bool,
         output_profile: &JxlColorProfile,
     ) -> Result<()> {
-        if self.render_pipeline.is_none() {
+        if self.render_pipeline.is_none() || self.lf_global.is_none() {
             assert_eq!(groups.iter().map(|x| x.1.len()).sum::<usize>(), 0);
             // We don't yet have any output ready (as the pipeline would be initialized otherwise),
             // so exit without doing anything.
@@ -211,6 +219,7 @@ impl Frame {
             modular_global.zero_fill_empty_channels(
                 self.header.passes.num_passes as usize,
                 self.header.num_groups(),
+                self.header.num_lf_groups(),
             )?;
         }
 
@@ -327,8 +336,12 @@ impl Frame {
     pub(crate) fn build_render_pipeline<T: RenderPipeline>(
         decoder_state: &DecoderState,
         frame_header: &FrameHeader,
-        lf_global: &LfGlobalState,
-        epf_sigma: &Option<SigmaSource>,
+        patches: Arc<AtomicRefCell<PatchesDictionary>>,
+        splines: Arc<AtomicRefCell<Splines>>,
+        noise: Arc<AtomicRefCell<Noise>>,
+        lf_quant: Arc<AtomicRefCell<LfQuantFactors>>,
+        color_correlation_params: Arc<AtomicRefCell<ColorCorrelationParams>>,
+        epf_sigma: Arc<AtomicRefCell<SigmaSource>>,
         pixel_format: &JxlPixelFormat,
         cms: Option<&dyn JxlCms>,
         input_profile: &JxlColorProfile,
@@ -346,8 +359,7 @@ impl Frame {
 
         if frame_header.encoding == Encoding::Modular {
             if decoder_state.file_header.image_metadata.xyb_encoded {
-                pipeline = pipeline
-                    .add_inout_stage(ConvertModularXYBToF32Stage::new(0, &lf_global.lf_quant))
+                pipeline = pipeline.add_inout_stage(ConvertModularXYBToF32Stage::new(0, lf_quant))
             } else {
                 for i in 0..3 {
                     pipeline = pipeline
@@ -395,7 +407,7 @@ impl Frame {
                 rf.epf_pass0_sigma_scale,
                 rf.epf_border_sad_mul,
                 rf.epf_channel_scale,
-                epf_sigma.clone().unwrap(),
+                epf_sigma.clone(),
             ))
         }
         if rf.epf_iters >= 1 {
@@ -403,7 +415,7 @@ impl Frame {
                 1.0,
                 rf.epf_border_sad_mul,
                 rf.epf_channel_scale,
-                epf_sigma.clone().unwrap(),
+                epf_sigma.clone(),
             ))
         }
         if rf.epf_iters >= 2 {
@@ -411,7 +423,7 @@ impl Frame {
                 rf.epf_pass2_sigma_scale,
                 rf.epf_border_sad_mul,
                 rf.epf_channel_scale,
-                epf_sigma.clone().unwrap(),
+                epf_sigma.clone(),
             ))
         }
 
@@ -436,20 +448,20 @@ impl Frame {
         }
 
         if frame_header.has_patches() {
-            pipeline = pipeline.add_inplace_stage(PatchesStage {
-                patches: lf_global.patches.clone().unwrap(),
-                extra_channels: metadata.extra_channel_info.clone(),
-                decoder_state: decoder_state.reference_frames.clone(),
-            })
+            pipeline = pipeline.add_inplace_stage(PatchesStage::new(
+                patches,
+                metadata.extra_channel_info.clone(),
+                decoder_state.reference_frames.clone(),
+            ))
         }
 
         if frame_header.has_splines() {
             pipeline = pipeline.add_inplace_stage(SplinesStage::new(
-                lf_global.splines.clone().unwrap(),
+                splines,
                 frame_header.size(),
-                &lf_global.color_correlation_params.unwrap_or_default(),
+                color_correlation_params.clone(),
                 decoder_state.high_precision,
-            )?)
+            ))
         }
 
         if frame_header.upsampling > 1 {
@@ -475,8 +487,8 @@ impl Frame {
                 .add_inout_stage(ConvolveNoiseStage::new(num_channels + 1))
                 .add_inout_stage(ConvolveNoiseStage::new(num_channels + 2))
                 .add_inplace_stage(AddNoiseStage::new(
-                    *lf_global.noise.as_ref().unwrap(),
-                    lf_global.color_correlation_params.unwrap_or_default(),
+                    noise,
+                    color_correlation_params,
                     num_channels,
                 ));
         }
@@ -762,6 +774,11 @@ impl Frame {
                     fill_opaque_alpha,
                 );
             }
+            let mut save_idx = if pixel_format.color_data_format.is_some() {
+                1
+            } else {
+                0
+            };
             for i in 0..frame_header.num_extra_channels as usize {
                 if let Some(df) = &pixel_format.extra_channel_format[i] {
                     // Add conversion stages for non-float output formats
@@ -769,11 +786,12 @@ impl Frame {
                     pipeline = pipeline.add_save_stage(
                         &[3 + i],
                         metadata.orientation,
-                        1 + i,
+                        save_idx,
                         JxlColorType::Grayscale,
                         *df,
                         false,
                     );
+                    save_idx += 1;
                 }
             }
         }
@@ -787,20 +805,17 @@ impl Frame {
         input_profile: &JxlColorProfile,
         output_profile: &JxlColorProfile,
     ) -> Result<()> {
-        let lf_global = self.lf_global.as_mut().unwrap();
-        let epf_sigma = if self.header.restoration_filter.epf_iters > 0 {
-            Some(SigmaSource::new(&self.header, lf_global, &self.hf_meta)?)
-        } else {
-            None
-        };
-
         #[cfg(test)]
         let render_pipeline = if self.use_simple_pipeline {
             Self::build_render_pipeline::<SimpleRenderPipeline>(
                 &self.decoder_state,
                 &self.header,
-                lf_global,
-                &epf_sigma,
+                self.patches.clone(),
+                self.splines.clone(),
+                self.noise.clone(),
+                self.lf_quant.clone(),
+                self.color_correlation_params.clone(),
+                self.epf_sigma.clone(),
                 pixel_format,
                 cms,
                 input_profile,
@@ -810,8 +825,12 @@ impl Frame {
             Self::build_render_pipeline::<LowMemoryRenderPipeline>(
                 &self.decoder_state,
                 &self.header,
-                lf_global,
-                &epf_sigma,
+                self.patches.clone(),
+                self.splines.clone(),
+                self.noise.clone(),
+                self.lf_quant.clone(),
+                self.color_correlation_params.clone(),
+                self.epf_sigma.clone(),
                 pixel_format,
                 cms,
                 input_profile,
@@ -822,8 +841,12 @@ impl Frame {
         let render_pipeline = Self::build_render_pipeline::<LowMemoryRenderPipeline>(
             &self.decoder_state,
             &self.header,
-            lf_global,
-            &epf_sigma,
+            self.patches.clone(),
+            self.splines.clone(),
+            self.noise.clone(),
+            self.lf_quant.clone(),
+            self.color_correlation_params.clone(),
+            self.epf_sigma.clone(),
             pixel_format,
             cms,
             input_profile,

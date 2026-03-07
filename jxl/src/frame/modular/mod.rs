@@ -357,6 +357,10 @@ pub struct FullModularImage {
     section_buffer_indices: Vec<Vec<usize>>,
     modular_color_channels: usize,
     can_do_partial_render: bool,
+    can_do_early_partial_render: bool,
+    decoded_section0_channels: usize,
+    needed_section0_channels_for_early_render: usize,
+    global_header: Option<GroupHeader>,
     buffers_for_channels: Vec<usize>,
     // Buffers to _start rendering from_ on the next call to process_output.
     // This is initially set to LF global and LF buffers, and populated with HF buffers
@@ -372,10 +376,13 @@ impl FullModularImage {
         self.can_do_partial_render
     }
 
+    pub fn can_do_early_partial_render(&self) -> bool {
+        self.can_do_early_partial_render
+            // Avoid green martians
+            && self.decoded_section0_channels >= self.needed_section0_channels_for_early_render
+    }
+
     pub fn set_pipeline_used_channels(&mut self, used: &[bool]) {
-        if !self.pipeline_used_channels.is_empty() {
-            return;
-        }
         self.pipeline_used_channels = used.to_vec();
     }
 
@@ -384,7 +391,6 @@ impl FullModularImage {
         frame_header: &FrameHeader,
         image_metadata: &ImageMetadata,
         modular_color_channels: usize,
-        global_tree: &Option<Tree>,
         br: &mut BitReader,
     ) -> Result<Self> {
         let mut channels = vec![];
@@ -431,6 +437,10 @@ impl FullModularImage {
                 section_buffer_indices: vec![vec![]; 2 + frame_header.passes.num_passes as usize],
                 modular_color_channels,
                 can_do_partial_render: true,
+                can_do_early_partial_render: false,
+                decoded_section0_channels: 0,
+                needed_section0_channels_for_early_render: 0,
+                global_header: None,
                 buffers_for_channels: vec![],
                 ready_buffers_dry_run: BTreeSet::new(),
                 ready_buffers: BTreeSet::new(),
@@ -447,6 +457,11 @@ impl FullModularImage {
             x.id == TransformId::Palette
                 && (x.num_channels > 1 || x.predictor_id != Predictor::Zero as u32)
         });
+
+        let has_squeeze_transform = header
+            .transforms
+            .iter()
+            .any(|x| x.id == TransformId::Squeeze);
 
         let (mut buffer_info, transform_steps) =
             transforms::apply::meta_apply_transforms(&channels, &header)?;
@@ -579,21 +594,10 @@ impl FullModularImage {
             }
         }
 
-        with_buffers(&buffer_info, &section_buffer_indices[0], 0, |bufs| {
-            decode_modular_subbitstream(
-                bufs,
-                ModularStreamId::GlobalData.get_id(frame_header),
-                Some(header),
-                global_tree,
-                br,
-            )
-        })?;
-
-        let mut ready_buffers = BTreeSet::new();
-        for b in section_buffer_indices[0].iter() {
-            buffer_info[*b].buffer_grid[0].set_status(BUFFER_STATUS_FINAL_RENDER);
-            ready_buffers.insert((*b, 0));
-        }
+        let num_meta_channels = buffer_info
+            .iter()
+            .filter(|b| b.coded_channel_id >= 0 && b.info.is_meta())
+            .count();
 
         Ok(FullModularImage {
             buffer_info,
@@ -601,11 +605,74 @@ impl FullModularImage {
             section_buffer_indices,
             modular_color_channels,
             can_do_partial_render: !has_problematic_palette_transform,
+            can_do_early_partial_render: !has_problematic_palette_transform
+                && has_squeeze_transform,
+            decoded_section0_channels: 0,
+            needed_section0_channels_for_early_render: buffers_for_channels.len()
+                + num_meta_channels,
+            global_header: Some(header),
             buffers_for_channels,
-            ready_buffers_dry_run: ready_buffers,
+            ready_buffers_dry_run: BTreeSet::new(),
             ready_buffers: BTreeSet::new(),
             pipeline_used_channels: vec![],
         })
+    }
+
+    pub fn read_section0(
+        &mut self,
+        frame_header: &FrameHeader,
+        global_tree: &Option<Tree>,
+        br: &mut BitReader,
+        allow_partial: bool,
+    ) -> Result<()> {
+        let mut decoded_if_partial = 0;
+        let ret = with_buffers(
+            &self.buffer_info,
+            &self.section_buffer_indices[0],
+            0,
+            |bufs| {
+                decode_modular_subbitstream(
+                    bufs,
+                    ModularStreamId::GlobalData.get_id(frame_header),
+                    self.global_header.clone(),
+                    global_tree,
+                    br,
+                    Some(&mut decoded_if_partial),
+                )
+            },
+        );
+
+        match (ret, allow_partial) {
+            (Ok(_), _) => {
+                // Decoded section completely.
+                self.decoded_section0_channels = self.section_buffer_indices[0].len();
+            }
+            (Err(_), true) => {
+                self.decoded_section0_channels = decoded_if_partial;
+            }
+            (Err(e), false) => {
+                return Err(e);
+            }
+        }
+
+        for b in self.section_buffer_indices[0]
+            .iter()
+            .take(self.decoded_section0_channels)
+        {
+            if self.buffer_info[*b].buffer_grid[0].get_status() == BUFFER_STATUS_FINAL_RENDER {
+                continue;
+            }
+            // If we did a partial decode, we cannot be 100% sure of whether we correctly
+            // decoded all the sections. Thus, mark the sections as partially decoded.
+            self.buffer_info[*b].buffer_grid[0].set_status(if allow_partial {
+                BUFFER_STATUS_PARTIAL_RENDER
+            } else {
+                BUFFER_STATUS_FINAL_RENDER
+            });
+            self.ready_buffers_dry_run.insert((*b, 0));
+        }
+
+        Ok(())
     }
 
     pub fn mark_group_to_be_read(&mut self, section_id: usize, group: usize) {
@@ -649,14 +716,11 @@ impl FullModularImage {
                     None,
                     global_tree,
                     br,
-                )
+                    None,
+                )?;
+                Ok(())
             },
         )?;
-
-        // TODO(veluca): consider removing this from here and moving it to some appropriate place.
-        if section_id == 1 {
-            self.mark_group_to_be_read(section_id, grid);
-        }
 
         Ok(())
     }
@@ -853,31 +917,42 @@ impl FullModularImage {
         )
     }
 
-    pub fn zero_fill_empty_channels(&mut self, num_passes: usize, num_groups: usize) -> Result<()> {
+    pub fn zero_fill_empty_channels(
+        &mut self,
+        num_passes: usize,
+        num_groups: usize,
+        num_lf_groups: usize,
+    ) -> Result<()> {
         if !self.can_do_partial_render() {
             return Ok(());
         }
         if self.buffer_info.is_empty() {
             return Ok(());
         }
+        let mut fill_buffer = |section: usize, grid| -> Result<()> {
+            // TODO(veluca): consider filling these buffers with placeholders instead of real images.
+            with_buffers(
+                &self.buffer_info,
+                &self.section_buffer_indices[section],
+                grid,
+                |_| Ok(()),
+            )?;
+            for b in self.section_buffer_indices[section].iter() {
+                if self.buffer_info[*b].buffer_grid[grid].get_status() == BUFFER_STATUS_NOT_RENDERED
+                {
+                    self.buffer_info[*b].buffer_grid[grid].set_status(BUFFER_STATUS_PARTIAL_RENDER);
+                    self.ready_buffers.insert((*b, grid));
+                }
+            }
+            Ok(())
+        };
+        fill_buffer(0, 0)?;
+        for grid in 0..num_lf_groups {
+            fill_buffer(1, grid)?;
+        }
         for pass in 0..num_passes {
             for grid in 0..num_groups {
-                // TODO(veluca): consider filling these buffers with placeholders instead of real images.
-                with_buffers(
-                    &self.buffer_info,
-                    &self.section_buffer_indices[pass + 2],
-                    grid,
-                    |_| Ok(()),
-                )?;
-                for b in self.section_buffer_indices[pass + 2].iter() {
-                    if self.buffer_info[*b].buffer_grid[grid].get_status()
-                        == BUFFER_STATUS_NOT_RENDERED
-                    {
-                        self.buffer_info[*b].buffer_grid[grid]
-                            .set_status(BUFFER_STATUS_PARTIAL_RENDER);
-                        self.ready_buffers.insert((*b, grid));
-                    }
-                }
+                fill_buffer(2 + pass, grid)?;
             }
         }
 
@@ -1029,6 +1104,7 @@ pub fn decode_vardct_lf(
         None,
         global_tree,
         br,
+        None,
     )?;
     dequant_lf(
         r,
@@ -1076,6 +1152,7 @@ pub fn decode_hf_metadata(
         None,
         global_tree,
         br,
+        None,
     )?;
     let ytox_image = &buffers[0].data;
     let ytob_image = &buffers[1].data;

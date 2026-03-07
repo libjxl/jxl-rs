@@ -17,11 +17,13 @@ use super::{
     quantizer::{LfQuantFactors, QuantizerParams},
 };
 use crate::error::Error;
+use crate::features::epf::SigmaSource;
 use crate::frame::block_context_map::{ZERO_DENSITY_CONTEXT_COUNT, ZERO_DENSITY_CONTEXT_LIMIT};
 use crate::headers::frame_header::FrameType;
 #[cfg(test)]
 use crate::render::SimpleRenderPipeline;
 use crate::render::buffer_splitter::BufferSplitter;
+use crate::util::AtomicRefCell;
 use crate::util::{ShiftRightCeil, mirror};
 use crate::{
     GROUP_DIM,
@@ -236,6 +238,8 @@ impl Frame {
             None
         };
 
+        let num_extra_channels = image_metadata.extra_channel_info.len();
+
         Ok(Self {
             #[cfg(test)]
             use_simple_pipeline: decoder_state.use_simple_pipeline,
@@ -257,6 +261,16 @@ impl Frame {
             vardct_buffers: None,
             groups_to_flush: BTreeSet::new(),
             changed_since_last_flush: BTreeSet::new(),
+            patches: Arc::new(AtomicRefCell::new(PatchesDictionary::new(
+                num_extra_channels,
+            ))),
+            splines: Arc::new(AtomicRefCell::new(Splines::default())),
+            noise: Arc::new(AtomicRefCell::new(Noise::default())),
+            lf_quant: Arc::new(AtomicRefCell::new(LfQuantFactors::default())),
+            color_correlation_params: Arc::new(AtomicRefCell::new(
+                ColorCorrelationParams::default(),
+            )),
+            epf_sigma: Arc::new(AtomicRefCell::new(SigmaSource::default())),
         })
     }
 
@@ -301,96 +315,107 @@ impl Frame {
     }
 
     #[instrument(level = "debug", skip_all)]
-    pub fn decode_lf_global(&mut self, br: &mut BitReader) -> Result<()> {
+    pub fn decode_lf_global(&mut self, br: &mut BitReader, allow_partial: bool) -> Result<()> {
         debug!(section_size = br.total_bits_available());
-        assert!(self.lf_global.is_none());
-        trace!(pos = br.total_bits_read());
 
-        let patches = if self.header.has_patches() {
-            info!("decoding patches");
-            Some(PatchesDictionary::read(
+        if let Some(lfg) = &self.lf_global {
+            br.skip_bits(lfg.total_bits_read)?;
+        } else {
+            trace!(pos = br.total_bits_read());
+
+            if self.header.has_patches() {
+                info!("decoding patches");
+                let p = PatchesDictionary::read(
+                    br,
+                    self.header.size_padded().0,
+                    self.header.size_padded().1,
+                    self.decoder_state.extra_channel_info().len(),
+                    &self.decoder_state.reference_frames[..],
+                )?;
+                *self.patches.borrow_mut() = p;
+            }
+
+            if self.header.has_splines() {
+                info!("decoding splines");
+                let s = Splines::read(br, self.header.width * self.header.height)?;
+                *self.splines.borrow_mut() = s;
+            }
+
+            if self.header.has_noise() {
+                info!("decoding noise");
+                let n = Noise::read(br)?;
+                *self.noise.borrow_mut() = n;
+            }
+
+            let lf_quant = LfQuantFactors::new(br)?;
+            *self.lf_quant.borrow_mut() = lf_quant.clone();
+            debug!(?lf_quant);
+
+            let quant_params = if self.header.encoding == Encoding::VarDCT {
+                info!("decoding VarDCT quantizer params");
+                Some(QuantizerParams::read(br)?)
+            } else {
+                None
+            };
+            debug!(?quant_params);
+
+            let block_context_map = if self.header.encoding == Encoding::VarDCT {
+                info!("decoding block context map");
+                Some(BlockContextMap::read(br)?)
+            } else {
+                None
+            };
+            debug!(?block_context_map);
+
+            let color_correlation_params = if self.header.encoding == Encoding::VarDCT {
+                info!("decoding color correlation params");
+                let ccp = ColorCorrelationParams::read(br)?;
+                *self.color_correlation_params.borrow_mut() = ccp;
+                Some(ccp)
+            } else {
+                None
+            };
+            debug!(?color_correlation_params);
+
+            let tree = if br.read(1)? == 1 {
+                let size_limit = (1024
+                    + self.header.width as usize
+                        * self.header.height as usize
+                        * (self.color_channels + self.decoder_state.extra_channel_info().len())
+                        / 16)
+                    .min(1 << 22);
+                Some(Tree::read(br, size_limit)?)
+            } else {
+                None
+            };
+
+            let modular_global = FullModularImage::read(
+                &self.header,
+                &self.decoder_state.file_header.image_metadata,
+                self.modular_color_channels(),
                 br,
-                self.header.size_padded().0,
-                self.header.size_padded().1,
-                self.decoder_state.extra_channel_info().len(),
-                &self.decoder_state.reference_frames[..],
-            )?)
-        } else {
-            None
-        };
+            )?;
 
-        let splines = if self.header.has_splines() {
-            info!("decoding splines");
-            Some(Splines::read(br, self.header.width * self.header.height)?)
-        } else {
-            None
-        };
+            // Ensure that, if we call this function again, we resume from just after
+            // reading modular global data (excluding section 0 channels).
+            let total_bits_read = br.total_bits_read();
 
-        let noise = if self.header.has_noise() {
-            info!("decoding noise");
-            Some(Noise::read(br)?)
-        } else {
-            None
-        };
+            self.lf_global = Some(LfGlobalState {
+                lf_quant,
+                quant_params,
+                block_context_map,
+                color_correlation_params,
+                tree,
+                modular_global,
+                total_bits_read,
+            });
+        }
 
-        let lf_quant = LfQuantFactors::new(br)?;
-        debug!(?lf_quant);
+        let lf_global = self.lf_global.as_mut().unwrap();
 
-        let quant_params = if self.header.encoding == Encoding::VarDCT {
-            info!("decoding VarDCT quantizer params");
-            Some(QuantizerParams::read(br)?)
-        } else {
-            None
-        };
-        debug!(?quant_params);
-
-        let block_context_map = if self.header.encoding == Encoding::VarDCT {
-            info!("decoding block context map");
-            Some(BlockContextMap::read(br)?)
-        } else {
-            None
-        };
-        debug!(?block_context_map);
-
-        let color_correlation_params = if self.header.encoding == Encoding::VarDCT {
-            info!("decoding color correlation params");
-            Some(ColorCorrelationParams::read(br)?)
-        } else {
-            None
-        };
-        debug!(?color_correlation_params);
-
-        let tree = if br.read(1)? == 1 {
-            let size_limit = (1024
-                + self.header.width as usize
-                    * self.header.height as usize
-                    * (self.color_channels + self.decoder_state.extra_channel_info().len())
-                    / 16)
-                .min(1 << 22);
-            Some(Tree::read(br, size_limit)?)
-        } else {
-            None
-        };
-
-        let modular_global = FullModularImage::read(
-            &self.header,
-            &self.decoder_state.file_header.image_metadata,
-            self.modular_color_channels(),
-            &tree,
-            br,
-        )?;
-
-        self.lf_global = Some(LfGlobalState {
-            patches: patches.map(Arc::new),
-            splines,
-            noise,
-            lf_quant,
-            quant_params,
-            block_context_map,
-            color_correlation_params,
-            tree,
-            modular_global,
-        });
+        lf_global
+            .modular_global
+            .read_section0(&self.header, &lf_global.tree, br, allow_partial)?;
 
         Ok(())
     }
@@ -415,6 +440,9 @@ impl Frame {
                 br,
             )?;
         }
+
+        lf_global.modular_global.mark_group_to_be_read(1, group);
+
         lf_global.modular_global.read_stream(
             ModularStreamId::ModularLF(group),
             &self.header,
@@ -439,75 +467,83 @@ impl Frame {
     #[instrument(level = "debug", skip_all)]
     pub fn decode_hf_global(&mut self, br: &mut BitReader) -> Result<()> {
         debug!(section_size = br.total_bits_available());
-        if self.header.encoding == Encoding::Modular {
-            return Ok(());
-        }
-        let lf_global = self.lf_global.as_mut().unwrap();
-        let dequant_matrices = DequantMatrices::decode(&self.header, lf_global, br)?;
-        let block_context_map = lf_global.block_context_map.as_mut().unwrap();
-        let num_histo_bits = self.header.num_groups().ceil_log2();
-        let num_histograms: u32 = br.read(num_histo_bits)? as u32 + 1;
-        info!(
-            "Processing HFGlobal section with {} passes and {} histograms",
-            self.header.passes.num_passes, num_histograms
-        );
-        let mut passes: Vec<PassState> = vec![];
-        #[allow(unused_variables)]
-        for i in 0..self.header.passes.num_passes as usize {
-            let used_orders = match br.read(2)? {
-                0 => 0x5f,
-                1 => 0x13,
-                2 => 0,
-                _ => br.read(coeff_order::NUM_ORDERS)?,
-            } as u32;
-            debug!(used_orders);
-            let coeff_orders = decode_coeff_orders(used_orders, br)?;
-            assert_eq!(coeff_orders.len(), 3 * coeff_order::NUM_ORDERS);
-            let num_contexts = num_histograms as usize * block_context_map.num_ac_contexts();
+        if self.header.encoding == Encoding::VarDCT {
+            let lf_global = self.lf_global.as_mut().unwrap();
+            let dequant_matrices = DequantMatrices::decode(&self.header, lf_global, br)?;
+            let block_context_map = lf_global.block_context_map.as_mut().unwrap();
+            let num_histo_bits = self.header.num_groups().ceil_log2();
+            let num_histograms: u32 = br.read(num_histo_bits)? as u32 + 1;
             info!(
-                "Decoding histograms for pass {} with {} contexts",
-                i, num_contexts
+                "Processing HFGlobal section with {} passes and {} histograms",
+                self.header.passes.num_passes, num_histograms
             );
-            let mut histograms = Histograms::decode(num_contexts, br, true)?;
-            // Pad the context map to avoid index out of bounds in decode_vardct_group (group.rs#L514@752e6a4).
-            let padding = ZERO_DENSITY_CONTEXT_LIMIT - ZERO_DENSITY_CONTEXT_COUNT;
-            histograms.resize(num_contexts + padding);
-            debug!("Found {} histograms", histograms.num_histograms());
-            passes.push(PassState {
-                coeff_orders,
-                histograms,
+            let mut passes: Vec<PassState> = vec![];
+            #[allow(unused_variables)]
+            for i in 0..self.header.passes.num_passes as usize {
+                let used_orders = match br.read(2)? {
+                    0 => 0x5f,
+                    1 => 0x13,
+                    2 => 0,
+                    _ => br.read(coeff_order::NUM_ORDERS)?,
+                } as u32;
+                debug!(used_orders);
+                let coeff_orders = decode_coeff_orders(used_orders, br)?;
+                assert_eq!(coeff_orders.len(), 3 * coeff_order::NUM_ORDERS);
+                let num_contexts = num_histograms as usize * block_context_map.num_ac_contexts();
+                info!(
+                    "Decoding histograms for pass {} with {} contexts",
+                    i, num_contexts
+                );
+                let mut histograms = Histograms::decode(num_contexts, br, true)?;
+                // Pad the context map to avoid index out of bounds in decode_vardct_group (group.rs#L514@752e6a4).
+                let padding = ZERO_DENSITY_CONTEXT_LIMIT - ZERO_DENSITY_CONTEXT_COUNT;
+                histograms.resize(num_contexts + padding);
+                debug!("Found {} histograms", histograms.num_histograms());
+                passes.push(PassState {
+                    coeff_orders,
+                    histograms,
+                });
+            }
+            // Note that, if we have extra channels that can be rendered progressively,
+            // we might end up re-drawing some VarDCT groups. In that case, we need to
+            // keep around the coefficients, so allocate coefficients under those conditions
+            // too.
+            // TODO(veluca): evaluate whether we can make this check more precise.
+            let hf_coefficients = if passes.len() <= 1
+                && !(self
+                    .lf_global
+                    .as_mut()
+                    .unwrap()
+                    .modular_global
+                    .can_do_partial_render()
+                    && self.header.num_extra_channels > 0)
+            {
+                None
+            } else {
+                let xs = GROUP_DIM * GROUP_DIM;
+                let ys = self.header.num_groups();
+                Some((
+                    Image::new((xs, ys))?,
+                    Image::new((xs, ys))?,
+                    Image::new((xs, ys))?,
+                ))
+            };
+
+            self.hf_global = Some(HfGlobalState {
+                num_histograms,
+                passes,
+                dequant_matrices,
+                hf_coefficients,
             });
         }
-        // Note that, if we have extra channels that can be rendered progressively,
-        // we might end up re-drawing some VarDCT groups. In that case, we need to
-        // keep around the coefficients, so allocate coefficients under those conditions
-        // too.
-        // TODO(veluca): evaluate whether we can make this check more precise.
-        let hf_coefficients = if passes.len() <= 1
-            && !(self
-                .lf_global
-                .as_mut()
-                .unwrap()
-                .modular_global
-                .can_do_partial_render()
-                && self.header.num_extra_channels > 0)
-        {
-            None
-        } else {
-            let xs = GROUP_DIM * GROUP_DIM;
-            let ys = self.header.num_groups();
-            Some((
-                Image::new((xs, ys))?,
-                Image::new((xs, ys))?,
-                Image::new((xs, ys))?,
-            ))
-        };
-        self.hf_global = Some(HfGlobalState {
-            num_histograms,
-            passes,
-            dequant_matrices,
-            hf_coefficients,
-        });
+        // Set EPF sigma values to the correct values if we are doing EPF.
+        if self.header.restoration_filter.epf_iters > 0 {
+            *self.epf_sigma.borrow_mut() = SigmaSource::new(
+                &self.header,
+                self.lf_global.as_ref().unwrap(),
+                &self.hf_meta,
+            )?;
+        }
         Ok(())
     }
 
@@ -669,9 +705,6 @@ impl Frame {
 
         let lf_global = self.lf_global.as_mut().unwrap();
         if self.header.encoding == Encoding::VarDCT {
-            info!("Decoding VarDCT group {group}");
-            let hf_global = self.hf_global.as_mut().unwrap();
-            let hf_meta = self.hf_meta.as_mut().unwrap();
             let mut pixels = if do_render {
                 Some([
                     pipeline!(self, p, p.get_buffer(0))?,
@@ -681,8 +714,8 @@ impl Frame {
             } else {
                 None
             };
-            let buffers = self.vardct_buffers.get_or_insert_with(VarDctBuffers::new);
             if pass_to_render.is_none() && do_render {
+                info!("Upsampling LF for group {group}");
                 upsample_lf_group(
                     group,
                     pixels.as_mut().unwrap(),
@@ -691,6 +724,10 @@ impl Frame {
                     &self.decoder_state.file_header.transform_data,
                 )?;
             } else {
+                info!("Decoding VarDCT group {group}");
+                let hf_global = self.hf_global.as_mut().unwrap();
+                let hf_meta = self.hf_meta.as_mut().unwrap();
+                let buffers = self.vardct_buffers.get_or_insert_with(VarDctBuffers::new);
                 decode_vardct_group(
                     group,
                     passes,

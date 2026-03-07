@@ -622,6 +622,10 @@ simd_function!(
 );
 
 impl Splines {
+    pub fn is_initialized(&self) -> bool {
+        !self.segment_y_start.is_empty()
+    }
+
     #[cfg(test)]
     pub fn create(
         quantization_adjustment: i32,
