@@ -35,6 +35,8 @@ pub(super) struct BoxParser {
     box_type: CodestreamBoxType,
     /// Parsed frame index box, if present in the file.
     pub(super) frame_index: Option<FrameIndexBox>,
+    /// Total codestream bytes consumed so far (tracks logical codestream offset).
+    pub(super) total_codestream_consumed: u64,
 }
 
 impl BoxParser {
@@ -44,6 +46,7 @@ impl BoxParser {
             state: ParseState::SignatureNeeded,
             box_type: CodestreamBoxType::None,
             frame_index: None,
+            total_codestream_consumed: 0,
         }
     }
 
@@ -205,9 +208,38 @@ impl BoxParser {
         }
     }
 
+    /// Returns remaining codestream bytes in the current box, or `None` if
+    /// the parser is not currently inside a codestream box.
+    ///
+    /// Note: The returned value reflects the box parser's internal counter.
+    /// Bytes that have been consumed from the box (via [`consume_codestream`])
+    /// but are still buffered in the codestream parser are NOT included.
+    pub(super) fn remaining_in_codestream_box(&self) -> Option<u64> {
+        match &self.state {
+            ParseState::CodestreamBox(r) => Some(*r),
+            _ => None,
+        }
+    }
+
+    /// Resets the box parser for seeking to a specific codestream position.
+    ///
+    /// Sets the parser to `CodestreamBox(remaining)` state with cleared
+    /// buffers.  The caller must provide raw input starting from the file
+    /// position that corresponds to the target codestream offset.
+    ///
+    /// `remaining` is the number of codestream bytes left in the current
+    /// box from the target file position.  For bare-codestream files this
+    /// is `u64::MAX`.
+    pub(super) fn reset_for_codestream_seek(&mut self, remaining: u64) {
+        self.box_buffer = SmallBuffer::new(128);
+        self.state = ParseState::CodestreamBox(remaining);
+        // Keep frame_index and total_codestream_consumed unchanged.
+    }
+
     pub(super) fn consume_codestream(&mut self, amount: u64) {
         if let ParseState::CodestreamBox(cb) = &mut self.state {
             *cb = cb.checked_sub(amount).unwrap();
+            self.total_codestream_consumed += amount;
             if *cb == 0 {
                 self.state = ParseState::BoxNeeded;
             }

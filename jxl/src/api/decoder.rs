@@ -159,14 +159,21 @@ impl JxlDecoder<WithImageInfo> {
     ///
     /// This clears intermediate buffers (frame header, TOC, section data) while
     /// preserving image-level state (file header, color profiles, pixel format,
-    /// reference frames). After calling this, the next `process()` call will
-    /// attempt to parse a new frame header from the input.
+    /// reference frames). The box parser is restored to the correct
+    /// mid-codestream state using `remaining_in_box`, so the next `process()`
+    /// call correctly parses a new frame header from the input.
     ///
-    /// This is intended for animation seeking: use
-    /// [`FrameInfoDecoder`](super::frame_scan::FrameInfoDecoder) to scan frame
-    /// offsets, then call `start_new_frame()` and provide input starting from
-    /// the target frame's codestream offset (or its `decode_start_offset` if
-    /// reference frames need to be decoded first).
+    /// # Arguments
+    ///
+    /// * `remaining_in_box` -- from
+    ///   [`VisibleFrameInfo::remaining_in_box`](super::frame_scan::VisibleFrameInfo::remaining_in_box).
+    ///   Tells the box parser how many codestream bytes remain in the current
+    ///   container box at the seek position. For bare-codestream files this is
+    ///   `u64::MAX`.
+    ///
+    /// After calling this, provide raw file input starting from the file
+    /// position that corresponds to the target frame's codestream offset
+    /// (for bare codestream this is the same as `codestream_offset`).
     ///
     /// # Example
     ///
@@ -175,13 +182,13 @@ impl JxlDecoder<WithImageInfo> {
     /// let mut scanner = FrameInfoDecoder::new();
     /// scanner.feed(&data).unwrap();
     ///
-    /// // 2. Seek to frame N.
+    /// // 2. Seek to frame N (bare codestream).
     /// let target = &scanner.frames()[n];
-    /// decoder.start_new_frame();
-    /// // 3. Provide input from target.decode_start_offset and process().
+    /// decoder.start_new_frame(target.remaining_in_box);
+    /// // 3. Provide input from target.codestream_offset and process().
     /// ```
-    pub fn start_new_frame(&mut self) {
-        self.inner.start_new_frame();
+    pub fn start_new_frame(&mut self, remaining_in_box: u64) {
+        self.inner.start_new_frame(remaining_in_box);
     }
 
     #[cfg(test)]
@@ -1496,6 +1503,105 @@ pub(crate) mod tests {
             }
         };
         assert!(dec.frame_index().is_none());
+    }
+
+    /// Test that `start_new_frame()` with `remaining_in_box` correctly
+    /// seeks to a frame in a bare-codestream animation.
+    #[test]
+    fn test_start_new_frame_bare_codestream() {
+        use crate::api::frame_scan::FrameInfoDecoder;
+        use crate::api::{JxlColorType, JxlDataFormat, JxlPixelFormat};
+        use crate::image::{Image, Rect};
+
+        let data =
+            std::fs::read("resources/test/conformance_test_images/animation_icos4d_5.jxl").unwrap();
+
+        // 1. Scan frame info to get offsets.
+        let mut scanner = FrameInfoDecoder::new();
+        assert!(scanner.feed(&data).unwrap());
+        assert!(scanner.frame_count() > 1, "need multiple frames");
+
+        // Find a non-first frame to seek to.
+        let target = &scanner.frames()[1];
+        let seek_offset = target.decode_start_offset;
+        let remaining = target.remaining_in_box;
+
+        // For bare codestream, remaining_in_box should be u64::MAX.
+        assert_eq!(remaining, u64::MAX);
+
+        // 2. Create a decoder and parse image info normally.
+        let options = JxlDecoderOptions::default();
+        let decoder = JxlDecoder::<states::Initialized>::new(options);
+        let mut input = data.as_slice();
+
+        let mut decoder = loop {
+            match decoder.process(&mut input).unwrap() {
+                ProcessingResult::Complete { result } => break result,
+                ProcessingResult::NeedsMoreInput { .. } => unreachable!(),
+            }
+        };
+
+        let basic_info = decoder.basic_info().clone();
+        let num_ec = basic_info.extra_channels.len();
+        let channels = 3;
+        let rgb_format = JxlPixelFormat {
+            color_type: JxlColorType::Rgb,
+            color_data_format: Some(JxlDataFormat::f32()),
+            extra_channel_format: vec![Some(JxlDataFormat::f32()); num_ec],
+        };
+        decoder.set_pixel_format(rgb_format);
+        let (width, height) = basic_info.size;
+
+        // 3. Seek to the target frame.
+        decoder.start_new_frame(remaining);
+        let mut input = &data[seek_offset..];
+
+        // 4. Process to get frame info.
+        let mut decoder_frame = loop {
+            match decoder.process(&mut input).unwrap() {
+                ProcessingResult::Complete { result } => break result,
+                ProcessingResult::NeedsMoreInput { fallback, .. } => {
+                    decoder = fallback;
+                }
+            }
+        };
+
+        // 5. Decode pixels -- proves the seek was correct.
+        let mut color_buffer = Image::<f32>::new((width * channels, height)).unwrap();
+        let mut ec_buffers: Vec<Image<f32>> = (0..num_ec)
+            .map(|_| Image::<f32>::new((width, height)).unwrap())
+            .collect();
+        let mut buffers: Vec<JxlOutputBuffer> = vec![JxlOutputBuffer::from_image_rect_mut(
+            color_buffer
+                .get_rect_mut(Rect {
+                    origin: (0, 0),
+                    size: (width * channels, height),
+                })
+                .into_raw(),
+        )];
+        for ec in ec_buffers.iter_mut() {
+            buffers.push(JxlOutputBuffer::from_image_rect_mut(
+                ec.get_rect_mut(Rect {
+                    origin: (0, 0),
+                    size: (width, height),
+                })
+                .into_raw(),
+            ));
+        }
+
+        let _decoder = loop {
+            match decoder_frame.process(&mut input, &mut buffers).unwrap() {
+                ProcessingResult::Complete { result } => break result,
+                ProcessingResult::NeedsMoreInput { fallback, .. } => {
+                    decoder_frame = fallback;
+                }
+            }
+        };
+
+        // Verify pixels were written (not all zeros).
+        let row = color_buffer.row(0);
+        let has_nonzero = row.iter().any(|&v| v != 0.0);
+        assert!(has_nonzero, "decoded frame should have non-zero pixels");
     }
 
     /// Regression test for Chromium ClusterFuzz issue 474401148.
