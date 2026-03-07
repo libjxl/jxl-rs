@@ -157,6 +157,34 @@ impl CodestreamParser {
         pixel_format
     }
 
+    /// Resets frame-level state for seeking to a new frame.
+    ///
+    /// Preserves: file_header, decoder_state (including reference frames),
+    /// basic_info, animation, color profiles, pixel_format, xyb_encoded,
+    /// is_gray, output_color_profile_set_by_user, preview_done.
+    ///
+    /// Clears: frame_header, toc_parser, frame, all section buffers,
+    /// non_section_buf, and processing flags.
+    pub(super) fn start_new_frame(&mut self) {
+        self.frame_header = None;
+        self.toc_parser = None;
+        self.frame = None;
+        self.non_section_buf = SmallBuffer::new(4096);
+        self.non_section_bit_offset = 0;
+        self.sections.clear();
+        self.ready_section_data = 0;
+        self.skip_sections = false;
+        self.process_without_output = false;
+        self.section_state = SectionState::new(0, 0);
+        self.lf_global_section = None;
+        self.lf_sections.clear();
+        self.hf_global_section = None;
+        self.hf_sections.clear();
+        self.candidate_hf_sections.clear();
+        self.has_more_frames = true;
+        self.header_needed_bytes = None;
+    }
+
     pub(super) fn process(
         &mut self,
         box_parser: &mut BoxParser,
