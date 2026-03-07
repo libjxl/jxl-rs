@@ -420,9 +420,9 @@ impl CodestreamParser {
                 // total_codestream_consumed counts bytes passed from BoxParser;
                 // non_section_buf.len() is bytes buffered but not yet parsed.
                 if self.decoder_state.is_some() && self.frame_header.is_none() {
-                    self.current_frame_codestream_offset =
-                        (box_parser.total_codestream_consumed as usize)
-                            .saturating_sub(self.non_section_buf.len());
+                    self.current_frame_codestream_offset = (box_parser.total_codestream_consumed
+                        as usize)
+                        .saturating_sub(self.non_section_buf.len());
 
                     // Capture remaining-in-box at the frame's file position.
                     // BoxParser's remaining_in_codestream_box() gives remaining

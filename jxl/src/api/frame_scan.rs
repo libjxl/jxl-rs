@@ -228,12 +228,12 @@ impl FrameInfoDecoder {
 
     /// Extract animation metadata from the inner decoder after image info is parsed.
     fn extract_image_info(&mut self) {
-        if let Some(info) = self.inner.basic_info() {
-            if let Some(ref anim) = info.animation {
-                self.has_animation = true;
-                self.tps_numerator = anim.tps_numerator;
-                self.tps_denominator = anim.tps_denominator;
-            }
+        if let Some(info) = self.inner.basic_info()
+            && let Some(ref anim) = info.animation
+        {
+            self.has_animation = true;
+            self.tps_numerator = anim.tps_numerator;
+            self.tps_denominator = anim.tps_denominator;
         }
     }
 }
