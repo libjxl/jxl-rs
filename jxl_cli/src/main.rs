@@ -6,9 +6,10 @@
 use clap::Parser;
 use color_eyre::eyre::{Result, WrapErr, eyre};
 use jxl::api::JxlDecoderOptions;
+use jxl_cli::dec;
 use jxl_cli::dec::OutputDataType;
 use jxl_cli::enc::OutputFormat;
-use jxl_cli::{cms::Lcms2Cms, dec};
+use jxl_cms::lcms2::Lcms2Cms;
 use std::fs;
 use std::io::{BufReader, Read, Seek};
 use std::path::PathBuf;
