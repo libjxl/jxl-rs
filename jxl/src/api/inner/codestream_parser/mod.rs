@@ -88,13 +88,17 @@ pub(super) struct CodestreamParser {
     pub(super) scanned_frames: Vec<VisibleFrameInfo>,
     /// Zero-based visible frame index counter.
     visible_frame_index: usize,
-    /// Codestream offset of the most recent keyframe (for decode_start_offset).
-    last_keyframe_offset: usize,
-    /// Codestream byte offset where the current frame header parse started.
+    /// File offset of the first (non-preview) frame seen in the stream.
+    /// Needed because the first visible frame may depend on prior non-visible
+    /// patch/reference frames.
+    first_frame_file_offset: Option<usize>,
+    /// File offset of the most recent keyframe (for decode_start_file_offset).
+    last_keyframe_file_offset: Option<usize>,
+    /// File byte offset where the current frame header parse started.
     /// Set when we begin parsing a frame header.
-    current_frame_codestream_offset: usize,
+    current_frame_file_offset: usize,
     /// Remaining codestream bytes in the current box at frame start.
-    /// Captured alongside `current_frame_codestream_offset`.
+    /// Captured alongside `current_frame_file_offset`.
     current_frame_remaining_in_box: u64,
 
     #[cfg(test)]
@@ -138,8 +142,9 @@ impl CodestreamParser {
             header_needed_bytes: None,
             scanned_frames: Vec::new(),
             visible_frame_index: 0,
-            last_keyframe_offset: 0,
-            current_frame_codestream_offset: 0,
+            first_frame_file_offset: None,
+            last_keyframe_file_offset: None,
+            current_frame_file_offset: 0,
             current_frame_remaining_in_box: u64::MAX,
             #[cfg(test)]
             frame_callback: None,
@@ -165,22 +170,23 @@ impl CodestreamParser {
         };
         let header = frame.header();
 
+        // Remember the first (non-preview) frame offset. The first visible
+        // frame may depend on earlier non-visible patch/reference frames.
+        if self.first_frame_file_offset.is_none() {
+            self.first_frame_file_offset = Some(self.current_frame_file_offset);
+        }
+
         if !header.is_visible() {
             return;
         }
 
-        // A visible frame is a keyframe when:
-        // 1. It's the first visible frame, OR
-        // 2. It uses Replace blending for all channels, covers the full
-        //    frame (!needs_blending), and does not use patches.
-        let is_keyframe = if self.visible_frame_index == 0 {
-            true
-        } else {
-            !header.needs_blending() && !header.has_patches()
-        };
+        // A visible frame is a keyframe when it can be decoded independently:
+        // full-frame Replace blending, no patches, and no LF-frame dependency.
+        let is_keyframe =
+            !header.needs_blending() && !header.has_patches() && !header.has_lf_frame();
 
         if is_keyframe {
-            self.last_keyframe_offset = self.current_frame_codestream_offset;
+            self.last_keyframe_file_offset = Some(self.current_frame_file_offset);
         }
 
         let duration_ticks = header.duration;
@@ -195,18 +201,24 @@ impl CodestreamParser {
             0.0
         };
 
+        let decode_start_file_offset = if is_keyframe {
+            self.current_frame_file_offset
+        } else if let Some(offset) = self.last_keyframe_file_offset {
+            offset
+        } else {
+            // No keyframe yet: must resume from the first frame.
+            self.first_frame_file_offset
+                .unwrap_or(self.current_frame_file_offset)
+        };
+
         self.scanned_frames.push(VisibleFrameInfo {
             index: self.visible_frame_index,
             duration_ms,
             duration_ticks,
-            codestream_offset: self.current_frame_codestream_offset,
+            file_offset: self.current_frame_file_offset,
             is_last: header.is_last,
             is_keyframe,
-            decode_start_offset: if is_keyframe {
-                self.current_frame_codestream_offset
-            } else {
-                self.last_keyframe_offset
-            },
+            decode_start_file_offset,
             remaining_in_box: self.current_frame_remaining_in_box,
             name: header.name.clone(),
         });
@@ -342,7 +354,9 @@ impl CodestreamParser {
                         let num = if !box_parser.box_buffer.is_empty() {
                             box_parser.box_buffer.take(buffers)
                         } else {
-                            input.read(buffers)?
+                            let num = input.read(buffers)?;
+                            box_parser.note_file_consumed(num);
+                            num
                         };
                         self.ready_section_data += num;
                         box_parser.consume_codestream(num as u64);
@@ -369,7 +383,9 @@ impl CodestreamParser {
                         let skipped = if !box_parser.box_buffer.is_empty() {
                             box_parser.box_buffer.consume(to_skip)
                         } else {
-                            input.skip(to_skip)?
+                            let skipped = input.skip(to_skip)?;
+                            box_parser.note_file_consumed(skipped);
+                            skipped
                         };
                         box_parser.consume_codestream(skipped as u64);
                         self.ready_section_data += skipped;
@@ -415,24 +431,24 @@ impl CodestreamParser {
                     return Ok(());
                 }
 
-                // Record codestream offset and box state at frame header start
-                // for scanning and seeking.
-                // total_codestream_consumed counts bytes passed from BoxParser;
-                // non_section_buf.len() is bytes buffered but not yet parsed.
+                // Record file offset and box state at frame header start for
+                // scanning and seeking.
+                // total_file_consumed counts bytes read/skipped from the raw
+                // input stream. non_section_buf and box_buffer contain unread
+                // bytes already accounted in total_file_consumed.
                 if self.decoder_state.is_some() && self.frame_header.is_none() {
-                    self.current_frame_codestream_offset = (box_parser.total_codestream_consumed
-                        as usize)
-                        .saturating_sub(self.non_section_buf.len());
+                    self.current_frame_file_offset = (box_parser.total_file_consumed as usize)
+                        .saturating_sub(self.non_section_buf.len())
+                        .saturating_sub(box_parser.box_buffer.len());
 
                     // Capture remaining-in-box at the frame's file position.
                     // BoxParser's remaining_in_codestream_box() gives remaining
                     // AFTER bytes were consumed into non_section_buf and
-                    // box_buffer.  Add those back since they come from the
-                    // current box and haven't been "read from the file" from
-                    // the frame start perspective.
+                    // box_buffer. Add those back since they come from the
+                    // current box and are still unread at frame start.
                     //
                     // For bare codestream the initial remaining is u64::MAX
-                    // (sentinel for "rest of file").  Detect this by checking
+                    // (sentinel for "rest of file"). Detect this by checking
                     // whether the value is still very large after consumption
                     // (no real box can exceed u64::MAX / 2).
                     self.current_frame_remaining_in_box = box_parser
@@ -461,7 +477,9 @@ impl CodestreamParser {
                             if !box_parser.box_buffer.is_empty() {
                                 Ok(box_parser.box_buffer.take(buf))
                             } else {
-                                input.read(buf)
+                                let read = input.read(buf)?;
+                                box_parser.note_file_consumed(read);
+                                Ok(read)
                             }
                         },
                         Some(available_codestream),

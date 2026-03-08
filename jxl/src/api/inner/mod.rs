@@ -159,8 +159,8 @@ impl JxlDecoderInner {
     /// current container box at the target position.  For bare-codestream
     /// files this is `u64::MAX`.
     ///
-    /// The caller must provide raw file input starting from the file
-    /// position that corresponds to the target frame's codestream offset.
+    /// The caller must provide raw file input starting from the target
+    /// frame's `decode_start_file_offset`.
     pub fn start_new_frame(&mut self, remaining_in_box: u64) {
         self.box_parser.reset_for_codestream_seek(remaining_in_box);
         self.codestream_parser.start_new_frame();
