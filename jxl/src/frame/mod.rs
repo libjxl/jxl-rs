@@ -116,7 +116,7 @@ impl ReferenceFrame {
 pub struct DecoderState {
     pub(super) file_header: FileHeader,
     pub(super) reference_frames: Arc<[Option<ReferenceFrame>; Self::MAX_STORED_FRAMES]>,
-    pub(super) lf_frames: [Option<[Image<f32>; 3]>; 4],
+    pub(super) lf_frames: [Option<[Image<f32>; 3]>; Self::NUM_LF_FRAMES],
     pub render_spotcolors: bool,
     #[cfg(test)]
     pub use_simple_pipeline: bool,
@@ -132,12 +132,13 @@ pub struct DecoderState {
 
 impl DecoderState {
     pub const MAX_STORED_FRAMES: usize = 4;
+    pub const NUM_LF_FRAMES: usize = 4;
 
     pub fn new(file_header: FileHeader) -> Self {
         Self {
             file_header,
             reference_frames: Arc::new([None, None, None, None]),
-            lf_frames: [None, None, None, None],
+            lf_frames: std::array::from_fn(|_| None),
             render_spotcolors: true,
             #[cfg(test)]
             use_simple_pipeline: false,

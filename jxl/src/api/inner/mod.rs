@@ -6,7 +6,7 @@
 #[cfg(test)]
 use crate::api::FrameCallback;
 use crate::{
-    api::JxlFrameHeader,
+    api::{JxlFrameHeader, VisibleFrameInfo},
     error::{Error, Result},
 };
 
@@ -139,6 +139,30 @@ impl JxlDecoderInner {
     /// Returns the parsed frame index box, if the file contained one.
     pub fn frame_index(&self) -> Option<&FrameIndexBox> {
         self.box_parser.frame_index.as_ref()
+    }
+
+    /// Returns visible frame info entries collected during parsing.
+    pub fn scanned_frames(&self) -> &[VisibleFrameInfo] {
+        &self.codestream_parser.scanned_frames
+    }
+
+    /// Resets frame-level state to prepare for decoding a new frame.
+    ///
+    /// Preserves image-level state (file header, decoder state including
+    /// reference frames, color profiles, pixel format). Clears frame header,
+    /// TOC, section buffers, and restores the box parser to the correct
+    /// state so the next `process()` call parses a new frame header.
+    ///
+    /// `remaining_in_box` comes from
+    /// `VisibleFrameInfo::seek_target.remaining_in_box` and tells the box
+    /// parser how many codestream bytes remain in the current container box at
+    /// the target position. For bare-codestream files this is `u64::MAX`.
+    ///
+    /// The caller must provide raw file input starting from the target
+    /// frame's `seek_target.decode_start_file_offset`.
+    pub fn start_new_frame(&mut self, remaining_in_box: u64) {
+        self.box_parser.reset_for_codestream_seek(remaining_in_box);
+        self.codestream_parser.start_new_frame();
     }
 
     #[cfg(test)]

@@ -35,6 +35,8 @@ pub(super) struct BoxParser {
     box_type: CodestreamBoxType,
     /// Parsed frame index box, if present in the file.
     pub(super) frame_index: Option<FrameIndexBox>,
+    /// Total file bytes consumed from the underlying input.
+    pub(super) total_file_consumed: u64,
 }
 
 impl BoxParser {
@@ -44,6 +46,7 @@ impl BoxParser {
             state: ParseState::SignatureNeeded,
             box_type: CodestreamBoxType::None,
             frame_index: None,
+            total_file_consumed: 0,
         }
     }
 
@@ -57,7 +60,8 @@ impl BoxParser {
         loop {
             match self.state.clone() {
                 ParseState::SignatureNeeded => {
-                    self.box_buffer.refill(|b| input.read(b), None)?;
+                    let read = self.box_buffer.refill(|b| input.read(b), None)?;
+                    self.total_file_consumed += read as u64;
                     match check_signature_internal(&self.box_buffer)? {
                         None => return Err(Error::InvalidSignature),
                         Some(JxlSignatureType::Codestream) => {
@@ -79,7 +83,9 @@ impl BoxParser {
                     let skipped = if !self.box_buffer.is_empty() {
                         self.box_buffer.consume(num)
                     } else {
-                        input.skip(num)?
+                        let skipped = input.skip(num)?;
+                        self.total_file_consumed += skipped as u64;
+                        skipped
                     };
                     if skipped == 0 {
                         return Err(Error::OutOfBounds(num));
@@ -102,6 +108,7 @@ impl BoxParser {
                         let old_len = buf.len();
                         buf.resize(old_len + num, 0);
                         let read = input.read(&mut [IoSliceMut::new(&mut buf[old_len..])])?;
+                        self.total_file_consumed += read as u64;
                         if read == 0 {
                             return Err(Error::OutOfBounds(num));
                         }
@@ -117,7 +124,8 @@ impl BoxParser {
                     }
                 }
                 ParseState::BoxNeeded => {
-                    self.box_buffer.refill(|b| input.read(b), None)?;
+                    let read = self.box_buffer.refill(|b| input.read(b), None)?;
+                    self.total_file_consumed += read as u64;
                     let min_len = match &self.box_buffer[..] {
                         [0, 0, 0, 1, ..] => 16,
                         _ => 8,
@@ -203,6 +211,26 @@ impl BoxParser {
                 }
             }
         }
+    }
+
+    /// Accounts file bytes consumed directly by codestream parser reads/skips.
+    pub(super) fn mark_file_consumed(&mut self, amount: usize) {
+        self.total_file_consumed += amount as u64;
+    }
+
+    /// Resets the box parser for seeking to a specific codestream position.
+    ///
+    /// Sets the parser to `CodestreamBox(remaining)` state with cleared
+    /// buffers.  The caller must provide raw input starting from the file
+    /// position that corresponds to the target codestream offset.
+    ///
+    /// `remaining` is the number of codestream bytes left in the current
+    /// box from the target file position.  For bare-codestream files this
+    /// is `u64::MAX`.
+    pub(super) fn reset_for_codestream_seek(&mut self, remaining: u64) {
+        self.box_buffer = SmallBuffer::new(128);
+        self.state = ParseState::CodestreamBox(remaining);
+        // Keep frame_index unchanged.
     }
 
     pub(super) fn consume_codestream(&mut self, amount: u64) {

@@ -39,6 +39,11 @@ pub struct JxlDecoderOptions {
     /// This produces premultiplied alpha output, which is useful for compositing.
     /// Default: false (output straight alpha)
     pub premultiply_output: bool,
+    /// If true, only parse frame headers/TOC and skip section decoding.
+    ///
+    /// This is useful for collecting [`VisibleFrameInfo`](crate::api::VisibleFrameInfo)
+    /// via the regular decoder API without producing pixels.
+    pub scan_frames_only: bool,
 }
 
 impl Default for JxlDecoderOptions {
@@ -54,6 +59,7 @@ impl Default for JxlDecoderOptions {
             pixel_limit: None,
             high_precision: false,
             premultiply_output: false,
+            scan_frames_only: false,
         }
     }
 }
