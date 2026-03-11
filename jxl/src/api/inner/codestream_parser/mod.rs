@@ -16,6 +16,7 @@ use crate::{
     api::{
         JxlBasicInfo, JxlBitstreamInput, JxlColorEncoding, JxlColorProfile, JxlDataFormat,
         JxlDecoderOptions, JxlOutputBuffer, JxlPixelFormat, VisibleFrameInfo,
+        VisibleFrameSeekTarget,
         inner::{box_parser::BoxParser, process::SmallBuffer},
     },
     error::{Error, Result},
@@ -39,6 +40,7 @@ const NUM_LF_SLOTS: usize = 4;
 #[derive(Clone, Copy)]
 struct FrameStartInfo {
     file_offset: usize,
+    remaining_in_box: u64,
     visible_count_before: usize,
 }
 
@@ -186,6 +188,7 @@ impl CodestreamParser {
         let is_visible = header.is_visible();
         self.frame_starts.push(FrameStartInfo {
             file_offset: self.current_frame_file_offset,
+            remaining_in_box: self.current_frame_remaining_in_box,
             visible_count_before: self.visible_frame_index,
         });
 
@@ -196,15 +199,18 @@ impl CodestreamParser {
         // reference slot may be used.
         let mut used_reference_slots = [false; NUM_REFERENCE_SLOTS];
         if header.needs_blending() {
-            let color_source = header.blending_info.source as usize;
-            if color_source < NUM_REFERENCE_SLOTS {
-                used_reference_slots[color_source] = true;
-            }
-            for ec in &header.ec_blending_info {
-                let source = ec.source as usize;
-                if source < NUM_REFERENCE_SLOTS {
-                    used_reference_slots[source] = true;
-                }
+            for blending_info in header
+                .ec_blending_info
+                .iter()
+                .chain(std::iter::once(&header.blending_info))
+            {
+                let source = blending_info.source as usize;
+                assert!(
+                    source < NUM_REFERENCE_SLOTS,
+                    "invalid blending source slot {source}, max {}",
+                    NUM_REFERENCE_SLOTS - 1
+                );
+                used_reference_slots[source] = true;
             }
         }
         if header.has_patches() {
@@ -219,9 +225,12 @@ impl CodestreamParser {
 
         if header.has_lf_frame() {
             let lf_slot = header.lf_level as usize;
-            if lf_slot < NUM_LF_SLOTS
-                && let Some(dep_start) = self.lf_slot_decode_start[lf_slot]
-            {
+            assert!(
+                lf_slot < NUM_LF_SLOTS,
+                "invalid lf slot {lf_slot}, max {}",
+                NUM_LF_SLOTS - 1
+            );
+            if let Some(dep_start) = self.lf_slot_decode_start[lf_slot] {
                 decode_start_frame_index = decode_start_frame_index.min(dep_start);
             }
         }
@@ -239,18 +248,15 @@ impl CodestreamParser {
                 0.0
             };
 
-            let decode_start_file_offset = self.frame_starts[decode_start_frame_index].file_offset;
-
-            // A visible frame is a seek-keyframe if there are no other visible
-            // frames between the earliest frame it depends on and itself.
-            let is_keyframe = if decode_start_frame_index == current_frame_index {
-                true
-            } else {
-                let visible_before_current = self.visible_frame_index;
-                let visible_before_after_start =
-                    self.frame_starts[decode_start_frame_index + 1].visible_count_before;
-                visible_before_current == visible_before_after_start
+            let decode_start = self.frame_starts[decode_start_frame_index];
+            let seek_target = VisibleFrameSeekTarget {
+                decode_start_file_offset: decode_start.file_offset,
+                remaining_in_box: decode_start.remaining_in_box,
+                visible_frames_to_skip: self
+                    .visible_frame_index
+                    .saturating_sub(decode_start.visible_count_before),
             };
+            let is_keyframe = seek_target.visible_frames_to_skip == 0;
 
             self.scanned_frames.push(VisibleFrameInfo {
                 index: self.visible_frame_index,
@@ -259,8 +265,7 @@ impl CodestreamParser {
                 file_offset: self.current_frame_file_offset,
                 is_last: header.is_last,
                 is_keyframe,
-                decode_start_file_offset,
-                remaining_in_box: self.current_frame_remaining_in_box,
+                seek_target,
                 name: header.name.clone(),
             });
 
@@ -270,16 +275,22 @@ impl CodestreamParser {
         // Update slot dependency origins after processing this frame.
         if header.can_be_referenced {
             let slot = header.save_as_reference as usize;
-            if slot < NUM_REFERENCE_SLOTS {
-                self.reference_slot_decode_start[slot] = Some(decode_start_frame_index);
-            }
+            assert!(
+                slot < NUM_REFERENCE_SLOTS,
+                "invalid save_as_reference slot {slot}, max {}",
+                NUM_REFERENCE_SLOTS - 1
+            );
+            self.reference_slot_decode_start[slot] = Some(decode_start_frame_index);
         }
 
         if header.lf_level != 0 {
             let slot = (header.lf_level - 1) as usize;
-            if slot < NUM_LF_SLOTS {
-                self.lf_slot_decode_start[slot] = Some(decode_start_frame_index);
-            }
+            assert!(
+                slot < NUM_LF_SLOTS,
+                "invalid lf save slot {slot}, max {}",
+                NUM_LF_SLOTS - 1
+            );
+            self.lf_slot_decode_start[slot] = Some(decode_start_frame_index);
         }
     }
 
@@ -416,7 +427,7 @@ impl CodestreamParser {
                             box_parser.box_buffer.take(buffers)
                         } else {
                             let num = input.read(buffers)?;
-                            box_parser.note_file_consumed(num);
+                            box_parser.mark_file_consumed(num);
                             num
                         };
                         self.ready_section_data += num;
@@ -445,7 +456,7 @@ impl CodestreamParser {
                             box_parser.box_buffer.consume(to_skip)
                         } else {
                             let skipped = input.skip(to_skip)?;
-                            box_parser.note_file_consumed(skipped);
+                            box_parser.mark_file_consumed(skipped);
                             skipped
                         };
                         box_parser.consume_codestream(skipped as u64);
@@ -539,7 +550,7 @@ impl CodestreamParser {
                                 Ok(box_parser.box_buffer.take(buf))
                             } else {
                                 let read = input.read(buf)?;
-                                box_parser.note_file_consumed(read);
+                                box_parser.mark_file_consumed(read);
                                 Ok(read)
                             }
                         },

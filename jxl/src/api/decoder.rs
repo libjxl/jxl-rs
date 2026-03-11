@@ -50,19 +50,10 @@ pub struct VisibleFrameInfo {
     pub is_last: bool,
     /// Whether this frame is a seek-keyframe for visible-frame playback.
     ///
-    /// A visible frame is considered a keyframe when there are no other
-    /// visible frames between it and the earliest frame needed to decode it.
-    /// That earliest frame may still be non-visible.
+    /// This is equivalent to `seek_target.visible_frames_to_skip == 0`.
     pub is_keyframe: bool,
-    /// Earliest file byte offset needed to decode this frame.
-    ///
-    /// This may point to a non-visible frame if the visible frame depends on
-    /// earlier saved LF/reference state.
-    pub decode_start_file_offset: usize,
-    /// Remaining codestream bytes in the current container box at this
-    /// frame's start position. For bare-codestream files this is `u64::MAX`.
-    /// Used by [`JxlDecoder::start_new_frame`] to restore box-parser state.
-    pub remaining_in_box: u64,
+    /// Precomputed seek inputs for this visible frame.
+    pub seek_target: VisibleFrameSeekTarget,
     /// Frame name, if any.
     pub name: String,
 }
@@ -87,18 +78,9 @@ pub fn seek_target_for_visible_frame(
     scanned_frames: &[VisibleFrameInfo],
     visible_frame_index: usize,
 ) -> Option<VisibleFrameSeekTarget> {
-    let target = scanned_frames.get(visible_frame_index)?;
-    let visible_before_seek = scanned_frames
-        .iter()
-        .filter(|f| f.file_offset < target.decode_start_file_offset)
-        .count();
-    let visible_frames_to_skip = visible_frame_index.saturating_sub(visible_before_seek);
-
-    Some(VisibleFrameSeekTarget {
-        decode_start_file_offset: target.decode_start_file_offset,
-        remaining_in_box: target.remaining_in_box,
-        visible_frames_to_skip,
-    })
+    scanned_frames
+        .get(visible_frame_index)
+        .map(|f| f.seek_target)
 }
 
 impl<S: JxlState> JxlDecoder<S> {
@@ -242,7 +224,7 @@ impl JxlDecoder<WithImageInfo> {
         visible_frame_index: usize,
     ) -> Option<VisibleFrameSeekTarget> {
         let seek_target = seek_target_for_visible_frame(scanned_frames, visible_frame_index)?;
-        self.start_new_frame(seek_target.remaining_in_box);
+        self.start_new_frame(seek_target);
         Some(seek_target)
     }
 
@@ -256,13 +238,12 @@ impl JxlDecoder<WithImageInfo> {
     ///
     /// # Arguments
     ///
-    /// * `remaining_in_box` -- from `VisibleFrameInfo::remaining_in_box`.
-    ///   Tells the box parser how many codestream bytes remain in the current
-    ///   container box at the seek position. For bare-codestream files this is
-    ///   `u64::MAX`.
+    /// * `seek_target` -- from `VisibleFrameInfo::seek_target`.
+    ///   Includes both the box-parser state (`remaining_in_box`) and the input
+    ///   resume offset (`decode_start_file_offset`).
     ///
-    /// After calling this, provide raw file input starting from the target
-    /// frame's `decode_start_file_offset`.
+    /// After calling this, provide raw file input starting from
+    /// `seek_target.decode_start_file_offset`.
     ///
     /// # Example
     ///
@@ -277,11 +258,11 @@ impl JxlDecoder<WithImageInfo> {
     ///
     /// // 2. Seek to frame N (bare codestream).
     /// let target = &frames[n];
-    /// decoder.start_new_frame(target.remaining_in_box);
-    /// // 3. Provide input from target.decode_start_file_offset and process().
+    /// decoder.start_new_frame(target.seek_target);
+    /// // 3. Provide input from target.seek_target.decode_start_file_offset and process().
     /// ```
-    pub fn start_new_frame(&mut self, remaining_in_box: u64) {
-        self.inner.start_new_frame(remaining_in_box);
+    pub fn start_new_frame(&mut self, seek_target: VisibleFrameSeekTarget) {
+        self.inner.start_new_frame(seek_target.remaining_in_box);
     }
 
     #[cfg(test)]
@@ -1859,7 +1840,10 @@ pub(crate) mod tests {
         assert!(frames.last().unwrap().is_last);
 
         assert!(frames[0].is_keyframe);
-        assert_eq!(frames[0].decode_start_file_offset, frames[0].file_offset);
+        assert_eq!(
+            frames[0].seek_target.decode_start_file_offset,
+            frames[0].file_offset
+        );
     }
 
     #[test]
@@ -1899,7 +1883,8 @@ pub(crate) mod tests {
         assert_eq!(frames.len(), 1);
         let f = &frames[0];
         assert!(f.is_keyframe);
-        assert_eq!(f.decode_start_file_offset, f.file_offset);
+        assert_eq!(f.seek_target.decode_start_file_offset, f.file_offset);
+        assert_eq!(f.seek_target.visible_frames_to_skip, 0);
     }
 
     #[test]
@@ -1911,19 +1896,18 @@ pub(crate) mod tests {
 
         for frame in &frames {
             assert!(
-                frame.decode_start_file_offset <= frame.file_offset,
+                frame.seek_target.decode_start_file_offset <= frame.file_offset,
                 "frame {}: decode_start_file_offset {} > file_offset {}",
                 frame.index,
-                frame.decode_start_file_offset,
+                frame.seek_target.decode_start_file_offset,
                 frame.file_offset,
             );
-            if frame.is_keyframe {
-                assert_eq!(
-                    frame.decode_start_file_offset, frame.file_offset,
-                    "keyframe {} should have decode_start_file_offset == file_offset",
-                    frame.index,
-                );
-            }
+            assert_eq!(
+                frame.is_keyframe,
+                frame.seek_target.visible_frames_to_skip == 0,
+                "frame {}: keyframe flag should match visible_frames_to_skip",
+                frame.index,
+            );
         }
     }
 

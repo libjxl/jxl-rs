@@ -35,8 +35,6 @@ pub(super) struct BoxParser {
     box_type: CodestreamBoxType,
     /// Parsed frame index box, if present in the file.
     pub(super) frame_index: Option<FrameIndexBox>,
-    /// Total codestream bytes consumed so far (tracks logical codestream offset).
-    pub(super) total_codestream_consumed: u64,
     /// Total file bytes consumed from the underlying input.
     pub(super) total_file_consumed: u64,
 }
@@ -48,7 +46,6 @@ impl BoxParser {
             state: ParseState::SignatureNeeded,
             box_type: CodestreamBoxType::None,
             frame_index: None,
-            total_codestream_consumed: 0,
             total_file_consumed: 0,
         }
     }
@@ -230,7 +227,7 @@ impl BoxParser {
     }
 
     /// Accounts file bytes consumed directly by codestream parser reads/skips.
-    pub(super) fn note_file_consumed(&mut self, amount: usize) {
+    pub(super) fn mark_file_consumed(&mut self, amount: usize) {
         self.total_file_consumed += amount as u64;
     }
 
@@ -246,13 +243,12 @@ impl BoxParser {
     pub(super) fn reset_for_codestream_seek(&mut self, remaining: u64) {
         self.box_buffer = SmallBuffer::new(128);
         self.state = ParseState::CodestreamBox(remaining);
-        // Keep frame_index and total_codestream_consumed unchanged.
+        // Keep frame_index unchanged.
     }
 
     pub(super) fn consume_codestream(&mut self, amount: u64) {
         if let ParseState::CodestreamBox(cb) = &mut self.state {
             *cb = cb.checked_sub(amount).unwrap();
-            self.total_codestream_consumed += amount;
             if *cb == 0 {
                 self.state = ParseState::BoxNeeded;
             }
