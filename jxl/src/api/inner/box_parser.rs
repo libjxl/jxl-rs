@@ -213,19 +213,6 @@ impl BoxParser {
         }
     }
 
-    /// Returns remaining codestream bytes in the current box, or `None` if
-    /// the parser is not currently inside a codestream box.
-    ///
-    /// Note: The returned value reflects the box parser's internal counter.
-    /// Bytes that have been consumed from the box (via [`consume_codestream`])
-    /// but are still buffered in the codestream parser are NOT included.
-    pub(super) fn remaining_in_codestream_box(&self) -> Option<u64> {
-        match &self.state {
-            ParseState::CodestreamBox(r) => Some(*r),
-            _ => None,
-        }
-    }
-
     /// Accounts file bytes consumed directly by codestream parser reads/skips.
     pub(super) fn mark_file_consumed(&mut self, amount: usize) {
         self.total_file_consumed += amount as u64;

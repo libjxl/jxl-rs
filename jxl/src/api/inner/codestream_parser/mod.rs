@@ -34,9 +34,6 @@ struct SectionBuffer {
     section: Section,
 }
 
-const NUM_REFERENCE_SLOTS: usize = DecoderState::MAX_STORED_FRAMES;
-const NUM_LF_SLOTS: usize = 4;
-
 #[derive(Clone, Copy)]
 struct FrameStartInfo {
     file_offset: usize,
@@ -103,10 +100,10 @@ pub(super) struct CodestreamParser {
     frame_starts: Vec<FrameStartInfo>,
     /// For each reference slot, earliest frame index required to reconstruct
     /// the current contents of that slot.
-    reference_slot_decode_start: [Option<usize>; NUM_REFERENCE_SLOTS],
+    reference_slot_decode_start: [Option<usize>; DecoderState::MAX_STORED_FRAMES],
     /// For each LF slot, earliest frame index required to reconstruct the
     /// current contents of that slot.
-    lf_slot_decode_start: [Option<usize>; NUM_LF_SLOTS],
+    lf_slot_decode_start: [Option<usize>; DecoderState::NUM_LF_FRAMES],
     /// File byte offset where the current frame header parse started.
     /// Set when we begin parsing a frame header.
     current_frame_file_offset: usize,
@@ -156,8 +153,8 @@ impl CodestreamParser {
             scanned_frames: Vec::new(),
             visible_frame_index: 0,
             frame_starts: Vec::new(),
-            reference_slot_decode_start: [None; NUM_REFERENCE_SLOTS],
-            lf_slot_decode_start: [None; NUM_LF_SLOTS],
+            reference_slot_decode_start: [None; DecoderState::MAX_STORED_FRAMES],
+            lf_slot_decode_start: [None; DecoderState::NUM_LF_FRAMES],
             current_frame_file_offset: 0,
             current_frame_remaining_in_box: u64::MAX,
             #[cfg(test)]
@@ -197,7 +194,7 @@ impl CodestreamParser {
         // Track frame dependencies through reference slots. For blending we know
         // exactly which slots are used. For patches we conservatively assume any
         // reference slot may be used.
-        let mut used_reference_slots = [false; NUM_REFERENCE_SLOTS];
+        let mut used_reference_slots = [false; DecoderState::MAX_STORED_FRAMES];
         if header.needs_blending() {
             for blending_info in header
                 .ec_blending_info
@@ -206,9 +203,9 @@ impl CodestreamParser {
             {
                 let source = blending_info.source as usize;
                 assert!(
-                    source < NUM_REFERENCE_SLOTS,
+                    source < DecoderState::MAX_STORED_FRAMES,
                     "invalid blending source slot {source}, max {}",
-                    NUM_REFERENCE_SLOTS - 1
+                    DecoderState::MAX_STORED_FRAMES - 1
                 );
                 used_reference_slots[source] = true;
             }
@@ -226,9 +223,9 @@ impl CodestreamParser {
         if header.has_lf_frame() {
             let lf_slot = header.lf_level as usize;
             assert!(
-                lf_slot < NUM_LF_SLOTS,
+                lf_slot < DecoderState::NUM_LF_FRAMES,
                 "invalid lf slot {lf_slot}, max {}",
-                NUM_LF_SLOTS - 1
+                DecoderState::NUM_LF_FRAMES - 1
             );
             if let Some(dep_start) = self.lf_slot_decode_start[lf_slot] {
                 decode_start_frame_index = decode_start_frame_index.min(dep_start);
@@ -276,9 +273,9 @@ impl CodestreamParser {
         if header.can_be_referenced {
             let slot = header.save_as_reference as usize;
             assert!(
-                slot < NUM_REFERENCE_SLOTS,
+                slot < DecoderState::MAX_STORED_FRAMES,
                 "invalid save_as_reference slot {slot}, max {}",
-                NUM_REFERENCE_SLOTS - 1
+                DecoderState::MAX_STORED_FRAMES - 1
             );
             self.reference_slot_decode_start[slot] = Some(decode_start_frame_index);
         }
@@ -286,9 +283,9 @@ impl CodestreamParser {
         if header.lf_level != 0 {
             let slot = (header.lf_level - 1) as usize;
             assert!(
-                slot < NUM_LF_SLOTS,
+                slot < DecoderState::NUM_LF_FRAMES,
                 "invalid lf save slot {slot}, max {}",
-                NUM_LF_SLOTS - 1
+                DecoderState::NUM_LF_FRAMES - 1
             );
             self.lf_slot_decode_start[slot] = Some(decode_start_frame_index);
         }
@@ -503,47 +500,41 @@ impl CodestreamParser {
                     return Ok(());
                 }
 
-                // Record file offset and box state at frame header start for
-                // scanning and seeking.
-                // total_file_consumed counts bytes read/skipped from the raw
-                // input stream. non_section_buf and box_buffer contain unread
-                // bytes already accounted in total_file_consumed.
-                if self.decoder_state.is_some() && self.frame_header.is_none() {
-                    self.current_frame_file_offset = (box_parser.total_file_consumed as usize)
-                        .saturating_sub(self.non_section_buf.len())
-                        .saturating_sub(box_parser.box_buffer.len());
-
-                    // Capture remaining-in-box at the frame's file position.
-                    // BoxParser's remaining_in_codestream_box() gives remaining
-                    // AFTER bytes were consumed into non_section_buf and
-                    // box_buffer. Add those back since they come from the
-                    // current box and are still unread at frame start.
-                    //
-                    // For bare codestream the initial remaining is u64::MAX
-                    // (sentinel for "rest of file"). Detect this by checking
-                    // whether the value is still very large after consumption
-                    // (no real box can exceed u64::MAX / 2).
-                    self.current_frame_remaining_in_box = box_parser
-                        .remaining_in_codestream_box()
-                        .map(|r| {
-                            if r > u64::MAX / 2 {
-                                u64::MAX
-                            } else {
-                                r.saturating_add(self.non_section_buf.len() as u64)
-                                    .saturating_add(box_parser.box_buffer.len() as u64)
-                            }
-                        })
-                        .unwrap_or(u64::MAX);
-                }
+                // Capture frame-start metadata once before parsing the next
+                // frame header. We do this after `get_more_codestream()` so we
+                // are robust to the previous frame ending exactly at a box
+                // boundary (BoxNeeded -> CodestreamBox transition).
+                let mut capture_frame_start =
+                    self.decoder_state.is_some() && self.frame_header.is_none();
 
                 // Loop to handle incremental parsing (e.g. large ICC profiles) that may need
                 // multiple buffer refills to complete.
                 loop {
                     let available_codestream = match box_parser.get_more_codestream(input) {
                         Err(Error::OutOfBounds(_)) => 0,
-                        Ok(c) => c as usize,
+                        Ok(c) => c,
                         Err(e) => return Err(e),
                     };
+
+                    if capture_frame_start {
+                        // total_file_consumed counts bytes read/skipped from
+                        // raw input. non_section_buf and box_buffer contain
+                        // unread bytes already accounted there.
+                        self.current_frame_file_offset = (box_parser.total_file_consumed as usize)
+                            .saturating_sub(self.non_section_buf.len())
+                            .saturating_sub(box_parser.box_buffer.len());
+
+                        // `available_codestream` includes bytes still in
+                        // box_buffer and not yet in non_section_buf.
+                        self.current_frame_remaining_in_box = if available_codestream > u64::MAX / 2
+                        {
+                            u64::MAX
+                        } else {
+                            available_codestream.saturating_add(self.non_section_buf.len() as u64)
+                        };
+                        capture_frame_start = false;
+                    }
+
                     let c = self.non_section_buf.refill(
                         |buf| {
                             if !box_parser.box_buffer.is_empty() {
@@ -554,7 +545,7 @@ impl CodestreamParser {
                                 Ok(read)
                             }
                         },
-                        Some(available_codestream),
+                        Some(available_codestream as usize),
                     )? as u64;
                     box_parser.consume_codestream(c);
 
