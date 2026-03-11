@@ -67,6 +67,40 @@ pub struct VisibleFrameInfo {
     pub name: String,
 }
 
+/// Computed seek inputs for a target visible frame.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct VisibleFrameSeekTarget {
+    /// File byte offset to start feeding input from.
+    pub decode_start_file_offset: usize,
+    /// Remaining codestream bytes in the current container box at the seek
+    /// point. Pass this to [`JxlDecoder::start_new_frame`].
+    pub remaining_in_box: u64,
+    /// Number of visible frames to skip after seek-start before decoding the
+    /// requested target frame.
+    pub visible_frames_to_skip: usize,
+}
+
+/// Compute seek inputs for `visible_frame_index` from scanned frame info.
+///
+/// Returns `None` if `visible_frame_index` is out of range.
+pub fn seek_target_for_visible_frame(
+    scanned_frames: &[VisibleFrameInfo],
+    visible_frame_index: usize,
+) -> Option<VisibleFrameSeekTarget> {
+    let target = scanned_frames.get(visible_frame_index)?;
+    let visible_before_seek = scanned_frames
+        .iter()
+        .filter(|f| f.file_offset < target.decode_start_file_offset)
+        .count();
+    let visible_frames_to_skip = visible_frame_index.saturating_sub(visible_before_seek);
+
+    Some(VisibleFrameSeekTarget {
+        decode_start_file_offset: target.decode_start_file_offset,
+        remaining_in_box: target.remaining_in_box,
+        visible_frames_to_skip,
+    })
+}
+
 impl<S: JxlState> JxlDecoder<S> {
     fn wrap_inner(inner: Box<JxlDecoderInner>) -> Self {
         Self {
@@ -193,6 +227,23 @@ impl JxlDecoder<WithImageInfo> {
 
     pub fn has_more_frames(&self) -> bool {
         self.inner.has_more_frames()
+    }
+
+    /// Prepare and apply a seek to `visible_frame_index` from scanned metadata.
+    ///
+    /// This calls [`start_new_frame`](Self::start_new_frame) internally and
+    /// returns the input offset and number of visible frames to skip before
+    /// decoding the requested target frame.
+    ///
+    /// Returns `None` if `visible_frame_index` is out of range.
+    pub fn seek_to_visible_frame(
+        &mut self,
+        scanned_frames: &[VisibleFrameInfo],
+        visible_frame_index: usize,
+    ) -> Option<VisibleFrameSeekTarget> {
+        let seek_target = seek_target_for_visible_frame(scanned_frames, visible_frame_index)?;
+        self.start_new_frame(seek_target.remaining_in_box);
+        Some(seek_target)
     }
 
     /// Resets frame-level decoder state to prepare for decoding a new frame.
@@ -1635,23 +1686,14 @@ pub(crate) mod tests {
         assert!(scanned_frames.len() > 1, "need multiple frames");
 
         // Compare against second visible frame from regular sequential decode.
-        let target = &scanned_frames[1];
-        let seek_offset = target.decode_start_file_offset;
-        let remaining = target.remaining_in_box;
-        let target_visible_index = target.index;
-
-        // Number of visible frames before the seek start.
-        let visible_before_seek = scanned_frames
-            .iter()
-            .filter(|f| f.file_offset < seek_offset)
-            .count();
-        assert!(target_visible_index >= visible_before_seek);
-        let relative_target_index = target_visible_index - visible_before_seek;
+        let target_visible_index = 1;
+        let seek_target = seek_target_for_visible_frame(&scanned_frames, target_visible_index)
+            .expect("seek target for visible frame");
 
         if expect_bare_codestream {
-            assert_eq!(remaining, u64::MAX);
+            assert_eq!(seek_target.remaining_in_box, u64::MAX);
         } else {
-            assert_ne!(remaining, u64::MAX);
+            assert_ne!(seek_target.remaining_in_box, u64::MAX);
         }
 
         // 2. Decode all frames sequentially and keep the reference frame.
@@ -1690,10 +1732,13 @@ pub(crate) mod tests {
         let num_ec = requested_format.extra_channel_format.len();
 
         // 4. Seek to decode-start and advance to the target visible frame.
-        decoder.start_new_frame(remaining);
-        let mut input = &data[seek_offset..];
+        let seek_target_from_method = decoder
+            .seek_to_visible_frame(&scanned_frames, target_visible_index)
+            .expect("seek target for visible frame");
+        assert_eq!(seek_target_from_method, seek_target);
+        let mut input = &data[seek_target.decode_start_file_offset..];
 
-        for _ in 0..relative_target_index {
+        for _ in 0..seek_target.visible_frames_to_skip {
             let mut decoder_frame = loop {
                 match decoder.process(&mut input).unwrap() {
                     ProcessingResult::Complete { result } => break result,
