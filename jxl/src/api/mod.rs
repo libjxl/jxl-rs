@@ -18,12 +18,6 @@ pub use crate::image::JxlOutputBuffer;
 pub use color::*;
 pub use data_types::*;
 pub use decoder::*;
-
-/// Backward-compatible namespace re-export for frame scanning APIs.
-pub mod frame_scan {
-    pub use super::decoder::{FrameInfoDecoder, VisibleFrameInfo};
-}
-
 pub use inner::*;
 pub use input::*;
 pub use options::*;

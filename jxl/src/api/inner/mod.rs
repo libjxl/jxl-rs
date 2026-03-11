@@ -6,7 +6,7 @@
 #[cfg(test)]
 use crate::api::FrameCallback;
 use crate::{
-    api::{JxlFrameHeader, frame_scan::VisibleFrameInfo},
+    api::{JxlFrameHeader, VisibleFrameInfo},
     error::{Error, Result},
 };
 
@@ -153,8 +153,7 @@ impl JxlDecoderInner {
     /// TOC, section buffers, and restores the box parser to the correct
     /// state so the next `process()` call parses a new frame header.
     ///
-    /// `remaining_in_box` comes from
-    /// [`VisibleFrameInfo::remaining_in_box`](super::frame_scan::VisibleFrameInfo::remaining_in_box)
+    /// `remaining_in_box` comes from `VisibleFrameInfo::remaining_in_box`
     /// and tells the box parser how many codestream bytes remain in the
     /// current container box at the target position.  For bare-codestream
     /// files this is `u64::MAX`.

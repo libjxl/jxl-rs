@@ -15,8 +15,7 @@ use crate::api::FrameCallback;
 use crate::{
     api::{
         JxlBasicInfo, JxlBitstreamInput, JxlColorEncoding, JxlColorProfile, JxlDataFormat,
-        JxlDecoderOptions, JxlOutputBuffer, JxlPixelFormat,
-        frame_scan::VisibleFrameInfo,
+        JxlDecoderOptions, JxlOutputBuffer, JxlPixelFormat, VisibleFrameInfo,
         inner::{box_parser::BoxParser, process::SmallBuffer},
     },
     error::{Error, Result},
@@ -32,6 +31,15 @@ struct SectionBuffer {
     len: usize,
     data: Vec<u8>,
     section: Section,
+}
+
+const NUM_REFERENCE_SLOTS: usize = DecoderState::MAX_STORED_FRAMES;
+const NUM_LF_SLOTS: usize = 4;
+
+#[derive(Clone, Copy)]
+struct FrameStartInfo {
+    file_offset: usize,
+    visible_count_before: usize,
 }
 
 pub(super) struct CodestreamParser {
@@ -88,12 +96,15 @@ pub(super) struct CodestreamParser {
     pub(super) scanned_frames: Vec<VisibleFrameInfo>,
     /// Zero-based visible frame index counter.
     visible_frame_index: usize,
-    /// File offset of the first (non-preview) frame seen in the stream.
-    /// Needed because the first visible frame may depend on prior non-visible
-    /// patch/reference frames.
-    first_frame_file_offset: Option<usize>,
-    /// File offset of the most recent keyframe (for decode_start_file_offset).
-    last_keyframe_file_offset: Option<usize>,
+    /// File offsets and visibility info for every non-preview frame (visible
+    /// and non-visible), in parse order.
+    frame_starts: Vec<FrameStartInfo>,
+    /// For each reference slot, earliest frame index required to reconstruct
+    /// the current contents of that slot.
+    reference_slot_decode_start: [Option<usize>; NUM_REFERENCE_SLOTS],
+    /// For each LF slot, earliest frame index required to reconstruct the
+    /// current contents of that slot.
+    lf_slot_decode_start: [Option<usize>; NUM_LF_SLOTS],
     /// File byte offset where the current frame header parse started.
     /// Set when we begin parsing a frame header.
     current_frame_file_offset: usize,
@@ -142,8 +153,9 @@ impl CodestreamParser {
             header_needed_bytes: None,
             scanned_frames: Vec::new(),
             visible_frame_index: 0,
-            first_frame_file_offset: None,
-            last_keyframe_file_offset: None,
+            frame_starts: Vec::new(),
+            reference_slot_decode_start: [None; NUM_REFERENCE_SLOTS],
+            lf_slot_decode_start: [None; NUM_LF_SLOTS],
             current_frame_file_offset: 0,
             current_frame_remaining_in_box: u64::MAX,
             #[cfg(test)]
@@ -170,60 +182,105 @@ impl CodestreamParser {
         };
         let header = frame.header();
 
-        // Remember the first (non-preview) frame offset. The first visible
-        // frame may depend on earlier non-visible patch/reference frames.
-        if self.first_frame_file_offset.is_none() {
-            self.first_frame_file_offset = Some(self.current_frame_file_offset);
-        }
-
-        if !header.is_visible() {
-            return;
-        }
-
-        // A visible frame is a keyframe when it can be decoded independently:
-        // full-frame Replace blending, no patches, and no LF-frame dependency.
-        let is_keyframe =
-            !header.needs_blending() && !header.has_patches() && !header.has_lf_frame();
-
-        if is_keyframe {
-            self.last_keyframe_file_offset = Some(self.current_frame_file_offset);
-        }
-
-        let duration_ticks = header.duration;
-        let duration_ms = if let Some(ref anim) = self.animation {
-            if anim.tps_numerator > 0 {
-                (duration_ticks as f64) * 1000.0 * (anim.tps_denominator as f64)
-                    / (anim.tps_numerator as f64)
-            } else {
-                0.0
-            }
-        } else {
-            0.0
-        };
-
-        let decode_start_file_offset = if is_keyframe {
-            self.current_frame_file_offset
-        } else if let Some(offset) = self.last_keyframe_file_offset {
-            offset
-        } else {
-            // No keyframe yet: must resume from the first frame.
-            self.first_frame_file_offset
-                .unwrap_or(self.current_frame_file_offset)
-        };
-
-        self.scanned_frames.push(VisibleFrameInfo {
-            index: self.visible_frame_index,
-            duration_ms,
-            duration_ticks,
+        let current_frame_index = self.frame_starts.len();
+        let is_visible = header.is_visible();
+        self.frame_starts.push(FrameStartInfo {
             file_offset: self.current_frame_file_offset,
-            is_last: header.is_last,
-            is_keyframe,
-            decode_start_file_offset,
-            remaining_in_box: self.current_frame_remaining_in_box,
-            name: header.name.clone(),
+            visible_count_before: self.visible_frame_index,
         });
 
-        self.visible_frame_index += 1;
+        let mut decode_start_frame_index = current_frame_index;
+
+        // Track frame dependencies through reference slots. For blending we know
+        // exactly which slots are used. For patches we conservatively assume any
+        // reference slot may be used.
+        let mut used_reference_slots = [false; NUM_REFERENCE_SLOTS];
+        if header.needs_blending() {
+            let color_source = header.blending_info.source as usize;
+            if color_source < NUM_REFERENCE_SLOTS {
+                used_reference_slots[color_source] = true;
+            }
+            for ec in &header.ec_blending_info {
+                let source = ec.source as usize;
+                if source < NUM_REFERENCE_SLOTS {
+                    used_reference_slots[source] = true;
+                }
+            }
+        }
+        if header.has_patches() {
+            used_reference_slots.fill(true);
+        }
+
+        for (slot, used) in used_reference_slots.iter().enumerate() {
+            if *used && let Some(dep_start) = self.reference_slot_decode_start[slot] {
+                decode_start_frame_index = decode_start_frame_index.min(dep_start);
+            }
+        }
+
+        if header.has_lf_frame() {
+            let lf_slot = header.lf_level as usize;
+            if lf_slot < NUM_LF_SLOTS
+                && let Some(dep_start) = self.lf_slot_decode_start[lf_slot]
+            {
+                decode_start_frame_index = decode_start_frame_index.min(dep_start);
+            }
+        }
+
+        if is_visible {
+            let duration_ticks = header.duration;
+            let duration_ms = if let Some(ref anim) = self.animation {
+                if anim.tps_numerator > 0 {
+                    (duration_ticks as f64) * 1000.0 * (anim.tps_denominator as f64)
+                        / (anim.tps_numerator as f64)
+                } else {
+                    0.0
+                }
+            } else {
+                0.0
+            };
+
+            let decode_start_file_offset = self.frame_starts[decode_start_frame_index].file_offset;
+
+            // A visible frame is a seek-keyframe if there are no other visible
+            // frames between the earliest frame it depends on and itself.
+            let is_keyframe = if decode_start_frame_index == current_frame_index {
+                true
+            } else {
+                let visible_before_current = self.visible_frame_index;
+                let visible_before_after_start =
+                    self.frame_starts[decode_start_frame_index + 1].visible_count_before;
+                visible_before_current == visible_before_after_start
+            };
+
+            self.scanned_frames.push(VisibleFrameInfo {
+                index: self.visible_frame_index,
+                duration_ms,
+                duration_ticks,
+                file_offset: self.current_frame_file_offset,
+                is_last: header.is_last,
+                is_keyframe,
+                decode_start_file_offset,
+                remaining_in_box: self.current_frame_remaining_in_box,
+                name: header.name.clone(),
+            });
+
+            self.visible_frame_index += 1;
+        }
+
+        // Update slot dependency origins after processing this frame.
+        if header.can_be_referenced {
+            let slot = header.save_as_reference as usize;
+            if slot < NUM_REFERENCE_SLOTS {
+                self.reference_slot_decode_start[slot] = Some(decode_start_frame_index);
+            }
+        }
+
+        if header.lf_level != 0 {
+            let slot = (header.lf_level - 1) as usize;
+            if slot < NUM_LF_SLOTS {
+                self.lf_slot_decode_start[slot] = Some(decode_start_frame_index);
+            }
+        }
     }
 
     /// Returns the number of passes that are fully completed across all groups.
@@ -304,7 +361,11 @@ impl CodestreamParser {
                     .frame
                     .as_ref()
                     .is_some_and(|f| f.header().can_be_referenced);
-                if !self.process_without_output && output_buffers.is_none() && !can_be_referenced {
+                if decode_options.scan_frames_only
+                    || (!self.process_without_output
+                        && output_buffers.is_none()
+                        && !can_be_referenced)
+                {
                     self.skip_sections = true;
                 }
 

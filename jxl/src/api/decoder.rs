@@ -9,11 +9,7 @@ use super::{
 };
 #[cfg(test)]
 use crate::frame::Frame;
-use crate::{
-    api::JxlFrameHeader,
-    container::frame_index::FrameIndexBox,
-    error::{Error, Result},
-};
+use crate::{api::JxlFrameHeader, container::frame_index::FrameIndexBox, error::Result};
 use states::*;
 use std::marker::PhantomData;
 
@@ -39,7 +35,7 @@ pub struct JxlDecoder<State: JxlState> {
 #[cfg(test)]
 pub type FrameCallback = dyn FnMut(&Frame, usize) -> Result<()>;
 
-/// Information about a single visible frame discovered by [`FrameInfoDecoder`].
+/// Information about a single visible frame discovered while decoding.
 #[derive(Debug, Clone, PartialEq)]
 pub struct VisibleFrameInfo {
     /// Zero-based index among visible frames.
@@ -49,24 +45,19 @@ pub struct VisibleFrameInfo {
     /// Duration in raw ticks from the animation header.
     pub duration_ticks: u32,
     /// Byte offset of this frame's header in the input file.
-    pub file_offset: usize,
+    pub(crate) file_offset: usize,
     /// Whether this is the last frame in the codestream.
     pub is_last: bool,
-    /// Whether this frame can be independently decoded (true keyframe for seeking).
+    /// Whether this frame is a seek-keyframe for visible-frame playback.
     ///
-    /// A frame is a keyframe when:
-    /// - It uses Replace blending mode for all channels, AND
-    /// - It covers the full image (no crop offset), AND
-    /// - It does not use patches (which reference saved slots), AND
-    /// - It does not depend on an LF frame (`!has_lf_frame()`).
-    ///
-    /// Note: the first visible frame is not necessarily a keyframe; it may
-    /// depend on prior non-visible patch/reference/LF frames.
+    /// A visible frame is considered a keyframe when there are no other
+    /// visible frames between it and the earliest frame needed to decode it.
+    /// That earliest frame may still be non-visible.
     pub is_keyframe: bool,
     /// Earliest file byte offset needed to decode this frame.
-    /// For keyframes this equals `file_offset`.
-    /// For non-keyframes this is the offset of the nearest prior keyframe,
-    /// or the first frame when no keyframe exists yet.
+    ///
+    /// This may point to a non-visible frame if the visible frame depends on
+    /// earlier saved LF/reference state.
     pub decode_start_file_offset: usize,
     /// Remaining codestream bytes in the current container box at this
     /// frame's start position. For bare-codestream files this is `u64::MAX`.
@@ -74,136 +65,6 @@ pub struct VisibleFrameInfo {
     pub remaining_in_box: u64,
     /// Frame name, if any.
     pub name: String,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum ScanPhase {
-    Initial,
-    Scanning,
-    Done,
-}
-
-/// Incremental frame information scanner for animation support.
-///
-/// Internally, this drives the existing decoder implementation without pixel
-/// output, so container/header/TOC parsing is shared with normal decoding.
-pub struct FrameInfoDecoder {
-    inner: JxlDecoderInner,
-    buf: Vec<u8>,
-    consumed: usize,
-    phase: ScanPhase,
-    has_animation: bool,
-    tps_numerator: u32,
-    tps_denominator: u32,
-}
-
-impl FrameInfoDecoder {
-    pub fn new() -> Self {
-        Self {
-            inner: JxlDecoderInner::new(JxlDecoderOptions::default()),
-            buf: Vec::new(),
-            consumed: 0,
-            phase: ScanPhase::Initial,
-            has_animation: false,
-            tps_numerator: 0,
-            tps_denominator: 0,
-        }
-    }
-
-    pub fn feed(&mut self, data: &[u8]) -> Result<bool> {
-        if self.phase == ScanPhase::Done {
-            return Ok(true);
-        }
-        self.buf.extend_from_slice(data);
-        self.try_advance()
-    }
-
-    pub fn frames(&self) -> &[VisibleFrameInfo] {
-        self.inner.scanned_frames()
-    }
-
-    pub fn frame_count(&self) -> usize {
-        self.inner.scanned_frames().len()
-    }
-
-    pub fn is_animated(&self) -> bool {
-        self.has_animation
-    }
-
-    pub fn is_complete(&self) -> bool {
-        self.phase == ScanPhase::Done
-    }
-
-    pub fn total_duration_ms(&self) -> f64 {
-        self.inner
-            .scanned_frames()
-            .iter()
-            .map(|f| f.duration_ms)
-            .sum()
-    }
-
-    pub fn tps(&self) -> (u32, u32) {
-        (self.tps_numerator, self.tps_denominator)
-    }
-
-    pub fn frame_index(&self) -> Option<&FrameIndexBox> {
-        self.inner.frame_index()
-    }
-
-    fn try_advance(&mut self) -> Result<bool> {
-        loop {
-            let mut input: &[u8] = &self.buf[self.consumed..];
-            let before_len = input.len();
-
-            match self.inner.process(&mut input, None) {
-                Ok(ProcessingResult::Complete { .. }) => {
-                    self.consumed = self.buf.len() - input.len();
-
-                    match self.phase {
-                        ScanPhase::Initial => {
-                            self.extract_image_info();
-                            self.phase = ScanPhase::Scanning;
-                        }
-                        ScanPhase::Scanning => {
-                            if !self.inner.has_more_frames() {
-                                self.phase = ScanPhase::Done;
-                                return Ok(true);
-                            }
-                        }
-                        ScanPhase::Done => return Ok(true),
-                    }
-                }
-                Ok(ProcessingResult::NeedsMoreInput { .. }) => {
-                    self.consumed = self.buf.len() - input.len();
-                    return Ok(false);
-                }
-                Err(Error::OutOfBounds(_)) => {
-                    let after_len = input.len();
-                    self.consumed = self.buf.len() - after_len;
-                    if before_len == after_len {
-                        return Ok(false);
-                    }
-                }
-                Err(e) => return Err(e),
-            }
-        }
-    }
-
-    fn extract_image_info(&mut self) {
-        if let Some(info) = self.inner.basic_info()
-            && let Some(ref anim) = info.animation
-        {
-            self.has_animation = true;
-            self.tps_numerator = anim.tps_numerator;
-            self.tps_denominator = anim.tps_denominator;
-        }
-    }
-}
-
-impl Default for FrameInfoDecoder {
-    fn default() -> Self {
-        Self::new()
-    }
 }
 
 impl<S: JxlState> JxlDecoder<S> {
@@ -232,6 +93,14 @@ impl<S: JxlState> JxlDecoder<S> {
     /// byte offsets, timestamps, and frame counts.
     pub fn frame_index(&self) -> Option<&FrameIndexBox> {
         self.inner.frame_index()
+    }
+
+    /// Returns visible frame info entries collected so far.
+    ///
+    /// When `JxlDecoderOptions::scan_frames_only` is enabled this is the
+    /// primary output of decoding.
+    pub fn scanned_frames(&self) -> &[VisibleFrameInfo] {
+        self.inner.scanned_frames()
     }
 
     /// Rewinds a decoder to the start of the file, allowing past frames to be displayed again.
@@ -336,8 +205,7 @@ impl JxlDecoder<WithImageInfo> {
     ///
     /// # Arguments
     ///
-    /// * `remaining_in_box` -- from
-    ///   [`VisibleFrameInfo::remaining_in_box`](super::frame_scan::VisibleFrameInfo::remaining_in_box).
+    /// * `remaining_in_box` -- from `VisibleFrameInfo::remaining_in_box`.
     ///   Tells the box parser how many codestream bytes remain in the current
     ///   container box at the seek position. For bare-codestream files this is
     ///   `u64::MAX`.
@@ -348,12 +216,16 @@ impl JxlDecoder<WithImageInfo> {
     /// # Example
     ///
     /// ```rust,ignore
-    /// // 1. Scan frame info to get offsets.
-    /// let mut scanner = FrameInfoDecoder::new();
-    /// scanner.feed(&data).unwrap();
+    /// // 1. Scan frame info using the regular decoder API.
+    /// let options = JxlDecoderOptions {
+    ///     scan_frames_only: true,
+    ///     ..Default::default()
+    /// };
+    /// let decoder = JxlDecoder::<states::Initialized>::new(options);
+    /// // ...advance decoder and call `scanned_frames()`...
     ///
     /// // 2. Seek to frame N (bare codestream).
-    /// let target = &scanner.frames()[n];
+    /// let target = &frames[n];
     /// decoder.start_new_frame(target.remaining_in_box);
     /// // 3. Provide input from target.decode_start_file_offset and process().
     /// ```
@@ -374,10 +246,11 @@ impl JxlDecoder<WithFrameInfo> {
     /// does not render pixels. Reference frames that may be needed by later
     /// frames are still decoded internally.
     ///
-    /// For efficient frame seeking in animations, prefer using
-    /// [`FrameInfoDecoder`](super::frame_scan::FrameInfoDecoder) to scan frame
-    /// offsets, then [`start_new_frame`](JxlDecoder::start_new_frame) to jump
-    /// directly to a target frame.
+    /// For efficient frame seeking in animations, enable
+    /// `JxlDecoderOptions::scan_frames_only` and use
+    /// [`scanned_frames`](JxlDecoder::scanned_frames), then
+    /// [`start_new_frame`](JxlDecoder::start_new_frame) to jump directly to a
+    /// target frame.
     pub fn skip_frame(
         mut self,
         input: &mut impl JxlBitstreamInput,
@@ -1675,66 +1548,120 @@ pub(crate) mod tests {
         assert!(dec.frame_index().is_none());
     }
 
-    /// Test that `start_new_frame()` + scanner seek info decodes the same
-    /// frame as regular sequential decode.
-    #[test]
-    fn test_start_new_frame_bare_codestream() {
-        use crate::api::frame_scan::FrameInfoDecoder;
-        use crate::api::{JxlDataFormat, JxlPixelFormat};
-        use crate::image::{Image, Rect};
+    fn scan_frames_with_decoder(
+        mut input: &[u8],
+        chunk_size: usize,
+    ) -> (bool, Vec<VisibleFrameInfo>) {
+        let mut chunk_input = &input[0..0];
+        let options = JxlDecoderOptions {
+            scan_frames_only: true,
+            skip_preview: false,
+            ..Default::default()
+        };
+        let mut initialized_decoder = JxlDecoder::<states::Initialized>::new(options);
 
-        fn assert_images_close(expected: &Image<f32>, actual: &Image<f32>) {
-            const EPS: f32 = 2e-3;
-            assert_eq!(expected.size(), actual.size());
-            let (w, h) = expected.size();
-            for y in 0..h {
-                let er = expected.row(y);
-                let ar = actual.row(y);
-                for x in 0..w {
-                    let e = er[x];
-                    let a = ar[x];
-                    assert!(
-                        (e - a).abs() <= EPS,
-                        "pixel mismatch at ({x}, {y}): expected {e}, got {a}",
-                    );
+        macro_rules! advance_process {
+            ($decoder: ident) => {
+                loop {
+                    chunk_input =
+                        &input[..(chunk_input.len().saturating_add(chunk_size)).min(input.len())];
+                    let available_before = chunk_input.len();
+                    let process_result = $decoder.process(&mut chunk_input);
+                    input = &input[(available_before - chunk_input.len())..];
+                    match process_result.unwrap() {
+                        ProcessingResult::Complete { result } => break result,
+                        ProcessingResult::NeedsMoreInput { fallback, .. } => {
+                            if input.is_empty() {
+                                panic!("Unexpected end of input");
+                            }
+                            $decoder = fallback;
+                        }
+                    }
                 }
+            };
+        }
+
+        macro_rules! advance_skip {
+            ($decoder: ident) => {
+                loop {
+                    chunk_input =
+                        &input[..(chunk_input.len().saturating_add(chunk_size)).min(input.len())];
+                    let available_before = chunk_input.len();
+                    let process_result = $decoder.skip_frame(&mut chunk_input);
+                    input = &input[(available_before - chunk_input.len())..];
+                    match process_result.unwrap() {
+                        ProcessingResult::Complete { result } => break result,
+                        ProcessingResult::NeedsMoreInput { fallback, .. } => {
+                            if input.is_empty() {
+                                panic!("Unexpected end of input");
+                            }
+                            $decoder = fallback;
+                        }
+                    }
+                }
+            };
+        }
+
+        let mut decoder_with_image_info = advance_process!(initialized_decoder);
+        let is_animated = decoder_with_image_info.basic_info().animation.is_some();
+
+        if !decoder_with_image_info.has_more_frames() {
+            return (
+                is_animated,
+                decoder_with_image_info.scanned_frames().to_vec(),
+            );
+        }
+
+        loop {
+            let mut decoder_with_frame_info = advance_process!(decoder_with_image_info);
+            decoder_with_image_info = advance_skip!(decoder_with_frame_info);
+            if !decoder_with_image_info.has_more_frames() {
+                break;
             }
         }
 
-        let data =
-            std::fs::read("resources/test/conformance_test_images/animation_icos4d_5.jxl").unwrap();
+        (
+            is_animated,
+            decoder_with_image_info.scanned_frames().to_vec(),
+        )
+    }
+
+    fn assert_start_new_frame_matches_sequential(data: &[u8], expect_bare_codestream: bool) {
+        use crate::api::{JxlDataFormat, JxlPixelFormat};
+        use crate::image::{Image, Rect};
 
         // 1. Scan frame info to get seek offsets.
-        let mut scanner = FrameInfoDecoder::new();
-        assert!(scanner.feed(&data).unwrap());
-        assert!(scanner.frame_count() > 1, "need multiple frames");
+        let (_is_animated, scanned_frames) = scan_frames_with_decoder(data, usize::MAX);
+        assert!(scanned_frames.len() > 1, "need multiple frames");
 
         // Compare against second visible frame from regular sequential decode.
-        let target = &scanner.frames()[1];
+        let target = &scanned_frames[1];
         let seek_offset = target.decode_start_file_offset;
         let remaining = target.remaining_in_box;
         let target_visible_index = target.index;
 
         // Number of visible frames before the seek start.
-        let visible_before_seek = scanner
-            .frames()
+        let visible_before_seek = scanned_frames
             .iter()
             .filter(|f| f.file_offset < seek_offset)
             .count();
         assert!(target_visible_index >= visible_before_seek);
         let relative_target_index = target_visible_index - visible_before_seek;
 
-        // For bare codestream, remaining_in_box should be u64::MAX.
-        assert_eq!(remaining, u64::MAX);
+        if expect_bare_codestream {
+            assert_eq!(remaining, u64::MAX);
+        } else {
+            assert_ne!(remaining, u64::MAX);
+        }
 
         // 2. Decode all frames sequentially and keep the reference frame.
-        let (_n, sequential_frames) = decode(&data, usize::MAX, false, false, None).unwrap();
+        let (_n, sequential_frames) = decode(data, usize::MAX, false, false, None).unwrap();
         let expected = &sequential_frames[target_visible_index];
 
         // 3. Create decoder and parse image info.
         let options = JxlDecoderOptions::default();
         let decoder = JxlDecoder::<states::Initialized>::new(options);
-        let mut input = data.as_slice();
+        let mut input = data;
 
         let ProcessingResult::Complete {
             result: mut decoder,
@@ -1827,59 +1754,75 @@ pub(crate) mod tests {
         };
 
         // 5. Compare seek-decoded frame against sequential decode reference.
-        assert_eq!(expected.len(), 1 + num_ec);
-        assert_images_close(&expected[0], &color_buffer);
-        for (i, ec) in ec_buffers.iter().enumerate() {
-            assert_images_close(&expected[i + 1], ec);
-        }
+        let mut seek_decoded = Vec::with_capacity(1 + num_ec);
+        seek_decoded.push(color_buffer);
+        seek_decoded.extend(ec_buffers);
+        compare_frames(
+            Path::new("start_new_frame_seek"),
+            target_visible_index,
+            expected,
+            &seek_decoded,
+        )
+        .unwrap();
+    }
+
+    /// Test that `start_new_frame()` + scanner seek info decodes the same
+    /// frame as regular sequential decode for bare codestream input.
+    #[test]
+    fn test_start_new_frame_bare_codestream() {
+        let data =
+            std::fs::read("resources/test/conformance_test_images/animation_icos4d_5.jxl").unwrap();
+        assert_start_new_frame_matches_sequential(&data, true);
+    }
+
+    /// Test that `start_new_frame()` + scanner seek info also works for boxed input.
+    #[test]
+    fn test_start_new_frame_boxed_codestream() {
+        let codestream =
+            std::fs::read("resources/test/conformance_test_images/animation_icos4d_5.jxl").unwrap();
+        let entries = vec![(0u64, 100u64, 1u64), (500, 100, 1), (600, 100, 1)];
+        let container = wrap_with_frame_index(&codestream, 1, 1000, &entries);
+        assert_start_new_frame_matches_sequential(&container, false);
     }
 
     #[test]
     fn test_scan_still_image() {
         let data = std::fs::read("resources/test/green_queen_vardct_e3.jxl").unwrap();
-        let mut scanner = FrameInfoDecoder::new();
-        let done = scanner.feed(&data).unwrap();
+        let (is_animated, frames) = scan_frames_with_decoder(&data, usize::MAX);
 
-        assert!(done);
-        assert!(!scanner.is_animated());
-        assert_eq!(scanner.frame_count(), 1);
-        assert!(scanner.frames()[0].is_last);
-        assert!(scanner.frames()[0].is_keyframe);
-        assert_eq!(scanner.total_duration_ms(), 0.0);
+        assert!(!is_animated);
+        assert_eq!(frames.len(), 1);
+        assert!(frames[0].is_last);
+        assert!(frames[0].is_keyframe);
+        let total_duration_ms: f64 = frames.iter().map(|f| f.duration_ms).sum();
+        assert_eq!(total_duration_ms, 0.0);
     }
 
     #[test]
     fn test_scan_bare_animation() {
         let data =
             std::fs::read("resources/test/conformance_test_images/animation_icos4d_5.jxl").unwrap();
-        let mut scanner = FrameInfoDecoder::new();
-        let done = scanner.feed(&data).unwrap();
+        let (is_animated, frames) = scan_frames_with_decoder(&data, usize::MAX);
 
-        assert!(done);
-        assert!(scanner.is_animated());
-        assert!(scanner.frame_count() > 1, "expected multiple frames");
+        assert!(is_animated);
+        assert!(frames.len() > 1, "expected multiple frames");
 
-        for (i, frame) in scanner.frames().iter().enumerate() {
+        for (i, frame) in frames.iter().enumerate() {
             assert_eq!(frame.index, i);
         }
 
-        assert!(scanner.frames().last().unwrap().is_last);
+        assert!(frames.last().unwrap().is_last);
 
-        assert!(scanner.frames()[0].is_keyframe);
-        assert_eq!(
-            scanner.frames()[0].decode_start_file_offset,
-            scanner.frames()[0].file_offset
-        );
+        assert!(frames[0].is_keyframe);
+        assert_eq!(frames[0].decode_start_file_offset, frames[0].file_offset);
     }
 
     #[test]
     fn test_scan_animation_offsets_increase() {
         let data =
             std::fs::read("resources/test/conformance_test_images/animation_icos4d_5.jxl").unwrap();
-        let mut scanner = FrameInfoDecoder::new();
-        scanner.feed(&data).unwrap();
+        let (_is_animated, frames) = scan_frames_with_decoder(&data, usize::MAX);
 
-        let frames = scanner.frames();
         for i in 1..frames.len() {
             assert!(
                 frames[i].file_offset > frames[i - 1].file_offset,
@@ -1897,31 +1840,19 @@ pub(crate) mod tests {
         let data =
             std::fs::read("resources/test/conformance_test_images/animation_icos4d_5.jxl").unwrap();
 
-        let mut scanner = FrameInfoDecoder::new();
-
-        let chunk_size = 128;
-        let mut done = false;
-        for chunk in data.chunks(chunk_size) {
-            done = scanner.feed(chunk).unwrap();
-            if done {
-                break;
-            }
-        }
-
-        assert!(done);
-        assert!(scanner.is_animated());
-        assert!(scanner.frame_count() > 1);
-        assert!(scanner.frames().last().unwrap().is_last);
+        let (is_animated, frames) = scan_frames_with_decoder(&data, 128);
+        assert!(is_animated);
+        assert!(frames.len() > 1);
+        assert!(frames.last().unwrap().is_last);
     }
 
     #[test]
     fn test_scan_keyframe_detection_still() {
         let data = std::fs::read("resources/test/green_queen_vardct_e3.jxl").unwrap();
-        let mut scanner = FrameInfoDecoder::new();
-        scanner.feed(&data).unwrap();
+        let (_is_animated, frames) = scan_frames_with_decoder(&data, usize::MAX);
 
-        assert_eq!(scanner.frame_count(), 1);
-        let f = &scanner.frames()[0];
+        assert_eq!(frames.len(), 1);
+        let f = &frames[0];
         assert!(f.is_keyframe);
         assert_eq!(f.decode_start_file_offset, f.file_offset);
     }
@@ -1931,10 +1862,9 @@ pub(crate) mod tests {
         let data =
             std::fs::read("resources/test/conformance_test_images/animation_icos4d_5.jxl").unwrap();
 
-        let mut scanner = FrameInfoDecoder::new();
-        scanner.feed(&data).unwrap();
+        let (_is_animated, frames) = scan_frames_with_decoder(&data, usize::MAX);
 
-        for frame in scanner.frames() {
+        for frame in &frames {
             assert!(
                 frame.decode_start_file_offset <= frame.file_offset,
                 "frame {}: decode_start_file_offset {} > file_offset {}",
@@ -1959,11 +1889,10 @@ pub(crate) mod tests {
             return;
         }
         let data = data.unwrap();
-        let mut scanner = FrameInfoDecoder::new();
-        let done = scanner.feed(&data).unwrap();
+        let (is_animated, frames) = scan_frames_with_decoder(&data, usize::MAX);
 
-        assert!(done);
-        assert!(scanner.frame_count() >= 1);
+        assert!(!is_animated);
+        assert!(frames.len() <= 1);
     }
 
     #[test]
@@ -1973,10 +1902,9 @@ pub(crate) mod tests {
             return;
         }
         let data = data.unwrap();
-        let mut scanner = FrameInfoDecoder::new();
-        scanner.feed(&data).unwrap();
+        let (_is_animated, frames) = scan_frames_with_decoder(&data, usize::MAX);
 
-        assert!(scanner.frame_count() >= 1);
+        assert!(!frames.is_empty());
     }
 
     /// Regression test for Chromium ClusterFuzz issue 474401148.
