@@ -41,6 +41,7 @@ impl SectionState {
 }
 
 impl CodestreamParser {
+    #[inline(never)]
     pub(super) fn process_sections(
         &mut self,
         decode_options: &JxlDecoderOptions,

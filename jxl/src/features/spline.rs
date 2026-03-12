@@ -521,7 +521,7 @@ impl Dct32 {
     }
 }
 
-#[inline(always)]
+#[inline]
 fn draw_segment_inner<D: SimdDescriptor>(
     d: D,
     row: &mut [&mut [f32]],

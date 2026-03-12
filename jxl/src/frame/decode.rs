@@ -50,6 +50,7 @@ use crate::render::RenderPipelineInOutStage;
 use crate::render::stages::Upsample8x;
 use crate::render::{Channels, ChannelsMut};
 
+#[inline(never)]
 fn upsample_lf_group(
     group: usize,
     pixels: &mut [Image<f32>; 3],
@@ -547,6 +548,7 @@ impl Frame {
         Ok(())
     }
 
+    #[inline(never)]
     pub fn render_noise_for_group(
         &mut self,
         group: usize,

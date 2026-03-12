@@ -12,7 +12,7 @@ use crate::{
         IMAGE_OFFSET, IMAGE_PADDING, ModularChannel, Tree,
         decode::{
             common::make_pixel,
-            specialized_trees::{TreeSpecialCase, specialize_tree},
+            specialized_trees::{NoTree, TreeSpecialCase, specialize_tree},
         },
         predict::{PredictionData, WeightedPredictorState},
         tree::{NUM_NONREF_PROPERTIES, PROPERTIES_PER_PREVCHAN, predict},
@@ -161,6 +161,37 @@ fn decode_modular_channel_impl<D: ModularChannelDecoder>(
     Ok(())
 }
 
+/// Dedicated decoder for the NoTree case. Since NoTree doesn't use any prediction
+/// (no top/toptop rows, no weighted predictor, no properties), we can use a simple
+/// loop that just reads entropy-coded values directly, avoiding the generic
+/// `decode_modular_channel_impl` with all its border/prediction scaffolding.
+#[inline(never)]
+fn decode_modular_channel_notree(
+    buffers: &mut [&mut ModularChannel],
+    chan: usize,
+    mut decoder: NoTree,
+    reader: &mut SymbolReader,
+    br: &mut BitReader,
+    histograms: &Histograms,
+) -> Result<()> {
+    let size = buffers[chan].data.size();
+    for y in 0..size.1 {
+        let row = &mut buffers[chan].data.row_mut(y + IMAGE_OFFSET.1)
+            [IMAGE_OFFSET.0..IMAGE_OFFSET.0 + size.0];
+        for x in 0..size.0 {
+            row[x] = decoder.decode_one(
+                PredictionData::default(),
+                (x, y),
+                size.0,
+                reader,
+                br,
+                histograms,
+            );
+        }
+    }
+    Ok(())
+}
+
 #[allow(clippy::too_many_arguments)]
 #[instrument(level = "debug", skip(buffers, reader, tree))]
 pub(super) fn decode_modular_channel(
@@ -190,7 +221,7 @@ pub(super) fn decode_modular_channel(
     let special_tree = specialize_tree(tree, chan, stream_id, size.0, header)?;
     match special_tree {
         TreeSpecialCase::NoTree(t) => {
-            decode_modular_channel_impl(buffers, chan, t, reader, br, &tree.histograms)
+            decode_modular_channel_notree(buffers, chan, t, reader, br, &tree.histograms)
         }
         TreeSpecialCase::NoWp(t) => {
             decode_modular_channel_impl(buffers, chan, t, reader, br, &tree.histograms)

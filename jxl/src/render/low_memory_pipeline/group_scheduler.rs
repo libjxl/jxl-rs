@@ -116,6 +116,7 @@ impl LowMemoryRenderPipeline {
         self.scratch_channel_buffers[channel * 3 + kind].push(image)
     }
 
+    #[inline(never)]
     pub(super) fn render_with_new_group(
         &mut self,
         g: usize,

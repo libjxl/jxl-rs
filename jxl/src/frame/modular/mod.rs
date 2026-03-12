@@ -371,6 +371,81 @@ pub struct FullModularImage {
     pipeline_used_channels: Vec<bool>,
 }
 
+/// Compute the mapping from (channel, group) pairs to bitstream sections.
+#[inline(never)]
+fn compute_section_buffer_indices(
+    frame_header: &FrameHeader,
+    buffer_info: &[ModularBufferInfo],
+) -> Vec<Vec<usize>> {
+    let mut section_buffer_indices: Vec<Vec<usize>> = vec![];
+
+    let mut sorted_buffers: Vec<_> = buffer_info
+        .iter()
+        .enumerate()
+        .filter_map(|(i, b)| {
+            if b.coded_channel_id >= 0 {
+                Some((b.coded_channel_id, i))
+            } else {
+                None
+            }
+        })
+        .collect();
+
+    sorted_buffers.sort_by_key(|x| x.0);
+
+    section_buffer_indices.push(
+        sorted_buffers
+            .iter()
+            .take_while(|x| {
+                buffer_info[x.1]
+                    .info
+                    .is_meta_or_small(frame_header.group_dim())
+            })
+            .map(|x| x.1)
+            .collect(),
+    );
+
+    section_buffer_indices.push(
+        sorted_buffers
+            .iter()
+            .skip_while(|x| {
+                buffer_info[x.1]
+                    .info
+                    .is_meta_or_small(frame_header.group_dim())
+            })
+            .filter(|x| buffer_info[x.1].info.is_shift_in_range(3, usize::MAX))
+            .map(|x| x.1)
+            .collect(),
+    );
+
+    for pass in 0..frame_header.passes.num_passes as usize {
+        let (min_shift, max_shift) = frame_header.passes.downsampling_bracket(pass);
+        section_buffer_indices.push(
+            sorted_buffers
+                .iter()
+                .skip_while(|x| {
+                    buffer_info[x.1]
+                        .info
+                        .is_meta_or_small(frame_header.group_dim())
+                })
+                .filter(|x| {
+                    buffer_info[x.1]
+                        .info
+                        .is_shift_in_range(min_shift, max_shift)
+                })
+                .map(|x| x.1)
+                .collect(),
+        );
+    }
+
+    // Ensure that the channel list in each group is sorted by actual channel ID.
+    for list in section_buffer_indices.iter_mut() {
+        list.sort_by_key(|x| buffer_info[*x].coded_channel_id);
+    }
+
+    section_buffer_indices
+}
+
 impl FullModularImage {
     pub fn can_do_partial_render(&self) -> bool {
         self.can_do_partial_render
@@ -386,6 +461,7 @@ impl FullModularImage {
         self.pipeline_used_channels = used.to_vec();
     }
 
+    #[inline(never)]
     #[instrument(level = "debug", skip_all)]
     pub fn read(
         frame_header: &FrameHeader,
@@ -466,73 +542,8 @@ impl FullModularImage {
         let (mut buffer_info, transform_steps) =
             transforms::apply::meta_apply_transforms(&channels, &header)?;
 
-        // Assign each (channel, group) pair present in the bitstream to the section in which it
-        // will be decoded.
-        let mut section_buffer_indices: Vec<Vec<usize>> = vec![];
-
-        let mut sorted_buffers: Vec<_> = buffer_info
-            .iter()
-            .enumerate()
-            .filter_map(|(i, b)| {
-                if b.coded_channel_id >= 0 {
-                    Some((b.coded_channel_id, i))
-                } else {
-                    None
-                }
-            })
-            .collect();
-
-        sorted_buffers.sort_by_key(|x| x.0);
-
-        section_buffer_indices.push(
-            sorted_buffers
-                .iter()
-                .take_while(|x| {
-                    buffer_info[x.1]
-                        .info
-                        .is_meta_or_small(frame_header.group_dim())
-                })
-                .map(|x| x.1)
-                .collect(),
-        );
-
-        section_buffer_indices.push(
-            sorted_buffers
-                .iter()
-                .skip_while(|x| {
-                    buffer_info[x.1]
-                        .info
-                        .is_meta_or_small(frame_header.group_dim())
-                })
-                .filter(|x| buffer_info[x.1].info.is_shift_in_range(3, usize::MAX))
-                .map(|x| x.1)
-                .collect(),
-        );
-
-        for pass in 0..frame_header.passes.num_passes as usize {
-            let (min_shift, max_shift) = frame_header.passes.downsampling_bracket(pass);
-            section_buffer_indices.push(
-                sorted_buffers
-                    .iter()
-                    .skip_while(|x| {
-                        buffer_info[x.1]
-                            .info
-                            .is_meta_or_small(frame_header.group_dim())
-                    })
-                    .filter(|x| {
-                        buffer_info[x.1]
-                            .info
-                            .is_shift_in_range(min_shift, max_shift)
-                    })
-                    .map(|x| x.1)
-                    .collect(),
-            );
-        }
-
-        // Ensure that the channel list in each group is sorted by actual channel ID.
-        for list in section_buffer_indices.iter_mut() {
-            list.sort_by_key(|x| buffer_info[*x].coded_channel_id);
-        }
+        let section_buffer_indices =
+            compute_section_buffer_indices(frame_header, &buffer_info);
 
         trace!(?section_buffer_indices);
         #[cfg(feature = "tracing")]

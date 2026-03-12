@@ -340,6 +340,7 @@ impl CodestreamParser {
         self.header_needed_bytes = None;
     }
 
+    #[inline(never)]
     pub(super) fn process(
         &mut self,
         box_parser: &mut BoxParser,
