@@ -58,19 +58,48 @@ impl<'a> JxlOutputBuffer<'a> {
         num_rows: usize,
         bytes_per_row: usize,
     ) -> Self {
-        assert!(buf.len() >= bytes_per_row * num_rows);
-        // SAFETY: The assert above guarantees that `buf` has enough space to satisfy the first
-        // safety requirement, and the rest follow from borrowing from a &mut [].
-        unsafe { Self::new_from_ptr(buf.as_mut_ptr(), num_rows, bytes_per_row, bytes_per_row) }
+        Self::new_uninit_with_stride(buf, num_rows, bytes_per_row, bytes_per_row)
     }
 
     pub fn new(buf: &'a mut [u8], num_rows: usize, bytes_per_row: usize) -> Self {
-        Self::new_uninit(
+        Self::new_with_stride(buf, num_rows, bytes_per_row, bytes_per_row)
+    }
+
+    /// Creates a new JxlOutputBuffer from a slice of uninit data.
+    /// It is guaranteed that `buf` will never be used to write uninitalized data.
+    pub fn new_uninit_with_stride(
+        buf: &'a mut [MaybeUninit<u8>],
+        num_rows: usize,
+        bytes_per_row: usize,
+        byte_stride: usize,
+    ) -> Self {
+        assert_ne!(num_rows, 0);
+        assert!(
+            buf.len()
+                >= byte_stride
+                    .checked_mul(num_rows - 1)
+                    .unwrap()
+                    .checked_add(bytes_per_row)
+                    .unwrap()
+        );
+        // SAFETY: The assert above guarantees that `buf` has enough space to satisfy the first
+        // safety requirement, and the rest follow from borrowing from a &mut [].
+        unsafe { Self::new_from_ptr(buf.as_mut_ptr(), num_rows, bytes_per_row, byte_stride) }
+    }
+
+    pub fn new_with_stride(
+        buf: &'a mut [u8],
+        num_rows: usize,
+        bytes_per_row: usize,
+        byte_stride: usize,
+    ) -> Self {
+        Self::new_uninit_with_stride(
             // SAFETY: `new_uninit` guarantees that no uninit data is ever written to the passed-in
             // slice. Moreover, `T` and `MaybeUninit<T>` have the same memory layout.
             unsafe { std::slice::from_raw_parts_mut(buf.as_mut_ptr().cast(), buf.len()) },
             num_rows,
             bytes_per_row,
+            byte_stride,
         )
     }
 
