@@ -6,7 +6,7 @@
 #[cfg(test)]
 use crate::api::FrameCallback;
 use crate::{
-    api::{JxlFrameHeader, VisibleFrameInfo},
+    api::{JxlFrameHeader, VisibleFrameInfo, VisibleFrameSeekTarget},
     error::{Error, Result},
 };
 
@@ -24,6 +24,12 @@ pub struct JxlDecoderInner {
     options: JxlDecoderOptions,
     box_parser: BoxParser,
     codestream_parser: CodestreamParser,
+    /// Number of visible frames still to skip before returning to the caller.
+    /// Set by `start_new_frame` when seeking to a non-keyframe.
+    visible_frames_to_skip: usize,
+    /// True when we've parsed a frame header during skipping and are now
+    /// waiting for the frame data to be consumed.
+    skip_awaiting_frame_data: bool,
 }
 
 impl JxlDecoderInner {
@@ -33,6 +39,8 @@ impl JxlDecoderInner {
             options,
             box_parser: BoxParser::new(),
             codestream_parser: CodestreamParser::new(),
+            visible_frames_to_skip: 0,
+            skip_awaiting_frame_data: false,
         }
     }
 
@@ -153,16 +161,16 @@ impl JxlDecoderInner {
     /// TOC, section buffers, and restores the box parser to the correct
     /// state so the next `process()` call parses a new frame header.
     ///
-    /// `remaining_in_box` comes from
-    /// `VisibleFrameInfo::seek_target.remaining_in_box` and tells the box
-    /// parser how many codestream bytes remain in the current container box at
-    /// the target position. For bare-codestream files this is `u64::MAX`.
-    ///
-    /// The caller must provide raw file input starting from the target
-    /// frame's `seek_target.decode_start_file_offset`.
-    pub fn start_new_frame(&mut self, remaining_in_box: u64) {
-        self.box_parser.reset_for_codestream_seek(remaining_in_box);
+    /// The `seek_target` comes from `VisibleFrameInfo::seek_target`. It tells
+    /// the decoder which container box position to seek to and how many visible
+    /// frames to skip before the target frame. The caller must provide raw file
+    /// input starting from `seek_target.decode_start_file_offset`.
+    pub fn start_new_frame(&mut self, seek_target: VisibleFrameSeekTarget) {
+        self.box_parser
+            .reset_for_codestream_seek(seek_target.remaining_in_box);
         self.codestream_parser.start_new_frame();
+        self.visible_frames_to_skip = seek_target.visible_frames_to_skip;
+        self.skip_awaiting_frame_data = false;
     }
 
     #[cfg(test)]

@@ -122,6 +122,36 @@ impl JxlDecoderInner {
         input: &mut dyn JxlBitstreamInput,
         buffers: Option<&mut [JxlOutputBuffer]>,
     ) -> Result<ProcessingResult<(), ()>> {
+        // If we need to skip visible frames (after a seek to a non-keyframe),
+        // process frames without pixel output until the counter reaches zero.
+        // Each visible frame requires two process() steps: parsing the frame
+        // header, then skipping the frame data. OutOfBounds (NeedsMoreInput)
+        // propagates to the caller; on retry the skip state is preserved.
+        while self.visible_frames_to_skip > 0 {
+            if self.skip_awaiting_frame_data {
+                // Phase 2: skip the frame data.
+                self.codestream_parser.process(
+                    &mut self.box_parser,
+                    input,
+                    &self.options,
+                    None,
+                    false,
+                )?;
+                self.skip_awaiting_frame_data = false;
+                self.visible_frames_to_skip -= 1;
+            } else {
+                // Phase 1: parse the frame header.
+                self.codestream_parser.process(
+                    &mut self.box_parser,
+                    input,
+                    &self.options,
+                    None,
+                    false,
+                )?;
+                self.skip_awaiting_frame_data = true;
+            }
+        }
+
         ProcessingResult::new(self.codestream_parser.process(
             &mut self.box_parser,
             input,
