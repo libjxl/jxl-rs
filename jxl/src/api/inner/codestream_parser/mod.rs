@@ -72,6 +72,9 @@ pub(super) struct CodestreamParser {
     process_without_output: bool,
     // True once the preview frame has been processed (if there is one)
     preview_done: bool,
+    /// Number of visible frames still to skip before returning to the caller.
+    /// Set via `start_new_frame` when seeking to a non-keyframe.
+    visible_frames_to_skip: usize,
     // Saved file header for recreating decoder state after preview frame
     saved_file_header: Option<crate::headers::FileHeader>,
 
@@ -141,6 +144,7 @@ impl CodestreamParser {
             skip_sections: false,
             process_without_output: false,
             preview_done: false,
+            visible_frames_to_skip: 0,
             saved_file_header: None,
             section_state: SectionState::new(0, 0),
             lf_global_section: None,
@@ -320,7 +324,7 @@ impl CodestreamParser {
     ///
     /// Clears: frame_header, toc_parser, frame, all section buffers,
     /// non_section_buf, and processing flags.
-    pub(super) fn start_new_frame(&mut self) {
+    pub(super) fn start_new_frame(&mut self, visible_frames_to_skip: usize) {
         self.frame_header = None;
         self.toc_parser = None;
         self.frame = None;
@@ -330,6 +334,7 @@ impl CodestreamParser {
         self.ready_section_data = 0;
         self.skip_sections = false;
         self.process_without_output = false;
+        self.visible_frames_to_skip = visible_frames_to_skip;
         self.section_state = SectionState::new(0, 0);
         self.lf_global_section = None;
         self.lf_sections.clear();
@@ -617,6 +622,14 @@ impl CodestreamParser {
                     }
 
                     if self.has_visible_frame() {
+                        if self.visible_frames_to_skip > 0 {
+                            // Skip this visible frame without returning to the
+                            // caller; decrement the counter and continue
+                            // processing internally.
+                            self.visible_frames_to_skip -= 1;
+                            self.process_without_output = true;
+                            continue;
+                        }
                         // Return to caller if we found visible frame info.
                         return Ok(());
                     } else {

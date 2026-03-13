@@ -6,7 +6,7 @@
 #[cfg(test)]
 use crate::api::FrameCallback;
 use crate::{
-    api::{JxlFrameHeader, VisibleFrameInfo},
+    api::{JxlFrameHeader, VisibleFrameInfo, VisibleFrameSeekTarget},
     error::{Error, Result},
 };
 
@@ -153,16 +153,15 @@ impl JxlDecoderInner {
     /// TOC, section buffers, and restores the box parser to the correct
     /// state so the next `process()` call parses a new frame header.
     ///
-    /// `remaining_in_box` comes from
-    /// `VisibleFrameInfo::seek_target.remaining_in_box` and tells the box
-    /// parser how many codestream bytes remain in the current container box at
-    /// the target position. For bare-codestream files this is `u64::MAX`.
-    ///
-    /// The caller must provide raw file input starting from the target
-    /// frame's `seek_target.decode_start_file_offset`.
-    pub fn start_new_frame(&mut self, remaining_in_box: u64) {
-        self.box_parser.reset_for_codestream_seek(remaining_in_box);
-        self.codestream_parser.start_new_frame();
+    /// The `seek_target` comes from `VisibleFrameInfo::seek_target`. It tells
+    /// the decoder which container box position to seek to and how many visible
+    /// frames to skip before the target frame. The caller must provide raw file
+    /// input starting from `seek_target.decode_start_file_offset`.
+    pub fn start_new_frame(&mut self, seek_target: VisibleFrameSeekTarget) {
+        self.box_parser
+            .reset_for_codestream_seek(seek_target.remaining_in_box);
+        self.codestream_parser
+            .start_new_frame(seek_target.visible_frames_to_skip);
     }
 
     #[cfg(test)]
