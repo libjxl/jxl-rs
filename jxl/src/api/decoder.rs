@@ -236,7 +236,7 @@ impl JxlDecoder<WithImageInfo> {
     /// // 3. Provide input from target.seek_target.decode_start_file_offset and process().
     /// ```
     pub fn start_new_frame(&mut self, seek_target: VisibleFrameSeekTarget) {
-        self.inner.start_new_frame(seek_target.remaining_in_box);
+        self.inner.start_new_frame(seek_target);
     }
 
     #[cfg(test)]
