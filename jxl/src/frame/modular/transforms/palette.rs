@@ -24,6 +24,7 @@ const SMALL_CUBE_BITS: usize = 2;
 // SMALL_CUBE ** 3
 const LARGE_CUBE_OFFSET: usize = SMALL_CUBE * SMALL_CUBE * SMALL_CUBE;
 
+#[inline(always)]
 fn scale<const DENOM: usize>(value: usize, bit_depth: usize) -> i32 {
     // return (value * ((1 << bit_depth) - 1)) / DENOM;
     // We only call this function with SMALL_CUBE or LARGE_CUBE - 1 as DENOM,
