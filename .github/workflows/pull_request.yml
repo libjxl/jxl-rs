@@ -100,6 +100,9 @@ jobs:
             simd: avx512
           - os: ubuntu-24.04-arm
             simd: neon
+          - os: ubuntu-latest
+            simd: simd128
+            target: wasm32-wasip1
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -108,16 +111,25 @@ jobs:
 
       - name: Install latest rust toolchain
         uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Install wasmtime
+        if: ${{ matrix.target == 'wasm32-wasip1' }}
+        uses: bytecodealliance/actions/wasmtime/setup@v1
 
       - name: Rust cache
         uses: Swatinem/rust-cache@v2.8.0
         with:
           prefix-key: ${{ matrix.os }}-test-${{ matrix.simd }}
 
-
       - name: Tests with SIMD feature ${{ matrix.simd }}
-        if: ${{ matrix.simd != 'none' }}
+        if: ${{ matrix.simd != 'none' && !matrix.target }}
         run: cargo test --release --all --no-fail-fast --no-default-features --features ${{ matrix.simd }}
+
+      - name: Tests with SIMD feature ${{ matrix.simd }} (wasm)
+        if: ${{ matrix.target == 'wasm32-wasip1' }}
+        run: cargo test --release -p jxl_simd --no-fail-fast --no-default-features --features ${{ matrix.simd }} --target ${{ matrix.target }}
 
       - name: Tests with no features
         if: ${{ matrix.simd == 'none' }}
