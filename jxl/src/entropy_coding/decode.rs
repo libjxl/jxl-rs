@@ -120,10 +120,12 @@ impl Lz77State {
     }
 
     #[inline(always)]
+    #[allow(unsafe_code)]
     fn push_decoded_symbol(&mut self, token: u32) {
         let offset = (self.num_decoded & Self::WINDOW_MASK) as usize;
-        if let Some(slot) = self.window.get_mut(offset) {
-            *slot = token;
+        if offset < self.window.len() {
+            // SAFETY: offset < self.window.len() checked above
+            unsafe { *self.window.get_unchecked_mut(offset) = token };
         } else {
             debug_assert_eq!(self.window.len(), offset);
             self.window.push(token);
@@ -132,9 +134,14 @@ impl Lz77State {
     }
 
     #[inline(always)]
+    #[allow(unsafe_code)]
     fn pull_symbol(&mut self) -> Option<u32> {
         if let Some(next_num_to_copy) = self.num_to_copy.checked_sub(1) {
-            let sym = self.window[(self.copy_pos & Self::WINDOW_MASK) as usize];
+            // SAFETY: copy_pos & WINDOW_MASK is always < 1 << LOG_WINDOW_SIZE,
+            // and the window has capacity 1 << LOG_WINDOW_SIZE. As long as num_decoded > 0
+            // (checked by apply_copy), the window has enough entries.
+            let idx = (self.copy_pos & Self::WINDOW_MASK) as usize;
+            let sym = unsafe { *self.window.get_unchecked(idx) };
             self.copy_pos += 1;
             self.num_to_copy = next_num_to_copy;
             Some(sym)
