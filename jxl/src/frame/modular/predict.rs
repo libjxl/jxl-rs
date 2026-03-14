@@ -120,6 +120,7 @@ impl PredictionData {
         }
     }
 
+    #[inline(always)]
     pub fn get_rows(row: &[i32], row_top: &[i32], row_toptop: &[i32], x: usize, y: usize) -> Self {
         let left = if x > 0 {
             row[x - 1]
@@ -153,6 +154,7 @@ impl PredictionData {
         }
     }
 
+    #[inline(always)]
     pub fn get(rect: &Image<i32>, x: usize, y: usize) -> Self {
         Self::get_rows(
             rect.row(y),
@@ -163,6 +165,7 @@ impl PredictionData {
         )
     }
 
+    #[inline(always)]
     #[allow(clippy::too_many_arguments)]
     pub fn get_with_neighbors(
         rect: &Image<i32>,

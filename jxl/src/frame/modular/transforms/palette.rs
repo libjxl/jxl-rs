@@ -38,6 +38,7 @@ fn scale<const DENOM: usize>(value: usize, bit_depth: usize) -> i32 {
 // palette indices to implicit values. If index < nb_deltas, indicating that the
 // result is a delta palette entry, it is the responsibility of the caller to
 // treat it as such.
+#[inline(always)]
 fn get_palette_value(
     palette: &Image<i32>,
     index: isize,
@@ -166,6 +167,7 @@ fn get_palette_value(
     }
 }
 
+#[inline(always)]
 pub fn do_palette_step_general(
     buf_in: &ModularChannel,
     buf_pal: &ModularChannel,
@@ -254,6 +256,7 @@ pub fn do_palette_step_general(
     }
 }
 
+#[inline(always)]
 #[allow(clippy::too_many_arguments)]
 fn get_prediction_data(
     buf: &mut [&mut ModularChannel],
@@ -300,6 +303,7 @@ fn get_prediction_data(
     )
 }
 
+#[inline(always)]
 #[allow(clippy::too_many_arguments)]
 pub fn do_palette_step_one_group(
     buf_in: &ModularChannel,
@@ -348,6 +352,7 @@ pub fn do_palette_step_one_group(
     }
 }
 
+#[inline(always)]
 #[allow(clippy::too_many_arguments)]
 pub fn do_palette_step_group_row(
     buf_in: &[&ModularChannel],

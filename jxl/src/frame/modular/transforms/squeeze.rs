@@ -453,6 +453,7 @@ simd_function!(
     }
 );
 
+#[inline(always)]
 pub fn do_hsqueeze_step(
     in_avg: &ImageRect<'_, i32>,
     in_res: &ImageRect<'_, i32>,
@@ -648,6 +649,7 @@ simd_function!(
     }
 );
 
+#[inline(always)]
 pub fn do_vsqueeze_step(
     in_avg: &ImageRect<'_, i32>,
     in_res: &ImageRect<'_, i32>,

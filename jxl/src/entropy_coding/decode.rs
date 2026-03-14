@@ -102,7 +102,7 @@ impl Lz77State {
         ( 8, 4), ( 6, 7), (-6, 7), ( 7, 6), (-7, 6), ( 8, 5), ( 7, 7), (-7, 7), ( 8, 6), ( 8, 7),
     ];
 
-    #[inline]
+    #[inline(always)]
     fn apply_copy(&mut self, distance_sym: u32, num_to_copy: u32) {
         let distance_sub_1 = if self.dist_multiplier == 0 {
             distance_sym
@@ -119,7 +119,7 @@ impl Lz77State {
         self.num_to_copy = num_to_copy;
     }
 
-    #[inline]
+    #[inline(always)]
     fn push_decoded_symbol(&mut self, token: u32) {
         let offset = (self.num_decoded & Self::WINDOW_MASK) as usize;
         if let Some(slot) = self.window.get_mut(offset) {
@@ -131,7 +131,7 @@ impl Lz77State {
         self.num_decoded += 1;
     }
 
-    #[inline]
+    #[inline(always)]
     fn pull_symbol(&mut self) -> Option<u32> {
         if let Some(next_num_to_copy) = self.num_to_copy.checked_sub(1) {
             let sym = self.window[(self.copy_pos & Self::WINDOW_MASK) as usize];
@@ -153,7 +153,7 @@ struct RleState {
 }
 
 impl RleState {
-    #[inline]
+    #[inline(always)]
     fn push_token(
         &mut self,
         token: u32,
@@ -174,7 +174,7 @@ impl RleState {
         }
     }
 
-    #[inline]
+    #[inline(always)]
     fn pull_symbol(&mut self) -> Option<u32> {
         if self.repeat_count > 0 {
             self.repeat_count -= 1;
