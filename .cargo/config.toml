@@ -1,2 +1,3 @@
 [target.wasm32-wasip1]
 runner = "wasmtime"
+rustflags = ["-C", "target-feature=+simd128,+relaxed-simd"]
