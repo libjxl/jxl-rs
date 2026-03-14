@@ -28,6 +28,7 @@ pub fn decode_varint16(br: &mut BitReader) -> Result<u16> {
     }
 }
 
+#[inline(always)]
 pub fn unpack_signed(unsigned: u32) -> i32 {
     ((unsigned >> 1) ^ ((!unsigned) & 1).wrapping_sub(1)) as i32
 }
@@ -322,6 +323,7 @@ impl SymbolReader {
     }
 
     #[inline(always)]
+    #[allow(unsafe_code)]
     pub fn read_unsigned_clustered_inline(
         &mut self,
         histograms: &Histograms,
@@ -334,7 +336,10 @@ impl SymbolReader {
                     Codes::Huffman(hc) => hc.read(br, cluster),
                     Codes::Ans(ans) => self.ans_reader.read(ans, br, cluster),
                 };
-                histograms.uint_configs[cluster].read(token, br)
+                // SAFETY: cluster is a validated cluster ID from the context map,
+                // which is checked during Histograms::decode() to be < uint_configs.len().
+                debug_assert!(cluster < histograms.uint_configs.len());
+                unsafe { histograms.uint_configs.get_unchecked(cluster) }.read(token, br)
             }
 
             SymbolReaderState::Lz77(lz77_state) => {
@@ -622,8 +627,14 @@ impl Histograms {
         })
     }
 
+    #[inline(always)]
+    #[allow(unsafe_code)]
     pub fn map_context_to_cluster(&self, context: usize) -> usize {
-        self.context_map[context] as usize
+        // SAFETY: context < context_map.len() is guaranteed by the caller -
+        // contexts are bounded by the number of leaf nodes in the tree
+        // or num_ac_contexts, both validated during decode.
+        debug_assert!(context < self.context_map.len());
+        unsafe { *self.context_map.get_unchecked(context) as usize }
     }
 
     pub fn num_histograms(&self) -> usize {

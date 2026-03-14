@@ -9,11 +9,9 @@ use crate::{
     image::Image,
     util::floor_log2_nonzero,
 };
-use num_derive::FromPrimitive;
-use num_traits::FromPrimitive;
 
 #[repr(u8)]
-#[derive(Debug, FromPrimitive, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Predictor {
     Zero = 0,
     West = 1,
@@ -43,11 +41,29 @@ impl Predictor {
     }
 }
 
+impl Predictor {
+    /// Fast conversion from u32. Since Predictor is #[repr(u8)] with
+    /// contiguous values 0..=13, a bounds check + transmute replaces
+    /// the num_derive FromPrimitive chain (from_u32 -> from_u64 -> from_i64).
+    #[inline(always)]
+    #[allow(unsafe_code)]
+    pub fn from_u32_fast(value: u32) -> Option<Self> {
+        if value <= Predictor::AverageAll as u32 {
+            // SAFETY: Predictor is #[repr(u8)] with contiguous discriminants 0..=13,
+            // and we verified value is in range.
+            Some(unsafe { std::mem::transmute(value as u8) })
+        } else {
+            None
+        }
+    }
+}
+
 impl TryFrom<u32> for Predictor {
     type Error = Error;
 
+    #[inline(always)]
     fn try_from(value: u32) -> Result<Self> {
-        Self::from_u32(value).ok_or(Error::InvalidPredictor(value))
+        Self::from_u32_fast(value).ok_or(Error::InvalidPredictor(value))
     }
 }
 
@@ -63,7 +79,8 @@ pub struct PredictionData {
 }
 
 impl PredictionData {
-    #[inline]
+    #[inline(always)]
+    #[allow(unsafe_code)]
     pub fn update_for_interior_row(
         self,
         row_top: &[i32],
@@ -80,8 +97,18 @@ impl PredictionData {
         let topleft = self.top;
         let topright = self.toprightright;
         let leftleft = self.left;
-        let toptop = if needs_toptop { row_toptop[x] } else { 0 };
-        let toprightright = if needs_top { row_top[x + 2] } else { 0 };
+        // SAFETY: x < row_toptop.len() because x < width and row_toptop has width elements.
+        // x + 2 < row_top.len() asserted above.
+        let toptop = if needs_toptop {
+            unsafe { *row_toptop.get_unchecked(x) }
+        } else {
+            0
+        };
+        let toprightright = if needs_top {
+            unsafe { *row_top.get_unchecked(x + 2) }
+        } else {
+            0
+        };
         Self {
             left,
             top,
@@ -250,6 +277,7 @@ impl PredictionData {
     }
 }
 
+#[inline(always)]
 pub fn clamped_gradient(left: i64, top: i64, topleft: i64) -> i64 {
     // Same code/logic as libjxl.
     let min = left.min(top);
@@ -262,7 +290,7 @@ pub fn clamped_gradient(left: i64, top: i64, topleft: i64) -> i64 {
 impl Predictor {
     pub const NUM_PREDICTORS: u32 = Predictor::AverageAll as u32 + 1;
 
-    #[inline]
+    #[inline(always)]
     pub fn predict_one(
         &self,
         PredictionData {
@@ -302,6 +330,7 @@ impl Predictor {
         }
     }
 
+    #[inline(always)]
     fn select(left: i64, top: i64, topleft: i64) -> i64 {
         let p = left + top - topleft;
         if (p - left).abs() < (p - top).abs() {
@@ -342,6 +371,7 @@ fn error_weight(x: u32, maxweight: u32) -> u32 {
 }
 
 #[inline(always)]
+#[allow(unsafe_code)]
 fn weighted_average(pixels: &[i64; NUM_PREDICTORS], weights: &mut [u32; NUM_PREDICTORS]) -> i64 {
     let log_weight = floor_log2_nonzero(weights.iter().fold(0u64, |sum, el| sum + *el as u64));
     let weight_sum = weights.iter_mut().fold(0, |sum, el| {
@@ -354,7 +384,12 @@ fn weighted_average(pixels: &[i64; NUM_PREDICTORS], weights: &mut [u32; NUM_PRED
         .fold(((weight_sum >> 1) - 1) as i64, |sum, (i, weight)| {
             sum + pixels[i] * *weight as i64
         });
-    (sum * DIVLOOKUP[(weight_sum - 1) as usize] as i64) >> 24
+    // SAFETY: weight_sum <= 64 after the shift-right by (log_weight - 4).
+    // The total of 4 weights, each shifted right by the same amount, sums to at most 64.
+    // weight_sum >= 1 because weights are >= 4 (from error_weight).
+    debug_assert!((weight_sum - 1) < 64, "weight_sum={}", weight_sum);
+    let div = unsafe { *DIVLOOKUP.get_unchecked((weight_sum - 1) as usize) };
+    (sum * div as i64) >> 24
 }
 
 #[derive(Debug)]
@@ -366,11 +401,19 @@ pub struct WeightedPredictorState {
     pred_errors_buffer: Vec<u32>,
     error: Vec<i32>,
     wp_header: WeightedHeader,
+    /// Pre-computed max weights from wp_header, avoids match+unwrap per iteration.
+    maxweights: [u32; NUM_PREDICTORS],
 }
 
 impl WeightedPredictorState {
     pub fn new(wp_header: &WeightedHeader, xsize: usize) -> WeightedPredictorState {
         let num_errors = (xsize + 2) * 2;
+        let maxweights = [
+            wp_header.w(0).unwrap(),
+            wp_header.w(1).unwrap(),
+            wp_header.w(2).unwrap(),
+            wp_header.w(3).unwrap(),
+        ];
         WeightedPredictorState {
             prediction: [0; NUM_PREDICTORS],
             pred: 0,
@@ -380,25 +423,33 @@ impl WeightedPredictorState {
             pred_errors_buffer: vec![0; num_errors * NUM_PREDICTORS],
             error: vec![0; num_errors],
             wp_header: wp_header.clone(),
+            maxweights,
         }
     }
 
     /// Get all predictor errors for a given position (contiguous in memory)
     #[inline(always)]
+    #[allow(unsafe_code)]
     fn get_errors_at_pos(&self, pos: usize) -> &[u32; NUM_PREDICTORS] {
         let start = pos * NUM_PREDICTORS;
-        self.pred_errors_buffer[start..start + NUM_PREDICTORS]
-            .try_into()
-            .unwrap()
+        debug_assert!(start + NUM_PREDICTORS <= self.pred_errors_buffer.len());
+        // SAFETY: start + NUM_PREDICTORS <= buffer.len() because pos < num_errors
+        // (which is (xsize+2)*2), and buffer.len() = num_errors * NUM_PREDICTORS.
+        unsafe {
+            &*(self.pred_errors_buffer.as_ptr().add(start) as *const [u32; NUM_PREDICTORS])
+        }
     }
 
     /// Get mutable reference to all predictor errors for a given position
     #[inline(always)]
+    #[allow(unsafe_code)]
     fn get_errors_at_pos_mut(&mut self, pos: usize) -> &mut [u32; NUM_PREDICTORS] {
         let start = pos * NUM_PREDICTORS;
-        (&mut self.pred_errors_buffer[start..start + NUM_PREDICTORS])
-            .try_into()
-            .unwrap()
+        debug_assert!(start + NUM_PREDICTORS <= self.pred_errors_buffer.len());
+        // SAFETY: same invariant as get_errors_at_pos.
+        unsafe {
+            &mut *(self.pred_errors_buffer.as_mut_ptr().add(start) as *mut [u32; NUM_PREDICTORS])
+        }
     }
 
     pub fn save_state(&self, wp_image: &mut Image<i32>, xsize: usize) {
@@ -412,6 +463,7 @@ impl WeightedPredictorState {
     }
 
     #[inline(always)]
+    #[allow(unsafe_code)]
     pub fn update_errors(&mut self, correct_val: i32, pos: (usize, usize), xsize: usize) {
         let (cur_row, prev_row) = if pos.1 & 1 != 0 {
             (0, xsize + 2)
@@ -419,7 +471,9 @@ impl WeightedPredictorState {
             (xsize + 2, 0)
         };
         let val = add_bits(correct_val);
-        self.error[cur_row + pos.0] = (self.pred - val) as i32;
+        // SAFETY: cur_row + pos.0 < (xsize+2)*2 = error.len() since pos.0 < xsize
+        // and cur_row is either 0 or xsize+2.
+        unsafe { *self.error.get_unchecked_mut(cur_row + pos.0) = (self.pred - val) as i32 };
 
         // Compute errors for all predictors
         let mut errs = [0u32; NUM_PREDICTORS];
@@ -438,11 +492,37 @@ impl WeightedPredictorState {
     }
 
     #[inline(always)]
+    #[allow(unsafe_code)]
     pub fn predict_and_property(
         &mut self,
         pos: (usize, usize),
         xsize: usize,
         data: &PredictionData,
+    ) -> (i64, i32) {
+        self.predict_impl(pos, xsize, data, true)
+    }
+
+    /// Predict without computing the WP property (property 15).
+    /// Use when the tree doesn't split on property 15.
+    #[inline(always)]
+    #[allow(unsafe_code)]
+    pub fn predict_no_property(
+        &mut self,
+        pos: (usize, usize),
+        xsize: usize,
+        data: &PredictionData,
+    ) -> i64 {
+        self.predict_impl(pos, xsize, data, false).0
+    }
+
+    #[inline(always)]
+    #[allow(unsafe_code)]
+    fn predict_impl(
+        &mut self,
+        pos: (usize, usize),
+        xsize: usize,
+        data: &PredictionData,
+        compute_property: bool,
     ) -> (i64, i32) {
         let (cur_row, prev_row) = if pos.1 & 1 != 0 {
             (0, xsize + 2)
@@ -463,7 +543,7 @@ impl WeightedPredictorState {
                 errors_n[i]
                     .wrapping_add(errors_ne[i])
                     .wrapping_add(errors_nw[i]),
-                self.wp_header.w(i).unwrap(),
+                self.maxweights[i],
             );
         }
         let n = add_bits(data.top);
@@ -472,26 +552,34 @@ impl WeightedPredictorState {
         let nw = add_bits(data.topleft);
         let nn = add_bits(data.toptop);
 
+        // SAFETY: all positions are within error.len() = (xsize+2)*2.
+        // cur_row + pos.0 - 1 >= 0 since pos.0 > 0 in the branch that reads it.
+        // pos_n, pos_nw, pos_ne are all in [0, (xsize+2)*2).
         let te_w = if pos.0 == 0 {
             0
         } else {
-            self.error[cur_row + pos.0 - 1] as i64
+            unsafe { *self.error.get_unchecked(cur_row + pos.0 - 1) as i64 }
         };
-        let te_n = self.error[pos_n] as i64;
-        let te_nw = self.error[pos_nw] as i64;
+        let te_n = unsafe { *self.error.get_unchecked(pos_n) as i64 };
+        let te_nw = unsafe { *self.error.get_unchecked(pos_nw) as i64 };
         let sum_wn = te_n + te_w;
-        let te_ne = self.error[pos_ne] as i64;
+        let te_ne = unsafe { *self.error.get_unchecked(pos_ne) as i64 };
 
-        let mut p = te_w;
-        if te_n.abs() > p.abs() {
-            p = te_n;
-        }
-        if te_nw.abs() > p.abs() {
-            p = te_nw;
-        }
-        if te_ne.abs() > p.abs() {
-            p = te_ne;
-        }
+        let p = if compute_property {
+            let mut p = te_w;
+            if te_n.abs() > p.abs() {
+                p = te_n;
+            }
+            if te_nw.abs() > p.abs() {
+                p = te_nw;
+            }
+            if te_ne.abs() > p.abs() {
+                p = te_ne;
+            }
+            p
+        } else {
+            0
+        };
 
         self.prediction[0] = w + ne - n;
         self.prediction[1] = n - (((sum_wn + te_ne) * self.wp_header.p1c as i64) >> 5);

@@ -8,13 +8,12 @@ use std::sync::Arc;
 use crate::{
     error::Result,
     features::{
-        blending::perform_blending,
+        blending::perform_blending_with_tmp,
         patches::{PatchBlendMode, PatchBlending},
     },
     frame::ReferenceFrame,
     headers::{FileHeader, extra_channels::ExtraChannelInfo, frame_header::*},
     render::RenderPipelineInPlaceStage,
-    util::slice,
 };
 
 pub struct BlendingStage {
@@ -25,6 +24,11 @@ pub struct BlendingStage {
     pub extra_channels: Vec<ExtraChannelInfo>,
     pub reference_frames: Arc<[Option<ReferenceFrame>; 4]>,
     pub zeros: Vec<f32>,
+}
+
+/// Per-thread state for BlendingStage: pre-allocated tmp buffer reused across calls.
+struct BlendingState {
+    tmp: Vec<Vec<f32>>,
 }
 
 impl From<&BlendingInfo> for PatchBlending {
@@ -76,12 +80,16 @@ impl RenderPipelineInPlaceStage for BlendingStage {
         c < 3 + self.extra_channels.len()
     }
 
+    fn init_local_state(&self, _thread_index: usize) -> Result<Option<Box<dyn std::any::Any>>> {
+        Ok(Some(Box::new(BlendingState { tmp: Vec::new() })))
+    }
+
     fn process_row_chunk(
         &self,
         position: (usize, usize),
         xsize: usize,
         row: &mut [&mut [f32]],
-        _state: Option<&mut dyn std::any::Any>,
+        state: Option<&mut dyn std::any::Any>,
     ) {
         let num_ec = self.extra_channels.len();
         let fg_y0 = self.frame_origin.1 + position.1 as isize;
@@ -109,47 +117,56 @@ impl RenderPipelineInPlaceStage for BlendingStage {
         let bg_x1: usize = bg_x1 as usize;
         let fg_y0: usize = fg_y0 as usize;
 
-        // TODO(szabadka): Allocate a buffer for this when building the stage instead of when
-        // executing it.
-        let mut out = row
-            .iter_mut()
-            .map(|s| &mut s[..xsize])
-            .collect::<Vec<&mut [f32]>>();
+        // Use stack-allocated arrays to avoid per-row heap allocation.
+        // Max 16 channels (3 color + 13 extra) is well above JPEG XL's practical limit.
+        const MAX_CHANNELS: usize = 16;
+        let total_channels = 3 + num_ec;
+        debug_assert!(total_channels <= MAX_CHANNELS);
 
-        let mut fg = vec![self.zeros.as_slice(); 3 + num_ec];
+        // Build fg references on stack.
+        let zeros_slice: &[f32] = self.zeros.as_slice();
+        let mut fg_buf: [&[f32]; MAX_CHANNELS] = [zeros_slice; MAX_CHANNELS];
 
-        for (c, fg_ptr) in fg.iter_mut().enumerate().take(3) {
-            if self.reference_frames[self.blending_info.source as usize].is_some() {
-                *fg_ptr = &(self.reference_frames[self.blending_info.source as usize]
-                    .as_ref()
-                    .unwrap()
-                    .frame[c]
-                    .row(fg_y0)[fg_x0..fg_x1]);
+        for c in 0..3 {
+            if let Some(ref rf) = self.reference_frames[self.blending_info.source as usize] {
+                fg_buf[c] = &rf.frame[c].row(fg_y0)[fg_x0..fg_x1];
             }
         }
         for i in 0..num_ec {
-            if self.reference_frames[self.ec_blending_info[i].source as usize].is_some() {
-                fg[3 + i] = &(self.reference_frames[self.ec_blending_info[i].source as usize]
-                    .as_ref()
-                    .unwrap()
-                    .frame[3 + i]
-                    .row(fg_y0)[fg_x0..fg_x1]);
+            if let Some(ref rf) = self.reference_frames[self.ec_blending_info[i].source as usize] {
+                fg_buf[3 + i] = &rf.frame[3 + i].row(fg_y0)[fg_x0..fg_x1];
             }
         }
 
         let blending_info = PatchBlending::from(&self.blending_info);
-        let ec_blending_info: Vec<PatchBlending> = self
-            .ec_blending_info
-            .iter()
-            .map(PatchBlending::from)
-            .collect();
+        // ec_blending_info on stack (max 13 extra channels).
+        let mut ec_blend_buf: [PatchBlending; MAX_CHANNELS] = [PatchBlending {
+            mode: PatchBlendMode::None,
+            alpha_channel: 0,
+            clamp: false,
+        }; MAX_CHANNELS];
+        for (i, bi) in self.ec_blending_info.iter().enumerate() {
+            ec_blend_buf[i] = PatchBlending::from(bi);
+        }
 
-        perform_blending(
-            &mut slice!(&mut out, .., bg_x0..bg_x1),
-            &fg,
+        // Use pre-allocated tmp buffer from state to avoid per-call heap allocation.
+        let reusable_tmp = state.and_then(|s| {
+            s.downcast_mut::<BlendingState>().map(|bs| &mut bs.tmp)
+        });
+
+        // Build bg slice references on stack instead of using slice! macro (which allocates a Vec).
+        let mut bg_slices: [&mut [f32]; MAX_CHANNELS] = Default::default();
+        for (i, r) in row[..total_channels].iter_mut().enumerate() {
+            bg_slices[i] = &mut r[bg_x0..bg_x1];
+        }
+
+        perform_blending_with_tmp(
+            &mut bg_slices[..total_channels],
+            &fg_buf[..total_channels],
             &blending_info,
-            &ec_blending_info,
+            &ec_blend_buf[..num_ec],
             &self.extra_channels,
+            reusable_tmp,
         );
     }
 }

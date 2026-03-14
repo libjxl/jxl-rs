@@ -352,7 +352,7 @@ impl AnsHistogram {
 }
 
 impl AnsHistogram {
-    #[inline]
+    #[inline(always)]
     pub fn read(&self, br: &mut BitReader, state: &mut u32) -> u32 {
         let idx = *state & 0xfff;
         let i = (idx >> self.log_bucket_size) as usize;
@@ -433,9 +433,13 @@ impl AnsReader {
         Ok(Self(initial_state))
     }
 
-    #[inline]
+    #[inline(always)]
+    #[allow(unsafe_code)]
     pub fn read(&mut self, codes: &AnsCodes, br: &mut BitReader, ctx: usize) -> u32 {
-        codes.histograms[ctx].read(br, &mut self.0)
+        // SAFETY: ctx is a validated cluster ID from the context map,
+        // checked during Histograms::decode() to be < histograms.len().
+        debug_assert!(ctx < codes.histograms.len());
+        unsafe { codes.histograms.get_unchecked(ctx) }.read(br, &mut self.0)
     }
 
     pub fn check_final_state(self) -> Result<()> {

@@ -45,8 +45,23 @@ impl<'a> BitReader<'a> {
         }
     }
 
+    /// Constructs a BitReader for data with zero-padding appended.
+    /// `data` must contain at least `real_len + 8` bytes, with the last 8 bytes
+    /// being zero padding. `initial_bits` is set to `real_len * 8` for error checking.
+    /// This ensures `refill()` always takes the fast path (no refill_slow calls).
+    pub fn new_padded(data: &[u8], real_len: usize) -> BitReader<'_> {
+        debug_assert!(data.len() >= real_len + 8);
+        BitReader {
+            data,
+            bit_buf: 0,
+            bits_in_buf: 0,
+            total_bits_read: 0,
+            initial_bits: real_len * 8,
+        }
+    }
+
     /// Reads `num` bits from the buffer without consuming them.
-    #[inline]
+    #[inline(always)]
     pub fn peek(&mut self, num: usize) -> u64 {
         debug_assert!(num <= MAX_BITS_PER_CALL);
         if self.bits_in_buf < num {
@@ -66,7 +81,7 @@ impl<'a> BitReader<'a> {
         Ok(())
     }
 
-    #[inline]
+    #[inline(always)]
     pub fn consume_optimistic(&mut self, num: usize) {
         self.bit_buf >>= num;
         self.bits_in_buf = self.bits_in_buf.saturating_sub(num);
@@ -84,7 +99,7 @@ impl<'a> BitReader<'a> {
     /// assert!(br.read(1).is_err());
     /// # Ok::<(), jxl::error::Error>(())
     /// ```
-    #[inline]
+    #[inline(always)]
     pub fn read(&mut self, num: usize) -> Result<u64, Error> {
         let ret = self.peek(num);
         self.consume(num)?;
@@ -97,7 +112,7 @@ impl<'a> BitReader<'a> {
         self.read(num)
     }
 
-    #[inline]
+    #[inline(always)]
     pub fn read_optimistic(&mut self, num: usize) -> u64 {
         let ret = self.peek(num);
         self.consume_optimistic(num);
@@ -201,7 +216,7 @@ impl<'a> BitReader<'a> {
         Ok(())
     }
 
-    #[inline]
+    #[inline(always)]
     fn refill(&mut self) {
         // See Refill() in C++ code.
         if self.data.len() >= 8 {

@@ -68,14 +68,14 @@ impl RowBuffer {
         Ok(result)
     }
 
-    #[inline]
+    #[inline(always)]
     pub fn get_row<T: ImageDataType>(&self, row: usize) -> &[T] {
         let row_idx = row & (self.num_rows - 1);
         let start = row_idx * self.row_stride;
         slice_from_cachelines(&self.buffer[start..start + self.row_stride])
     }
 
-    #[inline]
+    #[inline(always)]
     pub fn get_row_mut<T: ImageDataType>(&mut self, row: usize) -> &mut [T] {
         let row_idx = row & (self.num_rows - 1);
         let stride = self.row_stride;
@@ -83,6 +83,7 @@ impl RowBuffer {
         slice_from_cachelines_mut(&mut self.buffer[start..start + stride])
     }
 
+    #[inline(always)]
     pub fn get_rows_mut<T: ImageDataType>(
         &mut self,
         y: Range<usize>,

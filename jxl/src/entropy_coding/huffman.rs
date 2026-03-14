@@ -441,18 +441,26 @@ impl Table {
         Ok(Table { entries })
     }
 
-    #[inline]
+    #[inline(always)]
+    #[allow(unsafe_code)]
     pub fn read(&self, br: &mut BitReader) -> u32 {
         let mut pos = br.peek(TABLE_BITS) as usize;
-        let mut n_bits = self.entries[pos].bits as usize;
+        // SAFETY: pos = peek(TABLE_BITS) which returns at most (1<<TABLE_BITS)-1 = TABLE_SIZE-1.
+        // The entries array is always at least TABLE_SIZE entries (256), built by decode/build.
+        let entry = unsafe { *self.entries.get_unchecked(pos) };
+        let mut n_bits = entry.bits as usize;
         if n_bits > TABLE_BITS {
             br.consume_optimistic(TABLE_BITS);
             n_bits -= TABLE_BITS;
-            pos += self.entries[pos].value as usize;
-            pos += br.peek(n_bits) as usize;
+            pos = pos + entry.value as usize + br.peek(n_bits) as usize;
+            // SAFETY: For 2nd-level tables, build() ensures the table is large enough
+            // to hold all entries pointed to by 1st-level value + peek(n_bits).
+            let entry = unsafe { *self.entries.get_unchecked(pos) };
+            br.consume_optimistic(entry.bits as usize);
+            return entry.value as u32;
         }
-        br.consume_optimistic(self.entries[pos].bits as usize);
-        self.entries[pos].value as u32
+        br.consume_optimistic(n_bits);
+        entry.value as u32
     }
 }
 
@@ -477,9 +485,13 @@ impl HuffmanCodes {
         Ok(HuffmanCodes { tables })
     }
 
-    #[inline]
+    #[inline(always)]
+    #[allow(unsafe_code)]
     pub fn read(&self, br: &mut BitReader, ctx: usize) -> u32 {
-        self.tables[ctx].read(br)
+        // SAFETY: ctx is always < self.tables.len() because it comes from a validated
+        // context map (cluster ID), which was checked during Histograms::decode().
+        debug_assert!(ctx < self.tables.len());
+        unsafe { self.tables.get_unchecked(ctx) }.read(br)
     }
 
     pub fn single_symbol(&self, ctx: usize) -> Option<u32> {

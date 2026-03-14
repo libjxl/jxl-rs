@@ -9,7 +9,7 @@ use crate::headers::extra_channels::{ExtraChannel, ExtraChannelInfo};
 
 use super::patches::{PatchBlendMode, PatchBlending};
 
-#[inline]
+#[inline(always)]
 fn maybe_clamp(v: f32, clamp: bool) -> f32 {
     if clamp { v.clamp(0.0, 1.0) } else { v }
 }
@@ -21,13 +21,71 @@ pub fn perform_blending<T: AsRef<[f32]>, V: AsMut<[f32]>>(
     ec_blending: &[PatchBlending],
     extra_channel_info: &[ExtraChannelInfo],
 ) {
-    let has_alpha = extra_channel_info
-        .iter()
-        .any(|info| info.ec_type == ExtraChannel::Alpha);
+    perform_blending_with_tmp(bg, fg, color_blending, ec_blending, extra_channel_info, None);
+}
+
+/// Like `perform_blending` but accepts a pre-allocated tmp buffer to avoid per-call heap
+/// allocation. Each inner Vec is reused across calls (only resized/zeroed as needed).
+pub fn perform_blending_with_tmp<T: AsRef<[f32]>, V: AsMut<[f32]>>(
+    bg: &mut [V],
+    fg: &[T],
+    color_blending: &PatchBlending,
+    ec_blending: &[PatchBlending],
+    extra_channel_info: &[ExtraChannelInfo],
+    reusable_tmp: Option<&mut Vec<Vec<f32>>>,
+) {
     let num_ec = extra_channel_info.len();
     let xsize = bg[0].as_mut().len();
 
-    let mut tmp = vec![vec![0.0f32; xsize]; 3 + num_ec];
+    // Fast path: if color is None (keep bg) and all ec are None, nothing to do.
+    if color_blending.mode == PatchBlendMode::None
+        && ec_blending.iter().all(|b| b.mode == PatchBlendMode::None)
+    {
+        return;
+    }
+
+    // Fast path: Replace color + Replace/None ec -> copy fg directly to bg, no tmp needed.
+    if color_blending.mode == PatchBlendMode::Replace {
+        let all_simple = ec_blending[..num_ec].iter().all(|b| {
+            b.mode == PatchBlendMode::Replace || b.mode == PatchBlendMode::None
+        });
+        if all_simple {
+            for c in 0..3 {
+                bg[c].as_mut().copy_from_slice(fg[c].as_ref());
+            }
+            for i in 0..num_ec {
+                match ec_blending[i].mode {
+                    PatchBlendMode::Replace => {
+                        bg[3 + i].as_mut().copy_from_slice(fg[3 + i].as_ref());
+                    }
+                    PatchBlendMode::None => {} // keep bg
+                    _ => unreachable!(),
+                }
+            }
+            return;
+        }
+    }
+
+    let has_alpha = extra_channel_info
+        .iter()
+        .any(|info| info.ec_type == ExtraChannel::Alpha);
+
+    let num_channels = 3 + num_ec;
+
+    // Reuse pre-allocated buffer or allocate fresh.
+    let mut owned_tmp;
+    let tmp: &mut Vec<Vec<f32>> = if let Some(buf) = reusable_tmp {
+        // Ensure we have enough channels and each is the right size.
+        // No need to zero -- every code path below fully overwrites the used elements.
+        buf.resize_with(num_channels, || Vec::with_capacity(xsize));
+        for ch in buf.iter_mut().take(num_channels) {
+            ch.resize(xsize, 0.0);
+        }
+        buf
+    } else {
+        owned_tmp = vec![vec![0.0f32; xsize]; num_channels];
+        &mut owned_tmp
+    };
 
     for i in 0..num_ec {
         let alpha = ec_blending[i].alpha_channel;

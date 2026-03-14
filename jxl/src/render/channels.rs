@@ -25,6 +25,7 @@ impl<'a, T> Channels<'a, T> {
     /// * `row_data` - Flat vector of all rows for all channels (length = num_channels * rows_per_channel)
     /// * `num_channels` - Number of channels
     /// * `rows_per_channel` - Number of rows per channel (typically 2*BORDER+1)
+    #[inline(always)]
     pub fn new(
         row_data: SmallVec<&'a [T], 32>,
         num_channels: usize,
@@ -43,16 +44,19 @@ impl<'a, T> Channels<'a, T> {
     }
 
     /// Returns the number of channels.
+    #[inline(always)]
     pub fn len(&self) -> usize {
         self.num_channels
     }
 
     /// Returns true if there are no channels.
+    #[inline(always)]
     pub fn is_empty(&self) -> bool {
         self.num_channels == 0
     }
 
     /// Returns an iterator over channel slices.
+    #[inline(always)]
     pub fn iter(&self) -> impl Iterator<Item = &[&'a [T]]> {
         (0..self.num_channels).map(move |ch| &self[ch])
     }
@@ -62,6 +66,7 @@ impl<'a, T> Channels<'a, T> {
 impl<'a, T> std::ops::Index<usize> for Channels<'a, T> {
     type Output = [&'a [T]];
 
+    #[inline(always)]
     fn index(&self, ch: usize) -> &[&'a [T]] {
         let start = ch * self.rows_per_channel;
         &self.row_data[start..start + self.rows_per_channel]
@@ -86,6 +91,7 @@ impl<'a, T> ChannelsMut<'a, T> {
     /// * `row_data` - Flat vector of all mutable rows for all channels
     /// * `num_channels` - Number of channels
     /// * `rows_per_channel` - Number of rows per channel (typically 1 << SHIFT)
+    #[inline(always)]
     pub fn new(
         row_data: SmallVec<&'a mut [T], 8>,
         num_channels: usize,
@@ -104,11 +110,13 @@ impl<'a, T> ChannelsMut<'a, T> {
     }
 
     /// Returns the number of channels.
+    #[inline(always)]
     pub fn len(&self) -> usize {
         self.num_channels
     }
 
     /// Returns true if there are no channels.
+    #[inline(always)]
     pub fn is_empty(&self) -> bool {
         self.num_channels == 0
     }
@@ -116,6 +124,7 @@ impl<'a, T> ChannelsMut<'a, T> {
     /// Splits the first 3 channels into separate mutable slices.
     /// Returns a tuple containing mutable references to each channel's rows.
     #[allow(clippy::type_complexity)]
+    #[inline(always)]
     pub fn split_first_3_mut(
         &mut self,
     ) -> (&mut [&'a mut [T]], &mut [&'a mut [T]], &mut [&'a mut [T]]) {
@@ -133,6 +142,7 @@ impl<'a, T> ChannelsMut<'a, T> {
 
     /// Returns a mutable iterator over all channels.
     /// Each item is a mutable slice of rows for that channel.
+    #[inline(always)]
     pub fn iter_mut(&mut self) -> impl Iterator<Item = &mut [&'a mut [T]]> {
         let rpc = self.rows_per_channel;
         self.row_data.chunks_mut(rpc)
@@ -143,6 +153,7 @@ impl<'a, T> ChannelsMut<'a, T> {
 impl<'a, T> std::ops::Index<usize> for ChannelsMut<'a, T> {
     type Output = [&'a mut [T]];
 
+    #[inline(always)]
     fn index(&self, ch: usize) -> &[&'a mut [T]] {
         let start = ch * self.rows_per_channel;
         &self.row_data[start..start + self.rows_per_channel]
@@ -151,6 +162,7 @@ impl<'a, T> std::ops::Index<usize> for ChannelsMut<'a, T> {
 
 /// Implement mutable indexing: &mut channels[ch] returns &mut [&mut [T]]
 impl<'a, T> std::ops::IndexMut<usize> for ChannelsMut<'a, T> {
+    #[inline(always)]
     fn index_mut(&mut self, ch: usize) -> &mut [&'a mut [T]] {
         let start = ch * self.rows_per_channel;
         &mut self.row_data[start..start + self.rows_per_channel]

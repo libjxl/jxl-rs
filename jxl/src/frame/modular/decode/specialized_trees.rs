@@ -17,7 +17,8 @@ use crate::{
         },
         predict::{PredictionData, WeightedPredictorState, clamped_gradient},
         tree::{
-            FlatTreeNode, NUM_NONREF_PROPERTIES, PROPERTIES_PER_PREVCHAN, TreeNode, predict_flat,
+            FlatTreeNode, NUM_NONREF_PROPERTIES, PROPERTIES_PER_PREVCHAN, TreeNode,
+            predict_flat_no_wp, predict_flat_with_wp,
         },
     },
     headers::modular::GroupHeader,
@@ -28,6 +29,8 @@ pub struct NoWpTree {
     flat_nodes: Vec<FlatTreeNode>,
     references: Image<i32>,
     property_buffer: Vec<i32>,
+    /// Bitmask of properties used by the tree (bit i = property i is used).
+    used_properties: u32,
 }
 
 impl NoWpTree {
@@ -48,12 +51,13 @@ impl NoWpTree {
         property_buffer[0] = channel as i32;
         property_buffer[1] = stream as i32;
 
-        let flat_nodes = Tree::build_flat_tree(&nodes)?;
+        let (flat_nodes, used_properties) = Tree::build_flat_tree(&nodes)?;
 
         Ok(Self {
             flat_nodes,
             references,
             property_buffer,
+            used_properties,
         })
     }
 }
@@ -64,29 +68,33 @@ impl ModularChannelDecoder for NoWpTree {
 
     fn init_row(&mut self, buffers: &mut [&mut ModularChannel], chan: usize, y: usize) {
         precompute_references(buffers, chan, y, &mut self.references);
-        self.property_buffer[2..].fill(0);
+        // Only need to zero property 9 (local gradient) since property 8
+        // depends on the previous value of property 9. All other properties
+        // are overwritten each pixel by compute_properties_common.
+        self.property_buffer[9] = 0;
     }
 
+    #[inline(always)]
     fn decode_one(
         &mut self,
         prediction_data: PredictionData,
         pos: (usize, usize),
-        xsize: usize,
+        _xsize: usize,
         reader: &mut SymbolReader,
         br: &mut BitReader,
         histograms: &Histograms,
     ) -> i32 {
-        let prediction_result = predict_flat(
+        let prediction_result = predict_flat_no_wp(
             &self.flat_nodes,
             prediction_data,
-            xsize,
-            None,
             pos.0,
             pos.1,
             &self.references,
             &mut self.property_buffer,
+            self.used_properties,
         );
-        let dec = reader.read_signed_clustered(histograms, br, prediction_result.context as usize);
+        // Use inlined variant for hot interior loop (matches C++ ReadHybridUintClusteredInlined)
+        let dec = reader.read_signed_clustered_inline(histograms, br, prediction_result.context as usize);
         make_pixel(dec, prediction_result.multiplier, prediction_result.guess)
     }
 }
@@ -121,6 +129,7 @@ impl ModularChannelDecoder for GeneralTree {
         self.no_wp_tree.init_row(buffers, chan, y);
     }
 
+    #[inline(always)]
     fn decode_one(
         &mut self,
         prediction_data: PredictionData,
@@ -130,17 +139,19 @@ impl ModularChannelDecoder for GeneralTree {
         br: &mut BitReader,
         histograms: &Histograms,
     ) -> i32 {
-        let prediction_result = predict_flat(
+        let prediction_result = predict_flat_with_wp(
             &self.no_wp_tree.flat_nodes,
             prediction_data,
             xsize,
-            Some(&mut self.wp_state),
+            &mut self.wp_state,
             pos.0,
             pos.1,
             &self.no_wp_tree.references,
             &mut self.no_wp_tree.property_buffer,
+            self.no_wp_tree.used_properties,
         );
-        let dec = reader.read_signed_clustered(histograms, br, prediction_result.context as usize);
+        // Use inlined variant for hot interior loop (matches C++ ReadHybridUintClusteredInlined)
+        let dec = reader.read_signed_clustered_inline(histograms, br, prediction_result.context as usize);
         let val = make_pixel(dec, prediction_result.multiplier, prediction_result.guess);
         self.wp_state.update_errors(val, pos, xsize);
         val
