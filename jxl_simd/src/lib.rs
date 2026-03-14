@@ -20,6 +20,9 @@ mod x86_64;
 #[cfg(target_arch = "aarch64")]
 mod aarch64;
 
+#[cfg(target_arch = "wasm32")]
+mod wasm32;
+
 pub mod float16;
 pub mod scalar;
 
@@ -34,6 +37,9 @@ pub use x86_64::sse42::Sse42Descriptor;
 
 #[cfg(all(target_arch = "aarch64", feature = "neon"))]
 pub use aarch64::neon::NeonDescriptor;
+
+#[cfg(all(target_arch = "wasm32", feature = "simd128"))]
+pub use wasm32::simd128::Simd128Descriptor;
 
 pub use scalar::ScalarDescriptor;
 
