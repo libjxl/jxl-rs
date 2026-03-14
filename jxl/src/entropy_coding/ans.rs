@@ -384,11 +384,15 @@ impl AnsHistogram {
         let symbol = (alias_symbol * map_to_alias) | (i as u32 * (1 - map_to_alias));
         let offset = offset + pos;
 
-        let next_state = (*state >> LOG_SUM_PROBS) * dist + offset;
-        let select_appended = (next_state < (1 << 16)) as u32;
-        let appended_state = (next_state << 16) | (br.peek(16) as u32);
-        *state = (appended_state * select_appended) | (next_state * (1 - select_appended));
-        br.consume_optimistic((16 * select_appended) as usize);
+        let mut next_state = (*state >> LOG_SUM_PROBS) * dist + offset;
+
+        // Use an explicit branch to bypass the BitReader's internal
+        // bounds-checks when state normalization isn't required.
+        if next_state < (1 << 16) {
+            next_state = (next_state << 16) | (br.read_optimistic(16) as u32);
+        }
+        *state = next_state;
+
         symbol
     }
 
