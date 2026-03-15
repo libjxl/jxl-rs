@@ -254,15 +254,34 @@ jobs:
     - name: Install jxl-perfhistory
       run: cargo install --git https://github.com/zond/jxl-perfhistory
 
-    - name: Select benchmark corpus (all test images)
+    - name: Select benchmark corpus (autoresearch 8 images)
       id: select-images
       run: |
         mkdir -p testimages
-        find jxl/resources/test -type f -name '*.jxl' | sort | while read -r src; do
-          rel="${src#jxl/resources/test/}"
-          safe_name="${rel//\//__}"
-          ln -s "$GITHUB_WORKSPACE/$src" "testimages/$safe_name"
+
+        # Keep this aligned with the autoresearch image set so CI numbers stay
+        # comparable while avoiding benchmark timeouts.
+        image_map=(
+          "jxl/resources/test/conformance_test_images/sunset_logo.jxl:sunset_logo.jxl"
+          "jxl/resources/test/conformance_test_images/bike.jxl:bike.jxl"
+          "jxl/resources/test/green_queen_modular_e3.jxl:green_queen_modular_e3.jxl"
+          "jxl/resources/test/green_queen_vardct_e3.jxl:green_queen_vardct_e3.jxl"
+          "jxl/resources/test/conformance_test_images/bicycles.jxl:bicycles.jxl"
+          "jxl/resources/test/conformance_test_images/delta_palette.jxl:delta_palette.jxl"
+          "jxl/resources/test/conformance_test_images/lz77_flower.jxl:lz77_flower.jxl"
+          "jxl/resources/test/conformance_test_images/patches.jxl:patches_lossless.jxl"
+        )
+
+        for entry in "${image_map[@]}"; do
+          src="${entry%%:*}"
+          dest="${entry##*:}"
+          if [ ! -f "$src" ]; then
+            echo "Missing benchmark image: $src"
+            exit 1
+          fi
+          ln -s "$GITHUB_WORKSPACE/$src" "testimages/$dest"
         done
+
         echo "Selected $(find testimages -maxdepth 1 -name '*.jxl' | wc -l) images for benchmark"
 
     - name: Cache benchmark binaries
