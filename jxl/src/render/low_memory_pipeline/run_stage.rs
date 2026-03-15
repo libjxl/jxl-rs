@@ -9,9 +9,8 @@ use crate::{
     render::{
         Channels, ChannelsMut, RunInPlaceStage,
         internal::{PipelineBuffer, RunInOutStage},
-        low_memory_pipeline::render_group::ChannelVec,
     },
-    util::{ShiftRightCeil, SmallVec, mirror, tracing_wrappers::*},
+    util::{ShiftRightCeil, StackVec, mirror, tracing_wrappers::*},
 };
 
 use super::{
@@ -56,10 +55,10 @@ impl<T: RenderPipelineInPlaceStage> RunInPlaceStage<RowBuffer> for T {
         let xpre = if start_of_row { 0 } else { out_extra_x };
         let xstart = x0 - xpre;
         let xend = x0 + xsize + if end_of_row { 0 } else { out_extra_x };
-        let mut rows: ChannelVec<_> = buffers
-            .iter_mut()
-            .map(|x| &mut x.get_row_mut::<T::Type>(current_row)[xstart..])
-            .collect();
+        let mut rows: StackVec<&mut [T::Type], 8> = StackVec::new();
+        for x in buffers.iter_mut() {
+            rows.push(&mut x.get_row_mut::<T::Type>(current_row)[xstart..]);
+        }
 
         self.process_row_chunk(
             (group_x0 - xpre, current_row),
@@ -103,10 +102,10 @@ impl<T: RenderPipelineInOutStage> RunInOutStage<RowBuffer> for T {
                 out_extra_x.shrc(T::SHIFT.0)
             };
 
-        // Build flat input rows: all rows for all channels in one Vec
+        // Build flat input rows: all rows for all channels in one StackVec
         let input_rows_per_channel = (2 * Self::BORDER.1 + 1) as usize;
         let num_channels = input_buffers.len();
-        let mut input_row_data = SmallVec::new();
+        let mut input_row_data: StackVec<&[T::InputT], 32> = StackVec::new();
         for x in input_buffers.iter() {
             for iy in -ibordery..=ibordery {
                 input_row_data.push(
@@ -117,10 +116,10 @@ impl<T: RenderPipelineInOutStage> RunInOutStage<RowBuffer> for T {
         }
         let input_rows = Channels::new(input_row_data, num_channels, input_rows_per_channel);
 
-        // Build flat output rows: all rows for all channels in one Vec
+        // Build flat output rows: all rows for all channels in one StackVec
         let output_rows_per_channel = 1 << T::SHIFT.1;
         let num_output_channels = output_buffers.len();
-        let mut output_row_data = SmallVec::new();
+        let mut output_row_data: StackVec<&mut [T::OutputT], 8> = StackVec::new();
         // optimize for the common case of a single output row per channel.
         if output_rows_per_channel == 1 {
             // Use OutputT's x0_offset, not InputT's - they differ for type conversions (e.g., f32→u8).
@@ -132,11 +131,11 @@ impl<T: RenderPipelineInOutStage> RunInOutStage<RowBuffer> for T {
             }
         } else {
             for x in output_buffers.iter_mut() {
-                let rows = x.get_rows_mut::<T::OutputT>(
+                x.push_rows_mut::<T::OutputT>(
                     (current_row << T::SHIFT.1)..((current_row + 1) << T::SHIFT.1),
                     RowBuffer::x0_offset::<T::OutputT>() - (xpre << T::SHIFT.0),
+                    &mut output_row_data,
                 );
-                output_row_data.extend_sv(rows);
             }
         }
         let mut output_rows = ChannelsMut::new(

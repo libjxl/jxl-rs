@@ -46,6 +46,50 @@ impl OwnedRawImage {
         })
     }
 
+    /// Like `new_zeroed_with_padding`, but only zeroes the padding region.
+    /// The main data area (byte_size) is left uninitialized.
+    ///
+    /// SAFETY: The caller must ensure that the main data area is fully written before reading.
+    /// The offset/padding regions ARE zeroed for correct boundary behavior.
+    #[allow(unsafe_code)]
+    pub unsafe fn new_uninit_with_zeroed_padding(
+        byte_size: (usize, usize),
+        offset: (usize, usize),
+        mut padding: (usize, usize),
+    ) -> Result<Self> {
+        if !(padding.0 + byte_size.0).is_multiple_of(CACHE_LINE_BYTE_SIZE) {
+            padding.0 += CACHE_LINE_BYTE_SIZE - (padding.0 + byte_size.0) % CACHE_LINE_BYTE_SIZE;
+        }
+        let total_cols = byte_size.0 + padding.0;
+        let total_rows = byte_size.1 + padding.1;
+        let mut data = RawImageBuffer::try_allocate((total_cols, total_rows), true)?;
+
+        // Zero only the padding regions:
+        // 1. Top offset rows (full width each)
+        for y in 0..offset.1 {
+            let row = unsafe { data.row_mut(y) };
+            row.fill(std::mem::MaybeUninit::new(0));
+        }
+        // 2. Left offset columns + right padding columns for data rows
+        for y in offset.1..total_rows {
+            let row = unsafe { data.row_mut(y) };
+            // Left offset region
+            for i in 0..offset.0 {
+                row[i] = std::mem::MaybeUninit::new(0);
+            }
+            // Right padding region: [byte_size.0..total_cols]
+            for i in byte_size.0..total_cols {
+                row[i] = std::mem::MaybeUninit::new(0);
+            }
+        }
+
+        Ok(Self {
+            data,
+            offset,
+            padding,
+        })
+    }
+
     pub fn get_rect_including_padding_mut(&mut self, rect: Rect) -> RawImageRectMut<'_> {
         RawImageRectMut {
             // Safety note: we are lending exclusive ownership to RawImageRectMut.

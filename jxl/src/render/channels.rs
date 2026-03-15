@@ -3,7 +3,7 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-use crate::util::SmallVec;
+use crate::util::StackVec;
 
 /// Multi-row channel accessor for immutable access.
 ///
@@ -11,9 +11,10 @@ use crate::util::SmallVec;
 /// and `channels[ch][row]` returns `&[T]` (pixels for a specific row).
 ///
 /// This eliminates nested Vec collections while maintaining the same indexing syntax.
+/// Uses StackVec (no enum discriminant) for zero-overhead access in the hot render loop.
 pub struct Channels<'a, T> {
     // The number of input rows should be maximized by the EPF0 stage, which has 21.
-    pub(crate) row_data: SmallVec<&'a [T], 32>,
+    pub(crate) row_data: StackVec<&'a [T], 32>,
     num_channels: usize,
     pub(crate) rows_per_channel: usize,
 }
@@ -27,7 +28,7 @@ impl<'a, T> Channels<'a, T> {
     /// * `rows_per_channel` - Number of rows per channel (typically 2*BORDER+1)
     #[inline(always)]
     pub fn new(
-        row_data: SmallVec<&'a [T], 32>,
+        row_data: StackVec<&'a [T], 32>,
         num_channels: usize,
         rows_per_channel: usize,
     ) -> Self {
@@ -79,7 +80,7 @@ impl<'a, T> std::ops::Index<usize> for Channels<'a, T> {
 /// and `channels[ch][row]` returns `&mut [T]` (pixels for a specific row).
 pub struct ChannelsMut<'a, T> {
     // The number of output rows should be maximized by the Upsample8 stage, which has 8.
-    pub(crate) row_data: SmallVec<&'a mut [T], 8>,
+    pub(crate) row_data: StackVec<&'a mut [T], 8>,
     num_channels: usize,
     pub(crate) rows_per_channel: usize,
 }
@@ -93,7 +94,7 @@ impl<'a, T> ChannelsMut<'a, T> {
     /// * `rows_per_channel` - Number of rows per channel (typically 1 << SHIFT)
     #[inline(always)]
     pub fn new(
-        row_data: SmallVec<&'a mut [T], 8>,
+        row_data: StackVec<&'a mut [T], 8>,
         num_channels: usize,
         rows_per_channel: usize,
     ) -> Self {

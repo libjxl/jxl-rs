@@ -36,6 +36,28 @@ impl<T: ImageDataType> Image<T> {
         Ok(Self::from_raw(img))
     }
 
+    /// Like `new_with_padding`, but only zeroes the padding region.
+    /// The main data area is left uninitialized -- caller must write all pixels before reading.
+    ///
+    /// # Safety
+    /// The caller must fully write the main data area before reading from it.
+    #[allow(unsafe_code)]
+    pub unsafe fn new_uninit_with_zeroed_padding(
+        size: (usize, usize),
+        offset: (usize, usize),
+        padding: (usize, usize),
+    ) -> Result<Image<T>> {
+        let s = T::DATA_TYPE_ID.size();
+        let img = unsafe {
+            OwnedRawImage::new_uninit_with_zeroed_padding(
+                (size.0 * s, size.1),
+                (offset.0 * s, offset.1),
+                (padding.0 * s, padding.1),
+            )?
+        };
+        Ok(Self::from_raw(img))
+    }
+
     #[instrument(ret, err)]
     pub fn new(size: (usize, usize)) -> Result<Image<T>> {
         Self::new_with_padding(size, (0, 0), (0, 0))

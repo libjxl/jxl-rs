@@ -38,10 +38,10 @@ fn scale<const DENOM: usize>(value: usize, bit_depth: usize) -> i32 {
 // The purpose of this function is solely to extend the interpretation of
 // palette indices to implicit values. If index < nb_deltas, indicating that the
 // result is a delta palette entry, it is the responsibility of the caller to
-// treat it as such.
+/// Look up palette value. `pal_row` is the pre-fetched palette row for channel `c`.
 #[inline(always)]
-fn get_palette_value(
-    palette: &Image<i32>,
+fn get_palette_value_with_row(
+    pal_row: &[i32],
     index: isize,
     c: usize,
     palette_size: usize,
@@ -163,7 +163,7 @@ fn get_palette_value(
             }
             scale::<{ LARGE_CUBE - 1 }>(index % LARGE_CUBE, bit_depth)
         } else {
-            palette.row(c)[index]
+            pal_row[index]
         }
     }
 }
@@ -187,31 +187,39 @@ pub fn do_palette_step_general(
         // Avoid touching "empty" channels with non-zero height.
     } else if num_deltas == 0 && predictor == Predictor::Zero {
         for (chan_index, out) in buf_out.iter_mut().enumerate() {
+            let pal_row = palette.row(chan_index);
             for y in 0..h {
                 let row_index = buf_in.data.row(y);
                 let row_out = out.data.row_mut(y);
+                #[allow(unsafe_code)]
                 for x in 0..w {
                     let index = row_index[x];
-                    let palette_value = get_palette_value(
-                        palette,
-                        index as isize,
-                        /*c=*/ chan_index,
-                        /*palette_size=*/ num_colors,
-                        /*bit_depth=*/ bit_depth,
-                    );
-                    row_out[x] = palette_value;
+                    let idx = index as usize;
+                    if idx < num_colors {
+                        // SAFETY: idx < num_colors <= pal_row.len()
+                        row_out[x] = unsafe { *pal_row.get_unchecked(idx) };
+                    } else {
+                        row_out[x] = get_palette_value_with_row(
+                            pal_row,
+                            index as isize,
+                            chan_index,
+                            num_colors,
+                            bit_depth,
+                        );
+                    }
                 }
             }
         }
     } else if predictor == Predictor::Weighted {
         let w = buf_in.data.size().0;
         for (chan_index, out) in buf_out.iter_mut().enumerate() {
+            let pal_row = palette.row(chan_index);
             let mut wp_state = WeightedPredictorState::new(wp_header, w);
             for y in 0..h {
                 let idx = buf_in.data.row(y);
                 for (x, &index) in idx.iter().enumerate() {
-                    let palette_entry = get_palette_value(
-                        palette,
+                    let palette_entry = get_palette_value_with_row(
+                        pal_row,
                         index as isize,
                         /*c=*/ chan_index,
                         /*palette_size=*/ num_colors + num_deltas,
@@ -233,11 +241,12 @@ pub fn do_palette_step_general(
         }
     } else {
         for (chan_index, out) in buf_out.iter_mut().enumerate() {
+            let pal_row = palette.row(chan_index);
             for y in 0..h {
                 let idx = buf_in.data.row(y);
                 for (x, &index) in idx.iter().enumerate() {
-                    let palette_entry = get_palette_value(
-                        palette,
+                    let palette_entry = get_palette_value_with_row(
+                        pal_row,
                         index as isize,
                         /*c=*/ chan_index,
                         /*palette_size=*/ num_colors + num_deltas,
@@ -324,30 +333,76 @@ pub fn do_palette_step_one_group(
     let num_c = buf_out.len() / (grid_xsize * grid_ysize);
     let (xsize, ysize) = buf_out[0].data.size();
 
-    for c in 0..num_c {
-        for y in 0..h {
-            let index_img = buf_in.data.row(y);
+    let palette_size = num_colors + num_deltas;
+
+    if num_deltas == 0 {
+        // Fast path: no delta palette entries, just direct lookups.
+        // Avoids prediction data computation entirely.
+        for c in 0..num_c {
+            let pal_row = palette.row(c);
             let out_idx = c * grid_ysize * grid_xsize + grid_y * grid_xsize + grid_x;
-            for (x, &index) in index_img.iter().enumerate() {
-                let palette_entry = get_palette_value(
-                    palette,
-                    index as isize,
-                    c,
-                    /*palette_size=*/ num_colors + num_deltas,
-                    /*bit_depth=*/ bit_depth,
-                );
-                let val = if index < num_deltas as i32 {
-                    let pred = predictor.predict_one(
-                        get_prediction_data(
-                            buf_out, out_idx, grid_x, grid_y, grid_xsize, x, y, xsize, ysize,
-                        ),
-                        /*wp_pred=*/ 0,
+            for y in 0..h {
+                let index_img = buf_in.data.row(y);
+                let out_row = buf_out[out_idx].data.row_mut(y);
+                #[allow(unsafe_code)]
+                for (x, &index) in index_img.iter().enumerate() {
+                    // Fast path: direct palette lookup for valid indices (common case).
+                    // Skip the multi-branch get_palette_value_with_row for the hot path.
+                    let idx = index as usize;
+                    if idx < palette_size {
+                        // SAFETY: idx < palette_size <= pal_row.len() (palette is at least
+                        // palette_size wide, validated during palette transform setup).
+                        out_row[x] = unsafe { *pal_row.get_unchecked(idx) };
+                    } else {
+                        // Rare case: implicit color cube or negative index
+                        out_row[x] = get_palette_value_with_row(
+                            pal_row,
+                            index as isize,
+                            c,
+                            palette_size,
+                            bit_depth,
+                        );
+                    }
+                }
+            }
+        }
+    } else {
+        for c in 0..num_c {
+            let pal_row = palette.row(c);
+            let out_idx = c * grid_ysize * grid_xsize + grid_y * grid_xsize + grid_x;
+            for y in 0..h {
+                let index_img = buf_in.data.row(y);
+                for (x, &index) in index_img.iter().enumerate() {
+                    let palette_entry = get_palette_value_with_row(
+                        pal_row,
+                        index as isize,
+                        c,
+                        palette_size,
+                        bit_depth,
                     );
-                    (pred + palette_entry as i64) as i32
-                } else {
-                    palette_entry
-                };
-                buf_out[out_idx].data.row_mut(y)[x] = val;
+                    let val = if index < num_deltas as i32 {
+                        // Fast path for interior pixels: avoid expensive get_with_neighbors
+                        // when we can read directly from the same output buffer.
+                        let pred = if x > 0 && y > 0 && x + 1 < xsize {
+                            predictor.predict_one(
+                                PredictionData::get(&buf_out[out_idx].data, x, y),
+                                /*wp_pred=*/ 0,
+                            )
+                        } else {
+                            predictor.predict_one(
+                                get_prediction_data(
+                                    buf_out, out_idx, grid_x, grid_y, grid_xsize, x, y, xsize,
+                                    ysize,
+                                ),
+                                /*wp_pred=*/ 0,
+                            )
+                        };
+                        (pred + palette_entry as i64) as i32
+                    } else {
+                        palette_entry
+                    };
+                    buf_out[out_idx].data.row_mut(y)[x] = val;
+                }
             }
         }
     }
@@ -377,8 +432,10 @@ pub fn do_palette_step_group_row(
         .sum();
     let (xsize, ysize) = buf_out[0].data.size();
 
+    let palette_size = num_colors + num_deltas;
     if predictor == Predictor::Weighted {
         for c in 0..num_c {
+            let pal_row = palette.row(c);
             let mut wp_state = WeightedPredictorState::new(wp_header, total_w);
             let out_row_idx = c * grid_ysize * grid_xsize + grid_y * grid_xsize;
             if grid_y > 0 {
@@ -393,17 +450,22 @@ pub fn do_palette_step_group_row(
                     let index_img = index_buf.data.row(y);
                     let out_idx = out_row_idx + grid_x;
                     for (x, &index) in index_img.iter().enumerate() {
-                        let palette_entry = get_palette_value(
-                            palette,
+                        let palette_entry = get_palette_value_with_row(
+                            pal_row,
                             index as isize,
                             c,
-                            /*palette_size=*/ num_colors + num_deltas,
-                            /*bit_depth=*/ bit_depth,
+                            palette_size,
+                            bit_depth,
                         );
                         let val = if index < num_deltas as i32 {
-                            let prediction_data = get_prediction_data(
-                                buf_out, out_idx, grid_x, grid_y, grid_xsize, x, y, xsize, ysize,
-                            );
+                            // Fast path for interior pixels: avoid expensive get_with_neighbors
+                            let prediction_data = if x > 0 && y > 0 && x + 1 < xsize {
+                                PredictionData::get(&buf_out[out_idx].data, x, y)
+                            } else {
+                                get_prediction_data(
+                                    buf_out, out_idx, grid_x, grid_y, grid_xsize, x, y, xsize, ysize,
+                                )
+                            };
                             let (pred, _) = wp_state.predict_and_property(
                                 (grid_x * xsize + x, y & 1),
                                 total_w,
@@ -424,26 +486,35 @@ pub fn do_palette_step_group_row(
         }
     } else {
         for c in 0..num_c {
+            let pal_row = palette.row(c);
             for y in 0..h {
                 for (grid_x, index_buf) in buf_in.iter().enumerate().take(grid_xsize) {
                     let index_img = index_buf.data.row(y);
                     let out_idx = c * grid_ysize * grid_xsize + grid_y * grid_xsize + grid_x;
                     for (x, &index) in index_img.iter().enumerate() {
-                        let palette_entry = get_palette_value(
-                            palette,
+                        let palette_entry = get_palette_value_with_row(
+                            pal_row,
                             index as isize,
                             c,
-                            /*palette_size=*/ num_colors + num_deltas,
-                            /*bit_depth=*/ bit_depth,
+                            palette_size,
+                            bit_depth,
                         );
                         let val = if index < num_deltas as i32 {
-                            let pred = predictor.predict_one(
-                                get_prediction_data(
-                                    buf_out, out_idx, grid_x, grid_y, grid_xsize, x, y, xsize,
-                                    ysize,
-                                ),
-                                /*wp_pred=*/ 0,
-                            );
+                            // Fast path for interior pixels: avoid expensive get_with_neighbors
+                            let pred = if x > 0 && y > 0 && x + 1 < xsize {
+                                predictor.predict_one(
+                                    PredictionData::get(&buf_out[out_idx].data, x, y),
+                                    /*wp_pred=*/ 0,
+                                )
+                            } else {
+                                predictor.predict_one(
+                                    get_prediction_data(
+                                        buf_out, out_idx, grid_x, grid_y, grid_xsize, x, y, xsize,
+                                        ysize,
+                                    ),
+                                    /*wp_pred=*/ 0,
+                                )
+                            };
                             (pred + palette_entry as i64) as i32
                         } else {
                             palette_entry

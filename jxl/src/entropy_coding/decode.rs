@@ -481,6 +481,30 @@ impl SymbolReader {
         unpack_signed(unsigned)
     }
 
+    /// Fast path for reads without LZ77. Skips the LZ77 state match.
+    /// Matching libjxl's template<bool uses_lz77> approach.
+    ///
+    /// # Preconditions
+    /// - `self.state` must be `SymbolReaderState::None` (no LZ77)
+    #[inline(always)]
+    #[allow(unsafe_code)]
+    pub fn read_signed_clustered_no_lz77(
+        &mut self,
+        histograms: &Histograms,
+        br: &mut BitReader,
+        cluster: usize,
+    ) -> i32 {
+        debug_assert!(matches!(self.state, SymbolReaderState::None));
+        let token = match &histograms.codes {
+            Codes::Huffman(hc) => hc.read(br, cluster),
+            Codes::Ans(ans) => self.ans_reader.read(ans, br, cluster),
+        };
+        // SAFETY: cluster is a validated cluster ID.
+        debug_assert!(cluster < histograms.uint_configs.len());
+        let unsigned = unsafe { histograms.uint_configs.get_unchecked(cluster) }.read(token, br);
+        unpack_signed(unsigned)
+    }
+
     pub fn check_final_state(self, histograms: &Histograms, br: &mut BitReader) -> Result<()> {
         self.errors.check_for_error()?;
         br.check_for_error()?;
@@ -657,6 +681,11 @@ impl Histograms {
     /// Requires: all configs are 420 AND LZ77 is disabled
     pub fn can_use_config_420_fast_path(&self) -> bool {
         !self.lz77_params.enabled && self.uint_configs.iter().all(|cfg| cfg.is_config_420())
+    }
+
+    /// Returns true if LZ77 is disabled, enabling the no-LZ77 fast path.
+    pub fn has_no_lz77(&self) -> bool {
+        !self.lz77_params.enabled
     }
 }
 

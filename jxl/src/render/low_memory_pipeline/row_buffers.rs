@@ -10,7 +10,7 @@ use crate::{
     image::{DataTypeTag, ImageDataType},
     render::MAX_BORDER,
     util::{
-        CACHE_LINE_BYTE_SIZE, CacheLine, SmallVec, num_per_cache_line, slice_from_cachelines,
+        CACHE_LINE_BYTE_SIZE, CacheLine, StackVec, num_per_cache_line, slice_from_cachelines,
         slice_from_cachelines_mut,
     },
 };
@@ -88,7 +88,7 @@ impl RowBuffer {
         &mut self,
         y: Range<usize>,
         xoffset: usize,
-    ) -> SmallVec<&mut [T], 8> {
+    ) -> StackVec<&mut [T], 8> {
         assert!(y.clone().count() <= self.num_rows);
         let first_row_idx = y.start & (self.num_rows - 1);
         let stride = self.row_stride;
@@ -103,6 +103,29 @@ impl RowBuffer {
             .chain(pre_rows)
             .map(|x| &mut slice_from_cachelines_mut(x)[xoffset..])
             .collect()
+    }
+
+    /// Push rows directly into an existing StackVec, avoiding temporary allocation.
+    pub fn push_rows_mut<'a, T: ImageDataType>(
+        &'a mut self,
+        y: Range<usize>,
+        xoffset: usize,
+        out: &mut StackVec<&'a mut [T], 8>,
+    ) {
+        assert!(y.clone().count() <= self.num_rows);
+        let first_row_idx = y.start & (self.num_rows - 1);
+        let stride = self.row_stride;
+        let start = first_row_idx * stride;
+        let num_pre = (y.clone().count() + first_row_idx).saturating_sub(self.num_rows);
+        let num_post = y.clone().count() - num_pre;
+        let buf = &mut self.buffer[..];
+        let (pre, post) = buf.split_at_mut(start);
+        for chunk in post.chunks_exact_mut(stride).take(num_post) {
+            out.push(&mut slice_from_cachelines_mut(chunk)[xoffset..]);
+        }
+        for chunk in pre.chunks_exact_mut(stride).take(num_pre) {
+            out.push(&mut slice_from_cachelines_mut(chunk)[xoffset..]);
+        }
     }
 
     pub const fn x0_offset<T: ImageDataType>() -> usize {

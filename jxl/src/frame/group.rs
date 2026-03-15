@@ -47,10 +47,10 @@ impl VarDctBuffers {
 
     /// Reset buffers to zero for reuse.
     pub fn reset(&mut self) {
-        self.scratch.fill(0.0);
-        for buf in &mut self.transform_buffer {
-            buf.fill(0.0);
-        }
+        // scratch does NOT need zeroing: each block's LF coefficients are fully written
+        // by copy_from_slice before transform_to_pixels reads them.
+        // transform_buffer does NOT need zeroing: dequant_block fully overwrites
+        // all num_coeffs entries before transform_to_pixels reads them.
         self.coeffs_storage.fill(0);
     }
 }
@@ -616,6 +616,7 @@ pub fn decode_vardct_group(
                     &qblock,
                     dequant_matrices,
                 )?;
+
             }
             coeffs_offset += num_coeffs;
         }
