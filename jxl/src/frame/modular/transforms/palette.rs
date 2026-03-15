@@ -381,22 +381,14 @@ pub fn do_palette_step_one_group(
                         bit_depth,
                     );
                     let val = if index < num_deltas as i32 {
-                        // Fast path for interior pixels: avoid expensive get_with_neighbors
-                        // when we can read directly from the same output buffer.
-                        let pred = if x > 0 && y > 0 && x + 1 < xsize {
-                            predictor.predict_one(
-                                PredictionData::get(&buf_out[out_idx].data, x, y),
-                                /*wp_pred=*/ 0,
-                            )
-                        } else {
-                            predictor.predict_one(
-                                get_prediction_data(
-                                    buf_out, out_idx, grid_x, grid_y, grid_xsize, x, y, xsize,
-                                    ysize,
-                                ),
-                                /*wp_pred=*/ 0,
-                            )
-                        };
+                        // Delta palette prediction may need cross-grid neighbors.
+                        // Always use get_prediction_data to preserve exact behavior.
+                        let pred = predictor.predict_one(
+                            get_prediction_data(
+                                buf_out, out_idx, grid_x, grid_y, grid_xsize, x, y, xsize, ysize,
+                            ),
+                            /*wp_pred=*/ 0,
+                        );
                         (pred + palette_entry as i64) as i32
                     } else {
                         palette_entry
@@ -458,15 +450,10 @@ pub fn do_palette_step_group_row(
                             bit_depth,
                         );
                         let val = if index < num_deltas as i32 {
-                            // Fast path for interior pixels: avoid expensive get_with_neighbors
-                            let prediction_data = if x > 0 && y > 0 && x + 1 < xsize {
-                                PredictionData::get(&buf_out[out_idx].data, x, y)
-                            } else {
-                                get_prediction_data(
-                                    buf_out, out_idx, grid_x, grid_y, grid_xsize, x, y, xsize,
-                                    ysize,
-                                )
-                            };
+                            // Delta palette prediction may need cross-grid neighbors.
+                            let prediction_data = get_prediction_data(
+                                buf_out, out_idx, grid_x, grid_y, grid_xsize, x, y, xsize, ysize,
+                            );
                             let (pred, _) = wp_state.predict_and_property(
                                 (grid_x * xsize + x, y & 1),
                                 total_w,
@@ -501,21 +488,14 @@ pub fn do_palette_step_group_row(
                             bit_depth,
                         );
                         let val = if index < num_deltas as i32 {
-                            // Fast path for interior pixels: avoid expensive get_with_neighbors
-                            let pred = if x > 0 && y > 0 && x + 1 < xsize {
-                                predictor.predict_one(
-                                    PredictionData::get(&buf_out[out_idx].data, x, y),
-                                    /*wp_pred=*/ 0,
-                                )
-                            } else {
-                                predictor.predict_one(
-                                    get_prediction_data(
-                                        buf_out, out_idx, grid_x, grid_y, grid_xsize, x, y, xsize,
-                                        ysize,
-                                    ),
-                                    /*wp_pred=*/ 0,
-                                )
-                            };
+                            // Delta palette prediction may need cross-grid neighbors.
+                            let pred = predictor.predict_one(
+                                get_prediction_data(
+                                    buf_out, out_idx, grid_x, grid_y, grid_xsize, x, y, xsize,
+                                    ysize,
+                                ),
+                                /*wp_pred=*/ 0,
+                            );
                             (pred + palette_entry as i64) as i32
                         } else {
                             palette_entry
