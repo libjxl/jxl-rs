@@ -262,27 +262,49 @@ fn compute_properties_common(
     // Full mask-based approach is best: branch cost < store savings.
 
     if used_mask & 0x000C != 0 {
-        if used_mask & (1 << 2) != 0 { property_buffer[2] = y as i32; }
-        if used_mask & (1 << 3) != 0 { property_buffer[3] = x as i32; }
+        if used_mask & (1 << 2) != 0 {
+            property_buffer[2] = y as i32;
+        }
+        if used_mask & (1 << 3) != 0 {
+            property_buffer[3] = x as i32;
+        }
     }
     if used_mask & 0x0030 != 0 {
-        if used_mask & (1 << 4) != 0 { property_buffer[4] = top.wrapping_abs(); }
-        if used_mask & (1 << 5) != 0 { property_buffer[5] = left.wrapping_abs(); }
+        if used_mask & (1 << 4) != 0 {
+            property_buffer[4] = top.wrapping_abs();
+        }
+        if used_mask & (1 << 5) != 0 {
+            property_buffer[5] = left.wrapping_abs();
+        }
     }
     if used_mask & 0x00C0 != 0 {
-        if used_mask & (1 << 6) != 0 { property_buffer[6] = top; }
-        if used_mask & (1 << 7) != 0 { property_buffer[7] = left; }
+        if used_mask & (1 << 6) != 0 {
+            property_buffer[6] = top;
+        }
+        if used_mask & (1 << 7) != 0 {
+            property_buffer[7] = left;
+        }
     }
     if used_mask & 0x0300 != 0 {
         property_buffer[8] = left.wrapping_sub(property_buffer[9]);
         property_buffer[9] = left.wrapping_add(top).wrapping_sub(topleft);
     }
     if used_mask & 0x7C00 != 0 {
-        if used_mask & (1 << 10) != 0 { property_buffer[10] = left.wrapping_sub(topleft); }
-        if used_mask & (1 << 11) != 0 { property_buffer[11] = topleft.wrapping_sub(top); }
-        if used_mask & (1 << 12) != 0 { property_buffer[12] = top.wrapping_sub(topright); }
-        if used_mask & (1 << 13) != 0 { property_buffer[13] = top.wrapping_sub(toptop); }
-        if used_mask & (1 << 14) != 0 { property_buffer[14] = left.wrapping_sub(leftleft); }
+        if used_mask & (1 << 10) != 0 {
+            property_buffer[10] = left.wrapping_sub(topleft);
+        }
+        if used_mask & (1 << 11) != 0 {
+            property_buffer[11] = topleft.wrapping_sub(top);
+        }
+        if used_mask & (1 << 12) != 0 {
+            property_buffer[12] = top.wrapping_sub(topright);
+        }
+        if used_mask & (1 << 13) != 0 {
+            property_buffer[13] = top.wrapping_sub(toptop);
+        }
+        if used_mask & (1 << 14) != 0 {
+            property_buffer[14] = left.wrapping_sub(leftleft);
+        }
     }
 
     // Reference properties - only copy if used (this involves a memcpy).
@@ -305,7 +327,14 @@ fn compute_properties_no_wp(
     y: usize,
     used_mask: u32,
 ) {
-    compute_properties_common(prediction_data, references, property_buffer, x, y, used_mask);
+    compute_properties_common(
+        prediction_data,
+        references,
+        property_buffer,
+        x,
+        y,
+        used_mask,
+    );
     if used_mask & (1 << 15) != 0 {
         property_buffer[15] = 0;
     }
@@ -313,6 +342,7 @@ fn compute_properties_no_wp(
 
 /// Computes properties with weighted predictor. Returns the WP prediction value.
 #[inline(always)]
+#[allow(clippy::too_many_arguments)]
 fn compute_properties_with_wp(
     prediction_data: PredictionData,
     xsize: usize,
@@ -323,7 +353,14 @@ fn compute_properties_with_wp(
     y: usize,
     used_mask: u32,
 ) -> i64 {
-    compute_properties_common(prediction_data, references, property_buffer, x, y, used_mask);
+    compute_properties_common(
+        prediction_data,
+        references,
+        property_buffer,
+        x,
+        y,
+        used_mask,
+    );
     // If property 15 (WP max error) is used by the tree, compute it.
     // Otherwise skip the expensive abs() comparisons.
     if used_mask & (1 << 15) != 0 {
@@ -337,7 +374,7 @@ fn compute_properties_with_wp(
 
 /// Interior version: no edge checks for WP predictor. x > 0 and x < xsize-1 guaranteed.
 #[inline(always)]
-#[allow(unsafe_code)]
+#[allow(clippy::too_many_arguments, unsafe_code)]
 fn compute_properties_with_wp_interior(
     prediction_data: PredictionData,
     xsize: usize,
@@ -348,7 +385,14 @@ fn compute_properties_with_wp_interior(
     y: usize,
     used_mask: u32,
 ) -> i64 {
-    compute_properties_common(prediction_data, references, property_buffer, x, y, used_mask);
+    compute_properties_common(
+        prediction_data,
+        references,
+        property_buffer,
+        x,
+        y,
+        used_mask,
+    );
     if used_mask & (1 << 15) != 0 {
         let (wp_pred, wp_prop) = wp_state.predict_and_property_interior(x, xsize, &prediction_data);
         property_buffer[15] = wp_prop;
@@ -503,10 +547,12 @@ pub(super) fn predict_flat(
             let p0 = unsafe {
                 *property_buffer.get_unchecked(node.property0 as usize) <= node.splitval0
             };
+            // SAFETY: properties_or_offset[0] is validated to be a valid property index.
             let off0 = unsafe {
                 (*property_buffer.get_unchecked(node.properties_or_offset[0] as usize)
                     <= node.splitvals_or_multiplier[0]) as u32
             };
+            // SAFETY: properties_or_offset[1] is validated to be a valid property index.
             let off1 = unsafe {
                 2 | (*property_buffer.get_unchecked(node.properties_or_offset[1] as usize)
                     <= node.splitvals_or_multiplier[1]) as u32
@@ -533,11 +579,19 @@ pub(super) fn predict_flat_no_wp(
     property_buffer: &mut [i32],
     used_mask: u32,
 ) -> PredictionResult {
-    compute_properties_no_wp(prediction_data, references, property_buffer, x, y, used_mask);
+    compute_properties_no_wp(
+        prediction_data,
+        references,
+        property_buffer,
+        x,
+        y,
+        used_mask,
+    );
 
     let mut pos = 0;
     macro_rules! traverse {
         ($pos:expr) => {{
+            // SAFETY: pos always points to a valid node in flat_tree by construction.
             let node = unsafe { flat_tree.get_unchecked($pos) };
             if node.property0 < 0 {
                 let pred = node.predictor.predict_one(prediction_data, 0);
@@ -547,13 +601,16 @@ pub(super) fn predict_flat_no_wp(
                     context: node.child_id,
                 };
             }
+            // SAFETY: node.property0 is a validated property index for property_buffer.
             let p0 = unsafe {
                 *property_buffer.get_unchecked(node.property0 as usize) <= node.splitval0
             };
+            // SAFETY: properties_or_offset[0] is a validated property index.
             let off0 = unsafe {
                 (*property_buffer.get_unchecked(node.properties_or_offset[0] as usize)
                     <= node.splitvals_or_multiplier[0]) as u32
             };
+            // SAFETY: properties_or_offset[1] is a validated property index.
             let off1 = unsafe {
                 2 | (*property_buffer.get_unchecked(node.properties_or_offset[1] as usize)
                     <= node.splitvals_or_multiplier[1]) as u32
@@ -569,7 +626,7 @@ pub(super) fn predict_flat_no_wp(
 
 /// Specialized predict_flat with weighted predictor (avoids Option overhead).
 #[inline(always)]
-#[allow(unsafe_code)]
+#[allow(clippy::too_many_arguments, unsafe_code)]
 pub(super) fn predict_flat_with_wp(
     flat_tree: &[FlatTreeNode],
     prediction_data: PredictionData,
@@ -582,12 +639,20 @@ pub(super) fn predict_flat_with_wp(
     used_mask: u32,
 ) -> PredictionResult {
     let wp_pred = compute_properties_with_wp(
-        prediction_data, xsize, wp_state, references, property_buffer, x, y, used_mask,
+        prediction_data,
+        xsize,
+        wp_state,
+        references,
+        property_buffer,
+        x,
+        y,
+        used_mask,
     );
 
     let mut pos = 0;
     macro_rules! traverse {
         ($pos:expr) => {{
+            // SAFETY: pos always points to a valid node in flat_tree by construction.
             let node = unsafe { flat_tree.get_unchecked($pos) };
             if node.property0 < 0 {
                 let pred = node.predictor.predict_one(prediction_data, wp_pred);
@@ -597,13 +662,16 @@ pub(super) fn predict_flat_with_wp(
                     context: node.child_id,
                 };
             }
+            // SAFETY: node.property0 is a validated property index for property_buffer.
             let p0 = unsafe {
                 *property_buffer.get_unchecked(node.property0 as usize) <= node.splitval0
             };
+            // SAFETY: properties_or_offset[0] is a validated property index.
             let off0 = unsafe {
                 (*property_buffer.get_unchecked(node.properties_or_offset[0] as usize)
                     <= node.splitvals_or_multiplier[0]) as u32
             };
+            // SAFETY: properties_or_offset[1] is a validated property index.
             let off1 = unsafe {
                 2 | (*property_buffer.get_unchecked(node.properties_or_offset[1] as usize)
                     <= node.splitvals_or_multiplier[1]) as u32
@@ -620,7 +688,7 @@ pub(super) fn predict_flat_with_wp(
 /// Interior version of predict_flat_with_wp. No edge checks for WP predictor.
 /// x > 0 and x < xsize-1 guaranteed.
 #[inline(always)]
-#[allow(unsafe_code)]
+#[allow(clippy::too_many_arguments, unsafe_code)]
 pub(super) fn predict_flat_with_wp_interior(
     flat_tree: &[FlatTreeNode],
     prediction_data: PredictionData,
@@ -633,12 +701,20 @@ pub(super) fn predict_flat_with_wp_interior(
     used_mask: u32,
 ) -> PredictionResult {
     let wp_pred = compute_properties_with_wp_interior(
-        prediction_data, xsize, wp_state, references, property_buffer, x, y, used_mask,
+        prediction_data,
+        xsize,
+        wp_state,
+        references,
+        property_buffer,
+        x,
+        y,
+        used_mask,
     );
 
     let mut pos = 0;
     macro_rules! traverse {
         ($pos:expr) => {{
+            // SAFETY: pos always points to a valid node in flat_tree by construction.
             let node = unsafe { flat_tree.get_unchecked($pos) };
             if node.property0 < 0 {
                 let pred = node.predictor.predict_one(prediction_data, wp_pred);
@@ -648,13 +724,16 @@ pub(super) fn predict_flat_with_wp_interior(
                     context: node.child_id,
                 };
             }
+            // SAFETY: node.property0 is a validated property index for property_buffer.
             let p0 = unsafe {
                 *property_buffer.get_unchecked(node.property0 as usize) <= node.splitval0
             };
+            // SAFETY: properties_or_offset[0] is a validated property index.
             let off0 = unsafe {
                 (*property_buffer.get_unchecked(node.properties_or_offset[0] as usize)
                     <= node.splitvals_or_multiplier[0]) as u32
             };
+            // SAFETY: properties_or_offset[1] is a validated property index.
             let off1 = unsafe {
                 2 | (*property_buffer.get_unchecked(node.properties_or_offset[1] as usize)
                     <= node.splitvals_or_multiplier[1]) as u32

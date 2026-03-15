@@ -577,6 +577,8 @@ pub fn decode_vardct_group(
                         // coeff_order decoding, and current_coeffs.len() == num_coeffs.
                         // k < num_coeffs by loop bounds.
                         let coeff_index = unsafe { *permutation.get_unchecked(k) } as usize;
+                        // SAFETY: coeff_index comes from permutation[k], which is validated
+                        // to be < num_coeffs, and current_coeffs.len() == num_coeffs.
                         unsafe { *current_coeffs.get_unchecked_mut(coeff_index) += coeff };
                     }
                     if nonzeros != 0 {
@@ -616,7 +618,6 @@ pub fn decode_vardct_group(
                     &qblock,
                     dequant_matrices,
                 )?;
-
             }
             coeffs_offset += num_coeffs;
         }

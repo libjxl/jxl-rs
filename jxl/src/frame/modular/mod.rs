@@ -151,9 +151,8 @@ impl ModularChannel {
         // SAFETY: The modular decode loop (decode_modular_channel_impl) fully writes
         // every pixel in the data region. The padding region is zeroed for correct
         // boundary behavior in prediction.
-        let data = unsafe {
-            Image::new_uninit_with_zeroed_padding(size, IMAGE_OFFSET, IMAGE_PADDING)?
-        };
+        let data =
+            unsafe { Image::new_uninit_with_zeroed_padding(size, IMAGE_OFFSET, IMAGE_PADDING)? };
         Ok(ModularChannel {
             data,
             auxiliary_data: None,

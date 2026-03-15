@@ -51,7 +51,7 @@ impl Predictor {
         if value <= Predictor::AverageAll as u32 {
             // SAFETY: Predictor is #[repr(u8)] with contiguous discriminants 0..=13,
             // and we verified value is in range.
-            Some(unsafe { std::mem::transmute(value as u8) })
+            Some(unsafe { std::mem::transmute::<u8, Self>(value as u8) })
         } else {
             None
         }
@@ -96,8 +96,8 @@ impl PredictionData {
         self.topright = self.toprightright;
         self.left = cur;
         // SAFETY: x < row_toptop.len() because x < width and row_toptop has width elements.
-        // x + 2 < row_top.len() asserted above.
         self.toptop = unsafe { *row_toptop.get_unchecked(x) };
+        // SAFETY: x + 2 < row_top.len() asserted above.
         self.toprightright = unsafe { *row_top.get_unchecked(x + 2) };
     }
 
@@ -361,7 +361,10 @@ fn error_weight(x: u32, maxweight: u32) -> u32 {
 #[allow(unsafe_code)]
 fn weighted_average(pixels: &[i64; NUM_PREDICTORS], weights: &mut [u32; NUM_PREDICTORS]) -> i64 {
     // Sum weights as u32 (always fits in practice).
-    let sum32 = weights[0].wrapping_add(weights[1]).wrapping_add(weights[2]).wrapping_add(weights[3]);
+    let sum32 = weights[0]
+        .wrapping_add(weights[1])
+        .wrapping_add(weights[2])
+        .wrapping_add(weights[3]);
     let log_weight = if sum32 > 0 {
         31u32 ^ sum32.leading_zeros()
     } else {
@@ -378,8 +381,8 @@ fn weighted_average(pixels: &[i64; NUM_PREDICTORS], weights: &mut [u32; NUM_PRED
         + pixels[1] * weights[1] as i64
         + pixels[2] * weights[2] as i64
         + pixels[3] * weights[3] as i64;
-    // SAFETY: weight_sum <= 64 after the shift-right by (log_weight - 4).
     debug_assert!((weight_sum - 1) < 64, "weight_sum={}", weight_sum);
+    // SAFETY: weight_sum <= 64 after the shift-right by (log_weight - 4).
     let div = unsafe { *DIVLOOKUP.get_unchecked((weight_sum - 1) as usize) };
     (sum * div as i64) >> 24
 }
@@ -432,9 +435,7 @@ impl WeightedPredictorState {
         debug_assert!(start + NUM_PREDICTORS <= self.pred_errors_buffer.len());
         // SAFETY: start + NUM_PREDICTORS <= buffer.len() because pos < num_errors
         // (which is (xsize+2)*2), and buffer.len() = num_errors * NUM_PREDICTORS.
-        unsafe {
-            &*(self.pred_errors_buffer.as_ptr().add(start) as *const [u32; NUM_PREDICTORS])
-        }
+        unsafe { &*(self.pred_errors_buffer.as_ptr().add(start) as *const [u32; NUM_PREDICTORS]) }
     }
 
     /// Get mutable reference to all predictor errors for a given position
@@ -488,11 +489,17 @@ impl WeightedPredictorState {
         debug_assert!(cur_start + NUM_PREDICTORS <= self.pred_errors_buffer.len());
         debug_assert!(prev_start + NUM_PREDICTORS <= self.pred_errors_buffer.len());
         let buf = self.pred_errors_buffer.as_mut_ptr();
+        // SAFETY: cur_start/prev_start ranges are bounds-checked above, and each access
+        // stays within [0, pred_errors_buffer.len()).
         unsafe {
-            let e0 = (((self.prediction[0] - val).abs() + PREDICTION_ROUND) >> PRED_EXTRA_BITS) as u32;
-            let e1 = (((self.prediction[1] - val).abs() + PREDICTION_ROUND) >> PRED_EXTRA_BITS) as u32;
-            let e2 = (((self.prediction[2] - val).abs() + PREDICTION_ROUND) >> PRED_EXTRA_BITS) as u32;
-            let e3 = (((self.prediction[3] - val).abs() + PREDICTION_ROUND) >> PRED_EXTRA_BITS) as u32;
+            let e0 =
+                (((self.prediction[0] - val).abs() + PREDICTION_ROUND) >> PRED_EXTRA_BITS) as u32;
+            let e1 =
+                (((self.prediction[1] - val).abs() + PREDICTION_ROUND) >> PRED_EXTRA_BITS) as u32;
+            let e2 =
+                (((self.prediction[2] - val).abs() + PREDICTION_ROUND) >> PRED_EXTRA_BITS) as u32;
+            let e3 =
+                (((self.prediction[3] - val).abs() + PREDICTION_ROUND) >> PRED_EXTRA_BITS) as u32;
             // Write current position
             *buf.add(cur_start) = e0;
             *buf.add(cur_start + 1) = e1;
@@ -575,21 +582,31 @@ impl WeightedPredictorState {
         let off_ne = pos_ne * NUM_PREDICTORS;
         let off_nw = pos_nw * NUM_PREDICTORS;
         let mut weights = [0u32; NUM_PREDICTORS];
+        // SAFETY: pos_n/pos_ne/pos_nw are valid row positions, so each computed offset
+        // points to 4 contiguous predictor-error entries within pred_errors_buffer.
         unsafe {
             weights[0] = error_weight(
-                (*base.add(off_n)).wrapping_add(*base.add(off_ne)).wrapping_add(*base.add(off_nw)),
+                (*base.add(off_n))
+                    .wrapping_add(*base.add(off_ne))
+                    .wrapping_add(*base.add(off_nw)),
                 self.maxweights[0],
             );
             weights[1] = error_weight(
-                (*base.add(off_n + 1)).wrapping_add(*base.add(off_ne + 1)).wrapping_add(*base.add(off_nw + 1)),
+                (*base.add(off_n + 1))
+                    .wrapping_add(*base.add(off_ne + 1))
+                    .wrapping_add(*base.add(off_nw + 1)),
                 self.maxweights[1],
             );
             weights[2] = error_weight(
-                (*base.add(off_n + 2)).wrapping_add(*base.add(off_ne + 2)).wrapping_add(*base.add(off_nw + 2)),
+                (*base.add(off_n + 2))
+                    .wrapping_add(*base.add(off_ne + 2))
+                    .wrapping_add(*base.add(off_nw + 2)),
                 self.maxweights[2],
             );
             weights[3] = error_weight(
-                (*base.add(off_n + 3)).wrapping_add(*base.add(off_ne + 3)).wrapping_add(*base.add(off_nw + 3)),
+                (*base.add(off_n + 3))
+                    .wrapping_add(*base.add(off_ne + 3))
+                    .wrapping_add(*base.add(off_nw + 3)),
                 self.maxweights[3],
             );
         }
@@ -599,19 +616,30 @@ impl WeightedPredictorState {
         let nw = add_bits(data.topleft);
         let nn = add_bits(data.toptop);
 
-        // SAFETY: x > 0 guaranteed in interior, so cur_row + x - 1 >= 0
         let err_base = self.error.as_ptr();
-        let te_w = unsafe { *err_base.add(cur_row + x - 1) as i64 };
-        let te_n = unsafe { *err_base.add(pos_n) as i64 };
-        let te_nw = unsafe { *err_base.add(pos_nw) as i64 };
+        // SAFETY: x > 0 in the interior path, and pos_n/pos_nw/pos_ne are all valid
+        // indexes within error.len() = (xsize + 2) * 2.
+        let (te_w, te_n, te_nw, te_ne) = unsafe {
+            (
+                *err_base.add(cur_row + x - 1) as i64,
+                *err_base.add(pos_n) as i64,
+                *err_base.add(pos_nw) as i64,
+                *err_base.add(pos_ne) as i64,
+            )
+        };
         let sum_wn = te_n + te_w;
-        let te_ne = unsafe { *err_base.add(pos_ne) as i64 };
 
         let p = if COMPUTE_PROPERTY {
             let mut p = te_w;
-            if te_n.abs() > p.abs() { p = te_n; }
-            if te_nw.abs() > p.abs() { p = te_nw; }
-            if te_ne.abs() > p.abs() { p = te_ne; }
+            if te_n.abs() > p.abs() {
+                p = te_n;
+            }
+            if te_nw.abs() > p.abs() {
+                p = te_nw;
+            }
+            if te_ne.abs() > p.abs() {
+                p = te_ne;
+            }
             p
         } else {
             0
@@ -672,18 +700,22 @@ impl WeightedPredictorState {
         let nw = add_bits(data.topleft);
         let nn = add_bits(data.toptop);
 
-        // SAFETY: all positions are within error.len() = (xsize+2)*2.
-        // cur_row + pos.0 - 1 >= 0 since pos.0 > 0 in the branch that reads it.
-        // pos_n, pos_nw, pos_ne are all in [0, (xsize+2)*2).
         let te_w = if pos.0 == 0 {
             0
         } else {
+            // SAFETY: when pos.0 > 0, cur_row + pos.0 - 1 is a valid error index.
             unsafe { *self.error.get_unchecked(cur_row + pos.0 - 1) as i64 }
         };
-        let te_n = unsafe { *self.error.get_unchecked(pos_n) as i64 };
-        let te_nw = unsafe { *self.error.get_unchecked(pos_nw) as i64 };
+        // SAFETY: pos_n/pos_nw/pos_ne are clamped to valid neighborhood positions
+        // in error.len() = (xsize + 2) * 2.
+        let (te_n, te_nw, te_ne) = unsafe {
+            (
+                *self.error.get_unchecked(pos_n) as i64,
+                *self.error.get_unchecked(pos_nw) as i64,
+                *self.error.get_unchecked(pos_ne) as i64,
+            )
+        };
         let sum_wn = te_n + te_w;
-        let te_ne = unsafe { *self.error.get_unchecked(pos_ne) as i64 };
 
         let p = if compute_property {
             let mut p = te_w;

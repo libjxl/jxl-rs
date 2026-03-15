@@ -628,9 +628,9 @@ impl Frame {
                                 unsafe { &*batch.as_ptr().cast() };
                             let batch_size =
                                 (sub_xsize - batch_index * FLOATS_PER_BATCH).min(FLOATS_PER_BATCH);
-                            for i in 0..batch_size {
+                            for (i, &bits) in batch_u32.iter().take(batch_size).enumerate() {
                                 let x = sub_x0 + FLOATS_PER_BATCH * batch_index + i;
-                                row[x] = bits_to_float(batch_u32[i]);
+                                row[x] = bits_to_float(bits);
                             }
                         }
                     }

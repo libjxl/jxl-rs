@@ -436,9 +436,9 @@ impl AnsReader {
     #[inline(always)]
     #[allow(unsafe_code)]
     pub fn read(&mut self, codes: &AnsCodes, br: &mut BitReader, ctx: usize) -> u32 {
+        debug_assert!(ctx < codes.histograms.len());
         // SAFETY: ctx is a validated cluster ID from the context map,
         // checked during Histograms::decode() to be < histograms.len().
-        debug_assert!(ctx < codes.histograms.len());
         unsafe { codes.histograms.get_unchecked(ctx) }.read(br, &mut self.0)
     }
 

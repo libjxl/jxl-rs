@@ -48,6 +48,8 @@ impl<T: ImageDataType> Image<T> {
         padding: (usize, usize),
     ) -> Result<Image<T>> {
         let s = T::DATA_TYPE_ID.size();
+        // SAFETY: this function has the same safety contract as
+        // OwnedRawImage::new_uninit_with_zeroed_padding, and we only scale dimensions.
         let img = unsafe {
             OwnedRawImage::new_uninit_with_zeroed_padding(
                 (size.0 * s, size.1),

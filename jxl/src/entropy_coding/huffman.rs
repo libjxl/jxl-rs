@@ -488,9 +488,9 @@ impl HuffmanCodes {
     #[inline(always)]
     #[allow(unsafe_code)]
     pub fn read(&self, br: &mut BitReader, ctx: usize) -> u32 {
+        debug_assert!(ctx < self.tables.len());
         // SAFETY: ctx is always < self.tables.len() because it comes from a validated
         // context map (cluster ID), which was checked during Histograms::decode().
-        debug_assert!(ctx < self.tables.len());
         unsafe { self.tables.get_unchecked(ctx) }.read(br)
     }
 

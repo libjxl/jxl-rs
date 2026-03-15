@@ -127,9 +127,9 @@ impl RenderPipelineInPlaceStage for BlendingStage {
         let zeros_slice: &[f32] = self.zeros.as_slice();
         let mut fg_buf: [&[f32]; MAX_CHANNELS] = [zeros_slice; MAX_CHANNELS];
 
-        for c in 0..3 {
-            if let Some(ref rf) = self.reference_frames[self.blending_info.source as usize] {
-                fg_buf[c] = &rf.frame[c].row(fg_y0)[fg_x0..fg_x1];
+        if let Some(ref rf) = self.reference_frames[self.blending_info.source as usize] {
+            for (c, fg) in fg_buf.iter_mut().enumerate().take(3) {
+                *fg = &rf.frame[c].row(fg_y0)[fg_x0..fg_x1];
             }
         }
         for i in 0..num_ec {
@@ -150,9 +150,8 @@ impl RenderPipelineInPlaceStage for BlendingStage {
         }
 
         // Use pre-allocated tmp buffer from state to avoid per-call heap allocation.
-        let reusable_tmp = state.and_then(|s| {
-            s.downcast_mut::<BlendingState>().map(|bs| &mut bs.tmp)
-        });
+        let reusable_tmp =
+            state.and_then(|s| s.downcast_mut::<BlendingState>().map(|bs| &mut bs.tmp));
 
         // Build bg slice references on stack instead of using slice! macro (which allocates a Vec).
         let mut bg_slices: [&mut [f32]; MAX_CHANNELS] = Default::default();

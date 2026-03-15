@@ -21,7 +21,14 @@ pub fn perform_blending<T: AsRef<[f32]>, V: AsMut<[f32]>>(
     ec_blending: &[PatchBlending],
     extra_channel_info: &[ExtraChannelInfo],
 ) {
-    perform_blending_with_tmp(bg, fg, color_blending, ec_blending, extra_channel_info, None);
+    perform_blending_with_tmp(
+        bg,
+        fg,
+        color_blending,
+        ec_blending,
+        extra_channel_info,
+        None,
+    );
 }
 
 /// Like `perform_blending` but accepts a pre-allocated tmp buffer to avoid per-call heap
@@ -46,9 +53,9 @@ pub fn perform_blending_with_tmp<T: AsRef<[f32]>, V: AsMut<[f32]>>(
 
     // Fast path: Replace color + Replace/None ec -> copy fg directly to bg, no tmp needed.
     if color_blending.mode == PatchBlendMode::Replace {
-        let all_simple = ec_blending[..num_ec].iter().all(|b| {
-            b.mode == PatchBlendMode::Replace || b.mode == PatchBlendMode::None
-        });
+        let all_simple = ec_blending[..num_ec]
+            .iter()
+            .all(|b| b.mode == PatchBlendMode::Replace || b.mode == PatchBlendMode::None);
         if all_simple {
             for c in 0..3 {
                 bg[c].as_mut().copy_from_slice(fg[c].as_ref());

@@ -91,37 +91,30 @@ impl CodestreamParser {
 
         let complete_lf_global;
         // lf_global_real_len: the actual data length (excluding padding bytes)
-        let (lf_global, lf_global_real_len, lf_global_is_complete) = if let Some(d) = self.lf_global_section.take() {
-            complete_lf_global = d;
-            // Use full data slice (includes 8-byte padding from dequeue)
-            let real_len = complete_lf_global.len;
-            (
-                Some(&complete_lf_global.data[..]),
-                real_len,
-                true,
-            )
-        } else if do_flush
-            && self
-                .sections
-                .front()
-                .is_some_and(|s| s.section == Section::LfGlobal)
-            && 2 * self.ready_section_data > 3 * self.section_state.lf_global_flush_len
-            && frame_header.encoding == Encoding::Modular
-            && matches!(
-                frame_header.frame_type,
-                FrameType::RegularFrame | FrameType::LFFrame
-            )
-        {
-            self.section_state.lf_global_flush_len = self.ready_section_data;
-            let rsd = self.ready_section_data;
-            (
-                Some(&self.sections[0].data[..rsd]),
-                rsd,
-                false,
-            )
-        } else {
-            (None, 0, false)
-        };
+        let (lf_global, lf_global_real_len, lf_global_is_complete) =
+            if let Some(d) = self.lf_global_section.take() {
+                complete_lf_global = d;
+                // Use full data slice (includes 8-byte padding from dequeue)
+                let real_len = complete_lf_global.len;
+                (Some(&complete_lf_global.data[..]), real_len, true)
+            } else if do_flush
+                && self
+                    .sections
+                    .front()
+                    .is_some_and(|s| s.section == Section::LfGlobal)
+                && 2 * self.ready_section_data > 3 * self.section_state.lf_global_flush_len
+                && frame_header.encoding == Encoding::Modular
+                && matches!(
+                    frame_header.frame_type,
+                    FrameType::RegularFrame | FrameType::LFFrame
+                )
+            {
+                self.section_state.lf_global_flush_len = self.ready_section_data;
+                let rsd = self.ready_section_data;
+                (Some(&self.sections[0].data[..rsd]), rsd, false)
+            } else {
+                (None, 0, false)
+            };
 
         'process: {
             if frame_header.num_groups() == 1 && frame_header.passes.num_passes == 1 {
@@ -186,7 +179,10 @@ impl CodestreamParser {
                     let Section::Lf { group } = lf_section.section else {
                         unreachable!()
                     };
-                    frame.decode_lf_group(group, &mut BitReader::new_padded(&lf_section.data, lf_section.len))?;
+                    frame.decode_lf_group(
+                        group,
+                        &mut BitReader::new_padded(&lf_section.data, lf_section.len),
+                    )?;
                     processed_section = true;
                     self.section_state.remaining_lf -= 1;
                 }
@@ -196,7 +192,10 @@ impl CodestreamParser {
                 }
 
                 if let Some(hf_global) = self.hf_global_section.take() {
-                    frame.decode_hf_global(&mut BitReader::new_padded(&hf_global.data, hf_global.len))?;
+                    frame.decode_hf_global(&mut BitReader::new_padded(
+                        &hf_global.data,
+                        hf_global.len,
+                    ))?;
                     frame.finalize_lf()?;
                     self.section_state.hf_global_done = true;
                     processed_section = true;

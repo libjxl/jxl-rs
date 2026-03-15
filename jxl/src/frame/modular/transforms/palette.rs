@@ -463,7 +463,8 @@ pub fn do_palette_step_group_row(
                                 PredictionData::get(&buf_out[out_idx].data, x, y)
                             } else {
                                 get_prediction_data(
-                                    buf_out, out_idx, grid_x, grid_y, grid_xsize, x, y, xsize, ysize,
+                                    buf_out, out_idx, grid_x, grid_y, grid_xsize, x, y, xsize,
+                                    ysize,
                                 )
                             };
                             let (pred, _) = wp_state.predict_and_property(

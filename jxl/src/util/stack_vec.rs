@@ -38,7 +38,12 @@ impl<T, const N: usize> StackVec<T, N> {
 
     #[inline(always)]
     pub fn push(&mut self, val: T) {
-        debug_assert!(self.len < N, "StackVec overflow: len={}, cap={}", self.len, N);
+        debug_assert!(
+            self.len < N,
+            "StackVec overflow: len={}, cap={}",
+            self.len,
+            N
+        );
         // SAFETY: we just checked len < N (in debug), and the caller must ensure capacity.
         unsafe {
             self.data.get_unchecked_mut(self.len).write(val);
@@ -61,6 +66,13 @@ impl<T, const N: usize> StackVec<T, N> {
         for val in iter {
             self.push(val);
         }
+    }
+}
+
+impl<T, const N: usize> Default for StackVec<T, N> {
+    #[inline(always)]
+    fn default() -> Self {
+        Self::new()
     }
 }
 

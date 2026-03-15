@@ -63,7 +63,6 @@ impl NoWpTree {
 }
 
 impl ModularChannelDecoder for NoWpTree {
-
     fn init_row(&mut self, buffers: &mut [&mut ModularChannel], chan: usize, y: usize) {
         precompute_references(buffers, chan, y, &mut self.references);
         // Only need to zero property 9 (local gradient) since property 8
@@ -93,7 +92,8 @@ impl ModularChannelDecoder for NoWpTree {
             self.used_properties,
         );
         // Use inlined variant for hot interior loop (matches C++ ReadHybridUintClusteredInlined)
-        let dec = reader.read_signed_clustered_inline(histograms, br, prediction_result.context as usize);
+        let dec =
+            reader.read_signed_clustered_inline(histograms, br, prediction_result.context as usize);
         make_pixel(dec, prediction_result.multiplier, prediction_result.guess)
     }
 }
@@ -102,7 +102,6 @@ impl ModularChannelDecoder for NoWpTree {
 pub struct NoWpTreeNoLz77(NoWpTree);
 
 impl ModularChannelDecoder for NoWpTreeNoLz77 {
-
     fn init_row(&mut self, buffers: &mut [&mut ModularChannel], chan: usize, y: usize) {
         self.0.init_row(buffers, chan, y);
     }
@@ -126,7 +125,11 @@ impl ModularChannelDecoder for NoWpTreeNoLz77 {
             &mut self.0.property_buffer,
             self.0.used_properties,
         );
-        let dec = reader.read_signed_clustered_no_lz77(histograms, br, prediction_result.context as usize);
+        let dec = reader.read_signed_clustered_no_lz77(
+            histograms,
+            br,
+            prediction_result.context as usize,
+        );
         make_pixel(dec, prediction_result.multiplier, prediction_result.guess)
     }
 }
@@ -136,7 +139,6 @@ impl ModularChannelDecoder for NoWpTreeNoLz77 {
 pub struct NoWpTreeConfig420(NoWpTree);
 
 impl ModularChannelDecoder for NoWpTreeConfig420 {
-
     fn init_row(&mut self, buffers: &mut [&mut ModularChannel], chan: usize, y: usize) {
         self.0.init_row(buffers, chan, y);
     }
@@ -161,7 +163,11 @@ impl ModularChannelDecoder for NoWpTreeConfig420 {
             self.0.used_properties,
         );
         // Use the specialized config_420 fast path for entropy decoding
-        let dec = reader.read_signed_clustered_config_420(histograms, br, prediction_result.context as usize);
+        let dec = reader.read_signed_clustered_config_420(
+            histograms,
+            br,
+            prediction_result.context as usize,
+        );
         make_pixel(dec, prediction_result.multiplier, prediction_result.guess)
     }
 }
@@ -213,7 +219,6 @@ impl GeneralTreeNoLz77 {
 }
 
 impl ModularChannelDecoder for GeneralTree {
-
     fn init_row(&mut self, buffers: &mut [&mut ModularChannel], chan: usize, y: usize) {
         self.no_wp_tree.init_row(buffers, chan, y);
         let xsize = buffers[chan].data.size().0;
@@ -241,7 +246,8 @@ impl ModularChannelDecoder for GeneralTree {
             &mut self.no_wp_tree.property_buffer,
             self.no_wp_tree.used_properties,
         );
-        let dec = reader.read_signed_clustered_inline(histograms, br, prediction_result.context as usize);
+        let dec =
+            reader.read_signed_clustered_inline(histograms, br, prediction_result.context as usize);
         let val = make_pixel(dec, prediction_result.multiplier, prediction_result.guess);
         self.wp_state.update_errors(val, pos, xsize);
         val
@@ -268,7 +274,8 @@ impl ModularChannelDecoder for GeneralTree {
             &mut self.no_wp_tree.property_buffer,
             self.no_wp_tree.used_properties,
         );
-        let dec = reader.read_signed_clustered_inline(histograms, br, prediction_result.context as usize);
+        let dec =
+            reader.read_signed_clustered_inline(histograms, br, prediction_result.context as usize);
         let val = make_pixel(dec, prediction_result.multiplier, prediction_result.guess);
         self.wp_state.update_errors(val, pos, xsize);
         val
@@ -276,7 +283,6 @@ impl ModularChannelDecoder for GeneralTree {
 }
 
 impl ModularChannelDecoder for GeneralTreeNoLz77 {
-
     fn init_row(&mut self, buffers: &mut [&mut ModularChannel], chan: usize, y: usize) {
         self.no_wp_tree.init_row(buffers, chan, y);
         let xsize = buffers[chan].data.size().0;
@@ -305,7 +311,11 @@ impl ModularChannelDecoder for GeneralTreeNoLz77 {
             self.no_wp_tree.used_properties,
         );
         // No-LZ77 fast path: skip SymbolReaderState match (compile-time elimination)
-        let dec = reader.read_signed_clustered_no_lz77(histograms, br, prediction_result.context as usize);
+        let dec = reader.read_signed_clustered_no_lz77(
+            histograms,
+            br,
+            prediction_result.context as usize,
+        );
         let val = make_pixel(dec, prediction_result.multiplier, prediction_result.guess);
         self.wp_state.update_errors(val, pos, xsize);
         val
@@ -332,7 +342,11 @@ impl ModularChannelDecoder for GeneralTreeNoLz77 {
             &mut self.no_wp_tree.property_buffer,
             self.no_wp_tree.used_properties,
         );
-        let dec = reader.read_signed_clustered_no_lz77(histograms, br, prediction_result.context as usize);
+        let dec = reader.read_signed_clustered_no_lz77(
+            histograms,
+            br,
+            prediction_result.context as usize,
+        );
         let val = make_pixel(dec, prediction_result.multiplier, prediction_result.guess);
         self.wp_state.update_errors(val, pos, xsize);
         val
@@ -363,7 +377,6 @@ impl GeneralTreeConfig420 {
 }
 
 impl ModularChannelDecoder for GeneralTreeConfig420 {
-
     fn init_row(&mut self, buffers: &mut [&mut ModularChannel], chan: usize, y: usize) {
         self.no_wp_tree.init_row(buffers, chan, y);
         let xsize = buffers[chan].data.size().0;
@@ -391,7 +404,11 @@ impl ModularChannelDecoder for GeneralTreeConfig420 {
             &mut self.no_wp_tree.property_buffer,
             self.no_wp_tree.used_properties,
         );
-        let dec = reader.read_signed_clustered_config_420(histograms, br, prediction_result.context as usize);
+        let dec = reader.read_signed_clustered_config_420(
+            histograms,
+            br,
+            prediction_result.context as usize,
+        );
         let val = make_pixel(dec, prediction_result.multiplier, prediction_result.guess);
         self.wp_state.update_errors(val, pos, xsize);
         val
@@ -418,7 +435,11 @@ impl ModularChannelDecoder for GeneralTreeConfig420 {
             &mut self.no_wp_tree.property_buffer,
             self.no_wp_tree.used_properties,
         );
-        let dec = reader.read_signed_clustered_config_420(histograms, br, prediction_result.context as usize);
+        let dec = reader.read_signed_clustered_config_420(
+            histograms,
+            br,
+            prediction_result.context as usize,
+        );
         let val = make_pixel(dec, prediction_result.multiplier, prediction_result.guess);
         self.wp_state.update_errors(val, pos, xsize);
         val
@@ -503,7 +524,6 @@ impl WpOnlyLookupConfig420 {
 }
 
 impl ModularChannelDecoder for WpOnlyLookupConfig420 {
-
     fn init_row(&mut self, buffers: &mut [&mut ModularChannel], chan: usize, y: usize) {
         let xsize = buffers[chan].data.size().0;
         self.wp_state.set_row(y, xsize);
@@ -523,8 +543,9 @@ impl ModularChannelDecoder for WpOnlyLookupConfig420 {
         let (wp_pred, property) = self
             .wp_state
             .predict_and_property(pos, xsize, &prediction_data);
-        let clamped = property.max(LUT_MIN_SPLITVAL).min(LUT_MAX_SPLITVAL);
+        let clamped = property.clamp(LUT_MIN_SPLITVAL, LUT_MAX_SPLITVAL);
         let idx = (clamped - LUT_MIN_SPLITVAL) as usize;
+        // SAFETY: clamped is constrained to the LUT range, so idx is in-bounds.
         let ctx = unsafe { *self.lut.get_unchecked(idx) };
         let dec = reader.read_signed_clustered_config_420(histograms, br, ctx as usize);
         let val = dec.wrapping_add(wp_pred as i32);
@@ -543,11 +564,12 @@ impl ModularChannelDecoder for WpOnlyLookupConfig420 {
         br: &mut BitReader,
         histograms: &Histograms,
     ) -> i32 {
-        let (wp_pred, property) = self
-            .wp_state
-            .predict_and_property_interior(pos.0, xsize, &prediction_data);
-        let clamped = property.max(LUT_MIN_SPLITVAL).min(LUT_MAX_SPLITVAL);
+        let (wp_pred, property) =
+            self.wp_state
+                .predict_and_property_interior(pos.0, xsize, &prediction_data);
+        let clamped = property.clamp(LUT_MIN_SPLITVAL, LUT_MAX_SPLITVAL);
         let idx = (clamped - LUT_MIN_SPLITVAL) as usize;
+        // SAFETY: clamped is constrained to the LUT range, so idx is in-bounds.
         let ctx = unsafe { *self.lut.get_unchecked(idx) };
         let dec = reader.read_signed_clustered_config_420(histograms, br, ctx as usize);
         let val = dec.wrapping_add(wp_pred as i32);
@@ -593,7 +615,6 @@ fn make_gradient_lut_config_420(
 }
 
 impl ModularChannelDecoder for GradientLookupConfig420 {
-
     fn init_row(&mut self, _: &mut [&mut ModularChannel], _: usize, _: usize) {}
 
     #[inline(always)]
@@ -632,7 +653,6 @@ pub struct SingleGradientOnly {
 }
 
 impl ModularChannelDecoder for SingleGradientOnly {
-
     fn init_row(&mut self, _: &mut [&mut ModularChannel], _: usize, _: usize) {}
 
     #[inline(always)]
@@ -656,7 +676,6 @@ pub struct NoTree {
 }
 
 impl ModularChannelDecoder for NoTree {
-
     fn init_row(&mut self, _: &mut [&mut ModularChannel], _: usize, _: usize) {}
 
     #[inline(always)]
@@ -798,14 +817,24 @@ pub fn specialize_tree(
         // Use config_420 fast path when all entropy configs are 420 (no LZ77)
         if tree.histograms.can_use_config_420_fast_path() {
             return Ok(TreeSpecialCase::NoWpConfig420(NoWpTreeConfig420(
-                NoWpTree::new(pruned_tree, tree.max_property_count(), channel, stream, xsize)?,
+                NoWpTree::new(
+                    pruned_tree,
+                    tree.max_property_count(),
+                    channel,
+                    stream,
+                    xsize,
+                )?,
             )));
         }
         // Use no-LZ77 fast path when LZ77 is disabled
         if tree.histograms.has_no_lz77() {
-            return Ok(TreeSpecialCase::NoWpNoLz77(NoWpTreeNoLz77(
-                NoWpTree::new(pruned_tree, tree.max_property_count(), channel, stream, xsize)?,
-            )));
+            return Ok(TreeSpecialCase::NoWpNoLz77(NoWpTreeNoLz77(NoWpTree::new(
+                pruned_tree,
+                tree.max_property_count(),
+                channel,
+                stream,
+                xsize,
+            )?)));
         }
         return Ok(TreeSpecialCase::NoWp(NoWpTree::new(
             pruned_tree,
@@ -818,14 +847,16 @@ pub fn specialize_tree(
 
     // Use config_420 fast path for general (WP) trees when all entropy configs are 420
     if tree.histograms.can_use_config_420_fast_path() {
-        return Ok(TreeSpecialCase::GeneralConfig420(GeneralTreeConfig420::new(
-            pruned_tree,
-            tree.max_property_count(),
-            header,
-            channel,
-            stream,
-            xsize,
-        )?));
+        return Ok(TreeSpecialCase::GeneralConfig420(
+            GeneralTreeConfig420::new(
+                pruned_tree,
+                tree.max_property_count(),
+                header,
+                channel,
+                stream,
+                xsize,
+            )?,
+        ));
     }
 
     // Use no-LZ77 fast path when LZ77 is disabled but configs aren't all 420

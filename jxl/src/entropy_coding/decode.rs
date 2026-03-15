@@ -137,10 +137,10 @@ impl Lz77State {
     #[allow(unsafe_code)]
     fn pull_symbol(&mut self) -> Option<u32> {
         if let Some(next_num_to_copy) = self.num_to_copy.checked_sub(1) {
+            let idx = (self.copy_pos & Self::WINDOW_MASK) as usize;
             // SAFETY: copy_pos & WINDOW_MASK is always < 1 << LOG_WINDOW_SIZE,
             // and the window has capacity 1 << LOG_WINDOW_SIZE. As long as num_decoded > 0
             // (checked by apply_copy), the window has enough entries.
-            let idx = (self.copy_pos & Self::WINDOW_MASK) as usize;
             let sym = unsafe { *self.window.get_unchecked(idx) };
             self.copy_pos += 1;
             self.num_to_copy = next_num_to_copy;
@@ -343,9 +343,9 @@ impl SymbolReader {
                     Codes::Huffman(hc) => hc.read(br, cluster),
                     Codes::Ans(ans) => self.ans_reader.read(ans, br, cluster),
                 };
+                debug_assert!(cluster < histograms.uint_configs.len());
                 // SAFETY: cluster is a validated cluster ID from the context map,
                 // which is checked during Histograms::decode() to be < uint_configs.len().
-                debug_assert!(cluster < histograms.uint_configs.len());
                 unsafe { histograms.uint_configs.get_unchecked(cluster) }.read(token, br)
             }
 
@@ -499,8 +499,8 @@ impl SymbolReader {
             Codes::Huffman(hc) => hc.read(br, cluster),
             Codes::Ans(ans) => self.ans_reader.read(ans, br, cluster),
         };
-        // SAFETY: cluster is a validated cluster ID.
         debug_assert!(cluster < histograms.uint_configs.len());
+        // SAFETY: cluster is a validated cluster ID.
         let unsigned = unsafe { histograms.uint_configs.get_unchecked(cluster) }.read(token, br);
         unpack_signed(unsigned)
     }
@@ -661,10 +661,10 @@ impl Histograms {
     #[inline(always)]
     #[allow(unsafe_code)]
     pub fn map_context_to_cluster(&self, context: usize) -> usize {
+        debug_assert!(context < self.context_map.len());
         // SAFETY: context < context_map.len() is guaranteed by the caller -
         // contexts are bounded by the number of leaf nodes in the tree
         // or num_ac_contexts, both validated during decode.
-        debug_assert!(context < self.context_map.len());
         unsafe { *self.context_map.get_unchecked(context) as usize }
     }
 

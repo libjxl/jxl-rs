@@ -155,14 +155,15 @@ fn decode_modular_channel_impl<D: ModularChannelDecoder>(
         } else {
             #[allow(unsafe_code)]
             for x in 2..size.0 - 2 {
-                prediction_data.update_for_interior_row(
-                    row_top,
-                    row_toptop,
-                    x,
-                    last,
+                prediction_data.update_for_interior_row(row_top, row_toptop, x, last);
+                let val = decoder.decode_one_interior(
+                    prediction_data,
+                    (x, y),
+                    size.0,
+                    reader,
+                    br,
+                    histograms,
                 );
-                let val =
-                    decoder.decode_one_interior(prediction_data, (x, y), size.0, reader, br, histograms);
                 // SAFETY: x is in [2, size.0 - 2), and row.len() == size.0.
                 unsafe { *row.get_unchecked_mut(x) = val };
                 last = val;
