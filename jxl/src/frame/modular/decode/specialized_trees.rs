@@ -91,12 +91,136 @@ impl ModularChannelDecoder for NoWpTree {
     }
 }
 
+/// NoWp tree variant without LZ77. Skips SymbolReaderState matching per pixel.
+pub struct NoWpTreeNoLz77(NoWpTree);
+
+impl ModularChannelDecoder for NoWpTreeNoLz77 {
+    const NEEDS_TOP: bool = true;
+    const NEEDS_TOPTOP: bool = true;
+
+    fn init_row(&mut self, buffers: &mut [&mut ModularChannel], chan: usize, y: usize) {
+        self.0.init_row(buffers, chan, y);
+    }
+
+    fn decode_one(
+        &mut self,
+        prediction_data: PredictionData,
+        pos: (usize, usize),
+        xsize: usize,
+        reader: &mut SymbolReader,
+        br: &mut BitReader,
+        histograms: &Histograms,
+    ) -> i32 {
+        let prediction_result = predict_flat(
+            &self.0.flat_nodes,
+            prediction_data,
+            xsize,
+            None,
+            pos.0,
+            pos.1,
+            &self.0.references,
+            &mut self.0.property_buffer,
+        );
+        let dec = reader.read_signed_clustered_no_lz77(
+            histograms,
+            br,
+            prediction_result.context as usize,
+        );
+        make_pixel(dec, prediction_result.multiplier, prediction_result.guess)
+    }
+}
+
+/// NoWp tree variant using config_420 entropy fast path.
+pub struct NoWpTreeConfig420(NoWpTree);
+
+impl ModularChannelDecoder for NoWpTreeConfig420 {
+    const NEEDS_TOP: bool = true;
+    const NEEDS_TOPTOP: bool = true;
+
+    fn init_row(&mut self, buffers: &mut [&mut ModularChannel], chan: usize, y: usize) {
+        self.0.init_row(buffers, chan, y);
+    }
+
+    fn decode_one(
+        &mut self,
+        prediction_data: PredictionData,
+        pos: (usize, usize),
+        xsize: usize,
+        reader: &mut SymbolReader,
+        br: &mut BitReader,
+        histograms: &Histograms,
+    ) -> i32 {
+        let prediction_result = predict_flat(
+            &self.0.flat_nodes,
+            prediction_data,
+            xsize,
+            None,
+            pos.0,
+            pos.1,
+            &self.0.references,
+            &mut self.0.property_buffer,
+        );
+        let dec = reader.read_signed_clustered_config_420(
+            histograms,
+            br,
+            prediction_result.context as usize,
+        );
+        make_pixel(dec, prediction_result.multiplier, prediction_result.guess)
+    }
+}
+
 pub struct GeneralTree {
     no_wp_tree: NoWpTree,
     wp_state: WeightedPredictorState,
 }
 
 impl GeneralTree {
+    fn new(
+        nodes: Vec<TreeNode>,
+        max_property_count: usize,
+        header: &GroupHeader,
+        channel: usize,
+        stream: usize,
+        xsize: usize,
+    ) -> Result<Self> {
+        let wp_state = WeightedPredictorState::new(&header.wp_header, xsize);
+        Ok(Self {
+            no_wp_tree: NoWpTree::new(nodes, max_property_count, channel, stream, xsize)?,
+            wp_state,
+        })
+    }
+}
+
+/// GeneralTree variant without LZ77.
+pub struct GeneralTreeNoLz77 {
+    no_wp_tree: NoWpTree,
+    wp_state: WeightedPredictorState,
+}
+
+impl GeneralTreeNoLz77 {
+    fn new(
+        nodes: Vec<TreeNode>,
+        max_property_count: usize,
+        header: &GroupHeader,
+        channel: usize,
+        stream: usize,
+        xsize: usize,
+    ) -> Result<Self> {
+        let wp_state = WeightedPredictorState::new(&header.wp_header, xsize);
+        Ok(Self {
+            no_wp_tree: NoWpTree::new(nodes, max_property_count, channel, stream, xsize)?,
+            wp_state,
+        })
+    }
+}
+
+/// GeneralTree variant using config_420 entropy fast path.
+pub struct GeneralTreeConfig420 {
+    no_wp_tree: NoWpTree,
+    wp_state: WeightedPredictorState,
+}
+
+impl GeneralTreeConfig420 {
     fn new(
         nodes: Vec<TreeNode>,
         max_property_count: usize,
@@ -141,6 +265,82 @@ impl ModularChannelDecoder for GeneralTree {
             &mut self.no_wp_tree.property_buffer,
         );
         let dec = reader.read_signed_clustered(histograms, br, prediction_result.context as usize);
+        let val = make_pixel(dec, prediction_result.multiplier, prediction_result.guess);
+        self.wp_state.update_errors(val, pos, xsize);
+        val
+    }
+}
+
+impl ModularChannelDecoder for GeneralTreeNoLz77 {
+    const NEEDS_TOP: bool = true;
+    const NEEDS_TOPTOP: bool = true;
+
+    fn init_row(&mut self, buffers: &mut [&mut ModularChannel], chan: usize, y: usize) {
+        self.no_wp_tree.init_row(buffers, chan, y);
+    }
+
+    fn decode_one(
+        &mut self,
+        prediction_data: PredictionData,
+        pos: (usize, usize),
+        xsize: usize,
+        reader: &mut SymbolReader,
+        br: &mut BitReader,
+        histograms: &Histograms,
+    ) -> i32 {
+        let prediction_result = predict_flat(
+            &self.no_wp_tree.flat_nodes,
+            prediction_data,
+            xsize,
+            Some(&mut self.wp_state),
+            pos.0,
+            pos.1,
+            &self.no_wp_tree.references,
+            &mut self.no_wp_tree.property_buffer,
+        );
+        let dec = reader.read_signed_clustered_no_lz77(
+            histograms,
+            br,
+            prediction_result.context as usize,
+        );
+        let val = make_pixel(dec, prediction_result.multiplier, prediction_result.guess);
+        self.wp_state.update_errors(val, pos, xsize);
+        val
+    }
+}
+
+impl ModularChannelDecoder for GeneralTreeConfig420 {
+    const NEEDS_TOP: bool = true;
+    const NEEDS_TOPTOP: bool = true;
+
+    fn init_row(&mut self, buffers: &mut [&mut ModularChannel], chan: usize, y: usize) {
+        self.no_wp_tree.init_row(buffers, chan, y);
+    }
+
+    fn decode_one(
+        &mut self,
+        prediction_data: PredictionData,
+        pos: (usize, usize),
+        xsize: usize,
+        reader: &mut SymbolReader,
+        br: &mut BitReader,
+        histograms: &Histograms,
+    ) -> i32 {
+        let prediction_result = predict_flat(
+            &self.no_wp_tree.flat_nodes,
+            prediction_data,
+            xsize,
+            Some(&mut self.wp_state),
+            pos.0,
+            pos.1,
+            &self.no_wp_tree.references,
+            &mut self.no_wp_tree.property_buffer,
+        );
+        let dec = reader.read_signed_clustered_config_420(
+            histograms,
+            br,
+            prediction_result.context as usize,
+        );
         let val = make_pixel(dec, prediction_result.multiplier, prediction_result.guess);
         self.wp_state.update_errors(val, pos, xsize);
         val
@@ -383,10 +583,14 @@ impl ModularChannelDecoder for NoTree {
 pub enum TreeSpecialCase {
     NoTree(NoTree),
     NoWp(NoWpTree),
+    NoWpNoLz77(NoWpTreeNoLz77),
+    NoWpConfig420(NoWpTreeConfig420),
     WpOnlyConfig420(WpOnlyLookupConfig420),
     GradientLookupConfig420(GradientLookupConfig420),
     SingleGradientOnly(SingleGradientOnly),
     General(GeneralTree),
+    GeneralNoLz77(GeneralTreeNoLz77),
+    GeneralConfig420(GeneralTreeConfig420),
 }
 
 pub fn specialize_tree(
@@ -496,9 +700,45 @@ pub fn specialize_tree(
         if let Some(gl) = make_gradient_lut_config_420(&pruned_tree, &tree.histograms) {
             return Ok(TreeSpecialCase::GradientLookupConfig420(gl));
         }
+        if tree.histograms.can_use_config_420_fast_path() {
+            return Ok(TreeSpecialCase::NoWpConfig420(NoWpTreeConfig420(
+                NoWpTree::new(pruned_tree, tree.max_property_count(), channel, stream, xsize)?,
+            )));
+        }
+        if tree.histograms.has_no_lz77() {
+            return Ok(TreeSpecialCase::NoWpNoLz77(NoWpTreeNoLz77(NoWpTree::new(
+                pruned_tree,
+                tree.max_property_count(),
+                channel,
+                stream,
+                xsize,
+            )?)));
+        }
         return Ok(TreeSpecialCase::NoWp(NoWpTree::new(
             pruned_tree,
             tree.max_property_count(),
+            channel,
+            stream,
+            xsize,
+        )?));
+    }
+
+    if tree.histograms.can_use_config_420_fast_path() {
+        return Ok(TreeSpecialCase::GeneralConfig420(GeneralTreeConfig420::new(
+            pruned_tree,
+            tree.max_property_count(),
+            header,
+            channel,
+            stream,
+            xsize,
+        )?));
+    }
+
+    if tree.histograms.has_no_lz77() {
+        return Ok(TreeSpecialCase::GeneralNoLz77(GeneralTreeNoLz77::new(
+            pruned_tree,
+            tree.max_property_count(),
+            header,
             channel,
             stream,
             xsize,
