@@ -132,6 +132,14 @@ impl<Pipeline: RenderPipeline> RenderPipelineBuilder<Pipeline> {
                     stage_is_used[i] |= self.shared.channel_is_used[c];
                 }
             }
+            // For now, mark stages with a shift as used.
+            // This is because they change channel information, which can then
+            // trigger downstream failures.
+            // TODO(veluca): we should probably compute channel information *before*
+            // we do the pruning.
+            if stage.shift() != (0, 0) {
+                stage_is_used[i] = true;
+            }
             if stage_is_used[i] {
                 match self.shared.stages[i].is_special_case() {
                     None => (),
