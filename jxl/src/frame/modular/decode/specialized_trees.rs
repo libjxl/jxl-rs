@@ -154,7 +154,11 @@ impl ModularChannelDecoder for NoWpTreeConfig420 {
         let dec = if let Some(sv) = self.0.single_value {
             sv
         } else {
-            reader.read_signed_clustered_config_420(histograms, br, prediction_result.context as usize)
+            reader.read_signed_clustered_config_420(
+                histograms,
+                br,
+                prediction_result.context as usize,
+            )
         };
         make_pixel(dec, prediction_result.multiplier, prediction_result.guess)
     }
@@ -288,7 +292,11 @@ impl ModularChannelDecoder for GeneralTreeConfig420 {
         let dec = if let Some(sv) = self.0.no_wp_tree.single_value {
             sv
         } else {
-            reader.read_signed_clustered_config_420(histograms, br, prediction_result.context as usize)
+            reader.read_signed_clustered_config_420(
+                histograms,
+                br,
+                prediction_result.context as usize,
+            )
         };
         let val = make_pixel(dec, prediction_result.multiplier, prediction_result.guess);
         self.0.wp_state.update_errors(val, pos);
