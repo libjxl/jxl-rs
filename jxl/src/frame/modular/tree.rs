@@ -34,12 +34,12 @@ pub enum TreeNode {
 
 /// Flattened tree node for optimized traversal (matches C++ FlatDecisionNode).
 /// Stores parent + info about both children to evaluate 3 nodes per iteration.
-// TODO(hjanuschka): investigate performance of using a Rust enum here, and whether
-// separating internal nodes and leaves into two arrays could save a branch.
+/// Leaf nodes store `Predictor` directly to avoid runtime integer-to-enum conversion.
 #[derive(Debug, Clone, Copy)]
 pub(super) struct FlatTreeNode {
     property0: i32,                    // Property to test, -1 if leaf
-    splitval0_or_predictor: i32,       // Split value, or predictor if leaf
+    splitval0: i32,                    // Split value (only used for split nodes)
+    predictor: Predictor,              // Stored for leaf nodes (avoids runtime conversion)
     splitvals_or_multiplier: [i32; 2], // Child splitvals, or multiplier if leaf
     child_id: u32,                     // Index to first grandchild, or context if leaf
     properties_or_offset: [i16; 2],    // Child properties, or offset if leaf
@@ -50,10 +50,29 @@ impl FlatTreeNode {
     fn leaf(predictor: Predictor, offset: i32, multiplier: u32, context: u32) -> Self {
         Self {
             property0: -1,
-            splitval0_or_predictor: predictor as i32,
+            splitval0: 0,
+            predictor,
             splitvals_or_multiplier: [multiplier as i32, 0],
             child_id: context,
             properties_or_offset: [offset as i16, 0],
+        }
+    }
+
+    #[inline]
+    fn split(
+        property0: i32,
+        splitval0: i32,
+        child_id: u32,
+        properties: [i16; 2],
+        splitvals: [i32; 2],
+    ) -> Self {
+        Self {
+            property0,
+            splitval0,
+            predictor: Predictor::Zero,
+            splitvals_or_multiplier: splitvals,
+            child_id,
+            properties_or_offset: properties,
         }
     }
 }
@@ -342,7 +361,7 @@ pub(super) fn predict(
 
 /// Optimized prediction using flat tree (matches C++ context_predict.h:351-371).
 #[inline]
-#[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments, unsafe_code)]
 pub(super) fn predict_flat(
     flat_tree: &[FlatTreeNode],
     prediction_data: PredictionData,
@@ -363,45 +382,45 @@ pub(super) fn predict_flat(
         property_buffer,
     );
 
-    // Flat tree traversal
+    // Flat tree traversal -- this is a hot loop in modular decoding.
+    // Use targeted unchecked indexing with validated tree/property invariants.
     let mut pos = 0;
-    loop {
-        let node = &flat_tree[pos];
 
-        if node.property0 < 0 {
-            // Leaf node
-            let predictor = Predictor::try_from(node.splitval0_or_predictor as u32).unwrap();
-            let offset = node.properties_or_offset[0] as i32;
-            let multiplier = node.splitvals_or_multiplier[0] as u32;
-            let context = node.child_id;
-
-            let pred = predictor.predict_one(prediction_data, wp_pred);
-
-            return PredictionResult {
-                guess: pred + offset as i64,
-                multiplier,
-                context,
+    macro_rules! traverse {
+        ($pos:expr) => {{
+            // SAFETY: `pos` always points to a valid node. build_flat_tree constructs
+            // child jumps from validated tree nodes and only emits in-range indices.
+            let node = unsafe { flat_tree.get_unchecked($pos) };
+            if node.property0 < 0 {
+                let pred = node.predictor.predict_one(prediction_data, wp_pred);
+                return PredictionResult {
+                    guess: pred + node.properties_or_offset[0] as i32 as i64,
+                    multiplier: node.splitvals_or_multiplier[0] as u32,
+                    context: node.child_id,
+                };
+            }
+            // SAFETY: property indices are bounded by max_property_count and validated
+            // during tree decode/build before prediction starts.
+            let p0 = unsafe {
+                *property_buffer.get_unchecked(node.property0 as usize) <= node.splitval0
             };
-        }
+            // SAFETY: child property indices are validated during tree flattening.
+            let off0 = unsafe {
+                (*property_buffer.get_unchecked(node.properties_or_offset[0] as usize)
+                    <= node.splitvals_or_multiplier[0]) as u32
+            };
+            // SAFETY: child property indices are validated during tree flattening.
+            let off1 = unsafe {
+                2 | (*property_buffer.get_unchecked(node.properties_or_offset[1] as usize)
+                    <= node.splitvals_or_multiplier[1]) as u32
+            };
+            (node.child_id + if p0 { off1 } else { off0 }) as usize
+        }};
+    }
 
-        // Split node: C++ logic from context_predict.h:361-365
-        let p0 = property_buffer[node.property0 as usize] <= node.splitval0_or_predictor;
-        let off0 = if property_buffer[node.properties_or_offset[0] as usize]
-            <= node.splitvals_or_multiplier[0]
-        {
-            1
-        } else {
-            0
-        };
-        let off1 = if property_buffer[node.properties_or_offset[1] as usize]
-            <= node.splitvals_or_multiplier[1]
-        {
-            3
-        } else {
-            2
-        };
-
-        pos = (node.child_id + if p0 { off1 } else { off0 }) as usize;
+    loop {
+        pos = traverse!(pos);
+        pos = traverse!(pos);
     }
 }
 
@@ -518,21 +537,16 @@ impl Tree {
                     // childID points to first of 4 grandchildren in output
                     let child_id = (flat_nodes.len() + queue.len() + 1) as u32;
 
-                    let mut flat = FlatTreeNode {
-                        property0: *property as i32,
-                        splitval0_or_predictor: *val,
-                        splitvals_or_multiplier: [0, 0],
-                        child_id,
-                        properties_or_offset: [0, 0],
-                    };
+                    let mut properties = [0i16; 2];
+                    let mut splitvals = [0i32; 2];
 
                     // Process left (i=0) and right (i=1) children
                     for (i, &child_idx) in [*left as usize, *right as usize].iter().enumerate() {
                         match &nodes[child_idx] {
                             TreeNode::Leaf { .. } => {
                                 // Child is leaf: set property=0 and enqueue leaf twice
-                                flat.properties_or_offset[i] = 0;
-                                flat.splitvals_or_multiplier[i] = 0;
+                                properties[i] = 0;
+                                splitvals[i] = 0;
                                 queue.push_back(child_idx);
                                 queue.push_back(child_idx);
                             }
@@ -543,15 +557,21 @@ impl Tree {
                                 right: cr,
                             } => {
                                 // Child is split: store property/splitval and enqueue grandchildren
-                                flat.properties_or_offset[i] = *cp as i16;
-                                flat.splitvals_or_multiplier[i] = *cv;
+                                properties[i] = *cp as i16;
+                                splitvals[i] = *cv;
                                 queue.push_back(*cl as usize);
                                 queue.push_back(*cr as usize);
                             }
                         }
                     }
 
-                    flat_nodes.push(flat);
+                    flat_nodes.push(FlatTreeNode::split(
+                        *property as i32,
+                        *val,
+                        child_id,
+                        properties,
+                        splitvals,
+                    ));
                 }
             }
         }
