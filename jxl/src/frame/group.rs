@@ -47,10 +47,10 @@ impl VarDctBuffers {
 
     /// Reset buffers to zero for reuse.
     pub fn reset(&mut self) {
-        self.scratch.fill(0.0);
-        for buf in &mut self.transform_buffer {
-            buf.fill(0.0);
-        }
+        // scratch does NOT need zeroing: each block's LF coefficients are fully written
+        // by copy_from_slice before transform_to_pixels reads them.
+        // transform_buffer does NOT need zeroing: dequant_block fully overwrites
+        // all num_coeffs entries before transform_to_pixels reads them.
         self.coeffs_storage.fill(0);
     }
 }
@@ -61,7 +61,7 @@ impl Default for VarDctBuffers {
     }
 }
 
-#[inline]
+#[inline(always)]
 fn predict_num_nonzeros(nzeros_map: &Image<u32>, bx: usize, by: usize) -> usize {
     if bx == 0 {
         if by == 0 {
@@ -365,6 +365,7 @@ impl<'a, 'b> PassInfo<'a, 'b> {
 
 #[allow(clippy::too_many_arguments)]
 #[allow(clippy::type_complexity)]
+#[allow(unsafe_code)]
 pub fn decode_vardct_group(
     group: usize,
     passes: &mut [(usize, BitReader)],
@@ -572,8 +573,13 @@ pub fn decode_vardct_group(
                             reader.read_signed_inline(&pass_info.histograms, br, ctx) << *shift;
                         prev = if coeff != 0 { 1 } else { 0 };
                         nonzeros -= prev;
-                        let coeff_index = permutation[k] as usize;
-                        current_coeffs[coeff_index] += coeff;
+                        // SAFETY: permutation[k] is validated to be < num_coeffs during
+                        // coeff_order decoding, and current_coeffs.len() == num_coeffs.
+                        // k < num_coeffs by loop bounds.
+                        let coeff_index = unsafe { *permutation.get_unchecked(k) } as usize;
+                        // SAFETY: coeff_index comes from permutation[k], which is validated
+                        // to be < num_coeffs, and current_coeffs.len() == num_coeffs.
+                        unsafe { *current_coeffs.get_unchecked_mut(coeff_index) += coeff };
                     }
                     if nonzeros != 0 {
                         return Err(Error::EndOfBlockResidualNonZeros(nonzeros));
