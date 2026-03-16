@@ -702,7 +702,13 @@ pub fn specialize_tree(
         }
         if tree.histograms.can_use_config_420_fast_path() {
             return Ok(TreeSpecialCase::NoWpConfig420(NoWpTreeConfig420(
-                NoWpTree::new(pruned_tree, tree.max_property_count(), channel, stream, xsize)?,
+                NoWpTree::new(
+                    pruned_tree,
+                    tree.max_property_count(),
+                    channel,
+                    stream,
+                    xsize,
+                )?,
             )));
         }
         if tree.histograms.has_no_lz77() {
@@ -724,14 +730,16 @@ pub fn specialize_tree(
     }
 
     if tree.histograms.can_use_config_420_fast_path() {
-        return Ok(TreeSpecialCase::GeneralConfig420(GeneralTreeConfig420::new(
-            pruned_tree,
-            tree.max_property_count(),
-            header,
-            channel,
-            stream,
-            xsize,
-        )?));
+        return Ok(TreeSpecialCase::GeneralConfig420(
+            GeneralTreeConfig420::new(
+                pruned_tree,
+                tree.max_property_count(),
+                header,
+                channel,
+                stream,
+                xsize,
+            )?,
+        ));
     }
 
     if tree.histograms.has_no_lz77() {
