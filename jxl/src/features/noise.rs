@@ -17,6 +17,7 @@ impl Noise {
         }
         Ok(noise)
     }
+    #[inline(always)]
     pub fn strength(&self, vx: f32) -> f32 {
         let k_scale = (self.lut.len() - 2) as f32;
         let scaled_vx = f32::max(0.0, vx * k_scale);
