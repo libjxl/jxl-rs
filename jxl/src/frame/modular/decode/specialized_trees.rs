@@ -119,6 +119,8 @@ impl ModularChannelDecoder for GeneralTree {
 
     fn init_row(&mut self, buffers: &mut [&mut ModularChannel], chan: usize, y: usize) {
         self.no_wp_tree.init_row(buffers, chan, y);
+        let xsize = buffers[chan].data.size().0;
+        self.wp_state.set_row(y, xsize);
     }
 
     fn decode_one(
@@ -228,8 +230,9 @@ impl ModularChannelDecoder for WpOnlyLookupConfig420 {
     const NEEDS_TOP: bool = true;
     const NEEDS_TOPTOP: bool = true;
 
-    fn init_row(&mut self, _buffers: &mut [&mut ModularChannel], _chan: usize, _y: usize) {
-        // nothing to do
+    fn init_row(&mut self, buffers: &mut [&mut ModularChannel], chan: usize, y: usize) {
+        let xsize = buffers[chan].data.size().0;
+        self.wp_state.set_row(y, xsize);
     }
 
     #[inline(always)]

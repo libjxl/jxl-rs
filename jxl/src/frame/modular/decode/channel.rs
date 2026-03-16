@@ -47,11 +47,15 @@ fn decode_modular_channel_small(
 
     const { assert!(IMAGE_OFFSET.1 == 2) };
 
+    let mut property_buffer: Vec<i32> = vec![0; num_properties];
+    property_buffer[0] = chan as i32;
+    property_buffer[1] = stream_id as i32;
+
     for y in 0..size.1 {
         precompute_references(buffers, chan, y, &mut references);
-        let mut property_buffer: Vec<i32> = vec![0; num_properties];
-        property_buffer[0] = chan as i32;
-        property_buffer[1] = stream_id as i32;
+        // Reset property 9 (local gradient depends on previous row's value)
+        property_buffer[9] = 0;
+        wp_state.set_row(y, size.0);
         let [row, row_top, row_toptop] =
             buffers[chan].data.distinct_full_rows_mut([y + 2, y + 1, y]);
         let row = &mut row[IMAGE_OFFSET.0..IMAGE_OFFSET.0 + size.0];
@@ -79,6 +83,7 @@ fn decode_modular_channel_small(
     Ok(())
 }
 
+#[allow(dead_code)]
 pub(super) trait ModularChannelDecoder {
     const NEEDS_TOP: bool;
     const NEEDS_TOPTOP: bool;
@@ -137,18 +142,13 @@ fn decode_modular_channel_impl<D: ModularChannelDecoder>(
                 row[x] = val;
             }
         } else {
-            for (x, r) in row.iter_mut().enumerate().skip(2).take(size.0 - 4) {
-                prediction_data = prediction_data.update_for_interior_row(
-                    row_top,
-                    row_toptop,
-                    x,
-                    last,
-                    D::NEEDS_TOP,
-                    D::NEEDS_TOPTOP,
-                );
+            #[allow(unsafe_code)]
+            for x in 2..size.0 - 2 {
+                prediction_data.update_for_interior_row(row_top, row_toptop, x, last);
                 let val =
                     decoder.decode_one(prediction_data, (x, y), size.0, reader, br, histograms);
-                *r = val;
+                // SAFETY: x is in [2, size.0 - 2), and row.len() == size.0.
+                unsafe { *row.get_unchecked_mut(x) = val };
                 last = val;
             }
         }

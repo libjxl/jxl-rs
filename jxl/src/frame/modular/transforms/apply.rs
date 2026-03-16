@@ -562,7 +562,7 @@ fn meta_apply_single_transform(
             let num_channels = transform.num_channels as usize;
             let num_colors = transform.num_colors as usize;
             let num_deltas = transform.num_deltas as usize;
-            let pred = Predictor::from_u32(transform.predictor_id)
+            let pred = Predictor::from_u32_fast(transform.predictor_id)
                 .expect("header decoding should ensure a valid predictor");
             check_equal_channels(channels, begin_channel, num_channels)?;
             // We already checked the bit_depth for all channels from `begin_channel` is
