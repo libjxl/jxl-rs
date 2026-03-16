@@ -28,6 +28,8 @@ pub struct NoWpTree {
     flat_nodes: Vec<FlatTreeNode>,
     references: Image<i32>,
     property_buffer: Vec<i32>,
+    /// Bitmask of properties used by this tree (bit i = property i is referenced).
+    used_properties: u32,
 }
 
 impl NoWpTree {
@@ -48,12 +50,13 @@ impl NoWpTree {
         property_buffer[0] = channel as i32;
         property_buffer[1] = stream as i32;
 
-        let flat_nodes = Tree::build_flat_tree(&nodes)?;
+        let (flat_nodes, used_properties) = Tree::build_flat_tree(&nodes)?;
 
         Ok(Self {
             flat_nodes,
             references,
             property_buffer,
+            used_properties,
         })
     }
 }
@@ -64,7 +67,11 @@ impl ModularChannelDecoder for NoWpTree {
 
     fn init_row(&mut self, buffers: &mut [&mut ModularChannel], chan: usize, y: usize) {
         precompute_references(buffers, chan, y, &mut self.references);
-        self.property_buffer[2..].fill(0);
+        // Property 8 depends on the previous value of property 9.
+        // Reset property 9 at row start when either is used by the tree.
+        if self.used_properties & 0x0300 != 0 {
+            self.property_buffer[9] = 0;
+        }
     }
 
     fn decode_one(
@@ -85,6 +92,7 @@ impl ModularChannelDecoder for NoWpTree {
             pos.1,
             &self.references,
             &mut self.property_buffer,
+            self.used_properties,
         );
         let dec = reader.read_signed_clustered(histograms, br, prediction_result.context as usize);
         make_pixel(dec, prediction_result.multiplier, prediction_result.guess)
@@ -139,6 +147,7 @@ impl ModularChannelDecoder for GeneralTree {
             pos.1,
             &self.no_wp_tree.references,
             &mut self.no_wp_tree.property_buffer,
+            self.no_wp_tree.used_properties,
         );
         let dec = reader.read_signed_clustered(histograms, br, prediction_result.context as usize);
         let val = make_pixel(dec, prediction_result.multiplier, prediction_result.guess);
