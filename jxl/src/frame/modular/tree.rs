@@ -319,7 +319,14 @@ fn compute_properties_flat(
     property_buffer: &mut [i32],
     used_mask: u32,
 ) -> i64 {
-    compute_properties_common(prediction_data, references, property_buffer, x, y, used_mask);
+    compute_properties_common(
+        prediction_data,
+        references,
+        property_buffer,
+        x,
+        y,
+        used_mask,
+    );
 
     let (wp_pred, wp_prop) = wp_state
         .map(|wp_state| wp_state.predict_and_property((x, y), xsize, &prediction_data))
