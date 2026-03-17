@@ -296,41 +296,22 @@ unsafe impl F32SimdVec for F32VecSimd128 {
 
     #[inline(always)]
     fn transpose_square(d: Simd128Descriptor, data: &mut [[f32; 4]], stride: usize) {
-        if stride == 1 {
-            assert!(data.len() > 3);
-            // SAFETY: input is verified to be large enough. v128_load supports unaligned loads.
-            let v0 = unsafe { v128_load(data.as_ptr().cast()) };
-            let v1 = unsafe { v128_load(data.as_ptr().add(1).cast()) };
-            let v2 = unsafe { v128_load(data.as_ptr().add(2).cast()) };
-            let v3 = unsafe { v128_load(data.as_ptr().add(3).cast()) };
+        assert!(data.len() > 3 * stride);
 
-            let ac02 = i32x4_shuffle::<0, 4, 2, 6>(v0, v1);
-            let bd02 = i32x4_shuffle::<1, 5, 3, 7>(v0, v1);
-            let ac13 = i32x4_shuffle::<0, 4, 2, 6>(v2, v3);
-            let bd13 = i32x4_shuffle::<1, 5, 3, 7>(v2, v3);
+        let p0 = F32VecSimd128::load_array(d, &data[0]).0;
+        let p1 = F32VecSimd128::load_array(d, &data[1 * stride]).0;
+        let p2 = F32VecSimd128::load_array(d, &data[2 * stride]).0;
+        let p3 = F32VecSimd128::load_array(d, &data[3 * stride]).0;
 
-            F32VecSimd128(i64x2_shuffle::<0, 2>(ac02, ac13), d).store_array(&mut data[0]);
-            F32VecSimd128(i64x2_shuffle::<0, 2>(bd02, bd13), d).store_array(&mut data[1]);
-            F32VecSimd128(i64x2_shuffle::<1, 3>(ac02, ac13), d).store_array(&mut data[2]);
-            F32VecSimd128(i64x2_shuffle::<1, 3>(bd02, bd13), d).store_array(&mut data[3]);
-        } else {
-            assert!(data.len() > 3 * stride);
+        let tr0 = i32x4_shuffle::<0, 4, 1, 5>(p0, p1);
+        let tr1 = i32x4_shuffle::<2, 6, 3, 7>(p0, p1);
+        let tr2 = i32x4_shuffle::<0, 4, 1, 5>(p2, p3);
+        let tr3 = i32x4_shuffle::<2, 6, 3, 7>(p2, p3);
 
-            let p0 = F32VecSimd128::load_array(d, &data[0]).0;
-            let p1 = F32VecSimd128::load_array(d, &data[1 * stride]).0;
-            let p2 = F32VecSimd128::load_array(d, &data[2 * stride]).0;
-            let p3 = F32VecSimd128::load_array(d, &data[3 * stride]).0;
-
-            let tr0 = i32x4_shuffle::<0, 4, 1, 5>(p0, p1);
-            let tr1 = i32x4_shuffle::<2, 6, 3, 7>(p0, p1);
-            let tr2 = i32x4_shuffle::<0, 4, 1, 5>(p2, p3);
-            let tr3 = i32x4_shuffle::<2, 6, 3, 7>(p2, p3);
-
-            F32VecSimd128(i64x2_shuffle::<0, 2>(tr0, tr2), d).store_array(&mut data[0]);
-            F32VecSimd128(i64x2_shuffle::<1, 3>(tr0, tr2), d).store_array(&mut data[1 * stride]);
-            F32VecSimd128(i64x2_shuffle::<0, 2>(tr1, tr3), d).store_array(&mut data[2 * stride]);
-            F32VecSimd128(i64x2_shuffle::<1, 3>(tr1, tr3), d).store_array(&mut data[3 * stride]);
-        }
+        F32VecSimd128(i64x2_shuffle::<0, 2>(tr0, tr2), d).store_array(&mut data[0]);
+        F32VecSimd128(i64x2_shuffle::<1, 3>(tr0, tr2), d).store_array(&mut data[1 * stride]);
+        F32VecSimd128(i64x2_shuffle::<0, 2>(tr1, tr3), d).store_array(&mut data[2 * stride]);
+        F32VecSimd128(i64x2_shuffle::<1, 3>(tr1, tr3), d).store_array(&mut data[3 * stride]);
     }
 
     crate::impl_f32_array_interface!();
