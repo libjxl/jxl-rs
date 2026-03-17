@@ -63,20 +63,6 @@ impl SimdDescriptor for Simd128Descriptor {
     }
 }
 
-macro_rules! fn_simd128 {
-    {} => {};
-    {$(
-        fn $name:ident($this:ident: $self_ty:ty $(, $arg:ident: $ty:ty)* $(,)?) $(-> $ret:ty )?
-        $body: block
-    )*} => {$(
-        #[inline(always)]
-        fn $name(self: $self_ty, $($arg: $ty),*) $(-> $ret)? {
-            let $this = self;
-            $body
-        }
-    )*};
-}
-
 #[derive(Clone, Copy, Debug)]
 #[repr(transparent)]
 pub struct F32VecSimd128(v128, Simd128Descriptor);
@@ -349,111 +335,128 @@ unsafe impl F32SimdVec for F32VecSimd128 {
 
     crate::impl_f32_array_interface!();
 
-    fn_simd128! {
-        fn mul_add(this: F32VecSimd128, mul: F32VecSimd128, add: F32VecSimd128) -> F32VecSimd128 {
-            #[cfg(target_feature = "relaxed-simd")]
-            { F32VecSimd128(f32x4_relaxed_madd(this.0, mul.0, add.0), this.1) }
-            #[cfg(not(target_feature = "relaxed-simd"))]
-            { F32VecSimd128(f32x4_add(f32x4_mul(this.0, mul.0), add.0), this.1) }
+    #[inline(always)]
+    fn mul_add(self, mul: F32VecSimd128, add: F32VecSimd128) -> F32VecSimd128 {
+        #[cfg(target_feature = "relaxed-simd")]
+        {
+            F32VecSimd128(f32x4_relaxed_madd(self.0, mul.0, add.0), self.1)
         }
-
-        fn neg_mul_add(this: F32VecSimd128, mul: F32VecSimd128, add: F32VecSimd128) -> F32VecSimd128 {
-            #[cfg(target_feature = "relaxed-simd")]
-            { F32VecSimd128(f32x4_relaxed_nmadd(this.0, mul.0, add.0), this.1) }
-            #[cfg(not(target_feature = "relaxed-simd"))]
-            { F32VecSimd128(f32x4_sub(add.0, f32x4_mul(this.0, mul.0)), this.1) }
+        #[cfg(not(target_feature = "relaxed-simd"))]
+        {
+            F32VecSimd128(f32x4_add(f32x4_mul(self.0, mul.0), add.0), self.1)
         }
+    }
 
-        fn abs(this: F32VecSimd128) -> F32VecSimd128 {
-            F32VecSimd128(f32x4_abs(this.0), this.1)
+    #[inline(always)]
+    fn neg_mul_add(self, mul: F32VecSimd128, add: F32VecSimd128) -> F32VecSimd128 {
+        #[cfg(target_feature = "relaxed-simd")]
+        {
+            F32VecSimd128(f32x4_relaxed_nmadd(self.0, mul.0, add.0), self.1)
         }
-
-        fn floor(this: F32VecSimd128) -> F32VecSimd128 {
-            F32VecSimd128(f32x4_floor(this.0), this.1)
+        #[cfg(not(target_feature = "relaxed-simd"))]
+        {
+            F32VecSimd128(f32x4_sub(add.0, f32x4_mul(self.0, mul.0)), self.1)
         }
+    }
 
-        fn sqrt(this: F32VecSimd128) -> F32VecSimd128 {
-            F32VecSimd128(f32x4_sqrt(this.0), this.1)
+    #[inline(always)]
+    fn abs(self) -> F32VecSimd128 {
+        F32VecSimd128(f32x4_abs(self.0), self.1)
+    }
+
+    #[inline(always)]
+    fn floor(self) -> F32VecSimd128 {
+        F32VecSimd128(f32x4_floor(self.0), self.1)
+    }
+
+    #[inline(always)]
+    fn sqrt(self) -> F32VecSimd128 {
+        F32VecSimd128(f32x4_sqrt(self.0), self.1)
+    }
+
+    #[inline(always)]
+    fn neg(self) -> F32VecSimd128 {
+        F32VecSimd128(f32x4_neg(self.0), self.1)
+    }
+
+    #[inline(always)]
+    fn copysign(self, sign: F32VecSimd128) -> F32VecSimd128 {
+        // Select sign bit from `sign`, magnitude from `self`
+        let sign_mask = u32x4_splat(0x8000_0000);
+        F32VecSimd128(v128_bitselect(sign.0, self.0, sign_mask), self.1)
+    }
+
+    #[inline(always)]
+    fn max(self, other: F32VecSimd128) -> F32VecSimd128 {
+        F32VecSimd128(f32x4_max(self.0, other.0), self.1)
+    }
+
+    #[inline(always)]
+    fn min(self, other: F32VecSimd128) -> F32VecSimd128 {
+        F32VecSimd128(f32x4_min(self.0, other.0), self.1)
+    }
+
+    #[inline(always)]
+    fn gt(self, other: F32VecSimd128) -> MaskSimd128 {
+        MaskSimd128(f32x4_gt(self.0, other.0), self.1)
+    }
+
+    #[inline(always)]
+    fn as_i32(self) -> I32VecSimd128 {
+        I32VecSimd128(i32x4_trunc_sat_f32x4(self.0), self.1)
+    }
+
+    #[inline(always)]
+    fn bitcast_to_i32(self) -> I32VecSimd128 {
+        // v128 is untyped; no conversion needed, just reinterpret.
+        I32VecSimd128(self.0, self.1)
+    }
+
+    #[inline(always)]
+    fn round_store_u8(self, dest: &mut [u8]) {
+        assert!(dest.len() >= F32VecSimd128::LEN);
+        let rounded = f32x4_nearest(self.0);
+        let i32s = i32x4_trunc_sat_f32x4(rounded);
+        // Saturate i32 -> i16 (signed narrow, preserving sign for next stage)
+        let i16s = i16x8_narrow_i32x4(i32s, i32s);
+        // Saturate i16 -> u8 (signed-to-unsigned narrow, clamping to [0, 255])
+        let u8s = u8x16_narrow_i16x8(i16s, i16s);
+        // Store lower 4 bytes
+        let val = u32x4_extract_lane::<0>(u8s);
+        // SAFETY: we checked dest has enough space.
+        unsafe {
+            std::ptr::copy_nonoverlapping(&val as *const u32 as *const u8, dest.as_mut_ptr(), 4);
         }
+    }
 
-        fn neg(this: F32VecSimd128) -> F32VecSimd128 {
-            F32VecSimd128(f32x4_neg(this.0), this.1)
+    #[inline(always)]
+    fn round_store_u16(self, dest: &mut [u16]) {
+        assert!(dest.len() >= F32VecSimd128::LEN);
+        let rounded = f32x4_nearest(self.0);
+        let i32s = i32x4_trunc_sat_f32x4(rounded);
+        // Saturate i32 -> u16 (narrow to 16-bit)
+        let u16s = u16x8_narrow_i32x4(i32s, i32s);
+        // Store lower 8 bytes (4 u16s)
+        let lo = i64x2_extract_lane::<0>(u16s);
+        // SAFETY: we checked dest has enough space.
+        unsafe {
+            std::ptr::copy_nonoverlapping(
+                &lo as *const i64 as *const u8,
+                dest.as_mut_ptr().cast::<u8>(),
+                8,
+            );
         }
+    }
 
-        fn copysign(this: F32VecSimd128, sign: F32VecSimd128) -> F32VecSimd128 {
-            // Select sign bit from `sign`, magnitude from `this`
-            let sign_mask = u32x4_splat(0x8000_0000);
-            F32VecSimd128(v128_bitselect(sign.0, this.0, sign_mask), this.1)
-        }
-
-        fn max(this: F32VecSimd128, other: F32VecSimd128) -> F32VecSimd128 {
-            F32VecSimd128(f32x4_max(this.0, other.0), this.1)
-        }
-
-        fn min(this: F32VecSimd128, other: F32VecSimd128) -> F32VecSimd128 {
-            F32VecSimd128(f32x4_min(this.0, other.0), this.1)
-        }
-
-        fn gt(this: F32VecSimd128, other: F32VecSimd128) -> MaskSimd128 {
-            MaskSimd128(f32x4_gt(this.0, other.0), this.1)
-        }
-
-        fn as_i32(this: F32VecSimd128) -> I32VecSimd128 {
-            I32VecSimd128(i32x4_trunc_sat_f32x4(this.0), this.1)
-        }
-
-        fn bitcast_to_i32(this: F32VecSimd128) -> I32VecSimd128 {
-            // v128 is untyped; no conversion needed, just reinterpret.
-            I32VecSimd128(this.0, this.1)
-        }
-
-        fn round_store_u8(this: F32VecSimd128, dest: &mut [u8]) {
-            assert!(dest.len() >= F32VecSimd128::LEN);
-            let rounded = f32x4_nearest(this.0);
-            let i32s = i32x4_trunc_sat_f32x4(rounded);
-            // Saturate i32 -> i16 (signed narrow, preserving sign for next stage)
-            let i16s = i16x8_narrow_i32x4(i32s, i32s);
-            // Saturate i16 -> u8 (signed-to-unsigned narrow, clamping to [0, 255])
-            let u8s = u8x16_narrow_i16x8(i16s, i16s);
-            // Store lower 4 bytes
-            let val = u32x4_extract_lane::<0>(u8s);
-            // SAFETY: we checked dest has enough space.
-            unsafe {
-                std::ptr::copy_nonoverlapping(
-                    &val as *const u32 as *const u8,
-                    dest.as_mut_ptr(),
-                    4,
-                );
-            }
-        }
-
-        fn round_store_u16(this: F32VecSimd128, dest: &mut [u16]) {
-            assert!(dest.len() >= F32VecSimd128::LEN);
-            let rounded = f32x4_nearest(this.0);
-            let i32s = i32x4_trunc_sat_f32x4(rounded);
-            // Saturate i32 -> u16 (narrow to 16-bit)
-            let u16s = u16x8_narrow_i32x4(i32s, i32s);
-            // Store lower 8 bytes (4 u16s)
-            let lo = i64x2_extract_lane::<0>(u16s);
-            // SAFETY: we checked dest has enough space.
-            unsafe {
-                std::ptr::copy_nonoverlapping(
-                    &lo as *const i64 as *const u8,
-                    dest.as_mut_ptr().cast::<u8>(),
-                    8,
-                );
-            }
-        }
-
-        fn store_f16_bits(this: F32VecSimd128, dest: &mut [u16]) {
-            assert!(dest.len() >= F32VecSimd128::LEN);
-            // WASM SIMD128 has no hardware f16 conversion; use scalar fallback.
-            let mut tmp = [0.0f32; 4];
-            // SAFETY: tmp is large enough.
-            unsafe { v128_store(tmp.as_mut_ptr().cast(), this.0) };
-            for i in 0..4 {
-                dest[i] = crate::f16::from_f32(tmp[i]).to_bits();
-            }
+    #[inline(always)]
+    fn store_f16_bits(self, dest: &mut [u16]) {
+        assert!(dest.len() >= F32VecSimd128::LEN);
+        // WASM SIMD128 has no hardware f16 conversion; use scalar fallback.
+        let mut tmp = [0.0f32; 4];
+        // SAFETY: tmp is large enough.
+        unsafe { v128_store(tmp.as_mut_ptr().cast(), self.0) };
+        for i in 0..4 {
+            dest[i] = crate::f16::from_f32(tmp[i]).to_bits();
         }
     }
 
@@ -510,69 +513,61 @@ unsafe impl F32SimdVec for F32VecSimd128 {
 
 impl Add<F32VecSimd128> for F32VecSimd128 {
     type Output = Self;
-    fn_simd128! {
-        fn add(this: F32VecSimd128, rhs: F32VecSimd128) -> F32VecSimd128 {
-            F32VecSimd128(f32x4_add(this.0, rhs.0), this.1)
-        }
+    #[inline(always)]
+    fn add(self, rhs: F32VecSimd128) -> F32VecSimd128 {
+        F32VecSimd128(f32x4_add(self.0, rhs.0), self.1)
     }
 }
 
 impl Sub<F32VecSimd128> for F32VecSimd128 {
     type Output = Self;
-    fn_simd128! {
-        fn sub(this: F32VecSimd128, rhs: F32VecSimd128) -> F32VecSimd128 {
-            F32VecSimd128(f32x4_sub(this.0, rhs.0), this.1)
-        }
+    #[inline(always)]
+    fn sub(self, rhs: F32VecSimd128) -> F32VecSimd128 {
+        F32VecSimd128(f32x4_sub(self.0, rhs.0), self.1)
     }
 }
 
 impl Mul<F32VecSimd128> for F32VecSimd128 {
     type Output = Self;
-    fn_simd128! {
-        fn mul(this: F32VecSimd128, rhs: F32VecSimd128) -> F32VecSimd128 {
-            F32VecSimd128(f32x4_mul(this.0, rhs.0), this.1)
-        }
+    #[inline(always)]
+    fn mul(self, rhs: F32VecSimd128) -> F32VecSimd128 {
+        F32VecSimd128(f32x4_mul(self.0, rhs.0), self.1)
     }
 }
 
 impl Div<F32VecSimd128> for F32VecSimd128 {
     type Output = Self;
-    fn_simd128! {
-        fn div(this: F32VecSimd128, rhs: F32VecSimd128) -> F32VecSimd128 {
-            F32VecSimd128(f32x4_div(this.0, rhs.0), this.1)
-        }
+    #[inline(always)]
+    fn div(self, rhs: F32VecSimd128) -> F32VecSimd128 {
+        F32VecSimd128(f32x4_div(self.0, rhs.0), self.1)
     }
 }
 
 impl AddAssign<F32VecSimd128> for F32VecSimd128 {
-    fn_simd128! {
-        fn add_assign(this: &mut F32VecSimd128, rhs: F32VecSimd128) {
-            this.0 = f32x4_add(this.0, rhs.0);
-        }
+    #[inline(always)]
+    fn add_assign(&mut self, rhs: F32VecSimd128) {
+        self.0 = f32x4_add(self.0, rhs.0);
     }
 }
 
 impl SubAssign<F32VecSimd128> for F32VecSimd128 {
-    fn_simd128! {
-        fn sub_assign(this: &mut F32VecSimd128, rhs: F32VecSimd128) {
-            this.0 = f32x4_sub(this.0, rhs.0);
-        }
+    #[inline(always)]
+    fn sub_assign(&mut self, rhs: F32VecSimd128) {
+        self.0 = f32x4_sub(self.0, rhs.0);
     }
 }
 
 impl MulAssign<F32VecSimd128> for F32VecSimd128 {
-    fn_simd128! {
-        fn mul_assign(this: &mut F32VecSimd128, rhs: F32VecSimd128) {
-            this.0 = f32x4_mul(this.0, rhs.0);
-        }
+    #[inline(always)]
+    fn mul_assign(&mut self, rhs: F32VecSimd128) {
+        self.0 = f32x4_mul(self.0, rhs.0);
     }
 }
 
 impl DivAssign<F32VecSimd128> for F32VecSimd128 {
-    fn_simd128! {
-        fn div_assign(this: &mut F32VecSimd128, rhs: F32VecSimd128) {
-            this.0 = f32x4_div(this.0, rhs.0);
-        }
+    #[inline(always)]
+    fn div_assign(&mut self, rhs: F32VecSimd128) {
+        self.0 = f32x4_div(self.0, rhs.0);
     }
 }
 
@@ -604,55 +599,62 @@ impl I32SimdVec for I32VecSimd128 {
         unsafe { v128_store(mem.as_mut_ptr().cast(), self.0) }
     }
 
-    fn_simd128! {
-        fn abs(this: I32VecSimd128) -> I32VecSimd128 {
-            I32VecSimd128(i32x4_abs(this.0), this.1)
-        }
+    #[inline(always)]
+    fn abs(self) -> I32VecSimd128 {
+        I32VecSimd128(i32x4_abs(self.0), self.1)
+    }
 
-        fn as_f32(this: I32VecSimd128) -> F32VecSimd128 {
-            F32VecSimd128(f32x4_convert_i32x4(this.0), this.1)
-        }
+    #[inline(always)]
+    fn as_f32(self) -> F32VecSimd128 {
+        F32VecSimd128(f32x4_convert_i32x4(self.0), self.1)
+    }
 
-        fn bitcast_to_f32(this: I32VecSimd128) -> F32VecSimd128 {
-            // v128 is untyped; no conversion needed.
-            F32VecSimd128(this.0, this.1)
-        }
+    #[inline(always)]
+    fn bitcast_to_f32(self) -> F32VecSimd128 {
+        // v128 is untyped; no conversion needed.
+        F32VecSimd128(self.0, self.1)
+    }
 
-        fn bitcast_to_u32(this: I32VecSimd128) -> U32VecSimd128 {
-            // v128 is untyped; no conversion needed.
-            U32VecSimd128(this.0, this.1)
-        }
+    #[inline(always)]
+    fn bitcast_to_u32(self) -> U32VecSimd128 {
+        // v128 is untyped; no conversion needed.
+        U32VecSimd128(self.0, self.1)
+    }
 
-        fn gt(this: I32VecSimd128, other: I32VecSimd128) -> MaskSimd128 {
-            MaskSimd128(i32x4_gt(this.0, other.0), this.1)
-        }
+    #[inline(always)]
+    fn gt(self, other: I32VecSimd128) -> MaskSimd128 {
+        MaskSimd128(i32x4_gt(self.0, other.0), self.1)
+    }
 
-        fn lt_zero(this: I32VecSimd128) -> MaskSimd128 {
-            MaskSimd128(i32x4_lt(this.0, i32x4_splat(0)), this.1)
-        }
+    #[inline(always)]
+    fn lt_zero(self) -> MaskSimd128 {
+        MaskSimd128(i32x4_lt(self.0, i32x4_splat(0)), self.1)
+    }
 
-        fn eq(this: I32VecSimd128, other: I32VecSimd128) -> MaskSimd128 {
-            MaskSimd128(i32x4_eq(this.0, other.0), this.1)
-        }
+    #[inline(always)]
+    fn eq(self, other: I32VecSimd128) -> MaskSimd128 {
+        MaskSimd128(i32x4_eq(self.0, other.0), self.1)
+    }
 
-        fn eq_zero(this: I32VecSimd128) -> MaskSimd128 {
-            MaskSimd128(i32x4_eq(this.0, i32x4_splat(0)), this.1)
-        }
+    #[inline(always)]
+    fn eq_zero(self) -> MaskSimd128 {
+        MaskSimd128(i32x4_eq(self.0, i32x4_splat(0)), self.1)
+    }
 
-        fn mul_wide_take_high(this: I32VecSimd128, rhs: I32VecSimd128) -> I32VecSimd128 {
-            // Multiply pairs and take the high 32 bits of each 64-bit result
-            let lo = i64x2_extmul_low_i32x4(this.0, rhs.0); // [a0*b0, a1*b1] as i64
-            let hi = i64x2_extmul_high_i32x4(this.0, rhs.0); // [a2*b2, a3*b3] as i64
-            // Extract high 32 bits: shift right by 32, then shuffle to pack
-            // After shift: lo = [hi(a0*b0), 0, hi(a1*b1), 0] as i32 view
-            // We want: [hi(a0*b0), hi(a1*b1), hi(a2*b2), hi(a3*b3)]
-            let lo_shifted = i64x2_shr(lo, 32);
-            let hi_shifted = i64x2_shr(hi, 32);
-            // Pack: take lanes 0,2 from lo_shifted and 0,2 from hi_shifted
-            // lo_shifted as i32x4: [hi0, 0, hi1, 0]
-            // hi_shifted as i32x4: [hi2, 0, hi3, 0]
-            I32VecSimd128(i32x4_shuffle::<0, 2, 4, 6>(lo_shifted, hi_shifted), this.1)
-        }
+    #[inline(always)]
+    fn mul_wide_take_high(self, rhs: I32VecSimd128) -> I32VecSimd128 {
+        // Multiply pairs and take the high 32 bits of each 64-bit result
+        let lo = i64x2_extmul_low_i32x4(self.0, rhs.0); // [a0*b0, a1*b1] as i64
+        let hi = i64x2_extmul_high_i32x4(self.0, rhs.0); // [a2*b2, a3*b3] as i64
+        // Extract high 32 bits: shift right by 32, then shuffle to pack
+        // After shift: lo = [hi(a0*b0), 0, hi(a1*b1), 0] as i32 view
+        // We want: [hi(a0*b0), hi(a1*b1), hi(a2*b2), hi(a3*b3)]
+        let lo_shifted = i64x2_shr(lo, 32);
+        let hi_shifted = i64x2_shr(hi, 32);
+        // Pack: take lanes 0,2 from lo_shifted and 0,2 from hi_shifted
+        // lo_shifted as i32x4: [hi0, 0, hi1, 0]
+        // hi_shifted as i32x4: [hi2, 0, hi3, 0]
+        I32VecSimd128(i32x4_shuffle::<0, 2, 4, 6>(lo_shifted, hi_shifted), self.1)
     }
 
     #[inline(always)]
@@ -702,112 +704,99 @@ impl I32SimdVec for I32VecSimd128 {
 
 impl Add<I32VecSimd128> for I32VecSimd128 {
     type Output = I32VecSimd128;
-    fn_simd128! {
-        fn add(this: I32VecSimd128, rhs: I32VecSimd128) -> I32VecSimd128 {
-            I32VecSimd128(i32x4_add(this.0, rhs.0), this.1)
-        }
+    #[inline(always)]
+    fn add(self, rhs: I32VecSimd128) -> I32VecSimd128 {
+        I32VecSimd128(i32x4_add(self.0, rhs.0), self.1)
     }
 }
 
 impl Sub<I32VecSimd128> for I32VecSimd128 {
     type Output = I32VecSimd128;
-    fn_simd128! {
-        fn sub(this: I32VecSimd128, rhs: I32VecSimd128) -> I32VecSimd128 {
-            I32VecSimd128(i32x4_sub(this.0, rhs.0), this.1)
-        }
+    #[inline(always)]
+    fn sub(self, rhs: I32VecSimd128) -> I32VecSimd128 {
+        I32VecSimd128(i32x4_sub(self.0, rhs.0), self.1)
     }
 }
 
 impl Mul<I32VecSimd128> for I32VecSimd128 {
     type Output = I32VecSimd128;
-    fn_simd128! {
-        fn mul(this: I32VecSimd128, rhs: I32VecSimd128) -> I32VecSimd128 {
-            I32VecSimd128(i32x4_mul(this.0, rhs.0), this.1)
-        }
+    #[inline(always)]
+    fn mul(self, rhs: I32VecSimd128) -> I32VecSimd128 {
+        I32VecSimd128(i32x4_mul(self.0, rhs.0), self.1)
     }
 }
 
 impl Neg for I32VecSimd128 {
     type Output = I32VecSimd128;
-    fn_simd128! {
-        fn neg(this: I32VecSimd128) -> I32VecSimd128 {
-            I32VecSimd128(i32x4_neg(this.0), this.1)
-        }
+    #[inline(always)]
+    fn neg(self) -> I32VecSimd128 {
+        I32VecSimd128(i32x4_neg(self.0), self.1)
     }
 }
 
 impl BitAnd<I32VecSimd128> for I32VecSimd128 {
     type Output = I32VecSimd128;
-    fn_simd128! {
-        fn bitand(this: I32VecSimd128, rhs: I32VecSimd128) -> I32VecSimd128 {
-            I32VecSimd128(v128_and(this.0, rhs.0), this.1)
-        }
+    #[inline(always)]
+    fn bitand(self, rhs: I32VecSimd128) -> I32VecSimd128 {
+        I32VecSimd128(v128_and(self.0, rhs.0), self.1)
     }
 }
 
 impl BitOr<I32VecSimd128> for I32VecSimd128 {
     type Output = I32VecSimd128;
-    fn_simd128! {
-        fn bitor(this: I32VecSimd128, rhs: I32VecSimd128) -> I32VecSimd128 {
-            I32VecSimd128(v128_or(this.0, rhs.0), this.1)
-        }
+    #[inline(always)]
+    fn bitor(self, rhs: I32VecSimd128) -> I32VecSimd128 {
+        I32VecSimd128(v128_or(self.0, rhs.0), self.1)
     }
 }
 
 impl BitXor<I32VecSimd128> for I32VecSimd128 {
     type Output = I32VecSimd128;
-    fn_simd128! {
-        fn bitxor(this: I32VecSimd128, rhs: I32VecSimd128) -> I32VecSimd128 {
-            I32VecSimd128(v128_xor(this.0, rhs.0), this.1)
-        }
+    #[inline(always)]
+    fn bitxor(self, rhs: I32VecSimd128) -> I32VecSimd128 {
+        I32VecSimd128(v128_xor(self.0, rhs.0), self.1)
     }
 }
 
 impl AddAssign<I32VecSimd128> for I32VecSimd128 {
-    fn_simd128! {
-        fn add_assign(this: &mut I32VecSimd128, rhs: I32VecSimd128) {
-            this.0 = i32x4_add(this.0, rhs.0)
-        }
+    #[inline(always)]
+    fn add_assign(&mut self, rhs: I32VecSimd128) {
+        self.0 = i32x4_add(self.0, rhs.0)
     }
 }
 
 impl SubAssign<I32VecSimd128> for I32VecSimd128 {
-    fn_simd128! {
-        fn sub_assign(this: &mut I32VecSimd128, rhs: I32VecSimd128) {
-            this.0 = i32x4_sub(this.0, rhs.0)
-        }
+    #[inline(always)]
+    fn sub_assign(&mut self, rhs: I32VecSimd128) {
+        self.0 = i32x4_sub(self.0, rhs.0)
     }
 }
 
 impl MulAssign<I32VecSimd128> for I32VecSimd128 {
-    fn_simd128! {
-        fn mul_assign(this: &mut I32VecSimd128, rhs: I32VecSimd128) {
-            this.0 = i32x4_mul(this.0, rhs.0)
-        }
+    #[inline(always)]
+    fn mul_assign(&mut self, rhs: I32VecSimd128) {
+        self.0 = i32x4_mul(self.0, rhs.0)
     }
 }
 
 impl BitAndAssign<I32VecSimd128> for I32VecSimd128 {
-    fn_simd128! {
-        fn bitand_assign(this: &mut I32VecSimd128, rhs: I32VecSimd128) {
-            this.0 = v128_and(this.0, rhs.0);
-        }
+    #[inline(always)]
+    fn bitand_assign(&mut self, rhs: I32VecSimd128) {
+        self.0 = v128_and(self.0, rhs.0);
     }
 }
 
 impl BitOrAssign<I32VecSimd128> for I32VecSimd128 {
-    fn_simd128! {
-        fn bitor_assign(this: &mut I32VecSimd128, rhs: I32VecSimd128) {
-            this.0 = v128_or(this.0, rhs.0);
-        }
+    #[inline(always)]
+    fn bitor_assign(&mut self, rhs: I32VecSimd128) {
+        self.0 = v128_or(self.0, rhs.0);
     }
 }
 
 impl BitXorAssign<I32VecSimd128> for I32VecSimd128 {
-    fn_simd128! {
-        fn bitxor_assign(this: &mut I32VecSimd128, rhs: I32VecSimd128) {
-            this.0 = v128_xor(this.0, rhs.0);
-        }
+    #[inline(always)]
+    fn bitxor_assign(&mut self, rhs: I32VecSimd128) {
+        self.0 = v128_xor(self.0, rhs.0);
     }
 }
 
@@ -820,11 +809,10 @@ impl U32SimdVec for U32VecSimd128 {
 
     const LEN: usize = 4;
 
-    fn_simd128! {
-        fn bitcast_to_i32(this: U32VecSimd128) -> I32VecSimd128 {
-            // v128 is untyped; no conversion needed.
-            I32VecSimd128(this.0, this.1)
-        }
+    #[inline(always)]
+    fn bitcast_to_i32(self) -> I32VecSimd128 {
+        // v128 is untyped; no conversion needed.
+        I32VecSimd128(self.0, self.1)
     }
 
     #[inline(always)]
@@ -1047,59 +1035,66 @@ pub struct MaskSimd128(v128, Simd128Descriptor);
 impl SimdMask for MaskSimd128 {
     type Descriptor = Simd128Descriptor;
 
-    fn_simd128! {
-        fn if_then_else_f32(
-            this: MaskSimd128,
-            if_true: F32VecSimd128,
-            if_false: F32VecSimd128,
-        ) -> F32VecSimd128 {
-            #[cfg(target_feature = "relaxed-simd")]
-            { F32VecSimd128(i32x4_relaxed_laneselect(if_true.0, if_false.0, this.0), this.1) }
-            #[cfg(not(target_feature = "relaxed-simd"))]
-            { F32VecSimd128(v128_bitselect(if_true.0, if_false.0, this.0), this.1) }
+    #[inline(always)]
+    fn if_then_else_f32(self, if_true: F32VecSimd128, if_false: F32VecSimd128) -> F32VecSimd128 {
+        #[cfg(target_feature = "relaxed-simd")]
+        {
+            F32VecSimd128(
+                i32x4_relaxed_laneselect(if_true.0, if_false.0, self.0),
+                self.1,
+            )
         }
+        #[cfg(not(target_feature = "relaxed-simd"))]
+        {
+            F32VecSimd128(v128_bitselect(if_true.0, if_false.0, self.0), self.1)
+        }
+    }
 
-        fn if_then_else_i32(
-            this: MaskSimd128,
-            if_true: I32VecSimd128,
-            if_false: I32VecSimd128,
-        ) -> I32VecSimd128 {
-            #[cfg(target_feature = "relaxed-simd")]
-            { I32VecSimd128(i32x4_relaxed_laneselect(if_true.0, if_false.0, this.0), this.1) }
-            #[cfg(not(target_feature = "relaxed-simd"))]
-            { I32VecSimd128(v128_bitselect(if_true.0, if_false.0, this.0), this.1) }
+    #[inline(always)]
+    fn if_then_else_i32(self, if_true: I32VecSimd128, if_false: I32VecSimd128) -> I32VecSimd128 {
+        #[cfg(target_feature = "relaxed-simd")]
+        {
+            I32VecSimd128(
+                i32x4_relaxed_laneselect(if_true.0, if_false.0, self.0),
+                self.1,
+            )
         }
+        #[cfg(not(target_feature = "relaxed-simd"))]
+        {
+            I32VecSimd128(v128_bitselect(if_true.0, if_false.0, self.0), self.1)
+        }
+    }
 
-        fn maskz_i32(this: MaskSimd128, v: I32VecSimd128) -> I32VecSimd128 {
-            // Zero out lanes where mask is true: v AND NOT mask
-            I32VecSimd128(v128_andnot(v.0, this.0), this.1)
-        }
+    #[inline(always)]
+    fn maskz_i32(self, v: I32VecSimd128) -> I32VecSimd128 {
+        // Zero out lanes where mask is true: v AND NOT mask
+        I32VecSimd128(v128_andnot(v.0, self.0), self.1)
+    }
 
-        fn andnot(this: MaskSimd128, rhs: MaskSimd128) -> MaskSimd128 {
-            // !this & rhs
-            MaskSimd128(v128_andnot(rhs.0, this.0), this.1)
-        }
+    #[inline(always)]
+    fn andnot(self, rhs: MaskSimd128) -> MaskSimd128 {
+        // !self & rhs
+        MaskSimd128(v128_andnot(rhs.0, self.0), self.1)
+    }
 
-        fn all(this: MaskSimd128) -> bool {
-            u32x4_all_true(this.0)
-        }
+    #[inline(always)]
+    fn all(self) -> bool {
+        u32x4_all_true(self.0)
     }
 }
 
 impl BitAnd<MaskSimd128> for MaskSimd128 {
     type Output = MaskSimd128;
-    fn_simd128! {
-        fn bitand(this: MaskSimd128, rhs: MaskSimd128) -> MaskSimd128 {
-            MaskSimd128(v128_and(this.0, rhs.0), this.1)
-        }
+    #[inline(always)]
+    fn bitand(self, rhs: MaskSimd128) -> MaskSimd128 {
+        MaskSimd128(v128_and(self.0, rhs.0), self.1)
     }
 }
 
 impl BitOr<MaskSimd128> for MaskSimd128 {
     type Output = MaskSimd128;
-    fn_simd128! {
-        fn bitor(this: MaskSimd128, rhs: MaskSimd128) -> MaskSimd128 {
-            MaskSimd128(v128_or(this.0, rhs.0), this.1)
-        }
+    #[inline(always)]
+    fn bitor(self, rhs: MaskSimd128) -> MaskSimd128 {
+        MaskSimd128(v128_or(self.0, rhs.0), self.1)
     }
 }
