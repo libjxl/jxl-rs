@@ -14,11 +14,17 @@ license = "BSD-3-Clause"
 jxl_simd = { path = "../jxl_simd", version = "=0.4.2" }
 
 [dev-dependencies]
-criterion = { version = "0.7.0", features = ["html_reports"] }
 test-log = "0.2.14"
 paste = "1.0.15"
 rand = "0.9.2"
 rand_chacha = "0.9.0"
+
+# rayon doesn't support wasm32
+[target.'cfg(target_arch = "wasm32")'.dev-dependencies]
+criterion = { version = "0.7.0", default-features = false, features = ["html_reports", "plotters", "cargo_bench_support"] }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
+criterion = { version = "0.7.0", features = ["html_reports"] }
 
 [features]
 all-simd = ["jxl_simd/all-simd"]
@@ -26,6 +32,7 @@ sse42 = ["jxl_simd/sse42"]
 avx = ["jxl_simd/avx"]
 avx512 = ["jxl_simd/avx512"]
 neon = ["jxl_simd/neon"]
+simd128 = ["jxl_simd/simd128"]
 
 [[bench]]
 name = "dct"

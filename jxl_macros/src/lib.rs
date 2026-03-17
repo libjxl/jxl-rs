@@ -712,11 +712,10 @@ pub fn for_each_test_file(input: TokenStream) -> TokenStream {
     use syn::Ident;
 
     let fn_name = parse_macro_input!(input as Ident);
-    let root_test_dir = Path::new(env!("CARGO_MANIFEST_DIR"))
+    let jxl_crate_dir = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("..")
-        .join("jxl")
-        .join("resources")
-        .join("test");
+        .join("jxl");
+    let root_test_dir = jxl_crate_dir.join("resources").join("test");
     let conformance_test_dir = root_test_dir.join("conformance_test_images");
 
     let mut tests = vec![];
@@ -726,7 +725,8 @@ pub fn for_each_test_file(input: TokenStream) -> TokenStream {
             let entry = entry.unwrap();
             let path = entry.path();
             if path.extension().is_some_and(|ext| ext == "jxl") {
-                let pathname = path.to_string_lossy();
+                // Use relative path so tests work in WASM sandbox
+                let pathname = path.strip_prefix(&jxl_crate_dir).unwrap().to_string_lossy();
                 let relative_path = path
                     .strip_prefix(&test_dir)
                     .unwrap()

@@ -129,7 +129,11 @@ jobs:
 
       - name: Tests with SIMD feature ${{ matrix.simd }} (wasm)
         if: ${{ matrix.target == 'wasm32-wasip1' }}
-        run: cargo test --release -p jxl_simd --no-fail-fast --no-default-features --features ${{ matrix.simd }} --target ${{ matrix.target }}
+        run: |
+          cargo test --release --workspace --exclude jxl_cli --exclude jxl_cms --no-fail-fast --no-default-features --features ${{ matrix.simd }} --target ${{ matrix.target }} --
+          --skip tirr_photo # 4GiB wasm32 memory limit
+          --skip huge_image # 4GiB wasm32 memory limit
+          --skip fuzzer_smallbuffer # only panic=abort is supported in stable toolchain
 
       - name: Tests with no features
         if: ${{ matrix.simd == 'none' }}
