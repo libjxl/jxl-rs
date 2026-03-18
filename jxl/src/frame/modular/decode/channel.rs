@@ -94,7 +94,7 @@ pub(super) trait ModularChannelDecoder {
     ) -> i32;
 }
 
-#[inline(never)]
+#[inline(always)]
 fn decode_modular_channel_impl<D: ModularChannelDecoder>(
     buffers: &mut [&mut ModularChannel],
     chan: usize,
