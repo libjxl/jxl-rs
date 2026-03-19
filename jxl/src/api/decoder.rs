@@ -1983,4 +1983,44 @@ pub(crate) mod tests {
             let _ = profile.try_as_icc();
         }
     }
+
+    /// Regression test for issue #728: squeeze transform boundary bug.
+    ///
+    /// This synthetic image is 15360x8640 with exactly two colors: the top half
+    /// is black (0,0,0) and the bottom half is white (65535,65535,65535).
+    /// It's encoded lossless with palette + squeeze, so every decoded pixel
+    /// must be exactly 0.0 or 1.0.
+    ///
+    /// The bug caused incorrect squeeze averages at deep levels when grid
+    /// cells had h==1 and the local has_tail was false but in_next_avg was
+    /// available. This produced a faint off-color line near the transition.
+    #[test]
+    fn test_squeeze_boundary() {
+        let (_, frames) = decode(
+            &std::fs::read("resources/test/issue728_synthetic.jxl").unwrap(),
+            usize::MAX,
+            false,
+            false,
+            None,
+        )
+        .unwrap();
+        assert_eq!(frames.len(), 1);
+        let frame = &frames[0];
+        // Color channels are interleaved in the first buffer (RGB = 3 channels)
+        let buf = &frame[0];
+        let (xs, ys) = buf.size();
+        for y in 0..ys {
+            let row = buf.row(y);
+            for x in 0..xs {
+                let v = row[x];
+                assert!(
+                    v == 0.0 || v == 1.0,
+                    "pixel ({}, {}) has value {v}, expected 0.0 or 1.0 \
+                     (issue #728 squeeze boundary bug)",
+                    x / 3,
+                    y,
+                );
+            }
+        }
+    }
 }
