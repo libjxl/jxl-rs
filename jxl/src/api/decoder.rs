@@ -2012,4 +2012,56 @@ pub(crate) mod tests {
             }
         }
     }
+
+    /// Regression test for grid boundary bug with odd-width images (issue #728 variant).
+    ///
+    /// This test image is 257x256 solid blue (RGB 0, 0, 255). The width has a tail pixel
+    /// which triggers a bug in grid-based decoding where hsqueeze is called with a
+    /// 0-width residual rectangle for the rightmost grid cell.
+    ///
+    /// The bug was in the w==0 shortcut in do_hsqueeze_step() which looped over in_res
+    /// height (0) instead of output height, so no pixels were copied. The fix ensures
+    /// we loop over output dimensions to copy all pixels from in_avg.
+    ///
+    /// Before the fix: 512 pixels corrupted (2 rightmost columns × 256 rows)
+    /// After the fix: All pixels decode correctly as blue (0.0, 0.0, 1.0)
+    #[test]
+    fn decode_test_strategic_solid_blue_grid_boundary() {
+        let (_, frames) = decode(
+            &std::fs::read("resources/test/strategic_solid_blue.jxl").unwrap(),
+            usize::MAX,
+            false,
+            false,
+            None,
+        )
+        .unwrap();
+        assert_eq!(frames.len(), 1);
+        let frame = &frames[0];
+
+        // First buffer contains interleaved RGB channels (3 channels)
+        let buf = &frame[0];
+        let (xs, ys) = buf.size();
+
+        // Verify dimensions: 257 pixels × 3 channels = 771, height = 256
+        assert_eq!(xs, 257 * 3);
+        assert_eq!(ys, 256);
+
+        // Check all pixels are blue (0.0, 0.0, 1.0 in f32 format)
+        for y in 0..ys {
+            for x in 0..257 {
+                let row = buf.row(y);
+                let (r, g, b) = (row[x * 3], row[x * 3 + 1], row[x * 3 + 2]);
+                assert_eq!(
+                    (r, g, b),
+                    (0.0, 0.0, 1.0),
+                    "pixel ({}, {}) has value ({}, {}, {}), expected (0.0, 0.0, 1.0)",
+                    x,
+                    y,
+                    r,
+                    g,
+                    b,
+                );
+            }
+        }
+    }
 }
