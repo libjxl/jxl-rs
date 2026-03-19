@@ -1995,7 +1995,7 @@ pub(crate) mod tests {
     /// cells had h==1 and the local has_tail was false but in_next_avg was
     /// available. This produced a faint off-color line near the transition.
     #[test]
-    fn test_squeeze_boundary() {
+    fn decode_test_squeeze_boundary() {
         let (_, frames) = decode(
             &std::fs::read("resources/test/issue728_synthetic.jxl").unwrap(),
             usize::MAX,
@@ -2008,11 +2008,9 @@ pub(crate) mod tests {
         let frame = &frames[0];
         // Color channels are interleaved in the first buffer (RGB = 3 channels)
         let buf = &frame[0];
-        let (xs, ys) = buf.size();
+        let (_, ys) = buf.size();
         for y in 0..ys {
-            let row = buf.row(y);
-            for x in 0..xs {
-                let v = row[x];
+            for (x, &v) in buf.row(y).iter().enumerate() {
                 assert!(
                     v == 0.0 || v == 1.0,
                     "pixel ({}, {}) has value {v}, expected 0.0 or 1.0 \
