@@ -467,10 +467,11 @@ pub fn do_hsqueeze_step(
         return;
     }
 
-    let (w, h) = in_res.size();
+    let w = in_res.size().0;
     // Another shortcut: when output row has just 1px
     if w == 0 {
-        for y in 0..h {
+        let out_h = out.data.size().1;
+        for y in 0..out_h {
             out.data.row_mut(y)[0] = in_avg.row(y)[0];
         }
         return;
@@ -661,9 +662,12 @@ pub fn do_vsqueeze_step(
     if out.size().1 == 0 || out.size().0 == 0 {
         return;
     }
-    // Another shortcut: when there is one output row
+    // Another shortcut: when there is one output row or when in_res has height 0
     if in_res.size().1 == 0 {
-        out.row_mut(0).copy_from_slice(in_avg.row(0));
+        let out_h = out.size().1;
+        for y in 0..out_h {
+            out.row_mut(y).copy_from_slice(in_avg.row(y));
+        }
         return;
     }
     // Otherwise: 2 or more rows
