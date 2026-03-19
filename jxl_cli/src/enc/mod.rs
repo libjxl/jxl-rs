@@ -48,7 +48,7 @@ impl OutputFormat {
 
     pub fn supported_output_data_types(&self) -> &'static [OutputDataType] {
         match self {
-            Self::Ppm | Self::Pgm => &[OutputDataType::U8],
+            Self::Ppm | Self::Pgm => &[OutputDataType::U8, OutputDataType::U16],
             Self::Npy => &[OutputDataType::F32],
             Self::Png => &[OutputDataType::U8, OutputDataType::U16],
             #[cfg(feature = "exr")]
