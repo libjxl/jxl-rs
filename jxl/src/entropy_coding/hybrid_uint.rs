@@ -88,8 +88,8 @@ impl HybridUint {
 
         // Common path in some LZ77/RLE configs: no MSB bits embedded in token.
         if self.msb_in_token == 0 {
-            let nbits =
-                self.split_exponent - self.lsb_in_token + ((symbol - self.split_token) >> self.lsb_in_token);
+            let nbits = self.split_exponent - self.lsb_in_token
+                + ((symbol - self.split_token) >> self.lsb_in_token);
             // The bitstream is invalid if nbits >= 32. We do not report errors, and just pretend we
             // decoded a number <32.
             let nbits = nbits & 31;
