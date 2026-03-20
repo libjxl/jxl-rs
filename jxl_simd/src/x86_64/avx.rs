@@ -700,7 +700,7 @@ unsafe impl F32SimdVec for F32VecAvx {
         #[inline]
         fn store_f16_bits_impl(v: __m256, dest: &mut [u16]) {
             assert!(dest.len() >= F32VecAvx::LEN);
-            let bits = _mm256_cvtps_ph::<{ _MM_FROUND_TO_NEAREST_INT | _MM_FROUND_NO_EXC }>(v);
+            let bits = _mm256_cvtps_ph::<{ _MM_FROUND_TO_NEAREST_INT }>(v);
             // SAFETY: dest.len() >= 8 is checked above. _mm_storeu_si128 supports unaligned stores.
             unsafe { _mm_storeu_si128(dest.as_mut_ptr().cast(), bits) };
         }

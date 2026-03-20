@@ -757,7 +757,7 @@ unsafe impl F32SimdVec for F32VecAvx512 {
         #[inline]
         fn store_f16_bits_impl(v: __m512, dest: &mut [u16]) {
             assert!(dest.len() >= F32VecAvx512::LEN);
-            let bits = _mm512_cvtps_ph::<{ _MM_FROUND_TO_NEAREST_INT | _MM_FROUND_NO_EXC }>(v);
+            let bits = _mm512_cvtps_ph::<{ _MM_FROUND_TO_NEAREST_INT }>(v);
             // SAFETY: dest.len() >= 16 is checked above.
             unsafe { _mm256_storeu_si256(dest.as_mut_ptr().cast(), bits) };
         }
