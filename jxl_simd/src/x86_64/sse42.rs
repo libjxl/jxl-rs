@@ -625,7 +625,7 @@ unsafe impl F32SimdVec for F32VecSse42 {
     #[inline(always)]
     fn load_f16_bits(d: Self::Descriptor, mem: &[u16]) -> Self {
         assert!(mem.len() >= Self::LEN);
-        // SSE4.2 doesn't have F16C, use scalar conversion
+        // TODO: use SIMD bit manipulation instead of scalar loop (see wasm32/simd128.rs)
         let mut result = [0.0f32; 4];
         for i in 0..4 {
             result[i] = crate::f16::from_bits(mem[i]).to_f32();
@@ -636,7 +636,7 @@ unsafe impl F32SimdVec for F32VecSse42 {
     #[inline(always)]
     fn store_f16_bits(self, dest: &mut [u16]) {
         assert!(dest.len() >= Self::LEN);
-        // SSE4.2 doesn't have F16C, use scalar conversion
+        // TODO: use SIMD bit manipulation instead of scalar loop (see wasm32/simd128.rs)
         let mut tmp = [0.0f32; 4];
         self.store(&mut tmp);
         for i in 0..4 {

@@ -431,25 +431,72 @@ unsafe impl F32SimdVec for F32VecSimd128 {
 
     #[inline(always)]
     fn store_f16_bits(self, dest: &mut [u16]) {
-        assert!(dest.len() >= F32VecSimd128::LEN);
-        // WASM SIMD128 has no hardware f16 conversion; use scalar fallback.
-        let mut tmp = [0.0f32; 4];
-        // SAFETY: tmp is large enough.
-        unsafe { v128_store(tmp.as_mut_ptr().cast(), self.0) };
-        for i in 0..4 {
-            dest[i] = crate::f16::from_f32(tmp[i]).to_bits();
+        assert!(dest.len() >= Self::LEN);
+        let abs = f32x4_abs(self.0);
+        let sign = v128_and(u32x4_shr(self.0, 16), u32x4_splat(0x8000));
+        let abs_shifted = u32x4_shr(abs, 13);
+
+        // Normal: shift exp+mant into f16 position, rebias, clamp to max f16
+        let normal = i32x4_min(
+            i32x4_sub(abs_shifted, u32x4_splat(112 << 10)),
+            i32x4_splat(0x7C00),
+        );
+
+        // Subnormal (|x| < 2^-14): magic number trick to denormalize
+        // Adding 2^-14 normalizes the mantissa via float rounding,
+        // then integer-subtract the bias and shift to get the 10-bit mantissa.
+        let magic = u32x4_splat(113 << 23);
+        let subnorm = u32x4_shr(i32x4_sub(f32x4_add(abs, magic), magic), 13);
+
+        // Inf/NaN (exp==255): set f16 exp=31, keep top 10 mantissa bits
+        let infnan = v128_or(
+            u32x4_splat(0x7C00),
+            v128_and(abs_shifted, u32x4_splat(0x03FF)),
+        );
+
+        let is_subnorm = i32x4_lt(abs, u32x4_splat(0x38800000));
+        let is_infnan = i32x4_gt(abs, u32x4_splat(0x7F7FFFFF));
+        let result = v128_bitselect(subnorm, normal, is_subnorm);
+        let result = v128_bitselect(infnan, result, is_infnan);
+        let h = v128_or(sign, result);
+
+        // Narrow u32->u16 and store
+        let packed = i8x16_shuffle::<0, 1, 4, 5, 8, 9, 12, 13, 0, 0, 0, 0, 0, 0, 0, 0>(h, h);
+        // SAFETY: we checked dest has enough space.
+        unsafe {
+            v128_store64_lane::<0>(packed, dest.as_mut_ptr().cast::<u64>());
         }
     }
 
     #[inline(always)]
     fn load_f16_bits(d: Self::Descriptor, mem: &[u16]) -> Self {
         assert!(mem.len() >= Self::LEN);
-        // WASM SIMD128 has no hardware f16 conversion; use scalar fallback.
-        let mut result = [0.0f32; 4];
-        for i in 0..4 {
-            result[i] = crate::f16::from_bits(mem[i]).to_f32();
-        }
-        Self::load(d, &result)
+        let lo = unsafe { v128_load64_splat(mem.as_ptr().cast()) };
+        let zero = i32x4_splat(0);
+        let wide =
+            i8x16_shuffle::<0, 1, 16, 16, 2, 3, 16, 16, 4, 5, 16, 16, 6, 7, 16, 16>(lo, zero);
+        let sign = i32x4_shl(v128_and(wide, u32x4_splat(0x8000)), 16);
+        let mag = v128_and(wide, u32x4_splat(0x7FFF));
+        let mag_shifted = i32x4_shl(mag, 13);
+
+        // Normal: shift exp+mant into f32 position, rebias exponent (+112)
+        let normal = i32x4_add(mag_shifted, u32x4_splat(112 << 23));
+
+        // Subnormal (exp==0): magic number trick to normalize
+        // Construct 2^(-14) * (1 + mant/1024) then subtract 2^(-14)
+        let magic = u32x4_splat(113 << 23);
+        let mant_shifted = v128_and(mag_shifted, u32x4_splat(0x7FE000));
+        let subnorm = f32x4_sub(v128_or(magic, mant_shifted), magic);
+
+        // Inf/NaN (exp==31): normal path gives f32 exp=143, need 255; add 112<<23
+        let infnan = i32x4_add(normal, u32x4_splat(112 << 23));
+
+        let is_subnorm = i32x4_lt(mag, u32x4_splat(0x0400));
+        let is_infnan = i32x4_gt(mag, u32x4_splat(0x7BFF));
+        let result = v128_bitselect(subnorm, normal, is_subnorm);
+        let result = v128_bitselect(infnan, result, is_infnan);
+
+        Self(v128_or(sign, result), d)
     }
 
     #[inline(always)]
