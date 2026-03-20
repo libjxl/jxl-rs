@@ -85,11 +85,21 @@ impl HybridUint {
         if symbol < self.split_token {
             return symbol;
         }
+
+        // Fast path: no LSB bits in token. Covers common configs (0,0), (1,0), (2,0).
+        // Eliminates low-bits extraction, symbol shift, and final shift/OR.
+        if self.lsb_in_token == 0 {
+            let nbits = (self.split_exponent - self.msb_in_token
+                + ((symbol - self.split_token) >> self.msb_in_token))
+                & 31;
+            let bits = br.read_optimistic(nbits as usize) as u32;
+            let hi = (symbol & ((1 << self.msb_in_token) - 1)) | (1 << self.msb_in_token);
+            return (hi << nbits) | bits;
+        }
+
         let bits_in_token = self.lsb_in_token + self.msb_in_token;
         let nbits =
             self.split_exponent - bits_in_token + ((symbol - self.split_token) >> bits_in_token);
-        // The bitstream is invalid if nbits >= 32. We do not report errors, and just pretend we
-        // decoded a number <32.
         let nbits = nbits & 31;
         let low = symbol & ((1 << self.lsb_in_token) - 1);
         let symbol_nolow = symbol >> self.lsb_in_token;
