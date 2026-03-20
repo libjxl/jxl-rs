@@ -1669,12 +1669,11 @@ mod test {
         let mut f16_buf = vec![0u16; len];
         v.store_f16_bits(&mut f16_buf);
         // Magnitude bits should be zero (sign may be preserved)
-        for i in 0..3.min(len) {
+        for (i, &bits) in f16_buf.iter().enumerate().take(3.min(len)) {
             assert_eq!(
-                f16_buf[i] & 0x7FFF,
+                bits & 0x7FFF,
                 0,
-                "underflow not flushed to zero at {i}: got 0x{:04X}",
-                f16_buf[i],
+                "underflow not flushed to zero at {i}: got 0x{bits:04X}",
             );
         }
     }
