@@ -105,7 +105,7 @@ impl f16 {
             } else if unbiased < -14 {
                 // Denormal f16
                 let shift = (-14 - unbiased) as u32;
-                let m = ((mant | 0x0080_0000) >> (shift + 14)) as u16;
+                let m = ((mant | 0x0080_0000) >> (shift + 13)) as u16;
                 (sign << 15) | m
             } else if unbiased > 15 {
                 // Overflow to infinity
