@@ -2001,8 +2001,7 @@ pub(crate) mod tests {
         let (xs, ys) = buf.size();
         for y in 0..ys {
             let row = buf.row(y);
-            for x in 0..xs {
-                let v = row[x];
+            for (x, &v) in row.iter().enumerate().take(xs) {
                 assert!(
                     v == 0.0 || v == 1.0,
                     "pixel ({}, {}) has value {v}, expected 0.0 or 1.0 \
