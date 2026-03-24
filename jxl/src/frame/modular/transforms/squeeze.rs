@@ -597,8 +597,10 @@ fn vsqueeze_scalar(
         let avg_row = in_avg.row(0);
         let res_row = in_res.row(0);
         let avg_row_next = if !has_tail && (h == 1) {
-            debug_assert!(in_next_avg.is_none());
-            in_avg.row(0)
+            match in_next_avg {
+                None => in_avg.row(0),
+                Some(mc) => mc.row(0),
+            }
         } else {
             in_avg.row(1)
         };

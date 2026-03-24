@@ -1983,4 +1983,33 @@ pub(crate) mod tests {
             let _ = profile.try_as_icc();
         }
     }
+
+    /// Small regression test for issue #728: squeeze transform boundary bug.
+    #[test]
+    fn test_squeeze_boundary_minimal() {
+        let (_, frames) = decode(
+            &std::fs::read("resources/test/issue728_minimal.jxl").unwrap(),
+            usize::MAX,
+            false,
+            false,
+            None,
+        )
+        .unwrap();
+        assert_eq!(frames.len(), 1);
+        let frame = &frames[0];
+        let buf = &frame[0];
+        let (xs, ys) = buf.size();
+        for y in 0..ys {
+            let row = buf.row(y);
+            for (x, &v) in row.iter().enumerate().take(xs) {
+                assert!(
+                    v == 0.0 || v == 1.0,
+                    "pixel ({}, {}) has value {v}, expected 0.0 or 1.0 \
+                     (issue #728 squeeze boundary bug - minimal test)",
+                    x / 3,
+                    y,
+                );
+            }
+        }
+    }
 }
