@@ -80,11 +80,24 @@ impl HybridUint {
         (hi << nbits) | bits
     }
 
-    #[inline]
+    #[inline(always)]
     pub fn read(&self, symbol: u32, br: &mut BitReader) -> u32 {
         if symbol < self.split_token {
             return symbol;
         }
+
+        // Common path in some LZ77/RLE configs: no MSB bits embedded in token.
+        if self.msb_in_token == 0 {
+            let nbits = self.split_exponent - self.lsb_in_token
+                + ((symbol - self.split_token) >> self.lsb_in_token);
+            // The bitstream is invalid if nbits >= 32. We do not report errors, and just pretend we
+            // decoded a number <32.
+            let nbits = nbits & 31;
+            let low = symbol & ((1 << self.lsb_in_token) - 1);
+            let bits = br.read_optimistic(nbits as usize) as u32;
+            return (((1u32 << nbits) | bits) << self.lsb_in_token) | low;
+        }
+
         let bits_in_token = self.lsb_in_token + self.msb_in_token;
         let nbits =
             self.split_exponent - bits_in_token + ((symbol - self.split_token) >> bits_in_token);

@@ -547,6 +547,8 @@ impl Frame {
         Ok(())
     }
 
+    #[inline(always)]
+    #[allow(unsafe_code)]
     pub fn render_noise_for_group(
         &mut self,
         group: usize,
@@ -614,23 +616,20 @@ impl Frame {
                     continue;
                 }
 
-                // Fill all 3 channels with this subregion's noise, sharing the RNG
+                // Fill all 3 channels with this subregion's noise, sharing the RNG.
+                // Reinterpret the u64 batch as u32 pairs to avoid per-element branching.
                 for buf in &mut bufs {
                     for y in 0..sub_ysize {
                         let row = buf.row_mut(sub_y0 + y);
                         for batch_index in 0..sub_xsize.div_ceil(FLOATS_PER_BATCH) {
                             rng.fill(&mut batch);
+                            // SAFETY: [u64; N] and [u32; 2*N] have the same layout
+                            let batch_u32: &[u32; FLOATS_PER_BATCH] =
+                                unsafe { &*batch.as_ptr().cast() };
                             let batch_size =
                                 (sub_xsize - batch_index * FLOATS_PER_BATCH).min(FLOATS_PER_BATCH);
-                            for i in 0..batch_size {
+                            for (i, &bits) in batch_u32.iter().take(batch_size).enumerate() {
                                 let x = sub_x0 + FLOATS_PER_BATCH * batch_index + i;
-                                let k = i / 2;
-                                let high_bytes = i % 2 != 0;
-                                let bits = if high_bytes {
-                                    ((batch[k] & 0xFFFFFFFF00000000) >> 32) as u32
-                                } else {
-                                    (batch[k] & 0xFFFFFFFF) as u32
-                                };
                                 row[x] = bits_to_float(bits);
                             }
                         }

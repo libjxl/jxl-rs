@@ -47,11 +47,15 @@ fn decode_modular_channel_small(
 
     const { assert!(IMAGE_OFFSET.1 == 2) };
 
+    let mut property_buffer: Vec<i32> = vec![0; num_properties];
+    property_buffer[0] = chan as i32;
+    property_buffer[1] = stream_id as i32;
+
     for y in 0..size.1 {
         precompute_references(buffers, chan, y, &mut references);
-        let mut property_buffer: Vec<i32> = vec![0; num_properties];
-        property_buffer[0] = chan as i32;
-        property_buffer[1] = stream_id as i32;
+        // Reset property 9 (local gradient depends on previous row's value)
+        property_buffer[9] = 0;
+        wp_state.set_row(y, size.0);
         let [row, row_top, row_toptop] =
             buffers[chan].data.distinct_full_rows_mut([y + 2, y + 1, y]);
         let row = &mut row[IMAGE_OFFSET.0..IMAGE_OFFSET.0 + size.0];
@@ -80,8 +84,6 @@ fn decode_modular_channel_small(
 }
 
 pub(super) trait ModularChannelDecoder {
-    const NEEDS_TOP: bool;
-    const NEEDS_TOPTOP: bool;
     fn init_row(&mut self, buffers: &mut [&mut ModularChannel], chan: usize, y: usize);
     fn decode_one(
         &mut self,
@@ -92,6 +94,20 @@ pub(super) trait ModularChannelDecoder {
         br: &mut BitReader,
         histograms: &Histograms,
     ) -> i32;
+    /// Interior variant: x > 0 and x < xsize-1 guaranteed, y >= 2.
+    /// Default: delegates to decode_one. Override for WP trees to skip edge checks.
+    #[inline(always)]
+    fn decode_one_interior(
+        &mut self,
+        prediction_data: PredictionData,
+        pos: (usize, usize),
+        xsize: usize,
+        reader: &mut SymbolReader,
+        br: &mut BitReader,
+        histograms: &Histograms,
+    ) -> i32 {
+        self.decode_one(prediction_data, pos, xsize, reader, br, histograms)
+    }
 }
 
 #[inline(never)]
@@ -137,18 +153,19 @@ fn decode_modular_channel_impl<D: ModularChannelDecoder>(
                 row[x] = val;
             }
         } else {
-            for (x, r) in row.iter_mut().enumerate().skip(2).take(size.0 - 4) {
-                prediction_data = prediction_data.update_for_interior_row(
-                    row_top,
-                    row_toptop,
-                    x,
-                    last,
-                    D::NEEDS_TOP,
-                    D::NEEDS_TOPTOP,
+            #[allow(unsafe_code)]
+            for x in 2..size.0 - 2 {
+                prediction_data.update_for_interior_row(row_top, row_toptop, x, last);
+                let val = decoder.decode_one_interior(
+                    prediction_data,
+                    (x, y),
+                    size.0,
+                    reader,
+                    br,
+                    histograms,
                 );
-                let val =
-                    decoder.decode_one(prediction_data, (x, y), size.0, reader, br, histograms);
-                *r = val;
+                // SAFETY: x is in [2, size.0 - 2), and row.len() == size.0.
+                unsafe { *row.get_unchecked_mut(x) = val };
                 last = val;
             }
         }
@@ -195,6 +212,12 @@ pub(super) fn decode_modular_channel(
         TreeSpecialCase::NoWp(t) => {
             decode_modular_channel_impl(buffers, chan, t, reader, br, &tree.histograms)
         }
+        TreeSpecialCase::NoWpNoLz77(t) => {
+            decode_modular_channel_impl(buffers, chan, t, reader, br, &tree.histograms)
+        }
+        TreeSpecialCase::NoWpConfig420(t) => {
+            decode_modular_channel_impl(buffers, chan, t, reader, br, &tree.histograms)
+        }
         TreeSpecialCase::WpOnlyConfig420(t) => {
             decode_modular_channel_impl(buffers, chan, t, reader, br, &tree.histograms)
         }
@@ -205,6 +228,12 @@ pub(super) fn decode_modular_channel(
             decode_modular_channel_impl(buffers, chan, t, reader, br, &tree.histograms)
         }
         TreeSpecialCase::General(t) => {
+            decode_modular_channel_impl(buffers, chan, t, reader, br, &tree.histograms)
+        }
+        TreeSpecialCase::GeneralNoLz77(t) => {
+            decode_modular_channel_impl(buffers, chan, t, reader, br, &tree.histograms)
+        }
+        TreeSpecialCase::GeneralConfig420(t) => {
             decode_modular_channel_impl(buffers, chan, t, reader, br, &tree.histograms)
         }
     }?;

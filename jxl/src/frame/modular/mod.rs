@@ -142,13 +142,19 @@ impl ModularChannel {
         Self::new_with_shift(size, Some((0, 0)), bit_depth)
     }
 
+    #[allow(unsafe_code)]
     fn new_with_shift(
         size: (usize, usize),
         shift: Option<(usize, usize)>,
         bit_depth: BitDepth,
     ) -> Result<Self> {
+        // SAFETY: The modular decode loop (decode_modular_channel_impl) fully writes
+        // every pixel in the data region. The padding region is zeroed for correct
+        // boundary behavior in prediction.
+        let data =
+            unsafe { Image::new_uninit_with_zeroed_padding(size, IMAGE_OFFSET, IMAGE_PADDING)? };
         Ok(ModularChannel {
-            data: Image::new_with_padding(size, IMAGE_OFFSET, IMAGE_PADDING)?,
+            data,
             auxiliary_data: None,
             shift,
             bit_depth,

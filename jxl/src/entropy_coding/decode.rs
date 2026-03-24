@@ -28,6 +28,7 @@ pub fn decode_varint16(br: &mut BitReader) -> Result<u16> {
     }
 }
 
+#[inline(always)]
 pub fn unpack_signed(unsigned: u32) -> i32 {
     ((unsigned >> 1) ^ ((!unsigned) & 1).wrapping_sub(1)) as i32
 }
@@ -101,7 +102,7 @@ impl Lz77State {
         ( 8, 4), ( 6, 7), (-6, 7), ( 7, 6), (-7, 6), ( 8, 5), ( 7, 7), (-7, 7), ( 8, 6), ( 8, 7),
     ];
 
-    #[inline]
+    #[inline(always)]
     fn apply_copy(&mut self, distance_sym: u32, num_to_copy: u32) {
         let distance_sub_1 = if self.dist_multiplier == 0 {
             distance_sym
@@ -118,11 +119,13 @@ impl Lz77State {
         self.num_to_copy = num_to_copy;
     }
 
-    #[inline]
+    #[inline(always)]
+    #[allow(unsafe_code)]
     fn push_decoded_symbol(&mut self, token: u32) {
         let offset = (self.num_decoded & Self::WINDOW_MASK) as usize;
-        if let Some(slot) = self.window.get_mut(offset) {
-            *slot = token;
+        if offset < self.window.len() {
+            // SAFETY: offset < self.window.len() checked above
+            unsafe { *self.window.get_unchecked_mut(offset) = token };
         } else {
             debug_assert_eq!(self.window.len(), offset);
             self.window.push(token);
@@ -130,10 +133,15 @@ impl Lz77State {
         self.num_decoded += 1;
     }
 
-    #[inline]
+    #[inline(always)]
+    #[allow(unsafe_code)]
     fn pull_symbol(&mut self) -> Option<u32> {
         if let Some(next_num_to_copy) = self.num_to_copy.checked_sub(1) {
-            let sym = self.window[(self.copy_pos & Self::WINDOW_MASK) as usize];
+            let idx = (self.copy_pos & Self::WINDOW_MASK) as usize;
+            // SAFETY: copy_pos & WINDOW_MASK is always < 1 << LOG_WINDOW_SIZE,
+            // and the window has capacity 1 << LOG_WINDOW_SIZE. As long as num_decoded > 0
+            // (checked by apply_copy), the window has enough entries.
+            let sym = unsafe { *self.window.get_unchecked(idx) };
             self.copy_pos += 1;
             self.num_to_copy = next_num_to_copy;
             Some(sym)
@@ -152,7 +160,7 @@ struct RleState {
 }
 
 impl RleState {
-    #[inline]
+    #[inline(always)]
     fn push_token(
         &mut self,
         token: u32,
@@ -173,7 +181,7 @@ impl RleState {
         }
     }
 
-    #[inline]
+    #[inline(always)]
     fn pull_symbol(&mut self) -> Option<u32> {
         if self.repeat_count > 0 {
             self.repeat_count -= 1;
@@ -322,6 +330,7 @@ impl SymbolReader {
     }
 
     #[inline(always)]
+    #[allow(unsafe_code)]
     pub fn read_unsigned_clustered_inline(
         &mut self,
         histograms: &Histograms,
@@ -334,7 +343,10 @@ impl SymbolReader {
                     Codes::Huffman(hc) => hc.read(br, cluster),
                     Codes::Ans(ans) => self.ans_reader.read(ans, br, cluster),
                 };
-                histograms.uint_configs[cluster].read(token, br)
+                debug_assert!(cluster < histograms.uint_configs.len());
+                // SAFETY: cluster is a validated cluster ID from the context map,
+                // which is checked during Histograms::decode() to be < uint_configs.len().
+                unsafe { histograms.uint_configs.get_unchecked(cluster) }.read(token, br)
             }
 
             SymbolReaderState::Lz77(lz77_state) => {
@@ -393,8 +405,14 @@ impl SymbolReader {
                     Codes::Ans(ans) => self.ans_reader.read(ans, br, cluster),
                 };
                 rle_state.push_token(token, histograms, br, cluster);
-                if let Some(sym) = rle_state.pull_symbol() {
-                    sym
+                if rle_state.repeat_count > 0 {
+                    rle_state.repeat_count -= 1;
+                    if let Some(sym) = rle_state.last_sym {
+                        sym
+                    } else {
+                        self.errors.lz77_repeat = true;
+                        0
+                    }
                 } else {
                     self.errors.lz77_repeat = true;
                     0
@@ -466,6 +484,30 @@ impl SymbolReader {
         cluster: usize,
     ) -> i32 {
         let unsigned = self.read_unsigned_clustered_config_420(histograms, br, cluster);
+        unpack_signed(unsigned)
+    }
+
+    /// Fast path for reads without LZ77. Skips the LZ77 state match.
+    /// Matching libjxl's template<bool uses_lz77> approach.
+    ///
+    /// # Preconditions
+    /// - `self.state` must be `SymbolReaderState::None` (no LZ77)
+    #[inline(always)]
+    #[allow(unsafe_code)]
+    pub fn read_signed_clustered_no_lz77(
+        &mut self,
+        histograms: &Histograms,
+        br: &mut BitReader,
+        cluster: usize,
+    ) -> i32 {
+        debug_assert!(matches!(self.state, SymbolReaderState::None));
+        let token = match &histograms.codes {
+            Codes::Huffman(hc) => hc.read(br, cluster),
+            Codes::Ans(ans) => self.ans_reader.read(ans, br, cluster),
+        };
+        debug_assert!(cluster < histograms.uint_configs.len());
+        // SAFETY: cluster is a validated cluster ID.
+        let unsigned = unsafe { histograms.uint_configs.get_unchecked(cluster) }.read(token, br);
         unpack_signed(unsigned)
     }
 
@@ -622,8 +664,14 @@ impl Histograms {
         })
     }
 
+    #[inline(always)]
+    #[allow(unsafe_code)]
     pub fn map_context_to_cluster(&self, context: usize) -> usize {
-        self.context_map[context] as usize
+        debug_assert!(context < self.context_map.len());
+        // SAFETY: context < context_map.len() is guaranteed by the caller -
+        // contexts are bounded by the number of leaf nodes in the tree
+        // or num_ac_contexts, both validated during decode.
+        unsafe { *self.context_map.get_unchecked(context) as usize }
     }
 
     pub fn num_histograms(&self) -> usize {
@@ -639,6 +687,11 @@ impl Histograms {
     /// Requires: all configs are 420 AND LZ77 is disabled
     pub fn can_use_config_420_fast_path(&self) -> bool {
         !self.lz77_params.enabled && self.uint_configs.iter().all(|cfg| cfg.is_config_420())
+    }
+
+    /// Returns true if LZ77 is disabled, enabling the no-LZ77 fast path.
+    pub fn has_no_lz77(&self) -> bool {
+        !self.lz77_params.enabled
     }
 }
 
