@@ -662,12 +662,9 @@ pub fn do_vsqueeze_step(
     if out.size().1 == 0 || out.size().0 == 0 {
         return;
     }
-    // Another shortcut: when there is one output row or when in_res has height 0
+    // Another shortcut: when there is one output row
     if in_res.size().1 == 0 {
-        let out_h = out.size().1;
-        for y in 0..out_h {
-            out.row_mut(y).copy_from_slice(in_avg.row(y));
-        }
+        out.row_mut(0).copy_from_slice(in_avg.row(0));
         return;
     }
     // Otherwise: 2 or more rows
