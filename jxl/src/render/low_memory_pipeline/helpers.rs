@@ -50,3 +50,68 @@ pub(super) fn get_distinct_indices<'a, T>(
 
     result
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn get_distinct_indices_arbtest() {
+        arbtest::arbtest(|u| {
+            let outer_len = (u.arbitrary::<u8>()? % 6) as usize + 1;
+            let mut vals = Vec::with_capacity(outer_len);
+            let mut coords = Vec::new();
+
+            for a in 0..outer_len {
+                let inner_len = (u.arbitrary::<u8>()? % 6) as usize + 1;
+                let mut row = Vec::with_capacity(inner_len);
+                for b in 0..inner_len {
+                    row.push(((a as u32) << 16) | b as u32);
+                    coords.push((a, b));
+                }
+                vals.push(row);
+            }
+
+            let selected_len = (u.arbitrary::<u8>()? as usize % coords.len()) + 1;
+            let mut selected = (0..coords.len()).collect::<Vec<_>>();
+            for i in (1..selected.len()).rev() {
+                let j = u.arbitrary::<u16>()? as usize % (i + 1);
+                selected.swap(i, j);
+            }
+            selected.truncate(selected_len);
+            selected.sort_unstable();
+
+            let mut pos = (0..selected_len).collect::<Vec<_>>();
+            for i in (1..selected_len).rev() {
+                let j = u.arbitrary::<u16>()? as usize % (i + 1);
+                pos.swap(i, j);
+            }
+
+            let mut idx = Vec::with_capacity(selected_len);
+            let mut expected_before = vec![0u32; selected_len];
+            let mut expected_after = vec![0u32; selected_len];
+            for (i, &coord_idx) in selected.iter().enumerate() {
+                let (a, b) = coords[coord_idx];
+                let p = pos[i];
+                idx.push((a, b, p));
+                expected_before[p] = vals[a][b];
+                expected_after[p] = 0xA5A5_0000 | p as u32;
+            }
+
+            let mut refs = get_distinct_indices(&mut vals, &idx);
+            assert_eq!(refs.len(), selected_len);
+            for (i, r) in refs.iter_mut().enumerate() {
+                assert_eq!(**r, expected_before[i]);
+                **r = expected_after[i];
+            }
+            drop(refs);
+
+            for (i, &coord_idx) in selected.iter().enumerate() {
+                let (a, b) = coords[coord_idx];
+                let p = pos[i];
+                assert_eq!(vals[a][b], expected_after[p]);
+            }
+
+            Ok(())
+        });
+    }
+}
