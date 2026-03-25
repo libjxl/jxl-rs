@@ -254,7 +254,7 @@ jobs:
     - name: Install jxl-perfhistory
       run: cargo install --git https://github.com/zond/jxl-perfhistory
 
-    - name: Select benchmark corpus (autoresearch 8 images)
+    - name: Select benchmark corpus
       id: select-images
       run: |
         mkdir -p testimages
