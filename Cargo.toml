@@ -1,5 +1,7 @@
 [profile.release]
 debug = true
+lto = "thin"
+panic = "abort"
 
 [profile.bench]
 debug = true
