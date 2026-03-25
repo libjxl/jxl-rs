@@ -2,7 +2,6 @@
 debug = true
 lto = "thin"
 panic = "abort"
-overflow-checks = false
 
 [profile.bench]
 debug = true
