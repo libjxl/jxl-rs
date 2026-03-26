@@ -682,6 +682,19 @@ impl FrameHeader {
             ));
         }
 
+        if self.has_patches()
+            && self.upsampling != 1
+            && let Some(&ec_upsampling) = self
+                .ec_upsampling
+                .iter()
+                .find(|&&ec_upsampling| ec_upsampling != self.upsampling)
+        {
+            return Err(Error::PatchesUnsupportedMixedUpsampling(
+                self.upsampling,
+                ec_upsampling,
+            ));
+        }
+
         let num_extra_channels = nonserialized.extra_channel_info.len();
         let uses_alpha =
             |mode| matches!(mode, BlendingMode::Blend | BlendingMode::AlphaWeightedAdd);
