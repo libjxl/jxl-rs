@@ -119,7 +119,7 @@ impl<'a> JxlOutputBuffer<'a> {
         unsafe { self.inner.row_mut(row) }
     }
 
-    #[inline(always)]
+    #[inline]
     pub fn write_bytes(&mut self, row: usize, col: usize, bytes: &[u8]) {
         // SAFETY: We never use the returned slice to write uninit data, and we have write access
         // to the data.
