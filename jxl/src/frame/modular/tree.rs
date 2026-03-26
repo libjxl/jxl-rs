@@ -210,83 +210,8 @@ const NUM_TREE_CONTEXTS: usize = 6;
 // Also, the first two properties (the static properties) should be already set by the caller.
 // All other properties should be 0 on the first call in a row.
 
-/// Computes non-WP properties for tree traversal, gated by a used-properties bitmask.
-/// Bit i in `used_mask` indicates property i is referenced by some split node.
-#[inline(always)]
-fn compute_properties_common(
-    prediction_data: PredictionData,
-    references: &Image<i32>,
-    property_buffer: &mut [i32],
-    x: usize,
-    y: usize,
-    used_mask: u32,
-) {
-    let PredictionData {
-        left,
-        top,
-        toptop,
-        topleft,
-        topright,
-        leftleft,
-        toprightright: _,
-    } = prediction_data;
-
-    if used_mask & 0x000C != 0 {
-        if used_mask & (1 << 2) != 0 {
-            property_buffer[2] = y as i32;
-        }
-        if used_mask & (1 << 3) != 0 {
-            property_buffer[3] = x as i32;
-        }
-    }
-    if used_mask & 0x0030 != 0 {
-        if used_mask & (1 << 4) != 0 {
-            property_buffer[4] = top.wrapping_abs();
-        }
-        if used_mask & (1 << 5) != 0 {
-            property_buffer[5] = left.wrapping_abs();
-        }
-    }
-    if used_mask & 0x00C0 != 0 {
-        if used_mask & (1 << 6) != 0 {
-            property_buffer[6] = top;
-        }
-        if used_mask & (1 << 7) != 0 {
-            property_buffer[7] = left;
-        }
-    }
-    if used_mask & 0x0300 != 0 {
-        property_buffer[8] = left.wrapping_sub(property_buffer[9]);
-        property_buffer[9] = left.wrapping_add(top).wrapping_sub(topleft);
-    }
-    if used_mask & 0x7C00 != 0 {
-        if used_mask & (1 << 10) != 0 {
-            property_buffer[10] = left.wrapping_sub(topleft);
-        }
-        if used_mask & (1 << 11) != 0 {
-            property_buffer[11] = topleft.wrapping_sub(top);
-        }
-        if used_mask & (1 << 12) != 0 {
-            property_buffer[12] = top.wrapping_sub(topright);
-        }
-        if used_mask & (1 << 13) != 0 {
-            property_buffer[13] = top.wrapping_sub(toptop);
-        }
-        if used_mask & (1 << 14) != 0 {
-            property_buffer[14] = left.wrapping_sub(leftleft);
-        }
-    }
-
-    if used_mask >> NUM_NONREF_PROPERTIES as u32 != 0 {
-        let num_refs = references.size().0;
-        if num_refs != 0 {
-            let ref_properties = &mut property_buffer[NUM_NONREF_PROPERTIES..];
-            ref_properties[..num_refs].copy_from_slice(&references.row(x)[..num_refs]);
-        }
-    }
-}
-
-/// Computes properties for the non-flat prediction path.
+/// Computes properties for tree traversal. Shared between flat and non-flat prediction.
+/// Returns the weighted predictor prediction value.
 #[inline]
 fn compute_properties(
     prediction_data: PredictionData,
@@ -297,43 +222,52 @@ fn compute_properties(
     references: &Image<i32>,
     property_buffer: &mut [i32],
 ) -> i64 {
-    compute_properties_common(prediction_data, references, property_buffer, x, y, u32::MAX);
+    assert!(property_buffer.len() >= NUM_NONREF_PROPERTIES);
 
+    let PredictionData {
+        left,
+        top,
+        toptop,
+        topleft,
+        topright,
+        leftleft,
+        toprightright: _,
+    } = prediction_data;
+
+    // Position
+    property_buffer[2] = y as i32;
+    property_buffer[3] = x as i32;
+
+    // Neighbours
+    property_buffer[4] = top.wrapping_abs();
+    property_buffer[5] = left.wrapping_abs();
+    property_buffer[6] = top;
+    property_buffer[7] = left;
+
+    // Local gradient
+    property_buffer[8] = left.wrapping_sub(property_buffer[9]);
+    property_buffer[9] = left.wrapping_add(top).wrapping_sub(topleft);
+
+    // FFV1 context properties
+    property_buffer[10] = left.wrapping_sub(topleft);
+    property_buffer[11] = topleft.wrapping_sub(top);
+    property_buffer[12] = top.wrapping_sub(topright);
+    property_buffer[13] = top.wrapping_sub(toptop);
+    property_buffer[14] = left.wrapping_sub(leftleft);
+
+    // Weighted predictor property.
     let (wp_pred, wp_prop) = wp_state
         .map(|wp_state| wp_state.predict_and_property((x, y), xsize, &prediction_data))
         .unwrap_or((0, 0));
     property_buffer[15] = wp_prop;
-    wp_pred
-}
 
-/// Computes properties for flat-tree prediction, using only referenced properties.
-#[inline(always)]
-#[allow(clippy::too_many_arguments)]
-fn compute_properties_flat(
-    prediction_data: PredictionData,
-    xsize: usize,
-    wp_state: Option<&mut WeightedPredictorState>,
-    x: usize,
-    y: usize,
-    references: &Image<i32>,
-    property_buffer: &mut [i32],
-    used_mask: u32,
-) -> i64 {
-    compute_properties_common(
-        prediction_data,
-        references,
-        property_buffer,
-        x,
-        y,
-        used_mask,
-    );
-
-    let (wp_pred, wp_prop) = wp_state
-        .map(|wp_state| wp_state.predict_and_property((x, y), xsize, &prediction_data))
-        .unwrap_or((0, 0));
-    if used_mask & (1 << 15) != 0 {
-        property_buffer[15] = wp_prop;
+    // Reference properties.
+    let num_refs = references.size().0;
+    if num_refs != 0 {
+        let ref_properties = &mut property_buffer[NUM_NONREF_PROPERTIES..];
+        ref_properties[..num_refs].copy_from_slice(&references.row(x)[..num_refs]);
     }
+
     wp_pred
 }
 
@@ -420,9 +354,8 @@ pub(super) fn predict_flat(
     y: usize,
     references: &Image<i32>,
     property_buffer: &mut [i32],
-    used_mask: u32,
 ) -> PredictionResult {
-    let wp_pred = compute_properties_flat(
+    let wp_pred = compute_properties(
         prediction_data,
         xsize,
         wp_state,
@@ -430,7 +363,6 @@ pub(super) fn predict_flat(
         y,
         references,
         property_buffer,
-        used_mask,
     );
 
     // Flat tree traversal
@@ -558,15 +490,14 @@ impl Tree {
 
     /// Build flat tree using BFS traversal (matches C++ encoding.cc:81-144).
     /// Each flat node stores parent + both children info to reduce branches.
-    pub(super) fn build_flat_tree(nodes: &[TreeNode]) -> Result<(Vec<FlatTreeNode>, u32)> {
+    pub(super) fn build_flat_tree(nodes: &[TreeNode]) -> Result<Vec<FlatTreeNode>> {
         use std::collections::VecDeque;
 
         if nodes.is_empty() {
-            return Ok((vec![], 0));
+            return Ok(vec![]);
         }
 
         let mut flat_nodes = Vec::new_with_capacity(nodes.len())?;
-        let mut used_mask: u32 = 0;
         let mut queue: VecDeque<usize> = VecDeque::new();
         queue.push_back(0); // Start with root
 
@@ -586,7 +517,6 @@ impl Tree {
                     left,
                     right,
                 } => {
-                    used_mask |= 1u32 << (*property as u32);
                     // childID points to first of 4 grandchildren in output
                     let child_id = (flat_nodes.len() + queue.len() + 1) as u32;
 
@@ -615,7 +545,6 @@ impl Tree {
                                 right: cr,
                             } => {
                                 // Child is split: store property/splitval and enqueue grandchildren
-                                used_mask |= 1u32 << (*cp as u32);
                                 flat.properties_or_offset[i] = *cp as i16;
                                 flat.splitvals_or_multiplier[i] = *cv;
                                 queue.push_back(*cl as usize);
@@ -629,7 +558,7 @@ impl Tree {
             }
         }
 
-        Ok((flat_nodes, used_mask))
+        Ok(flat_nodes)
     }
 
     pub fn max_property_count(&self) -> usize {
