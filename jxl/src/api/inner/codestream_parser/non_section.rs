@@ -330,12 +330,12 @@ impl CodestreamParser {
                 break;
             }
             let mut data = Vec::new();
-            data.try_reserve_exact(buf.len)?;
-            data.resize(buf.len, 0);
+            data.try_reserve_exact(buf.len + super::PADDING)?;
+            data.resize(buf.len + super::PADDING, 0);
             buf.data = data;
             self.ready_section_data += self
                 .non_section_buf
-                .take(&mut [IoSliceMut::new(&mut buf.data)]);
+                .take(&mut [IoSliceMut::new(&mut buf.data[..buf.len])]);
         }
 
         self.section_state =

@@ -45,6 +45,22 @@ impl<'a> BitReader<'a> {
         }
     }
 
+    /// Constructs a BitReader with an explicit `initial_bits` limit.
+    ///
+    /// `data` may be longer than `initial_bits / 8` (e.g. zero-padded) so that
+    /// `refill()` always takes the fast 8-byte-read path.  Out-of-bounds
+    /// detection still uses `initial_bits`.
+    pub fn new_with_initial_bits(data: &[u8], initial_bits: usize) -> BitReader<'_> {
+        debug_assert!(data.len() * 8 >= initial_bits);
+        BitReader {
+            data,
+            bit_buf: 0,
+            bits_in_buf: 0,
+            total_bits_read: 0,
+            initial_bits,
+        }
+    }
+
     /// Reads `num` bits from the buffer without consuming them.
     #[inline]
     pub fn peek(&mut self, num: usize) -> u64 {

@@ -28,10 +28,37 @@ use crate::{
 mod non_section;
 mod sections;
 
+/// Buffer for a single codestream section.
+///
+/// When allocated, `data` always contains `len + PADDING` bytes: `len` bytes
+/// of real payload followed by [`PADDING`] zero bytes. The padding lets
+/// `BitReader::refill()` always take the fast 8-byte-read path.
 struct SectionBuffer {
     len: usize,
     data: Vec<u8>,
     section: Section,
+}
+
+/// Number of zero-padding bytes appended after real data in every
+/// [`SectionBuffer`]. Must be >= 8 so that `BitReader::refill()` can always
+/// do a single 8-byte LE read.
+const PADDING: usize = 8;
+
+impl SectionBuffer {
+    /// Allocate the backing store if not yet allocated.
+    /// The buffer is `len + PADDING` bytes; the trailing [`PADDING`] bytes
+    /// are zero-initialized and must stay zero.
+    fn ensure_allocated(&mut self) {
+        if self.data.is_empty() {
+            self.data.resize(self.len + PADDING, 0);
+        }
+    }
+
+    /// Create a [`BitReader`] that uses the zero-padded buffer for fast refill.
+    fn bit_reader(&self) -> crate::bit_reader::BitReader<'_> {
+        debug_assert!(self.data.len() >= self.len + PADDING);
+        crate::bit_reader::BitReader::new_with_initial_bits(&self.data, self.len * 8)
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -394,11 +421,8 @@ impl CodestreamParser {
                         .max(1);
                     // Ensure enough section buffers are available for reading available data.
                     for buf in self.sections.iter_mut() {
-                        if buf.data.is_empty() {
-                            buf.data.resize(buf.len, 0);
-                        }
-                        readable_section_data =
-                            readable_section_data.saturating_sub(buf.data.len());
+                        buf.ensure_allocated();
+                        readable_section_data = readable_section_data.saturating_sub(buf.len);
                         if readable_section_data == 0 {
                             break;
                         }
@@ -415,7 +439,7 @@ impl CodestreamParser {
                         if buf.data.is_empty() {
                             break;
                         }
-                        let len = buf.data.len();
+                        let len = buf.len;
                         if len > ready {
                             let readable = (available_codestream + ready).min(len);
                             section_buffers.push(IoSliceMut::new(&mut buf.data[ready..readable]));
