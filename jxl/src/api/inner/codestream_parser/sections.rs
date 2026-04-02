@@ -89,10 +89,7 @@ impl CodestreamParser {
         let complete_lf_global;
         let (lf_global, lf_global_is_complete) = if let Some(d) = self.lf_global_section.take() {
             complete_lf_global = d;
-            (
-                Some(&complete_lf_global.data[..complete_lf_global.len]),
-                true,
-            )
+            (Some(&complete_lf_global), true)
         } else if do_flush
             && self
                 .sections
@@ -106,10 +103,7 @@ impl CodestreamParser {
             )
         {
             self.section_state.lf_global_flush_len = self.ready_section_data;
-            (
-                Some(&self.sections[0].data[..self.ready_section_data]),
-                false,
-            )
+            (Some(&self.sections[0]), false)
         } else {
             (None, false)
         };
@@ -117,11 +111,15 @@ impl CodestreamParser {
         'process: {
             if frame_header.num_groups() == 1 && frame_header.passes.num_passes == 1 {
                 // Single-group special case.
-                let Some(buf) = lf_global else {
+                let Some(section) = lf_global else {
                     break 'process;
                 };
                 assert!(self.sections.is_empty() || !lf_global_is_complete);
-                let mut br = BitReader::new(buf);
+                let mut br = if lf_global_is_complete {
+                    section.bit_reader()
+                } else {
+                    BitReader::new(&section.data[..self.ready_section_data])
+                };
                 let res = (|| -> Result<()> {
                     frame.decode_lf_global(&mut br, !lf_global_is_complete)?;
                     frame.decode_lf_group(0, &mut br)?;
@@ -147,8 +145,13 @@ impl CodestreamParser {
                     Err(e) => return Err(e),
                 }
             } else {
-                if let Some(buf) = lf_global {
-                    match frame.decode_lf_global(&mut BitReader::new(buf), !lf_global_is_complete) {
+                if let Some(section) = lf_global {
+                    let mut br = if lf_global_is_complete {
+                        section.bit_reader()
+                    } else {
+                        BitReader::new(&section.data[..self.ready_section_data])
+                    };
+                    match frame.decode_lf_global(&mut br, !lf_global_is_complete) {
                         Ok(_) => {
                             self.section_state.lf_global_done = true;
                             processed_section = true;
@@ -168,7 +171,7 @@ impl CodestreamParser {
                     let Section::Lf { group } = lf_section.section else {
                         unreachable!()
                     };
-                    frame.decode_lf_group(group, &mut BitReader::new(&lf_section.data))?;
+                    frame.decode_lf_group(group, &mut lf_section.bit_reader())?;
                     processed_section = true;
                     self.section_state.remaining_lf -= 1;
                 }
@@ -178,7 +181,7 @@ impl CodestreamParser {
                 }
 
                 if let Some(hf_global) = self.hf_global_section.take() {
-                    frame.decode_hf_global(&mut BitReader::new(&hf_global.data))?;
+                    frame.decode_hf_global(&mut hf_global.bit_reader())?;
                     frame.finalize_lf()?;
                     self.section_state.hf_global_done = true;
                     processed_section = true;
@@ -202,7 +205,7 @@ impl CodestreamParser {
                             break;
                         };
                         self.section_state.completed_passes[g] += 1;
-                        sections.push((pass, BitReader::new(&s.data)));
+                        sections.push((pass, s.bit_reader()));
                     }
                     if !sections.is_empty() {
                         group_readers.push((g, sections));
