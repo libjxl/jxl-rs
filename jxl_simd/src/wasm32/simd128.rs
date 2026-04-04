@@ -118,17 +118,12 @@ unsafe impl F32SimdVec for F32VecSimd128 {
         assert!(dest.len() >= 3 * Self::LEN);
         // a = [a0, a1, a2, a3], b = [b0, b1, b2, b3], c = [c0, c1, c2, c3]
         // out0 = [a0, b0, c0, a1], out1 = [b1, c1, a2, b2], out2 = [c2, a3, b3, c3]
-        let ab01 = i32x4_shuffle::<0, 4, 0, 0>(a.0, b.0); // [a0, b0, ?, ?]
-        let ca01 = i32x4_shuffle::<0, 5, 0, 0>(c.0, a.0); // [c0, a1, ?, ?]
-        let out0 = i64x2_shuffle::<0, 2>(ab01, ca01); // [a0, b0, c0, a1]
-
-        let bc1 = i32x4_shuffle::<1, 5, 0, 0>(b.0, c.0); // [b1, c1, ?, ?]
-        let ab2 = i32x4_shuffle::<2, 6, 0, 0>(a.0, b.0); // [a2, b2, ?, ?]
-        let out1 = i64x2_shuffle::<0, 2>(bc1, ab2); // [b1, c1, a2, b2]
-
-        let ca2 = i32x4_shuffle::<2, 7, 0, 0>(c.0, a.0); // [c2, a3, ?, ?]
-        let bc3 = i32x4_shuffle::<3, 7, 0, 0>(b.0, c.0); // [b3, c3, ?, ?]
-        let out2 = i64x2_shuffle::<0, 2>(ca2, bc3); // [c2, a3, b3, c3]
+        let ab_lo = i32x4_shuffle::<0, 4, 1, 5>(a.0, b.0); // [a0, b0, a1, b1]
+        let ab_hi = i32x4_shuffle::<2, 6, 3, 7>(a.0, b.0); // [a2, b2, a3, b3]
+        let out0 = i32x4_shuffle::<0, 1, 4, 2>(ab_lo, c.0); // [a0, b0, c0, a1]
+        let tmp1 = i32x4_shuffle::<3, 5, 0, 0>(ab_lo, c.0); // [b1, c1, ?, ?]
+        let out1 = i32x4_shuffle::<0, 1, 4, 5>(tmp1, ab_hi); // [b1, c1, a2, b2]
+        let out2 = i32x4_shuffle::<6, 2, 3, 7>(ab_hi, c.0); // [c2, a3, b3, c3]
 
         // SAFETY: dest has enough space.
         unsafe {
@@ -186,47 +181,37 @@ unsafe impl F32SimdVec for F32VecSimd128 {
     ) {
         assert!(dest.len() >= 8 * Self::LEN);
 
-        // Use zip to interleave pairs
-        let ae_lo = i32x4_shuffle::<0, 4, 1, 5>(a.0, e.0);
-        let ae_hi = i32x4_shuffle::<2, 6, 3, 7>(a.0, e.0);
-        let bf_lo = i32x4_shuffle::<0, 4, 1, 5>(b.0, f.0);
-        let bf_hi = i32x4_shuffle::<2, 6, 3, 7>(b.0, f.0);
-        let cg_lo = i32x4_shuffle::<0, 4, 1, 5>(c.0, g.0);
-        let cg_hi = i32x4_shuffle::<2, 6, 3, 7>(c.0, g.0);
-        let dh_lo = i32x4_shuffle::<0, 4, 1, 5>(d.0, h.0);
-        let dh_hi = i32x4_shuffle::<2, 6, 3, 7>(d.0, h.0);
+        // Interleave adjacent pairs
+        let ab_lo = i32x4_shuffle::<0, 4, 1, 5>(a.0, b.0);
+        let ab_hi = i32x4_shuffle::<2, 6, 3, 7>(a.0, b.0);
+        let cd_lo = i32x4_shuffle::<0, 4, 1, 5>(c.0, d.0);
+        let cd_hi = i32x4_shuffle::<2, 6, 3, 7>(c.0, d.0);
+        let ef_lo = i32x4_shuffle::<0, 4, 1, 5>(e.0, f.0);
+        let ef_hi = i32x4_shuffle::<2, 6, 3, 7>(e.0, f.0);
+        let gh_lo = i32x4_shuffle::<0, 4, 1, 5>(g.0, h.0);
+        let gh_hi = i32x4_shuffle::<2, 6, 3, 7>(g.0, h.0);
 
-        // Now interleave ae with bf, and cg with dh
-        let aebf_0 = i32x4_shuffle::<0, 4, 1, 5>(ae_lo, bf_lo);
-        let aebf_1 = i32x4_shuffle::<2, 6, 3, 7>(ae_lo, bf_lo);
-        let aebf_2 = i32x4_shuffle::<0, 4, 1, 5>(ae_hi, bf_hi);
-        let aebf_3 = i32x4_shuffle::<2, 6, 3, 7>(ae_hi, bf_hi);
-        let cgdh_0 = i32x4_shuffle::<0, 4, 1, 5>(cg_lo, dh_lo);
-        let cgdh_1 = i32x4_shuffle::<2, 6, 3, 7>(cg_lo, dh_lo);
-        let cgdh_2 = i32x4_shuffle::<0, 4, 1, 5>(cg_hi, dh_hi);
-        let cgdh_3 = i32x4_shuffle::<2, 6, 3, 7>(cg_hi, dh_hi);
-
-        // Final interleave using 64-bit shuffles
-        let out0 = i64x2_shuffle::<0, 2>(aebf_0, cgdh_0);
-        let out1 = i64x2_shuffle::<1, 3>(aebf_0, cgdh_0);
-        let out2 = i64x2_shuffle::<0, 2>(aebf_1, cgdh_1);
-        let out3 = i64x2_shuffle::<1, 3>(aebf_1, cgdh_1);
-        let out4 = i64x2_shuffle::<0, 2>(aebf_2, cgdh_2);
-        let out5 = i64x2_shuffle::<1, 3>(aebf_2, cgdh_2);
-        let out6 = i64x2_shuffle::<0, 2>(aebf_3, cgdh_3);
-        let out7 = i64x2_shuffle::<1, 3>(aebf_3, cgdh_3);
+        // Combine into 4-wide groups
+        let abcd_0 = i64x2_shuffle::<0, 2>(ab_lo, cd_lo);
+        let abcd_1 = i64x2_shuffle::<1, 3>(ab_lo, cd_lo);
+        let abcd_2 = i64x2_shuffle::<0, 2>(ab_hi, cd_hi);
+        let abcd_3 = i64x2_shuffle::<1, 3>(ab_hi, cd_hi);
+        let efgh_0 = i64x2_shuffle::<0, 2>(ef_lo, gh_lo);
+        let efgh_1 = i64x2_shuffle::<1, 3>(ef_lo, gh_lo);
+        let efgh_2 = i64x2_shuffle::<0, 2>(ef_hi, gh_hi);
+        let efgh_3 = i64x2_shuffle::<1, 3>(ef_hi, gh_hi);
 
         // SAFETY: we just checked that dest has enough space.
         unsafe {
             let ptr = dest.as_mut_ptr().cast::<v128>();
-            v128_store(ptr, out0);
-            v128_store(ptr.add(1), out1);
-            v128_store(ptr.add(2), out2);
-            v128_store(ptr.add(3), out3);
-            v128_store(ptr.add(4), out4);
-            v128_store(ptr.add(5), out5);
-            v128_store(ptr.add(6), out6);
-            v128_store(ptr.add(7), out7);
+            v128_store(ptr, abcd_0);
+            v128_store(ptr.add(1), efgh_0);
+            v128_store(ptr.add(2), abcd_1);
+            v128_store(ptr.add(3), efgh_1);
+            v128_store(ptr.add(4), abcd_2);
+            v128_store(ptr.add(5), efgh_2);
+            v128_store(ptr.add(6), abcd_3);
+            v128_store(ptr.add(7), efgh_3);
         }
     }
 
@@ -402,12 +387,8 @@ unsafe impl F32SimdVec for F32VecSimd128 {
         let i16s = i16x8_narrow_i32x4(i32s, i32s);
         // Saturate i16 -> u8 (signed-to-unsigned narrow, clamping to [0, 255])
         let u8s = u8x16_narrow_i16x8(i16s, i16s);
-        // Store lower 4 bytes
-        let val = u32x4_extract_lane::<0>(u8s);
         // SAFETY: we checked dest has enough space.
-        unsafe {
-            std::ptr::copy_nonoverlapping(&val as *const u32 as *const u8, dest.as_mut_ptr(), 4);
-        }
+        unsafe { v128_store32_lane::<0>(u8s, dest.as_mut_ptr().cast()) }
     }
 
     #[inline(always)]
