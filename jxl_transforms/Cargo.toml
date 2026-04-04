@@ -26,6 +26,7 @@ sse42 = ["jxl_simd/sse42"]
 avx = ["jxl_simd/avx"]
 avx512 = ["jxl_simd/avx512"]
 neon = ["jxl_simd/neon"]
+simd128 = ["jxl_simd/simd128"]
 
 [[bench]]
 name = "dct"
