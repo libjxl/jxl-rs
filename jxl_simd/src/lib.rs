@@ -1635,6 +1635,7 @@ mod test {
             (f32::NEG_INFINITY, 0xFC00), // -inf
             (100000.0, 0x7C00),          // overflow to inf
             (65504.0, 0x7BFF),           // max normal f16
+            (f32::NAN, 0x7E00),          // NaN preserved
         ];
         for chunk in cases.chunks(len) {
             let mut input = vec![0.0f32; len];
@@ -1678,4 +1679,59 @@ mod test {
         }
     }
     test_all_instruction_sets!(test_f16_underflow_to_zero);
+
+    fn compare_f16_bits(s: u16, m: u16) {
+        let (s_exp, m_exp) = ((s >> 10) & 0x1F, (m >> 10) & 0x1F);
+        if s_exp == 0x1F || m_exp == 0x1F {
+            assert_eq!(s_exp, m_exp, "inf/nan: scalar 0x{s:04X}, simd 0x{m:04X}");
+            return;
+        }
+        let (s_mag, m_mag) = (s & 0x7FFF, m & 0x7FFF);
+        let diff_mag = (s_mag as i32 - m_mag as i32).unsigned_abs();
+        assert!(diff_mag <= 1, "magnitude: scalar 0x{s:04X}, simd 0x{m:04X}");
+        if s_mag != 0 || m_mag != 0 {
+            let (s_sign, m_sign) = (s & 0x8000, m & 0x8000);
+            assert_eq!(s_sign, m_sign, "sign: scalar 0x{s:04X}, simd 0x{m:04X}");
+        }
+    }
+
+    fn test_f16_store_scalar_equivalent<D: SimdDescriptor>(d: D) {
+        let len = D::F32Vec::LEN;
+        arbtest::arbtest(|u| {
+            let mut input = vec![0.0f32; len];
+            for v in input.iter_mut() {
+                *v = f32::from_bits(u.arbitrary::<u32>()?);
+            }
+            let mut simd_bits = vec![0u16; len];
+            D::F32Vec::load(d, &input).store_f16_bits(&mut simd_bits);
+            for i in 0..len {
+                compare_f16_bits(crate::f16::from_f32(input[i]).to_bits(), simd_bits[i]);
+            }
+            Ok(())
+        });
+    }
+    test_all_instruction_sets!(test_f16_store_scalar_equivalent);
+
+    fn test_f16_load_scalar_equivalent<D: SimdDescriptor>(d: D) {
+        let len = D::F32Vec::LEN;
+        arbtest::arbtest(|u| {
+            let mut input = vec![0u16; len];
+            for v in input.iter_mut() {
+                *v = u.arbitrary::<u16>()?;
+            }
+            let mut simd_f32 = vec![0.0f32; len];
+            D::F32Vec::load_f16_bits(d, &input).store(&mut simd_f32);
+            for i in 0..len {
+                let (s, m) = (crate::f16::from_bits(input[i]).to_f32(), simd_f32[i]);
+                if s.is_nan() {
+                    assert!(m.is_nan(), "expected NaN for 0x{:04X}, got {m}", input[i]);
+                    continue;
+                }
+                let (s_b, m_b) = (s.to_bits(), m.to_bits());
+                assert_eq!(s_b, m_b, "load 0x{:04X}: scalar {s}, simd {m}", input[i]);
+            }
+            Ok(())
+        });
+    }
+    test_all_instruction_sets!(test_f16_load_scalar_equivalent);
 }
