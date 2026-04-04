@@ -103,6 +103,11 @@ jobs:
           - os: ubuntu-latest
             simd: simd128
             target: wasm32-wasip1
+            wasm_features: +simd128,+relaxed-simd
+          - os: ubuntu-latest
+            simd: simd128
+            target: wasm32-wasip1
+            wasm_features: +simd128
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -127,8 +132,10 @@ jobs:
         if: ${{ matrix.simd != 'none' && !matrix.target }}
         run: cargo test --release --all --no-fail-fast --no-default-features --features ${{ matrix.simd }}
 
-      - name: Tests with SIMD feature ${{ matrix.simd }} (wasm)
+      - name: Tests with SIMD feature ${{ matrix.simd }} (wasm ${{ matrix.wasm_features }})
         if: ${{ matrix.target == 'wasm32-wasip1' }}
+        env:
+          RUSTFLAGS: -C target-feature=${{ matrix.wasm_features }}
         run: |
           cargo test --release --workspace --exclude jxl_cli --exclude jxl_cms --no-fail-fast --no-default-features --features ${{ matrix.simd }} --target ${{ matrix.target }} -- \
             --skip tirr_photo \
