@@ -434,11 +434,15 @@ unsafe impl F32SimdVec for F32VecSimd128 {
         assert!(dest.len() >= Self::LEN);
         let abs = f32x4_abs(self.0);
         let sign = v128_and(u32x4_shr(self.0, 16), u32x4_splat(0x8000));
-        let abs_shifted = u32x4_shr(abs, 13);
 
-        // Normal: shift exp+mant into f16 position, rebias, clamp to max f16
+        // Round to nearest even
+        let abs_shifted = u32x4_shr(abs, 13);
+        let lsb = v128_and(abs_shifted, u32x4_splat(1));
+        let rounded = i32x4_add(abs, i32x4_add(lsb, u32x4_splat(0x0FFF)));
+
+        // Normal: shift exp+mant into f16 position, rebias, clamp to inf (0x7C00)
         let normal = i32x4_min(
-            i32x4_sub(abs_shifted, u32x4_splat(112 << 10)),
+            i32x4_sub(u32x4_shr(rounded, 13), u32x4_splat(112 << 10)),
             i32x4_splat(0x7C00),
         );
 
@@ -483,10 +487,8 @@ unsafe impl F32SimdVec for F32VecSimd128 {
         let normal = i32x4_add(mag_shifted, u32x4_splat(112 << 23));
 
         // Subnormal (exp==0): magic number trick to normalize
-        // Construct 2^(-14) * (1 + mant/1024) then subtract 2^(-14)
         let magic = u32x4_splat(113 << 23);
-        let mant_shifted = v128_and(mag_shifted, u32x4_splat(0x7FE000));
-        let subnorm = f32x4_sub(v128_or(magic, mant_shifted), magic);
+        let subnorm = f32x4_sub(v128_or(magic, mag_shifted), magic);
 
         // Inf/NaN (exp==31): normal path gives f32 exp=143, need 255; add 112<<23
         let infnan = i32x4_add(normal, u32x4_splat(112 << 23));
