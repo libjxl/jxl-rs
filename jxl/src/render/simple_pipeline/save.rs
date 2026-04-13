@@ -47,7 +47,8 @@ impl SaveStage {
                             } else {
                                 px.to_be_bytes()
                             };
-                            buf.write_bytes(dy, dx * bps, &px_bytes);
+                            buf.row_mut(dy)[dx * bps..][..px_bytes.len()]
+                                .copy_from_slice(&px_bytes);
                         };
                     }
 
@@ -80,7 +81,8 @@ impl SaveStage {
                     let (dx, dy) = self.orientation.display_pixel((x, y), size);
                     let dx = dx * output_channels + alpha_channel;
                     let bps = self.data_format.bytes_per_sample();
-                    buf.write_bytes(dy, dx * bps, &opaque_bytes);
+                    buf.row_mut(dy)[dx * bps..][..opaque_bytes.len()]
+                        .copy_from_slice(&opaque_bytes);
                 }
             }
         }
