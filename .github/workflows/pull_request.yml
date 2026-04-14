@@ -10,6 +10,9 @@ on:
   pull_request:
     types: [opened, reopened, synchronize]
 
+permissions:
+  contents: read
+
 env:
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: 1
@@ -20,7 +23,9 @@ jobs:
     runs-on: [ubuntu-latest]
     steps:
     - name: Checkout the source
-      uses: actions/checkout@v4
+      uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      with:
+        persist-credentials: false
     - name: Check source code
       run:
         ./ci/pull_request_checks.sh
@@ -30,7 +35,9 @@ jobs:
     continue-on-error: true
     steps:
     - name: Checkout the source
-      uses: actions/checkout@v4
+      uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      with:
+        persist-credentials: false
     - name: Check AUTHORS file
       run:
         ./ci/author_check.sh
@@ -39,12 +46,13 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
           submodules: recursive
+          persist-credentials: false
 
       - name: Install latest rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
         with:
           components: rustfmt
 
@@ -61,17 +69,18 @@ jobs:
         os: [ubuntu-24.04-arm, ubuntu-latest]
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
           submodules: recursive
+          persist-credentials: false
 
       - name: Install latest rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
         with:
           components: clippy
 
       - name: Rust cache
-        uses: Swatinem/rust-cache@v2.8.0
+        uses: Swatinem/rust-cache@98c8021b550208e191a6a3145459bfc9fb29c4c0 # v2.8.0
         with:
           prefix-key: ${{ matrix.os }}-clippy-${{ matrix.features }}
 
@@ -102,15 +111,16 @@ jobs:
             simd: neon
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
           submodules: recursive
+          persist-credentials: false
 
       - name: Install latest rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
 
       - name: Rust cache
-        uses: Swatinem/rust-cache@v2.8.0
+        uses: Swatinem/rust-cache@98c8021b550208e191a6a3145459bfc9fb29c4c0 # v2.8.0
         with:
           prefix-key: ${{ matrix.os }}-test-${{ matrix.simd }}
 
@@ -127,13 +137,15 @@ jobs:
     runs-on: ubuntu-latest
     steps:
     - name: Checkout the source
-      uses: actions/checkout@v4
+      uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      with:
+        persist-credentials: false
 
     - name: Install latest rust toolchain
-      uses: dtolnay/rust-toolchain@stable
+      uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
 
     - name: Rust cache
-      uses: Swatinem/rust-cache@v2.7.3
+      uses: Swatinem/rust-cache@23bce251a8cd2ffc3c1075eaa2367cf899916d84 # v2.7.3
 
     - name: Install llvm-cov
       run: cargo +stable install cargo-llvm-cov --locked
@@ -151,7 +163,7 @@ jobs:
       run: cargo llvm-cov report --html --release --output-dir=coverage_html
 
     - name: Upload HTML report
-      uses: actions/upload-artifact@v4.6.2
+      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
       with:
         name: coverage_report
         path: ./coverage_html/html
@@ -160,14 +172,17 @@ jobs:
     runs-on: ubuntu-latest
     steps:
     - name: Checkout the source
-      uses: actions/checkout@v4
+      uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      with:
+        persist-credentials: false
 
     - name: Checkout bench
-      uses: actions/checkout@master
+      uses: actions/checkout@61b9e3751b92087fd0b06925ba6dd6314e06f089 # master
       with:
         repository: libjxl/bench
         path: bench      
         fetch-depth: 1
+        persist-credentials: false
 
     - name: Fix bench dependencies
       run: |
@@ -176,7 +191,7 @@ jobs:
 
     - name: Cache conformance objects
       id: cache-conformance
-      uses: actions/cache@v4
+      uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
       with:
         path: bench/third_party/conformance/.objects
         key: conformance-objects
@@ -185,18 +200,18 @@ jobs:
       run: bash bench/third_party/conformance/scripts/download_and_symlink_using_curl.sh
 
     - name: Install latest rust toolchain
-      uses: dtolnay/rust-toolchain@stable
+      uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
       with:
         components: clippy, rustfmt
 
     - name: Rust cache
-      uses: Swatinem/rust-cache@v2.7.3
+      uses: Swatinem/rust-cache@23bce251a8cd2ffc3c1075eaa2367cf899916d84 # v2.7.3
 
     - name: Build jxl_cli
       run: cargo build --release --bin jxl_cli
 
     - name: Setup python3
-      uses: actions/setup-python@v5
+      uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
       with:
         python-version: '3.x'
     
@@ -225,7 +240,7 @@ jobs:
       run: ./ci/merge_conformance_report.py "${GITHUB_WORKSPACE}/bench/docs" >> conformance_report.html
 
     - name: Upload HTML report
-      uses: actions/upload-artifact@v4.6.2
+      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
       with:
         name: conformance_report
         path: conformance_report.html
@@ -236,18 +251,19 @@ jobs:
       pull-requests: write
     steps:
     - name: Checkout the source
-      uses: actions/checkout@v4
+      uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
       with:
         fetch-depth: 0  # Full history needed for jxl-perfhistory
+        persist-credentials: false
 
     - name: Fetch base branch
-      run: git fetch origin ${{ github.base_ref }}
+      run: git fetch origin ${GITHUB_BASE_REF}
 
     - name: Install latest rust toolchain
-      uses: dtolnay/rust-toolchain@stable
+      uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
 
     - name: Rust cache
-      uses: Swatinem/rust-cache@v2.7.3
+      uses: Swatinem/rust-cache@23bce251a8cd2ffc3c1075eaa2367cf899916d84 # v2.7.3
       with:
         prefix-key: benchmark
 
@@ -273,7 +289,7 @@ jobs:
         echo "Selected $(find testimages -maxdepth 1 -name '*.jxl' | wc -l) images for benchmark"
 
     - name: Cache benchmark binaries
-      uses: actions/cache@v4
+      uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
       with:
         path: benchmark-binaries
         key: ${{ runner.os }}-${{ runner.arch }}-benchmark-binaries
@@ -298,7 +314,7 @@ jobs:
         cat benchmark.txt >> $GITHUB_STEP_SUMMARY
         echo "" >> $GITHUB_STEP_SUMMARY
 
-    - uses: actions/upload-artifact@v4
+    - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
       with:
         name: benchmark-results
         path: |
