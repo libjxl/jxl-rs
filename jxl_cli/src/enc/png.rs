@@ -70,13 +70,10 @@ fn make_cicp(encoding: &JxlColorEncoding) -> Option<png::CodingIndependentCodePo
 
     Some(png::CodingIndependentCodePoints {
         color_primaries: match white_point {
-            JxlWhitePoint::DCI => {
-                if *primaries == JxlPrimaries::P3 {
+            JxlWhitePoint::DCI
+                if *primaries == JxlPrimaries::P3 => {
                     11
-                } else {
-                    return None;
                 }
-            }
             JxlWhitePoint::D65 => match primaries {
                 JxlPrimaries::SRGB => 1,
                 JxlPrimaries::BT2100 => 9,
