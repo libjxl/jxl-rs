@@ -544,11 +544,7 @@ pub(crate) mod tests {
         let simple_frames = decode(&file, usize::MAX, true, false, None)?.1;
         let frames = decode(&file, usize::MAX, false, false, None)?.1;
         assert_eq!(frames.len(), simple_frames.len());
-        for (fc, (f, sf)) in frames
-            .into_iter()
-            .zip(simple_frames.into_iter())
-            .enumerate()
-        {
+        for (fc, (f, sf)) in frames.into_iter().zip(simple_frames).enumerate() {
             compare_frames(path, fc, &f, &sf)?;
         }
         Ok(())
@@ -565,11 +561,7 @@ pub(crate) mod tests {
 
         // Compare one_shot_frames and frames
         assert_eq!(one_shot_frames.len(), frames.len());
-        for (fc, (f, sf)) in frames
-            .into_iter()
-            .zip(one_shot_frames.into_iter())
-            .enumerate()
-        {
+        for (fc, (f, sf)) in frames.into_iter().zip(one_shot_frames).enumerate() {
             compare_frames(path, fc, &f, &sf)?;
         }
 
