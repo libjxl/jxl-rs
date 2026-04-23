@@ -82,6 +82,22 @@ impl SmallBuffer {
         amount
     }
 
+    /// Prepend bytes so they are returned next by [`Self::take`] (and appear first in [`Deref`]).
+    pub(super) fn inject_bytes_front(&mut self, data: Vec<u8>) {
+        if data.is_empty() {
+            return;
+        }
+        if self.range.is_empty() {
+            self.buf = data;
+            self.range = 0..self.buf.len();
+            return;
+        }
+        let mut combined = data;
+        combined.extend_from_slice(&self.buf[self.range.clone()]);
+        self.buf = combined;
+        self.range = 0..self.buf.len();
+    }
+
     pub(super) fn new(initial_size: usize) -> Self {
         Self {
             buf: vec![0; initial_size],

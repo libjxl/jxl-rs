@@ -322,6 +322,57 @@ pub(crate) mod tests {
         });
     }
 
+    /// `ftyp` minor version 1 with `jxlp` boxes in physical order 0, 2, 1, 3 (streaming OOO).
+    #[test]
+    #[allow(clippy::type_complexity)]
+    fn decode_ooo_jxlp_animated_container() {
+        let data = std::fs::read("resources/test/animated_ooo_jxlp.jxl").unwrap();
+        let (_decoded_count, frames) = decode(&data, usize::MAX, false, false, None).unwrap();
+        assert!(
+            frames.len() >= 4,
+            "expected at least 4 decoded frames (animation + possible blending frames)"
+        );
+
+        let color0 = &frames[0][0];
+        let (cw, ch) = color0.size();
+        assert_eq!(
+            (cw, ch),
+            (500 * 3, 160),
+            "RGB interleaved buffer is 500×3 by 160"
+        );
+
+        // Golden RGB8 values for the **last** decoded frame at selected (x, y), taken from
+        // libjxl `djxl` (APNG last frame) on `animated_ooo_jxlp.jxl`. Wrong `jxlp` assembly
+        // typically still decodes but shifts bitstream alignment so these pixels no longer match.
+        let last_color = &frames.last().expect("at least one frame")[0];
+        assert_eq!(last_color.size(), (500 * 3, 160));
+
+        let rgb_at = |img: &Image<f32>, x: usize, y: usize| -> (f32, f32, f32) {
+            let row = img.row(y);
+            let b = x * 3;
+            (row[b], row[b + 1], row[b + 2])
+        };
+
+        // Decoder `f32` buffer is display-referred sRGB in 0..1 (channel value ≈ sRGB8/255).
+        // Expected triples match libjxl `djxl` APNG last frame at the same coordinates.
+        let s = |c: u8| c as f32 / 255.0;
+        let checks: [((usize, usize), (f32, f32, f32)); 5] = [
+            ((21, 27), (s(15), s(15), s(15))),
+            ((22, 27), (s(15), s(15), s(15))),
+            ((43, 27), (s(156), s(156), s(156))),
+            ((57, 27), (s(26), s(26), s(26))),
+            ((250, 80), (s(245), s(245), s(245))),
+        ];
+        for &((x, y), (er, eg, eb)) in &checks {
+            let (r, g, b) = rgb_at(last_color, x, y);
+            let close = |a: f32, e: f32| (a - e).abs() < 1e-5;
+            assert!(
+                close(r, er) && close(g, eg) && close(b, eb),
+                "last-frame RGB mismatch at ({x}, {y}): got ({r:.7}, {g:.7}, {b:.7}) expected ({er:.7}, {eg:.7}, {eb:.7})"
+            );
+        }
+    }
+
     #[allow(clippy::type_complexity)]
     pub fn decode(
         mut input: &[u8],
