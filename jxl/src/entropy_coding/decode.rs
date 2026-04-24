@@ -434,6 +434,24 @@ impl SymbolReader {
         self.read_signed_clustered_inline(histograms, br, cluster)
     }
 
+    /// Fast path for reads without LZ77.
+    /// Preconditions: histograms has LZ77 disabled and reader state is None.
+    #[inline(always)]
+    pub fn read_signed_clustered_no_lz77(
+        &mut self,
+        histograms: &Histograms,
+        br: &mut BitReader,
+        cluster: usize,
+    ) -> i32 {
+        debug_assert!(matches!(self.state, SymbolReaderState::None));
+        let token = match &histograms.codes {
+            Codes::Huffman(hc) => hc.read(br, cluster),
+            Codes::Ans(ans) => self.ans_reader.read(ans, br, cluster),
+        };
+        let unsigned = histograms.uint_configs[cluster].read(token, br);
+        unpack_signed(unsigned)
+    }
+
     /// Specialized fast path for when all HybridUint configs are 420.
     ///
     /// # Preconditions
@@ -639,6 +657,11 @@ impl Histograms {
     /// Requires: all configs are 420 AND LZ77 is disabled
     pub fn can_use_config_420_fast_path(&self) -> bool {
         !self.lz77_params.enabled && self.uint_configs.iter().all(|cfg| cfg.is_config_420())
+    }
+
+    /// Returns true when LZ77 is disabled.
+    pub fn has_no_lz77(&self) -> bool {
+        !self.lz77_params.enabled
     }
 }
 
