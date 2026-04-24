@@ -7,7 +7,7 @@ panic = "abort"
 debug = true
 
 [workspace]
-members = ["jxl", "jxl_cli", "jxl_cms", "jxl_macros", "jxl_simd", "jxl_transforms"]
+members = ["jxl", "jxl_cli", "jxl_macros", "jxl_simd", "jxl_transforms"]
 resolver = "2"
 
 [workspace.lints.clippy]

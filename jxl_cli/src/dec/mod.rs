@@ -200,8 +200,7 @@ pub fn decode_frames<In: JxlBitstreamInputExt>(
     if linear_output
         && let JxlColorProfile::Simple(enc) = decoder_with_image_info.output_color_profile().clone()
     {
-        decoder_with_image_info
-            .set_output_color_profile(JxlColorProfile::Simple(enc.with_linear_tf()))?;
+        decoder_with_image_info.set_output_color_profile(enc.with_linear_tf());
     }
     let output_profile = decoder_with_image_info.output_color_profile().clone();
 
