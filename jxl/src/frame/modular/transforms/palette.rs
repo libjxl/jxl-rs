@@ -205,6 +205,7 @@ pub fn do_palette_step_general(
         for (chan_index, out) in buf_out.iter_mut().enumerate() {
             let mut wp_state = WeightedPredictorState::new(wp_header, w);
             for y in 0..h {
+                wp_state.set_row(y, w);
                 let idx = buf_in.data.row(y);
                 for (x, &index) in idx.iter().enumerate() {
                     let palette_entry = get_palette_value(
@@ -383,6 +384,7 @@ pub fn do_palette_step_group_row(
                 );
             }
             for y in 0..h {
+                wp_state.set_row(y & 1, total_w);
                 for (grid_x, index_buf) in buf_in.iter().enumerate().take(grid_xsize) {
                     let index_img = index_buf.data.row(y);
                     let out_idx = out_row_idx + grid_x;
