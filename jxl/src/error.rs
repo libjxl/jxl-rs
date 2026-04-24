@@ -259,10 +259,8 @@ pub enum Error {
     IccUnsupportedTransferFunction,
     #[error("Table size too large when writing ICC: {0}")]
     IccTableSizeExceeded(usize),
-    #[error("Invalid CMS configuration: requested ICC but no CMS is configured")]
-    ICCOutputNoCMS,
-    #[error("Non-XYB image requires CMS to convert to different output color profile")]
-    NonXybOutputNoCMS,
+    #[error("Non-XYB image cannot be converted to different output color profile")]
+    NonXybConversionRequested,
     #[error("I/O error: {0}")]
     IOError(#[from] std::io::Error),
     #[error("Wrong buffer count: {0} buffers given, {1} buffers expected")]
@@ -275,22 +273,6 @@ pub enum Error {
     SaveDifferentDownsample((u8, u8), (u8, u8)),
     #[error("Image has {0} extra channels, more than the maximum of 256")]
     TooManyExtraChannels(usize),
-    #[error(
-        "CMS transform increases channel count from {in_channels} to {out_channels}, which is not supported"
-    )]
-    CmsChannelCountIncrease {
-        in_channels: usize,
-        out_channels: usize,
-    },
-    #[error(
-        "Cannot output extra channel {channel_index} ({channel_type:?}): it was consumed by CMS color conversion"
-    )]
-    CmsConsumedChannelRequested {
-        channel_index: usize,
-        channel_type: String,
-    },
-    #[error("CMS error: {0}")]
-    CmsError(String),
 }
 
 pub type Result<T, E = Error> = std::result::Result<T, E>;

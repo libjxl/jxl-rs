@@ -7,7 +7,6 @@ default-run = "jxl_cli"
 
 [dependencies]
 jxl = { path = "../jxl", version = "=0.4.3", default-features = false }
-jxl_cms = { path = "../jxl_cms", version = "=0.4.3" }
 clap = { version = "4.5.18", features = ["derive"] }
 tracing-subscriber = { version = "0.3.18", features = [
   "env-filter",

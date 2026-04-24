@@ -4,8 +4,8 @@
 // license that can be found in the LICENSE file.
 
 use super::{
-    JxlBasicInfo, JxlBitstreamInput, JxlColorProfile, JxlDecoderInner, JxlDecoderOptions,
-    JxlOutputBuffer, JxlPixelFormat, ProcessingResult,
+    JxlBasicInfo, JxlBitstreamInput, JxlColorEncoding, JxlColorProfile, JxlDecoderInner,
+    JxlDecoderOptions, JxlOutputBuffer, JxlPixelFormat, ProcessingResult,
 };
 #[cfg(test)]
 use crate::frame::Frame;
@@ -166,7 +166,7 @@ impl JxlDecoder<WithImageInfo> {
 
     /// Specifies the preferred color profile to be used for outputting data.
     /// Same semantics as JxlDecoderSetOutputColorProfile.
-    pub fn set_output_color_profile(&mut self, profile: JxlColorProfile) -> Result<()> {
+    pub fn set_output_color_profile(&mut self, profile: JxlColorEncoding) {
         self.inner.set_output_color_profile(profile)
     }
 
@@ -688,14 +688,10 @@ pub(crate) mod tests {
         };
 
         // Get the embedded profile and set it as output (should work)
-        let embedded = decoder.embedded_color_profile().clone();
-        let result = decoder.set_output_color_profile(embedded);
-        assert!(result.is_ok());
-
-        // Setting an ICC profile without CMS should fail
-        let icc_profile = JxlColorProfile::Icc(vec![0u8; 100]);
-        let result = decoder.set_output_color_profile(icc_profile);
-        assert!(result.is_err());
+        let JxlColorProfile::Simple(embedded) = decoder.embedded_color_profile().clone() else {
+            panic!()
+        };
+        decoder.set_output_color_profile(embedded);
     }
 
     #[test]
@@ -741,10 +737,10 @@ pub(crate) mod tests {
 
         // Once output color profile is set by user, it will remain as is regardless of what pixel
         // format is set
-        let profile = JxlColorProfile::Simple(JxlColorEncoding::srgb(false));
-        decoder.set_output_color_profile(profile.clone()).unwrap();
+        let profile = JxlColorEncoding::srgb(false);
+        decoder.set_output_color_profile(profile.clone());
         decoder.set_pixel_format(JxlPixelFormat::rgba_f16(0));
-        assert!(decoder.output_color_profile() == &profile);
+        assert!(*decoder.output_color_profile() == JxlColorProfile::Simple(profile));
     }
 
     #[test]

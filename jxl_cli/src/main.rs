@@ -9,7 +9,6 @@ use jxl::api::JxlDecoderOptions;
 use jxl_cli::dec;
 use jxl_cli::dec::OutputDataType;
 use jxl_cli::enc::OutputFormat;
-use jxl_cms::lcms2::Lcms2Cms;
 use std::fs;
 use std::io::{BufReader, Read, Seek};
 use std::path::PathBuf;
@@ -117,7 +116,6 @@ fn main() -> Result<()> {
         options.render_spot_colors = !matches!(output_format, Some(OutputFormat::Npy));
         options.skip_preview = skip_preview;
         options.high_precision = high_precision;
-        options.cms = Some(Box::new(Lcms2Cms));
         options
     };
 

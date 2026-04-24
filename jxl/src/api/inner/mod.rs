@@ -5,12 +5,9 @@
 
 #[cfg(test)]
 use crate::api::FrameCallback;
-use crate::{
-    api::{JxlFrameHeader, VisibleFrameInfo, VisibleFrameSeekTarget},
-    error::{Error, Result},
-};
+use crate::api::{JxlFrameHeader, VisibleFrameInfo, VisibleFrameSeekTarget};
 
-use super::{JxlBasicInfo, JxlColorProfile, JxlDecoderOptions, JxlPixelFormat};
+use super::{JxlBasicInfo, JxlColorEncoding, JxlColorProfile, JxlDecoderOptions, JxlPixelFormat};
 use crate::container::frame_index::FrameIndexBox;
 use box_parser::BoxParser;
 use codestream_parser::CodestreamParser;
@@ -67,13 +64,9 @@ impl JxlDecoderInner {
 
     /// Specifies the preferred color profile to be used for outputting data.
     /// Same semantics as JxlDecoderSetOutputColorProfile.
-    pub fn set_output_color_profile(&mut self, profile: JxlColorProfile) -> Result<()> {
-        if let (JxlColorProfile::Icc(_), None) = (&profile, &self.options.cms) {
-            return Err(Error::ICCOutputNoCMS);
-        }
-        self.codestream_parser.output_color_profile = Some(profile);
+    pub fn set_output_color_profile(&mut self, profile: JxlColorEncoding) {
+        self.codestream_parser.output_color_profile = Some(JxlColorProfile::Simple(profile));
         self.codestream_parser.output_color_profile_set_by_user = true;
-        Ok(())
     }
 
     pub fn current_pixel_format(&self) -> Option<&JxlPixelFormat> {

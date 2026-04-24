@@ -667,21 +667,11 @@ dependencies = [
  "exr",
  "half",
  "jxl",
- "jxl_cms",
  "jxl_macros",
  "lcms2",
  "png",
  "tracing-subscriber",
  "vergen-gitcl",
-]
-
-[[package]]
-name = "jxl_cms"
-version = "0.4.3"
-dependencies = [
- "bytemuck",
- "jxl",
- "lcms2",
 ]
 
 [[package]]

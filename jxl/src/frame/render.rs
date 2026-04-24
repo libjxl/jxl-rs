@@ -3,8 +3,6 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-use crate::api::JxlCms;
-use crate::api::JxlColorEncoding;
 use crate::api::JxlColorProfile;
 use crate::api::JxlColorType;
 use crate::api::JxlDataFormat;
@@ -107,32 +105,6 @@ impl Frame {
             JxlDataFormat::F32 { .. } => {}
         }
         pipeline
-    }
-
-    /// Check if CMS will consume a black channel that the user requested in the output.
-    fn check_cms_consumed_black_channel(
-        black_channel: Option<usize>,
-        in_channels: usize,
-        out_channels: usize,
-        pixel_format: &JxlPixelFormat,
-    ) -> Result<()> {
-        if let Some(k_pipeline_idx) = black_channel
-            && out_channels < in_channels
-        {
-            // K channel is consumed (4->3 conversion)
-            let k_ec_idx = k_pipeline_idx - 3;
-            if pixel_format
-                .extra_channel_format
-                .get(k_ec_idx)
-                .is_some_and(|f| f.is_some())
-            {
-                return Err(Error::CmsConsumedChannelRequested {
-                    channel_index: k_ec_idx,
-                    channel_type: "Black".to_string(),
-                });
-            }
-        }
-        Ok(())
     }
 
     pub fn decode_and_render_hf_groups(
@@ -346,8 +318,6 @@ impl Frame {
         color_correlation_params: Arc<AtomicRefCell<ColorCorrelationParams>>,
         epf_sigma: Arc<AtomicRefCell<SigmaSource>>,
         pixel_format: &JxlPixelFormat,
-        cms: Option<&dyn JxlCms>,
-        input_profile: &JxlColorProfile,
         output_profile: &JxlColorProfile,
     ) -> Result<Box<T>> {
         let num_channels = frame_header.num_extra_channels as usize + 3;
@@ -563,18 +533,6 @@ impl Frame {
             _ => None,
         };
 
-        // Find the Black (K) extra channel if present.
-        // In JXL, CMYK is stored as 3 color channels (CMY) + K as extra channel.
-        // Pipeline index of K = extra_channel_index + 3
-        let black_channel: Option<usize> = decoder_state
-            .file_header
-            .image_metadata
-            .extra_channel_info
-            .iter()
-            .enumerate()
-            .find(|x| x.1.ec_type == ExtraChannel::Black)
-            .map(|(k_idx, _)| k_idx + 3);
-
         let xyb_encoded = decoder_state.file_header.image_metadata.xyb_encoded;
 
         if frame_header.do_ycbcr {
@@ -583,96 +541,8 @@ impl Frame {
             pipeline = pipeline.add_inplace_stage(XybStage::new(0, output_color_info.clone()));
         }
 
-        // Insert CMS stage if profiles differ.
-        // Following libjxl: use EITHER CMS OR FromLinearStage, never both.
-        // - If output matches original encoding: only FromLinearStage is needed
-        // - If output differs: CMS handles everything including TF conversion
-        //
-        // For XYB images, XybStage outputs LINEAR data in the embedded profile's primaries,
-        // so the CMS input should be the LINEAR version of the embedded profile.
-        // For ICC embedded profiles with XYB, XybStage outputs linear sRGB (see xyb.rs).
-        let cms_input_profile = if xyb_encoded {
-            // XYB outputs linear, so use linear version of input profile for CMS
-            input_profile.with_linear_tf().or_else(|| {
-                // For ICC profiles with XYB, XybStage outputs linear sRGB
-                Some(JxlColorProfile::Simple(JxlColorEncoding::linear_srgb(
-                    false,
-                )))
-            })
-        } else {
-            // Non-XYB: data is in the embedded profile's space including TF
-            Some(input_profile.clone())
-        };
-
-        // Compare ORIGINAL input profile (not linearized cms_input_profile) with output.
-        // This matches libjxl (53042ec5) dec_xyb.cc:184:
-        //   color_encoding_is_original = orig_color_encoding.SameColorEncoding(c_desired);
-        let color_encoding_is_original = input_profile.same_color_encoding(output_profile);
-        let mut cms_used = false;
-
-        // Skip CMS if channel counts differ (grayscale↔RGB) - like libjxl's not_mixing_color_and_grey.
-        // Exception: CMYK (4) → RGB (3) is allowed via CMS.
-        let src_channels = cms_input_profile
-            .as_ref()
-            .map(|p| p.channels())
-            .unwrap_or(3);
-        let dst_channels = output_profile.channels();
-        let channel_counts_compatible =
-            src_channels == dst_channels || (src_channels == 4 && dst_channels == 3);
-
-        if !color_encoding_is_original
-            && channel_counts_compatible
-            && let Some(cms) = cms
-            && let Some(cms_input) = cms_input_profile
-        {
-            // Use frame width as max_pixels since rows can be that wide
-            let max_pixels = frame_header.size_upsampled().0;
-            // Use CMS input profile's channel count, matching libjxl's c_src_.Channels()
-            // For CMYK, channels() returns 4; for RGB, 3; for grayscale, 1.
-            let in_channels = cms_input.channels();
-            let (out_channels, transformers) = cms.initialize_transforms(
-                1, // num transforms (1 for single-threaded)
-                max_pixels,
-                cms_input,
-                output_profile.clone(),
-                output_color_info.intensity_target,
-            )?;
-            // CMS cannot add channels - reject transforms that would
-            if out_channels > in_channels {
-                return Err(Error::CmsChannelCountIncrease {
-                    in_channels,
-                    out_channels,
-                });
-            }
-            // Only pass black_channel to CmsStage if CMS is actually processing CMYK input.
-            // For XYB images, even if original was CMYK, CMS input is linear RGB.
-            let cms_black_channel = if in_channels == 4 {
-                black_channel
-            } else {
-                None
-            };
-            Self::check_cms_consumed_black_channel(
-                cms_black_channel,
-                in_channels,
-                out_channels,
-                pixel_format,
-            )?;
-            if !transformers.is_empty() {
-                pipeline = pipeline.add_inplace_stage(CmsStage::new(
-                    transformers,
-                    in_channels,
-                    out_channels,
-                    cms_black_channel,
-                    max_pixels,
-                ));
-                cms_used = true;
-            }
-        }
-
-        // XYB output is linear, so apply transfer function:
-        // - Only if output is non-linear AND
-        // - CMS was not used (CMS already handles the full conversion including TF)
-        if xyb_encoded && !output_tf.is_linear() && !cms_used {
+        // XYB output is linear, so apply transfer function, but only if output is not linear itself
+        if xyb_encoded && !output_tf.is_linear() {
             pipeline = pipeline.add_inplace_stage(FromLinearStage::new(0, output_tf.clone()));
         }
 
@@ -821,8 +691,6 @@ impl Frame {
     pub fn prepare_render_pipeline(
         &mut self,
         pixel_format: &JxlPixelFormat,
-        cms: Option<&dyn JxlCms>,
-        input_profile: &JxlColorProfile,
         output_profile: &JxlColorProfile,
     ) -> Result<()> {
         #[cfg(test)]
@@ -837,8 +705,6 @@ impl Frame {
                 self.color_correlation_params.clone(),
                 self.epf_sigma.clone(),
                 pixel_format,
-                cms,
-                input_profile,
                 output_profile,
             )? as Box<dyn std::any::Any>
         } else {
@@ -852,8 +718,6 @@ impl Frame {
                 self.color_correlation_params.clone(),
                 self.epf_sigma.clone(),
                 pixel_format,
-                cms,
-                input_profile,
                 output_profile,
             )? as Box<dyn std::any::Any>
         };
@@ -868,8 +732,6 @@ impl Frame {
             self.color_correlation_params.clone(),
             self.epf_sigma.clone(),
             pixel_format,
-            cms,
-            input_profile,
             output_profile,
         )?;
         self.render_pipeline = Some(render_pipeline);
