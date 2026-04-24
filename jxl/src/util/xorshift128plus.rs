@@ -47,6 +47,7 @@ impl Xorshift128Plus {
         Self { s0, s1 }
     }
 
+    #[inline(always)]
     pub fn fill(&mut self, random_bits: &mut [u64; Self::N]) {
         for ((s0, s1), random_bits) in self
             .s0
