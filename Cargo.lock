@@ -682,6 +682,7 @@ dependencies = [
  "bytemuck",
  "jxl",
  "lcms2",
+ "thiserror",
 ]
 
 [[package]]

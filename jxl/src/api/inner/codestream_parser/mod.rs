@@ -79,7 +79,6 @@ pub(super) struct CodestreamParser {
     pub(super) pixel_format: Option<JxlPixelFormat>,
     xyb_encoded: bool,
     is_gray: bool,
-    pub(super) output_color_profile_set_by_user: bool,
 
     // These fields are populated when starting to decode a frame, and cleared once
     // the frame is done.
@@ -164,7 +163,6 @@ impl CodestreamParser {
             pixel_format: None,
             xyb_encoded: false,
             is_gray: false,
-            output_color_profile_set_by_user: false,
             frame_header: None,
             toc_parser: None,
             frame: None,
@@ -711,11 +709,6 @@ impl CodestreamParser {
     }
 
     pub(super) fn update_default_output_color_profile(&mut self) {
-        // Only set default output_color_profile if not already configured by user
-        if self.output_color_profile_set_by_user {
-            return;
-        }
-
         let embedded_color_profile = self.embedded_color_profile.as_ref().unwrap();
         let pixel_format = self.pixel_format.as_ref().unwrap();
 

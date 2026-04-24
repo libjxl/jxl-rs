@@ -164,12 +164,6 @@ impl JxlDecoder<WithImageInfo> {
         self.inner.output_color_profile().unwrap()
     }
 
-    /// Specifies the preferred color profile to be used for outputting data.
-    /// Same semantics as JxlDecoderSetOutputColorProfile.
-    pub fn set_output_color_profile(&mut self, profile: JxlColorProfile) -> Result<()> {
-        self.inner.set_output_color_profile(profile)
-    }
-
     /// Retrieves the current pixel format for output buffers.
     pub fn current_pixel_format(&self) -> &JxlPixelFormat {
         self.inner.current_pixel_format().unwrap()
@@ -729,34 +723,8 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn test_set_output_color_profile() {
-        use crate::api::JxlColorProfile;
-
-        let file = std::fs::read("resources/test/basic.jxl").unwrap();
-        let options = JxlDecoderOptions::default();
-        let mut decoder = JxlDecoder::<states::Initialized>::new(options);
-        let mut input = file.as_slice();
-        let mut decoder = loop {
-            match decoder.process(&mut input).unwrap() {
-                ProcessingResult::Complete { result } => break result,
-                ProcessingResult::NeedsMoreInput { fallback, .. } => decoder = fallback,
-            }
-        };
-
-        // Get the embedded profile and set it as output (should work)
-        let embedded = decoder.embedded_color_profile().clone();
-        let result = decoder.set_output_color_profile(embedded);
-        assert!(result.is_ok());
-
-        // Setting an ICC profile without CMS should fail
-        let icc_profile = JxlColorProfile::Icc(vec![0u8; 100]);
-        let result = decoder.set_output_color_profile(icc_profile);
-        assert!(result.is_err());
-    }
-
-    #[test]
     fn test_default_output_tf_by_pixel_format() {
-        use crate::api::{JxlColorEncoding, JxlTransferFunction};
+        use crate::api::JxlTransferFunction;
 
         // Using test image with ICC profile to trigger default transfer function path
         let file = std::fs::read("resources/test/lossy_with_icc.jxl").unwrap();
@@ -794,13 +762,6 @@ pub(crate) mod tests {
             *decoder.output_color_profile().transfer_function().unwrap(),
             JxlTransferFunction::SRGB,
         );
-
-        // Once output color profile is set by user, it will remain as is regardless of what pixel
-        // format is set
-        let profile = JxlColorProfile::Simple(JxlColorEncoding::srgb(false));
-        decoder.set_output_color_profile(profile.clone()).unwrap();
-        decoder.set_pixel_format(JxlPixelFormat::rgba_f16(0));
-        assert!(decoder.output_color_profile() == &profile);
     }
 
     #[test]
