@@ -27,8 +27,14 @@ pub fn with_buffers<T>(
         let b = &buf.buffer_grid[grid];
         let mut data = b.data.borrow_mut();
         if data.is_none() {
+            // SAFETY: The modular decode loop fully writes every pixel in the data region.
+            // The padding region is zeroed for correct boundary behavior in prediction.
+            #[allow(unsafe_code)]
+            let img = unsafe {
+                Image::new_uninit_with_zeroed_padding(b.size, IMAGE_OFFSET, IMAGE_PADDING)?
+            };
             *data = Some(ModularChannel {
-                data: Image::new_with_padding(b.size, IMAGE_OFFSET, IMAGE_PADDING)?,
+                data: img,
                 auxiliary_data: None,
                 shift: buf.info.shift,
                 bit_depth: buf.info.bit_depth,
