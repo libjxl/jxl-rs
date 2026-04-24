@@ -27,6 +27,7 @@ pub enum SmallVec<T, const N: usize> {
 impl<T, const N: usize> Deref for SmallVec<T, N> {
     type Target = [T];
 
+    #[inline(always)]
     fn deref(&self) -> &[T] {
         match self {
             SmallVec::Stack { len, data } => {
@@ -41,6 +42,7 @@ impl<T, const N: usize> Deref for SmallVec<T, N> {
 }
 
 impl<T, const N: usize> DerefMut for SmallVec<T, N> {
+    #[inline(always)]
     fn deref_mut(&mut self) -> &mut [T] {
         match self {
             SmallVec::Stack { len, data } => {
@@ -67,7 +69,7 @@ impl<T, const N: usize> Default for SmallVec<T, N> {
 }
 
 impl<T, const N: usize> SmallVec<T, N> {
-    #[inline]
+    #[inline(always)]
     pub fn new() -> Self {
         Self::Stack {
             // Safety note: len == 0 makes the safety invariant trivially true.
@@ -76,7 +78,7 @@ impl<T, const N: usize> SmallVec<T, N> {
         }
     }
 
-    #[inline]
+    #[inline(always)]
     pub fn is_empty(&self) -> bool {
         match self {
             Self::Stack { len, .. } => *len == 0,
@@ -84,7 +86,7 @@ impl<T, const N: usize> SmallVec<T, N> {
         }
     }
 
-    #[inline]
+    #[inline(always)]
     pub fn len(&self) -> usize {
         match self {
             Self::Stack { len, .. } => *len,
@@ -140,7 +142,7 @@ impl<T, const N: usize> SmallVec<T, N> {
         }
     }
 
-    #[inline]
+    #[inline(always)]
     pub fn push(&mut self, val: T) {
         if self.len() + 1 > N {
             self.move_to_heap();
@@ -199,7 +201,7 @@ impl<T, const N: usize> SmallVec<T, N> {
 }
 
 impl<T, const N: usize> FromIterator<T> for SmallVec<T, N> {
-    #[inline]
+    #[inline(always)]
     fn from_iter<I: IntoIterator<Item = T>>(iter: I) -> Self {
         let mut ret = Self::new();
         ret.extend(iter);
