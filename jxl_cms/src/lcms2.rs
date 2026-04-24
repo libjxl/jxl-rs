@@ -5,8 +5,8 @@
 
 //! Color Management System implementation using lcms2.
 
-use jxl::api::{JxlCms, JxlCmsTransformer, JxlColorProfile};
-use jxl::error::{Error, Result};
+use crate::{Error, JxlCms, JxlCmsTransformer, Result};
+use jxl::api::JxlColorProfile;
 use lcms2::{
     AllowCache, ColorSpaceSignatureExt, Intent, PixelFormat, Profile, ThreadContext, Transform,
 };
@@ -24,18 +24,14 @@ impl JxlCms for Lcms2Cms {
         _intensity_target: f32,
     ) -> Result<(usize, Vec<Box<dyn JxlCmsTransformer + Send>>)> {
         // Convert profiles to ICC
-        let input_icc = input
-            .try_as_icc()
-            .ok_or_else(|| Error::CmsError("Cannot create ICC for input profile".into()))?;
-        let output_icc = output
-            .try_as_icc()
-            .ok_or_else(|| Error::CmsError("Cannot create ICC for output profile".into()))?;
+        let input_icc = input.try_as_icc().ok_or(Error::InputIccError)?;
+        let output_icc = output.try_as_icc().ok_or(Error::OutputIccError)?;
 
         // Parse profiles once to determine channel counts
         let temp_input_profile = Profile::new_icc(input_icc.as_slice())
-            .map_err(|e| Error::CmsError(format!("lcms2 failed to parse input ICC: {e}")))?;
+            .map_err(|e| Error::Lcms2InputParseError(format!("{e}")))?;
         let temp_output_profile = Profile::new_icc(output_icc.as_slice())
-            .map_err(|e| Error::CmsError(format!("lcms2 failed to parse output ICC: {e}")))?;
+            .map_err(|e| Error::Lcms2OutputParseError(format!("{e}")))?;
 
         let input_channels = temp_input_profile.color_space().channels() as usize;
         let output_channels = temp_output_profile.color_space().channels() as usize;
@@ -52,9 +48,9 @@ impl JxlCms for Lcms2Cms {
 
             // Create profiles with the thread context
             let input_profile = Profile::new_icc_context(&context, input_icc.as_slice())
-                .map_err(|e| Error::CmsError(format!("lcms2 failed to parse input ICC: {e}")))?;
+                .map_err(|e| Error::Lcms2InputParseError(format!("{e}")))?;
             let output_profile = Profile::new_icc_context(&context, output_icc.as_slice())
-                .map_err(|e| Error::CmsError(format!("lcms2 failed to parse output ICC: {e}")))?;
+                .map_err(|e| Error::Lcms2OutputParseError(format!("{e}")))?;
 
             let transform: Transform<u8, u8, ThreadContext, AllowCache> = Transform::new_context(
                 context,
@@ -64,7 +60,7 @@ impl JxlCms for Lcms2Cms {
                 output_format,
                 Intent::RelativeColorimetric,
             )
-            .map_err(|e| Error::CmsError(format!("lcms2 failed to create transform: {e}")))?;
+            .map_err(|e| Error::Lcms2TransformError(format!("{e}")))?;
 
             transforms.push(Box::new(Lcms2Transformer {
                 transform,
@@ -101,10 +97,10 @@ impl JxlCmsTransformer for Lcms2Transformer {
         // Verify output buffer size
         let expected_output_len = num_pixels * self.output_channels;
         if output.len() < expected_output_len {
-            return Err(Error::CmsError(format!(
-                "Output buffer too small: expected {expected_output_len}, got {}",
-                output.len()
-            )));
+            return Err(Error::OutputBufferTooSmall(
+                expected_output_len,
+                output.len(),
+            ));
         }
 
         // Convert f32 slices to byte slices using bytemuck for safe casting
@@ -112,22 +108,6 @@ impl JxlCmsTransformer for Lcms2Transformer {
         let output_bytes: &mut [u8] = bytemuck::cast_slice_mut(output);
 
         self.transform.transform_pixels(input_bytes, output_bytes);
-
-        Ok(())
-    }
-
-    fn do_transform_inplace(&mut self, inout: &mut [f32]) -> Result<()> {
-        // For in-place transform, input and output channel counts must match
-        if self.input_channels != self.output_channels {
-            return Err(Error::CmsError(
-                "In-place transform requires matching channel counts".into(),
-            ));
-        }
-
-        // Convert f32 slice to byte slice
-        let inout_bytes: &mut [u8] = bytemuck::cast_slice_mut(inout);
-
-        self.transform.transform_in_place(inout_bytes);
 
         Ok(())
     }

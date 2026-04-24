@@ -196,14 +196,28 @@ pub fn decode_frames<In: JxlBitstreamInputExt>(
     };
     decoder_with_image_info.set_pixel_format(new_format);
 
-    // If linear output is requested, modify the output profile
-    if linear_output
-        && let JxlColorProfile::Simple(enc) = decoder_with_image_info.output_color_profile().clone()
-    {
-        decoder_with_image_info
-            .set_output_color_profile(JxlColorProfile::Simple(enc.with_linear_tf()))?;
+    // If linear output is requested, initialize the CMS transformer
+    let mut output_profile = decoder_with_image_info.output_color_profile().clone();
+    let mut cms_transformer = None;
+    if linear_output && let JxlColorProfile::Simple(ref enc) = output_profile {
+        let linear_enc = enc.with_linear_tf();
+        let target_profile = JxlColorProfile::Simple(linear_enc.clone());
+
+        let cms = jxl_cms::lcms2::Lcms2Cms;
+        use jxl_cms::JxlCms;
+        let (_out_chans, mut transformers) = cms
+            .initialize_transforms(
+                1,
+                info.size.0,
+                output_profile.clone(),
+                target_profile.clone(),
+                255.0,
+            )
+            .map_err(|e| eyre!("CMS initialization failed: {}", e))?;
+
+        cms_transformer = Some(transformers.remove(0));
+        output_profile = target_profile;
     }
-    let output_profile = decoder_with_image_info.output_color_profile().clone();
 
     let mut image_data = DecodeOutput {
         size: info.size,
@@ -219,6 +233,11 @@ pub fn decode_frames<In: JxlBitstreamInputExt>(
     let pixel_format = decoder_with_image_info.current_pixel_format().clone();
     let color_type = pixel_format.color_type;
     let samples_per_pixel = pixel_format.color_type.samples_per_pixel();
+    let color_channels = if interleave_alpha {
+        samples_per_pixel - 1
+    } else {
+        samples_per_pixel
+    };
 
     'frame: loop {
         let image_size = info.size;
@@ -236,7 +255,7 @@ pub fn decode_frames<In: JxlBitstreamInputExt>(
             outputs.push(OwnedRawImage::new(byte_size)?);
         }
 
-        let mut partial_renders = vec![];
+        let mut partial_renders: Vec<Vec<OwnedRawImage>> = vec![];
 
         let mut has_rendered_data = false;
 
@@ -350,5 +369,147 @@ pub fn decode_frames<In: JxlBitstreamInputExt>(
         }
     }
 
+    if let Some(ref mut transformer) = cms_transformer {
+        for frame in &mut image_data.frames {
+            apply_cms(
+                &mut frame.channels[0],
+                samples_per_pixel,
+                color_channels,
+                output_type,
+                transformer.as_mut(),
+                info.size.0,
+                info.size.1,
+            )?;
+            for partial in &mut frame.partial_renders {
+                apply_cms(
+                    &mut partial[0],
+                    samples_per_pixel,
+                    color_channels,
+                    output_type,
+                    transformer.as_mut(),
+                    info.size.0,
+                    info.size.1,
+                )?;
+            }
+        }
+    }
+
     Ok((image_data, start.elapsed()))
+}
+
+fn apply_cms(
+    image: &mut OwnedRawImage,
+    samples_per_pixel: usize,
+    color_channels: usize,
+    output_type: OutputDataType,
+    transformer: &mut dyn jxl_cms::JxlCmsTransformer,
+    width: usize,
+    height: usize,
+) -> Result<()> {
+    let mut row_color_buffer = vec![0.0f32; width * color_channels];
+    let mut row_output_buffer = vec![0.0f32; width * color_channels];
+    for y in 0..height {
+        let row_bytes = image.row(y);
+        // 1. Extract and convert to f32
+        match output_type {
+            OutputDataType::U8 => {
+                for x in 0..width {
+                    for c in 0..color_channels {
+                        let idx = x * samples_per_pixel + c;
+                        row_color_buffer[x * color_channels + c] = row_bytes[idx] as f32 / 255.0;
+                    }
+                }
+            }
+            OutputDataType::U16 => {
+                for x in 0..width {
+                    for c in 0..color_channels {
+                        let idx = (x * samples_per_pixel + c) * 2;
+                        let val = u16::from_ne_bytes([row_bytes[idx], row_bytes[idx + 1]]);
+                        row_color_buffer[x * color_channels + c] = val as f32 / 65535.0;
+                    }
+                }
+            }
+            OutputDataType::F16 => {
+                for x in 0..width {
+                    for c in 0..color_channels {
+                        let idx = (x * samples_per_pixel + c) * 2;
+                        let val = u16::from_ne_bytes([row_bytes[idx], row_bytes[idx + 1]]);
+                        row_color_buffer[x * color_channels + c] =
+                            jxl::util::f16::from_bits(val).to_f32();
+                    }
+                }
+            }
+            OutputDataType::F32 => {
+                for x in 0..width {
+                    for c in 0..color_channels {
+                        let idx = (x * samples_per_pixel + c) * 4;
+                        let val = f32::from_ne_bytes([
+                            row_bytes[idx],
+                            row_bytes[idx + 1],
+                            row_bytes[idx + 2],
+                            row_bytes[idx + 3],
+                        ]);
+                        row_color_buffer[x * color_channels + c] = val;
+                    }
+                }
+            }
+        }
+
+        // 2. Perform CMS transform
+        transformer
+            .do_transform(&row_color_buffer, &mut row_output_buffer)
+            .map_err(|e| eyre!("CMS transform failed: {}", e))?;
+
+        // 3. Convert back and write to row
+        let row_bytes_mut = image.row_mut(y);
+        match output_type {
+            OutputDataType::U8 => {
+                for x in 0..width {
+                    for c in 0..color_channels {
+                        let idx = x * samples_per_pixel + c;
+                        let val = row_output_buffer[x * color_channels + c];
+                        row_bytes_mut[idx] = (val * 255.0 + 0.5).clamp(0.0, 255.0) as u8;
+                    }
+                }
+            }
+            OutputDataType::U16 => {
+                for x in 0..width {
+                    for c in 0..color_channels {
+                        let idx = (x * samples_per_pixel + c) * 2;
+                        let val = row_output_buffer[x * color_channels + c];
+                        let val_u16 = (val * 65535.0 + 0.5).clamp(0.0, 65535.0) as u16;
+                        let u16_bytes = val_u16.to_ne_bytes();
+                        row_bytes_mut[idx] = u16_bytes[0];
+                        row_bytes_mut[idx + 1] = u16_bytes[1];
+                    }
+                }
+            }
+            OutputDataType::F16 => {
+                for x in 0..width {
+                    for c in 0..color_channels {
+                        let idx = (x * samples_per_pixel + c) * 2;
+                        let val = row_output_buffer[x * color_channels + c];
+                        let val_f16 = jxl::util::f16::from_f32(val);
+                        let u16_bytes = val_f16.to_bits().to_ne_bytes();
+                        row_bytes_mut[idx] = u16_bytes[0];
+                        row_bytes_mut[idx + 1] = u16_bytes[1];
+                    }
+                }
+            }
+            OutputDataType::F32 => {
+                for x in 0..width {
+                    for c in 0..color_channels {
+                        let idx = (x * samples_per_pixel + c) * 4;
+                        let val = row_output_buffer[x * color_channels + c];
+                        let f32_bytes = val.to_ne_bytes();
+                        row_bytes_mut[idx] = f32_bytes[0];
+                        row_bytes_mut[idx + 1] = f32_bytes[1];
+                        row_bytes_mut[idx + 2] = f32_bytes[2];
+                        row_bytes_mut[idx + 3] = f32_bytes[3];
+                    }
+                }
+            }
+        }
+    }
+    Ok(())
 }
