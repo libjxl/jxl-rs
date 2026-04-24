@@ -393,8 +393,14 @@ impl SymbolReader {
                     Codes::Ans(ans) => self.ans_reader.read(ans, br, cluster),
                 };
                 rle_state.push_token(token, histograms, br, cluster);
-                if let Some(sym) = rle_state.pull_symbol() {
-                    sym
+                if rle_state.repeat_count > 0 {
+                    rle_state.repeat_count -= 1;
+                    if let Some(sym) = rle_state.last_sym {
+                        sym
+                    } else {
+                        self.errors.lz77_repeat = true;
+                        0
+                    }
                 } else {
                     self.errors.lz77_repeat = true;
                     0
