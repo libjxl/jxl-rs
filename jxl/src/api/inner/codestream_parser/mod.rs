@@ -17,7 +17,10 @@ use crate::{
         JxlBasicInfo, JxlBitstreamInput, JxlColorEncoding, JxlColorProfile, JxlDataFormat,
         JxlDecoderOptions, JxlOutputBuffer, JxlPixelFormat, VisibleFrameInfo,
         VisibleFrameSeekTarget,
-        inner::{box_parser::BoxParser, process::SmallBuffer},
+        inner::{
+            box_parser::{BoxParser, ParseState},
+            process::SmallBuffer,
+        },
     },
     error::{Error, Result},
     frame::{DecoderState, Frame, Section},
@@ -27,6 +30,27 @@ use crate::{
 
 mod non_section;
 mod sections;
+
+/// After `get_more_codestream` returns `Ok(0)` / `OutOfBounds`, return `OutOfBounds(1)` if we
+/// must wait for more container bytes (OOO `jxlp`, `jxli`, or partial box header).
+#[inline]
+fn err_unless_more_container_input(
+    box_parser: &BoxParser,
+    input: &mut dyn JxlBitstreamInput,
+) -> Result<()> {
+    if matches!(
+        &box_parser.state,
+        ParseState::BufferingOooJxlp { .. } | ParseState::BufferingFrameIndex(..)
+    ) {
+        return Err(Error::OutOfBounds(1));
+    }
+    if matches!(&box_parser.state, ParseState::BoxNeeded)
+        && input.available_bytes().unwrap_or(0) == 0
+    {
+        return Err(Error::OutOfBounds(1));
+    }
+    Ok(())
+}
 
 struct SectionBuffer {
     len: usize,
@@ -409,6 +433,21 @@ impl CodestreamParser {
                         Ok(c) => c as usize,
                         Err(e) => return Err(e),
                     };
+                    if available_codestream == 0 {
+                        err_unless_more_container_input(box_parser, input)?;
+                        let need_from_box: usize = self
+                            .sections
+                            .iter()
+                            .map(|b| b.len)
+                            .sum::<usize>()
+                            .saturating_sub(self.ready_section_data);
+                        if need_from_box > 0 {
+                            if matches!(&box_parser.state, &ParseState::Exhausted) {
+                                return Err(Error::InvalidBox);
+                            }
+                            return Err(Error::OutOfBounds(1));
+                        }
+                    }
                     let mut section_buffers = vec![];
                     let mut ready = self.ready_section_data;
                     for buf in self.sections.iter_mut() {
@@ -452,12 +491,25 @@ impl CodestreamParser {
                 } else {
                     let total_size = self.sections.iter().map(|x| x.len).sum::<usize>();
                     loop {
-                        let to_skip = total_size - self.ready_section_data;
-                        if to_skip == 0 {
+                        let need_skip = total_size - self.ready_section_data;
+                        if need_skip == 0 {
                             break;
                         }
-                        let available_codestream = box_parser.get_more_codestream(input)? as usize;
-                        let to_skip = to_skip.min(available_codestream);
+                        let available_codestream = match box_parser.get_more_codestream(input) {
+                            Err(Error::OutOfBounds(_)) => 0,
+                            Ok(c) => c as usize,
+                            Err(e) => return Err(e),
+                        };
+                        if available_codestream == 0 {
+                            err_unless_more_container_input(box_parser, input)?;
+                            if need_skip > 0 {
+                                if matches!(&box_parser.state, &ParseState::Exhausted) {
+                                    return Err(Error::InvalidBox);
+                                }
+                                return Err(Error::OutOfBounds(1));
+                            }
+                        }
+                        let to_skip = need_skip.min(available_codestream);
                         let skipped = if !box_parser.box_buffer.is_empty() {
                             box_parser.box_buffer.consume(to_skip)
                         } else {
@@ -527,6 +579,9 @@ impl CodestreamParser {
                         Ok(c) => c,
                         Err(e) => return Err(e),
                     };
+                    if available_codestream == 0 {
+                        err_unless_more_container_input(box_parser, input)?;
+                    }
 
                     if capture_frame_start {
                         // total_file_consumed counts bytes read/skipped from
@@ -563,18 +618,17 @@ impl CodestreamParser {
 
                     // If we know that non-section parsing will require more bytes than what
                     // we added to the codestream, don't even try to parse non-section data.
-                    if let Some(needed) = self.header_needed_bytes.as_mut() {
-                        *needed = needed.saturating_sub(c);
-                        if *needed > 0 {
+                    if let Some(mut need) = self.header_needed_bytes.take() {
+                        need = need.saturating_sub(c);
+                        if need > 0 {
+                            self.header_needed_bytes = Some(need);
                             if !self.non_section_buf.can_read_more() {
                                 self.non_section_buf.enlarge();
                             }
-                            // Check if input still has data - if so, refill and retry
                             if input.available_bytes().unwrap_or(0) > 0 {
                                 continue;
-                            } else {
-                                return Err(Error::OutOfBounds(*needed as usize));
                             }
+                            return Err(Error::OutOfBounds(need as usize));
                         }
                     }
 
