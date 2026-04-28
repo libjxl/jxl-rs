@@ -3,7 +3,7 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-use std::io::IoSliceMut;
+use std::{collections::BTreeMap, io::IoSliceMut};
 
 use crate::container::frame_index::FrameIndexBox;
 use crate::error::{Error, Result};
@@ -36,6 +36,15 @@ pub enum ParseState {
     Exhausted,
 }
 
+#[derive(Default)]
+struct OooJxlpState {
+    /// From `ftyp`: `0` = `jxlp` boxes must be in order; `1` = out-of-order `jxlp` allowed.
+    file_format_version: u32,
+    /// Out-of-order `jxlp` payloads keyed by index.
+    buffered: BTreeMap<u32, (Vec<u8>, bool)>,
+    ftyp_seen: bool,
+}
+
 #[derive(Debug)]
 enum CodestreamBoxType {
     None,
@@ -53,10 +62,7 @@ pub(super) struct BoxParser {
     /// Total file bytes consumed from the underlying input.
     pub(super) total_file_consumed: u64,
     skip_jxlp_checks: bool,
-    /// From `ftyp`: `0` = `jxlp` boxes must be in order; `1` = out-of-order `jxlp` allowed.
-    jxl_file_format_version: u32,
-    jxlp_ooo_buffer: Vec<(u32, Vec<u8>, bool)>,
-    ftyp_seen: bool,
+    ooo_jxlp: OooJxlpState,
 }
 
 impl BoxParser {
@@ -68,9 +74,7 @@ impl BoxParser {
             frame_index: None,
             total_file_consumed: 0,
             skip_jxlp_checks: false,
-            jxl_file_format_version: 0,
-            jxlp_ooo_buffer: Vec::new(),
-            ftyp_seen: false,
+            ooo_jxlp: OooJxlpState::default(),
         }
     }
 
@@ -84,18 +88,13 @@ impl BoxParser {
 
     /// If the next expected `jxlp` index is already buffered (OOO), prepend it as the next codestream.
     fn try_inject_next_buffered_jxlp(&mut self) {
-        if self.skip_jxlp_checks || self.jxl_file_format_version < 1 {
+        if self.skip_jxlp_checks || self.ooo_jxlp.file_format_version < 1 {
             return;
         }
         let Some(next) = self.next_expected_jxlp_index() else {
             return;
         };
-        if let Some(pos) = self
-            .jxlp_ooo_buffer
-            .iter()
-            .position(|(idx, _, _)| *idx == next)
-        {
-            let (_, payload, is_last) = self.jxlp_ooo_buffer.swap_remove(pos);
+        if let Some((payload, is_last)) = self.ooo_jxlp.buffered.remove(&next) {
             let len = payload.len() as u64;
             self.box_buffer.inject_bytes_front(payload);
             self.box_type = if is_last {
@@ -218,8 +217,8 @@ impl BoxParser {
                     if ver > 1 {
                         return Err(Error::InvalidBox);
                     }
-                    self.jxl_file_format_version = ver;
-                    self.ftyp_seen = true;
+                    self.ooo_jxlp.file_format_version = ver;
+                    self.ooo_jxlp.ftyp_seen = true;
                     self.state = if skip_rest == 0 {
                         ParseState::BoxNeeded
                     } else {
@@ -250,7 +249,7 @@ impl BoxParser {
                         remaining -= read as u64;
                     }
                     if remaining == 0 {
-                        self.jxlp_ooo_buffer.push((idx, buf, last));
+                        self.ooo_jxlp.buffered.insert(idx, (buf, last));
                         self.state = ParseState::BoxNeeded;
                     } else {
                         self.state = ParseState::BufferingOooJxlp {
@@ -266,8 +265,8 @@ impl BoxParser {
                     self.total_file_consumed += read as u64;
                     if self.box_buffer.is_empty()
                         && read == 0
-                        && self.ftyp_seen
-                        && self.jxlp_ooo_buffer.is_empty()
+                        && self.ooo_jxlp.ftyp_seen
+                        && self.ooo_jxlp.buffered.is_empty()
                         && !self.skip_jxlp_checks
                         && matches!(
                             self.box_type,
@@ -308,10 +307,10 @@ impl BoxParser {
                         }
                         box_len - min_len as u64 - extra_len as u64
                     };
-                    if !self.ftyp_seen && &ty != b"ftyp" {
+                    if !self.ooo_jxlp.ftyp_seen && &ty != b"ftyp" {
                         return Err(Error::InvalidBox);
                     }
-                    if self.ftyp_seen && &ty == b"ftyp" {
+                    if self.ooo_jxlp.ftyp_seen && &ty == b"ftyp" {
                         return Err(Error::InvalidBox);
                     }
                     match &ty {
@@ -343,10 +342,10 @@ impl BoxParser {
                                     return Err(Error::InvalidBox);
                                 }
                                 if idx > wanted_idx {
-                                    if self.jxl_file_format_version < 1 {
+                                    if self.ooo_jxlp.file_format_version < 1 {
                                         return Err(Error::InvalidBox);
                                     }
-                                    if self.jxlp_ooo_buffer.iter().any(|(i, _, _)| *i == idx) {
+                                    if self.ooo_jxlp.buffered.contains_key(&idx) {
                                         return Err(Error::InvalidBox);
                                     }
                                     if content_len == u64::MAX {
@@ -417,7 +416,7 @@ impl BoxParser {
         self.box_buffer = SmallBuffer::new(128);
         self.state = ParseState::CodestreamBox(remaining);
         self.skip_jxlp_checks = true;
-        self.jxlp_ooo_buffer.clear();
+        self.ooo_jxlp.buffered.clear();
         // Keep frame_index unchanged.
     }
 
