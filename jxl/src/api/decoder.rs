@@ -324,7 +324,6 @@ pub(crate) mod tests {
 
     /// `ftyp` minor version 1 with `jxlp` boxes in physical order 0, 2, 1, 3 (streaming OOO).
     #[test]
-    #[allow(clippy::type_complexity)]
     fn decode_ooo_jxlp_animated_container() {
         let data = std::fs::read("resources/test/animated_ooo_jxlp.jxl").unwrap();
         let (_decoded_count, frames) = decode(&data, usize::MAX, false, false, None).unwrap();
@@ -356,7 +355,7 @@ pub(crate) mod tests {
         // Decoder `f32` buffer is display-referred sRGB in 0..1 (channel value ≈ sRGB8/255).
         // Expected triples match libjxl `djxl` APNG last frame at the same coordinates.
         let s = |c: u8| c as f32 / 255.0;
-        let checks: [((usize, usize), (f32, f32, f32)); 5] = [
+        let checks = [
             ((21, 27), (s(15), s(15), s(15))),
             ((22, 27), (s(15), s(15), s(15))),
             ((43, 27), (s(156), s(156), s(156))),
