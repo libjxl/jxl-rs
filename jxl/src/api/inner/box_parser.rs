@@ -30,7 +30,6 @@ pub enum ParseState {
         remaining: u64,
         buf: Vec<u8>,
         idx: u32,
-        last: bool,
     },
     /// After the last codestream box, no more container bytes: no further codestream in file.
     Exhausted,
@@ -40,8 +39,8 @@ pub enum ParseState {
 struct OooJxlpState {
     /// From `ftyp`: `0` = `jxlp` boxes must be in order; `1` = out-of-order `jxlp` allowed.
     file_format_version: u32,
-    /// Out-of-order `jxlp` payloads keyed by index.
-    buffered: BTreeMap<u32, (Vec<u8>, bool)>,
+    /// Out-of-order `jxlp` payloads keyed by index field (MSB = is_last).
+    buffered: BTreeMap<u32, Vec<u8>>,
     ftyp_seen: bool,
 }
 
@@ -94,16 +93,17 @@ impl BoxParser {
         let Some(next) = self.next_expected_jxlp_index() else {
             return;
         };
-        if let Some((payload, is_last)) = self.ooo_jxlp.buffered.remove(&next) {
-            let len = payload.len() as u64;
-            self.box_buffer.inject_bytes_front(payload);
-            self.box_type = if is_last {
-                CodestreamBoxType::LastJxlp
-            } else {
-                CodestreamBoxType::Jxlp(next)
-            };
-            self.state = ParseState::CodestreamBox(len);
-        }
+        let (payload, box_type) = if let Some(p) = self.ooo_jxlp.buffered.remove(&next) {
+            (p, CodestreamBoxType::Jxlp(next))
+        } else if let Some(p) = self.ooo_jxlp.buffered.remove(&(next | 0x8000_0000)) {
+            (p, CodestreamBoxType::LastJxlp)
+        } else {
+            return;
+        };
+        let len = payload.len() as u64;
+        self.box_buffer.inject_bytes_front(payload);
+        self.box_type = box_type;
+        self.state = ParseState::CodestreamBox(len);
     }
 
     // Reads input until the next byte of codestream is available.
@@ -229,7 +229,6 @@ impl BoxParser {
                     mut remaining,
                     mut buf,
                     idx,
-                    last,
                 } => {
                     let num = remaining.min(usize::MAX as u64) as usize;
                     if !self.box_buffer.is_empty() {
@@ -249,14 +248,13 @@ impl BoxParser {
                         remaining -= read as u64;
                     }
                     if remaining == 0 {
-                        self.ooo_jxlp.buffered.insert(idx, (buf, last));
+                        self.ooo_jxlp.buffered.insert(idx, buf);
                         self.state = ParseState::BoxNeeded;
                     } else {
                         self.state = ParseState::BufferingOooJxlp {
                             remaining,
                             buf,
                             idx,
-                            last,
                         };
                     }
                 }
@@ -345,7 +343,7 @@ impl BoxParser {
                                     if self.ooo_jxlp.file_format_version < 1 {
                                         return Err(Error::InvalidBox);
                                     }
-                                    if self.ooo_jxlp.buffered.contains_key(&idx) {
+                                    if self.ooo_jxlp.buffered.contains_key(&index) {
                                         return Err(Error::InvalidBox);
                                     }
                                     if content_len == u64::MAX {
@@ -354,8 +352,7 @@ impl BoxParser {
                                     self.state = ParseState::BufferingOooJxlp {
                                         remaining: content_len,
                                         buf: Vec::new(),
-                                        idx,
-                                        last,
+                                        idx: index,
                                     };
                                     self.box_buffer.consume(min_len + extra_len);
                                     continue;
