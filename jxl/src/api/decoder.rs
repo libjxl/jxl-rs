@@ -62,7 +62,7 @@ pub struct VisibleFrameInfo {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct VisibleFrameSeekTarget {
     /// File byte offset to start feeding input from.
-    pub decode_start_file_offset: usize,
+    pub decode_start_file_offset: u64,
     /// Remaining codestream bytes in the current container box at the seek
     /// point. Pass this to [`JxlDecoder::start_new_frame`].
     pub remaining_in_box: u64,
@@ -1706,7 +1706,7 @@ pub(crate) mod tests {
 
                 // 4. Seek to decode-start.
                 decoder.start_new_frame(seek_target);
-                let mut input = &data[seek_target.decode_start_file_offset..];
+                let mut input = &data[seek_target.decode_start_file_offset as usize..];
 
                 // Advance to Frame Header
                 assert!(matches!(
@@ -1873,7 +1873,7 @@ pub(crate) mod tests {
         assert!(frames[0].is_keyframe);
         assert_eq!(
             frames[0].seek_target.decode_start_file_offset,
-            frames[0].file_offset
+            frames[0].file_offset as u64
         );
     }
 
@@ -1913,7 +1913,7 @@ pub(crate) mod tests {
         assert_eq!(frames.len(), 1);
         let f = &frames[0];
         assert!(f.is_keyframe);
-        assert_eq!(f.seek_target.decode_start_file_offset, f.file_offset);
+        assert_eq!(f.seek_target.decode_start_file_offset, f.file_offset as u64);
         assert_eq!(f.seek_target.visible_frames_to_skip, 0);
     }
 
@@ -1926,7 +1926,7 @@ pub(crate) mod tests {
 
         for frame in &frames {
             assert!(
-                frame.seek_target.decode_start_file_offset <= frame.file_offset,
+                frame.seek_target.decode_start_file_offset <= frame.file_offset as u64,
                 "frame {}: decode_start_file_offset {} > file_offset {}",
                 frame.index,
                 frame.seek_target.decode_start_file_offset,
@@ -1977,7 +1977,7 @@ pub(crate) mod tests {
         ];
 
         let opts = JxlDecoderOptions {
-            pixel_limit: Some(1024 * 1024 * 1024),
+            sample_limit: Some(1024 * 1024 * 1024),
             ..Default::default()
         };
         let mut decoder = JxlDecoderInner::new(opts);
@@ -2006,7 +2006,7 @@ pub(crate) mod tests {
 
         let opts = JxlDecoderOptions {
             scan_frames_only: true,
-            pixel_limit: Some(1024 * 1024 * 1024),
+            sample_limit: Some(1024 * 1024 * 1024),
             ..Default::default()
         };
         let mut decoder = JxlDecoderInner::new(opts);

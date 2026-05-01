@@ -50,13 +50,13 @@ impl CodestreamParser {
             let xsize = file_header.size.xsize() as usize;
             let ysize = file_header.size.ysize() as usize;
             check_size_limit(
-                decode_options.pixel_limit,
+                decode_options.sample_limit,
                 (xsize, ysize),
                 file_header.image_metadata.extra_channel_info.len(),
             )?;
             if let Some(preview) = &file_header.image_metadata.preview {
                 check_size_limit(
-                    decode_options.pixel_limit,
+                    decode_options.sample_limit,
                     (preview.xsize() as usize, preview.ysize() as usize),
                     file_header.image_metadata.extra_channel_info.len(),
                 )?;
@@ -227,7 +227,7 @@ impl CodestreamParser {
             let mut frame_header = FrameHeader::read_unconditional(&(), &mut br, &nonserialized)?;
             frame_header.postprocess(&nonserialized);
             check_size_limit(
-                decode_options.pixel_limit,
+                decode_options.sample_limit,
                 frame_header.size(),
                 frame_header.num_extra_channels as usize,
             )?;

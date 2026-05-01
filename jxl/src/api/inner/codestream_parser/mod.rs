@@ -254,7 +254,7 @@ impl CodestreamParser {
 
             let decode_start = self.frame_starts[decode_start_frame_index];
             let seek_target = VisibleFrameSeekTarget {
-                decode_start_file_offset: decode_start.file_offset,
+                decode_start_file_offset: decode_start.file_offset as u64,
                 remaining_in_box: decode_start.remaining_in_box,
                 visible_frames_to_skip: self
                     .visible_frame_index
