@@ -369,6 +369,8 @@ pub struct FullModularImage {
     ready_buffers: BTreeSet<(usize, usize)>,
     // Whether each channel is used or not by the render pipeline.
     pipeline_used_channels: Vec<bool>,
+    log_group_dim: usize,
+    num_groups: (usize, usize),
 }
 
 impl FullModularImage {
@@ -445,6 +447,8 @@ impl FullModularImage {
                 ready_buffers_dry_run: BTreeSet::new(),
                 ready_buffers: BTreeSet::new(),
                 pipeline_used_channels: vec![],
+                log_group_dim: frame_header.log_group_dim(),
+                num_groups: frame_header.size_groups(),
             });
         }
 
@@ -615,6 +619,8 @@ impl FullModularImage {
             ready_buffers_dry_run: BTreeSet::new(),
             ready_buffers: BTreeSet::new(),
             pipeline_used_channels: vec![],
+            log_group_dim: frame_header.log_group_dim(),
+            num_groups: frame_header.size_groups(),
         })
     }
 
@@ -733,11 +739,15 @@ impl FullModularImage {
         pass_to_pipeline: &mut dyn FnMut(usize, usize, bool, Option<Image<i32>>) -> Result<()>,
     ) -> Result<()> {
         if let Some(chan) = self.buffer_info[buf].info.output_channel_idx {
-            let is_final =
-                self.buffer_info[buf].buffer_grid[grid].get_status() == BUFFER_STATUS_FINAL_RENDER;
+            let grid_is_none = self.buffer_info[buf].grid_kind == ModularGridKind::None;
+            let grid_idx = if grid_is_none { 0 } else { grid };
+            let is_final = self.buffer_info[buf].buffer_grid[grid_idx].get_status()
+                == BUFFER_STATUS_FINAL_RENDER;
             let all_final = self.buffers_for_channels.iter().all(|x| {
-                self.buffer_info[*x].buffer_grid[grid].get_status() == BUFFER_STATUS_FINAL_RENDER
+                self.buffer_info[*x].buffer_grid[grid_idx].get_status()
+                    == BUFFER_STATUS_FINAL_RENDER
             });
+
             let channels: SmallVec<usize, 3> = if chan == 0 && self.modular_color_channels == 1 {
                 (0..3).filter(|x| self.pipeline_used_channels[*x]).collect()
             } else {
@@ -755,11 +765,39 @@ impl FullModularImage {
                 }
             } else {
                 debug!("Rendering channel {chan:?}, grid position {grid}");
-                let buf = self.buffer_info[buf].buffer_grid[grid].get_buffer(all_final)?;
-                for c in channels[1..].iter() {
-                    pass_to_pipeline(*c, grid, is_final, Some(buf.data.try_clone()?))?;
+
+                let modular_buf = self.buffer_info[buf].buffer_grid[grid_idx]
+                    .get_buffer(all_final && !grid_is_none)?;
+                let mut image = modular_buf.data;
+
+                if grid_is_none {
+                    let (shift_x, shift_y) = self.buffer_info[buf].info.shift.unwrap_or((0, 0));
+                    let log_group_dim = self.log_group_dim;
+                    let gx = grid % self.num_groups.0;
+                    let gy = grid / self.num_groups.0;
+
+                    let rect = Rect {
+                        origin: (gx << log_group_dim, gy << log_group_dim),
+                        size: (1 << log_group_dim, 1 << log_group_dim),
+                    };
+                    let rect = rect.downsample((shift_x as u8, shift_y as u8));
+                    let full_size = self.buffer_info[buf].buffer_grid[grid_idx].size;
+                    let rect = rect.clip(full_size);
+
+                    if rect.origin != (0, 0) || rect.size != full_size {
+                        let mut cropped = Image::new(rect.size)?;
+                        let src_view = image.get_rect(rect);
+                        for y in 0..rect.size.1 {
+                            cropped.row_mut(y).copy_from_slice(src_view.row(y));
+                        }
+                        image = cropped;
+                    }
                 }
-                pass_to_pipeline(channels[0], grid, is_final, Some(buf.data))?;
+
+                for c in channels[1..].iter() {
+                    pass_to_pipeline(*c, grid, is_final, Some(image.try_clone()?))?;
+                }
+                pass_to_pipeline(channels[0], grid, is_final, Some(image))?;
             }
         }
         Ok(())
@@ -885,7 +923,13 @@ impl FullModularImage {
 
         // Pass all the output buffers to the render pipeline.
         for (buf, grid) in buffers_to_output {
-            self.maybe_output(buf, grid, dry_run, pass_to_pipeline)?;
+            if self.buffer_info[buf].grid_kind == ModularGridKind::None {
+                for g in 0..self.num_groups.0 * self.num_groups.1 {
+                    self.maybe_output(buf, g, dry_run, pass_to_pipeline)?;
+                }
+            } else {
+                self.maybe_output(buf, grid, dry_run, pass_to_pipeline)?;
+            }
         }
 
         Ok(())
