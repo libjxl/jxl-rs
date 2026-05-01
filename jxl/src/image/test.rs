@@ -67,6 +67,20 @@ fn rect_basic() -> Result<()> {
     Ok(())
 }
 
+#[cfg(miri)]
+#[test]
+fn image_from_raw_with_misaligned_offset_triggers_ub() -> Result<()> {
+    use super::OwnedRawImage;
+    // Issue: Image<T>::from_raw checks the base RawImageBuffer alignment, but it does not check
+    // that OwnedRawImage's byte offset is aligned for T. This safe construction leaves the
+    // allocation itself 4-byte aligned while making row(0) start one byte later; Image::<u32>::row
+    // then creates a misaligned &[u32], which Miri reports as UB.
+    let raw = OwnedRawImage::new_zeroed_with_padding((4, 1), (1, 0), (1, 0))?;
+    let image = Image::<u32>::from_raw(raw);
+    let _ = image.row(0);
+    Ok(())
+}
+
 fn f64_conversions<T: ImageDataType + Eq + for<'a> Arbitrary<'a>>() {
     arbtest::arbtest(|u| {
         let t = T::arbitrary(u)?;
