@@ -88,6 +88,10 @@ pub(super) struct CodestreamParser {
     // group indices that *might* have new renderable data.
     candidate_hf_sections: HashSet<usize>,
 
+    /// Set when `decode_and_render_hf_groups` actually writes to the output
+    /// buffer (i.e. `regions` is non-empty). Cleared by `flush_pixels`.
+    pub(super) pixels_dirty: bool,
+
     pub(super) has_more_frames: bool,
 
     header_needed_bytes: Option<u64>,
@@ -154,6 +158,7 @@ impl CodestreamParser {
             hf_global_section: None,
             hf_sections: vec![],
             candidate_hf_sections: HashSet::new(),
+            pixels_dirty: false,
             has_more_frames: true,
             header_needed_bytes: None,
             scanned_frames: Vec::new(),

@@ -127,7 +127,7 @@ impl CodestreamParser {
                     frame.decode_lf_group(0, &mut br)?;
                     frame.decode_hf_global(&mut br)?;
                     frame.finalize_lf()?;
-                    frame.decode_and_render_hf_groups(
+                    self.pixels_dirty |= frame.decode_and_render_hf_groups(
                         output_buffers,
                         pixel_format,
                         vec![(0, vec![(0, br)])],
@@ -226,7 +226,7 @@ impl CodestreamParser {
                     self.candidate_hf_sections.clear();
                 }
 
-                frame.decode_and_render_hf_groups(
+                self.pixels_dirty |= frame.decode_and_render_hf_groups(
                     output_buffers,
                     pixel_format,
                     group_readers,
@@ -245,7 +245,7 @@ impl CodestreamParser {
         }
 
         if do_flush && !called_render_hf && frame.can_do_early_rendering() {
-            frame.decode_and_render_hf_groups(
+            self.pixels_dirty |= frame.decode_and_render_hf_groups(
                 output_buffers,
                 pixel_format,
                 vec![],
