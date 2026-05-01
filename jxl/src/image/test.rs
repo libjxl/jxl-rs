@@ -67,6 +67,18 @@ fn rect_basic() -> Result<()> {
     Ok(())
 }
 
+#[test]
+#[should_panic(expected = "image byte offset must be aligned to element size")]
+fn image_from_raw_rejects_misaligned_offset() {
+    use super::OwnedRawImage;
+    // Regression test: Image<T>::from_raw used to check the base RawImageBuffer alignment but not
+    // OwnedRawImage's byte offset. This safe construction leaves the allocation itself 4-byte
+    // aligned while making row(0) start one byte later; accepting it would let Image::<u32>::row
+    // create a misaligned &[u32], which is UB.
+    let raw = OwnedRawImage::new_zeroed_with_padding((4, 1), (1, 0), (1, 0)).unwrap();
+    let _ = Image::<u32>::from_raw(raw);
+}
+
 fn f64_conversions<T: ImageDataType + Eq + for<'a> Arbitrary<'a>>() {
     arbtest::arbtest(|u| {
         let t = T::arbitrary(u)?;
