@@ -385,6 +385,6 @@ impl Frame {
             )?;
         }
 
-        Ok(true)
+        Ok(!regions.is_empty())
     }
 }
