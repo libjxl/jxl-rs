@@ -193,8 +193,11 @@ impl JxlDecoder<WithImageInfo> {
 
     /// Draws all the pixels we have data for. This is useful for i.e. previewing LF frames.
     ///
+    /// Returns `true` if any new pixels were written to `buffers` since the
+    /// previous call to `flush_pixels`; `false` if nothing new was rendered.
+    ///
     /// Note: see `process` for alignment requirements for the buffer data.
-    pub fn flush_pixels(&mut self, buffers: &mut [JxlOutputBuffer<'_>]) -> Result<()> {
+    pub fn flush_pixels(&mut self, buffers: &mut [JxlOutputBuffer<'_>]) -> Result<bool> {
         self.inner.flush_pixels(buffers)
     }
 
@@ -276,8 +279,11 @@ impl JxlDecoder<WithFrameInfo> {
 
     /// Draws all the pixels we have data for.
     ///
+    /// Returns `true` if any new pixels were written to `buffers` since the
+    /// previous call to `flush_pixels`; `false` if nothing new was rendered.
+    ///
     /// Note: see `process` for alignment requirements for the buffer data.
-    pub fn flush_pixels(&mut self, buffers: &mut [JxlOutputBuffer<'_>]) -> Result<()> {
+    pub fn flush_pixels(&mut self, buffers: &mut [JxlOutputBuffer<'_>]) -> Result<bool> {
         self.inner.flush_pixels(buffers)
     }
 

@@ -274,14 +274,14 @@ impl Frame {
         output_buffers: &mut [JxlOutputBuffer<'_>],
         changed_regions: Option<&[Rect]>,
         output_profile: &JxlColorProfile,
-    ) -> Result<()> {
+    ) -> Result<bool> {
         if self.header.needs_blending() {
-            return Ok(());
+            return Ok(false);
         }
         if !((self.header.has_lf_frame() && self.header.frame_type == FrameType::RegularFrame)
             || (self.header.frame_type == FrameType::LFFrame && self.header.lf_level == 1))
         {
-            return Ok(());
+            return Ok(false);
         }
 
         let output_color_info = OutputColorInfo::from_header(&self.decoder_state.file_header)?;
@@ -293,18 +293,18 @@ impl Frame {
                 output_color_info.luminances,
             )
         }) else {
-            return Ok(());
+            return Ok(false);
         };
 
         if output_tf.is_linear() {
-            return Ok(());
+            return Ok(false);
         }
 
         let image_metadata = &self.decoder_state.file_header.image_metadata;
         if !image_metadata.xyb_encoded || !image_metadata.extra_channel_info.is_empty() {
             // We only render LF frames for XYB VarDCT images with no extra channels.
             // TODO(veluca): we might want to relax this to "no alpha".
-            return Ok(());
+            return Ok(false);
         }
         let color_type = pixel_format.color_type;
         let data_format = pixel_format.color_data_format.unwrap();
@@ -316,12 +316,12 @@ impl Frame {
             )
         {
             // We only render color data, and only to 3- or 4- channel output buffers.
-            return Ok(());
+            return Ok(false);
         }
         // We already have a fully-rendered frame and we are not requesting to re-render
         // specific regions.
         if self.decoder_state.lf_frame_was_rendered && changed_regions.is_none() {
-            return Ok(());
+            return Ok(false);
         }
         if changed_regions.is_none() {
             self.decoder_state.lf_frame_was_rendered = true;
@@ -385,6 +385,6 @@ impl Frame {
             )?;
         }
 
-        Ok(())
+        Ok(true)
     }
 }

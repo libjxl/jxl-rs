@@ -135,6 +135,9 @@ impl Frame {
         Ok(())
     }
 
+    /// Returns `true` if any pixels were written to the output buffers during
+    /// this call, `false` if the call was a no-op for the buffers (e.g. no new
+    /// HF groups, no flush work, or the render pipeline was not yet ready).
     pub fn decode_and_render_hf_groups(
         &mut self,
         api_buffers: &mut Option<&mut [JxlOutputBuffer<'_>]>,
@@ -142,12 +145,12 @@ impl Frame {
         groups: Vec<(usize, Vec<(usize, BitReader)>)>,
         do_flush: bool,
         output_profile: &JxlColorProfile,
-    ) -> Result<()> {
+    ) -> Result<bool> {
         if self.render_pipeline.is_none() || self.lf_global.is_none() {
             assert_eq!(groups.iter().map(|x| x.1.len()).sum::<usize>(), 0);
             // We don't yet have any output ready (as the pipeline would be initialized otherwise),
             // so exit without doing anything.
-            return Ok(());
+            return Ok(false);
         }
 
         let mut buffers: Vec<Option<JxlOutputBuffer>> = Vec::new();
@@ -312,18 +315,19 @@ impl Frame {
         }
 
         let regions = buffer_splitter.into_changed_regions();
+        let rendered = !regions.is_empty() && self.header.frame_type == FrameType::RegularFrame;
 
         self.reference_frame_data = reference_frame_data;
         self.lf_frame_data = lf_frame_data;
 
         if self.header.frame_type == FrameType::LFFrame && self.header.lf_level == 1 {
             if do_flush && let Some(buffers) = api_buffers {
-                self.maybe_preview_lf_frame(
+                return self.maybe_preview_lf_frame(
                     pixel_format,
                     buffers,
                     Some(&regions[..]),
                     output_profile,
-                )?;
+                );
             } else if self.incomplete_groups == 0 {
                 // If we are not requesting another flush at the end of the LF frame, we
                 // probably have a partial render. Ensure we re-render the LF frame when
@@ -332,7 +336,7 @@ impl Frame {
             }
         }
 
-        Ok(())
+        Ok(rendered)
     }
 
     #[allow(clippy::too_many_arguments)]
