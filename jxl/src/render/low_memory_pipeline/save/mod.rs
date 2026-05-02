@@ -95,7 +95,7 @@ impl SaveStage {
                 } else {
                     px.to_be_bytes()
                 };
-                buf.write_bytes($y, $x, &px_bytes);
+                buf.row_mut($y)[$x..][..px_bytes.len()].copy_from_slice(&px_bytes);
             };
         }
 
