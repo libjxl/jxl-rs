@@ -3,7 +3,7 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-use std::{collections::BTreeMap, io::IoSliceMut};
+use std::{collections::HashMap, io::IoSliceMut};
 
 use crate::container::frame_index::FrameIndexBox;
 use crate::error::{Error, Result};
@@ -30,17 +30,23 @@ pub enum ParseState {
         remaining: u64,
         buf: Vec<u8>,
         idx: u32,
+        last: bool,
     },
     /// After the last codestream box, no more container bytes: no further codestream in file.
     Exhausted,
+}
+
+struct BufferedOooJxlp {
+    payload: Vec<u8>,
+    is_last: bool,
 }
 
 #[derive(Default)]
 struct OooJxlpState {
     /// From `ftyp`: `0` = `jxlp` boxes must be in order; `1` = out-of-order `jxlp` allowed.
     file_format_version: u32,
-    /// Out-of-order `jxlp` payloads keyed by index field (MSB = is_last).
-    buffered: BTreeMap<u32, Vec<u8>>,
+    /// Out-of-order `jxlp` payloads keyed by logical chunk index (low 31 bits of the box index).
+    buffered: HashMap<u32, BufferedOooJxlp>,
     ftyp_seen: bool,
 }
 
@@ -93,16 +99,16 @@ impl BoxParser {
         let Some(next) = self.next_expected_jxlp_index() else {
             return;
         };
-        let (payload, box_type) = if let Some(p) = self.ooo_jxlp.buffered.remove(&next) {
-            (p, CodestreamBoxType::Jxlp(next))
-        } else if let Some(p) = self.ooo_jxlp.buffered.remove(&(next | 0x8000_0000)) {
-            (p, CodestreamBoxType::LastJxlp)
-        } else {
+        let Some(entry) = self.ooo_jxlp.buffered.remove(&next) else {
             return;
         };
-        let len = payload.len() as u64;
-        self.box_buffer.inject_bytes_front(payload);
-        self.box_type = box_type;
+        let len = entry.payload.len() as u64;
+        self.box_buffer.inject_bytes_front(entry.payload);
+        self.box_type = if entry.is_last {
+            CodestreamBoxType::LastJxlp
+        } else {
+            CodestreamBoxType::Jxlp(next)
+        };
         self.state = ParseState::CodestreamBox(len);
     }
 
@@ -229,6 +235,7 @@ impl BoxParser {
                     mut remaining,
                     mut buf,
                     idx,
+                    last,
                 } => {
                     let num = remaining.min(usize::MAX as u64) as usize;
                     if !self.box_buffer.is_empty() {
@@ -248,13 +255,20 @@ impl BoxParser {
                         remaining -= read as u64;
                     }
                     if remaining == 0 {
-                        self.ooo_jxlp.buffered.insert(idx, buf);
+                        self.ooo_jxlp.buffered.insert(
+                            idx,
+                            BufferedOooJxlp {
+                                payload: buf,
+                                is_last: last,
+                            },
+                        );
                         self.state = ParseState::BoxNeeded;
                     } else {
                         self.state = ParseState::BufferingOooJxlp {
                             remaining,
                             buf,
                             idx,
+                            last,
                         };
                     }
                 }
@@ -343,7 +357,7 @@ impl BoxParser {
                                     if self.ooo_jxlp.file_format_version < 1 {
                                         return Err(Error::InvalidBox);
                                     }
-                                    if self.ooo_jxlp.buffered.contains_key(&index) {
+                                    if self.ooo_jxlp.buffered.contains_key(&idx) {
                                         return Err(Error::InvalidBox);
                                     }
                                     if content_len == u64::MAX {
@@ -352,7 +366,8 @@ impl BoxParser {
                                     self.state = ParseState::BufferingOooJxlp {
                                         remaining: content_len,
                                         buf: Vec::new(),
-                                        idx: index,
+                                        idx,
+                                        last,
                                     };
                                     self.box_buffer.consume(min_len + extra_len);
                                     continue;
