@@ -147,6 +147,12 @@ impl JxlDecoderInner {
             Ok(()) | Err(crate::error::Error::OutOfBounds(_)) => {
                 let updated = self.codestream_parser.pixels_dirty;
                 self.codestream_parser.pixels_dirty = false;
+                // Clear the modular-side "real decode happened" flag so that
+                // subsequent flushes only report Ok(true) when new real decode
+                // landed in the buffers since this call.
+                if let Some(frame) = self.codestream_parser.frame.as_mut() {
+                    frame.clear_modular_real_decode_since_last_flush();
+                }
                 Ok(updated)
             }
             Err(e) => Err(e),

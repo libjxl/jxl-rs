@@ -315,7 +315,21 @@ impl Frame {
         }
 
         let regions = buffer_splitter.into_changed_regions();
-        let rendered = !regions.is_empty() && self.header.frame_type == FrameType::RegularFrame;
+        // Only gate modular files. VarDCT files write pixels directly via
+        // `decode_hf_group` and don't go through `read_section0`/`read_stream`,
+        // so `real_decode_since_last_flush` would always be false for them and
+        // we'd suppress legitimate progressive renders.
+        let modular_gate_passed = if self.header.encoding == Encoding::Modular {
+            self.lf_global
+                .as_ref()
+                .map(|lf| lf.modular_global.real_decode_since_last_flush())
+                .unwrap_or(false)
+        } else {
+            true
+        };
+        let rendered = !regions.is_empty()
+            && modular_gate_passed
+            && self.header.frame_type == FrameType::RegularFrame;
 
         self.reference_frame_data = reference_frame_data;
         self.lf_frame_data = lf_frame_data;

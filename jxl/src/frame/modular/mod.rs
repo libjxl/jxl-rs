@@ -371,9 +371,26 @@ pub struct FullModularImage {
     pipeline_used_channels: Vec<bool>,
     log_group_dim: usize,
     num_groups: (usize, usize),
+    // True if real decoded modular data has reached the buffers since the
+    // last `flush_pixels` cleared this. Set by `read_section0` (when newly
+    // decoded section-0 channel count increases) and `read_stream` (after a
+    // successful subbitstream decode into a section that has buffers). Used
+    // by `decode_and_render_hf_groups` to gate the `rendered` return so that
+    // pure zero-fill flushes (which would render zero placeholders through
+    // the pipeline before any real data is available) do not falsely report
+    // new content. Cleared by `flush_pixels` after consuming `pixels_dirty`.
+    real_decode_since_last_flush: bool,
 }
 
 impl FullModularImage {
+    pub fn real_decode_since_last_flush(&self) -> bool {
+        self.real_decode_since_last_flush
+    }
+
+    pub fn clear_real_decode_since_last_flush(&mut self) {
+        self.real_decode_since_last_flush = false;
+    }
+
     pub fn can_do_partial_render(&self) -> bool {
         self.can_do_partial_render
     }
@@ -449,6 +466,7 @@ impl FullModularImage {
                 pipeline_used_channels: vec![],
                 log_group_dim: frame_header.log_group_dim(),
                 num_groups: frame_header.size_groups(),
+                real_decode_since_last_flush: false,
             });
         }
 
@@ -621,6 +639,7 @@ impl FullModularImage {
             pipeline_used_channels: vec![],
             log_group_dim: frame_header.log_group_dim(),
             num_groups: frame_header.size_groups(),
+            real_decode_since_last_flush: false,
         })
     }
 
@@ -631,6 +650,7 @@ impl FullModularImage {
         br: &mut BitReader,
         allow_partial: bool,
     ) -> Result<()> {
+        let prev_decoded_section0_channels = self.decoded_section0_channels;
         let mut decoded_if_partial = 0;
         let ret = with_buffers(
             &self.buffer_info,
@@ -659,6 +679,9 @@ impl FullModularImage {
             (Err(e), false) => {
                 return Err(e);
             }
+        }
+        if self.decoded_section0_channels > prev_decoded_section0_channels {
+            self.real_decode_since_last_flush = true;
         }
 
         for b in self.section_buffer_indices[0]
@@ -727,6 +750,13 @@ impl FullModularImage {
                 Ok(())
             },
         )?;
+        // Reached here only if `decode_modular_subbitstream` returned Ok above
+        // (the `?` short-circuits on partial-decode errors). Only signal real
+        // decode if the section actually has buffers — empty/meta sections
+        // pass through here as no-ops and do not produce visible content.
+        if !self.section_buffer_indices[section_id].is_empty() {
+            self.real_decode_since_last_flush = true;
+        }
 
         Ok(())
     }

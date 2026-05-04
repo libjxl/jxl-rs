@@ -219,6 +219,16 @@ pub struct Frame {
 }
 
 impl Frame {
+    /// Reset the modular "real decode happened since last flush" flag.
+    /// Called from `flush_pixels` after the consumer has read `pixels_dirty`,
+    /// so that the gate in `decode_and_render_hf_groups` only fires for
+    /// decode activity that follows this flush.
+    pub fn clear_modular_real_decode_since_last_flush(&mut self) {
+        if let Some(lf) = self.lf_global.as_mut() {
+            lf.modular_global.clear_real_decode_since_last_flush();
+        }
+    }
+
     pub fn toc(&self) -> &Toc {
         &self.toc
     }
