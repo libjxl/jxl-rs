@@ -218,8 +218,11 @@ impl Frame {
         modular_global.set_pipeline_used_channels(pipeline!(self, p, p.used_channel_mask()));
 
         // STEP 1: if we are requesting a flush, and did not flush before, mark modular channels
-        // as having been decoded as 0.
-        if !self.was_flushed_once && do_flush {
+        // as having been decoded as 0 if some data has been decoded.
+        if !self.was_flushed_once
+            && do_flush
+            && (modular_global.has_decoded_data() || self.header.encoding == Encoding::VarDCT)
+        {
             self.was_flushed_once = true;
             self.groups_to_flush.extend(0..self.header.num_groups());
             modular_global.zero_fill_empty_channels(
