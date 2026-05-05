@@ -238,6 +238,8 @@ pub fn decode_frames<In: JxlBitstreamInputExt>(
 
         let mut partial_renders = vec![];
 
+        let mut has_rendered_data = false;
+
         let mut decoder_with_frame_info = 'partial: loop {
             match input
                 .with_capped_size(render_interval, |inp| decoder_with_image_info.process(inp))?
@@ -260,13 +262,15 @@ pub fn decode_frames<In: JxlBitstreamInputExt>(
                     // If we have more data but we're feeding it slowly, save the partial
                     // render and retry.
                     if render_interval.is_some() && input.available_bytes()? > 0 {
-                        fallback.flush_pixels(&mut output_bufs)?;
-                        partial_renders.push(
-                            outputs
-                                .iter()
-                                .map(|x| x.try_clone())
-                                .collect::<Result<_, _>>()?,
-                        );
+                        has_rendered_data |= fallback.flush_pixels(&mut output_bufs)?;
+                        if has_rendered_data {
+                            partial_renders.push(
+                                outputs
+                                    .iter()
+                                    .map(|x| x.try_clone())
+                                    .collect::<Result<_, _>>()?,
+                            );
+                        }
                         decoder_with_image_info = fallback;
                         continue 'partial;
                     } else if allow_partial_files {
@@ -308,13 +312,15 @@ pub fn decode_frames<In: JxlBitstreamInputExt>(
                     // If we have more data but we're feeding it slowly, save the partial
                     // render and retry.
                     if render_interval.is_some() && input.available_bytes()? > 0 {
-                        fallback.flush_pixels(&mut output_bufs)?;
-                        partial_renders.push(
-                            outputs
-                                .iter()
-                                .map(|x| x.try_clone())
-                                .collect::<Result<_, _>>()?,
-                        );
+                        has_rendered_data |= fallback.flush_pixels(&mut output_bufs)?;
+                        if has_rendered_data {
+                            partial_renders.push(
+                                outputs
+                                    .iter()
+                                    .map(|x| x.try_clone())
+                                    .collect::<Result<_, _>>()?,
+                            );
+                        }
                         decoder_with_frame_info = fallback;
                         continue 'partial;
                     } else if allow_partial_files {
