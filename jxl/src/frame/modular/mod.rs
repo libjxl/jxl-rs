@@ -358,8 +358,8 @@ pub struct FullModularImage {
     modular_color_channels: usize,
     can_do_partial_render: bool,
     can_do_early_partial_render: bool,
-    decoded_section0_channels: usize,
     needed_section0_channels_for_early_render: usize,
+    has_decoded_data: bool,
     global_header: Option<GroupHeader>,
     buffers_for_channels: Vec<usize>,
     // Buffers to _start rendering from_ on the next call to process_output.
@@ -380,8 +380,6 @@ impl FullModularImage {
 
     pub fn can_do_early_partial_render(&self) -> bool {
         self.can_do_early_partial_render
-            // Avoid green martians
-            && self.decoded_section0_channels >= self.needed_section0_channels_for_early_render
     }
 
     pub fn set_pipeline_used_channels(&mut self, used: &[bool]) {
@@ -440,8 +438,8 @@ impl FullModularImage {
                 modular_color_channels,
                 can_do_partial_render: true,
                 can_do_early_partial_render: false,
-                decoded_section0_channels: 0,
                 needed_section0_channels_for_early_render: 0,
+                has_decoded_data: false,
                 global_header: None,
                 buffers_for_channels: vec![],
                 ready_buffers_dry_run: BTreeSet::new(),
@@ -611,9 +609,9 @@ impl FullModularImage {
             can_do_partial_render: !has_problematic_palette_transform,
             can_do_early_partial_render: !has_problematic_palette_transform
                 && has_squeeze_transform,
-            decoded_section0_channels: 0,
             needed_section0_channels_for_early_render: buffers_for_channels.len()
                 + num_meta_channels,
+            has_decoded_data: false,
             global_header: Some(header),
             buffers_for_channels,
             ready_buffers_dry_run: BTreeSet::new(),
@@ -631,6 +629,7 @@ impl FullModularImage {
         br: &mut BitReader,
         allow_partial: bool,
     ) -> Result<()> {
+        let allow_partial = allow_partial && self.can_do_early_partial_render;
         let mut decoded_if_partial = 0;
         let ret = with_buffers(
             &self.buffer_info,
@@ -648,23 +647,20 @@ impl FullModularImage {
             },
         );
 
-        match (ret, allow_partial) {
-            (Ok(_), _) => {
-                // Decoded section completely.
-                self.decoded_section0_channels = self.section_buffer_indices[0].len();
-            }
-            (Err(_), true) => {
-                self.decoded_section0_channels = decoded_if_partial;
-            }
+        let num_decoded = match (ret, allow_partial) {
+            // Decoded section completely.
+            (Ok(_), _) => self.section_buffer_indices[0].len(),
+            (Err(_), true) => decoded_if_partial,
             (Err(e), false) => {
                 return Err(e);
             }
-        }
+        };
 
-        for b in self.section_buffer_indices[0]
-            .iter()
-            .take(self.decoded_section0_channels)
-        {
+        // Avoid green martians
+        self.has_decoded_data |=
+            num_decoded >= self.needed_section0_channels_for_early_render && num_decoded > 0;
+
+        for b in self.section_buffer_indices[0].iter().take(num_decoded) {
             if self.buffer_info[*b].buffer_grid[0].get_status() == BUFFER_STATUS_FINAL_RENDER {
                 continue;
             }
@@ -727,6 +723,8 @@ impl FullModularImage {
                 Ok(())
             },
         )?;
+
+        self.has_decoded_data |= !self.section_buffer_indices[section_id].is_empty();
 
         Ok(())
     }
@@ -950,7 +948,7 @@ impl FullModularImage {
         chan: usize,
         pass_to_pipeline: &mut dyn FnMut(usize, usize, bool, Image<i32>) -> Result<()>,
     ) -> Result<()> {
-        if !self.can_do_partial_render() {
+        if !self.can_do_partial_render() || !self.has_decoded_data {
             return Ok(());
         }
         let buf_idx = self.buffers_for_channels[chan];
@@ -1005,6 +1003,10 @@ impl FullModularImage {
         }
 
         Ok(())
+    }
+
+    pub fn has_decoded_data(&self) -> bool {
+        self.has_decoded_data
     }
 }
 
