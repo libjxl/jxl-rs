@@ -63,20 +63,6 @@ pub struct Histograms {
     lz77_params: Lz77Params,
     lz77_length_uint: Option<HybridUint>,
     context_map: Vec<u8>,
-    /// Cluster index used for LZ77 distance reads.
-    ///
-    /// Captured at `Histograms::decode` time as the original last entry of
-    /// `context_map`, mirroring libjxl's
-    /// `code->lz77.nonserialized_distance_context = context_map->back()`
-    /// (`dec_ans.cc:362`).
-    ///
-    /// Stored separately because callers may pad `context_map` with zeros
-    /// after decode (see `Frame::decode` calling `Histograms::resize` to
-    /// avoid bounds checks at AC `ZeroDensityContext` lookup sites). That
-    /// padding moves the original last entry, so reading
-    /// `context_map.last()` after a resize would silently return a pad byte
-    /// (0) and route LZ77 distance ANS reads through the wrong histogram.
-    ///
     /// Explicitly stored: context_map can get padded so we cannot use .last()
     lz_dist_cluster: u8,
     // TODO(veluca): figure out why this is unused.
@@ -610,9 +596,6 @@ impl Histograms {
 
         // Capture the LZ77 distance cluster BEFORE any later resize() can pad
         // context_map with zeros (see Histograms::resize and Frame::decode).
-        // Mirrors libjxl's
-        // ANSCode::lz77.nonserialized_distance_context = context_map->back();
-        // (dec_ans.cc:362).
         let lz_dist_cluster = if lz77_params.enabled {
             *context_map.last().unwrap()
         } else {
