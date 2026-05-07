@@ -77,7 +77,7 @@ pub struct Histograms {
     /// `context_map.last()` after a resize would silently return a pad byte
     /// (0) and route LZ77 distance ANS reads through the wrong histogram.
     ///
-    /// Set to 0 when LZ77 is disabled.
+    /// Explicitly stored: context_map can get padded so we cannot use .last()
     lz_dist_cluster: u8,
     // TODO(veluca): figure out why this is unused.
     #[allow(dead_code)]
