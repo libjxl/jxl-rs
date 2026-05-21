@@ -101,7 +101,7 @@ pub fn perform_blending<T: AsRef<[f32]>, V: AsMut<[f32]>>(
             }
             PatchBlendMode::AlphaWeightedAddBelow => {
                 if i == alpha {
-                    tmp[3 + i].copy_from_slice(fg[3 + i].as_ref());
+                    tmp[3 + i].copy_from_slice(&fg[3 + i].as_ref()[..xsize]);
                 } else if clamp {
                     for x in 0..xsize {
                         tmp[3 + i][x] = fg[3 + i].as_ref()[x]
@@ -127,7 +127,7 @@ pub fn perform_blending<T: AsRef<[f32]>, V: AsMut<[f32]>>(
                 }
             }
             PatchBlendMode::Replace => {
-                tmp[3 + i].copy_from_slice(fg[3 + i].as_ref());
+                tmp[3 + i].copy_from_slice(&fg[3 + i].as_ref()[..xsize]);
             }
             PatchBlendMode::None => {
                 tmp[3 + i].copy_from_slice(bg[3 + i].as_mut());
@@ -187,7 +187,7 @@ pub fn perform_blending<T: AsRef<[f32]>, V: AsMut<[f32]>>(
         PatchBlendMode::BlendAbove => {
             if !has_alpha {
                 for c in 0..3 {
-                    tmp[c].copy_from_slice(fg[c].as_ref());
+                    tmp[c].copy_from_slice(&fg[c].as_ref()[..xsize]);
                 }
             } else if extra_channel_info[alpha].alpha_associated() {
                 for x in 0..xsize {
@@ -247,7 +247,7 @@ pub fn perform_blending<T: AsRef<[f32]>, V: AsMut<[f32]>>(
         }
         PatchBlendMode::Replace => {
             for c in 0..3 {
-                tmp[c].copy_from_slice(fg[c].as_ref());
+                tmp[c].copy_from_slice(&fg[c].as_ref()[..xsize]);
             }
         }
         PatchBlendMode::None => {
