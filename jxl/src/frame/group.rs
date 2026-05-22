@@ -327,6 +327,16 @@ impl<'a, 'b> PassInfo<'a, 'b> {
         debug!(?pass);
         let histogram_index = br.read(num_histo_bits as usize)? as usize;
         debug!(?histogram_index);
+        // `num_histo_bits` is `ceil_log2(num_histograms)`, so the bitstream can
+        // legally encode values >= `num_histograms` when it is not a power of
+        // two. Reject those here, otherwise downstream indexing into the
+        // per-pass histogram context map can go out of bounds.
+        if histogram_index >= hf_global.num_histograms as usize {
+            return Err(Error::InvalidHistogramIndex(
+                histogram_index,
+                hf_global.num_histograms as usize,
+            ));
+        }
         let reader = Some(SymbolReader::new(
             &hf_global.passes[pass].histograms,
             br,
