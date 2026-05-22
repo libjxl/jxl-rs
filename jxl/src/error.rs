@@ -237,6 +237,8 @@ pub enum Error {
     HFBlockOutOfBounds,
     #[error("Invalid AC: nonzeros {0} is too large for {1} 8x8 blocks")]
     InvalidNumNonZeros(usize, usize),
+    #[error("Invalid AC: histogram index {0} is out of bounds (num_histograms = {1})")]
+    InvalidHistogramIndex(usize, usize),
     #[error("Invalid AC: {0} nonzeros after decoding block")]
     EndOfBlockResidualNonZeros(usize),
     #[error("Unknown transfer function for ICC profile")]
