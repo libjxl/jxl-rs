@@ -63,6 +63,8 @@ pub struct Histograms {
     lz77_params: Lz77Params,
     lz77_length_uint: Option<HybridUint>,
     context_map: Vec<u8>,
+    /// Explicitly stored: context_map can get padded so we cannot use .last()
+    lz_dist_cluster: u8,
     // TODO(veluca): figure out why this is unused.
     #[allow(dead_code)]
     log_alpha_size: usize,
@@ -243,7 +245,7 @@ impl SymbolReader {
             let min_length = min_length.unwrap();
             let dist_multiplier = image_width.unwrap_or(0) as u32;
 
-            let lz_dist_cluster = *histograms.context_map.last().unwrap() as usize;
+            let lz_dist_cluster = histograms.lz_dist_cluster as usize;
             let lz_conf = &histograms.uint_configs[lz_dist_cluster];
             let is_rle = histograms.codes.single_symbol(lz_dist_cluster) == Some(1)
                 && lz_conf.is_split_exponent_zero();
@@ -370,7 +372,7 @@ impl SymbolReader {
                     return 0;
                 };
 
-                let lz_dist_cluster = *histograms.context_map.last().unwrap() as usize;
+                let lz_dist_cluster = histograms.lz_dist_cluster as usize;
                 let distance_sym = match &histograms.codes {
                     Codes::Huffman(hc) => hc.read(br, lz_dist_cluster),
                     Codes::Ans(ans) => self.ans_reader.read(ans, br, lz_dist_cluster),
@@ -592,6 +594,14 @@ impl Histograms {
         };
         assert_eq!(context_map.len(), num_contexts);
 
+        // Capture the LZ77 distance cluster BEFORE any later resize() can pad
+        // context_map with zeros (see Histograms::resize and Frame::decode).
+        let lz_dist_cluster = if lz77_params.enabled {
+            *context_map.last().unwrap()
+        } else {
+            0
+        };
+
         let use_prefix_code = br.read(1)? != 0;
         let log_alpha_size = if use_prefix_code {
             HUFFMAN_MAX_BITS
@@ -616,6 +626,7 @@ impl Histograms {
             lz77_params,
             lz77_length_uint,
             context_map,
+            lz_dist_cluster,
             log_alpha_size,
             uint_configs,
             codes,
@@ -659,6 +670,7 @@ impl Histograms {
             uint_configs,
             log_alpha_size: 15,
             context_map: vec![0u8; num_contexts],
+            lz_dist_cluster: 0,
             codes,
         }
     }
@@ -669,6 +681,7 @@ impl Histograms {
         let uint_configs = vec![HybridUint::new(8, 0, 0), HybridUint::new(0, 0, 0)];
         let mut context_map = vec![0u8; num_contexts + 1];
         *context_map.last_mut().unwrap() = 1;
+        let lz_dist_cluster = *context_map.last().unwrap();
         Self {
             lz77_params: Lz77Params {
                 enabled: true,
@@ -679,6 +692,7 @@ impl Histograms {
             uint_configs,
             log_alpha_size: 15,
             context_map,
+            lz_dist_cluster,
             codes,
         }
     }
