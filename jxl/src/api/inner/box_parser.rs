@@ -244,6 +244,7 @@ impl BoxParser {
                         self.box_buffer.consume(take);
                         remaining -= take as u64;
                     } else {
+                        buf.try_reserve(num)?;
                         let old_len = buf.len();
                         buf.resize(old_len + num, 0);
                         let read = input.read(&mut [IoSliceMut::new(&mut buf[old_len..])])?;
