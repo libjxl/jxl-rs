@@ -86,8 +86,12 @@ pub fn make_grids(
                     buffer_info[*buf].grid_kind = buffer_info[*buf_in].grid_kind;
                 }
             }
-            TransformStep::HSqueeze { buf_in, buf_out }
-            | TransformStep::VSqueeze { buf_in, buf_out } => {
+            TransformStep::HSqueeze {
+                buf_in, buf_out, ..
+            }
+            | TransformStep::VSqueeze {
+                buf_in, buf_out, ..
+            } => {
                 let mut grid_kind = buffer_info[buf_in[0]]
                     .grid_kind
                     .max(buffer_info[buf_in[1]].grid_kind);
@@ -315,7 +319,9 @@ pub fn make_grids(
                     }
                 }
             }
-            TransformStep::HSqueeze { buf_in, buf_out } => {
+            TransformStep::HSqueeze {
+                buf_in, buf_out, ..
+            } => {
                 let out_kind = buffer_info[*buf_out].grid_kind;
                 let out_shape = buffer_info[*buf_out].grid_shape;
                 for (x, y) in get_grid_indices(out_shape) {
@@ -357,7 +363,9 @@ pub fn make_grids(
                     );
                 }
             }
-            TransformStep::VSqueeze { buf_in, buf_out } => {
+            TransformStep::VSqueeze {
+                buf_in, buf_out, ..
+            } => {
                 let out_kind = buffer_info[*buf_out].grid_kind;
                 let out_shape = buffer_info[*buf_out].grid_shape;
                 for (x, y) in get_grid_indices(out_shape) {
