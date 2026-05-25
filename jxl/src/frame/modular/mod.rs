@@ -179,8 +179,9 @@ impl ModularChannel {
 }
 
 const BUFFER_STATUS_NOT_RENDERED: usize = 0;
-const BUFFER_STATUS_PARTIAL_RENDER: usize = 1;
-const BUFFER_STATUS_FINAL_RENDER: usize = 2;
+const BUFFER_STATUS_ZERO_FILLED: usize = 1;
+const BUFFER_STATUS_PARTIAL_RENDER: usize = 2;
+const BUFFER_STATUS_FINAL_RENDER: usize = 3;
 
 // Note: this type uses interior mutability to get mutable references to multiple buffers at once.
 // In principle, this is not needed, but the overhead should be minimal so using `unsafe` here is
@@ -986,7 +987,7 @@ impl FullModularImage {
             for b in self.section_buffer_indices[section].iter() {
                 if self.buffer_info[*b].buffer_grid[grid].get_status() == BUFFER_STATUS_NOT_RENDERED
                 {
-                    self.buffer_info[*b].buffer_grid[grid].set_status(BUFFER_STATUS_PARTIAL_RENDER);
+                    self.buffer_info[*b].buffer_grid[grid].set_status(BUFFER_STATUS_ZERO_FILLED);
                     self.ready_buffers.insert((*b, grid));
                 }
             }

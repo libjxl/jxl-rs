@@ -3,15 +3,17 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-use std::fmt::Debug;
+use std::{collections::HashMap, fmt::Debug};
 
 use num_traits::FromPrimitive;
 
 use crate::{
     error::{Error, Result},
     frame::modular::{
-        ChannelInfo, ModularBufferInfo, ModularChannel, ModularGridKind, Predictor,
+        BUFFER_STATUS_ZERO_FILLED, ChannelInfo, ModularBufferInfo, ModularChannel, ModularGridKind,
+        Predictor,
         borrowed_buffers::with_buffers,
+        transforms::squeeze::{smooth_2d_unsqueeze, smooth_h_unsqueeze, smooth_v_unsqueeze},
     },
     headers::{
         self,
@@ -46,10 +48,16 @@ pub enum TransformStep {
     HSqueeze {
         buf_in: [usize; 2],
         buf_out: usize,
+        // If buf_in[0] was obtained via VSqueeze, the two source buffers
+        // for that transform.
+        buf_in_avg: Option<[usize; 2]>,
     },
     VSqueeze {
         buf_in: [usize; 2],
         buf_out: usize,
+        // If buf_in[0] was obtained via HSqueeze, the two source buffers
+        // for that transform.
+        buf_in_avg: Option<[usize; 2]>,
     },
 }
 
@@ -261,11 +269,21 @@ impl TransformStepChunk {
                     buffers[*buf_in].buffer_grid[out_grid + grid_x].mark_used(is_final);
                 }
             }
-            TransformStep::HSqueeze { buf_in, buf_out } => {
+            TransformStep::HSqueeze {
+                buf_in,
+                buf_out,
+                buf_in_avg,
+            } => {
                 let buf_avg = &buffers[buf_in[0]];
                 let buf_res = &buffers[buf_in[1]];
                 let in_grid = buf_avg.get_grid_idx(out_grid_kind, self.grid_pos);
                 let res_grid = buf_res.get_grid_idx(out_grid_kind, self.grid_pos);
+                let zero_res = buf_res.grid_kind == ModularGridKind::None
+                    && buf_res.buffer_grid[0].get_status() == BUFFER_STATUS_ZERO_FILLED;
+                let double_zero_res = zero_res
+                    && buf_in_avg.is_some_and(|x| {
+                        buffers[x[1]].buffer_grid[0].get_status() == BUFFER_STATUS_ZERO_FILLED
+                    });
                 {
                     trace!(
                         "HSqueeze {:?} -> {:?}, grid {out_grid} grid pos {:?}",
@@ -305,7 +323,26 @@ impl TransformStepChunk {
                         ))
                     };
 
+                    let in_avg2 = if double_zero_res {
+                        Some(AtomicRef::map(
+                            buffers[buf_in_avg.unwrap()[0]].buffer_grid[0].data.borrow(),
+                            |x| x.as_ref().unwrap(),
+                        ))
+                    } else {
+                        None
+                    };
+
                     with_buffers(buffers, &[*buf_out], out_grid, |mut bufs| {
+                        if double_zero_res {
+                            assert_eq!(bufs.len(), 1);
+                            smooth_2d_unsqueeze(&in_avg2.unwrap().data, &mut bufs[0].data);
+                            return Ok(());
+                        }
+                        if zero_res {
+                            assert_eq!(bufs.len(), 1);
+                            smooth_h_unsqueeze(&in_avg.data, &mut bufs[0].data);
+                            return Ok(());
+                        }
                         super::squeeze::do_hsqueeze_step(
                             &in_avg.data.get_rect(buf_avg.get_grid_rect(
                                 frame_header,
@@ -327,11 +364,21 @@ impl TransformStepChunk {
                 buffers[buf_in[0]].buffer_grid[in_grid].mark_used(is_final);
                 buffers[buf_in[1]].buffer_grid[res_grid].mark_used(is_final);
             }
-            TransformStep::VSqueeze { buf_in, buf_out } => {
+            TransformStep::VSqueeze {
+                buf_in,
+                buf_out,
+                buf_in_avg,
+            } => {
                 let buf_avg = &buffers[buf_in[0]];
                 let buf_res = &buffers[buf_in[1]];
                 let in_grid = buf_avg.get_grid_idx(out_grid_kind, self.grid_pos);
                 let res_grid = buf_res.get_grid_idx(out_grid_kind, self.grid_pos);
+                let zero_res = buf_res.grid_kind == ModularGridKind::None
+                    && buf_res.buffer_grid[0].get_status() == BUFFER_STATUS_ZERO_FILLED;
+                let double_zero_res = zero_res
+                    && buf_in_avg.is_some_and(|x| {
+                        buffers[x[1]].buffer_grid[0].get_status() == BUFFER_STATUS_ZERO_FILLED
+                    });
                 {
                     trace!(
                         "VSqueeze {:?} -> {:?} grid: {out_grid:?} grid pos: {:?}",
@@ -374,7 +421,27 @@ impl TransformStepChunk {
                         buf_avg.get_grid_rect(frame_header, out_grid_kind, (gx, gy));
                     let res_grid_rect =
                         buf_res.get_grid_rect(frame_header, out_grid_kind, (gx, gy));
+
+                    let in_avg2 = if double_zero_res {
+                        Some(AtomicRef::map(
+                            buffers[buf_in_avg.unwrap()[0]].buffer_grid[0].data.borrow(),
+                            |x| x.as_ref().unwrap(),
+                        ))
+                    } else {
+                        None
+                    };
+
                     with_buffers(buffers, &[*buf_out], out_grid, |mut bufs| {
+                        if double_zero_res {
+                            assert_eq!(bufs.len(), 1);
+                            smooth_2d_unsqueeze(&in_avg2.unwrap().data, &mut bufs[0].data);
+                            return Ok(());
+                        }
+                        if zero_res {
+                            assert_eq!(bufs.len(), 1);
+                            smooth_v_unsqueeze(&in_avg.data, &mut bufs[0].data);
+                            return Ok(());
+                        }
                         super::squeeze::do_vsqueeze_step(
                             &in_avg.data.get_rect(avg_grid_rect),
                             &in_res.data.get_rect(res_grid_rect),
@@ -487,6 +554,7 @@ fn meta_apply_single_transform(
             } else {
                 transform.squeezes.clone()
             };
+            let mut transform_step_for_buf = HashMap::new();
             for step in steps {
                 super::squeeze::check_squeeze_params(channels, &step)?;
                 let in_place = step.in_place;
@@ -540,15 +608,29 @@ fn meta_apply_single_transform(
                         new_1,
                         format!("Squeeze residual, original channel {}", begin_channel + ic),
                     );
+                    transform_step_for_buf.insert(buf_0, (transform_steps.len(), horizontal));
+                    let buf_out = channels[begin_channel + ic].0;
+                    if let Some(t) = transform_step_for_buf.get(&buf_out)
+                        && t.1 != horizontal
+                    {
+                        let (TransformStep::VSqueeze { buf_in_avg, .. }
+                        | TransformStep::HSqueeze { buf_in_avg, .. }) = &mut transform_steps[t.0]
+                        else {
+                            unreachable!()
+                        };
+                        *buf_in_avg = Some([buf_0, buf_1]);
+                    }
                     if horizontal {
                         transform_steps.push(TransformStep::HSqueeze {
                             buf_in: [buf_0, buf_1],
-                            buf_out: channels[begin_channel + ic].0,
+                            buf_out,
+                            buf_in_avg: None,
                         });
                     } else {
                         transform_steps.push(TransformStep::VSqueeze {
                             buf_in: [buf_0, buf_1],
-                            buf_out: channels[begin_channel + ic].0,
+                            buf_out,
+                            buf_in_avg: None,
                         });
                     }
                     channels[begin_channel + ic] = (buf_0, new_0);
@@ -821,8 +903,12 @@ pub fn meta_apply_local_transforms<'a, 'b>(
                         *b = buf_remap[*b];
                     }
                 }
-                TransformStep::HSqueeze { buf_in, buf_out }
-                | TransformStep::VSqueeze { buf_in, buf_out } => {
+                TransformStep::HSqueeze {
+                    buf_in, buf_out, ..
+                }
+                | TransformStep::VSqueeze {
+                    buf_in, buf_out, ..
+                } => {
                     for b in once(buf_out).chain(buf_in.iter_mut()) {
                         *b = buf_remap[*b];
                     }
@@ -950,7 +1036,9 @@ impl TransformStep {
                     buffers[*pos] = buf;
                 }
             }
-            TransformStep::HSqueeze { buf_in, buf_out } => {
+            TransformStep::HSqueeze {
+                buf_in, buf_out, ..
+            } => {
                 buffers[*buf_out].allocate_if_needed()?;
                 let mut out_buf = buffers[*buf_out].take();
                 let mut in_avg = buffers[buf_in[0]].take();
@@ -975,7 +1063,9 @@ impl TransformStep {
                 }
                 buffers[*buf_out] = out_buf;
             }
-            TransformStep::VSqueeze { buf_in, buf_out } => {
+            TransformStep::VSqueeze {
+                buf_in, buf_out, ..
+            } => {
                 buffers[*buf_out].allocate_if_needed()?;
                 let mut out_buf = buffers[*buf_out].take();
                 let mut in_avg = buffers[buf_in[0]].take();

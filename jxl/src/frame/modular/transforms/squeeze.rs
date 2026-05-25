@@ -675,3 +675,346 @@ pub fn do_vsqueeze_step(
 
     vsqueeze(in_avg, in_res, in_next_avg, out_prev, out);
 }
+
+const WEIGHTS_2D: [[[i32; 5]; 5]; 4] = [
+    // py=0, px=0
+    [
+        [0, 7, 93, 0, 0],
+        [7, 6175, 12905, 1188, 0],
+        [93, 12905, 25198, 2842, 0],
+        [0, 1188, 2842, 93, 0],
+        [0, 0, 0, 0, 0],
+    ],
+    // py=0, px=1
+    [
+        [0, 0, 93, 7, 0],
+        [0, 1188, 12905, 6175, 7],
+        [0, 2842, 25198, 12905, 93],
+        [0, 93, 2842, 1188, 0],
+        [0, 0, 0, 0, 0],
+    ],
+    // py=1, px=0
+    [
+        [0, 0, 0, 0, 0],
+        [0, 1188, 2842, 93, 0],
+        [93, 12905, 25198, 2842, 0],
+        [7, 6175, 12905, 1188, 0],
+        [0, 7, 93, 0, 0],
+    ],
+    // py=1, px=1
+    [
+        [0, 0, 0, 0, 0],
+        [0, 93, 2842, 1188, 0],
+        [0, 2842, 25198, 12905, 93],
+        [0, 1188, 12905, 6175, 7],
+        [0, 0, 93, 7, 0],
+    ],
+];
+
+const WEIGHTS_H: [[[i32; 5]; 3]; 2] = [
+    // px=0
+    [
+        [0, 3145, 6787, 474, 0],
+        [116, 14093, 27370, 3145, 0],
+        [0, 3145, 6787, 474, 0],
+    ],
+    // px=1
+    [
+        [0, 474, 6787, 3145, 0],
+        [0, 3145, 27370, 14093, 116],
+        [0, 474, 6787, 3145, 0],
+    ],
+];
+
+const WEIGHTS_V: [[[i32; 3]; 5]; 2] = [
+    // py=0
+    [
+        [0, 116, 0],
+        [3145, 14093, 3145],
+        [6787, 27370, 6787],
+        [474, 3145, 474],
+        [0, 0, 0],
+    ],
+    // py=1
+    [
+        [0, 0, 0],
+        [474, 3145, 474],
+        [6787, 27370, 6787],
+        [3145, 14093, 3145],
+        [0, 116, 0],
+    ],
+];
+
+#[allow(clippy::needless_range_loop)]
+pub fn smooth_2d_unsqueeze(input: &Image<i32>, output: &mut Image<i32>) {
+    let (xs, ys) = output.size();
+    let (in_xs, in_ys) = input.size();
+    if in_xs == 0 || in_ys == 0 {
+        return;
+    }
+
+    let x_start = 4;
+    let x_end = if xs >= 4 { xs.min(2 * in_xs - 4) } else { 0 };
+
+    for y in 0..ys {
+        let output_row = output.row_mut(y);
+        let py = y % 2;
+        let iy_center = (y / 2) as isize;
+
+        // Pre-clamp the 5 row slices at the beginning of the row
+        let clamped_y = |iy: isize| -> usize { iy.clamp(0, in_ys as isize - 1) as usize };
+        let r0 = input.row(clamped_y(iy_center - 2));
+        let r1 = input.row(clamped_y(iy_center - 1));
+        let r2 = input.row(clamped_y(iy_center));
+        let r3 = input.row(clamped_y(iy_center + 1));
+        let r4 = input.row(clamped_y(iy_center + 2));
+
+        let compute =
+            |px: usize, ix0: usize, ix1: usize, ix2: usize, ix3: usize, ix4: usize| -> i32 {
+                let w = &WEIGHTS_2D[py * 2 + px];
+                let sum = (r0[ix0] as i64 * w[0][0] as i64)
+                    + (r0[ix1] as i64 * w[0][1] as i64)
+                    + (r0[ix2] as i64 * w[0][2] as i64)
+                    + (r0[ix3] as i64 * w[0][3] as i64)
+                    + (r0[ix4] as i64 * w[0][4] as i64)
+                    + (r1[ix0] as i64 * w[1][0] as i64)
+                    + (r1[ix1] as i64 * w[1][1] as i64)
+                    + (r1[ix2] as i64 * w[1][2] as i64)
+                    + (r1[ix3] as i64 * w[1][3] as i64)
+                    + (r1[ix4] as i64 * w[1][4] as i64)
+                    + (r2[ix0] as i64 * w[2][0] as i64)
+                    + (r2[ix1] as i64 * w[2][1] as i64)
+                    + (r2[ix2] as i64 * w[2][2] as i64)
+                    + (r2[ix3] as i64 * w[2][3] as i64)
+                    + (r2[ix4] as i64 * w[2][4] as i64)
+                    + (r3[ix0] as i64 * w[3][0] as i64)
+                    + (r3[ix1] as i64 * w[3][1] as i64)
+                    + (r3[ix2] as i64 * w[3][2] as i64)
+                    + (r3[ix3] as i64 * w[3][3] as i64)
+                    + (r3[ix4] as i64 * w[3][4] as i64)
+                    + (r4[ix0] as i64 * w[4][0] as i64)
+                    + (r4[ix1] as i64 * w[4][1] as i64)
+                    + (r4[ix2] as i64 * w[4][2] as i64)
+                    + (r4[ix3] as i64 * w[4][3] as i64)
+                    + (r4[ix4] as i64 * w[4][4] as i64);
+                let val = if sum >= 0 {
+                    (sum + 32768) >> 16
+                } else {
+                    (sum - 32768) >> 16
+                };
+                val as i32
+            };
+
+        let get_clamped_x = |ix: isize| -> usize { ix.clamp(0, in_xs as isize - 1) as usize };
+
+        // Extremal values of x at the beginning
+        for x in 0..x_start.min(xs) {
+            let px = x % 2;
+            let ix_center = (x / 2) as isize;
+            let ix0 = get_clamped_x(ix_center - 2);
+            let ix1 = get_clamped_x(ix_center - 1);
+            let ix2 = get_clamped_x(ix_center);
+            let ix3 = get_clamped_x(ix_center + 1);
+            let ix4 = get_clamped_x(ix_center + 2);
+            output_row[x] = compute(px, ix0, ix1, ix2, ix3, ix4);
+        }
+
+        // Main inner loop
+        if x_start < x_end {
+            for x in x_start..x_end {
+                let px = x % 2;
+                let ix_center = x / 2;
+                output_row[x] = compute(
+                    px,
+                    ix_center - 2,
+                    ix_center - 1,
+                    ix_center,
+                    ix_center + 1,
+                    ix_center + 2,
+                );
+            }
+        }
+
+        // Extremal values of x at the end
+        for x in x_start.max(x_end)..xs {
+            let px = x % 2;
+            let ix_center = (x / 2) as isize;
+            let ix0 = get_clamped_x(ix_center - 2);
+            let ix1 = get_clamped_x(ix_center - 1);
+            let ix2 = get_clamped_x(ix_center);
+            let ix3 = get_clamped_x(ix_center + 1);
+            let ix4 = get_clamped_x(ix_center + 2);
+            output_row[x] = compute(px, ix0, ix1, ix2, ix3, ix4);
+        }
+    }
+}
+
+#[allow(clippy::needless_range_loop)]
+pub fn smooth_h_unsqueeze(input: &Image<i32>, output: &mut Image<i32>) {
+    let (xs, ys) = output.size();
+    let (in_xs, in_ys) = input.size();
+    if in_xs == 0 || in_ys == 0 {
+        return;
+    }
+
+    let x_start = 4;
+    let x_end = if xs >= 4 { xs.min(2 * in_xs - 4) } else { 0 };
+
+    for y in 0..ys {
+        let output_row = output.row_mut(y);
+        let iy_center = y as isize;
+
+        // Pre-clamp the 3 row slices at the beginning of the row
+        let clamped_y = |iy: isize| -> usize { iy.clamp(0, in_ys as isize - 1) as usize };
+        let r0 = input.row(clamped_y(iy_center - 1));
+        let r1 = input.row(clamped_y(iy_center));
+        let r2 = input.row(clamped_y(iy_center + 1));
+
+        let compute =
+            |px: usize, ix0: usize, ix1: usize, ix2: usize, ix3: usize, ix4: usize| -> i32 {
+                let w = &WEIGHTS_H[px];
+                let sum = (r0[ix0] as i64 * w[0][0] as i64)
+                    + (r0[ix1] as i64 * w[0][1] as i64)
+                    + (r0[ix2] as i64 * w[0][2] as i64)
+                    + (r0[ix3] as i64 * w[0][3] as i64)
+                    + (r0[ix4] as i64 * w[0][4] as i64)
+                    + (r1[ix0] as i64 * w[1][0] as i64)
+                    + (r1[ix1] as i64 * w[1][1] as i64)
+                    + (r1[ix2] as i64 * w[1][2] as i64)
+                    + (r1[ix3] as i64 * w[1][3] as i64)
+                    + (r1[ix4] as i64 * w[1][4] as i64)
+                    + (r2[ix0] as i64 * w[2][0] as i64)
+                    + (r2[ix1] as i64 * w[2][1] as i64)
+                    + (r2[ix2] as i64 * w[2][2] as i64)
+                    + (r2[ix3] as i64 * w[2][3] as i64)
+                    + (r2[ix4] as i64 * w[2][4] as i64);
+                let val = if sum >= 0 {
+                    (sum + 32768) >> 16
+                } else {
+                    (sum - 32768) >> 16
+                };
+                val as i32
+            };
+
+        let get_clamped_x = |ix: isize| -> usize { ix.clamp(0, in_xs as isize - 1) as usize };
+
+        // Extremal values of x at the beginning
+        for x in 0..x_start.min(xs) {
+            let px = x % 2;
+            let ix_center = (x / 2) as isize;
+            let ix0 = get_clamped_x(ix_center - 2);
+            let ix1 = get_clamped_x(ix_center - 1);
+            let ix2 = get_clamped_x(ix_center);
+            let ix3 = get_clamped_x(ix_center + 1);
+            let ix4 = get_clamped_x(ix_center + 2);
+            output_row[x] = compute(px, ix0, ix1, ix2, ix3, ix4);
+        }
+
+        // Main inner loop
+        if x_start < x_end {
+            for x in x_start..x_end {
+                let px = x % 2;
+                let ix_center = x / 2;
+                output_row[x] = compute(
+                    px,
+                    ix_center - 2,
+                    ix_center - 1,
+                    ix_center,
+                    ix_center + 1,
+                    ix_center + 2,
+                );
+            }
+        }
+
+        // Extremal values of x at the end
+        for x in x_start.max(x_end)..xs {
+            let px = x % 2;
+            let ix_center = (x / 2) as isize;
+            let ix0 = get_clamped_x(ix_center - 2);
+            let ix1 = get_clamped_x(ix_center - 1);
+            let ix2 = get_clamped_x(ix_center);
+            let ix3 = get_clamped_x(ix_center + 1);
+            let ix4 = get_clamped_x(ix_center + 2);
+            output_row[x] = compute(px, ix0, ix1, ix2, ix3, ix4);
+        }
+    }
+}
+
+#[allow(clippy::needless_range_loop)]
+pub fn smooth_v_unsqueeze(input: &Image<i32>, output: &mut Image<i32>) {
+    let (xs, ys) = output.size();
+    let (in_xs, in_ys) = input.size();
+    if in_xs == 0 || in_ys == 0 {
+        return;
+    }
+
+    let x_start = 1;
+    let x_end = xs.min(in_xs - 1);
+
+    for y in 0..ys {
+        let output_row = output.row_mut(y);
+        let py = y % 2;
+        let iy_center = (y / 2) as isize;
+
+        // Pre-clamp the 5 row slices at the beginning of the row
+        let clamped_y = |iy: isize| -> usize { iy.clamp(0, in_ys as isize - 1) as usize };
+        let r0 = input.row(clamped_y(iy_center - 2));
+        let r1 = input.row(clamped_y(iy_center - 1));
+        let r2 = input.row(clamped_y(iy_center));
+        let r3 = input.row(clamped_y(iy_center + 1));
+        let r4 = input.row(clamped_y(iy_center + 2));
+
+        let compute = |ix0: usize, ix1: usize, ix2: usize| -> i32 {
+            let w = &WEIGHTS_V[py];
+            let sum = (r0[ix0] as i64 * w[0][0] as i64)
+                + (r0[ix1] as i64 * w[0][1] as i64)
+                + (r0[ix2] as i64 * w[0][2] as i64)
+                + (r1[ix0] as i64 * w[1][0] as i64)
+                + (r1[ix1] as i64 * w[1][1] as i64)
+                + (r1[ix2] as i64 * w[1][2] as i64)
+                + (r2[ix0] as i64 * w[2][0] as i64)
+                + (r2[ix1] as i64 * w[2][1] as i64)
+                + (r2[ix2] as i64 * w[2][2] as i64)
+                + (r3[ix0] as i64 * w[3][0] as i64)
+                + (r3[ix1] as i64 * w[3][1] as i64)
+                + (r3[ix2] as i64 * w[3][2] as i64)
+                + (r4[ix0] as i64 * w[4][0] as i64)
+                + (r4[ix1] as i64 * w[4][1] as i64)
+                + (r4[ix2] as i64 * w[4][2] as i64);
+            let val = if sum >= 0 {
+                (sum + 32768) >> 16
+            } else {
+                (sum - 32768) >> 16
+            };
+            val as i32
+        };
+
+        let get_clamped_x = |ix: isize| -> usize { ix.clamp(0, in_xs as isize - 1) as usize };
+
+        // Extremal values of x at the beginning
+        for x in 0..x_start.min(xs) {
+            let ix_center = x as isize;
+            let ix0 = get_clamped_x(ix_center - 1);
+            let ix1 = get_clamped_x(ix_center);
+            let ix2 = get_clamped_x(ix_center + 1);
+            output_row[x] = compute(ix0, ix1, ix2);
+        }
+
+        // Main inner loop
+        if x_start < x_end {
+            for x in x_start..x_end {
+                let ix_center = x;
+                output_row[x] = compute(ix_center - 1, ix_center, ix_center + 1);
+            }
+        }
+
+        // Extremal values of x at the end
+        for x in x_start.max(x_end)..xs {
+            let ix_center = x as isize;
+            let ix0 = get_clamped_x(ix_center - 1);
+            let ix1 = get_clamped_x(ix_center);
+            let ix2 = get_clamped_x(ix_center + 1);
+            output_row[x] = compute(ix0, ix1, ix2);
+        }
+    }
+}
