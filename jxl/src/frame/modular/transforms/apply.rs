@@ -333,6 +333,9 @@ impl TransformStepChunk {
                     };
 
                     with_buffers(buffers, &[*buf_out], out_grid, |mut bufs| {
+                        if bufs.is_empty() {
+                            return Ok(());
+                        }
                         if double_zero_res {
                             assert_eq!(bufs.len(), 1);
                             smooth_2d_unsqueeze(&in_avg2.unwrap().data, &mut bufs[0].data);
@@ -432,6 +435,9 @@ impl TransformStepChunk {
                     };
 
                     with_buffers(buffers, &[*buf_out], out_grid, |mut bufs| {
+                        if bufs.is_empty() {
+                            return Ok(());
+                        }
                         if double_zero_res {
                             assert_eq!(bufs.len(), 1);
                             smooth_2d_unsqueeze(&in_avg2.unwrap().data, &mut bufs[0].data);
