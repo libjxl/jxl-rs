@@ -40,6 +40,8 @@ pub fn with_buffers<T>(
         // Note that some bitstreams can contain channels with one dimension being 0 (e.g. palette
         // meta-channel with 0 colors has size (0, 3)). Those must still participate in channel
         // numbering (but carry no entropy-coded pixels), so we only skip when both dimensions are 0.
+        // TODO(veluca): figure out if this is the best approach or we should instead pass through
+        // empty buffers.
         if b.size.0 == 0 && b.size.1 == 0 {
             continue;
         }
