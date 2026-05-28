@@ -745,276 +745,429 @@ const WEIGHTS_V: [[[i32; 3]; 5]; 2] = [
     ],
 ];
 
+use super::super::{ModularBufferInfo, ModularGridKind};
+use crate::headers::frame_header::FrameHeader;
+use crate::image::Rect;
+
+fn get_pixel_global(
+    channel: &ModularBufferInfo,
+    frame_header: &FrameHeader,
+    x: isize,
+    y: isize,
+) -> i32 {
+    let (w, h) = channel.info.size;
+    let x = x.clamp(0, w as isize - 1) as usize;
+    let y = y.clamp(0, h as isize - 1) as usize;
+    if channel.grid_kind == ModularGridKind::None {
+        let grid_data = channel.buffer_grid[0].data.borrow();
+        if let Some(chan) = grid_data.as_ref() {
+            chan.data.row(y)[x]
+        } else {
+            0
+        }
+    } else {
+        let shift = channel.info.shift.unwrap_or((0, 0));
+        let grid_dim = channel.grid_kind.grid_dim(frame_header, shift);
+        let gx = x / grid_dim.0;
+        let gy = y / grid_dim.1;
+        let lx = x % grid_dim.0;
+        let ly = y % grid_dim.1;
+        let grid_idx = channel.get_grid_idx(channel.grid_kind, (gx, gy));
+        let grid_data = channel.buffer_grid[grid_idx].data.borrow();
+        if let Some(chan) = grid_data.as_ref() {
+            chan.data.row(ly)[lx]
+        } else {
+            0
+        }
+    }
+}
+
 #[allow(clippy::needless_range_loop)]
-pub fn smooth_2d_unsqueeze(input: &Image<i32>, output: &mut Image<i32>) {
+pub fn smooth_2d_unsqueeze(
+    input: &ModularBufferInfo,
+    frame_header: &FrameHeader,
+    rect: Rect,
+    output: &mut Image<i32>,
+) {
     let (xs, ys) = output.size();
-    let (in_xs, in_ys) = input.size();
+    let (in_xs, in_ys) = (rect.size.0 / 2, rect.size.1 / 2);
     if in_xs == 0 || in_ys == 0 {
         return;
     }
 
+    let in_grid = if input.grid_kind == ModularGridKind::None {
+        0
+    } else {
+        let shift = input.info.shift.unwrap_or((0, 0));
+        let grid_dim = input.grid_kind.grid_dim(frame_header, shift);
+        let in_gx = (rect.origin.0 / 2) / grid_dim.0;
+        let in_gy = (rect.origin.1 / 2) / grid_dim.1;
+        input.get_grid_idx(input.grid_kind, (in_gx, in_gy))
+    };
+    let grid_data = input.buffer_grid[in_grid].data.borrow();
+    if grid_data.is_none() {
+        for y in 0..ys {
+            output.row_mut(y).fill(0);
+        }
+        return;
+    }
+    let in_grid_data = &grid_data.as_ref().unwrap().data;
+
+    let (row_offset, col_offset) = if input.grid_kind == ModularGridKind::None {
+        (rect.origin.1 / 2, rect.origin.0 / 2)
+    } else {
+        (0, 0)
+    };
+
+    let y_start = 4;
+    let y_end = if ys >= 4 { ys.min(2 * in_ys - 4) } else { 0 };
+
     let x_start = 4;
     let x_end = if xs >= 4 { xs.min(2 * in_xs - 4) } else { 0 };
+
+    let compute_border = |py: usize, px: usize, ix_center: isize, iy_center: isize| -> i32 {
+        let w = &WEIGHTS_2D[py * 2 + px];
+        let mut sum = 0i64;
+        let global_ix_center = (rect.origin.0 / 2) as isize + ix_center;
+        let global_iy_center = (rect.origin.1 / 2) as isize + iy_center;
+        for dy in -2isize..=2 {
+            let r_w = &w[(dy + 2) as usize];
+            let iy = global_iy_center + dy;
+            for dx in -2isize..=2 {
+                sum += get_pixel_global(input, frame_header, global_ix_center + dx, iy) as i64
+                    * r_w[(dx + 2) as usize] as i64;
+            }
+        }
+        let val = if sum >= 0 {
+            (sum + 32768) >> 16
+        } else {
+            (sum - 32768) >> 16
+        };
+        val as i32
+    };
 
     for y in 0..ys {
         let output_row = output.row_mut(y);
         let py = y % 2;
-        let iy_center = (y / 2) as isize;
+        let iy_center = y / 2;
 
-        // Pre-clamp the 5 row slices at the beginning of the row
-        let clamped_y = |iy: isize| -> usize { iy.clamp(0, in_ys as isize - 1) as usize };
-        let r0 = input.row(clamped_y(iy_center - 2));
-        let r1 = input.row(clamped_y(iy_center - 1));
-        let r2 = input.row(clamped_y(iy_center));
-        let r3 = input.row(clamped_y(iy_center + 1));
-        let r4 = input.row(clamped_y(iy_center + 2));
-
-        let compute =
-            |px: usize, ix0: usize, ix1: usize, ix2: usize, ix3: usize, ix4: usize| -> i32 {
-                let w = &WEIGHTS_2D[py * 2 + px];
-                let sum = (r0[ix0] as i64 * w[0][0] as i64)
-                    + (r0[ix1] as i64 * w[0][1] as i64)
-                    + (r0[ix2] as i64 * w[0][2] as i64)
-                    + (r0[ix3] as i64 * w[0][3] as i64)
-                    + (r0[ix4] as i64 * w[0][4] as i64)
-                    + (r1[ix0] as i64 * w[1][0] as i64)
-                    + (r1[ix1] as i64 * w[1][1] as i64)
-                    + (r1[ix2] as i64 * w[1][2] as i64)
-                    + (r1[ix3] as i64 * w[1][3] as i64)
-                    + (r1[ix4] as i64 * w[1][4] as i64)
-                    + (r2[ix0] as i64 * w[2][0] as i64)
-                    + (r2[ix1] as i64 * w[2][1] as i64)
-                    + (r2[ix2] as i64 * w[2][2] as i64)
-                    + (r2[ix3] as i64 * w[2][3] as i64)
-                    + (r2[ix4] as i64 * w[2][4] as i64)
-                    + (r3[ix0] as i64 * w[3][0] as i64)
-                    + (r3[ix1] as i64 * w[3][1] as i64)
-                    + (r3[ix2] as i64 * w[3][2] as i64)
-                    + (r3[ix3] as i64 * w[3][3] as i64)
-                    + (r3[ix4] as i64 * w[3][4] as i64)
-                    + (r4[ix0] as i64 * w[4][0] as i64)
-                    + (r4[ix1] as i64 * w[4][1] as i64)
-                    + (r4[ix2] as i64 * w[4][2] as i64)
-                    + (r4[ix3] as i64 * w[4][3] as i64)
-                    + (r4[ix4] as i64 * w[4][4] as i64);
-                let val = if sum >= 0 {
-                    (sum + 32768) >> 16
-                } else {
-                    (sum - 32768) >> 16
-                };
-                val as i32
-            };
-
-        let get_clamped_x = |ix: isize| -> usize { ix.clamp(0, in_xs as isize - 1) as usize };
-
-        // Extremal values of x at the beginning
-        for x in 0..x_start.min(xs) {
-            let px = x % 2;
-            let ix_center = (x / 2) as isize;
-            let ix0 = get_clamped_x(ix_center - 2);
-            let ix1 = get_clamped_x(ix_center - 1);
-            let ix2 = get_clamped_x(ix_center);
-            let ix3 = get_clamped_x(ix_center + 1);
-            let ix4 = get_clamped_x(ix_center + 2);
-            output_row[x] = compute(px, ix0, ix1, ix2, ix3, ix4);
-        }
-
-        // Main inner loop
-        if x_start < x_end {
-            for x in x_start..x_end {
+        if y < y_start || y >= y_end {
+            for x in 0..xs {
                 let px = x % 2;
                 let ix_center = x / 2;
-                output_row[x] = compute(
-                    px,
-                    ix_center - 2,
-                    ix_center - 1,
-                    ix_center,
-                    ix_center + 1,
-                    ix_center + 2,
-                );
+                output_row[x] = compute_border(py, px, ix_center as isize, iy_center as isize);
             }
-        }
+        } else {
+            // Start border
+            for x in 0..x_start.min(xs) {
+                let px = x % 2;
+                let ix_center = x / 2;
+                output_row[x] = compute_border(py, px, ix_center as isize, iy_center as isize);
+            }
 
-        // Extremal values of x at the end
-        for x in x_start.max(x_end)..xs {
-            let px = x % 2;
-            let ix_center = (x / 2) as isize;
-            let ix0 = get_clamped_x(ix_center - 2);
-            let ix1 = get_clamped_x(ix_center - 1);
-            let ix2 = get_clamped_x(ix_center);
-            let ix3 = get_clamped_x(ix_center + 1);
-            let ix4 = get_clamped_x(ix_center + 2);
-            output_row[x] = compute(px, ix0, ix1, ix2, ix3, ix4);
+            // Interior fast path
+            if x_start < x_end {
+                let r0 = in_grid_data.row(row_offset + iy_center - 2);
+                let r1 = in_grid_data.row(row_offset + iy_center - 1);
+                let r2 = in_grid_data.row(row_offset + iy_center);
+                let r3 = in_grid_data.row(row_offset + iy_center + 1);
+                let r4 = in_grid_data.row(row_offset + iy_center + 2);
+
+                for x in x_start..x_end {
+                    let px = x % 2;
+                    let ix_center = x / 2;
+                    let w = &WEIGHTS_2D[py * 2 + px];
+                    let sum = (r0[col_offset + ix_center - 2] as i64 * w[0][0] as i64)
+                        + (r0[col_offset + ix_center - 1] as i64 * w[0][1] as i64)
+                        + (r0[col_offset + ix_center] as i64 * w[0][2] as i64)
+                        + (r0[col_offset + ix_center + 1] as i64 * w[0][3] as i64)
+                        + (r0[col_offset + ix_center + 2] as i64 * w[0][4] as i64)
+                        + (r1[col_offset + ix_center - 2] as i64 * w[1][0] as i64)
+                        + (r1[col_offset + ix_center - 1] as i64 * w[1][1] as i64)
+                        + (r1[col_offset + ix_center] as i64 * w[1][2] as i64)
+                        + (r1[col_offset + ix_center + 1] as i64 * w[1][3] as i64)
+                        + (r1[col_offset + ix_center + 2] as i64 * w[1][4] as i64)
+                        + (r2[col_offset + ix_center - 2] as i64 * w[2][0] as i64)
+                        + (r2[col_offset + ix_center - 1] as i64 * w[2][1] as i64)
+                        + (r2[col_offset + ix_center] as i64 * w[2][2] as i64)
+                        + (r2[col_offset + ix_center + 1] as i64 * w[2][3] as i64)
+                        + (r2[col_offset + ix_center + 2] as i64 * w[2][4] as i64)
+                        + (r3[col_offset + ix_center - 2] as i64 * w[3][0] as i64)
+                        + (r3[col_offset + ix_center - 1] as i64 * w[3][1] as i64)
+                        + (r3[col_offset + ix_center] as i64 * w[3][2] as i64)
+                        + (r3[col_offset + ix_center + 1] as i64 * w[3][3] as i64)
+                        + (r3[col_offset + ix_center + 2] as i64 * w[3][4] as i64)
+                        + (r4[col_offset + ix_center - 2] as i64 * w[4][0] as i64)
+                        + (r4[col_offset + ix_center - 1] as i64 * w[4][1] as i64)
+                        + (r4[col_offset + ix_center] as i64 * w[4][2] as i64)
+                        + (r4[col_offset + ix_center + 1] as i64 * w[4][3] as i64)
+                        + (r4[col_offset + ix_center + 2] as i64 * w[4][4] as i64);
+                    let val = if sum >= 0 {
+                        (sum + 32768) >> 16
+                    } else {
+                        (sum - 32768) >> 16
+                    };
+                    output_row[x] = val as i32;
+                }
+            }
+
+            // End border
+            for x in x_start.max(x_end)..xs {
+                let px = x % 2;
+                let ix_center = x / 2;
+                output_row[x] = compute_border(py, px, ix_center as isize, iy_center as isize);
+            }
         }
     }
 }
 
 #[allow(clippy::needless_range_loop)]
-pub fn smooth_h_unsqueeze(input: &Image<i32>, output: &mut Image<i32>) {
+pub fn smooth_h_unsqueeze(
+    input: &ModularBufferInfo,
+    frame_header: &FrameHeader,
+    rect: Rect,
+    output: &mut Image<i32>,
+) {
     let (xs, ys) = output.size();
-    let (in_xs, in_ys) = input.size();
+    let (in_xs, in_ys) = (rect.size.0 / 2, rect.size.1);
     if in_xs == 0 || in_ys == 0 {
         return;
     }
+
+    let in_grid = if input.grid_kind == ModularGridKind::None {
+        0
+    } else {
+        let shift = input.info.shift.unwrap_or((0, 0));
+        let grid_dim = input.grid_kind.grid_dim(frame_header, shift);
+        let in_gx = (rect.origin.0 / 2) / grid_dim.0;
+        let in_gy = rect.origin.1 / grid_dim.1;
+        input.get_grid_idx(input.grid_kind, (in_gx, in_gy))
+    };
+    let grid_data = input.buffer_grid[in_grid].data.borrow();
+    if grid_data.is_none() {
+        for y in 0..ys {
+            output.row_mut(y).fill(0);
+        }
+        return;
+    }
+    let in_grid_data = &grid_data.as_ref().unwrap().data;
+
+    let (row_offset, col_offset) = if input.grid_kind == ModularGridKind::None {
+        (rect.origin.1, rect.origin.0 / 2)
+    } else {
+        (0, 0)
+    };
+
+    let y_start = 1;
+    let y_end = if ys >= 1 { ys.min(in_ys - 1) } else { 0 };
 
     let x_start = 4;
     let x_end = if xs >= 4 { xs.min(2 * in_xs - 4) } else { 0 };
 
-    for y in 0..ys {
-        let output_row = output.row_mut(y);
-        let iy_center = y as isize;
-
-        // Pre-clamp the 3 row slices at the beginning of the row
-        let clamped_y = |iy: isize| -> usize { iy.clamp(0, in_ys as isize - 1) as usize };
-        let r0 = input.row(clamped_y(iy_center - 1));
-        let r1 = input.row(clamped_y(iy_center));
-        let r2 = input.row(clamped_y(iy_center + 1));
-
-        let compute =
-            |px: usize, ix0: usize, ix1: usize, ix2: usize, ix3: usize, ix4: usize| -> i32 {
-                let w = &WEIGHTS_H[px];
-                let sum = (r0[ix0] as i64 * w[0][0] as i64)
-                    + (r0[ix1] as i64 * w[0][1] as i64)
-                    + (r0[ix2] as i64 * w[0][2] as i64)
-                    + (r0[ix3] as i64 * w[0][3] as i64)
-                    + (r0[ix4] as i64 * w[0][4] as i64)
-                    + (r1[ix0] as i64 * w[1][0] as i64)
-                    + (r1[ix1] as i64 * w[1][1] as i64)
-                    + (r1[ix2] as i64 * w[1][2] as i64)
-                    + (r1[ix3] as i64 * w[1][3] as i64)
-                    + (r1[ix4] as i64 * w[1][4] as i64)
-                    + (r2[ix0] as i64 * w[2][0] as i64)
-                    + (r2[ix1] as i64 * w[2][1] as i64)
-                    + (r2[ix2] as i64 * w[2][2] as i64)
-                    + (r2[ix3] as i64 * w[2][3] as i64)
-                    + (r2[ix4] as i64 * w[2][4] as i64);
-                let val = if sum >= 0 {
-                    (sum + 32768) >> 16
-                } else {
-                    (sum - 32768) >> 16
-                };
-                val as i32
-            };
-
-        let get_clamped_x = |ix: isize| -> usize { ix.clamp(0, in_xs as isize - 1) as usize };
-
-        // Extremal values of x at the beginning
-        for x in 0..x_start.min(xs) {
-            let px = x % 2;
-            let ix_center = (x / 2) as isize;
-            let ix0 = get_clamped_x(ix_center - 2);
-            let ix1 = get_clamped_x(ix_center - 1);
-            let ix2 = get_clamped_x(ix_center);
-            let ix3 = get_clamped_x(ix_center + 1);
-            let ix4 = get_clamped_x(ix_center + 2);
-            output_row[x] = compute(px, ix0, ix1, ix2, ix3, ix4);
-        }
-
-        // Main inner loop
-        if x_start < x_end {
-            for x in x_start..x_end {
-                let px = x % 2;
-                let ix_center = x / 2;
-                output_row[x] = compute(
-                    px,
-                    ix_center - 2,
-                    ix_center - 1,
-                    ix_center,
-                    ix_center + 1,
-                    ix_center + 2,
-                );
+    let compute_border = |px: usize, ix_center: isize, iy_center: isize| -> i32 {
+        let w = &WEIGHTS_H[px];
+        let mut sum = 0i64;
+        let global_ix_center = (rect.origin.0 / 2) as isize + ix_center;
+        let global_iy_center = rect.origin.1 as isize + iy_center;
+        for dy in -1isize..=1 {
+            let r_w = &w[(dy + 1) as usize];
+            let iy = global_iy_center + dy;
+            for dx in -2isize..=2 {
+                sum += get_pixel_global(input, frame_header, global_ix_center + dx, iy) as i64
+                    * r_w[(dx + 2) as usize] as i64;
             }
         }
+        let val = if sum >= 0 {
+            (sum + 32768) >> 16
+        } else {
+            (sum - 32768) >> 16
+        };
+        val as i32
+    };
 
-        // Extremal values of x at the end
-        for x in x_start.max(x_end)..xs {
-            let px = x % 2;
-            let ix_center = (x / 2) as isize;
-            let ix0 = get_clamped_x(ix_center - 2);
-            let ix1 = get_clamped_x(ix_center - 1);
-            let ix2 = get_clamped_x(ix_center);
-            let ix3 = get_clamped_x(ix_center + 1);
-            let ix4 = get_clamped_x(ix_center + 2);
-            output_row[x] = compute(px, ix0, ix1, ix2, ix3, ix4);
+    for y in 0..ys {
+        let output_row = output.row_mut(y);
+        let iy_center = y;
+
+        if y < y_start || y >= y_end {
+            for x in 0..xs {
+                let px = x % 2;
+                let ix_center = x / 2;
+                output_row[x] = compute_border(px, ix_center as isize, iy_center as isize);
+            }
+        } else {
+            // Start border
+            for x in 0..x_start.min(xs) {
+                let px = x % 2;
+                let ix_center = x / 2;
+                output_row[x] = compute_border(px, ix_center as isize, iy_center as isize);
+            }
+
+            // Interior fast path
+            if x_start < x_end {
+                let r0 = in_grid_data.row(row_offset + iy_center - 1);
+                let r1 = in_grid_data.row(row_offset + iy_center);
+                let r2 = in_grid_data.row(row_offset + iy_center + 1);
+
+                for x in x_start..x_end {
+                    let px = x % 2;
+                    let ix_center = x / 2;
+                    let w = &WEIGHTS_H[px];
+                    let sum = (r0[col_offset + ix_center - 2] as i64 * w[0][0] as i64)
+                        + (r0[col_offset + ix_center - 1] as i64 * w[0][1] as i64)
+                        + (r0[col_offset + ix_center] as i64 * w[0][2] as i64)
+                        + (r0[col_offset + ix_center + 1] as i64 * w[0][3] as i64)
+                        + (r0[col_offset + ix_center + 2] as i64 * w[0][4] as i64)
+                        + (r1[col_offset + ix_center - 2] as i64 * w[1][0] as i64)
+                        + (r1[col_offset + ix_center - 1] as i64 * w[1][1] as i64)
+                        + (r1[col_offset + ix_center] as i64 * w[1][2] as i64)
+                        + (r1[col_offset + ix_center + 1] as i64 * w[1][3] as i64)
+                        + (r1[col_offset + ix_center + 2] as i64 * w[1][4] as i64)
+                        + (r2[col_offset + ix_center - 2] as i64 * w[2][0] as i64)
+                        + (r2[col_offset + ix_center - 1] as i64 * w[2][1] as i64)
+                        + (r2[col_offset + ix_center] as i64 * w[2][2] as i64)
+                        + (r2[col_offset + ix_center + 1] as i64 * w[2][3] as i64)
+                        + (r2[col_offset + ix_center + 2] as i64 * w[2][4] as i64);
+                    let val = if sum >= 0 {
+                        (sum + 32768) >> 16
+                    } else {
+                        (sum - 32768) >> 16
+                    };
+                    output_row[x] = val as i32;
+                }
+            }
+
+            // End border
+            for x in x_start.max(x_end)..xs {
+                let px = x % 2;
+                let ix_center = x / 2;
+                output_row[x] = compute_border(px, ix_center as isize, iy_center as isize);
+            }
         }
     }
 }
 
 #[allow(clippy::needless_range_loop)]
-pub fn smooth_v_unsqueeze(input: &Image<i32>, output: &mut Image<i32>) {
+pub fn smooth_v_unsqueeze(
+    input: &ModularBufferInfo,
+    frame_header: &FrameHeader,
+    rect: Rect,
+    output: &mut Image<i32>,
+) {
     let (xs, ys) = output.size();
-    let (in_xs, in_ys) = input.size();
+    let (in_xs, in_ys) = (rect.size.0, rect.size.1 / 2);
     if in_xs == 0 || in_ys == 0 {
         return;
     }
+
+    let in_grid = if input.grid_kind == ModularGridKind::None {
+        0
+    } else {
+        let shift = input.info.shift.unwrap_or((0, 0));
+        let grid_dim = input.grid_kind.grid_dim(frame_header, shift);
+        let in_gx = rect.origin.0 / grid_dim.0;
+        let in_gy = (rect.origin.1 / 2) / grid_dim.1;
+        input.get_grid_idx(input.grid_kind, (in_gx, in_gy))
+    };
+    let grid_data = input.buffer_grid[in_grid].data.borrow();
+    if grid_data.is_none() {
+        for y in 0..ys {
+            output.row_mut(y).fill(0);
+        }
+        return;
+    }
+    let in_grid_data = &grid_data.as_ref().unwrap().data;
+
+    let (row_offset, col_offset) = if input.grid_kind == ModularGridKind::None {
+        (rect.origin.1 / 2, rect.origin.0)
+    } else {
+        (0, 0)
+    };
+
+    let y_start = 4;
+    let y_end = if ys >= 4 { ys.min(2 * in_ys - 4) } else { 0 };
 
     let x_start = 1;
-    let x_end = xs.min(in_xs - 1);
+    let x_end = if xs >= 1 { xs.min(in_xs - 1) } else { 0 };
+
+    let compute_border = |py: usize, ix_center: isize, iy_center: isize| -> i32 {
+        let w = &WEIGHTS_V[py];
+        let mut sum = 0i64;
+        let global_ix_center = rect.origin.0 as isize + ix_center;
+        let global_iy_center = (rect.origin.1 / 2) as isize + iy_center;
+        for dy in -2isize..=2 {
+            let r_w = &w[(dy + 2) as usize];
+            let iy = global_iy_center + dy;
+            for dx in -1isize..=1 {
+                sum += get_pixel_global(input, frame_header, global_ix_center + dx, iy) as i64
+                    * r_w[(dx + 1) as usize] as i64;
+            }
+        }
+        let val = if sum >= 0 {
+            (sum + 32768) >> 16
+        } else {
+            (sum - 32768) >> 16
+        };
+        val as i32
+    };
 
     for y in 0..ys {
         let output_row = output.row_mut(y);
         let py = y % 2;
-        let iy_center = (y / 2) as isize;
+        let iy_center = y / 2;
 
-        // Pre-clamp the 5 row slices at the beginning of the row
-        let clamped_y = |iy: isize| -> usize { iy.clamp(0, in_ys as isize - 1) as usize };
-        let r0 = input.row(clamped_y(iy_center - 2));
-        let r1 = input.row(clamped_y(iy_center - 1));
-        let r2 = input.row(clamped_y(iy_center));
-        let r3 = input.row(clamped_y(iy_center + 1));
-        let r4 = input.row(clamped_y(iy_center + 2));
-
-        let compute = |ix0: usize, ix1: usize, ix2: usize| -> i32 {
-            let w = &WEIGHTS_V[py];
-            let sum = (r0[ix0] as i64 * w[0][0] as i64)
-                + (r0[ix1] as i64 * w[0][1] as i64)
-                + (r0[ix2] as i64 * w[0][2] as i64)
-                + (r1[ix0] as i64 * w[1][0] as i64)
-                + (r1[ix1] as i64 * w[1][1] as i64)
-                + (r1[ix2] as i64 * w[1][2] as i64)
-                + (r2[ix0] as i64 * w[2][0] as i64)
-                + (r2[ix1] as i64 * w[2][1] as i64)
-                + (r2[ix2] as i64 * w[2][2] as i64)
-                + (r3[ix0] as i64 * w[3][0] as i64)
-                + (r3[ix1] as i64 * w[3][1] as i64)
-                + (r3[ix2] as i64 * w[3][2] as i64)
-                + (r4[ix0] as i64 * w[4][0] as i64)
-                + (r4[ix1] as i64 * w[4][1] as i64)
-                + (r4[ix2] as i64 * w[4][2] as i64);
-            let val = if sum >= 0 {
-                (sum + 32768) >> 16
-            } else {
-                (sum - 32768) >> 16
-            };
-            val as i32
-        };
-
-        let get_clamped_x = |ix: isize| -> usize { ix.clamp(0, in_xs as isize - 1) as usize };
-
-        // Extremal values of x at the beginning
-        for x in 0..x_start.min(xs) {
-            let ix_center = x as isize;
-            let ix0 = get_clamped_x(ix_center - 1);
-            let ix1 = get_clamped_x(ix_center);
-            let ix2 = get_clamped_x(ix_center + 1);
-            output_row[x] = compute(ix0, ix1, ix2);
-        }
-
-        // Main inner loop
-        if x_start < x_end {
-            for x in x_start..x_end {
+        if y < y_start || y >= y_end {
+            for x in 0..xs {
                 let ix_center = x;
-                output_row[x] = compute(ix_center - 1, ix_center, ix_center + 1);
+                output_row[x] = compute_border(py, ix_center as isize, iy_center as isize);
             }
-        }
+        } else {
+            // Start border
+            for x in 0..x_start.min(xs) {
+                let ix_center = x;
+                output_row[x] = compute_border(py, ix_center as isize, iy_center as isize);
+            }
 
-        // Extremal values of x at the end
-        for x in x_start.max(x_end)..xs {
-            let ix_center = x as isize;
-            let ix0 = get_clamped_x(ix_center - 1);
-            let ix1 = get_clamped_x(ix_center);
-            let ix2 = get_clamped_x(ix_center + 1);
-            output_row[x] = compute(ix0, ix1, ix2);
+            // Interior fast path
+            if x_start < x_end {
+                let r0 = in_grid_data.row(row_offset + iy_center - 2);
+                let r1 = in_grid_data.row(row_offset + iy_center - 1);
+                let r2 = in_grid_data.row(row_offset + iy_center);
+                let r3 = in_grid_data.row(row_offset + iy_center + 1);
+                let r4 = in_grid_data.row(row_offset + iy_center + 2);
+
+                for x in x_start..x_end {
+                    let ix_center = x;
+                    let w = &WEIGHTS_V[py];
+                    let sum = (r0[col_offset + ix_center - 1] as i64 * w[0][0] as i64)
+                        + (r0[col_offset + ix_center] as i64 * w[0][1] as i64)
+                        + (r0[col_offset + ix_center + 1] as i64 * w[0][2] as i64)
+                        + (r1[col_offset + ix_center - 1] as i64 * w[1][0] as i64)
+                        + (r1[col_offset + ix_center] as i64 * w[1][1] as i64)
+                        + (r1[col_offset + ix_center + 1] as i64 * w[1][2] as i64)
+                        + (r2[col_offset + ix_center - 1] as i64 * w[2][0] as i64)
+                        + (r2[col_offset + ix_center] as i64 * w[2][1] as i64)
+                        + (r2[col_offset + ix_center + 1] as i64 * w[2][2] as i64)
+                        + (r3[col_offset + ix_center - 1] as i64 * w[3][0] as i64)
+                        + (r3[col_offset + ix_center] as i64 * w[3][1] as i64)
+                        + (r3[col_offset + ix_center + 1] as i64 * w[3][2] as i64)
+                        + (r4[col_offset + ix_center - 1] as i64 * w[4][0] as i64)
+                        + (r4[col_offset + ix_center] as i64 * w[4][1] as i64)
+                        + (r4[col_offset + ix_center + 1] as i64 * w[4][2] as i64);
+                    let val = if sum >= 0 {
+                        (sum + 32768) >> 16
+                    } else {
+                        (sum - 32768) >> 16
+                    };
+                    output_row[x] = val as i32;
+                }
+            }
+
+            // End border
+            for x in x_start.max(x_end)..xs {
+                let ix_center = x as isize;
+                output_row[x] = compute_border(py, ix_center, iy_center as isize);
+            }
         }
     }
 }

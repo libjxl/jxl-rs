@@ -278,11 +278,14 @@ impl TransformStepChunk {
                 let buf_res = &buffers[buf_in[1]];
                 let in_grid = buf_avg.get_grid_idx(out_grid_kind, self.grid_pos);
                 let res_grid = buf_res.get_grid_idx(out_grid_kind, self.grid_pos);
-                let zero_res = buf_res.grid_kind == ModularGridKind::None
-                    && buf_res.buffer_grid[0].get_status() == BUFFER_STATUS_ZERO_FILLED;
+                let zero_res =
+                    buf_res.buffer_grid[res_grid].get_status() == BUFFER_STATUS_ZERO_FILLED;
                 let double_zero_res = zero_res
                     && buf_in_avg.is_some_and(|x| {
-                        buffers[x[1]].buffer_grid[0].get_status() == BUFFER_STATUS_ZERO_FILLED
+                        let avg2_res_grid =
+                            buffers[x[1]].get_grid_idx(out_grid_kind, self.grid_pos);
+                        buffers[x[1]].buffer_grid[avg2_res_grid].get_status()
+                            == BUFFER_STATUS_ZERO_FILLED
                     });
                 {
                     trace!(
@@ -290,6 +293,15 @@ impl TransformStepChunk {
                         buf_in, buf_out, self.grid_pos
                     );
                     let (gx, gy) = self.grid_pos;
+                    let mut out_rect =
+                        buffers[*buf_out].get_grid_rect(frame_header, out_grid_kind, (gx, gy));
+                    out_rect.origin = if out_grid_kind == ModularGridKind::None {
+                        (0, 0)
+                    } else {
+                        let out_shift = buffers[*buf_out].info.shift.unwrap_or((0, 0));
+                        let out_grid_dim = out_grid_kind.grid_dim(frame_header, out_shift);
+                        (gx * out_grid_dim.0, gy * out_grid_dim.1)
+                    };
                     let in_avg = AtomicRef::map(buf_avg.buffer_grid[in_grid].data.borrow(), |x| {
                         x.as_ref().unwrap()
                     });
@@ -323,27 +335,23 @@ impl TransformStepChunk {
                         ))
                     };
 
-                    let in_avg2 = if double_zero_res {
-                        Some(AtomicRef::map(
-                            buffers[buf_in_avg.unwrap()[0]].buffer_grid[0].data.borrow(),
-                            |x| x.as_ref().unwrap(),
-                        ))
-                    } else {
-                        None
-                    };
-
                     with_buffers(buffers, &[*buf_out], out_grid, |mut bufs| {
                         if bufs.is_empty() {
                             return Ok(());
                         }
                         if double_zero_res {
                             assert_eq!(bufs.len(), 1);
-                            smooth_2d_unsqueeze(&in_avg2.unwrap().data, &mut bufs[0].data);
+                            smooth_2d_unsqueeze(
+                                &buffers[buf_in_avg.unwrap()[0]],
+                                frame_header,
+                                out_rect,
+                                &mut bufs[0].data,
+                            );
                             return Ok(());
                         }
                         if zero_res {
                             assert_eq!(bufs.len(), 1);
-                            smooth_h_unsqueeze(&in_avg.data, &mut bufs[0].data);
+                            smooth_h_unsqueeze(buf_avg, frame_header, out_rect, &mut bufs[0].data);
                             return Ok(());
                         }
                         super::squeeze::do_hsqueeze_step(
@@ -376,11 +384,14 @@ impl TransformStepChunk {
                 let buf_res = &buffers[buf_in[1]];
                 let in_grid = buf_avg.get_grid_idx(out_grid_kind, self.grid_pos);
                 let res_grid = buf_res.get_grid_idx(out_grid_kind, self.grid_pos);
-                let zero_res = buf_res.grid_kind == ModularGridKind::None
-                    && buf_res.buffer_grid[0].get_status() == BUFFER_STATUS_ZERO_FILLED;
+                let zero_res =
+                    buf_res.buffer_grid[res_grid].get_status() == BUFFER_STATUS_ZERO_FILLED;
                 let double_zero_res = zero_res
                     && buf_in_avg.is_some_and(|x| {
-                        buffers[x[1]].buffer_grid[0].get_status() == BUFFER_STATUS_ZERO_FILLED
+                        let avg2_res_grid =
+                            buffers[x[1]].get_grid_idx(out_grid_kind, self.grid_pos);
+                        buffers[x[1]].buffer_grid[avg2_res_grid].get_status()
+                            == BUFFER_STATUS_ZERO_FILLED
                     });
                 {
                     trace!(
@@ -388,6 +399,15 @@ impl TransformStepChunk {
                         buf_in, buf_out, self.grid_pos
                     );
                     let (gx, gy) = self.grid_pos;
+                    let mut out_rect =
+                        buffers[*buf_out].get_grid_rect(frame_header, out_grid_kind, (gx, gy));
+                    out_rect.origin = if out_grid_kind == ModularGridKind::None {
+                        (0, 0)
+                    } else {
+                        let out_shift = buffers[*buf_out].info.shift.unwrap_or((0, 0));
+                        let out_grid_dim = out_grid_kind.grid_dim(frame_header, out_shift);
+                        (gx * out_grid_dim.0, gy * out_grid_dim.1)
+                    };
                     let in_avg = AtomicRef::map(buf_avg.buffer_grid[in_grid].data.borrow(), |x| {
                         x.as_ref().unwrap()
                     });
@@ -425,27 +445,23 @@ impl TransformStepChunk {
                     let res_grid_rect =
                         buf_res.get_grid_rect(frame_header, out_grid_kind, (gx, gy));
 
-                    let in_avg2 = if double_zero_res {
-                        Some(AtomicRef::map(
-                            buffers[buf_in_avg.unwrap()[0]].buffer_grid[0].data.borrow(),
-                            |x| x.as_ref().unwrap(),
-                        ))
-                    } else {
-                        None
-                    };
-
                     with_buffers(buffers, &[*buf_out], out_grid, |mut bufs| {
                         if bufs.is_empty() {
                             return Ok(());
                         }
                         if double_zero_res {
                             assert_eq!(bufs.len(), 1);
-                            smooth_2d_unsqueeze(&in_avg2.unwrap().data, &mut bufs[0].data);
+                            smooth_2d_unsqueeze(
+                                &buffers[buf_in_avg.unwrap()[0]],
+                                frame_header,
+                                out_rect,
+                                &mut bufs[0].data,
+                            );
                             return Ok(());
                         }
                         if zero_res {
                             assert_eq!(bufs.len(), 1);
-                            smooth_v_unsqueeze(&in_avg.data, &mut bufs[0].data);
+                            smooth_v_unsqueeze(buf_avg, frame_header, out_rect, &mut bufs[0].data);
                             return Ok(());
                         }
                         super::squeeze::do_vsqueeze_step(
