@@ -4,6 +4,14 @@
 // license that can be found in the LICENSE file.
 
 #![allow(clippy::too_many_arguments)]
+#![cfg_attr(
+    all(target_arch = "arm", target_feature = "v7", feature = "nightly"),
+    feature(
+        arm_target_feature,
+        stdarch_arm_feature_detection,
+        stdarch_arm_neon_intrinsics
+    )
+)]
 
 use std::{
     fmt::Debug,
@@ -16,8 +24,11 @@ use std::{
 #[cfg(target_arch = "x86_64")]
 mod x86_64;
 
-#[cfg(target_arch = "aarch64")]
-mod aarch64;
+#[cfg(any(
+    target_arch = "aarch64",
+    all(target_arch = "arm", target_feature = "v7", feature = "nightly")
+))]
+mod arm;
 
 #[cfg(target_arch = "wasm32")]
 mod wasm32;
@@ -34,8 +45,14 @@ pub use x86_64::avx512::Avx512Descriptor;
 #[cfg(all(target_arch = "x86_64", feature = "sse42"))]
 pub use x86_64::sse42::Sse42Descriptor;
 
-#[cfg(all(target_arch = "aarch64", feature = "neon"))]
-pub use aarch64::neon::NeonDescriptor;
+#[cfg(all(
+    any(
+        target_arch = "aarch64",
+        all(target_arch = "arm", target_feature = "v7", feature = "nightly")
+    ),
+    feature = "neon"
+))]
+pub use arm::neon::NeonDescriptor;
 
 #[cfg(all(target_arch = "wasm32", feature = "simd128"))]
 pub use wasm32::simd128::Simd128Descriptor;
