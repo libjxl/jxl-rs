@@ -5,7 +5,6 @@
 
 use std::{
     arch::wasm32::*,
-    mem::MaybeUninit,
     ops::{
         Add, AddAssign, BitAnd, BitAndAssign, BitOr, BitOrAssign, BitXor, BitXorAssign, Div,
         DivAssign, Mul, MulAssign, Neg, Sub, SubAssign,
@@ -67,9 +66,7 @@ impl SimdDescriptor for Simd128Descriptor {
 #[repr(transparent)]
 pub struct F32VecSimd128(v128, Simd128Descriptor);
 
-// SAFETY: The methods in this implementation that write to `MaybeUninit` (store_interleaved_*)
-// ensure that they write valid data to the output slice without reading uninitialized memory.
-unsafe impl F32SimdVec for F32VecSimd128 {
+impl F32SimdVec for F32VecSimd128 {
     type Descriptor = Simd128Descriptor;
 
     const LEN: usize = 4;
@@ -99,7 +96,7 @@ unsafe impl F32SimdVec for F32VecSimd128 {
     }
 
     #[inline(always)]
-    fn store_interleaved_2_uninit(a: Self, b: Self, dest: &mut [MaybeUninit<f32>]) {
+    fn store_interleaved_2(a: Self, b: Self, dest: &mut [f32]) {
         assert!(dest.len() >= 2 * Self::LEN);
         // a = [a0, a1, a2, a3], b = [b0, b1, b2, b3]
         // out0 = [a0, b0, a1, b1], out1 = [a2, b2, a3, b3]
@@ -114,7 +111,7 @@ unsafe impl F32SimdVec for F32VecSimd128 {
     }
 
     #[inline(always)]
-    fn store_interleaved_3_uninit(a: Self, b: Self, c: Self, dest: &mut [MaybeUninit<f32>]) {
+    fn store_interleaved_3(a: Self, b: Self, c: Self, dest: &mut [f32]) {
         assert!(dest.len() >= 3 * Self::LEN);
         // a = [a0, a1, a2, a3], b = [b0, b1, b2, b3], c = [c0, c1, c2, c3]
         // out0 = [a0, b0, c0, a1], out1 = [b1, c1, a2, b2], out2 = [c2, a3, b3, c3]
@@ -135,13 +132,7 @@ unsafe impl F32SimdVec for F32VecSimd128 {
     }
 
     #[inline(always)]
-    fn store_interleaved_4_uninit(
-        a: Self,
-        b: Self,
-        c: Self,
-        d: Self,
-        dest: &mut [MaybeUninit<f32>],
-    ) {
+    fn store_interleaved_4(a: Self, b: Self, c: Self, d: Self, dest: &mut [f32]) {
         assert!(dest.len() >= 4 * Self::LEN);
         // a = [a0,a1,a2,a3], b = [b0,b1,b2,b3], c = [c0,c1,c2,c3], d = [d0,d1,d2,d3]
         // out = [a0,b0,c0,d0, a1,b1,c1,d1, a2,b2,c2,d2, a3,b3,c3,d3]
@@ -836,9 +827,7 @@ impl U32SimdVec for U32VecSimd128 {
 #[repr(transparent)]
 pub struct U8VecSimd128(v128, Simd128Descriptor);
 
-// SAFETY: The methods in this implementation that write to `MaybeUninit` (store_interleaved_*)
-// ensure that they write valid data to the output slice without reading uninitialized memory.
-unsafe impl U8SimdVec for U8VecSimd128 {
+impl U8SimdVec for U8VecSimd128 {
     type Descriptor = Simd128Descriptor;
     const LEN: usize = 16;
 
@@ -862,7 +851,7 @@ unsafe impl U8SimdVec for U8VecSimd128 {
     }
 
     #[inline(always)]
-    fn store_interleaved_2_uninit(a: Self, b: Self, dest: &mut [MaybeUninit<u8>]) {
+    fn store_interleaved_2(a: Self, b: Self, dest: &mut [u8]) {
         assert!(dest.len() >= 2 * Self::LEN);
         let lo = i8x16_shuffle::<0, 16, 1, 17, 2, 18, 3, 19, 4, 20, 5, 21, 6, 22, 7, 23>(a.0, b.0);
         let hi =
@@ -876,7 +865,7 @@ unsafe impl U8SimdVec for U8VecSimd128 {
     }
 
     #[inline(always)]
-    fn store_interleaved_3_uninit(a: Self, b: Self, c: Self, dest: &mut [MaybeUninit<u8>]) {
+    fn store_interleaved_3(a: Self, b: Self, c: Self, dest: &mut [u8]) {
         assert!(dest.len() >= 3 * Self::LEN);
         // 3-way byte interleave using 2 shuffles per output vector.
         let ab0 = i8x16_shuffle::<0, 16, 0, 1, 17, 0, 2, 18, 0, 3, 19, 0, 4, 20, 0, 5>(a.0, b.0);
@@ -902,13 +891,7 @@ unsafe impl U8SimdVec for U8VecSimd128 {
     }
 
     #[inline(always)]
-    fn store_interleaved_4_uninit(
-        a: Self,
-        b: Self,
-        c: Self,
-        d: Self,
-        dest: &mut [MaybeUninit<u8>],
-    ) {
+    fn store_interleaved_4(a: Self, b: Self, c: Self, d: Self, dest: &mut [u8]) {
         assert!(dest.len() >= 4 * Self::LEN);
         // Stage 1: interleave a,b and c,d
         let ab_lo =
@@ -947,9 +930,7 @@ unsafe impl U8SimdVec for U8VecSimd128 {
 #[repr(transparent)]
 pub struct U16VecSimd128(v128, Simd128Descriptor);
 
-// SAFETY: The methods in this implementation that write to `MaybeUninit` (store_interleaved_*)
-// ensure that they write valid data to the output slice without reading uninitialized memory.
-unsafe impl U16SimdVec for U16VecSimd128 {
+impl U16SimdVec for U16VecSimd128 {
     type Descriptor = Simd128Descriptor;
     const LEN: usize = 8;
 
@@ -973,7 +954,7 @@ unsafe impl U16SimdVec for U16VecSimd128 {
     }
 
     #[inline(always)]
-    fn store_interleaved_2_uninit(a: Self, b: Self, dest: &mut [MaybeUninit<u16>]) {
+    fn store_interleaved_2(a: Self, b: Self, dest: &mut [u16]) {
         assert!(dest.len() >= 2 * Self::LEN);
         let lo = i16x8_shuffle::<0, 8, 1, 9, 2, 10, 3, 11>(a.0, b.0);
         let hi = i16x8_shuffle::<4, 12, 5, 13, 6, 14, 7, 15>(a.0, b.0);
@@ -986,7 +967,7 @@ unsafe impl U16SimdVec for U16VecSimd128 {
     }
 
     #[inline(always)]
-    fn store_interleaved_3_uninit(a: Self, b: Self, c: Self, dest: &mut [MaybeUninit<u16>]) {
+    fn store_interleaved_3(a: Self, b: Self, c: Self, dest: &mut [u16]) {
         assert!(dest.len() >= 3 * Self::LEN);
         // 3-way u16 interleave using 2 shuffles per output vector.
         let ab0 = i16x8_shuffle::<0, 8, 0, 1, 9, 0, 2, 10>(a.0, b.0);
@@ -1008,13 +989,7 @@ unsafe impl U16SimdVec for U16VecSimd128 {
     }
 
     #[inline(always)]
-    fn store_interleaved_4_uninit(
-        a: Self,
-        b: Self,
-        c: Self,
-        d: Self,
-        dest: &mut [MaybeUninit<u16>],
-    ) {
+    fn store_interleaved_4(a: Self, b: Self, c: Self, d: Self, dest: &mut [u16]) {
         assert!(dest.len() >= 4 * Self::LEN);
         // Stage 1: interleave a,b and c,d at 16-bit level
         let ab_lo = i16x8_shuffle::<0, 8, 1, 9, 2, 10, 3, 11>(a.0, b.0);
