@@ -211,8 +211,12 @@ impl F32SimdVec for F32VecSimd128 {
         assert!(src.len() >= 2 * Self::LEN);
         // src = [a0, b0, a1, b1, a2, b2, a3, b3]
         // SAFETY: we just checked that `src` has enough space.
-        let lo = unsafe { v128_load(src.as_ptr().cast()) }; // [a0, b0, a1, b1]
-        let hi = unsafe { v128_load(src.as_ptr().add(4).cast()) }; // [a2, b2, a3, b3]
+        let (lo, hi) = unsafe {
+            (
+                v128_load(src.as_ptr().cast()),        // [a0, b0, a1, b1]
+                v128_load(src.as_ptr().add(4).cast()), // [a2, b2, a3, b3]
+            )
+        };
         let a = i32x4_shuffle::<0, 2, 4, 6>(lo, hi); // [a0, a1, a2, a3]
         let b = i32x4_shuffle::<1, 3, 5, 7>(lo, hi); // [b0, b1, b2, b3]
         (Self(a, d), Self(b, d))
@@ -224,9 +228,13 @@ impl F32SimdVec for F32VecSimd128 {
         // src = [a0,b0,c0, a1,b1,c1, a2,b2,c2, a3,b3,c3]
         // v0 = [a0, b0, c0, a1], v1 = [b1, c1, a2, b2], v2 = [c2, a3, b3, c3]
         // SAFETY: we just checked that `src` has enough space.
-        let v0 = unsafe { v128_load(src.as_ptr().cast()) };
-        let v1 = unsafe { v128_load(src.as_ptr().add(4).cast()) };
-        let v2 = unsafe { v128_load(src.as_ptr().add(8).cast()) };
+        let (v0, v1, v2) = unsafe {
+            (
+                v128_load(src.as_ptr().cast()),
+                v128_load(src.as_ptr().add(4).cast()),
+                v128_load(src.as_ptr().add(8).cast()),
+            )
+        };
 
         // a = [a0, a1, a2, a3] = v0[0], v0[3], v1[2], v2[1]
         let a01 = i32x4_shuffle::<0, 3, 0, 0>(v0, v0); // [a0, a1, ?, ?]
@@ -251,10 +259,14 @@ impl F32SimdVec for F32VecSimd128 {
         assert!(src.len() >= 4 * Self::LEN);
         // src = [a0,b0,c0,d0, a1,b1,c1,d1, a2,b2,c2,d2, a3,b3,c3,d3]
         // SAFETY: we just checked that `src` has enough space.
-        let v0 = unsafe { v128_load(src.as_ptr().cast()) }; // [a0, b0, c0, d0]
-        let v1 = unsafe { v128_load(src.as_ptr().add(4).cast()) }; // [a1, b1, c1, d1]
-        let v2 = unsafe { v128_load(src.as_ptr().add(8).cast()) }; // [a2, b2, c2, d2]
-        let v3 = unsafe { v128_load(src.as_ptr().add(12).cast()) }; // [a3, b3, c3, d3]
+        let (v0, v1, v2, v3) = unsafe {
+            (
+                v128_load(src.as_ptr().cast()),         // [a0, b0, c0, d0]
+                v128_load(src.as_ptr().add(4).cast()),  // [a1, b1, c1, d1]
+                v128_load(src.as_ptr().add(8).cast()),  // [a2, b2, c2, d2]
+                v128_load(src.as_ptr().add(12).cast()), // [a3, b3, c3, d3]
+            )
+        };
 
         // Stage 1: interleave pairs
         let ac02 = i32x4_shuffle::<0, 4, 2, 6>(v0, v1); // [a0, a1, c0, c1]
@@ -275,7 +287,7 @@ impl F32SimdVec for F32VecSimd128 {
         assert!(data.len() > 3 * stride);
 
         let p0 = F32VecSimd128::load_array(d, &data[0]).0;
-        let p1 = F32VecSimd128::load_array(d, &data[1 * stride]).0;
+        let p1 = F32VecSimd128::load_array(d, &data[stride]).0;
         let p2 = F32VecSimd128::load_array(d, &data[2 * stride]).0;
         let p3 = F32VecSimd128::load_array(d, &data[3 * stride]).0;
 
@@ -285,7 +297,7 @@ impl F32SimdVec for F32VecSimd128 {
         let tr3 = i32x4_shuffle::<2, 6, 3, 7>(p2, p3);
 
         F32VecSimd128(i64x2_shuffle::<0, 2>(tr0, tr2), d).store_array(&mut data[0]);
-        F32VecSimd128(i64x2_shuffle::<1, 3>(tr0, tr2), d).store_array(&mut data[1 * stride]);
+        F32VecSimd128(i64x2_shuffle::<1, 3>(tr0, tr2), d).store_array(&mut data[stride]);
         F32VecSimd128(i64x2_shuffle::<0, 2>(tr1, tr3), d).store_array(&mut data[2 * stride]);
         F32VecSimd128(i64x2_shuffle::<1, 3>(tr1, tr3), d).store_array(&mut data[3 * stride]);
     }
@@ -447,6 +459,7 @@ impl F32SimdVec for F32VecSimd128 {
     #[inline(always)]
     fn load_f16_bits(d: Self::Descriptor, mem: &[u16]) -> Self {
         assert!(mem.len() >= Self::LEN);
+        // SAFETY: we just checked that `mem` has enough space.
         let lo = unsafe { v128_load64_splat(mem.as_ptr().cast()) };
         let zero = i32x4_splat(0);
         let wide =
@@ -478,8 +491,12 @@ impl F32SimdVec for F32VecSimd128 {
         // Convert f32 table to BF16 packed in 128 bits (16 bytes for 8 entries)
         // BF16 is the high 16 bits of f32
         // SAFETY: `table` has 8 elements, so both loads are in bounds.
-        let table_lo = unsafe { v128_load(table.as_ptr().cast()) };
-        let table_hi = unsafe { v128_load(table.as_ptr().add(4).cast()) };
+        let (table_lo, table_hi) = unsafe {
+            (
+                v128_load(table.as_ptr().cast()),
+                v128_load(table.as_ptr().add(4).cast()),
+            )
+        };
 
         // Shift right by 16 to get BF16 values, then narrow to 16-bit
         let lo_shifted = u32x4_shr(table_lo, 16);
