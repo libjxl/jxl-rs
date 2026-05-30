@@ -437,7 +437,11 @@ impl SimdMask for bool {
     }
 }
 
-#[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))]
+#[cfg(not(any(
+    target_arch = "x86_64",
+    target_arch = "aarch64",
+    target_arch = "wasm32"
+)))]
 #[macro_export]
 macro_rules! simd_function {
     (
@@ -456,7 +460,11 @@ macro_rules! simd_function {
     };
 }
 
-#[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))]
+#[cfg(not(any(
+    target_arch = "x86_64",
+    target_arch = "aarch64",
+    target_arch = "wasm32"
+)))]
 #[macro_export]
 macro_rules! test_all_instruction_sets {
     (
@@ -472,7 +480,11 @@ macro_rules! test_all_instruction_sets {
     };
 }
 
-#[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))]
+#[cfg(not(any(
+    target_arch = "x86_64",
+    target_arch = "aarch64",
+    target_arch = "wasm32"
+)))]
 #[macro_export]
 macro_rules! bench_all_instruction_sets {
     (
