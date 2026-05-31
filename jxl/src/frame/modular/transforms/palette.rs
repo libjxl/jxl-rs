@@ -168,7 +168,6 @@ fn get_palette_value_with_row(
     }
 }
 
-#[inline(always)]
 pub fn do_palette_step_general(
     buf_in: &ModularChannel,
     buf_pal: &ModularChannel,
@@ -188,16 +187,18 @@ pub fn do_palette_step_general(
     } else if num_deltas == 0 && predictor == Predictor::Zero {
         for (chan_index, out) in buf_out.iter_mut().enumerate() {
             let pal_row = palette.row(chan_index);
+            // Asserting palette_size <= pal_row.len() once lets the compiler elide the
+            // bounds check on `pal_row[idx]` inside the loop given the `idx < num_colors`
+            // guard.
+            assert!(num_colors <= pal_row.len());
             for y in 0..h {
                 let row_index = buf_in.data.row(y);
                 let row_out = out.data.row_mut(y);
-                #[allow(unsafe_code)]
                 for x in 0..w {
                     let index = row_index[x];
                     let idx = index as usize;
                     if idx < num_colors {
-                        // SAFETY: idx < num_colors <= pal_row.len()
-                        row_out[x] = unsafe { *pal_row.get_unchecked(idx) };
+                        row_out[x] = pal_row[idx];
                     } else {
                         row_out[x] = get_palette_value_with_row(
                             pal_row,
@@ -266,7 +267,6 @@ pub fn do_palette_step_general(
     }
 }
 
-#[inline(always)]
 #[allow(clippy::too_many_arguments)]
 fn get_prediction_data(
     buf: &mut [&mut ModularChannel],
@@ -313,7 +313,6 @@ fn get_prediction_data(
     )
 }
 
-#[inline(always)]
 #[allow(clippy::too_many_arguments)]
 pub fn do_palette_step_one_group(
     buf_in: &ModularChannel,
@@ -340,21 +339,19 @@ pub fn do_palette_step_one_group(
         // Avoids prediction data computation entirely.
         for c in 0..num_c {
             let pal_row = palette.row(c);
+            // Asserting once lets the compiler elide the bounds check inside the loop
+            // given the `idx < palette_size` guard.
+            assert!(palette_size <= pal_row.len());
             let out_idx = c * grid_ysize * grid_xsize + grid_y * grid_xsize + grid_x;
             for y in 0..h {
                 let index_img = buf_in.data.row(y);
                 let out_row = buf_out[out_idx].data.row_mut(y);
-                #[allow(unsafe_code)]
                 for (x, &index) in index_img.iter().enumerate() {
-                    // Fast path: direct palette lookup for valid indices (common case).
-                    // Skip the multi-branch get_palette_value_with_row for the hot path.
                     let idx = index as usize;
                     if idx < palette_size {
-                        // SAFETY: idx < palette_size <= pal_row.len() (palette is at least
-                        // palette_size wide, validated during palette transform setup).
-                        out_row[x] = unsafe { *pal_row.get_unchecked(idx) };
+                        out_row[x] = pal_row[idx];
                     } else {
-                        // Rare case: implicit color cube or negative index
+                        // Rare case: implicit color cube or negative index.
                         out_row[x] = get_palette_value_with_row(
                             pal_row,
                             index as isize,
@@ -400,7 +397,6 @@ pub fn do_palette_step_one_group(
     }
 }
 
-#[inline(always)]
 #[allow(clippy::too_many_arguments)]
 pub fn do_palette_step_group_row(
     buf_in: &[&ModularChannel],
