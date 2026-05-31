@@ -10,7 +10,7 @@ use crate::{
     image::{DataTypeTag, ImageDataType},
     render::MAX_BORDER,
     util::{
-        CACHE_LINE_BYTE_SIZE, CacheLine, StackVec, num_per_cache_line, slice_from_cachelines,
+        CACHE_LINE_BYTE_SIZE, CacheLine, SmallVec, num_per_cache_line, slice_from_cachelines,
         slice_from_cachelines_mut,
     },
 };
@@ -88,7 +88,7 @@ impl RowBuffer {
         &mut self,
         y: Range<usize>,
         xoffset: usize,
-    ) -> StackVec<&mut [T], 8> {
+    ) -> SmallVec<&mut [T], 8> {
         assert!(y.clone().count() <= self.num_rows);
         let first_row_idx = y.start & (self.num_rows - 1);
         let stride = self.row_stride;
@@ -105,12 +105,13 @@ impl RowBuffer {
             .collect()
     }
 
-    /// Push rows directly into an existing StackVec, avoiding temporary allocation.
+    /// Push rows directly into an existing SmallVec, avoiding the temporary allocation +
+    /// `extend_sv` round-trip incurred by `get_rows_mut`.
     pub fn push_rows_mut<'a, T: ImageDataType>(
         &'a mut self,
         y: Range<usize>,
         xoffset: usize,
-        out: &mut StackVec<&'a mut [T], 8>,
+        out: &mut SmallVec<&'a mut [T], 8>,
     ) {
         assert!(y.clone().count() <= self.num_rows);
         let first_row_idx = y.start & (self.num_rows - 1);
