@@ -26,9 +26,31 @@ pub struct BlendingStage {
     pub zeros: Vec<f32>,
 }
 
-/// Per-thread state for BlendingStage: pre-allocated tmp buffer reused across calls.
+/// Per-thread scratch for BlendingStage.
+///
+/// Holds a single flat `Vec<f32>` of `num_channels * xsize` elements, grown as needed via
+/// `ensure_capacity`. `process_row_chunk` re-slices it into one `&mut [f32]` per channel each
+/// call (cheap; no allocation) before handing it to `perform_blending_with_tmp`. This matches
+/// the pattern used by `UpsampleState` and `CmsLocalState`.
 struct BlendingState {
-    tmp: Vec<Vec<f32>>,
+    scratch: Vec<f32>,
+}
+
+impl BlendingState {
+    fn new() -> Self {
+        // xsize is not known at stage-construction time, so the storage is grown lazily on
+        // the first row chunk.
+        Self {
+            scratch: Vec::new(),
+        }
+    }
+
+    fn ensure_capacity(&mut self, num_channels: usize, xsize: usize) {
+        let needed = num_channels * xsize;
+        if self.scratch.len() < needed {
+            self.scratch.resize(needed, 0.0);
+        }
+    }
 }
 
 impl From<&BlendingInfo> for PatchBlending {
@@ -81,7 +103,7 @@ impl RenderPipelineInPlaceStage for BlendingStage {
     }
 
     fn init_local_state(&self, _thread_index: usize) -> Result<Option<Box<dyn std::any::Any>>> {
-        Ok(Some(Box::new(BlendingState { tmp: Vec::new() })))
+        Ok(Some(Box::new(BlendingState::new())))
     }
 
     fn process_row_chunk(
@@ -149,14 +171,30 @@ impl RenderPipelineInPlaceStage for BlendingStage {
             ec_blend_buf[i] = PatchBlending::from(bi);
         }
 
-        // Use pre-allocated tmp buffer from state to avoid per-call heap allocation.
-        let reusable_tmp =
-            state.and_then(|s| s.downcast_mut::<BlendingState>().map(|bs| &mut bs.tmp));
-
         // Build bg slice references on stack instead of using slice! macro (which allocates a Vec).
         let mut bg_slices: [&mut [f32]; MAX_CHANNELS] = Default::default();
         for (i, r) in row[..total_channels].iter_mut().enumerate() {
             bg_slices[i] = &mut r[bg_x0..bg_x1];
+        }
+
+        // Borrow the per-thread scratch from the render pipeline state, grow it if needed,
+        // and re-slice it into one row per channel. No allocation in the hot path.
+        let bg_xsize = bg_x1 - bg_x0;
+        let state = state
+            .expect("BlendingStage requires per-thread state")
+            .downcast_mut::<BlendingState>()
+            .expect("BlendingStage state has wrong type");
+        state.ensure_capacity(total_channels, bg_xsize);
+        let mut tmp_slices: [&mut [f32]; MAX_CHANNELS] = Default::default();
+        if bg_xsize > 0 {
+            for (i, chunk) in state
+                .scratch
+                .chunks_exact_mut(bg_xsize)
+                .take(total_channels)
+                .enumerate()
+            {
+                tmp_slices[i] = chunk;
+            }
         }
 
         perform_blending_with_tmp(
@@ -165,7 +203,7 @@ impl RenderPipelineInPlaceStage for BlendingStage {
             &blending_info,
             &ec_blend_buf[..num_ec],
             &self.extra_channels,
-            reusable_tmp,
+            &mut tmp_slices[..total_channels],
         );
     }
 }

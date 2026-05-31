@@ -21,25 +21,39 @@ pub fn perform_blending<T: AsRef<[f32]>, V: AsMut<[f32]>>(
     ec_blending: &[PatchBlending],
     extra_channel_info: &[ExtraChannelInfo],
 ) {
+    let num_channels = 3 + extra_channel_info.len();
+    let xsize = if bg.is_empty() {
+        0
+    } else {
+        bg[0].as_mut().len()
+    };
+    let mut flat = vec![0.0f32; num_channels * xsize];
+    let mut tmp: Vec<&mut [f32]> = if xsize == 0 {
+        (0..num_channels).map(|_| &mut [][..]).collect()
+    } else {
+        flat.chunks_exact_mut(xsize).collect()
+    };
     perform_blending_with_tmp(
         bg,
         fg,
         color_blending,
         ec_blending,
         extra_channel_info,
-        None,
+        &mut tmp,
     );
 }
 
-/// Like `perform_blending` but accepts a pre-allocated tmp buffer to avoid per-call heap
-/// allocation. Each inner Vec is reused across calls (only resized/zeroed as needed).
+/// Like `perform_blending` but accepts pre-split per-channel scratch slices, avoiding any
+/// allocation inside the function. `tmp` must contain at least `3 + extra_channel_info.len()`
+/// slices, each of length `bg[0].len()`. The slices' contents do not need to be initialized;
+/// every code path fully overwrites the elements it uses.
 pub fn perform_blending_with_tmp<T: AsRef<[f32]>, V: AsMut<[f32]>>(
     bg: &mut [V],
     fg: &[T],
     color_blending: &PatchBlending,
     ec_blending: &[PatchBlending],
     extra_channel_info: &[ExtraChannelInfo],
-    reusable_tmp: Option<&mut Vec<Vec<f32>>>,
+    tmp: &mut [&mut [f32]],
 ) {
     let num_ec = extra_channel_info.len();
     let xsize = bg[0].as_mut().len();
@@ -77,22 +91,8 @@ pub fn perform_blending_with_tmp<T: AsRef<[f32]>, V: AsMut<[f32]>>(
         .iter()
         .any(|info| info.ec_type == ExtraChannel::Alpha);
 
-    let num_channels = 3 + num_ec;
-
-    // Reuse pre-allocated buffer or allocate fresh.
-    let mut owned_tmp;
-    let tmp: &mut Vec<Vec<f32>> = if let Some(buf) = reusable_tmp {
-        // Ensure we have enough channels and each is the right size.
-        // No need to zero -- every code path below fully overwrites the used elements.
-        buf.resize_with(num_channels, || Vec::with_capacity(xsize));
-        for ch in buf.iter_mut().take(num_channels) {
-            ch.resize(xsize, 0.0);
-        }
-        buf
-    } else {
-        owned_tmp = vec![vec![0.0f32; xsize]; num_channels];
-        &mut owned_tmp
-    };
+    debug_assert!(tmp.len() >= 3 + num_ec);
+    debug_assert!(tmp.iter().take(3 + num_ec).all(|s| s.len() == xsize));
 
     for i in 0..num_ec {
         let alpha = ec_blending[i].alpha_channel;
@@ -322,7 +322,7 @@ pub fn perform_blending_with_tmp<T: AsRef<[f32]>, V: AsMut<[f32]>>(
         }
     }
     for i in 0..(3 + num_ec) {
-        bg[i].as_mut().copy_from_slice(&tmp[i]);
+        bg[i].as_mut().copy_from_slice(tmp[i]);
     }
 }
 
