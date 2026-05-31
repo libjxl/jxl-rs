@@ -19,7 +19,7 @@ use crate::{
             OutputColorInfo, TransferFunction, Upsample8x, XybStage,
         },
     },
-    util::{f16, mirror},
+    util::{SmallVec, f16, mirror},
 };
 
 impl Frame {
@@ -163,8 +163,12 @@ impl Frame {
                 .collect();
                 let input_channels = Channels::new(input_rows_refs, 1, 5);
 
-                let output_rows_refs =
-                    upsampled_rows[c].get_rows_mut(y * 8..y * 8 + 8, RowBuffer::x0_offset::<f32>());
+                let mut output_rows_refs = SmallVec::new();
+                upsampled_rows[c].get_rows_mut(
+                    y * 8..y * 8 + 8,
+                    RowBuffer::x0_offset::<f32>(),
+                    &mut output_rows_refs,
+                );
                 let mut output_channels = ChannelsMut::new(output_rows_refs, 1, 8);
 
                 upsample_stage.process_row_chunk(
@@ -197,8 +201,12 @@ impl Frame {
                             )
                             .collect();
                             let input_channels = Channels::new(input_rows_refs, 1, 1);
-                            let output_rows_refs = output_rows[c]
-                                .get_rows_mut(uy..uy + 1, RowBuffer::x0_offset::<$t>());
+                            let mut output_rows_refs = SmallVec::new();
+                            output_rows[c].get_rows_mut(
+                                uy..uy + 1,
+                                RowBuffer::x0_offset::<$t>(),
+                                &mut output_rows_refs,
+                            );
                             let mut output_channels = ChannelsMut::new(output_rows_refs, 1, 1);
                             $s.process_row_chunk(
                                 (0, 0),
