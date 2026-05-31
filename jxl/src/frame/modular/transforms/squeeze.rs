@@ -782,10 +782,29 @@ fn get_pixel_global(
     }
 }
 
+fn compute_unsqueeze_offsets(
+    input: &ModularBufferInfo,
+    frame_header: &FrameHeader,
+    out_grid_kind: ModularGridKind,
+    input_origin: (usize, usize),
+) -> (usize, usize) {
+    if input.grid_kind == ModularGridKind::None {
+        (input_origin.1, input_origin.0)
+    } else {
+        let shift = input.info.shift.unwrap_or((0, 0));
+        let out_grid_dim = out_grid_kind.grid_dim(frame_header, shift);
+        let gx = input_origin.0 / out_grid_dim.0;
+        let gy = input_origin.1 / out_grid_dim.1;
+        let input_rect = input.get_grid_rect(frame_header, out_grid_kind, (gx, gy));
+        (input_rect.origin.1, input_rect.origin.0)
+    }
+}
+
 #[allow(clippy::needless_range_loop)]
 pub fn smooth_2d_unsqueeze(
     input: &ModularBufferInfo,
     frame_header: &FrameHeader,
+    out_grid_kind: ModularGridKind,
     rect: Rect,
     output: &mut Image<i32>,
 ) {
@@ -813,11 +832,12 @@ pub fn smooth_2d_unsqueeze(
     }
     let in_grid_data = &grid_data.as_ref().unwrap().data;
 
-    let (row_offset, col_offset) = if input.grid_kind == ModularGridKind::None {
-        (rect.origin.1 / 2, rect.origin.0 / 2)
-    } else {
-        (0, 0)
-    };
+    let (row_offset, col_offset) = compute_unsqueeze_offsets(
+        input,
+        frame_header,
+        out_grid_kind,
+        (rect.origin.0 / 2, rect.origin.1 / 2),
+    );
 
     let y_start = 4;
     let y_end = if ys >= 4 { ys.min(2 * in_ys - 4) } else { 0 };
@@ -925,6 +945,7 @@ pub fn smooth_2d_unsqueeze(
 pub fn smooth_h_unsqueeze(
     input: &ModularBufferInfo,
     frame_header: &FrameHeader,
+    out_grid_kind: ModularGridKind,
     rect: Rect,
     output: &mut Image<i32>,
 ) {
@@ -952,11 +973,12 @@ pub fn smooth_h_unsqueeze(
     }
     let in_grid_data = &grid_data.as_ref().unwrap().data;
 
-    let (row_offset, col_offset) = if input.grid_kind == ModularGridKind::None {
-        (rect.origin.1, rect.origin.0 / 2)
-    } else {
-        (0, 0)
-    };
+    let (row_offset, col_offset) = compute_unsqueeze_offsets(
+        input,
+        frame_header,
+        out_grid_kind,
+        (rect.origin.0 / 2, rect.origin.1),
+    );
 
     let y_start = 1;
     let y_end = if ys >= 1 { ys.min(in_ys - 1) } else { 0 };
@@ -1051,6 +1073,7 @@ pub fn smooth_h_unsqueeze(
 pub fn smooth_v_unsqueeze(
     input: &ModularBufferInfo,
     frame_header: &FrameHeader,
+    out_grid_kind: ModularGridKind,
     rect: Rect,
     output: &mut Image<i32>,
 ) {
@@ -1078,11 +1101,12 @@ pub fn smooth_v_unsqueeze(
     }
     let in_grid_data = &grid_data.as_ref().unwrap().data;
 
-    let (row_offset, col_offset) = if input.grid_kind == ModularGridKind::None {
-        (rect.origin.1 / 2, rect.origin.0)
-    } else {
-        (0, 0)
-    };
+    let (row_offset, col_offset) = compute_unsqueeze_offsets(
+        input,
+        frame_header,
+        out_grid_kind,
+        (rect.origin.0, rect.origin.1 / 2),
+    );
 
     let y_start = 4;
     let y_end = if ys >= 4 { ys.min(2 * in_ys - 4) } else { 0 };
