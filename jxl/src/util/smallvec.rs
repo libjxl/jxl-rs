@@ -12,22 +12,81 @@ use std::{
     ops::{Deref, DerefMut},
 };
 
+pub trait SmallVecHeapStorage<T> {
+    const STACK_ONLY: bool;
+    fn as_slice(&self) -> &[T];
+    fn as_slice_mut(&mut self) -> &mut [T];
+    fn with_capacity(cap: usize) -> Self;
+    fn push(&mut self, v: T);
+    fn extend<Iter: Iterator<Item = T>>(&mut self, iter: Iter);
+}
+
+pub enum StackOnly {}
+
+impl<T> SmallVecHeapStorage<T> for StackOnly {
+    const STACK_ONLY: bool = true;
+    #[inline(always)]
+    fn as_slice(&self) -> &[T] {
+        unreachable!()
+    }
+    #[inline(always)]
+    fn as_slice_mut(&mut self) -> &mut [T] {
+        unreachable!()
+    }
+    #[inline(always)]
+    fn with_capacity(_: usize) -> Self {
+        unreachable!();
+    }
+    #[inline(always)]
+    fn push(&mut self, _: T) {
+        unreachable!()
+    }
+    #[inline(always)]
+    fn extend<Iter: Iterator<Item = T>>(&mut self, _: Iter) {
+        unreachable!()
+    }
+}
+
+impl<T> SmallVecHeapStorage<T> for Vec<T> {
+    const STACK_ONLY: bool = false;
+    #[inline(always)]
+    fn as_slice(&self) -> &[T] {
+        &self[..]
+    }
+    #[inline(always)]
+    fn as_slice_mut(&mut self) -> &mut [T] {
+        &mut self[..]
+    }
+    #[inline(always)]
+    fn with_capacity(cap: usize) -> Self {
+        Self::with_capacity(cap)
+    }
+    #[inline(always)]
+    fn push(&mut self, v: T) {
+        self.push(v)
+    }
+    #[inline(always)]
+    fn extend<Iter: Iterator<Item = T>>(&mut self, iter: Iter) {
+        Extend::extend(self, iter)
+    }
+}
+
 /// Note: this implementation of SmallVec is not panic-safe, in the sense
 /// that in presence of panics the SmallVec will be left in some valid but
 /// unspecified state.
-pub enum SmallVec<T, const N: usize> {
+pub enum SmallVec<T, const N: usize, HeapStorage: SmallVecHeapStorage<T> = Vec<T>> {
     Stack {
         // Safety invariant: the first `len` values of `data` are initialized.
         len: usize,
         data: [MaybeUninit<T>; N],
     },
-    Heap(Vec<T>),
+    Heap(HeapStorage),
 }
 
-impl<T, const N: usize> Deref for SmallVec<T, N> {
+impl<T, const N: usize, HeapStorage: SmallVecHeapStorage<T>> Deref for SmallVec<T, N, HeapStorage> {
     type Target = [T];
 
-    #[inline(always)]
+    #[inline]
     fn deref(&self) -> &[T] {
         match self {
             SmallVec::Stack { len, data } => {
@@ -36,13 +95,15 @@ impl<T, const N: usize> Deref for SmallVec<T, N> {
                 // initialized, and T and MaybeUninit<T> have the same size and alignment.
                 unsafe { slice::from_raw_parts(data.as_ptr().cast::<T>(), data.len()) }
             }
-            SmallVec::Heap(v) => &v[..],
+            SmallVec::Heap(v) => v.as_slice(),
         }
     }
 }
 
-impl<T, const N: usize> DerefMut for SmallVec<T, N> {
-    #[inline(always)]
+impl<T, const N: usize, HeapStorage: SmallVecHeapStorage<T>> DerefMut
+    for SmallVec<T, N, HeapStorage>
+{
+    #[inline]
     fn deref_mut(&mut self) -> &mut [T] {
         match self {
             SmallVec::Stack { len, data } => {
@@ -51,25 +112,29 @@ impl<T, const N: usize> DerefMut for SmallVec<T, N> {
                 // initialized, and T and MaybeUninit<T> have the same size and alignment.
                 unsafe { slice::from_raw_parts_mut(data.as_mut_ptr().cast::<T>(), data.len()) }
             }
-            SmallVec::Heap(v) => &mut v[..],
+            SmallVec::Heap(v) => v.as_slice_mut(),
         }
     }
 }
 
-impl<T: Debug, const N: usize> Debug for SmallVec<T, N> {
+impl<T: Debug, const N: usize, HeapStorage: SmallVecHeapStorage<T>> Debug
+    for SmallVec<T, N, HeapStorage>
+{
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "SmallVec<{N}>({:?})", &**self)
     }
 }
 
-impl<T, const N: usize> Default for SmallVec<T, N> {
+impl<T, const N: usize, HeapStorage: SmallVecHeapStorage<T>> Default
+    for SmallVec<T, N, HeapStorage>
+{
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl<T, const N: usize> SmallVec<T, N> {
-    #[inline(always)]
+impl<T, const N: usize, HeapStorage: SmallVecHeapStorage<T>> SmallVec<T, N, HeapStorage> {
+    #[inline]
     pub fn new() -> Self {
         Self::Stack {
             // Safety note: len == 0 makes the safety invariant trivially true.
@@ -78,29 +143,29 @@ impl<T, const N: usize> SmallVec<T, N> {
         }
     }
 
-    #[inline(always)]
+    #[inline]
     pub fn is_empty(&self) -> bool {
         match self {
             Self::Stack { len, .. } => *len == 0,
-            Self::Heap(v) => v.is_empty(),
+            Self::Heap(v) => v.as_slice().is_empty(),
         }
     }
 
-    #[inline(always)]
+    #[inline]
     pub fn len(&self) -> usize {
         match self {
             Self::Stack { len, .. } => *len,
-            Self::Heap(v) => v.len(),
+            Self::Heap(v) => v.as_slice().len(),
         }
     }
 
     #[inline(never)]
-    fn move_to_heap(&mut self) {
+    fn move_to_heap_impl(&mut self) {
         let Self::Stack { len, data } = self else {
             // Nothing to do.
             return;
         };
-        let mut ret = Vec::<T>::with_capacity(*len);
+        let mut ret = HeapStorage::with_capacity(*len);
         let old_len = *len;
         *len = 0;
         for data in data[..old_len].iter_mut() {
@@ -112,6 +177,14 @@ impl<T, const N: usize> SmallVec<T, N> {
             ret.push(unsafe { tmp.assume_init() });
         }
         *self = Self::Heap(ret);
+    }
+
+    #[inline(always)]
+    fn move_to_heap(&mut self) {
+        if HeapStorage::STACK_ONLY {
+            panic!("Tried to move a stack-only SmallVec to the heap!")
+        }
+        self.move_to_heap_impl();
     }
 
     // Note: if `iter` has an incorrect implementation of `size_hint` (specifically, incorrect
@@ -142,7 +215,7 @@ impl<T, const N: usize> SmallVec<T, N> {
         }
     }
 
-    #[inline(always)]
+    #[inline]
     pub fn push(&mut self, val: T) {
         if self.len() + 1 > N {
             self.move_to_heap();
@@ -159,49 +232,12 @@ impl<T, const N: usize> SmallVec<T, N> {
         // the array.
         *len += 1;
     }
-
-    // It is easier to implement this method than to implement IntoIterator.
-    #[inline]
-    pub fn extend_sv<const M: usize>(&mut self, mut other: SmallVec<T, M>) {
-        if self.len() + other.len() > N {
-            self.move_to_heap();
-        }
-        if matches!(self, Self::Heap(_)) {
-            other.move_to_heap();
-        }
-        if matches!(other, SmallVec::Heap(_)) {
-            self.move_to_heap();
-        }
-        let (len, data) = match self {
-            Self::Heap(v) => {
-                let SmallVec::Heap(o) = &mut other else {
-                    unreachable!()
-                };
-                v.extend(std::mem::take(o));
-                return;
-            }
-            Self::Stack { len, data } => (len, data),
-        };
-
-        // We now know `other`'s elements fit on the stack.
-        let SmallVec::Stack {
-            len: olen,
-            data: odata,
-        } = &mut other
-        else {
-            unreachable!()
-        };
-        let other_len = *olen;
-        *olen = 0;
-        data[*len..*len + other_len].swap_with_slice(&mut odata[..other_len]);
-        // Safety note: we just wrote `other_len` elements in the first non-initialized slots
-        // of the array.
-        *len += other_len;
-    }
 }
 
-impl<T, const N: usize> FromIterator<T> for SmallVec<T, N> {
-    #[inline(always)]
+impl<T, const N: usize, HeapStorage: SmallVecHeapStorage<T>> FromIterator<T>
+    for SmallVec<T, N, HeapStorage>
+{
+    #[inline]
     fn from_iter<I: IntoIterator<Item = T>>(iter: I) -> Self {
         let mut ret = Self::new();
         ret.extend(iter);
@@ -209,7 +245,7 @@ impl<T, const N: usize> FromIterator<T> for SmallVec<T, N> {
     }
 }
 
-impl<T, const N: usize> Drop for SmallVec<T, N> {
+impl<T, const N: usize, HeapStorage: SmallVecHeapStorage<T>> Drop for SmallVec<T, N, HeapStorage> {
     fn drop(&mut self) {
         if let SmallVec::Stack { len, data } = self {
             let old_len = *len;
@@ -229,6 +265,16 @@ impl<T, const N: usize> Drop for SmallVec<T, N> {
 mod tests {
     use super::*;
     use arbtest::arbitrary::Arbitrary;
+
+    #[test]
+    fn test_size() {
+        // StackOnly is uninhabited, so the enum should not have a discriminant
+        // (and all the SmallVec::Heap paths should be erased by dead-code elimination)
+        assert_eq!(
+            std::mem::size_of::<SmallVec<usize, 3, StackOnly>>(),
+            4 * std::mem::size_of::<usize>()
+        )
+    }
 
     #[test]
     fn test_new() {
@@ -262,6 +308,15 @@ mod tests {
     }
 
     #[test]
+    #[should_panic(expected = "Tried to move a stack-only SmallVec to the heap!")]
+    fn test_push_heap_stackonly() {
+        let mut sv: SmallVec<i32, 2, StackOnly> = SmallVec::new();
+        sv.push(1);
+        sv.push(2);
+        sv.push(3);
+    }
+
+    #[test]
     fn test_extend() {
         let mut sv: SmallVec<i32, 4> = SmallVec::new();
         sv.extend(vec![1, 2, 3]);
@@ -274,19 +329,6 @@ mod tests {
         assert_eq!(sv.len(), 5);
         assert_eq!(sv[4], 5);
         assert!(matches!(sv, SmallVec::Heap(_)));
-    }
-
-    #[test]
-    fn test_extend_sv() {
-        let mut sv1: SmallVec<i32, 4> = SmallVec::new();
-        sv1.push(1);
-        let mut sv2: SmallVec<i32, 4> = SmallVec::new();
-        sv2.push(2);
-
-        sv1.extend_sv(sv2);
-        assert_eq!(sv1.len(), 2);
-        assert_eq!(sv1[0], 1);
-        assert_eq!(sv1[1], 2);
     }
 
     #[test]
@@ -329,7 +371,7 @@ mod tests {
                         elements.push(u8::arbitrary(u)?);
                     }
                     smallvec.extend(elements.iter().copied());
-                    vec.extend(elements.iter().copied());
+                    Extend::extend(&mut vec, elements.iter().copied());
                 }
 
                 assert_eq!(&*smallvec, &*vec);
