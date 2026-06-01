@@ -651,6 +651,10 @@ impl Histograms {
     pub fn can_use_config_420_fast_path(&self) -> bool {
         !self.lz77_params.enabled && self.uint_configs.iter().all(|cfg| cfg.is_config_420())
     }
+
+    pub fn single_symbol(&self, ctx: usize) -> Option<u32> {
+        self.codes.single_symbol(ctx)
+    }
 }
 
 #[cfg(test)]

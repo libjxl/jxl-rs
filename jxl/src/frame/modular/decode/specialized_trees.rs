@@ -7,7 +7,7 @@ use std::{collections::VecDeque, ops::Range};
 
 use crate::{
     bit_reader::BitReader,
-    entropy_coding::decode::{Histograms, SymbolReader},
+    entropy_coding::decode::{Histograms, SymbolReader, unpack_signed},
     error::Result,
     frame::modular::{
         ModularChannel, Predictor, Tree,
@@ -28,6 +28,7 @@ pub struct NoWpTree {
     flat_nodes: Vec<FlatTreeNode>,
     references: Image<i32>,
     property_buffer: Vec<i32>,
+    single_value: Option<i32>,
 }
 
 impl NoWpTree {
@@ -37,6 +38,7 @@ impl NoWpTree {
         channel: usize,
         stream: usize,
         xsize: usize,
+        single_symbol: Option<u32>,
     ) -> Result<Self> {
         let num_ref_props = max_property_count
             .saturating_sub(NUM_NONREF_PROPERTIES)
@@ -54,14 +56,12 @@ impl NoWpTree {
             flat_nodes,
             references,
             property_buffer,
+            single_value: single_symbol.map(unpack_signed),
         })
     }
 }
 
 impl ModularChannelDecoder for NoWpTree {
-    const NEEDS_TOP: bool = true;
-    const NEEDS_TOPTOP: bool = true;
-
     fn init_row(&mut self, buffers: &mut [&mut ModularChannel], chan: usize, y: usize) {
         precompute_references(buffers, chan, y, &mut self.references);
         self.property_buffer[9] = 0;
@@ -86,7 +86,11 @@ impl ModularChannelDecoder for NoWpTree {
             &self.references,
             &mut self.property_buffer,
         );
-        let dec = reader.read_signed_clustered(histograms, br, prediction_result.context as usize);
+        let dec = if let Some(sv) = self.single_value {
+            sv
+        } else {
+            reader.read_signed_clustered(histograms, br, prediction_result.context as usize)
+        };
         make_pixel(dec, prediction_result.multiplier, prediction_result.guess)
     }
 }
@@ -104,19 +108,24 @@ impl GeneralTree {
         channel: usize,
         stream: usize,
         xsize: usize,
+        single_symbol: Option<u32>,
     ) -> Result<Self> {
         let wp_state = WeightedPredictorState::new(&header.wp_header, xsize);
         Ok(Self {
-            no_wp_tree: NoWpTree::new(nodes, max_property_count, channel, stream, xsize)?,
+            no_wp_tree: NoWpTree::new(
+                nodes,
+                max_property_count,
+                channel,
+                stream,
+                xsize,
+                single_symbol,
+            )?,
             wp_state,
         })
     }
 }
 
 impl ModularChannelDecoder for GeneralTree {
-    const NEEDS_TOP: bool = true;
-    const NEEDS_TOPTOP: bool = true;
-
     fn init_row(&mut self, buffers: &mut [&mut ModularChannel], chan: usize, y: usize) {
         self.no_wp_tree.init_row(buffers, chan, y);
     }
@@ -140,7 +149,11 @@ impl ModularChannelDecoder for GeneralTree {
             &self.no_wp_tree.references,
             &mut self.no_wp_tree.property_buffer,
         );
-        let dec = reader.read_signed_clustered(histograms, br, prediction_result.context as usize);
+        let dec = if let Some(sv) = self.no_wp_tree.single_value {
+            sv
+        } else {
+            reader.read_signed_clustered(histograms, br, prediction_result.context as usize)
+        };
         let val = make_pixel(dec, prediction_result.multiplier, prediction_result.guess);
         self.wp_state.update_errors(val, pos, xsize);
         val
@@ -225,13 +238,6 @@ impl WpOnlyLookupConfig420 {
 }
 
 impl ModularChannelDecoder for WpOnlyLookupConfig420 {
-    const NEEDS_TOP: bool = true;
-    const NEEDS_TOPTOP: bool = true;
-
-    fn init_row(&mut self, _buffers: &mut [&mut ModularChannel], _chan: usize, _y: usize) {
-        // nothing to do
-    }
-
     #[inline(always)]
     fn decode_one(
         &mut self,
@@ -292,10 +298,10 @@ fn make_gradient_lut_config_420(
 }
 
 impl ModularChannelDecoder for GradientLookupConfig420 {
-    const NEEDS_TOP: bool = true;
-    const NEEDS_TOPTOP: bool = false;
-
-    fn init_row(&mut self, _: &mut [&mut ModularChannel], _: usize, _: usize) {}
+    #[inline(always)]
+    fn needs_toptop(&self) -> bool {
+        false
+    }
 
     #[inline(always)]
     fn decode_one(
@@ -333,10 +339,10 @@ pub struct SingleGradientOnly {
 }
 
 impl ModularChannelDecoder for SingleGradientOnly {
-    const NEEDS_TOP: bool = true;
-    const NEEDS_TOPTOP: bool = false;
-
-    fn init_row(&mut self, _: &mut [&mut ModularChannel], _: usize, _: usize) {}
+    #[inline(always)]
+    fn needs_toptop(&self) -> bool {
+        false
+    }
 
     #[inline(always)]
     fn decode_one(
@@ -360,46 +366,41 @@ impl ModularChannelDecoder for SingleGradientOnly {
 
 pub struct NoTree {
     clustered_ctx: usize,
+    single_value: Option<i32>,
 }
 
 impl ModularChannelDecoder for NoTree {
-    const NEEDS_TOP: bool = false;
-    const NEEDS_TOPTOP: bool = false;
-
-    fn init_row(&mut self, _: &mut [&mut ModularChannel], _: usize, _: usize) {}
-
-    #[inline(always)]
-    fn decode_one(
+    #[inline(never)]
+    fn decode_row(
         &mut self,
-        _: PredictionData,
-        _: (usize, usize),
-        _: usize,
+        buffers: &mut [&mut ModularChannel],
+        chan: usize,
+        histograms: &Histograms,
         reader: &mut SymbolReader,
         br: &mut BitReader,
-        histograms: &Histograms,
-    ) -> i32 {
-        let dec = reader.read_signed_clustered_inline(histograms, br, self.clustered_ctx);
-        make_pixel(dec, 1, 0)
+        y: usize,
+        xsize: usize,
+    ) {
+        let row = buffers[chan].data.row_mut(y);
+        debug_assert_eq!(row.len(), xsize);
+        if let Some(sym) = self.single_value {
+            row.fill(sym);
+        } else {
+            for r in row.iter_mut() {
+                *r = reader.read_signed_clustered_inline(histograms, br, self.clustered_ctx);
+            }
+        }
     }
 }
 
-#[allow(clippy::large_enum_variant)]
-pub enum TreeSpecialCase {
-    NoTree(NoTree),
-    NoWp(NoWpTree),
-    WpOnlyConfig420(WpOnlyLookupConfig420),
-    GradientLookupConfig420(GradientLookupConfig420),
-    SingleGradientOnly(SingleGradientOnly),
-    General(GeneralTree),
-}
-
-pub fn specialize_tree(
+pub fn run_on_specialized_tree<F: FnOnce(&mut dyn ModularChannelDecoder) -> Result<()>>(
     tree: &Tree,
     channel: usize,
     stream: usize,
     xsize: usize,
     header: &GroupHeader,
-) -> Result<TreeSpecialCase> {
+    run: F,
+) -> Result<()> {
     // TODO(veluca): consider skipping the pruning if header.uses_global_tree is true.
     let mut pruned_tree = Vec::new();
     let mut queue = VecDeque::new();
@@ -409,6 +410,11 @@ pub fn specialize_tree(
 
     let mut uses_wp = false;
     let mut uses_non_wp = false;
+
+    // If, after pruning the tree, `is_single_symbol` is true, then `single_symbol` is the
+    // only symbol that could possibly be decoded by this tree.
+    let mut is_single_symbol = true;
+    let mut single_symbol = None;
 
     // Obtain a pruned tree without nodes that are not relevant in the current channel and stream.
     // Proceed in BFS order, so that we know that the children of a node will be adjacent.
@@ -453,9 +459,25 @@ pub fn specialize_tree(
                     unreachable!()
                 };
                 *id = tree.histograms.map_context_to_cluster(*id as usize) as u32;
+                if is_single_symbol {
+                    if let Some(sym) = tree.histograms.single_symbol(*id as usize) {
+                        if single_symbol.is_none() {
+                            single_symbol = Some(sym);
+                        }
+                        if single_symbol != Some(sym) {
+                            is_single_symbol = false;
+                        }
+                    } else {
+                        is_single_symbol = false;
+                    }
+                }
                 pruned_tree.push(node);
             }
         }
+    }
+
+    if !is_single_symbol {
+        single_symbol = None;
     }
 
     if let [
@@ -467,9 +489,10 @@ pub fn specialize_tree(
         },
     ] = &*pruned_tree
     {
-        return Ok(TreeSpecialCase::NoTree(NoTree {
+        return run(&mut NoTree {
             clustered_ctx: *id as usize,
-        }));
+            single_value: single_symbol.map(unpack_signed),
+        });
     }
 
     if let [
@@ -481,40 +504,43 @@ pub fn specialize_tree(
         },
     ] = &*pruned_tree
     {
-        return Ok(TreeSpecialCase::SingleGradientOnly(SingleGradientOnly {
+        return run(&mut SingleGradientOnly {
             clustered_ctx: *id as usize,
-        }));
+        });
     }
 
     if !uses_non_wp {
         // Try the specialized 420 config version (fast path for effort 3 encoded images)
-        if let Some(wp) = WpOnlyLookupConfig420::new(&pruned_tree, &tree.histograms, header, xsize)
+        if let Some(mut wp) =
+            WpOnlyLookupConfig420::new(&pruned_tree, &tree.histograms, header, xsize)
         {
-            return Ok(TreeSpecialCase::WpOnlyConfig420(wp));
+            return run(&mut wp);
         }
     }
 
     // Non-WP trees (includes effort 2 encoding and some groups in effort > 3)
     if !uses_wp {
         // Try config 420 specialized gradient LUT version (fast path for effort 2 encoded images)
-        if let Some(gl) = make_gradient_lut_config_420(&pruned_tree, &tree.histograms) {
-            return Ok(TreeSpecialCase::GradientLookupConfig420(gl));
+        if let Some(mut gl) = make_gradient_lut_config_420(&pruned_tree, &tree.histograms) {
+            return run(&mut gl);
         }
-        return Ok(TreeSpecialCase::NoWp(NoWpTree::new(
+        return run(&mut NoWpTree::new(
             pruned_tree,
             tree.max_property_count(),
             channel,
             stream,
             xsize,
-        )?));
+            single_symbol,
+        )?);
     }
 
-    Ok(TreeSpecialCase::General(GeneralTree::new(
+    run(&mut GeneralTree::new(
         pruned_tree,
         tree.max_property_count(),
         header,
         channel,
         stream,
         xsize,
-    )?))
+        single_symbol,
+    )?)
 }
