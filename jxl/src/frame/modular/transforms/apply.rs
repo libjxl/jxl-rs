@@ -344,6 +344,7 @@ impl TransformStepChunk {
                             smooth_2d_unsqueeze(
                                 &buffers[buf_in_avg.unwrap()[0]],
                                 frame_header,
+                                out_grid_kind,
                                 out_rect,
                                 &mut bufs[0].data,
                             );
@@ -351,7 +352,13 @@ impl TransformStepChunk {
                         }
                         if zero_res {
                             assert_eq!(bufs.len(), 1);
-                            smooth_h_unsqueeze(buf_avg, frame_header, out_rect, &mut bufs[0].data);
+                            smooth_h_unsqueeze(
+                                buf_avg,
+                                frame_header,
+                                out_grid_kind,
+                                out_rect,
+                                &mut bufs[0].data,
+                            );
                             return Ok(());
                         }
                         super::squeeze::do_hsqueeze_step(
@@ -454,6 +461,7 @@ impl TransformStepChunk {
                             smooth_2d_unsqueeze(
                                 &buffers[buf_in_avg.unwrap()[0]],
                                 frame_header,
+                                out_grid_kind,
                                 out_rect,
                                 &mut bufs[0].data,
                             );
@@ -461,7 +469,13 @@ impl TransformStepChunk {
                         }
                         if zero_res {
                             assert_eq!(bufs.len(), 1);
-                            smooth_v_unsqueeze(buf_avg, frame_header, out_rect, &mut bufs[0].data);
+                            smooth_v_unsqueeze(
+                                buf_avg,
+                                frame_header,
+                                out_grid_kind,
+                                out_rect,
+                                &mut bufs[0].data,
+                            );
                             return Ok(());
                         }
                         super::squeeze::do_vsqueeze_step(
