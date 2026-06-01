@@ -96,6 +96,28 @@ impl JxlDecoderInner {
         Some(self.codestream_parser.num_completed_passes())
     }
 
+    /// Number of TOC entries in the current frame, if a frame header has
+    /// been parsed.
+    pub fn toc_num_entries(&self) -> Option<usize> {
+        self.codestream_parser.toc_num_entries()
+    }
+
+    /// TOC entry at `index` for the current frame, if available.
+    pub fn toc_entry(&self, index: usize) -> Option<crate::api::TocEntry> {
+        self.codestream_parser.toc_entry(index)
+    }
+
+    /// Total size in bytes of the current frame's section data.
+    pub fn frame_data_size(&self) -> Option<u64> {
+        self.codestream_parser.frame_data_size()
+    }
+
+    /// Byte offset from the start of the input (file-absolute; includes any ISOBMFF container) to where the current
+    /// frame's TOC-described section data begins.
+    pub fn frame_data_offset(&self) -> Option<u64> {
+        self.codestream_parser.frame_data_offset()
+    }
+
     /// Fully resets the decoder to its initial state.
     ///
     /// This clears all state including pixel_format. For animation loop playback,
