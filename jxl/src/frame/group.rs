@@ -47,10 +47,10 @@ impl VarDctBuffers {
 
     /// Reset buffers to zero for reuse.
     pub fn reset(&mut self) {
-        self.scratch.fill(0.0);
-        for buf in &mut self.transform_buffer {
-            buf.fill(0.0);
-        }
+        // scratch does NOT need zeroing: each block's LF coefficients are fully written
+        // by copy_from_slice before transform_to_pixels reads them.
+        // transform_buffer does NOT need zeroing: dequant_block fully overwrites
+        // all num_coeffs entries before transform_to_pixels reads them.
         self.coeffs_storage.fill(0);
     }
 }
@@ -572,6 +572,9 @@ pub fn decode_vardct_group(
                     let mut prev = if nonzeros > num_coeffs / 16 { 0 } else { 1 };
                     let permutation = &pass_info.coeff_orders[shape_id * 3 + c];
                     let current_coeffs = &mut coeffs[c][coeffs_offset..coeffs_offset + num_coeffs];
+                    // Asserting once lets the compiler elide the bounds check on
+                    // `permutation[k]` inside the loop given `k < num_coeffs`.
+                    assert!(permutation.len() >= num_coeffs);
                     for k in num_blocks..num_coeffs {
                         if nonzeros == 0 {
                             break;

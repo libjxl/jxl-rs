@@ -273,6 +273,8 @@ pub enum Error {
     SaveDifferentDownsample((u8, u8), (u8, u8)),
     #[error("Image has {0} extra channels, more than the maximum of 256")]
     TooManyExtraChannels(usize),
+    #[error("No LF frame for level {0}")]
+    NoLfFrame(u32),
 }
 
 pub type Result<T, E = Error> = std::result::Result<T, E>;
