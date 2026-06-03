@@ -301,6 +301,20 @@ pub trait I32SimdVec:
     /// Requires `dest.len() >= Self::LEN` or it will panic.
     fn store_u16(self, dest: &mut [u16]);
 
+    /// Stores two vectors interleaved: [a0, b0, a1, b1, a2, b2, ...].
+    /// Requires `dest.len() >= 2 * Self::LEN` or it will panic.
+    fn store_interleaved_2(a: Self, b: Self, dest: &mut [i32]) {
+        let a_f32 = a.bitcast_to_f32();
+        let b_f32 = b.bitcast_to_f32();
+        // SAFETY: i32 and f32 have the same size and alignment, and both are bag-of-bits types,
+        // so the implicit transmute is safe.
+        let dest_f32 =
+            unsafe { std::slice::from_raw_parts_mut(dest.as_mut_ptr() as *mut f32, dest.len()) };
+        <<Self as I32SimdVec>::Descriptor as SimdDescriptor>::F32Vec::store_interleaved_2(
+            a_f32, b_f32, dest_f32,
+        );
+    }
+
     /// Stores the lower 8 bits of each i32 lane as u8 values.
     /// Requires `dest.len() >= Self::LEN` or it will panic.
     fn store_u8(self, dest: &mut [u8]);
@@ -1580,4 +1594,23 @@ mod test {
         });
     }
     test_all_instruction_sets!(test_f16_load_scalar_equivalent);
+
+    fn test_i32_store_interleaved_2<D: SimdDescriptor>(d: D) {
+        let len = D::I32Vec::LEN;
+        let mut a_input = vec![0i32; len];
+        let mut b_input = vec![0i32; len];
+        for i in 0..len {
+            a_input[i] = i as i32 * 2;
+            b_input[i] = i as i32 * 2 + 1;
+        }
+        let a = D::I32Vec::load(d, &a_input);
+        let b = D::I32Vec::load(d, &b_input);
+        let mut dest = vec![0i32; 2 * len];
+        D::I32Vec::store_interleaved_2(a, b, &mut dest);
+        for i in 0..len {
+            assert_eq!(dest[2 * i], i as i32 * 2);
+            assert_eq!(dest[2 * i + 1], i as i32 * 2 + 1);
+        }
+    }
+    test_all_instruction_sets!(test_i32_store_interleaved_2);
 }
