@@ -70,7 +70,6 @@ impl PredictionData {
         row_toptop: &[i32],
         x: usize,
         cur: i32,
-        needs_top: bool,
         needs_toptop: bool,
     ) -> PredictionData {
         debug_assert!(x > 1);
@@ -81,7 +80,7 @@ impl PredictionData {
         let topright = self.toprightright;
         let leftleft = self.left;
         let toptop = if needs_toptop { row_toptop[x] } else { 0 };
-        let toprightright = if needs_top { row_top[x + 2] } else { 0 };
+        let toprightright = row_top[x + 2];
         Self {
             left,
             top,
