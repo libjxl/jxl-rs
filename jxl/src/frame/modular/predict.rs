@@ -332,12 +332,8 @@ fn add_bits(x: i32) -> i64 {
 
 #[inline(always)]
 fn error_weight(x: u32, maxweight: u32) -> u32 {
-    let shift = floor_log2_nonzero(x as u64 + 1) as i32 - 5;
-    if shift < 0 {
-        4u32 + maxweight * DIVLOOKUP[x as usize & 63]
-    } else {
-        4u32 + ((maxweight * DIVLOOKUP[(x as usize >> shift) & 63]) >> shift)
-    }
+    let shift = 0.max(floor_log2_nonzero(x as u64 + 1) as i32 - 5);
+    4u32 + ((maxweight * DIVLOOKUP[(x >> shift) as usize & 63]) >> shift)
 }
 
 #[inline(always)]
@@ -353,7 +349,7 @@ fn weighted_average(pixels: &[i64; NUM_PREDICTORS], weights: &mut [u32; NUM_PRED
         .fold(((weight_sum >> 1) - 1) as i64, |sum, (i, weight)| {
             sum + pixels[i] * *weight as i64
         });
-    (sum * DIVLOOKUP[(weight_sum - 1) as usize] as i64) >> 24
+    (sum * DIVLOOKUP[(weight_sum - 1) as usize & 63] as i64) >> 24
 }
 
 #[derive(Debug)]
