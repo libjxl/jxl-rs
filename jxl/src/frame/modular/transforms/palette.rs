@@ -214,11 +214,10 @@ pub fn do_palette_step_general(
                         /*palette_size=*/ num_colors + num_deltas,
                         /*bit_depth=*/ bit_depth,
                     );
+                    let prediction_data = PredictionData::get(&out.data, x, y);
+                    let (wp_pred, _) = wp_state.predict_and_property((x, y), w, &prediction_data);
+                    let pred = predictor.predict_one(prediction_data, wp_pred);
                     let val = if index < num_deltas as i32 {
-                        let prediction_data = PredictionData::get(&out.data, x, y);
-                        let (wp_pred, _) =
-                            wp_state.predict_and_property((x, y), w, &prediction_data);
-                        let pred = predictor.predict_one(prediction_data, wp_pred);
                         (pred + palette_entry as i64) as i32
                     } else {
                         palette_entry
@@ -394,15 +393,15 @@ pub fn do_palette_step_group_row(
                             /*palette_size=*/ num_colors + num_deltas,
                             /*bit_depth=*/ bit_depth,
                         );
+                        let prediction_data = get_prediction_data(
+                            buf_out, out_idx, grid_x, grid_y, grid_xsize, x, y, xsize, ysize,
+                        );
+                        let (pred, _) = wp_state.predict_and_property(
+                            (grid_x * xsize + x, y & 1),
+                            total_w,
+                            &prediction_data,
+                        );
                         let val = if index < num_deltas as i32 {
-                            let prediction_data = get_prediction_data(
-                                buf_out, out_idx, grid_x, grid_y, grid_xsize, x, y, xsize, ysize,
-                            );
-                            let (pred, _) = wp_state.predict_and_property(
-                                (grid_x * xsize + x, y & 1),
-                                total_w,
-                                &prediction_data,
-                            );
                             (pred + palette_entry as i64) as i32
                         } else {
                             palette_entry
@@ -412,7 +411,7 @@ pub fn do_palette_step_group_row(
                     }
                 }
             }
-            let mut wp_image = Image::<i32>::new((total_w + 2, 1))?;
+            let mut wp_image = Image::<i32>::new((total_w + 2, 5))?;
             wp_state.save_state(&mut wp_image, total_w);
             buf_out[out_row_idx].auxiliary_data = Some(wp_image);
         }

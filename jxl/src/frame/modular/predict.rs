@@ -401,13 +401,31 @@ impl WeightedPredictorState {
     }
 
     pub fn save_state(&self, wp_image: &mut Image<i32>, xsize: usize) {
+        let row_stride = xsize + 2;
         wp_image
             .row_mut(0)
-            .copy_from_slice(&self.error[xsize + 2..]);
+            .copy_from_slice(&self.error[0..row_stride]);
+        for r in 0..4 {
+            let start = r * row_stride;
+            let src = &self.pred_errors_buffer[start..start + row_stride];
+            let dst = wp_image.row_mut(1 + r);
+            for (d, &s) in dst.iter_mut().zip(src) {
+                *d = s as i32;
+            }
+        }
     }
 
     pub fn restore_state(&mut self, wp_image: &Image<i32>, xsize: usize) {
-        self.error[xsize + 2..].copy_from_slice(wp_image.row(0));
+        let row_stride = xsize + 2;
+        self.error[0..row_stride].copy_from_slice(wp_image.row(0));
+        for r in 0..4 {
+            let start = r * row_stride;
+            let src = wp_image.row(1 + r);
+            let dst = &mut self.pred_errors_buffer[start..start + row_stride];
+            for (d, &s) in dst.iter_mut().zip(src) {
+                *d = s as u32;
+            }
+        }
     }
 
     #[inline(always)]
