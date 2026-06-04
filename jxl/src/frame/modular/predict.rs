@@ -332,7 +332,12 @@ fn add_bits(x: i32) -> i64 {
 
 #[inline(always)]
 fn error_weight(x: u32, maxweight: u32) -> u32 {
-    let shift = 0.max(floor_log2_nonzero(x as u64 + 1) as i32 - 5);
+    // Inline log2 to merge the XOR and subtraction by 5. 
+    // This avoids branching and permits 32-bit lzcnt instead of 64-bit. 
+    // It also unlocks some auto-vectorization, especially on ARM and AVX512 
+    // which have native 4x32 lzcnt (aligning with NUM_PREDICTORS). 
+    let carry = ((x & 0b11111) == 0b11111) as u32;
+    let shift = 31u32.saturating_sub(((x >> 5) + carry).leading_zeros());
     4u32 + ((maxweight * DIVLOOKUP[(x >> shift) as usize & 63]) >> shift)
 }
 
