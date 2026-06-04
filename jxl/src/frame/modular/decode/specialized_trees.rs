@@ -15,10 +15,9 @@ use crate::{
             channel::ModularChannelDecoder,
             common::{make_pixel, precompute_references},
         },
+        flat_tree::{FlatTreeNode, predict_flat},
         predict::{PredictionData, WeightedPredictorState, clamped_gradient},
-        tree::{
-            FlatTreeNode, NUM_NONREF_PROPERTIES, PROPERTIES_PER_PREVCHAN, TreeNode, predict_flat,
-        },
+        tree::{NUM_NONREF_PROPERTIES, PROPERTIES_PER_PREVCHAN, TreeNode},
     },
     headers::modular::GroupHeader,
     image::Image,
@@ -27,7 +26,7 @@ use crate::{
 pub struct NoWpTree {
     flat_nodes: Vec<FlatTreeNode>,
     references: Image<i32>,
-    property_buffer: Vec<i32>,
+    property_buffer: Box<[i32; 256]>,
     single_value: Option<i32>,
 }
 
@@ -44,8 +43,7 @@ impl NoWpTree {
             .saturating_sub(NUM_NONREF_PROPERTIES)
             .next_multiple_of(PROPERTIES_PER_PREVCHAN);
         let references = Image::<i32>::new((num_ref_props, xsize))?;
-        let num_properties = NUM_NONREF_PROPERTIES + num_ref_props;
-        let mut property_buffer: Vec<i32> = vec![0; num_properties];
+        let mut property_buffer = Box::new([0; 256]);
 
         property_buffer[0] = channel as i32;
         property_buffer[1] = stream as i32;

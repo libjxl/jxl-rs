@@ -32,6 +32,7 @@ use jxl_transforms::transform_map::*;
 
 mod borrowed_buffers;
 pub(crate) mod decode;
+mod flat_tree;
 mod predict;
 mod transforms;
 mod tree;
