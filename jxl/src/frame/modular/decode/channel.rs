@@ -33,7 +33,6 @@ pub(super) trait ModularChannelDecoder {
         &mut self,
         _prediction_data: PredictionData,
         _pos: (usize, usize),
-        _xsize: usize,
         _reader: &mut SymbolReader,
         _br: &mut BitReader,
         _histograms: &Histograms,
@@ -73,7 +72,7 @@ pub(super) trait ModularChannelDecoder {
              -> (PredictionData, i32) {
                 let prediction_data =
                     PredictionData::get_rows(row, row_top, row_toptop, pos.0, pos.1);
-                let val = decoder.decode_one(prediction_data, pos, xsize, reader, br, histograms);
+                let val = decoder.decode_one(prediction_data, pos, reader, br, histograms);
                 row[pos.0] = val;
                 (prediction_data, val)
             }
@@ -98,7 +97,7 @@ pub(super) trait ModularChannelDecoder {
                     last,
                     self.needs_toptop(),
                 );
-                let val = self.decode_one(prediction_data, (x, y), xsize, reader, br, histograms);
+                let val = self.decode_one(prediction_data, (x, y), reader, br, histograms);
                 *r = val;
                 last = val;
             }
@@ -147,7 +146,6 @@ fn decode_modular_channel_small(
             let prediction_result = predict(
                 &tree.nodes,
                 prediction_data,
-                size.0,
                 Some(&mut wp_state),
                 x,
                 y,
@@ -157,7 +155,7 @@ fn decode_modular_channel_small(
             let dec = reader.read_signed(&tree.histograms, br, prediction_result.context as usize);
             let val = make_pixel(dec, prediction_result.multiplier, prediction_result.guess);
             row[x] = val;
-            wp_state.update_errors(val, (x, y), size.0);
+            wp_state.update_errors(val, (x, y));
         }
     }
 

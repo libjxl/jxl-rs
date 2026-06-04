@@ -185,10 +185,9 @@ const NUM_TREE_CONTEXTS: usize = 6;
 
 /// Computes properties for tree traversal. Shared between flat and non-flat prediction.
 /// Returns the weighted predictor prediction value.
-#[inline]
+#[inline(always)]
 pub(super) fn compute_properties(
     prediction_data: PredictionData,
-    xsize: usize,
     wp_state: Option<&mut WeightedPredictorState>,
     x: usize,
     y: usize,
@@ -230,7 +229,7 @@ pub(super) fn compute_properties(
 
     // Weighted predictor property.
     let (wp_pred, wp_prop) = wp_state
-        .map(|wp_state| wp_state.predict_and_property((x, y), xsize, &prediction_data))
+        .map(|wp_state| wp_state.predict_and_property((x, y), &prediction_data))
         .unwrap_or((0, 0));
     property_buffer[15] = wp_prop;
 
@@ -252,22 +251,13 @@ pub(super) fn compute_properties(
 pub(super) fn predict(
     tree: &[TreeNode],
     prediction_data: PredictionData,
-    xsize: usize,
     wp_state: Option<&mut WeightedPredictorState>,
     x: usize,
     y: usize,
     references: &Image<i32>,
     property_buffer: &mut [i32],
 ) -> PredictionResult {
-    let wp_pred = compute_properties(
-        prediction_data,
-        xsize,
-        wp_state,
-        x,
-        y,
-        references,
-        property_buffer,
-    );
+    let wp_pred = compute_properties(prediction_data, wp_state, x, y, references, property_buffer);
 
     trace!(?property_buffer, "new properties");
 

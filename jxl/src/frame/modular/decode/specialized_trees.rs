@@ -65,11 +65,11 @@ impl ModularChannelDecoder for NoWpTree {
         self.property_buffer[9] = 0;
     }
 
+    #[inline(always)]
     fn decode_one(
         &mut self,
         prediction_data: PredictionData,
         pos: (usize, usize),
-        xsize: usize,
         reader: &mut SymbolReader,
         br: &mut BitReader,
         histograms: &Histograms,
@@ -77,7 +77,6 @@ impl ModularChannelDecoder for NoWpTree {
         let prediction_result = predict_flat(
             &self.flat_nodes,
             prediction_data,
-            xsize,
             None,
             pos.0,
             pos.1,
@@ -128,11 +127,11 @@ impl ModularChannelDecoder for GeneralTree {
         self.no_wp_tree.init_row(buffers, chan, y);
     }
 
+    #[inline(always)]
     fn decode_one(
         &mut self,
         prediction_data: PredictionData,
         pos: (usize, usize),
-        xsize: usize,
         reader: &mut SymbolReader,
         br: &mut BitReader,
         histograms: &Histograms,
@@ -140,7 +139,6 @@ impl ModularChannelDecoder for GeneralTree {
         let prediction_result = predict_flat(
             &self.no_wp_tree.flat_nodes,
             prediction_data,
-            xsize,
             Some(&mut self.wp_state),
             pos.0,
             pos.1,
@@ -153,7 +151,7 @@ impl ModularChannelDecoder for GeneralTree {
             reader.read_signed_clustered(histograms, br, prediction_result.context as usize)
         };
         let val = make_pixel(dec, prediction_result.multiplier, prediction_result.guess);
-        self.wp_state.update_errors(val, pos, xsize);
+        self.wp_state.update_errors(val, pos);
         val
     }
 }
@@ -241,20 +239,17 @@ impl ModularChannelDecoder for WpOnlyLookupConfig420 {
         &mut self,
         prediction_data: PredictionData,
         pos: (usize, usize),
-        xsize: usize,
         reader: &mut SymbolReader,
         br: &mut BitReader,
         histograms: &Histograms,
     ) -> i32 {
-        let (wp_pred, property) = self
-            .wp_state
-            .predict_and_property(pos, xsize, &prediction_data);
+        let (wp_pred, property) = self.wp_state.predict_and_property(pos, &prediction_data);
         let ctx = self.lut[(property as i64 - LUT_MIN_SPLITVAL as i64)
             .clamp(0, LUT_TABLE_SIZE as i64 - 1) as usize];
         // Use the specialized 420 fast path
         let dec = reader.read_signed_clustered_config_420(histograms, br, ctx as usize);
         let val = dec.wrapping_add(wp_pred as i32);
-        self.wp_state.update_errors(val, pos, xsize);
+        self.wp_state.update_errors(val, pos);
         val
     }
 }
@@ -306,7 +301,6 @@ impl ModularChannelDecoder for GradientLookupConfig420 {
         &mut self,
         prediction_data: PredictionData,
         _: (usize, usize),
-        _: usize,
         reader: &mut SymbolReader,
         br: &mut BitReader,
         histograms: &Histograms,
@@ -347,7 +341,6 @@ impl ModularChannelDecoder for SingleGradientOnly {
         &mut self,
         prediction_data: PredictionData,
         _: (usize, usize),
-        _: usize,
         reader: &mut SymbolReader,
         br: &mut BitReader,
         histograms: &Histograms,
