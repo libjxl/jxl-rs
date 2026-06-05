@@ -4,7 +4,12 @@
 // license that can be found in the LICENSE file.
 
 #![cfg_attr(
-    all(target_arch = "arm", target_feature = "v7", feature = "nightly"),
+    all(
+        target_arch = "arm",
+        target_feature = "v7",
+        feature = "nightly",
+        feature = "neon"
+    ),
     feature(arm_target_feature)
 )]
 

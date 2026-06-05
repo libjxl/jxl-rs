@@ -5,7 +5,12 @@
 
 #![deny(unsafe_code)]
 #![cfg_attr(
-    all(target_arch = "arm", target_feature = "v7", feature = "nightly"),
+    all(
+        target_arch = "arm",
+        target_feature = "v7",
+        feature = "nightly",
+        feature = "neon"
+    ),
     feature(arm_target_feature)
 )]
 
