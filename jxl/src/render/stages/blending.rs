@@ -13,8 +13,7 @@ use crate::{
     },
     frame::ReferenceFrame,
     headers::{FileHeader, extra_channels::ExtraChannelInfo, frame_header::*},
-    render::RenderPipelineInPlaceStage,
-    util::SmallVec,
+    render::{ChannelVec, RenderPipelineInPlaceStage},
 };
 
 pub struct BlendingStage {
@@ -24,7 +23,7 @@ pub struct BlendingStage {
     pub ec_blending_info: Vec<BlendingInfo>,
     /// Precomputed `PatchBlending` form of `ec_blending_info`, since it never changes
     /// per call and the conversion is pure.
-    pub ec_blendings_cooked: Vec<PatchBlending>,
+    pub ec_patch_blending_info: Vec<PatchBlending>,
     pub extra_channels: Vec<ExtraChannelInfo>,
     pub reference_frames: Arc<[Option<ReferenceFrame>; 4]>,
     pub zeros: Vec<f32>,
@@ -82,13 +81,13 @@ impl BlendingStage {
     ) -> Result<BlendingStage> {
         let xsize = file_header.size.xsize();
         let ec_blending_info = frame_header.ec_blending_info.clone();
-        let ec_blendings_cooked = ec_blending_info.iter().map(PatchBlending::from).collect();
+        let ec_patch_blending_info = ec_blending_info.iter().map(PatchBlending::from).collect();
         Ok(BlendingStage {
             frame_origin: (frame_header.x0 as isize, frame_header.y0 as isize),
             image_size: (xsize as isize, file_header.size.ysize() as isize),
             blending_info: frame_header.blending_info.clone(),
             ec_blending_info,
-            ec_blendings_cooked,
+            ec_patch_blending_info,
             extra_channels: file_header.image_metadata.extra_channel_info.clone(),
             reference_frames,
             zeros: vec![0f32; xsize as usize],
@@ -148,11 +147,10 @@ impl RenderPipelineInPlaceStage for BlendingStage {
 
         let total_channels = 3 + num_ec;
 
-        // Per-channel reference slices for this row. SmallVec inlines up to 16 channels
-        // (3 color + 13 extra), well above JPEG XL's practical limit; the heap fallback is
-        // a correctness safety net only.
+        // Per-channel reference slices for this row, on the stack via the project-standard
+        // ChannelVec (= SmallVec<T, 8>). The heap fallback is a correctness safety net only.
         let zeros_slice: &[f32] = self.zeros.as_slice();
-        let mut fg_buf: SmallVec<&[f32], 16> = SmallVec::new();
+        let mut fg_buf: ChannelVec<&[f32]> = ChannelVec::new();
         for _ in 0..total_channels {
             fg_buf.push(zeros_slice);
         }
@@ -170,7 +168,7 @@ impl RenderPipelineInPlaceStage for BlendingStage {
         let blending_info = PatchBlending::from(&self.blending_info);
 
         // Per-channel mutable slices into the in-place row buffer.
-        let mut bg_slices: SmallVec<&mut [f32], 16> = SmallVec::new();
+        let mut bg_slices: ChannelVec<&mut [f32]> = ChannelVec::new();
         for r in row[..total_channels].iter_mut() {
             bg_slices.push(&mut r[bg_x0..bg_x1]);
         }
@@ -183,7 +181,7 @@ impl RenderPipelineInPlaceStage for BlendingStage {
             .downcast_mut::<BlendingState>()
             .expect("BlendingStage state has wrong type");
         state.ensure_capacity(total_channels, bg_xsize);
-        let mut tmp_slices: SmallVec<&mut [f32], 16> = SmallVec::new();
+        let mut tmp_slices: ChannelVec<&mut [f32]> = ChannelVec::new();
         if bg_xsize > 0 {
             for chunk in state
                 .scratch
@@ -198,7 +196,7 @@ impl RenderPipelineInPlaceStage for BlendingStage {
             &mut bg_slices,
             &fg_buf,
             &blending_info,
-            &self.ec_blendings_cooked[..num_ec],
+            &self.ec_patch_blending_info[..num_ec],
             &self.extra_channels,
             &mut tmp_slices,
         );

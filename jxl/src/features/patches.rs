@@ -14,6 +14,7 @@ use crate::{
     features::blending::perform_blending,
     frame::{DecoderState, ReferenceFrame},
     headers::extra_channels::ExtraChannelInfo,
+    render::ChannelVec,
     util::{NewWithCapacity, slice, tracing_wrappers::*},
 };
 
@@ -680,6 +681,7 @@ impl PatchesDictionary {
     }
 
     #[inline(always)]
+    #[allow(clippy::too_many_arguments)]
     pub fn add_one_row(
         &self,
         row: &mut [&mut [f32]],
@@ -688,6 +690,9 @@ impl PatchesDictionary {
         extra_channel_info: &[ExtraChannelInfo],
         reference_frames: &[Option<ReferenceFrame>],
         patches_for_row_result: &mut Vec<usize>,
+        // Reused-across-rows flat scratch for blending. Grown as needed; contents are
+        // overwritten on each blending call so the initial value does not matter.
+        blending_scratch: &mut Vec<f32>,
     ) {
         // TODO(zond): Allocate a buffer for this when building the stage instead of when executing it.
         let mut out = row
@@ -750,11 +755,17 @@ impl PatchesDictionary {
             let blending_idx = pos_idx * self.blendings_stride;
             let xsize = out_x1 - out_x0;
             let num_channels = 3 + num_ec;
-            let mut tmp_flat = vec![0.0f32; num_channels * xsize];
-            let mut tmp: Vec<&mut [f32]> = if xsize == 0 {
+            let needed = num_channels * xsize;
+            if blending_scratch.len() < needed {
+                blending_scratch.resize(needed, 0.0);
+            }
+            let mut tmp: ChannelVec<&mut [f32]> = if xsize == 0 {
                 (0..num_channels).map(|_| &mut [][..]).collect()
             } else {
-                tmp_flat.chunks_exact_mut(xsize).collect()
+                blending_scratch
+                    .chunks_exact_mut(xsize)
+                    .take(num_channels)
+                    .collect()
             };
             perform_blending(
                 &mut slice!(&mut out, .., out_x0..out_x1),
@@ -1553,6 +1564,7 @@ mod tests {
                 &extra_channel_info,
                 &ref_frames, // Pass the Vec<ReferenceFrame>
                 &mut vec![],
+                &mut vec![],
             );
 
             assert_all_almost_abs_eq(&r_data, &expected_r, MAX_ABS_DELTA);
@@ -1614,6 +1626,7 @@ mod tests {
                 xsize,
                 &extra_channel_info,
                 &ref_frames,
+                &mut vec![],
                 &mut vec![],
             );
 
@@ -1699,6 +1712,7 @@ mod tests {
                 xsize,
                 &extra_channel_info,
                 &ref_frames,
+                &mut vec![],
                 &mut vec![],
             );
 
@@ -1813,6 +1827,7 @@ mod tests {
                 &ec_info,
                 &ref_frames,
                 &mut vec![],
+                &mut vec![],
             );
 
             assert_all_almost_abs_eq(&r_data, &vec![expected_color], MAX_ABS_DELTA);
@@ -1910,6 +1925,7 @@ mod tests {
                 &ec_info,
                 &ref_frames,
                 &mut vec![],
+                &mut vec![],
             );
 
             assert_all_almost_abs_eq(&ec0_data, &vec![expected_ec0], MAX_ABS_DELTA);
@@ -1976,6 +1992,7 @@ mod tests {
                 &extra_channel_info,
                 &ref_frames,
                 &mut vec![],
+                &mut vec![],
             );
 
             let expected_vals = [0.5 * 0.8, 2.0 * 0.7]; // [0.4, 1.4]
@@ -2040,6 +2057,7 @@ mod tests {
                 xsize,
                 &extra_channel_info,
                 &ref_frames,
+                &mut vec![],
                 &mut vec![],
             );
 

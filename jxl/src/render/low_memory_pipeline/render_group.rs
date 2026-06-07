@@ -20,7 +20,7 @@ use super::{LowMemoryRenderPipeline, row_buffers::RowBuffer};
 
 // Most images have at most 7 channels (RGBA + noise extra channels).
 // 8 gives a bit extra leeway and makes the size a power of two.
-pub(super) type ChannelVec<T> = SmallVec<T, 8>;
+pub(crate) type ChannelVec<T> = SmallVec<T, 8>;
 
 fn apply_x_padding(
     input_type: DataTypeTag,
