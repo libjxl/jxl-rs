@@ -748,12 +748,21 @@ impl PatchesDictionary {
             }
 
             let blending_idx = pos_idx * self.blendings_stride;
+            let xsize = out_x1 - out_x0;
+            let num_channels = 3 + num_ec;
+            let mut tmp_flat = vec![0.0f32; num_channels * xsize];
+            let mut tmp: Vec<&mut [f32]> = if xsize == 0 {
+                (0..num_channels).map(|_| &mut [][..]).collect()
+            } else {
+                tmp_flat.chunks_exact_mut(xsize).collect()
+            };
             perform_blending(
                 &mut slice!(&mut out, .., out_x0..out_x1),
                 &fg,
                 &self.blendings[blending_idx],
                 &self.blendings[blending_idx + 1..],
                 extra_channel_info,
+                &mut tmp,
             );
         }
     }
