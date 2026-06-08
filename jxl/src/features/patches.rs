@@ -14,7 +14,6 @@ use crate::{
     features::blending::perform_blending,
     frame::{DecoderState, ReferenceFrame},
     headers::extra_channels::ExtraChannelInfo,
-    render::ChannelVec,
     util::{NewWithCapacity, slice, tracing_wrappers::*},
 };
 
@@ -690,8 +689,6 @@ impl PatchesDictionary {
         extra_channel_info: &[ExtraChannelInfo],
         reference_frames: &[Option<ReferenceFrame>],
         patches_for_row_result: &mut Vec<usize>,
-        // Reused-across-rows flat scratch for blending. Grown as needed; contents are
-        // overwritten on each blending call so the initial value does not matter.
         blending_scratch: &mut Vec<f32>,
     ) {
         // TODO(zond): Allocate a buffer for this when building the stage instead of when executing it.
@@ -753,27 +750,13 @@ impl PatchesDictionary {
             }
 
             let blending_idx = pos_idx * self.blendings_stride;
-            let xsize = out_x1 - out_x0;
-            let num_channels = 3 + num_ec;
-            let needed = num_channels * xsize;
-            if blending_scratch.len() < needed {
-                blending_scratch.resize(needed, 0.0);
-            }
-            let mut tmp: ChannelVec<&mut [f32]> = if xsize == 0 {
-                (0..num_channels).map(|_| &mut [][..]).collect()
-            } else {
-                blending_scratch
-                    .chunks_exact_mut(xsize)
-                    .take(num_channels)
-                    .collect()
-            };
             perform_blending(
                 &mut slice!(&mut out, .., out_x0..out_x1),
                 &fg,
                 &self.blendings[blending_idx],
                 &self.blendings[blending_idx + 1..],
                 extra_channel_info,
-                &mut tmp,
+                blending_scratch,
             );
         }
     }

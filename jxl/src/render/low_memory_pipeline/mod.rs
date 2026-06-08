@@ -23,7 +23,7 @@ use super::internal::{RenderPipelineShared, RunInOutStage, RunInPlaceStage};
 
 mod group_scheduler;
 mod helpers;
-pub(crate) mod render_group;
+mod render_group;
 pub(crate) mod row_buffers;
 mod run_stage;
 mod save;

@@ -19,11 +19,6 @@ pub struct PatchesStage {
     decoder_state: Arc<[Option<ReferenceFrame>; 4]>,
 }
 
-/// Per-thread state for `PatchesStage`.
-///
-/// Both buffers are reused across `process_row_chunk` invocations on the same thread to
-/// avoid per-row heap allocation. `blending_scratch` is a single flat `Vec<f32>` of
-/// `num_channels * xsize` elements, grown as needed inside `add_one_row`.
 struct PatchesState {
     patches_for_row_result: Vec<usize>,
     blending_scratch: Vec<f32>,

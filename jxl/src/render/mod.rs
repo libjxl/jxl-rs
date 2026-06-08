@@ -38,7 +38,7 @@ const MAX_BORDER: usize = 9;
 
 pub(crate) use builder::RenderPipelineBuilder;
 pub(crate) use channels::{Channels, ChannelsMut};
-pub(crate) use low_memory_pipeline::{LowMemoryRenderPipeline, render_group::ChannelVec};
+pub(crate) use low_memory_pipeline::LowMemoryRenderPipeline;
 #[cfg(test)]
 pub(crate) use simple_pipeline::SimpleRenderPipeline;
 
