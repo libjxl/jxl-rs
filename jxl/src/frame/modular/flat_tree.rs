@@ -34,27 +34,18 @@ pub(super) enum FlatTreeNode {
     },
 }
 
-#[inline]
+#[inline(always)]
 #[allow(clippy::too_many_arguments, unsafe_code)]
 pub(super) fn predict_flat(
     flat_tree: &[FlatTreeNode],
     prediction_data: PredictionData,
-    xsize: usize,
     wp_state: Option<&mut WeightedPredictorState>,
     x: usize,
     y: usize,
     references: &Image<i32>,
     property_buffer: &mut [i32; 256],
 ) -> PredictionResult {
-    let wp_pred = compute_properties(
-        prediction_data,
-        xsize,
-        wp_state,
-        x,
-        y,
-        references,
-        property_buffer,
-    );
+    let wp_pred = compute_properties(prediction_data, wp_state, x, y, references, property_buffer);
 
     let mut pos = 0;
     loop {
