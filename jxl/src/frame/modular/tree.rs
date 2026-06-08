@@ -34,6 +34,7 @@ pub enum TreeNode {
 pub struct Tree {
     pub nodes: Vec<TreeNode>,
     pub histograms: Histograms,
+    pub num_properties: usize,
 }
 
 fn validate_tree(tree: &[TreeNode], num_properties: usize) -> Result<()> {
@@ -383,24 +384,7 @@ impl Tree {
         Ok(Tree {
             nodes: tree,
             histograms,
+            num_properties,
         })
-    }
-
-    pub fn max_property_count(&self) -> usize {
-        self.nodes
-            .iter()
-            .map(|x| match x {
-                TreeNode::Leaf { .. } => 0,
-                TreeNode::Split { property, .. } => *property,
-            })
-            .max()
-            .unwrap_or_default() as usize
-            + 1
-    }
-
-    pub fn num_prev_channels(&self) -> usize {
-        self.max_property_count()
-            .saturating_sub(NUM_NONREF_PROPERTIES)
-            .div_ceil(PROPERTIES_PER_PREVCHAN)
     }
 }
