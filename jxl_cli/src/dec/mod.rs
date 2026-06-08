@@ -139,6 +139,7 @@ pub fn decode_frames<In: JxlBitstreamInputExt>(
     linear_output: bool,
     render_interval: Option<usize>,
     allow_partial_files: bool,
+    store_partial_renders: bool,
 ) -> Result<(DecodeOutput, Duration)> {
     let start = Instant::now();
 
@@ -282,7 +283,7 @@ pub fn decode_frames<In: JxlBitstreamInputExt>(
                     // render and retry.
                     if render_interval.is_some() && input.available_bytes()? > 0 {
                         has_rendered_data |= fallback.flush_pixels(&mut output_bufs)?;
-                        if has_rendered_data {
+                        if has_rendered_data && store_partial_renders {
                             partial_renders.push(
                                 outputs
                                     .iter()
@@ -332,7 +333,7 @@ pub fn decode_frames<In: JxlBitstreamInputExt>(
                     // render and retry.
                     if render_interval.is_some() && input.available_bytes()? > 0 {
                         has_rendered_data |= fallback.flush_pixels(&mut output_bufs)?;
-                        if has_rendered_data {
+                        if has_rendered_data && store_partial_renders {
                             partial_renders.push(
                                 outputs
                                     .iter()
