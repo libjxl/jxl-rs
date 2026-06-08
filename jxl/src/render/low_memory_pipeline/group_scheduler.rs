@@ -116,6 +116,9 @@ impl LowMemoryRenderPipeline {
     }
 
     fn store_scratch_buffer(&mut self, channel: usize, kind: usize, image: OwnedRawImage) {
+        if kind == 0 && self.allow_pending_buffer_replacement {
+            return;
+        }
         self.scratch_channel_buffers[channel * 3 + kind].push(image)
     }
 
