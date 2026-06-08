@@ -113,7 +113,15 @@ impl LowMemoryRenderPipeline {
     }
 
     fn store_scratch_buffer(&mut self, channel: usize, kind: usize, image: OwnedRawImage) {
-        self.scratch_channel_buffers[channel * 3 + kind].push(image)
+        // The scratch pool only exists to recycle buffers for upcoming groups. Sequential
+        // rendering never needs more than a couple of buffers per (channel, kind) in flight, so
+        // bound the pool; otherwise pure-modular frames (which never reclaim center buffers via
+        // `get_buffer`) would retain a full-frame copy for the pipeline's lifetime.
+        const MAX_SCRATCH_BUFFERS: usize = 4;
+        let pool = &mut self.scratch_channel_buffers[channel * 3 + kind];
+        if pool.len() < MAX_SCRATCH_BUFFERS {
+            pool.push(image);
+        }
     }
 
     pub(super) fn render_with_new_group(
