@@ -26,10 +26,13 @@ pub(super) struct InputBuffer {
 }
 
 impl InputBuffer {
-    pub(super) fn set_buffer(&mut self, chan: usize, buf: OwnedRawImage) {
-        assert!(self.data[chan].is_none());
+    pub(super) fn set_buffer(&mut self, chan: usize, buf: OwnedRawImage, replace: bool) {
+        if self.data[chan].is_none() {
+            self.ready_channels += 1;
+        } else {
+            assert!(replace);
+        }
         self.data[chan] = Some(buf);
-        self.ready_channels += 1;
     }
 
     pub(super) fn new(num_channels: usize) -> Self {

@@ -961,6 +961,12 @@ impl FullModularImage {
         Ok(())
     }
 
+    pub fn outputs_are_gridded(&self) -> bool {
+        self.buffer_info
+            .iter()
+            .all(|b| b.info.output_channel_idx.is_none() || b.grid_kind != ModularGridKind::None)
+    }
+
     pub fn channel_range(&self) -> Range<usize> {
         if self.modular_color_channels != 0 {
             0..self.buffers_for_channels.len()
