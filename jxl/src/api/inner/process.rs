@@ -12,6 +12,13 @@ use crate::error::Result;
 
 use crate::api::{JxlBitstreamInput, JxlDecoderInner, JxlOutputBuffer, ProcessingResult};
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ProcessMode {
+    Normal,
+    Flush,
+    SkipFrame,
+}
+
 // General implementation strategy:
 // - Anything that is not a section is read into a small buffer.
 // - As soon as we know section sizes, data is read directly into sections.
@@ -137,13 +144,14 @@ impl JxlDecoderInner {
         &mut self,
         input: &mut dyn JxlBitstreamInput,
         buffers: Option<&mut [JxlOutputBuffer]>,
+        mode: ProcessMode,
     ) -> Result<ProcessingResult<(), ()>> {
         ProcessingResult::new(self.codestream_parser.process(
             &mut self.box_parser,
             input,
             &self.options,
             buffers,
-            false,
+            mode,
         ))
     }
 
@@ -158,7 +166,7 @@ impl JxlDecoderInner {
             &mut input,
             &self.options,
             Some(buffers),
-            true,
+            ProcessMode::Flush,
         ) {
             Ok(()) | Err(crate::error::Error::OutOfBounds(_)) => {
                 let updated = self.codestream_parser.pixels_dirty;
