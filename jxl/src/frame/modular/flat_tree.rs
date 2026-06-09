@@ -40,12 +40,18 @@ pub(super) fn predict_flat(
     flat_tree: &[FlatTreeNode],
     prediction_data: PredictionData,
     wp_state: Option<&mut WeightedPredictorState>,
-    x: usize,
-    y: usize,
+    pos: (usize, usize),
     references: &Image<i32>,
     property_buffer: &mut [i32; 256],
 ) -> PredictionResult {
-    let wp_pred = compute_properties(prediction_data, wp_state, x, y, references, property_buffer);
+    let wp_pred = compute_properties(
+        prediction_data,
+        wp_state,
+        pos.0,
+        pos.1,
+        references,
+        property_buffer,
+    );
 
     let mut pos = 0;
     loop {

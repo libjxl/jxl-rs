@@ -63,7 +63,7 @@ pub struct PredictionData {
 }
 
 impl PredictionData {
-    #[inline]
+    #[inline(always)]
     pub fn update_for_interior_row(
         self,
         row_top: &[i32],
@@ -92,6 +92,7 @@ impl PredictionData {
         }
     }
 
+    #[inline]
     pub fn get_rows(row: &[i32], row_top: &[i32], row_toptop: &[i32], x: usize, y: usize) -> Self {
         let left = if x > 0 {
             row[x - 1]
