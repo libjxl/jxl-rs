@@ -173,7 +173,7 @@ impl<'a> ModularChannelDecoder for FullTree<'a> {
         for x in 0..xsize {
             let prediction_data = PredictionData::get_rows(row, row_top, row_toptop, x, y);
             let prediction_result = predict(
-                &self.tree.nodes,
+                self.tree,
                 prediction_data,
                 Some(&mut self.wp_state),
                 x,

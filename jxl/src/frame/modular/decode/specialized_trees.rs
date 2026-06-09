@@ -150,7 +150,7 @@ impl FlatTreeInner {
     }
 }
 
-struct FlatTree<WP: MaybeWeightedPredictor, R: Reader> {
+struct FlatTree<WP, R> {
     inner: FlatTreeInner,
     reader: R,
     wp_state: WP,
@@ -251,7 +251,7 @@ fn make_lut(tree: &[TreeNode]) -> Option<[u8; LUT_TABLE_SIZE]> {
     Some(ans)
 }
 
-struct WpOnly<R: Reader> {
+struct WpOnly<R> {
     lut: [u8; LUT_TABLE_SIZE],
     wp_state: WeightedPredictorState,
     reader: R,
@@ -293,7 +293,7 @@ impl<R: Reader> ModularChannelDecoder for WpOnly<R> {
 const GRADIENT_PROPERTY: u8 = 9;
 const WEIGHTED_PROPERTY: u8 = 15;
 
-struct GradientOnly<R: Reader> {
+struct GradientOnly<R> {
     lut: [u8; LUT_TABLE_SIZE],
     reader: R,
 }
@@ -340,7 +340,7 @@ impl<R: Reader> ModularChannelDecoder for GradientOnly<R> {
     }
 }
 
-struct SingleGradientOnly<R: Reader> {
+struct SingleGradientOnly<R> {
     clustered_ctx: usize,
     reader: R,
 }
@@ -533,16 +533,18 @@ pub fn run_on_specialized_tree<F: FnOnce(&mut dyn ModularChannelDecoder) -> Resu
 
     let uses_non420 = !tree.histograms.can_use_config_420_fast_path();
 
-    if !uses_non_wp && !uses_non420 {
-        if let Some(mut wp) = WpOnly::new(&pruned_tree, header, xsize, Reader420NoLz) {
-            return run(&mut wp);
-        }
+    if !uses_non_wp
+        && !uses_non420
+        && let Some(mut wp) = WpOnly::new(&pruned_tree, header, xsize, Reader420NoLz)
+    {
+        return run(&mut wp);
     }
 
-    if !uses_non_gradient && !uses_non420 {
-        if let Some(mut grad) = GradientOnly::new(&pruned_tree, Reader420NoLz) {
-            return run(&mut grad);
-        }
+    if !uses_non_gradient
+        && !uses_non420
+        && let Some(mut grad) = GradientOnly::new(&pruned_tree, Reader420NoLz)
+    {
+        return run(&mut grad);
     }
 
     let single_symbol = single_symbol.map(unpack_signed);

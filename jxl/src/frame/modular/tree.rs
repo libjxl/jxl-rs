@@ -246,11 +246,10 @@ pub(super) fn compute_properties(
 
 /// Prediction using standard tree traversal.
 /// Used for small channels where building a flat tree isn't worth it.
-#[inline]
 #[instrument(level = "trace", ret)]
 #[allow(clippy::too_many_arguments)]
 pub(super) fn predict(
-    tree: &[TreeNode],
+    tree: &Tree,
     prediction_data: PredictionData,
     wp_state: Option<&mut WeightedPredictorState>,
     x: usize,
@@ -262,37 +261,12 @@ pub(super) fn predict(
 
     trace!(?property_buffer, "new properties");
 
-    let mut tree_node = 0;
-    while let TreeNode::Split {
-        property,
-        val,
-        left,
-        right,
-    } = tree[tree_node]
-    {
-        if property_buffer[property as usize] > val {
-            trace!(
-                "left at node {tree_node} [{} > {val}]",
-                property_buffer[property as usize]
-            );
-            tree_node = left as usize;
-        } else {
-            trace!(
-                "right at node {tree_node} [{} <= {val}]",
-                property_buffer[property as usize]
-            );
-            tree_node = right as usize;
-        }
-    }
-
-    trace!(leaf = ?tree[tree_node]);
-
     let TreeNode::Leaf {
         predictor,
         offset,
         multiplier,
         id,
-    } = tree[tree_node]
+    } = tree.walk(property_buffer)
     else {
         unreachable!();
     };
@@ -386,5 +360,33 @@ impl Tree {
             histograms,
             num_properties,
         })
+    }
+
+    pub(super) fn walk(&self, properties: &[i32]) -> TreeNode {
+        let mut tree_node = 0;
+        while let TreeNode::Split {
+            property,
+            val,
+            left,
+            right,
+        } = self.nodes[tree_node]
+        {
+            if properties[property as usize] > val {
+                trace!(
+                    "left at node {tree_node} [{} > {val}]",
+                    properties[property as usize]
+                );
+                tree_node = left as usize;
+            } else {
+                trace!(
+                    "right at node {tree_node} [{} <= {val}]",
+                    properties[property as usize]
+                );
+                tree_node = right as usize;
+            }
+        }
+
+        trace!(leaf = ?self.nodes[tree_node]);
+        self.nodes[tree_node]
     }
 }
