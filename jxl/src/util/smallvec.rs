@@ -83,6 +83,11 @@ pub enum SmallVec<T, const N: usize, HeapStorage: SmallVecHeapStorage<T> = Vec<T
     Heap(HeapStorage),
 }
 
+/// A SmallVec optimized to store up to #channels values.
+// Most images have at most 7 channels (RGBA + noise extra channels).
+// 8 gives a bit extra leeway and makes the size a power of two.
+pub(crate) type ChannelVec<T> = SmallVec<T, 8>;
+
 impl<T, const N: usize, HeapStorage: SmallVecHeapStorage<T>> Deref for SmallVec<T, N, HeapStorage> {
     type Target = [T];
 

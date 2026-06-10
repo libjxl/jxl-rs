@@ -214,17 +214,16 @@ pub fn do_palette_step_general(
                         /*palette_size=*/ num_colors + num_deltas,
                         /*bit_depth=*/ bit_depth,
                     );
+                    let prediction_data = PredictionData::get(&out.data, x, y);
+                    let (wp_pred, _) = wp_state.predict_and_property((x, y), &prediction_data);
+                    let pred = predictor.predict_one(prediction_data, wp_pred);
                     let val = if index < num_deltas as i32 {
-                        let prediction_data = PredictionData::get(&out.data, x, y);
-                        let (wp_pred, _) =
-                            wp_state.predict_and_property((x, y), w, &prediction_data);
-                        let pred = predictor.predict_one(prediction_data, wp_pred);
                         (pred + palette_entry as i64) as i32
                     } else {
                         palette_entry
                     };
                     out.data.row_mut(y)[x] = val;
-                    wp_state.update_errors(val, (x, y), w);
+                    wp_state.update_errors(val, (x, y));
                 }
             }
         }
@@ -377,10 +376,7 @@ pub fn do_palette_step_group_row(
             let out_row_idx = c * grid_ysize * grid_xsize + grid_y * grid_xsize;
             if grid_y > 0 {
                 let prev_row_idx = out_row_idx - grid_y * grid_xsize;
-                wp_state.restore_state(
-                    buf_out[prev_row_idx].auxiliary_data.as_ref().unwrap(),
-                    total_w,
-                );
+                wp_state.restore_state(buf_out[prev_row_idx].auxiliary_data.as_ref().unwrap());
             }
             for y in 0..h {
                 for (grid_x, index_buf) in buf_in.iter().enumerate().take(grid_xsize) {
@@ -394,26 +390,23 @@ pub fn do_palette_step_group_row(
                             /*palette_size=*/ num_colors + num_deltas,
                             /*bit_depth=*/ bit_depth,
                         );
+                        let prediction_data = get_prediction_data(
+                            buf_out, out_idx, grid_x, grid_y, grid_xsize, x, y, xsize, ysize,
+                        );
+                        let (pred, _) = wp_state
+                            .predict_and_property((grid_x * xsize + x, y & 1), &prediction_data);
                         let val = if index < num_deltas as i32 {
-                            let prediction_data = get_prediction_data(
-                                buf_out, out_idx, grid_x, grid_y, grid_xsize, x, y, xsize, ysize,
-                            );
-                            let (pred, _) = wp_state.predict_and_property(
-                                (grid_x * xsize + x, y & 1),
-                                total_w,
-                                &prediction_data,
-                            );
                             (pred + palette_entry as i64) as i32
                         } else {
                             palette_entry
                         };
                         buf_out[out_idx].data.row_mut(y)[x] = val;
-                        wp_state.update_errors(val, (grid_x * xsize + x, y & 1), total_w);
+                        wp_state.update_errors(val, (grid_x * xsize + x, y & 1));
                     }
                 }
             }
-            let mut wp_image = Image::<i32>::new((total_w + 2, 1))?;
-            wp_state.save_state(&mut wp_image, total_w);
+            let mut wp_image = Image::<i32>::new((total_w + 1, 5))?;
+            wp_state.save_state(&mut wp_image);
             buf_out[out_row_idx].auxiliary_data = Some(wp_image);
         }
     } else {

@@ -11,7 +11,7 @@ use crate::{
     error::{Error, Result},
     frame::modular::{
         BUFFER_STATUS_ZERO_FILLED, ChannelInfo, ModularBufferInfo, ModularChannel, ModularGridKind,
-        Predictor,
+        Predictor, TransformScratchSpace,
         borrowed_buffers::with_buffers,
         transforms::squeeze::{smooth_2d_unsqueeze, smooth_h_unsqueeze, smooth_v_unsqueeze},
     },
@@ -100,6 +100,7 @@ impl TransformStepChunk {
         frame_header: &FrameHeader,
         buffers: &[ModularBufferInfo],
         is_final: bool,
+        tranform_scratch_space: &mut TransformScratchSpace,
     ) -> Result<()> {
         let buf_out = self.buf_out();
         let out_grid_kind = buffers[buf_out[0]].grid_kind;
@@ -344,9 +345,9 @@ impl TransformStepChunk {
                             smooth_2d_unsqueeze(
                                 &buffers[buf_in_avg.unwrap()[0]],
                                 frame_header,
-                                out_grid_kind,
                                 out_rect,
                                 &mut bufs[0].data,
+                                &mut tranform_scratch_space.smooth_unsqueeze_buffer,
                             );
                             return Ok(());
                         }
@@ -355,9 +356,9 @@ impl TransformStepChunk {
                             smooth_h_unsqueeze(
                                 buf_avg,
                                 frame_header,
-                                out_grid_kind,
                                 out_rect,
                                 &mut bufs[0].data,
+                                &mut tranform_scratch_space.smooth_unsqueeze_buffer,
                             );
                             return Ok(());
                         }
@@ -461,9 +462,9 @@ impl TransformStepChunk {
                             smooth_2d_unsqueeze(
                                 &buffers[buf_in_avg.unwrap()[0]],
                                 frame_header,
-                                out_grid_kind,
                                 out_rect,
                                 &mut bufs[0].data,
+                                &mut tranform_scratch_space.smooth_unsqueeze_buffer,
                             );
                             return Ok(());
                         }
@@ -472,9 +473,9 @@ impl TransformStepChunk {
                             smooth_v_unsqueeze(
                                 buf_avg,
                                 frame_header,
-                                out_grid_kind,
                                 out_rect,
                                 &mut bufs[0].data,
+                                &mut tranform_scratch_space.smooth_unsqueeze_buffer,
                             );
                             return Ok(());
                         }

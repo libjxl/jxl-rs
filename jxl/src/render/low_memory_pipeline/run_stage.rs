@@ -9,9 +9,8 @@ use crate::{
     render::{
         Channels, ChannelsMut, RunInPlaceStage,
         internal::{PipelineBuffer, RunInOutStage},
-        low_memory_pipeline::render_group::ChannelVec,
     },
-    util::{ShiftRightCeil, SmallVec, StackOnly, mirror, tracing_wrappers::*},
+    util::{ChannelVec, ShiftRightCeil, SmallVec, StackOnly, mirror, tracing_wrappers::*},
 };
 
 use super::{

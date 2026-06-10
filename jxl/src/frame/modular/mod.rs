@@ -342,6 +342,24 @@ impl ModularBufferInfo {
     }
 }
 
+struct TransformScratchSpace {
+    smooth_unsqueeze_buffer: ([Vec<f32>; 5], Vec<i32>),
+}
+
+impl Debug for TransformScratchSpace {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "TransformScratchSpace")
+    }
+}
+
+impl TransformScratchSpace {
+    fn new() -> TransformScratchSpace {
+        TransformScratchSpace {
+            smooth_unsqueeze_buffer: (std::array::from_fn(|_| vec![]), vec![]),
+        }
+    }
+}
+
 /// A modular image is a sequence of channels to which one or more transforms might have been
 /// applied. We represent a modular image as a list of buffers, some of which are coded in the
 /// bitstream; other buffers are obtained as the output of one of the transformation steps.
@@ -352,6 +370,7 @@ impl ModularBufferInfo {
 /// transforms to each of the groups in the input of the transforms.
 #[derive(Debug)]
 pub struct FullModularImage {
+    transform_scratch_space: TransformScratchSpace,
     buffer_info: Vec<ModularBufferInfo>,
     transform_steps: Vec<TransformStepChunk>,
     // List of buffer indices of the channels of the modular image encoded in each kind of section.
@@ -434,6 +453,7 @@ impl FullModularImage {
 
         if channels.is_empty() {
             return Ok(Self {
+                transform_scratch_space: TransformScratchSpace::new(),
                 buffer_info: vec![],
                 transform_steps: vec![],
                 section_buffer_indices: vec![vec![]; 2 + frame_header.passes.num_passes as usize],
@@ -604,6 +624,7 @@ impl FullModularImage {
             .count();
 
         Ok(FullModularImage {
+            transform_scratch_space: TransformScratchSpace::new(),
             buffer_info,
             transform_steps,
             section_buffer_indices,
@@ -892,7 +913,12 @@ impl FullModularImage {
                 let previous_output_status = previous_output_status.unwrap();
 
                 if !dry_run {
-                    tfm.do_run(frame_header, &self.buffer_info, is_final)?;
+                    tfm.do_run(
+                        frame_header,
+                        &self.buffer_info,
+                        is_final,
+                        &mut self.transform_scratch_space,
+                    )?;
                 }
 
                 // If this was the first _or_ the last render, trigger a re-render across weak edges
