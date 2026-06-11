@@ -8,7 +8,7 @@ use crate::error::Error;
 
 use crate::util::CeilLog2;
 
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy)]
 pub struct HybridUint {
     split_token: u32,
     split_exponent: u32,

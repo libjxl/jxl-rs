@@ -300,7 +300,7 @@ impl Frame {
                 return self.maybe_preview_lf_frame(
                     pixel_format,
                     buffers,
-                    Some(&regions[..]),
+                    &regions[..],
                     output_profile,
                 );
             } else if self.incomplete_groups == 0 {

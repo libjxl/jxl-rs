@@ -34,6 +34,7 @@ pub enum TreeNode {
 pub struct Tree {
     pub nodes: Vec<TreeNode>,
     pub histograms: Histograms,
+    pub num_properties: usize,
 }
 
 fn validate_tree(tree: &[TreeNode], num_properties: usize) -> Result<()> {
@@ -185,10 +186,9 @@ const NUM_TREE_CONTEXTS: usize = 6;
 
 /// Computes properties for tree traversal. Shared between flat and non-flat prediction.
 /// Returns the weighted predictor prediction value.
-#[inline]
+#[inline(always)]
 pub(super) fn compute_properties(
     prediction_data: PredictionData,
-    xsize: usize,
     wp_state: Option<&mut WeightedPredictorState>,
     x: usize,
     y: usize,
@@ -230,7 +230,7 @@ pub(super) fn compute_properties(
 
     // Weighted predictor property.
     let (wp_pred, wp_prop) = wp_state
-        .map(|wp_state| wp_state.predict_and_property((x, y), xsize, &prediction_data))
+        .map(|wp_state| wp_state.predict_and_property((x, y), &prediction_data))
         .unwrap_or((0, 0));
     property_buffer[15] = wp_prop;
 
@@ -246,62 +246,27 @@ pub(super) fn compute_properties(
 
 /// Prediction using standard tree traversal.
 /// Used for small channels where building a flat tree isn't worth it.
-#[inline]
 #[instrument(level = "trace", ret)]
 #[allow(clippy::too_many_arguments)]
 pub(super) fn predict(
-    tree: &[TreeNode],
+    tree: &Tree,
     prediction_data: PredictionData,
-    xsize: usize,
     wp_state: Option<&mut WeightedPredictorState>,
     x: usize,
     y: usize,
     references: &Image<i32>,
     property_buffer: &mut [i32],
 ) -> PredictionResult {
-    let wp_pred = compute_properties(
-        prediction_data,
-        xsize,
-        wp_state,
-        x,
-        y,
-        references,
-        property_buffer,
-    );
+    let wp_pred = compute_properties(prediction_data, wp_state, x, y, references, property_buffer);
 
     trace!(?property_buffer, "new properties");
-
-    let mut tree_node = 0;
-    while let TreeNode::Split {
-        property,
-        val,
-        left,
-        right,
-    } = tree[tree_node]
-    {
-        if property_buffer[property as usize] > val {
-            trace!(
-                "left at node {tree_node} [{} > {val}]",
-                property_buffer[property as usize]
-            );
-            tree_node = left as usize;
-        } else {
-            trace!(
-                "right at node {tree_node} [{} <= {val}]",
-                property_buffer[property as usize]
-            );
-            tree_node = right as usize;
-        }
-    }
-
-    trace!(leaf = ?tree[tree_node]);
 
     let TreeNode::Leaf {
         predictor,
         offset,
         multiplier,
         id,
-    } = tree[tree_node]
+    } = tree.walk(property_buffer)
     else {
         unreachable!();
     };
@@ -393,24 +358,35 @@ impl Tree {
         Ok(Tree {
             nodes: tree,
             histograms,
+            num_properties,
         })
     }
 
-    pub fn max_property_count(&self) -> usize {
-        self.nodes
-            .iter()
-            .map(|x| match x {
-                TreeNode::Leaf { .. } => 0,
-                TreeNode::Split { property, .. } => *property,
-            })
-            .max()
-            .unwrap_or_default() as usize
-            + 1
-    }
+    pub(super) fn walk(&self, properties: &[i32]) -> TreeNode {
+        let mut tree_node = 0;
+        while let TreeNode::Split {
+            property,
+            val,
+            left,
+            right,
+        } = self.nodes[tree_node]
+        {
+            if properties[property as usize] > val {
+                trace!(
+                    "left at node {tree_node} [{} > {val}]",
+                    properties[property as usize]
+                );
+                tree_node = left as usize;
+            } else {
+                trace!(
+                    "right at node {tree_node} [{} <= {val}]",
+                    properties[property as usize]
+                );
+                tree_node = right as usize;
+            }
+        }
 
-    pub fn num_prev_channels(&self) -> usize {
-        self.max_property_count()
-            .saturating_sub(NUM_NONREF_PROPERTIES)
-            .div_ceil(PROPERTIES_PER_PREVCHAN)
+        trace!(leaf = ?self.nodes[tree_node]);
+        self.nodes[tree_node]
     }
 }
