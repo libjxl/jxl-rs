@@ -142,17 +142,37 @@ impl OutputColorInfo {
     }
 }
 
+/// Precomputed per-frame constants for `xyb_process`.
+struct XybParams {
+    mat: [f32; 9],
+    bias_cbrt: [f32; 3],
+    scaled_bias: [f32; 3],
+    intensity_scale: f32,
+}
+
+impl XybParams {
+    fn new(opsin: &OpsinInverseMatrix, intensity_target: f32) -> Self {
+        let intensity_scale = 255.0 / intensity_target;
+        Self {
+            mat: opsin.inverse_matrix,
+            bias_cbrt: opsin.opsin_biases.map(|x| x.cbrt()),
+            scaled_bias: opsin.opsin_biases.map(|x| x * intensity_scale),
+            intensity_scale,
+        }
+    }
+}
+
 /// Convert XYB to linear RGB with appropriate primaries, where 1.0 corresponds to `intensity_target` nits.
 pub struct XybStage {
     first_channel: usize,
-    output_color_info: OutputColorInfo,
+    params: XybParams,
 }
 
 impl XybStage {
     pub fn new(first_channel: usize, output_color_info: OutputColorInfo) -> Self {
         Self {
             first_channel,
-            output_color_info,
+            params: XybParams::new(&output_color_info.opsin, output_color_info.intensity_target),
         }
     }
 }
@@ -174,24 +194,16 @@ simd_function!(
     xyb_process_dispatch,
     d: D,
     fn xyb_process(
-        opsin: &OpsinInverseMatrix,
-        intensity_target: f32,
+        params: &XybParams,
         xsize: usize,
         row_x: &mut [f32],
         row_y: &mut [f32],
         row_b: &mut [f32],
     ) {
-        let OpsinInverseMatrix {
-            inverse_matrix: mat,
-            opsin_biases: bias,
-            ..
-        } = opsin;
-        // TODO(veluca): consider computing the cbrt in advance.
-        let bias_cbrt = bias.map(|x| D::F32Vec::splat(d, x.cbrt()));
-        let intensity_scale = 255.0 / intensity_target;
-        let scaled_bias = bias.map(|x| D::F32Vec::splat(d, x * intensity_scale));
-        let mat = mat.map(|x| D::F32Vec::splat(d, x));
-        let intensity_scale = D::F32Vec::splat(d, intensity_scale);
+        let mat = params.mat.map(|x| D::F32Vec::splat(d, x));
+        let bias_cbrt = params.bias_cbrt.map(|x| D::F32Vec::splat(d, x));
+        let scaled_bias = params.scaled_bias.map(|x| D::F32Vec::splat(d, x));
+        let intensity_scale = D::F32Vec::splat(d, params.intensity_scale);
 
         for idx in (0..xsize).step_by(D::F32Vec::LEN) {
             let x = D::F32Vec::load(d, &row_x[idx..]);
@@ -246,14 +258,7 @@ impl RenderPipelineInPlaceStage for XybStage {
             );
         };
 
-        xyb_process_dispatch(
-            &self.output_color_info.opsin,
-            self.output_color_info.intensity_target,
-            xsize,
-            row_x,
-            row_y,
-            row_b,
-        );
+        xyb_process_dispatch(&self.params, xsize, row_x, row_y, row_b);
     }
 }
 
@@ -324,20 +329,12 @@ mod test {
             let mut scalar_y = row_y.clone();
             let mut scalar_b = row_b.clone();
 
-            xyb_process(
-                d,
-                &opsin,
-                intensity_target,
-                xsize,
-                &mut row_x,
-                &mut row_y,
-                &mut row_b,
-            );
+            let params = XybParams::new(&opsin, intensity_target);
 
+            xyb_process(d, &params, xsize, &mut row_x, &mut row_y, &mut row_b);
             xyb_process(
                 ScalarDescriptor::new().unwrap(),
-                &opsin,
-                intensity_target,
+                &params,
                 xsize,
                 &mut scalar_x,
                 &mut scalar_y,
