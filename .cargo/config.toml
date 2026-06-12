@@ -1,3 +1,6 @@
+[target.thumbv7neon-unknown-linux-gnueabihf]
+linker = "arm-linux-gnueabihf-gcc"
+
 [target.wasm32-wasip1]
 runner = "wasmtime --dir=. --dir=.. --env ARBTEST_BUDGET_MS"
 rustflags = ["-C", "target-feature=+simd128,+relaxed-simd"]

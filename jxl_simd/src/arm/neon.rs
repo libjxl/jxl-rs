@@ -3,13 +3,15 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-use std::{
-    arch::aarch64::*,
-    ops::{
-        Add, AddAssign, BitAnd, BitAndAssign, BitOr, BitOrAssign, BitXor, BitXorAssign, Div,
-        DivAssign, Mul, MulAssign, Neg, Sub, SubAssign,
-    },
+use std::ops::{
+    Add, AddAssign, BitAnd, BitAndAssign, BitOr, BitOrAssign, BitXor, BitXorAssign, Div, DivAssign,
+    Mul, MulAssign, Neg, Sub, SubAssign,
 };
+
+#[cfg(target_arch = "aarch64")]
+use std::arch::aarch64::*;
+#[cfg(target_arch = "arm")]
+use std::arch::arm::*;
 
 use crate::U32SimdVec;
 
@@ -51,7 +53,12 @@ impl SimdDescriptor for NeonDescriptor {
     type Descriptor128 = Self;
 
     fn new() -> Option<Self> {
-        if std::arch::is_aarch64_feature_detected!("neon") {
+        #[cfg(target_arch = "aarch64")]
+        let has_neon = std::arch::is_aarch64_feature_detected!("neon");
+        #[cfg(target_arch = "arm")]
+        let has_neon = std::arch::is_arm_feature_detected!("neon");
+
+        if has_neon {
             // SAFETY: we just checked neon.
             Some(unsafe { Self::new_unchecked() })
         } else {
@@ -69,6 +76,7 @@ impl SimdDescriptor for NeonDescriptor {
 
     fn call<R>(self, f: impl FnOnce(Self) -> R) -> R {
         #[target_feature(enable = "neon")]
+        #[cfg_attr(target_arch = "arm", target_feature(enable = "v7"))]
         #[inline(never)]
         unsafe fn inner<R>(d: NeonDescriptor, f: impl FnOnce(NeonDescriptor) -> R) -> R {
             f(d)
@@ -88,6 +96,7 @@ macro_rules! fn_neon {
         #[inline(always)]
         fn $name(self: $self_ty, $($arg: $ty),*) $(-> $ret)? {
             #[target_feature(enable = "neon")]
+			#[cfg_attr(target_arch = "arm", target_feature(enable = "v7"))]
             #[inline]
             fn inner($this: $self_ty, $($arg: $ty),*) $(-> $ret)? {
                 $body
@@ -101,6 +110,20 @@ macro_rules! fn_neon {
 #[derive(Clone, Copy, Debug)]
 #[repr(transparent)]
 pub struct F32VecNeon(float32x4_t, NeonDescriptor);
+
+#[cfg(target_arch = "arm")]
+#[inline(always)]
+fn f32_vec_from_array(array: [f32; 4]) -> float32x4_t {
+    // SAFETY: Both types have an identical layout.
+    unsafe { core::mem::transmute(array) }
+}
+
+#[cfg(target_arch = "arm")]
+#[inline(always)]
+fn f32_vec_to_array(vec: float32x4_t) -> [f32; 4] {
+    // SAFETY: Both types have an identical layout.
+    unsafe { core::mem::transmute(vec) }
+}
 
 impl F32SimdVec for F32VecNeon {
     type Descriptor = NeonDescriptor;
@@ -180,6 +203,7 @@ impl F32SimdVec for F32VecNeon {
         dest: &mut [f32],
     ) {
         #[target_feature(enable = "neon")]
+        #[cfg_attr(target_arch = "arm", target_feature(enable = "v7"))]
         #[inline]
         fn store_interleaved_8_impl(
             a: float32x4_t,
@@ -195,60 +219,86 @@ impl F32SimdVec for F32VecNeon {
             assert!(dest.len() >= 8 * F32VecNeon::LEN);
             // NEON doesn't have vst8, so we use manual interleaving
             // For 4-wide vectors, output is 32 elements: [a0,b0,c0,d0,e0,f0,g0,h0, a1,...]
+            let (out0, out1, out2, out3, out4, out5, out6, out7);
 
-            // Use zip to interleave pairs
-            let ae_lo = vzip1q_f32(a, e); // [a0, e0, a1, e1]
-            let ae_hi = vzip2q_f32(a, e); // [a2, e2, a3, e3]
-            let bf_lo = vzip1q_f32(b, f);
-            let bf_hi = vzip2q_f32(b, f);
-            let cg_lo = vzip1q_f32(c, g);
-            let cg_hi = vzip2q_f32(c, g);
-            let dh_lo = vzip1q_f32(d, h);
-            let dh_hi = vzip2q_f32(d, h);
+            #[cfg(target_arch = "aarch64")]
+            {
+                // Use zip to interleave pairs
+                let ae_lo = vzip1q_f32(a, e); // [a0, e0, a1, e1]
+                let ae_hi = vzip2q_f32(a, e); // [a2, e2, a3, e3]
+                let bf_lo = vzip1q_f32(b, f);
+                let bf_hi = vzip2q_f32(b, f);
+                let cg_lo = vzip1q_f32(c, g);
+                let cg_hi = vzip2q_f32(c, g);
+                let dh_lo = vzip1q_f32(d, h);
+                let dh_hi = vzip2q_f32(d, h);
 
-            // Now interleave ae with bf, and cg with dh
-            let aebf_0 = vzip1q_f32(ae_lo, bf_lo); // [a0, b0, e0, f0]
-            let aebf_1 = vzip2q_f32(ae_lo, bf_lo); // [a1, b1, e1, f1]
-            let aebf_2 = vzip1q_f32(ae_hi, bf_hi);
-            let aebf_3 = vzip2q_f32(ae_hi, bf_hi);
-            let cgdh_0 = vzip1q_f32(cg_lo, dh_lo); // [c0, d0, g0, h0]
-            let cgdh_1 = vzip2q_f32(cg_lo, dh_lo);
-            let cgdh_2 = vzip1q_f32(cg_hi, dh_hi);
-            let cgdh_3 = vzip2q_f32(cg_hi, dh_hi);
+                // Now interleave ae with bf, and cg with dh
+                let aebf_0 = vzip1q_f32(ae_lo, bf_lo); // [a0, b0, e0, f0]
+                let aebf_1 = vzip2q_f32(ae_lo, bf_lo); // [a1, b1, e1, f1]
+                let aebf_2 = vzip1q_f32(ae_hi, bf_hi);
+                let aebf_3 = vzip2q_f32(ae_hi, bf_hi);
+                let cgdh_0 = vzip1q_f32(cg_lo, dh_lo); // [c0, d0, g0, h0]
+                let cgdh_1 = vzip2q_f32(cg_lo, dh_lo);
+                let cgdh_2 = vzip1q_f32(cg_hi, dh_hi);
+                let cgdh_3 = vzip2q_f32(cg_hi, dh_hi);
 
-            // Final interleave to get [a0,b0,c0,d0,e0,f0,g0,h0]
-            let out0 = vreinterpretq_f32_f64(vzip1q_f64(
-                vreinterpretq_f64_f32(aebf_0),
-                vreinterpretq_f64_f32(cgdh_0),
-            ));
-            let out1 = vreinterpretq_f32_f64(vzip2q_f64(
-                vreinterpretq_f64_f32(aebf_0),
-                vreinterpretq_f64_f32(cgdh_0),
-            ));
-            let out2 = vreinterpretq_f32_f64(vzip1q_f64(
-                vreinterpretq_f64_f32(aebf_1),
-                vreinterpretq_f64_f32(cgdh_1),
-            ));
-            let out3 = vreinterpretq_f32_f64(vzip2q_f64(
-                vreinterpretq_f64_f32(aebf_1),
-                vreinterpretq_f64_f32(cgdh_1),
-            ));
-            let out4 = vreinterpretq_f32_f64(vzip1q_f64(
-                vreinterpretq_f64_f32(aebf_2),
-                vreinterpretq_f64_f32(cgdh_2),
-            ));
-            let out5 = vreinterpretq_f32_f64(vzip2q_f64(
-                vreinterpretq_f64_f32(aebf_2),
-                vreinterpretq_f64_f32(cgdh_2),
-            ));
-            let out6 = vreinterpretq_f32_f64(vzip1q_f64(
-                vreinterpretq_f64_f32(aebf_3),
-                vreinterpretq_f64_f32(cgdh_3),
-            ));
-            let out7 = vreinterpretq_f32_f64(vzip2q_f64(
-                vreinterpretq_f64_f32(aebf_3),
-                vreinterpretq_f64_f32(cgdh_3),
-            ));
+                // Final interleave to get [a0,b0,c0,d0,e0,f0,g0,h0]
+                out0 = vreinterpretq_f32_f64(vzip1q_f64(
+                    vreinterpretq_f64_f32(aebf_0),
+                    vreinterpretq_f64_f32(cgdh_0),
+                ));
+                out1 = vreinterpretq_f32_f64(vzip2q_f64(
+                    vreinterpretq_f64_f32(aebf_0),
+                    vreinterpretq_f64_f32(cgdh_0),
+                ));
+                out2 = vreinterpretq_f32_f64(vzip1q_f64(
+                    vreinterpretq_f64_f32(aebf_1),
+                    vreinterpretq_f64_f32(cgdh_1),
+                ));
+                out3 = vreinterpretq_f32_f64(vzip2q_f64(
+                    vreinterpretq_f64_f32(aebf_1),
+                    vreinterpretq_f64_f32(cgdh_1),
+                ));
+                out4 = vreinterpretq_f32_f64(vzip1q_f64(
+                    vreinterpretq_f64_f32(aebf_2),
+                    vreinterpretq_f64_f32(cgdh_2),
+                ));
+                out5 = vreinterpretq_f32_f64(vzip2q_f64(
+                    vreinterpretq_f64_f32(aebf_2),
+                    vreinterpretq_f64_f32(cgdh_2),
+                ));
+                out6 = vreinterpretq_f32_f64(vzip1q_f64(
+                    vreinterpretq_f64_f32(aebf_3),
+                    vreinterpretq_f64_f32(cgdh_3),
+                ));
+                out7 = vreinterpretq_f32_f64(vzip2q_f64(
+                    vreinterpretq_f64_f32(aebf_3),
+                    vreinterpretq_f64_f32(cgdh_3),
+                ));
+            }
+
+            #[cfg(target_arch = "arm")]
+            {
+                let ae = vzipq_f32(a, e);
+                let bf = vzipq_f32(b, f);
+                let cg = vzipq_f32(c, g);
+                let dh = vzipq_f32(d, h);
+
+                let aebf_lo = vzipq_f32(ae.0, bf.0);
+                let aebf_hi = vzipq_f32(ae.1, bf.1);
+                let cgdh_lo = vzipq_f32(cg.0, dh.0);
+                let cgdh_hi = vzipq_f32(cg.1, dh.1);
+
+                out0 = vcombine_f32(vget_low_f32(aebf_lo.0), vget_low_f32(cgdh_lo.0));
+                out1 = vcombine_f32(vget_high_f32(aebf_lo.0), vget_high_f32(cgdh_lo.0));
+                out2 = vcombine_f32(vget_low_f32(aebf_lo.1), vget_low_f32(cgdh_lo.1));
+                out3 = vcombine_f32(vget_high_f32(aebf_lo.1), vget_high_f32(cgdh_lo.1));
+                out4 = vcombine_f32(vget_low_f32(aebf_hi.0), vget_low_f32(cgdh_hi.0));
+                out5 = vcombine_f32(vget_high_f32(aebf_hi.0), vget_high_f32(cgdh_hi.0));
+                out6 = vcombine_f32(vget_low_f32(aebf_hi.1), vget_low_f32(cgdh_hi.1));
+                out7 = vcombine_f32(vget_high_f32(aebf_hi.1), vget_high_f32(cgdh_hi.1));
+            }
 
             // SAFETY: we just checked that dest has enough space.
             unsafe {
@@ -298,6 +348,7 @@ impl F32SimdVec for F32VecNeon {
     #[inline(always)]
     fn transpose_square(d: NeonDescriptor, data: &mut [[f32; 4]], stride: usize) {
         #[target_feature(enable = "neon")]
+        #[cfg_attr(target_arch = "arm", target_feature(enable = "v7"))]
         #[inline]
         fn transpose4x4f32(d: NeonDescriptor, data: &mut [[f32; 4]], stride: usize) {
             assert!(data.len() > 3 * stride);
@@ -307,26 +358,43 @@ impl F32SimdVec for F32VecNeon {
             let p2 = F32VecNeon::load_array(d, &data[2 * stride]).0;
             let p3 = F32VecNeon::load_array(d, &data[3 * stride]).0;
 
-            // Stage 1: Transpose within each of 2x2 blocks
-            let tr0 = vreinterpretq_f64_f32(vtrn1q_f32(p0, p1));
-            let tr1 = vreinterpretq_f64_f32(vtrn2q_f32(p0, p1));
-            let tr2 = vreinterpretq_f64_f32(vtrn1q_f32(p2, p3));
-            let tr3 = vreinterpretq_f64_f32(vtrn2q_f32(p2, p3));
+            let (out0, out1, out2, out3);
 
-            // Stage 2: Transpose 2x2 grid of 2x2 blocks
-            let p0 = vreinterpretq_f32_f64(vzip1q_f64(tr0, tr2));
-            let p1 = vreinterpretq_f32_f64(vzip1q_f64(tr1, tr3));
-            let p2 = vreinterpretq_f32_f64(vzip2q_f64(tr0, tr2));
-            let p3 = vreinterpretq_f32_f64(vzip2q_f64(tr1, tr3));
+            #[cfg(target_arch = "aarch64")]
+            {
+                // Stage 1: Transpose within each of 2x2 blocks
+                let tr0 = vreinterpretq_f64_f32(vtrn1q_f32(p0, p1));
+                let tr1 = vreinterpretq_f64_f32(vtrn2q_f32(p0, p1));
+                let tr2 = vreinterpretq_f64_f32(vtrn1q_f32(p2, p3));
+                let tr3 = vreinterpretq_f64_f32(vtrn2q_f32(p2, p3));
 
-            F32VecNeon(p0, d).store_array(&mut data[0]);
-            F32VecNeon(p1, d).store_array(&mut data[1 * stride]);
-            F32VecNeon(p2, d).store_array(&mut data[2 * stride]);
-            F32VecNeon(p3, d).store_array(&mut data[3 * stride]);
+                // Stage 2: Transpose 2x2 grid of 2x2 blocks
+                out0 = vreinterpretq_f32_f64(vzip1q_f64(tr0, tr2));
+                out1 = vreinterpretq_f32_f64(vzip1q_f64(tr1, tr3));
+                out2 = vreinterpretq_f32_f64(vzip2q_f64(tr0, tr2));
+                out3 = vreinterpretq_f32_f64(vzip2q_f64(tr1, tr3));
+            }
+
+            #[cfg(target_arch = "arm")]
+            {
+                let tr01 = vtrnq_f32(p0, p1);
+                let tr23 = vtrnq_f32(p2, p3);
+
+                out0 = vcombine_f32(vget_low_f32(tr01.0), vget_low_f32(tr23.0));
+                out1 = vcombine_f32(vget_low_f32(tr01.1), vget_low_f32(tr23.1));
+                out2 = vcombine_f32(vget_high_f32(tr01.0), vget_high_f32(tr23.0));
+                out3 = vcombine_f32(vget_high_f32(tr01.1), vget_high_f32(tr23.1));
+            }
+
+            F32VecNeon(out0, d).store_array(&mut data[0]);
+            F32VecNeon(out1, d).store_array(&mut data[1 * stride]);
+            F32VecNeon(out2, d).store_array(&mut data[2 * stride]);
+            F32VecNeon(out3, d).store_array(&mut data[3 * stride]);
         }
 
         /// Potentially faster variant of `transpose4x4f32` where `stride == 1`.
         #[target_feature(enable = "neon")]
+        #[cfg_attr(target_arch = "arm", target_feature(enable = "v7"))]
         #[inline]
         fn transpose4x4f32_contiguous(d: NeonDescriptor, data: &mut [[f32; 4]]) {
             assert!(data.len() > 3);
@@ -358,11 +426,19 @@ impl F32SimdVec for F32VecNeon {
 
     fn_neon! {
         fn mul_add(this: F32VecNeon, mul: F32VecNeon, add: F32VecNeon) -> F32VecNeon {
-            F32VecNeon(vfmaq_f32(add.0, this.0, mul.0), this.1)
+            #[cfg(target_arch = "aarch64")]
+            let res = vfmaq_f32(add.0, this.0, mul.0);
+            #[cfg(target_arch = "arm")]
+            let res = vmlaq_f32(add.0, this.0, mul.0);
+            F32VecNeon(res, this.1)
         }
 
         fn neg_mul_add(this: F32VecNeon, mul: F32VecNeon, add: F32VecNeon) -> F32VecNeon {
-            F32VecNeon(vfmsq_f32(add.0, this.0, mul.0), this.1)
+            #[cfg(target_arch = "aarch64")]
+            let res = vfmsq_f32(add.0, this.0, mul.0);
+            #[cfg(target_arch = "arm")]
+            let res = vmlsq_f32(add.0, this.0, mul.0);
+            F32VecNeon(res, this.1)
         }
 
         fn abs(this: F32VecNeon) -> F32VecNeon {
@@ -370,11 +446,31 @@ impl F32SimdVec for F32VecNeon {
         }
 
         fn floor(this: F32VecNeon) -> F32VecNeon {
-            F32VecNeon(vrndmq_f32(this.0), this.1)
+            #[cfg(target_arch = "aarch64")]
+            let res = vrndmq_f32(this.0);
+            #[cfg(target_arch = "arm")]
+            let res = {
+                let mut tmp = f32_vec_to_array(this.0);
+                for x in &mut tmp {
+                    *x = x.floor();
+                }
+                f32_vec_from_array(tmp)
+            };
+            F32VecNeon(res, this.1)
         }
 
         fn sqrt(this: F32VecNeon) -> F32VecNeon {
-            F32VecNeon(vsqrtq_f32(this.0), this.1)
+            #[cfg(target_arch = "aarch64")]
+            let res = vsqrtq_f32(this.0);
+            #[cfg(target_arch = "arm")]
+            let res = {
+                let mut tmp = f32_vec_to_array(this.0);
+                for x in &mut tmp {
+                    *x = x.sqrt();
+                }
+                f32_vec_from_array(tmp)
+            };
+            F32VecNeon(res, this.1)
         }
 
         fn neg(this: F32VecNeon) -> F32VecNeon {
@@ -411,7 +507,10 @@ impl F32SimdVec for F32VecNeon {
         fn round_store_u8(this: F32VecNeon, dest: &mut [u8]) {
             assert!(dest.len() >= F32VecNeon::LEN);
             // Round to nearest integer
+            #[cfg(target_arch = "aarch64")]
             let rounded = vrndnq_f32(this.0);
+            #[cfg(target_arch = "arm")]
+            let rounded = vaddq_f32(this.0, vdupq_n_f32(0.5));
             // Convert to i32, then to u16, then to u8
             let i32s = vcvtq_s32_f32(rounded);
             let u16s = vqmovun_s32(i32s);
@@ -426,7 +525,10 @@ impl F32SimdVec for F32VecNeon {
         fn round_store_u16(this: F32VecNeon, dest: &mut [u16]) {
             assert!(dest.len() >= F32VecNeon::LEN);
             // Round to nearest integer
+            #[cfg(target_arch = "aarch64")]
             let rounded = vrndnq_f32(this.0);
+            #[cfg(target_arch = "arm")]
+            let rounded = vaddq_f32(this.0, vdupq_n_f32(0.5));
             // Convert to i32, then to u16
             let i32s = vcvtq_s32_f32(rounded);
             let u16s = vqmovun_s32(i32s);
@@ -439,12 +541,14 @@ impl F32SimdVec for F32VecNeon {
 
         fn store_f16_bits(this: F32VecNeon, dest: &mut [u16]) {
             assert!(dest.len() >= F32VecNeon::LEN);
+
+            #[cfg(target_arch = "aarch64")]
             // Use inline asm because Rust stdarch incorrectly requires fp16 target feature
             // for vcvt_f16_f32 (fixed in https://github.com/rust-lang/stdarch/pull/1978)
-            let f16_bits: uint16x4_t;
             // SAFETY: NEON is available (guaranteed by descriptor), dest has enough space,
             // vst1_u16 supports unaligned stores.
             unsafe {
+                let f16_bits: uint16x4_t;
                 std::arch::asm!(
                     "fcvtn {out:v}.4h, {inp:v}.4s",
                     inp = in(vreg) this.0,
@@ -453,15 +557,26 @@ impl F32SimdVec for F32VecNeon {
                 );
                 vst1_u16(dest.as_mut_ptr(), f16_bits);
             }
+
+            #[cfg(target_arch = "arm")]
+            {
+                let tmp = f32_vec_to_array(this.0);
+                for (d, t) in dest.iter_mut().zip(tmp) {
+                    *d = crate::f16::from_f32(t).to_bits();
+                }
+            }
         }
     }
 
     #[inline(always)]
     fn load_f16_bits(d: Self::Descriptor, mem: &[u16]) -> Self {
         assert!(mem.len() >= Self::LEN);
+
+        let result: float32x4_t;
+
+        #[cfg(target_arch = "aarch64")]
         // Use inline asm because Rust stdarch incorrectly requires fp16 target feature
         // for vcvt_f32_f16 (fixed in https://github.com/rust-lang/stdarch/pull/1978)
-        let result: float32x4_t;
         // SAFETY: NEON is available (guaranteed by descriptor), mem has enough space.
         // vld1_u16 supports unaligned loads.
         unsafe {
@@ -473,12 +588,20 @@ impl F32SimdVec for F32VecNeon {
                 options(pure, nomem, nostack),
             );
         }
+
+        #[cfg(target_arch = "arm")]
+        {
+            let tmp = core::array::from_fn(|i| crate::f16::from_bits(mem[i]).to_f32());
+            result = f32_vec_from_array(tmp);
+        }
+
         F32VecNeon(result, d)
     }
 
     #[inline(always)]
     fn prepare_table_bf16_8(_d: NeonDescriptor, table: &[f32; 8]) -> Bf16Table8Neon {
         #[target_feature(enable = "neon")]
+        #[cfg_attr(target_arch = "arm", target_feature(enable = "v7"))]
         #[inline]
         fn prepare_impl(table: &[f32; 8]) -> uint8x16_t {
             // Convert f32 table to BF16 packed in 128 bits (16 bytes for 8 entries)
@@ -507,6 +630,7 @@ impl F32SimdVec for F32VecNeon {
     #[inline(always)]
     fn table_lookup_bf16_8(d: NeonDescriptor, table: Bf16Table8Neon, indices: I32VecNeon) -> Self {
         #[target_feature(enable = "neon")]
+        #[cfg_attr(target_arch = "arm", target_feature(enable = "v7"))]
         #[inline]
         fn lookup_impl(bf16_table: uint8x16_t, indices: int32x4_t) -> float32x4_t {
             // Build shuffle mask efficiently using arithmetic on 32-bit indices.
@@ -523,9 +647,19 @@ impl F32SimdVec for F32VecNeon {
             let shl25 = vshlq_n_u32::<25>(indices_u32);
             let base = vdupq_n_u32(0x01008080);
             let shuffle_mask = vorrq_u32(vorrq_u32(shl17, shl25), base);
+            let shuffle_mask_u8 = vreinterpretq_u8_u32(shuffle_mask);
 
             // Perform the table lookup (out of range indices give 0)
-            let result = vqtbl1q_u8(bf16_table, vreinterpretq_u8_u32(shuffle_mask));
+            #[cfg(target_arch = "aarch64")]
+            let result = vqtbl1q_u8(bf16_table, shuffle_mask_u8);
+
+            #[cfg(target_arch = "arm")]
+            let result = {
+                let table = uint8x8x2_t(vget_low_u8(bf16_table), vget_high_u8(bf16_table));
+                let res_low = vtbl2_u8(table, vget_low_u8(shuffle_mask_u8));
+                let res_high = vtbl2_u8(table, vget_high_u8(shuffle_mask_u8));
+                vcombine_u8(res_low, res_high)
+            };
 
             // Result has bf16 in high 16 bits of each 32-bit lane = valid f32
             vreinterpretq_f32_u8(result)
@@ -566,7 +700,18 @@ impl Div<F32VecNeon> for F32VecNeon {
     type Output = Self;
     fn_neon! {
         fn div(this: F32VecNeon, rhs: F32VecNeon) -> F32VecNeon {
-            F32VecNeon(vdivq_f32(this.0, rhs.0), this.1)
+            #[cfg(target_arch = "aarch64")]
+            let res = vdivq_f32(this.0, rhs.0);
+            #[cfg(target_arch = "arm")]
+            let res = {
+                let mut a = f32_vec_to_array(this.0);
+                let b = f32_vec_to_array(rhs.0);
+                for (x, y) in a.iter_mut().zip(b) {
+                    *x /= y;
+                }
+                f32_vec_from_array(a)
+            };
+            F32VecNeon(res, this.1)
         }
     }
 }
@@ -598,7 +743,19 @@ impl MulAssign<F32VecNeon> for F32VecNeon {
 impl DivAssign<F32VecNeon> for F32VecNeon {
     fn_neon! {
         fn div_assign(this: &mut F32VecNeon, rhs: F32VecNeon) {
-            this.0 = vdivq_f32(this.0, rhs.0);
+            #[cfg(target_arch = "aarch64")]
+            {
+                this.0 = vdivq_f32(this.0, rhs.0);
+            }
+            #[cfg(target_arch = "arm")]
+            {
+                let mut a = f32_vec_to_array(this.0);
+                let b = f32_vec_to_array(rhs.0);
+                for (x, y) in a.iter_mut().zip(b) {
+                    *x /= y;
+                }
+                this.0 = f32_vec_from_array(a);
+            }
         }
     }
 }
@@ -656,7 +813,11 @@ impl I32SimdVec for I32VecNeon {
         }
 
         fn lt_zero(this: I32VecNeon) -> MaskNeon {
-            MaskNeon(vcltzq_s32(this.0), this.1)
+            #[cfg(target_arch = "aarch64")]
+            let res = vcltzq_s32(this.0);
+            #[cfg(target_arch = "arm")]
+            let res = vcltq_s32(this.0, vdupq_n_s32(0));
+            MaskNeon(res, this.1)
         }
 
         fn eq(this: I32VecNeon, other: I32VecNeon) -> MaskNeon {
@@ -664,15 +825,26 @@ impl I32SimdVec for I32VecNeon {
         }
 
         fn eq_zero(this: I32VecNeon) -> MaskNeon {
-            MaskNeon(vceqzq_s32(this.0), this.1)
+            #[cfg(target_arch = "aarch64")]
+            let res = vceqzq_s32(this.0);
+            #[cfg(target_arch = "arm")]
+            let res = vceqq_s32(this.0, vdupq_n_s32(0));
+            MaskNeon(res, this.1)
         }
 
         fn mul_wide_take_high(this: I32VecNeon, rhs: I32VecNeon) -> I32VecNeon {
             let l = vmull_s32(vget_low_s32(this.0), vget_low_s32(rhs.0));
             let l = vreinterpretq_s32_s64(l);
+            #[cfg(target_arch = "aarch64")]
             let h = vmull_high_s32(this.0, rhs.0);
+            #[cfg(target_arch = "arm")]
+            let h = vmull_s32(vget_high_s32(this.0), vget_high_s32(rhs.0));
             let h = vreinterpretq_s32_s64(h);
-            I32VecNeon(vuzp2q_s32(l, h), this.1)
+            #[cfg(target_arch = "aarch64")]
+            let res = vuzp2q_s32(l, h);
+            #[cfg(target_arch = "arm")]
+            let res = vuzpq_s32(l, h).1;
+            I32VecNeon(res, this.1)
         }
     }
 
@@ -1010,7 +1182,15 @@ impl SimdMask for MaskNeon {
         }
 
         fn all(this: MaskNeon) -> bool {
-            vminvq_u32(this.0) == u32::MAX
+            #[cfg(target_arch = "aarch64")]
+            {
+                vminvq_u32(this.0) == u32::MAX
+            }
+            #[cfg(target_arch = "arm")]
+            {
+                let res = vand_u32(vget_low_u32(this.0), vget_high_u32(this.0));
+                (vget_lane_u32::<0>(res) & vget_lane_u32::<1>(res)) == u32::MAX
+            }
         }
     }
 }

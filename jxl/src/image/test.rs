@@ -31,6 +31,10 @@ impl<T: ImageDataType> Image<T> {
     }
 }
 
+#[cfg_attr(
+    target_pointer_width = "32",
+    ignore = "will overflow on 32-bit targets"
+)]
 #[test]
 fn huge_image() {
     assert!(Image::<u8>::new((1 << 28, 1 << 28)).is_err());

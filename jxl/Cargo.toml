@@ -34,12 +34,13 @@ jxl_macros = { path = "../jxl_macros", version = "=0.4.3", features = ["test"] }
 [features]
 default = ["all-simd"]
 
-all-simd = ["jxl_simd/all-simd"]
-sse42 = ["jxl_simd/sse42"]
-avx = ["jxl_simd/avx"]
-avx512 = ["jxl_simd/avx512"]
-neon = ["jxl_simd/neon"]
-simd128 = ["jxl_simd/simd128"]
+all-simd = ["jxl_transforms/all-simd"]
+sse42 = ["jxl_transforms/sse42"]
+avx = ["jxl_transforms/avx"]
+avx512 = ["jxl_transforms/avx512"]
+neon = ["jxl_transforms/neon"]
+simd128 = ["jxl_transforms/simd128"]
+nightly = ["jxl_transforms/nightly"]
 
 [lints]
 workspace = true
