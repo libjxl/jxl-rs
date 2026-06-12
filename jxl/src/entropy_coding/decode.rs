@@ -577,10 +577,6 @@ impl Histograms {
         self.codes.single_symbol(lz_dist_cluster) == Some(1) && lz_conf.is_split_exponent_zero()
     }
 
-    /// Returns the maximum number of bits any decoded value can require across all clusters.
-    ///
-    /// Returns `usize::MAX` conservatively for Huffman-coded streams. Mirrors libjxl's
-    /// `max_num_bits` field in `AnsCodes` / `dec_ans.cc`.
     pub fn max_num_bits(&self) -> usize {
         match &self.codes {
             Codes::Ans(ans) => (0..self.uint_configs.len())

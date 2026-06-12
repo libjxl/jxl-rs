@@ -53,9 +53,6 @@ impl HybridUint {
         })
     }
 
-    /// Returns the maximum number of output bits for the given maximum input symbol.
-    ///
-    /// Mirrors libjxl's `UpdateMaxNumBits` from `dec_ans.cc`.
     pub fn max_bits_for_symbol(&self, max_symbol: u32) -> usize {
         if max_symbol < self.split_token {
             self.split_exponent as usize

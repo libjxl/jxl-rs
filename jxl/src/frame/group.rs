@@ -76,8 +76,6 @@ fn predict_num_nonzeros(nzeros_map: &Image<u32>, bx: usize, by: usize) -> usize 
     }
 }
 
-/// Abstraction over coefficient slice types (i32 or i16) for zero-copy SIMD dequant.
-/// Implemented for both `&[i32]` (direct) and `&[i16]` (sign-extend via load_from_i16).
 trait CoeffSlice<D: SimdDescriptor>: Copy {
     fn load_vec(self, d: D, k: usize) -> D::I32Vec;
 }
@@ -498,9 +496,7 @@ pub fn decode_vardct_group(
     let raw_quant_map = hf_meta.raw_quant_map.get_rect(block_group_rect);
     let quant_lf_rect = quant_lf.get_rect(block_group_rect);
     let block_context_map = lf_global.block_context_map.as_mut().unwrap();
-    // Coefficient storage: i16 when the histogram guarantees all values fit (saves ~50% RAM for
-    // persistent multi-pass coefficients). In the i16 case we expand per block before dequant
-    // using the scratch coeffs_storage buffer (which is unused in multi-pass mode).
+
     let mut coeffs_i16: Option<[&mut [i16]; 3]>;
     let mut coeffs_i32: Option<[&mut [i32]; 3]>;
     match hf_global.hf_coefficients.as_mut() {

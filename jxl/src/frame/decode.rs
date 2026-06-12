@@ -518,8 +518,6 @@ impl Frame {
                     .can_do_partial_render()
                     && self.header.num_extra_channels > 0);
 
-            // Use i16 storage when the histogram guarantees all values fit: mirrors libjxl's
-            // dec_frame.cc `use_16_bit` check (max_num_bits + CeilLog2Nonzero(num_passes) < 16).
             let max_bits = passes
                 .iter()
                 .map(|p| p.histograms.max_num_bits())

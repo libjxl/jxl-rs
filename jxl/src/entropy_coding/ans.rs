@@ -418,7 +418,6 @@ impl AnsCodes {
         self.histograms[ctx].single_symbol()
     }
 
-    /// Returns the largest symbol that can appear in this cluster's histogram.
     pub fn max_symbol_for_cluster(&self, cluster: usize) -> u32 {
         self.histograms[cluster].alphabet_size.saturating_sub(1) as u32
     }
