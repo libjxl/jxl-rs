@@ -240,6 +240,11 @@ impl I32SimdVec for Wrapping<i32> {
     }
 
     #[inline(always)]
+    fn load_from_i16(_d: Self::Descriptor, mem: &[i16]) -> Self {
+        Wrapping(mem[0] as i32)
+    }
+
+    #[inline(always)]
     fn store(&self, mem: &mut [i32]) {
         mem[0] = self.0;
     }
