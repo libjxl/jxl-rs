@@ -630,8 +630,7 @@ impl I32SimdVec for I32VecNeon {
     fn load_from_i16(d: Self::Descriptor, mem: &[i16]) -> Self {
         assert!(mem.len() >= Self::LEN);
         // SAFETY: we just checked that `mem` has enough space. Moreover, we know neon is available
-        // from the safety invariant on `d`. vld1_s16 loads 4 i16 values; vmovl_s16 sign-extends
-        // them to 4 i32 values.
+        // from the safety invariant on `d`.
         Self(unsafe { vmovl_s16(vld1_s16(mem.as_ptr())) }, d)
     }
 

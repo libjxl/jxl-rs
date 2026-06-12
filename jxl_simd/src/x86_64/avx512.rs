@@ -979,8 +979,7 @@ impl I32SimdVec for I32VecAvx512 {
     fn load_from_i16(d: Self::Descriptor, mem: &[i16]) -> Self {
         assert!(mem.len() >= Self::LEN);
         // SAFETY: we just checked that `mem` has enough space. Moreover, we know avx512f is available
-        // from the safety invariant on `d`. _mm256_loadu_si256 loads 32 bytes (16 i16);
-        // _mm512_cvtepi16_epi32 sign-extends them to 16 i32 values (AVX512F+BW).
+        // from the safety invariant on `d`.
         Self(
             unsafe { _mm512_cvtepi16_epi32(_mm256_loadu_si256(mem.as_ptr().cast())) },
             d,

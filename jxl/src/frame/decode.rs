@@ -531,22 +531,22 @@ impl Frame {
             let use_i16 = max_bits.saturating_add(pass_log) < 16;
 
             let hf_coefficients = if !need_hf_coefficients {
-                None
+                HfCoefficients::None
             } else {
                 let xs = GROUP_DIM * GROUP_DIM;
                 let ys = self.header.num_groups();
                 if use_i16 {
-                    Some(HfCoefficients::I16(
+                    HfCoefficients::I16([
                         Image::new((xs, ys))?,
                         Image::new((xs, ys))?,
                         Image::new((xs, ys))?,
-                    ))
+                    ])
                 } else {
-                    Some(HfCoefficients::I32(
+                    HfCoefficients::I32([
                         Image::new((xs, ys))?,
                         Image::new((xs, ys))?,
                         Image::new((xs, ys))?,
-                    ))
+                    ])
                 }
             };
 

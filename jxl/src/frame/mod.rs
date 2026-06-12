@@ -67,15 +67,16 @@ pub struct PassState {
 }
 
 pub(super) enum HfCoefficients {
-    I32(Image<i32>, Image<i32>, Image<i32>),
-    I16(Image<i16>, Image<i16>, Image<i16>),
+    None,
+    I32([Image<i32>; 3]),
+    I16([Image<i16>; 3]),
 }
 
 pub struct HfGlobalState {
     num_histograms: u32,
     passes: Vec<PassState>,
     dequant_matrices: DequantMatrices,
-    pub(super) hf_coefficients: Option<HfCoefficients>,
+    pub(super) hf_coefficients: HfCoefficients,
 }
 
 #[derive(Debug)]
