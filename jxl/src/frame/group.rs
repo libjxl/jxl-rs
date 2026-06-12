@@ -82,14 +82,14 @@ trait CoeffSlice<D: SimdDescriptor>: Copy {
     fn load_vec(self, d: D, k: usize) -> D::I32Vec;
 }
 
-impl<'a, D: SimdDescriptor> CoeffSlice<D> for &'a [i32] {
+impl<D: SimdDescriptor> CoeffSlice<D> for &[i32] {
     #[inline(always)]
     fn load_vec(self, d: D, k: usize) -> D::I32Vec {
         D::I32Vec::load(d, &self[k..])
     }
 }
 
-impl<'a, D: SimdDescriptor> CoeffSlice<D> for &'a [i16] {
+impl<D: SimdDescriptor> CoeffSlice<D> for &[i16] {
     #[inline(always)]
     fn load_vec(self, d: D, k: usize) -> D::I32Vec {
         D::I32Vec::load_from_i16(d, &self[k..])
@@ -515,8 +515,7 @@ pub fn decode_vardct_group(
         None => {
             // Use pooled buffer (already reset to zero in buffers.reset() above)
             coeffs_i16 = None;
-            let (coeffs_x, coeffs_y_b) =
-                buffers.coeffs_storage.split_at_mut(GROUP_DIM * GROUP_DIM);
+            let (coeffs_x, coeffs_y_b) = buffers.coeffs_storage.split_at_mut(GROUP_DIM * GROUP_DIM);
             let (coeffs_y, coeffs_b) = coeffs_y_b.split_at_mut(GROUP_DIM * GROUP_DIM);
             coeffs_i32 = Some([coeffs_x, coeffs_y, coeffs_b]);
         }
@@ -669,13 +668,12 @@ pub fn decode_vardct_group(
                             }
                             let ctx = histo_offset
                                 + zero_density_context(nonzeros, k, log_num_blocks, prev);
-                            let coeff = reader.read_signed_inline(&pass_info.histograms, br, ctx)
-                                << *shift;
+                            let coeff =
+                                reader.read_signed_inline(&pass_info.histograms, br, ctx) << *shift;
                             prev = if coeff != 0 { 1 } else { 0 };
                             nonzeros -= prev;
                             let coeff_index = permutation[k] as usize;
-                            current[coeff_index] =
-                                current[coeff_index].wrapping_add(coeff as i16);
+                            current[coeff_index] = current[coeff_index].wrapping_add(coeff as i16);
                         }
                     } else {
                         let current = &mut coeffs_i32.as_mut().unwrap()[c]
@@ -687,8 +685,8 @@ pub fn decode_vardct_group(
                             }
                             let ctx = histo_offset
                                 + zero_density_context(nonzeros, k, log_num_blocks, prev);
-                            let coeff = reader.read_signed_inline(&pass_info.histograms, br, ctx)
-                                << *shift;
+                            let coeff =
+                                reader.read_signed_inline(&pass_info.histograms, br, ctx) << *shift;
                             prev = if coeff != 0 { 1 } else { 0 };
                             nonzeros -= prev;
                             let coeff_index = permutation[k] as usize;
