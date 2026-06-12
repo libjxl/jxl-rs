@@ -61,6 +61,7 @@ pub struct LowMemoryRenderPipeline {
     // could be reused to store group data for that channel.
     // Indexed by [3*channel] = center, [3*channel+1] = topbottom, [3*channel+2] = leftright.
     scratch_channel_buffers: Vec<Vec<OwnedRawImage>>,
+    allow_pending_buffer_replacement: bool,
 }
 
 impl RenderPipeline for LowMemoryRenderPipeline {
@@ -282,7 +283,12 @@ impl RenderPipeline for LowMemoryRenderPipeline {
             opaque_alpha_buffers,
             sorted_buffer_indices,
             scratch_channel_buffers: (0..nc * 3).map(|_| vec![]).collect(),
+            allow_pending_buffer_replacement: false,
         })
+    }
+
+    fn set_allow_pending_buffer_replacement(&mut self, allow: bool) {
+        self.allow_pending_buffer_replacement = allow;
     }
 
     #[instrument(skip_all, err)]
@@ -309,7 +315,9 @@ impl RenderPipeline for LowMemoryRenderPipeline {
                 channel,
                 T::DATA_TYPE_ID,
             );
-            self.input_buffers[group_id].set_buffer(channel, buf.into_raw());
+            let replace = self.allow_pending_buffer_replacement
+                && !self.shared.group_chan_complete[group_id][channel];
+            self.input_buffers[group_id].set_buffer(channel, buf.into_raw(), replace);
             self.shared.group_chan_complete[group_id][channel] = complete;
 
             self.render_with_new_group(group_id, buffer_splitter)?;

@@ -26,10 +26,13 @@ pub(super) struct InputBuffer {
 }
 
 impl InputBuffer {
-    pub(super) fn set_buffer(&mut self, chan: usize, buf: OwnedRawImage) {
-        assert!(self.data[chan].is_none());
+    pub(super) fn set_buffer(&mut self, chan: usize, buf: OwnedRawImage, replace: bool) {
+        if self.data[chan].is_none() {
+            self.ready_channels += 1;
+        } else {
+            assert!(replace);
+        }
         self.data[chan] = Some(buf);
-        self.ready_channels += 1;
     }
 
     pub(super) fn new(num_channels: usize) -> Self {
@@ -113,6 +116,9 @@ impl LowMemoryRenderPipeline {
     }
 
     fn store_scratch_buffer(&mut self, channel: usize, kind: usize, image: OwnedRawImage) {
+        if kind == 0 && self.allow_pending_buffer_replacement {
+            return;
+        }
         self.scratch_channel_buffers[channel * 3 + kind].push(image)
     }
 

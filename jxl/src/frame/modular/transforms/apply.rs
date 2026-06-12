@@ -382,6 +382,20 @@ impl TransformStepChunk {
                 }
                 buffers[buf_in[0]].buffer_grid[in_grid].mark_used(is_final);
                 buffers[buf_in[1]].buffer_grid[res_grid].mark_used(is_final);
+                // Release the weak neighbor grids read above (next average and previous
+                // decoded), which are counted as uses in the transform graph.
+                let (gx, gy) = self.grid_pos;
+                if gx + 1 < buffers[*buf_out].grid_shape.0 {
+                    let next_avg_grid =
+                        buffers[buf_in[0]].get_grid_idx(out_grid_kind, (gx + 1, gy));
+                    if next_avg_grid != in_grid {
+                        buffers[buf_in[0]].buffer_grid[next_avg_grid].mark_used(is_final);
+                    }
+                }
+                if gx > 0 {
+                    let prev_out_grid = buffers[*buf_out].get_grid_idx(out_grid_kind, (gx - 1, gy));
+                    buffers[*buf_out].buffer_grid[prev_out_grid].mark_used(is_final);
+                }
             }
             TransformStep::VSqueeze {
                 buf_in,
@@ -491,6 +505,20 @@ impl TransformStepChunk {
                 }
                 buffers[buf_in[0]].buffer_grid[in_grid].mark_used(is_final);
                 buffers[buf_in[1]].buffer_grid[res_grid].mark_used(is_final);
+                // Release the weak neighbor grids read above (next average and previous
+                // decoded), which are counted as uses in the transform graph.
+                let (gx, gy) = self.grid_pos;
+                if gy + 1 < buffers[*buf_out].grid_shape.1 {
+                    let next_avg_grid =
+                        buffers[buf_in[0]].get_grid_idx(out_grid_kind, (gx, gy + 1));
+                    if next_avg_grid != in_grid {
+                        buffers[buf_in[0]].buffer_grid[next_avg_grid].mark_used(is_final);
+                    }
+                }
+                if gy > 0 {
+                    let prev_out_grid = buffers[*buf_out].get_grid_idx(out_grid_kind, (gx, gy - 1));
+                    buffers[*buf_out].buffer_grid[prev_out_grid].mark_used(is_final);
+                }
             }
         };
 
