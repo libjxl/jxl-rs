@@ -13,7 +13,7 @@ use crate::{
     entropy_coding::decode::SymbolReader,
     error::{Error, Result},
     frame::{
-        HfGlobalState, HfMetadata, LfGlobalState, block_context_map::*,
+        HfCoefficients, HfGlobalState, HfMetadata, LfGlobalState, block_context_map::*,
         color_correlation_map::COLOR_TILE_DIM_IN_BLOCKS, quant_weights::DequantMatrices,
     },
     headers::frame_header::FrameHeader,
@@ -76,6 +76,26 @@ fn predict_num_nonzeros(nzeros_map: &Image<u32>, bx: usize, by: usize) -> usize 
     }
 }
 
+/// Abstraction over coefficient slice types (i32 or i16) for zero-copy SIMD dequant.
+/// Implemented for both `&[i32]` (direct) and `&[i16]` (sign-extend via load_from_i16).
+trait CoeffSlice<D: SimdDescriptor>: Copy {
+    fn load_vec(self, d: D, k: usize) -> D::I32Vec;
+}
+
+impl<'a, D: SimdDescriptor> CoeffSlice<D> for &'a [i32] {
+    #[inline(always)]
+    fn load_vec(self, d: D, k: usize) -> D::I32Vec {
+        D::I32Vec::load(d, &self[k..])
+    }
+}
+
+impl<'a, D: SimdDescriptor> CoeffSlice<D> for &'a [i16] {
+    #[inline(always)]
+    fn load_vec(self, d: D, k: usize) -> D::I32Vec {
+        D::I32Vec::load_from_i16(d, &self[k..])
+    }
+}
+
 #[inline(always)]
 fn adjust_quant_bias<D: SimdDescriptor>(
     d: D,
@@ -92,7 +112,7 @@ fn adjust_quant_bias<D: SimdDescriptor>(
 
 #[allow(clippy::too_many_arguments)]
 #[inline(always)]
-fn dequant_lane<D: SimdDescriptor>(
+fn dequant_lane<D: SimdDescriptor, C: CoeffSlice<D>>(
     d: D,
     scaled_dequant_x: f32,
     scaled_dequant_y: f32,
@@ -103,7 +123,7 @@ fn dequant_lane<D: SimdDescriptor>(
     x_cc_mul: f32,
     b_cc_mul: f32,
     biases: &[f32; 4],
-    qblock: &[&[i32]; 3],
+    qblock: [C; 3],
     block: &mut [Vec<f32>; 3],
 ) {
     let x_mul = D::F32Vec::load(d, &dequant_matrices[k..]) * D::F32Vec::splat(d, scaled_dequant_x);
@@ -112,9 +132,9 @@ fn dequant_lane<D: SimdDescriptor>(
     let b_mul = D::F32Vec::load(d, &dequant_matrices[2 * size + k..])
         * D::F32Vec::splat(d, scaled_dequant_b);
 
-    let quantized_x = D::I32Vec::load(d, &qblock[0][k..]);
-    let quantized_y = D::I32Vec::load(d, &qblock[1][k..]);
-    let quantized_b = D::I32Vec::load(d, &qblock[2][k..]);
+    let quantized_x = qblock[0].load_vec(d, k);
+    let quantized_y = qblock[1].load_vec(d, k);
+    let quantized_b = qblock[2].load_vec(d, k);
 
     let dequant_x_cc = adjust_quant_bias(d, 0, quantized_x, biases) * x_mul;
     let dequant_y = adjust_quant_bias(d, 1, quantized_y, biases) * y_mul;
@@ -129,7 +149,7 @@ fn dequant_lane<D: SimdDescriptor>(
 
 #[allow(clippy::too_many_arguments)]
 #[inline(always)]
-fn dequant_block<D: SimdDescriptor>(
+fn dequant_block<D: SimdDescriptor, C: CoeffSlice<D>>(
     d: D,
     hf_type: HfTransformType,
     inv_global_scale: f32,
@@ -142,7 +162,7 @@ fn dequant_block<D: SimdDescriptor>(
     dequant_matrices: &DequantMatrices,
     covered_blocks: usize,
     biases: &[f32; 4],
-    qblock: &[&[i32]; 3],
+    qblock: [C; 3],
     block: &mut [Vec<f32>; 3],
 ) {
     let scaled_dequant_y = inv_global_scale / (quant as f32);
@@ -154,7 +174,7 @@ fn dequant_block<D: SimdDescriptor>(
 
     assert!(BLOCK_SIZE.is_multiple_of(D::F32Vec::LEN));
     for k in (0..covered_blocks * BLOCK_SIZE).step_by(D::F32Vec::LEN) {
-        dequant_lane(
+        dequant_lane::<D, C>(
             d,
             scaled_dequant_x,
             scaled_dequant_y,
@@ -173,7 +193,7 @@ fn dequant_block<D: SimdDescriptor>(
 
 #[allow(clippy::too_many_arguments)]
 #[inline(always)]
-fn dequant_and_transform_to_pixels<D: SimdDescriptor>(
+fn dequant_and_transform_to_pixels<D: SimdDescriptor, C: CoeffSlice<D>>(
     d: D,
     quant_biases: &[f32; 4],
     x_dm_multiplier: f32,
@@ -196,10 +216,10 @@ fn dequant_and_transform_to_pixels<D: SimdDescriptor>(
     block_rect: Rect,
     num_blocks: usize,
     num_coeffs: usize,
-    qblock: &[&[i32]; 3],
+    qblock: [C; 3],
     dequant_matrices: &DequantMatrices,
 ) -> Result<(), Error> {
-    dequant_block::<D>(
+    dequant_block::<D, C>(
         d,
         transform_type,
         inv_global_scale,
@@ -276,7 +296,7 @@ simd_function!(
         qblock: &[&[i32]; 3],
         dequant_matrices: &DequantMatrices,
     ) -> Result<(), Error> {
-        dequant_and_transform_to_pixels(
+        dequant_and_transform_to_pixels::<D, &[i32]>(
             d,
             quant_biases,
             x_dm_multiplier,
@@ -299,7 +319,65 @@ simd_function!(
             block_rect,
             num_blocks,
             num_coeffs,
-            qblock,
+            [qblock[0], qblock[1], qblock[2]],
+            dequant_matrices,
+        )
+    }
+);
+
+simd_function!(
+    dequant_and_transform_to_pixels_dispatch_i16,
+    d: D,
+    #[allow(clippy::too_many_arguments)]
+    pub fn dequant_and_transform_to_pixels_fwd_i16(
+        quant_biases: &[f32; 4],
+        x_dm_multiplier: f32,
+        b_dm_multiplier: f32,
+        pixels: &mut [Image<f32>; 3],
+        scratch: &mut [f32],
+        inv_global_scale: f32,
+        transform_buffer: &mut [Vec<f32>; 3],
+        hshift: [usize; 3],
+        vshift: [usize; 3],
+        by: usize,
+        sby: [usize; 3],
+        bx: usize,
+        sbx: [usize; 3],
+        x_cc_mul: f32,
+        b_cc_mul: f32,
+        raw_quant: u32,
+        lf_rects: &Option<[ImageRect<f32>; 3]>,
+        transform_type: HfTransformType,
+        block_rect: Rect,
+        num_blocks: usize,
+        num_coeffs: usize,
+        qblock: &[&[i16]; 3],
+        dequant_matrices: &DequantMatrices,
+    ) -> Result<(), Error> {
+        dequant_and_transform_to_pixels::<D, &[i16]>(
+            d,
+            quant_biases,
+            x_dm_multiplier,
+            b_dm_multiplier,
+            pixels,
+            scratch,
+            inv_global_scale,
+            transform_buffer,
+            hshift,
+            vshift,
+            by,
+            sby,
+            bx,
+            sbx,
+            x_cc_mul,
+            b_cc_mul,
+            raw_quant,
+            lf_rects,
+            transform_type,
+            block_rect,
+            num_blocks,
+            num_coeffs,
+            [qblock[0], qblock[1], qblock[2]],
             dequant_matrices,
         )
     }
@@ -420,20 +498,29 @@ pub fn decode_vardct_group(
     let raw_quant_map = hf_meta.raw_quant_map.get_rect(block_group_rect);
     let quant_lf_rect = quant_lf.get_rect(block_group_rect);
     let block_context_map = lf_global.block_context_map.as_mut().unwrap();
-    // TODO(veluca): improve coefficient storage (smaller allocations, use 16 bits if possible).
-    let coeffs = match hf_global.hf_coefficients.as_mut() {
-        Some(hf_coefficients) => [
-            hf_coefficients.0.row_mut(group),
-            hf_coefficients.1.row_mut(group),
-            hf_coefficients.2.row_mut(group),
-        ],
+    // Coefficient storage: i16 when the histogram guarantees all values fit (saves ~50% RAM for
+    // persistent multi-pass coefficients). In the i16 case we expand per block before dequant
+    // using the scratch coeffs_storage buffer (which is unused in multi-pass mode).
+    let mut coeffs_i16: Option<[&mut [i16]; 3]>;
+    let mut coeffs_i32: Option<[&mut [i32]; 3]>;
+    match hf_global.hf_coefficients.as_mut() {
+        Some(HfCoefficients::I16(c0, c1, c2)) => {
+            coeffs_i16 = Some([c0.row_mut(group), c1.row_mut(group), c2.row_mut(group)]);
+            coeffs_i32 = None;
+        }
+        Some(HfCoefficients::I32(c0, c1, c2)) => {
+            coeffs_i16 = None;
+            coeffs_i32 = Some([c0.row_mut(group), c1.row_mut(group), c2.row_mut(group)]);
+        }
         None => {
             // Use pooled buffer (already reset to zero in buffers.reset() above)
-            let (coeffs_x, coeffs_y_b) = buffers.coeffs_storage.split_at_mut(GROUP_DIM * GROUP_DIM);
+            coeffs_i16 = None;
+            let (coeffs_x, coeffs_y_b) =
+                buffers.coeffs_storage.split_at_mut(GROUP_DIM * GROUP_DIM);
             let (coeffs_y, coeffs_b) = coeffs_y_b.split_at_mut(GROUP_DIM * GROUP_DIM);
-            [coeffs_x, coeffs_y, coeffs_b]
+            coeffs_i32 = Some([coeffs_x, coeffs_y, coeffs_b]);
         }
-    };
+    }
     let mut coeffs_offset = 0;
     let transform_buffer = &mut buffers.transform_buffer;
 
@@ -571,22 +658,42 @@ pub fn decode_vardct_group(
                         + context_offset;
                     let mut prev = if nonzeros > num_coeffs / 16 { 0 } else { 1 };
                     let permutation = &pass_info.coeff_orders[shape_id * 3 + c];
-                    let current_coeffs = &mut coeffs[c][coeffs_offset..coeffs_offset + num_coeffs];
                     // Asserting once lets the compiler elide the bounds check on
                     // `permutation[k]` inside the loop given `k < num_coeffs`.
-                    assert!(permutation.len() >= num_coeffs);
-                    for k in num_blocks..num_coeffs {
-                        if nonzeros == 0 {
-                            break;
+                    if let Some(ref mut ci16) = coeffs_i16 {
+                        let current = &mut ci16[c][coeffs_offset..coeffs_offset + num_coeffs];
+                        assert!(permutation.len() >= num_coeffs);
+                        for k in num_blocks..num_coeffs {
+                            if nonzeros == 0 {
+                                break;
+                            }
+                            let ctx = histo_offset
+                                + zero_density_context(nonzeros, k, log_num_blocks, prev);
+                            let coeff = reader.read_signed_inline(&pass_info.histograms, br, ctx)
+                                << *shift;
+                            prev = if coeff != 0 { 1 } else { 0 };
+                            nonzeros -= prev;
+                            let coeff_index = permutation[k] as usize;
+                            current[coeff_index] =
+                                current[coeff_index].wrapping_add(coeff as i16);
                         }
-                        let ctx =
-                            histo_offset + zero_density_context(nonzeros, k, log_num_blocks, prev);
-                        let coeff =
-                            reader.read_signed_inline(&pass_info.histograms, br, ctx) << *shift;
-                        prev = if coeff != 0 { 1 } else { 0 };
-                        nonzeros -= prev;
-                        let coeff_index = permutation[k] as usize;
-                        current_coeffs[coeff_index] += coeff;
+                    } else {
+                        let current = &mut coeffs_i32.as_mut().unwrap()[c]
+                            [coeffs_offset..coeffs_offset + num_coeffs];
+                        assert!(permutation.len() >= num_coeffs);
+                        for k in num_blocks..num_coeffs {
+                            if nonzeros == 0 {
+                                break;
+                            }
+                            let ctx = histo_offset
+                                + zero_density_context(nonzeros, k, log_num_blocks, prev);
+                            let coeff = reader.read_signed_inline(&pass_info.histograms, br, ctx)
+                                << *shift;
+                            prev = if coeff != 0 { 1 } else { 0 };
+                            nonzeros -= prev;
+                            let coeff_index = permutation[k] as usize;
+                            current[coeff_index] += coeff;
+                        }
                     }
                     if nonzeros != 0 {
                         return Err(Error::EndOfBlockResidualNonZeros(nonzeros));
@@ -594,37 +701,71 @@ pub fn decode_vardct_group(
                 }
             }
             if let Some(pixels) = pixels {
-                let qblock = [
-                    &coeffs[0][coeffs_offset..],
-                    &coeffs[1][coeffs_offset..],
-                    &coeffs[2][coeffs_offset..],
-                ];
                 let dequant_matrices = &hf_global.dequant_matrices;
-                dequant_and_transform_to_pixels_dispatch(
-                    quant_biases,
-                    x_dm_multiplier,
-                    b_dm_multiplier,
-                    pixels,
-                    scratch,
-                    inv_global_scale,
-                    transform_buffer,
-                    hshift,
-                    vshift,
-                    by,
-                    sby,
-                    bx,
-                    sbx,
-                    x_cc_mul,
-                    b_cc_mul,
-                    raw_quant,
-                    &lf_rects,
-                    transform_type,
-                    block_rect,
-                    num_blocks,
-                    num_coeffs,
-                    &qblock,
-                    dequant_matrices,
-                )?;
+                if let Some(ref ci16) = coeffs_i16 {
+                    let qblock = [
+                        &ci16[0][coeffs_offset..],
+                        &ci16[1][coeffs_offset..],
+                        &ci16[2][coeffs_offset..],
+                    ];
+                    dequant_and_transform_to_pixels_dispatch_i16(
+                        quant_biases,
+                        x_dm_multiplier,
+                        b_dm_multiplier,
+                        pixels,
+                        scratch,
+                        inv_global_scale,
+                        transform_buffer,
+                        hshift,
+                        vshift,
+                        by,
+                        sby,
+                        bx,
+                        sbx,
+                        x_cc_mul,
+                        b_cc_mul,
+                        raw_quant,
+                        &lf_rects,
+                        transform_type,
+                        block_rect,
+                        num_blocks,
+                        num_coeffs,
+                        &qblock,
+                        dequant_matrices,
+                    )?;
+                } else {
+                    let ci32 = coeffs_i32.as_ref().unwrap();
+                    let qblock = [
+                        &ci32[0][coeffs_offset..],
+                        &ci32[1][coeffs_offset..],
+                        &ci32[2][coeffs_offset..],
+                    ];
+                    dequant_and_transform_to_pixels_dispatch(
+                        quant_biases,
+                        x_dm_multiplier,
+                        b_dm_multiplier,
+                        pixels,
+                        scratch,
+                        inv_global_scale,
+                        transform_buffer,
+                        hshift,
+                        vshift,
+                        by,
+                        sby,
+                        bx,
+                        sbx,
+                        x_cc_mul,
+                        b_cc_mul,
+                        raw_quant,
+                        &lf_rects,
+                        transform_type,
+                        block_rect,
+                        num_blocks,
+                        num_coeffs,
+                        &qblock,
+                        dequant_matrices,
+                    )?;
+                }
             }
             coeffs_offset += num_coeffs;
         }

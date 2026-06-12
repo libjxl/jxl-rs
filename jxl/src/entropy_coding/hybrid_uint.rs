@@ -53,6 +53,21 @@ impl HybridUint {
         })
     }
 
+    /// Returns the maximum number of output bits for the given maximum input symbol.
+    ///
+    /// Mirrors libjxl's `UpdateMaxNumBits` from `dec_ans.cc`.
+    pub fn max_bits_for_symbol(&self, max_symbol: u32) -> usize {
+        if max_symbol < self.split_token {
+            self.split_exponent as usize
+        } else {
+            let bits_in_token = self.lsb_in_token + self.msb_in_token;
+            // split_exponent >= bits_in_token is guaranteed by decode() validation
+            let n_extra = self.split_exponent - bits_in_token
+                + ((max_symbol - self.split_token) >> bits_in_token);
+            (bits_in_token + n_extra + 1) as usize
+        }
+    }
+
     /// Returns true if this config matches the 420 pattern (common in e3 images):
     /// split_exponent=4, msb_in_token=2, lsb_in_token=0
     #[inline(always)]

@@ -273,6 +273,10 @@ pub trait I32SimdVec:
     fn load(d: Self::Descriptor, mem: &[i32]) -> Self;
 
     // Requires `mem.len() >= Self::LEN` or it will panic.
+    // Sign-extends LEN i16 values from `mem` to Self.
+    fn load_from_i16(d: Self::Descriptor, mem: &[i16]) -> Self;
+
+    // Requires `mem.len() >= Self::LEN` or it will panic.
     fn store(&self, mem: &mut [i32]);
 
     fn abs(self) -> Self;

@@ -729,6 +729,18 @@ impl I32SimdVec for I32VecSse42 {
     }
 
     #[inline(always)]
+    fn load_from_i16(d: Self::Descriptor, mem: &[i16]) -> Self {
+        assert!(mem.len() >= Self::LEN);
+        // SAFETY: we just checked that `mem` has enough space. Moreover, we know sse4.2 is available
+        // from the safety invariant on `d`. _mm_loadl_epi64 loads 8 bytes (4 i16) into the lower
+        // 64 bits; _mm_cvtepi16_epi32 sign-extends them to 4 i32 values.
+        Self(
+            unsafe { _mm_cvtepi16_epi32(_mm_loadl_epi64(mem.as_ptr().cast())) },
+            d,
+        )
+    }
+
+    #[inline(always)]
     fn store(&self, mem: &mut [i32]) {
         assert!(mem.len() >= Self::LEN);
         // SAFETY: we just checked that `mem` has enough space. Moreover, we know sse4.2 is available
