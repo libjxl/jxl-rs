@@ -247,6 +247,7 @@ impl Frame {
             header: frame_header,
             color_channels,
             toc,
+            data_offset: 0,
             lf_global: None,
             hf_global: None,
             lf_image,

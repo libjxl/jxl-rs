@@ -186,6 +186,10 @@ pub enum RenderUnit {
 pub struct Frame {
     header: FrameHeader,
     toc: Toc,
+    /// Absolute byte offset, from the start of the input (file-absolute; includes any ISOBMFF container), at which this
+    /// frame's TOC-described section data begins (after the frame header +
+    /// TOC). Set by the codestream parser; 0 until then.
+    data_offset: u64,
     color_channels: usize,
     lf_global: Option<LfGlobalState>,
     hf_global: Option<HfGlobalState>,
@@ -229,6 +233,82 @@ impl Frame {
 
     pub fn total_bytes_in_toc(&self) -> usize {
         self.toc.entries.iter().map(|x| *x as usize).sum()
+    }
+
+    /// Returns the TOC entry at `index`, in **bitstream (physical) order** —
+    /// the order sections are laid out in the codestream. Returns `None` if
+    /// the index is out of bounds.
+    ///
+    /// The entry's `offset` is relative to [`frame_data_offset`](Self::frame_data_offset)
+    /// (i.e. the first physical section is at offset 0), and is the sum of
+    /// the sizes of the preceding physical sections. `kind` is the logical
+    /// section kind stored at this physical position, resolved through the
+    /// TOC permutation when present.
+    pub fn toc_entry(&self, index: usize) -> Option<crate::api::TocEntry> {
+        use crate::api::TocEntry;
+        let sizes = &self.toc.entries; // sizes in bitstream order
+        if index >= sizes.len() {
+            return None;
+        }
+        // Offset = cumulative size of preceding physical sections.
+        let offset: u64 = sizes[..index].iter().map(|&s| s as u64).sum();
+        // Resolve the spec-order index for this physical position. The TOC
+        // permutation maps spec index -> bitstream position; we need its
+        // inverse (bitstream position -> spec index).
+        let spec_idx = if self.toc.permuted {
+            self.toc
+                .permutation
+                .iter()
+                .position(|&p| p as usize == index)
+                .unwrap_or(index)
+        } else {
+            index
+        };
+        Some(TocEntry {
+            kind: self.toc_kind_for_spec_index(spec_idx),
+            offset,
+            size: sizes[index],
+        })
+    }
+
+    /// Maps a spec-order TOC index to its [`TocGroupKind`](crate::api::TocGroupKind),
+    /// following the JPEG XL section layout: `LfGlobal`, then `num_lf_groups`
+    /// `LfGroup`s, then `HfGlobal`, then `num_passes * num_groups`
+    /// `GroupPass`es (pass-major). Single-entry frames are `All`.
+    fn toc_kind_for_spec_index(&self, spec_idx: usize) -> crate::api::TocGroupKind {
+        use crate::api::TocGroupKind;
+        if self.header.num_toc_entries() == 1 {
+            return TocGroupKind::All;
+        }
+        let num_lf_groups = self.header.num_lf_groups();
+        let num_groups = self.header.num_groups();
+        if spec_idx == 0 {
+            TocGroupKind::LfGlobal
+        } else if spec_idx <= num_lf_groups {
+            TocGroupKind::LfGroup((spec_idx - 1) as u32)
+        } else if spec_idx == num_lf_groups + 1 {
+            TocGroupKind::HfGlobal
+        } else {
+            let j = spec_idx - (num_lf_groups + 2);
+            TocGroupKind::GroupPass {
+                pass_idx: (j / num_groups) as u32,
+                group_idx: (j % num_groups) as u32,
+            }
+        }
+    }
+
+    /// Returns the byte offset, from the start of the input (file-absolute; includes any ISOBMFF container), at which
+    /// this frame's TOC-described section data begins (immediately after the
+    /// frame header + TOC). [`toc_entry`](Self::toc_entry) offsets are
+    /// relative to this. Set by the codestream parser once the TOC is parsed.
+    pub fn frame_data_offset(&self) -> Option<u64> {
+        Some(self.data_offset)
+    }
+
+    /// Records the absolute codestream byte offset where this frame's section
+    /// data begins. Called by the codestream parser after the TOC is parsed.
+    pub(crate) fn set_data_offset(&mut self, offset: u64) {
+        self.data_offset = offset;
     }
 
     #[instrument(level = "debug", skip(self), ret)]
