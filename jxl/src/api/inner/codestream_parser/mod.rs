@@ -19,7 +19,7 @@ use crate::{
         VisibleFrameSeekTarget,
         inner::{
             box_parser::{BoxParser, ParseState},
-            process::SmallBuffer,
+            process::{ProcessMode, SmallBuffer},
         },
     },
     error::{Error, Result},
@@ -382,7 +382,7 @@ impl CodestreamParser {
         input: &mut dyn JxlBitstreamInput,
         decode_options: &JxlDecoderOptions,
         mut output_buffers: Option<&mut [JxlOutputBuffer]>,
-        do_flush: bool,
+        mode: ProcessMode,
     ) -> Result<()> {
         if let Some(output_buffers) = &output_buffers {
             let px = self.pixel_format.as_ref().unwrap();
@@ -396,6 +396,16 @@ impl CodestreamParser {
         }
         // If we have sections to read, read into sections; otherwise, read into the local buffer.
         loop {
+            if self.frame.is_some()
+                && output_buffers.is_none()
+                && mode != ProcessMode::SkipFrame
+                && !self.process_without_output
+                && mode != ProcessMode::Flush
+                && self.has_visible_frame()
+                && self.visible_frames_to_skip == 0
+            {
+                return Ok(());
+            }
             if !self.sections.is_empty() {
                 let regular_frame = self.has_visible_frame();
                 // Only skip sections if we don't need the frame data. Frames that can be
@@ -406,7 +416,8 @@ impl CodestreamParser {
                     .as_ref()
                     .is_some_and(|f| f.header().can_be_referenced);
                 if decode_options.scan_frames_only
-                    || (!self.process_without_output
+                    || (mode == ProcessMode::SkipFrame
+                        && !self.process_without_output
                         && output_buffers.is_none()
                         && !can_be_referenced)
                 {
@@ -485,7 +496,11 @@ impl CodestreamParser {
                             break;
                         }
                     }
-                    match self.process_sections(decode_options, &mut output_buffers, do_flush) {
+                    match self.process_sections(
+                        decode_options,
+                        &mut output_buffers,
+                        mode == ProcessMode::Flush,
+                    ) {
                         Ok(None) => Ok(()),
                         Ok(Some(missing)) => Err(Error::OutOfBounds(missing)),
                         Err(Error::OutOfBounds(_)) => Err(Error::SectionTooShort),
@@ -563,7 +578,7 @@ impl CodestreamParser {
                 if !self.has_more_frames {
                     // If this is a flush request and the file is complete, we are done.
                     // Otherwise, this is an API usage error.
-                    assert!(do_flush);
+                    assert!(mode == ProcessMode::Flush);
                     return Ok(());
                 }
 
@@ -690,14 +705,10 @@ impl CodestreamParser {
 
                     if self.has_visible_frame() {
                         if self.visible_frames_to_skip > 0 {
-                            // Skip this visible frame without returning to the
-                            // caller; decrement the counter and continue
-                            // processing internally.
                             self.visible_frames_to_skip -= 1;
                             self.process_without_output = true;
                             continue;
                         }
-                        // Return to caller if we found visible frame info.
                         return Ok(());
                     } else {
                         self.process_without_output = true;
