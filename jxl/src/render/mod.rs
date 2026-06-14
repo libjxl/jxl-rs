@@ -119,13 +119,20 @@ pub(crate) trait RenderPipeline: Sized {
 
     fn new_from_shared(shared: RenderPipelineShared<Self::Buffer>) -> Result<Self>;
 
+    /// Informs the pipeline that it is allowed to clear partial buffers after rendering
+    /// a group. By default, that only happens once the known-last render happens for
+    /// a certain group.
+    /// This should only be set if we know that we cannot ask to render only a subset
+    /// of the channels for a group in a single render pass.
+    fn allow_clearing_partial_buffers(&mut self);
+
     /// Obtains a buffer suitable for storing the input in channel `channel`.
     /// This *might* be a buffer that was used to store that channel for that group in a previous
     /// pass, a new buffer, or a re-used buffer from i.e. previously decoded frames.
     fn get_buffer<T: ImageDataType>(&mut self, channel: usize) -> Result<Image<T>>;
 
     /// Gives back the buffer for a channel and group to the render pipeline, marking whether
-    /// this will be the last time that this function is called for this group.
+    /// this will be the last time that this function is called for this group and channel.
     fn set_buffer_for_group<T: ImageDataType>(
         &mut self,
         channel: usize,
@@ -143,8 +150,8 @@ pub(crate) trait RenderPipeline: Sized {
     /// implementation to ensure rendering only happens once.
     fn render_outside_frame(&mut self, buffer_splitter: &mut BufferSplitter) -> Result<()>;
 
-    // Marks a group for being re-rendered later.
-    fn mark_group_to_rerender(&mut self, g: usize);
+    // Marks a group and channel for needing to be updated before the next re-render.
+    fn mark_group_channel_to_rerender(&mut self, g: usize, c: usize);
 
     fn box_inout_stage<S: RenderPipelineInOutStage>(
         stage: S,

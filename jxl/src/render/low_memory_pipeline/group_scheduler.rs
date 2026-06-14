@@ -19,17 +19,27 @@ pub(super) struct InputBuffer {
     pub(super) leftright: Vec<Option<OwnedRawImage>>,
     // Storage for top/bottom borders. Includes corners.
     pub(super) topbottom: Vec<Option<OwnedRawImage>>,
-    // Number of ready channels in the current pass.
+    // Bitmask of ready channels for the current render.
+    channel_is_ready: Vec<bool>,
     ready_channels: usize,
-    pub(super) is_ready: bool,
+    is_ready: bool,
     num_completed_groups_3x3: usize,
 }
 
 impl InputBuffer {
     pub(super) fn set_buffer(&mut self, chan: usize, buf: OwnedRawImage) {
-        assert!(self.data[chan].is_none());
         self.data[chan] = Some(buf);
-        self.ready_channels += 1;
+        if !self.channel_is_ready[chan] {
+            self.ready_channels += 1;
+        }
+        self.channel_is_ready[chan] = true;
+    }
+
+    pub(super) fn mark_not_ready(&mut self, chan: usize) {
+        if self.channel_is_ready[chan] {
+            self.ready_channels -= 1;
+        }
+        self.channel_is_ready[chan] = false;
     }
 
     pub(super) fn new(num_channels: usize) -> Self {
@@ -38,6 +48,7 @@ impl InputBuffer {
             data: b(),
             leftright: b(),
             topbottom: b(),
+            channel_is_ready: vec![false; num_channels],
             ready_channels: 0,
             is_ready: false,
             num_completed_groups_3x3: 0,
@@ -119,6 +130,7 @@ impl LowMemoryRenderPipeline {
     pub(super) fn render_with_new_group(
         &mut self,
         g: usize,
+        allow_clearing_partial_buffers: bool,
         buffer_splitter: &mut BufferSplitter,
     ) -> Result<()> {
         let buf = &mut self.input_buffers[g];
@@ -126,7 +138,6 @@ impl LowMemoryRenderPipeline {
         if buf.ready_channels != self.shared.num_used_channels() {
             return Ok(());
         }
-        buf.ready_channels = 0;
         let (gx, gy) = self.shared.group_position(g);
         debug!("new data ready for group {gx},{gy}");
 
@@ -279,16 +290,22 @@ impl LowMemoryRenderPipeline {
             Ok(())
         })?;
 
-        for c in 0..self.input_buffers[g].data.len() {
-            if let Some(b) = std::mem::take(&mut self.input_buffers[g].data[c]) {
-                self.store_scratch_buffer(c, 0, b);
+        let complete = self.shared.group_chan_complete[g].iter().all(|x| *x);
+
+        if allow_clearing_partial_buffers || complete {
+            self.input_buffers[g].ready_channels = 0;
+            self.input_buffers[g].channel_is_ready.fill(false);
+            for c in 0..self.input_buffers[g].data.len() {
+                if let Some(b) = std::mem::take(&mut self.input_buffers[g].data[c]) {
+                    self.store_scratch_buffer(c, 0, b);
+                }
             }
         }
 
         // Clear border buffers that will not be used again.
         // This is certainly the case if *all* the groups in the 3x3 group area around
         // the current group are complete.
-        if self.shared.group_chan_complete[g].iter().all(|x| *x) {
+        if complete {
             for g in [
                 gym1 * gw + gxm1,
                 gym1 * gw + gx,

@@ -259,7 +259,6 @@ impl Frame {
             was_flushed_once: false,
             vardct_buffers: None,
             groups_to_flush: BTreeSet::new(),
-            changed_since_last_flush: BTreeSet::new(),
             patches: Arc::new(AtomicRefCell::new(PatchesDictionary::new(
                 num_extra_channels,
             ))),

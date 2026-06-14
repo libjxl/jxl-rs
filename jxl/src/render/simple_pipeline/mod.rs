@@ -199,7 +199,9 @@ impl RenderPipeline for SimpleRenderPipeline {
         Ok(())
     }
 
-    fn mark_group_to_rerender(&mut self, _g: usize) {}
+    fn mark_group_channel_to_rerender(&mut self, _g: usize, _c: usize) {}
+
+    fn allow_clearing_partial_buffers(&mut self) {}
 
     fn box_inout_stage<S: RenderPipelineInOutStage>(
         stage: S,
