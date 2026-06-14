@@ -61,6 +61,7 @@ pub struct LowMemoryRenderPipeline {
     // could be reused to store group data for that channel.
     // Indexed by [3*channel] = center, [3*channel+1] = topbottom, [3*channel+2] = leftright.
     scratch_channel_buffers: Vec<Vec<OwnedRawImage>>,
+    allow_clearing_partial_buffers: bool,
 }
 
 impl RenderPipeline for LowMemoryRenderPipeline {
@@ -282,7 +283,12 @@ impl RenderPipeline for LowMemoryRenderPipeline {
             opaque_alpha_buffers,
             sorted_buffer_indices,
             scratch_channel_buffers: (0..nc * 3).map(|_| vec![]).collect(),
+            allow_clearing_partial_buffers: false,
         })
+    }
+
+    fn allow_clearing_partial_buffers(&mut self) {
+        self.allow_clearing_partial_buffers = true;
     }
 
     #[instrument(skip_all, err)]
@@ -312,7 +318,11 @@ impl RenderPipeline for LowMemoryRenderPipeline {
             self.input_buffers[group_id].set_buffer(channel, buf.into_raw());
             self.shared.group_chan_complete[group_id][channel] = complete;
 
-            self.render_with_new_group(group_id, buffer_splitter)?;
+            self.render_with_new_group(
+                group_id,
+                self.allow_clearing_partial_buffers,
+                buffer_splitter,
+            )?;
         }
         Ok(())
     }
@@ -416,8 +426,8 @@ impl RenderPipeline for LowMemoryRenderPipeline {
         Ok(())
     }
 
-    fn mark_group_to_rerender(&mut self, g: usize) {
-        self.input_buffers[g].is_ready = false;
+    fn mark_group_channel_to_rerender(&mut self, g: usize, c: usize) {
+        self.input_buffers[g].mark_not_ready(c);
     }
 
     fn box_inout_stage<S: super::RenderPipelineInOutStage>(

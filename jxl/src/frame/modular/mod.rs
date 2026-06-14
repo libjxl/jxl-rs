@@ -970,27 +970,6 @@ impl FullModularImage {
         }
     }
 
-    pub fn flush_output(
-        &mut self,
-        group: usize,
-        chan: usize,
-        pass_to_pipeline: &mut dyn FnMut(usize, usize, bool, Image<i32>) -> Result<()>,
-    ) -> Result<()> {
-        if !self.can_do_partial_render() || !self.has_decoded_data {
-            return Ok(());
-        }
-        let buf_idx = self.buffers_for_channels[chan];
-        // Skip channels that don't have a real buffer assignment.
-        // buffers_for_channels is zero-filled on resize, so intermediate channels
-        // (e.g. G/B when modular_color_channels==1) may alias buffer 0 incorrectly.
-        if self.buffer_info[buf_idx].info.output_channel_idx != Some(chan) {
-            return Ok(());
-        }
-        self.maybe_output(buf_idx, group, false, &mut |chan, grid, complete, img| {
-            pass_to_pipeline(chan, grid, complete, img.unwrap())
-        })
-    }
-
     pub fn zero_fill_empty_channels(
         &mut self,
         num_passes: usize,
