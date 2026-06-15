@@ -173,10 +173,10 @@ impl Frame {
         let size_blocks = frame_header.size_blocks();
         let lf_image = if frame_header.encoding == Encoding::VarDCT {
             if frame_header.has_lf_frame() {
-                if let Some([a, b, c]) = &decoder_state.lf_frames[frame_header.lf_level as usize] {
-                    Some([a.try_clone()?, b.try_clone()?, c.try_clone()?])
-                } else {
+                if decoder_state.lf_frames[frame_header.lf_level as usize].is_none() {
                     return Err(Error::NoLfFrame(frame_header.lf_level));
+                } else {
+                    None
                 }
             } else {
                 Some([
@@ -713,12 +713,20 @@ impl Frame {
             } else {
                 None
             };
+            let lf_image = if self.header.has_lf_frame() {
+                // We already checked that the LF image is present
+                self.decoder_state.lf_frames[self.header.lf_level as usize]
+                    .as_ref()
+                    .unwrap()
+            } else {
+                self.lf_image.as_ref().unwrap()
+            };
             if pass_to_render.is_none() && do_render {
                 info!("Upsampling LF for group {group}");
                 upsample_lf_group(
                     group,
                     pixels.as_mut().unwrap(),
-                    self.lf_image.as_ref().unwrap(),
+                    lf_image,
                     &self.header,
                     &self.decoder_state.file_header.transform_data,
                 )?;
@@ -734,7 +742,7 @@ impl Frame {
                     lf_global,
                     hf_global,
                     hf_meta,
-                    &self.lf_image,
+                    lf_image,
                     &self.quant_lf,
                     &self
                         .decoder_state
