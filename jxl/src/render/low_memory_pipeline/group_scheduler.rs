@@ -126,7 +126,6 @@ impl LowMemoryRenderPipeline {
         if buf.ready_channels != self.shared.num_used_channels() {
             return Ok(());
         }
-        buf.ready_channels = 0;
         let (gx, gy) = self.shared.group_position(g);
         debug!("new data ready for group {gx},{gy}");
 
@@ -279,11 +278,26 @@ impl LowMemoryRenderPipeline {
             Ok(())
         })?;
 
+        let all_finalized = (0..self.shared.num_channels())
+            .filter(|&c| self.shared.channel_is_used[c])
+            .all(|c| self.shared.group_chan_complete[g][c]);
+
+        let mut preserved_count = 0;
         for c in 0..self.input_buffers[g].data.len() {
-            if let Some(b) = std::mem::take(&mut self.input_buffers[g].data[c]) {
-                self.store_scratch_buffer(c, 0, b);
+            if !self.shared.channel_is_used[c] {
+                continue;
+            }
+            let is_finalized = self.shared.group_chan_complete[g][c];
+            let preserve = is_finalized && !all_finalized;
+            if !preserve {
+                if let Some(b) = std::mem::take(&mut self.input_buffers[g].data[c]) {
+                    self.store_scratch_buffer(c, 0, b);
+                }
+            } else {
+                preserved_count += 1;
             }
         }
+        self.input_buffers[g].ready_channels = preserved_count;
 
         // Clear border buffers that will not be used again.
         // This is certainly the case if *all* the groups in the 3x3 group area around

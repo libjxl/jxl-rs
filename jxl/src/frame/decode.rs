@@ -672,7 +672,10 @@ impl Frame {
         }
 
         let last_pass_in_file = self.header.passes.num_passes as usize - 1;
-        let was_complete = self.last_rendered_pass[group].is_some_and(|p| p >= last_pass_in_file);
+        // Group was fully rendered already, nothing to do.
+        if self.last_rendered_pass[group].is_some_and(|p| p >= last_pass_in_file) {
+            return Ok(false);
+        }
 
         if let Some((p, _)) = passes.last() {
             self.last_rendered_pass[group] = Some(*p);
@@ -680,7 +683,7 @@ impl Frame {
         let pass_to_render = self.last_rendered_pass[group];
         let complete = pass_to_render.is_some_and(|p| p >= last_pass_in_file);
 
-        if complete && !was_complete {
+        if complete {
             self.incomplete_groups = self.incomplete_groups.checked_sub(1).unwrap();
         }
 
