@@ -764,10 +764,6 @@ impl FullModularImage {
             let grid_idx = if grid_is_none { 0 } else { grid };
             let is_final = self.buffer_info[buf].buffer_grid[grid_idx].get_status()
                 == BUFFER_STATUS_FINAL_RENDER;
-            let all_final = self.buffers_for_channels.iter().all(|x| {
-                self.buffer_info[*x].buffer_grid[grid_idx].get_status()
-                    == BUFFER_STATUS_FINAL_RENDER
-            });
 
             let channels: SmallVec<usize, 3> = if chan == 0 && self.modular_color_channels == 1 {
                 (0..3).filter(|x| self.pipeline_used_channels[*x]).collect()
@@ -788,7 +784,7 @@ impl FullModularImage {
                 debug!("Rendering channel {chan:?}, grid position {grid}");
 
                 let modular_buf = self.buffer_info[buf].buffer_grid[grid_idx]
-                    .get_buffer(all_final && !grid_is_none)?;
+                    .get_buffer(is_final && !grid_is_none)?;
                 let mut image = modular_buf.data;
 
                 if grid_is_none {
@@ -984,6 +980,13 @@ impl FullModularImage {
         // buffers_for_channels is zero-filled on resize, so intermediate channels
         // (e.g. G/B when modular_color_channels==1) may alias buffer 0 incorrectly.
         if self.buffer_info[buf_idx].info.output_channel_idx != Some(chan) {
+            return Ok(());
+        }
+        let grid_is_none = self.buffer_info[buf_idx].grid_kind == ModularGridKind::None;
+        let grid_idx = if grid_is_none { 0 } else { group };
+        if self.buffer_info[buf_idx].buffer_grid[grid_idx].get_status()
+            == BUFFER_STATUS_FINAL_RENDER
+        {
             return Ok(());
         }
         self.maybe_output(buf_idx, group, false, &mut |chan, grid, complete, img| {
