@@ -2034,6 +2034,44 @@ pub(crate) mod tests {
         }
     }
 
+    /// Regression test for Chromium ClusterFuzz issue 525710098
+    /// (blink_jxl_decoder_fuzzer timeout).
+    ///
+    /// The reproducer is a truncated still image followed by thousands of
+    /// tiny frames whose TOC declares zero-length sections. In scan-only mode
+    /// the sections are never decoded, but each frame used to allocate (and
+    /// zero) full-resolution per-frame working buffers and build a render
+    /// pipeline, making the scan cost proportional to image_size * num_frames
+    /// and timing out under the fuzzer. Scanning must now stay cheap and
+    /// enumerate the whole stream without doing that per-frame work.
+    #[test]
+    fn test_scan_frames_only_many_empty_frames_525710098() {
+        let data = std::fs::read("resources/fuzz_regression/issue_525710098_many_empty_frames.jxl")
+            .unwrap();
+
+        let opts = JxlDecoderOptions {
+            scan_frames_only: true,
+            sample_limit: Some(1024 * 1024 * 1024),
+            ..Default::default()
+        };
+        let mut decoder = JxlDecoderInner::new(opts);
+
+        let mut input: &[u8] = &data;
+        // Drive the scanner to completion. This must terminate (the stream is
+        // truncated) without walking the frames via expensive per-frame setup.
+        while let Ok(ProcessingResult::Complete { .. }) = decoder.process(&mut input, None) {
+            if !decoder.has_more_frames() {
+                break;
+            }
+        }
+
+        // Basic info is recoverable even though the image data is truncated.
+        let info = decoder
+            .basic_info()
+            .expect("basic info should be available");
+        assert_eq!(info.size, (512, 512));
+    }
+
     /// Small regression test for issue #728: squeeze transform boundary bug.
     #[test]
     fn test_squeeze_boundary_minimal() {

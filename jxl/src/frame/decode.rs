@@ -155,6 +155,13 @@ impl Frame {
         frame_header: FrameHeader,
         toc: Toc,
         mut decoder_state: DecoderState,
+        // When set, the caller only wants to enumerate frames (TOC/headers)
+        // without decoding any sections. In that mode we skip the large
+        // per-frame working buffers (reference frames, LF/HF buffers, ...)
+        // that would otherwise be allocated and zeroed for every frame. This
+        // keeps frame scanning proportional to the parsed header size instead
+        // of the declared image size times the number of frames.
+        scan_only: bool,
     ) -> Result<Self> {
         if frame_header.is_visible() {
             decoder_state.visible_frame_index += 1;
@@ -171,7 +178,7 @@ impl Frame {
             && image_metadata.color_encoding.color_space == ColorSpace::Gray;
         let color_channels = if is_gray { 1 } else { 3 };
         let size_blocks = frame_header.size_blocks();
-        let lf_image = if frame_header.encoding == Encoding::VarDCT {
+        let lf_image = if !scan_only && frame_header.encoding == Encoding::VarDCT {
             if frame_header.has_lf_frame() {
                 if decoder_state.lf_frames[frame_header.lf_level as usize].is_none() {
                     return Err(Error::NoLfFrame(frame_header.lf_level));
@@ -188,9 +195,13 @@ impl Frame {
         } else {
             None
         };
-        let quant_lf = Image::new(size_blocks)?;
+        let quant_lf = if scan_only {
+            Image::new((0, 0))?
+        } else {
+            Image::new(size_blocks)?
+        };
         let size_color_tiles = (size_blocks.0.div_ceil(8), size_blocks.1.div_ceil(8));
-        let hf_meta = if frame_header.encoding == Encoding::VarDCT {
+        let hf_meta = if !scan_only && frame_header.encoding == Encoding::VarDCT {
             Some(HfMetadata {
                 ytox_map: Image::new(size_color_tiles)?,
                 ytob_map: Image::new(size_color_tiles)?,
@@ -206,7 +217,7 @@ impl Frame {
             None
         };
 
-        let reference_frame_data = if frame_header.can_be_referenced {
+        let reference_frame_data = if !scan_only && frame_header.can_be_referenced {
             let image_size = &decoder_state.file_header.size;
             let image_size = (image_size.xsize() as usize, image_size.ysize() as usize);
             let sz = if frame_header.save_before_ct {
@@ -225,7 +236,7 @@ impl Frame {
             None
         };
 
-        let lf_frame_data = if frame_header.lf_level != 0 {
+        let lf_frame_data = if !scan_only && frame_header.lf_level != 0 {
             Some(
                 (0..3)
                     .map(|_| Image::new(frame_header.size_upsampled()))

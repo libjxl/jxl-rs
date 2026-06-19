@@ -285,6 +285,7 @@ impl CodestreamParser {
             self.frame_header.take().unwrap(),
             toc,
             self.decoder_state.take().unwrap(),
+            decode_options.scan_frames_only,
         )?;
 
         let mut sections: Vec<_> = frame
@@ -343,12 +344,17 @@ impl CodestreamParser {
         self.section_state =
             SectionState::new(frame.header().num_lf_groups(), frame.header().num_groups());
 
-        frame.prepare_render_pipeline(
-            self.pixel_format.as_ref().unwrap(),
-            self.output_color_profile
-                .as_ref()
-                .expect("output_color_profile should be set before pipeline preparation"),
-        )?;
+        // In scan-only mode the sections are skipped, so the render pipeline is
+        // never used. Building it (and the buffers it owns) for every frame is
+        // both wasted work and a DoS vector for files with many tiny frames.
+        if !decode_options.scan_frames_only {
+            frame.prepare_render_pipeline(
+                self.pixel_format.as_ref().unwrap(),
+                self.output_color_profile
+                    .as_ref()
+                    .expect("output_color_profile should be set before pipeline preparation"),
+            )?;
+        }
 
         self.frame = Some(frame);
 
