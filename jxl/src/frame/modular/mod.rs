@@ -8,7 +8,6 @@ use std::{
     collections::{BTreeMap, BTreeSet},
     fmt::Debug,
     ops::Range,
-    sync::atomic::{AtomicUsize, Ordering},
 };
 
 use crate::{
@@ -17,6 +16,14 @@ use crate::{
     frame::{
         ColorCorrelationParams, HfMetadata,
         block_context_map::BlockContextMap,
+        modular::{
+            buffers::{
+                BUFFER_STATUS_FINAL_RENDER, BUFFER_STATUS_NOT_RENDERED,
+                BUFFER_STATUS_PARTIAL_RENDER, BUFFER_STATUS_ZERO_FILLED, ModularBuffer,
+                ModularChannel,
+            },
+            transforms::step::TransformStepChunk,
+        },
         quantizer::{self, LfQuantFactors, QuantizerParams},
     },
     headers::{
@@ -26,22 +33,21 @@ use crate::{
         modular::{GroupHeader, TransformId},
     },
     image::{Image, Rect},
-    util::{AtomicRefCell, CeilLog2, SmallVec, tracing_wrappers::*},
+    util::{CeilLog2, SmallVec, tracing_wrappers::*},
 };
 use jxl_transforms::transform_map::*;
 
-mod borrowed_buffers;
-pub(crate) mod decode;
+mod buffers;
+mod decode;
 mod flat_tree;
 mod predict;
 mod transforms;
 mod tree;
 
-use borrowed_buffers::with_buffers;
+use buffers::with_buffers;
 pub use decode::ModularStreamId;
 use decode::decode_modular_subbitstream;
 pub use predict::Predictor;
-use transforms::{TransformStepChunk, make_grids};
 pub use tree::Tree;
 
 // Two rows on top, two pixels to the left, two pixels to the right.
@@ -122,150 +128,6 @@ impl ModularGridKind {
             ModularGridKind::Lf => frame_header.size_lf_groups(),
             ModularGridKind::Hf => frame_header.size_groups(),
         }
-    }
-}
-
-// All the information on a specific buffer needed by Modular decoding.
-#[derive(Debug)]
-pub(crate) struct ModularChannel {
-    // Actual pixel buffer.
-    pub data: Image<i32>,
-    // Holds additional information such as the weighted predictor's error channel's last row for
-    // the transform chunk that produced this buffer.
-    auxiliary_data: Option<Image<i32>>,
-    // Shift of the channel (None if this is a meta-channel).
-    shift: Option<(usize, usize)>,
-    bit_depth: BitDepth,
-}
-
-impl ModularChannel {
-    pub fn new(size: (usize, usize), bit_depth: BitDepth) -> Result<Self> {
-        Self::new_with_shift(size, Some((0, 0)), bit_depth)
-    }
-
-    fn new_with_shift(
-        size: (usize, usize),
-        shift: Option<(usize, usize)>,
-        bit_depth: BitDepth,
-    ) -> Result<Self> {
-        Ok(ModularChannel {
-            data: Image::new_with_padding(size, IMAGE_OFFSET, IMAGE_PADDING)?,
-            auxiliary_data: None,
-            shift,
-            bit_depth,
-        })
-    }
-
-    fn try_clone(&self) -> Result<Self> {
-        Ok(ModularChannel {
-            data: self.data.try_clone()?,
-            auxiliary_data: self
-                .auxiliary_data
-                .as_ref()
-                .map(Image::try_clone)
-                .transpose()?,
-            shift: self.shift,
-            bit_depth: self.bit_depth,
-        })
-    }
-
-    fn channel_info(&self) -> ChannelInfo {
-        ChannelInfo {
-            output_channel_idx: None,
-            size: self.data.size(),
-            shift: self.shift,
-            bit_depth: self.bit_depth,
-        }
-    }
-}
-
-const BUFFER_STATUS_NOT_RENDERED: usize = 0;
-const BUFFER_STATUS_ZERO_FILLED: usize = 1;
-const BUFFER_STATUS_PARTIAL_RENDER: usize = 2;
-const BUFFER_STATUS_FINAL_RENDER: usize = 3;
-
-// Note: this type uses interior mutability to get mutable references to multiple buffers at once.
-// In principle, this is not needed, but the overhead should be minimal so using `unsafe` here is
-// probably not worth it.
-#[derive(Debug)]
-struct ModularBuffer {
-    data: AtomicRefCell<Option<ModularChannel>>,
-    // Number of times this buffer will be used, *including* when it is used for output.
-    remaining_uses: AtomicUsize,
-    // Transform steps that "strongly" or "weakly" use the image data in this buffer.
-    // A "strong" usage always triggers a re-render if the image data changes.
-    // A "weak" usage only triggers a re-render if the buffer is final, or if the
-    // current re-render was not only caused by weak re-renders.
-    used_by_transforms_strong: Vec<usize>,
-    used_by_transforms_weak: Vec<usize>,
-    size: (usize, usize),
-    status: AtomicUsize,
-}
-
-impl ModularBuffer {
-    fn get_status(&self) -> usize {
-        self.status.load(Ordering::Relaxed)
-    }
-
-    fn set_status(&self, val: usize) {
-        self.status.store(val, Ordering::Relaxed);
-    }
-
-    // Iterator over (transform_id, is_strong_use)
-    fn users(&self, include_weak: bool) -> impl Iterator<Item = (usize, bool)> {
-        let strong = self.used_by_transforms_strong.iter().map(|x| (*x, true));
-        let weak = if include_weak {
-            &self.used_by_transforms_weak[..]
-        } else {
-            &[]
-        }
-        .iter()
-        .map(|x| (*x, false));
-        strong.chain(weak)
-    }
-
-    // Gives out a copy of the buffer + auxiliary buffer, marking the buffer as used.
-    // If this was the last usage of the buffer, does not actually copy the buffer.
-    fn get_buffer(&self, can_consume: bool) -> Result<ModularChannel> {
-        if !can_consume {
-            return ModularChannel::try_clone(self.data.borrow().as_ref().unwrap());
-        }
-        let mut ret = None;
-        let _ = self.remaining_uses.fetch_update(
-            Ordering::Release,
-            Ordering::Acquire,
-            |remaining_pre| {
-                let remaining = remaining_pre.checked_sub(1).unwrap();
-                if ret.is_none() {
-                    if remaining == 0 {
-                        ret = Some(Ok(self.data.borrow_mut().take().unwrap()))
-                    } else {
-                        ret = self.data.borrow().as_ref().map(ModularChannel::try_clone);
-                    }
-                } else if remaining == 0 {
-                    *self.data.borrow_mut() = None;
-                }
-                Some(remaining)
-            },
-        );
-        Ok(ret.transpose()?.unwrap())
-    }
-
-    fn mark_used(&self, can_consume: bool) {
-        if !can_consume {
-            return;
-        }
-        let _ = self.remaining_uses.fetch_update(
-            Ordering::Release,
-            Ordering::Acquire,
-            |remaining_pre: usize| {
-                let remaining = remaining_pre.checked_sub(1).unwrap();
-                if remaining == 0 {
-                    *self.data.borrow_mut() = None;
-                }
-                Some(remaining)
-            },
-        );
     }
 }
 
@@ -488,7 +350,7 @@ impl FullModularImage {
             .any(|x| x.id == TransformId::Squeeze);
 
         let (mut buffer_info, transform_steps) =
-            transforms::apply::meta_apply_transforms(&channels, &header)?;
+            transforms::meta_apply::meta_apply_transforms(&channels, &header)?;
 
         // Assign each (channel, group) pair present in the bitstream to the section in which it
         // will be decoded.
@@ -576,7 +438,7 @@ impl FullModularImage {
             }
         }
 
-        let transform_steps = make_grids(
+        let transform_steps = transforms::meta_apply::make_grids(
             frame_header,
             transform_steps,
             &section_buffer_indices,
@@ -1303,4 +1165,45 @@ pub fn decode_hf_metadata(
     }
     hf_meta.used_hf_types |= used_hf_types;
     Ok(())
+}
+
+pub fn decode_quant_table(
+    index: usize,
+    frame_header: &FrameHeader,
+    (required_size_x, required_size_y): (usize, usize),
+    global_tree: &Option<Tree>,
+    br: &mut BitReader,
+) -> Result<Vec<i32>> {
+    let bit_depth = BitDepth::integer_samples(8);
+    let mut image = [
+        ModularChannel::new((required_size_x, required_size_y), bit_depth)?,
+        ModularChannel::new((required_size_x, required_size_y), bit_depth)?,
+        ModularChannel::new((required_size_x, required_size_y), bit_depth)?,
+    ];
+    let stream_id = ModularStreamId::QuantTable(index).get_id(frame_header);
+    decode_modular_subbitstream(
+        image.iter_mut().collect(),
+        stream_id,
+        None,
+        global_tree,
+        br,
+        None,
+    )?;
+    let mut qtable = Vec::with_capacity(required_size_x * required_size_y * 3);
+    for channel in image.iter_mut() {
+        for entry in channel
+            .data
+            .get_rect(Rect {
+                size: (required_size_x, required_size_y),
+                origin: (0, 0),
+            })
+            .iter()
+        {
+            qtable.push(entry);
+            if entry <= 0 {
+                return Err(Error::InvalidRawQuantTable);
+            }
+        }
+    }
+    Ok(qtable)
 }

@@ -5,6 +5,8 @@
 
 use std::{borrow::Cow, f32::consts::SQRT_2, sync::OnceLock};
 
+use crate::frame::modular::decode_quant_table;
+use crate::headers::frame_header::FrameHeader;
 use crate::util::f16;
 
 use crate::{
@@ -17,12 +19,7 @@ use crate::{
         },
         Result,
     },
-    frame::{
-        LfGlobalState,
-        modular::{ModularChannel, ModularStreamId, decode::decode_modular_subbitstream},
-    },
-    headers::{bit_depth::BitDepth, frame_header::FrameHeader},
-    image::Rect,
+    frame::LfGlobalState,
 };
 use jxl_transforms::transform_map::*;
 
@@ -241,38 +238,16 @@ impl QuantEncoding {
                     // qtable[] values are already checked for <= 0 so the denominator may not be negative.
                     return Err(InvalidRawQuantTable);
                 }
-                let bit_depth = BitDepth::integer_samples(8);
-                let mut image = [
-                    ModularChannel::new((required_size_x, required_size_y), bit_depth)?,
-                    ModularChannel::new((required_size_x, required_size_y), bit_depth)?,
-                    ModularChannel::new((required_size_x, required_size_y), bit_depth)?,
-                ];
-                let stream_id = ModularStreamId::QuantTable(index).get_id(header);
-                decode_modular_subbitstream(
-                    image.iter_mut().collect(),
-                    stream_id,
-                    None,
-                    &lf_global.tree,
-                    br,
-                    None,
-                )?;
-                let mut qtable = Vec::with_capacity(required_size_x * required_size_y * 3);
-                for channel in image.iter_mut() {
-                    for entry in channel
-                        .data
-                        .get_rect(Rect {
-                            size: (required_size_x, required_size_y),
-                            origin: (0, 0),
-                        })
-                        .iter()
-                    {
-                        qtable.push(entry);
-                        if entry <= 0 {
-                            return Err(InvalidRawQuantTable);
-                        }
-                    }
-                }
-                Ok(Self::Raw { qtable, qtable_den })
+                Ok(Self::Raw {
+                    qtable: decode_quant_table(
+                        index,
+                        header,
+                        (required_size_x, required_size_y),
+                        &lf_global.tree,
+                        br,
+                    )?,
+                    qtable_den,
+                })
             }
             _ => Err(InvalidQuantEncoding {
                 mode,
