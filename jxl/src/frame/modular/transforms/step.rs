@@ -3,18 +3,20 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-use std::fmt::Debug;
+use std::{
+    fmt::Debug,
+    sync::atomic::{AtomicUsize, Ordering},
+};
 
 use crate::{
     error::Result,
     frame::modular::{
-        BUFFER_STATUS_ZERO_FILLED, ModularBufferInfo, ModularGridKind, Predictor,
-        TransformScratchSpace,
+        DataStatus, ModularBufferInfo, ModularGridKind, Predictor, TransformScratchSpace,
         buffers::{ModularChannel, with_buffers},
         transforms::squeeze::{smooth_2d_unsqueeze, smooth_h_unsqueeze, smooth_v_unsqueeze},
     },
     headers::{frame_header::FrameHeader, modular::WeightedHeader},
-    image::{Image, ImageRect, Rect},
+    image::{ImageRect, Rect},
     util::{AtomicRef, AtomicRefMut, SmallVec, tracing_wrappers::*},
 };
 use std::ops::{Deref, DerefMut};
@@ -64,15 +66,13 @@ pub struct TransformStepChunk {
     // transforms with position (x, y) with x > 0).
     pub(super) grid_pos: (usize, usize),
 
-    // List of (buffer, grid) that this transform depends on.
-    pub(in super::super) deps: Vec<(usize, usize)>,
+    // Number of missing final dependencies for this transform.
+    // Note that this is updated *before* actually computing other transforms.
+    pub(super) missing_final_deps: usize,
 
-    // Processing layer that this transform belongs to. Layer 0 are transforms
-    // that only depend on coded channels, layer 1 are transforms that only
-    // depend on coded channels and layer 0 outputs, etc. Since transforms
-    // in the same layer have no inter-dependencies, they can be run at the
-    // same time.
-    pub(in super::super) layer: usize,
+    // Number of dependencies that are still missing *during this progressive
+    // preview phase*.
+    pub(super) missing_deps: AtomicUsize,
 }
 
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
@@ -119,11 +119,11 @@ impl SqueezeInfo<(usize, usize)> {
         let output_grid_kind = buffers[buf_out].grid_kind;
         let in_grid = buf_avg.get_grid_idx(output_grid_kind, output_grid_pos);
         let res_grid = buf_res.get_grid_idx(output_grid_kind, output_grid_pos);
-        let kind = if buf_res.buffer_grid[res_grid].get_status() != BUFFER_STATUS_ZERO_FILLED {
+        let kind = if buf_res.buffer_grid[res_grid].data_status != DataStatus::Zero {
             SqueezeStepKind::Regular
         } else if let Some([_, res2_buf]) = buf_in_avg {
             let res2_grid = buffers[res2_buf].get_grid_idx(output_grid_kind, output_grid_pos);
-            if buffers[res2_buf].buffer_grid[res2_grid].get_status() == BUFFER_STATUS_ZERO_FILLED {
+            if buffers[res2_buf].buffer_grid[res2_grid].data_status == DataStatus::Zero {
                 SqueezeStepKind::Upsample2D
             } else {
                 SqueezeStepKind::Upsample1D
@@ -217,15 +217,29 @@ impl TransformStepChunk {
         }
     }
 
+    // Returns true if this was the last remaining final dep.
+    pub fn final_dep_ready(&mut self) -> bool {
+        self.missing_deps.fetch_add(1, Ordering::Relaxed);
+        self.missing_final_deps = self.missing_final_deps.checked_sub(1).unwrap();
+        self.missing_final_deps == 0
+    }
+
+    // Returns true if this was the last remaining current dep.
+    pub fn current_dep_ready(&mut self) -> bool {
+        let v = self.missing_deps.fetch_sub(1, Ordering::Relaxed);
+        assert_ne!(v, 0);
+        v == 1
+    }
+
     // Runs this transform. This function *will* crash if the transform is not ready.
     #[instrument(level = "trace", skip_all)]
     pub fn do_run(
         &self,
         frame_header: &FrameHeader,
         buffers: &[ModularBufferInfo],
-        is_final: bool,
         tranform_scratch_space: &mut TransformScratchSpace,
     ) -> Result<()> {
+        let is_final = self.missing_final_deps == 0;
         let buf_out = self.buf_out();
         let out_grid_kind = buffers[buf_out[0]].grid_kind;
         let out_grid = buffers[buf_out[0]].get_grid_idx(out_grid_kind, self.grid_pos);
@@ -516,7 +530,9 @@ impl TransformStepChunk {
     }
 
     // Iterates over the list of outputs for this transform.
-    pub fn outputs(&self, buffers: &[ModularBufferInfo]) -> impl Iterator<Item = (usize, usize)> {
+    // Except for palette, we only output 1 (squeeze) or 3 (RCT) buffers.
+    // For non-delta palette, in most cases we output 1, 3 or 4 channels.
+    pub fn outputs(&self, buffers: &[ModularBufferInfo]) -> SmallVec<(usize, usize), 4> {
         let buf_out = self.buf_out();
         let out_grid_kind = buffers[buf_out[0]].grid_kind;
         let out_grid = buffers[buf_out[0]].get_grid_idx(out_grid_kind, self.grid_pos);
@@ -535,5 +551,6 @@ impl TransformStepChunk {
         buf_out
             .iter()
             .flat_map(move |x| (0..grid_offset_up).map(move |y| (*x, out_grid + y)))
+            .collect()
     }
 }

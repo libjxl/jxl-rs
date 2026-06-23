@@ -175,14 +175,6 @@ pub struct HfMetadata {
     used_hf_types: u32,
 }
 
-#[derive(Debug, PartialEq, Eq, PartialOrd, Ord)]
-pub enum RenderUnit {
-    /// VarDCT data
-    VarDCT,
-    /// Modular channel with the given index
-    Modular(usize),
-}
-
 pub struct Frame {
     header: FrameHeader,
     toc: Toc,
@@ -208,7 +200,7 @@ pub struct Frame {
     last_rendered_pass: Vec<Option<usize>>,
     // Groups that should be rendered on the next call to flush().
     groups_to_flush: BTreeSet<usize>,
-    changed_since_last_flush: BTreeSet<(usize, RenderUnit)>,
+    vardct_changed_since_last_flush: BTreeSet<usize>,
     incomplete_groups: usize,
     patches: Arc<AtomicRefCell<PatchesDictionary>>,
     splines: Arc<AtomicRefCell<Splines>>,

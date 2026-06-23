@@ -259,7 +259,7 @@ impl Frame {
             was_flushed_once: false,
             vardct_buffers: None,
             groups_to_flush: BTreeSet::new(),
-            changed_since_last_flush: BTreeSet::new(),
+            vardct_changed_since_last_flush: BTreeSet::new(),
             patches: Arc::new(AtomicRefCell::new(PatchesDictionary::new(
                 num_extra_channels,
             ))),
@@ -440,13 +440,15 @@ impl Frame {
             )?;
         }
 
-        lf_global.modular_global.mark_group_to_be_read(1, group);
+        lf_global.modular_global.mark_final(1, group, |_| {});
 
         lf_global.modular_global.read_stream(
             ModularStreamId::ModularLF(group),
             &self.header,
             &lf_global.tree,
             br,
+            // FIXME: is this reachable? I think it might be.
+            &mut |_, _, _, _| unreachable!(),
         )?;
         if self.header.encoding == Encoding::VarDCT {
             info!("decoding HF metadata with group id {}", group);
@@ -658,7 +660,6 @@ impl Frame {
         Ok(())
     }
 
-    // Returns `true` if VarDCT and noise data were effectively rendered.
     #[instrument(level = "debug", skip(self, passes, buffer_splitter))]
     pub fn decode_hf_group(
         &mut self,
@@ -666,7 +667,7 @@ impl Frame {
         passes: &mut [(usize, BitReader)],
         buffer_splitter: &mut BufferSplitter,
         force_render: bool,
-    ) -> Result<bool> {
+    ) -> Result<()> {
         if passes.is_empty() {
             assert!(force_render);
         }
@@ -674,7 +675,7 @@ impl Frame {
         let last_pass_in_file = self.header.passes.num_passes as usize - 1;
         // Group was fully rendered already, nothing to do.
         if self.last_rendered_pass[group].is_some_and(|p| p >= last_pass_in_file) {
-            return Ok(false);
+            return Ok(());
         }
 
         if let Some((p, _)) = passes.last() {
@@ -698,7 +699,7 @@ impl Frame {
         };
 
         if !do_render && passes.is_empty() {
-            return Ok(false);
+            return Ok(());
         }
 
         if self.header.has_noise() && do_render {
@@ -768,14 +769,33 @@ impl Frame {
             }
         }
 
+        let mut pass_to_pipeline = |chan, group, complete, image: Option<Image<i32>>| {
+            pipeline!(
+                self,
+                p,
+                p.set_buffer_for_group(
+                    chan,
+                    group,
+                    complete,
+                    image.unwrap(),
+                    &mut *buffer_splitter
+                )?
+            );
+            Ok(())
+        };
+
         for (pass, br) in passes.iter_mut() {
             lf_global.modular_global.read_stream(
                 ModularStreamId::ModularHF { group, pass: *pass },
                 &self.header,
                 &lf_global.tree,
                 br,
+                &mut pass_to_pipeline,
             )?;
         }
-        Ok(do_render)
+        if do_render {
+            self.vardct_changed_since_last_flush.insert(group);
+        }
+        Ok(())
     }
 }

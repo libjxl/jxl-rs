@@ -72,49 +72,62 @@ impl ModularChannel {
     }
 }
 
-pub(super) const BUFFER_STATUS_NOT_RENDERED: usize = 0;
-pub(super) const BUFFER_STATUS_ZERO_FILLED: usize = 1;
-pub(super) const BUFFER_STATUS_PARTIAL_RENDER: usize = 2;
-pub(super) const BUFFER_STATUS_FINAL_RENDER: usize = 3;
+#[derive(Debug, PartialEq, Eq)]
+pub(super) enum DataStatus {
+    Zero,
+    Partial,
+    Final,
+}
 
-// Note: this type uses interior mutability to get mutable references to multiple buffers at once.
-// In principle, this is not needed, but the overhead should be minimal so using `unsafe` here is
-// probably not worth it.
 #[derive(Debug)]
 pub(super) struct ModularBuffer {
     pub(super) data: AtomicRefCell<Option<ModularChannel>>,
     // Number of times this buffer will be used, *including* when it is used for output.
     pub(super) remaining_uses: AtomicUsize,
-    // Transform steps that "strongly" or "weakly" use the image data in this buffer.
-    // A "strong" usage always triggers a re-render if the image data changes.
-    // A "weak" usage only triggers a re-render if the buffer is final, or if the
-    // current re-render was not only caused by weak re-renders.
-    pub(super) used_by_transforms_strong: Vec<usize>,
-    pub(super) used_by_transforms_weak: Vec<usize>,
+    // Transform steps that use the image data in this buffer for final renders.
+    pub(super) used_by_transforms_final: Vec<usize>,
+    // Transform steps that depend on this buffer for the current rendering pass.
+    pub(super) used_by_transforms_current: Vec<usize>,
+    // Transform step that will produce this channel (None if the channel is final).
+    pub(super) produced_by_step: Option<usize>,
     pub(super) size: (usize, usize),
-    pub(super) status: AtomicUsize,
+    // Status of the data in this buffer. Note that the distinction between "Zero"
+    // and "partial" is only meaningful for section0 coded buffers.
+    pub(super) data_status: DataStatus,
 }
 
 impl ModularBuffer {
-    pub fn get_status(&self) -> usize {
-        self.status.load(Ordering::Relaxed)
-    }
-
-    pub fn set_status(&self, val: usize) {
-        self.status.store(val, Ordering::Relaxed);
-    }
-
-    // Iterator over (transform_id, is_strong_use)
-    pub fn users(&self, include_weak: bool) -> impl Iterator<Item = (usize, bool)> {
-        let strong = self.used_by_transforms_strong.iter().map(|x| (*x, true));
-        let weak = if include_weak {
-            &self.used_by_transforms_weak[..]
-        } else {
-            &[]
+    pub fn new(size: (usize, usize), is_output: bool) -> Self {
+        ModularBuffer {
+            data: AtomicRefCell::new(None),
+            remaining_uses: AtomicUsize::new(if is_output { 1 } else { 0 }),
+            used_by_transforms_final: vec![],
+            used_by_transforms_current: vec![],
+            size,
+            data_status: DataStatus::Zero,
+            produced_by_step: None,
         }
-        .iter()
-        .map(|x| (*x, false));
-        strong.chain(weak)
+    }
+
+    pub fn has_buffer(&self) -> bool {
+        self.data.borrow().is_some()
+    }
+
+    pub fn make_buffer(&self, info: &ChannelInfo) -> Result<ModularChannel> {
+        Ok(ModularChannel {
+            data: Image::new_with_padding(self.size, IMAGE_OFFSET, IMAGE_PADDING)?,
+            auxiliary_data: None,
+            shift: info.shift,
+            bit_depth: info.bit_depth,
+        })
+    }
+
+    pub fn ensure_buffer(&self, info: &ChannelInfo) -> Result<()> {
+        if !self.has_buffer() {
+            let buf = self.make_buffer(info)?;
+            *self.data.borrow_mut() = Some(buf);
+        }
+        Ok(())
     }
 
     // Gives out a copy of the buffer + auxiliary buffer, marking the buffer as used.
@@ -173,15 +186,8 @@ pub fn with_buffers<T>(
         // Allocate buffers if they are not present.
         let buf = &buffers[*i];
         let b = &buf.buffer_grid[grid];
-        let mut data = b.data.borrow_mut();
-        if data.is_none() {
-            *data = Some(ModularChannel {
-                data: Image::new_with_padding(b.size, IMAGE_OFFSET, IMAGE_PADDING)?,
-                auxiliary_data: None,
-                shift: buf.info.shift,
-                bit_depth: buf.info.bit_depth,
-            });
-        }
+        b.ensure_buffer(&buf.info)?;
+        let data = b.data.borrow_mut();
 
         // Skip zero-sized *tiles*.
         //
