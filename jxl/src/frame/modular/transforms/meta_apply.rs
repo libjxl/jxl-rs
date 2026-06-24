@@ -5,7 +5,7 @@
 
 use std::{
     collections::HashMap,
-    sync::atomic::{AtomicUsize, Ordering},
+    sync::atomic::{AtomicBool, AtomicUsize},
 };
 
 use num_traits::FromPrimitive;
@@ -17,6 +17,7 @@ use crate::{
         transforms::step::{TransformStep, TransformStepChunk},
     },
     headers::{self, frame_header::FrameHeader, modular::TransformId},
+    image::Rect,
     util::tracing_wrappers::*,
 };
 
@@ -305,6 +306,7 @@ pub fn make_grids(
     transform_steps: Vec<TransformStep>,
     section_buffer_indices: &[Vec<usize>],
     buffer_info: &mut Vec<ModularBufferInfo>,
+    color_channels: usize,
 ) -> Vec<TransformStepChunk> {
     // Initialize grid sizes, starting from coded channels.
     for i in section_buffer_indices[1].iter() {
@@ -359,6 +361,9 @@ pub fn make_grids(
                 }
                 buffer_info[*buf_out].grid_kind = grid_kind;
             }
+            TransformStep::Output { .. } => {
+                unreachable!()
+            }
         }
     }
 
@@ -375,13 +380,11 @@ pub fn make_grids(
 
     // Create grids.
     for g in buffer_info.iter_mut() {
-        let is_output = g.info.output_channel_idx.is_some();
         g.buffer_grid = get_grid_indices(g.grid_shape)
             .map(|(x, y)| {
                 ModularBuffer::new(
                     g.get_grid_rect(frame_header, g.grid_kind, (x as usize, y as usize))
                         .size,
-                    is_output,
                 )
             })
             .collect();
@@ -399,6 +402,7 @@ pub fn make_grids(
                 grid_pos: (grid_pos.0 as usize, grid_pos.1 as usize),
                 missing_final_deps: 0,
                 missing_deps: AtomicUsize::new(0),
+                do_render: AtomicBool::new(false),
             });
             ts
         };
@@ -424,7 +428,6 @@ pub fn make_grids(
             buffer_info[input_buffer_idx].get_grid_idx(output_grid_kind, output_grid_pos);
         let grid = &mut buffer_info[input_buffer_idx].buffer_grid[input_grid_pos];
         if !grid.used_by_transforms_final.contains(&ts) {
-            grid.remaining_uses.fetch_add(1, Ordering::Relaxed);
             grid_transform_steps[ts].missing_final_deps += 1;
             grid.used_by_transforms_final.push(ts);
         }
@@ -637,6 +640,9 @@ pub fn make_grids(
                     );
                 }
             }
+            TransformStep::Output { .. } => {
+                unreachable!()
+            }
         }
     }
 
@@ -644,6 +650,68 @@ pub fn make_grids(
     for (ts, step) in grid_transform_steps.iter().enumerate() {
         for &(buf, grid) in step.outputs(&buffer_info).iter() {
             buffer_info[buf].buffer_grid[grid].produced_by_step = Some(ts);
+        }
+    }
+
+    // Add "output" transform steps.
+    // TODO(veluca): filter this by pipeline_used_channels.
+    for (idx, bi) in buffer_info.iter_mut().enumerate() {
+        if let Some(chan) = bi.info.output_channel_idx {
+            let (shift_x, shift_y) = bi.info.shift.unwrap_or((0, 0));
+            let gsx = frame_header.group_dim() >> shift_x;
+            let gsy = frame_header.group_dim() >> shift_y;
+            // If the channel has a grid size of Hf groups, then we can just output
+            // the entire buffer. Otherwise, we need to copy the region of the image
+            // that corresponds to a HF group.
+            let grid_dim = match bi.grid_kind {
+                ModularGridKind::None => frame_header.size().0.max(frame_header.size().1),
+                ModularGridKind::Hf => frame_header.group_dim(),
+                ModularGridKind::Lf => frame_header.lf_group_dim(),
+            };
+            let gtx = grid_dim >> shift_x;
+            let gty = grid_dim >> shift_y;
+
+            let group_shape = frame_header.size_groups();
+            for y in 0..group_shape.1 {
+                let gy = y * gsy / gty;
+                let gyo = y * gsy - gy * gty;
+                for x in 0..group_shape.0 {
+                    let gx = x * gsx / gtx;
+                    let gxo = x * gsx - gx * gtx;
+                    let grid = gy * bi.grid_shape.0 + gx;
+                    let rect = if gxo == 0 && gyo == 0 && gtx == gsx && gty == gsy {
+                        None
+                    } else {
+                        let rect = Rect {
+                            origin: (gxo, gyo),
+                            size: (gsx, gsy),
+                        };
+                        Some(rect.clip(bi.buffer_grid[grid].size))
+                    };
+                    let chans = if chan == 0 && color_channels == 1 {
+                        0..=2
+                    } else {
+                        chan..=chan
+                    };
+                    for c in chans {
+                        bi.buffer_grid[grid]
+                            .used_by_transforms_final
+                            .push(grid_transform_steps.len());
+                        grid_transform_steps.push(TransformStepChunk {
+                            step: TransformStep::Output {
+                                buf_in: idx,
+                                rect,
+                                group: y * frame_header.size_groups().0 + x,
+                                channel: c,
+                            },
+                            grid_pos: (gx, gy),
+                            missing_final_deps: 1,
+                            missing_deps: AtomicUsize::new(0),
+                            do_render: AtomicBool::new(false),
+                        });
+                    }
+                }
+            }
         }
     }
 

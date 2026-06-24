@@ -3,7 +3,7 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-use std::{cmp::min, fmt::Debug};
+use std::{cmp::min, fmt::Debug, sync::atomic::Ordering};
 
 use crate::{
     bit_reader::BitReader,
@@ -24,7 +24,7 @@ use crate::{
         modular::{GroupHeader, TransformId},
     },
     image::{Image, Rect},
-    util::{CeilLog2, SmallVec, tracing_wrappers::*},
+    util::{CeilLog2, tracing_wrappers::*},
 };
 use jxl_transforms::transform_map::*;
 
@@ -229,7 +229,6 @@ pub struct FullModularImage {
     // List of buffer indices of the channels of the modular image encoded in each kind of section.
     // In order, LfGlobal, LfGroup, HfGroup(pass 0), ..., HfGroup(last pass).
     section_buffer_indices: Vec<Vec<usize>>,
-    modular_color_channels: usize,
     can_do_partial_render: bool,
     can_do_early_partial_render: bool,
     needed_section0_channels_for_early_render: usize,
@@ -307,7 +306,6 @@ impl FullModularImage {
                 buffer_info: vec![],
                 transform_steps: vec![],
                 section_buffer_indices: vec![vec![]; 2 + frame_header.passes.num_passes as usize],
-                modular_color_channels,
                 can_do_partial_render: true,
                 can_do_early_partial_render: false,
                 needed_section0_channels_for_early_render: 0,
@@ -430,6 +428,7 @@ impl FullModularImage {
             transform_steps,
             &section_buffer_indices,
             &mut buffer_info,
+            modular_color_channels,
         );
 
         #[cfg(feature = "tracing")]
@@ -477,7 +476,6 @@ impl FullModularImage {
             buffer_info,
             transform_steps,
             section_buffer_indices,
-            modular_color_channels,
             can_do_partial_render: !has_problematic_palette_transform,
             can_do_early_partial_render: !has_problematic_palette_transform
                 && has_squeeze_transform,
@@ -531,6 +529,13 @@ impl FullModularImage {
         self.has_decoded_data |=
             num_decoded >= self.needed_section0_channels_for_early_render && num_decoded > 0;
 
+        if num_decoded >= self.section_buffer_indices[0].len() {
+            self.mark_final(0, 0, |_| ());
+            self.mark_section_ready(0, 0);
+            // We don't run transforms here - we ask the caller to call `run_all_transforms`
+            // at least once per decode.
+        }
+
         // FIXME
         // FIXME FIXME FIXME
 
@@ -561,7 +566,9 @@ impl FullModularImage {
         frame_header: &FrameHeader,
         global_tree: &Option<Tree>,
         br: &mut BitReader,
-        pass_to_pipeline: &mut dyn FnMut(usize, usize, bool, Option<Image<i32>>) -> Result<()>,
+        pass_to_pipeline: Option<
+            &mut dyn FnMut(usize, usize, bool, Option<Image<i32>>) -> Result<()>,
+        >,
     ) -> Result<()> {
         if self.buffer_info.is_empty() {
             info!("No modular channels to decode");
@@ -596,16 +603,16 @@ impl FullModularImage {
 
         self.has_decoded_data |= !self.section_buffer_indices[section_id].is_empty();
 
-        self.on_section_ready(section_id, grid, frame_header, pass_to_pipeline)
+        self.mark_section_ready(section_id, grid);
+
+        if let Some(pass_to_pipeline) = pass_to_pipeline {
+            self.run_all_transforms(frame_header, pass_to_pipeline)
+        } else {
+            Ok(())
+        }
     }
 
-    fn on_section_ready(
-        &mut self,
-        section_id: usize,
-        grid: usize,
-        frame_header: &FrameHeader,
-        pass_to_pipeline: &mut dyn FnMut(usize, usize, bool, Option<Image<i32>>) -> Result<()>,
-    ) -> Result<()> {
+    fn mark_section_ready(&mut self, section_id: usize, grid: usize) {
         for buf in self.section_buffer_indices[section_id].iter().copied() {
             // Note: this is duplicated with `run_transform` because the compiler can't tell
             // that we are not using `section_buffer_indices` in a factored-out method.
@@ -619,95 +626,24 @@ impl FullModularImage {
                 }
             }
         }
-
-        self.run_all_transforms(frame_header, pass_to_pipeline)
-    }
-
-    // TODO(veluca): make this into a transform step.
-    fn maybe_output(
-        &self,
-        buf: usize,
-        grid: usize,
-        dry_run: bool,
-        pass_to_pipeline: &mut dyn FnMut(usize, usize, bool, Option<Image<i32>>) -> Result<()>,
-    ) -> Result<()> {
-        if let Some(chan) = self.buffer_info[buf].info.output_channel_idx {
-            let grid_is_none = self.buffer_info[buf].grid_kind == ModularGridKind::None;
-            let grid_idx = if grid_is_none { 0 } else { grid };
-            let is_final =
-                self.buffer_info[buf].buffer_grid[grid_idx].data_status == DataStatus::Final;
-
-            let channels: SmallVec<usize, 3> = if chan == 0 && self.modular_color_channels == 1 {
-                (0..3).filter(|x| self.pipeline_used_channels[*x]).collect()
-            } else {
-                self.pipeline_used_channels[chan]
-                    .then_some(chan)
-                    .into_iter()
-                    .collect()
-            };
-            if channels.is_empty() {
-                return Ok(());
-            }
-            if dry_run {
-                for c in channels.iter() {
-                    pass_to_pipeline(*c, grid, is_final, None)?;
-                }
-            } else {
-                debug!("Rendering channel {chan:?}, grid position {grid}");
-
-                let modular_buf = self.buffer_info[buf].buffer_grid[grid_idx]
-                    .get_buffer(is_final && !grid_is_none)?;
-                let mut image = modular_buf.data;
-
-                if grid_is_none {
-                    let (shift_x, shift_y) = self.buffer_info[buf].info.shift.unwrap_or((0, 0));
-                    let log_group_dim = self.log_group_dim;
-                    let gx = grid % self.num_groups.0;
-                    let gy = grid / self.num_groups.0;
-
-                    let rect = Rect {
-                        origin: (gx << log_group_dim, gy << log_group_dim),
-                        size: (1 << log_group_dim, 1 << log_group_dim),
-                    };
-                    let rect = rect.downsample((shift_x as u8, shift_y as u8));
-                    let full_size = self.buffer_info[buf].buffer_grid[grid_idx].size;
-                    let rect = rect.clip(full_size);
-
-                    if rect.origin != (0, 0) || rect.size != full_size {
-                        let mut cropped = Image::new(rect.size)?;
-                        let src_view = image.get_rect(rect);
-                        for y in 0..rect.size.1 {
-                            cropped.row_mut(y).copy_from_slice(src_view.row(y));
-                        }
-                        image = cropped;
-                    }
-                }
-
-                for c in channels[1..].iter() {
-                    pass_to_pipeline(*c, grid, is_final, Some(image.try_clone()?))?;
-                }
-                pass_to_pipeline(channels[0], grid, is_final, Some(image))?;
-            }
-        }
-        Ok(())
     }
 
     pub fn mark_final(
         &mut self,
         section_id: usize,
-        group: usize,
+        grid: usize,
         mut group_callback: impl FnMut(usize),
     ) {
         let mut buffer_stack = vec![];
         let mut stack = vec![];
         for b in self.section_buffer_indices[section_id].iter() {
-            buffer_stack.push((*b, group));
+            buffer_stack.push((*b, grid));
         }
         loop {
             if let Some((b, g)) = buffer_stack.pop() {
                 let buf = &mut self.buffer_info[b];
                 if buf.info.output_channel_idx.is_some() {
-                    group_callback(group);
+                    group_callback(grid);
                 }
                 let grid = &mut buf.buffer_grid[g];
                 grid.data_status = DataStatus::Final;
@@ -715,6 +651,8 @@ impl FullModularImage {
                 for v in grid.used_by_transforms_final.iter() {
                     stack.push(*v);
                 }
+                grid.remaining_uses
+                    .store(grid.used_by_transforms_final.len(), Ordering::Relaxed);
                 assert!(grid.used_by_transforms_current.is_empty());
                 grid.used_by_transforms_current = grid.used_by_transforms_final.clone();
             }
@@ -742,6 +680,7 @@ impl FullModularImage {
             frame_header,
             &self.buffer_info,
             &mut self.transform_scratch_space,
+            pass_to_pipeline,
         )?;
 
         for &(buf, grid) in self.transform_steps[tfm].outputs(&self.buffer_info).iter() {
@@ -753,15 +692,6 @@ impl FullModularImage {
                 if self.transform_steps[t].current_dep_ready() {
                     self.ready_transform_steps.push(t);
                 }
-            }
-
-            // FIXME: get rid of this.
-            if self.buffer_info[buf].grid_kind == ModularGridKind::None {
-                for g in 0..self.num_groups.0 * self.num_groups.1 {
-                    self.maybe_output(buf, g, false, pass_to_pipeline)?;
-                }
-            } else {
-                self.maybe_output(buf, grid, false, pass_to_pipeline)?;
             }
         }
         Ok(())

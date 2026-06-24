@@ -169,6 +169,9 @@ pub fn meta_apply_local_transforms<'a, 'b>(
                         *b = buf_remap[*b];
                     }
                 }
+                TransformStep::Output { .. } => {
+                    unreachable!()
+                }
             }
         }
     }
@@ -345,6 +348,9 @@ impl TransformStep {
                     );
                 }
                 buffers[*buf_out] = out_buf;
+            }
+            TransformStep::Output { .. } => {
+                unreachable!()
             }
         };
 

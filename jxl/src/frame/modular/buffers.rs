@@ -97,10 +97,10 @@ pub(super) struct ModularBuffer {
 }
 
 impl ModularBuffer {
-    pub fn new(size: (usize, usize), is_output: bool) -> Self {
+    pub fn new(size: (usize, usize)) -> Self {
         ModularBuffer {
             data: AtomicRefCell::new(None),
-            remaining_uses: AtomicUsize::new(if is_output { 1 } else { 0 }),
+            remaining_uses: AtomicUsize::new(0),
             used_by_transforms_final: vec![],
             used_by_transforms_current: vec![],
             size,

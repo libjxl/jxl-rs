@@ -5,7 +5,7 @@
 
 use std::{
     fmt::Debug,
-    sync::atomic::{AtomicUsize, Ordering},
+    sync::atomic::{AtomicBool, AtomicUsize, Ordering},
 };
 
 use crate::{
@@ -16,7 +16,7 @@ use crate::{
         transforms::squeeze::{smooth_2d_unsqueeze, smooth_h_unsqueeze, smooth_v_unsqueeze},
     },
     headers::{frame_header::FrameHeader, modular::WeightedHeader},
-    image::{ImageRect, Rect},
+    image::{Image, ImageRect, Rect},
     util::{AtomicRef, AtomicRefMut, SmallVec, tracing_wrappers::*},
 };
 use std::ops::{Deref, DerefMut};
@@ -54,6 +54,12 @@ pub enum TransformStep {
         // for that transform.
         buf_in_avg: Option<[usize; 2]>,
     },
+    Output {
+        buf_in: usize,
+        rect: Option<Rect>,
+        group: usize,
+        channel: usize,
+    },
 }
 
 #[derive(Debug)]
@@ -73,6 +79,9 @@ pub struct TransformStepChunk {
     // Number of dependencies that are still missing *during this progressive
     // preview phase*.
     pub(super) missing_deps: AtomicUsize,
+
+    // True if we intend to run this transform *during this phase*.
+    pub(super) do_render: AtomicBool,
 }
 
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
@@ -214,6 +223,14 @@ impl TransformStepChunk {
             TransformStep::HSqueeze { buf_out, .. } | TransformStep::VSqueeze { buf_out, .. } => {
                 std::slice::from_ref(buf_out)
             }
+            TransformStep::Output { .. } => &[],
+        }
+    }
+
+    pub fn output_group(&self) -> Option<usize> {
+        match &self.step {
+            TransformStep::Output { group, .. } => Some(*group),
+            _ => None,
         }
     }
 
@@ -221,14 +238,23 @@ impl TransformStepChunk {
     pub fn final_dep_ready(&mut self) -> bool {
         self.missing_deps.fetch_add(1, Ordering::Relaxed);
         self.missing_final_deps = self.missing_final_deps.checked_sub(1).unwrap();
+        if self.missing_final_deps == 0 {
+            self.do_render.store(true, Ordering::Relaxed);
+        }
         self.missing_final_deps == 0
     }
 
-    // Returns true if this was the last remaining current dep.
-    pub fn current_dep_ready(&mut self) -> bool {
+    // Returns true if this was the last remaining current dep *and* do_render
+    // was true. In that case, clears do_render.
+    pub fn current_dep_ready(&self) -> bool {
         let v = self.missing_deps.fetch_sub(1, Ordering::Relaxed);
         assert_ne!(v, 0);
-        v == 1
+        if v == 1 {
+            if self.do_render.fetch_and(false, Ordering::Relaxed) {
+                return true;
+            }
+        }
+        false
     }
 
     // Runs this transform. This function *will* crash if the transform is not ready.
@@ -238,12 +264,28 @@ impl TransformStepChunk {
         frame_header: &FrameHeader,
         buffers: &[ModularBufferInfo],
         tranform_scratch_space: &mut TransformScratchSpace,
+        pass_to_pipeline: &mut dyn FnMut(usize, usize, bool, Option<Image<i32>>) -> Result<()>,
     ) -> Result<()> {
         let is_final = self.missing_final_deps == 0;
         let buf_out = self.buf_out();
-        let out_grid_kind = buffers[buf_out[0]].grid_kind;
-        let out_grid = buffers[buf_out[0]].get_grid_idx(out_grid_kind, self.grid_pos);
-        let out_size = buffers[buf_out[0]].info.size;
+
+        // *INPUT* values for Output transforms.
+        let (out_grid_kind, out_grid, out_size) =
+            if let TransformStep::Output { buf_in, .. } = self.step {
+                let b = buf_in;
+                (
+                    buffers[b].grid_kind,
+                    buffers[b].get_grid_idx(buffers[b].grid_kind, self.grid_pos),
+                    buffers[b].info.size,
+                )
+            } else {
+                let b = buf_out[0];
+                (
+                    buffers[b].grid_kind,
+                    buffers[b].get_grid_idx(buffers[b].grid_kind, self.grid_pos),
+                    buffers[b].info.size,
+                )
+            };
         for bo in buf_out {
             assert_eq!(out_grid_kind, buffers[*bo].grid_kind);
             assert_eq!(out_size, buffers[*bo].info.size);
@@ -524,6 +566,25 @@ impl TransformStepChunk {
                 }
                 info.decrement_refs(buffers, is_final);
             }
+            TransformStep::Output {
+                buf_in,
+                rect,
+                group,
+                channel,
+            } => {
+                debug!("Rendering channel {channel:?}, rect {rect:?}, group {group}");
+                let modular_buf = buffers[*buf_in].buffer_grid[out_grid].get_buffer(is_final)?;
+                if let Some(rect) = rect {
+                    let mut cropped = Image::new(rect.size)?;
+                    let src_view = modular_buf.data.get_rect(*rect);
+                    for y in 0..rect.size.1 {
+                        cropped.row_mut(y).copy_from_slice(src_view.row(y));
+                    }
+                    pass_to_pipeline(*channel, *group, is_final, Some(cropped))?;
+                } else {
+                    pass_to_pipeline(*channel, *group, is_final, Some(modular_buf.data))?;
+                }
+            }
         };
 
         Ok(())
@@ -534,8 +595,9 @@ impl TransformStepChunk {
     // For non-delta palette, in most cases we output 1, 3 or 4 channels.
     pub fn outputs(&self, buffers: &[ModularBufferInfo]) -> SmallVec<(usize, usize), 4> {
         let buf_out = self.buf_out();
-        let out_grid_kind = buffers[buf_out[0]].grid_kind;
-        let out_grid = buffers[buf_out[0]].get_grid_idx(out_grid_kind, self.grid_pos);
+        let b = buf_out.first().copied().unwrap_or(0);
+        let out_grid_kind = buffers[b].grid_kind;
+        let out_grid = buffers[b].get_grid_idx(out_grid_kind, self.grid_pos);
         let grid_offset_up = match &self.step {
             TransformStep::Palette {
                 buf_in,
@@ -545,6 +607,7 @@ impl TransformStepChunk {
             } if buffers[*buf_in].info.size.0 != 0 && predictor.requires_full_row() => {
                 buffers[buf_out[0]].grid_shape.0
             }
+            TransformStep::Output { .. } => 0,
             _ => 1,
         };
 

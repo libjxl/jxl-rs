@@ -18,6 +18,7 @@ use crate::frame::quantizer::LfQuantFactors;
 use crate::headers::frame_header::Encoding;
 use crate::headers::frame_header::FrameType;
 use crate::headers::{Orientation, color_encoding::ColorSpace, extra_channels::ExtraChannel};
+use crate::image::Image;
 use crate::image::Rect;
 use crate::util::AtomicRefCell;
 use std::sync::Arc;
@@ -204,6 +205,7 @@ impl Frame {
         for (group, _) in groups.iter() {
             // FIXME: ask Modular decoder to re-render this groups as a progressive preview.
             let _ = group;
+            pipeline!(self, p, p.mark_group_to_rerender(*group));
         }
         if !self.was_flushed_once
             && do_flush
@@ -217,12 +219,33 @@ impl Frame {
             // FIXME: ask Modular decoder to re-render those groups as a progressive preview.
         }
 
-        // STEP 3: decode the groups, eagerly decoding all the data.
+        // STEP 3: Run all the transforms that could be run already.
+        // We do this because some modular images might not have coded channels in HF, so
+        // all the coded channels were already decoded and the modular decoder does not
+        // automatically call run_all_transforms unless a new channel is decoded.
+        let mut pass_to_pipeline = |chan, group, complete, image: Option<Image<i32>>| {
+            pipeline!(
+                self,
+                p,
+                p.set_buffer_for_group(
+                    chan,
+                    group,
+                    complete,
+                    image.unwrap(),
+                    &mut buffer_splitter
+                )?
+            );
+            Ok(())
+        };
+
+        modular_global.run_all_transforms(&self.header, &mut pass_to_pipeline)?;
+
+        // STEP 4: decode the groups, eagerly decoding all the data.
         for (group, mut passes) in groups {
             self.decode_hf_group(group, &mut passes, &mut buffer_splitter, do_flush)?;
         }
 
-        // STEP 4: re-render VarDCT/noise data in rendered groups for which it was
+        // STEP 5: re-render VarDCT/noise data in rendered groups for which it was
         // not rendered.
         // Note that modular data has certainly all been rendered if it needed to,
         // so we don't need to do anything special.

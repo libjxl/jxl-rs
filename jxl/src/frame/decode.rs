@@ -447,8 +447,7 @@ impl Frame {
             &self.header,
             &lf_global.tree,
             br,
-            // FIXME: is this reachable? I think it might be.
-            &mut |_, _, _, _| unreachable!(),
+            None,
         )?;
         if self.header.encoding == Encoding::VarDCT {
             info!("decoding HF metadata with group id {}", group);
@@ -790,7 +789,7 @@ impl Frame {
                 &self.header,
                 &lf_global.tree,
                 br,
-                &mut pass_to_pipeline,
+                Some(&mut pass_to_pipeline),
             )?;
         }
         if do_render {
