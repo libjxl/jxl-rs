@@ -335,6 +335,12 @@ impl Frame {
             frame_header.size_upsampled(),
             frame_header.upsampling.ilog2() as usize,
             frame_header.log_group_dim(),
+            // TODO(veluca): we should instead have modular mode participate in buffer reuse.
+            if frame_header.encoding == Encoding::Modular {
+                Some(0)
+            } else {
+                None
+            },
         );
 
         if frame_header.encoding == Encoding::Modular {

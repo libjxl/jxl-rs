@@ -113,6 +113,14 @@ impl LowMemoryRenderPipeline {
     }
 
     fn store_scratch_buffer(&mut self, channel: usize, kind: usize, image: OwnedRawImage) {
+        if kind == 0
+            && let Some(s) = self.group_scratch_buffers_limit
+            && self.scratch_channel_buffers[channel * 3].len() >= s
+        {
+            // We are going over the limit of group-sized scratch buffers for
+            // this channel - avoid storing the buffer.
+            return;
+        }
         self.scratch_channel_buffers[channel * 3 + kind].push(image)
     }
 
