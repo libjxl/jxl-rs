@@ -66,6 +66,11 @@ impl JxlCms for Lcms2Cms {
                 transform,
                 input_channels,
                 output_channels,
+                cmyk_buffer: if input_format == PixelFormat::CMYK_FLT {
+                    Some(Vec::new())
+                } else {
+                    None
+                },
             }));
         }
 
@@ -88,6 +93,7 @@ struct Lcms2Transformer {
     transform: Transform<u8, u8, ThreadContext, AllowCache>,
     input_channels: usize,
     output_channels: usize,
+    cmyk_buffer: Option<Vec<f32>>,
 }
 
 impl JxlCmsTransformer for Lcms2Transformer {
@@ -102,6 +108,17 @@ impl JxlCmsTransformer for Lcms2Transformer {
                 output.len(),
             ));
         }
+
+        // We use [0 = max ink, 1], but lcms2 expects [0 = no ink, 100].
+        let input = if let Some(buf) = &mut self.cmyk_buffer {
+            buf.resize(input.len(), 0.0);
+            for (dst, &src) in buf.iter_mut().zip(input.iter()) {
+                *dst = 100.0 - src * 100.0;
+            }
+            buf
+        } else {
+            input
+        };
 
         // Convert f32 slices to byte slices using bytemuck for safe casting
         let input_bytes: &[u8] = bytemuck::cast_slice(input);

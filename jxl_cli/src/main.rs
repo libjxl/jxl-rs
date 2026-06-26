@@ -172,6 +172,7 @@ fn main() -> Result<()> {
                 output_format
                     .map(|x| x.supported_output_data_types())
                     .unwrap_or(OutputDataType::ALL),
+                output_format.is_none_or(|x| x.accepts_cmyk()),
                 output_format.is_none_or(|x| x.should_fold_alpha()),
                 linear_output,
                 opt.render_interval,
