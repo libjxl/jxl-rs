@@ -66,6 +66,7 @@ fn decode_benches(c: &mut Criterion) {
                             OutputDataType::F32,
                         ],
                         true,
+                        true,
                         false,
                         None,
                         false,
