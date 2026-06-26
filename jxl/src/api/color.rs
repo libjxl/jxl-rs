@@ -1223,7 +1223,7 @@ impl JxlColorProfile {
     ///
     /// Two profiles are the same if they are both simple color encodings
     /// with matching color space (primaries, white point) and transfer function.
-    /// ICC profiles are never considered the same (even if identical bytes).
+    /// ICC profiles are considered the same if they have identical bytes.
     pub fn same_color_encoding(&self, other: &Self) -> bool {
         match (self, other) {
             (Self::Simple(a), Self::Simple(b)) => {
