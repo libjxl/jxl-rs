@@ -65,6 +65,15 @@ impl OutputFormat {
         }
     }
 
+    pub fn accepts_cmyk(&self) -> bool {
+        match self {
+            Self::Ppm | Self::Pgm | Self::Png => false,
+            Self::Npy => true,
+            #[cfg(feature = "exr")]
+            Self::Exr => false,
+        }
+    }
+
     pub fn save_image(&self, image_data: &DecodeOutput, output_filename: &PathBuf) -> Result<()> {
         let has_partial_renders = image_data
             .frames
