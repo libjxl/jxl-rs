@@ -14,7 +14,8 @@ use crate::{
         transforms::squeeze::{smooth_2d_unsqueeze, smooth_h_unsqueeze, smooth_v_unsqueeze},
     },
     headers::{frame_header::FrameHeader, modular::WeightedHeader},
-    util::{AtomicRef, AtomicRefMut, tracing_wrappers::*},
+    image::{Image, ImageRect, Rect},
+    util::{AtomicRef, AtomicRefMut, SmallVec, tracing_wrappers::*},
 };
 use std::ops::{Deref, DerefMut};
 
@@ -72,6 +73,137 @@ pub struct TransformStepChunk {
     // in the same layer have no inter-dependencies, they can be run at the
     // same time.
     pub(in super::super) layer: usize,
+}
+
+#[derive(Debug, PartialEq, Eq, Clone, Copy)]
+enum SqueezeStepKind {
+    Regular,
+    Upsample1D,
+    Upsample2D,
+}
+
+#[derive(Debug)]
+struct SqueezeInfo<T> {
+    kind: SqueezeStepKind,
+    out_rect: Rect,
+    in_avg: T,
+    avg_rect: Rect,
+    in_res: T,
+    res_rect: Rect,
+    in_next_avg: Option<T>,
+    out_prev: Option<T>,
+    next_avg_rect: Option<Rect>,
+}
+
+fn borrow_channel(
+    buffers: &[ModularBufferInfo],
+    x: (usize, usize),
+) -> AtomicRef<'_, ModularChannel> {
+    AtomicRef::map(buffers[x.0].buffer_grid[x.1].data.borrow(), |x| {
+        x.as_ref().unwrap()
+    })
+}
+
+impl SqueezeInfo<(usize, usize)> {
+    fn new(
+        buffers: &[ModularBufferInfo],
+        buf_in: [usize; 2],
+        buf_out: usize,
+        buf_in_avg: Option<[usize; 2]>,
+        output_grid_pos: (usize, usize),
+        frame_header: &FrameHeader,
+        vertical: bool,
+    ) -> Self {
+        let buf_avg = &buffers[buf_in[0]];
+        let buf_res = &buffers[buf_in[1]];
+        let output_grid_kind = buffers[buf_out].grid_kind;
+        let in_grid = buf_avg.get_grid_idx(output_grid_kind, output_grid_pos);
+        let res_grid = buf_res.get_grid_idx(output_grid_kind, output_grid_pos);
+        let kind = if buf_res.buffer_grid[res_grid].get_status() != BUFFER_STATUS_ZERO_FILLED {
+            SqueezeStepKind::Regular
+        } else if let Some([_, res2_buf]) = buf_in_avg {
+            let res2_grid = buffers[res2_buf].get_grid_idx(output_grid_kind, output_grid_pos);
+            if buffers[res2_buf].buffer_grid[res2_grid].get_status() == BUFFER_STATUS_ZERO_FILLED {
+                SqueezeStepKind::Upsample2D
+            } else {
+                SqueezeStepKind::Upsample1D
+            }
+        } else {
+            SqueezeStepKind::Upsample1D
+        };
+        let (gx, gy) = output_grid_pos;
+        let mut out_rect =
+            buffers[buf_out].get_grid_rect(frame_header, output_grid_kind, output_grid_pos);
+        out_rect.origin = if output_grid_kind == ModularGridKind::None {
+            (0, 0)
+        } else {
+            let out_shift = buffers[buf_out].info.shift.unwrap_or((0, 0));
+            let out_grid_dim = output_grid_kind.grid_dim(frame_header, out_shift);
+            (gx * out_grid_dim.0, gy * out_grid_dim.1)
+        };
+        let pos_next = if vertical {
+            (gy + 1 < buffers[buf_out].grid_shape.1).then_some((gx, gy + 1))
+        } else {
+            (gx + 1 < buffers[buf_out].grid_shape.0).then_some((gx + 1, gy))
+        };
+        let pos_prev = if vertical {
+            (gy > 0).then_some((gx, gy - 1))
+        } else {
+            (gx > 0).then_some((gx - 1, gy))
+        };
+        let next_avg_grid = pos_next.map(|x| buf_avg.get_grid_idx(output_grid_kind, x));
+        let prev_out_grid = pos_prev.map(|x| buffers[buf_out].get_grid_idx(output_grid_kind, x));
+        let next_avg_rect =
+            pos_next.map(|x| buf_avg.get_grid_rect(frame_header, output_grid_kind, x));
+        Self {
+            kind,
+            out_rect,
+            in_avg: (buf_in[0], in_grid),
+            avg_rect: buf_avg.get_grid_rect(frame_header, output_grid_kind, output_grid_pos),
+            in_res: (buf_in[1], res_grid),
+            res_rect: buf_res.get_grid_rect(frame_header, output_grid_kind, output_grid_pos),
+            in_next_avg: next_avg_grid.map(|x| (buf_in[0], x)),
+            out_prev: prev_out_grid.map(|x| (buf_out, x)),
+            next_avg_rect,
+        }
+    }
+
+    // The lifetimes prevent calling decrement_refs while buffers are still borrowed.
+    fn borrow<'a>(
+        &'a self,
+        buffers: &'a [ModularBufferInfo],
+    ) -> SqueezeInfo<AtomicRef<'a, ModularChannel>> {
+        SqueezeInfo {
+            kind: self.kind,
+            out_rect: self.out_rect,
+            in_avg: borrow_channel(buffers, self.in_avg),
+            avg_rect: self.avg_rect,
+            in_res: borrow_channel(buffers, self.in_res),
+            res_rect: self.res_rect,
+            in_next_avg: self.in_next_avg.map(|x| borrow_channel(buffers, x)),
+            out_prev: self.out_prev.map(|x| borrow_channel(buffers, x)),
+            next_avg_rect: self.next_avg_rect,
+        }
+    }
+
+    fn decrement_refs(self, buffers: &[ModularBufferInfo], is_final: bool) {
+        buffers[self.in_avg.0].buffer_grid[self.in_avg.1].mark_used(is_final);
+        buffers[self.in_res.0].buffer_grid[self.in_res.1].mark_used(is_final);
+    }
+}
+
+impl<'a> SqueezeInfo<AtomicRef<'a, ModularChannel>> {
+    fn in_avg_rect(&self) -> ImageRect<'_, i32> {
+        self.in_avg.data.get_rect(self.avg_rect)
+    }
+    fn in_res_rect(&self) -> ImageRect<'_, i32> {
+        self.in_res.data.get_rect(self.res_rect)
+    }
+    fn in_next_avg_rect(&self) -> Option<ImageRect<'_, i32>> {
+        self.in_next_avg
+            .as_ref()
+            .map(|x| x.data.get_rect(self.next_avg_rect.unwrap()))
+    }
 }
 
 impl TransformStepChunk {
@@ -267,222 +399,116 @@ impl TransformStepChunk {
                 buf_out,
                 buf_in_avg,
             } => {
-                let buf_avg = &buffers[buf_in[0]];
-                let buf_res = &buffers[buf_in[1]];
-                let in_grid = buf_avg.get_grid_idx(out_grid_kind, self.grid_pos);
-                let res_grid = buf_res.get_grid_idx(out_grid_kind, self.grid_pos);
-                let zero_res =
-                    buf_res.buffer_grid[res_grid].get_status() == BUFFER_STATUS_ZERO_FILLED;
-                let double_zero_res = zero_res
-                    && buf_in_avg.is_some_and(|x| {
-                        let avg2_res_grid =
-                            buffers[x[1]].get_grid_idx(out_grid_kind, self.grid_pos);
-                        buffers[x[1]].buffer_grid[avg2_res_grid].get_status()
-                            == BUFFER_STATUS_ZERO_FILLED
-                    });
+                let info = SqueezeInfo::new(
+                    buffers,
+                    *buf_in,
+                    *buf_out,
+                    *buf_in_avg,
+                    self.grid_pos,
+                    frame_header,
+                    false,
+                );
+                trace!(
+                    "HSqueeze {:?} -> {:?}, grid {out_grid} grid pos {:?}: {info:?}",
+                    buf_in, buf_out, self.grid_pos
+                );
                 {
-                    trace!(
-                        "HSqueeze {:?} -> {:?}, grid {out_grid} grid pos {:?}",
-                        buf_in, buf_out, self.grid_pos
-                    );
-                    let (gx, gy) = self.grid_pos;
-                    let mut out_rect =
-                        buffers[*buf_out].get_grid_rect(frame_header, out_grid_kind, (gx, gy));
-                    out_rect.origin = if out_grid_kind == ModularGridKind::None {
-                        (0, 0)
-                    } else {
-                        let out_shift = buffers[*buf_out].info.shift.unwrap_or((0, 0));
-                        let out_grid_dim = out_grid_kind.grid_dim(frame_header, out_shift);
-                        (gx * out_grid_dim.0, gy * out_grid_dim.1)
-                    };
-                    let in_avg = AtomicRef::map(buf_avg.buffer_grid[in_grid].data.borrow(), |x| {
-                        x.as_ref().unwrap()
-                    });
-                    let has_next = gx + 1 < buffers[*buf_out].grid_shape.0;
-                    let gx_next = if has_next { gx + 1 } else { gx };
-                    let next_avg_grid = buf_avg.get_grid_idx(out_grid_kind, (gx_next, gy));
-                    let in_next_avg =
-                        AtomicRef::map(buf_avg.buffer_grid[next_avg_grid].data.borrow(), |x| {
-                            x.as_ref().unwrap()
-                        });
-                    let in_next_avg_rect = if has_next {
-                        Some(in_next_avg.data.get_rect(buf_avg.get_grid_rect(
-                            frame_header,
-                            out_grid_kind,
-                            (gx_next, gy),
-                        )))
-                    } else {
-                        None
-                    };
-                    let in_res = AtomicRef::map(buf_res.buffer_grid[res_grid].data.borrow(), |x| {
-                        x.as_ref().unwrap()
-                    });
-                    let out_prev = if gx == 0 {
-                        None
-                    } else {
-                        let prev_out_grid =
-                            buffers[*buf_out].get_grid_idx(out_grid_kind, (gx - 1, gy));
-                        Some(AtomicRef::map(
-                            buffers[*buf_out].buffer_grid[prev_out_grid].data.borrow(),
-                            |x| x.as_ref().unwrap(),
-                        ))
-                    };
-
+                    let info = info.borrow(buffers);
                     with_buffers(buffers, &[*buf_out], out_grid, |mut bufs| {
                         if bufs.is_empty() {
                             return Ok(());
                         }
-                        if double_zero_res {
-                            assert_eq!(bufs.len(), 1);
-                            smooth_2d_unsqueeze(
-                                &buffers[buf_in_avg.unwrap()[0]],
-                                frame_header,
-                                out_rect,
-                                &mut bufs[0].data,
-                                &mut tranform_scratch_space.smooth_unsqueeze_buffer,
-                            );
-                            return Ok(());
+                        match info.kind {
+                            SqueezeStepKind::Upsample2D => {
+                                assert_eq!(bufs.len(), 1);
+                                smooth_2d_unsqueeze(
+                                    &buffers[buf_in_avg.unwrap()[0]],
+                                    frame_header,
+                                    info.out_rect,
+                                    &mut bufs[0].data,
+                                    &mut tranform_scratch_space.smooth_unsqueeze_buffer,
+                                )
+                            }
+                            SqueezeStepKind::Upsample1D => {
+                                assert_eq!(bufs.len(), 1);
+                                smooth_h_unsqueeze(
+                                    &buffers[buf_in[0]],
+                                    frame_header,
+                                    info.out_rect,
+                                    &mut bufs[0].data,
+                                    &mut tranform_scratch_space.smooth_unsqueeze_buffer,
+                                )
+                            }
+                            SqueezeStepKind::Regular => super::squeeze::do_hsqueeze_step(
+                                &info.in_avg_rect(),
+                                &info.in_res_rect(),
+                                &info.in_next_avg_rect(),
+                                &info.out_prev,
+                                &mut bufs,
+                            ),
                         }
-                        if zero_res {
-                            assert_eq!(bufs.len(), 1);
-                            smooth_h_unsqueeze(
-                                buf_avg,
-                                frame_header,
-                                out_rect,
-                                &mut bufs[0].data,
-                                &mut tranform_scratch_space.smooth_unsqueeze_buffer,
-                            );
-                            return Ok(());
-                        }
-                        super::squeeze::do_hsqueeze_step(
-                            &in_avg.data.get_rect(buf_avg.get_grid_rect(
-                                frame_header,
-                                out_grid_kind,
-                                (gx, gy),
-                            )),
-                            &in_res.data.get_rect(buf_res.get_grid_rect(
-                                frame_header,
-                                out_grid_kind,
-                                (gx, gy),
-                            )),
-                            &in_next_avg_rect,
-                            &out_prev,
-                            &mut bufs,
-                        );
                         Ok(())
                     })?;
                 }
-                buffers[buf_in[0]].buffer_grid[in_grid].mark_used(is_final);
-                buffers[buf_in[1]].buffer_grid[res_grid].mark_used(is_final);
+                info.decrement_refs(buffers, is_final);
             }
             TransformStep::VSqueeze {
                 buf_in,
                 buf_out,
                 buf_in_avg,
             } => {
-                let buf_avg = &buffers[buf_in[0]];
-                let buf_res = &buffers[buf_in[1]];
-                let in_grid = buf_avg.get_grid_idx(out_grid_kind, self.grid_pos);
-                let res_grid = buf_res.get_grid_idx(out_grid_kind, self.grid_pos);
-                let zero_res =
-                    buf_res.buffer_grid[res_grid].get_status() == BUFFER_STATUS_ZERO_FILLED;
-                let double_zero_res = zero_res
-                    && buf_in_avg.is_some_and(|x| {
-                        let avg2_res_grid =
-                            buffers[x[1]].get_grid_idx(out_grid_kind, self.grid_pos);
-                        buffers[x[1]].buffer_grid[avg2_res_grid].get_status()
-                            == BUFFER_STATUS_ZERO_FILLED
-                    });
+                let info = SqueezeInfo::new(
+                    buffers,
+                    *buf_in,
+                    *buf_out,
+                    *buf_in_avg,
+                    self.grid_pos,
+                    frame_header,
+                    true,
+                );
+                trace!(
+                    "VSqueeze {:?} -> {:?}, grid {out_grid} grid pos {:?}: {info:?}",
+                    buf_in, buf_out, self.grid_pos
+                );
                 {
-                    trace!(
-                        "VSqueeze {:?} -> {:?} grid: {out_grid:?} grid pos: {:?}",
-                        buf_in, buf_out, self.grid_pos
-                    );
-                    let (gx, gy) = self.grid_pos;
-                    let mut out_rect =
-                        buffers[*buf_out].get_grid_rect(frame_header, out_grid_kind, (gx, gy));
-                    out_rect.origin = if out_grid_kind == ModularGridKind::None {
-                        (0, 0)
-                    } else {
-                        let out_shift = buffers[*buf_out].info.shift.unwrap_or((0, 0));
-                        let out_grid_dim = out_grid_kind.grid_dim(frame_header, out_shift);
-                        (gx * out_grid_dim.0, gy * out_grid_dim.1)
-                    };
-                    let in_avg = AtomicRef::map(buf_avg.buffer_grid[in_grid].data.borrow(), |x| {
-                        x.as_ref().unwrap()
-                    });
-                    let has_next = gy + 1 < buffers[*buf_out].grid_shape.1;
-                    let gy_next = if has_next { gy + 1 } else { gy };
-                    let next_avg_grid = buf_avg.get_grid_idx(out_grid_kind, (gx, gy_next));
-                    let in_next_avg =
-                        AtomicRef::map(buf_avg.buffer_grid[next_avg_grid].data.borrow(), |x| {
-                            x.as_ref().unwrap()
-                        });
-                    let in_next_avg_rect = if has_next {
-                        Some(in_next_avg.data.get_rect(buf_avg.get_grid_rect(
-                            frame_header,
-                            out_grid_kind,
-                            (gx, gy_next),
-                        )))
-                    } else {
-                        None
-                    };
-                    let in_res = AtomicRef::map(buf_res.buffer_grid[res_grid].data.borrow(), |x| {
-                        x.as_ref().unwrap()
-                    });
-                    let out_prev = if gy == 0 {
-                        None
-                    } else {
-                        let prev_out_grid =
-                            buffers[*buf_out].get_grid_idx(out_grid_kind, (gx, gy - 1));
-                        Some(AtomicRef::map(
-                            buffers[*buf_out].buffer_grid[prev_out_grid].data.borrow(),
-                            |x| x.as_ref().unwrap(),
-                        ))
-                    };
-                    let avg_grid_rect =
-                        buf_avg.get_grid_rect(frame_header, out_grid_kind, (gx, gy));
-                    let res_grid_rect =
-                        buf_res.get_grid_rect(frame_header, out_grid_kind, (gx, gy));
-
+                    let info = info.borrow(buffers);
                     with_buffers(buffers, &[*buf_out], out_grid, |mut bufs| {
                         if bufs.is_empty() {
                             return Ok(());
                         }
-                        if double_zero_res {
-                            assert_eq!(bufs.len(), 1);
-                            smooth_2d_unsqueeze(
-                                &buffers[buf_in_avg.unwrap()[0]],
-                                frame_header,
-                                out_rect,
-                                &mut bufs[0].data,
-                                &mut tranform_scratch_space.smooth_unsqueeze_buffer,
-                            );
-                            return Ok(());
+                        match info.kind {
+                            SqueezeStepKind::Upsample2D => {
+                                assert_eq!(bufs.len(), 1);
+                                smooth_2d_unsqueeze(
+                                    &buffers[buf_in_avg.unwrap()[0]],
+                                    frame_header,
+                                    info.out_rect,
+                                    &mut bufs[0].data,
+                                    &mut tranform_scratch_space.smooth_unsqueeze_buffer,
+                                )
+                            }
+                            SqueezeStepKind::Upsample1D => {
+                                assert_eq!(bufs.len(), 1);
+                                smooth_v_unsqueeze(
+                                    &buffers[buf_in[0]],
+                                    frame_header,
+                                    info.out_rect,
+                                    &mut bufs[0].data,
+                                    &mut tranform_scratch_space.smooth_unsqueeze_buffer,
+                                )
+                            }
+                            SqueezeStepKind::Regular => super::squeeze::do_vsqueeze_step(
+                                &info.in_avg_rect(),
+                                &info.in_res_rect(),
+                                &info.in_next_avg_rect(),
+                                &info.out_prev,
+                                &mut bufs,
+                            ),
                         }
-                        if zero_res {
-                            assert_eq!(bufs.len(), 1);
-                            smooth_v_unsqueeze(
-                                buf_avg,
-                                frame_header,
-                                out_rect,
-                                &mut bufs[0].data,
-                                &mut tranform_scratch_space.smooth_unsqueeze_buffer,
-                            );
-                            return Ok(());
-                        }
-                        super::squeeze::do_vsqueeze_step(
-                            &in_avg.data.get_rect(avg_grid_rect),
-                            &in_res.data.get_rect(res_grid_rect),
-                            &in_next_avg_rect,
-                            &out_prev,
-                            &mut bufs,
-                        );
                         Ok(())
                     })?;
                 }
-                buffers[buf_in[0]].buffer_grid[in_grid].mark_used(is_final);
-                buffers[buf_in[1]].buffer_grid[res_grid].mark_used(is_final);
+                info.decrement_refs(buffers, is_final);
             }
         };
 
