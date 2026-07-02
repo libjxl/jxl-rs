@@ -169,8 +169,6 @@ impl CodestreamParser {
                         unreachable!()
                     };
                     frame.decode_lf_group(group, &mut BitReader::new(&lf_section.data))?;
-                    // TODO(veluca): sufficiently large progressive Modular images can
-                    // produce new output with new LF groups. We should handle that case.
                     processed_section = true;
                     self.section_state.remaining_lf -= 1;
                 }

@@ -5,7 +5,7 @@
 
 use std::{
     fmt::Debug,
-    sync::atomic::{AtomicBool, AtomicUsize, Ordering},
+    sync::atomic::{AtomicUsize, Ordering},
 };
 
 use crate::{
@@ -79,16 +79,13 @@ pub struct TransformStepChunk {
     // Number of dependencies that are still missing *during this progressive
     // preview phase*.
     pub(super) missing_deps: AtomicUsize,
-
-    // True if we intend to run this transform *during this phase*.
-    pub(super) do_render: AtomicBool,
 }
 
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
 enum SqueezeStepKind {
     Regular,
-    Upsample1D,
-    Upsample2D,
+    Upsample1D(usize, usize),
+    Upsample2D(usize, usize),
 }
 
 #[derive(Debug)]
@@ -130,15 +127,16 @@ impl SqueezeInfo<(usize, usize)> {
         let res_grid = buf_res.get_grid_idx(output_grid_kind, output_grid_pos);
         let kind = if buf_res.buffer_grid[res_grid].data_status != DataStatus::Zero {
             SqueezeStepKind::Regular
-        } else if let Some([_, res2_buf]) = buf_in_avg {
+        } else if let Some([avg2_buf, res2_buf]) = buf_in_avg {
+            let avg2_grid = buffers[avg2_buf].get_grid_idx(output_grid_kind, output_grid_pos);
             let res2_grid = buffers[res2_buf].get_grid_idx(output_grid_kind, output_grid_pos);
             if buffers[res2_buf].buffer_grid[res2_grid].data_status == DataStatus::Zero {
-                SqueezeStepKind::Upsample2D
+                SqueezeStepKind::Upsample2D(avg2_buf, avg2_grid)
             } else {
-                SqueezeStepKind::Upsample1D
+                SqueezeStepKind::Upsample1D(buf_in[0], in_grid)
             }
         } else {
-            SqueezeStepKind::Upsample1D
+            SqueezeStepKind::Upsample1D(buf_in[0], in_grid)
         };
         let (gx, gy) = output_grid_pos;
         let mut out_rect =
@@ -151,14 +149,14 @@ impl SqueezeInfo<(usize, usize)> {
             (gx * out_grid_dim.0, gy * out_grid_dim.1)
         };
         let pos_next = if vertical {
-            (gy + 1 < buffers[buf_out].grid_shape.1).then_some((gx, gy + 1))
+            (gy < buffers[buf_out].grid_shape.1 - 1).then(|| (gx, gy + 1))
         } else {
-            (gx + 1 < buffers[buf_out].grid_shape.0).then_some((gx + 1, gy))
+            (gx < buffers[buf_out].grid_shape.0 - 1).then(|| (gx + 1, gy))
         };
         let pos_prev = if vertical {
-            (gy > 0).then_some((gx, gy - 1))
+            (gy > 0).then(|| (gx, gy - 1))
         } else {
-            (gx > 0).then_some((gx - 1, gy))
+            (gx > 0).then(|| (gx - 1, gy))
         };
         let next_avg_grid = pos_next.map(|x| buf_avg.get_grid_idx(output_grid_kind, x));
         let prev_out_grid = pos_prev.map(|x| buffers[buf_out].get_grid_idx(output_grid_kind, x));
@@ -227,34 +225,37 @@ impl TransformStepChunk {
         }
     }
 
-    pub fn output_group(&self) -> Option<usize> {
+    // (group, channel)
+    pub fn output_info(&self) -> Option<(usize, usize)> {
         match &self.step {
-            TransformStep::Output { group, .. } => Some(*group),
+            TransformStep::Output { group, channel, .. } => Some((*group, *channel)),
             _ => None,
         }
     }
 
     // Returns true if this was the last remaining final dep.
     pub fn final_dep_ready(&mut self) -> bool {
-        self.missing_deps.fetch_add(1, Ordering::Relaxed);
         self.missing_final_deps = self.missing_final_deps.checked_sub(1).unwrap();
-        if self.missing_final_deps == 0 {
-            self.do_render.store(true, Ordering::Relaxed);
-        }
         self.missing_final_deps == 0
     }
 
-    // Returns true if this was the last remaining current dep *and* do_render
-    // was true. In that case, clears do_render.
+    pub fn ready_for_final_render(&self) -> bool {
+        self.missing_final_deps == 0
+    }
+
+    pub fn no_current_deps(&self) -> bool {
+        self.missing_deps.load(Ordering::Relaxed) == 0
+    }
+
+    // Returns true if this was the last remaining current dep.
     pub fn current_dep_ready(&self) -> bool {
         let v = self.missing_deps.fetch_sub(1, Ordering::Relaxed);
         assert_ne!(v, 0);
-        if v == 1 {
-            if self.do_render.fetch_and(false, Ordering::Relaxed) {
-                return true;
-            }
-        }
-        false
+        v == 1
+    }
+
+    pub fn add_current_dep(&mut self) {
+        self.missing_deps.fetch_add(1, Ordering::Relaxed);
     }
 
     // Runs this transform. This function *will* crash if the transform is not ready.
@@ -264,7 +265,7 @@ impl TransformStepChunk {
         frame_header: &FrameHeader,
         buffers: &[ModularBufferInfo],
         tranform_scratch_space: &mut TransformScratchSpace,
-        pass_to_pipeline: &mut dyn FnMut(usize, usize, bool, Option<Image<i32>>) -> Result<()>,
+        pass_to_pipeline: &mut dyn FnMut(usize, usize, bool, Image<i32>) -> Result<()>,
     ) -> Result<()> {
         let is_final = self.missing_final_deps == 0;
         let buf_out = self.buf_out();
@@ -304,8 +305,13 @@ impl TransformStepChunk {
                     // Optimistically move the buffers to the output if possible.
                     // If not, creates buffers in the output that are a copy of the input buffers.
                     // This should be rare.
-                    *buffers[buf_out[i]].buffer_grid[out_grid].data.borrow_mut() =
-                        Some(buffers[buf_in[i]].buffer_grid[out_grid].get_buffer(is_final)?);
+                    let b_in = &buffers[buf_in[i]].buffer_grid[out_grid];
+                    let b_out = &buffers[buf_out[i]].buffer_grid[out_grid];
+                    if b_in.data_status == DataStatus::Zero && !b_in.has_buffer() {
+                        b_out.ensure_buffer(&buffers[buf_out[i]].info)?;
+                    } else {
+                        *b_out.data.borrow_mut() = Some(b_in.get_buffer(is_final)?);
+                    }
                 }
                 with_buffers(buffers, buf_out, out_grid, |mut bufs| {
                     super::rct::do_rct_step(&mut bufs, *op, *perm);
@@ -336,14 +342,7 @@ impl TransformStepChunk {
                 assert_eq!(out_size, buffers[*buf_in].info.size);
 
                 {
-                    let img_in =
-                        AtomicRef::map(buffers[*buf_in].buffer_grid[out_grid].data.borrow(), |x| {
-                            x.as_ref().unwrap()
-                        });
-                    let img_pal =
-                        AtomicRef::map(buffers[*buf_pal].buffer_grid[0].data.borrow(), |x| {
-                            x.as_ref().unwrap()
-                        });
+                    let img_pal = borrow_channel(buffers, (*buf_pal, 0));
                     // Ensure that the output buffers are present.
                     // TODO(szabadka): Extend the callback to support many grid points.
                     with_buffers(buffers, buf_out, out_grid, |_| Ok(()))?;
@@ -369,18 +368,34 @@ impl TransformStepChunk {
                     }
                     let mut out_buf_refs: Vec<&mut ModularChannel> =
                         out_bufs.iter_mut().map(|x| x.deref_mut()).collect();
-                    super::palette::do_palette_step_one_group(
-                        &img_in,
-                        &img_pal,
-                        &mut out_buf_refs,
-                        grid_x - grid_x0,
-                        grid_y - grid_y0,
-                        grid_x1 - grid_x0,
-                        grid_y1 - grid_y0,
-                        *num_colors,
-                        *num_deltas,
-                        *predictor,
-                    );
+                    if matches!(predictor, Predictor::Zero)
+                        && buffers[*buf_in].buffer_grid[out_grid].data_status == DataStatus::Zero
+                    {
+                        super::palette::zero_palette_step_one_group(
+                            &img_pal,
+                            &mut out_buf_refs,
+                            grid_x - grid_x0,
+                            grid_y - grid_y0,
+                            grid_x1 - grid_x0,
+                            grid_y1 - grid_y0,
+                            *num_colors,
+                            *num_deltas,
+                        );
+                    } else {
+                        let img_in = borrow_channel(buffers, (*buf_in, out_grid));
+                        super::palette::do_palette_step_one_group(
+                            &img_in,
+                            &img_pal,
+                            &mut out_buf_refs,
+                            grid_x - grid_x0,
+                            grid_y - grid_y0,
+                            grid_x1 - grid_x0,
+                            grid_y1 - grid_y0,
+                            *num_colors,
+                            *num_deltas,
+                            *predictor,
+                        );
+                    }
                 }
                 buffers[*buf_in].buffer_grid[out_grid].mark_used(is_final);
                 buffers[*buf_pal].buffer_grid[0].mark_used(is_final);
@@ -405,20 +420,14 @@ impl TransformStepChunk {
                     let mut in_bufs = vec![];
                     for grid_x in 0..grid_shape.0 {
                         let grid = grid_y * grid_shape.0 + grid_x;
-                        in_bufs.push(AtomicRef::map(
-                            buffers[*buf_in].buffer_grid[grid].data.borrow(),
-                            |x| x.as_ref().unwrap(),
-                        ));
+                        in_bufs.push(borrow_channel(buffers, (*buf_in, grid)));
                         // Ensure that the output buffers are present.
                         // TODO(szabadka): Extend the callback to support many grid points.
                         with_buffers(buffers, buf_out, out_grid + grid_x, |_| Ok(()))?;
                     }
                     let in_buf_refs: Vec<&ModularChannel> =
                         in_bufs.iter().map(|x| x.deref()).collect();
-                    let img_pal =
-                        AtomicRef::map(buffers[*buf_pal].buffer_grid[0].data.borrow(), |x| {
-                            x.as_ref().unwrap()
-                        });
+                    let img_pal = borrow_channel(buffers, (*buf_pal, 0));
                     let mut out_bufs = vec![];
                     for i in buf_out {
                         for grid_y in grid_y0..grid_y1 {
@@ -468,44 +477,44 @@ impl TransformStepChunk {
                     "HSqueeze {:?} -> {:?}, grid {out_grid} grid pos {:?}: {info:?}",
                     buf_in, buf_out, self.grid_pos
                 );
-                {
-                    let info = info.borrow(buffers);
-                    with_buffers(buffers, &[*buf_out], out_grid, |mut bufs| {
-                        if bufs.is_empty() {
-                            return Ok(());
+                with_buffers(buffers, &[*buf_out], out_grid, |mut bufs| {
+                    if bufs.is_empty() {
+                        return Ok(());
+                    }
+                    match info.kind {
+                        SqueezeStepKind::Upsample2D(b, _) => {
+                            assert_eq!(bufs.len(), 1);
+                            smooth_2d_unsqueeze(
+                                &buffers[b],
+                                frame_header,
+                                info.out_rect,
+                                &mut bufs[0].data,
+                                &mut tranform_scratch_space.smooth_unsqueeze_buffer,
+                            )
                         }
-                        match info.kind {
-                            SqueezeStepKind::Upsample2D => {
-                                assert_eq!(bufs.len(), 1);
-                                smooth_2d_unsqueeze(
-                                    &buffers[buf_in_avg.unwrap()[0]],
-                                    frame_header,
-                                    info.out_rect,
-                                    &mut bufs[0].data,
-                                    &mut tranform_scratch_space.smooth_unsqueeze_buffer,
-                                )
-                            }
-                            SqueezeStepKind::Upsample1D => {
-                                assert_eq!(bufs.len(), 1);
-                                smooth_h_unsqueeze(
-                                    &buffers[buf_in[0]],
-                                    frame_header,
-                                    info.out_rect,
-                                    &mut bufs[0].data,
-                                    &mut tranform_scratch_space.smooth_unsqueeze_buffer,
-                                )
-                            }
-                            SqueezeStepKind::Regular => super::squeeze::do_hsqueeze_step(
+                        SqueezeStepKind::Upsample1D(b, _) => {
+                            assert_eq!(bufs.len(), 1);
+                            smooth_h_unsqueeze(
+                                &buffers[b],
+                                frame_header,
+                                info.out_rect,
+                                &mut bufs[0].data,
+                                &mut tranform_scratch_space.smooth_unsqueeze_buffer,
+                            )
+                        }
+                        SqueezeStepKind::Regular => {
+                            let info = info.borrow(buffers);
+                            super::squeeze::do_hsqueeze_step(
                                 &info.in_avg_rect(),
                                 &info.in_res_rect(),
                                 &info.in_next_avg_rect(),
                                 &info.out_prev,
                                 &mut bufs,
-                            ),
+                            )
                         }
-                        Ok(())
-                    })?;
-                }
+                    }
+                    Ok(())
+                })?;
                 info.decrement_refs(buffers, is_final);
             }
             TransformStep::VSqueeze {
@@ -526,44 +535,44 @@ impl TransformStepChunk {
                     "VSqueeze {:?} -> {:?}, grid {out_grid} grid pos {:?}: {info:?}",
                     buf_in, buf_out, self.grid_pos
                 );
-                {
-                    let info = info.borrow(buffers);
-                    with_buffers(buffers, &[*buf_out], out_grid, |mut bufs| {
-                        if bufs.is_empty() {
-                            return Ok(());
+                with_buffers(buffers, &[*buf_out], out_grid, |mut bufs| {
+                    if bufs.is_empty() {
+                        return Ok(());
+                    }
+                    match info.kind {
+                        SqueezeStepKind::Upsample2D(b, _) => {
+                            assert_eq!(bufs.len(), 1);
+                            smooth_2d_unsqueeze(
+                                &buffers[b],
+                                frame_header,
+                                info.out_rect,
+                                &mut bufs[0].data,
+                                &mut tranform_scratch_space.smooth_unsqueeze_buffer,
+                            )
                         }
-                        match info.kind {
-                            SqueezeStepKind::Upsample2D => {
-                                assert_eq!(bufs.len(), 1);
-                                smooth_2d_unsqueeze(
-                                    &buffers[buf_in_avg.unwrap()[0]],
-                                    frame_header,
-                                    info.out_rect,
-                                    &mut bufs[0].data,
-                                    &mut tranform_scratch_space.smooth_unsqueeze_buffer,
-                                )
-                            }
-                            SqueezeStepKind::Upsample1D => {
-                                assert_eq!(bufs.len(), 1);
-                                smooth_v_unsqueeze(
-                                    &buffers[buf_in[0]],
-                                    frame_header,
-                                    info.out_rect,
-                                    &mut bufs[0].data,
-                                    &mut tranform_scratch_space.smooth_unsqueeze_buffer,
-                                )
-                            }
-                            SqueezeStepKind::Regular => super::squeeze::do_vsqueeze_step(
+                        SqueezeStepKind::Upsample1D(b, _) => {
+                            assert_eq!(bufs.len(), 1);
+                            smooth_v_unsqueeze(
+                                &buffers[b],
+                                frame_header,
+                                info.out_rect,
+                                &mut bufs[0].data,
+                                &mut tranform_scratch_space.smooth_unsqueeze_buffer,
+                            )
+                        }
+                        SqueezeStepKind::Regular => {
+                            let info = info.borrow(buffers);
+                            super::squeeze::do_vsqueeze_step(
                                 &info.in_avg_rect(),
                                 &info.in_res_rect(),
                                 &info.in_next_avg_rect(),
                                 &info.out_prev,
                                 &mut bufs,
-                            ),
+                            )
                         }
-                        Ok(())
-                    })?;
-                }
+                    }
+                    Ok(())
+                })?;
                 info.decrement_refs(buffers, is_final);
             }
             TransformStep::Output {
@@ -573,16 +582,22 @@ impl TransformStepChunk {
                 channel,
             } => {
                 debug!("Rendering channel {channel:?}, rect {rect:?}, group {group}");
-                let modular_buf = buffers[*buf_in].buffer_grid[out_grid].get_buffer(is_final)?;
-                if let Some(rect) = rect {
-                    let mut cropped = Image::new(rect.size)?;
-                    let src_view = modular_buf.data.get_rect(*rect);
-                    for y in 0..rect.size.1 {
-                        cropped.row_mut(y).copy_from_slice(src_view.row(y));
-                    }
-                    pass_to_pipeline(*channel, *group, is_final, Some(cropped))?;
+                let buf = &buffers[*buf_in].buffer_grid[out_grid];
+                if buf.data_status == DataStatus::Zero && !buf.has_buffer() {
+                    let zero = Image::new(rect.map(|x| x.size).unwrap_or(buf.size))?;
+                    pass_to_pipeline(*channel, *group, is_final, zero)?;
                 } else {
-                    pass_to_pipeline(*channel, *group, is_final, Some(modular_buf.data))?;
+                    let modular_buf = buf.get_buffer(is_final)?;
+                    if let Some(rect) = rect {
+                        let mut cropped = Image::new(rect.size)?;
+                        let src_view = modular_buf.data.get_rect(*rect);
+                        for y in 0..rect.size.1 {
+                            cropped.row_mut(y).copy_from_slice(src_view.row(y));
+                        }
+                        pass_to_pipeline(*channel, *group, is_final, cropped)?;
+                    } else {
+                        pass_to_pipeline(*channel, *group, is_final, modular_buf.data)?;
+                    }
                 }
             }
         };
@@ -615,5 +630,133 @@ impl TransformStepChunk {
             .iter()
             .flat_map(move |x| (0..grid_offset_up).map(move |y| (*x, out_grid + y)))
             .collect()
+    }
+}
+
+#[derive(Debug)]
+pub struct TransformDependency {
+    pub buffer: usize,
+    pub grid: usize,
+    pub order_only: bool,
+}
+
+impl TransformDependency {
+    fn new(buffer: usize, grid: usize) -> Self {
+        Self {
+            buffer,
+            grid,
+            order_only: false,
+        }
+    }
+
+    fn new_order_only(buffer: usize, grid: usize) -> Self {
+        Self {
+            buffer,
+            grid,
+            order_only: true,
+        }
+    }
+}
+
+impl TransformStepChunk {
+    // List of input buffers for this transform.
+    // We use a stack-size-9 SmallVec because upsampling squeezes touch 9 buffers total (and that is the maximum for
+    // non-delta-palette transforms)
+    pub fn dependecies(
+        &self,
+        buffers: &[ModularBufferInfo],
+        frame_header: &FrameHeader,
+    ) -> SmallVec<TransformDependency, 9> {
+        match &self.step {
+            TransformStep::Rct { buf_in, .. } => {
+                let b = buf_in[0];
+                let grid_idx = buffers[b].get_grid_idx(buffers[b].grid_kind, self.grid_pos);
+                buf_in
+                    .iter()
+                    .map(|x| TransformDependency::new(*x, grid_idx))
+                    .collect()
+            }
+            TransformStep::Output { buf_in, .. } => {
+                let b = *buf_in;
+                let grid_idx = buffers[b].get_grid_idx(buffers[b].grid_kind, self.grid_pos);
+                std::iter::once(TransformDependency::new(b, grid_idx)).collect()
+            }
+            TransformStep::Palette {
+                buf_in,
+                buf_pal,
+                predictor,
+                ..
+            } if !predictor.requires_full_row() => {
+                let b = *buf_in;
+                let grid_idx = buffers[b].get_grid_idx(buffers[b].grid_kind, self.grid_pos);
+                [(b, grid_idx), (*buf_pal, 0)]
+                    .into_iter()
+                    .map(|(a, b)| TransformDependency::new(a, b))
+                    .collect()
+            }
+            TransformStep::Palette {
+                buf_in, buf_pal, ..
+            } => {
+                let b = *buf_in;
+                let mut ans = SmallVec::new();
+                let grid_shape = buffers[b].grid_shape;
+                let grid_idx = buffers[b].get_grid_idx(buffers[b].grid_kind, self.grid_pos);
+                ans.push(TransformDependency::new(*buf_pal, 0));
+                for grid_x in 0..grid_shape.0 {
+                    ans.push(TransformDependency::new(b, grid_idx + grid_x));
+                }
+                ans
+            }
+            TransformStep::VSqueeze {
+                buf_in,
+                buf_out,
+                buf_in_avg,
+            }
+            | TransformStep::HSqueeze {
+                buf_in,
+                buf_out,
+                buf_in_avg,
+            } => {
+                let info = SqueezeInfo::new(
+                    buffers,
+                    *buf_in,
+                    *buf_out,
+                    *buf_in_avg,
+                    self.grid_pos,
+                    frame_header,
+                    matches!(self.step, TransformStep::VSqueeze { .. }),
+                );
+                let mut ans = SmallVec::new();
+                match info.kind {
+                    SqueezeStepKind::Regular => {
+                        ans.push(TransformDependency::new(info.in_avg.0, info.in_avg.1));
+                        ans.push(TransformDependency::new(info.in_res.0, info.in_res.1));
+                        if let Some(na) = info.in_next_avg {
+                            ans.push(TransformDependency::new_order_only(na.0, na.1));
+                        }
+                        if let Some(op) = info.out_prev {
+                            ans.push(TransformDependency::new_order_only(op.0, op.1));
+                        }
+                    }
+                    SqueezeStepKind::Upsample1D(b, g) | SqueezeStepKind::Upsample2D(b, g) => {
+                        let (xs, ys) = buffers[b].grid_shape;
+                        let (gx, gy) = (g % xs, g / xs);
+                        ans.push(TransformDependency::new(b, g));
+                        let mut add = |x, y| {
+                            ans.push(TransformDependency::new_order_only(b, y * xs + x));
+                        };
+                        add(gx.saturating_sub(1), gy.saturating_sub(1));
+                        add(gx, gy.saturating_sub(1));
+                        add((gx + 1).min(xs - 1), gy.saturating_sub(1));
+                        add(gx.saturating_sub(1), gy);
+                        add((gx + 1).min(xs - 1), gy);
+                        add(gx.saturating_sub(1), (gy + 1).min(ys - 1));
+                        add(gx, (gy + 1).min(ys - 1));
+                        add((gx + 1).min(xs - 1), (gy + 1).min(ys - 1));
+                    }
+                }
+                ans
+            }
+        }
     }
 }

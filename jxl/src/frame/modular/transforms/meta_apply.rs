@@ -3,10 +3,7 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-use std::{
-    collections::HashMap,
-    sync::atomic::{AtomicBool, AtomicUsize},
-};
+use std::{collections::HashMap, sync::atomic::AtomicUsize};
 
 use num_traits::FromPrimitive;
 
@@ -402,7 +399,6 @@ pub fn make_grids(
                 grid_pos: (grid_pos.0 as usize, grid_pos.1 as usize),
                 missing_final_deps: 0,
                 missing_deps: AtomicUsize::new(0),
-                do_render: AtomicBool::new(false),
             });
             ts
         };
@@ -648,7 +644,7 @@ pub fn make_grids(
 
     // Write on transform outputs which step produces them.
     for (ts, step) in grid_transform_steps.iter().enumerate() {
-        for &(buf, grid) in step.outputs(&buffer_info).iter() {
+        for &(buf, grid) in step.outputs(buffer_info).iter() {
             buffer_info[buf].buffer_grid[grid].produced_by_step = Some(ts);
         }
     }
@@ -707,7 +703,6 @@ pub fn make_grids(
                             grid_pos: (gx, gy),
                             missing_final_deps: 1,
                             missing_deps: AtomicUsize::new(0),
-                            do_render: AtomicBool::new(false),
                         });
                     }
                 }

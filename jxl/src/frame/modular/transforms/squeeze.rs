@@ -991,6 +991,8 @@ fn make_float<D: SimdDescriptor>(d: D, inp: &[i32], out: &mut [f32]) {
 #[inline(always)]
 fn smooth_2d_unsqueeze_simd_impl<D: SimdDescriptor>(
     d: D,
+    // TODO(veluca): modify this to *not* take a full ModularBufferInfo, but to let the caller
+    // extract appropriate buffers.
     input: &ModularBufferInfo,
     frame_header: &FrameHeader,
     rect: Rect,

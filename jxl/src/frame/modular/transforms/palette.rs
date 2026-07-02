@@ -348,6 +348,37 @@ pub fn do_palette_step_one_group(
 }
 
 #[allow(clippy::too_many_arguments)]
+pub fn zero_palette_step_one_group(
+    buf_pal: &ModularChannel,
+    buf_out: &mut [&mut ModularChannel],
+    grid_x: usize,
+    grid_y: usize,
+    grid_xsize: usize,
+    grid_ysize: usize,
+    num_colors: usize,
+    num_deltas: usize,
+) {
+    let palette = &buf_pal.data;
+    let bit_depth = buf_out[0].bit_depth.bits_per_sample().min(24) as usize;
+    let num_c = buf_out.len() / (grid_xsize * grid_ysize);
+    let (xsize, ysize) = buf_out[0].data.size();
+
+    for c in 0..num_c {
+        let palette_entry = get_palette_value(
+            palette,
+            0,
+            c,
+            /*palette_size=*/ num_colors + num_deltas,
+            /*bit_depth=*/ bit_depth,
+        );
+        for y in 0..ysize {
+            let out_idx = c * grid_ysize * grid_xsize + grid_y * grid_xsize + grid_x;
+            buf_out[out_idx].data.row_mut(y)[..xsize].fill(palette_entry);
+        }
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
 pub fn do_palette_step_group_row(
     buf_in: &[&ModularChannel],
     buf_pal: &ModularChannel,

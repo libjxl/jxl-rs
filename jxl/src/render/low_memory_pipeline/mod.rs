@@ -420,7 +420,13 @@ impl RenderPipeline for LowMemoryRenderPipeline {
     }
 
     fn mark_group_to_rerender(&mut self, g: usize) {
-        self.input_buffers[g].is_ready = false;
+        let all_finalized = (0..self.shared.num_channels())
+            .filter(|&c| self.shared.channel_is_used[c])
+            .all(|c| self.shared.group_chan_complete[g][c]);
+        // The caller will feed back in all the non-ready channels.
+        if !all_finalized {
+            self.input_buffers[g].is_ready = false;
+        }
     }
 
     fn box_inout_stage<S: super::RenderPipelineInOutStage>(

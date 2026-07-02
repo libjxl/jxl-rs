@@ -10,7 +10,10 @@ use std::{
 
 use crate::{
     error::Result,
-    frame::modular::{ChannelInfo, IMAGE_OFFSET, IMAGE_PADDING},
+    frame::{
+        DataStatus,
+        modular::{ChannelInfo, IMAGE_OFFSET, IMAGE_PADDING},
+    },
     headers::bit_depth::BitDepth,
     image::Image,
     util::{AtomicRefCell, AtomicRefMut},
@@ -72,13 +75,6 @@ impl ModularChannel {
     }
 }
 
-#[derive(Debug, PartialEq, Eq)]
-pub(super) enum DataStatus {
-    Zero,
-    Partial,
-    Final,
-}
-
 #[derive(Debug)]
 pub(super) struct ModularBuffer {
     pub(super) data: AtomicRefCell<Option<ModularChannel>>,
@@ -95,6 +91,8 @@ pub(super) struct ModularBuffer {
     // and "partial" is only meaningful for section0 coded buffers.
     pub(super) data_status: DataStatus,
 }
+
+const DISABLE_MODULAR_BUFFER_DEALLOCATION_FOR_DEBUG: bool = false;
 
 impl ModularBuffer {
     pub fn new(size: (usize, usize)) -> Self {
@@ -133,7 +131,7 @@ impl ModularBuffer {
     // Gives out a copy of the buffer + auxiliary buffer, marking the buffer as used.
     // If this was the last usage of the buffer, does not actually copy the buffer.
     pub fn get_buffer(&self, can_consume: bool) -> Result<ModularChannel> {
-        if !can_consume {
+        if !can_consume || DISABLE_MODULAR_BUFFER_DEALLOCATION_FOR_DEBUG {
             return ModularChannel::try_clone(self.data.borrow().as_ref().unwrap());
         }
         let mut ret = None;
@@ -158,7 +156,7 @@ impl ModularBuffer {
     }
 
     pub fn mark_used(&self, can_consume: bool) {
-        if !can_consume {
+        if !can_consume || DISABLE_MODULAR_BUFFER_DEALLOCATION_FOR_DEBUG {
             return;
         }
         let _ = self.remaining_uses.fetch_update(
