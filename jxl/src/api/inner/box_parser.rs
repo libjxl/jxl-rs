@@ -138,6 +138,11 @@ impl BoxParser {
                     return Ok(b);
                 }
                 ParseState::SkippableBox(mut s) => {
+                    if s == 0 {
+                        // Already fully consumed; skipping 0 bytes would loop forever.
+                        self.state = ParseState::BoxNeeded;
+                        continue;
+                    }
                     let num = s.min(usize::MAX as u64) as usize;
                     let skipped = if !self.box_buffer.is_empty() {
                         self.box_buffer.consume(num)
@@ -400,5 +405,27 @@ impl BoxParser {
         } else if amount != 0 {
             unreachable!()
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{BoxParser, ParseState};
+
+    /// Regression: a zero-length skippable box must not leave the parser stuck at
+    /// `SkippableBox(0)` when more container input is available.
+    #[test]
+    fn zero_length_skippable_box_does_not_hang() {
+        let data = include_bytes!("../../../tests/testdata/zero_length_skippable_box.jxl");
+        let mut parser = BoxParser::new();
+        let mut input = data.as_slice();
+
+        for _ in 0..100 {
+            let _ = parser.get_more_codestream(&mut input);
+            if !matches!(parser.state, ParseState::SkippableBox(0)) {
+                return;
+            }
+        }
+        panic!("parser stuck at SkippableBox(0)");
     }
 }
