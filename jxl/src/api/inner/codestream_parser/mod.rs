@@ -625,10 +625,14 @@ impl CodestreamParser {
                         need = need.saturating_sub(c);
                         if need > 0 {
                             self.header_needed_bytes = Some(need);
-                            if !self.non_section_buf.can_read_more() {
+                            let enlarge = !self.non_section_buf.can_read_more();
+                            if enlarge {
                                 self.non_section_buf.enlarge();
                             }
-                            if input.available_bytes().unwrap_or(0) > 0 {
+                            // Only retry when refill made progress or the buffer was
+                            // enlarged to accept more codestream bytes. Do not spin on
+                            // unrelated container bytes when no codestream is available.
+                            if c > 0 || enlarge {
                                 continue;
                             }
                             return Err(Error::OutOfBounds(need as usize));
@@ -646,16 +650,16 @@ impl CodestreamParser {
                             let new_range = self.non_section_buf.range();
                             // If non-section parsing consumed no bytes, and the non-section buffer
                             // cannot accept more bytes, enlarge the buffer to allow to make progress.
-                            if new_range == range && !self.non_section_buf.can_read_more() {
+                            let enlarge =
+                                new_range == range && !self.non_section_buf.can_read_more();
+                            if enlarge {
                                 self.non_section_buf.enlarge();
                             }
                             self.header_needed_bytes = Some(n as u64);
-                            // Check if input still has data - if so, refill and retry
-                            if input.available_bytes().unwrap_or(0) > 0 {
+                            if c > 0 || enlarge {
                                 continue;
-                            } else {
-                                return Err(Error::OutOfBounds(n));
                             }
+                            return Err(Error::OutOfBounds(n));
                         }
                         Err(e) => return Err(e),
                     }
