@@ -263,6 +263,8 @@ pub enum Error {
     IccTableSizeExceeded(usize),
     #[error("I/O error: {0}")]
     IOError(#[from] std::io::Error),
+    #[error("Output pixel format is not set")]
+    PixelFormatNotSet,
     #[error("Wrong buffer count: {0} buffers given, {1} buffers expected")]
     WrongBufferCount(usize, usize),
     #[error("Image is not grayscale, but grayscale output was requested")]

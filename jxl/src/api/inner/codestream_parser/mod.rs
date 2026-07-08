@@ -385,7 +385,9 @@ impl CodestreamParser {
         do_flush: bool,
     ) -> Result<()> {
         if let Some(output_buffers) = &output_buffers {
-            let px = self.pixel_format.as_ref().unwrap();
+            let Some(px) = self.pixel_format.as_ref() else {
+                return Err(Error::PixelFormatNotSet);
+            };
             let expected_len = std::iter::once(&px.color_data_format)
                 .chain(px.extra_channel_format.iter())
                 .filter(|x| x.is_some())

@@ -2034,6 +2034,16 @@ pub(crate) mod tests {
         }
     }
 
+    /// Regression test for Chromium ClusterFuzz issue 526010666.
+    #[test]
+    fn test_flush_pixels_without_pixel_format_no_panic_526010666() {
+        let mut decoder = JxlDecoderInner::new(JxlDecoderOptions::default());
+        let mut pixels = [0u8; 4];
+        let output = JxlOutputBuffer::new(&mut pixels, 1, 4);
+        let err = decoder.flush_pixels(&mut [output]).unwrap_err();
+        assert!(matches!(err, crate::error::Error::PixelFormatNotSet));
+    }
+
     /// Small regression test for issue #728: squeeze transform boundary bug.
     #[test]
     fn test_squeeze_boundary_minimal() {
