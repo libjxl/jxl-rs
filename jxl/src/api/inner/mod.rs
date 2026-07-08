@@ -15,6 +15,7 @@ use codestream_parser::CodestreamParser;
 mod box_parser;
 mod codestream_parser;
 mod process;
+pub(super) use process::ProcessMode;
 
 /// Low-level, less-type-safe API.
 pub struct JxlDecoderInner {
@@ -166,7 +167,7 @@ impl JxlDecoderInner {
 
 #[cfg(test)]
 mod tests {
-    use super::JxlDecoderInner;
+    use super::{JxlDecoderInner, ProcessMode};
     use crate::api::JxlDecoderOptions;
 
     #[test]
@@ -176,7 +177,7 @@ mod tests {
 
         for chunk in data.chunks(64) {
             let mut input = chunk;
-            let _ = decoder.process(&mut input, None);
+            let _ = decoder.process(&mut input, None, ProcessMode::Normal);
 
             if decoder.embedded_color_profile().is_none() {
                 assert!(decoder.basic_info().is_none());

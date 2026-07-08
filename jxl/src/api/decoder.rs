@@ -9,7 +9,11 @@ use super::{
 };
 #[cfg(test)]
 use crate::frame::Frame;
-use crate::{api::JxlFrameHeader, container::frame_index::FrameIndexBox, error::Result};
+use crate::{
+    api::{JxlFrameHeader, inner::ProcessMode},
+    container::frame_index::FrameIndexBox,
+    error::Result,
+};
 use states::*;
 use std::marker::PhantomData;
 
@@ -143,7 +147,7 @@ impl JxlDecoder<Initialized> {
         mut self,
         input: &mut impl JxlBitstreamInput,
     ) -> Result<ProcessingResult<JxlDecoder<WithImageInfo>, Self>> {
-        let inner_result = self.inner.process(input, None)?;
+        let inner_result = self.inner.process(input, None, ProcessMode::Normal)?;
         Ok(self.map_inner_processing_result(inner_result))
     }
 }
@@ -181,7 +185,7 @@ impl JxlDecoder<WithImageInfo> {
         mut self,
         input: &mut impl JxlBitstreamInput,
     ) -> Result<ProcessingResult<JxlDecoder<WithFrameInfo>, Self>> {
-        let inner_result = self.inner.process(input, None)?;
+        let inner_result = self.inner.process(input, None, ProcessMode::Normal)?;
         Ok(self.map_inner_processing_result(inner_result))
     }
 
@@ -258,7 +262,7 @@ impl JxlDecoder<WithFrameInfo> {
         mut self,
         input: &mut impl JxlBitstreamInput,
     ) -> Result<ProcessingResult<JxlDecoder<WithImageInfo>, Self>> {
-        let inner_result = self.inner.process(input, None)?;
+        let inner_result = self.inner.process(input, None, ProcessMode::SkipFrame)?;
         Ok(self.map_inner_processing_result(inner_result))
     }
 
@@ -293,7 +297,9 @@ impl JxlDecoder<WithFrameInfo> {
         input: &mut In,
         buffers: &mut [JxlOutputBuffer<'_>],
     ) -> Result<ProcessingResult<JxlDecoder<WithImageInfo>, Self>> {
-        let inner_result = self.inner.process(input, Some(buffers))?;
+        let inner_result = self
+            .inner
+            .process(input, Some(buffers), ProcessMode::Normal)?;
         Ok(self.map_inner_processing_result(inner_result))
     }
 }
@@ -1706,7 +1712,9 @@ pub(crate) mod tests {
             let mut input = &data[..initial_offset];
 
             // Advance decoder to initial state.
-            while let ProcessingResult::Complete { .. } = decoder.process(&mut input, None).unwrap()
+            while let ProcessingResult::Complete { .. } = decoder
+                .process(&mut input, None, ProcessMode::SkipFrame)
+                .unwrap()
             {
                 if input.is_empty() {
                     break;
@@ -1727,7 +1735,7 @@ pub(crate) mod tests {
 
                 // Advance to Frame Header
                 assert!(matches!(
-                    decoder.process(&mut input, None),
+                    decoder.process(&mut input, None, ProcessMode::Normal),
                     Ok(ProcessingResult::Complete { .. })
                 ));
 
@@ -1774,7 +1782,7 @@ pub(crate) mod tests {
 
                 // Decode frame
                 assert!(matches!(
-                    decoder.process(&mut input, Some(&mut buffers)),
+                    decoder.process(&mut input, Some(&mut buffers), ProcessMode::Normal),
                     Ok(ProcessingResult::Complete { .. })
                 ));
 
@@ -1798,8 +1806,9 @@ pub(crate) mod tests {
                 }
                 let mut extra_input = &input[..extra_bytes];
 
-                while let ProcessingResult::Complete { .. } =
-                    decoder.process(&mut extra_input, None).unwrap()
+                while let ProcessingResult::Complete { .. } = decoder
+                    .process(&mut extra_input, None, ProcessMode::SkipFrame)
+                    .unwrap()
                 {
                     if extra_input.is_empty() {
                         break;
@@ -2000,7 +2009,8 @@ pub(crate) mod tests {
         let mut decoder = JxlDecoderInner::new(opts);
         let mut input = data;
 
-        if let Ok(ProcessingResult::Complete { .. }) = decoder.process(&mut input, None)
+        if let Ok(ProcessingResult::Complete { .. }) =
+            decoder.process(&mut input, None, ProcessMode::Normal)
             && let Some(profile) = decoder.output_color_profile()
         {
             let _ = profile.try_as_icc();
@@ -2030,7 +2040,9 @@ pub(crate) mod tests {
 
         let mut input = data;
         while decoder.has_more_frames() {
-            let _ = decoder.process(&mut input, None).unwrap();
+            let _ = decoder
+                .process(&mut input, None, ProcessMode::Normal)
+                .unwrap();
         }
     }
 
@@ -2112,6 +2124,72 @@ pub(crate) mod tests {
                     b,
                 );
             }
+        }
+    }
+
+    /// Regression test for https://github.com/libjxl/jxl-rs/issues/783.
+    ///
+    /// Interleaving `flush_pixels` with `process` from `WithImageInfo` and then
+    /// `WithFrameInfo` panicked at `assert!(do_flush)` in the codestream parser.
+    #[test]
+    fn flush_then_process_does_not_panic_issue_783() {
+        use crate::api::JxlPixelFormat;
+        use crate::image::OwnedRawImage;
+
+        let input = std::fs::read("resources/issues/issue_783_flush_pixels_panic.jxl").unwrap();
+        let mut buf = &*input;
+
+        let mut initialized_decoder =
+            JxlDecoder::<states::Initialized>::new(JxlDecoderOptions::default());
+        let mut decoder = loop {
+            let result = initialized_decoder.process(&mut buf).unwrap();
+            initialized_decoder = match result {
+                ProcessingResult::Complete { result } => break result,
+                ProcessingResult::NeedsMoreInput { fallback, .. } => fallback,
+            };
+        };
+
+        let new_format = JxlPixelFormat::rgb8(decoder.basic_info().extra_channels.len());
+        decoder.set_pixel_format(new_format);
+
+        let color_type = decoder.current_pixel_format().color_type;
+        let samples_per_pixel = color_type.samples_per_pixel();
+        let image_size = decoder.basic_info().size;
+        let mut output =
+            OwnedRawImage::new((image_size.0 * samples_per_pixel, image_size.1)).unwrap();
+
+        macro_rules! full_buf {
+            () => {{
+                let rect = Rect {
+                    size: output.byte_size(),
+                    origin: (0, 0),
+                };
+                [JxlOutputBuffer::from_image_rect_mut(
+                    output.get_rect_mut(rect),
+                )]
+            }};
+        }
+
+        decoder.flush_pixels(&mut full_buf!()).unwrap();
+
+        let mut decoder_frame = loop {
+            let mut output_buf = full_buf!();
+            let result = decoder.process(&mut buf).unwrap();
+            decoder = match result {
+                ProcessingResult::Complete { result } => break result,
+                ProcessingResult::NeedsMoreInput { fallback, .. } => fallback,
+            };
+            decoder.flush_pixels(&mut output_buf).unwrap();
+        };
+
+        loop {
+            let mut output_buf = full_buf!();
+            let result = decoder_frame.process(&mut buf, &mut output_buf).unwrap();
+            decoder_frame = match result {
+                ProcessingResult::Complete { .. } => break,
+                ProcessingResult::NeedsMoreInput { fallback, .. } => fallback,
+            };
+            decoder_frame.flush_pixels(&mut output_buf).unwrap();
         }
     }
 }
