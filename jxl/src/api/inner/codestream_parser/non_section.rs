@@ -245,6 +245,7 @@ impl CodestreamParser {
 
             self.frame_header = Some(frame_header);
             let bits = br.total_bits_read();
+            self.frame_header_byte_size = bits / 8;
             self.non_section_buf.consume(bits / 8);
             self.non_section_bit_offset = (bits % 8) as u8;
         }
@@ -255,6 +256,7 @@ impl CodestreamParser {
             if self.toc_parser.is_none() {
                 let num_toc_entries = self.frame_header.as_ref().unwrap().num_toc_entries();
                 self.toc_parser = Some(IncrementalTocReader::new(num_toc_entries as u32, &mut br)?);
+                self.toc_byte_size = 0;
             }
 
             let toc_parser = self.toc_parser.as_mut().unwrap();
@@ -264,6 +266,7 @@ impl CodestreamParser {
                     Ok(()) => bits = br.total_bits_read(),
                     Err(Error::OutOfBounds(c)) => {
                         self.non_section_buf.consume(bits / 8);
+                        self.toc_byte_size += bits / 8;
                         self.non_section_bit_offset = (bits % 8) as u8;
                         // Estimate >= 16 bits per remaining entry to read.
                         return Err(Error::OutOfBounds(
@@ -277,6 +280,7 @@ impl CodestreamParser {
 
             bits = br.total_bits_read();
             self.non_section_buf.consume(bits / 8);
+            self.toc_byte_size += bits / 8;
             self.non_section_bit_offset = (bits % 8) as u8;
             self.toc_parser.take().unwrap().finalize()
         };
@@ -286,6 +290,13 @@ impl CodestreamParser {
             toc,
             self.decoder_state.take().unwrap(),
         )?;
+
+        // Absolute codestream offset where this frame's section data begins.
+        frame.set_data_offset(
+            self.current_frame_file_offset as u64
+                + self.frame_header_byte_size as u64
+                + self.toc_byte_size as u64,
+        );
 
         let mut sections: Vec<_> = frame
             .toc()

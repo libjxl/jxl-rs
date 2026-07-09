@@ -84,6 +84,17 @@ pub(super) struct CodestreamParser {
     // the frame is done.
     frame_header: Option<FrameHeader>,
     toc_parser: Option<IncrementalTocReader>,
+    /// Whole bytes consumed by the current frame's header, captured when the
+    /// frame header is parsed and used (together with the TOC byte size) to
+    /// compute the frame's section-data offset.
+    frame_header_byte_size: usize,
+    /// Whole bytes consumed by the current frame's TOC, accumulated across
+    /// process() calls. The TOC can be read incrementally (each OutOfBounds
+    /// retry consumes a partial slice), so this must accumulate rather than be
+    /// recomputed from the final call's BitReader — otherwise the section-data
+    /// offset undercounts by the bytes consumed in earlier retries. Reset to 0
+    /// when a new frame's TOC parse begins.
+    toc_byte_size: usize,
     pub(super) frame: Option<Frame>,
 
     // Buffers.
@@ -165,6 +176,8 @@ impl CodestreamParser {
             is_gray: false,
             frame_header: None,
             toc_parser: None,
+            frame_header_byte_size: 0,
+            toc_byte_size: 0,
             frame: None,
             non_section_buf: SmallBuffer::new(4096),
             non_section_bit_offset: 0,
@@ -196,6 +209,28 @@ impl CodestreamParser {
             #[cfg(test)]
             decoded_frames: 0,
         }
+    }
+
+    /// Number of TOC entries in the current frame, if a frame header has
+    /// been parsed.
+    pub(super) fn toc_num_entries(&self) -> Option<usize> {
+        self.frame.as_ref().map(|f| f.header().num_toc_entries())
+    }
+
+    /// TOC entry at `index` for the current frame, if available.
+    pub(super) fn toc_entry(&self, index: usize) -> Option<crate::api::TocEntry> {
+        self.frame.as_ref().and_then(|f| f.toc_entry(index))
+    }
+
+    /// Total size in bytes of the current frame's section data.
+    pub(super) fn frame_data_size(&self) -> Option<u64> {
+        self.frame.as_ref().map(|f| f.total_bytes_in_toc() as u64)
+    }
+
+    /// Byte offset from the start of the input (including any ISOBMFF
+    /// container) to where the current frame's section data begins.
+    pub(super) fn frame_data_offset(&self) -> Option<u64> {
+        self.frame.as_ref().and_then(|f| f.frame_data_offset())
     }
 
     fn has_visible_frame(&self) -> bool {

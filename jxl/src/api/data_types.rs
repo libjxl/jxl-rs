@@ -288,3 +288,21 @@ pub struct JxlFrameHeader {
     /// Frame size (width, height)
     pub size: (usize, usize),
 }
+
+#[derive(Debug, Copy, Clone, Eq, PartialEq, Hash)]
+pub enum TocGroupKind {
+    All,
+    LfGlobal,
+    LfGroup(u32),
+    HfGlobal,
+    GroupPass { pass_idx: u32, group_idx: u32 },
+}
+
+#[derive(Debug, Copy, Clone)]
+pub struct TocEntry {
+    pub kind: TocGroupKind,
+    /// Offset in bytes from the start of frame data (after the frame header).
+    pub offset: u64,
+    /// Size of the entry in bytes.
+    pub size: u32,
+}

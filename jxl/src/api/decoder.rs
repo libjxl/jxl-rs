@@ -5,7 +5,7 @@
 
 use super::{
     JxlBasicInfo, JxlBitstreamInput, JxlColorProfile, JxlDecoderInner, JxlDecoderOptions,
-    JxlOutputBuffer, JxlPixelFormat, ProcessingResult,
+    JxlOutputBuffer, JxlPixelFormat, ProcessingResult, TocEntry,
 };
 #[cfg(test)]
 use crate::frame::Frame;
@@ -269,6 +269,57 @@ impl JxlDecoder<WithFrameInfo> {
     /// Number of passes we have full data for.
     pub fn num_completed_passes(&self) -> usize {
         self.inner.num_completed_passes().unwrap()
+    }
+
+    /// Returns the number of TOC entries in the current frame.
+    pub fn toc_num_entries(&self) -> usize {
+        self.inner.toc_num_entries().unwrap()
+    }
+
+    /// Returns the TOC entry at the given index, or `None` if out of bounds.
+    ///
+    /// # TOC layout
+    ///
+    /// Entries are returned in bitstream (physical) order. For single-group
+    /// frames there is one [`TocGroupKind::All`] entry. For multi-group frames
+    /// without a TOC permutation the order is:
+    /// - index 0: [`TocGroupKind::LfGlobal`]
+    /// - indices `1..=num_lf_groups`: [`TocGroupKind::LfGroup`]
+    /// - index `1 + num_lf_groups`: [`TocGroupKind::HfGlobal`]
+    /// - the rest: [`TocGroupKind::GroupPass`], pass-major
+    ///
+    /// When the frame has a permuted TOC the same set of kinds is present but
+    /// may appear in any order; each entry's `kind` is resolved through the
+    /// permutation, so identify a section by its `kind`, not by its index.
+    ///
+    /// The entry `offset` is relative to the start of frame data (after the
+    /// frame header) and is the cumulative size of the preceding sections in
+    /// this same bitstream order. Designed for progressive-streaming use cases
+    /// that need section byte boundaries without fully decoding the frame.
+    ///
+    /// [`TocGroupKind::All`]: crate::api::TocGroupKind::All
+    /// [`TocGroupKind::LfGlobal`]: crate::api::TocGroupKind::LfGlobal
+    /// [`TocGroupKind::LfGroup`]: crate::api::TocGroupKind::LfGroup
+    /// [`TocGroupKind::HfGlobal`]: crate::api::TocGroupKind::HfGlobal
+    /// [`TocGroupKind::GroupPass`]: crate::api::TocGroupKind::GroupPass
+    pub fn toc_entry(&self, index: usize) -> Option<TocEntry> {
+        self.inner.toc_entry(index)
+    }
+
+    /// Returns the total size of frame section data in bytes, ie the sum of
+    /// all TOC entry sizes, or the amount of section data
+    /// needed to fully decode the frame (not counting the frame header).
+    pub fn frame_data_size(&self) -> u64 {
+        self.inner.frame_data_size().unwrap()
+    }
+
+    /// Returns the byte offset, from the start of the input (file-absolute,
+    /// including any ISOBMFF container), at which the current frame's
+    /// TOC-described section data begins (immediately after the frame header).
+    ///
+    /// [`toc_entry`](Self::toc_entry) offsets are relative to this position.
+    pub fn frame_data_offset(&self) -> u64 {
+        self.inner.frame_data_offset().unwrap()
     }
 
     /// Draws all the pixels we have data for.
@@ -2111,6 +2162,261 @@ pub(crate) mod tests {
                     g,
                     b,
                 );
+            }
+        }
+    }
+
+    // ---- TOC API tests ------------------------------------------------------
+
+    use crate::api::{TocEntry, TocGroupKind};
+
+    /// Drive a fresh decoder over `file` to the `WithFrameInfo` state, where
+    /// the TOC API is available.
+    fn decode_to_frame_info(file: &[u8]) -> JxlDecoder<WithFrameInfo> {
+        let options = JxlDecoderOptions::default();
+        let mut decoder = JxlDecoder::<states::Initialized>::new(options);
+        let mut input = file;
+        let mut with_info = loop {
+            match decoder.process(&mut input).unwrap() {
+                ProcessingResult::Complete { result } => break result,
+                ProcessingResult::NeedsMoreInput { fallback, .. } => decoder = fallback,
+            }
+        };
+        loop {
+            match with_info.process(&mut input).unwrap() {
+                ProcessingResult::Complete { result } => break result,
+                ProcessingResult::NeedsMoreInput { fallback, .. } => with_info = fallback,
+            }
+        }
+    }
+
+    fn collect_toc(d: &JxlDecoder<WithFrameInfo>) -> Vec<TocEntry> {
+        (0..d.toc_num_entries())
+            .map(|i| d.toc_entry(i).expect("in-range TOC entry"))
+            .collect()
+    }
+
+    /// Invariants that must hold for any valid frame's TOC, derived purely
+    /// from the entries themselves (no external reference decoder).
+    fn assert_toc_invariants(d: &JxlDecoder<WithFrameInfo>) {
+        let entries = collect_toc(d);
+        assert!(!entries.is_empty(), "a frame always has >= 1 TOC entry");
+
+        // Offsets are relative to frame_data_offset, start at 0, and are the
+        // running sum of preceding section sizes (contiguous layout).
+        let mut acc = 0u64;
+        for (i, e) in entries.iter().enumerate() {
+            assert_eq!(e.offset, acc, "entry {i} offset is not contiguous");
+            acc += e.size as u64;
+        }
+        // frame_data_size is the total of all section sizes.
+        assert_eq!(d.frame_data_size(), acc, "frame_data_size != sum of sizes");
+        // Section data starts after the codestream header + frame header + TOC.
+        assert!(d.frame_data_offset() > 0, "frame_data_offset should be > 0");
+
+        // The multiset of kinds must be exactly the JPEG XL section layout —
+        // this validates the (possibly permuted) bitstream-order -> spec-kind
+        // mapping is internally consistent.
+        if entries.len() == 1 {
+            assert_eq!(entries[0].kind, TocGroupKind::All);
+            return;
+        }
+        let mut lf_globals = 0;
+        let mut hf_globals = 0;
+        let mut lf_group_idxs = Vec::new();
+        let mut group_passes = Vec::new();
+        for e in &entries {
+            match e.kind {
+                TocGroupKind::All => panic!("All kind in a multi-entry frame"),
+                TocGroupKind::LfGlobal => lf_globals += 1,
+                TocGroupKind::HfGlobal => hf_globals += 1,
+                TocGroupKind::LfGroup(i) => lf_group_idxs.push(i),
+                TocGroupKind::GroupPass {
+                    pass_idx,
+                    group_idx,
+                } => group_passes.push((pass_idx, group_idx)),
+            }
+        }
+        assert_eq!(lf_globals, 1, "exactly one LfGlobal expected");
+        assert_eq!(hf_globals, 1, "exactly one HfGlobal expected");
+
+        // LfGroup indices form a complete 0..num_lf_groups set.
+        lf_group_idxs.sort_unstable();
+        for (i, idx) in lf_group_idxs.iter().enumerate() {
+            assert_eq!(*idx as usize, i, "LfGroup indices not a contiguous 0..n");
+        }
+
+        // GroupPass (pass, group) pairs form a complete pass x group grid.
+        let num_groups = group_passes.iter().map(|&(_, g)| g).max().unwrap_or(0) as usize + 1;
+        let num_passes = group_passes.len() / num_groups.max(1);
+        assert_eq!(
+            group_passes.len(),
+            num_groups * num_passes,
+            "GroupPass count is not num_groups * num_passes"
+        );
+        let mut seen = std::collections::HashSet::new();
+        for &(p, g) in &group_passes {
+            assert!(seen.insert((p, g)), "duplicate GroupPass ({p}, {g})");
+            assert!((g as usize) < num_groups, "group_idx out of range");
+            assert!((p as usize) < num_passes, "pass_idx out of range");
+        }
+    }
+
+    #[test]
+    fn test_toc_invariants_basic() {
+        let file = std::fs::read("resources/test/basic.jxl").unwrap();
+        assert_toc_invariants(&decode_to_frame_info(&file));
+    }
+
+    #[test]
+    fn test_toc_invariants_multigroup() {
+        // A multi-group image exercises the LfGroup / HfGlobal / GroupPass
+        // layout rather than the single "All" entry.
+        let file = std::fs::read("resources/test/multiple_lf_420.jxl").unwrap();
+        assert_toc_invariants(&decode_to_frame_info(&file));
+    }
+
+    #[test]
+    fn test_toc_invariants_permuted() {
+        // has_permutation.jxl has a permuted TOC; the invariants check that the
+        // bitstream-order -> spec-kind mapping survives the permutation.
+        let file = std::fs::read("resources/test/has_permutation.jxl").unwrap();
+        assert_toc_invariants(&decode_to_frame_info(&file));
+    }
+
+    #[test]
+    fn test_toc_permutation_container_consistency() {
+        // The bare and containerised variants of the same permuted image must
+        // report identical TOC structure (kinds, indices, sizes, relative
+        // offsets) and frame_data_size. Only frame_data_offset differs — the
+        // containerised file's section data starts later by the box overhead.
+        let bare = std::fs::read("resources/test/has_permutation.jxl").unwrap();
+        let cont = std::fs::read("resources/test/has_permutation_with_container.jxl").unwrap();
+
+        let db = decode_to_frame_info(&bare);
+        let dc = decode_to_frame_info(&cont);
+
+        let eb = collect_toc(&db);
+        let ec = collect_toc(&dc);
+
+        assert_eq!(eb.len(), ec.len(), "entry count differs bare vs container");
+        for (i, (b, c)) in eb.iter().zip(ec.iter()).enumerate() {
+            assert_eq!(b.kind, c.kind, "entry {i} kind differs");
+            assert_eq!(b.offset, c.offset, "entry {i} relative offset differs");
+            assert_eq!(b.size, c.size, "entry {i} size differs");
+        }
+        assert_eq!(
+            db.frame_data_size(),
+            dc.frame_data_size(),
+            "frame_data_size differs bare vs container"
+        );
+        assert!(
+            dc.frame_data_offset() > db.frame_data_offset(),
+            "containerised frame_data_offset ({}) should exceed bare ({}) by the \
+             container box overhead",
+            dc.frame_data_offset(),
+            db.frame_data_offset(),
+        );
+    }
+
+    /// Drive a decoder to `WithFrameInfo` by feeding `chunk_size` bytes at a
+    /// time, exercising the incremental `OutOfBounds` parse path (frame header
+    /// + TOC split across multiple `process()` calls).
+    fn decode_to_frame_info_chunked(file: &[u8], chunk_size: usize) -> JxlDecoder<WithFrameInfo> {
+        let options = JxlDecoderOptions::default();
+        let mut decoder = JxlDecoder::<states::Initialized>::new(options);
+        let mut remaining = file;
+        let mut window = &remaining[0..0];
+        // Stage 1: Initialized -> WithImageInfo.
+        let mut with_info = loop {
+            window = &remaining[..(window.len() + chunk_size).min(remaining.len())];
+            let before = window.len();
+            let res = decoder.process(&mut window).unwrap();
+            remaining = &remaining[(before - window.len())..];
+            match res {
+                ProcessingResult::Complete { result } => break result,
+                ProcessingResult::NeedsMoreInput { fallback, .. } => {
+                    assert!(!remaining.is_empty(), "ran out of input before image info");
+                    decoder = fallback;
+                }
+            }
+        };
+        // Stage 2: WithImageInfo -> WithFrameInfo (this is where the TOC is
+        // parsed; small chunks force the OutOfBounds retry path).
+        loop {
+            window = &remaining[..(window.len() + chunk_size).min(remaining.len())];
+            let before = window.len();
+            let res = with_info.process(&mut window).unwrap();
+            remaining = &remaining[(before - window.len())..];
+            match res {
+                ProcessingResult::Complete { result } => break result,
+                ProcessingResult::NeedsMoreInput { fallback, .. } => {
+                    assert!(!remaining.is_empty(), "ran out of input before frame info");
+                    with_info = fallback;
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn test_toc_offset_chunked_matches_single_shot() {
+        // Regression: feeding a frame in tiny chunks splits frame-header + TOC
+        // parsing across multiple process() calls (the OutOfBounds path). The
+        // resulting frame_data_offset / frame_data_size / TOC entries MUST
+        // match the single-shot feed — otherwise the section-data byte anchor
+        // undercounts and every progressive split boundary shifts.
+        for name in [
+            "resources/test/basic.jxl",
+            "resources/test/multiple_lf_420.jxl",
+            "resources/test/has_permutation.jxl",
+            "resources/test/has_permutation_with_container.jxl",
+        ] {
+            let file = std::fs::read(name).unwrap();
+            let single = decode_to_frame_info(&file);
+            let single_offset = single.frame_data_offset();
+            let single_size = single.frame_data_size();
+            let single_entries = collect_toc(&single);
+
+            // 1 byte at a time is the most aggressive split; also test a few
+            // small sizes to vary where the boundary lands.
+            for chunk in [1usize, 3, 7, 17] {
+                let chunked = decode_to_frame_info_chunked(&file, chunk);
+                assert_eq!(
+                    chunked.frame_data_offset(),
+                    single_offset,
+                    "{name}: frame_data_offset differs at chunk_size={chunk} \
+                     (chunked={}, single={single_offset})",
+                    chunked.frame_data_offset(),
+                );
+                assert_eq!(
+                    chunked.frame_data_size(),
+                    single_size,
+                    "{name}: frame_data_size differs at chunk_size={chunk}"
+                );
+                let chunked_entries = collect_toc(&chunked);
+                assert_eq!(
+                    chunked_entries.len(),
+                    single_entries.len(),
+                    "{name}: TOC entry count differs at chunk_size={chunk}"
+                );
+                for (i, (a, b)) in chunked_entries
+                    .iter()
+                    .zip(single_entries.iter())
+                    .enumerate()
+                {
+                    assert_eq!(
+                        a.kind, b.kind,
+                        "{name}: entry {i} kind differs at chunk={chunk}"
+                    );
+                    assert_eq!(
+                        a.offset, b.offset,
+                        "{name}: entry {i} offset differs at chunk={chunk}"
+                    );
+                    assert_eq!(
+                        a.size, b.size,
+                        "{name}: entry {i} size differs at chunk={chunk}"
+                    );
+                }
             }
         }
     }
