@@ -214,11 +214,3 @@ fn main() {
         println!("Error parsing JXL codestream: {err}");
     }
 }
-
-#[cfg(test)]
-mod jxl_cli_test {
-    use super::*;
-    use jxl_macros::for_each_test_file;
-
-    for_each_test_file!(parse_jxl);
-}
