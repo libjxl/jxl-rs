@@ -340,7 +340,7 @@ mod test {
         bytes: &[u8],
         verify: impl Fn(&Frame, usize) -> Result<()> + 'static,
     ) -> Result<usize> {
-        crate::api::tests::decode(bytes, usize::MAX, false, false, Some(Box::new(verify)))
+        crate::tests::decode::decode(bytes, usize::MAX, false, false, Some(Box::new(verify)))
             .map(|x| x.0)
     }
 
