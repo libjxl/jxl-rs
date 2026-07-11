@@ -164,6 +164,7 @@ fn main() -> Result<()> {
             let linear_output = matches!(output_format, Some(OutputFormat::Exr));
             #[cfg(not(feature = "exr"))]
             let linear_output = false;
+            let store_partial_renders = output_format.is_some() && opt.render_interval.is_some();
             let (mut output, duration) = dec::decode_frames(
                 $input,
                 options(skip_preview),
@@ -176,6 +177,7 @@ fn main() -> Result<()> {
                 linear_output,
                 opt.render_interval,
                 opt.allow_partial_files,
+                store_partial_renders,
             )?;
             if opt.preview {
                 output.frames.truncate(1);
