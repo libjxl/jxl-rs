@@ -27,7 +27,7 @@ pub(super) struct InputBuffer {
 
 impl InputBuffer {
     pub(super) fn set_buffer(&mut self, chan: usize, buf: OwnedRawImage) {
-        assert!(self.data[chan].is_none());
+        assert!(self.data[chan].is_none(), "chan: {chan}");
         self.data[chan] = Some(buf);
         self.ready_channels += 1;
     }
@@ -113,6 +113,14 @@ impl LowMemoryRenderPipeline {
     }
 
     fn store_scratch_buffer(&mut self, channel: usize, kind: usize, image: OwnedRawImage) {
+        if kind == 0
+            && let Some(s) = self.group_scratch_buffers_limit
+            && self.scratch_channel_buffers[channel * 3].len() >= s
+        {
+            // We are going over the limit of group-sized scratch buffers for
+            // this channel - avoid storing the buffer.
+            return;
+        }
         self.scratch_channel_buffers[channel * 3 + kind].push(image)
     }
 
@@ -259,6 +267,10 @@ impl LowMemoryRenderPipeline {
                 // (_, 1)
                 _ => group_rect.origin.0 + self.border_size.0,
             };
+
+            if x1 < x0 || y1 < y0 {
+                return Ok(());
+            }
 
             let image_area = Rect {
                 origin: (x0, y0),

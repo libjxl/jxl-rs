@@ -13,7 +13,7 @@ use crate::features::epf::SigmaSource;
 use crate::features::noise::Noise;
 use crate::features::patches::PatchesDictionary;
 use crate::features::spline::Splines;
-use crate::frame::RenderUnit;
+use crate::frame::DataStatus;
 use crate::frame::color_correlation_map::ColorCorrelationParams;
 use crate::frame::quantizer::LfQuantFactors;
 use crate::headers::frame_header::Encoding;
@@ -185,107 +185,136 @@ impl Frame {
 
         pipeline!(self, p, p.render_outside_frame(&mut buffer_splitter)?);
 
+        let should_render_non_final = self.allow_rendering_before_last_pass() && do_flush;
+
         let modular_global = &mut self.lf_global.as_mut().unwrap().modular_global;
 
         modular_global.set_pipeline_used_channels(pipeline!(self, p, p.used_channel_mask()));
 
-        // STEP 1: if we are requesting a flush, and did not flush before, mark modular channels
-        // as having been decoded as 0 if some data has been decoded.
-        if !self.was_flushed_once
-            && do_flush
-            && (modular_global.has_decoded_data() || self.header.encoding == Encoding::VarDCT)
-        {
-            self.was_flushed_once = true;
-            self.groups_to_flush.extend(0..self.header.num_groups());
-            modular_global.zero_fill_empty_channels(
-                self.header.passes.num_passes as usize,
-                self.header.num_groups(),
-                self.header.num_lf_groups(),
-            )?;
-        }
-
-        // STEP 2: ensure that groups that will be re-rendered are marked as such.
-        // VarDCT data to be rendered.
-        for (g, _) in groups.iter() {
-            self.groups_to_flush.insert(*g);
-            pipeline!(self, p, p.mark_group_to_rerender(*g));
-        }
-        // Modular data to be re-rendered.
-        {
-            let modular_global = &mut self.lf_global.as_mut().unwrap().modular_global;
-            for (group, passes) in groups.iter() {
-                for (pass, _) in passes.iter() {
-                    modular_global.mark_group_to_be_read(2 + *pass, *group);
-                }
-            }
-            let mut pass_to_pipeline = |_, group, _, _| {
-                self.groups_to_flush.insert(group);
-                pipeline!(self, p, p.mark_group_to_rerender(group));
-                Ok(())
-            };
-            modular_global.process_output(&self.header, true, &mut pass_to_pipeline)?;
-        }
-
-        // STEP 3: decode the groups, eagerly rendering VarDCT channels and noise.
-        for (group, mut passes) in groups {
-            if self.decode_hf_group(group, &mut passes, &mut buffer_splitter, do_flush)? {
-                self.changed_since_last_flush
-                    .insert((group, RenderUnit::VarDCT));
-            }
-        }
-
-        // STEP 4: process all modular transforms that can now be processed,
-        // flushing buffers that will not be used again, if either we are forcing a render now
-        // or we are done with the file.
-        if self.incomplete_groups == 0 || do_flush {
-            let modular_global = &mut self.lf_global.as_mut().unwrap().modular_global;
-            let mut pass_to_pipeline = |chan, group, complete, image: Option<Image<i32>>| {
-                self.changed_since_last_flush
-                    .insert((group, RenderUnit::Modular(chan)));
-                pipeline!(
-                    self,
-                    p,
-                    p.set_buffer_for_group(
-                        chan,
-                        group,
-                        complete,
-                        image.unwrap(),
-                        &mut buffer_splitter
-                    )?
-                );
-                Ok(())
-            };
-            modular_global.process_output(&self.header, false, &mut pass_to_pipeline)?;
-
-            // STEP 5: re-render VarDCT/noise data in rendered groups for which it was
-            // not rendered, or re-send to pipeline modular channels that were not
-            // updated in those groups.
-            for g in std::mem::take(&mut self.groups_to_flush) {
-                if self
-                    .changed_since_last_flush
-                    .take(&(g, RenderUnit::VarDCT))
-                    .is_none()
+        // STEP 1: figure out what modular buffers will be finalized during this decode, and mark them
+        // as such.
+        for (group, passes) in groups.iter() {
+            self.group_status.need_vardct_flush.insert(*group);
+            self.group_status.need_modular_flush.insert(*group);
+            if self.header.encoding == Encoding::VarDCT {
+                let status = if passes
+                    .last()
+                    .is_some_and(|x| x.0 + 1 >= self.header.passes.num_passes as usize)
                 {
-                    self.decode_hf_group(g, &mut [], &mut buffer_splitter, true)?;
-                }
-                let modular_global = &mut self.lf_global.as_mut().unwrap().modular_global;
-                let mut pass_to_pipeline = |chan, group, complete, image| {
-                    pipeline!(
-                        self,
-                        p,
-                        p.set_buffer_for_group(chan, group, complete, image, &mut buffer_splitter)?
-                    );
-                    Ok(())
+                    DataStatus::Final
+                } else {
+                    DataStatus::Partial
                 };
-                for c in modular_global.channel_range() {
-                    if self
-                        .changed_since_last_flush
-                        .take(&(g, RenderUnit::Modular(c)))
-                        .is_none()
-                    {
-                        modular_global.flush_output(g, c, &mut pass_to_pipeline)?;
+                for c in 0..3 {
+                    self.group_status.update_status(*group, c, status);
+                }
+            }
+            for (pass, _) in passes.iter() {
+                modular_global.mark_final(2 + *pass, *group);
+            }
+        }
+
+        // STEP 2: mark all the groups that will need a progressive re-render if
+        // we are flushing.
+
+        // Request re-renders in updated LF groups if those contain meaningful
+        // data and we are decoding a Modular image.
+        if modular_global.can_do_early_partial_render()
+            && self.section0_render_up_to_date
+            && self.header.encoding == Encoding::Modular
+        {
+            for lg in std::mem::take(&mut self.dirty_lf_groups) {
+                let lgx = lg % self.header.size_lf_groups().0;
+                let lgy = lg / self.header.size_lf_groups().0;
+                let (sgx, sgy) = self.header.size_groups();
+                for iy in 0..8 {
+                    let gy = lgy * 8 + iy;
+                    if gy >= sgy {
+                        continue;
+                    }
+                    for ix in 0..8 {
+                        let gx = lgx * 8 + ix;
+                        if gx >= sgx {
+                            continue;
+                        }
+                        self.group_status.need_modular_flush.insert(gy * sgx + gx);
                     }
                 }
+            }
+        }
+
+        // If section0 data is dirty, re-render everything.
+        if !self.section0_render_up_to_date
+            && (modular_global.has_decoded_data() || self.header.encoding == Encoding::VarDCT)
+        {
+            self.section0_render_up_to_date = true;
+            for g in 0..self.header.num_groups() {
+                self.group_status.need_vardct_flush.insert(g);
+                self.group_status.need_modular_flush.insert(g);
+            }
+        }
+
+        if should_render_non_final {
+            if self.header.encoding == Encoding::VarDCT {
+                for group in self.group_status.need_vardct_flush.iter() {
+                    pipeline!(self, p, p.mark_group_to_rerender(*group));
+                    modular_global.request_rerender(&self.header, *group);
+                }
+            }
+            for group in std::mem::take(&mut self.group_status.need_modular_flush) {
+                modular_global.request_rerender(&self.header, group);
+            }
+        }
+
+        // STEP 3: Run all the transforms that could be run already.
+        // We do this because some modular images might not have coded channels in HF, so
+        // all the coded channels were already decoded and the modular decoder does not
+        // automatically call run_all_transforms unless a new channel is decoded.
+
+        // ... but first, make sure modular_global is ready to run.
+        modular_global.prepare_render(&self.header, |g, c, is_final| {
+            self.group_status.update_status(
+                g,
+                c,
+                if is_final {
+                    DataStatus::Final
+                } else {
+                    DataStatus::Partial
+                },
+            );
+            self.group_status.need_vardct_flush.insert(g);
+            if should_render_non_final {
+                pipeline!(self, p, p.mark_group_to_rerender(g));
+            }
+        });
+
+        let mut pass_to_pipeline = |chan, group, complete, image: Image<i32>| {
+            pipeline!(
+                self,
+                p,
+                p.set_buffer_for_group(chan, group, complete, image, &mut buffer_splitter)?
+            );
+            Ok(())
+        };
+
+        modular_global.run_all_transforms(&self.header, &mut pass_to_pipeline)?;
+
+        // STEP 4: decode the groups, eagerly decoding all the data.
+        for (group, mut passes) in groups {
+            self.decode_hf_group(group, &mut passes, &mut buffer_splitter, do_flush)?;
+        }
+
+        self.lf_global
+            .as_ref()
+            .unwrap()
+            .modular_global
+            .validate_state_after_transforms();
+
+        // STEP 5: re-render VarDCT/noise data in rendered groups for which it was
+        // not rendered.
+        if should_render_non_final || self.group_status.incomplete_groups == 0 {
+            for g in std::mem::take(&mut self.group_status.need_vardct_flush) {
+                self.decode_hf_group(g, &mut [], &mut buffer_splitter, true)?;
             }
         }
 
@@ -303,7 +332,7 @@ impl Frame {
                     &regions[..],
                     output_profile,
                 );
-            } else if self.incomplete_groups == 0 {
+            } else if self.group_status.incomplete_groups == 0 {
                 // If we are not requesting another flush at the end of the LF frame, we
                 // probably have a partial render. Ensure we re-render the LF frame when
                 // decoding the actual frame.
@@ -335,6 +364,12 @@ impl Frame {
             frame_header.size_upsampled(),
             frame_header.upsampling.ilog2() as usize,
             frame_header.log_group_dim(),
+            // TODO(veluca): we should instead have modular mode participate in buffer reuse.
+            if frame_header.encoding == Encoding::Modular {
+                Some(0)
+            } else {
+                None
+            },
         );
 
         if frame_header.encoding == Encoding::Modular {
@@ -742,7 +777,7 @@ impl Frame {
             output_profile,
         )?;
         self.render_pipeline = Some(render_pipeline);
-        self.was_flushed_once = false;
+        self.section0_render_up_to_date = false;
         Ok(())
     }
 }

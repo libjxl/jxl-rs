@@ -10,7 +10,7 @@ use crate::{
     error::{Error, Result},
     frame::modular::{
         IMAGE_OFFSET, ModularChannel, Predictor, Tree, predict::clamped_gradient,
-        transforms::apply::meta_apply_local_transforms, tree::TreeNode,
+        transforms::apply_local::meta_apply_local_transforms, tree::TreeNode,
     },
     headers::{JxlHeader, modular::GroupHeader},
 };
@@ -131,7 +131,7 @@ fn decode_fast_lossless(
 
 // This function will decode a header and apply local transforms if a header is not given.
 // The intended use of passing a header is for the DcGlobal section.
-pub fn decode_modular_subbitstream(
+pub(in crate::frame::modular) fn decode_modular_subbitstream(
     buffers: Vec<&mut ModularChannel>,
     stream_id: usize,
     header: Option<GroupHeader>,

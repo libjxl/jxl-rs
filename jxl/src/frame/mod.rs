@@ -3,7 +3,7 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-use std::{collections::BTreeSet, sync::Arc};
+use std::{collections::HashSet, sync::Arc};
 
 use crate::{
     api::JxlDecoderOptions,
@@ -175,12 +175,55 @@ pub struct HfMetadata {
     used_hf_types: u32,
 }
 
-#[derive(Debug, PartialEq, Eq, PartialOrd, Ord)]
-pub enum RenderUnit {
-    /// VarDCT data
-    VarDCT,
-    /// Modular channel with the given index
-    Modular(usize),
+#[derive(Debug, PartialEq, Eq, Clone, Copy)]
+pub enum DataStatus {
+    Zero,
+    Partial,
+    Final,
+}
+
+// TODO(veluca): consider merging the modular rendering infra
+// with VarDCT rendering infra. That would likely remove the
+// need for this custom tracking.
+#[derive(Debug)]
+struct GroupStatus {
+    // Groups that should be rendered on the next call to flush().
+    need_vardct_flush: HashSet<usize>,
+    need_modular_flush: HashSet<usize>,
+    channel_status: Vec<Vec<DataStatus>>,
+    final_vardct_render_done: HashSet<usize>,
+    incomplete_groups: usize,
+}
+
+impl GroupStatus {
+    fn new(frame_header: &FrameHeader) -> Self {
+        let count = frame_header.num_groups();
+        let ecs = frame_header.num_extra_channels as usize;
+        // We don't track noise channels because we pretend they always
+        // have the same status as VarDCT channels.
+        GroupStatus {
+            need_vardct_flush: HashSet::new(),
+            need_modular_flush: HashSet::new(),
+            channel_status: vec![vec![DataStatus::Zero; 3 + ecs]; count],
+            final_vardct_render_done: HashSet::new(),
+            incomplete_groups: count,
+        }
+    }
+
+    fn update_status(&mut self, group: usize, channel: usize, status: DataStatus) {
+        let ss = &mut self.channel_status[group];
+        let all_complete = ss.iter().all(|x| *x == DataStatus::Final);
+        ss[channel] = status;
+        if !all_complete && ss.iter().all(|x| *x == DataStatus::Final) {
+            self.incomplete_groups = self.incomplete_groups.checked_sub(1).unwrap();
+        }
+    }
+
+    fn colour_complete(&self, group: usize) -> bool {
+        self.channel_status[group][..3]
+            .iter()
+            .all(|x| *x == DataStatus::Final)
+    }
 }
 
 pub struct Frame {
@@ -201,21 +244,19 @@ pub struct Frame {
     render_pipeline: Option<Box<crate::render::LowMemoryRenderPipeline>>,
     reference_frame_data: Option<Vec<Image<f32>>>,
     lf_frame_data: Option<[Image<f32>; 3]>,
-    was_flushed_once: bool,
+    section0_render_up_to_date: bool,
     /// Reusable buffers for VarDCT group decoding.
     vardct_buffers: Option<group::VarDctBuffers>,
-    // Last pass rendered so far for each HF group.
-    last_rendered_pass: Vec<Option<usize>>,
-    // Groups that should be rendered on the next call to flush().
-    groups_to_flush: BTreeSet<usize>,
-    changed_since_last_flush: BTreeSet<(usize, RenderUnit)>,
-    incomplete_groups: usize,
+    group_status: GroupStatus,
     patches: Arc<AtomicRefCell<PatchesDictionary>>,
     splines: Arc<AtomicRefCell<Splines>>,
     noise: Arc<AtomicRefCell<Noise>>,
     lf_quant: Arc<AtomicRefCell<LfQuantFactors>>,
     color_correlation_params: Arc<AtomicRefCell<ColorCorrelationParams>>,
     epf_sigma: Arc<AtomicRefCell<SigmaSource>>,
+    // LF groups that received data and thus should trigger a modular
+    // re-render of the corresponding groups.
+    dirty_lf_groups: HashSet<usize>,
 }
 
 impl Frame {

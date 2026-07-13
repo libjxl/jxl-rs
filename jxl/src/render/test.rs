@@ -104,6 +104,8 @@ fn make_and_run_simple_pipeline_impl<InputT: ImageDataType, OutputT: ImageDataTy
         downsampling_shift,
         LOG_GROUP_SIZE,
         chunk_size,
+        // No need to reuse buffers in tests.
+        Some(0),
     )
     .add_stage_internal(stage);
 
