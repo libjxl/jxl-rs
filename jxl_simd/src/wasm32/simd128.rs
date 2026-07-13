@@ -612,6 +612,16 @@ impl I32SimdVec for I32VecSimd128 {
     }
 
     #[inline(always)]
+    fn load_from_i16(d: Self::Descriptor, mem: &[i16]) -> Self {
+        assert!(mem.len() >= Self::LEN);
+        // SAFETY: we just checked that `mem` has enough space.
+        Self(
+            unsafe { i32x4_extend_low_i16x8(v128_load64_zero(mem.as_ptr().cast())) },
+            d,
+        )
+    }
+
+    #[inline(always)]
     fn store(&self, mem: &mut [i32]) {
         assert!(mem.len() >= Self::LEN);
         // SAFETY: we just checked that `mem` has enough space.

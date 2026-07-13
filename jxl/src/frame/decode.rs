@@ -32,7 +32,8 @@ use crate::{
     error::Result,
     features::{noise::Noise, patches::PatchesDictionary, spline::Splines},
     frame::{
-        DecoderState, Frame, HfGlobalState, HfMetadata, LfGlobalState, PassState, coeff_order,
+        DecoderState, Frame, HfCoefficients, HfGlobalState, HfMetadata, LfGlobalState, PassState,
+        coeff_order,
     },
     headers::{
         color_encoding::ColorSpace,
@@ -508,24 +509,45 @@ impl Frame {
             // keep around the coefficients, so allocate coefficients under those conditions
             // too.
             // TODO(veluca): evaluate whether we can make this check more precise.
-            let hf_coefficients = if passes.len() <= 1
-                && !(self
+            let need_hf_coefficients = passes.len() > 1
+                || (self
                     .lf_global
                     .as_mut()
                     .unwrap()
                     .modular_global
                     .can_do_partial_render()
-                    && self.header.num_extra_channels > 0)
-            {
-                None
+                    && self.header.num_extra_channels > 0);
+
+            let max_bits = passes
+                .iter()
+                .map(|p| p.histograms.max_num_bits())
+                .max()
+                .unwrap_or(0);
+            let pass_log = if passes.len() <= 1 {
+                0
+            } else {
+                (passes.len() - 1).ilog2() as usize + 1
+            };
+            let use_i16 = max_bits.saturating_add(pass_log) < 16;
+
+            let hf_coefficients = if !need_hf_coefficients {
+                HfCoefficients::None
             } else {
                 let xs = GROUP_DIM * GROUP_DIM;
                 let ys = self.header.num_groups();
-                Some((
-                    Image::new((xs, ys))?,
-                    Image::new((xs, ys))?,
-                    Image::new((xs, ys))?,
-                ))
+                if use_i16 {
+                    HfCoefficients::I16([
+                        Image::new((xs, ys))?,
+                        Image::new((xs, ys))?,
+                        Image::new((xs, ys))?,
+                    ])
+                } else {
+                    HfCoefficients::I32([
+                        Image::new((xs, ys))?,
+                        Image::new((xs, ys))?,
+                        Image::new((xs, ys))?,
+                    ])
+                }
             };
 
             self.hf_global = Some(HfGlobalState {

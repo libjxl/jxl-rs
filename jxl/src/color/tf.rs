@@ -452,8 +452,7 @@ pub fn scene_to_hlg_precise(samples: &mut [f32]) {
         let y = if a <= 1.0 / 12.0 {
             (3.0 * a).sqrt()
         } else {
-            // TODO(tirr-c): maybe use mul_add?
-            HLG_A * (12.0 * a - HLG_B).ln() + HLG_C
+            HLG_A.mul_add((12.0 * a - HLG_B).ln(), HLG_C)
         };
         *s = (y as f32).copysign(*s);
     }
@@ -484,10 +483,9 @@ pub fn scene_to_hlg(samples: &mut [f32]) {
         let y = if a <= 1.0 / 12.0 {
             (3.0 * a).sqrt()
         } else {
-            // TODO(tirr-c): maybe use mul_add?
             let log = crate::util::fast_log2f(12.0 * a - HLG_B as f32);
             // log2 x = ln x / ln 2, therefore ln x = (ln 2)(log2 x)
-            (HLG_A * std::f64::consts::LN_2) as f32 * log + HLG_C as f32
+            ((HLG_A * std::f64::consts::LN_2) as f32).mul_add(log, HLG_C as f32)
         };
         *s = y.copysign(*s);
     }
@@ -512,8 +510,7 @@ pub fn hlg_to_scene(samples: &mut [f32]) {
             // Constant: 0.003_639_807_079_052_639
             const MUL: f32 = 0.003_639_807;
 
-            // TODO(OneDeuxTriSeiGo): maybe use mul_add?
-            crate::util::fast_pow2f(a * POW) * MUL + ADD
+            crate::util::fast_pow2f(a * POW).mul_add(MUL, ADD)
         };
         *s = y.copysign(*s);
     }

@@ -577,6 +577,19 @@ impl Histograms {
         self.codes.single_symbol(lz_dist_cluster) == Some(1) && lz_conf.is_split_exponent_zero()
     }
 
+    pub fn max_num_bits(&self) -> usize {
+        match &self.codes {
+            Codes::Ans(ans) => (0..self.uint_configs.len())
+                .map(|i| {
+                    let max_sym = ans.max_symbol_for_cluster(i);
+                    self.uint_configs[i].max_bits_for_symbol(max_sym)
+                })
+                .max()
+                .unwrap_or(0),
+            Codes::Huffman(_) => usize::MAX,
+        }
+    }
+
     pub(crate) fn lz77_params(&self) -> Lz77Params {
         self.lz77_params
     }
