@@ -432,7 +432,9 @@ pub fn run_on_specialized_tree<F: FnOnce(&mut dyn ModularChannelDecoder) -> Resu
 
     // If, after pruning the tree, `is_single_symbol` is true, then `single_symbol` is the
     // only symbol that could possibly be decoded by this tree.
-    let mut is_single_symbol = true;
+    // TODO(veluca): The single-symbol special case corrupts the lz77 window, so it is
+    // disabled for now if lz77 is enabled. Figure out how to make them work together.
+    let mut is_single_symbol = !tree.histograms.lz77_params().enabled;
     let mut single_symbol = None;
 
     // Obtain a pruned tree without nodes that are not relevant in the current channel and stream.
@@ -482,6 +484,11 @@ pub fn run_on_specialized_tree<F: FnOnce(&mut dyn ModularChannelDecoder) -> Resu
                 *id = tree.histograms.map_context_to_cluster(*id as usize) as u32;
                 if is_single_symbol {
                     if let Some(sym) = tree.histograms.single_symbol(*id as usize) {
+                        if sym >= tree.histograms.uint(*id as usize).split_token() {
+                            // This symbol would need extra bits. This is rare enough, so disable
+                            // the optimization.
+                            is_single_symbol = false;
+                        }
                         if single_symbol.is_none() {
                             single_symbol = Some(sym);
                         }
