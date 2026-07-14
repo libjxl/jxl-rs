@@ -227,13 +227,13 @@ impl Frame {
                 let lgx = lg % self.header.size_lf_groups().0;
                 let lgy = lg / self.header.size_lf_groups().0;
                 let (sgx, sgy) = self.header.size_groups();
-                for iy in 0..8 {
-                    let gy = lgy * 8 + iy;
+                for iy in 0..10 {
+                    let gy = (lgy * 8 + iy).saturating_sub(1);
                     if gy >= sgy {
                         continue;
                     }
-                    for ix in 0..8 {
-                        let gx = lgx * 8 + ix;
+                    for ix in 0..10 {
+                        let gx = (lgx * 8 + ix).saturating_sub(1);
                         if gx >= sgx {
                             continue;
                         }
@@ -262,7 +262,26 @@ impl Frame {
                 }
             }
             for group in std::mem::take(&mut self.group_status.need_modular_flush) {
-                modular_global.request_rerender(&self.header, group);
+                if self.header.lf_level != 0 {
+                    let (gsx, gsy) = self.header.size_groups();
+                    let gx = group % gsx;
+                    let gy = group / gsx;
+                    let gxm = gx.saturating_sub(1);
+                    let gxp = (gx + 1).min(gsx - 1);
+                    let gym = gy.saturating_sub(1);
+                    let gyp = (gy + 1).min(gsy - 1);
+                    modular_global.request_rerender(&self.header, gym * gsx + gxm);
+                    modular_global.request_rerender(&self.header, gym * gsx + gx);
+                    modular_global.request_rerender(&self.header, gym * gsx + gxp);
+                    modular_global.request_rerender(&self.header, gy * gsx + gxm);
+                    modular_global.request_rerender(&self.header, gy * gsx + gx);
+                    modular_global.request_rerender(&self.header, gy * gsx + gxp);
+                    modular_global.request_rerender(&self.header, gyp * gsx + gxm);
+                    modular_global.request_rerender(&self.header, gyp * gsx + gx);
+                    modular_global.request_rerender(&self.header, gyp * gsx + gxp);
+                } else {
+                    modular_global.request_rerender(&self.header, group);
+                }
             }
         }
 
