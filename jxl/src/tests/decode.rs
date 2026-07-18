@@ -299,18 +299,7 @@ pub fn compute_mse(actual: &[Image<f32>], reference: &[Image<f32>]) -> f32 {
 pub fn compare_frames(path: &Path, fc: usize, f: &[Image<f32>], sf: &[Image<f32>]) {
     assert_eq!(f.len(), sf.len());
     for (c, (b, sb)) in f.iter().zip(sf.iter()).enumerate() {
-        assert_eq!(b.size(), sb.size());
-        let sz = b.size();
-        for y in 0..sz.1 {
-            let row_b = b.row(y);
-            let row_sb = sb.row(y);
-            for x in 0..sz.0 {
-                assert_eq!(
-                    row_b[x], row_sb[x],
-                    "Pixels differ at ({x}, {y}) channel {c} frame {fc} for {path:?}"
-                );
-            }
-        }
+        crate::tests::assert_image_eq!(b, sb, "channel {} frame {} for {:?}", c, fc, path);
     }
 }
 

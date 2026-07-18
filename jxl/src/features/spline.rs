@@ -905,7 +905,7 @@ mod test_splines {
         error::{Error, Result},
         features::spline::SplineSegment,
         frame::color_correlation_map::ColorCorrelationParams,
-        util::test::{assert_all_almost_abs_eq, assert_almost_abs_eq, assert_almost_eq},
+        tests::assert_close,
     };
 
     use super::{
@@ -1497,7 +1497,8 @@ mod test_splines {
                 got_dequantized.control_points.len(),
                 want_dequantized.control_points.len()
             );
-            assert_all_almost_abs_eq(
+            assert_close!(
+                all,
                 got_dequantized
                     .control_points
                     .iter()
@@ -1510,7 +1511,8 @@ mod test_splines {
                     .collect::<Vec<f32>>(),
                 1e-6,
             );
-            assert_all_almost_abs_eq(
+            assert_close!(
+                all,
                 got_dequantized
                     .control_points
                     .iter()
@@ -1524,13 +1526,15 @@ mod test_splines {
                 1e-6,
             );
             for index in 0..got_dequantized.color_dct.len() {
-                assert_all_almost_abs_eq(
+                assert_close!(
+                    all,
                     got_dequantized.color_dct[index].0,
                     want_dequantized.color_dct[index].0,
                     1e-4,
                 );
             }
-            assert_all_almost_abs_eq(
+            assert_close!(
+                all,
                 got_dequantized.sigma_dct.0,
                 want_dequantized.sigma_dct.0,
                 1e-4,
@@ -1602,7 +1606,8 @@ mod test_splines {
             Point { x: 4.0, y: 3.0 },
         ];
         let got_result = draw_centripetal_catmull_rom_spline(&control_points)?;
-        assert_all_almost_abs_eq(
+        assert_close!(
+            all,
             got_result.iter().map(|p| p.x).collect::<Vec<f32>>(),
             want_result.iter().map(|p| p.x).collect::<Vec<f32>>(),
             1e-10,
@@ -1631,17 +1636,20 @@ mod test_splines {
         for_each_equally_spaced_point(&segments, desired_rendering_distance, |p, d| {
             got_results.push((p, d))
         });
-        assert_all_almost_abs_eq(
+        assert_close!(
+            all,
             got_results.iter().map(|(p, _)| p.x).collect::<Vec<f32>>(),
             want_results.iter().map(|(p, _)| p.x).collect::<Vec<f32>>(),
             1e-9,
         );
-        assert_all_almost_abs_eq(
+        assert_close!(
+            all,
             got_results.iter().map(|(p, _)| p.y).collect::<Vec<f32>>(),
             want_results.iter().map(|(p, _)| p.y).collect::<Vec<f32>>(),
             1e-9,
         );
-        assert_all_almost_abs_eq(
+        assert_close!(
+            all,
             got_results.iter().map(|(_, d)| *d).collect::<Vec<f32>>(),
             want_results.iter().map(|(_, d)| *d).collect::<Vec<f32>>(),
             1e-9,
@@ -1692,7 +1700,7 @@ mod test_splines {
         ];
         for (t, want) in want_out.iter().enumerate() {
             let got_out = dct.continuous_idct(t as f32);
-            assert_almost_abs_eq(got_out, *want, 1e-4);
+            assert_close!(got_out, *want, 1e-4);
         }
         Ok(())
     }
@@ -1710,23 +1718,23 @@ mod test_splines {
             let original = dct.continuous_idct(t_val);
             let precomputed = PrecomputedCosines::new(t_val);
             let fast = dct.continuous_idct_fast(&precomputed);
-            assert_almost_abs_eq(fast, original, 1e-5);
+            assert_close!(fast, original, 1e-5);
         }
     }
 
     fn verify_segment_almost_equal(seg1: &SplineSegment, seg2: &SplineSegment) {
-        assert_almost_eq(seg1.center_x, seg2.center_x, 1e-2, 1e-4);
-        assert_almost_eq(seg1.center_y, seg2.center_y, 1e-2, 1e-4);
+        assert_close!(seg1.center_x, seg2.center_x, 1e-2, rel: 1e-4);
+        assert_close!(seg1.center_y, seg2.center_y, 1e-2, rel: 1e-4);
         for (got, want) in zip(seg1.color.iter(), seg2.color.iter()) {
-            assert_almost_eq(*got, *want, 1e-2, 1e-4);
+            assert_close!(*got, *want, 1e-2, rel: 1e-4);
         }
-        assert_almost_eq(seg1.inv_sigma, seg2.inv_sigma, 1e-2, 1e-4);
-        assert_almost_eq(seg1.maximum_distance, seg2.maximum_distance, 1e-2, 1e-4);
-        assert_almost_eq(
+        assert_close!(seg1.inv_sigma, seg2.inv_sigma, 1e-2, rel: 1e-4);
+        assert_close!(seg1.maximum_distance, seg2.maximum_distance, 1e-2, rel: 1e-4);
+        assert_close!(
             seg1.sigma_over_4_times_intensity,
             seg2.sigma_over_4_times_intensity,
             1e-2,
-            1e-4,
+            rel: 1e-4,
         );
     }
 

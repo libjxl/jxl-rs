@@ -10,6 +10,11 @@ mod api;
 mod compare_incremental;
 pub(crate) mod decode;
 
+#[allow(clippy::single_component_path_imports)]
+pub(crate) use assert_close;
+#[allow(clippy::single_component_path_imports)]
+pub(crate) use assert_image_eq;
+
 declare_test_file!(jpeg_recompression_3x3, "3x3_jpeg_recompression.jxl");
 declare_test_file!(srgb_lossless_3x3, "3x3_srgb_lossless.jxl");
 declare_test_file!(srgb_lossy_3x3, "3x3_srgb_lossy.jxl");

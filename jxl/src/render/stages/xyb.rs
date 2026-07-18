@@ -271,8 +271,8 @@ mod test {
     use crate::headers::encodings::Empty;
     use crate::image::Image;
     use crate::render::test::make_and_run_simple_pipeline;
+    use crate::tests::assert_close;
     use crate::util::round_up_size_to_cache_line;
-    use crate::util::test::assert_all_almost_abs_eq;
     use jxl_simd::{ScalarDescriptor, SimdDescriptor, test_all_instruction_sets};
 
     #[test]
@@ -303,9 +303,9 @@ mod test {
         let output =
             make_and_run_simple_pipeline(stage, &[input_x, input_y, input_b], (3, 1), 0, 256)?;
 
-        assert_all_almost_abs_eq(output[0].row(0), &[1.0, 0.0, 0.0], 1e-6);
-        assert_all_almost_abs_eq(output[1].row(0), &[0.0, 1.0, 0.0], 1e-6);
-        assert_all_almost_abs_eq(output[2].row(0), &[0.0, 0.0, 1.0], 1e-6);
+        assert_close!(all, output[0].row(0), &[1.0, 0.0, 0.0], 1e-6);
+        assert_close!(all, output[1].row(0), &[0.0, 1.0, 0.0], 1e-6);
+        assert_close!(all, output[2].row(0), &[0.0, 0.0, 1.0], 1e-6);
 
         Ok(())
     }
