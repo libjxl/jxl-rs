@@ -643,6 +643,7 @@ dependencies = [
  "arbtest",
  "array-init",
  "byteorder",
+ "criterion",
  "jxl_macros",
  "jxl_simd",
  "jxl_transforms",
