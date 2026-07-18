@@ -38,10 +38,7 @@ fn err_unless_more_container_input(
     box_parser: &BoxParser,
     input: &mut dyn JxlBitstreamInput,
 ) -> Result<()> {
-    if matches!(
-        &box_parser.state,
-        ParseState::BufferingOooJxlp { .. } | ParseState::BufferingFrameIndex(..)
-    ) {
+    if matches!(&box_parser.state, ParseState::BufferingOooJxlp { .. }) {
         return Err(Error::OutOfBounds(1));
     }
     if matches!(&box_parser.state, ParseState::BoxNeeded)

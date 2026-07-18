@@ -10,7 +10,7 @@ use std::path::Path;
 pub fn run(path: &Path, expected_checkpoints: &[(usize, f32)]) {
     let file = std::fs::read(path).unwrap();
     // One-shot decode
-    let (_, one_shot_frames) = decode(&file, usize::MAX, false, false, None).unwrap();
+    let (_, one_shot_frames) = decode(&file).unwrap();
     if one_shot_frames.is_empty() {
         return;
     }

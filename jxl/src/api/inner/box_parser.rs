@@ -5,7 +5,6 @@
 
 use std::{collections::HashMap, io::IoSliceMut};
 
-use crate::container::frame_index::FrameIndexBox;
 use crate::error::{Error, Result};
 
 use crate::api::{
@@ -18,8 +17,6 @@ pub enum ParseState {
     BoxNeeded,
     CodestreamBox(u64),
     SkippableBox(u64),
-    /// Buffering a jxli box: (remaining bytes, accumulated content).
-    BufferingFrameIndex(u64, Vec<u8>),
     /// Read first 8 bytes of `ftyp` for brand+version, then skip `skip_rest` payload bytes.
     FtypHead {
         head: [u8; 8],
@@ -62,8 +59,6 @@ pub(super) struct BoxParser {
     pub(super) box_buffer: SmallBuffer,
     pub(super) state: ParseState,
     box_type: CodestreamBoxType,
-    /// Parsed frame index box, if present in the file.
-    pub(super) frame_index: Option<FrameIndexBox>,
     /// Total file bytes consumed from the underlying input.
     pub(super) total_file_consumed: u64,
     skip_jxlp_checks: bool,
@@ -76,7 +71,6 @@ impl BoxParser {
             box_buffer: SmallBuffer::new(128),
             state: ParseState::SignatureNeeded,
             box_type: CodestreamBoxType::None,
-            frame_index: None,
             total_file_consumed: 0,
             skip_jxlp_checks: false,
             ooo_jxlp: OooJxlpState::default(),
@@ -160,32 +154,6 @@ impl BoxParser {
                         self.state = ParseState::BoxNeeded;
                     } else {
                         self.state = ParseState::SkippableBox(s);
-                    }
-                }
-                ParseState::BufferingFrameIndex(mut remaining, mut buf) => {
-                    let num = remaining.min(usize::MAX as u64) as usize;
-                    if !self.box_buffer.is_empty() {
-                        let take = num.min(self.box_buffer.len());
-                        buf.extend_from_slice(&self.box_buffer[..take]);
-                        self.box_buffer.consume(take);
-                        remaining -= take as u64;
-                    } else {
-                        let old_len = buf.len();
-                        buf.resize(old_len + num, 0);
-                        let read = input.read(&mut [IoSliceMut::new(&mut buf[old_len..])])?;
-                        self.total_file_consumed += read as u64;
-                        if read == 0 {
-                            return Err(Error::OutOfBounds(num));
-                        }
-                        buf.truncate(old_len + read);
-                        remaining -= read as u64;
-                    }
-                    if remaining == 0 {
-                        // Parse the buffered frame index box.
-                        self.frame_index = Some(FrameIndexBox::parse(&buf)?);
-                        self.state = ParseState::BoxNeeded;
-                    } else {
-                        self.state = ParseState::BufferingFrameIndex(remaining, buf);
                     }
                 }
                 ParseState::FtypHead {
@@ -391,16 +359,6 @@ impl BoxParser {
                                 skip_rest: content_len - 8,
                             };
                         }
-                        b"jxli" => {
-                            if content_len == u64::MAX || content_len > 16 * 1024 * 1024 {
-                                self.state = ParseState::SkippableBox(content_len);
-                            } else {
-                                self.state = ParseState::BufferingFrameIndex(
-                                    content_len,
-                                    Vec::with_capacity(content_len as usize),
-                                );
-                            }
-                        }
                         _ => {
                             self.state = ParseState::SkippableBox(content_len);
                         }
@@ -430,7 +388,6 @@ impl BoxParser {
         self.state = ParseState::CodestreamBox(remaining);
         self.skip_jxlp_checks = true;
         self.ooo_jxlp.buffered.clear();
-        // Keep frame_index unchanged.
     }
 
     pub(super) fn consume_codestream(&mut self, amount: u64) {
