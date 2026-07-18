@@ -139,6 +139,8 @@ pub(super) struct CodestreamParser {
     /// Remaining codestream bytes in the current box at frame start.
     /// Captured alongside `current_frame_file_offset`.
     current_frame_remaining_in_box: u64,
+    /// Total length of the file.
+    pub(super) file_length: Option<u64>,
 
     /// Remember whether we are decoding the file sequentially or we seeked.
     did_seek: bool,
@@ -190,6 +192,7 @@ impl CodestreamParser {
             lf_slot_decode_start: [None; DecoderState::NUM_LF_FRAMES],
             current_frame_file_offset: 0,
             current_frame_remaining_in_box: u64::MAX,
+            file_length: None,
             did_seek: false,
             #[cfg(test)]
             frame_callback: None,
@@ -538,6 +541,7 @@ impl CodestreamParser {
                         if let Some(decoder_state) = frame.finalize()? {
                             self.decoder_state = Some(decoder_state);
                         } else {
+                            self.file_length = Some(box_parser.total_file_consumed);
                             self.has_more_frames = false;
                             // Return immediately so we don't re-enter the outer loop and hit the
                             // API-misuse assertion below inside the same call.

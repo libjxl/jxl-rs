@@ -199,6 +199,13 @@ impl JxlDecoder<WithImageInfo> {
         self.inner.has_more_frames()
     }
 
+    /// Returns the total length of the JPEG XL file, once decoding is finished.
+    /// This is needed because the decoder might over-consume bytes from the
+    /// provided input stream in some cases.
+    pub fn file_length(&self) -> Option<u64> {
+        self.inner.file_length()
+    }
+
     /// Resets frame-level decoder state to prepare for decoding a new frame.
     ///
     /// This clears intermediate buffers (frame header, TOC, section data) while

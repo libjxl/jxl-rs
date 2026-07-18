@@ -162,6 +162,10 @@ impl JxlDecoderInner {
     pub(crate) fn set_use_simple_pipeline(&mut self, u: bool) {
         self.codestream_parser.set_use_simple_pipeline(u);
     }
+
+    pub fn file_length(&self) -> Option<u64> {
+        self.codestream_parser.file_length
+    }
 }
 
 #[cfg(test)]
