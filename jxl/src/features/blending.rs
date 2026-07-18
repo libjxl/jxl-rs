@@ -104,9 +104,7 @@ pub fn perform_blending(
                         let oa = old_alpha(alpha)[x];
                         let new_a = 1.0 - (1.0 - fa) * (1.0 - oa);
                         let rnew_a = if new_a > 0.0 { 1.0 / new_a } else { 0.0 };
-                        ec_out[x] = (fg[3 + i][x] * fa
-                            + ec_out[x] * oa * (1.0 - fa))
-                            * rnew_a;
+                        ec_out[x] = (fg[3 + i][x] * fa + ec_out[x] * oa * (1.0 - fa)) * rnew_a;
                     }
                 }
             }
@@ -129,8 +127,7 @@ pub fn perform_blending(
                         let ba = maybe_clamp(oa, clamp);
                         let new_a = 1.0 - (1.0 - ba) * (1.0 - fg[3 + alpha][x]);
                         let rnew_a = if new_a > 0.0 { 1.0 / new_a } else { 0.0 };
-                        ec_out[x] = (ec_out[x] * ba
-                            + fg[3 + i][x] * fg[3 + alpha][x] * (1.0 - ba))
+                        ec_out[x] = (ec_out[x] * ba + fg[3 + i][x] * fg[3 + alpha][x] * (1.0 - ba))
                             * rnew_a;
                     }
                 }
@@ -278,8 +275,9 @@ pub fn perform_blending(
                     let new_a = 1.0 - (1.0 - ba) * (1.0 - fg[3 + alpha][x]);
                     let rnew_a = if new_a > 0.0 { 1.0 / new_a } else { 0.0 };
                     for c in 0..3 {
-                        bg_color[c][x] =
-                            (bg_color[c][x] * ba + fg[c][x] * fg[3 + alpha][x] * (1.0 - ba)) * rnew_a;
+                        bg_color[c][x] = (bg_color[c][x] * ba
+                            + fg[c][x] * fg[3 + alpha][x] * (1.0 - ba))
+                            * rnew_a;
                     }
                     bg_ec[alpha][x] = new_a;
                 }
