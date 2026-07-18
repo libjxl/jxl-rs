@@ -121,7 +121,7 @@ pub fn perform_blending(
                     for x in 0..xsize {
                         let oa = old_alpha(alpha)[x];
                         let ba = maybe_clamp(oa, clamp);
-                        ec_out[x] = ec_out[x] + fg[3 + i][x] * (1.0 - ba);
+                        ec_out[x] += fg[3 + i][x] * (1.0 - ba);
                     }
                 } else {
                     for x in 0..xsize {
@@ -267,7 +267,7 @@ pub fn perform_blending(
                     let oa = old_alpha(alpha)[x];
                     let ba = maybe_clamp(oa, clamp);
                     for c in 0..3 {
-                        bg_color[c][x] = bg_color[c][x] + fg[c][x] * (1.0 - ba);
+                        bg_color[c][x] += fg[c][x] * (1.0 - ba);
                     }
                     bg_ec[alpha][x] = 1.0 - (1.0 - ba) * (1.0 - fg[3 + alpha][x]);
                 }
