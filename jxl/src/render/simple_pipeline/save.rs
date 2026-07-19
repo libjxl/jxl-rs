@@ -94,9 +94,7 @@ impl SaveStage {
 #[cfg(test)]
 mod test {
     use super::*;
-    use crate::{
-        api::JxlColorType, headers::Orientation, image::Rect, util::test::assert_almost_eq,
-    };
+    use crate::{api::JxlColorType, headers::Orientation, image::Rect, tests::assert_close};
     use rand::SeedableRng;
     use rand_xorshift::XorShiftRng;
     use test_log::test;
@@ -179,11 +177,11 @@ mod test {
             for x_dest in 0..ow {
                 // For each destination pixel, find its corresponding source pixel.
                 let (src_x, src_y) = transform(x_dest, y_dest, w, h);
-                assert_almost_eq(
+                assert_close!(
                     dst.row(y_dest)[x_dest],
                     src[0].row(src_y)[src_x] as f32,
                     1e-5,
-                    1e-5,
+                    rel: 1e-5,
                 );
             }
         }

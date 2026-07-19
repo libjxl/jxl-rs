@@ -7,9 +7,9 @@ use super::{
     JxlBasicInfo, JxlBitstreamInput, JxlColorProfile, JxlDecoderInner, JxlDecoderOptions,
     JxlOutputBuffer, JxlPixelFormat, ProcessingResult,
 };
+use crate::{api::JxlFrameHeader, error::Result};
 #[cfg(test)]
-use crate::frame::Frame;
-use crate::{api::JxlFrameHeader, container::frame_index::FrameIndexBox, error::Result};
+use crate::{frame::Frame, headers::FileHeader};
 use states::*;
 use std::marker::PhantomData;
 
@@ -33,7 +33,7 @@ pub struct JxlDecoder<State: JxlState> {
 }
 
 #[cfg(test)]
-pub type FrameCallback = dyn FnMut(&Frame, usize) -> Result<()>;
+pub type FrameCallback = dyn FnMut(&FileHeader, &Frame, usize) -> Result<()>;
 
 /// Information about a single visible frame discovered while decoding.
 #[derive(Debug, Clone, PartialEq)]
@@ -88,18 +88,6 @@ impl<S: JxlState> JxlDecoder<S> {
     #[cfg(test)]
     pub fn decoded_frames(&self) -> usize {
         self.inner.decoded_frames()
-    }
-
-    /// Returns the parsed frame index box, if the file contained one.
-    ///
-    /// The frame index box (`jxli`) is an optional part of the JXL container
-    /// format that provides a seek table for animated files, listing keyframe
-    /// byte offsets, timestamps, and frame counts.
-    ///
-    /// TODO(veluca): Provide a higher-level frame-index API aligned with
-    /// `scanned_frames()` / `VisibleFrameInfo` seek metadata.
-    pub fn frame_index(&self) -> Option<&FrameIndexBox> {
-        self.inner.frame_index()
     }
 
     /// Returns visible frame info entries collected so far.
@@ -197,6 +185,13 @@ impl JxlDecoder<WithImageInfo> {
 
     pub fn has_more_frames(&self) -> bool {
         self.inner.has_more_frames()
+    }
+
+    /// Returns the total length of the JPEG XL file, once decoding is finished.
+    /// This is needed because the decoder might over-consume bytes from the
+    /// provided input stream in some cases.
+    pub fn file_length(&self) -> Option<u64> {
+        self.inner.file_length()
     }
 
     /// Resets frame-level decoder state to prepare for decoding a new frame.

@@ -11,7 +11,6 @@ use crate::{
     render::{SimpleRenderPipeline, buffer_splitter::BufferSplitter},
     util::{
         ShiftRightCeil,
-        test::check_equal_images,
         tracing_wrappers::{instrument, trace},
     },
 };
@@ -233,8 +232,8 @@ pub(super) fn test_stage_consistency<S: RenderPipelineTestableStage<V>, V>(
         )
         .unwrap_or_else(|_| panic!("error running pipeline with chunk size {chunk_size}"));
 
-        for (o, bo) in output.iter().zip(base_output.iter()) {
-            check_equal_images(bo, o);
+        for (out, base_out) in output.iter().zip(base_output.iter()) {
+            crate::tests::assert_image_eq!(out, base_out, "with chunk size {}", chunk_size);
         }
 
         Ok(())

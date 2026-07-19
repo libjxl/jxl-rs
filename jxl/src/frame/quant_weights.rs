@@ -1206,7 +1206,7 @@ mod test {
     use super::*;
     use crate::error::Result;
     use crate::frame::quant_weights::DequantMatrices;
-    use crate::util::test::assert_almost_abs_eq;
+    use crate::tests::assert_close;
 
     #[test]
     fn check_required_x_y() {
@@ -1216,7 +1216,7 @@ mod test {
                 .iter()
                 .zip(DequantMatrices::REQUIRED_SIZE_Y)
                 .map(|(&x, y)| x * y)
-                .sum()
+                .sum::<usize>()
         );
     }
 
@@ -2133,7 +2133,7 @@ mod test {
             for c in 0..3 {
                 let table = matrices.matrix(hf_type, c);
                 for j in (0..size).step_by(size / 10) {
-                    assert_almost_abs_eq(table[j], target_table[target_table_index], 1e-5);
+                    assert_close!(table[j], target_table[target_table_index], 1e-5);
                     target_table_index += 1;
                 }
             }
