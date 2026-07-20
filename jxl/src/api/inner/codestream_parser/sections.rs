@@ -268,7 +268,11 @@ impl CodestreamParser {
         #[cfg(test)]
         {
             self.frame_callback.as_mut().map_or(Ok(()), |cb| {
-                cb(self.frame.as_ref().unwrap(), self.decoded_frames)
+                cb(
+                    self.file_header.as_ref().unwrap(),
+                    self.frame.as_ref().unwrap(),
+                    self.decoded_frames,
+                )
             })?;
             self.decoded_frames += 1;
         }

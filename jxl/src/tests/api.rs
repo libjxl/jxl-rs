@@ -10,16 +10,17 @@ use crate::api::{
 use crate::image::{Image, JxlOutputBuffer, Rect};
 use std::path::Path;
 
-use crate::tests::decode::{compare_frames, decode, scan_frames_with_decoder};
+use crate::tests::decode::{compare_frames, decode, decode_internal, scan_frames_with_decoder};
 
 #[test]
 fn decode_small_chunks() {
     arbtest::arbtest(|u| {
-        decode(
+        decode_internal(
             &std::fs::read("resources/test/green_queen_vardct_e3.jxl").unwrap(),
             u.arbitrary::<u8>().unwrap() as usize + 1,
             false,
             false,
+            None,
             None,
         )
         .unwrap();
@@ -31,7 +32,7 @@ fn decode_small_chunks() {
 #[test]
 fn decode_ooo_jxlp_animated_container() {
     let data = std::fs::read("resources/test/animated_ooo_jxlp.jxl").unwrap();
-    let (_decoded_count, frames) = decode(&data, usize::MAX, false, false, None).unwrap();
+    let (_decoded_count, frames) = decode(&data).unwrap();
     assert!(
         frames.len() >= 4,
         "expected at least 4 decoded frames (animation + possible blending frames)"
@@ -809,7 +810,7 @@ fn test_fuzzer_smallbuffer_overflow() {
     let data = include_bytes!("../../tests/testdata/fuzzer_smallbuffer_overflow.jxl");
 
     let result = panic::catch_unwind(|| {
-        let _ = decode(data, 1024, false, false, None);
+        let _ = decode_internal(data, 1024, false, false, None, None);
     });
 
     if let Err(e) = result {
@@ -842,24 +843,6 @@ fn add_container_header(container: &mut Vec<u8>) {
     let ftyp = make_box(b"ftyp", b"jxl \x00\x00\x00\x00jxl ");
     container.extend(&sig);
     container.extend(&ftyp);
-}
-
-fn wrap_with_frame_index(
-    codestream: &[u8],
-    tnum: u32,
-    tden: u32,
-    entries: &[(u64, u64, u64)],
-) -> Vec<u8> {
-    let jxli_content = crate::util::test::build_frame_index_content(tnum, tden, entries);
-
-    let jxli = make_box(b"jxli", &jxli_content);
-    let jxlc = make_box(b"jxlc", codestream);
-
-    let mut container = Vec::new();
-    add_container_header(&mut container);
-    container.extend(&jxli);
-    container.extend(&jxlc);
-    container
 }
 
 fn wrap_with_jxlp_chunks(codestream: &[u8], chunk_starts: &[usize]) -> Vec<u8> {
@@ -896,66 +879,10 @@ fn wrap_with_jxlp_chunks(codestream: &[u8], chunk_starts: &[usize]) -> Vec<u8> {
     container
 }
 
-#[test]
-fn test_frame_index_parsed_from_container() {
-    let codestream =
-        std::fs::read("resources/test/conformance_test_images/animation_icos4d_5.jxl").unwrap();
-
-    let entries = vec![(0u64, 100u64, 1u64), (500, 100, 1), (600, 100, 1)];
-
-    let container = wrap_with_frame_index(&codestream, 1, 1000, &entries);
-
-    let options = JxlDecoderOptions::default();
-    let mut dec = JxlDecoder::<states::Initialized>::new(options);
-    let mut input: &[u8] = &container;
-    let dec = loop {
-        match dec.process(&mut input).unwrap() {
-            ProcessingResult::Complete { result } => break result,
-            ProcessingResult::NeedsMoreInput { fallback, .. } => {
-                if input.is_empty() {
-                    panic!("Unexpected end of input");
-                }
-                dec = fallback;
-            }
-        }
-    };
-
-    let fi = dec.frame_index().expect("frame_index should be Some");
-    assert_eq!(fi.num_frames(), 3);
-    assert_eq!(fi.tnum, 1);
-    assert_eq!(fi.tden.get(), 1000);
-    assert_eq!(fi.entries[0].codestream_offset, 0);
-    assert_eq!(fi.entries[1].codestream_offset, 500);
-    assert_eq!(fi.entries[2].codestream_offset, 1100);
-    assert_eq!(fi.entries[0].duration_ticks, 100);
-    assert_eq!(fi.entries[2].frame_count, 1);
-}
-
-#[test]
-fn test_frame_index_none_for_bare_codestream() {
-    let data =
-        std::fs::read("resources/test/conformance_test_images/animation_icos4d_5.jxl").unwrap();
-    let options = JxlDecoderOptions::default();
-    let mut dec = JxlDecoder::<states::Initialized>::new(options);
-    let mut input: &[u8] = &data;
-    let dec = loop {
-        match dec.process(&mut input).unwrap() {
-            ProcessingResult::Complete { result } => break result,
-            ProcessingResult::NeedsMoreInput { fallback, .. } => {
-                if input.is_empty() {
-                    panic!("Unexpected end of input");
-                }
-                dec = fallback;
-            }
-        }
-    };
-    assert!(dec.frame_index().is_none());
-}
-
 fn assert_start_new_frame_matches_sequential(data: &[u8]) {
     let scanned_frames = scan_frames_with_decoder(data, usize::MAX);
 
-    let (_n, sequential_frames) = decode(data, usize::MAX, false, false, None).unwrap();
+    let (_n, sequential_frames) = decode(data).unwrap();
 
     arbtest::arbtest(|u| {
         let initial_offset =
@@ -1069,15 +996,6 @@ fn test_start_new_frame_bare_codestream() {
 }
 
 #[test]
-fn test_start_new_frame_boxed_codestream() {
-    let codestream =
-        std::fs::read("resources/test/conformance_test_images/animation_icos4d.jxl").unwrap();
-    let entries = vec![(0u64, 100u64, 1u64), (500, 100, 1), (600, 100, 1)];
-    let container = wrap_with_frame_index(&codestream, 1, 1000, &entries);
-    assert_start_new_frame_matches_sequential(&container);
-}
-
-#[test]
 fn test_start_new_frame_boxed_jxlp_per_visible_frame() {
     let codestream =
         std::fs::read("resources/test/conformance_test_images/animation_icos4d.jxl").unwrap();
@@ -1085,7 +1003,7 @@ fn test_start_new_frame_boxed_jxlp_per_visible_frame() {
     let scanned_frames = scan_frames_with_decoder(&codestream, usize::MAX);
     assert!(scanned_frames.len() > 1, "need multiple frames");
 
-    let (decoded_frames, _) = decode(&codestream, usize::MAX, false, false, None).unwrap();
+    let (decoded_frames, _) = decode(&codestream).unwrap();
     assert_eq!(
         decoded_frames,
         scanned_frames.len(),
@@ -1276,14 +1194,8 @@ fn test_scan_frames_only_empty_followup_no_panic_502853162() {
 /// Small regression test for issue #728: squeeze transform boundary bug.
 #[test]
 fn test_squeeze_boundary_minimal() {
-    let (_, frames) = decode(
-        &std::fs::read("resources/test/issue728_minimal.jxl").unwrap(),
-        usize::MAX,
-        false,
-        false,
-        None,
-    )
-    .unwrap();
+    let (_, frames) =
+        decode(&std::fs::read("resources/test/issue728_minimal.jxl").unwrap()).unwrap();
     assert_eq!(frames.len(), 1);
     let frame = &frames[0];
     let buf = &frame[0];
@@ -1305,14 +1217,8 @@ fn test_squeeze_boundary_minimal() {
 /// Regression test for grid boundary bug with odd-width images (issue #728 variant).
 #[test]
 fn decode_test_strategic_solid_blue_grid_boundary() {
-    let (_, frames) = decode(
-        &std::fs::read("resources/test/strategic_solid_blue.jxl").unwrap(),
-        usize::MAX,
-        false,
-        false,
-        None,
-    )
-    .unwrap();
+    let (_, frames) =
+        decode(&std::fs::read("resources/test/strategic_solid_blue.jxl").unwrap()).unwrap();
     assert_eq!(frames.len(), 1);
     let frame = &frames[0];
 

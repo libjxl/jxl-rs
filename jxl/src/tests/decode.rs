@@ -7,27 +7,19 @@ use crate::api::{
     JxlDataFormat, JxlDecoder, JxlDecoderOptions, JxlPixelFormat, ProcessingResult,
     VisibleFrameInfo, states,
 };
-use crate::error::Error;
+use crate::error::{Error, Result};
 use crate::frame::Frame;
+use crate::headers::FileHeader;
+use crate::headers::frame_header::FrameHeader;
+use crate::headers::toc::Toc;
 use crate::image::{Image, JxlOutputBuffer, Rect};
+use std::cell::RefCell;
 use std::path::Path;
+use std::rc::Rc;
 
 #[allow(clippy::type_complexity)]
-pub fn decode(
-    input: &[u8],
-    chunk_size: usize,
-    use_simple_pipeline: bool,
-    do_flush: bool,
-    callback: Option<Box<dyn FnMut(&Frame, usize) -> Result<(), Error>>>,
-) -> Result<(usize, Vec<Vec<Image<f32>>>), Error> {
-    decode_internal(
-        input,
-        chunk_size,
-        use_simple_pipeline,
-        do_flush,
-        callback,
-        None,
-    )
+pub fn decode(input: &[u8]) -> Result<(usize, Vec<Vec<Image<f32>>>), Error> {
+    decode_internal(input, usize::MAX, false, false, None, None)
 }
 
 #[allow(clippy::type_complexity)]
@@ -36,7 +28,7 @@ pub fn decode_internal(
     chunk_size: usize,
     use_simple_pipeline: bool,
     do_flush: bool,
-    callback: Option<Box<dyn FnMut(&Frame, usize) -> Result<(), Error>>>,
+    callback: Option<Box<dyn FnMut(&FileHeader, &Frame, usize) -> Result<(), Error>>>,
     mut flush_callback: Option<&mut dyn FnMut(usize, usize, &[Image<f32>]) -> Result<(), Error>>,
 ) -> Result<(usize, Vec<Vec<Image<f32>>>), Error> {
     let options = JxlDecoderOptions::default();
@@ -304,20 +296,31 @@ pub fn compute_mse(actual: &[Image<f32>], reference: &[Image<f32>]) -> f32 {
     }
 }
 
-pub fn compare_frames(_path: &Path, fc: usize, f: &[Image<f32>], sf: &[Image<f32>]) {
+pub fn compare_frames(path: &Path, fc: usize, f: &[Image<f32>], sf: &[Image<f32>]) {
     assert_eq!(f.len(), sf.len());
     for (c, (b, sb)) in f.iter().zip(sf.iter()).enumerate() {
-        assert_eq!(b.size(), sb.size());
-        let sz = b.size();
-        for y in 0..sz.1 {
-            let row_b = b.row(y);
-            let row_sb = sb.row(y);
-            for x in 0..sz.0 {
-                assert_eq!(
-                    row_b[x], row_sb[x],
-                    "Pixels differ at ({x}, {y}) channel {c} frame {fc}"
-                );
-            }
-        }
+        crate::tests::assert_image_eq!(b, sb, "channel {} frame {} for {:?}", c, fc, path);
     }
+}
+
+pub fn read_headers_and_toc(data: &[u8]) -> Result<(FileHeader, FrameHeader, Toc)> {
+    let result = Rc::new(RefCell::new(None));
+
+    let r = result.clone();
+    decode_internal(
+        data,
+        usize::MAX,
+        false,
+        false,
+        Some(Box::new(move |fh, f, _| {
+            let mut r = r.borrow_mut();
+            if r.is_none() {
+                *r = Some((fh.clone(), f.header().clone(), f.toc().clone()));
+            }
+            Ok(())
+        })),
+        None,
+    )?;
+
+    Ok(result.take().unwrap())
 }

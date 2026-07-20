@@ -100,7 +100,7 @@ mod test {
 
     use super::*;
     use crate::error::Result;
-    use crate::util::test::read_headers_and_toc;
+    use crate::tests::decode::read_headers_and_toc;
 
     #[test]
     fn patches_consistency() -> Result<()> {

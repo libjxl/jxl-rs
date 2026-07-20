@@ -17,7 +17,7 @@ pub struct TocNonserialized {
     pub num_entries: u32,
 }
 
-#[derive(UnconditionalCoder, Debug, PartialEq)]
+#[derive(UnconditionalCoder, Debug, PartialEq, Clone)]
 #[nonserialized(TocNonserialized)]
 pub struct Toc {
     #[default(false)]

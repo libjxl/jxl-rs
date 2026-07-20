@@ -8,7 +8,6 @@ use crate::api::FrameCallback;
 use crate::api::{JxlFrameHeader, VisibleFrameInfo, VisibleFrameSeekTarget};
 
 use super::{JxlBasicInfo, JxlColorProfile, JxlDecoderOptions, JxlPixelFormat};
-use crate::container::frame_index::FrameIndexBox;
 use box_parser::BoxParser;
 use codestream_parser::CodestreamParser;
 
@@ -126,11 +125,6 @@ impl JxlDecoderInner {
         self.codestream_parser.has_more_frames
     }
 
-    /// Returns the parsed frame index box, if the file contained one.
-    pub fn frame_index(&self) -> Option<&FrameIndexBox> {
-        self.box_parser.frame_index.as_ref()
-    }
-
     /// Returns visible frame info entries collected during parsing.
     pub fn scanned_frames(&self) -> &[VisibleFrameInfo] {
         &self.codestream_parser.scanned_frames
@@ -161,6 +155,10 @@ impl JxlDecoderInner {
     #[cfg(test)]
     pub(crate) fn set_use_simple_pipeline(&mut self, u: bool) {
         self.codestream_parser.set_use_simple_pipeline(u);
+    }
+
+    pub fn file_length(&self) -> Option<u64> {
+        self.codestream_parser.file_length
     }
 }
 

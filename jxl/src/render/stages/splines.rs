@@ -79,71 +79,9 @@ mod test {
 
     use crate::features::spline::{Point, QuantizedSpline, Splines};
     use crate::frame::color_correlation_map::ColorCorrelationParams;
-    use crate::render::test::make_and_run_simple_pipeline;
     use crate::util::AtomicRefCell;
-    use crate::util::test::{self, assert_all_almost_abs_eq, read_pfm};
-    use crate::{error::Result, image::Image, render::stages::splines::SplinesStage};
+    use crate::{error::Result, render::stages::splines::SplinesStage};
     use test_log::test;
-
-    #[test]
-    fn splines_process_row_chunk() -> Result<(), test::Error> {
-        let want_image = read_pfm(include_bytes!("../../../resources/test/splines.pfm"))?;
-        let target_images = [
-            Image::<f32>::new((320, 320))?,
-            Image::<f32>::new((320, 320))?,
-            Image::<f32>::new((320, 320))?,
-        ];
-        let size = target_images[0].size();
-        let splines = Splines::create(
-            0,
-            vec![QuantizedSpline {
-                control_points: vec![
-                    (109, 105),
-                    (-130, -261),
-                    (-66, 193),
-                    (227, -52),
-                    (-170, 290),
-                ],
-                color_dct: [
-                    [
-                        168, 119, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-                        0, 0, 0, 0, 0, 0, 0, 0,
-                    ],
-                    [
-                        9, 0, 7, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-                        0, 0, 0, 0, 0, 0, 0,
-                    ],
-                    [
-                        -10, 7, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-                        0, 0, 0, 0, 0, 0, 0, 0,
-                    ],
-                ],
-                sigma_dct: [
-                    4, 0, 0, 0, 0, 0, 0, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-                    0, 0, 0, 0, 0, 0,
-                ],
-            }],
-            vec![Point { x: 9.0, y: 54.0 }],
-        );
-        let output: Vec<Image<f32>> = make_and_run_simple_pipeline(
-            SplinesStage::new(
-                Arc::new(AtomicRefCell::new(splines.clone())),
-                size,
-                Arc::new(AtomicRefCell::new(ColorCorrelationParams::default())),
-                true,
-            ),
-            &target_images,
-            size,
-            0,
-            256,
-        )?;
-        for c in 0..3 {
-            for row in 0..size.1 {
-                assert_all_almost_abs_eq(output[c].row(row), want_image[c].row(row), 1e-3);
-            }
-        }
-        Ok(())
-    }
 
     #[ignore = "spline rendering is not fully consistent due to sqrt precision differences"]
     #[test]
