@@ -118,6 +118,11 @@ impl Frame {
         do_flush: bool,
         output_profile: &JxlColorProfile,
     ) -> Result<bool> {
+        if !do_flush && groups.is_empty() {
+            // Nothing to do.
+            return Ok(false);
+        }
+
         if self.render_pipeline.is_none() || self.lf_global.is_none() {
             assert_eq!(groups.iter().map(|x| x.1.len()).sum::<usize>(), 0);
             // We don't yet have any output ready (as the pipeline would be initialized otherwise),
