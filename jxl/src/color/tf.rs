@@ -65,7 +65,7 @@ pub fn srgb_to_linear(samples: &mut [f32]) {
     for x in samples {
         let a = x.abs();
         *x = if a <= 0.04045 {
-            a / 12.92
+            a * (1.0 / 12.92)
         } else {
             eval_rational_poly(a, P, Q)
         }
@@ -99,7 +99,7 @@ pub fn srgb_to_linear_simd<D: SimdDescriptor>(d: D, samples: &mut [f32]) {
         D::F32Vec::splat(d, 0.04045)
             .gt(a)
             .if_then_else_f32(
-                a / D::F32Vec::splat(d, 12.92),
+                a * D::F32Vec::splat(d, 1.0 / 12.92),
                 eval_rational_poly_simd(d, a, P, Q),
             )
             .copysign(x)
