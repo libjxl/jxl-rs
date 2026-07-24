@@ -23,6 +23,7 @@ avx = ["sse42"]
 avx512 = ["avx"]
 neon = []
 simd128 = []
+nightly = []
 
 [lints]
 workspace = true
