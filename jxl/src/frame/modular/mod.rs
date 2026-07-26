@@ -641,6 +641,9 @@ impl FullModularImage {
             if let Some((b, g)) = buffer_stack.pop() {
                 let buf = &mut self.buffer_info[b];
                 let grid = &mut buf.buffer_grid[g];
+                if grid.data_status == DataStatus::Final {
+                    continue;
+                }
                 self.rerendered_buffers.insert((b, g));
                 for v in grid.used_by_transforms_final.iter() {
                     stack.push(*v);
