@@ -15,7 +15,7 @@ use crate::{
     },
     headers::{self, frame_header::FrameHeader, modular::TransformId},
     image::Rect,
-    util::tracing_wrappers::*,
+    util::{ShiftRightCeil, tracing_wrappers::*},
 };
 
 use super::{RctOp, RctPermutation};
@@ -654,8 +654,8 @@ pub fn make_grids(
     for (idx, bi) in buffer_info.iter_mut().enumerate() {
         if let Some(chan) = bi.info.output_channel_idx {
             let (shift_x, shift_y) = bi.info.shift.unwrap_or((0, 0));
-            let gsx = frame_header.group_dim() >> shift_x;
-            let gsy = frame_header.group_dim() >> shift_y;
+            let gsx = frame_header.group_dim().shrc(shift_x);
+            let gsy = frame_header.group_dim().shrc(shift_y);
             // If the channel has a grid size of Hf groups, then we can just output
             // the entire buffer. Otherwise, we need to copy the region of the image
             // that corresponds to a HF group.
@@ -664,8 +664,8 @@ pub fn make_grids(
                 ModularGridKind::Hf => frame_header.group_dim(),
                 ModularGridKind::Lf => frame_header.lf_group_dim(),
             };
-            let gtx = grid_dim >> shift_x;
-            let gty = grid_dim >> shift_y;
+            let gtx = grid_dim.shrc(shift_x);
+            let gty = grid_dim.shrc(shift_y);
 
             let group_shape = frame_header.size_groups();
             for y in 0..group_shape.1 {
