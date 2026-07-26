@@ -375,6 +375,17 @@ impl Frame {
             };
             debug!(?color_correlation_params);
 
+            // Validate spline parameters
+            if self.header.has_splines() {
+                let color_correlation_params = self.color_correlation_params.borrow();
+                self.splines.borrow_mut().initialize_draw_cache(
+                    self.header.size().0 as u64,
+                    self.header.size().1 as u64,
+                    &color_correlation_params,
+                    self.decoder_state.high_precision,
+                )?;
+            }
+
             let tree = if br.read(1)? == 1 {
                 let size_limit = (1024
                     + self.header.width as usize
