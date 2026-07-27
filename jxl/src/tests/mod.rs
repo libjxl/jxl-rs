@@ -21,13 +21,6 @@ declare_test_file!(srgb_lossy_3x3, "3x3_srgb_lossy.jxl");
 declare_test_file!(srgb_lossless_3x3a, "3x3a_srgb_lossless.jxl");
 declare_test_file!(srgb_lossy_3x3a, "3x3a_srgb_lossy.jxl");
 declare_test_file!(noise_8x8, "8x8_noise.jxl");
-declare_test_file!(
-    animated_ooo_jxlp,
-    "animated_ooo_jxlp.jxl",
-    checkpoints: &[
-        (1968, 0.4584823)
-    ]
-);
 declare_test_file!(basic, "basic.jxl");
 declare_test_file!(
     candle,

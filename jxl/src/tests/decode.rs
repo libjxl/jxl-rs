@@ -49,9 +49,9 @@ pub fn decode_internal(
                 let available_before = chunk_input.len();
                 let process_result = $process_call;
                 input = &input[(available_before - chunk_input.len())..];
-                match process_result.unwrap() {
+                match process_result? {
                     ProcessingResult::Complete { result } => break result,
-                    ProcessingResult::NeedsMoreInput { fallback, .. } => {
+                    ProcessingResult::NeedsMoreInput { fallback, size_hint } => {
                         #[allow(unused_mut)]
                         let mut fallback = fallback;
                         #[allow(unused_mut)]
@@ -82,7 +82,7 @@ pub fn decode_internal(
                             )?
                         }
                         if input.is_empty() {
-                            panic!("Unexpected end of input");
+                            panic!("Unexpected end of input ({size_hint})");
                         }
                         $decoder = fallback;
                     }
@@ -191,7 +191,7 @@ pub fn decode_internal(
 
         // Check if there are more frames
         if !decoder_with_image_info.has_more_frames() {
-            let decoded_frames = decoder_with_image_info.decoded_frames();
+            let decoded_frames = decoder_with_image_info.scanned_frames().len();
 
             // Ensure we decoded at least one frame
             assert!(decoded_frames > 0, "No frames were decoded");
@@ -221,9 +221,12 @@ pub fn scan_frames_with_decoder(mut input: &[u8], chunk_size: usize) -> Vec<Visi
                 input = &input[(available_before - chunk_input.len())..];
                 match process_result.unwrap() {
                     ProcessingResult::Complete { result } => break result,
-                    ProcessingResult::NeedsMoreInput { fallback, .. } => {
+                    ProcessingResult::NeedsMoreInput {
+                        fallback,
+                        size_hint,
+                    } => {
                         if input.is_empty() {
-                            panic!("Unexpected end of input");
+                            panic!("Unexpected end of input ({size_hint})");
                         }
                         $decoder = fallback;
                     }
@@ -242,9 +245,12 @@ pub fn scan_frames_with_decoder(mut input: &[u8], chunk_size: usize) -> Vec<Visi
                 input = &input[(available_before - chunk_input.len())..];
                 match process_result.unwrap() {
                     ProcessingResult::Complete { result } => break result,
-                    ProcessingResult::NeedsMoreInput { fallback, .. } => {
+                    ProcessingResult::NeedsMoreInput {
+                        fallback,
+                        size_hint,
+                    } => {
                         if input.is_empty() {
-                            panic!("Unexpected end of input");
+                            panic!("Unexpected end of input ({size_hint})");
                         }
                         $decoder = fallback;
                     }
