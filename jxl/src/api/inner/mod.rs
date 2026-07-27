@@ -74,6 +74,9 @@ impl JxlDecoderInner {
     }
 
     pub fn frame_header(&self) -> Option<JxlFrameHeader> {
+        if !self.codestream_parser.has_frame() {
+            return None;
+        }
         let frame_header = self.codestream_parser.frame_info.current_frame_header()?;
         // The render pipeline always adds ExtendToImageDimensionsStage which extends
         // frames to the full image size. So the output size is always the image size,
