@@ -5,31 +5,15 @@
 
 use std::{any::Any, sync::Arc};
 
-use crate::{
-    features::spline::Splines, frame::color_correlation_map::ColorCorrelationParams,
-    render::RenderPipelineInPlaceStage, util::AtomicRefCell,
-};
+use crate::{features::spline::Splines, render::RenderPipelineInPlaceStage, util::AtomicRefCell};
 
 pub struct SplinesStage {
     splines: Arc<AtomicRefCell<Splines>>,
-    image_size: (usize, usize),
-    color_correlation_params: Arc<AtomicRefCell<ColorCorrelationParams>>,
-    high_precision: bool,
 }
 
 impl SplinesStage {
-    pub fn new(
-        splines: Arc<AtomicRefCell<Splines>>,
-        image_size: (usize, usize),
-        color_correlation_params: Arc<AtomicRefCell<ColorCorrelationParams>>,
-        high_precision: bool,
-    ) -> Self {
-        SplinesStage {
-            splines,
-            image_size,
-            color_correlation_params,
-            high_precision,
-        }
+    pub fn new(splines: Arc<AtomicRefCell<Splines>>) -> Self {
+        SplinesStage { splines }
     }
 }
 
@@ -53,22 +37,11 @@ impl RenderPipelineInPlaceStage for SplinesStage {
         row: &mut [&mut [f32]],
         _state: Option<&mut dyn Any>,
     ) {
-        // TODO(veluca): this is wrong!! Race condition in MT.
-        let mut splines = self.splines.borrow_mut();
+        let splines = self.splines.borrow();
         if splines.splines.is_empty() {
             return;
         }
-        if !splines.is_initialized() {
-            let color_correlation_params = self.color_correlation_params.borrow();
-            splines
-                .initialize_draw_cache(
-                    self.image_size.0 as u64,
-                    self.image_size.1 as u64,
-                    &color_correlation_params,
-                    self.high_precision,
-                )
-                .unwrap();
-        }
+        assert!(splines.is_initialized());
         splines.draw_segments(row, position, xsize);
     }
 }
@@ -86,7 +59,7 @@ mod test {
     #[ignore = "spline rendering is not fully consistent due to sqrt precision differences"]
     #[test]
     fn splines_consistency() -> Result<()> {
-        let splines = Splines::create(
+        let mut splines = Splines::create(
             0,
             vec![QuantizedSpline {
                 control_points: vec![
@@ -118,15 +91,12 @@ mod test {
             vec![Point { x: 9.0, y: 54.0 }],
         );
 
+        splines
+            .initialize_draw_cache(500, 500, &ColorCorrelationParams::default(), false)
+            .unwrap();
+
         crate::render::test::test_stage_consistency(
-            || {
-                SplinesStage::new(
-                    Arc::new(AtomicRefCell::new(splines.clone())),
-                    (500, 500),
-                    Arc::new(AtomicRefCell::new(ColorCorrelationParams::default())),
-                    false,
-                )
-            },
+            || SplinesStage::new(Arc::new(AtomicRefCell::new(splines.clone()))),
             (500, 500),
             6,
         )

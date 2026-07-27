@@ -495,12 +495,7 @@ impl Frame {
         }
 
         if frame_header.has_splines() {
-            pipeline = pipeline.add_inplace_stage(SplinesStage::new(
-                splines,
-                frame_header.size(),
-                color_correlation_params.clone(),
-                decoder_state.high_precision,
-            ))
+            pipeline = pipeline.add_inplace_stage(SplinesStage::new(splines))
         }
 
         if frame_header.upsampling > 1 {
