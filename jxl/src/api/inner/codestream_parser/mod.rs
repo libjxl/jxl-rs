@@ -371,4 +371,8 @@ impl CodestreamParser {
             };
         }
     }
+
+    pub fn has_frame(&self) -> bool {
+        matches!(self.state, ParserState::Sections { .. })
+    }
 }
