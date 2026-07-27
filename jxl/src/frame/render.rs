@@ -248,6 +248,8 @@ impl Frame {
             }
         }
 
+        let has_decoded_modular_data = modular_global.has_decoded_data();
+
         // If section0 data is dirty, re-render everything.
         if !self.section0_render_up_to_date
             && (modular_global.has_decoded_data() || self.header.encoding == Encoding::VarDCT)
@@ -348,7 +350,10 @@ impl Frame {
         self.reference_frame_data = reference_frame_data;
         self.lf_frame_data = lf_frame_data;
 
-        if self.header.frame_type == FrameType::LFFrame && self.header.lf_level == 1 {
+        if self.header.frame_type == FrameType::LFFrame
+            && self.header.lf_level == 1
+            && has_decoded_modular_data
+        {
             if do_flush && let Some(buffers) = api_buffers {
                 return self.maybe_preview_lf_frame(
                     pixel_format,
