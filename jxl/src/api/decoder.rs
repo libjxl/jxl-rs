@@ -7,7 +7,10 @@ use super::{
     JxlBasicInfo, JxlBitstreamInput, JxlColorProfile, JxlDecoderInner, JxlDecoderOptions,
     JxlOutputBuffer, JxlPixelFormat, ProcessingResult,
 };
-use crate::{api::JxlFrameHeader, error::Result};
+use crate::{
+    api::{BoxParserCheckpoint, JxlFrameHeader},
+    error::Result,
+};
 #[cfg(test)]
 use crate::{frame::Frame, headers::FileHeader};
 use states::*;
@@ -36,7 +39,7 @@ pub struct JxlDecoder<State: JxlState> {
 pub type FrameCallback = dyn FnMut(&FileHeader, &Frame, usize) -> Result<()>;
 
 /// Information about a single visible frame discovered while decoding.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone)]
 pub struct VisibleFrameInfo {
     /// Zero-based index among visible frames.
     pub index: usize,
@@ -45,7 +48,7 @@ pub struct VisibleFrameInfo {
     /// Duration in raw ticks from the animation header.
     pub duration_ticks: u32,
     /// Byte offset of this frame's header in the input file.
-    pub(crate) file_offset: usize,
+    pub file_offset: u64,
     /// Whether this is the last frame in the codestream.
     pub is_last: bool,
     /// Whether this frame is a seek-keyframe for visible-frame playback.
@@ -59,13 +62,13 @@ pub struct VisibleFrameInfo {
 }
 
 /// Computed seek inputs for a target visible frame.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy)]
 pub struct VisibleFrameSeekTarget {
     /// File byte offset to start feeding input from.
     pub decode_start_file_offset: u64,
-    /// Remaining codestream bytes in the current container box at the seek
-    /// point. Pass this to [`JxlDecoder::start_new_frame`].
-    pub remaining_in_box: u64,
+    /// State of the box parser at the file offset we want to seek to.
+    /// Pass this to [`JxlDecoder::start_new_frame`].
+    pub box_parser_checkpoint: BoxParserCheckpoint,
     /// Number of visible frames to skip after seek-start before decoding the
     /// requested target frame.
     pub visible_frames_to_skip: usize,
@@ -85,23 +88,12 @@ impl<S: JxlState> JxlDecoder<S> {
         self.inner.set_frame_callback(callback);
     }
 
-    #[cfg(test)]
-    pub fn decoded_frames(&self) -> usize {
-        self.inner.decoded_frames()
-    }
-
     /// Returns visible frame info entries collected so far.
     ///
     /// When `JxlDecoderOptions::scan_frames_only` is enabled this is the
     /// primary output of decoding.
     pub fn scanned_frames(&self) -> &[VisibleFrameInfo] {
         self.inner.scanned_frames()
-    }
-
-    /// Rewinds a decoder to the start of the file, allowing past frames to be displayed again.
-    pub fn rewind(mut self) -> JxlDecoder<Initialized> {
-        self.inner.rewind();
-        JxlDecoder::wrap_inner(self.inner)
     }
 
     fn map_inner_processing_result<SuccessState: JxlState>(
@@ -194,39 +186,14 @@ impl JxlDecoder<WithImageInfo> {
         self.inner.file_length()
     }
 
-    /// Resets frame-level decoder state to prepare for decoding a new frame.
+    /// Resets frame-level state to prepare for decoding a new frame.
     ///
-    /// This clears intermediate buffers (frame header, TOC, section data) while
-    /// preserving image-level state (file header, color profiles, pixel format,
-    /// reference frames). The box parser is restored to the correct
-    /// mid-codestream state using `remaining_in_box`, so the next `process()`
-    /// call correctly parses a new frame header from the input.
-    ///
-    /// # Arguments
-    ///
-    /// * `seek_target` -- from `VisibleFrameInfo::seek_target`.
-    ///   Includes both the box-parser state (`remaining_in_box`) and the input
-    ///   resume offset (`decode_start_file_offset`).
+    /// After seeking the first time, scanned frame information will no longer
+    /// be updated. If you seek before having completed decoding once, the scanned
+    /// frames might be incomplete.
     ///
     /// After calling this, provide raw file input starting from
     /// `seek_target.decode_start_file_offset`.
-    ///
-    /// # Example
-    ///
-    /// ```rust,ignore
-    /// // 1. Scan frame info using the regular decoder API.
-    /// let options = JxlDecoderOptions {
-    ///     scan_frames_only: true,
-    ///     ..Default::default()
-    /// };
-    /// let decoder = JxlDecoder::<states::Initialized>::new(options);
-    /// // ...advance decoder and call `scanned_frames()`...
-    ///
-    /// // 2. Seek to frame N (bare codestream).
-    /// let target = &frames[n];
-    /// decoder.start_new_frame(target.seek_target);
-    /// // 3. Provide input from target.seek_target.decode_start_file_offset and process().
-    /// ```
     pub fn start_new_frame(&mut self, seek_target: VisibleFrameSeekTarget) {
         self.inner.start_new_frame(seek_target);
     }
@@ -259,11 +226,6 @@ impl JxlDecoder<WithFrameInfo> {
 
     pub fn frame_header(&self) -> JxlFrameHeader {
         self.inner.frame_header().unwrap()
-    }
-
-    /// Number of passes we have full data for.
-    pub fn num_completed_passes(&self) -> usize {
-        self.inner.num_completed_passes().unwrap()
     }
 
     /// Draws all the pixels we have data for.
