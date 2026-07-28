@@ -406,7 +406,7 @@ impl F32SimdVec for F32VecSimd128 {
         // SAFETY: we checked dest has enough space.
         unsafe {
             std::ptr::copy_nonoverlapping(
-                &lo as *const i64 as *const u8,
+                (&raw const lo).cast::<u8>(),
                 dest.as_mut_ptr().cast::<u8>(),
                 8,
             );
@@ -698,7 +698,7 @@ impl I32SimdVec for I32VecSimd128 {
         // SAFETY: we checked that `dest` has enough space.
         unsafe {
             std::ptr::copy_nonoverlapping(
-                &lo as *const i64 as *const u8,
+                (&raw const lo).cast::<u8>(),
                 dest.as_mut_ptr().cast::<u8>(),
                 8,
             );
@@ -716,7 +716,7 @@ impl I32SimdVec for I32VecSimd128 {
         let val = u32x4_extract_lane::<0>(packed);
         // SAFETY: we checked that `dest` has enough space.
         unsafe {
-            std::ptr::copy_nonoverlapping(&val as *const u32 as *const u8, dest.as_mut_ptr(), 4);
+            std::ptr::copy_nonoverlapping((&raw const val).cast::<u8>(), dest.as_mut_ptr(), 4);
         }
     }
 }
