@@ -15,6 +15,10 @@ use crate::{
     headers::{JxlHeader, modular::GroupHeader},
 };
 
+// If we have at least this many bits still available to read,
+// we can be sure that none of the reads up to this point read garbage.
+const DECODE_SAFETY_MARGIN: usize = 32;
+
 fn can_decode_fast_lossless(tree: &Tree) -> bool {
     if !tree.nodes.iter().all(|n| {
         matches!(
@@ -48,6 +52,7 @@ fn decode_fast_lossless(
     let mut rle_len: usize = 0;
     let mut rle_sym = 0;
 
+    let mut last_safe_buf = 0;
     for (c, buf) in buffers.into_iter().enumerate() {
         let (w, h) = buf.data.size();
         if w == 0 || h == 0 {
@@ -59,6 +64,10 @@ fn decode_fast_lossless(
         let Codes::Huffman(codes) = tree.histograms.codes() else {
             unreachable!();
         };
+
+        if br.total_bits_available() >= DECODE_SAFETY_MARGIN {
+            last_safe_buf = c;
+        }
 
         let table = codes.table(tree.histograms.map_context_to_cluster(id as usize));
         let min_sym = tree.histograms.lz77_params().min_symbol.unwrap();
@@ -119,8 +128,7 @@ fn decode_fast_lossless(
 
         if let Err(e) = br.check_for_error() {
             if let Some(p) = partial_decoded_buffers {
-                buf.fill(0);
-                *p = c;
+                *p = last_safe_buf;
             }
             return Err(e);
         }
@@ -201,6 +209,7 @@ pub(in crate::frame::modular) fn decode_modular_subbitstream(
     } else {
         let mut reader = SymbolReader::new(&tree.histograms, br, Some(image_width))?;
 
+        let mut last_safe_buf = 0;
         for i in 0..buffers.len() {
             // Keep channel numbering stable, but skip actually decoding empty channels.
             // This matches libjxl, which continues the loop without renumbering.
@@ -208,12 +217,14 @@ pub(in crate::frame::modular) fn decode_modular_subbitstream(
             if w == 0 || h == 0 {
                 continue;
             }
+            if br.total_bits_available() >= DECODE_SAFETY_MARGIN {
+                last_safe_buf = i;
+            }
             if let Err(e) =
                 decode_modular_channel(&mut buffers, i, stream_id, &header, tree, &mut reader, br)
             {
                 if let Some(p) = partial_decoded_buffers {
-                    buffers[i].data.fill(0);
-                    *p = i;
+                    *p = last_safe_buf;
                 }
                 return Err(e);
             }

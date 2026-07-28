@@ -37,15 +37,23 @@ pub struct DecodeOutput {
     pub jxl_animation: Option<JxlAnimation>,
 }
 
-pub fn decode_header<In: JxlBitstreamInput>(
+pub fn decode_header<In: JxlBitstreamInputExt>(
     input: &mut In,
+    render_interval: Option<usize>,
     decoder_options: JxlDecoderOptions,
 ) -> Result<JxlDecoder<WithImageInfo>> {
-    let initialized_decoder = JxlDecoder::<jxl::api::states::Initialized>::new(decoder_options);
-
-    match initialized_decoder.process(input)? {
-        ProcessingResult::Complete { result } => Ok(result),
-        ProcessingResult::NeedsMoreInput { .. } => Err(eyre!("Source file truncated")),
+    let mut decoder = JxlDecoder::<jxl::api::states::Initialized>::new(decoder_options);
+    loop {
+        match input.with_capped_size(render_interval, |inp| decoder.process(inp))? {
+            ProcessingResult::Complete { result } => break Ok(result),
+            ProcessingResult::NeedsMoreInput { fallback, .. } => {
+                if input.available_bytes()? > 0 {
+                    decoder = fallback;
+                    continue;
+                }
+                return Err(eyre!("Source file truncated"));
+            }
+        }
     }
 }
 
@@ -142,7 +150,7 @@ pub fn decode_frames<In: JxlBitstreamInputExt>(
 ) -> Result<(DecodeOutput, Duration)> {
     let start = Instant::now();
 
-    let mut decoder_with_image_info = decode_header(input, decoder_options)?;
+    let mut decoder_with_image_info = decode_header(input, render_interval, decoder_options)?;
 
     // Get info and clone what we need before mutating the decoder
     let info = decoder_with_image_info.basic_info().clone();
