@@ -309,7 +309,7 @@ pub trait I32SimdVec:
         // SAFETY: i32 and f32 have the same size and alignment, and both are bag-of-bits types,
         // so the implicit transmute is safe.
         let dest_f32 =
-            unsafe { std::slice::from_raw_parts_mut(dest.as_mut_ptr() as *mut f32, dest.len()) };
+            unsafe { std::slice::from_raw_parts_mut(dest.as_mut_ptr().cast::<f32>(), dest.len()) };
         <<Self as I32SimdVec>::Descriptor as SimdDescriptor>::F32Vec::store_interleaved_2(
             a_f32, b_f32, dest_f32,
         );
