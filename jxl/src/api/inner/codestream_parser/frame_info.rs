@@ -55,6 +55,10 @@ impl SectionState {
             lf_global_flush_len: 0,
         }
     }
+
+    fn num_completed_passes(&self) -> usize {
+        self.completed_passes.iter().copied().min().unwrap_or(0) as usize
+    }
 }
 
 pub struct FrameInfo {
@@ -127,6 +131,41 @@ impl FrameInfo {
         self.frame_header
             .as_ref()
             .or(self.frame.as_ref().map(|x| x.header()))
+    }
+
+    /// Minimum number of completed passes across all groups of the current
+    /// frame (0 if no sections have been processed yet).
+    pub(super) fn num_completed_passes(&self) -> usize {
+        self.section_state.num_completed_passes()
+    }
+
+    /// Number of TOC entries in the current frame, if one has been built.
+    pub(super) fn toc_num_entries(&self) -> Option<usize> {
+        self.frame.as_ref().map(|f| f.header().num_toc_entries())
+    }
+
+    /// TOC entry at `index` for the current frame, if available.
+    pub(super) fn toc_entry(&self, index: usize) -> Option<crate::api::TocEntry> {
+        self.frame.as_ref().and_then(|f| f.toc_entry(index))
+    }
+
+    /// Total size in bytes of the current frame's section data.
+    pub(super) fn frame_data_size(&self) -> Option<u64> {
+        self.frame.as_ref().map(|f| f.total_bytes_in_toc() as u64)
+    }
+
+    /// File-absolute byte offset (container-aware) where the current frame's
+    /// TOC-described section data begins.
+    pub(super) fn frame_data_offset(&self) -> Option<u64> {
+        self.frame.as_ref().and_then(|f| f.frame_data_offset())
+    }
+
+    /// Records the section-data byte offset on the current frame, if built.
+    /// No-op for skipped frames (no `Frame` is constructed).
+    pub(super) fn set_frame_data_offset(&mut self, offset: u64) {
+        if let Some(f) = self.frame.as_mut() {
+            f.set_data_offset(offset);
+        }
     }
 
     pub fn parse_frame_header(

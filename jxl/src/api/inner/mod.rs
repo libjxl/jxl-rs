@@ -122,6 +122,32 @@ impl JxlDecoderInner {
     pub fn file_length(&self) -> Option<u64> {
         self.codestream_parser.file_length
     }
+
+    /// Minimum number of completed passes across the current frame's groups.
+    pub fn num_completed_passes(&self) -> Option<usize> {
+        Some(self.codestream_parser.num_completed_passes())
+    }
+
+    /// Number of TOC entries in the current frame, if a frame has been built.
+    pub fn toc_num_entries(&self) -> Option<usize> {
+        self.codestream_parser.toc_num_entries()
+    }
+
+    /// TOC entry at `index` for the current frame, if available.
+    pub fn toc_entry(&self, index: usize) -> Option<crate::api::TocEntry> {
+        self.codestream_parser.toc_entry(index)
+    }
+
+    /// Total size in bytes of the current frame's section data.
+    pub fn frame_data_size(&self) -> Option<u64> {
+        self.codestream_parser.frame_data_size()
+    }
+
+    /// File-absolute byte offset (container-aware) where the current frame's
+    /// TOC-described section data begins.
+    pub fn frame_data_offset(&self) -> Option<u64> {
+        self.codestream_parser.frame_data_offset()
+    }
 }
 
 #[cfg(test)]

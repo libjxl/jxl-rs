@@ -118,6 +118,25 @@ impl BoxParser {
         b.file_position + (codestream_bytes_consumed - *start)
     }
 
+    /// Maps an arbitrary codestream byte position to its file-absolute offset
+    /// (accounting for container box overhead), by looking up the box that
+    /// *contains* `codestream_pos` (the last box whose start is `<= pos`).
+    ///
+    /// Unlike [`total_bytes_consumed`](Self::total_bytes_consumed), which
+    /// assumes the position lies in the last-seen box, this is safe to call
+    /// mid-stream — e.g. to record a frame's section-data offset while
+    /// out-of-order jxlp boxes are buffered at higher codestream positions.
+    /// Uses the same containing-box resolution as
+    /// [`state_checkpoint`](Self::state_checkpoint).
+    pub(super) fn file_offset_at(&self, codestream_pos: u64) -> u64 {
+        let (&start, b) = self
+            .codestream_pos_to_box
+            .range(..=codestream_pos)
+            .last()
+            .unwrap();
+        b.file_position + (codestream_pos - start)
+    }
+
     fn add_checkpoint(&mut self) {
         if !self.allow_checkpoint {
             return;

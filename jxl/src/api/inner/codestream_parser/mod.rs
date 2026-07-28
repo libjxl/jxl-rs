@@ -262,6 +262,17 @@ impl CodestreamParser {
                             .with_br(|br, bits| c.frame_info.parse_toc(br, bits))
                     })?;
 
+                    // File-absolute (container-aware) byte offset where this
+                    // frame's TOC-described section data begins. `local_buffer`
+                    // sits exactly at that boundary now: `with_br` accumulated
+                    // every header + TOC byte into `consumed()` — including
+                    // across `OutOfBounds` refill retries — and `parse_toc`
+                    // ends on a byte boundary. Captured BEFORE `make_frame`,
+                    // which advances `consumed()` by pulling in section data.
+                    let frame_data_offset = input
+                        .box_parser()
+                        .file_offset_at(self.local_buffer.consumed());
+
                     // Decide how much to decode this frame.
                     let mut process_mode = ProcessMode::Process;
 
@@ -302,6 +313,8 @@ impl CodestreamParser {
                         self.output_color_profile.as_ref().unwrap(),
                         process_mode,
                     )?;
+
+                    self.frame_info.set_frame_data_offset(frame_data_offset);
 
                     if !matches!(process_mode, ProcessMode::Skip(..)) {
                         self.frame_info.dequeue_ready_sections();
@@ -374,5 +387,25 @@ impl CodestreamParser {
 
     pub fn has_frame(&self) -> bool {
         matches!(self.state, ParserState::Sections { .. })
+    }
+
+    pub(super) fn num_completed_passes(&self) -> usize {
+        self.frame_info.num_completed_passes()
+    }
+
+    pub(super) fn toc_num_entries(&self) -> Option<usize> {
+        self.frame_info.toc_num_entries()
+    }
+
+    pub(super) fn toc_entry(&self, index: usize) -> Option<crate::api::TocEntry> {
+        self.frame_info.toc_entry(index)
+    }
+
+    pub(super) fn frame_data_size(&self) -> Option<u64> {
+        self.frame_info.frame_data_size()
+    }
+
+    pub(super) fn frame_data_offset(&self) -> Option<u64> {
+        self.frame_info.frame_data_offset()
     }
 }
