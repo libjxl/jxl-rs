@@ -79,7 +79,7 @@ impl RenderPipelineInPlaceStage for PatchesStage {
         );
     }
 
-    fn init_local_state(&self, _thread_index: usize) -> crate::error::Result<Option<Box<dyn Any>>> {
+    fn init_local_state(&self) -> crate::error::Result<Option<Box<dyn Any>>> {
         // TODO(veluca): I think this is wrong, check that.
         let patches = self.patches.borrow();
         let len = patches.positions.len();

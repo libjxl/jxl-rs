@@ -48,7 +48,7 @@ pub enum StageSpecialCase {
 }
 
 /// Modifies channels in-place.
-pub trait RenderPipelineInPlaceStage: Any + std::fmt::Display {
+pub trait RenderPipelineInPlaceStage: Any + std::fmt::Display + Send + Sync {
     type Type: ImageDataType;
 
     fn process_row_chunk(
@@ -60,7 +60,7 @@ pub trait RenderPipelineInPlaceStage: Any + std::fmt::Display {
         state: Option<&mut dyn Any>,
     );
 
-    fn init_local_state(&self, _thread_index: usize) -> Result<Option<Box<dyn Any>>> {
+    fn init_local_state(&self) -> Result<Option<Box<dyn Any>>> {
         Ok(None)
     }
 
@@ -83,7 +83,7 @@ pub trait RenderPipelineInPlaceStage: Any + std::fmt::Display {
 ///    padding on either side.
 ///  - the output slice contains 1 << SHIFT.1 slices, each of length xsize << SHIFT.0, the
 ///    corresponding output pixels.
-pub trait RenderPipelineInOutStage: Any + std::fmt::Display {
+pub trait RenderPipelineInOutStage: Any + std::fmt::Display + Send + Sync {
     type InputT: ImageDataType;
     type OutputT: ImageDataType;
 
@@ -101,7 +101,7 @@ pub trait RenderPipelineInOutStage: Any + std::fmt::Display {
         state: Option<&mut dyn Any>,
     );
 
-    fn init_local_state(&self, _thread_index: usize) -> Result<Option<Box<dyn Any>>> {
+    fn init_local_state(&self) -> Result<Option<Box<dyn Any>>> {
         Ok(None)
     }
 

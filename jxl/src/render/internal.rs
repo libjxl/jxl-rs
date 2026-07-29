@@ -23,10 +23,10 @@ pub enum Stage<Buffer> {
 }
 
 impl<Buffer: 'static> Stage<Buffer> {
-    pub(super) fn init_local_state(&self, thread_index: usize) -> Result<Option<Box<dyn Any>>> {
+    pub(super) fn init_local_state(&self) -> Result<Option<Box<dyn Any>>> {
         match self {
-            Stage::InPlace(s) => s.init_local_state(thread_index),
-            Stage::InOut(s) => s.init_local_state(thread_index),
+            Stage::InPlace(s) => s.init_local_state(),
+            Stage::InOut(s) => s.init_local_state(),
             _ => Ok(None),
         }
     }
@@ -180,8 +180,8 @@ pub trait PipelineBuffer {
     type InOutExtraInfo;
 }
 
-pub trait InPlaceStage: Any + Display {
-    fn init_local_state(&self, thread_index: usize) -> Result<Option<Box<dyn Any>>>;
+pub trait InPlaceStage: Any + Display + Send + Sync {
+    fn init_local_state(&self) -> Result<Option<Box<dyn Any>>>;
     fn uses_channel(&self, c: usize) -> bool;
     fn ty(&self) -> DataTypeTag;
     fn is_special_case(&self) -> Option<StageSpecialCase>;
@@ -197,8 +197,8 @@ pub trait RunInPlaceStage<Buffer: PipelineBuffer>: InPlaceStage {
 }
 
 impl<T: RenderPipelineInPlaceStage> InPlaceStage for T {
-    fn init_local_state(&self, thread_index: usize) -> Result<Option<Box<dyn Any>>> {
-        self.init_local_state(thread_index)
+    fn init_local_state(&self) -> Result<Option<Box<dyn Any>>> {
+        self.init_local_state()
     }
     fn uses_channel(&self, c: usize) -> bool {
         self.uses_channel(c)
@@ -211,8 +211,8 @@ impl<T: RenderPipelineInPlaceStage> InPlaceStage for T {
     }
 }
 
-pub trait InOutStage: Any + Display {
-    fn init_local_state(&self, thread_index: usize) -> Result<Option<Box<dyn Any>>>;
+pub trait InOutStage: Any + Display + Send + Sync {
+    fn init_local_state(&self) -> Result<Option<Box<dyn Any>>>;
     fn shift(&self) -> (u8, u8);
     fn border(&self) -> (u8, u8);
     fn uses_channel(&self, c: usize) -> bool;
@@ -222,8 +222,8 @@ pub trait InOutStage: Any + Display {
 }
 
 impl<T: RenderPipelineInOutStage> InOutStage for T {
-    fn init_local_state(&self, thread_index: usize) -> Result<Option<Box<dyn Any>>> {
-        self.init_local_state(thread_index)
+    fn init_local_state(&self) -> Result<Option<Box<dyn Any>>> {
+        self.init_local_state()
     }
     fn uses_channel(&self, c: usize) -> bool {
         self.uses_channel(c)
