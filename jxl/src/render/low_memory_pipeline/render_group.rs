@@ -15,7 +15,7 @@ use crate::{
             LowMemoryRenderPipelinePerThread, helpers::get_distinct_indices, run_stage::ExtraInfo,
         },
     },
-    util::{ChannelVec, ShiftRightCeil, mirror, tracing_wrappers::*},
+    util::{AtomicRef, AtomicRefCell, ChannelVec, ShiftRightCeil, mirror, tracing_wrappers::*},
 };
 
 use super::{LowMemoryRenderPipeline, row_buffers::RowBuffer};
@@ -71,7 +71,7 @@ struct BufferFiller<'a> {
     group_ysize: usize,
     top_y_offset: usize,
     bot_y_offset: usize,
-    images: [Option<&'a OwnedRawImage>; 9],
+    images: [Option<AtomicRef<'a, OwnedRawImage>>; 9],
     copy_byte_offset_initial: usize,
     src_byte_offset_left_topbottom: usize,
     src_byte_offset_left_center: usize,
@@ -147,7 +147,7 @@ impl<'a> BufferFiller<'a> {
 
         let gw = rp.shared.group_count.0;
 
-        let mut images: [Option<&'a OwnedRawImage>; 9] = [None; 9];
+        let mut images: [Option<AtomicRef<OwnedRawImage>>; 9] = std::array::from_fn(|_| None);
 
         let has_left = copy_x0 < group_x0;
         let has_right = copy_x1 > group_x1;
@@ -161,36 +161,42 @@ impl<'a> BufferFiller<'a> {
         let src_byte_offset_left_topbottom = group_xsize * ty.size() - to_copy_left;
         let src_byte_offset_left_center = 4 * (bx >> dx) * ty.size() - to_copy_left;
 
+        fn make_ref(
+            g: &AtomicRefCell<Option<OwnedRawImage>>,
+        ) -> Option<AtomicRef<'_, OwnedRawImage>> {
+            Some(AtomicRef::map(g.borrow(), |x| x.as_ref().unwrap()))
+        }
+
         if has_top {
             let base_gid = (gy - 1) * gw + gx;
             if has_left {
-                images[0] = rp.input_buffers[base_gid - 1].topbottom[c].as_ref();
+                images[0] = make_ref(&rp.input_buffers.get(base_gid - 1).topbottom[c]);
             }
-            images[1] = rp.input_buffers[base_gid].topbottom[c].as_ref();
+            images[1] = make_ref(&rp.input_buffers.get(base_gid).topbottom[c]);
             if has_right {
-                images[2] = rp.input_buffers[base_gid + 1].topbottom[c].as_ref();
+                images[2] = make_ref(&rp.input_buffers.get(base_gid + 1).topbottom[c]);
             }
         }
 
         if has_center {
             let base_gid = gy * gw + gx;
             if has_left {
-                images[3] = rp.input_buffers[base_gid - 1].leftright[c].as_ref();
+                images[3] = make_ref(&rp.input_buffers.get(base_gid - 1).leftright[c]);
             }
-            images[4] = rp.input_buffers[base_gid].data[c].as_ref();
+            images[4] = make_ref(&rp.input_buffers.get(base_gid).data[c]);
             if has_right {
-                images[5] = rp.input_buffers[base_gid + 1].leftright[c].as_ref();
+                images[5] = make_ref(&rp.input_buffers.get(base_gid + 1).leftright[c]);
             }
         }
 
         if has_bot {
             let base_gid = (gy + 1) * gw + gx;
             if has_left {
-                images[6] = rp.input_buffers[base_gid - 1].topbottom[c].as_ref();
+                images[6] = make_ref(&rp.input_buffers.get(base_gid - 1).topbottom[c]);
             }
-            images[7] = rp.input_buffers[base_gid].topbottom[c].as_ref();
+            images[7] = make_ref(&rp.input_buffers.get(base_gid).topbottom[c]);
             if has_right {
-                images[8] = rp.input_buffers[base_gid + 1].topbottom[c].as_ref();
+                images[8] = make_ref(&rp.input_buffers.get(base_gid + 1).topbottom[c]);
             }
         }
 
@@ -248,7 +254,7 @@ impl<'a> BufferFiller<'a> {
         let output_row = data.row_buffers[0][self.c].get_row_mut::<u8>(y);
         let mut copy_byte_offset = self.copy_byte_offset_initial;
 
-        if let Some(left_buf) = self.images[base] {
+        if let Some(left_buf) = &self.images[base] {
             let input_row = left_buf.row(input_y);
             let src_byte_offset = if row_idx != 1 {
                 self.src_byte_offset_left_topbottom
@@ -260,13 +266,13 @@ impl<'a> BufferFiller<'a> {
             copy_byte_offset += self.to_copy_left;
         }
 
-        let center_buf = self.images[base + 1].unwrap();
+        let center_buf = self.images[base + 1].as_ref().unwrap();
         let input_row = center_buf.row(input_y);
         output_row[copy_byte_offset..copy_byte_offset + self.to_copy_main]
             .copy_from_slice(&input_row[self.copy_start..self.copy_end]);
         copy_byte_offset += self.to_copy_main;
 
-        if let Some(right_buf) = self.images[base + 2] {
+        if let Some(right_buf) = &self.images[base + 2] {
             let input_row = right_buf.row(input_y);
             output_row[copy_byte_offset..copy_byte_offset + self.to_copy_right]
                 .copy_from_slice(&input_row[..self.to_copy_right]);

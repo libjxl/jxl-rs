@@ -4,6 +4,7 @@
 // license that can be found in the LICENSE file.
 
 use std::ops::Range;
+use std::sync::atomic::Ordering;
 
 use crate::error::Result;
 use crate::image::{OwnedRawImage, Rect};
@@ -11,39 +12,6 @@ use crate::render::LowMemoryRenderPipeline;
 use crate::render::buffer_splitter::BufferSplitter;
 use crate::render::internal::{ChannelInfo, Stage};
 use crate::util::tracing_wrappers::*;
-
-pub(super) struct InputBuffer {
-    // One buffer per channel.
-    pub(super) data: Vec<Option<OwnedRawImage>>,
-    // Storage for left/right borders. Includes corners.
-    pub(super) leftright: Vec<Option<OwnedRawImage>>,
-    // Storage for top/bottom borders. Includes corners.
-    pub(super) topbottom: Vec<Option<OwnedRawImage>>,
-    // Number of ready channels in the current pass.
-    ready_channels: usize,
-    pub(super) is_ready: bool,
-    num_completed_groups_3x3: usize,
-}
-
-impl InputBuffer {
-    pub(super) fn set_buffer(&mut self, chan: usize, buf: OwnedRawImage) {
-        assert!(self.data[chan].is_none(), "chan: {chan}");
-        self.data[chan] = Some(buf);
-        self.ready_channels += 1;
-    }
-
-    pub(super) fn new(num_channels: usize) -> Self {
-        let b = || (0..num_channels).map(|_| None).collect();
-        Self {
-            data: b(),
-            leftright: b(),
-            topbottom: b(),
-            ready_channels: 0,
-            is_ready: false,
-            num_completed_groups_3x3: 0,
-        }
-    }
-}
 
 // Finds a small set of rectangles that cover all the "true" values in `ready_mask`,
 // and calls `f` on each such rectangle.
@@ -134,9 +102,9 @@ impl LowMemoryRenderPipeline {
         g: usize,
         buffer_splitter: &mut BufferSplitter,
     ) -> Result<()> {
-        let buf = &mut self.input_buffers[g];
-        assert!(buf.ready_channels <= self.shared.num_used_channels());
-        if buf.ready_channels != self.shared.num_used_channels() {
+        let buf = self.input_buffers.get(g);
+        assert!(buf.ready_channels.load(Ordering::Relaxed) <= self.shared.num_used_channels());
+        if buf.ready_channels.load(Ordering::Relaxed) != self.shared.num_used_channels() {
             return Ok(());
         }
         let (gx, gy) = self.shared.group_position(g);
@@ -158,88 +126,59 @@ impl LowMemoryRenderPipeline {
         }
         .clip(self.shared.input_size);
 
-        {
-            for c in 0..self.shared.num_channels() {
-                if !self.shared.channel_is_used[c] {
-                    continue;
-                }
-                let (bx, by) = self.border_size;
-                let (sx, sy) = self.input_buffers[g].data[c].as_ref().unwrap().byte_size();
-                let ChannelInfo {
-                    ty,
-                    downsample: (dx, dy),
-                } = self.shared.channel_info[0][c];
-                let ty = ty.unwrap();
-                let bx = bx >> dx;
-                let by = by >> dy;
-                let mut topbottom = if let Some(b) = self.input_buffers[g].topbottom[c].take() {
-                    b
-                } else if let Some(b) = self.maybe_get_scratch_buffer(c, 1) {
-                    b
-                } else {
-                    let height = 4 * by;
-                    let width = (1 << self.shared.log_group_size) * ty.size();
-                    OwnedRawImage::new_zeroed_with_padding((width, height), (0, 0), (0, 0))?
-                };
-                let mut leftright = if let Some(b) = self.input_buffers[g].leftright[c].take() {
-                    b
-                } else if let Some(b) = self.maybe_get_scratch_buffer(c, 2) {
-                    b
-                } else {
-                    let height = 1 << self.shared.log_group_size;
-                    let width = 4 * bx * ty.size();
-                    OwnedRawImage::new_zeroed_with_padding((width, height), (0, 0), (0, 0))?
-                };
-                let input = self.input_buffers[g].data[c].as_ref().unwrap();
-                if by != 0 {
-                    for y in 0..(2 * by).min(sy) {
-                        topbottom.row_mut(y)[..sx].copy_from_slice(input.row(y));
-                        topbottom.row_mut(4 * by - 1 - y)[..sx]
-                            .copy_from_slice(input.row(sy - y - 1));
-                    }
-                }
-                if bx != 0 {
-                    let cs = (bx * 2 * ty.size()).min(sx);
-                    for y in 0..sy {
-                        let row_out = leftright.row_mut(y);
-                        let row_in = input.row(y);
-                        row_out[..cs].copy_from_slice(&row_in[..cs]);
-                        row_out[4 * bx * ty.size() - cs..].copy_from_slice(&row_in[sx - cs..]);
-                    }
-                }
-                self.input_buffers[g].leftright[c] = Some(leftright);
-                self.input_buffers[g].topbottom[c] = Some(topbottom);
+        for c in 0..self.shared.num_channels() {
+            if !self.shared.channel_is_used[c] {
+                continue;
             }
-            self.input_buffers[g].is_ready = true;
+            let (bx, by) = self.border_size;
+            let (sx, sy) = buf.data[c].borrow().as_ref().unwrap().byte_size();
+            let ChannelInfo {
+                ty,
+                downsample: (dx, dy),
+            } = self.shared.channel_info[0][c];
+            let ty = ty.unwrap();
+            let bx = bx >> dx;
+            let by = by >> dy;
+            let mut topbottom = if let Some(b) = buf.topbottom[c].borrow_mut().take() {
+                b
+            } else if let Some(b) = self.maybe_get_scratch_buffer(c, 1) {
+                b
+            } else {
+                let height = 4 * by;
+                let width = (1 << self.shared.log_group_size) * ty.size();
+                OwnedRawImage::new_zeroed_with_padding((width, height), (0, 0), (0, 0))?
+            };
+            let mut leftright = if let Some(b) = buf.leftright[c].borrow_mut().take() {
+                b
+            } else if let Some(b) = self.maybe_get_scratch_buffer(c, 2) {
+                b
+            } else {
+                let height = 1 << self.shared.log_group_size;
+                let width = 4 * bx * ty.size();
+                OwnedRawImage::new_zeroed_with_padding((width, height), (0, 0), (0, 0))?
+            };
+            let data = &buf.data[c].borrow();
+            let input = data.as_ref().unwrap();
+            if by != 0 {
+                for y in 0..(2 * by).min(sy) {
+                    topbottom.row_mut(y)[..sx].copy_from_slice(input.row(y));
+                    topbottom.row_mut(4 * by - 1 - y)[..sx].copy_from_slice(input.row(sy - y - 1));
+                }
+            }
+            if bx != 0 {
+                let cs = (bx * 2 * ty.size()).min(sx);
+                for y in 0..sy {
+                    let row_out = leftright.row_mut(y);
+                    let row_in = input.row(y);
+                    row_out[..cs].copy_from_slice(&row_in[..cs]);
+                    row_out[4 * bx * ty.size() - cs..].copy_from_slice(&row_in[sx - cs..]);
+                }
+            }
+            *buf.leftright[c].borrow_mut() = Some(leftright);
+            *buf.topbottom[c].borrow_mut() = Some(topbottom);
         }
 
-        let gxm1 = gx.saturating_sub(1);
-        let gym1 = gy.saturating_sub(1);
-        let gxp1 = (gx + 1).min(self.shared.group_count.0 - 1);
-        let gyp1 = (gy + 1).min(self.shared.group_count.1 - 1);
-        let gw = self.shared.group_count.0;
-        // TODO(veluca): this code probably needs to be adapted for multithreading.
-        let mut ready_mask = [
-            self.input_buffers[gym1 * gw + gxm1].is_ready,
-            self.input_buffers[gym1 * gw + gx].is_ready,
-            self.input_buffers[gym1 * gw + gxp1].is_ready,
-            self.input_buffers[gy * gw + gxm1].is_ready,
-            self.input_buffers[gy * gw + gx].is_ready, // should be guaranteed to be 1.
-            self.input_buffers[gy * gw + gxp1].is_ready,
-            self.input_buffers[gyp1 * gw + gxm1].is_ready,
-            self.input_buffers[gyp1 * gw + gx].is_ready,
-            self.input_buffers[gyp1 * gw + gxp1].is_ready,
-        ];
-        // We can only render a corner if we have all the 4 adjacent groups. Thus, mask out corners if
-        // the corresponding side buffers are not ready.
-        ready_mask[0] &= ready_mask[1];
-        ready_mask[0] &= ready_mask[3];
-        ready_mask[2] &= ready_mask[1];
-        ready_mask[2] &= ready_mask[5];
-        ready_mask[6] &= ready_mask[3];
-        ready_mask[6] &= ready_mask[7];
-        ready_mask[8] &= ready_mask[5];
-        ready_mask[8] &= ready_mask[7];
+        let ready_mask = self.input_buffers.mark_ready(g);
 
         let mut data = self.per_thread_data.get();
         data.ensure_populated(self)?;
@@ -302,58 +241,10 @@ impl LowMemoryRenderPipeline {
             Ok(())
         })?;
 
-        drop(data);
-
-        let all_finalized = (0..self.shared.num_channels())
-            .filter(|&c| self.shared.channel_is_used[c])
-            .all(|c| self.shared.group_chan_complete[g][c]);
-
-        let mut preserved_count = 0;
-        for c in 0..self.input_buffers[g].data.len() {
-            if !self.shared.channel_is_used[c] {
-                continue;
-            }
-            let is_finalized = self.shared.group_chan_complete[g][c];
-            let preserve = is_finalized && !all_finalized;
-            if !preserve {
-                if let Some(b) = std::mem::take(&mut self.input_buffers[g].data[c]) {
-                    self.store_scratch_buffer(c, 0, b);
-                }
-            } else {
-                preserved_count += 1;
-            }
-        }
-        self.input_buffers[g].ready_channels = preserved_count;
-
-        // Clear border buffers that will not be used again.
-        // This is certainly the case if *all* the groups in the 3x3 group area around
-        // the current group are complete.
-        if self.shared.group_chan_complete[g].iter().all(|x| *x) {
-            for g in [
-                gym1 * gw + gxm1,
-                gym1 * gw + gx,
-                gym1 * gw + gxp1,
-                gy * gw + gxm1,
-                gy * gw + gx,
-                gy * gw + gxp1,
-                gyp1 * gw + gxm1,
-                gyp1 * gw + gx,
-                gyp1 * gw + gxp1,
-            ] {
-                self.input_buffers[g].num_completed_groups_3x3 += 1;
-                if self.input_buffers[g].num_completed_groups_3x3 != 9 {
-                    continue;
-                }
-                for c in 0..self.input_buffers[g].data.len() {
-                    if let Some(b) = std::mem::take(&mut self.input_buffers[g].topbottom[c]) {
-                        self.store_scratch_buffer(c, 1, b);
-                    }
-                    if let Some(b) = std::mem::take(&mut self.input_buffers[g].leftright[c]) {
-                        self.store_scratch_buffer(c, 2, b);
-                    }
-                }
-            }
-        }
+        self.input_buffers
+            .mark_done(g, &self.shared, |channel, kind, image| {
+                self.store_scratch_buffer(channel, kind, image)
+            });
 
         Ok(())
     }

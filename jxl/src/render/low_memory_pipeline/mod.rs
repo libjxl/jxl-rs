@@ -14,7 +14,7 @@ use crate::error::Result;
 use crate::image::{DataTypeTag, Image, ImageDataType, OwnedRawImage, Rect};
 use crate::render::buffer_splitter::{BufferSplitter, SaveStageBufferInfo};
 use crate::render::internal::Stage;
-use crate::render::low_memory_pipeline::group_scheduler::InputBuffer;
+use crate::render::low_memory_pipeline::input_buffers::InputBuffers;
 use crate::render::{ErasedLocalState, MAX_BORDER};
 use crate::util::{AtomicRefCell, PerThreadStorage, ShiftRightCeil, tracing_wrappers::*};
 
@@ -23,6 +23,7 @@ use super::internal::{RenderPipelineShared, RunInOutStage, RunInPlaceStage};
 
 mod group_scheduler;
 mod helpers;
+mod input_buffers;
 mod render_group;
 pub(crate) mod row_buffers;
 mod run_stage;
@@ -85,7 +86,7 @@ impl LowMemoryRenderPipelinePerThread {
 pub struct LowMemoryRenderPipeline {
     shared: RenderPipelineShared<RowBuffer>,
     per_thread_data: PerThreadStorage<LowMemoryRenderPipelinePerThread>,
-    input_buffers: Vec<InputBuffer>,
+    input_buffers: InputBuffers,
     next_border_and_cur_downsample: Vec<Vec<(u8, (u8, u8))>>,
     save_buffer_info: Vec<Option<SaveStageBufferInfo>>,
     // The input buffer that each channel of each stage should use.
@@ -122,11 +123,7 @@ impl RenderPipeline for LowMemoryRenderPipeline {
     type Buffer = RowBuffer;
 
     fn new_from_shared(shared: RenderPipelineShared<Self::Buffer>) -> Result<Self> {
-        let mut input_buffers = vec![];
         let nc = shared.num_channels();
-        for _ in 0..shared.group_chan_complete.len() {
-            input_buffers.push(InputBuffer::new(nc));
-        }
         let mut previous_inout: Vec<_> = (0..nc).map(|x| (0usize, x)).collect();
         let mut stage_input_buffer_index = vec![];
         let mut next_border_and_cur_downsample = vec![vec![]];
@@ -293,7 +290,7 @@ impl RenderPipeline for LowMemoryRenderPipeline {
         }
 
         Ok(Self {
-            input_buffers,
+            input_buffers: InputBuffers::new(nc, shared.group_count)?,
             stage_input_buffer_index,
             next_border_and_cur_downsample,
             per_thread_data: PerThreadStorage::new(|| LowMemoryRenderPipelinePerThread {
@@ -338,7 +335,9 @@ impl RenderPipeline for LowMemoryRenderPipeline {
                 channel,
                 T::DATA_TYPE_ID,
             );
-            self.input_buffers[group_id].set_buffer(channel, buf.into_raw());
+            self.input_buffers
+                .get(group_id)
+                .set_buffer(channel, buf.into_raw());
             self.shared.group_chan_complete[group_id][channel] = complete;
 
             self.render_with_new_group(group_id, buffer_splitter)?;
@@ -456,7 +455,7 @@ impl RenderPipeline for LowMemoryRenderPipeline {
             .all(|c| self.shared.group_chan_complete[g][c]);
         // The caller will feed back in all the non-ready channels.
         if !all_finalized {
-            self.input_buffers[g].is_ready = false;
+            self.input_buffers.mark_not_ready(g);
         }
     }
 
