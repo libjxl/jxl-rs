@@ -5,6 +5,8 @@
 
 #![allow(clippy::needless_range_loop)]
 
+use std::fmt::Debug;
+
 use row_buffers::RowBuffer;
 
 use crate::api::JxlOutputBuffer;
@@ -14,7 +16,7 @@ use crate::render::buffer_splitter::{BufferSplitter, SaveStageBufferInfo};
 use crate::render::internal::Stage;
 use crate::render::low_memory_pipeline::group_scheduler::InputBuffer;
 use crate::render::{ErasedLocalState, MAX_BORDER};
-use crate::util::{ShiftRightCeil, tracing_wrappers::*};
+use crate::util::{PerThreadStorage, ShiftRightCeil, tracing_wrappers::*};
 
 use super::RenderPipeline;
 use super::internal::{RenderPipelineShared, RunInOutStage, RunInPlaceStage};
@@ -26,10 +28,65 @@ pub(crate) mod row_buffers;
 mod run_stage;
 mod save;
 
+struct LowMemoryRenderPipelinePerThread {
+    row_buffers: Vec<Vec<RowBuffer>>,
+    // Local states of each stage, if any.
+    local_states: Vec<Option<Box<ErasedLocalState>>>,
+}
+
+impl Debug for LowMemoryRenderPipelinePerThread {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "<scratch>")
+    }
+}
+
+impl LowMemoryRenderPipelinePerThread {
+    fn ensure_populated(&mut self, p: &LowMemoryRenderPipeline) -> Result<()> {
+        if !self.row_buffers.is_empty() {
+            return Ok(());
+        }
+        let nc = p.shared.num_channels();
+        let mut initial_buffers = vec![];
+        for chan in 0..nc {
+            initial_buffers.push(RowBuffer::new(
+                p.shared.channel_info[0][chan].ty.unwrap_or(DataTypeTag::U8),
+                p.next_border_and_cur_downsample[0][chan].0 as usize,
+                0,
+                0,
+                p.shared.chunk_size >> p.shared.channel_info[0][chan].downsample.0,
+            )?);
+        }
+        self.row_buffers = vec![initial_buffers];
+
+        // Allocate buffers.
+        for (i, stage) in p.shared.stages.iter().enumerate() {
+            let mut stage_buffers = vec![];
+            for (next_y_border, (dsx, _)) in p.next_border_and_cur_downsample[i + 1].iter() {
+                stage_buffers.push(RowBuffer::new(
+                    stage.output_type().unwrap(),
+                    *next_y_border as usize,
+                    stage.shift().1 as usize,
+                    stage.shift().0 as usize,
+                    p.shared.chunk_size >> *dsx,
+                )?);
+            }
+            self.row_buffers.push(stage_buffers);
+        }
+        self.local_states = p
+            .shared
+            .stages
+            .iter()
+            .map(|x| x.init_local_state())
+            .collect::<Result<_>>()?;
+        Ok(())
+    }
+}
+
 pub struct LowMemoryRenderPipeline {
     shared: RenderPipelineShared<RowBuffer>,
+    per_thread_data: PerThreadStorage<LowMemoryRenderPipelinePerThread>,
     input_buffers: Vec<InputBuffer>,
-    row_buffers: Vec<Vec<RowBuffer>>,
+    next_border_and_cur_downsample: Vec<Vec<(u8, (u8, u8))>>,
     save_buffer_info: Vec<Option<SaveStageBufferInfo>>,
     // The input buffer that each channel of each stage should use.
     // This is indexed both by stage index (0 corresponds to input data, 1 to stage[0], etc) and by
@@ -48,8 +105,6 @@ pub struct LowMemoryRenderPipeline {
     // For every stage, the downsampling level of *any* channel that the stage uses at that point.
     // Note that this must be equal across all the used channels.
     downsampling_for_stage: Vec<(usize, usize)>,
-    // Local states of each stage, if any.
-    local_states: Vec<Option<Box<ErasedLocalState>>>,
     // Pre-filled opaque alpha buffers for stages that need fill_opaque_alpha.
     // Indexed by stage index; None if stage doesn't need alpha fill.
     opaque_alpha_buffers: Vec<Option<RowBuffer>>,
@@ -100,32 +155,6 @@ impl RenderPipeline for LowMemoryRenderPipeline {
             }
         }
 
-        let mut initial_buffers = vec![];
-        for chan in 0..nc {
-            initial_buffers.push(RowBuffer::new(
-                shared.channel_info[0][chan].ty.unwrap_or(DataTypeTag::U8),
-                next_border_and_cur_downsample[0][chan].0 as usize,
-                0,
-                0,
-                shared.chunk_size >> shared.channel_info[0][chan].downsample.0,
-            )?);
-        }
-        let mut row_buffers = vec![initial_buffers];
-
-        // Allocate buffers.
-        for (i, stage) in shared.stages.iter().enumerate() {
-            let mut stage_buffers = vec![];
-            for (next_y_border, (dsx, _)) in next_border_and_cur_downsample[i + 1].iter() {
-                stage_buffers.push(RowBuffer::new(
-                    stage.output_type().unwrap(),
-                    *next_y_border as usize,
-                    stage.shift().1 as usize,
-                    stage.shift().0 as usize,
-                    shared.chunk_size >> *dsx,
-                )?);
-            }
-            row_buffers.push(stage_buffers);
-        }
         // Compute information to be used to compute sub-rects for "save" stages to operate on
         // rects.
         let mut save_buffer_info = vec![];
@@ -266,17 +295,16 @@ impl RenderPipeline for LowMemoryRenderPipeline {
         Ok(Self {
             input_buffers,
             stage_input_buffer_index,
-            row_buffers,
+            next_border_and_cur_downsample,
+            per_thread_data: PerThreadStorage::new(|| LowMemoryRenderPipelinePerThread {
+                row_buffers: vec![],
+                local_states: vec![],
+            }),
             padding_was_rendered: false,
             save_buffer_info,
             stage_output_border_pixels: border_pixels_per_stage,
             border_size,
             input_border_pixels: border_pixels,
-            local_states: shared
-                .stages
-                .iter()
-                .map(|x| x.init_local_state())
-                .collect::<Result<_>>()?,
             group_scratch_buffers_limit: shared.group_scratch_buffers_limit,
             shared,
             downsampling_for_stage,
@@ -396,6 +424,11 @@ impl RenderPipeline for LowMemoryRenderPipeline {
             }
         }
         let full_image_size = e.image_size;
+
+        // TODO(veluca): parallelize here.
+        let mut data = self.per_thread_data.get();
+        data.ensure_populated(self)?;
+
         for (xrange, yrange) in strips {
             let rect_to_render = Rect {
                 origin: (xrange.start, yrange.start),
@@ -412,7 +445,7 @@ impl RenderPipeline for LowMemoryRenderPipeline {
                 full_image_size,
                 (0, 0),
             );
-            self.render_outside_frame(xrange, yrange, &mut local_buffers)?;
+            self.render_outside_frame_internal(&mut data, xrange, yrange, &mut local_buffers)?;
         }
         Ok(())
     }

@@ -236,6 +236,9 @@ impl LowMemoryRenderPipeline {
         ready_mask[8] &= ready_mask[5];
         ready_mask[8] &= ready_mask[7];
 
+        let mut data = self.per_thread_data.get();
+        data.ensure_populated(self)?;
+
         foreach_ready_rect(ready_mask, |xrange, yrange| {
             let y0 = match (gy == 0, yrange.start) {
                 (true, 0) => group_rect.origin.1,
@@ -290,9 +293,11 @@ impl LowMemoryRenderPipeline {
                 origin,
             );
 
-            self.render_group((gx, gy), image_area, &mut local_buffers)?;
+            self.render_group(&mut data, (gx, gy), image_area, &mut local_buffers)?;
             Ok(())
         })?;
+
+        drop(data);
 
         let all_finalized = (0..self.shared.num_channels())
             .filter(|&c| self.shared.channel_is_used[c])
