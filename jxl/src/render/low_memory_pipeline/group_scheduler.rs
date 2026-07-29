@@ -98,7 +98,7 @@ impl LowMemoryRenderPipeline {
     }
 
     pub(super) fn render_with_new_group(
-        &mut self,
+        &self,
         g: usize,
         buffer_splitter: &mut BufferSplitter,
     ) -> Result<()> {

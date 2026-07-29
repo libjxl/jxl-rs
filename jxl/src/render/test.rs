@@ -131,7 +131,7 @@ fn make_and_run_simple_pipeline_impl<InputT: ImageDataType, OutputT: ImageDataTy
             false,
         );
     }
-    let mut pipeline = pipeline.build()?;
+    let pipeline = pipeline.build()?;
 
     let num_groups = image_size.0.shrc(LOG_GROUP_SIZE) * image_size.1.shrc(LOG_GROUP_SIZE);
 
