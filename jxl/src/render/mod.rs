@@ -114,8 +114,6 @@ pub trait RenderPipelineInOutStage: Any + std::fmt::Display + Send + Sync {
     }
 }
 
-// TODO(veluca): find a way to reduce the generated code due to having two builders, to integrate
-// SIMD dispatch in the pipeline, and to test consistency across instruction sets in the pipeline.
 pub(crate) trait RenderPipeline: Sized {
     type Buffer: 'static;
 
