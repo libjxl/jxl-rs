@@ -3,6 +3,8 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
+use std::sync::{Mutex, atomic::Ordering};
+
 use crate::{
     api::JxlOutputBuffer,
     error::Result,
@@ -25,25 +27,28 @@ mod save;
 /// Eventually meant to be used only for verification purposes.
 pub struct SimpleRenderPipeline {
     shared: RenderPipelineShared<Image<f64>>,
-    input_buffers: Vec<Image<f64>>,
+    input_buffers: Mutex<Vec<Image<f64>>>,
 }
 
 impl SimpleRenderPipeline {
     #[instrument(skip_all, err)]
-    fn do_render(&mut self, buffer_splitter: &mut BufferSplitter) -> Result<()> {
+    fn do_render(&self, buffer_splitter: &mut BufferSplitter) -> Result<()> {
         let ready = self
             .shared
             .group_chan_complete
             .iter()
             .flat_map(|x| x.iter())
-            .all(|x| *x);
+            .all(|x| x.load(Ordering::Relaxed));
         if !ready {
             debug!("not yet ready");
             return Ok(());
         }
         debug!("ready to render");
 
-        let mut current_buffers = clone_images(&self.input_buffers)?;
+        // We explicitly lock the mutex until the end of the function call to
+        // avoid concurrent calls to BufferSplitter.
+        let buffers = self.input_buffers.lock().unwrap();
+        let mut current_buffers = clone_images(&*buffers)?;
 
         let mut current_size = self.shared.input_size;
 
@@ -143,7 +148,7 @@ impl RenderPipeline for SimpleRenderPipeline {
 
         Ok(Self {
             shared,
-            input_buffers,
+            input_buffers: Mutex::new(input_buffers),
         })
     }
 
@@ -152,13 +157,13 @@ impl RenderPipeline for SimpleRenderPipeline {
     }
 
     #[instrument(skip_all, err)]
-    fn get_buffer<T: ImageDataType>(&mut self, channel: usize) -> Result<Image<T>> {
+    fn get_buffer<T: ImageDataType>(&self, channel: usize) -> Result<Image<T>> {
         let sz = self.shared.group_size_for_channel(channel, T::DATA_TYPE_ID);
         Image::<T>::new(sz)
     }
 
     fn set_buffer_for_group<T: ImageDataType>(
-        &mut self,
+        &self,
         channel: usize,
         group_id: usize,
         complete: bool,
@@ -179,15 +184,16 @@ impl RenderPipeline for SimpleRenderPipeline {
             debug!(?sz, input_buffers_sz=?self.input_buffers[channel].size(), offset=?off, ?downsample, ?goffset);
             let ty = ty.unwrap();
             assert_eq!(ty, T::DATA_TYPE_ID);
-            let total_sz = self.input_buffers[channel].size();
+            let mut buffers = self.input_buffers.lock().unwrap();
+            let total_sz = buffers[channel].size();
             for y in 0..sz.1.min(total_sz.1 - off.1) {
                 let row_in = buf.row(y);
-                let row_out = self.input_buffers[channel].row_mut(y + off.1);
+                let row_out = buffers[channel].row_mut(y + off.1);
                 for x in 0..sz.0.min(total_sz.0 - off.0) {
                     row_out[x + off.0] = row_in[x].to_f64();
                 }
             }
-            self.shared.group_chan_complete[group_id][channel] = complete;
+            self.shared.group_chan_complete[group_id][channel].store(complete, Ordering::Relaxed);
         }
 
         self.do_render(buffer_splitter)

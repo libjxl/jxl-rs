@@ -121,7 +121,7 @@ impl InputBuffers {
 
         let all_finalized = (0..shared.num_channels())
             .filter(|&c| shared.channel_is_used[c])
-            .all(|c| shared.group_chan_complete[group][c]);
+            .all(|c| shared.group_chan_complete[group][c].load(Ordering::Relaxed));
 
         {
             let mut data = self.buffers[group].data.borrow_mut();
@@ -130,7 +130,7 @@ impl InputBuffers {
                 if !shared.channel_is_used[c] {
                     continue;
                 }
-                let is_finalized = shared.group_chan_complete[group][c];
+                let is_finalized = shared.group_chan_complete[group][c].load(Ordering::Relaxed);
                 let preserve = is_finalized && !all_finalized;
                 if !preserve {
                     if let Some(b) = std::mem::take(&mut data[c]) {
@@ -148,7 +148,10 @@ impl InputBuffers {
         // Clear border buffers that will not be used again.
         // This is certainly the case if *all* the groups in the 3x3 group area around
         // the current group are complete.
-        if shared.group_chan_complete[group].iter().all(|x| *x) {
+        if shared.group_chan_complete[group]
+            .iter()
+            .all(|x| x.load(Ordering::Relaxed))
+        {
             for g in [
                 gym1 * gw + gxm1,
                 gym1 * gw + gx,

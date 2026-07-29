@@ -6,6 +6,7 @@
 #![allow(clippy::needless_range_loop)]
 
 use std::any::Any;
+use std::sync::atomic::Ordering;
 
 use row_buffers::RowBuffer;
 
@@ -312,7 +313,7 @@ impl RenderPipeline for LowMemoryRenderPipeline {
     }
 
     #[instrument(skip_all, err)]
-    fn get_buffer<T: ImageDataType>(&mut self, channel: usize) -> Result<Image<T>> {
+    fn get_buffer<T: ImageDataType>(&self, channel: usize) -> Result<Image<T>> {
         if let Some(b) = self.maybe_get_scratch_buffer(channel, 0) {
             return Ok(Image::from_raw(b));
         }
@@ -321,7 +322,7 @@ impl RenderPipeline for LowMemoryRenderPipeline {
     }
 
     fn set_buffer_for_group<T: ImageDataType>(
-        &mut self,
+        &self,
         channel: usize,
         group_id: usize,
         complete: bool,
@@ -338,7 +339,7 @@ impl RenderPipeline for LowMemoryRenderPipeline {
             self.input_buffers
                 .get(group_id)
                 .set_buffer(channel, buf.into_raw());
-            self.shared.group_chan_complete[group_id][channel] = complete;
+            self.shared.group_chan_complete[group_id][channel].store(complete, Ordering::Relaxed);
 
             self.render_with_new_group(group_id, buffer_splitter)?;
         }
@@ -452,7 +453,7 @@ impl RenderPipeline for LowMemoryRenderPipeline {
     fn mark_group_to_rerender(&mut self, g: usize) {
         let all_finalized = (0..self.shared.num_channels())
             .filter(|&c| self.shared.channel_is_used[c])
-            .all(|c| self.shared.group_chan_complete[g][c]);
+            .all(|c| self.shared.group_chan_complete[g][c].load(Ordering::Relaxed));
         // The caller will feed back in all the non-ready channels.
         if !all_finalized {
             self.input_buffers.mark_not_ready(g);

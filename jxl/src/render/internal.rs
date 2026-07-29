@@ -5,6 +5,7 @@
 
 use std::any::Any;
 use std::fmt::Display;
+use std::sync::atomic::AtomicBool;
 
 use crate::error::Result;
 use crate::image::{DataTypeTag, ImageDataType};
@@ -106,7 +107,7 @@ pub struct RenderPipelineShared<Buffer> {
     pub input_size: (usize, usize),
     pub log_group_size: usize,
     pub group_count: (usize, usize),
-    pub group_chan_complete: Vec<Vec<bool>>,
+    pub group_chan_complete: Vec<Vec<AtomicBool>>,
     pub chunk_size: usize,
     pub stages: Vec<Stage<Buffer>>,
     pub extend_stage_index: Option<usize>,
