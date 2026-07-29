@@ -11,7 +11,9 @@ use crate::{
     image::{DataTypeTag, Rect},
     render::{
         internal::{ChannelInfo, Stage},
-        low_memory_pipeline::{helpers::get_distinct_indices, run_stage::ExtraInfo},
+        low_memory_pipeline::{
+            LowMemoryRenderPipelinePerThread, helpers::get_distinct_indices, run_stage::ExtraInfo,
+        },
     },
     util::{ChannelVec, ShiftRightCeil, mirror, tracing_wrappers::*},
 };
@@ -64,7 +66,8 @@ fn apply_x_padding(
 
 impl LowMemoryRenderPipeline {
     fn fill_initial_buffers(
-        &mut self,
+        &self,
+        data: &mut LowMemoryRenderPipelinePerThread,
         c: usize,
         y: usize,
         (x0, xsize): (usize, usize),
@@ -95,7 +98,7 @@ impl LowMemoryRenderPipeline {
             (y - group_y0, gy, false)
         };
 
-        let output_row = self.row_buffers[0][c].get_row_mut::<u8>(y);
+        let output_row = data.row_buffers[0][c].get_row_mut::<u8>(y);
 
         let copy_x0 = x0.saturating_sub(self.input_border_pixels[c].0);
         let copy_x1 =
@@ -176,7 +179,8 @@ impl LowMemoryRenderPipeline {
     // the center of the group, and 0 and 2 include data from the neighbouring group (if any).
     #[instrument(skip(self, buffers))]
     pub(super) fn render_group(
-        &mut self,
+        &self,
+        data: &mut LowMemoryRenderPipelinePerThread,
         (gx, gy): (usize, usize),
         image_area: Rect,
         buffers: &mut [Option<JxlOutputBuffer>],
@@ -224,7 +228,7 @@ impl LowMemoryRenderPipeline {
                     continue;
                 }
                 let y = y as usize;
-                self.fill_initial_buffers(c, y, (x0 >> dx, xsize >> dx), (gx, gy));
+                self.fill_initial_buffers(data, c, y, (x0 >> dx, xsize >> dx), (gx, gy));
             }
             // Step 2: go through stages one by one.
             for (i, stage) in self.shared.stages.iter().enumerate() {
@@ -254,7 +258,7 @@ impl LowMemoryRenderPipeline {
                 match stage {
                     Stage::InPlace(s) => {
                         let mut buffers = get_distinct_indices(
-                            &mut self.row_buffers,
+                            &mut data.row_buffers,
                             &self.sorted_buffer_indices[i],
                         );
                         s.run_stage_on(
@@ -268,7 +272,7 @@ impl LowMemoryRenderPipeline {
                                 image_height: shifted_ysize,
                             },
                             &mut buffers,
-                            self.local_states[i].as_deref_mut(),
+                            data.local_states[i].as_deref_mut(),
                         );
                     }
                     Stage::Save(s) => {
@@ -276,7 +280,7 @@ impl LowMemoryRenderPipeline {
                         // Channel ordering is handled in stage_input_buffer_index construction.
                         let mut input_data: ChannelVec<_> = self.stage_input_buffer_index[i]
                             .iter()
-                            .map(|(si, ci)| &self.row_buffers[*si][*ci])
+                            .map(|(si, ci)| &data.row_buffers[*si][*ci])
                             .collect();
                         // Append opaque alpha buffer if fill_opaque_alpha is set
                         if let Some(ref alpha_buf) = self.opaque_alpha_buffers[i] {
@@ -306,7 +310,7 @@ impl LowMemoryRenderPipeline {
                                     let y = mirror(y as isize + iy, shifted_ysize);
                                     apply_x_padding(
                                         s.input_type(),
-                                        self.row_buffers[*si][*ci].get_row_mut::<u8>(y),
+                                        data.row_buffers[*si][*ci].get_row_mut::<u8>(y),
                                         -(borderx as isize)..0,
                                         // Either xsize is the actual size of the image, or it is
                                         // much larger than borderx, so this works out either way.
@@ -324,7 +328,7 @@ impl LowMemoryRenderPipeline {
                                     let y = mirror(y as isize + iy, shifted_ysize);
                                     apply_x_padding(
                                         s.input_type(),
-                                        self.row_buffers[*si][*ci].get_row_mut::<u8>(y),
+                                        data.row_buffers[*si][*ci].get_row_mut::<u8>(y),
                                         shifted_xsize as isize..(shifted_xsize + borderx) as isize,
                                         // borderx..0 is either data from the neighbouring group or
                                         // data that was filled in by the iteration above.
@@ -333,7 +337,7 @@ impl LowMemoryRenderPipeline {
                                 }
                             }
                         }
-                        let (inb, outb) = self.row_buffers.split_at_mut(i + 1);
+                        let (inb, outb) = data.row_buffers.split_at_mut(i + 1);
                         // Prepare pointers to input and output buffers.
                         let input_data: ChannelVec<_> = self.stage_input_buffer_index[i]
                             .iter()
@@ -351,7 +355,7 @@ impl LowMemoryRenderPipeline {
                             },
                             &input_data,
                             &mut outb[0][..],
-                            self.local_states[i].as_deref_mut(),
+                            data.local_states[i].as_deref_mut(),
                         );
                     }
                 }
@@ -362,8 +366,9 @@ impl LowMemoryRenderPipeline {
 
     // Renders a chunk of data outside the current frame.
     #[instrument(skip(self, buffers))]
-    pub(super) fn render_outside_frame(
-        &mut self,
+    pub(super) fn render_outside_frame_internal(
+        &self,
+        data: &mut LowMemoryRenderPipelinePerThread,
         xrange: Range<usize>,
         yrange: Range<usize>,
         buffers: &mut [Option<JxlOutputBuffer>],
@@ -379,7 +384,7 @@ impl LowMemoryRenderPipeline {
             // Step 1: get padding from extend stage.
             for c in 0..num_channels {
                 let (si, ci) = self.stage_input_buffer_index[extend][c];
-                let buffer = &mut self.row_buffers[si][ci];
+                let buffer = &mut data.row_buffers[si][ci];
                 let Stage::Extend(extend) = &self.shared.stages[extend] else {
                     unreachable!("extend stage is not an extend stage");
                 };
@@ -393,7 +398,7 @@ impl LowMemoryRenderPipeline {
                 match stage {
                     Stage::InPlace(s) => {
                         let mut buffers = get_distinct_indices(
-                            &mut self.row_buffers,
+                            &mut data.row_buffers,
                             &self.sorted_buffer_indices[i],
                         );
                         s.run_stage_on(
@@ -407,7 +412,7 @@ impl LowMemoryRenderPipeline {
                                 image_height: self.shared.input_size.1,
                             },
                             &mut buffers,
-                            self.local_states[i].as_deref_mut(),
+                            data.local_states[i].as_deref_mut(),
                         );
                     }
                     Stage::Save(s) => {
@@ -415,7 +420,7 @@ impl LowMemoryRenderPipeline {
                         // Channel ordering is handled in stage_input_buffer_index construction.
                         let mut input_data: ChannelVec<_> = self.stage_input_buffer_index[i]
                             .iter()
-                            .map(|(si, ci)| &self.row_buffers[*si][*ci])
+                            .map(|(si, ci)| &data.row_buffers[*si][*ci])
                             .collect();
                         // Append opaque alpha buffer if fill_opaque_alpha is set
                         if let Some(ref alpha_buf) = self.opaque_alpha_buffers[i] {
@@ -436,7 +441,7 @@ impl LowMemoryRenderPipeline {
                     }
                     Stage::InOut(s) => {
                         assert_eq!(s.border(), (0, 0));
-                        let (inb, outb) = self.row_buffers.split_at_mut(i + 1);
+                        let (inb, outb) = data.row_buffers.split_at_mut(i + 1);
                         // Prepare pointers to input and output buffers.
                         let input_data: ChannelVec<_> = self.stage_input_buffer_index[i]
                             .iter()
@@ -454,7 +459,7 @@ impl LowMemoryRenderPipeline {
                             },
                             &input_data,
                             &mut outb[0][..],
-                            self.local_states[i].as_deref_mut(),
+                            data.local_states[i].as_deref_mut(),
                         );
                     }
                 }
