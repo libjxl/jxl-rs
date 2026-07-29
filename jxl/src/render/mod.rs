@@ -122,12 +122,12 @@ pub(crate) trait RenderPipeline: Sized {
     /// Obtains a buffer suitable for storing the input in channel `channel`.
     /// This *might* be a buffer that was used to store that channel for that group in a previous
     /// pass, a new buffer, or a re-used buffer from i.e. previously decoded frames.
-    fn get_buffer<T: ImageDataType>(&mut self, channel: usize) -> Result<Image<T>>;
+    fn get_buffer<T: ImageDataType>(&self, channel: usize) -> Result<Image<T>>;
 
     /// Gives back the buffer for a channel and group to the render pipeline, marking whether
     /// this will be the last time that this function is called for this group.
     fn set_buffer_for_group<T: ImageDataType>(
-        &mut self,
+        &self,
         channel: usize,
         group_id: usize,
         complete: bool,
