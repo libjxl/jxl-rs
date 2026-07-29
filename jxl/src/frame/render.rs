@@ -295,6 +295,14 @@ impl Frame {
             }
         }
 
+        if self.header.encoding == Encoding::VarDCT {
+            for (group, _) in groups.iter() {
+                if self.group_status.channel_status[*group][0] == DataStatus::Final {
+                    pipeline!(self, p, p.mark_group_to_rerender(*group));
+                }
+            }
+        }
+
         // STEP 3: Run all the transforms that could be run already.
         // We do this because some modular images might not have coded channels in HF, so
         // all the coded channels were already decoded and the modular decoder does not
@@ -312,7 +320,7 @@ impl Frame {
                 },
             );
             self.group_status.need_vardct_flush.insert(g);
-            if should_render_non_final {
+            if should_render_non_final || is_final {
                 pipeline!(self, p, p.mark_group_to_rerender(g));
             }
         });

@@ -112,20 +112,13 @@ impl LowMemoryRenderPipeline {
 
         // Previous group horizontally, if needed.
         if copy_x0 < group_x0 {
+            let r;
             let (input_buf, xs) = if is_topbottom {
-                (
-                    self.input_buffers[base_gid - 1].topbottom[c]
-                        .as_ref()
-                        .unwrap(),
-                    group_xsize,
-                )
+                r = self.input_buffers.get(base_gid - 1).topbottom.borrow();
+                (r[c].as_ref().unwrap(), group_xsize)
             } else {
-                (
-                    self.input_buffers[base_gid - 1].leftright[c]
-                        .as_ref()
-                        .unwrap(),
-                    4 * (bx >> dx),
-                )
+                r = self.input_buffers.get(base_gid - 1).leftright.borrow();
+                (r[c].as_ref().unwrap(), 4 * (bx >> dx))
             };
             let input_row = input_buf.row(input_y);
 
@@ -136,28 +129,34 @@ impl LowMemoryRenderPipeline {
                 .copy_from_slice(&input_row[src_byte_offset..src_byte_offset + to_copy]);
             copy_byte_offset += to_copy;
         }
-        let input_buf = if is_topbottom {
-            self.input_buffers[base_gid].topbottom[c].as_ref().unwrap()
-        } else {
-            self.input_buffers[base_gid].data[c].as_ref().unwrap()
-        };
-        let input_row = input_buf.row(input_y);
-        let copy_start = copy_x0.saturating_sub(group_x0) * ty.size();
-        let copy_end = (copy_x1.min(group_x1) - group_x0) * ty.size();
-        let to_copy = copy_end - copy_start;
-        output_row[copy_byte_offset..copy_byte_offset + to_copy]
-            .copy_from_slice(&input_row[copy_start..copy_end]);
-        copy_byte_offset += to_copy;
+
+        {
+            let r;
+            let input_buf = if is_topbottom {
+                r = self.input_buffers.get(base_gid).topbottom.borrow();
+                r[c].as_ref().unwrap()
+            } else {
+                r = self.input_buffers.get(base_gid).data.borrow();
+                r[c].as_ref().unwrap()
+            };
+            let input_row = input_buf.row(input_y);
+            let copy_start = copy_x0.saturating_sub(group_x0) * ty.size();
+            let copy_end = (copy_x1.min(group_x1) - group_x0) * ty.size();
+            let to_copy = copy_end - copy_start;
+            output_row[copy_byte_offset..copy_byte_offset + to_copy]
+                .copy_from_slice(&input_row[copy_start..copy_end]);
+            copy_byte_offset += to_copy;
+        }
+
         // Next group horizontally, if any.
         if copy_x1 > group_x1 {
+            let r;
             let input_buf = if is_topbottom {
-                self.input_buffers[base_gid + 1].topbottom[c]
-                    .as_ref()
-                    .unwrap()
+                r = self.input_buffers.get(base_gid + 1).topbottom.borrow();
+                r[c].as_ref().unwrap()
             } else {
-                self.input_buffers[base_gid + 1].leftright[c]
-                    .as_ref()
-                    .unwrap()
+                r = self.input_buffers.get(base_gid + 1).leftright.borrow();
+                r[c].as_ref().unwrap()
             };
             let input_row = input_buf.row(input_y);
             let dx = self.shared.channel_info[0][c].downsample.0;
