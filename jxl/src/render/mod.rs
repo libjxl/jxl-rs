@@ -112,12 +112,12 @@ pub trait RenderPipelineInOutStage: Any + std::fmt::Display + Send + Sync {
     }
 }
 
-// TODO(veluca): find a way to reduce the generated code due to having two builders, to integrate
-// SIMD dispatch in the pipeline, and to test consistency across instruction sets in the pipeline.
 pub(crate) trait RenderPipeline: Sized {
     type Buffer: 'static;
 
     fn new_from_shared(shared: RenderPipelineShared<Self::Buffer>) -> Result<Self>;
+
+    fn prepare_for_threads(&mut self, num: usize) -> Result<()>;
 
     /// Obtains a buffer suitable for storing the input in channel `channel`.
     /// This *might* be a buffer that was used to store that channel for that group in a previous

@@ -186,6 +186,8 @@ impl Frame {
 
         pipeline!(self, p, p.check_buffer_sizes(&mut buffers[..])?);
 
+        pipeline!(self, p, p.prepare_for_threads(1)?);
+
         let mut buffer_splitter = BufferSplitter::new(&mut buffers[..]);
 
         pipeline!(self, p, p.render_outside_frame(&mut buffer_splitter)?);
