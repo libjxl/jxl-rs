@@ -86,7 +86,7 @@ impl Frame {
         };
 
         let upsample_stage = Upsample8x::new(&self.decoder_state.file_header.transform_data, 0);
-        let mut upsample_state = upsample_stage.init_local_state(0)?.unwrap();
+        let mut upsample_state = upsample_stage.init_local_state()?.unwrap();
 
         let xyb_stage = XybStage::new(0, output_color_info.clone());
 

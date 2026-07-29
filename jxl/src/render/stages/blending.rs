@@ -93,7 +93,7 @@ impl RenderPipelineInPlaceStage for BlendingStage {
         c < 3 + self.extra_channels.len()
     }
 
-    fn init_local_state(&self, _thread_index: usize) -> Result<Option<Box<dyn std::any::Any>>> {
+    fn init_local_state(&self) -> Result<Option<Box<dyn std::any::Any>>> {
         Ok(Some(Box::new(BlendingScratch::new())))
     }
 
