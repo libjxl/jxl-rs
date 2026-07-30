@@ -35,7 +35,7 @@ use crate::{
 };
 
 #[cfg(test)]
-macro_rules! pipeline {
+macro_rules! pipeline_mut {
     ($frame: expr, $pipeline: ident, $op: expr) => {
         if $frame.use_simple_pipeline {
             let $pipeline = $frame
@@ -59,9 +59,41 @@ macro_rules! pipeline {
 }
 
 #[cfg(not(test))]
-macro_rules! pipeline {
+macro_rules! pipeline_mut {
     ($frame: expr, $pipeline: ident, $op: expr) => {{
         let $pipeline = $frame.render_pipeline.as_mut().unwrap();
+        $op
+    }};
+}
+
+#[cfg(test)]
+macro_rules! pipeline {
+    ($frame: expr, $pipeline: ident, $op: expr) => {
+        if $frame.use_simple_pipeline {
+            let $pipeline = $frame
+                .render_pipeline
+                .as_ref()
+                .unwrap()
+                .downcast_ref::<SimpleRenderPipeline>()
+                .unwrap();
+            $op
+        } else {
+            use crate::render::LowMemoryRenderPipeline;
+            let $pipeline = $frame
+                .render_pipeline
+                .as_ref()
+                .unwrap()
+                .downcast_ref::<LowMemoryRenderPipeline>()
+                .unwrap();
+            $op
+        }
+    };
+}
+
+#[cfg(not(test))]
+macro_rules! pipeline {
+    ($frame: expr, $pipeline: ident, $op: expr) => {{
+        let $pipeline = $frame.render_pipeline.as_ref().unwrap();
         $op
     }};
 }
@@ -184,17 +216,17 @@ impl Frame {
             }));
         };
 
-        pipeline!(self, p, p.check_buffer_sizes(&mut buffers[..])?);
+        pipeline_mut!(self, p, p.check_buffer_sizes(&mut buffers[..])?);
 
-        let mut buffer_splitter = BufferSplitter::new(&mut buffers[..]);
+        let buffer_splitter = BufferSplitter::new(&mut buffers[..]);
 
-        pipeline!(self, p, p.render_outside_frame(&mut buffer_splitter)?);
+        pipeline_mut!(self, p, p.render_outside_frame(&buffer_splitter)?);
 
         let should_render_non_final = self.allow_rendering_before_last_pass() && do_flush;
 
         let modular_global = &mut self.lf_global.as_mut().unwrap().modular_global;
 
-        modular_global.set_pipeline_used_channels(pipeline!(self, p, p.used_channel_mask()));
+        modular_global.set_pipeline_used_channels(pipeline_mut!(self, p, p.used_channel_mask()));
 
         // STEP 1: figure out what modular buffers will be finalized during this decode, and mark them
         // as such.
@@ -265,7 +297,7 @@ impl Frame {
         if should_render_non_final {
             if self.header.encoding == Encoding::VarDCT {
                 for group in self.group_status.need_vardct_flush.iter() {
-                    pipeline!(self, p, p.mark_group_to_rerender(*group));
+                    pipeline_mut!(self, p, p.mark_group_to_rerender(*group));
                     modular_global.request_rerender(&self.header, *group);
                 }
             }
@@ -296,7 +328,7 @@ impl Frame {
         if self.header.encoding == Encoding::VarDCT {
             for (group, _) in groups.iter() {
                 if self.group_status.channel_status[*group][0] == DataStatus::Final {
-                    pipeline!(self, p, p.mark_group_to_rerender(*group));
+                    pipeline_mut!(self, p, p.mark_group_to_rerender(*group));
                 }
             }
         }
@@ -319,24 +351,24 @@ impl Frame {
             );
             self.group_status.need_vardct_flush.insert(g);
             if should_render_non_final || is_final {
-                pipeline!(self, p, p.mark_group_to_rerender(g));
+                pipeline_mut!(self, p, p.mark_group_to_rerender(g));
             }
         });
 
-        let mut pass_to_pipeline = |chan, group, complete, image: Image<i32>| {
+        let pass_to_pipeline = |chan, group, complete, image: Image<i32>| {
             pipeline!(
                 self,
                 p,
-                p.set_buffer_for_group(chan, group, complete, image, &mut buffer_splitter)?
+                p.set_buffer_for_group(chan, group, complete, image, &buffer_splitter)?
             );
             Ok(())
         };
 
-        modular_global.run_all_transforms(&self.header, &mut pass_to_pipeline)?;
+        modular_global.run_all_transforms(&self.header, &pass_to_pipeline)?;
 
         // STEP 4: decode the groups, eagerly decoding all the data.
         for (group, mut passes) in groups {
-            self.decode_hf_group(group, &mut passes, &mut buffer_splitter, do_flush)?;
+            self.decode_hf_group(group, &mut passes, &buffer_splitter, do_flush)?;
         }
 
         self.lf_global
@@ -349,7 +381,7 @@ impl Frame {
         // not rendered.
         if should_render_non_final || self.group_status.incomplete_groups == 0 {
             for g in std::mem::take(&mut self.group_status.need_vardct_flush) {
-                self.decode_hf_group(g, &mut [], &mut buffer_splitter, true)?;
+                self.decode_hf_group(g, &mut [], &buffer_splitter, true)?;
             }
         }
 

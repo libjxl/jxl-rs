@@ -567,7 +567,7 @@ impl FullModularImage {
         frame_header: &FrameHeader,
         global_tree: &Option<Tree>,
         br: &mut BitReader,
-        pass_to_pipeline: Option<&mut dyn FnMut(usize, usize, bool, Image<i32>) -> Result<()>>,
+        pass_to_pipeline: Option<&dyn Fn(usize, usize, bool, Image<i32>) -> Result<()>>,
     ) -> Result<()> {
         if self.buffer_info.is_empty() {
             info!("No modular channels to decode");
@@ -752,7 +752,7 @@ impl FullModularImage {
         &mut self,
         frame_header: &FrameHeader,
         tfm: usize,
-        pass_to_pipeline: &mut dyn FnMut(usize, usize, bool, Image<i32>) -> Result<()>,
+        pass_to_pipeline: &dyn Fn(usize, usize, bool, Image<i32>) -> Result<()>,
     ) -> Result<()> {
         self.transform_steps[tfm].do_run(
             frame_header,
@@ -778,7 +778,7 @@ impl FullModularImage {
     pub fn run_all_transforms(
         &mut self,
         frame_header: &FrameHeader,
-        pass_to_pipeline: &mut dyn FnMut(usize, usize, bool, Image<i32>) -> Result<()>,
+        pass_to_pipeline: &dyn Fn(usize, usize, bool, Image<i32>) -> Result<()>,
     ) -> Result<()> {
         while let Some(t) = self.ready_transform_steps.pop() {
             self.run_transform(frame_header, t, pass_to_pipeline)?;

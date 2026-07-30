@@ -6,10 +6,10 @@
 use std::ops::Range;
 
 use crate::{
-    api::JxlOutputBuffer,
     error::Result,
     image::{DataTypeTag, OwnedRawImage, Rect},
     render::{
+        buffer_splitter::OutputChannelRef,
         internal::{ChannelInfo, Stage},
         low_memory_pipeline::{
             LowMemoryRenderPipelinePerThread, helpers::get_distinct_indices, run_stage::ExtraInfo,
@@ -293,7 +293,7 @@ impl LowMemoryRenderPipeline {
         data: &mut LowMemoryRenderPipelinePerThread,
         (gx, gy): (usize, usize),
         image_area: Rect,
-        buffers: &mut [Option<JxlOutputBuffer>],
+        buffers: &mut [Option<OutputChannelRef>],
     ) -> Result<()> {
         let start_of_row = image_area.origin.0 == 0;
         let end_of_row = image_area.end().0 == self.shared.input_size.0;
@@ -488,7 +488,7 @@ impl LowMemoryRenderPipeline {
         data: &mut LowMemoryRenderPipelinePerThread,
         xrange: Range<usize>,
         yrange: Range<usize>,
-        buffers: &mut [Option<JxlOutputBuffer>],
+        buffers: &mut [Option<OutputChannelRef>],
     ) -> Result<()> {
         let num_channels = self.shared.num_channels();
         let x0 = xrange.start;
