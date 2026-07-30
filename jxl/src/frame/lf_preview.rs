@@ -358,6 +358,7 @@ impl Frame {
         let info = [Some(info)];
         let mut bufs = [Some(JxlOutputBuffer::reborrow(&mut output_buffers[0]))];
         let bufs = BufferSplitter::new(&mut bufs);
+        // TODO(veluca): parallelize this
         for r in regions {
             let upsampled_rect = Rect {
                 size: (r.size.0 * 8, r.size.1 * 8),

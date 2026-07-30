@@ -36,6 +36,7 @@ fn compute_pixel_channel(
     (mc, sm, gap.max(abs((mc - sm) / dc_factor)))
 }
 
+// TODO(veluca): SIMD and maybe parallelize this
 pub fn adaptive_lf_smoothing(lf_factors: [f32; 3], lf_image: &mut [Image<f32>; 3]) -> Result<()> {
     let xsize = lf_image[0].size().0;
     let ysize = lf_image[0].size().1;
