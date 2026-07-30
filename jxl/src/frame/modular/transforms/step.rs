@@ -265,7 +265,7 @@ impl TransformStepChunk {
         frame_header: &FrameHeader,
         buffers: &[ModularBufferInfo],
         tranform_scratch_space: &mut TransformScratchSpace,
-        pass_to_pipeline: &mut dyn FnMut(usize, usize, bool, Image<i32>) -> Result<()>,
+        pass_to_pipeline: &dyn Fn(usize, usize, bool, Image<i32>) -> Result<()>,
     ) -> Result<()> {
         let is_final = self.missing_final_deps == 0;
         let buf_out = self.buf_out();
