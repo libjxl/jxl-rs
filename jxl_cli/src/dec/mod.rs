@@ -13,12 +13,13 @@ use color_eyre::eyre::{Result, eyre};
 use jxl::{
     api::{
         Endianness, JxlAnimation, JxlBitDepth, JxlBitstreamInput, JxlColorProfile, JxlColorType,
-        JxlDataFormat, JxlDecoder, JxlDecoderOptions, JxlOutputBuffer, JxlPixelFormat,
-        ProcessingResult, states::WithImageInfo,
+        JxlDataFormat, JxlDecoder, JxlDecoderOptions, JxlOutputBuffer, JxlParallelRunner,
+        JxlParallelRunnerFun, JxlPixelFormat, ProcessingResult, states::WithImageInfo,
     },
     headers::extra_channels::ExtraChannel,
     image::{OwnedRawImage, Rect},
 };
+use rayon::iter::{IntoParallelIterator, ParallelIterator};
 
 pub struct ImageFrame {
     pub partial_renders: Vec<Vec<OwnedRawImage>>,
@@ -37,6 +38,20 @@ pub struct DecodeOutput {
     pub jxl_animation: Option<JxlAnimation>,
 }
 
+struct RayonParallelRunner;
+
+impl JxlParallelRunner for RayonParallelRunner {
+    fn run(&mut self, num: usize, fun: &JxlParallelRunnerFun) -> jxl::error::Result<()> {
+        if num == 1 || rayon::current_num_threads() == 1 {
+            for i in 0..num {
+                fun(i)?;
+            }
+            return Ok(());
+        }
+        (0..num).into_par_iter().try_for_each(fun)
+    }
+}
+
 pub fn decode_header<In: JxlBitstreamInputExt>(
     input: &mut In,
     render_interval: Option<usize>,
@@ -44,7 +59,9 @@ pub fn decode_header<In: JxlBitstreamInputExt>(
 ) -> Result<JxlDecoder<WithImageInfo>> {
     let mut decoder = JxlDecoder::<jxl::api::states::Initialized>::new(decoder_options);
     loop {
-        match input.with_capped_size(render_interval, |inp| decoder.process(inp))? {
+        match input.with_capped_size(render_interval, |inp| {
+            decoder.process(inp, Some(&mut RayonParallelRunner))
+        })? {
             ProcessingResult::Complete { result } => break Ok(result),
             ProcessingResult::NeedsMoreInput { fallback, .. } => {
                 if input.available_bytes()? > 0 {
@@ -268,9 +285,9 @@ pub fn decode_frames<In: JxlBitstreamInputExt>(
         let mut has_rendered_data = false;
 
         let mut decoder_with_frame_info = 'partial: loop {
-            match input
-                .with_capped_size(render_interval, |inp| decoder_with_image_info.process(inp))?
-            {
+            match input.with_capped_size(render_interval, |inp| {
+                decoder_with_image_info.process(inp, Some(&mut RayonParallelRunner))
+            })? {
                 ProcessingResult::Complete { result } => {
                     break 'partial result;
                 }
@@ -289,7 +306,8 @@ pub fn decode_frames<In: JxlBitstreamInputExt>(
                     // If we have more data but we're feeding it slowly, save the partial
                     // render and retry.
                     if render_interval.is_some() && input.available_bytes()? > 0 {
-                        has_rendered_data |= fallback.flush_pixels(&mut output_bufs)?;
+                        has_rendered_data |= fallback
+                            .flush_pixels(&mut output_bufs, Some(&mut RayonParallelRunner))?;
                         if has_rendered_data {
                             partial_renders.push(
                                 outputs
@@ -301,7 +319,7 @@ pub fn decode_frames<In: JxlBitstreamInputExt>(
                         decoder_with_image_info = fallback;
                         continue 'partial;
                     } else if allow_partial_files {
-                        fallback.flush_pixels(&mut output_bufs)?;
+                        fallback.flush_pixels(&mut output_bufs, Some(&mut RayonParallelRunner))?;
                         image_data.frames.push(ImageFrame {
                             partial_renders,
                             duration: 0.0,
@@ -330,7 +348,11 @@ pub fn decode_frames<In: JxlBitstreamInputExt>(
                 .collect();
 
             match input.with_capped_size(render_interval, |inp| {
-                decoder_with_frame_info.process(inp, &mut output_bufs)
+                decoder_with_frame_info.process(
+                    inp,
+                    &mut output_bufs,
+                    Some(&mut RayonParallelRunner),
+                )
             })? {
                 ProcessingResult::Complete { result } => {
                     break 'partial result;
@@ -339,7 +361,8 @@ pub fn decode_frames<In: JxlBitstreamInputExt>(
                     // If we have more data but we're feeding it slowly, save the partial
                     // render and retry.
                     if render_interval.is_some() && input.available_bytes()? > 0 {
-                        has_rendered_data |= fallback.flush_pixels(&mut output_bufs)?;
+                        has_rendered_data |= fallback
+                            .flush_pixels(&mut output_bufs, Some(&mut RayonParallelRunner))?;
                         if has_rendered_data {
                             partial_renders.push(
                                 outputs
@@ -351,7 +374,7 @@ pub fn decode_frames<In: JxlBitstreamInputExt>(
                         decoder_with_frame_info = fallback;
                         continue 'partial;
                     } else if allow_partial_files {
-                        fallback.flush_pixels(&mut output_bufs)?;
+                        fallback.flush_pixels(&mut output_bufs, Some(&mut RayonParallelRunner))?;
                         image_data.frames.push(ImageFrame {
                             partial_renders,
                             duration: frame_header.duration.unwrap_or(0.0),

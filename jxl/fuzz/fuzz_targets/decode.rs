@@ -20,7 +20,7 @@ fn fuzz_decode(mut data: &[u8]) -> Result<(), ()> {
     let mut decoder_options = JxlDecoderOptions::default();
     decoder_options.sample_limit = Some(1 << 22);
     let initialized_decoder = JxlDecoder::<states::Initialized>::new(decoder_options);
-    let mut decoder_with_image_info = as_complete(initialized_decoder.process(&mut data))?;
+    let mut decoder_with_image_info = as_complete(initialized_decoder.process(&mut data, None))?;
 
     let info = decoder_with_image_info.basic_info();
 
@@ -35,7 +35,8 @@ fn fuzz_decode(mut data: &[u8]) -> Result<(), ()> {
     };
 
     loop {
-        let decoder_with_frame_info = as_complete(decoder_with_image_info.process(&mut data))?;
+        let decoder_with_frame_info =
+            as_complete(decoder_with_image_info.process(&mut data, None))?;
         let frame_header = decoder_with_frame_info.frame_header();
         let frame_size = frame_header.size;
 
@@ -58,7 +59,7 @@ fn fuzz_decode(mut data: &[u8]) -> Result<(), ()> {
             .collect();
 
         decoder_with_image_info =
-            as_complete(decoder_with_frame_info.process(&mut data, &mut output_bufs))?;
+            as_complete(decoder_with_frame_info.process(&mut data, &mut output_bufs, None))?;
 
         if !decoder_with_image_info.has_more_frames() {
             break;
