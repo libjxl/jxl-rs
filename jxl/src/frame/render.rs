@@ -325,6 +325,7 @@ impl Frame {
             }
         });
 
+        // FIX: Parallelize from here...
         let mut pass_to_pipeline = |chan, group, complete, image: Image<i32>| {
             pipeline!(
                 self,
@@ -340,6 +341,7 @@ impl Frame {
         for (group, mut passes) in groups {
             self.decode_hf_group(group, &mut passes, &mut buffer_splitter, do_flush)?;
         }
+        // FIX: to here
 
         self.lf_global
             .as_ref()

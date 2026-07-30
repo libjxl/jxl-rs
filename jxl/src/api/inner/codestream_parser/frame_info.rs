@@ -470,6 +470,7 @@ impl FrameInfo {
             return Ok(data_for_next_section);
         }
 
+        // FIX: parallelize here
         for lf_section in self.lf_sections.drain(..) {
             let Section::Lf { group } = lf_section.section else {
                 unreachable!()
