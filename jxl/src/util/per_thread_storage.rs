@@ -3,7 +3,10 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-use std::ops::{Deref, DerefMut};
+use std::{
+    fmt::Debug,
+    ops::{Deref, DerefMut},
+};
 
 use crate::util::AtomicRefCell;
 
@@ -12,6 +15,12 @@ use crate::util::AtomicRefCell;
 pub struct PerThreadStorage<T> {
     storage: AtomicRefCell<Vec<T>>,
     init: fn() -> T,
+}
+
+impl<T> Debug for PerThreadStorage<T> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "<thread storage>")
+    }
 }
 
 pub struct PerThreadStorageRef<'a, T> {

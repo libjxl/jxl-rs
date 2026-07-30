@@ -364,7 +364,8 @@ impl Frame {
             Ok(())
         };
 
-        modular_global.run_all_transforms(&self.header, &pass_to_pipeline)?;
+        let mut ready_steps = modular_global.take_ready_steps();
+        modular_global.run_transforms(&self.header, &pass_to_pipeline, &mut ready_steps)?;
 
         // STEP 4: decode the groups, eagerly decoding all the data.
         for (group, mut passes) in groups {

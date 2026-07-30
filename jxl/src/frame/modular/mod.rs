@@ -3,7 +3,12 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-use std::{cmp::min, collections::HashSet, fmt::Debug, sync::atomic::Ordering};
+use std::{
+    cmp::min,
+    collections::HashSet,
+    fmt::Debug,
+    sync::atomic::{AtomicBool, Ordering},
+};
 
 use crate::{
     bit_reader::BitReader,
@@ -24,7 +29,7 @@ use crate::{
         modular::{GroupHeader, TransformId},
     },
     image::{Image, Rect},
-    util::{CeilLog2, tracing_wrappers::*},
+    util::{AtomicRefCell, CeilLog2, PerThreadStorage, tracing_wrappers::*},
 };
 use jxl_transforms::transform_map::*;
 
@@ -223,7 +228,7 @@ impl TransformScratchSpace {
 /// transforms to each of the groups in the input of the transforms.
 #[derive(Debug)]
 pub struct FullModularImage {
-    transform_scratch_space: TransformScratchSpace,
+    transform_scratch_space: PerThreadStorage<TransformScratchSpace>,
     buffer_info: Vec<ModularBufferInfo>,
     transform_steps: Vec<TransformStepChunk>,
     // List of buffer indices of the channels of the modular image encoded in each kind of section.
@@ -232,16 +237,16 @@ pub struct FullModularImage {
     can_do_partial_render: bool,
     can_do_early_partial_render: bool,
     needed_section0_channels_for_early_render: usize,
-    has_decoded_data: bool,
+    has_decoded_data: AtomicBool,
     global_header: Option<GroupHeader>,
     output_transforms_for_group: Vec<Vec<usize>>,
     pending_transforms: HashSet<usize>,
     rerendered_buffers: HashSet<(usize, usize)>,
-    delayed_ready_sections: HashSet<(usize, usize)>,
+    delayed_ready_sections: AtomicRefCell<HashSet<(usize, usize)>>,
     // Whether each channel is used or not by the render pipeline.
     pipeline_used_channels: Vec<bool>,
     // Stack of transform steps that are ready to process.
-    ready_transform_steps: Vec<usize>,
+    ready_transform_steps: AtomicRefCell<Vec<usize>>,
 }
 
 impl FullModularImage {
@@ -305,21 +310,21 @@ impl FullModularImage {
 
         if channels.is_empty() {
             return Ok(Self {
-                transform_scratch_space: TransformScratchSpace::new(),
+                transform_scratch_space: PerThreadStorage::new(TransformScratchSpace::new),
                 buffer_info: vec![],
                 transform_steps: vec![],
                 section_buffer_indices: vec![vec![]; 2 + frame_header.passes.num_passes as usize],
                 can_do_partial_render: true,
                 can_do_early_partial_render: false,
                 needed_section0_channels_for_early_render: 0,
-                has_decoded_data: false,
+                has_decoded_data: AtomicBool::new(false),
                 global_header: None,
                 pipeline_used_channels: vec![],
                 output_transforms_for_group: vec![vec![]; frame_header.num_groups()],
-                ready_transform_steps: vec![],
+                ready_transform_steps: AtomicRefCell::new(vec![]),
                 pending_transforms: HashSet::new(),
                 rerendered_buffers: HashSet::new(),
-                delayed_ready_sections: HashSet::new(),
+                delayed_ready_sections: AtomicRefCell::new(HashSet::new()),
             });
         }
 
@@ -473,7 +478,7 @@ impl FullModularImage {
             .count();
 
         Ok(FullModularImage {
-            transform_scratch_space: TransformScratchSpace::new(),
+            transform_scratch_space: PerThreadStorage::new(TransformScratchSpace::new),
             buffer_info,
             transform_steps,
             section_buffer_indices,
@@ -481,14 +486,14 @@ impl FullModularImage {
             can_do_early_partial_render: !has_problematic_palette_transform
                 && has_squeeze_transform,
             needed_section0_channels_for_early_render: num_channels + num_meta_channels,
-            has_decoded_data: false,
+            has_decoded_data: AtomicBool::new(false),
             global_header: Some(header),
             output_transforms_for_group,
             pipeline_used_channels: vec![],
-            ready_transform_steps: vec![],
+            ready_transform_steps: AtomicRefCell::new(vec![]),
             pending_transforms: HashSet::new(),
             rerendered_buffers: HashSet::new(),
-            delayed_ready_sections: HashSet::new(),
+            delayed_ready_sections: AtomicRefCell::new(HashSet::new()),
         })
     }
 
@@ -531,12 +536,14 @@ impl FullModularImage {
         };
 
         // Avoid green martians
-        self.has_decoded_data |=
-            num_decoded >= self.needed_section0_channels_for_early_render && num_decoded > 0;
+        self.has_decoded_data.fetch_or(
+            num_decoded >= self.needed_section0_channels_for_early_render && num_decoded > 0,
+            Ordering::Relaxed,
+        );
 
         if num_decoded >= total_buffers {
             self.mark_final(0, 0);
-            self.delayed_ready_sections.insert((0, 0));
+            self.delayed_ready_sections.borrow_mut().insert((0, 0));
             // We don't run transforms here - we ask the caller to call `run_all_transforms`
             // at least once per decode.
             return Ok(true);
@@ -562,7 +569,7 @@ impl FullModularImage {
         ret
     )]
     pub fn read_stream(
-        &mut self,
+        &self,
         stream: ModularStreamId,
         frame_header: &FrameHeader,
         global_tree: &Option<Tree>,
@@ -600,34 +607,45 @@ impl FullModularImage {
             },
         )?;
 
-        self.has_decoded_data |= !self.section_buffer_indices[section_id].is_empty();
+        self.has_decoded_data.fetch_or(
+            !self.section_buffer_indices[section_id].is_empty(),
+            Ordering::Relaxed,
+        );
 
+        let mut ready_steps = vec![];
         if section_id == 1 {
-            self.delayed_ready_sections.insert((1, grid));
+            self.delayed_ready_sections
+                .spin_borrow_mut()
+                .insert((1, grid));
         } else {
-            self.mark_section_ready(section_id, grid);
+            self.mark_section_ready(section_id, grid, &mut ready_steps);
         }
 
         if let Some(pass_to_pipeline) = pass_to_pipeline {
-            self.run_all_transforms(frame_header, pass_to_pipeline)
+            self.run_transforms(frame_header, pass_to_pipeline, &mut ready_steps)
         } else {
+            self.ready_transform_steps
+                .spin_borrow_mut()
+                .extend_from_slice(&ready_steps);
             Ok(())
         }
     }
 
-    fn mark_section_ready(&mut self, section_id: usize, grid: usize) {
-        for buf in self.section_buffer_indices[section_id].iter().copied() {
-            // Note: this is duplicated with `run_transform` because the compiler can't tell
-            // that we are not using `section_buffer_indices` in a factored-out method.
-            // TODO(veluca): this doesn't work for MT.
-            for t in self.buffer_info[buf].buffer_grid[grid]
-                .used_by_transforms_current
-                .drain(..)
-            {
-                if self.transform_steps[t].current_dep_ready() {
-                    self.ready_transform_steps.push(t);
-                }
+    fn update_deps(&self, buf: usize, grid: usize, ready_steps: &mut Vec<usize>) {
+        for t in self.buffer_info[buf].buffer_grid[grid]
+            .used_by_transforms_current
+            .borrow_mut()
+            .drain(..)
+        {
+            if self.transform_steps[t].current_dep_ready() {
+                ready_steps.push(t);
             }
+        }
+    }
+
+    fn mark_section_ready(&self, section_id: usize, grid: usize, ready_steps: &mut Vec<usize>) {
+        for buf in self.section_buffer_indices[section_id].iter().copied() {
+            self.update_deps(buf, grid, ready_steps);
         }
     }
 
@@ -730,7 +748,7 @@ impl FullModularImage {
                     let buf = &mut self.buffer_info[*buffer].buffer_grid[*grid];
                     // TODO(veluca): account for *non-final* uses here, when we actually
                     // deallocate temporary buffers.
-                    buf.used_by_transforms_current.push(t);
+                    buf.used_by_transforms_current.borrow_mut().push(t);
                     self.transform_steps[t].add_current_dep();
                     has_current_deps = true;
                 }
@@ -738,52 +756,58 @@ impl FullModularImage {
             // Make sure that transforms that need to run, but don't need to wait for
             // actual decoding, are actually run.
             if !has_current_deps {
-                self.ready_transform_steps.push(t);
+                self.ready_transform_steps.borrow_mut().push(t);
             }
         }
         self.pending_transforms.clear();
         self.rerendered_buffers.clear();
-        for (s, g) in std::mem::take(&mut self.delayed_ready_sections).drain() {
-            self.mark_section_ready(s, g);
+        for (s, g) in std::mem::take(&mut *self.delayed_ready_sections.borrow_mut()).drain() {
+            self.mark_section_ready(s, g, &mut self.ready_transform_steps.borrow_mut());
         }
     }
 
     fn run_transform(
-        &mut self,
+        &self,
         frame_header: &FrameHeader,
         tfm: usize,
+        scratch_space: &mut TransformScratchSpace,
         pass_to_pipeline: &dyn Fn(usize, usize, bool, Image<i32>) -> Result<()>,
+        ready_steps: &mut Vec<usize>,
     ) -> Result<()> {
         self.transform_steps[tfm].do_run(
             frame_header,
             &self.buffer_info,
-            &mut self.transform_scratch_space,
+            scratch_space,
             pass_to_pipeline,
         )?;
 
         for &(buf, grid) in self.transform_steps[tfm].outputs(&self.buffer_info).iter() {
-            // TODO(veluca): this doesn't work for MT.
-            for t in self.buffer_info[buf].buffer_grid[grid]
-                .used_by_transforms_current
-                .drain(..)
-            {
-                if self.transform_steps[t].current_dep_ready() {
-                    self.ready_transform_steps.push(t);
-                }
-            }
+            self.update_deps(buf, grid, ready_steps);
         }
         Ok(())
     }
 
-    pub fn run_all_transforms(
-        &mut self,
+    pub fn run_transforms(
+        &self,
         frame_header: &FrameHeader,
         pass_to_pipeline: &dyn Fn(usize, usize, bool, Image<i32>) -> Result<()>,
+        ready_steps: &mut Vec<usize>,
     ) -> Result<()> {
-        while let Some(t) = self.ready_transform_steps.pop() {
-            self.run_transform(frame_header, t, pass_to_pipeline)?;
+        let mut scratch_space = self.transform_scratch_space.get();
+        while let Some(t) = ready_steps.pop() {
+            self.run_transform(
+                frame_header,
+                t,
+                &mut scratch_space,
+                pass_to_pipeline,
+                ready_steps,
+            )?;
         }
         Ok(())
+    }
+
+    pub fn take_ready_steps(&mut self) -> Vec<usize> {
+        std::mem::take(&mut self.ready_transform_steps.borrow_mut())
     }
 
     pub fn validate_state_after_transforms(&self) {
@@ -794,13 +818,16 @@ impl FullModularImage {
         }
         for b in self.buffer_info.iter() {
             for bg in b.buffer_grid.iter() {
-                debug_assert!(bg.used_by_transforms_current.is_empty(), "{b:?} {bg:?}");
+                debug_assert!(
+                    bg.used_by_transforms_current.borrow().is_empty(),
+                    "{b:?} {bg:?}"
+                );
             }
         }
     }
 
     pub fn has_decoded_data(&self) -> bool {
-        self.has_decoded_data
+        self.has_decoded_data.load(Ordering::Relaxed)
     }
 }
 
