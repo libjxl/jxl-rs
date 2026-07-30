@@ -22,6 +22,7 @@ use crate::headers::{Orientation, color_encoding::ColorSpace, extra_channels::Ex
 use crate::image::Image;
 use crate::image::Rect;
 use crate::util::AtomicRefCell;
+use std::collections::HashSet;
 use std::sync::Arc;
 
 #[cfg(test)]
@@ -333,12 +334,8 @@ impl Frame {
             }
         }
 
-        // STEP 3: Run all the transforms that could be run already.
-        // We do this because some modular images might not have coded channels in HF, so
-        // all the coded channels were already decoded and the modular decoder does not
-        // automatically call run_all_transforms unless a new channel is decoded.
-
-        // ... but first, make sure modular_global is ready to run.
+        // STEP 3: Make sure modular_global is ready to run, and prepare the list of
+        // all the decoding/rendering steps that we want to run.
         modular_global.prepare_render(&self.header, |g, c, is_final| {
             self.group_status.update_status(
                 g,
@@ -355,6 +352,51 @@ impl Frame {
             }
         });
 
+        let extra_groups_to_vardct_render =
+            if should_render_non_final || self.group_status.incomplete_groups == 0 {
+                let mut gr = std::mem::take(&mut self.group_status.need_vardct_flush);
+                for (g, _) in groups.iter() {
+                    gr.remove(g);
+                }
+                gr
+            } else {
+                HashSet::new()
+            };
+
+        let ready_steps = modular_global.take_ready_steps();
+
+        enum RenderStep<'a> {
+            Decode {
+                group: usize,
+                passes: AtomicRefCell<Vec<(usize, BitReader<'a>)>>,
+            },
+            FlushVarDCT {
+                group: usize,
+            },
+            RunTransformSteps {
+                steps: AtomicRefCell<Vec<usize>>,
+            },
+        }
+
+        const TRANSFORM_STEPS_PER_TASK: usize = 3;
+
+        let render_steps: Vec<_> = ready_steps
+            .chunks(TRANSFORM_STEPS_PER_TASK)
+            .map(|x| RenderStep::RunTransformSteps {
+                steps: AtomicRefCell::new(x.to_vec()),
+            })
+            .chain(
+                extra_groups_to_vardct_render
+                    .iter()
+                    .map(|x| RenderStep::FlushVarDCT { group: *x }),
+            )
+            .chain(groups.into_iter().map(|(g, p)| RenderStep::Decode {
+                group: g,
+                passes: AtomicRefCell::new(p),
+            }))
+            .collect();
+
+        // STEP 4: actually run the steps.
         let pass_to_pipeline = |chan, group, complete, image: Image<i32>| {
             pipeline!(
                 self,
@@ -364,12 +406,34 @@ impl Frame {
             Ok(())
         };
 
-        let mut ready_steps = modular_global.take_ready_steps();
-        modular_global.run_transforms(&self.header, &pass_to_pipeline, &mut ready_steps)?;
+        for s in render_steps.iter() {
+            match s {
+                RenderStep::Decode { group, passes } => {
+                    let mut passes = passes.borrow_mut();
+                    self.decode_hf_group(*group, &mut passes, &buffer_splitter, do_flush)?;
+                }
+                RenderStep::FlushVarDCT { group } => {
+                    self.decode_hf_group(*group, &mut [], &buffer_splitter, true)?;
+                }
+                RenderStep::RunTransformSteps { steps } => {
+                    let mut steps = steps.borrow_mut();
+                    self.lf_global
+                        .as_ref()
+                        .unwrap()
+                        .modular_global
+                        .run_transforms(&self.header, &pass_to_pipeline, &mut steps)?;
+                }
+            }
+        }
 
-        // STEP 4: decode the groups, eagerly decoding all the data.
-        for (group, mut passes) in groups {
-            self.decode_hf_group(group, &mut passes, &buffer_splitter, do_flush)?;
+        for g in render_steps.iter().filter_map(|x| match x {
+            RenderStep::Decode { group, .. } => Some(*group),
+            RenderStep::FlushVarDCT { group } => Some(*group),
+            _ => None,
+        }) {
+            if self.group_status.colour_complete(g) {
+                self.group_status.final_vardct_render_done.insert(g);
+            }
         }
 
         self.lf_global
@@ -377,14 +441,6 @@ impl Frame {
             .unwrap()
             .modular_global
             .validate_state_after_transforms();
-
-        // STEP 5: re-render VarDCT/noise data in rendered groups for which it was
-        // not rendered.
-        if should_render_non_final || self.group_status.incomplete_groups == 0 {
-            for g in std::mem::take(&mut self.group_status.need_vardct_flush) {
-                self.decode_hf_group(g, &mut [], &buffer_splitter, true)?;
-            }
-        }
 
         let regions = buffer_splitter.into_changed_regions();
         let rendered = !regions.is_empty() && self.header.frame_type == FrameType::RegularFrame;
