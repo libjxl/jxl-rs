@@ -8,7 +8,7 @@ use std::sync::Arc;
 use crate::{
     frame::quantizer::LfQuantFactors,
     headers::bit_depth::BitDepth,
-    render::{Channels, ChannelsMut, RenderPipelineInOutStage, StageSpecialCase},
+    render::{Channels, ChannelsMut, ErasedLocalState, RenderPipelineInOutStage, StageSpecialCase},
     util::AtomicRefCell,
 };
 use jxl_simd::{F32SimdVec, I32SimdVec, SimdMask, simd_function};
@@ -57,7 +57,7 @@ impl RenderPipelineInOutStage for ConvertModularXYBToF32Stage {
         xsize: usize,
         input_rows: &Channels<i32>,
         output_rows: &mut ChannelsMut<f32>,
-        _state: Option<&mut dyn std::any::Any>,
+        _state: Option<&mut ErasedLocalState>,
     ) {
         let lf_quant = self.lf_quant.borrow();
         let [scale_x, scale_y, scale_b] = lf_quant.quant_factors;
@@ -260,7 +260,7 @@ impl RenderPipelineInOutStage for ConvertModularToF32Stage {
         xsize: usize,
         input_rows: &Channels<i32>,
         output_rows: &mut ChannelsMut<f32>,
-        _state: Option<&mut dyn std::any::Any>,
+        _state: Option<&mut ErasedLocalState>,
     ) {
         let input = &input_rows[0];
         if self.bit_depth.floating_point_sample() {
@@ -346,7 +346,7 @@ impl RenderPipelineInOutStage for ConvertF32ToU8Stage {
         xsize: usize,
         input_rows: &Channels<f32>,
         output_rows: &mut ChannelsMut<u8>,
-        _state: Option<&mut dyn std::any::Any>,
+        _state: Option<&mut ErasedLocalState>,
     ) {
         let input = input_rows[0][0];
         let output = &mut output_rows[0][0];
@@ -430,7 +430,7 @@ impl RenderPipelineInOutStage for ConvertI32ToU8Stage {
         xsize: usize,
         input_rows: &Channels<i32>,
         output_rows: &mut ChannelsMut<u8>,
-        _state: Option<&mut dyn std::any::Any>,
+        _state: Option<&mut ErasedLocalState>,
     ) {
         let input = input_rows[0][0];
         let output = &mut output_rows[0][0];
@@ -501,7 +501,7 @@ impl RenderPipelineInOutStage for ConvertF32ToU16Stage {
         xsize: usize,
         input_rows: &Channels<f32>,
         output_rows: &mut ChannelsMut<u16>,
-        _state: Option<&mut dyn std::any::Any>,
+        _state: Option<&mut ErasedLocalState>,
     ) {
         let input = input_rows[0][0];
         let output = &mut output_rows[0][0];
@@ -568,7 +568,7 @@ impl RenderPipelineInOutStage for ConvertF32ToF16Stage {
         xsize: usize,
         input_rows: &Channels<f32>,
         output_rows: &mut ChannelsMut<crate::util::f16>,
-        _state: Option<&mut dyn std::any::Any>,
+        _state: Option<&mut ErasedLocalState>,
     ) {
         let input = &input_rows[0];
         if let Some((min_value, max_value)) = self.clamp_range {

@@ -5,7 +5,6 @@
 
 #![allow(clippy::needless_range_loop)]
 
-use std::any::Any;
 use std::sync::atomic::Ordering;
 
 use row_buffers::RowBuffer;
@@ -13,7 +12,7 @@ use row_buffers::RowBuffer;
 use crate::api::JxlOutputBuffer;
 use crate::error::Result;
 use crate::image::{DataTypeTag, Image, ImageDataType, OwnedRawImage, Rect};
-use crate::render::MAX_BORDER;
+use crate::render::{ErasedLocalState, MAX_BORDER};
 use crate::render::buffer_splitter::{BufferSplitter, SaveStageBufferInfo};
 use crate::render::internal::Stage;
 use crate::render::low_memory_pipeline::input_buffers::InputBuffers;
@@ -33,7 +32,7 @@ mod save;
 struct LowMemoryRenderPipelinePerThread {
     row_buffers: Vec<Vec<RowBuffer>>,
     // Local states of each stage, if any.
-    local_states: Vec<Option<Box<dyn Any>>>,
+    local_states: Vec<Option<Box<ErasedLocalState>>>,
 }
 
 impl LowMemoryRenderPipelinePerThread {

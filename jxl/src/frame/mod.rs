@@ -239,7 +239,7 @@ pub struct Frame {
     #[cfg(test)]
     use_simple_pipeline: bool,
     #[cfg(test)]
-    render_pipeline: Option<Box<dyn std::any::Any>>,
+    render_pipeline: Option<Box<dyn std::any::Any + Send + Sync>>,
     #[cfg(not(test))]
     render_pipeline: Option<Box<crate::render::LowMemoryRenderPipeline>>,
     reference_frame_data: Option<Vec<Image<f32>>>,

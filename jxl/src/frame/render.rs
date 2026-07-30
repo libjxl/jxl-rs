@@ -880,7 +880,7 @@ impl Frame {
                 self.epf_sigma.clone(),
                 pixel_format,
                 output_profile,
-            )? as Box<dyn std::any::Any>
+            )? as Box<dyn std::any::Any + Send + Sync>
         } else {
             Self::build_render_pipeline::<LowMemoryRenderPipeline>(
                 &self.decoder_state,
@@ -893,7 +893,7 @@ impl Frame {
                 self.epf_sigma.clone(),
                 pixel_format,
                 output_profile,
-            )? as Box<dyn std::any::Any>
+            )? as Box<dyn std::any::Any + Send + Sync>
         };
         #[cfg(not(test))]
         let render_pipeline = Self::build_render_pipeline::<LowMemoryRenderPipeline>(
