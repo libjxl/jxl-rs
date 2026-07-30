@@ -7,6 +7,7 @@ use crate::api::JxlColorProfile;
 use crate::api::JxlColorType;
 use crate::api::JxlDataFormat;
 use crate::api::JxlOutputBuffer;
+use crate::api::JxlParallelRunner;
 use crate::bit_reader::BitReader;
 use crate::error::{Error, Result};
 use crate::features::epf::SigmaSource;
@@ -151,6 +152,7 @@ impl Frame {
         groups: Vec<(usize, Vec<(usize, BitReader)>)>,
         do_flush: bool,
         output_profile: &JxlColorProfile,
+        parallel_runner: &mut dyn JxlParallelRunner,
     ) -> Result<bool> {
         if !do_flush && groups.is_empty() {
             // Nothing to do.
@@ -397,8 +399,7 @@ impl Frame {
 
         // STEP 4: actually run the steps.
 
-        // FIX: code to parallelize.
-        let num_concurrent = 1;
+        let num_concurrent = parallel_runner.max_threads().min(render_steps.len()).max(1);
         modular_global.prepare_for_threads(num_concurrent)?;
         self.vardct_buffers
             .prepare_for_threads(num_concurrent, VarDctBuffers::new)?;
@@ -413,8 +414,8 @@ impl Frame {
             Ok(())
         };
 
-        for s in render_steps.iter() {
-            match s {
+        parallel_runner.run(render_steps.len(), &|i| {
+            match &render_steps[i] {
                 RenderStep::Decode { group, passes } => {
                     let mut passes = passes.borrow_mut();
                     self.decode_hf_group(*group, &mut passes, &buffer_splitter, do_flush)?;
@@ -431,7 +432,8 @@ impl Frame {
                         .run_transforms(&self.header, &pass_to_pipeline, &mut steps)?;
                 }
             }
-        }
+            Ok(())
+        })?;
 
         for g in render_steps.iter().filter_map(|x| match x {
             RenderStep::Decode { group, .. } => Some(*group),

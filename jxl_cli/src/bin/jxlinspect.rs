@@ -22,7 +22,7 @@ fn parse_jxl(path: &Path) -> Result<()> {
     let options = JxlDecoderOptions::default();
     let initialized_decoder = JxlDecoder::<jxl::api::states::Initialized>::new(options);
 
-    let mut decoder_with_image_info = match initialized_decoder.process(&mut reader)? {
+    let mut decoder_with_image_info = match initialized_decoder.process(&mut reader, None)? {
         ProcessingResult::Complete { result } => result,
         ProcessingResult::NeedsMoreInput { .. } => {
             return Err(eyre!("Source file {:?} truncated", path));
@@ -120,7 +120,7 @@ fn parse_jxl(path: &Path) -> Result<()> {
         let mut total_seconds = 0.0;
 
         loop {
-            let decoder_with_frame_info = match decoder_with_image_info.process(&mut reader)? {
+            let decoder_with_frame_info = match decoder_with_image_info.process(&mut reader, None)? {
                 ProcessingResult::Complete { result } => result,
                 ProcessingResult::NeedsMoreInput { .. } => {
                     return Err(eyre!("Source file {:?} truncated", path));
@@ -152,7 +152,7 @@ fn parse_jxl(path: &Path) -> Result<()> {
                 .collect();
 
             decoder_with_image_info =
-                match decoder_with_frame_info.process(&mut reader, &mut output_bufs)? {
+                match decoder_with_frame_info.process(&mut reader, &mut output_bufs, None)? {
                     ProcessingResult::Complete { result } => result,
                     ProcessingResult::NeedsMoreInput { .. } => {
                         return Err(eyre!("Source file {:?} truncated", path));
