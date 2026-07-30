@@ -3,7 +3,17 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-use crate::{api::JxlOutputBuffer, headers::Orientation, image::Rect, util::ShiftRightCeil};
+use std::{
+    collections::BTreeSet,
+    ops::{Deref, DerefMut},
+};
+
+use crate::{
+    api::JxlOutputBuffer,
+    headers::Orientation,
+    image::Rect,
+    util::{AtomicRefCell, ShiftRightCeil},
+};
 
 // Information for splitting the output buffers.
 #[derive(Debug)]
@@ -16,30 +26,42 @@ pub struct SaveStageBufferInfo {
 
 /// Data structure responsible for handing out access to portions of the output buffers.
 pub struct BufferSplitter<'a, 'b> {
+    // Safety invariant: all the currently-borrowed rects of buffer i are stored in
+    // `borrowed_rects[i]`.
     buffers: &'a mut [Option<JxlOutputBuffer<'b>>],
-    requested_rects: Vec<Rect>,
+    requested_rects: AtomicRefCell<Vec<Rect>>,
+    borrowed_rects: Vec<AtomicRefCell<BTreeSet<Rect>>>,
 }
 
 impl<'a, 'b> BufferSplitter<'a, 'b> {
     pub fn new(bufs: &'a mut [Option<JxlOutputBuffer<'b>>]) -> Self {
         Self {
+            requested_rects: AtomicRefCell::new(vec![]),
+            borrowed_rects: bufs
+                .iter()
+                .map(|_| AtomicRefCell::new(BTreeSet::new()))
+                .collect(),
             buffers: bufs,
-            requested_rects: vec![],
         }
     }
 
     pub(crate) fn get_local_buffers(
-        &mut self,
+        &self,
         save_buffer_info: &[Option<SaveStageBufferInfo>],
         rect: Rect,
         outside_current_frame: bool,
         frame_size: (usize, usize),
         full_image_size: (usize, usize),
         frame_origin: (isize, isize),
-    ) -> Vec<Option<JxlOutputBuffer<'_>>> {
-        self.requested_rects.push(rect);
+    ) -> BorrowedLocalBuffer<'a, 'b, '_> {
+        loop {
+            if let Some(mut req) = self.requested_rects.try_borrow_mut() {
+                req.push(rect);
+                break;
+            }
+        }
         let mut local_buffers = vec![];
-        let buffers = &mut *self.buffers;
+        let buffers = &*self.buffers;
         local_buffers.reserve(buffers.len());
         for _ in 0..buffers.len() {
             local_buffers.push(None::<JxlOutputBuffer>);
@@ -49,15 +71,16 @@ impl<'a, 'b> BufferSplitter<'a, 'b> {
         } else {
             rect
         };
-        for (i, (info, buf)) in save_buffer_info.iter().zip(buffers.iter_mut()).enumerate() {
+        let mut used_rects = vec![None; buffers.len()];
+        for (i, (info, buf)) in save_buffer_info.iter().zip(buffers.iter()).enumerate() {
             let Some(bi) = info else {
                 // We never write to this buffer.
                 continue;
             };
-            let Some(buf) = buf.as_mut() else {
+            if !buf.is_some() {
                 // The buffer to write into was not provided.
                 continue;
-            };
+            }
             if outside_current_frame && !bi.after_extend {
                 // Before-extend stages do not write to rects outside the current frame.
                 continue;
@@ -99,16 +122,299 @@ impl<'a, 'b> BufferSplitter<'a, 'b> {
             }
             let channel_rect = bi.orientation.display_rect(channel_rect, full_image_size);
             let channel_rect = channel_rect.to_byte_rect_sz(bi.byte_size);
-            local_buffers[i] = Some(buf.rect(channel_rect));
+            local_buffers[i] = Some(self.borrow_rect(i, channel_rect));
+            used_rects[i] = Some(channel_rect);
         }
-        local_buffers
+        // Safety note: used_rects[i] holds the rect used for local_buffers[i].
+        BorrowedLocalBuffer {
+            local_buffers,
+            used_rects,
+            buffer_splitter: self,
+        }
+    }
+
+    #[allow(unsafe_code)]
+    fn borrow_rect(&self, chan: usize, rect: Rect) -> JxlOutputBuffer<'_> {
+        let mut rects = loop {
+            if let Some(b) = self.borrowed_rects[chan].try_borrow_mut() {
+                break b;
+            }
+        };
+        for r in rects.iter() {
+            assert!(!r.intersects(&rect));
+        }
+        rects.insert(rect);
+
+        // SAFETY: we just checked that `self.borrowed_rects[i]` does not contain
+        // any rects that intersect with the new rect. Since by safety invariant
+        // all the currently-borrowed rects are in `self.borrowed_rects[i]`, the
+        // new rect does not intersect the old ones.
+        unsafe { self.buffers[chan].as_ref().unwrap().rect(rect) }
     }
 
     pub fn into_changed_regions(self) -> Vec<Rect> {
-        self.requested_rects
+        std::mem::take(&mut *self.requested_rects.borrow_mut())
     }
 
-    pub fn get_full_buffers(&mut self) -> &mut [Option<JxlOutputBuffer<'b>>] {
-        &mut *self.buffers
+    #[cfg(test)]
+    pub fn get_full_buffers(&self) -> BorrowedLocalBuffer<'a, 'b, '_> {
+        let mut used_rects = vec![None; self.buffers.len()];
+        let mut local_buffers = vec![];
+        local_buffers.reserve(self.buffers.len());
+        for _ in 0..self.buffers.len() {
+            local_buffers.push(None::<JxlOutputBuffer>);
+        }
+        for (i, buf) in self.buffers.iter().enumerate() {
+            let Some(buf) = buf else {
+                continue;
+            };
+            let channel_rect = Rect {
+                origin: (0, 0),
+                size: buf.byte_size(),
+            };
+            local_buffers[i] = Some(self.borrow_rect(i, channel_rect));
+            used_rects[i] = Some(channel_rect);
+        }
+        // Safety note: used_rects[i] holds the rect used for local_buffers[i].
+        BorrowedLocalBuffer {
+            local_buffers,
+            used_rects,
+            buffer_splitter: self,
+        }
+    }
+}
+
+impl<'a, 'b> Drop for BufferSplitter<'a, 'b> {
+    fn drop(&mut self) {
+        for v in self.borrowed_rects.iter() {
+            assert!(v.borrow().is_empty())
+        }
+    }
+}
+
+pub struct BorrowedLocalBuffer<'a, 'b, 'c> {
+    buffer_splitter: &'c BufferSplitter<'a, 'b>,
+    // Safety invariant: rects[i] holds the rect that
+    // local_buffers[i] is borrowing for channel i
+    local_buffers: Vec<Option<JxlOutputBuffer<'c>>>,
+    used_rects: Vec<Option<Rect>>,
+}
+
+impl<'a, 'b, 'c> Deref for BorrowedLocalBuffer<'a, 'b, 'c> {
+    type Target = [Option<JxlOutputBuffer<'c>>];
+    fn deref(&self) -> &Self::Target {
+        &self.local_buffers[..]
+    }
+}
+
+impl<'a, 'b, 'c> DerefMut for BorrowedLocalBuffer<'a, 'b, 'c> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.local_buffers[..]
+    }
+}
+
+impl<'a, 'b, 'c> Drop for BorrowedLocalBuffer<'a, 'b, 'c> {
+    fn drop(&mut self) {
+        self.local_buffers.clear();
+        for (i, r) in self.used_rects.drain(..).enumerate() {
+            let Some(r) = r else {
+                continue;
+            };
+            loop {
+                if let Some(mut b) = self.buffer_splitter.borrowed_rects[i].try_borrow_mut() {
+                    // Safety note: we just dropped the local buffers, and the
+                    // safety invariant of `self` says that this is the correct rect
+                    // to remove.
+                    assert!(b.remove(&r));
+                    break;
+                }
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{api::JxlOutputBuffer, headers::Orientation, image::Rect};
+
+    #[test]
+    fn test_buffer_splitter_basic() {
+        let mut empty_bufs: [Option<JxlOutputBuffer>; 0] = [];
+        let splitter = BufferSplitter::new(&mut empty_bufs);
+        assert!(splitter.get_full_buffers().is_empty());
+
+        let mut raw0 = vec![0u8; 100];
+        let mut raw1 = vec![0u8; 200];
+        {
+            let buf0 = JxlOutputBuffer::new(&mut raw0, 10, 10);
+            let buf1 = JxlOutputBuffer::new(&mut raw1, 10, 20);
+            let mut bufs = [Some(buf0), Some(buf1), None];
+            let splitter = BufferSplitter::new(&mut bufs);
+
+            {
+                let mut full = splitter.get_full_buffers();
+                assert_eq!(full.len(), 3);
+                assert!(full[2].is_none());
+
+                full[0].as_mut().unwrap().row_mut(0)[0] = 42;
+                full[1].as_mut().unwrap().row_mut(1)[2] = 99;
+            }
+        }
+
+        assert_eq!(raw0[0], 42);
+        assert_eq!(raw1[1 * 20 + 2], 99);
+    }
+
+    #[test]
+    #[should_panic]
+    fn test_buffer_splitter_overlapping_borrows_panic() {
+        let mut raw0 = vec![0u8; 400];
+        let buf0 = JxlOutputBuffer::new(&mut raw0, 20, 20);
+        let mut bufs = [Some(buf0)];
+        let splitter = BufferSplitter::new(&mut bufs);
+
+        let info = vec![Some(SaveStageBufferInfo {
+            downsample: (0, 0),
+            orientation: Orientation::Identity,
+            byte_size: 1,
+            after_extend: false,
+        })];
+
+        let _local1 = splitter.get_local_buffers(
+            &info,
+            Rect {
+                origin: (0, 0),
+                size: (10, 10),
+            },
+            false,
+            (20, 20),
+            (20, 20),
+            (0, 0),
+        );
+
+        let _local2 = splitter.get_local_buffers(
+            &info,
+            Rect {
+                origin: (5, 5),
+                size: (10, 10),
+            },
+            false,
+            (20, 20),
+            (20, 20),
+            (0, 0),
+        );
+    }
+
+    #[test]
+    fn test_buffer_splitter_multithreaded_arbtest() {
+        arbtest::arbtest(|u| {
+            let width = u.int_in_range(16..=128)?;
+            let height = u.int_in_range(16..=128)?;
+            let num_threads = u.int_in_range(2..=8)?;
+            let num_channels = u.int_in_range(1..=4)?;
+
+            let downsample_x: u8 = u.int_in_range(0..=2)?;
+            let downsample_y: u8 = u.int_in_range(0..=2)?;
+            let byte_size: usize = *u.choose(&[1, 2, 4])?;
+            let orientation = Orientation::Identity;
+
+            let info: Vec<Option<SaveStageBufferInfo>> = (0..num_channels)
+                .map(|ch| {
+                    if ch % 2 == 0 {
+                        Some(SaveStageBufferInfo {
+                            downsample: (downsample_x, downsample_y),
+                            orientation,
+                            byte_size,
+                            after_extend: false,
+                        })
+                    } else {
+                        None
+                    }
+                })
+                .collect();
+
+            let mut raws: Vec<Vec<u8>> = (0..num_channels)
+                .map(|_| vec![0u8; width * height * byte_size])
+                .collect();
+            let mut tiles = Vec::new();
+
+            {
+                let mut bufs: Vec<Option<JxlOutputBuffer>> = raws
+                    .iter_mut()
+                    .enumerate()
+                    .map(|(i, raw)| {
+                        if i == num_channels - 1 && num_channels > 1 {
+                            None
+                        } else {
+                            Some(JxlOutputBuffer::new(raw, height, width * byte_size))
+                        }
+                    })
+                    .collect();
+
+                let splitter = BufferSplitter::new(&mut bufs);
+
+                let align_x = 1usize << downsample_x;
+                let align_y = 1usize << downsample_y;
+                let tile_w = u.int_in_range(1..=4)? * align_x;
+                let tile_h = u.int_in_range(1..=4)? * align_y;
+
+                let mut tile_id = 1u8;
+
+                for y in (0..height).step_by(tile_h) {
+                    for x in (0..width).step_by(tile_w) {
+                        let w = tile_w.min(width - x);
+                        let h = tile_h.min(height - y);
+                        let rect = Rect {
+                            origin: (x, y),
+                            size: (w, h),
+                        };
+                        tiles.push((rect, tile_id));
+                        tile_id = tile_id.wrapping_add(1);
+                    }
+                }
+
+                let chunk_size = (tiles.len() + num_threads - 1) / num_threads;
+                let tile_chunks: Vec<_> = tiles
+                    .chunks(chunk_size.max(1))
+                    .map(|c| c.to_vec())
+                    .collect();
+
+                std::thread::scope(|s| {
+                    for chunk in tile_chunks {
+                        let splitter_ref = &splitter;
+                        let info_ref = &info;
+                        s.spawn(move || {
+                            for (rect, id) in chunk {
+                                let mut local = splitter_ref.get_local_buffers(
+                                    info_ref,
+                                    rect,
+                                    false,
+                                    (width, height),
+                                    (width, height),
+                                    (0, 0),
+                                );
+
+                                for buf_opt in local.iter_mut() {
+                                    if let Some(buf) = buf_opt {
+                                        let (bw, bh) = buf.byte_size();
+                                        for ry in 0..bh {
+                                            let row = buf.row_mut(ry);
+                                            for rx in 0..bw {
+                                                row[rx] = id;
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        });
+                    }
+                });
+
+                assert_eq!(splitter.into_changed_regions().len(), tiles.len());
+            }
+
+            Ok(())
+        });
     }
 }

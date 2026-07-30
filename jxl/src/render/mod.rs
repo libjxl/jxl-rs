@@ -132,7 +132,7 @@ pub(crate) trait RenderPipeline: Sized {
         group_id: usize,
         complete: bool,
         buf: Image<T>,
-        buffer_splitter: &mut BufferSplitter,
+        buffer_splitter: &BufferSplitter,
     ) -> Result<()>;
 
     /// Checks whether the provided buffer sizes are correct.
@@ -141,7 +141,7 @@ pub(crate) trait RenderPipeline: Sized {
     /// Renders any data outside the frame that would not be rendered by calls to
     /// set_buffer_for_group. Can be called multiple times - it is up to the pipeline
     /// implementation to ensure rendering only happens once.
-    fn render_outside_frame(&mut self, buffer_splitter: &mut BufferSplitter) -> Result<()>;
+    fn render_outside_frame(&mut self, buffer_splitter: &BufferSplitter) -> Result<()>;
 
     // Marks a group for being re-rendered later.
     fn mark_group_to_rerender(&mut self, g: usize);

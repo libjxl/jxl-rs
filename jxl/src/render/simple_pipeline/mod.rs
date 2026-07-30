@@ -32,7 +32,7 @@ pub struct SimpleRenderPipeline {
 
 impl SimpleRenderPipeline {
     #[instrument(skip_all, err)]
-    fn do_render(&self, buffer_splitter: &mut BufferSplitter) -> Result<()> {
+    fn do_render(&self, buffer_splitter: &BufferSplitter) -> Result<()> {
         let ready = self
             .shared
             .group_chan_complete
@@ -119,7 +119,7 @@ impl SimpleRenderPipeline {
                     );
                 }
                 Stage::Save(stage) => {
-                    stage.save_simple(&output_buffers, buffer_splitter.get_full_buffers())?;
+                    stage.save_simple(&output_buffers, &mut *buffer_splitter.get_full_buffers())?;
                 }
             }
             current_buffers = output_buffers;
@@ -168,7 +168,7 @@ impl RenderPipeline for SimpleRenderPipeline {
         group_id: usize,
         complete: bool,
         buf: Image<T>,
-        buffer_splitter: &mut BufferSplitter,
+        buffer_splitter: &BufferSplitter,
     ) -> Result<()> {
         debug!(
             "filling data for group {}, channel {}, using type {:?}",
@@ -204,7 +204,7 @@ impl RenderPipeline for SimpleRenderPipeline {
         Ok(())
     }
 
-    fn render_outside_frame(&mut self, _buffer_splitter: &mut BufferSplitter) -> Result<()> {
+    fn render_outside_frame(&mut self, _buffer_splitter: &BufferSplitter) -> Result<()> {
         // Nothing to do in the simple pipeline.
         Ok(())
     }

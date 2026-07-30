@@ -175,6 +175,8 @@ fn make_and_run_simple_pipeline_impl<InputT: ImageDataType, OutputT: ImageDataTy
         }
     }
 
+    drop(buffer_splitter);
+
     Ok(outputs)
 }
 

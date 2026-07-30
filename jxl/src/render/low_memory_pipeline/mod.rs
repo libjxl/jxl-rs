@@ -327,7 +327,7 @@ impl RenderPipeline for LowMemoryRenderPipeline {
         group_id: usize,
         complete: bool,
         buf: Image<T>,
-        buffer_splitter: &mut BufferSplitter,
+        buffer_splitter: &BufferSplitter,
     ) -> Result<()> {
         if self.shared.channel_is_used[channel] {
             debug!(
@@ -365,7 +365,7 @@ impl RenderPipeline for LowMemoryRenderPipeline {
         Ok(())
     }
 
-    fn render_outside_frame(&mut self, buffer_splitter: &mut BufferSplitter) -> Result<()> {
+    fn render_outside_frame(&mut self, buffer_splitter: &BufferSplitter) -> Result<()> {
         if self.shared.extend_stage_index.is_none() || self.padding_was_rendered {
             return Ok(());
         }
