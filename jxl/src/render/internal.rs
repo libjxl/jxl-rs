@@ -8,7 +8,7 @@ use std::fmt::Display;
 
 use crate::error::Result;
 use crate::image::{DataTypeTag, ImageDataType};
-use crate::render::StageSpecialCase;
+use crate::render::{ErasedLocalState, StageSpecialCase};
 use crate::util::ShiftRightCeil;
 
 use super::save::SaveStage;
@@ -23,7 +23,7 @@ pub enum Stage<Buffer> {
 }
 
 impl<Buffer: 'static> Stage<Buffer> {
-    pub(super) fn init_local_state(&self) -> Result<Option<Box<dyn Any>>> {
+    pub(super) fn init_local_state(&self) -> Result<Option<Box<ErasedLocalState>>> {
         match self {
             Stage::InPlace(s) => s.init_local_state(),
             Stage::InOut(s) => s.init_local_state(),
@@ -181,7 +181,7 @@ pub trait PipelineBuffer {
 }
 
 pub trait InPlaceStage: Any + Display + Send + Sync {
-    fn init_local_state(&self) -> Result<Option<Box<dyn Any>>>;
+    fn init_local_state(&self) -> Result<Option<Box<ErasedLocalState>>>;
     fn uses_channel(&self, c: usize) -> bool;
     fn ty(&self) -> DataTypeTag;
     fn is_special_case(&self) -> Option<StageSpecialCase>;
@@ -192,12 +192,12 @@ pub trait RunInPlaceStage<Buffer: PipelineBuffer>: InPlaceStage {
         &self,
         info: Buffer::InPlaceExtraInfo,
         buffers: &mut [&mut Buffer],
-        state: Option<&mut dyn Any>,
+        state: Option<&mut ErasedLocalState>,
     );
 }
 
 impl<T: RenderPipelineInPlaceStage> InPlaceStage for T {
-    fn init_local_state(&self) -> Result<Option<Box<dyn Any>>> {
+    fn init_local_state(&self) -> Result<Option<Box<ErasedLocalState>>> {
         self.init_local_state()
     }
     fn uses_channel(&self, c: usize) -> bool {
@@ -212,7 +212,7 @@ impl<T: RenderPipelineInPlaceStage> InPlaceStage for T {
 }
 
 pub trait InOutStage: Any + Display + Send + Sync {
-    fn init_local_state(&self) -> Result<Option<Box<dyn Any>>>;
+    fn init_local_state(&self) -> Result<Option<Box<ErasedLocalState>>>;
     fn shift(&self) -> (u8, u8);
     fn border(&self) -> (u8, u8);
     fn uses_channel(&self, c: usize) -> bool;
@@ -222,7 +222,7 @@ pub trait InOutStage: Any + Display + Send + Sync {
 }
 
 impl<T: RenderPipelineInOutStage> InOutStage for T {
-    fn init_local_state(&self) -> Result<Option<Box<dyn Any>>> {
+    fn init_local_state(&self) -> Result<Option<Box<ErasedLocalState>>> {
         self.init_local_state()
     }
     fn uses_channel(&self, c: usize) -> bool {
@@ -251,6 +251,6 @@ pub trait RunInOutStage<Buffer: PipelineBuffer>: InOutStage {
         info: Buffer::InOutExtraInfo,
         input_buffers: &[&Buffer],
         output_buffers: &mut [Buffer],
-        state: Option<&mut dyn Any>,
+        state: Option<&mut ErasedLocalState>,
     );
 }
