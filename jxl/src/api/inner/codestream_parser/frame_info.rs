@@ -402,6 +402,7 @@ impl FrameInfo {
         Ok(())
     }
 
+    #[allow(clippy::too_many_arguments)]
     // Returns whether we modified the pixels.
     fn process_single_section(
         frame: &mut Frame,

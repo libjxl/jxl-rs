@@ -29,6 +29,12 @@ pub struct PerThreadStorageRef<'a, T> {
     index: usize,
 }
 
+impl<T> Default for PerThreadStorage<T> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl<T> PerThreadStorage<T> {
     pub fn new() -> Self {
         Self {

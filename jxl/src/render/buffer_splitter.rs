@@ -60,9 +60,8 @@ impl<'a, 'b> BufferSplitter<'a, 'b> {
                 break;
             }
         }
-        let mut local_buffers = vec![];
         let buffers = &*self.buffers;
-        local_buffers.reserve(buffers.len());
+        let mut local_buffers = Vec::with_capacity(buffers.len());
         for _ in 0..buffers.len() {
             local_buffers.push(None::<JxlOutputBuffer>);
         }
@@ -159,8 +158,7 @@ impl<'a, 'b> BufferSplitter<'a, 'b> {
     #[cfg(test)]
     pub fn get_full_buffers(&self) -> BorrowedLocalBuffer<'a, 'b, '_> {
         let mut used_rects = vec![None; self.buffers.len()];
-        let mut local_buffers = vec![];
-        local_buffers.reserve(self.buffers.len());
+        let mut local_buffers = Vec::with_capacity(self.buffers.len());
         for _ in 0..self.buffers.len() {
             local_buffers.push(None::<JxlOutputBuffer>);
         }
@@ -263,7 +261,7 @@ mod tests {
         }
 
         assert_eq!(raw0[0], 42);
-        assert_eq!(raw1[1 * 20 + 2], 99);
+        assert_eq!(raw1[20 + 2], 99);
     }
 
     #[test]
@@ -374,7 +372,7 @@ mod tests {
                     }
                 }
 
-                let chunk_size = (tiles.len() + num_threads - 1) / num_threads;
+                let chunk_size = tiles.len().div_ceil(num_threads);
                 let tile_chunks: Vec<_> = tiles
                     .chunks(chunk_size.max(1))
                     .map(|c| c.to_vec())
@@ -395,15 +393,11 @@ mod tests {
                                     (0, 0),
                                 );
 
-                                for buf_opt in local.iter_mut() {
-                                    if let Some(buf) = buf_opt {
-                                        let (bw, bh) = buf.byte_size();
-                                        for ry in 0..bh {
-                                            let row = buf.row_mut(ry);
-                                            for rx in 0..bw {
-                                                row[rx] = id;
-                                            }
-                                        }
+                                for buf in local.iter_mut().flatten() {
+                                    let (_, bh) = buf.byte_size();
+                                    for ry in 0..bh {
+                                        let row = buf.row_mut(ry);
+                                        row.fill(id);
                                     }
                                 }
                             }

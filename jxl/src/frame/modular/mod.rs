@@ -768,7 +768,7 @@ impl FullModularImage {
         self.pending_transforms.clear();
         self.rerendered_buffers.clear();
         for (s, g) in std::mem::take(&mut *self.delayed_ready_sections.borrow_mut()).drain() {
-            self.mark_section_ready(s, g, &mut *self.ready_transform_steps.borrow_mut());
+            self.mark_section_ready(s, g, &mut self.ready_transform_steps.borrow_mut());
         }
     }
 
@@ -804,7 +804,7 @@ impl FullModularImage {
             self.run_transform(
                 frame_header,
                 t,
-                &mut *scratch_space,
+                &mut scratch_space,
                 pass_to_pipeline,
                 ready_steps,
             )?;

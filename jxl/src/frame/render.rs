@@ -222,7 +222,7 @@ impl Frame {
 
         pipeline_mut!(self, p, p.check_buffer_sizes(&mut buffers[..])?);
 
-        let mut buffer_splitter = BufferSplitter::new(&mut buffers[..]);
+        let buffer_splitter = BufferSplitter::new(&mut buffers[..]);
 
         let should_render_non_final = self.allow_rendering_before_last_pass() && do_flush;
 
@@ -452,7 +452,7 @@ impl Frame {
             .validate_state_after_transforms();
 
         // This function uses internal parallelism.
-        pipeline_mut!(self, p, p.render_outside_frame(&mut buffer_splitter)?);
+        pipeline_mut!(self, p, p.render_outside_frame(&buffer_splitter)?);
 
         let regions = buffer_splitter.into_changed_regions();
         let rendered = !regions.is_empty() && self.header.frame_type == FrameType::RegularFrame;

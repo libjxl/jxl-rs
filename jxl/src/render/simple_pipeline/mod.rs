@@ -48,7 +48,7 @@ impl SimpleRenderPipeline {
         // We explicitly lock the mutex until the end of the function call to
         // avoid concurrent calls to BufferSplitter.
         let buffers = self.input_buffers.lock().unwrap();
-        let mut current_buffers = clone_images(&*buffers)?;
+        let mut current_buffers = clone_images(&buffers)?;
 
         let mut current_size = self.shared.input_size;
 
@@ -119,7 +119,7 @@ impl SimpleRenderPipeline {
                     );
                 }
                 Stage::Save(stage) => {
-                    stage.save_simple(&output_buffers, &mut *buffer_splitter.get_full_buffers())?;
+                    stage.save_simple(&output_buffers, &mut buffer_splitter.get_full_buffers())?;
                 }
             }
             current_buffers = output_buffers;
@@ -181,7 +181,6 @@ impl RenderPipeline for SimpleRenderPipeline {
             let goffset = self.shared.group_offset(group_id);
             let ChannelInfo { ty, downsample } = self.shared.channel_info[0][channel];
             let off = (goffset.0 >> downsample.0, goffset.1 >> downsample.1);
-            debug!(?sz, input_buffers_sz=?self.input_buffers[channel].size(), offset=?off, ?downsample, ?goffset);
             let ty = ty.unwrap();
             assert_eq!(ty, T::DATA_TYPE_ID);
             let mut buffers = self.input_buffers.lock().unwrap();

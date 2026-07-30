@@ -745,7 +745,7 @@ impl Frame {
                     .opsin_inverse_matrix
                     .quant_biases,
                 &mut pixels,
-                &mut *buffers,
+                &mut buffers,
             )?;
         }
         if let Some(pixels) = pixels {

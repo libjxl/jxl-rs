@@ -79,8 +79,7 @@ impl LowMemoryRenderPipeline {
     ) -> Option<OwnedRawImage> {
         self.scratch_channel_buffers
             .try_borrow_mut()
-            .map(|mut x| x[channel * 3 + kind].pop())
-            .flatten()
+            .and_then(|mut x| x[channel * 3 + kind].pop())
     }
 
     fn store_scratch_buffer(&self, channel: usize, kind: usize, image: OwnedRawImage) {
@@ -234,7 +233,7 @@ impl LowMemoryRenderPipeline {
                 origin,
             );
 
-            self.render_group(&mut *data, (gx, gy), image_area, &mut local_buffers)?;
+            self.render_group(&mut data, (gx, gy), image_area, &mut local_buffers)?;
             Ok(())
         })?;
 

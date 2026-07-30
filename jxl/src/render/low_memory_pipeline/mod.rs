@@ -5,6 +5,7 @@
 
 #![allow(clippy::needless_range_loop)]
 
+use std::fmt::Debug;
 use std::sync::atomic::Ordering;
 
 use row_buffers::RowBuffer;
@@ -33,6 +34,12 @@ struct LowMemoryRenderPipelinePerThread {
     row_buffers: Vec<Vec<RowBuffer>>,
     // Local states of each stage, if any.
     local_states: Vec<Option<Box<ErasedLocalState>>>,
+}
+
+impl Debug for LowMemoryRenderPipelinePerThread {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "<scratch>")
+    }
 }
 
 impl LowMemoryRenderPipelinePerThread {
@@ -444,7 +451,7 @@ impl RenderPipeline for LowMemoryRenderPipeline {
                 full_image_size,
                 (0, 0),
             );
-            self.render_outside_frame_internal(&mut *data, xrange, yrange, &mut local_buffers)?;
+            self.render_outside_frame_internal(&mut data, xrange, yrange, &mut local_buffers)?;
         }
         Ok(())
     }
