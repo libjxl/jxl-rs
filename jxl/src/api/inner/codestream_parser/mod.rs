@@ -5,7 +5,7 @@
 
 use crate::{
     api::{
-        JxlColorProfile, JxlDecoderOptions, JxlOutputBuffer, JxlPixelFormat,
+        JxlColorProfile, JxlDecoderOptions, JxlOutputBuffer, JxlParallelRunner, JxlPixelFormat,
         inner::{
             box_parser::CodestreamInput,
             codestream_parser::{
@@ -207,6 +207,7 @@ impl CodestreamParser {
         input: &mut CodestreamInput,
         decode_options: &JxlDecoderOptions,
         mut output_buffers: Option<&mut [JxlOutputBuffer]>,
+        parallel_runner: &mut dyn JxlParallelRunner,
     ) -> Result<()> {
         if let Some(output_buffers) = &output_buffers {
             validate_output_buffers(output_buffers, self.pixel_format.as_ref())?;
@@ -327,6 +328,7 @@ impl CodestreamParser {
                             &mut output_buffers,
                             self.output_color_profile.as_ref().unwrap(),
                             self.pixel_format.as_ref().unwrap(),
+                            parallel_runner,
                         ) {
                             Ok(None) => Ok(()),
                             Ok(Some(missing)) => Err(Error::OutOfBounds(missing)),

@@ -70,7 +70,7 @@ pub fn decode_internal(
                                         )
                                     })
                                     .collect();
-                                flushed = fallback.flush_pixels(&mut api_buffers)?;
+                                flushed = fallback.flush_pixels(&mut api_buffers, None)?;
                             )?
                         }
                         if flushed {
@@ -94,7 +94,7 @@ pub fn decode_internal(
     // Process until we have image info
     let mut decoder_with_image_info = advance_decoder!(
         initialized_decoder,
-        initialized_decoder.process(&mut chunk_input)
+        initialized_decoder.process(&mut chunk_input, None)
     );
     decoder_with_image_info.set_use_simple_pipeline(use_simple_pipeline);
 
@@ -149,7 +149,7 @@ pub fn decode_internal(
         // Process until we have frame info
         let mut decoder_with_frame_info = advance_decoder!(
             decoder_with_image_info,
-            decoder_with_image_info.process(&mut chunk_input);
+            decoder_with_image_info.process(&mut chunk_input, None);
             flush: buffers,
             f_idx
         );
@@ -168,7 +168,7 @@ pub fn decode_internal(
                         )
                     })
                     .collect();
-                let res = decoder_with_frame_info.process(&mut chunk_input, &mut api_buffers);
+                let res = decoder_with_frame_info.process(&mut chunk_input, &mut api_buffers, None);
                 drop(api_buffers);
                 res
             };
@@ -217,7 +217,7 @@ pub fn scan_frames_with_decoder(mut input: &[u8], chunk_size: usize) -> Vec<Visi
                 chunk_input =
                     &input[..(chunk_input.len().saturating_add(chunk_size)).min(input.len())];
                 let available_before = chunk_input.len();
-                let process_result = $decoder.process(&mut chunk_input);
+                let process_result = $decoder.process(&mut chunk_input, None);
                 input = &input[(available_before - chunk_input.len())..];
                 match process_result.unwrap() {
                     ProcessingResult::Complete { result } => break result,

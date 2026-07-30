@@ -18,6 +18,7 @@ png = "0.18.0"
 exr = { version = "1.73.0", optional = true }
 color-eyre = "0.6.5"
 mimalloc = "0.1.52"
+rayon = "1.12.0"
 
 [dev-dependencies]
 jxl_macros = { path = "../jxl_macros", features = ["test"], version = "=0.5.1" }

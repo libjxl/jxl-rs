@@ -10,7 +10,7 @@ use std::{
 
 use crate::{
     api::{
-        JxlColorProfile, JxlDecoderOptions, JxlOutputBuffer, JxlPixelFormat,
+        JxlColorProfile, JxlDecoderOptions, JxlOutputBuffer, JxlParallelRunner, JxlPixelFormat,
         inner::{
             CodestreamParser,
             box_parser::CodestreamInput,
@@ -416,6 +416,7 @@ impl FrameInfo {
     }
 
     // Returns whether we modified the pixels.
+    #[allow(clippy::too_many_arguments)]
     fn process_single_section(
         frame: &mut Frame,
         buf: &[u8],
@@ -424,6 +425,7 @@ impl FrameInfo {
         output_profile: &JxlColorProfile,
         pixel_format: &JxlPixelFormat,
         do_flush: bool,
+        parallel_runner: &mut dyn JxlParallelRunner,
     ) -> Result<bool> {
         let mut br = BitReader::new(buf);
         frame.decode_lf_global(&mut br, !is_complete)?;
@@ -436,6 +438,7 @@ impl FrameInfo {
             vec![(0, vec![(0, br)])],
             do_flush,
             output_profile,
+            parallel_runner,
         )
     }
 
@@ -448,6 +451,7 @@ impl FrameInfo {
         output_buffers: &mut Option<&mut [JxlOutputBuffer<'_>]>,
         output_profile: &JxlColorProfile,
         pixel_format: &JxlPixelFormat,
+        parallel_runner: &mut dyn JxlParallelRunner,
     ) -> Result<Option<usize>> {
         let data_for_next_section = self
             .sections
@@ -470,6 +474,7 @@ impl FrameInfo {
                 output_profile,
                 pixel_format,
                 false,
+                parallel_runner,
             )?;
             return Ok(None);
         }
@@ -549,6 +554,7 @@ impl FrameInfo {
             group_readers,
             false,
             output_profile,
+            parallel_runner,
         )?;
 
         for g in processed_groups.into_iter() {
@@ -565,6 +571,7 @@ impl FrameInfo {
         output_buffers: &mut [JxlOutputBuffer<'_>],
         output_profile: &JxlColorProfile,
         pixel_format: &JxlPixelFormat,
+        parallel_runner: &mut dyn JxlParallelRunner,
     ) -> Result<()> {
         let Some(frame) = self.frame.as_mut() else {
             return Ok(());
@@ -596,6 +603,7 @@ impl FrameInfo {
                     output_profile,
                     pixel_format,
                     true,
+                    parallel_runner,
                 ) {
                     self.pixels_dirty |= dirty;
                     return Ok(());
@@ -612,6 +620,7 @@ impl FrameInfo {
                 vec![],
                 true,
                 output_profile,
+                parallel_runner,
             )?;
         }
         Ok(())
