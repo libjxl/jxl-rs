@@ -136,7 +136,7 @@ impl Deref for SmallBuffer {
     }
 }
 
-struct SequentialRunner;
+pub(crate) struct SequentialRunner;
 
 impl JxlParallelRunner for SequentialRunner {
     fn run(&mut self, num: usize, fun: &JxlParallelRunnerFun) -> Result<()> {

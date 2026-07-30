@@ -13,7 +13,7 @@ use codestream_parser::CodestreamParser;
 
 mod box_parser;
 mod codestream_parser;
-mod process;
+pub(crate) mod process;
 
 pub use box_parser::BoxParserCheckpoint;
 
