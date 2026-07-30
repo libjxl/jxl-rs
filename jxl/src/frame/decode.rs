@@ -557,7 +557,7 @@ impl Frame {
         &mut self,
         group: usize,
         complete: bool,
-        buffer_splitter: &mut BufferSplitter,
+        buffer_splitter: &BufferSplitter,
     ) -> Result<()> {
         // TODO(sboukortt): consider making this a dedicated stage
         // TODO(veluca): SIMD.
@@ -670,7 +670,7 @@ impl Frame {
         &mut self,
         group: usize,
         passes: &mut [(usize, BitReader)],
-        buffer_splitter: &mut BufferSplitter,
+        buffer_splitter: &BufferSplitter,
         force_render: bool,
     ) -> Result<()> {
         // Group was fully rendered already, nothing to do.
@@ -777,7 +777,7 @@ impl Frame {
         &mut self,
         group: usize,
         passes: &mut [(usize, BitReader)],
-        buffer_splitter: &mut BufferSplitter,
+        buffer_splitter: &BufferSplitter,
         force_render: bool,
     ) -> Result<()> {
         if passes.is_empty() {
@@ -786,11 +786,11 @@ impl Frame {
 
         self.decode_and_render_varct_and_noise(group, passes, buffer_splitter, force_render)?;
 
-        let mut pass_to_pipeline = |chan, group, complete, image: Image<i32>| {
+        let pass_to_pipeline = |chan, group, complete, image: Image<i32>| {
             pipeline!(
                 self,
                 p,
-                p.set_buffer_for_group(chan, group, complete, image, &mut *buffer_splitter)?
+                p.set_buffer_for_group(chan, group, complete, image, &*buffer_splitter)?
             );
             Ok(())
         };
@@ -802,7 +802,7 @@ impl Frame {
                 &self.header,
                 &lf_global.tree,
                 br,
-                Some(&mut pass_to_pipeline),
+                Some(&pass_to_pipeline),
             )?;
         }
 

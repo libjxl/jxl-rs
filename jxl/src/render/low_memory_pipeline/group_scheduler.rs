@@ -100,7 +100,7 @@ impl LowMemoryRenderPipeline {
     pub(super) fn render_with_new_group(
         &self,
         g: usize,
-        buffer_splitter: &mut BufferSplitter,
+        buffer_splitter: &BufferSplitter,
     ) -> Result<()> {
         let buf = self.input_buffers.get(g);
         assert!(buf.ready_channels.load(Ordering::Relaxed) <= self.shared.num_used_channels());

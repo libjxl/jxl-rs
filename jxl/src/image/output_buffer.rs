@@ -97,9 +97,14 @@ impl<'a> JxlOutputBuffer<'a> {
         self.inner.byte_size()
     }
 
-    pub fn rect(&mut self, rect: Rect) -> JxlOutputBuffer<'_> {
+    /// # Safety
+    /// The caller must guarantee that there are no outstanding lends
+    /// of the provided `rect`.
+    pub(crate) unsafe fn rect(&self, rect: Rect) -> JxlOutputBuffer<'_> {
         // Safety note: the return value borrows from `self`, so we are lending our memory to the
-        // returned JxlOutputBuffer.
+        // returned JxlOutputBuffer. The caller guarantees that the region identified by
+        // `rect` does not overlap with other regions with outstanding borrows, so we have
+        // exclusive access to that region.
         Self {
             inner: self.inner.rect(rect),
             _ph: PhantomData,
