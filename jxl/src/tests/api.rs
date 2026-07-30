@@ -23,6 +23,7 @@ fn decode_small_chunks() {
             false,
             None,
             None,
+            None,
         )
         .unwrap();
         Ok(())
@@ -747,7 +748,7 @@ fn test_fuzzer_smallbuffer_overflow() {
     let data = include_bytes!("../../tests/testdata/fuzzer_smallbuffer_overflow.jxl");
 
     let result = panic::catch_unwind(|| {
-        let _ = decode_internal(data, 1024, false, false, None, None);
+        let _ = decode_internal(data, 1024, false, false, None, None, None);
     });
 
     if let Err(e) = result {
