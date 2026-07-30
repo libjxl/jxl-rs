@@ -83,7 +83,7 @@ pub(super) struct ModularBuffer {
     // Transform steps that use the image data in this buffer for final renders.
     pub(super) used_by_transforms_final: Vec<usize>,
     // Transform steps that depend on this buffer for the current rendering pass.
-    pub(super) used_by_transforms_current: Vec<usize>,
+    pub(super) used_by_transforms_current: AtomicRefCell<Vec<usize>>,
     // Transform step that will produce this channel (None if the channel is final).
     pub(super) produced_by_step: Option<usize>,
     pub(super) size: (usize, usize),
@@ -100,7 +100,7 @@ impl ModularBuffer {
             data: AtomicRefCell::new(None),
             remaining_uses: AtomicUsize::new(0),
             used_by_transforms_final: vec![],
-            used_by_transforms_current: vec![],
+            used_by_transforms_current: AtomicRefCell::new(vec![]),
             size,
             data_status: DataStatus::Zero,
             produced_by_step: None,
