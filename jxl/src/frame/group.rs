@@ -35,14 +35,26 @@ pub struct VarDctBuffers {
 impl VarDctBuffers {
     pub fn new() -> Self {
         Self {
-            scratch: vec![0.0; LF_BUFFER_SIZE],
-            transform_buffer: [
-                vec![0.0; MAX_COEFF_AREA],
-                vec![0.0; MAX_COEFF_AREA],
-                vec![0.0; MAX_COEFF_AREA],
-            ],
-            coeffs_storage: vec![0; 3 * GROUP_DIM * GROUP_DIM],
+            scratch: vec![],
+            transform_buffer: [vec![], vec![], vec![]],
+            coeffs_storage: vec![],
         }
+    }
+
+    pub fn ensure_allocated(&mut self) -> Result<()> {
+        if !self.scratch.is_empty() {
+            return Ok(());
+        }
+        self.scratch.try_reserve_exact(LF_BUFFER_SIZE)?;
+        self.scratch.resize(LF_BUFFER_SIZE, 0.0);
+        for b in self.transform_buffer.iter_mut() {
+            b.try_reserve_exact(MAX_COEFF_AREA)?;
+            b.resize(MAX_COEFF_AREA, 0.0);
+        }
+        self.coeffs_storage
+            .try_reserve_exact(3 * GROUP_DIM * GROUP_DIM)?;
+        self.coeffs_storage.resize(3 * GROUP_DIM * GROUP_DIM, 0);
+        Ok(())
     }
 
     /// Reset buffers to zero for reuse.
@@ -52,12 +64,6 @@ impl VarDctBuffers {
         // transform_buffer does NOT need zeroing: dequant_block fully overwrites
         // all num_coeffs entries before transform_to_pixels reads them.
         self.coeffs_storage.fill(0);
-    }
-}
-
-impl Default for VarDctBuffers {
-    fn default() -> Self {
-        Self::new()
     }
 }
 
@@ -379,8 +385,8 @@ pub fn decode_vardct_group(
     group: usize,
     passes: &mut [(usize, BitReader)],
     frame_header: &FrameHeader,
-    lf_global: &mut LfGlobalState,
-    hf_global: &mut HfGlobalState,
+    lf_global: &LfGlobalState,
+    hf_global: &HfGlobalState,
     hf_meta: &HfMetadata,
     lf_image: &[Image<f32>; 3],
     quant_lf: &Image<u8>,
@@ -419,21 +425,19 @@ pub fn decode_vardct_group(
     let transform_map = hf_meta.transform_map.get_rect(block_group_rect);
     let raw_quant_map = hf_meta.raw_quant_map.get_rect(block_group_rect);
     let quant_lf_rect = quant_lf.get_rect(block_group_rect);
-    let block_context_map = lf_global.block_context_map.as_mut().unwrap();
+    let block_context_map = lf_global.block_context_map.as_ref().unwrap();
     // TODO(veluca): improve coefficient storage (smaller allocations, use 16 bits if possible).
-    let coeffs = match hf_global.hf_coefficients.as_mut() {
-        Some(hf_coefficients) => [
-            hf_coefficients.0.row_mut(group),
-            hf_coefficients.1.row_mut(group),
-            hf_coefficients.2.row_mut(group),
-        ],
-        None => {
-            // Use pooled buffer (already reset to zero in buffers.reset() above)
-            let (coeffs_x, coeffs_y_b) = buffers.coeffs_storage.split_at_mut(GROUP_DIM * GROUP_DIM);
-            let (coeffs_y, coeffs_b) = coeffs_y_b.split_at_mut(GROUP_DIM * GROUP_DIM);
-            [coeffs_x, coeffs_y, coeffs_b]
-        }
+    let mut coeffs;
+    let coeffs = if !hf_global.hf_coefficients.is_empty() {
+        coeffs = hf_global.hf_coefficients[group].borrow_mut();
+        &mut *coeffs
+    } else {
+        &mut buffers.coeffs_storage
     };
+    // Use pooled buffer (already reset to zero in buffers.reset() above)
+    let (coeffs_x, coeffs_y_b) = coeffs.split_at_mut(GROUP_DIM * GROUP_DIM);
+    let (coeffs_y, coeffs_b) = coeffs_y_b.split_at_mut(GROUP_DIM * GROUP_DIM);
+    let coeffs = [coeffs_x, coeffs_y, coeffs_b];
     let mut coeffs_offset = 0;
     let transform_buffer = &mut buffers.transform_buffer;
 
