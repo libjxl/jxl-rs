@@ -8,6 +8,7 @@ mod macros;
 
 mod api;
 mod compare_incremental;
+mod compare_parallel;
 pub(crate) mod decode;
 
 #[allow(clippy::single_component_path_imports)]

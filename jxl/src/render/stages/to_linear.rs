@@ -5,8 +5,8 @@
 
 use crate::color::tf;
 use crate::headers::color_encoding::CustomTransferFunction;
-use crate::render::{ErasedLocalState, RenderPipelineInPlaceStage};
 use crate::render::stages::from_linear;
+use crate::render::{ErasedLocalState, RenderPipelineInPlaceStage};
 use jxl_simd::{F32SimdVec, simd_function};
 
 /// Convert encoded non-linear color samples to display-referred linear color samples.

@@ -12,10 +12,10 @@ use row_buffers::RowBuffer;
 use crate::api::JxlOutputBuffer;
 use crate::error::Result;
 use crate::image::{DataTypeTag, Image, ImageDataType, OwnedRawImage, Rect};
-use crate::render::{ErasedLocalState, MAX_BORDER};
 use crate::render::buffer_splitter::{BufferSplitter, SaveStageBufferInfo};
 use crate::render::internal::Stage;
 use crate::render::low_memory_pipeline::input_buffers::InputBuffers;
+use crate::render::{ErasedLocalState, MAX_BORDER};
 use crate::util::{AtomicRefCell, PerThreadStorage, ShiftRightCeil, tracing_wrappers::*};
 
 use super::RenderPipeline;

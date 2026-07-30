@@ -20,7 +20,7 @@ macro_rules! declare_test_file {
             fn [<test_decode_test_file_chunks_ $ident>]() {
                 let path = std::path::Path::new("resources/test/").join($path);
                 let file = std::fs::read(&path).unwrap();
-                crate::tests::decode::decode_internal(&file, 1, false, false, None, None).unwrap();
+                crate::tests::decode::decode_internal(&file, 1, false, false, None, None, None).unwrap();
             }
 
             #[test]
@@ -41,7 +41,7 @@ macro_rules! declare_test_file {
             fn [<test_compare_pipelines_ $ident>]() {
                 let path = std::path::Path::new("resources/test/").join($path);
                 let file = std::fs::read(&path).unwrap();
-                let simple_frames = crate::tests::decode::decode_internal(&file, usize::MAX, true, false, None, None).unwrap().1;
+                let simple_frames = crate::tests::decode::decode_internal(&file, usize::MAX, true, false, None, None, None).unwrap().1;
                 let frames = crate::tests::decode::decode(&file).unwrap().1;
                 assert_eq!(frames.len(), simple_frames.len());
                 for (fc, (f, sf)) in frames.into_iter().zip(simple_frames).enumerate() {
@@ -53,6 +53,18 @@ macro_rules! declare_test_file {
             fn [<test_compare_incremental_ $ident>]() {
                 let path = std::path::Path::new("resources/test/").join($path);
                 crate::tests::compare_incremental::run(&path, $checkpoints);
+            }
+
+            #[test]
+            fn [<test_compare_parallel_oneshot_ $ident>]() {
+                let path = std::path::Path::new("resources/test/").join($path);
+                crate::tests::compare_parallel::run_oneshot(&path);
+            }
+
+            #[test]
+            fn [<test_compare_parallel_progressive_ $ident>]() {
+                let path = std::path::Path::new("resources/test/").join($path);
+                crate::tests::compare_parallel::run_progressive(&path);
             }
         }
     };

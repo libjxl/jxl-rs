@@ -399,7 +399,7 @@ impl Frame {
 
         // STEP 4: actually run the steps.
 
-        let num_concurrent = parallel_runner.max_threads().min(render_steps.len()).max(1);
+        let num_concurrent = parallel_runner.max_threads().max(1);
         modular_global.prepare_for_threads(num_concurrent)?;
         self.vardct_buffers
             .prepare_for_threads(num_concurrent, VarDctBuffers::new)?;

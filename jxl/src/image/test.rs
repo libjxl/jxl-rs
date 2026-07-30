@@ -69,10 +69,22 @@ fn rect_basic() -> Result<()> {
 
 #[test]
 fn rect_intersects() {
-    let r1 = Rect { origin: (0, 0), size: (10, 10) };
-    let r2 = Rect { origin: (5, 5), size: (10, 10) };
-    let r3 = Rect { origin: (10, 0), size: (10, 10) };
-    let r4 = Rect { origin: (20, 20), size: (10, 10) };
+    let r1 = Rect {
+        origin: (0, 0),
+        size: (10, 10),
+    };
+    let r2 = Rect {
+        origin: (5, 5),
+        size: (10, 10),
+    };
+    let r3 = Rect {
+        origin: (10, 0),
+        size: (10, 10),
+    };
+    let r4 = Rect {
+        origin: (20, 20),
+        size: (10, 10),
+    };
 
     assert!(r1.intersects(&r2));
     assert!(r2.intersects(&r1));

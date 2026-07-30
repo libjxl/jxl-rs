@@ -23,6 +23,7 @@ fn decode_small_chunks() {
             false,
             None,
             None,
+            None,
         )
         .unwrap();
         Ok(())
@@ -397,7 +398,10 @@ fn test_animation_with_reference_frames() {
         )];
 
         decoder = loop {
-            match decoder_frame.process(&mut input, &mut buffers, None).unwrap() {
+            match decoder_frame
+                .process(&mut input, &mut buffers, None)
+                .unwrap()
+            {
                 ProcessingResult::Complete { result } => break result,
                 ProcessingResult::NeedsMoreInput { fallback, .. } => {
                     decoder_frame = fallback;
@@ -491,7 +495,10 @@ fn test_skip_frame_then_decode_next() {
     )];
 
     let decoder = loop {
-        match decoder_frame.process(&mut input, &mut buffers, None).unwrap() {
+        match decoder_frame
+            .process(&mut input, &mut buffers, None)
+            .unwrap()
+        {
             ProcessingResult::Complete { result } => break result,
             ProcessingResult::NeedsMoreInput { fallback, .. } => {
                 decoder_frame = fallback;
@@ -741,7 +748,7 @@ fn test_fuzzer_smallbuffer_overflow() {
     let data = include_bytes!("../../tests/testdata/fuzzer_smallbuffer_overflow.jxl");
 
     let result = panic::catch_unwind(|| {
-        let _ = decode_internal(data, 1024, false, false, None, None);
+        let _ = decode_internal(data, 1024, false, false, None, None, None);
     });
 
     if let Err(e) = result {
@@ -823,7 +830,9 @@ fn assert_start_new_frame_matches_sequential(data: &[u8]) {
         let mut decoder = JxlDecoderInner::new(options);
         let mut input = &data[..initial_offset];
 
-        while let ProcessingResult::Complete { .. } = decoder.process(&mut input, None, None).unwrap() {
+        while let ProcessingResult::Complete { .. } =
+            decoder.process(&mut input, None, None).unwrap()
+        {
             if input.is_empty() {
                 break;
             }
