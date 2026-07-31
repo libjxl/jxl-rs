@@ -131,7 +131,7 @@ impl LowMemoryRenderPipeline {
                 continue;
             }
             let (bx, by) = self.border_size;
-            let (sx, sy) = buf.data.borrow()[c].as_ref().unwrap().byte_size();
+            let (sx, sy) = buf.data[c].borrow().as_ref().unwrap().byte_size();
             let ChannelInfo {
                 ty,
                 downsample: (dx, dy),
@@ -139,7 +139,7 @@ impl LowMemoryRenderPipeline {
             let ty = ty.unwrap();
             let bx = bx >> dx;
             let by = by >> dy;
-            let mut topbottom = if let Some(b) = buf.topbottom.borrow_mut()[c].take() {
+            let mut topbottom = if let Some(b) = buf.topbottom[c].borrow_mut().take() {
                 b
             } else if let Some(b) = self.maybe_get_scratch_buffer(c, 1) {
                 b
@@ -148,7 +148,7 @@ impl LowMemoryRenderPipeline {
                 let width = (1 << self.shared.log_group_size) * ty.size();
                 OwnedRawImage::new_zeroed_with_padding((width, height), (0, 0), (0, 0))?
             };
-            let mut leftright = if let Some(b) = buf.leftright.borrow_mut()[c].take() {
+            let mut leftright = if let Some(b) = buf.leftright[c].borrow_mut().take() {
                 b
             } else if let Some(b) = self.maybe_get_scratch_buffer(c, 2) {
                 b
@@ -157,8 +157,8 @@ impl LowMemoryRenderPipeline {
                 let width = 4 * bx * ty.size();
                 OwnedRawImage::new_zeroed_with_padding((width, height), (0, 0), (0, 0))?
             };
-            let data = buf.data.borrow();
-            let input = data[c].as_ref().unwrap();
+            let data = &buf.data[c].borrow();
+            let input = data.as_ref().unwrap();
             if by != 0 {
                 for y in 0..(2 * by).min(sy) {
                     topbottom.row_mut(y)[..sx].copy_from_slice(input.row(y));
@@ -174,8 +174,8 @@ impl LowMemoryRenderPipeline {
                     row_out[4 * bx * ty.size() - cs..].copy_from_slice(&row_in[sx - cs..]);
                 }
             }
-            buf.leftright.borrow_mut()[c] = Some(leftright);
-            buf.topbottom.borrow_mut()[c] = Some(topbottom);
+            *buf.leftright[c].borrow_mut() = Some(leftright);
+            *buf.topbottom[c].borrow_mut() = Some(topbottom);
         }
 
         let ready_mask = self.input_buffers.mark_ready(g);

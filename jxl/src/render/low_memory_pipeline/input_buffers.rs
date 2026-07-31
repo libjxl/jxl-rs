@@ -13,11 +13,11 @@ use crate::util::{AtomicRefCell, NewWithCapacity};
 
 pub(super) struct InputBuffer {
     // One buffer per channel.
-    pub(super) data: AtomicRefCell<Vec<Option<OwnedRawImage>>>,
+    pub(super) data: Vec<AtomicRefCell<Option<OwnedRawImage>>>,
     // Storage for left/right borders. Includes corners.
-    pub(super) leftright: AtomicRefCell<Vec<Option<OwnedRawImage>>>,
+    pub(super) leftright: Vec<AtomicRefCell<Option<OwnedRawImage>>>,
     // Storage for top/bottom borders. Includes corners.
-    pub(super) topbottom: AtomicRefCell<Vec<Option<OwnedRawImage>>>,
+    pub(super) topbottom: Vec<AtomicRefCell<Option<OwnedRawImage>>>,
     // Number of ready channels in the current pass.
     pub(super) ready_channels: AtomicUsize,
     is_ready: AtomicBool,
@@ -25,15 +25,18 @@ pub(super) struct InputBuffer {
 
 impl InputBuffer {
     pub(super) fn set_buffer(&self, chan: usize, buf: OwnedRawImage) {
-        let mut data = self.data.borrow_mut();
         assert!(!self.is_ready.load(Ordering::Relaxed));
-        assert!(data[chan].is_none(), "chan: {chan}");
-        data[chan] = Some(buf);
+        assert!(self.data[chan].borrow_mut().is_none(), "chan: {chan}");
+        *self.data[chan].borrow_mut() = Some(buf);
         self.ready_channels.fetch_add(1, Ordering::Relaxed);
     }
 
     pub(super) fn new(num_channels: usize) -> Self {
-        let b = || AtomicRefCell::new((0..num_channels).map(|_| None).collect());
+        let b = || {
+            (0..num_channels)
+                .map(|_| AtomicRefCell::new(None))
+                .collect()
+        };
         Self {
             data: b(),
             leftright: b(),
@@ -124,7 +127,7 @@ impl InputBuffers {
             .all(|c| shared.group_chan_complete[group][c].load(Ordering::Relaxed));
 
         {
-            let mut data = self.buffers[group].data.borrow_mut();
+            let data = &self.buffers[group].data;
             let mut preserved_count = 0;
             for c in 0..data.len() {
                 if !shared.channel_is_used[c] {
@@ -133,7 +136,7 @@ impl InputBuffers {
                 let is_finalized = shared.group_chan_complete[group][c].load(Ordering::Relaxed);
                 let preserve = is_finalized && !all_finalized;
                 if !preserve {
-                    if let Some(b) = std::mem::take(&mut data[c]) {
+                    if let Some(b) = std::mem::take(&mut *data[c].borrow_mut()) {
                         store_buf(c, 0, b);
                     }
                 } else {
@@ -169,12 +172,12 @@ impl InputBuffers {
                 if self.remaining_flags[idx].fetch_add(1, Ordering::AcqRel) != 8 {
                     continue;
                 }
-                for c in 0..self.buffers[g].data.borrow().len() {
-                    if let Some(b) = std::mem::take(&mut self.buffers[g].topbottom.borrow_mut()[c])
+                for c in 0..self.buffers[g].data.len() {
+                    if let Some(b) = std::mem::take(&mut *self.buffers[g].topbottom[c].borrow_mut())
                     {
                         store_buf(c, 1, b);
                     }
-                    if let Some(b) = std::mem::take(&mut self.buffers[g].leftright.borrow_mut()[c])
+                    if let Some(b) = std::mem::take(&mut *self.buffers[g].leftright[c].borrow_mut())
                     {
                         store_buf(c, 2, b);
                     }

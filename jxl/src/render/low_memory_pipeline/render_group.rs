@@ -114,11 +114,11 @@ impl LowMemoryRenderPipeline {
         if copy_x0 < group_x0 {
             let r;
             let (input_buf, xs) = if is_topbottom {
-                r = self.input_buffers.get(base_gid - 1).topbottom.borrow();
-                (r[c].as_ref().unwrap(), group_xsize)
+                r = self.input_buffers.get(base_gid - 1).topbottom[c].borrow();
+                (r.as_ref().unwrap(), group_xsize)
             } else {
-                r = self.input_buffers.get(base_gid - 1).leftright.borrow();
-                (r[c].as_ref().unwrap(), 4 * (bx >> dx))
+                r = self.input_buffers.get(base_gid - 1).leftright[c].borrow();
+                (r.as_ref().unwrap(), 4 * (bx >> dx))
             };
             let input_row = input_buf.row(input_y);
 
@@ -133,11 +133,11 @@ impl LowMemoryRenderPipeline {
         {
             let r;
             let input_buf = if is_topbottom {
-                r = self.input_buffers.get(base_gid).topbottom.borrow();
-                r[c].as_ref().unwrap()
+                r = self.input_buffers.get(base_gid).topbottom[c].borrow();
+                r.as_ref().unwrap()
             } else {
-                r = self.input_buffers.get(base_gid).data.borrow();
-                r[c].as_ref().unwrap()
+                r = self.input_buffers.get(base_gid).data[c].borrow();
+                r.as_ref().unwrap()
             };
             let input_row = input_buf.row(input_y);
             let copy_start = copy_x0.saturating_sub(group_x0) * ty.size();
@@ -152,11 +152,11 @@ impl LowMemoryRenderPipeline {
         if copy_x1 > group_x1 {
             let r;
             let input_buf = if is_topbottom {
-                r = self.input_buffers.get(base_gid + 1).topbottom.borrow();
-                r[c].as_ref().unwrap()
+                r = self.input_buffers.get(base_gid + 1).topbottom[c].borrow();
+                r.as_ref().unwrap()
             } else {
-                r = self.input_buffers.get(base_gid + 1).leftright.borrow();
-                r[c].as_ref().unwrap()
+                r = self.input_buffers.get(base_gid + 1).leftright[c].borrow();
+                r.as_ref().unwrap()
             };
             let input_row = input_buf.row(input_y);
             let dx = self.shared.channel_info[0][c].downsample.0;
