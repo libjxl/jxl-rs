@@ -683,19 +683,37 @@ impl TransformStepChunk {
             }
             TransformStep::Palette {
                 buf_in,
+                buf_out,
                 buf_pal,
                 predictor,
                 ..
             } if !predictor.requires_full_row() => {
                 let b = *buf_in;
                 let grid_idx = buffers[b].get_grid_idx(buffers[b].grid_kind, self.grid_pos);
-                [(b, grid_idx), (*buf_pal, 0)]
-                    .into_iter()
-                    .map(|(a, b)| TransformDependency::new(a, b))
-                    .collect()
+                let mut ans: SmallVec<TransformDependency, 9> = SmallVec::new();
+                ans.push(TransformDependency::new(b, grid_idx));
+                ans.push(TransformDependency::new(*buf_pal, 0));
+                let grid_shape = buffers[b].grid_shape;
+                if *predictor != Predictor::Zero {
+                    let (gx, gy) = (self.grid_pos.0 as isize, self.grid_pos.1 as isize);
+                    let (xs, ys) = (grid_shape.0 as isize, grid_shape.1 as isize);
+                    for (dx, dy) in [(0, -1), (-1, 0), (-1, -1)] {
+                        let (nx, ny) = (gx + dx, gy + dy);
+                        if nx >= 0 && nx < xs && ny >= 0 && ny < ys {
+                            let prev_grid = ny as usize * grid_shape.0 + nx as usize;
+                            for out in buf_out {
+                                ans.push(TransformDependency::new_order_only(*out, prev_grid));
+                            }
+                        }
+                    }
+                }
+                ans
             }
             TransformStep::Palette {
-                buf_in, buf_pal, ..
+                buf_in,
+                buf_pal,
+                buf_out,
+                ..
             } => {
                 let b = *buf_in;
                 let mut ans = SmallVec::new();
@@ -705,6 +723,13 @@ impl TransformStepChunk {
                 for grid_x in 0..grid_shape.0 {
                     ans.push(TransformDependency::new(b, grid_idx + grid_x));
                 }
+                if let Some(prev) = self.grid_pos.1.checked_sub(1) {
+                    let prev_grid = prev * grid_shape.0;
+                    for out in buf_out {
+                        ans.push(TransformDependency::new_order_only(*out, prev_grid));
+                    }
+                }
+
                 ans
             }
             TransformStep::VSqueeze {
