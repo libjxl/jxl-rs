@@ -304,6 +304,7 @@ mod tests {
         );
     }
 
+    #[cfg(not(any(target_family = "wasm", target_arch = "wasm32", target_os = "wasi")))]
     #[test]
     fn test_buffer_splitter_multithreaded_arbtest() {
         arbtest::arbtest(|u| {

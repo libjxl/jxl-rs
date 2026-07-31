@@ -8,6 +8,7 @@ mod macros;
 
 mod api;
 mod compare_incremental;
+#[cfg(not(any(target_family = "wasm", target_arch = "wasm32", target_os = "wasi")))]
 mod compare_parallel;
 pub(crate) mod decode;
 

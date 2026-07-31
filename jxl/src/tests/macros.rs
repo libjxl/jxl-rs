@@ -55,12 +55,14 @@ macro_rules! declare_test_file {
                 crate::tests::compare_incremental::run(&path, $checkpoints);
             }
 
+            #[cfg(not(any(target_family = "wasm", target_arch = "wasm32", target_os = "wasi")))]
             #[test]
             fn [<test_compare_parallel_oneshot_ $ident>]() {
                 let path = std::path::Path::new("resources/test/").join($path);
                 crate::tests::compare_parallel::run_oneshot(&path);
             }
 
+            #[cfg(not(any(target_family = "wasm", target_arch = "wasm32", target_os = "wasi")))]
             #[test]
             fn [<test_compare_parallel_progressive_ $ident>]() {
                 let path = std::path::Path::new("resources/test/").join($path);
