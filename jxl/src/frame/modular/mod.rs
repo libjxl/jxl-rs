@@ -856,10 +856,14 @@ fn dequant_lf(
 
     if frame_header.is444() {
         let [lf0, lf1, lf2] = lf;
+        let local_r = Rect {
+            origin: (0, 0),
+            size: r.size,
+        };
         let mut lf_rects = (
-            lf0.get_rect_mut(r),
-            lf1.get_rect_mut(r),
-            lf2.get_rect_mut(r),
+            lf0.get_rect_mut(local_r),
+            lf1.get_rect_mut(local_r),
+            lf2.get_rect_mut(local_r),
         );
 
         let fac_x = lf_factors[0] * mul;
@@ -886,10 +890,7 @@ fn dequant_lf(
     } else {
         for (c, lf_rect) in lf.iter_mut().enumerate() {
             let rect = Rect {
-                origin: (
-                    r.origin.0 >> frame_header.hshift(c),
-                    r.origin.1 >> frame_header.vshift(c),
-                ),
+                origin: (0, 0),
                 size: (
                     r.size.0 >> frame_header.hshift(c),
                     r.size.1 >> frame_header.vshift(c),
@@ -907,7 +908,11 @@ fn dequant_lf(
             }
         }
     }
-    let mut quant_lf_rect = quant_lf.get_rect_mut(r);
+    let local_r = Rect {
+        origin: (0, 0),
+        size: r.size,
+    };
+    let mut quant_lf_rect = quant_lf.get_rect_mut(local_r);
     if bctx.num_lf_contexts <= 1 {
         for y in 0..r.size.1 {
             quant_lf_rect.row(y).fill(0);
@@ -1008,13 +1013,17 @@ pub fn decode_hf_metadata(
     let stream_id = ModularStreamId::LFMeta(group).get_id(frame_header);
     debug!(?stream_id);
     let r = frame_header.lf_group_rect(group);
+    let local_r = Rect {
+        origin: (0, 0),
+        size: r.size,
+    };
     debug!(?r);
     let upper_bound = r.size.0 * r.size.1;
     let count_num_bits = upper_bound.ceil_log2();
     let count: usize = br.read(count_num_bits)? as usize + 1;
     debug!(?count);
     let cr = Rect {
-        origin: (r.origin.0 >> 3, r.origin.1 >> 3),
+        origin: (0, 0),
         size: (r.size.0.div_ceil(8), r.size.1.div_ceil(8)),
     };
     let mut buffers = [
@@ -1049,9 +1058,9 @@ pub fn decode_hf_metadata(
     }
     let transform_image = &buffers[2].data;
     let epf_image = &buffers[3].data;
-    let mut transform_map_rect = hf_meta.transform_map.get_rect_mut(r);
-    let mut raw_quant_map_rect = hf_meta.raw_quant_map.get_rect_mut(r);
-    let mut epf_map_rect = hf_meta.epf_map.get_rect_mut(r);
+    let mut transform_map_rect = hf_meta.transform_map.get_rect_mut(local_r);
+    let mut raw_quant_map_rect = hf_meta.raw_quant_map.get_rect_mut(local_r);
+    let mut epf_map_rect = hf_meta.epf_map.get_rect_mut(local_r);
     let mut num: usize = 0;
     let mut used_hf_types: u32 = 0;
     for y in 0..r.size.1 {

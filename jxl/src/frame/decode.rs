@@ -52,10 +52,17 @@ use crate::render::RenderPipelineInOutStage;
 use crate::render::stages::Upsample8x;
 use crate::render::{Channels, ChannelsMut};
 
+type LfImage = [Image<f32>; 3];
+
+pub enum LfSource<'a> {
+    Single(&'a LfImage),
+    Chunks(&'a [AtomicRefCell<Option<LfImage>>]),
+}
+
 fn upsample_lf_group(
     group: usize,
     pixels: &mut [Image<f32>; 3],
-    lf_image: &[Image<f32>; 3],
+    lf_source: LfSource,
     header: &FrameHeader,
     factors: &CustomTransformData,
 ) -> Result<()> {
@@ -76,8 +83,10 @@ fn upsample_lf_group(
 
     let mut input_rows_storage: [_; 5] = std::array::from_fn(|_| vec![0.0; max_width / 8 + 32]);
 
+    let size_blocks = header.size_blocks();
+    let num_lf_x = header.size_lf_groups().0;
+
     for c in 0..3 {
-        let lf_img = &lf_image[c];
         let out_img = &mut pixels[c];
         let (out_width, out_height) = out_img.size();
 
@@ -89,8 +98,11 @@ fn upsample_lf_group(
         let lf_x0 = gx * lf_group_dim_x;
         let lf_y0 = gy * lf_group_dim_y;
 
-        let lf_width = lf_img.size().0.shrc(hs);
-        let lf_height = lf_img.size().1.shrc(hs);
+        let lf_width = size_blocks.0.shrc(hs);
+        let lf_height = size_blocks.1.shrc(hs);
+
+        let group_dim_lf_x = group_dim >> hs;
+        let group_dim_lf_y = group_dim >> vs;
 
         let start_x = lf_x0.saturating_sub(2);
         let lf_x1 = (lf_x0 + lf_group_dim_x).min(lf_width);
@@ -109,7 +121,24 @@ fn upsample_lf_group(
                 let save_start = if start_x == lf_x0 { 2 } else { 0 };
                 let save_end = save_start + copy_width;
 
-                storage[save_start..save_end].copy_from_slice(&lf_img.row(iy)[start_x..end_x]);
+                match lf_source {
+                    LfSource::Single(lf_image) => {
+                        storage[save_start..save_end]
+                            .copy_from_slice(&lf_image[c].row(iy)[start_x..end_x]);
+                    }
+                    LfSource::Chunks(lf_chunks) => {
+                        let lgy = iy / group_dim_lf_y;
+                        let local_iy = iy % group_dim_lf_y;
+                        for (i, x) in (start_x..end_x).enumerate() {
+                            let lgx = x / group_dim_lf_x;
+                            let local_x = x % group_dim_lf_x;
+                            let lg_idx = lgy * num_lf_x + lgx;
+                            let chunk = lf_chunks[lg_idx].borrow();
+                            storage[save_start + i] =
+                                chunk.as_ref().unwrap()[c].row(local_iy)[local_x];
+                        }
+                    }
+                }
 
                 if start_x == lf_x0 {
                     storage[0] = storage[2 + mirror(-2, copy_width)];
@@ -172,41 +201,53 @@ impl Frame {
             && !image_metadata.xyb_encoded
             && image_metadata.color_encoding.color_space == ColorSpace::Gray;
         let color_channels = if is_gray { 1 } else { 3 };
-        let size_blocks = frame_header.size_blocks();
-        let lf_image = if frame_header.encoding == Encoding::VarDCT {
-            if frame_header.has_lf_frame() {
-                if decoder_state.lf_frames[frame_header.lf_level as usize].is_none() {
-                    return Err(Error::NoLfFrame(frame_header.lf_level));
-                } else {
-                    None
-                }
-            } else {
-                Some([
-                    Image::new(size_blocks)?,
-                    Image::new(size_blocks)?,
-                    Image::new(size_blocks)?,
-                ])
+        let num_lf_groups = frame_header.num_lf_groups();
+        let is_vardct = frame_header.encoding == Encoding::VarDCT;
+        let has_lf_frame = frame_header.has_lf_frame();
+
+        if is_vardct && has_lf_frame {
+            if decoder_state.lf_frames[frame_header.lf_level as usize].is_none() {
+                return Err(Error::NoLfFrame(frame_header.lf_level));
             }
-        } else {
-            None
-        };
-        let quant_lf = Image::new(size_blocks)?;
-        let size_color_tiles = (size_blocks.0.div_ceil(8), size_blocks.1.div_ceil(8));
-        let hf_meta = if frame_header.encoding == Encoding::VarDCT {
-            Some(HfMetadata {
-                ytox_map: Image::new(size_color_tiles)?,
-                ytob_map: Image::new(size_color_tiles)?,
-                raw_quant_map: Image::new(size_blocks)?,
-                transform_map: Image::new_with_value(
-                    size_blocks,
-                    HfTransformType::INVALID_TRANSFORM,
-                )?,
-                epf_map: Image::new(size_blocks)?,
-                used_hf_types: 0,
+        }
+
+        let lf_image: Vec<AtomicRefCell<Option<[Image<f32>; 3]>>> = (0..num_lf_groups)
+            .map(|g| {
+                if is_vardct && !has_lf_frame {
+                    let r = frame_header.lf_group_rect(g);
+                    Ok(AtomicRefCell::new(Some([
+                        Image::new(r.size)?,
+                        Image::new(r.size)?,
+                        Image::new(r.size)?,
+                    ])))
+                } else {
+                    Ok(AtomicRefCell::new(None))
+                }
             })
-        } else {
-            None
-        };
+            .collect::<Result<Vec<_>>>()?;
+
+        let hf_meta: Vec<AtomicRefCell<Option<HfMetadata>>> = (0..num_lf_groups)
+            .map(|g| {
+                if is_vardct {
+                    let r = frame_header.lf_group_rect(g);
+                    let cr = (r.size.0.div_ceil(8), r.size.1.div_ceil(8));
+                    Ok(AtomicRefCell::new(Some(HfMetadata {
+                        ytox_map: Image::new(cr)?,
+                        ytob_map: Image::new(cr)?,
+                        raw_quant_map: Image::new(r.size)?,
+                        transform_map: Image::new_with_value(
+                            r.size,
+                            HfTransformType::INVALID_TRANSFORM,
+                        )?,
+                        epf_map: Image::new(r.size)?,
+                        quant_lf: Image::new(r.size)?,
+                        used_hf_types: 0,
+                    })))
+                } else {
+                    Ok(AtomicRefCell::new(None))
+                }
+            })
+            .collect::<Result<Vec<_>>>()?;
 
         let reference_frame_data = if frame_header.can_be_referenced {
             let image_size = &decoder_state.file_header.size;
@@ -251,7 +292,6 @@ impl Frame {
             lf_global: None,
             hf_global: None,
             lf_image,
-            quant_lf,
             hf_meta,
             decoder_state,
             render_pipeline: None,
@@ -443,6 +483,10 @@ impl Frame {
         let lf_global = self.lf_global.as_mut().unwrap();
         if self.header.encoding == Encoding::VarDCT && !self.header.has_lf_frame() {
             info!("decoding VarDCT LF with group id {}", group);
+            let mut lf_cell = self.lf_image[group].borrow_mut();
+            let lf_image = lf_cell.as_mut().unwrap();
+            let mut hf_cell = self.hf_meta[group].borrow_mut();
+            let hf_meta = hf_cell.as_mut().unwrap();
             decode_vardct_lf(
                 group,
                 &self.header,
@@ -452,8 +496,8 @@ impl Frame {
                 lf_global.quant_params.as_ref().unwrap(),
                 &lf_global.lf_quant,
                 lf_global.block_context_map.as_ref().unwrap(),
-                self.lf_image.as_mut().unwrap(),
-                &mut self.quant_lf,
+                lf_image,
+                &mut hf_meta.quant_lf,
                 br,
             )?;
         }
@@ -469,7 +513,8 @@ impl Frame {
         )?;
         if self.header.encoding == Encoding::VarDCT {
             info!("decoding HF metadata with group id {}", group);
-            let hf_meta = self.hf_meta.as_mut().unwrap();
+            let mut hf_cell = self.hf_meta[group].borrow_mut();
+            let hf_meta = hf_cell.as_mut().unwrap();
             decode_hf_metadata(
                 group,
                 &self.header,
@@ -707,27 +752,45 @@ impl Frame {
         } else {
             None
         };
-        let lf_image = if self.header.has_lf_frame() {
-            // We already checked that the LF image is present
-            self.decoder_state.lf_frames[self.header.lf_level as usize]
-                .as_ref()
-                .unwrap()
-        } else {
-            self.lf_image.as_ref().unwrap()
-        };
+        let block_group_rect = self.header.block_group_rect(group);
+        let lf_group_x = block_group_rect.origin.0 / self.header.group_dim();
+        let lf_group_y = block_group_rect.origin.1 / self.header.group_dim();
+        let lf_group_idx = lf_group_y * self.header.size_lf_groups().0 + lf_group_x;
+
         if self.group_status.channel_status[group][0] == DataStatus::Zero && render_vardct {
             info!("Upsampling LF for group {group}");
+            let lf_source = if self.header.has_lf_frame() {
+                LfSource::Single(
+                    self.decoder_state.lf_frames[self.header.lf_level as usize]
+                        .as_ref()
+                        .unwrap(),
+                )
+            } else {
+                LfSource::Chunks(&self.lf_image)
+            };
             upsample_lf_group(
                 group,
                 pixels.as_mut().unwrap(),
-                lf_image,
+                lf_source,
                 &self.header,
                 &self.decoder_state.file_header.transform_data,
             )?;
         } else {
             info!("Decoding VarDCT group {group}");
             let hf_global = self.hf_global.as_ref().unwrap();
-            let hf_meta = self.hf_meta.as_ref().unwrap();
+            let hf_meta_guard = self.hf_meta[lf_group_idx].borrow();
+            let hf_meta = hf_meta_guard.as_ref().unwrap();
+
+            let lf_image_guard;
+            let lf_image: &[Image<f32>; 3] = if self.header.has_lf_frame() {
+                self.decoder_state.lf_frames[self.header.lf_level as usize]
+                    .as_ref()
+                    .unwrap()
+            } else {
+                lf_image_guard = self.lf_image[lf_group_idx].borrow();
+                lf_image_guard.as_ref().unwrap()
+            };
+
             let mut buffers = self.vardct_buffers.get();
             buffers.ensure_allocated();
             decode_vardct_group(
@@ -738,7 +801,6 @@ impl Frame {
                 hf_global,
                 hf_meta,
                 lf_image,
-                &self.quant_lf,
                 &self
                     .decoder_state
                     .file_header

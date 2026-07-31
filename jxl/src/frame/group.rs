@@ -382,7 +382,6 @@ pub fn decode_vardct_group(
     hf_global: &HfGlobalState,
     hf_meta: &HfMetadata,
     lf_image: &[Image<f32>; 3],
-    quant_lf: &Image<u8>,
     quant_biases: &[f32; 4],
     pixels: &mut Option<[Image<f32>; 3]>,
     buffers: &mut VarDctBuffers,
@@ -401,6 +400,18 @@ pub fn decode_vardct_group(
     buffers.reset();
     let scratch = &mut buffers.scratch;
     let color_correlation_params = lf_global.color_correlation_params.as_ref().unwrap();
+    let gx = block_group_rect.origin.0 / frame_header.group_dim();
+    let gy = block_group_rect.origin.1 / frame_header.group_dim();
+    let lf_group_origin = (gx * frame_header.group_dim(), gy * frame_header.group_dim());
+    let local_block_origin = (
+        block_group_rect.origin.0 - lf_group_origin.0,
+        block_group_rect.origin.1 - lf_group_origin.1,
+    );
+    let local_block_group_rect = Rect {
+        origin: local_block_origin,
+        size: block_group_rect.size,
+    };
+
     let cmap_rect = Rect {
         origin: (
             block_group_rect.origin.0 / COLOR_TILE_DIM_IN_BLOCKS,
@@ -411,13 +422,20 @@ pub fn decode_vardct_group(
             block_group_rect.size.1.div_ceil(COLOR_TILE_DIM_IN_BLOCKS),
         ),
     };
+    let local_cmap_rect = Rect {
+        origin: (
+            local_block_origin.0 / COLOR_TILE_DIM_IN_BLOCKS,
+            local_block_origin.1 / COLOR_TILE_DIM_IN_BLOCKS,
+        ),
+        size: cmap_rect.size,
+    };
     let quant_params = lf_global.quant_params.as_ref().unwrap();
     let inv_global_scale = quant_params.inv_global_scale();
-    let ytox_map = hf_meta.ytox_map.get_rect(cmap_rect);
-    let ytob_map = hf_meta.ytob_map.get_rect(cmap_rect);
-    let transform_map = hf_meta.transform_map.get_rect(block_group_rect);
-    let raw_quant_map = hf_meta.raw_quant_map.get_rect(block_group_rect);
-    let quant_lf_rect = quant_lf.get_rect(block_group_rect);
+    let ytox_map = hf_meta.ytox_map.get_rect(local_cmap_rect);
+    let ytob_map = hf_meta.ytob_map.get_rect(local_cmap_rect);
+    let transform_map = hf_meta.transform_map.get_rect(local_block_group_rect);
+    let raw_quant_map = hf_meta.raw_quant_map.get_rect(local_block_group_rect);
+    let quant_lf_rect = hf_meta.quant_lf.get_rect(local_block_group_rect);
     let block_context_map = lf_global.block_context_map.as_ref().unwrap();
     // TODO(veluca): improve coefficient storage (smaller allocations, use 16 bits if possible).
     let mut coeffs;
@@ -477,10 +495,20 @@ pub fn decode_vardct_group(
             };
 
             let lf_rects = {
+                let lf_origin_x = if frame_header.has_lf_frame() {
+                    block_group_rect.origin.0
+                } else {
+                    local_block_origin.0
+                };
+                let lf_origin_y = if frame_header.has_lf_frame() {
+                    block_group_rect.origin.1
+                } else {
+                    local_block_origin.1
+                };
                 let lf_area: [Rect; 3] = core::array::from_fn(|i| Rect {
                     origin: (
-                        (block_group_rect.origin.0 + bx) >> hshift[i],
-                        (block_group_rect.origin.1 + by) >> vshift[i],
+                        (lf_origin_x + bx) >> hshift[i],
+                        (lf_origin_y + by) >> vshift[i],
                     ),
                     size: (cx, cy),
                 });

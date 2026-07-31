@@ -10,6 +10,7 @@ use crate::{
     frame::{HfMetadata, LfGlobalState},
     headers::frame_header::{Encoding, FrameHeader},
     image::Image,
+    util::AtomicRefCell,
 };
 
 use jxl_transforms::transform_map::*;
@@ -38,7 +39,7 @@ impl SigmaSource {
     pub fn new(
         frame_header: &FrameHeader,
         lf_global: &LfGlobalState,
-        hf_meta: &Option<HfMetadata>,
+        hf_meta: &[AtomicRefCell<Option<HfMetadata>>],
     ) -> Result<Self> {
         let rf = &frame_header.restoration_filter;
         if frame_header.encoding == Encoding::VarDCT {
@@ -51,15 +52,24 @@ impl SigmaSource {
             // special below).
             let mut sigma_image = Image::<f32>::new((sigma_xsize + 2, sigma_ysize))?;
 
-            let hf_meta = hf_meta.as_ref().unwrap();
             let quant_params = lf_global.quant_params.as_ref().unwrap();
             let quant_scale = 1.0 / quant_params.inv_global_scale();
+            let group_dim = frame_header.group_dim();
+            let num_lf_x = frame_header.size_lf_groups().0;
+
             for by in 0..size_blocks.1 {
-                let raw_quant_row = hf_meta.raw_quant_map.row(by);
-                let transform_row = hf_meta.transform_map.row(by);
+                let lgy = by / group_dim;
+                let local_by = by % group_dim;
                 for bx in 0..size_blocks.0 {
-                    let raw_quant = raw_quant_row[bx];
-                    let raw_transform_id = transform_row[bx];
+                    let lgx = bx / group_dim;
+                    let local_bx = bx % group_dim;
+                    let lg_idx = lgy * num_lf_x + lgx;
+
+                    let hf_meta_guard = hf_meta[lg_idx].borrow();
+                    let meta = hf_meta_guard.as_ref().unwrap();
+
+                    let raw_quant = meta.raw_quant_map.row(local_by)[local_bx];
+                    let raw_transform_id = meta.transform_map.row(local_by)[local_bx];
                     let transform_id = raw_transform_id & 127;
                     let is_first_block = raw_transform_id >= 128;
                     if !is_first_block {
@@ -73,7 +83,7 @@ impl SigmaSource {
                         rf.epf_quant_mul / (quant_scale * raw_quant as f32 * INV_SIGMA_NUM);
                     for iy in 0..cy {
                         for ix in 0..cx {
-                            let sharpness = hf_meta.epf_map.row(by + iy)[bx + ix] as usize;
+                            let sharpness = meta.epf_map.row(local_by + iy)[local_bx + ix] as usize;
                             let sigma = (sigma_quant * rf.epf_sharp_lut[sharpness]).min(-1e-4);
                             sigma_image.row_mut(by + iy)[bx + ix] = 1.0 / sigma;
                         }

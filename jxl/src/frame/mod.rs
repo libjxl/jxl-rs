@@ -172,6 +172,7 @@ pub struct HfMetadata {
     pub raw_quant_map: Image<i32>,
     pub transform_map: Image<u8>,
     pub epf_map: Image<u8>,
+    pub quant_lf: Image<u8>,
     used_hf_types: u32,
 }
 
@@ -232,9 +233,8 @@ pub struct Frame {
     color_channels: usize,
     lf_global: Option<LfGlobalState>,
     hf_global: Option<HfGlobalState>,
-    lf_image: Option<[Image<f32>; 3]>,
-    quant_lf: Image<u8>,
-    hf_meta: Option<HfMetadata>,
+    lf_image: Vec<AtomicRefCell<Option<[Image<f32>; 3]>>>,
+    hf_meta: Vec<AtomicRefCell<Option<HfMetadata>>>,
     decoder_state: DecoderState,
     #[cfg(test)]
     use_simple_pipeline: bool,
@@ -312,17 +312,14 @@ impl Frame {
             let lf_global = self.lf_global.as_mut().unwrap();
             let lf_quant = &lf_global.lf_quant;
             let inv_quant_lf = lf_global.quant_params.as_mut().unwrap().inv_quant_lf();
-            adaptive_lf_smoothing(
-                [
-                    inv_quant_lf * lf_quant.quant_factors[0],
-                    inv_quant_lf * lf_quant.quant_factors[1],
-                    inv_quant_lf * lf_quant.quant_factors[2],
-                ],
-                self.lf_image.as_mut().unwrap(),
-            )
-        } else {
-            Ok(())
+            let lf_factors = [
+                inv_quant_lf * lf_quant.quant_factors[0],
+                inv_quant_lf * lf_quant.quant_factors[1],
+                inv_quant_lf * lf_quant.quant_factors[2],
+            ];
+            adaptive_lf_smoothing(lf_factors, &self.header, &self.lf_image)?;
         }
+        Ok(())
     }
 
     pub fn finalize(mut self) -> Result<Option<DecoderState>> {
