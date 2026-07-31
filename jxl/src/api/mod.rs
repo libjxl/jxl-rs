@@ -76,6 +76,5 @@ pub struct JxlBasicInfo {
 pub type JxlParallelRunnerFun<'a> = dyn Fn(usize) -> Result<()> + Sync + 'a;
 
 pub trait JxlParallelRunner {
-    fn max_threads(&self) -> usize;
     fn run(&mut self, num: usize, fun: &JxlParallelRunnerFun<'_>) -> Result<()>;
 }

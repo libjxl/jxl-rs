@@ -119,8 +119,6 @@ pub(crate) trait RenderPipeline: Sized {
 
     fn new_from_shared(shared: RenderPipelineShared<Self::Buffer>) -> Result<Self>;
 
-    fn prepare_for_threads(&mut self, num: usize) -> Result<()>;
-
     /// Obtains a buffer suitable for storing the input in channel `channel`.
     /// This *might* be a buffer that was used to store that channel for that group in a previous
     /// pass, a new buffer, or a re-used buffer from i.e. previously decoded frames.

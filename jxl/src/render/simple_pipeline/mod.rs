@@ -152,10 +152,6 @@ impl RenderPipeline for SimpleRenderPipeline {
         })
     }
 
-    fn prepare_for_threads(&mut self, _num: usize) -> Result<()> {
-        Ok(())
-    }
-
     #[instrument(skip_all, err)]
     fn get_buffer<T: ImageDataType>(&self, channel: usize) -> Result<Image<T>> {
         let sz = self.shared.group_size_for_channel(channel, T::DATA_TYPE_ID);

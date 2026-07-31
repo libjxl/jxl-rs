@@ -41,9 +41,6 @@ pub struct DecodeOutput {
 struct RayonParallelRunner;
 
 impl JxlParallelRunner for RayonParallelRunner {
-    fn max_threads(&self) -> usize {
-        rayon::current_num_threads()
-    }
     fn run(&mut self, num: usize, fun: &JxlParallelRunnerFun) -> jxl::error::Result<()> {
         (0..num).into_par_iter().try_for_each(fun)
     }

@@ -139,9 +139,6 @@ impl Deref for SmallBuffer {
 struct SequentialRunner;
 
 impl JxlParallelRunner for SequentialRunner {
-    fn max_threads(&self) -> usize {
-        1
-    }
     fn run(&mut self, num: usize, fun: &JxlParallelRunnerFun) -> Result<()> {
         for i in 0..num {
             fun(i)?

@@ -4,7 +4,9 @@
 // license that can be found in the LICENSE file.
 #![no_main]
 
-use jxl::api::{JxlColorType, JxlDecoder, JxlDecoderOptions, JxlParallelRunner, ProcessingResult, states};
+use jxl::api::{
+    JxlColorType, JxlDecoder, JxlDecoderOptions, JxlParallelRunner, ProcessingResult, states,
+};
 use jxl::image::{Image, JxlOutputBuffer, Rect};
 use libfuzzer_sys::fuzz_target;
 
@@ -20,9 +22,6 @@ struct SimpleParallelRunner {
 }
 
 impl JxlParallelRunner for SimpleParallelRunner {
-    fn max_threads(&self) -> usize {
-        self.max_threads
-    }
     fn run(
         &mut self,
         num: usize,
@@ -41,20 +40,22 @@ impl JxlParallelRunner for SimpleParallelRunner {
         std::thread::scope(|s| {
             let mut handles = Vec::with_capacity(num_threads);
             for _ in 0..num_threads {
-                handles.push(s.spawn(|| loop {
-                    if error.lock().unwrap().is_some() {
-                        break;
-                    }
-                    let task = next_task.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                    if task >= num {
-                        break;
-                    }
-                    if let Err(e) = fun(task) {
-                        let mut err = error.lock().unwrap();
-                        if err.is_none() {
-                            *err = Some(e);
+                handles.push(s.spawn(|| {
+                    loop {
+                        if error.lock().unwrap().is_some() {
+                            break;
                         }
-                        break;
+                        let task = next_task.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                        if task >= num {
+                            break;
+                        }
+                        if let Err(e) = fun(task) {
+                            let mut err = error.lock().unwrap();
+                            if err.is_none() {
+                                *err = Some(e);
+                            }
+                            break;
+                        }
                     }
                 }));
             }

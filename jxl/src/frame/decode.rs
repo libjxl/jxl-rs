@@ -19,6 +19,7 @@ use super::{
 use crate::error::Error;
 use crate::features::epf::SigmaSource;
 use crate::frame::block_context_map::{ZERO_DENSITY_CONTEXT_COUNT, ZERO_DENSITY_CONTEXT_LIMIT};
+use crate::frame::group::VarDctBuffers;
 use crate::frame::{DataStatus, GroupStatus};
 use crate::headers::frame_header::FrameType;
 #[cfg(test)]
@@ -257,7 +258,7 @@ impl Frame {
             reference_frame_data,
             lf_frame_data,
             section0_render_up_to_date: false,
-            vardct_buffers: PerThreadStorage::new(),
+            vardct_buffers: PerThreadStorage::new(VarDctBuffers::new),
             patches: Arc::new(AtomicRefCell::new(PatchesDictionary::new(
                 num_extra_channels,
             ))),

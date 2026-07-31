@@ -14,9 +14,6 @@ pub struct TestParallelRunner {
 }
 
 impl JxlParallelRunner for TestParallelRunner {
-    fn max_threads(&self) -> usize {
-        self.max_threads
-    }
     fn run(&mut self, num: usize, fun: &crate::api::JxlParallelRunnerFun<'_>) -> Result<(), Error> {
         if num <= 1 || self.max_threads <= 1 {
             for i in 0..num {

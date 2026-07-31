@@ -211,10 +211,10 @@ impl Debug for TransformScratchSpace {
 }
 
 impl TransformScratchSpace {
-    fn new() -> Result<TransformScratchSpace> {
-        Ok(TransformScratchSpace {
+    fn new() -> TransformScratchSpace {
+        TransformScratchSpace {
             smooth_unsqueeze_buffer: (std::array::from_fn(|_| vec![]), vec![]),
-        })
+        }
     }
 }
 
@@ -310,7 +310,7 @@ impl FullModularImage {
 
         if channels.is_empty() {
             return Ok(Self {
-                transform_scratch_space: PerThreadStorage::new(),
+                transform_scratch_space: PerThreadStorage::new(TransformScratchSpace::new),
                 buffer_info: vec![],
                 transform_steps: vec![],
                 section_buffer_indices: vec![vec![]; 2 + frame_header.passes.num_passes as usize],
@@ -478,7 +478,7 @@ impl FullModularImage {
             .count();
 
         Ok(FullModularImage {
-            transform_scratch_space: PerThreadStorage::new(),
+            transform_scratch_space: PerThreadStorage::new(TransformScratchSpace::new),
             buffer_info,
             transform_steps,
             section_buffer_indices,
@@ -834,11 +834,6 @@ impl FullModularImage {
 
     pub fn has_decoded_data(&self) -> bool {
         self.has_decoded_data.load(Ordering::Relaxed)
-    }
-
-    pub fn prepare_for_threads(&mut self, num: usize) -> Result<()> {
-        self.transform_scratch_space
-            .prepare_for_threads(num, TransformScratchSpace::new)
     }
 }
 

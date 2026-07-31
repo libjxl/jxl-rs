@@ -16,7 +16,6 @@ use crate::features::patches::PatchesDictionary;
 use crate::features::spline::Splines;
 use crate::frame::DataStatus;
 use crate::frame::color_correlation_map::ColorCorrelationParams;
-use crate::frame::group::VarDctBuffers;
 use crate::frame::quantizer::LfQuantFactors;
 use crate::headers::frame_header::Encoding;
 use crate::headers::frame_header::FrameType;
@@ -398,12 +397,6 @@ impl Frame {
             .collect();
 
         // STEP 4: actually run the steps.
-
-        let num_concurrent = parallel_runner.max_threads().max(1);
-        modular_global.prepare_for_threads(num_concurrent)?;
-        self.vardct_buffers
-            .prepare_for_threads(num_concurrent, VarDctBuffers::new)?;
-        pipeline_mut!(self, p, p.prepare_for_threads(num_concurrent)?);
 
         let pass_to_pipeline = |chan, group, complete, image: Image<i32>| {
             pipeline!(

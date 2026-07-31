@@ -8,13 +8,13 @@ use std::{
     ops::{Deref, DerefMut},
 };
 
-use crate::{error::Result, util::AtomicRefCell};
+use crate::util::AtomicRefCell;
 
 // Note: this is meant to be used only in low-contention
 // scenarios.
 pub struct PerThreadStorage<T> {
-    storage: Vec<AtomicRefCell<Option<T>>>,
-    available: AtomicRefCell<Vec<usize>>,
+    storage: AtomicRefCell<Vec<T>>,
+    init: fn() -> T,
 }
 
 impl<T> Debug for PerThreadStorage<T> {
@@ -26,56 +26,41 @@ impl<T> Debug for PerThreadStorage<T> {
 pub struct PerThreadStorageRef<'a, T> {
     r: &'a PerThreadStorage<T>,
     val: Option<T>,
-    index: usize,
-}
-
-impl<T> Default for PerThreadStorage<T> {
-    fn default() -> Self {
-        Self::new()
-    }
 }
 
 impl<T> PerThreadStorage<T> {
-    pub fn new() -> Self {
+    pub fn new(init: fn() -> T) -> Self {
         Self {
-            storage: vec![],
-            available: AtomicRefCell::new(vec![]),
+            storage: AtomicRefCell::new(vec![]),
+            init,
         }
-    }
-
-    pub fn prepare_for_threads(
-        &mut self,
-        num: usize,
-        make_new: impl Fn() -> Result<T>,
-    ) -> Result<()> {
-        while self.storage.len() < num {
-            self.available.borrow_mut().push(self.storage.len());
-            self.storage.push(AtomicRefCell::new(Some(make_new()?)));
-        }
-        Ok(())
     }
 
     pub fn get(&self) -> PerThreadStorageRef<'_, T> {
-        let idx = loop {
-            if let Some(mut a) = self.available.try_borrow_mut() {
-                break a.pop().unwrap();
+        let t = loop {
+            if let Some(mut a) = self.storage.try_borrow_mut() {
+                if let Some(x) = a.pop() {
+                    break x;
+                }
+                // go to the call to `init()` if storage is empty
+            } else {
+                continue;
             }
+            break (self.init)();
         };
-        let t = self.storage[idx].borrow_mut().take().unwrap();
         PerThreadStorageRef {
             r: self,
             val: Some(t),
-            index: idx,
         }
     }
 }
 
 impl<'a, T> Drop for PerThreadStorageRef<'a, T> {
     fn drop(&mut self) {
-        *self.r.storage[self.index].borrow_mut() = self.val.take();
+        let v = self.val.take().unwrap();
         loop {
-            if let Some(mut a) = self.r.available.try_borrow_mut() {
-                a.push(self.index);
+            if let Some(mut a) = self.r.storage.try_borrow_mut() {
+                a.push(v);
                 break;
             }
         }

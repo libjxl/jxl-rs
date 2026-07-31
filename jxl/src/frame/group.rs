@@ -33,12 +33,12 @@ pub struct VarDctBuffers {
 }
 
 impl VarDctBuffers {
-    pub fn new() -> Result<Self> {
-        Ok(Self {
+    pub fn new() -> Self {
+        Self {
             scratch: vec![],
             transform_buffer: [vec![], vec![], vec![]],
             coeffs_storage: vec![],
-        })
+        }
     }
 
     pub fn ensure_allocated(&mut self) {

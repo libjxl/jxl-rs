@@ -43,6 +43,13 @@ impl Debug for LowMemoryRenderPipelinePerThread {
 }
 
 impl LowMemoryRenderPipelinePerThread {
+    fn new() -> Self {
+        LowMemoryRenderPipelinePerThread {
+            row_buffers: vec![],
+            local_states: vec![],
+        }
+    }
+
     fn ensure_populated(&mut self, p: &LowMemoryRenderPipeline) -> Result<()> {
         if !self.row_buffers.is_empty() {
             return Ok(());
@@ -294,7 +301,7 @@ impl RenderPipeline for LowMemoryRenderPipeline {
             input_buffers: InputBuffers::new(nc, shared.group_count)?,
             stage_input_buffer_index,
             next_border_and_cur_downsample,
-            per_thread_data: PerThreadStorage::new(),
+            per_thread_data: PerThreadStorage::new(LowMemoryRenderPipelinePerThread::new),
             padding_was_rendered: false,
             save_buffer_info,
             stage_output_border_pixels: border_pixels_per_stage,
@@ -306,15 +313,6 @@ impl RenderPipeline for LowMemoryRenderPipeline {
             opaque_alpha_buffers,
             sorted_buffer_indices,
             scratch_channel_buffers: AtomicRefCell::new((0..nc * 3).map(|_| vec![]).collect()),
-        })
-    }
-
-    fn prepare_for_threads(&mut self, num: usize) -> Result<()> {
-        self.per_thread_data.prepare_for_threads(num, || {
-            Ok(LowMemoryRenderPipelinePerThread {
-                row_buffers: vec![],
-                local_states: vec![],
-            })
         })
     }
 
