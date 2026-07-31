@@ -22,6 +22,7 @@ done
 # Both decode and decode_header targets benefit from real JXL samples
 if [ -d "resources/test" ]; then
     zip -j "$OUT/decode_seed_corpus.zip" resources/test/*.jxl resources/test/conformance_test_images/*.jxl || true
+    zip -j "$OUT/decode_parallel_seed_corpus.zip" resources/test/*.jxl resources/test/conformance_test_images/*.jxl || true
     zip -j "$OUT/decode_header_seed_corpus.zip" resources/test/*.jxl resources/test/conformance_test_images/*.jxl || true
 fi
 
