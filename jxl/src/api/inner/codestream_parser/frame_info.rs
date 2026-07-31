@@ -475,12 +475,19 @@ impl FrameInfo {
             return Ok(data_for_next_section);
         }
 
-        // TODO(veluca): parallelize this part.
+        parallel_runner.run(self.lf_sections.len(), &|i: usize| -> Result<()> {
+            let lf_section = &self.lf_sections[i];
+            let Section::Lf { group } = &lf_section.section else {
+                unreachable!()
+            };
+            frame.decode_lf_group(*group, &mut BitReader::new(&lf_section.data))?;
+            Ok(())
+        })?;
         for lf_section in self.lf_sections.drain(..) {
             let Section::Lf { group } = lf_section.section else {
                 unreachable!()
             };
-            frame.decode_lf_group(group, &mut BitReader::new(&lf_section.data))?;
+            frame.post_decode_lf_group(group);
             self.section_state.remaining_lf -= 1;
         }
 

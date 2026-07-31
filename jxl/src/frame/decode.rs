@@ -205,10 +205,11 @@ impl Frame {
         let is_vardct = frame_header.encoding == Encoding::VarDCT;
         let has_lf_frame = frame_header.has_lf_frame();
 
-        if is_vardct && has_lf_frame {
-            if decoder_state.lf_frames[frame_header.lf_level as usize].is_none() {
-                return Err(Error::NoLfFrame(frame_header.lf_level));
-            }
+        if is_vardct
+            && has_lf_frame
+            && decoder_state.lf_frames[frame_header.lf_level as usize].is_none()
+        {
+            return Err(Error::NoLfFrame(frame_header.lf_level));
         }
 
         let lf_image: Vec<AtomicRefCell<Option<[Image<f32>; 3]>>> = (0..num_lf_groups)
@@ -477,10 +478,9 @@ impl Frame {
     }
 
     #[instrument(level = "debug", skip(self, br))]
-    pub fn decode_lf_group(&mut self, group: usize, br: &mut BitReader) -> Result<()> {
-        self.dirty_lf_groups.insert(group);
+    pub fn decode_lf_group(&self, group: usize, br: &mut BitReader) -> Result<()> {
         debug!(section_size = br.total_bits_available());
-        let lf_global = self.lf_global.as_mut().unwrap();
+        let lf_global = self.lf_global.as_ref().unwrap();
         if self.header.encoding == Encoding::VarDCT && !self.header.has_lf_frame() {
             info!("decoding VarDCT LF with group id {}", group);
             let mut lf_cell = self.lf_image[group].borrow_mut();
@@ -501,8 +501,6 @@ impl Frame {
                 br,
             )?;
         }
-
-        lf_global.modular_global.mark_final(1, group);
 
         lf_global.modular_global.read_stream(
             ModularStreamId::ModularLF(group),
@@ -525,6 +523,12 @@ impl Frame {
             )?;
         }
         Ok(())
+    }
+
+    pub fn post_decode_lf_group(&mut self, group: usize) {
+        self.dirty_lf_groups.insert(group);
+        let lf_global = self.lf_global.as_mut().unwrap();
+        lf_global.modular_global.mark_final(1, group);
     }
 
     #[instrument(level = "debug", skip_all)]
