@@ -276,7 +276,11 @@ macro_rules! assert_image_eq {
                 .zip(row_r.iter().copied())
                 .enumerate()
             {
-                if !(left_val == right_val) {
+                // In some cases, we compare partially rendered images.
+                // If that happens, they may still contain uninitialized pixels,
+                // so check for NaNs (without is_nan() as the image is not necessarily
+                // float)
+                if !(left_val == right_val || (left_val != left_val && right_val != right_val)) {
                     mismatch_count += 1;
 
                     if first_mismatch.is_none() {
