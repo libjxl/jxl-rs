@@ -572,7 +572,6 @@ impl std::fmt::Display for ConvertF32ToU8Stage {
 simd_function!(
     f32_to_u8_simd_dispatch,
     d: D,
-    #[allow(clippy::too_many_arguments)]
     fn f32_to_u8_simd(
         input: &[f32],
         output: &mut [u8],
