@@ -16,7 +16,7 @@ use crate::render::buffer_splitter::{BufferSplitter, SaveStageBufferInfo};
 use crate::render::internal::Stage;
 use crate::render::low_memory_pipeline::group_scheduler::InputBuffer;
 use crate::render::{ErasedLocalState, MAX_BORDER};
-use crate::util::{PerThreadStorage, ShiftRightCeil, tracing_wrappers::*};
+use crate::util::{AtomicRefCell, PerThreadStorage, ShiftRightCeil, tracing_wrappers::*};
 
 use super::RenderPipeline;
 use super::internal::{RenderPipelineShared, RunInOutStage, RunInPlaceStage};
@@ -113,7 +113,7 @@ pub struct LowMemoryRenderPipeline {
     // For each channel and the 3 kinds of buffers (center / topbottom / leftright), buffers that
     // could be reused to store group data for that channel.
     // Indexed by [3*channel] = center, [3*channel+1] = topbottom, [3*channel+2] = leftright.
-    scratch_channel_buffers: Vec<Vec<OwnedRawImage>>,
+    scratch_channel_buffers: AtomicRefCell<Vec<Vec<OwnedRawImage>>>,
     // TODO(veluca): get rid of this when switching to global recycling of scratch buffers.
     group_scratch_buffers_limit: Option<usize>,
 }
@@ -310,7 +310,7 @@ impl RenderPipeline for LowMemoryRenderPipeline {
             downsampling_for_stage,
             opaque_alpha_buffers,
             sorted_buffer_indices,
-            scratch_channel_buffers: (0..nc * 3).map(|_| vec![]).collect(),
+            scratch_channel_buffers: AtomicRefCell::new((0..nc * 3).map(|_| vec![]).collect()),
         })
     }
 
