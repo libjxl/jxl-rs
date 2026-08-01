@@ -8,7 +8,7 @@ use std::ops::Range;
 use crate::{
     api::JxlOutputBuffer,
     error::Result,
-    image::{DataTypeTag, Rect},
+    image::{DataTypeTag, OwnedRawImage, Rect},
     render::{
         internal::{ChannelInfo, Stage},
         low_memory_pipeline::{
@@ -64,116 +64,220 @@ fn apply_x_padding(
     }
 }
 
-impl LowMemoryRenderPipeline {
-    fn fill_initial_buffers(
-        &self,
-        data: &mut LowMemoryRenderPipelinePerThread,
+struct BufferFiller<'a> {
+    c: usize,
+    ty: DataTypeTag,
+    group_y0: usize,
+    group_ysize: usize,
+    top_y_offset: usize,
+    bot_y_offset: usize,
+    images: [Option<&'a OwnedRawImage>; 9],
+    copy_byte_offset_initial: usize,
+    src_byte_offset_left_topbottom: usize,
+    src_byte_offset_left_center: usize,
+    to_copy_left: usize,
+    copy_start: usize,
+    copy_end: usize,
+    to_copy_main: usize,
+    to_copy_right: usize,
+    padding_range: Option<(isize, isize)>,
+}
+
+impl<'a> BufferFiller<'a> {
+    fn new(
+        rp: &'a LowMemoryRenderPipeline,
         c: usize,
-        y: usize,
         (x0, xsize): (usize, usize),
         (gx, gy): (usize, usize),
-    ) {
-        if !self.shared.channel_is_used[c] {
-            return;
+        vyrange: Range<usize>,
+    ) -> Option<Self> {
+        if !rp.shared.channel_is_used[c] || vyrange.is_empty() {
+            return None;
         }
         let ChannelInfo {
             ty,
             downsample: (dx, dy),
-        } = self.shared.channel_info[0][c];
+        } = rp.shared.channel_info[0][c];
         let ty = ty.expect("Channel info should be populated at this point");
-        let group_ysize = 1 << (self.shared.log_group_size - dy as usize);
-        let group_xsize = 1 << (self.shared.log_group_size - dx as usize);
 
-        let (bx, by) = self.border_size;
+        let scaled_y_border = rp.input_border_pixels[c].1 << dy;
+        let stage_vy_start = vyrange.start as isize - scaled_y_border as isize;
+        let stage_vy_end = (vyrange.end as isize - 1) + scaled_y_border as isize;
+        let min_y = stage_vy_start >> dy;
+        let max_y = stage_vy_end >> dy;
+        let max_valid_y = rp.shared.input_size.1.shrc(dy) as isize - 1;
 
-        let group_y0 = gy * group_ysize;
-        let group_x0 = gx << (self.shared.log_group_size - dx as usize);
-        let group_x1 = group_x0 + group_xsize;
-
-        let (input_y, igy, is_topbottom) = if y < group_y0 {
-            (y + (by >> dy) * 4 - group_y0, gy - 1, true)
-        } else if y >= group_y0 + group_ysize {
-            (y - group_y0 - group_ysize, gy + 1, true)
+        let yrange = if max_y < 0 || min_y > max_valid_y {
+            0..0
         } else {
-            (y - group_y0, gy, false)
+            let start = min_y.max(0) as usize;
+            let end = (max_y.min(max_valid_y) as usize) + 1;
+            start..end
         };
 
-        let output_row = data.row_buffers[0][c].get_row_mut::<u8>(y);
+        if yrange.is_empty() {
+            return None;
+        }
 
-        let copy_x0 = x0.saturating_sub(self.input_border_pixels[c].0);
+        let x0 = x0 >> dx;
+        let xsize = xsize >> dx;
+        let group_ysize = 1 << (rp.shared.log_group_size - dy as usize);
+        let group_xsize = 1 << (rp.shared.log_group_size - dx as usize);
+
+        let (bx, by) = rp.border_size;
+
+        let group_y0 = gy * group_ysize;
+        let group_x0 = gx << (rp.shared.log_group_size - dx as usize);
+        let group_x1 = group_x0 + group_xsize;
+
+        let top_y_offset = (by >> dy) * 4;
+        let bot_y_offset = group_y0 + group_ysize;
+
+        let has_top = yrange.start < group_y0;
+        let has_center = yrange.start < group_y0 + group_ysize && yrange.end > group_y0;
+        let has_bot = yrange.end > group_y0 + group_ysize;
+
+        let copy_x0 = x0.saturating_sub(rp.input_border_pixels[c].0);
         let copy_x1 =
-            (x0 + xsize + self.input_border_pixels[c].0).min(self.shared.input_size.0.shrc(dx));
+            (x0 + xsize + rp.input_border_pixels[c].0).min(rp.shared.input_size.0.shrc(dx));
 
         debug_assert!(copy_x1 >= group_x0);
 
-        let mut copy_byte_offset = RowBuffer::x0_byte_offset() - (x0 - copy_x0) * ty.size();
+        let copy_byte_offset_initial = RowBuffer::x0_byte_offset() - (x0 - copy_x0) * ty.size();
 
-        let base_gid = igy * self.shared.group_count.0 + gx;
+        let gw = rp.shared.group_count.0;
 
-        // Previous group horizontally, if needed.
-        if copy_x0 < group_x0 {
-            let (input_buf, xs) = if is_topbottom {
-                (
-                    self.input_buffers[base_gid - 1].topbottom[c]
-                        .as_ref()
-                        .unwrap(),
-                    group_xsize,
-                )
-            } else {
-                (
-                    self.input_buffers[base_gid - 1].leftright[c]
-                        .as_ref()
-                        .unwrap(),
-                    4 * (bx >> dx),
-                )
-            };
-            let input_row = input_buf.row(input_y);
+        let mut images: [Option<&'a OwnedRawImage>; 9] = [None; 9];
 
-            let to_copy = (group_x0 - copy_x0) * ty.size();
-            let src_byte_offset = xs * ty.size() - to_copy;
+        let has_left = copy_x0 < group_x0;
+        let has_right = copy_x1 > group_x1;
 
-            output_row[copy_byte_offset..copy_byte_offset + to_copy]
-                .copy_from_slice(&input_row[src_byte_offset..src_byte_offset + to_copy]);
-            copy_byte_offset += to_copy;
-        }
-        let input_buf = if is_topbottom {
-            self.input_buffers[base_gid].topbottom[c].as_ref().unwrap()
+        let to_copy_left = if has_left {
+            (group_x0 - copy_x0) * ty.size()
         } else {
-            self.input_buffers[base_gid].data[c].as_ref().unwrap()
+            0
         };
-        let input_row = input_buf.row(input_y);
+
+        let src_byte_offset_left_topbottom = group_xsize * ty.size() - to_copy_left;
+        let src_byte_offset_left_center = 4 * (bx >> dx) * ty.size() - to_copy_left;
+
+        if has_top {
+            let base_gid = (gy - 1) * gw + gx;
+            if has_left {
+                images[0] = rp.input_buffers[base_gid - 1].topbottom[c].as_ref();
+            }
+            images[1] = rp.input_buffers[base_gid].topbottom[c].as_ref();
+            if has_right {
+                images[2] = rp.input_buffers[base_gid + 1].topbottom[c].as_ref();
+            }
+        }
+
+        if has_center {
+            let base_gid = gy * gw + gx;
+            if has_left {
+                images[3] = rp.input_buffers[base_gid - 1].leftright[c].as_ref();
+            }
+            images[4] = rp.input_buffers[base_gid].data[c].as_ref();
+            if has_right {
+                images[5] = rp.input_buffers[base_gid + 1].leftright[c].as_ref();
+            }
+        }
+
+        if has_bot {
+            let base_gid = (gy + 1) * gw + gx;
+            if has_left {
+                images[6] = rp.input_buffers[base_gid - 1].topbottom[c].as_ref();
+            }
+            images[7] = rp.input_buffers[base_gid].topbottom[c].as_ref();
+            if has_right {
+                images[8] = rp.input_buffers[base_gid + 1].topbottom[c].as_ref();
+            }
+        }
+
         let copy_start = copy_x0.saturating_sub(group_x0) * ty.size();
         let copy_end = (copy_x1.min(group_x1) - group_x0) * ty.size();
-        let to_copy = copy_end - copy_start;
-        output_row[copy_byte_offset..copy_byte_offset + to_copy]
-            .copy_from_slice(&input_row[copy_start..copy_end]);
-        copy_byte_offset += to_copy;
-        // Next group horizontally, if any.
-        if copy_x1 > group_x1 {
-            let input_buf = if is_topbottom {
-                self.input_buffers[base_gid + 1].topbottom[c]
-                    .as_ref()
-                    .unwrap()
-            } else {
-                self.input_buffers[base_gid + 1].leftright[c]
-                    .as_ref()
-                    .unwrap()
-            };
-            let input_row = input_buf.row(input_y);
-            let dx = self.shared.channel_info[0][c].downsample.0;
-            let gid = gy * self.shared.group_count.0 + gx;
-            let next_group_xsize = self.shared.group_size(gid + 1).0.shrc(dx);
+        let to_copy_main = copy_end - copy_start;
+
+        let (to_copy_right, padding_range) = if has_right {
+            let gid = gy * gw + gx;
+            let next_group_xsize = rp.shared.group_size(gid + 1).0.shrc(dx);
             let border_x = (copy_x1 - group_x1).min(next_group_xsize);
-            output_row[copy_byte_offset..copy_byte_offset + border_x * ty.size()]
-                .copy_from_slice(&input_row[..border_x * ty.size()]);
-            if border_x + group_x1 < copy_x1 {
+            let to_copy_right = border_x * ty.size();
+            let pad = if border_x + group_x1 < copy_x1 {
                 let pad_from = (xsize + border_x) as isize;
                 let pad_to = (xsize + copy_x1 - group_x1) as isize;
-                apply_x_padding(ty, output_row, pad_from..pad_to, 0..pad_from);
+                Some((pad_from, pad_to))
+            } else {
+                None
+            };
+            (to_copy_right, pad)
+        } else {
+            (0, None)
+        };
+
+        Some(Self {
+            c,
+            ty,
+            group_y0,
+            group_ysize,
+            top_y_offset,
+            bot_y_offset,
+            images,
+            copy_byte_offset_initial,
+            src_byte_offset_left_topbottom,
+            src_byte_offset_left_center,
+            to_copy_left,
+            copy_start,
+            copy_end,
+            to_copy_main,
+            to_copy_right,
+            padding_range,
+        })
+    }
+
+    fn fill(&self, data: &mut LowMemoryRenderPipelinePerThread, y: usize) {
+        let (row_idx, input_y) = if y < self.group_y0 {
+            (0, y + self.top_y_offset - self.group_y0)
+        } else if y >= self.group_y0 + self.group_ysize {
+            (2, y - self.bot_y_offset)
+        } else {
+            (1, y - self.group_y0)
+        };
+
+        let base = row_idx * 3;
+        let output_row = data.row_buffers[0][self.c].get_row_mut::<u8>(y);
+        let mut copy_byte_offset = self.copy_byte_offset_initial;
+
+        if let Some(left_buf) = self.images[base] {
+            let input_row = left_buf.row(input_y);
+            let src_byte_offset = if row_idx != 1 {
+                self.src_byte_offset_left_topbottom
+            } else {
+                self.src_byte_offset_left_center
+            };
+            output_row[copy_byte_offset..copy_byte_offset + self.to_copy_left]
+                .copy_from_slice(&input_row[src_byte_offset..src_byte_offset + self.to_copy_left]);
+            copy_byte_offset += self.to_copy_left;
+        }
+
+        let center_buf = self.images[base + 1].unwrap();
+        let input_row = center_buf.row(input_y);
+        output_row[copy_byte_offset..copy_byte_offset + self.to_copy_main]
+            .copy_from_slice(&input_row[self.copy_start..self.copy_end]);
+        copy_byte_offset += self.to_copy_main;
+
+        if let Some(right_buf) = self.images[base + 2] {
+            let input_row = right_buf.row(input_y);
+            output_row[copy_byte_offset..copy_byte_offset + self.to_copy_right]
+                .copy_from_slice(&input_row[..self.to_copy_right]);
+            if let Some((pad_from, pad_to)) = self.padding_range {
+                apply_x_padding(self.ty, output_row, pad_from..pad_to, 0..pad_from);
             }
         }
     }
+}
 
+impl LowMemoryRenderPipeline {
     // Renders *parts* of group's worth of data.
     // In particular, renders the sub-rectangle given in `image_area`, where (1, 1) refers to
     // the center of the group, and 0 and 2 include data from the neighbouring group (if any).
@@ -206,14 +310,21 @@ impl LowMemoryRenderPipeline {
         let vy0 = y0.saturating_sub(num_extra_rows);
         let vy1 = image_area.end().1 + num_extra_rows;
 
+        let fillers: ChannelVec<_> = (0..num_channels)
+            .map(|c| BufferFiller::new(self, c, (x0, xsize), (gx, gy), y0..image_area.end().1))
+            .collect();
+
         for vy in vy0..vy1 {
             let mut current_origin = (0, 0);
             let mut current_size = self.shared.input_size;
 
             // Step 1: read input channels.
             for c in 0..num_channels {
+                let Some(filler) = &fillers[c] else {
+                    continue;
+                };
                 // Same logic as below, but adapted to the input stage.
-                let (dx, dy) = self.shared.channel_info[0][c].downsample;
+                let (_, dy) = self.shared.channel_info[0][c].downsample;
                 let scaled_y_border = self.input_border_pixels[c].1 << dy;
                 let stage_vy = vy as isize - num_extra_rows as isize + scaled_y_border as isize;
                 if stage_vy % (1 << dy) != 0 {
@@ -228,7 +339,7 @@ impl LowMemoryRenderPipeline {
                     continue;
                 }
                 let y = y as usize;
-                self.fill_initial_buffers(data, c, y, (x0 >> dx, xsize >> dx), (gx, gy));
+                filler.fill(data, y);
             }
             // Step 2: go through stages one by one.
             for (i, stage) in self.shared.stages.iter().enumerate() {
