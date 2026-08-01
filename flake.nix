@@ -25,7 +25,7 @@
         pkgs = import nixpkgs { inherit system; };
         fenix' = fenix.packages.${system};
 
-        rustBuildToolchain = fenix'.stable.withComponents [
+        rustBaseComponents = [
           "cargo"
           "clippy"
           "rustc"
@@ -33,20 +33,22 @@
           "rust-src"
         ];
 
-        rustDevToolchain = fenix'.combine [
-          rustBuildToolchain
-          fenix'.rust-analyzer # nightly rust-analyzer
-        ];
+        rustBuildToolchain = fenix'.stable.withComponents rustBaseComponents;
 
-        rustMiriToolchain = fenix'.complete.withComponents [
-          "cargo"
-          "clippy"
-          "miri"
-          "rustc"
-          "rustfmt"
-          "rust-analyzer"
-          "rust-src"
-        ];
+        rustDevToolchain = fenix'.stable.withComponents (
+          rustBaseComponents
+          ++ [
+            "rust-analyzer"
+          ]
+        );
+
+        rustMiriToolchain = fenix'.complete.withComponents (
+          rustBaseComponents
+          ++ [
+            "miri"
+            "rust-analyzer"
+          ]
+        );
 
         mkCraneLib = (crane.mkLib pkgs).overrideToolchain;
 
