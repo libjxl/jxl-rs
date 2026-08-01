@@ -105,23 +105,28 @@ fn foreach_ready_rect(
 
 impl LowMemoryRenderPipeline {
     pub(super) fn maybe_get_scratch_buffer(
-        &mut self,
+        &self,
         channel: usize,
         kind: usize,
     ) -> Option<OwnedRawImage> {
-        self.scratch_channel_buffers[channel * 3 + kind].pop()
+        self.scratch_channel_buffers
+            .try_borrow_mut()
+            .and_then(|mut x| x[channel * 3 + kind].pop())
     }
 
-    fn store_scratch_buffer(&mut self, channel: usize, kind: usize, image: OwnedRawImage) {
+    fn store_scratch_buffer(&self, channel: usize, kind: usize, image: OwnedRawImage) {
+        let Some(mut buf) = self.scratch_channel_buffers.try_borrow_mut() else {
+            return;
+        };
         if kind == 0
             && let Some(s) = self.group_scratch_buffers_limit
-            && self.scratch_channel_buffers[channel * 3].len() >= s
+            && buf[channel * 3].len() >= s
         {
             // We are going over the limit of group-sized scratch buffers for
             // this channel - avoid storing the buffer.
             return;
         }
-        self.scratch_channel_buffers[channel * 3 + kind].push(image)
+        buf[channel * 3 + kind].push(image)
     }
 
     pub(super) fn render_with_new_group(
