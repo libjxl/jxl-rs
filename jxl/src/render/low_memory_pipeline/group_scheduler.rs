@@ -254,7 +254,9 @@ impl LowMemoryRenderPipeline {
 
             let y1 = match (gy + 1 == self.shared.group_count.1, yrange.end) {
                 (true, 3) => group_rect.end().1,
-                (false, 3) => group_rect.end().1 + self.border_size.1,
+                (false, 3) => {
+                    (group_rect.end().1 + self.border_size.1).min(self.shared.input_size.1)
+                }
                 (_, 2) => group_rect.end().1 - self.border_size.1,
                 // (_, 1)
                 _ => group_rect.origin.1 + self.border_size.1,
@@ -262,7 +264,9 @@ impl LowMemoryRenderPipeline {
 
             let x1 = match (gx + 1 == self.shared.group_count.0, xrange.end) {
                 (true, 3) => group_rect.end().0,
-                (false, 3) => group_rect.end().0 + self.border_size.0,
+                (false, 3) => {
+                    (group_rect.end().0 + self.border_size.0).min(self.shared.input_size.0)
+                }
                 (_, 2) => group_rect.end().0 - self.border_size.0,
                 // (_, 1)
                 _ => group_rect.origin.0 + self.border_size.0,

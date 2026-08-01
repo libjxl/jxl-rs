@@ -300,7 +300,7 @@ impl LowMemoryRenderPipeline {
                         let borderx = s.border().0 as usize;
                         let bordery = s.border().1 as isize;
                         // Apply x padding.
-                        if gx == 0 && borderx != 0 {
+                        if (gx == 0 || image_area.origin.0 == 0) && borderx != 0 {
                             for (si, ci) in self.stage_input_buffer_index[i].iter() {
                                 for iy in -bordery..=bordery {
                                     let y = mirror(y as isize + iy, shifted_ysize);
@@ -315,7 +315,10 @@ impl LowMemoryRenderPipeline {
                                 }
                             }
                         }
-                        if gx + 1 == self.shared.group_count.0 && borderx != 0 {
+                        if (gx + 1 == self.shared.group_count.0
+                            || image_area.end().0 == self.shared.input_size.0)
+                            && borderx != 0
+                        {
                             for (si, ci) in self.stage_input_buffer_index[i].iter() {
                                 for iy in -bordery..=bordery {
                                     let y = mirror(y as isize + iy, shifted_ysize);
