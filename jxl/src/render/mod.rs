@@ -42,13 +42,15 @@ pub(crate) use low_memory_pipeline::LowMemoryRenderPipeline;
 #[cfg(test)]
 pub(crate) use simple_pipeline::SimpleRenderPipeline;
 
+pub(crate) type ErasedLocalState = dyn Any + Send + Sync;
+
 pub enum StageSpecialCase {
     F32ToU8 { channel: usize, bit_depth: u8 },
     ModularToF32 { channel: usize, bit_depth: u8 },
 }
 
 /// Modifies channels in-place.
-pub trait RenderPipelineInPlaceStage: Any + std::fmt::Display {
+pub trait RenderPipelineInPlaceStage: Any + std::fmt::Display + Send + Sync {
     type Type: ImageDataType;
 
     fn process_row_chunk(
@@ -57,10 +59,10 @@ pub trait RenderPipelineInPlaceStage: Any + std::fmt::Display {
         xsize: usize,
         // one for each channel
         row: &mut [&mut [Self::Type]],
-        state: Option<&mut dyn Any>,
+        state: Option<&mut ErasedLocalState>,
     );
 
-    fn init_local_state(&self, _thread_index: usize) -> Result<Option<Box<dyn Any>>> {
+    fn init_local_state(&self) -> Result<Option<Box<ErasedLocalState>>> {
         Ok(None)
     }
 
@@ -83,7 +85,7 @@ pub trait RenderPipelineInPlaceStage: Any + std::fmt::Display {
 ///    padding on either side.
 ///  - the output slice contains 1 << SHIFT.1 slices, each of length xsize << SHIFT.0, the
 ///    corresponding output pixels.
-pub trait RenderPipelineInOutStage: Any + std::fmt::Display {
+pub trait RenderPipelineInOutStage: Any + std::fmt::Display + Send + Sync {
     type InputT: ImageDataType;
     type OutputT: ImageDataType;
 
@@ -98,10 +100,10 @@ pub trait RenderPipelineInOutStage: Any + std::fmt::Display {
         input_rows: &Channels<Self::InputT>,
         // channel, row, column
         output_rows: &mut ChannelsMut<Self::OutputT>,
-        state: Option<&mut dyn Any>,
+        state: Option<&mut ErasedLocalState>,
     );
 
-    fn init_local_state(&self, _thread_index: usize) -> Result<Option<Box<dyn Any>>> {
+    fn init_local_state(&self) -> Result<Option<Box<ErasedLocalState>>> {
         Ok(None)
     }
 

@@ -3,9 +3,13 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-use std::{any::Any, sync::Arc};
+use std::sync::Arc;
 
-use crate::{features::spline::Splines, render::RenderPipelineInPlaceStage, util::AtomicRefCell};
+use crate::{
+    features::spline::Splines,
+    render::{ErasedLocalState, RenderPipelineInPlaceStage},
+    util::AtomicRefCell,
+};
 
 pub struct SplinesStage {
     splines: Arc<AtomicRefCell<Splines>>,
@@ -35,7 +39,7 @@ impl RenderPipelineInPlaceStage for SplinesStage {
         position: (usize, usize),
         xsize: usize,
         row: &mut [&mut [f32]],
-        _state: Option<&mut dyn Any>,
+        _state: Option<&mut ErasedLocalState>,
     ) {
         let splines = self.splines.borrow();
         if splines.splines.is_empty() {
