@@ -9,7 +9,7 @@ use crate::{
     BLOCK_DIM, MIN_SIGMA,
     features::epf::SigmaSource,
     render::{
-        Channels, ChannelsMut, RenderPipelineInOutStage,
+        Channels, ChannelsMut, ErasedLocalState, RenderPipelineInOutStage,
         stages::epf::common::{get_sigma, prepare_sad_mul_storage},
     },
     util::AtomicRefCell,
@@ -233,7 +233,7 @@ impl RenderPipelineInOutStage for Epf0Stage {
         xsize: usize,
         input_rows: &Channels<f32>,
         output_rows: &mut ChannelsMut<f32>,
-        _state: Option<&mut dyn std::any::Any>,
+        _state: Option<&mut ErasedLocalState>,
     ) {
         epf0_process_row_chunk_dispatch(self, (xpos, ypos), xsize, input_rows, output_rows);
     }

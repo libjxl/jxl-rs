@@ -5,12 +5,15 @@
 
 #![allow(clippy::needless_range_loop)]
 
-use std::{any::Any, sync::Arc};
+use std::sync::Arc;
 
 use crate::{
     features::noise::Noise,
     frame::color_correlation_map::ColorCorrelationParams,
-    render::{Channels, ChannelsMut, RenderPipelineInOutStage, RenderPipelineInPlaceStage},
+    render::{
+        Channels, ChannelsMut, ErasedLocalState, RenderPipelineInOutStage,
+        RenderPipelineInPlaceStage,
+    },
     util::AtomicRefCell,
 };
 use jxl_simd::{F32SimdVec, simd_function};
@@ -98,7 +101,7 @@ impl RenderPipelineInOutStage for ConvolveNoiseStage {
         xsize: usize,
         input_rows: &Channels<f32>,
         output_rows: &mut ChannelsMut<f32>,
-        _state: Option<&mut dyn std::any::Any>,
+        _state: Option<&mut ErasedLocalState>,
     ) {
         let input = &input_rows[0];
         convolve_noise_simd_dispatch(input, output_rows[0][0], xsize);
@@ -151,7 +154,7 @@ impl RenderPipelineInPlaceStage for AddNoiseStage {
         _position: (usize, usize),
         xsize: usize,
         row: &mut [&mut [f32]],
-        _state: Option<&mut dyn Any>,
+        _state: Option<&mut ErasedLocalState>,
     ) {
         let noise = self.noise.borrow();
         if noise.lut == [0.0; 8] {

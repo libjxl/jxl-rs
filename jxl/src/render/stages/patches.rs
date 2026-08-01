@@ -3,13 +3,13 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-use std::{any::Any, sync::Arc};
+use std::sync::Arc;
 
 use crate::{
     features::patches::PatchesDictionary,
     frame::ReferenceFrame,
     headers::extra_channels::ExtraChannelInfo,
-    render::RenderPipelineInPlaceStage,
+    render::{ErasedLocalState, RenderPipelineInPlaceStage},
     util::{AtomicRefCell, NewWithCapacity as _},
 };
 
@@ -56,7 +56,7 @@ impl RenderPipelineInPlaceStage for PatchesStage {
         position: (usize, usize),
         xsize: usize,
         row: &mut [&mut [f32]],
-        state: Option<&mut dyn Any>,
+        state: Option<&mut ErasedLocalState>,
     ) {
         let patches = self.patches.borrow();
         if patches.positions.is_empty() {
@@ -79,7 +79,7 @@ impl RenderPipelineInPlaceStage for PatchesStage {
         );
     }
 
-    fn init_local_state(&self, _thread_index: usize) -> crate::error::Result<Option<Box<dyn Any>>> {
+    fn init_local_state(&self) -> crate::error::Result<Option<Box<ErasedLocalState>>> {
         // TODO(veluca): I think this is wrong, check that.
         let patches = self.patches.borrow();
         let len = patches.positions.len();
@@ -87,7 +87,7 @@ impl RenderPipelineInPlaceStage for PatchesStage {
         Ok(Some(Box::new(PatchesState {
             patches_for_row_result,
             blending_scratch: Vec::new(),
-        }) as Box<dyn Any>))
+        }) as Box<ErasedLocalState>))
     }
 }
 
