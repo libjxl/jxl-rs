@@ -39,6 +39,16 @@ impl<T: ?Sized> AtomicRefCell<T> {
     }
 
     #[inline]
+    pub fn spin_borrow(&self) -> AtomicRef<'_, T> {
+        loop {
+            if let Some(s) = self.try_borrow() {
+                return s;
+            }
+            std::hint::spin_loop();
+        }
+    }
+
+    #[inline]
     pub fn borrow_mut(&self) -> AtomicRefMut<'_, T> {
         AtomicRefMut::new(self).unwrap()
     }
@@ -46,6 +56,16 @@ impl<T: ?Sized> AtomicRefCell<T> {
     #[inline]
     pub fn try_borrow_mut(&self) -> Option<AtomicRefMut<'_, T>> {
         AtomicRefMut::new(self)
+    }
+
+    #[inline]
+    pub fn spin_borrow_mut(&self) -> AtomicRefMut<'_, T> {
+        loop {
+            if let Some(s) = self.try_borrow_mut() {
+                return s;
+            }
+            std::hint::spin_loop();
+        }
     }
 }
 

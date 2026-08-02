@@ -28,16 +28,14 @@ impl<T> PerThreadStorage<T> {
     }
 
     pub fn get(&self) -> PerThreadStorageRef<'_, T> {
-        let t = loop {
-            if let Some(mut a) = self.storage.try_borrow_mut() {
-                if let Some(x) = a.pop() {
-                    break x;
-                }
-                // go to the call to `init()` if storage is empty
+        let t = {
+            let mut a = self.storage.spin_borrow_mut();
+            if let Some(x) = a.pop() {
+                x
             } else {
-                continue;
+                drop(a);
+                (self.init)()
             }
-            break (self.init)();
         };
         PerThreadStorageRef {
             r: self,
@@ -49,12 +47,8 @@ impl<T> PerThreadStorage<T> {
 impl<'a, T> Drop for PerThreadStorageRef<'a, T> {
     fn drop(&mut self) {
         let v = self.val.take().unwrap();
-        loop {
-            if let Some(mut a) = self.r.storage.try_borrow_mut() {
-                a.push(v);
-                break;
-            }
-        }
+        let mut a = self.r.storage.spin_borrow_mut();
+        a.push(v);
     }
 }
 
