@@ -38,11 +38,7 @@ impl<'a> OutputChannelSplitter<'a> {
 
     #[allow(unsafe_code)]
     pub fn borrow_rect(&self, rect: Rect) -> OutputChannelRef<'a, '_> {
-        let mut rects = loop {
-            if let Some(b) = self.borrowed_rects.try_borrow_mut() {
-                break b;
-            }
-        };
+        let mut rects = self.borrowed_rects.spin_borrow_mut();
         for r in rects.iter() {
             assert!(!r.intersects(&rect));
         }
@@ -83,15 +79,11 @@ impl<'a, 'b> DerefMut for OutputChannelRef<'a, 'b> {
 impl<'a, 'b> Drop for OutputChannelRef<'a, 'b> {
     fn drop(&mut self) {
         self.buf = None;
-        loop {
-            if let Some(mut b) = self.s.borrowed_rects.try_borrow_mut() {
-                // Safety note: we just dropped the local buffer, and the
-                // safety invariant of `self` says that this is the correct rect
-                // to remove.
-                assert!(b.remove(&self.r));
-                break;
-            }
-        }
+        let mut b = self.s.borrowed_rects.spin_borrow_mut();
+        // Safety note: we just dropped the local buffer, and the
+        // safety invariant of `self` says that this is the correct rect
+        // to remove.
+        assert!(b.remove(&self.r));
     }
 }
 
@@ -133,11 +125,9 @@ impl<'a> BufferSplitter<'a> {
         full_image_size: (usize, usize),
         frame_origin: (isize, isize),
     ) -> ChannelVec<Option<OutputChannelRef<'a, '_>>> {
-        loop {
-            if let Some(mut req) = self.requested_rects.try_borrow_mut() {
-                req.push(rect);
-                break;
-            }
+        {
+            let mut req = self.requested_rects.spin_borrow_mut();
+            req.push(rect);
         }
         let rect = if !outside_current_frame {
             rect.clip(frame_size)
