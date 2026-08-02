@@ -6,7 +6,7 @@
 use std::{collections::HashSet, sync::Arc};
 
 use crate::{
-    api::JxlDecoderOptions,
+    api::{JxlDecoderOptions, JxlParallelRunner},
     entropy_coding::decode::Histograms,
     error::Result,
     features::{noise::Noise, patches::PatchesDictionary, spline::Splines},
@@ -17,7 +17,8 @@ use crate::{
         permutation::Permutation,
         toc::Toc,
     },
-    image::Image,
+    image::{Image, Rect},
+    render::buffer_splitter::{OutputChannelRef, OutputChannelSplitter},
     util::{PerThreadStorage, tracing_wrappers::*},
 };
 use adaptive_lf_smoothing::adaptive_lf_smoothing;
@@ -167,12 +168,63 @@ impl DecoderState {
 }
 
 pub struct HfMetadata {
-    ytox_map: Image<i8>,
-    ytob_map: Image<i8>,
+    pub ytox_map: Image<i8>,
+    pub ytob_map: Image<i8>,
     pub raw_quant_map: Image<i32>,
     pub transform_map: Image<u8>,
     pub epf_map: Image<u8>,
-    used_hf_types: u32,
+    pub quant_lf: Image<u8>,
+}
+
+pub struct LfImageSplitter<'a> {
+    pub channels: [OutputChannelSplitter<'a>; 3],
+}
+
+impl<'a> LfImageSplitter<'a> {
+    pub fn new(lf_image: &'a mut [Image<f32>; 3]) -> Self {
+        let [img0, img1, img2] = lf_image;
+        Self {
+            channels: [
+                OutputChannelSplitter::from_image(img0),
+                OutputChannelSplitter::from_image(img1),
+                OutputChannelSplitter::from_image(img2),
+            ],
+        }
+    }
+
+    pub fn borrow_rect(&self, channel: usize, rect: Rect) -> OutputChannelRef<'a, '_> {
+        self.channels[channel].borrow_typed_rect::<f32>(rect)
+    }
+}
+
+pub struct HfMetaSplitter<'a> {
+    pub ytox_map: OutputChannelSplitter<'a>,
+    pub ytob_map: OutputChannelSplitter<'a>,
+    pub raw_quant_map: OutputChannelSplitter<'a>,
+    pub transform_map: OutputChannelSplitter<'a>,
+    pub epf_map: OutputChannelSplitter<'a>,
+    pub quant_lf: OutputChannelSplitter<'a>,
+}
+
+impl<'a> HfMetaSplitter<'a> {
+    pub fn new(hf_meta: &'a mut HfMetadata) -> Self {
+        Self {
+            ytox_map: OutputChannelSplitter::from_image(&mut hf_meta.ytox_map),
+            ytob_map: OutputChannelSplitter::from_image(&mut hf_meta.ytob_map),
+            raw_quant_map: OutputChannelSplitter::from_image(&mut hf_meta.raw_quant_map),
+            transform_map: OutputChannelSplitter::from_image(&mut hf_meta.transform_map),
+            epf_map: OutputChannelSplitter::from_image(&mut hf_meta.epf_map),
+            quant_lf: OutputChannelSplitter::from_image(&mut hf_meta.quant_lf),
+        }
+    }
+}
+
+pub struct HfMetaViews<'a, 'b> {
+    pub ytox_map: OutputChannelRef<'a, 'b>,
+    pub ytob_map: OutputChannelRef<'a, 'b>,
+    pub raw_quant_map: OutputChannelRef<'a, 'b>,
+    pub transform_map: OutputChannelRef<'a, 'b>,
+    pub epf_map: OutputChannelRef<'a, 'b>,
 }
 
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
@@ -227,15 +279,14 @@ impl GroupStatus {
 }
 
 pub struct Frame {
-    header: FrameHeader,
+    pub(super) header: FrameHeader,
     toc: Toc,
     color_channels: usize,
-    lf_global: Option<LfGlobalState>,
-    hf_global: Option<HfGlobalState>,
-    lf_image: Option<[Image<f32>; 3]>,
-    quant_lf: Image<u8>,
-    hf_meta: Option<HfMetadata>,
-    decoder_state: DecoderState,
+    pub(super) lf_global: Option<LfGlobalState>,
+    pub(super) hf_global: Option<HfGlobalState>,
+    pub(super) lf_image: Option<[Image<f32>; 3]>,
+    pub(super) hf_meta: Option<HfMetadata>,
+    pub(super) decoder_state: DecoderState,
     #[cfg(test)]
     use_simple_pipeline: bool,
     #[cfg(test)]
@@ -307,22 +358,24 @@ impl Frame {
             .unwrap_or_default()
     }
 
-    pub fn finalize_lf(&mut self) -> Result<()> {
+    pub fn finalize_lf(&mut self, parallel_runner: &mut dyn JxlParallelRunner) -> Result<()> {
         if self.header.should_do_adaptive_lf_smoothing() {
             let lf_global = self.lf_global.as_mut().unwrap();
             let lf_quant = &lf_global.lf_quant;
             let inv_quant_lf = lf_global.quant_params.as_mut().unwrap().inv_quant_lf();
+            let lf_factors = [
+                inv_quant_lf * lf_quant.quant_factors[0],
+                inv_quant_lf * lf_quant.quant_factors[1],
+                inv_quant_lf * lf_quant.quant_factors[2],
+            ];
             adaptive_lf_smoothing(
-                [
-                    inv_quant_lf * lf_quant.quant_factors[0],
-                    inv_quant_lf * lf_quant.quant_factors[1],
-                    inv_quant_lf * lf_quant.quant_factors[2],
-                ],
+                lf_factors,
+                &self.header,
                 self.lf_image.as_mut().unwrap(),
-            )
-        } else {
-            Ok(())
+                parallel_runner,
+            )?;
         }
+        Ok(())
     }
 
     pub fn finalize(mut self) -> Result<Option<DecoderState>> {

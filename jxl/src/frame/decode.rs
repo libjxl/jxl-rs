@@ -8,6 +8,7 @@ use std::sync::Arc;
 
 use super::render::pipeline;
 use super::{
+    HfMetaSplitter, HfMetaViews, LfImageSplitter,
     block_context_map::BlockContextMap,
     coeff_order::decode_coeff_orders,
     color_correlation_map::ColorCorrelationParams,
@@ -22,6 +23,7 @@ use crate::frame::block_context_map::{ZERO_DENSITY_CONTEXT_COUNT, ZERO_DENSITY_C
 use crate::frame::group::VarDctBuffers;
 use crate::frame::{DataStatus, GroupStatus};
 use crate::headers::frame_header::FrameType;
+use crate::image::Rect;
 #[cfg(test)]
 use crate::render::SimpleRenderPipeline;
 use crate::render::buffer_splitter::BufferSplitter;
@@ -190,7 +192,6 @@ impl Frame {
         } else {
             None
         };
-        let quant_lf = Image::new(size_blocks)?;
         let size_color_tiles = (size_blocks.0.div_ceil(8), size_blocks.1.div_ceil(8));
         let hf_meta = if frame_header.encoding == Encoding::VarDCT {
             Some(HfMetadata {
@@ -202,7 +203,7 @@ impl Frame {
                     HfTransformType::INVALID_TRANSFORM,
                 )?,
                 epf_map: Image::new(size_blocks)?,
-                used_hf_types: 0,
+                quant_lf: Image::new(size_blocks)?,
             })
         } else {
             None
@@ -251,7 +252,6 @@ impl Frame {
             lf_global: None,
             hf_global: None,
             lf_image,
-            quant_lf,
             hf_meta,
             decoder_state,
             render_pipeline: None,
@@ -436,50 +436,80 @@ impl Frame {
         Ok(())
     }
 
-    #[instrument(level = "debug", skip(self, br))]
-    pub fn decode_lf_group(&mut self, group: usize, br: &mut BitReader) -> Result<()> {
-        self.dirty_lf_groups.insert(group);
+    pub fn decode_lf_group(
+        header: &FrameHeader,
+        decoder_state: &DecoderState,
+        lf_global: &LfGlobalState,
+        group: usize,
+        br: &mut BitReader,
+        lf_splitter: Option<&LfImageSplitter>,
+        hf_meta_splitter: Option<&HfMetaSplitter>,
+    ) -> Result<()> {
         debug!(section_size = br.total_bits_available());
-        let lf_global = self.lf_global.as_mut().unwrap();
-        if self.header.encoding == Encoding::VarDCT && !self.header.has_lf_frame() {
+        let r = header.lf_group_rect(group);
+        let cr = Rect {
+            origin: (r.origin.0 >> 3, r.origin.1 >> 3),
+            size: (r.size.0.div_ceil(8), r.size.1.div_ceil(8)),
+        };
+
+        if header.encoding == Encoding::VarDCT && !header.has_lf_frame() {
             info!("decoding VarDCT LF with group id {}", group);
+            let splitter_lf = lf_splitter.as_ref().unwrap();
+            let splitter_hf = hf_meta_splitter.as_ref().unwrap();
+            let mut lf_views = [
+                splitter_lf.borrow_rect(0, r),
+                splitter_lf.borrow_rect(1, r),
+                splitter_lf.borrow_rect(2, r),
+            ];
+            let mut quant_lf_view = splitter_hf.quant_lf.borrow_typed_rect::<u8>(r);
             decode_vardct_lf(
                 group,
-                &self.header,
-                &self.decoder_state.file_header.image_metadata,
+                header,
+                &decoder_state.file_header.image_metadata,
                 &lf_global.tree,
                 lf_global.color_correlation_params.as_ref().unwrap(),
                 lf_global.quant_params.as_ref().unwrap(),
                 &lf_global.lf_quant,
                 lf_global.block_context_map.as_ref().unwrap(),
-                self.lf_image.as_mut().unwrap(),
-                &mut self.quant_lf,
+                &mut lf_views,
+                &mut quant_lf_view,
                 br,
             )?;
         }
 
-        lf_global.modular_global.mark_final(1, group);
-
         lf_global.modular_global.read_stream(
             ModularStreamId::ModularLF(group),
-            &self.header,
+            header,
             &lf_global.tree,
             br,
             None,
         )?;
-        if self.header.encoding == Encoding::VarDCT {
+        if header.encoding == Encoding::VarDCT {
             info!("decoding HF metadata with group id {}", group);
-            let hf_meta = self.hf_meta.as_mut().unwrap();
+            let splitter_hf = hf_meta_splitter.as_ref().unwrap();
+            let mut hf_views = HfMetaViews {
+                ytox_map: splitter_hf.ytox_map.borrow_typed_rect::<i8>(cr),
+                ytob_map: splitter_hf.ytob_map.borrow_typed_rect::<i8>(cr),
+                raw_quant_map: splitter_hf.raw_quant_map.borrow_typed_rect::<i32>(r),
+                transform_map: splitter_hf.transform_map.borrow_typed_rect::<u8>(r),
+                epf_map: splitter_hf.epf_map.borrow_typed_rect::<u8>(r),
+            };
             decode_hf_metadata(
                 group,
-                &self.header,
-                &self.decoder_state.file_header.image_metadata,
+                header,
+                &decoder_state.file_header.image_metadata,
                 &lf_global.tree,
-                hf_meta,
+                &mut hf_views,
                 br,
             )?;
         }
         Ok(())
+    }
+
+    pub fn post_decode_lf_group(&mut self, group: usize) {
+        self.dirty_lf_groups.insert(group);
+        let lf_global = self.lf_global.as_mut().unwrap();
+        lf_global.modular_global.mark_final(1, group);
     }
 
     #[instrument(level = "debug", skip_all)]
@@ -712,8 +742,9 @@ impl Frame {
         } else {
             None
         };
-        let lf_image = if self.header.has_lf_frame() {
-            // We already checked that the LF image is present
+        let hf_meta = self.hf_meta.as_ref().unwrap();
+
+        let lf_image: &[Image<f32>; 3] = if self.header.has_lf_frame() {
             self.decoder_state.lf_frames[self.header.lf_level as usize]
                 .as_ref()
                 .unwrap()
@@ -732,7 +763,6 @@ impl Frame {
         } else {
             info!("Decoding VarDCT group {group}");
             let hf_global = self.hf_global.as_ref().unwrap();
-            let hf_meta = self.hf_meta.as_ref().unwrap();
             let mut buffers = self.vardct_buffers.get();
             buffers.ensure_allocated()?;
             decode_vardct_group(
@@ -743,7 +773,6 @@ impl Frame {
                 hf_global,
                 hf_meta,
                 lf_image,
-                &self.quant_lf,
                 &self
                     .decoder_state
                     .file_header

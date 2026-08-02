@@ -389,7 +389,6 @@ pub fn decode_vardct_group(
     hf_global: &HfGlobalState,
     hf_meta: &HfMetadata,
     lf_image: &[Image<f32>; 3],
-    quant_lf: &Image<u8>,
     quant_biases: &[f32; 4],
     pixels: &mut Option<[Image<f32>; 3]>,
     buffers: &mut VarDctBuffers,
@@ -424,7 +423,7 @@ pub fn decode_vardct_group(
     let ytob_map = hf_meta.ytob_map.get_rect(cmap_rect);
     let transform_map = hf_meta.transform_map.get_rect(block_group_rect);
     let raw_quant_map = hf_meta.raw_quant_map.get_rect(block_group_rect);
-    let quant_lf_rect = quant_lf.get_rect(block_group_rect);
+    let quant_lf_rect = hf_meta.quant_lf.get_rect(block_group_rect);
     let block_context_map = lf_global.block_context_map.as_ref().unwrap();
     // TODO(veluca): improve coefficient storage (smaller allocations, use 16 bits if possible).
     let mut coeffs;

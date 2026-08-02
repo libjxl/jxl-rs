@@ -20,7 +20,7 @@ use crate::{
     },
     bit_reader::BitReader,
     error::{Error, Result},
-    frame::{DecoderState, Frame, Section},
+    frame::{DecoderState, Frame, HfMetaSplitter, LfImageSplitter, Section},
     headers::{
         FileHeader,
         encodings::UnconditionalCoder,
@@ -429,9 +429,22 @@ impl FrameInfo {
     ) -> Result<bool> {
         let mut br = BitReader::new(buf);
         frame.decode_lf_global(&mut br, !is_complete)?;
-        frame.decode_lf_group(0, &mut br)?;
+        {
+            let lf_splitter = frame.lf_image.as_mut().map(LfImageSplitter::new);
+            let hf_meta_splitter = frame.hf_meta.as_mut().map(HfMetaSplitter::new);
+            Frame::decode_lf_group(
+                &frame.header,
+                &frame.decoder_state,
+                frame.lf_global.as_ref().unwrap(),
+                0,
+                &mut br,
+                lf_splitter.as_ref(),
+                hf_meta_splitter.as_ref(),
+            )?;
+        }
+        frame.post_decode_lf_group(0);
         frame.decode_hf_global(&mut br)?;
-        frame.finalize_lf()?;
+        frame.finalize_lf(parallel_runner)?;
         frame.decode_and_render_hf_groups(
             output_buffers,
             pixel_format,
@@ -488,12 +501,36 @@ impl FrameInfo {
             return Ok(data_for_next_section);
         }
 
-        // TODO(veluca): parallelize here
+        {
+            let lf_splitter = frame.lf_image.as_mut().map(LfImageSplitter::new);
+            let hf_meta_splitter = frame.hf_meta.as_mut().map(HfMetaSplitter::new);
+            let header = &frame.header;
+            let decoder_state = &frame.decoder_state;
+            let lf_global = frame.lf_global.as_ref().unwrap();
+
+            parallel_runner.run(self.lf_sections.len(), &|i: usize| -> Result<()> {
+                let lf_section = &self.lf_sections[i];
+                let Section::Lf { group } = &lf_section.section else {
+                    unreachable!()
+                };
+                Frame::decode_lf_group(
+                    header,
+                    decoder_state,
+                    lf_global,
+                    *group,
+                    &mut BitReader::new(&lf_section.data),
+                    lf_splitter.as_ref(),
+                    hf_meta_splitter.as_ref(),
+                )?;
+                Ok(())
+            })?;
+        }
+
         for lf_section in self.lf_sections.drain(..) {
             let Section::Lf { group } = lf_section.section else {
                 unreachable!()
             };
-            frame.decode_lf_group(group, &mut BitReader::new(&lf_section.data))?;
+            frame.post_decode_lf_group(group);
             self.section_state.remaining_lf -= 1;
         }
 
@@ -503,7 +540,7 @@ impl FrameInfo {
 
         if let Some(hf_global) = self.hf_global_section.take() {
             frame.decode_hf_global(&mut BitReader::new(&hf_global.data))?;
-            frame.finalize_lf()?;
+            frame.finalize_lf(parallel_runner)?;
             self.section_state.hf_global_done = true;
         }
 

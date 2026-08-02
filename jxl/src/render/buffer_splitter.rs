@@ -11,7 +11,7 @@ use std::{
 use crate::{
     api::JxlOutputBuffer,
     headers::Orientation,
-    image::Rect,
+    image::{Image, ImageDataType, Rect},
     util::{AtomicRefCell, ChannelVec, ShiftRightCeil},
 };
 
@@ -34,6 +34,21 @@ impl<'a> OutputChannelSplitter<'a> {
             buffer,
             borrowed_rects: AtomicRefCell::new(BTreeSet::new()),
         }
+    }
+
+    pub fn from_image<T: ImageDataType>(image: &'a mut Image<T>) -> Self {
+        let size = image.size();
+        let raw = image
+            .get_rect_mut(Rect {
+                origin: (0, 0),
+                size,
+            })
+            .into_raw();
+        Self::new(JxlOutputBuffer::from_image_rect_mut(raw))
+    }
+
+    pub fn borrow_typed_rect<T: ImageDataType>(&self, rect: Rect) -> OutputChannelRef<'a, '_> {
+        self.borrow_rect(rect.to_byte_rect(T::DATA_TYPE_ID))
     }
 
     #[allow(unsafe_code)]
