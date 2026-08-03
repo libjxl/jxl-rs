@@ -14,6 +14,11 @@ use std::io::{BufReader, Read, Seek};
 use std::path::PathBuf;
 use std::time::Duration;
 
+use mimalloc::MiMalloc;
+
+#[global_allocator]
+static GLOBAL: MiMalloc = MiMalloc;
+
 const VERSION_STRING: &str = concat!(
     env!("VERGEN_GIT_DESCRIBE"),
     " (rustc ",
