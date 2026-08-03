@@ -25,6 +25,8 @@ use crate::image::Rect;
 use crate::util::AtomicRefCell;
 use std::collections::HashSet;
 use std::sync::Arc;
+use std::sync::atomic::AtomicUsize;
+use std::sync::atomic::Ordering;
 
 #[cfg(test)]
 use crate::render::SimpleRenderPipeline;
@@ -409,7 +411,7 @@ impl Frame {
             Ok(())
         };
 
-        parallel_runner.run(render_steps.len(), &|i| {
+        let run_step = |i| {
             match &render_steps[i] {
                 RenderStep::Decode { group, passes } => {
                     let mut passes = passes.borrow_mut();
@@ -428,7 +430,29 @@ impl Frame {
                 }
             }
             Ok(())
-        })?;
+        };
+
+        // Avoid significantly more than one thread per full group
+        let max_threads = (self.header.size().0 / self.header.group_dim())
+            * (self.header.size().1 / self.header.group_dim())
+            + 1;
+
+        let hw_threads = std::thread::available_parallelism()
+            .map(|x| x.get())
+            .unwrap_or(max_threads);
+
+        if render_steps.len() > max_threads && max_threads < hw_threads {
+            let next_index = AtomicUsize::new(0);
+            parallel_runner.run(max_threads, &|_| loop {
+                let t = next_index.fetch_add(1, Ordering::Relaxed);
+                if t >= render_steps.len() {
+                    return Ok(());
+                }
+                run_step(t)?;
+            })?;
+        } else {
+            parallel_runner.run(render_steps.len(), &run_step)?;
+        }
 
         for g in render_steps.iter().filter_map(|x| match x {
             RenderStep::Decode { group, .. } => Some(*group),
