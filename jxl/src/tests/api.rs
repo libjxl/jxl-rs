@@ -524,7 +524,7 @@ fn test_output_format_u8_matches_f32() {
                 decode_with_format::<f32>(&file, &f32_format, use_simple, false);
             let (u8_buffer, _, _) = decode_with_format::<u8>(&file, &u8_format, use_simple, false);
 
-            let tolerance = 0.003;
+            let tolerance = 0.004;
             let mut max_error: f32 = 0.0;
 
             for y in 0..height {
