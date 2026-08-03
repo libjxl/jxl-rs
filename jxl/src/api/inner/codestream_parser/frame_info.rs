@@ -271,13 +271,17 @@ impl FrameInfo {
             self.sections = sections.into_iter().collect();
 
             // Move data from the pre-section buffer into the sections.
+            // Only allocate as much of each section as the pre-section buffer
+            // can fill; the TOC-declared section length is untrusted and may
+            // be much larger than the actual input.
             for buf in self.sections.iter_mut() {
                 if cbuf.is_empty() {
                     break;
                 }
+                let target = buf.len.min(cbuf.len());
                 let mut data = Vec::new();
-                data.try_reserve_exact(buf.len)?;
-                data.resize(buf.len, 0);
+                data.try_reserve_exact(target)?;
+                data.resize(target, 0);
                 buf.data = data;
                 let n = cbuf.take(&mut [IoSliceMut::new(&mut buf.data)]);
                 self.ready_section_data += n;
@@ -362,10 +366,19 @@ impl FrameInfo {
                 (Err(e), _) => return Err(e),
             };
             let mut readable_section_data = self.ready_section_data + available_codestream;
-            // Ensure enough section buffers are available for reading available data.
+            // Ensure enough section buffer space is available for reading the
+            // available data. Section lengths come from the untrusted TOC, so
+            // grow buffers only as far as the data we can actually read; a
+            // truncated stream must not trigger a huge upfront allocation.
             for buf in self.sections.iter_mut() {
-                if buf.data.is_empty() {
-                    buf.data.resize(buf.len, 0);
+                if buf.data.len() < buf.len && buf.data.len() < readable_section_data {
+                    let target = buf.len.min(readable_section_data);
+                    if target == buf.len {
+                        buf.data.try_reserve_exact(target - buf.data.len())?;
+                    } else {
+                        buf.data.try_reserve(target - buf.data.len())?;
+                    }
+                    buf.data.resize(target, 0);
                 }
                 readable_section_data = readable_section_data.saturating_sub(buf.data.len());
                 if readable_section_data == 0 {
