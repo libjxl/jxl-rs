@@ -19,16 +19,17 @@ pub(super) struct InputBuffer {
     // Storage for top/bottom borders. Includes corners.
     pub(super) topbottom: Vec<AtomicRefCell<Option<OwnedRawImage>>>,
     // Number of ready channels in the current pass.
-    pub(super) ready_channels: AtomicUsize,
+    ready_channels: AtomicUsize,
     is_ready: AtomicBool,
 }
 
 impl InputBuffer {
-    pub(super) fn set_buffer(&self, chan: usize, buf: OwnedRawImage) {
+    // Returns the number of ready channels.
+    pub(super) fn set_buffer(&self, chan: usize, buf: OwnedRawImage) -> usize {
         assert!(!self.is_ready.load(Ordering::Relaxed));
         assert!(self.data[chan].borrow_mut().is_none(), "chan: {chan}");
         *self.data[chan].borrow_mut() = Some(buf);
-        self.ready_channels.fetch_add(1, Ordering::Relaxed);
+        self.ready_channels.fetch_add(1, Ordering::Relaxed) + 1
     }
 
     pub(super) fn new(num_channels: usize) -> Self {
