@@ -126,8 +126,9 @@ pub struct BlendingInfo {
     pub alpha_channel: u32,
 
     #[default(false)]
-    #[condition(nonserialized.num_extra_channels > 0 &&
-        (mode == BlendingMode::Blend || mode == BlendingMode::AlphaWeightedAdd || mode == BlendingMode::Mul))]
+    #[condition((nonserialized.num_extra_channels > 0 &&
+        (mode == BlendingMode::Blend || mode == BlendingMode::AlphaWeightedAdd)) ||
+        mode == BlendingMode::Mul)]
     pub clamp: bool,
 
     #[coder(u2S(0, 1, 2, 3))]
