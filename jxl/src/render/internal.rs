@@ -3,9 +3,9 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
+use crate::util::sync::atomic::AtomicBool;
 use std::any::Any;
 use std::fmt::Display;
-use std::sync::atomic::AtomicBool;
 
 use crate::error::Result;
 use crate::image::{DataTypeTag, ImageDataType};

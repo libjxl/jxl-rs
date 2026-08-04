@@ -8,7 +8,7 @@ use std::{
     ops::{Deref, DerefMut},
 };
 
-use std::sync::Mutex;
+use crate::util::sync::Mutex;
 
 // Note: this is meant to be used only in low-contention
 // scenarios.

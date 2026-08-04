@@ -3,10 +3,8 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-use std::{
-    collections::{BTreeSet, HashSet},
-    sync::Arc,
-};
+use crate::util::sync::Arc;
+use std::collections::{BTreeSet, HashSet};
 
 use crate::{
     api::{JxlDecoderOptions, JxlParallelRunner},
@@ -32,7 +30,7 @@ use quant_weights::DequantMatrices;
 use quantizer::{LfQuantFactors, QuantizerParams};
 
 use crate::features::epf::SigmaSource;
-use std::sync::{Mutex, RwLock};
+use crate::util::sync::{Mutex, RwLock};
 
 mod adaptive_lf_smoothing;
 mod block_context_map;

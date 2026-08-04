@@ -5,8 +5,8 @@
 
 #![allow(clippy::needless_range_loop)]
 
+use crate::util::sync::{Mutex, atomic::Ordering};
 use std::fmt::Debug;
-use std::sync::{Mutex, atomic::Ordering};
 
 use row_buffers::RowBuffer;
 

@@ -3,8 +3,8 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
+use crate::util::sync::{RwLock, RwLockReadGuard};
 use std::ops::Range;
-use std::sync::{RwLock, RwLockReadGuard};
 
 use crate::{
     error::Result,

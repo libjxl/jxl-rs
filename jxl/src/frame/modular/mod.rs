@@ -3,14 +3,14 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
+use crate::util::sync::{
+    Mutex,
+    atomic::{AtomicBool, Ordering},
+};
 use std::{
     cmp::min,
     collections::{BTreeSet, HashSet},
     fmt::Debug,
-    sync::{
-        Mutex,
-        atomic::{AtomicBool, Ordering},
-    },
 };
 
 use crate::{
