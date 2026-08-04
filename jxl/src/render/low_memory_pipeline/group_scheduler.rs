@@ -4,7 +4,6 @@
 // license that can be found in the LICENSE file.
 
 use std::ops::Range;
-use std::sync::atomic::Ordering;
 
 use crate::error::Result;
 use crate::image::{OwnedRawImage, Rect};
@@ -103,10 +102,6 @@ impl LowMemoryRenderPipeline {
         buffer_splitter: &BufferSplitter,
     ) -> Result<()> {
         let buf = self.input_buffers.get(g);
-        assert!(buf.ready_channels.load(Ordering::Relaxed) <= self.shared.num_used_channels());
-        if buf.ready_channels.load(Ordering::Relaxed) != self.shared.num_used_channels() {
-            return Ok(());
-        }
         let (gx, gy) = self.shared.group_position(g);
         debug!("new data ready for group {gx},{gy}");
 

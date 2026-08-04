@@ -336,10 +336,16 @@ impl RenderPipeline for LowMemoryRenderPipeline {
                 channel,
                 T::DATA_TYPE_ID,
             );
-            self.input_buffers
+            let num_ready = self
+                .input_buffers
                 .get(group_id)
                 .set_buffer(channel, buf.into_raw());
             self.shared.group_chan_complete[group_id][channel].store(complete, Ordering::Relaxed);
+
+            assert!(num_ready <= self.shared.num_used_channels());
+            if num_ready != self.shared.num_used_channels() {
+                return Ok(());
+            }
 
             self.render_with_new_group(group_id, buffer_splitter)?;
         }
