@@ -8,7 +8,7 @@ use std::{
     ops::{Deref, DerefMut},
 };
 
-use std::sync::Mutex;
+use crate::util::sync::Mutex;
 
 use crate::{
     api::JxlOutputBuffer,

@@ -3,8 +3,8 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
+use crate::util::sync::Arc;
 use std::collections::BTreeSet;
-use std::sync::Arc;
 
 use super::render::pipeline;
 use super::{
@@ -27,6 +27,7 @@ use crate::image::Rect;
 #[cfg(test)]
 use crate::render::SimpleRenderPipeline;
 use crate::render::buffer_splitter::BufferSplitter;
+use crate::util::sync::{Mutex, RwLock};
 use crate::util::{NewWithCapacity, PerThreadStorage};
 use crate::util::{ShiftRightCeil, mirror};
 use crate::{
@@ -48,7 +49,6 @@ use crate::{
     util::{CeilLog2, Xorshift128Plus, tracing_wrappers::*},
 };
 use jxl_transforms::transform_map::*;
-use std::sync::{Mutex, RwLock};
 
 use crate::headers::CustomTransformData;
 use crate::render::RenderPipelineInOutStage;

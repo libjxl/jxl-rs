@@ -16,6 +16,7 @@ mod per_thread_storage;
 mod rational_poly;
 mod shift_right_ceil;
 mod smallvec;
+pub mod sync;
 pub mod tracing_wrappers;
 mod vec_helpers;
 mod xorshift128plus;

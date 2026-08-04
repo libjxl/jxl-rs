@@ -23,11 +23,9 @@ use crate::headers::{Orientation, color_encoding::ColorSpace, extra_channels::Ex
 use crate::image::Image;
 use crate::image::Rect;
 use crate::util::SmallVec;
+use crate::util::sync::atomic::{AtomicUsize, Ordering};
+use crate::util::sync::{Arc, RwLock};
 use std::collections::BTreeSet;
-use std::sync::Arc;
-use std::sync::RwLock;
-use std::sync::atomic::AtomicUsize;
-use std::sync::atomic::Ordering;
 
 #[cfg(test)]
 use crate::render::SimpleRenderPipeline;

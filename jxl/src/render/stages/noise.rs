@@ -5,7 +5,7 @@
 
 #![allow(clippy::needless_range_loop)]
 
-use std::sync::{Arc, RwLock};
+use crate::util::sync::{Arc, RwLock};
 
 use crate::{
     features::noise::Noise,
@@ -192,7 +192,7 @@ impl RenderPipelineInPlaceStage for AddNoiseStage {
 
 #[cfg(test)]
 mod test {
-    use std::sync::{Arc, RwLock};
+    use crate::util::sync::{Arc, RwLock};
 
     use crate::{
         error::Result,

@@ -3,7 +3,7 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-use std::sync::{Arc, RwLock};
+use crate::util::sync::{Arc, RwLock};
 
 use crate::{
     features::patches::PatchesDictionary,
@@ -93,7 +93,7 @@ impl RenderPipelineInPlaceStage for PatchesStage {
 
 #[cfg(test)]
 mod test {
-    use std::sync::Arc;
+    use crate::util::sync::Arc;
 
     use rand::SeedableRng;
     use test_log::test;
