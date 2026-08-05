@@ -5,7 +5,7 @@
 
 use crate::api::{
     JxlColorType, JxlDataFormat, JxlDecoder, JxlDecoderInner, JxlDecoderOptions, JxlPixelFormat,
-    JxlProgressiveMode, JxlTransferFunction, ProcessingResult, states,
+    JxlTransferFunction, ProcessingResult, states,
 };
 use crate::error::Error;
 use crate::image::{Image, JxlOutputBuffer, Rect};
@@ -765,56 +765,14 @@ fn test_fuzzer_smallbuffer_overflow() {
     }
 }
 
-/// Regression test for ClusterFuzz issue 5920454820790272 (crbug.com/541318910).
-///
-/// Flushing a truncated Modular frame whose transforms do not support partial
-/// rendering used to force an eager VarDCT render of an incomplete group.
+/// Regression test for https://issues.chromium.org/issues/541318910: flushing a
+/// frame that does not support rendering before the last pass used to force an
+/// eager render of an incomplete group.
 #[test]
-fn clusterfuzz_541318910() {
-    let file = include_bytes!("../../tests/testdata/clusterfuzz_541318910.jxl");
-
-    // Emulate a progressive client that flushes whatever it has whenever the
-    // decoder runs out of input, for every possible truncation of the file.
-    for len in 1..=file.len() {
-        let options = JxlDecoderOptions {
-            progressive_mode: JxlProgressiveMode::Pass,
-            ..Default::default()
-        };
-        let mut decoder = JxlDecoderInner::new(options);
-        let mut input = &file[..len];
-
-        if !matches!(
-            decoder.process(&mut input, None, None),
-            Ok(ProcessingResult::Complete { .. })
-        ) {
-            continue;
-        }
-
-        let (width, height) = decoder.basic_info().unwrap().size;
-        decoder.set_pixel_format(JxlPixelFormat {
-            color_type: JxlColorType::Rgba,
-            color_data_format: Some(JxlDataFormat::U8 { bit_depth: 8 }),
-            extra_channel_format: vec![],
-        });
-
-        let mut output = Image::<u8>::new((width * 4, height)).unwrap();
-        let mut buffers = [JxlOutputBuffer::from_image_rect_mut(
-            output
-                .get_rect_mut(Rect {
-                    size: (width * 4, height),
-                    origin: (0, 0),
-                })
-                .into_raw(),
-        )];
-
-        while let Ok(ProcessingResult::Complete { .. }) =
-            decoder.process(&mut input, Some(&mut buffers), None)
-        {
-            if !decoder.has_more_frames() {
-                break;
-            }
-        }
-        let _ = decoder.flush_pixels(&mut buffers, None);
+fn flush_without_partial_render_support() {
+    let data = std::fs::read("resources/test/squeeze_empty_residual.jxl").unwrap();
+    for chunk_size in 1..=16 {
+        decode_internal(&data, chunk_size, false, true, None, None, None).unwrap();
     }
 }
 
