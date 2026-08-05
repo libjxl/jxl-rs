@@ -91,12 +91,7 @@ impl<'a> JxlOutputBuffer<'a> {
     }
 
     pub(crate) fn typed_row_mut<T: ImageDataType>(&mut self, row: usize) -> &mut [T] {
-        let row = self.row_mut(row);
-        // SAFETY: `T` is a bag-of-bits type with no invalid bit patterns.
-        let (head, ret, tail) = unsafe { row.align_to_mut() };
-        debug_assert!(head.is_empty());
-        debug_assert!(tail.is_empty());
-        ret
+        T::cast_slice_mut(self.row_mut(row))
     }
 
     pub(crate) fn row_mut(&mut self, row: usize) -> &mut [u8] {
