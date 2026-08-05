@@ -7,7 +7,10 @@ use std::{
     cmp::min,
     collections::HashSet,
     fmt::Debug,
-    sync::atomic::{AtomicBool, Ordering},
+    sync::{
+        Mutex,
+        atomic::{AtomicBool, Ordering},
+    },
 };
 
 use crate::{
@@ -30,7 +33,7 @@ use crate::{
     },
     image::{Image, Rect},
     render::buffer_splitter::OutputChannelRef,
-    util::{AtomicRefCell, CeilLog2, PerThreadStorage, tracing_wrappers::*},
+    util::{CeilLog2, PerThreadStorage, tracing_wrappers::*},
 };
 use jxl_transforms::transform_map::*;
 
@@ -243,11 +246,11 @@ pub struct FullModularImage {
     output_transforms_for_group: Vec<Vec<usize>>,
     pending_transforms: HashSet<usize>,
     rerendered_buffers: HashSet<(usize, usize)>,
-    delayed_ready_sections: AtomicRefCell<HashSet<(usize, usize)>>,
+    delayed_ready_sections: Mutex<HashSet<(usize, usize)>>,
     // Whether each channel is used or not by the render pipeline.
     pipeline_used_channels: Vec<bool>,
     // Stack of transform steps that are ready to process.
-    ready_transform_steps: AtomicRefCell<Vec<usize>>,
+    ready_transform_steps: Mutex<Vec<usize>>,
 }
 
 impl FullModularImage {
@@ -322,10 +325,10 @@ impl FullModularImage {
                 global_header: None,
                 pipeline_used_channels: vec![],
                 output_transforms_for_group: vec![vec![]; frame_header.num_groups()],
-                ready_transform_steps: AtomicRefCell::new(vec![]),
+                ready_transform_steps: Mutex::new(vec![]),
                 pending_transforms: HashSet::new(),
                 rerendered_buffers: HashSet::new(),
-                delayed_ready_sections: AtomicRefCell::new(HashSet::new()),
+                delayed_ready_sections: Mutex::new(HashSet::new()),
             });
         }
 
@@ -491,10 +494,10 @@ impl FullModularImage {
             global_header: Some(header),
             output_transforms_for_group,
             pipeline_used_channels: vec![],
-            ready_transform_steps: AtomicRefCell::new(vec![]),
+            ready_transform_steps: Mutex::new(vec![]),
             pending_transforms: HashSet::new(),
             rerendered_buffers: HashSet::new(),
-            delayed_ready_sections: AtomicRefCell::new(HashSet::new()),
+            delayed_ready_sections: Mutex::new(HashSet::new()),
         })
     }
 
@@ -544,7 +547,10 @@ impl FullModularImage {
 
         if num_decoded >= total_buffers {
             self.mark_final(0, 0);
-            self.delayed_ready_sections.borrow_mut().insert((0, 0));
+            self.delayed_ready_sections
+                .try_lock()
+                .unwrap()
+                .insert((0, 0));
             // We don't run transforms here - we ask the caller to call `run_all_transforms`
             // at least once per decode.
             return Ok(true);
@@ -616,7 +622,8 @@ impl FullModularImage {
         let mut ready_steps = vec![];
         if section_id == 1 {
             self.delayed_ready_sections
-                .spin_borrow_mut()
+                .lock()
+                .unwrap()
                 .insert((1, grid));
         } else {
             self.mark_section_ready(section_id, grid, &mut ready_steps);
@@ -626,7 +633,8 @@ impl FullModularImage {
             self.run_transforms(frame_header, pass_to_pipeline, &mut ready_steps)
         } else {
             self.ready_transform_steps
-                .spin_borrow_mut()
+                .lock()
+                .unwrap()
                 .extend_from_slice(&ready_steps);
             Ok(())
         }
@@ -635,7 +643,8 @@ impl FullModularImage {
     fn update_deps(&self, buf: usize, grid: usize, ready_steps: &mut Vec<usize>) {
         for t in self.buffer_info[buf].buffer_grid[grid]
             .used_by_transforms_current
-            .borrow_mut()
+            .try_lock()
+            .unwrap()
             .drain(..)
         {
             if self.transform_steps[t].current_dep_ready() {
@@ -749,7 +758,7 @@ impl FullModularImage {
                     let buf = &mut self.buffer_info[*buffer].buffer_grid[*grid];
                     // TODO(veluca): account for *non-final* uses here, when we actually
                     // deallocate temporary buffers.
-                    buf.used_by_transforms_current.borrow_mut().push(t);
+                    buf.used_by_transforms_current.try_lock().unwrap().push(t);
                     self.transform_steps[t].add_current_dep();
                     has_current_deps = true;
                 }
@@ -757,13 +766,14 @@ impl FullModularImage {
             // Make sure that transforms that need to run, but don't need to wait for
             // actual decoding, are actually run.
             if !has_current_deps {
-                self.ready_transform_steps.borrow_mut().push(t);
+                self.ready_transform_steps.try_lock().unwrap().push(t);
             }
         }
         self.pending_transforms.clear();
         self.rerendered_buffers.clear();
-        for (s, g) in std::mem::take(&mut *self.delayed_ready_sections.borrow_mut()).drain() {
-            self.mark_section_ready(s, g, &mut self.ready_transform_steps.borrow_mut());
+        for (s, g) in std::mem::take(&mut *self.delayed_ready_sections.try_lock().unwrap()).drain()
+        {
+            self.mark_section_ready(s, g, &mut self.ready_transform_steps.try_lock().unwrap());
         }
     }
 
@@ -808,7 +818,7 @@ impl FullModularImage {
     }
 
     pub fn take_ready_steps(&mut self) -> Vec<usize> {
-        std::mem::take(&mut self.ready_transform_steps.borrow_mut())
+        std::mem::take(self.ready_transform_steps.get_mut().unwrap())
     }
 
     pub fn validate_state_after_transforms(&self) {
@@ -820,7 +830,7 @@ impl FullModularImage {
         for b in self.buffer_info.iter() {
             for bg in b.buffer_grid.iter() {
                 debug_assert!(
-                    bg.used_by_transforms_current.borrow().is_empty(),
+                    bg.used_by_transforms_current.try_lock().unwrap().is_empty(),
                     "{b:?} {bg:?}"
                 );
             }

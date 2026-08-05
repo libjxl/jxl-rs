@@ -3,18 +3,18 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
 
 use crate::{
     features::patches::PatchesDictionary,
     frame::ReferenceFrame,
     headers::extra_channels::ExtraChannelInfo,
     render::{ErasedLocalState, RenderPipelineInPlaceStage},
-    util::{AtomicRefCell, NewWithCapacity as _},
+    util::NewWithCapacity as _,
 };
 
 pub struct PatchesStage {
-    patches: Arc<AtomicRefCell<PatchesDictionary>>,
+    patches: Arc<RwLock<PatchesDictionary>>,
     extra_channels: Vec<ExtraChannelInfo>,
     decoder_state: Arc<[Option<ReferenceFrame>; 4]>,
 }
@@ -26,7 +26,7 @@ struct PatchesState {
 
 impl PatchesStage {
     pub fn new(
-        patches: Arc<AtomicRefCell<PatchesDictionary>>,
+        patches: Arc<RwLock<PatchesDictionary>>,
         extra_channels: Vec<ExtraChannelInfo>,
         decoder_state: Arc<[Option<ReferenceFrame>; 4]>,
     ) -> Self {
@@ -58,7 +58,7 @@ impl RenderPipelineInPlaceStage for PatchesStage {
         row: &mut [&mut [f32]],
         state: Option<&mut ErasedLocalState>,
     ) {
-        let patches = self.patches.borrow();
+        let patches = self.patches.try_read().unwrap();
         if patches.positions.is_empty() {
             return;
         }
@@ -81,7 +81,7 @@ impl RenderPipelineInPlaceStage for PatchesStage {
 
     fn init_local_state(&self) -> crate::error::Result<Option<Box<ErasedLocalState>>> {
         // TODO(veluca): I think this is wrong, check that.
-        let patches = self.patches.borrow();
+        let patches = self.patches.try_read().unwrap();
         let len = patches.positions.len();
         let patches_for_row_result = Vec::<usize>::new_with_capacity(len)?;
         Ok(Some(Box::new(PatchesState {
@@ -122,7 +122,7 @@ mod test {
         ]);
         crate::render::test::test_stage_consistency(
             || PatchesStage {
-                patches: Arc::new(AtomicRefCell::new(patch_dict.clone())),
+                patches: Arc::new(RwLock::new(patch_dict.clone())),
                 extra_channels: file_header.image_metadata.extra_channel_info.clone(),
                 decoder_state: reference_frames.clone(),
             },

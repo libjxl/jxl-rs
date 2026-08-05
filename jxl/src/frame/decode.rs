@@ -27,7 +27,7 @@ use crate::image::Rect;
 #[cfg(test)]
 use crate::render::SimpleRenderPipeline;
 use crate::render::buffer_splitter::BufferSplitter;
-use crate::util::{AtomicRefCell, NewWithCapacity, PerThreadStorage};
+use crate::util::{NewWithCapacity, PerThreadStorage};
 use crate::util::{ShiftRightCeil, mirror};
 use crate::{
     GROUP_DIM,
@@ -48,6 +48,7 @@ use crate::{
     util::{CeilLog2, Xorshift128Plus, tracing_wrappers::*},
 };
 use jxl_transforms::transform_map::*;
+use std::sync::{Mutex, RwLock};
 
 use crate::headers::CustomTransformData;
 use crate::render::RenderPipelineInOutStage;
@@ -259,16 +260,12 @@ impl Frame {
             lf_frame_data,
             section0_render_up_to_date: false,
             vardct_buffers: PerThreadStorage::new(VarDctBuffers::new),
-            patches: Arc::new(AtomicRefCell::new(PatchesDictionary::new(
-                num_extra_channels,
-            ))),
-            splines: Arc::new(AtomicRefCell::new(Splines::default())),
-            noise: Arc::new(AtomicRefCell::new(Noise::default())),
-            lf_quant: Arc::new(AtomicRefCell::new(LfQuantFactors::default())),
-            color_correlation_params: Arc::new(AtomicRefCell::new(
-                ColorCorrelationParams::default(),
-            )),
-            epf_sigma: Arc::new(AtomicRefCell::new(SigmaSource::default())),
+            patches: Arc::new(RwLock::new(PatchesDictionary::new(num_extra_channels))),
+            splines: Arc::new(RwLock::new(Splines::default())),
+            noise: Arc::new(RwLock::new(Noise::default())),
+            lf_quant: Arc::new(RwLock::new(LfQuantFactors::default())),
+            color_correlation_params: Arc::new(RwLock::new(ColorCorrelationParams::default())),
+            epf_sigma: Arc::new(RwLock::new(SigmaSource::default())),
             dirty_lf_groups: HashSet::new(),
         })
     }
@@ -331,23 +328,23 @@ impl Frame {
                     self.decoder_state.extra_channel_info().len(),
                     &self.decoder_state.reference_frames[..],
                 )?;
-                *self.patches.borrow_mut() = p;
+                *self.patches.try_write().unwrap() = p;
             }
 
             if self.header.has_splines() {
                 info!("decoding splines");
                 let s = Splines::read(br, self.header.width * self.header.height)?;
-                *self.splines.borrow_mut() = s;
+                *self.splines.try_write().unwrap() = s;
             }
 
             if self.header.has_noise() {
                 info!("decoding noise");
                 let n = Noise::read(br)?;
-                *self.noise.borrow_mut() = n;
+                *self.noise.try_write().unwrap() = n;
             }
 
             let lf_quant = LfQuantFactors::new(br)?;
-            *self.lf_quant.borrow_mut() = lf_quant.clone();
+            *self.lf_quant.try_write().unwrap() = lf_quant.clone();
             debug!(?lf_quant);
 
             let quant_params = if self.header.encoding == Encoding::VarDCT {
@@ -369,7 +366,7 @@ impl Frame {
             let color_correlation_params = if self.header.encoding == Encoding::VarDCT {
                 info!("decoding color correlation params");
                 let ccp = ColorCorrelationParams::read(br)?;
-                *self.color_correlation_params.borrow_mut() = ccp;
+                *self.color_correlation_params.try_write().unwrap() = ccp;
                 Some(ccp)
             } else {
                 None
@@ -378,8 +375,8 @@ impl Frame {
 
             // Validate spline parameters
             if self.header.has_splines() {
-                let color_correlation_params = self.color_correlation_params.borrow();
-                self.splines.borrow_mut().initialize_draw_cache(
+                let color_correlation_params = self.color_correlation_params.try_read().unwrap();
+                self.splines.try_write().unwrap().initialize_draw_cache(
                     self.header.size().0 as u64,
                     self.header.size().1 as u64,
                     &color_correlation_params,
@@ -562,7 +559,7 @@ impl Frame {
                         let sz = GROUP_DIM * GROUP_DIM * 3;
                         let mut v = Vec::new_with_capacity(sz)?;
                         v.resize(sz, 0);
-                        Ok(AtomicRefCell::new(v))
+                        Ok(Mutex::new(v))
                     })
                     .collect::<Result<_>>()?
             };
@@ -576,7 +573,7 @@ impl Frame {
         }
         // Set EPF sigma values to the correct values if we are doing EPF.
         if self.header.restoration_filter.epf_iters > 0 {
-            *self.epf_sigma.borrow_mut() = SigmaSource::new(
+            *self.epf_sigma.try_write().unwrap() = SigmaSource::new(
                 &self.header,
                 self.lf_global.as_ref().unwrap(),
                 &self.hf_meta,

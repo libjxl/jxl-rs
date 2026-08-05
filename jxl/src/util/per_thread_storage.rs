@@ -8,12 +8,12 @@ use std::{
     ops::{Deref, DerefMut},
 };
 
-use crate::util::AtomicRefCell;
+use std::sync::Mutex;
 
 // Note: this is meant to be used only in low-contention
 // scenarios.
 pub struct PerThreadStorage<T> {
-    storage: AtomicRefCell<Vec<T>>,
+    storage: Mutex<Vec<T>>,
     init: fn() -> T,
 }
 
@@ -31,14 +31,14 @@ pub struct PerThreadStorageRef<'a, T> {
 impl<T> PerThreadStorage<T> {
     pub fn new(init: fn() -> T) -> Self {
         Self {
-            storage: AtomicRefCell::new(vec![]),
+            storage: Mutex::new(vec![]),
             init,
         }
     }
 
     pub fn get(&self) -> PerThreadStorageRef<'_, T> {
         let t = {
-            let mut a = self.storage.spin_borrow_mut();
+            let mut a = self.storage.lock().unwrap();
             if let Some(x) = a.pop() {
                 x
             } else {
@@ -56,7 +56,7 @@ impl<T> PerThreadStorage<T> {
 impl<'a, T> Drop for PerThreadStorageRef<'a, T> {
     fn drop(&mut self) {
         let v = self.val.take().unwrap();
-        let mut a = self.r.storage.spin_borrow_mut();
+        let mut a = self.r.storage.lock().unwrap();
         a.push(v);
     }
 }

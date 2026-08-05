@@ -22,9 +22,10 @@ use crate::headers::frame_header::FrameType;
 use crate::headers::{Orientation, color_encoding::ColorSpace, extra_channels::ExtraChannel};
 use crate::image::Image;
 use crate::image::Rect;
-use crate::util::AtomicRefCell;
+use crate::util::SmallVec;
 use std::collections::HashSet;
 use std::sync::Arc;
+use std::sync::RwLock;
 use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
 
@@ -369,25 +370,25 @@ impl Frame {
 
         let ready_steps = modular_global.take_ready_steps();
 
+        const TRANSFORM_STEPS_PER_TASK: usize = 3;
+
         enum RenderStep<'a> {
             Decode {
                 group: usize,
-                passes: AtomicRefCell<Vec<(usize, BitReader<'a>)>>,
+                passes: Vec<(usize, BitReader<'a>)>,
             },
             FlushVarDCT {
                 group: usize,
             },
             RunTransformSteps {
-                steps: AtomicRefCell<Vec<usize>>,
+                steps: SmallVec<usize, TRANSFORM_STEPS_PER_TASK>,
             },
         }
-
-        const TRANSFORM_STEPS_PER_TASK: usize = 3;
 
         let render_steps: Vec<_> = ready_steps
             .chunks(TRANSFORM_STEPS_PER_TASK)
             .map(|x| RenderStep::RunTransformSteps {
-                steps: AtomicRefCell::new(x.to_vec()),
+                steps: x.iter().copied().collect(),
             })
             .chain(
                 extra_groups_to_vardct_render
@@ -396,7 +397,7 @@ impl Frame {
             )
             .chain(groups.into_iter().map(|(g, p)| RenderStep::Decode {
                 group: g,
-                passes: AtomicRefCell::new(p),
+                passes: p,
             }))
             .collect();
 
@@ -414,10 +415,10 @@ impl Frame {
         let run_step = |i| {
             match &render_steps[i] {
                 RenderStep::Decode { group, passes } => {
-                    let mut passes = passes.borrow_mut();
+                    let mut new_passes: SmallVec<_, 11> = passes.iter().cloned().collect();
                     self.decode_hf_group(
                         *group,
-                        &mut passes,
+                        &mut new_passes,
                         &buffer_splitter,
                         should_render_non_final,
                     )?;
@@ -426,7 +427,7 @@ impl Frame {
                     self.decode_hf_group(*group, &mut [], &buffer_splitter, true)?;
                 }
                 RenderStep::RunTransformSteps { steps } => {
-                    let mut steps = steps.borrow_mut();
+                    let mut steps = steps.iter().copied().collect();
                     self.lf_global
                         .as_ref()
                         .unwrap()
@@ -507,12 +508,12 @@ impl Frame {
     pub(crate) fn build_render_pipeline<T: RenderPipeline>(
         decoder_state: &DecoderState,
         frame_header: &FrameHeader,
-        patches: Arc<AtomicRefCell<PatchesDictionary>>,
-        splines: Arc<AtomicRefCell<Splines>>,
-        noise: Arc<AtomicRefCell<Noise>>,
-        lf_quant: Arc<AtomicRefCell<LfQuantFactors>>,
-        color_correlation_params: Arc<AtomicRefCell<ColorCorrelationParams>>,
-        epf_sigma: Arc<AtomicRefCell<SigmaSource>>,
+        patches: Arc<RwLock<PatchesDictionary>>,
+        splines: Arc<RwLock<Splines>>,
+        noise: Arc<RwLock<Noise>>,
+        lf_quant: Arc<RwLock<LfQuantFactors>>,
+        color_correlation_params: Arc<RwLock<ColorCorrelationParams>>,
+        epf_sigma: Arc<RwLock<SigmaSource>>,
         pixel_format: &JxlPixelFormat,
         output_profile: &JxlColorProfile,
     ) -> Result<Box<T>> {

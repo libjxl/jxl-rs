@@ -8,23 +8,30 @@ use std::{
     ops::{Deref, DerefMut},
 };
 
+use std::sync::Mutex;
+
 use crate::{
     api::JxlOutputBuffer,
     headers::Orientation,
     image::{Image, ImageDataType, Rect},
-    util::{AtomicRefCell, ChannelVec, ShiftRightCeil},
+    util::{ChannelVec, ShiftRightCeil},
 };
 
 pub struct OutputChannelSplitter<'a> {
     // Safety invariant: all the currently-borrowed rects of are stored in
     // `borrowed_rects`.
     buffer: JxlOutputBuffer<'a>,
-    borrowed_rects: AtomicRefCell<BTreeSet<Rect>>,
+    borrowed_rects: Mutex<BTreeSet<Rect>>,
 }
 
 impl<'a> Drop for OutputChannelSplitter<'a> {
     fn drop(&mut self) {
-        assert!(self.borrowed_rects.borrow().is_empty())
+        assert!(
+            self.borrowed_rects
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .is_empty()
+        )
     }
 }
 
@@ -32,7 +39,7 @@ impl<'a> OutputChannelSplitter<'a> {
     pub fn new(buffer: JxlOutputBuffer<'a>) -> Self {
         Self {
             buffer,
-            borrowed_rects: AtomicRefCell::new(BTreeSet::new()),
+            borrowed_rects: Mutex::new(BTreeSet::new()),
         }
     }
 
@@ -53,7 +60,10 @@ impl<'a> OutputChannelSplitter<'a> {
 
     #[allow(unsafe_code)]
     pub fn borrow_rect(&self, rect: Rect) -> OutputChannelRef<'a, '_> {
-        let mut rects = self.borrowed_rects.spin_borrow_mut();
+        let mut rects = self
+            .borrowed_rects
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         for r in rects.iter() {
             assert!(!r.intersects(&rect));
         }
@@ -94,7 +104,11 @@ impl<'a, 'b> DerefMut for OutputChannelRef<'a, 'b> {
 impl<'a, 'b> Drop for OutputChannelRef<'a, 'b> {
     fn drop(&mut self) {
         self.buf = None;
-        let mut b = self.s.borrowed_rects.spin_borrow_mut();
+        let mut b = self
+            .s
+            .borrowed_rects
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         // Safety note: we just dropped the local buffer, and the
         // safety invariant of `self` says that this is the correct rect
         // to remove.
@@ -114,13 +128,13 @@ pub struct SaveStageBufferInfo {
 /// Data structure responsible for handing out access to portions of the output buffers.
 pub struct BufferSplitter<'a> {
     buffers: ChannelVec<Option<OutputChannelSplitter<'a>>>,
-    requested_rects: AtomicRefCell<Vec<Rect>>,
+    requested_rects: Mutex<Vec<Rect>>,
 }
 
 impl<'a> BufferSplitter<'a> {
     pub fn new(bufs: &'a mut [Option<JxlOutputBuffer<'_>>]) -> Self {
         Self {
-            requested_rects: AtomicRefCell::new(vec![]),
+            requested_rects: Mutex::new(vec![]),
             buffers: bufs
                 .iter_mut()
                 .map(|x| {
@@ -141,7 +155,7 @@ impl<'a> BufferSplitter<'a> {
         frame_origin: (isize, isize),
     ) -> ChannelVec<Option<OutputChannelRef<'a, '_>>> {
         {
-            let mut req = self.requested_rects.spin_borrow_mut();
+            let mut req = self.requested_rects.lock().unwrap();
             req.push(rect);
         }
         let rect = if !outside_current_frame {
@@ -206,7 +220,7 @@ impl<'a> BufferSplitter<'a> {
     }
 
     pub fn into_changed_regions(self) -> Vec<Rect> {
-        std::mem::take(&mut *self.requested_rects.borrow_mut())
+        self.requested_rects.into_inner().unwrap()
     }
 
     #[cfg(test)]

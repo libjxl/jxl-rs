@@ -3,13 +3,12 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
 
 use crate::{
     frame::quantizer::LfQuantFactors,
     headers::bit_depth::BitDepth,
     render::{Channels, ChannelsMut, ErasedLocalState, RenderPipelineInOutStage, StageSpecialCase},
-    util::AtomicRefCell,
 };
 use jxl_simd::{F32SimdVec, I32SimdVec, SimdMask, simd_function};
 
@@ -278,13 +277,13 @@ const DITHER_TABLE: [[f32; 48]; 32] = [
 
 pub struct ConvertModularXYBToF32Stage {
     first_channel: usize,
-    lf_quant: Arc<AtomicRefCell<LfQuantFactors>>,
+    lf_quant: Arc<RwLock<LfQuantFactors>>,
 }
 
 impl ConvertModularXYBToF32Stage {
     pub fn new(
         first_channel: usize,
-        lf_quant: Arc<AtomicRefCell<LfQuantFactors>>,
+        lf_quant: Arc<RwLock<LfQuantFactors>>,
     ) -> ConvertModularXYBToF32Stage {
         ConvertModularXYBToF32Stage {
             first_channel,
@@ -322,7 +321,7 @@ impl RenderPipelineInOutStage for ConvertModularXYBToF32Stage {
         output_rows: &mut ChannelsMut<f32>,
         _state: Option<&mut ErasedLocalState>,
     ) {
-        let lf_quant = self.lf_quant.borrow();
+        let lf_quant = self.lf_quant.try_read().unwrap();
         let [scale_x, scale_y, scale_b] = lf_quant.quant_factors;
         assert_eq!(
             input_rows.len(),

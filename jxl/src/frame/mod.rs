@@ -29,7 +29,7 @@ use quant_weights::DequantMatrices;
 use quantizer::{LfQuantFactors, QuantizerParams};
 
 use crate::features::epf::SigmaSource;
-use crate::util::AtomicRefCell;
+use std::sync::{Mutex, RwLock};
 
 mod adaptive_lf_smoothing;
 mod block_context_map;
@@ -71,7 +71,7 @@ pub struct HfGlobalState {
     num_histograms: u32,
     passes: Vec<PassState>,
     dequant_matrices: DequantMatrices,
-    hf_coefficients: Vec<AtomicRefCell<Vec<i32>>>,
+    hf_coefficients: Vec<Mutex<Vec<i32>>>,
 }
 
 #[derive(Debug)]
@@ -299,12 +299,12 @@ pub struct Frame {
     /// Reusable buffers for VarDCT group decoding.
     vardct_buffers: PerThreadStorage<group::VarDctBuffers>,
     group_status: GroupStatus,
-    patches: Arc<AtomicRefCell<PatchesDictionary>>,
-    splines: Arc<AtomicRefCell<Splines>>,
-    noise: Arc<AtomicRefCell<Noise>>,
-    lf_quant: Arc<AtomicRefCell<LfQuantFactors>>,
-    color_correlation_params: Arc<AtomicRefCell<ColorCorrelationParams>>,
-    epf_sigma: Arc<AtomicRefCell<SigmaSource>>,
+    patches: Arc<RwLock<PatchesDictionary>>,
+    splines: Arc<RwLock<Splines>>,
+    noise: Arc<RwLock<Noise>>,
+    lf_quant: Arc<RwLock<LfQuantFactors>>,
+    color_correlation_params: Arc<RwLock<ColorCorrelationParams>>,
+    epf_sigma: Arc<RwLock<SigmaSource>>,
     // LF groups that received data and thus should trigger a modular
     // re-render of the corresponding groups.
     dirty_lf_groups: HashSet<usize>,
