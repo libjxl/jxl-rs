@@ -3,7 +3,6 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-mod atomic_refcell;
 mod bits;
 mod cacheline;
 mod concat_slice;
@@ -21,7 +20,6 @@ pub mod tracing_wrappers;
 mod vec_helpers;
 mod xorshift128plus;
 
-pub use atomic_refcell::*;
 pub use bits::*;
 pub use cacheline::*;
 pub use concat_slice::*;

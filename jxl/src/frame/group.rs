@@ -428,7 +428,7 @@ pub fn decode_vardct_group(
     // TODO(veluca): improve coefficient storage (smaller allocations, use 16 bits if possible).
     let mut coeffs;
     let coeffs = if !hf_global.hf_coefficients.is_empty() {
-        coeffs = hf_global.hf_coefficients[group].borrow_mut();
+        coeffs = hf_global.hf_coefficients[group].try_lock().unwrap();
         &mut *coeffs
     } else {
         &mut buffers.coeffs_storage

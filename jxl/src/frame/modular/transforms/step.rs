@@ -5,7 +5,10 @@
 
 use std::{
     fmt::Debug,
-    sync::atomic::{AtomicUsize, Ordering},
+    sync::{
+        RwLockReadGuard,
+        atomic::{AtomicUsize, Ordering},
+    },
 };
 
 use crate::{
@@ -17,9 +20,8 @@ use crate::{
     },
     headers::{frame_header::FrameHeader, modular::WeightedHeader},
     image::{Image, ImageRect, Rect},
-    util::{AtomicRef, AtomicRefMut, SmallVec, tracing_wrappers::*},
+    util::{SmallVec, tracing_wrappers::*},
 };
-use std::ops::{Deref, DerefMut};
 
 use super::{RctOp, RctPermutation};
 
@@ -104,10 +106,8 @@ struct SqueezeInfo<T> {
 fn borrow_channel(
     buffers: &[ModularBufferInfo],
     x: (usize, usize),
-) -> AtomicRef<'_, ModularChannel> {
-    AtomicRef::map(buffers[x.0].buffer_grid[x.1].data.borrow(), |x| {
-        x.as_ref().unwrap()
-    })
+) -> RwLockReadGuard<'_, Option<ModularChannel>> {
+    buffers[x.0].buffer_grid[x.1].data.try_read().unwrap()
 }
 
 impl SqueezeInfo<(usize, usize)> {
@@ -179,7 +179,7 @@ impl SqueezeInfo<(usize, usize)> {
     fn borrow<'a>(
         &'a self,
         buffers: &'a [ModularBufferInfo],
-    ) -> SqueezeInfo<AtomicRef<'a, ModularChannel>> {
+    ) -> SqueezeInfo<RwLockReadGuard<'a, Option<ModularChannel>>> {
         SqueezeInfo {
             kind: self.kind,
             out_rect: self.out_rect,
@@ -199,17 +199,20 @@ impl SqueezeInfo<(usize, usize)> {
     }
 }
 
-impl<'a> SqueezeInfo<AtomicRef<'a, ModularChannel>> {
+impl<'a> SqueezeInfo<RwLockReadGuard<'a, Option<ModularChannel>>> {
     fn in_avg_rect(&self) -> ImageRect<'_, i32> {
-        self.in_avg.data.get_rect(self.avg_rect)
+        self.in_avg.as_ref().unwrap().data.get_rect(self.avg_rect)
     }
     fn in_res_rect(&self) -> ImageRect<'_, i32> {
-        self.in_res.data.get_rect(self.res_rect)
+        self.in_res.as_ref().unwrap().data.get_rect(self.res_rect)
     }
     fn in_next_avg_rect(&self) -> Option<ImageRect<'_, i32>> {
-        self.in_next_avg
-            .as_ref()
-            .map(|x| x.data.get_rect(self.next_avg_rect.unwrap()))
+        self.in_next_avg.as_ref().map(|x| {
+            x.as_ref()
+                .unwrap()
+                .data
+                .get_rect(self.next_avg_rect.unwrap())
+        })
     }
 }
 
@@ -310,7 +313,7 @@ impl TransformStepChunk {
                     if b_in.data_status == DataStatus::Zero && !b_in.has_buffer() {
                         b_out.ensure_buffer(&buffers[buf_out[i]].info)?;
                     } else {
-                        *b_out.data.borrow_mut() = Some(b_in.get_buffer(is_final)?);
+                        *b_out.data.try_write().unwrap() = Some(b_in.get_buffer(is_final)?);
                     }
                 }
                 with_buffers(buffers, buf_out, out_grid, |mut bufs| {
@@ -354,25 +357,24 @@ impl TransformStepChunk {
                     let grid_y0 = grid_y.saturating_sub(border);
                     let grid_x1 = grid_x + 1;
                     let grid_y1 = grid_y + 1;
-                    let mut out_bufs = vec![];
+                    let mut guards = vec![];
                     for i in buf_out {
                         for gy in grid_y0..grid_y1 {
                             for gx in grid_x0..grid_x1 {
                                 let grid = gy * grid_shape.0 + gx;
                                 let buf = &buffers[*i];
                                 let b = &buf.buffer_grid[grid];
-                                let data = b.data.borrow_mut();
-                                out_bufs.push(AtomicRefMut::map(data, |x| x.as_mut().unwrap()));
+                                guards.push(b.data.try_write().unwrap());
                             }
                         }
                     }
                     let mut out_buf_refs: Vec<&mut ModularChannel> =
-                        out_bufs.iter_mut().map(|x| x.deref_mut()).collect();
+                        guards.iter_mut().map(|g| g.as_mut().unwrap()).collect();
                     if matches!(predictor, Predictor::Zero)
                         && buffers[*buf_in].buffer_grid[out_grid].data_status == DataStatus::Zero
                     {
                         super::palette::zero_palette_step_one_group(
-                            &img_pal,
+                            img_pal.as_ref().unwrap(),
                             &mut out_buf_refs,
                             grid_x - grid_x0,
                             grid_y - grid_y0,
@@ -384,8 +386,8 @@ impl TransformStepChunk {
                     } else {
                         let img_in = borrow_channel(buffers, (*buf_in, out_grid));
                         super::palette::do_palette_step_one_group(
-                            &img_in,
-                            &img_pal,
+                            img_in.as_ref().unwrap(),
+                            img_pal.as_ref().unwrap(),
                             &mut out_buf_refs,
                             grid_x - grid_x0,
                             grid_y - grid_y0,
@@ -426,25 +428,24 @@ impl TransformStepChunk {
                         with_buffers(buffers, buf_out, out_grid + grid_x, |_| Ok(()))?;
                     }
                     let in_buf_refs: Vec<&ModularChannel> =
-                        in_bufs.iter().map(|x| x.deref()).collect();
+                        in_bufs.iter().map(|x| x.as_ref().unwrap()).collect();
                     let img_pal = borrow_channel(buffers, (*buf_pal, 0));
-                    let mut out_bufs = vec![];
+                    let mut guards = vec![];
                     for i in buf_out {
                         for grid_y in grid_y0..grid_y1 {
                             for grid_x in 0..grid_shape.0 {
                                 let grid = grid_y * grid_shape.0 + grid_x;
                                 let buf = &buffers[*i];
                                 let b = &buf.buffer_grid[grid];
-                                let data = b.data.borrow_mut();
-                                out_bufs.push(AtomicRefMut::map(data, |x| x.as_mut().unwrap()));
+                                guards.push(b.data.try_write().unwrap());
                             }
                         }
                     }
                     let mut out_buf_refs: Vec<&mut ModularChannel> =
-                        out_bufs.iter_mut().map(|x| x.deref_mut()).collect();
+                        guards.iter_mut().map(|g| g.as_mut().unwrap()).collect();
                     super::palette::do_palette_step_group_row(
                         &in_buf_refs,
-                        &img_pal,
+                        img_pal.as_ref().unwrap(),
                         &mut out_buf_refs,
                         grid_y - grid_y0,
                         grid_shape.0,
@@ -504,11 +505,12 @@ impl TransformStepChunk {
                         }
                         SqueezeStepKind::Regular => {
                             let info = info.borrow(buffers);
+                            let out_prev = info.out_prev.as_ref().map(|g| g.as_ref().unwrap());
                             super::squeeze::do_hsqueeze_step(
                                 &info.in_avg_rect(),
                                 &info.in_res_rect(),
                                 &info.in_next_avg_rect(),
-                                &info.out_prev,
+                                out_prev,
                                 &mut bufs,
                             )
                         }
@@ -562,11 +564,12 @@ impl TransformStepChunk {
                         }
                         SqueezeStepKind::Regular => {
                             let info = info.borrow(buffers);
+                            let out_prev = info.out_prev.as_ref().map(|g| g.as_ref().unwrap());
                             super::squeeze::do_vsqueeze_step(
                                 &info.in_avg_rect(),
                                 &info.in_res_rect(),
                                 &info.in_next_avg_rect(),
-                                &info.out_prev,
+                                out_prev,
                                 &mut bufs,
                             )
                         }

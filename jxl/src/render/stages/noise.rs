@@ -5,7 +5,7 @@
 
 #![allow(clippy::needless_range_loop)]
 
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
 
 use crate::{
     features::noise::Noise,
@@ -14,7 +14,6 @@ use crate::{
         Channels, ChannelsMut, ErasedLocalState, RenderPipelineInOutStage,
         RenderPipelineInPlaceStage,
     },
-    util::AtomicRefCell,
 };
 use jxl_simd::{F32SimdVec, simd_function};
 
@@ -109,16 +108,16 @@ impl RenderPipelineInOutStage for ConvolveNoiseStage {
 }
 
 pub struct AddNoiseStage {
-    noise: Arc<AtomicRefCell<Noise>>,
+    noise: Arc<RwLock<Noise>>,
     first_channel: usize,
-    color_correlation: Arc<AtomicRefCell<ColorCorrelationParams>>,
+    color_correlation: Arc<RwLock<ColorCorrelationParams>>,
 }
 
 impl AddNoiseStage {
     #[allow(dead_code)]
     pub fn new(
-        noise: Arc<AtomicRefCell<Noise>>,
-        color_correlation: Arc<AtomicRefCell<ColorCorrelationParams>>,
+        noise: Arc<RwLock<Noise>>,
+        color_correlation: Arc<RwLock<ColorCorrelationParams>>,
         first_channel: usize,
     ) -> AddNoiseStage {
         assert!(first_channel > 2);
@@ -156,11 +155,11 @@ impl RenderPipelineInPlaceStage for AddNoiseStage {
         row: &mut [&mut [f32]],
         _state: Option<&mut ErasedLocalState>,
     ) {
-        let noise = self.noise.borrow();
+        let noise = self.noise.try_read().unwrap();
         if noise.lut == [0.0; 8] {
             return;
         }
-        let color_correlation = self.color_correlation.borrow();
+        let color_correlation = self.color_correlation.try_read().unwrap();
         let norm_const = 0.22;
         let ytox = color_correlation.y_to_x_lf();
         let ytob = color_correlation.y_to_b_lf();
@@ -193,7 +192,7 @@ impl RenderPipelineInPlaceStage for AddNoiseStage {
 
 #[cfg(test)]
 mod test {
-    use std::sync::Arc;
+    use std::sync::{Arc, RwLock};
 
     use crate::{
         error::Result,
@@ -205,7 +204,6 @@ mod test {
             test::make_and_run_simple_pipeline,
         },
         tests::assert_close,
-        util::AtomicRefCell,
     };
     use test_log::test;
 
@@ -242,10 +240,10 @@ mod test {
         let input_c4: Image<f32> = Image::new_range((xsize, ysize), 0.1, 0.1)?;
         let input_c5: Image<f32> = Image::new_range((xsize, ysize), 0.1, 0.1)?;
         let stage = AddNoiseStage::new(
-            Arc::new(AtomicRefCell::new(Noise {
+            Arc::new(RwLock::new(Noise {
                 lut: [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0],
             })),
-            Arc::new(AtomicRefCell::new(ColorCorrelationParams::default())),
+            Arc::new(RwLock::new(ColorCorrelationParams::default())),
             3,
         );
         let output = make_and_run_simple_pipeline(
@@ -339,10 +337,10 @@ mod test {
         crate::render::test::test_stage_consistency(
             || {
                 AddNoiseStage::new(
-                    Arc::new(AtomicRefCell::new(Noise {
+                    Arc::new(RwLock::new(Noise {
                         lut: [0.0, 2.0, 1.0, 0.0, 1.0, 3.0, 1.1, 2.3],
                     })),
-                    Arc::new(AtomicRefCell::new(ColorCorrelationParams::default())),
+                    Arc::new(RwLock::new(ColorCorrelationParams::default())),
                     3,
                 )
             },

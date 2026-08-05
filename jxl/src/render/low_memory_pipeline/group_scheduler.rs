@@ -77,12 +77,13 @@ impl LowMemoryRenderPipeline {
         kind: usize,
     ) -> Option<OwnedRawImage> {
         self.scratch_channel_buffers
-            .try_borrow_mut()
+            .try_lock()
+            .ok()
             .and_then(|mut x| x[channel * 3 + kind].pop())
     }
 
     fn store_scratch_buffer(&self, channel: usize, kind: usize, image: OwnedRawImage) {
-        let Some(mut buf) = self.scratch_channel_buffers.try_borrow_mut() else {
+        let Some(mut buf) = self.scratch_channel_buffers.try_lock().ok() else {
             return;
         };
         if kind == 0
@@ -126,7 +127,12 @@ impl LowMemoryRenderPipeline {
                 continue;
             }
             let (bx, by) = self.border_size;
-            let (sx, sy) = buf.data[c].borrow().as_ref().unwrap().byte_size();
+            let (sx, sy) = buf.data[c]
+                .try_read()
+                .unwrap()
+                .as_ref()
+                .unwrap()
+                .byte_size();
             let ChannelInfo {
                 ty,
                 downsample: (dx, dy),
@@ -134,7 +140,7 @@ impl LowMemoryRenderPipeline {
             let ty = ty.unwrap();
             let bx = bx >> dx;
             let by = by >> dy;
-            let mut topbottom = if let Some(b) = buf.topbottom[c].borrow_mut().take() {
+            let mut topbottom = if let Some(b) = buf.topbottom[c].try_write().unwrap().take() {
                 b
             } else if let Some(b) = self.maybe_get_scratch_buffer(c, 1) {
                 b
@@ -143,7 +149,7 @@ impl LowMemoryRenderPipeline {
                 let width = (1 << self.shared.log_group_size) * ty.size();
                 OwnedRawImage::new_zeroed_with_padding((width, height), (0, 0), (0, 0))?
             };
-            let mut leftright = if let Some(b) = buf.leftright[c].borrow_mut().take() {
+            let mut leftright = if let Some(b) = buf.leftright[c].try_write().unwrap().take() {
                 b
             } else if let Some(b) = self.maybe_get_scratch_buffer(c, 2) {
                 b
@@ -152,7 +158,7 @@ impl LowMemoryRenderPipeline {
                 let width = 4 * bx * ty.size();
                 OwnedRawImage::new_zeroed_with_padding((width, height), (0, 0), (0, 0))?
             };
-            let data = &buf.data[c].borrow();
+            let data = buf.data[c].try_read().unwrap();
             let input = data.as_ref().unwrap();
             if by != 0 {
                 for y in 0..(2 * by).min(sy) {
@@ -169,8 +175,8 @@ impl LowMemoryRenderPipeline {
                     row_out[4 * bx * ty.size() - cs..].copy_from_slice(&row_in[sx - cs..]);
                 }
             }
-            *buf.leftright[c].borrow_mut() = Some(leftright);
-            *buf.topbottom[c].borrow_mut() = Some(topbottom);
+            *buf.leftright[c].try_write().unwrap() = Some(leftright);
+            *buf.topbottom[c].try_write().unwrap() = Some(topbottom);
         }
 
         let ready_mask = self.input_buffers.mark_ready(g);
