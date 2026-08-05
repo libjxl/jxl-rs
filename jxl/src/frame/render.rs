@@ -415,7 +415,12 @@ impl Frame {
             match &render_steps[i] {
                 RenderStep::Decode { group, passes } => {
                     let mut passes = passes.borrow_mut();
-                    self.decode_hf_group(*group, &mut passes, &buffer_splitter, do_flush)?;
+                    self.decode_hf_group(
+                        *group,
+                        &mut passes,
+                        &buffer_splitter,
+                        should_render_non_final,
+                    )?;
                 }
                 RenderStep::FlushVarDCT { group } => {
                     self.decode_hf_group(*group, &mut [], &buffer_splitter, true)?;
