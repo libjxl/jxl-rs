@@ -187,12 +187,13 @@ impl CodestreamParser {
                 }
                 Err(Error::OutOfBounds(n)) => {
                     let new_range = self.local_buffer.range();
-                    let enlarge = new_range == range && !self.local_buffer.can_read_more();
+                    let made_progress = new_range != range;
+                    let enlarge = !made_progress && !self.local_buffer.can_read_more();
                     if enlarge {
                         self.local_buffer.enlarge();
                     }
                     self.header_needed_bytes = Some(n);
-                    if c > 0 || enlarge {
+                    if c > 0 || made_progress || enlarge {
                         continue;
                     }
                     return Err(Error::OutOfBounds(n));
