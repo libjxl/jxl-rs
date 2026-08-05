@@ -406,6 +406,7 @@ declare_test_file!(
         (10332, 0.0004338)
     ]
 );
+declare_test_file!(issue865_large_toc, "issue865_large_toc.jxl");
 declare_test_file!(large_header, "large_header.jxl");
 declare_test_file!(lossy_with_icc, "lossy_with_icc.jxl");
 declare_test_file!(
