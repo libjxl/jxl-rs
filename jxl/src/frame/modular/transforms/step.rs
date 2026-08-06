@@ -353,20 +353,36 @@ impl TransformStepChunk {
                     let grid_x = out_grid % grid_shape.0;
                     let grid_y = out_grid / grid_shape.0;
                     let border = if *predictor == Predictor::Zero { 0 } else { 1 };
-                    let grid_x0 = grid_x.saturating_sub(border);
-                    let grid_y0 = grid_y.saturating_sub(border);
-                    let grid_x1 = grid_x + 1;
-                    let grid_y1 = grid_y + 1;
+                    let has_left = border > 0 && grid_x > 0;
+                    let has_top = border > 0 && grid_y > 0;
+                    // Neighbouring grid positions are only read as prediction context,
+                    // so take read locks on them: other transforms (e.g. Output) may
+                    // read them concurrently.
+                    let ctx_guards = |dx: usize, dy: usize| {
+                        buf_out
+                            .iter()
+                            .map(|i| {
+                                let grid = (grid_y - dy) * grid_shape.0 + (grid_x - dx);
+                                borrow_channel(buffers, (*i, grid))
+                            })
+                            .collect::<Vec<_>>()
+                    };
+                    let left_guards = has_left.then(|| ctx_guards(1, 0));
+                    let top_guards = has_top.then(|| ctx_guards(0, 1));
+                    let topleft_guards = (has_left && has_top).then(|| ctx_guards(1, 1));
+                    let left_refs: Option<Vec<&ModularChannel>> = left_guards
+                        .as_ref()
+                        .map(|g| g.iter().map(|x| x.as_ref().unwrap()).collect());
+                    let top_refs: Option<Vec<&ModularChannel>> = top_guards
+                        .as_ref()
+                        .map(|g| g.iter().map(|x| x.as_ref().unwrap()).collect());
+                    let topleft_refs: Option<Vec<&ModularChannel>> = topleft_guards
+                        .as_ref()
+                        .map(|g| g.iter().map(|x| x.as_ref().unwrap()).collect());
                     let mut guards = vec![];
                     for i in buf_out {
-                        for gy in grid_y0..grid_y1 {
-                            for gx in grid_x0..grid_x1 {
-                                let grid = gy * grid_shape.0 + gx;
-                                let buf = &buffers[*i];
-                                let b = &buf.buffer_grid[grid];
-                                guards.push(b.data.try_write().unwrap());
-                            }
-                        }
+                        let b = &buffers[*i].buffer_grid[out_grid];
+                        guards.push(b.data.try_write().unwrap());
                     }
                     let mut out_buf_refs: Vec<&mut ModularChannel> =
                         guards.iter_mut().map(|g| g.as_mut().unwrap()).collect();
@@ -376,10 +392,6 @@ impl TransformStepChunk {
                         super::palette::zero_palette_step_one_group(
                             img_pal.as_ref().unwrap(),
                             &mut out_buf_refs,
-                            grid_x - grid_x0,
-                            grid_y - grid_y0,
-                            grid_x1 - grid_x0,
-                            grid_y1 - grid_y0,
                             *num_colors,
                             *num_deltas,
                         );
@@ -389,10 +401,9 @@ impl TransformStepChunk {
                             img_in.as_ref().unwrap(),
                             img_pal.as_ref().unwrap(),
                             &mut out_buf_refs,
-                            grid_x - grid_x0,
-                            grid_y - grid_y0,
-                            grid_x1 - grid_x0,
-                            grid_y1 - grid_y0,
+                            left_refs.as_deref(),
+                            top_refs.as_deref(),
+                            topleft_refs.as_deref(),
                             *num_colors,
                             *num_deltas,
                             *predictor,
@@ -417,8 +428,6 @@ impl TransformStepChunk {
                 {
                     assert_eq!(out_grid % grid_shape.0, 0);
                     let grid_y = out_grid / grid_shape.0;
-                    let grid_y0 = grid_y.saturating_sub(1);
-                    let grid_y1 = grid_y + 1;
                     let mut in_bufs = vec![];
                     for grid_x in 0..grid_shape.0 {
                         let grid = grid_y * grid_shape.0 + grid_x;
@@ -430,15 +439,26 @@ impl TransformStepChunk {
                     let in_buf_refs: Vec<&ModularChannel> =
                         in_bufs.iter().map(|x| x.as_ref().unwrap()).collect();
                     let img_pal = borrow_channel(buffers, (*buf_pal, 0));
+                    // The previous row of output grids is only read as prediction
+                    // context, so take read locks on it: other transforms (e.g.
+                    // Output) may read it concurrently.
+                    let mut prev_guards = vec![];
+                    if grid_y > 0 {
+                        for i in buf_out {
+                            for grid_x in 0..grid_shape.0 {
+                                let grid = (grid_y - 1) * grid_shape.0 + grid_x;
+                                prev_guards.push(borrow_channel(buffers, (*i, grid)));
+                            }
+                        }
+                    }
+                    let prev_refs: Vec<&ModularChannel> =
+                        prev_guards.iter().map(|g| g.as_ref().unwrap()).collect();
                     let mut guards = vec![];
                     for i in buf_out {
-                        for grid_y in grid_y0..grid_y1 {
-                            for grid_x in 0..grid_shape.0 {
-                                let grid = grid_y * grid_shape.0 + grid_x;
-                                let buf = &buffers[*i];
-                                let b = &buf.buffer_grid[grid];
-                                guards.push(b.data.try_write().unwrap());
-                            }
+                        for grid_x in 0..grid_shape.0 {
+                            let grid = grid_y * grid_shape.0 + grid_x;
+                            let b = &buffers[*i].buffer_grid[grid];
+                            guards.push(b.data.try_write().unwrap());
                         }
                     }
                     let mut out_buf_refs: Vec<&mut ModularChannel> =
@@ -447,7 +467,7 @@ impl TransformStepChunk {
                         &in_buf_refs,
                         img_pal.as_ref().unwrap(),
                         &mut out_buf_refs,
-                        grid_y - grid_y0,
+                        (grid_y > 0).then_some(&prev_refs[..]),
                         grid_shape.0,
                         *num_colors,
                         *num_deltas,
