@@ -317,7 +317,18 @@ impl LowMemoryRenderPipeline {
         // to an actual row of the current processing stage; actual processing happens
         // when vy % (1<<vshift) == 0.
 
-        let vy0 = y0.saturating_sub(num_extra_rows);
+        // Rects are not guaranteed to start at a vertical position that is aligned
+        // to the rows of subsampled channels/stages. Since border rows are computed
+        // with floor semantics (see the parity adjustments in the loop below), the
+        // first border row of a subsampled channel can start up to (1 << dy) - 1
+        // virtual rows before y0 - scaled_y_border; extend the virtual row range
+        // upwards so that it is still produced.
+        let max_dy = (0..num_channels)
+            .map(|c| self.shared.channel_info[0][c].downsample.1 as usize)
+            .chain(self.downsampling_for_stage.iter().map(|d| d.1))
+            .max()
+            .unwrap_or(0);
+        let vy0 = y0.saturating_sub(num_extra_rows + (1 << max_dy) - 1);
         let vy1 = image_area.end().1 + num_extra_rows;
 
         let fillers: ChannelVec<_> = (0..num_channels)
@@ -340,10 +351,14 @@ impl LowMemoryRenderPipeline {
                 if stage_vy % (1 << dy) != 0 {
                     continue;
                 }
-                if stage_vy - (y0 as isize) < -(scaled_y_border as isize) {
+                let y = stage_vy >> dy;
+                // The first needed row is computed with *floor* semantics (matching the
+                // x direction and BufferFiller::new): if y0 - scaled_y_border is not
+                // aligned to the channel's vertical subsampling, the subsampled row
+                // containing it must still be filled, as downstream stages will read it.
+                if y < (y0 as isize - scaled_y_border as isize) >> dy {
                     continue;
                 }
-                let y = stage_vy >> dy;
                 // Do not produce rows in out-of-bounds areas.
                 if y < 0 || y >= self.shared.input_size.1.shrc(dy) as isize {
                     continue;
@@ -362,10 +377,18 @@ impl LowMemoryRenderPipeline {
                 if stage_vy % (1 << dy) != 0 {
                     continue;
                 }
-                if stage_vy - (y0 as isize) < -(scaled_y_border as isize) {
+                let y = stage_vy >> dy;
+                if matches!(stage, Stage::Save(_)) {
+                    // Save stages write to shared output buffers, so they must only
+                    // process rows owned by this rect; keep ceil semantics for them.
+                    if stage_vy - (y0 as isize) < -(scaled_y_border as isize) {
+                        continue;
+                    }
+                } else if y < (y0 as isize - scaled_y_border as isize) >> dy {
+                    // As for input channels, border rows of vertically subsampled
+                    // stages are computed with floor semantics.
                     continue;
                 }
-                let y = stage_vy >> dy;
                 let shifted_ysize = self.shared.input_size.1.shrc(dy);
                 // Do not produce rows in out-of-bounds areas.
                 if y < 0 || y >= shifted_ysize as isize {
