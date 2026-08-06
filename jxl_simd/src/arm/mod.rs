@@ -42,6 +42,7 @@ macro_rules! simd_function_body_neon {
             return $name(d, $($val),*);
         } else if let Some(d) = $crate::NeonDescriptor::new() {
             #[target_feature(enable = "neon")]
+			#[cfg_attr(target_arch = "arm", target_feature(enable = "v7"))]
             fn neon(d: $crate::NeonDescriptor, $($arg: $ty),*) $(-> $ret)? {
                 $name(d, $($val),*)
             }
@@ -87,6 +88,7 @@ macro_rules! test_neon {
                 use $crate::SimdDescriptor;
                 let Some(d) = $crate::NeonDescriptor::new() else { return; };
                 #[target_feature(enable = "neon")]
+                #[cfg_attr(target_arch = "arm", target_feature(enable = "v7"))]
                 fn inner(d: $crate::NeonDescriptor) {
                     $name(d)
                 }

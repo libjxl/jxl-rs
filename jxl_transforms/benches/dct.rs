@@ -4,6 +4,15 @@
 // license that can be found in the LICENSE file.
 
 #![allow(clippy::identity_op)]
+#![cfg_attr(
+    all(
+        target_arch = "arm",
+        target_feature = "v7",
+        feature = "nightly",
+        feature = "neon"
+    ),
+    feature(arm_target_feature)
+)]
 
 use criterion::measurement::Measurement;
 use criterion::{criterion_group, criterion_main, BenchmarkGroup, BenchmarkId, Criterion};

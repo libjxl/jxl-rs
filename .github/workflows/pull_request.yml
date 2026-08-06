@@ -67,6 +67,14 @@ jobs:
       matrix:
         features: [all, none]
         os: [ubuntu-24.04-arm, ubuntu-latest]
+        include:
+          - os: ubuntu-24.04-arm
+            nightly: true
+            features: neon
+            target: thumbv7neon-unknown-linux-gnueabihf
+          - os: ubuntu-latest
+            features: simd128
+            target: wasm32-wasip1
     steps:
       - name: Checkout
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
@@ -78,6 +86,7 @@ jobs:
         uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
         with:
           components: clippy
+          targets: ${{ matrix.target }}
 
       - name: Rust cache
         uses: Swatinem/rust-cache@98c8021b550208e191a6a3145459bfc9fb29c4c0 # v2.8.0
@@ -87,11 +96,17 @@ jobs:
 
       - name: Clippy with all features
         if: ${{ matrix.features == 'all' }}
-        run: cargo clippy --release --all-targets --all-features --tests --all -- -D warnings
+        run: cargo clippy --release --all-targets --all-features --all -- -D warnings
 
       - name: Clippy with no features
         if: ${{ matrix.features == 'none' }}
-        run: cargo clippy --release --all-targets --no-default-features --tests --all -- -D warnings
+        run: cargo clippy --release --all-targets --no-default-features --all -- -D warnings
+
+      - name: Clippy with ${{ matrix.features }} features
+        if: ${{ matrix.target }}
+        env:
+          RUSTC_BOOTSTRAP: ${{ matrix.nightly && 1 || 0 }}
+        run: cargo clippy --release -p jxl_simd --no-default-features --features ${{ matrix.features }} ${{ matrix.nightly && '--features nightly' }} --target ${{ matrix.target }} -- -D warnings
 
   test:
     runs-on: ${{ matrix.os || 'ubuntu-latest' }}
@@ -109,6 +124,9 @@ jobs:
             simd: avx512
           - os: ubuntu-24.04-arm
             simd: neon
+          - os: ubuntu-24.04-arm
+            simd: nightly-neon
+            target: thumbv7neon-unknown-linux-gnueabihf
           - os: ubuntu-latest
             simd: simd128
             target: wasm32-wasip1
@@ -129,6 +147,12 @@ jobs:
         with:
           targets: ${{ matrix.target }}
 
+      - name: Install ARMv7 toolchain
+        if: ${{ matrix.simd == 'nightly-neon' }}
+        run: |
+          sudo dpkg --add-architecture armhf
+          sudo apt install --update -y gcc-arm-linux-gnueabihf libc6-dev:armhf
+
       - name: Install wasmtime
         if: ${{ matrix.target == 'wasm32-wasip1' }}
         uses: bytecodealliance/actions/wasmtime/setup@v1
@@ -142,6 +166,16 @@ jobs:
         if: ${{ matrix.simd != 'none' && !matrix.target }}
         run: cargo test --release --all --no-fail-fast --no-default-features --features ${{ matrix.simd }}
 
+      - name: Tests with SIMD feature ${{ matrix.simd }} (ARMv7)
+        if: ${{ matrix.simd == 'nightly-neon' }}
+        env:
+          RUSTC_BOOTSTRAP: 1
+        run: |
+          cargo test --release --workspace --no-fail-fast --no-default-features --features nightly,neon --target ${{ matrix.target }} -- \
+            --skip compare_incremental_tirr_photo \
+            --skip compare_pipelines_progressive \
+            --skip compare_pipelines_tirr_photo
+
       - name: Tests with SIMD feature ${{ matrix.simd }} (wasm ${{ matrix.wasm_features }})
         if: ${{ matrix.target == 'wasm32-wasip1' }}
         env:
@@ -149,7 +183,6 @@ jobs:
         run: |
           cargo test --release --workspace --exclude jxl_cli --exclude jxl_cms --no-fail-fast --no-default-features --features ${{ matrix.simd }} --target ${{ matrix.target }} -- \
             --skip tirr_photo \
-            --skip huge_image \
             --skip fuzzer_smallbuffer
 
       - name: Tests with no features
