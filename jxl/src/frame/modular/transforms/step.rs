@@ -180,6 +180,14 @@ impl SqueezeInfo<(usize, usize)> {
         &'a self,
         buffers: &'a [ModularBufferInfo],
     ) -> SqueezeInfo<RwLockReadGuard<'a, Option<ModularChannel>>> {
+        // If the average buffer has a coarser grid than the output buffer (or no grid
+        // at all), `in_next_avg` can refer to the same buffer and grid position as
+        // `in_avg`. Avoid taking a second read lock on the same RwLock in that case;
+        // `in_next_avg_rect` falls back to the `in_avg` guard.
+        let in_next_avg = self
+            .in_next_avg
+            .filter(|x| *x != self.in_avg)
+            .map(|x| borrow_channel(buffers, x));
         SqueezeInfo {
             kind: self.kind,
             out_rect: self.out_rect,
@@ -187,7 +195,7 @@ impl SqueezeInfo<(usize, usize)> {
             avg_rect: self.avg_rect,
             in_res: borrow_channel(buffers, self.in_res),
             res_rect: self.res_rect,
-            in_next_avg: self.in_next_avg.map(|x| borrow_channel(buffers, x)),
+            in_next_avg,
             out_prev: self.out_prev.map(|x| borrow_channel(buffers, x)),
             next_avg_rect: self.next_avg_rect,
         }
@@ -207,12 +215,11 @@ impl<'a> SqueezeInfo<RwLockReadGuard<'a, Option<ModularChannel>>> {
         self.in_res.as_ref().unwrap().data.get_rect(self.res_rect)
     }
     fn in_next_avg_rect(&self) -> Option<ImageRect<'_, i32>> {
-        self.in_next_avg.as_ref().map(|x| {
-            x.as_ref()
-                .unwrap()
-                .data
-                .get_rect(self.next_avg_rect.unwrap())
-        })
+        let rect = self.next_avg_rect?;
+        // `in_next_avg` is None (while `next_avg_rect` is Some) when it aliases
+        // `in_avg`; use the `in_avg` guard in that case.
+        let guard = self.in_next_avg.as_ref().unwrap_or(&self.in_avg);
+        Some(guard.as_ref().unwrap().data.get_rect(rect))
     }
 }
 
