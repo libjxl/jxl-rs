@@ -946,13 +946,19 @@ fn load_row_to_scratch(
                 let grid_data = input.buffer_grid[grid_idx].data.try_read().unwrap();
                 // Note that smooth-unsqueezing depends on some grid positions that regular
                 // unsqueezing does not, so we might not have all grid positions available.
+                let dest_start = left_clamp + (intersect_start - clamped_x_start);
+                let dest_end = dest_start + (intersect_end - intersect_start);
                 if let Some(chan) = grid_data.as_ref() {
                     let row = chan.data.row(ly);
-                    let dest_start = left_clamp + (intersect_start - clamped_x_start);
-                    let dest_end = dest_start + (intersect_end - intersect_start);
                     let src_start = intersect_start - tile_x_start;
                     let src_end = intersect_end - tile_x_start;
                     row_buf[dest_start..dest_end].copy_from_slice(&row[src_start..src_end]);
+                } else {
+                    // Not-yet-decoded tiles are semantically all-zero. Fill
+                    // explicitly: the scratch buffer is reused across rows and
+                    // transforms, so leaving the previous contents in place makes
+                    // the (partial-render) output depend on scheduling order.
+                    row_buf[dest_start..dest_end].fill(0);
                 }
             }
         }
