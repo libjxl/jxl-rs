@@ -5,7 +5,7 @@
 
 use std::{
     cmp::min,
-    collections::HashSet,
+    collections::{BTreeSet, HashSet},
     fmt::Debug,
     sync::{
         Mutex,
@@ -244,9 +244,9 @@ pub struct FullModularImage {
     has_decoded_data: AtomicBool,
     global_header: Option<GroupHeader>,
     output_transforms_for_group: Vec<Vec<usize>>,
-    pending_transforms: HashSet<usize>,
+    pending_transforms: BTreeSet<usize>,
     rerendered_buffers: HashSet<(usize, usize)>,
-    delayed_ready_sections: Mutex<HashSet<(usize, usize)>>,
+    delayed_ready_sections: Mutex<BTreeSet<(usize, usize)>>,
     // Whether each channel is used or not by the render pipeline.
     pipeline_used_channels: Vec<bool>,
     // Stack of transform steps that are ready to process.
@@ -326,9 +326,9 @@ impl FullModularImage {
                 pipeline_used_channels: vec![],
                 output_transforms_for_group: vec![vec![]; frame_header.num_groups()],
                 ready_transform_steps: Mutex::new(vec![]),
-                pending_transforms: HashSet::new(),
+                pending_transforms: BTreeSet::new(),
                 rerendered_buffers: HashSet::new(),
-                delayed_ready_sections: Mutex::new(HashSet::new()),
+                delayed_ready_sections: Mutex::new(BTreeSet::new()),
             });
         }
 
@@ -495,9 +495,9 @@ impl FullModularImage {
             output_transforms_for_group,
             pipeline_used_channels: vec![],
             ready_transform_steps: Mutex::new(vec![]),
-            pending_transforms: HashSet::new(),
+            pending_transforms: BTreeSet::new(),
             rerendered_buffers: HashSet::new(),
-            delayed_ready_sections: Mutex::new(HashSet::new()),
+            delayed_ready_sections: Mutex::new(BTreeSet::new()),
         })
     }
 
@@ -771,8 +771,7 @@ impl FullModularImage {
         }
         self.pending_transforms.clear();
         self.rerendered_buffers.clear();
-        for (s, g) in std::mem::take(&mut *self.delayed_ready_sections.try_lock().unwrap()).drain()
-        {
+        for (s, g) in std::mem::take(&mut *self.delayed_ready_sections.try_lock().unwrap()) {
             self.mark_section_ready(s, g, &mut self.ready_transform_steps.try_lock().unwrap());
         }
     }

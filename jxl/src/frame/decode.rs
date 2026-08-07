@@ -3,7 +3,7 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-use std::collections::HashSet;
+use std::collections::BTreeSet;
 use std::sync::Arc;
 
 use super::render::pipeline;
@@ -266,7 +266,7 @@ impl Frame {
             lf_quant: Arc::new(RwLock::new(LfQuantFactors::default())),
             color_correlation_params: Arc::new(RwLock::new(ColorCorrelationParams::default())),
             epf_sigma: Arc::new(RwLock::new(SigmaSource::default())),
-            dirty_lf_groups: HashSet::new(),
+            dirty_lf_groups: BTreeSet::new(),
         })
     }
 

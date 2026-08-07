@@ -3,7 +3,10 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-use std::{collections::HashSet, sync::Arc};
+use std::{
+    collections::{BTreeSet, HashSet},
+    sync::Arc,
+};
 
 use crate::{
     api::{JxlDecoderOptions, JxlParallelRunner},
@@ -240,8 +243,8 @@ pub enum DataStatus {
 #[derive(Debug)]
 struct GroupStatus {
     // Groups that should be rendered on the next call to flush().
-    need_vardct_flush: HashSet<usize>,
-    need_modular_flush: HashSet<usize>,
+    need_vardct_flush: BTreeSet<usize>,
+    need_modular_flush: BTreeSet<usize>,
     channel_status: Vec<Vec<DataStatus>>,
     final_vardct_render_done: HashSet<usize>,
     incomplete_groups: usize,
@@ -254,8 +257,8 @@ impl GroupStatus {
         // We don't track noise channels because we pretend they always
         // have the same status as VarDCT channels.
         GroupStatus {
-            need_vardct_flush: HashSet::new(),
-            need_modular_flush: HashSet::new(),
+            need_vardct_flush: BTreeSet::new(),
+            need_modular_flush: BTreeSet::new(),
             channel_status: vec![vec![DataStatus::Zero; 3 + ecs]; count],
             final_vardct_render_done: HashSet::new(),
             incomplete_groups: count,
@@ -307,7 +310,7 @@ pub struct Frame {
     epf_sigma: Arc<RwLock<SigmaSource>>,
     // LF groups that received data and thus should trigger a modular
     // re-render of the corresponding groups.
-    dirty_lf_groups: HashSet<usize>,
+    dirty_lf_groups: BTreeSet<usize>,
 }
 
 impl Frame {
