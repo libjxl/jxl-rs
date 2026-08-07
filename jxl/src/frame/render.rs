@@ -23,7 +23,7 @@ use crate::headers::{Orientation, color_encoding::ColorSpace, extra_channels::Ex
 use crate::image::Image;
 use crate::image::Rect;
 use crate::util::SmallVec;
-use std::collections::HashSet;
+use std::collections::BTreeSet;
 use std::sync::Arc;
 use std::sync::RwLock;
 use std::sync::atomic::AtomicUsize;
@@ -365,7 +365,7 @@ impl Frame {
                 }
                 gr
             } else {
-                HashSet::new()
+                BTreeSet::new()
             };
 
         let ready_steps = modular_global.take_ready_steps();
