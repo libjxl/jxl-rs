@@ -868,9 +868,16 @@ fn load_row_to_scratch(
     frame_header: &FrameHeader,
     yg: isize,
     xoff: usize,
+    valid_len: usize,
 ) {
     let (w, h) = input.info.size;
-    let max_len = row_buf.len();
+    // Only the first `valid_len` values are actual convolution inputs; the rest
+    // of the buffer only exists so that SIMD loads for the last output chunk
+    // stay in bounds, and their values do not affect the output. Restrict the
+    // buffer reads to the valid region: reading further could touch grid
+    // positions outside the 3x3 neighbourhood that the transform's
+    // dependencies guarantee to be safe to read, racing with their producers.
+    let max_len = row_buf.len().min(valid_len);
     let clamped_y = if h == 1 {
         0
     } else if yg < 0 {
@@ -901,9 +908,11 @@ fn load_row_to_scratch(
         }
 
         if right_clamp_start < max_len {
-            row_buf[right_clamp_start..].fill(row[w - 1]);
+            row_buf[right_clamp_start..max_len].fill(row[w - 1]);
         }
 
+        let last = row_buf[max_len - 1];
+        row_buf[max_len..].fill(last);
         return;
     }
 
@@ -974,8 +983,11 @@ fn load_row_to_scratch(
                 0
             }
         };
-        row_buf[max_len - right_clamp..].fill(right_val);
+        row_buf[max_len - right_clamp..max_len].fill(right_val);
     }
+
+    let last = row_buf[max_len - 1];
+    row_buf[max_len..].fill(last);
 }
 
 fn make_float<D: SimdDescriptor>(d: D, inp: &[i32], out: &mut [f32]) {
@@ -1010,7 +1022,7 @@ fn smooth_2d_unsqueeze_simd_impl<D: SimdDescriptor>(
 
     for (dy, buf) in buffer.iter_mut().enumerate().take(4) {
         let yg = (row_offset + dy) as isize - 2;
-        load_row_to_scratch(ibuf, input, frame_header, yg, col_offset);
+        load_row_to_scratch(ibuf, input, frame_header, yg, col_offset, in_xs + 4);
         make_float(d, ibuf, buf);
     }
 
@@ -1018,7 +1030,7 @@ fn smooth_2d_unsqueeze_simd_impl<D: SimdDescriptor>(
     // We populate the fifth row at the start of the loop.
     for iy_center in 0..ys.div_ceil(2) {
         let yg = (row_offset + iy_center) as isize + 2;
-        load_row_to_scratch(ibuf, input, frame_header, yg, col_offset);
+        load_row_to_scratch(ibuf, input, frame_header, yg, col_offset, in_xs + 4);
         make_float(d, ibuf, &mut buffer[4]);
 
         const { assert!(IMAGE_OFFSET.1 > 0) };
@@ -1133,7 +1145,7 @@ fn smooth_h_unsqueeze_simd_impl<D: SimdDescriptor>(
 
     for (dy, buf) in buffer.iter_mut().enumerate().take(2) {
         let yg = (row_offset + dy) as isize - 1;
-        load_row_to_scratch(ibuf, input, frame_header, yg, col_offset);
+        load_row_to_scratch(ibuf, input, frame_header, yg, col_offset, in_xs + 4);
         make_float(d, ibuf, buf);
     }
 
@@ -1141,7 +1153,7 @@ fn smooth_h_unsqueeze_simd_impl<D: SimdDescriptor>(
     // We populate the third row at the start of the loop.
     for iy_center in 0..ys {
         let yg = (row_offset + iy_center) as isize + 1;
-        load_row_to_scratch(ibuf, input, frame_header, yg, col_offset);
+        load_row_to_scratch(ibuf, input, frame_header, yg, col_offset, in_xs + 4);
         make_float(d, ibuf, &mut buffer[2]);
 
         let output_row = output.row_mut(iy_center);
@@ -1224,7 +1236,7 @@ fn smooth_v_unsqueeze_simd_impl<D: SimdDescriptor>(
 
     for (dy, buf) in buffer.iter_mut().enumerate().take(4) {
         let yg = (row_offset + dy) as isize - 2;
-        load_row_to_scratch(ibuf, input, frame_header, yg, col_offset);
+        load_row_to_scratch(ibuf, input, frame_header, yg, col_offset, in_xs + 4);
         make_float(d, ibuf, buf);
     }
 
@@ -1232,7 +1244,7 @@ fn smooth_v_unsqueeze_simd_impl<D: SimdDescriptor>(
     // We populate the fifth row at the start of the loop.
     for iy_center in 0..ys.div_ceil(2) {
         let yg = (row_offset + iy_center) as isize + 2;
-        load_row_to_scratch(ibuf, input, frame_header, yg, col_offset);
+        load_row_to_scratch(ibuf, input, frame_header, yg, col_offset, in_xs + 4);
         make_float(d, ibuf, &mut buffer[4]);
 
         const { assert!(IMAGE_OFFSET.1 > 0) };
