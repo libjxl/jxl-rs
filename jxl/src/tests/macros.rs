@@ -76,40 +76,20 @@ macro_rules! declare_test_file_shuttle {
             #[test]
             fn [<test_compare_parallel_oneshot_shuttle_ $ident>]() {
                 let path = std::path::Path::new("resources/test/").join($path);
-                let iterations = std::env::var("SHUTTLE_ITERATIONS")
-                    .ok()
-                    .and_then(|x| x.parse().ok())
-                    .unwrap_or(10);
-
-                let mut config = shuttle::Config::default();
-                config.max_steps = shuttle::MaxSteps::FailAfter(10_000_000);
-                config.stack_size = 1024 * 1024;
-
-                let scheduler = shuttle::scheduler::RandomScheduler::new(iterations);
-                let runner = shuttle::Runner::new(scheduler, config.clone());
-                runner.run(move || {
-                    crate::tests::compare_parallel::run_oneshot(&path);
-                });
+                crate::tests::compare_parallel::run_shuttle_test(
+                    path,
+                    crate::tests::compare_parallel::run_oneshot,
+                );
             }
 
             #[cfg(all(feature = "shuttle", not(any(target_family = "wasm", target_arch = "wasm32"))))]
             #[test]
             fn [<test_compare_parallel_progressive_shuttle_ $ident>]() {
                 let path = std::path::Path::new("resources/test/").join($path);
-                let iterations = std::env::var("SHUTTLE_ITERATIONS")
-                    .ok()
-                    .and_then(|x| x.parse().ok())
-                    .unwrap_or(10);
-
-                let mut config = shuttle::Config::default();
-                config.max_steps = shuttle::MaxSteps::FailAfter(10_000_000);
-                config.stack_size = 1024 * 1024;
-
-                let scheduler = shuttle::scheduler::RandomScheduler::new(iterations);
-                let runner = shuttle::Runner::new(scheduler, config);
-                runner.run(move || {
-                    crate::tests::compare_parallel::run_progressive(&path);
-                });
+                crate::tests::compare_parallel::run_shuttle_test(
+                    path,
+                    crate::tests::compare_parallel::run_progressive,
+                );
             }
         }
     };
