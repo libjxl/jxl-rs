@@ -758,12 +758,6 @@ impl FrameHeader {
         if !self.save_before_ct && !self.full_frame && self.frame_type == FrameType::ReferenceOnly {
             return Err(Error::NonPatchReferenceWithCrop);
         }
-        if !self.is444()
-            && ((self.flags & Flags::SKIP_ADAPTIVE_LF_SMOOTHING) == 0)
-            && self.encoding == Encoding::VarDCT
-        {
-            return Err(Error::Non444ChromaSubsampling);
-        }
         Ok(())
     }
 }
