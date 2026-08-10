@@ -436,10 +436,13 @@ impl Frame {
             Ok(())
         };
 
-        // Avoid significantly more than one thread per full group
-        let max_threads = (self.header.size().0 / self.header.group_dim())
-            * (self.header.size().1 / self.header.group_dim())
-            + 1;
+        // Avoid significantly more than one thread per group's worth of work.
+        // Measured in whole groups of area rather than per dimension: truncating
+        // each dimension separately makes the product zero whenever a dimension
+        // is under one group, which pins max_threads to 1 and renders serially.
+        let group_dim = self.header.group_dim();
+        let max_threads =
+            (self.header.size().0 * self.header.size().1).div_ceil(group_dim * group_dim) + 1;
 
         let hw_threads = std::thread::available_parallelism()
             .map(|x| x.get())
