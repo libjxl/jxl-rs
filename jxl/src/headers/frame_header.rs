@@ -652,6 +652,19 @@ impl FrameHeader {
         Rect { origin, size }
     }
 
+    pub fn group_rect(&self, group: usize) -> Rect {
+        let lf_dims = self.size_groups();
+        let dims = self.size();
+        let gx = group % lf_dims.0;
+        let gy = group / lf_dims.0;
+        let origin = (gx * self.group_dim(), gy * self.group_dim());
+        let size = (
+            min(dims.0.checked_sub(origin.0).unwrap(), self.group_dim()),
+            min(dims.1.checked_sub(origin.1).unwrap(), self.group_dim()),
+        );
+        Rect { origin, size }
+    }
+
     pub fn postprocess(&mut self, nonserialized: &FrameHeaderNonserialized) {
         if self.upsampling > 1 {
             for i in 0..nonserialized.extra_channel_info.len() {
