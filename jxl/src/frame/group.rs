@@ -623,3 +623,48 @@ pub fn decode_vardct_group(
     }
     Ok(())
 }
+
+#[cfg(test)]
+mod test {
+    use test_log::test;
+
+    use crate::error::Result;
+    use crate::image::Rect;
+    use crate::tests::decode::decode;
+
+    #[test]
+    fn subsampled_chroma() -> Result<()> {
+        let (_, mut frames) = decode(include_bytes!("../../resources/test/multiple_lf_420.jxl"))?;
+        let frame = frames.pop().unwrap();
+        let [image]: [_; 1] = frame.try_into().unwrap();
+
+        let rect_lfs = [
+            // Green rect
+            Rect {
+                origin: (2048 * 3, 0),
+                size: (16 * 3, 16),
+            },
+            // Red rect
+            Rect {
+                origin: (0, 2048),
+                size: (16 * 3, 16),
+            },
+        ];
+        for rect in rect_lfs {
+            let view = image.get_rect(rect);
+            for y in 0..view.size().1 {
+                let row = view.row(y);
+                for pixel in row.chunks(3) {
+                    let &[r, g, b] = pixel else {
+                        unreachable!();
+                    };
+                    let max = r.max(g).max(b);
+                    let min = r.min(g).min(b);
+                    assert!(max - min > 0.5);
+                }
+            }
+        }
+
+        Ok(())
+    }
+}
