@@ -860,7 +860,9 @@ fn smooth_2d_unsqueeze_simd_impl<D: SimdDescriptor>(
     output: &mut Image<i32>,
     scratch: &mut SmoothUnsqueezeScratch,
 ) {
-    let (in_xs, in_ys) = (rect.size.0 / 2, rect.size.1 / 2);
+    // The input channel has ceil(xs / 2) columns; using floor here would leave
+    // the last output column unwritten for odd output widths.
+    let (in_xs, in_ys) = (rect.size.0.div_ceil(2), rect.size.1.div_ceil(2));
     let (col_offset, row_offset) = (rect.origin.0 / 2, rect.origin.1 / 2);
     let lanes = D::I32Vec::LEN;
     let (xs, ys) = output.size();
@@ -1007,7 +1009,9 @@ fn smooth_h_unsqueeze_simd_impl<D: SimdDescriptor>(
     output: &mut Image<i32>,
     scratch: &mut SmoothUnsqueezeScratch,
 ) {
-    let (in_xs, in_ys) = (rect.size.0 / 2, rect.size.1);
+    // The input channel has ceil(xs / 2) columns; using floor here would leave
+    // the last output column unwritten for odd output widths.
+    let (in_xs, in_ys) = (rect.size.0.div_ceil(2), rect.size.1);
     let (col_offset, row_offset) = (rect.origin.0 / 2, rect.origin.1);
     let lanes = D::I32Vec::LEN;
     let (_, ys) = output.size();
@@ -1126,7 +1130,7 @@ fn smooth_v_unsqueeze_simd_impl<D: SimdDescriptor>(
     output: &mut Image<i32>,
     scratch: &mut SmoothUnsqueezeScratch,
 ) {
-    let (in_xs, in_ys) = (rect.size.0, rect.size.1 / 2);
+    let (in_xs, in_ys) = (rect.size.0, rect.size.1.div_ceil(2));
     let (col_offset, row_offset) = (rect.origin.0, rect.origin.1 / 2);
     let lanes = D::I32Vec::LEN;
     let (xs, ys) = output.size();
