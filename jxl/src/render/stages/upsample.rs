@@ -161,13 +161,13 @@ simd_function!(
             let out_x = x * 2;
 
             // Row 0
-            let r0_0 = kernel_conv!(d, kernel_vecs[0], r0, r1, r2, r3, r4, x).max(minval).min(maxval);
-            let r0_1 = kernel_conv!(d, kernel_vecs[1], r0, r1, r2, r3, r4, x).max(minval).min(maxval);
+            let r0_0 = kernel_conv(d, &kernel_vecs[0], r0, r1, r2, r3, r4, x).max(minval).min(maxval);
+            let r0_1 = kernel_conv(d, &kernel_vecs[1], r0, r1, r2, r3, r4, x).max(minval).min(maxval);
             D::F32Vec::store_interleaved_2(r0_0, r0_1, &mut output[0][out_x..]);
 
             // Row 1
-            let r1_0 = kernel_conv!(d, kernel_vecs[2], r0, r1, r2, r3, r4, x).max(minval).min(maxval);
-            let r1_1 = kernel_conv!(d, kernel_vecs[3], r0, r1, r2, r3, r4, x).max(minval).min(maxval);
+            let r1_0 = kernel_conv(d, &kernel_vecs[2], r0, r1, r2, r3, r4, x).max(minval).min(maxval);
+            let r1_1 = kernel_conv(d, &kernel_vecs[3], r0, r1, r2, r3, r4, x).max(minval).min(maxval);
             D::F32Vec::store_interleaved_2(r1_0, r1_1, &mut output[1][out_x..]);
         }
     }
@@ -222,10 +222,10 @@ simd_function!(
             // Process all 4 output rows using a loop
             for oy in 0..4 {
                 let base = oy * 4;
-                let v0 = kernel_conv!(d, kernel_vecs[base], r0, r1, r2, r3, r4, x).max(minval).min(maxval);
-                let v1 = kernel_conv!(d, kernel_vecs[base + 1], r0, r1, r2, r3, r4, x).max(minval).min(maxval);
-                let v2 = kernel_conv!(d, kernel_vecs[base + 2], r0, r1, r2, r3, r4, x).max(minval).min(maxval);
-                let v3 = kernel_conv!(d, kernel_vecs[base + 3], r0, r1, r2, r3, r4, x).max(minval).min(maxval);
+                let v0 = kernel_conv(d, &kernel_vecs[base], r0, r1, r2, r3, r4, x).max(minval).min(maxval);
+                let v1 = kernel_conv(d, &kernel_vecs[base + 1], r0, r1, r2, r3, r4, x).max(minval).min(maxval);
+                let v2 = kernel_conv(d, &kernel_vecs[base + 2], r0, r1, r2, r3, r4, x).max(minval).min(maxval);
+                let v3 = kernel_conv(d, &kernel_vecs[base + 3], r0, r1, r2, r3, r4, x).max(minval).min(maxval);
                 D::F32Vec::store_interleaved_4(v0, v1, v2, v3, &mut output[oy][out_x..]);
             }
         }
@@ -281,14 +281,14 @@ simd_function!(
             // Process all 8 output rows using a loop
             for oy in 0..8 {
                 let base = oy * 8;
-                let v0 = kernel_conv!(d, kernel_vecs[base], r0, r1, r2, r3, r4, x).max(minval).min(maxval);
-                let v1 = kernel_conv!(d, kernel_vecs[base + 1], r0, r1, r2, r3, r4, x).max(minval).min(maxval);
-                let v2 = kernel_conv!(d, kernel_vecs[base + 2], r0, r1, r2, r3, r4, x).max(minval).min(maxval);
-                let v3 = kernel_conv!(d, kernel_vecs[base + 3], r0, r1, r2, r3, r4, x).max(minval).min(maxval);
-                let v4 = kernel_conv!(d, kernel_vecs[base + 4], r0, r1, r2, r3, r4, x).max(minval).min(maxval);
-                let v5 = kernel_conv!(d, kernel_vecs[base + 5], r0, r1, r2, r3, r4, x).max(minval).min(maxval);
-                let v6 = kernel_conv!(d, kernel_vecs[base + 6], r0, r1, r2, r3, r4, x).max(minval).min(maxval);
-                let v7 = kernel_conv!(d, kernel_vecs[base + 7], r0, r1, r2, r3, r4, x).max(minval).min(maxval);
+                let v0 = kernel_conv(d, &kernel_vecs[base], r0, r1, r2, r3, r4, x).max(minval).min(maxval);
+                let v1 = kernel_conv(d, &kernel_vecs[base + 1], r0, r1, r2, r3, r4, x).max(minval).min(maxval);
+                let v2 = kernel_conv(d, &kernel_vecs[base + 2], r0, r1, r2, r3, r4, x).max(minval).min(maxval);
+                let v3 = kernel_conv(d, &kernel_vecs[base + 3], r0, r1, r2, r3, r4, x).max(minval).min(maxval);
+                let v4 = kernel_conv(d, &kernel_vecs[base + 4], r0, r1, r2, r3, r4, x).max(minval).min(maxval);
+                let v5 = kernel_conv(d, &kernel_vecs[base + 5], r0, r1, r2, r3, r4, x).max(minval).min(maxval);
+                let v6 = kernel_conv(d, &kernel_vecs[base + 6], r0, r1, r2, r3, r4, x).max(minval).min(maxval);
+                let v7 = kernel_conv(d, &kernel_vecs[base + 7], r0, r1, r2, r3, r4, x).max(minval).min(maxval);
                 D::F32Vec::store_interleaved_8(v0, v1, v2, v3, v4, v5, v6, v7, &mut output[oy][out_x..]);
             }
         }

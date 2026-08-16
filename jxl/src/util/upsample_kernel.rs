@@ -4,7 +4,7 @@
 // license that can be found in the LICENSE file.
 
 use crate::headers::DEFAULT_KERN_2;
-use jxl_simd::F32SimdVec;
+use jxl_simd::{F32SimdVec, SimdDescriptor};
 
 /// Precomputes flattened 5x5 kernels for 2x upsampling from CustomTransformData weights (15
 /// values). Output layout: kernel[oy * 2 + ox] -> [f32; 25] for oy, ox in 0..2
@@ -129,45 +129,52 @@ pub fn compute_minmax<D: jxl_simd::SimdDescriptor>(
     }
 }
 
-/// Macro to generate the 5x5 kernel convolution code (shared across upsample and squeeze)
-macro_rules! kernel_conv {
-    ($d:expr, $kv:expr, $r0:expr, $r1:expr, $r2:expr, $r3:expr, $r4:expr, $x:expr) => {{
-        // Compute 5x5 kernel using FMA with 3-way ILP
-        // Row 0
-        let mut acc0 = <D::F32Vec>::load($d, &$r0[$x..]) * $kv[0];
-        let mut acc1 = <D::F32Vec>::load($d, &$r0[$x + 1..]) * $kv[1];
-        let mut acc2 = <D::F32Vec>::load($d, &$r0[$x + 2..]) * $kv[2];
-        acc0 = <D::F32Vec>::load($d, &$r0[$x + 3..]).mul_add($kv[3], acc0);
-        acc1 = <D::F32Vec>::load($d, &$r0[$x + 4..]).mul_add($kv[4], acc1);
-        // Row 1
-        acc2 = <D::F32Vec>::load($d, &$r1[$x..]).mul_add($kv[5], acc2);
-        acc0 = <D::F32Vec>::load($d, &$r1[$x + 1..]).mul_add($kv[6], acc0);
-        acc1 = <D::F32Vec>::load($d, &$r1[$x + 2..]).mul_add($kv[7], acc1);
-        acc2 = <D::F32Vec>::load($d, &$r1[$x + 3..]).mul_add($kv[8], acc2);
-        acc0 = <D::F32Vec>::load($d, &$r1[$x + 4..]).mul_add($kv[9], acc0);
-        // Row 2
-        acc1 = <D::F32Vec>::load($d, &$r2[$x..]).mul_add($kv[10], acc1);
-        acc2 = <D::F32Vec>::load($d, &$r2[$x + 1..]).mul_add($kv[11], acc2);
-        acc0 = <D::F32Vec>::load($d, &$r2[$x + 2..]).mul_add($kv[12], acc0);
-        acc1 = <D::F32Vec>::load($d, &$r2[$x + 3..]).mul_add($kv[13], acc1);
-        acc2 = <D::F32Vec>::load($d, &$r2[$x + 4..]).mul_add($kv[14], acc2);
-        // Row 3
-        acc0 = <D::F32Vec>::load($d, &$r3[$x..]).mul_add($kv[15], acc0);
-        acc1 = <D::F32Vec>::load($d, &$r3[$x + 1..]).mul_add($kv[16], acc1);
-        acc2 = <D::F32Vec>::load($d, &$r3[$x + 2..]).mul_add($kv[17], acc2);
-        acc0 = <D::F32Vec>::load($d, &$r3[$x + 3..]).mul_add($kv[18], acc0);
-        acc1 = <D::F32Vec>::load($d, &$r3[$x + 4..]).mul_add($kv[19], acc1);
-        // Row 4
-        acc2 = <D::F32Vec>::load($d, &$r4[$x..]).mul_add($kv[20], acc2);
-        acc0 = <D::F32Vec>::load($d, &$r4[$x + 1..]).mul_add($kv[21], acc0);
-        acc1 = <D::F32Vec>::load($d, &$r4[$x + 2..]).mul_add($kv[22], acc1);
-        acc2 = <D::F32Vec>::load($d, &$r4[$x + 3..]).mul_add($kv[23], acc2);
-        acc0 = <D::F32Vec>::load($d, &$r4[$x + 4..]).mul_add($kv[24], acc0);
+/// 5x5 kernel convolution using FMA with 3-way ILP (shared across upsample and squeeze).
+#[inline(always)]
+#[allow(clippy::too_many_arguments)]
+pub fn kernel_conv<D: SimdDescriptor>(
+    d: D,
+    kv: &[D::F32Vec; 25],
+    r0: &[f32],
+    r1: &[f32],
+    r2: &[f32],
+    r3: &[f32],
+    r4: &[f32],
+    x: usize,
+) -> D::F32Vec {
+    // Row 0
+    let mut acc0 = D::F32Vec::load(d, &r0[x..]) * kv[0];
+    let mut acc1 = D::F32Vec::load(d, &r0[x + 1..]) * kv[1];
+    let mut acc2 = D::F32Vec::load(d, &r0[x + 2..]) * kv[2];
+    acc0 = D::F32Vec::load(d, &r0[x + 3..]).mul_add(kv[3], acc0);
+    acc1 = D::F32Vec::load(d, &r0[x + 4..]).mul_add(kv[4], acc1);
+    // Row 1
+    acc2 = D::F32Vec::load(d, &r1[x..]).mul_add(kv[5], acc2);
+    acc0 = D::F32Vec::load(d, &r1[x + 1..]).mul_add(kv[6], acc0);
+    acc1 = D::F32Vec::load(d, &r1[x + 2..]).mul_add(kv[7], acc1);
+    acc2 = D::F32Vec::load(d, &r1[x + 3..]).mul_add(kv[8], acc2);
+    acc0 = D::F32Vec::load(d, &r1[x + 4..]).mul_add(kv[9], acc0);
+    // Row 2
+    acc1 = D::F32Vec::load(d, &r2[x..]).mul_add(kv[10], acc1);
+    acc2 = D::F32Vec::load(d, &r2[x + 1..]).mul_add(kv[11], acc2);
+    acc0 = D::F32Vec::load(d, &r2[x + 2..]).mul_add(kv[12], acc0);
+    acc1 = D::F32Vec::load(d, &r2[x + 3..]).mul_add(kv[13], acc1);
+    acc2 = D::F32Vec::load(d, &r2[x + 4..]).mul_add(kv[14], acc2);
+    // Row 3
+    acc0 = D::F32Vec::load(d, &r3[x..]).mul_add(kv[15], acc0);
+    acc1 = D::F32Vec::load(d, &r3[x + 1..]).mul_add(kv[16], acc1);
+    acc2 = D::F32Vec::load(d, &r3[x + 2..]).mul_add(kv[17], acc2);
+    acc0 = D::F32Vec::load(d, &r3[x + 3..]).mul_add(kv[18], acc0);
+    acc1 = D::F32Vec::load(d, &r3[x + 4..]).mul_add(kv[19], acc1);
+    // Row 4
+    acc2 = D::F32Vec::load(d, &r4[x..]).mul_add(kv[20], acc2);
+    acc0 = D::F32Vec::load(d, &r4[x + 1..]).mul_add(kv[21], acc0);
+    acc1 = D::F32Vec::load(d, &r4[x + 2..]).mul_add(kv[22], acc1);
+    acc2 = D::F32Vec::load(d, &r4[x + 3..]).mul_add(kv[23], acc2);
+    acc0 = D::F32Vec::load(d, &r4[x + 4..]).mul_add(kv[24], acc0);
 
-        acc0 + acc1 + acc2
-    }};
+    acc0 + acc1 + acc2
 }
-pub(crate) use kernel_conv;
 
 #[cfg(test)]
 mod test {

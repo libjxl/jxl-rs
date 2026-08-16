@@ -948,20 +948,20 @@ fn smooth_2d_unsqueeze_simd_impl<D: SimdDescriptor>(
             let maxval = D::F32Vec::load(d, maxs_chunk);
 
             // Row 0 (top subpixels: oy=0, ox=0 and oy=0, ox=1)
-            let v0_0 = kernel_conv!(d, kernel_vecs[0], r0, r1, r2, r3, r4, x)
+            let v0_0 = kernel_conv(d, &kernel_vecs[0], r0, r1, r2, r3, r4, x)
                 .max(minval)
                 .min(maxval);
-            let v0_1 = kernel_conv!(d, kernel_vecs[1], r0, r1, r2, r3, r4, x)
+            let v0_1 = kernel_conv(d, &kernel_vecs[1], r0, r1, r2, r3, r4, x)
                 .max(minval)
                 .min(maxval);
             let out_0_0 = (v0_0 + half.copysign(v0_0)).as_i32();
             let out_0_1 = (v0_1 + half.copysign(v0_1)).as_i32();
 
             // Row 1 (bottom subpixels: oy=1, ox=0 and oy=1, ox=1)
-            let v1_0 = kernel_conv!(d, kernel_vecs[2], r0, r1, r2, r3, r4, x)
+            let v1_0 = kernel_conv(d, &kernel_vecs[2], r0, r1, r2, r3, r4, x)
                 .max(minval)
                 .min(maxval);
-            let v1_1 = kernel_conv!(d, kernel_vecs[3], r0, r1, r2, r3, r4, x)
+            let v1_1 = kernel_conv(d, &kernel_vecs[3], r0, r1, r2, r3, r4, x)
                 .max(minval)
                 .min(maxval);
             let out_1_0 = (v1_0 + half.copysign(v1_0)).as_i32();
@@ -1082,10 +1082,10 @@ fn smooth_h_unsqueeze_simd_impl<D: SimdDescriptor>(
             let minval = D::F32Vec::load(d, mins_chunk);
             let maxval = D::F32Vec::load(d, maxs_chunk);
 
-            let v_even = kernel_conv!(d, kernel_vecs[0], r0, r1, r2, r3, r4, x)
+            let v_even = kernel_conv(d, &kernel_vecs[0], r0, r1, r2, r3, r4, x)
                 .max(minval)
                 .min(maxval);
-            let v_odd = kernel_conv!(d, kernel_vecs[1], r0, r1, r2, r3, r4, x)
+            let v_odd = kernel_conv(d, &kernel_vecs[1], r0, r1, r2, r3, r4, x)
                 .max(minval)
                 .min(maxval);
 
@@ -1215,10 +1215,10 @@ fn smooth_v_unsqueeze_simd_impl<D: SimdDescriptor>(
             let minval = D::F32Vec::load(d, mins_chunk);
             let maxval = D::F32Vec::load(d, maxs_chunk);
 
-            let v_top = kernel_conv!(d, kernel_vecs[0], r0, r1, r2, r3, r4, x)
+            let v_top = kernel_conv(d, &kernel_vecs[0], r0, r1, r2, r3, r4, x)
                 .max(minval)
                 .min(maxval);
-            let v_bottom = kernel_conv!(d, kernel_vecs[1], r0, r1, r2, r3, r4, x)
+            let v_bottom = kernel_conv(d, &kernel_vecs[1], r0, r1, r2, r3, r4, x)
                 .max(minval)
                 .min(maxval);
 
