@@ -35,7 +35,7 @@ impl InputBuffer {
             "chan: {chan}"
         );
         *self.data[chan].try_write().unwrap() = Some(buf);
-        self.ready_channels.fetch_add(1, Ordering::Relaxed) + 1
+        self.ready_channels.fetch_add(1, Ordering::AcqRel) + 1
     }
 
     pub(super) fn new(num_channels: usize) -> Self {
@@ -73,10 +73,7 @@ impl InputBuffers {
     }
 
     pub fn mark_not_ready(&mut self, group: usize) {
-        if !self.buffers[group]
-            .is_ready
-            .fetch_and(false, Ordering::Relaxed)
-        {
+        if !self.buffers[group].is_ready.swap(false, Ordering::Relaxed) {
             return;
         }
         let gx = group % self.size.0;
@@ -85,11 +82,7 @@ impl InputBuffers {
     }
 
     pub fn mark_ready(&self, group: usize) -> [bool; 9] {
-        assert!(
-            !self.buffers[group]
-                .is_ready
-                .fetch_or(true, Ordering::Relaxed)
-        );
+        assert!(!self.buffers[group].is_ready.swap(true, Ordering::Relaxed));
         let gx = group % self.size.0;
         let gy = group / self.size.0;
         let stride = self.size.0 * 2 + 1;
