@@ -8,9 +8,8 @@
 
 use crate::{
     headers::CustomTransformData,
-    kernel_conv,
     render::{Channels, ChannelsMut, ErasedLocalState, RenderPipelineInOutStage},
-    util::compute_minmax,
+    util::{compute_minmax, kernel_conv},
 };
 use jxl_simd::{F32SimdVec, simd_function};
 

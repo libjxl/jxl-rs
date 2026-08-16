@@ -205,7 +205,7 @@ impl ModularBufferInfo {
 }
 
 struct TransformScratchSpace {
-    smooth_unsqueeze_buffer: ([Vec<f32>; 5], Vec<i32>),
+    smooth_unsqueeze_buffer: transforms::squeeze::SmoothUnsqueezeScratch,
 }
 
 impl Debug for TransformScratchSpace {
@@ -217,7 +217,7 @@ impl Debug for TransformScratchSpace {
 impl TransformScratchSpace {
     fn new() -> TransformScratchSpace {
         TransformScratchSpace {
-            smooth_unsqueeze_buffer: (std::array::from_fn(|_| vec![]), vec![]),
+            smooth_unsqueeze_buffer: Default::default(),
         }
     }
 }

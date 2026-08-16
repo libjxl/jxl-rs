@@ -12,10 +12,9 @@ use crate::{
     frame::modular::{ChannelInfo, IMAGE_OFFSET, ModularChannel},
     headers::modular::SqueezeParams,
     image::{Image, ImageRect},
-    kernel_conv,
     util::{
-        compute_1d_h_kernels_2x, compute_1d_v_kernels_2x, compute_5x5_kernels_2x, compute_minmax,
-        tracing_wrappers::*,
+        SMOOTH_UNSQUEEZE_KERN_2D, SMOOTH_UNSQUEEZE_KERN_H, SMOOTH_UNSQUEEZE_KERN_V, compute_minmax,
+        kernel_conv, tracing_wrappers::*,
     },
 };
 
@@ -682,12 +681,29 @@ use super::super::{ModularBufferInfo, ModularGridKind};
 use crate::headers::frame_header::FrameHeader;
 use crate::image::Rect;
 
+/// Reusable scratch buffers for the smooth-unsqueeze functions, to avoid
+/// allocating on every call.
+#[derive(Default)]
+pub struct SmoothUnsqueezeScratch {
+    rows: [Vec<f32>; 5],
+    irow: Vec<i32>,
+    col_min: Vec<f32>,
+    col_max: Vec<f32>,
+    mins: Vec<f32>,
+    maxs: Vec<f32>,
+}
 
-fn init_buffers(buf: &mut [Vec<f32>; 5], ibuf: &mut Vec<i32>, len: usize) {
-    for b in buf {
-        b.resize(len, 0.0);
+impl SmoothUnsqueezeScratch {
+    fn prepare(&mut self, row_len: usize, minmax_len: usize) {
+        for b in &mut self.rows {
+            b.resize(row_len, 0.0);
+        }
+        self.irow.resize(row_len, 0);
+        self.col_min.resize(minmax_len, 0.0);
+        self.col_max.resize(minmax_len, 0.0);
+        self.mins.resize(minmax_len, 0.0);
+        self.maxs.resize(minmax_len, 0.0);
     }
-    ibuf.resize(len, 0);
 }
 
 fn load_row_to_scratch(
@@ -842,7 +858,7 @@ fn smooth_2d_unsqueeze_simd_impl<D: SimdDescriptor>(
     frame_header: &FrameHeader,
     rect: Rect,
     output: &mut Image<i32>,
-    (buffer, ibuf): &mut ([Vec<f32>; 5], Vec<i32>),
+    scratch: &mut SmoothUnsqueezeScratch,
 ) {
     let (in_xs, in_ys) = (rect.size.0 / 2, rect.size.1 / 2);
     let (col_offset, row_offset) = (rect.origin.0 / 2, rect.origin.1 / 2);
@@ -852,22 +868,23 @@ fn smooth_2d_unsqueeze_simd_impl<D: SimdDescriptor>(
     if in_xs == 0 || in_ys == 0 {
         return;
     }
-    init_buffers(buffer, ibuf, in_xs + 2 * lanes + 8);
+    scratch.prepare(in_xs + 2 * lanes + 8, in_xs + 24);
+    let SmoothUnsqueezeScratch {
+        rows: buffer,
+        irow: ibuf,
+        col_min,
+        col_max,
+        mins,
+        maxs,
+    } = scratch;
 
-    // Precompute 5x5 flattened kernels for 2D 2x unsqueezing from DEFAULT_KERN_2
-    let k2d = compute_5x5_kernels_2x(&crate::headers::DEFAULT_KERN_2);
+    // 5x5 flattened kernels for 2D 2x unsqueezing, derived from DEFAULT_KERN_2
     let mut kernel_vecs = [[D::F32Vec::splat(d, 0.0); 25]; 4];
     for idx in 0..4 {
         for i in 0..25 {
-            kernel_vecs[idx][i] = D::F32Vec::splat(d, k2d[idx][i]);
+            kernel_vecs[idx][i] = D::F32Vec::splat(d, SMOOTH_UNSQUEEZE_KERN_2D[idx][i]);
         }
     }
-
-    let needed = in_xs + 24;
-    let mut col_min = vec![0.0f32; needed];
-    let mut col_max = vec![0.0f32; needed];
-    let mut mins = vec![0.0f32; needed];
-    let mut maxs = vec![0.0f32; needed];
 
     for (dy, buf) in buffer.iter_mut().enumerate().take(4) {
         let yg = (row_offset + dy) as isize - 2;
@@ -904,7 +921,7 @@ fn smooth_2d_unsqueeze_simd_impl<D: SimdDescriptor>(
             buffer[3].as_slice(),
             buffer[4].as_slice(),
         ];
-        compute_minmax(d, &input_rows, in_xs, &mut col_min, &mut col_max, &mut mins, &mut maxs);
+        compute_minmax(d, &input_rows, in_xs, col_min, col_max, mins, maxs);
 
         let r0 = buffer[0].as_slice();
         let r1 = buffer[1].as_slice();
@@ -929,14 +946,22 @@ fn smooth_2d_unsqueeze_simd_impl<D: SimdDescriptor>(
             let maxval = D::F32Vec::load(d, maxs_chunk);
 
             // Row 0 (top subpixels: oy=0, ox=0 and oy=0, ox=1)
-            let v0_0 = kernel_conv!(d, kernel_vecs[0], r0, r1, r2, r3, r4, x).max(minval).min(maxval);
-            let v0_1 = kernel_conv!(d, kernel_vecs[1], r0, r1, r2, r3, r4, x).max(minval).min(maxval);
+            let v0_0 = kernel_conv!(d, kernel_vecs[0], r0, r1, r2, r3, r4, x)
+                .max(minval)
+                .min(maxval);
+            let v0_1 = kernel_conv!(d, kernel_vecs[1], r0, r1, r2, r3, r4, x)
+                .max(minval)
+                .min(maxval);
             let out_0_0 = (v0_0 + half.copysign(v0_0)).as_i32();
             let out_0_1 = (v0_1 + half.copysign(v0_1)).as_i32();
 
             // Row 1 (bottom subpixels: oy=1, ox=0 and oy=1, ox=1)
-            let v1_0 = kernel_conv!(d, kernel_vecs[2], r0, r1, r2, r3, r4, x).max(minval).min(maxval);
-            let v1_1 = kernel_conv!(d, kernel_vecs[3], r0, r1, r2, r3, r4, x).max(minval).min(maxval);
+            let v1_0 = kernel_conv!(d, kernel_vecs[2], r0, r1, r2, r3, r4, x)
+                .max(minval)
+                .min(maxval);
+            let v1_1 = kernel_conv!(d, kernel_vecs[3], r0, r1, r2, r3, r4, x)
+                .max(minval)
+                .min(maxval);
             let out_1_0 = (v1_0 + half.copysign(v1_0)).as_i32();
             let out_1_1 = (v1_1 + half.copysign(v1_1)).as_i32();
 
@@ -967,9 +992,9 @@ simd_function!(
         frame_header: &FrameHeader,
         rect: Rect,
         output: &mut Image<i32>,
-        buffer: &mut ([Vec<f32>; 5], Vec<i32>)
+        scratch: &mut SmoothUnsqueezeScratch
     ) {
-        smooth_2d_unsqueeze_simd_impl(d, input, frame_header, rect, output, buffer);
+        smooth_2d_unsqueeze_simd_impl(d, input, frame_header, rect, output, scratch);
     }
 );
 
@@ -980,7 +1005,7 @@ fn smooth_h_unsqueeze_simd_impl<D: SimdDescriptor>(
     frame_header: &FrameHeader,
     rect: Rect,
     output: &mut Image<i32>,
-    (buffer, ibuf): &mut ([Vec<f32>; 5], Vec<i32>),
+    scratch: &mut SmoothUnsqueezeScratch,
 ) {
     let (in_xs, in_ys) = (rect.size.0 / 2, rect.size.1);
     let (col_offset, row_offset) = (rect.origin.0 / 2, rect.origin.1);
@@ -990,23 +1015,23 @@ fn smooth_h_unsqueeze_simd_impl<D: SimdDescriptor>(
     if in_xs == 0 || in_ys == 0 {
         return;
     }
-    init_buffers(buffer, ibuf, in_xs + 2 * lanes + 8);
+    scratch.prepare(in_xs + 2 * lanes + 8, in_xs + 24);
+    let SmoothUnsqueezeScratch {
+        rows: buffer,
+        irow: ibuf,
+        col_min,
+        col_max,
+        mins,
+        maxs,
+    } = scratch;
 
-    // Precompute 1D horizontal 2x kernels by vertical averaging of 2D 2x kernels
-    let k2d = compute_5x5_kernels_2x(&crate::headers::DEFAULT_KERN_2);
-    let kh = compute_1d_h_kernels_2x(&k2d);
+    // 1D horizontal 2x kernels, derived by vertically averaging the 2D 2x kernels
     let mut kernel_vecs = [[D::F32Vec::splat(d, 0.0); 25]; 2];
     for idx in 0..2 {
         for i in 0..25 {
-            kernel_vecs[idx][i] = D::F32Vec::splat(d, kh[idx][i]);
+            kernel_vecs[idx][i] = D::F32Vec::splat(d, SMOOTH_UNSQUEEZE_KERN_H[idx][i]);
         }
     }
-
-    let needed = in_xs + 24;
-    let mut col_min = vec![0.0f32; needed];
-    let mut col_max = vec![0.0f32; needed];
-    let mut mins = vec![0.0f32; needed];
-    let mut maxs = vec![0.0f32; needed];
 
     for (dy, buf) in buffer.iter_mut().enumerate().take(4) {
         let yg = (row_offset + dy) as isize - 2;
@@ -1030,7 +1055,7 @@ fn smooth_h_unsqueeze_simd_impl<D: SimdDescriptor>(
             buffer[3].as_slice(),
             buffer[4].as_slice(),
         ];
-        compute_minmax(d, &input_rows, in_xs, &mut col_min, &mut col_max, &mut mins, &mut maxs);
+        compute_minmax(d, &input_rows, in_xs, col_min, col_max, mins, maxs);
 
         let r0 = buffer[0].as_slice();
         let r1 = buffer[1].as_slice();
@@ -1053,8 +1078,12 @@ fn smooth_h_unsqueeze_simd_impl<D: SimdDescriptor>(
             let minval = D::F32Vec::load(d, mins_chunk);
             let maxval = D::F32Vec::load(d, maxs_chunk);
 
-            let v_even = kernel_conv!(d, kernel_vecs[0], r0, r1, r2, r3, r4, x).max(minval).min(maxval);
-            let v_odd = kernel_conv!(d, kernel_vecs[1], r0, r1, r2, r3, r4, x).max(minval).min(maxval);
+            let v_even = kernel_conv!(d, kernel_vecs[0], r0, r1, r2, r3, r4, x)
+                .max(minval)
+                .min(maxval);
+            let v_odd = kernel_conv!(d, kernel_vecs[1], r0, r1, r2, r3, r4, x)
+                .max(minval)
+                .min(maxval);
 
             let out_even = (v_even + half.copysign(v_even)).as_i32();
             let out_odd = (v_odd + half.copysign(v_odd)).as_i32();
@@ -1082,9 +1111,9 @@ simd_function!(
         frame_header: &FrameHeader,
         rect: Rect,
         output: &mut Image<i32>,
-        buffer: &mut ([Vec<f32>; 5], Vec<i32>)
+        scratch: &mut SmoothUnsqueezeScratch
     ) {
-        smooth_h_unsqueeze_simd_impl(d, input, frame_header, rect, output, buffer);
+        smooth_h_unsqueeze_simd_impl(d, input, frame_header, rect, output, scratch);
     }
 );
 
@@ -1095,7 +1124,7 @@ fn smooth_v_unsqueeze_simd_impl<D: SimdDescriptor>(
     frame_header: &FrameHeader,
     rect: Rect,
     output: &mut Image<i32>,
-    (buffer, ibuf): &mut ([Vec<f32>; 5], Vec<i32>),
+    scratch: &mut SmoothUnsqueezeScratch,
 ) {
     let (in_xs, in_ys) = (rect.size.0, rect.size.1 / 2);
     let (col_offset, row_offset) = (rect.origin.0, rect.origin.1 / 2);
@@ -1105,23 +1134,23 @@ fn smooth_v_unsqueeze_simd_impl<D: SimdDescriptor>(
     if in_xs == 0 || in_ys == 0 {
         return;
     }
-    init_buffers(buffer, ibuf, in_xs + 2 * lanes + 8);
+    scratch.prepare(in_xs + 2 * lanes + 8, in_xs + 24);
+    let SmoothUnsqueezeScratch {
+        rows: buffer,
+        irow: ibuf,
+        col_min,
+        col_max,
+        mins,
+        maxs,
+    } = scratch;
 
-    // Precompute 1D vertical 2x kernels by horizontal averaging of 2D 2x kernels
-    let k2d = compute_5x5_kernels_2x(&crate::headers::DEFAULT_KERN_2);
-    let kv = compute_1d_v_kernels_2x(&k2d);
+    // 1D vertical 2x kernels, derived by horizontally averaging the 2D 2x kernels
     let mut kernel_vecs = [[D::F32Vec::splat(d, 0.0); 25]; 2];
     for idx in 0..2 {
         for i in 0..25 {
-            kernel_vecs[idx][i] = D::F32Vec::splat(d, kv[idx][i]);
+            kernel_vecs[idx][i] = D::F32Vec::splat(d, SMOOTH_UNSQUEEZE_KERN_V[idx][i]);
         }
     }
-
-    let needed = in_xs + 24;
-    let mut col_min = vec![0.0f32; needed];
-    let mut col_max = vec![0.0f32; needed];
-    let mut mins = vec![0.0f32; needed];
-    let mut maxs = vec![0.0f32; needed];
 
     for (dy, buf) in buffer.iter_mut().enumerate().take(4) {
         let yg = (row_offset + dy) as isize - 2;
@@ -1158,7 +1187,7 @@ fn smooth_v_unsqueeze_simd_impl<D: SimdDescriptor>(
             buffer[3].as_slice(),
             buffer[4].as_slice(),
         ];
-        compute_minmax(d, &input_rows, in_xs, &mut col_min, &mut col_max, &mut mins, &mut maxs);
+        compute_minmax(d, &input_rows, in_xs, col_min, col_max, mins, maxs);
 
         let r0 = buffer[0].as_slice();
         let r1 = buffer[1].as_slice();
@@ -1182,8 +1211,12 @@ fn smooth_v_unsqueeze_simd_impl<D: SimdDescriptor>(
             let minval = D::F32Vec::load(d, mins_chunk);
             let maxval = D::F32Vec::load(d, maxs_chunk);
 
-            let v_top = kernel_conv!(d, kernel_vecs[0], r0, r1, r2, r3, r4, x).max(minval).min(maxval);
-            let v_bottom = kernel_conv!(d, kernel_vecs[1], r0, r1, r2, r3, r4, x).max(minval).min(maxval);
+            let v_top = kernel_conv!(d, kernel_vecs[0], r0, r1, r2, r3, r4, x)
+                .max(minval)
+                .min(maxval);
+            let v_bottom = kernel_conv!(d, kernel_vecs[1], r0, r1, r2, r3, r4, x)
+                .max(minval)
+                .min(maxval);
 
             let out_py0 = (v_top + half.copysign(v_top)).as_i32();
             let out_py1 = (v_bottom + half.copysign(v_bottom)).as_i32();
@@ -1215,9 +1248,8 @@ simd_function!(
         frame_header: &FrameHeader,
         rect: Rect,
         output: &mut Image<i32>,
-        buffer: &mut ([Vec<f32>; 5], Vec<i32>)
+        scratch: &mut SmoothUnsqueezeScratch
     ) {
-        smooth_v_unsqueeze_simd_impl(d, input, frame_header, rect, output, buffer);
+        smooth_v_unsqueeze_simd_impl(d, input, frame_header, rect, output, scratch);
     }
 );
-

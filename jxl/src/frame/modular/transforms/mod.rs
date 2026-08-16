@@ -9,7 +9,7 @@ pub(super) mod apply_local;
 pub(super) mod meta_apply;
 mod palette;
 mod rct;
-mod squeeze;
+pub(super) mod squeeze;
 pub(super) mod step;
 
 #[derive(Debug, FromPrimitive, PartialEq, Clone, Copy)]

@@ -36,5 +36,6 @@ pub use shift_right_ceil::*;
 pub use smallvec::*;
 pub use vec_helpers::*;
 pub use xorshift128plus::*;
-pub mod upsample_kernel;
+mod upsample_kernel;
+pub(crate) use upsample_kernel::kernel_conv;
 pub use upsample_kernel::*;
