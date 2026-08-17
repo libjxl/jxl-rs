@@ -8,6 +8,11 @@ use jxl_simd::{F32SimdVec, SimdDescriptor};
 
 /// Precomputes flattened 5x5 kernels for 2x upsampling from CustomTransformData weights (15
 /// values). Output layout: kernel[oy * 2 + ox] -> [f32; 25] for oy, ox in 0..2
+///
+/// This is a const fn so that the kernel tables derived from the default weights can be
+/// const-evaluated: keeping the kernel values compile-time constants lets the compiler fold the
+/// splat loops in the (monomorphized-per-SIMD-target) smooth-unsqueeze functions into vector
+/// constants, which is considerably smaller than materializing the loops at runtime.
 const fn compute_5x5_kernels_2x(weights: &[f32; 15]) -> [[f32; 25]; 4] {
     // kernel[oy * 2 + ox], each flattened as [row * 5 + col].
     let mut kernel = [[0.0f32; 25]; 4];
@@ -134,7 +139,7 @@ pub fn compute_minmax<D: jxl_simd::SimdDescriptor>(
 #[allow(clippy::too_many_arguments)]
 pub fn kernel_conv<D: SimdDescriptor>(
     d: D,
-    kv: &[D::F32Vec; 25],
+    kv: &[f32; 25],
     r0: &[f32],
     r1: &[f32],
     r2: &[f32],
@@ -142,36 +147,37 @@ pub fn kernel_conv<D: SimdDescriptor>(
     r4: &[f32],
     x: usize,
 ) -> D::F32Vec {
+    let k = |i: usize| D::F32Vec::splat(d, kv[i]);
     // Row 0
-    let mut acc0 = D::F32Vec::load(d, &r0[x..]) * kv[0];
-    let mut acc1 = D::F32Vec::load(d, &r0[x + 1..]) * kv[1];
-    let mut acc2 = D::F32Vec::load(d, &r0[x + 2..]) * kv[2];
-    acc0 = D::F32Vec::load(d, &r0[x + 3..]).mul_add(kv[3], acc0);
-    acc1 = D::F32Vec::load(d, &r0[x + 4..]).mul_add(kv[4], acc1);
+    let mut acc0 = D::F32Vec::load(d, &r0[x..]) * k(0);
+    let mut acc1 = D::F32Vec::load(d, &r0[x + 1..]) * k(1);
+    let mut acc2 = D::F32Vec::load(d, &r0[x + 2..]) * k(2);
+    acc0 = D::F32Vec::load(d, &r0[x + 3..]).mul_add(k(3), acc0);
+    acc1 = D::F32Vec::load(d, &r0[x + 4..]).mul_add(k(4), acc1);
     // Row 1
-    acc2 = D::F32Vec::load(d, &r1[x..]).mul_add(kv[5], acc2);
-    acc0 = D::F32Vec::load(d, &r1[x + 1..]).mul_add(kv[6], acc0);
-    acc1 = D::F32Vec::load(d, &r1[x + 2..]).mul_add(kv[7], acc1);
-    acc2 = D::F32Vec::load(d, &r1[x + 3..]).mul_add(kv[8], acc2);
-    acc0 = D::F32Vec::load(d, &r1[x + 4..]).mul_add(kv[9], acc0);
+    acc2 = D::F32Vec::load(d, &r1[x..]).mul_add(k(5), acc2);
+    acc0 = D::F32Vec::load(d, &r1[x + 1..]).mul_add(k(6), acc0);
+    acc1 = D::F32Vec::load(d, &r1[x + 2..]).mul_add(k(7), acc1);
+    acc2 = D::F32Vec::load(d, &r1[x + 3..]).mul_add(k(8), acc2);
+    acc0 = D::F32Vec::load(d, &r1[x + 4..]).mul_add(k(9), acc0);
     // Row 2
-    acc1 = D::F32Vec::load(d, &r2[x..]).mul_add(kv[10], acc1);
-    acc2 = D::F32Vec::load(d, &r2[x + 1..]).mul_add(kv[11], acc2);
-    acc0 = D::F32Vec::load(d, &r2[x + 2..]).mul_add(kv[12], acc0);
-    acc1 = D::F32Vec::load(d, &r2[x + 3..]).mul_add(kv[13], acc1);
-    acc2 = D::F32Vec::load(d, &r2[x + 4..]).mul_add(kv[14], acc2);
+    acc1 = D::F32Vec::load(d, &r2[x..]).mul_add(k(10), acc1);
+    acc2 = D::F32Vec::load(d, &r2[x + 1..]).mul_add(k(11), acc2);
+    acc0 = D::F32Vec::load(d, &r2[x + 2..]).mul_add(k(12), acc0);
+    acc1 = D::F32Vec::load(d, &r2[x + 3..]).mul_add(k(13), acc1);
+    acc2 = D::F32Vec::load(d, &r2[x + 4..]).mul_add(k(14), acc2);
     // Row 3
-    acc0 = D::F32Vec::load(d, &r3[x..]).mul_add(kv[15], acc0);
-    acc1 = D::F32Vec::load(d, &r3[x + 1..]).mul_add(kv[16], acc1);
-    acc2 = D::F32Vec::load(d, &r3[x + 2..]).mul_add(kv[17], acc2);
-    acc0 = D::F32Vec::load(d, &r3[x + 3..]).mul_add(kv[18], acc0);
-    acc1 = D::F32Vec::load(d, &r3[x + 4..]).mul_add(kv[19], acc1);
+    acc0 = D::F32Vec::load(d, &r3[x..]).mul_add(k(15), acc0);
+    acc1 = D::F32Vec::load(d, &r3[x + 1..]).mul_add(k(16), acc1);
+    acc2 = D::F32Vec::load(d, &r3[x + 2..]).mul_add(k(17), acc2);
+    acc0 = D::F32Vec::load(d, &r3[x + 3..]).mul_add(k(18), acc0);
+    acc1 = D::F32Vec::load(d, &r3[x + 4..]).mul_add(k(19), acc1);
     // Row 4
-    acc2 = D::F32Vec::load(d, &r4[x..]).mul_add(kv[20], acc2);
-    acc0 = D::F32Vec::load(d, &r4[x + 1..]).mul_add(kv[21], acc0);
-    acc1 = D::F32Vec::load(d, &r4[x + 2..]).mul_add(kv[22], acc1);
-    acc2 = D::F32Vec::load(d, &r4[x + 3..]).mul_add(kv[23], acc2);
-    acc0 = D::F32Vec::load(d, &r4[x + 4..]).mul_add(kv[24], acc0);
+    acc2 = D::F32Vec::load(d, &r4[x..]).mul_add(k(20), acc2);
+    acc0 = D::F32Vec::load(d, &r4[x + 1..]).mul_add(k(21), acc0);
+    acc1 = D::F32Vec::load(d, &r4[x + 2..]).mul_add(k(22), acc1);
+    acc2 = D::F32Vec::load(d, &r4[x + 3..]).mul_add(k(23), acc2);
+    acc0 = D::F32Vec::load(d, &r4[x + 4..]).mul_add(k(24), acc0);
 
     acc0 + acc1 + acc2
 }
@@ -180,8 +186,8 @@ pub fn kernel_conv<D: SimdDescriptor>(
 mod test {
     use super::*;
 
-    /// The original (non-const) kernel construction, kept as a reference to
-    /// check the const-evaluated tables against.
+    /// Reference kernel construction using intermediate 4D arrays, used to
+    /// check the const-evaluated flat-indexed construction against.
     fn reference_5x5_kernels_2x(weights: &[f32; 15]) -> [[f32; 25]; 4] {
         let mut kernel = [[[[0.0f32; 5]; 5]; 2]; 2];
         let n = 1isize;
@@ -211,7 +217,7 @@ mod test {
     }
 
     #[test]
-    fn const_kernels_match_reference() {
+    fn kernels_match_reference() {
         let reference = reference_5x5_kernels_2x(&DEFAULT_KERN_2);
         assert_eq!(SMOOTH_UNSQUEEZE_KERN_2D, reference);
         for i in 0..25 {

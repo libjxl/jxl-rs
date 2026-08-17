@@ -7,9 +7,9 @@
 #![allow(clippy::too_many_arguments)]
 
 use crate::{
+    features::upsampling::{compute_minmax, kernel_conv},
     headers::CustomTransformData,
     render::{Channels, ChannelsMut, ErasedLocalState, RenderPipelineInOutStage},
-    util::{compute_minmax, kernel_conv},
 };
 use jxl_simd::{F32SimdVec, simd_function};
 
@@ -137,16 +137,6 @@ simd_function!(
         let r3 = input[3];
         let r4 = input[4];
 
-        // Pre-broadcast kernel weights
-        // flat_kernels layout: kernel[oy][ox] -> flat_kernels[oy * 2 + ox]
-        let mut kernel_vecs = [[D::F32Vec::splat(d, 0.0); 25]; 4];
-        for idx in 0..4 {
-            let k = &flat_kernels[idx];
-            for i in 0..25 {
-                kernel_vecs[idx][i] = D::F32Vec::splat(d, k[i]);
-            }
-        }
-
         // Process using iterators for mins/maxs, manual indexing for output
         let mins_iter = mins.chunks_exact(D::F32Vec::LEN);
         let maxs_iter = maxs.chunks_exact(D::F32Vec::LEN);
@@ -161,13 +151,13 @@ simd_function!(
             let out_x = x * 2;
 
             // Row 0
-            let r0_0 = kernel_conv(d, &kernel_vecs[0], r0, r1, r2, r3, r4, x).max(minval).min(maxval);
-            let r0_1 = kernel_conv(d, &kernel_vecs[1], r0, r1, r2, r3, r4, x).max(minval).min(maxval);
+            let r0_0 = kernel_conv(d, &flat_kernels[0], r0, r1, r2, r3, r4, x).max(minval).min(maxval);
+            let r0_1 = kernel_conv(d, &flat_kernels[1], r0, r1, r2, r3, r4, x).max(minval).min(maxval);
             D::F32Vec::store_interleaved_2(r0_0, r0_1, &mut output[0][out_x..]);
 
             // Row 1
-            let r1_0 = kernel_conv(d, &kernel_vecs[2], r0, r1, r2, r3, r4, x).max(minval).min(maxval);
-            let r1_1 = kernel_conv(d, &kernel_vecs[3], r0, r1, r2, r3, r4, x).max(minval).min(maxval);
+            let r1_0 = kernel_conv(d, &flat_kernels[2], r0, r1, r2, r3, r4, x).max(minval).min(maxval);
+            let r1_1 = kernel_conv(d, &flat_kernels[3], r0, r1, r2, r3, r4, x).max(minval).min(maxval);
             D::F32Vec::store_interleaved_2(r1_0, r1_1, &mut output[1][out_x..]);
         }
     }
@@ -196,16 +186,6 @@ simd_function!(
         let r3 = input[3];
         let r4 = input[4];
 
-        // Pre-broadcast kernel weights
-        // flat_kernels layout: kernel[oy][ox] -> flat_kernels[oy * 4 + ox]
-        let mut kernel_vecs = [[D::F32Vec::splat(d, 0.0); 25]; 16];
-        for idx in 0..16 {
-            let k = &flat_kernels[idx];
-            for i in 0..25 {
-                kernel_vecs[idx][i] = D::F32Vec::splat(d, k[i]);
-            }
-        }
-
         // Process using iterators for mins/maxs, manual indexing for output
         let mins_iter = mins.chunks_exact(D::F32Vec::LEN);
         let maxs_iter = maxs.chunks_exact(D::F32Vec::LEN);
@@ -222,10 +202,10 @@ simd_function!(
             // Process all 4 output rows using a loop
             for oy in 0..4 {
                 let base = oy * 4;
-                let v0 = kernel_conv(d, &kernel_vecs[base], r0, r1, r2, r3, r4, x).max(minval).min(maxval);
-                let v1 = kernel_conv(d, &kernel_vecs[base + 1], r0, r1, r2, r3, r4, x).max(minval).min(maxval);
-                let v2 = kernel_conv(d, &kernel_vecs[base + 2], r0, r1, r2, r3, r4, x).max(minval).min(maxval);
-                let v3 = kernel_conv(d, &kernel_vecs[base + 3], r0, r1, r2, r3, r4, x).max(minval).min(maxval);
+                let v0 = kernel_conv(d, &flat_kernels[base], r0, r1, r2, r3, r4, x).max(minval).min(maxval);
+                let v1 = kernel_conv(d, &flat_kernels[base + 1], r0, r1, r2, r3, r4, x).max(minval).min(maxval);
+                let v2 = kernel_conv(d, &flat_kernels[base + 2], r0, r1, r2, r3, r4, x).max(minval).min(maxval);
+                let v3 = kernel_conv(d, &flat_kernels[base + 3], r0, r1, r2, r3, r4, x).max(minval).min(maxval);
                 D::F32Vec::store_interleaved_4(v0, v1, v2, v3, &mut output[oy][out_x..]);
             }
         }
@@ -255,16 +235,6 @@ simd_function!(
         let r3 = input[3];
         let r4 = input[4];
 
-        // Pre-broadcast kernel weights
-        // flat_kernels layout: kernel[oy][ox] -> flat_kernels[oy * 8 + ox]
-        let mut kernel_vecs = [[D::F32Vec::splat(d, 0.0); 25]; 64];
-        for idx in 0..64 {
-            let k = &flat_kernels[idx];
-            for i in 0..25 {
-                kernel_vecs[idx][i] = D::F32Vec::splat(d, k[i]);
-            }
-        }
-
         // Process using iterators for mins/maxs, manual indexing for output
         let mins_iter = mins.chunks_exact(D::F32Vec::LEN);
         let maxs_iter = maxs.chunks_exact(D::F32Vec::LEN);
@@ -281,14 +251,14 @@ simd_function!(
             // Process all 8 output rows using a loop
             for oy in 0..8 {
                 let base = oy * 8;
-                let v0 = kernel_conv(d, &kernel_vecs[base], r0, r1, r2, r3, r4, x).max(minval).min(maxval);
-                let v1 = kernel_conv(d, &kernel_vecs[base + 1], r0, r1, r2, r3, r4, x).max(minval).min(maxval);
-                let v2 = kernel_conv(d, &kernel_vecs[base + 2], r0, r1, r2, r3, r4, x).max(minval).min(maxval);
-                let v3 = kernel_conv(d, &kernel_vecs[base + 3], r0, r1, r2, r3, r4, x).max(minval).min(maxval);
-                let v4 = kernel_conv(d, &kernel_vecs[base + 4], r0, r1, r2, r3, r4, x).max(minval).min(maxval);
-                let v5 = kernel_conv(d, &kernel_vecs[base + 5], r0, r1, r2, r3, r4, x).max(minval).min(maxval);
-                let v6 = kernel_conv(d, &kernel_vecs[base + 6], r0, r1, r2, r3, r4, x).max(minval).min(maxval);
-                let v7 = kernel_conv(d, &kernel_vecs[base + 7], r0, r1, r2, r3, r4, x).max(minval).min(maxval);
+                let v0 = kernel_conv(d, &flat_kernels[base], r0, r1, r2, r3, r4, x).max(minval).min(maxval);
+                let v1 = kernel_conv(d, &flat_kernels[base + 1], r0, r1, r2, r3, r4, x).max(minval).min(maxval);
+                let v2 = kernel_conv(d, &flat_kernels[base + 2], r0, r1, r2, r3, r4, x).max(minval).min(maxval);
+                let v3 = kernel_conv(d, &flat_kernels[base + 3], r0, r1, r2, r3, r4, x).max(minval).min(maxval);
+                let v4 = kernel_conv(d, &flat_kernels[base + 4], r0, r1, r2, r3, r4, x).max(minval).min(maxval);
+                let v5 = kernel_conv(d, &flat_kernels[base + 5], r0, r1, r2, r3, r4, x).max(minval).min(maxval);
+                let v6 = kernel_conv(d, &flat_kernels[base + 6], r0, r1, r2, r3, r4, x).max(minval).min(maxval);
+                let v7 = kernel_conv(d, &flat_kernels[base + 7], r0, r1, r2, r3, r4, x).max(minval).min(maxval);
                 D::F32Vec::store_interleaved_8(v0, v1, v2, v3, v4, v5, v6, v7, &mut output[oy][out_x..]);
             }
         }
