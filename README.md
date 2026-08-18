@@ -1,7 +1,7 @@
 # JPEG XL in Rust (`jxl-rs`)
 
 [![CI](https://github.com/libjxl/jxl-rs/actions/workflows/post_merge.yml/badge.svg)](https://github.com/libjxl/jxl-rs/actions/workflows/post_merge.yml)
-[![Crates.io](https://img.shields.io/crates/v/jxl.svg)](https://crates.io/crates/jxl)
+[![Crates.io](https://img.shields.io/crates/v/jxl.svg?color=brightgreen)](https://crates.io/crates/jxl)
 [![Docs.rs](https://docs.rs/jxl/badge.svg)](https://docs.rs/jxl)
 [![Discord](https://img.shields.io/discord/794206087879852103?label=Discord&logo=discord)](https://discord.gg/DqkQgDRTFu)
 
