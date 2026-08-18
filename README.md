@@ -16,11 +16,11 @@ and **Mozilla Firefox**.
 JPEG XL was standardized in 2022 as [ISO/IEC 18181](https://jpeg.org/jpegxl/workplan.html).
 While [`libjxl`](https://github.com/libjxl/libjxl) (C++) is the official ISO/IEC
 18181-4 reference software, `jxl-rs` is a pure-Rust implementation
-developed within the JPEG XL project. While not (yet) an official reference
+developed within the JPEG XL project. It is not (yet) an official reference
 implementation, it aims for full specification conformance, memory safety, and
 high decoding performance across diverse hardware architectures.
 
-`jxl-rs`'s performance closely matches (and sometimes exceeds) the C++ reference
+The performance of `jxl-rs` closely matches (and sometimes exceeds) the C++ reference
 implementation, while having improved support for progressive rendering and lower
 memory requirements.
 
@@ -74,7 +74,7 @@ cargo test --release --features shuttle shuttle
 ```
 
 To run property-based tests with extended budget:
-```
+```bash
 ARBTEST_BUDGET_MS=10000 cargo test --release --all
 SHUTTLE_ITERATIONS=100 cargo nextest run --features shuttle -- shuttle
 ```
