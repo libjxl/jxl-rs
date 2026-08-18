@@ -38,8 +38,6 @@ safety comments and to be reviewed by a non-author Unsafe Rust expert.
 
 ## Usage
 
-### Command-Line Utility (`jxl_cli`)
-
 ```bash
 # Build
 cargo build --release --bin jxl_cli
@@ -54,14 +52,8 @@ target/release/jxl_cli input.jxl --info
 target/release/jxl_cli input.jxl --speedtest --num-reps 10
 ```
 
-### Rust Library (`jxl`)
-
-Add `jxl` to your `Cargo.toml`:
-
-```toml
-[dependencies]
-jxl = "0.5"
-```
+The `jxl` crate is also available on [crates.io](https://crates.io/crates/jxl)
+for use as a library.
 
 ## Testing
 
@@ -93,4 +85,3 @@ issue](https://github.com/libjxl/jxl-rs/issues/new).
 - **Discord**: Join the [JPEG XL Discord Server](https://discord.gg/DqkQgDRTFu)
 - **JPEG XL Website**: [jpeg.org/jpegxl](https://jpeg.org/jpegxl) & [jpegxl.info](https://jpegxl.info)
 - **Contributing**: Please see [CONTRIBUTING.md](CONTRIBUTING.md) for contribution guidelines and CLA requirements.
-794206087879852103
