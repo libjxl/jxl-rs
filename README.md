@@ -44,7 +44,7 @@ safety comments and to be reviewed by a non-author Unsafe Rust expert.
 # Build
 cargo build --release --bin jxl_cli
 
-# Decode an image (PNG, PPM, PGM, APNG)
+# Decode an image (PNG, PPM, PGM, APNG, EXR)
 target/release/jxl_cli input.jxl output.png
 
 # Print image metadata
