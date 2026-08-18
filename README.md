@@ -3,7 +3,7 @@
 [![CI](https://github.com/libjxl/jxl-rs/actions/workflows/post_merge.yml/badge.svg)](https://github.com/libjxl/jxl-rs/actions/workflows/post_merge.yml)
 [![Crates.io](https://img.shields.io/crates/v/jxl.svg)](https://crates.io/crates/jxl)
 [![Docs.rs](https://docs.rs/jxl/badge.svg)](https://docs.rs/jxl)
-[![Discord](https://img.shields.io/discord/831144411466891275?label=Discord&logo=discord)](https://discord.gg/DqkQgDRTFu)
+[![Discord](https://img.shields.io/discord/794206087879852103?label=Discord&logo=discord)](https://discord.gg/DqkQgDRTFu)
 
 <img src="https://raw.githubusercontent.com/libjxl/libjxl/main/doc/jxl.svg" width="100" align="right" alt="JXL logo">
 
@@ -93,3 +93,4 @@ issue](https://github.com/libjxl/jxl-rs/issues/new).
 - **Discord**: Join the [JPEG XL Discord Server](https://discord.gg/DqkQgDRTFu)
 - **JPEG XL Website**: [jpeg.org/jpegxl](https://jpeg.org/jpegxl) & [jpegxl.info](https://jpegxl.info)
 - **Contributing**: Please see [CONTRIBUTING.md](CONTRIBUTING.md) for contribution guidelines and CLA requirements.
+794206087879852103
