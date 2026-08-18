@@ -147,10 +147,15 @@ impl<Buffer> RenderPipelineShared<Buffer> {
         requested_data_type: DataTypeTag,
     ) -> (usize, usize) {
         let ChannelInfo { downsample, ty } = self.channel_info[0][channel];
-        if ty.unwrap() != requested_data_type {
+        // Channels that no stage consumes have no type at all. Callers may still ask for a
+        // scratch buffer for them (e.g. VarDCT always decodes three colour channels, but a
+        // grayscale pipeline only ever reads the first one); the data written there is
+        // discarded, so any type is acceptable.
+        if let Some(ty) = ty
+            && ty != requested_data_type
+        {
             panic!(
-                "Invalid pipeline usage: incorrect channel type, requested {:?}, but pipeline wants {ty:?}",
-                requested_data_type
+                "Invalid pipeline usage: incorrect channel type, requested {requested_data_type:?}, but pipeline wants {ty:?}"
             );
         }
         // 420 JPEGs are padded to 16 pixels, not to 8.

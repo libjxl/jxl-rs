@@ -1296,3 +1296,26 @@ fn decode_test_strategic_solid_blue_grid_boundary() {
         }
     }
 }
+
+/// Regression test: a grayscale, non-XYB VarDCT frame has no stage consuming colour
+/// channels 1 and 2, so those channels end up with no type in the pipeline. VarDCT still
+/// decodes all three channels, and asking the pipeline for their scratch buffers used to
+/// panic.
+#[test]
+fn test_fuzzer_vardct_grayscale_unused_channel() {
+    let data = include_bytes!("../../tests/testdata/vardct_grayscale_unused_channel.jxl");
+    let (_, frames) = decode_internal(data, usize::MAX, false, false, None, None, None).unwrap();
+    let (_, simple_frames) =
+        decode_internal(data, usize::MAX, true, false, None, None, None).unwrap();
+    assert_eq!(frames.len(), 1);
+    assert_eq!(frames[0].len(), 1);
+    assert_eq!(frames[0][0].size(), (1, 1));
+    compare_frames(
+        Path::new("vardct_grayscale_unused_channel.jxl"),
+        0,
+        &frames[0],
+        &simple_frames[0],
+    );
+    // Streaming input with flushing exercises the low-memory pipeline's partial renders.
+    decode_internal(data, 1, false, true, None, None, None).unwrap();
+}
