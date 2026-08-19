@@ -3,12 +3,11 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-use crate::{
-    BLOCK_DIM,
-    bit_reader::BitReader,
-    error::{Error, Result},
-};
 use std::default::Default;
+
+use crate::BLOCK_DIM;
+use crate::bit_reader::BitReader;
+use crate::error::{Error, Result};
 
 pub const COLOR_TILE_DIM: usize = 64;
 

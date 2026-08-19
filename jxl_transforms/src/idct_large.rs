@@ -10,8 +10,7 @@
 
 use std::f32::consts::SQRT_2;
 
-use jxl_simd::F32SimdVec;
-use jxl_simd::SimdDescriptor;
+use jxl_simd::{F32SimdVec, SimdDescriptor};
 
 use crate::idct_32;
 

@@ -3,14 +3,14 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
+use std::path::Path;
+
 use crate::api::{
     JxlColorType, JxlDataFormat, JxlDecoder, JxlDecoderInner, JxlDecoderOptions, JxlPixelFormat,
     JxlTransferFunction, ProcessingResult, states,
 };
 use crate::error::Error;
 use crate::image::{Image, JxlOutputBuffer, Rect};
-use std::path::Path;
-
 use crate::tests::decode::{compare_frames, decode, decode_internal, scan_frames_with_decoder};
 
 #[test]

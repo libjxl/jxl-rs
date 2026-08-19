@@ -3,8 +3,9 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-use crate::render::{Channels, ChannelsMut, ErasedLocalState, RenderPipelineInOutStage};
 use jxl_simd::{F32SimdVec, simd_function};
+
+use crate::render::{Channels, ChannelsMut, ErasedLocalState, RenderPipelineInOutStage};
 
 /// Apply Gabor-like filter to a channel.
 #[derive(Debug)]

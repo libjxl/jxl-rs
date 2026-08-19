@@ -3,24 +3,21 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-use crate::{
-    api::{JxlColorProfile, JxlColorType, JxlDataFormat, JxlOutputBuffer, JxlPixelFormat},
-    error::Result,
-    frame::Frame,
-    headers::{Orientation, frame_header::FrameType},
-    image::{DataTypeTag, Rect},
-    render::{
-        Channels, ChannelsMut, RenderPipelineInOutStage, RenderPipelineInPlaceStage,
-        buffer_splitter::{BufferSplitter, OutputChannelRef, SaveStageBufferInfo},
-        low_memory_pipeline::row_buffers::RowBuffer,
-        save::SaveStage,
-        stages::{
-            ConvertF32ToF16Stage, ConvertF32ToU8Stage, ConvertF32ToU16Stage, FromLinearStage,
-            OutputColorInfo, TransferFunction, Upsample8x, XybStage,
-        },
-    },
-    util::{SmallVec, f16, mirror},
+use crate::api::{JxlColorProfile, JxlColorType, JxlDataFormat, JxlOutputBuffer, JxlPixelFormat};
+use crate::error::Result;
+use crate::frame::Frame;
+use crate::headers::Orientation;
+use crate::headers::frame_header::FrameType;
+use crate::image::{DataTypeTag, Rect};
+use crate::render::buffer_splitter::{BufferSplitter, OutputChannelRef, SaveStageBufferInfo};
+use crate::render::low_memory_pipeline::row_buffers::RowBuffer;
+use crate::render::save::SaveStage;
+use crate::render::stages::{
+    ConvertF32ToF16Stage, ConvertF32ToU8Stage, ConvertF32ToU16Stage, FromLinearStage,
+    OutputColorInfo, TransferFunction, Upsample8x, XybStage,
 };
+use crate::render::{Channels, ChannelsMut, RenderPipelineInOutStage, RenderPipelineInPlaceStage};
+use crate::util::{SmallVec, f16, mirror};
 
 impl Frame {
     #[allow(clippy::too_many_arguments)]

@@ -3,39 +3,29 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-use crate::util::sync::{
-    Mutex,
-    atomic::{AtomicBool, Ordering},
-};
-use std::{
-    cmp::min,
-    collections::{BTreeSet, HashSet},
-    fmt::Debug,
-};
+use std::cmp::min;
+use std::collections::{BTreeSet, HashSet};
+use std::fmt::Debug;
 
-use crate::{
-    bit_reader::BitReader,
-    error::{Error, Result},
-    frame::{
-        ColorCorrelationParams, DataStatus, HfMetaViews,
-        block_context_map::BlockContextMap,
-        modular::{
-            buffers::{ModularBuffer, ModularChannel},
-            transforms::step::{TransformDependency, TransformStepChunk},
-        },
-        quantizer::{self, LfQuantFactors, QuantizerParams},
-    },
-    headers::{
-        ImageMetadata, JxlHeader,
-        bit_depth::BitDepth,
-        frame_header::FrameHeader,
-        modular::{GroupHeader, TransformId},
-    },
-    image::{Image, Rect},
-    render::buffer_splitter::OutputChannelRef,
-    util::{CeilLog2, PerThreadStorage, tracing_wrappers::*},
-};
 use jxl_transforms::transform_map::*;
+
+use crate::bit_reader::BitReader;
+use crate::error::{Error, Result};
+use crate::frame::block_context_map::BlockContextMap;
+use crate::frame::modular::buffers::{ModularBuffer, ModularChannel};
+use crate::frame::modular::transforms::step::{TransformDependency, TransformStepChunk};
+use crate::frame::quantizer::{self, LfQuantFactors, QuantizerParams};
+use crate::frame::{ColorCorrelationParams, DataStatus, HfMetaViews};
+use crate::headers::bit_depth::BitDepth;
+use crate::headers::frame_header::FrameHeader;
+use crate::headers::modular::{GroupHeader, TransformId};
+use crate::headers::{ImageMetadata, JxlHeader};
+use crate::image::{Image, Rect};
+use crate::render::buffer_splitter::OutputChannelRef;
+use crate::util::sync::Mutex;
+use crate::util::sync::atomic::{AtomicBool, Ordering};
+use crate::util::tracing_wrappers::*;
+use crate::util::{CeilLog2, PerThreadStorage};
 
 mod buffers;
 mod decode;

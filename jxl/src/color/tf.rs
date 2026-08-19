@@ -3,8 +3,9 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-use crate::util::{eval_rational_poly, eval_rational_poly_simd};
 use jxl_simd::{F32SimdVec, SimdDescriptor, SimdMask};
+
+use crate::util::{eval_rational_poly, eval_rational_poly_simd};
 
 /// Converts the linear samples with the sRGB transfer curve (SIMD version).
 // Max error ~5e-7

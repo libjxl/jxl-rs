@@ -3,22 +3,19 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-use std::{
-    io::BufReader,
-    str::FromStr,
-    time::{Duration, Instant},
-};
+use std::io::BufReader;
+use std::str::FromStr;
+use std::time::{Duration, Instant};
 
 use color_eyre::eyre::{Result, eyre};
-use jxl::{
-    api::{
-        Endianness, JxlAnimation, JxlBitDepth, JxlBitstreamInput, JxlColorProfile, JxlColorType,
-        JxlDataFormat, JxlDecoder, JxlDecoderOptions, JxlOutputBuffer, JxlParallelRunner,
-        JxlParallelRunnerFun, JxlPixelFormat, ProcessingResult, states::WithImageInfo,
-    },
-    headers::extra_channels::ExtraChannel,
-    image::{OwnedRawImage, Rect},
+use jxl::api::states::WithImageInfo;
+use jxl::api::{
+    Endianness, JxlAnimation, JxlBitDepth, JxlBitstreamInput, JxlColorProfile, JxlColorType,
+    JxlDataFormat, JxlDecoder, JxlDecoderOptions, JxlOutputBuffer, JxlParallelRunner,
+    JxlParallelRunnerFun, JxlPixelFormat, ProcessingResult,
 };
+use jxl::headers::extra_channels::ExtraChannel;
+use jxl::image::{OwnedRawImage, Rect};
 use rayon::iter::{IntoParallelIterator, ParallelIterator};
 
 pub struct ImageFrame {

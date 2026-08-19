@@ -5,7 +5,6 @@
 
 use crate::bit_reader::BitReader;
 use crate::error::Error;
-
 use crate::util::CeilLog2;
 
 #[derive(Debug, Clone, Copy)]

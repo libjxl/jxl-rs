@@ -3,11 +3,11 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-use crate::{
-    api::{BoxParserCheckpoint, VisibleFrameInfo, VisibleFrameSeekTarget, inner::CodestreamParser},
-    frame::DecoderState,
-    headers::{Animation, frame_header::FrameHeader},
-};
+use crate::api::inner::CodestreamParser;
+use crate::api::{BoxParserCheckpoint, VisibleFrameInfo, VisibleFrameSeekTarget};
+use crate::frame::DecoderState;
+use crate::headers::Animation;
+use crate::headers::frame_header::FrameHeader;
 
 #[derive(Clone, Copy)]
 struct FrameStartInfo {

@@ -3,13 +3,13 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
+use box_parser::BoxParser;
+use codestream_parser::CodestreamParser;
+
+use super::{JxlBasicInfo, JxlColorProfile, JxlDecoderOptions, JxlPixelFormat};
 #[cfg(test)]
 use crate::api::FrameCallback;
 use crate::api::{JxlFrameHeader, VisibleFrameInfo, VisibleFrameSeekTarget};
-
-use super::{JxlBasicInfo, JxlColorProfile, JxlDecoderOptions, JxlPixelFormat};
-use box_parser::BoxParser;
-use codestream_parser::CodestreamParser;
 
 mod box_parser;
 mod codestream_parser;

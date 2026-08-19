@@ -3,23 +3,21 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-use crate::{
-    api::{Endianness, JxlColorType, JxlDataFormat, JxlOutputBuffer},
-    error::Result,
-    headers::Orientation,
-    image::{DataTypeTag, Image, ImageDataType, Rect},
-    render::{SimpleRenderPipeline, buffer_splitter::BufferSplitter},
-    util::{
-        ShiftRightCeil,
-        tracing_wrappers::{instrument, trace},
-    },
-};
 use rand::SeedableRng;
 
+use super::internal::Stage;
+use super::stages::ExtendToImageDimensionsStage;
 use super::{
     RenderPipeline, RenderPipelineBuilder, RenderPipelineInOutStage, RenderPipelineInPlaceStage,
-    internal::Stage, stages::ExtendToImageDimensionsStage,
 };
+use crate::api::{Endianness, JxlColorType, JxlDataFormat, JxlOutputBuffer};
+use crate::error::Result;
+use crate::headers::Orientation;
+use crate::image::{DataTypeTag, Image, ImageDataType, Rect};
+use crate::render::SimpleRenderPipeline;
+use crate::render::buffer_splitter::BufferSplitter;
+use crate::util::ShiftRightCeil;
+use crate::util::tracing_wrappers::{instrument, trace};
 
 pub(super) trait RenderPipelineTestableStage<V> {
     type InputT: ImageDataType;

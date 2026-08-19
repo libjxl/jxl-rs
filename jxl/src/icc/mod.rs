@@ -8,8 +8,7 @@ use std::io::Cursor;
 use byteorder::{BigEndian, ReadBytesExt, WriteBytesExt};
 
 use crate::bit_reader::*;
-use crate::entropy_coding::decode::Histograms;
-use crate::entropy_coding::decode::SymbolReader;
+use crate::entropy_coding::decode::{Histograms, SymbolReader};
 use crate::error::{Error, Result};
 use crate::headers::encodings::*;
 use crate::util::NewWithCapacity;

@@ -3,19 +3,16 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
+use crate::error::Result;
+use crate::features::blending::perform_blending;
+use crate::features::patches::{PatchBlendMode, PatchBlending};
+use crate::frame::ReferenceFrame;
+use crate::headers::FileHeader;
+use crate::headers::extra_channels::ExtraChannelInfo;
+use crate::headers::frame_header::*;
+use crate::render::{ErasedLocalState, RenderPipelineInPlaceStage};
+use crate::util::ChannelVec;
 use crate::util::sync::Arc;
-
-use crate::{
-    error::Result,
-    features::{
-        blending::perform_blending,
-        patches::{PatchBlendMode, PatchBlending},
-    },
-    frame::ReferenceFrame,
-    headers::{FileHeader, extra_channels::ExtraChannelInfo, frame_header::*},
-    render::{ErasedLocalState, RenderPipelineInPlaceStage},
-    util::ChannelVec,
-};
 
 pub struct BlendingStage {
     pub frame_origin: (isize, isize),

@@ -3,23 +3,20 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-use crate::util::sync::{RwLock, RwLockReadGuard};
 use std::ops::Range;
 
-use crate::{
-    error::Result,
-    image::{DataTypeTag, OwnedRawImage, Rect},
-    render::{
-        buffer_splitter::OutputChannelRef,
-        internal::{ChannelInfo, Stage},
-        low_memory_pipeline::{
-            LowMemoryRenderPipelinePerThread, helpers::get_distinct_indices, run_stage::ExtraInfo,
-        },
-    },
-    util::{ChannelVec, ShiftRightCeil, mirror, tracing_wrappers::*},
-};
-
-use super::{LowMemoryRenderPipeline, row_buffers::RowBuffer};
+use super::LowMemoryRenderPipeline;
+use super::row_buffers::RowBuffer;
+use crate::error::Result;
+use crate::image::{DataTypeTag, OwnedRawImage, Rect};
+use crate::render::buffer_splitter::OutputChannelRef;
+use crate::render::internal::{ChannelInfo, Stage};
+use crate::render::low_memory_pipeline::LowMemoryRenderPipelinePerThread;
+use crate::render::low_memory_pipeline::helpers::get_distinct_indices;
+use crate::render::low_memory_pipeline::run_stage::ExtraInfo;
+use crate::util::sync::{RwLock, RwLockReadGuard};
+use crate::util::tracing_wrappers::*;
+use crate::util::{ChannelVec, ShiftRightCeil, mirror};
 
 fn apply_x_padding(
     input_type: DataTypeTag,

@@ -3,9 +3,10 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
+use std::io::Write;
+
 use color_eyre::eyre::{Result, ensure};
 use jxl::api::JxlColorType;
-use std::io::Write;
 
 use crate::dec::{DecodeOutput, OutputDataType};
 

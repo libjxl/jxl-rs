@@ -55,10 +55,13 @@ impl RenderPipelineInOutStage for NearestNeighbourUpsample {
 
 #[cfg(test)]
 mod test {
-    use super::*;
-    use crate::{error::Result, image::Image, render::test::make_and_run_simple_pipeline};
     use rand::SeedableRng;
     use test_log::test;
+
+    use super::*;
+    use crate::error::Result;
+    use crate::image::Image;
+    use crate::render::test::make_and_run_simple_pipeline;
 
     #[test]
     fn nn_consistency() -> Result<()> {

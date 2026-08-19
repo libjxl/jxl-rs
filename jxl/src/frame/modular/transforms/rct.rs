@@ -5,14 +5,10 @@
 
 use jxl_simd::{I32SimdVec, ScalarDescriptor, SimdDescriptor, shr, simd_function};
 
-use crate::{
-    frame::modular::{
-        ModularChannel,
-        transforms::{RctOp, RctPermutation},
-    },
-    image::Image,
-    util::tracing_wrappers::*,
-};
+use crate::frame::modular::ModularChannel;
+use crate::frame::modular::transforms::{RctOp, RctPermutation};
+use crate::image::Image;
+use crate::util::tracing_wrappers::*;
 
 #[inline(always)]
 fn rct_impl<D: SimdDescriptor, const OP: u32>(

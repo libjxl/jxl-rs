@@ -3,15 +3,12 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-use std::collections::BTreeMap;
-use std::io::Read;
-use std::{collections::HashMap, io::IoSliceMut};
+use std::collections::{BTreeMap, HashMap};
+use std::io::{IoSliceMut, Read};
 
+use crate::api::inner::process::SmallBuffer;
+use crate::api::{JxlBitstreamInput, JxlSignatureType, check_signature_internal};
 use crate::error::{Error, Result};
-
-use crate::api::{
-    JxlBitstreamInput, JxlSignatureType, check_signature_internal, inner::process::SmallBuffer,
-};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ParseState {
@@ -537,9 +534,8 @@ impl<'a> CodestreamInput<'a> {
 mod tests {
     use std::io::IoSliceMut;
 
-    use crate::api::inner::box_parser::CodestreamInput;
-
     use super::BoxParser;
+    use crate::api::inner::box_parser::CodestreamInput;
 
     /// Regression: a zero-length skippable box must not leave the parser stuck at
     /// `SkippableBox(0)` when more container input is available.

@@ -3,23 +3,23 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-use crate::util::sync::atomic::AtomicUsize;
 use std::collections::HashMap;
 
 use num_traits::FromPrimitive;
 
-use crate::{
-    error::{Error, Result},
-    frame::modular::{
-        ChannelInfo, ModularBuffer, ModularBufferInfo, ModularGridKind, Predictor,
-        transforms::step::{TransformStep, TransformStepChunk},
-    },
-    headers::{self, frame_header::FrameHeader, modular::TransformId},
-    image::Rect,
-    util::{ShiftRightCeil, tracing_wrappers::*},
-};
-
 use super::{RctOp, RctPermutation};
+use crate::error::{Error, Result};
+use crate::frame::modular::transforms::step::{TransformStep, TransformStepChunk};
+use crate::frame::modular::{
+    ChannelInfo, ModularBuffer, ModularBufferInfo, ModularGridKind, Predictor,
+};
+use crate::headers::frame_header::FrameHeader;
+use crate::headers::modular::TransformId;
+use crate::headers::{self};
+use crate::image::Rect;
+use crate::util::ShiftRightCeil;
+use crate::util::sync::atomic::AtomicUsize;
+use crate::util::tracing_wrappers::*;
 
 #[instrument(level = "trace", err)]
 fn check_equal_channels(

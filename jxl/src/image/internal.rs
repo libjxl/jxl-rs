@@ -3,18 +3,14 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-use std::{
-    alloc::{Layout, alloc, alloc_zeroed, dealloc},
-    fmt::Debug,
-    ptr::null_mut,
-};
-
-use crate::{
-    error::{Error, Result},
-    util::{CACHE_LINE_BYTE_SIZE, tracing_wrappers::*},
-};
+use std::alloc::{Layout, alloc, alloc_zeroed, dealloc};
+use std::fmt::Debug;
+use std::ptr::null_mut;
 
 use super::Rect;
+use crate::error::{Error, Result};
+use crate::util::CACHE_LINE_BYTE_SIZE;
+use crate::util::tracing_wrappers::*;
 
 #[derive(Debug, Clone, Copy)]
 pub(super) struct RawImageBuffer {

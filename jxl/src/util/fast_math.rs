@@ -5,9 +5,11 @@
 
 #![allow(clippy::excessive_precision)]
 
-use super::{eval_rational_poly, eval_rational_poly_simd};
-use jxl_simd::{F32SimdVec, I32SimdVec, SimdDescriptor, shl, shr};
 use std::f32::consts::{PI, SQRT_2};
+
+use jxl_simd::{F32SimdVec, I32SimdVec, SimdDescriptor, shl, shr};
+
+use super::{eval_rational_poly, eval_rational_poly_simd};
 
 const POW2F_NUMER_COEFFS: [f32; 3] = [1.01749063e1, 4.88687798e1, 9.85506591e1];
 const POW2F_DENOM_COEFFS: [f32; 4] = [2.10242958e-1, -2.22328856e-2, -1.94414990e1, 9.85506633e1];
@@ -166,9 +168,8 @@ pub fn floor_log2_nonzero(x: u64) -> u32 {
 mod test {
     use test_log::test;
 
-    use crate::tests::assert_close;
-
     use super::*;
+    use crate::tests::assert_close;
 
     #[test]
     fn test_fast_erff() {

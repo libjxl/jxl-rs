@@ -3,16 +3,13 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-use crate::util::sync::{
-    RwLock,
-    atomic::{AtomicBool, AtomicU8, AtomicUsize, Ordering},
-};
-
 use crate::error::Result;
 use crate::image::OwnedRawImage;
 use crate::render::internal::RenderPipelineShared;
 use crate::render::low_memory_pipeline::row_buffers::RowBuffer;
 use crate::util::NewWithCapacity;
+use crate::util::sync::RwLock;
+use crate::util::sync::atomic::{AtomicBool, AtomicU8, AtomicUsize, Ordering};
 
 pub(super) struct InputBuffer {
     // One buffer per channel.

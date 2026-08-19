@@ -5,9 +5,8 @@
 
 use arbtest::arbitrary::Arbitrary;
 
-use crate::error::Result;
-
 use super::{Image, ImageDataType, Rect};
+use crate::error::Result;
 
 impl<T: ImageDataType> Image<T> {
     #[cfg(test)]

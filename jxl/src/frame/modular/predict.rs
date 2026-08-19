@@ -3,14 +3,13 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-use crate::{
-    error::{Error, Result},
-    headers::modular::WeightedHeader,
-    image::Image,
-    util::floor_log2_nonzero,
-};
 use num_derive::FromPrimitive;
 use num_traits::FromPrimitive;
+
+use crate::error::{Error, Result};
+use crate::headers::modular::WeightedHeader;
+use crate::image::Image;
+use crate::util::floor_log2_nonzero;
 
 #[repr(u8)]
 #[derive(Debug, FromPrimitive, Clone, Copy, PartialEq, Eq)]
@@ -633,12 +632,9 @@ impl WeightedPredictorState {
 
 #[cfg(test)]
 mod tests {
-    use crate::{
-        headers::modular::{GroupHeader, WeightedHeader},
-        util::floor_log2_nonzero,
-    };
-
     use super::{PredictionData, WeightedPredictorState};
+    use crate::headers::modular::{GroupHeader, WeightedHeader};
+    use crate::util::floor_log2_nonzero;
 
     struct SimpleRandom {
         out: i64,

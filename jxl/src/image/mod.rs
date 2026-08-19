@@ -14,8 +14,7 @@ mod rect;
 mod test;
 mod typed;
 
-pub use data_type::DataTypeTag;
-pub use data_type::ImageDataType;
+pub use data_type::{DataTypeTag, ImageDataType};
 pub use output_buffer::JxlOutputBuffer;
 pub use raw::{OwnedRawImage, RawImageRect, RawImageRectMut};
 pub use rect::Rect;

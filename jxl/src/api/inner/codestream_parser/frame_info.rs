@@ -3,32 +3,26 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-use std::{
-    collections::{HashSet, VecDeque},
-    io::IoSliceMut,
-};
+use std::collections::{HashSet, VecDeque};
+use std::io::IoSliceMut;
 
-use crate::{
-    api::{
-        JxlColorProfile, JxlDecoderOptions, JxlOutputBuffer, JxlParallelRunner, JxlPixelFormat,
-        inner::{
-            CodestreamParser,
-            box_parser::CodestreamInput,
-            codestream_parser::{ProcessMode, check_size_limit, validate_output_buffers},
-            process::SmallBuffer,
-        },
-    },
-    bit_reader::BitReader,
-    error::{Error, Result},
-    frame::{DecoderState, Frame, HfMetaSplitter, LfImageSplitter, Section},
-    headers::{
-        FileHeader,
-        encodings::UnconditionalCoder,
-        frame_header::{Encoding, FrameHeader, FrameType},
-        toc::{IncrementalTocReader, Toc},
-    },
-    util::NewWithCapacity,
+use crate::api::inner::CodestreamParser;
+use crate::api::inner::box_parser::CodestreamInput;
+use crate::api::inner::codestream_parser::{
+    ProcessMode, check_size_limit, validate_output_buffers,
 };
+use crate::api::inner::process::SmallBuffer;
+use crate::api::{
+    JxlColorProfile, JxlDecoderOptions, JxlOutputBuffer, JxlParallelRunner, JxlPixelFormat,
+};
+use crate::bit_reader::BitReader;
+use crate::error::{Error, Result};
+use crate::frame::{DecoderState, Frame, HfMetaSplitter, LfImageSplitter, Section};
+use crate::headers::FileHeader;
+use crate::headers::encodings::UnconditionalCoder;
+use crate::headers::frame_header::{Encoding, FrameHeader, FrameType};
+use crate::headers::toc::{IncrementalTocReader, Toc};
+use crate::util::NewWithCapacity;
 
 struct SectionBuffer {
     len: usize,

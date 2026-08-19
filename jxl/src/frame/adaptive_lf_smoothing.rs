@@ -3,12 +3,13 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
+use num_traits::abs;
+
 use crate::api::JxlParallelRunner;
 use crate::error::Result;
 use crate::headers::frame_header::FrameHeader;
 use crate::image::Image;
 use crate::render::buffer_splitter::OutputChannelSplitter;
-use num_traits::abs;
 
 #[allow(clippy::excessive_precision)]
 const W_SIDE: f32 = 0.20345139757231578;

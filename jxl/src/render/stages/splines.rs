@@ -3,12 +3,9 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
+use crate::features::spline::Splines;
+use crate::render::{ErasedLocalState, RenderPipelineInPlaceStage};
 use crate::util::sync::{Arc, RwLock};
-
-use crate::{
-    features::spline::Splines,
-    render::{ErasedLocalState, RenderPipelineInPlaceStage},
-};
 
 pub struct SplinesStage {
     splines: Arc<RwLock<Splines>>,
@@ -51,12 +48,13 @@ impl RenderPipelineInPlaceStage for SplinesStage {
 
 #[cfg(test)]
 mod test {
-    use crate::util::sync::{Arc, RwLock};
+    use test_log::test;
 
+    use crate::error::Result;
     use crate::features::spline::{Point, QuantizedSpline, Splines};
     use crate::frame::color_correlation_map::ColorCorrelationParams;
-    use crate::{error::Result, render::stages::splines::SplinesStage};
-    use test_log::test;
+    use crate::render::stages::splines::SplinesStage;
+    use crate::util::sync::{Arc, RwLock};
 
     #[ignore = "spline rendering is not fully consistent due to sqrt precision differences"]
     #[test]

@@ -3,15 +3,14 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-use internal::{RenderPipelineShared, RunInOutStage, RunInPlaceStage};
 use std::any::Any;
 
-use crate::{
-    api::JxlOutputBuffer,
-    error::Result,
-    image::{Image, ImageDataType},
-    render::buffer_splitter::BufferSplitter,
-};
+use internal::{RenderPipelineShared, RunInOutStage, RunInPlaceStage};
+
+use crate::api::JxlOutputBuffer;
+use crate::error::Result;
+use crate::image::{Image, ImageDataType};
+use crate::render::buffer_splitter::BufferSplitter;
 
 pub mod buffer_splitter;
 mod builder;

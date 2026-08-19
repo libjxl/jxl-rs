@@ -7,12 +7,10 @@ use std::collections::TryReserveError;
 
 use thiserror::Error;
 
-use crate::{
-    api::{JxlColorType, JxlDataFormat},
-    entropy_coding::huffman::HUFFMAN_MAX_BITS,
-    features::spline::Point,
-    image::DataTypeTag,
-};
+use crate::api::{JxlColorType, JxlDataFormat};
+use crate::entropy_coding::huffman::HUFFMAN_MAX_BITS;
+use crate::features::spline::Point;
+use crate::image::DataTypeTag;
 
 #[derive(Error, Debug)]
 #[non_exhaustive]

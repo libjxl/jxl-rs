@@ -3,14 +3,11 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-use crate::{
-    frame::{
-        modular::{ModularChannel, predict::clamped_gradient},
-        quantizer::NUM_QUANT_TABLES,
-    },
-    headers::frame_header::FrameHeader,
-    image::Image,
-};
+use crate::frame::modular::ModularChannel;
+use crate::frame::modular::predict::clamped_gradient;
+use crate::frame::quantizer::NUM_QUANT_TABLES;
+use crate::headers::frame_header::FrameHeader;
+use crate::image::Image;
 
 #[derive(Debug)]
 pub enum ModularStreamId {

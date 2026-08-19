@@ -3,16 +3,15 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-use crate::{U32SimdVec, impl_f32_array_interface, x86_64::sse42::Sse42Descriptor};
+use std::arch::x86_64::*;
+use std::ops::{
+    Add, AddAssign, BitAnd, BitAndAssign, BitOr, BitOrAssign, BitXor, BitXorAssign, Div, DivAssign,
+    Mul, MulAssign, Neg, Shl, ShlAssign, Shr, ShrAssign, Sub, SubAssign,
+};
 
 use super::super::{F32SimdVec, I32SimdVec, SimdDescriptor, SimdMask, U8SimdVec, U16SimdVec};
-use std::{
-    arch::x86_64::*,
-    ops::{
-        Add, AddAssign, BitAnd, BitAndAssign, BitOr, BitOrAssign, BitXor, BitXorAssign, Div,
-        DivAssign, Mul, MulAssign, Neg, Shl, ShlAssign, Shr, ShrAssign, Sub, SubAssign,
-    },
-};
+use crate::x86_64::sse42::Sse42Descriptor;
+use crate::{U32SimdVec, impl_f32_array_interface};
 
 /// Core 8x8 transpose algorithm for AVX2.
 /// Takes 8 __m256 vectors representing rows and returns 8 transposed vectors.

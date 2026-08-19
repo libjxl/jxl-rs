@@ -54,11 +54,12 @@ jobs:
       - name: Install latest rust toolchain
         uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
         with:
+          toolchain: nightly
           components: rustfmt
 
 
       - name: Cargo fmt (check)
-        run: cargo fmt --all -- --check
+        run: cargo +nightly fmt --all -- --check
 
   clippy:
     runs-on: ${{ matrix.os || 'ubuntu-latest' }}

@@ -3,17 +3,17 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
+use std::fs;
+use std::io::{BufReader, Read, Seek};
+use std::path::PathBuf;
+use std::time::Duration;
+
 use clap::Parser;
 use color_eyre::eyre::{Result, WrapErr, eyre};
 use jxl::api::JxlDecoderOptions;
 use jxl_cli::dec;
 use jxl_cli::dec::OutputDataType;
 use jxl_cli::enc::OutputFormat;
-use std::fs;
-use std::io::{BufReader, Read, Seek};
-use std::path::PathBuf;
-use std::time::Duration;
-
 use mimalloc::MiMalloc;
 
 #[global_allocator]
@@ -98,7 +98,8 @@ fn save_icc(icc_bytes: &[u8], icc_filename: Option<&PathBuf>) -> Result<()> {
 fn main() -> Result<()> {
     #[cfg(feature = "tracing-subscriber")]
     {
-        use tracing_subscriber::{EnvFilter, fmt, prelude::*};
+        use tracing_subscriber::prelude::*;
+        use tracing_subscriber::{EnvFilter, fmt};
         tracing_subscriber::registry()
             .with(fmt::layer())
             .with(EnvFilter::from_default_env())

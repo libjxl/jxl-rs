@@ -3,14 +3,12 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-use crate::{
-    api::{Endianness, JxlDataFormat},
-    error::Result,
-    headers::Orientation,
-    render::{buffer_splitter::OutputChannelRef, save::SaveStage},
-};
-
 use super::row_buffers::RowBuffer;
+use crate::api::{Endianness, JxlDataFormat};
+use crate::error::Result;
+use crate::headers::Orientation;
+use crate::render::buffer_splitter::OutputChannelRef;
+use crate::render::save::SaveStage;
 
 mod identity;
 
