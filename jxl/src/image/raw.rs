@@ -3,11 +3,13 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-use std::{fmt::Debug, marker::PhantomData};
+use std::fmt::Debug;
+use std::marker::PhantomData;
 
-use crate::{error::Result, util::CACHE_LINE_BYTE_SIZE};
-
-use super::{Rect, internal::RawImageBuffer};
+use super::Rect;
+use super::internal::RawImageBuffer;
+use crate::error::Result;
+use crate::util::CACHE_LINE_BYTE_SIZE;
 
 pub struct OwnedRawImage {
     // Safety invariant: all the accessible bytes of `self.data` are initialized, and

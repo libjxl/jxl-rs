@@ -3,11 +3,11 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-use crate::bit_reader::BitReader;
-use crate::error::Error;
 use std::collections::HashSet;
 
+use crate::bit_reader::BitReader;
 use crate::entropy_coding::decode::*;
+use crate::error::Error;
 
 fn move_to_front(v: &mut [u8], index: u8) {
     let value = v[index as usize];

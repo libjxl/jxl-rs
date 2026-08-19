@@ -5,15 +5,14 @@
 
 use std::fmt::Debug;
 
-use super::{Predictor, predict::WeightedPredictorState};
-use crate::{
-    bit_reader::BitReader,
-    entropy_coding::decode::{Histograms, SymbolReader},
-    error::{Error, Result},
-    frame::modular::predict::PredictionData,
-    image::Image,
-    util::tracing_wrappers::*,
-};
+use super::Predictor;
+use super::predict::WeightedPredictorState;
+use crate::bit_reader::BitReader;
+use crate::entropy_coding::decode::{Histograms, SymbolReader};
+use crate::error::{Error, Result};
+use crate::frame::modular::predict::PredictionData;
+use crate::image::Image;
+use crate::util::tracing_wrappers::*;
 
 #[derive(Debug, Clone, Copy)]
 pub enum TreeNode {

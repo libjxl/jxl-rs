@@ -3,9 +3,10 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
+use std::path::Path;
+
 use crate::image::Image;
 use crate::tests::decode::{compare_frames, compute_mse, decode, decode_internal};
-use std::path::Path;
 
 pub fn run(path: &Path, expected_checkpoints: &[(usize, f32)]) {
     let file = std::fs::read(path).unwrap();

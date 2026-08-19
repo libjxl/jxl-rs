@@ -6,16 +6,14 @@
 use num_derive::FromPrimitive;
 use num_traits::FromPrimitive;
 
-use crate::{
-    bit_reader::BitReader,
-    entropy_coding::decode::Histograms,
-    entropy_coding::decode::SymbolReader,
-    error::{Error, Result},
-    features::blending::perform_blending,
-    frame::{DecoderState, ReferenceFrame},
-    headers::extra_channels::ExtraChannelInfo,
-    util::{NewWithCapacity, slice, tracing_wrappers::*},
-};
+use crate::bit_reader::BitReader;
+use crate::entropy_coding::decode::{Histograms, SymbolReader};
+use crate::error::{Error, Result};
+use crate::features::blending::perform_blending;
+use crate::frame::{DecoderState, ReferenceFrame};
+use crate::headers::extra_channels::ExtraChannelInfo;
+use crate::util::tracing_wrappers::*;
+use crate::util::{NewWithCapacity, slice};
 
 // Context numbers as specified in Section C.4.5, Listing C.2:
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
@@ -766,8 +764,9 @@ impl PatchesDictionary {
 mod tests {
 
     mod read_patches_tests {
-        use super::super::*;
         use test_log::test;
+
+        use super::super::*;
 
         #[test]
         fn read_single_patch_dict() -> Result<()> {
@@ -1088,8 +1087,9 @@ mod tests {
     }
 
     mod set_patches_for_row_tests {
-        use super::super::*;
         use test_log::test;
+
+        use super::super::*;
 
         // Helper to create a PatchesDictionary for tests
         fn create_dictionary(
@@ -1458,11 +1458,10 @@ mod tests {
 
     mod add_one_row_tests {
         use super::super::*;
-        use crate::{
-            headers::{bit_depth::BitDepth, extra_channels::ExtraChannel},
-            image::Image,
-            tests::assert_close,
-        };
+        use crate::headers::bit_depth::BitDepth;
+        use crate::headers::extra_channels::ExtraChannel;
+        use crate::image::Image;
+        use crate::tests::assert_close;
 
         const MAX_ABS_DELTA: f32 = 1e-6; // Adjusted for typical f32 comparisons
 

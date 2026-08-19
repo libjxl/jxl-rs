@@ -3,17 +3,16 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
+use std::arch::x86_64::*;
+use std::ops::{
+    Add, AddAssign, BitAnd, BitAndAssign, BitOr, BitOrAssign, BitXor, BitXorAssign, Div, DivAssign,
+    Mul, MulAssign, Neg, Shl, ShlAssign, Shr, ShrAssign, Sub, SubAssign,
+};
+
 use super::super::{
     AvxDescriptor, F32SimdVec, I32SimdVec, SimdDescriptor, SimdMask, U8SimdVec, U16SimdVec,
 };
 use crate::{Sse42Descriptor, U32SimdVec, impl_f32_array_interface};
-use std::{
-    arch::x86_64::*,
-    ops::{
-        Add, AddAssign, BitAnd, BitAndAssign, BitOr, BitOrAssign, BitXor, BitXorAssign, Div,
-        DivAssign, Mul, MulAssign, Neg, Shl, ShlAssign, Shr, ShrAssign, Sub, SubAssign,
-    },
-};
 
 // Safety invariant: this type is only ever constructed if avx512f and avx512bw are available.
 #[derive(Clone, Copy, Debug)]

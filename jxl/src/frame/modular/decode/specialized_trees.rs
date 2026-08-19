@@ -3,25 +3,22 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-use std::{collections::VecDeque, ops::Range};
+use std::collections::VecDeque;
+use std::ops::Range;
 
-use crate::{
-    bit_reader::BitReader,
-    entropy_coding::decode::{Histograms, SymbolReader, unpack_signed},
-    error::Result,
-    frame::modular::{
-        ModularChannel, Predictor, Tree,
-        decode::{
-            channel::ModularChannelDecoder,
-            common::{make_pixel, precompute_references},
-        },
-        flat_tree::{FlatTreeNode, predict_flat},
-        predict::{PredictionData, WeightedPredictorState, clamped_gradient},
-        tree::{NUM_NONREF_PROPERTIES, PROPERTIES_PER_PREVCHAN, PredictionResult, TreeNode},
-    },
-    headers::modular::GroupHeader,
-    image::Image,
+use crate::bit_reader::BitReader;
+use crate::entropy_coding::decode::{Histograms, SymbolReader, unpack_signed};
+use crate::error::Result;
+use crate::frame::modular::decode::channel::ModularChannelDecoder;
+use crate::frame::modular::decode::common::{make_pixel, precompute_references};
+use crate::frame::modular::flat_tree::{FlatTreeNode, predict_flat};
+use crate::frame::modular::predict::{PredictionData, WeightedPredictorState, clamped_gradient};
+use crate::frame::modular::tree::{
+    NUM_NONREF_PROPERTIES, PROPERTIES_PER_PREVCHAN, PredictionResult, TreeNode,
 };
+use crate::frame::modular::{ModularChannel, Predictor, Tree};
+use crate::headers::modular::GroupHeader;
+use crate::image::Image;
 
 trait MaybeWeightedPredictor: Sized {
     fn predict(

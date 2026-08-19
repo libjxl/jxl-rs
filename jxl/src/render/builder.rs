@@ -3,8 +3,9 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-use crate::util::sync::atomic::{AtomicBool, Ordering};
-
+use super::internal::{RenderPipelineShared, Stage};
+use super::stages::ExtendToImageDimensionsStage;
+use super::{RenderPipeline, RenderPipelineInOutStage, RenderPipelineInPlaceStage};
 use crate::api::{JxlColorType, JxlDataFormat};
 use crate::error::{Error, Result};
 use crate::headers::Orientation;
@@ -12,11 +13,9 @@ use crate::render::StageSpecialCase;
 use crate::render::internal::ChannelInfo;
 use crate::render::save::SaveStage;
 use crate::render::stages::ConvertI32ToU8Stage;
-use crate::util::{ShiftRightCeil, tracing_wrappers::*};
-
-use super::internal::{RenderPipelineShared, Stage};
-use super::stages::ExtendToImageDimensionsStage;
-use super::{RenderPipeline, RenderPipelineInOutStage, RenderPipelineInPlaceStage};
+use crate::util::ShiftRightCeil;
+use crate::util::sync::atomic::{AtomicBool, Ordering};
+use crate::util::tracing_wrappers::*;
 
 pub(crate) struct RenderPipelineBuilder<Pipeline: RenderPipeline> {
     shared: RenderPipelineShared<Pipeline::Buffer>,

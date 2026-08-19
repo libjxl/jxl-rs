@@ -7,11 +7,9 @@ use std::ops::Range;
 
 use jxl_simd::{F32SimdVec, SimdDescriptor, U8SimdVec, U16SimdVec, simd_function};
 
-use crate::{
-    api::{Endianness, JxlDataFormat, JxlOutputBuffer},
-    image::ImageDataType,
-    render::low_memory_pipeline::row_buffers::RowBuffer,
-};
+use crate::api::{Endianness, JxlDataFormat, JxlOutputBuffer};
+use crate::image::ImageDataType;
+use crate::render::low_memory_pipeline::row_buffers::RowBuffer;
 
 macro_rules! define_run_interleaved {
     ($fn_name:ident, $ty:ty, $vec_trait:ident, $store_fn:ident, $cnt:expr, $($arg:ident),+) => {

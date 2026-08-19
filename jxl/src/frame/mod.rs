@@ -3,25 +3,8 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-use crate::util::sync::Arc;
 use std::collections::{BTreeSet, HashSet};
 
-use crate::{
-    api::{JxlDecoderOptions, JxlParallelRunner},
-    entropy_coding::decode::Histograms,
-    error::Result,
-    features::{noise::Noise, patches::PatchesDictionary, spline::Splines},
-    headers::{
-        FileHeader,
-        extra_channels::ExtraChannelInfo,
-        frame_header::{Encoding, FrameHeader, FrameType},
-        permutation::Permutation,
-        toc::Toc,
-    },
-    image::{Image, Rect},
-    render::buffer_splitter::{OutputChannelRef, OutputChannelSplitter},
-    util::{PerThreadStorage, tracing_wrappers::*},
-};
 use adaptive_lf_smoothing::adaptive_lf_smoothing;
 use block_context_map::BlockContextMap;
 use color_correlation_map::ColorCorrelationParams;
@@ -29,8 +12,23 @@ use modular::{FullModularImage, Tree};
 use quant_weights::DequantMatrices;
 use quantizer::{LfQuantFactors, QuantizerParams};
 
+use crate::api::{JxlDecoderOptions, JxlParallelRunner};
+use crate::entropy_coding::decode::Histograms;
+use crate::error::Result;
 use crate::features::epf::SigmaSource;
-use crate::util::sync::{Mutex, RwLock};
+use crate::features::noise::Noise;
+use crate::features::patches::PatchesDictionary;
+use crate::features::spline::Splines;
+use crate::headers::FileHeader;
+use crate::headers::extra_channels::ExtraChannelInfo;
+use crate::headers::frame_header::{Encoding, FrameHeader, FrameType};
+use crate::headers::permutation::Permutation;
+use crate::headers::toc::Toc;
+use crate::image::{Image, Rect};
+use crate::render::buffer_splitter::{OutputChannelRef, OutputChannelSplitter};
+use crate::util::PerThreadStorage;
+use crate::util::sync::{Arc, Mutex, RwLock};
+use crate::util::tracing_wrappers::*;
 
 mod adaptive_lf_smoothing;
 mod block_context_map;

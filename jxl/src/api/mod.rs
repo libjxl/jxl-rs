@@ -14,7 +14,6 @@ mod options;
 mod signature;
 mod xyb_constants;
 
-pub use crate::image::JxlOutputBuffer;
 pub use color::*;
 pub use data_types::*;
 pub use decoder::*;
@@ -23,7 +22,9 @@ pub use input::*;
 pub use options::*;
 pub use signature::*;
 
-use crate::{error::Result, headers::image_metadata::Orientation};
+use crate::error::Result;
+use crate::headers::image_metadata::Orientation;
+pub use crate::image::JxlOutputBuffer;
 
 /// This type represents the return value of a function that reads input from a bitstream. The
 /// variant `Complete` indicates that the operation was completed successfully, and its return

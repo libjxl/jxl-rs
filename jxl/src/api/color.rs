@@ -3,16 +3,15 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-use std::{borrow::Cow, fmt};
+use std::borrow::Cow;
+use std::fmt;
 
-use crate::{
-    color::tf::{hlg_to_scene, linear_to_pq_precise, pq_to_linear_precise},
-    error::{Error, Result},
-    headers::color_encoding::{
-        ColorEncoding, ColorSpace, Primaries, RenderingIntent, TransferFunction, WhitePoint,
-    },
-    util::{Matrix3x3, Vector3, inv_3x3_matrix, mul_3x3_matrix, mul_3x3_vector},
+use crate::color::tf::{hlg_to_scene, linear_to_pq_precise, pq_to_linear_precise};
+use crate::error::{Error, Result};
+use crate::headers::color_encoding::{
+    ColorEncoding, ColorSpace, Primaries, RenderingIntent, TransferFunction, WhitePoint,
 };
+use crate::util::{Matrix3x3, Vector3, inv_3x3_matrix, mul_3x3_matrix, mul_3x3_vector};
 
 // Bradford matrices for chromatic adaptation
 const K_BRADFORD: Matrix3x3<f64> = [
@@ -2043,8 +2042,9 @@ fn tone_map_pixel(
 
 /// Create mAB A2B0 tag for XYB color space.
 fn create_icc_lut_atob_tag_for_xyb(tags: &mut Vec<u8>) -> Result<(), Error> {
-    use super::xyb_constants::*;
     use byteorder::{BigEndian, WriteBytesExt};
+
+    use super::xyb_constants::*;
 
     // Tag signature: 'mAB '
     tags.extend_from_slice(b"mAB ");

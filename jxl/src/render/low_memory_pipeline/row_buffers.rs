@@ -5,14 +5,12 @@
 
 use std::ops::Range;
 
-use crate::{
-    error::Result,
-    image::{DataTypeTag, ImageDataType},
-    render::MAX_BORDER,
-    util::{
-        CACHE_LINE_BYTE_SIZE, CacheLine, SmallVec, SmallVecHeapStorage, num_per_cache_line,
-        slice_from_cachelines, slice_from_cachelines_mut,
-    },
+use crate::error::Result;
+use crate::image::{DataTypeTag, ImageDataType};
+use crate::render::MAX_BORDER;
+use crate::util::{
+    CACHE_LINE_BYTE_SIZE, CacheLine, SmallVec, SmallVecHeapStorage, num_per_cache_line,
+    slice_from_cachelines, slice_from_cachelines_mut,
 };
 
 /// Temporary storage for data rows. Note that the first pixel of the group is expected to be

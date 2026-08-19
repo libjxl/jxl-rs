@@ -6,11 +6,10 @@
 #![allow(clippy::needless_range_loop)]
 #![allow(clippy::too_many_arguments)]
 
-use crate::{
-    headers::CustomTransformData,
-    render::{Channels, ChannelsMut, ErasedLocalState, RenderPipelineInOutStage},
-};
 use jxl_simd::{F32SimdVec, simd_function};
+
+use crate::headers::CustomTransformData;
+use crate::render::{Channels, ChannelsMut, ErasedLocalState, RenderPipelineInOutStage};
 
 pub struct Upsample<const N: usize, const SHIFT: u8> {
     // Precomputed flattened kernels for SIMD optimization
@@ -469,12 +468,14 @@ pub type Upsample8x = Upsample<8, 3>;
 
 #[cfg(test)]
 mod test {
-    use super::*;
-    use crate::{
-        error::Result, headers::CustomTransformDataNonserialized, image::Image,
-        render::test::make_and_run_simple_pipeline, tests::assert_close,
-    };
     use test_log::test;
+
+    use super::*;
+    use crate::error::Result;
+    use crate::headers::CustomTransformDataNonserialized;
+    use crate::image::Image;
+    use crate::render::test::make_and_run_simple_pipeline;
+    use crate::tests::assert_close;
 
     fn ups_factors() -> CustomTransformData {
         CustomTransformData::default(&CustomTransformDataNonserialized { xyb_encoded: true })

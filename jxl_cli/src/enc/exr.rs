@@ -6,10 +6,9 @@
 use std::io::{Seek, Write};
 
 use color_eyre::eyre::{Result, eyre};
-use jxl::api::{JxlColorEncoding, JxlColorProfile, JxlTransferFunction};
-
 use exr::meta::attribute::Chromaticities;
 use exr::prelude::*;
+use jxl::api::{JxlColorEncoding, JxlColorProfile, JxlTransferFunction};
 
 use crate::dec::{DecodeOutput, OutputDataType};
 

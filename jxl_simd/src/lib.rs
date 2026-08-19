@@ -5,12 +5,10 @@
 
 #![allow(clippy::too_many_arguments)]
 
-use std::{
-    fmt::Debug,
-    ops::{
-        Add, AddAssign, BitAnd, BitAndAssign, BitOr, BitOrAssign, BitXor, BitXorAssign, Div,
-        DivAssign, Mul, MulAssign, Neg, Sub, SubAssign,
-    },
+use std::fmt::Debug;
+use std::ops::{
+    Add, AddAssign, BitAnd, BitAndAssign, BitOr, BitOrAssign, BitXor, BitXorAssign, Div, DivAssign,
+    Mul, MulAssign, Neg, Sub, SubAssign,
 };
 
 #[cfg(target_arch = "x86_64")]
@@ -25,22 +23,18 @@ mod wasm32;
 pub mod float16;
 pub mod scalar;
 
+#[cfg(all(target_arch = "aarch64", feature = "neon"))]
+pub use aarch64::neon::NeonDescriptor;
 pub use float16::f16;
-
+pub use scalar::ScalarDescriptor;
+#[cfg(all(target_arch = "wasm32", feature = "simd128"))]
+pub use wasm32::simd128::Simd128Descriptor;
 #[cfg(all(target_arch = "x86_64", feature = "avx"))]
 pub use x86_64::avx::AvxDescriptor;
 #[cfg(all(target_arch = "x86_64", feature = "avx512"))]
 pub use x86_64::avx512::Avx512Descriptor;
 #[cfg(all(target_arch = "x86_64", feature = "sse42"))]
 pub use x86_64::sse42::Sse42Descriptor;
-
-#[cfg(all(target_arch = "aarch64", feature = "neon"))]
-pub use aarch64::neon::NeonDescriptor;
-
-#[cfg(all(target_arch = "wasm32", feature = "simd128"))]
-pub use wasm32::simd128::Simd128Descriptor;
-
-pub use scalar::ScalarDescriptor;
 
 pub trait SimdDescriptor: Sized + Copy + Debug + Send + Sync {
     type F32Vec: F32SimdVec<Descriptor = Self>;

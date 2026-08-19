@@ -3,9 +3,14 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
+use std::cell::RefCell;
+use std::path::Path;
+use std::rc::Rc;
+
+use crate::api::process::SequentialRunner;
 use crate::api::{
     JxlDataFormat, JxlDecoder, JxlDecoderOptions, JxlParallelRunner, JxlPixelFormat,
-    ProcessingResult, VisibleFrameInfo, process::SequentialRunner, states,
+    ProcessingResult, VisibleFrameInfo, states,
 };
 use crate::error::{Error, Result};
 use crate::frame::Frame;
@@ -13,9 +18,6 @@ use crate::headers::FileHeader;
 use crate::headers::frame_header::FrameHeader;
 use crate::headers::toc::Toc;
 use crate::image::{Image, JxlOutputBuffer, Rect};
-use std::cell::RefCell;
-use std::path::Path;
-use std::rc::Rc;
 
 #[allow(clippy::type_complexity)]
 pub fn decode(input: &[u8]) -> Result<(usize, Vec<Vec<Image<f32>>>), Error> {

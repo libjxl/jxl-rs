@@ -3,25 +3,24 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-use crate::util::sync::{
-    RwLockReadGuard,
-    atomic::{AtomicUsize, Ordering},
-};
 use std::fmt::Debug;
 
-use crate::{
-    error::Result,
-    frame::modular::{
-        DataStatus, ModularBufferInfo, ModularGridKind, Predictor, TransformScratchSpace,
-        buffers::{ModularChannel, with_buffers},
-        transforms::squeeze::{smooth_2d_unsqueeze, smooth_h_unsqueeze, smooth_v_unsqueeze},
-    },
-    headers::{frame_header::FrameHeader, modular::WeightedHeader},
-    image::{Image, ImageRect, Rect},
-    util::{SmallVec, tracing_wrappers::*},
-};
-
 use super::{RctOp, RctPermutation};
+use crate::error::Result;
+use crate::frame::modular::buffers::{ModularChannel, with_buffers};
+use crate::frame::modular::transforms::squeeze::{
+    smooth_2d_unsqueeze, smooth_h_unsqueeze, smooth_v_unsqueeze,
+};
+use crate::frame::modular::{
+    DataStatus, ModularBufferInfo, ModularGridKind, Predictor, TransformScratchSpace,
+};
+use crate::headers::frame_header::FrameHeader;
+use crate::headers::modular::WeightedHeader;
+use crate::image::{Image, ImageRect, Rect};
+use crate::util::SmallVec;
+use crate::util::sync::RwLockReadGuard;
+use crate::util::sync::atomic::{AtomicUsize, Ordering};
+use crate::util::tracing_wrappers::*;
 
 #[derive(Debug, Clone)]
 pub enum TransformStep {

@@ -6,11 +6,9 @@
 #![allow(unsafe_code)]
 
 use core::slice;
-use std::{
-    fmt::Debug,
-    mem::MaybeUninit,
-    ops::{Deref, DerefMut},
-};
+use std::fmt::Debug;
+use std::mem::MaybeUninit;
+use std::ops::{Deref, DerefMut};
 
 pub trait SmallVecHeapStorage<T> {
     const STACK_ONLY: bool;
@@ -268,8 +266,9 @@ impl<T, const N: usize, HeapStorage: SmallVecHeapStorage<T>> Drop for SmallVec<T
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use arbtest::arbitrary::Arbitrary;
+
+    use super::*;
 
     #[test]
     fn test_size() {

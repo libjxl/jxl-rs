@@ -7,13 +7,10 @@ use jxl_simd::{
     F32SimdVec, I32SimdVec, SimdDescriptor, SimdMask, U32SimdVec, shl, shr, simd_function,
 };
 
-use crate::{
-    error::{Error, Result},
-    frame::modular::{ChannelInfo, IMAGE_OFFSET, ModularChannel},
-    headers::modular::SqueezeParams,
-    image::{Image, ImageRect},
-};
-
+use crate::error::{Error, Result};
+use crate::frame::modular::{ChannelInfo, IMAGE_OFFSET, ModularChannel};
+use crate::headers::modular::SqueezeParams;
+use crate::image::{Image, ImageRect};
 use crate::util::tracing_wrappers::*;
 
 #[instrument(level = "trace", err)]

@@ -3,20 +3,17 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-use crate::util::sync::{Mutex, atomic::Ordering};
-
-use crate::{
-    api::JxlOutputBuffer,
-    error::Result,
-    image::{Image, ImageDataType},
-    render::{buffer_splitter::BufferSplitter, internal::ChannelInfo},
-    util::{ShiftRightCeil, tracing_wrappers::*},
-};
-
-use super::{
-    RenderPipeline, RenderPipelineInOutStage, RenderPipelineInPlaceStage,
-    internal::{RenderPipelineShared, Stage},
-};
+use super::internal::{RenderPipelineShared, Stage};
+use super::{RenderPipeline, RenderPipelineInOutStage, RenderPipelineInPlaceStage};
+use crate::api::JxlOutputBuffer;
+use crate::error::Result;
+use crate::image::{Image, ImageDataType};
+use crate::render::buffer_splitter::BufferSplitter;
+use crate::render::internal::ChannelInfo;
+use crate::util::ShiftRightCeil;
+use crate::util::sync::Mutex;
+use crate::util::sync::atomic::Ordering;
+use crate::util::tracing_wrappers::*;
 
 mod extend;
 mod run_stage;

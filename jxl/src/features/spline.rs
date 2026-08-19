@@ -3,20 +3,18 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-use std::{
-    f32::consts::{FRAC_1_SQRT_2, PI, SQRT_2},
-    iter::{self, zip},
-    ops,
-};
+use std::f32::consts::{FRAC_1_SQRT_2, PI, SQRT_2};
+use std::iter::{self, zip};
+use std::ops;
 
-use crate::{
-    bit_reader::BitReader,
-    entropy_coding::decode::{Histograms, SymbolReader, unpack_signed},
-    error::{Error, Result},
-    frame::color_correlation_map::ColorCorrelationParams,
-    util::{CeilLog2, NewWithCapacity, fast_cos, fast_erff_simd, tracing_wrappers::*},
-};
 use jxl_simd::{F32SimdVec, SimdDescriptor, simd_function};
+
+use crate::bit_reader::BitReader;
+use crate::entropy_coding::decode::{Histograms, SymbolReader, unpack_signed};
+use crate::error::{Error, Result};
+use crate::frame::color_correlation_map::ColorCorrelationParams;
+use crate::util::tracing_wrappers::*;
+use crate::util::{CeilLog2, NewWithCapacity, fast_cos, fast_erff_simd};
 const MAX_NUM_CONTROL_POINTS: u32 = 1 << 20;
 const MAX_NUM_CONTROL_POINTS_PER_PIXEL_RATIO: u32 = 2;
 const DELTA_LIMIT: i64 = 1 << 30;
@@ -898,21 +896,20 @@ impl Splines {
 #[cfg(test)]
 #[allow(clippy::excessive_precision)]
 mod test_splines {
-    use std::{f32::consts::SQRT_2, iter::zip};
-    use test_log::test;
+    use std::f32::consts::SQRT_2;
+    use std::iter::zip;
 
-    use crate::{
-        error::{Error, Result},
-        features::spline::SplineSegment,
-        frame::color_correlation_map::ColorCorrelationParams,
-        tests::assert_close,
-    };
+    use test_log::test;
 
     use super::{
         DCT_MULTIPLIERS, DESIRED_RENDERING_DISTANCE, Dct32, Point, PrecomputedCosines,
         QuantizedSpline, Spline, Splines, draw_centripetal_catmull_rom_spline,
         for_each_equally_spaced_point,
     };
+    use crate::error::{Error, Result};
+    use crate::features::spline::SplineSegment;
+    use crate::frame::color_correlation_map::ColorCorrelationParams;
+    use crate::tests::assert_close;
     use crate::util::fast_cos;
 
     impl Dct32 {

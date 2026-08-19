@@ -5,11 +5,12 @@
 
 #![allow(clippy::needless_range_loop)]
 
-use crate::util::sync::{Mutex, atomic::Ordering};
 use std::fmt::Debug;
 
 use row_buffers::RowBuffer;
 
+use super::RenderPipeline;
+use super::internal::{RenderPipelineShared, RunInOutStage, RunInPlaceStage};
 use crate::api::JxlOutputBuffer;
 use crate::error::Result;
 use crate::image::{DataTypeTag, Image, ImageDataType, OwnedRawImage, Rect};
@@ -17,10 +18,10 @@ use crate::render::buffer_splitter::{BufferSplitter, SaveStageBufferInfo};
 use crate::render::internal::Stage;
 use crate::render::low_memory_pipeline::input_buffers::InputBuffers;
 use crate::render::{ErasedLocalState, MAX_BORDER};
-use crate::util::{PerThreadStorage, ShiftRightCeil, tracing_wrappers::*};
-
-use super::RenderPipeline;
-use super::internal::{RenderPipelineShared, RunInOutStage, RunInPlaceStage};
+use crate::util::sync::Mutex;
+use crate::util::sync::atomic::Ordering;
+use crate::util::tracing_wrappers::*;
+use crate::util::{PerThreadStorage, ShiftRightCeil};
 
 mod group_scheduler;
 mod helpers;

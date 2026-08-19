@@ -3,18 +3,17 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-use crate::util::sync::atomic::AtomicBool;
 use std::any::Any;
 use std::fmt::Display;
-
-use crate::error::Result;
-use crate::image::{DataTypeTag, ImageDataType};
-use crate::render::{ErasedLocalState, StageSpecialCase};
-use crate::util::ShiftRightCeil;
 
 use super::save::SaveStage;
 use super::stages::ExtendToImageDimensionsStage;
 use super::{RenderPipelineInOutStage, RenderPipelineInPlaceStage};
+use crate::error::Result;
+use crate::image::{DataTypeTag, ImageDataType};
+use crate::render::{ErasedLocalState, StageSpecialCase};
+use crate::util::ShiftRightCeil;
+use crate::util::sync::atomic::AtomicBool;
 
 pub enum Stage<Buffer> {
     InPlace(Box<dyn RunInPlaceStage<Buffer>>),

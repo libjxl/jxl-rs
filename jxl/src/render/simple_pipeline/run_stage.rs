@@ -5,14 +5,14 @@
 
 #![allow(clippy::needless_range_loop)]
 
-use crate::{
-    image::{Image, ImageDataType},
-    render::{
-        ErasedLocalState, RenderPipelineInOutStage, RenderPipelineInPlaceStage, RunInOutStage,
-        RunInPlaceStage, internal::PipelineBuffer,
-    },
-    util::{SmallVec, StackOnly, mirror, round_up_size_to_cache_line, tracing_wrappers::*},
+use crate::image::{Image, ImageDataType};
+use crate::render::internal::PipelineBuffer;
+use crate::render::{
+    ErasedLocalState, RenderPipelineInOutStage, RenderPipelineInPlaceStage, RunInOutStage,
+    RunInPlaceStage,
 };
+use crate::util::tracing_wrappers::*;
+use crate::util::{SmallVec, StackOnly, mirror, round_up_size_to_cache_line};
 
 impl PipelineBuffer for Image<f64> {
     type InPlaceExtraInfo = usize;

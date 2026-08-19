@@ -4,20 +4,17 @@
 // license that can be found in the LICENSE file.
 
 use super::common::precompute_references;
-use crate::{
-    bit_reader::BitReader,
-    entropy_coding::decode::{Histograms, SymbolReader},
-    error::Result,
-    frame::modular::{
-        IMAGE_OFFSET, IMAGE_PADDING, ModularChannel, Tree,
-        decode::{common::make_pixel, specialized_trees::run_on_specialized_tree},
-        predict::{PredictionData, WeightedPredictorState},
-        tree::{NUM_NONREF_PROPERTIES, PROPERTIES_PER_PREVCHAN, predict},
-    },
-    headers::modular::{GroupHeader, WeightedHeader},
-    image::Image,
-    util::tracing_wrappers::*,
-};
+use crate::bit_reader::BitReader;
+use crate::entropy_coding::decode::{Histograms, SymbolReader};
+use crate::error::Result;
+use crate::frame::modular::decode::common::make_pixel;
+use crate::frame::modular::decode::specialized_trees::run_on_specialized_tree;
+use crate::frame::modular::predict::{PredictionData, WeightedPredictorState};
+use crate::frame::modular::tree::{NUM_NONREF_PROPERTIES, PROPERTIES_PER_PREVCHAN, predict};
+use crate::frame::modular::{IMAGE_OFFSET, IMAGE_PADDING, ModularChannel, Tree};
+use crate::headers::modular::{GroupHeader, WeightedHeader};
+use crate::image::Image;
+use crate::util::tracing_wrappers::*;
 
 const SMALL_CHANNEL_THRESHOLD: usize = 64;
 

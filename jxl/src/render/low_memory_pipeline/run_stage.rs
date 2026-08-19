@@ -3,18 +3,12 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-use crate::{
-    render::{
-        Channels, ChannelsMut, ErasedLocalState, RunInPlaceStage,
-        internal::{PipelineBuffer, RunInOutStage},
-    },
-    util::{ChannelVec, ShiftRightCeil, SmallVec, StackOnly, mirror, tracing_wrappers::*},
-};
-
-use super::{
-    super::{RenderPipelineInOutStage, RenderPipelineInPlaceStage},
-    row_buffers::RowBuffer,
-};
+use super::super::{RenderPipelineInOutStage, RenderPipelineInPlaceStage};
+use super::row_buffers::RowBuffer;
+use crate::render::internal::{PipelineBuffer, RunInOutStage};
+use crate::render::{Channels, ChannelsMut, ErasedLocalState, RunInPlaceStage};
+use crate::util::tracing_wrappers::*;
+use crate::util::{ChannelVec, ShiftRightCeil, SmallVec, StackOnly, mirror};
 
 pub struct ExtraInfo {
     // Number of *input* pixels to process (ignoring additional border pixels).

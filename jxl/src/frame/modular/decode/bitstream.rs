@@ -4,16 +4,15 @@
 // license that can be found in the LICENSE file.
 
 use super::channel::decode_modular_channel;
-use crate::{
-    bit_reader::BitReader,
-    entropy_coding::decode::{Codes, SymbolReader, unpack_signed},
-    error::{Error, Result},
-    frame::modular::{
-        IMAGE_OFFSET, ModularChannel, Predictor, Tree, predict::clamped_gradient,
-        transforms::apply_local::meta_apply_local_transforms, tree::TreeNode,
-    },
-    headers::{JxlHeader, modular::GroupHeader},
-};
+use crate::bit_reader::BitReader;
+use crate::entropy_coding::decode::{Codes, SymbolReader, unpack_signed};
+use crate::error::{Error, Result};
+use crate::frame::modular::predict::clamped_gradient;
+use crate::frame::modular::transforms::apply_local::meta_apply_local_transforms;
+use crate::frame::modular::tree::TreeNode;
+use crate::frame::modular::{IMAGE_OFFSET, ModularChannel, Predictor, Tree};
+use crate::headers::JxlHeader;
+use crate::headers::modular::GroupHeader;
 
 // If we have at least this many bits still available to read,
 // we can be sure that none of the reads up to this point read garbage.

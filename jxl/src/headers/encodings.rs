@@ -3,12 +3,11 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-use super::{frame_header::PermutationNonserialized, permutation::Permutation};
-use crate::{
-    bit_reader::BitReader,
-    entropy_coding::decode::{Histograms, SymbolReader, unpack_signed},
-    error::Error,
-};
+use super::frame_header::PermutationNonserialized;
+use super::permutation::Permutation;
+use crate::bit_reader::BitReader;
+use crate::entropy_coding::decode::{Histograms, SymbolReader, unpack_signed};
+use crate::error::Error;
 
 pub enum U32 {
     Bits(usize),

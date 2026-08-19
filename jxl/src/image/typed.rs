@@ -3,15 +3,14 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-use std::{fmt::Debug, marker::PhantomData};
-
-use crate::{
-    error::Result,
-    image::internal::DistinctRowsIndexes,
-    util::{CACHE_LINE_BYTE_SIZE, tracing_wrappers::*},
-};
+use std::fmt::Debug;
+use std::marker::PhantomData;
 
 use super::{ImageDataType, OwnedRawImage, RawImageRect, RawImageRectMut, Rect};
+use crate::error::Result;
+use crate::image::internal::DistinctRowsIndexes;
+use crate::util::CACHE_LINE_BYTE_SIZE;
+use crate::util::tracing_wrappers::*;
 
 #[repr(transparent)]
 pub struct Image<T: ImageDataType> {

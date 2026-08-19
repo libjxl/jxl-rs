@@ -4,17 +4,14 @@
 // license that can be found in the LICENSE file.
 use std::fmt::Debug;
 
-use crate::{
-    error::Result,
-    frame::modular::{
-        ChannelInfo,
-        buffers::ModularChannel,
-        transforms::{meta_apply::meta_apply_single_transform, step::TransformStep},
-    },
-    headers::modular::GroupHeader,
-    image::Rect,
-    util::tracing_wrappers::*,
-};
+use crate::error::Result;
+use crate::frame::modular::ChannelInfo;
+use crate::frame::modular::buffers::ModularChannel;
+use crate::frame::modular::transforms::meta_apply::meta_apply_single_transform;
+use crate::frame::modular::transforms::step::TransformStep;
+use crate::headers::modular::GroupHeader;
+use crate::image::Rect;
+use crate::util::tracing_wrappers::*;
 
 #[derive(Debug)]
 pub enum LocalTransformBuffer<'a> {

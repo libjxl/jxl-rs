@@ -3,18 +3,18 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
+use std::marker::PhantomData;
+
+use states::*;
+
 use super::{
     JxlBasicInfo, JxlBitstreamInput, JxlColorProfile, JxlDecoderInner, JxlDecoderOptions,
     JxlOutputBuffer, JxlPixelFormat, ProcessingResult,
 };
-use crate::{
-    api::{BoxParserCheckpoint, JxlFrameHeader, JxlParallelRunner},
-    error::Result,
-};
+use crate::api::{BoxParserCheckpoint, JxlFrameHeader, JxlParallelRunner};
+use crate::error::Result;
 #[cfg(test)]
 use crate::{frame::Frame, headers::FileHeader};
-use states::*;
-use std::marker::PhantomData;
 
 pub mod states {
     pub trait JxlState {}

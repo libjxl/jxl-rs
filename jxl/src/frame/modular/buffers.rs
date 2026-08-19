@@ -3,22 +3,14 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-use crate::util::sync::{
-    Mutex, RwLock,
-    atomic::{AtomicUsize, Ordering},
-};
-
-use crate::{
-    error::Result,
-    frame::{
-        DataStatus,
-        modular::{ChannelInfo, IMAGE_OFFSET, IMAGE_PADDING},
-    },
-    headers::bit_depth::BitDepth,
-    image::Image,
-};
-
 use super::ModularBufferInfo;
+use crate::error::Result;
+use crate::frame::DataStatus;
+use crate::frame::modular::{ChannelInfo, IMAGE_OFFSET, IMAGE_PADDING};
+use crate::headers::bit_depth::BitDepth;
+use crate::image::Image;
+use crate::util::sync::atomic::{AtomicUsize, Ordering};
+use crate::util::sync::{Mutex, RwLock};
 
 // All the information on a specific buffer needed by Modular decoding.
 #[derive(Debug)]
