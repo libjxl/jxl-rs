@@ -672,8 +672,7 @@ pub fn do_vsqueeze_step(
     vsqueeze(in_avg, in_res, in_next_avg, out_prev, out);
 }
 
-use super::super::{ModularBufferInfo, ModularGridKind};
-use crate::headers::frame_header::FrameHeader;
+use super::step::TiledChannelView;
 use crate::image::Rect;
 
 #[inline(always)]
@@ -859,140 +858,6 @@ fn init_buffers(buf: &mut [Vec<f32>; 5], ibuf: &mut Vec<i32>, len: usize) {
     ibuf.resize(len, 0);
 }
 
-fn load_row_to_scratch(
-    row_buf: &mut [i32],
-    input: &ModularBufferInfo,
-    frame_header: &FrameHeader,
-    yg: isize,
-    xoff: usize,
-    valid_len: usize,
-) {
-    let (w, h) = input.info.size;
-    // Only the first `valid_len` values are actual convolution inputs; the rest
-    // of the buffer only exists so that SIMD loads for the last output chunk
-    // stay in bounds, and their values do not affect the output. Restrict the
-    // buffer reads to the valid region: reading further could touch grid
-    // positions outside the 3x3 neighbourhood that the transform's
-    // dependencies guarantee to be safe to read, racing with their producers.
-    let max_len = row_buf.len().min(valid_len);
-    let clamped_y = if h == 1 {
-        0
-    } else if yg < 0 {
-        (-yg - 1) as usize
-    } else if yg as usize >= h {
-        2 * h - 1 - yg as usize
-    } else {
-        yg as usize
-    };
-
-    if input.grid_kind == ModularGridKind::None {
-        let grid_data = input.buffer_grid[0].data.try_read().unwrap();
-        let chan = grid_data.as_ref().unwrap();
-        let row = chan.data.row(clamped_y);
-
-        let left_clamp = (2 - xoff as isize).max(0) as usize;
-        let right_clamp_start = (w as isize + 2 - xoff as isize).min(max_len as isize) as usize;
-
-        if left_clamp < right_clamp_start {
-            let src_start = (xoff as isize + left_clamp as isize - 2) as usize;
-            let len = right_clamp_start - left_clamp;
-            row_buf[left_clamp..right_clamp_start]
-                .copy_from_slice(&row[src_start..src_start + len]);
-        }
-
-        if left_clamp > 0 {
-            row_buf[..left_clamp].fill(row[0]);
-        }
-
-        if right_clamp_start < max_len {
-            row_buf[right_clamp_start..max_len].fill(row[w - 1]);
-        }
-
-        let last = row_buf[max_len - 1];
-        row_buf[max_len..].fill(last);
-        return;
-    }
-
-    let shift = input.info.shift.unwrap_or((0, 0));
-    let grid_dim = input.grid_kind.grid_dim(frame_header, shift);
-    let grid_w = grid_dim.0;
-    let gy = clamped_y / grid_dim.1;
-    let ly = clamped_y % grid_dim.1;
-
-    let global_x_start = xoff as isize - 2;
-    let global_x_end = global_x_start + max_len as isize;
-
-    let left_clamp = (-global_x_start).max(0) as usize;
-    let right_clamp = (global_x_end - w as isize).max(0) as usize;
-
-    let clamped_x_start = global_x_start.max(0) as usize;
-    let clamped_x_end = global_x_end.min(w as isize) as usize;
-
-    if clamped_x_start < clamped_x_end {
-        let gx_start = clamped_x_start / grid_w;
-        let gx_end = (clamped_x_end - 1) / grid_w;
-
-        for gx in gx_start..=gx_end {
-            let tile_x_start = gx * grid_w;
-            let tile_w = (w - tile_x_start).min(grid_w);
-            let intersect_start = clamped_x_start.max(tile_x_start);
-            let intersect_end = clamped_x_end.min(tile_x_start + tile_w);
-
-            if intersect_start < intersect_end {
-                let grid_idx = input.get_grid_idx(input.grid_kind, (gx, gy));
-                let grid_data = input.buffer_grid[grid_idx].data.try_read().unwrap();
-                // Note that smooth-unsqueezing depends on some grid positions that regular
-                // unsqueezing does not, so we might not have all grid positions available.
-                let dest_start = left_clamp + (intersect_start - clamped_x_start);
-                let dest_end = dest_start + (intersect_end - intersect_start);
-                if let Some(chan) = grid_data.as_ref() {
-                    let row = chan.data.row(ly);
-                    let src_start = intersect_start - tile_x_start;
-                    let src_end = intersect_end - tile_x_start;
-                    row_buf[dest_start..dest_end].copy_from_slice(&row[src_start..src_end]);
-                } else {
-                    // Not-yet-decoded tiles are semantically all-zero. Fill
-                    // explicitly: the scratch buffer is reused across rows and
-                    // transforms, so leaving the previous contents in place makes
-                    // the (partial-render) output depend on scheduling order.
-                    row_buf[dest_start..dest_end].fill(0);
-                }
-            }
-        }
-    }
-
-    if left_clamp > 0 {
-        let left_val = {
-            let grid_idx = input.get_grid_idx(input.grid_kind, (0, gy));
-            let grid_data = input.buffer_grid[grid_idx].data.try_read().unwrap();
-            if let Some(chan) = grid_data.as_ref() {
-                chan.data.row(ly)[0]
-            } else {
-                0
-            }
-        };
-        row_buf[..left_clamp].fill(left_val);
-    }
-
-    if right_clamp > 0 {
-        let right_val = {
-            let gx_right = (w - 1) / grid_w;
-            let lx_right = (w - 1) % grid_w;
-            let grid_idx = input.get_grid_idx(input.grid_kind, (gx_right, gy));
-            let grid_data = input.buffer_grid[grid_idx].data.try_read().unwrap();
-            if let Some(chan) = grid_data.as_ref() {
-                chan.data.row(ly)[lx_right]
-            } else {
-                0
-            }
-        };
-        row_buf[max_len - right_clamp..max_len].fill(right_val);
-    }
-
-    let last = row_buf[max_len - 1];
-    row_buf[max_len..].fill(last);
-}
-
 fn make_float<D: SimdDescriptor>(d: D, inp: &[i32], out: &mut [f32]) {
     for (i, o) in inp
         .chunks_exact(D::I32Vec::LEN)
@@ -1005,10 +870,7 @@ fn make_float<D: SimdDescriptor>(d: D, inp: &[i32], out: &mut [f32]) {
 #[inline(always)]
 fn smooth_2d_unsqueeze_simd_impl<D: SimdDescriptor>(
     d: D,
-    // TODO(veluca): modify this to *not* take a full ModularBufferInfo, but to let the caller
-    // extract appropriate buffers.
-    input: &ModularBufferInfo,
-    frame_header: &FrameHeader,
+    input: &TiledChannelView<'_>,
     rect: Rect,
     output: &mut Image<i32>,
     (buffer, ibuf): &mut ([Vec<f32>; 5], Vec<i32>),
@@ -1025,7 +887,7 @@ fn smooth_2d_unsqueeze_simd_impl<D: SimdDescriptor>(
 
     for (dy, buf) in buffer.iter_mut().enumerate().take(4) {
         let yg = (row_offset + dy) as isize - 2;
-        load_row_to_scratch(ibuf, input, frame_header, yg, col_offset, in_xs + 4);
+        input.load_row_to_scratch(yg, col_offset, in_xs + 4, ibuf);
         make_float(d, ibuf, buf);
     }
 
@@ -1033,7 +895,7 @@ fn smooth_2d_unsqueeze_simd_impl<D: SimdDescriptor>(
     // We populate the fifth row at the start of the loop.
     for iy_center in 0..ys.div_ceil(2) {
         let yg = (row_offset + iy_center) as isize + 2;
-        load_row_to_scratch(ibuf, input, frame_header, yg, col_offset, in_xs + 4);
+        input.load_row_to_scratch(yg, col_offset, in_xs + 4, ibuf);
         make_float(d, ibuf, &mut buffer[4]);
 
         const { assert!(IMAGE_OFFSET.1 > 0) };
@@ -1117,21 +979,19 @@ simd_function!(
     smooth_2d_unsqueeze,
     d: D,
     pub fn smooth_2d_unsqueeze_simd_dispatch(
-        input: &ModularBufferInfo,
-        frame_header: &FrameHeader,
+        input: &TiledChannelView<'_>,
         rect: Rect,
         output: &mut Image<i32>,
         buffer: &mut ([Vec<f32>; 5], Vec<i32>)
     ) {
-        smooth_2d_unsqueeze_simd_impl(d, input, frame_header, rect, output, buffer);
+        smooth_2d_unsqueeze_simd_impl(d, input, rect, output, buffer);
     }
 );
 
 #[inline(always)]
 fn smooth_h_unsqueeze_simd_impl<D: SimdDescriptor>(
     d: D,
-    input: &ModularBufferInfo,
-    frame_header: &FrameHeader,
+    input: &TiledChannelView<'_>,
     rect: Rect,
     output: &mut Image<i32>,
     (buffer, ibuf): &mut ([Vec<f32>; 5], Vec<i32>),
@@ -1148,7 +1008,7 @@ fn smooth_h_unsqueeze_simd_impl<D: SimdDescriptor>(
 
     for (dy, buf) in buffer.iter_mut().enumerate().take(2) {
         let yg = (row_offset + dy) as isize - 1;
-        load_row_to_scratch(ibuf, input, frame_header, yg, col_offset, in_xs + 4);
+        input.load_row_to_scratch(yg, col_offset, in_xs + 4, ibuf);
         make_float(d, ibuf, buf);
     }
 
@@ -1156,7 +1016,7 @@ fn smooth_h_unsqueeze_simd_impl<D: SimdDescriptor>(
     // We populate the third row at the start of the loop.
     for iy_center in 0..ys {
         let yg = (row_offset + iy_center) as isize + 1;
-        load_row_to_scratch(ibuf, input, frame_header, yg, col_offset, in_xs + 4);
+        input.load_row_to_scratch(yg, col_offset, in_xs + 4, ibuf);
         make_float(d, ibuf, &mut buffer[2]);
 
         let output_row = output.row_mut(iy_center);
@@ -1208,21 +1068,19 @@ simd_function!(
     smooth_h_unsqueeze,
     d: D,
     pub fn smooth_h_unsqueeze_simd_dispatch(
-        input: &ModularBufferInfo,
-        frame_header: &FrameHeader,
+        input: &TiledChannelView<'_>,
         rect: Rect,
         output: &mut Image<i32>,
         buffer: &mut ([Vec<f32>; 5], Vec<i32>)
     ) {
-        smooth_h_unsqueeze_simd_impl(d, input, frame_header, rect, output, buffer);
+        smooth_h_unsqueeze_simd_impl(d, input, rect, output, buffer);
     }
 );
 
 #[inline(always)]
 fn smooth_v_unsqueeze_simd_impl<D: SimdDescriptor>(
     d: D,
-    input: &ModularBufferInfo,
-    frame_header: &FrameHeader,
+    input: &TiledChannelView<'_>,
     rect: Rect,
     output: &mut Image<i32>,
     (buffer, ibuf): &mut ([Vec<f32>; 5], Vec<i32>),
@@ -1239,7 +1097,7 @@ fn smooth_v_unsqueeze_simd_impl<D: SimdDescriptor>(
 
     for (dy, buf) in buffer.iter_mut().enumerate().take(4) {
         let yg = (row_offset + dy) as isize - 2;
-        load_row_to_scratch(ibuf, input, frame_header, yg, col_offset, in_xs + 4);
+        input.load_row_to_scratch(yg, col_offset, in_xs + 4, ibuf);
         make_float(d, ibuf, buf);
     }
 
@@ -1247,7 +1105,7 @@ fn smooth_v_unsqueeze_simd_impl<D: SimdDescriptor>(
     // We populate the fifth row at the start of the loop.
     for iy_center in 0..ys.div_ceil(2) {
         let yg = (row_offset + iy_center) as isize + 2;
-        load_row_to_scratch(ibuf, input, frame_header, yg, col_offset, in_xs + 4);
+        input.load_row_to_scratch(yg, col_offset, in_xs + 4, ibuf);
         make_float(d, ibuf, &mut buffer[4]);
 
         const { assert!(IMAGE_OFFSET.1 > 0) };
@@ -1319,12 +1177,11 @@ simd_function!(
     smooth_v_unsqueeze,
     d: D,
     pub fn smooth_v_unsqueeze_simd_dispatch(
-        input: &ModularBufferInfo,
-        frame_header: &FrameHeader,
+        input: &TiledChannelView<'_>,
         rect: Rect,
         output: &mut Image<i32>,
         buffer: &mut ([Vec<f32>; 5], Vec<i32>)
     ) {
-        smooth_v_unsqueeze_simd_impl(d, input, frame_header, rect, output, buffer);
+        smooth_v_unsqueeze_simd_impl(d, input, rect, output, buffer);
     }
 );

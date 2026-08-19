@@ -202,6 +202,178 @@ impl SqueezeInfo<(usize, usize)> {
         buffers[self.in_avg.0].buffer_grid[self.in_avg.1].mark_used(is_final);
         buffers[self.in_res.0].buffer_grid[self.in_res.1].mark_used(is_final);
     }
+
+    fn borrow_upsample_view<'a>(
+        &self,
+        buffers: &'a [ModularBufferInfo],
+        frame_header: &FrameHeader,
+    ) -> TiledChannelView<'a> {
+        let (b, g) = match self.kind {
+            SqueezeStepKind::Upsample1D(b, g) | SqueezeStepKind::Upsample2D(b, g) => (b, g),
+            SqueezeStepKind::Regular => unreachable!(),
+        };
+        let buf_info = &buffers[b];
+        let (xs, ys) = buf_info.grid_shape;
+        let (gx, gy) = (g % xs, g / xs);
+        let grid_dim = if buf_info.grid_kind == ModularGridKind::None {
+            None
+        } else {
+            let shift = buf_info.info.shift.unwrap_or((0, 0));
+            Some(buf_info.grid_kind.grid_dim(frame_header, shift))
+        };
+
+        let mut guards = [[None, None, None], [None, None, None], [None, None, None]];
+        for (dy, row) in guards.iter_mut().enumerate() {
+            for (dx, g) in row.iter_mut().enumerate() {
+                let tile_x = gx as isize + dx as isize - 1;
+                let tile_y = gy as isize + dy as isize - 1;
+                if tile_x >= 0 && tile_x < xs as isize && tile_y >= 0 && tile_y < ys as isize {
+                    let grid_idx = tile_y as usize * xs + tile_x as usize;
+                    *g = Some(borrow_channel(buffers, (b, grid_idx)));
+                }
+            }
+        }
+
+        TiledChannelView {
+            size: buf_info.info.size,
+            grid_dim,
+            center_grid_pos: (gx, gy),
+            guards,
+        }
+    }
+}
+
+pub struct TiledChannelView<'a> {
+    size: (usize, usize),
+    grid_dim: Option<(usize, usize)>,
+    center_grid_pos: (usize, usize),
+    // 3x3 array of borrowed image tiles: [dy][dx] where [1][1] is center (gx, gy)
+    guards: [[Option<RwLockReadGuard<'a, Option<ModularChannel>>>; 3]; 3],
+}
+
+impl<'a> TiledChannelView<'a> {
+    #[inline(always)]
+    fn tile(&self, dy: usize, dx: usize) -> Option<&Image<i32>> {
+        self.guards[dy][dx]
+            .as_ref()
+            .and_then(|guard| guard.as_ref().map(|mc| &mc.data))
+    }
+
+    pub fn load_row_to_scratch(
+        &self,
+        yg: isize,
+        xoff: usize,
+        valid_len: usize,
+        row_buf: &mut [i32],
+    ) {
+        let (w, h) = self.size;
+        // Only the first `valid_len` values are actual convolution inputs; the rest
+        // of the buffer only exists so that SIMD loads for the last output chunk
+        // stay in bounds, and their values do not affect the output. Restrict the
+        // buffer reads to the valid region: reading further could touch grid
+        // positions outside the 3x3 neighbourhood that the transform's
+        // dependencies guarantee to be safe to read, racing with their producers.
+        let max_len = row_buf.len().min(valid_len);
+        let clamped_y = if h == 1 {
+            0
+        } else if yg < 0 {
+            (-yg - 1) as usize
+        } else if yg as usize >= h {
+            2 * h - 1 - yg as usize
+        } else {
+            yg as usize
+        };
+
+        let Some(grid_dim) = self.grid_dim else {
+            let row = self.tile(1, 1).unwrap().row(clamped_y);
+
+            let left_clamp = (2 - xoff as isize).max(0) as usize;
+            let right_clamp_start = (w as isize + 2 - xoff as isize).min(max_len as isize) as usize;
+
+            if left_clamp < right_clamp_start {
+                let src_start = (xoff as isize + left_clamp as isize - 2) as usize;
+                let len = right_clamp_start - left_clamp;
+                row_buf[left_clamp..right_clamp_start]
+                    .copy_from_slice(&row[src_start..src_start + len]);
+            }
+
+            if left_clamp > 0 {
+                row_buf[..left_clamp].fill(row[0]);
+            }
+
+            if right_clamp_start < max_len {
+                row_buf[right_clamp_start..max_len].fill(row[w - 1]);
+            }
+
+            let last = row_buf[max_len - 1];
+            row_buf[max_len..].fill(last);
+            return;
+        };
+
+        let grid_w = grid_dim.0;
+        let (gx_center, gy_center) = self.center_grid_pos;
+        let gy = clamped_y / grid_dim.1;
+        let ly = clamped_y % grid_dim.1;
+        let dy = (gy as isize - gy_center as isize + 1) as usize;
+
+        let global_x_start = xoff as isize - 2;
+        let global_x_end = global_x_start + max_len as isize;
+
+        let left_clamp = (-global_x_start).max(0) as usize;
+        let right_clamp = (global_x_end - w as isize).max(0) as usize;
+
+        let clamped_x_start = global_x_start.max(0) as usize;
+        let clamped_x_end = global_x_end.min(w as isize) as usize;
+
+        if clamped_x_start < clamped_x_end {
+            let gx_start = clamped_x_start / grid_w;
+            let gx_end = (clamped_x_end - 1) / grid_w;
+
+            for gx in gx_start..=gx_end {
+                let dx = (gx as isize - gx_center as isize + 1) as usize;
+                let tile_x_start = gx * grid_w;
+                let tile_w = (w - tile_x_start).min(grid_w);
+                let intersect_start = clamped_x_start.max(tile_x_start);
+                let intersect_end = clamped_x_end.min(tile_x_start + tile_w);
+
+                if intersect_start < intersect_end {
+                    let dest_start = left_clamp + (intersect_start - clamped_x_start);
+                    let dest_end = dest_start + (intersect_end - intersect_start);
+                    if let Some(chan) = self.tile(dy, dx) {
+                        let row = chan.row(ly);
+                        let src_start = intersect_start - tile_x_start;
+                        let src_end = intersect_end - tile_x_start;
+                        row_buf[dest_start..dest_end].copy_from_slice(&row[src_start..src_end]);
+                    } else {
+                        // Not-yet-decoded tiles are semantically all-zero. Fill
+                        // explicitly: the scratch buffer is reused across rows and
+                        // transforms, so leaving the previous contents in place makes
+                        // the (partial-render) output depend on scheduling order.
+                        row_buf[dest_start..dest_end].fill(0);
+                    }
+                }
+            }
+        }
+
+        if left_clamp > 0 {
+            let left_val = self.tile(dy, 1).map(|chan| chan.row(ly)[0]).unwrap_or(0);
+            row_buf[..left_clamp].fill(left_val);
+        }
+
+        if right_clamp > 0 {
+            let gx_right = (w - 1) / grid_w;
+            let lx_right = (w - 1) % grid_w;
+            let dx = (gx_right as isize - gx_center as isize + 1) as usize;
+            let right_val = self
+                .tile(dy, dx)
+                .map(|chan| chan.row(ly)[lx_right])
+                .unwrap_or(0);
+            row_buf[max_len - right_clamp..max_len].fill(right_val);
+        }
+
+        let last = row_buf[max_len - 1];
+        row_buf[max_len..].fill(last);
+    }
 }
 
 impl<'a> SqueezeInfo<RwLockReadGuard<'a, Option<ModularChannel>>> {
@@ -506,38 +678,25 @@ impl TransformStepChunk {
                     if bufs.is_empty() {
                         return Ok(());
                     }
-                    match info.kind {
-                        SqueezeStepKind::Upsample2D(b, _) => {
-                            assert_eq!(bufs.len(), 1);
-                            smooth_2d_unsqueeze(
-                                &buffers[b],
-                                frame_header,
-                                info.out_rect,
-                                &mut bufs[0].data,
-                                &mut tranform_scratch_space.smooth_unsqueeze_buffer,
-                            )
+                    if info.kind != SqueezeStepKind::Regular {
+                        assert_eq!(bufs.len(), 1);
+                        let view = info.borrow_upsample_view(buffers, frame_header);
+                        let scratch = &mut tranform_scratch_space.smooth_unsqueeze_buffer;
+                        if matches!(info.kind, SqueezeStepKind::Upsample2D(..)) {
+                            smooth_2d_unsqueeze(&view, info.out_rect, &mut bufs[0].data, scratch);
+                        } else {
+                            smooth_h_unsqueeze(&view, info.out_rect, &mut bufs[0].data, scratch);
                         }
-                        SqueezeStepKind::Upsample1D(b, _) => {
-                            assert_eq!(bufs.len(), 1);
-                            smooth_h_unsqueeze(
-                                &buffers[b],
-                                frame_header,
-                                info.out_rect,
-                                &mut bufs[0].data,
-                                &mut tranform_scratch_space.smooth_unsqueeze_buffer,
-                            )
-                        }
-                        SqueezeStepKind::Regular => {
-                            let info = info.borrow(buffers);
-                            let out_prev = info.out_prev.as_ref().map(|g| g.as_ref().unwrap());
-                            super::squeeze::do_hsqueeze_step(
-                                &info.in_avg_rect(),
-                                &info.in_res_rect(),
-                                &info.in_next_avg_rect(),
-                                out_prev,
-                                &mut bufs,
-                            )
-                        }
+                    } else {
+                        let info = info.borrow(buffers);
+                        let out_prev = info.out_prev.as_ref().map(|g| g.as_ref().unwrap());
+                        super::squeeze::do_hsqueeze_step(
+                            &info.in_avg_rect(),
+                            &info.in_res_rect(),
+                            &info.in_next_avg_rect(),
+                            out_prev,
+                            &mut bufs,
+                        );
                     }
                     Ok(())
                 })?;
@@ -565,38 +724,25 @@ impl TransformStepChunk {
                     if bufs.is_empty() {
                         return Ok(());
                     }
-                    match info.kind {
-                        SqueezeStepKind::Upsample2D(b, _) => {
-                            assert_eq!(bufs.len(), 1);
-                            smooth_2d_unsqueeze(
-                                &buffers[b],
-                                frame_header,
-                                info.out_rect,
-                                &mut bufs[0].data,
-                                &mut tranform_scratch_space.smooth_unsqueeze_buffer,
-                            )
+                    if info.kind != SqueezeStepKind::Regular {
+                        assert_eq!(bufs.len(), 1);
+                        let view = info.borrow_upsample_view(buffers, frame_header);
+                        let scratch = &mut tranform_scratch_space.smooth_unsqueeze_buffer;
+                        if matches!(info.kind, SqueezeStepKind::Upsample2D(..)) {
+                            smooth_2d_unsqueeze(&view, info.out_rect, &mut bufs[0].data, scratch);
+                        } else {
+                            smooth_v_unsqueeze(&view, info.out_rect, &mut bufs[0].data, scratch);
                         }
-                        SqueezeStepKind::Upsample1D(b, _) => {
-                            assert_eq!(bufs.len(), 1);
-                            smooth_v_unsqueeze(
-                                &buffers[b],
-                                frame_header,
-                                info.out_rect,
-                                &mut bufs[0].data,
-                                &mut tranform_scratch_space.smooth_unsqueeze_buffer,
-                            )
-                        }
-                        SqueezeStepKind::Regular => {
-                            let info = info.borrow(buffers);
-                            let out_prev = info.out_prev.as_ref().map(|g| g.as_ref().unwrap());
-                            super::squeeze::do_vsqueeze_step(
-                                &info.in_avg_rect(),
-                                &info.in_res_rect(),
-                                &info.in_next_avg_rect(),
-                                out_prev,
-                                &mut bufs,
-                            )
-                        }
+                    } else {
+                        let info = info.borrow(buffers);
+                        let out_prev = info.out_prev.as_ref().map(|g| g.as_ref().unwrap());
+                        super::squeeze::do_vsqueeze_step(
+                            &info.in_avg_rect(),
+                            &info.in_res_rect(),
+                            &info.in_next_avg_rect(),
+                            out_prev,
+                            &mut bufs,
+                        );
                     }
                     Ok(())
                 })?;
