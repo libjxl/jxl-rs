@@ -428,6 +428,9 @@ pub fn make_grids(
         let grid = &mut buffer_info[input_buffer_idx].buffer_grid[input_grid_pos];
         grid.needed_borders.topbottom |= needed_borders.topbottom;
         grid.needed_borders.leftright |= needed_borders.leftright;
+        if needed_borders.is_empty() {
+            grid.full_uses_count_final += 1;
+        }
         if !grid.used_by_transforms_final.contains(&ts) {
             grid_transform_steps[ts].missing_final_deps += 1;
             grid.used_by_transforms_final.push(ts);
@@ -700,6 +703,7 @@ pub fn make_grids(
                         bi.buffer_grid[grid]
                             .used_by_transforms_final
                             .push(grid_transform_steps.len());
+                        bi.buffer_grid[grid].full_uses_count_final += 1;
                         grid_transform_steps.push(TransformStepChunk {
                             step: TransformStep::Output {
                                 buf_in: idx,

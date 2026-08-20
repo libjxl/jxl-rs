@@ -675,7 +675,7 @@ impl FullModularImage {
                 }
                 grid.data_status = DataStatus::Final;
                 grid.remaining_uses
-                    .store(grid.used_by_transforms_final.len(), Ordering::Relaxed);
+                    .store(grid.full_uses_count_final, Ordering::Relaxed);
             }
             if let Some(v) = stack.pop() {
                 if !self.transform_steps[v].final_dep_ready() {
@@ -712,7 +712,7 @@ impl FullModularImage {
                 grid,
                 order_only,
             } in self.transform_steps[t]
-                .dependecies(&self.buffer_info, frame_header)
+                .dependencies(&self.buffer_info, frame_header)
                 .iter()
             {
                 let buf = &mut self.buffer_info[*buffer].buffer_grid[*grid];
@@ -747,7 +747,7 @@ impl FullModularImage {
             let mut has_current_deps = false;
             // Add dependency edges from *all* the buffers that will be modified and that are used.
             for TransformDependency { buffer, grid, .. } in self.transform_steps[t]
-                .dependecies(&self.buffer_info, frame_header)
+                .dependencies(&self.buffer_info, frame_header)
                 .iter()
             {
                 if self.rerendered_buffers.contains(&(*buffer, *grid)) {

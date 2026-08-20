@@ -95,6 +95,8 @@ pub(super) struct ModularBuffer {
     pub(super) needed_borders: NeededBorders,
     // Number of times this buffer will be used, *including* when it is used for output.
     pub(super) remaining_uses: AtomicUsize,
+    // Number of full-buffer uses for final renders.
+    pub(super) full_uses_count_final: usize,
     // Transform steps that use the image data in this buffer for final renders.
     pub(super) used_by_transforms_final: Vec<usize>,
     // Transform steps that depend on this buffer for the current rendering pass.
@@ -118,6 +120,7 @@ impl ModularBuffer {
             auxiliary_data: RwLock::new(None),
             needed_borders: NeededBorders::NONE,
             remaining_uses: AtomicUsize::new(0),
+            full_uses_count_final: 0,
             used_by_transforms_final: vec![],
             used_by_transforms_current: Mutex::new(vec![]),
             size,

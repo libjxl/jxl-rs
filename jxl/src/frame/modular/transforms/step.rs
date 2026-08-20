@@ -561,7 +561,7 @@ impl TransformStepChunk {
         &self,
         frame_header: &FrameHeader,
         buffers: &[ModularBufferInfo],
-        tranform_scratch_space: &mut TransformScratchSpace,
+        transform_scratch_space: &mut TransformScratchSpace,
         pass_to_pipeline: &dyn Fn(usize, usize, bool, Image<i32>) -> Result<()>,
     ) -> Result<()> {
         let is_final = self.missing_final_deps == 0;
@@ -704,7 +704,7 @@ impl TransformStepChunk {
                             *num_colors,
                             *num_deltas,
                             *predictor,
-                            &mut tranform_scratch_space.palette_row_scratch,
+                            &mut transform_scratch_space.palette_row_scratch,
                         );
                     }
                 }
@@ -799,7 +799,7 @@ impl TransformStepChunk {
                         *num_deltas,
                         *predictor,
                         wp_header,
-                        &mut tranform_scratch_space.palette_row_scratch,
+                        &mut transform_scratch_space.palette_row_scratch,
                     )?;
                 }
                 buffers[*buf_pal].buffer_grid[0].mark_used(is_final);
@@ -841,7 +841,7 @@ impl TransformStepChunk {
                     if info.kind != SqueezeStepKind::Regular {
                         assert_eq!(bufs.len(), 1);
                         let view = info.borrow_upsample_view(buffers, frame_header);
-                        let scratch = &mut tranform_scratch_space.smooth_unsqueeze_buffer;
+                        let scratch = &mut transform_scratch_space.smooth_unsqueeze_buffer;
                         if matches!(info.kind, SqueezeStepKind::Upsample2D(..)) {
                             smooth_2d_unsqueeze(&view, info.out_rect, &mut bufs[0].data, scratch);
                         } else if vertical {
@@ -964,7 +964,7 @@ impl TransformStepChunk {
     // List of input buffers for this transform.
     // We use a stack-size-9 SmallVec because upsampling squeezes touch 9 buffers total (and that is the maximum for
     // non-delta-palette transforms)
-    pub fn dependecies(
+    pub fn dependencies(
         &self,
         buffers: &[ModularBufferInfo],
         frame_header: &FrameHeader,
