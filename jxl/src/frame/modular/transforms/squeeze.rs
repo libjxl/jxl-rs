@@ -199,8 +199,8 @@ fn hsqueeze_impl<D: SimdDescriptor>(
     y_start: usize,
     in_avg: &ImageRect<'_, i32>,
     in_res: &ImageRect<'_, i32>,
-    in_next_avg: &Option<ImageRect<'_, i32>>,
-    out_prev: Option<&ModularChannel>,
+    in_next_avg: Option<&Image<i32>>,
+    out_prev: Option<&Image<i32>>,
     out: &mut Image<i32>,
 ) {
     const {
@@ -236,11 +236,9 @@ fn hsqueeze_impl<D: SimdDescriptor>(
 
         let mut prev_b = match out_prev {
             None => avg_first,
-            Some(mc) => {
-                let mc_w = mc.data.size().0;
-                let mc = &mc.data;
+            Some(lr) => {
                 for (dy, out) in buf[..lanes].iter_mut().enumerate() {
-                    *out = f32::from_bits(mc.row(y + dy)[mc_w - 1] as u32);
+                    *out = f32::from_bits(lr.row(y + dy)[3] as u32);
                 }
                 D::F32Vec::load(d, &buf).bitcast_to_i32()
             }
@@ -285,15 +283,16 @@ fn hsqueeze_impl<D: SimdDescriptor>(
         }
 
         let x = remainder_start;
+        let has_next_in_avg = in_avg.size().0 > w;
         if remainder_count == 0 {
-            let avg_last = if has_tail {
+            let avg_last = if has_tail || has_next_in_avg {
                 for (idx, out) in buf[..lanes].iter_mut().enumerate() {
                     *out = f32::from_bits(in_avg.row(y + idx)[w] as u32);
                 }
                 D::F32Vec::load(d, &buf).bitcast_to_i32()
-            } else if let Some(mc) = in_next_avg {
+            } else if let Some(lr) = in_next_avg {
                 for (idx, out) in buf[..lanes].iter_mut().enumerate() {
-                    *out = f32::from_bits(mc.row(y + idx)[0] as u32);
+                    *out = f32::from_bits(lr.row(y + idx)[0] as u32);
                 }
                 D::F32Vec::load(d, &buf).bitcast_to_i32()
             } else {
@@ -313,10 +312,10 @@ fn hsqueeze_impl<D: SimdDescriptor>(
                     buf[dx + lanes * (2 * dy + 1)] = f32::from_bits(res_row[x + dx] as u32);
                 }
 
-                buf[remainder_count + lanes * 2 * dy] = if has_tail {
+                buf[remainder_count + lanes * 2 * dy] = if has_tail || has_next_in_avg {
                     f32::from_bits(avg_row[w] as u32)
-                } else if let Some(mc) = in_next_avg {
-                    f32::from_bits(mc.row(y + dy)[0] as u32)
+                } else if let Some(lr) = in_next_avg {
+                    f32::from_bits(lr.row(y + dy)[0] as u32)
                 } else {
                     buf[remainder_count - 1 + lanes * 2 * dy]
                 };
@@ -392,14 +391,15 @@ fn hsqueeze_scalar(
     y_start: usize,
     in_avg: &ImageRect<'_, i32>,
     in_res: &ImageRect<'_, i32>,
-    in_next_avg: &Option<ImageRect<'_, i32>>,
-    out_prev: Option<&ModularChannel>,
+    in_next_avg: Option<&Image<i32>>,
+    out_prev: Option<&Image<i32>>,
     out: &mut Image<i32>,
 ) {
     let (w, h) = in_res.size();
 
     debug_assert!(w >= 1);
     let has_tail = out.size().0 & 1 == 1;
+    let has_next_in_avg = in_avg.size().0 > w;
     if has_tail {
         debug_assert!(in_avg.size().0 == w + 1);
         debug_assert!(out.size().0 == 2 * w + 1);
@@ -410,7 +410,7 @@ fn hsqueeze_scalar(
         let res_row = in_res.row(y);
         let mut prev_b = match out_prev {
             None => avg_row[0],
-            Some(mc) => mc.data.row(y)[mc.data.size().0 - 1],
+            Some(lr) => lr.row(y)[3],
         };
         // Guarantee that `avg_row[x + 1]` is available.
         let x_end = if has_tail { w } else { w - 1 };
@@ -421,9 +421,12 @@ fn hsqueeze_scalar(
             prev_b = b;
         }
         if !has_tail {
-            let last_avg = match in_next_avg {
-                None => avg_row[w - 1],
-                Some(mc) => mc.row(y)[0],
+            let last_avg = if has_next_in_avg {
+                avg_row[w]
+            } else if let Some(lr) = in_next_avg {
+                lr.row(y)[0]
+            } else {
+                avg_row[w - 1]
             };
             let (a, b) = unsqueeze_scalar(avg_row[w - 1], res_row[w - 1], last_avg, prev_b);
             out.row_mut(y)[2 * w - 2] = a;
@@ -441,8 +444,8 @@ simd_function!(
     pub fn hsqueeze_fwd(
         in_avg: &ImageRect<'_, i32>,
         in_res: &ImageRect<'_, i32>,
-        in_next_avg: &Option<ImageRect<'_, i32>>,
-        out_prev: Option<&ModularChannel>,
+        in_next_avg: Option<&Image<i32>>,
+        out_prev: Option<&Image<i32>>,
         out: &mut Image<i32>,
     ) {
         hsqueeze_impl(d, 0, in_avg, in_res, in_next_avg, out_prev, out)
@@ -453,8 +456,8 @@ simd_function!(
 pub fn do_hsqueeze_step(
     in_avg: &ImageRect<'_, i32>,
     in_res: &ImageRect<'_, i32>,
-    in_next_avg: &Option<ImageRect<'_, i32>>,
-    out_prev: Option<&ModularChannel>,
+    in_next_avg: Option<&Image<i32>>,
+    out_prev: Option<&Image<i32>>,
     buffers: &mut [&mut ModularChannel],
 ) {
     trace!("hsqueeze step in_avg: {in_avg:?} in_res: {in_res:?} in_next_avg: {in_next_avg:?}");
@@ -483,8 +486,8 @@ fn vsqueeze_impl<D: SimdDescriptor>(
     x_start: usize,
     in_avg: &ImageRect<'_, i32>,
     in_res: &ImageRect<'_, i32>,
-    in_next_avg: &Option<ImageRect<'_, i32>>,
-    out_prev: Option<&ModularChannel>,
+    in_next_avg: Option<&Image<i32>>,
+    out_prev: Option<&Image<i32>>,
     out: &mut Image<i32>,
 ) {
     const { assert!(D::I32Vec::LEN.is_power_of_two()) };
@@ -498,6 +501,7 @@ fn vsqueeze_impl<D: SimdDescriptor>(
     }
 
     let has_tail = out.size().1 & 1 == 1;
+    let has_next_in_avg = in_avg.size().1 > h;
     if has_tail {
         debug_assert!(in_avg.size().1 == h + 1);
         debug_assert!(out.size().1 == 2 * h + 1);
@@ -508,7 +512,7 @@ fn vsqueeze_impl<D: SimdDescriptor>(
 
     let prev_b_row = match out_prev {
         None => in_avg.row(0),
-        Some(mc) => mc.data.row(mc.data.size().1 - 1),
+        Some(tb) => tb.row(3),
     };
 
     for x in (x_start..x_limit).step_by(lanes) {
@@ -525,10 +529,10 @@ fn vsqueeze_impl<D: SimdDescriptor>(
             res_first = D::I32Vec::load(d, &in_res.row(y + 1)[x..]);
         }
 
-        let avg_last = if has_tail {
+        let avg_last = if has_tail || has_next_in_avg {
             D::I32Vec::load(d, &in_avg.row(h)[x..])
-        } else if let Some(mc) = in_next_avg {
-            D::I32Vec::load(d, &mc.row(0)[x..])
+        } else if let Some(tb) = in_next_avg {
+            D::I32Vec::load(d, &tb.row(0)[x..])
         } else {
             avg_first
         };
@@ -574,13 +578,14 @@ fn vsqueeze_scalar(
     x_start: usize,
     in_avg: &ImageRect<'_, i32>,
     in_res: &ImageRect<'_, i32>,
-    in_next_avg: &Option<ImageRect<'_, i32>>,
-    out_prev: Option<&ModularChannel>,
+    in_next_avg: Option<&Image<i32>>,
+    out_prev: Option<&Image<i32>>,
     out: &mut Image<i32>,
 ) {
     let (w, h) = in_res.size();
 
     let has_tail = out.size().1 & 1 == 1;
+    let has_next_in_avg = in_avg.size().1 > h;
     if has_tail {
         debug_assert!(in_avg.size().1 == h + 1);
         debug_assert!(out.size().1 == 2 * h + 1);
@@ -589,14 +594,17 @@ fn vsqueeze_scalar(
     {
         let prev_b_row = match out_prev {
             None => in_avg.row(0),
-            Some(mc) => mc.data.row(mc.data.size().1 - 1),
+            Some(tb) => tb.row(3),
         };
         let avg_row = in_avg.row(0);
         let res_row = in_res.row(0);
         let avg_row_next = if !has_tail && (h == 1) {
-            match in_next_avg {
-                None => in_avg.row(0),
-                Some(mc) => mc.row(0),
+            if has_next_in_avg {
+                in_avg.row(1)
+            } else if let Some(tb) = in_next_avg {
+                tb.row(0)
+            } else {
+                in_avg.row(0)
             }
         } else {
             in_avg.row(1)
@@ -612,11 +620,12 @@ fn vsqueeze_scalar(
         let res_row = in_res.row(y);
         let avg_row_next = if has_tail || y < h - 1 {
             in_avg.row(y + 1)
+        } else if has_next_in_avg {
+            in_avg.row(h)
+        } else if let Some(tb) = in_next_avg {
+            tb.row(0)
         } else {
-            match in_next_avg {
-                None => avg_row,
-                Some(mc) => mc.row(0),
-            }
+            avg_row
         };
         for x in x_start..w {
             let (a, b) = unsqueeze_scalar(
@@ -640,8 +649,8 @@ simd_function!(
     pub fn vsqueeze_fwd(
         in_avg: &ImageRect<'_, i32>,
         in_res: &ImageRect<'_, i32>,
-        in_next_avg: &Option<ImageRect<'_, i32>>,
-        out_prev: Option<&ModularChannel>,
+        in_next_avg: Option<&Image<i32>>,
+        out_prev: Option<&Image<i32>>,
         out: &mut Image<i32>,
     ) {
         vsqueeze_impl(d, 0, in_avg, in_res, in_next_avg, out_prev, out)
@@ -652,8 +661,8 @@ simd_function!(
 pub fn do_vsqueeze_step(
     in_avg: &ImageRect<'_, i32>,
     in_res: &ImageRect<'_, i32>,
-    in_next_avg: &Option<ImageRect<'_, i32>>,
-    out_prev: Option<&ModularChannel>,
+    in_next_avg: Option<&Image<i32>>,
+    out_prev: Option<&Image<i32>>,
     buffers: &mut [&mut ModularChannel],
 ) {
     trace!("vsqueeze step in_avg: {in_avg:?} in_res: {in_res:?} in_next_avg: {in_next_avg:?}");

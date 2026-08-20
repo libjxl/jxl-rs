@@ -88,16 +88,15 @@ enum SqueezeStepKind {
 }
 
 #[derive(Debug)]
-struct SqueezeInfo<T> {
+struct SqueezeInfo {
     kind: SqueezeStepKind,
     out_rect: Rect,
-    in_avg: T,
+    in_avg: (usize, usize),
     avg_rect: Rect,
-    in_res: T,
+    in_res: (usize, usize),
     res_rect: Rect,
-    in_next_avg: Option<T>,
-    out_prev: Option<T>,
-    next_avg_rect: Option<Rect>,
+    in_next_avg: Option<(usize, usize)>,
+    out_prev: Option<(usize, usize)>,
 }
 
 fn borrow_channel(
@@ -107,7 +106,21 @@ fn borrow_channel(
     buffers[x.0].buffer_grid[x.1].data.try_read().unwrap()
 }
 
-impl SqueezeInfo<(usize, usize)> {
+fn borrow_topbottom(
+    buffers: &[ModularBufferInfo],
+    x: (usize, usize),
+) -> RwLockReadGuard<'_, Option<Image<i32>>> {
+    buffers[x.0].buffer_grid[x.1].topbottom.try_read().unwrap()
+}
+
+fn borrow_leftright(
+    buffers: &[ModularBufferInfo],
+    x: (usize, usize),
+) -> RwLockReadGuard<'_, Option<Image<i32>>> {
+    buffers[x.0].buffer_grid[x.1].leftright.try_read().unwrap()
+}
+
+impl SqueezeInfo {
     fn new(
         buffers: &[ModularBufferInfo],
         buf_in: [usize; 2],
@@ -155,46 +168,51 @@ impl SqueezeInfo<(usize, usize)> {
         } else {
             (gx > 0).then(|| (gx - 1, gy))
         };
-        let next_avg_grid = pos_next.map(|x| buf_avg.get_grid_idx(output_grid_kind, x));
+        let mut avg_rect = buf_avg.get_grid_rect(frame_header, output_grid_kind, output_grid_pos);
+        let next_avg_grid = if let Some(pos) = pos_next {
+            let grid = buf_avg.get_grid_idx(output_grid_kind, pos);
+            if grid == in_grid {
+                if vertical {
+                    avg_rect.size.1 += 1;
+                } else {
+                    avg_rect.size.0 += 1;
+                }
+                None
+            } else {
+                Some(grid)
+            }
+        } else {
+            None
+        };
         let prev_out_grid = pos_prev.map(|x| buffers[buf_out].get_grid_idx(output_grid_kind, x));
-        let next_avg_rect =
-            pos_next.map(|x| buf_avg.get_grid_rect(frame_header, output_grid_kind, x));
         Self {
             kind,
             out_rect,
             in_avg: (buf_in[0], in_grid),
-            avg_rect: buf_avg.get_grid_rect(frame_header, output_grid_kind, output_grid_pos),
+            avg_rect,
             in_res: (buf_in[1], res_grid),
             res_rect: buf_res.get_grid_rect(frame_header, output_grid_kind, output_grid_pos),
             in_next_avg: next_avg_grid.map(|x| (buf_in[0], x)),
             out_prev: prev_out_grid.map(|x| (buf_out, x)),
-            next_avg_rect,
         }
     }
 
     // The lifetimes prevent calling decrement_refs while buffers are still borrowed.
-    fn borrow<'a>(
+    fn borrow_inputs<'a>(
         &'a self,
         buffers: &'a [ModularBufferInfo],
-    ) -> SqueezeInfo<RwLockReadGuard<'a, Option<ModularChannel>>> {
-        // If the average buffer has a coarser grid than the output buffer (or no grid
-        // at all), `in_next_avg` can refer to the same buffer and grid position as
-        // `in_avg`. Avoid taking a second read lock on the same RwLock in that case;
-        // `in_next_avg_rect` falls back to the `in_avg` guard.
-        let in_next_avg = self
-            .in_next_avg
-            .filter(|x| *x != self.in_avg)
-            .map(|x| borrow_channel(buffers, x));
-        SqueezeInfo {
-            kind: self.kind,
-            out_rect: self.out_rect,
+        vertical: bool,
+    ) -> SqueezeInputs<'a> {
+        let borrow_border = if vertical {
+            borrow_topbottom
+        } else {
+            borrow_leftright
+        };
+        SqueezeInputs {
             in_avg: borrow_channel(buffers, self.in_avg),
-            avg_rect: self.avg_rect,
             in_res: borrow_channel(buffers, self.in_res),
-            res_rect: self.res_rect,
-            in_next_avg,
-            out_prev: self.out_prev.map(|x| borrow_channel(buffers, x)),
-            next_avg_rect: self.next_avg_rect,
+            in_next_border: self.in_next_avg.map(|x| borrow_border(buffers, x)),
+            out_prev_border: self.out_prev.map(|x| borrow_border(buffers, x)),
         }
     }
 
@@ -240,6 +258,31 @@ impl SqueezeInfo<(usize, usize)> {
             center_grid_pos: (gx, gy),
             guards,
         }
+    }
+}
+
+struct SqueezeInputs<'a> {
+    in_avg: RwLockReadGuard<'a, Option<ModularChannel>>,
+    in_res: RwLockReadGuard<'a, Option<ModularChannel>>,
+    in_next_border: Option<RwLockReadGuard<'a, Option<Image<i32>>>>,
+    out_prev_border: Option<RwLockReadGuard<'a, Option<Image<i32>>>>,
+}
+
+impl<'a> SqueezeInputs<'a> {
+    fn in_avg_rect(&self, rect: Rect) -> ImageRect<'_, i32> {
+        self.in_avg.as_ref().unwrap().data.get_rect(rect)
+    }
+
+    fn in_res_rect(&self, rect: Rect) -> ImageRect<'_, i32> {
+        self.in_res.as_ref().unwrap().data.get_rect(rect)
+    }
+
+    fn in_next_border(&self) -> Option<&Image<i32>> {
+        self.in_next_border.as_ref().and_then(|g| g.as_ref())
+    }
+
+    fn out_prev_border(&self) -> Option<&Image<i32>> {
+        self.out_prev_border.as_ref().and_then(|g| g.as_ref())
     }
 }
 
@@ -373,22 +416,6 @@ impl<'a> TiledChannelView<'a> {
 
         let last = row_buf[max_len - 1];
         row_buf[max_len..].fill(last);
-    }
-}
-
-impl<'a> SqueezeInfo<RwLockReadGuard<'a, Option<ModularChannel>>> {
-    fn in_avg_rect(&self) -> ImageRect<'_, i32> {
-        self.in_avg.as_ref().unwrap().data.get_rect(self.avg_rect)
-    }
-    fn in_res_rect(&self) -> ImageRect<'_, i32> {
-        self.in_res.as_ref().unwrap().data.get_rect(self.res_rect)
-    }
-    fn in_next_avg_rect(&self) -> Option<ImageRect<'_, i32>> {
-        let rect = self.next_avg_rect?;
-        // `in_next_avg` is None (while `next_avg_rect` is Some) when it aliases
-        // `in_avg`; use the `in_avg` guard in that case.
-        let guard = self.in_next_avg.as_ref().unwrap_or(&self.in_avg);
-        Some(guard.as_ref().unwrap().data.get_rect(rect))
     }
 }
 
@@ -660,53 +687,13 @@ impl TransformStepChunk {
                 buf_in,
                 buf_out,
                 buf_in_avg,
-            } => {
-                let info = SqueezeInfo::new(
-                    buffers,
-                    *buf_in,
-                    *buf_out,
-                    *buf_in_avg,
-                    self.grid_pos,
-                    frame_header,
-                    false,
-                );
-                trace!(
-                    "HSqueeze {:?} -> {:?}, grid {out_grid} grid pos {:?}: {info:?}",
-                    buf_in, buf_out, self.grid_pos
-                );
-                with_buffers(buffers, &[*buf_out], out_grid, |mut bufs| {
-                    if bufs.is_empty() {
-                        return Ok(());
-                    }
-                    if info.kind != SqueezeStepKind::Regular {
-                        assert_eq!(bufs.len(), 1);
-                        let view = info.borrow_upsample_view(buffers, frame_header);
-                        let scratch = &mut tranform_scratch_space.smooth_unsqueeze_buffer;
-                        if matches!(info.kind, SqueezeStepKind::Upsample2D(..)) {
-                            smooth_2d_unsqueeze(&view, info.out_rect, &mut bufs[0].data, scratch);
-                        } else {
-                            smooth_h_unsqueeze(&view, info.out_rect, &mut bufs[0].data, scratch);
-                        }
-                    } else {
-                        let info = info.borrow(buffers);
-                        let out_prev = info.out_prev.as_ref().map(|g| g.as_ref().unwrap());
-                        super::squeeze::do_hsqueeze_step(
-                            &info.in_avg_rect(),
-                            &info.in_res_rect(),
-                            &info.in_next_avg_rect(),
-                            out_prev,
-                            &mut bufs,
-                        );
-                    }
-                    Ok(())
-                })?;
-                info.decrement_refs(buffers, is_final);
             }
-            TransformStep::VSqueeze {
+            | TransformStep::VSqueeze {
                 buf_in,
                 buf_out,
                 buf_in_avg,
             } => {
+                let vertical = matches!(self.step, TransformStep::VSqueeze { .. });
                 let info = SqueezeInfo::new(
                     buffers,
                     *buf_in,
@@ -714,11 +701,14 @@ impl TransformStepChunk {
                     *buf_in_avg,
                     self.grid_pos,
                     frame_header,
-                    true,
+                    vertical,
                 );
                 trace!(
-                    "VSqueeze {:?} -> {:?}, grid {out_grid} grid pos {:?}: {info:?}",
-                    buf_in, buf_out, self.grid_pos
+                    "{} {:?} -> {:?}, grid {out_grid} grid pos {:?}: {info:?}",
+                    if vertical { "VSqueeze" } else { "HSqueeze" },
+                    buf_in,
+                    buf_out,
+                    self.grid_pos
                 );
                 with_buffers(buffers, &[*buf_out], out_grid, |mut bufs| {
                     if bufs.is_empty() {
@@ -730,19 +720,30 @@ impl TransformStepChunk {
                         let scratch = &mut tranform_scratch_space.smooth_unsqueeze_buffer;
                         if matches!(info.kind, SqueezeStepKind::Upsample2D(..)) {
                             smooth_2d_unsqueeze(&view, info.out_rect, &mut bufs[0].data, scratch);
-                        } else {
+                        } else if vertical {
                             smooth_v_unsqueeze(&view, info.out_rect, &mut bufs[0].data, scratch);
+                        } else {
+                            smooth_h_unsqueeze(&view, info.out_rect, &mut bufs[0].data, scratch);
                         }
                     } else {
-                        let info = info.borrow(buffers);
-                        let out_prev = info.out_prev.as_ref().map(|g| g.as_ref().unwrap());
-                        super::squeeze::do_vsqueeze_step(
-                            &info.in_avg_rect(),
-                            &info.in_res_rect(),
-                            &info.in_next_avg_rect(),
-                            out_prev,
-                            &mut bufs,
-                        );
+                        let inputs = info.borrow_inputs(buffers, vertical);
+                        if vertical {
+                            super::squeeze::do_vsqueeze_step(
+                                &inputs.in_avg_rect(info.avg_rect),
+                                &inputs.in_res_rect(info.res_rect),
+                                inputs.in_next_border(),
+                                inputs.out_prev_border(),
+                                &mut bufs,
+                            );
+                        } else {
+                            super::squeeze::do_hsqueeze_step(
+                                &inputs.in_avg_rect(info.avg_rect),
+                                &inputs.in_res_rect(info.res_rect),
+                                inputs.in_next_border(),
+                                inputs.out_prev_border(),
+                                &mut bufs,
+                            );
+                        }
                     }
                     Ok(())
                 })?;
