@@ -240,23 +240,36 @@ impl SqueezeInfo {
             Some(buf_info.grid_kind.grid_dim(frame_header, shift))
         };
 
-        let mut guards = [[None, None, None], [None, None, None], [None, None, None]];
-        for (dy, row) in guards.iter_mut().enumerate() {
-            for (dx, g) in row.iter_mut().enumerate() {
-                let tile_x = gx as isize + dx as isize - 1;
-                let tile_y = gy as isize + dy as isize - 1;
-                if tile_x >= 0 && tile_x < xs as isize && tile_y >= 0 && tile_y < ys as isize {
-                    let grid_idx = tile_y as usize * xs + tile_x as usize;
-                    *g = Some(borrow_channel(buffers, (b, grid_idx)));
-                }
+        let mut tiles = [const { None }; 9];
+        tiles[4] = Some(TileGuard::Channel(borrow_channel(buffers, (b, g))));
+
+        let borrow_border = |tile_x: isize, tile_y: isize, is_tb: bool| -> Option<TileGuard<'a>> {
+            if tile_x >= 0 && tile_x < xs as isize && tile_y >= 0 && tile_y < ys as isize {
+                let grid_idx = tile_y as usize * xs + tile_x as usize;
+                let guard = if is_tb {
+                    borrow_topbottom(buffers, (b, grid_idx))
+                } else {
+                    borrow_leftright(buffers, (b, grid_idx))
+                };
+                Some(TileGuard::Border(guard))
+            } else {
+                None
             }
+        };
+
+        for dx in 0..3 {
+            let tx = gx as isize + dx as isize - 1;
+            tiles[dx] = borrow_border(tx, gy as isize - 1, true);
+            tiles[6 + dx] = borrow_border(tx, gy as isize + 1, true);
         }
+        tiles[3] = borrow_border(gx as isize - 1, gy as isize, false);
+        tiles[5] = borrow_border(gx as isize + 1, gy as isize, false);
 
         TiledChannelView {
             size: buf_info.info.size,
             grid_dim,
             center_grid_pos: (gx, gy),
-            guards,
+            tiles,
         }
     }
 }
@@ -286,20 +299,74 @@ impl<'a> SqueezeInputs<'a> {
     }
 }
 
-pub struct TiledChannelView<'a> {
+enum TileGuard<'a> {
+    Channel(RwLockReadGuard<'a, Option<ModularChannel>>),
+    Border(RwLockReadGuard<'a, Option<Image<i32>>>),
+}
+
+impl<'a> std::ops::Deref for TileGuard<'a> {
+    type Target = Image<i32>;
+
+    fn deref(&self) -> &Self::Target {
+        match self {
+            TileGuard::Channel(g) => &g.as_ref().unwrap().data,
+            TileGuard::Border(g) => g.as_ref().unwrap(),
+        }
+    }
+}
+
+pub(super) struct TiledChannelView<'a> {
     size: (usize, usize),
     grid_dim: Option<(usize, usize)>,
     center_grid_pos: (usize, usize),
-    // 3x3 array of borrowed image tiles: [dy][dx] where [1][1] is center (gx, gy)
-    guards: [[Option<RwLockReadGuard<'a, Option<ModularChannel>>>; 3]; 3],
+    tiles: [Option<TileGuard<'a>>; 9],
 }
 
 impl<'a> TiledChannelView<'a> {
     #[inline(always)]
-    fn tile(&self, dy: usize, dx: usize) -> Option<&Image<i32>> {
-        self.guards[dy][dx]
-            .as_ref()
-            .and_then(|guard| guard.as_ref().map(|mc| &mc.data))
+    fn top_border_row(ly: usize, top_tile_h: usize) -> usize {
+        if top_tile_h <= 1 || ly == top_tile_h - 1 {
+            3
+        } else {
+            2
+        }
+    }
+
+    #[inline(always)]
+    fn bottom_border_row(ly: usize) -> usize {
+        if ly == 0 { 0 } else { 1 }
+    }
+
+    fn copy_tile_slice(
+        &self,
+        (dx, dy): (usize, usize),
+        ly: usize,
+        src_range: std::ops::Range<usize>,
+        tile_w: usize,
+        top_tile_h: usize,
+        dest: &mut [i32],
+    ) {
+        let img = self.tiles[dy * 3 + dx].as_deref().unwrap();
+        match (dy, dx) {
+            (1, 1) => {
+                dest.copy_from_slice(&img.row(ly)[src_range]);
+            }
+            (0, _) => {
+                dest.copy_from_slice(&img.row(Self::top_border_row(ly, top_tile_h))[src_range]);
+            }
+            (2, _) => {
+                dest.copy_from_slice(&img.row(Self::bottom_border_row(ly))[src_range]);
+            }
+            (1, 0) => {
+                let offset_start = 4 - (tile_w - src_range.start);
+                let offset_end = 4 - (tile_w - src_range.end);
+                dest.copy_from_slice(&img.row(ly)[offset_start..offset_end]);
+            }
+            (1, 2) => {
+                dest.copy_from_slice(&img.row(ly)[src_range]);
+            }
+            _ => unreachable!(),
+        }
     }
 
     pub fn load_row_to_scratch(
@@ -328,7 +395,7 @@ impl<'a> TiledChannelView<'a> {
         };
 
         let Some(grid_dim) = self.grid_dim else {
-            let row = self.tile(1, 1).unwrap().row(clamped_y);
+            let row = self.tiles[4].as_deref().unwrap().row(clamped_y);
 
             let left_clamp = (2 - xoff as isize).max(0) as usize;
             let right_clamp_start = (w as isize + 2 - xoff as isize).min(max_len as isize) as usize;
@@ -353,11 +420,17 @@ impl<'a> TiledChannelView<'a> {
             return;
         };
 
-        let grid_w = grid_dim.0;
+        let (grid_w, grid_h) = grid_dim;
         let (gx_center, gy_center) = self.center_grid_pos;
-        let gy = clamped_y / grid_dim.1;
-        let ly = clamped_y % grid_dim.1;
+        let gy = clamped_y / grid_h;
+        let ly = clamped_y % grid_h;
         let dy = (gy as isize - gy_center as isize + 1) as usize;
+
+        let top_tile_h = if gy_center > 0 {
+            (h - (gy_center - 1) * grid_h).min(grid_h)
+        } else {
+            grid_h
+        };
 
         let global_x_start = xoff as isize - 2;
         let global_x_end = global_x_start + max_len as isize;
@@ -382,24 +455,33 @@ impl<'a> TiledChannelView<'a> {
                 if intersect_start < intersect_end {
                     let dest_start = left_clamp + (intersect_start - clamped_x_start);
                     let dest_end = dest_start + (intersect_end - intersect_start);
-                    if let Some(chan) = self.tile(dy, dx) {
-                        let row = chan.row(ly);
-                        let src_start = intersect_start - tile_x_start;
-                        let src_end = intersect_end - tile_x_start;
-                        row_buf[dest_start..dest_end].copy_from_slice(&row[src_start..src_end]);
-                    } else {
-                        // Not-yet-decoded tiles are semantically all-zero. Fill
-                        // explicitly: the scratch buffer is reused across rows and
-                        // transforms, so leaving the previous contents in place makes
-                        // the (partial-render) output depend on scheduling order.
-                        row_buf[dest_start..dest_end].fill(0);
-                    }
+                    let src_start = intersect_start - tile_x_start;
+                    let src_end = intersect_end - tile_x_start;
+                    self.copy_tile_slice(
+                        (dx, dy),
+                        ly,
+                        src_start..src_end,
+                        tile_w,
+                        top_tile_h,
+                        &mut row_buf[dest_start..dest_end],
+                    );
                 }
             }
         }
 
         if left_clamp > 0 {
-            let left_val = self.tile(dy, 1).map(|chan| chan.row(ly)[0]).unwrap_or(0);
+            let left_val = match dy {
+                1 => self.tiles[4].as_deref().unwrap().row(ly)[0],
+                0 => self.tiles[1]
+                    .as_deref()
+                    .unwrap()
+                    .row(Self::top_border_row(ly, top_tile_h))[0],
+                2 => self.tiles[7]
+                    .as_deref()
+                    .unwrap()
+                    .row(Self::bottom_border_row(ly))[0],
+                _ => 0,
+            };
             row_buf[..left_clamp].fill(left_val);
         }
 
@@ -407,10 +489,19 @@ impl<'a> TiledChannelView<'a> {
             let gx_right = (w - 1) / grid_w;
             let lx_right = (w - 1) % grid_w;
             let dx = (gx_right as isize - gx_center as isize + 1) as usize;
-            let right_val = self
-                .tile(dy, dx)
-                .map(|chan| chan.row(ly)[lx_right])
-                .unwrap_or(0);
+            let right_val = match (dy, dx) {
+                (1, 1) => self.tiles[4].as_deref().unwrap().row(ly)[lx_right],
+                (1, 2) => self.tiles[5].as_deref().unwrap().row(ly)[3],
+                (0, 1 | 2) => self.tiles[dx]
+                    .as_deref()
+                    .unwrap()
+                    .row(Self::top_border_row(ly, top_tile_h))[lx_right],
+                (2, 1 | 2) => self.tiles[6 + dx]
+                    .as_deref()
+                    .unwrap()
+                    .row(Self::bottom_border_row(ly))[lx_right],
+                _ => 0,
+            };
             row_buf[max_len - right_clamp..max_len].fill(right_val);
         }
 

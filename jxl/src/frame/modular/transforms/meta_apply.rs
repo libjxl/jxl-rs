@@ -594,41 +594,36 @@ pub fn make_grids(
                             buffer_info,
                         );
                     }
-                    // Next average
+                    // 3x3 neighbor grid positions for upsampling & next average
                     let cur_grid =
                         buffer_info[buf_in[0]].get_grid_idx(out_kind, (x as usize, y as usize));
-                    let (next_x, next_y) = if vertical { (x, y + 1) } else { (x + 1, y) };
-                    let in_bounds = if vertical {
-                        next_y < out_shape.1 as isize
-                    } else {
-                        next_x < out_shape.0 as isize
-                    };
-                    let next_grid = if in_bounds {
-                        buffer_info[buf_in[0]]
-                            .get_grid_idx(out_kind, (next_x as usize, next_y as usize))
-                    } else {
-                        cur_grid
-                    };
-                    let is_cross_tile = next_grid != cur_grid;
-                    let next_borders = if is_cross_tile {
-                        if vertical {
-                            NeededBorders::TOPBOTTOM
-                        } else {
-                            NeededBorders::LEFTRIGHT
+                    for dx in -1..=1 {
+                        for dy in -1..=1 {
+                            if dx == 0 && dy == 0 {
+                                continue;
+                            }
+                            let target_x = (x + dx).clamp(0, out_shape.0 as isize - 1);
+                            let target_y = (y + dy).clamp(0, out_shape.1 as isize - 1);
+                            let target_grid = buffer_info[buf_in[0]]
+                                .get_grid_idx(out_kind, (target_x as usize, target_y as usize));
+                            if target_grid != cur_grid {
+                                let borders = NeededBorders {
+                                    topbottom: dy != 0,
+                                    leftright: dx != 0 && dy == 0,
+                                };
+                                add_grid_use(
+                                    ts,
+                                    buf_in[0],
+                                    out_kind,
+                                    out_shape,
+                                    (x + dx, y + dy),
+                                    borders,
+                                    &mut grid_transform_steps,
+                                    buffer_info,
+                                );
+                            }
                         }
-                    } else {
-                        NeededBorders::NONE
-                    };
-                    add_grid_use(
-                        ts,
-                        buf_in[0],
-                        out_kind,
-                        out_shape,
-                        (next_x, next_y),
-                        next_borders,
-                        &mut grid_transform_steps,
-                        buffer_info,
-                    );
+                    }
                     // Previous decoded
                     let prev_pos = if vertical { (x, y - 1) } else { (x - 1, y) };
                     let prev_borders = if vertical {
