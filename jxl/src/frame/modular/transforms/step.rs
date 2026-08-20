@@ -555,33 +555,36 @@ impl TransformStepChunk {
                     let grid_shape = buffers[buf_out[0]].grid_shape;
                     let grid_x = out_grid % grid_shape.0;
                     let grid_y = out_grid / grid_shape.0;
-                    let border = if *predictor == Predictor::Zero { 0 } else { 1 };
-                    let has_left = border > 0 && grid_x > 0;
-                    let has_top = border > 0 && grid_y > 0;
-                    // Neighbouring grid positions are only read as prediction context,
-                    // so take read locks on them: other transforms (e.g. Output) may
-                    // read them concurrently.
-                    let ctx_guards = |dx: usize, dy: usize| {
+                    let has_left = *predictor != Predictor::Zero && grid_x > 0;
+                    let has_top = *predictor != Predictor::Zero && grid_y > 0;
+                    let borrow_border_guards = |grid_idx: usize, is_lr: bool| {
                         buf_out
                             .iter()
                             .map(|i| {
-                                let grid = (grid_y - dy) * grid_shape.0 + (grid_x - dx);
-                                borrow_channel(buffers, (*i, grid))
+                                if is_lr {
+                                    borrow_leftright(buffers, (*i, grid_idx))
+                                } else {
+                                    borrow_topbottom(buffers, (*i, grid_idx))
+                                }
                             })
                             .collect::<Vec<_>>()
                     };
-                    let left_guards = has_left.then(|| ctx_guards(1, 0));
-                    let top_guards = has_top.then(|| ctx_guards(0, 1));
-                    let topleft_guards = (has_left && has_top).then(|| ctx_guards(1, 1));
-                    let left_refs: Option<Vec<&ModularChannel>> = left_guards
+                    let stride = grid_shape.0;
+                    let left_guards = has_left
+                        .then(|| borrow_border_guards(grid_y * stride + (grid_x - 1), true));
+                    let top_guards = has_top
+                        .then(|| borrow_border_guards((grid_y - 1) * stride + grid_x, false));
+                    let topleft_guards = (has_left && has_top)
+                        .then(|| borrow_border_guards((grid_y - 1) * stride + (grid_x - 1), false));
+                    let left_refs = left_guards
                         .as_ref()
-                        .map(|g| g.iter().map(|x| x.as_ref().unwrap()).collect());
-                    let top_refs: Option<Vec<&ModularChannel>> = top_guards
+                        .map(|v| v.iter().map(|x| x.as_ref().unwrap()).collect::<Vec<_>>());
+                    let top_refs = top_guards
                         .as_ref()
-                        .map(|g| g.iter().map(|x| x.as_ref().unwrap()).collect());
-                    let topleft_refs: Option<Vec<&ModularChannel>> = topleft_guards
+                        .map(|v| v.iter().map(|x| x.as_ref().unwrap()).collect::<Vec<_>>());
+                    let topleft_refs = topleft_guards
                         .as_ref()
-                        .map(|g| g.iter().map(|x| x.as_ref().unwrap()).collect());
+                        .map(|v| v.iter().map(|x| x.as_ref().unwrap()).collect::<Vec<_>>());
                     let mut guards = vec![];
                     for i in buf_out {
                         let b = &buffers[*i].buffer_grid[out_grid];
@@ -610,6 +613,7 @@ impl TransformStepChunk {
                             *num_colors,
                             *num_deltas,
                             *predictor,
+                            &mut tranform_scratch_space.palette_row_scratch,
                         );
                     }
                 }
@@ -646,16 +650,28 @@ impl TransformStepChunk {
                     // context, so take read locks on it: other transforms (e.g.
                     // Output) may read it concurrently.
                     let mut prev_guards = vec![];
+                    let mut prev_aux_guards = vec![];
                     if grid_y > 0 {
                         for i in buf_out {
                             for grid_x in 0..grid_shape.0 {
                                 let grid = (grid_y - 1) * grid_shape.0 + grid_x;
-                                prev_guards.push(borrow_channel(buffers, (*i, grid)));
+                                prev_guards.push(borrow_topbottom(buffers, (*i, grid)));
+                            }
+                            if *predictor == Predictor::Weighted {
+                                let grid = (grid_y - 1) * grid_shape.0;
+                                prev_aux_guards.push(
+                                    buffers[*i].buffer_grid[grid]
+                                        .auxiliary_data
+                                        .try_read()
+                                        .unwrap(),
+                                );
                             }
                         }
                     }
-                    let prev_refs: Vec<&ModularChannel> =
+                    let prev_refs: Vec<&Image<i32>> =
                         prev_guards.iter().map(|g| g.as_ref().unwrap()).collect();
+                    let prev_aux_refs: Vec<Option<&Image<i32>>> =
+                        prev_aux_guards.iter().map(|g| g.as_ref()).collect();
                     let mut guards = vec![];
                     for i in buf_out {
                         for grid_x in 0..grid_shape.0 {
@@ -666,16 +682,33 @@ impl TransformStepChunk {
                     }
                     let mut out_buf_refs: Vec<&mut ModularChannel> =
                         guards.iter_mut().map(|g| g.as_mut().unwrap()).collect();
+                    let mut aux_out: Vec<_> = if *predictor == Predictor::Weighted {
+                        buf_out
+                            .iter()
+                            .map(|i| {
+                                buffers[*i].buffer_grid[grid_y * grid_shape.0]
+                                    .auxiliary_data
+                                    .try_write()
+                                    .unwrap()
+                            })
+                            .collect()
+                    } else {
+                        vec![]
+                    };
                     super::palette::do_palette_step_group_row(
                         &in_buf_refs,
                         img_pal.as_ref().unwrap(),
                         &mut out_buf_refs,
                         (grid_y > 0).then_some(&prev_refs[..]),
+                        (grid_y > 0 && *predictor == Predictor::Weighted)
+                            .then_some(&prev_aux_refs[..]),
+                        &mut aux_out,
                         grid_shape.0,
                         *num_colors,
                         *num_deltas,
                         *predictor,
                         wp_header,
+                        &mut tranform_scratch_space.palette_row_scratch,
                     )?;
                 }
                 buffers[*buf_pal].buffer_grid[0].mark_used(is_final);
