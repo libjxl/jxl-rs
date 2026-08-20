@@ -775,6 +775,10 @@ impl TransformStepChunk {
             }
         };
 
+        for &(buf, grid) in self.outputs(buffers).iter() {
+            buffers[buf].buffer_grid[grid].extract_needed_borders()?;
+        }
+
         Ok(())
     }
 

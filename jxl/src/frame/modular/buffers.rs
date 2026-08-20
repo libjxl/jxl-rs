@@ -66,9 +66,39 @@ impl ModularChannel {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub(super) struct NeededBorders {
+    pub topbottom: bool,
+    pub leftright: bool,
+}
+
+impl NeededBorders {
+    pub const NONE: Self = Self {
+        topbottom: false,
+        leftright: false,
+    };
+    pub const TOPBOTTOM: Self = Self {
+        topbottom: true,
+        leftright: false,
+    };
+    pub const LEFTRIGHT: Self = Self {
+        topbottom: false,
+        leftright: true,
+    };
+
+    pub fn is_empty(&self) -> bool {
+        !self.topbottom && !self.leftright
+    }
+}
+
 #[derive(Debug)]
 pub(super) struct ModularBuffer {
     pub(super) data: RwLock<Option<ModularChannel>>,
+    // 2px horizontal borders (top 2 rows and bottom 2 rows, size: (width, 4)).
+    pub(super) topbottom: RwLock<Option<Image<i32>>>,
+    // 2px vertical borders (left 2 cols and right 2 cols, size: (4, height)).
+    pub(super) leftright: RwLock<Option<Image<i32>>>,
+    pub(super) needed_borders: NeededBorders,
     // Number of times this buffer will be used, *including* when it is used for output.
     pub(super) remaining_uses: AtomicUsize,
     // Transform steps that use the image data in this buffer for final renders.
@@ -89,6 +119,9 @@ impl ModularBuffer {
     pub fn new(size: (usize, usize)) -> Self {
         ModularBuffer {
             data: RwLock::new(None),
+            topbottom: RwLock::new(None),
+            leftright: RwLock::new(None),
+            needed_borders: NeededBorders::NONE,
             remaining_uses: AtomicUsize::new(0),
             used_by_transforms_final: vec![],
             used_by_transforms_current: Mutex::new(vec![]),
@@ -100,6 +133,52 @@ impl ModularBuffer {
 
     pub fn has_buffer(&self) -> bool {
         self.data.try_read().unwrap().is_some()
+    }
+
+    pub fn has_borders(&self) -> bool {
+        self.topbottom.try_read().unwrap().is_some() || self.leftright.try_read().unwrap().is_some()
+    }
+
+    pub fn extract_needed_borders(&self) -> Result<()> {
+        if self.needed_borders.is_empty() {
+            return Ok(());
+        }
+        let data_guard = self.data.try_read().unwrap();
+        let Some(chan) = data_guard.as_ref() else {
+            return Ok(());
+        };
+        let (w, h) = chan.data.size();
+        if w == 0 || h == 0 {
+            return Ok(());
+        }
+
+        if self.needed_borders.topbottom {
+            let mut topbottom = Image::<i32>::new((w, 4))?;
+            let r0 = chan.data.row(0);
+            let r1 = if h > 1 { chan.data.row(1) } else { r0 };
+            let rb0 = if h > 1 { chan.data.row(h - 2) } else { r0 };
+            let rb1 = chan.data.row(h - 1);
+            topbottom.row_mut(0).copy_from_slice(r0);
+            topbottom.row_mut(1).copy_from_slice(r1);
+            topbottom.row_mut(2).copy_from_slice(rb0);
+            topbottom.row_mut(3).copy_from_slice(rb1);
+            *self.topbottom.try_write().unwrap() = Some(topbottom);
+        }
+
+        if self.needed_borders.leftright {
+            let mut leftright = Image::<i32>::new((4, h))?;
+            for y in 0..h {
+                let r = chan.data.row(y);
+                let out = leftright.row_mut(y);
+                out[0] = r[0];
+                out[1] = if w > 1 { r[1] } else { r[0] };
+                out[2] = if w > 1 { r[w - 2] } else { r[0] };
+                out[3] = r[w - 1];
+            }
+            *self.leftright.try_write().unwrap() = Some(leftright);
+        }
+
+        Ok(())
     }
 
     pub fn make_buffer(&self, info: &ChannelInfo) -> Result<ModularChannel> {
