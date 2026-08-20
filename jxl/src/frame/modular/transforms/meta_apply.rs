@@ -505,7 +505,7 @@ pub fn make_grids(
                             out_kind,
                             out_shape,
                             (x, y - 1),
-                            NeededBorders::NONE,
+                            NeededBorders::TOPBOTTOM,
                             &mut grid_transform_steps,
                             buffer_info,
                         );
@@ -551,6 +551,10 @@ pub fn make_grids(
                         _ => &[(0, -1), (-1, 0), (-1, -1)],
                     };
                     for &(dx, dy) in offsets {
+                        let borders = NeededBorders {
+                            topbottom: dy != 0,
+                            leftright: dx != 0 && dy == 0,
+                        };
                         for out in buf_out.iter() {
                             add_grid_use(
                                 ts,
@@ -558,7 +562,7 @@ pub fn make_grids(
                                 out_kind,
                                 out_shape,
                                 (x + dx, y + dy),
-                                NeededBorders::NONE,
+                                borders,
                                 &mut grid_transform_steps,
                                 buffer_info,
                             );

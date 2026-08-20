@@ -196,6 +196,7 @@ impl ModularBufferInfo {
 
 struct TransformScratchSpace {
     smooth_unsqueeze_buffer: ([Vec<f32>; 5], Vec<i32>),
+    palette_row_scratch: [Vec<i32>; 2],
 }
 
 impl Debug for TransformScratchSpace {
@@ -208,6 +209,7 @@ impl TransformScratchSpace {
     fn new() -> TransformScratchSpace {
         TransformScratchSpace {
             smooth_unsqueeze_buffer: (std::array::from_fn(|_| vec![]), vec![]),
+            palette_row_scratch: [vec![], vec![]],
         }
     }
 }

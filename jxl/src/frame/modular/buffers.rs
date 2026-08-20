@@ -17,9 +17,6 @@ use crate::util::sync::{Mutex, RwLock};
 pub(super) struct ModularChannel {
     // Actual pixel buffer.
     pub(super) data: Image<i32>,
-    // Holds additional information such as the weighted predictor's error channel's last row for
-    // the transform chunk that produced this buffer.
-    pub(super) auxiliary_data: Option<Image<i32>>,
     // Shift of the channel (None if this is a meta-channel).
     pub(super) shift: Option<(usize, usize)>,
     pub(super) bit_depth: BitDepth,
@@ -37,7 +34,6 @@ impl ModularChannel {
     ) -> Result<Self> {
         Ok(ModularChannel {
             data: Image::new_with_padding(size, IMAGE_OFFSET, IMAGE_PADDING)?,
-            auxiliary_data: None,
             shift,
             bit_depth,
         })
@@ -46,11 +42,6 @@ impl ModularChannel {
     fn try_clone(&self) -> Result<Self> {
         Ok(ModularChannel {
             data: self.data.try_clone()?,
-            auxiliary_data: self
-                .auxiliary_data
-                .as_ref()
-                .map(Image::try_clone)
-                .transpose()?,
             shift: self.shift,
             bit_depth: self.bit_depth,
         })
@@ -98,6 +89,9 @@ pub(super) struct ModularBuffer {
     pub(super) topbottom: RwLock<Option<Image<i32>>>,
     // 2px vertical borders (left 2 cols and right 2 cols, size: (4, height)).
     pub(super) leftright: RwLock<Option<Image<i32>>>,
+    // Holds additional information such as the weighted predictor's error channel's last row for
+    // the transform chunk that produced this buffer.
+    pub(super) auxiliary_data: RwLock<Option<Image<i32>>>,
     pub(super) needed_borders: NeededBorders,
     // Number of times this buffer will be used, *including* when it is used for output.
     pub(super) remaining_uses: AtomicUsize,
@@ -121,6 +115,7 @@ impl ModularBuffer {
             data: RwLock::new(None),
             topbottom: RwLock::new(None),
             leftright: RwLock::new(None),
+            auxiliary_data: RwLock::new(None),
             needed_borders: NeededBorders::NONE,
             remaining_uses: AtomicUsize::new(0),
             used_by_transforms_final: vec![],
@@ -184,7 +179,6 @@ impl ModularBuffer {
     pub fn make_buffer(&self, info: &ChannelInfo) -> Result<ModularChannel> {
         Ok(ModularChannel {
             data: Image::new_with_padding(self.size, IMAGE_OFFSET, IMAGE_PADDING)?,
-            auxiliary_data: None,
             shift: info.shift,
             bit_depth: info.bit_depth,
         })
