@@ -312,7 +312,7 @@ impl TransformStep {
                             size: in_res.size(),
                             origin: (0, 0),
                         }),
-                        &None,
+                        None,
                         None,
                         &mut bufs,
                     );
@@ -339,7 +339,7 @@ impl TransformStep {
                             size: in_res.size(),
                             origin: (0, 0),
                         }),
-                        &None,
+                        None,
                         None,
                         &mut bufs,
                     );
