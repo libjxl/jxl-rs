@@ -183,7 +183,7 @@ fn dequant_and_transform_to_pixels<D: SimdDescriptor>(
     quant_biases: &[f32; 4],
     x_dm_multiplier: f32,
     b_dm_multiplier: f32,
-    pixels: &mut [Image<f32>; 3],
+    pixels: &mut [Image<crate::util::f16>; 3],
     scratch: &mut [f32],
     inv_global_scale: f32,
     transform_buffer: &mut [Vec<f32>; 3],
@@ -242,11 +242,25 @@ fn dequant_and_transform_to_pixels<D: SimdDescriptor>(
             size: block_rect.size,
         };
         let mut output_rect = pixels[c].get_rect_mut(downsampled_rect);
+        let simd_width = D::F32Vec::LEN;
         for i in 0..downsampled_rect.size.1 {
             let offset = i * downsampled_rect.size.0;
-            output_rect
-                .row(i)
-                .copy_from_slice(&transform_buffer[c][offset..offset + downsampled_rect.size.0]);
+            let src = &transform_buffer[c][offset..offset + downsampled_rect.size.0];
+            let dst = output_rect.row(i);
+            let dst_u16 = crate::util::f16::slice_to_bits_mut(dst);
+            for (src_chunk, dst_chunk) in src
+                .chunks_exact(simd_width)
+                .zip(dst_u16.chunks_exact_mut(simd_width))
+            {
+                D::F32Vec::load(d, src_chunk).store_f16_bits(dst_chunk);
+            }
+            let rem = src.len() % simd_width;
+            if rem > 0 {
+                let start = src.len() - rem;
+                for (&s, d) in src[start..].iter().zip(&mut dst_u16[start..]) {
+                    *d = crate::util::f16::from_f32(s).to_bits();
+                }
+            }
         }
     }
     Ok(())
@@ -260,7 +274,7 @@ simd_function!(
         quant_biases: &[f32; 4],
         x_dm_multiplier: f32,
         b_dm_multiplier: f32,
-        pixels: &mut [Image<f32>; 3],
+        pixels: &mut [Image<crate::util::f16>; 3],
         scratch: &mut [f32],
         inv_global_scale: f32,
         transform_buffer: &mut [Vec<f32>; 3],
@@ -389,7 +403,7 @@ pub fn decode_vardct_group(
     hf_meta: &HfMetadata,
     lf_image: &[Image<f32>; 3],
     quant_biases: &[f32; 4],
-    pixels: &mut Option<[Image<f32>; 3]>,
+    pixels: &mut Option<[Image<crate::util::f16>; 3]>,
     buffers: &mut VarDctBuffers,
 ) -> Result<(), Error> {
     let x_dm_multiplier = (1.0 / (1.25)).powf(frame_header.x_qm_scale as f32 - 2.0);

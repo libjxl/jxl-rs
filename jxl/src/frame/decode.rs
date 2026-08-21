@@ -50,7 +50,7 @@ use crate::util::{
 
 fn upsample_lf_group(
     group: usize,
-    pixels: &mut [Image<f32>; 3],
+    pixels: &mut [Image<crate::util::f16>; 3],
     lf_image: &[Image<f32>; 3],
     header: &FrameHeader,
     factors: &CustomTransformData,
@@ -140,7 +140,10 @@ fn upsample_lf_group(
             for (i, buf) in temp_out_buf.iter().enumerate() {
                 let out_y = base_y + i;
                 if out_y < out_height {
-                    out_img.row_mut(out_y)[..out_width].copy_from_slice(&buf[..out_width]);
+                    let out_row = out_img.row_mut(out_y);
+                    for (dst, &src) in out_row[..out_width].iter_mut().zip(&buf[..out_width]) {
+                        *dst = crate::util::f16::from_f32(src);
+                    }
                 }
             }
         }
