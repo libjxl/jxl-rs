@@ -8,7 +8,7 @@ use jxl_simd::{
 };
 
 use crate::error::{Error, Result};
-use crate::frame::modular::{ChannelInfo, IMAGE_OFFSET, ModularChannel};
+use crate::frame::modular::{ChannelInfo, ModularChannel};
 use crate::headers::modular::SqueezeParams;
 use crate::image::{Image, ImageRect};
 use crate::util::tracing_wrappers::*;
@@ -885,11 +885,11 @@ fn convolve_1d_simd<D: SimdDescriptor>(d: D, n: &[D::F32Vec; 25]) -> (D::I32Vec,
     (out_even, out_odd)
 }
 
-fn init_buffers(buf: &mut [Vec<f32>; 5], ibuf: &mut Vec<i32>, len: usize) {
+fn init_buffers(buf: &mut [Vec<f32>; 5], ibuf: &mut Vec<i32>, in_len: usize, out_len: usize) {
     for b in buf {
-        b.resize(len, 0.0);
+        b.resize(in_len, 0.0);
     }
-    ibuf.resize(len, 0);
+    ibuf.resize(in_len.max(out_len), 0);
 }
 
 fn make_float<D: SimdDescriptor>(d: D, inp: &[i32], out: &mut [f32]) {
@@ -917,7 +917,7 @@ fn smooth_2d_unsqueeze_simd_impl<D: SimdDescriptor>(
     if in_xs == 0 || in_ys == 0 {
         return;
     }
-    init_buffers(buffer, ibuf, in_xs + 2 * lanes + 8);
+    init_buffers(buffer, ibuf, in_xs + 2 * lanes + 8, xs);
 
     for (dy, buf) in buffer.iter_mut().enumerate().take(4) {
         let yg = (row_offset + dy) as isize - 2;
@@ -932,20 +932,13 @@ fn smooth_2d_unsqueeze_simd_impl<D: SimdDescriptor>(
         input.load_row_to_scratch(yg, col_offset, in_xs + 4, ibuf);
         make_float(d, ibuf, &mut buffer[4]);
 
-        const { assert!(IMAGE_OFFSET.1 > 0) };
-        let offset = output.offset();
         let yout = 2 * iy_center;
-        let [output_row_0, output_row_1] = output.distinct_full_rows_mut([
-            yout + offset.1,
-            if yout + 1 < ys {
-                yout + offset.1 + 1
-            } else {
-                0
-            },
-        ]);
-
-        let output_row_0 = &mut output_row_0[offset.0..offset.0 + xs];
-        let output_row_1 = &mut output_row_1[offset.1..offset.1 + xs];
+        let (output_row_0, output_row_1) = if yout + 1 < ys {
+            let [r0, r1] = output.distinct_rows_mut([yout, yout + 1]);
+            (r0, r1)
+        } else {
+            (output.row_mut(yout), &mut ibuf[..xs])
+        };
 
         let row_iters = buffer[0]
             .windows(lanes + 4)
@@ -1038,7 +1031,7 @@ fn smooth_h_unsqueeze_simd_impl<D: SimdDescriptor>(
     if in_xs == 0 || in_ys == 0 {
         return;
     }
-    init_buffers(buffer, ibuf, in_xs + 2 * lanes + 8);
+    init_buffers(buffer, ibuf, in_xs + 2 * lanes + 8, 0);
 
     for (dy, buf) in buffer.iter_mut().enumerate().take(4) {
         let yg = (row_offset + dy) as isize - 2;
@@ -1141,7 +1134,7 @@ fn smooth_v_unsqueeze_simd_impl<D: SimdDescriptor>(
     if in_xs == 0 || in_ys == 0 {
         return;
     }
-    init_buffers(buffer, ibuf, in_xs + 2 * lanes + 8);
+    init_buffers(buffer, ibuf, in_xs + 2 * lanes + 8, xs);
 
     for (dy, buf) in buffer.iter_mut().enumerate().take(4) {
         let yg = (row_offset + dy) as isize - 2;
@@ -1156,20 +1149,13 @@ fn smooth_v_unsqueeze_simd_impl<D: SimdDescriptor>(
         input.load_row_to_scratch(yg, col_offset, in_xs + 4, ibuf);
         make_float(d, ibuf, &mut buffer[4]);
 
-        const { assert!(IMAGE_OFFSET.1 > 0) };
-        let offset = output.offset();
         let yout = 2 * iy_center;
-        let [output_row_0, output_row_1] = output.distinct_full_rows_mut([
-            yout + offset.1,
-            if yout + 1 < ys {
-                yout + offset.1 + 1
-            } else {
-                0
-            },
-        ]);
-
-        let output_row_0 = &mut output_row_0[offset.0..offset.0 + xs];
-        let output_row_1 = &mut output_row_1[offset.1..offset.1 + xs];
+        let (output_row_0, output_row_1) = if yout + 1 < ys {
+            let [r0, r1] = output.distinct_rows_mut([yout, yout + 1]);
+            (r0, r1)
+        } else {
+            (output.row_mut(yout), &mut ibuf[..xs])
+        };
 
         let row_iters = buffer[0]
             .windows(lanes + 4)

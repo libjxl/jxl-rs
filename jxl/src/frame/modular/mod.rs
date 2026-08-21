@@ -40,10 +40,6 @@ use decode::decode_modular_subbitstream;
 pub use predict::Predictor;
 pub use tree::Tree;
 
-// Two rows on top, two pixels to the left, two pixels to the right.
-const IMAGE_PADDING: (usize, usize) = (4, 2);
-const IMAGE_OFFSET: (usize, usize) = (2, 2);
-
 #[derive(Clone, PartialEq, Eq, Copy)]
 struct ChannelInfo {
     // The index of the output channel in the render pipeline.
