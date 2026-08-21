@@ -66,11 +66,13 @@ pub struct PassState {
     histograms: Histograms,
 }
 
+use group::CoeffBuffer;
+
 pub struct HfGlobalState {
     num_histograms: u32,
     passes: Vec<PassState>,
     dequant_matrices: DequantMatrices,
-    hf_coefficients: Vec<Mutex<Vec<i32>>>,
+    hf_coefficients: Vec<Mutex<CoeffBuffer>>,
 }
 
 #[derive(Debug)]

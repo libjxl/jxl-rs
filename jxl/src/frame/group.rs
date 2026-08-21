@@ -113,8 +113,35 @@ impl<D: SimdDescriptor> CoeffSlice<D> for &[i16] {
     }
 }
 
+#[derive(Debug)]
+pub enum CoeffBuffer {
+    I32(Vec<i32>),
+    I16(Vec<i16>),
+}
+
+pub enum CoeffsMut<'a> {
+    I32([&'a mut [i32]; 3]),
+    I16([&'a mut [i16]; 3]),
+}
+
+impl CoeffBuffer {
+    pub fn split_channels(&mut self) -> CoeffsMut<'_> {
+        match self {
+            Self::I32(v) => {
+                let (x, y_b) = v.split_at_mut(GROUP_DIM * GROUP_DIM);
+                let (y, b) = y_b.split_at_mut(GROUP_DIM * GROUP_DIM);
+                CoeffsMut::I32([x, y, b])
+            }
+            Self::I16(v) => {
+                let (x, y_b) = v.split_at_mut(GROUP_DIM * GROUP_DIM);
+                let (y, b) = y_b.split_at_mut(GROUP_DIM * GROUP_DIM);
+                CoeffsMut::I16([x, y, b])
+            }
+        }
+    }
+}
+
 #[derive(Clone, Copy)]
-#[allow(dead_code)]
 pub enum QBlock<'a> {
     I32([&'a [i32]; 3]),
     I16([&'a [i16]; 3]),
@@ -122,7 +149,6 @@ pub enum QBlock<'a> {
 
 impl<'a> QBlock<'a> {
     #[inline(always)]
-    #[allow(dead_code)]
     pub fn offset(&self, offset: usize) -> Self {
         match self {
             Self::I32(b) => Self::I32([&b[0][offset..], &b[1][offset..], &b[2][offset..]]),
@@ -486,17 +512,15 @@ pub fn decode_vardct_group(
     let quant_lf_rect = hf_meta.quant_lf.get_rect(block_group_rect);
     let block_context_map = lf_global.block_context_map.as_ref().unwrap();
     // TODO(veluca): improve coefficient storage (smaller allocations, use 16 bits if possible).
-    let mut coeffs;
-    let coeffs = if !hf_global.hf_coefficients.is_empty() {
-        coeffs = hf_global.hf_coefficients[group].try_lock().unwrap();
-        &mut *coeffs
+    let mut locked_coeffs;
+    let mut coeffs = if !hf_global.hf_coefficients.is_empty() {
+        locked_coeffs = hf_global.hf_coefficients[group].try_lock().unwrap();
+        locked_coeffs.split_channels()
     } else {
-        &mut buffers.coeffs_storage
+        let (coeffs_x, coeffs_y_b) = buffers.coeffs_storage.split_at_mut(GROUP_DIM * GROUP_DIM);
+        let (coeffs_y, coeffs_b) = coeffs_y_b.split_at_mut(GROUP_DIM * GROUP_DIM);
+        CoeffsMut::I32([coeffs_x, coeffs_y, coeffs_b])
     };
-    // Use pooled buffer (already reset to zero in buffers.reset() above)
-    let (coeffs_x, coeffs_y_b) = coeffs.split_at_mut(GROUP_DIM * GROUP_DIM);
-    let (coeffs_y, coeffs_b) = coeffs_y_b.split_at_mut(GROUP_DIM * GROUP_DIM);
-    let coeffs = [coeffs_x, coeffs_y, coeffs_b];
     let mut coeffs_offset = 0;
     let transform_buffer = &mut buffers.transform_buffer;
 
@@ -614,22 +638,46 @@ pub fn decode_vardct_group(
                         + context_offset;
                     let mut prev = if nonzeros > num_coeffs / 16 { 0 } else { 1 };
                     let permutation = &pass_info.coeff_orders[shape_id * 3 + c];
-                    let current_coeffs = &mut coeffs[c][coeffs_offset..coeffs_offset + num_coeffs];
                     // Asserting once lets the compiler elide the bounds check on
                     // `permutation[k]` inside the loop given `k < num_coeffs`.
                     assert!(permutation.len() >= num_coeffs);
-                    for k in num_blocks..num_coeffs {
-                        if nonzeros == 0 {
-                            break;
+                    match &mut coeffs {
+                        CoeffsMut::I32(c_arr) => {
+                            let current_coeffs =
+                                &mut c_arr[c][coeffs_offset..coeffs_offset + num_coeffs];
+                            for k in num_blocks..num_coeffs {
+                                if nonzeros == 0 {
+                                    break;
+                                }
+                                let ctx = histo_offset
+                                    + zero_density_context(nonzeros, k, log_num_blocks, prev);
+                                let coeff =
+                                    reader.read_signed_inline(&pass_info.histograms, br, ctx)
+                                        << *shift;
+                                prev = if coeff != 0 { 1 } else { 0 };
+                                nonzeros -= prev;
+                                let coeff_index = permutation[k] as usize;
+                                current_coeffs[coeff_index] += coeff;
+                            }
                         }
-                        let ctx =
-                            histo_offset + zero_density_context(nonzeros, k, log_num_blocks, prev);
-                        let coeff =
-                            reader.read_signed_inline(&pass_info.histograms, br, ctx) << *shift;
-                        prev = if coeff != 0 { 1 } else { 0 };
-                        nonzeros -= prev;
-                        let coeff_index = permutation[k] as usize;
-                        current_coeffs[coeff_index] += coeff;
+                        CoeffsMut::I16(c_arr) => {
+                            let current_coeffs =
+                                &mut c_arr[c][coeffs_offset..coeffs_offset + num_coeffs];
+                            for k in num_blocks..num_coeffs {
+                                if nonzeros == 0 {
+                                    break;
+                                }
+                                let ctx = histo_offset
+                                    + zero_density_context(nonzeros, k, log_num_blocks, prev);
+                                let coeff =
+                                    reader.read_signed_inline(&pass_info.histograms, br, ctx)
+                                        << *shift;
+                                prev = if coeff != 0 { 1 } else { 0 };
+                                nonzeros -= prev;
+                                let coeff_index = permutation[k] as usize;
+                                current_coeffs[coeff_index] += coeff as i16;
+                            }
+                        }
                     }
                     if nonzeros != 0 {
                         return Err(Error::EndOfBlockResidualNonZeros(nonzeros));
@@ -637,11 +685,18 @@ pub fn decode_vardct_group(
                 }
             }
             if let Some(pixels) = pixels {
-                let qblock = QBlock::I32([
-                    &coeffs[0][coeffs_offset..],
-                    &coeffs[1][coeffs_offset..],
-                    &coeffs[2][coeffs_offset..],
-                ]);
+                let qblock = match &coeffs {
+                    CoeffsMut::I32(c_arr) => QBlock::I32([
+                        &c_arr[0][coeffs_offset..],
+                        &c_arr[1][coeffs_offset..],
+                        &c_arr[2][coeffs_offset..],
+                    ]),
+                    CoeffsMut::I16(c_arr) => QBlock::I16([
+                        &c_arr[0][coeffs_offset..],
+                        &c_arr[1][coeffs_offset..],
+                        &c_arr[2][coeffs_offset..],
+                    ]),
+                };
                 let dequant_matrices = &hf_global.dequant_matrices;
                 dequant_and_transform_to_pixels_dispatch(
                     quant_biases,
