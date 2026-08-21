@@ -461,6 +461,7 @@ impl Table {
 #[derive(Debug)]
 pub struct HuffmanCodes {
     tables: Vec<Table>,
+    alphabet_sizes: Vec<usize>,
 }
 
 impl HuffmanCodes {
@@ -476,7 +477,10 @@ impl HuffmanCodes {
             .iter()
             .map(|sz| Table::decode(*sz, br))
             .collect::<Result<_>>()?;
-        Ok(HuffmanCodes { tables })
+        Ok(HuffmanCodes {
+            tables,
+            alphabet_sizes,
+        })
     }
 
     #[inline]
@@ -490,6 +494,10 @@ impl HuffmanCodes {
         } else {
             None
         }
+    }
+
+    pub fn max_symbol_for_cluster(&self, cluster: usize) -> u32 {
+        self.alphabet_sizes[cluster].saturating_sub(1) as u32
     }
 
     pub(crate) fn table(&self, ctx: usize) -> &Table {

@@ -100,6 +100,22 @@ impl HybridUint {
         let hi = (symbol_nolow & ((1 << self.msb_in_token) - 1)) | (1 << self.msb_in_token);
         (((hi << nbits) | bits) << self.lsb_in_token) | low
     }
+
+    pub fn max_bits_for_symbol(&self, symbol: u32) -> usize {
+        if symbol < self.split_token {
+            if symbol == 0 {
+                return 0;
+            }
+            return (symbol.ilog2() + 1) as usize;
+        }
+        let bits_in_token = self.lsb_in_token + self.msb_in_token;
+        let nbits =
+            self.split_exponent - bits_in_token + ((symbol - self.split_token) >> bits_in_token);
+        if nbits >= 32 {
+            return 32;
+        }
+        (self.split_exponent + ((symbol - self.split_token) >> bits_in_token) + 1) as usize
+    }
 }
 
 #[cfg(test)]
@@ -116,13 +132,25 @@ impl HybridUint {
 
 #[cfg(test)]
 mod test {
+    use super::*;
+
     #[test]
     fn test_hybrid_uint_decode_invalid() {
-        use super::*;
         let mut br = BitReader::new(&[10, 75, 10, 75, 168, 139, 132, 255, 244]);
         br.skip_bits(1).unwrap();
         if let Ok(uint) = HybridUint::decode(15, &mut br) {
             uint.read(1022, &mut br);
         }
+    }
+
+    #[test]
+    fn test_max_bits_for_symbol() {
+        let config420 = HybridUint::new(4, 2, 0);
+        assert_eq!(config420.max_bits_for_symbol(0), 0);
+        assert_eq!(config420.max_bits_for_symbol(1), 1);
+        assert_eq!(config420.max_bits_for_symbol(15), 4);
+        assert_eq!(config420.max_bits_for_symbol(16), 5);
+        assert_eq!(config420.max_bits_for_symbol(19), 5);
+        assert_eq!(config420.max_bits_for_symbol(20), 6);
     }
 }
