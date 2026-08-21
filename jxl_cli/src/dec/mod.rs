@@ -219,7 +219,7 @@ pub fn decode_frames<In: JxlBitstreamInputExt>(
             })
             .collect(),
     };
-    decoder_with_image_info.set_pixel_format(new_format);
+    decoder_with_image_info.set_pixel_format(new_format)?;
 
     // If linear output is requested, initialize the CMS transformer
     let mut output_profile = decoder_with_image_info.output_color_profile().clone();

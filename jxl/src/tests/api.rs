@@ -93,7 +93,7 @@ fn test_set_pixel_format() {
         color_data_format: Some(JxlDataFormat::U8 { bit_depth: 8 }),
         extra_channel_format: vec![],
     };
-    decoder.set_pixel_format(new_format.clone());
+    decoder.set_pixel_format(new_format.clone()).unwrap();
     assert_eq!(decoder.current_pixel_format(), &new_format);
 }
 
@@ -115,19 +115,21 @@ fn test_default_output_tf_by_pixel_format() {
         JxlTransferFunction::Linear,
     );
 
-    decoder.set_pixel_format(JxlPixelFormat::rgba8(0));
+    decoder.set_pixel_format(JxlPixelFormat::rgba8(0)).unwrap();
     assert_eq!(
         *decoder.output_color_profile().transfer_function().unwrap(),
         JxlTransferFunction::SRGB,
     );
 
-    decoder.set_pixel_format(JxlPixelFormat::rgba_f16(0));
+    decoder
+        .set_pixel_format(JxlPixelFormat::rgba_f16(0))
+        .unwrap();
     assert_eq!(
         *decoder.output_color_profile().transfer_function().unwrap(),
         JxlTransferFunction::Linear,
     );
 
-    decoder.set_pixel_format(JxlPixelFormat::rgba16(0));
+    decoder.set_pixel_format(JxlPixelFormat::rgba16(0)).unwrap();
     assert_eq!(
         *decoder.output_color_profile().transfer_function().unwrap(),
         JxlTransferFunction::SRGB,
@@ -180,7 +182,7 @@ fn test_fill_opaque_alpha_both_pipelines() {
         let mut decoder = decoder;
         let mut decoder = advance_decoder!(decoder);
         decoder.set_use_simple_pipeline(use_simple);
-        decoder.set_pixel_format(rgba_format.clone());
+        decoder.set_pixel_format(rgba_format.clone()).unwrap();
 
         let basic_info = decoder.basic_info().clone();
         let (width, height) = basic_info.size;
@@ -391,7 +393,7 @@ fn test_animation_with_reference_frames() {
         color_data_format: Some(JxlDataFormat::f32()),
         extra_channel_format: vec![],
     };
-    decoder.set_pixel_format(rgb_format);
+    decoder.set_pixel_format(rgb_format).unwrap();
 
     let basic_info = decoder.basic_info().clone();
     let (width, height) = basic_info.size;
@@ -468,7 +470,7 @@ fn test_skip_frame_then_decode_next() {
         color_data_format: Some(JxlDataFormat::f32()),
         extra_channel_format: vec![],
     };
-    decoder.set_pixel_format(rgb_format);
+    decoder.set_pixel_format(rgb_format).unwrap();
 
     let basic_info = decoder.basic_info().clone();
     let (width, height) = basic_info.size;
@@ -782,7 +784,7 @@ fn decode_with_format<T: crate::image::ImageDataType>(
         }
     };
     decoder.set_use_simple_pipeline(use_simple);
-    decoder.set_pixel_format(pixel_format.clone());
+    decoder.set_pixel_format(pixel_format.clone()).unwrap();
 
     let (width, height) = decoder.basic_info().size;
     let num_samples = pixel_format.color_type.samples_per_pixel();
@@ -978,7 +980,7 @@ fn assert_start_new_frame_matches_sequential(data: &[u8]) {
                     .map(|_| Some(JxlDataFormat::f32()))
                     .collect(),
             };
-            decoder.set_pixel_format(requested_format.clone());
+            decoder.set_pixel_format(requested_format.clone()).unwrap();
 
             let channels = requested_format.color_type.samples_per_pixel();
             let num_ec = requested_format.extra_channel_format.len();

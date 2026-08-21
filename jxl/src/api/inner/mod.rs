@@ -10,6 +10,7 @@ use super::{JxlBasicInfo, JxlColorProfile, JxlDecoderOptions, JxlPixelFormat};
 #[cfg(test)]
 use crate::api::FrameCallback;
 use crate::api::{JxlFrameHeader, VisibleFrameInfo, VisibleFrameSeekTarget};
+use crate::error::{Error, Result};
 
 mod box_parser;
 mod codestream_parser;
@@ -66,11 +67,27 @@ impl JxlDecoderInner {
         self.codestream_parser.pixel_format.as_ref()
     }
 
-    pub fn set_pixel_format(&mut self, pixel_format: JxlPixelFormat) {
+    pub fn set_pixel_format(&mut self, pixel_format: JxlPixelFormat) -> Result<()> {
         // TODO(veluca): return an error if we are asking for both planar and
         // interleaved-in-color alpha.
+        // Frame render pipelines are built for the pixel format that is
+        // current when the frame's TOC is parsed, so the format can only be
+        // changed before the first frame header is decoded, i.e. right after
+        // basic info becomes available.
+        let frame_header_was_decoded = self
+            .codestream_parser
+            .frame_info
+            .current_frame_header()
+            .is_some()
+            || !self.codestream_parser.scanned_frames().is_empty();
+        if frame_header_was_decoded
+            && self.codestream_parser.pixel_format.as_ref() != Some(&pixel_format)
+        {
+            return Err(Error::PixelFormatChangedAfterFirstFrame);
+        }
         self.codestream_parser.pixel_format = Some(pixel_format);
         self.codestream_parser.update_default_output_options();
+        Ok(())
     }
 
     pub fn frame_header(&self) -> Option<JxlFrameHeader> {
