@@ -23,7 +23,11 @@ members = [
 ]
 resolver = "2"
 
+[workspace.package]
+rust-version = "1.89.0"
+
 [workspace.lints.clippy]
+chunks_exact_to_as_chunks = "allow"
 missing_safety_doc = "deny"
 undocumented_unsafe_blocks = "deny"
 
