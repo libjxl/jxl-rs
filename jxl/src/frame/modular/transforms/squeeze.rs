@@ -453,6 +453,81 @@ simd_function!(
 );
 
 #[inline(always)]
+fn hsqueeze_scalar_i16(
+    y_start: usize,
+    in_avg: &ImageRect<'_, i16>,
+    in_res: &ImageRect<'_, i16>,
+    in_next_avg: Option<&Image<i16>>,
+    out_prev: Option<&Image<i16>>,
+    out: &mut Image<i16>,
+) {
+    let (w, h) = in_res.size();
+
+    debug_assert!(w >= 1);
+    let has_tail = out.size().0 & 1 == 1;
+    let has_next_in_avg = in_avg.size().0 > w;
+    if has_tail {
+        debug_assert!(in_avg.size().0 == w + 1);
+        debug_assert!(out.size().0 == 2 * w + 1);
+    }
+
+    for y in y_start..h {
+        let avg_row = in_avg.row(y);
+        let res_row = in_res.row(y);
+        let mut prev_b = match out_prev {
+            None => avg_row[0] as i32,
+            Some(lr) => lr.row(y)[3] as i32,
+        };
+        let x_end = if has_tail { w } else { w - 1 };
+        for x in 0..x_end {
+            let (a, b) = unsqueeze_scalar(
+                avg_row[x] as i32,
+                res_row[x] as i32,
+                avg_row[x + 1] as i32,
+                prev_b,
+            );
+            out.row_mut(y)[2 * x] = a as i16;
+            out.row_mut(y)[2 * x + 1] = b as i16;
+            prev_b = b;
+        }
+        if !has_tail {
+            let last_avg = if has_next_in_avg {
+                avg_row[w] as i32
+            } else if let Some(lr) = in_next_avg {
+                lr.row(y)[0] as i32
+            } else {
+                avg_row[w - 1] as i32
+            };
+            let (a, b) = unsqueeze_scalar(
+                avg_row[w - 1] as i32,
+                res_row[w - 1] as i32,
+                last_avg,
+                prev_b,
+            );
+            out.row_mut(y)[2 * w - 2] = a as i16;
+            out.row_mut(y)[2 * w - 1] = b as i16;
+        } else {
+            out.row_mut(y)[2 * w] = in_avg.row(y)[w];
+        }
+    }
+}
+
+simd_function!(
+    hsqueeze_i16,
+    d: D,
+    pub fn hsqueeze_i16_fwd(
+        in_avg: &ImageRect<'_, i16>,
+        in_res: &ImageRect<'_, i16>,
+        in_next_avg: Option<&Image<i16>>,
+        out_prev: Option<&Image<i16>>,
+        out: &mut Image<i16>,
+    ) {
+        let _ = d;
+        hsqueeze_scalar_i16(0, in_avg, in_res, in_next_avg, out_prev, out)
+    }
+);
+
+#[inline(always)]
 pub fn do_hsqueeze_step(
     in_avg: &ImageRect<'_, i32>,
     in_res: &ImageRect<'_, i32>,
@@ -654,6 +729,95 @@ simd_function!(
         out: &mut Image<i32>,
     ) {
         vsqueeze_impl(d, 0, in_avg, in_res, in_next_avg, out_prev, out)
+    }
+);
+
+#[inline(always)]
+fn vsqueeze_scalar_i16(
+    x_start: usize,
+    in_avg: &ImageRect<'_, i16>,
+    in_res: &ImageRect<'_, i16>,
+    in_next_avg: Option<&Image<i16>>,
+    out_prev: Option<&Image<i16>>,
+    out: &mut Image<i16>,
+) {
+    let (w, h) = in_res.size();
+    let has_tail = out.size().1 & 1 == 1;
+    let has_next_in_avg = in_avg.size().1 > h;
+    if has_tail {
+        debug_assert!(in_avg.size().1 == h + 1);
+        debug_assert!(out.size().1 == 2 * h + 1);
+    }
+
+    {
+        let prev_b_row = match out_prev {
+            None => in_avg.row(0),
+            Some(tb) => tb.row(3),
+        };
+        let avg_row = in_avg.row(0);
+        let res_row = in_res.row(0);
+        let avg_row_next = if !has_tail && (h == 1) {
+            if has_next_in_avg {
+                in_avg.row(1)
+            } else if let Some(tb) = in_next_avg {
+                tb.row(0)
+            } else {
+                in_avg.row(0)
+            }
+        } else {
+            in_avg.row(1)
+        };
+        for x in x_start..w {
+            let (a, b) = unsqueeze_scalar(
+                avg_row[x] as i32,
+                res_row[x] as i32,
+                avg_row_next[x] as i32,
+                prev_b_row[x] as i32,
+            );
+            out.row_mut(0)[x] = a as i16;
+            out.row_mut(1)[x] = b as i16;
+        }
+    }
+    for y in 1..h {
+        let avg_row = in_avg.row(y);
+        let res_row = in_res.row(y);
+        let avg_row_next = if has_tail || y < h - 1 {
+            in_avg.row(y + 1)
+        } else if has_next_in_avg {
+            in_avg.row(h)
+        } else if let Some(tb) = in_next_avg {
+            tb.row(0)
+        } else {
+            avg_row
+        };
+        for x in x_start..w {
+            let (a, b) = unsqueeze_scalar(
+                avg_row[x] as i32,
+                res_row[x] as i32,
+                avg_row_next[x] as i32,
+                out.row(2 * y - 1)[x] as i32,
+            );
+            out.row_mut(2 * y)[x] = a as i16;
+            out.row_mut(2 * y + 1)[x] = b as i16;
+        }
+    }
+    if has_tail {
+        out.row_mut(2 * h)[x_start..].copy_from_slice(&in_avg.row(h)[x_start..]);
+    }
+}
+
+simd_function!(
+    vsqueeze_i16,
+    d: D,
+    pub fn vsqueeze_i16_fwd(
+        in_avg: &ImageRect<'_, i16>,
+        in_res: &ImageRect<'_, i16>,
+        in_next_avg: Option<&Image<i16>>,
+        out_prev: Option<&Image<i16>>,
+        out: &mut Image<i16>,
+    ) {
+        let _ = d;
+        vsqueeze_scalar_i16(0, in_avg, in_res, in_next_avg, out_prev, out)
     }
 );
 
@@ -1316,5 +1480,79 @@ mod tests {
 
         assert_eq!(h1_even, h2_odd);
         assert_eq!(h1_odd, h2_even);
+    }
+
+    #[test]
+    fn test_hsqueeze_i16_matches_i32() -> Result<()> {
+        let size = (32, 32);
+        let mut avg32 = Image::<i32>::new(size)?;
+        let mut res32 = Image::<i32>::new(size)?;
+        let mut out32 = Image::<i32>::new((size.0 * 2, size.1))?;
+
+        let mut avg16 = Image::<i16>::new(size)?;
+        let mut res16 = Image::<i16>::new(size)?;
+        let mut out16 = Image::<i16>::new((size.0 * 2, size.1))?;
+
+        for y in 0..size.1 {
+            for x in 0..size.0 {
+                let a = ((x * 13 + y * 29) % 500) as i16 - 250;
+                let r = ((x * 37 + y * 11) % 100) as i16 - 50;
+                avg32.row_mut(y)[x] = a as i32;
+                res32.row_mut(y)[x] = r as i32;
+                avg16.row_mut(y)[x] = a;
+                res16.row_mut(y)[x] = r;
+            }
+        }
+
+        let rect = Rect {
+            origin: (0, 0),
+            size,
+        };
+        hsqueeze(&avg32.get_rect(rect), &res32.get_rect(rect), None, None, &mut out32);
+        hsqueeze_i16(&avg16.get_rect(rect), &res16.get_rect(rect), None, None, &mut out16);
+
+        for y in 0..size.1 {
+            for x in 0..size.0 * 2 {
+                assert_eq!(out32.row(y)[x], out16.row(y)[x] as i32);
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn test_vsqueeze_i16_matches_i32() -> Result<()> {
+        let size = (32, 32);
+        let mut avg32 = Image::<i32>::new(size)?;
+        let mut res32 = Image::<i32>::new(size)?;
+        let mut out32 = Image::<i32>::new((size.0, size.1 * 2))?;
+
+        let mut avg16 = Image::<i16>::new(size)?;
+        let mut res16 = Image::<i16>::new(size)?;
+        let mut out16 = Image::<i16>::new((size.0, size.1 * 2))?;
+
+        for y in 0..size.1 {
+            for x in 0..size.0 {
+                let a = ((x * 13 + y * 29) % 500) as i16 - 250;
+                let r = ((x * 37 + y * 11) % 100) as i16 - 50;
+                avg32.row_mut(y)[x] = a as i32;
+                res32.row_mut(y)[x] = r as i32;
+                avg16.row_mut(y)[x] = a;
+                res16.row_mut(y)[x] = r;
+            }
+        }
+
+        let rect = Rect {
+            origin: (0, 0),
+            size,
+        };
+        vsqueeze(&avg32.get_rect(rect), &res32.get_rect(rect), None, None, &mut out32);
+        vsqueeze_i16(&avg16.get_rect(rect), &res16.get_rect(rect), None, None, &mut out16);
+
+        for y in 0..size.1 * 2 {
+            for x in 0..size.0 {
+                assert_eq!(out32.row(y)[x], out16.row(y)[x] as i32);
+            }
+        }
+        Ok(())
     }
 }
