@@ -32,6 +32,38 @@ impl f16 {
         self.0
     }
 
+    /// Reinterprets a slice of f16 as a slice of u16 bit patterns.
+    #[inline]
+    #[allow(unsafe_code)]
+    pub fn slice_to_bits(slice: &[Self]) -> &[u16] {
+        // SAFETY: f16 is #[repr(transparent)] wrapping u16
+        unsafe { std::slice::from_raw_parts(slice.as_ptr().cast(), slice.len()) }
+    }
+
+    /// Reinterprets a mutable slice of f16 as a mutable slice of u16 bit patterns.
+    #[inline]
+    #[allow(unsafe_code)]
+    pub fn slice_to_bits_mut(slice: &mut [Self]) -> &mut [u16] {
+        // SAFETY: f16 is #[repr(transparent)] wrapping u16
+        unsafe { std::slice::from_raw_parts_mut(slice.as_mut_ptr().cast(), slice.len()) }
+    }
+
+    /// Reinterprets a slice of u16 bit patterns as a slice of f16.
+    #[inline]
+    #[allow(unsafe_code)]
+    pub fn slice_from_bits(slice: &[u16]) -> &[Self] {
+        // SAFETY: f16 is #[repr(transparent)] wrapping u16
+        unsafe { std::slice::from_raw_parts(slice.as_ptr().cast(), slice.len()) }
+    }
+
+    /// Reinterprets a mutable slice of u16 bit patterns as a mutable slice of f16.
+    #[inline]
+    #[allow(unsafe_code)]
+    pub fn slice_from_bits_mut(slice: &mut [u16]) -> &mut [Self] {
+        // SAFETY: f16 is #[repr(transparent)] wrapping u16
+        unsafe { std::slice::from_raw_parts_mut(slice.as_mut_ptr().cast(), slice.len()) }
+    }
+
     /// Converts to f32.
     #[inline]
     pub fn to_f32(self) -> f32 {

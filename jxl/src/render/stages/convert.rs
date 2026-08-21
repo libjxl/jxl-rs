@@ -828,6 +828,42 @@ impl std::fmt::Display for ConvertF32ToF16Stage {
     }
 }
 
+simd_function!(
+    f32_to_f16_simd_dispatch,
+    d: D,
+    fn f32_to_f16_simd(
+        input: &[f32],
+        output: &mut [crate::util::f16],
+        clamp_range: Option<(f32, f32)>,
+        xsize: usize,
+    ) {
+        let simd_width = D::F32Vec::LEN;
+        let output_u16 = crate::util::f16::slice_to_bits_mut(output);
+
+        if let Some((min_value, max_value)) = clamp_range {
+            let min_vec = D::F32Vec::splat(d, min_value);
+            let max_vec = D::F32Vec::splat(d, max_value);
+            for (input_chunk, output_chunk) in input
+                .chunks_exact(simd_width)
+                .zip(output_u16.chunks_exact_mut(simd_width))
+                .take(xsize.div_ceil(simd_width))
+            {
+                let val = D::F32Vec::load(d, input_chunk).max(min_vec).min(max_vec);
+                val.store_f16_bits(output_chunk);
+            }
+        } else {
+            for (input_chunk, output_chunk) in input
+                .chunks_exact(simd_width)
+                .zip(output_u16.chunks_exact_mut(simd_width))
+                .take(xsize.div_ceil(simd_width))
+            {
+                let val = D::F32Vec::load(d, input_chunk);
+                val.store_f16_bits(output_chunk);
+            }
+        }
+    }
+);
+
 impl RenderPipelineInOutStage for ConvertF32ToF16Stage {
     type InputT = f32;
     type OutputT = crate::util::f16;
@@ -846,17 +882,68 @@ impl RenderPipelineInOutStage for ConvertF32ToF16Stage {
         output_rows: &mut ChannelsMut<crate::util::f16>,
         _state: Option<&mut ErasedLocalState>,
     ) {
-        let input = &input_rows[0];
-        if let Some((min_value, max_value)) = self.clamp_range {
-            for i in 0..xsize {
-                output_rows[0][0][i] =
-                    crate::util::f16::from_f32(input[0][i].clamp(min_value, max_value));
-            }
-        } else {
-            for i in 0..xsize {
-                output_rows[0][0][i] = crate::util::f16::from_f32(input[0][i]);
-            }
+        let input = input_rows[0][0];
+        let output = &mut output_rows[0][0];
+        f32_to_f16_simd_dispatch(input, output, self.clamp_range, xsize);
+    }
+}
+
+simd_function!(
+    f16_to_f32_simd_dispatch,
+    d: D,
+    fn f16_to_f32_simd(input: &[crate::util::f16], output: &mut [f32], xsize: usize) {
+        let simd_width = D::F32Vec::LEN;
+        let input_u16 = crate::util::f16::slice_to_bits(input);
+
+        for (input_chunk, output_chunk) in input_u16
+            .chunks_exact(simd_width)
+            .zip(output.chunks_exact_mut(simd_width))
+            .take(xsize.div_ceil(simd_width))
+        {
+            let val = D::F32Vec::load_f16_bits(d, input_chunk);
+            val.store(output_chunk);
         }
+    }
+);
+
+/// Stage that converts f16 (half-precision float) values to f32 values.
+pub struct ConvertF16ToF32Stage {
+    channel: usize,
+}
+
+impl ConvertF16ToF32Stage {
+    pub fn new(channel: usize) -> ConvertF16ToF32Stage {
+        ConvertF16ToF32Stage { channel }
+    }
+}
+
+impl std::fmt::Display for ConvertF16ToF32Stage {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "convert F16 to F32 in channel {}", self.channel)
+    }
+}
+
+impl RenderPipelineInOutStage for ConvertF16ToF32Stage {
+    type InputT = crate::util::f16;
+    type OutputT = f32;
+    const SHIFT: (u8, u8) = (0, 0);
+    const BORDER: (u8, u8) = (0, 0);
+
+    fn uses_channel(&self, c: usize) -> bool {
+        c == self.channel
+    }
+
+    fn process_row_chunk(
+        &self,
+        _position: (usize, usize),
+        xsize: usize,
+        input_rows: &Channels<crate::util::f16>,
+        output_rows: &mut ChannelsMut<f32>,
+        _state: Option<&mut ErasedLocalState>,
+    ) {
+        let input = input_rows[0][0];
+        let output = &mut output_rows[0][0];
+        f16_to_f32_simd_dispatch(input, output, xsize);
     }
 }
 
@@ -898,6 +985,11 @@ mod test {
             (500, 500),
             1,
         )
+    }
+
+    #[test]
+    fn f16_to_f32_consistency() -> Result<()> {
+        crate::render::test::test_stage_consistency(|| ConvertF16ToF32Stage::new(0), (500, 500), 1)
     }
 
     /// Test ConvertModularToF32Stage consistency with different bit depths.
