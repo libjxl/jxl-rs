@@ -161,6 +161,14 @@ impl Frame {
             return Ok(false);
         }
 
+        // The pipeline's save stages and their output buffer indices are
+        // derived from the pixel format that was current when the pipeline
+        // was built; changing the format while a frame is in flight is an
+        // API usage error.
+        if self.pipeline_pixel_format.as_ref() != Some(pixel_format) {
+            return Err(Error::PixelFormatChangedMidFrame);
+        }
+
         let mut buffers: Vec<Option<JxlOutputBuffer>> = Vec::new();
 
         macro_rules! buffers_from_api {
@@ -951,6 +959,7 @@ impl Frame {
             output_profile,
         )?;
         self.render_pipeline = Some(render_pipeline);
+        self.pipeline_pixel_format = Some(pixel_format.clone());
         self.section0_render_up_to_date = false;
         Ok(())
     }

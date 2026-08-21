@@ -249,6 +249,7 @@ impl Frame {
             hf_meta,
             decoder_state,
             render_pipeline: None,
+            pipeline_pixel_format: None,
             reference_frame_data,
             lf_frame_data,
             section0_render_up_to_date: false,
