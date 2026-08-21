@@ -34,17 +34,25 @@ impl std::fmt::Display for ConvolveNoiseStage {
 simd_function!(
     convolve_noise_simd_dispatch,
     d: D,
-    fn convolve_noise_simd(input: &[&[f32]], output: &mut [f32], xsize: usize) {
+    fn convolve_noise_simd(input: &[&[crate::util::f16]], output: &mut [f32], xsize: usize) {
         // Precompute constants
         let c016 = D::F32Vec::splat(d, 0.16);
         let cn384 = D::F32Vec::splat(d, -3.84);
 
+        let u16_rows: [&[u16]; 5] = [
+            crate::util::f16::slice_to_bits(input[0]),
+            crate::util::f16::slice_to_bits(input[1]),
+            crate::util::f16::slice_to_bits(input[2]),
+            crate::util::f16::slice_to_bits(input[3]),
+            crate::util::f16::slice_to_bits(input[4]),
+        ];
+
         // Windows of size LEN+4 from each row (for offsets 0..5), stepping by LEN
-        let iter0 = input[0].windows(D::F32Vec::LEN + 4).step_by(D::F32Vec::LEN);
-        let iter1 = input[1].windows(D::F32Vec::LEN + 4).step_by(D::F32Vec::LEN);
-        let iter2 = input[2].windows(D::F32Vec::LEN + 4).step_by(D::F32Vec::LEN);
-        let iter3 = input[3].windows(D::F32Vec::LEN + 4).step_by(D::F32Vec::LEN);
-        let iter4 = input[4].windows(D::F32Vec::LEN + 4).step_by(D::F32Vec::LEN);
+        let iter0 = u16_rows[0].windows(D::F32Vec::LEN + 4).step_by(D::F32Vec::LEN);
+        let iter1 = u16_rows[1].windows(D::F32Vec::LEN + 4).step_by(D::F32Vec::LEN);
+        let iter2 = u16_rows[2].windows(D::F32Vec::LEN + 4).step_by(D::F32Vec::LEN);
+        let iter3 = u16_rows[3].windows(D::F32Vec::LEN + 4).step_by(D::F32Vec::LEN);
+        let iter4 = u16_rows[4].windows(D::F32Vec::LEN + 4).step_by(D::F32Vec::LEN);
         let out_iter = output.chunks_exact_mut(D::F32Vec::LEN);
 
         for ((((w0, w1), w2), w3), (w4, out)) in iter0
@@ -55,24 +63,24 @@ simd_function!(
             .take(xsize.div_ceil(D::F32Vec::LEN))
         {
             // Load center pixel (row 2, offset +2)
-            let p00 = D::F32Vec::load(d, &w2[2..]);
+            let p00 = D::F32Vec::load_f16_bits(d, &w2[2..]);
 
             // Accumulate surrounding pixels
             let mut others = D::F32Vec::splat(d, 0.0);
 
             // Add all 5 offsets for rows 0, 1, 3, 4
             for i in 0..5 {
-                others += D::F32Vec::load(d, &w0[i..]);
-                others += D::F32Vec::load(d, &w1[i..]);
-                others += D::F32Vec::load(d, &w3[i..]);
-                others += D::F32Vec::load(d, &w4[i..]);
+                others += D::F32Vec::load_f16_bits(d, &w0[i..]);
+                others += D::F32Vec::load_f16_bits(d, &w1[i..]);
+                others += D::F32Vec::load_f16_bits(d, &w3[i..]);
+                others += D::F32Vec::load_f16_bits(d, &w4[i..]);
             }
 
             // Add row 2 neighbors (skip center at offset 2)
-            others += D::F32Vec::load(d, &w2[0..]);
-            others += D::F32Vec::load(d, &w2[1..]);
-            others += D::F32Vec::load(d, &w2[3..]);
-            others += D::F32Vec::load(d, &w2[4..]);
+            others += D::F32Vec::load_f16_bits(d, &w2[0..]);
+            others += D::F32Vec::load_f16_bits(d, &w2[1..]);
+            others += D::F32Vec::load_f16_bits(d, &w2[3..]);
+            others += D::F32Vec::load_f16_bits(d, &w2[4..]);
 
             // Compute: others * 0.16 + center * -3.84
             let result = others.mul_add(c016, p00 * cn384);
@@ -82,7 +90,7 @@ simd_function!(
 );
 
 impl RenderPipelineInOutStage for ConvolveNoiseStage {
-    type InputT = f32;
+    type InputT = crate::util::f16;
     type OutputT = f32;
     const SHIFT: (u8, u8) = (0, 0);
     const BORDER: (u8, u8) = (2, 2);
@@ -95,7 +103,7 @@ impl RenderPipelineInOutStage for ConvolveNoiseStage {
         &self,
         _position: (usize, usize),
         xsize: usize,
-        input_rows: &Channels<f32>,
+        input_rows: &Channels<crate::util::f16>,
         output_rows: &mut ChannelsMut<f32>,
         _state: Option<&mut ErasedLocalState>,
     ) {
@@ -204,7 +212,7 @@ mod test {
 
     #[test]
     fn convolve_noise_process_row_chunk() -> Result<()> {
-        let input: Image<f32> = Image::new_range((2, 2), 0.0, 1.0)?;
+        let input: Image<crate::util::f16> = Image::new_range((2, 2), 0.0, 1.0)?;
         let stage = ConvolveNoiseStage::new(0);
         let output: Vec<Image<f32>> =
             make_and_run_simple_pipeline(stage, &[input], (2, 2), 0, 256)?;

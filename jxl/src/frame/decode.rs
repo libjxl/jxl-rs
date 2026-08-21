@@ -598,10 +598,10 @@ impl Frame {
         let buf_xsize = buf_x1.min(upsampled_size.0) - (gx * upsampling * group_dim) as usize;
         let buf_ysize = buf_y1.min(upsampled_size.1) - (gy * upsampling * group_dim) as usize;
 
-        let bits_to_float = |bits: u32| f32::from_bits((bits >> 9) | 0x3F800000);
+        let bits_to_float = |bits: u32| crate::util::f16::from_f32(f32::from_bits((bits >> 9) | 0x3F800000));
 
         // Get all 3 noise channel buffers upfront
-        let mut bufs = [
+        let mut bufs: [Image<crate::util::f16>; 3] = [
             pipeline!(self, p, p.get_buffer(num_channels)?),
             pipeline!(self, p, p.get_buffer(num_channels + 1)?),
             pipeline!(self, p, p.get_buffer(num_channels + 2)?),
