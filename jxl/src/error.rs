@@ -263,6 +263,8 @@ pub enum Error {
     WrongBufferCount(usize, usize),
     #[error("Image is not grayscale, but grayscale output was requested")]
     NotGrayscale,
+    #[error("Image is not CMYK, but CMYK output was requested")]
+    NotCmyk,
     #[error("Invalid output buffer byte size {0}x{1} for {2}x{3} image with type {4:?} {5:?}")]
     InvalidOutputBufferSize(usize, usize, usize, usize, JxlColorType, JxlDataFormat),
     #[error("Attempting to save channels with different downsample amounts: {0:?} and {1:?}")]

@@ -14,6 +14,15 @@ pub enum JxlColorType {
     Rgba,
     Bgr,
     Bgra,
+    /// Four interleaved channels: C, M, Y and K, where K is taken from the
+    /// image's Black extra channel. Sample values keep the color channel
+    /// convention (maximum value = no ink), matching the "Inverted CMYK"
+    /// convention produced by CMYK JPEG decoders and expected by CMS
+    /// libraries. Only valid for CMYK images, i.e. color images with a Black
+    /// extra channel and a CMYK ICC color profile. There is no CMYKA: if the
+    /// image carries an alpha extra channel, request it as a separate extra
+    /// channel plane.
+    Cmyk,
 }
 
 impl JxlColorType {
@@ -23,6 +32,7 @@ impl JxlColorType {
             Self::GrayscaleAlpha => true,
             Self::Rgb | Self::Bgr => false,
             Self::Rgba | Self::Bgra => true,
+            Self::Cmyk => false,
         }
     }
     pub fn samples_per_pixel(&self) -> usize {
@@ -30,7 +40,7 @@ impl JxlColorType {
             Self::Grayscale => 1,
             Self::GrayscaleAlpha => 2,
             Self::Rgb | Self::Bgr => 3,
-            Self::Rgba | Self::Bgra => 4,
+            Self::Rgba | Self::Bgra | Self::Cmyk => 4,
         }
     }
     pub fn is_grayscale(&self) -> bool {
@@ -39,6 +49,7 @@ impl JxlColorType {
             Self::GrayscaleAlpha => true,
             Self::Rgb | Self::Bgr => false,
             Self::Rgba | Self::Bgra => false,
+            Self::Cmyk => false,
         }
     }
     pub fn add_alpha(&self) -> Self {
@@ -46,6 +57,9 @@ impl JxlColorType {
             Self::Grayscale | Self::GrayscaleAlpha => Self::GrayscaleAlpha,
             Self::Rgb | Self::Rgba => Self::Rgba,
             Self::Bgr | Self::Bgra => Self::Bgra,
+            // There is no CMYKA; alpha is only available as a separate
+            // extra channel plane.
+            Self::Cmyk => Self::Cmyk,
         }
     }
 }
@@ -241,6 +255,15 @@ impl JxlPixelFormat {
             color_data_format: Some(JxlDataFormat::F32 {
                 endianness: Endianness::native(),
             }),
+            extra_channel_format: vec![None; num_extra_channels],
+        }
+    }
+
+    /// Creates a CMYK 8-bit pixel format.
+    pub fn cmyk8(num_extra_channels: usize) -> Self {
+        Self {
+            color_type: JxlColorType::Cmyk,
+            color_data_format: Some(JxlDataFormat::U8 { bit_depth: 8 }),
             extra_channel_format: vec![None; num_extra_channels],
         }
     }

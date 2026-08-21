@@ -669,6 +669,144 @@ fn test_output_format_f16_matches_f32() {
     }
 }
 
+/// Helper to decode with u8 output and buffers for the color channels plus
+/// every requested extra channel plane. Returns the decoded buffers in
+/// process() buffer order.
+fn decode_with_ec_buffers(
+    file: &[u8],
+    pixel_format: &JxlPixelFormat,
+    use_simple: bool,
+) -> Result<(Vec<Image<u8>>, usize, usize), Error> {
+    let options = JxlDecoderOptions::default();
+    let mut decoder = JxlDecoder::<states::Initialized>::new(options);
+    let mut input = file;
+
+    let mut decoder = loop {
+        match decoder.process(&mut input, None)? {
+            ProcessingResult::Complete { result } => break result,
+            ProcessingResult::NeedsMoreInput { fallback, .. } => {
+                if input.is_empty() {
+                    panic!("Unexpected end of input");
+                }
+                decoder = fallback;
+            }
+        }
+    };
+    decoder.set_use_simple_pipeline(use_simple);
+    decoder.set_pixel_format(pixel_format.clone());
+
+    let (width, height) = decoder.basic_info().size;
+    let num_samples = pixel_format.color_type.samples_per_pixel();
+
+    let mut decoder = loop {
+        match decoder.process(&mut input, None)? {
+            ProcessingResult::Complete { result } => break result,
+            ProcessingResult::NeedsMoreInput { fallback, .. } => {
+                if input.is_empty() {
+                    panic!("Unexpected end of input");
+                }
+                decoder = fallback;
+            }
+        }
+    };
+
+    let mut images = Vec::new();
+    if pixel_format.color_data_format.is_some() {
+        images.push(Image::<u8>::new((width * num_samples, height)).unwrap());
+    }
+    for ec_format in &pixel_format.extra_channel_format {
+        if ec_format.is_some() {
+            images.push(Image::<u8>::new((width, height)).unwrap());
+        }
+    }
+    let mut buffers: Vec<JxlOutputBuffer> = images
+        .iter_mut()
+        .map(|image| {
+            let size = image.size();
+            JxlOutputBuffer::from_image_rect_mut(
+                image
+                    .get_rect_mut(Rect {
+                        origin: (0, 0),
+                        size,
+                    })
+                    .into_raw(),
+            )
+        })
+        .collect();
+
+    loop {
+        match decoder.process(&mut input, &mut buffers, None)? {
+            ProcessingResult::Complete { .. } => break,
+            ProcessingResult::NeedsMoreInput { fallback, .. } => {
+                if input.is_empty() {
+                    panic!("Unexpected end of input");
+                }
+                decoder = fallback;
+            }
+        }
+    }
+    drop(buffers);
+
+    Ok((images, width, height))
+}
+
+/// CMYK interleaved output matches the RGB color channels for C, M and Y, and
+/// the Black extra channel plane for K.
+#[test]
+fn test_cmyk_pixel_format() {
+    let file = std::fs::read("resources/test/conformance_test_images/cmyk_layers.jxl").unwrap();
+
+    // cmyk_layers.jxl has two extra channels: Black (index 0) and Alpha
+    // (index 1).
+    let cmyk_format = JxlPixelFormat::cmyk8(2);
+    let reference_format = JxlPixelFormat {
+        color_type: JxlColorType::Rgb,
+        color_data_format: Some(JxlDataFormat::U8 { bit_depth: 8 }),
+        extra_channel_format: vec![Some(JxlDataFormat::U8 { bit_depth: 8 }), None],
+    };
+
+    for use_simple in [true, false] {
+        let (cmyk_buffers, width, height) =
+            decode_with_ec_buffers(&file, &cmyk_format, use_simple).unwrap();
+        let (reference_buffers, _, _) =
+            decode_with_ec_buffers(&file, &reference_format, use_simple).unwrap();
+        let cmyk = &cmyk_buffers[0];
+        let rgb = &reference_buffers[0];
+        let black = &reference_buffers[1];
+
+        for y in 0..height {
+            let cmyk_row = cmyk.row(y);
+            let rgb_row = rgb.row(y);
+            let black_row = black.row(y);
+            for x in 0..width {
+                for c in 0..3 {
+                    assert_eq!(
+                        cmyk_row[x * 4 + c],
+                        rgb_row[x * 3 + c],
+                        "CMY mismatch at ({x},{y}) channel {c} (use_simple={use_simple})"
+                    );
+                }
+                assert_eq!(
+                    cmyk_row[x * 4 + 3],
+                    black_row[x],
+                    "K mismatch at ({x},{y}) (use_simple={use_simple})"
+                );
+            }
+        }
+    }
+}
+
+/// Requesting CMYK output for a non-CMYK image fails.
+#[test]
+fn test_cmyk_pixel_format_requires_cmyk_image() {
+    let file = std::fs::read("resources/test/basic.jxl").unwrap();
+    let result = decode_with_ec_buffers(&file, &JxlPixelFormat::cmyk8(0), false);
+    assert!(
+        matches!(result, Err(Error::NotCmyk)),
+        "expected NotCmyk, got {result:?}"
+    );
+}
+
 /// Helper function to decode an image with a specific format.
 fn decode_with_format<T: crate::image::ImageDataType>(
     file: &[u8],
