@@ -268,13 +268,13 @@ pub fn decode_frames<In: JxlBitstreamInputExt>(
             image_size.1,
         );
 
-        let mut outputs = vec![OwnedRawImage::new((
-            byte_size.0 * samples_per_pixel,
-            byte_size.1,
-        ))?];
+        let mut outputs = vec![OwnedRawImage::new(
+            (byte_size.0 * samples_per_pixel, byte_size.1),
+            false,
+        )?];
 
         for _ in 0..extra_channels {
-            outputs.push(OwnedRawImage::new(byte_size)?);
+            outputs.push(OwnedRawImage::new(byte_size, false)?);
         }
 
         let mut partial_renders: Vec<Vec<OwnedRawImage>> = vec![];

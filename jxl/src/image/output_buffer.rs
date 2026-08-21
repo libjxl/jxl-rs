@@ -44,6 +44,7 @@ impl<'a> JxlOutputBuffer<'a> {
                     num_rows,
                     bytes_per_row,
                     bytes_between_rows,
+                    0,
                 )
             },
             _ph: PhantomData,

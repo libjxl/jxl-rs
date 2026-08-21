@@ -22,6 +22,7 @@ use crate::headers::FileHeader;
 use crate::headers::encodings::UnconditionalCoder;
 use crate::headers::frame_header::{Encoding, FrameHeader, FrameType};
 use crate::headers::toc::{IncrementalTocReader, Toc};
+use crate::image::LocalBufferRecycler;
 use crate::util::NewWithCapacity;
 
 struct SectionBuffer {
@@ -426,6 +427,7 @@ impl FrameInfo {
         {
             let lf_splitter = frame.lf_image.as_mut().map(LfImageSplitter::new);
             let hf_meta_splitter = frame.hf_meta.as_mut().map(HfMetaSplitter::new);
+            let mut recycler = LocalBufferRecycler::new(&frame.decoder_state.buffer_pool);
             Frame::decode_lf_group(
                 &frame.header,
                 &frame.decoder_state,
@@ -434,6 +436,7 @@ impl FrameInfo {
                 &mut br,
                 lf_splitter.as_ref(),
                 hf_meta_splitter.as_ref(),
+                &mut recycler,
             )?;
         }
         frame.post_decode_lf_group(0);
@@ -503,6 +506,7 @@ impl FrameInfo {
             let lf_global = frame.lf_global.as_ref().unwrap();
 
             parallel_runner.run(self.lf_sections.len(), &|i: usize| -> Result<()> {
+                let mut recycler = LocalBufferRecycler::new(&decoder_state.buffer_pool);
                 let lf_section = &self.lf_sections[i];
                 let Section::Lf { group } = &lf_section.section else {
                     unreachable!()
@@ -515,6 +519,7 @@ impl FrameInfo {
                     &mut BitReader::new(&lf_section.data),
                     lf_splitter.as_ref(),
                     hf_meta_splitter.as_ref(),
+                    &mut recycler,
                 )?;
                 Ok(())
             })?;

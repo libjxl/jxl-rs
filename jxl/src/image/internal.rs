@@ -30,6 +30,7 @@ pub(super) struct RawImageBuffer {
     bytes_per_row: usize,
     num_rows: usize,
     bytes_between_rows: usize,
+    capacity: usize,
 }
 
 // SAFETY: The safety invariant on RawImageBuffer enforces ownership rules on the contained data,
@@ -81,6 +82,7 @@ impl RawImageBuffer {
         num_rows: usize,
         bytes_per_row: usize,
         bytes_between_rows: usize,
+        capacity: usize,
     ) -> Self {
         RawImageBuffer::check_vals(num_rows, bytes_per_row, bytes_between_rows);
         // SAFETY: caller guarantees the buf-related requirements, and other safety invariants are
@@ -90,6 +92,7 @@ impl RawImageBuffer {
             bytes_per_row,
             bytes_between_rows,
             num_rows,
+            capacity,
         }
     }
 
@@ -100,6 +103,7 @@ impl RawImageBuffer {
             bytes_per_row: 0,
             num_rows: 0,
             bytes_between_rows: 0,
+            capacity: 0,
         }
     }
 
@@ -184,21 +188,82 @@ impl RawImageBuffer {
         // appropriate ranges are a subset of the ones accessible from `self.buf` at the
         // correct ranges for `self`. Thus, the safety invariant of `self` ensures that
         // the safety preconditions of this call are satisfied.
-        unsafe { Self::new_from_ptr(start_ptr, rect.size.1, rect.size.0, self.bytes_between_rows) }
+        unsafe {
+            Self::new_from_ptr(
+                start_ptr,
+                rect.size.1,
+                rect.size.0,
+                self.bytes_between_rows,
+                0,
+            )
+        }
     }
 
-    /// Returns zeroed memory if `copy_from` is `None`, otherwise it returns memory initialized
-    /// with the contents of `copy_from`. The returned buffer is aligned to CACHE_LINE_BYTE_SIZE bytes.
-    /// The returned RawImageBuffer owns the memory it references, which belongs to a single
-    /// allocation of size minimum_allocation_size().
+    pub(super) fn take_raw_parts(&mut self) -> (*mut u8, usize) {
+        let buf = self.buf;
+        let capacity = self.capacity;
+        self.buf = null_mut();
+        self.capacity = 0;
+        (buf, capacity)
+    }
+
+    /// Reconstructs a RawImageBuffer from a recycled buffer memory block.
     ///
     /// # Safety
-    /// If `copy_from` is not None, the caller must ensure that the data it
-    /// references -- *all* minimum_allocation_size() bytes starting from buf,
-    /// not just the accessible bytes -- can be read.
+    /// `buf` must point to an allocation of at least `capacity` bytes aligned to `CACHE_LINE_BYTE_SIZE`.
+    pub(super) unsafe fn from_recycled(
+        buf: *mut u8,
+        byte_size: (usize, usize),
+        capacity: usize,
+        init: BufferInitialization,
+    ) -> Result<Self> {
+        let (bytes_per_row, num_rows) = byte_size;
+        if bytes_per_row == 0 || num_rows == 0 {
+            return Ok(RawImageBuffer::empty());
+        }
+        if bytes_per_row as u64 >= i64::MAX as u64 / 4 || num_rows as u64 >= i64::MAX as u64 / 4 {
+            return Err(Error::ImageSizeTooLarge(bytes_per_row, num_rows));
+        }
+        let bytes_between_rows =
+            bytes_per_row.div_ceil(CACHE_LINE_BYTE_SIZE) * CACHE_LINE_BYTE_SIZE;
+        let allocation_len = (num_rows - 1)
+            .checked_mul(bytes_between_rows)
+            .unwrap()
+            .checked_add(bytes_per_row)
+            .unwrap();
+        assert!(capacity >= allocation_len);
+
+        match init {
+            BufferInitialization::Undefined => {}
+            BufferInitialization::Zeroed => {
+                // SAFETY: `buf` is valid for writes of `capacity >= allocation_len` bytes.
+                unsafe { std::ptr::write_bytes(buf, 0, allocation_len) };
+            }
+            BufferInitialization::CopyFrom(src) => {
+                assert_eq!(src.byte_size(), byte_size);
+                assert_eq!(src.bytes_per_row, bytes_per_row);
+                assert_eq!(src.bytes_between_rows, bytes_between_rows);
+                assert_eq!(src.num_rows, num_rows);
+                let data_len = src.minimum_allocation_size();
+                // SAFETY: `src` and `buf` are non-overlapping and valid for reads/writes of `data_len`.
+                unsafe { std::ptr::copy_nonoverlapping(src.buf, buf, data_len) };
+            }
+        }
+
+        // SAFETY: `buf` satisfies the safety requirements of `new_from_ptr`.
+        Ok(unsafe {
+            RawImageBuffer::new_from_ptr(buf, num_rows, bytes_per_row, bytes_between_rows, capacity)
+        })
+    }
+
+    /// Allocates memory for a new RawImageBuffer.
+    ///
+    /// # Safety
+    /// If `init` is `BufferInitialization::CopyFrom(src)`, the caller must ensure that
+    /// all `src.minimum_allocation_size()` bytes starting from `src.buf` can be read.
     pub(super) unsafe fn try_allocate(
         byte_size: (usize, usize),
-        copy_from: Option<&RawImageBuffer>,
+        init: BufferInitialization,
     ) -> Result<RawImageBuffer> {
         let (bytes_per_row, num_rows) = byte_size;
         // To simplify modular transform logic, we allow empty images, because some modular
@@ -221,43 +286,48 @@ impl RawImageBuffer {
             .unwrap();
         assert_ne!(allocation_len, 0);
         let layout = Layout::from_size_align(allocation_len, CACHE_LINE_BYTE_SIZE).unwrap();
-        let memory = if let Some(src) = copy_from {
-            // SAFETY: we just checked that allocation_len is not 0.
-            let memory = unsafe { alloc(layout) };
-            if memory.is_null() {
-                return Err(Error::ImageOutOfMemory(bytes_per_row, num_rows));
+        let memory = match init {
+            BufferInitialization::CopyFrom(src) => {
+                // SAFETY: we just checked that allocation_len is not 0.
+                let memory = unsafe { alloc(layout) };
+                if memory.is_null() {
+                    return Err(Error::ImageOutOfMemory(bytes_per_row, num_rows));
+                }
+                assert_eq!(src.byte_size(), byte_size);
+                assert_eq!(src.bytes_per_row, bytes_per_row);
+                assert_eq!(src.bytes_between_rows, bytes_between_rows);
+                assert_eq!(src.num_rows, num_rows);
+                let data_len = src.minimum_allocation_size();
+                // SAFETY: both `src` and `memory` have at least `data_len` bytes, and they are
+                // non-overlapping because `memory` was just allocated.
+                // The caller ensures that `src` is valid for reads of `data_len` bytes.
+                unsafe { std::ptr::copy_nonoverlapping(src.buf, memory, data_len) };
+                memory
             }
-            assert_eq!(src.byte_size(), byte_size);
-            assert_eq!(src.bytes_per_row, bytes_per_row);
-            assert_eq!(src.bytes_between_rows, bytes_between_rows);
-            assert_eq!(src.num_rows, num_rows);
-            let data_len = src.minimum_allocation_size();
-            // SAFETY: both `src` and `memory` have at least `data_len` bytes, and they are
-            // non-overlapping because `memory` was just allocated.
-            // The caller ensures that `src` is valid for reads of `data_len` bytes.
-            unsafe { std::ptr::copy_nonoverlapping(src.buf, memory, data_len) };
-            memory
-        } else {
-            // SAFETY: we just checked that allocation_len is not 0.
-            let memory = unsafe { alloc_zeroed(layout) };
-            if memory.is_null() {
-                return Err(Error::ImageOutOfMemory(bytes_per_row, num_rows));
+            BufferInitialization::Zeroed | BufferInitialization::Undefined => {
+                // SAFETY: we just checked that allocation_len is not 0.
+                let memory = unsafe { alloc_zeroed(layout) };
+                if memory.is_null() {
+                    return Err(Error::ImageOutOfMemory(bytes_per_row, num_rows));
+                }
+                memory
             }
-            memory
         };
-        // SAFETY: `memory` points to a contiguous array of size minimum_allocation_size() which
+        // SAFETY: `memory` points to a contiguous array of size allocation_len which
         // was just initialized, and we transfer ownership so the validity requirements are satisfied.
         Ok(unsafe {
-            RawImageBuffer::new_from_ptr(memory, num_rows, bytes_per_row, bytes_between_rows)
+            RawImageBuffer::new_from_ptr(
+                memory,
+                num_rows,
+                bytes_per_row,
+                bytes_between_rows,
+                allocation_len,
+            )
         })
     }
 
     /// Returns a copy of the current buffer contents in a new buffer that owns the returned data.
     /// The data is allocated with `try_allocate` so that it matches the size of the current image.
-    ///
-    /// This function is meant to be used when `self` is an owned buffer, and will panic if the
-    /// bytes between rows of a newly allocated image with the same size does not match the value
-    /// for `self`.
     ///
     /// # Safety
     /// The caller must ensure that the data referenced by self -- *all*
@@ -266,7 +336,9 @@ impl RawImageBuffer {
     pub(super) unsafe fn try_clone(&self) -> Result<Self> {
         // SAFETY: the safety requirement of this method matches the safety requirement
         // of `try_allocate`.
-        unsafe { RawImageBuffer::try_allocate(self.byte_size(), Some(self)) }
+        unsafe {
+            RawImageBuffer::try_allocate(self.byte_size(), BufferInitialization::CopyFrom(self))
+        }
     }
 
     /// Deallocates an owning buffer that was allocated by try_allocate.
@@ -274,15 +346,23 @@ impl RawImageBuffer {
     /// # Safety
     /// The data referenced by `self` must have been allocated with Self::try_allocate.
     pub(super) unsafe fn deallocate(&mut self) {
-        if !self.buf.is_null() {
-            let allocation_len = self.minimum_allocation_size();
-            let layout = Layout::from_size_align(allocation_len, CACHE_LINE_BYTE_SIZE).unwrap();
+        if !self.buf.is_null() && self.capacity > 0 {
+            let layout = Layout::from_size_align(self.capacity, CACHE_LINE_BYTE_SIZE).unwrap();
             // SAFETY: the buffer was allocated in `try_allocate` with the same layout.
             unsafe {
                 dealloc(self.buf, layout);
             }
+            self.buf = null_mut();
+            self.capacity = 0;
         }
     }
+}
+
+#[derive(Debug, Clone, Copy)]
+pub(super) enum BufferInitialization<'a> {
+    Undefined,
+    Zeroed,
+    CopyFrom(&'a RawImageBuffer),
 }
 
 #[allow(private_interfaces)]
