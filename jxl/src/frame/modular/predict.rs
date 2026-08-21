@@ -275,7 +275,7 @@ impl WeightedPredictorState {
             .row_mut(0)
             .copy_from_slice(&self.error[0..row_stride]);
         let src = &self.pred_errors_buffer;
-        let [d0, d1, d2, d3] = wp_image.distinct_full_rows_mut([1, 2, 3, 4]);
+        let [d0, d1, d2, d3] = wp_image.distinct_rows_mut([1, 2, 3, 4]);
         for ((((d0, d1), d2), d3), &s) in d0
             .iter_mut()
             .zip(d1.iter_mut())

@@ -6,7 +6,7 @@
 use super::ModularBufferInfo;
 use crate::error::Result;
 use crate::frame::DataStatus;
-use crate::frame::modular::{ChannelInfo, IMAGE_OFFSET, IMAGE_PADDING};
+use crate::frame::modular::ChannelInfo;
 use crate::headers::bit_depth::BitDepth;
 use crate::image::Image;
 use crate::util::sync::atomic::{AtomicUsize, Ordering};
@@ -33,7 +33,7 @@ impl ModularChannel {
         bit_depth: BitDepth,
     ) -> Result<Self> {
         Ok(ModularChannel {
-            data: Image::new_with_padding(size, IMAGE_OFFSET, IMAGE_PADDING)?,
+            data: Image::new(size)?,
             shift,
             bit_depth,
         })
@@ -181,7 +181,7 @@ impl ModularBuffer {
 
     pub fn make_buffer(&self, info: &ChannelInfo) -> Result<ModularChannel> {
         Ok(ModularChannel {
-            data: Image::new_with_padding(self.size, IMAGE_OFFSET, IMAGE_PADDING)?,
+            data: Image::new(self.size)?,
             shift: info.shift,
             bit_depth: info.bit_depth,
         })

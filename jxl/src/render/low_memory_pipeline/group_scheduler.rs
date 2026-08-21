@@ -196,7 +196,7 @@ impl LowMemoryRenderPipeline {
             } else {
                 let height = 4 * by;
                 let width = (1 << self.shared.log_group_size) * ty.size();
-                OwnedRawImage::new_zeroed_with_padding((width, height), (0, 0), (0, 0))?
+                OwnedRawImage::new((width, height))?
             };
             let mut leftright = if let Some(b) = buf.leftright[c].try_write().unwrap().take() {
                 b
@@ -205,7 +205,7 @@ impl LowMemoryRenderPipeline {
             } else {
                 let height = 1 << self.shared.log_group_size;
                 let width = 4 * bx * ty.size();
-                OwnedRawImage::new_zeroed_with_padding((width, height), (0, 0), (0, 0))?
+                OwnedRawImage::new((width, height))?
             };
             let data = buf.data[c].try_read().unwrap();
             let input = data.as_ref().unwrap();

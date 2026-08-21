@@ -11,7 +11,7 @@ use crate::frame::modular::decode::common::make_pixel;
 use crate::frame::modular::decode::specialized_trees::run_on_specialized_tree;
 use crate::frame::modular::predict::{PredictionData, WeightedPredictorState};
 use crate::frame::modular::tree::{NUM_NONREF_PROPERTIES, PROPERTIES_PER_PREVCHAN, predict};
-use crate::frame::modular::{IMAGE_OFFSET, IMAGE_PADDING, ModularChannel, Tree};
+use crate::frame::modular::{ModularChannel, Tree};
 use crate::headers::modular::{GroupHeader, WeightedHeader};
 use crate::image::Image;
 use crate::util::tracing_wrappers::*;
@@ -48,12 +48,18 @@ pub(super) trait ModularChannelDecoder {
         xsize: usize,
     ) {
         self.init_row(buffers, chan, y);
-        const { assert!(IMAGE_OFFSET.1 == 2) };
-        let [row, row_top, row_toptop] =
-            buffers[chan].data.distinct_full_rows_mut([y + 2, y + 1, y]);
-        let row = &mut row[IMAGE_OFFSET.0..IMAGE_OFFSET.0 + xsize];
-        let row_top = &mut row_top[IMAGE_OFFSET.0..IMAGE_OFFSET.0 + xsize];
-        let row_toptop = &mut row_toptop[IMAGE_OFFSET.0..IMAGE_OFFSET.0 + xsize];
+        let (row, row_top, row_toptop) = match y {
+            0 => (buffers[chan].data.row_mut(0), &mut [][..], &mut [][..]),
+            1 => {
+                let [row, row_top] = buffers[chan].data.distinct_rows_mut([1, 0]);
+                (row, row_top, &mut [][..])
+            }
+            _ => {
+                let [row, row_top, row_toptop] =
+                    buffers[chan].data.distinct_rows_mut([y, y - 1, y - 2]);
+                (row, row_top, row_toptop)
+            }
+        };
 
         let do_decode_cold = {
             #[inline(never)]
@@ -161,12 +167,18 @@ impl<'a> ModularChannelDecoder for FullTree<'a> {
         xsize: usize,
     ) {
         self.init_row(buffers, chan, y);
-        const { assert!(IMAGE_OFFSET.1 == 2) };
-        let [row, row_top, row_toptop] =
-            buffers[chan].data.distinct_full_rows_mut([y + 2, y + 1, y]);
-        let row = &mut row[IMAGE_OFFSET.0..IMAGE_OFFSET.0 + xsize];
-        let row_top = &mut row_top[IMAGE_OFFSET.0..IMAGE_OFFSET.0 + xsize];
-        let row_toptop = &mut row_toptop[IMAGE_OFFSET.0..IMAGE_OFFSET.0 + xsize];
+        let (row, row_top, row_toptop) = match y {
+            0 => (buffers[chan].data.row_mut(0), &mut [][..], &mut [][..]),
+            1 => {
+                let [row, row_top] = buffers[chan].data.distinct_rows_mut([1, 0]);
+                (row, row_top, &mut [][..])
+            }
+            _ => {
+                let [row, row_top, row_toptop] =
+                    buffers[chan].data.distinct_rows_mut([y, y - 1, y - 2]);
+                (row, row_top, row_toptop)
+            }
+        };
         for x in 0..xsize {
             let prediction_data = PredictionData::get_rows(row, row_top, row_toptop, x, y);
             let prediction_result = predict(
@@ -216,10 +228,7 @@ pub(super) fn decode_modular_channel(
 ) -> Result<()> {
     debug!("reading channel");
     let size = buffers[chan].data.size();
-    if size.0 <= IMAGE_PADDING.0
-        || size.1 <= IMAGE_PADDING.1
-        || size.0 * size.1 <= SMALL_CHANNEL_THRESHOLD
-    {
+    if size.0 <= 4 || size.1 <= 2 || size.0 * size.1 <= SMALL_CHANNEL_THRESHOLD {
         let mut decoder = FullTree::new(tree, &header.wp_header, chan, stream_id, size.0)?;
         return decode_modular_channel_impl(
             &mut decoder,
@@ -231,11 +240,6 @@ pub(super) fn decode_modular_channel(
         );
     }
 
-    assert_eq!(buffers[chan].data.padding().1, IMAGE_PADDING.1);
-    assert!(buffers[chan].data.padding().0 >= IMAGE_PADDING.0);
-    assert_eq!(buffers[chan].data.offset(), IMAGE_OFFSET);
-
-    // We now know the channel has size at least IMAGE_PADDING.
     run_on_specialized_tree(tree, chan, stream_id, size.0, header, {
         |t| decode_modular_channel_impl(t, buffers, chan, &tree.histograms, reader, br)
     })?;
