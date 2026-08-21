@@ -105,7 +105,7 @@ impl InputBuffers {
         &self,
         group: usize,
         shared: &RenderPipelineShared<RowBuffer>,
-        store_buf: impl Fn(usize, usize, OwnedRawImage),
+        mut store_buf: impl FnMut(usize, usize, OwnedRawImage),
     ) {
         let gx = group % self.size.0;
         let gy = group / self.size.0;

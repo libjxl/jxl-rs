@@ -6,7 +6,7 @@
 use std::ops::Range;
 
 use crate::error::Result;
-use crate::image::{OwnedRawImage, Rect};
+use crate::image::{LocalBufferRecycler, Rect};
 use crate::render::LowMemoryRenderPipeline;
 use crate::render::buffer_splitter::BufferSplitter;
 use crate::render::internal::{ChannelInfo, Stage};
@@ -120,36 +120,11 @@ fn ready_image_area(
 }
 
 impl LowMemoryRenderPipeline {
-    pub(super) fn maybe_get_scratch_buffer(
-        &self,
-        channel: usize,
-        kind: usize,
-    ) -> Option<OwnedRawImage> {
-        self.scratch_channel_buffers
-            .try_lock()
-            .ok()
-            .and_then(|mut x| x[channel * 3 + kind].pop())
-    }
-
-    fn store_scratch_buffer(&self, channel: usize, kind: usize, image: OwnedRawImage) {
-        let Some(mut buf) = self.scratch_channel_buffers.try_lock().ok() else {
-            return;
-        };
-        if kind == 0
-            && let Some(s) = self.group_scratch_buffers_limit
-            && buf[channel * 3].len() >= s
-        {
-            // We are going over the limit of group-sized scratch buffers for
-            // this channel - avoid storing the buffer.
-            return;
-        }
-        buf[channel * 3 + kind].push(image)
-    }
-
     pub(super) fn render_with_new_group(
         &self,
         g: usize,
         buffer_splitter: &BufferSplitter,
+        recycler: &mut LocalBufferRecycler,
     ) -> Result<()> {
         let buf = self.input_buffers.get(g);
         let (gx, gy) = self.shared.group_position(g);
@@ -191,21 +166,17 @@ impl LowMemoryRenderPipeline {
             let by = by >> dy;
             let mut topbottom = if let Some(b) = buf.topbottom[c].try_write().unwrap().take() {
                 b
-            } else if let Some(b) = self.maybe_get_scratch_buffer(c, 1) {
-                b
             } else {
                 let height = 4 * by;
                 let width = (1 << self.shared.log_group_size) * ty.size();
-                OwnedRawImage::new((width, height))?
+                recycler.alloc_raw((width, height), false)?
             };
             let mut leftright = if let Some(b) = buf.leftright[c].try_write().unwrap().take() {
-                b
-            } else if let Some(b) = self.maybe_get_scratch_buffer(c, 2) {
                 b
             } else {
                 let height = 1 << self.shared.log_group_size;
                 let width = 4 * bx * ty.size();
-                OwnedRawImage::new((width, height))?
+                recycler.alloc_raw((width, height), false)?
             };
             let data = buf.data[c].try_read().unwrap();
             let input = data.as_ref().unwrap();
@@ -260,8 +231,8 @@ impl LowMemoryRenderPipeline {
         })?;
 
         self.input_buffers
-            .mark_done(g, &self.shared, |channel, kind, image| {
-                self.store_scratch_buffer(channel, kind, image)
+            .mark_done(g, &self.shared, |_channel, _kind, image| {
+                recycler.recycle_raw(image);
             });
 
         Ok(())

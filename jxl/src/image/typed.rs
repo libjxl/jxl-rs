@@ -23,7 +23,14 @@ impl<T: ImageDataType> Image<T> {
     #[instrument(ret, err)]
     pub fn new(size: (usize, usize)) -> Result<Image<T>> {
         let s = T::DATA_TYPE_ID.size();
-        let img = OwnedRawImage::new((size.0 * s, size.1))?;
+        let img = OwnedRawImage::new((size.0 * s, size.1), false)?;
+        Ok(Self::from_raw(img))
+    }
+
+    #[instrument(ret, err)]
+    pub fn new_zeroed(size: (usize, usize)) -> Result<Image<T>> {
+        let s = T::DATA_TYPE_ID.size();
+        let img = OwnedRawImage::new_zeroed((size.0 * s, size.1))?;
         Ok(Self::from_raw(img))
     }
 

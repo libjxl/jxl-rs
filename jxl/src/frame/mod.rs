@@ -24,7 +24,7 @@ use crate::headers::extra_channels::ExtraChannelInfo;
 use crate::headers::frame_header::{Encoding, FrameHeader, FrameType};
 use crate::headers::permutation::Permutation;
 use crate::headers::toc::Toc;
-use crate::image::{Image, Rect};
+use crate::image::{DecoderBufferPool, Image, Rect};
 use crate::render::buffer_splitter::{OutputChannelRef, OutputChannelSplitter};
 use crate::util::PerThreadStorage;
 use crate::util::sync::{Arc, Mutex, RwLock};
@@ -88,7 +88,7 @@ impl ReferenceFrame {
         saved_before_color_transform: bool,
     ) -> Result<Self> {
         let frame = (0..num_channels)
-            .map(|_| Image::new((width, height)))
+            .map(|_| Image::new_zeroed((width, height)))
             .collect::<Result<_>>()?;
         Ok(Self {
             frame,
@@ -118,6 +118,7 @@ pub struct DecoderState {
     pub(super) file_header: FileHeader,
     pub(super) reference_frames: Arc<[Option<ReferenceFrame>; Self::MAX_STORED_FRAMES]>,
     pub(super) lf_frames: [Option<[Image<f32>; 3]>; Self::NUM_LF_FRAMES],
+    pub buffer_pool: Arc<DecoderBufferPool>,
     pub render_spotcolors: bool,
     #[cfg(test)]
     pub use_simple_pipeline: bool,
@@ -140,6 +141,7 @@ impl DecoderState {
             file_header,
             reference_frames: Arc::new([None, None, None, None]),
             lf_frames: std::array::from_fn(|_| None),
+            buffer_pool: Arc::new(DecoderBufferPool::new(None)),
             render_spotcolors: options.render_spot_colors,
             #[cfg(test)]
             use_simple_pipeline: false,

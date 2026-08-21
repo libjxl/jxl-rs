@@ -16,7 +16,7 @@ use crate::frame::modular::{
 };
 use crate::headers::frame_header::FrameHeader;
 use crate::headers::modular::WeightedHeader;
-use crate::image::{Image, ImageRect, Rect};
+use crate::image::{Image, ImageRect, LocalBufferRecycler, Rect};
 use crate::util::SmallVec;
 use crate::util::sync::RwLockReadGuard;
 use crate::util::sync::atomic::{AtomicUsize, Ordering};
@@ -556,13 +556,21 @@ impl TransformStepChunk {
     }
 
     // Runs this transform. This function *will* crash if the transform is not ready.
+    #[allow(clippy::type_complexity)]
     #[instrument(level = "trace", skip_all)]
     pub fn do_run(
         &self,
         frame_header: &FrameHeader,
         buffers: &[ModularBufferInfo],
         transform_scratch_space: &mut TransformScratchSpace,
-        pass_to_pipeline: &dyn Fn(usize, usize, bool, Image<i32>) -> Result<()>,
+        pass_to_pipeline: &dyn Fn(
+            usize,
+            usize,
+            bool,
+            Image<i32>,
+            &mut LocalBufferRecycler,
+        ) -> Result<()>,
+        recycler: &mut LocalBufferRecycler,
     ) -> Result<()> {
         let is_final = self.missing_final_deps == 0;
         let buf_out = self.buf_out();
@@ -605,12 +613,12 @@ impl TransformStepChunk {
                     let b_in = &buffers[buf_in[i]].buffer_grid[out_grid];
                     let b_out = &buffers[buf_out[i]].buffer_grid[out_grid];
                     if b_in.data_status == DataStatus::Zero && !b_in.has_buffer() {
-                        b_out.ensure_buffer(&buffers[buf_out[i]].info)?;
+                        b_out.ensure_buffer_zeroed(&buffers[buf_out[i]].info, recycler)?;
                     } else {
                         *b_out.data.try_write().unwrap() = Some(b_in.get_buffer(is_final)?);
                     }
                 }
-                with_buffers(buffers, buf_out, out_grid, |mut bufs| {
+                with_buffers(buffers, buf_out, out_grid, recycler, |mut bufs| {
                     super::rct::do_rct_step(&mut bufs, *op, *perm);
                     Ok(())
                 })?;
@@ -624,7 +632,7 @@ impl TransformStepChunk {
                 // Nothing to do, just bookkeeping.
                 buffers[*buf_in].buffer_grid[out_grid].mark_used(is_final);
                 buffers[*buf_pal].buffer_grid[0].mark_used(is_final);
-                with_buffers(buffers, buf_out, out_grid, |_| Ok(()))?;
+                with_buffers(buffers, buf_out, out_grid, recycler, |_| Ok(()))?;
             }
             TransformStep::Palette {
                 buf_in,
@@ -642,7 +650,7 @@ impl TransformStepChunk {
                     let img_pal = borrow_channel(buffers, (*buf_pal, 0));
                     // Ensure that the output buffers are present.
                     // TODO(szabadka): Extend the callback to support many grid points.
-                    with_buffers(buffers, buf_out, out_grid, |_| Ok(()))?;
+                    with_buffers(buffers, buf_out, out_grid, recycler, |_| Ok(()))?;
                     let grid_shape = buffers[buf_out[0]].grid_shape;
                     let grid_x = out_grid % grid_shape.0;
                     let grid_y = out_grid / grid_shape.0;
@@ -732,7 +740,7 @@ impl TransformStepChunk {
                         in_bufs.push(borrow_channel(buffers, (*buf_in, grid)));
                         // Ensure that the output buffers are present.
                         // TODO(szabadka): Extend the callback to support many grid points.
-                        with_buffers(buffers, buf_out, out_grid + grid_x, |_| Ok(()))?;
+                        with_buffers(buffers, buf_out, out_grid + grid_x, recycler, |_| Ok(()))?;
                     }
                     let in_buf_refs: Vec<&ModularChannel> =
                         in_bufs.iter().map(|x| x.as_ref().unwrap()).collect();
@@ -834,7 +842,7 @@ impl TransformStepChunk {
                     buf_out,
                     self.grid_pos
                 );
-                with_buffers(buffers, &[*buf_out], out_grid, |mut bufs| {
+                with_buffers(buffers, &[*buf_out], out_grid, recycler, |mut bufs| {
                     if bufs.is_empty() {
                         return Ok(());
                     }
@@ -882,26 +890,27 @@ impl TransformStepChunk {
                 debug!("Rendering channel {channel:?}, rect {rect:?}, group {group}");
                 let buf = &buffers[*buf_in].buffer_grid[out_grid];
                 if buf.data_status == DataStatus::Zero && !buf.has_buffer() {
-                    let zero = Image::new(rect.map(|x| x.size).unwrap_or(buf.size))?;
-                    pass_to_pipeline(*channel, *group, is_final, zero)?;
+                    let zero =
+                        recycler.alloc_image_zeroed(rect.map(|x| x.size).unwrap_or(buf.size))?;
+                    pass_to_pipeline(*channel, *group, is_final, zero, recycler)?;
                 } else {
                     let modular_buf = buf.get_buffer(is_final)?;
                     if let Some(rect) = rect {
-                        let mut cropped = Image::new(rect.size)?;
+                        let mut cropped = recycler.alloc_image(rect.size)?;
                         let src_view = modular_buf.data.get_rect(*rect);
                         for y in 0..rect.size.1 {
                             cropped.row_mut(y).copy_from_slice(src_view.row(y));
                         }
-                        pass_to_pipeline(*channel, *group, is_final, cropped)?;
+                        pass_to_pipeline(*channel, *group, is_final, cropped, recycler)?;
                     } else {
-                        pass_to_pipeline(*channel, *group, is_final, modular_buf.data)?;
+                        pass_to_pipeline(*channel, *group, is_final, modular_buf.data, recycler)?;
                     }
                 }
             }
         };
 
         for &(buf, grid) in self.outputs(buffers).iter() {
-            buffers[buf].buffer_grid[grid].extract_needed_borders()?;
+            buffers[buf].buffer_grid[grid].extract_needed_borders(recycler)?;
         }
 
         Ok(())

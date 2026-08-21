@@ -22,7 +22,7 @@ use crate::headers::Orientation;
 use crate::headers::color_encoding::ColorSpace;
 use crate::headers::extra_channels::ExtraChannel;
 use crate::headers::frame_header::{Encoding, FrameHeader, FrameType};
-use crate::image::{Image, Rect};
+use crate::image::{Image, LocalBufferRecycler, Rect};
 #[cfg(test)]
 use crate::render::SimpleRenderPipeline;
 use crate::render::buffer_splitter::BufferSplitter;
@@ -423,16 +423,20 @@ impl Frame {
 
         // STEP 4: actually run the steps.
 
-        let pass_to_pipeline = |chan, group, complete, image: Image<i32>| {
+        let pass_to_pipeline = |chan,
+                                group,
+                                complete,
+                                image: Image<i32>,
+                                recycler: &mut LocalBufferRecycler| {
             pipeline!(
                 self,
                 p,
-                p.set_buffer_for_group(chan, group, complete, image, &buffer_splitter)?
+                p.set_buffer_for_group(chan, group, complete, image, &buffer_splitter, recycler)?
             );
             Ok(())
         };
 
-        let run_step = |i| {
+        let run_step = |i, recycler: &mut LocalBufferRecycler| {
             match &render_steps[i] {
                 RenderStep::Decode { group, passes } => {
                     let mut new_passes: SmallVec<_, 11> = passes.iter().cloned().collect();
@@ -441,10 +445,11 @@ impl Frame {
                         &mut new_passes,
                         &buffer_splitter,
                         should_render_non_final,
+                        recycler,
                     )?;
                 }
                 RenderStep::FlushVarDCT { group } => {
-                    self.decode_hf_group(*group, &mut [], &buffer_splitter, true)?;
+                    self.decode_hf_group(*group, &mut [], &buffer_splitter, true, recycler)?;
                 }
                 RenderStep::RunTransformSteps { steps } => {
                     let mut steps = steps.iter().copied().collect();
@@ -452,7 +457,7 @@ impl Frame {
                         .as_ref()
                         .unwrap()
                         .modular_global
-                        .run_transforms(&self.header, &pass_to_pipeline, &mut steps)?;
+                        .run_transforms(&self.header, &pass_to_pipeline, &mut steps, recycler)?;
                 }
             }
             Ok(())
@@ -467,15 +472,21 @@ impl Frame {
 
         if render_steps.len() > max_threads && max_threads < hw_threads {
             let next_index = AtomicUsize::new(0);
-            parallel_runner.run(max_threads, &|_| loop {
-                let t = next_index.fetch_add(1, Ordering::Relaxed);
-                if t >= render_steps.len() {
-                    return Ok(());
+            parallel_runner.run(max_threads, &|_| {
+                let mut recycler = LocalBufferRecycler::new(&self.decoder_state.buffer_pool);
+                loop {
+                    let t = next_index.fetch_add(1, Ordering::Relaxed);
+                    if t >= render_steps.len() {
+                        return Ok(());
+                    }
+                    run_step(t, &mut recycler)?;
                 }
-                run_step(t)?;
             })?;
         } else {
-            parallel_runner.run(render_steps.len(), &run_step)?;
+            parallel_runner.run(render_steps.len(), &|i| {
+                let mut recycler = LocalBufferRecycler::new(&self.decoder_state.buffer_pool);
+                run_step(i, &mut recycler)
+            })?;
         }
 
         for g in render_steps.iter().filter_map(|x| match x {
@@ -543,12 +554,6 @@ impl Frame {
             frame_header.size_upsampled(),
             frame_header.upsampling.ilog2() as usize,
             frame_header.log_group_dim(),
-            // TODO(veluca): we should instead have modular mode participate in buffer reuse.
-            if frame_header.encoding == Encoding::Modular {
-                Some(0)
-            } else {
-                None
-            },
         );
 
         if frame_header.encoding == Encoding::Modular {

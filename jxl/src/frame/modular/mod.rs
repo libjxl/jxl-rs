@@ -20,7 +20,7 @@ use crate::headers::bit_depth::BitDepth;
 use crate::headers::frame_header::FrameHeader;
 use crate::headers::modular::{GroupHeader, TransformId};
 use crate::headers::{ImageMetadata, JxlHeader};
-use crate::image::{Image, Rect};
+use crate::image::{Image, LocalBufferRecycler, Rect};
 use crate::render::buffer_splitter::OutputChannelRef;
 use crate::util::sync::Mutex;
 use crate::util::sync::atomic::{AtomicBool, Ordering};
@@ -497,6 +497,7 @@ impl FullModularImage {
         global_tree: &Option<Tree>,
         br: &mut BitReader,
         allow_partial: bool,
+        recycler: &mut LocalBufferRecycler,
     ) -> Result<bool> {
         let allow_partial = allow_partial && self.can_do_early_partial_render;
         let mut decoded_if_partial = 0;
@@ -504,6 +505,7 @@ impl FullModularImage {
             &self.buffer_info,
             &self.section_buffer_indices[0],
             0,
+            recycler,
             |bufs| {
                 decode_modular_subbitstream(
                     bufs,
@@ -546,7 +548,7 @@ impl FullModularImage {
         let mut need_rerender = false;
         for b in self.section_buffer_indices[0].iter().take(num_decoded) {
             let buf = &mut self.buffer_info[*b].buffer_grid[0];
-            buf.extract_needed_borders()?;
+            buf.extract_needed_borders(recycler)?;
             if buf.data_status == DataStatus::Final {
                 continue;
             }
@@ -561,7 +563,7 @@ impl FullModularImage {
     #[allow(clippy::type_complexity)]
     #[instrument(
         level = "debug",
-        skip(self, frame_header, global_tree, br, pass_to_pipeline),
+        skip(self, frame_header, global_tree, br, pass_to_pipeline, recycler),
         ret
     )]
     pub fn read_stream(
@@ -570,7 +572,10 @@ impl FullModularImage {
         frame_header: &FrameHeader,
         global_tree: &Option<Tree>,
         br: &mut BitReader,
-        pass_to_pipeline: Option<&dyn Fn(usize, usize, bool, Image<i32>) -> Result<()>>,
+        pass_to_pipeline: Option<
+            &dyn Fn(usize, usize, bool, Image<i32>, &mut LocalBufferRecycler) -> Result<()>,
+        >,
+        recycler: &mut LocalBufferRecycler,
     ) -> Result<()> {
         if self.buffer_info.is_empty() {
             info!("No modular channels to decode");
@@ -590,6 +595,7 @@ impl FullModularImage {
             &self.buffer_info,
             &self.section_buffer_indices[section_id],
             grid,
+            recycler,
             |bufs| {
                 decode_modular_subbitstream(
                     bufs,
@@ -604,7 +610,7 @@ impl FullModularImage {
         )?;
 
         for b in self.section_buffer_indices[section_id].iter().copied() {
-            self.buffer_info[b].buffer_grid[grid].extract_needed_borders()?;
+            self.buffer_info[b].buffer_grid[grid].extract_needed_borders(recycler)?;
         }
 
         self.has_decoded_data.fetch_or(
@@ -623,7 +629,7 @@ impl FullModularImage {
         }
 
         if let Some(pass_to_pipeline) = pass_to_pipeline {
-            self.run_transforms(frame_header, pass_to_pipeline, &mut ready_steps)
+            self.run_transforms(frame_header, pass_to_pipeline, &mut ready_steps, recycler)
         } else {
             self.ready_transform_steps
                 .lock()
@@ -768,19 +774,28 @@ impl FullModularImage {
         }
     }
 
+    #[allow(clippy::type_complexity)]
     fn run_transform(
         &self,
         frame_header: &FrameHeader,
         tfm: usize,
         scratch_space: &mut TransformScratchSpace,
-        pass_to_pipeline: &dyn Fn(usize, usize, bool, Image<i32>) -> Result<()>,
+        pass_to_pipeline: &dyn Fn(
+            usize,
+            usize,
+            bool,
+            Image<i32>,
+            &mut LocalBufferRecycler,
+        ) -> Result<()>,
         ready_steps: &mut Vec<usize>,
+        recycler: &mut LocalBufferRecycler,
     ) -> Result<()> {
         self.transform_steps[tfm].do_run(
             frame_header,
             &self.buffer_info,
             scratch_space,
             pass_to_pipeline,
+            recycler,
         )?;
 
         for &(buf, grid) in self.transform_steps[tfm].outputs(&self.buffer_info).iter() {
@@ -789,11 +804,19 @@ impl FullModularImage {
         Ok(())
     }
 
+    #[allow(clippy::type_complexity)]
     pub fn run_transforms(
         &self,
         frame_header: &FrameHeader,
-        pass_to_pipeline: &dyn Fn(usize, usize, bool, Image<i32>) -> Result<()>,
+        pass_to_pipeline: &dyn Fn(
+            usize,
+            usize,
+            bool,
+            Image<i32>,
+            &mut LocalBufferRecycler,
+        ) -> Result<()>,
         ready_steps: &mut Vec<usize>,
+        recycler: &mut LocalBufferRecycler,
     ) -> Result<()> {
         let mut scratch_space = self.transform_scratch_space.get();
         while let Some(t) = ready_steps.pop() {
@@ -803,6 +826,7 @@ impl FullModularImage {
                 &mut scratch_space,
                 pass_to_pipeline,
                 ready_steps,
+                recycler,
             )?;
         }
         Ok(())

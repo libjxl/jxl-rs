@@ -7,7 +7,7 @@ use super::internal::{RenderPipelineShared, Stage};
 use super::{RenderPipeline, RenderPipelineInOutStage, RenderPipelineInPlaceStage};
 use crate::api::JxlOutputBuffer;
 use crate::error::Result;
-use crate::image::{Image, ImageDataType};
+use crate::image::{Image, ImageDataType, LocalBufferRecycler};
 use crate::render::buffer_splitter::BufferSplitter;
 use crate::render::internal::ChannelInfo;
 use crate::util::ShiftRightCeil;
@@ -150,9 +150,13 @@ impl RenderPipeline for SimpleRenderPipeline {
     }
 
     #[instrument(skip_all, err)]
-    fn get_buffer<T: ImageDataType>(&self, channel: usize) -> Result<Image<T>> {
+    fn get_buffer<T: ImageDataType>(
+        &self,
+        channel: usize,
+        recycler: &mut LocalBufferRecycler,
+    ) -> Result<Image<T>> {
         let sz = self.shared.group_size_for_channel(channel, T::DATA_TYPE_ID);
-        Image::<T>::new(sz)
+        recycler.alloc_image(sz)
     }
 
     fn set_buffer_for_group<T: ImageDataType>(
@@ -162,6 +166,7 @@ impl RenderPipeline for SimpleRenderPipeline {
         complete: bool,
         buf: Image<T>,
         buffer_splitter: &BufferSplitter,
+        _recycler: &mut LocalBufferRecycler,
     ) -> Result<()> {
         debug!(
             "filling data for group {}, channel {}, using type {:?}",

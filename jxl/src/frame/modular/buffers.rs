@@ -8,7 +8,7 @@ use crate::error::Result;
 use crate::frame::DataStatus;
 use crate::frame::modular::ChannelInfo;
 use crate::headers::bit_depth::BitDepth;
-use crate::image::Image;
+use crate::image::{Image, LocalBufferRecycler};
 use crate::util::sync::atomic::{AtomicUsize, Ordering};
 use crate::util::sync::{Mutex, RwLock};
 
@@ -137,7 +137,7 @@ impl ModularBuffer {
         self.topbottom.try_read().unwrap().is_some() || self.leftright.try_read().unwrap().is_some()
     }
 
-    pub fn extract_needed_borders(&self) -> Result<()> {
+    pub fn extract_needed_borders(&self, recycler: &mut LocalBufferRecycler) -> Result<()> {
         if self.needed_borders.is_empty() {
             return Ok(());
         }
@@ -151,7 +151,7 @@ impl ModularBuffer {
         }
 
         if self.needed_borders.topbottom {
-            let mut topbottom = Image::<i32>::new((w, 4))?;
+            let mut topbottom = recycler.alloc_image((w, 4))?;
             let r0 = chan.data.row(0);
             let r1 = if h > 1 { chan.data.row(1) } else { r0 };
             let rb0 = if h > 1 { chan.data.row(h - 2) } else { r0 };
@@ -164,7 +164,7 @@ impl ModularBuffer {
         }
 
         if self.needed_borders.leftright {
-            let mut leftright = Image::<i32>::new((4, h))?;
+            let mut leftright = recycler.alloc_image((4, h))?;
             for y in 0..h {
                 let r = chan.data.row(y);
                 let out = leftright.row_mut(y);
@@ -179,17 +179,49 @@ impl ModularBuffer {
         Ok(())
     }
 
-    pub fn make_buffer(&self, info: &ChannelInfo) -> Result<ModularChannel> {
+    pub fn make_buffer(
+        &self,
+        info: &ChannelInfo,
+        recycler: &mut LocalBufferRecycler,
+    ) -> Result<ModularChannel> {
         Ok(ModularChannel {
-            data: Image::new(self.size)?,
+            data: recycler.alloc_image(self.size)?,
             shift: info.shift,
             bit_depth: info.bit_depth,
         })
     }
 
-    pub fn ensure_buffer(&self, info: &ChannelInfo) -> Result<()> {
+    pub fn make_buffer_zeroed(
+        &self,
+        info: &ChannelInfo,
+        recycler: &mut LocalBufferRecycler,
+    ) -> Result<ModularChannel> {
+        Ok(ModularChannel {
+            data: recycler.alloc_image_zeroed(self.size)?,
+            shift: info.shift,
+            bit_depth: info.bit_depth,
+        })
+    }
+
+    pub fn ensure_buffer(
+        &self,
+        info: &ChannelInfo,
+        recycler: &mut LocalBufferRecycler,
+    ) -> Result<()> {
         if !self.has_buffer() {
-            let buf = self.make_buffer(info)?;
+            let buf = self.make_buffer(info, recycler)?;
+            *self.data.try_write().unwrap() = Some(buf);
+        }
+        Ok(())
+    }
+
+    pub fn ensure_buffer_zeroed(
+        &self,
+        info: &ChannelInfo,
+        recycler: &mut LocalBufferRecycler,
+    ) -> Result<()> {
+        if !self.has_buffer() {
+            let buf = self.make_buffer_zeroed(info, recycler)?;
             *self.data.try_write().unwrap() = Some(buf);
         }
         Ok(())
@@ -249,6 +281,7 @@ pub fn with_buffers<T>(
     buffers: &[ModularBufferInfo],
     indices: &[usize],
     grid: usize,
+    recycler: &mut LocalBufferRecycler,
     f: impl FnOnce(Vec<&mut ModularChannel>) -> Result<T>,
 ) -> Result<T> {
     let mut guards = vec![];
@@ -256,7 +289,7 @@ pub fn with_buffers<T>(
         // Allocate buffers if they are not present.
         let buf = &buffers[*i];
         let b = &buf.buffer_grid[grid];
-        b.ensure_buffer(&buf.info)?;
+        b.ensure_buffer(&buf.info, recycler)?;
 
         // Skip zero-sized *tiles*.
         //
