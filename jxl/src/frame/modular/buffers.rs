@@ -12,34 +12,122 @@ use crate::image::Image;
 use crate::util::sync::atomic::{AtomicUsize, Ordering};
 use crate::util::sync::{Mutex, RwLock};
 
+#[derive(Debug)]
+pub enum ModularData {
+    I32(Image<i32>),
+    I16(Image<i16>),
+}
+
+impl ModularData {
+    pub fn new(size: (usize, usize), is_16bit: bool) -> Result<Self> {
+        if is_16bit {
+            Ok(ModularData::I16(Image::new(size)?))
+        } else {
+            Ok(ModularData::I32(Image::new(size)?))
+        }
+    }
+
+    pub fn size(&self) -> (usize, usize) {
+        match self {
+            ModularData::I32(img) => img.size(),
+            ModularData::I16(img) => img.size(),
+        }
+    }
+
+    pub fn is_16bit(&self) -> bool {
+        matches!(self, ModularData::I16(_))
+    }
+
+    pub fn try_clone(&self) -> Result<Self> {
+        match self {
+            ModularData::I32(img) => Ok(ModularData::I32(img.try_clone()?)),
+            ModularData::I16(img) => Ok(ModularData::I16(img.try_clone()?)),
+        }
+    }
+
+    pub fn as_i32(&self) -> &Image<i32> {
+        match self {
+            ModularData::I32(img) => img,
+            ModularData::I16(_) => panic!("expected I32 ModularData"),
+        }
+    }
+
+    pub fn as_i32_mut(&mut self) -> &mut Image<i32> {
+        match self {
+            ModularData::I32(img) => img,
+            ModularData::I16(_) => panic!("expected I32 ModularData"),
+        }
+    }
+
+    pub fn as_i16(&self) -> &Image<i16> {
+        match self {
+            ModularData::I16(img) => img,
+            ModularData::I32(_) => panic!("expected I16 ModularData"),
+        }
+    }
+
+    pub fn as_i16_mut(&mut self) -> &mut Image<i16> {
+        match self {
+            ModularData::I16(img) => img,
+            ModularData::I32(_) => panic!("expected I16 ModularData"),
+        }
+    }
+
+    pub fn get_pixel_i32(&self, x: usize, y: usize) -> i32 {
+        match self {
+            ModularData::I32(img) => img.row(y)[x],
+            ModularData::I16(img) => img.row(y)[x] as i32,
+        }
+    }
+}
+
 // All the information on a specific buffer needed by Modular decoding.
 #[derive(Debug)]
 pub(super) struct ModularChannel {
     // Actual pixel buffer.
-    pub(super) data: Image<i32>,
+    pub(super) data: ModularData,
     // Shift of the channel (None if this is a meta-channel).
     pub(super) shift: Option<(usize, usize)>,
     pub(super) bit_depth: BitDepth,
 }
 
 impl ModularChannel {
-    pub fn new(size: (usize, usize), bit_depth: BitDepth) -> Result<Self> {
-        Self::new_with_shift(size, Some((0, 0)), bit_depth)
+    pub fn new(size: (usize, usize), is_16bit: bool, bit_depth: BitDepth) -> Result<Self> {
+        Self::new_with_shift(size, is_16bit, Some((0, 0)), bit_depth)
     }
 
     pub fn new_with_shift(
         size: (usize, usize),
+        is_16bit: bool,
         shift: Option<(usize, usize)>,
         bit_depth: BitDepth,
     ) -> Result<Self> {
         Ok(ModularChannel {
-            data: Image::new(size)?,
+            data: ModularData::new(size, is_16bit)?,
             shift,
             bit_depth,
         })
     }
 
-    fn try_clone(&self) -> Result<Self> {
+    #[allow(dead_code)]
+    pub fn from_image_i32(img: Image<i32>, shift: Option<(usize, usize)>, bit_depth: BitDepth) -> Self {
+        ModularChannel {
+            data: ModularData::I32(img),
+            shift,
+            bit_depth,
+        }
+    }
+
+    #[allow(dead_code)]
+    pub fn from_image_i16(img: Image<i16>, shift: Option<(usize, usize)>, bit_depth: BitDepth) -> Self {
+        ModularChannel {
+            data: ModularData::I16(img),
+            shift,
+            bit_depth,
+        }
+    }
+
+    pub fn try_clone(&self) -> Result<Self> {
         Ok(ModularChannel {
             data: self.data.try_clone()?,
             shift: self.shift,
@@ -86,9 +174,9 @@ impl NeededBorders {
 pub(super) struct ModularBuffer {
     pub(super) data: RwLock<Option<ModularChannel>>,
     // 2px horizontal borders (top 2 rows and bottom 2 rows, size: (width, 4)).
-    pub(super) topbottom: RwLock<Option<Image<i32>>>,
+    pub(super) topbottom: RwLock<Option<ModularData>>,
     // 2px vertical borders (left 2 cols and right 2 cols, size: (4, height)).
-    pub(super) leftright: RwLock<Option<Image<i32>>>,
+    pub(super) leftright: RwLock<Option<ModularData>>,
     // Holds additional information such as the weighted predictor's error channel's last row for
     // the transform chunk that produced this buffer.
     pub(super) auxiliary_data: RwLock<Option<Image<i32>>>,
@@ -104,6 +192,7 @@ pub(super) struct ModularBuffer {
     // Transform step that will produce this channel (None if the channel is final).
     pub(super) produced_by_step: Option<usize>,
     pub(super) size: (usize, usize),
+    pub(super) is_16bit: bool,
     // Status of the data in this buffer. Note that the distinction between "Zero"
     // and "partial" is only meaningful for section0 coded buffers.
     pub(super) data_status: DataStatus,
@@ -112,7 +201,7 @@ pub(super) struct ModularBuffer {
 const DISABLE_MODULAR_BUFFER_DEALLOCATION_FOR_DEBUG: bool = false;
 
 impl ModularBuffer {
-    pub fn new(size: (usize, usize)) -> Self {
+    pub fn new(size: (usize, usize), is_16bit: bool) -> Self {
         ModularBuffer {
             data: RwLock::new(None),
             topbottom: RwLock::new(None),
@@ -124,6 +213,7 @@ impl ModularBuffer {
             used_by_transforms_final: vec![],
             used_by_transforms_current: Mutex::new(vec![]),
             size,
+            is_16bit,
             data_status: DataStatus::Zero,
             produced_by_step: None,
         }
@@ -151,28 +241,62 @@ impl ModularBuffer {
         }
 
         if self.needed_borders.topbottom {
-            let mut topbottom = Image::<i32>::new((w, 4))?;
-            let r0 = chan.data.row(0);
-            let r1 = if h > 1 { chan.data.row(1) } else { r0 };
-            let rb0 = if h > 1 { chan.data.row(h - 2) } else { r0 };
-            let rb1 = chan.data.row(h - 1);
-            topbottom.row_mut(0).copy_from_slice(r0);
-            topbottom.row_mut(1).copy_from_slice(r1);
-            topbottom.row_mut(2).copy_from_slice(rb0);
-            topbottom.row_mut(3).copy_from_slice(rb1);
+            let topbottom = match &chan.data {
+                ModularData::I32(img) => {
+                    let mut topbottom = Image::<i32>::new((w, 4))?;
+                    let r0 = img.row(0);
+                    let r1 = if h > 1 { img.row(1) } else { r0 };
+                    let rb0 = if h > 1 { img.row(h - 2) } else { r0 };
+                    let rb1 = img.row(h - 1);
+                    topbottom.row_mut(0).copy_from_slice(r0);
+                    topbottom.row_mut(1).copy_from_slice(r1);
+                    topbottom.row_mut(2).copy_from_slice(rb0);
+                    topbottom.row_mut(3).copy_from_slice(rb1);
+                    ModularData::I32(topbottom)
+                }
+                ModularData::I16(img) => {
+                    let mut topbottom = Image::<i16>::new((w, 4))?;
+                    let r0 = img.row(0);
+                    let r1 = if h > 1 { img.row(1) } else { r0 };
+                    let rb0 = if h > 1 { img.row(h - 2) } else { r0 };
+                    let rb1 = img.row(h - 1);
+                    topbottom.row_mut(0).copy_from_slice(r0);
+                    topbottom.row_mut(1).copy_from_slice(r1);
+                    topbottom.row_mut(2).copy_from_slice(rb0);
+                    topbottom.row_mut(3).copy_from_slice(rb1);
+                    ModularData::I16(topbottom)
+                }
+            };
             *self.topbottom.try_write().unwrap() = Some(topbottom);
         }
 
         if self.needed_borders.leftright {
-            let mut leftright = Image::<i32>::new((4, h))?;
-            for y in 0..h {
-                let r = chan.data.row(y);
-                let out = leftright.row_mut(y);
-                out[0] = r[0];
-                out[1] = if w > 1 { r[1] } else { r[0] };
-                out[2] = if w > 1 { r[w - 2] } else { r[0] };
-                out[3] = r[w - 1];
-            }
+            let leftright = match &chan.data {
+                ModularData::I32(img) => {
+                    let mut leftright = Image::<i32>::new((4, h))?;
+                    for y in 0..h {
+                        let r = img.row(y);
+                        let out = leftright.row_mut(y);
+                        out[0] = r[0];
+                        out[1] = if w > 1 { r[1] } else { r[0] };
+                        out[2] = if w > 1 { r[w - 2] } else { r[0] };
+                        out[3] = r[w - 1];
+                    }
+                    ModularData::I32(leftright)
+                }
+                ModularData::I16(img) => {
+                    let mut leftright = Image::<i16>::new((4, h))?;
+                    for y in 0..h {
+                        let r = img.row(y);
+                        let out = leftright.row_mut(y);
+                        out[0] = r[0];
+                        out[1] = if w > 1 { r[1] } else { r[0] };
+                        out[2] = if w > 1 { r[w - 2] } else { r[0] };
+                        out[3] = r[w - 1];
+                    }
+                    ModularData::I16(leftright)
+                }
+            };
             *self.leftright.try_write().unwrap() = Some(leftright);
         }
 
@@ -180,11 +304,7 @@ impl ModularBuffer {
     }
 
     pub fn make_buffer(&self, info: &ChannelInfo) -> Result<ModularChannel> {
-        Ok(ModularChannel {
-            data: Image::new(self.size)?,
-            shift: info.shift,
-            bit_depth: info.bit_depth,
-        })
+        ModularChannel::new_with_shift(self.size, self.is_16bit, info.shift, info.bit_depth)
     }
 
     pub fn ensure_buffer(&self, info: &ChannelInfo) -> Result<()> {

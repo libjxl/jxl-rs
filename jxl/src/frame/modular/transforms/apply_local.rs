@@ -53,10 +53,11 @@ impl LocalTransformBuffer<'_> {
         r
     }
 
-    fn allocate_if_needed(&mut self) -> Result<()> {
+    fn allocate_if_needed(&mut self, is_16bit: bool) -> Result<()> {
         if let LocalTransformBuffer::Placeholder(c) = self {
             *self = LocalTransformBuffer::Owned(ModularChannel::new_with_shift(
                 c.size,
+                is_16bit,
                 c.shift,
                 c.bit_depth,
             )?);
@@ -201,9 +202,15 @@ pub fn meta_apply_local_transforms<'a, 'b>(
 
     debug!(?channels, ?buffer_storage, "RCT-adjusted channels");
 
+    let is_16bit = buffer_storage.iter().find_map(|b| match b {
+        LocalTransformBuffer::Borrowed(m) => Some(m.data.is_16bit()),
+        LocalTransformBuffer::Owned(m) => Some(m.data.is_16bit()),
+        _ => None,
+    }).unwrap_or(false);
+
     // Allocate all the coded channels if they aren't yet.
     for (buf, _) in channels.iter() {
-        buffer_storage[*buf].allocate_if_needed()?;
+        buffer_storage[*buf].allocate_if_needed(is_16bit)?;
     }
 
     debug!(?channels, ?buffer_storage, "allocated buffers");
@@ -231,6 +238,11 @@ impl TransformStep {
     // Marks that one dependency of this transform is ready, and potentially runs the transform,
     // returning the new buffers that are now ready.
     pub fn local_apply(&self, buffers: &mut [LocalTransformBuffer]) -> Result<()> {
+        let is_16bit = buffers.iter().find_map(|b| match b {
+            LocalTransformBuffer::Borrowed(m) => Some(m.data.is_16bit()),
+            LocalTransformBuffer::Owned(m) => Some(m.data.is_16bit()),
+            _ => None,
+        }).unwrap_or(false);
         match self {
             TransformStep::Rct {
                 buf_in,
@@ -271,7 +283,7 @@ impl TransformStep {
                         buffers[*b].channel_info().size,
                         buffers[*buf_in].channel_info().size
                     );
-                    buffers[*b].allocate_if_needed()?;
+                    buffers[*b].allocate_if_needed(is_16bit)?;
                 }
                 let mut img_in = buffers[*buf_in].take();
                 let mut img_pal = buffers[*buf_pal].take();
@@ -295,7 +307,7 @@ impl TransformStep {
             TransformStep::HSqueeze {
                 buf_in, buf_out, ..
             } => {
-                buffers[*buf_out].allocate_if_needed()?;
+                buffers[*buf_out].allocate_if_needed(is_16bit)?;
                 let mut out_buf = buffers[*buf_out].take();
                 let mut in_avg = buffers[buf_in[0]].take();
                 let mut in_res = buffers[buf_in[1]].take();
@@ -304,14 +316,16 @@ impl TransformStep {
                     let in_avg = &in_avg.borrow_mut().data;
                     let in_res = &in_res.borrow_mut().data;
                     super::squeeze::do_hsqueeze_step(
-                        &in_avg.get_rect(Rect {
+                        in_avg,
+                        Rect {
                             size: in_avg.size(),
                             origin: (0, 0),
-                        }),
-                        &in_res.get_rect(Rect {
+                        },
+                        in_res,
+                        Rect {
                             size: in_res.size(),
                             origin: (0, 0),
-                        }),
+                        },
                         None,
                         None,
                         &mut bufs,
@@ -322,7 +336,7 @@ impl TransformStep {
             TransformStep::VSqueeze {
                 buf_in, buf_out, ..
             } => {
-                buffers[*buf_out].allocate_if_needed()?;
+                buffers[*buf_out].allocate_if_needed(is_16bit)?;
                 let mut out_buf = buffers[*buf_out].take();
                 let mut in_avg = buffers[buf_in[0]].take();
                 let mut in_res = buffers[buf_in[1]].take();
@@ -331,14 +345,16 @@ impl TransformStep {
                     let in_avg = &in_avg.borrow_mut().data;
                     let in_res = &in_res.borrow_mut().data;
                     super::squeeze::do_vsqueeze_step(
-                        &in_avg.get_rect(Rect {
+                        in_avg,
+                        Rect {
                             size: in_avg.size(),
                             origin: (0, 0),
-                        }),
-                        &in_res.get_rect(Rect {
+                        },
+                        in_res,
+                        Rect {
                             size: in_res.size(),
                             origin: (0, 0),
-                        }),
+                        },
                         None,
                         None,
                         &mut bufs,

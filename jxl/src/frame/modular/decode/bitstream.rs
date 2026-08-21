@@ -98,23 +98,49 @@ fn decode_fast_lossless(
             }
         };
 
-        let mut last = 0i32;
-        for p in buf.row_mut(0) {
-            // clamped gradient == left on the first row.
-            *p = last.wrapping_add(decode());
-            last = *p;
-        }
+        use crate::frame::modular::buffers::ModularData;
+        match buf {
+            ModularData::I32(buf) => {
+                let mut last = 0i32;
+                for p in buf.row_mut(0) {
+                    // clamped gradient == left on the first row.
+                    *p = last.wrapping_add(decode());
+                    last = *p;
+                }
 
-        for y in 1..h {
-            let [row, row_top] = buf.distinct_rows_mut([y, y - 1]);
+                for y in 1..h {
+                    let [row, row_top] = buf.distinct_rows_mut([y, y - 1]);
 
-            let mut left = row_top[0];
-            let mut topleft = left;
-            for (top, p) in row_top.iter().copied().zip(row.iter_mut()) {
-                let pred = clamped_gradient(left as i64, top as i64, topleft as i64);
-                *p = (pred + decode() as i64) as i32;
-                left = *p;
-                topleft = top;
+                    let mut left = row_top[0];
+                    let mut topleft = left;
+                    for (top, p) in row_top.iter().copied().zip(row.iter_mut()) {
+                        let pred = clamped_gradient(left as i64, top as i64, topleft as i64);
+                        *p = (pred + decode() as i64) as i32;
+                        left = *p;
+                        topleft = top;
+                    }
+                }
+            }
+            ModularData::I16(buf) => {
+                let mut last = 0i32;
+                for p in buf.row_mut(0) {
+                    *p = last.wrapping_add(decode()) as i16;
+                    last = *p as i32;
+                }
+
+                for y in 1..h {
+                    let [row, row_top] = buf.distinct_rows_mut([y, y - 1]);
+
+                    let mut left = row_top[0] as i32;
+                    let mut topleft = left;
+                    for (top, p) in row_top.iter().copied().zip(row.iter_mut()) {
+                        let top = top as i32;
+                        let pred = clamped_gradient(left as i64, top as i64, topleft as i64);
+                        *p = (pred + decode() as i64) as i16;
+                        left = *p as i32;
+                        topleft = top;
+                    }
+                }
             }
         }
 

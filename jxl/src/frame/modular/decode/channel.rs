@@ -37,36 +37,23 @@ pub(super) trait ModularChannelDecoder {
 
     #[allow(clippy::too_many_arguments)]
     #[inline(never)]
-    fn decode_row(
+    fn decode_row_slices(
         &mut self,
-        buffers: &mut [&mut ModularChannel],
-        chan: usize,
+        row: &mut [i32],
+        row_top: &[i32],
+        row_toptop: &[i32],
         histograms: &Histograms,
         reader: &mut SymbolReader,
         br: &mut BitReader,
         y: usize,
         xsize: usize,
     ) {
-        self.init_row(buffers, chan, y);
-        let (row, row_top, row_toptop) = match y {
-            0 => (buffers[chan].data.row_mut(0), &mut [][..], &mut [][..]),
-            1 => {
-                let [row, row_top] = buffers[chan].data.distinct_rows_mut([1, 0]);
-                (row, row_top, &mut [][..])
-            }
-            _ => {
-                let [row, row_top, row_toptop] =
-                    buffers[chan].data.distinct_rows_mut([y, y - 1, y - 2]);
-                (row, row_top, row_toptop)
-            }
-        };
-
         let do_decode_cold = {
             #[inline(never)]
             |decoder: &mut Self,
              row: &mut [i32],
-             row_top: &mut [i32],
-             row_toptop: &mut [i32],
+             row_top: &[i32],
+             row_toptop: &[i32],
              pos: (usize, usize),
              reader: &mut SymbolReader,
              br: &mut BitReader|
@@ -101,6 +88,78 @@ pub(super) trait ModularChannelDecoder {
         }
         for x in x1..xsize {
             do_decode_cold(self, row, row_top, row_toptop, (x, y), reader, br);
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    #[inline(never)]
+    fn decode_row(
+        &mut self,
+        buffers: &mut [&mut ModularChannel],
+        chan: usize,
+        histograms: &Histograms,
+        reader: &mut SymbolReader,
+        br: &mut BitReader,
+        y: usize,
+        xsize: usize,
+    ) {
+        self.init_row(buffers, chan, y);
+        let (row, row_top, row_toptop) = match y {
+            0 => (buffers[chan].data.as_i32_mut().row_mut(0), &[][..], &[][..]),
+            1 => {
+                let [row, row_top] = buffers[chan].data.as_i32_mut().distinct_rows_mut([1, 0]);
+                (row, &*row_top, &[][..])
+            }
+            _ => {
+                let [row, row_top, row_toptop] =
+                    buffers[chan].data.as_i32_mut().distinct_rows_mut([y, y - 1, y - 2]);
+                (row, &*row_top, &*row_toptop)
+            }
+        };
+        self.decode_row_slices(row, row_top, row_toptop, histograms, reader, br, y, xsize);
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    #[inline(never)]
+    fn decode_row_i16(
+        &mut self,
+        buffers: &mut [&mut ModularChannel],
+        chan: usize,
+        histograms: &Histograms,
+        reader: &mut SymbolReader,
+        br: &mut BitReader,
+        y: usize,
+        xsize: usize,
+        scratch: &mut [Vec<i32>; 3],
+    ) {
+        self.init_row(buffers, chan, y);
+        let idx_curr = y % 3;
+        let idx_top = (y + 2) % 3;
+        let idx_toptop = (y + 1) % 3;
+
+        let (row, row_top, row_toptop): (&mut [i32], &[i32], &[i32]) = match y {
+            0 => (&mut scratch[0][..], &[][..], &[][..]),
+            1 => {
+                let (s0, rest) = scratch.split_at_mut(1);
+                (&mut rest[0][..], &s0[0][..], &[][..])
+            }
+            _ => {
+                let (s0, rest) = scratch.split_at_mut(1);
+                let (s1, s2) = rest.split_at_mut(1);
+                match (idx_curr, idx_top, idx_toptop) {
+                    (0, 2, 1) => (&mut s0[0][..], &s2[0][..], &s1[0][..]),
+                    (1, 0, 2) => (&mut s1[0][..], &s0[0][..], &s2[0][..]),
+                    (2, 1, 0) => (&mut s2[0][..], &s1[0][..], &s0[0][..]),
+                    _ => unreachable!(),
+                }
+            }
+        };
+
+        self.decode_row_slices(row, row_top, row_toptop, histograms, reader, br, y, xsize);
+
+        let out_row = buffers[chan].data.as_i16_mut().row_mut(y);
+        for (dst, &src) in out_row.iter_mut().zip(scratch[idx_curr].iter()) {
+            *dst = src as i16;
         }
     }
 }
@@ -156,29 +215,18 @@ impl<'a> ModularChannelDecoder for FullTree<'a> {
         unreachable!()
     }
 
-    fn decode_row(
+    fn decode_row_slices(
         &mut self,
-        buffers: &mut [&mut ModularChannel],
-        chan: usize,
+        row: &mut [i32],
+        row_top: &[i32],
+        row_toptop: &[i32],
         histograms: &Histograms,
         reader: &mut SymbolReader,
         br: &mut BitReader,
         y: usize,
         xsize: usize,
     ) {
-        self.init_row(buffers, chan, y);
-        let (row, row_top, row_toptop) = match y {
-            0 => (buffers[chan].data.row_mut(0), &mut [][..], &mut [][..]),
-            1 => {
-                let [row, row_top] = buffers[chan].data.distinct_rows_mut([1, 0]);
-                (row, row_top, &mut [][..])
-            }
-            _ => {
-                let [row, row_top, row_toptop] =
-                    buffers[chan].data.distinct_rows_mut([y, y - 1, y - 2]);
-                (row, row_top, row_toptop)
-            }
-        };
+        let _ = (row_top, row_toptop);
         for x in 0..xsize {
             let prediction_data = PredictionData::get_rows(row, row_top, row_toptop, x, y);
             let prediction_result = predict(
@@ -209,8 +257,15 @@ fn decode_modular_channel_impl(
 ) -> Result<()> {
     let size = buffers[chan].data.size();
     let xsize = size.0;
-    for y in 0..size.1 {
-        t.decode_row(buffers, chan, histo, reader, br, y, xsize);
+    if buffers[chan].data.is_16bit() {
+        let mut scratch = [vec![0i32; xsize], vec![0i32; xsize], vec![0i32; xsize]];
+        for y in 0..size.1 {
+            t.decode_row_i16(buffers, chan, histo, reader, br, y, xsize, &mut scratch);
+        }
+    } else {
+        for y in 0..size.1 {
+            t.decode_row(buffers, chan, histo, reader, br, y, xsize);
+        }
     }
     Ok(())
 }

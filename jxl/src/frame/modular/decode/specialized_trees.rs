@@ -384,6 +384,29 @@ impl ModularChannelDecoder for NoTreeZero {
     ) -> i32 {
         unreachable!()
     }
+
+    #[inline(never)]
+    fn decode_row_slices(
+        &mut self,
+        row: &mut [i32],
+        _row_top: &[i32],
+        _row_toptop: &[i32],
+        histograms: &Histograms,
+        reader: &mut SymbolReader,
+        br: &mut BitReader,
+        _y: usize,
+        xsize: usize,
+    ) {
+        debug_assert_eq!(row.len(), xsize);
+        if let Some(sym) = self.single_value {
+            row.fill(sym);
+        } else {
+            for r in row.iter_mut() {
+                *r = reader.read_signed_clustered_inline(histograms, br, self.clustered_ctx);
+            }
+        }
+    }
+
     #[inline(never)]
     fn decode_row(
         &mut self,
@@ -395,13 +418,22 @@ impl ModularChannelDecoder for NoTreeZero {
         y: usize,
         xsize: usize,
     ) {
-        let row = buffers[chan].data.row_mut(y);
-        debug_assert_eq!(row.len(), xsize);
-        if let Some(sym) = self.single_value {
-            row.fill(sym);
-        } else {
-            for r in row.iter_mut() {
-                *r = reader.read_signed_clustered_inline(histograms, br, self.clustered_ctx);
+        use crate::frame::modular::buffers::ModularData;
+        match &mut buffers[chan].data {
+            ModularData::I32(img) => {
+                let row = img.row_mut(y);
+                self.decode_row_slices(row, &[], &[], histograms, reader, br, y, xsize);
+            }
+            ModularData::I16(img) => {
+                let row = img.row_mut(y);
+                debug_assert_eq!(row.len(), xsize);
+                if let Some(sym) = self.single_value {
+                    row.fill(sym as i16);
+                } else {
+                    for r in row.iter_mut() {
+                        *r = reader.read_signed_clustered_inline(histograms, br, self.clustered_ctx) as i16;
+                    }
+                }
             }
         }
     }

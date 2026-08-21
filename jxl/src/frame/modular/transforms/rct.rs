@@ -5,7 +5,7 @@
 
 use jxl_simd::{I32SimdVec, ScalarDescriptor, SimdDescriptor, shr, simd_function};
 
-use crate::frame::modular::ModularChannel;
+use crate::frame::modular::buffers::{ModularChannel, ModularData};
 use crate::frame::modular::transforms::{RctOp, RctPermutation};
 use crate::image::Image;
 use crate::util::tracing_wrappers::*;
@@ -206,7 +206,15 @@ pub fn do_rct_step(buffers: &mut [&mut ModularChannel], op: RctOp, perm: RctPerm
     };
 
     if op != RctOp::Noop {
-        rct_loop(&mut r.data, &mut g.data, &mut b.data, op);
+        match (&mut r.data, &mut g.data, &mut b.data) {
+            (ModularData::I32(r), ModularData::I32(g), ModularData::I32(b)) => {
+                rct_loop(r, g, b, op);
+            }
+            (ModularData::I16(r), ModularData::I16(g), ModularData::I16(b)) => {
+                rct_loop_i16(r, g, b, op);
+            }
+            _ => unreachable!("mismatched buffer types in RCT"),
+        }
     }
 
     // Note: Gbr and Brg use the *inverse* permutation compared to libjxl, because we *first* write

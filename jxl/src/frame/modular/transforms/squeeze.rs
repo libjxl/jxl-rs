@@ -8,9 +8,10 @@ use jxl_simd::{
 };
 
 use crate::error::{Error, Result};
-use crate::frame::modular::{ChannelInfo, ModularChannel};
+use crate::frame::modular::buffers::{ModularChannel, ModularData};
+use crate::frame::modular::ChannelInfo;
 use crate::headers::modular::SqueezeParams;
-use crate::image::{Image, ImageRect};
+use crate::image::{Image, ImageRect, Rect};
 use crate::util::tracing_wrappers::*;
 
 #[instrument(level = "trace", err)]
@@ -529,30 +530,53 @@ simd_function!(
 
 #[inline(always)]
 pub fn do_hsqueeze_step(
-    in_avg: &ImageRect<'_, i32>,
-    in_res: &ImageRect<'_, i32>,
-    in_next_avg: Option<&Image<i32>>,
-    out_prev: Option<&Image<i32>>,
+    in_avg: &ModularData,
+    avg_rect: Rect,
+    in_res: &ModularData,
+    res_rect: Rect,
+    in_next_avg: Option<&ModularData>,
+    out_prev: Option<&ModularData>,
     buffers: &mut [&mut ModularChannel],
 ) {
-    trace!("hsqueeze step in_avg: {in_avg:?} in_res: {in_res:?} in_next_avg: {in_next_avg:?}");
+    trace!("hsqueeze step avg_rect: {avg_rect:?} res_rect: {res_rect:?}");
     let out = buffers.first_mut().unwrap();
-    // Shortcut: guarantees that row is at least 1px in the main loop
     if out.data.size().0 == 0 || out.data.size().1 == 0 {
         return;
     }
 
-    let w = in_res.size().0;
-    // Another shortcut: when output row has just 1px
-    if w == 0 {
-        let out_h = out.data.size().1;
-        for y in 0..out_h {
-            out.data.row_mut(y)[0] = in_avg.row(y)[0];
+    match (in_avg, in_res, &mut out.data) {
+        (ModularData::I32(in_avg), ModularData::I32(in_res), ModularData::I32(out)) => {
+            let in_avg_rect = in_avg.get_rect(avg_rect);
+            let in_res_rect = in_res.get_rect(res_rect);
+            let in_next_avg = in_next_avg.map(|b| b.as_i32());
+            let out_prev = out_prev.map(|b| b.as_i32());
+            let w = in_res_rect.size().0;
+            if w == 0 {
+                let out_h = out.size().1;
+                for y in 0..out_h {
+                    out.row_mut(y)[0] = in_avg_rect.row(y)[0];
+                }
+                return;
+            }
+            hsqueeze(&in_avg_rect, &in_res_rect, in_next_avg, out_prev, out);
         }
-        return;
+        (ModularData::I16(in_avg), ModularData::I16(in_res), ModularData::I16(out)) => {
+            let in_avg_rect = in_avg.get_rect(avg_rect);
+            let in_res_rect = in_res.get_rect(res_rect);
+            let in_next_avg = in_next_avg.map(|b| b.as_i16());
+            let out_prev = out_prev.map(|b| b.as_i16());
+            let w = in_res_rect.size().0;
+            if w == 0 {
+                let out_h = out.size().1;
+                for y in 0..out_h {
+                    out.row_mut(y)[0] = in_avg_rect.row(y)[0];
+                }
+                return;
+            }
+            hsqueeze_i16(&in_avg_rect, &in_res_rect, in_next_avg, out_prev, out);
+        }
+        _ => unreachable!("mismatched buffer types in hsqueeze"),
     }
-    // Otherwise: 2 or more in in row
-    hsqueeze(in_avg, in_res, in_next_avg, out_prev, &mut out.data);
 }
 
 #[inline(always)]
@@ -823,30 +847,48 @@ simd_function!(
 
 #[inline(always)]
 pub fn do_vsqueeze_step(
-    in_avg: &ImageRect<'_, i32>,
-    in_res: &ImageRect<'_, i32>,
-    in_next_avg: Option<&Image<i32>>,
-    out_prev: Option<&Image<i32>>,
+    in_avg: &ModularData,
+    avg_rect: Rect,
+    in_res: &ModularData,
+    res_rect: Rect,
+    in_next_avg: Option<&ModularData>,
+    out_prev: Option<&ModularData>,
     buffers: &mut [&mut ModularChannel],
 ) {
-    trace!("vsqueeze step in_avg: {in_avg:?} in_res: {in_res:?} in_next_avg: {in_next_avg:?}");
+    trace!("vsqueeze step avg_rect: {avg_rect:?} res_rect: {res_rect:?}");
     let out = &mut buffers.first_mut().unwrap().data;
-    // Shortcut: guarantees that there at least 1 output row
     if out.size().1 == 0 || out.size().0 == 0 {
         return;
     }
-    // Another shortcut: when there is one output row
-    if in_res.size().1 == 0 {
-        out.row_mut(0).copy_from_slice(in_avg.row(0));
-        return;
-    }
-    // Otherwise: 2 or more rows
 
-    vsqueeze(in_avg, in_res, in_next_avg, out_prev, out);
+    match (in_avg, in_res, out) {
+        (ModularData::I32(in_avg), ModularData::I32(in_res), ModularData::I32(out)) => {
+            let in_avg_rect = in_avg.get_rect(avg_rect);
+            let in_res_rect = in_res.get_rect(res_rect);
+            let in_next_avg = in_next_avg.map(|b| b.as_i32());
+            let out_prev = out_prev.map(|b| b.as_i32());
+            if in_res_rect.size().1 == 0 {
+                out.row_mut(0).copy_from_slice(in_avg_rect.row(0));
+                return;
+            }
+            vsqueeze(&in_avg_rect, &in_res_rect, in_next_avg, out_prev, out);
+        }
+        (ModularData::I16(in_avg), ModularData::I16(in_res), ModularData::I16(out)) => {
+            let in_avg_rect = in_avg.get_rect(avg_rect);
+            let in_res_rect = in_res.get_rect(res_rect);
+            let in_next_avg = in_next_avg.map(|b| b.as_i16());
+            let out_prev = out_prev.map(|b| b.as_i16());
+            if in_res_rect.size().1 == 0 {
+                out.row_mut(0).copy_from_slice(in_avg_rect.row(0));
+                return;
+            }
+            vsqueeze_i16(&in_avg_rect, &in_res_rect, in_next_avg, out_prev, out);
+        }
+        _ => unreachable!("mismatched buffer types in vsqueeze"),
+    }
 }
 
 use super::step::TiledChannelView;
-use crate::image::Rect;
 
 #[allow(clippy::excessive_precision)]
 #[inline(always)]

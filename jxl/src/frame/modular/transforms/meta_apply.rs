@@ -306,6 +306,7 @@ pub fn make_grids(
     section_buffer_indices: &[Vec<usize>],
     buffer_info: &mut Vec<ModularBufferInfo>,
     color_channels: usize,
+    is_16bit: bool,
 ) -> Vec<TransformStepChunk> {
     // Initialize grid sizes, starting from coded channels.
     for i in section_buffer_indices[1].iter() {
@@ -384,6 +385,7 @@ pub fn make_grids(
                 ModularBuffer::new(
                     g.get_grid_rect(frame_header, g.grid_kind, (x as usize, y as usize))
                         .size,
+                    is_16bit,
                 )
             })
             .collect();

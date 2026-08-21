@@ -12,7 +12,7 @@ use super::coeff_order::decode_coeff_orders;
 use super::color_correlation_map::ColorCorrelationParams;
 use super::group::decode_vardct_group;
 use super::modular::{
-    FullModularImage, ModularStreamId, Tree, decode_hf_metadata, decode_vardct_lf,
+    FullModularImage, ModularData, ModularStreamId, Tree, decode_hf_metadata, decode_vardct_lf,
 };
 use super::quant_weights::DequantMatrices;
 use super::quantizer::{LfQuantFactors, QuantizerParams};
@@ -800,11 +800,18 @@ impl Frame {
 
         self.decode_and_render_varct_and_noise(group, passes, buffer_splitter, force_render)?;
 
-        let pass_to_pipeline = |chan, group, complete, image: Image<i32>| {
+        let pass_to_pipeline = |chan, group, complete, image: ModularData| {
             pipeline!(
                 self,
                 p,
-                p.set_buffer_for_group(chan, group, complete, image, &*buffer_splitter)?
+                match image {
+                    ModularData::I32(img) => {
+                        p.set_buffer_for_group(chan, group, complete, img, &*buffer_splitter)?
+                    }
+                    ModularData::I16(img) => {
+                        p.set_buffer_for_group(chan, group, complete, img, &*buffer_splitter)?
+                    }
+                }
             );
             Ok(())
         };

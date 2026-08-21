@@ -59,17 +59,16 @@ pub(super) fn precompute_references(
         {
             continue;
         }
-        let ref_chan_row = buffers[j].data.row(y);
-        let ref_chan_prev = buffers[j].data.row(y.saturating_sub(1));
+        let ref_chan = &buffers[j].data;
         for x in 0..buffers[chan].data.size().0 {
             let ref_row = references.row_mut(x);
-            let v = ref_chan_row[x];
+            let v = ref_chan.get_pixel_i32(x, y);
             ref_row[offset] = v.wrapping_abs();
             ref_row[offset + 1] = v;
-            let vleft = if x > 0 { ref_chan_row[x - 1] } else { 0 };
-            let vtop = if y > 0 { ref_chan_prev[x] } else { vleft };
+            let vleft = if x > 0 { ref_chan.get_pixel_i32(x - 1, y) } else { 0 };
+            let vtop = if y > 0 { ref_chan.get_pixel_i32(x, y - 1) } else { vleft };
             let vtopleft = if x > 0 && y > 0 {
-                ref_chan_prev[x - 1]
+                ref_chan.get_pixel_i32(x - 1, y - 1)
             } else {
                 vleft
             };
