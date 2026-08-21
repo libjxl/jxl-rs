@@ -198,7 +198,10 @@ pub fn decode_frames<In: JxlBitstreamInputExt>(
     let current_format = decoder_with_image_info.current_pixel_format().clone();
     let new_format = JxlPixelFormat {
         color_type: if interleave_alpha {
-            current_format.color_type.add_alpha()
+            current_format
+                .color_type
+                .add_alpha()
+                .ok_or_else(|| eyre!("Output color type does not support interleaved alpha"))?
         } else {
             current_format.color_type
         },

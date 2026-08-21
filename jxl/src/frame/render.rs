@@ -848,13 +848,35 @@ impl Frame {
                 && alpha_in_color.is_some()
                 && !source_alpha_associated;
 
-            let color_source_channels: &[usize] =
+            // For CMYK output, interleave the Black extra channel as the
+            // fourth channel. This requires a color image with a Black extra
+            // channel.
+            let black_in_color = if pixel_format.color_type == JxlColorType::Cmyk {
+                let black_channel = decoder_state
+                    .file_header
+                    .image_metadata
+                    .extra_channel_info
+                    .iter()
+                    .position(|info| info.ec_type == ExtraChannel::Black);
+                match (num_color_channels, black_channel) {
+                    (3, Some(index)) => Some(index + 3),
+                    _ => return Err(Error::NotCmyk),
+                }
+            } else {
+                None
+            };
+            let cmyk_channels;
+            let color_source_channels: &[usize] = if let Some(black) = black_in_color {
+                cmyk_channels = [0, 1, 2, black];
+                &cmyk_channels
+            } else {
                 match (pixel_format.color_type.is_grayscale(), alpha_in_color) {
                     (true, None) => &[0],
                     (true, Some(c)) => &[0, c],
                     (false, None) => &[0, 1, 2],
                     (false, Some(c)) => &[0, 1, 2, c],
-                };
+                }
+            };
             if let Some(df) = &pixel_format.color_data_format {
                 // Add premultiply stage if needed (before conversion to output format)
                 if should_premultiply && let Some(alpha_channel) = alpha_in_color {
