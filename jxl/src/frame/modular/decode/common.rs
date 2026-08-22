@@ -59,22 +59,41 @@ pub(super) fn precompute_references(
         {
             continue;
         }
-        let ref_chan = &buffers[j].data;
-        for x in 0..buffers[chan].data.size().0 {
-            let ref_row = references.row_mut(x);
-            let v = ref_chan.get_pixel_i32(x, y);
-            ref_row[offset] = v.wrapping_abs();
-            ref_row[offset + 1] = v;
-            let vleft = if x > 0 { ref_chan.get_pixel_i32(x - 1, y) } else { 0 };
-            let vtop = if y > 0 { ref_chan.get_pixel_i32(x, y - 1) } else { vleft };
-            let vtopleft = if x > 0 && y > 0 {
-                ref_chan.get_pixel_i32(x - 1, y - 1)
-            } else {
-                vleft
-            };
-            let vpredicted = clamped_gradient(vleft as i64, vtop as i64, vtopleft as i64);
-            ref_row[offset + 2] = (v as i64 - vpredicted).wrapping_abs() as i32;
-            ref_row[offset + 3] = (v as i64 - vpredicted) as i32;
+        let xsize = buffers[chan].data.size().0;
+        use crate::frame::modular::buffers::ModularData;
+        match &buffers[j].data {
+            ModularData::I32(ref_chan) => {
+                let row = ref_chan.row(y);
+                let row_top = if y > 0 { ref_chan.row(y - 1) } else { row };
+                for x in 0..xsize {
+                    let ref_row = references.row_mut(x);
+                    let v = row[x];
+                    ref_row[offset] = v.wrapping_abs();
+                    ref_row[offset + 1] = v;
+                    let vleft = if x > 0 { row[x - 1] } else { 0 };
+                    let vtop = if y > 0 { row_top[x] } else { vleft };
+                    let vtopleft = if x > 0 && y > 0 { row_top[x - 1] } else { vleft };
+                    let vpredicted = clamped_gradient(vleft as i64, vtop as i64, vtopleft as i64);
+                    ref_row[offset + 2] = (v as i64 - vpredicted).wrapping_abs() as i32;
+                    ref_row[offset + 3] = (v as i64 - vpredicted) as i32;
+                }
+            }
+            ModularData::I16(ref_chan) => {
+                let row = ref_chan.row(y);
+                let row_top = if y > 0 { ref_chan.row(y - 1) } else { row };
+                for x in 0..xsize {
+                    let ref_row = references.row_mut(x);
+                    let v = row[x] as i32;
+                    ref_row[offset] = v.wrapping_abs();
+                    ref_row[offset + 1] = v;
+                    let vleft = if x > 0 { row[x - 1] as i32 } else { 0 };
+                    let vtop = if y > 0 { row_top[x] as i32 } else { vleft };
+                    let vtopleft = if x > 0 && y > 0 { row_top[x - 1] as i32 } else { vleft };
+                    let vpredicted = clamped_gradient(vleft as i64, vtop as i64, vtopleft as i64);
+                    ref_row[offset + 2] = (v as i64 - vpredicted).wrapping_abs() as i32;
+                    ref_row[offset + 3] = (v as i64 - vpredicted) as i32;
+                }
+            }
         }
         offset += 4;
     }

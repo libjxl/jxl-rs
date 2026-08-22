@@ -513,6 +513,199 @@ fn hsqueeze_scalar_i16(
     }
 }
 
+#[inline(always)]
+fn hsqueeze_impl_i16<D: SimdDescriptor>(
+    d: D,
+    y_start: usize,
+    in_avg: &ImageRect<'_, i16>,
+    in_res: &ImageRect<'_, i16>,
+    in_next_avg: Option<&Image<i16>>,
+    out_prev: Option<&Image<i16>>,
+    out: &mut Image<i16>,
+) {
+    const {
+        assert!(D::I32Vec::LEN.is_power_of_two());
+        assert!(D::I32Vec::LEN <= 16);
+    }
+
+    let lanes = D::I32Vec::LEN;
+    assert_eq!(y_start % lanes, 0);
+
+    let (w, h) = in_res.size();
+    if lanes == 1 {
+        return hsqueeze_scalar_i16(y_start, in_avg, in_res, in_next_avg, out_prev, out);
+    }
+
+    let has_tail = out.size().0 & 1 == 1;
+    if has_tail {
+        debug_assert!(in_avg.size().0 == w + 1);
+        debug_assert!(out.size().0 == 2 * w + 1);
+    }
+
+    let mask = !(lanes - 1);
+    let y_limit = if w >= lanes { h & mask } else { y_start };
+
+    let mut buf = [0f32; 512];
+    for y in (y_start..y_limit).step_by(lanes) {
+        for dy in 0..lanes {
+            buf[dy] = f32::from_bits(in_avg.row(y + dy)[0] as u32);
+            buf[lanes + dy] = f32::from_bits(in_res.row(y + dy)[0] as u32);
+        }
+        let mut avg_first = D::F32Vec::load(d, &buf).bitcast_to_i32();
+        let mut res_first = D::F32Vec::load(d, &buf[lanes..]).bitcast_to_i32();
+
+        let mut prev_b = match out_prev {
+            None => avg_first,
+            Some(lr) => {
+                for (dy, out) in buf[..lanes].iter_mut().enumerate() {
+                    *out = f32::from_bits(lr.row(y + dy)[3] as u32);
+                }
+                D::F32Vec::load(d, &buf).bitcast_to_i32()
+            }
+        };
+
+        let remainder_start = ((w - 1) & mask) + 1;
+        let remainder_count = w - remainder_start;
+        for x in (1..remainder_start).step_by(lanes) {
+            let buf_arr = D::F32Vec::make_array_slice_mut(&mut buf);
+
+            for dy in 0..lanes {
+                let avg_row = &in_avg.row(y + dy)[x..][..lanes];
+                let res_row = &in_res.row(y + dy)[x..][..lanes];
+                let avg = D::I32Vec::load_from_i16(d, avg_row);
+                let res = D::I32Vec::load_from_i16(d, res_row);
+                avg.bitcast_to_f32().store_array(&mut buf_arr[2 * dy]);
+                res.bitcast_to_f32().store_array(&mut buf_arr[2 * dy + 1]);
+            }
+            D::F32Vec::transpose_square(d, buf_arr, 2);
+            D::F32Vec::transpose_square(d, &mut buf_arr[1..], 2);
+
+            for idx in 0..lanes {
+                let avg_next = D::F32Vec::load_array(d, &buf_arr[2 * idx]).bitcast_to_i32();
+                let res_next = D::F32Vec::load_array(d, &buf_arr[2 * idx + 1]).bitcast_to_i32();
+                let (a, b) = unsqueeze_impl(d, avg_first, res_first, avg_next, prev_b);
+                a.bitcast_to_f32().store_array(&mut buf_arr[2 * idx]);
+                b.bitcast_to_f32().store_array(&mut buf_arr[2 * idx + 1]);
+                avg_first = avg_next;
+                res_first = res_next;
+                prev_b = b;
+            }
+
+            D::F32Vec::transpose_square(d, buf_arr, 1);
+            D::F32Vec::transpose_square(d, &mut buf_arr[lanes..], 1);
+            for dy in 0..lanes {
+                let out_row = &mut out.row_mut(y + dy)[2 * x - 2..][..2 * lanes];
+                for (dx, out_val) in out_row.iter_mut().enumerate() {
+                    let group = dx / lanes;
+                    let group_x = dx % lanes;
+                    *out_val = buf[(dy + group * lanes) * lanes + group_x].to_bits() as i16;
+                }
+            }
+        }
+
+        let x = remainder_start;
+        let has_next_in_avg = in_avg.size().0 > w;
+        if remainder_count == 0 {
+            let avg_last = if has_tail || has_next_in_avg {
+                for (idx, out) in buf[..lanes].iter_mut().enumerate() {
+                    *out = f32::from_bits(in_avg.row(y + idx)[w] as u32);
+                }
+                D::F32Vec::load(d, &buf).bitcast_to_i32()
+            } else if let Some(lr) = in_next_avg {
+                for (idx, out) in buf[..lanes].iter_mut().enumerate() {
+                    *out = f32::from_bits(lr.row(y + idx)[0] as u32);
+                }
+                D::F32Vec::load(d, &buf).bitcast_to_i32()
+            } else {
+                avg_first
+            };
+
+            let buf_arr = D::F32Vec::make_array_slice_mut(&mut buf);
+            let (a, b) = unsqueeze_impl(d, avg_first, res_first, avg_last, prev_b);
+            a.bitcast_to_f32().store_array(&mut buf_arr[0]);
+            b.bitcast_to_f32().store_array(&mut buf_arr[1]);
+        } else {
+            for dy in 0..lanes {
+                let avg_row = in_avg.row(y + dy);
+                let res_row = in_res.row(y + dy);
+                for dx in 0..remainder_count {
+                    buf[dx + lanes * 2 * dy] = f32::from_bits(avg_row[x + dx] as u32);
+                    buf[dx + lanes * (2 * dy + 1)] = f32::from_bits(res_row[x + dx] as u32);
+                }
+
+                buf[remainder_count + lanes * 2 * dy] = if has_tail || has_next_in_avg {
+                    f32::from_bits(avg_row[w] as u32)
+                } else if let Some(lr) = in_next_avg {
+                    f32::from_bits(lr.row(y + dy)[0] as u32)
+                } else {
+                    buf[remainder_count - 1 + lanes * 2 * dy]
+                };
+            }
+
+            let buf_arr = D::F32Vec::make_array_slice_mut(&mut buf);
+            D::F32Vec::transpose_square(d, buf_arr, 2);
+            D::F32Vec::transpose_square(d, &mut buf_arr[1..], 2);
+
+            for idx in 0..=remainder_count {
+                let avg_next = D::F32Vec::load_array(d, &buf_arr[2 * idx]).bitcast_to_i32();
+                let res_next = D::F32Vec::load_array(d, &buf_arr[2 * idx + 1]).bitcast_to_i32();
+                let (a, b) = unsqueeze_impl(d, avg_first, res_first, avg_next, prev_b);
+                a.bitcast_to_f32().store_array(&mut buf_arr[2 * idx]);
+                b.bitcast_to_f32().store_array(&mut buf_arr[2 * idx + 1]);
+                avg_first = avg_next;
+                res_first = res_next;
+                prev_b = b;
+            }
+        }
+
+        let buf_arr = D::F32Vec::make_array_slice_mut(&mut buf);
+        D::F32Vec::transpose_square(d, buf_arr, 1);
+        D::F32Vec::transpose_square(d, &mut buf_arr[lanes..], 1);
+
+        let x_limit = 2 * (remainder_count + 1);
+        for dy in 0..lanes {
+            let out_row = &mut out.row_mut(y + dy)[2 * x - 2..];
+            for (dx, out_val) in out_row[..x_limit].iter_mut().enumerate() {
+                let group = dx / lanes;
+                let group_x = dx % lanes;
+                *out_val = buf[(dy + group * lanes) * lanes + group_x].to_bits() as i16;
+            }
+        }
+
+        if has_tail {
+            for dy in 0..lanes {
+                out.row_mut(y + dy)[2 * w] = in_avg.row(y + dy)[w];
+            }
+        }
+    }
+
+    let remainder_rows = h - y_limit;
+    if lanes > 8 && remainder_rows >= 8 && w >= 8 {
+        return hsqueeze_impl_i16(
+            d.maybe_downgrade_256bit(),
+            y_limit,
+            in_avg,
+            in_res,
+            in_next_avg,
+            out_prev,
+            out,
+        );
+    }
+    if lanes > 4 && remainder_rows >= 4 && w >= 4 {
+        return hsqueeze_impl_i16(
+            d.maybe_downgrade_128bit(),
+            y_limit,
+            in_avg,
+            in_res,
+            in_next_avg,
+            out_prev,
+            out,
+        );
+    }
+
+    hsqueeze_scalar_i16(y_limit, in_avg, in_res, in_next_avg, out_prev, out)
+}
+
 simd_function!(
     hsqueeze_i16,
     d: D,
@@ -523,8 +716,7 @@ simd_function!(
         out_prev: Option<&Image<i16>>,
         out: &mut Image<i16>,
     ) {
-        let _ = d;
-        hsqueeze_scalar_i16(0, in_avg, in_res, in_next_avg, out_prev, out)
+        hsqueeze_impl_i16(d, 0, in_avg, in_res, in_next_avg, out_prev, out)
     }
 );
 
@@ -830,6 +1022,120 @@ fn vsqueeze_scalar_i16(
     }
 }
 
+#[inline(always)]
+fn vsqueeze_impl_i16<D: SimdDescriptor>(
+    d: D,
+    x_start: usize,
+    in_avg: &ImageRect<'_, i16>,
+    in_res: &ImageRect<'_, i16>,
+    in_next_avg: Option<&Image<i16>>,
+    out_prev: Option<&Image<i16>>,
+    out: &mut Image<i16>,
+) {
+    const {
+        assert!(D::I32Vec::LEN.is_power_of_two());
+        assert!(D::I32Vec::LEN <= 16);
+    }
+
+    let lanes = D::I32Vec::LEN;
+    assert_eq!(x_start % lanes, 0);
+
+    let (w, h) = in_res.size();
+    if lanes == 1 {
+        return vsqueeze_scalar_i16(x_start, in_avg, in_res, in_next_avg, out_prev, out);
+    }
+
+    let has_tail = out.size().1 & 1 == 1;
+    let has_next_in_avg = in_avg.size().1 > h;
+    if has_tail {
+        debug_assert!(in_avg.size().1 == h + 1);
+        debug_assert!(out.size().1 == 2 * h + 1);
+    }
+
+    let mask = !(lanes - 1);
+    let x_limit = if w >= lanes { w & mask } else { x_start };
+
+    let prev_b_row = match out_prev {
+        None => in_avg.row(0),
+        Some(tb) => tb.row(3),
+    };
+
+    let mut temp_a = [0i32; 16];
+    let mut temp_b = [0i32; 16];
+    let mut temp_last = [0i32; 16];
+
+    for x in (x_start..x_limit).step_by(lanes) {
+        let mut prev_b = D::I32Vec::load_from_i16(d, &prev_b_row[x..]);
+        let mut avg_first = D::I32Vec::load_from_i16(d, &in_avg.row(0)[x..]);
+        let mut res_first = D::I32Vec::load_from_i16(d, &in_res.row(0)[x..]);
+        for y in 0..h - 1 {
+            let avg_next = D::I32Vec::load_from_i16(d, &in_avg.row(y + 1)[x..]);
+            let (a, b) = unsqueeze_impl(d, avg_first, res_first, avg_next, prev_b);
+            a.store(&mut temp_a[..lanes]);
+            b.store(&mut temp_b[..lanes]);
+            for (dst, &src) in out.row_mut(2 * y)[x..x + lanes].iter_mut().zip(&temp_a[..lanes]) {
+                *dst = src as i16;
+            }
+            for (dst, &src) in out.row_mut(2 * y + 1)[x..x + lanes].iter_mut().zip(&temp_b[..lanes]) {
+                *dst = src as i16;
+            }
+            prev_b = b;
+            avg_first = avg_next;
+            res_first = D::I32Vec::load_from_i16(d, &in_res.row(y + 1)[x..]);
+        }
+
+        let avg_last = if has_tail || has_next_in_avg {
+            D::I32Vec::load_from_i16(d, &in_avg.row(h)[x..])
+        } else if let Some(tb) = in_next_avg {
+            D::I32Vec::load_from_i16(d, &tb.row(0)[x..])
+        } else {
+            avg_first
+        };
+        let (a, b) = unsqueeze_impl(d, avg_first, res_first, avg_last, prev_b);
+        a.store(&mut temp_a[..lanes]);
+        b.store(&mut temp_b[..lanes]);
+        for (dst, &src) in out.row_mut(2 * h - 2)[x..x + lanes].iter_mut().zip(&temp_a[..lanes]) {
+            *dst = src as i16;
+        }
+        for (dst, &src) in out.row_mut(2 * h - 1)[x..x + lanes].iter_mut().zip(&temp_b[..lanes]) {
+            *dst = src as i16;
+        }
+
+        if has_tail {
+            avg_last.store(&mut temp_last[..lanes]);
+            for (dst, &src) in out.row_mut(2 * h)[x..x + lanes].iter_mut().zip(&temp_last[..lanes]) {
+                *dst = src as i16;
+            }
+        }
+    }
+
+    let remainder_cols = w - x_limit;
+    if lanes > 8 && remainder_cols >= 8 {
+        return vsqueeze_impl_i16(
+            d.maybe_downgrade_256bit(),
+            x_limit,
+            in_avg,
+            in_res,
+            in_next_avg,
+            out_prev,
+            out,
+        );
+    }
+    if lanes > 4 && remainder_cols >= 4 {
+        return vsqueeze_impl_i16(
+            d.maybe_downgrade_128bit(),
+            x_limit,
+            in_avg,
+            in_res,
+            in_next_avg,
+            out_prev,
+            out,
+        );
+    }
+
+    vsqueeze_scalar_i16(x_limit, in_avg, in_res, in_next_avg, out_prev, out)
+}
+
 simd_function!(
     vsqueeze_i16,
     d: D,
@@ -840,8 +1146,7 @@ simd_function!(
         out_prev: Option<&Image<i16>>,
         out: &mut Image<i16>,
     ) {
-        let _ = d;
-        vsqueeze_scalar_i16(0, in_avg, in_res, in_next_avg, out_prev, out)
+        vsqueeze_impl_i16(d, 0, in_avg, in_res, in_next_avg, out_prev, out)
     }
 );
 
@@ -1208,16 +1513,165 @@ fn smooth_2d_unsqueeze_simd_impl<D: SimdDescriptor>(
     }
 }
 
+#[inline(always)]
+fn smooth_2d_unsqueeze_i16_simd_impl<D: SimdDescriptor>(
+    d: D,
+    input: &TiledChannelView<'_>,
+    rect: Rect,
+    output: &mut Image<i16>,
+    (buffer, ibuf): &mut ([Vec<f32>; 5], Vec<i32>),
+) {
+    let (in_xs, in_ys) = (rect.size.0 / 2, rect.size.1 / 2);
+    let (col_offset, row_offset) = (rect.origin.0 / 2, rect.origin.1 / 2);
+    let lanes = D::I32Vec::LEN;
+    let (xs, ys) = output.size();
+
+    if in_xs == 0 || in_ys == 0 {
+        return;
+    }
+    init_buffers(buffer, ibuf, in_xs + 2 * lanes + 8, xs);
+
+    for (dy, buf) in buffer.iter_mut().enumerate().take(4) {
+        let yg = (row_offset + dy) as isize - 2;
+        input.load_row_to_scratch(yg, col_offset, in_xs + 4, ibuf);
+        make_float(d, ibuf, buf);
+    }
+
+    for iy_center in 0..ys.div_ceil(2) {
+        let yg = (row_offset + iy_center) as isize + 2;
+        input.load_row_to_scratch(yg, col_offset, in_xs + 4, ibuf);
+        make_float(d, ibuf, &mut buffer[4]);
+
+        let yout = 2 * iy_center;
+        if yout + 1 < ys {
+            let [output_row_0, output_row_1] = output.distinct_rows_mut([yout, yout + 1]);
+            let row_iters = buffer[0]
+                .windows(lanes + 4)
+                .zip(buffer[1].windows(lanes + 4))
+                .zip(buffer[2].windows(lanes + 4))
+                .zip(buffer[3].windows(lanes + 4))
+                .zip(buffer[4].windows(lanes + 4))
+                .step_by(lanes)
+                .zip(output_row_0.chunks_mut(2 * lanes))
+                .zip(output_row_1.chunks_mut(2 * lanes));
+            for ((((((r0, r1), r2), r3), r4), out0), out1) in row_iters {
+                let mut n = [D::F32Vec::zero(d); 25];
+                n[0] = D::F32Vec::load(d, r0);
+                n[1] = D::F32Vec::load(d, &r0[1..]);
+                n[2] = D::F32Vec::load(d, &r0[2..]);
+                n[3] = D::F32Vec::load(d, &r0[3..]);
+                n[4] = D::F32Vec::load(d, &r0[4..]);
+
+                n[5] = D::F32Vec::load(d, r1);
+                n[6] = D::F32Vec::load(d, &r1[1..]);
+                n[7] = D::F32Vec::load(d, &r1[2..]);
+                n[8] = D::F32Vec::load(d, &r1[3..]);
+                n[9] = D::F32Vec::load(d, &r1[4..]);
+
+                n[10] = D::F32Vec::load(d, r2);
+                n[11] = D::F32Vec::load(d, &r2[1..]);
+                n[12] = D::F32Vec::load(d, &r2[2..]);
+                n[13] = D::F32Vec::load(d, &r2[3..]);
+                n[14] = D::F32Vec::load(d, &r2[4..]);
+
+                n[15] = D::F32Vec::load(d, r3);
+                n[16] = D::F32Vec::load(d, &r3[1..]);
+                n[17] = D::F32Vec::load(d, &r3[2..]);
+                n[18] = D::F32Vec::load(d, &r3[3..]);
+                n[19] = D::F32Vec::load(d, &r3[4..]);
+
+                n[20] = D::F32Vec::load(d, r4);
+                n[21] = D::F32Vec::load(d, &r4[1..]);
+                n[22] = D::F32Vec::load(d, &r4[2..]);
+                n[23] = D::F32Vec::load(d, &r4[3..]);
+                n[24] = D::F32Vec::load(d, &r4[4..]);
+
+                let (out_0_0, out_0_1, out_1_0, out_1_1) = convolve_2d_simd(d, &n);
+
+                const { assert!(D::I32Vec::LEN <= 16) };
+                let mut temp_out_0 = [0i32; 32];
+                let mut temp_out_1 = [0i32; 32];
+                D::I32Vec::store_interleaved_2(out_0_0, out_0_1, &mut temp_out_0);
+                D::I32Vec::store_interleaved_2(out_1_0, out_1_1, &mut temp_out_1);
+                let len0 = out0.len();
+                for (dst, &src) in out0.iter_mut().zip(&temp_out_0[..len0]) {
+                    *dst = src as i16;
+                }
+                let len1 = out1.len();
+                for (dst, &src) in out1.iter_mut().zip(&temp_out_1[..len1]) {
+                    *dst = src as i16;
+                }
+            }
+        } else {
+            let output_row_0 = output.row_mut(yout);
+            let row_iters = buffer[0]
+                .windows(lanes + 4)
+                .zip(buffer[1].windows(lanes + 4))
+                .zip(buffer[2].windows(lanes + 4))
+                .zip(buffer[3].windows(lanes + 4))
+                .zip(buffer[4].windows(lanes + 4))
+                .step_by(lanes)
+                .zip(output_row_0.chunks_mut(2 * lanes));
+            for (((((r0, r1), r2), r3), r4), out0) in row_iters {
+                let mut n = [D::F32Vec::zero(d); 25];
+                n[0] = D::F32Vec::load(d, r0);
+                n[1] = D::F32Vec::load(d, &r0[1..]);
+                n[2] = D::F32Vec::load(d, &r0[2..]);
+                n[3] = D::F32Vec::load(d, &r0[3..]);
+                n[4] = D::F32Vec::load(d, &r0[4..]);
+
+                n[5] = D::F32Vec::load(d, r1);
+                n[6] = D::F32Vec::load(d, &r1[1..]);
+                n[7] = D::F32Vec::load(d, &r1[2..]);
+                n[8] = D::F32Vec::load(d, &r1[3..]);
+                n[9] = D::F32Vec::load(d, &r1[4..]);
+
+                n[10] = D::F32Vec::load(d, r2);
+                n[11] = D::F32Vec::load(d, &r2[1..]);
+                n[12] = D::F32Vec::load(d, &r2[2..]);
+                n[13] = D::F32Vec::load(d, &r2[3..]);
+                n[14] = D::F32Vec::load(d, &r2[4..]);
+
+                n[15] = D::F32Vec::load(d, r3);
+                n[16] = D::F32Vec::load(d, &r3[1..]);
+                n[17] = D::F32Vec::load(d, &r3[2..]);
+                n[18] = D::F32Vec::load(d, &r3[3..]);
+                n[19] = D::F32Vec::load(d, &r3[4..]);
+
+                n[20] = D::F32Vec::load(d, r4);
+                n[21] = D::F32Vec::load(d, &r4[1..]);
+                n[22] = D::F32Vec::load(d, &r4[2..]);
+                n[23] = D::F32Vec::load(d, &r4[3..]);
+                n[24] = D::F32Vec::load(d, &r4[4..]);
+
+                let (out_0_0, out_0_1, _, _) = convolve_2d_simd(d, &n);
+
+                const { assert!(D::I32Vec::LEN <= 16) };
+                let mut temp_out_0 = [0i32; 32];
+                D::I32Vec::store_interleaved_2(out_0_0, out_0_1, &mut temp_out_0);
+                let len0 = out0.len();
+                for (dst, &src) in out0.iter_mut().zip(&temp_out_0[..len0]) {
+                    *dst = src as i16;
+                }
+            }
+        }
+        buffer.rotate_left(1);
+    }
+}
+
 simd_function!(
     smooth_2d_unsqueeze,
     d: D,
     pub fn smooth_2d_unsqueeze_simd_dispatch(
         input: &TiledChannelView<'_>,
         rect: Rect,
-        output: &mut Image<i32>,
+        output: &mut ModularData,
         buffer: &mut ([Vec<f32>; 5], Vec<i32>)
     ) {
-        smooth_2d_unsqueeze_simd_impl(d, input, rect, output, buffer);
+        match output {
+            ModularData::I32(out) => smooth_2d_unsqueeze_simd_impl(d, input, rect, out, buffer),
+            ModularData::I16(out) => smooth_2d_unsqueeze_i16_simd_impl(d, input, rect, out, buffer),
+        }
     }
 );
 
@@ -1311,16 +1765,104 @@ fn smooth_h_unsqueeze_simd_impl<D: SimdDescriptor>(
     }
 }
 
+#[inline(always)]
+fn smooth_h_unsqueeze_i16_simd_impl<D: SimdDescriptor>(
+    d: D,
+    input: &TiledChannelView<'_>,
+    rect: Rect,
+    output: &mut Image<i16>,
+    (buffer, ibuf): &mut ([Vec<f32>; 5], Vec<i32>),
+) {
+    let (in_xs, in_ys) = (rect.size.0 / 2, rect.size.1);
+    let (col_offset, row_offset) = (rect.origin.0 / 2, rect.origin.1);
+    let lanes = D::I32Vec::LEN;
+    let (_, ys) = output.size();
+
+    if in_xs == 0 || in_ys == 0 {
+        return;
+    }
+    init_buffers(buffer, ibuf, in_xs + 2 * lanes + 8, 0);
+
+    for (dy, buf) in buffer.iter_mut().enumerate().take(4) {
+        let yg = (row_offset + dy) as isize - 2;
+        input.load_row_to_scratch(yg, col_offset, in_xs + 4, ibuf);
+        make_float(d, ibuf, buf);
+    }
+
+    for iy_center in 0..ys {
+        let yg = (row_offset + iy_center) as isize + 2;
+        input.load_row_to_scratch(yg, col_offset, in_xs + 4, ibuf);
+        make_float(d, ibuf, &mut buffer[4]);
+
+        let output_row = output.row_mut(iy_center);
+
+        let row_iters = buffer[0]
+            .windows(lanes + 4)
+            .zip(buffer[1].windows(lanes + 4))
+            .zip(buffer[2].windows(lanes + 4))
+            .zip(buffer[3].windows(lanes + 4))
+            .zip(buffer[4].windows(lanes + 4))
+            .step_by(lanes)
+            .zip(output_row.chunks_mut(2 * lanes));
+        for (((((r0, r1), r2), r3), r4), out) in row_iters {
+            let mut n = [D::F32Vec::zero(d); 25];
+            n[0] = D::F32Vec::load(d, r0);
+            n[1] = D::F32Vec::load(d, &r0[1..]);
+            n[2] = D::F32Vec::load(d, &r0[2..]);
+            n[3] = D::F32Vec::load(d, &r0[3..]);
+            n[4] = D::F32Vec::load(d, &r0[4..]);
+
+            n[5] = D::F32Vec::load(d, r1);
+            n[6] = D::F32Vec::load(d, &r1[1..]);
+            n[7] = D::F32Vec::load(d, &r1[2..]);
+            n[8] = D::F32Vec::load(d, &r1[3..]);
+            n[9] = D::F32Vec::load(d, &r1[4..]);
+
+            n[10] = D::F32Vec::load(d, r2);
+            n[11] = D::F32Vec::load(d, &r2[1..]);
+            n[12] = D::F32Vec::load(d, &r2[2..]);
+            n[13] = D::F32Vec::load(d, &r2[3..]);
+            n[14] = D::F32Vec::load(d, &r2[4..]);
+
+            n[15] = D::F32Vec::load(d, r3);
+            n[16] = D::F32Vec::load(d, &r3[1..]);
+            n[17] = D::F32Vec::load(d, &r3[2..]);
+            n[18] = D::F32Vec::load(d, &r3[3..]);
+            n[19] = D::F32Vec::load(d, &r3[4..]);
+
+            n[20] = D::F32Vec::load(d, r4);
+            n[21] = D::F32Vec::load(d, &r4[1..]);
+            n[22] = D::F32Vec::load(d, &r4[2..]);
+            n[23] = D::F32Vec::load(d, &r4[3..]);
+            n[24] = D::F32Vec::load(d, &r4[4..]);
+
+            let (out_even, out_odd) = convolve_1d_simd(d, &n);
+
+            const { assert!(D::I32Vec::LEN <= 16) };
+            let mut temp_out = [0i32; 32];
+            D::I32Vec::store_interleaved_2(out_even, out_odd, &mut temp_out);
+            let len = out.len();
+            for (dst, &src) in out.iter_mut().zip(&temp_out[..len]) {
+                *dst = src as i16;
+            }
+        }
+        buffer.rotate_left(1);
+    }
+}
+
 simd_function!(
     smooth_h_unsqueeze,
     d: D,
     pub fn smooth_h_unsqueeze_simd_dispatch(
         input: &TiledChannelView<'_>,
         rect: Rect,
-        output: &mut Image<i32>,
+        output: &mut ModularData,
         buffer: &mut ([Vec<f32>; 5], Vec<i32>)
     ) {
-        smooth_h_unsqueeze_simd_impl(d, input, rect, output, buffer);
+        match output {
+            ModularData::I32(out) => smooth_h_unsqueeze_simd_impl(d, input, rect, out, buffer),
+            ModularData::I16(out) => smooth_h_unsqueeze_i16_simd_impl(d, input, rect, out, buffer),
+        }
     }
 );
 
@@ -1425,16 +1967,165 @@ fn smooth_v_unsqueeze_simd_impl<D: SimdDescriptor>(
     }
 }
 
+#[inline(always)]
+fn smooth_v_unsqueeze_i16_simd_impl<D: SimdDescriptor>(
+    d: D,
+    input: &TiledChannelView<'_>,
+    rect: Rect,
+    output: &mut Image<i16>,
+    (buffer, ibuf): &mut ([Vec<f32>; 5], Vec<i32>),
+) {
+    let (in_xs, in_ys) = (rect.size.0, rect.size.1 / 2);
+    let (col_offset, row_offset) = (rect.origin.0, rect.origin.1 / 2);
+    let lanes = D::I32Vec::LEN;
+    let (xs, ys) = output.size();
+
+    if in_xs == 0 || in_ys == 0 {
+        return;
+    }
+    init_buffers(buffer, ibuf, in_xs + 2 * lanes + 8, xs);
+
+    for (dy, buf) in buffer.iter_mut().enumerate().take(4) {
+        let yg = (row_offset + dy) as isize - 2;
+        input.load_row_to_scratch(yg, col_offset, in_xs + 4, ibuf);
+        make_float(d, ibuf, buf);
+    }
+
+    for iy_center in 0..ys.div_ceil(2) {
+        let yg = (row_offset + iy_center) as isize + 2;
+        input.load_row_to_scratch(yg, col_offset, in_xs + 4, ibuf);
+        make_float(d, ibuf, &mut buffer[4]);
+
+        let yout = 2 * iy_center;
+        if yout + 1 < ys {
+            let [output_row_0, output_row_1] = output.distinct_rows_mut([yout, yout + 1]);
+            let row_iters = buffer[0]
+                .windows(lanes + 4)
+                .zip(buffer[1].windows(lanes + 4))
+                .zip(buffer[2].windows(lanes + 4))
+                .zip(buffer[3].windows(lanes + 4))
+                .zip(buffer[4].windows(lanes + 4))
+                .step_by(lanes)
+                .zip(output_row_0.chunks_mut(lanes))
+                .zip(output_row_1.chunks_mut(lanes));
+            for ((((((r0, r1), r2), r3), r4), out0), out1) in row_iters {
+                let mut n = [D::F32Vec::zero(d); 25];
+                n[0] = D::F32Vec::load(d, r0);
+                n[1] = D::F32Vec::load(d, r1);
+                n[2] = D::F32Vec::load(d, r2);
+                n[3] = D::F32Vec::load(d, r3);
+                n[4] = D::F32Vec::load(d, r4);
+
+                n[5] = D::F32Vec::load(d, &r0[1..]);
+                n[6] = D::F32Vec::load(d, &r1[1..]);
+                n[7] = D::F32Vec::load(d, &r2[1..]);
+                n[8] = D::F32Vec::load(d, &r3[1..]);
+                n[9] = D::F32Vec::load(d, &r4[1..]);
+
+                n[10] = D::F32Vec::load(d, &r0[2..]);
+                n[11] = D::F32Vec::load(d, &r1[2..]);
+                n[12] = D::F32Vec::load(d, &r2[2..]);
+                n[13] = D::F32Vec::load(d, &r3[2..]);
+                n[14] = D::F32Vec::load(d, &r4[2..]);
+
+                n[15] = D::F32Vec::load(d, &r0[3..]);
+                n[16] = D::F32Vec::load(d, &r1[3..]);
+                n[17] = D::F32Vec::load(d, &r2[3..]);
+                n[18] = D::F32Vec::load(d, &r3[3..]);
+                n[19] = D::F32Vec::load(d, &r4[3..]);
+
+                n[20] = D::F32Vec::load(d, &r0[4..]);
+                n[21] = D::F32Vec::load(d, &r1[4..]);
+                n[22] = D::F32Vec::load(d, &r2[4..]);
+                n[23] = D::F32Vec::load(d, &r3[4..]);
+                n[24] = D::F32Vec::load(d, &r4[4..]);
+
+                let (out_py0, out_py1) = convolve_1d_simd(d, &n);
+
+                const { assert!(D::I32Vec::LEN <= 16) };
+                let mut temp_out_0 = [0i32; 16];
+                let mut temp_out_1 = [0i32; 16];
+                out_py0.store(&mut temp_out_0);
+                out_py1.store(&mut temp_out_1);
+                let len0 = out0.len();
+                for (dst, &src) in out0.iter_mut().zip(&temp_out_0[..len0]) {
+                    *dst = src as i16;
+                }
+                let len1 = out1.len();
+                for (dst, &src) in out1.iter_mut().zip(&temp_out_1[..len1]) {
+                    *dst = src as i16;
+                }
+            }
+        } else {
+            let output_row_0 = output.row_mut(yout);
+            let row_iters = buffer[0]
+                .windows(lanes + 4)
+                .zip(buffer[1].windows(lanes + 4))
+                .zip(buffer[2].windows(lanes + 4))
+                .zip(buffer[3].windows(lanes + 4))
+                .zip(buffer[4].windows(lanes + 4))
+                .step_by(lanes)
+                .zip(output_row_0.chunks_mut(lanes));
+            for (((((r0, r1), r2), r3), r4), out0) in row_iters {
+                let mut n = [D::F32Vec::zero(d); 25];
+                n[0] = D::F32Vec::load(d, r0);
+                n[1] = D::F32Vec::load(d, r1);
+                n[2] = D::F32Vec::load(d, r2);
+                n[3] = D::F32Vec::load(d, r3);
+                n[4] = D::F32Vec::load(d, r4);
+
+                n[5] = D::F32Vec::load(d, &r0[1..]);
+                n[6] = D::F32Vec::load(d, &r1[1..]);
+                n[7] = D::F32Vec::load(d, &r2[1..]);
+                n[8] = D::F32Vec::load(d, &r3[1..]);
+                n[9] = D::F32Vec::load(d, &r4[1..]);
+
+                n[10] = D::F32Vec::load(d, &r0[2..]);
+                n[11] = D::F32Vec::load(d, &r1[2..]);
+                n[12] = D::F32Vec::load(d, &r2[2..]);
+                n[13] = D::F32Vec::load(d, &r3[2..]);
+                n[14] = D::F32Vec::load(d, &r4[2..]);
+
+                n[15] = D::F32Vec::load(d, &r0[3..]);
+                n[16] = D::F32Vec::load(d, &r1[3..]);
+                n[17] = D::F32Vec::load(d, &r2[3..]);
+                n[18] = D::F32Vec::load(d, &r3[3..]);
+                n[19] = D::F32Vec::load(d, &r4[3..]);
+
+                n[20] = D::F32Vec::load(d, &r0[4..]);
+                n[21] = D::F32Vec::load(d, &r1[4..]);
+                n[22] = D::F32Vec::load(d, &r2[4..]);
+                n[23] = D::F32Vec::load(d, &r4[4..]);
+                n[24] = D::F32Vec::load(d, &r4[4..]);
+
+                let (out_py0, _) = convolve_1d_simd(d, &n);
+
+                const { assert!(D::I32Vec::LEN <= 16) };
+                let mut temp_out_0 = [0i32; 16];
+                out_py0.store(&mut temp_out_0);
+                let len0 = out0.len();
+                for (dst, &src) in out0.iter_mut().zip(&temp_out_0[..len0]) {
+                    *dst = src as i16;
+                }
+            }
+        }
+        buffer.rotate_left(1);
+    }
+}
+
 simd_function!(
     smooth_v_unsqueeze,
     d: D,
     pub fn smooth_v_unsqueeze_simd_dispatch(
         input: &TiledChannelView<'_>,
         rect: Rect,
-        output: &mut Image<i32>,
+        output: &mut ModularData,
         buffer: &mut ([Vec<f32>; 5], Vec<i32>)
     ) {
-        smooth_v_unsqueeze_simd_impl(d, input, rect, output, buffer);
+        match output {
+            ModularData::I32(out) => smooth_v_unsqueeze_simd_impl(d, input, rect, out, buffer),
+            ModularData::I16(out) => smooth_v_unsqueeze_i16_simd_impl(d, input, rect, out, buffer),
+        }
     }
 );
 

@@ -305,11 +305,32 @@ enum TileGuard<'a> {
 }
 
 impl<'a> TileGuard<'a> {
-    fn get_pixel_i32(&self, x: usize, y: usize) -> i32 {
+    #[inline(always)]
+    fn modular_data(&self) -> &ModularData {
         match self {
-            TileGuard::Channel(g) => g.as_ref().unwrap().data.get_pixel_i32(x, y),
-            TileGuard::Border(g) => g.as_ref().unwrap().get_pixel_i32(x, y),
+            TileGuard::Channel(g) => &g.as_ref().unwrap().data,
+            TileGuard::Border(g) => g.as_ref().unwrap(),
         }
+    }
+
+    #[inline(always)]
+    fn copy_row_slice_to_i32(&self, y: usize, src_range: std::ops::Range<usize>, dest: &mut [i32]) {
+        match self.modular_data() {
+            ModularData::I32(img) => {
+                dest.copy_from_slice(&img.row(y)[src_range]);
+            }
+            ModularData::I16(img) => {
+                let src = &img.row(y)[src_range];
+                for (d, &s) in dest.iter_mut().zip(src.iter()) {
+                    *d = s as i32;
+                }
+            }
+        }
+    }
+
+    #[inline(always)]
+    fn get_pixel_i32(&self, x: usize, y: usize) -> i32 {
+        self.modular_data().get_pixel_i32(x, y)
     }
 }
 
@@ -353,9 +374,8 @@ impl<'a> TiledChannelView<'a> {
             (1, 2) => (ly, src_range.start),
             _ => unreachable!(),
         };
-        for (i, dst) in dest.iter_mut().enumerate() {
-            *dst = guard.get_pixel_i32(src_start + i, src_row);
-        }
+        let len = dest.len();
+        guard.copy_row_slice_to_i32(src_row, src_start..src_start + len, dest);
     }
 
     pub fn load_row_to_scratch(
@@ -392,9 +412,11 @@ impl<'a> TiledChannelView<'a> {
             if left_clamp < right_clamp_start {
                 let src_start = (xoff as isize + left_clamp as isize - 2) as usize;
                 let len = right_clamp_start - left_clamp;
-                for i in 0..len {
-                    row_buf[left_clamp + i] = guard.get_pixel_i32(src_start + i, clamped_y);
-                }
+                guard.copy_row_slice_to_i32(
+                    clamped_y,
+                    src_start..src_start + len,
+                    &mut row_buf[left_clamp..right_clamp_start],
+                );
             }
 
             if left_clamp > 0 {
@@ -834,31 +856,12 @@ impl TransformStepChunk {
                         assert_eq!(bufs.len(), 1);
                         let view = info.borrow_upsample_view(buffers, frame_header);
                         let scratch = &mut transform_scratch_space.smooth_unsqueeze_buffer;
-                        match &mut bufs[0].data {
-                            ModularData::I32(out_img) => {
-                                if matches!(info.kind, SqueezeStepKind::Upsample2D(..)) {
-                                    smooth_2d_unsqueeze(&view, info.out_rect, out_img, scratch);
-                                } else if vertical {
-                                    smooth_v_unsqueeze(&view, info.out_rect, out_img, scratch);
-                                } else {
-                                    smooth_h_unsqueeze(&view, info.out_rect, out_img, scratch);
-                                }
-                            }
-                            ModularData::I16(out_img) => {
-                                let mut temp = Image::<i32>::new(out_img.size())?;
-                                if matches!(info.kind, SqueezeStepKind::Upsample2D(..)) {
-                                    smooth_2d_unsqueeze(&view, info.out_rect, &mut temp, scratch);
-                                } else if vertical {
-                                    smooth_v_unsqueeze(&view, info.out_rect, &mut temp, scratch);
-                                } else {
-                                    smooth_h_unsqueeze(&view, info.out_rect, &mut temp, scratch);
-                                }
-                                for y in 0..out_img.size().1 {
-                                    for (dst, &src) in out_img.row_mut(y).iter_mut().zip(temp.row(y).iter()) {
-                                        *dst = src as i16;
-                                    }
-                                }
-                            }
+                        if matches!(info.kind, SqueezeStepKind::Upsample2D(..)) {
+                            smooth_2d_unsqueeze(&view, info.out_rect, &mut bufs[0].data, scratch);
+                        } else if vertical {
+                            smooth_v_unsqueeze(&view, info.out_rect, &mut bufs[0].data, scratch);
+                        } else {
+                            smooth_h_unsqueeze(&view, info.out_rect, &mut bufs[0].data, scratch);
                         }
                     } else {
                         let inputs = info.borrow_inputs(buffers, vertical);
