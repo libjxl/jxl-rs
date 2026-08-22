@@ -4,8 +4,9 @@
 // license that can be found in the LICENSE file.
 
 use crate::error::Result;
+use crate::frame::modular::buffers::{ModularChannel, ModularData};
 use crate::frame::modular::predict::{PredictionData, WeightedPredictorState};
-use crate::frame::modular::{ModularChannel, Predictor};
+use crate::frame::modular::Predictor;
 use crate::headers::modular::WeightedHeader;
 use crate::image::Image;
 use crate::util::sync::RwLockWriteGuard;
@@ -36,7 +37,7 @@ fn scale<const DENOM: usize>(value: usize, bit_depth: usize) -> i32 {
 // result is a delta palette entry, it is the responsibility of the caller to
 // treat it as such.
 fn get_palette_value(
-    palette: &Image<i32>,
+    palette: &ModularData,
     index: isize,
     c: usize,
     palette_size: usize,
@@ -158,7 +159,7 @@ fn get_palette_value(
             }
             scale::<{ LARGE_CUBE - 1 }>(index % LARGE_CUBE, bit_depth)
         } else {
-            palette.row(c)[index]
+            palette.get_pixel_i32(index, c)
         }
     }
 }
@@ -182,10 +183,8 @@ pub fn do_palette_step_general(
     } else if num_deltas == 0 && predictor == Predictor::Zero {
         for (chan_index, out) in buf_out.iter_mut().enumerate() {
             for y in 0..h {
-                let row_index = buf_in.data.row(y);
-                let row_out = out.data.row_mut(y);
                 for x in 0..w {
-                    let index = row_index[x];
+                    let index = buf_in.data.get_pixel_i32(x, y);
                     let palette_value = get_palette_value(
                         palette,
                         index as isize,
@@ -193,7 +192,10 @@ pub fn do_palette_step_general(
                         /*palette_size=*/ num_colors,
                         /*bit_depth=*/ bit_depth,
                     );
-                    row_out[x] = palette_value;
+                    match &mut out.data {
+                        ModularData::I32(img) => img.row_mut(y)[x] = palette_value,
+                        ModularData::I16(img) => img.row_mut(y)[x] = palette_value as i16,
+                    }
                 }
             }
         }
@@ -202,8 +204,8 @@ pub fn do_palette_step_general(
         for (chan_index, out) in buf_out.iter_mut().enumerate() {
             let mut wp_state = WeightedPredictorState::new(wp_header, w);
             for y in 0..h {
-                let idx = buf_in.data.row(y);
-                for (x, &index) in idx.iter().enumerate() {
+                for x in 0..w {
+                    let index = buf_in.data.get_pixel_i32(x, y);
                     let palette_entry = get_palette_value(
                         palette,
                         index as isize,
@@ -211,7 +213,16 @@ pub fn do_palette_step_general(
                         /*palette_size=*/ num_colors + num_deltas,
                         /*bit_depth=*/ bit_depth,
                     );
-                    let prediction_data = PredictionData::get(&out.data, x, y);
+                    let prediction_data = match &out.data {
+                        ModularData::I32(img) => PredictionData::get(img, x, y),
+                        ModularData::I16(img) => PredictionData::get_rows(
+                            img.row(y),
+                            img.row(y.saturating_sub(1)),
+                            img.row(y.saturating_sub(2)),
+                            x,
+                            y,
+                        ),
+                    };
                     let (wp_pred, _) = wp_state.predict_and_property((x, y), &prediction_data);
                     let pred = predictor.predict_one(prediction_data, wp_pred);
                     let val = if index < num_deltas as i32 {
@@ -219,7 +230,10 @@ pub fn do_palette_step_general(
                     } else {
                         palette_entry
                     };
-                    out.data.row_mut(y)[x] = val;
+                    match &mut out.data {
+                        ModularData::I32(img) => img.row_mut(y)[x] = val,
+                        ModularData::I16(img) => img.row_mut(y)[x] = val as i16,
+                    }
                     wp_state.update_errors(val, (x, y));
                 }
             }
@@ -227,8 +241,8 @@ pub fn do_palette_step_general(
     } else {
         for (chan_index, out) in buf_out.iter_mut().enumerate() {
             for y in 0..h {
-                let idx = buf_in.data.row(y);
-                for (x, &index) in idx.iter().enumerate() {
+                for x in 0..w {
+                    let index = buf_in.data.get_pixel_i32(x, y);
                     let palette_entry = get_palette_value(
                         palette,
                         index as isize,
@@ -236,14 +250,26 @@ pub fn do_palette_step_general(
                         /*palette_size=*/ num_colors + num_deltas,
                         /*bit_depth=*/ bit_depth,
                     );
+                    let pred_data = match &out.data {
+                        ModularData::I32(img) => PredictionData::get(img, x, y),
+                        ModularData::I16(img) => PredictionData::get_rows(
+                            img.row(y),
+                            img.row(y.saturating_sub(1)),
+                            img.row(y.saturating_sub(2)),
+                            x,
+                            y,
+                        ),
+                    };
                     let val = if index < num_deltas as i32 {
-                        let pred = predictor
-                            .predict_one(PredictionData::get(&out.data, x, y), /*wp_pred=*/ 0);
+                        let pred = predictor.predict_one(pred_data, /*wp_pred=*/ 0);
                         (pred + palette_entry as i64) as i32
                     } else {
                         palette_entry
                     };
-                    out.data.row_mut(y)[x] = val;
+                    match &mut out.data {
+                        ModularData::I32(img) => img.row_mut(y)[x] = val,
+                        ModularData::I16(img) => img.row_mut(y)[x] = val as i16,
+                    }
                 }
             }
         }
@@ -262,9 +288,9 @@ pub fn do_palette_step_one_group(
     buf_in: &ModularChannel,
     buf_pal: &ModularChannel,
     buf_out: &mut [&mut ModularChannel],
-    buf_left: Option<&[&Image<i32>]>,
-    buf_top: Option<&[&Image<i32>]>,
-    buf_topleft: Option<&[&Image<i32>]>,
+    buf_left: Option<&[&ModularData]>,
+    buf_top: Option<&[&ModularData]>,
+    buf_topleft: Option<&[&ModularData]>,
     num_colors: usize,
     num_deltas: usize,
     predictor: Predictor,
@@ -282,31 +308,47 @@ pub fn do_palette_step_one_group(
         for y in 0..h {
             let has_top = y > 0 || buf_top.is_some();
             if y > 0 {
-                let prev_row = buf_out[c].data.row(y - 1);
-                let topleft = buf_left.map(|l| l[c].row(y - 1)[3]);
-                stage_padded_top_row(row_top, &prev_row[..w], topleft);
+                match &buf_out[c].data {
+                    ModularData::I32(img) => {
+                        let prev_row = img.row(y - 1);
+                        let topleft = buf_left.map(|l| l[c].get_pixel_i32(3, y - 1));
+                        stage_padded_top_row(row_top, &prev_row[..w], topleft);
+                    }
+                    ModularData::I16(img) => {
+                        let prev_row = img.row(y - 1);
+                        let topleft = buf_left.map(|l| l[c].get_pixel_i32(3, y - 1));
+                        for i in 0..w {
+                            row_top[i + 1] = prev_row[i] as i32;
+                        }
+                        row_top[0] = topleft.unwrap_or(row_top[1]);
+                        row_top[w + 1] = row_top[w];
+                    }
+                }
             } else if let Some(top) = buf_top {
-                let top_row = top[c].row(3);
-                let topleft = buf_topleft.map(|tl| tl[c].row(3)[tl[c].size().0 - 1]);
-                stage_padded_top_row(row_top, &top_row[..w], topleft);
+                let top_img = top[c];
+                let topleft = buf_topleft.map(|tl| tl[c].get_pixel_i32(tl[c].size().0 - 1, 3));
+                for i in 0..w {
+                    row_top[i + 1] = top_img.get_pixel_i32(i, 3);
+                }
+                row_top[0] = topleft.unwrap_or(row_top[1]);
+                row_top[w + 1] = row_top[w];
             }
 
             let mut left = if let Some(l) = buf_left {
-                l[c].row(y)[3]
+                l[c].get_pixel_i32(3, y)
             } else if has_top {
                 row_top[1]
             } else {
                 0
             };
             let mut leftleft = if let Some(l) = buf_left {
-                l[c].row(y)[2]
+                l[c].get_pixel_i32(2, y)
             } else {
                 left
             };
 
-            let index_img = buf_in.data.row(y);
-            let out_row = buf_out[c].data.row_mut(y);
-            for (x, &index) in index_img.iter().enumerate() {
+            for x in 0..w {
+                let index = buf_in.data.get_pixel_i32(x, y);
                 let palette_entry = get_palette_value(
                     palette,
                     index as isize,
@@ -339,7 +381,10 @@ pub fn do_palette_step_one_group(
                 } else {
                     palette_entry
                 };
-                out_row[x] = val;
+                match &mut buf_out[c].data {
+                    ModularData::I32(img) => img.row_mut(y)[x] = val,
+                    ModularData::I16(img) => img.row_mut(y)[x] = val as i16,
+                }
                 leftleft = left;
                 left = val;
             }
@@ -365,8 +410,17 @@ pub fn zero_palette_step_one_group(
             /*palette_size=*/ num_colors + num_deltas,
             /*bit_depth=*/ bit_depth,
         );
-        for y in 0..h {
-            out.data.row_mut(y).fill(palette_entry);
+        match &mut out.data {
+            ModularData::I32(img) => {
+                for y in 0..h {
+                    img.row_mut(y).fill(palette_entry);
+                }
+            }
+            ModularData::I16(img) => {
+                for y in 0..h {
+                    img.row_mut(y).fill(palette_entry as i16);
+                }
+            }
         }
     }
 }
@@ -376,7 +430,7 @@ pub fn do_palette_step_group_row(
     buf_in: &[&ModularChannel],
     buf_pal: &ModularChannel,
     buf_out: &mut [&mut ModularChannel],
-    buf_prev: Option<&[&Image<i32>]>,
+    buf_prev: Option<&[&ModularData]>,
     prev_aux: Option<&[Option<&Image<i32>>]>,
     aux_out: &mut [RwLockWriteGuard<Option<Image<i32>>>],
     grid_xsize: usize,
@@ -416,8 +470,22 @@ pub fn do_palette_step_group_row(
             for grid_x in 0..grid_xsize {
                 let prev_img = prev[out_row_idx + grid_x];
                 let w = prev_img.size().0;
-                scratch[0][x_offset..x_offset + w].copy_from_slice(prev_img.row(3));
-                scratch[1][x_offset..x_offset + w].copy_from_slice(prev_img.row(2));
+                match prev_img {
+                    ModularData::I32(img) => {
+                        let r3 = img.row(3);
+                        let r2 = img.row(2);
+                        scratch[0][x_offset..x_offset + w].copy_from_slice(&r3[..w]);
+                        scratch[1][x_offset..x_offset + w].copy_from_slice(&r2[..w]);
+                    }
+                    ModularData::I16(img) => {
+                        let r3 = img.row(3);
+                        let r2 = img.row(2);
+                        for i in 0..w {
+                            scratch[0][x_offset + i] = r3[i] as i32;
+                            scratch[1][x_offset + i] = r2[i] as i32;
+                        }
+                    }
+                }
                 x_offset += w;
             }
         }
@@ -439,68 +507,140 @@ pub fn do_palette_step_group_row(
 
             let mut gx = 0;
             for (grid_x, index_buf) in buf_in.iter().enumerate().take(grid_xsize) {
-                let index_img = index_buf.data.row(y);
                 let out_idx = out_row_idx + grid_x;
-                let out_row = buf_out[out_idx].data.row_mut(y);
-                for (x, &index) in index_img.iter().enumerate() {
-                    let palette_entry = get_palette_value(
-                        palette,
-                        index as isize,
-                        c,
-                        num_colors + num_deltas,
-                        bit_depth,
-                    );
-                    let (top, topleft, topright, toprightright) = if has_top {
-                        (
-                            top_row[gx],
-                            if gx > 0 { top_row[gx - 1] } else { left },
-                            if gx + 1 < total_w {
-                                top_row[gx + 1]
+                let cur_w = index_buf.data.size().0;
+                match (&index_buf.data, &mut buf_out[out_idx].data) {
+                    (ModularData::I32(index_img), ModularData::I32(out_img)) => {
+                        let in_row = index_img.row(y);
+                        let out_row = out_img.row_mut(y);
+                        for x in 0..cur_w {
+                            let index = in_row[x];
+                            let palette_entry = get_palette_value(
+                                palette,
+                                index as isize,
+                                c,
+                                num_colors + num_deltas,
+                                bit_depth,
+                            );
+                            let (top, topleft, topright, toprightright) = if has_top {
+                                (
+                                    top_row[gx],
+                                    if gx > 0 { top_row[gx - 1] } else { left },
+                                    if gx + 1 < total_w {
+                                        top_row[gx + 1]
+                                    } else {
+                                        top_row[gx]
+                                    },
+                                    if gx + 2 < total_w {
+                                        top_row[gx + 2]
+                                    } else if gx + 1 < total_w {
+                                        top_row[gx + 1]
+                                    } else {
+                                        top_row[gx]
+                                    },
+                                )
                             } else {
-                                top_row[gx]
-                            },
-                            if gx + 2 < total_w {
-                                top_row[gx + 2]
-                            } else if gx + 1 < total_w {
-                                top_row[gx + 1]
+                                (left, left, left, left)
+                            };
+                            let toptop = if has_toptop { curr_row[gx] } else { top };
+                            let leftleft_val = if gx > 1 { leftleft } else { left };
+                            let prediction_data = PredictionData {
+                                left,
+                                top,
+                                toptop,
+                                topleft,
+                                topright,
+                                leftleft: leftleft_val,
+                                toprightright,
+                            };
+                            let val = if let Some(wp) = &mut wp_state {
+                                let (pred, _) = wp.predict_and_property((gx, y & 1), &prediction_data);
+                                let val = if index < num_deltas as i32 {
+                                    (pred + palette_entry as i64) as i32
+                                } else {
+                                    palette_entry
+                                };
+                                wp.update_errors(val, (gx, y & 1));
+                                val
+                            } else if index < num_deltas as i32 {
+                                let pred = predictor.predict_one(prediction_data, /*wp_pred=*/ 0);
+                                (pred + palette_entry as i64) as i32
                             } else {
-                                top_row[gx]
-                            },
-                        )
-                    } else {
-                        (left, left, left, left)
-                    };
-                    let toptop = if has_toptop { curr_row[gx] } else { top };
-                    let leftleft_val = if gx > 1 { leftleft } else { left };
-                    let prediction_data = PredictionData {
-                        left,
-                        top,
-                        toptop,
-                        topleft,
-                        topright,
-                        leftleft: leftleft_val,
-                        toprightright,
-                    };
-                    let val = if let Some(wp) = &mut wp_state {
-                        let (pred, _) = wp.predict_and_property((gx, y & 1), &prediction_data);
-                        let val = if index < num_deltas as i32 {
-                            (pred + palette_entry as i64) as i32
-                        } else {
-                            palette_entry
-                        };
-                        wp.update_errors(val, (gx, y & 1));
-                        val
-                    } else if index < num_deltas as i32 {
-                        let pred = predictor.predict_one(prediction_data, /*wp_pred=*/ 0);
-                        (pred + palette_entry as i64) as i32
-                    } else {
-                        palette_entry
-                    };
-                    out_row[x] = val;
-                    curr_row[gx] = val;
-                    leftleft = left;
-                    left = val;
-                    gx += 1;
+                                palette_entry
+                            };
+                            out_row[x] = val;
+                            curr_row[gx] = val;
+                            leftleft = left;
+                            left = val;
+                            gx += 1;
+                        }
+                    }
+                    (ModularData::I16(index_img), ModularData::I16(out_img)) => {
+                        let in_row = index_img.row(y);
+                        let out_row = out_img.row_mut(y);
+                        for x in 0..cur_w {
+                            let index = in_row[x] as i32;
+                            let palette_entry = get_palette_value(
+                                palette,
+                                index as isize,
+                                c,
+                                num_colors + num_deltas,
+                                bit_depth,
+                            );
+                            let (top, topleft, topright, toprightright) = if has_top {
+                                (
+                                    top_row[gx],
+                                    if gx > 0 { top_row[gx - 1] } else { left },
+                                    if gx + 1 < total_w {
+                                        top_row[gx + 1]
+                                    } else {
+                                        top_row[gx]
+                                    },
+                                    if gx + 2 < total_w {
+                                        top_row[gx + 2]
+                                    } else if gx + 1 < total_w {
+                                        top_row[gx + 1]
+                                    } else {
+                                        top_row[gx]
+                                    },
+                                )
+                            } else {
+                                (left, left, left, left)
+                            };
+                            let toptop = if has_toptop { curr_row[gx] } else { top };
+                            let leftleft_val = if gx > 1 { leftleft } else { left };
+                            let prediction_data = PredictionData {
+                                left,
+                                top,
+                                toptop,
+                                topleft,
+                                topright,
+                                leftleft: leftleft_val,
+                                toprightright,
+                            };
+                            let val = if let Some(wp) = &mut wp_state {
+                                let (pred, _) = wp.predict_and_property((gx, y & 1), &prediction_data);
+                                let val = if index < num_deltas as i32 {
+                                    (pred + palette_entry as i64) as i32
+                                } else {
+                                    palette_entry
+                                };
+                                wp.update_errors(val, (gx, y & 1));
+                                val
+                            } else if index < num_deltas as i32 {
+                                let pred = predictor.predict_one(prediction_data, /*wp_pred=*/ 0);
+                                (pred + palette_entry as i64) as i32
+                            } else {
+                                palette_entry
+                            };
+                            out_row[x] = val as i16;
+                            curr_row[gx] = val;
+                            leftleft = left;
+                            left = val;
+                            gx += 1;
+                        }
+                    }
+                    _ => unreachable!("mismatched buffer types in palette"),
                 }
             }
         }

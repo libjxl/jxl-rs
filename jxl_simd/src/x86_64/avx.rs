@@ -9,7 +9,7 @@ use std::ops::{
     Mul, MulAssign, Neg, Shl, ShlAssign, Shr, ShrAssign, Sub, SubAssign,
 };
 
-use super::super::{F32SimdVec, I32SimdVec, SimdDescriptor, SimdMask, U8SimdVec, U16SimdVec};
+use super::super::{F32SimdVec, I16SimdVec, I32SimdVec, SimdDescriptor, SimdMask, U8SimdVec, U16SimdVec};
 use crate::x86_64::sse42::Sse42Descriptor;
 use crate::{U32SimdVec, impl_f32_array_interface};
 
@@ -122,8 +122,9 @@ impl SimdDescriptor for AvxDescriptor {
     type F32Vec = F32VecAvx;
     type I32Vec = I32VecAvx;
     type U32Vec = U32VecAvx;
-    type U8Vec = U8VecAvx;
+    type I16Vec = I16VecAvx;
     type U16Vec = U16VecAvx;
+    type U8Vec = U8VecAvx;
     type Mask = MaskAvx;
     type Bf16Table8 = Bf16Table8Avx;
 
@@ -792,6 +793,17 @@ impl I32SimdVec for I32VecAvx {
     }
 
     #[inline(always)]
+    fn load_from_i16(d: Self::Descriptor, mem: &[i16]) -> Self {
+        assert!(mem.len() >= Self::LEN);
+        // SAFETY: we just checked that `mem` has enough space. Moreover, we know avx2 is available
+        // from the safety invariant on `d`. _mm_loadu_si128 supports unaligned loads.
+        Self(
+            unsafe { _mm256_cvtepi16_epi32(_mm_loadu_si128(mem.as_ptr().cast())) },
+            d,
+        )
+    }
+
+    #[inline(always)]
     fn store(&self, mem: &mut [i32]) {
         assert!(mem.len() >= Self::LEN);
         // SAFETY: we just checked that `mem` has enough space. Moreover, we know avx is available
@@ -1434,6 +1446,95 @@ impl U16SimdVec for U16VecAvx {
         // SAFETY: avx2 is available from the safety invariant on the descriptor.
         unsafe { store_interleaved_4_impl(a.0, b.0, c.0, d.0, dest) }
     }
+}
+
+#[derive(Clone, Copy, Debug)]
+#[repr(transparent)]
+pub struct I16VecAvx(__m256i, AvxDescriptor);
+
+impl I16SimdVec for I16VecAvx {
+    type Descriptor = AvxDescriptor;
+
+    const LEN: usize = 16;
+
+    #[inline(always)]
+    fn splat(d: Self::Descriptor, v: i16) -> Self {
+        unsafe { Self(_mm256_set1_epi16(v), d) }
+    }
+
+    #[inline(always)]
+    fn load(d: Self::Descriptor, mem: &[i16]) -> Self {
+        assert!(mem.len() >= Self::LEN);
+        Self(unsafe { _mm256_loadu_si256(mem.as_ptr().cast()) }, d)
+    }
+
+    #[inline(always)]
+    fn store(&self, mem: &mut [i16]) {
+        assert!(mem.len() >= Self::LEN);
+        unsafe { _mm256_storeu_si256(mem.as_mut_ptr().cast(), self.0) }
+    }
+
+    #[inline(always)]
+    fn shr<const AMOUNT_U: u32, const AMOUNT_I: i32>(self) -> Self {
+        // SAFETY: We know avx2 is available from the safety invariant on descriptor.
+        unsafe { Self(_mm256_srai_epi16::<AMOUNT_I>(self.0), self.1) }
+    }
+
+    #[inline(always)]
+    fn store_interleaved_2(a: Self, b: Self, dest: &mut [i16]) {
+        U16SimdVec::store_interleaved_2(
+            U16VecAvx(a.0, a.1),
+            U16VecAvx(b.0, b.1),
+            unsafe { std::slice::from_raw_parts_mut(dest.as_mut_ptr().cast::<u16>(), dest.len()) },
+        );
+    }
+
+    #[inline(always)]
+    fn store_interleaved_3(a: Self, b: Self, c: Self, dest: &mut [i16]) {
+        U16SimdVec::store_interleaved_3(
+            U16VecAvx(a.0, a.1),
+            U16VecAvx(b.0, b.1),
+            U16VecAvx(c.0, c.1),
+            unsafe { std::slice::from_raw_parts_mut(dest.as_mut_ptr().cast::<u16>(), dest.len()) },
+        );
+    }
+
+    #[inline(always)]
+    fn store_interleaved_4(a: Self, b: Self, c: Self, d: Self, dest: &mut [i16]) {
+        U16SimdVec::store_interleaved_4(
+            U16VecAvx(a.0, a.1),
+            U16VecAvx(b.0, b.1),
+            U16VecAvx(c.0, c.1),
+            U16VecAvx(d.0, d.1),
+            unsafe { std::slice::from_raw_parts_mut(dest.as_mut_ptr().cast::<u16>(), dest.len()) },
+        );
+    }
+}
+
+impl Add<I16VecAvx> for I16VecAvx {
+    type Output = I16VecAvx;
+    fn_avx!(this: I16VecAvx, fn add(rhs: I16VecAvx) -> I16VecAvx {
+        I16VecAvx(_mm256_add_epi16(this.0, rhs.0), this.1)
+    });
+}
+
+impl Sub<I16VecAvx> for I16VecAvx {
+    type Output = I16VecAvx;
+    fn_avx!(this: I16VecAvx, fn sub(rhs: I16VecAvx) -> I16VecAvx {
+        I16VecAvx(_mm256_sub_epi16(this.0, rhs.0), this.1)
+    });
+}
+
+impl AddAssign<I16VecAvx> for I16VecAvx {
+    fn_avx!(this: &mut I16VecAvx, fn add_assign(rhs: I16VecAvx) {
+        this.0 = _mm256_add_epi16(this.0, rhs.0)
+    });
+}
+
+impl SubAssign<I16VecAvx> for I16VecAvx {
+    fn_avx!(this: &mut I16VecAvx, fn sub_assign(rhs: I16VecAvx) {
+        this.0 = _mm256_sub_epi16(this.0, rhs.0)
+    });
 }
 
 impl SimdMask for MaskAvx {

@@ -59,23 +59,41 @@ pub(super) fn precompute_references(
         {
             continue;
         }
-        let ref_chan_row = buffers[j].data.row(y);
-        let ref_chan_prev = buffers[j].data.row(y.saturating_sub(1));
-        for x in 0..buffers[chan].data.size().0 {
-            let ref_row = references.row_mut(x);
-            let v = ref_chan_row[x];
-            ref_row[offset] = v.wrapping_abs();
-            ref_row[offset + 1] = v;
-            let vleft = if x > 0 { ref_chan_row[x - 1] } else { 0 };
-            let vtop = if y > 0 { ref_chan_prev[x] } else { vleft };
-            let vtopleft = if x > 0 && y > 0 {
-                ref_chan_prev[x - 1]
-            } else {
-                vleft
-            };
-            let vpredicted = clamped_gradient(vleft as i64, vtop as i64, vtopleft as i64);
-            ref_row[offset + 2] = (v as i64 - vpredicted).wrapping_abs() as i32;
-            ref_row[offset + 3] = (v as i64 - vpredicted) as i32;
+        let xsize = buffers[chan].data.size().0;
+        use crate::frame::modular::buffers::ModularData;
+        match &buffers[j].data {
+            ModularData::I32(ref_chan) => {
+                let row = ref_chan.row(y);
+                let row_top = if y > 0 { ref_chan.row(y - 1) } else { row };
+                for x in 0..xsize {
+                    let ref_row = references.row_mut(x);
+                    let v = row[x];
+                    ref_row[offset] = v.wrapping_abs();
+                    ref_row[offset + 1] = v;
+                    let vleft = if x > 0 { row[x - 1] } else { 0 };
+                    let vtop = if y > 0 { row_top[x] } else { vleft };
+                    let vtopleft = if x > 0 && y > 0 { row_top[x - 1] } else { vleft };
+                    let vpredicted = clamped_gradient(vleft as i64, vtop as i64, vtopleft as i64);
+                    ref_row[offset + 2] = (v as i64 - vpredicted).wrapping_abs() as i32;
+                    ref_row[offset + 3] = (v as i64 - vpredicted) as i32;
+                }
+            }
+            ModularData::I16(ref_chan) => {
+                let row = ref_chan.row(y);
+                let row_top = if y > 0 { ref_chan.row(y - 1) } else { row };
+                for x in 0..xsize {
+                    let ref_row = references.row_mut(x);
+                    let v = row[x] as i32;
+                    ref_row[offset] = v.wrapping_abs();
+                    ref_row[offset + 1] = v;
+                    let vleft = if x > 0 { row[x - 1] as i32 } else { 0 };
+                    let vtop = if y > 0 { row_top[x] as i32 } else { vleft };
+                    let vtopleft = if x > 0 && y > 0 { row_top[x - 1] as i32 } else { vleft };
+                    let vpredicted = clamped_gradient(vleft as i64, vtop as i64, vtopleft as i64);
+                    ref_row[offset + 2] = (v as i64 - vpredicted).wrapping_abs() as i32;
+                    ref_row[offset + 3] = (v as i64 - vpredicted) as i32;
+                }
+            }
         }
         offset += 4;
     }
@@ -85,3 +103,21 @@ pub(super) fn precompute_references(
 pub(super) fn make_pixel(dec: i32, mul: u32, guess: i64) -> i32 {
     (guess + (mul as i64) * (dec as i64)) as i32
 }
+
+jxl_simd::simd_function!(
+    convert_i32_to_i16_dispatch,
+    d: D,
+    pub(super) fn convert_i32_to_i16(src: &[i32], dst: &mut [i16]) {
+        use jxl_simd::I32SimdVec;
+        let lanes = D::I32Vec::LEN;
+        let mut it_src = src.chunks_exact(lanes);
+        let mut it_dst = dst.chunks_exact_mut(lanes);
+        for (s, d_chunk) in (&mut it_src).zip(&mut it_dst) {
+            let v = D::I32Vec::load(d, s);
+            v.store_i16(d_chunk);
+        }
+        for (d_val, &s_val) in it_dst.into_remainder().iter_mut().zip(it_src.remainder()) {
+            *d_val = s_val as i16;
+        }
+    }
+);

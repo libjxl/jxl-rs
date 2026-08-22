@@ -9,7 +9,7 @@ use std::ops::{
     Mul, MulAssign, Neg, Sub, SubAssign,
 };
 
-use super::super::{F32SimdVec, I32SimdVec, SimdDescriptor, SimdMask, U8SimdVec, U16SimdVec};
+use super::super::{F32SimdVec, I16SimdVec, I32SimdVec, SimdDescriptor, SimdMask, U8SimdVec, U16SimdVec};
 use crate::U32SimdVec;
 
 #[derive(Clone, Copy, Debug)]
@@ -27,6 +27,8 @@ impl SimdDescriptor for Simd128Descriptor {
     type I32Vec = I32VecSimd128;
 
     type U32Vec = U32VecSimd128;
+
+    type I16Vec = I16VecSimd128;
 
     type U16Vec = U16VecSimd128;
 
@@ -609,6 +611,16 @@ impl I32SimdVec for I32VecSimd128 {
     }
 
     #[inline(always)]
+    fn load_from_i16(d: Self::Descriptor, mem: &[i16]) -> Self {
+        assert!(mem.len() >= Self::LEN);
+        // SAFETY: we just checked that `mem` has enough space (4 * i16 = 8 bytes = 64 bits).
+        Self(
+            unsafe { i32x4_extend_low_i16x8(v128_load64_zero(mem.as_ptr().cast())) },
+            d,
+        )
+    }
+
+    #[inline(always)]
     fn store(&self, mem: &mut [i32]) {
         assert!(mem.len() >= Self::LEN);
         // SAFETY: we just checked that `mem` has enough space.
@@ -1025,6 +1037,98 @@ impl U16SimdVec for U16VecSimd128 {
             v128_store(ptr.add(2), out2);
             v128_store(ptr.add(3), out3);
         }
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+#[repr(transparent)]
+pub struct I16VecSimd128(v128, Simd128Descriptor);
+
+impl I16SimdVec for I16VecSimd128 {
+    type Descriptor = Simd128Descriptor;
+
+    const LEN: usize = 8;
+
+    #[inline(always)]
+    fn splat(d: Self::Descriptor, v: i16) -> Self {
+        Self(i16x8_splat(v), d)
+    }
+
+    #[inline(always)]
+    fn load(d: Self::Descriptor, mem: &[i16]) -> Self {
+        assert!(mem.len() >= Self::LEN);
+        Self(unsafe { v128_load(mem.as_ptr().cast::<v128>()) }, d)
+    }
+
+    #[inline(always)]
+    fn store(&self, mem: &mut [i16]) {
+        assert!(mem.len() >= Self::LEN);
+        unsafe { v128_store(mem.as_mut_ptr().cast::<v128>(), self.0) }
+    }
+
+    #[inline(always)]
+    fn shr<const AMOUNT_U: u32, const AMOUNT_I: i32>(self) -> Self {
+        Self(i16x8_shr(self.0, AMOUNT_U), self.1)
+    }
+
+    #[inline(always)]
+    fn store_interleaved_2(a: Self, b: Self, dest: &mut [i16]) {
+        U16SimdVec::store_interleaved_2(
+            U16VecSimd128(a.0, a.1),
+            U16VecSimd128(b.0, b.1),
+            unsafe { std::slice::from_raw_parts_mut(dest.as_mut_ptr().cast::<u16>(), dest.len()) },
+        );
+    }
+
+    #[inline(always)]
+    fn store_interleaved_3(a: Self, b: Self, c: Self, dest: &mut [i16]) {
+        U16SimdVec::store_interleaved_3(
+            U16VecSimd128(a.0, a.1),
+            U16VecSimd128(b.0, b.1),
+            U16VecSimd128(c.0, c.1),
+            unsafe { std::slice::from_raw_parts_mut(dest.as_mut_ptr().cast::<u16>(), dest.len()) },
+        );
+    }
+
+    #[inline(always)]
+    fn store_interleaved_4(a: Self, b: Self, c: Self, d: Self, dest: &mut [i16]) {
+        U16SimdVec::store_interleaved_4(
+            U16VecSimd128(a.0, a.1),
+            U16VecSimd128(b.0, b.1),
+            U16VecSimd128(c.0, c.1),
+            U16VecSimd128(d.0, d.1),
+            unsafe { std::slice::from_raw_parts_mut(dest.as_mut_ptr().cast::<u16>(), dest.len()) },
+        );
+    }
+}
+
+impl Add<I16VecSimd128> for I16VecSimd128 {
+    type Output = I16VecSimd128;
+    #[inline(always)]
+    fn add(self, rhs: I16VecSimd128) -> I16VecSimd128 {
+        I16VecSimd128(i16x8_add(self.0, rhs.0), self.1)
+    }
+}
+
+impl Sub<I16VecSimd128> for I16VecSimd128 {
+    type Output = I16VecSimd128;
+    #[inline(always)]
+    fn sub(self, rhs: I16VecSimd128) -> I16VecSimd128 {
+        I16VecSimd128(i16x8_sub(self.0, rhs.0), self.1)
+    }
+}
+
+impl AddAssign<I16VecSimd128> for I16VecSimd128 {
+    #[inline(always)]
+    fn add_assign(&mut self, rhs: I16VecSimd128) {
+        self.0 = i16x8_add(self.0, rhs.0);
+    }
+}
+
+impl SubAssign<I16VecSimd128> for I16VecSimd128 {
+    #[inline(always)]
+    fn sub_assign(&mut self, rhs: I16VecSimd128) {
+        self.0 = i16x8_sub(self.0, rhs.0);
     }
 }
 

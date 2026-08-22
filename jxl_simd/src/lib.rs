@@ -43,6 +43,8 @@ pub trait SimdDescriptor: Sized + Copy + Debug + Send + Sync {
 
     type U32Vec: U32SimdVec<Descriptor = Self>;
 
+    type I16Vec: I16SimdVec<Descriptor = Self>;
+
     type U16Vec: U16SimdVec<Descriptor = Self>;
 
     type U8Vec: U8SimdVec<Descriptor = Self>;
@@ -267,6 +269,9 @@ pub trait I32SimdVec:
     fn load(d: Self::Descriptor, mem: &[i32]) -> Self;
 
     // Requires `mem.len() >= Self::LEN` or it will panic.
+    fn load_from_i16(d: Self::Descriptor, mem: &[i16]) -> Self;
+
+    // Requires `mem.len() >= Self::LEN` or it will panic.
     fn store(&self, mem: &mut [i32]);
 
     fn abs(self) -> Self;
@@ -295,6 +300,14 @@ pub trait I32SimdVec:
     /// Requires `dest.len() >= Self::LEN` or it will panic.
     fn store_u16(self, dest: &mut [u16]);
 
+    /// Stores the lower 16 bits of each i32 lane as i16 values.
+    /// Requires `dest.len() >= Self::LEN` or it will panic.
+    fn store_i16(self, dest: &mut [i16]) {
+        let dest_u16 =
+            unsafe { std::slice::from_raw_parts_mut(dest.as_mut_ptr().cast::<u16>(), dest.len()) };
+        self.store_u16(dest_u16);
+    }
+
     /// Stores two vectors interleaved: [a0, b0, a1, b1, a2, b2, ...].
     /// Requires `dest.len() >= 2 * Self::LEN` or it will panic.
     fn store_interleaved_2(a: Self, b: Self, dest: &mut [i32]) {
@@ -307,6 +320,21 @@ pub trait I32SimdVec:
         <<Self as I32SimdVec>::Descriptor as SimdDescriptor>::F32Vec::store_interleaved_2(
             a_f32, b_f32, dest_f32,
         );
+    }
+
+    /// Stores two vectors interleaved as i16 values: [a0, b0, a1, b1, a2, b2, ...].
+    /// Requires `dest.len() >= 2 * Self::LEN` or it will panic.
+    fn store_interleaved_2_i16(a: Self, b: Self, dest: &mut [i16]) {
+        let len = Self::LEN;
+        assert!(dest.len() >= 2 * len);
+        let mut tmp_a = [0i16; 16];
+        let mut tmp_b = [0i16; 16];
+        a.store_i16(&mut tmp_a[..len]);
+        b.store_i16(&mut tmp_b[..len]);
+        for i in 0..len {
+            dest[2 * i] = tmp_a[i];
+            dest[2 * i + 1] = tmp_b[i];
+        }
     }
 
     /// Stores the lower 8 bits of each i32 lane as u8 values.
@@ -345,6 +373,40 @@ pub trait U8SimdVec: Sized + Copy + Debug + Send + Sync {
     /// Stores four vectors interleaved: [a0, b0, c0, d0, a1, b1, c1, d1, ...].
     /// Requires `dest.len() >= 4 * Self::LEN` or it will panic.
     fn store_interleaved_4(a: Self, b: Self, c: Self, d: Self, dest: &mut [u8]);
+}
+
+pub trait I16SimdVec:
+    Sized
+    + Copy
+    + Debug
+    + Send
+    + Sync
+    + Add<Self, Output = Self>
+    + Sub<Self, Output = Self>
+    + AddAssign<Self>
+    + SubAssign<Self>
+{
+    type Descriptor: SimdDescriptor;
+
+    const LEN: usize;
+
+    fn load(d: Self::Descriptor, mem: &[i16]) -> Self;
+    fn splat(d: Self::Descriptor, v: i16) -> Self;
+    fn store(&self, mem: &mut [i16]);
+
+    fn shr<const AMOUNT_U: u32, const AMOUNT_I: i32>(self) -> Self;
+
+    /// Stores two vectors interleaved: [a0, b0, a1, b1, a2, b2, ...].
+    /// Requires `dest.len() >= 2 * Self::LEN` or it will panic.
+    fn store_interleaved_2(a: Self, b: Self, dest: &mut [i16]);
+
+    /// Stores three vectors interleaved: [a0, b0, c0, a1, b1, c1, ...].
+    /// Requires `dest.len() >= 3 * Self::LEN` or it will panic.
+    fn store_interleaved_3(a: Self, b: Self, c: Self, dest: &mut [i16]);
+
+    /// Stores four vectors interleaved: [a0, b0, c0, d0, a1, b1, c1, d1, ...].
+    /// Requires `dest.len() >= 4 * Self::LEN` or it will panic.
+    fn store_interleaved_4(a: Self, b: Self, c: Self, d: Self, dest: &mut [i16]);
 }
 
 pub trait U16SimdVec: Sized + Copy + Debug + Send + Sync {
@@ -1607,4 +1669,21 @@ mod test {
         }
     }
     test_all_instruction_sets!(test_i32_store_interleaved_2);
+
+    fn test_i32_load_from_i16<D: SimdDescriptor>(d: D) {
+        let len = D::I32Vec::LEN;
+        arbtest::arbtest(|u| {
+            let mut input = vec![0i16; len];
+            for v in input.iter_mut() {
+                *v = u.arbitrary::<i16>()?;
+            }
+            let mut output = vec![0i32; len];
+            D::I32Vec::load_from_i16(d, &input).store(&mut output);
+            for i in 0..len {
+                assert_eq!(output[i], input[i] as i32, "mismatch at index {i} for input {}", input[i]);
+            }
+            Ok(())
+        });
+    }
+    test_all_instruction_sets!(test_i32_load_from_i16);
 }

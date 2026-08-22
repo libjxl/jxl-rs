@@ -34,6 +34,7 @@ mod predict;
 mod transforms;
 mod tree;
 
+pub use buffers::ModularData;
 use buffers::with_buffers;
 pub use decode::ModularStreamId;
 use decode::decode_modular_subbitstream;
@@ -424,12 +425,14 @@ impl FullModularImage {
             }
         }
 
+        let is_16bit = image_metadata.modular_16bit_sufficient;
         let transform_steps = transforms::meta_apply::make_grids(
             frame_header,
             transform_steps,
             &section_buffer_indices,
             &mut buffer_info,
             modular_color_channels,
+            is_16bit,
         );
 
         #[cfg(feature = "tracing")]
@@ -570,7 +573,7 @@ impl FullModularImage {
         frame_header: &FrameHeader,
         global_tree: &Option<Tree>,
         br: &mut BitReader,
-        pass_to_pipeline: Option<&dyn Fn(usize, usize, bool, Image<i32>) -> Result<()>>,
+        pass_to_pipeline: Option<&dyn Fn(usize, usize, bool, ModularData) -> Result<()>>,
     ) -> Result<()> {
         if self.buffer_info.is_empty() {
             info!("No modular channels to decode");
@@ -773,7 +776,7 @@ impl FullModularImage {
         frame_header: &FrameHeader,
         tfm: usize,
         scratch_space: &mut TransformScratchSpace,
-        pass_to_pipeline: &dyn Fn(usize, usize, bool, Image<i32>) -> Result<()>,
+        pass_to_pipeline: &dyn Fn(usize, usize, bool, ModularData) -> Result<()>,
         ready_steps: &mut Vec<usize>,
     ) -> Result<()> {
         self.transform_steps[tfm].do_run(
@@ -792,7 +795,7 @@ impl FullModularImage {
     pub fn run_transforms(
         &self,
         frame_header: &FrameHeader,
-        pass_to_pipeline: &dyn Fn(usize, usize, bool, Image<i32>) -> Result<()>,
+        pass_to_pipeline: &dyn Fn(usize, usize, bool, ModularData) -> Result<()>,
         ready_steps: &mut Vec<usize>,
     ) -> Result<()> {
         let mut scratch_space = self.transform_scratch_space.get();
@@ -955,9 +958,9 @@ pub fn decode_vardct_lf(
         )
     };
     let mut buffers = [
-        ModularChannel::new(shrink_rect(r.size, 1), image_metadata.bit_depth)?,
-        ModularChannel::new(shrink_rect(r.size, 0), image_metadata.bit_depth)?,
-        ModularChannel::new(shrink_rect(r.size, 2), image_metadata.bit_depth)?,
+        ModularChannel::new(shrink_rect(r.size, 1), false, image_metadata.bit_depth)?,
+        ModularChannel::new(shrink_rect(r.size, 0), false, image_metadata.bit_depth)?,
+        ModularChannel::new(shrink_rect(r.size, 2), false, image_metadata.bit_depth)?,
     ];
     decode_modular_subbitstream(
         buffers.iter_mut().collect(),
@@ -971,7 +974,7 @@ pub fn decode_vardct_lf(
         r,
         lf,
         quant_lf,
-        [&buffers[0].data, &buffers[1].data, &buffers[2].data],
+        [buffers[0].data.as_i32(), buffers[1].data.as_i32(), buffers[2].data.as_i32()],
         color_correlation_params,
         quant_params,
         lf_quant,
@@ -1002,10 +1005,10 @@ pub fn decode_hf_metadata(
         size: (r.size.0.div_ceil(8), r.size.1.div_ceil(8)),
     };
     let mut buffers = [
-        ModularChannel::new_with_shift(cr.size, Some((3, 3)), image_metadata.bit_depth)?,
-        ModularChannel::new_with_shift(cr.size, Some((3, 3)), image_metadata.bit_depth)?,
-        ModularChannel::new((count, 2), image_metadata.bit_depth)?,
-        ModularChannel::new(r.size, image_metadata.bit_depth)?,
+        ModularChannel::new_with_shift(cr.size, false, Some((3, 3)), image_metadata.bit_depth)?,
+        ModularChannel::new_with_shift(cr.size, false, Some((3, 3)), image_metadata.bit_depth)?,
+        ModularChannel::new((count, 2), false, image_metadata.bit_depth)?,
+        ModularChannel::new(r.size, false, image_metadata.bit_depth)?,
     ];
     decode_modular_subbitstream(
         buffers.iter_mut().collect(),
@@ -1015,8 +1018,8 @@ pub fn decode_hf_metadata(
         br,
         None,
     )?;
-    let ytox_image = &buffers[0].data;
-    let ytob_image = &buffers[1].data;
+    let ytox_image = buffers[0].data.as_i32();
+    let ytob_image = buffers[1].data.as_i32();
     let i8min: i32 = i8::MIN.into();
     let i8max: i32 = i8::MAX.into();
     for y in 0..cr.size.1 {
@@ -1029,8 +1032,8 @@ pub fn decode_hf_metadata(
             row_out_b[x] = row_in_b[x].clamp(i8min, i8max) as i8;
         }
     }
-    let transform_image = &buffers[2].data;
-    let epf_image = &buffers[3].data;
+    let transform_image = buffers[2].data.as_i32();
+    let epf_image = buffers[3].data.as_i32();
     let mut num: usize = 0;
     for y in 0..r.size.1 {
         let epf_row_in = epf_image.row(y);
@@ -1089,9 +1092,9 @@ pub fn decode_quant_table(
 ) -> Result<Vec<i32>> {
     let bit_depth = BitDepth::integer_samples(8);
     let mut image = [
-        ModularChannel::new((required_size_x, required_size_y), bit_depth)?,
-        ModularChannel::new((required_size_x, required_size_y), bit_depth)?,
-        ModularChannel::new((required_size_x, required_size_y), bit_depth)?,
+        ModularChannel::new((required_size_x, required_size_y), false, bit_depth)?,
+        ModularChannel::new((required_size_x, required_size_y), false, bit_depth)?,
+        ModularChannel::new((required_size_x, required_size_y), false, bit_depth)?,
     ];
     let stream_id = ModularStreamId::QuantTable(index).get_id(frame_header);
     decode_modular_subbitstream(
@@ -1106,6 +1109,7 @@ pub fn decode_quant_table(
     for channel in image.iter_mut() {
         for entry in channel
             .data
+            .as_i32()
             .get_rect(Rect {
                 size: (required_size_x, required_size_y),
                 origin: (0, 0),
