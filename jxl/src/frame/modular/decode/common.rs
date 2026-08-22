@@ -103,3 +103,21 @@ pub(super) fn precompute_references(
 pub(super) fn make_pixel(dec: i32, mul: u32, guess: i64) -> i32 {
     (guess + (mul as i64) * (dec as i64)) as i32
 }
+
+jxl_simd::simd_function!(
+    convert_i32_to_i16_dispatch,
+    d: D,
+    pub(super) fn convert_i32_to_i16(src: &[i32], dst: &mut [i16]) {
+        use jxl_simd::{I32SimdVec, SimdDescriptor};
+        let lanes = D::I32Vec::LEN;
+        let mut it_src = src.chunks_exact(lanes);
+        let mut it_dst = dst.chunks_exact_mut(lanes);
+        for (s, d_chunk) in (&mut it_src).zip(&mut it_dst) {
+            let v = D::I32Vec::load(d, s);
+            v.store_i16(d_chunk);
+        }
+        for (d_val, &s_val) in it_dst.into_remainder().iter_mut().zip(it_src.remainder()) {
+            *d_val = s_val as i16;
+        }
+    }
+);

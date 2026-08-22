@@ -1568,18 +1568,16 @@ fn smooth_2d_unsqueeze_i16_simd_impl<D: SimdDescriptor>(
 
                 let (out_0_0, out_0_1, out_1_0, out_1_1) = convolve_2d_simd(d, &n);
 
-                const { assert!(D::I32Vec::LEN <= 16) };
-                let mut temp_out_0 = [0i32; 32];
-                let mut temp_out_1 = [0i32; 32];
-                D::I32Vec::store_interleaved_2(out_0_0, out_0_1, &mut temp_out_0);
-                D::I32Vec::store_interleaved_2(out_1_0, out_1_1, &mut temp_out_1);
-                let len0 = out0.len();
-                for (dst, &src) in out0.iter_mut().zip(&temp_out_0[..len0]) {
-                    *dst = src as i16;
-                }
-                let len1 = out1.len();
-                for (dst, &src) in out1.iter_mut().zip(&temp_out_1[..len1]) {
-                    *dst = src as i16;
+                if out0.len() == 2 * lanes {
+                    D::I32Vec::store_interleaved_2_i16(out_0_0, out_0_1, out0);
+                    D::I32Vec::store_interleaved_2_i16(out_1_0, out_1_1, out1);
+                } else {
+                    let mut temp0 = [0i16; 32];
+                    let mut temp1 = [0i16; 32];
+                    D::I32Vec::store_interleaved_2_i16(out_0_0, out_0_1, &mut temp0[..2 * lanes]);
+                    D::I32Vec::store_interleaved_2_i16(out_1_0, out_1_1, &mut temp1[..2 * lanes]);
+                    out0.copy_from_slice(&temp0[..out0.len()]);
+                    out1.copy_from_slice(&temp1[..out1.len()]);
                 }
             }
         } else {
@@ -1626,12 +1624,12 @@ fn smooth_2d_unsqueeze_i16_simd_impl<D: SimdDescriptor>(
 
                 let (out_0_0, out_0_1, _, _) = convolve_2d_simd(d, &n);
 
-                const { assert!(D::I32Vec::LEN <= 16) };
-                let mut temp_out_0 = [0i32; 32];
-                D::I32Vec::store_interleaved_2(out_0_0, out_0_1, &mut temp_out_0);
-                let len0 = out0.len();
-                for (dst, &src) in out0.iter_mut().zip(&temp_out_0[..len0]) {
-                    *dst = src as i16;
+                if out0.len() == 2 * lanes {
+                    D::I32Vec::store_interleaved_2_i16(out_0_0, out_0_1, out0);
+                } else {
+                    let mut temp0 = [0i16; 32];
+                    D::I32Vec::store_interleaved_2_i16(out_0_0, out_0_1, &mut temp0[..2 * lanes]);
+                    out0.copy_from_slice(&temp0[..out0.len()]);
                 }
             }
         }
@@ -1818,12 +1816,12 @@ fn smooth_h_unsqueeze_i16_simd_impl<D: SimdDescriptor>(
 
             let (out_even, out_odd) = convolve_1d_simd(d, &n);
 
-            const { assert!(D::I32Vec::LEN <= 16) };
-            let mut temp_out = [0i32; 32];
-            D::I32Vec::store_interleaved_2(out_even, out_odd, &mut temp_out);
-            let len = out.len();
-            for (dst, &src) in out.iter_mut().zip(&temp_out[..len]) {
-                *dst = src as i16;
+            if out.len() == 2 * lanes {
+                D::I32Vec::store_interleaved_2_i16(out_even, out_odd, out);
+            } else {
+                let mut temp = [0i16; 32];
+                D::I32Vec::store_interleaved_2_i16(out_even, out_odd, &mut temp[..2 * lanes]);
+                out.copy_from_slice(&temp[..out.len()]);
             }
         }
         buffer.rotate_left(1);
@@ -2022,18 +2020,16 @@ fn smooth_v_unsqueeze_i16_simd_impl<D: SimdDescriptor>(
 
                 let (out_py0, out_py1) = convolve_1d_simd(d, &n);
 
-                const { assert!(D::I32Vec::LEN <= 16) };
-                let mut temp_out_0 = [0i32; 16];
-                let mut temp_out_1 = [0i32; 16];
-                out_py0.store(&mut temp_out_0);
-                out_py1.store(&mut temp_out_1);
-                let len0 = out0.len();
-                for (dst, &src) in out0.iter_mut().zip(&temp_out_0[..len0]) {
-                    *dst = src as i16;
-                }
-                let len1 = out1.len();
-                for (dst, &src) in out1.iter_mut().zip(&temp_out_1[..len1]) {
-                    *dst = src as i16;
+                if out0.len() == lanes {
+                    out_py0.store_i16(out0);
+                    out_py1.store_i16(out1);
+                } else {
+                    let mut temp0 = [0i16; 16];
+                    let mut temp1 = [0i16; 16];
+                    out_py0.store_i16(&mut temp0[..lanes]);
+                    out_py1.store_i16(&mut temp1[..lanes]);
+                    out0.copy_from_slice(&temp0[..out0.len()]);
+                    out1.copy_from_slice(&temp1[..out1.len()]);
                 }
             }
         } else {
@@ -2080,12 +2076,12 @@ fn smooth_v_unsqueeze_i16_simd_impl<D: SimdDescriptor>(
 
                 let (out_py0, _) = convolve_1d_simd(d, &n);
 
-                const { assert!(D::I32Vec::LEN <= 16) };
-                let mut temp_out_0 = [0i32; 16];
-                out_py0.store(&mut temp_out_0);
-                let len0 = out0.len();
-                for (dst, &src) in out0.iter_mut().zip(&temp_out_0[..len0]) {
-                    *dst = src as i16;
+                if out0.len() == lanes {
+                    out_py0.store_i16(out0);
+                } else {
+                    let mut temp0 = [0i16; 16];
+                    out_py0.store_i16(&mut temp0[..lanes]);
+                    out0.copy_from_slice(&temp0[..out0.len()]);
                 }
             }
         }

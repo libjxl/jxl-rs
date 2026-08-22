@@ -9,7 +9,7 @@ use std::ops::Range;
 use crate::bit_reader::BitReader;
 use crate::entropy_coding::decode::{Histograms, SymbolReader, unpack_signed};
 use crate::error::Result;
-use crate::frame::modular::decode::channel::ModularChannelDecoder;
+use crate::frame::modular::decode::channel::{ModularChannelDecoder, decode_row_slices_impl};
 use crate::frame::modular::decode::common::{make_pixel, precompute_references};
 use crate::frame::modular::flat_tree::{FlatTreeNode, predict_flat};
 use crate::frame::modular::predict::{PredictionData, WeightedPredictorState, clamped_gradient};
@@ -192,6 +192,23 @@ impl<WP: MaybeWeightedPredictor, R: Reader> ModularChannelDecoder for FlatTree<W
         self.wp_state.update_errors(val, pos);
         val
     }
+
+    #[inline(never)]
+    fn decode_row_slices(
+        &mut self,
+        row: &mut [i32],
+        row_top: &[i32],
+        row_toptop: &[i32],
+        histograms: &Histograms,
+        reader: &mut SymbolReader,
+        br: &mut BitReader,
+        y: usize,
+        xsize: usize,
+    ) {
+        decode_row_slices_impl(
+            self, row, row_top, row_toptop, histograms, reader, br, y, xsize,
+        );
+    }
 }
 
 const LUT_MAX_SPLITVAL: i32 = 1023;
@@ -284,6 +301,23 @@ impl<R: Reader> ModularChannelDecoder for WpOnly<R> {
         self.wp_state.update_errors(val, pos);
         val
     }
+
+    #[inline(never)]
+    fn decode_row_slices(
+        &mut self,
+        row: &mut [i32],
+        row_top: &[i32],
+        row_toptop: &[i32],
+        histograms: &Histograms,
+        reader: &mut SymbolReader,
+        br: &mut BitReader,
+        y: usize,
+        xsize: usize,
+    ) {
+        decode_row_slices_impl(
+            self, row, row_top, row_toptop, histograms, reader, br, y, xsize,
+        );
+    }
 }
 
 /// Property 9 is the "gradient property": left + top - topleft
@@ -335,6 +369,23 @@ impl<R: Reader> ModularChannelDecoder for GradientOnly<R> {
         let dec = self.reader.read(reader, histograms, br, cluster as usize);
         dec.wrapping_add(pred as i32)
     }
+
+    #[inline(never)]
+    fn decode_row_slices(
+        &mut self,
+        row: &mut [i32],
+        row_top: &[i32],
+        row_toptop: &[i32],
+        histograms: &Histograms,
+        reader: &mut SymbolReader,
+        br: &mut BitReader,
+        y: usize,
+        xsize: usize,
+    ) {
+        decode_row_slices_impl(
+            self, row, row_top, row_toptop, histograms, reader, br, y, xsize,
+        );
+    }
 }
 
 struct SingleGradientOnly<R> {
@@ -364,6 +415,23 @@ impl<R: Reader> ModularChannelDecoder for SingleGradientOnly<R> {
         );
         let dec = self.reader.read(reader, histograms, br, self.clustered_ctx);
         dec.wrapping_add(pred as i32)
+    }
+
+    #[inline(never)]
+    fn decode_row_slices(
+        &mut self,
+        row: &mut [i32],
+        row_top: &[i32],
+        row_toptop: &[i32],
+        histograms: &Histograms,
+        reader: &mut SymbolReader,
+        br: &mut BitReader,
+        y: usize,
+        xsize: usize,
+    ) {
+        decode_row_slices_impl(
+            self, row, row_top, row_toptop, histograms, reader, br, y, xsize,
+        );
     }
 }
 

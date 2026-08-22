@@ -320,6 +320,21 @@ pub trait I32SimdVec:
         );
     }
 
+    /// Stores two vectors interleaved as i16 values: [a0, b0, a1, b1, a2, b2, ...].
+    /// Requires `dest.len() >= 2 * Self::LEN` or it will panic.
+    fn store_interleaved_2_i16(a: Self, b: Self, dest: &mut [i16]) {
+        let len = Self::LEN;
+        assert!(dest.len() >= 2 * len);
+        let mut tmp_a = [0i16; 16];
+        let mut tmp_b = [0i16; 16];
+        a.store_i16(&mut tmp_a[..len]);
+        b.store_i16(&mut tmp_b[..len]);
+        for i in 0..len {
+            dest[2 * i] = tmp_a[i];
+            dest[2 * i + 1] = tmp_b[i];
+        }
+    }
+
     /// Stores the lower 8 bits of each i32 lane as u8 values.
     /// Requires `dest.len() >= Self::LEN` or it will panic.
     fn store_u8(self, dest: &mut [u8]);
