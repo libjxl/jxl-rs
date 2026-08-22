@@ -1195,3 +1195,97 @@ fn decode_test_strategic_solid_blue_grid_boundary() {
         }
     }
 }
+
+/// Changing the pixel format after a frame's render pipeline has already
+/// been built (e.g. an embedder configuring its output format once basic
+/// info is available, while the decoder already parsed ahead into a
+/// reference frame) must surface as an API usage error, not a panic.
+/// Setting the format right after the header stage completes works.
+#[test]
+fn test_pixel_format_change_after_pipeline_build() {
+    use crate::api::JxlDecoderInner;
+    let file = std::fs::read("resources/test/conformance_test_images/patches.jxl").unwrap();
+
+    let format_for = |decoder: &JxlDecoderInner| {
+        let num_ec = decoder.basic_info().unwrap().extra_channels.len();
+        JxlPixelFormat {
+            color_type: JxlColorType::Bgra,
+            color_data_format: Some(JxlDataFormat::U8 { bit_depth: 8 }),
+            extra_channel_format: vec![None; num_ec],
+        }
+    };
+
+    // Well-behaved usage: configure the pixel format as soon as basic info
+    // is available, i.e. right after the header-stage process() call and
+    // before any frame render pipeline exists.
+    {
+        let mut options = JxlDecoderOptions::default();
+        options.scan_frames_only = true;
+        let mut decoder = JxlDecoderInner::new(options);
+        let mut input = file.as_slice();
+        let mut format_set = false;
+        loop {
+            match decoder.process(&mut input, None, None).unwrap() {
+                ProcessingResult::Complete { .. } => {
+                    if !decoder.has_more_frames() {
+                        break;
+                    }
+                }
+                ProcessingResult::NeedsMoreInput { .. } => {
+                    if input.is_empty() {
+                        break;
+                    }
+                }
+            }
+            if !format_set && decoder.basic_info().is_some() {
+                decoder.set_pixel_format(format_for(&decoder));
+                format_set = true;
+            }
+        }
+    }
+
+    // API misuse: change the pixel format at an input split while the
+    // reference frame's pipeline is already built; rendering must return an
+    // error instead of panicking. Splits anywhere between the reference
+    // frame's pipeline creation and the end of its rendering used to panic;
+    // use one early and one late split.
+    for split in [2000, 20000] {
+        let mut options = JxlDecoderOptions::default();
+        options.scan_frames_only = true;
+        let mut decoder = JxlDecoderInner::new(options);
+        let mut format_set = false;
+        let mut error = None;
+        'chunks: for (start, end) in [(0usize, split), (split, file.len())] {
+            let mut input = &file[start..end];
+            loop {
+                match decoder.process(&mut input, None, None) {
+                    Ok(ProcessingResult::Complete { .. }) => {
+                        if !decoder.has_more_frames() {
+                            break;
+                        }
+                    }
+                    Ok(ProcessingResult::NeedsMoreInput { .. }) => {
+                        if input.is_empty() {
+                            break;
+                        }
+                    }
+                    Err(e) => {
+                        error = Some(e);
+                        break 'chunks;
+                    }
+                }
+                if input.is_empty() && !decoder.has_more_frames() {
+                    break;
+                }
+            }
+            if !format_set && decoder.basic_info().is_some() {
+                decoder.set_pixel_format(format_for(&decoder));
+                format_set = true;
+            }
+        }
+        assert!(
+            matches!(error, Some(Error::PixelFormatChangedMidFrame)),
+            "split {split}: expected PixelFormatChangedMidFrame, got {error:?}"
+        );
+    }
+}

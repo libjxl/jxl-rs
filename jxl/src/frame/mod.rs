@@ -12,7 +12,7 @@ use modular::{FullModularImage, Tree};
 use quant_weights::DequantMatrices;
 use quantizer::{LfQuantFactors, QuantizerParams};
 
-use crate::api::{JxlDecoderOptions, JxlParallelRunner};
+use crate::api::{JxlDecoderOptions, JxlParallelRunner, JxlPixelFormat};
 use crate::entropy_coding::decode::Histograms;
 use crate::error::Result;
 use crate::features::epf::SigmaSource;
@@ -292,6 +292,11 @@ pub struct Frame {
     render_pipeline: Option<Box<dyn std::any::Any + Send + Sync>>,
     #[cfg(not(test))]
     render_pipeline: Option<Box<crate::render::LowMemoryRenderPipeline>>,
+    /// The pixel format the render pipeline was built with. The pipeline's
+    /// save stages and output buffer indices are derived from it, so renders
+    /// must assemble output buffers according to this snapshot even if the
+    /// requested pixel format changes after the pipeline was built.
+    pipeline_pixel_format: Option<JxlPixelFormat>,
     reference_frame_data: Option<Vec<Image<f32>>>,
     lf_frame_data: Option<[Image<f32>; 3]>,
     section0_render_up_to_date: bool,
