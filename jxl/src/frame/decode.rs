@@ -27,7 +27,7 @@ use crate::features::noise::Noise;
 use crate::features::patches::PatchesDictionary;
 use crate::features::spline::Splines;
 use crate::frame::block_context_map::{ZERO_DENSITY_CONTEXT_COUNT, ZERO_DENSITY_CONTEXT_LIMIT};
-use crate::frame::group::VarDctBuffers;
+use crate::frame::group::{CoeffBuffer, VarDctBuffers};
 use crate::frame::{
     DataStatus, DecoderState, Frame, GroupStatus, HfGlobalState, HfMetadata, LfGlobalState,
     PassState, coeff_order,
@@ -547,12 +547,28 @@ impl Frame {
             let hf_coefficients = if passes.len() <= 1 {
                 vec![]
             } else {
+                let max_num_bits = passes
+                    .iter()
+                    .enumerate()
+                    .map(|(pass, p)| {
+                        let shift = self.header.passes.shift.get(pass).copied().unwrap_or(0);
+                        p.histograms.max_num_bits().saturating_add(shift as usize)
+                    })
+                    .max()
+                    .unwrap_or(0);
+                let use_i16 = max_num_bits < 16;
                 (0..self.header.num_groups())
                     .map(|_| {
                         let sz = GROUP_DIM * GROUP_DIM * 3;
-                        let mut v = Vec::new_with_capacity(sz)?;
-                        v.resize(sz, 0);
-                        Ok(Mutex::new(v))
+                        if use_i16 {
+                            let mut v = Vec::new_with_capacity(sz)?;
+                            v.resize(sz, 0i16);
+                            Ok(Mutex::new(CoeffBuffer::I16(v)))
+                        } else {
+                            let mut v = Vec::new_with_capacity(sz)?;
+                            v.resize(sz, 0i32);
+                            Ok(Mutex::new(CoeffBuffer::I32(v)))
+                        }
                     })
                     .collect::<Result<_>>()?
             };
