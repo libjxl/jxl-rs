@@ -3,7 +3,7 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-use jxl_simd::{I32SimdVec, ScalarDescriptor, SimdDescriptor, shr, simd_function};
+use jxl_simd::{I16SimdVec, I32SimdVec, ScalarDescriptor, SimdDescriptor, shr, simd_function};
 
 use crate::frame::modular::buffers::{ModularChannel, ModularData};
 use crate::frame::modular::transforms::{RctOp, RctPermutation};
@@ -11,12 +11,45 @@ use crate::image::Image;
 use crate::util::tracing_wrappers::*;
 
 #[inline(always)]
-fn rct_impl<D: SimdDescriptor, const OP: u32>(
-    _: D,
+fn rct_impl_i32<D: SimdDescriptor, const OP: u32>(
     v0: D::I32Vec,
     v1: D::I32Vec,
     v2: D::I32Vec,
 ) -> (D::I32Vec, D::I32Vec, D::I32Vec) {
+    const { assert!(OP <= 6) };
+
+    match OP {
+        0 => (v0, v1, v2),
+        1 => (v0, v1, v2 + v0),
+        2 => (v0, v1 + v0, v2),
+        3 => (v0, v1 + v0, v2 + v0),
+        4 => {
+            let avg = shr!(v0 + v2, 1);
+            (v0, v1 + avg, v2)
+        }
+        5 => {
+            let v2 = v0 + v2;
+            let avg = shr!(v0 + v2, 1);
+            (v0, v1 + avg, v2)
+        }
+        6 => {
+            let (y, co, cg) = (v0, v1, v2);
+            let y = y - shr!(cg, 1);
+            let g = cg + y;
+            let y = y - shr!(co, 1);
+            let r = y + co;
+            (r, g, y)
+        }
+        _ => unreachable!(),
+    }
+}
+
+#[inline(always)]
+fn rct_impl_i16<D: SimdDescriptor, const OP: u32>(
+    v0: D::I16Vec,
+    v1: D::I16Vec,
+    v2: D::I16Vec,
+) -> (D::I16Vec, D::I16Vec, D::I16Vec) {
     const { assert!(OP <= 6) };
 
     match OP {
@@ -57,7 +90,7 @@ fn rct_row_impl<D: SimdDescriptor, const OP: u32>(d: D, rgb: [&mut [i32]; 3]) ->
         let v0 = D::I32Vec::load(d, r);
         let v1 = D::I32Vec::load(d, g);
         let v2 = D::I32Vec::load(d, b);
-        let (w0, w1, w2) = rct_impl::<D, OP>(d, v0, v1, v2);
+        let (w0, w1, w2) = rct_impl_i32::<D, OP>(v0, v1, v2);
         w0.store(r);
         w1.store(g);
         w2.store(b);
@@ -121,16 +154,16 @@ fn rct_row_impl_i16<D: SimdDescriptor, const OP: u32>(
     const { assert!(OP <= 6) };
 
     let [mut it_row_r, mut it_row_g, mut it_row_b] =
-        rgb.map(|x| x.chunks_exact_mut(D::I32Vec::LEN));
+        rgb.map(|x| x.chunks_exact_mut(D::I16Vec::LEN));
     let it = (&mut it_row_r).zip(&mut it_row_g).zip(&mut it_row_b);
     for ((r, g), b) in it {
-        let v0 = D::I32Vec::load_from_i16(d, r);
-        let v1 = D::I32Vec::load_from_i16(d, g);
-        let v2 = D::I32Vec::load_from_i16(d, b);
-        let (w0, w1, w2) = rct_impl::<D, OP>(d, v0, v1, v2);
-        w0.store_i16(r);
-        w1.store_i16(g);
-        w2.store_i16(b);
+        let v0 = D::I16Vec::load(d, r);
+        let v1 = D::I16Vec::load(d, g);
+        let v2 = D::I16Vec::load(d, b);
+        let (w0, w1, w2) = rct_impl_i16::<D, OP>(v0, v1, v2);
+        w0.store(r);
+        w1.store(g);
+        w2.store(b);
     }
 
     [
@@ -155,13 +188,13 @@ fn rct_loop_impl_i16<D: SimdDescriptor, const OP: u32>(
         let mut rgb = [&mut *r, &mut *g, &mut *b].map(|x| x.row_mut(pos_y));
 
         rgb = rct_row_impl_i16::<D, OP>(d, rgb);
-        if D::I32Vec::LEN > 8 {
+        if D::I16Vec::LEN > 16 {
             rgb = rct_row_impl_i16::<_, OP>(d.maybe_downgrade_256bit(), rgb);
         }
-        if D::I32Vec::LEN > 4 {
+        if D::I16Vec::LEN > 8 {
             rgb = rct_row_impl_i16::<_, OP>(d.maybe_downgrade_128bit(), rgb);
         }
-        if D::I32Vec::LEN > 1 {
+        if D::I16Vec::LEN > 1 {
             rct_row_impl_i16::<_, OP>(ScalarDescriptor::new().unwrap(), rgb);
         }
     }

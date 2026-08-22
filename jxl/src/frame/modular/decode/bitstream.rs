@@ -124,8 +124,9 @@ fn decode_fast_lossless(
             ModularData::I16(buf) => {
                 let mut last = 0i32;
                 for p in buf.row_mut(0) {
-                    *p = last.wrapping_add(decode()) as i16;
-                    last = *p as i32;
+                    let val = last.wrapping_add(decode());
+                    *p = val as i16;
+                    last = val;
                 }
 
                 for y in 1..h {
@@ -136,8 +137,9 @@ fn decode_fast_lossless(
                     for (top, p) in row_top.iter().copied().zip(row.iter_mut()) {
                         let top = top as i32;
                         let pred = clamped_gradient(left as i64, top as i64, topleft as i64);
-                        *p = (pred + decode() as i64) as i16;
-                        left = *p as i32;
+                        let val = (pred + decode() as i64) as i32;
+                        *p = val as i16;
+                        left = val;
                         topleft = top;
                     }
                 }

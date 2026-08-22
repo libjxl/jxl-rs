@@ -209,6 +209,23 @@ impl<WP: MaybeWeightedPredictor, R: Reader> ModularChannelDecoder for FlatTree<W
             self, row, row_top, row_toptop, histograms, reader, br, y, xsize,
         );
     }
+
+    #[inline(never)]
+    fn decode_row_slices_i16(
+        &mut self,
+        row: &mut [i16],
+        row_top: &[i16],
+        row_toptop: &[i16],
+        histograms: &Histograms,
+        reader: &mut SymbolReader,
+        br: &mut BitReader,
+        y: usize,
+        xsize: usize,
+    ) {
+        decode_row_slices_impl(
+            self, row, row_top, row_toptop, histograms, reader, br, y, xsize,
+        );
+    }
 }
 
 const LUT_MAX_SPLITVAL: i32 = 1023;
@@ -318,6 +335,23 @@ impl<R: Reader> ModularChannelDecoder for WpOnly<R> {
             self, row, row_top, row_toptop, histograms, reader, br, y, xsize,
         );
     }
+
+    #[inline(never)]
+    fn decode_row_slices_i16(
+        &mut self,
+        row: &mut [i16],
+        row_top: &[i16],
+        row_toptop: &[i16],
+        histograms: &Histograms,
+        reader: &mut SymbolReader,
+        br: &mut BitReader,
+        y: usize,
+        xsize: usize,
+    ) {
+        decode_row_slices_impl(
+            self, row, row_top, row_toptop, histograms, reader, br, y, xsize,
+        );
+    }
 }
 
 /// Property 9 is the "gradient property": left + top - topleft
@@ -386,6 +420,23 @@ impl<R: Reader> ModularChannelDecoder for GradientOnly<R> {
             self, row, row_top, row_toptop, histograms, reader, br, y, xsize,
         );
     }
+
+    #[inline(never)]
+    fn decode_row_slices_i16(
+        &mut self,
+        row: &mut [i16],
+        row_top: &[i16],
+        row_toptop: &[i16],
+        histograms: &Histograms,
+        reader: &mut SymbolReader,
+        br: &mut BitReader,
+        y: usize,
+        xsize: usize,
+    ) {
+        decode_row_slices_impl(
+            self, row, row_top, row_toptop, histograms, reader, br, y, xsize,
+        );
+    }
 }
 
 struct SingleGradientOnly<R> {
@@ -423,6 +474,23 @@ impl<R: Reader> ModularChannelDecoder for SingleGradientOnly<R> {
         row: &mut [i32],
         row_top: &[i32],
         row_toptop: &[i32],
+        histograms: &Histograms,
+        reader: &mut SymbolReader,
+        br: &mut BitReader,
+        y: usize,
+        xsize: usize,
+    ) {
+        decode_row_slices_impl(
+            self, row, row_top, row_toptop, histograms, reader, br, y, xsize,
+        );
+    }
+
+    #[inline(never)]
+    fn decode_row_slices_i16(
+        &mut self,
+        row: &mut [i16],
+        row_top: &[i16],
+        row_toptop: &[i16],
         histograms: &Histograms,
         reader: &mut SymbolReader,
         br: &mut BitReader,
@@ -475,6 +543,27 @@ impl ModularChannelDecoder for NoTreeZero {
         }
     }
 
+    #[inline(never)]
+    fn decode_row_slices_i16(
+        &mut self,
+        row: &mut [i16],
+        _row_top: &[i16],
+        _row_toptop: &[i16],
+        histograms: &Histograms,
+        reader: &mut SymbolReader,
+        br: &mut BitReader,
+        _y: usize,
+        xsize: usize,
+    ) {
+        debug_assert_eq!(row.len(), xsize);
+        if let Some(sym) = self.single_value {
+            row.fill(sym as i16);
+        } else {
+            for r in row.iter_mut() {
+                *r = reader.read_signed_clustered_inline(histograms, br, self.clustered_ctx) as i16;
+            }
+        }
+    }
 }
 
 pub fn run_on_specialized_tree<F: FnOnce(&mut dyn ModularChannelDecoder) -> Result<()>>(

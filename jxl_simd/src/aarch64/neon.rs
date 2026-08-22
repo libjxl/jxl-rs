@@ -9,7 +9,7 @@ use std::ops::{
     Mul, MulAssign, Neg, Sub, SubAssign,
 };
 
-use super::super::{F32SimdVec, I32SimdVec, SimdDescriptor, SimdMask, U8SimdVec, U16SimdVec};
+use super::super::{F32SimdVec, I16SimdVec, I32SimdVec, SimdDescriptor, SimdMask, U8SimdVec, U16SimdVec};
 use crate::U32SimdVec;
 
 // Safety invariant: this type is only ever constructed if neon is available.
@@ -36,6 +36,8 @@ impl SimdDescriptor for NeonDescriptor {
     type I32Vec = I32VecNeon;
 
     type U32Vec = U32VecNeon;
+
+    type I16Vec = I16VecNeon;
 
     type U16Vec = U16VecNeon;
 
@@ -978,6 +980,105 @@ impl U16SimdVec for U16VecNeon {
         unsafe {
             let dest_ptr = dest.as_mut_ptr();
             vst4q_u16(dest_ptr, uint16x8x4_t(a.0, b.0, c.0, d.0));
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+#[repr(transparent)]
+pub struct I16VecNeon(int16x8_t, NeonDescriptor);
+
+impl I16SimdVec for I16VecNeon {
+    type Descriptor = NeonDescriptor;
+
+    const LEN: usize = 8;
+
+    #[inline(always)]
+    fn splat(d: Self::Descriptor, v: i16) -> Self {
+        // SAFETY: We know neon is available from the safety invariant on `d`.
+        Self(unsafe { vdupq_n_s16(v) }, d)
+    }
+
+    #[inline(always)]
+    fn load(d: Self::Descriptor, mem: &[i16]) -> Self {
+        assert!(mem.len() >= Self::LEN);
+        // SAFETY: we just checked that `mem` has enough space. Moreover, we know neon is available
+        // from the safety invariant on `d`.
+        Self(unsafe { vld1q_s16(mem.as_ptr()) }, d)
+    }
+
+    #[inline(always)]
+    fn store(&self, mem: &mut [i16]) {
+        assert!(mem.len() >= Self::LEN);
+        // SAFETY: we just checked that `mem` has enough space. Moreover, we know neon is available
+        // from the safety invariant on `self.1`.
+        unsafe { vst1q_s16(mem.as_mut_ptr(), self.0) }
+    }
+
+    #[inline(always)]
+    fn shr<const AMOUNT_U: u32, const AMOUNT_I: i32>(self) -> Self {
+        // SAFETY: We know neon is available from the safety invariant on `self.1`.
+        unsafe { Self(vshrq_n_s16::<AMOUNT_I>(self.0), self.1) }
+    }
+
+    #[inline(always)]
+    fn store_interleaved_2(a: Self, b: Self, dest: &mut [i16]) {
+        assert!(dest.len() >= 2 * Self::LEN);
+        unsafe {
+            let dest_ptr = dest.as_mut_ptr();
+            vst2q_s16(dest_ptr, int16x8x2_t(a.0, b.0));
+        }
+    }
+
+    #[inline(always)]
+    fn store_interleaved_3(a: Self, b: Self, c: Self, dest: &mut [i16]) {
+        assert!(dest.len() >= 3 * Self::LEN);
+        unsafe {
+            let dest_ptr = dest.as_mut_ptr();
+            vst3q_s16(dest_ptr, int16x8x3_t(a.0, b.0, c.0));
+        }
+    }
+
+    #[inline(always)]
+    fn store_interleaved_4(a: Self, b: Self, c: Self, d: Self, dest: &mut [i16]) {
+        assert!(dest.len() >= 4 * Self::LEN);
+        unsafe {
+            let dest_ptr = dest.as_mut_ptr();
+            vst4q_s16(dest_ptr, int16x8x4_t(a.0, b.0, c.0, d.0));
+        }
+    }
+}
+
+impl Add<I16VecNeon> for I16VecNeon {
+    type Output = I16VecNeon;
+    fn_neon! {
+        fn add(this: I16VecNeon, rhs: I16VecNeon) -> I16VecNeon {
+            I16VecNeon(vaddq_s16(this.0, rhs.0), this.1)
+        }
+    }
+}
+
+impl Sub<I16VecNeon> for I16VecNeon {
+    type Output = I16VecNeon;
+    fn_neon! {
+        fn sub(this: I16VecNeon, rhs: I16VecNeon) -> I16VecNeon {
+            I16VecNeon(vsubq_s16(this.0, rhs.0), this.1)
+        }
+    }
+}
+
+impl AddAssign<I16VecNeon> for I16VecNeon {
+    fn_neon! {
+        fn add_assign(this: &mut I16VecNeon, rhs: I16VecNeon) {
+            this.0 = vaddq_s16(this.0, rhs.0);
+        }
+    }
+}
+
+impl SubAssign<I16VecNeon> for I16VecNeon {
+    fn_neon! {
+        fn sub_assign(this: &mut I16VecNeon, rhs: I16VecNeon) {
+            this.0 = vsubq_s16(this.0, rhs.0);
         }
     }
 }

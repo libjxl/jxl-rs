@@ -50,6 +50,33 @@ impl TryFrom<u32> for Predictor {
     }
 }
 
+pub trait ModularSample: Copy + Default + 'static {
+    fn from_i32(val: i32) -> Self;
+    fn to_i32(self) -> i32;
+}
+
+impl ModularSample for i32 {
+    #[inline(always)]
+    fn from_i32(val: i32) -> Self {
+        val
+    }
+    #[inline(always)]
+    fn to_i32(self) -> i32 {
+        self
+    }
+}
+
+impl ModularSample for i16 {
+    #[inline(always)]
+    fn from_i32(val: i32) -> Self {
+        val as i16
+    }
+    #[inline(always)]
+    fn to_i32(self) -> i32 {
+        self as i32
+    }
+}
+
 #[derive(Debug, Clone, Copy, Default)]
 pub struct PredictionData {
     pub left: i32,
@@ -63,10 +90,10 @@ pub struct PredictionData {
 
 impl PredictionData {
     #[inline(always)]
-    pub fn update_for_interior_row(
+    pub fn update_for_interior_row<T: ModularSample>(
         self,
-        row_top: &[i32],
-        row_toptop: &[i32],
+        row_top: &[T],
+        row_toptop: &[T],
         x: usize,
         cur: i32,
         needs_toptop: bool,
@@ -78,8 +105,8 @@ impl PredictionData {
         let topleft = self.top;
         let topright = self.toprightright;
         let leftleft = self.left;
-        let toptop = if needs_toptop { row_toptop[x] } else { 0 };
-        let toprightright = row_top[x + 2];
+        let toptop = if needs_toptop { row_toptop[x].to_i32() } else { 0 };
+        let toprightright = row_top[x + 2].to_i32();
         Self {
             left,
             top,
@@ -92,25 +119,25 @@ impl PredictionData {
     }
 
     #[inline]
-    pub fn get_rows(row: &[i32], row_top: &[i32], row_toptop: &[i32], x: usize, y: usize) -> Self {
+    pub fn get_rows<T: ModularSample>(row: &[T], row_top: &[T], row_toptop: &[T], x: usize, y: usize) -> Self {
         let left = if x > 0 {
-            row[x - 1]
+            row[x - 1].to_i32()
         } else if y > 0 {
-            row_top[0]
+            row_top[0].to_i32()
         } else {
             0
         };
-        let top = if y > 0 { row_top[x] } else { left };
-        let topleft = if x > 0 && y > 0 { row_top[x - 1] } else { left };
+        let top = if y > 0 { row_top[x].to_i32() } else { left };
+        let topleft = if x > 0 && y > 0 { row_top[x - 1].to_i32() } else { left };
         let topright = if x + 1 < row.len() && y > 0 {
-            row_top[x + 1]
+            row_top[x + 1].to_i32()
         } else {
             top
         };
-        let leftleft = if x > 1 { row[x - 2] } else { left };
-        let toptop = if y > 1 { row_toptop[x] } else { top };
+        let leftleft = if x > 1 { row[x - 2].to_i32() } else { left };
+        let toptop = if y > 1 { row_toptop[x].to_i32() } else { top };
         let toprightright = if x + 2 < row.len() && y > 0 {
-            row_top[x + 2]
+            row_top[x + 2].to_i32()
         } else {
             topright
         };

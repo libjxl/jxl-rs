@@ -43,6 +43,8 @@ pub trait SimdDescriptor: Sized + Copy + Debug + Send + Sync {
 
     type U32Vec: U32SimdVec<Descriptor = Self>;
 
+    type I16Vec: I16SimdVec<Descriptor = Self>;
+
     type U16Vec: U16SimdVec<Descriptor = Self>;
 
     type U8Vec: U8SimdVec<Descriptor = Self>;
@@ -371,6 +373,40 @@ pub trait U8SimdVec: Sized + Copy + Debug + Send + Sync {
     /// Stores four vectors interleaved: [a0, b0, c0, d0, a1, b1, c1, d1, ...].
     /// Requires `dest.len() >= 4 * Self::LEN` or it will panic.
     fn store_interleaved_4(a: Self, b: Self, c: Self, d: Self, dest: &mut [u8]);
+}
+
+pub trait I16SimdVec:
+    Sized
+    + Copy
+    + Debug
+    + Send
+    + Sync
+    + Add<Self, Output = Self>
+    + Sub<Self, Output = Self>
+    + AddAssign<Self>
+    + SubAssign<Self>
+{
+    type Descriptor: SimdDescriptor;
+
+    const LEN: usize;
+
+    fn load(d: Self::Descriptor, mem: &[i16]) -> Self;
+    fn splat(d: Self::Descriptor, v: i16) -> Self;
+    fn store(&self, mem: &mut [i16]);
+
+    fn shr<const AMOUNT_U: u32, const AMOUNT_I: i32>(self) -> Self;
+
+    /// Stores two vectors interleaved: [a0, b0, a1, b1, a2, b2, ...].
+    /// Requires `dest.len() >= 2 * Self::LEN` or it will panic.
+    fn store_interleaved_2(a: Self, b: Self, dest: &mut [i16]);
+
+    /// Stores three vectors interleaved: [a0, b0, c0, a1, b1, c1, ...].
+    /// Requires `dest.len() >= 3 * Self::LEN` or it will panic.
+    fn store_interleaved_3(a: Self, b: Self, c: Self, dest: &mut [i16]);
+
+    /// Stores four vectors interleaved: [a0, b0, c0, d0, a1, b1, c1, d1, ...].
+    /// Requires `dest.len() >= 4 * Self::LEN` or it will panic.
+    fn store_interleaved_4(a: Self, b: Self, c: Self, d: Self, dest: &mut [i16]);
 }
 
 pub trait U16SimdVec: Sized + Copy + Debug + Send + Sync {

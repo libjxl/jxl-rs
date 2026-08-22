@@ -5,7 +5,7 @@
 
 use std::num::Wrapping;
 
-use super::{F32SimdVec, I32SimdVec, SimdDescriptor, SimdMask, U8SimdVec, U16SimdVec};
+use super::{F32SimdVec, I16SimdVec, I32SimdVec, SimdDescriptor, SimdMask, U8SimdVec, U16SimdVec};
 use crate::{U32SimdVec, f16, impl_f32_array_interface};
 
 #[derive(Clone, Copy, Debug)]
@@ -15,8 +15,9 @@ impl SimdDescriptor for ScalarDescriptor {
     type F32Vec = f32;
     type I32Vec = Wrapping<i32>;
     type U32Vec = Wrapping<u32>;
-    type U8Vec = u8;
+    type I16Vec = Wrapping<i16>;
     type U16Vec = u16;
+    type U8Vec = u8;
     type Mask = bool;
     type Bf16Table8 = [f32; 8];
 
@@ -368,6 +369,52 @@ impl U8SimdVec for u8 {
         dest[1] = b;
         dest[2] = c;
         dest[3] = d;
+    }
+}
+
+impl I16SimdVec for Wrapping<i16> {
+    type Descriptor = ScalarDescriptor;
+    const LEN: usize = 1;
+
+    #[inline(always)]
+    fn load(_d: Self::Descriptor, mem: &[i16]) -> Self {
+        Wrapping(mem[0])
+    }
+
+    #[inline(always)]
+    fn splat(_d: Self::Descriptor, v: i16) -> Self {
+        Wrapping(v)
+    }
+
+    #[inline(always)]
+    fn store(&self, mem: &mut [i16]) {
+        mem[0] = self.0;
+    }
+
+    #[inline(always)]
+    fn shr<const AMOUNT_U: u32, const AMOUNT_I: i32>(self) -> Self {
+        Wrapping(self.0 >> AMOUNT_I)
+    }
+
+    #[inline(always)]
+    fn store_interleaved_2(a: Self, b: Self, dest: &mut [i16]) {
+        dest[0] = a.0;
+        dest[1] = b.0;
+    }
+
+    #[inline(always)]
+    fn store_interleaved_3(a: Self, b: Self, c: Self, dest: &mut [i16]) {
+        dest[0] = a.0;
+        dest[1] = b.0;
+        dest[2] = c.0;
+    }
+
+    #[inline(always)]
+    fn store_interleaved_4(a: Self, b: Self, c: Self, d: Self, dest: &mut [i16]) {
+        dest[0] = a.0;
+        dest[1] = b.0;
+        dest[2] = c.0;
+        dest[3] = d.0;
     }
 }
 

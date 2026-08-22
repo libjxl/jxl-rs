@@ -9,7 +9,7 @@ use std::ops::{
     Mul, MulAssign, Neg, Sub, SubAssign,
 };
 
-use super::super::{F32SimdVec, I32SimdVec, SimdDescriptor, SimdMask, U8SimdVec, U16SimdVec};
+use super::super::{F32SimdVec, I16SimdVec, I32SimdVec, SimdDescriptor, SimdMask, U8SimdVec, U16SimdVec};
 use crate::{U32SimdVec, impl_f32_array_interface};
 
 // Safety invariant: this type is only ever constructed if sse4.2 is available.
@@ -28,6 +28,7 @@ impl SimdDescriptor for Sse42Descriptor {
     type F32Vec = F32VecSse42;
     type I32Vec = I32VecSse42;
     type U32Vec = U32VecSse42;
+    type I16Vec = I16VecSse42;
     type U16Vec = U16VecSse42;
     type U8Vec = U8VecSse42;
     type Mask = MaskSse42;
@@ -1252,6 +1253,95 @@ impl U16SimdVec for U16VecSse42 {
         // SAFETY: sse4.2 is available from the safety invariant on the descriptor.
         unsafe { store_interleaved_4_impl(a.0, b.0, c.0, d.0, dest) }
     }
+}
+
+#[derive(Clone, Copy, Debug)]
+#[repr(transparent)]
+pub struct I16VecSse42(__m128i, Sse42Descriptor);
+
+impl I16SimdVec for I16VecSse42 {
+    type Descriptor = Sse42Descriptor;
+
+    const LEN: usize = 8;
+
+    #[inline(always)]
+    fn splat(d: Self::Descriptor, v: i16) -> Self {
+        unsafe { Self(_mm_set1_epi16(v), d) }
+    }
+
+    #[inline(always)]
+    fn load(d: Self::Descriptor, mem: &[i16]) -> Self {
+        assert!(mem.len() >= Self::LEN);
+        Self(unsafe { _mm_loadu_si128(mem.as_ptr().cast()) }, d)
+    }
+
+    #[inline(always)]
+    fn store(&self, mem: &mut [i16]) {
+        assert!(mem.len() >= Self::LEN);
+        unsafe { _mm_storeu_si128(mem.as_mut_ptr().cast(), self.0) }
+    }
+
+    #[inline(always)]
+    fn shr<const AMOUNT_U: u32, const AMOUNT_I: i32>(self) -> Self {
+        // SAFETY: We know sse2 is available from the safety invariant on descriptor.
+        unsafe { Self(_mm_srai_epi16::<AMOUNT_I>(self.0), self.1) }
+    }
+
+    #[inline(always)]
+    fn store_interleaved_2(a: Self, b: Self, dest: &mut [i16]) {
+        U16SimdVec::store_interleaved_2(
+            U16VecSse42(a.0, a.1),
+            U16VecSse42(b.0, b.1),
+            unsafe { std::slice::from_raw_parts_mut(dest.as_mut_ptr().cast::<u16>(), dest.len()) },
+        );
+    }
+
+    #[inline(always)]
+    fn store_interleaved_3(a: Self, b: Self, c: Self, dest: &mut [i16]) {
+        U16SimdVec::store_interleaved_3(
+            U16VecSse42(a.0, a.1),
+            U16VecSse42(b.0, b.1),
+            U16VecSse42(c.0, c.1),
+            unsafe { std::slice::from_raw_parts_mut(dest.as_mut_ptr().cast::<u16>(), dest.len()) },
+        );
+    }
+
+    #[inline(always)]
+    fn store_interleaved_4(a: Self, b: Self, c: Self, d: Self, dest: &mut [i16]) {
+        U16SimdVec::store_interleaved_4(
+            U16VecSse42(a.0, a.1),
+            U16VecSse42(b.0, b.1),
+            U16VecSse42(c.0, c.1),
+            U16VecSse42(d.0, d.1),
+            unsafe { std::slice::from_raw_parts_mut(dest.as_mut_ptr().cast::<u16>(), dest.len()) },
+        );
+    }
+}
+
+impl Add<I16VecSse42> for I16VecSse42 {
+    type Output = I16VecSse42;
+    fn_sse42!(this: I16VecSse42, fn add(rhs: I16VecSse42) -> I16VecSse42 {
+        I16VecSse42(_mm_add_epi16(this.0, rhs.0), this.1)
+    });
+}
+
+impl Sub<I16VecSse42> for I16VecSse42 {
+    type Output = I16VecSse42;
+    fn_sse42!(this: I16VecSse42, fn sub(rhs: I16VecSse42) -> I16VecSse42 {
+        I16VecSse42(_mm_sub_epi16(this.0, rhs.0), this.1)
+    });
+}
+
+impl AddAssign<I16VecSse42> for I16VecSse42 {
+    fn_sse42!(this: &mut I16VecSse42, fn add_assign(rhs: I16VecSse42) {
+        this.0 = _mm_add_epi16(this.0, rhs.0)
+    });
+}
+
+impl SubAssign<I16VecSse42> for I16VecSse42 {
+    fn_sse42!(this: &mut I16VecSse42, fn sub_assign(rhs: I16VecSse42) {
+        this.0 = _mm_sub_epi16(this.0, rhs.0)
+    });
 }
 
 impl SimdMask for MaskSse42 {

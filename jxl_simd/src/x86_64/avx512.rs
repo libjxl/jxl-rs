@@ -10,7 +10,7 @@ use std::ops::{
 };
 
 use super::super::{
-    AvxDescriptor, F32SimdVec, I32SimdVec, SimdDescriptor, SimdMask, U8SimdVec, U16SimdVec,
+    AvxDescriptor, F32SimdVec, I16SimdVec, I32SimdVec, SimdDescriptor, SimdMask, U8SimdVec, U16SimdVec,
 };
 use crate::{Sse42Descriptor, U32SimdVec, impl_f32_array_interface};
 
@@ -43,8 +43,9 @@ impl SimdDescriptor for Avx512Descriptor {
     type F32Vec = F32VecAvx512;
     type I32Vec = I32VecAvx512;
     type U32Vec = U32VecAvx512;
-    type U8Vec = U8VecAvx512;
+    type I16Vec = I16VecAvx512;
     type U16Vec = U16VecAvx512;
+    type U8Vec = U8VecAvx512;
     type Mask = MaskAvx512;
     type Bf16Table8 = Bf16Table8Avx512;
 
@@ -92,6 +93,23 @@ macro_rules! fn_avx {
                 $body
             }
             // SAFETY: `self.1` is constructed iff avx512f is available.
+            unsafe { inner(self, $($arg),*) }
+        }
+    };
+}
+
+macro_rules! fn_avx_bw {
+    (
+        $this:ident: $self_ty:ty,
+        fn $name:ident($($arg:ident: $ty:ty),* $(,)?) $(-> $ret:ty )? $body: block) => {
+        #[inline(always)]
+        fn $name(self: $self_ty, $($arg: $ty),*) $(-> $ret)? {
+            #[target_feature(enable = "avx512f,avx512bw")]
+            #[inline]
+            fn inner($this: $self_ty, $($arg: $ty),*) $(-> $ret)? {
+                $body
+            }
+            // SAFETY: `self.1` is constructed iff avx512f and avx512bw are available.
             unsafe { inner(self, $($arg),*) }
         }
     };
@@ -1582,6 +1600,95 @@ impl U16SimdVec for U16VecAvx512 {
         // SAFETY: We know avx512f and avx512bw are available from the safety invariant on `d`.
         unsafe { impl_u16_4(a.0, b.0, c.0, d.0, dest) }
     }
+}
+
+#[derive(Clone, Copy, Debug)]
+#[repr(transparent)]
+pub struct I16VecAvx512(__m512i, Avx512Descriptor);
+
+impl I16SimdVec for I16VecAvx512 {
+    type Descriptor = Avx512Descriptor;
+
+    const LEN: usize = 32;
+
+    #[inline(always)]
+    fn splat(d: Self::Descriptor, v: i16) -> Self {
+        unsafe { Self(_mm512_set1_epi16(v), d) }
+    }
+
+    #[inline(always)]
+    fn load(d: Self::Descriptor, mem: &[i16]) -> Self {
+        assert!(mem.len() >= Self::LEN);
+        Self(unsafe { _mm512_loadu_si512(mem.as_ptr().cast()) }, d)
+    }
+
+    #[inline(always)]
+    fn store(&self, mem: &mut [i16]) {
+        assert!(mem.len() >= Self::LEN);
+        unsafe { _mm512_storeu_si512(mem.as_mut_ptr().cast(), self.0) }
+    }
+
+    #[inline(always)]
+    fn shr<const AMOUNT_U: u32, const AMOUNT_I: i32>(self) -> Self {
+        // SAFETY: We know avx512bw is available from the safety invariant on descriptor.
+        unsafe { Self(_mm512_srai_epi16::<AMOUNT_U>(self.0), self.1) }
+    }
+
+    #[inline(always)]
+    fn store_interleaved_2(a: Self, b: Self, dest: &mut [i16]) {
+        U16SimdVec::store_interleaved_2(
+            U16VecAvx512(a.0, a.1),
+            U16VecAvx512(b.0, b.1),
+            unsafe { std::slice::from_raw_parts_mut(dest.as_mut_ptr().cast::<u16>(), dest.len()) },
+        );
+    }
+
+    #[inline(always)]
+    fn store_interleaved_3(a: Self, b: Self, c: Self, dest: &mut [i16]) {
+        U16SimdVec::store_interleaved_3(
+            U16VecAvx512(a.0, a.1),
+            U16VecAvx512(b.0, b.1),
+            U16VecAvx512(c.0, c.1),
+            unsafe { std::slice::from_raw_parts_mut(dest.as_mut_ptr().cast::<u16>(), dest.len()) },
+        );
+    }
+
+    #[inline(always)]
+    fn store_interleaved_4(a: Self, b: Self, c: Self, d: Self, dest: &mut [i16]) {
+        U16SimdVec::store_interleaved_4(
+            U16VecAvx512(a.0, a.1),
+            U16VecAvx512(b.0, b.1),
+            U16VecAvx512(c.0, c.1),
+            U16VecAvx512(d.0, d.1),
+            unsafe { std::slice::from_raw_parts_mut(dest.as_mut_ptr().cast::<u16>(), dest.len()) },
+        );
+    }
+}
+
+impl Add<I16VecAvx512> for I16VecAvx512 {
+    type Output = I16VecAvx512;
+    fn_avx_bw!(this: I16VecAvx512, fn add(rhs: I16VecAvx512) -> I16VecAvx512 {
+        I16VecAvx512(_mm512_add_epi16(this.0, rhs.0), this.1)
+    });
+}
+
+impl Sub<I16VecAvx512> for I16VecAvx512 {
+    type Output = I16VecAvx512;
+    fn_avx_bw!(this: I16VecAvx512, fn sub(rhs: I16VecAvx512) -> I16VecAvx512 {
+        I16VecAvx512(_mm512_sub_epi16(this.0, rhs.0), this.1)
+    });
+}
+
+impl AddAssign<I16VecAvx512> for I16VecAvx512 {
+    fn_avx_bw!(this: &mut I16VecAvx512, fn add_assign(rhs: I16VecAvx512) {
+        this.0 = _mm512_add_epi16(this.0, rhs.0)
+    });
+}
+
+impl SubAssign<I16VecAvx512> for I16VecAvx512 {
+    fn_avx_bw!(this: &mut I16VecAvx512, fn sub_assign(rhs: I16VecAvx512) {
+        this.0 = _mm512_sub_epi16(this.0, rhs.0)
+    });
 }
 
 impl SimdMask for MaskAvx512 {

@@ -108,7 +108,7 @@ jxl_simd::simd_function!(
     convert_i32_to_i16_dispatch,
     d: D,
     pub(super) fn convert_i32_to_i16(src: &[i32], dst: &mut [i16]) {
-        use jxl_simd::{I32SimdVec, SimdDescriptor};
+        use jxl_simd::I32SimdVec;
         let lanes = D::I32Vec::LEN;
         let mut it_src = src.chunks_exact(lanes);
         let mut it_dst = dst.chunks_exact_mut(lanes);

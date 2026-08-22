@@ -216,9 +216,9 @@ pub fn do_palette_step_general(
                     let prediction_data = match &out.data {
                         ModularData::I32(img) => PredictionData::get(img, x, y),
                         ModularData::I16(img) => PredictionData::get_rows(
-                            &img.row(y).iter().map(|&v| v as i32).collect::<Vec<_>>(),
-                            &img.row(y.saturating_sub(1)).iter().map(|&v| v as i32).collect::<Vec<_>>(),
-                            &img.row(y.saturating_sub(2)).iter().map(|&v| v as i32).collect::<Vec<_>>(),
+                            img.row(y),
+                            img.row(y.saturating_sub(1)),
+                            img.row(y.saturating_sub(2)),
                             x,
                             y,
                         ),
@@ -253,9 +253,9 @@ pub fn do_palette_step_general(
                     let pred_data = match &out.data {
                         ModularData::I32(img) => PredictionData::get(img, x, y),
                         ModularData::I16(img) => PredictionData::get_rows(
-                            &img.row(y).iter().map(|&v| v as i32).collect::<Vec<_>>(),
-                            &img.row(y.saturating_sub(1)).iter().map(|&v| v as i32).collect::<Vec<_>>(),
-                            &img.row(y.saturating_sub(2)).iter().map(|&v| v as i32).collect::<Vec<_>>(),
+                            img.row(y),
+                            img.row(y.saturating_sub(1)),
+                            img.row(y.saturating_sub(2)),
                             x,
                             y,
                         ),
