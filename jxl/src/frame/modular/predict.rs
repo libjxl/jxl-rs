@@ -91,35 +91,6 @@ impl PredictionData {
         }
     }
 
-    #[inline(always)]
-    pub fn update_for_interior_row_i16(
-        self,
-        row_top: &[i16],
-        row_toptop: &[i16],
-        x: usize,
-        cur: i32,
-        needs_toptop: bool,
-    ) -> PredictionData {
-        debug_assert!(x > 1);
-        debug_assert!(x + 2 < row_top.len());
-        let left = cur;
-        let top = self.topright;
-        let topleft = self.top;
-        let topright = self.toprightright;
-        let leftleft = self.left;
-        let toptop = if needs_toptop { row_toptop[x] as i32 } else { 0 };
-        let toprightright = row_top[x + 2] as i32;
-        Self {
-            left,
-            top,
-            toptop,
-            topleft,
-            topright,
-            leftleft,
-            toprightright,
-        }
-    }
-
     #[inline]
     pub fn get_rows(row: &[i32], row_top: &[i32], row_toptop: &[i32], x: usize, y: usize) -> Self {
         let left = if x > 0 {
@@ -140,46 +111,6 @@ impl PredictionData {
         let toptop = if y > 1 { row_toptop[x] } else { top };
         let toprightright = if x + 2 < row.len() && y > 0 {
             row_top[x + 2]
-        } else {
-            topright
-        };
-        Self {
-            left,
-            top,
-            toptop,
-            topleft,
-            topright,
-            leftleft,
-            toprightright,
-        }
-    }
-
-    #[inline]
-    pub fn get_rows_i16(
-        row: &[i16],
-        row_top: &[i16],
-        row_toptop: &[i16],
-        x: usize,
-        y: usize,
-    ) -> Self {
-        let left = if x > 0 {
-            row[x - 1] as i32
-        } else if y > 0 {
-            row_top[0] as i32
-        } else {
-            0
-        };
-        let top = if y > 0 { row_top[x] as i32 } else { left };
-        let topleft = if x > 0 && y > 0 { row_top[x - 1] as i32 } else { left };
-        let topright = if x + 1 < row.len() && y > 0 {
-            row_top[x + 1] as i32
-        } else {
-            top
-        };
-        let leftleft = if x > 1 { row[x - 2] as i32 } else { left };
-        let toptop = if y > 1 { row_toptop[x] as i32 } else { top };
-        let toprightright = if x + 2 < row.len() && y > 0 {
-            row_top[x + 2] as i32
         } else {
             topright
         };

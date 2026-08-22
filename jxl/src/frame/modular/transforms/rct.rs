@@ -123,24 +123,14 @@ fn rct_row_impl_i16<D: SimdDescriptor, const OP: u32>(
     let [mut it_row_r, mut it_row_g, mut it_row_b] =
         rgb.map(|x| x.chunks_exact_mut(D::I32Vec::LEN));
     let it = (&mut it_row_r).zip(&mut it_row_g).zip(&mut it_row_b);
-
-    let mut tmp_r = [0i32; 16];
-    let mut tmp_g = [0i32; 16];
-    let mut tmp_b = [0i32; 16];
-
     for ((r, g), b) in it {
         let v0 = D::I32Vec::load_from_i16(d, r);
         let v1 = D::I32Vec::load_from_i16(d, g);
         let v2 = D::I32Vec::load_from_i16(d, b);
         let (w0, w1, w2) = rct_impl::<D, OP>(d, v0, v1, v2);
-        w0.store(&mut tmp_r[..D::I32Vec::LEN]);
-        w1.store(&mut tmp_g[..D::I32Vec::LEN]);
-        w2.store(&mut tmp_b[..D::I32Vec::LEN]);
-        for i in 0..D::I32Vec::LEN {
-            r[i] = tmp_r[i] as i16;
-            g[i] = tmp_g[i] as i16;
-            b[i] = tmp_b[i] as i16;
-        }
+        w0.store_i16(r);
+        w1.store_i16(g);
+        w2.store_i16(b);
     }
 
     [

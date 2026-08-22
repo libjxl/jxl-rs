@@ -298,6 +298,14 @@ pub trait I32SimdVec:
     /// Requires `dest.len() >= Self::LEN` or it will panic.
     fn store_u16(self, dest: &mut [u16]);
 
+    /// Stores the lower 16 bits of each i32 lane as i16 values.
+    /// Requires `dest.len() >= Self::LEN` or it will panic.
+    fn store_i16(self, dest: &mut [i16]) {
+        let dest_u16 =
+            unsafe { std::slice::from_raw_parts_mut(dest.as_mut_ptr().cast::<u16>(), dest.len()) };
+        self.store_u16(dest_u16);
+    }
+
     /// Stores two vectors interleaved: [a0, b0, a1, b1, a2, b2, ...].
     /// Requires `dest.len() >= 2 * Self::LEN` or it will panic.
     fn store_interleaved_2(a: Self, b: Self, dest: &mut [i32]) {

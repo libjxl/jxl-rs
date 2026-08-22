@@ -595,10 +595,9 @@ fn hsqueeze_impl_i16<D: SimdDescriptor>(
             D::F32Vec::transpose_square(d, &mut buf_arr[lanes..], 1);
             for dy in 0..lanes {
                 let out_row = &mut out.row_mut(y + dy)[2 * x - 2..][..2 * lanes];
-                for (dx, out_val) in out_row.iter_mut().enumerate() {
-                    let group = dx / lanes;
-                    let group_x = dx % lanes;
-                    *out_val = buf[(dy + group * lanes) * lanes + group_x].to_bits() as i16;
+                for group in 0..2 {
+                    let v = D::F32Vec::load_array(d, &buf_arr[dy + group * lanes]).bitcast_to_i32();
+                    v.store_i16(&mut out_row[group * lanes..]);
                 }
             }
         }
@@ -1060,10 +1059,6 @@ fn vsqueeze_impl_i16<D: SimdDescriptor>(
         Some(tb) => tb.row(3),
     };
 
-    let mut temp_a = [0i32; 16];
-    let mut temp_b = [0i32; 16];
-    let mut temp_last = [0i32; 16];
-
     for x in (x_start..x_limit).step_by(lanes) {
         let mut prev_b = D::I32Vec::load_from_i16(d, &prev_b_row[x..]);
         let mut avg_first = D::I32Vec::load_from_i16(d, &in_avg.row(0)[x..]);
@@ -1071,14 +1066,8 @@ fn vsqueeze_impl_i16<D: SimdDescriptor>(
         for y in 0..h - 1 {
             let avg_next = D::I32Vec::load_from_i16(d, &in_avg.row(y + 1)[x..]);
             let (a, b) = unsqueeze_impl(d, avg_first, res_first, avg_next, prev_b);
-            a.store(&mut temp_a[..lanes]);
-            b.store(&mut temp_b[..lanes]);
-            for (dst, &src) in out.row_mut(2 * y)[x..x + lanes].iter_mut().zip(&temp_a[..lanes]) {
-                *dst = src as i16;
-            }
-            for (dst, &src) in out.row_mut(2 * y + 1)[x..x + lanes].iter_mut().zip(&temp_b[..lanes]) {
-                *dst = src as i16;
-            }
+            a.store_i16(&mut out.row_mut(2 * y)[x..x + lanes]);
+            b.store_i16(&mut out.row_mut(2 * y + 1)[x..x + lanes]);
             prev_b = b;
             avg_first = avg_next;
             res_first = D::I32Vec::load_from_i16(d, &in_res.row(y + 1)[x..]);
@@ -1092,20 +1081,11 @@ fn vsqueeze_impl_i16<D: SimdDescriptor>(
             avg_first
         };
         let (a, b) = unsqueeze_impl(d, avg_first, res_first, avg_last, prev_b);
-        a.store(&mut temp_a[..lanes]);
-        b.store(&mut temp_b[..lanes]);
-        for (dst, &src) in out.row_mut(2 * h - 2)[x..x + lanes].iter_mut().zip(&temp_a[..lanes]) {
-            *dst = src as i16;
-        }
-        for (dst, &src) in out.row_mut(2 * h - 1)[x..x + lanes].iter_mut().zip(&temp_b[..lanes]) {
-            *dst = src as i16;
-        }
+        a.store_i16(&mut out.row_mut(2 * h - 2)[x..x + lanes]);
+        b.store_i16(&mut out.row_mut(2 * h - 1)[x..x + lanes]);
 
         if has_tail {
-            avg_last.store(&mut temp_last[..lanes]);
-            for (dst, &src) in out.row_mut(2 * h)[x..x + lanes].iter_mut().zip(&temp_last[..lanes]) {
-                *dst = src as i16;
-            }
+            avg_last.store_i16(&mut out.row_mut(2 * h)[x..x + lanes]);
         }
     }
 

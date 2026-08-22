@@ -407,42 +407,6 @@ impl ModularChannelDecoder for NoTreeZero {
         }
     }
 
-    #[inline(never)]
-    fn decode_row(
-        &mut self,
-        buffers: &mut [&mut ModularChannel],
-        chan: usize,
-        histograms: &Histograms,
-        reader: &mut SymbolReader,
-        br: &mut BitReader,
-        y: usize,
-        xsize: usize,
-    ) {
-        let row = buffers[chan].data.as_i32_mut().row_mut(y);
-        self.decode_row_slices(row, &[], &[], histograms, reader, br, y, xsize);
-    }
-
-    #[inline(never)]
-    fn decode_row_i16(
-        &mut self,
-        buffers: &mut [&mut ModularChannel],
-        chan: usize,
-        histograms: &Histograms,
-        reader: &mut SymbolReader,
-        br: &mut BitReader,
-        y: usize,
-        xsize: usize,
-    ) {
-        let row = buffers[chan].data.as_i16_mut().row_mut(y);
-        debug_assert_eq!(row.len(), xsize);
-        if let Some(sym) = self.single_value {
-            row.fill(sym as i16);
-        } else {
-            for r in row.iter_mut() {
-                *r = reader.read_signed_clustered_inline(histograms, br, self.clustered_ctx) as i16;
-            }
-        }
-    }
 }
 
 pub fn run_on_specialized_tree<F: FnOnce(&mut dyn ModularChannelDecoder) -> Result<()>>(
