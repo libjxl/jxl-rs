@@ -281,12 +281,15 @@ impl SqueezeInfo {
     fn decrement_refs(self, buffers: &[ModularBufferInfo], is_final: bool) {
         match self {
             Self::Regular { in_avg, in_res, .. } => {
-                buffers[in_avg.0].buffer_grid[in_avg.1].mark_used(is_final);
-                buffers[in_res.0].buffer_grid[in_res.1].mark_used(is_final);
+                let buf_avg = &buffers[in_avg.0].buffer_grid[in_avg.1];
+                let buf_res = &buffers[in_res.0].buffer_grid[in_res.1];
+                buf_avg.mark_used(buf_avg.can_consume(is_final));
+                buf_res.mark_used(buf_res.can_consume(is_final));
             }
             Self::Upsample { upsample: u, .. } => {
                 assert!(!is_final);
-                buffers[u.source_buf].buffer_grid[u.source_grid].mark_used(false);
+                let buf = &buffers[u.source_buf].buffer_grid[u.source_grid];
+                buf.mark_used(buf.can_consume(false));
             }
         }
     }
@@ -678,24 +681,14 @@ impl TransformStepChunk {
                     if b_in.data_status == DataStatus::Zero && !b_in.has_buffer() {
                         b_out.ensure_buffer(&buffers[buf_out[i]].info)?;
                     } else {
-                        *b_out.data.try_write().unwrap() = Some(b_in.get_buffer(is_final)?);
+                        *b_out.data.try_write().unwrap() =
+                            Some(b_in.get_buffer(b_in.can_consume(is_final))?);
                     }
                 }
                 with_buffers(buffers, buf_out, out_grid, |mut bufs| {
                     super::rct::do_rct_step(&mut bufs, *op, *perm);
                     Ok(())
                 })?;
-            }
-            TransformStep::Palette {
-                buf_in,
-                buf_pal,
-                buf_out,
-                ..
-            } if buffers[*buf_in].info.size.0 == 0 => {
-                // Nothing to do, just bookkeeping.
-                buffers[*buf_in].buffer_grid[out_grid].mark_used(is_final);
-                buffers[*buf_pal].buffer_grid[0].mark_used(is_final);
-                with_buffers(buffers, buf_out, out_grid, |_| Ok(()))?;
             }
             TransformStep::Palette {
                 buf_in,
@@ -709,11 +702,9 @@ impl TransformStepChunk {
                 assert_eq!(out_grid_kind, buffers[*buf_in].grid_kind);
                 assert_eq!(out_size, buffers[*buf_in].info.size);
 
-                {
+                with_buffers(buffers, buf_out, out_grid, |_| Ok(()))?;
+                if out_size.0 != 0 {
                     let img_pal = borrow_channel(buffers, (*buf_pal, 0));
-                    // Ensure that the output buffers are present.
-                    // TODO(szabadka): Extend the callback to support many grid points.
-                    with_buffers(buffers, buf_out, out_grid, |_| Ok(()))?;
                     let grid_shape = buffers[buf_out[0]].grid_shape;
                     let grid_x = out_grid % grid_shape.0;
                     let grid_y = out_grid / grid_shape.0;
@@ -779,8 +770,10 @@ impl TransformStepChunk {
                         );
                     }
                 }
-                buffers[*buf_in].buffer_grid[out_grid].mark_used(is_final);
-                buffers[*buf_pal].buffer_grid[0].mark_used(is_final);
+                let buf_in_grid = &buffers[*buf_in].buffer_grid[out_grid];
+                let buf_pal_grid = &buffers[*buf_pal].buffer_grid[0];
+                buf_in_grid.mark_used(buf_in_grid.can_consume(is_final));
+                buf_pal_grid.mark_used(buf_pal_grid.can_consume(is_final));
             }
             TransformStep::Palette {
                 buf_in,
@@ -794,16 +787,18 @@ impl TransformStepChunk {
                 assert_eq!(out_grid_kind, buffers[*buf_in].grid_kind);
                 assert_eq!(out_size, buffers[*buf_in].info.size);
                 let grid_shape = buffers[buf_out[0]].grid_shape;
-                {
-                    assert_eq!(out_grid % grid_shape.0, 0);
-                    let grid_y = out_grid / grid_shape.0;
+                assert_eq!(out_grid % grid_shape.0, 0);
+                let grid_y = out_grid / grid_shape.0;
+                for grid_x in 0..grid_shape.0 {
+                    // Ensure that the output buffers are present.
+                    // TODO(szabadka): Extend the callback to support many grid points.
+                    with_buffers(buffers, buf_out, out_grid + grid_x, |_| Ok(()))?;
+                }
+                if out_size.0 != 0 {
                     let mut in_bufs = vec![];
                     for grid_x in 0..grid_shape.0 {
                         let grid = grid_y * grid_shape.0 + grid_x;
                         in_bufs.push(borrow_channel(buffers, (*buf_in, grid)));
-                        // Ensure that the output buffers are present.
-                        // TODO(szabadka): Extend the callback to support many grid points.
-                        with_buffers(buffers, buf_out, out_grid + grid_x, |_| Ok(()))?;
                     }
                     let in_buf_refs: Vec<&ModularChannel> =
                         in_bufs.iter().map(|x| x.as_ref().unwrap()).collect();
@@ -873,9 +868,11 @@ impl TransformStepChunk {
                         &mut transform_scratch_space.palette_row_scratch,
                     )?;
                 }
-                buffers[*buf_pal].buffer_grid[0].mark_used(is_final);
+                let buf_pal_grid = &buffers[*buf_pal].buffer_grid[0];
+                buf_pal_grid.mark_used(buf_pal_grid.can_consume(is_final));
                 for grid_x in 0..grid_shape.0 {
-                    buffers[*buf_in].buffer_grid[out_grid + grid_x].mark_used(is_final);
+                    let buf_in_grid = &buffers[*buf_in].buffer_grid[out_grid + grid_x];
+                    buf_in_grid.mark_used(buf_in_grid.can_consume(is_final));
                 }
             }
             TransformStep::HSqueeze {
@@ -968,7 +965,7 @@ impl TransformStepChunk {
                     let zero = Image::new(rect.map(|x| x.size).unwrap_or(buf.size))?;
                     pass_to_pipeline(*channel, *group, is_final, zero)?;
                 } else {
-                    let modular_buf = buf.get_buffer(is_final)?;
+                    let modular_buf = buf.get_buffer(buf.can_consume(is_final))?;
                     if let Some(rect) = rect {
                         let mut cropped = Image::new(rect.size)?;
                         let src_view = modular_buf.data.get_rect(*rect);
@@ -987,6 +984,12 @@ impl TransformStepChunk {
             buffers[buf].buffer_grid[grid].extract_needed_borders()?;
         }
 
+        if is_final {
+            for dep in self.dependencies(buffers, frame_header).iter() {
+                buffers[dep.buffer].buffer_grid[dep.grid].mark_final_use_done();
+            }
+        }
+
         Ok(())
     }
 
@@ -1000,13 +1003,8 @@ impl TransformStepChunk {
         let out_grid = buffers[b].get_grid_idx(out_grid_kind, self.grid_pos);
         let grid_offset_up = match &self.step {
             TransformStep::Palette {
-                buf_in,
-                buf_out,
-                predictor,
-                ..
-            } if buffers[*buf_in].info.size.0 != 0 && predictor.requires_full_row() => {
-                buffers[buf_out[0]].grid_shape.0
-            }
+                buf_out, predictor, ..
+            } if predictor.requires_full_row() => buffers[buf_out[0]].grid_shape.0,
             TransformStep::Output { .. } => 0,
             _ => 1,
         };
@@ -1111,7 +1109,12 @@ impl TransformStepChunk {
                 if let Some(prev) = self.grid_pos.1.checked_sub(1) {
                     let prev_grid = prev * grid_shape.0;
                     for out in buf_out {
-                        ans.push(TransformDependency::new_order_only(*out, prev_grid));
+                        for grid_x in 0..grid_shape.0 {
+                            ans.push(TransformDependency::new_order_only(
+                                *out,
+                                prev_grid + grid_x,
+                            ));
+                        }
                     }
                 }
 

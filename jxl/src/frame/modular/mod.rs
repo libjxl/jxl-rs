@@ -736,13 +736,15 @@ impl FullModularImage {
                     continue;
                 }
                 if let Some(b) = buf.produced_by_step
-                    && buf.data_status != DataStatus::Final
+                    && (!buf.has_buffer() || buf.data_status != DataStatus::Final)
                 {
                     self.rerendered_buffers.insert((*buffer, *grid));
                     // The data in this buffer is no longer guaranteed to be all-0.
                     // In usual images, this is mostly only relevant in palette images,
                     // but in principle one could apply transforms to Squeeze residuals.
-                    buf.data_status = DataStatus::Partial;
+                    if buf.data_status != DataStatus::Final {
+                        buf.data_status = DataStatus::Partial;
+                    }
                     stack.push(b);
                 }
             }
@@ -754,6 +756,12 @@ impl FullModularImage {
         frame_header: &FrameHeader,
         mut group_callback: impl FnMut(usize, usize, bool),
     ) {
+        for &(b, g) in &self.rerendered_buffers {
+            let buf = &mut self.buffer_info[b].buffer_grid[g];
+            if buf.can_consume(false) {
+                buf.remaining_uses.store(0, Ordering::Relaxed);
+            }
+        }
         for t in self.pending_transforms.iter().cloned() {
             if self.transform_steps[t].ready_for_final_render() {
                 self.transform_steps[t].set_squeeze_upsample(None);
@@ -764,14 +772,19 @@ impl FullModularImage {
             }
             let mut has_current_deps = false;
             // Add dependency edges from *all* the buffers that will be modified and that are used.
-            for TransformDependency { buffer, grid, .. } in self.transform_steps[t]
+            for TransformDependency {
+                buffer,
+                grid,
+                order_only,
+            } in self.transform_steps[t]
                 .dependencies(&self.buffer_info, frame_header)
                 .iter()
             {
                 if self.rerendered_buffers.contains(&(*buffer, *grid)) {
                     let buf = &mut self.buffer_info[*buffer].buffer_grid[*grid];
-                    // TODO(veluca): account for *non-final* uses here, when we actually
-                    // deallocate temporary buffers.
+                    if !order_only && buf.can_consume(false) {
+                        buf.remaining_uses.fetch_add(1, Ordering::Relaxed);
+                    }
                     buf.used_by_transforms_current.try_lock().unwrap().push(t);
                     self.transform_steps[t].add_current_dep();
                     has_current_deps = true;

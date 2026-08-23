@@ -96,6 +96,8 @@ pub(super) struct ModularBuffer {
     pub(super) needed_borders: NeededBorders,
     // Number of times this buffer will be used, *including* when it is used for output.
     pub(super) remaining_uses: AtomicUsize,
+    // Number of remaining final transform chunks that depend on this buffer (for data and/or borders).
+    pub(super) remaining_final_uses: AtomicUsize,
     // Number of full-buffer uses for final renders.
     pub(super) full_uses_count_final: usize,
     // Transform steps that use the image data in this buffer for final renders.
@@ -121,6 +123,7 @@ impl ModularBuffer {
             auxiliary_data: RwLock::new(None),
             needed_borders: NeededBorders::NONE,
             remaining_uses: AtomicUsize::new(0),
+            remaining_final_uses: AtomicUsize::new(0),
             full_uses_count_final: 0,
             used_by_transforms_final: vec![],
             used_by_transforms_current: Mutex::new(vec![]),
@@ -228,6 +231,11 @@ impl ModularBuffer {
         Ok(ret.transpose()?.unwrap())
     }
 
+    #[inline]
+    pub fn can_consume(&self, is_final: bool) -> bool {
+        (self.produced_by_step.is_some() && self.data_status == DataStatus::Partial) || is_final
+    }
+
     pub fn mark_used(&self, can_consume: bool) {
         if !can_consume || DISABLE_MODULAR_BUFFER_DEALLOCATION_FOR_DEBUG {
             return;
@@ -243,6 +251,20 @@ impl ModularBuffer {
                 Some(remaining)
             },
         );
+    }
+
+    pub fn mark_final_use_done(&self) {
+        if DISABLE_MODULAR_BUFFER_DEALLOCATION_FOR_DEBUG {
+            return;
+        }
+        let prev = self.remaining_final_uses.fetch_sub(1, Ordering::AcqRel);
+        assert_ne!(prev, 0);
+        if prev == 1 {
+            *self.topbottom.try_write().unwrap() = None;
+            *self.leftright.try_write().unwrap() = None;
+            *self.auxiliary_data.try_write().unwrap() = None;
+            *self.data.try_write().unwrap() = None;
+        }
     }
 }
 
