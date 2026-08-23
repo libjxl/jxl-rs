@@ -77,5 +77,10 @@ pub struct JxlBasicInfo {
 pub type JxlParallelRunnerFun<'a> = dyn Fn(usize) -> Result<()> + Sync + 'a;
 
 pub trait JxlParallelRunner {
+    /// Calling this function is equivalent to calling fun(i) for i = 0..num.
+    /// The calls *might* happen in parallel or sequentially, and no promises
+    /// are made on the order of the calls.
+    /// This implies that different invocations of `fun(i)` are not allowed
+    /// to wait on each other.
     fn run(&mut self, num: usize, fun: &JxlParallelRunnerFun<'_>) -> Result<()>;
 }
