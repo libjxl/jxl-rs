@@ -227,9 +227,11 @@ fn test_premultiply_output_straight_alpha() {
 
     for use_simple in [true, false] {
         let (straight_buffer, width, height) =
-            decode_with_format::<f32>(&file, &rgba_format, use_simple, false);
+            decode_with_format::<f32>(&file, &rgba_format, use_simple, false).unwrap();
+        let straight_buffer = &straight_buffer[0];
         let (premul_buffer, _, _) =
-            decode_with_format::<f32>(&file, &rgba_format, use_simple, true);
+            decode_with_format::<f32>(&file, &rgba_format, use_simple, true).unwrap();
+        let premul_buffer = &premul_buffer[0];
 
         let mut found_semitransparent = false;
         for y in 0..height {
@@ -318,9 +320,11 @@ fn test_premultiply_output_already_premultiplied() {
 
     for use_simple in [true, false] {
         let (without_flag_buffer, width, height) =
-            decode_with_format::<f32>(&file, &rgba_format, use_simple, false);
+            decode_with_format::<f32>(&file, &rgba_format, use_simple, false).unwrap();
+        let without_flag_buffer = &without_flag_buffer[0];
         let (with_flag_buffer, _, _) =
-            decode_with_format::<f32>(&file, &rgba_format, use_simple, true);
+            decode_with_format::<f32>(&file, &rgba_format, use_simple, true).unwrap();
+        let with_flag_buffer = &with_flag_buffer[0];
 
         for y in 0..height {
             let without_row = without_flag_buffer.row(y);
@@ -528,8 +532,11 @@ fn test_output_format_u8_matches_f32() {
 
         for use_simple in [true, false] {
             let (f32_buffer, width, height) =
-                decode_with_format::<f32>(&file, &f32_format, use_simple, false);
-            let (u8_buffer, _, _) = decode_with_format::<u8>(&file, &u8_format, use_simple, false);
+                decode_with_format::<f32>(&file, &f32_format, use_simple, false).unwrap();
+            let f32_buffer = &f32_buffer[0];
+            let (u8_buffer, _, _) =
+                decode_with_format::<u8>(&file, &u8_format, use_simple, false).unwrap();
+            let u8_buffer = &u8_buffer[0];
 
             let tolerance = 0.004;
             let mut max_error: f32 = 0.0;
@@ -584,9 +591,11 @@ fn test_output_format_u16_matches_f32() {
 
         for use_simple in [true, false] {
             let (f32_buffer, width, height) =
-                decode_with_format::<f32>(&file, &f32_format, use_simple, false);
+                decode_with_format::<f32>(&file, &f32_format, use_simple, false).unwrap();
+            let f32_buffer = &f32_buffer[0];
             let (u16_buffer, _, _) =
-                decode_with_format::<u16>(&file, &u16_format, use_simple, false);
+                decode_with_format::<u16>(&file, &u16_format, use_simple, false).unwrap();
+            let u16_buffer = &u16_buffer[0];
 
             let tolerance = 0.0001;
 
@@ -639,9 +648,11 @@ fn test_output_format_f16_matches_f32() {
 
         for use_simple in [true, false] {
             let (f32_buffer, width, height) =
-                decode_with_format::<f32>(&file, &f32_format, use_simple, false);
+                decode_with_format::<f32>(&file, &f32_format, use_simple, false).unwrap();
+            let f32_buffer = &f32_buffer[0];
             let (f16_buffer, _, _) =
-                decode_with_format::<f16>(&file, &f16_format, use_simple, false);
+                decode_with_format::<f16>(&file, &f16_format, use_simple, false).unwrap();
+            let f16_buffer = &f16_buffer[0];
 
             let tolerance = 0.002;
 
@@ -669,13 +680,72 @@ fn test_output_format_f16_matches_f32() {
     }
 }
 
-/// Helper function to decode an image with a specific format.
+/// CMYK interleaved output matches the RGB color channels for C, M and Y, and
+/// the Black extra channel plane for K.
+#[test]
+fn test_cmyk_pixel_format() {
+    let file = std::fs::read("resources/test/conformance_test_images/cmyk_layers.jxl").unwrap();
+
+    // cmyk_layers.jxl has two extra channels: Black (index 0) and Alpha
+    // (index 1).
+    let cmyk_format = JxlPixelFormat::cmyk8(2);
+    let reference_format = JxlPixelFormat {
+        color_type: JxlColorType::Rgb,
+        color_data_format: Some(JxlDataFormat::U8 { bit_depth: 8 }),
+        extra_channel_format: vec![Some(JxlDataFormat::U8 { bit_depth: 8 }), None],
+    };
+
+    for use_simple in [true, false] {
+        let (cmyk_buffers, width, height) =
+            decode_with_format::<u8>(&file, &cmyk_format, use_simple, false).unwrap();
+        let (reference_buffers, _, _) =
+            decode_with_format::<u8>(&file, &reference_format, use_simple, false).unwrap();
+        let cmyk = &cmyk_buffers[0];
+        let rgb = &reference_buffers[0];
+        let black = &reference_buffers[1];
+
+        for y in 0..height {
+            let cmyk_row = cmyk.row(y);
+            let rgb_row = rgb.row(y);
+            let black_row = black.row(y);
+            for x in 0..width {
+                for c in 0..3 {
+                    assert_eq!(
+                        cmyk_row[x * 4 + c],
+                        rgb_row[x * 3 + c],
+                        "CMY mismatch at ({x},{y}) channel {c} (use_simple={use_simple})"
+                    );
+                }
+                assert_eq!(
+                    cmyk_row[x * 4 + 3],
+                    black_row[x],
+                    "K mismatch at ({x},{y}) (use_simple={use_simple})"
+                );
+            }
+        }
+    }
+}
+
+/// Requesting CMYK output for a non-CMYK image fails.
+#[test]
+fn test_cmyk_pixel_format_requires_cmyk_image() {
+    let file = std::fs::read("resources/test/basic.jxl").unwrap();
+    let result = decode_with_format::<u8>(&file, &JxlPixelFormat::cmyk8(0), false, false);
+    assert!(
+        matches!(result, Err(Error::NotCmyk)),
+        "expected NotCmyk, got {result:?}"
+    );
+}
+
+/// Helper function to decode an image with a specific format, with buffers
+/// for the color channels (if requested) plus every requested extra channel
+/// plane. Returns the decoded buffers in process() buffer order.
 fn decode_with_format<T: crate::image::ImageDataType>(
     file: &[u8],
     pixel_format: &JxlPixelFormat,
     use_simple: bool,
     premultiply: bool,
-) -> (Image<T>, usize, usize) {
+) -> Result<(Vec<Image<T>>, usize, usize), Error> {
     let options = JxlDecoderOptions {
         premultiply_output: premultiply,
         ..Default::default()
@@ -684,7 +754,7 @@ fn decode_with_format<T: crate::image::ImageDataType>(
     let mut input = file;
 
     let mut decoder = loop {
-        match decoder.process(&mut input, None).unwrap() {
+        match decoder.process(&mut input, None)? {
             ProcessingResult::Complete { result } => break result,
             ProcessingResult::NeedsMoreInput { fallback, .. } => {
                 if input.is_empty() {
@@ -697,13 +767,11 @@ fn decode_with_format<T: crate::image::ImageDataType>(
     decoder.set_use_simple_pipeline(use_simple);
     decoder.set_pixel_format(pixel_format.clone());
 
-    let basic_info = decoder.basic_info().clone();
-    let (width, height) = basic_info.size;
-
+    let (width, height) = decoder.basic_info().size;
     let num_samples = pixel_format.color_type.samples_per_pixel();
 
-    let decoder = loop {
-        match decoder.process(&mut input, None).unwrap() {
+    let mut decoder = loop {
+        match decoder.process(&mut input, None)? {
             ProcessingResult::Complete { result } => break result,
             ProcessingResult::NeedsMoreInput { fallback, .. } => {
                 if input.is_empty() {
@@ -714,19 +782,32 @@ fn decode_with_format<T: crate::image::ImageDataType>(
         }
     };
 
-    let mut buffer = Image::<T>::new((width * num_samples, height)).unwrap();
-    let mut buffers: Vec<_> = vec![JxlOutputBuffer::from_image_rect_mut(
-        buffer
-            .get_rect_mut(Rect {
-                origin: (0, 0),
-                size: (width * num_samples, height),
-            })
-            .into_raw(),
-    )];
+    let mut images = Vec::new();
+    if pixel_format.color_data_format.is_some() {
+        images.push(Image::<T>::new((width * num_samples, height))?);
+    }
+    for ec_format in &pixel_format.extra_channel_format {
+        if ec_format.is_some() {
+            images.push(Image::<T>::new((width, height))?);
+        }
+    }
+    let mut buffers: Vec<JxlOutputBuffer> = images
+        .iter_mut()
+        .map(|image| {
+            let size = image.size();
+            JxlOutputBuffer::from_image_rect_mut(
+                image
+                    .get_rect_mut(Rect {
+                        origin: (0, 0),
+                        size,
+                    })
+                    .into_raw(),
+            )
+        })
+        .collect();
 
-    let mut decoder = decoder;
     loop {
-        match decoder.process(&mut input, &mut buffers, None).unwrap() {
+        match decoder.process(&mut input, &mut buffers, None)? {
             ProcessingResult::Complete { .. } => break,
             ProcessingResult::NeedsMoreInput { fallback, .. } => {
                 if input.is_empty() {
@@ -736,8 +817,9 @@ fn decode_with_format<T: crate::image::ImageDataType>(
             }
         }
     }
+    drop(buffers);
 
-    (buffer, width, height)
+    Ok((images, width, height))
 }
 
 /// Regression test for ClusterFuzz issue 5342436251336704
