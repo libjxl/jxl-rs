@@ -880,9 +880,14 @@ impl Frame {
             if let Some(df) = &pixel_format.color_data_format {
                 // Add premultiply stage if needed (before conversion to output format)
                 if should_premultiply && let Some(alpha_channel) = alpha_in_color {
+                    let num_output_color_channels = if pixel_format.color_type.is_grayscale() {
+                        1
+                    } else {
+                        3
+                    };
                     pipeline = pipeline.add_inplace_stage(PremultiplyAlphaStage::new(
                         0,
-                        num_color_channels,
+                        num_output_color_channels,
                         alpha_channel,
                     ));
                 }

@@ -305,6 +305,23 @@ fn test_premultiply_output_straight_alpha() {
     }
 }
 
+/// Test that premultiplied RGBA output from a grayscale image remains gray.
+#[test]
+fn test_premultiply_output_grayscale_as_rgba() {
+    let file = std::fs::read("resources/test/gray_alpha_lossless.jxl").unwrap();
+    let (buffers, width, height) =
+        decode_with_format::<f32>(&file, &JxlPixelFormat::rgba_f32(1), false, true).unwrap();
+    let rgba = &buffers[0];
+
+    for y in 0..height {
+        let row = rgba.row(y);
+        for x in 0..width {
+            assert_eq!(row[x * 4], row[x * 4 + 1]);
+            assert_eq!(row[x * 4 + 1], row[x * 4 + 2]);
+        }
+    }
+}
+
 /// Test that premultiply_output=true doesn't double-premultiply
 /// when the source already has premultiplied alpha (alpha_associated=true).
 #[test]
