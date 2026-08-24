@@ -77,7 +77,8 @@ pub struct JxlBasicInfo {
 pub type JxlParallelRunnerFun<'a> = dyn Fn(usize) -> Result<()> + Sync + 'a;
 
 pub trait JxlParallelRunner {
-    /// Calling this function is equivalent to calling fun(i) for i = 0..num.
+    /// Runs `fun(i)` for each `i` in `0..num`, possibly in parallel.
+    ///
     /// The calls *might* happen in parallel or sequentially, and no promises
     /// are made on the order of the calls.
     /// This implies that different invocations of `fun(i)` are not allowed
