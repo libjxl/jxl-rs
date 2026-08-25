@@ -37,6 +37,10 @@ struct Opt {
     #[clap(required_unless_present_any = ["speedtest", "info"])]
     output: Option<PathBuf>,
 
+    /// Number of worker threads (0 = choose automatically)
+    #[clap(long, default_value_t = 0)]
+    num_threads: usize,
+
     /// Print measured decoding speed.
     #[clap(long, short, action)]
     speedtest: bool,
@@ -124,6 +128,9 @@ fn main() -> Result<()> {
         options.high_precision = high_precision;
         options
     };
+    rayon::ThreadPoolBuilder::new()
+        .num_threads(opt.num_threads)
+        .build_global()?;
 
     // Handle --info flag: print image info and exit
     if opt.info {
