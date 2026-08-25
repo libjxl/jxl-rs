@@ -337,6 +337,100 @@ impl<R: Reader> ModularChannelDecoder for GradientOnly<R> {
     }
 }
 
+/// Decoder for trees whose leaves are all `Gradient` and whose splits only use
+/// the local neighborhood properties 9..=13, which is what
+/// `cjxl --faster_decoding` produces. Skips the full property computation (and
+/// any weighted predictor state) of the generic flat-tree decoder.
+struct GradientMultiProp<R> {
+    nodes: Vec<FlatTreeNode>,
+    needs_toptop: bool,
+    reader: R,
+}
+
+impl<R: Reader> GradientMultiProp<R> {
+    fn new(tree: &[TreeNode], reader: R) -> Result<Option<Self>> {
+        let mut needs_toptop = false;
+        for node in tree {
+            match node {
+                TreeNode::Split { property, .. } => match property {
+                    9..=12 => {}
+                    13 => needs_toptop = true,
+                    _ => return Ok(None),
+                },
+                TreeNode::Leaf { predictor, .. } => {
+                    if *predictor != Predictor::Gradient {
+                        return Ok(None);
+                    }
+                }
+            }
+        }
+        Ok(Some(Self {
+            nodes: Tree::build_flat_tree(tree)?,
+            needs_toptop,
+            reader,
+        }))
+    }
+}
+
+impl<R: Reader> ModularChannelDecoder for GradientMultiProp<R> {
+    #[inline(always)]
+    fn needs_toptop(&self) -> bool {
+        self.needs_toptop
+    }
+
+    #[inline(always)]
+    fn decode_one(
+        &mut self,
+        prediction_data: PredictionData,
+        _: (usize, usize),
+        reader: &mut SymbolReader,
+        br: &mut BitReader,
+        histograms: &Histograms,
+    ) -> i32 {
+        let PredictionData {
+            left,
+            top,
+            toptop,
+            topleft,
+            topright,
+            ..
+        } = prediction_data;
+        let mut properties = [0i32; 16];
+        properties[9] = left.wrapping_add(top).wrapping_sub(topleft);
+        properties[10] = left.wrapping_sub(topleft);
+        properties[11] = topleft.wrapping_sub(top);
+        properties[12] = top.wrapping_sub(topright);
+        properties[13] = top.wrapping_sub(toptop);
+
+        let mut node = 0;
+        let (multiplier, context, offset) = loop {
+            match self.nodes[node] {
+                FlatTreeNode::Split {
+                    properties: node_properties,
+                    splitvals,
+                    child_id,
+                } => {
+                    let props = node_properties.map(|x| properties[x as usize]);
+                    let p0 = props[0] <= splitvals[0];
+                    let p1 = props[1] <= splitvals[1];
+                    let p2 = props[2] <= splitvals[2];
+                    node = child_id as usize + if p0 { 2 | p2 as usize } else { p1 as usize };
+                }
+                FlatTreeNode::Leaf {
+                    multiplier,
+                    context,
+                    offset,
+                    ..
+                } => break (multiplier, context, offset),
+            }
+        };
+
+        let pred = clamped_gradient(left as i64, top as i64, topleft as i64);
+        let dec = self.reader.read(reader, histograms, br, context as usize);
+        make_pixel(dec, multiplier, pred + offset as i64)
+    }
+}
+
 struct SingleGradientOnly<R> {
     clustered_ctx: usize,
     reader: R,
@@ -549,6 +643,16 @@ pub fn run_on_specialized_tree<F: FnOnce(&mut dyn ModularChannelDecoder) -> Resu
         && let Some(mut grad) = GradientOnly::new(&pruned_tree, Reader420NoLz)
     {
         return run(&mut grad);
+    }
+
+    if !uses_wp && single_symbol.is_none() {
+        if !uses_non420 {
+            if let Some(mut grad) = GradientMultiProp::new(&pruned_tree, Reader420NoLz)? {
+                return run(&mut grad);
+            }
+        } else if let Some(mut grad) = GradientMultiProp::new(&pruned_tree, ReaderGeneric)? {
+            return run(&mut grad);
+        }
     }
 
     let single_symbol = single_symbol.map(unpack_signed);
