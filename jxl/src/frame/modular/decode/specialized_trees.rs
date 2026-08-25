@@ -370,6 +370,8 @@ impl<R: Reader> ModularChannelDecoder for SingleGradientOnly<R> {
 struct NoTreeZero {
     clustered_ctx: usize,
     single_value: Option<i32>,
+    multiplier: u32,
+    offset: i64,
 }
 
 impl ModularChannelDecoder for NoTreeZero {
@@ -398,10 +400,16 @@ impl ModularChannelDecoder for NoTreeZero {
         let row = buffers[chan].data.row_mut(y);
         debug_assert_eq!(row.len(), xsize);
         if let Some(sym) = self.single_value {
-            row.fill(sym);
-        } else {
+            row.fill(make_pixel(sym, self.multiplier, self.offset));
+        } else if self.multiplier == 1 && self.offset == 0 {
             for r in row.iter_mut() {
                 *r = reader.read_signed_clustered_inline(histograms, br, self.clustered_ctx);
+            }
+        } else {
+            for r in row.iter_mut() {
+                let residual =
+                    reader.read_signed_clustered_inline(histograms, br, self.clustered_ctx);
+                *r = make_pixel(residual, self.multiplier, self.offset);
             }
         }
     }
@@ -508,8 +516,8 @@ pub fn run_on_specialized_tree<F: FnOnce(&mut dyn ModularChannelDecoder) -> Resu
     if let [
         TreeNode::Leaf {
             predictor: Predictor::Zero,
-            multiplier: 1,
-            offset: 0,
+            multiplier,
+            offset,
             id,
         },
     ] = &*pruned_tree
@@ -517,6 +525,8 @@ pub fn run_on_specialized_tree<F: FnOnce(&mut dyn ModularChannelDecoder) -> Resu
         return run(&mut NoTreeZero {
             clustered_ctx: *id as usize,
             single_value: single_symbol.map(unpack_signed),
+            multiplier: *multiplier,
+            offset: *offset as i64,
         });
     }
 
