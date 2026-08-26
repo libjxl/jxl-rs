@@ -123,7 +123,9 @@ pub fn decode_internal(
             .map(|_| Some(JxlDataFormat::f32()))
             .collect(),
     };
-    decoder_with_image_info.set_pixel_format(requested_format);
+    decoder_with_image_info
+        .set_pixel_format(requested_format)
+        .unwrap();
 
     // Get the configured pixel format
     let pixel_format = decoder_with_image_info.current_pixel_format().clone();
