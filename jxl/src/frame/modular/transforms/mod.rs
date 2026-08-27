@@ -9,6 +9,7 @@ pub(super) mod apply_local;
 pub(super) mod meta_apply;
 mod palette;
 mod rct;
+pub(super) mod smooth_squeeze;
 mod squeeze;
 pub(super) mod step;
 
