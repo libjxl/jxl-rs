@@ -6,6 +6,7 @@
 mod bits;
 mod cacheline;
 mod concat_slice;
+mod dither;
 mod fast_math;
 mod float16;
 mod linalg;
@@ -24,6 +25,7 @@ mod xorshift128plus;
 pub use bits::*;
 pub use cacheline::*;
 pub use concat_slice::*;
+pub(crate) use dither::*;
 pub use fast_math::*;
 pub use float16::f16;
 pub use linalg::*;
