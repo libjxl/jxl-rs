@@ -10,9 +10,8 @@ use crate::headers::bit_depth::BitDepth;
 use crate::render::{
     Channels, ChannelsMut, ErasedLocalState, RenderPipelineInOutStage, StageSpecialCase,
 };
-use crate::util::sync::{Arc, RwLock};
-
 use crate::util::DITHER_TABLE;
+use crate::util::sync::{Arc, RwLock};
 
 pub struct ConvertModularXYBToF32Stage {
     first_channel: usize,

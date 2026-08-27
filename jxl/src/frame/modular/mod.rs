@@ -48,6 +48,7 @@ struct ChannelInfo {
     size: (usize, usize),
     shift: Option<(usize, usize)>, // None for meta-channels
     bit_depth: BitDepth,
+    followed_by_palette: bool,
 }
 
 impl Debug for ChannelInfo {
@@ -61,6 +62,9 @@ impl Debug for ChannelInfo {
         write!(f, "{:?}", self.bit_depth)?;
         if let Some(oc) = self.output_channel_idx {
             write!(f, "(output channel {})", oc)?;
+        }
+        if self.followed_by_palette {
+            write!(f, "(palette)")?;
         }
         Ok(())
     }
@@ -204,8 +208,10 @@ impl ModularBufferInfo {
     }
 }
 
+use crate::frame::modular::transforms::smooth_squeeze::SmoothUpsampleScratch;
+
 struct TransformScratchSpace {
-    smooth_unsqueeze_buffer: ([Vec<f32>; 5], Vec<i32>),
+    smooth_upsample_scratch: SmoothUpsampleScratch,
     palette_row_scratch: [Vec<i32>; 2],
 }
 
@@ -218,7 +224,7 @@ impl Debug for TransformScratchSpace {
 impl TransformScratchSpace {
     fn new() -> TransformScratchSpace {
         TransformScratchSpace {
-            smooth_unsqueeze_buffer: (std::array::from_fn(|_| vec![]), vec![]),
+            smooth_upsample_scratch: SmoothUpsampleScratch::default(),
             palette_row_scratch: [vec![], vec![]],
         }
     }
@@ -284,6 +290,7 @@ impl FullModularImage {
                 size: (size.0.div_ceil(1 << shift.0), size.1.div_ceil(1 << shift.1)),
                 shift: Some(shift),
                 bit_depth: image_metadata.bit_depth,
+                followed_by_palette: false,
             });
         }
 
@@ -304,6 +311,7 @@ impl FullModularImage {
                 size,
                 shift: Some((shift, shift)),
                 bit_depth: image_metadata.bit_depth,
+                followed_by_palette: false,
             });
         }
 
@@ -717,6 +725,8 @@ impl FullModularImage {
             if !self.pending_transforms.insert(t) {
                 continue;
             }
+            let upsample = self.compute_squeeze_upsample(t);
+            self.transform_steps[t].set_squeeze_upsample(upsample);
             for TransformDependency {
                 buffer,
                 grid,
@@ -750,6 +760,9 @@ impl FullModularImage {
         mut group_callback: impl FnMut(usize, usize, bool),
     ) {
         for t in self.pending_transforms.iter().cloned() {
+            if self.transform_steps[t].ready_for_final_render() {
+                self.transform_steps[t].set_squeeze_upsample(None);
+            }
             // If this will produce output, tell the caller.
             if let Some((g, c)) = self.transform_steps[t].output_info() {
                 group_callback(g, c, self.transform_steps[t].ready_for_final_render());
