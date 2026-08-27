@@ -5,9 +5,8 @@
 
 #![allow(clippy::excessive_precision)]
 
+use jxl_simd::{F32SimdVec, I32SimdVec, ScalarDescriptor, SimdDescriptor, SimdMask, shl, shr};
 use std::f32::consts::{PI, SQRT_2};
-
-use jxl_simd::{F32SimdVec, I32SimdVec, SimdDescriptor, shl, shr};
 
 use super::{eval_rational_poly, eval_rational_poly_simd};
 
@@ -164,6 +163,37 @@ pub fn floor_log2_nonzero(x: u64) -> u32 {
     (u64::BITS as usize - 1) as u32 ^ x.leading_zeros()
 }
 
+const JINC_WINDOWED_SQ_P: [f32; 6] = [
+    1.0,
+    -9.49473905e-01,
+    3.03599826e-01,
+    -4.37817437e-02,
+    2.93920389e-03,
+    -7.56152766e-05,
+];
+const JINC_WINDOWED_SQ_Q: [f32; 5] = [
+    1.0,
+    2.35513458e-01,
+    2.73748942e-02,
+    1.99519538e-03,
+    9.81907926e-05,
+];
+
+/// Rational approximation of f(x) = jinc(pi * sqrt(x) * 0.85) * jinc(j_{1,1} * sqrt(x) / 2.5)
+/// for x = r^2 in [0, 6.25]. Returns 0.0 for x >= 6.25.
+/// Max absolute error < 6e-8.
+#[inline(always)]
+pub fn fast_jinc_windowed_sq(r2: f32) -> f32 {
+    fast_jinc_windowed_sq_simd(ScalarDescriptor::new().unwrap(), r2)
+}
+
+#[inline(always)]
+pub fn fast_jinc_windowed_sq_simd<D: SimdDescriptor>(d: D, r2: D::F32Vec) -> D::F32Vec {
+    let poly = eval_rational_poly_simd(d, r2, JINC_WINDOWED_SQ_P, JINC_WINDOWED_SQ_Q);
+    let mask = D::F32Vec::splat(d, 6.25).gt(r2);
+    mask.if_then_else_f32(poly, D::F32Vec::zero(d))
+}
+
 #[cfg(test)]
 mod test {
     use test_log::test;
@@ -242,4 +272,83 @@ mod test {
             Ok(())
         });
     }
+
+    fn bessel_j1(x: f64) -> f64 {
+        if x == 0.0 {
+            return 0.0;
+        }
+        let z = x.abs();
+        let z2_4 = -(z * z) * 0.25;
+        let mut term = 1.0;
+        let mut sum = 1.0;
+        for k in 1..=30 {
+            term *= z2_4 / (k as f64 * (k + 1) as f64);
+            sum += term;
+            if term.abs() < 1e-16 {
+                break;
+            }
+        }
+        let res = (z * 0.5) * sum;
+        if x < 0.0 { -res } else { res }
+    }
+
+    fn jinc_windowed_sq(r2: f64) -> f64 {
+        if r2 >= 6.25 {
+            return 0.0;
+        }
+        let r = r2.sqrt();
+        if r == 0.0 {
+            return 1.0;
+        }
+        const J1_ZERO_1: f64 = 3.8317059702075126;
+        const CUTOFF_SCALE: f64 = 0.85;
+        let pi_r = std::f64::consts::PI * r * CUTOFF_SCALE;
+        let jinc = 2.0 * bessel_j1(pi_r) / pi_r;
+        let pi_r_w = J1_ZERO_1 * r / 2.5;
+        let window = 2.0 * bessel_j1(pi_r_w) / pi_r_w;
+        jinc * window
+    }
+
+    #[test]
+    fn test_fast_jinc_windowed_sq_accuracy() {
+        for i in 0..=10000 {
+            let r2 = (i as f64) * 6.25 / 10000.0;
+            let expected = jinc_windowed_sq(r2) as f32;
+            let actual = fast_jinc_windowed_sq(r2 as f32);
+            let diff = (actual - expected).abs();
+            assert!(
+                diff < 1e-6,
+                "Accuracy test failed at r2 = {r2}: expected {expected}, got {actual}, diff {diff}"
+            );
+        }
+    }
+
+    fn fast_jinc_windowed_sq_simd_arb<D: SimdDescriptor>(d: D) {
+        let lanes = D::F32Vec::LEN;
+        let mut input = vec![0.0f32; lanes];
+        let mut output = vec![0.0f32; lanes];
+        arbtest::arbtest(|u| {
+            for v in &mut input {
+                *v = (u.int_in_range(0..=(1i32 << 24))? as f64 / (1 << 24) as f64 * 10.0) as f32;
+            }
+            let vec = D::F32Vec::load(d, &input);
+            fast_jinc_windowed_sq_simd(d, vec).store(&mut output);
+            for i in 0..lanes {
+                let expected = jinc_windowed_sq(input[i] as f64);
+                let actual = output[i] as f64;
+                let abs_error = (actual - expected).abs();
+                assert!(
+                    abs_error < 1e-6,
+                    "input: {}, expected: {}, actual: {}, abs_error: {}",
+                    input[i],
+                    expected,
+                    actual,
+                    abs_error
+                );
+            }
+            Ok(())
+        });
+    }
+
+    jxl_simd::test_all_instruction_sets!(fast_jinc_windowed_sq_simd_arb);
 }
