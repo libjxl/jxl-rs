@@ -8,11 +8,10 @@ use std::fmt::Debug;
 use super::{RctOp, RctPermutation};
 use crate::error::Result;
 use crate::frame::modular::buffers::{ModularChannel, with_buffers};
-use crate::frame::modular::transforms::squeeze::{
-    smooth_2d_unsqueeze, smooth_h_unsqueeze, smooth_v_unsqueeze,
-};
+use crate::frame::modular::transforms::smooth_squeeze::smooth_upsample;
 use crate::frame::modular::{
-    DataStatus, ModularBufferInfo, ModularGridKind, Predictor, TransformScratchSpace,
+    DataStatus, FullModularImage, ModularBufferInfo, ModularGridKind, Predictor,
+    TransformScratchSpace,
 };
 use crate::headers::frame_header::FrameHeader;
 use crate::headers::modular::WeightedHeader;
@@ -21,6 +20,13 @@ use crate::util::SmallVec;
 use crate::util::sync::RwLockReadGuard;
 use crate::util::sync::atomic::{AtomicUsize, Ordering};
 use crate::util::tracing_wrappers::*;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(in crate::frame::modular) struct SqueezeUpsample {
+    pub source_buf: usize,
+    pub source_grid: usize,
+    pub shift_diff: (usize, usize),
+}
 
 #[derive(Debug, Clone)]
 pub enum TransformStep {
@@ -42,16 +48,12 @@ pub enum TransformStep {
     HSqueeze {
         buf_in: [usize; 2],
         buf_out: usize,
-        // If buf_in[0] was obtained via VSqueeze, the two source buffers
-        // for that transform.
-        buf_in_avg: Option<[usize; 2]>,
+        upsample: Option<SqueezeUpsample>,
     },
     VSqueeze {
         buf_in: [usize; 2],
         buf_out: usize,
-        // If buf_in[0] was obtained via HSqueeze, the two source buffers
-        // for that transform.
-        buf_in_avg: Option<[usize; 2]>,
+        upsample: Option<SqueezeUpsample>,
     },
     Output {
         buf_in: usize,
@@ -80,23 +82,85 @@ pub struct TransformStepChunk {
     pub(super) missing_deps: AtomicUsize,
 }
 
-#[derive(Debug, PartialEq, Eq, Clone, Copy)]
-enum SqueezeStepKind {
-    Regular,
-    Upsample1D(usize, usize),
-    Upsample2D(usize, usize),
+impl TransformStepChunk {
+    pub(in crate::frame::modular) fn set_squeeze_upsample(
+        &mut self,
+        upsample: Option<SqueezeUpsample>,
+    ) {
+        match &mut self.step {
+            TransformStep::HSqueeze { upsample: u, .. }
+            | TransformStep::VSqueeze { upsample: u, .. } => {
+                *u = upsample;
+            }
+            _ => {}
+        }
+    }
+}
+
+impl FullModularImage {
+    pub(in crate::frame::modular) fn compute_squeeze_upsample(
+        &self,
+        t: usize,
+    ) -> Option<SqueezeUpsample> {
+        let chunk = &self.transform_steps[t];
+        let (buf_in, buf_out) = match chunk.step {
+            TransformStep::HSqueeze {
+                buf_in, buf_out, ..
+            }
+            | TransformStep::VSqueeze {
+                buf_in, buf_out, ..
+            } => (buf_in, buf_out),
+            _ => return None,
+        };
+        let out_kind = self.buffer_info[buf_out].grid_kind;
+        let res_grid = self.buffer_info[buf_in[1]].get_grid_idx(out_kind, chunk.grid_pos);
+        if self.buffer_info[buf_in[1]].buffer_grid[res_grid].data_status != DataStatus::Zero {
+            return None;
+        }
+        let mut cur_buf = buf_in[0];
+        let mut cur_grid = self.buffer_info[cur_buf].get_grid_idx(out_kind, chunk.grid_pos);
+        while let Some(prev_t) = self.buffer_info[cur_buf].buffer_grid[cur_grid].produced_by_step {
+            let (next_avg, next_res) = match self.transform_steps[prev_t].step {
+                TransformStep::HSqueeze { buf_in: [a, r], .. }
+                | TransformStep::VSqueeze { buf_in: [a, r], .. } => (a, r),
+                _ => break,
+            };
+            let next_res_grid = self.buffer_info[next_res].get_grid_idx(out_kind, chunk.grid_pos);
+            if self.buffer_info[next_res].buffer_grid[next_res_grid].data_status != DataStatus::Zero
+            {
+                break;
+            }
+            cur_buf = next_avg;
+            cur_grid = self.buffer_info[cur_buf].get_grid_idx(out_kind, chunk.grid_pos);
+        }
+        let src_shift = self.buffer_info[cur_buf].info.shift.unwrap_or((0, 0));
+        let dst_shift = self.buffer_info[buf_out].info.shift.unwrap_or((0, 0));
+        let shift_diff = (
+            src_shift.0.checked_sub(dst_shift.0).unwrap(),
+            src_shift.1.checked_sub(dst_shift.1).unwrap(),
+        );
+        Some(SqueezeUpsample {
+            source_buf: cur_buf,
+            source_grid: cur_grid,
+            shift_diff,
+        })
+    }
 }
 
 #[derive(Debug)]
-struct SqueezeInfo {
-    kind: SqueezeStepKind,
-    out_rect: Rect,
-    in_avg: (usize, usize),
-    avg_rect: Rect,
-    in_res: (usize, usize),
-    res_rect: Rect,
-    in_next_avg: Option<(usize, usize)>,
-    out_prev: Option<(usize, usize)>,
+enum SqueezeInfo {
+    Upsample {
+        upsample: SqueezeUpsample,
+        out_rect: Rect,
+    },
+    Regular {
+        in_avg: (usize, usize),
+        avg_rect: Rect,
+        in_res: (usize, usize),
+        res_rect: Rect,
+        in_next_avg: Option<(usize, usize)>,
+        out_prev: Option<(usize, usize)>,
+    },
 }
 
 fn borrow_channel(
@@ -125,39 +189,29 @@ impl SqueezeInfo {
         buffers: &[ModularBufferInfo],
         buf_in: [usize; 2],
         buf_out: usize,
-        buf_in_avg: Option<[usize; 2]>,
+        upsample: Option<SqueezeUpsample>,
         output_grid_pos: (usize, usize),
         frame_header: &FrameHeader,
         vertical: bool,
     ) -> Self {
+        let (gx, gy) = output_grid_pos;
+        let output_grid_kind = buffers[buf_out].grid_kind;
+        if let Some(upsample) = upsample {
+            let mut out_rect =
+                buffers[buf_out].get_grid_rect(frame_header, output_grid_kind, output_grid_pos);
+            out_rect.origin = if output_grid_kind == ModularGridKind::None {
+                (0, 0)
+            } else {
+                let out_shift = buffers[buf_out].info.shift.unwrap_or((0, 0));
+                let out_grid_dim = output_grid_kind.grid_dim(frame_header, out_shift);
+                (gx * out_grid_dim.0, gy * out_grid_dim.1)
+            };
+            return Self::Upsample { upsample, out_rect };
+        }
         let buf_avg = &buffers[buf_in[0]];
         let buf_res = &buffers[buf_in[1]];
-        let output_grid_kind = buffers[buf_out].grid_kind;
         let in_grid = buf_avg.get_grid_idx(output_grid_kind, output_grid_pos);
         let res_grid = buf_res.get_grid_idx(output_grid_kind, output_grid_pos);
-        let kind = if buf_res.buffer_grid[res_grid].data_status != DataStatus::Zero {
-            SqueezeStepKind::Regular
-        } else if let Some([avg2_buf, res2_buf]) = buf_in_avg {
-            let avg2_grid = buffers[avg2_buf].get_grid_idx(output_grid_kind, output_grid_pos);
-            let res2_grid = buffers[res2_buf].get_grid_idx(output_grid_kind, output_grid_pos);
-            if buffers[res2_buf].buffer_grid[res2_grid].data_status == DataStatus::Zero {
-                SqueezeStepKind::Upsample2D(avg2_buf, avg2_grid)
-            } else {
-                SqueezeStepKind::Upsample1D(buf_in[0], in_grid)
-            }
-        } else {
-            SqueezeStepKind::Upsample1D(buf_in[0], in_grid)
-        };
-        let (gx, gy) = output_grid_pos;
-        let mut out_rect =
-            buffers[buf_out].get_grid_rect(frame_header, output_grid_kind, output_grid_pos);
-        out_rect.origin = if output_grid_kind == ModularGridKind::None {
-            (0, 0)
-        } else {
-            let out_shift = buffers[buf_out].info.shift.unwrap_or((0, 0));
-            let out_grid_dim = output_grid_kind.grid_dim(frame_header, out_shift);
-            (gx * out_grid_dim.0, gy * out_grid_dim.1)
-        };
         let pos_next = if vertical {
             (gy < buffers[buf_out].grid_shape.1 - 1).then(|| (gx, gy + 1))
         } else {
@@ -185,9 +239,7 @@ impl SqueezeInfo {
             None
         };
         let prev_out_grid = pos_prev.map(|x| buffers[buf_out].get_grid_idx(output_grid_kind, x));
-        Self {
-            kind,
-            out_rect,
+        Self::Regular {
             in_avg: (buf_in[0], in_grid),
             avg_rect,
             in_res: (buf_in[1], res_grid),
@@ -203,33 +255,52 @@ impl SqueezeInfo {
         buffers: &'a [ModularBufferInfo],
         vertical: bool,
     ) -> SqueezeInputs<'a> {
+        let (in_avg, in_res, in_next_avg, out_prev) = match self {
+            Self::Regular {
+                in_avg,
+                in_res,
+                in_next_avg,
+                out_prev,
+                ..
+            } => (*in_avg, *in_res, *in_next_avg, *out_prev),
+            Self::Upsample { .. } => unreachable!(),
+        };
         let borrow_border = if vertical {
             borrow_topbottom
         } else {
             borrow_leftright
         };
         SqueezeInputs {
-            in_avg: borrow_channel(buffers, self.in_avg),
-            in_res: borrow_channel(buffers, self.in_res),
-            in_next_border: self.in_next_avg.map(|x| borrow_border(buffers, x)),
-            out_prev_border: self.out_prev.map(|x| borrow_border(buffers, x)),
+            in_avg: borrow_channel(buffers, in_avg),
+            in_res: borrow_channel(buffers, in_res),
+            in_next_border: in_next_avg.map(|x| borrow_border(buffers, x)),
+            out_prev_border: out_prev.map(|x| borrow_border(buffers, x)),
         }
     }
 
     fn decrement_refs(self, buffers: &[ModularBufferInfo], is_final: bool) {
-        buffers[self.in_avg.0].buffer_grid[self.in_avg.1].mark_used(is_final);
-        buffers[self.in_res.0].buffer_grid[self.in_res.1].mark_used(is_final);
+        match self {
+            Self::Regular { in_avg, in_res, .. } => {
+                buffers[in_avg.0].buffer_grid[in_avg.1].mark_used(is_final);
+                buffers[in_res.0].buffer_grid[in_res.1].mark_used(is_final);
+            }
+            Self::Upsample { upsample: u, .. } => {
+                assert!(!is_final);
+                buffers[u.source_buf].buffer_grid[u.source_grid].mark_used(false);
+            }
+        }
     }
 
     fn borrow_upsample_view<'a>(
-        &self,
+        &'a self,
         buffers: &'a [ModularBufferInfo],
         frame_header: &FrameHeader,
     ) -> TiledChannelView<'a> {
-        let (b, g) = match self.kind {
-            SqueezeStepKind::Upsample1D(b, g) | SqueezeStepKind::Upsample2D(b, g) => (b, g),
-            SqueezeStepKind::Regular => unreachable!(),
+        let u = match self {
+            Self::Upsample { upsample: u, .. } => *u,
+            Self::Regular { .. } => unreachable!(),
         };
+        let (b, g) = (u.source_buf, u.source_grid);
         let buf_info = &buffers[b];
         let (xs, ys) = buf_info.grid_shape;
         let (gx, gy) = (g % xs, g / xs);
@@ -240,7 +311,7 @@ impl SqueezeInfo {
             Some(buf_info.grid_kind.grid_dim(frame_header, shift))
         };
 
-        let mut tiles = [const { None }; 9];
+        let mut tiles: [Option<TileGuard<'a>>; 9] = Default::default();
         tiles[4] = Some(TileGuard::Channel(borrow_channel(buffers, (b, g))));
 
         let borrow_border = |tile_x: isize, tile_y: isize, is_tb: bool| -> Option<TileGuard<'a>> {
@@ -810,19 +881,19 @@ impl TransformStepChunk {
             TransformStep::HSqueeze {
                 buf_in,
                 buf_out,
-                buf_in_avg,
+                upsample,
             }
             | TransformStep::VSqueeze {
                 buf_in,
                 buf_out,
-                buf_in_avg,
+                upsample,
             } => {
                 let vertical = matches!(self.step, TransformStep::VSqueeze { .. });
                 let info = SqueezeInfo::new(
                     buffers,
                     *buf_in,
                     *buf_out,
-                    *buf_in_avg,
+                    *upsample,
                     self.grid_pos,
                     frame_header,
                     vertical,
@@ -838,35 +909,47 @@ impl TransformStepChunk {
                     if bufs.is_empty() {
                         return Ok(());
                     }
-                    if info.kind != SqueezeStepKind::Regular {
-                        assert_eq!(bufs.len(), 1);
-                        let view = info.borrow_upsample_view(buffers, frame_header);
-                        let scratch = &mut transform_scratch_space.smooth_unsqueeze_buffer;
-                        if matches!(info.kind, SqueezeStepKind::Upsample2D(..)) {
-                            smooth_2d_unsqueeze(&view, info.out_rect, &mut bufs[0].data, scratch);
-                        } else if vertical {
-                            smooth_v_unsqueeze(&view, info.out_rect, &mut bufs[0].data, scratch);
-                        } else {
-                            smooth_h_unsqueeze(&view, info.out_rect, &mut bufs[0].data, scratch);
+                    match info {
+                        SqueezeInfo::Upsample {
+                            upsample: u,
+                            out_rect,
+                        } => {
+                            assert!(!is_final);
+                            assert_eq!(bufs.len(), 1);
+                            let view = info.borrow_upsample_view(buffers, frame_header);
+                            let scratch = &mut transform_scratch_space.smooth_upsample_scratch;
+                            let dither = buffers[*buf_out].info.shift.unwrap_or((0, 0)) == (0, 0)
+                                && !buffers[*buf_out].info.followed_by_palette;
+                            smooth_upsample(
+                                &view,
+                                u.shift_diff,
+                                dither,
+                                out_rect,
+                                &mut bufs[0].data,
+                                scratch,
+                            );
                         }
-                    } else {
-                        let inputs = info.borrow_inputs(buffers, vertical);
-                        if vertical {
-                            super::squeeze::do_vsqueeze_step(
-                                &inputs.in_avg_rect(info.avg_rect),
-                                &inputs.in_res_rect(info.res_rect),
-                                inputs.in_next_border(),
-                                inputs.out_prev_border(),
-                                &mut bufs,
-                            );
-                        } else {
-                            super::squeeze::do_hsqueeze_step(
-                                &inputs.in_avg_rect(info.avg_rect),
-                                &inputs.in_res_rect(info.res_rect),
-                                inputs.in_next_border(),
-                                inputs.out_prev_border(),
-                                &mut bufs,
-                            );
+                        SqueezeInfo::Regular {
+                            avg_rect, res_rect, ..
+                        } => {
+                            let inputs = info.borrow_inputs(buffers, vertical);
+                            if vertical {
+                                super::squeeze::do_vsqueeze_step(
+                                    &inputs.in_avg_rect(avg_rect),
+                                    &inputs.in_res_rect(res_rect),
+                                    inputs.in_next_border(),
+                                    inputs.out_prev_border(),
+                                    &mut bufs,
+                                );
+                            } else {
+                                super::squeeze::do_hsqueeze_step(
+                                    &inputs.in_avg_rect(avg_rect),
+                                    &inputs.in_res_rect(res_rect),
+                                    inputs.in_next_border(),
+                                    inputs.out_prev_border(),
+                                    &mut bufs,
+                                );
+                            }
                         }
                     }
                     Ok(())
@@ -1037,49 +1120,60 @@ impl TransformStepChunk {
             TransformStep::VSqueeze {
                 buf_in,
                 buf_out,
-                buf_in_avg,
+                upsample,
             }
             | TransformStep::HSqueeze {
                 buf_in,
                 buf_out,
-                buf_in_avg,
+                upsample,
             } => {
                 let info = SqueezeInfo::new(
                     buffers,
                     *buf_in,
                     *buf_out,
-                    *buf_in_avg,
+                    *upsample,
                     self.grid_pos,
                     frame_header,
                     matches!(self.step, TransformStep::VSqueeze { .. }),
                 );
                 let mut ans = SmallVec::new();
-                match info.kind {
-                    SqueezeStepKind::Regular => {
-                        ans.push(TransformDependency::new(info.in_avg.0, info.in_avg.1));
-                        ans.push(TransformDependency::new(info.in_res.0, info.in_res.1));
-                        if let Some(na) = info.in_next_avg {
+                match info {
+                    SqueezeInfo::Regular {
+                        in_avg,
+                        in_res,
+                        in_next_avg,
+                        out_prev,
+                        ..
+                    } => {
+                        ans.push(TransformDependency::new(in_avg.0, in_avg.1));
+                        ans.push(TransformDependency::new(in_res.0, in_res.1));
+                        if let Some(na) = in_next_avg {
                             ans.push(TransformDependency::new_order_only(na.0, na.1));
                         }
-                        if let Some(op) = info.out_prev {
+                        if let Some(op) = out_prev {
                             ans.push(TransformDependency::new_order_only(op.0, op.1));
                         }
                     }
-                    SqueezeStepKind::Upsample1D(b, g) | SqueezeStepKind::Upsample2D(b, g) => {
-                        let (xs, ys) = buffers[b].grid_shape;
-                        let (gx, gy) = (g % xs, g / xs);
-                        ans.push(TransformDependency::new(b, g));
-                        let mut add = |x, y| {
-                            ans.push(TransformDependency::new_order_only(b, y * xs + x));
-                        };
-                        add(gx.saturating_sub(1), gy.saturating_sub(1));
-                        add(gx, gy.saturating_sub(1));
-                        add((gx + 1).min(xs - 1), gy.saturating_sub(1));
-                        add(gx.saturating_sub(1), gy);
-                        add((gx + 1).min(xs - 1), gy);
-                        add(gx.saturating_sub(1), (gy + 1).min(ys - 1));
-                        add(gx, (gy + 1).min(ys - 1));
-                        add((gx + 1).min(xs - 1), (gy + 1).min(ys - 1));
+                    SqueezeInfo::Upsample { upsample: u, .. } => {
+                        let (xs, ys) = buffers[u.source_buf].grid_shape;
+                        let (gx, gy) = (u.source_grid % xs, u.source_grid / xs);
+                        ans.push(TransformDependency::new(u.source_buf, u.source_grid));
+                        for dy in -1..=1 {
+                            let ny = gy as isize + dy;
+                            if ny < 0 || ny >= ys as isize {
+                                continue;
+                            }
+                            for dx in -1..=1 {
+                                let nx = gx as isize + dx;
+                                if nx < 0 || nx >= xs as isize || (dx == 0 && dy == 0) {
+                                    continue;
+                                }
+                                ans.push(TransformDependency::new_order_only(
+                                    u.source_buf,
+                                    ny as usize * xs + nx as usize,
+                                ));
+                            }
+                        }
                     }
                 }
                 ans

@@ -186,9 +186,10 @@ pub fn meta_apply_local_transforms<'a, 'b>(
         } = ts
         {
             for c in 0..3 {
-                assert_eq!(
-                    buffer_storage[buf_in[c]].channel_info(),
-                    buffer_storage[buf_out[c]].channel_info()
+                assert!(
+                    buffer_storage[buf_in[c]]
+                        .channel_info()
+                        .is_equivalent(&buffer_storage[buf_out[c]].channel_info())
                 );
                 assert!(matches!(
                     buffer_storage[buf_in[c]],
@@ -239,9 +240,10 @@ impl TransformStep {
                 perm,
             } => {
                 for i in 0..3 {
-                    assert_eq!(
-                        buffers[buf_in[i]].channel_info(),
-                        buffers[buf_out[i]].channel_info()
+                    assert!(
+                        buffers[buf_in[i]]
+                            .channel_info()
+                            .is_equivalent(&buffers[buf_out[i]].channel_info())
                     );
                 }
                 let [mut a, mut b, mut c] = [

@@ -53,6 +53,7 @@ impl ModularChannel {
             size: self.data.size(),
             shift: self.shift,
             bit_depth: self.bit_depth,
+            followed_by_palette: false,
         }
     }
 }

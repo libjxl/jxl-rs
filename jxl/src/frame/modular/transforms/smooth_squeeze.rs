@@ -9,8 +9,7 @@ use jxl_simd::{F32SimdVec, I32SimdVec, SimdDescriptor, simd_function};
 
 use super::step::TiledChannelView;
 use crate::image::{Image, Rect};
-use crate::util::DITHER_TABLE;
-use crate::util::fast_jinc_windowed_sq_simd;
+use crate::util::{DITHER_TABLE, fast_jinc_windowed_sq_simd};
 
 fn compute_jinc_subkernel(delta_x: f32, delta_y: f32) -> [f32; 25] {
     let mut w = [0.0f32; 25];

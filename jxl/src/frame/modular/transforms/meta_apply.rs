@@ -3,8 +3,6 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-use std::collections::HashMap;
-
 use num_traits::FromPrimitive;
 
 use super::{RctOp, RctPermutation};
@@ -93,7 +91,6 @@ pub(super) fn meta_apply_single_transform(
             } else {
                 transform.squeezes.clone()
             };
-            let mut transform_step_for_buf = HashMap::new();
             for step in steps {
                 super::squeeze::check_squeeze_params(channels, &step)?;
                 let in_place = step.in_place;
@@ -132,6 +129,7 @@ pub(super) fn meta_apply_single_transform(
                         shift: new_shift,
                         size: new_size_0,
                         bit_depth: chan.bit_depth,
+                        followed_by_palette: chan.followed_by_palette,
                     };
                     let buf_0 = add_transform_buffer(
                         new_0,
@@ -142,34 +140,24 @@ pub(super) fn meta_apply_single_transform(
                         shift: new_shift,
                         size: new_size_1,
                         bit_depth: chan.bit_depth,
+                        followed_by_palette: chan.followed_by_palette,
                     };
                     let buf_1 = add_transform_buffer(
                         new_1,
                         format!("Squeeze residual, original channel {}", begin_channel + ic),
                     );
-                    transform_step_for_buf.insert(buf_0, (transform_steps.len(), horizontal));
                     let buf_out = channels[begin_channel + ic].0;
-                    if let Some(t) = transform_step_for_buf.get(&buf_out)
-                        && t.1 != horizontal
-                    {
-                        let (TransformStep::VSqueeze { buf_in_avg, .. }
-                        | TransformStep::HSqueeze { buf_in_avg, .. }) = &mut transform_steps[t.0]
-                        else {
-                            unreachable!()
-                        };
-                        *buf_in_avg = Some([buf_0, buf_1]);
-                    }
                     if horizontal {
                         transform_steps.push(TransformStep::HSqueeze {
                             buf_in: [buf_0, buf_1],
                             buf_out,
-                            buf_in_avg: None,
+                            upsample: None,
                         });
                     } else {
                         transform_steps.push(TransformStep::VSqueeze {
                             buf_in: [buf_0, buf_1],
                             buf_out,
-                            buf_in_avg: None,
+                            upsample: None,
                         });
                     }
                     channels[begin_channel + ic] = (buf_0, new_0);
@@ -194,16 +182,17 @@ pub(super) fn meta_apply_single_transform(
                 shift: None,
                 size: (num_colors + num_deltas, num_channels),
                 bit_depth,
+                followed_by_palette: false,
             };
             let pchan = add_transform_buffer(
                 pchan_info,
                 format!(
-                    "Palette for palette transform starting at channel {begin_channel} with \
-		     {num_channels} channels"
+                    "Palette for palette transform starting at channel {begin_channel} with {num_channels} channels",
                 ),
             );
             let mut inchan_info = channels[begin_channel].1;
             inchan_info.output_channel_idx = None;
+            inchan_info.followed_by_palette = true;
             let inchan = add_transform_buffer(
                 inchan_info,
                 format!(
@@ -224,7 +213,7 @@ pub(super) fn meta_apply_single_transform(
                 wp_header: header.wp_header.clone(),
             });
             channels.drain(begin_channel + 1..begin_channel + num_channels);
-            channels[begin_channel].0 = inchan;
+            channels[begin_channel] = (inchan, inchan_info);
             channels.insert(0, (pchan, pchan_info));
             trace!("applied palette: {channels:?}");
         }

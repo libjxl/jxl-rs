@@ -5,8 +5,9 @@
 
 #![allow(clippy::excessive_precision)]
 
-use jxl_simd::{F32SimdVec, I32SimdVec, ScalarDescriptor, SimdDescriptor, SimdMask, shl, shr};
 use std::f32::consts::{PI, SQRT_2};
+
+use jxl_simd::{F32SimdVec, I32SimdVec, ScalarDescriptor, SimdDescriptor, SimdMask, shl, shr};
 
 use super::{eval_rational_poly, eval_rational_poly_simd};
 
