@@ -636,7 +636,7 @@ impl F32SimdVec for F32VecAvx512 {
     });
 
     fn_avx!(this: F32VecAvx512, fn as_i32() -> I32VecAvx512 {
-        I32VecAvx512(_mm512_cvtps_epi32(this.0), this.1)
+        I32VecAvx512(_mm512_cvttps_epi32(this.0), this.1)
     });
 
     fn_avx!(this: F32VecAvx512, fn bitcast_to_i32() -> I32VecAvx512 {
