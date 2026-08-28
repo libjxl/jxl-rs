@@ -470,7 +470,7 @@ impl F32SimdVec for F32VecSse42 {
     });
 
     fn_sse42!(this: F32VecSse42, fn as_i32() -> I32VecSse42 {
-        I32VecSse42(_mm_cvtps_epi32(this.0), this.1)
+        I32VecSse42(_mm_cvttps_epi32(this.0), this.1)
     });
 
     fn_sse42!(this: F32VecSse42, fn bitcast_to_i32() -> I32VecSse42 {
