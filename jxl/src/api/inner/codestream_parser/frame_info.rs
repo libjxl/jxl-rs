@@ -81,8 +81,14 @@ pub struct FrameInfo {
 
     /// Byte offset, from the start of the *input file* (so container-aware),
     /// at which the current frame's TOC-described section data begins, i.e.
-    /// immediately after the frame header and TOC. Set when the TOC is parsed.
-    frame_data_offset: u64,
+    /// immediately after the frame header and TOC.
+    ///
+    /// Set when the TOC is parsed, and cleared whenever there is no current
+    /// frame to describe — including for skipped frames, where `self.frame`
+    /// may still hold the *previous* frame and must not be reported alongside
+    /// this frame's offset. `Some` therefore means "`self.frame` is the frame
+    /// this offset belongs to", which is what the TOC accessors gate on.
+    frame_data_offset: Option<u64>,
 
     // Or only section if in single section special case.
     lf_global_section: Option<SectionBuffer>,
@@ -107,7 +113,7 @@ impl FrameInfo {
             section_size: 0,
             ready_section_data: 0,
             section_state: SectionState::new(0, 0),
-            frame_data_offset: 0,
+            frame_data_offset: None,
             lf_global_section: None,
             lf_sections: vec![],
             hf_global_section: None,
@@ -121,6 +127,7 @@ impl FrameInfo {
 
     pub fn clear(&mut self, clear_frame: bool) {
         self.frame_header = None;
+        self.frame_data_offset = None;
         self.toc_parser = None;
         self.ready_section_data = 0;
 
@@ -144,28 +151,35 @@ impl FrameInfo {
             .or(self.frame.as_ref().map(|x| x.header()))
     }
 
+    /// The frame the TOC accessors describe: `self.frame`, but only while it
+    /// is the frame the recorded section-data offset belongs to.
+    fn described_frame(&self) -> Option<&Frame> {
+        self.frame_data_offset.and(self.frame.as_ref())
+    }
+
     /// Number of TOC entries in the current frame, if one has been built.
     pub fn toc_num_entries(&self) -> Option<usize> {
-        self.frame.as_ref().map(|f| f.toc().entries.len())
+        self.described_frame().map(|f| f.toc().entries.len())
     }
 
     /// TOC entry at `index` (bitstream order) for the current frame.
     pub fn toc_entry(&self, index: usize) -> Option<crate::api::TocEntry> {
-        self.frame.as_ref().and_then(|f| f.toc_entry(index))
+        self.described_frame().and_then(|f| f.toc_entry(index))
     }
 
     /// Total size in bytes of the current frame's section data.
     pub fn frame_data_size(&self) -> Option<u64> {
-        self.frame.as_ref().map(|f| f.total_bytes_in_toc() as u64)
+        self.described_frame()
+            .map(|f| f.total_bytes_in_toc() as u64)
     }
 
     /// File-absolute byte offset at which the current frame's section data
-    /// begins. See [`FrameInfo::frame_data_offset`] (the field docs).
+    /// begins. See the [`frame_data_offset`](Self::frame_data_offset) field.
     pub fn frame_data_offset(&self) -> Option<u64> {
-        self.frame.as_ref().map(|_| self.frame_data_offset)
+        self.described_frame().and(self.frame_data_offset)
     }
 
-    pub fn set_frame_data_offset(&mut self, offset: u64) {
+    pub fn set_frame_data_offset(&mut self, offset: Option<u64>) {
         self.frame_data_offset = offset;
     }
 
@@ -336,6 +350,10 @@ impl FrameInfo {
             frame.prepare_render_pipeline(pixel_format, output_profile)?;
             self.frame = Some(frame);
         } else {
+            // A skipped frame builds no Frame of its own, so `self.frame` may
+            // still hold the previous one; don't let the TOC accessors pair it
+            // with this frame's offset.
+            self.frame_data_offset = None;
             let num = cbuf.len().min(self.section_size);
             cbuf.consume(num);
             self.ready_section_data += num;

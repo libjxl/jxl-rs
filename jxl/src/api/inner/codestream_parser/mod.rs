@@ -274,7 +274,7 @@ impl CodestreamParser {
                     let data_offset = input
                         .box_parser()
                         .file_position_at(self.local_buffer.consumed());
-                    self.frame_info.set_frame_data_offset(data_offset);
+                    self.frame_info.set_frame_data_offset(Some(data_offset));
 
                     // Decide how much to decode this frame.
                     let mut process_mode = ProcessMode::Process;

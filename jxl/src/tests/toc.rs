@@ -460,3 +460,48 @@ fn frame_data_offsets_advance_across_frames() {
         }
     }
 }
+
+#[test]
+fn toc_api_reports_nothing_for_skipped_frames() {
+    // Under `scan_frames_only` no Frame is built, but the decoder still hands
+    // the caller a WithFrameInfo state. The previous frame's Frame is still
+    // held internally for reference-frame chaining, so the TOC accessors must
+    // report "nothing" rather than that stale frame's entries.
+    let file = std::fs::read("tests/testdata/5_frames_numbered_jxli.jxl").unwrap();
+    let mut options = JxlDecoderOptions::default();
+    options.scan_frames_only = true;
+    let mut input = file.as_slice();
+    let mut decoder = JxlDecoder::<states::Initialized>::new(options);
+    let mut with_info = loop {
+        match decoder.process(&mut input, None).unwrap() {
+            ProcessingResult::Complete { result } => break result,
+            ProcessingResult::NeedsMoreInput { fallback, .. } => decoder = fallback,
+        }
+    };
+    let mut seen = 0;
+    loop {
+        let with_frame = loop {
+            match with_info.process(&mut input, None).unwrap() {
+                ProcessingResult::Complete { result } => break result,
+                ProcessingResult::NeedsMoreInput { fallback, .. } => with_info = fallback,
+            }
+        };
+        seen += 1;
+        assert_eq!(with_frame.toc_num_entries(), 0, "frame {seen}");
+        assert!(with_frame.toc_entry(0).is_none(), "frame {seen}");
+        assert_eq!(with_frame.frame_data_size(), 0, "frame {seen}");
+        assert_eq!(with_frame.frame_data_offset(), 0, "frame {seen}");
+        with_info = loop {
+            match with_frame.skip_frame(&mut input).unwrap() {
+                ProcessingResult::Complete { result } => break result,
+                ProcessingResult::NeedsMoreInput { .. } => {
+                    unreachable!("whole file already available")
+                }
+            }
+        };
+        if !with_info.has_more_frames() {
+            break;
+        }
+    }
+    assert!(seen > 1, "expected several scanned frames");
+}
