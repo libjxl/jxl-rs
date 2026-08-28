@@ -86,9 +86,9 @@ pub fn meta_apply_local_transforms<'a, 'b>(
     buffer_storage.extend(channels_in.into_iter().map(LocalTransformBuffer::Borrowed));
 
     #[allow(unused_variables)]
-    let mut add_transform_buffer = |info, description| {
+    let mut add_transform_buffer = |info: ChannelInfo, description| {
         trace!(description, ?info, "adding channel buffer");
-        buffer_storage.push(LocalTransformBuffer::Placeholder(info));
+        buffer_storage.push(LocalTransformBuffer::Placeholder(info.as_allocated()));
         buffer_storage.len() - 1
     };
 

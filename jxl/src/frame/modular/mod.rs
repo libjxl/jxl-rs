@@ -87,6 +87,20 @@ impl ChannelInfo {
     fn is_equivalent(&self, other: &ChannelInfo) -> bool {
         self.size == other.size && self.shift == other.shift && self.bit_depth == other.bit_depth
     }
+
+    /// Returns this channel info with the size it'll have once a `ModularChannel` is allocated for
+    /// it.
+    ///
+    /// `Image` does not allocate anything for a channel with a zero-sized dimension and reports
+    /// such a channel as `0x0`, so a channel that is declared as e.g. `0x1` (which happens for
+    /// the palette channel of a palette transform with no colors and no deltas) would otherwise
+    /// change size when it gets allocated.
+    fn as_allocated(mut self) -> ChannelInfo {
+        if self.size.0 == 0 || self.size.1 == 0 {
+            self.size = (0, 0);
+        }
+        self
+    }
 }
 
 #[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Clone, Copy)]

@@ -1327,3 +1327,14 @@ fn test_fuzzer_context_map_num_histograms_overflow() {
     let _ = decode_internal(data, usize::MAX, false, false, None, None, None);
     let _ = decode_internal(data, 1024, false, true, None, None, None);
 }
+
+/// Regression test: two nested palette transforms, where the inner one has no colors and no
+/// deltas and so produces a 0x1 palette channel. `Image` allocates such a channel as 0x0, and
+/// applying the outer palette on top of it used to compare the declared 0x1 size against the
+/// allocated 0x0 one and panic. The file is malformed further on, so decoding it must fail --
+/// but with an error rather than a panic.
+#[test]
+fn test_fuzzer_modular_palette_empty_meta_channel() {
+    let data = include_bytes!("../../tests/testdata/modular_palette_empty_meta_channel.jxl");
+    assert!(decode_internal(data, usize::MAX, false, false, None, None, None).is_err());
+}
