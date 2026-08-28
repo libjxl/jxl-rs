@@ -11,6 +11,7 @@ mod compare_incremental;
 #[cfg(not(any(target_family = "wasm", target_arch = "wasm32")))]
 mod compare_parallel;
 pub(crate) mod decode;
+mod toc;
 
 #[allow(clippy::single_component_path_imports)]
 pub(crate) use assert_close;

@@ -100,6 +100,32 @@ impl JxlDecoderInner {
         self.codestream_parser.has_more_frames()
     }
 
+    /// Number of TOC entries in the current frame, if any.
+    pub fn toc_num_entries(&self) -> Option<usize> {
+        self.codestream_parser.toc_num_entries()
+    }
+
+    /// TOC entry at `index` (bitstream order) for the current frame.
+    pub fn toc_entry(&self, index: usize) -> Option<crate::api::TocEntry> {
+        self.codestream_parser.toc_entry(index)
+    }
+
+    /// Total size in bytes of the current frame's section data.
+    pub fn frame_data_size(&self) -> Option<u64> {
+        self.codestream_parser.frame_data_size()
+    }
+
+    /// File-absolute byte offset at which the current frame's section data
+    /// begins (after the frame header + TOC; includes any container overhead).
+    pub fn frame_data_offset(&self) -> Option<u64> {
+        self.codestream_parser.frame_data_offset()
+    }
+
+    /// Number of passes fully decoded across all groups of the current frame.
+    pub fn num_completed_passes(&self) -> usize {
+        self.codestream_parser.num_completed_passes()
+    }
+
     /// Returns visible frame info entries collected during parsing.
     pub fn scanned_frames(&self) -> &[VisibleFrameInfo] {
         self.codestream_parser.scanned_frames()
