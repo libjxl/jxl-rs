@@ -1319,3 +1319,11 @@ fn test_fuzzer_vardct_grayscale_unused_channel() {
     // Streaming input with flushing exercises the low-memory pipeline's partial renders.
     decode_internal(data, 1, false, true, None, None, None).unwrap();
 }
+
+/// Regression test: a context map with cluster index 255. This shouldn't panic.
+#[test]
+fn test_fuzzer_context_map_num_histograms_overflow() {
+    let data = include_bytes!("../../tests/testdata/context_map_num_histograms_overflow.jxl");
+    let _ = decode_internal(data, usize::MAX, false, false, None, None, None);
+    let _ = decode_internal(data, 1024, false, true, None, None, None);
+}

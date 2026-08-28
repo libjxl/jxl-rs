@@ -519,18 +519,16 @@ impl Histograms {
         } else {
             br.read(2)? as usize + 5
         };
-        let num_histograms = *context_map.iter().max().unwrap() + 1;
+        // Note: cluster indices are u8, so a context map that uses cluster 255
+        // yields 256 histograms; compute the count in usize to avoid overflow.
+        let num_histograms = *context_map.iter().max().unwrap() as usize + 1;
         let uint_configs = ((0..num_histograms).map(|_| HybridUint::decode(log_alpha_size, br)))
             .collect::<Result<_>>()?;
 
         let codes = if use_prefix_code {
-            Codes::Huffman(HuffmanCodes::decode(num_histograms as usize, br)?)
+            Codes::Huffman(HuffmanCodes::decode(num_histograms, br)?)
         } else {
-            Codes::Ans(AnsCodes::decode(
-                num_histograms as usize,
-                log_alpha_size,
-                br,
-            )?)
+            Codes::Ans(AnsCodes::decode(num_histograms, log_alpha_size, br)?)
         };
 
         Ok(Histograms {
