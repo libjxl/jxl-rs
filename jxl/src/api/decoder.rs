@@ -9,7 +9,7 @@ use states::*;
 
 use super::{
     JxlBasicInfo, JxlBitstreamInput, JxlColorProfile, JxlDecoderInner, JxlDecoderOptions,
-    JxlOutputBuffer, JxlPixelFormat, ProcessingResult,
+    JxlOutputBuffer, JxlPixelFormat, ProcessingResult, TocEntry,
 };
 use crate::api::{BoxParserCheckpoint, JxlFrameHeader, JxlParallelRunner};
 use crate::error::Result;
@@ -236,6 +236,82 @@ impl JxlDecoder<WithFrameInfo> {
 
     pub fn frame_header(&self) -> JxlFrameHeader {
         self.inner.frame_header().unwrap()
+    }
+
+    /// Number of passes we have full data for in the current frame.
+    ///
+    /// A pass counts once every group has decoded it. The value only grows
+    /// while a frame is being fed, which makes it a cheap trigger for
+    /// progressive consumers: re-render when it increases.
+    ///
+    /// (Re-added downstream of upstream v0.6.0, which dropped it: Hikaru's
+    /// progressive medical-image streaming drives its re-flush loop off this.)
+    pub fn num_completed_passes(&self) -> usize {
+        self.inner.num_completed_passes()
+    }
+
+    /// Returns the number of TOC entries in the current frame.
+    ///
+    /// The TOC (table of contents) describes the byte layout of frame
+    /// sections. Use [`toc_entry`](Self::toc_entry) to get details about
+    /// each entry. For single-group frames (small images) this is 1; for
+    /// multi-group frames it is `2 + num_lf_groups + num_passes * num_groups`.
+    ///
+    /// Returns 0 if no frame is currently being decoded (e.g. under
+    /// [`JxlDecoderOptions::scan_frames_only`]).
+    pub fn toc_num_entries(&self) -> usize {
+        self.inner.toc_num_entries().unwrap_or(0)
+    }
+
+    /// Returns the TOC entry at the given index, or `None` if out of bounds.
+    ///
+    /// # TOC layout
+    ///
+    /// Entries are returned in **bitstream (physical) order**. For
+    /// single-group frames there is one [`TocGroupKind::All`] entry. For
+    /// multi-group frames the *spec* order is:
+    /// - index 0: [`TocGroupKind::LfGlobal`]
+    /// - indices `1..=num_lf_groups`: [`TocGroupKind::LfGroup`]
+    /// - index `1 + num_lf_groups`: [`TocGroupKind::HfGlobal`]
+    /// - the rest: [`TocGroupKind::GroupPass`], pass-major
+    ///
+    /// When the frame's TOC is permuted, the physical order differs; the
+    /// returned `kind` is resolved through the permutation, so it always
+    /// describes the section actually stored at that physical position.
+    ///
+    /// The entry `offset` is relative to
+    /// [`frame_data_offset`](Self::frame_data_offset). Designed for
+    /// progressive-streaming use cases that need section byte boundaries
+    /// without fully decoding the frame.
+    ///
+    /// [`TocGroupKind::All`]: crate::api::TocGroupKind::All
+    /// [`TocGroupKind::LfGlobal`]: crate::api::TocGroupKind::LfGlobal
+    /// [`TocGroupKind::LfGroup`]: crate::api::TocGroupKind::LfGroup
+    /// [`TocGroupKind::HfGlobal`]: crate::api::TocGroupKind::HfGlobal
+    /// [`TocGroupKind::GroupPass`]: crate::api::TocGroupKind::GroupPass
+    pub fn toc_entry(&self, index: usize) -> Option<TocEntry> {
+        self.inner.toc_entry(index)
+    }
+
+    /// Returns the total size of frame section data in bytes.
+    ///
+    /// This is the sum of all TOC entry sizes — the amount of section data
+    /// needed to fully decode the frame (not counting the frame header/TOC).
+    pub fn frame_data_size(&self) -> u64 {
+        self.inner.frame_data_size().unwrap_or(0)
+    }
+
+    /// Returns the byte offset, from the start of the *input* (file-absolute,
+    /// so it includes any ISOBMFF container overhead), at which the current
+    /// frame's TOC-described section data begins — immediately after the frame
+    /// header and TOC.
+    ///
+    /// [`toc_entry`](Self::toc_entry) offsets are relative to this. Add the two
+    /// to locate a section in the original file bytes — useful for
+    /// progressive-streaming consumers that slice the raw bitstream into
+    /// prefixes.
+    pub fn frame_data_offset(&self) -> u64 {
+        self.inner.frame_data_offset().unwrap_or(0)
     }
 
     /// Draws all the pixels we have data for.

@@ -259,6 +259,18 @@ impl CodestreamParser {
                             .with_br(|br, bits| c.frame_info.parse_toc(br, bits))
                     })?;
 
+                    // The TOC ends byte-aligned, and `local_buffer.consumed()`
+                    // is a running total across every process() call, so this is
+                    // the codestream position of the first section byte even
+                    // when the header/TOC were parsed across several calls.
+                    // Nothing has consumed section data from the buffer yet —
+                    // `make_frame` below is the first to do so — so this must be
+                    // sampled here.
+                    let data_offset = input
+                        .box_parser()
+                        .file_position_at(self.local_buffer.consumed());
+                    self.frame_info.set_frame_data_offset(Some(data_offset));
+
                     // Decide how much to decode this frame.
                     let mut process_mode = ProcessMode::Process;
 
@@ -372,5 +384,25 @@ impl CodestreamParser {
 
     pub fn has_frame(&self) -> bool {
         matches!(self.state, ParserState::Sections { .. })
+    }
+
+    pub(super) fn toc_num_entries(&self) -> Option<usize> {
+        self.frame_info.toc_num_entries()
+    }
+
+    pub(super) fn toc_entry(&self, index: usize) -> Option<crate::api::TocEntry> {
+        self.frame_info.toc_entry(index)
+    }
+
+    pub(super) fn frame_data_size(&self) -> Option<u64> {
+        self.frame_info.frame_data_size()
+    }
+
+    pub(super) fn frame_data_offset(&self) -> Option<u64> {
+        self.frame_info.frame_data_offset()
+    }
+
+    pub(super) fn num_completed_passes(&self) -> usize {
+        self.frame_info.num_completed_passes()
     }
 }

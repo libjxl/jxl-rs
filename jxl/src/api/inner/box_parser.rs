@@ -115,6 +115,25 @@ impl BoxParser {
         b.file_position + (codestream_bytes_consumed - *start)
     }
 
+    /// Maps a *codestream* byte position to the corresponding byte position in
+    /// the input file, i.e. adding back any ISOBMFF container/box overhead that
+    /// precedes it.
+    ///
+    /// Unlike [`total_bytes_consumed`](Self::total_bytes_consumed), which
+    /// assumes the position lies in the most recently seen codestream box, this
+    /// looks up the box actually containing `codestream_pos`. That matters for
+    /// positions recorded mid-parse (e.g. a frame's section-data offset), since
+    /// the box parser may already have advanced into a later `jxlp` box while
+    /// refilling the read-ahead buffer.
+    pub(super) fn file_position_at(&self, codestream_pos: u64) -> u64 {
+        let (start, b) = self
+            .codestream_pos_to_box
+            .range(..=codestream_pos)
+            .next_back()
+            .unwrap();
+        b.file_position + (codestream_pos - *start)
+    }
+
     fn add_checkpoint(&mut self) {
         if !self.allow_checkpoint {
             return;

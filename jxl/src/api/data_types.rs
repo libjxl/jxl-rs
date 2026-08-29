@@ -328,3 +328,38 @@ pub struct JxlFrameHeader {
     /// Frame size (width, height)
     pub size: (usize, usize),
 }
+
+/// Kind of a TOC group within a frame.
+///
+/// Mirrors the JPEG XL frame layout — for single-entry frames the only
+/// kind is `All`; multi-entry frames have one `LfGlobal`, N `LfGroup`s,
+/// one `HfGlobal`, then `pass_count * group_count` `GroupPass`es.
+#[derive(Debug, Copy, Clone, Eq, PartialEq, Hash)]
+pub enum TocGroupKind {
+    /// Single-entry frame (small images that fit in one group).
+    All,
+    /// LF-global section (header data shared across LF groups).
+    LfGlobal,
+    /// LF group (DC coefficients) for one spatial region.
+    LfGroup(u32),
+    /// HF-global section (header data shared across HF groups).
+    HfGlobal,
+    /// One pass of one HF group.
+    GroupPass { pass_idx: u32, group_idx: u32 },
+}
+
+/// A single TOC entry describing one frame section's kind, byte offset, and size.
+///
+/// Used for progressive streaming scenarios where the caller needs to know
+/// frame-section byte boundaries without fully decoding the bitstream. See
+/// [`JxlDecoder::toc_entry`](crate::api::JxlDecoder::toc_entry).
+#[derive(Debug, Copy, Clone, Eq, PartialEq)]
+pub struct TocEntry {
+    /// Kind of the group.
+    pub kind: TocGroupKind,
+    /// Offset in bytes from the start of frame section data, i.e. relative to
+    /// [`JxlDecoder::frame_data_offset`](crate::api::JxlDecoder::frame_data_offset).
+    pub offset: u64,
+    /// Size of the entry in bytes.
+    pub size: u32,
+}
