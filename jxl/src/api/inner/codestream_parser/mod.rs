@@ -3,22 +3,17 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-use crate::{
-    api::{
-        JxlColorProfile, JxlDecoderOptions, JxlOutputBuffer, JxlParallelRunner, JxlPixelFormat,
-        inner::{
-            box_parser::CodestreamInput,
-            codestream_parser::{
-                frame_info::FrameInfo, frame_scan_info::FrameScanInfo, image_info::ImageInfo,
-            },
-            process::SmallBuffer,
-        },
-    },
-    error::{Error, Result},
-};
-
 #[cfg(test)]
 use crate::api::FrameCallback;
+use crate::api::inner::box_parser::CodestreamInput;
+use crate::api::inner::codestream_parser::frame_info::FrameInfo;
+use crate::api::inner::codestream_parser::frame_scan_info::FrameScanInfo;
+use crate::api::inner::codestream_parser::image_info::ImageInfo;
+use crate::api::inner::process::SmallBuffer;
+use crate::api::{
+    JxlColorProfile, JxlDecoderOptions, JxlOutputBuffer, JxlParallelRunner, JxlPixelFormat,
+};
+use crate::error::{Error, Result};
 
 mod frame_info;
 mod frame_scan_info;

@@ -8,9 +8,11 @@ pub mod enc;
 
 #[cfg(test)]
 mod tests {
-    use crate::dec::{DecodeOutput, OutputDataType, decode_frames};
-    use jxl::api::JxlDecoderOptions;
     use std::path::PathBuf;
+
+    use jxl::api::JxlDecoderOptions;
+
+    use crate::dec::{DecodeOutput, OutputDataType, decode_frames};
 
     fn get_test_file(name: &str) -> PathBuf {
         let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));

@@ -5,20 +5,19 @@
 
 #![allow(clippy::excessive_precision)]
 
-use crate::{
-    BLOCK_DIM, GROUP_DIM,
-    bit_reader::BitReader,
-    error::Error,
-    headers::{encodings::*, extra_channels::ExtraChannelInfo},
-    image::Rect,
-    util::FloorLog2,
-};
+use std::cmp::min;
 
 use jxl_macros::UnconditionalCoder;
 use num_derive::FromPrimitive;
-use std::cmp::min;
 
 use super::Animation;
+use crate::bit_reader::BitReader;
+use crate::error::Error;
+use crate::headers::encodings::*;
+use crate::headers::extra_channels::ExtraChannelInfo;
+use crate::image::Rect;
+use crate::util::FloorLog2;
+use crate::{BLOCK_DIM, GROUP_DIM};
 
 #[derive(UnconditionalCoder, Copy, Clone, PartialEq, Debug, FromPrimitive)]
 pub enum FrameType {
@@ -777,13 +776,14 @@ impl FrameHeader {
 
 #[cfg(test)]
 mod test_frame_header {
+    use test_log::test;
+
     use super::super::bit_depth::BitDepth;
     use super::super::extra_channels::{ExtraChannel, ExtraChannelInfo};
     use super::super::permutation::Permutation;
     use super::super::toc::Toc;
     use super::*;
     use crate::tests::decode::read_headers_and_toc;
-    use test_log::test;
 
     #[test]
     fn test_basic() {

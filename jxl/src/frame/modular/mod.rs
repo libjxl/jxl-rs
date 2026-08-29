@@ -3,39 +3,29 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-use crate::util::sync::{
-    Mutex,
-    atomic::{AtomicBool, Ordering},
-};
-use std::{
-    cmp::min,
-    collections::{BTreeSet, HashSet},
-    fmt::Debug,
-};
+use std::cmp::min;
+use std::collections::{BTreeSet, HashSet};
+use std::fmt::Debug;
 
-use crate::{
-    bit_reader::BitReader,
-    error::{Error, Result},
-    frame::{
-        ColorCorrelationParams, DataStatus, HfMetaViews,
-        block_context_map::BlockContextMap,
-        modular::{
-            buffers::{ModularBuffer, ModularChannel},
-            transforms::step::{TransformDependency, TransformStepChunk},
-        },
-        quantizer::{self, LfQuantFactors, QuantizerParams},
-    },
-    headers::{
-        ImageMetadata, JxlHeader,
-        bit_depth::BitDepth,
-        frame_header::FrameHeader,
-        modular::{GroupHeader, TransformId},
-    },
-    image::{Image, Rect},
-    render::buffer_splitter::OutputChannelRef,
-    util::{CeilLog2, PerThreadStorage, tracing_wrappers::*},
-};
 use jxl_transforms::transform_map::*;
+
+use crate::bit_reader::BitReader;
+use crate::error::{Error, Result};
+use crate::frame::block_context_map::BlockContextMap;
+use crate::frame::modular::buffers::{ModularBuffer, ModularChannel};
+use crate::frame::modular::transforms::step::{TransformDependency, TransformStepChunk};
+use crate::frame::quantizer::{self, LfQuantFactors, QuantizerParams};
+use crate::frame::{ColorCorrelationParams, DataStatus, HfMetaViews};
+use crate::headers::bit_depth::BitDepth;
+use crate::headers::frame_header::FrameHeader;
+use crate::headers::modular::{GroupHeader, TransformId};
+use crate::headers::{ImageMetadata, JxlHeader};
+use crate::image::{Image, Rect};
+use crate::render::buffer_splitter::OutputChannelRef;
+use crate::util::sync::Mutex;
+use crate::util::sync::atomic::{AtomicBool, Ordering};
+use crate::util::tracing_wrappers::*;
+use crate::util::{CeilLog2, PerThreadStorage};
 
 mod buffers;
 mod decode;
@@ -49,10 +39,6 @@ pub use decode::ModularStreamId;
 use decode::decode_modular_subbitstream;
 pub use predict::Predictor;
 pub use tree::Tree;
-
-// Two rows on top, two pixels to the left, two pixels to the right.
-const IMAGE_PADDING: (usize, usize) = (4, 2);
-const IMAGE_OFFSET: (usize, usize) = (2, 2);
 
 #[derive(Clone, PartialEq, Eq, Copy)]
 struct ChannelInfo {
@@ -100,6 +86,20 @@ impl ChannelInfo {
 
     fn is_equivalent(&self, other: &ChannelInfo) -> bool {
         self.size == other.size && self.shift == other.shift && self.bit_depth == other.bit_depth
+    }
+
+    /// Returns this channel info with the size it'll have once a `ModularChannel` is allocated for
+    /// it.
+    ///
+    /// `Image` does not allocate anything for a channel with a zero-sized dimension and reports
+    /// such a channel as `0x0`, so a channel that is declared as e.g. `0x1` (which happens for
+    /// the palette channel of a palette transform with no colors and no deltas) would otherwise
+    /// change size when it gets allocated.
+    fn as_allocated(mut self) -> ChannelInfo {
+        if self.size.0 == 0 || self.size.1 == 0 {
+            self.size = (0, 0);
+        }
+        self
     }
 }
 
@@ -206,6 +206,7 @@ impl ModularBufferInfo {
 
 struct TransformScratchSpace {
     smooth_unsqueeze_buffer: ([Vec<f32>; 5], Vec<i32>),
+    palette_row_scratch: [Vec<i32>; 2],
 }
 
 impl Debug for TransformScratchSpace {
@@ -218,6 +219,7 @@ impl TransformScratchSpace {
     fn new() -> TransformScratchSpace {
         TransformScratchSpace {
             smooth_unsqueeze_buffer: (std::array::from_fn(|_| vec![]), vec![]),
+            palette_row_scratch: [vec![], vec![]],
         }
     }
 }
@@ -558,6 +560,7 @@ impl FullModularImage {
         let mut need_rerender = false;
         for b in self.section_buffer_indices[0].iter().take(num_decoded) {
             let buf = &mut self.buffer_info[*b].buffer_grid[0];
+            buf.extract_needed_borders()?;
             if buf.data_status == DataStatus::Final {
                 continue;
             }
@@ -613,6 +616,10 @@ impl FullModularImage {
                 Ok(())
             },
         )?;
+
+        for b in self.section_buffer_indices[section_id].iter().copied() {
+            self.buffer_info[b].buffer_grid[grid].extract_needed_borders()?;
+        }
 
         self.has_decoded_data.fetch_or(
             !self.section_buffer_indices[section_id].is_empty(),
@@ -678,7 +685,7 @@ impl FullModularImage {
                 }
                 grid.data_status = DataStatus::Final;
                 grid.remaining_uses
-                    .store(grid.used_by_transforms_final.len(), Ordering::Relaxed);
+                    .store(grid.full_uses_count_final, Ordering::Relaxed);
             }
             if let Some(v) = stack.pop() {
                 if !self.transform_steps[v].final_dep_ready() {
@@ -715,13 +722,12 @@ impl FullModularImage {
                 grid,
                 order_only,
             } in self.transform_steps[t]
-                .dependecies(&self.buffer_info, frame_header)
+                .dependencies(&self.buffer_info, frame_header)
                 .iter()
             {
                 let buf = &mut self.buffer_info[*buffer].buffer_grid[*grid];
                 // Force a re-render only of those buffers that we fully use.
-                // TODO(veluca): investigate why we need `buf.has_buffer()` here.
-                if *order_only && buf.has_buffer() {
+                if *order_only && (buf.has_buffer() || buf.has_borders()) {
                     continue;
                 }
                 if let Some(b) = buf.produced_by_step
@@ -751,7 +757,7 @@ impl FullModularImage {
             let mut has_current_deps = false;
             // Add dependency edges from *all* the buffers that will be modified and that are used.
             for TransformDependency { buffer, grid, .. } in self.transform_steps[t]
-                .dependecies(&self.buffer_info, frame_header)
+                .dependencies(&self.buffer_info, frame_header)
                 .iter()
             {
                 if self.rerendered_buffers.contains(&(*buffer, *grid)) {

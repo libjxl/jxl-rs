@@ -3,57 +3,50 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-use crate::util::sync::Arc;
 use std::collections::BTreeSet;
 
-use super::render::pipeline;
-use super::{
-    HfMetaSplitter, HfMetaViews, LfImageSplitter,
-    block_context_map::BlockContextMap,
-    coeff_order::decode_coeff_orders,
-    color_correlation_map::ColorCorrelationParams,
-    group::decode_vardct_group,
-    modular::{FullModularImage, ModularStreamId, Tree, decode_hf_metadata, decode_vardct_lf},
-    quant_weights::DequantMatrices,
-    quantizer::{LfQuantFactors, QuantizerParams},
+use jxl_transforms::transform_map::*;
+
+use super::block_context_map::BlockContextMap;
+use super::coeff_order::decode_coeff_orders;
+use super::color_correlation_map::ColorCorrelationParams;
+use super::group::decode_vardct_group;
+use super::modular::{
+    FullModularImage, ModularStreamId, Tree, decode_hf_metadata, decode_vardct_lf,
 };
-use crate::error::Error;
+use super::quant_weights::DequantMatrices;
+use super::quantizer::{LfQuantFactors, QuantizerParams};
+use super::render::pipeline;
+use super::{HfMetaSplitter, HfMetaViews, LfImageSplitter};
+use crate::GROUP_DIM;
+use crate::bit_reader::BitReader;
+use crate::entropy_coding::decode::Histograms;
+use crate::error::{Error, Result};
 use crate::features::epf::SigmaSource;
+use crate::features::noise::Noise;
+use crate::features::patches::PatchesDictionary;
+use crate::features::spline::Splines;
 use crate::frame::block_context_map::{ZERO_DENSITY_CONTEXT_COUNT, ZERO_DENSITY_CONTEXT_LIMIT};
 use crate::frame::group::VarDctBuffers;
-use crate::frame::{DataStatus, GroupStatus};
-use crate::headers::frame_header::FrameType;
-use crate::image::Rect;
+use crate::frame::{
+    DataStatus, DecoderState, Frame, GroupStatus, HfGlobalState, HfMetadata, LfGlobalState,
+    PassState, coeff_order,
+};
+use crate::headers::CustomTransformData;
+use crate::headers::color_encoding::ColorSpace;
+use crate::headers::frame_header::{Encoding, FrameHeader, FrameType};
+use crate::headers::toc::Toc;
+use crate::image::{Image, Rect};
 #[cfg(test)]
 use crate::render::SimpleRenderPipeline;
 use crate::render::buffer_splitter::BufferSplitter;
-use crate::util::sync::{Mutex, RwLock};
-use crate::util::{NewWithCapacity, PerThreadStorage};
-use crate::util::{ShiftRightCeil, mirror};
-use crate::{
-    GROUP_DIM,
-    bit_reader::BitReader,
-    entropy_coding::decode::Histograms,
-    error::Result,
-    features::{noise::Noise, patches::PatchesDictionary, spline::Splines},
-    frame::{
-        DecoderState, Frame, HfGlobalState, HfMetadata, LfGlobalState, PassState, coeff_order,
-    },
-    headers::{
-        color_encoding::ColorSpace,
-        frame_header::{Encoding, FrameHeader},
-        toc::Toc,
-    },
-    image::Image,
-    render::RenderPipeline,
-    util::{CeilLog2, Xorshift128Plus, tracing_wrappers::*},
-};
-use jxl_transforms::transform_map::*;
-
-use crate::headers::CustomTransformData;
-use crate::render::RenderPipelineInOutStage;
 use crate::render::stages::Upsample8x;
-use crate::render::{Channels, ChannelsMut};
+use crate::render::{Channels, ChannelsMut, RenderPipeline, RenderPipelineInOutStage};
+use crate::util::sync::{Arc, Mutex, RwLock};
+use crate::util::tracing_wrappers::*;
+use crate::util::{
+    CeilLog2, NewWithCapacity, PerThreadStorage, ShiftRightCeil, Xorshift128Plus, mirror,
+};
 
 fn upsample_lf_group(
     group: usize,

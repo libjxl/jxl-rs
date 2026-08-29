@@ -5,13 +5,11 @@
 
 use jxl_macros::UnconditionalCoder;
 
-use crate::{
-    bit_reader::BitReader,
-    error::{Error, Result},
-    headers::{encodings::*, frame_header::PermutationNonserialized},
-};
-
 use super::permutation::Permutation;
+use crate::bit_reader::BitReader;
+use crate::error::{Error, Result};
+use crate::headers::encodings::*;
+use crate::headers::frame_header::PermutationNonserialized;
 
 pub struct TocNonserialized {
     pub num_entries: u32,

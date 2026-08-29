@@ -3,25 +3,22 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-use std::{collections::VecDeque, ops::Range};
+use std::collections::VecDeque;
+use std::ops::Range;
 
-use crate::{
-    bit_reader::BitReader,
-    entropy_coding::decode::{Histograms, SymbolReader, unpack_signed},
-    error::Result,
-    frame::modular::{
-        ModularChannel, Predictor, Tree,
-        decode::{
-            channel::ModularChannelDecoder,
-            common::{make_pixel, precompute_references},
-        },
-        flat_tree::{FlatTreeNode, predict_flat},
-        predict::{PredictionData, WeightedPredictorState, clamped_gradient},
-        tree::{NUM_NONREF_PROPERTIES, PROPERTIES_PER_PREVCHAN, PredictionResult, TreeNode},
-    },
-    headers::modular::GroupHeader,
-    image::Image,
+use crate::bit_reader::BitReader;
+use crate::entropy_coding::decode::{Histograms, SymbolReader, unpack_signed};
+use crate::error::Result;
+use crate::frame::modular::decode::channel::ModularChannelDecoder;
+use crate::frame::modular::decode::common::{make_pixel, precompute_references};
+use crate::frame::modular::flat_tree::{FlatTreeNode, predict_flat};
+use crate::frame::modular::predict::{PredictionData, WeightedPredictorState, clamped_gradient};
+use crate::frame::modular::tree::{
+    NUM_NONREF_PROPERTIES, PROPERTIES_PER_PREVCHAN, PredictionResult, TreeNode,
 };
+use crate::frame::modular::{ModularChannel, Predictor, Tree};
+use crate::headers::modular::GroupHeader;
+use crate::image::Image;
 
 trait MaybeWeightedPredictor: Sized {
     fn predict(
@@ -373,6 +370,8 @@ impl<R: Reader> ModularChannelDecoder for SingleGradientOnly<R> {
 struct NoTreeZero {
     clustered_ctx: usize,
     single_value: Option<i32>,
+    multiplier: u32,
+    offset: i64,
 }
 
 impl ModularChannelDecoder for NoTreeZero {
@@ -401,10 +400,16 @@ impl ModularChannelDecoder for NoTreeZero {
         let row = buffers[chan].data.row_mut(y);
         debug_assert_eq!(row.len(), xsize);
         if let Some(sym) = self.single_value {
-            row.fill(sym);
-        } else {
+            row.fill(make_pixel(sym, self.multiplier, self.offset));
+        } else if self.multiplier == 1 && self.offset == 0 {
             for r in row.iter_mut() {
                 *r = reader.read_signed_clustered_inline(histograms, br, self.clustered_ctx);
+            }
+        } else {
+            for r in row.iter_mut() {
+                let residual =
+                    reader.read_signed_clustered_inline(histograms, br, self.clustered_ctx);
+                *r = make_pixel(residual, self.multiplier, self.offset);
             }
         }
     }
@@ -511,8 +516,8 @@ pub fn run_on_specialized_tree<F: FnOnce(&mut dyn ModularChannelDecoder) -> Resu
     if let [
         TreeNode::Leaf {
             predictor: Predictor::Zero,
-            multiplier: 1,
-            offset: 0,
+            multiplier,
+            offset,
             id,
         },
     ] = &*pruned_tree
@@ -520,6 +525,8 @@ pub fn run_on_specialized_tree<F: FnOnce(&mut dyn ModularChannelDecoder) -> Resu
         return run(&mut NoTreeZero {
             clustered_ctx: *id as usize,
             single_value: single_symbol.map(unpack_signed),
+            multiplier: *multiplier,
+            offset: *offset as i64,
         });
     }
 

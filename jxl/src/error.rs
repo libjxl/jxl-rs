@@ -7,12 +7,10 @@ use std::collections::TryReserveError;
 
 use thiserror::Error;
 
-use crate::{
-    api::{JxlColorType, JxlDataFormat},
-    entropy_coding::huffman::HUFFMAN_MAX_BITS,
-    features::spline::Point,
-    image::DataTypeTag,
-};
+use crate::api::{JxlColorType, JxlDataFormat};
+use crate::entropy_coding::huffman::HUFFMAN_MAX_BITS;
+use crate::features::spline::Point;
+use crate::image::DataTypeTag;
 
 #[derive(Error, Debug)]
 #[non_exhaustive]
@@ -149,6 +147,8 @@ pub enum Error {
     InvalidProperty(u32),
     #[error("Invalid alpha channel for blending: {0}, limit is {1}")]
     InvalidBlendingAlphaChannel(usize, usize),
+    #[error("Blending cannot use reference frame {0} saved before color transforms")]
+    BlendingPreColorTransform(usize),
     #[error("Invalid alpha channel for blending: {0}, limit is {1}")]
     PatchesInvalidAlphaChannel(usize, usize),
     #[error("Invalid patch blend mode: {0}, limit is {1}")]
@@ -265,6 +265,10 @@ pub enum Error {
     WrongBufferCount(usize, usize),
     #[error("Image is not grayscale, but grayscale output was requested")]
     NotGrayscale,
+    #[error("Image is not CMYK, but CMYK output was requested")]
+    NotCmyk,
+    #[error("The pixel format can only be changed before the first frame header is decoded")]
+    PixelFormatChangedAfterFirstFrame,
     #[error("Invalid output buffer byte size {0}x{1} for {2}x{3} image with type {4:?} {5:?}")]
     InvalidOutputBufferSize(usize, usize, usize, usize, JxlColorType, JxlDataFormat),
     #[error("Attempting to save channels with different downsample amounts: {0:?} and {1:?}")]

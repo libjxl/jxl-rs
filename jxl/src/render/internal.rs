@@ -3,18 +3,17 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-use crate::util::sync::atomic::AtomicBool;
 use std::any::Any;
 use std::fmt::Display;
-
-use crate::error::Result;
-use crate::image::{DataTypeTag, ImageDataType};
-use crate::render::{ErasedLocalState, StageSpecialCase};
-use crate::util::ShiftRightCeil;
 
 use super::save::SaveStage;
 use super::stages::ExtendToImageDimensionsStage;
 use super::{RenderPipelineInOutStage, RenderPipelineInPlaceStage};
+use crate::error::Result;
+use crate::image::{DataTypeTag, ImageDataType};
+use crate::render::{ErasedLocalState, StageSpecialCase};
+use crate::util::ShiftRightCeil;
+use crate::util::sync::atomic::AtomicBool;
 
 pub enum Stage<Buffer> {
     InPlace(Box<dyn RunInPlaceStage<Buffer>>),
@@ -148,10 +147,15 @@ impl<Buffer> RenderPipelineShared<Buffer> {
         requested_data_type: DataTypeTag,
     ) -> (usize, usize) {
         let ChannelInfo { downsample, ty } = self.channel_info[0][channel];
-        if ty.unwrap() != requested_data_type {
+        // Channels that no stage consumes have no type at all. Callers may still ask for a
+        // scratch buffer for them (e.g. VarDCT always decodes three colour channels, but a
+        // grayscale pipeline only ever reads the first one); the data written there is
+        // discarded, so any type is acceptable.
+        if let Some(ty) = ty
+            && ty != requested_data_type
+        {
             panic!(
-                "Invalid pipeline usage: incorrect channel type, requested {:?}, but pipeline wants {ty:?}",
-                requested_data_type
+                "Invalid pipeline usage: incorrect channel type, requested {requested_data_type:?}, but pipeline wants {ty:?}"
             );
         }
         // 420 JPEGs are padded to 16 pixels, not to 8.

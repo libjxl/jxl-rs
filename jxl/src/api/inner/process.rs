@@ -3,22 +3,16 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-use std::{
-    io::IoSliceMut,
-    ops::{Deref, Range},
-};
+use std::io::IoSliceMut;
+use std::ops::{Deref, Range};
 
-use crate::{
-    api::{
-        JxlBitstreamInput, JxlDecoderInner, JxlOutputBuffer, ProcessingResult,
-        inner::box_parser::CodestreamInput,
-    },
-    bit_reader::BitReader,
+use crate::api::inner::box_parser::CodestreamInput;
+use crate::api::{
+    JxlBitstreamInput, JxlDecoderInner, JxlOutputBuffer, JxlParallelRunner, JxlParallelRunnerFun,
+    ProcessingResult,
 };
-use crate::{
-    api::{JxlParallelRunner, JxlParallelRunnerFun},
-    error::Result,
-};
+use crate::bit_reader::BitReader;
+use crate::error::Result;
 
 /// A small buffer, that guarantees to never use more than twice the maximum
 /// amount of bytes that were simultaneously present in it.

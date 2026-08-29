@@ -3,16 +3,16 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
+use std::borrow::Cow;
+use std::io::Write;
+
+use color_eyre::eyre::{Result, eyre};
 use jxl::api::{
     JxlColorEncoding, JxlColorProfile, JxlPrimaries, JxlTransferFunction, JxlWhitePoint,
 };
-
-use crate::dec::{DecodeOutput, OutputDataType};
-use color_eyre::eyre::{Result, eyre};
 use jxl::headers::color_encoding::RenderingIntent;
 
-use std::borrow::Cow;
-use std::io::Write;
+use crate::dec::{DecodeOutput, OutputDataType};
 
 fn gcd(a: u64, b: u64) -> u64 {
     if b == 0 { a } else { gcd(b, a % b) }

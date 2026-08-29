@@ -3,10 +3,11 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
+use jxl_simd::{F32SimdVec, simd_function};
+
 use crate::color::tf;
 use crate::headers::color_encoding::CustomTransferFunction;
 use crate::render::{ErasedLocalState, RenderPipelineInPlaceStage};
-use jxl_simd::{F32SimdVec, simd_function};
 
 /// Apply transfer function to display-referred linear color samples.
 #[derive(Debug)]

@@ -3,18 +3,18 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
+use std::marker::PhantomData;
+
+use states::*;
+
 use super::{
     JxlBasicInfo, JxlBitstreamInput, JxlColorProfile, JxlDecoderInner, JxlDecoderOptions,
     JxlOutputBuffer, JxlPixelFormat, ProcessingResult, TocEntry,
 };
-use crate::{
-    api::{BoxParserCheckpoint, JxlFrameHeader, JxlParallelRunner},
-    error::Result,
-};
+use crate::api::{BoxParserCheckpoint, JxlFrameHeader, JxlParallelRunner};
+use crate::error::Result;
 #[cfg(test)]
 use crate::{frame::Frame, headers::FileHeader};
-use states::*;
-use std::marker::PhantomData;
 
 pub mod states {
     pub trait JxlState {}
@@ -154,8 +154,12 @@ impl JxlDecoder<WithImageInfo> {
     ///
     /// Setting this may also change output color profile in some cases, if the profile was not set
     /// manually before.
-    pub fn set_pixel_format(&mut self, pixel_format: JxlPixelFormat) {
-        self.inner.set_pixel_format(pixel_format);
+    ///
+    /// The pixel format can only be changed before the first frame header is
+    /// decoded, i.e. right after basic info becomes available; afterwards
+    /// this returns an error (except when the format does not change).
+    pub fn set_pixel_format(&mut self, pixel_format: JxlPixelFormat) -> Result<()> {
+        self.inner.set_pixel_format(pixel_format)
     }
 
     pub fn process(

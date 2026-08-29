@@ -3,7 +3,9 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-use std::{fs::File, io::BufWriter, path::PathBuf};
+use std::fs::File;
+use std::io::BufWriter;
+use std::path::PathBuf;
 
 use color_eyre::eyre::{Result, eyre};
 

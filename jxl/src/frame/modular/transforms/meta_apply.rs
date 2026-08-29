@@ -3,23 +3,24 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-use crate::util::sync::atomic::AtomicUsize;
 use std::collections::HashMap;
 
 use num_traits::FromPrimitive;
 
-use crate::{
-    error::{Error, Result},
-    frame::modular::{
-        ChannelInfo, ModularBuffer, ModularBufferInfo, ModularGridKind, Predictor,
-        transforms::step::{TransformStep, TransformStepChunk},
-    },
-    headers::{self, frame_header::FrameHeader, modular::TransformId},
-    image::Rect,
-    util::{ShiftRightCeil, tracing_wrappers::*},
-};
-
 use super::{RctOp, RctPermutation};
+use crate::error::{Error, Result};
+use crate::frame::modular::buffers::NeededBorders;
+use crate::frame::modular::transforms::step::{TransformStep, TransformStepChunk};
+use crate::frame::modular::{
+    ChannelInfo, ModularBuffer, ModularBufferInfo, ModularGridKind, Predictor,
+};
+use crate::headers::frame_header::FrameHeader;
+use crate::headers::modular::TransformId;
+use crate::headers::{self};
+use crate::image::Rect;
+use crate::util::ShiftRightCeil;
+use crate::util::sync::atomic::AtomicUsize;
+use crate::util::tracing_wrappers::*;
 
 #[instrument(level = "trace", err)]
 fn check_equal_channels(
@@ -409,6 +410,7 @@ pub fn make_grids(
                         output_grid_kind: ModularGridKind,
                         output_grid_shape: (usize, usize),
                         output_grid_pos: (isize, isize),
+                        needed_borders: NeededBorders,
                         grid_transform_steps: &mut Vec<TransformStepChunk>,
                         buffer_info: &mut Vec<ModularBufferInfo>| {
         let output_grid_size = (output_grid_shape.0 as isize, output_grid_shape.1 as isize);
@@ -424,6 +426,11 @@ pub fn make_grids(
         let input_grid_pos =
             buffer_info[input_buffer_idx].get_grid_idx(output_grid_kind, output_grid_pos);
         let grid = &mut buffer_info[input_buffer_idx].buffer_grid[input_grid_pos];
+        grid.needed_borders.topbottom |= needed_borders.topbottom;
+        grid.needed_borders.leftright |= needed_borders.leftright;
+        if needed_borders.is_empty() {
+            grid.full_uses_count_final += 1;
+        }
         if !grid.used_by_transforms_final.contains(&ts) {
             grid_transform_steps[ts].missing_final_deps += 1;
             grid.used_by_transforms_final.push(ts);
@@ -450,6 +457,7 @@ pub fn make_grids(
                             out_kind,
                             out_shape,
                             (x, y),
+                            NeededBorders::NONE,
                             &mut grid_transform_steps,
                             buffer_info,
                         );
@@ -478,6 +486,7 @@ pub fn make_grids(
                             out_kind,
                             out_shape,
                             (x, y),
+                            NeededBorders::NONE,
                             &mut grid_transform_steps,
                             buffer_info,
                         );
@@ -488,6 +497,7 @@ pub fn make_grids(
                         out_kind,
                         out_shape,
                         (x, y),
+                        NeededBorders::NONE,
                         &mut grid_transform_steps,
                         buffer_info,
                     );
@@ -498,6 +508,7 @@ pub fn make_grids(
                             out_kind,
                             out_shape,
                             (x, y - 1),
+                            NeededBorders::TOPBOTTOM,
                             &mut grid_transform_steps,
                             buffer_info,
                         );
@@ -524,6 +535,7 @@ pub fn make_grids(
                         out_kind,
                         out_shape,
                         (x, y),
+                        NeededBorders::NONE,
                         &mut grid_transform_steps,
                         buffer_info,
                     );
@@ -533,6 +545,7 @@ pub fn make_grids(
                         out_kind,
                         out_shape,
                         (x, y),
+                        NeededBorders::NONE,
                         &mut grid_transform_steps,
                         buffer_info,
                     );
@@ -540,7 +553,11 @@ pub fn make_grids(
                         Predictor::Zero => [].as_slice(),
                         _ => &[(0, -1), (-1, 0), (-1, -1)],
                     };
-                    for (dx, dy) in offsets {
+                    for &(dx, dy) in offsets {
+                        let borders = NeededBorders {
+                            topbottom: dy != 0,
+                            leftright: dx != 0 && dy == 0,
+                        };
                         for out in buf_out.iter() {
                             add_grid_use(
                                 ts,
@@ -548,6 +565,7 @@ pub fn make_grids(
                                 out_kind,
                                 out_shape,
                                 (x + dx, y + dy),
+                                borders,
                                 &mut grid_transform_steps,
                                 buffer_info,
                             );
@@ -557,48 +575,11 @@ pub fn make_grids(
             }
             TransformStep::HSqueeze {
                 buf_in, buf_out, ..
-            } => {
-                let out_kind = buffer_info[*buf_out].grid_kind;
-                let out_shape = buffer_info[*buf_out].grid_shape;
-                for (x, y) in get_grid_indices(out_shape) {
-                    let ts = add_transform_step(&transform, (x, y), &mut grid_transform_steps);
-                    // Average and residuals from the same position
-                    for bin in buf_in {
-                        add_grid_use(
-                            ts,
-                            *bin,
-                            out_kind,
-                            out_shape,
-                            (x, y),
-                            &mut grid_transform_steps,
-                            buffer_info,
-                        );
-                    }
-                    // Next average
-                    add_grid_use(
-                        ts,
-                        buf_in[0],
-                        out_kind,
-                        out_shape,
-                        (x + 1, y),
-                        &mut grid_transform_steps,
-                        buffer_info,
-                    );
-                    // Previous decoded
-                    add_grid_use(
-                        ts,
-                        *buf_out,
-                        out_kind,
-                        out_shape,
-                        (x - 1, y),
-                        &mut grid_transform_steps,
-                        buffer_info,
-                    );
-                }
             }
-            TransformStep::VSqueeze {
+            | TransformStep::VSqueeze {
                 buf_in, buf_out, ..
             } => {
+                let vertical = matches!(transform, TransformStep::VSqueeze { .. });
                 let out_kind = buffer_info[*buf_out].grid_kind;
                 let out_shape = buffer_info[*buf_out].grid_shape;
                 for (x, y) in get_grid_indices(out_shape) {
@@ -611,27 +592,55 @@ pub fn make_grids(
                             out_kind,
                             out_shape,
                             (x, y),
+                            NeededBorders::NONE,
                             &mut grid_transform_steps,
                             buffer_info,
                         );
                     }
-                    // Next average
-                    add_grid_use(
-                        ts,
-                        buf_in[0],
-                        out_kind,
-                        out_shape,
-                        (x, y + 1),
-                        &mut grid_transform_steps,
-                        buffer_info,
-                    );
+                    // 3x3 neighbor grid positions for upsampling & next average
+                    let cur_grid =
+                        buffer_info[buf_in[0]].get_grid_idx(out_kind, (x as usize, y as usize));
+                    for dx in -1..=1 {
+                        for dy in -1..=1 {
+                            if dx == 0 && dy == 0 {
+                                continue;
+                            }
+                            let target_x = (x + dx).clamp(0, out_shape.0 as isize - 1);
+                            let target_y = (y + dy).clamp(0, out_shape.1 as isize - 1);
+                            let target_grid = buffer_info[buf_in[0]]
+                                .get_grid_idx(out_kind, (target_x as usize, target_y as usize));
+                            if target_grid != cur_grid {
+                                let borders = NeededBorders {
+                                    topbottom: dy != 0,
+                                    leftright: dx != 0 && dy == 0,
+                                };
+                                add_grid_use(
+                                    ts,
+                                    buf_in[0],
+                                    out_kind,
+                                    out_shape,
+                                    (x + dx, y + dy),
+                                    borders,
+                                    &mut grid_transform_steps,
+                                    buffer_info,
+                                );
+                            }
+                        }
+                    }
                     // Previous decoded
+                    let prev_pos = if vertical { (x, y - 1) } else { (x - 1, y) };
+                    let prev_borders = if vertical {
+                        NeededBorders::TOPBOTTOM
+                    } else {
+                        NeededBorders::LEFTRIGHT
+                    };
                     add_grid_use(
                         ts,
                         *buf_out,
                         out_kind,
                         out_shape,
-                        (x, y - 1),
+                        prev_pos,
+                        prev_borders,
                         &mut grid_transform_steps,
                         buffer_info,
                     );
@@ -694,6 +703,7 @@ pub fn make_grids(
                         bi.buffer_grid[grid]
                             .used_by_transforms_final
                             .push(grid_transform_steps.len());
+                        bi.buffer_grid[grid].full_uses_count_final += 1;
                         grid_transform_steps.push(TransformStepChunk {
                             step: TransformStep::Output {
                                 buf_in: idx,

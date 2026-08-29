@@ -3,15 +3,12 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
+use crate::api::{Endianness, JxlDataFormat, JxlOutputBuffer};
+use crate::error::Result;
+use crate::image::Image;
 use crate::render::buffer_splitter::OutputChannelRef;
+use crate::render::save::SaveStage;
 use crate::util::f16;
-
-use crate::{
-    api::{Endianness, JxlDataFormat, JxlOutputBuffer},
-    error::Result,
-    image::Image,
-    render::save::SaveStage,
-};
 
 impl SaveStage {
     pub(super) fn save_simple(
@@ -94,14 +91,16 @@ impl SaveStage {
 
 #[cfg(test)]
 mod test {
-    use super::*;
-    use crate::{
-        api::JxlColorType, headers::Orientation, image::Rect,
-        render::buffer_splitter::OutputChannelSplitter, tests::assert_close,
-    };
     use rand::SeedableRng;
     use rand_xorshift::XorShiftRng;
     use test_log::test;
+
+    use super::*;
+    use crate::api::JxlColorType;
+    use crate::headers::Orientation;
+    use crate::image::Rect;
+    use crate::render::buffer_splitter::OutputChannelSplitter;
+    use crate::tests::assert_close;
 
     #[test]
     fn save_stage() -> Result<()> {

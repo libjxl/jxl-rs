@@ -3,6 +3,10 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
+use std::fs::File;
+use std::io::BufReader;
+use std::path::Path;
+
 use clap::{Arg, Command};
 use color_eyre::eyre::{Result, eyre};
 use jxl::api::{
@@ -11,9 +15,6 @@ use jxl::api::{
 };
 use jxl::headers::extra_channels::ExtraChannel;
 use jxl::image::{Image, Rect};
-use std::fs::File;
-use std::io::BufReader;
-use std::path::Path;
 
 fn parse_jxl(path: &Path) -> Result<()> {
     let file = File::open(path)?;
@@ -191,7 +192,8 @@ fn parse_jxl(path: &Path) -> Result<()> {
 fn main() {
     #[cfg(feature = "tracing-subscriber")]
     {
-        use tracing_subscriber::{EnvFilter, fmt, prelude::*};
+        use tracing_subscriber::prelude::*;
+        use tracing_subscriber::{EnvFilter, fmt};
         tracing_subscriber::registry()
             .with(fmt::layer())
             .with(EnvFilter::from_default_env())

@@ -3,14 +3,17 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-use crate::{
-    bit_reader::BitReader,
-    error::Error,
-    headers::{bit_depth::*, color_encoding::*, encodings::*, extra_channels::*, size::*},
-    image::Rect,
-};
 use jxl_macros::UnconditionalCoder;
 use num_derive::FromPrimitive;
+
+use crate::bit_reader::BitReader;
+use crate::error::Error;
+use crate::headers::bit_depth::*;
+use crate::headers::color_encoding::*;
+use crate::headers::encodings::*;
+use crate::headers::extra_channels::*;
+use crate::headers::size::*;
+use crate::image::Rect;
 
 #[derive(Debug, Default, Clone)]
 pub struct Signature;

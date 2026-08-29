@@ -3,39 +3,34 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-use crate::api::JxlColorProfile;
-use crate::api::JxlColorType;
-use crate::api::JxlDataFormat;
-use crate::api::JxlOutputBuffer;
-use crate::api::JxlParallelRunner;
+use std::collections::BTreeSet;
+
+use crate::api::{
+    JxlColorProfile, JxlColorType, JxlDataFormat, JxlOutputBuffer, JxlParallelRunner,
+    JxlPixelFormat,
+};
 use crate::bit_reader::BitReader;
 use crate::error::{Error, Result};
 use crate::features::epf::SigmaSource;
 use crate::features::noise::Noise;
 use crate::features::patches::PatchesDictionary;
 use crate::features::spline::Splines;
-use crate::frame::DataStatus;
 use crate::frame::color_correlation_map::ColorCorrelationParams;
 use crate::frame::quantizer::LfQuantFactors;
-use crate::headers::frame_header::Encoding;
-use crate::headers::frame_header::FrameType;
-use crate::headers::{Orientation, color_encoding::ColorSpace, extra_channels::ExtraChannel};
-use crate::image::Image;
-use crate::image::Rect;
-use crate::util::SmallVec;
-use crate::util::sync::atomic::{AtomicUsize, Ordering};
-use crate::util::sync::{Arc, RwLock};
-use std::collections::BTreeSet;
-
+use crate::frame::{DataStatus, DecoderState, Frame};
+use crate::headers::Orientation;
+use crate::headers::color_encoding::ColorSpace;
+use crate::headers::extra_channels::ExtraChannel;
+use crate::headers::frame_header::{Encoding, FrameHeader, FrameType};
+use crate::image::{Image, Rect};
 #[cfg(test)]
 use crate::render::SimpleRenderPipeline;
 use crate::render::buffer_splitter::BufferSplitter;
-use crate::render::{LowMemoryRenderPipeline, RenderPipeline, RenderPipelineBuilder, stages::*};
-use crate::{
-    api::JxlPixelFormat,
-    frame::{DecoderState, Frame},
-    headers::frame_header::FrameHeader,
-};
+use crate::render::stages::*;
+use crate::render::{LowMemoryRenderPipeline, RenderPipeline, RenderPipelineBuilder};
+use crate::util::SmallVec;
+use crate::util::sync::atomic::{AtomicUsize, Ordering};
+use crate::util::sync::{Arc, RwLock};
 
 #[cfg(test)]
 macro_rules! pipeline_mut {
@@ -853,19 +848,46 @@ impl Frame {
                 && alpha_in_color.is_some()
                 && !source_alpha_associated;
 
-            let color_source_channels: &[usize] =
+            // For CMYK output, interleave the Black extra channel as the
+            // fourth channel. This requires a color image with a Black extra
+            // channel.
+            let black_in_color = if pixel_format.color_type == JxlColorType::Cmyk {
+                let black_channel = decoder_state
+                    .file_header
+                    .image_metadata
+                    .extra_channel_info
+                    .iter()
+                    .position(|info| info.ec_type == ExtraChannel::Black);
+                match (num_color_channels, black_channel) {
+                    (3, Some(index)) => Some(index + 3),
+                    _ => return Err(Error::NotCmyk),
+                }
+            } else {
+                None
+            };
+            let cmyk_channels;
+            let color_source_channels: &[usize] = if let Some(black) = black_in_color {
+                cmyk_channels = [0, 1, 2, black];
+                &cmyk_channels
+            } else {
                 match (pixel_format.color_type.is_grayscale(), alpha_in_color) {
                     (true, None) => &[0],
                     (true, Some(c)) => &[0, c],
                     (false, None) => &[0, 1, 2],
                     (false, Some(c)) => &[0, 1, 2, c],
-                };
+                }
+            };
             if let Some(df) = &pixel_format.color_data_format {
                 // Add premultiply stage if needed (before conversion to output format)
                 if should_premultiply && let Some(alpha_channel) = alpha_in_color {
+                    let num_output_color_channels = if pixel_format.color_type.is_grayscale() {
+                        1
+                    } else {
+                        3
+                    };
                     pipeline = pipeline.add_inplace_stage(PremultiplyAlphaStage::new(
                         0,
-                        num_color_channels,
+                        num_output_color_channels,
                         alpha_channel,
                     ));
                 }

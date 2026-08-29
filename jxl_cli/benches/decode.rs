@@ -3,11 +3,12 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
+use std::fs;
+use std::path::{Path, PathBuf};
+
 use criterion::{BenchmarkId, Criterion, SamplingMode, criterion_group, criterion_main};
 use jxl::api::JxlDecoderOptions;
 use jxl_cli::dec::{OutputDataType, decode_frames, decode_header};
-use std::fs;
-use std::path::{Path, PathBuf};
 
 fn decode_benches(c: &mut Criterion) {
     let mut group = c.benchmark_group("decode");

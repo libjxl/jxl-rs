@@ -3,25 +3,23 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-use std::{borrow::Cow, f32::consts::SQRT_2, sync::OnceLock};
+use std::borrow::Cow;
+use std::f32::consts::SQRT_2;
+use std::sync::OnceLock;
 
+use jxl_transforms::transform_map::*;
+
+use crate::bit_reader::BitReader;
+use crate::error::Error::{
+    HfQuantFactorTooSmall, InvalidDistanceBand, InvalidQuantEncoding, InvalidQuantEncodingMode,
+    InvalidQuantizationTableWeight, InvalidRawQuantTable,
+};
+use crate::error::Result;
+use crate::frame::LfGlobalState;
 use crate::frame::modular::decode_quant_table;
 use crate::headers::frame_header::FrameHeader;
 use crate::util::f16;
-
-use crate::{
-    BLOCK_DIM, BLOCK_SIZE,
-    bit_reader::BitReader,
-    error::{
-        Error::{
-            HfQuantFactorTooSmall, InvalidDistanceBand, InvalidQuantEncoding,
-            InvalidQuantEncodingMode, InvalidQuantizationTableWeight, InvalidRawQuantTable,
-        },
-        Result,
-    },
-    frame::LfGlobalState,
-};
-use jxl_transforms::transform_map::*;
+use crate::{BLOCK_DIM, BLOCK_SIZE};
 
 pub const INV_LF_QUANT: [f32; 3] = [4096.0, 512.0, 256.0];
 

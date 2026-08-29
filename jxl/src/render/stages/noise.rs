@@ -5,17 +5,14 @@
 
 #![allow(clippy::needless_range_loop)]
 
-use crate::util::sync::{Arc, RwLock};
-
-use crate::{
-    features::noise::Noise,
-    frame::color_correlation_map::ColorCorrelationParams,
-    render::{
-        Channels, ChannelsMut, ErasedLocalState, RenderPipelineInOutStage,
-        RenderPipelineInPlaceStage,
-    },
-};
 use jxl_simd::{F32SimdVec, simd_function};
+
+use crate::features::noise::Noise;
+use crate::frame::color_correlation_map::ColorCorrelationParams;
+use crate::render::{
+    Channels, ChannelsMut, ErasedLocalState, RenderPipelineInOutStage, RenderPipelineInPlaceStage,
+};
+use crate::util::sync::{Arc, RwLock};
 
 pub struct ConvolveNoiseStage {
     channel: usize,
@@ -192,20 +189,16 @@ impl RenderPipelineInPlaceStage for AddNoiseStage {
 
 #[cfg(test)]
 mod test {
-    use crate::util::sync::{Arc, RwLock};
-
-    use crate::{
-        error::Result,
-        features::noise::Noise,
-        frame::color_correlation_map::ColorCorrelationParams,
-        image::Image,
-        render::{
-            stages::noise::{AddNoiseStage, ConvolveNoiseStage},
-            test::make_and_run_simple_pipeline,
-        },
-        tests::assert_close,
-    };
     use test_log::test;
+
+    use crate::error::Result;
+    use crate::features::noise::Noise;
+    use crate::frame::color_correlation_map::ColorCorrelationParams;
+    use crate::image::Image;
+    use crate::render::stages::noise::{AddNoiseStage, ConvolveNoiseStage};
+    use crate::render::test::make_and_run_simple_pipeline;
+    use crate::tests::assert_close;
+    use crate::util::sync::{Arc, RwLock};
 
     // TODO(firsching): Add more relevant ConvolveNoise tests as per discussions in https://github.com/libjxl/jxl-rs/pull/60.
 

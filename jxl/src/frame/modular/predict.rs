@@ -3,14 +3,13 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-use crate::{
-    error::{Error, Result},
-    headers::modular::WeightedHeader,
-    image::Image,
-    util::floor_log2_nonzero,
-};
 use num_derive::FromPrimitive;
 use num_traits::FromPrimitive;
+
+use crate::error::{Error, Result};
+use crate::headers::modular::WeightedHeader;
+use crate::image::Image;
+use crate::util::floor_log2_nonzero;
 
 #[repr(u8)]
 #[derive(Debug, FromPrimitive, Clone, Copy, PartialEq, Eq)]
@@ -134,119 +133,6 @@ impl PredictionData {
             x,
             y,
         )
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    pub fn get_with_neighbors(
-        rect: &Image<i32>,
-        rect_left: Option<&Image<i32>>,
-        rect_top: Option<&Image<i32>>,
-        rect_top_left: Option<&Image<i32>>,
-        rect_right: Option<&Image<i32>>,
-        rect_top_right: Option<&Image<i32>>,
-        x: usize,
-        y: usize,
-        xsize: usize,
-        ysize: usize,
-    ) -> Self {
-        let left = if x > 0 {
-            rect.row(y)[x - 1]
-        } else if let Some(l) = rect_left {
-            l.row(y)[xsize - 1]
-        } else if y > 0 {
-            rect.row(y - 1)[0]
-        } else if let Some(t) = rect_top {
-            t.row(ysize - 1)[0]
-        } else {
-            0
-        };
-        let top = if y > 0 {
-            rect.row(y - 1)[x]
-        } else if let Some(t) = rect_top {
-            t.row(ysize - 1)[x]
-        } else {
-            left
-        };
-        let topleft = if x > 0 {
-            if y > 0 {
-                rect.row(y - 1)[x - 1]
-            } else if let Some(t) = rect_top {
-                t.row(ysize - 1)[x - 1]
-            } else {
-                left
-            }
-        } else if y > 0 {
-            if let Some(l) = rect_left {
-                l.row(y - 1)[xsize - 1]
-            } else {
-                left
-            }
-        } else if let Some(tl) = rect_top_left {
-            tl.row(ysize - 1)[xsize - 1]
-        } else {
-            left
-        };
-        let topright = if x + 1 < rect.size().0 {
-            if y > 0 {
-                rect.row(y - 1)[x + 1]
-            } else if let Some(t) = rect_top {
-                t.row(ysize - 1)[x + 1]
-            } else {
-                top
-            }
-        } else if y > 0 {
-            if let Some(r) = rect_right {
-                r.row(y - 1)[0]
-            } else {
-                top
-            }
-        } else if let Some(tr) = rect_top_right {
-            tr.row(ysize - 1)[0]
-        } else {
-            top
-        };
-        let leftleft = if x > 1 {
-            rect.row(y)[x - 2]
-        } else if let Some(l) = rect_left {
-            l.row(y)[xsize + x - 2]
-        } else {
-            left
-        };
-        let toptop = if y > 1 {
-            rect.row(y - 2)[x]
-        } else if let Some(t) = rect_top {
-            t.row(ysize + y - 2)[x]
-        } else {
-            top
-        };
-        let toprightright = if x + 2 < rect.size().0 {
-            if y > 0 {
-                rect.row(y - 1)[x + 2]
-            } else if let Some(t) = rect_top {
-                t.row(ysize - 1)[x + 2]
-            } else {
-                topright
-            }
-        } else if y > 0 {
-            if let Some(r) = rect_right {
-                r.row(y - 1)[x + 2 - rect.size().0]
-            } else {
-                topright
-            }
-        } else if let Some(tr) = rect_top_right {
-            tr.row(ysize - 1)[x + 2 - rect.size().0]
-        } else {
-            topright
-        };
-        Self {
-            left,
-            top,
-            toptop,
-            topleft,
-            topright,
-            leftleft,
-            toprightright,
-        }
     }
 }
 
@@ -389,7 +275,7 @@ impl WeightedPredictorState {
             .row_mut(0)
             .copy_from_slice(&self.error[0..row_stride]);
         let src = &self.pred_errors_buffer;
-        let [d0, d1, d2, d3] = wp_image.distinct_full_rows_mut([1, 2, 3, 4]);
+        let [d0, d1, d2, d3] = wp_image.distinct_rows_mut([1, 2, 3, 4]);
         for ((((d0, d1), d2), d3), &s) in d0
             .iter_mut()
             .zip(d1.iter_mut())
@@ -633,12 +519,9 @@ impl WeightedPredictorState {
 
 #[cfg(test)]
 mod tests {
-    use crate::{
-        headers::modular::{GroupHeader, WeightedHeader},
-        util::floor_log2_nonzero,
-    };
-
     use super::{PredictionData, WeightedPredictorState};
+    use crate::headers::modular::{GroupHeader, WeightedHeader};
+    use crate::util::floor_log2_nonzero;
 
     struct SimpleRandom {
         out: i64,

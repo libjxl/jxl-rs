@@ -3,14 +3,14 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-use crate::util::sync::{Arc, RwLock};
-
-use crate::{
-    frame::quantizer::LfQuantFactors,
-    headers::bit_depth::BitDepth,
-    render::{Channels, ChannelsMut, ErasedLocalState, RenderPipelineInOutStage, StageSpecialCase},
-};
 use jxl_simd::{F32SimdVec, I32SimdVec, SimdMask, simd_function};
+
+use crate::frame::quantizer::LfQuantFactors;
+use crate::headers::bit_depth::BitDepth;
+use crate::render::{
+    Channels, ChannelsMut, ErasedLocalState, RenderPipelineInOutStage, StageSpecialCase,
+};
+use crate::util::sync::{Arc, RwLock};
 
 // 32x32 blue noise dithering pattern from
 // https://momentsingraphics.de/BlueNoise.html#Downloads scaled to have
@@ -862,10 +862,11 @@ impl RenderPipelineInOutStage for ConvertF32ToF16Stage {
 
 #[cfg(test)]
 mod test {
+    use test_log::test;
+
     use super::*;
     use crate::error::Result;
     use crate::headers::bit_depth::BitDepth;
-    use test_log::test;
 
     #[test]
     fn f32_to_u8_consistency() -> Result<()> {

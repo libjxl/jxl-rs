@@ -3,24 +3,23 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
+use jxl_simd::{F32SimdVec, I32SimdVec, SimdDescriptor, SimdMask, simd_function};
+use jxl_transforms::transform::*;
+use jxl_transforms::transform_map::*;
 use num_traits::Float;
 
-use jxl_transforms::{transform::*, transform_map::*};
-
-use crate::{
-    BLOCK_DIM, BLOCK_SIZE, GROUP_DIM,
-    bit_reader::BitReader,
-    entropy_coding::decode::SymbolReader,
-    error::{Error, Result},
-    frame::{
-        HfGlobalState, HfMetadata, LfGlobalState, block_context_map::*,
-        color_correlation_map::COLOR_TILE_DIM_IN_BLOCKS, quant_weights::DequantMatrices,
-    },
-    headers::frame_header::FrameHeader,
-    image::{Image, ImageRect, Rect},
-    util::{CeilLog2, ShiftRightCeil, SmallVec, tracing_wrappers::*},
-};
-use jxl_simd::{F32SimdVec, I32SimdVec, SimdDescriptor, SimdMask, simd_function};
+use crate::bit_reader::BitReader;
+use crate::entropy_coding::decode::SymbolReader;
+use crate::error::{Error, Result};
+use crate::frame::block_context_map::*;
+use crate::frame::color_correlation_map::COLOR_TILE_DIM_IN_BLOCKS;
+use crate::frame::quant_weights::DequantMatrices;
+use crate::frame::{HfGlobalState, HfMetadata, LfGlobalState};
+use crate::headers::frame_header::FrameHeader;
+use crate::image::{Image, ImageRect, Rect};
+use crate::util::tracing_wrappers::*;
+use crate::util::{CeilLog2, ShiftRightCeil, SmallVec};
+use crate::{BLOCK_DIM, BLOCK_SIZE, GROUP_DIM};
 
 const LF_BUFFER_SIZE: usize = 32 * 32;
 

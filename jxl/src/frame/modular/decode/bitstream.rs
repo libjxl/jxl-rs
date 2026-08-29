@@ -4,16 +4,15 @@
 // license that can be found in the LICENSE file.
 
 use super::channel::decode_modular_channel;
-use crate::{
-    bit_reader::BitReader,
-    entropy_coding::decode::{Codes, SymbolReader, unpack_signed},
-    error::{Error, Result},
-    frame::modular::{
-        IMAGE_OFFSET, ModularChannel, Predictor, Tree, predict::clamped_gradient,
-        transforms::apply_local::meta_apply_local_transforms, tree::TreeNode,
-    },
-    headers::{JxlHeader, modular::GroupHeader},
-};
+use crate::bit_reader::BitReader;
+use crate::entropy_coding::decode::{Codes, SymbolReader, unpack_signed};
+use crate::error::{Error, Result};
+use crate::frame::modular::predict::clamped_gradient;
+use crate::frame::modular::transforms::apply_local::meta_apply_local_transforms;
+use crate::frame::modular::tree::TreeNode;
+use crate::frame::modular::{ModularChannel, Predictor, Tree};
+use crate::headers::JxlHeader;
+use crate::headers::modular::GroupHeader;
 
 // If we have at least this many bits still available to read,
 // we can be sure that none of the reads up to this point read garbage.
@@ -107,18 +106,11 @@ fn decode_fast_lossless(
         }
 
         for y in 1..h {
-            let [row, row_top] =
-                buf.distinct_full_rows_mut([y + IMAGE_OFFSET.1, y + IMAGE_OFFSET.1 - 1]);
+            let [row, row_top] = buf.distinct_rows_mut([y, y - 1]);
 
             let mut left = row_top[0];
             let mut topleft = left;
-            for (top, p) in row_top
-                .iter()
-                .copied()
-                .zip(row.iter_mut())
-                .skip(IMAGE_OFFSET.0)
-                .take(w)
-            {
+            for (top, p) in row_top.iter().copied().zip(row.iter_mut()) {
                 let pred = clamped_gradient(left as i64, top as i64, topleft as i64);
                 *p = (pred + decode() as i64) as i32;
                 left = *p;

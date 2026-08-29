@@ -14,7 +14,6 @@ mod options;
 mod signature;
 mod xyb_constants;
 
-pub use crate::image::JxlOutputBuffer;
 pub use color::*;
 pub use data_types::*;
 pub use decoder::*;
@@ -23,7 +22,9 @@ pub use input::*;
 pub use options::*;
 pub use signature::*;
 
-use crate::{error::Result, headers::image_metadata::Orientation};
+use crate::error::Result;
+use crate::headers::image_metadata::Orientation;
+pub use crate::image::JxlOutputBuffer;
 
 /// This type represents the return value of a function that reads input from a bitstream. The
 /// variant `Complete` indicates that the operation was completed successfully, and its return
@@ -76,5 +77,11 @@ pub struct JxlBasicInfo {
 pub type JxlParallelRunnerFun<'a> = dyn Fn(usize) -> Result<()> + Sync + 'a;
 
 pub trait JxlParallelRunner {
+    /// Runs `fun(i)` for each `i` in `0..num`, possibly in parallel.
+    ///
+    /// The calls *might* happen in parallel or sequentially, and no promises
+    /// are made on the order of the calls.
+    /// This implies that different invocations of `fun(i)` are not allowed
+    /// to wait on each other.
     fn run(&mut self, num: usize, fun: &JxlParallelRunnerFun<'_>) -> Result<()>;
 }

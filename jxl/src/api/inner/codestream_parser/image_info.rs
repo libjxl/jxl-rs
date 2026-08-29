@@ -3,17 +3,17 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-use crate::{
-    api::{
-        Endianness, JxlBasicInfo, JxlBitDepth, JxlColorEncoding, JxlColorProfile, JxlColorType,
-        JxlDataFormat, JxlDecoderOptions, JxlExtraChannel, JxlPixelFormat, ToneMapping,
-        inner::{CodestreamParser, codestream_parser::check_size_limit},
-    },
-    bit_reader::BitReader,
-    error::{Error, Result},
-    headers::{FileHeader, JxlHeader, color_encoding::ColorSpace},
-    icc::IncrementalIccReader,
+use crate::api::inner::CodestreamParser;
+use crate::api::inner::codestream_parser::check_size_limit;
+use crate::api::{
+    Endianness, JxlBasicInfo, JxlBitDepth, JxlColorEncoding, JxlColorProfile, JxlColorType,
+    JxlDataFormat, JxlDecoderOptions, JxlExtraChannel, JxlPixelFormat, ToneMapping,
 };
+use crate::bit_reader::BitReader;
+use crate::error::{Error, Result};
+use crate::headers::color_encoding::ColorSpace;
+use crate::headers::{FileHeader, JxlHeader};
+use crate::icc::IncrementalIccReader;
 
 pub struct ImageInfo {
     file_header: Option<FileHeader>,

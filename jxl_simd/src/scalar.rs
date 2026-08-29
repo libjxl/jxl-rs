@@ -5,9 +5,8 @@
 
 use std::num::Wrapping;
 
-use crate::{U32SimdVec, f16, impl_f32_array_interface};
-
 use super::{F32SimdVec, I32SimdVec, SimdDescriptor, SimdMask, U8SimdVec, U16SimdVec};
+use crate::{U32SimdVec, f16, impl_f32_array_interface};
 
 #[derive(Clone, Copy, Debug)]
 pub struct ScalarDescriptor;

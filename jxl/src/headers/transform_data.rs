@@ -5,8 +5,11 @@
 
 #![allow(clippy::excessive_precision)]
 
-use crate::{bit_reader::BitReader, error::Error, headers::encodings::*};
 use jxl_macros::UnconditionalCoder;
+
+use crate::bit_reader::BitReader;
+use crate::error::Error;
+use crate::headers::encodings::*;
 #[derive(Default)]
 pub struct CustomTransformDataNonserialized {
     pub xyb_encoded: bool,

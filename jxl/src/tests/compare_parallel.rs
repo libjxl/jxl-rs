@@ -3,11 +3,13 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-use crate::api::JxlParallelRunner;
-use crate::error::Error;
-use crate::image::Image;
-use crate::tests::decode::{compare_frames, decode_internal};
 use std::path::Path;
+#[cfg(not(feature = "shuttle"))]
+use std::sync::Mutex;
+#[cfg(not(feature = "shuttle"))]
+use std::sync::atomic::{AtomicUsize, Ordering};
+#[cfg(not(feature = "shuttle"))]
+use std::thread;
 
 #[cfg(feature = "shuttle")]
 use shuttle::sync::Mutex;
@@ -16,12 +18,10 @@ use shuttle::sync::atomic::{AtomicUsize, Ordering};
 #[cfg(feature = "shuttle")]
 use shuttle::thread;
 
-#[cfg(not(feature = "shuttle"))]
-use std::sync::Mutex;
-#[cfg(not(feature = "shuttle"))]
-use std::sync::atomic::{AtomicUsize, Ordering};
-#[cfg(not(feature = "shuttle"))]
-use std::thread;
+use crate::api::JxlParallelRunner;
+use crate::error::Error;
+use crate::image::Image;
+use crate::tests::decode::{compare_frames, decode_internal};
 
 pub struct TestParallelRunner {
     pub max_threads: usize,

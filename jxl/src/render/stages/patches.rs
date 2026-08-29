@@ -3,15 +3,12 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
+use crate::features::patches::PatchesDictionary;
+use crate::frame::ReferenceFrame;
+use crate::headers::extra_channels::ExtraChannelInfo;
+use crate::render::{ErasedLocalState, RenderPipelineInPlaceStage};
+use crate::util::NewWithCapacity as _;
 use crate::util::sync::{Arc, RwLock};
-
-use crate::{
-    features::patches::PatchesDictionary,
-    frame::ReferenceFrame,
-    headers::extra_channels::ExtraChannelInfo,
-    render::{ErasedLocalState, RenderPipelineInPlaceStage},
-    util::NewWithCapacity as _,
-};
 
 pub struct PatchesStage {
     patches: Arc<RwLock<PatchesDictionary>>,
@@ -93,14 +90,13 @@ impl RenderPipelineInPlaceStage for PatchesStage {
 
 #[cfg(test)]
 mod test {
-    use crate::util::sync::Arc;
-
     use rand::SeedableRng;
     use test_log::test;
 
     use super::*;
     use crate::error::Result;
     use crate::tests::decode::read_headers_and_toc;
+    use crate::util::sync::Arc;
 
     #[test]
     fn patches_consistency() -> Result<()> {

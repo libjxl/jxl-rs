@@ -3,22 +3,19 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-use std::{
-    io::BufReader,
-    str::FromStr,
-    time::{Duration, Instant},
-};
+use std::io::BufReader;
+use std::str::FromStr;
+use std::time::{Duration, Instant};
 
 use color_eyre::eyre::{Result, eyre};
-use jxl::{
-    api::{
-        Endianness, JxlAnimation, JxlBitDepth, JxlBitstreamInput, JxlColorProfile, JxlColorType,
-        JxlDataFormat, JxlDecoder, JxlDecoderOptions, JxlOutputBuffer, JxlParallelRunner,
-        JxlParallelRunnerFun, JxlPixelFormat, ProcessingResult, states::WithImageInfo,
-    },
-    headers::extra_channels::ExtraChannel,
-    image::{OwnedRawImage, Rect},
+use jxl::api::states::WithImageInfo;
+use jxl::api::{
+    Endianness, JxlAnimation, JxlBitDepth, JxlBitstreamInput, JxlColorProfile, JxlColorType,
+    JxlDataFormat, JxlDecoder, JxlDecoderOptions, JxlOutputBuffer, JxlParallelRunner,
+    JxlParallelRunnerFun, JxlPixelFormat, ProcessingResult,
 };
+use jxl::headers::extra_channels::ExtraChannel;
+use jxl::image::{OwnedRawImage, Rect};
 use rayon::iter::{IntoParallelIterator, ParallelIterator};
 
 pub struct ImageFrame {
@@ -201,7 +198,10 @@ pub fn decode_frames<In: JxlBitstreamInputExt>(
     let current_format = decoder_with_image_info.current_pixel_format().clone();
     let new_format = JxlPixelFormat {
         color_type: if interleave_alpha {
-            current_format.color_type.add_alpha()
+            current_format
+                .color_type
+                .add_alpha()
+                .ok_or_else(|| eyre!("Output color type does not support interleaved alpha"))?
         } else {
             current_format.color_type
         },
@@ -219,7 +219,7 @@ pub fn decode_frames<In: JxlBitstreamInputExt>(
             })
             .collect(),
     };
-    decoder_with_image_info.set_pixel_format(new_format);
+    decoder_with_image_info.set_pixel_format(new_format)?;
 
     // If linear output is requested, initialize the CMS transformer
     let mut output_profile = decoder_with_image_info.output_color_profile().clone();

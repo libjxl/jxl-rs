@@ -7,9 +7,8 @@
 
 use jxl_simd::{F32SimdVec, SimdDescriptor, SimdMask, simd_function};
 
-use crate::headers::extra_channels::{ExtraChannel, ExtraChannelInfo};
-
 use super::patches::{PatchBlendMode, PatchBlending};
+use crate::headers::extra_channels::{ExtraChannel, ExtraChannelInfo};
 
 const MAX_F32_LANES: usize = 16;
 
@@ -480,9 +479,12 @@ mod tests {
     }
 
     mod perform_blending_tests {
-        use super::{super::*, *};
-        use crate::{headers::bit_depth::BitDepth, tests::assert_close};
         use test_log::test;
+
+        use super::super::*;
+        use super::*;
+        use crate::headers::bit_depth::BitDepth;
+        use crate::tests::assert_close;
 
         const ABS_DELTA: f32 = 1e-6;
 

@@ -3,19 +3,14 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-use std::{
-    collections::BTreeSet,
-    ops::{Deref, DerefMut},
-};
+use std::collections::BTreeSet;
+use std::ops::{Deref, DerefMut};
 
+use crate::api::JxlOutputBuffer;
+use crate::headers::Orientation;
+use crate::image::{Image, ImageDataType, Rect};
 use crate::util::sync::Mutex;
-
-use crate::{
-    api::JxlOutputBuffer,
-    headers::Orientation,
-    image::{Image, ImageDataType, Rect},
-    util::{ChannelVec, ShiftRightCeil},
-};
+use crate::util::{ChannelVec, ShiftRightCeil};
 
 pub struct OutputChannelSplitter<'a> {
     // Safety invariant: all the currently-borrowed rects of are stored in
@@ -242,7 +237,9 @@ impl<'a> BufferSplitter<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{api::JxlOutputBuffer, headers::Orientation, image::Rect};
+    use crate::api::JxlOutputBuffer;
+    use crate::headers::Orientation;
+    use crate::image::Rect;
 
     #[test]
     fn test_buffer_splitter_basic() {
