@@ -695,12 +695,18 @@ impl FrameHeader {
             ));
         }
 
+        // `postprocess` shifts `ec_upsampling` by `dim_shift` after this runs, so compare
+        // against the effective upsampling the render pipeline will see. Otherwise a frame that
+        // declares matching upsampling passes here and still ends up with the extra channels
+        // upsampled before the patches stage and the color channels after it.
         if self.has_patches()
             && self.upsampling != 1
-            && let Some(&ec_upsampling) = self
-                .ec_upsampling
+            && let Some(ec_upsampling) = nonserialized
+                .extra_channel_info
                 .iter()
-                .find(|&&ec_upsampling| ec_upsampling != self.upsampling)
+                .zip(&self.ec_upsampling)
+                .map(|(info, ec_upsampling)| ec_upsampling << info.dim_shift())
+                .find(|&ec_upsampling| ec_upsampling != self.upsampling)
         {
             return Err(Error::PatchesUnsupportedMixedUpsampling(
                 self.upsampling,

@@ -1338,3 +1338,21 @@ fn test_fuzzer_modular_palette_empty_meta_channel() {
     let data = include_bytes!("../../tests/testdata/modular_palette_empty_meta_channel.jxl");
     assert!(decode_internal(data, usize::MAX, false, false, None, None, None).is_err());
 }
+
+/// Regression test: a frame with patches that declares `upsampling = 4` and `ec_upsampling = [4]`
+/// for an extra channel with `dim_shift = 1`. The declared amounts match, so the guard against
+/// mixing patches with differing upsampling used to pass, and `postprocess` then shifted the
+/// extra channel to an effective 8x. The extra channel is upsampled before the patches stage
+/// while the color channels are upsampled after it, so the patches stage (which uses both)
+/// saw channels at two different resolutions and tripped an assertion in the low-memory
+/// pipeline.
+#[test]
+fn test_fuzzer_patches_ec_upsampling_dim_shift() {
+    let data = include_bytes!("../../tests/testdata/patches_ec_upsampling_dim_shift.jxl");
+    let result = decode_internal(data, usize::MAX, false, false, None, None, None);
+    assert!(
+        matches!(result, Err(Error::PatchesUnsupportedMixedUpsampling(..))),
+        "expected a mixed upsampling error, got {:?}",
+        result.map(|_| "a decoded image")
+    );
+}
