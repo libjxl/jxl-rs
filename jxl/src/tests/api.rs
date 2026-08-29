@@ -1356,3 +1356,39 @@ fn test_fuzzer_patches_ec_upsampling_dim_shift() {
         result.map(|_| "a decoded image")
     );
 }
+
+/// Regression test: a Modular stream that disables LZ77, but whose pixel histogram codes the
+/// constant symbol 1 with a split-exponent-zero uint config -- the shape `Histograms::is_rle()`
+/// used to accept, since without LZ77 it inspected cluster 0 instead of the (nonexistent)
+/// distance cluster. Together with a single Gradient leaf and prefix codes, that made
+/// `decode_modular_subbitstream()` take the RLE fast path, where `decode_fast_lossless()`
+/// unwraps the LZ77 parameters -- all `None` here -- and panicked. The stream is valid and
+/// decodes on the normal path, so it must decode rather than merely not panic.
+#[test]
+fn test_fuzzer_modular_rle_fast_path_without_lz77() {
+    let data = include_bytes!("../../tests/testdata/modular_rle_fast_path_without_lz77.jxl");
+    let (_, frames) = decode_internal(data, usize::MAX, false, false, None, None, None).unwrap();
+    assert_eq!(frames.len(), 1);
+    // A single 8x8 frame, with its three colour channels interleaved.
+    assert_eq!(frames[0][0].size(), (3 * 8, 8));
+    // Streaming input with flushing exercises the low-memory pipeline as well.
+    decode_internal(data, 1, false, true, None, None, None).unwrap();
+}
+
+/// The other direction: a stream that is genuinely RLE-coded (LZ77 enabled, every copy at
+/// distance 1) still takes the fast path. It codes the same image as
+/// `modular_rle_fast_path_without_lz77.jxl`, so the two must decode to the same pixels.
+#[test]
+fn test_modular_rle_fast_path() {
+    let data = include_bytes!("../../tests/testdata/modular_rle_fast_path.jxl");
+    let (_, frames) = decode_internal(data, usize::MAX, false, false, None, None, None).unwrap();
+    let no_lz77 = include_bytes!("../../tests/testdata/modular_rle_fast_path_without_lz77.jxl");
+    let (_, no_lz77_frames) =
+        decode_internal(no_lz77, usize::MAX, false, false, None, None, None).unwrap();
+    compare_frames(
+        Path::new("modular_rle_fast_path.jxl"),
+        0,
+        &frames[0],
+        &no_lz77_frames[0],
+    );
+}

@@ -569,7 +569,14 @@ impl Histograms {
         &self.codes
     }
 
+    /// Whether every LZ77 copy has distance 1, i.e. the stream is a plain run-length
+    /// encoding. False without LZ77: there is no distance cluster then (`lz_dist_cluster`
+    /// falls back to cluster 0, which holds real data), and the parameters an RLE decoder
+    /// needs (`min_symbol`, `min_length`, `lz77_length_uint`) are `None`.
     pub fn is_rle(&self) -> bool {
+        if !self.lz77_params.enabled {
+            return false;
+        }
         let lz_dist_cluster = self.lz_dist_cluster as usize;
         let lz_conf = &self.uint_configs[lz_dist_cluster];
         self.codes.single_symbol(lz_dist_cluster) == Some(1) && lz_conf.is_split_exponent_zero()
