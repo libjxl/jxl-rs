@@ -66,11 +66,14 @@ pub struct PassState {
     histograms: Histograms,
 }
 
+use crate::util::CacheLine;
+
 pub struct HfGlobalState {
     num_histograms: u32,
     passes: Vec<PassState>,
     dequant_matrices: DequantMatrices,
-    hf_coefficients: Vec<Mutex<Vec<i32>>>,
+    hf_coefficients: Vec<Mutex<Vec<CacheLine>>>,
+    use_i16: bool,
 }
 
 #[derive(Debug)]

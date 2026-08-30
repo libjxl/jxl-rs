@@ -9,16 +9,19 @@ use jxl_transforms::transform_map::*;
 use num_traits::Float;
 
 use crate::bit_reader::BitReader;
-use crate::entropy_coding::decode::SymbolReader;
+use crate::entropy_coding::decode::{Histograms, SymbolReader};
 use crate::error::{Error, Result};
 use crate::frame::block_context_map::*;
 use crate::frame::color_correlation_map::COLOR_TILE_DIM_IN_BLOCKS;
 use crate::frame::quant_weights::DequantMatrices;
 use crate::frame::{HfGlobalState, HfMetadata, LfGlobalState};
 use crate::headers::frame_header::FrameHeader;
+use crate::headers::permutation::Permutation;
 use crate::image::{Image, ImageRect, Rect};
 use crate::util::tracing_wrappers::*;
-use crate::util::{CacheLine, CeilLog2, ShiftRightCeil, SmallVec, slice_from_cachelines_mut};
+use crate::util::{
+    CacheLine, CeilLog2, ShiftRightCeil, SmallVec, num_cache_lines_for, slice_from_cachelines_mut,
+};
 use crate::{BLOCK_DIM, BLOCK_SIZE, GROUP_DIM};
 
 const LF_BUFFER_SIZE: usize = 32 * 32;
@@ -28,7 +31,7 @@ pub struct VarDctBuffers {
     pub scratch: Vec<f32>,
     pub transform_buffer: [Vec<f32>; 3],
     /// Coefficient storage for single-pass decoding (when hf_coefficients is None)
-    pub coeffs_storage: Vec<i32>,
+    pub coeffs_storage: Vec<CacheLine>,
 }
 
 impl VarDctBuffers {
@@ -50,9 +53,10 @@ impl VarDctBuffers {
             b.try_reserve_exact(MAX_COEFF_AREA)?;
             b.resize(MAX_COEFF_AREA, 0.0);
         }
+        let num_cache_lines = num_cache_lines_for::<i32>(3 * GROUP_DIM * GROUP_DIM);
+        self.coeffs_storage.try_reserve_exact(num_cache_lines)?;
         self.coeffs_storage
-            .try_reserve_exact(3 * GROUP_DIM * GROUP_DIM)?;
-        self.coeffs_storage.resize(3 * GROUP_DIM * GROUP_DIM, 0);
+            .resize(num_cache_lines, CacheLine::default());
         Ok(())
     }
 
@@ -62,7 +66,7 @@ impl VarDctBuffers {
         // by copy_from_slice before transform_to_pixels reads them.
         // transform_buffer does NOT need zeroing: dequant_block fully overwrites
         // all num_coeffs entries before transform_to_pixels reads them.
-        self.coeffs_storage.fill(0);
+        self.coeffs_storage.fill(CacheLine::default());
     }
 }
 
@@ -97,12 +101,17 @@ fn adjust_quant_bias<D: SimdDescriptor>(
 
 pub trait CoeffStorage: Sized {
     fn load_simd<D: SimdDescriptor>(slice: &[Self], d: D, offset: usize) -> D::I32Vec;
+    fn add_coeff(&mut self, val: i32);
 }
 
 impl CoeffStorage for i32 {
     #[inline(always)]
     fn load_simd<D: SimdDescriptor>(slice: &[i32], d: D, offset: usize) -> D::I32Vec {
         D::I32Vec::load(d, &slice[offset..])
+    }
+    #[inline(always)]
+    fn add_coeff(&mut self, val: i32) {
+        *self = self.wrapping_add(val);
     }
 }
 
@@ -111,11 +120,51 @@ impl CoeffStorage for i16 {
     fn load_simd<D: SimdDescriptor>(slice: &[i16], d: D, offset: usize) -> D::I32Vec {
         D::I32Vec::load_from_i16(d, &slice[offset..])
     }
+    #[inline(always)]
+    fn add_coeff(&mut self, val: i32) {
+        *self = self.wrapping_add(val as i16);
+    }
 }
 
 enum CoeffsMut<'a> {
     I32([&'a mut [i32]; 3]),
     I16([&'a mut [i16]; 3]),
+}
+
+#[allow(clippy::too_many_arguments)]
+#[inline(always)]
+fn decode_channel_coeffs<T: CoeffStorage>(
+    current_coeffs: &mut [T],
+    permutation: &Permutation,
+    num_blocks: usize,
+    num_coeffs: usize,
+    log_num_blocks: usize,
+    histo_offset: usize,
+    shift: u32,
+    mut nonzeros: usize,
+    reader: &mut SymbolReader,
+    histograms: &Histograms,
+    br: &mut BitReader,
+) -> Result<(), Error> {
+    // Asserting once lets the compiler elide the bounds check on
+    // `permutation[k]` inside the loop given `k < num_coeffs`.
+    assert!(permutation.len() >= num_coeffs);
+    let mut prev = if nonzeros > num_coeffs / 16 { 0 } else { 1 };
+    for k in num_blocks..num_coeffs {
+        if nonzeros == 0 {
+            break;
+        }
+        let ctx = histo_offset + zero_density_context(nonzeros, k, log_num_blocks, prev);
+        let coeff = reader.read_signed_inline(histograms, br, ctx) << shift;
+        prev = if coeff != 0 { 1 } else { 0 };
+        nonzeros -= prev;
+        let coeff_index = permutation[k] as usize;
+        current_coeffs[coeff_index].add_coeff(coeff);
+    }
+    if nonzeros != 0 {
+        return Err(Error::EndOfBlockResidualNonZeros(nonzeros));
+    }
+    Ok(())
 }
 
 impl<'a> CoeffsMut<'a> {
@@ -145,6 +194,52 @@ impl<'a> CoeffsMut<'a> {
                 c_arr[1][..num_coeffs].fill(0);
                 c_arr[2][..num_coeffs].fill(0);
             }
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn decode_channel(
+        &mut self,
+        c: usize,
+        offset: usize,
+        permutation: &Permutation,
+        num_blocks: usize,
+        num_coeffs: usize,
+        log_num_blocks: usize,
+        histo_offset: usize,
+        shift: u32,
+        nonzeros: usize,
+        reader: &mut SymbolReader,
+        histograms: &Histograms,
+        br: &mut BitReader,
+    ) -> Result<(), Error> {
+        match self {
+            Self::I32(c_arr) => decode_channel_coeffs(
+                &mut c_arr[c][offset..offset + num_coeffs],
+                permutation,
+                num_blocks,
+                num_coeffs,
+                log_num_blocks,
+                histo_offset,
+                shift,
+                nonzeros,
+                reader,
+                histograms,
+                br,
+            ),
+            Self::I16(c_arr) => decode_channel_coeffs(
+                &mut c_arr[c][offset..offset + num_coeffs],
+                permutation,
+                num_blocks,
+                num_coeffs,
+                log_num_blocks,
+                histo_offset,
+                shift,
+                nonzeros,
+                reader,
+                histograms,
+                br,
+            ),
         }
     }
 }
@@ -508,18 +603,15 @@ pub fn decode_vardct_group(
     let raw_quant_map = hf_meta.raw_quant_map.get_rect(block_group_rect);
     let quant_lf_rect = hf_meta.quant_lf.get_rect(block_group_rect);
     let block_context_map = lf_global.block_context_map.as_ref().unwrap();
-    // TODO(veluca): improve coefficient storage (smaller allocations, use 16 bits if possible).
-    let mut coeffs;
-    let coeffs = if !hf_global.hf_coefficients.is_empty() {
-        coeffs = hf_global.hf_coefficients[group].try_lock().unwrap();
-        &mut *coeffs
+    let use_i16 = hf_global.use_i16;
+    let mut locked_coeffs;
+    let coeffs_cachelines = if !hf_global.hf_coefficients.is_empty() {
+        locked_coeffs = hf_global.hf_coefficients[group].try_lock().unwrap();
+        &mut locked_coeffs[..]
     } else {
-        &mut buffers.coeffs_storage
+        &mut buffers.coeffs_storage[..]
     };
-    // Use pooled buffer (already reset to zero in buffers.reset() above)
-    let (coeffs_x, coeffs_y_b) = coeffs.split_at_mut(GROUP_DIM * GROUP_DIM);
-    let (coeffs_y, coeffs_b) = coeffs_y_b.split_at_mut(GROUP_DIM * GROUP_DIM);
-    let mut coeffs = CoeffsMut::I32([coeffs_x, coeffs_y, coeffs_b]);
+    let mut coeffs = CoeffsMut::from_cachelines(coeffs_cachelines, use_i16, GROUP_DIM * GROUP_DIM);
     let mut coeffs_offset = 0;
     let transform_buffer = &mut buffers.transform_buffer;
 
@@ -615,7 +707,7 @@ pub fn decode_vardct_group(
                     let nonzero_context = block_context_map
                         .nonzero_context(predicted_nzeros, block_context)
                         + context_offset;
-                    let mut nonzeros =
+                    let nonzeros =
                         reader.read_unsigned_inline(&pass_info.histograms, br, nonzero_context)
                             as usize;
                     trace!(
@@ -635,31 +727,21 @@ pub fn decode_vardct_group(
                     }
                     let histo_offset = block_context_map.zero_density_context_offset(block_context)
                         + context_offset;
-                    let mut prev = if nonzeros > num_coeffs / 16 { 0 } else { 1 };
                     let permutation = &pass_info.coeff_orders[shape_id * 3 + c];
-                    let CoeffsMut::I32(ref mut c_arr) = coeffs else {
-                        unreachable!();
-                    };
-                    let current_coeffs = &mut c_arr[c][coeffs_offset..coeffs_offset + num_coeffs];
-                    // Asserting once lets the compiler elide the bounds check on
-                    // `permutation[k]` inside the loop given `k < num_coeffs`.
-                    assert!(permutation.len() >= num_coeffs);
-                    for k in num_blocks..num_coeffs {
-                        if nonzeros == 0 {
-                            break;
-                        }
-                        let ctx =
-                            histo_offset + zero_density_context(nonzeros, k, log_num_blocks, prev);
-                        let coeff =
-                            reader.read_signed_inline(&pass_info.histograms, br, ctx) << *shift;
-                        prev = if coeff != 0 { 1 } else { 0 };
-                        nonzeros -= prev;
-                        let coeff_index = permutation[k] as usize;
-                        current_coeffs[coeff_index] += coeff;
-                    }
-                    if nonzeros != 0 {
-                        return Err(Error::EndOfBlockResidualNonZeros(nonzeros));
-                    }
+                    coeffs.decode_channel(
+                        c,
+                        coeffs_offset,
+                        permutation,
+                        num_blocks,
+                        num_coeffs,
+                        log_num_blocks,
+                        histo_offset,
+                        *shift,
+                        nonzeros,
+                        reader,
+                        &pass_info.histograms,
+                        br,
+                    )?;
                 }
             }
             if let Some(pixels) = pixels {

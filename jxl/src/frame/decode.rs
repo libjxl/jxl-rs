@@ -45,7 +45,8 @@ use crate::render::{Channels, ChannelsMut, RenderPipeline, RenderPipelineInOutSt
 use crate::util::sync::{Arc, Mutex, RwLock};
 use crate::util::tracing_wrappers::*;
 use crate::util::{
-    CeilLog2, NewWithCapacity, PerThreadStorage, ShiftRightCeil, Xorshift128Plus, mirror,
+    CacheLine, CeilLog2, NewWithCapacity, PerThreadStorage, ShiftRightCeil, Xorshift128Plus,
+    mirror, num_cache_lines_for,
 };
 
 fn upsample_lf_group(
@@ -542,16 +543,30 @@ impl Frame {
                     histograms,
                 });
             }
+            let max_num_bits = passes
+                .iter()
+                .enumerate()
+                .map(|(pass, p)| {
+                    let shift = self.header.passes.shift.get(pass).copied().unwrap_or(0);
+                    p.histograms.max_num_bits().saturating_add(shift as usize)
+                })
+                .max()
+                .unwrap_or(0);
+            let use_i16 = max_num_bits < 16;
             // Since the render pipeline keeps finalized channels, we don't need to store
             // HF coefficients if there is a single pass.
             let hf_coefficients = if passes.len() <= 1 {
                 vec![]
             } else {
+                let num_cache_lines = if use_i16 {
+                    num_cache_lines_for::<i16>(GROUP_DIM * GROUP_DIM * 3)
+                } else {
+                    num_cache_lines_for::<i32>(GROUP_DIM * GROUP_DIM * 3)
+                };
                 (0..self.header.num_groups())
                     .map(|_| {
-                        let sz = GROUP_DIM * GROUP_DIM * 3;
-                        let mut v = Vec::new_with_capacity(sz)?;
-                        v.resize(sz, 0);
+                        let mut v = Vec::new_with_capacity(num_cache_lines)?;
+                        v.resize(num_cache_lines, CacheLine::default());
                         Ok(Mutex::new(v))
                     })
                     .collect::<Result<_>>()?
@@ -562,6 +577,7 @@ impl Frame {
                 passes,
                 dequant_matrices,
                 hf_coefficients,
+                use_i16,
             });
         }
         // Set EPF sigma values to the correct values if we are doing EPF.
