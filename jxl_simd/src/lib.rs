@@ -270,6 +270,9 @@ pub trait I32SimdVec:
     fn load_from_i16(d: Self::Descriptor, mem: &[i16]) -> Self;
 
     // Requires `mem.len() >= Self::LEN` or it will panic.
+    fn load_from_u16(d: Self::Descriptor, mem: &[u16]) -> Self;
+
+    // Requires `mem.len() >= Self::LEN` or it will panic.
     fn store(&self, mem: &mut [i32]);
 
     fn abs(self) -> Self;
@@ -1655,4 +1658,25 @@ mod test {
         });
     }
     test_all_instruction_sets!(test_i32_load_from_i16);
+
+    fn test_i32_load_from_u16<D: SimdDescriptor>(d: D) {
+        let len = D::I32Vec::LEN;
+        arbtest::arbtest(|u| {
+            let mut input = vec![0u16; len];
+            for v in input.iter_mut() {
+                *v = u.arbitrary::<u16>()?;
+            }
+            let mut output = vec![0i32; len];
+            D::I32Vec::load_from_u16(d, &input).store(&mut output);
+            for i in 0..len {
+                assert_eq!(
+                    output[i], input[i] as i32,
+                    "mismatch at index {i} for input {}",
+                    input[i]
+                );
+            }
+            Ok(())
+        });
+    }
+    test_all_instruction_sets!(test_i32_load_from_u16);
 }
