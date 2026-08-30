@@ -653,7 +653,7 @@ impl F32SimdVec for F32VecAvx512 {
             // exactly as many as are present in `table`.
             let table_256 = unsafe { _mm256_loadu_ps(table.as_ptr()) };
             // Zero-extend to 512-bit; vpermutexvar with indices 0-7 only reads first 256 bits
-            _mm512_castps256_ps512(table_256)
+            _mm512_zextps256_ps512(table_256)
         }
         // SAFETY: avx512f is available from the safety invariant on the descriptor
         Bf16Table8Avx512(unsafe { prepare_impl(table) })
