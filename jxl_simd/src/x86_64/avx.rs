@@ -803,6 +803,17 @@ impl I32SimdVec for I32VecAvx {
     }
 
     #[inline(always)]
+    fn load_from_u16(d: Self::Descriptor, mem: &[u16]) -> Self {
+        assert!(mem.len() >= Self::LEN);
+        // SAFETY: we just checked that `mem` has enough space. Moreover, we know avx2 is available
+        // from the safety invariant on `d`. _mm_loadu_si128 supports unaligned loads.
+        Self(
+            unsafe { _mm256_cvtepu16_epi32(_mm_loadu_si128(mem.as_ptr().cast())) },
+            d,
+        )
+    }
+
+    #[inline(always)]
     fn store(&self, mem: &mut [i32]) {
         assert!(mem.len() >= Self::LEN);
         // SAFETY: we just checked that `mem` has enough space. Moreover, we know avx is available

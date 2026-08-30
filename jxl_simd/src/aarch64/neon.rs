@@ -632,6 +632,17 @@ impl I32SimdVec for I32VecNeon {
     }
 
     #[inline(always)]
+    fn load_from_u16(d: Self::Descriptor, mem: &[u16]) -> Self {
+        assert!(mem.len() >= Self::LEN);
+        // SAFETY: we just checked that `mem` has enough space. Moreover, we know neon is available
+        // from the safety invariant on `d`.
+        Self(
+            unsafe { vreinterpretq_s32_u32(vmovl_u16(vld1_u16(mem.as_ptr()))) },
+            d,
+        )
+    }
+
+    #[inline(always)]
     fn store(&self, mem: &mut [i32]) {
         assert!(mem.len() >= Self::LEN);
         // SAFETY: we just checked that `mem` has enough space. Moreover, we know neon is available
