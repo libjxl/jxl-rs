@@ -79,7 +79,7 @@ pub fn fast_erff_simd<D: SimdDescriptor>(d: D, x: D::F32Vec) -> D::F32Vec {
 #[inline(always)]
 pub fn fast_pow2f(x: f32) -> f32 {
     let x_floor = x.floor();
-    let exp = f32::from_bits(((x_floor as i32 + 127) as u32) << 23);
+    let exp = f32::from_bits((((x_floor as i32).wrapping_add(127)) as u32) << 23);
     let frac = x - x_floor;
 
     let num = frac + POW2F_NUMER_COEFFS[0];
