@@ -118,7 +118,10 @@ impl Lz77State {
             distance
         } else {
             let (offset, dist) = Lz77State::SPECIAL_DISTANCES[distance_sym as usize];
-            let dist = (self.dist_multiplier * dist as u32).checked_add_signed(offset as i32 - 1);
+            let dist = self
+                .dist_multiplier
+                .checked_mul(dist as u32)
+                .and_then(|d| d.checked_add_signed(offset as i32 - 1));
             dist.unwrap_or(0)
         };
 

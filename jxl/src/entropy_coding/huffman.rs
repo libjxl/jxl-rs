@@ -82,7 +82,7 @@ impl Table {
             }
             *symbol = sym as u16;
         }
-        if (0..num_symbols - 1).any(|i| symbols[..i].contains(&symbols[i + 1])) {
+        if (0..num_symbols - 1).any(|i| symbols[..=i].contains(&symbols[i + 1])) {
             return Err(Error::InvalidHuffman);
         }
 
@@ -567,5 +567,17 @@ mod test {
             1791,
             &mut br,
         );
+    }
+
+    #[test]
+    fn test_simple_table_duplicate_symbols() {
+        // Simple table header: num_symbols = 2 (coded as 1 -> bits '01'), symbols: 0, 0 (max_bits for alphabet 256 is 8)
+        // Bit stream: 2 bits for (num_symbols - 1) = 1 (binary 01), symbol 0 = 0x00, symbol 1 = 0x00
+        let data = [0b00000001, 0b00000000, 0b00000000];
+        let mut br = BitReader::new(&data);
+        assert!(matches!(
+            Table::decode_simple_table(256, &mut br),
+            Err(Error::InvalidHuffman)
+        ));
     }
 }
