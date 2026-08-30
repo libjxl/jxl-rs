@@ -8,6 +8,7 @@ use std::fmt;
 use jxl_macros::UnconditionalCoder;
 use num_derive::FromPrimitive;
 
+use crate::api::primaries_to_xyz;
 use crate::bit_reader::BitReader;
 use crate::error::Error;
 use crate::headers::encodings::*;
@@ -200,9 +201,20 @@ impl ColorEncoding {
             || self.tf.transfer_function == TransferFunction::Unknown
             || self.color_space == ColorSpace::XYB
         {
-            Err(Error::InvalidColorEncoding)
-        } else {
-            Ok(())
+            return Err(Error::InvalidColorEncoding);
         }
+        if self.primaries == Primaries::Custom {
+            primaries_to_xyz(
+                self.custom_primaries[0].as_f32_coords().0,
+                self.custom_primaries[0].as_f32_coords().1,
+                self.custom_primaries[1].as_f32_coords().0,
+                self.custom_primaries[1].as_f32_coords().1,
+                self.custom_primaries[2].as_f32_coords().0,
+                self.custom_primaries[2].as_f32_coords().1,
+                self.white.as_f32_coords().0,
+                self.white.as_f32_coords().1,
+            )?;
+        }
+        Ok(())
     }
 }
