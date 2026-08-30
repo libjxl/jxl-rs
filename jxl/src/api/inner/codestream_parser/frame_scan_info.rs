@@ -77,11 +77,6 @@ impl FrameScanInfo {
                 .chain(std::iter::once(&header.blending_info))
             {
                 let source = blending_info.source as usize;
-                assert!(
-                    source < DecoderState::MAX_STORED_FRAMES,
-                    "invalid blending source slot {source}, max {}",
-                    DecoderState::MAX_STORED_FRAMES - 1
-                );
                 used_reference_slots[source] = true;
             }
         }
@@ -97,11 +92,6 @@ impl FrameScanInfo {
 
         if header.has_lf_frame() {
             let lf_slot = header.lf_level as usize;
-            assert!(
-                lf_slot < DecoderState::NUM_LF_FRAMES,
-                "invalid lf slot {lf_slot}, max {}",
-                DecoderState::NUM_LF_FRAMES - 1
-            );
             if let Some(dep_start) = self.lf_slot_decode_start[lf_slot] {
                 decode_start_frame_index = decode_start_frame_index.min(dep_start);
             }
@@ -147,21 +137,11 @@ impl FrameScanInfo {
         // Update slot dependency origins after processing this frame.
         if header.can_be_referenced {
             let slot = header.save_as_reference as usize;
-            assert!(
-                slot < DecoderState::MAX_STORED_FRAMES,
-                "invalid save_as_reference slot {slot}, max {}",
-                DecoderState::MAX_STORED_FRAMES - 1
-            );
             self.reference_slot_decode_start[slot] = Some(decode_start_frame_index);
         }
 
         if header.lf_level != 0 {
             let slot = (header.lf_level - 1) as usize;
-            assert!(
-                slot < DecoderState::NUM_LF_FRAMES,
-                "invalid lf save slot {slot}, max {}",
-                DecoderState::NUM_LF_FRAMES - 1
-            );
             self.lf_slot_decode_start[slot] = Some(decode_start_frame_index);
         }
     }

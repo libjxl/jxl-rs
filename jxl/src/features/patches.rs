@@ -275,8 +275,9 @@ impl PatchesDictionary {
 
         // Count the number of patches for each row.
         sort_by_y1(&mut intervals, 0, intervals_len);
-        self.num_patches
-            .resize(intervals.last().map_or(0, |iv| iv.y1), 0); //Safe last()
+        let max_y1 = intervals.last().map_or(0, |iv| iv.y1);
+        self.num_patches.try_reserve(max_y1)?;
+        self.num_patches.resize(max_y1, 0);
         for iv in &intervals {
             for y in iv.y0..iv.y1 {
                 self.num_patches[y] += 1;

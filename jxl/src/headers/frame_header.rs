@@ -143,6 +143,7 @@ pub struct RestorationFilterNonserialized {
 
 #[derive(UnconditionalCoder, Debug, PartialEq, Clone)]
 #[nonserialized(RestorationFilterNonserialized)]
+#[validate]
 pub struct RestorationFilter {
     #[all_default]
     all_default: bool,
@@ -232,6 +233,21 @@ pub struct RestorationFilter {
 
     #[default(Extensions::default())]
     extensions: Extensions,
+}
+
+impl RestorationFilter {
+    fn check(&self, _nonserialized: &RestorationFilterNonserialized) -> Result<(), Error> {
+        if (1.0 + (self.gab_x_weight1 + self.gab_x_weight2) * 4.0).abs() < 1e-6
+            || (1.0 + (self.gab_y_weight1 + self.gab_y_weight2) * 4.0).abs() < 1e-6
+            || (1.0 + (self.gab_b_weight1 + self.gab_b_weight2) * 4.0).abs() < 1e-6
+        {
+            return Err(Error::FloatNaNOrInf);
+        }
+        if !self.epf_sigma_for_modular.is_finite() || self.epf_sigma_for_modular <= 0.0 {
+            return Err(Error::FloatNaNOrInf);
+        }
+        Ok(())
+    }
 }
 
 pub struct PermutationNonserialized {

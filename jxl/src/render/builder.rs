@@ -259,14 +259,16 @@ impl<Pipeline: RenderPipeline> RenderPipelineBuilder<Pipeline> {
                 // Arithmetic overflows here should be very uncommon, so custom error variants
                 // are probably unwarranted.
                 let cur_downsample = &mut cur_downsamples[chan];
-                if matches!(stage, Stage::Save(_))
-                    && save_downsample.is_some_and(|x| x != *cur_downsample)
-                {
-                    save_downsample = Some(*cur_downsample);
-                    return Err(Error::SaveDifferentDownsample(
-                        save_downsample.unwrap(),
-                        *cur_downsample,
-                    ));
+                if matches!(stage, Stage::Save(_)) {
+                    if save_downsample.is_none() {
+                        save_downsample = Some(*cur_downsample);
+                    }
+                    if save_downsample != Some(*cur_downsample) {
+                        return Err(Error::SaveDifferentDownsample(
+                            save_downsample.unwrap(),
+                            *cur_downsample,
+                        ));
+                    }
                 }
                 let next_downsample = &mut next_chan.downsample;
                 let next_total_downsample = *cur_downsample;
