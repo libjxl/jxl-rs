@@ -971,7 +971,7 @@ impl I32SimdVec for I32VecAvx512 {
         assert!(mem.len() >= Self::LEN);
         // SAFETY: we just checked that `mem` has enough space. Moreover, we know avx512f is available
         // from the safety invariant on `d`.
-        Self(unsafe { _mm512_loadu_epi32(mem.as_ptr()) }, d)
+        Self(unsafe { _mm512_loadu_si512(mem.as_ptr().cast()) }, d)
     }
 
     #[inline(always)]
@@ -1001,7 +1001,7 @@ impl I32SimdVec for I32VecAvx512 {
         assert!(mem.len() >= Self::LEN);
         // SAFETY: we just checked that `mem` has enough space. Moreover, we know avx512f is available
         // from the safety invariant on `self.1`.
-        unsafe { _mm512_storeu_epi32(mem.as_mut_ptr(), self.0) }
+        unsafe { _mm512_storeu_si512(mem.as_mut_ptr().cast(), self.0) }
     }
 
     #[inline(always)]
@@ -1070,7 +1070,7 @@ impl I32SimdVec for I32VecAvx512 {
             assert!(dest.len() >= I32VecAvx512::LEN);
             let tmp = _mm512_cvtepi32_epi16(v);
             // SAFETY: We just checked `dst` has enough space.
-            unsafe { _mm256_storeu_epi32(dest.as_mut_ptr().cast(), tmp) };
+            unsafe { _mm256_storeu_si256(dest.as_mut_ptr().cast(), tmp) };
         }
         // SAFETY: avx512f is available from the safety invariant on the descriptor.
         unsafe { store_u16_impl(self.0, dest) }
