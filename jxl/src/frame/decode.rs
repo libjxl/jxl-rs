@@ -5,6 +5,7 @@
 
 use std::collections::BTreeSet;
 
+use jxl_simd::{SimdDescriptor, simd_function};
 use jxl_transforms::transform_map::*;
 
 use super::block_context_map::BlockContextMap;
@@ -149,6 +150,47 @@ fn upsample_lf_group(
     }
     Ok(())
 }
+
+#[inline(always)]
+fn render_noise_subregion_channel_simd_impl<D: SimdDescriptor>(
+    d: D,
+    rng: &mut Xorshift128Plus,
+    buf: &mut Image<u16>,
+    sub_x0: usize,
+    sub_y0: usize,
+    sub_xsize: usize,
+    sub_ysize: usize,
+) {
+    for y in 0..sub_ysize {
+        let mut chunks = buf.row_mut(sub_y0 + y)[sub_x0..sub_x0 + sub_xsize].chunks_exact_mut(16);
+        for chunk in &mut chunks {
+            rng.fill_u16_simd(d, chunk);
+        }
+        let rem = chunks.into_remainder();
+        if !rem.is_empty() {
+            let mut temp = [0u16; 16];
+            rng.fill_u16_simd(d, &mut temp);
+            rem.copy_from_slice(&temp[..rem.len()]);
+        }
+    }
+}
+
+simd_function!(
+    render_noise_subregion_channel_dispatch,
+    d: D,
+    fn render_noise_subregion_channel_simd(
+        rng: &mut Xorshift128Plus,
+        buf: &mut Image<u16>,
+        sub_x0: usize,
+        sub_y0: usize,
+        sub_xsize: usize,
+        sub_ysize: usize,
+    ) {
+        render_noise_subregion_channel_simd_impl(
+            d, rng, buf, sub_x0, sub_y0, sub_xsize, sub_ysize,
+        );
+    }
+);
 
 impl Frame {
     pub fn from_header_and_toc(
@@ -599,7 +641,6 @@ impl Frame {
         buffer_splitter: &BufferSplitter,
     ) -> Result<()> {
         // TODO(sboukortt): consider making this a dedicated stage
-        // TODO(veluca): SIMD.
         let num_channels = self.header.num_extra_channels as usize + 3;
 
         let group_dim = self.header.group_dim() as u32;
@@ -621,10 +662,6 @@ impl Frame {
             pipeline!(self, p, p.get_buffer(num_channels + 1)?),
             pipeline!(self, p, p.get_buffer(num_channels + 2)?),
         ];
-
-        const FLOATS_PER_BATCH: usize =
-            Xorshift128Plus::N * std::mem::size_of::<u64>() / std::mem::size_of::<f32>();
-        let mut batch = [0u64; Xorshift128Plus::N];
 
         // libjxl iterates through upsampling subdivisions with separate RNG seeds.
         // For each subregion, a single RNG is shared across all 3 channels.
@@ -659,25 +696,9 @@ impl Frame {
 
                 // Fill all 3 channels with this subregion's noise, sharing the RNG
                 for buf in &mut bufs {
-                    for y in 0..sub_ysize {
-                        let row = buf.row_mut(sub_y0 + y);
-                        for batch_index in 0..sub_xsize.div_ceil(FLOATS_PER_BATCH) {
-                            rng.fill(&mut batch);
-                            let batch_size =
-                                (sub_xsize - batch_index * FLOATS_PER_BATCH).min(FLOATS_PER_BATCH);
-                            for i in 0..batch_size {
-                                let x = sub_x0 + FLOATS_PER_BATCH * batch_index + i;
-                                let k = i / 2;
-                                let high_bytes = i % 2 != 0;
-                                let bits = if high_bytes {
-                                    ((batch[k] & 0xFFFFFFFF00000000) >> 32) as u32
-                                } else {
-                                    (batch[k] & 0xFFFFFFFF) as u32
-                                };
-                                row[x] = (bits >> 16) as u16;
-                            }
-                        }
-                    }
+                    render_noise_subregion_channel_dispatch(
+                        &mut rng, buf, sub_x0, sub_y0, sub_xsize, sub_ysize,
+                    );
                 }
             }
         }
