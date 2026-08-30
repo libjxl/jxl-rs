@@ -51,7 +51,7 @@ impl<T: RenderPipelineInPlaceStage> RunInPlaceStage<Image<f64>> for T {
                     }
                 }
                 let mut row: Vec<_> = buffer.iter_mut().map(|x| x as &mut [_]).collect();
-                self.process_row_chunk((x, y), xsize, &mut row, state.as_deref_mut());
+                self.process_row_chunk((x, y), xsize, &mut row, state.as_deref_mut(), false);
                 for c in 0..numc {
                     let out_row = buffers[c].row_mut(y);
                     for ix in 0..xsize {
@@ -181,6 +181,7 @@ impl<T: RenderPipelineInOutStage> RunInOutStage<Image<f64>> for T {
                         &input_rows,
                         &mut output_rows,
                         state.as_deref_mut(),
+                        false,
                     );
                 }
 

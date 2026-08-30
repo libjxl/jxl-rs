@@ -43,6 +43,7 @@ impl RenderPipelineInPlaceStage for SpotColorStage {
         xsize: usize,
         row: &mut [&mut [f32]],
         _state: Option<&mut ErasedLocalState>,
+        _previous_call_was_previous_row: bool,
     ) {
         let [row_r, row_g, row_b, row_s] = row else {
             panic!(

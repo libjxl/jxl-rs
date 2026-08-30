@@ -58,6 +58,7 @@ impl RenderPipelineInOutStage for ConvertModularXYBToF32Stage {
         input_rows: &Channels<i32>,
         output_rows: &mut ChannelsMut<f32>,
         _state: Option<&mut ErasedLocalState>,
+        _previous_call_was_previous_row: bool,
     ) {
         let lf_quant = self.lf_quant.try_read().unwrap();
         let [scale_x, scale_y, scale_b] = lf_quant.quant_factors;
@@ -261,6 +262,7 @@ impl RenderPipelineInOutStage for ConvertModularToF32Stage {
         input_rows: &Channels<i32>,
         output_rows: &mut ChannelsMut<f32>,
         _state: Option<&mut ErasedLocalState>,
+        _previous_call_was_previous_row: bool,
     ) {
         let input = &input_rows[0];
         if self.bit_depth.floating_point_sample() {
@@ -361,6 +363,7 @@ impl RenderPipelineInOutStage for ConvertF32ToU8Stage {
         input_rows: &Channels<f32>,
         output_rows: &mut ChannelsMut<u8>,
         _state: Option<&mut ErasedLocalState>,
+        _previous_call_was_previous_row: bool,
     ) {
         let input = input_rows[0][0];
         let output = &mut output_rows[0][0];
@@ -445,6 +448,7 @@ impl RenderPipelineInOutStage for ConvertI32ToU8Stage {
         input_rows: &Channels<i32>,
         output_rows: &mut ChannelsMut<u8>,
         _state: Option<&mut ErasedLocalState>,
+        _previous_call_was_previous_row: bool,
     ) {
         let input = input_rows[0][0];
         let output = &mut output_rows[0][0];
@@ -516,6 +520,7 @@ impl RenderPipelineInOutStage for ConvertF32ToU16Stage {
         input_rows: &Channels<f32>,
         output_rows: &mut ChannelsMut<u16>,
         _state: Option<&mut ErasedLocalState>,
+        _previous_call_was_previous_row: bool,
     ) {
         let input = input_rows[0][0];
         let output = &mut output_rows[0][0];
@@ -583,6 +588,7 @@ impl RenderPipelineInOutStage for ConvertF32ToF16Stage {
         input_rows: &Channels<f32>,
         output_rows: &mut ChannelsMut<crate::util::f16>,
         _state: Option<&mut ErasedLocalState>,
+        _previous_call_was_previous_row: bool,
     ) {
         let input = &input_rows[0];
         if let Some((min_value, max_value)) = self.clamp_range {

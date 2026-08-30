@@ -36,6 +36,7 @@ impl RenderPipelineInPlaceStage for SplinesStage {
         xsize: usize,
         row: &mut [&mut [f32]],
         _state: Option<&mut ErasedLocalState>,
+        _previous_call_was_previous_row: bool,
     ) {
         let splines = self.splines.try_read().unwrap();
         if splines.splines.is_empty() {

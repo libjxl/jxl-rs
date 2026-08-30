@@ -76,6 +76,7 @@ impl RenderPipelineInPlaceStage for PremultiplyAlphaStage {
         xsize: usize,
         row: &mut [&mut [f32]],
         _state: Option<&mut ErasedLocalState>,
+        _previous_call_was_previous_row: bool,
     ) {
         // The row slice contains only the channels we said we use.
         // The last channel is alpha (since alpha_channel > color channels).

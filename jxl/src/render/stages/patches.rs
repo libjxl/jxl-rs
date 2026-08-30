@@ -54,6 +54,7 @@ impl RenderPipelineInPlaceStage for PatchesStage {
         xsize: usize,
         row: &mut [&mut [f32]],
         state: Option<&mut ErasedLocalState>,
+        _previous_call_was_previous_row: bool,
     ) {
         let patches = self.patches.try_read().unwrap();
         if patches.positions.is_empty() {

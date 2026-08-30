@@ -116,6 +116,7 @@ impl RenderPipelineInPlaceStage for BlendingStage {
         xsize: usize,
         row: &mut [&mut [f32]],
         state: Option<&mut ErasedLocalState>,
+        _previous_call_was_previous_row: bool,
     ) {
         let num_ec = self.extra_channels.len();
         let fg_y0 = self.frame_origin.1 + position.1 as isize;

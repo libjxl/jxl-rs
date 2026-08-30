@@ -59,6 +59,7 @@ pub trait RenderPipelineInPlaceStage: Any + std::fmt::Display + Send + Sync {
         // one for each channel
         row: &mut [&mut [Self::Type]],
         state: Option<&mut ErasedLocalState>,
+        previous_call_was_previous_row: bool,
     );
 
     fn init_local_state(&self) -> Result<Option<Box<ErasedLocalState>>> {
@@ -91,6 +92,10 @@ pub trait RenderPipelineInOutStage: Any + std::fmt::Display + Send + Sync {
     const BORDER: (u8, u8);
     const SHIFT: (u8, u8);
 
+    // Note: If previous_call_was_previous_row is true, it is guaranteed
+    // that the previous call on this specific implementor covered the same
+    // range of pixels, but in the row above the current one.
+    // If it is false, it is *NOT* guaranteed that it wasn't.
     fn process_row_chunk(
         &self,
         position: (usize, usize),
@@ -100,6 +105,7 @@ pub trait RenderPipelineInOutStage: Any + std::fmt::Display + Send + Sync {
         // channel, row, column
         output_rows: &mut ChannelsMut<Self::OutputT>,
         state: Option<&mut ErasedLocalState>,
+        previous_call_was_previous_row: bool,
     );
 
     fn init_local_state(&self) -> Result<Option<Box<ErasedLocalState>>> {

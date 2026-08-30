@@ -105,6 +105,7 @@ impl RenderPipelineInOutStage for GaborishStage {
         input_rows: &Channels<f32>,
         output_rows: &mut ChannelsMut<f32>,
         _state: Option<&mut ErasedLocalState>,
+        _previous_call_was_previous_row: bool,
     ) {
         gaborish_process_dispatch(self, xsize, input_rows, output_rows);
     }
