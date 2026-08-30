@@ -230,14 +230,9 @@ pub(super) fn decode_modular_channel(
     let size = buffers[chan].data.size();
     if size.0 <= 4 || size.1 <= 2 || size.0 * size.1 <= SMALL_CHANNEL_THRESHOLD {
         let mut decoder = FullTree::new(tree, &header.wp_header, chan, stream_id, size.0)?;
-        return decode_modular_channel_impl(
-            &mut decoder,
-            buffers,
-            chan,
-            &tree.histograms,
-            reader,
-            br,
-        );
+        decode_modular_channel_impl(&mut decoder, buffers, chan, &tree.histograms, reader, br)?;
+        br.check_for_error()?;
+        return Ok(());
     }
 
     run_on_specialized_tree(tree, chan, stream_id, size.0, header, {

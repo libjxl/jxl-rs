@@ -57,7 +57,7 @@ impl ColorCorrelationParams {
             }
             let base_correlation_x = val_x.to_f32();
             let base_correlation_b = val_b.to_f32();
-            if base_correlation_x > 4.0 || base_correlation_b > 4.0 {
+            if base_correlation_x.abs() > 4.0 || base_correlation_b.abs() > 4.0 {
                 return Err(Error::BaseColorCorrelationOutOfRange);
             }
             let ytox_lf = br.read(8)? as i32 - 128;
