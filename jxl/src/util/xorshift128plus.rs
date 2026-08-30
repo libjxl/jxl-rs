@@ -20,7 +20,7 @@ impl Xorshift128Plus {
         let mut s0 = [0; Self::N];
         let mut s1 = [0; Self::N];
 
-        s0[0] = Self::split_mix_64(seed + 0x9E3779B97F4A7C15);
+        s0[0] = Self::split_mix_64(seed.wrapping_add(0x9E3779B97F4A7C15));
         s1[0] = Self::split_mix_64(s0[0]);
 
         for i in 1..Self::N {
