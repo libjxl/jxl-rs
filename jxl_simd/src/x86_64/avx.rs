@@ -11,7 +11,7 @@ use std::ops::{
 
 use super::super::{F32SimdVec, I32SimdVec, SimdDescriptor, SimdMask, U8SimdVec, U16SimdVec};
 use crate::x86_64::sse42::Sse42Descriptor;
-use crate::{U32SimdVec, impl_f32_array_interface};
+use crate::{U32SimdVec, U64SimdVec, impl_f32_array_interface};
 
 /// Core 8x8 transpose algorithm for AVX2.
 /// Takes 8 __m256 vectors representing rows and returns 8 transposed vectors.
@@ -121,6 +121,7 @@ pub struct Bf16Table8Avx(__m256);
 impl SimdDescriptor for AvxDescriptor {
     type F32Vec = F32VecAvx;
     type I32Vec = I32VecAvx;
+    type U64Vec = U64VecAvx;
     type U32Vec = U32VecAvx;
     type U8Vec = U8VecAvx;
     type U16Vec = U16VecAvx;
@@ -1074,6 +1075,107 @@ impl U32SimdVec for U32VecAvx {
         // SAFETY: We know avx2 is available from the safety invariant on `self.1`.
         unsafe { Self(_mm256_srli_epi32::<AMOUNT_I>(self.0), self.1) }
     }
+}
+
+#[derive(Clone, Copy, Debug)]
+#[repr(transparent)]
+pub struct U64VecAvx(pub(crate) __m256i, pub(crate) AvxDescriptor);
+
+impl U64SimdVec for U64VecAvx {
+    type Descriptor = AvxDescriptor;
+
+    const LEN: usize = 4;
+
+    #[inline(always)]
+    fn splat(d: Self::Descriptor, v: u64) -> Self {
+        // SAFETY: We know avx2 is available from the safety invariant on `d`.
+        unsafe { Self(_mm256_set1_epi64x(v as i64), d) }
+    }
+
+    #[inline(always)]
+    fn load(d: Self::Descriptor, mem: &[u64]) -> Self {
+        assert!(mem.len() >= Self::LEN);
+        // SAFETY: we just checked that `mem` has enough space. Moreover, we know avx2 is available
+        // from the safety invariant on `d`. _mm256_loadu_si256 supports unaligned loads.
+        unsafe { Self(_mm256_loadu_si256(mem.as_ptr().cast()), d) }
+    }
+
+    #[inline(always)]
+    fn store(&self, mem: &mut [u64]) {
+        assert!(mem.len() >= Self::LEN);
+        // SAFETY: we just checked that `mem` has enough space. Moreover, we know avx2 is available
+        // from the safety invariant on `self.1`. _mm256_storeu_si256 supports unaligned stores.
+        unsafe { _mm256_storeu_si256(mem.as_mut_ptr().cast(), self.0) }
+    }
+
+    #[inline(always)]
+    fn shl<const AMOUNT_U: u32, const AMOUNT_I: i32>(self) -> Self {
+        // SAFETY: We know avx2 is available from the safety invariant on `self.1`.
+        unsafe { Self(_mm256_slli_epi64::<AMOUNT_I>(self.0), self.1) }
+    }
+
+    #[inline(always)]
+    fn shr<const AMOUNT_U: u32, const AMOUNT_I: i32>(self) -> Self {
+        // SAFETY: We know avx2 is available from the safety invariant on `self.1`.
+        unsafe { Self(_mm256_srli_epi64::<AMOUNT_I>(self.0), self.1) }
+    }
+
+    #[inline(always)]
+    fn bitcast_to_u32(self) -> U32VecAvx {
+        U32VecAvx(self.0, self.1)
+    }
+}
+
+impl Add<U64VecAvx> for U64VecAvx {
+    type Output = U64VecAvx;
+    fn_avx!(this: U64VecAvx, fn add(rhs: U64VecAvx) -> U64VecAvx {
+        U64VecAvx(_mm256_add_epi64(this.0, rhs.0), this.1)
+    });
+}
+
+impl AddAssign<U64VecAvx> for U64VecAvx {
+    fn_avx!(this: &mut U64VecAvx, fn add_assign(rhs: U64VecAvx) {
+        this.0 = _mm256_add_epi64(this.0, rhs.0);
+    });
+}
+
+impl BitAnd<U64VecAvx> for U64VecAvx {
+    type Output = U64VecAvx;
+    fn_avx!(this: U64VecAvx, fn bitand(rhs: U64VecAvx) -> U64VecAvx {
+        U64VecAvx(_mm256_and_si256(this.0, rhs.0), this.1)
+    });
+}
+
+impl BitAndAssign<U64VecAvx> for U64VecAvx {
+    fn_avx!(this: &mut U64VecAvx, fn bitand_assign(rhs: U64VecAvx) {
+        this.0 = _mm256_and_si256(this.0, rhs.0);
+    });
+}
+
+impl BitOr<U64VecAvx> for U64VecAvx {
+    type Output = U64VecAvx;
+    fn_avx!(this: U64VecAvx, fn bitor(rhs: U64VecAvx) -> U64VecAvx {
+        U64VecAvx(_mm256_or_si256(this.0, rhs.0), this.1)
+    });
+}
+
+impl BitOrAssign<U64VecAvx> for U64VecAvx {
+    fn_avx!(this: &mut U64VecAvx, fn bitor_assign(rhs: U64VecAvx) {
+        this.0 = _mm256_or_si256(this.0, rhs.0);
+    });
+}
+
+impl BitXor<U64VecAvx> for U64VecAvx {
+    type Output = U64VecAvx;
+    fn_avx!(this: U64VecAvx, fn bitxor(rhs: U64VecAvx) -> U64VecAvx {
+        U64VecAvx(_mm256_xor_si256(this.0, rhs.0), this.1)
+    });
+}
+
+impl BitXorAssign<U64VecAvx> for U64VecAvx {
+    fn_avx!(this: &mut U64VecAvx, fn bitxor_assign(rhs: U64VecAvx) {
+        this.0 = _mm256_xor_si256(this.0, rhs.0);
+    });
 }
 
 #[derive(Clone, Copy, Debug)]

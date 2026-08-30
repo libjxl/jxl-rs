@@ -10,7 +10,7 @@ use std::ops::{
 };
 
 use super::super::{F32SimdVec, I32SimdVec, SimdDescriptor, SimdMask, U8SimdVec, U16SimdVec};
-use crate::U32SimdVec;
+use crate::{U32SimdVec, U64SimdVec};
 
 #[derive(Clone, Copy, Debug)]
 pub struct Simd128Descriptor(());
@@ -25,6 +25,8 @@ impl SimdDescriptor for Simd128Descriptor {
     type F32Vec = F32VecSimd128;
 
     type I32Vec = I32VecSimd128;
+
+    type U64Vec = U64VecSimd128;
 
     type U32Vec = U32VecSimd128;
 
@@ -854,6 +856,110 @@ impl U32SimdVec for U32VecSimd128 {
     #[inline(always)]
     fn shr<const AMOUNT_U: u32, const AMOUNT_I: i32>(self) -> Self {
         Self(u32x4_shr(self.0, AMOUNT_U), self.1)
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+#[repr(transparent)]
+pub struct U64VecSimd128(v128, Simd128Descriptor);
+
+impl U64SimdVec for U64VecSimd128 {
+    type Descriptor = Simd128Descriptor;
+
+    const LEN: usize = 2;
+
+    #[inline(always)]
+    fn splat(d: Self::Descriptor, v: u64) -> Self {
+        Self(i64x2_splat(v as i64), d)
+    }
+
+    #[inline(always)]
+    fn load(d: Self::Descriptor, mem: &[u64]) -> Self {
+        assert!(mem.len() >= Self::LEN);
+        // SAFETY: we just checked that `mem` has enough space.
+        unsafe { Self(v128_load(mem.as_ptr().cast()), d) }
+    }
+
+    #[inline(always)]
+    fn store(&self, mem: &mut [u64]) {
+        assert!(mem.len() >= Self::LEN);
+        // SAFETY: we just checked that `mem` has enough space.
+        unsafe { v128_store(mem.as_mut_ptr().cast(), self.0) }
+    }
+
+    #[inline(always)]
+    fn shl<const AMOUNT_U: u32, const AMOUNT_I: i32>(self) -> Self {
+        Self(i64x2_shl(self.0, AMOUNT_U), self.1)
+    }
+
+    #[inline(always)]
+    fn shr<const AMOUNT_U: u32, const AMOUNT_I: i32>(self) -> Self {
+        Self(u64x2_shr(self.0, AMOUNT_U), self.1)
+    }
+
+    #[inline(always)]
+    fn bitcast_to_u32(self) -> U32VecSimd128 {
+        U32VecSimd128(self.0, self.1)
+    }
+}
+
+impl Add<U64VecSimd128> for U64VecSimd128 {
+    type Output = U64VecSimd128;
+    #[inline(always)]
+    fn add(self, rhs: U64VecSimd128) -> U64VecSimd128 {
+        U64VecSimd128(i64x2_add(self.0, rhs.0), self.1)
+    }
+}
+
+impl AddAssign<U64VecSimd128> for U64VecSimd128 {
+    #[inline(always)]
+    fn add_assign(&mut self, rhs: U64VecSimd128) {
+        self.0 = i64x2_add(self.0, rhs.0);
+    }
+}
+
+impl BitAnd<U64VecSimd128> for U64VecSimd128 {
+    type Output = U64VecSimd128;
+    #[inline(always)]
+    fn bitand(self, rhs: U64VecSimd128) -> U64VecSimd128 {
+        U64VecSimd128(v128_and(self.0, rhs.0), self.1)
+    }
+}
+
+impl BitAndAssign<U64VecSimd128> for U64VecSimd128 {
+    #[inline(always)]
+    fn bitand_assign(&mut self, rhs: U64VecSimd128) {
+        self.0 = v128_and(self.0, rhs.0);
+    }
+}
+
+impl BitOr<U64VecSimd128> for U64VecSimd128 {
+    type Output = U64VecSimd128;
+    #[inline(always)]
+    fn bitor(self, rhs: U64VecSimd128) -> U64VecSimd128 {
+        U64VecSimd128(v128_or(self.0, rhs.0), self.1)
+    }
+}
+
+impl BitOrAssign<U64VecSimd128> for U64VecSimd128 {
+    #[inline(always)]
+    fn bitor_assign(&mut self, rhs: U64VecSimd128) {
+        self.0 = v128_or(self.0, rhs.0);
+    }
+}
+
+impl BitXor<U64VecSimd128> for U64VecSimd128 {
+    type Output = U64VecSimd128;
+    #[inline(always)]
+    fn bitxor(self, rhs: U64VecSimd128) -> U64VecSimd128 {
+        U64VecSimd128(v128_xor(self.0, rhs.0), self.1)
+    }
+}
+
+impl BitXorAssign<U64VecSimd128> for U64VecSimd128 {
+    #[inline(always)]
+    fn bitxor_assign(&mut self, rhs: U64VecSimd128) {
+        self.0 = v128_xor(self.0, rhs.0);
     }
 }
 
