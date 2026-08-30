@@ -50,24 +50,29 @@ impl VarDctBuffers {
         self.scratch.try_reserve_exact(LF_BUFFER_SIZE)?;
         self.scratch.resize(LF_BUFFER_SIZE, 0.0);
         for b in self.transform_buffer.iter_mut() {
-            b.try_reserve_exact(MAX_COEFF_AREA)?;
-            b.resize(MAX_COEFF_AREA, 0.0);
+            b.try_reserve_exact(64 * 64)?;
+            b.resize(64 * 64, 0.0);
         }
-        let num_cache_lines = num_cache_lines_for::<i32>(3 * GROUP_DIM * GROUP_DIM);
+        let num_cache_lines = num_cache_lines_for::<i32>(3 * 64 * 64);
         self.coeffs_storage.try_reserve_exact(num_cache_lines)?;
         self.coeffs_storage
             .resize(num_cache_lines, CacheLine::default());
         Ok(())
     }
+}
 
-    /// Reset buffers to zero for reuse.
-    pub fn reset(&mut self) {
-        // scratch does NOT need zeroing: each block's LF coefficients are fully written
-        // by copy_from_slice before transform_to_pixels reads them.
-        // transform_buffer does NOT need zeroing: dequant_block fully overwrites
-        // all num_coeffs entries before transform_to_pixels reads them.
-        self.coeffs_storage.fill(CacheLine::default());
+fn get_single_pass_coeffs<'a>(
+    coeffs_storage: &'a mut Vec<CacheLine>,
+    use_i16: bool,
+    num_coeffs: usize,
+) -> CoeffsMut<'a> {
+    let needed_cache_lines = num_cache_lines_for::<i32>(3 * num_coeffs);
+    if coeffs_storage.len() < needed_cache_lines {
+        coeffs_storage.resize(needed_cache_lines, CacheLine::default());
     }
+    let mut c = CoeffsMut::from_cachelines(&mut coeffs_storage[..], use_i16, num_coeffs);
+    c.zero(num_coeffs);
+    c
 }
 
 #[inline]
@@ -379,6 +384,11 @@ fn dequant_and_transform_to_pixels<D: SimdDescriptor>(
     offset: usize,
     dequant_matrices: &DequantMatrices,
 ) -> Result<(), Error> {
+    for b in transform_buffer.iter_mut() {
+        if b.len() < num_coeffs {
+            b.resize(num_coeffs, 0.0);
+        }
+    }
     dequant_block::<D>(
         d,
         transform_type,
@@ -581,8 +591,6 @@ pub fn decode_vardct_group(
         .map(|(pass, br)| PassInfo::new(hf_global, frame_header, block_group_rect, *pass, br))
         .collect::<Result<SmallVec<_, 4>>>()?;
 
-    // Reset and use pooled buffers
-    buffers.reset();
     let scratch = &mut buffers.scratch;
     let color_correlation_params = lf_global.color_correlation_params.as_ref().unwrap();
     let cmap_rect = Rect {
@@ -604,14 +612,12 @@ pub fn decode_vardct_group(
     let quant_lf_rect = hf_meta.quant_lf.get_rect(block_group_rect);
     let block_context_map = lf_global.block_context_map.as_ref().unwrap();
     let use_i16 = hf_global.use_i16;
-    let mut locked_coeffs;
-    let coeffs_cachelines = if !hf_global.hf_coefficients.is_empty() {
-        locked_coeffs = hf_global.hf_coefficients[group].try_lock().unwrap();
-        &mut locked_coeffs[..]
+    let is_multi_pass = !hf_global.hf_coefficients.is_empty();
+    let mut locked_coeffs = if is_multi_pass {
+        Some(hf_global.hf_coefficients[group].try_lock().unwrap())
     } else {
-        &mut buffers.coeffs_storage[..]
+        None
     };
-    let mut coeffs = CoeffsMut::from_cachelines(coeffs_cachelines, use_i16, GROUP_DIM * GROUP_DIM);
     let mut coeffs_offset = 0;
     let transform_buffer = &mut buffers.transform_buffer;
 
@@ -681,6 +687,18 @@ pub fn decode_vardct_group(
             let num_blocks = cx * cy;
             let num_coeffs = num_blocks * BLOCK_SIZE;
             let log_num_blocks = num_blocks.ilog2() as usize;
+
+            let (mut coeffs, offset) = match &mut locked_coeffs {
+                Some(locked) => (
+                    CoeffsMut::from_cachelines(&mut locked[..], use_i16, GROUP_DIM * GROUP_DIM),
+                    coeffs_offset,
+                ),
+                None => (
+                    get_single_pass_coeffs(&mut buffers.coeffs_storage, use_i16, num_coeffs),
+                    0,
+                ),
+            };
+
             for PassInfo {
                 histogram_index,
                 reader,
@@ -730,7 +748,7 @@ pub fn decode_vardct_group(
                     let permutation = &pass_info.coeff_orders[shape_id * 3 + c];
                     coeffs.decode_channel(
                         c,
-                        coeffs_offset,
+                        offset,
                         permutation,
                         num_blocks,
                         num_coeffs,
@@ -769,11 +787,13 @@ pub fn decode_vardct_group(
                     num_blocks,
                     num_coeffs,
                     &coeffs,
-                    coeffs_offset,
+                    offset,
                     dequant_matrices,
                 )?;
             }
-            coeffs_offset += num_coeffs;
+            if is_multi_pass {
+                coeffs_offset += num_coeffs;
+            }
         }
     }
     for PassInfo {
