@@ -77,6 +77,10 @@ impl NeededBorders {
         topbottom: false,
         leftright: true,
     };
+    pub const BOTH: Self = Self {
+        topbottom: true,
+        leftright: true,
+    };
 
     pub fn is_empty(&self) -> bool {
         !self.topbottom && !self.leftright
@@ -94,6 +98,9 @@ pub(super) struct ModularBuffer {
     // the transform chunk that produced this buffer.
     pub(super) auxiliary_data: RwLock<Option<Image<i32>>>,
     pub(super) needed_borders: NeededBorders,
+    // Number of final-render transforms that still need each border buffer.
+    remaining_topbottom_uses: AtomicUsize,
+    remaining_leftright_uses: AtomicUsize,
     // Number of times this buffer will be used, *including* when it is used for output.
     pub(super) remaining_uses: AtomicUsize,
     // Number of full-buffer uses for final renders.
@@ -120,6 +127,8 @@ impl ModularBuffer {
             leftright: RwLock::new(None),
             auxiliary_data: RwLock::new(None),
             needed_borders: NeededBorders::NONE,
+            remaining_topbottom_uses: AtomicUsize::new(0),
+            remaining_leftright_uses: AtomicUsize::new(0),
             remaining_uses: AtomicUsize::new(0),
             full_uses_count_final: 0,
             used_by_transforms_final: vec![],
@@ -136,6 +145,55 @@ impl ModularBuffer {
 
     pub fn has_borders(&self) -> bool {
         self.topbottom.try_read().unwrap().is_some() || self.leftright.try_read().unwrap().is_some()
+    }
+
+    pub fn add_final_border_use(&self, borders: NeededBorders) {
+        if borders.topbottom {
+            self.remaining_topbottom_uses
+                .fetch_add(1, Ordering::Relaxed);
+        }
+        if borders.leftright {
+            self.remaining_leftright_uses
+                .fetch_add(1, Ordering::Relaxed);
+        }
+    }
+
+    // Every cell with needed borders holds one extra "extract credit" per orientation,
+    // released by its producer after its last `extract_needed_borders` call. This guarantees
+    // that the border use counts can only reach zero -- and thus the border storage can only be
+    // freed -- after the producer has finished (re-)extracting the borders, so the freeing
+    // write can never race with the extraction write.
+    pub fn add_border_extract_credit(&self) {
+        self.add_final_border_use(self.needed_borders);
+    }
+
+    pub fn release_border_extract_credit(&self) {
+        self.mark_final_borders_used(self.needed_borders);
+    }
+
+    pub fn mark_final_borders_used(&self, borders: NeededBorders) {
+        if borders.topbottom {
+            let previous = self
+                .remaining_topbottom_uses
+                .fetch_update(Ordering::AcqRel, Ordering::Acquire, |uses| {
+                    Some(uses.checked_sub(1).unwrap())
+                })
+                .unwrap();
+            if previous == 1 {
+                *self.topbottom.try_write().unwrap() = None;
+            }
+        }
+        if borders.leftright {
+            let previous = self
+                .remaining_leftright_uses
+                .fetch_update(Ordering::AcqRel, Ordering::Acquire, |uses| {
+                    Some(uses.checked_sub(1).unwrap())
+                })
+                .unwrap();
+            if previous == 1 {
+                *self.leftright.try_write().unwrap() = None;
+            }
+        }
     }
 
     pub fn extract_needed_borders(&self) -> Result<()> {

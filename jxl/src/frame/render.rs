@@ -476,6 +476,12 @@ impl Frame {
         }
 
         self.lf_global
+            .as_mut()
+            .unwrap()
+            .modular_global
+            .release_transient_border_pins();
+
+        self.lf_global
             .as_ref()
             .unwrap()
             .modular_global

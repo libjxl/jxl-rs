@@ -390,6 +390,7 @@ pub fn make_grids(
                 grid_pos: (grid_pos.0 as usize, grid_pos.1 as usize),
                 missing_final_deps: 0,
                 missing_deps: AtomicUsize::new(0),
+                border_uses: vec![],
             });
             ts
         };
@@ -419,6 +420,13 @@ pub fn make_grids(
         grid.needed_borders.leftright |= needed_borders.leftright;
         if needed_borders.is_empty() {
             grid.full_uses_count_final += 1;
+        } else {
+            grid.add_final_border_use(needed_borders);
+            grid_transform_steps[ts].border_uses.push((
+                input_buffer_idx,
+                input_grid_pos,
+                needed_borders,
+            ));
         }
         if !grid.used_by_transforms_final.contains(&ts) {
             grid_transform_steps[ts].missing_final_deps += 1;
@@ -641,6 +649,13 @@ pub fn make_grids(
         }
     }
 
+    // Reserve the border extract credits; see `add_border_extract_credit`.
+    for bi in buffer_info.iter() {
+        for grid in bi.buffer_grid.iter() {
+            grid.add_border_extract_credit();
+        }
+    }
+
     // Write on transform outputs which step produces them.
     for (ts, step) in grid_transform_steps.iter().enumerate() {
         for &(buf, grid) in step.outputs(buffer_info).iter() {
@@ -703,6 +718,7 @@ pub fn make_grids(
                             grid_pos: (gx, gy),
                             missing_final_deps: 1,
                             missing_deps: AtomicUsize::new(0),
+                            border_uses: vec![],
                         });
                     }
                 }

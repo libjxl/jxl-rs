@@ -7,7 +7,7 @@ use std::fmt::Debug;
 
 use super::{RctOp, RctPermutation};
 use crate::error::Result;
-use crate::frame::modular::buffers::{ModularChannel, with_buffers};
+use crate::frame::modular::buffers::{ModularChannel, NeededBorders, with_buffers};
 use crate::frame::modular::transforms::smooth_squeeze::smooth_upsample;
 use crate::frame::modular::{
     DataStatus, FullModularImage, ModularBufferInfo, ModularGridKind, Predictor,
@@ -80,6 +80,10 @@ pub struct TransformStepChunk {
     // Number of dependencies that are still missing *during this progressive
     // preview phase*.
     pub(super) missing_deps: AtomicUsize,
+
+    // Border buffers this transform uses, as registered at graph construction time; they are
+    // released once every registered user has completed its final render.
+    pub(super) border_uses: Vec<(usize, usize, NeededBorders)>,
 }
 
 impl TransformStepChunk {
@@ -985,6 +989,16 @@ impl TransformStepChunk {
 
         for &(buf, grid) in self.outputs(buffers).iter() {
             buffers[buf].buffer_grid[grid].extract_needed_borders()?;
+            if is_final {
+                // The final render is the last time this cell's borders are extracted.
+                buffers[buf].buffer_grid[grid].release_border_extract_credit();
+            }
+        }
+
+        if is_final {
+            for &(buffer, grid, needed_borders) in self.border_uses.iter() {
+                buffers[buffer].buffer_grid[grid].mark_final_borders_used(needed_borders);
+            }
         }
 
         Ok(())

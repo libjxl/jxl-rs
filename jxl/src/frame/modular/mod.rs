@@ -12,7 +12,7 @@ use jxl_transforms::transform_map::*;
 use crate::bit_reader::BitReader;
 use crate::error::{Error, Result};
 use crate::frame::block_context_map::BlockContextMap;
-use crate::frame::modular::buffers::{ModularBuffer, ModularChannel};
+use crate::frame::modular::buffers::{ModularBuffer, ModularChannel, NeededBorders};
 use crate::frame::modular::transforms::step::{TransformDependency, TransformStepChunk};
 use crate::frame::quantizer::{self, LfQuantFactors, QuantizerParams};
 use crate::frame::{ColorCorrelationParams, DataStatus, HfMetaViews};
@@ -259,6 +259,11 @@ pub struct FullModularImage {
     pipeline_used_channels: Vec<bool>,
     // Stack of transforms that are ready to process
     ready_transform_steps: Mutex<Vec<usize>>,
+    // Border buffers pinned for the duration of the current render pass. Partial renders (e.g.
+    // squeeze upsampling) pick their inputs dynamically, so their border reads cannot be
+    // accounted for statically; instead the borders they may read are pinned while preparing the
+    // pass (with exclusive access) and released once the pass has completed.
+    transient_border_pins: Vec<(usize, usize)>,
 }
 
 impl FullModularImage {
@@ -339,6 +344,7 @@ impl FullModularImage {
                 pending_transforms: BTreeSet::new(),
                 rerendered_buffers: HashSet::new(),
                 delayed_ready_sections: Mutex::new(BTreeSet::new()),
+                transient_border_pins: vec![],
             });
         }
 
@@ -508,6 +514,7 @@ impl FullModularImage {
             pending_transforms: BTreeSet::new(),
             rerendered_buffers: HashSet::new(),
             delayed_ready_sections: Mutex::new(BTreeSet::new()),
+            transient_border_pins: vec![],
         })
     }
 
@@ -627,6 +634,8 @@ impl FullModularImage {
 
         for b in self.section_buffer_indices[section_id].iter().copied() {
             self.buffer_info[b].buffer_grid[grid].extract_needed_borders()?;
+            // Section cells are decoded (and hence extracted) exactly once.
+            self.buffer_info[b].buffer_grid[grid].release_border_extract_credit();
         }
 
         self.has_decoded_data.fetch_or(
@@ -755,19 +764,32 @@ impl FullModularImage {
         mut group_callback: impl FnMut(usize, usize, bool),
     ) {
         for t in self.pending_transforms.iter().cloned() {
-            if self.transform_steps[t].ready_for_final_render() {
+            let is_final = self.transform_steps[t].ready_for_final_render();
+            if is_final {
                 self.transform_steps[t].set_squeeze_upsample(None);
             }
             // If this will produce output, tell the caller.
             if let Some((g, c)) = self.transform_steps[t].output_info() {
-                group_callback(g, c, self.transform_steps[t].ready_for_final_render());
+                group_callback(g, c, is_final);
             }
             let mut has_current_deps = false;
             // Add dependency edges from *all* the buffers that will be modified and that are used.
-            for TransformDependency { buffer, grid, .. } in self.transform_steps[t]
+            for TransformDependency {
+                buffer,
+                grid,
+                order_only,
+            } in self.transform_steps[t]
                 .dependencies(&self.buffer_info, frame_header)
                 .iter()
             {
+                if !is_final && *order_only {
+                    // Partial renders choose their inputs dynamically (e.g. squeeze
+                    // upsampling), so their border reads are not part of the static border
+                    // use counts. Pin those borders for the duration of this render pass.
+                    self.buffer_info[*buffer].buffer_grid[*grid]
+                        .add_final_border_use(NeededBorders::BOTH);
+                    self.transient_border_pins.push((*buffer, *grid));
+                }
                 if self.rerendered_buffers.contains(&(*buffer, *grid)) {
                     let buf = &mut self.buffer_info[*buffer].buffer_grid[*grid];
                     // TODO(veluca): account for *non-final* uses here, when we actually
@@ -787,6 +809,14 @@ impl FullModularImage {
         self.rerendered_buffers.clear();
         for (s, g) in std::mem::take(&mut *self.delayed_ready_sections.try_lock().unwrap()) {
             self.mark_section_ready(s, g);
+        }
+    }
+
+    // Releases the border pins taken by `prepare_render`. Must only be called once the render
+    // pass has completed, i.e. no transforms are running concurrently.
+    pub fn release_transient_border_pins(&mut self) {
+        for (buffer, grid) in std::mem::take(&mut self.transient_border_pins) {
+            self.buffer_info[buffer].buffer_grid[grid].mark_final_borders_used(NeededBorders::BOTH);
         }
     }
 
