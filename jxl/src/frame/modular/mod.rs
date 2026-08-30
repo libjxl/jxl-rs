@@ -976,6 +976,8 @@ pub fn decode_vardct_lf(
     let r = frame_header.lf_group_rect(group);
     debug!(?r);
     let shrink_rect = |size: (usize, usize), c| {
+        debug_assert!(size.0.is_multiple_of(1 << frame_header.hshift(c)));
+        debug_assert!(size.1.is_multiple_of(1 << frame_header.vshift(c)));
         (
             size.0 >> frame_header.hshift(c),
             size.1 >> frame_header.vshift(c),

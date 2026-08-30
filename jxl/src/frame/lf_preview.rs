@@ -108,6 +108,7 @@ impl Frame {
             RowBuffer::new(data_format.data_type(), 0, 0, 0, ulen)?,
         ];
 
+        // At this point, we already verified that lf_frame or lf_frame_data are present.
         let src = if self.header.frame_type == FrameType::RegularFrame {
             self.decoder_state.lf_frames[0].as_ref().unwrap()
         } else {
@@ -314,9 +315,10 @@ impl Frame {
             return Ok(false);
         }
         let color_type = pixel_format.color_type;
-        let data_format = pixel_format.color_data_format.unwrap();
-        if pixel_format.color_data_format.is_none()
-            || output_buffers.is_empty()
+        let Some(data_format) = pixel_format.color_data_format else {
+            return Ok(false);
+        };
+        if output_buffers.is_empty()
             || !matches!(
                 color_type,
                 JxlColorType::Rgb | JxlColorType::Rgba | JxlColorType::Bgr | JxlColorType::Bgra,
