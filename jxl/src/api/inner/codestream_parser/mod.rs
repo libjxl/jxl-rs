@@ -72,7 +72,8 @@ fn validate_output_buffers(
     output_buffers: &[JxlOutputBuffer],
     pixel_format: Option<&JxlPixelFormat>,
 ) -> Result<()> {
-    let px = pixel_format.unwrap();
+    let px = pixel_format
+        .expect("API usage error: cannot pass output buffers before having color information");
     let expected_len = std::iter::once(&px.color_data_format)
         .chain(px.extra_channel_format.iter())
         .filter(|x| x.is_some())

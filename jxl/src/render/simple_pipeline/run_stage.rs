@@ -99,8 +99,8 @@ impl<T: RenderPipelineInOutStage> RunInOutStage<Image<f64>> for T {
                 vec![
                     T::InputT::default();
                     // Double rounding make sure that we always have enough buffer for reading a whole SIMD lane.
-                    round_up_size_to_cache_line::<T::OutputT>(
-                        round_up_size_to_cache_line::<T::OutputT>(chunk_size)
+                    round_up_size_to_cache_line::<T::InputT>(
+                        round_up_size_to_cache_line::<T::InputT>(chunk_size)
                             + T::BORDER.0 as usize * 2
                     )
                 ];

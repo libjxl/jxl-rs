@@ -60,7 +60,7 @@ pub struct FrameInfo {
 
     // Section information.
     sections: VecDeque<SectionBuffer>,
-    section_size: usize,
+    section_size: u64,
     ready_section_data: usize,
     section_state: SectionState,
 
@@ -189,7 +189,7 @@ impl FrameInfo {
         output_profile: &JxlColorProfile,
         process_mode: ProcessMode,
     ) -> Result<()> {
-        self.section_size = toc.entries.iter().map(|x| *x as usize).sum();
+        self.section_size = toc.entries.iter().map(|x| *x as u64).sum();
         self.ready_section_data = 0;
 
         self.lf_global_section = None;
@@ -286,7 +286,7 @@ impl FrameInfo {
             frame.prepare_render_pipeline(pixel_format, output_profile)?;
             self.frame = Some(frame);
         } else {
-            let num = cbuf.len().min(self.section_size);
+            let num = (cbuf.len() as u64).min(self.section_size) as usize;
             cbuf.consume(num);
             self.ready_section_data += num;
         }
@@ -333,12 +333,15 @@ impl FrameInfo {
         buf: &mut SmallBuffer,
     ) -> Result<()> {
         let total_size = self.section_size;
-        let need_skip = total_size - self.ready_section_data;
+        let need_skip =
+            (total_size - self.ready_section_data as u64).min(usize::MAX as u64) as usize;
         let skipped = input.skip(need_skip)?;
         buf.mark_consumed(skipped as u64);
         self.ready_section_data += skipped;
-        if self.ready_section_data < total_size {
-            Err(Error::OutOfBounds(total_size - self.ready_section_data))
+        if (self.ready_section_data as u64) < total_size {
+            Err(Error::OutOfBounds(
+                (total_size - self.ready_section_data as u64).min(usize::MAX as u64) as usize,
+            ))
         } else {
             self.sections.clear();
             Ok(())
