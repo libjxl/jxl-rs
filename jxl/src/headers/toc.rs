@@ -43,7 +43,7 @@ impl IncrementalTocReader {
     pub fn new(num_entries: u32, br: &mut BitReader) -> Result<Self> {
         let permuted = bool::read_unconditional(&(), br, &Empty {})?;
         let mut entries = Vec::new();
-        entries.try_reserve(num_entries as usize)?;
+        entries.try_reserve(num_entries.min(4096) as usize)?;
         Ok(Self {
             num_entries,
             permuted,
@@ -79,6 +79,7 @@ impl IncrementalTocReader {
             },
         );
         let entry = u32::read_unconditional(&entry_coder, br, &Empty {})?;
+        self.entries.try_reserve(1)?;
         self.entries.push(entry);
         br.check_for_error()
     }
