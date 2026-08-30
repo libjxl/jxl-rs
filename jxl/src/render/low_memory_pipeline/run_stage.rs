@@ -20,6 +20,7 @@ pub struct ExtraInfo {
     pub(super) start_of_row: bool,
     pub(super) end_of_row: bool,
     pub(super) image_height: usize,
+    pub(super) previous_call_was_previous_row: bool,
 }
 
 impl PipelineBuffer for RowBuffer {
@@ -39,6 +40,7 @@ impl<T: RenderPipelineInPlaceStage> RunInPlaceStage<RowBuffer> for T {
             image_height: _,
             start_of_row,
             end_of_row,
+            previous_call_was_previous_row,
         }: ExtraInfo,
         buffers: &mut [&mut RowBuffer],
         state: Option<&mut ErasedLocalState>,
@@ -57,6 +59,7 @@ impl<T: RenderPipelineInPlaceStage> RunInPlaceStage<RowBuffer> for T {
             xend - xstart,
             &mut rows[..],
             state,
+            previous_call_was_previous_row,
         );
     }
 }
@@ -73,6 +76,7 @@ impl<T: RenderPipelineInOutStage> RunInOutStage<RowBuffer> for T {
             image_height,
             start_of_row,
             end_of_row,
+            previous_call_was_previous_row,
         }: ExtraInfo,
         input_buffers: &[&RowBuffer],
         output_buffers: &mut [RowBuffer],
@@ -140,6 +144,7 @@ impl<T: RenderPipelineInOutStage> RunInOutStage<RowBuffer> for T {
             &input_rows,
             &mut output_rows,
             state,
+            previous_call_was_previous_row,
         );
     }
 }

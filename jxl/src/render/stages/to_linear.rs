@@ -128,6 +128,7 @@ impl RenderPipelineInPlaceStage for ToLinearStage {
         xsize: usize,
         row: &mut [&mut [f32]],
         _state: Option<&mut ErasedLocalState>,
+        _previous_call_was_previous_row: bool,
     ) {
         to_linear_process_dispatch(&self.tf, xsize, row)
     }

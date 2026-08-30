@@ -124,6 +124,7 @@ impl RenderPipelineInPlaceStage for FromLinearStage {
         xsize: usize,
         row: &mut [&mut [f32]],
         _state: Option<&mut ErasedLocalState>,
+        _previous_call_was_previous_row: bool,
     ) {
         from_linear_process_dispatch(&self.tf, xsize, row)
     }

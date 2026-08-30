@@ -78,6 +78,7 @@ impl RenderPipelineInOutStage for HorizontalChromaUpsample {
         input_rows: &Channels<f32>,
         output_rows: &mut ChannelsMut<f32>,
         _state: Option<&mut ErasedLocalState>,
+        _previous_call_was_previous_row: bool,
     ) {
         let input = &input_rows[0];
         let output = &mut output_rows[0];
@@ -165,6 +166,7 @@ impl RenderPipelineInOutStage for VerticalChromaUpsample {
         input_rows: &Channels<f32>,
         output_rows: &mut ChannelsMut<f32>,
         _state: Option<&mut ErasedLocalState>,
+        _previous_call_was_previous_row: bool,
     ) {
         let input = &input_rows[0];
         let output = &mut output_rows[0];

@@ -413,6 +413,7 @@ impl<const N: usize, const SHIFT: u8> RenderPipelineInOutStage for Upsample<N, S
         input_rows: &Channels<f32>,
         output_rows: &mut ChannelsMut<f32>,
         state: Option<&mut ErasedLocalState>,
+        _previous_call_was_previous_row: bool,
     ) {
         let input = &input_rows[0];
         let state: &mut UpsampleState = state.unwrap().downcast_mut().unwrap();

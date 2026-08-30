@@ -133,6 +133,7 @@ fn upsample_lf_group(
                     &input_channels,
                     &mut output_channels,
                     Some(state.as_mut()),
+                    false,
                 );
             }
 

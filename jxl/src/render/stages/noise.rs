@@ -7,6 +7,7 @@
 
 use jxl_simd::{F32SimdVec, I32SimdVec, SimdDescriptor, SimdMask, simd_function};
 
+use crate::error::Result;
 use crate::features::noise::Noise;
 use crate::frame::color_correlation_map::ColorCorrelationParams;
 use crate::render::{
@@ -87,6 +88,10 @@ impl RenderPipelineInOutStage for ConvolveNoiseStage {
     const SHIFT: (u8, u8) = (0, 0);
     const BORDER: (u8, u8) = (2, 2);
 
+    fn init_local_state(&self) -> Result<Option<Box<ErasedLocalState>>> {
+        Ok(Some(Box::new(Vec::<f32>::new())))
+    }
+
     fn uses_channel(&self, c: usize) -> bool {
         c == self.channel
     }
@@ -98,6 +103,7 @@ impl RenderPipelineInOutStage for ConvolveNoiseStage {
         input_rows: &Channels<f32>,
         output_rows: &mut ChannelsMut<f32>,
         _state: Option<&mut ErasedLocalState>,
+        _previous_call_was_previous_row: bool,
     ) {
         let input = &input_rows[0];
         convolve_noise_simd_dispatch(input, output_rows[0][0], xsize);
@@ -251,6 +257,7 @@ impl RenderPipelineInPlaceStage for AddNoiseStage {
         xsize: usize,
         row: &mut [&mut [f32]],
         _state: Option<&mut ErasedLocalState>,
+        _previous_call_was_previous_row: bool,
     ) {
         let noise = self.noise.try_read().unwrap();
         if noise.lut == [0.0; 8] {

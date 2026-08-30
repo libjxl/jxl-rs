@@ -251,6 +251,7 @@ impl RenderPipelineInPlaceStage for XybStage {
         xsize: usize,
         row: &mut [&mut [f32]],
         _state: Option<&mut ErasedLocalState>,
+        _previous_call_was_previous_row: bool,
     ) {
         let [row_x, row_y, row_b] = row else {
             panic!(

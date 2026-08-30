@@ -147,6 +147,7 @@ impl RenderPipelineInOutStage for Epf2Stage {
         input_rows: &Channels<f32>,
         output_rows: &mut ChannelsMut<f32>,
         _state: Option<&mut ErasedLocalState>,
+        _previous_call_was_previous_row: bool,
     ) {
         epf2_process_row_chunk_dispatch(self, (xpos, ypos), xsize, input_rows, output_rows);
     }
