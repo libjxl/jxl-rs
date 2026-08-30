@@ -6,7 +6,7 @@
 use std::num::Wrapping;
 
 use super::{F32SimdVec, I32SimdVec, SimdDescriptor, SimdMask, U8SimdVec, U16SimdVec};
-use crate::{U32SimdVec, f16, impl_f32_array_interface};
+use crate::{U32SimdVec, U64SimdVec, f16, impl_f32_array_interface};
 
 #[derive(Clone, Copy, Debug)]
 pub struct ScalarDescriptor;
@@ -14,6 +14,7 @@ pub struct ScalarDescriptor;
 impl SimdDescriptor for ScalarDescriptor {
     type F32Vec = f32;
     type I32Vec = Wrapping<i32>;
+    type U64Vec = Wrapping<u64>;
     type U32Vec = Wrapping<u32>;
     type U8Vec = u8;
     type U16Vec = u16;
@@ -332,6 +333,42 @@ impl U32SimdVec for Wrapping<u32> {
     #[inline(always)]
     fn shr<const AMOUNT_U: u32, const AMOUNT_I: i32>(self) -> Self {
         Wrapping(self.0 >> AMOUNT_U)
+    }
+}
+
+impl U64SimdVec for Wrapping<u64> {
+    type Descriptor = ScalarDescriptor;
+
+    const LEN: usize = 1;
+
+    #[inline(always)]
+    fn splat(_d: Self::Descriptor, v: u64) -> Self {
+        Wrapping(v)
+    }
+
+    #[inline(always)]
+    fn load(_d: Self::Descriptor, mem: &[u64]) -> Self {
+        Wrapping(mem[0])
+    }
+
+    #[inline(always)]
+    fn store(&self, mem: &mut [u64]) {
+        mem[0] = self.0;
+    }
+
+    #[inline(always)]
+    fn shl<const AMOUNT_U: u32, const AMOUNT_I: i32>(self) -> Self {
+        Wrapping(self.0 << AMOUNT_U)
+    }
+
+    #[inline(always)]
+    fn shr<const AMOUNT_U: u32, const AMOUNT_I: i32>(self) -> Self {
+        Wrapping(self.0 >> AMOUNT_U)
+    }
+
+    #[inline(always)]
+    fn bitcast_to_u32(self) -> Wrapping<u32> {
+        Wrapping(self.0 as u32)
     }
 }
 

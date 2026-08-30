@@ -10,7 +10,7 @@ use std::ops::{
 };
 
 use super::super::{F32SimdVec, I32SimdVec, SimdDescriptor, SimdMask, U8SimdVec, U16SimdVec};
-use crate::{U32SimdVec, impl_f32_array_interface};
+use crate::{U32SimdVec, U64SimdVec, impl_f32_array_interface};
 
 // Safety invariant: this type is only ever constructed if sse4.2 is available.
 #[derive(Clone, Copy, Debug)]
@@ -27,6 +27,7 @@ impl Sse42Descriptor {
 impl SimdDescriptor for Sse42Descriptor {
     type F32Vec = F32VecSse42;
     type I32Vec = I32VecSse42;
+    type U64Vec = U64VecSse42;
     type U32Vec = U32VecSse42;
     type U16Vec = U16VecSse42;
     type U8Vec = U8VecSse42;
@@ -983,6 +984,107 @@ impl U32SimdVec for U32VecSse42 {
         // SAFETY: We know sse2 is available from the safety invariant on `self.1`.
         unsafe { Self(_mm_srli_epi32::<AMOUNT_I>(self.0), self.1) }
     }
+}
+
+#[derive(Clone, Copy, Debug)]
+#[repr(transparent)]
+pub struct U64VecSse42(pub(crate) __m128i, pub(crate) Sse42Descriptor);
+
+impl U64SimdVec for U64VecSse42 {
+    type Descriptor = Sse42Descriptor;
+
+    const LEN: usize = 2;
+
+    #[inline(always)]
+    fn splat(d: Self::Descriptor, v: u64) -> Self {
+        // SAFETY: We know sse2 is available from the safety invariant on `d`.
+        unsafe { Self(_mm_set1_epi64x(v as i64), d) }
+    }
+
+    #[inline(always)]
+    fn load(d: Self::Descriptor, mem: &[u64]) -> Self {
+        assert!(mem.len() >= Self::LEN);
+        // SAFETY: we just checked that `mem` has enough space. Moreover, we know sse2 is available
+        // from the safety invariant on `d`.
+        unsafe { Self(_mm_loadu_si128(mem.as_ptr().cast()), d) }
+    }
+
+    #[inline(always)]
+    fn store(&self, mem: &mut [u64]) {
+        assert!(mem.len() >= Self::LEN);
+        // SAFETY: we just checked that `mem` has enough space. Moreover, we know sse2 is available
+        // from the safety invariant on `self.1`.
+        unsafe { _mm_storeu_si128(mem.as_mut_ptr().cast(), self.0) }
+    }
+
+    #[inline(always)]
+    fn shl<const AMOUNT_U: u32, const AMOUNT_I: i32>(self) -> Self {
+        // SAFETY: We know sse2 is available from the safety invariant on `self.1`.
+        unsafe { Self(_mm_slli_epi64::<AMOUNT_I>(self.0), self.1) }
+    }
+
+    #[inline(always)]
+    fn shr<const AMOUNT_U: u32, const AMOUNT_I: i32>(self) -> Self {
+        // SAFETY: We know sse2 is available from the safety invariant on `self.1`.
+        unsafe { Self(_mm_srli_epi64::<AMOUNT_I>(self.0), self.1) }
+    }
+
+    #[inline(always)]
+    fn bitcast_to_u32(self) -> U32VecSse42 {
+        U32VecSse42(self.0, self.1)
+    }
+}
+
+impl Add<U64VecSse42> for U64VecSse42 {
+    type Output = U64VecSse42;
+    fn_sse42!(this: U64VecSse42, fn add(rhs: U64VecSse42) -> U64VecSse42 {
+        U64VecSse42(_mm_add_epi64(this.0, rhs.0), this.1)
+    });
+}
+
+impl AddAssign<U64VecSse42> for U64VecSse42 {
+    fn_sse42!(this: &mut U64VecSse42, fn add_assign(rhs: U64VecSse42) {
+        this.0 = _mm_add_epi64(this.0, rhs.0)
+    });
+}
+
+impl BitAnd<U64VecSse42> for U64VecSse42 {
+    type Output = U64VecSse42;
+    fn_sse42!(this: U64VecSse42, fn bitand(rhs: U64VecSse42) -> U64VecSse42 {
+        U64VecSse42(_mm_and_si128(this.0, rhs.0), this.1)
+    });
+}
+
+impl BitAndAssign<U64VecSse42> for U64VecSse42 {
+    fn_sse42!(this: &mut U64VecSse42, fn bitand_assign(rhs: U64VecSse42) {
+        this.0 = _mm_and_si128(this.0, rhs.0)
+    });
+}
+
+impl BitOr<U64VecSse42> for U64VecSse42 {
+    type Output = U64VecSse42;
+    fn_sse42!(this: U64VecSse42, fn bitor(rhs: U64VecSse42) -> U64VecSse42 {
+        U64VecSse42(_mm_or_si128(this.0, rhs.0), this.1)
+    });
+}
+
+impl BitOrAssign<U64VecSse42> for U64VecSse42 {
+    fn_sse42!(this: &mut U64VecSse42, fn bitor_assign(rhs: U64VecSse42) {
+        this.0 = _mm_or_si128(this.0, rhs.0)
+    });
+}
+
+impl BitXor<U64VecSse42> for U64VecSse42 {
+    type Output = U64VecSse42;
+    fn_sse42!(this: U64VecSse42, fn bitxor(rhs: U64VecSse42) -> U64VecSse42 {
+        U64VecSse42(_mm_xor_si128(this.0, rhs.0), this.1)
+    });
+}
+
+impl BitXorAssign<U64VecSse42> for U64VecSse42 {
+    fn_sse42!(this: &mut U64VecSse42, fn bitxor_assign(rhs: U64VecSse42) {
+        this.0 = _mm_xor_si128(this.0, rhs.0)
+    });
 }
 
 #[derive(Clone, Copy, Debug)]

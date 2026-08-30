@@ -12,7 +12,7 @@ use std::ops::{
 use super::super::{
     AvxDescriptor, F32SimdVec, I32SimdVec, SimdDescriptor, SimdMask, U8SimdVec, U16SimdVec,
 };
-use crate::{Sse42Descriptor, U32SimdVec, impl_f32_array_interface};
+use crate::{Sse42Descriptor, U32SimdVec, U64SimdVec, impl_f32_array_interface};
 
 // Safety invariant: this type is only ever constructed if avx512f and avx512bw are available.
 #[derive(Clone, Copy, Debug)]
@@ -42,6 +42,7 @@ pub struct Bf16Table8Avx512(__m512);
 impl SimdDescriptor for Avx512Descriptor {
     type F32Vec = F32VecAvx512;
     type I32Vec = I32VecAvx512;
+    type U64Vec = U64VecAvx512;
     type U32Vec = U32VecAvx512;
     type U8Vec = U8VecAvx512;
     type U16Vec = U16VecAvx512;
@@ -1223,6 +1224,107 @@ impl U32SimdVec for U32VecAvx512 {
         // SAFETY: We know avx512f is available from the safety invariant on `self.1`.
         unsafe { Self(_mm512_srli_epi32::<AMOUNT_U>(self.0), self.1) }
     }
+}
+
+#[derive(Clone, Copy, Debug)]
+#[repr(transparent)]
+pub struct U64VecAvx512(pub(crate) __m512i, pub(crate) Avx512Descriptor);
+
+impl U64SimdVec for U64VecAvx512 {
+    type Descriptor = Avx512Descriptor;
+
+    const LEN: usize = 8;
+
+    #[inline(always)]
+    fn splat(d: Self::Descriptor, v: u64) -> Self {
+        // SAFETY: We know avx512f is available from the safety invariant on `d`.
+        unsafe { Self(_mm512_set1_epi64(v as i64), d) }
+    }
+
+    #[inline(always)]
+    fn load(d: Self::Descriptor, mem: &[u64]) -> Self {
+        assert!(mem.len() >= Self::LEN);
+        // SAFETY: we just checked that `mem` has enough space. Moreover, we know avx512f is available
+        // from the safety invariant on `d`. _mm512_loadu_si512 supports unaligned loads.
+        unsafe { Self(_mm512_loadu_si512(mem.as_ptr().cast()), d) }
+    }
+
+    #[inline(always)]
+    fn store(&self, mem: &mut [u64]) {
+        assert!(mem.len() >= Self::LEN);
+        // SAFETY: we just checked that `mem` has enough space. Moreover, we know avx512f is available
+        // from the safety invariant on `self.1`. _mm512_storeu_si512 supports unaligned stores.
+        unsafe { _mm512_storeu_si512(mem.as_mut_ptr().cast(), self.0) }
+    }
+
+    #[inline(always)]
+    fn shl<const AMOUNT_U: u32, const AMOUNT_I: i32>(self) -> Self {
+        // SAFETY: We know avx512f is available from the safety invariant on `self.1`.
+        unsafe { Self(_mm512_slli_epi64::<AMOUNT_U>(self.0), self.1) }
+    }
+
+    #[inline(always)]
+    fn shr<const AMOUNT_U: u32, const AMOUNT_I: i32>(self) -> Self {
+        // SAFETY: We know avx512f is available from the safety invariant on `self.1`.
+        unsafe { Self(_mm512_srli_epi64::<AMOUNT_U>(self.0), self.1) }
+    }
+
+    #[inline(always)]
+    fn bitcast_to_u32(self) -> U32VecAvx512 {
+        U32VecAvx512(self.0, self.1)
+    }
+}
+
+impl Add<U64VecAvx512> for U64VecAvx512 {
+    type Output = U64VecAvx512;
+    fn_avx!(this: U64VecAvx512, fn add(rhs: U64VecAvx512) -> U64VecAvx512 {
+        U64VecAvx512(_mm512_add_epi64(this.0, rhs.0), this.1)
+    });
+}
+
+impl AddAssign<U64VecAvx512> for U64VecAvx512 {
+    fn_avx!(this: &mut U64VecAvx512, fn add_assign(rhs: U64VecAvx512) {
+        this.0 = _mm512_add_epi64(this.0, rhs.0);
+    });
+}
+
+impl BitAnd<U64VecAvx512> for U64VecAvx512 {
+    type Output = U64VecAvx512;
+    fn_avx!(this: U64VecAvx512, fn bitand(rhs: U64VecAvx512) -> U64VecAvx512 {
+        U64VecAvx512(_mm512_and_si512(this.0, rhs.0), this.1)
+    });
+}
+
+impl BitAndAssign<U64VecAvx512> for U64VecAvx512 {
+    fn_avx!(this: &mut U64VecAvx512, fn bitand_assign(rhs: U64VecAvx512) {
+        this.0 = _mm512_and_si512(this.0, rhs.0);
+    });
+}
+
+impl BitOr<U64VecAvx512> for U64VecAvx512 {
+    type Output = U64VecAvx512;
+    fn_avx!(this: U64VecAvx512, fn bitor(rhs: U64VecAvx512) -> U64VecAvx512 {
+        U64VecAvx512(_mm512_or_si512(this.0, rhs.0), this.1)
+    });
+}
+
+impl BitOrAssign<U64VecAvx512> for U64VecAvx512 {
+    fn_avx!(this: &mut U64VecAvx512, fn bitor_assign(rhs: U64VecAvx512) {
+        this.0 = _mm512_or_si512(this.0, rhs.0);
+    });
+}
+
+impl BitXor<U64VecAvx512> for U64VecAvx512 {
+    type Output = U64VecAvx512;
+    fn_avx!(this: U64VecAvx512, fn bitxor(rhs: U64VecAvx512) -> U64VecAvx512 {
+        U64VecAvx512(_mm512_xor_si512(this.0, rhs.0), this.1)
+    });
+}
+
+impl BitXorAssign<U64VecAvx512> for U64VecAvx512 {
+    fn_avx!(this: &mut U64VecAvx512, fn bitxor_assign(rhs: U64VecAvx512) {
+        this.0 = _mm512_xor_si512(this.0, rhs.0);
+    });
 }
 
 #[derive(Clone, Copy, Debug)]

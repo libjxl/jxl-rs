@@ -41,6 +41,8 @@ pub trait SimdDescriptor: Sized + Copy + Debug + Send + Sync {
 
     type I32Vec: I32SimdVec<Descriptor = Self>;
 
+    type U64Vec: U64SimdVec<Descriptor = Self>;
+
     type U32Vec: U32SimdVec<Descriptor = Self>;
 
     type U16Vec: U16SimdVec<Descriptor = Self>;
@@ -320,6 +322,41 @@ pub trait I32SimdVec:
     fn store_u8(self, dest: &mut [u8]);
 }
 
+pub trait U64SimdVec:
+    Sized
+    + Copy
+    + Debug
+    + Send
+    + Sync
+    + Add<Self, Output = Self>
+    + BitAnd<Self, Output = Self>
+    + BitOr<Self, Output = Self>
+    + BitXor<Self, Output = Self>
+    + AddAssign<Self>
+    + BitAndAssign<Self>
+    + BitOrAssign<Self>
+    + BitXorAssign<Self>
+{
+    type Descriptor: SimdDescriptor;
+
+    #[allow(dead_code)]
+    const LEN: usize;
+
+    fn splat(d: Self::Descriptor, v: u64) -> Self;
+
+    // Requires `mem.len() >= Self::LEN` or it will panic.
+    fn load(d: Self::Descriptor, mem: &[u64]) -> Self;
+
+    // Requires `mem.len() >= Self::LEN` or it will panic.
+    fn store(&self, mem: &mut [u64]);
+
+    fn shl<const AMOUNT_U: u32, const AMOUNT_I: i32>(self) -> Self;
+
+    fn shr<const AMOUNT_U: u32, const AMOUNT_I: i32>(self) -> Self;
+
+    fn bitcast_to_u32(self) -> <<Self as U64SimdVec>::Descriptor as SimdDescriptor>::U32Vec;
+}
+
 pub trait U32SimdVec: Sized + Copy + Debug + Send + Sync {
     type Descriptor: SimdDescriptor;
 
@@ -455,7 +492,7 @@ mod test {
 
     use crate::{
         F32SimdVec, I32SimdVec, ScalarDescriptor, SimdDescriptor, U8SimdVec, U16SimdVec,
-        test_all_instruction_sets,
+        U64SimdVec, test_all_instruction_sets,
     };
 
     enum Distribution {
@@ -1679,4 +1716,70 @@ mod test {
         });
     }
     test_all_instruction_sets!(test_i32_load_from_u16);
+
+    fn test_u64_operations<D: SimdDescriptor>(d: D) {
+        let len = D::U64Vec::LEN;
+        arbtest::arbtest(|u| {
+            let mut a = vec![0u64; len];
+            let mut b = vec![0u64; len];
+            for i in 0..len {
+                a[i] = u.arbitrary::<u64>()?;
+                b[i] = u.arbitrary::<u64>()?;
+            }
+            let va = D::U64Vec::load(d, &a);
+            let vb = D::U64Vec::load(d, &b);
+
+            // Addition
+            let mut res_add = vec![0u64; len];
+            (va + vb).store(&mut res_add);
+            for i in 0..len {
+                assert_eq!(res_add[i], a[i].wrapping_add(b[i]));
+            }
+
+            // Bitwise XOR
+            let mut res_xor = vec![0u64; len];
+            (va ^ vb).store(&mut res_xor);
+            for i in 0..len {
+                assert_eq!(res_xor[i], a[i] ^ b[i]);
+            }
+
+            // Bitwise AND
+            let mut res_and = vec![0u64; len];
+            (va & vb).store(&mut res_and);
+            for i in 0..len {
+                assert_eq!(res_and[i], a[i] & b[i]);
+            }
+
+            // Bitwise OR
+            let mut res_or = vec![0u64; len];
+            (va | vb).store(&mut res_or);
+            for i in 0..len {
+                assert_eq!(res_or[i], a[i] | b[i]);
+            }
+
+            // Shift left by 23
+            let mut res_shl = vec![0u64; len];
+            crate::shl!(va, 23).store(&mut res_shl);
+            for i in 0..len {
+                assert_eq!(res_shl[i], a[i] << 23);
+            }
+
+            // Shift right by 18
+            let mut res_shr18 = vec![0u64; len];
+            crate::shr!(va, 18).store(&mut res_shr18);
+            for i in 0..len {
+                assert_eq!(res_shr18[i], a[i] >> 18);
+            }
+
+            // Shift right by 5
+            let mut res_shr5 = vec![0u64; len];
+            crate::shr!(va, 5).store(&mut res_shr5);
+            for i in 0..len {
+                assert_eq!(res_shr5[i], a[i] >> 5);
+            }
+
+            Ok(())
+        });
+    }
+    test_all_instruction_sets!(test_u64_operations);
 }

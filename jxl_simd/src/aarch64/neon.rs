@@ -10,7 +10,7 @@ use std::ops::{
 };
 
 use super::super::{F32SimdVec, I32SimdVec, SimdDescriptor, SimdMask, U8SimdVec, U16SimdVec};
-use crate::U32SimdVec;
+use crate::{U32SimdVec, U64SimdVec};
 
 // Safety invariant: this type is only ever constructed if neon is available.
 #[derive(Clone, Copy, Debug)]
@@ -34,6 +34,8 @@ impl SimdDescriptor for NeonDescriptor {
     type F32Vec = F32VecNeon;
 
     type I32Vec = I32VecNeon;
+
+    type U64Vec = U64VecNeon;
 
     type U32Vec = U32VecNeon;
 
@@ -862,6 +864,124 @@ impl U32SimdVec for U32VecNeon {
     fn shr<const AMOUNT_U: u32, const AMOUNT_I: i32>(self) -> Self {
         // SAFETY: We know neon is available from the safety invariant on `self.1`.
         unsafe { Self(vshrq_n_u32::<AMOUNT_I>(self.0), self.1) }
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+#[repr(transparent)]
+pub struct U64VecNeon(uint64x2_t, NeonDescriptor);
+
+impl U64SimdVec for U64VecNeon {
+    type Descriptor = NeonDescriptor;
+
+    const LEN: usize = 2;
+
+    #[inline(always)]
+    fn splat(d: Self::Descriptor, v: u64) -> Self {
+        // SAFETY: We know neon is available from the safety invariant on `d`.
+        unsafe { Self(vdupq_n_u64(v), d) }
+    }
+
+    #[inline(always)]
+    fn load(d: Self::Descriptor, mem: &[u64]) -> Self {
+        assert!(mem.len() >= Self::LEN);
+        // SAFETY: we just checked that `mem` has enough space. Moreover, we know neon is available
+        // from the safety invariant on `d`.
+        unsafe { Self(vld1q_u64(mem.as_ptr()), d) }
+    }
+
+    #[inline(always)]
+    fn store(&self, mem: &mut [u64]) {
+        assert!(mem.len() >= Self::LEN);
+        // SAFETY: we just checked that `mem` has enough space. Moreover, we know neon is available
+        // from the safety invariant on `self.1`.
+        unsafe { vst1q_u64(mem.as_mut_ptr(), self.0) }
+    }
+
+    #[inline(always)]
+    fn shl<const AMOUNT_U: u32, const AMOUNT_I: i32>(self) -> Self {
+        // SAFETY: We know neon is available from the safety invariant on `self.1`.
+        unsafe { Self(vshlq_n_u64::<AMOUNT_I>(self.0), self.1) }
+    }
+
+    #[inline(always)]
+    fn shr<const AMOUNT_U: u32, const AMOUNT_I: i32>(self) -> Self {
+        // SAFETY: We know neon is available from the safety invariant on `self.1`.
+        unsafe { Self(vshrq_n_u64::<AMOUNT_I>(self.0), self.1) }
+    }
+
+    fn_neon! {
+        fn bitcast_to_u32(this: U64VecNeon) -> U32VecNeon {
+            U32VecNeon(vreinterpretq_u32_u64(this.0), this.1)
+        }
+    }
+}
+
+impl Add<U64VecNeon> for U64VecNeon {
+    type Output = U64VecNeon;
+    fn_neon! {
+        fn add(this: U64VecNeon, rhs: U64VecNeon) -> U64VecNeon {
+            U64VecNeon(vaddq_u64(this.0, rhs.0), this.1)
+        }
+    }
+}
+
+impl AddAssign<U64VecNeon> for U64VecNeon {
+    fn_neon! {
+        fn add_assign(this: &mut U64VecNeon, rhs: U64VecNeon) {
+            this.0 = vaddq_u64(this.0, rhs.0);
+        }
+    }
+}
+
+impl BitAnd<U64VecNeon> for U64VecNeon {
+    type Output = U64VecNeon;
+    fn_neon! {
+        fn bitand(this: U64VecNeon, rhs: U64VecNeon) -> U64VecNeon {
+            U64VecNeon(vandq_u64(this.0, rhs.0), this.1)
+        }
+    }
+}
+
+impl BitAndAssign<U64VecNeon> for U64VecNeon {
+    fn_neon! {
+        fn bitand_assign(this: &mut U64VecNeon, rhs: U64VecNeon) {
+            this.0 = vandq_u64(this.0, rhs.0);
+        }
+    }
+}
+
+impl BitOr<U64VecNeon> for U64VecNeon {
+    type Output = U64VecNeon;
+    fn_neon! {
+        fn bitor(this: U64VecNeon, rhs: U64VecNeon) -> U64VecNeon {
+            U64VecNeon(vorrq_u64(this.0, rhs.0), this.1)
+        }
+    }
+}
+
+impl BitOrAssign<U64VecNeon> for U64VecNeon {
+    fn_neon! {
+        fn bitor_assign(this: &mut U64VecNeon, rhs: U64VecNeon) {
+            this.0 = vorrq_u64(this.0, rhs.0);
+        }
+    }
+}
+
+impl BitXor<U64VecNeon> for U64VecNeon {
+    type Output = U64VecNeon;
+    fn_neon! {
+        fn bitxor(this: U64VecNeon, rhs: U64VecNeon) -> U64VecNeon {
+            U64VecNeon(veorq_u64(this.0, rhs.0), this.1)
+        }
+    }
+}
+
+impl BitXorAssign<U64VecNeon> for U64VecNeon {
+    fn_neon! {
+        fn bitxor_assign(this: &mut U64VecNeon, rhs: U64VecNeon) {
+            this.0 = veorq_u64(this.0, rhs.0);
+        }
     }
 }
 
