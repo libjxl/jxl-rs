@@ -29,7 +29,6 @@ use crate::render::buffer_splitter::BufferSplitter;
 use crate::render::stages::*;
 use crate::render::{LowMemoryRenderPipeline, RenderPipeline, RenderPipelineBuilder};
 use crate::util::SmallVec;
-use crate::util::sync::atomic::{AtomicUsize, Ordering};
 use crate::util::sync::{Arc, RwLock};
 
 #[cfg(test)]
@@ -380,8 +379,6 @@ impl Frame {
                 BTreeSet::new()
             };
 
-        let ready_steps = modular_global.take_ready_steps();
-
         for g in extra_groups_to_vardct_render.iter() {
             let sz = self.header.group_rect(*g).size;
             let area = sz.0 * sz.1;
@@ -392,6 +389,7 @@ impl Frame {
 
         const TRANSFORM_STEPS_PER_TASK: usize = 3;
 
+        #[derive(Debug)]
         enum RenderStep<'a> {
             Decode {
                 group: usize,
@@ -400,26 +398,33 @@ impl Frame {
             FlushVarDCT {
                 group: usize,
             },
-            RunTransformSteps {
-                steps: SmallVec<usize, TRANSFORM_STEPS_PER_TASK>,
-            },
+            RunTransformSteps,
         }
 
-        let render_steps: Vec<_> = ready_steps
-            .chunks(TRANSFORM_STEPS_PER_TASK)
-            .map(|x| RenderStep::RunTransformSteps {
-                steps: x.iter().copied().collect(),
+        let num_transform_tasks = modular_global
+            .num_ready_steps()
+            .div_ceil(TRANSFORM_STEPS_PER_TASK);
+        let mut render_steps: Vec<_> = groups
+            .into_iter()
+            .map(|(g, p)| RenderStep::Decode {
+                group: g,
+                passes: p,
             })
             .chain(
                 extra_groups_to_vardct_render
                     .iter()
                     .map(|x| RenderStep::FlushVarDCT { group: *x }),
             )
-            .chain(groups.into_iter().map(|(g, p)| RenderStep::Decode {
-                group: g,
-                passes: p,
-            }))
+            .chain((0..num_transform_tasks).map(|_| RenderStep::RunTransformSteps))
             .collect();
+
+        // Note that sorting by group has noticeable positive effects on memory usage,
+        // and also on performance by virtue of increased locality.
+        render_steps.sort_unstable_by_key(|s| match s {
+            RenderStep::Decode { group, .. } => *group,
+            RenderStep::FlushVarDCT { group } => *group,
+            RenderStep::RunTransformSteps => usize::MAX,
+        });
 
         // STEP 4: actually run the steps.
 
@@ -432,7 +437,10 @@ impl Frame {
             Ok(())
         };
 
-        let run_step = |i| {
+        // Avoid significantly more than one thread per largest-group worth of work.
+        let max_threads = groups_of_work.div_ceil(THREAD_COUNT_DENOMINATOR).max(1);
+
+        parallel_runner.run_ordered(render_steps.len(), Some(max_threads), &|i| {
             match &render_steps[i] {
                 RenderStep::Decode { group, passes } => {
                     let mut new_passes: SmallVec<_, 11> = passes.iter().cloned().collect();
@@ -446,37 +454,16 @@ impl Frame {
                 RenderStep::FlushVarDCT { group } => {
                     self.decode_hf_group(*group, &mut [], &buffer_splitter, true)?;
                 }
-                RenderStep::RunTransformSteps { steps } => {
-                    let mut steps = steps.iter().copied().collect();
+                RenderStep::RunTransformSteps => {
                     self.lf_global
                         .as_ref()
                         .unwrap()
                         .modular_global
-                        .run_transforms(&self.header, &pass_to_pipeline, &mut steps)?;
+                        .run_transforms(&self.header, &pass_to_pipeline)?;
                 }
             }
             Ok(())
-        };
-
-        // Avoid significantly more than one thread per largest-group worth of work.
-        let max_threads = groups_of_work.div_ceil(THREAD_COUNT_DENOMINATOR).max(1);
-
-        let hw_threads = std::thread::available_parallelism()
-            .map(|x| x.get())
-            .unwrap_or(max_threads);
-
-        if render_steps.len() > max_threads && max_threads < hw_threads {
-            let next_index = AtomicUsize::new(0);
-            parallel_runner.run(max_threads, &|_| loop {
-                let t = next_index.fetch_add(1, Ordering::Relaxed);
-                if t >= render_steps.len() {
-                    return Ok(());
-                }
-                run_step(t)?;
-            })?;
-        } else {
-            parallel_runner.run(render_steps.len(), &run_step)?;
-        }
+        })?;
 
         for g in render_steps.iter().filter_map(|x| match x {
             RenderStep::Decode { group, .. } => Some(*group),

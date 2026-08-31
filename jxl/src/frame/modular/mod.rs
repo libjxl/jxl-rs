@@ -257,7 +257,7 @@ pub struct FullModularImage {
     delayed_ready_sections: Mutex<BTreeSet<(usize, usize)>>,
     // Whether each channel is used or not by the render pipeline.
     pipeline_used_channels: Vec<bool>,
-    // Stack of transform steps that are ready to process.
+    // Stack of transforms that are ready to process
     ready_transform_steps: Mutex<Vec<usize>>,
 }
 
@@ -634,28 +634,23 @@ impl FullModularImage {
             Ordering::Relaxed,
         );
 
-        let mut ready_steps = vec![];
         if section_id == 1 {
             self.delayed_ready_sections
                 .lock()
                 .unwrap()
                 .insert((1, grid));
         } else {
-            self.mark_section_ready(section_id, grid, &mut ready_steps);
+            self.mark_section_ready(section_id, grid);
         }
 
         if let Some(pass_to_pipeline) = pass_to_pipeline {
-            self.run_transforms(frame_header, pass_to_pipeline, &mut ready_steps)
+            self.run_transforms(frame_header, pass_to_pipeline)
         } else {
-            self.ready_transform_steps
-                .lock()
-                .unwrap()
-                .extend_from_slice(&ready_steps);
             Ok(())
         }
     }
 
-    fn update_deps(&self, buf: usize, grid: usize, ready_steps: &mut Vec<usize>) {
+    fn update_deps(&self, buf: usize, grid: usize) {
         for t in self.buffer_info[buf].buffer_grid[grid]
             .used_by_transforms_current
             .try_lock()
@@ -663,14 +658,14 @@ impl FullModularImage {
             .drain(..)
         {
             if self.transform_steps[t].current_dep_ready() {
-                ready_steps.push(t);
+                self.ready_transform_steps.lock().unwrap().push(t);
             }
         }
     }
 
-    fn mark_section_ready(&self, section_id: usize, grid: usize, ready_steps: &mut Vec<usize>) {
+    fn mark_section_ready(&self, section_id: usize, grid: usize) {
         for buf in self.section_buffer_indices[section_id].iter().copied() {
-            self.update_deps(buf, grid, ready_steps);
+            self.update_deps(buf, grid);
         }
     }
 
@@ -791,7 +786,7 @@ impl FullModularImage {
         self.pending_transforms.clear();
         self.rerendered_buffers.clear();
         for (s, g) in std::mem::take(&mut *self.delayed_ready_sections.try_lock().unwrap()) {
-            self.mark_section_ready(s, g, &mut self.ready_transform_steps.try_lock().unwrap());
+            self.mark_section_ready(s, g);
         }
     }
 
@@ -801,7 +796,6 @@ impl FullModularImage {
         tfm: usize,
         scratch_space: &mut TransformScratchSpace,
         pass_to_pipeline: &dyn Fn(usize, usize, bool, Image<i32>) -> Result<()>,
-        ready_steps: &mut Vec<usize>,
     ) -> Result<()> {
         self.transform_steps[tfm].do_run(
             frame_header,
@@ -811,7 +805,7 @@ impl FullModularImage {
         )?;
 
         for &(buf, grid) in self.transform_steps[tfm].outputs(&self.buffer_info).iter() {
-            self.update_deps(buf, grid, ready_steps);
+            self.update_deps(buf, grid);
         }
         Ok(())
     }
@@ -820,23 +814,18 @@ impl FullModularImage {
         &self,
         frame_header: &FrameHeader,
         pass_to_pipeline: &dyn Fn(usize, usize, bool, Image<i32>) -> Result<()>,
-        ready_steps: &mut Vec<usize>,
     ) -> Result<()> {
         let mut scratch_space = self.transform_scratch_space.get();
-        while let Some(t) = ready_steps.pop() {
-            self.run_transform(
-                frame_header,
-                t,
-                &mut scratch_space,
-                pass_to_pipeline,
-                ready_steps,
-            )?;
+        loop {
+            let Some(t) = self.ready_transform_steps.lock().unwrap().pop() else {
+                return Ok(());
+            };
+            self.run_transform(frame_header, t, &mut scratch_space, pass_to_pipeline)?;
         }
-        Ok(())
     }
 
-    pub fn take_ready_steps(&mut self) -> Vec<usize> {
-        std::mem::take(self.ready_transform_steps.get_mut().unwrap())
+    pub fn num_ready_steps(&mut self) -> usize {
+        self.ready_transform_steps.get_mut().unwrap().len()
     }
 
     pub fn validate_state_after_transforms(&self) {

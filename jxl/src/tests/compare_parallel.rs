@@ -24,7 +24,7 @@ use crate::image::Image;
 use crate::tests::decode::{compare_frames, decode_internal};
 
 pub struct TestParallelRunner {
-    pub max_threads: usize,
+    max_threads: usize,
 }
 
 impl JxlParallelRunner for TestParallelRunner {
@@ -73,6 +73,10 @@ impl JxlParallelRunner for TestParallelRunner {
         } else {
             Ok(())
         }
+    }
+
+    fn num_threads(&self) -> usize {
+        self.max_threads
     }
 }
 

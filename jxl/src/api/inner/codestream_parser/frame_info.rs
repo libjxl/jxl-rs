@@ -505,22 +505,26 @@ impl FrameInfo {
             let decoder_state = &frame.decoder_state;
             let lf_global = frame.lf_global.as_ref().unwrap();
 
-            parallel_runner.run(self.lf_sections.len(), &|i: usize| -> Result<()> {
-                let lf_section = &self.lf_sections[i];
-                let Section::Lf { group } = &lf_section.section else {
-                    unreachable!()
-                };
-                Frame::decode_lf_group(
-                    header,
-                    decoder_state,
-                    lf_global,
-                    *group,
-                    &mut BitReader::new(&lf_section.data),
-                    lf_splitter.as_ref(),
-                    hf_meta_splitter.as_ref(),
-                )?;
-                Ok(())
-            })?;
+            parallel_runner.run_ordered(
+                self.lf_sections.len(),
+                None,
+                &|i: usize| -> Result<()> {
+                    let lf_section = &self.lf_sections[i];
+                    let Section::Lf { group } = &lf_section.section else {
+                        unreachable!()
+                    };
+                    Frame::decode_lf_group(
+                        header,
+                        decoder_state,
+                        lf_global,
+                        *group,
+                        &mut BitReader::new(&lf_section.data),
+                        lf_splitter.as_ref(),
+                        hf_meta_splitter.as_ref(),
+                    )?;
+                    Ok(())
+                },
+            )?;
         }
 
         for lf_section in self.lf_sections.drain(..) {

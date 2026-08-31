@@ -133,11 +133,12 @@ impl Deref for SmallBuffer {
 pub(crate) struct SequentialRunner;
 
 impl JxlParallelRunner for SequentialRunner {
-    fn run(&mut self, num: usize, fun: &JxlParallelRunnerFun) -> Result<()> {
-        for i in 0..num {
-            fun(i)?
-        }
-        Ok(())
+    fn run(&mut self, _num: usize, _fun: &JxlParallelRunnerFun) -> Result<()> {
+        unreachable!("jxl-rs should only use run_ordered!")
+    }
+
+    fn num_threads(&self) -> usize {
+        1
     }
 }
 
