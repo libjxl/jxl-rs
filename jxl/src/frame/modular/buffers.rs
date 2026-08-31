@@ -254,6 +254,14 @@ impl ModularBuffer {
         Ok(())
     }
 
+    // Whether a use of this buffer is allowed to consume it: either this is a final use, or the
+    // buffer holds partially-rendered data that a later progressive render pass will regenerate
+    // from its (retained) producer inputs.
+    #[inline]
+    pub fn can_consume(&self, is_final: bool) -> bool {
+        (self.produced_by_step.is_some() && self.data_status == DataStatus::Partial) || is_final
+    }
+
     // Gives out a copy of the buffer + auxiliary buffer, marking the buffer as used.
     // If this was the last usage of the buffer, does not actually copy the buffer.
     pub fn get_buffer(&self, can_consume: bool) -> Result<ModularChannel> {

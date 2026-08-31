@@ -763,6 +763,14 @@ impl FullModularImage {
         frame_header: &FrameHeader,
         mut group_callback: impl FnMut(usize, usize, bool),
     ) {
+        // Reset the use counts of partially-rendered buffers that will be re-rendered during
+        // this pass; the uses of this pass are counted below.
+        for &(b, g) in &self.rerendered_buffers {
+            let buf = &self.buffer_info[b].buffer_grid[g];
+            if buf.can_consume(false) {
+                buf.remaining_uses.store(0, Ordering::Relaxed);
+            }
+        }
         for t in self.pending_transforms.iter().cloned() {
             let is_final = self.transform_steps[t].ready_for_final_render();
             if is_final {
@@ -792,8 +800,11 @@ impl FullModularImage {
                 }
                 if self.rerendered_buffers.contains(&(*buffer, *grid)) {
                     let buf = &mut self.buffer_info[*buffer].buffer_grid[*grid];
-                    // TODO(veluca): account for *non-final* uses here, when we actually
-                    // deallocate temporary buffers.
+                    // Account for non-final uses of partially-rendered buffers, so that their
+                    // last use in this pass can consume them.
+                    if !*order_only && buf.can_consume(false) {
+                        buf.remaining_uses.fetch_add(1, Ordering::Relaxed);
+                    }
                     buf.used_by_transforms_current.try_lock().unwrap().push(t);
                     self.transform_steps[t].add_current_dep();
                     has_current_deps = true;
