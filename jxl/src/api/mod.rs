@@ -14,6 +14,8 @@ mod options;
 mod signature;
 mod xyb_constants;
 
+use std::sync::atomic::{AtomicUsize, Ordering};
+
 pub use color::*;
 pub use data_types::*;
 pub use decoder::*;
@@ -84,4 +86,46 @@ pub trait JxlParallelRunner {
     /// This implies that different invocations of `fun(i)` are not allowed
     /// to wait on each other.
     fn run(&mut self, num: usize, fun: &JxlParallelRunnerFun<'_>) -> Result<()>;
+
+    /// Returns an estimate of the number of parallel threads that this parallel
+    /// runner will use.
+    ///
+    /// Note that this is just an optimization hint.
+    fn num_threads(&self) -> usize;
+
+    /// Runs `fun(i)` for each `i` in `0..num`, possibly in parallel.
+    ///
+    /// Equivalent to `run`, but attempts to start tasks in roughly sequential
+    /// order and receives a hint on the number of threads to use.
+    /// This is not a hard guarantee, but doing otherwise might have negative
+    /// performance implications.
+    /// The default implementation uses `run` to start
+    /// `min(num_threads, num, max_threads)` tasks, and uses an atomic counter
+    /// to ensure each task is executed exactly once and approximately in
+    /// order.
+    fn run_ordered(
+        &mut self,
+        num: usize,
+        max_threads: Option<usize>,
+        fun: &JxlParallelRunnerFun<'_>,
+    ) -> Result<()> {
+        let max_threads = max_threads
+            .unwrap_or(usize::MAX)
+            .min(self.num_threads())
+            .min(num);
+        if max_threads <= 1 {
+            for i in 0..num {
+                fun(i)?;
+            }
+            return Ok(());
+        }
+        let next_index = AtomicUsize::new(0);
+        self.run(max_threads, &|_| loop {
+            let t = next_index.fetch_add(1, Ordering::Relaxed);
+            if t >= num {
+                return Ok(());
+            }
+            fun(t)?;
+        })
+    }
 }

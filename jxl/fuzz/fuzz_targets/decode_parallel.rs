@@ -72,6 +72,10 @@ impl JxlParallelRunner for SimpleParallelRunner {
             Ok(())
         }
     }
+
+    fn num_threads(&self) -> usize {
+        self.max_threads
+    }
 }
 
 fn reborrow<'a>(
