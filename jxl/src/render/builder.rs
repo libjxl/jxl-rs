@@ -3,12 +3,15 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
+use std::sync::Arc;
+
 use super::internal::{RenderPipelineShared, Stage};
 use super::stages::ExtendToImageDimensionsStage;
 use super::{RenderPipeline, RenderPipelineInOutStage, RenderPipelineInPlaceStage};
 use crate::api::{JxlColorType, JxlDataFormat};
 use crate::error::{Error, Result};
 use crate::headers::Orientation;
+use crate::image::BufferRecycler;
 use crate::render::StageSpecialCase;
 use crate::render::internal::ChannelInfo;
 use crate::render::save::SaveStage;
@@ -29,7 +32,7 @@ impl<Pipeline: RenderPipeline> RenderPipelineBuilder<Pipeline> {
         downsampling_shift: usize,
         mut log_group_size: usize,
         chunk_size: usize,
-        group_scratch_buffers_limit: Option<usize>,
+        buffer_recycler: Arc<BufferRecycler>,
     ) -> Self {
         info!("creating render pipeline");
         assert!(chunk_size <= u16::MAX as usize);
@@ -57,7 +60,7 @@ impl<Pipeline: RenderPipeline> RenderPipelineBuilder<Pipeline> {
                 chunk_size,
                 extend_stage_index: None,
                 channel_is_used: vec![false; num_channels],
-                group_scratch_buffers_limit,
+                buffer_recycler,
             },
         }
     }
@@ -72,7 +75,7 @@ impl<Pipeline: RenderPipeline> RenderPipelineBuilder<Pipeline> {
         size: (usize, usize),
         downsampling_shift: usize,
         log_group_size: usize,
-        group_scratch_buffers_limit: Option<usize>,
+        buffer_recycler: Arc<BufferRecycler>,
     ) -> Self {
         Self::new_with_chunk_size(
             num_channels,
@@ -80,7 +83,7 @@ impl<Pipeline: RenderPipeline> RenderPipelineBuilder<Pipeline> {
             downsampling_shift,
             log_group_size,
             1 << (log_group_size + downsampling_shift),
-            group_scratch_buffers_limit,
+            buffer_recycler,
         )
     }
 

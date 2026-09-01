@@ -8,7 +8,7 @@ use crate::error::Result;
 use crate::frame::DataStatus;
 use crate::frame::modular::ChannelInfo;
 use crate::headers::bit_depth::BitDepth;
-use crate::image::Image;
+use crate::image::{BufferRecycler, Image};
 use crate::util::sync::atomic::{AtomicUsize, Ordering};
 use crate::util::sync::{Mutex, RwLock};
 
@@ -141,7 +141,7 @@ impl ModularBuffer {
         self.topbottom.try_read().unwrap().is_some() || self.leftright.try_read().unwrap().is_some()
     }
 
-    pub fn extract_needed_borders(&self) -> Result<()> {
+    pub fn extract_needed_borders(&self, recycler: &BufferRecycler) -> Result<()> {
         if self.needed_borders.is_empty() {
             return Ok(());
         }
@@ -155,7 +155,7 @@ impl ModularBuffer {
         }
 
         if self.needed_borders.topbottom {
-            let mut topbottom = Image::<i32>::new((w, 4))?;
+            let mut topbottom = recycler.get_buffer::<i32>((w, 4))?;
             let r0 = chan.data.row(0);
             let r1 = if h > 1 { chan.data.row(1) } else { r0 };
             let rb0 = if h > 1 { chan.data.row(h - 2) } else { r0 };
@@ -168,7 +168,7 @@ impl ModularBuffer {
         }
 
         if self.needed_borders.leftright {
-            let mut leftright = Image::<i32>::new((4, h))?;
+            let mut leftright = recycler.get_buffer::<i32>((4, h))?;
             for y in 0..h {
                 let r = chan.data.row(y);
                 let out = leftright.row_mut(y);
@@ -183,17 +183,22 @@ impl ModularBuffer {
         Ok(())
     }
 
-    pub fn make_buffer(&self, info: &ChannelInfo) -> Result<ModularChannel> {
+    pub fn make_buffer(
+        &self,
+        info: &ChannelInfo,
+        recycler: &BufferRecycler,
+    ) -> Result<ModularChannel> {
+        let data = recycler.get_buffer::<i32>(self.size)?;
         Ok(ModularChannel {
-            data: Image::new(self.size)?,
+            data,
             shift: info.shift,
             bit_depth: info.bit_depth,
         })
     }
 
-    pub fn ensure_buffer(&self, info: &ChannelInfo) -> Result<()> {
+    pub fn ensure_buffer(&self, info: &ChannelInfo, recycler: &BufferRecycler) -> Result<()> {
         if !self.has_buffer() {
-            let buf = self.make_buffer(info)?;
+            let buf = self.make_buffer(info, recycler)?;
             *self.data.try_write().unwrap() = Some(buf);
         }
         Ok(())
@@ -201,7 +206,11 @@ impl ModularBuffer {
 
     // Gives out a copy of the buffer + auxiliary buffer, marking the buffer as used.
     // If this was the last usage of the buffer, does not actually copy the buffer.
-    pub fn get_buffer(&self, can_consume: bool) -> Result<ModularChannel> {
+    pub fn get_buffer(
+        &self,
+        can_consume: bool,
+        recycler: &BufferRecycler,
+    ) -> Result<ModularChannel> {
         if !can_consume || DISABLE_MODULAR_BUFFER_DEALLOCATION_FOR_DEBUG {
             return ModularChannel::try_clone(self.data.try_read().unwrap().as_ref().unwrap());
         }
@@ -223,7 +232,10 @@ impl ModularBuffer {
                             .map(ModularChannel::try_clone);
                     }
                 } else if remaining == 0 {
-                    *self.data.try_write().unwrap() = None;
+                    let old_data = self.data.try_write().unwrap().take();
+                    if let Some(chan) = old_data {
+                        recycler.recycle_buffer(chan.data);
+                    }
                 }
                 Some(remaining)
             },
@@ -236,7 +248,7 @@ impl ModularBuffer {
         (self.produced_by_step.is_some() && self.data_status == DataStatus::Partial) || is_final
     }
 
-    pub fn mark_used(&self, can_consume: bool) {
+    pub fn mark_used(&self, can_consume: bool, recycler: &BufferRecycler) {
         if !can_consume || DISABLE_MODULAR_BUFFER_DEALLOCATION_FOR_DEBUG {
             return;
         }
@@ -246,24 +258,36 @@ impl ModularBuffer {
             |remaining_pre: usize| {
                 let remaining = remaining_pre.checked_sub(1).unwrap();
                 if remaining == 0 {
-                    *self.data.try_write().unwrap() = None;
+                    let old_data = self.data.try_write().unwrap().take();
+                    if let Some(chan) = old_data {
+                        recycler.recycle_buffer(chan.data);
+                    }
                 }
                 Some(remaining)
             },
         );
     }
 
-    pub fn mark_final_use_done(&self) {
+    pub fn mark_final_use_done(&self, recycler: &BufferRecycler) {
         if DISABLE_MODULAR_BUFFER_DEALLOCATION_FOR_DEBUG {
             return;
         }
         let prev = self.remaining_final_uses.fetch_sub(1, Ordering::AcqRel);
         assert_ne!(prev, 0);
         if prev == 1 {
-            *self.topbottom.try_write().unwrap() = None;
-            *self.leftright.try_write().unwrap() = None;
-            *self.auxiliary_data.try_write().unwrap() = None;
-            *self.data.try_write().unwrap() = None;
+            let tb = self.topbottom.try_write().unwrap().take();
+            let lr = self.leftright.try_write().unwrap().take();
+            let _ = self.auxiliary_data.try_write().unwrap().take();
+            let d = self.data.try_write().unwrap().take();
+            if let Some(chan) = d {
+                recycler.recycle_buffer(chan.data);
+            }
+            if let Some(tb_img) = tb {
+                recycler.recycle_buffer(tb_img);
+            }
+            if let Some(lr_img) = lr {
+                recycler.recycle_buffer(lr_img);
+            }
         }
     }
 }
@@ -272,6 +296,7 @@ pub fn with_buffers<T>(
     buffers: &[ModularBufferInfo],
     indices: &[usize],
     grid: usize,
+    recycler: &BufferRecycler,
     f: impl FnOnce(Vec<&mut ModularChannel>) -> Result<T>,
 ) -> Result<T> {
     let mut guards = vec![];
@@ -279,7 +304,7 @@ pub fn with_buffers<T>(
         // Allocate buffers if they are not present.
         let buf = &buffers[*i];
         let b = &buf.buffer_grid[grid];
-        b.ensure_buffer(&buf.info)?;
+        b.ensure_buffer(&buf.info, recycler)?;
 
         // Skip zero-sized *tiles*.
         //

@@ -37,7 +37,7 @@ use crate::headers::CustomTransformData;
 use crate::headers::color_encoding::ColorSpace;
 use crate::headers::frame_header::{Encoding, FrameHeader, FrameType};
 use crate::headers::toc::Toc;
-use crate::image::{Image, Rect};
+use crate::image::{BufferRecycler, Image, Rect};
 #[cfg(test)]
 use crate::render::SimpleRenderPipeline;
 use crate::render::buffer_splitter::BufferSplitter;
@@ -280,6 +280,8 @@ impl Frame {
 
         let num_extra_channels = image_metadata.extra_channel_info.len();
 
+        let group_dim = frame_header.group_dim();
+
         Ok(Self {
             #[cfg(test)]
             use_simple_pipeline: decoder_state.use_simple_pipeline,
@@ -304,6 +306,7 @@ impl Frame {
             color_correlation_params: Arc::new(RwLock::new(ColorCorrelationParams::default())),
             epf_sigma: Arc::new(RwLock::new(SigmaSource::default())),
             dirty_lf_groups: BTreeSet::new(),
+            buffer_recycler: Arc::new(BufferRecycler::new(group_dim)),
         })
     }
 
@@ -438,6 +441,7 @@ impl Frame {
                 &self.decoder_state.file_header.image_metadata,
                 self.modular_color_channels(),
                 br,
+                self.buffer_recycler.clone(),
             )?;
 
             // Ensure that, if we call this function again, we resume from just after
