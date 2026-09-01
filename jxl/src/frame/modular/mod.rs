@@ -6,6 +6,7 @@
 use std::cmp::min;
 use std::collections::{BTreeSet, HashSet};
 use std::fmt::Debug;
+use std::sync::Arc;
 
 use jxl_transforms::transform_map::*;
 
@@ -20,7 +21,7 @@ use crate::headers::bit_depth::BitDepth;
 use crate::headers::frame_header::FrameHeader;
 use crate::headers::modular::{GroupHeader, TransformId};
 use crate::headers::{ImageMetadata, JxlHeader};
-use crate::image::{Image, Rect};
+use crate::image::{BufferRecycler, Image, Rect};
 use crate::render::buffer_splitter::OutputChannelRef;
 use crate::util::sync::Mutex;
 use crate::util::sync::atomic::{AtomicBool, Ordering};
@@ -280,6 +281,7 @@ impl FullModularImage {
         image_metadata: &ImageMetadata,
         modular_color_channels: usize,
         br: &mut BitReader,
+        recycler: Option<Arc<BufferRecycler>>,
     ) -> Result<Self> {
         let mut channels = vec![];
         for c in 0..modular_color_channels {
@@ -452,6 +454,7 @@ impl FullModularImage {
             &section_buffer_indices,
             &mut buffer_info,
             modular_color_channels,
+            recycler,
         );
 
         #[cfg(feature = "tracing")]

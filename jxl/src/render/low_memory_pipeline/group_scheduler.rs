@@ -6,7 +6,7 @@
 use std::ops::Range;
 
 use crate::error::Result;
-use crate::image::{OwnedRawImage, Rect};
+use crate::image::{KIND_GROUP, KIND_LEFTRIGHT, KIND_TOPBOTTOM, OwnedRawImage, Rect};
 use crate::render::LowMemoryRenderPipeline;
 use crate::render::buffer_splitter::BufferSplitter;
 use crate::render::internal::{ChannelInfo, Stage};
@@ -125,25 +125,41 @@ impl LowMemoryRenderPipeline {
         channel: usize,
         kind: usize,
     ) -> Option<OwnedRawImage> {
-        self.scratch_channel_buffers
-            .try_lock()
-            .ok()
-            .and_then(|mut x| x[channel * 3 + kind].pop())
+        let ChannelInfo {
+            ty,
+            downsample: (dx, dy),
+        } = self.shared.channel_info[0][channel];
+        let ty = ty?;
+        let type_size = ty.size();
+        let recycler = self.shared.buffer_recycler.as_ref()?;
+        match kind {
+            KIND_GROUP => recycler.get_group_buffer((dx as usize, dy as usize), type_size),
+            KIND_TOPBOTTOM => recycler.get_topbottom_buffer(dy as usize, type_size),
+            KIND_LEFTRIGHT => recycler.get_leftright_buffer(dx as usize, type_size),
+            _ => None,
+        }
     }
 
     fn store_scratch_buffer(&self, channel: usize, kind: usize, image: OwnedRawImage) {
-        let Some(mut buf) = self.scratch_channel_buffers.try_lock().ok() else {
+        let ChannelInfo {
+            ty,
+            downsample: (dx, dy),
+        } = self.shared.channel_info[0][channel];
+        let Some(ty) = ty else {
             return;
         };
-        if kind == 0
-            && let Some(s) = self.group_scratch_buffers_limit
-            && buf[channel * 3].len() >= s
-        {
-            // We are going over the limit of group-sized scratch buffers for
-            // this channel - avoid storing the buffer.
+        let type_size = ty.size();
+        let Some(recycler) = &self.shared.buffer_recycler else {
             return;
+        };
+        match kind {
+            KIND_GROUP => {
+                recycler.recycle_group_buffer((dx as usize, dy as usize), type_size, image)
+            }
+            KIND_TOPBOTTOM => recycler.recycle_topbottom_buffer(dy as usize, type_size, image),
+            KIND_LEFTRIGHT => recycler.recycle_leftright_buffer(dx as usize, type_size, image),
+            _ => {}
         }
-        buf[channel * 3 + kind].push(image)
     }
 
     pub(super) fn render_with_new_group(
@@ -189,23 +205,29 @@ impl LowMemoryRenderPipeline {
             let ty = ty.unwrap();
             let bx = bx >> dx;
             let by = by >> dy;
+            let topbottom_expected_size = ((1 << self.shared.log_group_size) * ty.size(), 4 * by);
             let mut topbottom = if let Some(b) = buf.topbottom[c].try_write().unwrap().take() {
                 b
-            } else if let Some(b) = self.maybe_get_scratch_buffer(c, 1) {
-                b
+            } else if let Some(b) = self.maybe_get_scratch_buffer(c, KIND_TOPBOTTOM) {
+                if b.byte_size() == topbottom_expected_size {
+                    b
+                } else {
+                    OwnedRawImage::new(topbottom_expected_size)?
+                }
             } else {
-                let height = 4 * by;
-                let width = (1 << self.shared.log_group_size) * ty.size();
-                OwnedRawImage::new((width, height))?
+                OwnedRawImage::new(topbottom_expected_size)?
             };
+            let leftright_expected_size = (4 * bx * ty.size(), 1 << self.shared.log_group_size);
             let mut leftright = if let Some(b) = buf.leftright[c].try_write().unwrap().take() {
                 b
-            } else if let Some(b) = self.maybe_get_scratch_buffer(c, 2) {
-                b
+            } else if let Some(b) = self.maybe_get_scratch_buffer(c, KIND_LEFTRIGHT) {
+                if b.byte_size() == leftright_expected_size {
+                    b
+                } else {
+                    OwnedRawImage::new(leftright_expected_size)?
+                }
             } else {
-                let height = 1 << self.shared.log_group_size;
-                let width = 4 * bx * ty.size();
-                OwnedRawImage::new((width, height))?
+                OwnedRawImage::new(leftright_expected_size)?
             };
             let data = buf.data[c].try_read().unwrap();
             let input = data.as_ref().unwrap();

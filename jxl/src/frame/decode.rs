@@ -304,6 +304,7 @@ impl Frame {
             color_correlation_params: Arc::new(RwLock::new(ColorCorrelationParams::default())),
             epf_sigma: Arc::new(RwLock::new(SigmaSource::default())),
             dirty_lf_groups: BTreeSet::new(),
+            buffer_recycler: Arc::new(crate::image::BufferRecycler::new()),
         })
     }
 
@@ -438,6 +439,7 @@ impl Frame {
                 &self.decoder_state.file_header.image_metadata,
                 self.modular_color_channels(),
                 br,
+                Some(self.buffer_recycler.clone()),
             )?;
 
             // Ensure that, if we call this function again, we resume from just after

@@ -3,12 +3,14 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
+use std::sync::Arc;
+
 use super::ModularBufferInfo;
 use crate::error::Result;
 use crate::frame::DataStatus;
 use crate::frame::modular::ChannelInfo;
 use crate::headers::bit_depth::BitDepth;
-use crate::image::Image;
+use crate::image::{BufferRecycler, Image};
 use crate::util::sync::atomic::{AtomicUsize, Ordering};
 use crate::util::sync::{Mutex, RwLock};
 
@@ -107,15 +109,21 @@ pub(super) struct ModularBuffer {
     // Transform step that will produce this channel (None if the channel is final).
     pub(super) produced_by_step: Option<usize>,
     pub(super) size: (usize, usize),
+    pub(super) shift: Option<(usize, usize)>,
     // Status of the data in this buffer. Note that the distinction between "Zero"
     // and "partial" is only meaningful for section0 coded buffers.
     pub(super) data_status: DataStatus,
+    pub(super) recycler: Option<Arc<BufferRecycler>>,
 }
 
 const DISABLE_MODULAR_BUFFER_DEALLOCATION_FOR_DEBUG: bool = false;
 
 impl ModularBuffer {
-    pub fn new(size: (usize, usize)) -> Self {
+    pub fn new(
+        size: (usize, usize),
+        shift: Option<(usize, usize)>,
+        recycler: Option<Arc<BufferRecycler>>,
+    ) -> Self {
         ModularBuffer {
             data: RwLock::new(None),
             topbottom: RwLock::new(None),
@@ -128,8 +136,10 @@ impl ModularBuffer {
             used_by_transforms_final: vec![],
             used_by_transforms_current: Mutex::new(vec![]),
             size,
+            shift,
             data_status: DataStatus::Zero,
             produced_by_step: None,
+            recycler,
         }
     }
 
@@ -154,8 +164,24 @@ impl ModularBuffer {
             return Ok(());
         }
 
+        let shift = chan.shift.or(self.shift).unwrap_or((0, 0));
+        let s = std::mem::size_of::<i32>();
+
         if self.needed_borders.topbottom {
-            let mut topbottom = Image::<i32>::new((w, 4))?;
+            let expected_byte_size = (w * s, 4);
+            let mut topbottom = if let Some(recycler) = &self.recycler {
+                if let Some(raw) = recycler.get_topbottom_buffer(shift.0, s) {
+                    if raw.byte_size() == expected_byte_size {
+                        Image::from_raw(raw)
+                    } else {
+                        Image::<i32>::new((w, 4))?
+                    }
+                } else {
+                    Image::<i32>::new((w, 4))?
+                }
+            } else {
+                Image::<i32>::new((w, 4))?
+            };
             let r0 = chan.data.row(0);
             let r1 = if h > 1 { chan.data.row(1) } else { r0 };
             let rb0 = if h > 1 { chan.data.row(h - 2) } else { r0 };
@@ -168,7 +194,20 @@ impl ModularBuffer {
         }
 
         if self.needed_borders.leftright {
-            let mut leftright = Image::<i32>::new((4, h))?;
+            let expected_byte_size = (4 * s, h);
+            let mut leftright = if let Some(recycler) = &self.recycler {
+                if let Some(raw) = recycler.get_leftright_buffer(shift.1, s) {
+                    if raw.byte_size() == expected_byte_size {
+                        Image::from_raw(raw)
+                    } else {
+                        Image::<i32>::new((4, h))?
+                    }
+                } else {
+                    Image::<i32>::new((4, h))?
+                }
+            } else {
+                Image::<i32>::new((4, h))?
+            };
             for y in 0..h {
                 let r = chan.data.row(y);
                 let out = leftright.row_mut(y);
@@ -184,8 +223,24 @@ impl ModularBuffer {
     }
 
     pub fn make_buffer(&self, info: &ChannelInfo) -> Result<ModularChannel> {
+        let shift = info.shift.or(self.shift);
+        let s = std::mem::size_of::<i32>();
+        let expected_byte_size = (self.size.0 * s, self.size.1);
+        let data = if let (Some(recycler), Some(sh)) = (&self.recycler, shift) {
+            if let Some(raw) = recycler.get_group_buffer(sh, s) {
+                if raw.byte_size() == expected_byte_size {
+                    Image::from_raw(raw)
+                } else {
+                    Image::new(self.size)?
+                }
+            } else {
+                Image::new(self.size)?
+            }
+        } else {
+            Image::new(self.size)?
+        };
         Ok(ModularChannel {
-            data: Image::new(self.size)?,
+            data,
             shift: info.shift,
             bit_depth: info.bit_depth,
         })
@@ -223,7 +278,15 @@ impl ModularBuffer {
                             .map(ModularChannel::try_clone);
                     }
                 } else if remaining == 0 {
-                    *self.data.try_write().unwrap() = None;
+                    let old_data = self.data.try_write().unwrap().take();
+                    if let (Some(recycler), Some(chan)) = (&self.recycler, old_data) {
+                        let shift = chan.shift.or(self.shift).unwrap_or((0, 0));
+                        recycler.recycle_group_buffer(
+                            shift,
+                            std::mem::size_of::<i32>(),
+                            chan.data.into_raw(),
+                        );
+                    }
                 }
                 Some(remaining)
             },
@@ -246,7 +309,15 @@ impl ModularBuffer {
             |remaining_pre: usize| {
                 let remaining = remaining_pre.checked_sub(1).unwrap();
                 if remaining == 0 {
-                    *self.data.try_write().unwrap() = None;
+                    let old_data = self.data.try_write().unwrap().take();
+                    if let (Some(recycler), Some(chan)) = (&self.recycler, old_data) {
+                        let shift = chan.shift.or(self.shift).unwrap_or((0, 0));
+                        recycler.recycle_group_buffer(
+                            shift,
+                            std::mem::size_of::<i32>(),
+                            chan.data.into_raw(),
+                        );
+                    }
                 }
                 Some(remaining)
             },
@@ -260,10 +331,24 @@ impl ModularBuffer {
         let prev = self.remaining_final_uses.fetch_sub(1, Ordering::AcqRel);
         assert_ne!(prev, 0);
         if prev == 1 {
-            *self.topbottom.try_write().unwrap() = None;
-            *self.leftright.try_write().unwrap() = None;
-            *self.auxiliary_data.try_write().unwrap() = None;
-            *self.data.try_write().unwrap() = None;
+            let tb = self.topbottom.try_write().unwrap().take();
+            let lr = self.leftright.try_write().unwrap().take();
+            let _ = self.auxiliary_data.try_write().unwrap().take();
+            let d = self.data.try_write().unwrap().take();
+            if let Some(recycler) = &self.recycler {
+                let shift = self.shift.unwrap_or((0, 0));
+                let s = std::mem::size_of::<i32>();
+                if let Some(chan) = d {
+                    let sh = chan.shift.unwrap_or(shift);
+                    recycler.recycle_group_buffer(sh, s, chan.data.into_raw());
+                }
+                if let Some(tb_img) = tb {
+                    recycler.recycle_topbottom_buffer(shift.0, s, tb_img.into_raw());
+                }
+                if let Some(lr_img) = lr {
+                    recycler.recycle_leftright_buffer(shift.1, s, lr_img.into_raw());
+                }
+            }
         }
     }
 }

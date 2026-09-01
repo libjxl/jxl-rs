@@ -3,6 +3,8 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
+use std::sync::Arc;
+
 use num_traits::FromPrimitive;
 
 use super::{RctOp, RctPermutation};
@@ -15,7 +17,7 @@ use crate::frame::modular::{
 use crate::headers::frame_header::FrameHeader;
 use crate::headers::modular::TransformId;
 use crate::headers::{self};
-use crate::image::Rect;
+use crate::image::{BufferRecycler, Rect};
 use crate::util::ShiftRightCeil;
 use crate::util::sync::atomic::AtomicUsize;
 use crate::util::tracing_wrappers::*;
@@ -295,6 +297,7 @@ pub fn make_grids(
     section_buffer_indices: &[Vec<usize>],
     buffer_info: &mut Vec<ModularBufferInfo>,
     color_channels: usize,
+    recycler: Option<Arc<BufferRecycler>>,
 ) -> Vec<TransformStepChunk> {
     // Initialize grid sizes, starting from coded channels.
     for i in section_buffer_indices[1].iter() {
@@ -368,11 +371,15 @@ pub fn make_grids(
 
     // Create grids.
     for g in buffer_info.iter_mut() {
+        let shift = g.info.shift;
+        let rec = recycler.clone();
         g.buffer_grid = get_grid_indices(g.grid_shape)
             .map(|(x, y)| {
                 ModularBuffer::new(
                     g.get_grid_rect(frame_header, g.grid_kind, (x as usize, y as usize))
                         .size,
+                    shift,
+                    rec.clone(),
                 )
             })
             .collect();

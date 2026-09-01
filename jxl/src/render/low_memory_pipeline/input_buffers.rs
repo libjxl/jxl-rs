@@ -4,7 +4,7 @@
 // license that can be found in the LICENSE file.
 
 use crate::error::Result;
-use crate::image::OwnedRawImage;
+use crate::image::{KIND_GROUP, KIND_LEFTRIGHT, KIND_TOPBOTTOM, OwnedRawImage};
 use crate::render::internal::RenderPipelineShared;
 use crate::render::low_memory_pipeline::row_buffers::RowBuffer;
 use crate::util::NewWithCapacity;
@@ -130,7 +130,7 @@ impl InputBuffers {
                 let preserve = is_finalized && !all_finalized;
                 if !preserve {
                     if let Some(b) = std::mem::take(&mut *data[c].try_write().unwrap()) {
-                        store_buf(c, 0, b);
+                        store_buf(c, KIND_GROUP, b);
                     }
                 } else {
                     preserved_count += 1;
@@ -169,12 +169,12 @@ impl InputBuffers {
                     if let Some(b) =
                         std::mem::take(&mut *self.buffers[g].topbottom[c].try_write().unwrap())
                     {
-                        store_buf(c, 1, b);
+                        store_buf(c, KIND_TOPBOTTOM, b);
                     }
                     if let Some(b) =
                         std::mem::take(&mut *self.buffers[g].leftright[c].try_write().unwrap())
                     {
-                        store_buf(c, 2, b);
+                        store_buf(c, KIND_LEFTRIGHT, b);
                     }
                 }
             }
