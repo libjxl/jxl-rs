@@ -101,22 +101,21 @@ impl InputBuffers {
         &self.buffers[group]
     }
 
-    pub fn mark_done(
+    pub(super) fn mark_done(
         &self,
         group: usize,
         shared: &RenderPipelineShared<RowBuffer>,
-        store_buf: impl Fn(usize, usize, OwnedRawImage),
+        mut store_buf: impl FnMut(OwnedRawImage),
     ) {
-        let gx = group % self.size.0;
-        let gy = group / self.size.0;
+        let (gx, gy) = (group % self.size.0, group / self.size.0);
+        let gw = self.size.0;
         let gxm1 = gx.saturating_sub(1);
         let gym1 = gy.saturating_sub(1);
-        let gxp1 = (gx + 1).min(shared.group_count.0 - 1);
-        let gyp1 = (gy + 1).min(shared.group_count.1 - 1);
-        let gw = shared.group_count.0;
+        let gxp1 = (gx + 1).min(self.size.0 - 1);
+        let gyp1 = (gy + 1).min(self.size.1 - 1);
 
         let all_finalized = (0..shared.num_channels())
-            .filter(|&c| shared.channel_is_used[c])
+            .filter(|c| shared.channel_is_used[*c])
             .all(|c| shared.group_chan_complete[group][c].load(Ordering::Relaxed));
 
         {
@@ -129,8 +128,8 @@ impl InputBuffers {
                 let is_finalized = shared.group_chan_complete[group][c].load(Ordering::Relaxed);
                 let preserve = is_finalized && !all_finalized;
                 if !preserve {
-                    if let Some(b) = std::mem::take(&mut *data[c].try_write().unwrap()) {
-                        store_buf(c, 0, b);
+                    if let Some(b) = data[c].try_write().unwrap().take() {
+                        store_buf(b);
                     }
                 } else {
                     preserved_count += 1;
@@ -166,15 +165,11 @@ impl InputBuffers {
                     continue;
                 }
                 for c in 0..self.buffers[g].data.len() {
-                    if let Some(b) =
-                        std::mem::take(&mut *self.buffers[g].topbottom[c].try_write().unwrap())
-                    {
-                        store_buf(c, 1, b);
+                    if let Some(b) = self.buffers[g].topbottom[c].try_write().unwrap().take() {
+                        store_buf(b);
                     }
-                    if let Some(b) =
-                        std::mem::take(&mut *self.buffers[g].leftright[c].try_write().unwrap())
-                    {
-                        store_buf(c, 2, b);
+                    if let Some(b) = self.buffers[g].leftright[c].try_write().unwrap().take() {
+                        store_buf(b);
                     }
                 }
             }
