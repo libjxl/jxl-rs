@@ -710,6 +710,12 @@ pub fn make_grids(
         }
     }
 
+    for bi in buffer_info.iter_mut() {
+        for grid in bi.buffer_grid.iter_mut() {
+            grid.remaining_final_uses = AtomicUsize::new(grid.used_by_transforms_final.len());
+        }
+    }
+
     trace!(?grid_transform_steps, ?buffer_info);
 
     grid_transform_steps
