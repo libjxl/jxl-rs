@@ -214,13 +214,15 @@ impl RawImageBuffer {
         let bytes_between_rows =
             bytes_per_row.div_ceil(CACHE_LINE_BYTE_SIZE) * CACHE_LINE_BYTE_SIZE;
         // Note: matches RawImageBuffer::minimum_allocation_size.
-        let allocation_len = (num_rows - 1)
+        let Some(allocation_len) = (num_rows - 1)
             .checked_mul(bytes_between_rows)
-            .unwrap()
-            .checked_add(bytes_per_row)
-            .unwrap();
+            .and_then(|x| x.checked_add(bytes_per_row))
+        else {
+            return Err(Error::ImageSizeTooLarge(bytes_per_row, num_rows));
+        };
         assert_ne!(allocation_len, 0);
-        let layout = Layout::from_size_align(allocation_len, CACHE_LINE_BYTE_SIZE).unwrap();
+        let layout = Layout::from_size_align(allocation_len, CACHE_LINE_BYTE_SIZE)
+            .map_err(|_| Error::ImageSizeTooLarge(bytes_per_row, num_rows))?;
         let memory = if let Some(src) = copy_from {
             // SAFETY: we just checked that allocation_len is not 0.
             let memory = unsafe { alloc(layout) };
