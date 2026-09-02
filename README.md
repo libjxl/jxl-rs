@@ -55,6 +55,27 @@ target/release/jxl_cli input.jxl --speedtest --num-reps 10
 The `jxl` crate is also available on [crates.io](https://crates.io/crates/jxl)
 for use as a library.
 
+### `image` crate integration
+
+Enable the `image` feature and register the JPEG XL decoder before using
+`image`'s format-agnostic loading APIs:
+
+```toml
+[dependencies]
+image = "0.25"
+jxl = { version = "0.6", features = ["image"] }
+```
+
+```rust
+jxl::integration::register_image_decoding_hook();
+
+let decoded = image::open("input.jxl")?;
+# Ok::<(), image::ImageError>(())
+```
+
+Registration enables both `.jxl` extension handling and automatic detection
+of bare codestreams and JPEG XL containers.
+
 ## Testing
 
 ```bash
