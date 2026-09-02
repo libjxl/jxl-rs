@@ -41,6 +41,8 @@ pub trait SimdDescriptor: Sized + Copy + Debug + Send + Sync {
 
     type I32Vec: I32SimdVec<Descriptor = Self>;
 
+    type I16Vec: I16SimdVec<Descriptor = Self>;
+
     type U64Vec: U64SimdVec<Descriptor = Self>;
 
     type U32Vec: U32SimdVec<Descriptor = Self>;
@@ -50,6 +52,8 @@ pub trait SimdDescriptor: Sized + Copy + Debug + Send + Sync {
     type U8Vec: U8SimdVec<Descriptor = Self>;
 
     type Mask: SimdMask<Descriptor = Self>;
+
+    type Mask16: SimdMask16<Descriptor = Self>;
 
     /// Prepared 8-entry BF16 lookup table for fast approximate lookups.
     /// Use `F32SimdVec::prepare_table_bf16_8` to create and
@@ -322,6 +326,134 @@ pub trait I32SimdVec:
     fn store_u8(self, dest: &mut [u8]);
 }
 
+pub trait I16SimdVec:
+    Sized
+    + Copy
+    + Debug
+    + Send
+    + Sync
+    + Add<Self, Output = Self>
+    + Sub<Self, Output = Self>
+    + Mul<Self, Output = Self>
+    + Neg<Output = Self>
+    + BitAnd<Self, Output = Self>
+    + BitOr<Self, Output = Self>
+    + BitXor<Self, Output = Self>
+    + AddAssign<Self>
+    + SubAssign<Self>
+    + MulAssign<Self>
+    + BitAndAssign<Self>
+    + BitOrAssign<Self>
+    + BitXorAssign<Self>
+{
+    type Descriptor: SimdDescriptor;
+
+    const LEN: usize;
+
+    /// An array of i16 of length Self::LEN.
+    type UnderlyingArray: Copy + Default + Debug;
+
+    /// Converts v to an array of v.
+    fn splat(d: Self::Descriptor, v: i16) -> Self;
+
+    fn zero(d: Self::Descriptor) -> Self;
+
+    // Requires `mem.len() >= Self::LEN` or it will panic.
+    fn load(d: Self::Descriptor, mem: &[i16]) -> Self;
+
+    fn load_array(d: Self::Descriptor, mem: &Self::UnderlyingArray) -> Self;
+
+    // Requires `mem.len() >= Self::LEN` or it will panic.
+    fn store(&self, mem: &mut [i16]);
+
+    fn store_array(&self, mem: &mut Self::UnderlyingArray);
+
+    /// Converts a slice of i16 into a slice of Self::UnderlyingArray. If slice.len() is not a
+    /// multiple of `Self::LEN` this will panic.
+    fn make_array_slice(slice: &[i16]) -> &[Self::UnderlyingArray];
+
+    /// Converts a mut slice of i16 into a slice of Self::UnderlyingArray. If slice.len() is not a
+    /// multiple of `Self::LEN` this will panic.
+    fn make_array_slice_mut(slice: &mut [i16]) -> &mut [Self::UnderlyingArray];
+
+    /// Transposes the Self::LEN x Self::LEN matrix formed by array elements
+    /// `data[stride * i]` for i = 0..Self::LEN.
+    fn transpose_square(d: Self::Descriptor, data: &mut [Self::UnderlyingArray], stride: usize);
+
+    fn abs(self) -> Self;
+
+    fn shl<const AMOUNT_U: u32, const AMOUNT_I: i32>(self) -> Self;
+
+    fn shr<const AMOUNT_U: u32, const AMOUNT_I: i32>(self) -> Self;
+
+    fn mul_wide_take_high(self, rhs: Self) -> Self;
+
+    fn gt(self, other: Self) -> <<Self as I16SimdVec>::Descriptor as SimdDescriptor>::Mask16;
+
+    fn lt_zero(self) -> <<Self as I16SimdVec>::Descriptor as SimdDescriptor>::Mask16;
+
+    fn eq(self, other: Self) -> <<Self as I16SimdVec>::Descriptor as SimdDescriptor>::Mask16;
+
+    fn eq_zero(self) -> <<Self as I16SimdVec>::Descriptor as SimdDescriptor>::Mask16;
+
+    fn bitcast_u16(self) -> <<Self as I16SimdVec>::Descriptor as SimdDescriptor>::U16Vec;
+
+    /// Stores two vectors interleaved: [a0, b0, a1, b1, a2, b2, ...].
+    /// Requires `dest.len() >= 2 * Self::LEN` or it will panic.
+    #[inline(always)]
+    fn store_interleaved_2(a: Self, b: Self, dest: &mut [i16]) {
+        assert!(dest.len() >= 2 * Self::LEN);
+        // SAFETY: i16 and u16 have the same size and alignment, and both are bag-of-bits types,
+        // so the implicit transmute is safe.
+        let dest_u16 =
+            unsafe { std::slice::from_raw_parts_mut(dest.as_mut_ptr().cast::<u16>(), dest.len()) };
+        <<Self as I16SimdVec>::Descriptor as SimdDescriptor>::U16Vec::store_interleaved_2(
+            a.bitcast_u16(),
+            b.bitcast_u16(),
+            dest_u16,
+        );
+    }
+
+    /// Stores three vectors interleaved: [a0, b0, c0, a1, b1, c1, ...].
+    /// Requires `dest.len() >= 3 * Self::LEN` or it will panic.
+    #[inline(always)]
+    fn store_interleaved_3(a: Self, b: Self, c: Self, dest: &mut [i16]) {
+        assert!(dest.len() >= 3 * Self::LEN);
+        // SAFETY: i16 and u16 have the same size and alignment, and both are bag-of-bits types,
+        // so the implicit transmute is safe.
+        let dest_u16 =
+            unsafe { std::slice::from_raw_parts_mut(dest.as_mut_ptr().cast::<u16>(), dest.len()) };
+        <<Self as I16SimdVec>::Descriptor as SimdDescriptor>::U16Vec::store_interleaved_3(
+            a.bitcast_u16(),
+            b.bitcast_u16(),
+            c.bitcast_u16(),
+            dest_u16,
+        );
+    }
+
+    /// Stores four vectors interleaved: [a0, b0, c0, d0, a1, b1, c1, d1, ...].
+    /// Requires `dest.len() >= 4 * Self::LEN` or it will panic.
+    #[inline(always)]
+    fn store_interleaved_4(a: Self, b: Self, c: Self, d: Self, dest: &mut [i16]) {
+        assert!(dest.len() >= 4 * Self::LEN);
+        // SAFETY: i16 and u16 have the same size and alignment, and both are bag-of-bits types,
+        // so the implicit transmute is safe.
+        let dest_u16 =
+            unsafe { std::slice::from_raw_parts_mut(dest.as_mut_ptr().cast::<u16>(), dest.len()) };
+        <<Self as I16SimdVec>::Descriptor as SimdDescriptor>::U16Vec::store_interleaved_4(
+            a.bitcast_u16(),
+            b.bitcast_u16(),
+            c.bitcast_u16(),
+            d.bitcast_u16(),
+            dest_u16,
+        );
+    }
+
+    /// Stores the lower 8 bits of each lane into `dest`.
+    /// Requires `dest.len() >= Self::LEN` or it will panic.
+    fn store_u8(self, dest: &mut [u8]);
+}
+
 pub trait U64SimdVec:
     Sized
     + Copy
@@ -410,6 +542,8 @@ pub trait U16SimdVec: Sized + Copy + Debug + Send + Sync {
     /// Stores four vectors interleaved: [a0, b0, c0, d0, a1, b1, c1, d1, ...].
     /// Requires `dest.len() >= 4 * Self::LEN` or it will panic.
     fn store_interleaved_4(a: Self, b: Self, c: Self, d: Self, dest: &mut [u16]);
+
+    fn bitcast_i16(self) -> <<Self as U16SimdVec>::Descriptor as SimdDescriptor>::I16Vec;
 }
 
 #[macro_export]
@@ -454,6 +588,28 @@ pub trait SimdMask:
     fn andnot(self, rhs: Self) -> Self;
 }
 
+pub trait SimdMask16:
+    Sized + Copy + Debug + Send + Sync + BitAnd<Self, Output = Self> + BitOr<Self, Output = Self>
+{
+    type Descriptor: SimdDescriptor;
+
+    fn if_then_else_i16(
+        self,
+        if_true: <<Self as SimdMask16>::Descriptor as SimdDescriptor>::I16Vec,
+        if_false: <<Self as SimdMask16>::Descriptor as SimdDescriptor>::I16Vec,
+    ) -> <<Self as SimdMask16>::Descriptor as SimdDescriptor>::I16Vec;
+
+    fn maskz_i16(
+        self,
+        v: <<Self as SimdMask16>::Descriptor as SimdDescriptor>::I16Vec,
+    ) -> <<Self as SimdMask16>::Descriptor as SimdDescriptor>::I16Vec;
+
+    fn all(self) -> bool;
+
+    // !self & rhs
+    fn andnot(self, rhs: Self) -> Self;
+}
+
 macro_rules! impl_f32_array_interface {
     () => {
         type UnderlyingArray = [f32; Self::LEN];
@@ -486,13 +642,45 @@ macro_rules! impl_f32_array_interface {
 
 pub(crate) use impl_f32_array_interface;
 
+macro_rules! impl_i16_array_interface {
+    () => {
+        type UnderlyingArray = [i16; Self::LEN];
+
+        #[inline(always)]
+        fn make_array_slice(slice: &[i16]) -> &[Self::UnderlyingArray] {
+            let (ret, rem) = slice.as_chunks();
+            assert!(rem.is_empty());
+            ret
+        }
+
+        #[inline(always)]
+        fn make_array_slice_mut(slice: &mut [i16]) -> &mut [Self::UnderlyingArray] {
+            let (ret, rem) = slice.as_chunks_mut();
+            assert!(rem.is_empty());
+            ret
+        }
+
+        #[inline(always)]
+        fn load_array(d: Self::Descriptor, mem: &Self::UnderlyingArray) -> Self {
+            Self::load(d, mem)
+        }
+
+        #[inline(always)]
+        fn store_array(&self, mem: &mut Self::UnderlyingArray) {
+            self.store(mem);
+        }
+    };
+}
+
+pub(crate) use impl_i16_array_interface;
+
 #[cfg(test)]
 mod test {
     use arbtest::arbitrary::Unstructured;
 
     use crate::{
-        F32SimdVec, I32SimdVec, ScalarDescriptor, SimdDescriptor, U8SimdVec, U16SimdVec,
-        U64SimdVec, test_all_instruction_sets,
+        F32SimdVec, I16SimdVec, I32SimdVec, ScalarDescriptor, SimdDescriptor, SimdMask16,
+        U8SimdVec, U16SimdVec, U64SimdVec, test_all_instruction_sets,
     };
 
     enum Distribution {
@@ -1782,4 +1970,266 @@ mod test {
         });
     }
     test_all_instruction_sets!(test_u64_operations);
+
+    fn test_i16_operations<D: SimdDescriptor>(d: D) {
+        let len = D::I16Vec::LEN;
+        arbtest::arbtest(|u| {
+            let mut a = vec![0i16; len];
+            let mut b = vec![0i16; len];
+            for i in 0..len {
+                a[i] = u.arbitrary::<i16>()?;
+                b[i] = u.arbitrary::<i16>()?;
+            }
+            let va = D::I16Vec::load(d, &a);
+            let vb = D::I16Vec::load(d, &b);
+
+            // Addition
+            let mut res_add = vec![0i16; len];
+            (va + vb).store(&mut res_add);
+            for i in 0..len {
+                assert_eq!(res_add[i], a[i].wrapping_add(b[i]));
+            }
+
+            // Subtraction
+            let mut res_sub = vec![0i16; len];
+            (va - vb).store(&mut res_sub);
+            for i in 0..len {
+                assert_eq!(res_sub[i], a[i].wrapping_sub(b[i]));
+            }
+
+            // Multiplication
+            let mut res_mul = vec![0i16; len];
+            (va * vb).store(&mut res_mul);
+            for i in 0..len {
+                assert_eq!(res_mul[i], a[i].wrapping_mul(b[i]));
+            }
+
+            // store_u8
+            let mut res_u8 = vec![0u8; len];
+            va.store_u8(&mut res_u8);
+            for i in 0..len {
+                assert_eq!(res_u8[i], (a[i] & 0xFF) as u8);
+            }
+
+            // Negation
+            let mut res_neg = vec![0i16; len];
+            (-va).store(&mut res_neg);
+            for i in 0..len {
+                assert_eq!(res_neg[i], a[i].wrapping_neg());
+            }
+
+            // Bitwise XOR
+            let mut res_xor = vec![0i16; len];
+            (va ^ vb).store(&mut res_xor);
+            for i in 0..len {
+                assert_eq!(res_xor[i], a[i] ^ b[i]);
+            }
+
+            // Bitwise AND
+            let mut res_and = vec![0i16; len];
+            (va & vb).store(&mut res_and);
+            for i in 0..len {
+                assert_eq!(res_and[i], a[i] & b[i]);
+            }
+
+            // Bitwise OR
+            let mut res_or = vec![0i16; len];
+            (va | vb).store(&mut res_or);
+            for i in 0..len {
+                assert_eq!(res_or[i], a[i] | b[i]);
+            }
+
+            // Shift left by 5
+            let mut res_shl = vec![0i16; len];
+            crate::shl!(va, 5).store(&mut res_shl);
+            for i in 0..len {
+                assert_eq!(res_shl[i], (a[i] as u16).wrapping_shl(5) as i16);
+            }
+
+            // Shift right by 3
+            let mut res_shr = vec![0i16; len];
+            crate::shr!(va, 3).store(&mut res_shr);
+            for i in 0..len {
+                assert_eq!(res_shr[i], a[i] >> 3);
+            }
+
+            // abs
+            let mut res_abs = vec![0i16; len];
+            va.abs().store(&mut res_abs);
+            for i in 0..len {
+                assert_eq!(res_abs[i], a[i].wrapping_abs());
+            }
+
+            // mul_wide_take_high
+            let mut res_mulhi = vec![0i16; len];
+            va.mul_wide_take_high(vb).store(&mut res_mulhi);
+            for i in 0..len {
+                let expected = ((a[i] as i32 * b[i] as i32) >> 16) as i16;
+                assert_eq!(res_mulhi[i], expected);
+            }
+
+            // gt
+            let mask_gt = va.gt(vb);
+            let mut res_gt = vec![0i16; len];
+            mask_gt.if_then_else_i16(va, vb).store(&mut res_gt);
+            for i in 0..len {
+                assert_eq!(res_gt[i], if a[i] > b[i] { a[i] } else { b[i] });
+            }
+
+            // lt_zero
+            let mask_ltz = va.lt_zero();
+            let mut res_ltz = vec![0i16; len];
+            mask_ltz.if_then_else_i16(va, vb).store(&mut res_ltz);
+            for i in 0..len {
+                assert_eq!(res_ltz[i], if a[i] < 0 { a[i] } else { b[i] });
+            }
+
+            // eq
+            let mask_eq = va.eq(vb);
+            let mut res_eq = vec![0i16; len];
+            mask_eq.if_then_else_i16(va, vb).store(&mut res_eq);
+            for i in 0..len {
+                assert_eq!(res_eq[i], if a[i] == b[i] { a[i] } else { b[i] });
+            }
+
+            // eq_zero
+            let mask_eqz = va.eq_zero();
+            let mut res_eqz = vec![0i16; len];
+            mask_eqz.if_then_else_i16(va, vb).store(&mut res_eqz);
+            for i in 0..len {
+                assert_eq!(res_eqz[i], if a[i] == 0 { a[i] } else { b[i] });
+            }
+
+            // maskz_i16
+            let mut res_maskz = vec![0i16; len];
+            mask_gt.maskz_i16(va).store(&mut res_maskz);
+            for i in 0..len {
+                assert_eq!(res_maskz[i], if a[i] > b[i] { 0 } else { a[i] });
+            }
+
+            // all
+            assert_eq!(mask_eqz.all(), a.iter().all(|&x| x == 0));
+
+            // andnot
+            let mask_andnot = mask_gt.andnot(mask_eq);
+            let mut res_andnot = vec![0i16; len];
+            mask_andnot.if_then_else_i16(va, vb).store(&mut res_andnot);
+            for i in 0..len {
+                let expected_mask = !(a[i] > b[i]) && (a[i] == b[i]);
+                assert_eq!(res_andnot[i], if expected_mask { a[i] } else { b[i] });
+            }
+
+            Ok(())
+        });
+    }
+    test_all_instruction_sets!(test_i16_operations);
+
+    fn test_i16_transpose_square<D: SimdDescriptor>(d: D) {
+        let len = D::I16Vec::LEN;
+        // Test with stride = 1
+        let mut input = vec![0i16; len * len];
+        for (i, val) in input.iter_mut().enumerate() {
+            *val = i as i16;
+        }
+        let mut output = input.clone();
+        D::I16Vec::transpose_square(d, D::I16Vec::make_array_slice_mut(&mut output), 1);
+
+        for i in 0..len {
+            for j in 0..len {
+                let expected = input[j * len + i];
+                let actual = output[i * len + j];
+                assert_eq!(
+                    actual, expected,
+                    "Mismatch at position ({i}, {j}): expected {expected}, got {actual}"
+                );
+            }
+        }
+
+        // Test with stride > 1
+        let stride = 2;
+        let mut input_strided = vec![0i16; len * len * stride];
+        for i in 0..len {
+            for j in 0..len {
+                input_strided[(i * stride) * len + j] = (i * len + j) as i16;
+            }
+        }
+        let mut output_strided = input_strided.clone();
+        D::I16Vec::transpose_square(
+            d,
+            D::I16Vec::make_array_slice_mut(&mut output_strided),
+            stride,
+        );
+
+        for i in 0..len {
+            for j in 0..len {
+                let expected = input_strided[(j * stride) * len + i];
+                let actual = output_strided[(i * stride) * len + j];
+                assert_eq!(
+                    actual, expected,
+                    "Mismatch with stride at ({i}, {j}): expected {expected}, got {actual}"
+                );
+            }
+        }
+    }
+    test_all_instruction_sets!(test_i16_transpose_square);
+
+    fn test_i16_store_interleaved_2<D: SimdDescriptor>(d: D) {
+        let len = D::I16Vec::LEN;
+        let a: Vec<i16> = (0..len).map(|i| i as i16).collect();
+        let b: Vec<i16> = (0..len).map(|i| (i + 100) as i16).collect();
+        let mut output = vec![0i16; 2 * len];
+
+        let a_vec = D::I16Vec::load(d, &a);
+        let b_vec = D::I16Vec::load(d, &b);
+        D::I16Vec::store_interleaved_2(a_vec, b_vec, &mut output);
+
+        for i in 0..len {
+            assert_eq!(output[2 * i], a[i]);
+            assert_eq!(output[2 * i + 1], b[i]);
+        }
+    }
+    test_all_instruction_sets!(test_i16_store_interleaved_2);
+
+    fn test_i16_store_interleaved_3<D: SimdDescriptor>(d: D) {
+        let len = D::I16Vec::LEN;
+        let a: Vec<i16> = (0..len).map(|i| i as i16).collect();
+        let b: Vec<i16> = (0..len).map(|i| (i + 100) as i16).collect();
+        let c: Vec<i16> = (0..len).map(|i| (i + 200) as i16).collect();
+        let mut output = vec![0i16; 3 * len];
+
+        let a_vec = D::I16Vec::load(d, &a);
+        let b_vec = D::I16Vec::load(d, &b);
+        let c_vec = D::I16Vec::load(d, &c);
+        D::I16Vec::store_interleaved_3(a_vec, b_vec, c_vec, &mut output);
+
+        for i in 0..len {
+            assert_eq!(output[3 * i], a[i]);
+            assert_eq!(output[3 * i + 1], b[i]);
+            assert_eq!(output[3 * i + 2], c[i]);
+        }
+    }
+    test_all_instruction_sets!(test_i16_store_interleaved_3);
+
+    fn test_i16_store_interleaved_4<D: SimdDescriptor>(d: D) {
+        let len = D::I16Vec::LEN;
+        let a: Vec<i16> = (0..len).map(|i| i as i16).collect();
+        let b: Vec<i16> = (0..len).map(|i| (i + 100) as i16).collect();
+        let c: Vec<i16> = (0..len).map(|i| (i + 200) as i16).collect();
+        let e: Vec<i16> = (0..len).map(|i| (i + 300) as i16).collect();
+        let mut output = vec![0i16; 4 * len];
+
+        let a_vec = D::I16Vec::load(d, &a);
+        let b_vec = D::I16Vec::load(d, &b);
+        let c_vec = D::I16Vec::load(d, &c);
+        let e_vec = D::I16Vec::load(d, &e);
+        D::I16Vec::store_interleaved_4(a_vec, b_vec, c_vec, e_vec, &mut output);
+
+        for i in 0..len {
+            assert_eq!(output[4 * i], a[i]);
+            assert_eq!(output[4 * i + 1], b[i]);
+            assert_eq!(output[4 * i + 2], c[i]);
+            assert_eq!(output[4 * i + 3], e[i]);
+        }
+    }
+    test_all_instruction_sets!(test_i16_store_interleaved_4);
 }
