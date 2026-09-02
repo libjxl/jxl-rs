@@ -692,7 +692,7 @@ impl TransformStepChunk {
                     }
                 }
                 with_buffers(buffers, buf_out, out_grid, recycler, |mut bufs| {
-                    super::rct::do_rct_step(&mut bufs, *op, *perm);
+                    super::rct::do_rct_step(&mut bufs, buffers[buf_in[0]].storage, *op, *perm);
                     Ok(())
                 })?;
             }
