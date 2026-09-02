@@ -271,7 +271,7 @@ impl TransformStep {
                 ];
                 {
                     let mut bufs = [a.borrow_mut(), b.borrow_mut(), c.borrow_mut()];
-                    super::rct::do_rct_step(&mut bufs, *op, *perm);
+                    super::rct::do_rct_step(&mut bufs, storage, *op, *perm);
                 }
                 buffers[buf_out[0]] = a;
                 buffers[buf_out[1]] = b;
