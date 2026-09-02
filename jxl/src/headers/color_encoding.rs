@@ -8,7 +8,7 @@ use std::fmt;
 use jxl_macros::UnconditionalCoder;
 use num_derive::FromPrimitive;
 
-use crate::api::primaries_to_xyz;
+use crate::api::{adapt_to_xyz_d50, primaries_to_xyz};
 use crate::bit_reader::BitReader;
 use crate::error::Error;
 use crate::headers::encodings::*;
@@ -44,6 +44,17 @@ pub enum WhitePoint {
     Custom = 2,
     E = 10,
     DCI = 11,
+}
+
+impl WhitePoint {
+    pub fn to_xy_coords(&self, custom: &CustomXY) -> (f32, f32) {
+        match self {
+            WhitePoint::D65 => (0.3127, 0.3290),
+            WhitePoint::E => (1.0 / 3.0, 1.0 / 3.0),
+            WhitePoint::DCI => (0.314, 0.351),
+            WhitePoint::Custom => custom.as_f32_coords(),
+        }
+    }
 }
 
 #[allow(clippy::upper_case_acronyms)]
@@ -203,6 +214,10 @@ impl ColorEncoding {
         {
             return Err(Error::InvalidColorEncoding);
         }
+        let (wx, wy) = self.white_point.to_xy_coords(&self.white);
+        if self.white_point == WhitePoint::Custom {
+            adapt_to_xyz_d50(wx, wy)?;
+        }
         if self.primaries == Primaries::Custom {
             primaries_to_xyz(
                 self.custom_primaries[0].as_f32_coords().0,
@@ -211,10 +226,37 @@ impl ColorEncoding {
                 self.custom_primaries[1].as_f32_coords().1,
                 self.custom_primaries[2].as_f32_coords().0,
                 self.custom_primaries[2].as_f32_coords().1,
-                self.white.as_f32_coords().0,
-                self.white.as_f32_coords().1,
+                wx,
+                wy,
             )?;
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+
+    #[test]
+    fn test_custom_primaries_with_standard_white_point() {
+        let mut encoding = ColorEncoding::default(&Empty {});
+        encoding.primaries = Primaries::Custom;
+        encoding.white_point = WhitePoint::D65;
+        // Set standard sRGB-like primaries
+        encoding.custom_primaries = [
+            CustomXY::from_f32_coords(0.64, 0.33),
+            CustomXY::from_f32_coords(0.30, 0.60),
+            CustomXY::from_f32_coords(0.15, 0.06),
+        ];
+        assert!(encoding.check(&Empty {}).is_ok());
+    }
+
+    #[test]
+    fn test_custom_white_point_invalid() {
+        let mut encoding = ColorEncoding::default(&Empty {});
+        encoding.white_point = WhitePoint::Custom;
+        encoding.white = CustomXY::from_f32_coords(0.3127, 0.0);
+        assert!(encoding.check(&Empty {}).is_err());
     }
 }
