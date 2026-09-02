@@ -14,6 +14,8 @@ pub mod frame;
 pub mod headers;
 pub mod icc;
 pub mod image;
+#[cfg(feature = "image")]
+pub mod integration;
 pub mod render;
 pub mod util;
 
