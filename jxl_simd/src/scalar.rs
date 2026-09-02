@@ -5,8 +5,10 @@
 
 use std::num::Wrapping;
 
-use super::{F32SimdVec, I32SimdVec, SimdDescriptor, SimdMask, U8SimdVec, U16SimdVec};
-use crate::{U32SimdVec, U64SimdVec, f16, impl_f32_array_interface};
+use super::{
+    F32SimdVec, I16SimdVec, I32SimdVec, SimdDescriptor, SimdMask, SimdMask16, U8SimdVec, U16SimdVec,
+};
+use crate::{U32SimdVec, U64SimdVec, f16, impl_f32_array_interface, impl_i16_array_interface};
 
 #[derive(Clone, Copy, Debug)]
 pub struct ScalarDescriptor;
@@ -14,11 +16,13 @@ pub struct ScalarDescriptor;
 impl SimdDescriptor for ScalarDescriptor {
     type F32Vec = f32;
     type I32Vec = Wrapping<i32>;
+    type I16Vec = Wrapping<i16>;
     type U64Vec = Wrapping<u64>;
     type U32Vec = Wrapping<u32>;
     type U8Vec = u8;
     type U16Vec = u16;
     type Mask = bool;
+    type Mask16 = bool;
     type Bf16Table8 = [f32; 8];
 
     type Descriptor256 = Self;
@@ -320,6 +324,92 @@ impl I32SimdVec for Wrapping<i32> {
     }
 }
 
+impl I16SimdVec for Wrapping<i16> {
+    type Descriptor = ScalarDescriptor;
+
+    const LEN: usize = 1;
+
+    #[inline(always)]
+    fn splat(_d: Self::Descriptor, v: i16) -> Self {
+        Wrapping(v)
+    }
+
+    #[inline(always)]
+    fn zero(_d: Self::Descriptor) -> Self {
+        Wrapping(0)
+    }
+
+    #[inline(always)]
+    fn load(_d: Self::Descriptor, mem: &[i16]) -> Self {
+        assert!(!mem.is_empty());
+        Wrapping(mem[0])
+    }
+
+    #[inline(always)]
+    fn store(&self, mem: &mut [i16]) {
+        assert!(!mem.is_empty());
+        mem[0] = self.0;
+    }
+
+    #[inline(always)]
+    fn abs(self) -> Self {
+        Wrapping(self.0.wrapping_abs())
+    }
+
+    #[inline(always)]
+    fn gt(self, other: Self) -> bool {
+        self.0 > other.0
+    }
+
+    #[inline(always)]
+    fn lt_zero(self) -> bool {
+        self.0 < 0
+    }
+
+    #[inline(always)]
+    fn eq(self, other: Self) -> bool {
+        self.0 == other.0
+    }
+
+    #[inline(always)]
+    fn eq_zero(self) -> bool {
+        self.0 == 0
+    }
+
+    #[inline(always)]
+    fn shl<const AMOUNT_U: u32, const AMOUNT_I: i32>(self) -> Self {
+        Wrapping(self.0 << AMOUNT_U)
+    }
+
+    #[inline(always)]
+    fn shr<const AMOUNT_U: u32, const AMOUNT_I: i32>(self) -> Self {
+        Wrapping(self.0 >> AMOUNT_U)
+    }
+
+    #[inline(always)]
+    fn mul_wide_take_high(self, rhs: Self) -> Self {
+        Wrapping(((self.0 as i32 * rhs.0 as i32) >> 16) as i16)
+    }
+
+    #[inline(always)]
+    fn bitcast_u16(self) -> u16 {
+        self.0 as u16
+    }
+
+    impl_i16_array_interface!();
+
+    #[inline(always)]
+    fn transpose_square(_d: Self::Descriptor, _data: &mut [Self::UnderlyingArray], _stride: usize) {
+        // Nothing to do for 1x1 transpose.
+    }
+
+    #[inline(always)]
+    fn store_u8(self, dest: &mut [u8]) {
+        assert!(!dest.is_empty());
+        dest[0] = self.0 as u8;
+    }
+}
+
 impl U32SimdVec for Wrapping<u32> {
     type Descriptor = ScalarDescriptor;
 
@@ -452,6 +542,11 @@ impl U16SimdVec for u16 {
         dest[2] = c;
         dest[3] = d;
     }
+
+    #[inline(always)]
+    fn bitcast_i16(self) -> Wrapping<i16> {
+        Wrapping(self as i16)
+    }
 }
 
 impl SimdMask for bool {
@@ -469,6 +564,30 @@ impl SimdMask for bool {
 
     #[inline(always)]
     fn maskz_i32(self, v: Wrapping<i32>) -> Wrapping<i32> {
+        if self { Wrapping(0) } else { v }
+    }
+
+    #[inline(always)]
+    fn all(self) -> bool {
+        self
+    }
+
+    #[inline(always)]
+    fn andnot(self, rhs: Self) -> Self {
+        (!self) & rhs
+    }
+}
+
+impl SimdMask16 for bool {
+    type Descriptor = ScalarDescriptor;
+
+    #[inline(always)]
+    fn if_then_else_i16(self, if_true: Wrapping<i16>, if_false: Wrapping<i16>) -> Wrapping<i16> {
+        if self { if_true } else { if_false }
+    }
+
+    #[inline(always)]
+    fn maskz_i16(self, v: Wrapping<i16>) -> Wrapping<i16> {
         if self { Wrapping(0) } else { v }
     }
 
