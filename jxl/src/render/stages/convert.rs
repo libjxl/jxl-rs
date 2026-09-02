@@ -41,6 +41,47 @@ impl std::fmt::Display for ConvertModularXYBToF32Stage {
     }
 }
 
+simd_function!(
+    modular_xyb_to_float_simd_dispatch,
+    d: D,
+    #[allow(clippy::too_many_arguments)]
+    fn modular_xyb_to_float_simd(
+        input_y: &[i32],
+        input_x: &[i32],
+        input_b: &[i32],
+        output_x: &mut [f32],
+        output_y: &mut [f32],
+        output_b: &mut [f32],
+        scale_x: f32,
+        scale_y: f32,
+        scale_b: f32,
+        xsize: usize,
+    ) {
+        let simd_width = D::I32Vec::LEN;
+        let scale_x = D::F32Vec::splat(d, scale_x);
+        let scale_y = D::F32Vec::splat(d, scale_y);
+        let scale_b = D::F32Vec::splat(d, scale_b);
+
+        for (((((in_y, in_x), in_b), out_x), out_y), out_b) in input_y
+            .chunks_exact(simd_width)
+            .zip(input_x.chunks_exact(simd_width))
+            .zip(input_b.chunks_exact(simd_width))
+            .zip(output_x.chunks_exact_mut(simd_width))
+            .zip(output_y.chunks_exact_mut(simd_width))
+            .zip(output_b.chunks_exact_mut(simd_width))
+            .take(xsize.div_ceil(simd_width))
+        {
+            let vy = D::I32Vec::load(d, in_y).as_f32();
+            let vx = D::I32Vec::load(d, in_x).as_f32();
+            let vb = D::I32Vec::load(d, in_b).as_f32();
+
+            (vx * scale_x).store(out_x);
+            (vy * scale_y).store(out_y);
+            ((vb + vy) * scale_b).store(out_b);
+        }
+    }
+);
+
 impl RenderPipelineInOutStage for ConvertModularXYBToF32Stage {
     type InputT = i32;
     type OutputT = f32;
@@ -72,12 +113,133 @@ impl RenderPipelineInOutStage for ConvertModularXYBToF32Stage {
         // Output channels: [X, Y, B] (standard XYB order)
         let (input_y, input_x, input_b) = (&input_rows[0], &input_rows[1], &input_rows[2]);
         let (output_x, output_y, output_b) = output_rows.split_first_3_mut();
-        // TODO(veluca): SIMD this
-        for i in 0..xsize {
-            output_x[0][i] = input_x[0][i] as f32 * scale_x;
-            output_y[0][i] = input_y[0][i] as f32 * scale_y;
-            output_b[0][i] = (input_b[0][i] as f32 + input_y[0][i] as f32) * scale_b;
+        modular_xyb_to_float_simd_dispatch(
+            input_y[0],
+            input_x[0],
+            input_b[0],
+            output_x[0],
+            output_y[0],
+            output_b[0],
+            scale_x,
+            scale_y,
+            scale_b,
+            xsize,
+        );
+    }
+}
+
+pub struct ConvertModular16XYBToF32Stage {
+    first_channel: usize,
+    lf_quant: Arc<RwLock<LfQuantFactors>>,
+}
+
+impl ConvertModular16XYBToF32Stage {
+    pub fn new(
+        first_channel: usize,
+        lf_quant: Arc<RwLock<LfQuantFactors>>,
+    ) -> ConvertModular16XYBToF32Stage {
+        ConvertModular16XYBToF32Stage {
+            first_channel,
+            lf_quant,
         }
+    }
+}
+
+impl std::fmt::Display for ConvertModular16XYBToF32Stage {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "convert modular xyb data to F32 in channels {}..{}",
+            self.first_channel,
+            self.first_channel + 2,
+        )
+    }
+}
+
+simd_function!(
+    modular16_xyb_to_float_simd_dispatch,
+    d: D,
+    #[allow(clippy::too_many_arguments)]
+    fn modular16_xyb_to_float_simd(
+        input_y: &[i16],
+        input_x: &[i16],
+        input_b: &[i16],
+        output_x: &mut [f32],
+        output_y: &mut [f32],
+        output_b: &mut [f32],
+        scale_x: f32,
+        scale_y: f32,
+        scale_b: f32,
+        xsize: usize,
+    ) {
+        let simd_width = D::I32Vec::LEN;
+        let scale_x = D::F32Vec::splat(d, scale_x);
+        let scale_y = D::F32Vec::splat(d, scale_y);
+        let scale_b = D::F32Vec::splat(d, scale_b);
+
+        for (((((in_y, in_x), in_b), out_x), out_y), out_b) in input_y
+            .chunks_exact(simd_width)
+            .zip(input_x.chunks_exact(simd_width))
+            .zip(input_b.chunks_exact(simd_width))
+            .zip(output_x.chunks_exact_mut(simd_width))
+            .zip(output_y.chunks_exact_mut(simd_width))
+            .zip(output_b.chunks_exact_mut(simd_width))
+            .take(xsize.div_ceil(simd_width))
+        {
+            let vy = D::I32Vec::load_from_i16(d, in_y).as_f32();
+            let vx = D::I32Vec::load_from_i16(d, in_x).as_f32();
+            let vb = D::I32Vec::load_from_i16(d, in_b).as_f32();
+
+            (vx * scale_x).store(out_x);
+            (vy * scale_y).store(out_y);
+            ((vb + vy) * scale_b).store(out_b);
+        }
+    }
+);
+
+impl RenderPipelineInOutStage for ConvertModular16XYBToF32Stage {
+    type InputT = i16;
+    type OutputT = f32;
+    const SHIFT: (u8, u8) = (0, 0);
+    const BORDER: (u8, u8) = (0, 0);
+
+    fn uses_channel(&self, c: usize) -> bool {
+        (self.first_channel..self.first_channel + 3).contains(&c)
+    }
+
+    fn process_row_chunk(
+        &self,
+        _position: (usize, usize),
+        xsize: usize,
+        input_rows: &Channels<i16>,
+        output_rows: &mut ChannelsMut<f32>,
+        _state: Option<&mut ErasedLocalState>,
+        _previous_call_was_previous_row: bool,
+    ) {
+        let lf_quant = self.lf_quant.try_read().unwrap();
+        let [scale_x, scale_y, scale_b] = lf_quant.quant_factors;
+        assert_eq!(
+            input_rows.len(),
+            3,
+            "incorrect number of channels; expected 3, found {}",
+            input_rows.len()
+        );
+        // Input channels: [Y, X, B] (modular XYB order)
+        // Output channels: [X, Y, B] (standard XYB order)
+        let (input_y, input_x, input_b) = (&input_rows[0], &input_rows[1], &input_rows[2]);
+        let (output_x, output_y, output_b) = output_rows.split_first_3_mut();
+        modular16_xyb_to_float_simd_dispatch(
+            input_y[0],
+            input_x[0],
+            input_b[0],
+            output_x[0],
+            output_y[0],
+            output_b[0],
+            scale_x,
+            scale_y,
+            scale_b,
+            xsize,
+        );
     }
 }
 
@@ -756,6 +918,20 @@ mod test {
             || ConvertModular16ToF32Stage::new(0, BitDepth::integer_samples(16)),
             (500, 500),
             1,
+        )
+    }
+
+    #[test]
+    fn modular16_xyb_to_f32_consistency() -> Result<()> {
+        crate::render::test::test_stage_consistency(
+            || {
+                ConvertModular16XYBToF32Stage::new(
+                    0,
+                    Arc::new(RwLock::new(LfQuantFactors::default())),
+                )
+            },
+            (500, 500),
+            3,
         )
     }
 
