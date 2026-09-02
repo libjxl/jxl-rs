@@ -311,6 +311,8 @@ pub struct Frame {
     // re-render of the corresponding groups.
     dirty_lf_groups: BTreeSet<usize>,
     buffer_recycler: Arc<BufferRecycler>,
+    // LF groups that received data or have modified neighbors and need to be previewed.
+    lf_preview_dirty_groups: BTreeSet<usize>,
 }
 
 impl Frame {

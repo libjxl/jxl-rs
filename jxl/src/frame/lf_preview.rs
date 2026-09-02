@@ -3,7 +3,10 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-use crate::api::{JxlColorProfile, JxlColorType, JxlDataFormat, JxlOutputBuffer, JxlPixelFormat};
+use crate::api::{
+    JxlColorProfile, JxlColorType, JxlDataFormat, JxlOutputBuffer, JxlParallelRunner,
+    JxlPixelFormat,
+};
 use crate::error::Result;
 use crate::frame::Frame;
 use crate::headers::Orientation;
@@ -22,7 +25,7 @@ use crate::util::{SmallVec, f16, mirror};
 impl Frame {
     #[allow(clippy::too_many_arguments)]
     fn render_lf_frame_rect(
-        &mut self,
+        &self,
         color_type: JxlColorType,
         data_format: JxlDataFormat,
         rect: Rect,
@@ -280,8 +283,8 @@ impl Frame {
         &mut self,
         pixel_format: &JxlPixelFormat,
         output_buffers: &mut [JxlOutputBuffer<'_>],
-        changed_regions: &[Rect],
         output_profile: &JxlColorProfile,
+        parallel_runner: &mut dyn JxlParallelRunner,
     ) -> Result<bool> {
         if self.header.needs_blending() {
             return Ok(false);
@@ -331,23 +334,16 @@ impl Frame {
         let xsize = sz.xsize() as usize;
         let ysize = sz.ysize() as usize;
 
-        // Render the whole image the first time, then only the changed regions.
-        let mut regions_storage;
-        let regions = if self.decoder_state.lf_frame_was_rendered {
-            changed_regions
-        } else {
-            self.decoder_state.lf_frame_was_rendered = true;
-            regions_storage = vec![];
-            for i in (0..xsize.div_ceil(8)).step_by(256) {
-                let x0 = i;
-                let x1 = (i + 256).min(xsize.div_ceil(8));
-                regions_storage.push(Rect {
-                    origin: (x0, 0),
-                    size: (x1 - x0, ysize.div_ceil(8)),
-                });
-            }
-            &regions_storage[..]
-        };
+        let groups = std::mem::take(&mut self.lf_preview_dirty_groups);
+        if groups.is_empty() {
+            return Ok(false);
+        }
+        self.decoder_state.lf_frame_was_rendered = true;
+        let regions_storage: Vec<Rect> = groups
+            .into_iter()
+            .map(|g| self.header.group_rect(g))
+            .collect();
+        let regions = &regions_storage[..];
 
         let orientation = image_metadata.orientation;
         let info = SaveStageBufferInfo {
@@ -359,8 +355,8 @@ impl Frame {
         let info = [Some(info)];
         let mut bufs = [Some(JxlOutputBuffer::reborrow(&mut output_buffers[0]))];
         let bufs = BufferSplitter::new(&mut bufs);
-        // TODO(veluca): parallelize this
-        for r in regions {
+        parallel_runner.run_ordered(regions.len(), None, &|i| {
+            let r = &regions[i];
             let upsampled_rect = Rect {
                 size: (r.size.0 * 8, r.size.1 * 8),
                 origin: (r.origin.0 * 8, r.origin.1 * 8),
@@ -384,8 +380,8 @@ impl Frame {
                 (xsize, ysize),
                 &output_color_info,
                 &output_tf,
-            )?;
-        }
+            )
+        })?;
 
         Ok(!regions.is_empty())
     }

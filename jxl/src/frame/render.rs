@@ -487,16 +487,41 @@ impl Frame {
         self.reference_frame_data = reference_frame_data;
         self.lf_frame_data = lf_frame_data;
 
-        if self.header.frame_type == FrameType::LFFrame
-            && self.header.lf_level == 1
-            && has_decoded_data
-        {
-            if do_flush && let Some(buffers) = api_buffers {
+        if self.header.frame_type == FrameType::LFFrame && self.header.lf_level == 1 {
+            let (gsx, gsy) = self.header.size_groups();
+            let group_dim = self.header.group_dim();
+            for r in &regions {
+                if r.size.0 == 0 || r.size.1 == 0 {
+                    continue;
+                }
+                let gx0 = r.origin.0 / group_dim;
+                let gx1 = (r.end().0 - 1) / group_dim;
+                let gy0 = r.origin.1 / group_dim;
+                let gy1 = (r.end().1 - 1) / group_dim;
+                for gy in gy0..=gy1 {
+                    for gx in gx0..=gx1 {
+                        let gxm = gx.saturating_sub(1);
+                        let gxp = (gx + 1).min(gsx - 1);
+                        let gym = gy.saturating_sub(1);
+                        let gyp = (gy + 1).min(gsy - 1);
+                        for ny in gym..=gyp {
+                            for nx in gxm..=gxp {
+                                self.lf_preview_dirty_groups.insert(ny * gsx + nx);
+                            }
+                        }
+                    }
+                }
+            }
+
+            if do_flush
+                && let Some(buffers) = api_buffers
+                && has_decoded_data
+            {
                 return self.maybe_preview_lf_frame(
                     pixel_format,
                     buffers,
-                    &regions[..],
                     output_profile,
+                    parallel_runner,
                 );
             } else if self.group_status.incomplete_groups == 0 {
                 // If we are not requesting another flush at the end of the LF frame, we
