@@ -154,7 +154,7 @@ simd_function!(
 // Converts custom [bits]-bit float (with [exp_bits] exponent bits) stored as
 // int back to binary32 float.
 fn int_to_float(input: &[i32], output: &mut [f32], bit_depth: &BitDepth, xsize: usize) {
-    assert_eq!(input.len(), output.len());
+    assert!(input.len() >= xsize && output.len() >= xsize);
     let bits = bit_depth.bits_per_sample();
     let exp_bits = bit_depth.exponent_bits_per_sample();
 
@@ -172,55 +172,56 @@ fn int_to_float(input: &[i32], output: &mut [f32], bit_depth: &BitDepth, xsize: 
     }
 
     // Generic scalar path for other custom float formats
-    int_to_float_generic(input, output, bits, exp_bits);
+    int_to_float_generic(&input[..xsize], &mut output[..xsize], bits, exp_bits);
+}
+
+fn custom_float_sample_to_f32(mut f: u32, bits: u32, exp_bits: u32) -> f32 {
+    let exp_bias = (1 << (exp_bits - 1)) - 1;
+    let sign_shift = bits - 1;
+    let mant_bits = bits - exp_bits - 1;
+    let mant_shift = 23 - mant_bits;
+    let signbit = (f >> sign_shift) != 0;
+    f &= (1 << sign_shift) - 1;
+    if f == 0 {
+        return if signbit { -0.0 } else { 0.0 };
+    }
+    let mut exp = (f >> mant_bits) as i32;
+    let mut mantissa = f & ((1 << mant_bits) - 1);
+    if exp == (1 << exp_bits) - 1 {
+        // NaN or infinity
+        f = if signbit { 0x80000000 } else { 0 };
+        f |= 0b11111111 << 23;
+        f |= mantissa << mant_shift;
+        return f32::from_bits(f);
+    }
+    mantissa <<= mant_shift;
+    // Try to normalize only if there is space for maneuver.
+    if exp == 0 && exp_bits < 8 {
+        // subnormal number
+        while (mantissa & 0x800000) == 0 {
+            mantissa <<= 1;
+            exp -= 1;
+        }
+        exp += 1;
+        // remove leading 1 because it is implicit now
+        mantissa &= 0x7fffff;
+    }
+    exp -= exp_bias;
+    // broke up the arbitrary float into its parts, now reassemble into
+    // binary32
+    exp += 127;
+    assert!(exp >= 0);
+    f = if signbit { 0x80000000 } else { 0 };
+    f |= (exp as u32) << 23;
+    f |= mantissa;
+    f32::from_bits(f)
 }
 
 // Generic scalar conversion for arbitrary bit-depth floats
 // TODO: SIMD optimization for custom float formats
 fn int_to_float_generic(input: &[i32], output: &mut [f32], bits: u32, exp_bits: u32) {
-    let exp_bias = (1 << (exp_bits - 1)) - 1;
-    let sign_shift = bits - 1;
-    let mant_bits = bits - exp_bits - 1;
-    let mant_shift = 23 - mant_bits;
     for (&in_val, out_val) in input.iter().zip(output) {
-        let mut f = in_val as u32;
-        let signbit = (f >> sign_shift) != 0;
-        f &= (1 << sign_shift) - 1;
-        if f == 0 {
-            *out_val = if signbit { -0.0 } else { 0.0 };
-            continue;
-        }
-        let mut exp = (f >> mant_bits) as i32;
-        let mut mantissa = f & ((1 << mant_bits) - 1);
-        if exp == (1 << exp_bits) - 1 {
-            // NaN or infinity
-            f = if signbit { 0x80000000 } else { 0 };
-            f |= 0b11111111 << 23;
-            f |= mantissa << mant_shift;
-            *out_val = f32::from_bits(f);
-            continue;
-        }
-        mantissa <<= mant_shift;
-        // Try to normalize only if there is space for maneuver.
-        if exp == 0 && exp_bits < 8 {
-            // subnormal number
-            while (mantissa & 0x800000) == 0 {
-                mantissa <<= 1;
-                exp -= 1;
-            }
-            exp += 1;
-            // remove leading 1 because it is implicit now
-            mantissa &= 0x7fffff;
-        }
-        exp -= exp_bias;
-        // broke up the arbitrary float into its parts, now reassemble into
-        // binary32
-        exp += 127;
-        assert!(exp >= 0);
-        f = if signbit { 0x80000000 } else { 0 };
-        f |= (exp as u32) << 23;
-        f |= mantissa;
-        *out_val = f32::from_bits(f);
+        *out_val = custom_float_sample_to_f32(in_val as u32, bits, exp_bits);
     }
 }
 
@@ -281,6 +282,83 @@ impl RenderPipelineInOutStage for ConvertModularToF32Stage {
                 channel: self.channel,
                 bit_depth: self.bit_depth.bits_per_sample() as u8,
             })
+        }
+    }
+}
+
+pub struct ConvertModular16ToF32Stage {
+    channel: usize,
+    bit_depth: BitDepth,
+}
+
+impl ConvertModular16ToF32Stage {
+    pub fn new(channel: usize, bit_depth: BitDepth) -> ConvertModular16ToF32Stage {
+        ConvertModular16ToF32Stage { channel, bit_depth }
+    }
+}
+
+impl std::fmt::Display for ConvertModular16ToF32Stage {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "convert modular data to F32 in channel {} with bit depth {:?}",
+            self.channel, self.bit_depth
+        )
+    }
+}
+
+simd_function!(
+    modular16_to_float_simd_dispatch,
+    d: D,
+    fn modular16_to_float_simd(input: &[i16], output: &mut [f32], scale: f32, xsize: usize) {
+        let simd_width = D::I32Vec::LEN;
+        let scale_vec = D::F32Vec::splat(d, scale);
+        for (in_chunk, out_chunk) in input
+            .chunks_exact(simd_width)
+            .zip(output.chunks_exact_mut(simd_width))
+            .take(xsize.div_ceil(simd_width))
+        {
+            let val = D::I32Vec::load_from_i16(d, in_chunk);
+            (val.as_f32() * scale_vec).store(out_chunk);
+        }
+    }
+);
+
+fn int16_to_float(input: &[i16], output: &mut [f32], bit_depth: &BitDepth, xsize: usize) {
+    assert!(input.len() >= xsize && output.len() >= xsize);
+    let bits = bit_depth.bits_per_sample();
+    let exp_bits = bit_depth.exponent_bits_per_sample();
+
+    for (&in_val, out_val) in input[..xsize].iter().zip(&mut output[..xsize]) {
+        *out_val = custom_float_sample_to_f32((in_val as u16) as u32, bits, exp_bits);
+    }
+}
+
+impl RenderPipelineInOutStage for ConvertModular16ToF32Stage {
+    type InputT = i16;
+    type OutputT = f32;
+    const SHIFT: (u8, u8) = (0, 0);
+    const BORDER: (u8, u8) = (0, 0);
+
+    fn uses_channel(&self, c: usize) -> bool {
+        c == self.channel
+    }
+
+    fn process_row_chunk(
+        &self,
+        _position: (usize, usize),
+        xsize: usize,
+        input_rows: &Channels<i16>,
+        output_rows: &mut ChannelsMut<f32>,
+        _state: Option<&mut ErasedLocalState>,
+        _previous_call_was_previous_row: bool,
+    ) {
+        let input = &input_rows[0];
+        if self.bit_depth.floating_point_sample() {
+            int16_to_float(input[0], output_rows[0][0], &self.bit_depth, xsize);
+        } else {
+            let scale = 1.0 / ((1u64 << self.bit_depth.bits_per_sample()) - 1) as f32;
+            modular16_to_float_simd_dispatch(input[0], output_rows[0][0], scale, xsize);
         }
     }
 }
@@ -658,6 +736,24 @@ mod test {
     fn modular_to_f32_16bit_consistency() -> Result<()> {
         crate::render::test::test_stage_consistency(
             || ConvertModularToF32Stage::new(0, BitDepth::integer_samples(16)),
+            (500, 500),
+            1,
+        )
+    }
+
+    #[test]
+    fn modular16_to_f32_8bit_consistency() -> Result<()> {
+        crate::render::test::test_stage_consistency(
+            || ConvertModular16ToF32Stage::new(0, BitDepth::integer_samples(8)),
+            (500, 500),
+            1,
+        )
+    }
+
+    #[test]
+    fn modular16_to_f32_16bit_consistency() -> Result<()> {
+        crate::render::test::test_stage_consistency(
+            || ConvertModular16ToF32Stage::new(0, BitDepth::integer_samples(16)),
             (500, 500),
             1,
         )
