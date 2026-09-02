@@ -9,9 +9,11 @@ use std::ops::{
     Mul, MulAssign, Neg, Shl, ShlAssign, Shr, ShrAssign, Sub, SubAssign,
 };
 
-use super::super::{F32SimdVec, I32SimdVec, SimdDescriptor, SimdMask, U8SimdVec, U16SimdVec};
+use super::super::{
+    F32SimdVec, I16SimdVec, I32SimdVec, SimdDescriptor, SimdMask, SimdMask16, U8SimdVec, U16SimdVec,
+};
 use crate::x86_64::sse42::Sse42Descriptor;
-use crate::{U32SimdVec, U64SimdVec, impl_f32_array_interface};
+use crate::{U32SimdVec, U64SimdVec, impl_f32_array_interface, impl_i16_array_interface};
 
 /// Core 8x8 transpose algorithm for AVX2.
 /// Takes 8 __m256 vectors representing rows and returns 8 transposed vectors.
@@ -121,11 +123,13 @@ pub struct Bf16Table8Avx(__m256);
 impl SimdDescriptor for AvxDescriptor {
     type F32Vec = F32VecAvx;
     type I32Vec = I32VecAvx;
+    type I16Vec = I16VecAvx;
     type U64Vec = U64VecAvx;
     type U32Vec = U32VecAvx;
     type U8Vec = U8VecAvx;
     type U16Vec = U16VecAvx;
     type Mask = MaskAvx;
+    type Mask16 = Mask16Avx;
     type Bf16Table8 = Bf16Table8Avx;
 
     type Descriptor256 = Self;
@@ -187,6 +191,10 @@ pub struct F32VecAvx(__m256, AvxDescriptor);
 #[derive(Clone, Copy, Debug)]
 #[repr(transparent)]
 pub struct MaskAvx(__m256, AvxDescriptor);
+
+#[derive(Clone, Copy, Debug)]
+#[repr(transparent)]
+pub struct Mask16Avx(__m256i, AvxDescriptor);
 
 impl F32SimdVec for F32VecAvx {
     type Descriptor = AvxDescriptor;
@@ -692,7 +700,7 @@ impl F32SimdVec for F32VecAvx {
     fn transpose_square(d: Self::Descriptor, data: &mut [Self::UnderlyingArray], stride: usize) {
         #[target_feature(enable = "avx2")]
         #[inline]
-        unsafe fn transpose8x8f32(d: AvxDescriptor, data: &mut [[f32; 8]], stride: usize) {
+        fn transpose8x8f32(d: AvxDescriptor, data: &mut [[f32; 8]], stride: usize) {
             assert!(data.len() > stride * 7);
 
             let r0 = F32VecAvx::load_array(d, &data[0]).0;
@@ -1053,6 +1061,315 @@ impl BitOrAssign<I32VecAvx> for I32VecAvx {
 impl BitXorAssign<I32VecAvx> for I32VecAvx {
     fn_avx!(this: &mut I32VecAvx, fn bitxor_assign(rhs: I32VecAvx) {
         this.0 = _mm256_xor_si256(this.0, rhs.0)
+    });
+}
+
+#[derive(Clone, Copy, Debug)]
+#[repr(transparent)]
+pub struct I16VecAvx(__m256i, AvxDescriptor);
+
+impl I16SimdVec for I16VecAvx {
+    type Descriptor = AvxDescriptor;
+
+    const LEN: usize = 16;
+
+    #[inline(always)]
+    fn load(d: Self::Descriptor, mem: &[i16]) -> Self {
+        assert!(mem.len() >= Self::LEN);
+        // SAFETY: we just checked that `mem` has enough space. Moreover, we know avx2 is available
+        // from the safety invariant on `d`.
+        Self(unsafe { _mm256_loadu_si256(mem.as_ptr().cast()) }, d)
+    }
+
+    #[inline(always)]
+    fn store(&self, mem: &mut [i16]) {
+        assert!(mem.len() >= Self::LEN);
+        // SAFETY: we just checked that `mem` has enough space. Moreover, we know avx2 is available
+        // from the safety invariant on `self.1`.
+        unsafe { _mm256_storeu_si256(mem.as_mut_ptr().cast(), self.0) }
+    }
+
+    #[inline(always)]
+    fn splat(d: Self::Descriptor, v: i16) -> Self {
+        // SAFETY: We know avx2 is available from the safety invariant on `d`.
+        unsafe { Self(_mm256_set1_epi16(v), d) }
+    }
+
+    #[inline(always)]
+    fn zero(d: Self::Descriptor) -> Self {
+        // SAFETY: We know avx2 is available from the safety invariant on `d`.
+        unsafe { Self(_mm256_setzero_si256(), d) }
+    }
+
+    fn_avx!(this: I16VecAvx, fn abs() -> I16VecAvx {
+        I16VecAvx(_mm256_abs_epi16(this.0), this.1)
+    });
+
+    fn_avx!(this: I16VecAvx, fn gt(rhs: I16VecAvx) -> Mask16Avx {
+        Mask16Avx(_mm256_cmpgt_epi16(this.0, rhs.0), this.1)
+    });
+
+    fn_avx!(this: I16VecAvx, fn lt_zero() -> Mask16Avx {
+        I16VecAvx(_mm256_setzero_si256(), this.1).gt(this)
+    });
+
+    fn_avx!(this: I16VecAvx, fn eq(rhs: I16VecAvx) -> Mask16Avx {
+        Mask16Avx(_mm256_cmpeq_epi16(this.0, rhs.0), this.1)
+    });
+
+    fn_avx!(this: I16VecAvx, fn eq_zero() -> Mask16Avx {
+        this.eq(I16VecAvx(_mm256_setzero_si256(), this.1))
+    });
+
+    #[inline(always)]
+    fn shl<const AMOUNT_U: u32, const AMOUNT_I: i32>(self) -> Self {
+        // SAFETY: We know avx2 is available from the safety invariant on `self.1`.
+        unsafe { Self(_mm256_slli_epi16::<AMOUNT_I>(self.0), self.1) }
+    }
+
+    #[inline(always)]
+    fn shr<const AMOUNT_U: u32, const AMOUNT_I: i32>(self) -> Self {
+        // SAFETY: We know avx2 is available from the safety invariant on `self.1`.
+        unsafe { Self(_mm256_srai_epi16::<AMOUNT_I>(self.0), self.1) }
+    }
+
+    fn_avx!(this: I16VecAvx, fn mul_wide_take_high(rhs: I16VecAvx) -> I16VecAvx {
+        I16VecAvx(_mm256_mulhi_epi16(this.0, rhs.0), this.1)
+    });
+
+    #[inline(always)]
+    fn bitcast_u16(self) -> U16VecAvx {
+        U16VecAvx(self.0, self.1)
+    }
+
+    impl_i16_array_interface!();
+
+    #[inline(always)]
+    fn transpose_square(d: Self::Descriptor, data: &mut [Self::UnderlyingArray], stride: usize) {
+        #[target_feature(enable = "avx2")]
+        #[inline]
+        fn transpose16x16i16(d: AvxDescriptor, data: &mut [[i16; 16]], stride: usize) {
+            assert!(data.len() > stride * 15);
+
+            #[target_feature(enable = "avx2")]
+            #[inline]
+            fn transpose_8x8_inlane(
+                r0: __m256i,
+                r1: __m256i,
+                r2: __m256i,
+                r3: __m256i,
+                r4: __m256i,
+                r5: __m256i,
+                r6: __m256i,
+                r7: __m256i,
+            ) -> (
+                __m256i,
+                __m256i,
+                __m256i,
+                __m256i,
+                __m256i,
+                __m256i,
+                __m256i,
+                __m256i,
+            ) {
+                let t0 = _mm256_unpacklo_epi16(r0, r1);
+                let t1 = _mm256_unpackhi_epi16(r0, r1);
+                let t2 = _mm256_unpacklo_epi16(r2, r3);
+                let t3 = _mm256_unpackhi_epi16(r2, r3);
+                let t4 = _mm256_unpacklo_epi16(r4, r5);
+                let t5 = _mm256_unpackhi_epi16(r4, r5);
+                let t6 = _mm256_unpacklo_epi16(r6, r7);
+                let t7 = _mm256_unpackhi_epi16(r6, r7);
+
+                let u0 = _mm256_unpacklo_epi32(t0, t2);
+                let u1 = _mm256_unpackhi_epi32(t0, t2);
+                let u2 = _mm256_unpacklo_epi32(t1, t3);
+                let u3 = _mm256_unpackhi_epi32(t1, t3);
+                let u4 = _mm256_unpacklo_epi32(t4, t6);
+                let u5 = _mm256_unpackhi_epi32(t4, t6);
+                let u6 = _mm256_unpacklo_epi32(t5, t7);
+                let u7 = _mm256_unpackhi_epi32(t5, t7);
+
+                let s0 = _mm256_unpacklo_epi64(u0, u4);
+                let s1 = _mm256_unpackhi_epi64(u0, u4);
+                let s2 = _mm256_unpacklo_epi64(u1, u5);
+                let s3 = _mm256_unpackhi_epi64(u1, u5);
+                let s4 = _mm256_unpacklo_epi64(u2, u6);
+                let s5 = _mm256_unpackhi_epi64(u2, u6);
+                let s6 = _mm256_unpacklo_epi64(u3, u7);
+                let s7 = _mm256_unpackhi_epi64(u3, u7);
+
+                (s0, s1, s2, s3, s4, s5, s6, s7)
+            }
+
+            let r0 = I16VecAvx::load_array(d, &data[0]).0;
+            let r1 = I16VecAvx::load_array(d, &data[1 * stride]).0;
+            let r2 = I16VecAvx::load_array(d, &data[2 * stride]).0;
+            let r3 = I16VecAvx::load_array(d, &data[3 * stride]).0;
+            let r4 = I16VecAvx::load_array(d, &data[4 * stride]).0;
+            let r5 = I16VecAvx::load_array(d, &data[5 * stride]).0;
+            let r6 = I16VecAvx::load_array(d, &data[6 * stride]).0;
+            let r7 = I16VecAvx::load_array(d, &data[7 * stride]).0;
+            let r8 = I16VecAvx::load_array(d, &data[8 * stride]).0;
+            let r9 = I16VecAvx::load_array(d, &data[9 * stride]).0;
+            let r10 = I16VecAvx::load_array(d, &data[10 * stride]).0;
+            let r11 = I16VecAvx::load_array(d, &data[11 * stride]).0;
+            let r12 = I16VecAvx::load_array(d, &data[12 * stride]).0;
+            let r13 = I16VecAvx::load_array(d, &data[13 * stride]).0;
+            let r14 = I16VecAvx::load_array(d, &data[14 * stride]).0;
+            let r15 = I16VecAvx::load_array(d, &data[15 * stride]).0;
+
+            let (t0, t1, t2, t3, t4, t5, t6, t7) =
+                transpose_8x8_inlane(r0, r1, r2, r3, r4, r5, r6, r7);
+            let (b0, b1, b2, b3, b4, b5, b6, b7) =
+                transpose_8x8_inlane(r8, r9, r10, r11, r12, r13, r14, r15);
+
+            I16VecAvx(_mm256_permute2x128_si256::<0x20>(t0, b0), d).store_array(&mut data[0]);
+            I16VecAvx(_mm256_permute2x128_si256::<0x20>(t1, b1), d)
+                .store_array(&mut data[1 * stride]);
+            I16VecAvx(_mm256_permute2x128_si256::<0x20>(t2, b2), d)
+                .store_array(&mut data[2 * stride]);
+            I16VecAvx(_mm256_permute2x128_si256::<0x20>(t3, b3), d)
+                .store_array(&mut data[3 * stride]);
+            I16VecAvx(_mm256_permute2x128_si256::<0x20>(t4, b4), d)
+                .store_array(&mut data[4 * stride]);
+            I16VecAvx(_mm256_permute2x128_si256::<0x20>(t5, b5), d)
+                .store_array(&mut data[5 * stride]);
+            I16VecAvx(_mm256_permute2x128_si256::<0x20>(t6, b6), d)
+                .store_array(&mut data[6 * stride]);
+            I16VecAvx(_mm256_permute2x128_si256::<0x20>(t7, b7), d)
+                .store_array(&mut data[7 * stride]);
+
+            I16VecAvx(_mm256_permute2x128_si256::<0x31>(t0, b0), d)
+                .store_array(&mut data[8 * stride]);
+            I16VecAvx(_mm256_permute2x128_si256::<0x31>(t1, b1), d)
+                .store_array(&mut data[9 * stride]);
+            I16VecAvx(_mm256_permute2x128_si256::<0x31>(t2, b2), d)
+                .store_array(&mut data[10 * stride]);
+            I16VecAvx(_mm256_permute2x128_si256::<0x31>(t3, b3), d)
+                .store_array(&mut data[11 * stride]);
+            I16VecAvx(_mm256_permute2x128_si256::<0x31>(t4, b4), d)
+                .store_array(&mut data[12 * stride]);
+            I16VecAvx(_mm256_permute2x128_si256::<0x31>(t5, b5), d)
+                .store_array(&mut data[13 * stride]);
+            I16VecAvx(_mm256_permute2x128_si256::<0x31>(t6, b6), d)
+                .store_array(&mut data[14 * stride]);
+            I16VecAvx(_mm256_permute2x128_si256::<0x31>(t7, b7), d)
+                .store_array(&mut data[15 * stride]);
+        }
+
+        // SAFETY: the safety invariant on `d` guarantees avx2
+        unsafe {
+            transpose16x16i16(d, data, stride);
+        }
+    }
+
+    #[inline(always)]
+    fn store_u8(self, dest: &mut [u8]) {
+        #[target_feature(enable = "avx2")]
+        #[inline]
+        fn store_u8_impl(v: __m256i, dest: &mut [u8]) {
+            assert!(dest.len() >= I16VecAvx::LEN);
+            let shuffle_mask = _mm256_setr_epi8(
+                0, 2, 4, 6, 8, 10, 12, 14, -1, -1, -1, -1, -1, -1, -1, -1, //
+                0, 2, 4, 6, 8, 10, 12, 14, -1, -1, -1, -1, -1, -1, -1, -1,
+            );
+            let tmp = _mm256_shuffle_epi8(v, shuffle_mask);
+            let lo = _mm256_castsi256_si128(tmp);
+            let hi = _mm256_extracti128_si256::<1>(tmp);
+            let packed = _mm_unpacklo_epi64(lo, hi);
+            // SAFETY: dest has at least 16 bytes (asserted above).
+            unsafe {
+                _mm_storeu_si128(dest.as_mut_ptr().cast(), packed);
+            }
+        }
+        // SAFETY: avx2 is available from the safety invariant on the descriptor.
+        unsafe { store_u8_impl(self.0, dest) }
+    }
+}
+
+impl Add<I16VecAvx> for I16VecAvx {
+    type Output = I16VecAvx;
+    fn_avx!(this: I16VecAvx, fn add(rhs: I16VecAvx) -> I16VecAvx {
+        I16VecAvx(_mm256_add_epi16(this.0, rhs.0), this.1)
+    });
+}
+
+impl Sub<I16VecAvx> for I16VecAvx {
+    type Output = I16VecAvx;
+    fn_avx!(this: I16VecAvx, fn sub(rhs: I16VecAvx) -> I16VecAvx {
+        I16VecAvx(_mm256_sub_epi16(this.0, rhs.0), this.1)
+    });
+}
+
+impl Neg for I16VecAvx {
+    type Output = I16VecAvx;
+    fn_avx!(this: I16VecAvx, fn neg() -> I16VecAvx {
+        I16VecAvx(_mm256_sub_epi16(_mm256_setzero_si256(), this.0), this.1)
+    });
+}
+
+impl BitAnd<I16VecAvx> for I16VecAvx {
+    type Output = I16VecAvx;
+    fn_avx!(this: I16VecAvx, fn bitand(rhs: I16VecAvx) -> I16VecAvx {
+        I16VecAvx(_mm256_and_si256(this.0, rhs.0), this.1)
+    });
+}
+
+impl BitOr<I16VecAvx> for I16VecAvx {
+    type Output = I16VecAvx;
+    fn_avx!(this: I16VecAvx, fn bitor(rhs: I16VecAvx) -> I16VecAvx {
+        I16VecAvx(_mm256_or_si256(this.0, rhs.0), this.1)
+    });
+}
+
+impl BitXor<I16VecAvx> for I16VecAvx {
+    type Output = I16VecAvx;
+    fn_avx!(this: I16VecAvx, fn bitxor(rhs: I16VecAvx) -> I16VecAvx {
+        I16VecAvx(_mm256_xor_si256(this.0, rhs.0), this.1)
+    });
+}
+
+impl AddAssign<I16VecAvx> for I16VecAvx {
+    fn_avx!(this: &mut I16VecAvx, fn add_assign(rhs: I16VecAvx) {
+        this.0 = _mm256_add_epi16(this.0, rhs.0);
+    });
+}
+
+impl SubAssign<I16VecAvx> for I16VecAvx {
+    fn_avx!(this: &mut I16VecAvx, fn sub_assign(rhs: I16VecAvx) {
+        this.0 = _mm256_sub_epi16(this.0, rhs.0);
+    });
+}
+
+impl BitAndAssign<I16VecAvx> for I16VecAvx {
+    fn_avx!(this: &mut I16VecAvx, fn bitand_assign(rhs: I16VecAvx) {
+        this.0 = _mm256_and_si256(this.0, rhs.0);
+    });
+}
+
+impl BitOrAssign<I16VecAvx> for I16VecAvx {
+    fn_avx!(this: &mut I16VecAvx, fn bitor_assign(rhs: I16VecAvx) {
+        this.0 = _mm256_or_si256(this.0, rhs.0);
+    });
+}
+
+impl BitXorAssign<I16VecAvx> for I16VecAvx {
+    fn_avx!(this: &mut I16VecAvx, fn bitxor_assign(rhs: I16VecAvx) {
+        this.0 = _mm256_xor_si256(this.0, rhs.0);
+    });
+}
+
+impl Mul<I16VecAvx> for I16VecAvx {
+    type Output = I16VecAvx;
+    fn_avx!(this: I16VecAvx, fn mul(rhs: I16VecAvx) -> I16VecAvx {
+        I16VecAvx(_mm256_mullo_epi16(this.0, rhs.0), this.1)
+    });
+}
+
+impl MulAssign<I16VecAvx> for I16VecAvx {
+    fn_avx!(this: &mut I16VecAvx, fn mul_assign(rhs: I16VecAvx) {
+        this.0 = _mm256_mullo_epi16(this.0, rhs.0);
     });
 }
 
@@ -1558,6 +1875,11 @@ impl U16SimdVec for U16VecAvx {
         // SAFETY: avx2 is available from the safety invariant on the descriptor.
         unsafe { store_interleaved_4_impl(a.0, b.0, c.0, d.0, dest) }
     }
+
+    #[inline(always)]
+    fn bitcast_i16(self) -> I16VecAvx {
+        I16VecAvx(self.0, self.1)
+    }
 }
 
 impl SimdMask for MaskAvx {
@@ -1595,5 +1917,39 @@ impl BitOr<MaskAvx> for MaskAvx {
     type Output = MaskAvx;
     fn_avx!(this: MaskAvx, fn bitor(rhs: MaskAvx) -> MaskAvx {
         MaskAvx(_mm256_or_ps(this.0, rhs.0), this.1)
+    });
+}
+
+impl SimdMask16 for Mask16Avx {
+    type Descriptor = AvxDescriptor;
+
+    fn_avx!(this: Mask16Avx, fn if_then_else_i16(if_true: I16VecAvx, if_false: I16VecAvx) -> I16VecAvx {
+        I16VecAvx(_mm256_blendv_epi8(if_false.0, if_true.0, this.0), this.1)
+    });
+
+    fn_avx!(this: Mask16Avx, fn maskz_i16(v: I16VecAvx) -> I16VecAvx {
+        I16VecAvx(_mm256_andnot_si256(this.0, v.0), this.1)
+    });
+
+    fn_avx!(this: Mask16Avx, fn all() -> bool {
+        _mm256_movemask_epi8(this.0) as u32 == 0xFFFF_FFFF
+    });
+
+    fn_avx!(this: Mask16Avx, fn andnot(rhs: Mask16Avx) -> Mask16Avx {
+        Mask16Avx(_mm256_andnot_si256(this.0, rhs.0), this.1)
+    });
+}
+
+impl BitAnd<Mask16Avx> for Mask16Avx {
+    type Output = Mask16Avx;
+    fn_avx!(this: Mask16Avx, fn bitand(rhs: Mask16Avx) -> Mask16Avx {
+        Mask16Avx(_mm256_and_si256(this.0, rhs.0), this.1)
+    });
+}
+
+impl BitOr<Mask16Avx> for Mask16Avx {
+    type Output = Mask16Avx;
+    fn_avx!(this: Mask16Avx, fn bitor(rhs: Mask16Avx) -> Mask16Avx {
+        Mask16Avx(_mm256_or_si256(this.0, rhs.0), this.1)
     });
 }

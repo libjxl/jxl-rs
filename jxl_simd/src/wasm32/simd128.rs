@@ -9,8 +9,10 @@ use std::ops::{
     Mul, MulAssign, Neg, Sub, SubAssign,
 };
 
-use super::super::{F32SimdVec, I32SimdVec, SimdDescriptor, SimdMask, U8SimdVec, U16SimdVec};
-use crate::{U32SimdVec, U64SimdVec};
+use super::super::{
+    F32SimdVec, I16SimdVec, I32SimdVec, SimdDescriptor, SimdMask, SimdMask16, U8SimdVec, U16SimdVec,
+};
+use crate::{U32SimdVec, U64SimdVec, impl_i16_array_interface};
 
 #[derive(Clone, Copy, Debug)]
 pub struct Simd128Descriptor(());
@@ -26,6 +28,8 @@ impl SimdDescriptor for Simd128Descriptor {
 
     type I32Vec = I32VecSimd128;
 
+    type I16Vec = I16VecSimd128;
+
     type U64Vec = U64VecSimd128;
 
     type U32Vec = U32VecSimd128;
@@ -35,6 +39,7 @@ impl SimdDescriptor for Simd128Descriptor {
     type U8Vec = U8VecSimd128;
 
     type Mask = MaskSimd128;
+    type Mask16 = Mask16Simd128;
     type Bf16Table8 = Bf16Table8Simd128;
 
     type Descriptor256 = Self;
@@ -840,6 +845,252 @@ impl BitXorAssign<I32VecSimd128> for I32VecSimd128 {
 
 #[derive(Clone, Copy, Debug)]
 #[repr(transparent)]
+pub struct I16VecSimd128(v128, Simd128Descriptor);
+
+impl I16SimdVec for I16VecSimd128 {
+    type Descriptor = Simd128Descriptor;
+
+    const LEN: usize = 8;
+
+    #[inline(always)]
+    fn load(d: Self::Descriptor, mem: &[i16]) -> Self {
+        assert!(mem.len() >= Self::LEN);
+        // SAFETY: we just checked that `mem` has enough space.
+        Self(unsafe { v128_load(mem.as_ptr().cast()) }, d)
+    }
+
+    #[inline(always)]
+    fn store(&self, mem: &mut [i16]) {
+        assert!(mem.len() >= Self::LEN);
+        // SAFETY: we just checked that `mem` has enough space.
+        unsafe { v128_store(mem.as_mut_ptr().cast(), self.0) }
+    }
+
+    #[inline(always)]
+    fn splat(d: Self::Descriptor, v: i16) -> Self {
+        Self(i16x8_splat(v), d)
+    }
+
+    #[inline(always)]
+    fn zero(d: Self::Descriptor) -> Self {
+        Self(i16x8_splat(0), d)
+    }
+
+    #[inline(always)]
+    fn abs(self) -> Self {
+        Self(i16x8_abs(self.0), self.1)
+    }
+
+    #[inline(always)]
+    fn gt(self, other: Self) -> Mask16Simd128 {
+        Mask16Simd128(i16x8_gt(self.0, other.0), self.1)
+    }
+
+    #[inline(always)]
+    fn lt_zero(self) -> Mask16Simd128 {
+        Mask16Simd128(i16x8_lt(self.0, i16x8_splat(0)), self.1)
+    }
+
+    #[inline(always)]
+    fn eq(self, other: Self) -> Mask16Simd128 {
+        Mask16Simd128(i16x8_eq(self.0, other.0), self.1)
+    }
+
+    #[inline(always)]
+    fn eq_zero(self) -> Mask16Simd128 {
+        Mask16Simd128(i16x8_eq(self.0, i16x8_splat(0)), self.1)
+    }
+
+    #[inline(always)]
+    fn mul_wide_take_high(self, rhs: Self) -> Self {
+        let lo = i32x4_extmul_low_i16x8(self.0, rhs.0);
+        let hi = i32x4_extmul_high_i16x8(self.0, rhs.0);
+        Self(
+            i8x16_shuffle::<2, 3, 6, 7, 10, 11, 14, 15, 18, 19, 22, 23, 26, 27, 30, 31>(lo, hi),
+            self.1,
+        )
+    }
+
+    #[inline(always)]
+    fn shl<const AMOUNT_U: u32, const AMOUNT_I: i32>(self) -> Self {
+        Self(i16x8_shl(self.0, AMOUNT_U), self.1)
+    }
+
+    #[inline(always)]
+    fn shr<const AMOUNT_U: u32, const AMOUNT_I: i32>(self) -> Self {
+        Self(i16x8_shr(self.0, AMOUNT_U), self.1)
+    }
+
+    #[inline(always)]
+    fn bitcast_u16(self) -> U16VecSimd128 {
+        U16VecSimd128(self.0, self.1)
+    }
+
+    impl_i16_array_interface!();
+
+    #[inline(always)]
+    fn transpose_square(d: Self::Descriptor, data: &mut [Self::UnderlyingArray], stride: usize) {
+        assert!(data.len() > 7 * stride);
+
+        let r0 = I16VecSimd128::load_array(d, &data[0]).0;
+        let r1 = I16VecSimd128::load_array(d, &data[stride]).0;
+        let r2 = I16VecSimd128::load_array(d, &data[2 * stride]).0;
+        let r3 = I16VecSimd128::load_array(d, &data[3 * stride]).0;
+        let r4 = I16VecSimd128::load_array(d, &data[4 * stride]).0;
+        let r5 = I16VecSimd128::load_array(d, &data[5 * stride]).0;
+        let r6 = I16VecSimd128::load_array(d, &data[6 * stride]).0;
+        let r7 = I16VecSimd128::load_array(d, &data[7 * stride]).0;
+
+        // Stage 1: 16-bit unpack (shuffle)
+        let t0 = i16x8_shuffle::<0, 8, 1, 9, 2, 10, 3, 11>(r0, r1);
+        let t1 = i16x8_shuffle::<4, 12, 5, 13, 6, 14, 7, 15>(r0, r1);
+        let t2 = i16x8_shuffle::<0, 8, 1, 9, 2, 10, 3, 11>(r2, r3);
+        let t3 = i16x8_shuffle::<4, 12, 5, 13, 6, 14, 7, 15>(r2, r3);
+        let t4 = i16x8_shuffle::<0, 8, 1, 9, 2, 10, 3, 11>(r4, r5);
+        let t5 = i16x8_shuffle::<4, 12, 5, 13, 6, 14, 7, 15>(r4, r5);
+        let t6 = i16x8_shuffle::<0, 8, 1, 9, 2, 10, 3, 11>(r6, r7);
+        let t7 = i16x8_shuffle::<4, 12, 5, 13, 6, 14, 7, 15>(r6, r7);
+
+        // Stage 2: 32-bit unpack (shuffle)
+        let u0 = i32x4_shuffle::<0, 4, 1, 5>(t0, t2);
+        let u1 = i32x4_shuffle::<2, 6, 3, 7>(t0, t2);
+        let u2 = i32x4_shuffle::<0, 4, 1, 5>(t1, t3);
+        let u3 = i32x4_shuffle::<2, 6, 3, 7>(t1, t3);
+        let u4 = i32x4_shuffle::<0, 4, 1, 5>(t4, t6);
+        let u5 = i32x4_shuffle::<2, 6, 3, 7>(t4, t6);
+        let u6 = i32x4_shuffle::<0, 4, 1, 5>(t5, t7);
+        let u7 = i32x4_shuffle::<2, 6, 3, 7>(t5, t7);
+
+        // Stage 3: 64-bit unpack (shuffle)
+        let out0 = i64x2_shuffle::<0, 2>(u0, u4);
+        let out1 = i64x2_shuffle::<1, 3>(u0, u4);
+        let out2 = i64x2_shuffle::<0, 2>(u1, u5);
+        let out3 = i64x2_shuffle::<1, 3>(u1, u5);
+        let out4 = i64x2_shuffle::<0, 2>(u2, u6);
+        let out5 = i64x2_shuffle::<1, 3>(u2, u6);
+        let out6 = i64x2_shuffle::<0, 2>(u3, u7);
+        let out7 = i64x2_shuffle::<1, 3>(u3, u7);
+
+        I16VecSimd128(out0, d).store_array(&mut data[0]);
+        I16VecSimd128(out1, d).store_array(&mut data[stride]);
+        I16VecSimd128(out2, d).store_array(&mut data[2 * stride]);
+        I16VecSimd128(out3, d).store_array(&mut data[3 * stride]);
+        I16VecSimd128(out4, d).store_array(&mut data[4 * stride]);
+        I16VecSimd128(out5, d).store_array(&mut data[5 * stride]);
+        I16VecSimd128(out6, d).store_array(&mut data[6 * stride]);
+        I16VecSimd128(out7, d).store_array(&mut data[7 * stride]);
+    }
+
+    #[inline(always)]
+    fn store_u8(self, dest: &mut [u8]) {
+        assert!(dest.len() >= Self::LEN);
+        let packed =
+            i8x16_shuffle::<0, 2, 4, 6, 8, 10, 12, 14, 0, 0, 0, 0, 0, 0, 0, 0>(self.0, self.0);
+        let val = u64x2_extract_lane::<0>(packed);
+        dest[..8].copy_from_slice(&val.to_ne_bytes());
+    }
+}
+
+impl Add<I16VecSimd128> for I16VecSimd128 {
+    type Output = I16VecSimd128;
+    #[inline(always)]
+    fn add(self, rhs: I16VecSimd128) -> I16VecSimd128 {
+        I16VecSimd128(i16x8_add(self.0, rhs.0), self.1)
+    }
+}
+
+impl Sub<I16VecSimd128> for I16VecSimd128 {
+    type Output = I16VecSimd128;
+    #[inline(always)]
+    fn sub(self, rhs: I16VecSimd128) -> I16VecSimd128 {
+        I16VecSimd128(i16x8_sub(self.0, rhs.0), self.1)
+    }
+}
+
+impl Neg for I16VecSimd128 {
+    type Output = I16VecSimd128;
+    #[inline(always)]
+    fn neg(self) -> I16VecSimd128 {
+        I16VecSimd128(i16x8_neg(self.0), self.1)
+    }
+}
+
+impl BitAnd<I16VecSimd128> for I16VecSimd128 {
+    type Output = I16VecSimd128;
+    #[inline(always)]
+    fn bitand(self, rhs: I16VecSimd128) -> I16VecSimd128 {
+        I16VecSimd128(v128_and(self.0, rhs.0), self.1)
+    }
+}
+
+impl BitOr<I16VecSimd128> for I16VecSimd128 {
+    type Output = I16VecSimd128;
+    #[inline(always)]
+    fn bitor(self, rhs: I16VecSimd128) -> I16VecSimd128 {
+        I16VecSimd128(v128_or(self.0, rhs.0), self.1)
+    }
+}
+
+impl BitXor<I16VecSimd128> for I16VecSimd128 {
+    type Output = I16VecSimd128;
+    #[inline(always)]
+    fn bitxor(self, rhs: I16VecSimd128) -> I16VecSimd128 {
+        I16VecSimd128(v128_xor(self.0, rhs.0), self.1)
+    }
+}
+
+impl AddAssign<I16VecSimd128> for I16VecSimd128 {
+    #[inline(always)]
+    fn add_assign(&mut self, rhs: I16VecSimd128) {
+        self.0 = i16x8_add(self.0, rhs.0);
+    }
+}
+
+impl SubAssign<I16VecSimd128> for I16VecSimd128 {
+    #[inline(always)]
+    fn sub_assign(&mut self, rhs: I16VecSimd128) {
+        self.0 = i16x8_sub(self.0, rhs.0);
+    }
+}
+
+impl BitAndAssign<I16VecSimd128> for I16VecSimd128 {
+    #[inline(always)]
+    fn bitand_assign(&mut self, rhs: I16VecSimd128) {
+        self.0 = v128_and(self.0, rhs.0);
+    }
+}
+
+impl BitOrAssign<I16VecSimd128> for I16VecSimd128 {
+    #[inline(always)]
+    fn bitor_assign(&mut self, rhs: I16VecSimd128) {
+        self.0 = v128_or(self.0, rhs.0);
+    }
+}
+
+impl BitXorAssign<I16VecSimd128> for I16VecSimd128 {
+    #[inline(always)]
+    fn bitxor_assign(&mut self, rhs: I16VecSimd128) {
+        self.0 = v128_xor(self.0, rhs.0);
+    }
+}
+
+impl Mul<I16VecSimd128> for I16VecSimd128 {
+    type Output = I16VecSimd128;
+    #[inline(always)]
+    fn mul(self, rhs: I16VecSimd128) -> I16VecSimd128 {
+        I16VecSimd128(i16x8_mul(self.0, rhs.0), self.1)
+    }
+}
+
+impl MulAssign<I16VecSimd128> for I16VecSimd128 {
+    #[inline(always)]
+    fn mul_assign(&mut self, rhs: I16VecSimd128) {
+        self.0 = i16x8_mul(self.0, rhs.0);
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+#[repr(transparent)]
 pub struct U32VecSimd128(v128, Simd128Descriptor);
 
 impl U32SimdVec for U32VecSimd128 {
@@ -1152,6 +1403,11 @@ impl U16SimdVec for U16VecSimd128 {
             v128_store(ptr.add(3), out3);
         }
     }
+
+    #[inline(always)]
+    fn bitcast_i16(self) -> I16VecSimd128 {
+        I16VecSimd128(self.0, self.1)
+    }
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -1222,5 +1478,61 @@ impl BitOr<MaskSimd128> for MaskSimd128 {
     #[inline(always)]
     fn bitor(self, rhs: MaskSimd128) -> MaskSimd128 {
         MaskSimd128(v128_or(self.0, rhs.0), self.1)
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+#[repr(transparent)]
+pub struct Mask16Simd128(v128, Simd128Descriptor);
+
+impl SimdMask16 for Mask16Simd128 {
+    type Descriptor = Simd128Descriptor;
+
+    #[inline(always)]
+    fn if_then_else_i16(self, if_true: I16VecSimd128, if_false: I16VecSimd128) -> I16VecSimd128 {
+        #[cfg(target_feature = "relaxed-simd")]
+        {
+            I16VecSimd128(
+                i16x8_relaxed_laneselect(if_true.0, if_false.0, self.0),
+                self.1,
+            )
+        }
+        #[cfg(not(target_feature = "relaxed-simd"))]
+        {
+            I16VecSimd128(v128_bitselect(if_true.0, if_false.0, self.0), self.1)
+        }
+    }
+
+    #[inline(always)]
+    fn maskz_i16(self, v: I16VecSimd128) -> I16VecSimd128 {
+        // Zero out lanes where mask is true: v AND NOT mask
+        I16VecSimd128(v128_andnot(v.0, self.0), self.1)
+    }
+
+    #[inline(always)]
+    fn andnot(self, rhs: Mask16Simd128) -> Mask16Simd128 {
+        // !self & rhs
+        Mask16Simd128(v128_andnot(rhs.0, self.0), self.1)
+    }
+
+    #[inline(always)]
+    fn all(self) -> bool {
+        i16x8_all_true(self.0)
+    }
+}
+
+impl BitAnd<Mask16Simd128> for Mask16Simd128 {
+    type Output = Mask16Simd128;
+    #[inline(always)]
+    fn bitand(self, rhs: Mask16Simd128) -> Mask16Simd128 {
+        Mask16Simd128(v128_and(self.0, rhs.0), self.1)
+    }
+}
+
+impl BitOr<Mask16Simd128> for Mask16Simd128 {
+    type Output = Mask16Simd128;
+    #[inline(always)]
+    fn bitor(self, rhs: Mask16Simd128) -> Mask16Simd128 {
+        Mask16Simd128(v128_or(self.0, rhs.0), self.1)
     }
 }
