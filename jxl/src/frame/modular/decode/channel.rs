@@ -46,27 +46,44 @@ pub(super) trait ModularChannelDecoder {
         br: &mut BitReader,
         y: usize,
         xsize: usize,
+        mut scratch: Option<&mut [Vec<i32>; 3]>,
     ) {
         self.init_row(buffers, chan, y);
-        let mut rect = ImageRectMut::<i32>::from_raw(buffers[chan].data.as_rect_mut());
-        let (row, row_top, row_toptop) = match y {
-            0 => (rect.row(0), &mut [][..], &mut [][..]),
-            1 => {
-                let [row, row_top] = rect.distinct_rows_mut([1, 0]);
-                (row, row_top, &mut [][..])
-            }
-            _ => {
-                let [row, row_top, row_toptop] = rect.distinct_rows_mut([y, y - 1, y - 2]);
-                (row, row_top, row_toptop)
-            }
+        let mut rect = if scratch.is_none() {
+            Some(ImageRectMut::<i32>::from_raw(
+                buffers[chan].data.as_rect_mut(),
+            ))
+        } else {
+            None
         };
+        let (row, row_top, row_toptop): (&mut [i32], &[i32], &[i32]) =
+            if let Some(scratch) = scratch.as_deref_mut() {
+                let (cur, prev) = scratch.split_at_mut(1);
+                let row = &mut cur[0][..xsize];
+                let row_top = if y > 0 { &prev[0][..xsize] } else { &[] };
+                let row_toptop = if y > 1 { &prev[1][..xsize] } else { &[] };
+                (row, row_top, row_toptop)
+            } else {
+                let rect = rect.as_mut().unwrap();
+                match y {
+                    0 => (rect.row(0), &[], &[]),
+                    1 => {
+                        let [row, row_top] = rect.distinct_rows_mut([1, 0]);
+                        (row, row_top, &[])
+                    }
+                    _ => {
+                        let [row, row_top, row_toptop] = rect.distinct_rows_mut([y, y - 1, y - 2]);
+                        (row, row_top, row_toptop)
+                    }
+                }
+            };
 
         let do_decode_cold = {
             #[inline(never)]
             |decoder: &mut Self,
              row: &mut [i32],
-             row_top: &mut [i32],
-             row_toptop: &mut [i32],
+             row_top: &[i32],
+             row_toptop: &[i32],
              pos: (usize, usize),
              reader: &mut SymbolReader,
              br: &mut BitReader|
@@ -101,6 +118,15 @@ pub(super) trait ModularChannelDecoder {
         }
         for x in x1..xsize {
             do_decode_cold(self, row, row_top, row_toptop, (x, y), reader, br);
+        }
+
+        if let Some(scratch) = scratch {
+            let mut dest_rect = ImageRectMut::<i16>::from_raw(buffers[chan].data.as_rect_mut());
+            let dest = dest_rect.row(y);
+            for (d, &s) in dest[..xsize].iter_mut().zip(&scratch[0][..xsize]) {
+                *d = s as i16;
+            }
+            scratch.rotate_right(1);
         }
     }
 }
@@ -168,21 +194,37 @@ impl<'a> ModularChannelDecoder for FullTree<'a> {
         br: &mut BitReader,
         y: usize,
         xsize: usize,
+        mut scratch: Option<&mut [Vec<i32>; 3]>,
     ) {
         self.init_row(buffers, chan, y);
-        let mut rect = ImageRectMut::<i32>::from_raw(buffers[chan].data.as_rect_mut());
-        let (row, row_top, row_toptop) = match y {
-            0 => (rect.row(0), &mut [][..], &mut [][..]),
-            1 => {
-                let [row, row_top] = rect.distinct_rows_mut([1, 0]);
-                (row, row_top, &mut [][..])
-            }
-            _ => {
-                let [row, row_top, row_toptop] = rect.distinct_rows_mut([y, y - 1, y - 2]);
-                (row, row_top, row_toptop)
-            }
+        let mut rect = if scratch.is_none() {
+            Some(ImageRectMut::<i32>::from_raw(
+                buffers[chan].data.as_rect_mut(),
+            ))
+        } else {
+            None
         };
-
+        let (row, row_top, row_toptop): (&mut [i32], &[i32], &[i32]) =
+            if let Some(scratch) = scratch.as_deref_mut() {
+                let (cur, prev) = scratch.split_at_mut(1);
+                let row = &mut cur[0][..xsize];
+                let row_top = if y > 0 { &prev[0][..xsize] } else { &[] };
+                let row_toptop = if y > 1 { &prev[1][..xsize] } else { &[] };
+                (row, row_top, row_toptop)
+            } else {
+                let rect = rect.as_mut().unwrap();
+                match y {
+                    0 => (rect.row(0), &[], &[]),
+                    1 => {
+                        let [row, row_top] = rect.distinct_rows_mut([1, 0]);
+                        (row, row_top, &[])
+                    }
+                    _ => {
+                        let [row, row_top, row_toptop] = rect.distinct_rows_mut([y, y - 1, y - 2]);
+                        (row, row_top, row_toptop)
+                    }
+                }
+            };
         for x in 0..xsize {
             let prediction_data = PredictionData::get_rows(row, row_top, row_toptop, x, y);
             let prediction_result = predict(
@@ -199,9 +241,19 @@ impl<'a> ModularChannelDecoder for FullTree<'a> {
             self.wp_state.update_errors(val, (x, y));
             row[x] = val;
         }
+
+        if let Some(scratch) = scratch {
+            let mut dest_rect = ImageRectMut::<i16>::from_raw(buffers[chan].data.as_rect_mut());
+            let dest = dest_rect.row(y);
+            for (d, &s) in dest[..xsize].iter_mut().zip(&scratch[0][..xsize]) {
+                *d = s as i16;
+            }
+            scratch.rotate_right(1);
+        }
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 #[inline(never)]
 fn decode_modular_channel_impl(
     t: &mut dyn ModularChannelDecoder,
@@ -211,11 +263,38 @@ fn decode_modular_channel_impl(
     reader: &mut SymbolReader,
     br: &mut BitReader,
     is_16bit: bool,
+    scratch: Option<&mut [Vec<i32>; 3]>,
 ) -> Result<()> {
     let size = buffers[chan].size(is_16bit);
     let xsize = size.0;
+    let mut fallback_scratch;
+    let mut scratch = if is_16bit {
+        match scratch {
+            Some(s) => {
+                for r in s.iter_mut() {
+                    r.resize(xsize, 0);
+                }
+                Some(s)
+            }
+            None => {
+                fallback_scratch = [vec![0i32; xsize], vec![0i32; xsize], vec![0i32; xsize]];
+                Some(&mut fallback_scratch)
+            }
+        }
+    } else {
+        None
+    };
     for y in 0..size.1 {
-        t.decode_row(buffers, chan, histo, reader, br, y, xsize);
+        t.decode_row(
+            buffers,
+            chan,
+            histo,
+            reader,
+            br,
+            y,
+            xsize,
+            scratch.as_deref_mut(),
+        );
     }
     Ok(())
 }
@@ -231,6 +310,7 @@ pub(super) fn decode_modular_channel(
     reader: &mut SymbolReader,
     br: &mut BitReader,
     is_16bit: bool,
+    scratch: Option<&mut [Vec<i32>; 3]>,
 ) -> Result<()> {
     debug!("reading channel");
     let size = buffers[chan].size(is_16bit);
@@ -245,13 +325,25 @@ pub(super) fn decode_modular_channel(
             reader,
             br,
             is_16bit,
+            scratch,
         )?;
         br.check_for_error()?;
         return Ok(());
     }
 
     run_on_specialized_tree(tree, chan, stream_id, size.0, header, is_16bit, {
-        |t| decode_modular_channel_impl(t, buffers, chan, &tree.histograms, reader, br, is_16bit)
+        |t| {
+            decode_modular_channel_impl(
+                t,
+                buffers,
+                chan,
+                &tree.histograms,
+                reader,
+                br,
+                is_16bit,
+                scratch,
+            )
+        }
     })?;
     br.check_for_error()
 }

@@ -405,9 +405,21 @@ impl ModularChannelDecoder for NoTreeZero {
         br: &mut BitReader,
         y: usize,
         xsize: usize,
+        mut scratch: Option<&mut [Vec<i32>; 3]>,
     ) {
-        let mut rect = ImageRectMut::<i32>::from_raw(buffers[chan].data.as_rect_mut());
-        let row = rect.row(y);
+        let is_16bit = scratch.is_some();
+        let mut rect = if !is_16bit {
+            Some(ImageRectMut::<i32>::from_raw(
+                buffers[chan].data.as_rect_mut(),
+            ))
+        } else {
+            None
+        };
+        let row: &mut [i32] = if let Some(scratch) = scratch.as_deref_mut() {
+            &mut scratch[0][..xsize]
+        } else {
+            rect.as_mut().unwrap().row(y)
+        };
         debug_assert_eq!(row.len(), xsize);
         if let Some(sym) = self.single_value {
             row.fill(make_pixel(sym, self.multiplier, self.offset));
@@ -420,6 +432,13 @@ impl ModularChannelDecoder for NoTreeZero {
                 let residual =
                     reader.read_signed_clustered_inline(histograms, br, self.clustered_ctx);
                 *r = make_pixel(residual, self.multiplier, self.offset);
+            }
+        }
+        if is_16bit {
+            let mut dest_rect = ImageRectMut::<i16>::from_raw(buffers[chan].data.as_rect_mut());
+            let dest = dest_rect.row(y);
+            for (d, &s) in dest[..xsize].iter_mut().zip(&scratch.unwrap()[0][..xsize]) {
+                *d = s as i16;
             }
         }
     }

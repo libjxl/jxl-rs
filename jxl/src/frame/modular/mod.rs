@@ -215,6 +215,7 @@ use crate::frame::modular::transforms::smooth_squeeze::SmoothUpsampleScratch;
 struct ScratchSpace {
     smooth_upsample_scratch: SmoothUpsampleScratch,
     palette_row_scratch: [Vec<i32>; 2],
+    decode_row_scratch: [Vec<i32>; 3],
 }
 
 impl Debug for ScratchSpace {
@@ -228,6 +229,7 @@ impl ScratchSpace {
         ScratchSpace {
             smooth_upsample_scratch: SmoothUpsampleScratch::default(),
             palette_row_scratch: [vec![], vec![]],
+            decode_row_scratch: [vec![], vec![], vec![]],
         }
     }
 }
@@ -537,23 +539,27 @@ impl FullModularImage {
     ) -> Result<bool> {
         let allow_partial = allow_partial && self.can_do_early_partial_render;
         let mut decoded_if_partial = 0;
-        let ret = with_buffers(
-            &self.buffer_info,
-            &self.section_buffer_indices[0],
-            0,
-            &self.recycler,
-            |bufs| {
-                decode_modular_subbitstream(
-                    bufs,
-                    self.is_16bit,
-                    ModularStreamId::GlobalData.get_id(frame_header),
-                    self.global_header.clone(),
-                    global_tree,
-                    br,
-                    Some(&mut decoded_if_partial),
-                )
-            },
-        );
+        let ret = {
+            let mut scratch_space = self.scratch_space.get();
+            with_buffers(
+                &self.buffer_info,
+                &self.section_buffer_indices[0],
+                0,
+                &self.recycler,
+                |bufs| {
+                    decode_modular_subbitstream(
+                        bufs,
+                        self.is_16bit,
+                        ModularStreamId::GlobalData.get_id(frame_header),
+                        self.global_header.clone(),
+                        global_tree,
+                        br,
+                        Some(&mut decoded_if_partial),
+                        Some(&mut scratch_space.decode_row_scratch),
+                    )
+                },
+            )
+        };
 
         let total_buffers = self.section_buffer_indices[0].len();
 
@@ -626,6 +632,7 @@ impl FullModularImage {
             }
         };
 
+        let mut scratch_space = self.scratch_space.get();
         with_buffers(
             &self.buffer_info,
             &self.section_buffer_indices[section_id],
@@ -640,6 +647,7 @@ impl FullModularImage {
                     global_tree,
                     br,
                     None,
+                    Some(&mut scratch_space.decode_row_scratch),
                 )?;
                 Ok(())
             },
@@ -1020,6 +1028,7 @@ pub fn decode_vardct_lf(
         global_tree,
         br,
         None,
+        None,
     )?;
     dequant_lf(
         r,
@@ -1072,6 +1081,7 @@ pub fn decode_hf_metadata(
         None,
         global_tree,
         br,
+        None,
         None,
     )?;
     let ytox_rect = ImageRect::<i32>::from_raw(buffers[0].data.as_rect());
@@ -1160,6 +1170,7 @@ pub fn decode_quant_table(
         None,
         global_tree,
         br,
+        None,
         None,
     )?;
     let mut qtable = Vec::with_capacity(required_size_x * required_size_y * 3);
