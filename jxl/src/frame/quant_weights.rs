@@ -245,6 +245,7 @@ impl QuantEncoding {
                         &lf_global.tree,
                         br,
                         &mut scratch,
+                        lf_global.modular_global.storage(),
                     )?,
                     qtable_den,
                 })
