@@ -55,19 +55,10 @@ struct OOOJxlpBox {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum JxlAuxBoxType {
-    Exif,
-}
+pub struct JxlAuxBoxType(pub [u8; 4]);
 
 impl JxlAuxBoxType {
-    fn from_code(code: &[u8]) -> Option<JxlAuxBoxType> {
-        Some(match code {
-            b"Exif" => JxlAuxBoxType::Exif,
-            _ => {
-                return None;
-            }
-        })
-    }
+    pub const EXIF: Self = JxlAuxBoxType(*b"Exif");
 }
 
 pub struct JxlAuxBox {
@@ -95,10 +86,12 @@ impl JxlAuxBox {
         self.ty
     }
 
+    /// Returns the raw box data, potentially compressed.
     pub fn raw_data(&self) -> &[u8] {
         &self.data
     }
 
+    /// Returns if the raw data is Brotli-compressed.
     pub fn is_compressed(&self) -> bool {
         self.brotli
     }
@@ -160,16 +153,12 @@ pub(super) struct BoxParser {
 #[derive(Default)]
 struct AuxBoxState {
     boxes_to_extract: HashSet<JxlAuxBoxType>,
-    boxes: Vec<JxlAuxBox>,
+    boxes: HashMap<JxlAuxBoxType, Vec<JxlAuxBox>>,
     box_buffer: Option<JxlAuxBox>,
     next_box_idx: usize,
 }
 
 impl BoxParser {
-    pub(super) fn new() -> Self {
-        Self::with_aux_boxes(None)
-    }
-
     pub(super) fn with_aux_boxes(box_types: impl IntoIterator<Item = JxlAuxBoxType>) -> Self {
         BoxParser {
             local_buffer: SmallBuffer::new(128),
@@ -228,11 +217,15 @@ impl BoxParser {
         b.file_position + (codestream_bytes_consumed - *start)
     }
 
-    pub(super) fn aux_boxes(&self) -> &[JxlAuxBox] {
-        &self.aux.boxes
+    pub(super) fn aux_boxes(&self, box_type: JxlAuxBoxType) -> &[JxlAuxBox] {
+        self.aux
+            .boxes
+            .get(&box_type)
+            .map(|v| &**v)
+            .unwrap_or_default()
     }
 
-    pub(super) fn trailing_box_info(&self) -> Option<&JxlAuxBox> {
+    pub(super) fn trailing_box(&self) -> Option<&JxlAuxBox> {
         if self.state != ParseState::Aux(None) {
             return None;
         }
@@ -426,7 +419,7 @@ impl BoxParser {
                 ParseState::Aux(Some(count)) => {
                     if count == 0 {
                         let buf = self.aux.box_buffer.take().unwrap();
-                        self.aux.boxes.push(buf);
+                        self.aux.boxes.entry(buf.ty).or_default().push(buf);
                         self.state = if self.latest_codestream_box.is_last() {
                             ParseState::Complete
                         } else {
@@ -479,19 +472,13 @@ impl BoxParser {
     }
 
     fn consume_trailing_data(&mut self, input: &mut dyn JxlBitstreamInput) -> Result<()> {
-        let is_invalid_state = matches!(
-            self.state,
-            ParseState::SignatureNeeded | ParseState::Codestream(_) | ParseState::OOOJxlp(..)
-        );
-        assert!(
-            !is_invalid_state && self.latest_codestream_box.is_last(),
-            "API usage error: cannot consume trailing data while codestream is incomplete",
-        );
-
         loop {
             match self.state {
+                ParseState::Codestream(None) => {
+                    return Ok(());
+                }
                 ParseState::Complete => {
-                    if input.available_bytes()? == 0 {
+                    if self.available_bytes_inner(input)? == 0 {
                         return Ok(());
                     }
                     self.state = ParseState::BoxNeeded(8);
@@ -520,7 +507,7 @@ impl BoxParser {
                 ParseState::Aux(Some(count)) => {
                     if count == 0 {
                         let buf = self.aux.box_buffer.take().unwrap();
-                        self.aux.boxes.push(buf);
+                        self.aux.boxes.entry(buf.ty).or_default().push(buf);
                         self.state = ParseState::Complete;
                         continue;
                     }
@@ -677,17 +664,16 @@ impl BoxParser {
                 if matches!(inner_type, b"brob" | [b'j', b'x', b'l', _] | b"jbrd") {
                     return Err(Error::InvalidBox);
                 }
-                let inner_type = JxlAuxBoxType::from_code(inner_type);
+                let inner_type = JxlAuxBoxType(inner_type.try_into().unwrap());
                 self.local_buffer.consume(4);
 
                 let current_box_idx = self.aux.next_box_idx;
                 self.aux.next_box_idx += 1;
                 if current_box_idx >= self.aux.boxes.len()
-                    && let Some(ty) = inner_type
-                    && self.aux.boxes_to_extract.contains(&ty)
+                    && self.aux.boxes_to_extract.contains(&inner_type)
                 {
                     self.aux.box_buffer = Some(JxlAuxBox {
-                        ty,
+                        ty: inner_type,
                         brotli: true,
                         data: Vec::new(),
                     });
@@ -699,8 +685,8 @@ impl BoxParser {
             code => {
                 let current_box_idx = self.aux.next_box_idx;
                 self.aux.next_box_idx += 1;
+                let ty = JxlAuxBoxType(*code);
                 if current_box_idx >= self.aux.boxes.len()
-                    && let Some(ty) = JxlAuxBoxType::from_code(code)
                     && self.aux.boxes_to_extract.contains(&ty)
                 {
                     self.aux.box_buffer = Some(JxlAuxBox {
@@ -820,7 +806,7 @@ mod tests {
     #[test]
     fn zero_length_skippable_box_does_not_hang() {
         let data = include_bytes!("../../../tests/testdata/zero_length_skippable_box.jxl");
-        let mut parser = BoxParser::new();
+        let mut parser = BoxParser::with_aux_boxes(None);
         let mut input = data.as_slice();
 
         {
