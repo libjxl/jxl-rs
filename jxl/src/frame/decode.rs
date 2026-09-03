@@ -37,7 +37,7 @@ use crate::headers::CustomTransformData;
 use crate::headers::color_encoding::ColorSpace;
 use crate::headers::frame_header::{Encoding, FrameHeader, FrameType};
 use crate::headers::toc::Toc;
-use crate::image::{BufferRecycler, Image, Rect};
+use crate::image::{BufferRecycler, Image, OwnedRawImage, Rect};
 #[cfg(test)]
 use crate::render::SimpleRenderPipeline;
 use crate::render::buffer_splitter::BufferSplitter;
@@ -841,16 +841,27 @@ impl Frame {
 
         self.decode_and_render_varct_and_noise(group, passes, buffer_splitter, force_render)?;
 
-        let pass_to_pipeline = |chan, group, complete, image: Image<i32>| {
-            pipeline!(
-                self,
-                p,
-                p.set_buffer_for_group(chan, group, complete, image, &*buffer_splitter)?
-            );
+        let lf_global = self.lf_global.as_ref().unwrap();
+        let is_16bit = lf_global.modular_global.is_16bit();
+        let pass_to_pipeline = |chan, group, complete, raw_image: OwnedRawImage| {
+            if is_16bit {
+                let image = Image::<i16>::from_raw(raw_image);
+                pipeline!(
+                    self,
+                    p,
+                    p.set_buffer_for_group(chan, group, complete, image, &*buffer_splitter)?
+                );
+            } else {
+                let image = Image::<i32>::from_raw(raw_image);
+                pipeline!(
+                    self,
+                    p,
+                    p.set_buffer_for_group(chan, group, complete, image, &*buffer_splitter)?
+                );
+            }
             Ok(())
         };
 
-        let lf_global = self.lf_global.as_ref().unwrap();
         for (pass, br) in passes.iter_mut() {
             lf_global.modular_global.read_stream(
                 ModularStreamId::ModularHF { group, pass: *pass },

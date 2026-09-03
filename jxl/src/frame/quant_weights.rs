@@ -243,6 +243,7 @@ impl QuantEncoding {
                         (required_size_x, required_size_y),
                         &lf_global.tree,
                         br,
+                        lf_global.modular_global.is_16bit(),
                     )?,
                     qtable_den,
                 })
