@@ -9,7 +9,7 @@ use crate::frame::modular::buffers::ModularChannel;
 use crate::frame::modular::transforms::meta_apply::meta_apply_single_transform;
 use crate::frame::modular::transforms::palette::PaletteStep;
 use crate::frame::modular::transforms::step::TransformStep;
-use crate::frame::modular::{ChannelInfo, TransformScratchSpace, max_channels};
+use crate::frame::modular::{ChannelInfo, ScratchSpace, max_channels};
 use crate::headers::modular::GroupHeader;
 use crate::image::Rect;
 use crate::util::tracing_wrappers::*;
@@ -245,7 +245,7 @@ impl TransformStep {
     pub fn local_apply(
         &self,
         buffers: &mut [LocalTransformBuffer],
-        transform_scratch_space: &mut TransformScratchSpace,
+        scratch_space: &mut ScratchSpace,
     ) -> Result<()> {
         match self {
             TransformStep::Rct {
@@ -309,7 +309,7 @@ impl TransformStep {
                         prev_aux: None,
                         aux_out: &mut [],
                     }
-                    .run(&mut transform_scratch_space.palette_row_scratch)?;
+                    .run(&mut scratch_space.palette_row_scratch)?;
                 }
                 for (pos, buf) in buf_out.iter().zip(out_bufs) {
                     buffers[*pos] = buf;
