@@ -211,20 +211,20 @@ impl ModularBufferInfo {
 
 use crate::frame::modular::transforms::smooth_squeeze::SmoothUpsampleScratch;
 
-struct TransformScratchSpace {
+struct ScratchSpace {
     smooth_upsample_scratch: SmoothUpsampleScratch,
     palette_row_scratch: [Vec<i32>; 2],
 }
 
-impl Debug for TransformScratchSpace {
+impl Debug for ScratchSpace {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "TransformScratchSpace")
+        write!(f, "ScratchSpace")
     }
 }
 
-impl TransformScratchSpace {
-    fn new() -> TransformScratchSpace {
-        TransformScratchSpace {
+impl ScratchSpace {
+    fn new() -> ScratchSpace {
+        ScratchSpace {
             smooth_upsample_scratch: SmoothUpsampleScratch::default(),
             palette_row_scratch: [vec![], vec![]],
         }
@@ -241,7 +241,7 @@ impl TransformScratchSpace {
 /// transforms to each of the groups in the input of the transforms.
 #[derive(Debug)]
 pub struct FullModularImage {
-    transform_scratch_space: PerThreadStorage<TransformScratchSpace>,
+    scratch_space: PerThreadStorage<ScratchSpace>,
     buffer_info: Vec<ModularBufferInfo>,
     transform_steps: Vec<TransformStepChunk>,
     // List of buffer indices of the channels of the modular image encoded in each kind of section.
@@ -327,7 +327,7 @@ impl FullModularImage {
 
         if channels.is_empty() {
             return Ok(Self {
-                transform_scratch_space: PerThreadStorage::new(TransformScratchSpace::new),
+                scratch_space: PerThreadStorage::new(ScratchSpace::new),
                 buffer_info: vec![],
                 transform_steps: vec![],
                 section_buffer_indices: vec![vec![]; 2 + frame_header.passes.num_passes as usize],
@@ -496,7 +496,7 @@ impl FullModularImage {
             .count();
 
         Ok(FullModularImage {
-            transform_scratch_space: PerThreadStorage::new(TransformScratchSpace::new),
+            scratch_space: PerThreadStorage::new(ScratchSpace::new),
             buffer_info,
             transform_steps,
             section_buffer_indices,
@@ -815,7 +815,7 @@ impl FullModularImage {
         &self,
         frame_header: &FrameHeader,
         tfm: usize,
-        scratch_space: &mut TransformScratchSpace,
+        scratch_space: &mut ScratchSpace,
         pass_to_pipeline: &dyn Fn(usize, usize, bool, Image<i32>) -> Result<()>,
     ) -> Result<()> {
         self.transform_steps[tfm].do_run(
@@ -837,7 +837,7 @@ impl FullModularImage {
         frame_header: &FrameHeader,
         pass_to_pipeline: &dyn Fn(usize, usize, bool, Image<i32>) -> Result<()>,
     ) -> Result<()> {
-        let mut scratch_space = self.transform_scratch_space.get();
+        let mut scratch_space = self.scratch_space.get();
         loop {
             let Some(t) = self.ready_transform_steps.lock().unwrap().pop() else {
                 return Ok(());

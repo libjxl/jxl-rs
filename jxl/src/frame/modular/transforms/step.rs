@@ -10,8 +10,7 @@ use crate::error::Result;
 use crate::frame::modular::buffers::{ModularChannel, with_buffers};
 use crate::frame::modular::transforms::smooth_squeeze::smooth_upsample;
 use crate::frame::modular::{
-    DataStatus, FullModularImage, ModularBufferInfo, ModularGridKind, Predictor,
-    TransformScratchSpace,
+    DataStatus, FullModularImage, ModularBufferInfo, ModularGridKind, Predictor, ScratchSpace,
 };
 use crate::headers::frame_header::FrameHeader;
 use crate::headers::modular::WeightedHeader;
@@ -640,7 +639,7 @@ impl TransformStepChunk {
         &self,
         frame_header: &FrameHeader,
         buffers: &[ModularBufferInfo],
-        transform_scratch_space: &mut TransformScratchSpace,
+        scratch_space: &mut ScratchSpace,
         recycler: &BufferRecycler,
         pass_to_pipeline: &dyn Fn(usize, usize, bool, Image<i32>) -> Result<()>,
     ) -> Result<()> {
@@ -773,7 +772,7 @@ impl TransformStepChunk {
                             *num_colors,
                             *num_deltas,
                             *predictor,
-                            &mut transform_scratch_space.palette_row_scratch,
+                            &mut scratch_space.palette_row_scratch,
                         );
                     }
                 }
@@ -872,7 +871,7 @@ impl TransformStepChunk {
                         *num_deltas,
                         *predictor,
                         wp_header,
-                        &mut transform_scratch_space.palette_row_scratch,
+                        &mut scratch_space.palette_row_scratch,
                     )?;
                 }
                 let buf_pal_grid = &buffers[*buf_pal].buffer_grid[0];
@@ -921,7 +920,7 @@ impl TransformStepChunk {
                             assert!(!is_final);
                             assert_eq!(bufs.len(), 1);
                             let view = info.borrow_upsample_view(buffers, frame_header);
-                            let scratch = &mut transform_scratch_space.smooth_upsample_scratch;
+                            let scratch = &mut scratch_space.smooth_upsample_scratch;
                             let dither = buffers[*buf_out].info.shift.unwrap_or((0, 0)) == (0, 0)
                                 && !buffers[*buf_out].info.followed_by_palette;
                             smooth_upsample(
