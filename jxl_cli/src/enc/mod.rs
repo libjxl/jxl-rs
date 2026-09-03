@@ -78,18 +78,20 @@ impl OutputFormat {
             } else if *self != Self::Png {
                 eprintln!("Warning: Ignoring partial renders with non-PNG output.");
             } else {
-                let num_partials = image_data.frames[0].partial_renders.len();
-                for i in 0..=num_partials {
-                    let dir = output_filename.parent().unwrap();
-                    let stem = output_filename.file_stem().unwrap().to_string_lossy();
-                    let fname = dir.join(format!("{stem}.partial{i:05}.png"));
+                let frame = &image_data.frames[0];
+                let dir = output_filename.parent().unwrap_or(std::path::Path::new(""));
+                let stem = output_filename
+                    .file_stem()
+                    .map(|s| s.to_string_lossy())
+                    .unwrap_or_else(|| "output".into());
+                for (i, partial) in frame.partial_renders.iter().enumerate() {
+                    let fname = dir.join(format!("{stem}.partial_{:012}.png", partial.byte_index));
                     let mut writer = BufWriter::new(File::create(fname)?);
-                    png::to_png(
-                        image_data,
-                        &mut writer,
-                        if i < num_partials { Some(i) } else { None },
-                    )?
+                    png::to_png(image_data, &mut writer, Some(i))?;
                 }
+                let fname = dir.join(format!("{stem}.partial_{:012}.png", frame.total_bytes));
+                let mut writer = BufWriter::new(File::create(fname)?);
+                png::to_png(image_data, &mut writer, None)?;
             }
         }
         let mut writer = BufWriter::new(File::create(output_filename)?);

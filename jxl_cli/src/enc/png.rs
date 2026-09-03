@@ -175,7 +175,13 @@ pub fn to_png<Writer: Write>(
             }
             let mut ww = writer.stream_writer()?;
             let chan = if let Some(p) = partial_render {
-                &frame.partial_renders[p][0]
+                frame
+                    .partial_renders
+                    .get(p)
+                    .and_then(|r| r.channels.first())
+                    .ok_or_else(|| {
+                        color_eyre::eyre::eyre!("Partial render index {} out of range", p)
+                    })?
             } else {
                 &frame.channels[0]
             };
@@ -193,7 +199,13 @@ pub fn to_png<Writer: Write>(
             }
             let mut ww = writer.stream_writer()?;
             let chan = if let Some(p) = partial_render {
-                &frame.partial_renders[p][0]
+                frame
+                    .partial_renders
+                    .get(p)
+                    .and_then(|r| r.channels.first())
+                    .ok_or_else(|| {
+                        color_eyre::eyre::eyre!("Partial render index {} out of range", p)
+                    })?
             } else {
                 &frame.channels[0]
             };
