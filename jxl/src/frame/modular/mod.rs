@@ -211,20 +211,20 @@ impl ModularBufferInfo {
 
 use crate::frame::modular::transforms::smooth_squeeze::SmoothUpsampleScratch;
 
-pub(super) struct TransformScratchSpace {
+pub(super) struct ScratchSpace {
     smooth_upsample_scratch: SmoothUpsampleScratch,
     palette_row_scratch: [Vec<i32>; 3],
 }
 
-impl Debug for TransformScratchSpace {
+impl Debug for ScratchSpace {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "TransformScratchSpace")
+        write!(f, "ScratchSpace")
     }
 }
 
-impl TransformScratchSpace {
-    fn new() -> TransformScratchSpace {
-        TransformScratchSpace {
+impl ScratchSpace {
+    fn new() -> ScratchSpace {
+        ScratchSpace {
             smooth_upsample_scratch: SmoothUpsampleScratch::default(),
             palette_row_scratch: [vec![], vec![], vec![]],
         }
@@ -241,7 +241,7 @@ impl TransformScratchSpace {
 /// transforms to each of the groups in the input of the transforms.
 #[derive(Debug)]
 pub struct FullModularImage {
-    transform_scratch_space: PerThreadStorage<TransformScratchSpace>,
+    scratch_space: PerThreadStorage<ScratchSpace>,
     buffer_info: Vec<ModularBufferInfo>,
     transform_steps: Vec<TransformStepChunk>,
     // List of buffer indices of the channels of the modular image encoded in each kind of section.
@@ -275,10 +275,8 @@ fn max_channels<'a, T: Iterator<Item = &'a ChannelInfo> + ExactSizeIterator>(cha
 }
 
 impl FullModularImage {
-    pub(super) fn get_transform_scratch_space(
-        &self,
-    ) -> PerThreadStorageRef<'_, TransformScratchSpace> {
-        self.transform_scratch_space.get()
+    pub(super) fn get_scratch_space(&self) -> PerThreadStorageRef<'_, ScratchSpace> {
+        self.scratch_space.get()
     }
 
     pub fn can_do_partial_render(&self) -> bool {
@@ -345,7 +343,7 @@ impl FullModularImage {
 
         if channels.is_empty() {
             return Ok(Self {
-                transform_scratch_space: PerThreadStorage::new(TransformScratchSpace::new),
+                scratch_space: PerThreadStorage::new(ScratchSpace::new),
                 buffer_info: vec![],
                 transform_steps: vec![],
                 section_buffer_indices: vec![vec![]; 2 + frame_header.passes.num_passes as usize],
@@ -522,7 +520,7 @@ impl FullModularImage {
             .count();
 
         Ok(FullModularImage {
-            transform_scratch_space: PerThreadStorage::new(TransformScratchSpace::new),
+            scratch_space: PerThreadStorage::new(ScratchSpace::new),
             buffer_info,
             transform_steps,
             section_buffer_indices,
@@ -553,7 +551,7 @@ impl FullModularImage {
     ) -> Result<bool> {
         let allow_partial = allow_partial && self.can_do_early_partial_render;
         let mut decoded_if_partial = 0;
-        let mut scratch = self.transform_scratch_space.get();
+        let mut scratch = self.scratch_space.get();
         let ret = with_buffers(
             &self.buffer_info,
             &self.section_buffer_indices[0],
@@ -644,7 +642,7 @@ impl FullModularImage {
             }
         };
 
-        let mut scratch = self.transform_scratch_space.get();
+        let mut scratch = self.scratch_space.get();
         with_buffers(
             &self.buffer_info,
             &self.section_buffer_indices[section_id],
@@ -847,7 +845,7 @@ impl FullModularImage {
         &self,
         frame_header: &FrameHeader,
         tfm: usize,
-        scratch_space: &mut TransformScratchSpace,
+        scratch_space: &mut ScratchSpace,
         pass_to_pipeline: &dyn Fn(usize, usize, bool, Image<i32>) -> Result<()>,
     ) -> Result<()> {
         self.transform_steps[tfm].do_run(
@@ -869,7 +867,7 @@ impl FullModularImage {
         frame_header: &FrameHeader,
         pass_to_pipeline: &dyn Fn(usize, usize, bool, Image<i32>) -> Result<()>,
     ) -> Result<()> {
-        let mut scratch_space = self.transform_scratch_space.get();
+        let mut scratch_space = self.scratch_space.get();
         loop {
             let Some(t) = self.ready_transform_steps.lock().unwrap().pop() else {
                 return Ok(());
@@ -1010,7 +1008,7 @@ pub(super) fn decode_vardct_lf(
     lf: &mut [OutputChannelRef],
     quant_lf: &mut OutputChannelRef,
     br: &mut BitReader,
-    transform_scratch_space: &mut TransformScratchSpace,
+    scratch_space: &mut ScratchSpace,
 ) -> Result<()> {
     let extra_precision = br.read(2)?;
     debug!(?extra_precision);
@@ -1039,7 +1037,7 @@ pub(super) fn decode_vardct_lf(
         global_tree,
         br,
         None,
-        transform_scratch_space,
+        scratch_space,
     )?;
     dequant_lf(
         r,
@@ -1062,7 +1060,7 @@ pub(super) fn decode_hf_metadata(
     global_tree: &Option<Tree>,
     hf_meta: &mut HfMetaViews,
     br: &mut BitReader,
-    transform_scratch_space: &mut TransformScratchSpace,
+    scratch_space: &mut ScratchSpace,
 ) -> Result<()> {
     let stream_id = ModularStreamId::LFMeta(group).get_id(frame_header);
     debug!(?stream_id);
@@ -1089,7 +1087,7 @@ pub(super) fn decode_hf_metadata(
         global_tree,
         br,
         None,
-        transform_scratch_space,
+        scratch_space,
     )?;
     let ytox_image = &buffers[0].data;
     let ytob_image = &buffers[1].data;
@@ -1162,7 +1160,7 @@ pub(super) fn decode_quant_table(
     (required_size_x, required_size_y): (usize, usize),
     global_tree: &Option<Tree>,
     br: &mut BitReader,
-    transform_scratch_space: &mut TransformScratchSpace,
+    scratch_space: &mut ScratchSpace,
 ) -> Result<Vec<i32>> {
     let bit_depth = BitDepth::integer_samples(8);
     let mut image = [
@@ -1178,7 +1176,7 @@ pub(super) fn decode_quant_table(
         global_tree,
         br,
         None,
-        transform_scratch_space,
+        scratch_space,
     )?;
     let mut qtable = Vec::with_capacity(required_size_x * required_size_y * 3);
     for channel in image.iter_mut() {

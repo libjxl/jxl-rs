@@ -10,7 +10,7 @@ use crate::error::{Error, Result};
 use crate::frame::modular::predict::clamped_gradient;
 use crate::frame::modular::transforms::apply_local::meta_apply_local_transforms;
 use crate::frame::modular::tree::TreeNode;
-use crate::frame::modular::{ModularChannel, Predictor, TransformScratchSpace, Tree};
+use crate::frame::modular::{ModularChannel, Predictor, ScratchSpace, Tree};
 use crate::headers::JxlHeader;
 use crate::headers::modular::GroupHeader;
 
@@ -138,7 +138,7 @@ pub(in crate::frame::modular) fn decode_modular_subbitstream(
     global_tree: &Option<Tree>,
     br: &mut BitReader,
     partial_decoded_buffers: Option<&mut usize>,
-    transform_scratch_space: &mut TransformScratchSpace,
+    scratch_space: &mut ScratchSpace,
 ) -> Result<()> {
     // Skip decoding if all grids are zero-sized.
     let is_empty = buffers
@@ -229,7 +229,7 @@ pub(in crate::frame::modular) fn decode_modular_subbitstream(
     }
 
     for step in transform_steps.iter().rev() {
-        step.local_apply(&mut buffer_storage, transform_scratch_space)?;
+        step.local_apply(&mut buffer_storage, scratch_space)?;
     }
 
     Ok(())
