@@ -29,6 +29,7 @@ use crate::features::patches::PatchesDictionary;
 use crate::features::spline::Splines;
 use crate::frame::block_context_map::{ZERO_DENSITY_CONTEXT_COUNT, ZERO_DENSITY_CONTEXT_LIMIT};
 use crate::frame::group::VarDctBuffers;
+use crate::frame::modular::ModularStorage;
 use crate::frame::{
     DataStatus, DecoderState, Frame, GroupStatus, HfGlobalState, HfMetadata, LfGlobalState,
     PassState, coeff_order,
@@ -37,7 +38,7 @@ use crate::headers::CustomTransformData;
 use crate::headers::color_encoding::ColorSpace;
 use crate::headers::frame_header::{Encoding, FrameHeader, FrameType};
 use crate::headers::toc::Toc;
-use crate::image::{BufferRecycler, Image, Rect};
+use crate::image::{BufferRecycler, Image, OwnedRawImage, Rect};
 #[cfg(test)]
 use crate::render::SimpleRenderPipeline;
 use crate::render::buffer_splitter::BufferSplitter;
@@ -847,16 +848,30 @@ impl Frame {
 
         self.decode_and_render_varct_and_noise(group, passes, buffer_splitter, force_render)?;
 
-        let pass_to_pipeline = |chan, group, complete, image: Image<i32>| {
-            pipeline!(
-                self,
-                p,
-                p.set_buffer_for_group(chan, group, complete, image, &*buffer_splitter)?
-            );
+        let lf_global = self.lf_global.as_ref().unwrap();
+        let storage = lf_global.modular_global.storage();
+        let pass_to_pipeline = |chan, group, complete, raw_image: OwnedRawImage| {
+            match storage {
+                ModularStorage::I16 => {
+                    let image = Image::<i16>::from_raw(raw_image);
+                    pipeline!(
+                        self,
+                        p,
+                        p.set_buffer_for_group(chan, group, complete, image, &*buffer_splitter)?
+                    );
+                }
+                ModularStorage::I32 => {
+                    let image = Image::<i32>::from_raw(raw_image);
+                    pipeline!(
+                        self,
+                        p,
+                        p.set_buffer_for_group(chan, group, complete, image, &*buffer_splitter)?
+                    );
+                }
+            }
             Ok(())
         };
 
-        let lf_global = self.lf_global.as_ref().unwrap();
         for (pass, br) in passes.iter_mut() {
             lf_global.modular_global.read_stream(
                 ModularStreamId::ModularHF { group, pass: *pass },

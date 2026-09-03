@@ -16,13 +16,14 @@ use crate::features::noise::Noise;
 use crate::features::patches::PatchesDictionary;
 use crate::features::spline::Splines;
 use crate::frame::color_correlation_map::ColorCorrelationParams;
+use crate::frame::modular::ModularStorage;
 use crate::frame::quantizer::LfQuantFactors;
 use crate::frame::{DataStatus, DecoderState, Frame};
 use crate::headers::Orientation;
 use crate::headers::color_encoding::ColorSpace;
 use crate::headers::extra_channels::ExtraChannel;
 use crate::headers::frame_header::{Encoding, FrameHeader, FrameType};
-use crate::image::{Image, Rect};
+use crate::image::{Image, OwnedRawImage, Rect};
 #[cfg(test)]
 use crate::render::SimpleRenderPipeline;
 use crate::render::buffer_splitter::BufferSplitter;
@@ -428,12 +429,27 @@ impl Frame {
 
         // STEP 4: actually run the steps.
 
-        let pass_to_pipeline = |chan, group, complete, image: Image<i32>| {
-            pipeline!(
-                self,
-                p,
-                p.set_buffer_for_group(chan, group, complete, image, &buffer_splitter)?
-            );
+        let storage = self.lf_global.as_ref().unwrap().modular_global.storage();
+
+        let pass_to_pipeline = |chan, group, complete, raw_image: OwnedRawImage| {
+            match storage {
+                ModularStorage::I16 => {
+                    let image = Image::<i16>::from_raw(raw_image);
+                    pipeline!(
+                        self,
+                        p,
+                        p.set_buffer_for_group(chan, group, complete, image, &buffer_splitter)?
+                    );
+                }
+                ModularStorage::I32 => {
+                    let image = Image::<i32>::from_raw(raw_image);
+                    pipeline!(
+                        self,
+                        p,
+                        p.set_buffer_for_group(chan, group, complete, image, &buffer_splitter)?
+                    );
+                }
+            }
             Ok(())
         };
 
@@ -561,17 +577,35 @@ impl Frame {
 
         if frame_header.encoding == Encoding::Modular {
             if decoder_state.file_header.image_metadata.xyb_encoded {
-                pipeline = pipeline.add_inout_stage(ConvertModularXYBToF32Stage::new(0, lf_quant))
+                if metadata.modular_16bit_sufficient {
+                    pipeline =
+                        pipeline.add_inout_stage(ConvertModular16XYBToF32Stage::new(0, lf_quant));
+                } else {
+                    pipeline =
+                        pipeline.add_inout_stage(ConvertModularXYBToF32Stage::new(0, lf_quant));
+                }
             } else {
                 for i in 0..3 {
-                    pipeline = pipeline
-                        .add_inout_stage(ConvertModularToF32Stage::new(i, metadata.bit_depth));
+                    if metadata.modular_16bit_sufficient {
+                        pipeline = pipeline.add_inout_stage(ConvertModular16ToF32Stage::new(
+                            i,
+                            metadata.bit_depth,
+                        ));
+                    } else {
+                        pipeline = pipeline
+                            .add_inout_stage(ConvertModularToF32Stage::new(i, metadata.bit_depth));
+                    }
                 }
             }
         }
         for i in 3..num_channels {
             let ec_bit_depth = metadata.extra_channel_info[i - 3].bit_depth();
-            pipeline = pipeline.add_inout_stage(ConvertModularToF32Stage::new(i, ec_bit_depth));
+            if metadata.modular_16bit_sufficient {
+                pipeline =
+                    pipeline.add_inout_stage(ConvertModular16ToF32Stage::new(i, ec_bit_depth));
+            } else {
+                pipeline = pipeline.add_inout_stage(ConvertModularToF32Stage::new(i, ec_bit_depth));
+            }
         }
 
         for c in 0..3 {

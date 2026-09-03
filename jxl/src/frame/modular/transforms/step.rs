@@ -661,7 +661,7 @@ impl TransformStepChunk {
         buffers: &[ModularBufferInfo],
         scratch_space: &mut ScratchSpace,
         recycler: &BufferRecycler,
-        pass_to_pipeline: &dyn Fn(usize, usize, bool, Image<i32>) -> Result<()>,
+        pass_to_pipeline: &dyn Fn(usize, usize, bool, OwnedRawImage) -> Result<()>,
     ) -> Result<()> {
         let is_final = self.missing_final_deps == 0;
         let buf_out = self.buf_out();
@@ -962,27 +962,43 @@ impl TransformStepChunk {
             } => {
                 debug!("Rendering channel {channel:?}, rect {rect:?}, group {group}");
                 let buf = &buffers[*buf_in].buffer_grid[out_grid];
+                let storage = buffers[*buf_in].storage;
                 if buf.data_status == DataStatus::Zero && !buf.has_buffer() {
-                    let zero = Image::new(rect.map(|x| x.size).unwrap_or(buf.size))?;
-                    pass_to_pipeline(*channel, *group, is_final, zero)?;
+                    let sz = rect.map(|x| x.size).unwrap_or(buf.size);
+                    let raw = match storage {
+                        ModularStorage::I16 => Image::<i16>::new(sz)?.into_raw(),
+                        ModularStorage::I32 => Image::<i32>::new(sz)?.into_raw(),
+                    };
+                    pass_to_pipeline(*channel, *group, is_final, raw)?;
                 } else {
                     let modular_buf = buf.get_buffer(buf.can_consume(is_final), recycler)?;
-                    if let Some(rect) = rect {
-                        let mut cropped = Image::new(rect.size)?;
-                        let src_view =
-                            ImageRect::<i32>::from_raw(modular_buf.data.as_rect()).rect(*rect);
-                        for y in 0..rect.size.1 {
-                            cropped.row_mut(y).copy_from_slice(src_view.row(y));
+                    let raw = if let Some(rect) = rect {
+                        match storage {
+                            ModularStorage::I16 => {
+                                let mut cropped = Image::<i16>::new(rect.size)?;
+                                let src_view =
+                                    ImageRect::<i16>::from_raw(modular_buf.data.as_rect())
+                                        .rect(*rect);
+                                for y in 0..rect.size.1 {
+                                    cropped.row_mut(y).copy_from_slice(src_view.row(y));
+                                }
+                                cropped.into_raw()
+                            }
+                            ModularStorage::I32 => {
+                                let mut cropped = Image::<i32>::new(rect.size)?;
+                                let src_view =
+                                    ImageRect::<i32>::from_raw(modular_buf.data.as_rect())
+                                        .rect(*rect);
+                                for y in 0..rect.size.1 {
+                                    cropped.row_mut(y).copy_from_slice(src_view.row(y));
+                                }
+                                cropped.into_raw()
+                            }
                         }
-                        pass_to_pipeline(*channel, *group, is_final, cropped)?;
                     } else {
-                        pass_to_pipeline(
-                            *channel,
-                            *group,
-                            is_final,
-                            Image::from_raw(modular_buf.data),
-                        )?;
-                    }
+                        modular_buf.data
+                    };
+                    pass_to_pipeline(*channel, *group, is_final, raw)?;
                 }
             }
         };
