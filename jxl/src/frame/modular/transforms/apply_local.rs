@@ -311,6 +311,7 @@ impl TransformStep {
                         buf_topleft: None,
                         prev_aux: None,
                         aux_out: &mut [],
+                        storage,
                     }
                     .run(&mut scratch_space.palette_row_scratch)?;
                 }
