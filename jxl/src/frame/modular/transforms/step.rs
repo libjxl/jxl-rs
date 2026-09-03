@@ -14,7 +14,10 @@ use crate::frame::modular::{
 };
 use crate::headers::frame_header::FrameHeader;
 use crate::headers::modular::WeightedHeader;
-use crate::image::{BufferRecycler, Image, ImageRect, ImageRectMut, OwnedRawImage, Rect};
+use crate::image::{
+    BufferRecycler, Image, ImageDataType, ImageRect, ImageRectMut, OwnedRawImage, RawImageRect,
+    Rect,
+};
 use crate::util::SmallVec;
 use crate::util::sync::RwLockReadGuard;
 use crate::util::sync::atomic::{AtomicUsize, Ordering};
@@ -360,26 +363,36 @@ struct SqueezeInputs<'a> {
 }
 
 impl<'a> SqueezeInputs<'a> {
-    fn in_avg_rect(&self, rect: Rect) -> ImageRect<'_, i32> {
-        ImageRect::<i32>::from_raw(self.in_avg.as_ref().unwrap().data.as_rect()).rect(rect)
+    fn in_avg_rect(&self, rect: Rect, is_16bit: bool) -> RawImageRect<'_> {
+        self.in_avg
+            .as_ref()
+            .unwrap()
+            .data
+            .as_rect()
+            .rect(rect.to_byte_rect_sz(if is_16bit { 2 } else { 4 }))
     }
 
-    fn in_res_rect(&self, rect: Rect) -> ImageRect<'_, i32> {
-        ImageRect::<i32>::from_raw(self.in_res.as_ref().unwrap().data.as_rect()).rect(rect)
+    fn in_res_rect(&self, rect: Rect, is_16bit: bool) -> RawImageRect<'_> {
+        self.in_res
+            .as_ref()
+            .unwrap()
+            .data
+            .as_rect()
+            .rect(rect.to_byte_rect_sz(if is_16bit { 2 } else { 4 }))
     }
 
-    fn in_next_border(&self) -> Option<ImageRect<'_, i32>> {
+    fn in_next_border(&self) -> Option<RawImageRect<'_>> {
         self.in_next_border
             .as_ref()
             .and_then(|g| g.as_ref())
-            .map(|img| ImageRect::<i32>::from_raw(img.as_rect()))
+            .map(|img| img.as_rect())
     }
 
-    fn out_prev_border(&self) -> Option<ImageRect<'_, i32>> {
+    fn out_prev_border(&self) -> Option<RawImageRect<'_>> {
         self.out_prev_border
             .as_ref()
             .and_then(|g| g.as_ref())
-            .map(|img| ImageRect::<i32>::from_raw(img.as_rect()))
+            .map(|img| img.as_rect())
     }
 }
 
@@ -389,11 +402,15 @@ enum TileGuard<'a> {
 }
 
 impl<'a> TileGuard<'a> {
-    fn as_rect(&self) -> ImageRect<'_, i32> {
+    fn as_rect<T: ImageDataType>(&self) -> ImageRect<'_, T> {
         match self {
-            TileGuard::Channel(g) => ImageRect::<i32>::from_raw(g.as_ref().unwrap().data.as_rect()),
-            TileGuard::Border(g) => ImageRect::<i32>::from_raw(g.as_ref().unwrap().as_rect()),
+            TileGuard::Channel(g) => ImageRect::<T>::from_raw(g.as_ref().unwrap().data.as_rect()),
+            TileGuard::Border(g) => ImageRect::<T>::from_raw(g.as_ref().unwrap().as_rect()),
         }
+    }
+
+    fn row<T: ImageDataType>(&self, row: usize) -> &[T] {
+        self.as_rect::<T>().row(row)
     }
 }
 
@@ -405,11 +422,6 @@ pub(super) struct TiledChannelView<'a> {
 }
 
 impl<'a> TiledChannelView<'a> {
-    #[inline(always)]
-    fn tile(&self, idx: usize) -> ImageRect<'_, i32> {
-        self.tiles[idx].as_ref().unwrap().as_rect()
-    }
-
     #[inline(always)]
     fn top_border_row(ly: usize, top_tile_h: usize) -> usize {
         if top_tile_h <= 1 || ly == top_tile_h - 1 {
@@ -424,44 +436,46 @@ impl<'a> TiledChannelView<'a> {
         if ly == 0 { 0 } else { 1 }
     }
 
-    fn copy_tile_slice(
+    fn copy_tile_slice<T: ImageDataType>(
         &self,
         (dx, dy): (usize, usize),
         ly: usize,
         src_range: std::ops::Range<usize>,
         tile_w: usize,
         top_tile_h: usize,
-        dest: &mut [i32],
+        dest: &mut [T],
     ) {
-        let img = self.tile(dy * 3 + dx);
+        let img = self.tiles[dy * 3 + dx].as_ref().unwrap();
         match (dy, dx) {
             (1, 1) => {
-                dest.copy_from_slice(&img.row(ly)[src_range]);
+                dest.copy_from_slice(&img.row::<T>(ly)[src_range]);
             }
             (0, _) => {
-                dest.copy_from_slice(&img.row(Self::top_border_row(ly, top_tile_h))[src_range]);
+                dest.copy_from_slice(
+                    &img.row::<T>(Self::top_border_row(ly, top_tile_h))[src_range],
+                );
             }
             (2, _) => {
-                dest.copy_from_slice(&img.row(Self::bottom_border_row(ly))[src_range]);
+                dest.copy_from_slice(&img.row::<T>(Self::bottom_border_row(ly))[src_range]);
             }
             (1, 0) => {
                 let offset_start = 4 - (tile_w - src_range.start);
                 let offset_end = 4 - (tile_w - src_range.end);
-                dest.copy_from_slice(&img.row(ly)[offset_start..offset_end]);
+                dest.copy_from_slice(&img.row::<T>(ly)[offset_start..offset_end]);
             }
             (1, 2) => {
-                dest.copy_from_slice(&img.row(ly)[src_range]);
+                dest.copy_from_slice(&img.row::<T>(ly)[src_range]);
             }
             _ => unreachable!(),
         }
     }
 
-    pub fn load_row_to_scratch(
+    pub fn load_row_to_scratch<T: ImageDataType>(
         &self,
         yg: isize,
         xoff: usize,
         valid_len: usize,
-        row_buf: &mut [i32],
+        row_buf: &mut [T],
     ) {
         let (w, h) = self.size;
         // Only the first `valid_len` values are actual convolution inputs; the rest
@@ -482,7 +496,7 @@ impl<'a> TiledChannelView<'a> {
         };
 
         let Some(grid_dim) = self.grid_dim else {
-            let row = self.tile(4).row(clamped_y);
+            let row = self.tiles[4].as_ref().unwrap().row::<T>(clamped_y);
 
             let left_clamp = (2 - xoff as isize).max(0) as usize;
             let right_clamp_start = (w as isize + 2 - xoff as isize).min(max_len as isize) as usize;
@@ -558,10 +572,16 @@ impl<'a> TiledChannelView<'a> {
 
         if left_clamp > 0 {
             let left_val = match dy {
-                1 => self.tile(4).row(ly)[0],
-                0 => self.tile(1).row(Self::top_border_row(ly, top_tile_h))[0],
-                2 => self.tile(7).row(Self::bottom_border_row(ly))[0],
-                _ => 0,
+                1 => self.tiles[4].as_ref().unwrap().row::<T>(ly)[0],
+                0 => self.tiles[1]
+                    .as_ref()
+                    .unwrap()
+                    .row::<T>(Self::top_border_row(ly, top_tile_h))[0],
+                2 => self.tiles[7]
+                    .as_ref()
+                    .unwrap()
+                    .row::<T>(Self::bottom_border_row(ly))[0],
+                _ => T::default(),
             };
             row_buf[..left_clamp].fill(left_val);
         }
@@ -571,11 +591,17 @@ impl<'a> TiledChannelView<'a> {
             let lx_right = (w - 1) % grid_w;
             let dx = (gx_right as isize - gx_center as isize + 1) as usize;
             let right_val = match (dy, dx) {
-                (1, 1) => self.tile(4).row(ly)[lx_right],
-                (1, 2) => self.tile(5).row(ly)[3],
-                (0, 1 | 2) => self.tile(dx).row(Self::top_border_row(ly, top_tile_h))[lx_right],
-                (2, 1 | 2) => self.tile(6 + dx).row(Self::bottom_border_row(ly))[lx_right],
-                _ => 0,
+                (1, 1) => self.tiles[4].as_ref().unwrap().row::<T>(ly)[lx_right],
+                (1, 2) => self.tiles[5].as_ref().unwrap().row::<T>(ly)[3],
+                (0, 1 | 2) => self.tiles[dx]
+                    .as_ref()
+                    .unwrap()
+                    .row::<T>(Self::top_border_row(ly, top_tile_h))[lx_right],
+                (2, 1 | 2) => self.tiles[6 + dx]
+                    .as_ref()
+                    .unwrap()
+                    .row::<T>(Self::bottom_border_row(ly))[lx_right],
+                _ => T::default(),
             };
             row_buf[max_len - right_clamp..max_len].fill(right_val);
         }
@@ -944,21 +970,24 @@ impl TransformStepChunk {
                             let inputs = info.borrow_inputs(buffers, vertical);
                             let in_next = inputs.in_next_border();
                             let out_prev = inputs.out_prev_border();
+                            let is_16bit = buffers[*buf_out].is_16bit;
                             if vertical {
                                 super::squeeze::do_vsqueeze_step(
-                                    &inputs.in_avg_rect(avg_rect),
-                                    &inputs.in_res_rect(res_rect),
+                                    &inputs.in_avg_rect(avg_rect, is_16bit),
+                                    &inputs.in_res_rect(res_rect, is_16bit),
                                     in_next.as_ref(),
                                     out_prev.as_ref(),
                                     &mut bufs,
+                                    is_16bit,
                                 );
                             } else {
                                 super::squeeze::do_hsqueeze_step(
-                                    &inputs.in_avg_rect(avg_rect),
-                                    &inputs.in_res_rect(res_rect),
+                                    &inputs.in_avg_rect(avg_rect, is_16bit),
+                                    &inputs.in_res_rect(res_rect, is_16bit),
                                     in_next.as_ref(),
                                     out_prev.as_ref(),
                                     &mut bufs,
+                                    is_16bit,
                                 );
                             }
                         }
