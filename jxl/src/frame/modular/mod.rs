@@ -215,7 +215,7 @@ use crate::frame::modular::transforms::smooth_squeeze::SmoothUpsampleScratch;
 
 pub(super) struct ScratchSpace {
     smooth_upsample_scratch: SmoothUpsampleScratch,
-    palette_row_scratch: [Vec<i32>; 3],
+    palette_row_scratch: [Vec<i32>; 4],
     decode_row_scratch: [Vec<i32>; 3],
 }
 
@@ -229,7 +229,7 @@ impl ScratchSpace {
     fn new() -> ScratchSpace {
         ScratchSpace {
             smooth_upsample_scratch: SmoothUpsampleScratch::default(),
-            palette_row_scratch: [vec![], vec![], vec![]],
+            palette_row_scratch: [vec![], vec![], vec![], vec![]],
             decode_row_scratch: [vec![], vec![], vec![]],
         }
     }

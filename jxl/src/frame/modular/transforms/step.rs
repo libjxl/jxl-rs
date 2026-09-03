@@ -749,18 +749,12 @@ impl TransformStepChunk {
                             })
                             .collect::<Vec<_>>()
                     });
-                    let left_refs: Option<Vec<ImageRect<'_, i32>>> =
-                        left_guards.as_ref().map(|v| {
-                            v.iter()
-                                .map(|x| ImageRect::<i32>::from_raw(x.as_ref().unwrap().as_rect()))
-                                .collect::<Vec<_>>()
-                        });
-                    let topleft_refs: Option<Vec<ImageRect<'_, i32>>> =
-                        topleft_guards.as_ref().map(|v| {
-                            v.iter()
-                                .map(|x| ImageRect::<i32>::from_raw(x.as_ref().unwrap().as_rect()))
-                                .collect::<Vec<_>>()
-                        });
+                    let left_refs: Option<Vec<&OwnedRawImage>> = left_guards
+                        .as_ref()
+                        .map(|v| v.iter().map(|x| x.as_ref().unwrap()).collect::<Vec<_>>());
+                    let topleft_refs: Option<Vec<&OwnedRawImage>> = topleft_guards
+                        .as_ref()
+                        .map(|v| v.iter().map(|x| x.as_ref().unwrap()).collect::<Vec<_>>());
 
                     let mut top_guards = vec![];
                     let mut prev_aux_guards = vec![];
@@ -781,10 +775,8 @@ impl TransformStepChunk {
                             }
                         }
                     }
-                    let top_refs: Vec<ImageRect<'_, i32>> = top_guards
-                        .iter()
-                        .map(|g| ImageRect::<i32>::from_raw(g.as_ref().unwrap().as_rect()))
-                        .collect();
+                    let top_refs: Vec<&OwnedRawImage> =
+                        top_guards.iter().map(|g| g.as_ref().unwrap()).collect();
                     let prev_aux_refs: Vec<Option<&Image<i32>>> =
                         prev_aux_guards.iter().map(|g| g.as_ref()).collect();
 
@@ -805,6 +797,7 @@ impl TransformStepChunk {
                         super::palette::zero_palette_step_one_group(
                             img_pal.as_ref().unwrap(),
                             &mut out_buf_refs,
+                            buffers[*buf_in].storage,
                         );
                     } else {
                         let mut in_bufs = vec![];
@@ -842,6 +835,7 @@ impl TransformStepChunk {
                             prev_aux: (has_top && *predictor == Predictor::Weighted)
                                 .then_some(&prev_aux_refs[..]),
                             aux_out: &mut aux_out,
+                            storage: buffers[*buf_in].storage,
                         }
                         .run(&mut scratch_space.palette_row_scratch)?;
                     }
