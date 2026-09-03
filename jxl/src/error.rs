@@ -277,6 +277,8 @@ pub enum Error {
     TooManyExtraChannels(usize),
     #[error("No LF frame for level {0}")]
     NoLfFrame(u32),
+    #[error("Brotli decompress error: {0}")]
+    Brotli(std::io::Error),
 }
 
 pub type Result<T, E = Error> = std::result::Result<T, E>;

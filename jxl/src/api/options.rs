@@ -31,6 +31,7 @@ pub struct JxlDecoderOptions {
     /// This is useful for collecting [`VisibleFrameInfo`](crate::api::VisibleFrameInfo)
     /// via the regular decoder API without producing pixels.
     pub scan_frames_only: bool,
+    pub request_exif: bool,
 }
 
 impl Default for JxlDecoderOptions {
@@ -45,6 +46,7 @@ impl Default for JxlDecoderOptions {
             high_precision: false,
             premultiply_output: false,
             scan_frames_only: false,
+            request_exif: false,
         }
     }
 }

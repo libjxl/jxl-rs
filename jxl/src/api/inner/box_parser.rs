@@ -3,12 +3,16 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-use std::collections::{BTreeMap, HashMap};
+#[cfg(feature = "brotli")]
+use std::borrow::Cow;
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::io::{IoSliceMut, Read};
 
 use crate::api::inner::process::SmallBuffer;
 use crate::api::{JxlBitstreamInput, JxlSignatureType, check_signature_internal};
 use crate::error::{Error, Result};
+#[cfg(feature = "brotli")]
+use crate::util::NewWithCapacity;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ParseState {
@@ -20,6 +24,8 @@ enum ParseState {
     Codestream(Option<u64>),
     // Skip the next bytes.
     Skip(Option<u64>),
+    // The next bytes are auxiliary box contents. None = no limit.
+    Aux(Option<u64>),
     // The next bytes should be buffered in a jxlp box.
     OOOJxlp(u32, Option<u64>),
     // After the last codestream box, no more container bytes: no further
@@ -36,10 +42,96 @@ enum CodestreamBoxType {
     Jxlp(u32, bool),
 }
 
+impl CodestreamBoxType {
+    fn is_last(&self) -> bool {
+        matches!(self, Self::Jxlc | Self::Jxlp(_, true))
+    }
+}
+
 struct OOOJxlpBox {
     data: Vec<u8>,
     consumed: usize,
     is_last: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum JxlAuxBoxType {
+    Exif,
+}
+
+impl JxlAuxBoxType {
+    fn from_code(code: &[u8]) -> Option<JxlAuxBoxType> {
+        Some(match code {
+            b"Exif" => JxlAuxBoxType::Exif,
+            _ => {
+                return None;
+            }
+        })
+    }
+}
+
+pub struct JxlAuxBox {
+    ty: JxlAuxBoxType,
+    data: Vec<u8>,
+    brotli: bool,
+}
+
+impl std::fmt::Debug for JxlAuxBox {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let len = self.data.len();
+        f.debug_struct("JxlAuxBox")
+            .field("ty", &self.ty)
+            .field(
+                "data",
+                &format_args!("({len} byte{})", if len == 1 { "" } else { "s" }),
+            )
+            .field("brotli", &self.brotli)
+            .finish()
+    }
+}
+
+impl JxlAuxBox {
+    pub fn box_type(&self) -> JxlAuxBoxType {
+        self.ty
+    }
+
+    pub fn raw_data(&self) -> &[u8] {
+        &self.data
+    }
+
+    pub fn is_compressed(&self) -> bool {
+        self.brotli
+    }
+
+    #[cfg(feature = "brotli")]
+    pub fn data(&self, mut trailing_data: &[u8]) -> Result<Cow<'_, [u8]>> {
+        use std::io::prelude::*;
+
+        let output = if self.is_compressed() {
+            let mut data = &self.data[..];
+            let r = (&mut data).chain(&mut trailing_data);
+            let mut output = Vec::new();
+            let mut brotli = brotli_decompressor::Decompressor::new(r, 1024);
+            let mut buf = [0u8; 1024];
+            loop {
+                let n = brotli.read(&mut buf).map_err(crate::error::Error::Brotli)?;
+                if n == 0 {
+                    break;
+                }
+                output.try_reserve(n)?;
+                output.extend_from_slice(&buf[..n]);
+            }
+            Cow::Owned(output)
+        } else if trailing_data.is_empty() {
+            Cow::Borrowed(&self.data[..])
+        } else {
+            let mut output = Vec::new_with_capacity(self.data.len() + trailing_data.len())?;
+            output.extend_from_slice(&self.data);
+            output.extend_from_slice(trailing_data);
+            Cow::Owned(output)
+        };
+        Ok(output)
+    }
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -49,6 +141,7 @@ pub struct BoxParserCheckpoint {
     codestream_left: Option<u64>,
     is_valid_checkpoint: bool,
     pub(crate) consumed_codestream: u64,
+    num_aux_boxes: usize,
 }
 
 pub(super) struct BoxParser {
@@ -61,10 +154,23 @@ pub(super) struct BoxParser {
     // to box info
     codestream_pos_to_box: BTreeMap<u64, BoxParserCheckpoint>,
     allow_checkpoint: bool,
+    aux: AuxBoxState,
+}
+
+#[derive(Default)]
+struct AuxBoxState {
+    boxes_to_extract: HashSet<JxlAuxBoxType>,
+    boxes: Vec<JxlAuxBox>,
+    box_buffer: Option<JxlAuxBox>,
+    next_box_idx: usize,
 }
 
 impl BoxParser {
     pub(super) fn new() -> Self {
+        Self::with_aux_boxes(None)
+    }
+
+    pub(super) fn with_aux_boxes(box_types: impl IntoIterator<Item = JxlAuxBoxType>) -> Self {
         BoxParser {
             local_buffer: SmallBuffer::new(128),
             state: ParseState::SignatureNeeded,
@@ -73,6 +179,10 @@ impl BoxParser {
             version: None,
             codestream_pos_to_box: BTreeMap::new(),
             allow_checkpoint: true,
+            aux: AuxBoxState {
+                boxes_to_extract: box_types.into_iter().collect(),
+                ..Default::default()
+            },
         }
     }
 
@@ -83,6 +193,9 @@ impl BoxParser {
         self.state = ParseState::Codestream(box_checkpoint.codestream_left);
         // Do not allow creating new checkpoints after a reset.
         self.allow_checkpoint = false;
+
+        self.aux.box_buffer = Default::default();
+        self.aux.next_box_idx = box_checkpoint.num_aux_boxes;
     }
 
     pub(super) fn state_checkpoint(
@@ -115,6 +228,18 @@ impl BoxParser {
         b.file_position + (codestream_bytes_consumed - *start)
     }
 
+    pub(super) fn aux_boxes(&self) -> &[JxlAuxBox] {
+        &self.aux.boxes
+    }
+
+    pub(super) fn trailing_box_info(&self) -> Option<&JxlAuxBox> {
+        if self.state != ParseState::Aux(None) {
+            return None;
+        }
+
+        self.aux.box_buffer.as_ref()
+    }
+
     fn add_checkpoint(&mut self) {
         if !self.allow_checkpoint {
             return;
@@ -141,6 +266,7 @@ impl BoxParser {
                 codestream_left,
                 is_valid_checkpoint,
                 consumed_codestream: 0,
+                num_aux_boxes: self.aux.boxes.len(),
             },
         );
     }
@@ -182,10 +308,7 @@ impl BoxParser {
         }
         let new_size = c.unwrap() - n as u64;
         if new_size == 0 {
-            self.state = if matches!(
-                self.latest_codestream_box,
-                CodestreamBoxType::Jxlc | CodestreamBoxType::Jxlp(_, true)
-            ) {
+            self.state = if self.latest_codestream_box.is_last() {
                 ParseState::Complete
             } else {
                 if let CodestreamBoxType::Jxlp(j, _) = self.latest_codestream_box
@@ -291,6 +414,33 @@ impl BoxParser {
                     }
                     self.state = ParseState::Skip(count.map(|x| x - n));
                 }
+                ParseState::Aux(None) => {
+                    let local_buffer_len = self.local_buffer.len();
+                    let buf = self.aux.box_buffer.as_mut().unwrap();
+                    if local_buffer_len > 0 {
+                        buf.data.extend_from_slice(&self.local_buffer);
+                        self.local_buffer.consume(local_buffer_len);
+                    }
+                    return Ok(());
+                }
+                ParseState::Aux(Some(count)) => {
+                    if count == 0 {
+                        let buf = self.aux.box_buffer.take().unwrap();
+                        self.aux.boxes.push(buf);
+                        self.state = if self.latest_codestream_box.is_last() {
+                            ParseState::Complete
+                        } else {
+                            ParseState::BoxNeeded(8)
+                        };
+                        continue;
+                    }
+
+                    let total = self.handle_aux_box(input, count)?;
+                    if total == 0 {
+                        return Err(Error::OutOfBounds(count.min(usize::MAX as u64) as usize));
+                    }
+                    self.state = ParseState::Aux(Some(count - total));
+                }
                 ParseState::OOOJxlp(id, count) => {
                     if count == Some(0) {
                         self.state = ParseState::BoxNeeded(8);
@@ -328,6 +478,89 @@ impl BoxParser {
         }
     }
 
+    fn consume_trailing_data(&mut self, input: &mut dyn JxlBitstreamInput) -> Result<()> {
+        let is_invalid_state = matches!(
+            self.state,
+            ParseState::SignatureNeeded | ParseState::Codestream(_) | ParseState::OOOJxlp(..)
+        );
+        assert!(
+            !is_invalid_state && self.latest_codestream_box.is_last(),
+            "API usage error: cannot consume trailing data while codestream is incomplete",
+        );
+
+        loop {
+            match self.state {
+                ParseState::Complete => {
+                    if input.available_bytes()? == 0 {
+                        return Ok(());
+                    }
+                    self.state = ParseState::BoxNeeded(8);
+                }
+                ParseState::Skip(count) => {
+                    if count == Some(0) {
+                        self.state = ParseState::Complete;
+                        continue;
+                    }
+                    let to_skip = count.unwrap_or(u64::MAX).min(usize::MAX as u64) as usize;
+                    let n = self.skip_inner(input, to_skip)? as u64;
+                    if n == 0 {
+                        return Err(Error::OutOfBounds(to_skip));
+                    }
+                    self.state = ParseState::Skip(count.map(|x| x - n));
+                }
+                ParseState::Aux(None) => {
+                    let local_buffer_len = self.local_buffer.len();
+                    let buf = self.aux.box_buffer.as_mut().unwrap();
+                    if local_buffer_len > 0 {
+                        buf.data.extend_from_slice(&self.local_buffer);
+                        self.local_buffer.consume(local_buffer_len);
+                    }
+                    return Ok(());
+                }
+                ParseState::Aux(Some(count)) => {
+                    if count == 0 {
+                        let buf = self.aux.box_buffer.take().unwrap();
+                        self.aux.boxes.push(buf);
+                        self.state = ParseState::Complete;
+                        continue;
+                    }
+
+                    let total = self.handle_aux_box(input, count)?;
+                    if total == 0 {
+                        return Err(Error::OutOfBounds(count.min(usize::MAX as u64) as usize));
+                    }
+                    self.state = ParseState::Aux(Some(count - total));
+                }
+                ParseState::BoxNeeded(min_size) => self.parse_box(input, min_size)?,
+                _ => {
+                    return Err(Error::InvalidBox);
+                }
+            }
+        }
+    }
+
+    fn handle_aux_box(&mut self, input: &mut dyn JxlBitstreamInput, count: u64) -> Result<u64> {
+        let mut buf = self.aux.box_buffer.take().unwrap();
+        let mut total = 0;
+        loop {
+            let space = buf.data.len().max(1024).min(input.available_bytes()?) as u64;
+            let space = (count - total).min(space) as usize;
+            if space == 0 {
+                break;
+            }
+            buf.data.try_reserve(space)?;
+            let cur = buf.data.len();
+            buf.data.resize(cur + space, 0);
+            let n = self.read_inner(input, &mut [IoSliceMut::new(&mut buf.data[cur..])])?;
+            if n == 0 {
+                break;
+            }
+            total += n as u64;
+        }
+        self.aux.box_buffer = Some(buf);
+        Ok(total)
+    }
+
     fn parse_box(&mut self, input: &mut dyn JxlBitstreamInput, required_size: usize) -> Result<()> {
         self.read_until_at_least(input, required_size)?;
 
@@ -345,6 +578,7 @@ impl BoxParser {
         let extra_len = match &ty {
             b"jxlp" => 4,
             b"ftyp" => 8,
+            b"brob" => 4,
             _ => 0,
         };
 
@@ -438,7 +672,47 @@ impl BoxParser {
                 self.state = ParseState::Codestream(content_len);
                 self.add_checkpoint();
             }
-            _ => self.state = ParseState::Skip(content_len),
+            b"brob" => {
+                let inner_type = &self.local_buffer[..4];
+                if matches!(inner_type, b"brob" | [b'j', b'x', b'l', _] | b"jbrd") {
+                    return Err(Error::InvalidBox);
+                }
+                let inner_type = JxlAuxBoxType::from_code(inner_type);
+                self.local_buffer.consume(4);
+
+                let current_box_idx = self.aux.next_box_idx;
+                self.aux.next_box_idx += 1;
+                if current_box_idx >= self.aux.boxes.len()
+                    && let Some(ty) = inner_type
+                    && self.aux.boxes_to_extract.contains(&ty)
+                {
+                    self.aux.box_buffer = Some(JxlAuxBox {
+                        ty,
+                        brotli: true,
+                        data: Vec::new(),
+                    });
+                    self.state = ParseState::Aux(content_len);
+                } else {
+                    self.state = ParseState::Skip(content_len);
+                }
+            }
+            code => {
+                let current_box_idx = self.aux.next_box_idx;
+                self.aux.next_box_idx += 1;
+                if current_box_idx >= self.aux.boxes.len()
+                    && let Some(ty) = JxlAuxBoxType::from_code(code)
+                    && self.aux.boxes_to_extract.contains(&ty)
+                {
+                    self.aux.box_buffer = Some(JxlAuxBox {
+                        ty,
+                        brotli: false,
+                        data: Vec::new(),
+                    });
+                    self.state = ParseState::Aux(content_len);
+                } else {
+                    self.state = ParseState::Skip(content_len);
+                }
+            }
         }
         Ok(())
     }
@@ -456,6 +730,10 @@ impl<'a> CodestreamInput<'a> {
 
     pub(super) fn box_parser(&self) -> &BoxParser {
         self.box_parser
+    }
+
+    pub(super) fn consume_trailing_data(&mut self) -> Result<()> {
+        self.box_parser.consume_trailing_data(self.input)
     }
 
     // The methods below have the same semantics as the methods in JxlBitstreamInput.
