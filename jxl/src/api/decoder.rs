@@ -212,6 +212,11 @@ impl JxlDecoder<WithImageInfo> {
     pub(crate) fn set_use_simple_pipeline(&mut self, u: bool) {
         self.inner.set_use_simple_pipeline(u);
     }
+
+    #[cfg(test)]
+    pub(crate) fn disable_16bit_modular_buffers(&mut self) {
+        self.inner.disable_16bit_modular_buffers();
+    }
 }
 
 impl JxlDecoder<WithFrameInfo> {

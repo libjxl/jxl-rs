@@ -293,6 +293,7 @@ impl FullModularImage {
         modular_color_channels: usize,
         br: &mut BitReader,
         recycler: Arc<BufferRecycler>,
+        is_16bit: bool,
     ) -> Result<Self> {
         let mut channels = vec![];
         for c in 0..modular_color_channels {
@@ -353,7 +354,7 @@ impl FullModularImage {
                 rerendered_buffers: HashSet::new(),
                 delayed_ready_sections: Mutex::new(BTreeSet::new()),
                 recycler,
-                is_16bit: image_metadata.modular_16bit_sufficient,
+                is_16bit,
             });
         }
 
@@ -372,11 +373,8 @@ impl FullModularImage {
             .iter()
             .any(|x| x.id == TransformId::Squeeze);
 
-        let (mut buffer_info, transform_steps) = transforms::meta_apply::meta_apply_transforms(
-            &channels,
-            &header,
-            image_metadata.modular_16bit_sufficient,
-        )?;
+        let (mut buffer_info, transform_steps) =
+            transforms::meta_apply::meta_apply_transforms(&channels, &header, is_16bit)?;
 
         // Assign each (channel, group) pair present in the bitstream to the section in which it
         // will be decoded.
@@ -527,7 +525,7 @@ impl FullModularImage {
             rerendered_buffers: HashSet::new(),
             delayed_ready_sections: Mutex::new(BTreeSet::new()),
             recycler,
-            is_16bit: image_metadata.modular_16bit_sufficient,
+            is_16bit,
         })
     }
 

@@ -24,6 +24,7 @@ fn decode_small_chunks() {
             None,
             None,
             None,
+            false,
         )
         .unwrap();
         Ok(())
@@ -849,7 +850,7 @@ fn test_fuzzer_smallbuffer_overflow() {
     let data = include_bytes!("../../tests/testdata/fuzzer_smallbuffer_overflow.jxl");
 
     let result = panic::catch_unwind(|| {
-        let _ = decode_internal(data, 1024, false, false, None, None, None);
+        let _ = decode_internal(data, 1024, false, false, None, None, None, false);
     });
 
     if let Err(e) = result {
@@ -873,7 +874,7 @@ fn test_fuzzer_smallbuffer_overflow() {
 fn flush_without_partial_render_support() {
     let data = std::fs::read("resources/test/squeeze_empty_residual.jxl").unwrap();
     for chunk_size in 1..=16 {
-        decode_internal(&data, chunk_size, false, true, None, None, None).unwrap();
+        decode_internal(&data, chunk_size, false, true, None, None, None, false).unwrap();
     }
 }
 
@@ -1304,9 +1305,10 @@ fn decode_test_strategic_solid_blue_grid_boundary() {
 #[test]
 fn test_fuzzer_vardct_grayscale_unused_channel() {
     let data = include_bytes!("../../tests/testdata/vardct_grayscale_unused_channel.jxl");
-    let (_, frames) = decode_internal(data, usize::MAX, false, false, None, None, None).unwrap();
+    let (_, frames) =
+        decode_internal(data, usize::MAX, false, false, None, None, None, false).unwrap();
     let (_, simple_frames) =
-        decode_internal(data, usize::MAX, true, false, None, None, None).unwrap();
+        decode_internal(data, usize::MAX, true, false, None, None, None, false).unwrap();
     assert_eq!(frames.len(), 1);
     assert_eq!(frames[0].len(), 1);
     assert_eq!(frames[0][0].size(), (1, 1));
@@ -1317,15 +1319,15 @@ fn test_fuzzer_vardct_grayscale_unused_channel() {
         &simple_frames[0],
     );
     // Streaming input with flushing exercises the low-memory pipeline's partial renders.
-    decode_internal(data, 1, false, true, None, None, None).unwrap();
+    decode_internal(data, 1, false, true, None, None, None, false).unwrap();
 }
 
 /// Regression test: a context map with cluster index 255. This shouldn't panic.
 #[test]
 fn test_fuzzer_context_map_num_histograms_overflow() {
     let data = include_bytes!("../../tests/testdata/context_map_num_histograms_overflow.jxl");
-    let _ = decode_internal(data, usize::MAX, false, false, None, None, None);
-    let _ = decode_internal(data, 1024, false, true, None, None, None);
+    let _ = decode_internal(data, usize::MAX, false, false, None, None, None, false);
+    let _ = decode_internal(data, 1024, false, true, None, None, None, false);
 }
 
 /// Regression test: two nested palette transforms, where the inner one has no colors and no
@@ -1336,7 +1338,7 @@ fn test_fuzzer_context_map_num_histograms_overflow() {
 #[test]
 fn test_fuzzer_modular_palette_empty_meta_channel() {
     let data = include_bytes!("../../tests/testdata/modular_palette_empty_meta_channel.jxl");
-    assert!(decode_internal(data, usize::MAX, false, false, None, None, None).is_err());
+    assert!(decode_internal(data, usize::MAX, false, false, None, None, None, false).is_err());
 }
 
 /// Regression test: a frame with patches that declares `upsampling = 4` and `ec_upsampling = [4]`
@@ -1349,7 +1351,7 @@ fn test_fuzzer_modular_palette_empty_meta_channel() {
 #[test]
 fn test_fuzzer_patches_ec_upsampling_dim_shift() {
     let data = include_bytes!("../../tests/testdata/patches_ec_upsampling_dim_shift.jxl");
-    let result = decode_internal(data, usize::MAX, false, false, None, None, None);
+    let result = decode_internal(data, usize::MAX, false, false, None, None, None, false);
     assert!(
         matches!(result, Err(Error::PatchesUnsupportedMixedUpsampling(..))),
         "expected a mixed upsampling error, got {:?}",
@@ -1367,12 +1369,13 @@ fn test_fuzzer_patches_ec_upsampling_dim_shift() {
 #[test]
 fn test_fuzzer_modular_rle_fast_path_without_lz77() {
     let data = include_bytes!("../../tests/testdata/modular_rle_fast_path_without_lz77.jxl");
-    let (_, frames) = decode_internal(data, usize::MAX, false, false, None, None, None).unwrap();
+    let (_, frames) =
+        decode_internal(data, usize::MAX, false, false, None, None, None, false).unwrap();
     assert_eq!(frames.len(), 1);
     // A single 8x8 frame, with its three colour channels interleaved.
     assert_eq!(frames[0][0].size(), (3 * 8, 8));
     // Streaming input with flushing exercises the low-memory pipeline as well.
-    decode_internal(data, 1, false, true, None, None, None).unwrap();
+    decode_internal(data, 1, false, true, None, None, None, false).unwrap();
 }
 
 /// The other direction: a stream that is genuinely RLE-coded (LZ77 enabled, every copy at
@@ -1381,10 +1384,11 @@ fn test_fuzzer_modular_rle_fast_path_without_lz77() {
 #[test]
 fn test_modular_rle_fast_path() {
     let data = include_bytes!("../../tests/testdata/modular_rle_fast_path.jxl");
-    let (_, frames) = decode_internal(data, usize::MAX, false, false, None, None, None).unwrap();
+    let (_, frames) =
+        decode_internal(data, usize::MAX, false, false, None, None, None, false).unwrap();
     let no_lz77 = include_bytes!("../../tests/testdata/modular_rle_fast_path_without_lz77.jxl");
     let (_, no_lz77_frames) =
-        decode_internal(no_lz77, usize::MAX, false, false, None, None, None).unwrap();
+        decode_internal(no_lz77, usize::MAX, false, false, None, None, None, false).unwrap();
     compare_frames(
         Path::new("modular_rle_fast_path.jxl"),
         0,

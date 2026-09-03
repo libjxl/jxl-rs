@@ -572,8 +572,9 @@ impl Frame {
         );
 
         if frame_header.encoding == Encoding::Modular {
+            let modular_16bit_sufficient = decoder_state.modular_16bit_sufficient();
             if decoder_state.file_header.image_metadata.xyb_encoded {
-                if metadata.modular_16bit_sufficient {
+                if modular_16bit_sufficient {
                     pipeline =
                         pipeline.add_inout_stage(ConvertModular16XYBToF32Stage::new(0, lf_quant));
                 } else {
@@ -582,7 +583,7 @@ impl Frame {
                 }
             } else {
                 for i in 0..3 {
-                    if metadata.modular_16bit_sufficient {
+                    if modular_16bit_sufficient {
                         pipeline = pipeline.add_inout_stage(ConvertModular16ToF32Stage::new(
                             i,
                             metadata.bit_depth,
@@ -596,7 +597,7 @@ impl Frame {
         }
         for i in 3..num_channels {
             let ec_bit_depth = metadata.extra_channel_info[i - 3].bit_depth();
-            if metadata.modular_16bit_sufficient {
+            if decoder_state.modular_16bit_sufficient() {
                 pipeline =
                     pipeline.add_inout_stage(ConvertModular16ToF32Stage::new(i, ec_bit_depth));
             } else {

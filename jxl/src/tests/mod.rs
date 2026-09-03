@@ -8,6 +8,7 @@ mod macros;
 
 mod api;
 mod compare_incremental;
+mod compare_modular;
 #[cfg(not(any(target_family = "wasm", target_arch = "wasm32")))]
 mod compare_parallel;
 pub(crate) mod decode;
