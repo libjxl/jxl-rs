@@ -163,6 +163,15 @@ impl JxlDecoderInner {
         ))
     }
 
+    #[inline(never)]
+    pub fn process_trailing_data(
+        &mut self,
+        input: &mut dyn JxlBitstreamInput,
+    ) -> Result<ProcessingResult<(), ()>> {
+        let mut input = CodestreamInput::new(&mut self.box_parser, input);
+        ProcessingResult::new(input.consume_trailing_data())
+    }
+
     /// Draws all the pixels we have data for. Returns `true` if any new pixels
     /// were written to `buffers` since the previous call to `flush_pixels`;
     /// returns `false` if no new rendering has happened, in which case the
