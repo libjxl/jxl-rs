@@ -18,6 +18,55 @@ use crate::util::tracing_wrappers::*;
 
 const SMALL_CHANNEL_THRESHOLD: usize = 64;
 
+macro_rules! rows {
+    ($row: ident, $row_top: ident, $row_toptop: ident, $buffers: expr, $y: expr, $scratch: expr, $xsize: expr) => {
+        let mut rect;
+        let ($row, $row_top, $row_toptop): (&mut [i32], &[i32], &[i32]) = if let Some(scratch) =
+            $scratch.as_deref_mut()
+        {
+            let [row, row_top, row_toptop] = scratch;
+            (
+                &mut row[..$xsize],
+                &row_top[..$xsize],
+                &row_toptop[..$xsize],
+            )
+        } else {
+            rect = ImageRectMut::<i32>::from_raw($buffers.data.as_rect_mut());
+            match $y {
+                0 => (rect.row(0), &[], &[]),
+                1 => {
+                    let [row, row_top] = rect.distinct_rows_mut([1, 0]);
+                    (row, row_top, &[])
+                }
+                _ => {
+                    let [row, row_top, row_toptop] = rect.distinct_rows_mut([$y, $y - 1, $y - 2]);
+                    (row, row_top, row_toptop)
+                }
+            }
+        };
+    };
+}
+
+// `scratch` is None for 32-bit decoding; for 16-bit decoding,
+// it keeps a rolling window of the previous 3 rows as i32;
+// in that case, this function updates the window and stores
+// the current row back to the i16 channel.
+pub(super) fn sync_scratch(
+    buf: &mut ModularChannel,
+    y: usize,
+    scratch: Option<&mut [Vec<i32>; 3]>,
+) {
+    if let Some(scratch) = scratch {
+        let xsize = buf.size(ModularStorage::I16).0;
+        let mut dest_rect = ImageRectMut::<i16>::from_raw(buf.data.as_rect_mut());
+        let dest = dest_rect.row(y);
+        for (d, &s) in dest[..xsize].iter_mut().zip(&scratch[0][..xsize]) {
+            *d = s as i16;
+        }
+        scratch.rotate_right(1);
+    }
+}
+
 pub(super) trait ModularChannelDecoder {
     #[inline(always)]
     fn needs_toptop(&self) -> bool {
@@ -35,6 +84,7 @@ pub(super) trait ModularChannelDecoder {
         histograms: &Histograms,
     ) -> i32;
 
+    // Note: scratch is None iff modular buffers are 32-bit, otherwise buffers are 16-bit.
     #[allow(clippy::too_many_arguments)]
     #[inline(never)]
     fn decode_row(
@@ -46,27 +96,18 @@ pub(super) trait ModularChannelDecoder {
         br: &mut BitReader,
         y: usize,
         xsize: usize,
+        mut scratch: Option<&mut [Vec<i32>; 3]>,
     ) {
         self.init_row(buffers, chan, y);
-        let mut rect = ImageRectMut::<i32>::from_raw(buffers[chan].data.as_rect_mut());
-        let (row, row_top, row_toptop) = match y {
-            0 => (rect.row(0), &mut [][..], &mut [][..]),
-            1 => {
-                let [row, row_top] = rect.distinct_rows_mut([1, 0]);
-                (row, row_top, &mut [][..])
-            }
-            _ => {
-                let [row, row_top, row_toptop] = rect.distinct_rows_mut([y, y - 1, y - 2]);
-                (row, row_top, row_toptop)
-            }
-        };
+
+        rows!(row, row_top, row_toptop, buffers[chan], y, scratch, xsize);
 
         let do_decode_cold = {
             #[inline(never)]
             |decoder: &mut Self,
              row: &mut [i32],
-             row_top: &mut [i32],
-             row_toptop: &mut [i32],
+             row_top: &[i32],
+             row_toptop: &[i32],
              pos: (usize, usize),
              reader: &mut SymbolReader,
              br: &mut BitReader|
@@ -102,6 +143,7 @@ pub(super) trait ModularChannelDecoder {
         for x in x1..xsize {
             do_decode_cold(self, row, row_top, row_toptop, (x, y), reader, br);
         }
+        sync_scratch(buffers[chan], y, scratch);
     }
 }
 
@@ -168,20 +210,11 @@ impl<'a> ModularChannelDecoder for FullTree<'a> {
         br: &mut BitReader,
         y: usize,
         xsize: usize,
+        mut scratch: Option<&mut [Vec<i32>; 3]>,
     ) {
         self.init_row(buffers, chan, y);
-        let mut rect = ImageRectMut::<i32>::from_raw(buffers[chan].data.as_rect_mut());
-        let (row, row_top, row_toptop) = match y {
-            0 => (rect.row(0), &mut [][..], &mut [][..]),
-            1 => {
-                let [row, row_top] = rect.distinct_rows_mut([1, 0]);
-                (row, row_top, &mut [][..])
-            }
-            _ => {
-                let [row, row_top, row_toptop] = rect.distinct_rows_mut([y, y - 1, y - 2]);
-                (row, row_top, row_toptop)
-            }
-        };
+
+        rows!(row, row_top, row_toptop, buffers[chan], y, scratch, xsize);
 
         for x in 0..xsize {
             let prediction_data = PredictionData::get_rows(row, row_top, row_toptop, x, y);
@@ -199,9 +232,11 @@ impl<'a> ModularChannelDecoder for FullTree<'a> {
             self.wp_state.update_errors(val, (x, y));
             row[x] = val;
         }
+        sync_scratch(buffers[chan], y, scratch);
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 #[inline(never)]
 fn decode_modular_channel_impl(
     t: &mut dyn ModularChannelDecoder,
@@ -211,11 +246,32 @@ fn decode_modular_channel_impl(
     reader: &mut SymbolReader,
     br: &mut BitReader,
     storage: ModularStorage,
+    scratch: &mut [Vec<i32>; 3],
 ) -> Result<()> {
     let size = buffers[chan].size(storage);
     let xsize = size.0;
+    if storage == ModularStorage::I16 {
+        for r in scratch.iter_mut() {
+            if r.len() < xsize {
+                r.resize(xsize, 0);
+            }
+        }
+    }
     for y in 0..size.1 {
-        t.decode_row(buffers, chan, histo, reader, br, y, xsize);
+        t.decode_row(
+            buffers,
+            chan,
+            histo,
+            reader,
+            br,
+            y,
+            xsize,
+            if storage == ModularStorage::I16 {
+                Some(scratch)
+            } else {
+                None
+            },
+        );
     }
     Ok(())
 }
@@ -231,6 +287,7 @@ pub(super) fn decode_modular_channel(
     reader: &mut SymbolReader,
     br: &mut BitReader,
     storage: ModularStorage,
+    scratch: &mut [Vec<i32>; 3],
 ) -> Result<()> {
     debug!("reading channel");
     let size = buffers[chan].size(storage);
@@ -244,13 +301,25 @@ pub(super) fn decode_modular_channel(
             reader,
             br,
             storage,
+            scratch,
         )?;
         br.check_for_error()?;
         return Ok(());
     }
 
     run_on_specialized_tree(tree, chan, stream_id, size.0, header, storage, {
-        |t| decode_modular_channel_impl(t, buffers, chan, &tree.histograms, reader, br, storage)
+        |t| {
+            decode_modular_channel_impl(
+                t,
+                buffers,
+                chan,
+                &tree.histograms,
+                reader,
+                br,
+                storage,
+                scratch,
+            )
+        }
     })?;
     br.check_for_error()
 }

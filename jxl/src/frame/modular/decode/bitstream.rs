@@ -78,8 +78,6 @@ fn decode_fast_lossless(
             .uint(tree.histograms.map_context_to_cluster(id as usize));
         let lz_conf = tree.histograms.lz77_length_uint();
 
-        let mut buf = ImageRectMut::<i32>::from_raw(buf.data.as_rect_mut());
-
         let mut decode = {
             #[inline(always)]
             || {
@@ -100,23 +98,48 @@ fn decode_fast_lossless(
             }
         };
 
-        let mut last = 0i32;
-        for p in buf.row(0) {
-            // clamped gradient == left on the first row.
-            *p = last.wrapping_add(decode());
-            last = *p;
-        }
+        if storage == ModularStorage::I16 {
+            let mut buf = ImageRectMut::<i16>::from_raw(buf.data.as_rect_mut());
+            let mut last = 0i32;
+            for p in buf.row(0) {
+                last = last.wrapping_add(decode());
+                *p = last as i16;
+            }
 
-        for y in 1..h {
-            let [row, row_top] = buf.distinct_rows_mut([y, y - 1]);
+            for y in 1..h {
+                let [row, row_top] = buf.distinct_rows_mut([y, y - 1]);
 
-            let mut left = row_top[0];
-            let mut topleft = left;
-            for (top, p) in row_top.iter().copied().zip(row.iter_mut()) {
-                let pred = clamped_gradient(left as i64, top as i64, topleft as i64);
-                *p = (pred + decode() as i64) as i32;
-                left = *p;
-                topleft = top;
+                let mut left = row_top[0] as i32;
+                let mut topleft = left;
+                for (&top_sample, p) in row_top.iter().zip(row.iter_mut()) {
+                    let top = top_sample as i32;
+                    let pred = clamped_gradient(left as i64, top as i64, topleft as i64);
+                    let val = (pred + decode() as i64) as i32;
+                    *p = val as i16;
+                    left = val;
+                    topleft = top;
+                }
+            }
+        } else {
+            let mut buf = ImageRectMut::<i32>::from_raw(buf.data.as_rect_mut());
+            let mut last = 0i32;
+            for p in buf.row(0) {
+                // clamped gradient == left on the first row.
+                *p = last.wrapping_add(decode());
+                last = *p;
+            }
+
+            for y in 1..h {
+                let [row, row_top] = buf.distinct_rows_mut([y, y - 1]);
+
+                let mut left = row_top[0];
+                let mut topleft = left;
+                for (top, p) in row_top.iter().copied().zip(row.iter_mut()) {
+                    let pred = clamped_gradient(left as i64, top as i64, topleft as i64);
+                    *p = (pred + decode() as i64) as i32;
+                    left = *p;
+                    topleft = top;
+                }
             }
         }
 
@@ -226,6 +249,7 @@ pub(in crate::frame::modular) fn decode_modular_subbitstream(
                 &mut reader,
                 br,
                 storage,
+                &mut scratch_space.decode_row_scratch,
             ) {
                 if let Some(p) = partial_decoded_buffers {
                     *p = last_safe_buf;
