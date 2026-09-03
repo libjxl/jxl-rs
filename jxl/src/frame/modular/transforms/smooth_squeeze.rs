@@ -8,7 +8,8 @@ use std::sync::OnceLock;
 use jxl_simd::{F32SimdVec, I32SimdVec, SimdDescriptor, simd_function};
 
 use super::step::TiledChannelView;
-use crate::image::{ImageRectMut, Rect};
+use crate::frame::modular::ModularStorage;
+use crate::image::{ImageRectMut, OwnedRawImage, Rect};
 use crate::util::{DITHER_TABLE, fast_jinc_windowed_sq_simd};
 
 fn compute_jinc_subkernel(delta_x: f32, delta_y: f32) -> [f32; 25] {
@@ -109,6 +110,7 @@ fn get_small_squeeze_kernel(shift_diff: (usize, usize)) -> &'static [[f32; 25]] 
 pub(crate) struct SmoothUpsampleScratch {
     buffer: [Vec<f32>; 5],
     ibuf: Vec<i32>,
+    out_buf: Vec<i32>,
     kernel_storage: Vec<f32>,
     row_float: Vec<f32>,
 }
@@ -119,6 +121,7 @@ impl SmoothUpsampleScratch {
             b.resize(in_len, 0.0);
         }
         self.ibuf.resize(in_len, 0);
+        self.out_buf.resize(out_len, 0);
         self.row_float.resize(out_len, 0.0);
         self.kernel_storage.resize(kernel_len, 0.0);
     }
@@ -254,6 +257,7 @@ fn dither_round_and_store<D: SimdDescriptor>(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 #[inline(always)]
 fn smooth_upsample_simd_impl<D: SimdDescriptor>(
     d: D,
@@ -261,7 +265,8 @@ fn smooth_upsample_simd_impl<D: SimdDescriptor>(
     shift_diff: (usize, usize),
     dither: bool,
     rect: Rect,
-    output: &mut ImageRectMut<'_, i32>,
+    output: &mut OwnedRawImage,
+    storage: ModularStorage,
     scratch: &mut SmoothUpsampleScratch,
 ) {
     let (dx, dy) = shift_diff;
@@ -292,7 +297,11 @@ fn smooth_upsample_simd_impl<D: SimdDescriptor>(
 
     for (dy_idx, buf) in scratch.buffer.iter_mut().enumerate().take(4) {
         let yg = (row_offset + dy_idx) as isize - 2;
-        input.load_row_to_scratch(yg, col_offset, in_xs + 4, &mut scratch.ibuf);
+        if storage == ModularStorage::I16 {
+            input.load_row_to_scratch::<i16>(yg, col_offset, in_xs + 4, &mut scratch.ibuf);
+        } else {
+            input.load_row_to_scratch::<i32>(yg, col_offset, in_xs + 4, &mut scratch.ibuf);
+        }
         make_float(d, &scratch.ibuf, buf);
     }
 
@@ -307,7 +316,11 @@ fn smooth_upsample_simd_impl<D: SimdDescriptor>(
 
     for iy_center in 0..in_ys {
         let yg = (row_offset + iy_center) as isize + 2;
-        input.load_row_to_scratch(yg, col_offset, in_xs + 4, &mut scratch.ibuf);
+        if storage == ModularStorage::I16 {
+            input.load_row_to_scratch::<i16>(yg, col_offset, in_xs + 4, &mut scratch.ibuf);
+        } else {
+            input.load_row_to_scratch::<i32>(yg, col_offset, in_xs + 4, &mut scratch.ibuf);
+        }
         make_float(d, &scratch.ibuf, &mut scratch.buffer[4]);
 
         for oy in 0..fy {
@@ -315,7 +328,6 @@ fn smooth_upsample_simd_impl<D: SimdDescriptor>(
             if yout >= ys {
                 continue;
             }
-            let output_row = output.row(yout);
             let dither_y = (y0 + yout) % 32;
             let delta_y = (oy as f32 + 0.5) / (fy as f32) - 0.5;
 
@@ -373,7 +385,21 @@ fn smooth_upsample_simd_impl<D: SimdDescriptor>(
                 );
             }
 
-            dither_round_and_store(d, dither, dither_y, x0, xs, &scratch.row_float, output_row);
+            let mut img;
+            let out_row = if storage == ModularStorage::I16 {
+                &mut scratch.out_buf
+            } else {
+                img = ImageRectMut::<i32>::from_raw(output.as_rect_mut());
+                img.row(yout)
+            };
+            dither_round_and_store(d, dither, dither_y, x0, xs, &scratch.row_float, out_row);
+            let mut img;
+            if storage == ModularStorage::I16 {
+                img = ImageRectMut::<i16>::from_raw(output.as_rect_mut());
+                for (dst, &src) in img.row(yout).iter_mut().zip(&scratch.out_buf) {
+                    *dst = src as i16;
+                }
+            }
         }
         scratch.buffer.rotate_left(1);
     }
@@ -382,15 +408,19 @@ fn smooth_upsample_simd_impl<D: SimdDescriptor>(
 simd_function!(
     smooth_upsample,
     d: D,
-    pub fn smooth_upsample_simd_dispatch(
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn smooth_upsample_dispatch(
         input: &TiledChannelView<'_>,
         shift_diff: (usize, usize),
         dither: bool,
         rect: Rect,
-        output: &mut ImageRectMut<'_, i32>,
-        scratch: &mut SmoothUpsampleScratch
+        output: &mut OwnedRawImage,
+        storage: ModularStorage,
+        scratch: &mut SmoothUpsampleScratch,
     ) {
-        smooth_upsample_simd_impl(d, input, shift_diff, dither, rect, output, scratch);
+        smooth_upsample_simd_impl(
+            d, input, shift_diff, dither, rect, output, storage, scratch,
+        );
     }
 );
 

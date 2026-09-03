@@ -11,11 +11,14 @@ use crate::frame::modular::buffers::{ModularChannel, with_buffers};
 use crate::frame::modular::transforms::palette::PaletteStep;
 use crate::frame::modular::transforms::smooth_squeeze::smooth_upsample;
 use crate::frame::modular::{
-    DataStatus, FullModularImage, ModularBufferInfo, ModularGridKind, Predictor, ScratchSpace,
+    DataStatus, FullModularImage, ModularBufferInfo, ModularGridKind, ModularStorage, Predictor,
+    ScratchSpace,
 };
 use crate::headers::frame_header::FrameHeader;
 use crate::headers::modular::WeightedHeader;
-use crate::image::{BufferRecycler, Image, ImageRect, ImageRectMut, OwnedRawImage, Rect};
+use crate::image::{
+    BufferRecycler, Image, ImageDataType, ImageRect, OwnedRawImage, RawImageRect, Rect,
+};
 use crate::util::SmallVec;
 use crate::util::sync::RwLockReadGuard;
 use crate::util::sync::atomic::{AtomicUsize, Ordering};
@@ -360,26 +363,36 @@ struct SqueezeInputs<'a> {
 }
 
 impl<'a> SqueezeInputs<'a> {
-    fn in_avg_rect(&self, rect: Rect) -> ImageRect<'_, i32> {
-        ImageRect::<i32>::from_raw(self.in_avg.as_ref().unwrap().data.as_rect()).rect(rect)
+    fn in_avg_rect(&self, rect: Rect, storage: ModularStorage) -> RawImageRect<'_> {
+        self.in_avg
+            .as_ref()
+            .unwrap()
+            .data
+            .as_rect()
+            .rect(rect.to_byte_rect_sz(storage.sample_size()))
     }
 
-    fn in_res_rect(&self, rect: Rect) -> ImageRect<'_, i32> {
-        ImageRect::<i32>::from_raw(self.in_res.as_ref().unwrap().data.as_rect()).rect(rect)
+    fn in_res_rect(&self, rect: Rect, storage: ModularStorage) -> RawImageRect<'_> {
+        self.in_res
+            .as_ref()
+            .unwrap()
+            .data
+            .as_rect()
+            .rect(rect.to_byte_rect_sz(storage.sample_size()))
     }
 
-    fn in_next_border(&self) -> Option<ImageRect<'_, i32>> {
+    fn in_next_border(&self) -> Option<RawImageRect<'_>> {
         self.in_next_border
             .as_ref()
             .and_then(|g| g.as_ref())
-            .map(|img| ImageRect::<i32>::from_raw(img.as_rect()))
+            .map(|img| img.as_rect())
     }
 
-    fn out_prev_border(&self) -> Option<ImageRect<'_, i32>> {
+    fn out_prev_border(&self) -> Option<RawImageRect<'_>> {
         self.out_prev_border
             .as_ref()
             .and_then(|g| g.as_ref())
-            .map(|img| ImageRect::<i32>::from_raw(img.as_rect()))
+            .map(|img| img.as_rect())
     }
 }
 
@@ -389,11 +402,15 @@ enum TileGuard<'a> {
 }
 
 impl<'a> TileGuard<'a> {
-    fn as_rect(&self) -> ImageRect<'_, i32> {
+    fn as_rect<T: ImageDataType>(&self) -> ImageRect<'_, T> {
         match self {
-            TileGuard::Channel(g) => ImageRect::<i32>::from_raw(g.as_ref().unwrap().data.as_rect()),
-            TileGuard::Border(g) => ImageRect::<i32>::from_raw(g.as_ref().unwrap().as_rect()),
+            TileGuard::Channel(g) => ImageRect::<T>::from_raw(g.as_ref().unwrap().data.as_rect()),
+            TileGuard::Border(g) => ImageRect::<T>::from_raw(g.as_ref().unwrap().as_rect()),
         }
+    }
+
+    fn row<T: ImageDataType>(&self, row: usize) -> &[T] {
+        self.as_rect::<T>().row(row)
     }
 }
 
@@ -405,11 +422,6 @@ pub(super) struct TiledChannelView<'a> {
 }
 
 impl<'a> TiledChannelView<'a> {
-    #[inline(always)]
-    fn tile(&self, idx: usize) -> ImageRect<'_, i32> {
-        self.tiles[idx].as_ref().unwrap().as_rect()
-    }
-
     #[inline(always)]
     fn top_border_row(ly: usize, top_tile_h: usize) -> usize {
         if top_tile_h <= 1 || ly == top_tile_h - 1 {
@@ -424,7 +436,7 @@ impl<'a> TiledChannelView<'a> {
         if ly == 0 { 0 } else { 1 }
     }
 
-    fn copy_tile_slice(
+    fn copy_tile_slice<T: Into<i32> + ImageDataType>(
         &self,
         (dx, dy): (usize, usize),
         ly: usize,
@@ -433,30 +445,25 @@ impl<'a> TiledChannelView<'a> {
         top_tile_h: usize,
         dest: &mut [i32],
     ) {
-        let img = self.tile(dy * 3 + dx);
-        match (dy, dx) {
-            (1, 1) => {
-                dest.copy_from_slice(&img.row(ly)[src_range]);
-            }
-            (0, _) => {
-                dest.copy_from_slice(&img.row(Self::top_border_row(ly, top_tile_h))[src_range]);
-            }
-            (2, _) => {
-                dest.copy_from_slice(&img.row(Self::bottom_border_row(ly))[src_range]);
-            }
+        let img = self.tiles[dy * 3 + dx].as_ref().unwrap();
+        let src = match (dy, dx) {
+            (1, 1) => &img.row::<T>(ly)[src_range],
+            (0, _) => &img.row::<T>(Self::top_border_row(ly, top_tile_h))[src_range],
+            (2, _) => &img.row::<T>(Self::bottom_border_row(ly))[src_range],
             (1, 0) => {
                 let offset_start = 4 - (tile_w - src_range.start);
                 let offset_end = 4 - (tile_w - src_range.end);
-                dest.copy_from_slice(&img.row(ly)[offset_start..offset_end]);
+                &img.row::<T>(ly)[offset_start..offset_end]
             }
-            (1, 2) => {
-                dest.copy_from_slice(&img.row(ly)[src_range]);
-            }
+            (1, 2) => &img.row::<T>(ly)[src_range],
             _ => unreachable!(),
+        };
+        for (d, &s) in dest.iter_mut().zip(src) {
+            *d = s.into();
         }
     }
 
-    pub fn load_row_to_scratch(
+    pub fn load_row_to_scratch<T: Into<i32> + ImageDataType>(
         &self,
         yg: isize,
         xoff: usize,
@@ -482,7 +489,7 @@ impl<'a> TiledChannelView<'a> {
         };
 
         let Some(grid_dim) = self.grid_dim else {
-            let row = self.tile(4).row(clamped_y);
+            let row = self.tiles[4].as_ref().unwrap().row::<T>(clamped_y);
 
             let left_clamp = (2 - xoff as isize).max(0) as usize;
             let right_clamp_start = (w as isize + 2 - xoff as isize).min(max_len as isize) as usize;
@@ -490,16 +497,20 @@ impl<'a> TiledChannelView<'a> {
             if left_clamp < right_clamp_start {
                 let src_start = (xoff as isize + left_clamp as isize - 2) as usize;
                 let len = right_clamp_start - left_clamp;
-                row_buf[left_clamp..right_clamp_start]
-                    .copy_from_slice(&row[src_start..src_start + len]);
+                for (d, &s) in row_buf[left_clamp..right_clamp_start]
+                    .iter_mut()
+                    .zip(&row[src_start..src_start + len])
+                {
+                    *d = s.into();
+                }
             }
 
             if left_clamp > 0 {
-                row_buf[..left_clamp].fill(row[0]);
+                row_buf[..left_clamp].fill(row[0].into());
             }
 
             if right_clamp_start < max_len {
-                row_buf[right_clamp_start..max_len].fill(row[w - 1]);
+                row_buf[right_clamp_start..max_len].fill(row[w - 1].into());
             }
 
             let last = row_buf[max_len - 1];
@@ -544,7 +555,7 @@ impl<'a> TiledChannelView<'a> {
                     let dest_end = dest_start + (intersect_end - intersect_start);
                     let src_start = intersect_start - tile_x_start;
                     let src_end = intersect_end - tile_x_start;
-                    self.copy_tile_slice(
+                    self.copy_tile_slice::<T>(
                         (dx, dy),
                         ly,
                         src_start..src_end,
@@ -558,12 +569,18 @@ impl<'a> TiledChannelView<'a> {
 
         if left_clamp > 0 {
             let left_val = match dy {
-                1 => self.tile(4).row(ly)[0],
-                0 => self.tile(1).row(Self::top_border_row(ly, top_tile_h))[0],
-                2 => self.tile(7).row(Self::bottom_border_row(ly))[0],
-                _ => 0,
+                1 => self.tiles[4].as_ref().unwrap().row::<T>(ly)[0],
+                0 => self.tiles[1]
+                    .as_ref()
+                    .unwrap()
+                    .row::<T>(Self::top_border_row(ly, top_tile_h))[0],
+                2 => self.tiles[7]
+                    .as_ref()
+                    .unwrap()
+                    .row::<T>(Self::bottom_border_row(ly))[0],
+                _ => T::default(),
             };
-            row_buf[..left_clamp].fill(left_val);
+            row_buf[..left_clamp].fill(left_val.into());
         }
 
         if right_clamp > 0 {
@@ -571,13 +588,19 @@ impl<'a> TiledChannelView<'a> {
             let lx_right = (w - 1) % grid_w;
             let dx = (gx_right as isize - gx_center as isize + 1) as usize;
             let right_val = match (dy, dx) {
-                (1, 1) => self.tile(4).row(ly)[lx_right],
-                (1, 2) => self.tile(5).row(ly)[3],
-                (0, 1 | 2) => self.tile(dx).row(Self::top_border_row(ly, top_tile_h))[lx_right],
-                (2, 1 | 2) => self.tile(6 + dx).row(Self::bottom_border_row(ly))[lx_right],
-                _ => 0,
+                (1, 1) => self.tiles[4].as_ref().unwrap().row::<T>(ly)[lx_right],
+                (1, 2) => self.tiles[5].as_ref().unwrap().row::<T>(ly)[3],
+                (0, 1 | 2) => self.tiles[dx]
+                    .as_ref()
+                    .unwrap()
+                    .row::<T>(Self::top_border_row(ly, top_tile_h))[lx_right],
+                (2, 1 | 2) => self.tiles[6 + dx]
+                    .as_ref()
+                    .unwrap()
+                    .row::<T>(Self::bottom_border_row(ly))[lx_right],
+                _ => T::default(),
             };
-            row_buf[max_len - right_clamp..max_len].fill(right_val);
+            row_buf[max_len - right_clamp..max_len].fill(right_val.into());
         }
 
         let last = row_buf[max_len - 1];
@@ -858,6 +881,7 @@ impl TransformStepChunk {
                 upsample,
             } => {
                 let vertical = matches!(self.step, TransformStep::VSqueeze { .. });
+                let storage = buffers[*buf_out].storage;
                 let info = SqueezeInfo::new(
                     buffers,
                     *buf_in,
@@ -889,14 +913,13 @@ impl TransformStepChunk {
                             let scratch = &mut scratch_space.smooth_upsample_scratch;
                             let dither = buffers[*buf_out].info.shift.unwrap_or((0, 0)) == (0, 0)
                                 && !buffers[*buf_out].info.followed_by_palette;
-                            let mut out_rect_buf =
-                                ImageRectMut::<i32>::from_raw(bufs[0].data.as_rect_mut());
                             smooth_upsample(
                                 &view,
                                 u.shift_diff,
                                 dither,
                                 out_rect,
-                                &mut out_rect_buf,
+                                &mut bufs[0].data,
+                                storage,
                                 scratch,
                             );
                         }
@@ -908,19 +931,21 @@ impl TransformStepChunk {
                             let out_prev = inputs.out_prev_border();
                             if vertical {
                                 super::squeeze::do_vsqueeze_step(
-                                    &inputs.in_avg_rect(avg_rect),
-                                    &inputs.in_res_rect(res_rect),
+                                    &inputs.in_avg_rect(avg_rect, storage),
+                                    &inputs.in_res_rect(res_rect, storage),
                                     in_next.as_ref(),
                                     out_prev.as_ref(),
                                     &mut bufs,
+                                    storage,
                                 );
                             } else {
                                 super::squeeze::do_hsqueeze_step(
-                                    &inputs.in_avg_rect(avg_rect),
-                                    &inputs.in_res_rect(res_rect),
+                                    &inputs.in_avg_rect(avg_rect, storage),
+                                    &inputs.in_res_rect(res_rect, storage),
                                     in_next.as_ref(),
                                     out_prev.as_ref(),
                                     &mut bufs,
+                                    storage,
                                 );
                             }
                         }
