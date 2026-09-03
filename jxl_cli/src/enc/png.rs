@@ -167,31 +167,52 @@ pub fn to_png<Writer: Write>(
     }
     let mut writer = encoder.write_header()?;
 
-    if eight_bits {
-        for frame in &image_data.frames {
-            if animated {
-                let (delay_num, delay_den) = calculate_apng_delay(frame.duration)?;
-                writer.set_frame_delay(delay_num, delay_den)?;
+    if !animated {
+        if eight_bits {
+            let mut stream = writer.stream_writer()?;
+            for frame in &image_data.frames {
+                let chan = if let Some(p) = partial_render {
+                    &frame.partial_renders[p][0]
+                } else {
+                    &frame.channels[0]
+                };
+                for y in 0..height {
+                    stream.write_all(chan.row(y))?;
+                }
             }
-            let mut ww = writer.stream_writer()?;
-            let chan = if let Some(p) = partial_render {
-                &frame.partial_renders[p][0]
-            } else {
-                &frame.channels[0]
-            };
-            for y in 0..height {
-                ww.write_all(chan.row(y))?;
+            stream.finish()?;
+        } else {
+            let mut buffer = vec![0; 2 * width * num_channels];
+            let mut stream = writer.stream_writer()?;
+            for frame in &image_data.frames {
+                let chan = if let Some(p) = partial_render {
+                    &frame.partial_renders[p][0]
+                } else {
+                    &frame.channels[0]
+                };
+                for y in 0..height {
+                    let row = chan.row(y);
+                    if cfg!(target_endian = "big") {
+                        stream.write_all(row)?;
+                    } else {
+                        for x in 0..width * num_channels {
+                            buffer[x * 2..][..2].copy_from_slice(
+                                &u16::from_ne_bytes(row[x * 2..][..2].try_into().unwrap())
+                                    .to_be_bytes(),
+                            );
+                        }
+                        stream.write_all(&buffer)?;
+                    }
+                }
             }
+            stream.finish()?;
         }
     } else {
-        // 16-bit
-        let mut buffer: Vec<u8> = vec![0; 2 * width * num_channels];
+        let row_size = width * num_channels * if eight_bits { 1 } else { 2 };
+        let mut buffer = vec![0; row_size * height];
         for frame in &image_data.frames {
-            if animated {
-                let (delay_num, delay_den) = calculate_apng_delay(frame.duration)?;
-                writer.set_frame_delay(delay_num, delay_den)?;
-            }
-            let mut ww = writer.stream_writer()?;
+            let (delay_num, delay_den) = calculate_apng_delay(frame.duration)?;
+            writer.set_frame_delay(delay_num, delay_den)?;
             let chan = if let Some(p) = partial_render {
                 &frame.partial_renders[p][0]
             } else {
@@ -199,19 +220,21 @@ pub fn to_png<Writer: Write>(
             };
             for y in 0..height {
                 let row = chan.row(y);
-                if cfg!(target_endian = "big") {
-                    ww.write_all(row)?;
+                let output_row = &mut buffer[y * row_size..][..row_size];
+                if eight_bits || cfg!(target_endian = "big") {
+                    output_row.copy_from_slice(row);
                 } else {
                     for x in 0..width * num_channels {
-                        buffer[x * 2..][..2].copy_from_slice(
+                        output_row[x * 2..][..2].copy_from_slice(
                             &u16::from_ne_bytes(row[x * 2..][..2].try_into().unwrap())
                                 .to_be_bytes(),
                         );
                     }
-                    ww.write_all(&buffer)?;
                 }
             }
+            writer.write_image_data(&buffer)?;
         }
     }
+    writer.finish()?;
     Ok(())
 }
