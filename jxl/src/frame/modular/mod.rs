@@ -310,12 +310,8 @@ impl FullModularImage {
         br: &mut BitReader,
         recycler: Arc<BufferRecycler>,
         sample_limit: Option<usize>,
+        storage: ModularStorage,
     ) -> Result<Self> {
-        let storage = if image_metadata.modular_16bit_sufficient {
-            ModularStorage::I16
-        } else {
-            ModularStorage::I32
-        };
         let mut channels = vec![];
         for c in 0..modular_color_channels {
             let shift = (frame_header.hshift(c), frame_header.vshift(c));
@@ -1073,6 +1069,7 @@ pub(super) fn decode_vardct_lf(
     lf: &mut [OutputChannelRef],
     quant_lf: &mut OutputChannelRef,
     br: &mut BitReader,
+    storage: ModularStorage,
     scratch_space: &mut ScratchSpace,
 ) -> Result<()> {
     let extra_precision = br.read(2)?;
@@ -1089,11 +1086,6 @@ pub(super) fn decode_vardct_lf(
             size.0 >> frame_header.hshift(c),
             size.1 >> frame_header.vshift(c),
         )
-    };
-    let storage = if image_metadata.modular_16bit_sufficient {
-        ModularStorage::I16
-    } else {
-        ModularStorage::I32
     };
     let mut buffers = [
         ModularChannel::new(shrink_rect(r.size, 1), storage, image_metadata.bit_depth)?,
@@ -1129,6 +1121,7 @@ pub(super) fn decode_vardct_lf(
     )
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(super) fn decode_hf_metadata(
     group: usize,
     frame_header: &FrameHeader,
@@ -1136,6 +1129,7 @@ pub(super) fn decode_hf_metadata(
     global_tree: &Option<Tree>,
     hf_meta: &mut HfMetaViews,
     br: &mut BitReader,
+    storage: ModularStorage,
     scratch_space: &mut ScratchSpace,
 ) -> Result<()> {
     let stream_id = ModularStreamId::LFMeta(group).get_id(frame_header);
@@ -1149,11 +1143,6 @@ pub(super) fn decode_hf_metadata(
     let cr = Rect {
         origin: (r.origin.0 >> 3, r.origin.1 >> 3),
         size: (r.size.0.div_ceil(8), r.size.1.div_ceil(8)),
-    };
-    let storage = if image_metadata.modular_16bit_sufficient {
-        ModularStorage::I16
-    } else {
-        ModularStorage::I32
     };
     let mut buffers = [
         ModularChannel::new_with_shift(cr.size, storage, Some((3, 3)), image_metadata.bit_depth)?,

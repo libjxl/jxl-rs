@@ -446,6 +446,7 @@ impl Frame {
                 br,
                 self.buffer_recycler.clone(),
                 self.decoder_state.sample_limit,
+                self.decoder_state.modular_storage(),
             )?;
 
             // Ensure that, if we call this function again, we resume from just after
@@ -517,6 +518,7 @@ impl Frame {
                 &mut lf_views,
                 &mut quant_lf_view,
                 br,
+                decoder_state.modular_storage(),
                 &mut scratch,
             )?;
         }
@@ -546,6 +548,7 @@ impl Frame {
                 &lf_global.tree,
                 &mut hf_views,
                 br,
+                decoder_state.modular_storage(),
                 &mut scratch,
             )?;
         }

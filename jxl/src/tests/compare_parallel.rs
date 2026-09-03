@@ -97,7 +97,7 @@ pub fn run_oneshot(path: &Path) {
 
     // Oneshot sequential decode
     let (_, seq_frames) =
-        decode_internal(&file, usize::MAX, false, false, None, None, None).unwrap();
+        decode_internal(&file, usize::MAX, false, false, None, None, None, false).unwrap();
 
     if seq_frames.is_empty() {
         return;
@@ -120,6 +120,7 @@ pub fn run_oneshot(path: &Path) {
         None,
         None,
         Some(&mut runner),
+        false,
     )
     .unwrap();
 
@@ -156,6 +157,7 @@ pub fn run_progressive(path: &Path) {
         None,
         Some(&mut seq_callback),
         None,
+        false,
     );
 
     let mut par_flushes: Vec<(usize, usize, Vec<Image<f32>>)> = Vec::new();
@@ -182,6 +184,7 @@ pub fn run_progressive(path: &Path) {
         None,
         Some(&mut par_callback),
         Some(&mut runner),
+        false,
     );
 
     assert_eq!(
