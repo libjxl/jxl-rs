@@ -3,6 +3,8 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
+use crate::api::JxlAuxBoxType;
+
 #[non_exhaustive]
 pub struct JxlDecoderOptions {
     pub adjust_orientation: bool,
@@ -31,7 +33,7 @@ pub struct JxlDecoderOptions {
     /// This is useful for collecting [`VisibleFrameInfo`](crate::api::VisibleFrameInfo)
     /// via the regular decoder API without producing pixels.
     pub scan_frames_only: bool,
-    pub request_exif: bool,
+    pub request_aux_boxes: Vec<JxlAuxBoxType>,
 }
 
 impl Default for JxlDecoderOptions {
@@ -46,7 +48,7 @@ impl Default for JxlDecoderOptions {
             high_precision: false,
             premultiply_output: false,
             scan_frames_only: false,
-            request_exif: false,
+            request_aux_boxes: Vec::new(),
         }
     }
 }

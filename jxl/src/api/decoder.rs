@@ -8,9 +8,9 @@ use std::marker::PhantomData;
 use states::*;
 
 use super::{
-    BoxParserCheckpoint, JxlAuxBox, JxlBasicInfo, JxlBitstreamInput, JxlColorProfile,
-    JxlDecoderInner, JxlDecoderOptions, JxlFrameHeader, JxlOutputBuffer, JxlParallelRunner,
-    JxlPixelFormat, ProcessingResult,
+    BoxParserCheckpoint, JxlAuxBox, JxlAuxBoxType, JxlBasicInfo, JxlBitstreamInput,
+    JxlColorProfile, JxlDecoderInner, JxlDecoderOptions, JxlFrameHeader, JxlOutputBuffer,
+    JxlParallelRunner, JxlPixelFormat, ProcessingResult,
 };
 use crate::error::Result;
 #[cfg(test)]
@@ -98,8 +98,8 @@ impl<S: JxlState> JxlDecoder<S> {
         self.inner.scanned_frames()
     }
 
-    pub fn exif(&self) -> Option<&JxlAuxBox> {
-        self.inner.exif()
+    pub fn aux_boxes(&self, box_type: JxlAuxBoxType) -> &[JxlAuxBox] {
+        self.inner.aux_boxes(box_type)
     }
 
     fn map_inner_processing_result<SuccessState: JxlState>(
@@ -177,6 +177,10 @@ impl JxlDecoder<WithImageInfo> {
         Ok(self.map_inner_processing_result(inner_result))
     }
 
+    /// Feeds additional trailing data, potentially parsing more trailing auxiliary boxes.
+    ///
+    /// When [`has_more_frames`][Self::has_more_frames] returned `false` and there is more data
+    /// available, call this method to parse auxiliary boxes.
     pub fn process_trailing_data(
         mut self,
         input: &mut impl JxlBitstreamInput,
@@ -285,8 +289,23 @@ impl JxlDecoder<WithFrameInfo> {
 }
 
 impl JxlDecoder<InTrailingBox> {
-    pub fn trailing_box_info(&self) -> Option<&JxlAuxBox> {
-        self.inner.trailing_box_info()
+    /// Returns information about the trailing box that extends to the end of stream.
+    ///
+    /// The raw buffer inside the returned `JxlAuxBox` is part of the box data, and must be
+    /// prepended to the remaining input to get the complete data.
+    pub fn trailing_box(&self) -> Option<&JxlAuxBox> {
+        self.inner.trailing_box()
+    }
+
+    /// Feeds additional trailing data, potentially parsing more trailing auxiliary boxes.
+    ///
+    /// When [`trailing_box`][Self::trailing_box] retruned `None` and there is more data available,
+    /// call this method to parse more auxiliary boxes.
+    pub fn process_trailing_data(
+        &mut self,
+        input: &mut impl JxlBitstreamInput,
+    ) -> Result<ProcessingResult<(), ()>> {
+        self.inner.process_trailing_data(input)
     }
 
     pub fn start_new_frame(

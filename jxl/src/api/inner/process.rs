@@ -168,6 +168,10 @@ impl JxlDecoderInner {
         &mut self,
         input: &mut dyn JxlBitstreamInput,
     ) -> Result<ProcessingResult<(), ()>> {
+        assert!(
+            !self.codestream_parser.has_more_frames(),
+            "API usage error: cannot consume trailing data while codestream is incomplete",
+        );
         let mut input = CodestreamInput::new(&mut self.box_parser, input);
         ProcessingResult::new(input.consume_trailing_data())
     }

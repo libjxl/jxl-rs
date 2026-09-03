@@ -28,11 +28,7 @@ pub struct JxlDecoderInner {
 impl JxlDecoderInner {
     /// Creates a new decoder with the given options and, optionally, CMS.
     pub fn new(options: JxlDecoderOptions) -> Self {
-        let box_parser = if options.request_exif {
-            BoxParser::with_aux_boxes([JxlAuxBoxType::Exif])
-        } else {
-            BoxParser::new()
-        };
+        let box_parser = BoxParser::with_aux_boxes(options.request_aux_boxes.iter().copied());
         JxlDecoderInner {
             options,
             box_parser,
@@ -127,8 +123,8 @@ impl JxlDecoderInner {
         self.codestream_parser.scanned_frames()
     }
 
-    pub(crate) fn trailing_box_info(&self) -> Option<&JxlAuxBox> {
-        self.box_parser.trailing_box_info()
+    pub(crate) fn trailing_box(&self) -> Option<&JxlAuxBox> {
+        self.box_parser.trailing_box()
     }
 
     pub fn start_new_frame(&mut self, seek_target: VisibleFrameSeekTarget) {
@@ -149,11 +145,8 @@ impl JxlDecoderInner {
         self.codestream_parser.file_length
     }
 
-    pub(crate) fn exif(&self) -> Option<&JxlAuxBox> {
-        self.box_parser
-            .aux_boxes()
-            .iter()
-            .find(|b| b.box_type() == JxlAuxBoxType::Exif)
+    pub(crate) fn aux_boxes(&self, box_type: JxlAuxBoxType) -> &[JxlAuxBox] {
+        self.box_parser.aux_boxes(box_type)
     }
 }
 
@@ -204,6 +197,24 @@ mod tests {
     }
 
     #[test]
+    fn consume_trailing_on_bare_codestream() {
+        let data = include_bytes!("../../../resources/test/basic.jxl");
+        let mut buf = &data[..];
+
+        let options = JxlDecoderOptions {
+            request_aux_boxes: vec![JxlAuxBoxType::EXIF],
+            scan_frames_only: true,
+            ..Default::default()
+        };
+        let mut decoder = JxlDecoderInner::new(options);
+
+        while decoder.has_more_frames() {
+            decoder.process(&mut buf, None, None).unwrap();
+        }
+        decoder.process_trailing_data(&mut buf).unwrap();
+    }
+
+    #[test]
     fn aux_box_before_codestream() {
         let data = [
             (&include_bytes!("../../../tests/testdata/exif.jxl")[..], 170),
@@ -215,7 +226,7 @@ mod tests {
 
         for (mut buf, expected_size) in data {
             let options = JxlDecoderOptions {
-                request_exif: true,
+                request_aux_boxes: vec![JxlAuxBoxType::EXIF],
                 scan_frames_only: true,
                 ..Default::default()
             };
@@ -226,8 +237,9 @@ mod tests {
             }
             decoder.process_trailing_data(&mut buf).unwrap();
 
-            assert_eq!(decoder.exif().unwrap().raw_data().len(), expected_size);
-            assert!(decoder.trailing_box_info().is_none());
+            let exif = &decoder.aux_boxes(JxlAuxBoxType::EXIF)[0];
+            assert_eq!(exif.raw_data().len(), expected_size);
+            assert!(decoder.trailing_box().is_none());
         }
     }
 
@@ -246,7 +258,7 @@ mod tests {
 
         for (mut buf, expected_size) in data {
             let options = JxlDecoderOptions {
-                request_exif: true,
+                request_aux_boxes: vec![JxlAuxBoxType::EXIF],
                 scan_frames_only: true,
                 ..Default::default()
             };
@@ -257,8 +269,9 @@ mod tests {
             }
             decoder.process_trailing_data(&mut buf).unwrap();
 
-            assert_eq!(decoder.exif().unwrap().raw_data().len(), expected_size);
-            assert!(decoder.trailing_box_info().is_none());
+            let exif = &decoder.aux_boxes(JxlAuxBoxType::EXIF)[0];
+            assert_eq!(exif.raw_data().len(), expected_size);
+            assert!(decoder.trailing_box().is_none());
         }
     }
 
@@ -277,7 +290,7 @@ mod tests {
 
         for (mut buf, expected_size) in data {
             let options = JxlDecoderOptions {
-                request_exif: true,
+                request_aux_boxes: vec![JxlAuxBoxType::EXIF],
                 scan_frames_only: true,
                 ..Default::default()
             };
@@ -288,8 +301,8 @@ mod tests {
             }
             decoder.process_trailing_data(&mut buf).unwrap();
 
-            let trailing = decoder.trailing_box_info().unwrap();
-            assert_eq!(trailing.box_type(), JxlAuxBoxType::Exif);
+            let trailing = decoder.trailing_box().unwrap();
+            assert_eq!(trailing.box_type(), JxlAuxBoxType::EXIF);
             assert_eq!(trailing.raw_data().len() + buf.len(), expected_size);
         }
     }
