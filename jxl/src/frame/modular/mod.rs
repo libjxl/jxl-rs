@@ -839,12 +839,14 @@ impl FullModularImage {
         scratch_space: &mut ScratchSpace,
         pass_to_pipeline: &dyn Fn(usize, usize, bool, Image<i32>) -> Result<()>,
     ) -> Result<()> {
+        let pass_to_pipeline_raw =
+            |c, g, comp, raw| pass_to_pipeline(c, g, comp, Image::<i32>::from_raw(raw));
         self.transform_steps[tfm].do_run(
             frame_header,
             &self.buffer_info,
             scratch_space,
             &self.recycler,
-            pass_to_pipeline,
+            &pass_to_pipeline_raw,
         )?;
 
         for &(buf, grid) in self.transform_steps[tfm].outputs(&self.buffer_info).iter() {

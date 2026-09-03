@@ -8,7 +8,7 @@ use std::fmt::Debug;
 use super::{RctOp, RctPermutation};
 use crate::error::Result;
 use crate::frame::modular::buffers::{ModularChannel, with_buffers};
-use crate::frame::modular::transforms::smooth_squeeze::smooth_upsample;
+use crate::frame::modular::transforms::smooth_squeeze::{smooth_upsample_i16, smooth_upsample_i32};
 use crate::frame::modular::{
     DataStatus, FullModularImage, ModularBufferInfo, ModularGridKind, Predictor, ScratchSpace,
 };
@@ -664,7 +664,7 @@ impl TransformStepChunk {
         buffers: &[ModularBufferInfo],
         scratch_space: &mut ScratchSpace,
         recycler: &BufferRecycler,
-        pass_to_pipeline: &dyn Fn(usize, usize, bool, Image<i32>) -> Result<()>,
+        pass_to_pipeline: &dyn Fn(usize, usize, bool, OwnedRawImage) -> Result<()>,
     ) -> Result<()> {
         let is_final = self.missing_final_deps == 0;
         let buf_out = self.buf_out();
@@ -718,7 +718,14 @@ impl TransformStepChunk {
                     }
                 }
                 with_buffers(buffers, buf_out, out_grid, recycler, |mut bufs| {
-                    super::rct::do_rct_step(&mut bufs, *op, *perm);
+                    if bufs.is_empty() {
+                        return Ok(());
+                    }
+                    if buffers[buf_out[0]].is_16bit {
+                        super::rct::do_rct_step_i16(&mut bufs, *op, *perm);
+                    } else {
+                        super::rct::do_rct_step_i32(&mut bufs, *op, *perm);
+                    }
                     Ok(())
                 })?;
             }
@@ -942,6 +949,7 @@ impl TransformStepChunk {
                     if bufs.is_empty() {
                         return Ok(());
                     }
+                    let is_16bit = buffers[*buf_out].is_16bit;
                     match info {
                         SqueezeInfo::Upsample {
                             upsample: u,
@@ -953,16 +961,29 @@ impl TransformStepChunk {
                             let scratch = &mut scratch_space.smooth_upsample_scratch;
                             let dither = buffers[*buf_out].info.shift.unwrap_or((0, 0)) == (0, 0)
                                 && !buffers[*buf_out].info.followed_by_palette;
-                            let mut out_rect_buf =
-                                ImageRectMut::<i32>::from_raw(bufs[0].data.as_rect_mut());
-                            smooth_upsample(
-                                &view,
-                                u.shift_diff,
-                                dither,
-                                out_rect,
-                                &mut out_rect_buf,
-                                scratch,
-                            );
+                            if is_16bit {
+                                let mut out_rect_buf =
+                                    ImageRectMut::<i16>::from_raw(bufs[0].data.as_rect_mut());
+                                smooth_upsample_i16(
+                                    &view,
+                                    u.shift_diff,
+                                    dither,
+                                    out_rect,
+                                    &mut out_rect_buf,
+                                    scratch,
+                                );
+                            } else {
+                                let mut out_rect_buf =
+                                    ImageRectMut::<i32>::from_raw(bufs[0].data.as_rect_mut());
+                                smooth_upsample_i32(
+                                    &view,
+                                    u.shift_diff,
+                                    dither,
+                                    out_rect,
+                                    &mut out_rect_buf,
+                                    scratch,
+                                );
+                            }
                         }
                         SqueezeInfo::Regular {
                             avg_rect, res_rect, ..
@@ -970,7 +991,6 @@ impl TransformStepChunk {
                             let inputs = info.borrow_inputs(buffers, vertical);
                             let in_next = inputs.in_next_border();
                             let out_prev = inputs.out_prev_border();
-                            let is_16bit = buffers[*buf_out].is_16bit;
                             if vertical {
                                 super::squeeze::do_vsqueeze_step(
                                     &inputs.in_avg_rect(avg_rect, is_16bit),
@@ -1004,27 +1024,39 @@ impl TransformStepChunk {
             } => {
                 debug!("Rendering channel {channel:?}, rect {rect:?}, group {group}");
                 let buf = &buffers[*buf_in].buffer_grid[out_grid];
+                let is_16bit = buffers[*buf_in].is_16bit;
                 if buf.data_status == DataStatus::Zero && !buf.has_buffer() {
-                    let zero = Image::new(rect.map(|x| x.size).unwrap_or(buf.size))?;
-                    pass_to_pipeline(*channel, *group, is_final, zero)?;
+                    let sz = rect.map(|x| x.size).unwrap_or(buf.size);
+                    let raw = if is_16bit {
+                        Image::<i16>::new(sz)?.into_raw()
+                    } else {
+                        Image::<i32>::new(sz)?.into_raw()
+                    };
+                    pass_to_pipeline(*channel, *group, is_final, raw)?;
                 } else {
                     let modular_buf = buf.get_buffer(buf.can_consume(is_final), recycler)?;
-                    if let Some(rect) = rect {
-                        let mut cropped = Image::new(rect.size)?;
-                        let src_view =
-                            ImageRect::<i32>::from_raw(modular_buf.data.as_rect()).rect(*rect);
-                        for y in 0..rect.size.1 {
-                            cropped.row_mut(y).copy_from_slice(src_view.row(y));
+                    let raw = if let Some(rect) = rect {
+                        if is_16bit {
+                            let mut cropped = Image::<i16>::new(rect.size)?;
+                            let src_view =
+                                ImageRect::<i16>::from_raw(modular_buf.data.as_rect()).rect(*rect);
+                            for y in 0..rect.size.1 {
+                                cropped.row_mut(y).copy_from_slice(src_view.row(y));
+                            }
+                            cropped.into_raw()
+                        } else {
+                            let mut cropped = Image::<i32>::new(rect.size)?;
+                            let src_view =
+                                ImageRect::<i32>::from_raw(modular_buf.data.as_rect()).rect(*rect);
+                            for y in 0..rect.size.1 {
+                                cropped.row_mut(y).copy_from_slice(src_view.row(y));
+                            }
+                            cropped.into_raw()
                         }
-                        pass_to_pipeline(*channel, *group, is_final, cropped)?;
                     } else {
-                        pass_to_pipeline(
-                            *channel,
-                            *group,
-                            is_final,
-                            Image::from_raw(modular_buf.data),
-                        )?;
-                    }
+                        modular_buf.data
+                    };
+                    pass_to_pipeline(*channel, *group, is_final, raw)?;
                 }
             }
         };

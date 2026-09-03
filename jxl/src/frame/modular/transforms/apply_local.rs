@@ -18,9 +18,9 @@ pub enum LocalTransformBuffer<'a> {
     Empty,
     // This channel has not been written to yet.
     Placeholder(ChannelInfo),
-    // Temporary, locally-allocated channel.
+    // This channel has a non-consumed buffer.
     Owned(ModularChannel),
-    // Channel belonging to the global image.
+    // This channel is an input channel borrowed from the caller.
     Borrowed(&'a mut ModularChannel),
 }
 
@@ -36,12 +36,9 @@ impl LocalTransformBuffer<'_> {
 
     fn borrow_mut(&mut self) -> &mut ModularChannel {
         match self {
-            LocalTransformBuffer::Owned(m) => m,
-            LocalTransformBuffer::Borrowed(m) => m,
-            LocalTransformBuffer::Empty => unreachable!("tried to borrow an empty channel"),
-            LocalTransformBuffer::Placeholder(_) => {
-                unreachable!("tried to borrow a placeholder channel")
-            }
+            LocalTransformBuffer::Owned(c) => c,
+            LocalTransformBuffer::Borrowed(c) => c,
+            _ => unreachable!(),
         }
     }
 
@@ -254,7 +251,11 @@ impl TransformStep {
                 ];
                 {
                     let mut bufs = [a.borrow_mut(), b.borrow_mut(), c.borrow_mut()];
-                    super::rct::do_rct_step(&mut bufs, *op, *perm);
+                    if is_16bit {
+                        super::rct::do_rct_step_i16(&mut bufs, *op, *perm);
+                    } else {
+                        super::rct::do_rct_step_i32(&mut bufs, *op, *perm);
+                    }
                 }
                 buffers[buf_out[0]] = a;
                 buffers[buf_out[1]] = b;
