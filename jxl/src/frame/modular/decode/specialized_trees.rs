@@ -9,7 +9,7 @@ use std::ops::Range;
 use crate::bit_reader::BitReader;
 use crate::entropy_coding::decode::{Histograms, SymbolReader, unpack_signed};
 use crate::error::Result;
-use crate::frame::modular::decode::channel::ModularChannelDecoder;
+use crate::frame::modular::decode::channel::{ModularChannelDecoder, sync_scratch};
 use crate::frame::modular::decode::common::{make_pixel, precompute_references};
 use crate::frame::modular::flat_tree::{FlatTreeNode, predict_flat};
 use crate::frame::modular::predict::{PredictionData, WeightedPredictorState, clamped_gradient};
@@ -405,13 +405,37 @@ impl ModularChannelDecoder for NoTreeZero {
         br: &mut BitReader,
         y: usize,
         xsize: usize,
+        mut scratch: Option<&mut [Vec<i32>; 3]>,
     ) {
-        let mut rect = ImageRectMut::<i32>::from_raw(buffers[chan].data.as_rect_mut());
-        let row = rect.row(y);
-        debug_assert_eq!(row.len(), xsize);
+        let storage = if scratch.is_some() {
+            ModularStorage::I16
+        } else {
+            ModularStorage::I32
+        };
         if let Some(sym) = self.single_value {
-            row.fill(make_pixel(sym, self.multiplier, self.offset));
-        } else if self.multiplier == 1 && self.offset == 0 {
+            match storage {
+                ModularStorage::I16 => {
+                    let mut rect = ImageRectMut::<i16>::from_raw(buffers[chan].data.as_rect_mut());
+                    rect.row(y)
+                        .fill(make_pixel(sym, self.multiplier, self.offset) as i16);
+                }
+                ModularStorage::I32 => {
+                    let mut rect = ImageRectMut::<i32>::from_raw(buffers[chan].data.as_rect_mut());
+                    rect.row(y)
+                        .fill(make_pixel(sym, self.multiplier, self.offset));
+                }
+            }
+            return;
+        }
+        let mut rect;
+        let row: &mut [i32] = if let Some(scratch) = scratch.as_deref_mut() {
+            &mut scratch[0][..xsize]
+        } else {
+            rect = ImageRectMut::<i32>::from_raw(buffers[chan].data.as_rect_mut());
+            rect.row(y)
+        };
+        debug_assert_eq!(row.len(), xsize);
+        if self.multiplier == 1 && self.offset == 0 {
             for r in row.iter_mut() {
                 *r = reader.read_signed_clustered_inline(histograms, br, self.clustered_ctx);
             }
@@ -422,6 +446,7 @@ impl ModularChannelDecoder for NoTreeZero {
                 *r = make_pixel(residual, self.multiplier, self.offset);
             }
         }
+        sync_scratch(buffers[chan], y, scratch);
     }
 }
 
