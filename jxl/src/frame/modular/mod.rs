@@ -6,6 +6,7 @@
 use std::cmp::min;
 use std::collections::{BTreeSet, HashSet};
 use std::fmt::Debug;
+use std::sync::Arc;
 
 use jxl_transforms::transform_map::*;
 
@@ -20,7 +21,7 @@ use crate::headers::bit_depth::BitDepth;
 use crate::headers::frame_header::FrameHeader;
 use crate::headers::modular::{GroupHeader, TransformId};
 use crate::headers::{ImageMetadata, JxlHeader};
-use crate::image::{Image, Rect};
+use crate::image::{BufferRecycler, Image, Rect};
 use crate::render::buffer_splitter::OutputChannelRef;
 use crate::util::sync::Mutex;
 use crate::util::sync::atomic::{AtomicBool, Ordering};
@@ -259,6 +260,7 @@ pub struct FullModularImage {
     pipeline_used_channels: Vec<bool>,
     // Stack of transforms that are ready to process
     ready_transform_steps: Mutex<Vec<usize>>,
+    pub(super) recycler: Arc<BufferRecycler>,
 }
 
 impl FullModularImage {
@@ -280,6 +282,7 @@ impl FullModularImage {
         image_metadata: &ImageMetadata,
         modular_color_channels: usize,
         br: &mut BitReader,
+        recycler: Arc<BufferRecycler>,
     ) -> Result<Self> {
         let mut channels = vec![];
         for c in 0..modular_color_channels {
@@ -339,6 +342,7 @@ impl FullModularImage {
                 pending_transforms: BTreeSet::new(),
                 rerendered_buffers: HashSet::new(),
                 delayed_ready_sections: Mutex::new(BTreeSet::new()),
+                recycler,
             });
         }
 
@@ -508,6 +512,7 @@ impl FullModularImage {
             pending_transforms: BTreeSet::new(),
             rerendered_buffers: HashSet::new(),
             delayed_ready_sections: Mutex::new(BTreeSet::new()),
+            recycler,
         })
     }
 
@@ -526,6 +531,7 @@ impl FullModularImage {
             &self.buffer_info,
             &self.section_buffer_indices[0],
             0,
+            &self.recycler,
             |bufs| {
                 decode_modular_subbitstream(
                     bufs,
@@ -567,8 +573,9 @@ impl FullModularImage {
         }
         let mut need_rerender = false;
         for b in self.section_buffer_indices[0].iter().take(num_decoded) {
-            let buf = &mut self.buffer_info[*b].buffer_grid[0];
-            buf.extract_needed_borders()?;
+            let bi = &mut self.buffer_info[*b];
+            let buf = &mut bi.buffer_grid[0];
+            buf.extract_needed_borders(&self.recycler)?;
             if buf.data_status == DataStatus::Final {
                 continue;
             }
@@ -612,6 +619,7 @@ impl FullModularImage {
             &self.buffer_info,
             &self.section_buffer_indices[section_id],
             grid,
+            &self.recycler,
             |bufs| {
                 decode_modular_subbitstream(
                     bufs,
@@ -626,7 +634,7 @@ impl FullModularImage {
         )?;
 
         for b in self.section_buffer_indices[section_id].iter().copied() {
-            self.buffer_info[b].buffer_grid[grid].extract_needed_borders()?;
+            self.buffer_info[b].buffer_grid[grid].extract_needed_borders(&self.recycler)?;
         }
 
         self.has_decoded_data.fetch_or(
@@ -814,6 +822,7 @@ impl FullModularImage {
             frame_header,
             &self.buffer_info,
             scratch_space,
+            &self.recycler,
             pass_to_pipeline,
         )?;
 

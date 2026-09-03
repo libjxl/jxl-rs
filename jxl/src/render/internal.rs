@@ -5,12 +5,13 @@
 
 use std::any::Any;
 use std::fmt::Display;
+use std::sync::Arc;
 
 use super::save::SaveStage;
 use super::stages::ExtendToImageDimensionsStage;
 use super::{RenderPipelineInOutStage, RenderPipelineInPlaceStage};
 use crate::error::Result;
-use crate::image::{DataTypeTag, ImageDataType};
+use crate::image::{BufferRecycler, DataTypeTag, ImageDataType};
 use crate::render::{ErasedLocalState, StageSpecialCase};
 use crate::util::ShiftRightCeil;
 use crate::util::sync::atomic::AtomicBool;
@@ -111,7 +112,7 @@ pub struct RenderPipelineShared<Buffer> {
     pub stages: Vec<Stage<Buffer>>,
     pub extend_stage_index: Option<usize>,
     pub channel_is_used: Vec<bool>,
-    pub group_scratch_buffers_limit: Option<usize>,
+    pub buffer_recycler: Arc<BufferRecycler>,
 }
 
 impl<Buffer> RenderPipelineShared<Buffer> {

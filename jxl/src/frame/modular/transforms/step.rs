@@ -15,7 +15,7 @@ use crate::frame::modular::{
 };
 use crate::headers::frame_header::FrameHeader;
 use crate::headers::modular::WeightedHeader;
-use crate::image::{Image, ImageRect, Rect};
+use crate::image::{BufferRecycler, Image, ImageRect, Rect};
 use crate::util::SmallVec;
 use crate::util::sync::RwLockReadGuard;
 use crate::util::sync::atomic::{AtomicUsize, Ordering};
@@ -278,18 +278,23 @@ impl SqueezeInfo {
         }
     }
 
-    fn decrement_refs(self, buffers: &[ModularBufferInfo], is_final: bool) {
+    fn decrement_refs(
+        self,
+        buffers: &[ModularBufferInfo],
+        is_final: bool,
+        recycler: &BufferRecycler,
+    ) {
         match self {
             Self::Regular { in_avg, in_res, .. } => {
                 let buf_avg = &buffers[in_avg.0].buffer_grid[in_avg.1];
                 let buf_res = &buffers[in_res.0].buffer_grid[in_res.1];
-                buf_avg.mark_used(buf_avg.can_consume(is_final));
-                buf_res.mark_used(buf_res.can_consume(is_final));
+                buf_avg.mark_used(buf_avg.can_consume(is_final), recycler);
+                buf_res.mark_used(buf_res.can_consume(is_final), recycler);
             }
             Self::Upsample { upsample: u, .. } => {
                 assert!(!is_final);
                 let buf = &buffers[u.source_buf].buffer_grid[u.source_grid];
-                buf.mark_used(buf.can_consume(false));
+                buf.mark_used(buf.can_consume(false), recycler);
             }
         }
     }
@@ -636,6 +641,7 @@ impl TransformStepChunk {
         frame_header: &FrameHeader,
         buffers: &[ModularBufferInfo],
         transform_scratch_space: &mut TransformScratchSpace,
+        recycler: &BufferRecycler,
         pass_to_pipeline: &dyn Fn(usize, usize, bool, Image<i32>) -> Result<()>,
     ) -> Result<()> {
         let is_final = self.missing_final_deps == 0;
@@ -679,13 +685,13 @@ impl TransformStepChunk {
                     let b_in = &buffers[buf_in[i]].buffer_grid[out_grid];
                     let b_out = &buffers[buf_out[i]].buffer_grid[out_grid];
                     if b_in.data_status == DataStatus::Zero && !b_in.has_buffer() {
-                        b_out.ensure_buffer(&buffers[buf_out[i]].info)?;
+                        b_out.ensure_buffer(&buffers[buf_out[i]].info, recycler)?;
                     } else {
                         *b_out.data.try_write().unwrap() =
-                            Some(b_in.get_buffer(b_in.can_consume(is_final))?);
+                            Some(b_in.get_buffer(b_in.can_consume(is_final), recycler)?);
                     }
                 }
-                with_buffers(buffers, buf_out, out_grid, |mut bufs| {
+                with_buffers(buffers, buf_out, out_grid, recycler, |mut bufs| {
                     super::rct::do_rct_step(&mut bufs, *op, *perm);
                     Ok(())
                 })?;
@@ -702,7 +708,7 @@ impl TransformStepChunk {
                 assert_eq!(out_grid_kind, buffers[*buf_in].grid_kind);
                 assert_eq!(out_size, buffers[*buf_in].info.size);
 
-                with_buffers(buffers, buf_out, out_grid, |_| Ok(()))?;
+                with_buffers(buffers, buf_out, out_grid, recycler, |_| Ok(()))?;
                 if out_size.0 != 0 {
                     let img_pal = borrow_channel(buffers, (*buf_pal, 0));
                     let grid_shape = buffers[buf_out[0]].grid_shape;
@@ -738,6 +744,7 @@ impl TransformStepChunk {
                     let topleft_refs = topleft_guards
                         .as_ref()
                         .map(|v| v.iter().map(|x| x.as_ref().unwrap()).collect::<Vec<_>>());
+
                     let mut guards = vec![];
                     for i in buf_out {
                         let b = &buffers[*i].buffer_grid[out_grid];
@@ -772,8 +779,8 @@ impl TransformStepChunk {
                 }
                 let buf_in_grid = &buffers[*buf_in].buffer_grid[out_grid];
                 let buf_pal_grid = &buffers[*buf_pal].buffer_grid[0];
-                buf_in_grid.mark_used(buf_in_grid.can_consume(is_final));
-                buf_pal_grid.mark_used(buf_pal_grid.can_consume(is_final));
+                buf_in_grid.mark_used(buf_in_grid.can_consume(is_final), recycler);
+                buf_pal_grid.mark_used(buf_pal_grid.can_consume(is_final), recycler);
             }
             TransformStep::Palette {
                 buf_in,
@@ -792,7 +799,7 @@ impl TransformStepChunk {
                 for grid_x in 0..grid_shape.0 {
                     // Ensure that the output buffers are present.
                     // TODO(szabadka): Extend the callback to support many grid points.
-                    with_buffers(buffers, buf_out, out_grid + grid_x, |_| Ok(()))?;
+                    with_buffers(buffers, buf_out, out_grid + grid_x, recycler, |_| Ok(()))?;
                 }
                 if out_size.0 != 0 {
                     let mut in_bufs = vec![];
@@ -869,10 +876,10 @@ impl TransformStepChunk {
                     )?;
                 }
                 let buf_pal_grid = &buffers[*buf_pal].buffer_grid[0];
-                buf_pal_grid.mark_used(buf_pal_grid.can_consume(is_final));
+                buf_pal_grid.mark_used(buf_pal_grid.can_consume(is_final), recycler);
                 for grid_x in 0..grid_shape.0 {
                     let buf_in_grid = &buffers[*buf_in].buffer_grid[out_grid + grid_x];
-                    buf_in_grid.mark_used(buf_in_grid.can_consume(is_final));
+                    buf_in_grid.mark_used(buf_in_grid.can_consume(is_final), recycler);
                 }
             }
             TransformStep::HSqueeze {
@@ -902,7 +909,7 @@ impl TransformStepChunk {
                     buf_out,
                     self.grid_pos
                 );
-                with_buffers(buffers, &[*buf_out], out_grid, |mut bufs| {
+                with_buffers(buffers, &[*buf_out], out_grid, recycler, |mut bufs| {
                     if bufs.is_empty() {
                         return Ok(());
                     }
@@ -951,7 +958,7 @@ impl TransformStepChunk {
                     }
                     Ok(())
                 })?;
-                info.decrement_refs(buffers, is_final);
+                info.decrement_refs(buffers, is_final, recycler);
             }
             TransformStep::Output {
                 buf_in,
@@ -965,7 +972,7 @@ impl TransformStepChunk {
                     let zero = Image::new(rect.map(|x| x.size).unwrap_or(buf.size))?;
                     pass_to_pipeline(*channel, *group, is_final, zero)?;
                 } else {
-                    let modular_buf = buf.get_buffer(buf.can_consume(is_final))?;
+                    let modular_buf = buf.get_buffer(buf.can_consume(is_final), recycler)?;
                     if let Some(rect) = rect {
                         let mut cropped = Image::new(rect.size)?;
                         let src_view = modular_buf.data.get_rect(*rect);
@@ -981,12 +988,12 @@ impl TransformStepChunk {
         };
 
         for &(buf, grid) in self.outputs(buffers).iter() {
-            buffers[buf].buffer_grid[grid].extract_needed_borders()?;
+            buffers[buf].buffer_grid[grid].extract_needed_borders(recycler)?;
         }
 
         if is_final {
             for dep in self.dependencies(buffers, frame_header).iter() {
-                buffers[dep.buffer].buffer_grid[dep.grid].mark_final_use_done();
+                buffers[dep.buffer].buffer_grid[dep.grid].mark_final_use_done(recycler);
             }
         }
 

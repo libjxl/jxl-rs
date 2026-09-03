@@ -521,6 +521,7 @@ impl Frame {
         epf_sigma: Arc<RwLock<SigmaSource>>,
         pixel_format: &JxlPixelFormat,
         output_profile: &JxlColorProfile,
+        buffer_recycler: Arc<crate::image::BufferRecycler>,
     ) -> Result<Box<T>> {
         let num_channels = frame_header.num_extra_channels as usize + 3;
         let num_temp_channels = if frame_header.has_noise() { 3 } else { 0 };
@@ -530,12 +531,7 @@ impl Frame {
             frame_header.size_upsampled(),
             frame_header.upsampling.ilog2() as usize,
             frame_header.log_group_dim(),
-            // TODO(veluca): we should instead have modular mode participate in buffer reuse.
-            if frame_header.encoding == Encoding::Modular {
-                Some(0)
-            } else {
-                None
-            },
+            buffer_recycler,
         );
 
         if frame_header.encoding == Encoding::Modular {
@@ -936,6 +932,7 @@ impl Frame {
                 self.epf_sigma.clone(),
                 pixel_format,
                 output_profile,
+                self.buffer_recycler.clone(),
             )? as Box<dyn std::any::Any + Send + Sync>
         } else {
             Self::build_render_pipeline::<LowMemoryRenderPipeline>(
@@ -949,6 +946,7 @@ impl Frame {
                 self.epf_sigma.clone(),
                 pixel_format,
                 output_profile,
+                self.buffer_recycler.clone(),
             )? as Box<dyn std::any::Any + Send + Sync>
         };
         #[cfg(not(test))]
@@ -963,6 +961,7 @@ impl Frame {
             self.epf_sigma.clone(),
             pixel_format,
             output_profile,
+            self.buffer_recycler.clone(),
         )?;
         self.render_pipeline = Some(render_pipeline);
         self.section0_render_up_to_date = false;
