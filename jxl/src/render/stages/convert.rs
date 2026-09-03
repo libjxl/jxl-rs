@@ -3,7 +3,7 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-use jxl_simd::{F32SimdVec, I32SimdVec, SimdMask, simd_function};
+use jxl_simd::{F32SimdVec, I16SimdVec, I32SimdVec, SimdMask, SimdMask16, simd_function};
 
 use crate::frame::quantizer::LfQuantFactors;
 use crate::headers::bit_depth::BitDepth;
@@ -523,6 +523,17 @@ impl RenderPipelineInOutStage for ConvertModular16ToF32Stage {
             modular16_to_float_simd_dispatch(input[0], output_rows[0][0], scale, xsize);
         }
     }
+
+    fn is_special_case(&self) -> Option<StageSpecialCase> {
+        if self.bit_depth.floating_point_sample() {
+            None
+        } else {
+            Some(StageSpecialCase::Modular16ToF32 {
+                channel: self.channel,
+                bit_depth: self.bit_depth.bits_per_sample() as u8,
+            })
+        }
+    }
 }
 
 /// Stage that converts f32 values in [0, 1] range to u8 values.
@@ -616,6 +627,82 @@ impl RenderPipelineInOutStage for ConvertF32ToU8Stage {
             channel: self.channel,
             bit_depth: self.bit_depth,
         })
+    }
+}
+
+/// Stage that converts i16 values to u8 values, applying a multiplier.
+pub struct ConvertI16ToU8Stage {
+    channel: usize,
+    multiplier: i32,
+    max: i32,
+}
+
+impl ConvertI16ToU8Stage {
+    pub fn new(channel: usize, multiplier: i32, max: i32) -> ConvertI16ToU8Stage {
+        ConvertI16ToU8Stage {
+            channel,
+            multiplier,
+            max,
+        }
+    }
+}
+
+impl std::fmt::Display for ConvertI16ToU8Stage {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "convert I16 to U8 in channel {} with multiplier {}",
+            self.channel, self.multiplier
+        )
+    }
+}
+
+// SIMD I16 to U8 conversion
+simd_function!(
+    i16_to_u8_simd_dispatch,
+    d: D,
+    fn i16_to_u8_simd(input: &[i16], output: &mut [u8], scale: i32, max: i32, xsize: usize) {
+        let simd_width = D::I16Vec::LEN;
+        let scale_vec = D::I16Vec::splat(d, scale as i16);
+        let max_vec = D::I16Vec::splat(d, max as i16);
+        let zero = D::I16Vec::splat(d, 0);
+
+        for (input_chunk, output_chunk) in input
+            .chunks_exact(simd_width)
+            .zip(output.chunks_exact_mut(simd_width))
+            .take(xsize.div_ceil(simd_width))
+        {
+            let val = D::I16Vec::load(d, input_chunk);
+            let scaled = if scale == 1 { val } else { val * scale_vec };
+            let zeroclip = scaled.lt_zero().if_then_else_i16(zero, scaled);
+            let clip = scaled.gt(max_vec).if_then_else_i16(max_vec, zeroclip);
+            clip.store_u8(output_chunk);
+        }
+    }
+);
+
+impl RenderPipelineInOutStage for ConvertI16ToU8Stage {
+    type InputT = i16;
+    type OutputT = u8;
+    const SHIFT: (u8, u8) = (0, 0);
+    const BORDER: (u8, u8) = (0, 0);
+
+    fn uses_channel(&self, c: usize) -> bool {
+        c == self.channel
+    }
+
+    fn process_row_chunk(
+        &self,
+        _position: (usize, usize),
+        xsize: usize,
+        input_rows: &Channels<i16>,
+        output_rows: &mut ChannelsMut<u8>,
+        _state: Option<&mut ErasedLocalState>,
+        _previous_call_was_previous_row: bool,
+    ) {
+        let input = input_rows[0][0];
+        let output = &mut output_rows[0][0];
+        i16_to_u8_simd_dispatch(input, output, self.multiplier, self.max, xsize);
     }
 }
 
@@ -856,6 +943,24 @@ mod test {
     fn f32_to_u8_consistency() -> Result<()> {
         crate::render::test::test_stage_consistency(
             || ConvertF32ToU8Stage::new(0, 8),
+            (500, 500),
+            1,
+        )
+    }
+
+    #[test]
+    fn i16_to_u8_consistency() -> Result<()> {
+        crate::render::test::test_stage_consistency(
+            || ConvertI16ToU8Stage::new(0, 1, 255),
+            (500, 500),
+            1,
+        )
+    }
+
+    #[test]
+    fn i16_to_u8_scaled_consistency() -> Result<()> {
+        crate::render::test::test_stage_consistency(
+            || ConvertI16ToU8Stage::new(0, 17, 255),
             (500, 500),
             1,
         )
