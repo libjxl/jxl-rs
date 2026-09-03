@@ -290,6 +290,7 @@ impl TransformStep {
                         *num_deltas,
                         *predictor,
                         wp_header,
+                        is_16bit,
                     );
                 }
                 for (pos, buf) in buf_out.iter().zip(out_bufs) {

@@ -735,23 +735,15 @@ impl TransformStepChunk {
                         .then(|| borrow_border_guards((grid_y - 1) * stride + grid_x, false));
                     let topleft_guards = (has_left && has_top)
                         .then(|| borrow_border_guards((grid_y - 1) * stride + (grid_x - 1), false));
-                    let left_refs: Option<Vec<ImageRect<'_, i32>>> =
-                        left_guards.as_ref().map(|v| {
-                            v.iter()
-                                .map(|x| ImageRect::<i32>::from_raw(x.as_ref().unwrap().as_rect()))
-                                .collect::<Vec<_>>()
-                        });
-                    let top_refs: Option<Vec<ImageRect<'_, i32>>> = top_guards.as_ref().map(|v| {
-                        v.iter()
-                            .map(|x| ImageRect::<i32>::from_raw(x.as_ref().unwrap().as_rect()))
-                            .collect::<Vec<_>>()
-                    });
-                    let topleft_refs: Option<Vec<ImageRect<'_, i32>>> =
-                        topleft_guards.as_ref().map(|v| {
-                            v.iter()
-                                .map(|x| ImageRect::<i32>::from_raw(x.as_ref().unwrap().as_rect()))
-                                .collect::<Vec<_>>()
-                        });
+                    let left_refs: Option<Vec<&OwnedRawImage>> = left_guards
+                        .as_ref()
+                        .map(|v| v.iter().map(|x| x.as_ref().unwrap()).collect::<Vec<_>>());
+                    let top_refs: Option<Vec<&OwnedRawImage>> = top_guards
+                        .as_ref()
+                        .map(|v| v.iter().map(|x| x.as_ref().unwrap()).collect::<Vec<_>>());
+                    let topleft_refs: Option<Vec<&OwnedRawImage>> = topleft_guards
+                        .as_ref()
+                        .map(|v| v.iter().map(|x| x.as_ref().unwrap()).collect::<Vec<_>>());
 
                     let mut guards = vec![];
                     for i in buf_out {
@@ -768,6 +760,7 @@ impl TransformStepChunk {
                             &mut out_buf_refs,
                             *num_colors,
                             *num_deltas,
+                            buffers[*buf_in].is_16bit,
                         );
                     } else {
                         let img_in = borrow_channel(buffers, (*buf_in, out_grid));
@@ -781,6 +774,7 @@ impl TransformStepChunk {
                             *num_colors,
                             *num_deltas,
                             *predictor,
+                            buffers[*buf_in].is_16bit,
                             &mut scratch_space.palette_row_scratch,
                         );
                     }
@@ -840,10 +834,8 @@ impl TransformStepChunk {
                             }
                         }
                     }
-                    let prev_refs: Vec<ImageRect<'_, i32>> = prev_guards
-                        .iter()
-                        .map(|g| ImageRect::<i32>::from_raw(g.as_ref().unwrap().as_rect()))
-                        .collect();
+                    let prev_refs: Vec<&OwnedRawImage> =
+                        prev_guards.iter().map(|g| g.as_ref().unwrap()).collect();
                     let prev_aux_refs: Vec<Option<&Image<i32>>> =
                         prev_aux_guards.iter().map(|g| g.as_ref()).collect();
                     let mut guards = vec![];
@@ -882,6 +874,7 @@ impl TransformStepChunk {
                         *num_deltas,
                         *predictor,
                         wp_header,
+                        buffers[*buf_in].is_16bit,
                         &mut scratch_space.palette_row_scratch,
                     )?;
                 }

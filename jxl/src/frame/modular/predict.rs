@@ -124,7 +124,6 @@ impl PredictionData {
             toprightright,
         }
     }
-
     pub fn get(rect: ImageRect<'_, i32>, x: usize, y: usize) -> Self {
         Self::get_rows(
             rect.row(y),
