@@ -7,7 +7,7 @@ use jxl_simd::{I32SimdVec, ScalarDescriptor, SimdDescriptor, shr, simd_function}
 
 use crate::frame::modular::ModularChannel;
 use crate::frame::modular::transforms::{RctOp, RctPermutation};
-use crate::image::Image;
+use crate::image::ImageRectMut;
 use crate::util::tracing_wrappers::*;
 
 #[inline(always)]
@@ -73,18 +73,18 @@ fn rct_row_impl<D: SimdDescriptor, const OP: u32>(d: D, rgb: [&mut [i32]; 3]) ->
 #[inline(always)]
 fn rct_loop_impl<D: SimdDescriptor, const OP: u32>(
     d: D,
-    r: &mut Image<i32>,
-    g: &mut Image<i32>,
-    b: &mut Image<i32>,
+    r: &mut ImageRectMut<'_, i32>,
+    g: &mut ImageRectMut<'_, i32>,
+    b: &mut ImageRectMut<'_, i32>,
 ) {
     const { assert!(OP <= 6) };
 
     let h = r.size().1;
 
     for pos_y in 0..h {
-        let mut rgb = [&mut *r, &mut *g, &mut *b].map(|x| x.row_mut(pos_y));
+        let rgb = [r.row(pos_y), g.row(pos_y), b.row(pos_y)];
 
-        rgb = rct_row_impl::<D, OP>(d, rgb);
+        let mut rgb = rct_row_impl::<D, OP>(d, rgb);
         if D::I32Vec::LEN > 8 {
             rgb = rct_row_impl::<_, OP>(d.maybe_downgrade_256bit(), rgb);
         }
@@ -100,7 +100,12 @@ fn rct_loop_impl<D: SimdDescriptor, const OP: u32>(
 simd_function!(
     rct_loop,
     d: D,
-    fn rct_loop_fwd(r: &mut Image<i32>, g: &mut Image<i32>, b: &mut Image<i32>, op: RctOp) {
+    fn rct_loop_fwd(
+        r: &mut ImageRectMut<'_, i32>,
+        g: &mut ImageRectMut<'_, i32>,
+        b: &mut ImageRectMut<'_, i32>,
+        op: RctOp,
+    ) {
         match op {
             RctOp::Noop => {},
             RctOp::AddFirstToThird => rct_loop_impl::<D, 1>(d, r, g, b),
@@ -121,7 +126,10 @@ pub fn do_rct_step(buffers: &mut [&mut ModularChannel], op: RctOp, perm: RctPerm
     };
 
     if op != RctOp::Noop {
-        rct_loop(&mut r.data, &mut g.data, &mut b.data, op);
+        let mut r_rect = ImageRectMut::<i32>::from_raw(r.data.as_rect_mut());
+        let mut g_rect = ImageRectMut::<i32>::from_raw(g.data.as_rect_mut());
+        let mut b_rect = ImageRectMut::<i32>::from_raw(b.data.as_rect_mut());
+        rct_loop(&mut r_rect, &mut g_rect, &mut b_rect, op);
     }
 
     // Note: Gbr and Brg use the *inverse* permutation compared to libjxl, because we *first* write

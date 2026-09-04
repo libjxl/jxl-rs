@@ -14,7 +14,7 @@ use crate::frame::modular::{
 };
 use crate::headers::frame_header::FrameHeader;
 use crate::headers::modular::WeightedHeader;
-use crate::image::{BufferRecycler, Image, ImageRect, Rect};
+use crate::image::{BufferRecycler, Image, ImageRect, ImageRectMut, OwnedRawImage, Rect};
 use crate::util::SmallVec;
 use crate::util::sync::RwLockReadGuard;
 use crate::util::sync::atomic::{AtomicUsize, Ordering};
@@ -172,14 +172,14 @@ fn borrow_channel(
 fn borrow_topbottom(
     buffers: &[ModularBufferInfo],
     x: (usize, usize),
-) -> RwLockReadGuard<'_, Option<Image<i32>>> {
+) -> RwLockReadGuard<'_, Option<OwnedRawImage>> {
     buffers[x.0].buffer_grid[x.1].topbottom.try_read().unwrap()
 }
 
 fn borrow_leftright(
     buffers: &[ModularBufferInfo],
     x: (usize, usize),
-) -> RwLockReadGuard<'_, Option<Image<i32>>> {
+) -> RwLockReadGuard<'_, Option<OwnedRawImage>> {
     buffers[x.0].buffer_grid[x.1].leftright.try_read().unwrap()
 }
 
@@ -355,40 +355,44 @@ impl SqueezeInfo {
 struct SqueezeInputs<'a> {
     in_avg: RwLockReadGuard<'a, Option<ModularChannel>>,
     in_res: RwLockReadGuard<'a, Option<ModularChannel>>,
-    in_next_border: Option<RwLockReadGuard<'a, Option<Image<i32>>>>,
-    out_prev_border: Option<RwLockReadGuard<'a, Option<Image<i32>>>>,
+    in_next_border: Option<RwLockReadGuard<'a, Option<OwnedRawImage>>>,
+    out_prev_border: Option<RwLockReadGuard<'a, Option<OwnedRawImage>>>,
 }
 
 impl<'a> SqueezeInputs<'a> {
     fn in_avg_rect(&self, rect: Rect) -> ImageRect<'_, i32> {
-        self.in_avg.as_ref().unwrap().data.get_rect(rect)
+        ImageRect::<i32>::from_raw(self.in_avg.as_ref().unwrap().data.as_rect()).rect(rect)
     }
 
     fn in_res_rect(&self, rect: Rect) -> ImageRect<'_, i32> {
-        self.in_res.as_ref().unwrap().data.get_rect(rect)
+        ImageRect::<i32>::from_raw(self.in_res.as_ref().unwrap().data.as_rect()).rect(rect)
     }
 
-    fn in_next_border(&self) -> Option<&Image<i32>> {
-        self.in_next_border.as_ref().and_then(|g| g.as_ref())
+    fn in_next_border(&self) -> Option<ImageRect<'_, i32>> {
+        self.in_next_border
+            .as_ref()
+            .and_then(|g| g.as_ref())
+            .map(|img| ImageRect::<i32>::from_raw(img.as_rect()))
     }
 
-    fn out_prev_border(&self) -> Option<&Image<i32>> {
-        self.out_prev_border.as_ref().and_then(|g| g.as_ref())
+    fn out_prev_border(&self) -> Option<ImageRect<'_, i32>> {
+        self.out_prev_border
+            .as_ref()
+            .and_then(|g| g.as_ref())
+            .map(|img| ImageRect::<i32>::from_raw(img.as_rect()))
     }
 }
 
 enum TileGuard<'a> {
     Channel(RwLockReadGuard<'a, Option<ModularChannel>>),
-    Border(RwLockReadGuard<'a, Option<Image<i32>>>),
+    Border(RwLockReadGuard<'a, Option<OwnedRawImage>>),
 }
 
-impl<'a> std::ops::Deref for TileGuard<'a> {
-    type Target = Image<i32>;
-
-    fn deref(&self) -> &Self::Target {
+impl<'a> TileGuard<'a> {
+    fn as_rect(&self) -> ImageRect<'_, i32> {
         match self {
-            TileGuard::Channel(g) => &g.as_ref().unwrap().data,
-            TileGuard::Border(g) => g.as_ref().unwrap(),
+            TileGuard::Channel(g) => ImageRect::<i32>::from_raw(g.as_ref().unwrap().data.as_rect()),
+            TileGuard::Border(g) => ImageRect::<i32>::from_raw(g.as_ref().unwrap().as_rect()),
         }
     }
 }
@@ -401,6 +405,11 @@ pub(super) struct TiledChannelView<'a> {
 }
 
 impl<'a> TiledChannelView<'a> {
+    #[inline(always)]
+    fn tile(&self, idx: usize) -> ImageRect<'_, i32> {
+        self.tiles[idx].as_ref().unwrap().as_rect()
+    }
+
     #[inline(always)]
     fn top_border_row(ly: usize, top_tile_h: usize) -> usize {
         if top_tile_h <= 1 || ly == top_tile_h - 1 {
@@ -424,7 +433,7 @@ impl<'a> TiledChannelView<'a> {
         top_tile_h: usize,
         dest: &mut [i32],
     ) {
-        let img = self.tiles[dy * 3 + dx].as_deref().unwrap();
+        let img = self.tile(dy * 3 + dx);
         match (dy, dx) {
             (1, 1) => {
                 dest.copy_from_slice(&img.row(ly)[src_range]);
@@ -473,7 +482,7 @@ impl<'a> TiledChannelView<'a> {
         };
 
         let Some(grid_dim) = self.grid_dim else {
-            let row = self.tiles[4].as_deref().unwrap().row(clamped_y);
+            let row = self.tile(4).row(clamped_y);
 
             let left_clamp = (2 - xoff as isize).max(0) as usize;
             let right_clamp_start = (w as isize + 2 - xoff as isize).min(max_len as isize) as usize;
@@ -549,15 +558,9 @@ impl<'a> TiledChannelView<'a> {
 
         if left_clamp > 0 {
             let left_val = match dy {
-                1 => self.tiles[4].as_deref().unwrap().row(ly)[0],
-                0 => self.tiles[1]
-                    .as_deref()
-                    .unwrap()
-                    .row(Self::top_border_row(ly, top_tile_h))[0],
-                2 => self.tiles[7]
-                    .as_deref()
-                    .unwrap()
-                    .row(Self::bottom_border_row(ly))[0],
+                1 => self.tile(4).row(ly)[0],
+                0 => self.tile(1).row(Self::top_border_row(ly, top_tile_h))[0],
+                2 => self.tile(7).row(Self::bottom_border_row(ly))[0],
                 _ => 0,
             };
             row_buf[..left_clamp].fill(left_val);
@@ -568,16 +571,10 @@ impl<'a> TiledChannelView<'a> {
             let lx_right = (w - 1) % grid_w;
             let dx = (gx_right as isize - gx_center as isize + 1) as usize;
             let right_val = match (dy, dx) {
-                (1, 1) => self.tiles[4].as_deref().unwrap().row(ly)[lx_right],
-                (1, 2) => self.tiles[5].as_deref().unwrap().row(ly)[3],
-                (0, 1 | 2) => self.tiles[dx]
-                    .as_deref()
-                    .unwrap()
-                    .row(Self::top_border_row(ly, top_tile_h))[lx_right],
-                (2, 1 | 2) => self.tiles[6 + dx]
-                    .as_deref()
-                    .unwrap()
-                    .row(Self::bottom_border_row(ly))[lx_right],
+                (1, 1) => self.tile(4).row(ly)[lx_right],
+                (1, 2) => self.tile(5).row(ly)[3],
+                (0, 1 | 2) => self.tile(dx).row(Self::top_border_row(ly, top_tile_h))[lx_right],
+                (2, 1 | 2) => self.tile(6 + dx).row(Self::bottom_border_row(ly))[lx_right],
                 _ => 0,
             };
             row_buf[max_len - right_clamp..max_len].fill(right_val);
@@ -734,15 +731,23 @@ impl TransformStepChunk {
                         .then(|| borrow_border_guards((grid_y - 1) * stride + grid_x, false));
                     let topleft_guards = (has_left && has_top)
                         .then(|| borrow_border_guards((grid_y - 1) * stride + (grid_x - 1), false));
-                    let left_refs = left_guards
-                        .as_ref()
-                        .map(|v| v.iter().map(|x| x.as_ref().unwrap()).collect::<Vec<_>>());
-                    let top_refs = top_guards
-                        .as_ref()
-                        .map(|v| v.iter().map(|x| x.as_ref().unwrap()).collect::<Vec<_>>());
-                    let topleft_refs = topleft_guards
-                        .as_ref()
-                        .map(|v| v.iter().map(|x| x.as_ref().unwrap()).collect::<Vec<_>>());
+                    let left_refs: Option<Vec<ImageRect<'_, i32>>> =
+                        left_guards.as_ref().map(|v| {
+                            v.iter()
+                                .map(|x| ImageRect::<i32>::from_raw(x.as_ref().unwrap().as_rect()))
+                                .collect::<Vec<_>>()
+                        });
+                    let top_refs: Option<Vec<ImageRect<'_, i32>>> = top_guards.as_ref().map(|v| {
+                        v.iter()
+                            .map(|x| ImageRect::<i32>::from_raw(x.as_ref().unwrap().as_rect()))
+                            .collect::<Vec<_>>()
+                    });
+                    let topleft_refs: Option<Vec<ImageRect<'_, i32>>> =
+                        topleft_guards.as_ref().map(|v| {
+                            v.iter()
+                                .map(|x| ImageRect::<i32>::from_raw(x.as_ref().unwrap().as_rect()))
+                                .collect::<Vec<_>>()
+                        });
 
                     let mut guards = vec![];
                     for i in buf_out {
@@ -831,8 +836,10 @@ impl TransformStepChunk {
                             }
                         }
                     }
-                    let prev_refs: Vec<&Image<i32>> =
-                        prev_guards.iter().map(|g| g.as_ref().unwrap()).collect();
+                    let prev_refs: Vec<ImageRect<'_, i32>> = prev_guards
+                        .iter()
+                        .map(|g| ImageRect::<i32>::from_raw(g.as_ref().unwrap().as_rect()))
+                        .collect();
                     let prev_aux_refs: Vec<Option<&Image<i32>>> =
                         prev_aux_guards.iter().map(|g| g.as_ref()).collect();
                     let mut guards = vec![];
@@ -923,12 +930,14 @@ impl TransformStepChunk {
                             let scratch = &mut scratch_space.smooth_upsample_scratch;
                             let dither = buffers[*buf_out].info.shift.unwrap_or((0, 0)) == (0, 0)
                                 && !buffers[*buf_out].info.followed_by_palette;
+                            let mut out_rect_buf =
+                                ImageRectMut::<i32>::from_raw(bufs[0].data.as_rect_mut());
                             smooth_upsample(
                                 &view,
                                 u.shift_diff,
                                 dither,
                                 out_rect,
-                                &mut bufs[0].data,
+                                &mut out_rect_buf,
                                 scratch,
                             );
                         }
@@ -936,20 +945,22 @@ impl TransformStepChunk {
                             avg_rect, res_rect, ..
                         } => {
                             let inputs = info.borrow_inputs(buffers, vertical);
+                            let in_next = inputs.in_next_border();
+                            let out_prev = inputs.out_prev_border();
                             if vertical {
                                 super::squeeze::do_vsqueeze_step(
                                     &inputs.in_avg_rect(avg_rect),
                                     &inputs.in_res_rect(res_rect),
-                                    inputs.in_next_border(),
-                                    inputs.out_prev_border(),
+                                    in_next.as_ref(),
+                                    out_prev.as_ref(),
                                     &mut bufs,
                                 );
                             } else {
                                 super::squeeze::do_hsqueeze_step(
                                     &inputs.in_avg_rect(avg_rect),
                                     &inputs.in_res_rect(res_rect),
-                                    inputs.in_next_border(),
-                                    inputs.out_prev_border(),
+                                    in_next.as_ref(),
+                                    out_prev.as_ref(),
                                     &mut bufs,
                                 );
                             }
@@ -974,13 +985,19 @@ impl TransformStepChunk {
                     let modular_buf = buf.get_buffer(buf.can_consume(is_final), recycler)?;
                     if let Some(rect) = rect {
                         let mut cropped = Image::new(rect.size)?;
-                        let src_view = modular_buf.data.get_rect(*rect);
+                        let src_view =
+                            ImageRect::<i32>::from_raw(modular_buf.data.as_rect()).rect(*rect);
                         for y in 0..rect.size.1 {
                             cropped.row_mut(y).copy_from_slice(src_view.row(y));
                         }
                         pass_to_pipeline(*channel, *group, is_final, cropped)?;
                     } else {
-                        pass_to_pipeline(*channel, *group, is_final, modular_buf.data)?;
+                        pass_to_pipeline(
+                            *channel,
+                            *group,
+                            is_final,
+                            Image::from_raw(modular_buf.data),
+                        )?;
                     }
                 }
             }

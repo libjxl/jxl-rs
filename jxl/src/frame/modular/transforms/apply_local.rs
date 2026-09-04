@@ -10,7 +10,7 @@ use crate::frame::modular::buffers::ModularChannel;
 use crate::frame::modular::transforms::meta_apply::meta_apply_single_transform;
 use crate::frame::modular::transforms::step::TransformStep;
 use crate::headers::modular::GroupHeader;
-use crate::image::Rect;
+use crate::image::ImageRect;
 use crate::util::tracing_wrappers::*;
 
 #[derive(Debug)]
@@ -303,17 +303,13 @@ impl TransformStep {
                 let mut in_res = buffers[buf_in[1]].take();
                 {
                     let mut bufs: Vec<_> = vec![out_buf.borrow_mut()];
-                    let in_avg = &in_avg.borrow_mut().data;
-                    let in_res = &in_res.borrow_mut().data;
+                    let in_avg_guard = in_avg.borrow_mut();
+                    let in_res_guard = in_res.borrow_mut();
+                    let in_avg_img = ImageRect::<i32>::from_raw(in_avg_guard.data.as_rect());
+                    let in_res_img = ImageRect::<i32>::from_raw(in_res_guard.data.as_rect());
                     super::squeeze::do_hsqueeze_step(
-                        &in_avg.get_rect(Rect {
-                            size: in_avg.size(),
-                            origin: (0, 0),
-                        }),
-                        &in_res.get_rect(Rect {
-                            size: in_res.size(),
-                            origin: (0, 0),
-                        }),
+                        &in_avg_img,
+                        &in_res_img,
                         None,
                         None,
                         &mut bufs,
@@ -330,17 +326,13 @@ impl TransformStep {
                 let mut in_res = buffers[buf_in[1]].take();
                 {
                     let mut bufs: Vec<_> = vec![out_buf.borrow_mut()];
-                    let in_avg = &in_avg.borrow_mut().data;
-                    let in_res = &in_res.borrow_mut().data;
+                    let in_avg_guard = in_avg.borrow_mut();
+                    let in_res_guard = in_res.borrow_mut();
+                    let in_avg_img = ImageRect::<i32>::from_raw(in_avg_guard.data.as_rect());
+                    let in_res_img = ImageRect::<i32>::from_raw(in_res_guard.data.as_rect());
                     super::squeeze::do_vsqueeze_step(
-                        &in_avg.get_rect(Rect {
-                            size: in_avg.size(),
-                            origin: (0, 0),
-                        }),
-                        &in_res.get_rect(Rect {
-                            size: in_res.size(),
-                            origin: (0, 0),
-                        }),
+                        &in_avg_img,
+                        &in_res_img,
                         None,
                         None,
                         &mut bufs,

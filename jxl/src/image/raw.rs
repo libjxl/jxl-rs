@@ -45,6 +45,22 @@ impl OwnedRawImage {
     }
 
     #[inline(always)]
+    pub fn as_rect(&self) -> RawImageRect<'_> {
+        self.get_rect(Rect {
+            origin: (0, 0),
+            size: self.byte_size(),
+        })
+    }
+
+    #[inline(always)]
+    pub fn as_rect_mut(&mut self) -> RawImageRectMut<'_> {
+        self.get_rect_mut(Rect {
+            origin: (0, 0),
+            size: self.byte_size(),
+        })
+    }
+
+    #[inline(always)]
     pub fn row_mut(&mut self, row: usize) -> &mut [u8] {
         // SAFETY: we have ownership of the accessible bytes of `self.data`.
         unsafe { self.data.row_mut(row) }

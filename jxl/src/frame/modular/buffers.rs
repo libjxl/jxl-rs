@@ -8,7 +8,7 @@ use crate::error::Result;
 use crate::frame::DataStatus;
 use crate::frame::modular::ChannelInfo;
 use crate::headers::bit_depth::BitDepth;
-use crate::image::{BufferRecycler, Image};
+use crate::image::{BufferRecycler, Image, ImageRect, OwnedRawImage};
 use crate::util::sync::atomic::{AtomicUsize, Ordering};
 use crate::util::sync::{Mutex, RwLock};
 
@@ -16,7 +16,7 @@ use crate::util::sync::{Mutex, RwLock};
 #[derive(Debug)]
 pub(super) struct ModularChannel {
     // Actual pixel buffer.
-    pub(super) data: Image<i32>,
+    pub(super) data: OwnedRawImage,
     // Shift of the channel (None if this is a meta-channel).
     pub(super) shift: Option<(usize, usize)>,
     pub(super) bit_depth: BitDepth,
@@ -33,7 +33,7 @@ impl ModularChannel {
         bit_depth: BitDepth,
     ) -> Result<Self> {
         Ok(ModularChannel {
-            data: Image::new(size)?,
+            data: OwnedRawImage::new((size.0 * 4, size.1))?,
             shift,
             bit_depth,
         })
@@ -50,11 +50,16 @@ impl ModularChannel {
     pub fn channel_info(&self) -> ChannelInfo {
         ChannelInfo {
             output_channel_idx: None,
-            size: self.data.size(),
+            size: self.size(),
             shift: self.shift,
             bit_depth: self.bit_depth,
             followed_by_palette: false,
         }
+    }
+
+    #[inline(always)]
+    pub fn size(&self) -> (usize, usize) {
+        (self.data.byte_size().0 / 4, self.data.byte_size().1)
     }
 }
 
@@ -87,9 +92,9 @@ impl NeededBorders {
 pub(super) struct ModularBuffer {
     pub(super) data: RwLock<Option<ModularChannel>>,
     // 2px horizontal borders (top 2 rows and bottom 2 rows, size: (width, 4)).
-    pub(super) topbottom: RwLock<Option<Image<i32>>>,
+    pub(super) topbottom: RwLock<Option<OwnedRawImage>>,
     // 2px vertical borders (left 2 cols and right 2 cols, size: (4, height)).
-    pub(super) leftright: RwLock<Option<Image<i32>>>,
+    pub(super) leftright: RwLock<Option<OwnedRawImage>>,
     // Holds additional information such as the weighted predictor's error channel's last row for
     // the transform chunk that produced this buffer.
     pub(super) auxiliary_data: RwLock<Option<Image<i32>>>,
@@ -149,13 +154,13 @@ impl ModularBuffer {
         let Some(chan) = data_guard.as_ref() else {
             return Ok(());
         };
-        let (w, h) = chan.data.size();
+        let (w, h) = chan.size();
         if w == 0 || h == 0 {
             return Ok(());
         }
 
         if self.needed_borders.topbottom {
-            let mut topbottom = recycler.get_buffer::<i32>((w, 4))?;
+            let mut topbottom = recycler.get_raw_buffer((w * 4, 4))?;
             let r0 = chan.data.row(0);
             let r1 = if h > 1 { chan.data.row(1) } else { r0 };
             let rb0 = if h > 1 { chan.data.row(h - 2) } else { r0 };
@@ -168,16 +173,17 @@ impl ModularBuffer {
         }
 
         if self.needed_borders.leftright {
+            let in_rect = ImageRect::<i32>::from_raw(chan.data.as_rect());
             let mut leftright = recycler.get_buffer::<i32>((4, h))?;
             for y in 0..h {
-                let r = chan.data.row(y);
+                let r = in_rect.row(y);
                 let out = leftright.row_mut(y);
                 out[0] = r[0];
                 out[1] = if w > 1 { r[1] } else { r[0] };
                 out[2] = if w > 1 { r[w - 2] } else { r[0] };
                 out[3] = r[w - 1];
             }
-            *self.leftright.try_write().unwrap() = Some(leftright);
+            *self.leftright.try_write().unwrap() = Some(leftright.into_raw());
         }
 
         Ok(())
@@ -188,7 +194,7 @@ impl ModularBuffer {
         info: &ChannelInfo,
         recycler: &BufferRecycler,
     ) -> Result<ModularChannel> {
-        let data = recycler.get_buffer::<i32>(self.size)?;
+        let data = recycler.get_raw_buffer((self.size.0 * 4, self.size.1))?;
         Ok(ModularChannel {
             data,
             shift: info.shift,
@@ -211,6 +217,7 @@ impl ModularBuffer {
         can_consume: bool,
         recycler: &BufferRecycler,
     ) -> Result<ModularChannel> {
+        let _ = recycler;
         if !can_consume || DISABLE_MODULAR_BUFFER_DEALLOCATION_FOR_DEBUG {
             return ModularChannel::try_clone(self.data.try_read().unwrap().as_ref().unwrap());
         }
@@ -231,16 +238,11 @@ impl ModularBuffer {
                             .as_ref()
                             .map(ModularChannel::try_clone);
                     }
-                } else if remaining == 0 {
-                    let old_data = self.data.try_write().unwrap().take();
-                    if let Some(chan) = old_data {
-                        recycler.recycle_buffer(chan.data);
-                    }
                 }
                 Some(remaining)
             },
         );
-        Ok(ret.transpose()?.unwrap())
+        ret.unwrap()
     }
 
     #[inline]
@@ -260,7 +262,7 @@ impl ModularBuffer {
                 if remaining == 0 {
                     let old_data = self.data.try_write().unwrap().take();
                     if let Some(chan) = old_data {
-                        recycler.recycle_buffer(chan.data);
+                        recycler.recycle_raw_buffer(chan.data);
                     }
                 }
                 Some(remaining)
@@ -280,13 +282,13 @@ impl ModularBuffer {
             let _ = self.auxiliary_data.try_write().unwrap().take();
             let d = self.data.try_write().unwrap().take();
             if let Some(chan) = d {
-                recycler.recycle_buffer(chan.data);
+                recycler.recycle_raw_buffer(chan.data);
             }
             if let Some(tb_img) = tb {
-                recycler.recycle_buffer(tb_img);
+                recycler.recycle_raw_buffer(tb_img);
             }
             if let Some(lr_img) = lr {
-                recycler.recycle_buffer(lr_img);
+                recycler.recycle_raw_buffer(lr_img);
             }
         }
     }

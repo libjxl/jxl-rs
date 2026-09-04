@@ -13,6 +13,7 @@ use crate::frame::modular::tree::TreeNode;
 use crate::frame::modular::{ModularChannel, Predictor, Tree};
 use crate::headers::JxlHeader;
 use crate::headers::modular::GroupHeader;
+use crate::image::ImageRectMut;
 
 // If we have at least this many bits still available to read,
 // we can be sure that none of the reads up to this point read garbage.
@@ -53,7 +54,7 @@ fn decode_fast_lossless(
 
     let mut last_safe_buf = 0;
     for (c, buf) in buffers.into_iter().enumerate() {
-        let (w, h) = buf.data.size();
+        let (w, h) = buf.size();
         if w == 0 || h == 0 {
             continue;
         }
@@ -76,7 +77,7 @@ fn decode_fast_lossless(
             .uint(tree.histograms.map_context_to_cluster(id as usize));
         let lz_conf = tree.histograms.lz77_length_uint();
 
-        let buf = &mut buf.data;
+        let mut buf = ImageRectMut::<i32>::from_raw(buf.data.as_rect_mut());
 
         let mut decode = {
             #[inline(always)]
@@ -99,7 +100,7 @@ fn decode_fast_lossless(
         };
 
         let mut last = 0i32;
-        for p in buf.row_mut(0) {
+        for p in buf.row(0) {
             // clamped gradient == left on the first row.
             *p = last.wrapping_add(decode());
             last = *p;
@@ -142,7 +143,7 @@ pub(in crate::frame::modular) fn decode_modular_subbitstream(
     // Skip decoding if all grids are zero-sized.
     let is_empty = buffers
         .iter()
-        .all(|buffer| matches!(buffer.data.size(), (0, _) | (_, 0)));
+        .all(|buffer| matches!(buffer.size(), (0, _) | (_, 0)));
     if is_empty {
         return Ok(());
     }
@@ -205,7 +206,7 @@ pub(in crate::frame::modular) fn decode_modular_subbitstream(
         for i in 0..buffers.len() {
             // Keep channel numbering stable, but skip actually decoding empty channels.
             // This matches libjxl, which continues the loop without renumbering.
-            let (w, h) = buffers[i].data.size();
+            let (w, h) = buffers[i].size();
             if w == 0 || h == 0 {
                 continue;
             }

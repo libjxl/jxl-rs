@@ -10,7 +10,7 @@ use jxl_simd::{
 use crate::error::{Error, Result};
 use crate::frame::modular::{ChannelInfo, ModularChannel};
 use crate::headers::modular::SqueezeParams;
-use crate::image::{Image, ImageRect};
+use crate::image::{ImageRect, ImageRectMut};
 use crate::util::tracing_wrappers::*;
 
 #[instrument(level = "trace", err)]
@@ -199,9 +199,9 @@ fn hsqueeze_impl<D: SimdDescriptor>(
     y_start: usize,
     in_avg: &ImageRect<'_, i32>,
     in_res: &ImageRect<'_, i32>,
-    in_next_avg: Option<&Image<i32>>,
-    out_prev: Option<&Image<i32>>,
-    out: &mut Image<i32>,
+    in_next_avg: Option<&ImageRect<'_, i32>>,
+    out_prev: Option<&ImageRect<'_, i32>>,
+    out: &mut ImageRectMut<'_, i32>,
 ) {
     const {
         assert!(D::I32Vec::LEN <= 16);
@@ -274,7 +274,7 @@ fn hsqueeze_impl<D: SimdDescriptor>(
             D::F32Vec::transpose_square(d, buf_arr, 1);
             D::F32Vec::transpose_square(d, &mut buf_arr[lanes..], 1);
             for dy in 0..lanes {
-                let out_row = &mut out.row_mut(y + dy)[2 * x - 2..][..2 * lanes];
+                let out_row = &mut out.row(y + dy)[2 * x - 2..][..2 * lanes];
                 for group in 0..2 {
                     let v = D::F32Vec::load_array(d, &buf_arr[dy + group * lanes]).bitcast_to_i32();
                     v.store(&mut out_row[group * lanes..]);
@@ -343,7 +343,7 @@ fn hsqueeze_impl<D: SimdDescriptor>(
 
         let x_limit = 2 * (remainder_count + 1);
         for dy in 0..lanes {
-            let out_row = &mut out.row_mut(y + dy)[2 * x - 2..];
+            let out_row = &mut out.row(y + dy)[2 * x - 2..];
             for (dx, out) in out_row[..x_limit].iter_mut().enumerate() {
                 let group = dx / lanes;
                 let group_x = dx % lanes;
@@ -353,7 +353,7 @@ fn hsqueeze_impl<D: SimdDescriptor>(
 
         if has_tail {
             for dy in 0..lanes {
-                out.row_mut(y + dy)[2 * w] = in_avg.row(y + dy)[w];
+                out.row(y + dy)[2 * w] = in_avg.row(y + dy)[w];
             }
         }
     }
@@ -391,9 +391,9 @@ fn hsqueeze_scalar(
     y_start: usize,
     in_avg: &ImageRect<'_, i32>,
     in_res: &ImageRect<'_, i32>,
-    in_next_avg: Option<&Image<i32>>,
-    out_prev: Option<&Image<i32>>,
-    out: &mut Image<i32>,
+    in_next_avg: Option<&ImageRect<'_, i32>>,
+    out_prev: Option<&ImageRect<'_, i32>>,
+    out: &mut ImageRectMut<'_, i32>,
 ) {
     let (w, h) = in_res.size();
 
@@ -416,8 +416,8 @@ fn hsqueeze_scalar(
         let x_end = if has_tail { w } else { w - 1 };
         for x in 0..x_end {
             let (a, b) = unsqueeze_scalar(avg_row[x], res_row[x], avg_row[x + 1], prev_b);
-            out.row_mut(y)[2 * x] = a;
-            out.row_mut(y)[2 * x + 1] = b;
+            out.row(y)[2 * x] = a;
+            out.row(y)[2 * x + 1] = b;
             prev_b = b;
         }
         if !has_tail {
@@ -429,11 +429,11 @@ fn hsqueeze_scalar(
                 avg_row[w - 1]
             };
             let (a, b) = unsqueeze_scalar(avg_row[w - 1], res_row[w - 1], last_avg, prev_b);
-            out.row_mut(y)[2 * w - 2] = a;
-            out.row_mut(y)[2 * w - 1] = b;
+            out.row(y)[2 * w - 2] = a;
+            out.row(y)[2 * w - 1] = b;
         } else {
             // 1 last pixel
-            out.row_mut(y)[2 * w] = in_avg.row(y)[w];
+            out.row(y)[2 * w] = in_avg.row(y)[w];
         }
     }
 }
@@ -444,9 +444,9 @@ simd_function!(
     pub fn hsqueeze_fwd(
         in_avg: &ImageRect<'_, i32>,
         in_res: &ImageRect<'_, i32>,
-        in_next_avg: Option<&Image<i32>>,
-        out_prev: Option<&Image<i32>>,
-        out: &mut Image<i32>,
+        in_next_avg: Option<&ImageRect<'_, i32>>,
+        out_prev: Option<&ImageRect<'_, i32>>,
+        out: &mut ImageRectMut<'_, i32>,
     ) {
         hsqueeze_impl(d, 0, in_avg, in_res, in_next_avg, out_prev, out)
     }
@@ -456,28 +456,29 @@ simd_function!(
 pub fn do_hsqueeze_step(
     in_avg: &ImageRect<'_, i32>,
     in_res: &ImageRect<'_, i32>,
-    in_next_avg: Option<&Image<i32>>,
-    out_prev: Option<&Image<i32>>,
+    in_next_avg: Option<&ImageRect<'_, i32>>,
+    out_prev: Option<&ImageRect<'_, i32>>,
     buffers: &mut [&mut ModularChannel],
 ) {
     trace!("hsqueeze step in_avg: {in_avg:?} in_res: {in_res:?} in_next_avg: {in_next_avg:?}");
     let out = buffers.first_mut().unwrap();
+    let mut out_rect = ImageRectMut::<i32>::from_raw(out.data.as_rect_mut());
     // Shortcut: guarantees that row is at least 1px in the main loop
-    if out.data.size().0 == 0 || out.data.size().1 == 0 {
+    if out_rect.size().0 == 0 || out_rect.size().1 == 0 {
         return;
     }
 
     let w = in_res.size().0;
     // Another shortcut: when output row has just 1px
     if w == 0 {
-        let out_h = out.data.size().1;
+        let out_h = out_rect.size().1;
         for y in 0..out_h {
-            out.data.row_mut(y)[0] = in_avg.row(y)[0];
+            out_rect.row(y)[0] = in_avg.row(y)[0];
         }
         return;
     }
     // Otherwise: 2 or more in in row
-    hsqueeze(in_avg, in_res, in_next_avg, out_prev, &mut out.data);
+    hsqueeze(in_avg, in_res, in_next_avg, out_prev, &mut out_rect);
 }
 
 #[inline(always)]
@@ -486,9 +487,9 @@ fn vsqueeze_impl<D: SimdDescriptor>(
     x_start: usize,
     in_avg: &ImageRect<'_, i32>,
     in_res: &ImageRect<'_, i32>,
-    in_next_avg: Option<&Image<i32>>,
-    out_prev: Option<&Image<i32>>,
-    out: &mut Image<i32>,
+    in_next_avg: Option<&ImageRect<'_, i32>>,
+    out_prev: Option<&ImageRect<'_, i32>>,
+    out: &mut ImageRectMut<'_, i32>,
 ) {
     const { assert!(D::I32Vec::LEN.is_power_of_two()) };
 
@@ -522,8 +523,8 @@ fn vsqueeze_impl<D: SimdDescriptor>(
         for y in 0..h - 1 {
             let avg_next = D::I32Vec::load(d, &in_avg.row(y + 1)[x..]);
             let (a, b) = unsqueeze_impl(d, avg_first, res_first, avg_next, prev_b);
-            a.store(&mut out.row_mut(2 * y)[x..]);
-            b.store(&mut out.row_mut(2 * y + 1)[x..]);
+            a.store(&mut out.row(2 * y)[x..]);
+            b.store(&mut out.row(2 * y + 1)[x..]);
             prev_b = b;
             avg_first = avg_next;
             res_first = D::I32Vec::load(d, &in_res.row(y + 1)[x..]);
@@ -537,11 +538,11 @@ fn vsqueeze_impl<D: SimdDescriptor>(
             avg_first
         };
         let (a, b) = unsqueeze_impl(d, avg_first, res_first, avg_last, prev_b);
-        a.store(&mut out.row_mut(2 * h - 2)[x..]);
-        b.store(&mut out.row_mut(2 * h - 1)[x..]);
+        a.store(&mut out.row(2 * h - 2)[x..]);
+        b.store(&mut out.row(2 * h - 1)[x..]);
 
         if has_tail {
-            avg_last.store(&mut out.row_mut(2 * h)[x..]);
+            avg_last.store(&mut out.row(2 * h)[x..]);
         }
     }
 
@@ -578,9 +579,9 @@ fn vsqueeze_scalar(
     x_start: usize,
     in_avg: &ImageRect<'_, i32>,
     in_res: &ImageRect<'_, i32>,
-    in_next_avg: Option<&Image<i32>>,
-    out_prev: Option<&Image<i32>>,
-    out: &mut Image<i32>,
+    in_next_avg: Option<&ImageRect<'_, i32>>,
+    out_prev: Option<&ImageRect<'_, i32>>,
+    out: &mut ImageRectMut<'_, i32>,
 ) {
     let (w, h) = in_res.size();
 
@@ -609,10 +610,11 @@ fn vsqueeze_scalar(
         } else {
             in_avg.row(1)
         };
+        let [out_row0, out_row1] = out.distinct_rows_mut([0, 1]);
         for x in x_start..w {
             let (a, b) = unsqueeze_scalar(avg_row[x], res_row[x], avg_row_next[x], prev_b_row[x]);
-            out.row_mut(0)[x] = a;
-            out.row_mut(1)[x] = b;
+            out_row0[x] = a;
+            out_row1[x] = b;
         }
     }
     for y in 1..h {
@@ -627,19 +629,15 @@ fn vsqueeze_scalar(
         } else {
             avg_row
         };
+        let [prev_b_row, out_row0, out_row1] = out.distinct_rows_mut([2 * y - 1, 2 * y, 2 * y + 1]);
         for x in x_start..w {
-            let (a, b) = unsqueeze_scalar(
-                avg_row[x],
-                res_row[x],
-                avg_row_next[x],
-                out.row(2 * y - 1)[x],
-            );
-            out.row_mut(2 * y)[x] = a;
-            out.row_mut(2 * y + 1)[x] = b;
+            let (a, b) = unsqueeze_scalar(avg_row[x], res_row[x], avg_row_next[x], prev_b_row[x]);
+            out_row0[x] = a;
+            out_row1[x] = b;
         }
     }
     if has_tail {
-        out.row_mut(2 * h)[x_start..].copy_from_slice(&in_avg.row(h)[x_start..]);
+        out.row(2 * h)[x_start..].copy_from_slice(&in_avg.row(h)[x_start..]);
     }
 }
 
@@ -649,9 +647,9 @@ simd_function!(
     pub fn vsqueeze_fwd(
         in_avg: &ImageRect<'_, i32>,
         in_res: &ImageRect<'_, i32>,
-        in_next_avg: Option<&Image<i32>>,
-        out_prev: Option<&Image<i32>>,
-        out: &mut Image<i32>,
+        in_next_avg: Option<&ImageRect<'_, i32>>,
+        out_prev: Option<&ImageRect<'_, i32>>,
+        out: &mut ImageRectMut<'_, i32>,
     ) {
         vsqueeze_impl(d, 0, in_avg, in_res, in_next_avg, out_prev, out)
     }
@@ -661,22 +659,23 @@ simd_function!(
 pub fn do_vsqueeze_step(
     in_avg: &ImageRect<'_, i32>,
     in_res: &ImageRect<'_, i32>,
-    in_next_avg: Option<&Image<i32>>,
-    out_prev: Option<&Image<i32>>,
+    in_next_avg: Option<&ImageRect<'_, i32>>,
+    out_prev: Option<&ImageRect<'_, i32>>,
     buffers: &mut [&mut ModularChannel],
 ) {
     trace!("vsqueeze step in_avg: {in_avg:?} in_res: {in_res:?} in_next_avg: {in_next_avg:?}");
-    let out = &mut buffers.first_mut().unwrap().data;
+    let out = buffers.first_mut().unwrap();
+    let mut out_rect = ImageRectMut::<i32>::from_raw(out.data.as_rect_mut());
     // Shortcut: guarantees that there at least 1 output row
-    if out.size().1 == 0 || out.size().0 == 0 {
+    if out_rect.size().1 == 0 || out_rect.size().0 == 0 {
         return;
     }
     // Another shortcut: when there is one output row
     if in_res.size().1 == 0 {
-        out.row_mut(0).copy_from_slice(in_avg.row(0));
+        out_rect.row(0).copy_from_slice(in_avg.row(0));
         return;
     }
     // Otherwise: 2 or more rows
 
-    vsqueeze(in_avg, in_res, in_next_avg, out_prev, out);
+    vsqueeze(in_avg, in_res, in_next_avg, out_prev, &mut out_rect);
 }

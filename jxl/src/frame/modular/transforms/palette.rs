@@ -7,7 +7,7 @@ use crate::error::Result;
 use crate::frame::modular::predict::{PredictionData, WeightedPredictorState};
 use crate::frame::modular::{ModularChannel, Predictor};
 use crate::headers::modular::WeightedHeader;
-use crate::image::Image;
+use crate::image::{Image, ImageRect, ImageRectMut};
 use crate::util::sync::RwLockWriteGuard;
 
 const RGB_CHANNELS: usize = 3;
@@ -36,7 +36,7 @@ fn scale<const DENOM: usize>(value: usize, bit_depth: usize) -> i32 {
 // result is a delta palette entry, it is the responsibility of the caller to
 // treat it as such.
 fn get_palette_value(
-    palette: &Image<i32>,
+    palette: ImageRect<'_, i32>,
     index: isize,
     c: usize,
     palette_size: usize,
@@ -172,8 +172,9 @@ pub fn do_palette_step_general(
     predictor: Predictor,
     wp_header: &WeightedHeader,
 ) {
-    let (w, h) = buf_in.data.size();
-    let palette = &buf_pal.data;
+    let in_rect = ImageRect::<i32>::from_raw(buf_in.data.as_rect());
+    let (w, h) = in_rect.size();
+    let palette = ImageRect::<i32>::from_raw(buf_pal.data.as_rect());
     let bit_depth = buf_in.bit_depth.bits_per_sample().min(24) as usize;
 
     if w == 0 {
@@ -181,9 +182,10 @@ pub fn do_palette_step_general(
         // Avoid touching "empty" channels with non-zero height.
     } else if num_deltas == 0 && predictor == Predictor::Zero {
         for (chan_index, out) in buf_out.iter_mut().enumerate() {
+            let mut out_rect = ImageRectMut::<i32>::from_raw(out.data.as_rect_mut());
             for y in 0..h {
-                let row_index = buf_in.data.row(y);
-                let row_out = out.data.row_mut(y);
+                let row_index = in_rect.row(y);
+                let row_out = out_rect.row(y);
                 for x in 0..w {
                     let index = row_index[x];
                     let palette_value = get_palette_value(
@@ -198,11 +200,11 @@ pub fn do_palette_step_general(
             }
         }
     } else if predictor == Predictor::Weighted {
-        let w = buf_in.data.size().0;
         for (chan_index, out) in buf_out.iter_mut().enumerate() {
+            let mut out_rect = ImageRectMut::<i32>::from_raw(out.data.as_rect_mut());
             let mut wp_state = WeightedPredictorState::new(wp_header, w);
             for y in 0..h {
-                let idx = buf_in.data.row(y);
+                let idx = in_rect.row(y);
                 for (x, &index) in idx.iter().enumerate() {
                     let palette_entry = get_palette_value(
                         palette,
@@ -211,7 +213,7 @@ pub fn do_palette_step_general(
                         /*palette_size=*/ num_colors + num_deltas,
                         /*bit_depth=*/ bit_depth,
                     );
-                    let prediction_data = PredictionData::get(&out.data, x, y);
+                    let prediction_data = PredictionData::get(out_rect.as_rect(), x, y);
                     let (wp_pred, _) = wp_state.predict_and_property((x, y), &prediction_data);
                     let pred = predictor.predict_one(prediction_data, wp_pred);
                     let val = if index < num_deltas as i32 {
@@ -219,15 +221,16 @@ pub fn do_palette_step_general(
                     } else {
                         palette_entry
                     };
-                    out.data.row_mut(y)[x] = val;
+                    out_rect.row(y)[x] = val;
                     wp_state.update_errors(val, (x, y));
                 }
             }
         }
     } else {
         for (chan_index, out) in buf_out.iter_mut().enumerate() {
+            let mut out_rect = ImageRectMut::<i32>::from_raw(out.data.as_rect_mut());
             for y in 0..h {
-                let idx = buf_in.data.row(y);
+                let idx = in_rect.row(y);
                 for (x, &index) in idx.iter().enumerate() {
                     let palette_entry = get_palette_value(
                         palette,
@@ -237,13 +240,15 @@ pub fn do_palette_step_general(
                         /*bit_depth=*/ bit_depth,
                     );
                     let val = if index < num_deltas as i32 {
-                        let pred = predictor
-                            .predict_one(PredictionData::get(&out.data, x, y), /*wp_pred=*/ 0);
+                        let pred = predictor.predict_one(
+                            PredictionData::get(out_rect.as_rect(), x, y),
+                            /*wp_pred=*/ 0,
+                        );
                         (pred + palette_entry as i64) as i32
                     } else {
                         palette_entry
                     };
-                    out.data.row_mut(y)[x] = val;
+                    out_rect.row(y)[x] = val;
                 }
             }
         }
@@ -262,16 +267,17 @@ pub fn do_palette_step_one_group(
     buf_in: &ModularChannel,
     buf_pal: &ModularChannel,
     buf_out: &mut [&mut ModularChannel],
-    buf_left: Option<&[&Image<i32>]>,
-    buf_top: Option<&[&Image<i32>]>,
-    buf_topleft: Option<&[&Image<i32>]>,
+    buf_left: Option<&[ImageRect<'_, i32>]>,
+    buf_top: Option<&[ImageRect<'_, i32>]>,
+    buf_topleft: Option<&[ImageRect<'_, i32>]>,
     num_colors: usize,
     num_deltas: usize,
     predictor: Predictor,
     scratch: &mut [Vec<i32>; 2],
 ) {
-    let (w, h) = buf_in.data.size();
-    let palette = &buf_pal.data;
+    let in_rect = ImageRect::<i32>::from_raw(buf_in.data.as_rect());
+    let (w, h) = in_rect.size();
+    let palette = ImageRect::<i32>::from_raw(buf_pal.data.as_rect());
     let bit_depth = buf_in.bit_depth.bits_per_sample().min(24) as usize;
     let num_c = buf_out.len();
 
@@ -279,10 +285,11 @@ pub fn do_palette_step_one_group(
     row_top.resize(w + 2, 0);
 
     for c in 0..num_c {
+        let mut out_rect = ImageRectMut::<i32>::from_raw(buf_out[c].data.as_rect_mut());
         for y in 0..h {
             let has_top = y > 0 || buf_top.is_some();
             if y > 0 {
-                let prev_row = buf_out[c].data.row(y - 1);
+                let prev_row = out_rect.row(y - 1);
                 let topleft = buf_left.map(|l| l[c].row(y - 1)[3]);
                 stage_padded_top_row(row_top, &prev_row[..w], topleft);
             } else if let Some(top) = buf_top {
@@ -304,8 +311,8 @@ pub fn do_palette_step_one_group(
                 left
             };
 
-            let index_img = buf_in.data.row(y);
-            let out_row = buf_out[c].data.row_mut(y);
+            let index_img = in_rect.row(y);
+            let out_row = out_rect.row(y);
             for (x, &index) in index_img.iter().enumerate() {
                 let palette_entry = get_palette_value(
                     palette,
@@ -353,11 +360,12 @@ pub fn zero_palette_step_one_group(
     num_colors: usize,
     num_deltas: usize,
 ) {
-    let (_w, h) = buf_out[0].data.size();
-    let palette = &buf_pal.data;
+    let palette = ImageRect::<i32>::from_raw(buf_pal.data.as_rect());
     let bit_depth = buf_out[0].bit_depth.bits_per_sample().min(24) as usize;
 
     for (c, out) in buf_out.iter_mut().enumerate() {
+        let mut out_rect = ImageRectMut::<i32>::from_raw(out.data.as_rect_mut());
+        let (_w, h) = out_rect.size();
         let palette_entry = get_palette_value(
             palette,
             0,
@@ -366,7 +374,7 @@ pub fn zero_palette_step_one_group(
             /*bit_depth=*/ bit_depth,
         );
         for y in 0..h {
-            out.data.row_mut(y).fill(palette_entry);
+            out_rect.row(y).fill(palette_entry);
         }
     }
 }
@@ -376,7 +384,7 @@ pub fn do_palette_step_group_row(
     buf_in: &[&ModularChannel],
     buf_pal: &ModularChannel,
     buf_out: &mut [&mut ModularChannel],
-    buf_prev: Option<&[&Image<i32>]>,
+    buf_prev: Option<&[ImageRect<'_, i32>]>,
     prev_aux: Option<&[Option<&Image<i32>>]>,
     aux_out: &mut [RwLockWriteGuard<Option<Image<i32>>>],
     grid_xsize: usize,
@@ -386,15 +394,12 @@ pub fn do_palette_step_group_row(
     wp_header: &WeightedHeader,
     scratch: &mut [Vec<i32>; 2],
 ) -> Result<()> {
-    let (_, h) = buf_in[0].data.size();
-    let palette = &buf_pal.data;
+    let (_, h) = ImageRect::<i32>::from_raw(buf_in[0].data.as_rect()).size();
+    let palette = ImageRect::<i32>::from_raw(buf_pal.data.as_rect());
     let bit_depth = buf_in[0].bit_depth.bits_per_sample().min(24) as usize;
     let num_c = buf_out.len() / grid_xsize;
 
-    let total_w: usize = buf_out[..grid_xsize]
-        .iter()
-        .map(|buf| buf.data.size().0)
-        .sum();
+    let total_w: usize = buf_out[..grid_xsize].iter().map(|buf| buf.size().0).sum();
 
     scratch[0].resize(total_w, 0);
     scratch[1].resize(total_w, 0);
@@ -414,7 +419,7 @@ pub fn do_palette_step_group_row(
         if let Some(prev) = buf_prev {
             let mut x_offset = 0;
             for grid_x in 0..grid_xsize {
-                let prev_img = prev[out_row_idx + grid_x];
+                let prev_img = &prev[out_row_idx + grid_x];
                 let w = prev_img.size().0;
                 scratch[0][x_offset..x_offset + w].copy_from_slice(prev_img.row(3));
                 scratch[1][x_offset..x_offset + w].copy_from_slice(prev_img.row(2));
@@ -439,9 +444,12 @@ pub fn do_palette_step_group_row(
 
             let mut gx = 0;
             for (grid_x, index_buf) in buf_in.iter().enumerate().take(grid_xsize) {
-                let index_img = index_buf.data.row(y);
+                let in_rect = ImageRect::<i32>::from_raw(index_buf.data.as_rect());
+                let index_img = in_rect.row(y);
                 let out_idx = out_row_idx + grid_x;
-                let out_row = buf_out[out_idx].data.row_mut(y);
+                let mut out_rect =
+                    ImageRectMut::<i32>::from_raw(buf_out[out_idx].data.as_rect_mut());
+                let out_row = out_rect.row(y);
                 for (x, &index) in index_img.iter().enumerate() {
                     let palette_entry = get_palette_value(
                         palette,
