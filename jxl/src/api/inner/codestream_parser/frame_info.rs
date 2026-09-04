@@ -144,7 +144,7 @@ impl FrameInfo {
         frame_header.postprocess(&nonserialized);
         check_size_limit(
             decode_options.sample_limit,
-            frame_header.size(),
+            frame_header.size_upsampled(),
             frame_header.num_extra_channels as usize,
         )?;
 
