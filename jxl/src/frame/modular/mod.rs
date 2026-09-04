@@ -21,7 +21,7 @@ use crate::headers::bit_depth::BitDepth;
 use crate::headers::frame_header::FrameHeader;
 use crate::headers::modular::{GroupHeader, TransformId};
 use crate::headers::{ImageMetadata, JxlHeader};
-use crate::image::{BufferRecycler, Image, Rect};
+use crate::image::{BufferRecycler, Image, ImageRect, Rect};
 use crate::render::buffer_splitter::OutputChannelRef;
 use crate::util::sync::Mutex;
 use crate::util::sync::atomic::{AtomicBool, Ordering};
@@ -906,7 +906,7 @@ fn dequant_lf(
     r: Rect,
     lf: &mut [OutputChannelRef],
     quant_lf: &mut OutputChannelRef,
-    input: [&Image<i32>; 3],
+    input: [ImageRect<'_, i32>; 3],
     color_correlation_params: &ColorCorrelationParams,
     quant_params: &QuantizerParams,
     lf_quant: &LfQuantFactors,
@@ -950,7 +950,7 @@ fn dequant_lf(
                 r.size.1 >> frame_header.vshift(c),
             );
             let fac = lf_factors[c] * mul;
-            let ch = input[if c < 2 { c ^ 1 } else { c }];
+            let ch = &input[if c < 2 { c ^ 1 } else { c }];
             for y in 0..rect_size.1 {
                 let quant_row = ch.row(y);
                 let row = lf[c].typed_row_mut::<f32>(y);
@@ -1043,7 +1043,11 @@ pub(super) fn decode_vardct_lf(
         r,
         lf,
         quant_lf,
-        [&buffers[0].data, &buffers[1].data, &buffers[2].data],
+        [
+            ImageRect::<i32>::from_raw(buffers[0].data.as_rect()),
+            ImageRect::<i32>::from_raw(buffers[1].data.as_rect()),
+            ImageRect::<i32>::from_raw(buffers[2].data.as_rect()),
+        ],
         color_correlation_params,
         quant_params,
         lf_quant,
@@ -1089,13 +1093,13 @@ pub(super) fn decode_hf_metadata(
         None,
         scratch_space,
     )?;
-    let ytox_image = &buffers[0].data;
-    let ytob_image = &buffers[1].data;
+    let ytox_rect = ImageRect::<i32>::from_raw(buffers[0].data.as_rect());
+    let ytob_rect = ImageRect::<i32>::from_raw(buffers[1].data.as_rect());
     let i8min: i32 = i8::MIN.into();
     let i8max: i32 = i8::MAX.into();
     for y in 0..cr.size.1 {
-        let row_in_x = ytox_image.row(y);
-        let row_in_b = ytob_image.row(y);
+        let row_in_x = ytox_rect.row(y);
+        let row_in_b = ytob_rect.row(y);
         let row_out_x = hf_meta.ytox_map.typed_row_mut::<i8>(y);
         let row_out_b = hf_meta.ytob_map.typed_row_mut::<i8>(y);
         for x in 0..cr.size.0 {
@@ -1103,11 +1107,11 @@ pub(super) fn decode_hf_metadata(
             row_out_b[x] = row_in_b[x].clamp(i8min, i8max) as i8;
         }
     }
-    let transform_image = &buffers[2].data;
-    let epf_image = &buffers[3].data;
+    let transform_rect = ImageRect::<i32>::from_raw(buffers[2].data.as_rect());
+    let epf_rect = ImageRect::<i32>::from_raw(buffers[3].data.as_rect());
     let mut num: usize = 0;
     for y in 0..r.size.1 {
-        let epf_row_in = epf_image.row(y);
+        let epf_row_in = epf_rect.row(y);
         let epf_row_out = hf_meta.epf_map.typed_row_mut::<u8>(y);
         for x in 0..r.size.0 {
             let epf_val = epf_row_in[x];
@@ -1122,8 +1126,8 @@ pub(super) fn decode_hf_metadata(
             if num >= count {
                 return Err(Error::InvalidVarDCTTransformMap);
             }
-            let raw_transform = transform_image.row(0)[num];
-            let raw_quant = 1 + transform_image.row(1)[num].clamp(0, 255);
+            let raw_transform = transform_rect.row(0)[num];
+            let raw_quant = 1 + transform_rect.row(1)[num].clamp(0, 255);
             let transform_type = HfTransformType::from_usize(raw_transform as usize)
                 .ok_or(Error::InvalidVarDCTTransform(raw_transform as usize))?;
 
@@ -1180,17 +1184,16 @@ pub(super) fn decode_quant_table(
     )?;
     let mut qtable = Vec::with_capacity(required_size_x * required_size_y * 3);
     for channel in image.iter_mut() {
-        for entry in channel
-            .data
-            .get_rect(Rect {
-                size: (required_size_x, required_size_y),
-                origin: (0, 0),
-            })
-            .iter()
-        {
-            qtable.push(entry);
-            if entry <= 0 {
-                return Err(Error::InvalidRawQuantTable);
+        let rect = ImageRect::<i32>::from_raw(channel.data.as_rect()).rect(Rect {
+            size: (required_size_x, required_size_y),
+            origin: (0, 0),
+        });
+        for y in 0..required_size_y {
+            for &entry in rect.row(y) {
+                qtable.push(entry);
+                if entry <= 0 {
+                    return Err(Error::InvalidRawQuantTable);
+                }
             }
         }
     }

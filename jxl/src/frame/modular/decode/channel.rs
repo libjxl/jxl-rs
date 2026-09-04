@@ -13,7 +13,7 @@ use crate::frame::modular::predict::{PredictionData, WeightedPredictorState};
 use crate::frame::modular::tree::{NUM_NONREF_PROPERTIES, PROPERTIES_PER_PREVCHAN, predict};
 use crate::frame::modular::{ModularChannel, Tree};
 use crate::headers::modular::{GroupHeader, WeightedHeader};
-use crate::image::Image;
+use crate::image::{Image, ImageRectMut};
 use crate::util::tracing_wrappers::*;
 
 const SMALL_CHANNEL_THRESHOLD: usize = 64;
@@ -48,15 +48,15 @@ pub(super) trait ModularChannelDecoder {
         xsize: usize,
     ) {
         self.init_row(buffers, chan, y);
+        let mut rect = ImageRectMut::<i32>::from_raw(buffers[chan].data.as_rect_mut());
         let (row, row_top, row_toptop) = match y {
-            0 => (buffers[chan].data.row_mut(0), &mut [][..], &mut [][..]),
+            0 => (rect.row(0), &mut [][..], &mut [][..]),
             1 => {
-                let [row, row_top] = buffers[chan].data.distinct_rows_mut([1, 0]);
+                let [row, row_top] = rect.distinct_rows_mut([1, 0]);
                 (row, row_top, &mut [][..])
             }
             _ => {
-                let [row, row_top, row_toptop] =
-                    buffers[chan].data.distinct_rows_mut([y, y - 1, y - 2]);
+                let [row, row_top, row_toptop] = rect.distinct_rows_mut([y, y - 1, y - 2]);
                 (row, row_top, row_toptop)
             }
         };
@@ -167,18 +167,19 @@ impl<'a> ModularChannelDecoder for FullTree<'a> {
         xsize: usize,
     ) {
         self.init_row(buffers, chan, y);
+        let mut rect = ImageRectMut::<i32>::from_raw(buffers[chan].data.as_rect_mut());
         let (row, row_top, row_toptop) = match y {
-            0 => (buffers[chan].data.row_mut(0), &mut [][..], &mut [][..]),
+            0 => (rect.row(0), &mut [][..], &mut [][..]),
             1 => {
-                let [row, row_top] = buffers[chan].data.distinct_rows_mut([1, 0]);
+                let [row, row_top] = rect.distinct_rows_mut([1, 0]);
                 (row, row_top, &mut [][..])
             }
             _ => {
-                let [row, row_top, row_toptop] =
-                    buffers[chan].data.distinct_rows_mut([y, y - 1, y - 2]);
+                let [row, row_top, row_toptop] = rect.distinct_rows_mut([y, y - 1, y - 2]);
                 (row, row_top, row_toptop)
             }
         };
+
         for x in 0..xsize {
             let prediction_data = PredictionData::get_rows(row, row_top, row_toptop, x, y);
             let prediction_result = predict(
@@ -207,7 +208,7 @@ fn decode_modular_channel_impl(
     reader: &mut SymbolReader,
     br: &mut BitReader,
 ) -> Result<()> {
-    let size = buffers[chan].data.size();
+    let size = buffers[chan].size();
     let xsize = size.0;
     for y in 0..size.1 {
         t.decode_row(buffers, chan, histo, reader, br, y, xsize);
@@ -227,7 +228,7 @@ pub(super) fn decode_modular_channel(
     br: &mut BitReader,
 ) -> Result<()> {
     debug!("reading channel");
-    let size = buffers[chan].data.size();
+    let size = buffers[chan].size();
     if size.0 <= 4 || size.1 <= 2 || size.0 * size.1 <= SMALL_CHANNEL_THRESHOLD {
         let mut decoder = FullTree::new(tree, &header.wp_header, chan, stream_id, size.0)?;
         decode_modular_channel_impl(&mut decoder, buffers, chan, &tree.histograms, reader, br)?;

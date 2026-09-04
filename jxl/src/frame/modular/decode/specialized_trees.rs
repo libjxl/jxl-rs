@@ -18,7 +18,7 @@ use crate::frame::modular::tree::{
 };
 use crate::frame::modular::{ModularChannel, Predictor, Tree};
 use crate::headers::modular::GroupHeader;
-use crate::image::Image;
+use crate::image::{Image, ImageRectMut};
 
 trait MaybeWeightedPredictor: Sized {
     fn predict(
@@ -397,7 +397,8 @@ impl ModularChannelDecoder for NoTreeZero {
         y: usize,
         xsize: usize,
     ) {
-        let row = buffers[chan].data.row_mut(y);
+        let mut rect = ImageRectMut::<i32>::from_raw(buffers[chan].data.as_rect_mut());
+        let row = rect.row(y);
         debug_assert_eq!(row.len(), xsize);
         if let Some(sym) = self.single_value {
             row.fill(make_pixel(sym, self.multiplier, self.offset));
