@@ -12,6 +12,22 @@ use crate::image::{BufferRecycler, Image, ImageRect, OwnedRawImage};
 use crate::util::sync::atomic::{AtomicUsize, Ordering};
 use crate::util::sync::{Mutex, RwLock};
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ModularStorage {
+    I16,
+    I32,
+}
+
+impl ModularStorage {
+    #[inline(always)]
+    pub const fn sample_size(self) -> usize {
+        match self {
+            ModularStorage::I16 => 2,
+            ModularStorage::I32 => 4,
+        }
+    }
+}
+
 // All the information on a specific buffer needed by Modular decoding.
 #[derive(Debug)]
 pub(super) struct ModularChannel {
@@ -23,17 +39,19 @@ pub(super) struct ModularChannel {
 }
 
 impl ModularChannel {
-    pub fn new(size: (usize, usize), bit_depth: BitDepth) -> Result<Self> {
-        Self::new_with_shift(size, Some((0, 0)), bit_depth)
+    pub fn new(size: (usize, usize), storage: ModularStorage, bit_depth: BitDepth) -> Result<Self> {
+        Self::new_with_shift(size, storage, Some((0, 0)), bit_depth)
     }
 
     pub fn new_with_shift(
         size: (usize, usize),
+        storage: ModularStorage,
         shift: Option<(usize, usize)>,
         bit_depth: BitDepth,
     ) -> Result<Self> {
+        let sample_size = storage.sample_size();
         Ok(ModularChannel {
-            data: OwnedRawImage::new((size.0 * 4, size.1))?,
+            data: OwnedRawImage::new((size.0 * sample_size, size.1))?,
             shift,
             bit_depth,
         })
@@ -47,10 +65,10 @@ impl ModularChannel {
         })
     }
 
-    pub fn channel_info(&self) -> ChannelInfo {
+    pub fn channel_info(&self, storage: ModularStorage) -> ChannelInfo {
         ChannelInfo {
             output_channel_idx: None,
-            size: self.size(),
+            size: self.size(storage),
             shift: self.shift,
             bit_depth: self.bit_depth,
             followed_by_palette: false,
@@ -58,8 +76,12 @@ impl ModularChannel {
     }
 
     #[inline(always)]
-    pub fn size(&self) -> (usize, usize) {
-        (self.data.byte_size().0 / 4, self.data.byte_size().1)
+    pub fn size(&self, storage: ModularStorage) -> (usize, usize) {
+        let sample_size = storage.sample_size();
+        (
+            self.data.byte_size().0 / sample_size,
+            self.data.byte_size().1,
+        )
     }
 }
 
@@ -146,7 +168,11 @@ impl ModularBuffer {
         self.topbottom.try_read().unwrap().is_some() || self.leftright.try_read().unwrap().is_some()
     }
 
-    pub fn extract_needed_borders(&self, recycler: &BufferRecycler) -> Result<()> {
+    pub fn extract_needed_borders(
+        &self,
+        storage: ModularStorage,
+        recycler: &BufferRecycler,
+    ) -> Result<()> {
         if self.needed_borders.is_empty() {
             return Ok(());
         }
@@ -154,13 +180,15 @@ impl ModularBuffer {
         let Some(chan) = data_guard.as_ref() else {
             return Ok(());
         };
-        let (w, h) = chan.size();
+        let (w, h) = chan.size(storage);
         if w == 0 || h == 0 {
             return Ok(());
         }
 
+        let sample_size = storage.sample_size();
+
         if self.needed_borders.topbottom {
-            let mut topbottom = recycler.get_raw_buffer((w * 4, 4))?;
+            let mut topbottom = recycler.get_raw_buffer((w * sample_size, 4))?;
             let r0 = chan.data.row(0);
             let r1 = if h > 1 { chan.data.row(1) } else { r0 };
             let rb0 = if h > 1 { chan.data.row(h - 2) } else { r0 };
@@ -173,17 +201,35 @@ impl ModularBuffer {
         }
 
         if self.needed_borders.leftright {
-            let in_rect = ImageRect::<i32>::from_raw(chan.data.as_rect());
-            let mut leftright = recycler.get_buffer::<i32>((4, h))?;
-            for y in 0..h {
-                let r = in_rect.row(y);
-                let out = leftright.row_mut(y);
-                out[0] = r[0];
-                out[1] = if w > 1 { r[1] } else { r[0] };
-                out[2] = if w > 1 { r[w - 2] } else { r[0] };
-                out[3] = r[w - 1];
-            }
-            *self.leftright.try_write().unwrap() = Some(leftright.into_raw());
+            let leftright = match storage {
+                ModularStorage::I16 => {
+                    let in_rect = ImageRect::<i16>::from_raw(chan.data.as_rect());
+                    let mut leftright = recycler.get_buffer::<i16>((4, h))?;
+                    for y in 0..h {
+                        let r = in_rect.row(y);
+                        let out = leftright.row_mut(y);
+                        out[0] = r[0];
+                        out[1] = if w > 1 { r[1] } else { r[0] };
+                        out[2] = if w > 1 { r[w - 2] } else { r[0] };
+                        out[3] = r[w - 1];
+                    }
+                    leftright.into_raw()
+                }
+                ModularStorage::I32 => {
+                    let in_rect = ImageRect::<i32>::from_raw(chan.data.as_rect());
+                    let mut leftright = recycler.get_buffer::<i32>((4, h))?;
+                    for y in 0..h {
+                        let r = in_rect.row(y);
+                        let out = leftright.row_mut(y);
+                        out[0] = r[0];
+                        out[1] = if w > 1 { r[1] } else { r[0] };
+                        out[2] = if w > 1 { r[w - 2] } else { r[0] };
+                        out[3] = r[w - 1];
+                    }
+                    leftright.into_raw()
+                }
+            };
+            *self.leftright.try_write().unwrap() = Some(leftright);
         }
 
         Ok(())
@@ -192,9 +238,11 @@ impl ModularBuffer {
     pub fn make_buffer(
         &self,
         info: &ChannelInfo,
+        storage: ModularStorage,
         recycler: &BufferRecycler,
     ) -> Result<ModularChannel> {
-        let data = recycler.get_raw_buffer((self.size.0 * 4, self.size.1))?;
+        let sample_size = storage.sample_size();
+        let data = recycler.get_raw_buffer((self.size.0 * sample_size, self.size.1))?;
         Ok(ModularChannel {
             data,
             shift: info.shift,
@@ -202,9 +250,14 @@ impl ModularBuffer {
         })
     }
 
-    pub fn ensure_buffer(&self, info: &ChannelInfo, recycler: &BufferRecycler) -> Result<()> {
+    pub fn ensure_buffer(
+        &self,
+        info: &ChannelInfo,
+        storage: ModularStorage,
+        recycler: &BufferRecycler,
+    ) -> Result<()> {
         if !self.has_buffer() {
-            let buf = self.make_buffer(info, recycler)?;
+            let buf = self.make_buffer(info, storage, recycler)?;
             *self.data.try_write().unwrap() = Some(buf);
         }
         Ok(())
@@ -310,7 +363,7 @@ pub fn with_buffers<T>(
         // Allocate buffers if they are not present.
         let buf = &buffers[*i];
         let b = &buf.buffer_grid[grid];
-        b.ensure_buffer(&buf.info, recycler)?;
+        b.ensure_buffer(&buf.info, buf.storage, recycler)?;
 
         // Skip zero-sized *tiles*.
         //

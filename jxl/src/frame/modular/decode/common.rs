@@ -3,8 +3,8 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-use crate::frame::modular::ModularChannel;
 use crate::frame::modular::predict::clamped_gradient;
+use crate::frame::modular::{ModularChannel, ModularStorage};
 use crate::frame::quantizer::NUM_QUANT_TABLES;
 use crate::headers::frame_header::FrameHeader;
 use crate::image::{Image, ImageRect};
@@ -42,6 +42,7 @@ pub(super) fn precompute_references(
     chan: usize,
     y: usize,
     references: &mut Image<i32>,
+    storage: ModularStorage,
 ) {
     if references.size().0 == 0 {
         return;
@@ -54,13 +55,15 @@ pub(super) fn precompute_references(
             break;
         }
         let j = chan - i - 1;
-        if buffers[j].size() != buffers[chan].size() || buffers[j].shift != buffers[chan].shift {
+        if buffers[j].size(storage) != buffers[chan].size(storage)
+            || buffers[j].shift != buffers[chan].shift
+        {
             continue;
         }
         let ref_rect = ImageRect::<i32>::from_raw(buffers[j].data.as_rect());
         let ref_chan_row = ref_rect.row(y);
         let ref_chan_prev = ref_rect.row(y.saturating_sub(1));
-        for x in 0..buffers[chan].size().0 {
+        for x in 0..buffers[chan].size(storage).0 {
             let ref_row = references.row_mut(x);
             let v = ref_chan_row[x];
             ref_row[offset] = v.wrapping_abs();

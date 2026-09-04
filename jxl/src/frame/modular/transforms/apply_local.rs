@@ -9,7 +9,7 @@ use crate::frame::modular::buffers::ModularChannel;
 use crate::frame::modular::transforms::meta_apply::meta_apply_single_transform;
 use crate::frame::modular::transforms::palette::PaletteStep;
 use crate::frame::modular::transforms::step::TransformStep;
-use crate::frame::modular::{ChannelInfo, ScratchSpace, max_channels};
+use crate::frame::modular::{ChannelInfo, ModularStorage, ScratchSpace, max_channels};
 use crate::headers::modular::GroupHeader;
 use crate::image::ImageRect;
 use crate::util::tracing_wrappers::*;
@@ -27,12 +27,12 @@ pub enum LocalTransformBuffer<'a> {
 }
 
 impl LocalTransformBuffer<'_> {
-    fn channel_info(&self) -> ChannelInfo {
+    fn channel_info(&self, storage: ModularStorage) -> ChannelInfo {
         match self {
             LocalTransformBuffer::Empty => unreachable!("an empty buffer has no channel info"),
-            LocalTransformBuffer::Owned(m) => m.channel_info(),
+            LocalTransformBuffer::Owned(m) => m.channel_info(storage),
             LocalTransformBuffer::Placeholder(c) => *c,
-            LocalTransformBuffer::Borrowed(m) => m.channel_info(),
+            LocalTransformBuffer::Borrowed(m) => m.channel_info(storage),
         }
     }
 
@@ -54,10 +54,11 @@ impl LocalTransformBuffer<'_> {
         r
     }
 
-    fn allocate_if_needed(&mut self) -> Result<()> {
+    fn allocate_if_needed(&mut self, storage: ModularStorage) -> Result<()> {
         if let LocalTransformBuffer::Placeholder(c) = self {
             *self = LocalTransformBuffer::Owned(ModularChannel::new_with_shift(
                 c.size,
+                storage,
                 c.shift,
                 c.bit_depth,
             )?);
@@ -71,13 +72,14 @@ pub fn meta_apply_local_transforms<'a, 'b>(
     channels_in: Vec<&'a mut ModularChannel>,
     buffer_storage: &'b mut Vec<LocalTransformBuffer<'a>>,
     header: &GroupHeader,
+    storage: ModularStorage,
 ) -> Result<(Vec<&'b mut ModularChannel>, Vec<TransformStep>)> {
     let mut transform_steps = vec![];
 
     // (buffer id, channel info)
     let mut channels: Vec<_> = channels_in
         .iter()
-        .map(|x| x.channel_info())
+        .map(|x| x.channel_info(storage))
         .enumerate()
         .collect();
 
@@ -199,8 +201,8 @@ pub fn meta_apply_local_transforms<'a, 'b>(
             for c in 0..3 {
                 assert!(
                     buffer_storage[buf_in[c]]
-                        .channel_info()
-                        .is_equivalent(&buffer_storage[buf_out[c]].channel_info())
+                        .channel_info(storage)
+                        .is_equivalent(&buffer_storage[buf_out[c]].channel_info(storage))
                 );
                 assert!(matches!(
                     buffer_storage[buf_in[c]],
@@ -215,7 +217,7 @@ pub fn meta_apply_local_transforms<'a, 'b>(
 
     // Allocate all the coded channels if they aren't yet.
     for (buf, _) in channels.iter() {
-        buffer_storage[*buf].allocate_if_needed()?;
+        buffer_storage[*buf].allocate_if_needed(storage)?;
     }
 
     debug!(?channels, ?buffer_storage, "allocated buffers");
@@ -246,6 +248,7 @@ impl TransformStep {
         &self,
         buffers: &mut [LocalTransformBuffer],
         scratch_space: &mut ScratchSpace,
+        storage: ModularStorage,
     ) -> Result<()> {
         match self {
             TransformStep::Rct {
@@ -257,8 +260,8 @@ impl TransformStep {
                 for i in 0..3 {
                     assert!(
                         buffers[buf_in[i]]
-                            .channel_info()
-                            .is_equivalent(&buffers[buf_out[i]].channel_info())
+                            .channel_info(storage)
+                            .is_equivalent(&buffers[buf_out[i]].channel_info(storage))
                     );
                 }
                 let [mut a, mut b, mut c] = [
@@ -284,10 +287,10 @@ impl TransformStep {
             } => {
                 for b in buf_out.iter() {
                     assert_eq!(
-                        buffers[*b].channel_info().size,
-                        buffers[*buf_in].channel_info().size
+                        buffers[*b].channel_info(storage).size,
+                        buffers[*buf_in].channel_info(storage).size
                     );
-                    buffers[*b].allocate_if_needed()?;
+                    buffers[*b].allocate_if_needed(storage)?;
                 }
                 let mut img_in = buffers[*buf_in].take();
                 let mut img_pal = buffers[*buf_pal].take();
@@ -318,7 +321,7 @@ impl TransformStep {
             TransformStep::HSqueeze {
                 buf_in, buf_out, ..
             } => {
-                buffers[*buf_out].allocate_if_needed()?;
+                buffers[*buf_out].allocate_if_needed(storage)?;
                 let mut out_buf = buffers[*buf_out].take();
                 let mut in_avg = buffers[buf_in[0]].take();
                 let mut in_res = buffers[buf_in[1]].take();
@@ -341,7 +344,7 @@ impl TransformStep {
             TransformStep::VSqueeze {
                 buf_in, buf_out, ..
             } => {
-                buffers[*buf_out].allocate_if_needed()?;
+                buffers[*buf_out].allocate_if_needed(storage)?;
                 let mut out_buf = buffers[*buf_out].take();
                 let mut in_avg = buffers[buf_in[0]].take();
                 let mut in_res = buffers[buf_in[1]].take();
