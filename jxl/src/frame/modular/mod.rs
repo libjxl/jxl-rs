@@ -35,6 +35,7 @@ mod predict;
 mod transforms;
 mod tree;
 
+pub use buffers::ModularStorage;
 use buffers::with_buffers;
 pub use decode::ModularStreamId;
 use decode::decode_modular_subbitstream;
@@ -146,6 +147,7 @@ struct ModularBufferInfo {
     grid_kind: ModularGridKind,
     grid_shape: (usize, usize),
     buffer_grid: Vec<ModularBuffer>,
+    storage: ModularStorage,
 }
 
 impl ModularBufferInfo {
@@ -261,6 +263,7 @@ pub struct FullModularImage {
     // Stack of transforms that are ready to process
     ready_transform_steps: Mutex<Vec<usize>>,
     pub(super) recycler: Arc<BufferRecycler>,
+    storage: ModularStorage,
 }
 
 fn max_channels<'a, T: Iterator<Item = &'a ChannelInfo> + ExactSizeIterator>(channels: T) -> usize {
@@ -277,6 +280,12 @@ fn max_channels<'a, T: Iterator<Item = &'a ChannelInfo> + ExactSizeIterator>(cha
 impl FullModularImage {
     pub(super) fn get_scratch_space(&self) -> PerThreadStorageRef<'_, ScratchSpace> {
         self.scratch_space.get()
+    }
+
+    #[inline(always)]
+    #[allow(dead_code)]
+    pub(crate) fn storage(&self) -> ModularStorage {
+        self.storage
     }
 
     pub fn can_do_partial_render(&self) -> bool {
@@ -359,6 +368,7 @@ impl FullModularImage {
                 rerendered_buffers: HashSet::new(),
                 delayed_ready_sections: Mutex::new(BTreeSet::new()),
                 recycler,
+                storage: ModularStorage::I32,
             });
         }
 
@@ -386,6 +396,7 @@ impl FullModularImage {
             &header,
             max_palette_samples,
             max_channels,
+            ModularStorage::I32,
         )?;
 
         // Assign each (channel, group) pair present in the bitstream to the section in which it
@@ -537,6 +548,7 @@ impl FullModularImage {
             rerendered_buffers: HashSet::new(),
             delayed_ready_sections: Mutex::new(BTreeSet::new()),
             recycler,
+            storage: ModularStorage::I32,
         })
     }
 
@@ -560,6 +572,7 @@ impl FullModularImage {
             |bufs| {
                 decode_modular_subbitstream(
                     bufs,
+                    self.storage,
                     ModularStreamId::GlobalData.get_id(frame_header),
                     self.global_header.clone(),
                     global_tree,
@@ -602,7 +615,7 @@ impl FullModularImage {
         for b in self.section_buffer_indices[0].iter().take(num_decoded) {
             let bi = &mut self.buffer_info[*b];
             let buf = &mut bi.buffer_grid[0];
-            buf.extract_needed_borders(&self.recycler)?;
+            buf.extract_needed_borders(self.storage, &self.recycler)?;
             if buf.data_status == DataStatus::Final {
                 continue;
             }
@@ -651,6 +664,7 @@ impl FullModularImage {
             |bufs| {
                 decode_modular_subbitstream(
                     bufs,
+                    self.storage,
                     stream.get_id(frame_header),
                     None,
                     global_tree,
@@ -664,7 +678,8 @@ impl FullModularImage {
         drop(scratch);
 
         for b in self.section_buffer_indices[section_id].iter().copied() {
-            self.buffer_info[b].buffer_grid[grid].extract_needed_borders(&self.recycler)?;
+            self.buffer_info[b].buffer_grid[grid]
+                .extract_needed_borders(self.storage, &self.recycler)?;
         }
 
         self.has_decoded_data.fetch_or(
@@ -1026,12 +1041,25 @@ pub(super) fn decode_vardct_lf(
         )
     };
     let mut buffers = [
-        ModularChannel::new(shrink_rect(r.size, 1), image_metadata.bit_depth)?,
-        ModularChannel::new(shrink_rect(r.size, 0), image_metadata.bit_depth)?,
-        ModularChannel::new(shrink_rect(r.size, 2), image_metadata.bit_depth)?,
+        ModularChannel::new(
+            shrink_rect(r.size, 1),
+            ModularStorage::I32,
+            image_metadata.bit_depth,
+        )?,
+        ModularChannel::new(
+            shrink_rect(r.size, 0),
+            ModularStorage::I32,
+            image_metadata.bit_depth,
+        )?,
+        ModularChannel::new(
+            shrink_rect(r.size, 2),
+            ModularStorage::I32,
+            image_metadata.bit_depth,
+        )?,
     ];
     decode_modular_subbitstream(
         buffers.iter_mut().collect(),
+        ModularStorage::I32,
         stream_id,
         None,
         global_tree,
@@ -1079,13 +1107,24 @@ pub(super) fn decode_hf_metadata(
         size: (r.size.0.div_ceil(8), r.size.1.div_ceil(8)),
     };
     let mut buffers = [
-        ModularChannel::new_with_shift(cr.size, Some((3, 3)), image_metadata.bit_depth)?,
-        ModularChannel::new_with_shift(cr.size, Some((3, 3)), image_metadata.bit_depth)?,
-        ModularChannel::new((count, 2), image_metadata.bit_depth)?,
-        ModularChannel::new(r.size, image_metadata.bit_depth)?,
+        ModularChannel::new_with_shift(
+            cr.size,
+            ModularStorage::I32,
+            Some((3, 3)),
+            image_metadata.bit_depth,
+        )?,
+        ModularChannel::new_with_shift(
+            cr.size,
+            ModularStorage::I32,
+            Some((3, 3)),
+            image_metadata.bit_depth,
+        )?,
+        ModularChannel::new((count, 2), ModularStorage::I32, image_metadata.bit_depth)?,
+        ModularChannel::new(r.size, ModularStorage::I32, image_metadata.bit_depth)?,
     ];
     decode_modular_subbitstream(
         buffers.iter_mut().collect(),
+        ModularStorage::I32,
         stream_id,
         None,
         global_tree,
@@ -1168,13 +1207,26 @@ pub(super) fn decode_quant_table(
 ) -> Result<Vec<i32>> {
     let bit_depth = BitDepth::integer_samples(8);
     let mut image = [
-        ModularChannel::new((required_size_x, required_size_y), bit_depth)?,
-        ModularChannel::new((required_size_x, required_size_y), bit_depth)?,
-        ModularChannel::new((required_size_x, required_size_y), bit_depth)?,
+        ModularChannel::new(
+            (required_size_x, required_size_y),
+            ModularStorage::I32,
+            bit_depth,
+        )?,
+        ModularChannel::new(
+            (required_size_x, required_size_y),
+            ModularStorage::I32,
+            bit_depth,
+        )?,
+        ModularChannel::new(
+            (required_size_x, required_size_y),
+            ModularStorage::I32,
+            bit_depth,
+        )?,
     ];
     let stream_id = ModularStreamId::QuantTable(index).get_id(frame_header);
     decode_modular_subbitstream(
         image.iter_mut().collect(),
+        ModularStorage::I32,
         stream_id,
         None,
         global_tree,

@@ -11,7 +11,7 @@ use crate::frame::modular::decode::common::make_pixel;
 use crate::frame::modular::decode::specialized_trees::run_on_specialized_tree;
 use crate::frame::modular::predict::{PredictionData, WeightedPredictorState};
 use crate::frame::modular::tree::{NUM_NONREF_PROPERTIES, PROPERTIES_PER_PREVCHAN, predict};
-use crate::frame::modular::{ModularChannel, Tree};
+use crate::frame::modular::{ModularChannel, ModularStorage, Tree};
 use crate::headers::modular::{GroupHeader, WeightedHeader};
 use crate::image::{Image, ImageRectMut};
 use crate::util::tracing_wrappers::*;
@@ -110,6 +110,7 @@ struct FullTree<'a> {
     references: Image<i32>,
     property_buffer: Box<[i32; 256]>,
     wp_state: WeightedPredictorState,
+    storage: ModularStorage,
 }
 
 impl<'a> FullTree<'a> {
@@ -119,6 +120,7 @@ impl<'a> FullTree<'a> {
         channel: usize,
         stream: usize,
         xsize: usize,
+        storage: ModularStorage,
     ) -> Result<Self> {
         let num_ref_props = tree
             .num_properties
@@ -135,13 +137,14 @@ impl<'a> FullTree<'a> {
             references,
             property_buffer,
             wp_state: WeightedPredictorState::new(wp_header, xsize),
+            storage,
         })
     }
 }
 
 impl<'a> ModularChannelDecoder for FullTree<'a> {
     fn init_row(&mut self, buffers: &mut [&mut ModularChannel], chan: usize, y: usize) {
-        precompute_references(buffers, chan, y, &mut self.references);
+        precompute_references(buffers, chan, y, &mut self.references, self.storage);
         self.property_buffer[9] = 0;
     }
 
@@ -207,8 +210,9 @@ fn decode_modular_channel_impl(
     histo: &Histograms,
     reader: &mut SymbolReader,
     br: &mut BitReader,
+    storage: ModularStorage,
 ) -> Result<()> {
-    let size = buffers[chan].size();
+    let size = buffers[chan].size(storage);
     let xsize = size.0;
     for y in 0..size.1 {
         t.decode_row(buffers, chan, histo, reader, br, y, xsize);
@@ -226,18 +230,27 @@ pub(super) fn decode_modular_channel(
     tree: &Tree,
     reader: &mut SymbolReader,
     br: &mut BitReader,
+    storage: ModularStorage,
 ) -> Result<()> {
     debug!("reading channel");
-    let size = buffers[chan].size();
+    let size = buffers[chan].size(storage);
     if size.0 <= 4 || size.1 <= 2 || size.0 * size.1 <= SMALL_CHANNEL_THRESHOLD {
-        let mut decoder = FullTree::new(tree, &header.wp_header, chan, stream_id, size.0)?;
-        decode_modular_channel_impl(&mut decoder, buffers, chan, &tree.histograms, reader, br)?;
+        let mut decoder = FullTree::new(tree, &header.wp_header, chan, stream_id, size.0, storage)?;
+        decode_modular_channel_impl(
+            &mut decoder,
+            buffers,
+            chan,
+            &tree.histograms,
+            reader,
+            br,
+            storage,
+        )?;
         br.check_for_error()?;
         return Ok(());
     }
 
-    run_on_specialized_tree(tree, chan, stream_id, size.0, header, {
-        |t| decode_modular_channel_impl(t, buffers, chan, &tree.histograms, reader, br)
+    run_on_specialized_tree(tree, chan, stream_id, size.0, header, storage, {
+        |t| decode_modular_channel_impl(t, buffers, chan, &tree.histograms, reader, br, storage)
     })?;
     br.check_for_error()
 }

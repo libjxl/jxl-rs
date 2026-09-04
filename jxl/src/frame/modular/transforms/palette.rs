@@ -5,7 +5,7 @@
 
 use crate::error::Result;
 use crate::frame::modular::predict::{PredictionData, WeightedPredictorState};
-use crate::frame::modular::{ModularChannel, Predictor};
+use crate::frame::modular::{ModularChannel, ModularStorage, Predictor};
 use crate::headers::bit_depth::BitDepth;
 use crate::headers::modular::WeightedHeader;
 use crate::image::{Image, ImageRect, ImageRectMut};
@@ -232,7 +232,7 @@ impl<'a, 'b> PaletteStep<'a, 'b> {
             prev_aux,
             aux_out,
         } = self;
-        let (w0, h) = buf_in[0].size();
+        let (w0, h) = buf_in[0].size(ModularStorage::I32);
         if w0 == 0 || h == 0 {
             return Ok(());
         }
@@ -257,7 +257,10 @@ impl<'a, 'b> PaletteStep<'a, 'b> {
             return Ok(());
         }
 
-        let total_w: usize = buf_out[..grid_xsize].iter().map(|b| b.size().0).sum();
+        let total_w: usize = buf_out[..grid_xsize]
+            .iter()
+            .map(|b| b.size(ModularStorage::I32).0)
+            .sum();
         let left_offset = if buf_left.is_some() { 2 } else { 0 };
         let row_len = total_w + left_offset;
         for s in scratch.iter_mut() {
@@ -365,7 +368,7 @@ impl<'a, 'b> PaletteStep<'a, 'b> {
 }
 
 pub fn zero_palette_step_one_group(buf_pal: &ModularChannel, buf_out: &mut [&mut ModularChannel]) {
-    let (_w, h) = buf_out[0].size();
+    let (_w, h) = buf_out[0].size(ModularStorage::I32);
     for (c, out) in buf_out.iter_mut().enumerate() {
         let palette = Palette::new(&out.bit_depth, c, buf_pal);
         let palette_entry = palette.get(0);

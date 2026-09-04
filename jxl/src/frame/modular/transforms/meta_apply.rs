@@ -10,7 +10,7 @@ use crate::error::{Error, Result};
 use crate::frame::modular::buffers::NeededBorders;
 use crate::frame::modular::transforms::step::{TransformStep, TransformStepChunk};
 use crate::frame::modular::{
-    ChannelInfo, ModularBuffer, ModularBufferInfo, ModularGridKind, Predictor,
+    ChannelInfo, ModularBuffer, ModularBufferInfo, ModularGridKind, ModularStorage, Predictor,
 };
 use crate::headers::frame_header::FrameHeader;
 use crate::headers::modular::TransformId;
@@ -247,6 +247,7 @@ pub fn meta_apply_transforms(
     header: &headers::modular::GroupHeader,
     max_palette_samples: usize,
     max_channels: usize,
+    storage: ModularStorage,
 ) -> Result<(Vec<ModularBufferInfo>, Vec<TransformStep>)> {
     if channels.len() > max_channels {
         return Err(Error::TooManyModularChannels(channels.len(), max_channels));
@@ -270,6 +271,7 @@ pub fn meta_apply_transforms(
             grid_kind: ModularGridKind::None,
             grid_shape: (0, 0),
             buffer_grid: vec![],
+            storage,
         });
     }
 
@@ -282,6 +284,7 @@ pub fn meta_apply_transforms(
             grid_kind: ModularGridKind::None,
             grid_shape: (0, 0),
             buffer_grid: vec![],
+            storage,
         });
         buffer_info.len() - 1
     };
