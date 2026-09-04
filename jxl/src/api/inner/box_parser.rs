@@ -134,7 +134,7 @@ pub struct BoxParserCheckpoint {
     codestream_left: Option<u64>,
     is_valid_checkpoint: bool,
     pub(crate) consumed_codestream: u64,
-    num_aux_boxes: usize,
+    next_aux_box_idx: usize,
 }
 
 pub(super) struct BoxParser {
@@ -156,6 +156,7 @@ struct AuxBoxState {
     boxes: HashMap<JxlAuxBoxType, Vec<JxlAuxBox>>,
     box_buffer: Option<JxlAuxBox>,
     next_box_idx: usize,
+    seen_box_count: usize,
 }
 
 impl BoxParser {
@@ -175,6 +176,24 @@ impl BoxParser {
         }
     }
 
+    fn start_aux_box(&mut self, box_type: JxlAuxBoxType, brotli: bool, content_len: Option<u64>) {
+        let box_idx = self.aux.next_box_idx;
+        self.aux.next_box_idx += 1;
+        let is_new = box_idx >= self.aux.seen_box_count;
+        self.aux.seen_box_count = self.aux.seen_box_count.max(self.aux.next_box_idx);
+
+        if is_new && self.aux.boxes_to_extract.contains(&box_type) {
+            self.aux.box_buffer = Some(JxlAuxBox {
+                ty: box_type,
+                brotli,
+                data: Vec::new(),
+            });
+            self.state = ParseState::Aux(content_len);
+        } else {
+            self.state = ParseState::Skip(content_len);
+        }
+    }
+
     pub(super) fn reset_to_checkpoint(&mut self, box_checkpoint: BoxParserCheckpoint) {
         self.local_buffer = SmallBuffer::new(128);
         self.ooo_jxlp_buffer.clear();
@@ -183,8 +202,10 @@ impl BoxParser {
         // Do not allow creating new checkpoints after a reset.
         self.allow_checkpoint = false;
 
-        self.aux.box_buffer = Default::default();
-        self.aux.next_box_idx = box_checkpoint.num_aux_boxes;
+        if self.aux.box_buffer.take().is_some() {
+            self.aux.seen_box_count -= 1;
+        }
+        self.aux.next_box_idx = box_checkpoint.next_aux_box_idx;
     }
 
     pub(super) fn state_checkpoint(
@@ -262,7 +283,7 @@ impl BoxParser {
                 codestream_left,
                 is_valid_checkpoint,
                 consumed_codestream: 0,
-                num_aux_boxes: self.aux.boxes.len(),
+                next_aux_box_idx: self.aux.next_box_idx,
             },
         );
     }
@@ -681,37 +702,11 @@ impl BoxParser {
                 let inner_type = JxlAuxBoxType(inner_type.try_into().unwrap());
                 self.local_buffer.consume(4);
 
-                let current_box_idx = self.aux.next_box_idx;
-                self.aux.next_box_idx += 1;
-                if current_box_idx >= self.aux.boxes.len()
-                    && self.aux.boxes_to_extract.contains(&inner_type)
-                {
-                    self.aux.box_buffer = Some(JxlAuxBox {
-                        ty: inner_type,
-                        brotli: true,
-                        data: Vec::new(),
-                    });
-                    self.state = ParseState::Aux(content_len);
-                } else {
-                    self.state = ParseState::Skip(content_len);
-                }
+                self.start_aux_box(inner_type, true, content_len);
             }
             code => {
-                let current_box_idx = self.aux.next_box_idx;
-                self.aux.next_box_idx += 1;
                 let ty = JxlAuxBoxType(*code);
-                if current_box_idx >= self.aux.boxes.len()
-                    && self.aux.boxes_to_extract.contains(&ty)
-                {
-                    self.aux.box_buffer = Some(JxlAuxBox {
-                        ty,
-                        brotli: false,
-                        data: Vec::new(),
-                    });
-                    self.state = ParseState::Aux(content_len);
-                } else {
-                    self.state = ParseState::Skip(content_len);
-                }
+                self.start_aux_box(ty, false, content_len);
             }
         }
         Ok(())
