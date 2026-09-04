@@ -44,6 +44,7 @@ fn check_equal_channels(
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(super) fn meta_apply_single_transform(
     transform: &headers::modular::Transform,
     header: &headers::modular::GroupHeader,
@@ -52,6 +53,7 @@ pub(super) fn meta_apply_single_transform(
     mut add_transform_buffer: impl FnMut(ChannelInfo, String) -> usize,
     cumulative_palette_samples: &mut usize,
     max_palette_samples: usize,
+    max_channels: usize,
 ) -> Result<()> {
     match transform.id {
         TransformId::Rct => {
@@ -164,6 +166,9 @@ pub(super) fn meta_apply_single_transform(
                     }
                     channels[begin_channel + ic] = (buf_0, new_0);
                     channels.insert(new_chan_offset + ic, (buf_1, new_1));
+                    if channels.len() > max_channels {
+                        return Err(Error::TooManyModularChannels(channels.len(), max_channels));
+                    }
                     trace!("applied squeeze: {channels:?}");
                 }
             }
@@ -242,7 +247,12 @@ pub fn meta_apply_transforms(
     channels: &[ChannelInfo],
     header: &headers::modular::GroupHeader,
     max_palette_samples: usize,
+    max_channels: usize,
 ) -> Result<(Vec<ModularBufferInfo>, Vec<TransformStep>)> {
+    if channels.len() > max_channels {
+        return Err(Error::TooManyModularChannels(channels.len(), max_channels));
+    }
+
     let mut buffer_info = vec![];
     let mut transform_steps = vec![];
     // (buffer id, channel info)
@@ -288,7 +298,11 @@ pub fn meta_apply_transforms(
             &mut add_transform_buffer,
             &mut cumulative_palette_samples,
             max_palette_samples,
+            max_channels,
         )?;
+        if channels.len() > max_channels {
+            return Err(Error::TooManyModularChannels(channels.len(), max_channels));
+        }
     }
 
     // All the channels left over at the end of applying transforms are the channels that are

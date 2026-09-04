@@ -4,11 +4,11 @@
 // license that can be found in the LICENSE file.
 use std::fmt::Debug;
 
-use crate::error::Result;
-use crate::frame::modular::ChannelInfo;
+use crate::error::{Error, Result};
 use crate::frame::modular::buffers::ModularChannel;
 use crate::frame::modular::transforms::meta_apply::meta_apply_single_transform;
 use crate::frame::modular::transforms::step::TransformStep;
+use crate::frame::modular::{ChannelInfo, max_channels};
 use crate::headers::modular::GroupHeader;
 use crate::image::Rect;
 use crate::util::tracing_wrappers::*;
@@ -80,6 +80,8 @@ pub fn meta_apply_local_transforms<'a, 'b>(
         .enumerate()
         .collect();
 
+    let max_channels = max_channels(channels.iter().map(|x| &x.1));
+
     debug!(?channels, "initial channels");
 
     // First, add all the pre-transform channels to the buffer list.
@@ -104,7 +106,11 @@ pub fn meta_apply_local_transforms<'a, 'b>(
             &mut cumulative_palette_samples,
             // Reasonable upper bound.
             1 << 26,
+            max_channels,
         )?;
+        if channels.len() > max_channels {
+            return Err(Error::TooManyModularChannels(channels.len(), max_channels));
+        }
     }
 
     debug!(?channels, ?buffer_storage, "channels after transforms");
