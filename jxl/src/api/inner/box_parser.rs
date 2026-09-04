@@ -460,6 +460,7 @@ impl BoxParser {
                         buf.data.resize(cur + space, 0);
                         let n =
                             self.read_inner(input, &mut [IoSliceMut::new(&mut buf.data[cur..])])?;
+                        buf.data.truncate(cur + n);
                         if n == 0 {
                             break;
                         }
@@ -552,6 +553,7 @@ impl BoxParser {
             let cur = buf.data.len();
             buf.data.resize(cur + space, 0);
             let n = self.read_inner(input, &mut [IoSliceMut::new(&mut buf.data[cur..])])?;
+            buf.data.truncate(cur + n);
             if n == 0 {
                 break;
             }
