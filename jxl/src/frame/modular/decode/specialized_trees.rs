@@ -120,6 +120,7 @@ struct FlatTreeInner {
     nodes: Vec<FlatTreeNode>,
     references: Image<i32>,
     property_buffer: Box<[i32; 256]>,
+    is_16bit: bool,
 }
 
 impl FlatTreeInner {
@@ -129,6 +130,7 @@ impl FlatTreeInner {
         channel: usize,
         stream: usize,
         xsize: usize,
+        is_16bit: bool,
     ) -> Result<Self> {
         let num_ref_props = max_property_count
             .saturating_sub(NUM_NONREF_PROPERTIES)
@@ -143,6 +145,7 @@ impl FlatTreeInner {
             nodes: Tree::build_flat_tree(&nodes)?,
             references,
             property_buffer,
+            is_16bit,
         })
     }
 }
@@ -165,7 +168,13 @@ impl<WP: MaybeWeightedPredictor, R: Reader> FlatTree<WP, R> {
 
 impl<WP: MaybeWeightedPredictor, R: Reader> ModularChannelDecoder for FlatTree<WP, R> {
     fn init_row(&mut self, buffers: &mut [&mut ModularChannel], chan: usize, y: usize) {
-        precompute_references(buffers, chan, y, &mut self.inner.references);
+        precompute_references(
+            buffers,
+            chan,
+            y,
+            &mut self.inner.references,
+            self.inner.is_16bit,
+        );
         self.inner.property_buffer[GRADIENT_PROPERTY as usize] = 0;
     }
 
@@ -422,6 +431,7 @@ pub fn run_on_specialized_tree<F: FnOnce(&mut dyn ModularChannelDecoder) -> Resu
     stream: usize,
     xsize: usize,
     header: &GroupHeader,
+    is_16bit: bool,
     run: F,
 ) -> Result<()> {
     // TODO(veluca): consider skipping the pruning if header.uses_global_tree is true.
@@ -564,7 +574,14 @@ pub fn run_on_specialized_tree<F: FnOnce(&mut dyn ModularChannelDecoder) -> Resu
 
     let single_symbol = single_symbol.map(unpack_signed);
 
-    let inner = FlatTreeInner::new(pruned_tree, max_property_count, channel, stream, xsize)?;
+    let inner = FlatTreeInner::new(
+        pruned_tree,
+        max_property_count,
+        channel,
+        stream,
+        xsize,
+        is_16bit,
+    )?;
 
     // Non-WP trees (includes effort 2 encoding and some groups in effort > 3)
     if !uses_wp {

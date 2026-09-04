@@ -681,7 +681,11 @@ impl TransformStepChunk {
                     let b_in = &buffers[buf_in[i]].buffer_grid[out_grid];
                     let b_out = &buffers[buf_out[i]].buffer_grid[out_grid];
                     if b_in.data_status == DataStatus::Zero && !b_in.has_buffer() {
-                        b_out.ensure_buffer(&buffers[buf_out[i]].info, recycler)?;
+                        b_out.ensure_buffer(
+                            &buffers[buf_out[i]].info,
+                            buffers[buf_out[i]].is_16bit,
+                            recycler,
+                        )?;
                     } else {
                         *b_out.data.try_write().unwrap() =
                             Some(b_in.get_buffer(b_in.can_consume(is_final), recycler)?);
@@ -1004,7 +1008,8 @@ impl TransformStepChunk {
         };
 
         for &(buf, grid) in self.outputs(buffers).iter() {
-            buffers[buf].buffer_grid[grid].extract_needed_borders(recycler)?;
+            buffers[buf].buffer_grid[grid]
+                .extract_needed_borders(buffers[buf].is_16bit, recycler)?;
         }
 
         if is_final {

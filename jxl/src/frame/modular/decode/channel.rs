@@ -110,6 +110,7 @@ struct FullTree<'a> {
     references: Image<i32>,
     property_buffer: Box<[i32; 256]>,
     wp_state: WeightedPredictorState,
+    is_16bit: bool,
 }
 
 impl<'a> FullTree<'a> {
@@ -119,6 +120,7 @@ impl<'a> FullTree<'a> {
         channel: usize,
         stream: usize,
         xsize: usize,
+        is_16bit: bool,
     ) -> Result<Self> {
         let num_ref_props = tree
             .num_properties
@@ -135,13 +137,14 @@ impl<'a> FullTree<'a> {
             references,
             property_buffer,
             wp_state: WeightedPredictorState::new(wp_header, xsize),
+            is_16bit,
         })
     }
 }
 
 impl<'a> ModularChannelDecoder for FullTree<'a> {
     fn init_row(&mut self, buffers: &mut [&mut ModularChannel], chan: usize, y: usize) {
-        precompute_references(buffers, chan, y, &mut self.references);
+        precompute_references(buffers, chan, y, &mut self.references, self.is_16bit);
         self.property_buffer[9] = 0;
     }
 
@@ -207,8 +210,9 @@ fn decode_modular_channel_impl(
     histo: &Histograms,
     reader: &mut SymbolReader,
     br: &mut BitReader,
+    is_16bit: bool,
 ) -> Result<()> {
-    let size = buffers[chan].size();
+    let size = buffers[chan].size(is_16bit);
     let xsize = size.0;
     for y in 0..size.1 {
         t.decode_row(buffers, chan, histo, reader, br, y, xsize);
@@ -226,18 +230,28 @@ pub(super) fn decode_modular_channel(
     tree: &Tree,
     reader: &mut SymbolReader,
     br: &mut BitReader,
+    is_16bit: bool,
 ) -> Result<()> {
     debug!("reading channel");
-    let size = buffers[chan].size();
+    let size = buffers[chan].size(is_16bit);
     if size.0 <= 4 || size.1 <= 2 || size.0 * size.1 <= SMALL_CHANNEL_THRESHOLD {
-        let mut decoder = FullTree::new(tree, &header.wp_header, chan, stream_id, size.0)?;
-        decode_modular_channel_impl(&mut decoder, buffers, chan, &tree.histograms, reader, br)?;
+        let mut decoder =
+            FullTree::new(tree, &header.wp_header, chan, stream_id, size.0, is_16bit)?;
+        decode_modular_channel_impl(
+            &mut decoder,
+            buffers,
+            chan,
+            &tree.histograms,
+            reader,
+            br,
+            is_16bit,
+        )?;
         br.check_for_error()?;
         return Ok(());
     }
 
-    run_on_specialized_tree(tree, chan, stream_id, size.0, header, {
-        |t| decode_modular_channel_impl(t, buffers, chan, &tree.histograms, reader, br)
+    run_on_specialized_tree(tree, chan, stream_id, size.0, header, is_16bit, {
+        |t| decode_modular_channel_impl(t, buffers, chan, &tree.histograms, reader, br, is_16bit)
     })?;
     br.check_for_error()
 }

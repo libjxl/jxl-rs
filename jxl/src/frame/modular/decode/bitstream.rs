@@ -48,13 +48,14 @@ fn decode_fast_lossless(
     tree: &Tree,
     br: &mut BitReader,
     partial_decoded_buffers: Option<&mut usize>,
+    is_16bit: bool,
 ) -> Result<()> {
     let mut rle_len: usize = 0;
     let mut rle_sym = 0;
 
     let mut last_safe_buf = 0;
     for (c, buf) in buffers.into_iter().enumerate() {
-        let (w, h) = buf.size();
+        let (w, h) = buf.size(is_16bit);
         if w == 0 || h == 0 {
             continue;
         }
@@ -134,6 +135,7 @@ fn decode_fast_lossless(
 // The intended use of passing a header is for the DcGlobal section.
 pub(in crate::frame::modular) fn decode_modular_subbitstream(
     buffers: Vec<&mut ModularChannel>,
+    is_16bit: bool,
     stream_id: usize,
     header: Option<GroupHeader>,
     global_tree: &Option<Tree>,
@@ -143,7 +145,7 @@ pub(in crate::frame::modular) fn decode_modular_subbitstream(
     // Skip decoding if all grids are zero-sized.
     let is_empty = buffers
         .iter()
-        .all(|buffer| matches!(buffer.size(), (0, _) | (_, 0)));
+        .all(|buffer| matches!(buffer.size(is_16bit), (0, _) | (_, 0)));
     if is_empty {
         return Ok(());
     }
@@ -161,7 +163,7 @@ pub(in crate::frame::modular) fn decode_modular_subbitstream(
                 // applying transforms later.
                 let new_bufs;
                 (new_bufs, transform_steps) =
-                    meta_apply_local_transforms(buffers, &mut buffer_storage, &h)?;
+                    meta_apply_local_transforms(buffers, &mut buffer_storage, &h, is_16bit)?;
                 (h, new_bufs)
             } else {
                 (h, buffers)
@@ -176,7 +178,7 @@ pub(in crate::frame::modular) fn decode_modular_subbitstream(
         let num_local_samples = buffers
             .iter()
             .map(|buf| {
-                let (width, height) = buf.channel_info().size;
+                let (width, height) = buf.channel_info(is_16bit).size;
                 width * height
             })
             .sum::<usize>();
@@ -193,12 +195,12 @@ pub(in crate::frame::modular) fn decode_modular_subbitstream(
 
     let image_width = buffers
         .iter()
-        .map(|info| info.channel_info().size.0)
+        .map(|info| info.channel_info(is_16bit).size.0)
         .max()
         .unwrap_or(0);
 
     if can_decode_fast_lossless(tree) {
-        decode_fast_lossless(buffers, tree, br, partial_decoded_buffers)?
+        decode_fast_lossless(buffers, tree, br, partial_decoded_buffers, is_16bit)?
     } else {
         let mut reader = SymbolReader::new(&tree.histograms, br, Some(image_width))?;
 
@@ -206,16 +208,23 @@ pub(in crate::frame::modular) fn decode_modular_subbitstream(
         for i in 0..buffers.len() {
             // Keep channel numbering stable, but skip actually decoding empty channels.
             // This matches libjxl, which continues the loop without renumbering.
-            let (w, h) = buffers[i].size();
+            let (w, h) = buffers[i].size(is_16bit);
             if w == 0 || h == 0 {
                 continue;
             }
             if br.total_bits_available() >= DECODE_SAFETY_MARGIN {
                 last_safe_buf = i;
             }
-            if let Err(e) =
-                decode_modular_channel(&mut buffers, i, stream_id, &header, tree, &mut reader, br)
-            {
+            if let Err(e) = decode_modular_channel(
+                &mut buffers,
+                i,
+                stream_id,
+                &header,
+                tree,
+                &mut reader,
+                br,
+                is_16bit,
+            ) {
                 if let Some(p) = partial_decoded_buffers {
                     *p = last_safe_buf;
                 }
@@ -229,7 +238,7 @@ pub(in crate::frame::modular) fn decode_modular_subbitstream(
     }
 
     for step in transform_steps.iter().rev() {
-        step.local_apply(&mut buffer_storage)?;
+        step.local_apply(&mut buffer_storage, is_16bit)?;
     }
 
     Ok(())

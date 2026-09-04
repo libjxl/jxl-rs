@@ -42,6 +42,7 @@ pub(super) fn precompute_references(
     chan: usize,
     y: usize,
     references: &mut Image<i32>,
+    is_16bit: bool,
 ) {
     if references.size().0 == 0 {
         return;
@@ -54,13 +55,15 @@ pub(super) fn precompute_references(
             break;
         }
         let j = chan - i - 1;
-        if buffers[j].size() != buffers[chan].size() || buffers[j].shift != buffers[chan].shift {
+        if buffers[j].size(is_16bit) != buffers[chan].size(is_16bit)
+            || buffers[j].shift != buffers[chan].shift
+        {
             continue;
         }
         let ref_rect = ImageRect::<i32>::from_raw(buffers[j].data.as_rect());
         let ref_chan_row = ref_rect.row(y);
         let ref_chan_prev = ref_rect.row(y.saturating_sub(1));
-        for x in 0..buffers[chan].size().0 {
+        for x in 0..buffers[chan].size(is_16bit).0 {
             let ref_row = references.row_mut(x);
             let v = ref_chan_row[x];
             ref_row[offset] = v.wrapping_abs();

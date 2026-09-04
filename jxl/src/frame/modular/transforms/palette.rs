@@ -399,7 +399,10 @@ pub fn do_palette_step_group_row(
     let bit_depth = buf_in[0].bit_depth.bits_per_sample().min(24) as usize;
     let num_c = buf_out.len() / grid_xsize;
 
-    let total_w: usize = buf_out[..grid_xsize].iter().map(|buf| buf.size().0).sum();
+    let total_w: usize = buf_out[..grid_xsize]
+        .iter()
+        .map(|buf| buf.size(false).0)
+        .sum();
 
     scratch[0].resize(total_w, 0);
     scratch[1].resize(total_w, 0);

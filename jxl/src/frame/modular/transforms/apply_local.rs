@@ -26,12 +26,12 @@ pub enum LocalTransformBuffer<'a> {
 }
 
 impl LocalTransformBuffer<'_> {
-    fn channel_info(&self) -> ChannelInfo {
+    fn channel_info(&self, is_16bit: bool) -> ChannelInfo {
         match self {
             LocalTransformBuffer::Empty => unreachable!("an empty buffer has no channel info"),
-            LocalTransformBuffer::Owned(m) => m.channel_info(),
+            LocalTransformBuffer::Owned(m) => m.channel_info(is_16bit),
             LocalTransformBuffer::Placeholder(c) => *c,
-            LocalTransformBuffer::Borrowed(m) => m.channel_info(),
+            LocalTransformBuffer::Borrowed(m) => m.channel_info(is_16bit),
         }
     }
 
@@ -53,10 +53,11 @@ impl LocalTransformBuffer<'_> {
         r
     }
 
-    fn allocate_if_needed(&mut self) -> Result<()> {
+    fn allocate_if_needed(&mut self, is_16bit: bool) -> Result<()> {
         if let LocalTransformBuffer::Placeholder(c) = self {
             *self = LocalTransformBuffer::Owned(ModularChannel::new_with_shift(
                 c.size,
+                is_16bit,
                 c.shift,
                 c.bit_depth,
             )?);
@@ -70,13 +71,14 @@ pub fn meta_apply_local_transforms<'a, 'b>(
     channels_in: Vec<&'a mut ModularChannel>,
     buffer_storage: &'b mut Vec<LocalTransformBuffer<'a>>,
     header: &GroupHeader,
+    is_16bit: bool,
 ) -> Result<(Vec<&'b mut ModularChannel>, Vec<TransformStep>)> {
     let mut transform_steps = vec![];
 
     // (buffer id, channel info)
     let mut channels: Vec<_> = channels_in
         .iter()
-        .map(|x| x.channel_info())
+        .map(|x| x.channel_info(is_16bit))
         .enumerate()
         .collect();
 
@@ -188,8 +190,8 @@ pub fn meta_apply_local_transforms<'a, 'b>(
             for c in 0..3 {
                 assert!(
                     buffer_storage[buf_in[c]]
-                        .channel_info()
-                        .is_equivalent(&buffer_storage[buf_out[c]].channel_info())
+                        .channel_info(is_16bit)
+                        .is_equivalent(&buffer_storage[buf_out[c]].channel_info(is_16bit))
                 );
                 assert!(matches!(
                     buffer_storage[buf_in[c]],
@@ -204,7 +206,7 @@ pub fn meta_apply_local_transforms<'a, 'b>(
 
     // Allocate all the coded channels if they aren't yet.
     for (buf, _) in channels.iter() {
-        buffer_storage[*buf].allocate_if_needed()?;
+        buffer_storage[*buf].allocate_if_needed(is_16bit)?;
     }
 
     debug!(?channels, ?buffer_storage, "allocated buffers");
@@ -231,7 +233,7 @@ pub fn meta_apply_local_transforms<'a, 'b>(
 impl TransformStep {
     // Marks that one dependency of this transform is ready, and potentially runs the transform,
     // returning the new buffers that are now ready.
-    pub fn local_apply(&self, buffers: &mut [LocalTransformBuffer]) -> Result<()> {
+    pub fn local_apply(&self, buffers: &mut [LocalTransformBuffer], is_16bit: bool) -> Result<()> {
         match self {
             TransformStep::Rct {
                 buf_in,
@@ -242,8 +244,8 @@ impl TransformStep {
                 for i in 0..3 {
                     assert!(
                         buffers[buf_in[i]]
-                            .channel_info()
-                            .is_equivalent(&buffers[buf_out[i]].channel_info())
+                            .channel_info(is_16bit)
+                            .is_equivalent(&buffers[buf_out[i]].channel_info(is_16bit))
                     );
                 }
                 let [mut a, mut b, mut c] = [
@@ -270,10 +272,10 @@ impl TransformStep {
             } => {
                 for b in buf_out.iter() {
                     assert_eq!(
-                        buffers[*b].channel_info().size,
-                        buffers[*buf_in].channel_info().size
+                        buffers[*b].channel_info(is_16bit).size,
+                        buffers[*buf_in].channel_info(is_16bit).size
                     );
-                    buffers[*b].allocate_if_needed()?;
+                    buffers[*b].allocate_if_needed(is_16bit)?;
                 }
                 let mut img_in = buffers[*buf_in].take();
                 let mut img_pal = buffers[*buf_pal].take();
@@ -297,7 +299,7 @@ impl TransformStep {
             TransformStep::HSqueeze {
                 buf_in, buf_out, ..
             } => {
-                buffers[*buf_out].allocate_if_needed()?;
+                buffers[*buf_out].allocate_if_needed(is_16bit)?;
                 let mut out_buf = buffers[*buf_out].take();
                 let mut in_avg = buffers[buf_in[0]].take();
                 let mut in_res = buffers[buf_in[1]].take();
@@ -320,7 +322,7 @@ impl TransformStep {
             TransformStep::VSqueeze {
                 buf_in, buf_out, ..
             } => {
-                buffers[*buf_out].allocate_if_needed()?;
+                buffers[*buf_out].allocate_if_needed(is_16bit)?;
                 let mut out_buf = buffers[*buf_out].take();
                 let mut in_avg = buffers[buf_in[0]].take();
                 let mut in_res = buffers[buf_in[1]].take();
