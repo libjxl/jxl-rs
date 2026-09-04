@@ -34,6 +34,10 @@ pub struct JxlDecoderOptions {
     /// via the regular decoder API without producing pixels.
     pub scan_frames_only: bool,
     pub request_aux_boxes: Vec<JxlAuxBoxType>,
+    /// Whether to force Level 5 limits for splines (default: true).
+    /// When true, limits total spline area to min(8 * image_size + 2^25, 2^30).
+    /// When false, allows Level 10 limits (min(1024 * image_size + 2^32, 2^42)).
+    pub force_level5_splines: bool,
 }
 
 impl Default for JxlDecoderOptions {
@@ -49,6 +53,7 @@ impl Default for JxlDecoderOptions {
             premultiply_output: false,
             scan_frames_only: false,
             request_aux_boxes: Vec::new(),
+            force_level5_splines: true,
         }
     }
 }

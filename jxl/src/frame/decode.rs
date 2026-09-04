@@ -422,6 +422,7 @@ impl Frame {
                     self.header.size().1 as u64,
                     &color_correlation_params,
                     self.decoder_state.high_precision,
+                    self.decoder_state.force_level5_splines,
                 )?;
             }
 

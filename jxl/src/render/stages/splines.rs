@@ -93,7 +93,7 @@ mod test {
         );
 
         splines
-            .initialize_draw_cache(500, 500, &ColorCorrelationParams::default(), false)
+            .initialize_draw_cache(500, 500, &ColorCorrelationParams::default(), false, true)
             .unwrap();
 
         crate::render::test::test_stage_consistency(
