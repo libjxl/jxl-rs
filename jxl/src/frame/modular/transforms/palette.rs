@@ -8,7 +8,7 @@ use crate::frame::modular::predict::{PredictionData, WeightedPredictorState};
 use crate::frame::modular::{ModularChannel, Predictor};
 use crate::headers::bit_depth::BitDepth;
 use crate::headers::modular::WeightedHeader;
-use crate::image::Image;
+use crate::image::{Image, ImageRect, ImageRectMut};
 use crate::util::sync::{OnceLock, RwLockWriteGuard};
 
 const RGB_CHANNELS: usize = 3;
@@ -163,10 +163,11 @@ impl<'a> Palette<'a> {
     fn new(bit_depth: &BitDepth, c: usize, buf: &'a ModularChannel) -> Self {
         static IMPLICIT_PALETTES: [OnceLock<ImplicitPalette>; 25] = [const { OnceLock::new() }; 25];
         let bit_depth = bit_depth.bits_per_sample().min(24) as usize;
+        let pal_rect = ImageRect::<i32>::from_raw(buf.data.as_rect());
         Self {
             implicit: IMPLICIT_PALETTES[bit_depth].get_or_init(|| ImplicitPalette::new(bit_depth)),
-            explicit: if buf.data.size().0 > 0 {
-                buf.data.row(c)
+            explicit: if pal_rect.size().0 > 0 {
+                pal_rect.row(c)
             } else {
                 &[]
             },
@@ -208,9 +209,9 @@ pub(super) struct PaletteStep<'a, 'b> {
     pub predictor: Predictor,
     pub wp_header: &'a WeightedHeader,
     pub grid_xsize: usize,
-    pub buf_left: Option<&'a [&'b Image<i32>]>,
-    pub buf_top: Option<&'a [&'b Image<i32>]>,
-    pub buf_topleft: Option<&'a [&'b Image<i32>]>,
+    pub buf_left: Option<&'a [ImageRect<'b, i32>]>,
+    pub buf_top: Option<&'a [ImageRect<'b, i32>]>,
+    pub buf_topleft: Option<&'a [ImageRect<'b, i32>]>,
     pub prev_aux: Option<&'a [Option<&'b Image<i32>>]>,
     pub aux_out: &'a mut [RwLockWriteGuard<'b, Option<Image<i32>>>],
 }
@@ -231,7 +232,7 @@ impl<'a, 'b> PaletteStep<'a, 'b> {
             prev_aux,
             aux_out,
         } = self;
-        let (w0, h) = buf_in[0].data.size();
+        let (w0, h) = buf_in[0].size();
         if w0 == 0 || h == 0 {
             return Ok(());
         }
@@ -241,11 +242,13 @@ impl<'a, 'b> PaletteStep<'a, 'b> {
         if predictor == Predictor::Zero {
             assert_eq!(grid_xsize, 1);
             assert_eq!(buf_in.len(), 1);
+            let in_rect = ImageRect::<i32>::from_raw(buf_in[0].data.as_rect());
             for (c, out_buf) in buf_out.iter_mut().enumerate() {
                 let palette = Palette::new(&out_buf.bit_depth, c, buf_pal);
+                let mut out_rect = ImageRectMut::<i32>::from_raw(out_buf.data.as_rect_mut());
                 for y in 0..h {
-                    let index_row = buf_in[0].data.row(y);
-                    let out_row = out_buf.data.row_mut(y);
+                    let index_row = in_rect.row(y);
+                    let out_row = out_rect.row(y);
                     for (out, &index) in out_row.iter_mut().zip(index_row.iter()) {
                         *out = palette.get(index as isize);
                     }
@@ -254,7 +257,7 @@ impl<'a, 'b> PaletteStep<'a, 'b> {
             return Ok(());
         }
 
-        let total_w: usize = buf_out[..grid_xsize].iter().map(|b| b.data.size().0).sum();
+        let total_w: usize = buf_out[..grid_xsize].iter().map(|b| b.size().0).sum();
         let left_offset = if buf_left.is_some() { 2 } else { 0 };
         let row_len = total_w + left_offset;
         for s in scratch.iter_mut() {
@@ -277,7 +280,7 @@ impl<'a, 'b> PaletteStep<'a, 'b> {
             if let Some(prev) = buf_top {
                 let mut x_offset = 0;
                 for grid_x in 0..grid_xsize {
-                    let prev_img = prev[out_row_idx + grid_x];
+                    let prev_img = &prev[out_row_idx + grid_x];
                     let w = prev_img.size().0;
                     scratch[1][left_offset + x_offset..left_offset + x_offset + w]
                         .copy_from_slice(prev_img.row(3));
@@ -301,7 +304,7 @@ impl<'a, 'b> PaletteStep<'a, 'b> {
                 let effective_y = if buf_top.is_some() { y + 2 } else { y };
 
                 if let Some(left_border) = buf_left {
-                    let left_img = left_border[c];
+                    let left_img = &left_border[c];
                     scratch[0][1] = left_img.row(y)[3];
                     scratch[0][0] = left_img.row(y)[2];
                 }
@@ -310,9 +313,12 @@ impl<'a, 'b> PaletteStep<'a, 'b> {
 
                 let mut gx = 0;
                 for (grid_x, index_buf) in buf_in.iter().enumerate().take(grid_xsize) {
-                    let index_img = index_buf.data.row(y);
+                    let in_rect = ImageRect::<i32>::from_raw(index_buf.data.as_rect());
+                    let index_img = in_rect.row(y);
                     let out_idx = out_row_idx + grid_x;
-                    let out_row = buf_out[out_idx].data.row_mut(y);
+                    let mut out_rect =
+                        ImageRectMut::<i32>::from_raw(buf_out[out_idx].data.as_rect_mut());
+                    let out_row = out_rect.row(y);
                     for (x, &index) in index_img.iter().enumerate() {
                         let palette_entry = palette.get(index as isize);
                         let x_scratch = left_offset + gx;
@@ -359,12 +365,13 @@ impl<'a, 'b> PaletteStep<'a, 'b> {
 }
 
 pub fn zero_palette_step_one_group(buf_pal: &ModularChannel, buf_out: &mut [&mut ModularChannel]) {
-    let (_w, h) = buf_out[0].data.size();
+    let (_w, h) = buf_out[0].size();
     for (c, out) in buf_out.iter_mut().enumerate() {
         let palette = Palette::new(&out.bit_depth, c, buf_pal);
         let palette_entry = palette.get(0);
+        let mut out_rect = ImageRectMut::<i32>::from_raw(out.data.as_rect_mut());
         for y in 0..h {
-            out.data.row_mut(y).fill(palette_entry);
+            out_rect.row(y).fill(palette_entry);
         }
     }
 }

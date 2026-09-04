@@ -205,6 +205,14 @@ impl<'a, T: ImageDataType> ImageRectMut<'a, T> {
         }
     }
 
+    #[inline(always)]
+    pub fn distinct_rows_mut<I: DistinctRowsIndexes>(&mut self, rows: I) -> I::Output<'_, T> {
+        // SAFETY: self.raw.data distinct_rows_mut checks index uniqueness and in-bounds.
+        let rows = unsafe { self.raw.data.distinct_rows_mut(rows) };
+        // SAFETY: T is ImageDataType, so row contains valid initialized memory aligned for T.
+        unsafe { I::transmute_rows(rows) }
+    }
+
     pub fn as_rect(&'a self) -> ImageRect<'a, T> {
         ImageRect::from_raw(self.raw.as_rect())
     }

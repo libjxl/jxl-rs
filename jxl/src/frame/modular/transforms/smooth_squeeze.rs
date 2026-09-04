@@ -8,7 +8,7 @@ use std::sync::OnceLock;
 use jxl_simd::{F32SimdVec, I32SimdVec, SimdDescriptor, simd_function};
 
 use super::step::TiledChannelView;
-use crate::image::{Image, Rect};
+use crate::image::{ImageRectMut, Rect};
 use crate::util::{DITHER_TABLE, fast_jinc_windowed_sq_simd};
 
 fn compute_jinc_subkernel(delta_x: f32, delta_y: f32) -> [f32; 25] {
@@ -261,7 +261,7 @@ fn smooth_upsample_simd_impl<D: SimdDescriptor>(
     shift_diff: (usize, usize),
     dither: bool,
     rect: Rect,
-    output: &mut Image<i32>,
+    output: &mut ImageRectMut<'_, i32>,
     scratch: &mut SmoothUpsampleScratch,
 ) {
     let (dx, dy) = shift_diff;
@@ -315,7 +315,7 @@ fn smooth_upsample_simd_impl<D: SimdDescriptor>(
             if yout >= ys {
                 continue;
             }
-            let output_row = output.row_mut(yout);
+            let output_row = output.row(yout);
             let dither_y = (y0 + yout) % 32;
             let delta_y = (oy as f32 + 0.5) / (fy as f32) - 0.5;
 
@@ -387,7 +387,7 @@ simd_function!(
         shift_diff: (usize, usize),
         dither: bool,
         rect: Rect,
-        output: &mut Image<i32>,
+        output: &mut ImageRectMut<'_, i32>,
         scratch: &mut SmoothUpsampleScratch
     ) {
         smooth_upsample_simd_impl(d, input, shift_diff, dither, rect, output, scratch);
