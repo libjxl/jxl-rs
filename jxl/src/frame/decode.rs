@@ -444,6 +444,7 @@ impl Frame {
                 self.modular_color_channels(),
                 br,
                 self.buffer_recycler.clone(),
+                self.decoder_state.sample_limit,
             )?;
 
             // Ensure that, if we call this function again, we resume from just after

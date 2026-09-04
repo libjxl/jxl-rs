@@ -92,6 +92,7 @@ pub fn meta_apply_local_transforms<'a, 'b>(
         buffer_storage.len() - 1
     };
 
+    let mut cumulative_palette_samples = 0;
     // Apply transforms to the channel list.
     for transform in &header.transforms {
         meta_apply_single_transform(
@@ -100,6 +101,9 @@ pub fn meta_apply_local_transforms<'a, 'b>(
             &mut channels,
             &mut transform_steps,
             &mut add_transform_buffer,
+            &mut cumulative_palette_samples,
+            // Reasonable upper bound.
+            1 << 26,
         )?;
     }
 

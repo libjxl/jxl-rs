@@ -283,6 +283,7 @@ impl FullModularImage {
         modular_color_channels: usize,
         br: &mut BitReader,
         recycler: Arc<BufferRecycler>,
+        sample_limit: Option<usize>,
     ) -> Result<Self> {
         let mut channels = vec![];
         for c in 0..modular_color_channels {
@@ -361,8 +362,10 @@ impl FullModularImage {
             .iter()
             .any(|x| x.id == TransformId::Squeeze);
 
+        let max_palette_samples = sample_limit.unwrap_or(usize::MAX);
+
         let (mut buffer_info, transform_steps) =
-            transforms::meta_apply::meta_apply_transforms(&channels, &header)?;
+            transforms::meta_apply::meta_apply_transforms(&channels, &header, max_palette_samples)?;
 
         // Assign each (channel, group) pair present in the bitstream to the section in which it
         // will be decoded.

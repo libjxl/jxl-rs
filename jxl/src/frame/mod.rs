@@ -129,6 +129,7 @@ pub struct DecoderState {
     pub high_precision: bool,
     pub premultiply_output: bool,
     pub force_level5_splines: bool,
+    pub sample_limit: Option<usize>,
     // Whether the latest level 1 LF frame was fully rendered.
     // If this is set to `true`, early flushing in the main frame
     // (before HF is available) will do nothing.
@@ -152,6 +153,7 @@ impl DecoderState {
             high_precision: options.high_precision,
             premultiply_output: options.premultiply_output,
             force_level5_splines: options.force_level5_splines,
+            sample_limit: options.sample_limit,
             lf_frame_was_rendered: false,
         }
     }
