@@ -7,8 +7,9 @@ use std::fmt::Debug;
 use crate::error::{Error, Result};
 use crate::frame::modular::buffers::ModularChannel;
 use crate::frame::modular::transforms::meta_apply::meta_apply_single_transform;
+use crate::frame::modular::transforms::palette::PaletteStep;
 use crate::frame::modular::transforms::step::TransformStep;
-use crate::frame::modular::{ChannelInfo, max_channels};
+use crate::frame::modular::{ChannelInfo, TransformScratchSpace, max_channels};
 use crate::headers::modular::GroupHeader;
 use crate::image::Rect;
 use crate::util::tracing_wrappers::*;
@@ -241,7 +242,11 @@ pub fn meta_apply_local_transforms<'a, 'b>(
 impl TransformStep {
     // Marks that one dependency of this transform is ready, and potentially runs the transform,
     // returning the new buffers that are now ready.
-    pub fn local_apply(&self, buffers: &mut [LocalTransformBuffer]) -> Result<()> {
+    pub fn local_apply(
+        &self,
+        buffers: &mut [LocalTransformBuffer],
+        transform_scratch_space: &mut TransformScratchSpace,
+    ) -> Result<()> {
         match self {
             TransformStep::Rct {
                 buf_in,
@@ -273,7 +278,6 @@ impl TransformStep {
                 buf_in,
                 buf_pal,
                 buf_out,
-                num_colors,
                 num_deltas,
                 predictor,
                 wp_header,
@@ -290,15 +294,22 @@ impl TransformStep {
                 let mut out_bufs: Vec<_> = buf_out.iter().map(|x| buffers[*x].take()).collect();
                 {
                     let mut bufs: Vec<_> = out_bufs.iter_mut().map(|x| x.borrow_mut()).collect();
-                    super::palette::do_palette_step_general(
-                        img_in.borrow_mut(),
-                        img_pal.borrow_mut(),
-                        &mut bufs,
-                        *num_colors,
-                        *num_deltas,
-                        *predictor,
+                    let in_chan: &ModularChannel = img_in.borrow_mut();
+                    PaletteStep {
+                        buf_in: std::slice::from_ref(&in_chan),
+                        buf_pal: img_pal.borrow_mut(),
+                        buf_out: &mut bufs,
+                        num_deltas: *num_deltas,
+                        predictor: *predictor,
                         wp_header,
-                    );
+                        grid_xsize: 1,
+                        buf_left: None,
+                        buf_top: None,
+                        buf_topleft: None,
+                        prev_aux: None,
+                        aux_out: &mut [],
+                    }
+                    .run(&mut transform_scratch_space.palette_row_scratch)?;
                 }
                 for (pos, buf) in buf_out.iter().zip(out_bufs) {
                     buffers[*pos] = buf;

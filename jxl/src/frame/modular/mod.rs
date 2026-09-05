@@ -26,7 +26,7 @@ use crate::render::buffer_splitter::OutputChannelRef;
 use crate::util::sync::Mutex;
 use crate::util::sync::atomic::{AtomicBool, Ordering};
 use crate::util::tracing_wrappers::*;
-use crate::util::{CeilLog2, PerThreadStorage};
+use crate::util::{CeilLog2, PerThreadStorage, PerThreadStorageRef};
 
 mod buffers;
 mod decode;
@@ -211,9 +211,9 @@ impl ModularBufferInfo {
 
 use crate::frame::modular::transforms::smooth_squeeze::SmoothUpsampleScratch;
 
-struct TransformScratchSpace {
+pub(super) struct TransformScratchSpace {
     smooth_upsample_scratch: SmoothUpsampleScratch,
-    palette_row_scratch: [Vec<i32>; 2],
+    palette_row_scratch: [Vec<i32>; 3],
 }
 
 impl Debug for TransformScratchSpace {
@@ -226,7 +226,7 @@ impl TransformScratchSpace {
     fn new() -> TransformScratchSpace {
         TransformScratchSpace {
             smooth_upsample_scratch: SmoothUpsampleScratch::default(),
-            palette_row_scratch: [vec![], vec![]],
+            palette_row_scratch: [vec![], vec![], vec![]],
         }
     }
 }
@@ -275,6 +275,12 @@ fn max_channels<'a, T: Iterator<Item = &'a ChannelInfo> + ExactSizeIterator>(cha
 }
 
 impl FullModularImage {
+    pub(super) fn get_transform_scratch_space(
+        &self,
+    ) -> PerThreadStorageRef<'_, TransformScratchSpace> {
+        self.transform_scratch_space.get()
+    }
+
     pub fn can_do_partial_render(&self) -> bool {
         self.can_do_partial_render
     }
@@ -547,6 +553,7 @@ impl FullModularImage {
     ) -> Result<bool> {
         let allow_partial = allow_partial && self.can_do_early_partial_render;
         let mut decoded_if_partial = 0;
+        let mut scratch = self.transform_scratch_space.get();
         let ret = with_buffers(
             &self.buffer_info,
             &self.section_buffer_indices[0],
@@ -560,9 +567,11 @@ impl FullModularImage {
                     global_tree,
                     br,
                     Some(&mut decoded_if_partial),
+                    &mut scratch,
                 )
             },
         );
+        drop(scratch);
 
         let total_buffers = self.section_buffer_indices[0].len();
 
@@ -635,6 +644,7 @@ impl FullModularImage {
             }
         };
 
+        let mut scratch = self.transform_scratch_space.get();
         with_buffers(
             &self.buffer_info,
             &self.section_buffer_indices[section_id],
@@ -648,10 +658,12 @@ impl FullModularImage {
                     global_tree,
                     br,
                     None,
+                    &mut scratch,
                 )?;
                 Ok(())
             },
         )?;
+        drop(scratch);
 
         for b in self.section_buffer_indices[section_id].iter().copied() {
             self.buffer_info[b].buffer_grid[grid].extract_needed_borders(&self.recycler)?;
@@ -986,7 +998,7 @@ fn dequant_lf(
 }
 
 #[allow(clippy::too_many_arguments)]
-pub fn decode_vardct_lf(
+pub(super) fn decode_vardct_lf(
     group: usize,
     frame_header: &FrameHeader,
     image_metadata: &ImageMetadata,
@@ -998,6 +1010,7 @@ pub fn decode_vardct_lf(
     lf: &mut [OutputChannelRef],
     quant_lf: &mut OutputChannelRef,
     br: &mut BitReader,
+    transform_scratch_space: &mut TransformScratchSpace,
 ) -> Result<()> {
     let extra_precision = br.read(2)?;
     debug!(?extra_precision);
@@ -1026,6 +1039,7 @@ pub fn decode_vardct_lf(
         global_tree,
         br,
         None,
+        transform_scratch_space,
     )?;
     dequant_lf(
         r,
@@ -1041,13 +1055,14 @@ pub fn decode_vardct_lf(
     )
 }
 
-pub fn decode_hf_metadata(
+pub(super) fn decode_hf_metadata(
     group: usize,
     frame_header: &FrameHeader,
     image_metadata: &ImageMetadata,
     global_tree: &Option<Tree>,
     hf_meta: &mut HfMetaViews,
     br: &mut BitReader,
+    transform_scratch_space: &mut TransformScratchSpace,
 ) -> Result<()> {
     let stream_id = ModularStreamId::LFMeta(group).get_id(frame_header);
     debug!(?stream_id);
@@ -1074,6 +1089,7 @@ pub fn decode_hf_metadata(
         global_tree,
         br,
         None,
+        transform_scratch_space,
     )?;
     let ytox_image = &buffers[0].data;
     let ytob_image = &buffers[1].data;
@@ -1140,12 +1156,13 @@ pub fn decode_hf_metadata(
     Ok(())
 }
 
-pub fn decode_quant_table(
+pub(super) fn decode_quant_table(
     index: usize,
     frame_header: &FrameHeader,
     (required_size_x, required_size_y): (usize, usize),
     global_tree: &Option<Tree>,
     br: &mut BitReader,
+    transform_scratch_space: &mut TransformScratchSpace,
 ) -> Result<Vec<i32>> {
     let bit_depth = BitDepth::integer_samples(8);
     let mut image = [
@@ -1161,6 +1178,7 @@ pub fn decode_quant_table(
         global_tree,
         br,
         None,
+        transform_scratch_space,
     )?;
     let mut qtable = Vec::with_capacity(required_size_x * required_size_y * 3);
     for channel in image.iter_mut() {

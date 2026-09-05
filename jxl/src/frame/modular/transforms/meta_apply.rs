@@ -225,7 +225,6 @@ pub(super) fn meta_apply_single_transform(
                     .iter()
                     .map(|x| x.0)
                     .collect(),
-                num_colors,
                 num_deltas,
                 predictor: pred,
                 wp_header: header.wp_header.clone(),
