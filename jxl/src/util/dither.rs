@@ -6,7 +6,8 @@
 use std::sync::LazyLock;
 
 // 32x32 blue noise dithering pattern from
-// https://momentsingraphics.de/BlueNoise.html#Downloads
+// PBBN_32T.png by DZgas (CC BY)
+// https://gate-dzgas.com/Perfect-best-blue-noise.html
 // Stored as 8-bit rank values p in 0..255 (1,024 bytes).
 // Scaled to zero-centered floats in (-0.5, +0.5) via (2.0 * p - 255.0) / 512.0.
 // Rows are expanded to 64 (32 + 32) at runtime to allow wrap-around SIMD loads.
