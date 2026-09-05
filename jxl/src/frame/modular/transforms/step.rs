@@ -8,6 +8,7 @@ use std::fmt::Debug;
 use super::{RctOp, RctPermutation};
 use crate::error::Result;
 use crate::frame::modular::buffers::{ModularChannel, with_buffers};
+use crate::frame::modular::transforms::palette::PaletteStep;
 use crate::frame::modular::transforms::smooth_squeeze::smooth_upsample;
 use crate::frame::modular::{
     DataStatus, FullModularImage, ModularBufferInfo, ModularGridKind, Predictor,
@@ -40,7 +41,6 @@ pub enum TransformStep {
         buf_in: usize,
         buf_pal: usize,
         buf_out: Vec<usize>,
-        num_colors: usize,
         num_deltas: usize,
         predictor: Predictor,
         wp_header: WeightedHeader,
@@ -700,10 +700,9 @@ impl TransformStepChunk {
                 buf_in,
                 buf_pal,
                 buf_out,
-                num_colors,
                 num_deltas,
                 predictor,
-                ..
+                wp_header,
             } if !predictor.requires_full_row() => {
                 assert_eq!(out_grid_kind, buffers[*buf_in].grid_kind);
                 assert_eq!(out_size, buffers[*buf_in].info.size);
@@ -758,23 +757,25 @@ impl TransformStepChunk {
                         super::palette::zero_palette_step_one_group(
                             img_pal.as_ref().unwrap(),
                             &mut out_buf_refs,
-                            *num_colors,
-                            *num_deltas,
                         );
                     } else {
                         let img_in = borrow_channel(buffers, (*buf_in, out_grid));
-                        super::palette::do_palette_step_one_group(
-                            img_in.as_ref().unwrap(),
-                            img_pal.as_ref().unwrap(),
-                            &mut out_buf_refs,
-                            left_refs.as_deref(),
-                            top_refs.as_deref(),
-                            topleft_refs.as_deref(),
-                            *num_colors,
-                            *num_deltas,
-                            *predictor,
-                            &mut transform_scratch_space.palette_row_scratch,
-                        );
+                        let in_chan = img_in.as_ref().unwrap();
+                        PaletteStep {
+                            buf_in: std::slice::from_ref(&in_chan),
+                            buf_pal: img_pal.as_ref().unwrap(),
+                            buf_out: &mut out_buf_refs,
+                            num_deltas: *num_deltas,
+                            predictor: *predictor,
+                            wp_header,
+                            grid_xsize: 1,
+                            buf_left: left_refs.as_deref(),
+                            buf_top: top_refs.as_deref(),
+                            buf_topleft: topleft_refs.as_deref(),
+                            prev_aux: None,
+                            aux_out: &mut [],
+                        }
+                        .run(&mut transform_scratch_space.palette_row_scratch)?;
                     }
                 }
                 let buf_in_grid = &buffers[*buf_in].buffer_grid[out_grid];
@@ -786,7 +787,6 @@ impl TransformStepChunk {
                 buf_in,
                 buf_pal,
                 buf_out,
-                num_colors,
                 num_deltas,
                 predictor,
                 wp_header,
@@ -859,21 +859,22 @@ impl TransformStepChunk {
                     } else {
                         vec![]
                     };
-                    super::palette::do_palette_step_group_row(
-                        &in_buf_refs,
-                        img_pal.as_ref().unwrap(),
-                        &mut out_buf_refs,
-                        (grid_y > 0).then_some(&prev_refs[..]),
-                        (grid_y > 0 && *predictor == Predictor::Weighted)
-                            .then_some(&prev_aux_refs[..]),
-                        &mut aux_out,
-                        grid_shape.0,
-                        *num_colors,
-                        *num_deltas,
-                        *predictor,
+                    PaletteStep {
+                        buf_in: &in_buf_refs,
+                        buf_pal: img_pal.as_ref().unwrap(),
+                        buf_out: &mut out_buf_refs,
+                        num_deltas: *num_deltas,
+                        predictor: *predictor,
                         wp_header,
-                        &mut transform_scratch_space.palette_row_scratch,
-                    )?;
+                        grid_xsize: grid_shape.0,
+                        buf_left: None,
+                        buf_top: (grid_y > 0).then_some(&prev_refs[..]),
+                        buf_topleft: None,
+                        prev_aux: (grid_y > 0 && *predictor == Predictor::Weighted)
+                            .then_some(&prev_aux_refs[..]),
+                        aux_out: &mut aux_out,
+                    }
+                    .run(&mut transform_scratch_space.palette_row_scratch)?;
                 }
                 let buf_pal_grid = &buffers[*buf_pal].buffer_grid[0];
                 buf_pal_grid.mark_used(buf_pal_grid.can_consume(is_final), recycler);
