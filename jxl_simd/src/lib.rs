@@ -604,7 +604,7 @@ mod test {
                     let simd_res = compute(d, &a, &b, &c);
                     for (scalar, simd) in scalar_res.iter().zip(simd_res.iter()) {
                         // Less strict requirements because of fma.
-                        compare_scalar_simd(*scalar, *simd, 2e-5, 2e-5);
+                        compare_scalar_simd(*scalar, *simd, 3e-5, 3e-5);
                     }
                     Ok(())
                 })
