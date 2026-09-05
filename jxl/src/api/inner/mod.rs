@@ -306,4 +306,38 @@ mod tests {
             assert_eq!(trailing.raw_data().len() + buf.len(), expected_size);
         }
     }
+
+    #[test]
+    fn aux_box_seek() {
+        let data = include_bytes!("../../../tests/testdata/multiple_aux.jxl");
+
+        let ty_foo = JxlAuxBoxType(*b"foo ");
+        let ty_bar = JxlAuxBoxType(*b"bar ");
+
+        let options = JxlDecoderOptions {
+            request_aux_boxes: vec![ty_bar],
+            scan_frames_only: true,
+            ..Default::default()
+        };
+        let mut decoder = JxlDecoderInner::new(options);
+
+        let mut buf = &data[..];
+        while decoder.has_more_frames() {
+            decoder.process(&mut buf, None, None).unwrap();
+        }
+        decoder.process_trailing_data(&mut buf).unwrap();
+        assert!(decoder.aux_boxes(ty_foo).is_empty());
+        assert_eq!(decoder.aux_boxes(ty_bar).len(), 2);
+
+        let seek_target = decoder.scanned_frames()[0].seek_target;
+        decoder.start_new_frame(seek_target);
+
+        let mut buf = &data[(seek_target.decode_start_file_offset as usize)..];
+        while decoder.has_more_frames() {
+            decoder.process(&mut buf, None, None).unwrap();
+        }
+        decoder.process_trailing_data(&mut buf).unwrap();
+        assert!(decoder.aux_boxes(ty_foo).is_empty());
+        assert_eq!(decoder.aux_boxes(ty_bar).len(), 2);
+    }
 }
