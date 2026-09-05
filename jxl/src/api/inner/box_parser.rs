@@ -206,6 +206,9 @@ impl BoxParser {
                 return Err(Error::InvalidBox);
             }
             let overflow = codestream_pos - start;
+            if let Some(bytes) = &mut b.codestream_left {
+                *bytes -= overflow;
+            }
             b.file_position += overflow;
             b.consumed_codestream = codestream_pos;
             Ok(Some(b))
@@ -443,7 +446,12 @@ impl BoxParser {
                     let mut buf = self.ooo_jxlp_buffer.remove(&id).unwrap();
                     let mut total = 0;
                     loop {
-                        let space = buf.data.len().max(1024).min(input.available_bytes()?) as u64;
+                        let space = buf
+                            .data
+                            .len()
+                            .max(1024)
+                            .min(self.available_bytes_inner(input)?)
+                            as u64;
                         let space = count.map(|x| (x - total).min(space)).unwrap_or(space) as usize;
                         if space == 0 {
                             break;
@@ -531,7 +539,11 @@ impl BoxParser {
         let mut buf = self.aux.box_buffer.take().unwrap();
         let mut total = 0;
         loop {
-            let space = buf.data.len().max(1024).min(input.available_bytes()?) as u64;
+            let space = buf
+                .data
+                .len()
+                .max(1024)
+                .min(self.available_bytes_inner(input)?) as u64;
             let space = (count - total).min(space) as usize;
             if space == 0 {
                 break;
