@@ -6,14 +6,16 @@
 use crate::error::Result;
 use crate::frame::modular::predict::{PredictionData, WeightedPredictorState};
 use crate::frame::modular::{ModularChannel, Predictor};
+use crate::headers::bit_depth::BitDepth;
 use crate::headers::modular::WeightedHeader;
 use crate::image::Image;
-use crate::util::sync::RwLockWriteGuard;
+use crate::util::sync::{OnceLock, RwLockWriteGuard};
 
 const RGB_CHANNELS: usize = 3;
 
 // 5x5x5 color cube for the larger cube.
 const LARGE_CUBE: usize = 5;
+const LARGE_CUBE_ENTRIES: usize = LARGE_CUBE * LARGE_CUBE * LARGE_CUBE;
 
 // Smaller interleaved color cube to fill the holes of the larger cube.
 const SMALL_CUBE: usize = 4;
@@ -21,22 +23,17 @@ const SMALL_CUBE_BITS: usize = 2;
 // SMALL_CUBE ** 3
 const LARGE_CUBE_OFFSET: usize = SMALL_CUBE * SMALL_CUBE * SMALL_CUBE;
 
-fn scale<const DENOM: usize>(value: usize, bit_depth: usize) -> i32 {
-    // return (value * ((1 << bit_depth) - 1)) / DENOM;
-    // We only call this function with SMALL_CUBE or LARGE_CUBE - 1 as DENOM,
-    // allowing us to avoid a division here.
-    const {
-        assert!(DENOM == 4, "denom must be 4");
-    }
-    ((value * ((1 << bit_depth) - 1)) >> 2) as i32
+const DELTA_PALETTE_ENTRIES: usize = 143;
+
+#[derive(Debug)]
+struct ImplicitPalette {
+    deltas: [[i32; DELTA_PALETTE_ENTRIES]; RGB_CHANNELS],
+    small_cube: [[i32; LARGE_CUBE_OFFSET]; RGB_CHANNELS],
+    large_cube: [[i32; LARGE_CUBE_ENTRIES]; RGB_CHANNELS],
 }
 
-// The purpose of this function is solely to extend the interpretation of
-// palette indices to implicit values. If index < nb_deltas, indicating that the
-// result is a delta palette entry, it is the responsibility of the caller to
-// treat it as such.
-fn get_palette_value(palette: &Image<i32>, index: isize, c: usize, bit_depth: usize) -> i32 {
-    if index < 0 {
+impl ImplicitPalette {
+    fn new(bit_depth: usize) -> Self {
         const DELTA_PALETTE: [[i32; 3]; 72] = [
             [0, 0, 0],
             [4, 4, 4],
@@ -111,49 +108,94 @@ fn get_palette_value(palette: &Image<i32>, index: isize, c: usize, bit_depth: us
             [0, 0, -128],
             [-24, 45, -45],
         ];
-        if c >= RGB_CHANNELS {
-            return 0;
-        }
-        // Do not open the brackets, otherwise INT32_MIN negation could overflow.
-        let mut index = -(index + 1) as usize;
-        index %= 1 + 2 * (DELTA_PALETTE.len() - 1);
         const MULTIPLIER: [i32; 2] = [-1, 1];
-        let mut result = DELTA_PALETTE[(index + 1) >> 1][c] * MULTIPLIER[index & 1];
-        if bit_depth > 8 {
-            result *= 1 << (bit_depth - 8);
+
+        let mut deltas = [[0; DELTA_PALETTE_ENTRIES]; RGB_CHANNELS];
+        for (c, deltas_c) in deltas.iter_mut().enumerate() {
+            for (idx, slot) in deltas_c.iter_mut().enumerate() {
+                let mut result = DELTA_PALETTE[(idx + 1) >> 1][c] * MULTIPLIER[idx & 1];
+                if bit_depth > 8 {
+                    result *= 1 << (bit_depth - 8);
+                }
+                *slot = result;
+            }
         }
-        result
-    } else {
-        let palette_size = palette.size().0;
-        let mut index = index as usize;
-        if index < palette_size {
-            palette.row(c)[index]
-        } else if index < palette_size + LARGE_CUBE_OFFSET {
-            if c >= RGB_CHANNELS {
-                return 0;
+
+        let scale = |value: usize, bit_depth: usize| ((value * ((1 << bit_depth) - 1)) / 4) as i32;
+
+        let mut small_cube = [[0; LARGE_CUBE_OFFSET]; RGB_CHANNELS];
+        for (c, cube_c) in small_cube.iter_mut().enumerate() {
+            for (idx, slot) in cube_c.iter_mut().enumerate() {
+                let shifted = idx >> (c * SMALL_CUBE_BITS);
+                *slot =
+                    scale(shifted % SMALL_CUBE, bit_depth) + (1 << (0.max(bit_depth as isize - 3)));
             }
-            index -= palette_size;
-            index >>= c * SMALL_CUBE_BITS;
-            scale::<SMALL_CUBE>(index % SMALL_CUBE, bit_depth)
-                + (1 << (0.max(bit_depth as isize - 3)))
+        }
+
+        let mut large_cube = [[0; LARGE_CUBE_ENTRIES]; RGB_CHANNELS];
+        for (c, cube_c) in large_cube.iter_mut().enumerate() {
+            for (idx, slot) in cube_c.iter_mut().enumerate() {
+                let val = match c {
+                    0 => idx,
+                    1 => idx / LARGE_CUBE,
+                    2 => idx / (LARGE_CUBE * LARGE_CUBE),
+                    _ => unreachable!(),
+                };
+                *slot = scale(val % LARGE_CUBE, bit_depth);
+            }
+        }
+
+        ImplicitPalette {
+            deltas,
+            small_cube,
+            large_cube,
+        }
+    }
+}
+
+struct Palette<'a> {
+    implicit: &'static ImplicitPalette,
+    explicit: &'a [i32],
+    c: usize,
+}
+
+impl<'a> Palette<'a> {
+    fn new(bit_depth: &BitDepth, c: usize, buf: &'a ModularChannel) -> Self {
+        static IMPLICIT_PALETTES: [OnceLock<ImplicitPalette>; 25] = [const { OnceLock::new() }; 25];
+        let bit_depth = bit_depth.bits_per_sample().min(24) as usize;
+        Self {
+            implicit: IMPLICIT_PALETTES[bit_depth].get_or_init(|| ImplicitPalette::new(bit_depth)),
+            explicit: if buf.data.size().0 > 0 {
+                buf.data.row(c)
+            } else {
+                &[]
+            },
+            c,
+        }
+    }
+
+    #[inline(always)]
+    fn get(&self, index: isize) -> i32 {
+        let Self {
+            implicit,
+            explicit,
+            c,
+        } = self;
+        let uindex = index as usize;
+        if index >= 0 && uindex < explicit.len() {
+            explicit[uindex]
+        } else if *c >= RGB_CHANNELS {
+            0
+        } else if index < 0 {
+            let idx = (-(index + 1) as usize) % DELTA_PALETTE_ENTRIES;
+            implicit.deltas[*c][idx]
         } else {
-            if c >= RGB_CHANNELS {
-                return 0;
+            let cube_idx = uindex - self.explicit.len();
+            if cube_idx < LARGE_CUBE_OFFSET {
+                implicit.small_cube[*c][cube_idx]
+            } else {
+                implicit.large_cube[*c][(cube_idx - LARGE_CUBE_OFFSET) % LARGE_CUBE_ENTRIES]
             }
-            index -= palette_size + LARGE_CUBE_OFFSET;
-            // TODO(eustas): should we take care of ambiguity created by
-            //               index >= LARGE_CUBE ** 3 ?
-            match c {
-                0 => (),
-                1 => {
-                    index /= LARGE_CUBE;
-                }
-                2 => {
-                    index /= LARGE_CUBE * LARGE_CUBE;
-                }
-                _ => (),
-            }
-            scale::<{ LARGE_CUBE - 1 }>(index % LARGE_CUBE, bit_depth)
         }
     }
 }
@@ -194,19 +236,18 @@ impl<'a, 'b> PaletteStep<'a, 'b> {
             return Ok(());
         }
 
-        let palette = &buf_pal.data;
-        let bit_depth = buf_in[0].bit_depth.bits_per_sample().min(24) as usize;
         let num_c = buf_out.len() / grid_xsize;
 
         if predictor == Predictor::Zero {
             assert_eq!(grid_xsize, 1);
             assert_eq!(buf_in.len(), 1);
             for (c, out_buf) in buf_out.iter_mut().enumerate() {
+                let palette = Palette::new(&out_buf.bit_depth, c, buf_pal);
                 for y in 0..h {
                     let index_row = buf_in[0].data.row(y);
                     let out_row = out_buf.data.row_mut(y);
                     for (out, &index) in out_row.iter_mut().zip(index_row.iter()) {
-                        *out = get_palette_value(palette, index as isize, c, bit_depth);
+                        *out = palette.get(index as isize);
                     }
                 }
             }
@@ -222,6 +263,7 @@ impl<'a, 'b> PaletteStep<'a, 'b> {
 
         for c in 0..num_c {
             let out_row_idx = c * grid_xsize;
+            let palette = Palette::new(&buf_out[out_row_idx].bit_depth, c, buf_pal);
             let mut wp_state = if predictor == Predictor::Weighted {
                 let mut state = WeightedPredictorState::new(wp_header, total_w);
                 if let Some(Some(aux_img)) = prev_aux.and_then(|aux| aux.get(c)) {
@@ -272,8 +314,7 @@ impl<'a, 'b> PaletteStep<'a, 'b> {
                     let out_idx = out_row_idx + grid_x;
                     let out_row = buf_out[out_idx].data.row_mut(y);
                     for (x, &index) in index_img.iter().enumerate() {
-                        let palette_entry =
-                            get_palette_value(palette, index as isize, c, bit_depth);
+                        let palette_entry = palette.get(index as isize);
                         let x_scratch = left_offset + gx;
                         let prediction_data = PredictionData::get_rows(
                             row_cur,
@@ -319,11 +360,9 @@ impl<'a, 'b> PaletteStep<'a, 'b> {
 
 pub fn zero_palette_step_one_group(buf_pal: &ModularChannel, buf_out: &mut [&mut ModularChannel]) {
     let (_w, h) = buf_out[0].data.size();
-    let palette = &buf_pal.data;
-    let bit_depth = buf_out[0].bit_depth.bits_per_sample().min(24) as usize;
-
     for (c, out) in buf_out.iter_mut().enumerate() {
-        let palette_entry = get_palette_value(palette, 0, c, bit_depth);
+        let palette = Palette::new(&out.bit_depth, c, buf_pal);
+        let palette_entry = palette.get(0);
         for y in 0..h {
             out.data.row_mut(y).fill(palette_entry);
         }
