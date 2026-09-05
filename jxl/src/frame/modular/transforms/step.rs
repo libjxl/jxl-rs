@@ -703,126 +703,69 @@ impl TransformStepChunk {
                 num_deltas,
                 predictor,
                 wp_header,
-            } if !predictor.requires_full_row() => {
+            } => {
                 assert_eq!(out_grid_kind, buffers[*buf_in].grid_kind);
                 assert_eq!(out_size, buffers[*buf_in].info.size);
+                let grid_shape = buffers[buf_out[0]].grid_shape;
+                let stride = grid_shape.0;
+                let requires_full_row = predictor.requires_full_row();
+                let grid_xsize = if requires_full_row {
+                    assert_eq!(out_grid % stride, 0);
+                    stride
+                } else {
+                    1
+                };
+                let grid_x = out_grid % stride;
+                let grid_y = out_grid / stride;
 
-                with_buffers(buffers, buf_out, out_grid, recycler, |_| Ok(()))?;
+                for gx in 0..grid_xsize {
+                    with_buffers(buffers, buf_out, out_grid + gx, recycler, |_| Ok(()))?;
+                }
+
                 if out_size.0 != 0 {
                     let img_pal = borrow_channel(buffers, (*buf_pal, 0));
-                    let grid_shape = buffers[buf_out[0]].grid_shape;
-                    let grid_x = out_grid % grid_shape.0;
-                    let grid_y = out_grid / grid_shape.0;
-                    let has_left = *predictor != Predictor::Zero && grid_x > 0;
+
+                    let has_left =
+                        !requires_full_row && *predictor != Predictor::Zero && grid_x > 0;
                     let has_top = *predictor != Predictor::Zero && grid_y > 0;
-                    let borrow_border_guards = |grid_idx: usize, is_lr: bool| {
+                    let has_topleft = has_left && has_top;
+
+                    let left_guards = has_left.then(|| {
                         buf_out
                             .iter()
                             .map(|i| {
-                                if is_lr {
-                                    borrow_leftright(buffers, (*i, grid_idx))
-                                } else {
-                                    borrow_topbottom(buffers, (*i, grid_idx))
-                                }
+                                borrow_leftright(buffers, (*i, grid_y * stride + (grid_x - 1)))
                             })
                             .collect::<Vec<_>>()
-                    };
-                    let stride = grid_shape.0;
-                    let left_guards = has_left
-                        .then(|| borrow_border_guards(grid_y * stride + (grid_x - 1), true));
-                    let top_guards = has_top
-                        .then(|| borrow_border_guards((grid_y - 1) * stride + grid_x, false));
-                    let topleft_guards = (has_left && has_top)
-                        .then(|| borrow_border_guards((grid_y - 1) * stride + (grid_x - 1), false));
+                    });
+                    let topleft_guards = has_topleft.then(|| {
+                        buf_out
+                            .iter()
+                            .map(|i| {
+                                borrow_topbottom(
+                                    buffers,
+                                    (*i, (grid_y - 1) * stride + (grid_x - 1)),
+                                )
+                            })
+                            .collect::<Vec<_>>()
+                    });
                     let left_refs = left_guards
-                        .as_ref()
-                        .map(|v| v.iter().map(|x| x.as_ref().unwrap()).collect::<Vec<_>>());
-                    let top_refs = top_guards
                         .as_ref()
                         .map(|v| v.iter().map(|x| x.as_ref().unwrap()).collect::<Vec<_>>());
                     let topleft_refs = topleft_guards
                         .as_ref()
                         .map(|v| v.iter().map(|x| x.as_ref().unwrap()).collect::<Vec<_>>());
 
-                    let mut guards = vec![];
-                    for i in buf_out {
-                        let b = &buffers[*i].buffer_grid[out_grid];
-                        guards.push(b.data.try_write().unwrap());
-                    }
-                    let mut out_buf_refs: Vec<&mut ModularChannel> =
-                        guards.iter_mut().map(|g| g.as_mut().unwrap()).collect();
-                    if matches!(predictor, Predictor::Zero)
-                        && buffers[*buf_in].buffer_grid[out_grid].data_status == DataStatus::Zero
-                    {
-                        super::palette::zero_palette_step_one_group(
-                            img_pal.as_ref().unwrap(),
-                            &mut out_buf_refs,
-                        );
-                    } else {
-                        let img_in = borrow_channel(buffers, (*buf_in, out_grid));
-                        let in_chan = img_in.as_ref().unwrap();
-                        PaletteStep {
-                            buf_in: std::slice::from_ref(&in_chan),
-                            buf_pal: img_pal.as_ref().unwrap(),
-                            buf_out: &mut out_buf_refs,
-                            num_deltas: *num_deltas,
-                            predictor: *predictor,
-                            wp_header,
-                            grid_xsize: 1,
-                            buf_left: left_refs.as_deref(),
-                            buf_top: top_refs.as_deref(),
-                            buf_topleft: topleft_refs.as_deref(),
-                            prev_aux: None,
-                            aux_out: &mut [],
-                        }
-                        .run(&mut transform_scratch_space.palette_row_scratch)?;
-                    }
-                }
-                let buf_in_grid = &buffers[*buf_in].buffer_grid[out_grid];
-                let buf_pal_grid = &buffers[*buf_pal].buffer_grid[0];
-                buf_in_grid.mark_used(buf_in_grid.can_consume(is_final), recycler);
-                buf_pal_grid.mark_used(buf_pal_grid.can_consume(is_final), recycler);
-            }
-            TransformStep::Palette {
-                buf_in,
-                buf_pal,
-                buf_out,
-                num_deltas,
-                predictor,
-                wp_header,
-            } => {
-                assert_eq!(out_grid_kind, buffers[*buf_in].grid_kind);
-                assert_eq!(out_size, buffers[*buf_in].info.size);
-                let grid_shape = buffers[buf_out[0]].grid_shape;
-                assert_eq!(out_grid % grid_shape.0, 0);
-                let grid_y = out_grid / grid_shape.0;
-                for grid_x in 0..grid_shape.0 {
-                    // Ensure that the output buffers are present.
-                    // TODO(szabadka): Extend the callback to support many grid points.
-                    with_buffers(buffers, buf_out, out_grid + grid_x, recycler, |_| Ok(()))?;
-                }
-                if out_size.0 != 0 {
-                    let mut in_bufs = vec![];
-                    for grid_x in 0..grid_shape.0 {
-                        let grid = grid_y * grid_shape.0 + grid_x;
-                        in_bufs.push(borrow_channel(buffers, (*buf_in, grid)));
-                    }
-                    let in_buf_refs: Vec<&ModularChannel> =
-                        in_bufs.iter().map(|x| x.as_ref().unwrap()).collect();
-                    let img_pal = borrow_channel(buffers, (*buf_pal, 0));
-                    // The previous row of output grids is only read as prediction
-                    // context, so take read locks on it: other transforms (e.g.
-                    // Output) may read it concurrently.
-                    let mut prev_guards = vec![];
+                    let mut top_guards = vec![];
                     let mut prev_aux_guards = vec![];
-                    if grid_y > 0 {
+                    if has_top {
                         for i in buf_out {
-                            for grid_x in 0..grid_shape.0 {
-                                let grid = (grid_y - 1) * grid_shape.0 + grid_x;
-                                prev_guards.push(borrow_topbottom(buffers, (*i, grid)));
+                            for gx in 0..grid_xsize {
+                                let grid = (grid_y - 1) * stride + grid_x + gx;
+                                top_guards.push(borrow_topbottom(buffers, (*i, grid)));
                             }
                             if *predictor == Predictor::Weighted {
-                                let grid = (grid_y - 1) * grid_shape.0;
+                                let grid = (grid_y - 1) * stride;
                                 prev_aux_guards.push(
                                     buffers[*i].buffer_grid[grid]
                                         .auxiliary_data
@@ -832,54 +775,73 @@ impl TransformStepChunk {
                             }
                         }
                     }
-                    let prev_refs: Vec<&Image<i32>> =
-                        prev_guards.iter().map(|g| g.as_ref().unwrap()).collect();
+                    let top_refs: Vec<&Image<i32>> =
+                        top_guards.iter().map(|g| g.as_ref().unwrap()).collect();
                     let prev_aux_refs: Vec<Option<&Image<i32>>> =
                         prev_aux_guards.iter().map(|g| g.as_ref()).collect();
+
                     let mut guards = vec![];
                     for i in buf_out {
-                        for grid_x in 0..grid_shape.0 {
-                            let grid = grid_y * grid_shape.0 + grid_x;
+                        for gx in 0..grid_xsize {
+                            let grid = out_grid + gx;
                             let b = &buffers[*i].buffer_grid[grid];
                             guards.push(b.data.try_write().unwrap());
                         }
                     }
                     let mut out_buf_refs: Vec<&mut ModularChannel> =
                         guards.iter_mut().map(|g| g.as_mut().unwrap()).collect();
-                    let mut aux_out: Vec<_> = if *predictor == Predictor::Weighted {
-                        buf_out
-                            .iter()
-                            .map(|i| {
-                                buffers[*i].buffer_grid[grid_y * grid_shape.0]
-                                    .auxiliary_data
-                                    .try_write()
-                                    .unwrap()
-                            })
-                            .collect()
+
+                    if matches!(predictor, Predictor::Zero)
+                        && buffers[*buf_in].buffer_grid[out_grid].data_status == DataStatus::Zero
+                    {
+                        super::palette::zero_palette_step_one_group(
+                            img_pal.as_ref().unwrap(),
+                            &mut out_buf_refs,
+                        );
                     } else {
-                        vec![]
-                    };
-                    PaletteStep {
-                        buf_in: &in_buf_refs,
-                        buf_pal: img_pal.as_ref().unwrap(),
-                        buf_out: &mut out_buf_refs,
-                        num_deltas: *num_deltas,
-                        predictor: *predictor,
-                        wp_header,
-                        grid_xsize: grid_shape.0,
-                        buf_left: None,
-                        buf_top: (grid_y > 0).then_some(&prev_refs[..]),
-                        buf_topleft: None,
-                        prev_aux: (grid_y > 0 && *predictor == Predictor::Weighted)
-                            .then_some(&prev_aux_refs[..]),
-                        aux_out: &mut aux_out,
+                        let mut in_bufs = vec![];
+                        for gx in 0..grid_xsize {
+                            in_bufs.push(borrow_channel(buffers, (*buf_in, out_grid + gx)));
+                        }
+                        let in_buf_refs: Vec<&ModularChannel> =
+                            in_bufs.iter().map(|x| x.as_ref().unwrap()).collect();
+
+                        let mut aux_out: Vec<_> = if *predictor == Predictor::Weighted {
+                            buf_out
+                                .iter()
+                                .map(|i| {
+                                    buffers[*i].buffer_grid[grid_y * stride]
+                                        .auxiliary_data
+                                        .try_write()
+                                        .unwrap()
+                                })
+                                .collect()
+                        } else {
+                            vec![]
+                        };
+
+                        PaletteStep {
+                            buf_in: &in_buf_refs,
+                            buf_pal: img_pal.as_ref().unwrap(),
+                            buf_out: &mut out_buf_refs,
+                            num_deltas: *num_deltas,
+                            predictor: *predictor,
+                            wp_header,
+                            grid_xsize,
+                            buf_left: left_refs.as_deref(),
+                            buf_top: has_top.then_some(&top_refs[..]),
+                            buf_topleft: topleft_refs.as_deref(),
+                            prev_aux: (has_top && *predictor == Predictor::Weighted)
+                                .then_some(&prev_aux_refs[..]),
+                            aux_out: &mut aux_out,
+                        }
+                        .run(&mut transform_scratch_space.palette_row_scratch)?;
                     }
-                    .run(&mut transform_scratch_space.palette_row_scratch)?;
                 }
                 let buf_pal_grid = &buffers[*buf_pal].buffer_grid[0];
                 buf_pal_grid.mark_used(buf_pal_grid.can_consume(is_final), recycler);
-                for grid_x in 0..grid_shape.0 {
-                    let buf_in_grid = &buffers[*buf_in].buffer_grid[out_grid + grid_x];
+                for gx in 0..grid_xsize {
+                    let buf_in_grid = &buffers[*buf_in].buffer_grid[out_grid + gx];
                     buf_in_grid.mark_used(buf_in_grid.can_consume(is_final), recycler);
                 }
             }
