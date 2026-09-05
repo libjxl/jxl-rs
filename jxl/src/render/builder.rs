@@ -15,7 +15,7 @@ use crate::image::BufferRecycler;
 use crate::render::StageSpecialCase;
 use crate::render::internal::ChannelInfo;
 use crate::render::save::SaveStage;
-use crate::render::stages::ConvertI32ToU8Stage;
+use crate::render::stages::{ConvertI16ToU8Stage, ConvertI32ToU8Stage};
 use crate::util::ShiftRightCeil;
 use crate::util::sync::atomic::{AtomicBool, Ordering};
 use crate::util::tracing_wrappers::*;
@@ -162,11 +162,30 @@ impl<Pipeline: RenderPipeline> RenderPipelineBuilder<Pipeline> {
                             assert_eq!(c, channel);
                             if b % bit_depth == 0 {
                                 let mult = ((1 << b) - 1) / ((1 << bit_depth) - 1);
-                                // Remove the next stage, and replace the current stage with I32 -> I8
+                                // Remove the next stage, and replace the current stage with I32 -> U8
                                 // conversion.
                                 stage_is_used[n] = false;
                                 self.shared.stages[i] = Stage::InOut(Pipeline::box_inout_stage(
                                     ConvertI32ToU8Stage::new(c, mult, (1 << b) - 1),
+                                ));
+                            }
+                        }
+                    }
+                    Some(StageSpecialCase::Modular16ToF32 { channel, bit_depth }) => {
+                        let n = channel_next_use[channel].unwrap();
+                        if let Some(StageSpecialCase::F32ToU8 {
+                            channel: c,
+                            bit_depth: b,
+                        }) = self.shared.stages[n].is_special_case()
+                        {
+                            assert_eq!(c, channel);
+                            if b % bit_depth == 0 {
+                                let mult = ((1 << b) - 1) / ((1 << bit_depth) - 1);
+                                // Remove the next stage, and replace the current stage with I16 -> U8
+                                // conversion.
+                                stage_is_used[n] = false;
+                                self.shared.stages[i] = Stage::InOut(Pipeline::box_inout_stage(
+                                    ConvertI16ToU8Stage::new(c, mult, (1 << b) - 1),
                                 ));
                             }
                         }

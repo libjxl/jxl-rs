@@ -8,7 +8,7 @@ use std::sync::OnceLock;
 use jxl_simd::{F32SimdVec, I32SimdVec, SimdDescriptor, simd_function};
 
 use super::step::TiledChannelView;
-use crate::image::{Image, Rect};
+use crate::image::{ImageRectMut, Rect};
 use crate::util::{DITHER_TABLE, fast_jinc_windowed_sq_simd};
 
 fn compute_jinc_subkernel(delta_x: f32, delta_y: f32) -> [f32; 25] {
@@ -109,6 +109,7 @@ fn get_small_squeeze_kernel(shift_diff: (usize, usize)) -> &'static [[f32; 25]] 
 pub(crate) struct SmoothUpsampleScratch {
     buffer: [Vec<f32>; 5],
     ibuf: Vec<i32>,
+    ibuf_i16: Vec<i16>,
     kernel_storage: Vec<f32>,
     row_float: Vec<f32>,
 }
@@ -119,6 +120,7 @@ impl SmoothUpsampleScratch {
             b.resize(in_len, 0.0);
         }
         self.ibuf.resize(in_len, 0);
+        self.ibuf_i16.resize(in_len, 0);
         self.row_float.resize(out_len, 0.0);
         self.kernel_storage.resize(kernel_len, 0.0);
     }
@@ -130,6 +132,15 @@ fn make_float<D: SimdDescriptor>(d: D, inp: &[i32], out: &mut [f32]) {
         .zip(out.chunks_exact_mut(D::F32Vec::LEN))
     {
         D::I32Vec::load(d, i).as_f32().store(o);
+    }
+}
+
+fn make_float_i16<D: SimdDescriptor>(d: D, inp: &[i16], out: &mut [f32]) {
+    for (i, o) in inp
+        .chunks_exact(D::I32Vec::LEN)
+        .zip(out.chunks_exact_mut(D::F32Vec::LEN))
+    {
+        D::I32Vec::load_from_i16(d, i).as_f32().store(o);
     }
 }
 
@@ -254,6 +265,52 @@ fn dither_round_and_store<D: SimdDescriptor>(
     }
 }
 
+#[allow(dead_code)]
+#[inline(always)]
+fn dither_round_and_store_i16<D: SimdDescriptor>(
+    d: D,
+    dither: bool,
+    dither_y: usize,
+    x0: usize,
+    xs: usize,
+    row_float: &[f32],
+    output_row: &mut [i16],
+) {
+    const { assert!(D::F32Vec::LEN <= 16) };
+    let lanes = D::F32Vec::LEN;
+    let half = D::F32Vec::splat(d, 0.5);
+    let num_chunks = xs.div_ceil(lanes);
+
+    for chunk_idx in 0..num_chunks {
+        let x = chunk_idx * lanes;
+        let cur_len = (xs - x).min(lanes);
+        let val = D::F32Vec::load(d, &row_float[x..]);
+        let dither_val = if dither {
+            let dither_x = (x0 + x) % 32;
+            D::F32Vec::load(d, &DITHER_TABLE[dither_y][dither_x..])
+        } else {
+            D::F32Vec::zero(d)
+        };
+        let dithered = val + dither_val;
+        let rounded = (dithered + half.copysign(dithered)).as_i32();
+        if cur_len == lanes && output_row.len() >= x + lanes {
+            // SAFETY: i16 and u16 have identical size, alignment, and valid bit patterns.
+            #[allow(unsafe_code)]
+            let out_u16 = unsafe {
+                std::slice::from_raw_parts_mut(output_row[x..].as_mut_ptr().cast::<u16>(), lanes)
+            };
+            rounded.store_u16(out_u16);
+        } else {
+            let mut temp_u16 = [0u16; 16];
+            rounded.store_u16(&mut temp_u16[..lanes]);
+            let to_copy = cur_len.min(output_row.len() - x);
+            for i in 0..to_copy {
+                output_row[x + i] = temp_u16[i] as i16;
+            }
+        }
+    }
+}
+
 #[inline(always)]
 fn smooth_upsample_simd_impl<D: SimdDescriptor>(
     d: D,
@@ -261,7 +318,7 @@ fn smooth_upsample_simd_impl<D: SimdDescriptor>(
     shift_diff: (usize, usize),
     dither: bool,
     rect: Rect,
-    output: &mut Image<i32>,
+    output: &mut ImageRectMut<'_, i32>,
     scratch: &mut SmoothUpsampleScratch,
 ) {
     let (dx, dy) = shift_diff;
@@ -315,7 +372,7 @@ fn smooth_upsample_simd_impl<D: SimdDescriptor>(
             if yout >= ys {
                 continue;
             }
-            let output_row = output.row_mut(yout);
+            let output_row = output.row(yout);
             let dither_y = (y0 + yout) % 32;
             let delta_y = (oy as f32 + 0.5) / (fy as f32) - 0.5;
 
@@ -379,20 +436,174 @@ fn smooth_upsample_simd_impl<D: SimdDescriptor>(
     }
 }
 
-simd_function!(
-    smooth_upsample,
+#[allow(dead_code)]
+#[inline(always)]
+fn smooth_upsample_simd_impl_i16<D: SimdDescriptor>(
     d: D,
-    pub fn smooth_upsample_simd_dispatch(
+    input: &TiledChannelView<'_>,
+    shift_diff: (usize, usize),
+    dither: bool,
+    rect: Rect,
+    output: &mut ImageRectMut<'_, i16>,
+    scratch: &mut SmoothUpsampleScratch,
+) {
+    let (dx, dy) = shift_diff;
+    let (fx, fy) = (1usize << dx, 1usize << dy);
+    let (x0, y0) = (rect.origin.0, rect.origin.1);
+    let (xs, ys) = (rect.size.0, rect.size.1);
+    let (in_xs, in_ys) = (xs.div_ceil(fx), ys.div_ceil(fy));
+    let (col_offset, row_offset) = (x0 / fx, y0 / fy);
+    let lanes = D::I32Vec::LEN;
+
+    if in_xs == 0 || in_ys == 0 {
+        return;
+    }
+    let num_chunks = in_xs.div_ceil(lanes);
+    let in_len = (num_chunks + 1) * lanes + 8;
+    let out_len = if fx <= 8 {
+        (num_chunks + 1) * lanes * fx
+    } else {
+        xs.next_multiple_of(lanes)
+    };
+    let num_weights = xs.min(fx);
+    let kernel_len = if fx > 8 {
+        num_weights.div_ceil(lanes) * 25 * lanes
+    } else {
+        0
+    };
+    scratch.init(in_len, out_len, kernel_len);
+
+    for (dy_idx, buf) in scratch.buffer.iter_mut().enumerate().take(4) {
+        let yg = (row_offset + dy_idx) as isize - 2;
+        input.load_row_to_scratch(yg, col_offset, in_xs + 4, &mut scratch.ibuf_i16);
+        make_float_i16(d, &scratch.ibuf_i16, buf);
+    }
+
+    let is_small = dx < SMALL_SHIFT_LIMIT && dy < SMALL_SHIFT_LIMIT;
+    let small_kernel = if is_small {
+        Some(get_small_squeeze_kernel(shift_diff))
+    } else {
+        None
+    };
+
+    let mut small_dynamic_weights = [[0.0f32; 25]; 8];
+
+    for iy_center in 0..in_ys {
+        let yg = (row_offset + iy_center) as isize + 2;
+        input.load_row_to_scratch(yg, col_offset, in_xs + 4, &mut scratch.ibuf_i16);
+        make_float_i16(d, &scratch.ibuf_i16, &mut scratch.buffer[4]);
+
+        for oy in 0..fy {
+            let yout = fy * iy_center + oy;
+            if yout >= ys {
+                continue;
+            }
+            let output_row = output.row(yout);
+            let dither_y = (y0 + yout) % 32;
+            let delta_y = (oy as f32 + 0.5) / (fy as f32) - 0.5;
+
+            if fx <= 8 {
+                let row_weights: &[[f32; 25]] = if let Some(k) = small_kernel {
+                    &k[oy * fx..(oy + 1) * fx]
+                } else {
+                    for (ox, w) in small_dynamic_weights.iter_mut().enumerate().take(fx) {
+                        let delta_x = (ox as f32 + 0.5) / (fx as f32) - 0.5;
+                        *w = compute_jinc_subkernel(delta_x, delta_y);
+                    }
+                    &small_dynamic_weights[..fx]
+                };
+
+                match fx {
+                    1 => process_row::<D, 1>(
+                        d,
+                        row_weights,
+                        in_xs,
+                        &scratch.buffer,
+                        &mut scratch.row_float,
+                    ),
+                    2 => process_row::<D, 2>(
+                        d,
+                        row_weights,
+                        in_xs,
+                        &scratch.buffer,
+                        &mut scratch.row_float,
+                    ),
+                    4 => process_row::<D, 4>(
+                        d,
+                        row_weights,
+                        in_xs,
+                        &scratch.buffer,
+                        &mut scratch.row_float,
+                    ),
+                    8 => process_row::<D, 8>(
+                        d,
+                        row_weights,
+                        in_xs,
+                        &scratch.buffer,
+                        &mut scratch.row_float,
+                    ),
+                    _ => unreachable!(),
+                }
+            } else {
+                compute_row_kernel(d, fx, delta_y, num_weights, &mut scratch.kernel_storage);
+                process_row_large(
+                    d,
+                    &scratch.kernel_storage,
+                    fx,
+                    xs,
+                    &scratch.buffer,
+                    &mut scratch.row_float,
+                );
+            }
+
+            dither_round_and_store_i16(d, dither, dither_y, x0, xs, &scratch.row_float, output_row);
+        }
+        scratch.buffer.rotate_left(1);
+    }
+}
+
+simd_function!(
+    smooth_upsample_i32,
+    d: D,
+    pub fn smooth_upsample_simd_dispatch_i32(
         input: &TiledChannelView<'_>,
         shift_diff: (usize, usize),
         dither: bool,
         rect: Rect,
-        output: &mut Image<i32>,
-        scratch: &mut SmoothUpsampleScratch
+        output: &mut ImageRectMut<'_, i32>,
+        scratch: &mut SmoothUpsampleScratch,
     ) {
         smooth_upsample_simd_impl(d, input, shift_diff, dither, rect, output, scratch);
     }
 );
+
+simd_function!(
+    smooth_upsample_i16,
+    d: D,
+    pub fn smooth_upsample_simd_dispatch_i16(
+        input: &TiledChannelView<'_>,
+        shift_diff: (usize, usize),
+        dither: bool,
+        rect: Rect,
+        output: &mut ImageRectMut<'_, i16>,
+        scratch: &mut SmoothUpsampleScratch,
+    ) {
+        smooth_upsample_simd_impl_i16(d, input, shift_diff, dither, rect, output, scratch);
+    }
+);
+
+#[allow(dead_code)]
+#[inline(always)]
+pub(in crate::frame::modular::transforms) fn smooth_upsample(
+    input: &TiledChannelView<'_>,
+    shift_diff: (usize, usize),
+    dither: bool,
+    rect: Rect,
+    output: &mut ImageRectMut<'_, i32>,
+    scratch: &mut SmoothUpsampleScratch,
+) {
+    smooth_upsample_i32(input, shift_diff, dither, rect, output, scratch);
+}
 
 #[cfg(test)]
 mod tests {

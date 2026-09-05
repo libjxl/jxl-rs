@@ -21,10 +21,15 @@ use crate::image::{Image, JxlOutputBuffer, Rect};
 
 #[allow(clippy::type_complexity)]
 pub fn decode(input: &[u8]) -> Result<(usize, Vec<Vec<Image<f32>>>), Error> {
-    decode_internal(input, usize::MAX, false, false, None, None, None)
+    decode_internal(input, usize::MAX, false, false, None, None, None, false)
 }
 
 #[allow(clippy::type_complexity)]
+pub fn decode_32bit(input: &[u8]) -> Result<(usize, Vec<Vec<Image<f32>>>), Error> {
+    decode_internal(input, usize::MAX, false, false, None, None, None, true)
+}
+
+#[allow(clippy::type_complexity, clippy::too_many_arguments)]
 pub fn decode_internal(
     mut input: &[u8],
     chunk_size: usize,
@@ -33,6 +38,7 @@ pub fn decode_internal(
     callback: Option<Box<dyn FnMut(&FileHeader, &Frame, usize) -> Result<(), Error>>>,
     mut flush_callback: Option<&mut dyn FnMut(usize, usize, &[Image<f32>]) -> Result<(), Error>>,
     parallel_runner: Option<&mut dyn JxlParallelRunner>,
+    disable_16bit_modular_buffers: bool,
 ) -> Result<(usize, Vec<Vec<Image<f32>>>), Error> {
     let s = &mut SequentialRunner;
     let parallel_runner = parallel_runner.unwrap_or(s);
@@ -102,6 +108,9 @@ pub fn decode_internal(
         initialized_decoder.process(&mut chunk_input, Some(parallel_runner))
     );
     decoder_with_image_info.set_use_simple_pipeline(use_simple_pipeline);
+    if disable_16bit_modular_buffers {
+        decoder_with_image_info.disable_16bit_modular_buffers();
+    }
 
     // Get basic info
     let basic_info = decoder_with_image_info.basic_info().clone();
@@ -334,6 +343,7 @@ pub fn read_headers_and_toc(data: &[u8]) -> Result<(FileHeader, FrameHeader, Toc
         })),
         None,
         None,
+        false,
     )?;
 
     Ok(result.take().unwrap())

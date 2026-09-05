@@ -7,7 +7,7 @@ use crate::error::Result;
 use crate::frame::modular::predict::{PredictionData, WeightedPredictorState};
 use crate::frame::modular::{ModularChannel, Predictor};
 use crate::headers::modular::WeightedHeader;
-use crate::image::Image;
+use crate::image::{Image, ImageRect, ImageRectMut, OwnedRawImage};
 use crate::util::sync::RwLockWriteGuard;
 
 const RGB_CHANNELS: usize = 3;
@@ -36,7 +36,8 @@ fn scale<const DENOM: usize>(value: usize, bit_depth: usize) -> i32 {
 // result is a delta palette entry, it is the responsibility of the caller to
 // treat it as such.
 fn get_palette_value(
-    palette: &Image<i32>,
+    palette: &ModularChannel,
+    is_16bit: bool,
     index: isize,
     c: usize,
     palette_size: usize,
@@ -157,12 +158,15 @@ fn get_palette_value(
                 _ => (),
             }
             scale::<{ LARGE_CUBE - 1 }>(index % LARGE_CUBE, bit_depth)
+        } else if is_16bit {
+            ImageRect::<i16>::from_raw(palette.data.as_rect()).row(c)[index] as i32
         } else {
-            palette.row(c)[index]
+            ImageRect::<i32>::from_raw(palette.data.as_rect()).row(c)[index]
         }
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn do_palette_step_general(
     buf_in: &ModularChannel,
     buf_pal: &ModularChannel,
@@ -171,81 +175,113 @@ pub fn do_palette_step_general(
     num_deltas: usize,
     predictor: Predictor,
     wp_header: &WeightedHeader,
+    is_16bit: bool,
 ) {
-    let (w, h) = buf_in.data.size();
-    let palette = &buf_pal.data;
+    let (w, h) = buf_in.size(is_16bit);
     let bit_depth = buf_in.bit_depth.bits_per_sample().min(24) as usize;
 
     if w == 0 {
         // Nothing to do.
         // Avoid touching "empty" channels with non-zero height.
-    } else if num_deltas == 0 && predictor == Predictor::Zero {
+        return;
+    }
+
+    if num_deltas == 0 && predictor == Predictor::Zero {
+        let mut row_scratch = vec![0i32; w];
         for (chan_index, out) in buf_out.iter_mut().enumerate() {
             for y in 0..h {
-                let row_index = buf_in.data.row(y);
-                let row_out = out.data.row_mut(y);
-                for x in 0..w {
-                    let index = row_index[x];
-                    let palette_value = get_palette_value(
-                        palette,
-                        index as isize,
-                        /*c=*/ chan_index,
-                        /*palette_size=*/ num_colors,
-                        /*bit_depth=*/ bit_depth,
+                if is_16bit {
+                    let in_rect = ImageRect::<i16>::from_raw(buf_in.data.as_rect());
+                    for (dst, &src) in row_scratch.iter_mut().zip(in_rect.row(y)) {
+                        *dst = src as i32;
+                    }
+                } else {
+                    let in_rect = ImageRect::<i32>::from_raw(buf_in.data.as_rect());
+                    row_scratch.copy_from_slice(in_rect.row(y));
+                }
+                for index in &mut row_scratch {
+                    *index = get_palette_value(
+                        buf_pal,
+                        is_16bit,
+                        *index as isize,
+                        chan_index,
+                        num_colors,
+                        bit_depth,
                     );
-                    row_out[x] = palette_value;
+                }
+                if is_16bit {
+                    let mut out_rect = ImageRectMut::<i16>::from_raw(out.data.as_rect_mut());
+                    for (dst, &src) in out_rect.row(y).iter_mut().zip(&row_scratch) {
+                        *dst = src as i16;
+                    }
+                } else {
+                    let mut out_rect = ImageRectMut::<i32>::from_raw(out.data.as_rect_mut());
+                    out_rect.row(y).copy_from_slice(&row_scratch);
                 }
             }
         }
-    } else if predictor == Predictor::Weighted {
-        let w = buf_in.data.size().0;
-        for (chan_index, out) in buf_out.iter_mut().enumerate() {
-            let mut wp_state = WeightedPredictorState::new(wp_header, w);
-            for y in 0..h {
-                let idx = buf_in.data.row(y);
-                for (x, &index) in idx.iter().enumerate() {
-                    let palette_entry = get_palette_value(
-                        palette,
-                        index as isize,
-                        /*c=*/ chan_index,
-                        /*palette_size=*/ num_colors + num_deltas,
-                        /*bit_depth=*/ bit_depth,
-                    );
-                    let prediction_data = PredictionData::get(&out.data, x, y);
-                    let (wp_pred, _) = wp_state.predict_and_property((x, y), &prediction_data);
-                    let pred = predictor.predict_one(prediction_data, wp_pred);
+        return;
+    }
+
+    let mut rows = [vec![0i32; w], vec![0i32; w], vec![0i32; w]];
+    let mut in_row = vec![0i32; w];
+    for (chan_index, out) in buf_out.iter_mut().enumerate() {
+        for r in &mut rows {
+            r.fill(0);
+        }
+        let mut wp_state = if predictor == Predictor::Weighted {
+            Some(WeightedPredictorState::new(wp_header, w))
+        } else {
+            None
+        };
+        for y in 0..h {
+            if is_16bit {
+                let in_rect = ImageRect::<i16>::from_raw(buf_in.data.as_rect());
+                for (dst, &src) in in_row.iter_mut().zip(in_rect.row(y)) {
+                    *dst = src as i32;
+                }
+            } else {
+                let in_rect = ImageRect::<i32>::from_raw(buf_in.data.as_rect());
+                in_row.copy_from_slice(in_rect.row(y));
+            }
+            for (x, &index) in in_row.iter().enumerate() {
+                let palette_entry = get_palette_value(
+                    buf_pal,
+                    is_16bit,
+                    index as isize,
+                    chan_index,
+                    num_colors + num_deltas,
+                    bit_depth,
+                );
+                let prediction_data = PredictionData::get_rows(&rows[0], &rows[1], &rows[2], x, y);
+                let val = if let Some(wp) = &mut wp_state {
+                    let (wp_pred, _) = wp.predict_and_property((x, y), &prediction_data);
                     let val = if index < num_deltas as i32 {
+                        let pred = predictor.predict_one(prediction_data, wp_pred);
                         (pred + palette_entry as i64) as i32
                     } else {
                         palette_entry
                     };
-                    out.data.row_mut(y)[x] = val;
-                    wp_state.update_errors(val, (x, y));
-                }
+                    wp.update_errors(val, (x, y));
+                    val
+                } else if index < num_deltas as i32 {
+                    let pred = predictor.predict_one(prediction_data, /*wp_pred=*/ 0);
+                    (pred + palette_entry as i64) as i32
+                } else {
+                    palette_entry
+                };
+                rows[0][x] = val;
             }
-        }
-    } else {
-        for (chan_index, out) in buf_out.iter_mut().enumerate() {
-            for y in 0..h {
-                let idx = buf_in.data.row(y);
-                for (x, &index) in idx.iter().enumerate() {
-                    let palette_entry = get_palette_value(
-                        palette,
-                        index as isize,
-                        /*c=*/ chan_index,
-                        /*palette_size=*/ num_colors + num_deltas,
-                        /*bit_depth=*/ bit_depth,
-                    );
-                    let val = if index < num_deltas as i32 {
-                        let pred = predictor
-                            .predict_one(PredictionData::get(&out.data, x, y), /*wp_pred=*/ 0);
-                        (pred + palette_entry as i64) as i32
-                    } else {
-                        palette_entry
-                    };
-                    out.data.row_mut(y)[x] = val;
+            if is_16bit {
+                let mut out_rect = ImageRectMut::<i16>::from_raw(out.data.as_rect_mut());
+                for (dst, &src) in out_rect.row(y).iter_mut().zip(&rows[0]) {
+                    *dst = src as i16;
                 }
+            } else {
+                let mut out_rect = ImageRectMut::<i32>::from_raw(out.data.as_rect_mut());
+                out_rect.row(y).copy_from_slice(&rows[0]);
             }
+            rows.rotate_right(1);
         }
     }
 }
@@ -257,62 +293,123 @@ fn stage_padded_top_row(row_top: &mut [i32], src: &[i32], topleft: Option<i32>) 
     row_top[w + 1] = row_top[w];
 }
 
+fn stage_padded_top_row_i16(row_top: &mut [i32], src: &[i16], topleft: Option<i32>) {
+    let w = src.len();
+    for (dest, &s) in row_top[1..=w].iter_mut().zip(src) {
+        *dest = s as i32;
+    }
+    row_top[0] = topleft.unwrap_or(row_top[1]);
+    row_top[w + 1] = row_top[w];
+}
+
 #[allow(clippy::too_many_arguments)]
 pub fn do_palette_step_one_group(
     buf_in: &ModularChannel,
     buf_pal: &ModularChannel,
     buf_out: &mut [&mut ModularChannel],
-    buf_left: Option<&[&Image<i32>]>,
-    buf_top: Option<&[&Image<i32>]>,
-    buf_topleft: Option<&[&Image<i32>]>,
+    buf_left: Option<&[&OwnedRawImage]>,
+    buf_top: Option<&[&OwnedRawImage]>,
+    buf_topleft: Option<&[&OwnedRawImage]>,
     num_colors: usize,
     num_deltas: usize,
     predictor: Predictor,
+    is_16bit: bool,
     scratch: &mut [Vec<i32>; 2],
 ) {
-    let (w, h) = buf_in.data.size();
-    let palette = &buf_pal.data;
+    let (w, h) = buf_in.size(is_16bit);
     let bit_depth = buf_in.bit_depth.bits_per_sample().min(24) as usize;
     let num_c = buf_out.len();
 
-    let row_top = &mut scratch[0];
+    let (row_top, row_out) = scratch.split_at_mut(1);
+    let row_top = &mut row_top[0];
+    let row_out = &mut row_out[0];
     row_top.resize(w + 2, 0);
+    row_out.resize(w, 0);
 
     for c in 0..num_c {
         for y in 0..h {
             let has_top = y > 0 || buf_top.is_some();
             if y > 0 {
-                let prev_row = buf_out[c].data.row(y - 1);
-                let topleft = buf_left.map(|l| l[c].row(y - 1)[3]);
-                stage_padded_top_row(row_top, &prev_row[..w], topleft);
+                let topleft = if is_16bit {
+                    buf_left
+                        .map(|l| ImageRect::<i16>::from_raw(l[c].as_rect()).row(y - 1)[3] as i32)
+                } else {
+                    buf_left.map(|l| ImageRect::<i32>::from_raw(l[c].as_rect()).row(y - 1)[3])
+                };
+                if is_16bit {
+                    let prev_rect = ImageRect::<i16>::from_raw(buf_out[c].data.as_rect());
+                    let prev_row = prev_rect.row(y - 1);
+                    stage_padded_top_row_i16(row_top, &prev_row[..w], topleft);
+                } else {
+                    let prev_rect = ImageRect::<i32>::from_raw(buf_out[c].data.as_rect());
+                    let prev_row = prev_rect.row(y - 1);
+                    stage_padded_top_row(row_top, &prev_row[..w], topleft);
+                }
             } else if let Some(top) = buf_top {
-                let top_row = top[c].row(3);
-                let topleft = buf_topleft.map(|tl| tl[c].row(3)[tl[c].size().0 - 1]);
-                stage_padded_top_row(row_top, &top_row[..w], topleft);
+                let topleft = if is_16bit {
+                    buf_topleft.map(|tl| {
+                        let rect = ImageRect::<i16>::from_raw(tl[c].as_rect());
+                        let row = rect.row(3);
+                        row[row.len() - 1] as i32
+                    })
+                } else {
+                    buf_topleft.map(|tl| {
+                        let rect = ImageRect::<i32>::from_raw(tl[c].as_rect());
+                        let row = rect.row(3);
+                        row[row.len() - 1]
+                    })
+                };
+                if is_16bit {
+                    let top_rect = ImageRect::<i16>::from_raw(top[c].as_rect());
+                    let top_row = top_rect.row(3);
+                    stage_padded_top_row_i16(row_top, &top_row[..w], topleft);
+                } else {
+                    let top_rect = ImageRect::<i32>::from_raw(top[c].as_rect());
+                    let top_row = top_rect.row(3);
+                    stage_padded_top_row(row_top, &top_row[..w], topleft);
+                }
             }
 
             let mut left = if let Some(l) = buf_left {
-                l[c].row(y)[3]
+                if is_16bit {
+                    ImageRect::<i16>::from_raw(l[c].as_rect()).row(y)[3] as i32
+                } else {
+                    ImageRect::<i32>::from_raw(l[c].as_rect()).row(y)[3]
+                }
             } else if has_top {
                 row_top[1]
             } else {
                 0
             };
             let mut leftleft = if let Some(l) = buf_left {
-                l[c].row(y)[2]
+                if is_16bit {
+                    ImageRect::<i16>::from_raw(l[c].as_rect()).row(y)[2] as i32
+                } else {
+                    ImageRect::<i32>::from_raw(l[c].as_rect()).row(y)[2]
+                }
             } else {
                 left
             };
 
-            let index_img = buf_in.data.row(y);
-            let out_row = buf_out[c].data.row_mut(y);
-            for (x, &index) in index_img.iter().enumerate() {
+            if is_16bit {
+                let in_rect = ImageRect::<i16>::from_raw(buf_in.data.as_rect());
+                for (dst, &src) in row_out[..w].iter_mut().zip(in_rect.row(y)) {
+                    *dst = src as i32;
+                }
+            } else {
+                let in_rect = ImageRect::<i32>::from_raw(buf_in.data.as_rect());
+                row_out[..w].copy_from_slice(in_rect.row(y));
+            }
+
+            for x in 0..w {
+                let index = row_out[x];
                 let palette_entry = get_palette_value(
-                    palette,
+                    buf_pal,
+                    is_16bit,
                     index as isize,
                     c,
-                    /*palette_size=*/ num_colors + num_deltas,
-                    /*bit_depth=*/ bit_depth,
+                    num_colors + num_deltas,
+                    bit_depth,
                 );
                 let val = if index < num_deltas as i32 {
                     let (top, topleft, topright) = if has_top {
@@ -339,9 +436,19 @@ pub fn do_palette_step_one_group(
                 } else {
                     palette_entry
                 };
-                out_row[x] = val;
+                row_out[x] = val;
                 leftleft = left;
                 left = val;
+            }
+
+            if is_16bit {
+                let mut out_rect = ImageRectMut::<i16>::from_raw(buf_out[c].data.as_rect_mut());
+                for (dst, &src) in out_rect.row(y).iter_mut().zip(&row_out[..w]) {
+                    *dst = src as i16;
+                }
+            } else {
+                let mut out_rect = ImageRectMut::<i32>::from_raw(buf_out[c].data.as_rect_mut());
+                out_rect.row(y).copy_from_slice(&row_out[..w]);
             }
         }
     }
@@ -352,21 +459,30 @@ pub fn zero_palette_step_one_group(
     buf_out: &mut [&mut ModularChannel],
     num_colors: usize,
     num_deltas: usize,
+    is_16bit: bool,
 ) {
-    let (_w, h) = buf_out[0].data.size();
-    let palette = &buf_pal.data;
     let bit_depth = buf_out[0].bit_depth.bits_per_sample().min(24) as usize;
 
     for (c, out) in buf_out.iter_mut().enumerate() {
         let palette_entry = get_palette_value(
-            palette,
+            buf_pal,
+            is_16bit,
             0,
             c,
             /*palette_size=*/ num_colors + num_deltas,
             /*bit_depth=*/ bit_depth,
         );
-        for y in 0..h {
-            out.data.row_mut(y).fill(palette_entry);
+        let (_w, h) = out.size(is_16bit);
+        if is_16bit {
+            let mut out_rect = ImageRectMut::<i16>::from_raw(out.data.as_rect_mut());
+            for y in 0..h {
+                out_rect.row(y).fill(palette_entry as i16);
+            }
+        } else {
+            let mut out_rect = ImageRectMut::<i32>::from_raw(out.data.as_rect_mut());
+            for y in 0..h {
+                out_rect.row(y).fill(palette_entry);
+            }
         }
     }
 }
@@ -376,7 +492,7 @@ pub fn do_palette_step_group_row(
     buf_in: &[&ModularChannel],
     buf_pal: &ModularChannel,
     buf_out: &mut [&mut ModularChannel],
-    buf_prev: Option<&[&Image<i32>]>,
+    buf_prev: Option<&[&OwnedRawImage]>,
     prev_aux: Option<&[Option<&Image<i32>>]>,
     aux_out: &mut [RwLockWriteGuard<Option<Image<i32>>>],
     grid_xsize: usize,
@@ -384,20 +500,22 @@ pub fn do_palette_step_group_row(
     num_deltas: usize,
     predictor: Predictor,
     wp_header: &WeightedHeader,
+    is_16bit: bool,
     scratch: &mut [Vec<i32>; 2],
 ) -> Result<()> {
-    let (_, h) = buf_in[0].data.size();
-    let palette = &buf_pal.data;
+    let (_, h) = buf_in[0].size(is_16bit);
     let bit_depth = buf_in[0].bit_depth.bits_per_sample().min(24) as usize;
     let num_c = buf_out.len() / grid_xsize;
 
     let total_w: usize = buf_out[..grid_xsize]
         .iter()
-        .map(|buf| buf.data.size().0)
+        .map(|buf| buf.size(is_16bit).0)
         .sum();
 
     scratch[0].resize(total_w, 0);
     scratch[1].resize(total_w, 0);
+
+    let mut in_indices = Vec::new();
 
     for c in 0..num_c {
         let out_row_idx = c * grid_xsize;
@@ -415,9 +533,26 @@ pub fn do_palette_step_group_row(
             let mut x_offset = 0;
             for grid_x in 0..grid_xsize {
                 let prev_img = prev[out_row_idx + grid_x];
-                let w = prev_img.size().0;
-                scratch[0][x_offset..x_offset + w].copy_from_slice(prev_img.row(3));
-                scratch[1][x_offset..x_offset + w].copy_from_slice(prev_img.row(2));
+                let w = prev_img.byte_size().0 / if is_16bit { 2 } else { 4 };
+                if is_16bit {
+                    let prev_rect = ImageRect::<i16>::from_raw(prev_img.as_rect());
+                    for (d, &s) in scratch[0][x_offset..x_offset + w]
+                        .iter_mut()
+                        .zip(prev_rect.row(3))
+                    {
+                        *d = s as i32;
+                    }
+                    for (d, &s) in scratch[1][x_offset..x_offset + w]
+                        .iter_mut()
+                        .zip(prev_rect.row(2))
+                    {
+                        *d = s as i32;
+                    }
+                } else {
+                    let prev_rect = ImageRect::<i32>::from_raw(prev_img.as_rect());
+                    scratch[0][x_offset..x_offset + w].copy_from_slice(prev_rect.row(3));
+                    scratch[1][x_offset..x_offset + w].copy_from_slice(prev_rect.row(2));
+                }
                 x_offset += w;
             }
         }
@@ -439,12 +574,25 @@ pub fn do_palette_step_group_row(
 
             let mut gx = 0;
             for (grid_x, index_buf) in buf_in.iter().enumerate().take(grid_xsize) {
-                let index_img = index_buf.data.row(y);
                 let out_idx = out_row_idx + grid_x;
-                let out_row = buf_out[out_idx].data.row_mut(y);
-                for (x, &index) in index_img.iter().enumerate() {
+                let w = index_buf.size(is_16bit).0;
+                let gx_start = gx;
+
+                in_indices.resize(w, 0);
+                if is_16bit {
+                    let in_rect = ImageRect::<i16>::from_raw(index_buf.data.as_rect());
+                    for (d, &s) in in_indices.iter_mut().zip(in_rect.row(y)) {
+                        *d = s as i32;
+                    }
+                } else {
+                    let in_rect = ImageRect::<i32>::from_raw(index_buf.data.as_rect());
+                    in_indices.copy_from_slice(in_rect.row(y));
+                }
+
+                for &index in &in_indices {
                     let palette_entry = get_palette_value(
-                        palette,
+                        buf_pal,
+                        is_16bit,
                         index as isize,
                         c,
                         num_colors + num_deltas,
@@ -482,13 +630,14 @@ pub fn do_palette_step_group_row(
                         toprightright,
                     };
                     let val = if let Some(wp) = &mut wp_state {
-                        let (pred, _) = wp.predict_and_property((gx, y & 1), &prediction_data);
+                        let (wp_pred, _) = wp.predict_and_property((gx, y), &prediction_data);
                         let val = if index < num_deltas as i32 {
+                            let pred = predictor.predict_one(prediction_data, wp_pred);
                             (pred + palette_entry as i64) as i32
                         } else {
                             palette_entry
                         };
-                        wp.update_errors(val, (gx, y & 1));
+                        wp.update_errors(val, (gx, y));
                         val
                     } else if index < num_deltas as i32 {
                         let pred = predictor.predict_one(prediction_data, /*wp_pred=*/ 0);
@@ -496,11 +645,28 @@ pub fn do_palette_step_group_row(
                     } else {
                         palette_entry
                     };
-                    out_row[x] = val;
                     curr_row[gx] = val;
                     leftleft = left;
                     left = val;
                     gx += 1;
+                }
+
+                if is_16bit {
+                    let mut out_rect =
+                        ImageRectMut::<i16>::from_raw(buf_out[out_idx].data.as_rect_mut());
+                    for (d, &s) in out_rect
+                        .row(y)
+                        .iter_mut()
+                        .zip(&curr_row[gx_start..gx_start + w])
+                    {
+                        *d = s as i16;
+                    }
+                } else {
+                    let mut out_rect =
+                        ImageRectMut::<i32>::from_raw(buf_out[out_idx].data.as_rect_mut());
+                    out_rect
+                        .row(y)
+                        .copy_from_slice(&curr_row[gx_start..gx_start + w]);
                 }
             }
         }

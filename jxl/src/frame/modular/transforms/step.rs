@@ -8,14 +8,16 @@ use std::fmt::Debug;
 use super::{RctOp, RctPermutation};
 use crate::error::Result;
 use crate::frame::modular::buffers::{ModularChannel, with_buffers};
-use crate::frame::modular::transforms::smooth_squeeze::smooth_upsample;
+use crate::frame::modular::transforms::smooth_squeeze::{smooth_upsample_i16, smooth_upsample_i32};
 use crate::frame::modular::{
-    DataStatus, FullModularImage, ModularBufferInfo, ModularGridKind, Predictor,
-    TransformScratchSpace,
+    DataStatus, FullModularImage, ModularBufferInfo, ModularGridKind, Predictor, ScratchSpace,
 };
 use crate::headers::frame_header::FrameHeader;
 use crate::headers::modular::WeightedHeader;
-use crate::image::{BufferRecycler, Image, ImageRect, Rect};
+use crate::image::{
+    BufferRecycler, Image, ImageDataType, ImageRect, ImageRectMut, OwnedRawImage, RawImageRect,
+    Rect,
+};
 use crate::util::SmallVec;
 use crate::util::sync::RwLockReadGuard;
 use crate::util::sync::atomic::{AtomicUsize, Ordering};
@@ -173,14 +175,14 @@ fn borrow_channel(
 fn borrow_topbottom(
     buffers: &[ModularBufferInfo],
     x: (usize, usize),
-) -> RwLockReadGuard<'_, Option<Image<i32>>> {
+) -> RwLockReadGuard<'_, Option<OwnedRawImage>> {
     buffers[x.0].buffer_grid[x.1].topbottom.try_read().unwrap()
 }
 
 fn borrow_leftright(
     buffers: &[ModularBufferInfo],
     x: (usize, usize),
-) -> RwLockReadGuard<'_, Option<Image<i32>>> {
+) -> RwLockReadGuard<'_, Option<OwnedRawImage>> {
     buffers[x.0].buffer_grid[x.1].leftright.try_read().unwrap()
 }
 
@@ -356,41 +358,59 @@ impl SqueezeInfo {
 struct SqueezeInputs<'a> {
     in_avg: RwLockReadGuard<'a, Option<ModularChannel>>,
     in_res: RwLockReadGuard<'a, Option<ModularChannel>>,
-    in_next_border: Option<RwLockReadGuard<'a, Option<Image<i32>>>>,
-    out_prev_border: Option<RwLockReadGuard<'a, Option<Image<i32>>>>,
+    in_next_border: Option<RwLockReadGuard<'a, Option<OwnedRawImage>>>,
+    out_prev_border: Option<RwLockReadGuard<'a, Option<OwnedRawImage>>>,
 }
 
 impl<'a> SqueezeInputs<'a> {
-    fn in_avg_rect(&self, rect: Rect) -> ImageRect<'_, i32> {
-        self.in_avg.as_ref().unwrap().data.get_rect(rect)
+    fn in_avg_rect(&self, rect: Rect, is_16bit: bool) -> RawImageRect<'_> {
+        self.in_avg
+            .as_ref()
+            .unwrap()
+            .data
+            .as_rect()
+            .rect(rect.to_byte_rect_sz(if is_16bit { 2 } else { 4 }))
     }
 
-    fn in_res_rect(&self, rect: Rect) -> ImageRect<'_, i32> {
-        self.in_res.as_ref().unwrap().data.get_rect(rect)
+    fn in_res_rect(&self, rect: Rect, is_16bit: bool) -> RawImageRect<'_> {
+        self.in_res
+            .as_ref()
+            .unwrap()
+            .data
+            .as_rect()
+            .rect(rect.to_byte_rect_sz(if is_16bit { 2 } else { 4 }))
     }
 
-    fn in_next_border(&self) -> Option<&Image<i32>> {
-        self.in_next_border.as_ref().and_then(|g| g.as_ref())
+    fn in_next_border(&self) -> Option<RawImageRect<'_>> {
+        self.in_next_border
+            .as_ref()
+            .and_then(|g| g.as_ref())
+            .map(|img| img.as_rect())
     }
 
-    fn out_prev_border(&self) -> Option<&Image<i32>> {
-        self.out_prev_border.as_ref().and_then(|g| g.as_ref())
+    fn out_prev_border(&self) -> Option<RawImageRect<'_>> {
+        self.out_prev_border
+            .as_ref()
+            .and_then(|g| g.as_ref())
+            .map(|img| img.as_rect())
     }
 }
 
 enum TileGuard<'a> {
     Channel(RwLockReadGuard<'a, Option<ModularChannel>>),
-    Border(RwLockReadGuard<'a, Option<Image<i32>>>),
+    Border(RwLockReadGuard<'a, Option<OwnedRawImage>>),
 }
 
-impl<'a> std::ops::Deref for TileGuard<'a> {
-    type Target = Image<i32>;
-
-    fn deref(&self) -> &Self::Target {
+impl<'a> TileGuard<'a> {
+    fn as_rect<T: ImageDataType>(&self) -> ImageRect<'_, T> {
         match self {
-            TileGuard::Channel(g) => &g.as_ref().unwrap().data,
-            TileGuard::Border(g) => g.as_ref().unwrap(),
+            TileGuard::Channel(g) => ImageRect::<T>::from_raw(g.as_ref().unwrap().data.as_rect()),
+            TileGuard::Border(g) => ImageRect::<T>::from_raw(g.as_ref().unwrap().as_rect()),
         }
+    }
+
+    fn row<T: ImageDataType>(&self, row: usize) -> &[T] {
+        self.as_rect::<T>().row(row)
     }
 }
 
@@ -416,44 +436,46 @@ impl<'a> TiledChannelView<'a> {
         if ly == 0 { 0 } else { 1 }
     }
 
-    fn copy_tile_slice(
+    fn copy_tile_slice<T: ImageDataType>(
         &self,
         (dx, dy): (usize, usize),
         ly: usize,
         src_range: std::ops::Range<usize>,
         tile_w: usize,
         top_tile_h: usize,
-        dest: &mut [i32],
+        dest: &mut [T],
     ) {
-        let img = self.tiles[dy * 3 + dx].as_deref().unwrap();
+        let img = self.tiles[dy * 3 + dx].as_ref().unwrap();
         match (dy, dx) {
             (1, 1) => {
-                dest.copy_from_slice(&img.row(ly)[src_range]);
+                dest.copy_from_slice(&img.row::<T>(ly)[src_range]);
             }
             (0, _) => {
-                dest.copy_from_slice(&img.row(Self::top_border_row(ly, top_tile_h))[src_range]);
+                dest.copy_from_slice(
+                    &img.row::<T>(Self::top_border_row(ly, top_tile_h))[src_range],
+                );
             }
             (2, _) => {
-                dest.copy_from_slice(&img.row(Self::bottom_border_row(ly))[src_range]);
+                dest.copy_from_slice(&img.row::<T>(Self::bottom_border_row(ly))[src_range]);
             }
             (1, 0) => {
                 let offset_start = 4 - (tile_w - src_range.start);
                 let offset_end = 4 - (tile_w - src_range.end);
-                dest.copy_from_slice(&img.row(ly)[offset_start..offset_end]);
+                dest.copy_from_slice(&img.row::<T>(ly)[offset_start..offset_end]);
             }
             (1, 2) => {
-                dest.copy_from_slice(&img.row(ly)[src_range]);
+                dest.copy_from_slice(&img.row::<T>(ly)[src_range]);
             }
             _ => unreachable!(),
         }
     }
 
-    pub fn load_row_to_scratch(
+    pub fn load_row_to_scratch<T: ImageDataType>(
         &self,
         yg: isize,
         xoff: usize,
         valid_len: usize,
-        row_buf: &mut [i32],
+        row_buf: &mut [T],
     ) {
         let (w, h) = self.size;
         // Only the first `valid_len` values are actual convolution inputs; the rest
@@ -474,7 +496,7 @@ impl<'a> TiledChannelView<'a> {
         };
 
         let Some(grid_dim) = self.grid_dim else {
-            let row = self.tiles[4].as_deref().unwrap().row(clamped_y);
+            let row = self.tiles[4].as_ref().unwrap().row::<T>(clamped_y);
 
             let left_clamp = (2 - xoff as isize).max(0) as usize;
             let right_clamp_start = (w as isize + 2 - xoff as isize).min(max_len as isize) as usize;
@@ -550,16 +572,16 @@ impl<'a> TiledChannelView<'a> {
 
         if left_clamp > 0 {
             let left_val = match dy {
-                1 => self.tiles[4].as_deref().unwrap().row(ly)[0],
+                1 => self.tiles[4].as_ref().unwrap().row::<T>(ly)[0],
                 0 => self.tiles[1]
-                    .as_deref()
+                    .as_ref()
                     .unwrap()
-                    .row(Self::top_border_row(ly, top_tile_h))[0],
+                    .row::<T>(Self::top_border_row(ly, top_tile_h))[0],
                 2 => self.tiles[7]
-                    .as_deref()
+                    .as_ref()
                     .unwrap()
-                    .row(Self::bottom_border_row(ly))[0],
-                _ => 0,
+                    .row::<T>(Self::bottom_border_row(ly))[0],
+                _ => T::default(),
             };
             row_buf[..left_clamp].fill(left_val);
         }
@@ -569,17 +591,17 @@ impl<'a> TiledChannelView<'a> {
             let lx_right = (w - 1) % grid_w;
             let dx = (gx_right as isize - gx_center as isize + 1) as usize;
             let right_val = match (dy, dx) {
-                (1, 1) => self.tiles[4].as_deref().unwrap().row(ly)[lx_right],
-                (1, 2) => self.tiles[5].as_deref().unwrap().row(ly)[3],
+                (1, 1) => self.tiles[4].as_ref().unwrap().row::<T>(ly)[lx_right],
+                (1, 2) => self.tiles[5].as_ref().unwrap().row::<T>(ly)[3],
                 (0, 1 | 2) => self.tiles[dx]
-                    .as_deref()
+                    .as_ref()
                     .unwrap()
-                    .row(Self::top_border_row(ly, top_tile_h))[lx_right],
+                    .row::<T>(Self::top_border_row(ly, top_tile_h))[lx_right],
                 (2, 1 | 2) => self.tiles[6 + dx]
-                    .as_deref()
+                    .as_ref()
                     .unwrap()
-                    .row(Self::bottom_border_row(ly))[lx_right],
-                _ => 0,
+                    .row::<T>(Self::bottom_border_row(ly))[lx_right],
+                _ => T::default(),
             };
             row_buf[max_len - right_clamp..max_len].fill(right_val);
         }
@@ -640,9 +662,9 @@ impl TransformStepChunk {
         &self,
         frame_header: &FrameHeader,
         buffers: &[ModularBufferInfo],
-        transform_scratch_space: &mut TransformScratchSpace,
+        scratch_space: &mut ScratchSpace,
         recycler: &BufferRecycler,
-        pass_to_pipeline: &dyn Fn(usize, usize, bool, Image<i32>) -> Result<()>,
+        pass_to_pipeline: &dyn Fn(usize, usize, bool, OwnedRawImage) -> Result<()>,
     ) -> Result<()> {
         let is_final = self.missing_final_deps == 0;
         let buf_out = self.buf_out();
@@ -685,14 +707,25 @@ impl TransformStepChunk {
                     let b_in = &buffers[buf_in[i]].buffer_grid[out_grid];
                     let b_out = &buffers[buf_out[i]].buffer_grid[out_grid];
                     if b_in.data_status == DataStatus::Zero && !b_in.has_buffer() {
-                        b_out.ensure_buffer(&buffers[buf_out[i]].info, recycler)?;
+                        b_out.ensure_buffer(
+                            &buffers[buf_out[i]].info,
+                            buffers[buf_out[i]].is_16bit,
+                            recycler,
+                        )?;
                     } else {
                         *b_out.data.try_write().unwrap() =
                             Some(b_in.get_buffer(b_in.can_consume(is_final), recycler)?);
                     }
                 }
                 with_buffers(buffers, buf_out, out_grid, recycler, |mut bufs| {
-                    super::rct::do_rct_step(&mut bufs, *op, *perm);
+                    if bufs.is_empty() {
+                        return Ok(());
+                    }
+                    if buffers[buf_out[0]].is_16bit {
+                        super::rct::do_rct_step_i16(&mut bufs, *op, *perm);
+                    } else {
+                        super::rct::do_rct_step_i32(&mut bufs, *op, *perm);
+                    }
                     Ok(())
                 })?;
             }
@@ -735,13 +768,13 @@ impl TransformStepChunk {
                         .then(|| borrow_border_guards((grid_y - 1) * stride + grid_x, false));
                     let topleft_guards = (has_left && has_top)
                         .then(|| borrow_border_guards((grid_y - 1) * stride + (grid_x - 1), false));
-                    let left_refs = left_guards
+                    let left_refs: Option<Vec<&OwnedRawImage>> = left_guards
                         .as_ref()
                         .map(|v| v.iter().map(|x| x.as_ref().unwrap()).collect::<Vec<_>>());
-                    let top_refs = top_guards
+                    let top_refs: Option<Vec<&OwnedRawImage>> = top_guards
                         .as_ref()
                         .map(|v| v.iter().map(|x| x.as_ref().unwrap()).collect::<Vec<_>>());
-                    let topleft_refs = topleft_guards
+                    let topleft_refs: Option<Vec<&OwnedRawImage>> = topleft_guards
                         .as_ref()
                         .map(|v| v.iter().map(|x| x.as_ref().unwrap()).collect::<Vec<_>>());
 
@@ -760,6 +793,7 @@ impl TransformStepChunk {
                             &mut out_buf_refs,
                             *num_colors,
                             *num_deltas,
+                            buffers[*buf_in].is_16bit,
                         );
                     } else {
                         let img_in = borrow_channel(buffers, (*buf_in, out_grid));
@@ -773,7 +807,8 @@ impl TransformStepChunk {
                             *num_colors,
                             *num_deltas,
                             *predictor,
-                            &mut transform_scratch_space.palette_row_scratch,
+                            buffers[*buf_in].is_16bit,
+                            &mut scratch_space.palette_row_scratch,
                         );
                     }
                 }
@@ -832,7 +867,7 @@ impl TransformStepChunk {
                             }
                         }
                     }
-                    let prev_refs: Vec<&Image<i32>> =
+                    let prev_refs: Vec<&OwnedRawImage> =
                         prev_guards.iter().map(|g| g.as_ref().unwrap()).collect();
                     let prev_aux_refs: Vec<Option<&Image<i32>>> =
                         prev_aux_guards.iter().map(|g| g.as_ref()).collect();
@@ -872,7 +907,8 @@ impl TransformStepChunk {
                         *num_deltas,
                         *predictor,
                         wp_header,
-                        &mut transform_scratch_space.palette_row_scratch,
+                        buffers[*buf_in].is_16bit,
+                        &mut scratch_space.palette_row_scratch,
                     )?;
                 }
                 let buf_pal_grid = &buffers[*buf_pal].buffer_grid[0];
@@ -913,6 +949,7 @@ impl TransformStepChunk {
                     if bufs.is_empty() {
                         return Ok(());
                     }
+                    let is_16bit = buffers[*buf_out].is_16bit;
                     match info {
                         SqueezeInfo::Upsample {
                             upsample: u,
@@ -921,37 +958,56 @@ impl TransformStepChunk {
                             assert!(!is_final);
                             assert_eq!(bufs.len(), 1);
                             let view = info.borrow_upsample_view(buffers, frame_header);
-                            let scratch = &mut transform_scratch_space.smooth_upsample_scratch;
+                            let scratch = &mut scratch_space.smooth_upsample_scratch;
                             let dither = buffers[*buf_out].info.shift.unwrap_or((0, 0)) == (0, 0)
                                 && !buffers[*buf_out].info.followed_by_palette;
-                            smooth_upsample(
-                                &view,
-                                u.shift_diff,
-                                dither,
-                                out_rect,
-                                &mut bufs[0].data,
-                                scratch,
-                            );
+                            if is_16bit {
+                                let mut out_rect_buf =
+                                    ImageRectMut::<i16>::from_raw(bufs[0].data.as_rect_mut());
+                                smooth_upsample_i16(
+                                    &view,
+                                    u.shift_diff,
+                                    dither,
+                                    out_rect,
+                                    &mut out_rect_buf,
+                                    scratch,
+                                );
+                            } else {
+                                let mut out_rect_buf =
+                                    ImageRectMut::<i32>::from_raw(bufs[0].data.as_rect_mut());
+                                smooth_upsample_i32(
+                                    &view,
+                                    u.shift_diff,
+                                    dither,
+                                    out_rect,
+                                    &mut out_rect_buf,
+                                    scratch,
+                                );
+                            }
                         }
                         SqueezeInfo::Regular {
                             avg_rect, res_rect, ..
                         } => {
                             let inputs = info.borrow_inputs(buffers, vertical);
+                            let in_next = inputs.in_next_border();
+                            let out_prev = inputs.out_prev_border();
                             if vertical {
                                 super::squeeze::do_vsqueeze_step(
-                                    &inputs.in_avg_rect(avg_rect),
-                                    &inputs.in_res_rect(res_rect),
-                                    inputs.in_next_border(),
-                                    inputs.out_prev_border(),
+                                    &inputs.in_avg_rect(avg_rect, is_16bit),
+                                    &inputs.in_res_rect(res_rect, is_16bit),
+                                    in_next.as_ref(),
+                                    out_prev.as_ref(),
                                     &mut bufs,
+                                    is_16bit,
                                 );
                             } else {
                                 super::squeeze::do_hsqueeze_step(
-                                    &inputs.in_avg_rect(avg_rect),
-                                    &inputs.in_res_rect(res_rect),
-                                    inputs.in_next_border(),
-                                    inputs.out_prev_border(),
+                                    &inputs.in_avg_rect(avg_rect, is_16bit),
+                                    &inputs.in_res_rect(res_rect, is_16bit),
+                                    in_next.as_ref(),
+                                    out_prev.as_ref(),
                                     &mut bufs,
+                                    is_16bit,
                                 );
                             }
                         }
@@ -968,27 +1024,46 @@ impl TransformStepChunk {
             } => {
                 debug!("Rendering channel {channel:?}, rect {rect:?}, group {group}");
                 let buf = &buffers[*buf_in].buffer_grid[out_grid];
+                let is_16bit = buffers[*buf_in].is_16bit;
                 if buf.data_status == DataStatus::Zero && !buf.has_buffer() {
-                    let zero = Image::new(rect.map(|x| x.size).unwrap_or(buf.size))?;
-                    pass_to_pipeline(*channel, *group, is_final, zero)?;
+                    let sz = rect.map(|x| x.size).unwrap_or(buf.size);
+                    let raw = if is_16bit {
+                        Image::<i16>::new(sz)?.into_raw()
+                    } else {
+                        Image::<i32>::new(sz)?.into_raw()
+                    };
+                    pass_to_pipeline(*channel, *group, is_final, raw)?;
                 } else {
                     let modular_buf = buf.get_buffer(buf.can_consume(is_final), recycler)?;
-                    if let Some(rect) = rect {
-                        let mut cropped = Image::new(rect.size)?;
-                        let src_view = modular_buf.data.get_rect(*rect);
-                        for y in 0..rect.size.1 {
-                            cropped.row_mut(y).copy_from_slice(src_view.row(y));
+                    let raw = if let Some(rect) = rect {
+                        if is_16bit {
+                            let mut cropped = Image::<i16>::new(rect.size)?;
+                            let src_view =
+                                ImageRect::<i16>::from_raw(modular_buf.data.as_rect()).rect(*rect);
+                            for y in 0..rect.size.1 {
+                                cropped.row_mut(y).copy_from_slice(src_view.row(y));
+                            }
+                            cropped.into_raw()
+                        } else {
+                            let mut cropped = Image::<i32>::new(rect.size)?;
+                            let src_view =
+                                ImageRect::<i32>::from_raw(modular_buf.data.as_rect()).rect(*rect);
+                            for y in 0..rect.size.1 {
+                                cropped.row_mut(y).copy_from_slice(src_view.row(y));
+                            }
+                            cropped.into_raw()
                         }
-                        pass_to_pipeline(*channel, *group, is_final, cropped)?;
                     } else {
-                        pass_to_pipeline(*channel, *group, is_final, modular_buf.data)?;
-                    }
+                        modular_buf.data
+                    };
+                    pass_to_pipeline(*channel, *group, is_final, raw)?;
                 }
             }
         };
 
         for &(buf, grid) in self.outputs(buffers).iter() {
-            buffers[buf].buffer_grid[grid].extract_needed_borders(recycler)?;
+            buffers[buf].buffer_grid[grid]
+                .extract_needed_borders(buffers[buf].is_16bit, recycler)?;
         }
 
         if is_final {

@@ -8,7 +8,7 @@ use crate::error::Result;
 use crate::frame::DataStatus;
 use crate::frame::modular::ChannelInfo;
 use crate::headers::bit_depth::BitDepth;
-use crate::image::{BufferRecycler, Image};
+use crate::image::{BufferRecycler, Image, ImageRect, OwnedRawImage};
 use crate::util::sync::atomic::{AtomicUsize, Ordering};
 use crate::util::sync::{Mutex, RwLock};
 
@@ -16,24 +16,26 @@ use crate::util::sync::{Mutex, RwLock};
 #[derive(Debug)]
 pub(super) struct ModularChannel {
     // Actual pixel buffer.
-    pub(super) data: Image<i32>,
+    pub(super) data: OwnedRawImage,
     // Shift of the channel (None if this is a meta-channel).
     pub(super) shift: Option<(usize, usize)>,
     pub(super) bit_depth: BitDepth,
 }
 
 impl ModularChannel {
-    pub fn new(size: (usize, usize), bit_depth: BitDepth) -> Result<Self> {
-        Self::new_with_shift(size, Some((0, 0)), bit_depth)
+    pub fn new(size: (usize, usize), is_16bit: bool, bit_depth: BitDepth) -> Result<Self> {
+        Self::new_with_shift(size, is_16bit, Some((0, 0)), bit_depth)
     }
 
     pub fn new_with_shift(
         size: (usize, usize),
+        is_16bit: bool,
         shift: Option<(usize, usize)>,
         bit_depth: BitDepth,
     ) -> Result<Self> {
+        let sample_size = if is_16bit { 2 } else { 4 };
         Ok(ModularChannel {
-            data: Image::new(size)?,
+            data: OwnedRawImage::new((size.0 * sample_size, size.1))?,
             shift,
             bit_depth,
         })
@@ -47,14 +49,23 @@ impl ModularChannel {
         })
     }
 
-    pub fn channel_info(&self) -> ChannelInfo {
+    pub fn channel_info(&self, is_16bit: bool) -> ChannelInfo {
         ChannelInfo {
             output_channel_idx: None,
-            size: self.data.size(),
+            size: self.size(is_16bit),
             shift: self.shift,
             bit_depth: self.bit_depth,
             followed_by_palette: false,
         }
+    }
+
+    #[inline(always)]
+    pub fn size(&self, is_16bit: bool) -> (usize, usize) {
+        let sample_size = if is_16bit { 2 } else { 4 };
+        (
+            self.data.byte_size().0 / sample_size,
+            self.data.byte_size().1,
+        )
     }
 }
 
@@ -87,9 +98,9 @@ impl NeededBorders {
 pub(super) struct ModularBuffer {
     pub(super) data: RwLock<Option<ModularChannel>>,
     // 2px horizontal borders (top 2 rows and bottom 2 rows, size: (width, 4)).
-    pub(super) topbottom: RwLock<Option<Image<i32>>>,
+    pub(super) topbottom: RwLock<Option<OwnedRawImage>>,
     // 2px vertical borders (left 2 cols and right 2 cols, size: (4, height)).
-    pub(super) leftright: RwLock<Option<Image<i32>>>,
+    pub(super) leftright: RwLock<Option<OwnedRawImage>>,
     // Holds additional information such as the weighted predictor's error channel's last row for
     // the transform chunk that produced this buffer.
     pub(super) auxiliary_data: RwLock<Option<Image<i32>>>,
@@ -141,7 +152,7 @@ impl ModularBuffer {
         self.topbottom.try_read().unwrap().is_some() || self.leftright.try_read().unwrap().is_some()
     }
 
-    pub fn extract_needed_borders(&self, recycler: &BufferRecycler) -> Result<()> {
+    pub fn extract_needed_borders(&self, is_16bit: bool, recycler: &BufferRecycler) -> Result<()> {
         if self.needed_borders.is_empty() {
             return Ok(());
         }
@@ -149,13 +160,15 @@ impl ModularBuffer {
         let Some(chan) = data_guard.as_ref() else {
             return Ok(());
         };
-        let (w, h) = chan.data.size();
+        let (w, h) = chan.size(is_16bit);
         if w == 0 || h == 0 {
             return Ok(());
         }
 
+        let sample_size = if is_16bit { 2 } else { 4 };
+
         if self.needed_borders.topbottom {
-            let mut topbottom = recycler.get_buffer::<i32>((w, 4))?;
+            let mut topbottom = recycler.get_raw_buffer((w * sample_size, 4))?;
             let r0 = chan.data.row(0);
             let r1 = if h > 1 { chan.data.row(1) } else { r0 };
             let rb0 = if h > 1 { chan.data.row(h - 2) } else { r0 };
@@ -168,15 +181,31 @@ impl ModularBuffer {
         }
 
         if self.needed_borders.leftright {
-            let mut leftright = recycler.get_buffer::<i32>((4, h))?;
-            for y in 0..h {
-                let r = chan.data.row(y);
-                let out = leftright.row_mut(y);
-                out[0] = r[0];
-                out[1] = if w > 1 { r[1] } else { r[0] };
-                out[2] = if w > 1 { r[w - 2] } else { r[0] };
-                out[3] = r[w - 1];
-            }
+            let leftright = if is_16bit {
+                let in_rect = ImageRect::<i16>::from_raw(chan.data.as_rect());
+                let mut leftright = recycler.get_buffer::<i16>((4, h))?;
+                for y in 0..h {
+                    let r = in_rect.row(y);
+                    let out = leftright.row_mut(y);
+                    out[0] = r[0];
+                    out[1] = if w > 1 { r[1] } else { r[0] };
+                    out[2] = if w > 1 { r[w - 2] } else { r[0] };
+                    out[3] = r[w - 1];
+                }
+                leftright.into_raw()
+            } else {
+                let in_rect = ImageRect::<i32>::from_raw(chan.data.as_rect());
+                let mut leftright = recycler.get_buffer::<i32>((4, h))?;
+                for y in 0..h {
+                    let r = in_rect.row(y);
+                    let out = leftright.row_mut(y);
+                    out[0] = r[0];
+                    out[1] = if w > 1 { r[1] } else { r[0] };
+                    out[2] = if w > 1 { r[w - 2] } else { r[0] };
+                    out[3] = r[w - 1];
+                }
+                leftright.into_raw()
+            };
             *self.leftright.try_write().unwrap() = Some(leftright);
         }
 
@@ -186,9 +215,11 @@ impl ModularBuffer {
     pub fn make_buffer(
         &self,
         info: &ChannelInfo,
+        is_16bit: bool,
         recycler: &BufferRecycler,
     ) -> Result<ModularChannel> {
-        let data = recycler.get_buffer::<i32>(self.size)?;
+        let sample_size = if is_16bit { 2 } else { 4 };
+        let data = recycler.get_raw_buffer((self.size.0 * sample_size, self.size.1))?;
         Ok(ModularChannel {
             data,
             shift: info.shift,
@@ -196,9 +227,14 @@ impl ModularBuffer {
         })
     }
 
-    pub fn ensure_buffer(&self, info: &ChannelInfo, recycler: &BufferRecycler) -> Result<()> {
+    pub fn ensure_buffer(
+        &self,
+        info: &ChannelInfo,
+        is_16bit: bool,
+        recycler: &BufferRecycler,
+    ) -> Result<()> {
         if !self.has_buffer() {
-            let buf = self.make_buffer(info, recycler)?;
+            let buf = self.make_buffer(info, is_16bit, recycler)?;
             *self.data.try_write().unwrap() = Some(buf);
         }
         Ok(())
@@ -211,6 +247,7 @@ impl ModularBuffer {
         can_consume: bool,
         recycler: &BufferRecycler,
     ) -> Result<ModularChannel> {
+        let _ = recycler;
         if !can_consume || DISABLE_MODULAR_BUFFER_DEALLOCATION_FOR_DEBUG {
             return ModularChannel::try_clone(self.data.try_read().unwrap().as_ref().unwrap());
         }
@@ -231,16 +268,11 @@ impl ModularBuffer {
                             .as_ref()
                             .map(ModularChannel::try_clone);
                     }
-                } else if remaining == 0 {
-                    let old_data = self.data.try_write().unwrap().take();
-                    if let Some(chan) = old_data {
-                        recycler.recycle_buffer(chan.data);
-                    }
                 }
                 Some(remaining)
             },
         );
-        Ok(ret.transpose()?.unwrap())
+        ret.unwrap()
     }
 
     #[inline]
@@ -260,7 +292,7 @@ impl ModularBuffer {
                 if remaining == 0 {
                     let old_data = self.data.try_write().unwrap().take();
                     if let Some(chan) = old_data {
-                        recycler.recycle_buffer(chan.data);
+                        recycler.recycle_raw_buffer(chan.data);
                     }
                 }
                 Some(remaining)
@@ -280,13 +312,13 @@ impl ModularBuffer {
             let _ = self.auxiliary_data.try_write().unwrap().take();
             let d = self.data.try_write().unwrap().take();
             if let Some(chan) = d {
-                recycler.recycle_buffer(chan.data);
+                recycler.recycle_raw_buffer(chan.data);
             }
             if let Some(tb_img) = tb {
-                recycler.recycle_buffer(tb_img);
+                recycler.recycle_raw_buffer(tb_img);
             }
             if let Some(lr_img) = lr {
-                recycler.recycle_buffer(lr_img);
+                recycler.recycle_raw_buffer(lr_img);
             }
         }
     }
@@ -304,7 +336,7 @@ pub fn with_buffers<T>(
         // Allocate buffers if they are not present.
         let buf = &buffers[*i];
         let b = &buf.buffer_grid[grid];
-        b.ensure_buffer(&buf.info, recycler)?;
+        b.ensure_buffer(&buf.info, buf.is_16bit, recycler)?;
 
         // Skip zero-sized *tiles*.
         //
@@ -319,4 +351,105 @@ pub fn with_buffers<T>(
     }
     let bufs: Vec<&mut ModularChannel> = guards.iter_mut().map(|g| g.as_mut().unwrap()).collect();
     f(bufs)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::image::{ImageRect, ImageRectMut};
+
+    #[test]
+    fn test_modular_channel_size_and_allocation() -> Result<()> {
+        let bit_depth = BitDepth::integer_samples(8);
+        let ch16 = ModularChannel::new((10, 5), true, bit_depth)?;
+        assert_eq!(ch16.data.byte_size(), (20, 5));
+        assert_eq!(ch16.size(true), (10, 5));
+
+        let ch32 = ModularChannel::new((10, 5), false, bit_depth)?;
+        assert_eq!(ch32.data.byte_size(), (40, 5));
+        assert_eq!(ch32.size(false), (10, 5));
+        Ok(())
+    }
+
+    #[test]
+    fn test_modular_buffer_extract_borders_16bit_and_32bit() -> Result<()> {
+        let recycler = BufferRecycler::new(256);
+        let bit_depth = BitDepth::integer_samples(8);
+
+        // Test 16-bit
+        {
+            let mut buf = ModularBuffer::new((6, 6));
+            buf.needed_borders.topbottom = true;
+            buf.needed_borders.leftright = true;
+            let mut chan = ModularChannel::new((6, 6), true, bit_depth)?;
+            {
+                let mut rect = ImageRectMut::<i16>::from_raw(chan.data.as_rect_mut());
+                for y in 0..6 {
+                    for x in 0..6 {
+                        rect.row(y)[x] = (y * 10 + x) as i16;
+                    }
+                }
+            }
+            *buf.data.try_write().unwrap() = Some(chan);
+            buf.extract_needed_borders(true, &recycler)?;
+
+            let tb = buf.topbottom.try_read().unwrap();
+            let tb = tb.as_ref().unwrap();
+            let tb_rect = ImageRect::<i16>::from_raw(tb.as_rect());
+            assert_eq!(tb_rect.row(0), &[0, 1, 2, 3, 4, 5]);
+            assert_eq!(tb_rect.row(1), &[10, 11, 12, 13, 14, 15]);
+            assert_eq!(tb_rect.row(2), &[40, 41, 42, 43, 44, 45]);
+            assert_eq!(tb_rect.row(3), &[50, 51, 52, 53, 54, 55]);
+
+            let lr = buf.leftright.try_read().unwrap();
+            let lr = lr.as_ref().unwrap();
+            let lr_rect = ImageRect::<i16>::from_raw(lr.as_rect());
+            for y in 0..6 {
+                let r = lr_rect.row(y);
+                assert_eq!(r[0], (y * 10) as i16);
+                assert_eq!(r[1], (y * 10 + 1) as i16);
+                assert_eq!(r[2], (y * 10 + 4) as i16);
+                assert_eq!(r[3], (y * 10 + 5) as i16);
+            }
+        }
+
+        // Test 32-bit
+        {
+            let mut buf = ModularBuffer::new((6, 6));
+            buf.needed_borders.topbottom = true;
+            buf.needed_borders.leftright = true;
+            let mut chan = ModularChannel::new((6, 6), false, bit_depth)?;
+            {
+                let mut rect = ImageRectMut::<i32>::from_raw(chan.data.as_rect_mut());
+                for y in 0..6 {
+                    for x in 0..6 {
+                        rect.row(y)[x] = (y * 10 + x) as i32;
+                    }
+                }
+            }
+            *buf.data.try_write().unwrap() = Some(chan);
+            buf.extract_needed_borders(false, &recycler)?;
+
+            let tb = buf.topbottom.try_read().unwrap();
+            let tb = tb.as_ref().unwrap();
+            let tb_rect = ImageRect::<i32>::from_raw(tb.as_rect());
+            assert_eq!(tb_rect.row(0), &[0, 1, 2, 3, 4, 5]);
+            assert_eq!(tb_rect.row(1), &[10, 11, 12, 13, 14, 15]);
+            assert_eq!(tb_rect.row(2), &[40, 41, 42, 43, 44, 45]);
+            assert_eq!(tb_rect.row(3), &[50, 51, 52, 53, 54, 55]);
+
+            let lr = buf.leftright.try_read().unwrap();
+            let lr = lr.as_ref().unwrap();
+            let lr_rect = ImageRect::<i32>::from_raw(lr.as_rect());
+            for y in 0..6 {
+                let r = lr_rect.row(y);
+                assert_eq!(r[0], (y * 10) as i32);
+                assert_eq!(r[1], (y * 10 + 1) as i32);
+                assert_eq!(r[2], (y * 10 + 4) as i32);
+                assert_eq!(r[3], (y * 10 + 5) as i32);
+            }
+        }
+
+        Ok(())
+    }
 }

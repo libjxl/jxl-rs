@@ -228,6 +228,7 @@ pub(super) fn meta_apply_single_transform(
 pub fn meta_apply_transforms(
     channels: &[ChannelInfo],
     header: &headers::modular::GroupHeader,
+    is_16bit: bool,
 ) -> Result<(Vec<ModularBufferInfo>, Vec<TransformStep>)> {
     let mut buffer_info = vec![];
     let mut transform_steps = vec![];
@@ -247,6 +248,7 @@ pub fn meta_apply_transforms(
             grid_kind: ModularGridKind::None,
             grid_shape: (0, 0),
             buffer_grid: vec![],
+            is_16bit,
         });
     }
 
@@ -259,6 +261,7 @@ pub fn meta_apply_transforms(
             grid_kind: ModularGridKind::None,
             grid_shape: (0, 0),
             buffer_grid: vec![],
+            is_16bit,
         });
         buffer_info.len() - 1
     };

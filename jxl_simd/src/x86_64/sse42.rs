@@ -9,8 +9,10 @@ use std::ops::{
     Mul, MulAssign, Neg, Sub, SubAssign,
 };
 
-use super::super::{F32SimdVec, I32SimdVec, SimdDescriptor, SimdMask, U8SimdVec, U16SimdVec};
-use crate::{U32SimdVec, U64SimdVec, impl_f32_array_interface};
+use super::super::{
+    F32SimdVec, I16SimdVec, I32SimdVec, SimdDescriptor, SimdMask, SimdMask16, U8SimdVec, U16SimdVec,
+};
+use crate::{U32SimdVec, U64SimdVec, impl_f32_array_interface, impl_i16_array_interface};
 
 // Safety invariant: this type is only ever constructed if sse4.2 is available.
 #[derive(Clone, Copy, Debug)]
@@ -27,11 +29,13 @@ impl Sse42Descriptor {
 impl SimdDescriptor for Sse42Descriptor {
     type F32Vec = F32VecSse42;
     type I32Vec = I32VecSse42;
+    type I16Vec = I16VecSse42;
     type U64Vec = U64VecSse42;
     type U32Vec = U32VecSse42;
     type U16Vec = U16VecSse42;
     type U8Vec = U8VecSse42;
     type Mask = MaskSse42;
+    type Mask16 = Mask16Sse42;
     type Bf16Table8 = Bf16Table8Sse42;
 
     type Descriptor256 = Self;
@@ -95,6 +99,10 @@ pub struct F32VecSse42(__m128, Sse42Descriptor);
 #[derive(Clone, Copy, Debug)]
 #[repr(transparent)]
 pub struct MaskSse42(__m128, Sse42Descriptor);
+
+#[derive(Clone, Copy, Debug)]
+#[repr(transparent)]
+pub struct Mask16Sse42(__m128i, Sse42Descriptor);
 
 impl F32SimdVec for F32VecSse42 {
     type Descriptor = Sse42Descriptor;
@@ -967,6 +975,250 @@ impl BitXorAssign<I32VecSse42> for I32VecSse42 {
 
 #[derive(Clone, Copy, Debug)]
 #[repr(transparent)]
+pub struct I16VecSse42(__m128i, Sse42Descriptor);
+
+impl I16SimdVec for I16VecSse42 {
+    type Descriptor = Sse42Descriptor;
+
+    const LEN: usize = 8;
+
+    #[inline(always)]
+    fn load(d: Self::Descriptor, mem: &[i16]) -> Self {
+        assert!(mem.len() >= Self::LEN);
+        // SAFETY: we just checked that `mem` has enough space. Moreover, we know sse4.2 is available
+        // from the safety invariant on `d`.
+        Self(unsafe { _mm_loadu_si128(mem.as_ptr().cast()) }, d)
+    }
+
+    #[inline(always)]
+    fn store(&self, mem: &mut [i16]) {
+        assert!(mem.len() >= Self::LEN);
+        // SAFETY: we just checked that `mem` has enough space. Moreover, we know sse4.2 is available
+        // from the safety invariant on `self.1`.
+        unsafe { _mm_storeu_si128(mem.as_mut_ptr().cast(), self.0) }
+    }
+
+    #[inline(always)]
+    fn splat(d: Self::Descriptor, v: i16) -> Self {
+        // SAFETY: We know sse4.2 is available from the safety invariant on `d`.
+        unsafe { Self(_mm_set1_epi16(v), d) }
+    }
+
+    #[inline(always)]
+    fn zero(d: Self::Descriptor) -> Self {
+        // SAFETY: We know sse4.2 is available from the safety invariant on `d`.
+        unsafe { Self(_mm_setzero_si128(), d) }
+    }
+
+    fn_sse42!(this: I16VecSse42, fn abs() -> I16VecSse42 {
+        I16VecSse42(_mm_abs_epi16(this.0), this.1)
+    });
+
+    fn_sse42!(this: I16VecSse42, fn gt(rhs: I16VecSse42) -> Mask16Sse42 {
+        Mask16Sse42(_mm_cmpgt_epi16(this.0, rhs.0), this.1)
+    });
+
+    fn_sse42!(this: I16VecSse42, fn lt_zero() -> Mask16Sse42 {
+        I16VecSse42(_mm_setzero_si128(), this.1).gt(this)
+    });
+
+    fn_sse42!(this: I16VecSse42, fn eq(rhs: I16VecSse42) -> Mask16Sse42 {
+        Mask16Sse42(_mm_cmpeq_epi16(this.0, rhs.0), this.1)
+    });
+
+    fn_sse42!(this: I16VecSse42, fn eq_zero() -> Mask16Sse42 {
+        this.eq(I16VecSse42(_mm_setzero_si128(), this.1))
+    });
+
+    #[inline(always)]
+    fn shl<const AMOUNT_U: u32, const AMOUNT_I: i32>(self) -> Self {
+        // SAFETY: We know sse4.2 is available from the safety invariant on `self.1`.
+        unsafe { Self(_mm_slli_epi16::<AMOUNT_I>(self.0), self.1) }
+    }
+
+    #[inline(always)]
+    fn shr<const AMOUNT_U: u32, const AMOUNT_I: i32>(self) -> Self {
+        // SAFETY: We know sse4.2 is available from the safety invariant on `self.1`.
+        unsafe { Self(_mm_srai_epi16::<AMOUNT_I>(self.0), self.1) }
+    }
+
+    fn_sse42!(this: I16VecSse42, fn mul_wide_take_high(rhs: I16VecSse42) -> I16VecSse42 {
+        I16VecSse42(_mm_mulhi_epi16(this.0, rhs.0), this.1)
+    });
+
+    #[inline(always)]
+    fn bitcast_u16(self) -> U16VecSse42 {
+        U16VecSse42(self.0, self.1)
+    }
+
+    impl_i16_array_interface!();
+
+    #[inline(always)]
+    fn transpose_square(d: Self::Descriptor, data: &mut [Self::UnderlyingArray], stride: usize) {
+        #[target_feature(enable = "sse4.2")]
+        #[inline]
+        fn transpose8x8i16(d: Sse42Descriptor, data: &mut [[i16; 8]], stride: usize) {
+            assert!(data.len() > stride * 7);
+
+            let r0 = I16VecSse42::load_array(d, &data[0]).0;
+            let r1 = I16VecSse42::load_array(d, &data[1 * stride]).0;
+            let r2 = I16VecSse42::load_array(d, &data[2 * stride]).0;
+            let r3 = I16VecSse42::load_array(d, &data[3 * stride]).0;
+            let r4 = I16VecSse42::load_array(d, &data[4 * stride]).0;
+            let r5 = I16VecSse42::load_array(d, &data[5 * stride]).0;
+            let r6 = I16VecSse42::load_array(d, &data[6 * stride]).0;
+            let r7 = I16VecSse42::load_array(d, &data[7 * stride]).0;
+
+            // Stage 1: 16-bit unpack
+            let t0 = _mm_unpacklo_epi16(r0, r1);
+            let t1 = _mm_unpackhi_epi16(r0, r1);
+            let t2 = _mm_unpacklo_epi16(r2, r3);
+            let t3 = _mm_unpackhi_epi16(r2, r3);
+            let t4 = _mm_unpacklo_epi16(r4, r5);
+            let t5 = _mm_unpackhi_epi16(r4, r5);
+            let t6 = _mm_unpacklo_epi16(r6, r7);
+            let t7 = _mm_unpackhi_epi16(r6, r7);
+
+            // Stage 2: 32-bit unpack
+            let u0 = _mm_unpacklo_epi32(t0, t2);
+            let u1 = _mm_unpackhi_epi32(t0, t2);
+            let u2 = _mm_unpacklo_epi32(t1, t3);
+            let u3 = _mm_unpackhi_epi32(t1, t3);
+            let u4 = _mm_unpacklo_epi32(t4, t6);
+            let u5 = _mm_unpackhi_epi32(t4, t6);
+            let u6 = _mm_unpacklo_epi32(t5, t7);
+            let u7 = _mm_unpackhi_epi32(t5, t7);
+
+            // Stage 3: 64-bit unpack
+            let out0 = _mm_unpacklo_epi64(u0, u4);
+            let out1 = _mm_unpackhi_epi64(u0, u4);
+            let out2 = _mm_unpacklo_epi64(u1, u5);
+            let out3 = _mm_unpackhi_epi64(u1, u5);
+            let out4 = _mm_unpacklo_epi64(u2, u6);
+            let out5 = _mm_unpackhi_epi64(u2, u6);
+            let out6 = _mm_unpacklo_epi64(u3, u7);
+            let out7 = _mm_unpackhi_epi64(u3, u7);
+
+            I16VecSse42(out0, d).store_array(&mut data[0]);
+            I16VecSse42(out1, d).store_array(&mut data[1 * stride]);
+            I16VecSse42(out2, d).store_array(&mut data[2 * stride]);
+            I16VecSse42(out3, d).store_array(&mut data[3 * stride]);
+            I16VecSse42(out4, d).store_array(&mut data[4 * stride]);
+            I16VecSse42(out5, d).store_array(&mut data[5 * stride]);
+            I16VecSse42(out6, d).store_array(&mut data[6 * stride]);
+            I16VecSse42(out7, d).store_array(&mut data[7 * stride]);
+        }
+
+        // SAFETY: the safety invariant on `d` guarantees sse42
+        unsafe {
+            transpose8x8i16(d, data, stride);
+        }
+    }
+
+    #[inline(always)]
+    fn store_u8(self, dest: &mut [u8]) {
+        assert!(dest.len() >= I16VecSse42::LEN);
+        #[target_feature(enable = "sse4.2")]
+        #[inline]
+        fn store_u8_impl(v: __m128i, dest: &mut [u8]) {
+            let mask = _mm_setr_epi8(0, 2, 4, 6, 8, 10, 12, 14, -1, -1, -1, -1, -1, -1, -1, -1);
+            let shuffled = _mm_shuffle_epi8(v, mask);
+            let val = _mm_cvtsi128_si64(shuffled);
+            let bytes = val.to_ne_bytes();
+            dest[..8].copy_from_slice(&bytes);
+        }
+        // SAFETY: sse4.2 is available from the safety invariant on the descriptor.
+        unsafe { store_u8_impl(self.0, dest) }
+    }
+}
+
+impl Add<I16VecSse42> for I16VecSse42 {
+    type Output = I16VecSse42;
+    fn_sse42!(this: I16VecSse42, fn add(rhs: I16VecSse42) -> I16VecSse42 {
+        I16VecSse42(_mm_add_epi16(this.0, rhs.0), this.1)
+    });
+}
+
+impl Sub<I16VecSse42> for I16VecSse42 {
+    type Output = I16VecSse42;
+    fn_sse42!(this: I16VecSse42, fn sub(rhs: I16VecSse42) -> I16VecSse42 {
+        I16VecSse42(_mm_sub_epi16(this.0, rhs.0), this.1)
+    });
+}
+
+impl Neg for I16VecSse42 {
+    type Output = I16VecSse42;
+    fn_sse42!(this: I16VecSse42, fn neg() -> I16VecSse42 {
+        I16VecSse42(_mm_sub_epi16(_mm_setzero_si128(), this.0), this.1)
+    });
+}
+
+impl BitAnd<I16VecSse42> for I16VecSse42 {
+    type Output = I16VecSse42;
+    fn_sse42!(this: I16VecSse42, fn bitand(rhs: I16VecSse42) -> I16VecSse42 {
+        I16VecSse42(_mm_and_si128(this.0, rhs.0), this.1)
+    });
+}
+
+impl BitOr<I16VecSse42> for I16VecSse42 {
+    type Output = I16VecSse42;
+    fn_sse42!(this: I16VecSse42, fn bitor(rhs: I16VecSse42) -> I16VecSse42 {
+        I16VecSse42(_mm_or_si128(this.0, rhs.0), this.1)
+    });
+}
+
+impl BitXor<I16VecSse42> for I16VecSse42 {
+    type Output = I16VecSse42;
+    fn_sse42!(this: I16VecSse42, fn bitxor(rhs: I16VecSse42) -> I16VecSse42 {
+        I16VecSse42(_mm_xor_si128(this.0, rhs.0), this.1)
+    });
+}
+
+impl AddAssign<I16VecSse42> for I16VecSse42 {
+    fn_sse42!(this: &mut I16VecSse42, fn add_assign(rhs: I16VecSse42) {
+        this.0 = _mm_add_epi16(this.0, rhs.0)
+    });
+}
+
+impl SubAssign<I16VecSse42> for I16VecSse42 {
+    fn_sse42!(this: &mut I16VecSse42, fn sub_assign(rhs: I16VecSse42) {
+        this.0 = _mm_sub_epi16(this.0, rhs.0)
+    });
+}
+
+impl BitAndAssign<I16VecSse42> for I16VecSse42 {
+    fn_sse42!(this: &mut I16VecSse42, fn bitand_assign(rhs: I16VecSse42) {
+        this.0 = _mm_and_si128(this.0, rhs.0)
+    });
+}
+
+impl BitOrAssign<I16VecSse42> for I16VecSse42 {
+    fn_sse42!(this: &mut I16VecSse42, fn bitor_assign(rhs: I16VecSse42) {
+        this.0 = _mm_or_si128(this.0, rhs.0)
+    });
+}
+
+impl BitXorAssign<I16VecSse42> for I16VecSse42 {
+    fn_sse42!(this: &mut I16VecSse42, fn bitxor_assign(rhs: I16VecSse42) {
+        this.0 = _mm_xor_si128(this.0, rhs.0)
+    });
+}
+
+impl Mul<I16VecSse42> for I16VecSse42 {
+    type Output = I16VecSse42;
+    fn_sse42!(this: I16VecSse42, fn mul(rhs: I16VecSse42) -> I16VecSse42 {
+        I16VecSse42(_mm_mullo_epi16(this.0, rhs.0), this.1)
+    });
+}
+
+impl MulAssign<I16VecSse42> for I16VecSse42 {
+    fn_sse42!(this: &mut I16VecSse42, fn mul_assign(rhs: I16VecSse42) {
+        this.0 = _mm_mullo_epi16(this.0, rhs.0);
+    });
+}
+
+#[derive(Clone, Copy, Debug)]
+#[repr(transparent)]
 pub struct U32VecSse42(__m128i, Sse42Descriptor);
 
 impl U32SimdVec for U32VecSse42 {
@@ -1365,6 +1617,11 @@ impl U16SimdVec for U16VecSse42 {
         // SAFETY: sse4.2 is available from the safety invariant on the descriptor.
         unsafe { store_interleaved_4_impl(a.0, b.0, c.0, d.0, dest) }
     }
+
+    #[inline(always)]
+    fn bitcast_i16(self) -> I16VecSse42 {
+        I16VecSse42(self.0, self.1)
+    }
 }
 
 impl SimdMask for MaskSse42 {
@@ -1402,5 +1659,39 @@ impl BitOr<MaskSse42> for MaskSse42 {
     type Output = MaskSse42;
     fn_sse42!(this: MaskSse42, fn bitor(rhs: MaskSse42) -> MaskSse42 {
         MaskSse42(_mm_or_ps(this.0, rhs.0), this.1)
+    });
+}
+
+impl SimdMask16 for Mask16Sse42 {
+    type Descriptor = Sse42Descriptor;
+
+    fn_sse42!(this: Mask16Sse42, fn if_then_else_i16(if_true: I16VecSse42, if_false: I16VecSse42) -> I16VecSse42 {
+        I16VecSse42(_mm_blendv_epi8(if_false.0, if_true.0, this.0), this.1)
+    });
+
+    fn_sse42!(this: Mask16Sse42, fn maskz_i16(v: I16VecSse42) -> I16VecSse42 {
+        I16VecSse42(_mm_andnot_si128(this.0, v.0), this.1)
+    });
+
+    fn_sse42!(this: Mask16Sse42, fn all() -> bool {
+        _mm_movemask_epi8(this.0) == 0xFFFF
+    });
+
+    fn_sse42!(this: Mask16Sse42, fn andnot(rhs: Mask16Sse42) -> Mask16Sse42 {
+        Mask16Sse42(_mm_andnot_si128(this.0, rhs.0), this.1)
+    });
+}
+
+impl BitAnd<Mask16Sse42> for Mask16Sse42 {
+    type Output = Mask16Sse42;
+    fn_sse42!(this: Mask16Sse42, fn bitand(rhs: Mask16Sse42) -> Mask16Sse42 {
+        Mask16Sse42(_mm_and_si128(this.0, rhs.0), this.1)
+    });
+}
+
+impl BitOr<Mask16Sse42> for Mask16Sse42 {
+    type Output = Mask16Sse42;
+    fn_sse42!(this: Mask16Sse42, fn bitor(rhs: Mask16Sse42) -> Mask16Sse42 {
+        Mask16Sse42(_mm_or_si128(this.0, rhs.0), this.1)
     });
 }

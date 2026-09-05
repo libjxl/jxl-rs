@@ -41,6 +41,7 @@ pub fn run(path: &Path, expected_checkpoints: &[(usize, f32)]) {
         None,
         Some(&mut flush_callback),
         None,
+        false,
     )
     .unwrap();
 

@@ -124,6 +124,8 @@ pub struct DecoderState {
     pub render_spotcolors: bool,
     #[cfg(test)]
     pub use_simple_pipeline: bool,
+    #[cfg(test)]
+    pub allow_16bit_modular_buffers: bool,
     pub visible_frame_index: usize,
     pub nonvisible_frame_index: usize,
     pub high_precision: bool,
@@ -146,12 +148,22 @@ impl DecoderState {
             render_spotcolors: options.render_spot_colors,
             #[cfg(test)]
             use_simple_pipeline: false,
+            #[cfg(test)]
+            allow_16bit_modular_buffers: true,
             visible_frame_index: 0,
             nonvisible_frame_index: 0,
             high_precision: options.high_precision,
             premultiply_output: options.premultiply_output,
             lf_frame_was_rendered: false,
         }
+    }
+
+    pub fn modular_16bit_sufficient(&self) -> bool {
+        #[cfg(test)]
+        if !self.allow_16bit_modular_buffers {
+            return false;
+        }
+        self.file_header.image_metadata.modular_16bit_sufficient
     }
 
     pub fn extra_channel_info(&self) -> &Vec<ExtraChannelInfo> {
@@ -166,6 +178,11 @@ impl DecoderState {
     #[cfg(test)]
     pub fn set_use_simple_pipeline(&mut self, u: bool) {
         self.use_simple_pipeline = u;
+    }
+
+    #[cfg(test)]
+    pub fn disable_16bit_modular_buffers(&mut self) {
+        self.allow_16bit_modular_buffers = false;
     }
 }
 

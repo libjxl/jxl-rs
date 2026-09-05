@@ -13,6 +13,7 @@ use crate::frame::modular::tree::TreeNode;
 use crate::frame::modular::{ModularChannel, Predictor, Tree};
 use crate::headers::JxlHeader;
 use crate::headers::modular::GroupHeader;
+use crate::image::ImageRectMut;
 
 // If we have at least this many bits still available to read,
 // we can be sure that none of the reads up to this point read garbage.
@@ -47,13 +48,14 @@ fn decode_fast_lossless(
     tree: &Tree,
     br: &mut BitReader,
     partial_decoded_buffers: Option<&mut usize>,
+    is_16bit: bool,
 ) -> Result<()> {
     let mut rle_len: usize = 0;
     let mut rle_sym = 0;
 
     let mut last_safe_buf = 0;
     for (c, buf) in buffers.into_iter().enumerate() {
-        let (w, h) = buf.data.size();
+        let (w, h) = buf.size(is_16bit);
         if w == 0 || h == 0 {
             continue;
         }
@@ -76,8 +78,6 @@ fn decode_fast_lossless(
             .uint(tree.histograms.map_context_to_cluster(id as usize));
         let lz_conf = tree.histograms.lz77_length_uint();
 
-        let buf = &mut buf.data;
-
         let mut decode = {
             #[inline(always)]
             || {
@@ -98,23 +98,48 @@ fn decode_fast_lossless(
             }
         };
 
-        let mut last = 0i32;
-        for p in buf.row_mut(0) {
-            // clamped gradient == left on the first row.
-            *p = last.wrapping_add(decode());
-            last = *p;
-        }
+        if is_16bit {
+            let mut buf = ImageRectMut::<i16>::from_raw(buf.data.as_rect_mut());
+            let mut last = 0i32;
+            for p in buf.row(0) {
+                last = last.wrapping_add(decode());
+                *p = last as i16;
+            }
 
-        for y in 1..h {
-            let [row, row_top] = buf.distinct_rows_mut([y, y - 1]);
+            for y in 1..h {
+                let [row, row_top] = buf.distinct_rows_mut([y, y - 1]);
 
-            let mut left = row_top[0];
-            let mut topleft = left;
-            for (top, p) in row_top.iter().copied().zip(row.iter_mut()) {
-                let pred = clamped_gradient(left as i64, top as i64, topleft as i64);
-                *p = (pred + decode() as i64) as i32;
-                left = *p;
-                topleft = top;
+                let mut left = row_top[0] as i32;
+                let mut topleft = left;
+                for (&top_sample, p) in row_top.iter().zip(row.iter_mut()) {
+                    let top = top_sample as i32;
+                    let pred = clamped_gradient(left as i64, top as i64, topleft as i64);
+                    let val = (pred + decode() as i64) as i32;
+                    *p = val as i16;
+                    left = val;
+                    topleft = top;
+                }
+            }
+        } else {
+            let mut buf = ImageRectMut::<i32>::from_raw(buf.data.as_rect_mut());
+            let mut last = 0i32;
+            for p in buf.row(0) {
+                // clamped gradient == left on the first row.
+                *p = last.wrapping_add(decode());
+                last = *p;
+            }
+
+            for y in 1..h {
+                let [row, row_top] = buf.distinct_rows_mut([y, y - 1]);
+
+                let mut left = row_top[0];
+                let mut topleft = left;
+                for (top, p) in row_top.iter().copied().zip(row.iter_mut()) {
+                    let pred = clamped_gradient(left as i64, top as i64, topleft as i64);
+                    *p = (pred + decode() as i64) as i32;
+                    left = *p;
+                    topleft = top;
+                }
             }
         }
 
@@ -129,20 +154,21 @@ fn decode_fast_lossless(
     Ok(())
 }
 
-// This function will decode a header and apply local transforms if a header is not given.
-// The intended use of passing a header is for the DcGlobal section.
+#[allow(clippy::too_many_arguments)]
 pub(in crate::frame::modular) fn decode_modular_subbitstream(
     buffers: Vec<&mut ModularChannel>,
+    is_16bit: bool,
     stream_id: usize,
     header: Option<GroupHeader>,
     global_tree: &Option<Tree>,
     br: &mut BitReader,
     partial_decoded_buffers: Option<&mut usize>,
+    mut scratch: Option<&mut [Vec<i32>; 3]>,
 ) -> Result<()> {
     // Skip decoding if all grids are zero-sized.
     let is_empty = buffers
         .iter()
-        .all(|buffer| matches!(buffer.data.size(), (0, _) | (_, 0)));
+        .all(|buffer| matches!(buffer.size(is_16bit), (0, _) | (_, 0)));
     if is_empty {
         return Ok(());
     }
@@ -160,7 +186,7 @@ pub(in crate::frame::modular) fn decode_modular_subbitstream(
                 // applying transforms later.
                 let new_bufs;
                 (new_bufs, transform_steps) =
-                    meta_apply_local_transforms(buffers, &mut buffer_storage, &h)?;
+                    meta_apply_local_transforms(buffers, &mut buffer_storage, &h, is_16bit)?;
                 (h, new_bufs)
             } else {
                 (h, buffers)
@@ -175,7 +201,7 @@ pub(in crate::frame::modular) fn decode_modular_subbitstream(
         let num_local_samples = buffers
             .iter()
             .map(|buf| {
-                let (width, height) = buf.channel_info().size;
+                let (width, height) = buf.channel_info(is_16bit).size;
                 width * height
             })
             .sum::<usize>();
@@ -192,12 +218,12 @@ pub(in crate::frame::modular) fn decode_modular_subbitstream(
 
     let image_width = buffers
         .iter()
-        .map(|info| info.channel_info().size.0)
+        .map(|info| info.channel_info(is_16bit).size.0)
         .max()
         .unwrap_or(0);
 
     if can_decode_fast_lossless(tree) {
-        decode_fast_lossless(buffers, tree, br, partial_decoded_buffers)?
+        decode_fast_lossless(buffers, tree, br, partial_decoded_buffers, is_16bit)?
     } else {
         let mut reader = SymbolReader::new(&tree.histograms, br, Some(image_width))?;
 
@@ -205,16 +231,24 @@ pub(in crate::frame::modular) fn decode_modular_subbitstream(
         for i in 0..buffers.len() {
             // Keep channel numbering stable, but skip actually decoding empty channels.
             // This matches libjxl, which continues the loop without renumbering.
-            let (w, h) = buffers[i].data.size();
+            let (w, h) = buffers[i].size(is_16bit);
             if w == 0 || h == 0 {
                 continue;
             }
             if br.total_bits_available() >= DECODE_SAFETY_MARGIN {
                 last_safe_buf = i;
             }
-            if let Err(e) =
-                decode_modular_channel(&mut buffers, i, stream_id, &header, tree, &mut reader, br)
-            {
+            if let Err(e) = decode_modular_channel(
+                &mut buffers,
+                i,
+                stream_id,
+                &header,
+                tree,
+                &mut reader,
+                br,
+                is_16bit,
+                scratch.as_deref_mut(),
+            ) {
                 if let Some(p) = partial_decoded_buffers {
                     *p = last_safe_buf;
                 }
@@ -228,7 +262,7 @@ pub(in crate::frame::modular) fn decode_modular_subbitstream(
     }
 
     for step in transform_steps.iter().rev() {
-        step.local_apply(&mut buffer_storage)?;
+        step.local_apply(&mut buffer_storage, is_16bit)?;
     }
 
     Ok(())

@@ -17,7 +17,7 @@ macro_rules! declare_test_file_common {
             fn [<test_decode_test_file_chunks_ $ident>]() {
                 let path = std::path::Path::new("resources/test/").join($path);
                 let file = std::fs::read(&path).unwrap();
-                crate::tests::decode::decode_internal(&file, 1, false, false, None, None, None).unwrap();
+                crate::tests::decode::decode_internal(&file, 1, false, false, None, None, None, false).unwrap();
             }
 
             #[test]
@@ -38,12 +38,18 @@ macro_rules! declare_test_file_common {
             fn [<test_compare_pipelines_ $ident>]() {
                 let path = std::path::Path::new("resources/test/").join($path);
                 let file = std::fs::read(&path).unwrap();
-                let simple_frames = crate::tests::decode::decode_internal(&file, usize::MAX, true, false, None, None, None).unwrap().1;
+                let simple_frames = crate::tests::decode::decode_internal(&file, usize::MAX, true, false, None, None, None, false).unwrap().1;
                 let frames = crate::tests::decode::decode(&file).unwrap().1;
                 assert_eq!(frames.len(), simple_frames.len());
                 for (fc, (f, sf)) in frames.into_iter().zip(simple_frames).enumerate() {
                     crate::tests::decode::compare_frames(&path, fc, &f, &sf);
                 }
+            }
+
+            #[test]
+            fn [<test_compare_modular_buffers_ $ident>]() {
+                let path = std::path::Path::new("resources/test/").join($path);
+                crate::tests::compare_modular::run(&path, $checkpoints);
             }
 
             #[test]

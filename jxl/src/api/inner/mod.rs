@@ -141,6 +141,11 @@ impl JxlDecoderInner {
         self.codestream_parser.set_use_simple_pipeline(u);
     }
 
+    #[cfg(test)]
+    pub(crate) fn disable_16bit_modular_buffers(&mut self) {
+        self.codestream_parser.disable_16bit_modular_buffers();
+    }
+
     pub fn file_length(&self) -> Option<u64> {
         self.codestream_parser.file_length
     }
