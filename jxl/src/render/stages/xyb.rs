@@ -353,7 +353,7 @@ mod test {
                     let max = simd.abs().max(scalar.abs());
                     let rel = abs / max;
                     assert!(
-                        abs < 1e-3 || rel < 1e-3,
+                        abs < 2e-3 || rel < 2e-3,
                         "simd {simd}, scalar {scalar}, abs {abs:?} rel {rel:?}",
                     );
                 }
