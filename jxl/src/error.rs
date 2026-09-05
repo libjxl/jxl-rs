@@ -219,6 +219,10 @@ pub enum Error {
     MetaSqueezeRequiresInPlace,
     #[error("Invalid transform: too many squeezes (shift > 30)")]
     TooManySqueezes,
+    #[error("Palette meta-channel too large: {0} samples > limit {1}")]
+    PaletteTooLarge(usize, usize),
+    #[error("Too many modular channels: {0} > limit {1}")]
+    TooManyModularChannels(usize, usize),
     #[error("Invalid BlockConextMap: too big: num_lf_context: {0}, num_qf_thresholds: {1}")]
     BlockContextMapSizeTooBig(usize, usize),
     #[error("Invalid BlockConextMap: too many distinct contexts.")]

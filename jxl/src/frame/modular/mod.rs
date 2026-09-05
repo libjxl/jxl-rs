@@ -263,6 +263,17 @@ pub struct FullModularImage {
     pub(super) recycler: Arc<BufferRecycler>,
 }
 
+fn max_channels<'a, T: Iterator<Item = &'a ChannelInfo> + ExactSizeIterator>(channels: T) -> usize {
+    let num = channels.len();
+    let max_dim = channels
+        .flat_map(|c| [c.size.0, c.size.1].into_iter())
+        .chain(std::iter::once(1))
+        .max()
+        .unwrap();
+    let tree_depth = 2 + 2 * max_dim.ceil_log2();
+    num.saturating_mul(tree_depth).saturating_add(64)
+}
+
 impl FullModularImage {
     pub fn can_do_partial_render(&self) -> bool {
         self.can_do_partial_render
@@ -283,6 +294,7 @@ impl FullModularImage {
         modular_color_channels: usize,
         br: &mut BitReader,
         recycler: Arc<BufferRecycler>,
+        sample_limit: Option<usize>,
     ) -> Result<Self> {
         let mut channels = vec![];
         for c in 0..modular_color_channels {
@@ -361,8 +373,16 @@ impl FullModularImage {
             .iter()
             .any(|x| x.id == TransformId::Squeeze);
 
-        let (mut buffer_info, transform_steps) =
-            transforms::meta_apply::meta_apply_transforms(&channels, &header)?;
+        let max_palette_samples = sample_limit.unwrap_or(usize::MAX);
+
+        let max_channels = max_channels(channels.iter());
+
+        let (mut buffer_info, transform_steps) = transforms::meta_apply::meta_apply_transforms(
+            &channels,
+            &header,
+            max_palette_samples,
+            max_channels,
+        )?;
 
         // Assign each (channel, group) pair present in the bitstream to the section in which it
         // will be decoded.

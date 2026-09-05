@@ -44,12 +44,16 @@ fn check_equal_channels(
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(super) fn meta_apply_single_transform(
     transform: &headers::modular::Transform,
     header: &headers::modular::GroupHeader,
     channels: &mut Vec<(usize, ChannelInfo)>,
     transform_steps: &mut Vec<TransformStep>,
     mut add_transform_buffer: impl FnMut(ChannelInfo, String) -> usize,
+    cumulative_palette_samples: &mut usize,
+    max_palette_samples: usize,
+    max_channels: usize,
 ) -> Result<()> {
     match transform.id {
         TransformId::Rct => {
@@ -162,6 +166,9 @@ pub(super) fn meta_apply_single_transform(
                     }
                     channels[begin_channel + ic] = (buf_0, new_0);
                     channels.insert(new_chan_offset + ic, (buf_1, new_1));
+                    if channels.len() > max_channels {
+                        return Err(Error::TooManyModularChannels(channels.len(), max_channels));
+                    }
                     trace!("applied squeeze: {channels:?}");
                 }
             }
@@ -174,6 +181,17 @@ pub(super) fn meta_apply_single_transform(
             let pred = Predictor::from_u32(transform.predictor_id)
                 .expect("header decoding should ensure a valid predictor");
             check_equal_channels(channels, begin_channel, num_channels)?;
+
+            let palette_samples = (num_colors + num_deltas).saturating_mul(num_channels);
+            *cumulative_palette_samples =
+                cumulative_palette_samples.saturating_add(palette_samples);
+            if *cumulative_palette_samples > max_palette_samples {
+                return Err(Error::PaletteTooLarge(
+                    *cumulative_palette_samples,
+                    max_palette_samples,
+                ));
+            }
+
             // We already checked the bit_depth for all channels from `begin_channel` is
             // equal in the line above.
             let bit_depth = channels[begin_channel].1.bit_depth;
@@ -228,7 +246,13 @@ pub(super) fn meta_apply_single_transform(
 pub fn meta_apply_transforms(
     channels: &[ChannelInfo],
     header: &headers::modular::GroupHeader,
+    max_palette_samples: usize,
+    max_channels: usize,
 ) -> Result<(Vec<ModularBufferInfo>, Vec<TransformStep>)> {
+    if channels.len() > max_channels {
+        return Err(Error::TooManyModularChannels(channels.len(), max_channels));
+    }
+
     let mut buffer_info = vec![];
     let mut transform_steps = vec![];
     // (buffer id, channel info)
@@ -263,6 +287,7 @@ pub fn meta_apply_transforms(
         buffer_info.len() - 1
     };
 
+    let mut cumulative_palette_samples = 0;
     // Apply transforms to the channel list.
     for transform in &header.transforms {
         meta_apply_single_transform(
@@ -271,7 +296,13 @@ pub fn meta_apply_transforms(
             &mut channels,
             &mut transform_steps,
             &mut add_transform_buffer,
+            &mut cumulative_palette_samples,
+            max_palette_samples,
+            max_channels,
         )?;
+        if channels.len() > max_channels {
+            return Err(Error::TooManyModularChannels(channels.len(), max_channels));
+        }
     }
 
     // All the channels left over at the end of applying transforms are the channels that are

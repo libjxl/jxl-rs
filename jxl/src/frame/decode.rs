@@ -422,6 +422,7 @@ impl Frame {
                     self.header.size().1 as u64,
                     &color_correlation_params,
                     self.decoder_state.high_precision,
+                    self.decoder_state.force_level5_splines,
                 )?;
             }
 
@@ -443,6 +444,7 @@ impl Frame {
                 self.modular_color_channels(),
                 br,
                 self.buffer_recycler.clone(),
+                self.decoder_state.sample_limit,
             )?;
 
             // Ensure that, if we call this function again, we resume from just after
