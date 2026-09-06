@@ -33,6 +33,7 @@ safety comments and to be reviewed by a non-author Unsafe Rust expert.
 ## Workspace Crates
 
 - [`jxl`](jxl/): Core JPEG XL decoder library.
+- [`jxl-image-rs-integration`](jxl-image-rs-integration/): Integration for the `image` crate.
 - [`jxl_cli`](jxl_cli/): CLI decoding and benchmarking tool.
 - [`jxl_cms`](jxl_cms/), [`jxl_simd`](jxl_simd/), [`jxl_transforms`](jxl_transforms/), [`jxl_macros`](jxl_macros/): Internal crates for color management, SIMD acceleration, transforms, and macros.
 
@@ -54,6 +55,27 @@ target/release/jxl_cli input.jxl --speedtest --num-reps 10
 
 The `jxl` crate is also available on [crates.io](https://crates.io/crates/jxl)
 for use as a library.
+
+### `image` crate integration
+
+Add the integration crate and register the JPEG XL decoder before using
+`image`'s format-agnostic loading APIs:
+
+```toml
+[dependencies]
+image = "0.25"
+jxl-image-rs-integration = "0.6"
+```
+
+```rust
+jxl_image_rs_integration::register_image_decoding_hook();
+
+let decoded = image::open("input.jxl")?;
+# Ok::<(), image::ImageError>(())
+```
+
+Registration enables both `.jxl` extension handling and automatic detection
+of bare codestreams and JPEG XL containers.
 
 ## Testing
 

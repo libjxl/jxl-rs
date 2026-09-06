@@ -15,6 +15,7 @@ debug = true
 [workspace]
 members = [
   "jxl",
+  "jxl-image-rs-integration",
   "jxl_cli",
   "jxl_cms",
   "jxl_macros",
