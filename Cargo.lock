@@ -741,7 +741,7 @@ dependencies = [
 
 [[package]]
 name = "jxl"
-version = "0.6.0"
+version = "0.7.0"
 dependencies = [
  "arbtest",
  "array-init",
@@ -764,7 +764,7 @@ dependencies = [
 
 [[package]]
 name = "jxl-image-rs-integration"
-version = "0.6.0"
+version = "0.7.0"
 dependencies = [
  "bytemuck",
  "image",
@@ -773,7 +773,7 @@ dependencies = [
 
 [[package]]
 name = "jxl_cli"
-version = "0.6.0"
+version = "0.7.0"
 dependencies = [
  "anyhow",
  "clap",
@@ -794,7 +794,7 @@ dependencies = [
 
 [[package]]
 name = "jxl_cms"
-version = "0.6.0"
+version = "0.7.0"
 dependencies = [
  "bytemuck",
  "jxl",
@@ -804,7 +804,7 @@ dependencies = [
 
 [[package]]
 name = "jxl_macros"
-version = "0.6.0"
+version = "0.7.0"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -813,7 +813,7 @@ dependencies = [
 
 [[package]]
 name = "jxl_simd"
-version = "0.6.0"
+version = "0.7.0"
 dependencies = [
  "arbtest",
  "paste",
@@ -821,7 +821,7 @@ dependencies = [
 
 [[package]]
 name = "jxl_transforms"
-version = "0.6.0"
+version = "0.7.0"
 dependencies = [
  "criterion",
  "jxl_simd",
