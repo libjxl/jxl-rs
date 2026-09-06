@@ -859,6 +859,9 @@ impl TransformStepChunk {
                                 .then_some(&prev_aux_refs[..]),
                             aux_out: &mut aux_out,
                             storage: buffers[*buf_in].storage,
+                            is_partial: matches!(predictor, Predictor::Zero)
+                                && buffers[*buf_in].buffer_grid[out_grid].data_status
+                                    == DataStatus::Partial,
                         }
                         .run(&mut scratch_space.palette_row_scratch)?;
                     }
