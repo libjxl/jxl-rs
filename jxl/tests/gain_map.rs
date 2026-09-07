@@ -5,8 +5,8 @@
 
 use jxl::api::states::{Initialized, WithFrameInfo, WithImageInfo};
 use jxl::api::{
-    JxlAuxBoxType, JxlColorEncoding, JxlColorType, JxlDataFormat, JxlDecoder, JxlDecoderOptions,
-    JxlGainMapBundle, JxlGainMapColorEncoding, JxlOutputBuffer, JxlPixelFormat, ProcessingResult,
+    JxlAuxBoxType, JxlColorEncoding, JxlColorProfile, JxlColorType, JxlDataFormat, JxlDecoder,
+    JxlDecoderOptions, JxlGainMapBundle, JxlOutputBuffer, JxlPixelFormat, ProcessingResult,
 };
 use jxl::error::Error;
 use jxl::headers::color_encoding::RenderingIntent;
@@ -115,29 +115,27 @@ fn parses_independent_fields_and_color_variants() {
     assert_eq!(structured.color_encoding, Some(&[0x50, 0xb4, 0][..]));
     assert!(structured.compressed_icc.is_empty());
     assert_eq!(structured.gain_map, NAKED_JXL);
-    assert_eq!(
+    let expected_encoding = JxlColorEncoding::RgbColorSpace {
+        white_point: jxl::api::JxlWhitePoint::D65,
+        primaries: jxl::api::JxlPrimaries::SRGB,
+        transfer_function: jxl::api::JxlTransferFunction::Linear,
+        rendering_intent: RenderingIntent::Relative,
+    };
+    assert!(matches!(
         structured.decode_color_encoding().unwrap(),
-        Some(JxlGainMapColorEncoding::Structured(
-            JxlColorEncoding::RgbColorSpace {
-                white_point: jxl::api::JxlWhitePoint::D65,
-                primaries: jxl::api::JxlPrimaries::SRGB,
-                transfer_function: jxl::api::JxlTransferFunction::Linear,
-                rendering_intent: RenderingIntent::Relative,
-            },
-        ))
-    );
+        Some(JxlColorProfile::Simple(encoding)) if encoding == expected_encoding
+    ));
     assert_eq!(structured.decode_alternate_icc().unwrap(), None);
 
     let icc = bundle("icc");
     assert!(icc.color_encoding.is_none());
-    assert_eq!(icc.decode_color_encoding().unwrap(), None);
+    assert!(icc.decode_color_encoding().unwrap().is_none());
     assert_eq!(icc.decode_alternate_icc().unwrap().as_deref(), Some(ICC));
 
     let combined = bundle("combined");
     assert!(combined.color_encoding.is_some());
-    assert_eq!(
-        combined.decode_color_encoding().unwrap(),
-        structured.decode_color_encoding().unwrap()
+    assert!(
+        combined.decode_color_encoding().unwrap() == structured.decode_color_encoding().unwrap()
     );
     assert_eq!(
         combined.decode_alternate_icc().unwrap().as_deref(),
@@ -146,10 +144,10 @@ fn parses_independent_fields_and_color_variants() {
 
     let want_icc = bundle("want-icc");
     assert_eq!(want_icc.color_encoding, Some(&[0x02][..]));
-    assert_eq!(
+    assert!(matches!(
         want_icc.decode_color_encoding().unwrap(),
-        Some(JxlGainMapColorEncoding::IccRequired)
-    );
+        Some(JxlColorProfile::Icc(profile)) if profile.as_slice() == ICC
+    ));
     assert_eq!(
         want_icc.decode_alternate_icc().unwrap().as_deref(),
         Some(ICC)
@@ -168,10 +166,10 @@ fn want_icc_ignores_inapplicable_unknown_and_xyb_color_values() {
         );
         let parsed = JxlGainMapBundle::parse(&data).unwrap();
         assert_eq!(parsed.color_encoding, Some(&[color_byte][..]));
-        assert_eq!(
+        assert!(matches!(
             parsed.decode_color_encoding().unwrap(),
-            Some(JxlGainMapColorEncoding::IccRequired)
-        );
+            Some(JxlColorProfile::Icc(profile)) if profile.as_slice() == ICC
+        ));
         assert_eq!(parsed.decode_alternate_icc().unwrap().as_deref(), Some(ICC));
     }
 
@@ -224,6 +222,21 @@ fn rejects_truncated_and_invalid_fields_without_losing_raw_slices() {
     assert_eq!(parsed_color.gain_map, &[0xb4, 0x00]);
     assert!(parsed_color.decode_color_encoding().is_err());
 
+    let structured_with_invalid_icc = raw_bundle(&[], &[0x50, 0xb4, 0], &[0], &[]);
+    let parsed_structured_with_invalid_icc =
+        JxlGainMapBundle::parse(&structured_with_invalid_icc).unwrap();
+    assert!(matches!(
+        parsed_structured_with_invalid_icc
+            .decode_color_encoding()
+            .unwrap(),
+        Some(JxlColorProfile::Simple(_))
+    ));
+    assert!(
+        parsed_structured_with_invalid_icc
+            .decode_alternate_icc()
+            .is_err()
+    );
+
     let valid_icc = bundle("icc");
     let invalid_icc = raw_bundle(
         &[],
@@ -235,6 +248,23 @@ fn rejects_truncated_and_invalid_fields_without_losing_raw_slices() {
     assert_eq!(parsed_icc.compressed_icc, &valid_icc.compressed_icc[..1]);
     assert_eq!(parsed_icc.gain_map, &valid_icc.compressed_icc[1..]);
     assert!(parsed_icc.decode_alternate_icc().is_err());
+
+    let want_icc_without_profile = raw_bundle(&[], &[0x02], &[], &[]);
+    let parsed_want_icc_without_profile =
+        JxlGainMapBundle::parse(&want_icc_without_profile).unwrap();
+    assert!(matches!(
+        parsed_want_icc_without_profile.decode_color_encoding(),
+        Err(Error::InvalidColorEncoding)
+    ));
+
+    let want_icc_with_invalid_profile = raw_bundle(&[], &[0x02], &[0], &[]);
+    let parsed_want_icc_with_invalid_profile =
+        JxlGainMapBundle::parse(&want_icc_with_invalid_profile).unwrap();
+    assert!(
+        parsed_want_icc_with_invalid_profile
+            .decode_color_encoding()
+            .is_err()
+    );
 
     let mut unknown_version = include_bytes!("testdata/gain_map/structured.jhgm").to_vec();
     unknown_version[0] = 0xff;

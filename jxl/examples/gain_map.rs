@@ -15,8 +15,8 @@ use std::path::Path;
 
 use jxl::api::states::{Initialized, WithFrameInfo, WithImageInfo};
 use jxl::api::{
-    JxlAuxBoxType, JxlColorType, JxlDataFormat, JxlDecoder, JxlDecoderOptions, JxlGainMapBundle,
-    JxlGainMapColorEncoding, JxlOutputBuffer, JxlPixelFormat, ProcessingResult,
+    JxlAuxBoxType, JxlColorProfile, JxlColorType, JxlDataFormat, JxlDecoder, JxlDecoderOptions,
+    JxlGainMapBundle, JxlOutputBuffer, JxlPixelFormat, ProcessingResult,
 };
 
 type ExampleResult<T> = Result<T, Box<dyn Error>>;
@@ -110,12 +110,17 @@ fn run(path: &Path) -> ExampleResult<()> {
     let input = fs::read(path)?;
     let raw_bundle = read_gain_map_box(&input)?;
     let bundle = JxlGainMapBundle::parse(&raw_bundle)?;
-    let color = match bundle.decode_color_encoding()? {
-        None => "absent".to_owned(),
-        Some(JxlGainMapColorEncoding::IccRequired) => "ICC required".to_owned(),
-        Some(JxlGainMapColorEncoding::Structured(encoding)) => format!("structured {encoding:?}"),
+    let (color, alternate_icc_bytes) = match bundle.decode_color_encoding()? {
+        None => (
+            "absent".to_owned(),
+            bundle.decode_alternate_icc()?.map_or(0, |icc| icc.len()),
+        ),
+        Some(JxlColorProfile::Icc(icc)) => ("ICC".to_owned(), icc.len()),
+        Some(JxlColorProfile::Simple(encoding)) => (
+            format!("structured {encoding:?}"),
+            bundle.decode_alternate_icc()?.map_or(0, |icc| icc.len()),
+        ),
     };
-    let alternate_icc_bytes = bundle.decode_alternate_icc()?.map_or(0, |icc| icc.len());
     let (width, height, pixel_bytes, checksum) = decode_gain_map(bundle.gain_map)?;
     println!(
         "jhgm version={} metadata={} color={} alternate_icc={} gain_map={} bytes; nested image={}x{} RGB bytes={} checksum={}",

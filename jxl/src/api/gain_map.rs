@@ -3,21 +3,12 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-use super::JxlColorEncoding;
+use super::{JxlColorEncoding, JxlColorProfile};
 use crate::bit_reader::BitReader;
 use crate::error::{Error, Result};
 use crate::headers::color_encoding::{ColorEncoding, ColorSpace};
 use crate::headers::encodings::{Empty, UnconditionalCoder};
 use crate::icc::IncrementalIccReader;
-
-/// The alternate color encoding carried by a gain-map bundle.
-#[derive(Clone, Debug, PartialEq)]
-pub enum JxlGainMapColorEncoding {
-    /// Structured color information decoded from the bundle.
-    Structured(JxlColorEncoding),
-    /// The bundle requires the alternate ICC profile to describe its color.
-    IccRequired,
-}
 
 /// A borrowed view of the fields in a `jhgm` gain-map bundle.
 ///
@@ -70,12 +61,16 @@ impl<'a> JxlGainMapBundle<'a> {
         })
     }
 
-    /// Decodes the optional structured alternate color encoding.
+    /// Decodes the optional alternate color encoding.
     ///
-    /// `None` means that the field is absent. `IccRequired` is returned before
-    /// converting the structured fields because `want_icc` makes the
-    /// structured values inapplicable.
-    pub fn decode_color_encoding(&self) -> Result<Option<JxlGainMapColorEncoding>> {
+    /// `None` means that the structured color field is absent, even when an
+    /// independent alternate ICC field is present. When the structured field
+    /// requests ICC, this resolves that reference through
+    /// [`Self::decode_alternate_icc`]. The two fields remain independently
+    /// available through the raw slices and the ICC helper; this method does
+    /// not choose precedence between them. A required ICC field that is
+    /// absent or cannot be decoded is reported as an error.
+    pub fn decode_color_encoding(&self) -> Result<Option<JxlColorProfile>> {
         let Some(data) = self.color_encoding else {
             return Ok(None);
         };
@@ -84,7 +79,7 @@ impl<'a> JxlGainMapBundle<'a> {
         // serialized but is intentionally ignored. Read just the applicable
         // prefix so values unsupported by structured-color conversion do not
         // reject a usable ICC profile. Keep enum and bounds validation for the
-        // prefix.
+        // color-space prefix.
         let mut prefix_reader = BitReader::new(data);
         let all_default = bool::read_unconditional(&(), &mut prefix_reader, &Empty {})?;
         if !all_default {
@@ -92,7 +87,10 @@ impl<'a> JxlGainMapBundle<'a> {
             if want_icc {
                 ColorSpace::read_unconditional(&(), &mut prefix_reader, &Empty {})?;
                 prefix_reader.check_for_error()?;
-                return Ok(Some(JxlGainMapColorEncoding::IccRequired));
+                let profile = self
+                    .decode_alternate_icc()?
+                    .ok_or(Error::InvalidColorEncoding)?;
+                return Ok(Some(JxlColorProfile::Icc(profile)));
             }
         }
 
@@ -100,7 +98,7 @@ impl<'a> JxlGainMapBundle<'a> {
         let encoding = ColorEncoding::read_unconditional(&(), &mut reader, &Empty {})?;
         reader.check_for_error()?;
 
-        Ok(Some(JxlGainMapColorEncoding::Structured(
+        Ok(Some(JxlColorProfile::Simple(
             JxlColorEncoding::from_internal(&encoding)?,
         )))
     }
