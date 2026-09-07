@@ -1226,6 +1226,15 @@ fn decode_hf_metadata_finish<T: ImageDataType + Into<i32> + Copy>(
 
             for iy in 0..cy {
                 let trans_row = hf_meta.transform_map.typed_row_mut::<u8>(y + iy);
+                for ix in 0..cx {
+                    if trans_row[x + ix] != HfTransformType::INVALID_TRANSFORM {
+                        return Err(Error::InvalidVarDCTTransformMap);
+                    }
+                }
+            }
+
+            for iy in 0..cy {
+                let trans_row = hf_meta.transform_map.typed_row_mut::<u8>(y + iy);
                 let rq_row = hf_meta.raw_quant_map.typed_row_mut::<i32>(y + iy);
                 for ix in 0..cx {
                     let is_first_block = iy == 0 && ix == 0;
