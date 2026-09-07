@@ -238,7 +238,7 @@ impl BoxParser {
 
     pub(super) fn total_bytes_consumed(&self, codestream_bytes_consumed: u64) -> u64 {
         let (start, b) = self.codestream_pos_to_box.last_key_value().unwrap();
-        b.file_position + (codestream_bytes_consumed - *start)
+        b.file_position + codestream_bytes_consumed.saturating_sub(*start)
     }
 
     pub(super) fn aux_boxes(&self, box_type: JxlAuxBoxType) -> &[JxlAuxBox] {
