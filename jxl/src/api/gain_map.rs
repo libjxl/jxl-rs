@@ -69,7 +69,9 @@ impl<'a> JxlGainMapBundle<'a> {
     /// [`Self::decode_alternate_icc`]. The two fields remain independently
     /// available through the raw slices and the ICC helper; this method does
     /// not choose precedence between them. A required ICC field that is
-    /// absent or cannot be decoded is reported as an error.
+    /// absent or cannot be decoded is reported as an error. The structured
+    /// field must consume its complete byte slice, including zero alignment
+    /// padding.
     pub fn decode_color_encoding(&self) -> Result<Option<JxlColorProfile>> {
         let Some(data) = self.color_encoding else {
             return Ok(None);
@@ -86,7 +88,7 @@ impl<'a> JxlGainMapBundle<'a> {
             let want_icc = bool::read_unconditional(&(), &mut prefix_reader, &Empty {})?;
             if want_icc {
                 ColorSpace::read_unconditional(&(), &mut prefix_reader, &Empty {})?;
-                prefix_reader.check_for_error()?;
+                finish_bit_reader(&mut prefix_reader, data.len(), Error::InvalidColorEncoding)?;
                 let profile = self
                     .decode_alternate_icc()?
                     .ok_or(Error::InvalidColorEncoding)?;
@@ -96,14 +98,16 @@ impl<'a> JxlGainMapBundle<'a> {
 
         let mut reader = BitReader::new(data);
         let encoding = ColorEncoding::read_unconditional(&(), &mut reader, &Empty {})?;
-        reader.check_for_error()?;
+        finish_bit_reader(&mut reader, data.len(), Error::InvalidColorEncoding)?;
 
         Ok(Some(JxlColorProfile::Simple(
             JxlColorEncoding::from_internal(&encoding)?,
         )))
     }
 
-    /// Decodes the optional JPEG XL-compressed alternate ICC profile.
+    /// Decodes the optional JPEG XL-compressed alternate ICC profile. The
+    /// compressed stream must consume its complete byte slice, including zero
+    /// alignment padding.
     pub fn decode_alternate_icc(&self) -> Result<Option<Vec<u8>>> {
         if self.compressed_icc.is_empty() {
             return Ok(None);
@@ -113,9 +117,21 @@ impl<'a> JxlGainMapBundle<'a> {
         let mut icc = IncrementalIccReader::new(&mut reader)?;
         icc.read_all(&mut reader)?;
         let profile = icc.finalize(&mut reader)?;
-        reader.check_for_error()?;
+        finish_bit_reader(
+            &mut reader,
+            self.compressed_icc.len(),
+            Error::InvalidIccStream,
+        )?;
         Ok(Some(profile))
     }
+}
+
+fn finish_bit_reader(reader: &mut BitReader, data_len: usize, trailing_error: Error) -> Result<()> {
+    reader.jump_to_byte_boundary()?;
+    if reader.total_bits_read() / 8 != data_len {
+        return Err(trailing_error);
+    }
+    Ok(())
 }
 
 fn take<'a>(data: &'a [u8], position: &mut usize, length: usize) -> Result<&'a [u8]> {

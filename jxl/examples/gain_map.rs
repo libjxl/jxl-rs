@@ -110,6 +110,11 @@ fn run(path: &Path) -> ExampleResult<()> {
     let input = fs::read(path)?;
     let raw_bundle = read_gain_map_box(&input)?;
     let bundle = JxlGainMapBundle::parse(&raw_bundle)?;
+    if bundle.version != 0 {
+        return Err(
+            std::io::Error::other(format!("unsupported jhgm version {}", bundle.version)).into(),
+        );
+    }
     let (color, alternate_icc_bytes) = match bundle.decode_color_encoding()? {
         None => (
             "absent".to_owned(),

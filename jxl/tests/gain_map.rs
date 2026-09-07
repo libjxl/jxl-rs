@@ -5,8 +5,9 @@
 
 use jxl::api::states::{Initialized, WithFrameInfo, WithImageInfo};
 use jxl::api::{
-    JxlAuxBoxType, JxlColorEncoding, JxlColorProfile, JxlColorType, JxlDataFormat, JxlDecoder,
-    JxlDecoderOptions, JxlGainMapBundle, JxlOutputBuffer, JxlPixelFormat, ProcessingResult,
+    JxlAuxBox, JxlAuxBoxType, JxlColorEncoding, JxlColorProfile, JxlColorType, JxlDataFormat,
+    JxlDecoder, JxlDecoderOptions, JxlGainMapBundle, JxlOutputBuffer, JxlPixelFormat,
+    ProcessingResult,
 };
 use jxl::error::Error;
 use jxl::headers::color_encoding::RenderingIntent;
@@ -82,7 +83,7 @@ fn decode_pixels(data: &[u8]) -> Vec<u8> {
     pixels
 }
 
-fn capture_gain_map(data: &[u8]) -> Vec<u8> {
+fn with_captured_gain_map<T>(data: &[u8], callback: impl FnOnce(&JxlAuxBox) -> T) -> T {
     let mut input = data;
     let mut options = JxlDecoderOptions::default();
     options.request_aux_boxes = vec![JxlAuxBoxType::GAIN_MAP];
@@ -103,8 +104,14 @@ fn capture_gain_map(data: &[u8]) -> Vec<u8> {
         .aux_boxes(JxlAuxBoxType::GAIN_MAP)
         .first()
         .expect("finite jhgm box was not captured");
-    assert!(!box_data.is_compressed());
-    box_data.raw_data().to_vec()
+    callback(box_data)
+}
+
+fn capture_gain_map(data: &[u8]) -> Vec<u8> {
+    with_captured_gain_map(data, |box_data| {
+        assert!(!box_data.is_compressed());
+        box_data.raw_data().to_vec()
+    })
 }
 
 #[test]
@@ -199,6 +206,68 @@ fn want_icc_ignores_inapplicable_unknown_and_xyb_color_values() {
 }
 
 #[test]
+fn rejects_nonzero_padding_and_trailing_color_bytes() {
+    let structured = bundle("structured");
+    let mut nonzero_padding = structured.color_encoding.unwrap().to_vec();
+    *nonzero_padding.last_mut().unwrap() |= 2;
+    let data = raw_bundle(&[], &nonzero_padding, &[], &[]);
+    let parsed = JxlGainMapBundle::parse(&data).unwrap();
+    assert!(matches!(
+        parsed.decode_color_encoding(),
+        Err(Error::NonZeroPadding)
+    ));
+
+    let mut trailing_bytes = structured.color_encoding.unwrap().to_vec();
+    trailing_bytes.push(0);
+    let data = raw_bundle(&[], &trailing_bytes, &[], &[]);
+    let parsed = JxlGainMapBundle::parse(&data).unwrap();
+    assert!(matches!(
+        parsed.decode_color_encoding(),
+        Err(Error::InvalidColorEncoding)
+    ));
+
+    let icc = bundle("icc");
+    let mut want_icc_nonzero_padding = vec![0x02];
+    want_icc_nonzero_padding[0] |= 0x10;
+    let data = raw_bundle(&[], &want_icc_nonzero_padding, icc.compressed_icc, &[]);
+    let parsed = JxlGainMapBundle::parse(&data).unwrap();
+    assert!(matches!(
+        parsed.decode_color_encoding(),
+        Err(Error::NonZeroPadding)
+    ));
+
+    let data = raw_bundle(&[], &[0x02, 0], icc.compressed_icc, &[]);
+    let parsed = JxlGainMapBundle::parse(&data).unwrap();
+    assert!(matches!(
+        parsed.decode_color_encoding(),
+        Err(Error::InvalidColorEncoding)
+    ));
+}
+
+#[test]
+fn rejects_nonzero_padding_and_trailing_icc_bytes() {
+    let valid = bundle("icc");
+
+    let mut nonzero_padding = valid.compressed_icc.to_vec();
+    *nonzero_padding.last_mut().unwrap() |= 0x02;
+    let data = raw_bundle(&[], &[], &nonzero_padding, &[]);
+    let parsed = JxlGainMapBundle::parse(&data).unwrap();
+    assert!(matches!(
+        parsed.decode_alternate_icc(),
+        Err(Error::NonZeroPadding)
+    ));
+
+    let mut trailing_bytes = valid.compressed_icc.to_vec();
+    trailing_bytes.push(0);
+    let data = raw_bundle(&[], &[], &trailing_bytes, &[]);
+    let parsed = JxlGainMapBundle::parse(&data).unwrap();
+    assert!(matches!(
+        parsed.decode_alternate_icc(),
+        Err(Error::InvalidIccStream)
+    ));
+}
+
+#[test]
 fn rejects_truncated_and_invalid_fields_without_losing_raw_slices() {
     for data in [
         vec![],
@@ -272,19 +341,65 @@ fn rejects_truncated_and_invalid_fields_without_losing_raw_slices() {
     assert_eq!(parsed_unknown.version, 0xff);
     assert!(parsed_unknown.decode_color_encoding().is_ok());
 
-    for color in [
-        [0x01].as_slice(),
-        [0x81].as_slice(),
-        [0x01, 0xa5].as_slice(),
-    ] {
-        let data = raw_bundle(&[], color, &[], &[]);
-        let parsed = JxlGainMapBundle::parse(&data).unwrap();
-        assert!(parsed.decode_color_encoding().is_ok());
-    }
+    let valid_default = raw_bundle(&[], &[0x01], &[], &[]);
+    let parsed_default = JxlGainMapBundle::parse(&valid_default).unwrap();
+    assert!(parsed_default.decode_color_encoding().is_ok());
+
+    let nonzero_padding = raw_bundle(&[], &[0x81], &[], &[]);
+    let parsed_nonzero_padding = JxlGainMapBundle::parse(&nonzero_padding).unwrap();
+    assert!(matches!(
+        parsed_nonzero_padding.decode_color_encoding(),
+        Err(Error::NonZeroPadding)
+    ));
+
+    let trailing_color_bytes = raw_bundle(&[], &[0x01, 0xa5], &[], &[]);
+    let parsed_trailing_color_bytes = JxlGainMapBundle::parse(&trailing_color_bytes).unwrap();
+    assert!(matches!(
+        parsed_trailing_color_bytes.decode_color_encoding(),
+        Err(Error::InvalidColorEncoding)
+    ));
 }
 
 #[test]
-fn captures_finite_aux_box_and_decodes_bare_and_container_gain_maps() {
+fn arbitrary_bundles_reach_both_decode_helpers_with_bounded_fields() {
+    // Exercise arbitrary raw envelope bytes and valid envelopes with arbitrary
+    // field contents, including up to 256 bytes of ICC data. Keep the search
+    // bounded so malformed ICC streams exercise the normal decoder limits for
+    // a short, reproducible test run.
+    arbtest::arbtest(|u| {
+        let raw_len = usize::from(u.int_in_range::<u8>(0..=64)?);
+        let mut raw = vec![0; raw_len];
+        u.fill_buffer(&mut raw)?;
+        let _ = JxlGainMapBundle::parse(&raw);
+
+        let metadata_len = usize::from(u.int_in_range::<u8>(0..=16)?);
+        let mut metadata = vec![0; metadata_len];
+        u.fill_buffer(&mut metadata)?;
+
+        let color_len = usize::from(u.int_in_range::<u8>(1..=8)?);
+        let mut color = vec![0; color_len];
+        u.fill_buffer(&mut color)?;
+
+        let gain_map_len = usize::from(u.int_in_range::<u8>(0..=16)?);
+        let mut gain_map = vec![0; gain_map_len];
+        u.fill_buffer(&mut gain_map)?;
+
+        let icc_len = usize::from(u.int_in_range::<u16>(0..=256)?);
+        let mut compressed_icc = vec![0; icc_len];
+        u.fill_buffer(&mut compressed_icc)?;
+        let data = raw_bundle(&metadata, &color, &compressed_icc, &gain_map);
+        let parsed = JxlGainMapBundle::parse(&data).unwrap();
+        let _ = parsed.decode_color_encoding();
+        let _ = parsed.decode_alternate_icc();
+        Ok(())
+    })
+    .size_min(128)
+    .size_max(512)
+    .budget_ms(100);
+}
+
+#[test]
+fn captures_finite_aux_box_and_decodes_bare_gain_map() {
     let outer = include_bytes!("testdata/gain_map/synthetic-container.jxl");
     let captured = capture_gain_map(outer);
     assert_eq!(captured, include_bytes!("testdata/gain_map/combined.jhgm"));
@@ -292,7 +407,32 @@ fn captures_finite_aux_box_and_decodes_bare_and_container_gain_maps() {
     assert_eq!(decode_pixels(captured_bundle.gain_map), EXPECTED_PIXELS);
 
     assert_eq!(decode_pixels(NAKED_JXL), EXPECTED_PIXELS);
+}
+
+#[cfg(feature = "brotli")]
+#[test]
+fn captures_brotli_gain_map_and_decodes_bundle() {
+    let outer = include_bytes!("testdata/gain_map/synthetic-container-brob.jxl");
+    let captured = with_captured_gain_map(outer, |box_data| {
+        assert!(box_data.is_compressed());
+        box_data.data(&[]).unwrap().into_owned()
+    });
+    assert_eq!(captured, include_bytes!("testdata/gain_map/combined.jhgm"));
+    let captured_bundle = JxlGainMapBundle::parse(&captured).unwrap();
+    assert_eq!(decode_pixels(captured_bundle.gain_map), EXPECTED_PIXELS);
+}
+
+#[test]
+fn preserves_embedded_container_bytes_for_compatibility() {
+    // This synthetic case checks byte preservation for consumers that accept a
+    // container-form embedded image. It does not assert ISO validity or imply
+    // real-world container usage.
+    let source = include_bytes!("testdata/gain_map/embedded-container.jhgm");
     let embedded = bundle("embedded-container");
     assert_eq!(embedded.gain_map.len(), 86);
-    assert_eq!(decode_pixels(embedded.gain_map), EXPECTED_PIXELS);
+    assert_eq!(
+        embedded.gain_map,
+        &source[source.len() - embedded.gain_map.len()..]
+    );
+    assert!(embedded.gain_map.starts_with(b"\0\0\0\x0cJXL \r\n\x87\n"));
 }
