@@ -53,37 +53,24 @@ simd_function!(
             unreachable!();
         };
 
-        // These asserts help the compiler skip checks in the loop.
-        assert_eq!(row_top.len(), row_center.len());
-        assert_eq!(row_top.len(), row_bottom.len());
+        for x in (0..xsize).step_by(D::F32Vec::LEN) {
+            // SAFETY: input rows have at least xsize + 2 elements due to BORDER=(1, 1), and row_out has capacity for full SIMD vectors.
+            unsafe {
+                let p00 = D::F32Vec::load(d, row_top.get_unchecked(x..));
+                let p01 = D::F32Vec::load(d, row_top.get_unchecked(x + 1..));
+                let p02 = D::F32Vec::load(d, row_top.get_unchecked(x + 2..));
+                let p10 = D::F32Vec::load(d, row_center.get_unchecked(x..));
+                let p11 = D::F32Vec::load(d, row_center.get_unchecked(x + 1..));
+                let p12 = D::F32Vec::load(d, row_center.get_unchecked(x + 2..));
+                let p20 = D::F32Vec::load(d, row_bottom.get_unchecked(x..));
+                let p21 = D::F32Vec::load(d, row_bottom.get_unchecked(x + 1..));
+                let p22 = D::F32Vec::load(d, row_bottom.get_unchecked(x + 2..));
 
-        let num_vec = xsize.div_ceil(D::F32Vec::LEN);
-
-        let len = D::F32Vec::LEN;
-        let window_len = len + 2;
-
-        for (((top, center), bottom), out) in row_top
-            .windows(window_len)
-            .step_by(len)
-            .zip(row_center.windows(window_len).step_by(len))
-            .zip(row_bottom.windows(window_len).step_by(len))
-            .zip(row_out.chunks_exact_mut(D::F32Vec::LEN))
-            .take(num_vec)
-        {
-            let p00 = D::F32Vec::load(d, top);
-            let p01 = D::F32Vec::load(d, &top[1..]);
-            let p02 = D::F32Vec::load(d, &top[2..]);
-            let p10 = D::F32Vec::load(d, center);
-            let p11 = D::F32Vec::load(d, &center[1..]);
-            let p12 = D::F32Vec::load(d, &center[2..]);
-            let p20 = D::F32Vec::load(d, bottom);
-            let p21 = D::F32Vec::load(d, &bottom[1..]);
-            let p22 = D::F32Vec::load(d, &bottom[2..]);
-
-            let sum = p11 * w0;
-            let sum = w1.mul_add(p01 + p10 + p21 + p12, sum);
-            let sum = w2.mul_add(p00 + p02 + p20 + p22, sum);
-            sum.store(out);
+                let sum = p11 * w0;
+                let sum = w1.mul_add(p01 + p10 + p21 + p12, sum);
+                let sum = w2.mul_add(p00 + p02 + p20 + p22, sum);
+                sum.store(row_out.get_unchecked_mut(x..));
+            }
         }
     }
 );

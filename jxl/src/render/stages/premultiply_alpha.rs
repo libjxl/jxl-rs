@@ -50,13 +50,19 @@ simd_function!(
     d: D,
     fn premultiply_rows_simd(color_rows: &mut [&mut [f32]], alpha_row: &[f32], xsize: usize) {
         for color_row in color_rows.iter_mut() {
-            let iter_color = color_row.chunks_exact_mut(D::F32Vec::LEN);
-            let iter_alpha = alpha_row.chunks_exact(D::F32Vec::LEN);
-            for (color_chunk, alpha_chunk) in iter_color.zip(iter_alpha).take(xsize.div_ceil(D::F32Vec::LEN)) {
-                let color_vec = D::F32Vec::load(d, color_chunk);
-                let alpha_vec = D::F32Vec::load(d, alpha_chunk);
+            for x in (0..xsize).step_by(D::F32Vec::LEN) {
+                let (color_vec, alpha_vec) = unsafe {
+                    // SAFETY: x is within allocated row bounds (padded to vector multiple).
+                    (
+                        D::F32Vec::load(d, color_row.get_unchecked(x..)),
+                        D::F32Vec::load(d, alpha_row.get_unchecked(x..)),
+                    )
+                };
                 let result = color_vec * alpha_vec;
-                result.store(color_chunk);
+                unsafe {
+                    // SAFETY: x is within allocated row bounds (padded to vector multiple).
+                    result.store(color_row.get_unchecked_mut(x..));
+                }
             }
         }
     }

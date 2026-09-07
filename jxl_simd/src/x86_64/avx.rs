@@ -203,16 +203,14 @@ impl F32SimdVec for F32VecAvx {
 
     #[inline(always)]
     fn load(d: Self::Descriptor, mem: &[f32]) -> Self {
-        assert!(mem.len() >= Self::LEN);
-        // SAFETY: we just checked that `mem` has enough space. Moreover, we know avx is available
+        // SAFETY: caller must ensure `mem` has at least `Self::LEN` elements. Moreover, we know avx is available
         // from the safety invariant on `d`. _mm256_loadu_ps supports unaligned loads.
         Self(unsafe { _mm256_loadu_ps(mem.as_ptr().cast()) }, d)
     }
 
     #[inline(always)]
     fn store(&self, mem: &mut [f32]) {
-        assert!(mem.len() >= Self::LEN);
-        // SAFETY: we just checked that `mem` has enough space. Moreover, we know avx is available
+        // SAFETY: caller must ensure `mem` has at least `Self::LEN` elements. Moreover, we know avx is available
         // from the safety invariant on `self.1`. _mm256_storeu_ps supports unaligned stores.
         unsafe { _mm256_storeu_ps(mem.as_mut_ptr().cast(), self.0) }
     }
@@ -222,7 +220,6 @@ impl F32SimdVec for F32VecAvx {
         #[target_feature(enable = "avx2")]
         #[inline]
         fn store_interleaved_2_impl(a: __m256, b: __m256, dest: &mut [f32]) {
-            assert!(dest.len() >= 2 * F32VecAvx::LEN);
             // a = [a0, a1, a2, a3, a4, a5, a6, a7], b = [b0, b1, b2, b3, b4, b5, b6, b7]
             // Output: [a0, b0, a1, b1, a2, b2, a3, b3, a4, b4, a5, b5, a6, b6, a7, b7]
             let lo = _mm256_unpacklo_ps(a, b); // [a0, b0, a1, b1, a4, b4, a5, b5]
@@ -230,7 +227,7 @@ impl F32SimdVec for F32VecAvx {
             // Need to permute to get correct order
             let out0 = _mm256_permute2f128_ps::<0x20>(lo, hi); // lower halves: [a0,b0,a1,b1, a2,b2,a3,b3]
             let out1 = _mm256_permute2f128_ps::<0x31>(lo, hi); // upper halves: [a4,b4,a5,b5, a6,b6,a7,b7]
-            // SAFETY: `dest` has enough space and writing to `f32` through `*mut f32` is valid. _mm256_storeu_ps supports unaligned stores.
+            // SAFETY: caller must ensure `dest` has at least 2 * F32VecAvx::LEN elements and writing to `f32` through `*mut f32` is valid. _mm256_storeu_ps supports unaligned stores.
             unsafe {
                 let dest_ptr = dest.as_mut_ptr();
                 _mm256_storeu_ps(dest_ptr, out0);
@@ -247,8 +244,6 @@ impl F32SimdVec for F32VecAvx {
         #[target_feature(enable = "avx2")]
         #[inline]
         fn store_interleaved_3_impl(a: __m256, b: __m256, c: __m256, dest: &mut [f32]) {
-            assert!(dest.len() >= 3 * F32VecAvx::LEN);
-
             let idx_a0 = _mm256_setr_epi32(0, 0, 0, 1, 0, 0, 2, 0);
             let idx_b0 = _mm256_setr_epi32(0, 0, 0, 0, 1, 0, 0, 2);
             let idx_c0 = _mm256_setr_epi32(0, 0, 0, 0, 0, 1, 0, 0);
@@ -294,7 +289,6 @@ impl F32SimdVec for F32VecAvx {
         #[target_feature(enable = "avx2")]
         #[inline]
         fn store_interleaved_4_impl(a: __m256, b: __m256, c: __m256, d: __m256, dest: &mut [f32]) {
-            assert!(dest.len() >= 4 * F32VecAvx::LEN);
             // First interleave pairs
             let ab_lo = _mm256_unpacklo_ps(a, b);
             let ab_hi = _mm256_unpackhi_ps(a, b);
@@ -325,7 +319,7 @@ impl F32SimdVec for F32VecAvx {
             let out2 = _mm256_permute2f128_ps::<0x31>(abcd_0, abcd_1);
             let out3 = _mm256_permute2f128_ps::<0x31>(abcd_2, abcd_3);
 
-            // SAFETY: `dest` has enough space and writing to `f32` through `*mut f32` is valid. _mm256_storeu_ps supports unaligned stores.
+            // SAFETY: caller must ensure `dest` has at least 4 * F32VecAvx::LEN elements and writing to `f32` through `*mut f32` is valid. _mm256_storeu_ps supports unaligned stores.
             unsafe {
                 let dest_ptr = dest.as_mut_ptr();
                 _mm256_storeu_ps(dest_ptr, out0);
@@ -364,12 +358,11 @@ impl F32SimdVec for F32VecAvx {
             r7: __m256,
             dest: &mut [f32],
         ) {
-            assert!(dest.len() >= 8 * F32VecAvx::LEN);
             // This is essentially an 8x8 transpose, same algorithm as transpose_square
             let (c0, c1, c2, c3, c4, c5, c6, c7) =
                 transpose_8x8_core(r0, r1, r2, r3, r4, r5, r6, r7);
 
-            // SAFETY: we just checked that dest has enough space.
+            // SAFETY: caller must ensure dest has at least 8 * F32VecAvx::LEN elements.
             unsafe {
                 _mm256_storeu_ps(dest.as_mut_ptr(), c0);
                 _mm256_storeu_ps(dest.as_mut_ptr().add(8), c1);
@@ -391,10 +384,9 @@ impl F32SimdVec for F32VecAvx {
         #[target_feature(enable = "avx2")]
         #[inline]
         fn load_deinterleaved_2_impl(src: &[f32]) -> (__m256, __m256) {
-            assert!(src.len() >= 2 * F32VecAvx::LEN);
             // Input: [a0, b0, a1, b1, a2, b2, a3, b3, a4, b4, a5, b5, a6, b6, a7, b7]
             // Output: a = [a0, a1, a2, a3, a4, a5, a6, a7], b = [b0, b1, b2, b3, b4, b5, b6, b7]
-            // SAFETY: we just checked that src has enough space.
+            // SAFETY: caller must ensure src has at least 2 * F32VecAvx::LEN elements.
             let (in0, in1) = unsafe {
                 (
                     _mm256_loadu_ps(src.as_ptr()),        // [a0,b0,a1,b1, a2,b2,a3,b3]
@@ -424,14 +416,13 @@ impl F32SimdVec for F32VecAvx {
         #[target_feature(enable = "avx2")]
         #[inline]
         fn load_deinterleaved_3_impl(src: &[f32]) -> (__m256, __m256, __m256) {
-            assert!(src.len() >= 3 * F32VecAvx::LEN);
             // Input layout (24 floats):
             // in0: [a0, b0, c0, a1, b1, c1, a2, b2]
             // in1: [c2, a3, b3, c3, a4, b4, c4, a5]
             // in2: [b5, c5, a6, b6, c6, a7, b7, c7]
             // Output: a = [a0..a7], b = [b0..b7], c = [c0..c7]
 
-            // SAFETY: we just checked that src has enough space.
+            // SAFETY: caller must ensure src has at least 3 * F32VecAvx::LEN elements.
             let (in0, in1, in2) = unsafe {
                 (
                     _mm256_loadu_ps(src.as_ptr()),
@@ -486,10 +477,9 @@ impl F32SimdVec for F32VecAvx {
         #[target_feature(enable = "avx2")]
         #[inline]
         fn load_deinterleaved_4_impl(src: &[f32]) -> (__m256, __m256, __m256, __m256) {
-            assert!(src.len() >= 4 * F32VecAvx::LEN);
             // Input: [a0,b0,c0,d0, a1,b1,c1,d1, a2,b2,c2,d2, a3,b3,c3,d3, ...]
             // Output: a = [a0..a7], b = [b0..b7], c = [c0..c7], d = [d0..d7]
-            // SAFETY: we just checked that src has enough space.
+            // SAFETY: caller must ensure src has at least 4 * F32VecAvx::LEN elements.
             let (in0, in1, in2, in3) = unsafe {
                 (
                     _mm256_loadu_ps(src.as_ptr()),         // [a0,b0,c0,d0, a1,b1,c1,d1]
@@ -613,7 +603,6 @@ impl F32SimdVec for F32VecAvx {
         #[target_feature(enable = "avx2")]
         #[inline]
         fn round_store_u8_impl(v: __m256, dest: &mut [u8]) {
-            assert!(dest.len() >= F32VecAvx::LEN);
             // Round to nearest integer
             let rounded = _mm256_round_ps::<{ _MM_FROUND_TO_NEAREST_INT | _MM_FROUND_NO_EXC }>(v);
             // Convert to i32
@@ -630,7 +619,7 @@ impl F32SimdVec for F32VecAvx {
             let bytes = val.to_ne_bytes();
             // SAFETY:
             // 1. `src` (bytes.as_ptr()) is valid for 8 bytes as it is a local [u8; 8].
-            // 2. `dst` (dest.as_mut_ptr()) is valid for 8 bytes because dest.len() >= 8.
+            // 2. `dst` (dest.as_mut_ptr()) is valid for 8 bytes because caller must ensure dest.len() >= 8.
             // 3. `src` and `dst` are properly aligned for u8 (alignment 1).
             // 4. `src` and `dst` do not overlap as `src` is a local stack array.
             unsafe {
@@ -646,7 +635,6 @@ impl F32SimdVec for F32VecAvx {
         #[target_feature(enable = "avx2")]
         #[inline]
         fn round_store_u16_impl(v: __m256, dest: &mut [u16]) {
-            assert!(dest.len() >= F32VecAvx::LEN);
             // Round to nearest integer
             let rounded = _mm256_round_ps::<{ _MM_FROUND_TO_NEAREST_INT | _MM_FROUND_NO_EXC }>(v);
             // Convert to i32
@@ -657,7 +645,7 @@ impl F32SimdVec for F32VecAvx {
             // Pack 4+4 i32s to 8 u16s
             let u16s = _mm_packus_epi32(lo, hi);
             // Store 8 u16s (16 bytes)
-            // SAFETY: we checked dest has enough space. _mm_storeu_si128 supports unaligned stores.
+            // SAFETY: caller must ensure dest has at least F32VecAvx::LEN elements. _mm_storeu_si128 supports unaligned stores.
             unsafe {
                 _mm_storeu_si128(dest.as_mut_ptr().cast(), u16s);
             }
@@ -673,8 +661,7 @@ impl F32SimdVec for F32VecAvx {
         #[target_feature(enable = "avx2,f16c")]
         #[inline]
         fn load_f16_impl(d: AvxDescriptor, mem: &[u16]) -> F32VecAvx {
-            assert!(mem.len() >= F32VecAvx::LEN);
-            // SAFETY: mem.len() >= 8 is checked above. _mm_loadu_si128 supports unaligned loads.
+            // SAFETY: caller must ensure mem has at least F32VecAvx::LEN elements. _mm_loadu_si128 supports unaligned loads.
             let bits = unsafe { _mm_loadu_si128(mem.as_ptr().cast()) };
             F32VecAvx(_mm256_cvtph_ps(bits), d)
         }
@@ -687,9 +674,8 @@ impl F32SimdVec for F32VecAvx {
         #[target_feature(enable = "avx2,f16c")]
         #[inline]
         fn store_f16_bits_impl(v: __m256, dest: &mut [u16]) {
-            assert!(dest.len() >= F32VecAvx::LEN);
             let bits = _mm256_cvtps_ph::<{ _MM_FROUND_TO_NEAREST_INT }>(v);
-            // SAFETY: dest.len() >= 8 is checked above. _mm_storeu_si128 supports unaligned stores.
+            // SAFETY: caller must ensure dest has at least F32VecAvx::LEN elements. _mm_storeu_si128 supports unaligned stores.
             unsafe { _mm_storeu_si128(dest.as_mut_ptr().cast(), bits) };
         }
         // SAFETY: avx2 and f16c are available from the safety invariant on the descriptor

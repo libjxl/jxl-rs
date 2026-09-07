@@ -135,77 +135,86 @@ fn compute_minmax<D: jxl_simd::SimdDescriptor>(
     let num_vecs = col_fill_len.div_ceil(D::F32Vec::LEN);
     for i in 0..num_vecs {
         let offset = i * D::F32Vec::LEN;
-        let v0 = D::F32Vec::load(d, &r0[offset..]);
-        let v1 = D::F32Vec::load(d, &r1[offset..]);
-        let v2 = D::F32Vec::load(d, &r2[offset..]);
-        let v3 = D::F32Vec::load(d, &r3[offset..]);
-        let v4 = D::F32Vec::load(d, &r4[offset..]);
+        // SAFETY: r0..r4 and col_min/col_max have length >= col_fill_len + D::F32Vec::LEN.
+        unsafe {
+            let v0 = D::F32Vec::load(d, r0.get_unchecked(offset..));
+            let v1 = D::F32Vec::load(d, r1.get_unchecked(offset..));
+            let v2 = D::F32Vec::load(d, r2.get_unchecked(offset..));
+            let v3 = D::F32Vec::load(d, r3.get_unchecked(offset..));
+            let v4 = D::F32Vec::load(d, r4.get_unchecked(offset..));
 
-        let col_min_v = v0.min(v1).min(v2).min(v3).min(v4);
-        let col_max_v = v0.max(v1).max(v2).max(v3).max(v4);
+            let col_min_v = v0.min(v1).min(v2).min(v3).min(v4);
+            let col_max_v = v0.max(v1).max(v2).max(v3).max(v4);
 
-        col_min_v.store(&mut col_min[offset..]);
-        col_max_v.store(&mut col_max[offset..]);
+            col_min_v.store(col_min.get_unchecked_mut(offset..));
+            col_max_v.store(col_max.get_unchecked_mut(offset..));
+        }
     }
 
     // Step 2: Compute row-wise min/max from column temps (horizontal 5-wide window)
     let num_output_vecs = xsize.div_ceil(D::F32Vec::LEN);
     for i in 0..num_output_vecs {
         let offset = i * D::F32Vec::LEN;
-        let m0 = D::F32Vec::load(d, &col_min[offset..]);
-        let m1 = D::F32Vec::load(d, &col_min[offset + 1..]);
-        let m2 = D::F32Vec::load(d, &col_min[offset + 2..]);
-        let m3 = D::F32Vec::load(d, &col_min[offset + 3..]);
-        let m4 = D::F32Vec::load(d, &col_min[offset + 4..]);
-        let min_v = m0.min(m1).min(m2).min(m3).min(m4);
-        min_v.store(&mut mins[offset..]);
+        // SAFETY: col_min/col_max and mins/maxs have length >= offset + 4 + D::F32Vec::LEN.
+        unsafe {
+            let m0 = D::F32Vec::load(d, col_min.get_unchecked(offset..));
+            let m1 = D::F32Vec::load(d, col_min.get_unchecked(offset + 1..));
+            let m2 = D::F32Vec::load(d, col_min.get_unchecked(offset + 2..));
+            let m3 = D::F32Vec::load(d, col_min.get_unchecked(offset + 3..));
+            let m4 = D::F32Vec::load(d, col_min.get_unchecked(offset + 4..));
+            let min_v = m0.min(m1).min(m2).min(m3).min(m4);
+            min_v.store(mins.get_unchecked_mut(offset..));
 
-        let m0 = D::F32Vec::load(d, &col_max[offset..]);
-        let m1 = D::F32Vec::load(d, &col_max[offset + 1..]);
-        let m2 = D::F32Vec::load(d, &col_max[offset + 2..]);
-        let m3 = D::F32Vec::load(d, &col_max[offset + 3..]);
-        let m4 = D::F32Vec::load(d, &col_max[offset + 4..]);
-        let max_v = m0.max(m1).max(m2).max(m3).max(m4);
-        max_v.store(&mut maxs[offset..]);
+            let m0 = D::F32Vec::load(d, col_max.get_unchecked(offset..));
+            let m1 = D::F32Vec::load(d, col_max.get_unchecked(offset + 1..));
+            let m2 = D::F32Vec::load(d, col_max.get_unchecked(offset + 2..));
+            let m3 = D::F32Vec::load(d, col_max.get_unchecked(offset + 3..));
+            let m4 = D::F32Vec::load(d, col_max.get_unchecked(offset + 4..));
+            let max_v = m0.max(m1).max(m2).max(m3).max(m4);
+            max_v.store(maxs.get_unchecked_mut(offset..));
+        }
     }
 }
 
 // Macro to generate the kernel convolution code (shared across 2x, 4x, 8x)
 macro_rules! kernel_conv {
     ($d:expr, $kv:expr, $r0:expr, $r1:expr, $r2:expr, $r3:expr, $r4:expr, $x:expr) => {{
-        // Compute 5x5 kernel using FMA with 3-way ILP
-        // Row 0
-        let mut acc0 = <D::F32Vec>::load($d, &$r0[$x..]) * $kv[0];
-        let mut acc1 = <D::F32Vec>::load($d, &$r0[$x + 1..]) * $kv[1];
-        let mut acc2 = <D::F32Vec>::load($d, &$r0[$x + 2..]) * $kv[2];
-        acc0 = <D::F32Vec>::load($d, &$r0[$x + 3..]).mul_add($kv[3], acc0);
-        acc1 = <D::F32Vec>::load($d, &$r0[$x + 4..]).mul_add($kv[4], acc1);
-        // Row 1
-        acc2 = <D::F32Vec>::load($d, &$r1[$x..]).mul_add($kv[5], acc2);
-        acc0 = <D::F32Vec>::load($d, &$r1[$x + 1..]).mul_add($kv[6], acc0);
-        acc1 = <D::F32Vec>::load($d, &$r1[$x + 2..]).mul_add($kv[7], acc1);
-        acc2 = <D::F32Vec>::load($d, &$r1[$x + 3..]).mul_add($kv[8], acc2);
-        acc0 = <D::F32Vec>::load($d, &$r1[$x + 4..]).mul_add($kv[9], acc0);
-        // Row 2
-        acc1 = <D::F32Vec>::load($d, &$r2[$x..]).mul_add($kv[10], acc1);
-        acc2 = <D::F32Vec>::load($d, &$r2[$x + 1..]).mul_add($kv[11], acc2);
-        acc0 = <D::F32Vec>::load($d, &$r2[$x + 2..]).mul_add($kv[12], acc0);
-        acc1 = <D::F32Vec>::load($d, &$r2[$x + 3..]).mul_add($kv[13], acc1);
-        acc2 = <D::F32Vec>::load($d, &$r2[$x + 4..]).mul_add($kv[14], acc2);
-        // Row 3
-        acc0 = <D::F32Vec>::load($d, &$r3[$x..]).mul_add($kv[15], acc0);
-        acc1 = <D::F32Vec>::load($d, &$r3[$x + 1..]).mul_add($kv[16], acc1);
-        acc2 = <D::F32Vec>::load($d, &$r3[$x + 2..]).mul_add($kv[17], acc2);
-        acc0 = <D::F32Vec>::load($d, &$r3[$x + 3..]).mul_add($kv[18], acc0);
-        acc1 = <D::F32Vec>::load($d, &$r3[$x + 4..]).mul_add($kv[19], acc1);
-        // Row 4
-        acc2 = <D::F32Vec>::load($d, &$r4[$x..]).mul_add($kv[20], acc2);
-        acc0 = <D::F32Vec>::load($d, &$r4[$x + 1..]).mul_add($kv[21], acc0);
-        acc1 = <D::F32Vec>::load($d, &$r4[$x + 2..]).mul_add($kv[22], acc1);
-        acc2 = <D::F32Vec>::load($d, &$r4[$x + 3..]).mul_add($kv[23], acc2);
-        acc0 = <D::F32Vec>::load($d, &$r4[$x + 4..]).mul_add($kv[24], acc0);
+        // SAFETY: input rows have at least x + 4 + D::F32Vec::LEN elements due to BORDER=(2, 2).
+        unsafe {
+            // Compute 5x5 kernel using FMA with 3-way ILP
+            // Row 0
+            let mut acc0 = <D::F32Vec>::load($d, $r0.get_unchecked($x..)) * $kv[0];
+            let mut acc1 = <D::F32Vec>::load($d, $r0.get_unchecked($x + 1..)) * $kv[1];
+            let mut acc2 = <D::F32Vec>::load($d, $r0.get_unchecked($x + 2..)) * $kv[2];
+            acc0 = <D::F32Vec>::load($d, $r0.get_unchecked($x + 3..)).mul_add($kv[3], acc0);
+            acc1 = <D::F32Vec>::load($d, $r0.get_unchecked($x + 4..)).mul_add($kv[4], acc1);
+            // Row 1
+            acc2 = <D::F32Vec>::load($d, $r1.get_unchecked($x..)).mul_add($kv[5], acc2);
+            acc0 = <D::F32Vec>::load($d, $r1.get_unchecked($x + 1..)).mul_add($kv[6], acc0);
+            acc1 = <D::F32Vec>::load($d, $r1.get_unchecked($x + 2..)).mul_add($kv[7], acc1);
+            acc2 = <D::F32Vec>::load($d, $r1.get_unchecked($x + 3..)).mul_add($kv[8], acc2);
+            acc0 = <D::F32Vec>::load($d, $r1.get_unchecked($x + 4..)).mul_add($kv[9], acc0);
+            // Row 2
+            acc1 = <D::F32Vec>::load($d, $r2.get_unchecked($x..)).mul_add($kv[10], acc1);
+            acc2 = <D::F32Vec>::load($d, $r2.get_unchecked($x + 1..)).mul_add($kv[11], acc2);
+            acc0 = <D::F32Vec>::load($d, $r2.get_unchecked($x + 2..)).mul_add($kv[12], acc0);
+            acc1 = <D::F32Vec>::load($d, $r2.get_unchecked($x + 3..)).mul_add($kv[13], acc1);
+            acc2 = <D::F32Vec>::load($d, $r2.get_unchecked($x + 4..)).mul_add($kv[14], acc2);
+            // Row 3
+            acc0 = <D::F32Vec>::load($d, $r3.get_unchecked($x..)).mul_add($kv[15], acc0);
+            acc1 = <D::F32Vec>::load($d, $r3.get_unchecked($x + 1..)).mul_add($kv[16], acc1);
+            acc2 = <D::F32Vec>::load($d, $r3.get_unchecked($x + 2..)).mul_add($kv[17], acc2);
+            acc0 = <D::F32Vec>::load($d, $r3.get_unchecked($x + 3..)).mul_add($kv[18], acc0);
+            acc1 = <D::F32Vec>::load($d, $r3.get_unchecked($x + 4..)).mul_add($kv[19], acc1);
+            // Row 4
+            acc2 = <D::F32Vec>::load($d, $r4.get_unchecked($x..)).mul_add($kv[20], acc2);
+            acc0 = <D::F32Vec>::load($d, $r4.get_unchecked($x + 1..)).mul_add($kv[21], acc0);
+            acc1 = <D::F32Vec>::load($d, $r4.get_unchecked($x + 2..)).mul_add($kv[22], acc1);
+            acc2 = <D::F32Vec>::load($d, $r4.get_unchecked($x + 3..)).mul_add($kv[23], acc2);
+            acc0 = <D::F32Vec>::load($d, $r4.get_unchecked($x + 4..)).mul_add($kv[24], acc0);
 
-        acc0 + acc1 + acc2
+            acc0 + acc1 + acc2
+        }
     }};
 }
 
@@ -242,28 +251,32 @@ simd_function!(
             }
         }
 
-        // Process using iterators for mins/maxs, manual indexing for output
-        let mins_iter = mins.chunks_exact(D::F32Vec::LEN);
-        let maxs_iter = maxs.chunks_exact(D::F32Vec::LEN);
-
-        for ((mins_chunk, maxs_chunk), x) in mins_iter
-            .zip(maxs_iter)
-            .zip((0..xsize).step_by(D::F32Vec::LEN))
-            .take(xsize.div_ceil(D::F32Vec::LEN))
-        {
-            let minval = D::F32Vec::load(d, mins_chunk);
-            let maxval = D::F32Vec::load(d, maxs_chunk);
+        // Process using unchecked indexing for mins/maxs and output
+        for x in (0..xsize).step_by(D::F32Vec::LEN) {
+            let (minval, maxval) = unsafe {
+                // SAFETY: x is within allocated row bounds (padded to vector multiple).
+                (
+                    D::F32Vec::load(d, mins.get_unchecked(x..)),
+                    D::F32Vec::load(d, maxs.get_unchecked(x..)),
+                )
+            };
             let out_x = x * 2;
 
             // Row 0
             let r0_0 = kernel_conv!(d, kernel_vecs[0], r0, r1, r2, r3, r4, x).max(minval).min(maxval);
             let r0_1 = kernel_conv!(d, kernel_vecs[1], r0, r1, r2, r3, r4, x).max(minval).min(maxval);
-            D::F32Vec::store_interleaved_2(r0_0, r0_1, &mut output[0][out_x..]);
+            unsafe {
+                // SAFETY: output has at least 2 rows and out_x + 2*LEN <= output[0].len().
+                D::F32Vec::store_interleaved_2(r0_0, r0_1, output.get_unchecked_mut(0).get_unchecked_mut(out_x..));
+            }
 
             // Row 1
             let r1_0 = kernel_conv!(d, kernel_vecs[2], r0, r1, r2, r3, r4, x).max(minval).min(maxval);
             let r1_1 = kernel_conv!(d, kernel_vecs[3], r0, r1, r2, r3, r4, x).max(minval).min(maxval);
-            D::F32Vec::store_interleaved_2(r1_0, r1_1, &mut output[1][out_x..]);
+            unsafe {
+                // SAFETY: output has at least 2 rows and out_x + 2*LEN <= output[1].len().
+                D::F32Vec::store_interleaved_2(r1_0, r1_1, output.get_unchecked_mut(1).get_unchecked_mut(out_x..));
+            }
         }
     }
 );
@@ -301,17 +314,15 @@ simd_function!(
             }
         }
 
-        // Process using iterators for mins/maxs, manual indexing for output
-        let mins_iter = mins.chunks_exact(D::F32Vec::LEN);
-        let maxs_iter = maxs.chunks_exact(D::F32Vec::LEN);
-
-        for ((mins_chunk, maxs_chunk), x) in mins_iter
-            .zip(maxs_iter)
-            .zip((0..xsize).step_by(D::F32Vec::LEN))
-            .take(xsize.div_ceil(D::F32Vec::LEN))
-        {
-            let minval = D::F32Vec::load(d, mins_chunk);
-            let maxval = D::F32Vec::load(d, maxs_chunk);
+        // Process using unchecked indexing for mins/maxs and output
+        for x in (0..xsize).step_by(D::F32Vec::LEN) {
+            let (minval, maxval) = unsafe {
+                // SAFETY: x is within allocated row bounds (padded to vector multiple).
+                (
+                    D::F32Vec::load(d, mins.get_unchecked(x..)),
+                    D::F32Vec::load(d, maxs.get_unchecked(x..)),
+                )
+            };
             let out_x = x * 4;
 
             // Process all 4 output rows using a loop
@@ -321,7 +332,10 @@ simd_function!(
                 let v1 = kernel_conv!(d, kernel_vecs[base + 1], r0, r1, r2, r3, r4, x).max(minval).min(maxval);
                 let v2 = kernel_conv!(d, kernel_vecs[base + 2], r0, r1, r2, r3, r4, x).max(minval).min(maxval);
                 let v3 = kernel_conv!(d, kernel_vecs[base + 3], r0, r1, r2, r3, r4, x).max(minval).min(maxval);
-                D::F32Vec::store_interleaved_4(v0, v1, v2, v3, &mut output[oy][out_x..]);
+                unsafe {
+                    // SAFETY: oy < 4 and out_x + 4*LEN <= output[oy].len().
+                    D::F32Vec::store_interleaved_4(v0, v1, v2, v3, output.get_unchecked_mut(oy).get_unchecked_mut(out_x..));
+                }
             }
         }
     }
@@ -360,17 +374,15 @@ simd_function!(
             }
         }
 
-        // Process using iterators for mins/maxs, manual indexing for output
-        let mins_iter = mins.chunks_exact(D::F32Vec::LEN);
-        let maxs_iter = maxs.chunks_exact(D::F32Vec::LEN);
-
-        for ((mins_chunk, maxs_chunk), x) in mins_iter
-            .zip(maxs_iter)
-            .zip((0..xsize).step_by(D::F32Vec::LEN))
-            .take(xsize.div_ceil(D::F32Vec::LEN))
-        {
-            let minval = D::F32Vec::load(d, mins_chunk);
-            let maxval = D::F32Vec::load(d, maxs_chunk);
+        // Process using unchecked indexing for mins/maxs and output
+        for x in (0..xsize).step_by(D::F32Vec::LEN) {
+            let (minval, maxval) = unsafe {
+                // SAFETY: x is within allocated row bounds (padded to vector multiple).
+                (
+                    D::F32Vec::load(d, mins.get_unchecked(x..)),
+                    D::F32Vec::load(d, maxs.get_unchecked(x..)),
+                )
+            };
             let out_x = x * 8;
 
             // Process all 8 output rows using a loop
@@ -384,7 +396,10 @@ simd_function!(
                 let v5 = kernel_conv!(d, kernel_vecs[base + 5], r0, r1, r2, r3, r4, x).max(minval).min(maxval);
                 let v6 = kernel_conv!(d, kernel_vecs[base + 6], r0, r1, r2, r3, r4, x).max(minval).min(maxval);
                 let v7 = kernel_conv!(d, kernel_vecs[base + 7], r0, r1, r2, r3, r4, x).max(minval).min(maxval);
-                D::F32Vec::store_interleaved_8(v0, v1, v2, v3, v4, v5, v6, v7, &mut output[oy][out_x..]);
+                unsafe {
+                    // SAFETY: oy < 8 and out_x + 8*LEN <= output[oy].len().
+                    D::F32Vec::store_interleaved_8(v0, v1, v2, v3, v4, v5, v6, v7, output.get_unchecked_mut(oy).get_unchecked_mut(out_x..));
+                }
             }
         }
     }

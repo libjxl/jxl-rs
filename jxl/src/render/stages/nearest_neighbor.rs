@@ -43,13 +43,21 @@ impl RenderPipelineInOutStage for NearestNeighbourUpsample {
         _state: Option<&mut ErasedLocalState>,
         _previous_call_was_previous_row: bool,
     ) {
-        let input = &input_rows[0];
-        let output = &mut output_rows[0];
+        let in_row = input_rows[0][0];
+        let (out_row0, out_row1) = unsafe {
+            // SAFETY: output_rows has at least 2 rows for 2x upsampling.
+            let ptr = output_rows.row_data.as_mut_ptr();
+            (&mut **ptr, &mut **ptr.add(1))
+        };
         for i in 0..xsize {
-            output[0][i * 2] = input[0][i];
-            output[0][i * 2 + 1] = input[0][i];
-            output[1][i * 2] = input[0][i];
-            output[1][i * 2 + 1] = input[0][i];
+            unsafe {
+                // SAFETY: i < xsize and 2*i + 1 < out_row.len().
+                let val = *in_row.get_unchecked(i);
+                *out_row0.get_unchecked_mut(i * 2) = val;
+                *out_row0.get_unchecked_mut(i * 2 + 1) = val;
+                *out_row1.get_unchecked_mut(i * 2) = val;
+                *out_row1.get_unchecked_mut(i * 2 + 1) = val;
+            }
         }
     }
 }

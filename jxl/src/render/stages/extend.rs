@@ -64,7 +64,6 @@ impl ExtendToImageDimensionsStage {
         row: &mut [f32],
     ) {
         let x0 = position.0;
-        let x1 = x0 + xsize;
         let y0 = position.1;
         let source = if c < 3 {
             self.blending_info.source as usize
@@ -80,7 +79,12 @@ impl ExtendToImageDimensionsStage {
         } else {
             self.zeros.as_slice()
         };
-        row[0..xsize].copy_from_slice(&bg[x0..x1]);
+        let dst_ptr = row.as_mut_ptr();
+        let src_ptr = bg.as_ptr();
+        unsafe {
+            // SAFETY: x0 + xsize <= bg.len() and xsize <= row.len().
+            std::ptr::copy_nonoverlapping(src_ptr.add(x0), dst_ptr, xsize);
+        }
     }
 }
 
