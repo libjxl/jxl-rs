@@ -33,7 +33,7 @@ struct ImplicitPalette {
 }
 
 impl ImplicitPalette {
-    fn new(bit_depth: usize) -> Self {
+    fn new(bit_depth: usize) -> Box<Self> {
         const DELTA_PALETTE: [[i32; 3]; 72] = [
             [0, 0, 0],
             [4, 4, 4],
@@ -145,11 +145,11 @@ impl ImplicitPalette {
             }
         }
 
-        ImplicitPalette {
+        Box::new(ImplicitPalette {
             deltas,
             small_cube,
             large_cube,
-        }
+        })
     }
 }
 
@@ -167,7 +167,8 @@ impl<'a> Palette<'a> {
         buf: &'a ModularChannel,
         storage: ModularStorage,
     ) -> Self {
-        static IMPLICIT_PALETTES: [OnceLock<ImplicitPalette>; 25] = [const { OnceLock::new() }; 25];
+        static IMPLICIT_PALETTES: [OnceLock<Box<ImplicitPalette>>; 25] =
+            [const { OnceLock::new() }; 25];
         let bit_depth = bit_depth.bits_per_sample().min(24) as usize;
         let explicit = {
             if buf.size(storage).0 > 0 {

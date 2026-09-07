@@ -13,7 +13,7 @@ use std::sync::LazyLock;
 // Rows are expanded to 64 (32 + 32) at runtime to allow wrap-around SIMD loads.
 const DITHER_TABLE_U8: &[u8; 1024] = include_bytes!("dither_32x32.bin");
 
-pub(crate) static DITHER_TABLE: LazyLock<[[f32; 64]; 32]> = LazyLock::new(|| {
+pub(crate) static DITHER_TABLE: LazyLock<Box<[[f32; 64]; 32]>> = LazyLock::new(|| {
     let mut table = [[0.0f32; 64]; 32];
     for y in 0..32 {
         for x in 0..32 {
@@ -23,5 +23,5 @@ pub(crate) static DITHER_TABLE: LazyLock<[[f32; 64]; 32]> = LazyLock::new(|| {
             table[y][x + 32] = v;
         }
     }
-    table
+    Box::new(table)
 });
