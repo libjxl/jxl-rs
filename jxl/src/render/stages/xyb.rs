@@ -207,9 +207,14 @@ simd_function!(
         let intensity_scale = D::F32Vec::splat(d, params.intensity_scale);
 
         for idx in (0..xsize).step_by(D::F32Vec::LEN) {
-            let x = D::F32Vec::load(d, &row_x[idx..]);
-            let y = D::F32Vec::load(d, &row_y[idx..]);
-            let b = D::F32Vec::load(d, &row_b[idx..]);
+            let (x, y, b) = unsafe {
+                // SAFETY: idx is within allocated row bounds (padded to vector multiple).
+                (
+                    D::F32Vec::load(d, row_x.get_unchecked(idx..)),
+                    D::F32Vec::load(d, row_y.get_unchecked(idx..)),
+                    D::F32Vec::load(d, row_b.get_unchecked(idx..)),
+                )
+            };
 
             // Mix and apply bias
             let l = y + x - bias_cbrt[0];
@@ -231,9 +236,12 @@ simd_function!(
             let r = mat[0].mul_add(l, mat[1].mul_add(m, mat[2] * s));
             let g = mat[3].mul_add(l, mat[4].mul_add(m, mat[5] * s));
             let b = mat[6].mul_add(l, mat[7].mul_add(m, mat[8] * s));
-            r.store(&mut row_x[idx..]);
-            g.store(&mut row_y[idx..]);
-            b.store(&mut row_b[idx..]);
+            unsafe {
+                // SAFETY: idx is within allocated row bounds (padded to vector multiple).
+                r.store(row_x.get_unchecked_mut(idx..));
+                g.store(row_y.get_unchecked_mut(idx..));
+                b.store(row_b.get_unchecked_mut(idx..));
+            }
         }
     }
 );
@@ -253,11 +261,10 @@ impl RenderPipelineInPlaceStage for XybStage {
         _state: Option<&mut ErasedLocalState>,
         _previous_call_was_previous_row: bool,
     ) {
-        let [row_x, row_y, row_b] = row else {
-            panic!(
-                "incorrect number of channels; expected 3, found {}",
-                row.len()
-            );
+        let (row_x, row_y, row_b) = unsafe {
+            // SAFETY: row contains at least 3 channels.
+            let ptr = row.as_mut_ptr();
+            (&mut **ptr, &mut **ptr.add(1), &mut **ptr.add(2))
         };
 
         xyb_process_dispatch(&self.params, xsize, row_x, row_y, row_b);

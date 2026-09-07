@@ -49,64 +49,50 @@ fn convolve_noise_simd_impl<D: SimdDescriptor>(
 
     let row_sum = {
         #[inline(always)]
-        |w: &[u16]| -> D::I32Vec {
-            let mut sum = D::I32Vec::load_from_u16(d, &w[0..]);
-            sum += D::I32Vec::load_from_u16(d, &w[1..]);
-            sum += D::I32Vec::load_from_u16(d, &w[2..]);
-            sum += D::I32Vec::load_from_u16(d, &w[3..]);
-            sum += D::I32Vec::load_from_u16(d, &w[4..]);
-            sum
+        |w: &[u16], offset: usize| -> D::I32Vec {
+            // SAFETY: input buffer has sufficient border padding for offset + 4 + D::I32Vec::LEN.
+            unsafe {
+                let mut sum = D::I32Vec::load_from_u16(d, w.get_unchecked(offset..));
+                sum += D::I32Vec::load_from_u16(d, w.get_unchecked(offset + 1..));
+                sum += D::I32Vec::load_from_u16(d, w.get_unchecked(offset + 2..));
+                sum += D::I32Vec::load_from_u16(d, w.get_unchecked(offset + 3..));
+                sum += D::I32Vec::load_from_u16(d, w.get_unchecked(offset + 4..));
+                sum
+            }
         }
     };
 
-    let iter0 = input[0].windows(D::I32Vec::LEN + 4).step_by(D::I32Vec::LEN);
-    let iter2 = input[2].windows(D::I32Vec::LEN + 4).step_by(D::I32Vec::LEN);
-    let iter4 = input[4].windows(D::I32Vec::LEN + 4).step_by(D::I32Vec::LEN);
-    let out_iter = output.chunks_exact_mut(D::F32Vec::LEN);
-    let state_iter = state.chunks_exact_mut(D::I32Vec::LEN);
-    let num_chunks = xsize.div_ceil(D::I32Vec::LEN);
-
     if previous_call_was_previous_row {
-        for ((((w0, w2), w4), out), state_chunk) in iter0
-            .zip(iter2)
-            .zip(iter4)
-            .zip(out_iter)
-            .zip(state_iter)
-            .take(num_chunks)
-        {
-            let prev_state = D::I32Vec::load(d, state_chunk);
-            let r4 = row_sum(w4);
-            let sum_5x5 = prev_state + r4;
-            let p00 = D::I32Vec::load_from_u16(d, &w2[2..]);
-            let result = sum_5x5.as_f32().mul_add(c_sum, p00.as_f32() * c_center);
-            result.store(out);
-            let r0 = row_sum(w0);
-            let next_state = sum_5x5 - r0;
-            next_state.store(state_chunk);
+        for x in (0..xsize).step_by(D::I32Vec::LEN) {
+            // SAFETY: input, output and state buffers have sufficient length for x + D::I32Vec::LEN.
+            unsafe {
+                let prev_state = D::I32Vec::load(d, state.get_unchecked(x..));
+                let r4 = row_sum(input[4], x);
+                let sum_5x5 = prev_state + r4;
+                let p00 = D::I32Vec::load_from_u16(d, input[2].get_unchecked(x + 2..));
+                let result = sum_5x5.as_f32().mul_add(c_sum, p00.as_f32() * c_center);
+                result.store(output.get_unchecked_mut(x..));
+                let r0 = row_sum(input[0], x);
+                let next_state = sum_5x5 - r0;
+                next_state.store(state.get_unchecked_mut(x..));
+            }
         }
     } else {
-        let iter1 = input[1].windows(D::I32Vec::LEN + 4).step_by(D::I32Vec::LEN);
-        let iter3 = input[3].windows(D::I32Vec::LEN + 4).step_by(D::I32Vec::LEN);
-        for ((((((w0, w1), w2), w3), w4), out), state_chunk) in iter0
-            .zip(iter1)
-            .zip(iter2)
-            .zip(iter3)
-            .zip(iter4)
-            .zip(out_iter)
-            .zip(state_iter)
-            .take(num_chunks)
-        {
-            let p00 = D::I32Vec::load_from_u16(d, &w2[2..]);
-            let r0 = row_sum(w0);
-            let r1 = row_sum(w1);
-            let r2 = row_sum(w2);
-            let r3 = row_sum(w3);
-            let r4 = row_sum(w4);
-            let sum_5x5 = r0 + r1 + r2 + r3 + r4;
-            let result = sum_5x5.as_f32().mul_add(c_sum, p00.as_f32() * c_center);
-            result.store(out);
-            let next_state = sum_5x5 - r0;
-            next_state.store(state_chunk);
+        for x in (0..xsize).step_by(D::I32Vec::LEN) {
+            // SAFETY: input, output and state buffers have sufficient length for x + D::I32Vec::LEN.
+            unsafe {
+                let p00 = D::I32Vec::load_from_u16(d, input[2].get_unchecked(x + 2..));
+                let r0 = row_sum(input[0], x);
+                let r1 = row_sum(input[1], x);
+                let r2 = row_sum(input[2], x);
+                let r3 = row_sum(input[3], x);
+                let r4 = row_sum(input[4], x);
+                let sum_5x5 = r0 + r1 + r2 + r3 + r4;
+                let result = sum_5x5.as_f32().mul_add(c_sum, p00.as_f32() * c_center);
+                result.store(output.get_unchecked_mut(x..));
+                let next_state = sum_5x5 - r0;
+                next_state.store(state.get_unchecked_mut(x..));
+            }
         }
     }
 }
@@ -205,47 +191,39 @@ fn add_noise_simd_impl<D: SimdDescriptor>(
 
     let (row_c0, rest_c) = row_c.split_at_mut(1);
     let (row_c1, row_c2) = rest_c.split_at_mut(1);
+    let (c0_slice, c1_slice, c2_slice) =
+        (&mut row_c0[0][..], &mut row_c1[0][..], &mut row_c2[0][..]);
+    let (rnd_r_slice, rnd_g_slice, rnd_c_slice) = (row_rnd[0], row_rnd[1], row_rnd[2]);
 
-    let iter_c0 = row_c0[0].chunks_exact_mut(D::F32Vec::LEN);
-    let iter_c1 = row_c1[0].chunks_exact_mut(D::F32Vec::LEN);
-    let iter_c2 = row_c2[0].chunks_exact_mut(D::F32Vec::LEN);
-    let iter_rnd_r = row_rnd[0].chunks_exact(D::F32Vec::LEN);
-    let iter_rnd_g = row_rnd[1].chunks_exact(D::F32Vec::LEN);
-    let iter_rnd_c = row_rnd[2].chunks_exact(D::F32Vec::LEN);
+    for x in (0..xsize).step_by(D::F32Vec::LEN) {
+        // SAFETY: row_c and row_rnd buffers have sufficient length for x + D::F32Vec::LEN.
+        unsafe {
+            let vx = D::F32Vec::load(d, c0_slice.get_unchecked(x..));
+            let vy = D::F32Vec::load(d, c1_slice.get_unchecked(x..));
+            let vb = D::F32Vec::load(d, c2_slice.get_unchecked(x..));
 
-    for (((((c0, c1), c2), rnd_r_chunk), rnd_g_chunk), rnd_c_chunk) in iter_c0
-        .zip(iter_c1)
-        .zip(iter_c2)
-        .zip(iter_rnd_r)
-        .zip(iter_rnd_g)
-        .zip(iter_rnd_c)
-        .take(xsize.div_ceil(D::F32Vec::LEN))
-    {
-        let vx = D::F32Vec::load(d, c0);
-        let vy = D::F32Vec::load(d, c1);
-        let vb = D::F32Vec::load(d, c2);
+            let in_g = (vy - vx) * c_half;
+            let in_r = (vy + vx) * c_half;
 
-        let in_g = (vy - vx) * c_half;
-        let in_r = (vy + vx) * c_half;
+            let noise_strength_g = noise_strength(in_g);
+            let noise_strength_r = noise_strength(in_r);
 
-        let noise_strength_g = noise_strength(in_g);
-        let noise_strength_r = noise_strength(in_r);
+            let rnd_r = D::F32Vec::load(d, rnd_r_slice.get_unchecked(x..)) * c_norm;
+            let rnd_g = D::F32Vec::load(d, rnd_g_slice.get_unchecked(x..)) * c_norm;
+            let rnd_c = D::F32Vec::load(d, rnd_c_slice.get_unchecked(x..)) * c_norm;
 
-        let rnd_r = D::F32Vec::load(d, rnd_r_chunk) * c_norm;
-        let rnd_g = D::F32Vec::load(d, rnd_g_chunk) * c_norm;
-        let rnd_c = D::F32Vec::load(d, rnd_c_chunk) * c_norm;
+            let red_noise = noise_strength_r * (rnd_r.mul_add(c_rgn_corr, rnd_c * c_rg_corr));
+            let green_noise = noise_strength_g * (rnd_g.mul_add(c_rgn_corr, rnd_c * c_rg_corr));
+            let rg_noise = red_noise + green_noise;
 
-        let red_noise = noise_strength_r * (rnd_r.mul_add(c_rgn_corr, rnd_c * c_rg_corr));
-        let green_noise = noise_strength_g * (rnd_g.mul_add(c_rgn_corr, rnd_c * c_rg_corr));
-        let rg_noise = red_noise + green_noise;
+            let out_x = vx + rg_noise.mul_add(c_ytox, red_noise - green_noise);
+            let out_y = vy + rg_noise;
+            let out_b = vb + rg_noise * c_ytob;
 
-        let out_x = vx + rg_noise.mul_add(c_ytox, red_noise - green_noise);
-        let out_y = vy + rg_noise;
-        let out_b = vb + rg_noise * c_ytob;
-
-        out_x.store(c0);
-        out_y.store(c1);
-        out_b.store(c2);
+            out_x.store(c0_slice.get_unchecked_mut(x..));
+            out_y.store(c1_slice.get_unchecked_mut(x..));
+            out_b.store(c2_slice.get_unchecked_mut(x..));
+        }
     }
 }
 

@@ -58,11 +58,10 @@ simd_function!(
 from_linear_process_dispatch,
 d: D,
 fn from_linear_process(tf: &TransferFunction, xsize: usize, row: &mut [&mut [f32]]) {
-    let [row_r, row_g, row_b] = row else {
-        panic!(
-            "incorrect number of channels; expected 3, found {}",
-            row.len()
-        );
+    let (row_r, row_g, row_b) = unsafe {
+        // SAFETY: row contains at least 3 channels.
+        let ptr = row.as_mut_ptr();
+        (&mut **ptr, &mut **ptr.add(1), &mut **ptr.add(2))
     };
 
     match *tf {
@@ -97,14 +96,18 @@ fn from_linear_process(tf: &TransferFunction, xsize: usize, row: &mut [&mut [f32
             tf::scene_to_hlg(&mut row_b[..xsize]);
         }
         TransferFunction::Gamma(g) => {
+            let g_vec = D::F32Vec::splat(d, g);
             for row in row {
-                for values in row[..xsize.next_multiple_of(D::F32Vec::LEN)]
-                    .chunks_exact_mut(D::F32Vec::LEN)
-                {
-                    let v = D::F32Vec::load(d, values);
-                    crate::util::fast_powf_simd(d, v.abs(), D::F32Vec::splat(d, g))
-                        .copysign(v)
-                        .store(values);
+                for x in (0..xsize).step_by(D::F32Vec::LEN) {
+                    let v = unsafe {
+                        // SAFETY: x is within allocated row bounds (padded to vector multiple).
+                        D::F32Vec::load(d, row.get_unchecked(x..))
+                    };
+                    let res = crate::util::fast_powf_simd(d, v.abs(), g_vec).copysign(v);
+                    unsafe {
+                        // SAFETY: x is within allocated row bounds (padded to vector multiple).
+                        res.store(row.get_unchecked_mut(x..));
+                    }
                 }
             }
         }

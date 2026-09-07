@@ -153,12 +153,20 @@ impl RenderPipelineInPlaceStage for BlendingStage {
         }
         if let Some(ref rf) = self.reference_frames[self.blending_info.source as usize] {
             for (c, fg) in fg_buf.iter_mut().enumerate().take(3) {
-                *fg = &rf.frame[c].row(fg_y0)[fg_x0..fg_x1];
+                let full_row = rf.frame[c].row(fg_y0);
+                *fg = unsafe {
+                    // SAFETY: fg_x0 <= fg_x1 <= full_row.len().
+                    full_row.get_unchecked(fg_x0..fg_x1)
+                };
             }
         }
         for i in 0..num_ec {
             if let Some(ref rf) = self.reference_frames[self.ec_blending_info[i].source as usize] {
-                fg_buf[3 + i] = &rf.frame[3 + i].row(fg_y0)[fg_x0..fg_x1];
+                let full_row = rf.frame[3 + i].row(fg_y0);
+                fg_buf[3 + i] = unsafe {
+                    // SAFETY: fg_x0 <= fg_x1 <= full_row.len().
+                    full_row.get_unchecked(fg_x0..fg_x1)
+                };
             }
         }
 
@@ -167,7 +175,10 @@ impl RenderPipelineInPlaceStage for BlendingStage {
         // Per-channel mutable slices into the in-place row buffer.
         let mut bg_slices: ChannelVec<&mut [f32]> = ChannelVec::new();
         for r in row[..total_channels].iter_mut() {
-            bg_slices.push(&mut r[bg_x0..bg_x1]);
+            bg_slices.push(unsafe {
+                // SAFETY: bg_x0 <= bg_x1 <= r.len().
+                r.get_unchecked_mut(bg_x0..bg_x1)
+            });
         }
 
         let state = state.unwrap().downcast_mut::<BlendingScratch>().unwrap();

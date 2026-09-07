@@ -60,6 +60,11 @@ fn epf1_process_row_chunk(
     let (xpos, ypos) = pos;
     assert_eq!(input_rows.len(), 3);
     assert_eq!(output_rows.len(), 3);
+    let (input_x, input_y, input_b) = (&input_rows[0], &input_rows[1], &input_rows[2]);
+    let (output_x, output_y, output_b) = output_rows.split_first_3_mut();
+    let input_channels = [input_x, input_y, input_b];
+    let (out_x, out_y, out_b) = (&mut output_x[0], &mut output_y[0], &mut output_b[0]);
+    let output_channels = [out_x, out_y, out_b];
 
     let sigma = stage.sigma.try_read().unwrap();
     let row_sigma = sigma.row(ypos / BLOCK_DIM);
@@ -70,79 +75,88 @@ fn epf1_process_row_chunk(
 
     for x in (0..xsize).step_by(D::F32Vec::LEN) {
         let sigma = get_sigma(d, x + xpos, row_sigma);
-        let sad_mul = D::F32Vec::load(d, &sad_mul_storage[x % 8..]);
+        // SAFETY: sad_mul_storage has size at least 8 + D::F32Vec::LEN.
+        let sad_mul = unsafe { D::F32Vec::load(d, sad_mul_storage.get_unchecked(x % 8..)) };
 
         let sigma_mask = D::F32Vec::splat(d, MIN_SIGMA).gt(sigma);
         if sigma_mask.all() {
-            for (input_c, output_c) in input_rows.iter().zip(output_rows.iter_mut()) {
-                D::F32Vec::load(d, &input_c[2][2 + x..]).store(&mut output_c[0][x..]);
+            // SAFETY: input and output buffers have sufficient length for x + D::F32Vec::LEN.
+            unsafe {
+                D::F32Vec::load(d, input_x[2].get_unchecked(2 + x..))
+                    .store(output_channels[0].get_unchecked_mut(x..));
+                D::F32Vec::load(d, input_y[2].get_unchecked(2 + x..))
+                    .store(output_channels[1].get_unchecked_mut(x..));
+                D::F32Vec::load(d, input_b[2].get_unchecked(2 + x..))
+                    .store(output_channels[2].get_unchecked_mut(x..));
             }
             continue;
         }
 
         // Compute SADs
         let mut sads = [D::F32Vec::splat(d, 0.0); 4];
-        for (input_c, scale) in input_rows.iter().zip(stage.channel_scale) {
-            let scale = D::F32Vec::splat(d, scale);
-            let p20 = D::F32Vec::load(d, &input_c[0][2 + x..]);
-            let p11 = D::F32Vec::load(d, &input_c[1][1 + x..]);
-            let p21 = D::F32Vec::load(d, &input_c[1][2 + x..]);
-            let p31 = D::F32Vec::load(d, &input_c[1][3 + x..]);
-            let p02 = D::F32Vec::load(d, &input_c[2][x..]);
-            let p12 = D::F32Vec::load(d, &input_c[2][1 + x..]);
-            let p22 = D::F32Vec::load(d, &input_c[2][2 + x..]);
-            let p32 = D::F32Vec::load(d, &input_c[2][3 + x..]);
-            let p42 = D::F32Vec::load(d, &input_c[2][4 + x..]);
-            let p13 = D::F32Vec::load(d, &input_c[3][1 + x..]);
-            let p23 = D::F32Vec::load(d, &input_c[3][2 + x..]);
-            let p33 = D::F32Vec::load(d, &input_c[3][3 + x..]);
-            let p24 = D::F32Vec::load(d, &input_c[4][2 + x..]);
-            let d20_21 = (p20 - p21).abs();
-            let d11_21 = (p11 - p21).abs();
-            let d22_21 = (p22 - p21).abs();
-            let d31_21 = (p31 - p21).abs();
-            let d02_12 = (p02 - p12).abs();
-            let d11_12 = (p11 - p12).abs();
-            let d12_22 = (p22 - p12).abs();
-            let d31_32 = (p31 - p32).abs();
-            let d22_32 = (p22 - p32).abs();
-            let d42_32 = (p42 - p32).abs();
-            let d13_12 = (p13 - p12).abs();
-            let d22_23 = (p22 - p23).abs();
-            let d13_23 = (p13 - p23).abs();
-            let d33_23 = (p33 - p23).abs();
-            let d33_32 = (p33 - p32).abs();
-            let d24_23 = (p24 - p23).abs();
-            sads[0] = (d20_21 + d11_12 + d22_21 + d31_32 + d22_23).mul_add(scale, sads[0]);
-            sads[1] = (d11_21 + d02_12 + d12_22 + d22_32 + d13_23).mul_add(scale, sads[1]);
-            sads[2] = (d31_21 + d12_22 + d22_32 + d42_32 + d33_23).mul_add(scale, sads[2]);
-            sads[3] = (d22_21 + d13_12 + d22_23 + d33_32 + d24_23).mul_add(scale, sads[3]);
+        for (ch, input_c) in input_channels.iter().enumerate() {
+            let scale = D::F32Vec::splat(d, stage.channel_scale[ch]);
+            // SAFETY: input rows have at least xsize + 4 elements due to BORDER=(2, 2).
+            unsafe {
+                let p20 = D::F32Vec::load(d, input_c[0].get_unchecked(2 + x..));
+                let p11 = D::F32Vec::load(d, input_c[1].get_unchecked(1 + x..));
+                let p21 = D::F32Vec::load(d, input_c[1].get_unchecked(2 + x..));
+                let p31 = D::F32Vec::load(d, input_c[1].get_unchecked(3 + x..));
+                let p02 = D::F32Vec::load(d, input_c[2].get_unchecked(x..));
+                let p12 = D::F32Vec::load(d, input_c[2].get_unchecked(1 + x..));
+                let p22 = D::F32Vec::load(d, input_c[2].get_unchecked(2 + x..));
+                let p32 = D::F32Vec::load(d, input_c[2].get_unchecked(3 + x..));
+                let p42 = D::F32Vec::load(d, input_c[2].get_unchecked(4 + x..));
+                let p13 = D::F32Vec::load(d, input_c[3].get_unchecked(1 + x..));
+                let p23 = D::F32Vec::load(d, input_c[3].get_unchecked(2 + x..));
+                let p33 = D::F32Vec::load(d, input_c[3].get_unchecked(3 + x..));
+                let p24 = D::F32Vec::load(d, input_c[4].get_unchecked(2 + x..));
+                let d20_21 = (p20 - p21).abs();
+                let d11_21 = (p11 - p21).abs();
+                let d22_21 = (p22 - p21).abs();
+                let d31_21 = (p31 - p21).abs();
+                let d02_12 = (p02 - p12).abs();
+                let d11_12 = (p11 - p12).abs();
+                let d12_22 = (p22 - p12).abs();
+                let d31_32 = (p31 - p32).abs();
+                let d22_32 = (p22 - p32).abs();
+                let d42_32 = (p42 - p32).abs();
+                let d13_12 = (p13 - p12).abs();
+                let d22_23 = (p22 - p23).abs();
+                let d13_23 = (p13 - p23).abs();
+                let d33_23 = (p33 - p23).abs();
+                let d33_32 = (p33 - p32).abs();
+                let d24_23 = (p24 - p23).abs();
+                sads[0] = (d20_21 + d11_12 + d22_21 + d31_32 + d22_23).mul_add(scale, sads[0]);
+                sads[1] = (d11_21 + d02_12 + d12_22 + d22_32 + d13_23).mul_add(scale, sads[1]);
+                sads[2] = (d31_21 + d12_22 + d22_32 + d42_32 + d33_23).mul_add(scale, sads[2]);
+                sads[3] = (d22_21 + d13_12 + d22_23 + d33_32 + d24_23).mul_add(scale, sads[3]);
+            }
         }
 
         // Compute output based on SADs
         let inv_sigma = sigma * sad_mul;
         let mut w = D::F32Vec::splat(d, 1.0);
-        for sad in sads.iter_mut() {
+        for sad in &mut sads {
             *sad = sad
                 .mul_add(inv_sigma, D::F32Vec::splat(d, 1.0))
                 .max(D::F32Vec::splat(d, 0.0));
             w += *sad;
         }
         let inv_w = D::F32Vec::splat(d, 1.0) / w;
-        for (input_c, output_c) in input_rows.iter().zip(output_rows.iter_mut()) {
-            let mut out = D::F32Vec::load(d, &input_c[2][2 + x..]);
-            for (row_idx, col_idx, sad_idx) in [
-                (3, 2+x, 3),
-                (2, 3+x, 2),
-                (2, 1+x, 1),
-                (1, 2+x, 0),
-            ] {
-                out = D::F32Vec::load(d, &input_c[row_idx][col_idx..]).mul_add(sads[sad_idx], out);
+        for (ch, input_c) in input_channels.iter().enumerate() {
+            // SAFETY: input and output rows have sufficient length for x + D::F32Vec::LEN.
+            unsafe {
+                let mut out = D::F32Vec::load(d, input_c[2].get_unchecked(2 + x..));
+                out = D::F32Vec::load(d, input_c[3].get_unchecked(2 + x..)).mul_add(sads[3], out);
+                out = D::F32Vec::load(d, input_c[2].get_unchecked(3 + x..)).mul_add(sads[2], out);
+                out = D::F32Vec::load(d, input_c[2].get_unchecked(1 + x..)).mul_add(sads[1], out);
+                out = D::F32Vec::load(d, input_c[1].get_unchecked(2 + x..)).mul_add(sads[0], out);
+                out *= inv_w;
+                let p22 = D::F32Vec::load(d, input_c[2].get_unchecked(2 + x..));
+                let out = sigma_mask.if_then_else_f32(p22, out);
+                out.store(output_channels[ch].get_unchecked_mut(x..));
             }
-            out *= inv_w;
-            let p22 = D::F32Vec::load(d, &input_c[2][2 + x..]);
-            let out = sigma_mask.if_then_else_f32(p22, out);
-            out.store(&mut output_c[0][x..]);
         }
     }
 });

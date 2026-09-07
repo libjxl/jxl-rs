@@ -60,6 +60,11 @@ simd_function!(
     let (xpos, ypos) = pos;
     assert_eq!(input_rows.len(), 3);
     assert_eq!(output_rows.len(), 3);
+    let (input_x, input_y, input_b) = (&input_rows[0], &input_rows[1], &input_rows[2]);
+    let (output_x, output_y, output_b) = output_rows.split_first_3_mut();
+    let input_channels = [input_x, input_y, input_b];
+    let (out_x, out_y, out_b) = (&mut output_x[0], &mut output_y[0], &mut output_b[0]);
+    let output_channels = [out_x, out_y, out_b];
 
     let sigma = stage.sigma.try_read().unwrap();
     let row_sigma = sigma.row(ypos / BLOCK_DIM);
@@ -72,141 +77,150 @@ simd_function!(
 
     for x in (0..xsize).step_by(D::F32Vec::LEN) {
         let sigma = get_sigma(d, x + xpos, row_sigma);
-        let sad_mul = D::F32Vec::load(d, &sad_mul_storage[x % 8..]);
+        // SAFETY: sad_mul_storage has size at least 8 + D::F32Vec::LEN.
+        let sad_mul = unsafe { D::F32Vec::load(d, sad_mul_storage.get_unchecked(x % 8..)) };
 
         let sigma_mask = D::F32Vec::splat(d, MIN_SIGMA).gt(sigma);
         if sigma_mask.all() {
-            for (input_c, output_c) in input_rows.iter().zip(output_rows.iter_mut()) {
-                D::F32Vec::load(d, &input_c[3][3 + x..]).store(&mut output_c[0][x..]);
+            // SAFETY: input and output buffers have sufficient length for x + D::F32Vec::LEN.
+            unsafe {
+                D::F32Vec::load(d, input_x[3].get_unchecked(3 + x..))
+                    .store(output_channels[0].get_unchecked_mut(x..));
+                D::F32Vec::load(d, input_y[3].get_unchecked(3 + x..))
+                    .store(output_channels[1].get_unchecked_mut(x..));
+                D::F32Vec::load(d, input_b[3].get_unchecked(3 + x..))
+                    .store(output_channels[2].get_unchecked_mut(x..));
             }
             continue;
         }
 
         // Compute SADs
         let mut sads = [D::F32Vec::splat(d, 0.0); 12];
-        for (input_c, scale) in input_rows.iter().zip(stage.channel_scale) {
-            let scale = D::F32Vec::splat(d, scale);
+        for (ch, input_c) in input_channels.iter().enumerate() {
+            let scale = D::F32Vec::splat(d, stage.channel_scale[ch]);
 
-            let p30 = D::F32Vec::load(d, &input_c[0][3 + x..]);
-            let p21 = D::F32Vec::load(d, &input_c[1][2 + x..]);
-            let p31 = D::F32Vec::load(d, &input_c[1][3 + x..]);
-            let p41 = D::F32Vec::load(d, &input_c[1][4 + x..]);
-            let p12 = D::F32Vec::load(d, &input_c[2][1 + x..]);
-            let p22 = D::F32Vec::load(d, &input_c[2][2 + x..]);
-            let p32 = D::F32Vec::load(d, &input_c[2][3 + x..]);
-            let p42 = D::F32Vec::load(d, &input_c[2][4 + x..]);
-            let p52 = D::F32Vec::load(d, &input_c[2][5 + x..]);
-            let p03 = D::F32Vec::load(d, &input_c[3][x..]);
-            let p13 = D::F32Vec::load(d, &input_c[3][1 + x..]);
-            let p23 = D::F32Vec::load(d, &input_c[3][2 + x..]);
-            let p33 = D::F32Vec::load(d, &input_c[3][3 + x..]);
-            let p43 = D::F32Vec::load(d, &input_c[3][4 + x..]);
-            let p53 = D::F32Vec::load(d, &input_c[3][5 + x..]);
-            let p63 = D::F32Vec::load(d, &input_c[3][6 + x..]);
-            let p14 = D::F32Vec::load(d, &input_c[4][1 + x..]);
-            let p24 = D::F32Vec::load(d, &input_c[4][2 + x..]);
-            let p34 = D::F32Vec::load(d, &input_c[4][3 + x..]);
-            let p44 = D::F32Vec::load(d, &input_c[4][4 + x..]);
-            let p54 = D::F32Vec::load(d, &input_c[4][5 + x..]);
-            let p25 = D::F32Vec::load(d, &input_c[5][2 + x..]);
-            let p35 = D::F32Vec::load(d, &input_c[5][3 + x..]);
-            let p45 = D::F32Vec::load(d, &input_c[5][4 + x..]);
-            let p36 = D::F32Vec::load(d, &input_c[6][3 + x..]);
-            let d32_30 = (p32 - p30).abs();
-            let d32_21 = (p32 - p21).abs();
-            let d32_31 = (p32 - p31).abs();
-            let d32_41 = (p32 - p41).abs();
-            let d32_12 = (p32 - p12).abs();
-            let d32_22 = (p32 - p22).abs();
-            let d32_42 = (p32 - p42).abs();
-            let d32_52 = (p32 - p52).abs();
-            let d32_23 = (p32 - p23).abs();
-            let d32_34 = (p32 - p34).abs();
-            let d32_43 = (p32 - p43).abs();
-            let d32_33 = (p32 - p33).abs();
-            let d23_21 = (p23 - p21).abs();
-            let d23_12 = (p23 - p12).abs();
-            let d23_22 = (p23 - p22).abs();
-            let d23_03 = (p23 - p03).abs();
-            let d23_13 = (p23 - p13).abs();
-            let d23_33 = (p23 - p33).abs();
-            let d23_43 = (p23 - p43).abs();
-            let d23_14 = (p23 - p14).abs();
-            let d23_24 = (p23 - p24).abs();
-            let d23_34 = (p23 - p34).abs();
-            let d23_25 = (p23 - p25).abs();
-            let d33_31 = (p33 - p31).abs();
-            let d33_22 = (p33 - p22).abs();
-            let d33_42 = (p33 - p42).abs();
-            let d33_13 = (p33 - p13).abs();
-            let d33_43 = (p33 - p43).abs();
-            let d33_53 = (p33 - p53).abs();
-            let d33_24 = (p33 - p24).abs();
-            let d33_34 = (p33 - p34).abs();
-            let d33_44 = (p33 - p44).abs();
-            let d33_35 = (p33 - p35).abs();
-            let d43_41 = (p43 - p41).abs();
-            let d43_42 = (p43 - p42).abs();
-            let d43_52 = (p43 - p52).abs();
-            let d43_53 = (p43 - p53).abs();
-            let d43_63 = (p43 - p63).abs();
-            let d43_34 = (p43 - p34).abs();
-            let d43_44 = (p43 - p44).abs();
-            let d43_54 = (p43 - p54).abs();
-            let d43_45 = (p43 - p45).abs();
-            let d34_14 = (p34 - p14).abs();
-            let d34_24 = (p34 - p24).abs();
-            let d34_44 = (p34 - p44).abs();
-            let d34_54 = (p34 - p54).abs();
-            let d34_25 = (p34 - p25).abs();
-            let d34_35 = (p34 - p35).abs();
-            let d34_45 = (p34 - p45).abs();
-            let d34_36 = (p34 - p36).abs();
-            sads[0] = scale.mul_add(d32_30 + d23_21 + d33_31 + d43_41 + d32_34, sads[0]);
-            sads[1] = scale.mul_add(d32_21 + d23_12 + d33_22 + d32_43 + d23_34, sads[1]);
-            sads[2] = scale.mul_add(d32_31 + d23_22 + d32_33 + d43_42 + d33_34, sads[2]);
-            sads[3] = scale.mul_add(d32_41 + d32_23 + d33_42 + d43_52 + d43_34, sads[3]);
-            sads[4] = scale.mul_add(d32_12 + d23_03 + d33_13 + d23_43 + d34_14, sads[4]);
-            sads[5] = scale.mul_add(d32_22 + d23_13 + d23_33 + d33_43 + d34_24, sads[5]);
-            sads[6] = scale.mul_add(d32_42 + d23_33 + d33_43 + d43_53 + d34_44, sads[6]);
-            sads[7] = scale.mul_add(d32_52 + d23_43 + d33_53 + d43_63 + d34_54, sads[7]);
-            sads[8] = scale.mul_add(d32_23 + d23_14 + d33_24 + d43_34 + d34_25, sads[8]);
-            sads[9] = scale.mul_add(d32_33 + d23_24 + d33_34 + d43_44 + d34_35, sads[9]);
-            sads[10] = scale.mul_add(d32_43 + d23_34 + d33_44 + d43_54 + d34_45, sads[10]);
-            sads[11] = scale.mul_add(d32_34 + d23_25 + d33_35 + d43_45 + d34_36, sads[11]);
+            // SAFETY: input rows have at least xsize + 6 elements due to BORDER=(3, 3).
+            unsafe {
+                let p30 = D::F32Vec::load(d, input_c[0].get_unchecked(3 + x..));
+                let p21 = D::F32Vec::load(d, input_c[1].get_unchecked(2 + x..));
+                let p31 = D::F32Vec::load(d, input_c[1].get_unchecked(3 + x..));
+                let p41 = D::F32Vec::load(d, input_c[1].get_unchecked(4 + x..));
+                let p12 = D::F32Vec::load(d, input_c[2].get_unchecked(1 + x..));
+                let p22 = D::F32Vec::load(d, input_c[2].get_unchecked(2 + x..));
+                let p32 = D::F32Vec::load(d, input_c[2].get_unchecked(3 + x..));
+                let p42 = D::F32Vec::load(d, input_c[2].get_unchecked(4 + x..));
+                let p52 = D::F32Vec::load(d, input_c[2].get_unchecked(5 + x..));
+                let p03 = D::F32Vec::load(d, input_c[3].get_unchecked(x..));
+                let p13 = D::F32Vec::load(d, input_c[3].get_unchecked(1 + x..));
+                let p23 = D::F32Vec::load(d, input_c[3].get_unchecked(2 + x..));
+                let p33 = D::F32Vec::load(d, input_c[3].get_unchecked(3 + x..));
+                let p43 = D::F32Vec::load(d, input_c[3].get_unchecked(4 + x..));
+                let p53 = D::F32Vec::load(d, input_c[3].get_unchecked(5 + x..));
+                let p63 = D::F32Vec::load(d, input_c[3].get_unchecked(6 + x..));
+                let p14 = D::F32Vec::load(d, input_c[4].get_unchecked(1 + x..));
+                let p24 = D::F32Vec::load(d, input_c[4].get_unchecked(2 + x..));
+                let p34 = D::F32Vec::load(d, input_c[4].get_unchecked(3 + x..));
+                let p44 = D::F32Vec::load(d, input_c[4].get_unchecked(4 + x..));
+                let p54 = D::F32Vec::load(d, input_c[4].get_unchecked(5 + x..));
+                let p25 = D::F32Vec::load(d, input_c[5].get_unchecked(2 + x..));
+                let p35 = D::F32Vec::load(d, input_c[5].get_unchecked(3 + x..));
+                let p45 = D::F32Vec::load(d, input_c[5].get_unchecked(4 + x..));
+                let p36 = D::F32Vec::load(d, input_c[6].get_unchecked(3 + x..));
+                let d32_30 = (p32 - p30).abs();
+                let d32_21 = (p32 - p21).abs();
+                let d32_31 = (p32 - p31).abs();
+                let d32_41 = (p32 - p41).abs();
+                let d32_12 = (p32 - p12).abs();
+                let d32_22 = (p32 - p22).abs();
+                let d32_42 = (p32 - p42).abs();
+                let d32_52 = (p32 - p52).abs();
+                let d32_23 = (p32 - p23).abs();
+                let d32_34 = (p32 - p34).abs();
+                let d32_43 = (p32 - p43).abs();
+                let d32_33 = (p32 - p33).abs();
+                let d23_21 = (p23 - p21).abs();
+                let d23_12 = (p23 - p12).abs();
+                let d23_22 = (p23 - p22).abs();
+                let d23_03 = (p23 - p03).abs();
+                let d23_13 = (p23 - p13).abs();
+                let d23_33 = (p23 - p33).abs();
+                let d23_43 = (p23 - p43).abs();
+                let d23_14 = (p23 - p14).abs();
+                let d23_24 = (p23 - p24).abs();
+                let d23_34 = (p23 - p34).abs();
+                let d23_25 = (p23 - p25).abs();
+                let d33_31 = (p33 - p31).abs();
+                let d33_22 = (p33 - p22).abs();
+                let d33_42 = (p33 - p42).abs();
+                let d33_13 = (p33 - p13).abs();
+                let d33_43 = (p33 - p43).abs();
+                let d33_53 = (p33 - p53).abs();
+                let d33_24 = (p33 - p24).abs();
+                let d33_34 = (p33 - p34).abs();
+                let d33_44 = (p33 - p44).abs();
+                let d33_35 = (p33 - p35).abs();
+                let d43_41 = (p43 - p41).abs();
+                let d43_42 = (p43 - p42).abs();
+                let d43_52 = (p43 - p52).abs();
+                let d43_53 = (p43 - p53).abs();
+                let d43_63 = (p43 - p63).abs();
+                let d43_34 = (p43 - p34).abs();
+                let d43_44 = (p43 - p44).abs();
+                let d43_54 = (p43 - p54).abs();
+                let d43_45 = (p43 - p45).abs();
+                let d34_14 = (p34 - p14).abs();
+                let d34_24 = (p34 - p24).abs();
+                let d34_44 = (p34 - p44).abs();
+                let d34_54 = (p34 - p54).abs();
+                let d34_25 = (p34 - p25).abs();
+                let d34_35 = (p34 - p35).abs();
+                let d34_45 = (p34 - p45).abs();
+                let d34_36 = (p34 - p36).abs();
+                sads[0] = scale.mul_add(d32_30 + d23_21 + d33_31 + d43_41 + d32_34, sads[0]);
+                sads[1] = scale.mul_add(d32_21 + d23_12 + d33_22 + d32_43 + d23_34, sads[1]);
+                sads[2] = scale.mul_add(d32_31 + d23_22 + d32_33 + d43_42 + d33_34, sads[2]);
+                sads[3] = scale.mul_add(d32_41 + d32_23 + d33_42 + d43_52 + d43_34, sads[3]);
+                sads[4] = scale.mul_add(d32_12 + d23_03 + d33_13 + d23_43 + d34_14, sads[4]);
+                sads[5] = scale.mul_add(d32_22 + d23_13 + d23_33 + d33_43 + d34_24, sads[5]);
+                sads[6] = scale.mul_add(d32_42 + d23_33 + d33_43 + d43_53 + d34_44, sads[6]);
+                sads[7] = scale.mul_add(d32_52 + d23_43 + d33_53 + d43_63 + d34_54, sads[7]);
+                sads[8] = scale.mul_add(d32_23 + d23_14 + d33_24 + d43_34 + d34_25, sads[8]);
+                sads[9] = scale.mul_add(d32_33 + d23_24 + d33_34 + d43_44 + d34_35, sads[9]);
+                sads[10] = scale.mul_add(d32_43 + d23_34 + d33_44 + d43_54 + d34_45, sads[10]);
+                sads[11] = scale.mul_add(d32_34 + d23_25 + d33_35 + d43_45 + d34_36, sads[11]);
+            }
         }
         // Compute output based on SADs
         let inv_sigma = sigma * sad_mul;
         let mut w = D::F32Vec::splat(d, 1.0);
-        for sad in sads.iter_mut() {
+        for sad in &mut sads {
             *sad = sad
                 .mul_add(inv_sigma, D::F32Vec::splat(d, 1.0))
                 .max(D::F32Vec::splat(d, 0.0));
             w += *sad;
         }
         let inv_w = D::F32Vec::splat(d, 1.0) / w;
-        for (input_c, output_c) in input_rows.iter().zip(output_rows.iter_mut()) {
-            let mut out = D::F32Vec::load(d, &input_c[3][3 + x..]);
-            for (row_idx, col_idx, sad_idx) in [
-                (5, 3+x, 11),
-                (4, 4+x, 10),
-                (4, 3+x, 9),
-                (4, 2+x, 8),
-                (3, 5+x, 7),
-                (3, 4+x, 6),
-                (3, 2+x, 5),
-                (3, 1+x, 4),
-                (2, 4+x, 3),
-                (2, 3+x, 2),
-                (2, 2+x, 1),
-                (1, 3+x, 0),
-            ] {
-                out = D::F32Vec::load(d, &input_c[row_idx][col_idx..]).mul_add(sads[sad_idx], out);
+        for (ch, input_c) in input_channels.iter().enumerate() {
+            // SAFETY: input and output rows have sufficient length for x + D::F32Vec::LEN.
+            unsafe {
+                let mut out = D::F32Vec::load(d, input_c[3].get_unchecked(3 + x..));
+                out = D::F32Vec::load(d, input_c[5].get_unchecked(3 + x..)).mul_add(sads[11], out);
+                out = D::F32Vec::load(d, input_c[4].get_unchecked(4 + x..)).mul_add(sads[10], out);
+                out = D::F32Vec::load(d, input_c[4].get_unchecked(3 + x..)).mul_add(sads[9], out);
+                out = D::F32Vec::load(d, input_c[4].get_unchecked(2 + x..)).mul_add(sads[8], out);
+                out = D::F32Vec::load(d, input_c[3].get_unchecked(5 + x..)).mul_add(sads[7], out);
+                out = D::F32Vec::load(d, input_c[3].get_unchecked(4 + x..)).mul_add(sads[6], out);
+                out = D::F32Vec::load(d, input_c[3].get_unchecked(2 + x..)).mul_add(sads[5], out);
+                out = D::F32Vec::load(d, input_c[3].get_unchecked(1 + x..)).mul_add(sads[4], out);
+                out = D::F32Vec::load(d, input_c[2].get_unchecked(4 + x..)).mul_add(sads[3], out);
+                out = D::F32Vec::load(d, input_c[2].get_unchecked(3 + x..)).mul_add(sads[2], out);
+                out = D::F32Vec::load(d, input_c[2].get_unchecked(2 + x..)).mul_add(sads[1], out);
+                out = D::F32Vec::load(d, input_c[1].get_unchecked(3 + x..)).mul_add(sads[0], out);
+                out *= inv_w;
+                let p33 = D::F32Vec::load(d, input_c[3].get_unchecked(3 + x..));
+                let out = sigma_mask.if_then_else_f32(p33, out);
+                out.store(output_channels[ch].get_unchecked_mut(x..));
             }
-            out *= inv_w;
-            let p33 = D::F32Vec::load(d, &input_c[3][3 + x..]);
-            let out = sigma_mask.if_then_else_f32(p33, out);
-            out.store(&mut output_c[0][x..]);
         }
     }
 });

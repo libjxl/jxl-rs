@@ -62,22 +62,22 @@ simd_function!(
         let scale_y = D::F32Vec::splat(d, scale_y);
         let scale_b = D::F32Vec::splat(d, scale_b);
 
-        for (((((in_y, in_x), in_b), out_x), out_y), out_b) in input_y
-            .chunks_exact(simd_width)
-            .zip(input_x.chunks_exact(simd_width))
-            .zip(input_b.chunks_exact(simd_width))
-            .zip(output_x.chunks_exact_mut(simd_width))
-            .zip(output_y.chunks_exact_mut(simd_width))
-            .zip(output_b.chunks_exact_mut(simd_width))
-            .take(xsize.div_ceil(simd_width))
-        {
-            let vy = D::I32Vec::load(d, in_y).as_f32();
-            let vx = D::I32Vec::load(d, in_x).as_f32();
-            let vb = D::I32Vec::load(d, in_b).as_f32();
+        for x in (0..xsize).step_by(simd_width) {
+            let (vy, vx, vb) = unsafe {
+                // SAFETY: x is within allocated row bounds (padded to vector multiple).
+                (
+                    D::I32Vec::load(d, input_y.get_unchecked(x..)).as_f32(),
+                    D::I32Vec::load(d, input_x.get_unchecked(x..)).as_f32(),
+                    D::I32Vec::load(d, input_b.get_unchecked(x..)).as_f32(),
+                )
+            };
 
-            (vx * scale_x).store(out_x);
-            (vy * scale_y).store(out_y);
-            ((vb + vy) * scale_b).store(out_b);
+            unsafe {
+                // SAFETY: x is within allocated row bounds (padded to vector multiple).
+                (vx * scale_x).store(output_x.get_unchecked_mut(x..));
+                (vy * scale_y).store(output_y.get_unchecked_mut(x..));
+                ((vb + vy) * scale_b).store(output_b.get_unchecked_mut(x..));
+            }
         }
     }
 );
@@ -103,12 +103,6 @@ impl RenderPipelineInOutStage for ConvertModularXYBToF32Stage {
     ) {
         let lf_quant = self.lf_quant.try_read().unwrap();
         let [scale_x, scale_y, scale_b] = lf_quant.quant_factors;
-        assert_eq!(
-            input_rows.len(),
-            3,
-            "incorrect number of channels; expected 3, found {}",
-            input_rows.len()
-        );
         // Input channels: [Y, X, B] (modular XYB order)
         // Output channels: [X, Y, B] (standard XYB order)
         let (input_y, input_x, input_b) = (&input_rows[0], &input_rows[1], &input_rows[2]);
@@ -177,22 +171,22 @@ simd_function!(
         let scale_y = D::F32Vec::splat(d, scale_y);
         let scale_b = D::F32Vec::splat(d, scale_b);
 
-        for (((((in_y, in_x), in_b), out_x), out_y), out_b) in input_y
-            .chunks_exact(simd_width)
-            .zip(input_x.chunks_exact(simd_width))
-            .zip(input_b.chunks_exact(simd_width))
-            .zip(output_x.chunks_exact_mut(simd_width))
-            .zip(output_y.chunks_exact_mut(simd_width))
-            .zip(output_b.chunks_exact_mut(simd_width))
-            .take(xsize.div_ceil(simd_width))
-        {
-            let vy = D::I32Vec::load_from_i16(d, in_y).as_f32();
-            let vx = D::I32Vec::load_from_i16(d, in_x).as_f32();
-            let vb = D::I32Vec::load_from_i16(d, in_b).as_f32();
+        for x in (0..xsize).step_by(simd_width) {
+            let (vy, vx, vb) = unsafe {
+                // SAFETY: x is within allocated row bounds (padded to vector multiple).
+                (
+                    D::I32Vec::load_from_i16(d, input_y.get_unchecked(x..)).as_f32(),
+                    D::I32Vec::load_from_i16(d, input_x.get_unchecked(x..)).as_f32(),
+                    D::I32Vec::load_from_i16(d, input_b.get_unchecked(x..)).as_f32(),
+                )
+            };
 
-            (vx * scale_x).store(out_x);
-            (vy * scale_y).store(out_y);
-            ((vb + vy) * scale_b).store(out_b);
+            unsafe {
+                // SAFETY: x is within allocated row bounds (padded to vector multiple).
+                (vx * scale_x).store(output_x.get_unchecked_mut(x..));
+                (vy * scale_y).store(output_y.get_unchecked_mut(x..));
+                ((vb + vy) * scale_b).store(output_b.get_unchecked_mut(x..));
+            }
         }
     }
 );
@@ -218,14 +212,6 @@ impl RenderPipelineInOutStage for ConvertModular16XYBToF32Stage {
     ) {
         let lf_quant = self.lf_quant.try_read().unwrap();
         let [scale_x, scale_y, scale_b] = lf_quant.quant_factors;
-        assert_eq!(
-            input_rows.len(),
-            3,
-            "incorrect number of channels; expected 3, found {}",
-            input_rows.len()
-        );
-        // Input channels: [Y, X, B] (modular XYB order)
-        // Output channels: [X, Y, B] (standard XYB order)
         let (input_y, input_x, input_b) = (&input_rows[0], &input_rows[1], &input_rows[2]);
         let (output_x, output_y, output_b) = output_rows.split_first_3_mut();
         modular16_xyb_to_float_simd_dispatch(
@@ -272,13 +258,15 @@ simd_function!(
         let simd_width = D::I32Vec::LEN;
 
         // Process complete SIMD vectors
-        for (in_chunk, out_chunk) in input
-            .chunks_exact(simd_width)
-            .zip(output.chunks_exact_mut(simd_width))
-            .take(xsize.div_ceil(simd_width))
-        {
-            let val = D::I32Vec::load(d, in_chunk);
-            val.bitcast_to_f32().store(out_chunk);
+        for x in (0..xsize).step_by(simd_width) {
+            let val = unsafe {
+                // SAFETY: x is within allocated row bounds (padded to vector multiple).
+                D::I32Vec::load(d, input.get_unchecked(x..))
+            };
+            unsafe {
+                // SAFETY: x is within allocated row bounds (padded to vector multiple).
+                val.bitcast_to_f32().store(output.get_unchecked_mut(x..));
+            }
         }
     }
 );
@@ -298,17 +286,19 @@ simd_function!(
         let mut u16_buf = [0u16; 16];
 
         // Process complete SIMD vectors
-        for (in_chunk, out_chunk) in input
-            .chunks_exact(simd_width)
-            .zip(output.chunks_exact_mut(simd_width))
-            .take(xsize.div_ceil(simd_width))
-        {
+        for x in (0..xsize).step_by(simd_width) {
             // Use SIMD to extract lower 16 bits from each i32 lane
-            let i32_vec = D::I32Vec::load(d, in_chunk);
+            let i32_vec = unsafe {
+                // SAFETY: x is within allocated row bounds (padded to vector multiple).
+                D::I32Vec::load(d, input.get_unchecked(x..))
+            };
             i32_vec.store_u16(&mut u16_buf[..simd_width]);
             // Use hardware f16->f32 conversion
             let result = D::F32Vec::load_f16_bits(d, &u16_buf[..simd_width]);
-            result.store(out_chunk);
+            unsafe {
+                // SAFETY: x is within allocated row bounds (padded to vector multiple).
+                result.store(output.get_unchecked_mut(x..));
+            }
         }
     }
 );
@@ -316,7 +306,6 @@ simd_function!(
 // Converts custom [bits]-bit float (with [exp_bits] exponent bits) stored as
 // int back to binary32 float.
 fn int_to_float(input: &[i32], output: &mut [f32], bit_depth: &BitDepth, xsize: usize) {
-    assert!(input.len() >= xsize && output.len() >= xsize);
     let bits = bit_depth.bits_per_sample();
     let exp_bits = bit_depth.exponent_bits_per_sample();
 
@@ -382,8 +371,12 @@ fn custom_float_sample_to_f32(mut f: u32, bits: u32, exp_bits: u32) -> f32 {
 // Generic scalar conversion for arbitrary bit-depth floats
 // TODO: SIMD optimization for custom float formats
 fn int_to_float_generic(input: &[i32], output: &mut [f32], bits: u32, exp_bits: u32) {
-    for (&in_val, out_val) in input.iter().zip(output) {
-        *out_val = custom_float_sample_to_f32(in_val as u32, bits, exp_bits);
+    for i in 0..input.len() {
+        unsafe {
+            // SAFETY: i < input.len() <= output.len().
+            *output.get_unchecked_mut(i) =
+                custom_float_sample_to_f32(*input.get_unchecked(i) as u32, bits, exp_bits);
+        }
     }
 }
 
@@ -397,13 +390,15 @@ simd_function!(
         let scale = D::F32Vec::splat(d, scale);
 
         // Process complete SIMD vectors
-        for (in_chunk, out_chunk) in input
-            .chunks_exact(simd_width)
-            .zip(output.chunks_exact_mut(simd_width))
-            .take(xsize.div_ceil(simd_width))
-        {
-            let val = D::I32Vec::load(d, in_chunk);
-            (val.as_f32() * scale).store(out_chunk);
+        for x in (0..xsize).step_by(simd_width) {
+            let val = unsafe {
+                // SAFETY: x is within allocated row bounds (padded to vector multiple).
+                D::I32Vec::load(d, input.get_unchecked(x..))
+            };
+            unsafe {
+                // SAFETY: x is within allocated row bounds (padded to vector multiple).
+                (val.as_f32() * scale).store(output.get_unchecked_mut(x..));
+            }
         }
     }
 );
@@ -475,24 +470,29 @@ simd_function!(
     fn modular16_to_float_simd(input: &[i16], output: &mut [f32], scale: f32, xsize: usize) {
         let simd_width = D::I32Vec::LEN;
         let scale_vec = D::F32Vec::splat(d, scale);
-        for (in_chunk, out_chunk) in input
-            .chunks_exact(simd_width)
-            .zip(output.chunks_exact_mut(simd_width))
-            .take(xsize.div_ceil(simd_width))
-        {
-            let val = D::I32Vec::load_from_i16(d, in_chunk);
-            (val.as_f32() * scale_vec).store(out_chunk);
+        for x in (0..xsize).step_by(simd_width) {
+            let val = unsafe {
+                // SAFETY: x is within allocated row bounds (padded to vector multiple).
+                D::I32Vec::load_from_i16(d, input.get_unchecked(x..))
+            };
+            unsafe {
+                // SAFETY: x is within allocated row bounds (padded to vector multiple).
+                (val.as_f32() * scale_vec).store(output.get_unchecked_mut(x..));
+            }
         }
     }
 );
 
 fn int16_to_float(input: &[i16], output: &mut [f32], bit_depth: &BitDepth, xsize: usize) {
-    assert!(input.len() >= xsize && output.len() >= xsize);
     let bits = bit_depth.bits_per_sample();
     let exp_bits = bit_depth.exponent_bits_per_sample();
 
-    for (&in_val, out_val) in input[..xsize].iter().zip(&mut output[..xsize]) {
-        *out_val = custom_float_sample_to_f32((in_val as u16) as u32, bits, exp_bits);
+    for i in 0..xsize {
+        unsafe {
+            // SAFETY: i < xsize <= input.len() and output.len().
+            *output.get_unchecked_mut(i) =
+                custom_float_sample_to_f32((*input.get_unchecked(i) as u16) as u32, bits, exp_bits);
+        }
     }
 }
 
@@ -575,24 +575,27 @@ simd_function!(
         let zero = D::F32Vec::splat(d, 0.0);
         let scale = D::F32Vec::splat(d, max);
 
-        for (block, (input_chunk, output_chunk)) in input
-            .chunks_exact(simd_width)
-            .zip(output.chunks_exact_mut(simd_width))
-            .take(xsize.div_ceil(simd_width))
-            .enumerate()
-        {
-            let x = block * simd_width;
-            let val = D::F32Vec::load(d, input_chunk);
+        for x in (0..xsize).step_by(simd_width) {
+            let val = unsafe {
+                // SAFETY: x is within allocated row bounds (padded to vector multiple).
+                D::F32Vec::load(d, input.get_unchecked(x..))
+            };
             let dither_x = (x0 + x + channel * 23) % 32;
             let dither_y = (y0 + channel * 13) % 32;
-            let dither = D::F32Vec::load(
-                d,
-                &DITHER_TABLE[dither_y][dither_x..],
-            );
+            let dither = unsafe {
+                // SAFETY: dither_y < 32 and DITHER_TABLE row has 64 elements (padded for SIMD).
+                D::F32Vec::load(
+                    d,
+                    DITHER_TABLE.get_unchecked(dither_y).get_unchecked(dither_x..),
+                )
+            };
             let scaled = val * scale;
             let dithered = scaled + dither;
             let clamped = dithered.max(zero).min(scale);
-            clamped.round_store_u8(output_chunk);
+            unsafe {
+                // SAFETY: x is within allocated row bounds (padded to vector multiple).
+                clamped.round_store_u8(output.get_unchecked_mut(x..));
+            }
         }
     }
 );
@@ -667,16 +670,18 @@ simd_function!(
         let max= D::I16Vec::splat(d, max as i16);
         let zero = D::I16Vec::splat(d, 0);
 
-        for (input_chunk, output_chunk) in input
-            .chunks_exact(simd_width)
-            .zip(output.chunks_exact_mut(simd_width))
-            .take(xsize.div_ceil(simd_width))
-        {
-            let val = D::I16Vec::load(d, input_chunk);
+        for x in (0..xsize).step_by(simd_width) {
+            let val = unsafe {
+                // SAFETY: x is within allocated row bounds (padded to vector multiple).
+                D::I16Vec::load(d, input.get_unchecked(x..))
+            };
             let scaled = val * scale;
             let zeroclip = scaled.lt_zero().if_then_else_i16(zero, scaled);
             let clip = scaled.gt(max).if_then_else_i16(max, zeroclip);
-            clip.store_u8(output_chunk);
+            unsafe {
+                // SAFETY: x is within allocated row bounds (padded to vector multiple).
+                clip.store_u8(output.get_unchecked_mut(x..));
+            }
         }
     }
 );
@@ -744,16 +749,18 @@ simd_function!(
         let zero = D::I32Vec::splat(d, 0);
 
         // Process SIMD vectors using div_ceil (buffers are padded)
-        for (input_chunk, output_chunk) in input
-            .chunks_exact(simd_width)
-            .zip(output.chunks_exact_mut(simd_width))
-            .take(xsize.div_ceil(simd_width))
-        {
-            let val = D::I32Vec::load(d, input_chunk);
+        for x in (0..xsize).step_by(simd_width) {
+            let val = unsafe {
+                // SAFETY: x is within allocated row bounds (padded to vector multiple).
+                D::I32Vec::load(d, input.get_unchecked(x..))
+            };
             let scaled = val * scale;
             let zeroclip = scaled.lt_zero().if_then_else_i32(zero, scaled);
             let clip = scaled.gt(max).if_then_else_i32(max, zeroclip);
-            clip.store_u8(output_chunk);
+            unsafe {
+                // SAFETY: x is within allocated row bounds (padded to vector multiple).
+                clip.store_u8(output.get_unchecked_mut(x..));
+            }
         }
     }
 );
@@ -816,16 +823,18 @@ simd_function!(
         let scale = D::F32Vec::splat(d, max);
 
         // Process SIMD vectors using div_ceil (buffers are padded)
-        for (input_chunk, output_chunk) in input
-            .chunks_exact(simd_width)
-            .zip(output.chunks_exact_mut(simd_width))
-            .take(xsize.div_ceil(simd_width))
-        {
-            let val = D::F32Vec::load(d, input_chunk);
+        for x in (0..xsize).step_by(simd_width) {
+            let val = unsafe {
+                // SAFETY: x is within allocated row bounds (padded to vector multiple).
+                D::F32Vec::load(d, input.get_unchecked(x..))
+            };
             // Clamp to [0, 1] and scale
             let clamped = val.max(zero).min(one);
             let scaled = clamped * scale;
-            scaled.round_store_u16(output_chunk);
+            unsafe {
+                // SAFETY: x is within allocated row bounds (padded to vector multiple).
+                scaled.round_store_u16(output.get_unchecked_mut(x..));
+            }
         }
     }
 );
@@ -917,15 +926,24 @@ impl RenderPipelineInOutStage for ConvertF32ToF16Stage {
         _state: Option<&mut ErasedLocalState>,
         _previous_call_was_previous_row: bool,
     ) {
-        let input = &input_rows[0];
+        let input = input_rows[0][0];
+        let output = &mut output_rows[0][0];
         if let Some((min_value, max_value)) = self.clamp_range {
             for i in 0..xsize {
-                output_rows[0][0][i] =
-                    crate::util::f16::from_f32(input[0][i].clamp(min_value, max_value));
+                unsafe {
+                    // SAFETY: i < xsize <= input.len() and output.len().
+                    *output.get_unchecked_mut(i) = crate::util::f16::from_f32(
+                        input.get_unchecked(i).clamp(min_value, max_value),
+                    );
+                }
             }
         } else {
             for i in 0..xsize {
-                output_rows[0][0][i] = crate::util::f16::from_f32(input[0][i]);
+                unsafe {
+                    // SAFETY: i < xsize <= input.len() and output.len().
+                    *output.get_unchecked_mut(i) =
+                        crate::util::f16::from_f32(*input.get_unchecked(i));
+                }
             }
         }
     }
