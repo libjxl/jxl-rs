@@ -3,13 +3,12 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
+use super::JxlColorEncoding;
 use crate::bit_reader::BitReader;
 use crate::error::{Error, Result};
 use crate::headers::color_encoding::{ColorEncoding, ColorSpace};
 use crate::headers::encodings::{Empty, UnconditionalCoder};
 use crate::icc::IncrementalIccReader;
-
-use super::JxlColorEncoding;
 
 /// The alternate color encoding carried by a gain-map bundle.
 #[derive(Clone, Debug, PartialEq)]
