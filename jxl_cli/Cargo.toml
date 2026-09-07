@@ -1,14 +1,14 @@
 [package]
 name = "jxl_cli"
-version = "0.7.0"
+version = "0.7.1"
 edition = "2024"
 license = "BSD-3-Clause"
 default-run = "jxl_cli"
 rust-version.workspace = true
 
 [dependencies]
-jxl = { path = "../jxl", version = "=0.7.0", default-features = false }
-jxl_cms = { path = "../jxl_cms", version = "=0.7.0" }
+jxl = { path = "../jxl", version = "=0.7.1", default-features = false }
+jxl_cms = { path = "../jxl_cms", version = "=0.7.1" }
 clap = { version = "4.5.18", features = ["derive"] }
 tracing-subscriber = { version = "0.3.18", features = [
   "env-filter",
@@ -22,7 +22,7 @@ mimalloc = "0.1.52"
 rayon = "1.12.0"
 
 [dev-dependencies]
-jxl_macros = { path = "../jxl_macros", features = ["test"], version = "=0.7.0" }
+jxl_macros = { path = "../jxl_macros", features = ["test"], version = "=0.7.1" }
 criterion = { version = "0.7.0", features = ["html_reports"] }
 
 [build-dependencies]
