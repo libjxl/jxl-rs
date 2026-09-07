@@ -45,25 +45,29 @@ impl RenderPipelineInPlaceStage for SpotColorStage {
         _state: Option<&mut ErasedLocalState>,
         _previous_call_was_previous_row: bool,
     ) {
-        let [row_r, row_g, row_b, row_s] = row else {
-            panic!(
-                "incorrect number of channels; expected 4, found {}",
-                row.len()
-            );
+        let (row_r, row_g, row_b, row_s) = unsafe {
+            // SAFETY: row contains at least 4 channels.
+            let ptr = row.as_mut_ptr();
+            (
+                &mut **ptr,
+                &mut **ptr.add(1),
+                &mut **ptr.add(2),
+                &mut **ptr.add(3),
+            )
         };
 
         let scale = self.spot_color[3];
-        assert!(
-            xsize <= row_r.len()
-                && xsize <= row_g.len()
-                && xsize <= row_b.len()
-                && xsize <= row_s.len()
-        );
         for idx in 0..xsize {
-            let mix = scale * row_s[idx];
-            row_r[idx] = mix * self.spot_color[0] + (1.0 - mix) * row_r[idx];
-            row_g[idx] = mix * self.spot_color[1] + (1.0 - mix) * row_g[idx];
-            row_b[idx] = mix * self.spot_color[2] + (1.0 - mix) * row_b[idx];
+            unsafe {
+                // SAFETY: idx < xsize <= row buffer length.
+                let mix = scale * *row_s.get_unchecked(idx);
+                let r = *row_r.get_unchecked(idx);
+                let g = *row_g.get_unchecked(idx);
+                let b = *row_b.get_unchecked(idx);
+                *row_r.get_unchecked_mut(idx) = mix * self.spot_color[0] + (1.0 - mix) * r;
+                *row_g.get_unchecked_mut(idx) = mix * self.spot_color[1] + (1.0 - mix) * g;
+                *row_b.get_unchecked_mut(idx) = mix * self.spot_color[2] + (1.0 - mix) * b;
+            }
         }
     }
 }

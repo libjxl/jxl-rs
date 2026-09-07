@@ -49,18 +49,16 @@ simd_function!(
         let cb_to_b = D::F32Vec::splat(d, 1.772);
 
         // SIMD loop processing SIMD_WIDTH pixels at once
-        let iter_cb = row_cb.chunks_exact_mut(D::F32Vec::LEN);
-        let iter_y = row_y.chunks_exact_mut(D::F32Vec::LEN);
-        let iter_cr = row_cr.chunks_exact_mut(D::F32Vec::LEN);
-        for ((cb_chunk, y_chunk), cr_chunk) in iter_cb
-            .zip(iter_y)
-            .zip(iter_cr)
-            .take(xsize.div_ceil(D::F32Vec::LEN))
-        {
+        for x in (0..xsize).step_by(D::F32Vec::LEN) {
             // Load Y, Cb, Cr vectors
-            let y_vec = D::F32Vec::load(d, y_chunk) + c128;
-            let cb_vec = D::F32Vec::load(d, cb_chunk);
-            let cr_vec = D::F32Vec::load(d, cr_chunk);
+            let (cb_vec, y_vec, cr_vec) = unsafe {
+                // SAFETY: x is within allocated row bounds (padded to vector multiple).
+                (
+                    D::F32Vec::load(d, row_cb.get_unchecked(x..)),
+                    D::F32Vec::load(d, row_y.get_unchecked(x..)) + c128,
+                    D::F32Vec::load(d, row_cr.get_unchecked(x..)),
+                )
+            };
 
             // Compute RGB using FMA (fused multiply-add)
             // R = Y + 1.402 * Cr
@@ -73,9 +71,12 @@ simd_function!(
             let b_vec = cb_vec.mul_add(cb_to_b, y_vec);
 
             // Store back to channels (R→Cb, G→Y, B→Cr to match layout)
-            r_vec.store(cb_chunk);
-            g_vec.store(y_chunk);
-            b_vec.store(cr_chunk);
+            unsafe {
+                // SAFETY: x is within allocated row bounds (padded to vector multiple).
+                r_vec.store(row_cb.get_unchecked_mut(x..));
+                g_vec.store(row_y.get_unchecked_mut(x..));
+                b_vec.store(row_cr.get_unchecked_mut(x..));
+            }
         }
     }
 );
@@ -96,14 +97,11 @@ impl RenderPipelineInPlaceStage for YcbcrToRgbStage {
         _previous_call_was_previous_row: bool,
     ) {
         // pixels are stored in `Cb Y Cr` order to mimic XYB colorspace
-        let [row_cb, row_y, row_cr] = row else {
-            panic!(
-                "incorrect number of channels; expected 3, found {}",
-                row.len()
-            );
+        let (row_cb, row_y, row_cr) = unsafe {
+            // SAFETY: row contains at least 3 channels.
+            let ptr = row.as_mut_ptr();
+            (&mut **ptr, &mut **ptr.add(1), &mut **ptr.add(2))
         };
-
-        assert!(xsize <= row_cb.len() && xsize <= row_y.len() && xsize <= row_cr.len());
 
         // Use SIMD for YCbCr to RGB conversion
         // Full-range BT.601 as defined by JFIF Clause 7:

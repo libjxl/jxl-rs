@@ -125,24 +125,21 @@ impl F32SimdVec for F32VecNeon {
 
     #[inline(always)]
     fn load(d: Self::Descriptor, mem: &[f32]) -> Self {
-        assert!(mem.len() >= Self::LEN);
-        // SAFETY: we just checked that `mem` has enough space. Moreover, we know neon is available
+        // SAFETY: caller must ensure `mem` has at least `Self::LEN` elements. Moreover, we know neon is available
         // from the safety invariant on `d`. vld1q_f32 supports unaligned loads.
         Self(unsafe { vld1q_f32(mem.as_ptr()) }, d)
     }
 
     #[inline(always)]
     fn store(&self, mem: &mut [f32]) {
-        assert!(mem.len() >= Self::LEN);
-        // SAFETY: we just checked that `mem` has enough space. Moreover, we know neon is available
+        // SAFETY: caller must ensure `mem` has at least `Self::LEN` elements. Moreover, we know neon is available
         // from the safety invariant on `d`. vst1q_f32 supports unaligned stores.
         unsafe { vst1q_f32(mem.as_mut_ptr(), self.0) }
     }
 
     #[inline(always)]
     fn store_interleaved_2(a: Self, b: Self, dest: &mut [f32]) {
-        assert!(dest.len() >= 2 * Self::LEN);
-        // SAFETY: we just checked that `dest` has enough space, and neon is available
+        // SAFETY: caller must ensure that `dest` has at least 2 * Self::LEN elements, and neon is available
         // from the safety invariant on the descriptor stored in `a`. vst2q_f32 supports unaligned stores.
         unsafe {
             let dest_ptr = dest.as_mut_ptr();
@@ -152,8 +149,7 @@ impl F32SimdVec for F32VecNeon {
 
     #[inline(always)]
     fn store_interleaved_3(a: Self, b: Self, c: Self, dest: &mut [f32]) {
-        assert!(dest.len() >= 3 * Self::LEN);
-        // SAFETY: `dest` has enough space and vst3q_f32 supports unaligned stores.
+        // SAFETY: caller must ensure `dest` has at least 3 * Self::LEN elements and vst3q_f32 supports unaligned stores.
         unsafe {
             let dest_ptr = dest.as_mut_ptr();
             vst3q_f32(dest_ptr, float32x4x3_t(a.0, b.0, c.0));
@@ -162,8 +158,7 @@ impl F32SimdVec for F32VecNeon {
 
     #[inline(always)]
     fn store_interleaved_4(a: Self, b: Self, c: Self, d: Self, dest: &mut [f32]) {
-        assert!(dest.len() >= 4 * Self::LEN);
-        // SAFETY: we just checked that `dest` has enough space, and neon is available
+        // SAFETY: caller must ensure that `dest` has at least 4 * Self::LEN elements, and neon is available
         // from the safety invariant on the descriptor stored in `a`. vst4q_f32 supports unaligned stores.
         unsafe {
             let dest_ptr = dest.as_mut_ptr();
@@ -196,7 +191,6 @@ impl F32SimdVec for F32VecNeon {
             h: float32x4_t,
             dest: &mut [f32],
         ) {
-            assert!(dest.len() >= 8 * F32VecNeon::LEN);
             // NEON doesn't have vst8, so we use manual interleaving
             // For 4-wide vectors, output is 32 elements: [a0,b0,c0,d0,e0,f0,g0,h0, a1,...]
 
@@ -254,7 +248,7 @@ impl F32SimdVec for F32VecNeon {
                 vreinterpretq_f64_f32(cgdh_3),
             ));
 
-            // SAFETY: we just checked that dest has enough space.
+            // SAFETY: caller must ensure dest has at least 8 * F32VecNeon::LEN elements.
             unsafe {
                 let ptr = dest.as_mut_ptr();
                 vst1q_f32(ptr, out0);
@@ -274,8 +268,7 @@ impl F32SimdVec for F32VecNeon {
 
     #[inline(always)]
     fn load_deinterleaved_2(d: Self::Descriptor, src: &[f32]) -> (Self, Self) {
-        assert!(src.len() >= 2 * Self::LEN);
-        // SAFETY: we just checked that `src` has enough space, and neon is available
+        // SAFETY: caller must ensure `src` has at least 2 * Self::LEN elements, and neon is available
         // from the safety invariant on `d`. vld2q_f32 supports unaligned loads.
         let float32x4x2_t(a, b) = unsafe { vld2q_f32(src.as_ptr()) };
         (Self(a, d), Self(b, d))
@@ -283,8 +276,7 @@ impl F32SimdVec for F32VecNeon {
 
     #[inline(always)]
     fn load_deinterleaved_3(d: Self::Descriptor, src: &[f32]) -> (Self, Self, Self) {
-        assert!(src.len() >= 3 * Self::LEN);
-        // SAFETY: we just checked that `src` has enough space, and neon is available
+        // SAFETY: caller must ensure `src` has at least 3 * Self::LEN elements, and neon is available
         // from the safety invariant on `d`. vld3q_f32 supports unaligned loads.
         let float32x4x3_t(a, b, c) = unsafe { vld3q_f32(src.as_ptr()) };
         (Self(a, d), Self(b, d), Self(c, d))
@@ -292,8 +284,7 @@ impl F32SimdVec for F32VecNeon {
 
     #[inline(always)]
     fn load_deinterleaved_4(d: Self::Descriptor, src: &[f32]) -> (Self, Self, Self, Self) {
-        assert!(src.len() >= 4 * Self::LEN);
-        // SAFETY: we just checked that `src` has enough space, and neon is available
+        // SAFETY: caller must ensure `src` has at least 4 * Self::LEN elements, and neon is available
         // from the safety invariant on `d`. vld4q_f32 supports unaligned loads.
         let float32x4x4_t(a, b, c, e) = unsafe { vld4q_f32(src.as_ptr()) };
         (Self(a, d), Self(b, d), Self(c, d), Self(e, d))
@@ -413,7 +404,6 @@ impl F32SimdVec for F32VecNeon {
         }
 
         fn round_store_u8(this: F32VecNeon, dest: &mut [u8]) {
-            assert!(dest.len() >= F32VecNeon::LEN);
             // Round to nearest integer
             let rounded = vrndnq_f32(this.0);
             // Convert to i32, then to u16, then to u8
@@ -421,32 +411,30 @@ impl F32SimdVec for F32VecNeon {
             let u16s = vqmovun_s32(i32s);
             let u8s = vqmovn_u16(vcombine_u16(u16s, u16s));
             // Store lower 4 bytes
-            // SAFETY: we checked dest has enough space. vst1_lane_u32 supports unaligned stores.
+            // SAFETY: caller must ensure dest has at least F32VecNeon::LEN elements. vst1_lane_u32 supports unaligned stores.
             unsafe {
                 vst1_lane_u32::<0>(dest.as_mut_ptr().cast(), vreinterpret_u32_u8(u8s));
             }
         }
 
         fn round_store_u16(this: F32VecNeon, dest: &mut [u16]) {
-            assert!(dest.len() >= F32VecNeon::LEN);
             // Round to nearest integer
             let rounded = vrndnq_f32(this.0);
             // Convert to i32, then to u16
             let i32s = vcvtq_s32_f32(rounded);
             let u16s = vqmovun_s32(i32s);
             // Store 4 u16s (8 bytes)
-            // SAFETY: we checked dest has enough space. vst1_u16 supports unaligned stores.
+            // SAFETY: caller must ensure dest has at least F32VecNeon::LEN elements. vst1_u16 supports unaligned stores.
             unsafe {
                 vst1_u16(dest.as_mut_ptr(), u16s);
             }
         }
 
         fn store_f16_bits(this: F32VecNeon, dest: &mut [u16]) {
-            assert!(dest.len() >= F32VecNeon::LEN);
             // Use inline asm because Rust stdarch incorrectly requires fp16 target feature
             // for vcvt_f16_f32 (fixed in https://github.com/rust-lang/stdarch/pull/1978)
             let f16_bits: uint16x4_t;
-            // SAFETY: NEON is available (guaranteed by descriptor), dest has enough space,
+            // SAFETY: NEON is available (guaranteed by descriptor), caller must ensure dest has at least F32VecNeon::LEN elements,
             // vst1_u16 supports unaligned stores.
             unsafe {
                 std::arch::asm!(
@@ -462,11 +450,10 @@ impl F32SimdVec for F32VecNeon {
 
     #[inline(always)]
     fn load_f16_bits(d: Self::Descriptor, mem: &[u16]) -> Self {
-        assert!(mem.len() >= Self::LEN);
         // Use inline asm because Rust stdarch incorrectly requires fp16 target feature
         // for vcvt_f32_f16 (fixed in https://github.com/rust-lang/stdarch/pull/1978)
         let result: float32x4_t;
-        // SAFETY: NEON is available (guaranteed by descriptor), mem has enough space.
+        // SAFETY: NEON is available (guaranteed by descriptor), caller must ensure mem has at least Self::LEN elements.
         // vld1_u16 supports unaligned loads.
         unsafe {
             let f16_bits = vld1_u16(mem.as_ptr());

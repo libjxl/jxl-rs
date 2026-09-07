@@ -53,33 +53,46 @@ impl F32SimdVec for f32 {
 
     #[inline(always)]
     fn load(_d: Self::Descriptor, mem: &[f32]) -> Self {
-        mem[0]
+        // SAFETY: caller must ensure `mem` has at least `Self::LEN` elements.
+        unsafe { *mem.get_unchecked(0) }
     }
 
     #[inline(always)]
     fn store(&self, mem: &mut [f32]) {
-        mem[0] = *self;
+        // SAFETY: caller must ensure `mem` has at least `Self::LEN` elements.
+        unsafe {
+            *mem.get_unchecked_mut(0) = *self;
+        }
     }
 
     #[inline(always)]
     fn store_interleaved_2(a: Self, b: Self, dest: &mut [f32]) {
-        dest[0] = a;
-        dest[1] = b;
+        // SAFETY: caller must ensure `dest` has at least 2 * Self::LEN elements.
+        unsafe {
+            *dest.get_unchecked_mut(0) = a;
+            *dest.get_unchecked_mut(1) = b;
+        }
     }
 
     #[inline(always)]
     fn store_interleaved_3(a: Self, b: Self, c: Self, dest: &mut [f32]) {
-        dest[0] = a;
-        dest[1] = b;
-        dest[2] = c;
+        // SAFETY: caller must ensure `dest` has at least 3 * Self::LEN elements.
+        unsafe {
+            *dest.get_unchecked_mut(0) = a;
+            *dest.get_unchecked_mut(1) = b;
+            *dest.get_unchecked_mut(2) = c;
+        }
     }
 
     #[inline(always)]
     fn store_interleaved_4(a: Self, b: Self, c: Self, d: Self, dest: &mut [f32]) {
-        dest[0] = a;
-        dest[1] = b;
-        dest[2] = c;
-        dest[3] = d;
+        // SAFETY: caller must ensure `dest` has at least 4 * Self::LEN elements.
+        unsafe {
+            *dest.get_unchecked_mut(0) = a;
+            *dest.get_unchecked_mut(1) = b;
+            *dest.get_unchecked_mut(2) = c;
+            *dest.get_unchecked_mut(3) = d;
+        }
     }
 
     #[inline(always)]
@@ -94,29 +107,48 @@ impl F32SimdVec for f32 {
         h: Self,
         dest: &mut [f32],
     ) {
-        dest[0] = a;
-        dest[1] = b;
-        dest[2] = c;
-        dest[3] = d;
-        dest[4] = e;
-        dest[5] = f;
-        dest[6] = g;
-        dest[7] = h;
+        // SAFETY: caller must ensure `dest` has at least 8 * Self::LEN elements.
+        unsafe {
+            *dest.get_unchecked_mut(0) = a;
+            *dest.get_unchecked_mut(1) = b;
+            *dest.get_unchecked_mut(2) = c;
+            *dest.get_unchecked_mut(3) = d;
+            *dest.get_unchecked_mut(4) = e;
+            *dest.get_unchecked_mut(5) = f;
+            *dest.get_unchecked_mut(6) = g;
+            *dest.get_unchecked_mut(7) = h;
+        }
     }
 
     #[inline(always)]
     fn load_deinterleaved_2(_d: Self::Descriptor, src: &[f32]) -> (Self, Self) {
-        (src[0], src[1])
+        // SAFETY: caller must ensure `src` has at least 2 * Self::LEN elements.
+        unsafe { (*src.get_unchecked(0), *src.get_unchecked(1)) }
     }
 
     #[inline(always)]
     fn load_deinterleaved_3(_d: Self::Descriptor, src: &[f32]) -> (Self, Self, Self) {
-        (src[0], src[1], src[2])
+        // SAFETY: caller must ensure `src` has at least 3 * Self::LEN elements.
+        unsafe {
+            (
+                *src.get_unchecked(0),
+                *src.get_unchecked(1),
+                *src.get_unchecked(2),
+            )
+        }
     }
 
     #[inline(always)]
     fn load_deinterleaved_4(_d: Self::Descriptor, src: &[f32]) -> (Self, Self, Self, Self) {
-        (src[0], src[1], src[2], src[3])
+        // SAFETY: caller must ensure `src` has at least 4 * Self::LEN elements.
+        unsafe {
+            (
+                *src.get_unchecked(0),
+                *src.get_unchecked(1),
+                *src.get_unchecked(2),
+                *src.get_unchecked(3),
+            )
+        }
     }
 
     #[inline(always)]
@@ -202,22 +234,32 @@ impl F32SimdVec for f32 {
 
     #[inline(always)]
     fn round_store_u8(self, dest: &mut [u8]) {
-        dest[0] = self.round() as u8;
+        // SAFETY: caller must ensure `dest` has at least `Self::LEN` elements.
+        unsafe {
+            *dest.get_unchecked_mut(0) = self.round() as u8;
+        }
     }
 
     #[inline(always)]
     fn round_store_u16(self, dest: &mut [u16]) {
-        dest[0] = self.round() as u16;
+        // SAFETY: caller must ensure `dest` has at least `Self::LEN` elements.
+        unsafe {
+            *dest.get_unchecked_mut(0) = self.round() as u16;
+        }
     }
 
     #[inline(always)]
     fn load_f16_bits(_d: Self::Descriptor, mem: &[u16]) -> Self {
-        f16::from_bits(mem[0]).to_f32()
+        // SAFETY: caller must ensure `mem` has at least `Self::LEN` elements.
+        f16::from_bits(unsafe { *mem.get_unchecked(0) }).to_f32()
     }
 
     #[inline(always)]
     fn store_f16_bits(self, dest: &mut [u16]) {
-        dest[0] = f16::from_f32(self).to_bits();
+        // SAFETY: caller must ensure `dest` has at least `Self::LEN` elements.
+        unsafe {
+            *dest.get_unchecked_mut(0) = f16::from_f32(self).to_bits();
+        }
     }
 
     impl_f32_array_interface!();

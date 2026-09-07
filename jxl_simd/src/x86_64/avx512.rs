@@ -122,16 +122,14 @@ impl F32SimdVec for F32VecAvx512 {
 
     #[inline(always)]
     fn load(d: Self::Descriptor, mem: &[f32]) -> Self {
-        assert!(mem.len() >= Self::LEN);
-        // SAFETY: we just checked that `mem` has enough space. Moreover, we know avx512f is available
+        // SAFETY: caller must ensure `mem` has at least `Self::LEN` elements. Moreover, we know avx512f is available
         // from the safety invariant on `d`.
         Self(unsafe { _mm512_loadu_ps(mem.as_ptr()) }, d)
     }
 
     #[inline(always)]
     fn store(&self, mem: &mut [f32]) {
-        assert!(mem.len() >= Self::LEN);
-        // SAFETY: we just checked that `mem` has enough space. Moreover, we know avx512f is available
+        // SAFETY: caller must ensure `mem` has at least `Self::LEN` elements. Moreover, we know avx512f is available
         // from the safety invariant on `self.1`.
         unsafe { _mm512_storeu_ps(mem.as_mut_ptr(), self.0) }
     }
@@ -141,7 +139,6 @@ impl F32SimdVec for F32VecAvx512 {
         #[target_feature(enable = "avx512f")]
         #[inline]
         fn store_interleaved_2_impl(a: __m512, b: __m512, dest: &mut [f32]) {
-            assert!(dest.len() >= 2 * F32VecAvx512::LEN);
             // a = [a0..a15], b = [b0..b15]
             // Output: [a0, b0, a1, b1, ..., a15, b15]
             // unpacklo within each 128-bit lane: lane0=[a0,b0,a1,b1], lane1=[a4,b4,a5,b5], etc.
@@ -159,7 +156,7 @@ impl F32SimdVec for F32VecAvx512 {
             let out0 = _mm512_permutex2var_ps(lo, idx_lo, hi);
             let out1 = _mm512_permutex2var_ps(lo, idx_hi, hi);
 
-            // SAFETY: `dest` has enough space and writing to `f32` through `*mut f32` is valid. _mm512_storeu_ps supports unaligned stores.
+            // SAFETY: caller must ensure `dest` has at least 2 * F32VecAvx512::LEN elements and writing to `f32` through `*mut f32` is valid. _mm512_storeu_ps supports unaligned stores.
             unsafe {
                 let dest_ptr = dest.as_mut_ptr();
                 _mm512_storeu_ps(dest_ptr, out0);
@@ -176,8 +173,6 @@ impl F32SimdVec for F32VecAvx512 {
         #[target_feature(enable = "avx512f")]
         #[inline]
         fn store_interleaved_3_impl(a: __m512, b: __m512, c: __m512, dest: &mut [f32]) {
-            assert!(dest.len() >= 3 * F32VecAvx512::LEN);
-
             let idx_ab0 = _mm512_setr_epi32(0, 16, 0, 1, 17, 0, 2, 18, 0, 3, 19, 0, 4, 20, 0, 5);
             let idx_c0 = _mm512_setr_epi32(0, 0, 0, 0, 0, 1, 0, 0, 2, 0, 0, 3, 0, 0, 4, 0);
 
@@ -197,7 +192,7 @@ impl F32SimdVec for F32VecAvx512 {
             let out2 = _mm512_permutex2var_ps(a, idx_ab2, b);
             let out2 = _mm512_mask_permutexvar_ps(out2, 0b1001001001001001, idx_c2, c);
 
-            // SAFETY: `dest` has enough space and writing to `f32` through `*mut f32` is valid. _mm512_storeu_ps supports unaligned stores.
+            // SAFETY: caller must ensure `dest` has at least 3 * F32VecAvx512::LEN elements and writing to `f32` through `*mut f32` is valid. _mm512_storeu_ps supports unaligned stores.
             unsafe {
                 let dest_ptr = dest.as_mut_ptr();
                 _mm512_storeu_ps(dest_ptr, out0);
@@ -215,7 +210,6 @@ impl F32SimdVec for F32VecAvx512 {
         #[target_feature(enable = "avx512f")]
         #[inline]
         fn store_interleaved_4_impl(a: __m512, b: __m512, c: __m512, d: __m512, dest: &mut [f32]) {
-            assert!(dest.len() >= 4 * F32VecAvx512::LEN);
             // a = [a0..a15], b = [b0..b15], c = [c0..c15], d = [d0..d15]
             // Output: [a0,b0,c0,d0, a1,b1,c1,d1, ..., a15,b15,c15,d15]
 
@@ -284,7 +278,7 @@ impl F32SimdVec for F32VecAvx512 {
             let out1 = _mm512_permutex2var_ps(pair01_13, idx_0, pair23_13);
             let out3 = _mm512_permutex2var_ps(pair01_13, idx_1, pair23_13);
 
-            // SAFETY: `dest` has enough space and writing to `f32` through `*mut f32` is valid. _mm512_storeu_ps supports unaligned stores.
+            // SAFETY: caller must ensure `dest` has at least 4 * F32VecAvx512::LEN elements and writing to `f32` through `*mut f32` is valid. _mm512_storeu_ps supports unaligned stores.
             unsafe {
                 let dest_ptr = dest.as_mut_ptr();
                 _mm512_storeu_ps(dest_ptr, out0);
@@ -421,7 +415,7 @@ impl F32SimdVec for F32VecAvx512 {
             let out6 = _mm512_permutex2var_ps(full_0_13, idx_hi, full_1_13);
             let out7 = _mm512_permutex2var_ps(full_2_13, idx_hi, full_3_13);
 
-            // SAFETY: we just checked that dest has enough space. _mm512_storeu_ps supports unaligned stores.
+            // SAFETY: caller must ensure dest has at least 8 * F32VecAvx512::LEN elements. _mm512_storeu_ps supports unaligned stores.
             unsafe {
                 let ptr = dest.as_mut_ptr();
                 _mm512_storeu_ps(ptr, out0);
@@ -444,10 +438,9 @@ impl F32SimdVec for F32VecAvx512 {
         #[target_feature(enable = "avx512f")]
         #[inline]
         fn load_deinterleaved_2_impl(src: &[f32]) -> (__m512, __m512) {
-            assert!(src.len() >= 2 * F32VecAvx512::LEN);
             // Input: [a0,b0,a1,b1,...,a15,b15]
             // Output: a = [a0..a15], b = [b0..b15]
-            // SAFETY: we just checked that src has enough space. _mm512_loadu_ps supports unaligned loads.
+            // SAFETY: caller must ensure src has at least 2 * F32VecAvx512::LEN elements. _mm512_loadu_ps supports unaligned loads.
             let (in0, in1) = unsafe {
                 (
                     _mm512_loadu_ps(src.as_ptr()),
@@ -477,14 +470,13 @@ impl F32SimdVec for F32VecAvx512 {
         #[target_feature(enable = "avx512f")]
         #[inline]
         fn load_deinterleaved_3_impl(src: &[f32]) -> (__m512, __m512, __m512) {
-            assert!(src.len() >= 3 * F32VecAvx512::LEN);
             // Input layout (48 floats in 3x16-float vectors):
             // in0: [a0,b0,c0,a1,b1,c1,a2,b2,c2,a3,b3,c3,a4,b4,c4,a5]
             // in1: [b5,c5,a6,b6,c6,a7,b7,c7,a8,b8,c8,a9,b9,c9,a10,b10]
             // in2: [c10,a11,b11,c11,a12,b12,c12,a13,b13,c13,a14,b14,c14,a15,b15,c15]
             // Output: a = [a0..a15], b = [b0..b15], c = [c0..c15]
 
-            // SAFETY: we just checked that src has enough space. _mm512_loadu_ps supports unaligned loads.
+            // SAFETY: caller must ensure src has at least 3 * F32VecAvx512::LEN elements. _mm512_loadu_ps supports unaligned loads.
             let (in0, in1, in2) = unsafe {
                 (
                     _mm512_loadu_ps(src.as_ptr()),
@@ -534,10 +526,9 @@ impl F32SimdVec for F32VecAvx512 {
         #[target_feature(enable = "avx512f")]
         #[inline]
         fn load_deinterleaved_4_impl(src: &[f32]) -> (__m512, __m512, __m512, __m512) {
-            assert!(src.len() >= 4 * F32VecAvx512::LEN);
             // Input: [a0,b0,c0,d0,a1,b1,c1,d1,...] (64 floats)
             // Output: a = [a0..a15], b = [b0..b15], c = [c0..c15], d = [d0..d15]
-            // SAFETY: we just checked that src has enough space. _mm512_loadu_ps supports unaligned loads.
+            // SAFETY: caller must ensure src has at least 4 * F32VecAvx512::LEN elements. _mm512_loadu_ps supports unaligned loads.
             let (in0, in1, in2, in3) = unsafe {
                 (
                     _mm512_loadu_ps(src.as_ptr()),
@@ -683,7 +674,6 @@ impl F32SimdVec for F32VecAvx512 {
         #[target_feature(enable = "avx512f", enable = "avx512bw")]
         #[inline]
         fn round_store_u8_impl(v: __m512, dest: &mut [u8]) {
-            assert!(dest.len() >= F32VecAvx512::LEN);
             // Round to nearest integer
             let rounded = _mm512_roundscale_ps::<{ _MM_FROUND_TO_NEAREST_INT }>(v);
             // Convert to i32
@@ -691,7 +681,7 @@ impl F32SimdVec for F32VecAvx512 {
             // Use pmovusdb: saturating conversion from 32-bit to 8-bit unsigned
             let u8s = _mm512_cvtusepi32_epi8(i32s);
             // Store 16 bytes
-            // SAFETY: we checked dest has enough space
+            // SAFETY: caller must ensure dest has at least F32VecAvx512::LEN elements
             unsafe {
                 _mm_storeu_si128(dest.as_mut_ptr().cast(), u8s);
             }
@@ -705,7 +695,6 @@ impl F32SimdVec for F32VecAvx512 {
         #[target_feature(enable = "avx512f", enable = "avx512bw")]
         #[inline]
         fn round_store_u16_impl(v: __m512, dest: &mut [u16]) {
-            assert!(dest.len() >= F32VecAvx512::LEN);
             // Round to nearest integer
             let rounded = _mm512_roundscale_ps::<{ _MM_FROUND_TO_NEAREST_INT }>(v);
             // Convert to i32
@@ -713,7 +702,7 @@ impl F32SimdVec for F32VecAvx512 {
             // Use pmovusdw: saturating conversion from 32-bit to 16-bit unsigned
             let u16s = _mm512_cvtusepi32_epi16(i32s);
             // Store 16 u16s (32 bytes)
-            // SAFETY: we checked dest has enough space
+            // SAFETY: caller must ensure dest has at least F32VecAvx512::LEN elements
             unsafe {
                 _mm256_storeu_si256(dest.as_mut_ptr().cast(), u16s);
             }
@@ -730,8 +719,7 @@ impl F32SimdVec for F32VecAvx512 {
         #[target_feature(enable = "avx512f")]
         #[inline]
         fn load_f16_impl(d: Avx512Descriptor, mem: &[u16]) -> F32VecAvx512 {
-            assert!(mem.len() >= F32VecAvx512::LEN);
-            // SAFETY: mem.len() >= 16 is checked above.
+            // SAFETY: caller must ensure mem has at least F32VecAvx512::LEN elements.
             let bits = unsafe { _mm256_loadu_si256(mem.as_ptr().cast()) };
             F32VecAvx512(_mm512_cvtph_ps(bits), d)
         }
@@ -745,9 +733,8 @@ impl F32SimdVec for F32VecAvx512 {
         #[target_feature(enable = "avx512f")]
         #[inline]
         fn store_f16_bits_impl(v: __m512, dest: &mut [u16]) {
-            assert!(dest.len() >= F32VecAvx512::LEN);
             let bits = _mm512_cvtps_ph::<{ _MM_FROUND_TO_NEAREST_INT }>(v);
-            // SAFETY: dest.len() >= 16 is checked above.
+            // SAFETY: caller must ensure dest has at least F32VecAvx512::LEN elements.
             unsafe { _mm256_storeu_si256(dest.as_mut_ptr().cast(), bits) };
         }
         // SAFETY: avx512f is available from the safety invariant on the descriptor
