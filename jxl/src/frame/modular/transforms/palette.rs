@@ -33,7 +33,7 @@ struct ImplicitPalette {
 }
 
 impl ImplicitPalette {
-    fn new(bit_depth: usize) -> Self {
+    fn new(bit_depth: usize) -> Box<Self> {
         const DELTA_PALETTE: [[i32; 3]; 72] = [
             [0, 0, 0],
             [4, 4, 4],
@@ -145,11 +145,11 @@ impl ImplicitPalette {
             }
         }
 
-        ImplicitPalette {
+        Box::new(ImplicitPalette {
             deltas,
             small_cube,
             large_cube,
-        }
+        })
     }
 }
 
@@ -167,7 +167,8 @@ impl<'a> Palette<'a> {
         buf: &'a ModularChannel,
         storage: ModularStorage,
     ) -> Self {
-        static IMPLICIT_PALETTES: [OnceLock<ImplicitPalette>; 25] = [const { OnceLock::new() }; 25];
+        static IMPLICIT_PALETTES: [OnceLock<Box<ImplicitPalette>>; 25] =
+            [const { OnceLock::new() }; 25];
         let bit_depth = bit_depth.bits_per_sample().min(24) as usize;
         let explicit = {
             if buf.size(storage).0 > 0 {
@@ -230,6 +231,7 @@ pub(super) struct PaletteStep<'a, 'b> {
     pub prev_aux: Option<&'a [Option<&'b Image<i32>>]>,
     pub aux_out: &'a mut [RwLockWriteGuard<'b, Option<Image<i32>>>],
     pub storage: ModularStorage,
+    pub is_partial: bool,
 }
 
 #[inline(always)]
@@ -257,6 +259,7 @@ impl<'a, 'b> PaletteStep<'a, 'b> {
             prev_aux,
             aux_out,
             storage,
+            is_partial,
         } = self;
         let (w0, h) = buf_in[0].size(storage);
         if w0 == 0 || h == 0 {
@@ -268,26 +271,51 @@ impl<'a, 'b> PaletteStep<'a, 'b> {
         if predictor == Predictor::Zero {
             assert_eq!(grid_xsize, 1);
             assert_eq!(buf_in.len(), 1);
+            let is_single_channel = buf_out.len() == 1;
             for (c, out_buf) in buf_out.iter_mut().enumerate() {
                 let palette = Palette::new(&out_buf.bit_depth, c, buf_pal, storage);
+                // Avoid partial render overshoots going into the implicit cube / deltas.
+                // If we are not doing delta palette, we have a single channel, we have an actual
+                // palette, and we have partial data, almost certainly any under/over shoot is just
+                // due to partial rendering noise, so clip the index in those cases.
+                let palette_size = (palette.explicit.len() / storage.sample_size()) as i32;
+                let clip =
+                    is_partial && palette_size != 0 && self.num_deltas == 0 && is_single_channel;
                 if storage == ModularStorage::I16 {
                     let in_rect = ImageRect::<i16>::from_raw(buf_in[0].data.as_rect());
                     let mut out_rect = ImageRectMut::<i16>::from_raw(out_buf.data.as_rect_mut());
                     for y in 0..h {
                         let index_row = in_rect.row(y);
                         let out_row = out_rect.row(y);
-                        for (out, &index) in out_row.iter_mut().zip(index_row.iter()) {
-                            *out = palette.get(index as isize) as i16;
+                        if clip {
+                            for (out, &index) in out_row.iter_mut().zip(index_row.iter()) {
+                                *out = palette.get(index.clamp(0, palette_size as i16 - 1) as isize)
+                                    as i16;
+                            }
+                        } else {
+                            for (out, &index) in out_row.iter_mut().zip(index_row.iter()) {
+                                *out = palette.get(index as isize) as i16;
+                            }
                         }
                     }
                 } else {
                     let in_rect = ImageRect::<i32>::from_raw(buf_in[0].data.as_rect());
                     let mut out_rect = ImageRectMut::<i32>::from_raw(out_buf.data.as_rect_mut());
-                    for y in 0..h {
-                        let index_row = in_rect.row(y);
-                        let out_row = out_rect.row(y);
-                        for (out, &index) in out_row.iter_mut().zip(index_row.iter()) {
-                            *out = palette.get(index as isize);
+                    if clip {
+                        for y in 0..h {
+                            let index_row = in_rect.row(y);
+                            let out_row = out_rect.row(y);
+                            for (out, &index) in out_row.iter_mut().zip(index_row.iter()) {
+                                *out = palette.get(index.clamp(0, palette_size - 1) as isize);
+                            }
+                        }
+                    } else {
+                        for y in 0..h {
+                            let index_row = in_rect.row(y);
+                            let out_row = out_rect.row(y);
+                            for (out, &index) in out_row.iter_mut().zip(index_row.iter()) {
+                                *out = palette.get(index as isize);
+                            }
                         }
                     }
                 }
