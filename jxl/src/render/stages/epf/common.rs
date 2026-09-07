@@ -31,7 +31,7 @@ impl SigmaSource {
 pub(super) fn prepare_sad_mul_storage(x: usize, y: usize, sm: f32, bsm: f32) -> [f32; 24] {
     let mut sad_mul_storage = [bsm; 24];
     if ![0, BLOCK_DIM - 1].contains(&(y % BLOCK_DIM)) {
-        for (i, s) in sad_mul_storage.iter_mut().enumerate().take(16) {
+        for (i, s) in sad_mul_storage.iter_mut().enumerate() {
             if ![0, BLOCK_DIM - 1].contains(&((x + i) % BLOCK_DIM)) {
                 *s = sm;
             }
@@ -52,6 +52,9 @@ pub(super) fn get_sigma<D: SimdDescriptor>(d: D, x: usize, row_sigma: SigmaRow<'
 fn get_sigma_from_row<D: SimdDescriptor>(d: D, x: usize, row_sigma: &[f32]) -> D::F32Vec {
     const { assert!(BLOCK_DIM == 8) }
     const { assert!(D::F32Vec::LEN <= 16) }
+    if x.is_multiple_of(BLOCK_DIM) && D::F32Vec::LEN <= BLOCK_DIM {
+        return D::F32Vec::splat(d, row_sigma[x / BLOCK_DIM]);
+    }
     let iota = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15];
     let iota = D::I32Vec::load(d, &iota);
     let sigma_start = x / BLOCK_DIM;
