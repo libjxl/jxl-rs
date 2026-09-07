@@ -87,26 +87,23 @@ impl F32SimdVec for F32VecSimd128 {
 
     #[inline(always)]
     fn load(d: Self::Descriptor, mem: &[f32]) -> Self {
-        assert!(mem.len() >= Self::LEN);
-        // SAFETY: we just checked that `mem` has enough space.
+        // SAFETY: caller must ensure `mem` has at least `Self::LEN` elements.
         Self(unsafe { v128_load(mem.as_ptr().cast()) }, d)
     }
 
     #[inline(always)]
     fn store(&self, mem: &mut [f32]) {
-        assert!(mem.len() >= Self::LEN);
-        // SAFETY: we just checked that `mem` has enough space.
+        // SAFETY: caller must ensure `mem` has at least `Self::LEN` elements.
         unsafe { v128_store(mem.as_mut_ptr().cast(), self.0) }
     }
 
     #[inline(always)]
     fn store_interleaved_2(a: Self, b: Self, dest: &mut [f32]) {
-        assert!(dest.len() >= 2 * Self::LEN);
         // a = [a0, a1, a2, a3], b = [b0, b1, b2, b3]
         // out0 = [a0, b0, a1, b1], out1 = [a2, b2, a3, b3]
         let lo = i32x4_shuffle::<0, 4, 1, 5>(a.0, b.0);
         let hi = i32x4_shuffle::<2, 6, 3, 7>(a.0, b.0);
-        // SAFETY: dest has enough space.
+        // SAFETY: caller must ensure `dest` has at least 2 * Self::LEN elements.
         unsafe {
             let ptr = dest.as_mut_ptr().cast::<v128>();
             v128_store(ptr, lo);
@@ -116,7 +113,6 @@ impl F32SimdVec for F32VecSimd128 {
 
     #[inline(always)]
     fn store_interleaved_3(a: Self, b: Self, c: Self, dest: &mut [f32]) {
-        assert!(dest.len() >= 3 * Self::LEN);
         // a = [a0, a1, a2, a3], b = [b0, b1, b2, b3], c = [c0, c1, c2, c3]
         // out0 = [a0, b0, c0, a1], out1 = [b1, c1, a2, b2], out2 = [c2, a3, b3, c3]
         let ab_lo = i32x4_shuffle::<0, 4, 1, 5>(a.0, b.0); // [a0, b0, a1, b1]
@@ -126,7 +122,7 @@ impl F32SimdVec for F32VecSimd128 {
         let out1 = i32x4_shuffle::<0, 1, 4, 5>(tmp1, ab_hi); // [b1, c1, a2, b2]
         let out2 = i32x4_shuffle::<6, 2, 3, 7>(ab_hi, c.0); // [c2, a3, b3, c3]
 
-        // SAFETY: dest has enough space.
+        // SAFETY: caller must ensure `dest` has at least 3 * Self::LEN elements.
         unsafe {
             let ptr = dest.as_mut_ptr().cast::<v128>();
             v128_store(ptr, out0);
@@ -137,7 +133,6 @@ impl F32SimdVec for F32VecSimd128 {
 
     #[inline(always)]
     fn store_interleaved_4(a: Self, b: Self, c: Self, d: Self, dest: &mut [f32]) {
-        assert!(dest.len() >= 4 * Self::LEN);
         // a = [a0,a1,a2,a3], b = [b0,b1,b2,b3], c = [c0,c1,c2,c3], d = [d0,d1,d2,d3]
         // out = [a0,b0,c0,d0, a1,b1,c1,d1, a2,b2,c2,d2, a3,b3,c3,d3]
         // Stage 1: interleave pairs
@@ -152,7 +147,7 @@ impl F32SimdVec for F32VecSimd128 {
         let out2 = i64x2_shuffle::<0, 2>(ab_hi, cd_hi); // [a2, b2, c2, d2]
         let out3 = i64x2_shuffle::<1, 3>(ab_hi, cd_hi); // [a3, b3, c3, d3]
 
-        // SAFETY: dest has enough space.
+        // SAFETY: caller must ensure `dest` has at least 4 * Self::LEN elements.
         unsafe {
             let ptr = dest.as_mut_ptr().cast::<v128>();
             v128_store(ptr, out0);
@@ -174,8 +169,6 @@ impl F32SimdVec for F32VecSimd128 {
         h: Self,
         dest: &mut [f32],
     ) {
-        assert!(dest.len() >= 8 * Self::LEN);
-
         // Interleave adjacent pairs
         let ab_lo = i32x4_shuffle::<0, 4, 1, 5>(a.0, b.0);
         let ab_hi = i32x4_shuffle::<2, 6, 3, 7>(a.0, b.0);
@@ -196,7 +189,7 @@ impl F32SimdVec for F32VecSimd128 {
         let efgh_2 = i64x2_shuffle::<0, 2>(ef_hi, gh_hi);
         let efgh_3 = i64x2_shuffle::<1, 3>(ef_hi, gh_hi);
 
-        // SAFETY: we just checked that dest has enough space.
+        // SAFETY: caller must ensure `dest` has at least 8 * Self::LEN elements.
         unsafe {
             let ptr = dest.as_mut_ptr().cast::<v128>();
             v128_store(ptr, abcd_0);
@@ -212,9 +205,8 @@ impl F32SimdVec for F32VecSimd128 {
 
     #[inline(always)]
     fn load_deinterleaved_2(d: Self::Descriptor, src: &[f32]) -> (Self, Self) {
-        assert!(src.len() >= 2 * Self::LEN);
         // src = [a0, b0, a1, b1, a2, b2, a3, b3]
-        // SAFETY: we just checked that `src` has enough space.
+        // SAFETY: caller must ensure `src` has at least 2 * Self::LEN elements.
         let (lo, hi) = unsafe {
             (
                 v128_load(src.as_ptr().cast()),        // [a0, b0, a1, b1]
@@ -228,10 +220,9 @@ impl F32SimdVec for F32VecSimd128 {
 
     #[inline(always)]
     fn load_deinterleaved_3(d: Self::Descriptor, src: &[f32]) -> (Self, Self, Self) {
-        assert!(src.len() >= 3 * Self::LEN);
         // src = [a0,b0,c0, a1,b1,c1, a2,b2,c2, a3,b3,c3]
         // v0 = [a0, b0, c0, a1], v1 = [b1, c1, a2, b2], v2 = [c2, a3, b3, c3]
-        // SAFETY: we just checked that `src` has enough space.
+        // SAFETY: caller must ensure `src` has at least 3 * Self::LEN elements.
         let (v0, v1, v2) = unsafe {
             (
                 v128_load(src.as_ptr().cast()),
@@ -260,9 +251,8 @@ impl F32SimdVec for F32VecSimd128 {
 
     #[inline(always)]
     fn load_deinterleaved_4(d: Self::Descriptor, src: &[f32]) -> (Self, Self, Self, Self) {
-        assert!(src.len() >= 4 * Self::LEN);
         // src = [a0,b0,c0,d0, a1,b1,c1,d1, a2,b2,c2,d2, a3,b3,c3,d3]
-        // SAFETY: we just checked that `src` has enough space.
+        // SAFETY: caller must ensure `src` has at least 4 * Self::LEN elements.
         let (v0, v1, v2, v3) = unsafe {
             (
                 v128_load(src.as_ptr().cast()),         // [a0, b0, c0, d0]
@@ -387,27 +377,25 @@ impl F32SimdVec for F32VecSimd128 {
 
     #[inline(always)]
     fn round_store_u8(self, dest: &mut [u8]) {
-        assert!(dest.len() >= F32VecSimd128::LEN);
         let rounded = f32x4_nearest(self.0);
         let i32s = i32x4_trunc_sat_f32x4(rounded);
         // Saturate i32 -> i16 (signed narrow, preserving sign for next stage)
         let i16s = i16x8_narrow_i32x4(i32s, i32s);
         // Saturate i16 -> u8 (signed-to-unsigned narrow, clamping to [0, 255])
         let u8s = u8x16_narrow_i16x8(i16s, i16s);
-        // SAFETY: we checked dest has enough space.
+        // SAFETY: caller must ensure dest has at least F32VecSimd128::LEN elements.
         unsafe { v128_store32_lane::<0>(u8s, dest.as_mut_ptr().cast()) }
     }
 
     #[inline(always)]
     fn round_store_u16(self, dest: &mut [u16]) {
-        assert!(dest.len() >= F32VecSimd128::LEN);
         let rounded = f32x4_nearest(self.0);
         let i32s = i32x4_trunc_sat_f32x4(rounded);
         // Saturate i32 -> u16 (narrow to 16-bit)
         let u16s = u16x8_narrow_i32x4(i32s, i32s);
         // Store lower 8 bytes (4 u16s)
         let lo = i64x2_extract_lane::<0>(u16s);
-        // SAFETY: we checked dest has enough space.
+        // SAFETY: caller must ensure dest has at least F32VecSimd128::LEN elements.
         unsafe {
             std::ptr::copy_nonoverlapping(
                 (&raw const lo).cast::<u8>(),
@@ -419,7 +407,6 @@ impl F32SimdVec for F32VecSimd128 {
 
     #[inline(always)]
     fn store_f16_bits(self, dest: &mut [u16]) {
-        assert!(dest.len() >= Self::LEN);
         let abs = f32x4_abs(self.0);
         let sign = v128_and(u32x4_shr(self.0, 16), u32x4_splat(0x8000));
 
@@ -454,7 +441,7 @@ impl F32SimdVec for F32VecSimd128 {
 
         // Narrow u32->u16 and store
         let packed = i8x16_shuffle::<0, 1, 4, 5, 8, 9, 12, 13, 0, 0, 0, 0, 0, 0, 0, 0>(h, h);
-        // SAFETY: we checked dest has enough space.
+        // SAFETY: caller must ensure dest has at least Self::LEN elements.
         unsafe {
             v128_store64_lane::<0>(packed, dest.as_mut_ptr().cast::<u64>());
         }
@@ -462,8 +449,7 @@ impl F32SimdVec for F32VecSimd128 {
 
     #[inline(always)]
     fn load_f16_bits(d: Self::Descriptor, mem: &[u16]) -> Self {
-        assert!(mem.len() >= Self::LEN);
-        // SAFETY: we just checked that `mem` has enough space.
+        // SAFETY: caller must ensure `mem` has at least `Self::LEN` elements.
         let lo = unsafe { v128_load64_splat(mem.as_ptr().cast()) };
         let zero = i32x4_splat(0);
         let wide =

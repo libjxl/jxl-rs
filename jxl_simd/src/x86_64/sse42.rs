@@ -111,16 +111,14 @@ impl F32SimdVec for F32VecSse42 {
 
     #[inline(always)]
     fn load(d: Self::Descriptor, mem: &[f32]) -> Self {
-        assert!(mem.len() >= Self::LEN);
-        // SAFETY: we just checked that `mem` has enough space. Moreover, we know sse4.2 is available
+        // SAFETY: caller must ensure `mem` has at least `Self::LEN` elements. Moreover, we know sse4.2 is available
         // from the safety invariant on `d`.
         Self(unsafe { _mm_loadu_ps(mem.as_ptr()) }, d)
     }
 
     #[inline(always)]
     fn store(&self, mem: &mut [f32]) {
-        assert!(mem.len() >= Self::LEN);
-        // SAFETY: we just checked that `mem` has enough space. Moreover, we know sse4.2 is available
+        // SAFETY: caller must ensure `mem` has at least `Self::LEN` elements. Moreover, we know sse4.2 is available
         // from the safety invariant on `self.1`.
         unsafe { _mm_storeu_ps(mem.as_mut_ptr(), self.0) }
     }
@@ -130,12 +128,11 @@ impl F32SimdVec for F32VecSse42 {
         #[target_feature(enable = "sse4.2")]
         #[inline]
         fn store_interleaved_2_impl(a: __m128, b: __m128, dest: &mut [f32]) {
-            assert!(dest.len() >= 2 * F32VecSse42::LEN);
             // a = [a0, a1, a2, a3], b = [b0, b1, b2, b3]
             // lo = [a0, b0, a1, b1], hi = [a2, b2, a3, b3]
             let lo = _mm_unpacklo_ps(a, b);
             let hi = _mm_unpackhi_ps(a, b);
-            // SAFETY: `dest` has enough space.
+            // SAFETY: caller must ensure `dest` has at least 2 * F32VecSse42::LEN elements.
             unsafe {
                 let dest_ptr = dest.as_mut_ptr();
                 _mm_storeu_ps(dest_ptr, lo);
@@ -152,7 +149,6 @@ impl F32SimdVec for F32VecSse42 {
         #[target_feature(enable = "sse4.2")]
         #[inline]
         fn store_interleaved_3_impl(a: __m128, b: __m128, c: __m128, dest: &mut [f32]) {
-            assert!(dest.len() >= 3 * F32VecSse42::LEN);
             // Input vectors:
             // a = [a0, a1, a2, a3]
             // b = [b0, b1, b2, b3]
@@ -183,7 +179,7 @@ impl F32SimdVec for F32VecSse42 {
             let out2 = _mm_shuffle_ps::<0xEC>(p_ca_hi, p_bc_hi);
 
             // Store the results
-            // SAFETY: `dest` has enough space.
+            // SAFETY: caller must ensure `dest` has at least 3 * F32VecSse42::LEN elements.
             unsafe {
                 let dest_ptr = dest.as_mut_ptr();
                 _mm_storeu_ps(dest_ptr, out0);
@@ -201,7 +197,6 @@ impl F32SimdVec for F32VecSse42 {
         #[target_feature(enable = "sse4.2")]
         #[inline]
         fn store_interleaved_4_impl(a: __m128, b: __m128, c: __m128, d: __m128, dest: &mut [f32]) {
-            assert!(dest.len() >= 4 * F32VecSse42::LEN);
             // First interleave pairs: ab and cd
             let ab_lo = _mm_unpacklo_ps(a, b); // [a0, b0, a1, b1]
             let ab_hi = _mm_unpackhi_ps(a, b); // [a2, b2, a3, b3]
@@ -214,7 +209,7 @@ impl F32SimdVec for F32VecSse42 {
             let out2 = _mm_castpd_ps(_mm_unpacklo_pd(_mm_castps_pd(ab_hi), _mm_castps_pd(cd_hi))); // [a2, b2, c2, d2]
             let out3 = _mm_castpd_ps(_mm_unpackhi_pd(_mm_castps_pd(ab_hi), _mm_castps_pd(cd_hi))); // [a3, b3, c3, d3]
 
-            // SAFETY: `dest` has enough space.
+            // SAFETY: caller must ensure `dest` has at least 4 * F32VecSse42::LEN elements.
             unsafe {
                 let dest_ptr = dest.as_mut_ptr();
                 _mm_storeu_ps(dest_ptr, out0);
@@ -253,7 +248,6 @@ impl F32SimdVec for F32VecSse42 {
             h: __m128,
             dest: &mut [f32],
         ) {
-            assert!(dest.len() >= 8 * F32VecSse42::LEN);
             // For 4-wide vectors storing 8 interleaved, we need 32 elements output
             // Output: [a0,b0,c0,d0,e0,f0,g0,h0, a1,b1,c1,d1,e1,f1,g1,h1, ...]
             let ab_lo = _mm_unpacklo_ps(a, b);
@@ -274,7 +268,7 @@ impl F32SimdVec for F32VecSse42 {
             let efgh_2 = _mm_castpd_ps(_mm_unpacklo_pd(_mm_castps_pd(ef_hi), _mm_castps_pd(gh_hi)));
             let efgh_3 = _mm_castpd_ps(_mm_unpackhi_pd(_mm_castps_pd(ef_hi), _mm_castps_pd(gh_hi)));
 
-            // SAFETY: we just checked that dest has enough space.
+            // SAFETY: caller must ensure dest has at least 8 * F32VecSse42::LEN elements.
             unsafe {
                 let ptr = dest.as_mut_ptr();
                 _mm_storeu_ps(ptr, abcd_0);
@@ -297,10 +291,9 @@ impl F32SimdVec for F32VecSse42 {
         #[target_feature(enable = "sse4.2")]
         #[inline]
         fn load_deinterleaved_2_impl(src: &[f32]) -> (__m128, __m128) {
-            assert!(src.len() >= 2 * F32VecSse42::LEN);
             // Input: [a0, b0, a1, b1, a2, b2, a3, b3]
             // Output: a = [a0, a1, a2, a3], b = [b0, b1, b2, b3]
-            // SAFETY: we just checked that src has enough space.
+            // SAFETY: caller must ensure src has at least 2 * F32VecSse42::LEN elements.
             let (in0, in1) = unsafe {
                 (
                     _mm_loadu_ps(src.as_ptr()),        // [a0, b0, a1, b1]
@@ -325,11 +318,10 @@ impl F32SimdVec for F32VecSse42 {
         #[target_feature(enable = "sse4.2")]
         #[inline]
         fn load_deinterleaved_3_impl(src: &[f32]) -> (__m128, __m128, __m128) {
-            assert!(src.len() >= 3 * F32VecSse42::LEN);
             // Input: [a0, b0, c0, a1, b1, c1, a2, b2, c2, a3, b3, c3]
             // Output: a = [a0, a1, a2, a3], b = [b0, b1, b2, b3], c = [c0, c1, c2, c3]
 
-            // SAFETY: we just checked that src has enough space.
+            // SAFETY: caller must ensure src has at least 3 * F32VecSse42::LEN elements.
             let (in0, in1, in2) = unsafe {
                 (
                     _mm_loadu_ps(src.as_ptr()),        // [a0, b0, c0, a1]
@@ -375,10 +367,9 @@ impl F32SimdVec for F32VecSse42 {
         #[target_feature(enable = "sse4.2")]
         #[inline]
         fn load_deinterleaved_4_impl(src: &[f32]) -> (__m128, __m128, __m128, __m128) {
-            assert!(src.len() >= 4 * F32VecSse42::LEN);
             // Input: [a0, b0, c0, d0, a1, b1, c1, d1, a2, b2, c2, d2, a3, b3, c3, d3]
             // Output: a = [a0, a1, a2, a3], b = [b0, b1, b2, b3], c = [c0, c1, c2, c3], d = [d0, d1, d2, d3]
-            // SAFETY: we just checked that src has enough space.
+            // SAFETY: caller must ensure src has at least 4 * F32VecSse42::LEN elements.
             let (in0, in1, in2, in3) = unsafe {
                 (
                     _mm_loadu_ps(src.as_ptr()),         // [a0, b0, c0, d0]
@@ -555,7 +546,6 @@ impl F32SimdVec for F32VecSse42 {
         #[target_feature(enable = "sse4.2")]
         #[inline]
         fn round_store_u8_impl(v: __m128, dest: &mut [u8]) {
-            assert!(dest.len() >= F32VecSse42::LEN);
             // Round to nearest integer
             let rounded = _mm_round_ps::<{ _MM_FROUND_TO_NEAREST_INT | _MM_FROUND_NO_EXC }>(v);
             // Convert to i32
@@ -568,7 +558,7 @@ impl F32SimdVec for F32VecSse42 {
             let bytes = val.to_ne_bytes();
             // SAFETY:
             // 1. `src` (bytes.as_ptr()) is valid for 4 bytes as it is a local [u8; 4].
-            // 2. `dst` (dest.as_mut_ptr()) is valid for 4 bytes because dest.len() >= 4.
+            // 2. `dst` (dest.as_mut_ptr()) is valid for 4 bytes because caller must ensure dest.len() >= 4.
             // 3. `src` and `dst` are properly aligned for u8 (alignment 1).
             // 4. `src` and `dst` do not overlap as `src` is a local stack array.
             unsafe {
@@ -584,7 +574,6 @@ impl F32SimdVec for F32VecSse42 {
         #[target_feature(enable = "sse4.2")]
         #[inline]
         fn round_store_u16_impl(v: __m128, dest: &mut [u16]) {
-            assert!(dest.len() >= F32VecSse42::LEN);
             // Round to nearest integer
             let rounded = _mm_round_ps::<{ _MM_FROUND_TO_NEAREST_INT | _MM_FROUND_NO_EXC }>(v);
             // Convert to i32
@@ -596,7 +585,7 @@ impl F32SimdVec for F32VecSse42 {
             let bytes = val.to_ne_bytes();
             // SAFETY:
             // 1. `src` (bytes.as_ptr()) is valid for 8 bytes as it is a local [u8; 8].
-            // 2. `dst` (dest.as_mut_ptr()) is valid for 8 bytes because dest.len() >= 4 and each element is 2 bytes.
+            // 2. `dst` (dest.as_mut_ptr()) is valid for 8 bytes because caller must ensure dest.len() >= 4 and each element is 2 bytes.
             // 3. `src` and `dst` are properly aligned for u8 (alignment 1).
             // 4. `src` and `dst` do not overlap as `src` is a local stack array.
             unsafe {
@@ -611,23 +600,25 @@ impl F32SimdVec for F32VecSse42 {
 
     #[inline(always)]
     fn load_f16_bits(d: Self::Descriptor, mem: &[u16]) -> Self {
-        assert!(mem.len() >= Self::LEN);
         // TODO: use SIMD bit manipulation instead of scalar loop (see wasm32/simd128.rs)
         let mut result = [0.0f32; 4];
-        for i in 0..4 {
-            result[i] = crate::f16::from_bits(mem[i]).to_f32();
+        for (i, r) in result.iter_mut().enumerate() {
+            // SAFETY: caller must ensure `mem` has at least `Self::LEN` elements.
+            *r = crate::f16::from_bits(unsafe { *mem.get_unchecked(i) }).to_f32();
         }
         Self::load(d, &result)
     }
 
     #[inline(always)]
     fn store_f16_bits(self, dest: &mut [u16]) {
-        assert!(dest.len() >= Self::LEN);
         // TODO: use SIMD bit manipulation instead of scalar loop (see wasm32/simd128.rs)
         let mut tmp = [0.0f32; 4];
         self.store(&mut tmp);
-        for i in 0..4 {
-            dest[i] = crate::f16::from_f32(tmp[i]).to_bits();
+        for (i, &t) in tmp.iter().enumerate() {
+            // SAFETY: caller must ensure `dest` has at least `Self::LEN` elements.
+            unsafe {
+                *dest.get_unchecked_mut(i) = crate::f16::from_f32(t).to_bits();
+            }
         }
     }
 
