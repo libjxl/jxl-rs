@@ -363,12 +363,13 @@ impl Frame {
 
             if self.header.has_patches() {
                 info!("decoding patches");
-                let p = PatchesDictionary::read(
+                let p = PatchesDictionary::read_internal(
                     br,
                     self.header.size_padded().0,
                     self.header.size_padded().1,
                     self.decoder_state.extra_channel_info().len(),
                     &self.decoder_state.reference_frames[..],
+                    self.decoder_state.force_level5_patches,
                 )?;
                 *self.patches.try_write().unwrap() = p;
             }
