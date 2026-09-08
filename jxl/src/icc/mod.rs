@@ -125,11 +125,13 @@ impl IncrementalIccReader {
 
         let histograms = Histograms::decode(ICC_CONTEXTS, br, true)?;
         let reader = SymbolReader::new(&histograms, br, None)?;
+        let initial_alloc = len.min(64 * 1024);
+        let out_buf = Vec::new_with_capacity(initial_alloc)?;
         Ok(Self {
             histograms,
             reader,
             len,
-            out_buf: Vec::new_with_capacity(len)?,
+            out_buf,
             prev_bytes: [0, 0],
         })
     }
@@ -185,6 +187,10 @@ impl IncrementalIccReader {
         }
 
         let b = sym as u8;
+        if let Err(err) = self.out_buf.try_reserve(1) {
+            self.reader.restore(checkpoint);
+            return Err(err.into());
+        }
         self.out_buf.push(b);
         self.prev_bytes = [b, self.prev_bytes[0]];
         Ok(())
