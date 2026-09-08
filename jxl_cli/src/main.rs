@@ -10,14 +10,14 @@ use std::time::Duration;
 
 use clap::Parser;
 use color_eyre::eyre::{Result, WrapErr, eyre};
+use jemallocator::Jemalloc;
 use jxl::api::JxlDecoderOptions;
 use jxl_cli::dec;
 use jxl_cli::dec::OutputDataType;
 use jxl_cli::enc::OutputFormat;
-use mimalloc::MiMalloc;
 
 #[global_allocator]
-static GLOBAL: MiMalloc = MiMalloc;
+static GLOBAL: Jemalloc = Jemalloc;
 
 const VERSION_STRING: &str = concat!(
     env!("VERGEN_GIT_DESCRIBE"),
