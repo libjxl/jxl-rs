@@ -708,6 +708,7 @@ impl TransformStepChunk {
                             &buffers[buf_out[i]].info,
                             buffers[buf_out[i]].storage,
                             recycler,
+                            true,
                         )?;
                     } else {
                         *b_out.data.try_write().unwrap() =
