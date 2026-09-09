@@ -21,6 +21,27 @@ macro_rules! declare_test_file_common {
             }
 
             #[test]
+            fn [<test_decode_small_chunks_ $ident>]() {
+                let path = std::path::Path::new("resources/test/").join($path);
+                let file = std::fs::read(&path).unwrap();
+                arbtest::arbtest(|u| {
+                    let chunk_size = u.int_in_range(1..=1024)?;
+                    crate::tests::decode::decode_internal(
+                        &file,
+                        chunk_size,
+                        false,
+                        false,
+                        None,
+                        None,
+                        None,
+                        false,
+                    )
+                    .unwrap();
+                    Ok(())
+                });
+            }
+
+            #[test]
             fn [<test_scan_test_file_ $ident>]() {
                 let path = std::path::Path::new("resources/test/").join($path);
                 let file = std::fs::read(&path).unwrap();
@@ -44,6 +65,13 @@ macro_rules! declare_test_file_common {
                 for (fc, (f, sf)) in frames.into_iter().zip(simple_frames).enumerate() {
                     crate::tests::decode::compare_frames(&path, fc, &f, &sf);
                 }
+            }
+
+            #[cfg(not(any(target_family = "wasm", target_arch = "wasm32")))]
+            #[test]
+            fn [<test_compare_pipelines_parallel_ $ident>]() {
+                let path = std::path::Path::new("resources/test/").join($path);
+                crate::tests::compare_parallel::run_compare_pipelines_parallel(&path);
             }
 
             #[test]
