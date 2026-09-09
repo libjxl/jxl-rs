@@ -69,7 +69,7 @@ impl LowMemoryRenderPipelinePerThread {
                     *next_y_border as usize,
                     stage.shift().1 as usize,
                     stage.shift().0 as usize,
-                    p.shared.chunk_size >> *dsx,
+                    (p.shared.chunk_size + 2 * p.border_size.0) >> *dsx,
                 )?);
             }
             self.row_buffers.push(stage_buffers);
