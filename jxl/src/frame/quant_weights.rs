@@ -237,6 +237,7 @@ impl QuantEncoding {
                         br,
                         &mut scratch,
                         lf_global.modular_global.storage(),
+                        lf_global.modular_global.force_level5,
                     )?,
                     qtable_den,
                 })

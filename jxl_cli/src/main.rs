@@ -91,9 +91,9 @@ struct Opt {
     #[clap(long)]
     render_interval: Option<usize>,
 
-    /// Allow Level 10 limits for splines instead of the default Level 5 limits.
+    /// Allow Level 10 limits instead of the default Level 5 limits.
     #[clap(long)]
-    allow_level10_splines: bool,
+    allow_level10: bool,
 }
 
 fn save_icc(icc_bytes: &[u8], icc_filename: Option<&PathBuf>) -> Result<()> {
@@ -125,13 +125,15 @@ fn main() -> Result<()> {
         .transpose()?;
 
     let high_precision = opt.high_precision;
-    let allow_level10_splines = opt.allow_level10_splines;
+    let allow_level10 = opt.allow_level10;
     let options = |skip_preview: bool| {
         let mut options = JxlDecoderOptions::default();
         options.render_spot_colors = !matches!(output_format, Some(OutputFormat::Npy));
         options.skip_preview = skip_preview;
         options.high_precision = high_precision;
-        options.force_level5_splines = !allow_level10_splines;
+        options.force_level5_splines = !allow_level10;
+        options.force_level5_patches = !allow_level10;
+        options.force_level5_modular = !allow_level10;
         options
     };
     rayon::ThreadPoolBuilder::new()
