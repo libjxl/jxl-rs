@@ -1,0 +1,24 @@
+# JPEG XL fuzzer dictionary
+
+# Bare codestream signature
+codestream_magic="\xff\x0a"
+
+# Container signature box
+container_box="\x00\x00\x00\x0c\x4a\x58\x4c\x20\x0d\x0a\x87\x0a"
+
+# Box types
+box_ftyp="ftyp"
+box_jxl="jxl "
+box_jxlc="jxlc"
+box_jxlp="jxlp"
+box_jxli="jxli"
+box_jxld="jxld"
+box_jxll="jxll"
+box_exif="Exif"
+box_xml="xml "
+box_jumb="jumb"
+box_brob="brob"
+
+# Common box sizes
+box_size_auto="\x00\x00\x00\x00"
+box_size_ext="\x00\x00\x00\x01"

@@ -26,6 +26,7 @@ if [ -d "resources/test" ]; then
     zip -j "$OUT/decode_header_seed_corpus.zip" resources/test/*.jxl resources/test/conformance_test_images/*.jxl || true
     zip -j "$OUT/decode_progressive_seed_corpus.zip" resources/test/*.jxl resources/test/conformance_test_images/*.jxl || true
     zip -j "$OUT/decode_progressive_parallel_seed_corpus.zip" resources/test/*.jxl resources/test/conformance_test_images/*.jxl || true
+    zip -j "$OUT/decode_diff_seed_corpus.zip" resources/test/*.jxl resources/test/conformance_test_images/*.jxl || true
 fi
 
 # Also copy any manually curated corpus if available
@@ -38,3 +39,12 @@ if [ -d "fuzz/corpus" ]; then
         fi
     done
 fi
+
+# Copy dictionary for each fuzz target
+if [ -f "fuzz/jxl.dict" ]; then
+    for target in fuzz/fuzz_targets/*.rs; do
+        TARGET_NAME=$(basename "${target%.*}")
+        cp "fuzz/jxl.dict" "$OUT/${TARGET_NAME}.dict"
+    done
+fi
+
