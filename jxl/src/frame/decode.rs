@@ -447,6 +447,7 @@ impl Frame {
                 self.buffer_recycler.clone(),
                 self.decoder_state.sample_limit,
                 self.decoder_state.modular_storage(),
+                self.decoder_state.force_level5_modular,
             )?;
 
             // Ensure that, if we call this function again, we resume from just after
@@ -520,6 +521,7 @@ impl Frame {
                 br,
                 decoder_state.modular_storage(),
                 &mut scratch,
+                decoder_state.force_level5_modular,
             )?;
         }
 
@@ -550,6 +552,7 @@ impl Frame {
                 br,
                 decoder_state.modular_storage(),
                 &mut scratch,
+                decoder_state.force_level5_modular,
             )?;
         }
         Ok(())
