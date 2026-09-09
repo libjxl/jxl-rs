@@ -37,3 +37,15 @@ name = "decode_header"
 path = "fuzz_targets/decode_header.rs"
 test = false
 doc = false
+
+[[bin]]
+name = "decode_progressive"
+path = "fuzz_targets/decode_progressive.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "decode_progressive_parallel"
+path = "fuzz_targets/decode_progressive_parallel.rs"
+test = false
+doc = false

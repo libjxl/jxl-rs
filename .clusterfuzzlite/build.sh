@@ -24,6 +24,8 @@ if [ -d "resources/test" ]; then
     zip -j "$OUT/decode_seed_corpus.zip" resources/test/*.jxl resources/test/conformance_test_images/*.jxl || true
     zip -j "$OUT/decode_parallel_seed_corpus.zip" resources/test/*.jxl resources/test/conformance_test_images/*.jxl || true
     zip -j "$OUT/decode_header_seed_corpus.zip" resources/test/*.jxl resources/test/conformance_test_images/*.jxl || true
+    zip -j "$OUT/decode_progressive_seed_corpus.zip" resources/test/*.jxl resources/test/conformance_test_images/*.jxl || true
+    zip -j "$OUT/decode_progressive_parallel_seed_corpus.zip" resources/test/*.jxl resources/test/conformance_test_images/*.jxl || true
 fi
 
 # Also copy any manually curated corpus if available
