@@ -4,16 +4,9 @@
 // license that can be found in the LICENSE file.
 #![no_main]
 
-use jxl_fuzz::{FuzzConfig, fuzz_decode};
+use jxl_fuzz::fuzz_decode_diff;
 use libfuzzer_sys::fuzz_target;
 
 fuzz_target!(|data: &[u8]| {
-    let _ = fuzz_decode(
-        data,
-        FuzzConfig {
-            progressive: true,
-            flush_intermediate: true,
-            ..Default::default()
-        },
-    );
+    let _ = fuzz_decode_diff(data);
 });

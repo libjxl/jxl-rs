@@ -17,8 +17,8 @@ path = ".."
 [workspace]
 members = ["."]
 
-[profile.release]
-debug = 1
+[lib]
+path = "src/lib.rs"
 
 [[bin]]
 name = "decode"
@@ -49,3 +49,12 @@ name = "decode_progressive_parallel"
 path = "fuzz_targets/decode_progressive_parallel.rs"
 test = false
 doc = false
+
+[[bin]]
+name = "decode_diff"
+path = "fuzz_targets/decode_diff.rs"
+test = false
+doc = false
+
+[profile.release]
+debug = 1
