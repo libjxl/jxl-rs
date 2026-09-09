@@ -170,7 +170,7 @@ impl LowMemoryRenderPipeline {
                 let width = (1 << self.shared.log_group_size) * ty.size();
                 self.shared
                     .buffer_recycler
-                    .get_raw_buffer((width, height))?
+                    .get_raw_buffer((width, height), false)?
             };
             let mut leftright = if let Some(b) = buf.leftright[c].try_write().unwrap().take() {
                 b
@@ -179,7 +179,7 @@ impl LowMemoryRenderPipeline {
                 let width = 4 * bx * ty.size();
                 self.shared
                     .buffer_recycler
-                    .get_raw_buffer((width, height))?
+                    .get_raw_buffer((width, height), false)?
             };
             let data = buf.data[c].try_read().unwrap();
             let input = data.as_ref().unwrap();
