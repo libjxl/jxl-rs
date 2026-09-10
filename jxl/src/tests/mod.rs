@@ -486,6 +486,7 @@ declare_test_file!(
 );
 declare_test_file!(tree_max_property_20, "tree_max_property_20.jxl");
 declare_test_file!(upsampled_alpha, "upsampled_alpha.jxl");
+declare_test_file!(upsampling2_permuted_toc, "upsampling2_permuted_toc.jxl");
 declare_test_file!(with_icc, "with_icc.jxl");
 declare_test_file!(with_preview, "with_preview.jxl");
 declare_test_file!(
