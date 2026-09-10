@@ -426,11 +426,14 @@ pub fn fuzz_decode_diff(data: &[u8]) -> Result<(), ()> {
                 p_img.size()
             );
             for y in 0..s_img.size().1 {
-                assert_eq!(
-                    s_img.row(y),
-                    p_img.row(y),
-                    "Frame {f_idx} Channel {c_idx} Row {y}: Exact pixel mismatch between sequential and parallel!"
-                );
+                let s_row = s_img.row(y);
+                let p_row = p_img.row(y);
+                for (x, (&s_val, &p_val)) in s_row.iter().zip(p_row.iter()).enumerate() {
+                    assert!(
+                        s_val == p_val || (s_val.is_nan() && p_val.is_nan()),
+                        "Frame {f_idx} Channel {c_idx} ({x}, {y}): Exact pixel mismatch between sequential ({s_val}) and parallel ({p_val})!"
+                    );
+                }
             }
         }
     }
