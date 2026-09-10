@@ -190,6 +190,12 @@ impl ModularBufferInfo {
             (chan_size.0 - bx).min(grid_dim.0),
             (chan_size.1 - by).min(grid_dim.1),
         );
+        if size.0 == 0 || size.1 == 0 {
+            return Rect {
+                origin: (0, 0),
+                size: (0, 0),
+            };
+        }
         let origin = match (output_grid_kind, self.grid_kind) {
             (ModularGridKind::Lf, ModularGridKind::Lf)
             | (ModularGridKind::Hf, ModularGridKind::Hf) => (0, 0),
@@ -200,14 +206,7 @@ impl ModularBufferInfo {
             }
             _ => unreachable!("invalid combination of output grid kind and buffer grid kind"),
         };
-        if size.0 == 0 || size.1 == 0 {
-            Rect {
-                origin: (0, 0),
-                size: (0, 0),
-            }
-        } else {
-            Rect { origin, size }
-        }
+        Rect { origin, size }
     }
 }
 
