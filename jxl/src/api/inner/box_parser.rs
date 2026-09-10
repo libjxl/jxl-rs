@@ -289,6 +289,16 @@ impl BoxParser {
     }
 
     fn injected_jxlp(&mut self) -> Option<&mut OOOJxlpBox> {
+        // Skip 0-sized jxlp boxes.
+        while matches!(self.state, ParseState::BoxNeeded(_) | ParseState::Complete)
+            && let CodestreamBoxType::Jxlp(j, _) = self.latest_codestream_box
+            && self
+                .ooo_jxlp_buffer
+                .get(&j)
+                .is_some_and(|b| b.consumed == b.data.len())
+        {
+            self.check_ooo_jxlp_done();
+        }
         if matches!(self.state, ParseState::BoxNeeded(_) | ParseState::Complete)
             && let CodestreamBoxType::Jxlp(j, _) = self.latest_codestream_box
             && let Some(b) = self.ooo_jxlp_buffer.get_mut(&j)
