@@ -421,6 +421,10 @@ declare_test_file!(multiple_lf_420, "multiple_lf_420.jxl");
 declare_test_file!(named_frame_test, "named_frame_test.jxl");
 declare_test_file!(narrow_edge_group, "narrow_edge_group.jxl");
 declare_test_file!(oddsize_ups, "oddsize_ups.jxl");
+declare_test_file!(
+    ooo_jxlp_empty_dc_group_boxes,
+    "ooo_jxlp_empty_dc_group_boxes.jxl"
+);
 declare_test_file!(orientation1_identity, "orientation1_identity.jxl");
 declare_test_file!(
     orientation2_flip_horizontal,

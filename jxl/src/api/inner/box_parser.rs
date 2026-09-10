@@ -289,11 +289,7 @@ impl BoxParser {
     }
 
     fn injected_jxlp(&mut self) -> Option<&mut OOOJxlpBox> {
-        // A buffered out-of-order jxlp box with no bytes left carries no
-        // codestream. Returning it would make `read` yield 0, which every
-        // caller reads as end of input, so step over such boxes first.
-        // `check_ooo_jxlp_done` removes the box it advances past, so this
-        // terminates.
+        // Skip 0-sized jxlp boxes.
         while matches!(self.state, ParseState::BoxNeeded(_) | ParseState::Complete)
             && let CodestreamBoxType::Jxlp(j, _) = self.latest_codestream_box
             && self
@@ -840,54 +836,5 @@ mod tests {
 
         // All input should be consumed.
         assert!(input.is_empty());
-    }
-
-    /// Regression: an out-of-order `jxlp` box with no payload must not surface
-    /// as a 0-byte read. Callers treat a 0-byte read as end of input, so an
-    /// empty box in the middle of the buffered chain truncated the codestream.
-    ///
-    /// `cjxl --output_mode=2` emits empty `jxlp` boxes for the DC group slots
-    /// of a modular (lossless) frame, so files with four or more DC groups
-    /// failed to decode with "Source file truncated".
-    #[test]
-    fn empty_out_of_order_jxlp_box_is_not_end_of_input() {
-        fn boxed(ty: &[u8; 4], payload: &[u8]) -> Vec<u8> {
-            let mut v = ((payload.len() + 8) as u32).to_be_bytes().to_vec();
-            v.extend_from_slice(ty);
-            v.extend_from_slice(payload);
-            v
-        }
-        fn jxlp(index: u32, last: bool, payload: &[u8]) -> Vec<u8> {
-            let flagged = index | if last { 0x8000_0000 } else { 0 };
-            let mut body = flagged.to_be_bytes().to_vec();
-            body.extend_from_slice(payload);
-            boxed(b"jxlp", &body)
-        }
-
-        let mut file = boxed(b"JXL ", &[0x0d, 0x0a, 0x87, 0x0a]);
-        // Out-of-order jxlp boxes are only legal at ftyp version 1.
-        file.extend(boxed(b"ftyp", b"jxl \x00\x00\x00\x01jxl "));
-        file.extend(jxlp(0, false, b"AAA")); // in order
-        file.extend(jxlp(2, false, b"")); // buffered, EMPTY
-        file.extend(jxlp(3, false, b"CCC")); // buffered
-        file.extend(jxlp(4, true, b"DDD")); // buffered, last
-        file.extend(jxlp(1, false, b"BBB")); // in order, arrives last
-
-        let mut parser = BoxParser::with_aux_boxes(None);
-        let mut input = file.as_slice();
-        let mut got = vec![];
-        {
-            let mut input = CodestreamInput::new(&mut parser, &mut input);
-            let mut buf = [0u8; 64];
-            loop {
-                let n = input.read(&mut [IoSliceMut::new(&mut buf)]).unwrap();
-                if n == 0 {
-                    break;
-                }
-                got.extend_from_slice(&buf[..n]);
-            }
-        }
-
-        assert_eq!(std::str::from_utf8(&got).unwrap(), "AAABBBCCCDDD");
     }
 }
