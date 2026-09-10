@@ -55,7 +55,8 @@ impl LowMemoryRenderPipelinePerThread {
                 p.next_border_and_cur_downsample[0][chan].0 as usize,
                 0,
                 0,
-                p.shared.chunk_size >> p.shared.channel_info[0][chan].downsample.0,
+                (p.shared.chunk_size + 2 * p.border_size.0)
+                    >> p.shared.channel_info[0][chan].downsample.0,
             )?);
         }
         self.row_buffers = vec![initial_buffers];
