@@ -242,6 +242,7 @@ pub fn fuzz_decode(data: &[u8], config: FuzzConfig) -> Result<Vec<Vec<Image<f32>
                 2 => rng.gen_range(32, 512),
                 _ => rng.gen_range(512, 4096),
             };
+            let all_provided = chunk_input.len().saturating_add(chunk_size) >= remaining_input.len();
             let next_len =
                 (chunk_input.len().saturating_add(chunk_size)).min(remaining_input.len());
             chunk_input = &remaining_input[..next_len];
@@ -250,11 +251,12 @@ pub fn fuzz_decode(data: &[u8], config: FuzzConfig) -> Result<Vec<Vec<Image<f32>
                 Ok(r) => r,
                 Err(_) => return Err(()),
             };
-            remaining_input = &remaining_input[(available_before - chunk_input.len())..];
+            let consumed = available_before - chunk_input.len();
+            remaining_input = &remaining_input[consumed..];
             match res {
                 ProcessingResult::Complete { result } => break result,
                 ProcessingResult::NeedsMoreInput { fallback, .. } => {
-                    if remaining_input.is_empty() {
+                    if remaining_input.is_empty() || (all_provided && consumed == 0) {
                         return Ok(Vec::new());
                     }
                     decoder = fallback;
@@ -283,6 +285,8 @@ pub fn fuzz_decode(data: &[u8], config: FuzzConfig) -> Result<Vec<Vec<Image<f32>
         loop {
             let mut decoder_with_frame_info = loop {
                 let chunk_size = rng.gen_range(1, 512);
+                let all_provided =
+                    chunk_input.len().saturating_add(chunk_size) >= remaining_input.len();
                 let next_len =
                     (chunk_input.len().saturating_add(chunk_size)).min(remaining_input.len());
                 chunk_input = &remaining_input[..next_len];
@@ -293,7 +297,8 @@ pub fn fuzz_decode(data: &[u8], config: FuzzConfig) -> Result<Vec<Vec<Image<f32>
                     Ok(r) => r,
                     Err(_) => return Err(()),
                 };
-                remaining_input = &remaining_input[(available_before - chunk_input.len())..];
+                let consumed = available_before - chunk_input.len();
+                remaining_input = &remaining_input[consumed..];
                 match res {
                     ProcessingResult::Complete { result } => break result,
                     ProcessingResult::NeedsMoreInput { mut fallback, .. } => {
@@ -306,7 +311,7 @@ pub fn fuzz_decode(data: &[u8], config: FuzzConfig) -> Result<Vec<Vec<Image<f32>
                                     .flush_pixels(&mut output_bufs, reborrow(&mut runner_opt));
                             }
                         }
-                        if remaining_input.is_empty() {
+                        if remaining_input.is_empty() || (all_provided && consumed == 0) {
                             return Ok(all_frames);
                         }
                         decoder_with_image_info = fallback;
@@ -327,6 +332,8 @@ pub fn fuzz_decode(data: &[u8], config: FuzzConfig) -> Result<Vec<Vec<Image<f32>
                     3 => rng.gen_range(512, 2048),
                     _ => remaining_input.len().max(1),
                 };
+                let all_provided =
+                    chunk_input.len().saturating_add(chunk_size) >= remaining_input.len();
                 let next_len =
                     (chunk_input.len().saturating_add(chunk_size)).min(remaining_input.len());
                 chunk_input = &remaining_input[..next_len];
@@ -340,7 +347,8 @@ pub fn fuzz_decode(data: &[u8], config: FuzzConfig) -> Result<Vec<Vec<Image<f32>
                     Ok(r) => r,
                     Err(_) => return Err(()),
                 };
-                remaining_input = &remaining_input[(available_before - chunk_input.len())..];
+                let consumed = available_before - chunk_input.len();
+                remaining_input = &remaining_input[consumed..];
                 match res {
                     ProcessingResult::Complete { result } => break result,
                     ProcessingResult::NeedsMoreInput { mut fallback, .. } => {
@@ -352,13 +360,14 @@ pub fn fuzz_decode(data: &[u8], config: FuzzConfig) -> Result<Vec<Vec<Image<f32>
                                     .flush_pixels(&mut output_bufs, reborrow(&mut runner_opt));
                             }
                         }
-                        if remaining_input.is_empty() {
+                        if remaining_input.is_empty() || (all_provided && consumed == 0) {
                             return Ok(all_frames);
                         }
                         decoder_with_frame_info = fallback;
                     }
                 }
             };
+
 
             all_frames.push(outputs);
 

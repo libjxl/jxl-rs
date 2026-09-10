@@ -417,11 +417,30 @@ def triage_artifacts(args):
             if art.is_file():
                 found_artifacts.append((target_name, art))
 
+    # Prioritize crashes and OOMs before timeouts
+    def artifact_priority(item):
+        name = item[1].name
+        if name.startswith("crash"):
+            return 0
+        elif name.startswith("oom"):
+            return 1
+        elif name.startswith("leak"):
+            return 2
+        return 3
+
+    found_artifacts.sort(key=artifact_priority)
+
+    if getattr(args, "only_crashes", False):
+        found_artifacts = [
+            (t, a) for (t, a) in found_artifacts if not a.name.startswith("timeout") and not a.name.startswith("slow")
+        ]
+
     if not found_artifacts:
-        print("No artifacts found in artifacts/ directory.")
+        print("No matching artifacts found in artifacts/ directory.")
         return
 
-    print(f"Found {len(found_artifacts)} artifact(s):\n")
+    timeout_sec = getattr(args, "timeout", None) or 5
+    print(f"Found {len(found_artifacts)} artifact(s) (reproducer timeout: {timeout_sec}s):\n")
     for target, art in found_artifacts:
         print(f"--------------------------------------------------------------------------------")
         print(f"Target:   {target}")
@@ -434,11 +453,21 @@ def triage_artifacts(args):
             continue
 
         cmd = [str(bin_path), str(art)]
-        res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
-        lines = res.stdout.strip().splitlines()
-        # Filter for interesting crash lines
-        output_snippet = "\n".join(lines[-30:]) if len(lines) > 30 else "\n".join(lines)
-        print(output_snippet)
+        try:
+            res = subprocess.run(
+                cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+                timeout=timeout_sec,
+            )
+            lines = res.stdout.strip().splitlines()
+            output_snippet = "\n".join(lines[-30:]) if len(lines) > 30 else "\n".join(lines)
+            print(output_snippet)
+        except subprocess.TimeoutExpired:
+            print(f"  \033[93m[TIMEOUT] Reproduction timed out after {timeout_sec}s (infinite loop or pathological input)\033[0m")
+        except Exception as e:
+            print(f"  Error running reproducer: {e}")
         print("\n")
 
 
@@ -495,6 +524,17 @@ def main():
 
     # triage
     p_triage = subparsers.add_parser("triage", help="Triage discovered crashes and artifacts")
+    p_triage.add_argument(
+        "--timeout",
+        type=int,
+        default=5,
+        help="Per-artifact reproducer timeout in seconds (default: 5)",
+    )
+    p_triage.add_argument(
+        "--only-crashes",
+        action="store_true",
+        help="Only triage crashes and OOMs, skipping timeouts",
+    )
 
     args = parser.parse_args()
 
