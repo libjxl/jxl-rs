@@ -24,9 +24,9 @@ impl<const N: usize, const SHIFT: u8> Upsample<N, SHIFT> {
         const { assert!(1 << SHIFT == N) }
 
         let weights: &[f32] = match N {
-            2 => &ups_factors.weights2,
-            4 => &ups_factors.weights4,
-            8 => &ups_factors.weights8,
+            2 => &*ups_factors.weights2,
+            4 => &*ups_factors.weights4,
+            8 => &*ups_factors.weights8,
             _ => unreachable!(),
         };
 
