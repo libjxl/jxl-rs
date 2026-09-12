@@ -218,6 +218,7 @@ pub(super) struct ScratchSpace {
     palette_row_scratch: [Vec<i32>; 4],
     decode_row_scratch: [Vec<i32>; 3],
     tree_lut_scratch: Box<[u8; LUT_TABLE_SIZE]>,
+    hsqueeze_i16_scratch: Box<[i16; 2048]>,
 }
 
 impl Debug for ScratchSpace {
@@ -233,6 +234,7 @@ impl ScratchSpace {
             palette_row_scratch: [vec![], vec![], vec![], vec![]],
             decode_row_scratch: [vec![], vec![], vec![]],
             tree_lut_scratch: crate::util::box_array(0u8),
+            hsqueeze_i16_scratch: crate::util::box_array(0i16),
         }
     }
 }
