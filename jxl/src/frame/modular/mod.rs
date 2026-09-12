@@ -210,12 +210,14 @@ impl ModularBufferInfo {
     }
 }
 
+use crate::frame::modular::decode::specialized_trees::LUT_TABLE_SIZE;
 use crate::frame::modular::transforms::smooth_squeeze::SmoothUpsampleScratch;
 
 pub(super) struct ScratchSpace {
     smooth_upsample_scratch: SmoothUpsampleScratch,
     palette_row_scratch: [Vec<i32>; 4],
     decode_row_scratch: [Vec<i32>; 3],
+    tree_lut_scratch: Box<[u8; LUT_TABLE_SIZE]>,
 }
 
 impl Debug for ScratchSpace {
@@ -230,6 +232,7 @@ impl ScratchSpace {
             smooth_upsample_scratch: SmoothUpsampleScratch::default(),
             palette_row_scratch: [vec![], vec![], vec![], vec![]],
             decode_row_scratch: [vec![], vec![], vec![]],
+            tree_lut_scratch: crate::util::box_array(0u8),
         }
     }
 }
