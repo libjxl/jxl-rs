@@ -54,7 +54,7 @@ impl SectionState {
 pub struct FrameInfo {
     frame_header: Option<FrameHeader>,
     toc_parser: Option<IncrementalTocReader>,
-    frame: Option<Frame>,
+    frame: Option<Box<Frame>>,
     // Keeps track of whether pixels have been modified.
     pixels_dirty: bool,
 
@@ -308,7 +308,7 @@ impl FrameInfo {
 
     #[cfg(test)]
     pub fn frame(&mut self) -> Option<&mut Frame> {
-        self.frame.as_mut()
+        self.frame.as_deref_mut()
     }
 
     pub fn dequeue_ready_sections(&mut self) {
