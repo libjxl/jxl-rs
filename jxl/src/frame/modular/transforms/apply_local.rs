@@ -341,6 +341,7 @@ impl TransformStep {
                         None,
                         &mut bufs,
                         storage,
+                        &mut scratch_space.hsqueeze_i16_scratch,
                     );
                 }
                 buffers[*buf_out] = out_buf;
