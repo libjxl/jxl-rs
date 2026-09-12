@@ -414,7 +414,7 @@ impl FullModularImage {
             })
             .collect();
 
-        sorted_buffers.sort_by_key(|x| x.0);
+        sorted_buffers.sort_unstable_by_key(|x| x.0);
 
         section_buffer_indices.push(
             sorted_buffers
@@ -463,7 +463,7 @@ impl FullModularImage {
 
         // Ensure that the channel list in each group is sorted by actual channel ID.
         for list in section_buffer_indices.iter_mut() {
-            list.sort_by_key(|x| buffer_info[*x].coded_channel_id);
+            list.sort_unstable_by_key(|x| (buffer_info[*x].coded_channel_id, *x));
         }
 
         trace!(?section_buffer_indices);

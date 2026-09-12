@@ -589,7 +589,7 @@ impl FrameInfo {
             }
             // Processing sections in order is more efficient because it lets us flush
             // the pipeline faster.
-            group_readers.sort_by_key(|x| x.0);
+            group_readers.sort_unstable_by_key(|x| x.0);
         } else {
             for g in 0..self.hf_sections.len() {
                 if self.candidate_hf_sections.contains(&g) {
