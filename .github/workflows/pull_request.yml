@@ -365,3 +365,40 @@ jobs:
 
       - name: Run Shuttle Concurrency Tests
         run: cargo test --release --features shuttle shuttle
+
+  stack_usage:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          submodules: recursive
+          persist-credentials: false
+
+      - name: Install latest rust toolchain with targets
+        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
+        with:
+          toolchain: nightly
+          targets: i686-unknown-linux-gnu, armv7-unknown-linux-gnueabihf, aarch64-unknown-linux-gnu
+
+      - name: Install linkers and tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc-i686-linux-gnu gcc-aarch64-linux-gnu gcc-arm-linux-gnueabihf llvm
+
+      - name: Setup python3
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: '3.x'
+
+      - name: Install Python dependencies
+        run: pip install pyelftools
+
+      - name: Rust cache
+        uses: Swatinem/rust-cache@23bce251a8cd2ffc3c1075eaa2367cf899916d84 # v2.7.3
+        with:
+          prefix-key: ubuntu-latest-stack-usage
+
+      - name: Check cumulative stack usage (16 KiB threshold)
+        run: |
+          python3 ci/check_stack_usage.py --max-stack 16384 --summary-file "$GITHUB_STEP_SUMMARY"
