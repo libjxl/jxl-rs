@@ -12,9 +12,7 @@ use crate::headers::CustomTransformData;
 use crate::render::{Channels, ChannelsMut, ErasedLocalState, RenderPipelineInOutStage};
 
 pub struct Upsample<const N: usize, const SHIFT: u8> {
-    // Precomputed flattened kernels for SIMD optimization
-    // Stored as N*N kernels in row-major order: kernel[oy][ox] -> flat_kernels[oy * N + ox]
-    flat_kernels: Vec<[f32; 25]>,
+    flat_kernels: [[[f32; 25]; N]; N],
     channel: usize,
 }
 
@@ -30,38 +28,29 @@ impl<const N: usize, const SHIFT: u8> Upsample<N, SHIFT> {
             _ => unreachable!(),
         };
 
-        let mut kernel = [[[[0.0; 5]; 5]; N]; N];
+        let mut flat_kernels = [[[0.0; 25]; N]; N];
         let n = N / 2;
         for i in 0..5 * n {
             for j in 0..5 * n {
-                let y = i.min(j);
-                let x = i.max(j);
-                let y = y as isize;
-                let x = x as isize;
+                let y = i.min(j) as isize;
+                let x = i.max(j) as isize;
                 let n = n as isize;
                 let index = (5 * n * y - y * (y - 1) / 2 + x - y) as usize;
-                // Filling in the top left corner from the weights
-                kernel[j / 5][i / 5][j % 5][i % 5] = weights[index];
-                // Mirroring to get the rest of the kernel.
-                kernel[(2 * n as usize - 1) - j / 5][i / 5][4 - (j % 5)][i % 5] = weights[index];
-                kernel[j / 5][(2 * n as usize - 1) - i / 5][j % 5][4 - (i % 5)] = weights[index];
-                kernel[(2 * n as usize - 1) - j / 5][(2 * n as usize - 1) - i / 5][4 - (j % 5)]
-                    [4 - (i % 5)] = weights[index];
-            }
-        }
+                let weight = weights[index];
 
-        // Precompute flattened kernels for SIMD optimization
-        // Stored in row-major order: kernel[oy][ox] -> flat_kernels[oy * N + ox]
-        let mut flat_kernels = Vec::with_capacity(N * N);
-        for di in 0..N {
-            for dj in 0..N {
-                let mut k = [0.0f32; 25];
-                for i in 0..5 {
-                    for j in 0..5 {
-                        k[i * 5 + j] = kernel[di][dj][i][j];
-                    }
-                }
-                flat_kernels.push(k);
+                let oy1 = j / 5;
+                let ox1 = i / 5;
+                let ky1 = j % 5;
+                let kx1 = i % 5;
+                let oy2 = N - 1 - oy1;
+                let ox2 = N - 1 - ox1;
+                let ky2 = 4 - ky1;
+                let kx2 = 4 - kx1;
+
+                flat_kernels[oy1][ox1][ky1 * 5 + kx1] = weight;
+                flat_kernels[oy2][ox1][ky2 * 5 + kx1] = weight;
+                flat_kernels[oy1][ox2][ky1 * 5 + kx2] = weight;
+                flat_kernels[oy2][ox2][ky2 * 5 + kx2] = weight;
             }
         }
 
@@ -426,7 +415,7 @@ impl<const N: usize, const SHIFT: u8> RenderPipelineInOutStage for Upsample<N, S
                 upsample_2x_simd_dispatch(
                     input,
                     xsize,
-                    self.flat_kernels.as_slice(),
+                    self.flat_kernels.as_flattened(),
                     &mut state.col_min,
                     &mut state.col_max,
                     &mut state.mins,
@@ -438,7 +427,7 @@ impl<const N: usize, const SHIFT: u8> RenderPipelineInOutStage for Upsample<N, S
                 upsample_4x_simd_dispatch(
                     input,
                     xsize,
-                    self.flat_kernels.as_slice(),
+                    self.flat_kernels.as_flattened(),
                     &mut state.col_min,
                     &mut state.col_max,
                     &mut state.mins,
@@ -450,7 +439,7 @@ impl<const N: usize, const SHIFT: u8> RenderPipelineInOutStage for Upsample<N, S
                 upsample_8x_simd_dispatch(
                     input,
                     xsize,
-                    self.flat_kernels.as_slice(),
+                    self.flat_kernels.as_flattened(),
                     &mut state.col_min,
                     &mut state.col_max,
                     &mut state.mins,
@@ -480,6 +469,23 @@ mod test {
 
     fn ups_factors() -> CustomTransformData {
         CustomTransformData::default(&CustomTransformDataNonserialized { xyb_encoded: true })
+    }
+
+    #[test]
+    fn upsample_kernel_storage_is_inline() {
+        assert!(!std::mem::needs_drop::<Upsample2x>());
+        assert!(!std::mem::needs_drop::<Upsample4x>());
+        assert!(!std::mem::needs_drop::<Upsample8x>());
+        let channel_size = std::mem::size_of::<usize>();
+        assert_eq!(std::mem::size_of::<Upsample2x>(), 4 * 25 * 4 + channel_size);
+        assert_eq!(
+            std::mem::size_of::<Upsample4x>(),
+            16 * 25 * 4 + channel_size
+        );
+        assert_eq!(
+            std::mem::size_of::<Upsample8x>(),
+            64 * 25 * 4 + channel_size
+        );
     }
 
     #[test]
