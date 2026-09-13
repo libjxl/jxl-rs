@@ -8,7 +8,9 @@ use std::path::Path;
 
 use crate::error::Error;
 use crate::image::Image;
-use crate::tests::decode::{compare_frames, compute_mse, decode, decode_32bit, decode_internal};
+use crate::tests::decode::{
+    DecodeParams, compare_frames, compute_mse, decode, decode_32bit, decode_internal,
+};
 
 fn clone_images(imgs: &[Image<f32>]) -> Vec<Image<f32>> {
     imgs.iter()
@@ -63,13 +65,12 @@ pub fn run(path: &Path, expected_checkpoints: &[(usize, f32)]) {
         };
     let _ = decode_internal(
         &file,
-        chunk_size,
-        false,
-        true,
-        None,
-        Some(&mut cb_16),
-        None,
-        false,
+        DecodeParams {
+            chunk_size,
+            do_flush: true,
+            flush_callback: Some(&mut cb_16),
+            ..Default::default()
+        },
     );
 
     let mut latest_cp_32: HashMap<usize, (usize, usize, Vec<Image<f32>>)> = HashMap::new();
@@ -84,13 +85,13 @@ pub fn run(path: &Path, expected_checkpoints: &[(usize, f32)]) {
         };
     let _ = decode_internal(
         &file,
-        chunk_size,
-        false,
-        true,
-        None,
-        Some(&mut cb_32),
-        None,
-        true,
+        DecodeParams {
+            chunk_size,
+            do_flush: true,
+            flush_callback: Some(&mut cb_32),
+            disable_16bit_modular_buffers: true,
+            ..Default::default()
+        },
     );
 
     // 3. Validate exact equality and target MSE bounds at checkpoints
