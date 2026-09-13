@@ -1,5 +1,7 @@
 target
 corpus
 artifacts
+artifacts_archive
+runs
 coverage
 Cargo.lock
