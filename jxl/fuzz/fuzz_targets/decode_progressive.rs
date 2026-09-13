@@ -11,8 +11,8 @@ fuzz_target!(|data: &[u8]| {
     let _ = fuzz_decode(
         data,
         FuzzConfig {
-            parallel: true,
-            num_threads: 2,
+            progressive: true,
+            flush_intermediate: true,
             ..Default::default()
         },
     );

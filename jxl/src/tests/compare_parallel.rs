@@ -211,11 +211,62 @@ pub fn run_progressive(path: &Path) {
     }
 }
 
+pub fn run_compare_pipelines_parallel(path: &Path) {
+    let file = std::fs::read(path).unwrap();
+
+    let mut runner_simple = TestParallelRunner {
+        max_threads: std::env::var("TEST_MAX_THREADS")
+            .ok()
+            .and_then(|x| x.parse().ok())
+            .unwrap_or(4),
+    };
+    let (_, simple_frames) = decode_internal(
+        &file,
+        usize::MAX,
+        true,
+        false,
+        None,
+        None,
+        Some(&mut runner_simple),
+        false,
+    )
+    .unwrap();
+
+    let mut runner_lowmem = TestParallelRunner {
+        max_threads: std::env::var("TEST_MAX_THREADS")
+            .ok()
+            .and_then(|x| x.parse().ok())
+            .unwrap_or(4),
+    };
+    let (_, par_frames) = decode_internal(
+        &file,
+        usize::MAX,
+        false,
+        false,
+        None,
+        None,
+        Some(&mut runner_lowmem),
+        false,
+    )
+    .unwrap();
+
+    assert_eq!(
+        simple_frames.len(),
+        par_frames.len(),
+        "Simple and low-memory parallel frame counts differ for {:?}",
+        path
+    );
+
+    for (fc, (simple_f, par_f)) in simple_frames.into_iter().zip(par_frames).enumerate() {
+        compare_frames(path, fc, &par_f, &simple_f);
+    }
+}
+
 // Runs `f` under the shuttle scheduler selected via environment variables:
-// - default: random scheduling, SHUTTLE_ITERATIONS iterations (default 10);
+// - default: PCT scheduling with SHUTTLE_PCT_DEPTH preemptions (default 3)
+//   and SHUTTLE_ITERATIONS (default 20), which finds bugs that random scheduling misses.
+// - SHUTTLE_SCHEDULER=random: random scheduling, SHUTTLE_ITERATIONS iterations;
 //   set SHUTTLE_RANDOM_SEED to replay a failure reported as "failing seed".
-// - SHUTTLE_SCHEDULER=pct: PCT scheduling with SHUTTLE_PCT_DEPTH preemptions
-//   (default 3), which finds some bugs random scheduling misses.
 // - SHUTTLE_SCHEDULER=replay: replays the schedule stored in the file pointed
 //   to by SHUTTLE_REPLAY_FILE (a "failing schedule" printed by a failure).
 #[cfg(feature = "shuttle")]
@@ -223,10 +274,14 @@ pub fn run_shuttle_test(path: std::path::PathBuf, f: fn(&Path)) {
     let iterations = std::env::var("SHUTTLE_ITERATIONS")
         .ok()
         .and_then(|x| x.parse().ok())
-        .unwrap_or(10);
+        .unwrap_or(20);
 
     let mut config = shuttle::Config::default();
-    config.max_steps = shuttle::MaxSteps::FailAfter(10_000_000);
+    let max_steps = std::env::var("SHUTTLE_MAX_STEPS")
+        .ok()
+        .and_then(|x| x.parse().ok())
+        .unwrap_or(10_000_000);
+    config.max_steps = shuttle::MaxSteps::FailAfter(max_steps);
     config.stack_size = 1024 * 1024;
 
     let test = move || {
@@ -248,16 +303,16 @@ pub fn run_shuttle_test(path: std::path::PathBuf, f: fn(&Path)) {
             let scheduler = shuttle::scheduler::ReplayScheduler::new_from_encoded(schedule.trim());
             shuttle::Runner::new(scheduler, config).run(test);
         }
-        Ok("pct") => {
+        Ok("random") => {
+            let scheduler = shuttle::scheduler::RandomScheduler::new(iterations);
+            shuttle::Runner::new(scheduler, config).run(test);
+        }
+        _ => {
             let depth = std::env::var("SHUTTLE_PCT_DEPTH")
                 .ok()
                 .and_then(|x| x.parse().ok())
                 .unwrap_or(3);
             let scheduler = shuttle::scheduler::PctScheduler::new(depth, iterations);
-            shuttle::Runner::new(scheduler, config).run(test);
-        }
-        _ => {
-            let scheduler = shuttle::scheduler::RandomScheduler::new(iterations);
             shuttle::Runner::new(scheduler, config).run(test);
         }
     }
