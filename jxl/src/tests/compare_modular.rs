@@ -9,7 +9,8 @@ use std::path::Path;
 use crate::error::Error;
 use crate::image::Image;
 use crate::tests::decode::{
-    DecodeParams, compare_frames, compute_mse, decode, decode_32bit, decode_internal,
+    DecodeParams, compare_frames, compute_tile_quartiles, decode, decode_32bit, decode_internal,
+    image_size,
 };
 
 fn clone_images(imgs: &[Image<f32>]) -> Vec<Image<f32>> {
@@ -24,7 +25,7 @@ fn clone_images(imgs: &[Image<f32>]) -> Vec<Image<f32>> {
         .collect()
 }
 
-pub fn run(path: &Path, expected_checkpoints: &[(usize, f32)]) {
+pub fn run(path: &Path, expected_checkpoints: &[(usize, [f32; 4])]) {
     let file = std::fs::read(path).unwrap();
 
     // 1. One-shot decode in 16-bit (normal) and 32-bit mode
@@ -49,6 +50,8 @@ pub fn run(path: &Path, expected_checkpoints: &[(usize, f32)]) {
     if expected_checkpoints.is_empty() {
         return;
     }
+
+    let size = image_size(&file).unwrap();
 
     // 2. Incremental progressive decode with chunk_size = 123
     let chunk_size = 123;
@@ -120,23 +123,28 @@ pub fn run(path: &Path, expected_checkpoints: &[(usize, f32)]) {
             cp_idx, path
         );
         compare_frames(path, *f16, buf16, buf32);
-        let mse_16 = compute_mse(buf16, &frames_16[*f16]);
-        let mse_32 = compute_mse(buf32, &frames_32[*f32]);
-        assert!(
-            mse_16 <= max_mse * 1.02 + 1e-6,
-            "16-bit MSE {} exceeded max_mse {} at {} bytes for {:?}",
-            mse_16,
-            max_mse,
-            expected_bytes,
-            path
-        );
-        assert!(
-            mse_32 <= max_mse * 1.02 + 1e-6,
-            "32-bit MSE {} exceeded max_mse {} at {} bytes for {:?}",
-            mse_32,
-            max_mse,
-            expected_bytes,
-            path
-        );
+        let q16 = compute_tile_quartiles(buf16, &frames_16[*f16], size);
+        let q32 = compute_tile_quartiles(buf32, &frames_32[*f32], size);
+        for q_idx in 0..4 {
+            let bound = max_mse[q_idx] * 1.02 + 1e-6;
+            assert!(
+                q16[q_idx] <= bound,
+                "16-bit quartile {} ({}) exceeded expected bound {} at {} bytes for {:?}",
+                q_idx + 1,
+                q16[q_idx],
+                bound,
+                expected_bytes,
+                path
+            );
+            assert!(
+                q32[q_idx] <= bound,
+                "32-bit quartile {} ({}) exceeded expected bound {} at {} bytes for {:?}",
+                q_idx + 1,
+                q32[q_idx],
+                bound,
+                expected_bytes,
+                path
+            );
+        }
     }
 }
