@@ -392,6 +392,103 @@ pub fn compute_mse(actual: &[Image<f32>], reference: &[Image<f32>]) -> f32 {
     }
 }
 
+pub fn image_size(input: &[u8]) -> Result<(usize, usize)> {
+    let mut decoder = JxlDecoder::<states::Initialized>::new(JxlDecoderOptions::default());
+    let mut chunk_input = input;
+    loop {
+        match decoder.process(&mut chunk_input, None)? {
+            ProcessingResult::Complete { result } => return Ok(result.basic_info().size),
+            ProcessingResult::NeedsMoreInput { fallback, .. } => {
+                decoder = fallback;
+                if chunk_input.is_empty() {
+                    panic!("Unexpected end of input before image info");
+                }
+            }
+        }
+    }
+}
+
+pub fn compute_tile_quartiles(
+    actual: &[Image<f32>],
+    reference: &[Image<f32>],
+    image_size: (usize, usize),
+) -> [f32; 4] {
+    assert_eq!(actual.len(), reference.len());
+    let (width, height) = image_size;
+    let num_channels = actual[0].size().0 / width;
+    assert_eq!(actual[0].size().0, width * num_channels);
+    assert_eq!(actual[0].size().1, height);
+
+    const TILE_SIZE: usize = 64;
+    let mut tile_mses = Vec::new();
+
+    // Evaluate 64x64 tiles on natural alignment (full tiles only)
+    let mut y0 = 0;
+    while y0 + TILE_SIZE <= height {
+        let mut x0 = 0;
+        while x0 + TILE_SIZE <= width {
+            let mut sum_sq_diff = 0.0f64;
+            let mut tile_samples = 0usize;
+
+            for y in y0..y0 + TILE_SIZE {
+                let act_row0 = actual[0].row(y);
+                let ref_row0 = reference[0].row(y);
+                for x in x0..x0 + TILE_SIZE {
+                    let base_idx = x * num_channels;
+                    for c in 0..num_channels {
+                        let act_val = act_row0[base_idx + c];
+                        let ref_val = ref_row0[base_idx + c];
+                        let act_val = if act_val.is_nan() { 0.0 } else { act_val };
+                        let diff = act_val - ref_val;
+                        sum_sq_diff += (diff * diff) as f64;
+                        tile_samples += 1;
+                    }
+                }
+
+                for (act_chan, ref_chan) in actual[1..].iter().zip(reference[1..].iter()) {
+                    let act_row = act_chan.row(y);
+                    let ref_row = ref_chan.row(y);
+                    for x in x0..x0 + TILE_SIZE {
+                        let act_val = act_row[x];
+                        let ref_val = ref_row[x];
+                        let act_val = if act_val.is_nan() { 0.0 } else { act_val };
+                        let diff = act_val - ref_val;
+                        sum_sq_diff += (diff * diff) as f64;
+                        tile_samples += 1;
+                    }
+                }
+            }
+
+            if tile_samples > 0 {
+                let tile_mse = (sum_sq_diff / tile_samples as f64) as f32;
+                tile_mses.push(tile_mse);
+            }
+
+            x0 += TILE_SIZE;
+        }
+        y0 += TILE_SIZE;
+    }
+
+    if tile_mses.is_empty() {
+        let mse = compute_mse(actual, reference);
+        [mse, mse, mse, mse]
+    } else {
+        tile_mses.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+        let n = tile_mses.len();
+        let q = |p: f64| -> f32 {
+            let idx = p * (n - 1) as f64;
+            let i = idx.floor() as usize;
+            let frac = (idx - i as f64) as f32;
+            if i + 1 < n {
+                tile_mses[i] * (1.0 - frac) + tile_mses[i + 1] * frac
+            } else {
+                tile_mses[n - 1]
+            }
+        };
+        [q(0.25), q(0.50), q(0.75), q(1.00)]
+    }
+}
+
 pub fn compare_frames(path: &Path, fc: usize, f: &[Image<f32>], sf: &[Image<f32>]) {
     assert_eq!(f.len(), sf.len());
     for (c, (b, sb)) in f.iter().zip(sf.iter()).enumerate() {
