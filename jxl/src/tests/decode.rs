@@ -20,37 +20,65 @@ use crate::headers::toc::Toc;
 use crate::image::{Image, JxlOutputBuffer, Rect};
 
 #[allow(clippy::type_complexity)]
+pub struct DecodeParams<'a> {
+    pub chunk_size: usize,
+    pub use_simple_pipeline: bool,
+    pub do_flush: bool,
+    pub callback: Option<Box<dyn FnMut(&FileHeader, &Frame, usize) -> Result<(), Error>>>,
+    pub flush_callback: Option<&'a mut dyn FnMut(usize, usize, &[Image<f32>]) -> Result<(), Error>>,
+    pub parallel_runner: Option<&'a mut dyn JxlParallelRunner>,
+    pub disable_16bit_modular_buffers: bool,
+}
+
+impl<'a> Default for DecodeParams<'a> {
+    fn default() -> Self {
+        Self {
+            chunk_size: usize::MAX,
+            use_simple_pipeline: false,
+            do_flush: false,
+            callback: None,
+            flush_callback: None,
+            parallel_runner: None,
+            disable_16bit_modular_buffers: false,
+        }
+    }
+}
+
+#[allow(clippy::type_complexity)]
 pub fn decode(input: &[u8]) -> Result<(usize, Vec<Vec<Image<f32>>>), Error> {
-    decode_internal(input, usize::MAX, false, false, None, None, None, false)
+    decode_internal(input, DecodeParams::default())
 }
 
 #[allow(clippy::type_complexity)]
 pub fn decode_32bit(input: &[u8]) -> Result<(usize, Vec<Vec<Image<f32>>>), Error> {
-    decode_internal(input, usize::MAX, false, false, None, None, None, true)
+    decode_internal(
+        input,
+        DecodeParams {
+            disable_16bit_modular_buffers: true,
+            ..Default::default()
+        },
+    )
 }
 
-#[allow(clippy::type_complexity, clippy::too_many_arguments)]
-pub fn decode_internal(
+#[allow(clippy::type_complexity)]
+pub fn decode_internal<'a>(
     mut input: &[u8],
-    chunk_size: usize,
-    use_simple_pipeline: bool,
-    do_flush: bool,
-    callback: Option<Box<dyn FnMut(&FileHeader, &Frame, usize) -> Result<(), Error>>>,
-    mut flush_callback: Option<&mut dyn FnMut(usize, usize, &[Image<f32>]) -> Result<(), Error>>,
-    parallel_runner: Option<&mut dyn JxlParallelRunner>,
-    disable_16bit_modular_buffers: bool,
+    params: DecodeParams<'a>,
 ) -> Result<(usize, Vec<Vec<Image<f32>>>), Error> {
     let s = &mut SequentialRunner;
-    let parallel_runner = parallel_runner.unwrap_or(s);
+    let parallel_runner = params.parallel_runner.unwrap_or(s);
     let options = JxlDecoderOptions::default();
     let mut initialized_decoder = JxlDecoder::<states::Initialized>::new(options);
 
-    if let Some(callback) = callback {
+    if let Some(callback) = params.callback {
         initialized_decoder.set_frame_callback(callback);
     }
 
     let original_input_len = input.len();
     let mut chunk_input = &input[0..0];
+    let chunk_size = params.chunk_size;
+    let do_flush = params.do_flush;
+    let mut flush_callback = params.flush_callback;
 
     macro_rules! advance_decoder {
         ($decoder: ident, $process_call: expr $(; flush: $buffers: ident, $f_idx: ident)?) => {{
@@ -107,8 +135,8 @@ pub fn decode_internal(
         initialized_decoder,
         initialized_decoder.process(&mut chunk_input, Some(parallel_runner))
     );
-    decoder_with_image_info.set_use_simple_pipeline(use_simple_pipeline);
-    if disable_16bit_modular_buffers {
+    decoder_with_image_info.set_use_simple_pipeline(params.use_simple_pipeline);
+    if params.disable_16bit_modular_buffers {
         decoder_with_image_info.disable_16bit_modular_buffers();
     }
 
@@ -331,19 +359,16 @@ pub fn read_headers_and_toc(data: &[u8]) -> Result<(FileHeader, FrameHeader, Toc
     let r = result.clone();
     decode_internal(
         data,
-        usize::MAX,
-        false,
-        false,
-        Some(Box::new(move |fh, f, _| {
-            let mut r = r.borrow_mut();
-            if r.is_none() {
-                *r = Some((fh.clone(), f.header().clone(), f.toc().clone()));
-            }
-            Ok(())
-        })),
-        None,
-        None,
-        false,
+        DecodeParams {
+            callback: Some(Box::new(move |fh, f, _| {
+                let mut r = r.borrow_mut();
+                if r.is_none() {
+                    *r = Some((fh.clone(), f.header().clone(), f.toc().clone()));
+                }
+                Ok(())
+            })),
+            ..Default::default()
+        },
     )?;
 
     Ok(result.take().unwrap())

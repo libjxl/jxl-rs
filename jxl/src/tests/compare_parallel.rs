@@ -21,7 +21,7 @@ use shuttle::thread;
 use crate::api::JxlParallelRunner;
 use crate::error::Error;
 use crate::image::Image;
-use crate::tests::decode::{compare_frames, decode_internal};
+use crate::tests::decode::{DecodeParams, compare_frames, decode_internal};
 
 pub struct TestParallelRunner {
     max_threads: usize,
@@ -96,8 +96,7 @@ pub fn run_oneshot(path: &Path) {
     let file = std::fs::read(path).unwrap();
 
     // Oneshot sequential decode
-    let (_, seq_frames) =
-        decode_internal(&file, usize::MAX, false, false, None, None, None, false).unwrap();
+    let (_, seq_frames) = decode_internal(&file, DecodeParams::default()).unwrap();
 
     if seq_frames.is_empty() {
         return;
@@ -114,13 +113,10 @@ pub fn run_oneshot(path: &Path) {
     };
     let (_, par_frames) = decode_internal(
         &file,
-        usize::MAX,
-        false,
-        false,
-        None,
-        None,
-        Some(&mut runner),
-        false,
+        DecodeParams {
+            parallel_runner: Some(&mut runner),
+            ..Default::default()
+        },
     )
     .unwrap();
 
@@ -151,13 +147,12 @@ pub fn run_progressive(path: &Path) {
     // Sequential progressive decode
     let _ = decode_internal(
         &file,
-        chunk_size,
-        false,
-        true,
-        None,
-        Some(&mut seq_callback),
-        None,
-        false,
+        DecodeParams {
+            chunk_size,
+            do_flush: true,
+            flush_callback: Some(&mut seq_callback),
+            ..Default::default()
+        },
     );
 
     let mut par_flushes: Vec<(usize, usize, Vec<Image<f32>>)> = Vec::new();
@@ -178,13 +173,13 @@ pub fn run_progressive(path: &Path) {
     };
     let _ = decode_internal(
         &file,
-        chunk_size,
-        false,
-        true,
-        None,
-        Some(&mut par_callback),
-        Some(&mut runner),
-        false,
+        DecodeParams {
+            chunk_size,
+            do_flush: true,
+            flush_callback: Some(&mut par_callback),
+            parallel_runner: Some(&mut runner),
+            ..Default::default()
+        },
     );
 
     assert_eq!(

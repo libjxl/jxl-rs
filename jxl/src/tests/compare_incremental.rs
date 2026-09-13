@@ -6,7 +6,7 @@
 use std::path::Path;
 
 use crate::image::Image;
-use crate::tests::decode::{compare_frames, compute_mse, decode, decode_internal};
+use crate::tests::decode::{DecodeParams, compare_frames, compute_mse, decode, decode_internal};
 
 pub fn run(path: &Path, expected_checkpoints: &[(usize, f32)]) {
     let file = std::fs::read(path).unwrap();
@@ -35,13 +35,12 @@ pub fn run(path: &Path, expected_checkpoints: &[(usize, f32)]) {
     // Incremental decode with progressive callback
     let (_, frames) = decode_internal(
         &file,
-        123,
-        false,
-        true,
-        None,
-        Some(&mut flush_callback),
-        None,
-        false,
+        DecodeParams {
+            chunk_size: 123,
+            do_flush: true,
+            flush_callback: Some(&mut flush_callback),
+            ..Default::default()
+        },
     )
     .unwrap();
 
