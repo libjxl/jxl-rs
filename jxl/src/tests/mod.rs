@@ -423,6 +423,33 @@ declare_test_file!(named_frame_test, "named_frame_test.jxl");
 declare_test_file!(narrow_edge_group, "narrow_edge_group.jxl");
 declare_test_file!(oddsize_ups, "oddsize_ups.jxl");
 declare_test_file!(
+    red_420,
+    "red_420.jxl",
+    checkpoints: &[
+        (6150, 0.0009555),
+        (54243, 0.0005309),
+        (90405, 0.0002114)
+    ]
+);
+declare_test_file!(
+    red_422,
+    "red_422.jxl",
+    checkpoints: &[
+        (7995, 0.0010614),
+        (62730, 0.0005907),
+        (90159, 0.0003543)
+    ]
+);
+declare_test_file!(
+    red_440,
+    "red_440.jxl",
+    checkpoints: &[
+        (8610, 0.0010598),
+        (61623, 0.0005892),
+        (88191, 0.0003539)
+    ]
+);
+declare_test_file!(
     ooo_jxlp_empty_dc_group_boxes,
     "ooo_jxlp_empty_dc_group_boxes.jxl"
 );
