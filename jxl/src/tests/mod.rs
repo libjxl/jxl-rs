@@ -11,6 +11,7 @@ mod compare_incremental;
 mod compare_modular;
 #[cfg(not(any(target_family = "wasm", target_arch = "wasm32")))]
 mod compare_parallel;
+mod compare_prefix;
 pub(crate) mod decode;
 #[cfg(not(any(target_family = "wasm", target_arch = "wasm32")))]
 pub(crate) mod parallel_runner;

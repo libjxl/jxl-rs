@@ -28,6 +28,7 @@ pub struct DecodeParams<'a> {
     pub flush_callback: Option<&'a mut dyn FnMut(usize, usize, &[Image<f32>]) -> Result<(), Error>>,
     pub parallel_runner: Option<&'a mut dyn JxlParallelRunner>,
     pub disable_16bit_modular_buffers: bool,
+    pub allow_partial: bool,
 }
 
 impl<'a> Default for DecodeParams<'a> {
@@ -40,6 +41,7 @@ impl<'a> Default for DecodeParams<'a> {
             flush_callback: None,
             parallel_runner: None,
             disable_16bit_modular_buffers: false,
+            allow_partial: false,
         }
     }
 }
@@ -79,9 +81,12 @@ pub fn decode_internal<'a>(
     let chunk_size = params.chunk_size;
     let do_flush = params.do_flush;
     let mut flush_callback = params.flush_callback;
+    let allow_partial = params.allow_partial;
+    let mut frames = vec![];
+    let mut f_idx = 0;
 
     macro_rules! advance_decoder {
-        ($decoder: ident, $process_call: expr $(; flush: $buffers: ident, $f_idx: ident)?) => {{
+        ($decoder: ident, $process_call: expr) => {{
             loop {
                 chunk_input =
                     &input[..(chunk_input.len().saturating_add(chunk_size)).min(input.len())];
@@ -90,13 +95,60 @@ pub fn decode_internal<'a>(
                 input = &input[(available_before - chunk_input.len())..];
                 match process_result? {
                     ProcessingResult::Complete { result } => break result,
-                    ProcessingResult::NeedsMoreInput { fallback, size_hint } => {
-                        #[allow(unused_mut)]
+                    ProcessingResult::NeedsMoreInput {
+                        fallback,
+                        size_hint,
+                    } => {
+                        if input.is_empty() {
+                            if allow_partial {
+                                return Ok((0, vec![]));
+                            }
+                            panic!("Unexpected end of input ({size_hint})");
+                        }
+                        $decoder = fallback;
+                    }
+                }
+            }
+        }};
+        ($decoder: ident, $process_call: expr; flush: $buffers: ident, $f_idx: ident) => {{
+            loop {
+                chunk_input =
+                    &input[..(chunk_input.len().saturating_add(chunk_size)).min(input.len())];
+                let available_before = chunk_input.len();
+                let process_result = $process_call;
+                input = &input[(available_before - chunk_input.len())..];
+                match process_result? {
+                    ProcessingResult::Complete { result } => break result,
+                    ProcessingResult::NeedsMoreInput {
+                        fallback,
+                        size_hint,
+                    } => {
                         let mut fallback = fallback;
-                        #[allow(unused_mut)]
                         let mut flushed = false;
                         if do_flush && !input.is_empty() {
-                            $(
+                            let mut api_buffers: Vec<_> = $buffers
+                                .iter_mut()
+                                .map(|b| {
+                                    JxlOutputBuffer::from_image_rect_mut(
+                                        b.get_rect_mut(Rect {
+                                            origin: (0, 0),
+                                            size: b.size(),
+                                        })
+                                        .into_raw(),
+                                    )
+                                })
+                                .collect();
+                            flushed =
+                                fallback.flush_pixels(&mut api_buffers, Some(parallel_runner))?;
+                        }
+                        if flushed {
+                            if let Some(ref mut cb) = flush_callback {
+                                let consumed_bytes = original_input_len - input.len();
+                                cb(consumed_bytes, $f_idx, &$buffers)?;
+                            }
+                        }
+                        if input.is_empty() {
+                            if allow_partial {
                                 let mut api_buffers: Vec<_> = $buffers
                                     .iter_mut()
                                     .map(|b| {
@@ -109,18 +161,11 @@ pub fn decode_internal<'a>(
                                         )
                                     })
                                     .collect();
-                                flushed = fallback.flush_pixels(&mut api_buffers, Some(parallel_runner))?;
-                            )?
-                        }
-                        if flushed {
-                            $(
-                                if let Some(ref mut cb) = flush_callback {
-                                    let consumed_bytes = original_input_len - input.len();
-                                    cb(consumed_bytes, $f_idx, &$buffers)?;
-                                }
-                            )?
-                        }
-                        if input.is_empty() {
+                                let _ = fallback
+                                    .flush_pixels(&mut api_buffers, Some(parallel_runner))?;
+                                frames.push($buffers);
+                                return Ok((frames.len(), frames));
+                            }
                             panic!("Unexpected end of input ({size_hint})");
                         }
                         $decoder = fallback;
@@ -170,9 +215,6 @@ pub fn decode_internal<'a>(
     let num_channels = pixel_format.color_type.samples_per_pixel();
     assert!(num_channels > 0);
 
-    let mut frames = vec![];
-    let mut f_idx = 0;
-
     loop {
         // First channel is interleaved.
         let mut buffers = vec![Image::new_with_value(
@@ -220,13 +262,15 @@ pub fn decode_internal<'a>(
             f_idx
         );
 
-        // All pixels should have been overwritten, so they should no longer be NaNs.
-        for buf in buffers.iter() {
-            let (xs, ys) = buf.size();
-            for y in 0..ys {
-                let row = buf.row(y);
-                for (x, v) in row.iter().enumerate() {
-                    assert!(!v.is_nan(), "NaN at {x} {y} (image size {xs}x{ys})");
+        if !allow_partial {
+            // All pixels should have been overwritten, so they should no longer be NaNs.
+            for buf in buffers.iter() {
+                let (xs, ys) = buf.size();
+                for y in 0..ys {
+                    let row = buf.row(y);
+                    for (x, v) in row.iter().enumerate() {
+                        assert!(!v.is_nan(), "NaN at {x} {y} (image size {xs}x{ys})");
+                    }
                 }
             }
         }
@@ -237,8 +281,10 @@ pub fn decode_internal<'a>(
         if !decoder_with_image_info.has_more_frames() {
             let decoded_frames = decoder_with_image_info.scanned_frames().len();
 
-            // Ensure we decoded at least one frame
-            assert!(decoded_frames > 0, "No frames were decoded");
+            if !allow_partial {
+                // Ensure we decoded at least one frame
+                assert!(decoded_frames > 0, "No frames were decoded");
+            }
 
             return Ok((decoded_frames, frames));
         }
@@ -351,6 +397,47 @@ pub fn compare_frames(path: &Path, fc: usize, f: &[Image<f32>], sf: &[Image<f32>
     for (c, (b, sb)) in f.iter().zip(sf.iter()).enumerate() {
         crate::tests::assert_image_eq!(b, sb, "channel {} frame {} for {:?}", c, fc, path);
     }
+}
+
+pub fn compare_frames_close(
+    path: &Path,
+    fc: usize,
+    f: &[Image<f32>],
+    sf: &[Image<f32>],
+    max_abs_diff: f32,
+) {
+    assert_eq!(f.len(), sf.len());
+    for (c, (chan_a, chan_b)) in f.iter().zip(sf.iter()).enumerate() {
+        assert_eq!(chan_a.size(), chan_b.size(), "Size mismatch");
+        let (w, h) = chan_a.size();
+        for y in 0..h {
+            let row_a = chan_a.row(y);
+            let row_b = chan_b.row(y);
+            for x in 0..w {
+                let val_a = row_a[x];
+                let val_b = row_b[x];
+                if val_a.is_nan() && val_b.is_nan() {
+                    continue;
+                }
+                let diff = (val_a - val_b).abs();
+                if diff > max_abs_diff || val_a.is_nan() != val_b.is_nan() {
+                    panic!(
+                        "channel {} frame {} mismatch at ({}, {}) for {:?}: left={}, right={}, diff={}",
+                        c, fc, x, y, path, val_a, val_b, diff
+                    );
+                }
+            }
+        }
+    }
+}
+
+pub fn has_decoded_pixels(frames: &[Vec<Image<f32>>]) -> bool {
+    frames.iter().any(|f| {
+        f.iter().any(|c| {
+            let (_, h) = c.size();
+            (0..h).any(|y| c.row(y).iter().any(|&v| !v.is_nan()))
+        })
+    })
 }
 
 pub fn read_headers_and_toc(data: &[u8]) -> Result<(FileHeader, FrameHeader, Toc)> {
