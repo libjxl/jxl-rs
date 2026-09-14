@@ -64,6 +64,12 @@ macro_rules! declare_test_file_common {
                 crate::tests::compare_incremental::run(&path, $checkpoints);
             }
 
+            #[test]
+            fn [<test_compare_prefix_ $ident>]() {
+                let path = std::path::Path::new("resources/test/").join($path);
+                crate::tests::compare_prefix::run(&path);
+            }
+
             #[cfg(not(any(target_family = "wasm", target_arch = "wasm32")))]
             #[test]
             fn [<test_compare_parallel_oneshot_ $ident>]() {
