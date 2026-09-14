@@ -12,6 +12,8 @@ mod compare_modular;
 #[cfg(not(any(target_family = "wasm", target_arch = "wasm32")))]
 mod compare_parallel;
 pub(crate) mod decode;
+#[cfg(not(any(target_family = "wasm", target_arch = "wasm32")))]
+pub(crate) mod parallel_runner;
 
 #[allow(clippy::single_component_path_imports)]
 pub(crate) use assert_close;
