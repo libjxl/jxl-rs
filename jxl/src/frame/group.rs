@@ -33,6 +33,8 @@ pub struct VarDctBuffers {
     /// Coefficient storage for single-pass decoding (when hf_coefficients is None)
     pub coeffs_storage: Vec<CacheLine>,
     pub num_nzeros_storage: Vec<[u8; 32]>,
+    pub lf_upsample_out: [Vec<f32>; 8],
+    pub lf_upsample_in: [Vec<f32>; 5],
 }
 
 impl VarDctBuffers {
@@ -42,6 +44,8 @@ impl VarDctBuffers {
             transform_buffer: [vec![], vec![], vec![]],
             coeffs_storage: vec![],
             num_nzeros_storage: vec![],
+            lf_upsample_out: std::array::from_fn(|_| vec![]),
+            lf_upsample_in: std::array::from_fn(|_| vec![]),
         }
     }
 
