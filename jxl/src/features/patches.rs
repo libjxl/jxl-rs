@@ -13,7 +13,7 @@ use crate::features::blending::perform_blending;
 use crate::frame::{DecoderState, ReferenceFrame};
 use crate::headers::extra_channels::ExtraChannelInfo;
 use crate::util::tracing_wrappers::*;
-use crate::util::{NewWithCapacity, slice};
+use crate::util::{NewWithCapacity, SmallVec};
 
 // Context numbers as specified in Section C.4.5, Listing C.2:
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
@@ -724,16 +724,18 @@ impl PatchesDictionary {
         patches_for_row_result: &mut Vec<usize>,
         blending_scratch: &mut Vec<f32>,
     ) {
-        // TODO(zond): Allocate a buffer for this when building the stage instead of when executing it.
-        let mut out = row
-            .iter_mut()
-            .map(|s| &mut s[..xsize])
-            .collect::<Vec<&mut [f32]>>();
+        self.set_patches_for_row(row_pos.1, &mut *patches_for_row_result);
+        if patches_for_row_result.is_empty() {
+            return;
+        }
+
+        let mut out = SmallVec::<&mut [f32], 8>::new();
+        for s in row.iter_mut() {
+            out.push(&mut s[..xsize]);
+        }
         let num_ec = extra_channel_info.len();
         assert!(num_ec + 1 == self.blendings_stride);
-        let dummy_fg = vec![0f32];
-        let mut fg = vec![dummy_fg.as_slice(); 3 + num_ec];
-        self.set_patches_for_row(row_pos.1, &mut *patches_for_row_result);
+
         for pos_idx in patches_for_row_result.iter() {
             let pos = &self.positions[*pos_idx];
             assert!(row_pos.1 >= pos.y); // assert patch starts at or before current row
@@ -773,19 +775,24 @@ impl PatchesDictionary {
             };
             let ref_pos_y = ref_pos.y0 + row_pos.1 - pos.y;
 
-            for (c, fg_ptr) in fg.iter_mut().enumerate().take(3) {
-                *fg_ptr = &(reference_frames[ref_pos.reference].as_ref().unwrap().frame[c]
-                    .row(ref_pos_y)[ref_x0..ref_x1]);
+            let ref_frame = reference_frames[ref_pos.reference].as_ref().unwrap();
+            let mut fg = SmallVec::<&[f32], 8>::new();
+            for c in 0..3 {
+                fg.push(&ref_frame.frame[c].row(ref_pos_y)[ref_x0..ref_x1]);
             }
             for i in 0..num_ec {
-                fg[3 + i] = &(reference_frames[ref_pos.reference].as_ref().unwrap().frame[3 + i]
-                    .row(ref_pos_y)[ref_x0..ref_x1]);
+                fg.push(&ref_frame.frame[3 + i].row(ref_pos_y)[ref_x0..ref_x1]);
+            }
+
+            let mut bg = SmallVec::<&mut [f32], 8>::new();
+            for s in out.iter_mut() {
+                bg.push(&mut s[out_x0..out_x1]);
             }
 
             let blending_idx = pos_idx * self.blendings_stride;
             perform_blending(
-                &mut slice!(&mut out, .., out_x0..out_x1),
-                &fg,
+                &mut bg[..],
+                &fg[..],
                 &self.blendings[blending_idx],
                 &self.blendings[blending_idx + 1..],
                 extra_channel_info,
