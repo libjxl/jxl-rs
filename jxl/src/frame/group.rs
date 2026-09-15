@@ -32,6 +32,7 @@ pub struct VarDctBuffers {
     pub transform_buffer: [Vec<f32>; 3],
     /// Coefficient storage for single-pass decoding (when hf_coefficients is None)
     pub coeffs_storage: Vec<CacheLine>,
+    pub num_nzeros_storage: Vec<[u8; 32]>,
 }
 
 impl VarDctBuffers {
@@ -40,7 +41,16 @@ impl VarDctBuffers {
             scratch: vec![],
             transform_buffer: [vec![], vec![], vec![]],
             coeffs_storage: vec![],
+            num_nzeros_storage: vec![],
         }
+    }
+
+    pub fn ensure_num_nzeros(&mut self, num_passes: usize) {
+        let needed = num_passes * 3;
+        if self.num_nzeros_storage.len() < needed {
+            self.num_nzeros_storage.resize(needed, [0u8; 32]);
+        }
+        self.num_nzeros_storage[..needed].fill([0u8; 32]);
     }
 
     pub fn ensure_allocated(&mut self) -> Result<()> {
@@ -76,17 +86,13 @@ fn get_single_pass_coeffs<'a>(
 }
 
 #[inline]
-fn predict_num_nonzeros(nzeros_map: &Image<u32>, bx: usize, by: usize) -> usize {
+fn predict_num_nonzeros(nzeros_row: &[u8; 32], bx: usize, by: usize) -> usize {
     if bx == 0 {
-        if by == 0 {
-            32
-        } else {
-            nzeros_map.row(by - 1)[0] as usize
-        }
+        if by == 0 { 32 } else { nzeros_row[0] as usize }
     } else if by == 0 {
-        nzeros_map.row(by)[bx - 1] as usize
+        nzeros_row[bx - 1] as usize
     } else {
-        (nzeros_map.row(by - 1)[bx] + nzeros_map.row(by)[bx - 1]).div_ceil(2) as usize
+        (nzeros_row[bx] as usize + nzeros_row[bx - 1] as usize).div_ceil(2)
     }
 }
 
@@ -504,17 +510,16 @@ struct PassInfo<'a, 'b> {
     br: &'a mut BitReader<'b>,
     shift: u32,
     pass: usize,
-    // TODO(veluca): reuse this allocation.
-    num_nzeros: [Image<u32>; 3],
+    num_nzeros: &'a mut [[u8; 32]; 3],
 }
 
 impl<'a, 'b> PassInfo<'a, 'b> {
     fn new(
         hf_global: &HfGlobalState,
         frame_header: &FrameHeader,
-        block_group_rect: Rect,
         pass: usize,
         br: &'a mut BitReader<'b>,
+        num_nzeros: &'a mut [[u8; 32]; 3],
     ) -> Result<Self> {
         let num_histo_bits = hf_global.num_histograms.ceil_log2();
         debug!(?pass);
@@ -540,20 +545,6 @@ impl<'a, 'b> PassInfo<'a, 'b> {
         } else {
             0
         };
-        let num_nzeros = [
-            Image::new((
-                block_group_rect.size.0 >> frame_header.hshift(0),
-                block_group_rect.size.1 >> frame_header.vshift(0),
-            ))?,
-            Image::new((
-                block_group_rect.size.0 >> frame_header.hshift(1),
-                block_group_rect.size.1 >> frame_header.vshift(1),
-            ))?,
-            Image::new((
-                block_group_rect.size.0 >> frame_header.hshift(2),
-                block_group_rect.size.1 >> frame_header.vshift(2),
-            ))?,
-        ];
 
         Ok(Self {
             histogram_index,
@@ -586,9 +577,13 @@ pub fn decode_vardct_group(
     let block_group_rect = frame_header.block_group_rect(group);
     debug!(?block_group_rect);
     let log_group_dim = frame_header.log_group_dim();
+    buffers.ensure_num_nzeros(passes.len());
+    let (pass_chunks, _) = buffers.num_nzeros_storage[..passes.len() * 3].as_chunks_mut::<3>();
+
     let mut pass_info = passes
         .iter_mut()
-        .map(|(pass, br)| PassInfo::new(hf_global, frame_header, block_group_rect, *pass, br))
+        .zip(pass_chunks)
+        .map(|((pass, br), nz)| PassInfo::new(hf_global, frame_header, *pass, br, nz))
         .collect::<Result<SmallVec<_, 4>>>()?;
 
     let scratch = &mut buffers.scratch;
@@ -737,12 +732,8 @@ pub fn decode_vardct_group(
                     if nonzeros + num_blocks > num_coeffs {
                         return Err(Error::InvalidNumNonZeros(nonzeros, num_blocks));
                     }
-                    for iy in 0..cy {
-                        let nzrow = num_nzeros[c].row_mut(sby[c] + iy);
-                        for ix in 0..cx {
-                            nzrow[sbx[c] + ix] = nonzeros.shrc(log_num_blocks) as u32;
-                        }
-                    }
+                    let val = nonzeros.shrc(log_num_blocks) as u8;
+                    num_nzeros[c][sbx[c]..sbx[c] + cx].fill(val);
                     let histo_offset = block_context_map.zero_density_context_offset(block_context)
                         + context_offset;
                     let permutation = &pass_info.coeff_orders[shape_id * 3 + c];
