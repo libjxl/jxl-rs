@@ -8,6 +8,7 @@
 mod color;
 mod data_types;
 mod decoder;
+mod gain_map;
 mod inner;
 mod input;
 mod options;
@@ -19,6 +20,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 pub use color::*;
 pub use data_types::*;
 pub use decoder::*;
+pub use gain_map::*;
 pub use inner::*;
 pub use input::*;
 pub use options::*;
