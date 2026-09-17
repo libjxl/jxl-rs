@@ -891,6 +891,26 @@ fn flush_without_partial_render_support() {
     }
 }
 
+/// Regression test for https://issues.chromium.org/issues/562761172: flushing
+/// a truncated image used to panic when a smooth-squeeze upsample step read a
+/// tile whose channel had not been decoded yet.
+#[test]
+fn flush_truncated_squeeze_missing_tiles() {
+    let data = include_bytes!("../../tests/testdata/truncated_squeeze_flush_missing_tiles.jxl");
+    for chunk_size in [64, 256, usize::MAX] {
+        decode_internal(
+            data,
+            DecodeParams {
+                chunk_size,
+                do_flush: true,
+                allow_partial: true,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    }
+}
+
 fn make_box(ty: &[u8; 4], content: &[u8]) -> Vec<u8> {
     let len = (8 + content.len()) as u32;
     let mut buf = Vec::new();
