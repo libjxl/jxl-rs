@@ -1072,6 +1072,7 @@ impl TransformStepChunk {
         buf_out
             .iter()
             .flat_map(move |x| (0..grid_offset_up).map(move |y| (*x, out_grid + y)))
+            .take(grid_offset_up * buf_out.len())
             .collect()
     }
 }

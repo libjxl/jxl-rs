@@ -57,6 +57,7 @@ fn upsample_lf_group(
     lf_image: &[Image<f32>; 3],
     header: &FrameHeader,
     factors: &CustomTransformData,
+    buffers: &mut VarDctBuffers,
 ) -> Result<()> {
     let group_dim = header.group_dim();
     let lf_group_dim = group_dim / 8;
@@ -69,11 +70,22 @@ fn upsample_lf_group(
 
     let max_width = pixels.iter().map(|x| x.size().0).max().unwrap();
 
-    // Temporary buffer for 8 output rows
-    // We reuse this buffer for each iteration to minimize allocation
-    let mut temp_out_buf: [_; 8] = std::array::from_fn(|_| vec![0.0f32; max_width + 128]);
+    let out_len = max_width + 128;
+    for buf in buffers.lf_upsample_out.iter_mut() {
+        if buf.len() < out_len {
+            buf.resize(out_len, 0.0);
+        }
+    }
 
-    let mut input_rows_storage: [_; 5] = std::array::from_fn(|_| vec![0.0; max_width / 8 + 32]);
+    let in_len = max_width / 8 + 32;
+    for buf in buffers.lf_upsample_in.iter_mut() {
+        if buf.len() < in_len {
+            buf.resize(in_len, 0.0);
+        }
+    }
+
+    let temp_out_buf = &mut buffers.lf_upsample_out;
+    let input_rows_storage = &mut buffers.lf_upsample_in;
 
     for c in 0..3 {
         let lf_img = &lf_image[c];
@@ -796,6 +808,9 @@ impl Frame {
         } else {
             self.lf_image.as_ref().unwrap()
         };
+        let mut vardct_buffers = self.vardct_buffers.get();
+        vardct_buffers.ensure_allocated()?;
+
         if self.group_status.channel_status[group][0] == DataStatus::Zero && render_vardct {
             info!("Upsampling LF for group {group}");
             upsample_lf_group(
@@ -804,12 +819,11 @@ impl Frame {
                 lf_image,
                 &self.header,
                 &self.decoder_state.file_header.transform_data,
+                &mut vardct_buffers,
             )?;
         } else {
             info!("Decoding VarDCT group {group}");
             let hf_global = self.hf_global.as_ref().unwrap();
-            let mut buffers = self.vardct_buffers.get();
-            buffers.ensure_allocated()?;
             decode_vardct_group(
                 group,
                 passes,
@@ -825,7 +839,7 @@ impl Frame {
                     .opsin_inverse_matrix
                     .quant_biases,
                 &mut pixels,
-                &mut buffers,
+                &mut vardct_buffers,
             )?;
         }
         if let Some(pixels) = pixels {
