@@ -5,6 +5,7 @@
 
 use jxl_simd::{F32SimdVec, I16SimdVec, I32SimdVec, SimdMask, SimdMask16, simd_function};
 
+use super::row_chunks::for_each_chunk;
 use crate::frame::quantizer::LfQuantFactors;
 use crate::headers::bit_depth::BitDepth;
 use crate::render::{
@@ -57,28 +58,25 @@ simd_function!(
         scale_b: f32,
         xsize: usize,
     ) {
-        let simd_width = D::I32Vec::LEN;
         let scale_x = D::F32Vec::splat(d, scale_x);
         let scale_y = D::F32Vec::splat(d, scale_y);
         let scale_b = D::F32Vec::splat(d, scale_b);
 
-        for (((((in_y, in_x), in_b), out_x), out_y), out_b) in input_y
-            .chunks_exact(simd_width)
-            .zip(input_x.chunks_exact(simd_width))
-            .zip(input_b.chunks_exact(simd_width))
-            .zip(output_x.chunks_exact_mut(simd_width))
-            .zip(output_y.chunks_exact_mut(simd_width))
-            .zip(output_b.chunks_exact_mut(simd_width))
-            .take(xsize.div_ceil(simd_width))
-        {
-            let vy = D::I32Vec::load(d, in_y).as_f32();
-            let vx = D::I32Vec::load(d, in_x).as_f32();
-            let vb = D::I32Vec::load(d, in_b).as_f32();
+        for_each_chunk(
+            d,
+            xsize,
+            (input_y, input_x, input_b, output_x, output_y, output_b),
+            #[inline(always)]
+            |_x, (in_y, in_x, in_b, mut out_x, mut out_y, mut out_b)| {
+                let vy = in_y.as_f32();
+                let vx = in_x.as_f32();
+                let vb = in_b.as_f32();
 
-            (vx * scale_x).store(out_x);
-            (vy * scale_y).store(out_y);
-            ((vb + vy) * scale_b).store(out_b);
-        }
+                out_x.write(vx * scale_x);
+                out_y.write(vy * scale_y);
+                out_b.write((vb + vy) * scale_b);
+            },
+        );
     }
 );
 
@@ -172,28 +170,32 @@ simd_function!(
         scale_b: f32,
         xsize: usize,
     ) {
-        let simd_width = D::I32Vec::LEN;
         let scale_x = D::F32Vec::splat(d, scale_x);
         let scale_y = D::F32Vec::splat(d, scale_y);
         let scale_b = D::F32Vec::splat(d, scale_b);
 
-        for (((((in_y, in_x), in_b), out_x), out_y), out_b) in input_y
-            .chunks_exact(simd_width)
-            .zip(input_x.chunks_exact(simd_width))
-            .zip(input_b.chunks_exact(simd_width))
-            .zip(output_x.chunks_exact_mut(simd_width))
-            .zip(output_y.chunks_exact_mut(simd_width))
-            .zip(output_b.chunks_exact_mut(simd_width))
-            .take(xsize.div_ceil(simd_width))
-        {
-            let vy = D::I32Vec::load_from_i16(d, in_y).as_f32();
-            let vx = D::I32Vec::load_from_i16(d, in_x).as_f32();
-            let vb = D::I32Vec::load_from_i16(d, in_b).as_f32();
+        for_each_chunk(
+            d,
+            xsize,
+            (
+                input_y,
+                input_x,
+                input_b,
+                output_x,
+                output_y,
+                output_b,
+            ),
+            #[inline(always)]
+            |_x, (vy, vx, vb, mut out_x, mut out_y, mut out_b)| {
+                let vy = vy.as_f32();
+                let vx = vx.as_f32();
+                let vb = vb.as_f32();
 
-            (vx * scale_x).store(out_x);
-            (vy * scale_y).store(out_y);
-            ((vb + vy) * scale_b).store(out_b);
-        }
+                out_x.write(vx * scale_x);
+                out_y.write(vy * scale_y);
+                out_b.write((vb + vy) * scale_b);
+            },
+        );
     }
 );
 
@@ -269,17 +271,15 @@ simd_function!(
     int_to_float_32bit_simd_dispatch,
     d: D,
     fn int_to_float_32bit_simd(input: &[i32], output: &mut [f32], xsize: usize) {
-        let simd_width = D::I32Vec::LEN;
-
-        // Process complete SIMD vectors
-        for (in_chunk, out_chunk) in input
-            .chunks_exact(simd_width)
-            .zip(output.chunks_exact_mut(simd_width))
-            .take(xsize.div_ceil(simd_width))
-        {
-            let val = D::I32Vec::load(d, in_chunk);
-            val.bitcast_to_f32().store(out_chunk);
-        }
+        for_each_chunk(
+            d,
+            xsize,
+            (input, output),
+            #[inline(always)]
+            |_x, (in_chunk, mut out_chunk)| {
+                out_chunk.write(in_chunk.bitcast_to_f32());
+            },
+        );
     }
 );
 
@@ -297,19 +297,19 @@ simd_function!(
         const { assert!(D::F32Vec::LEN <= 16) }
         let mut u16_buf = [0u16; 16];
 
-        // Process complete SIMD vectors
-        for (in_chunk, out_chunk) in input
-            .chunks_exact(simd_width)
-            .zip(output.chunks_exact_mut(simd_width))
-            .take(xsize.div_ceil(simd_width))
-        {
-            // Use SIMD to extract lower 16 bits from each i32 lane
-            let i32_vec = D::I32Vec::load(d, in_chunk);
-            i32_vec.store_u16(&mut u16_buf[..simd_width]);
-            // Use hardware f16->f32 conversion
-            let result = D::F32Vec::load_f16_bits(d, &u16_buf[..simd_width]);
-            result.store(out_chunk);
-        }
+        for_each_chunk(
+            d,
+            xsize,
+            (input, output),
+            #[inline(always)]
+            |_x, (i32_vec, mut out_chunk)| {
+                // Use SIMD to extract lower 16 bits from each i32 lane
+                i32_vec.store_u16(&mut u16_buf[..simd_width]);
+                // Use hardware f16->f32 conversion
+                let result = D::F32Vec::load_f16_bits(d, &u16_buf[..simd_width]);
+                out_chunk.write(result);
+            },
+        );
     }
 );
 
@@ -392,19 +392,17 @@ simd_function!(
     modular_to_float_32bit_simd_dispatch,
     d: D,
     fn modular_to_float_32bit_simd(input: &[i32], output: &mut [f32], scale: f32, xsize: usize) {
-        let simd_width = D::I32Vec::LEN;
-
         let scale = D::F32Vec::splat(d, scale);
 
-        // Process complete SIMD vectors
-        for (in_chunk, out_chunk) in input
-            .chunks_exact(simd_width)
-            .zip(output.chunks_exact_mut(simd_width))
-            .take(xsize.div_ceil(simd_width))
-        {
-            let val = D::I32Vec::load(d, in_chunk);
-            (val.as_f32() * scale).store(out_chunk);
-        }
+        for_each_chunk(
+            d,
+            xsize,
+            (input, output),
+            #[inline(always)]
+            |_x, (in_chunk, mut out_chunk)| {
+                out_chunk.write(in_chunk.as_f32() * scale);
+            },
+        );
     }
 );
 
@@ -473,16 +471,16 @@ simd_function!(
     modular16_to_float_simd_dispatch,
     d: D,
     fn modular16_to_float_simd(input: &[i16], output: &mut [f32], scale: f32, xsize: usize) {
-        let simd_width = D::I32Vec::LEN;
         let scale_vec = D::F32Vec::splat(d, scale);
-        for (in_chunk, out_chunk) in input
-            .chunks_exact(simd_width)
-            .zip(output.chunks_exact_mut(simd_width))
-            .take(xsize.div_ceil(simd_width))
-        {
-            let val = D::I32Vec::load_from_i16(d, in_chunk);
-            (val.as_f32() * scale_vec).store(out_chunk);
-        }
+        for_each_chunk(
+            d,
+            xsize,
+            (input, output),
+            #[inline(always)]
+            |_x, (val, mut out_chunk)| {
+                out_chunk.write(val.as_f32() * scale_vec);
+            },
+        );
     }
 );
 
@@ -571,29 +569,27 @@ simd_function!(
         xsize: usize,
     ) {
         let (x0, y0) = position;
-        let simd_width = D::F32Vec::LEN;
         let zero = D::F32Vec::splat(d, 0.0);
         let scale = D::F32Vec::splat(d, max);
 
-        for (block, (input_chunk, output_chunk)) in input
-            .chunks_exact(simd_width)
-            .zip(output.chunks_exact_mut(simd_width))
-            .take(xsize.div_ceil(simd_width))
-            .enumerate()
-        {
-            let x = block * simd_width;
-            let val = D::F32Vec::load(d, input_chunk);
-            let dither_x = (x0 + x + channel * 23) % 32;
-            let dither_y = (y0 + channel * 13) % 32;
-            let dither = D::F32Vec::load(
-                d,
-                &DITHER_TABLE[dither_y][dither_x..],
-            );
-            let scaled = val * scale;
-            let dithered = scaled + dither;
-            let clamped = dithered.max(zero).min(scale);
-            clamped.round_store_u8(output_chunk);
-        }
+        for_each_chunk(
+            d,
+            xsize,
+            (input, output),
+            #[inline(always)]
+            |x, (val, mut output_chunk)| {
+                let dither_x = (x0 + x + channel * 23) % 32;
+                let dither_y = (y0 + channel * 13) % 32;
+                let dither = D::F32Vec::load(
+                    d,
+                    &DITHER_TABLE[dither_y][dither_x..],
+                );
+                let scaled = val * scale;
+                let dithered = scaled + dither;
+                let clamped = dithered.max(zero).min(scale);
+                output_chunk.round_store_u8(clamped);
+            },
+        );
     }
 );
 
@@ -664,14 +660,13 @@ simd_function!(
     fn i16_to_u8_simd(input: &[i16], output: &mut [u8], scale: i32, max: i32, xsize: usize) {
         let simd_width = D::I16Vec::LEN;
         let scale = D::I16Vec::splat(d, scale as i16);
-        let max= D::I16Vec::splat(d, max as i16);
+        let max = D::I16Vec::splat(d, max as i16);
         let zero = D::I16Vec::splat(d, 0);
 
-        for (input_chunk, output_chunk) in input
-            .chunks_exact(simd_width)
-            .zip(output.chunks_exact_mut(simd_width))
-            .take(xsize.div_ceil(simd_width))
-        {
+        let num_chunks = xsize.div_ceil(simd_width);
+        let in_chunks = input[..num_chunks * simd_width].chunks_exact(simd_width);
+        let out_chunks = output[..num_chunks * simd_width].chunks_exact_mut(simd_width);
+        for (input_chunk, output_chunk) in in_chunks.zip(out_chunks) {
             let val = D::I16Vec::load(d, input_chunk);
             let scaled = val * scale;
             let zeroclip = scaled.lt_zero().if_then_else_i16(zero, scaled);
@@ -738,23 +733,22 @@ simd_function!(
     i32_to_u8_simd_dispatch,
     d: D,
     fn i32_to_u8_simd(input: &[i32], output: &mut [u8], scale: i32, max: i32, xsize: usize) {
-        let simd_width = D::F32Vec::LEN;
         let scale = D::I32Vec::splat(d, scale);
         let max = D::I32Vec::splat(d, max);
         let zero = D::I32Vec::splat(d, 0);
 
-        // Process SIMD vectors using div_ceil (buffers are padded)
-        for (input_chunk, output_chunk) in input
-            .chunks_exact(simd_width)
-            .zip(output.chunks_exact_mut(simd_width))
-            .take(xsize.div_ceil(simd_width))
-        {
-            let val = D::I32Vec::load(d, input_chunk);
-            let scaled = val * scale;
-            let zeroclip = scaled.lt_zero().if_then_else_i32(zero, scaled);
-            let clip = scaled.gt(max).if_then_else_i32(max, zeroclip);
-            clip.store_u8(output_chunk);
-        }
+        for_each_chunk(
+            d,
+            xsize,
+            (input, output),
+            #[inline(always)]
+            |_x, (val, mut output_chunk)| {
+                let scaled = val * scale;
+                let zeroclip = scaled.lt_zero().if_then_else_i32(zero, scaled);
+                let clip = scaled.gt(max).if_then_else_i32(max, zeroclip);
+                output_chunk.store_u8(clip);
+            },
+        );
     }
 );
 
@@ -810,23 +804,22 @@ simd_function!(
     f32_to_u16_simd_dispatch,
     d: D,
     fn f32_to_u16_simd(input: &[f32], output: &mut [u16], max: f32, xsize: usize) {
-        let simd_width = D::F32Vec::LEN;
         let zero = D::F32Vec::splat(d, 0.0);
         let one = D::F32Vec::splat(d, 1.0);
         let scale = D::F32Vec::splat(d, max);
 
-        // Process SIMD vectors using div_ceil (buffers are padded)
-        for (input_chunk, output_chunk) in input
-            .chunks_exact(simd_width)
-            .zip(output.chunks_exact_mut(simd_width))
-            .take(xsize.div_ceil(simd_width))
-        {
-            let val = D::F32Vec::load(d, input_chunk);
-            // Clamp to [0, 1] and scale
-            let clamped = val.max(zero).min(one);
-            let scaled = clamped * scale;
-            scaled.round_store_u16(output_chunk);
-        }
+        for_each_chunk(
+            d,
+            xsize,
+            (input, output),
+            #[inline(always)]
+            |_x, (val, mut output_chunk)| {
+                // Clamp to [0, 1] and scale
+                let clamped = val.max(zero).min(one);
+                let scaled = clamped * scale;
+                output_chunk.round_store_u16(scaled);
+            },
+        );
     }
 );
 
@@ -917,15 +910,15 @@ impl RenderPipelineInOutStage for ConvertF32ToF16Stage {
         _state: Option<&mut ErasedLocalState>,
         _previous_call_was_previous_row: bool,
     ) {
-        let input = &input_rows[0];
+        let input = input_rows[0][0];
+        let output = &mut output_rows[0][0];
         if let Some((min_value, max_value)) = self.clamp_range {
-            for i in 0..xsize {
-                output_rows[0][0][i] =
-                    crate::util::f16::from_f32(input[0][i].clamp(min_value, max_value));
+            for (&in_val, out_val) in input[..xsize].iter().zip(&mut output[..xsize]) {
+                *out_val = crate::util::f16::from_f32(in_val.clamp(min_value, max_value));
             }
         } else {
-            for i in 0..xsize {
-                output_rows[0][0][i] = crate::util::f16::from_f32(input[0][i]);
+            for (&in_val, out_val) in input[..xsize].iter().zip(&mut output[..xsize]) {
+                *out_val = crate::util::f16::from_f32(in_val);
             }
         }
     }

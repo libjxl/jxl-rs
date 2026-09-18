@@ -3,6 +3,9 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
+use jxl_simd::{ScalarDescriptor, SimdDescriptor};
+
+use super::row_chunks::for_each_chunk;
 use crate::render::{ErasedLocalState, RenderPipelineInPlaceStage};
 
 /// Render spot color
@@ -53,18 +56,24 @@ impl RenderPipelineInPlaceStage for SpotColorStage {
         };
 
         let scale = self.spot_color[3];
-        assert!(
-            xsize <= row_r.len()
-                && xsize <= row_g.len()
-                && xsize <= row_b.len()
-                && xsize <= row_s.len()
+        let [spot_r, spot_g, spot_b, _] = self.spot_color;
+        let d = ScalarDescriptor::new().unwrap();
+        for_each_chunk(
+            d,
+            xsize,
+            (&mut **row_r, &mut **row_g, &mut **row_b, &**row_s),
+            #[inline(always)]
+            |_x, (mut r, mut g, mut b, s)| {
+                let mix = scale * s;
+                let inv_mix = 1.0 - mix;
+                let new_r = mix * spot_r + inv_mix * r.read();
+                let new_g = mix * spot_g + inv_mix * g.read();
+                let new_b = mix * spot_b + inv_mix * b.read();
+                r.write(new_r);
+                g.write(new_g);
+                b.write(new_b);
+            },
         );
-        for idx in 0..xsize {
-            let mix = scale * row_s[idx];
-            row_r[idx] = mix * self.spot_color[0] + (1.0 - mix) * row_r[idx];
-            row_g[idx] = mix * self.spot_color[1] + (1.0 - mix) * row_g[idx];
-            row_b[idx] = mix * self.spot_color[2] + (1.0 - mix) * row_b[idx];
-        }
     }
 }
 

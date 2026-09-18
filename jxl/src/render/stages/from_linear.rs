@@ -5,6 +5,7 @@
 
 use jxl_simd::{F32SimdVec, simd_function};
 
+use super::row_chunks::for_each_chunk;
 use crate::color::tf;
 use crate::headers::color_encoding::CustomTransferFunction;
 use crate::render::{ErasedLocalState, RenderPipelineInPlaceStage};
@@ -97,15 +98,19 @@ fn from_linear_process(tf: &TransferFunction, xsize: usize, row: &mut [&mut [f32
             tf::scene_to_hlg(&mut row_b[..xsize]);
         }
         TransferFunction::Gamma(g) => {
+            let g_vec = D::F32Vec::splat(d, g);
             for row in row {
-                for values in row[..xsize.next_multiple_of(D::F32Vec::LEN)]
-                    .chunks_exact_mut(D::F32Vec::LEN)
-                {
-                    let v = D::F32Vec::load(d, values);
-                    crate::util::fast_powf_simd(d, v.abs(), D::F32Vec::splat(d, g))
-                        .copysign(v)
-                        .store(values);
-                }
+                for_each_chunk(
+                    d,
+                    xsize,
+                    &mut **row,
+                    #[inline(always)]
+                    |_x, mut values| {
+                        let v = values.read();
+                        let res = crate::util::fast_powf_simd(d, v.abs(), g_vec).copysign(v);
+                        values.write(res);
+                    },
+                );
             }
         }
     }

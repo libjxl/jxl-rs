@@ -13,6 +13,7 @@ mod gaborish;
 mod noise;
 mod patches;
 mod premultiply_alpha;
+mod row_chunks;
 mod splines;
 mod spot;
 mod to_linear;

@@ -5,6 +5,7 @@
 
 use jxl_simd::{F32SimdVec, simd_function};
 
+use super::row_chunks::for_each_chunk;
 use crate::render::{ErasedLocalState, RenderPipelineInPlaceStage};
 
 /// Convert YCbCr to RGB
@@ -48,35 +49,33 @@ simd_function!(
         let cb_to_g = D::F32Vec::splat(d, -0.114 * 1.772 / 0.587);
         let cb_to_b = D::F32Vec::splat(d, 1.772);
 
-        // SIMD loop processing SIMD_WIDTH pixels at once
-        let iter_cb = row_cb.chunks_exact_mut(D::F32Vec::LEN);
-        let iter_y = row_y.chunks_exact_mut(D::F32Vec::LEN);
-        let iter_cr = row_cr.chunks_exact_mut(D::F32Vec::LEN);
-        for ((cb_chunk, y_chunk), cr_chunk) in iter_cb
-            .zip(iter_y)
-            .zip(iter_cr)
-            .take(xsize.div_ceil(D::F32Vec::LEN))
-        {
-            // Load Y, Cb, Cr vectors
-            let y_vec = D::F32Vec::load(d, y_chunk) + c128;
-            let cb_vec = D::F32Vec::load(d, cb_chunk);
-            let cr_vec = D::F32Vec::load(d, cr_chunk);
+        for_each_chunk(
+            d,
+            xsize,
+            (row_cb, row_y, row_cr),
+            #[inline(always)]
+            |_x, (mut cb_chunk, mut y_chunk, mut cr_chunk)| {
+                // Load Y, Cb, Cr vectors
+                let y_vec = y_chunk.read() + c128;
+                let cb_vec = cb_chunk.read();
+                let cr_vec = cr_chunk.read();
 
-            // Compute RGB using FMA (fused multiply-add)
-            // R = Y + 1.402 * Cr
-            let r_vec = cr_vec.mul_add(cr_to_r, y_vec);
+                // Compute RGB using FMA (fused multiply-add)
+                // R = Y + 1.402 * Cr
+                let r_vec = cr_vec.mul_add(cr_to_r, y_vec);
 
-            // G = Y - 0.299*1.402/0.587 * Cr - 0.114*1.772/0.587 * Cb
-            let g_vec = cr_vec.mul_add(cr_to_g, cb_vec.mul_add(cb_to_g, y_vec));
+                // G = Y - 0.299*1.402/0.587 * Cr - 0.114*1.772/0.587 * Cb
+                let g_vec = cr_vec.mul_add(cr_to_g, cb_vec.mul_add(cb_to_g, y_vec));
 
-            // B = Y + 1.772 * Cb
-            let b_vec = cb_vec.mul_add(cb_to_b, y_vec);
+                // B = Y + 1.772 * Cb
+                let b_vec = cb_vec.mul_add(cb_to_b, y_vec);
 
-            // Store back to channels (R→Cb, G→Y, B→Cr to match layout)
-            r_vec.store(cb_chunk);
-            g_vec.store(y_chunk);
-            b_vec.store(cr_chunk);
-        }
+                // Store back to channels (R→Cb, G→Y, B→Cr to match layout)
+                cb_chunk.write(r_vec);
+                y_chunk.write(g_vec);
+                cr_chunk.write(b_vec);
+            },
+        );
     }
 );
 
