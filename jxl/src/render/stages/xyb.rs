@@ -5,6 +5,7 @@
 
 use jxl_simd::{F32SimdVec, simd_function};
 
+use super::row_chunks::for_each_chunk;
 use crate::api::{
     JxlColorEncoding, JxlPrimaries, JxlTransferFunction, JxlWhitePoint, adapt_to_xyz_d50,
     primaries_to_xyz, primaries_to_xyz_d50,
@@ -206,35 +207,41 @@ simd_function!(
         let scaled_bias = params.scaled_bias.map(|x| D::F32Vec::splat(d, x));
         let intensity_scale = D::F32Vec::splat(d, params.intensity_scale);
 
-        for idx in (0..xsize).step_by(D::F32Vec::LEN) {
-            let x = D::F32Vec::load(d, &row_x[idx..]);
-            let y = D::F32Vec::load(d, &row_y[idx..]);
-            let b = D::F32Vec::load(d, &row_b[idx..]);
+        for_each_chunk(
+            d,
+            xsize,
+            (row_x, row_y, row_b),
+            #[inline(always)]
+            |_x, (mut row_x, mut row_y, mut row_b)| {
+                let x = row_x.read();
+                let y = row_y.read();
+                let b = row_b.read();
 
-            // Mix and apply bias
-            let l = y + x - bias_cbrt[0];
-            let m = y - x - bias_cbrt[1];
-            let s = b - bias_cbrt[2];
+                // Mix and apply bias
+                let l = y + x - bias_cbrt[0];
+                let m = y - x - bias_cbrt[1];
+                let s = b - bias_cbrt[2];
 
-            // Apply biased inverse gamma and scale (1.0 corresponds to `intensity_target` nits)
-            let l2 = l * l;
-            let m2 = m * m;
-            let s2 = s * s;
-            let scaled_l = l * intensity_scale;
-            let scaled_m = m * intensity_scale;
-            let scaled_s = s * intensity_scale;
-            let l = l2.mul_add(scaled_l, scaled_bias[0]);
-            let m = m2.mul_add(scaled_m, scaled_bias[1]);
-            let s = s2.mul_add(scaled_s, scaled_bias[2]);
+                // Apply biased inverse gamma and scale (1.0 corresponds to `intensity_target` nits)
+                let l2 = l * l;
+                let m2 = m * m;
+                let s2 = s * s;
+                let scaled_l = l * intensity_scale;
+                let scaled_m = m * intensity_scale;
+                let scaled_s = s * intensity_scale;
+                let l = l2.mul_add(scaled_l, scaled_bias[0]);
+                let m = m2.mul_add(scaled_m, scaled_bias[1]);
+                let s = s2.mul_add(scaled_s, scaled_bias[2]);
 
-            // Apply opsin inverse matrix (linear LMS to linear sRGB)
-            let r = mat[0].mul_add(l, mat[1].mul_add(m, mat[2] * s));
-            let g = mat[3].mul_add(l, mat[4].mul_add(m, mat[5] * s));
-            let b = mat[6].mul_add(l, mat[7].mul_add(m, mat[8] * s));
-            r.store(&mut row_x[idx..]);
-            g.store(&mut row_y[idx..]);
-            b.store(&mut row_b[idx..]);
-        }
+                // Apply opsin inverse matrix (linear LMS to linear sRGB)
+                let r = mat[0].mul_add(l, mat[1].mul_add(m, mat[2] * s));
+                let g = mat[3].mul_add(l, mat[4].mul_add(m, mat[5] * s));
+                let b = mat[6].mul_add(l, mat[7].mul_add(m, mat[8] * s));
+                row_x.write(r);
+                row_y.write(g);
+                row_b.write(b);
+            },
+        );
     }
 );
 
