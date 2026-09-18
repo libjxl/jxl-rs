@@ -217,13 +217,9 @@ fn add_bits(x: i32) -> i64 {
     (x as i64) << PRED_EXTRA_BITS
 }
 
-/// Splits a scratch buffer holding two rows of `row_len` entries back to back into its
-/// `(current, previous)` rows for the row with parity `y`.
-///
-/// The buffer is first narrowed to exactly `2 * row_len` entries, so the compiler knows that
-/// *both* halves are exactly `row_len` long. Combined with a single up-front check in the caller
-/// that the column `x` satisfies `x + 1 < row_len`, this lets it prove that every access at a
-/// column `<= x + 1` is in bounds and emit no per-access bounds checks, without `unsafe`.
+/// Splits a buffer holding two rows of `row_len` entries into its `(current, previous)` rows
+/// for row parity `y`. Narrowing to exactly `2 * row_len` first lets the optimizer see that both
+/// halves are `row_len` long, so callers' indexing needs no per-access bounds checks.
 #[inline(always)]
 fn double_rows<T>(buf: &[T], row_len: usize, y: usize) -> (&[T], &[T]) {
     let (first, second) = buf[..row_len * 2].split_at(row_len);
@@ -249,12 +245,8 @@ fn double_rows_mut<T>(buf: &mut [T], row_len: usize, y: usize) -> (&mut [T], &mu
 pub struct WeightedPredictorState {
     prediction: [i64; NUM_PREDICTORS],
     pred: i64,
-    // Invariant (established in `new`):
-    // - computing `(xsize + 1) * 2` does not overflow
-    // - `pred_errors_buffer.len() == (xsize + 1) * 2`
-    // - `error.len() == (xsize + 1) * 2`
-    // i.e. each buffer holds two rows of `xsize + 1` entries back to back, which
-    // `double_rows`/`double_rows_mut` split into fixed-length rows for safe access.
+    // `pred_errors_buffer` and `error` each hold two rows of `xsize + 1` entries (see
+    // `double_rows`).
     xsize: usize,
     pred_errors_buffer: Vec<[u32; NUM_PREDICTORS]>,
     // Note: we store errors in positions [1..=xsize], and error[0] == 0.
@@ -342,27 +334,18 @@ impl WeightedPredictorState {
         pos: (usize, usize),
         data: &PredictionData,
     ) -> (i64, i32) {
+        // Both checks are needed for the optimizer to elide the bounds checks below (every
+        // column used is <= pos.0 + 1); the first rules out `pos.0 + 1` wrapping.
         assert!(pos.0 < self.xsize);
         let row_len = self.xsize + 1;
-        // Single up-front check: every row index used below is at most `pos.0 + 1`, so with this
-        // (and the exact row lengths guaranteed by `double_rows`) the compiler can prove all row
-        // accesses in bounds and emits no further bounds checks.
         assert!(pos.0 + 1 < row_len);
-        // Column of the north-east neighbour, clamped to the last column. Equivalent to
-        // `if pos.0 + 1 < xsize`, but phrased against `row_len` so the bound on `pos_ne + 1` is
-        // visible to the compiler.
-        let pos_ne = if pos.0 + 2 < row_len {
-            pos.0 + 1
-        } else {
-            pos.0
-        };
-        let pos_nw = pos.0.saturating_sub(1);
 
-        // Previous row's per-predictor errors (columns pos.0, pos_ne, pos_nw are all <= pos.0 + 1).
+        // N, NE and NW per-predictor errors; NE clamps to the last column, NW to the first
+        // (written so the clamp doubles as the bounds check).
         let (_, pe_prev) = double_rows(&self.pred_errors_buffer, row_len, pos.1);
         let err_n = &pe_prev[pos.0];
-        let err_ne = &pe_prev[pos_ne];
-        let err_nw = &pe_prev[pos_nw];
+        let err_ne = &pe_prev[(pos.0 + 1).min(self.xsize - 1)];
+        let err_nw = pe_prev.get(pos.0.wrapping_sub(1)).unwrap_or(err_n);
 
         let err0 = err_n[0].wrapping_add(err_ne[0]).wrapping_add(err_nw[0]);
         let err1 = err_n[1].wrapping_add(err_ne[1]).wrapping_add(err_nw[1]);
@@ -402,15 +385,16 @@ impl WeightedPredictorState {
         // Note: this might access what's morally equivalent to position -1,
         // but that value is guaranteed to be 0.
 
-        // Total errors of the current/previous rows (columns are all <= pos.0 + 1).
+        // Total errors; `error` rows are offset by one column, and NW/NE clamp to N at the edges.
         let (te_cur, te_prev) = double_rows(&self.error, row_len, pos.1);
         let te_w = te_cur[pos.0] as i64;
         let te_n = te_prev[pos.0 + 1] as i64;
-        let te_nw = te_prev[pos_nw + 1] as i64;
+        let te_nw = if pos.0 > 0 {
+            te_prev[pos.0] as i64
+        } else {
+            te_n
+        };
         let sum_wn = te_n + te_w;
-        // North-east total error: column `pos_ne + 1`, i.e. `pos.0 + 2` when that column exists
-        // and otherwise `pos.0 + 1` (which is `te_n`). Using `get` makes the clamp condition and
-        // the bounds check the same branch.
         let te_ne = te_prev.get(pos.0 + 2).map_or(te_n, |&v| v as i64);
 
         let mut p = te_w;
@@ -482,10 +466,9 @@ impl WeightedPredictorState {
 
     #[inline(always)]
     pub fn update_errors(&mut self, correct_val: i32, pos: (usize, usize)) {
+        // See `predict_and_property`.
         assert!(pos.0 < self.xsize);
         let row_len = self.xsize + 1;
-        // See `predict_and_property`: this single check lets the compiler prove every row access
-        // below (columns <= pos.0 + 1) in bounds.
         assert!(pos.0 + 1 < row_len);
         let val = add_bits(correct_val);
         let (e_cur, _) = double_rows_mut(&mut self.error, row_len, pos.1);
