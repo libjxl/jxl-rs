@@ -7,6 +7,7 @@
 
 use jxl_simd::{F32SimdVec, I32SimdVec, SimdDescriptor, SimdMask, simd_function};
 
+use super::row_chunks::{Window, for_each_chunk};
 use crate::error::Result;
 use crate::features::noise::Noise;
 use crate::frame::color_correlation_map::ColorCorrelationParams;
@@ -47,67 +48,64 @@ fn convolve_noise_simd_impl<D: SimdDescriptor>(
     let c_sum = D::F32Vec::splat(d, 0.16 / 65536.0);
     let c_center = D::F32Vec::splat(d, -4.0 / 65536.0);
 
-    let row_sum = {
-        #[inline(always)]
-        |w: &[u16]| -> D::I32Vec {
-            let mut sum = D::I32Vec::load_from_u16(d, &w[0..]);
-            sum += D::I32Vec::load_from_u16(d, &w[1..]);
-            sum += D::I32Vec::load_from_u16(d, &w[2..]);
-            sum += D::I32Vec::load_from_u16(d, &w[3..]);
-            sum += D::I32Vec::load_from_u16(d, &w[4..]);
-            sum
-        }
-    };
-
-    let iter0 = input[0].windows(D::I32Vec::LEN + 4).step_by(D::I32Vec::LEN);
-    let iter2 = input[2].windows(D::I32Vec::LEN + 4).step_by(D::I32Vec::LEN);
-    let iter4 = input[4].windows(D::I32Vec::LEN + 4).step_by(D::I32Vec::LEN);
-    let out_iter = output.chunks_exact_mut(D::F32Vec::LEN);
-    let state_iter = state.chunks_exact_mut(D::I32Vec::LEN);
-    let num_chunks = xsize.div_ceil(D::I32Vec::LEN);
+    macro_rules! row_sum {
+        ($w:expr) => {
+            $w.get::<0>() + $w.get::<1>() + $w.get::<2>() + $w.get::<3>() + $w.get::<4>()
+        };
+    }
 
     if previous_call_was_previous_row {
-        for ((((w0, w2), w4), out), state_chunk) in iter0
-            .zip(iter2)
-            .zip(iter4)
-            .zip(out_iter)
-            .zip(state_iter)
-            .take(num_chunks)
-        {
-            let prev_state = D::I32Vec::load(d, state_chunk);
-            let r4 = row_sum(w4);
-            let sum_5x5 = prev_state + r4;
-            let p00 = D::I32Vec::load_from_u16(d, &w2[2..]);
-            let result = sum_5x5.as_f32().mul_add(c_sum, p00.as_f32() * c_center);
-            result.store(out);
-            let r0 = row_sum(w0);
-            let next_state = sum_5x5 - r0;
-            next_state.store(state_chunk);
-        }
+        for_each_chunk(
+            d,
+            xsize,
+            (
+                Window::<4, u16>(input[0]),
+                Window::<4, u16>(input[2]),
+                Window::<4, u16>(input[4]),
+                output,
+                state,
+            ),
+            #[inline(always)]
+            |_x, (w0, w2, w4, mut out, mut state_chunk)| {
+                let prev_state = state_chunk.read();
+                let r4 = row_sum!(w4);
+                let sum_5x5 = prev_state + r4;
+                let p00 = w2.get::<2>();
+                let result = sum_5x5.as_f32().mul_add(c_sum, p00.as_f32() * c_center);
+                out.write(result);
+                let r0 = row_sum!(w0);
+                let next_state = sum_5x5 - r0;
+                state_chunk.write(next_state);
+            },
+        );
     } else {
-        let iter1 = input[1].windows(D::I32Vec::LEN + 4).step_by(D::I32Vec::LEN);
-        let iter3 = input[3].windows(D::I32Vec::LEN + 4).step_by(D::I32Vec::LEN);
-        for ((((((w0, w1), w2), w3), w4), out), state_chunk) in iter0
-            .zip(iter1)
-            .zip(iter2)
-            .zip(iter3)
-            .zip(iter4)
-            .zip(out_iter)
-            .zip(state_iter)
-            .take(num_chunks)
-        {
-            let p00 = D::I32Vec::load_from_u16(d, &w2[2..]);
-            let r0 = row_sum(w0);
-            let r1 = row_sum(w1);
-            let r2 = row_sum(w2);
-            let r3 = row_sum(w3);
-            let r4 = row_sum(w4);
-            let sum_5x5 = r0 + r1 + r2 + r3 + r4;
-            let result = sum_5x5.as_f32().mul_add(c_sum, p00.as_f32() * c_center);
-            result.store(out);
-            let next_state = sum_5x5 - r0;
-            next_state.store(state_chunk);
-        }
+        for_each_chunk(
+            d,
+            xsize,
+            (
+                Window::<4, u16>(input[0]),
+                Window::<4, u16>(input[1]),
+                Window::<4, u16>(input[2]),
+                Window::<4, u16>(input[3]),
+                Window::<4, u16>(input[4]),
+                output,
+                state,
+            ),
+            #[inline(always)]
+            |_x, (w0, w1, w2, w3, w4, mut out, mut state_chunk)| {
+                let p00 = w2.get::<2>();
+                let r0 = row_sum!(w0);
+                let r1 = row_sum!(w1);
+                let r2 = row_sum!(w2);
+                let r3 = row_sum!(w3);
+                let r4 = row_sum!(w4);
+                let sum_5x5 = r0 + r1 + r2 + r3 + r4;
+                let result = sum_5x5.as_f32().mul_add(c_sum, p00.as_f32() * c_center);
+                out.write(result);
+                let next_state = sum_5x5 - r0;
+                state_chunk.write(next_state);
+            },
+        );
     }
 }
 
@@ -206,47 +204,46 @@ fn add_noise_simd_impl<D: SimdDescriptor>(
     let (row_c0, rest_c) = row_c.split_at_mut(1);
     let (row_c1, row_c2) = rest_c.split_at_mut(1);
 
-    let iter_c0 = row_c0[0].chunks_exact_mut(D::F32Vec::LEN);
-    let iter_c1 = row_c1[0].chunks_exact_mut(D::F32Vec::LEN);
-    let iter_c2 = row_c2[0].chunks_exact_mut(D::F32Vec::LEN);
-    let iter_rnd_r = row_rnd[0].chunks_exact(D::F32Vec::LEN);
-    let iter_rnd_g = row_rnd[1].chunks_exact(D::F32Vec::LEN);
-    let iter_rnd_c = row_rnd[2].chunks_exact(D::F32Vec::LEN);
+    for_each_chunk(
+        d,
+        xsize,
+        (
+            &mut *row_c0[0],
+            &mut *row_c1[0],
+            &mut *row_c2[0],
+            row_rnd[0],
+            row_rnd[1],
+            row_rnd[2],
+        ),
+        #[inline(always)]
+        |_x, (mut c0, mut c1, mut c2, rnd_r_vec, rnd_g_vec, rnd_c_vec)| {
+            let vx = c0.read();
+            let vy = c1.read();
+            let vb = c2.read();
 
-    for (((((c0, c1), c2), rnd_r_chunk), rnd_g_chunk), rnd_c_chunk) in iter_c0
-        .zip(iter_c1)
-        .zip(iter_c2)
-        .zip(iter_rnd_r)
-        .zip(iter_rnd_g)
-        .zip(iter_rnd_c)
-        .take(xsize.div_ceil(D::F32Vec::LEN))
-    {
-        let vx = D::F32Vec::load(d, c0);
-        let vy = D::F32Vec::load(d, c1);
-        let vb = D::F32Vec::load(d, c2);
+            let in_g = (vy - vx) * c_half;
+            let in_r = (vy + vx) * c_half;
 
-        let in_g = (vy - vx) * c_half;
-        let in_r = (vy + vx) * c_half;
+            let noise_strength_g = noise_strength(in_g);
+            let noise_strength_r = noise_strength(in_r);
 
-        let noise_strength_g = noise_strength(in_g);
-        let noise_strength_r = noise_strength(in_r);
+            let rnd_r = rnd_r_vec * c_norm;
+            let rnd_g = rnd_g_vec * c_norm;
+            let rnd_c = rnd_c_vec * c_norm;
 
-        let rnd_r = D::F32Vec::load(d, rnd_r_chunk) * c_norm;
-        let rnd_g = D::F32Vec::load(d, rnd_g_chunk) * c_norm;
-        let rnd_c = D::F32Vec::load(d, rnd_c_chunk) * c_norm;
+            let red_noise = noise_strength_r * (rnd_r.mul_add(c_rgn_corr, rnd_c * c_rg_corr));
+            let green_noise = noise_strength_g * (rnd_g.mul_add(c_rgn_corr, rnd_c * c_rg_corr));
+            let rg_noise = red_noise + green_noise;
 
-        let red_noise = noise_strength_r * (rnd_r.mul_add(c_rgn_corr, rnd_c * c_rg_corr));
-        let green_noise = noise_strength_g * (rnd_g.mul_add(c_rgn_corr, rnd_c * c_rg_corr));
-        let rg_noise = red_noise + green_noise;
+            let out_x = vx + rg_noise.mul_add(c_ytox, red_noise - green_noise);
+            let out_y = vy + rg_noise;
+            let out_b = vb + rg_noise * c_ytob;
 
-        let out_x = vx + rg_noise.mul_add(c_ytox, red_noise - green_noise);
-        let out_y = vy + rg_noise;
-        let out_b = vb + rg_noise * c_ytob;
-
-        out_x.store(c0);
-        out_y.store(c1);
-        out_b.store(c2);
-    }
+            c0.write(out_x);
+            c1.write(out_y);
+            c2.write(out_b);
+        },
+    );
 }
 
 // SIMD noise addition
