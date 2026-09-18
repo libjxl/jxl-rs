@@ -3,8 +3,9 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-use jxl_simd::{F32SimdVec, simd_function};
+use jxl_simd::simd_function;
 
+use super::row_chunks::for_each_chunk;
 use crate::render::{ErasedLocalState, RenderPipelineInPlaceStage};
 
 /// Premultiply color channels by alpha.
@@ -50,14 +51,16 @@ simd_function!(
     d: D,
     fn premultiply_rows_simd(color_rows: &mut [&mut [f32]], alpha_row: &[f32], xsize: usize) {
         for color_row in color_rows.iter_mut() {
-            let iter_color = color_row.chunks_exact_mut(D::F32Vec::LEN);
-            let iter_alpha = alpha_row.chunks_exact(D::F32Vec::LEN);
-            for (color_chunk, alpha_chunk) in iter_color.zip(iter_alpha).take(xsize.div_ceil(D::F32Vec::LEN)) {
-                let color_vec = D::F32Vec::load(d, color_chunk);
-                let alpha_vec = D::F32Vec::load(d, alpha_chunk);
-                let result = color_vec * alpha_vec;
-                result.store(color_chunk);
-            }
+            for_each_chunk(
+                d,
+                xsize,
+                (&mut **color_row, alpha_row),
+                #[inline(always)]
+                |_x, (mut color_chunk, alpha_vec)| {
+                    let color_vec = color_chunk.read();
+                    color_chunk.write(color_vec * alpha_vec);
+                },
+            );
         }
     }
 );
