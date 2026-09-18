@@ -5,6 +5,7 @@
 
 use jxl_simd::{F32SimdVec, simd_function};
 
+use super::row_chunks::{ScaledChunkMut, StoreInterleaved, Window, for_each_chunk};
 use crate::render::{Channels, ChannelsMut, ErasedLocalState, RenderPipelineInOutStage};
 
 pub struct HorizontalChromaUpsample {
@@ -36,28 +37,27 @@ simd_function!(
         let c025 = D::F32Vec::splat(d, 0.25);
         let c075 = D::F32Vec::splat(d, 0.75);
 
-        // Use windows for input (prev, cur, next) and chunks_exact_mut for output
-        // Input has border padding so windows of size simd_width+2 work
-        // Output is 2x the size, so chunks of 2*simd_width
-        let input_iter = input.windows(D::F32Vec::LEN + 2).step_by(D::F32Vec::LEN);
-        let output_iter = output.chunks_exact_mut(2 * D::F32Vec::LEN);
+        for_each_chunk(
+            d,
+            xsize,
+            (Window::<2>(input), ScaledChunkMut::<2>(output)),
+            #[inline(always)]
+            |_x, (in_win, mut out_chunk)| {
+                // Load: prev, cur, next
+                let prev_vec = in_win.get::<0>();
+                let cur_vec = in_win.get::<1>();
+                let next_vec = in_win.get::<2>();
 
-        for (in_win, out_chunk) in input_iter.zip(output_iter).take(xsize.div_ceil(D::F32Vec::LEN))
-        {
-            // Load: prev, cur, next
-            let prev_vec = D::F32Vec::load(d, &in_win[0..]);
-            let cur_vec = D::F32Vec::load(d, &in_win[1..]);
-            let next_vec = D::F32Vec::load(d, &in_win[2..]);
+                // Compute: left = 0.25 * prev + 0.75 * cur
+                let left = prev_vec.mul_add(c025, cur_vec * c075);
 
-            // Compute: left = 0.25 * prev + 0.75 * cur
-            let left = prev_vec.mul_add(c025, cur_vec * c075);
+                // Compute: right = 0.25 * next + 0.75 * cur
+                let right = next_vec.mul_add(c025, cur_vec * c075);
 
-            // Compute: right = 0.25 * next + 0.75 * cur
-            let right = next_vec.mul_add(c025, cur_vec * c075);
-
-            // Interleave and store: [left0, right0, left1, right1, ...]
-            D::F32Vec::store_interleaved_2(left, right, out_chunk);
-        }
+                // Interleave and store: [left0, right0, left1, right1, ...]
+                out_chunk.store_interleaved([left, right]);
+            },
+        );
     }
 );
 
@@ -118,34 +118,23 @@ simd_function!(
         let c025 = D::F32Vec::splat(d, 0.25);
         let c075 = D::F32Vec::splat(d, 0.75);
 
-        // Use chunks_exact for all arrays (buffers are guaranteed large enough)
-        let prev_iter = input_prev.chunks_exact(D::F32Vec::LEN);
-        let cur_iter = input_cur.chunks_exact(D::F32Vec::LEN);
-        let next_iter = input_next.chunks_exact(D::F32Vec::LEN);
-        let up_iter = output_up.chunks_exact_mut(D::F32Vec::LEN);
-        let down_iter = output_down.chunks_exact_mut(D::F32Vec::LEN);
+        for_each_chunk(
+            d,
+            xsize,
+            (input_prev, input_cur, input_next, output_up, output_down),
+            #[inline(always)]
+            |_x, (prev_vec, cur_vec, next_vec, mut up_chunk, mut down_chunk)| {
+                // Compute: up = 0.25 * prev + 0.75 * cur
+                let up = prev_vec.mul_add(c025, cur_vec * c075);
 
-        for ((((prev_chunk, cur_chunk), next_chunk), up_chunk), down_chunk) in prev_iter
-            .zip(cur_iter)
-            .zip(next_iter)
-            .zip(up_iter)
-            .zip(down_iter)
-            .take(xsize.div_ceil(D::F32Vec::LEN))
-        {
-            let prev_vec = D::F32Vec::load(d, prev_chunk);
-            let cur_vec = D::F32Vec::load(d, cur_chunk);
-            let next_vec = D::F32Vec::load(d, next_chunk);
+                // Compute: down = 0.25 * next + 0.75 * cur
+                let down = next_vec.mul_add(c025, cur_vec * c075);
 
-            // Compute: up = 0.25 * prev + 0.75 * cur
-            let up = prev_vec.mul_add(c025, cur_vec * c075);
-
-            // Compute: down = 0.25 * next + 0.75 * cur
-            let down = next_vec.mul_add(c025, cur_vec * c075);
-
-            // Store results
-            up.store(up_chunk);
-            down.store(down_chunk);
-        }
+                // Store results
+                up_chunk.write(up);
+                down_chunk.write(down);
+            },
+        );
     }
 );
 
