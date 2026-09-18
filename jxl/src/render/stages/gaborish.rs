@@ -5,6 +5,7 @@
 
 use jxl_simd::{F32SimdVec, simd_function};
 
+use super::row_chunks::{Window, for_each_chunk};
 use crate::render::{Channels, ChannelsMut, ErasedLocalState, RenderPipelineInOutStage};
 
 /// Apply Gabor-like filter to a channel.
@@ -43,7 +44,7 @@ simd_function!(
         input_rows: &Channels<f32>,
         output_rows: &mut ChannelsMut<f32>,
     ) {
-        let row_out = &mut output_rows[0][0];
+        let row_out = &mut *output_rows[0][0];
 
         let w0 = D::F32Vec::splat(d, stage.weight0);
         let w1 = D::F32Vec::splat(d, stage.weight1);
@@ -53,38 +54,33 @@ simd_function!(
             unreachable!();
         };
 
-        // These asserts help the compiler skip checks in the loop.
-        assert_eq!(row_top.len(), row_center.len());
-        assert_eq!(row_top.len(), row_bottom.len());
+        for_each_chunk(
+            d,
+            xsize,
+            (
+                Window::<2>(row_top),
+                Window::<2>(row_center),
+                Window::<2>(row_bottom),
+                row_out,
+            ),
+            #[inline(always)]
+            |_x, (top, center, bottom, mut out)| {
+                let p00 = top.get::<0>();
+                let p01 = top.get::<1>();
+                let p02 = top.get::<2>();
+                let p10 = center.get::<0>();
+                let p11 = center.get::<1>();
+                let p12 = center.get::<2>();
+                let p20 = bottom.get::<0>();
+                let p21 = bottom.get::<1>();
+                let p22 = bottom.get::<2>();
 
-        let num_vec = xsize.div_ceil(D::F32Vec::LEN);
-
-        let len = D::F32Vec::LEN;
-        let window_len = len + 2;
-
-        for (((top, center), bottom), out) in row_top
-            .windows(window_len)
-            .step_by(len)
-            .zip(row_center.windows(window_len).step_by(len))
-            .zip(row_bottom.windows(window_len).step_by(len))
-            .zip(row_out.chunks_exact_mut(D::F32Vec::LEN))
-            .take(num_vec)
-        {
-            let p00 = D::F32Vec::load(d, top);
-            let p01 = D::F32Vec::load(d, &top[1..]);
-            let p02 = D::F32Vec::load(d, &top[2..]);
-            let p10 = D::F32Vec::load(d, center);
-            let p11 = D::F32Vec::load(d, &center[1..]);
-            let p12 = D::F32Vec::load(d, &center[2..]);
-            let p20 = D::F32Vec::load(d, bottom);
-            let p21 = D::F32Vec::load(d, &bottom[1..]);
-            let p22 = D::F32Vec::load(d, &bottom[2..]);
-
-            let sum = p11 * w0;
-            let sum = w1.mul_add(p01 + p10 + p21 + p12, sum);
-            let sum = w2.mul_add(p00 + p02 + p20 + p22, sum);
-            sum.store(out);
-        }
+                let sum = p11 * w0;
+                let sum = w1.mul_add(p01 + p10 + p21 + p12, sum);
+                let sum = w2.mul_add(p00 + p02 + p20 + p22, sum);
+                out.write(sum);
+            },
+        );
     }
 );
 
