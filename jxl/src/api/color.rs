@@ -764,6 +764,51 @@ impl JxlColorEncoding {
         Ok(header_data)
     }
 
+    /// Validates that custom color primaries and white points produce a well-conditioned
+    /// RGB-to-XYZ matrix and chromatic adaptation matrix that fit within ICC s15Fixed16 format.
+    pub fn validate_icc_matrix(&self) -> Result<(), Error> {
+        let is_s15_fixed_16 =
+            |value: f32| value.is_finite() && (-32767.995..=32767.995).contains(&value);
+
+        match self {
+            JxlColorEncoding::GrayscaleColorSpace { white_point, .. } => {
+                let (wx, wy) = white_point.to_xy_coords();
+                let xyz = cie_xyz_from_white_cie_xy(wx, wy)?;
+                for val in xyz {
+                    if !is_s15_fixed_16(val) {
+                        return Err(Error::IccValueOutOfRangeS15Fixed16(val));
+                    }
+                }
+            }
+            JxlColorEncoding::RgbColorSpace {
+                white_point,
+                primaries,
+                ..
+            } => {
+                let (wx, wy) = white_point.to_xy_coords();
+                let chad = adapt_to_xyz_d50(wx, wy)?;
+                for row in &chad {
+                    for &val in row {
+                        if !is_s15_fixed_16(val as f32) {
+                            return Err(Error::IccValueOutOfRangeS15Fixed16(val as f32));
+                        }
+                    }
+                }
+                let [r, g, b] = primaries.to_xy_coords();
+                let m = create_icc_rgb_matrix(r.0, r.1, g.0, g.1, b.0, b.1, wx, wy)?;
+                for row in &m {
+                    for &val in row {
+                        if !is_s15_fixed_16(val) {
+                            return Err(Error::IccValueOutOfRangeS15Fixed16(val));
+                        }
+                    }
+                }
+            }
+            JxlColorEncoding::XYB { .. } => {}
+        }
+        Ok(())
+    }
+
     pub fn maybe_create_profile(&self) -> Result<Option<Vec<u8>>, Error> {
         if let JxlColorEncoding::XYB { rendering_intent } = self
             && *rendering_intent != RenderingIntent::Perceptual
@@ -1174,7 +1219,7 @@ impl JxlColorEncoding {
     }
 }
 
-#[derive(Clone, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum JxlColorProfile {
     Icc(Vec<u8>),
     Simple(JxlColorEncoding),
