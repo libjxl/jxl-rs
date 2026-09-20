@@ -117,4 +117,14 @@ impl RowBuffer {
     pub const fn x0_byte_offset() -> usize {
         CACHE_LINE_BYTE_SIZE
     }
+
+    #[inline]
+    pub fn num_rows(&self) -> usize {
+        self.num_rows
+    }
+
+    #[inline]
+    pub fn row_stride(&self) -> usize {
+        self.row_stride
+    }
 }

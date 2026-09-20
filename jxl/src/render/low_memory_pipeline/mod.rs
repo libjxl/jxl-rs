@@ -43,39 +43,38 @@ impl Debug for LowMemoryRenderPipelinePerThread {
     }
 }
 
+#[derive(Clone, Copy, Debug)]
+pub(super) struct RowBufferConfig {
+    pub(super) data_type: DataTypeTag,
+    pub(super) next_y_border: usize,
+    pub(super) y_shift: usize,
+    pub(super) x_shift: usize,
+    pub(super) row_len: usize,
+}
+
 impl LowMemoryRenderPipelinePerThread {
     fn ensure_populated(&mut self, p: &LowMemoryRenderPipeline) -> Result<()> {
         if !self.row_buffers.is_empty() {
             return Ok(());
         }
-        let nc = p.shared.num_channels();
-        let mut initial_buffers = vec![];
-        for chan in 0..nc {
-            initial_buffers.push(RowBuffer::new(
-                p.shared.channel_info[0][chan].ty.unwrap_or(DataTypeTag::U8),
-                p.next_border_and_cur_downsample[0][chan].0 as usize,
-                0,
-                0,
-                (p.shared.chunk_size + 2 * p.border_size.0)
-                    >> p.shared.channel_info[0][chan].downsample.0,
-            )?);
-        }
-        self.row_buffers = vec![initial_buffers];
-
-        // Allocate buffers.
-        for (i, stage) in p.shared.stages.iter().enumerate() {
-            let mut stage_buffers = vec![];
-            for (next_y_border, (dsx, _)) in p.next_border_and_cur_downsample[i + 1].iter() {
-                stage_buffers.push(RowBuffer::new(
-                    stage.output_type().unwrap(),
-                    *next_y_border as usize,
-                    stage.shift().1 as usize,
-                    stage.shift().0 as usize,
-                    (p.shared.chunk_size + 2 * p.border_size.0) >> *dsx,
-                )?);
-            }
-            self.row_buffers.push(stage_buffers);
-        }
+        self.row_buffers = p
+            .row_buffer_configs
+            .iter()
+            .map(|stage_cfgs| {
+                stage_cfgs
+                    .iter()
+                    .map(|cfg| {
+                        RowBuffer::new(
+                            cfg.data_type,
+                            cfg.next_y_border,
+                            cfg.y_shift,
+                            cfg.x_shift,
+                            cfg.row_len,
+                        )
+                    })
+                    .collect::<Result<_>>()
+            })
+            .collect::<Result<_>>()?;
         self.local_states = p
             .shared
             .stages
@@ -92,7 +91,7 @@ pub struct LowMemoryRenderPipeline {
     shared: RenderPipelineShared<RowBuffer>,
     per_thread_data: PerThreadStorage<LowMemoryRenderPipelinePerThread>,
     input_buffers: InputBuffers,
-    next_border_and_cur_downsample: Vec<Vec<(u8, (u8, u8))>>,
+    row_buffer_configs: Vec<Vec<RowBufferConfig>>,
     save_buffer_info: Vec<Option<SaveStageBufferInfo>>,
     // The input buffer that each channel of each stage should use.
     // This is indexed both by stage index (0 corresponds to input data, 1 to stage[0], etc) and by
@@ -288,10 +287,91 @@ impl RenderPipeline for LowMemoryRenderPipeline {
                 .max(border_pixels_per_stage[s].1 << downsampling_for_stage[s].1);
         }
 
+        let mut row_buffer_configs = vec![];
+        let mut initial_configs = vec![];
+        for chan in 0..nc {
+            let dsx = shared.channel_info[0][chan].downsample.0;
+            initial_configs.push(RowBufferConfig {
+                data_type: shared.channel_info[0][chan].ty.unwrap_or(DataTypeTag::U8),
+                next_y_border: next_border_and_cur_downsample[0][chan].0 as usize,
+                y_shift: 0,
+                x_shift: 0,
+                row_len: (shared.chunk_size + 2 * border_size.0) >> dsx,
+            });
+        }
+        row_buffer_configs.push(initial_configs);
+
+        for (i, stage) in shared.stages.iter().enumerate() {
+            let mut stage_configs = vec![];
+            for &(next_y_border, (dsx, _)) in next_border_and_cur_downsample[i + 1].iter() {
+                stage_configs.push(RowBufferConfig {
+                    data_type: stage.output_type().unwrap(),
+                    next_y_border: next_y_border as usize,
+                    y_shift: stage.shift().1 as usize,
+                    x_shift: stage.shift().0 as usize,
+                    row_len: (shared.chunk_size + 2 * border_size.0) >> dsx,
+                });
+            }
+            row_buffer_configs.push(stage_configs);
+        }
+
+        // Backward pass: unify buffer configurations for each InOut stage across all its channels
+        for (s, stage) in shared.stages.iter().enumerate().rev() {
+            if let Stage::InOut(_) = stage {
+                let inputs = &stage_input_buffer_index[s];
+                if !inputs.is_empty() {
+                    let max_next_y_border = inputs
+                        .iter()
+                        .map(|&(outer, inner)| row_buffer_configs[outer][inner].next_y_border)
+                        .max()
+                        .unwrap();
+                    let max_y_shift = inputs
+                        .iter()
+                        .map(|&(outer, inner)| row_buffer_configs[outer][inner].y_shift)
+                        .max()
+                        .unwrap();
+                    let max_x_shift = inputs
+                        .iter()
+                        .map(|&(outer, inner)| row_buffer_configs[outer][inner].x_shift)
+                        .max()
+                        .unwrap();
+                    let max_row_len = inputs
+                        .iter()
+                        .map(|&(outer, inner)| row_buffer_configs[outer][inner].row_len)
+                        .max()
+                        .unwrap();
+
+                    for &(outer, inner) in inputs {
+                        let cfg = &mut row_buffer_configs[outer][inner];
+                        cfg.next_y_border = max_next_y_border;
+                        cfg.y_shift = max_y_shift;
+                        cfg.x_shift = max_x_shift;
+                        cfg.row_len = max_row_len;
+                    }
+                }
+
+                let outputs = &mut row_buffer_configs[s + 1];
+                if !outputs.is_empty() {
+                    let max_next_y_border =
+                        outputs.iter().map(|c| c.next_y_border).max().unwrap();
+                    let max_y_shift = outputs.iter().map(|c| c.y_shift).max().unwrap();
+                    let max_x_shift = outputs.iter().map(|c| c.x_shift).max().unwrap();
+                    let max_row_len = outputs.iter().map(|c| c.row_len).max().unwrap();
+
+                    for cfg in outputs.iter_mut() {
+                        cfg.next_y_border = max_next_y_border;
+                        cfg.y_shift = max_y_shift;
+                        cfg.x_shift = max_x_shift;
+                        cfg.row_len = max_row_len;
+                    }
+                }
+            }
+        }
+
         Ok(Self {
             input_buffers: InputBuffers::new(nc, shared.group_count)?,
             stage_input_buffer_index,
-            next_border_and_cur_downsample,
+            row_buffer_configs,
             per_thread_data: PerThreadStorage::new(|| LowMemoryRenderPipelinePerThread {
                 row_buffers: vec![],
                 local_states: vec![],

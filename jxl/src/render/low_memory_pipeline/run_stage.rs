@@ -82,6 +82,35 @@ impl<T: RenderPipelineInOutStage> RunInOutStage<RowBuffer> for T {
         output_buffers: &mut [RowBuffer],
         state: Option<&mut ErasedLocalState>,
     ) {
+        if let Some(first) = input_buffers.first() {
+            for (idx, b) in input_buffers.iter().enumerate() {
+                debug_assert_eq!(
+                    b.num_rows(),
+                    first.num_rows(),
+                    "input buffer {idx} num_rows mismatch"
+                );
+                debug_assert_eq!(
+                    b.row_stride(),
+                    first.row_stride(),
+                    "input buffer {idx} row_stride mismatch"
+                );
+            }
+        }
+        if let Some(first) = output_buffers.first() {
+            for (idx, b) in output_buffers.iter().enumerate() {
+                debug_assert_eq!(
+                    b.num_rows(),
+                    first.num_rows(),
+                    "output buffer {idx} num_rows mismatch"
+                );
+                debug_assert_eq!(
+                    b.row_stride(),
+                    first.row_stride(),
+                    "output buffer {idx} row_stride mismatch"
+                );
+            }
+        }
+
         let ibordery = Self::BORDER.1 as isize;
         let x0 = RowBuffer::x0_offset::<T::InputT>();
         let xpre = if start_of_row {
