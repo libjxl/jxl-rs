@@ -67,6 +67,18 @@ impl SaveStage {
         let xlen = save_size.0;
         let nc = data.len();
 
+        if self.try_fused_identity_store(
+            data,
+            buf,
+            save_start,
+            save_size,
+            relative_y,
+            frame_y,
+            group_origin,
+        ) {
+            return Ok(());
+        }
+
         let out_channels = self.output_channels();
         let total_channels = out_channels.max(nc);
         let padded_len = xlen.div_ceil(64) * 64 + 64;
@@ -339,5 +351,293 @@ impl SaveStage {
             }
         }
         Ok(())
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn try_fused_identity_store(
+        &self,
+        data: &[&RowBuffer],
+        buf: &mut OutputChannelRef,
+        save_start: (usize, usize),
+        save_size: (usize, usize),
+        relative_y: usize,
+        frame_y: usize,
+        group_origin: (usize, usize),
+    ) -> bool {
+        let dest_y = match self.orientation {
+            Orientation::Identity => relative_y,
+            Orientation::FlipVertical => save_size.1 - 1 - relative_y,
+            _ => return false,
+        };
+        let out_channels = self.output_channels();
+        let nc = data.len();
+        let pos = (group_origin.0 + save_start.0, frame_y);
+        let xlen = save_size.0;
+
+        match self.data_format {
+            JxlDataFormat::U8 { .. } => {
+                let out_row = &mut buf.row_mut(dest_y)[..xlen * out_channels];
+                if nc >= 3 && (out_channels == 3 || out_channels == 4) {
+                    let c0 = self
+                        .conversions
+                        .first()
+                        .copied()
+                        .unwrap_or(ChannelConversion::None);
+                    let c1 = self
+                        .conversions
+                        .get(1)
+                        .copied()
+                        .unwrap_or(ChannelConversion::None);
+                    let c2 = self
+                        .conversions
+                        .get(2)
+                        .copied()
+                        .unwrap_or(ChannelConversion::None);
+
+                    let mut dispatch_u8 = |s0, s1, s2, s3, max, mult, max_i16| -> bool {
+                        if out_channels == 3 && nc == 3 && !self.fill_opaque_alpha {
+                            identity::store_fused_3_u8(s0, s1, s2, out_row, max, mult, max_i16, pos);
+                            true
+                        } else if out_channels == 4 {
+                            if self.fill_opaque_alpha && nc == 3 {
+                                identity::store_fused_4_u8(
+                                    s0,
+                                    s1,
+                                    s2,
+                                    identity::ChannelSourceU8::OpaqueAlpha,
+                                    out_row,
+                                    max,
+                                    mult,
+                                    max_i16,
+                                    pos,
+                                );
+                                true
+                            } else if let Some(s3) = s3 {
+                                identity::store_fused_4_u8(s0, s1, s2, s3, out_row, max, mult, max_i16, pos);
+                                true
+                            } else {
+                                false
+                            }
+                        } else {
+                            false
+                        }
+                    };
+
+                    if let (
+                        ChannelConversion::F32ToU8 {
+                            bit_depth: bd0,
+                            dither_channel: dc0,
+                        },
+                        ChannelConversion::F32ToU8 {
+                            bit_depth: bd1,
+                            dither_channel: dc1,
+                        },
+                        ChannelConversion::F32ToU8 {
+                            bit_depth: bd2,
+                            dither_channel: dc2,
+                        },
+                    ) = (c0, c1, c2)
+                        && bd0 == bd1
+                        && bd1 == bd2
+                    {
+                        let off = RowBuffer::x0_offset::<f32>() + save_start.0;
+                        let s0 = identity::ChannelSourceU8::F32 {
+                            slice: &data[0].get_row::<f32>(frame_y)[off..],
+                            dither_channel: dc0,
+                        };
+                        let s1 = identity::ChannelSourceU8::F32 {
+                            slice: &data[1].get_row::<f32>(frame_y)[off..],
+                            dither_channel: dc1,
+                        };
+                        let s2 = identity::ChannelSourceU8::F32 {
+                            slice: &data[2].get_row::<f32>(frame_y)[off..],
+                            dither_channel: dc2,
+                        };
+                        let max = ((1u32 << bd0) - 1) as f32;
+
+                        let mut mult = 0;
+                        let mut max_i16 = 0;
+                        let s3 = if nc == 4 {
+                            match self
+                                .conversions
+                                .get(3)
+                                .copied()
+                                .unwrap_or(ChannelConversion::None)
+                            {
+                                ChannelConversion::F32ToU8 {
+                                    bit_depth: bd3,
+                                    dither_channel: dc3,
+                                } if bd3 == bd0 => Some(identity::ChannelSourceU8::F32 {
+                                    slice: &data[3].get_row::<f32>(frame_y)[off..],
+                                    dither_channel: dc3,
+                                }),
+                                ChannelConversion::I16ToU8 {
+                                    multiplier: m3,
+                                    max: mx3,
+                                } => {
+                                    mult = m3 as i16;
+                                    max_i16 = mx3 as i16;
+                                    let off_i16 = RowBuffer::x0_offset::<i16>() + save_start.0;
+                                    Some(identity::ChannelSourceU8::I16 {
+                                        slice: &data[3].get_row::<i16>(frame_y)[off_i16..],
+                                    })
+                                }
+                                _ => None,
+                            }
+                        } else {
+                            None
+                        };
+
+                        if dispatch_u8(s0, s1, s2, s3, max, mult, max_i16) {
+                            return true;
+                        }
+                    } else if let (
+                        ChannelConversion::I16ToU8 {
+                            multiplier: m0,
+                            max: mx0,
+                        },
+                        ChannelConversion::I16ToU8 {
+                            multiplier: m1,
+                            max: mx1,
+                        },
+                        ChannelConversion::I16ToU8 {
+                            multiplier: m2,
+                            max: mx2,
+                        },
+                    ) = (c0, c1, c2)
+                        && m0 == m1
+                        && m1 == m2
+                        && mx0 == mx1
+                        && mx1 == mx2
+                    {
+                        let off = RowBuffer::x0_offset::<i16>() + save_start.0;
+                        let s0 = identity::ChannelSourceU8::I16 {
+                            slice: &data[0].get_row::<i16>(frame_y)[off..],
+                        };
+                        let s1 = identity::ChannelSourceU8::I16 {
+                            slice: &data[1].get_row::<i16>(frame_y)[off..],
+                        };
+                        let s2 = identity::ChannelSourceU8::I16 {
+                            slice: &data[2].get_row::<i16>(frame_y)[off..],
+                        };
+                        let mult = m0 as i16;
+                        let max_i16 = mx0 as i16;
+
+                        let s3 = if nc == 4 {
+                            match self
+                                .conversions
+                                .get(3)
+                                .copied()
+                                .unwrap_or(ChannelConversion::None)
+                            {
+                                ChannelConversion::I16ToU8 {
+                                    multiplier: m3,
+                                    max: mx3,
+                                } if m3 == m0 && mx3 == mx0 => {
+                                    Some(identity::ChannelSourceU8::I16 {
+                                        slice: &data[3].get_row::<i16>(frame_y)[off..],
+                                    })
+                                }
+                                _ => None,
+                            }
+                        } else {
+                            None
+                        };
+
+                        if dispatch_u8(s0, s1, s2, s3, 0.0, mult, max_i16) {
+                            return true;
+                        }
+                    }
+                }
+            }
+            JxlDataFormat::F16 { endianness, .. } if endianness == Endianness::native() => {
+                let out_bytes = &mut buf.row_mut(dest_y)[..xlen * out_channels * 2];
+                if out_bytes.as_mut_ptr().align_offset(std::mem::align_of::<u16>()) == 0 {
+                    let out_row = u16::cast_slice_mut(out_bytes);
+                    if nc >= 3 && (out_channels == 3 || out_channels == 4) {
+                        let c0 = self
+                            .conversions
+                            .first()
+                            .copied()
+                            .unwrap_or(ChannelConversion::None);
+                        let c1 = self
+                            .conversions
+                            .get(1)
+                            .copied()
+                            .unwrap_or(ChannelConversion::None);
+                        let c2 = self
+                            .conversions
+                            .get(2)
+                            .copied()
+                            .unwrap_or(ChannelConversion::None);
+
+                        if let (
+                            ChannelConversion::F32ToF16 { clamp_range: cr0 },
+                            ChannelConversion::F32ToF16 { clamp_range: cr1 },
+                            ChannelConversion::F32ToF16 { clamp_range: cr2 },
+                        ) = (c0, c1, c2)
+                            && cr0 == cr1
+                            && cr1 == cr2
+                        {
+                            let off = RowBuffer::x0_offset::<f32>() + save_start.0;
+                            let s0 = identity::ChannelSourceU16::F32 {
+                                slice: &data[0].get_row::<f32>(frame_y)[off..],
+                                clamp_range: cr0,
+                            };
+                            let s1 = identity::ChannelSourceU16::F32 {
+                                slice: &data[1].get_row::<f32>(frame_y)[off..],
+                                clamp_range: cr1,
+                            };
+                            let s2 = identity::ChannelSourceU16::F32 {
+                                slice: &data[2].get_row::<f32>(frame_y)[off..],
+                                clamp_range: cr2,
+                            };
+
+                            let s3 = if nc == 4 {
+                                match self
+                                    .conversions
+                                    .get(3)
+                                    .copied()
+                                    .unwrap_or(ChannelConversion::None)
+                                {
+                                    ChannelConversion::F32ToF16 { clamp_range: cr3 }
+                                        if cr3 == cr0 =>
+                                    {
+                                        Some(identity::ChannelSourceU16::F32 {
+                                            slice: &data[3].get_row::<f32>(frame_y)[off..],
+                                            clamp_range: cr3,
+                                        })
+                                    }
+                                    _ => None,
+                                }
+                            } else {
+                                None
+                            };
+
+                            if out_channels == 3 && nc == 3 && !self.fill_opaque_alpha {
+                                identity::store_fused_3_f16(s0, s1, s2, out_row);
+                                return true;
+                            } else if out_channels == 4 {
+                                if self.fill_opaque_alpha && nc == 3 {
+                                    identity::store_fused_4_f16(
+                                        s0,
+                                        s1,
+                                        s2,
+                                        identity::ChannelSourceU16::OpaqueAlpha,
+                                        out_row,
+                                    );
+                                    return true;
+                                } else if let Some(s3) = s3 {
+                                    identity::store_fused_4_f16(s0, s1, s2, s3, out_row);
+                                    return true;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
+        false
     }
 }
