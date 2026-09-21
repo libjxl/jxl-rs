@@ -7,10 +7,9 @@ use jxl_simd::{F32SimdVec, SimdDescriptor, SimdMask};
 
 use crate::util::{eval_rational_poly, eval_rational_poly_simd};
 
-/// Converts the linear samples with the sRGB transfer curve (SIMD version).
-// Max error ~5e-7
+/// Converts a single SIMD vector of linear samples to sRGB transfer curve.
 #[inline(always)]
-pub fn linear_to_srgb_simd<D: SimdDescriptor>(d: D, samples: &mut [f32]) {
+pub fn linear_to_srgb_simd_vec<D: SimdDescriptor>(d: D, x: D::F32Vec) -> D::F32Vec {
     #[allow(clippy::excessive_precision)]
     const P: [f32; 5] = [
         -5.135152395e-4,
@@ -29,17 +28,23 @@ pub fn linear_to_srgb_simd<D: SimdDescriptor>(d: D, samples: &mut [f32]) {
         2.424867759e-2,
     ];
 
+    let a = x.abs();
+    D::F32Vec::splat(d, 0.0031308)
+        .gt(a)
+        .if_then_else_f32(
+            a * D::F32Vec::splat(d, 12.92),
+            eval_rational_poly_simd(d, a.sqrt(), P, Q),
+        )
+        .copysign(x)
+}
+
+/// Converts the linear samples with the sRGB transfer curve (SIMD version).
+// Max error ~5e-7
+#[inline(always)]
+pub fn linear_to_srgb_simd<D: SimdDescriptor>(d: D, samples: &mut [f32]) {
     for vec in samples.chunks_exact_mut(D::F32Vec::LEN) {
         let x = D::F32Vec::load(d, vec);
-        let a = x.abs();
-        D::F32Vec::splat(d, 0.0031308)
-            .gt(a)
-            .if_then_else_f32(
-                a * D::F32Vec::splat(d, 12.92),
-                eval_rational_poly_simd(d, a.sqrt(), P, Q),
-            )
-            .copysign(x)
-            .store(vec);
+        linear_to_srgb_simd_vec(d, x).store(vec);
     }
 }
 
@@ -108,11 +113,9 @@ pub fn srgb_to_linear_simd<D: SimdDescriptor>(d: D, samples: &mut [f32]) {
     }
 }
 
-/// Converts the linear samples with the BT.709 transfer curve (SIMD version).
-// Rational polynomial approximation of 1.099 * x^0.45 - 0.099 on sqrt(x).
-// Max error ~3e-7
+/// Converts a single SIMD vector of linear samples to BT.709 transfer curve.
 #[inline(always)]
-pub fn linear_to_bt709_simd<D: SimdDescriptor>(d: D, samples: &mut [f32]) {
+pub fn linear_to_bt709_simd_vec<D: SimdDescriptor>(d: D, x: D::F32Vec) -> D::F32Vec {
     // Coefficients for rational polynomial P(y)/Q(y) where y = sqrt(x)
     // Approximates 1.099 * y^0.9 - 0.099 on [sqrt(0.018), 1]
     #[allow(clippy::excessive_precision)]
@@ -133,17 +136,24 @@ pub fn linear_to_bt709_simd<D: SimdDescriptor>(d: D, samples: &mut [f32]) {
         3.269049823284149e-1,
     ];
 
+    let a = x.abs();
+    D::F32Vec::splat(d, 0.018)
+        .gt(a)
+        .if_then_else_f32(
+            a * D::F32Vec::splat(d, 4.5),
+            eval_rational_poly_simd(d, a.sqrt(), P, Q),
+        )
+        .copysign(x)
+}
+
+/// Converts the linear samples with the BT.709 transfer curve (SIMD version).
+// Rational polynomial approximation of 1.099 * x^0.45 - 0.099 on sqrt(x).
+// Max error ~3e-7
+#[inline(always)]
+pub fn linear_to_bt709_simd<D: SimdDescriptor>(d: D, samples: &mut [f32]) {
     for vec in samples.chunks_exact_mut(D::F32Vec::LEN) {
         let x = D::F32Vec::load(d, vec);
-        let a = x.abs();
-        D::F32Vec::splat(d, 0.018)
-            .gt(a)
-            .if_then_else_f32(
-                a * D::F32Vec::splat(d, 4.5),
-                eval_rational_poly_simd(d, a.sqrt(), P, Q),
-            )
-            .copysign(x)
-            .store(vec);
+        linear_to_bt709_simd_vec(d, x).store(vec);
     }
 }
 
@@ -283,6 +293,26 @@ pub fn linear_to_pq(intensity_target: f32, samples: &mut [f32]) {
     }
 }
 
+/// Converts a single SIMD vector of linear samples to PQ signal.
+#[inline(always)]
+pub fn linear_to_pq_simd_vec<D: SimdDescriptor>(
+    d: D,
+    y_mult: D::F32Vec,
+    threshold: D::F32Vec,
+    s: D::F32Vec,
+) -> D::F32Vec {
+    let a = s.abs();
+    let a_scaled = a * y_mult;
+    let a_1_4 = a_scaled.sqrt().sqrt();
+
+    // Use small polynomial for a < 1e-4, regular polynomial otherwise
+    let y_small = eval_rational_poly_simd(d, a_1_4, PQ_INV_EOTF_P_SMALL, PQ_INV_EOTF_Q_SMALL);
+    let y_large = eval_rational_poly_simd(d, a_1_4, PQ_INV_EOTF_P, PQ_INV_EOTF_Q);
+    let y = threshold.gt(a).if_then_else_f32(y_small, y_large);
+
+    y.copysign(s)
+}
+
 /// Converts linear sample to PQ signal using PQ inverse EOTF (SIMD version).
 #[inline(always)]
 pub fn linear_to_pq_simd<D: SimdDescriptor>(
@@ -299,16 +329,7 @@ pub fn linear_to_pq_simd<D: SimdDescriptor>(
         .take(xsize.div_ceil(D::F32Vec::LEN))
     {
         let s = D::F32Vec::load(d, vec);
-        let a = s.abs();
-        let a_scaled = a * y_mult;
-        let a_1_4 = a_scaled.sqrt().sqrt();
-
-        // Use small polynomial for a < 1e-4, regular polynomial otherwise
-        let y_small = eval_rational_poly_simd(d, a_1_4, PQ_INV_EOTF_P_SMALL, PQ_INV_EOTF_Q_SMALL);
-        let y_large = eval_rational_poly_simd(d, a_1_4, PQ_INV_EOTF_P, PQ_INV_EOTF_Q);
-        let y = threshold.gt(a).if_then_else_f32(y_small, y_large);
-
-        y.copysign(s).store(vec);
+        linear_to_pq_simd_vec(d, y_mult, threshold, s).store(vec);
     }
 }
 
