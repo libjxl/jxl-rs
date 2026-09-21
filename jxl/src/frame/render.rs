@@ -10,6 +10,7 @@ use crate::api::{
     JxlPixelFormat,
 };
 use crate::bit_reader::BitReader;
+use crate::color::tf::TransferFunction;
 use crate::error::{Error, Result};
 use crate::features::epf::SigmaSource;
 use crate::features::noise::Noise;
@@ -797,12 +798,9 @@ impl Frame {
         if frame_header.do_ycbcr {
             pipeline = pipeline.add_inplace_stage(YcbcrToRgbStage::new(0));
         } else if xyb_encoded {
-            pipeline = pipeline.add_inplace_stage(XybStage::new(0, output_color_info.clone()));
-        }
-
-        // XYB output is linear, so apply transfer function, but only if output is not linear itself
-        if xyb_encoded && !output_tf.is_linear() {
-            pipeline = pipeline.add_inplace_stage(FromLinearStage::new(0, output_tf.clone()));
+            let mut stage_color_info = output_color_info.clone();
+            stage_color_info.tf = output_tf.clone();
+            pipeline = pipeline.add_inplace_stage(XybColorConvertStage::new(0, stage_color_info));
         }
 
         if frame_header.needs_blending() {
