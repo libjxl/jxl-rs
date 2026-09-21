@@ -38,16 +38,6 @@ pub fn linear_to_srgb_simd_vec<D: SimdDescriptor>(d: D, x: D::F32Vec) -> D::F32V
         .copysign(x)
 }
 
-/// Converts the linear samples with the sRGB transfer curve (SIMD version).
-// Max error ~5e-7
-#[inline(always)]
-pub fn linear_to_srgb_simd<D: SimdDescriptor>(d: D, samples: &mut [f32]) {
-    for vec in samples.chunks_exact_mut(D::F32Vec::LEN) {
-        let x = D::F32Vec::load(d, vec);
-        linear_to_srgb_simd_vec(d, x).store(vec);
-    }
-}
-
 /// Converts samples in sRGB transfer curve to linear. Inverse of `linear_to_srgb`.
 pub fn srgb_to_linear(samples: &mut [f32]) {
     #[allow(clippy::excessive_precision)]
@@ -144,17 +134,6 @@ pub fn linear_to_bt709_simd_vec<D: SimdDescriptor>(d: D, x: D::F32Vec) -> D::F32
             eval_rational_poly_simd(d, a.sqrt(), P, Q),
         )
         .copysign(x)
-}
-
-/// Converts the linear samples with the BT.709 transfer curve (SIMD version).
-// Rational polynomial approximation of 1.099 * x^0.45 - 0.099 on sqrt(x).
-// Max error ~3e-7
-#[inline(always)]
-pub fn linear_to_bt709_simd<D: SimdDescriptor>(d: D, samples: &mut [f32]) {
-    for vec in samples.chunks_exact_mut(D::F32Vec::LEN) {
-        let x = D::F32Vec::load(d, vec);
-        linear_to_bt709_simd_vec(d, x).store(vec);
-    }
 }
 
 /// Converts samples in BT.709 transfer curve to linear. Inverse of `linear_to_bt709_simd`.
@@ -311,26 +290,6 @@ pub fn linear_to_pq_simd_vec<D: SimdDescriptor>(
     let y = threshold.gt(a).if_then_else_f32(y_small, y_large);
 
     y.copysign(s)
-}
-
-/// Converts linear sample to PQ signal using PQ inverse EOTF (SIMD version).
-#[inline(always)]
-pub fn linear_to_pq_simd<D: SimdDescriptor>(
-    d: D,
-    intensity_target: f32,
-    xsize: usize,
-    samples: &mut [f32],
-) {
-    let y_mult = D::F32Vec::splat(d, intensity_target * 10000f32.recip());
-    let threshold = D::F32Vec::splat(d, 1e-4);
-
-    for vec in samples
-        .chunks_exact_mut(D::F32Vec::LEN)
-        .take(xsize.div_ceil(D::F32Vec::LEN))
-    {
-        let s = D::F32Vec::load(d, vec);
-        linear_to_pq_simd_vec(d, y_mult, threshold, s).store(vec);
-    }
 }
 
 /// Converts PQ signal to linear sample using PQ EOTF, where linear sample value of 1.0 represents
@@ -541,6 +500,75 @@ pub fn hlg_to_scene(samples: &mut [f32]) {
     }
 }
 
+use crate::headers::color_encoding::CustomTransferFunction;
+
+#[derive(Clone, Debug)]
+pub enum TransferFunction {
+    Bt709,
+    Srgb,
+    Pq {
+        intensity_target: f32,
+    },
+    Hlg {
+        intensity_target: f32,
+        luminance_rgb: [f32; 3],
+    },
+    /// Inverse gamma in range `(0, 1]`
+    Gamma(f32),
+}
+
+impl TransferFunction {
+    /// Returns true if this transfer function is linear (i.e., Gamma(1.0)).
+    pub fn is_linear(&self) -> bool {
+        matches!(self, Self::Gamma(g) if (*g - 1.0).abs() < f32::EPSILON)
+    }
+
+    /// Create a TransferFunction from a JxlTransferFunction.
+    /// For PQ/HLG, requires intensity_target and luminances from tone mapping info.
+    /// Note: JxlTransferFunction::Gamma stores the encoding exponent (e.g., 1/2.2 for gamma 2.2).
+    pub fn from_api_tf(
+        api_tf: &crate::api::JxlTransferFunction,
+        intensity_target: f32,
+        luminances: [f32; 3],
+    ) -> Self {
+        use crate::api::JxlTransferFunction;
+        match api_tf {
+            JxlTransferFunction::BT709 => Self::Bt709,
+            JxlTransferFunction::Linear => Self::Gamma(1.0),
+            JxlTransferFunction::SRGB => Self::Srgb,
+            JxlTransferFunction::PQ => Self::Pq { intensity_target },
+            JxlTransferFunction::DCI => Self::Gamma(2.6_f32.recip()),
+            JxlTransferFunction::HLG => Self::Hlg {
+                intensity_target,
+                luminance_rgb: luminances,
+            },
+            JxlTransferFunction::Gamma(g) => Self::Gamma(*g),
+        }
+    }
+}
+
+impl TryFrom<CustomTransferFunction> for TransferFunction {
+    type Error = ();
+
+    fn try_from(ctf: CustomTransferFunction) -> std::result::Result<Self, ()> {
+        use crate::headers::color_encoding::TransferFunction as HeaderTf;
+
+        if ctf.have_gamma {
+            Ok(Self::Gamma(ctf.gamma()))
+        } else {
+            match ctf.transfer_function {
+                HeaderTf::BT709 => Ok(Self::Bt709),
+                HeaderTf::Unknown => Err(()),
+                HeaderTf::Linear => Ok(Self::Gamma(1.0)),
+                HeaderTf::SRGB => Ok(Self::Srgb),
+                HeaderTf::PQ => Err(()),
+                HeaderTf::DCI => Ok(Self::Gamma(2.6_f32.recip())),
+                HeaderTf::HLG => Err(()),
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod test {
     use test_log::test;
@@ -598,7 +626,10 @@ mod test {
             let samples = arb_samples(u)?;
             let mut output = samples.clone();
 
-            linear_to_srgb_simd(jxl_simd::ScalarDescriptor::new().unwrap(), &mut output);
+            let d = jxl_simd::ScalarDescriptor::new().unwrap();
+            for s in &mut output {
+                *s = linear_to_srgb_simd_vec(d, *s);
+            }
             srgb_to_linear(&mut output);
             assert_close!(all, &output, &samples, 2e-6);
             Ok(())
@@ -611,7 +642,10 @@ mod test {
             let samples = arb_samples(u)?;
             let mut output = samples.clone();
 
-            linear_to_bt709_simd(jxl_simd::ScalarDescriptor::new().unwrap(), &mut output);
+            let d = jxl_simd::ScalarDescriptor::new().unwrap();
+            for s in &mut output {
+                *s = linear_to_bt709_simd_vec(d, *s);
+            }
             bt709_to_linear(&mut output);
             assert_close!(all, &output, &samples, 5e-6);
             Ok(())
@@ -625,7 +659,10 @@ mod test {
             let mut simd = samples.clone();
 
             linear_to_srgb_naive(&mut samples);
-            linear_to_srgb_simd(jxl_simd::ScalarDescriptor::new().unwrap(), &mut simd);
+            let d = jxl_simd::ScalarDescriptor::new().unwrap();
+            for s in &mut simd {
+                *s = linear_to_srgb_simd_vec(d, *s);
+            }
             assert_close!(all, &samples, &simd, 1e-6);
             Ok(())
         });
@@ -638,7 +675,10 @@ mod test {
             let mut simd = samples.clone();
 
             linear_to_bt709_naive(&mut samples);
-            linear_to_bt709_simd(jxl_simd::ScalarDescriptor::new().unwrap(), &mut simd);
+            let d = jxl_simd::ScalarDescriptor::new().unwrap();
+            for s in &mut simd {
+                *s = linear_to_bt709_simd_vec(d, *s);
+            }
             assert_close!(all, &samples, &simd, 1e-6);
             Ok(())
         });
@@ -713,15 +753,14 @@ mod test {
             let intensity_target = u.int_in_range(9900..=10100)? as f32;
             let mut samples = arb_samples(u)?;
             let mut simd = samples.clone();
-            let xsize = samples.len();
 
             linear_to_pq(intensity_target, &mut samples);
-            linear_to_pq_simd(
-                jxl_simd::ScalarDescriptor::new().unwrap(),
-                intensity_target,
-                xsize,
-                &mut simd,
-            );
+            let d = jxl_simd::ScalarDescriptor::new().unwrap();
+            let y_mult = jxl_simd::F32SimdVec::splat(d, intensity_target * 10000f32.recip());
+            let threshold = jxl_simd::F32SimdVec::splat(d, 1e-4);
+            for s in &mut simd {
+                *s = linear_to_pq_simd_vec(d, y_mult, threshold, *s);
+            }
             assert_close!(all, &samples, &simd, 2e-5);
             Ok(())
         });

@@ -16,8 +16,8 @@ use crate::render::buffer_splitter::{BufferSplitter, OutputChannelRef, SaveStage
 use crate::render::low_memory_pipeline::row_buffers::RowBuffer;
 use crate::render::save::SaveStage;
 use crate::render::stages::{
-    ConvertF32ToF16Stage, ConvertF32ToU8Stage, ConvertF32ToU16Stage, FromLinearStage,
-    OutputColorInfo, TransferFunction, Upsample8x, XybStage,
+    ConvertF32ToF16Stage, ConvertF32ToU8Stage, ConvertF32ToU16Stage, OutputColorInfo,
+    TransferFunction, Upsample8x, XybColorConvertStage,
 };
 use crate::render::{Channels, ChannelsMut, RenderPipelineInOutStage, RenderPipelineInPlaceStage};
 use crate::util::{SmallVec, f16, mirror};
@@ -88,9 +88,9 @@ impl Frame {
         let upsample_stage = Upsample8x::new(&self.decoder_state.file_header.transform_data, 0);
         let mut upsample_state = upsample_stage.init_local_state()?.unwrap();
 
-        let xyb_stage = XybStage::new(0, output_color_info.clone());
-
-        let from_linear_stage = FromLinearStage::new(0, output_tf.clone());
+        let mut stage_color_info = output_color_info.clone();
+        stage_color_info.tf = output_tf.clone();
+        let xyb_stage = XybColorConvertStage::new(0, stage_color_info);
 
         let mut lf_rows = [
             RowBuffer::new(DataTypeTag::F32, 2, 0, 0, len)?,
@@ -193,7 +193,6 @@ impl Frame {
                     &mut b.get_row_mut(uy)[off..],
                 ];
                 xyb_stage.process_row_chunk((0, 0), ulen, &mut rows, None, false);
-                from_linear_stage.process_row_chunk((0, 0), ulen, &mut rows, None, false);
 
                 macro_rules! convert {
                     ($s: expr, $t: ty) => {
