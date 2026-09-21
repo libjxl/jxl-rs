@@ -43,7 +43,6 @@ pub(crate) use simple_pipeline::SimpleRenderPipeline;
 pub(crate) type ErasedLocalState = dyn Any + Send + Sync;
 
 pub enum StageSpecialCase {
-    F32ToU8 { channel: usize, bit_depth: u8 },
     ModularToF32 { channel: usize, bit_depth: u8 },
     Modular16ToF32 { channel: usize, bit_depth: u8 },
 }

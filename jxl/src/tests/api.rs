@@ -139,76 +139,106 @@ fn test_default_output_tf_by_pixel_format() {
 #[test]
 fn test_fill_opaque_alpha_both_pipelines() {
     let file = std::fs::read("resources/test/basic.jxl").unwrap();
-    let rgba_format = JxlPixelFormat {
-        color_type: JxlColorType::Rgba,
-        color_data_format: Some(JxlDataFormat::f32()),
-        extra_channel_format: vec![],
-    };
 
-    for use_simple in [true, false] {
-        let options = JxlDecoderOptions::default();
-        let decoder = JxlDecoder::<states::Initialized>::new(options);
-        let mut input = file.as_slice();
+    for (df, is_u8) in [
+        (JxlDataFormat::f32(), false),
+        (JxlDataFormat::U8 { bit_depth: 8 }, true),
+    ] {
+        let rgba_format = JxlPixelFormat {
+            color_type: JxlColorType::Rgba,
+            color_data_format: Some(df),
+            extra_channel_format: vec![],
+        };
 
-        macro_rules! advance_decoder {
-            ($decoder:expr) => {
-                loop {
-                    match $decoder.process(&mut input, None).unwrap() {
-                        ProcessingResult::Complete { result } => break result,
-                        ProcessingResult::NeedsMoreInput { fallback, .. } => {
-                            if input.is_empty() {
-                                panic!("Unexpected end of input");
+        for use_simple in [true, false] {
+            let options = JxlDecoderOptions::default();
+            let decoder = JxlDecoder::<states::Initialized>::new(options);
+            let mut input = file.as_slice();
+
+            macro_rules! advance_decoder {
+                ($decoder:expr) => {
+                    loop {
+                        match $decoder.process(&mut input, None).unwrap() {
+                            ProcessingResult::Complete { result } => break result,
+                            ProcessingResult::NeedsMoreInput { fallback, .. } => {
+                                if input.is_empty() {
+                                    panic!("Unexpected end of input");
+                                }
+                                $decoder = fallback;
                             }
-                            $decoder = fallback;
                         }
                     }
-                }
-            };
-            ($decoder:expr, $buffers:expr) => {
-                loop {
-                    match $decoder.process(&mut input, $buffers, None).unwrap() {
-                        ProcessingResult::Complete { result } => break result,
-                        ProcessingResult::NeedsMoreInput { fallback, .. } => {
-                            if input.is_empty() {
-                                panic!("Unexpected end of input");
+                };
+                ($decoder:expr, $buffers:expr) => {
+                    loop {
+                        match $decoder.process(&mut input, $buffers, None).unwrap() {
+                            ProcessingResult::Complete { result } => break result,
+                            ProcessingResult::NeedsMoreInput { fallback, .. } => {
+                                if input.is_empty() {
+                                    panic!("Unexpected end of input");
+                                }
+                                $decoder = fallback;
                             }
-                            $decoder = fallback;
                         }
                     }
+                };
+            }
+
+            let mut decoder = decoder;
+            let mut decoder = advance_decoder!(decoder);
+            decoder.set_use_simple_pipeline(use_simple);
+            decoder.set_pixel_format(rgba_format.clone()).unwrap();
+
+            let basic_info = decoder.basic_info().clone();
+            let (width, height) = basic_info.size;
+            let mut decoder = advance_decoder!(decoder);
+
+            if is_u8 {
+                let mut color_buffer = Image::<u8>::new((width * 4, height)).unwrap();
+                let mut buffers: Vec<_> = vec![JxlOutputBuffer::from_image_rect_mut(
+                    color_buffer
+                        .get_rect_mut(Rect {
+                            origin: (0, 0),
+                            size: (width * 4, height),
+                        })
+                        .into_raw(),
+                )];
+                let _decoder = advance_decoder!(decoder, &mut buffers);
+
+                for y in 0..height {
+                    let row = color_buffer.row(y);
+                    for x in 0..width {
+                        let alpha = row[x * 4 + 3];
+                        assert_eq!(
+                            alpha, 255,
+                            "Alpha at ({},{}) should be 255, got {} (use_simple={})",
+                            x, y, alpha, use_simple
+                        );
+                    }
                 }
-            };
-        }
+            } else {
+                let mut color_buffer = Image::<f32>::new((width * 4, height)).unwrap();
+                let mut buffers: Vec<_> = vec![JxlOutputBuffer::from_image_rect_mut(
+                    color_buffer
+                        .get_rect_mut(Rect {
+                            origin: (0, 0),
+                            size: (width * 4, height),
+                        })
+                        .into_raw(),
+                )];
+                let _decoder = advance_decoder!(decoder, &mut buffers);
 
-        let mut decoder = decoder;
-        let mut decoder = advance_decoder!(decoder);
-        decoder.set_use_simple_pipeline(use_simple);
-        decoder.set_pixel_format(rgba_format.clone()).unwrap();
-
-        let basic_info = decoder.basic_info().clone();
-        let (width, height) = basic_info.size;
-        let mut decoder = advance_decoder!(decoder);
-
-        let mut color_buffer = Image::<f32>::new((width * 4, height)).unwrap();
-        let mut buffers: Vec<_> = vec![JxlOutputBuffer::from_image_rect_mut(
-            color_buffer
-                .get_rect_mut(Rect {
-                    origin: (0, 0),
-                    size: (width * 4, height),
-                })
-                .into_raw(),
-        )];
-
-        let _decoder = advance_decoder!(decoder, &mut buffers);
-
-        for y in 0..height {
-            let row = color_buffer.row(y);
-            for x in 0..width {
-                let alpha = row[x * 4 + 3];
-                assert_eq!(
-                    alpha, 1.0,
-                    "Alpha at ({},{}) should be 1.0, got {} (use_simple={})",
-                    x, y, alpha, use_simple
-                );
+                for y in 0..height {
+                    let row = color_buffer.row(y);
+                    for x in 0..width {
+                        let alpha = row[x * 4 + 3];
+                        assert_eq!(
+                            alpha, 1.0,
+                            "Alpha at ({},{}) should be 1.0, got {} (use_simple={})",
+                            x, y, alpha, use_simple
+                        );
+                    }
+                }
             }
         }
     }

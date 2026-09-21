@@ -440,6 +440,7 @@ impl LowMemoryRenderPipeline {
                             (x0 >> dx, y0 >> dy),
                             current_size,
                             current_origin,
+                            &mut data.save_scratch,
                         )?;
                     }
                     Stage::Extend(s) => {
@@ -584,6 +585,7 @@ impl LowMemoryRenderPipeline {
                             (x0, y0),
                             (xrange.end, yrange.end), // this is not true, but works out correctly.
                             (0, 0),
+                            &mut data.save_scratch,
                         )?;
                     }
                     Stage::Extend(_) => {

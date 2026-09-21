@@ -3,13 +3,48 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-use std::ops::Range;
+#![allow(clippy::too_many_arguments)]
 
-use jxl_simd::{F32SimdVec, SimdDescriptor, U8SimdVec, U16SimdVec, simd_function};
+use jxl_simd::{
+    F32SimdVec, I16SimdVec, I32SimdVec, SimdDescriptor, SimdMask, SimdMask16, U8SimdVec,
+    U16SimdVec, simd_function,
+};
 
-use crate::api::{Endianness, JxlDataFormat, JxlOutputBuffer};
 use crate::image::ImageDataType;
-use crate::render::low_memory_pipeline::row_buffers::RowBuffer;
+
+#[inline(always)]
+fn convert_f32_vec<D: SimdDescriptor>(
+    d: D,
+    val: D::F32Vec,
+    scale: D::F32Vec,
+    zero: D::F32Vec,
+    dither_row: &[f32; 64],
+    dither_x: usize,
+) -> D::F32Vec {
+    let dither = D::F32Vec::load(d, &dither_row[dither_x..]);
+    let scaled = val * scale;
+    let dithered = scaled + dither;
+    dithered.max(zero).min(scale)
+}
+
+#[inline(always)]
+fn scalar_f32_to_u8(val: f32, max: f32, dither: f32) -> u8 {
+    (val * max + dither).clamp(0.0, max).round() as u8
+}
+
+#[inline(always)]
+fn scalar_i16_to_u8(val: i16, mult: i32, max: i32) -> u8 {
+    ((val as i32) * mult).clamp(0, max) as u8
+}
+
+#[inline(always)]
+fn scalar_f32_to_f16(val: f32, clamp_range: Option<(f32, f32)>) -> u16 {
+    let val = match clamp_range {
+        Some((min, max)) => val.clamp(min, max),
+        None => val,
+    };
+    crate::util::f16::from_f32(val).to_bits()
+}
 
 macro_rules! define_run_interleaved {
     ($fn_name:ident, $ty:ty, $vec_trait:ident, $store_fn:ident, $cnt:expr, $($arg:ident),+) => {
@@ -96,10 +131,7 @@ define_run_interleaved!(
 simd_function!(
     store_interleaved_f32,
     d: D,
-        fn store_interleaved_impl_f32(
-            inputs: &[&[f32]],
-            output: &mut [f32]
-        ) -> usize {
+    fn store_interleaved_impl_f32(inputs: &[&[f32]], output: &mut [f32]) -> usize {
         match inputs.len() {
             2 => run_interleaved_2_f32(d, inputs[0], inputs[1], output),
             3 => run_interleaved_3_f32(d, inputs[0], inputs[1], inputs[2], output),
@@ -143,10 +175,7 @@ define_run_interleaved!(
 simd_function!(
     store_interleaved_u8,
     d: D,
-        fn store_interleaved_impl_u8(
-            inputs: &[&[u8]],
-            output: &mut [u8]
-        ) -> usize {
+    fn store_interleaved_impl_u8(inputs: &[&[u8]], output: &mut [u8]) -> usize {
         match inputs.len() {
             2 => run_interleaved_2_u8(d, inputs[0], inputs[1], output),
             3 => run_interleaved_3_u8(d, inputs[0], inputs[1], inputs[2], output),
@@ -190,10 +219,7 @@ define_run_interleaved!(
 simd_function!(
     store_interleaved_u16,
     d: D,
-        fn store_interleaved_impl_u16(
-            inputs: &[&[u16]],
-            output: &mut [u16]
-        ) -> usize {
+    fn store_interleaved_impl_u16(inputs: &[&[u16]], output: &mut [u16]) -> usize {
         match inputs.len() {
             2 => run_interleaved_2_u16(d, inputs[0], inputs[1], output),
             3 => run_interleaved_3_u16(d, inputs[0], inputs[1], inputs[2], output),
@@ -203,75 +229,244 @@ simd_function!(
     }
 );
 
-pub(super) fn store(
-    input_buf: &[&RowBuffer],
-    input_y: usize,
-    xrange: Range<usize>,
-    output_buf: &mut JxlOutputBuffer,
-    output_y: usize,
-    data_format: JxlDataFormat,
-) -> usize {
-    let byte_start = xrange.start * data_format.bytes_per_sample() + RowBuffer::x0_byte_offset();
-    let byte_end = xrange.end * data_format.bytes_per_sample() + RowBuffer::x0_byte_offset();
-    let is_native_endian = match data_format {
-        JxlDataFormat::U8 { .. } => true,
-        JxlDataFormat::F16 { endianness, .. }
-        | JxlDataFormat::U16 { endianness, .. }
-        | JxlDataFormat::F32 { endianness, .. } => endianness == Endianness::native(),
-    };
-    let output_buf = output_buf.row_mut(output_y);
-    let output_buf = &mut output_buf[0..(byte_end - byte_start) * input_buf.len()];
-    match (
-        input_buf.len(),
-        data_format.bytes_per_sample(),
-        is_native_endian,
-    ) {
-        (1, _, true) => {
-            // We can just do a memcpy.
-            let input_buf = &input_buf[0].get_row::<u8>(input_y)[byte_start..byte_end];
-            output_buf.copy_from_slice(input_buf);
-            input_buf.len() / data_format.bytes_per_sample()
-        }
-        (channels, 1, true) if (2..=4).contains(&channels) => {
-            let start_u8 = byte_start;
-            let end_u8 = byte_end;
-            let mut slices = [&[] as &[u8]; 4];
-            for (i, buf) in input_buf.iter().enumerate() {
-                slices[i] = &buf.get_row::<u8>(input_y)[start_u8..end_u8];
-            }
-            store_interleaved_u8(&slices[..channels], output_buf)
-        }
-        (channels, 2, true) if (2..=4).contains(&channels) => {
-            let ptr = output_buf.as_mut_ptr();
-            if ptr.align_offset(std::mem::align_of::<u16>()) == 0 {
-                let output_u16 = u16::cast_slice_mut(output_buf);
-                let start_u16 = byte_start / 2;
-                let end_u16 = byte_end / 2;
-                let mut slices = [&[] as &[u16]; 4];
-                for (i, buf) in input_buf.iter().enumerate() {
-                    slices[i] = &buf.get_row::<u16>(input_y)[start_u16..end_u16];
-                }
-                store_interleaved_u16(&slices[..channels], output_u16)
-            } else {
-                0
+pub(super) fn store_u8(slices: &[&[u8]], output_buf: &mut [u8]) -> usize {
+    let channels = slices.len();
+    if channels == 0 {
+        return 0;
+    }
+    let xsize = slices[0].len();
+    let out = &mut output_buf[..xsize * channels];
+    if channels == 1 {
+        out.copy_from_slice(slices[0]);
+        xsize
+    } else if (2..=4).contains(&channels) {
+        let n = store_interleaved_u8(slices, out);
+        for i in n..xsize {
+            for c in 0..channels {
+                out[i * channels + c] = slices[c][i];
             }
         }
-        (channels, 4, true) if (2..=4).contains(&channels) => {
-            let ptr = output_buf.as_mut_ptr();
-            if ptr.align_offset(std::mem::align_of::<f32>()) == 0 {
-                let output_f32 = f32::cast_slice_mut(output_buf);
-                let start_f32 = byte_start / 4;
-                let end_f32 = byte_end / 4;
-
-                let mut slices = [&[] as &[f32]; 4];
-                for (i, buf) in input_buf.iter().enumerate() {
-                    slices[i] = &buf.get_row::<f32>(input_y)[start_f32..end_f32];
-                }
-                store_interleaved_f32(&slices[..channels], output_f32)
-            } else {
-                0
-            }
-        }
-        _ => 0,
+        xsize
+    } else {
+        0
     }
 }
+
+pub(super) fn store_u16(slices: &[&[u16]], output_buf: &mut [u8]) -> usize {
+    let channels = slices.len();
+    if channels == 0 {
+        return 0;
+    }
+    let xsize = slices[0].len();
+    let out_bytes = &mut output_buf[..xsize * channels * 2];
+    let ptr = out_bytes.as_mut_ptr();
+    if ptr.align_offset(std::mem::align_of::<u16>()) == 0 {
+        let out_u16 = u16::cast_slice_mut(out_bytes);
+        if channels == 1 {
+            out_u16.copy_from_slice(slices[0]);
+            xsize
+        } else if (2..=4).contains(&channels) {
+            let n = store_interleaved_u16(slices, out_u16);
+            for i in n..xsize {
+                for c in 0..channels {
+                    out_u16[i * channels + c] = slices[c][i];
+                }
+            }
+            xsize
+        } else {
+            0
+        }
+    } else {
+        0
+    }
+}
+
+pub(super) fn store_f32(slices: &[&[f32]], output_buf: &mut [u8]) -> usize {
+    let channels = slices.len();
+    if channels == 0 {
+        return 0;
+    }
+    let xsize = slices[0].len();
+    let out_bytes = &mut output_buf[..xsize * channels * 4];
+    let ptr = out_bytes.as_mut_ptr();
+    if ptr.align_offset(std::mem::align_of::<f32>()) == 0 {
+        let out_f32 = f32::cast_slice_mut(out_bytes);
+        if channels == 1 {
+            out_f32.copy_from_slice(slices[0]);
+            xsize
+        } else if (2..=4).contains(&channels) {
+            let n = store_interleaved_f32(slices, out_f32);
+            for i in n..xsize {
+                for c in 0..channels {
+                    out_f32[i * channels + c] = slices[c][i];
+                }
+            }
+            xsize
+        } else {
+            0
+        }
+    } else {
+        0
+    }
+}
+
+simd_function!(
+    f32_to_u8_simd,
+    d: D,
+    pub(super) fn f32_to_u8_simd_impl(
+        input: &[f32],
+        output: &mut [u8],
+        max: f32,
+        position: (usize, usize),
+        channel: usize,
+    ) {
+        let (x0, y0) = position;
+        let simd_width = D::F32Vec::LEN;
+        let zero = D::F32Vec::splat(d, 0.0);
+        let scale = D::F32Vec::splat(d, max);
+        let dither_y = (y0 + channel * 13) % 32;
+        let dither_row = &crate::util::DITHER_TABLE[dither_y];
+
+        let xsize = output.len();
+        let num_full_vecs = xsize / simd_width;
+
+        for v in 0..num_full_vecs {
+            let x = v * simd_width;
+            let val = D::F32Vec::load(d, &input[x..]);
+            let dither_x = (x0 + x + channel * 23) % 32;
+            let clamped = convert_f32_vec(d, val, scale, zero, dither_row, dither_x);
+            clamped.round_store_u8(&mut output[x..x + simd_width]);
+        }
+
+        for x in (num_full_vecs * simd_width)..xsize {
+            let dither_x = (x0 + x + channel * 23) % 32;
+            output[x] = scalar_f32_to_u8(input[x], max, dither_row[dither_x]);
+        }
+    }
+);
+
+#[inline(always)]
+fn convert_i16_vec<D: SimdDescriptor>(
+    _d: D,
+    val: D::I16Vec,
+    scale: D::I16Vec,
+    zero: D::I16Vec,
+    max_vec: D::I16Vec,
+) -> D::I16Vec {
+    let scaled = val * scale;
+    let zeroclip = scaled.lt_zero().if_then_else_i16(zero, scaled);
+    scaled.gt(max_vec).if_then_else_i16(max_vec, zeroclip)
+}
+
+simd_function!(
+    i16_to_u8_simd,
+    d: D,
+    pub(super) fn i16_to_u8_simd_impl(
+        input: &[i16],
+        output: &mut [u8],
+        mult: i16,
+        max: i16,
+    ) {
+        let simd_width = D::I16Vec::LEN;
+        let scale = D::I16Vec::splat(d, mult);
+        let max_vec = D::I16Vec::splat(d, max);
+        let zero = D::I16Vec::splat(d, 0);
+
+        let xsize = output.len();
+        let num_full_vecs = xsize / simd_width;
+
+        for v in 0..num_full_vecs {
+            let x = v * simd_width;
+            let val = D::I16Vec::load(d, &input[x..]);
+            let clip = convert_i16_vec(d, val, scale, zero, max_vec);
+            clip.store_u8(&mut output[x..x + simd_width]);
+        }
+
+        for x in (num_full_vecs * simd_width)..xsize {
+            output[x] = scalar_i16_to_u8(input[x], mult as i32, max as i32);
+        }
+    }
+);
+
+// SIMD I32 to U8 conversion used by SaveStage
+simd_function!(
+    i32_to_u8_simd_dispatch,
+    d: D,
+    pub(crate) fn i32_to_u8_simd(
+        input: &[i32],
+        output: &mut [u8],
+        scale: i32,
+        max: i32,
+        xsize: usize,
+    ) {
+        let simd_width = D::F32Vec::LEN;
+        let scale = D::I32Vec::splat(d, scale);
+        let max = D::I32Vec::splat(d, max);
+        let zero = D::I32Vec::splat(d, 0);
+
+        for (input_chunk, output_chunk) in input
+            .chunks_exact(simd_width)
+            .zip(output.chunks_exact_mut(simd_width))
+            .take(xsize.div_ceil(simd_width))
+        {
+            let val = D::I32Vec::load(d, input_chunk);
+            let scaled = val * scale;
+            let zeroclip = scaled.lt_zero().if_then_else_i32(zero, scaled);
+            let clip = scaled.gt(max).if_then_else_i32(max, zeroclip);
+            clip.store_u8(output_chunk);
+        }
+    }
+);
+
+// SIMD F32 to U16 conversion used by SaveStage
+simd_function!(
+    f32_to_u16_simd_dispatch,
+    d: D,
+    pub(crate) fn f32_to_u16_simd(input: &[f32], output: &mut [u16], max: f32, xsize: usize) {
+        let simd_width = D::F32Vec::LEN;
+        let zero = D::F32Vec::splat(d, 0.0);
+        let scale = D::F32Vec::splat(d, max);
+
+        for (input_chunk, output_chunk) in input
+            .chunks_exact(simd_width)
+            .zip(output.chunks_exact_mut(simd_width))
+            .take(xsize.div_ceil(simd_width))
+        {
+            let val = D::F32Vec::load(d, input_chunk);
+            let scaled = val * scale;
+            let clamped = scaled.max(zero).min(scale);
+            clamped.round_store_u16(output_chunk);
+        }
+    }
+);
+
+// SIMD F32 to F16 conversion used by SaveStage
+simd_function!(
+    f32_to_f16_simd_dispatch,
+    d: D,
+    pub(crate) fn f32_to_f16_simd(
+        input: &[f32],
+        output: &mut [u16],
+        clamp_range: Option<(f32, f32)>,
+        xsize: usize,
+    ) {
+        let simd_width = D::F32Vec::LEN;
+        let mut x = 0;
+        let clamp_vecs =
+            clamp_range.map(|(min, max)| (D::F32Vec::splat(d, min), D::F32Vec::splat(d, max)));
+
+        while x + simd_width <= input.len() && x + simd_width <= output.len() && x < xsize {
+            let mut val = D::F32Vec::load(d, &input[x..x + simd_width]);
+            if let Some((min_vec, max_vec)) = clamp_vecs {
+                val = val.max(min_vec).min(max_vec);
+            }
+            val.store_f16_bits(&mut output[x..x + simd_width]);
+            x += simd_width;
+        }
+
+        for i in x..xsize {
+            output[i] = scalar_f32_to_f16(input[i], clamp_range);
+        }
+    }
+);
+

@@ -34,6 +34,7 @@ struct LowMemoryRenderPipelinePerThread {
     row_buffers: Vec<Vec<RowBuffer>>,
     // Local states of each stage, if any.
     local_states: Vec<Option<Box<ErasedLocalState>>>,
+    save_scratch: Vec<u8>,
 }
 
 impl Debug for LowMemoryRenderPipelinePerThread {
@@ -81,6 +82,8 @@ impl LowMemoryRenderPipelinePerThread {
             .iter()
             .map(|x| x.init_local_state())
             .collect::<Result<_>>()?;
+        let scratch_len = 64 + 4 * (p.shared.chunk_size.div_ceil(64) * 64 + 64) * 4;
+        self.save_scratch.resize(scratch_len, 0);
         Ok(())
     }
 }
@@ -292,6 +295,7 @@ impl RenderPipeline for LowMemoryRenderPipeline {
             per_thread_data: PerThreadStorage::new(|| LowMemoryRenderPipelinePerThread {
                 row_buffers: vec![],
                 local_states: vec![],
+                save_scratch: vec![],
             }),
             padding_was_rendered: false,
             save_buffer_info,
