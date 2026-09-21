@@ -134,25 +134,20 @@ impl Frame {
 
             // Upsample.
             for c in 0..3 {
-                let off = RowBuffer::x0_offset::<f32>() - 2;
-                let input_rows_refs = [
-                    &lf_rows[c].get_row::<f32>(y + LF_ROW_OFFSET - 2)[off..],
-                    &lf_rows[c].get_row::<f32>(y + LF_ROW_OFFSET - 1)[off..],
-                    &lf_rows[c].get_row::<f32>(y + LF_ROW_OFFSET)[off..],
-                    &lf_rows[c].get_row::<f32>(y + LF_ROW_OFFSET + 1)[off..],
-                    &lf_rows[c].get_row::<f32>(y + LF_ROW_OFFSET + 2)[off..],
-                ]
-                .into_iter()
-                .collect();
-                let input_channels = Channels::new(input_rows_refs, 1, 5);
-
-                let mut output_rows_refs = SmallVec::new();
-                upsampled_rows[c].get_rows_mut(
-                    y * 8..y * 8 + 8,
-                    RowBuffer::x0_offset::<f32>(),
-                    &mut output_rows_refs,
+                let off = RowBuffer::x0_offset::<f32>();
+                let input_channels = Channels::from_row_buffers(
+                    &[&lf_rows[c]],
+                    off,
+                    y + LF_ROW_OFFSET,
+                    2,
+                    usize::MAX,
                 );
-                let mut output_channels = ChannelsMut::new(output_rows_refs, 1, 8);
+                let mut output_channels = ChannelsMut::from_row_buffers(
+                    std::slice::from_mut(&mut upsampled_rows[c]),
+                    RowBuffer::x0_offset::<f32>(),
+                    y * 8,
+                    8,
+                );
 
                 upsample_stage.process_row_chunk(
                     (0, 0),

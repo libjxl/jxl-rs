@@ -7,7 +7,9 @@
 #[inline(always)]
 pub fn mirror(mut v: isize, s: usize) -> usize {
     debug_assert_ne!(s, 0, "mirror size must be greater than 0");
-    // TODO(veluca): consider speeding this up if needed.
+    if (v as usize) < s {
+        return v as usize;
+    }
     loop {
         if v < 0 {
             v = -v - 1;

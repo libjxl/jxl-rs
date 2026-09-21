@@ -118,6 +118,24 @@ impl RowBuffer {
         CACHE_LINE_BYTE_SIZE
     }
 
+    /// Returns a slice over the entire underlying buffer cast to `T`.
+    #[inline]
+    pub fn as_slice<T: ImageDataType>(&self) -> &[T] {
+        slice_from_cachelines(&self.buffer)
+    }
+
+    /// Returns a mutable slice over the entire underlying buffer cast to `T`.
+    #[inline]
+    pub fn as_mut_slice<T: ImageDataType>(&mut self) -> &mut [T] {
+        slice_from_cachelines_mut(&mut self.buffer)
+    }
+
+    /// Returns the row stride measured in elements of type `T`.
+    #[inline]
+    pub fn stride_elements<T: ImageDataType>(&self) -> usize {
+        self.row_stride * num_per_cache_line::<T>()
+    }
+
     #[inline]
     pub fn num_rows(&self) -> usize {
         self.num_rows

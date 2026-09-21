@@ -3,11 +3,15 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-use jxl_simd::{F32SimdVec, SimdMask, simd_function};
+use jxl_simd::{F32SimdVec, SimdDescriptor, SimdMask, simd_function};
 
 use crate::features::epf::SigmaSource;
-use crate::render::stages::epf::common::{get_sigma, prepare_sad_mul_storage};
-use crate::render::{Channels, ChannelsMut, ErasedLocalState, RenderPipelineInOutStage};
+use crate::render::stages::epf::common::{
+    accumulate_pair, get_sigma, prepare_sad_mul_storage,
+};
+use crate::render::{
+    Channels, ChannelsMut, ErasedLocalState, ForEachChunk, RenderPipelineInOutStage,
+};
 use crate::util::sync::{Arc, RwLock};
 use crate::{BLOCK_DIM, MIN_SIGMA};
 
@@ -47,10 +51,9 @@ impl Epf1Stage {
     }
 }
 
-simd_function!(
-epf1_process_row_chunk_dispatch,
-d: D,
-fn epf1_process_row_chunk(
+#[inline(always)]
+fn epf1_process_simd<D: SimdDescriptor>(
+    d: D,
     stage: &Epf1Stage,
     pos: (usize, usize),
     xsize: usize,
@@ -68,84 +71,143 @@ fn epf1_process_row_chunk(
     let bsm = sm * stage.border_sad_mul;
     let sad_mul_storage = prepare_sad_mul_storage(xpos, ypos, sm, bsm);
 
-    for x in (0..xsize).step_by(D::F32Vec::LEN) {
-        let sigma = get_sigma(d, x + xpos, row_sigma);
-        let sad_mul = D::F32Vec::load(d, &sad_mul_storage[x % 8..]);
+    let scale0 = D::F32Vec::splat(d, stage.channel_scale[0]);
+    let scale1 = D::F32Vec::splat(d, stage.channel_scale[1]);
+    let scale2 = D::F32Vec::splat(d, stage.channel_scale[2]);
+    let c_one = D::F32Vec::splat(d, 1.0);
+    let c_zero = D::F32Vec::splat(d, 0.0);
+    let min_sigma = D::F32Vec::splat(d, MIN_SIGMA);
 
-        let sigma_mask = D::F32Vec::splat(d, MIN_SIGMA).gt(sigma);
-        if sigma_mask.all() {
-            for (input_c, output_c) in input_rows.iter().zip(output_rows.iter_mut()) {
-                D::F32Vec::load(d, &input_c[2][2 + x..]).store(&mut output_c[0][x..]);
+    ForEachChunk::<3, 5, 2, 3, 1>::run(
+        d,
+        xsize,
+        input_rows,
+        output_rows,
+        #[inline(always)]
+        |x, in_view, out_view| {
+            let sigma = get_sigma(d, x + xpos, row_sigma);
+            let sad_mul = D::F32Vec::load(d, &sad_mul_storage[x % 8..]);
+
+            let sigma_mask = min_sigma.gt(sigma);
+            if sigma_mask.all() {
+                out_view.store::<0, 0>(in_view.load::<0, 2, 0>());
+                out_view.store::<1, 0>(in_view.load::<1, 2, 0>());
+                out_view.store::<2, 0>(in_view.load::<2, 2, 0>());
+                return;
             }
-            continue;
-        }
 
-        // Compute SADs
-        let mut sads = [D::F32Vec::splat(d, 0.0); 4];
-        for (input_c, scale) in input_rows.iter().zip(stage.channel_scale) {
-            let scale = D::F32Vec::splat(d, scale);
-            let p20 = D::F32Vec::load(d, &input_c[0][2 + x..]);
-            let p11 = D::F32Vec::load(d, &input_c[1][1 + x..]);
-            let p21 = D::F32Vec::load(d, &input_c[1][2 + x..]);
-            let p31 = D::F32Vec::load(d, &input_c[1][3 + x..]);
-            let p02 = D::F32Vec::load(d, &input_c[2][x..]);
-            let p12 = D::F32Vec::load(d, &input_c[2][1 + x..]);
-            let p22 = D::F32Vec::load(d, &input_c[2][2 + x..]);
-            let p32 = D::F32Vec::load(d, &input_c[2][3 + x..]);
-            let p42 = D::F32Vec::load(d, &input_c[2][4 + x..]);
-            let p13 = D::F32Vec::load(d, &input_c[3][1 + x..]);
-            let p23 = D::F32Vec::load(d, &input_c[3][2 + x..]);
-            let p33 = D::F32Vec::load(d, &input_c[3][3 + x..]);
-            let p24 = D::F32Vec::load(d, &input_c[4][2 + x..]);
-            let d20_21 = (p20 - p21).abs();
-            let d11_21 = (p11 - p21).abs();
-            let d22_21 = (p22 - p21).abs();
-            let d31_21 = (p31 - p21).abs();
-            let d02_12 = (p02 - p12).abs();
-            let d11_12 = (p11 - p12).abs();
-            let d12_22 = (p22 - p12).abs();
-            let d31_32 = (p31 - p32).abs();
-            let d22_32 = (p22 - p32).abs();
-            let d42_32 = (p42 - p32).abs();
-            let d13_12 = (p13 - p12).abs();
-            let d22_23 = (p22 - p23).abs();
-            let d13_23 = (p13 - p23).abs();
-            let d33_23 = (p33 - p23).abs();
-            let d33_32 = (p33 - p32).abs();
-            let d24_23 = (p24 - p23).abs();
-            sads[0] = (d20_21 + d11_12 + d22_21 + d31_32 + d22_23).mul_add(scale, sads[0]);
-            sads[1] = (d11_21 + d02_12 + d12_22 + d22_32 + d13_23).mul_add(scale, sads[1]);
-            sads[2] = (d31_21 + d12_22 + d22_32 + d42_32 + d33_23).mul_add(scale, sads[2]);
-            sads[3] = (d22_21 + d13_12 + d22_23 + d33_32 + d24_23).mul_add(scale, sads[3]);
-        }
+            let inv_sigma = sigma * sad_mul;
 
-        // Compute output based on SADs
-        let inv_sigma = sigma * sad_mul;
-        let mut w = D::F32Vec::splat(d, 1.0);
-        for sad in sads.iter_mut() {
-            *sad = sad
-                .mul_add(inv_sigma, D::F32Vec::splat(d, 1.0))
-                .max(D::F32Vec::splat(d, 0.0));
-            w += *sad;
-        }
-        let inv_w = D::F32Vec::splat(d, 1.0) / w;
-        for (input_c, output_c) in input_rows.iter().zip(output_rows.iter_mut()) {
-            let mut out = D::F32Vec::load(d, &input_c[2][2 + x..]);
-            for (row_idx, col_idx, sad_idx) in [
-                (3, 2+x, 3),
-                (2, 3+x, 2),
-                (2, 1+x, 1),
-                (1, 2+x, 0),
-            ] {
-                out = D::F32Vec::load(d, &input_c[row_idx][col_idx..]).mul_add(sads[sad_idx], out);
+            let mut w_acc = c_one;
+            let mut out0 = in_view.load::<0, 2, 0>();
+            let mut out1 = in_view.load::<1, 2, 0>();
+            let mut out2 = in_view.load::<2, 2, 0>();
+
+            // Pair 1: Vertical neighbors: North (p21, sad0) and South (p23, sad3)
+            let mut sad0 = c_zero;
+            let mut sad3 = c_zero;
+            macro_rules! vertical_channel {
+                ($c:expr, $scale:expr) => {{
+                    let scale = $scale;
+                    let p21 = in_view.load::<$c, 1, 0>();
+                    let p22 = in_view.load::<$c, 2, 0>();
+                    let p23 = in_view.load::<$c, 3, 0>();
+
+                    let d22_21 = (p22 - p21).abs();
+                    let d22_23 = (p22 - p23).abs();
+                    let shared = d22_21 + d22_23;
+
+                    let p20 = in_view.load::<$c, 0, 0>();
+                    let p11 = in_view.load::<$c, 1, -1>();
+                    let p12 = in_view.load::<$c, 2, -1>();
+                    let p31 = in_view.load::<$c, 1, 1>();
+                    let p32 = in_view.load::<$c, 2, 1>();
+                    let diff0 = shared + (p20 - p21).abs() + (p11 - p12).abs() + (p31 - p32).abs();
+
+                    let p24 = in_view.load::<$c, 4, 0>();
+                    let p13 = in_view.load::<$c, 3, -1>();
+                    let p33 = in_view.load::<$c, 3, 1>();
+                    let diff3 = shared + (p24 - p23).abs() + (p13 - p12).abs() + (p33 - p32).abs();
+
+                    sad0 = diff0.mul_add(scale, sad0);
+                    sad3 = diff3.mul_add(scale, sad3);
+                }};
             }
-            out *= inv_w;
-            let p22 = D::F32Vec::load(d, &input_c[2][2 + x..]);
-            let out = sigma_mask.if_then_else_f32(p22, out);
-            out.store(&mut output_c[0][x..]);
-        }
+            vertical_channel!(0, scale0);
+            vertical_channel!(1, scale1);
+            vertical_channel!(2, scale2);
+
+            let w0 = sad0.mul_add(inv_sigma, c_one).max(c_zero);
+            let w3 = sad3.mul_add(inv_sigma, c_one).max(c_zero);
+            w_acc += w0 + w3;
+
+            accumulate_pair!(in_view, out0, out1, out2, w0, 1, 0, w3, 3, 0);
+
+            // Pair 2: Horizontal neighbors: West (p12, sad1) and East (p32, sad2)
+            let mut sad1 = c_zero;
+            let mut sad2 = c_zero;
+            macro_rules! horizontal_channel {
+                ($c:expr, $scale:expr) => {{
+                    let scale = $scale;
+                    let p12 = in_view.load::<$c, 2, -1>();
+                    let p22 = in_view.load::<$c, 2, 0>();
+                    let p32 = in_view.load::<$c, 2, 1>();
+
+                    let d12_22 = (p22 - p12).abs();
+                    let d22_32 = (p22 - p32).abs();
+                    let shared = d12_22 + d22_32;
+
+                    let p02 = in_view.load::<$c, 2, -2>();
+                    let p11 = in_view.load::<$c, 1, -1>();
+                    let p21 = in_view.load::<$c, 1, 0>();
+                    let p13 = in_view.load::<$c, 3, -1>();
+                    let p23 = in_view.load::<$c, 3, 0>();
+                    let diff1 = shared + (p02 - p12).abs() + (p11 - p21).abs() + (p13 - p23).abs();
+
+                    let p42 = in_view.load::<$c, 2, 2>();
+                    let p31 = in_view.load::<$c, 1, 1>();
+                    let p33 = in_view.load::<$c, 3, 1>();
+                    let diff2 = shared + (p42 - p32).abs() + (p31 - p21).abs() + (p33 - p23).abs();
+
+                    sad1 = diff1.mul_add(scale, sad1);
+                    sad2 = diff2.mul_add(scale, sad2);
+                }};
+            }
+            horizontal_channel!(0, scale0);
+            horizontal_channel!(1, scale1);
+            horizontal_channel!(2, scale2);
+
+            let w1 = sad1.mul_add(inv_sigma, c_one).max(c_zero);
+            let w2 = sad2.mul_add(inv_sigma, c_one).max(c_zero);
+            w_acc += w1 + w2;
+
+            accumulate_pair!(in_view, out0, out1, out2, w1, 2, -1, w2, 2, 1);
+
+            let inv_w = c_one / w_acc;
+            out0 *= inv_w;
+            out1 *= inv_w;
+            out2 *= inv_w;
+
+            out_view.store::<0, 0>(sigma_mask.if_then_else_f32(in_view.load::<0, 2, 0>(), out0));
+            out_view.store::<1, 0>(sigma_mask.if_then_else_f32(in_view.load::<1, 2, 0>(), out1));
+            out_view.store::<2, 0>(sigma_mask.if_then_else_f32(in_view.load::<2, 2, 0>(), out2));
+        },
+    );
+}
+
+simd_function!(
+    epf1_process_row_chunk_dispatch,
+    d: D,
+    fn epf1_process_row_chunk(
+        stage: &Epf1Stage,
+        pos: (usize, usize),
+        xsize: usize,
+        input_rows: &Channels<f32>,
+        output_rows: &mut ChannelsMut<f32>,
+    ) {
+        epf1_process_simd(d, stage, pos, xsize, input_rows, output_rows);
     }
-});
+);
 
 impl RenderPipelineInOutStage for Epf1Stage {
     type InputT = f32;

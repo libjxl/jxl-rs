@@ -35,8 +35,13 @@ mod test;
 const MAX_BORDER: usize = 9;
 
 pub(crate) use builder::RenderPipelineBuilder;
-pub(crate) use channels::{Channels, ChannelsMut};
+#[allow(unused_imports)]
+pub(crate) use channels::{
+    Channels, ChannelsMut, ChannelsMutView, ChannelsView, ForEachChunk, StoreInterleaved, VecLoad,
+    VecStore,
+};
 pub(crate) use low_memory_pipeline::LowMemoryRenderPipeline;
+pub(crate) use low_memory_pipeline::row_buffers::RowBuffer;
 #[cfg(test)]
 pub(crate) use simple_pipeline::SimpleRenderPipeline;
 
