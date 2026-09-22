@@ -20,7 +20,7 @@ env:
   RUST_BACKTRACE: 1
 
 jobs:
-  post_merge_tests:
+  build_tests:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -32,15 +32,51 @@ jobs:
       - name: Install latest rust toolchain
         uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
 
+      - name: Install nextest
+        uses: taiki-e/install-action@2ab4414e29d1e7bb31565858e4b05de5d3713b61 # nextest
+
       - name: Rust cache
         uses: Swatinem/rust-cache@98c8021b550208e191a6a3145459bfc9fb29c4c0 # v2.8.0
+        with:
+          prefix-key: ubuntu-latest-post-merge-build
 
-      - name: Run arbtest with extended budget
+      - name: Build and archive tests
+        run: cargo nextest archive --release --all --features all-simd,exr,tracing,tracing-subscriber --archive-file nextest-archive.tar.zst
+
+      - name: Upload nextest archive
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: nextest-archive
+          path: nextest-archive.tar.zst
+          retention-days: 1
+
+  post_merge_tests:
+    needs: build_tests
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        partition: [1, 2, 3, 4]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          submodules: recursive
+          persist-credentials: false
+
+      - name: Install nextest
+        uses: taiki-e/install-action@2ab4414e29d1e7bb31565858e4b05de5d3713b61 # nextest
+
+      - name: Download nextest archive
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: nextest-archive
+
+      - name: Run arbtest with extended budget (shard ${{ matrix.partition }}/4)
         env:
-            # 1min40sec
-            ARBTEST_BUDGET_MS: 100000
-        # RUST_BACKTRACE=1 is already set in the global env for the workflow
-        run: cargo test --release --all --no-fail-fast --features all-simd,exr,tracing,tracing-subscriber
+          # 1min40sec
+          ARBTEST_BUDGET_MS: 100000
+        run: cargo nextest run --archive-file nextest-archive.tar.zst --partition hash:${{ matrix.partition }}/4 --test-threads 1 --no-fail-fast
 
   shuttle_post_merge:
     runs-on: ubuntu-latest
