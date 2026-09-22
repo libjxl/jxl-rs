@@ -959,8 +959,23 @@ impl TransformStepChunk {
                             );
                         }
                         SqueezeInfo::Regular {
-                            avg_rect, res_rect, ..
+                            avg_rect,
+                            res_rect,
+                            in_avg,
+                            ..
                         } => {
+                            // In partial file decoding or progressive renders, an average channel
+                            // may not have been decoded yet if its residual was decoded first (e.g.
+                            // squeezed down to LF). Ensure an all-zero buffer exists so we can read from it.
+                            let b_avg = &buffers[in_avg.0].buffer_grid[in_avg.1];
+                            if !b_avg.has_buffer() {
+                                b_avg.ensure_buffer(
+                                    &buffers[in_avg.0].info,
+                                    buffers[in_avg.0].storage,
+                                    recycler,
+                                    true,
+                                )?;
+                            }
                             let inputs = info.borrow_inputs(buffers, vertical);
                             let in_next = inputs.in_next_border();
                             let out_prev = inputs.out_prev_border();

@@ -911,6 +911,23 @@ fn flush_truncated_squeeze_missing_tiles() {
     }
 }
 
+#[test]
+fn flush_truncated_squeeze_missing_avg() {
+    let data = include_bytes!("../../tests/testdata/truncated_squeeze_missing_avg.jxl");
+    for chunk_size in [64, 256, usize::MAX] {
+        decode_internal(
+            data,
+            DecodeParams {
+                chunk_size,
+                do_flush: true,
+                allow_partial: true,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    }
+}
+
 fn make_box(ty: &[u8; 4], content: &[u8]) -> Vec<u8> {
     let len = (8 + content.len()) as u32;
     let mut buf = Vec::new();
