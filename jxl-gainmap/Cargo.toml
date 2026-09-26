@@ -1,0 +1,30 @@
+[package]
+name = "jxl-gainmap"
+description = "Gain-map bundle parsing helpers for the jxl decoder"
+version = "0.7.4"
+readme = "README.md"
+keywords = ["jpeg-xl", "gain-map"]
+categories = ["multimedia::images"]
+repository = "https://github.com/libjxl/jxl-rs"
+edition = "2024"
+license = "BSD-3-Clause"
+rust-version.workspace = true
+
+[dependencies]
+jxl = { path = "../jxl", version = "=0.7.4", default-features = false }
+
+[dev-dependencies]
+arbtest = "0.3.2"
+
+[features]
+default = ["all-simd"]
+brotli = ["jxl/brotli"]
+all-simd = ["jxl/all-simd"]
+sse42 = ["jxl/sse42"]
+avx = ["jxl/avx"]
+avx512 = ["jxl/avx512"]
+neon = ["jxl/neon"]
+simd128 = ["jxl/simd128"]
+
+[lints]
+workspace = true
