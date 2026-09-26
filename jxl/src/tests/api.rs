@@ -1137,6 +1137,20 @@ fn test_start_new_frame_cropped_traffic_light() {
 }
 
 #[test]
+fn test_start_new_frame_animation_newtons_cradle() {
+    let data = std::fs::read("resources/test/conformance_test_images/animation_newtons_cradle.jxl")
+        .unwrap();
+    assert_start_new_frame_matches_sequential(&data);
+}
+
+#[test]
+fn test_start_new_frame_animation_spline() {
+    let data =
+        std::fs::read("resources/test/conformance_test_images/animation_spline.jxl").unwrap();
+    assert_start_new_frame_matches_sequential(&data);
+}
+
+#[test]
 fn test_scan_still_image() {
     let data = std::fs::read("resources/test/green_queen_vardct_e3.jxl").unwrap();
     let frames = scan_frames_with_decoder(&data, usize::MAX);
