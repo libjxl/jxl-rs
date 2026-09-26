@@ -16,8 +16,9 @@ use std::path::Path;
 use jxl::api::states::{Initialized, WithFrameInfo, WithImageInfo};
 use jxl::api::{
     JxlAuxBoxType, JxlColorProfile, JxlColorType, JxlDataFormat, JxlDecoder, JxlDecoderOptions,
-    JxlGainMapBundle, JxlOutputBuffer, JxlPixelFormat, ProcessingResult,
+    JxlOutputBuffer, JxlPixelFormat, ProcessingResult,
 };
+use jxl_gainmap::JxlGainMapBundle;
 
 type ExampleResult<T> = Result<T, Box<dyn Error>>;
 
@@ -145,7 +146,7 @@ fn run(path: &Path) -> ExampleResult<()> {
 
 fn main() -> ExampleResult<()> {
     let path = std::env::args_os().nth(1).ok_or_else(|| {
-        std::io::Error::other("usage: cargo run -p jxl --example gain_map -- FILE.jxl")
+        std::io::Error::other("usage: cargo run -p jxl-gainmap --example gain_map -- FILE.jxl")
     })?;
     run(Path::new(&path))
 }

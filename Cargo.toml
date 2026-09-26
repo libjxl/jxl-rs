@@ -15,6 +15,7 @@ debug = true
 [workspace]
 members = [
   "jxl",
+  "jxl-gainmap",
   "jxl-image-rs-integration",
   "jxl_cli",
   "jxl_cms",

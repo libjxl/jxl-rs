@@ -1,6 +1,6 @@
 # Gain-map reader fixtures
 
-These small fixtures are used by the `JxlGainMapBundle` API tests. The
+These small fixtures are used by the `JxlGainMapBundle` tests. The
 reproducible `generate_fixtures.py` script constructs the metadata, structured
 linear-sRGB field, and 536-byte ICC profile from their field values. It invokes
 `cjxl` for the lossless 2x2 RGB gain-map image, the standalone
@@ -42,7 +42,7 @@ and Brotli 1.2.0. A different libjxl or tool version can legitimately produce
 different compressed bytes.
 
 ```sh
-FIXTURE_DIR=/path/to/jxl-rs/jxl/tests/testdata/gain_map
+FIXTURE_DIR=/path/to/jxl-rs/jxl-gainmap/tests/testdata/gain_map
 JXL_SOURCE=/path/to/libjxl
 JXL_BUILD=/path/to/libjxl-build
 SCRATCH=$(mktemp -d)

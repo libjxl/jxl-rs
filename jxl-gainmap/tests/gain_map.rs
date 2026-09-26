@@ -6,11 +6,11 @@
 use jxl::api::states::{Initialized, WithFrameInfo, WithImageInfo};
 use jxl::api::{
     JxlAuxBox, JxlAuxBoxType, JxlColorEncoding, JxlColorProfile, JxlColorType, JxlDataFormat,
-    JxlDecoder, JxlDecoderOptions, JxlGainMapBundle, JxlOutputBuffer, JxlPixelFormat,
-    ProcessingResult,
+    JxlDecoder, JxlDecoderOptions, JxlOutputBuffer, JxlPixelFormat, ProcessingResult,
 };
 use jxl::error::Error;
 use jxl::headers::color_encoding::RenderingIntent;
+use jxl_gainmap::JxlGainMapBundle;
 
 const EXPECTED_PIXELS: [u8; 12] = [0, 64, 128, 255, 254, 253, 32, 96, 160, 200, 100, 50];
 

@@ -3,12 +3,12 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-use super::{JxlColorEncoding, JxlColorProfile};
-use crate::bit_reader::BitReader;
-use crate::error::{Error, Result};
-use crate::headers::color_encoding::{ColorEncoding, ColorSpace};
-use crate::headers::encodings::{Empty, UnconditionalCoder};
-use crate::icc::IncrementalIccReader;
+use jxl::api::{JxlColorEncoding, JxlColorProfile};
+use jxl::bit_reader::BitReader;
+use jxl::error::{Error, Result};
+use jxl::headers::color_encoding::{ColorEncoding, ColorSpace};
+use jxl::headers::encodings::{Empty, UnconditionalCoder};
+use jxl::icc::IncrementalIccReader;
 
 /// A borrowed view of the fields in a `jhgm` gain-map bundle.
 ///
