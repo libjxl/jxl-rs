@@ -71,11 +71,25 @@ fn parse_jxl(path: &Path) -> Result<()> {
     }
     println!();
     match decoder_with_image_info.output_color_profile() {
-        JxlColorProfile::Icc(icc) => match lcms2::Profile::new_icc(icc.as_slice()) {
+        JxlColorProfile::Icc(icc) => match moxcms::ColorProfile::new_from_slice(icc.as_slice()) {
             Err(_) => println!("with unparseable ICC profile"),
             Ok(profile) => {
-                match profile.info(lcms2::InfoType::Description, lcms2::Locale::none()) {
-                    None => println!("with undescribed {}-byte ICC profile", icc.len()),
+                let description = match &profile.description {
+                    Some(moxcms::ProfileText::PlainString(text)) => Some(text.as_str()),
+                    Some(moxcms::ProfileText::Description(text)) => {
+                        Some(if text.unicode_string.is_empty() {
+                            text.ascii_string.as_str()
+                        } else {
+                            text.unicode_string.as_str()
+                        })
+                    }
+                    Some(moxcms::ProfileText::Localizable(texts)) => {
+                        texts.first().map(|text| text.value.as_str())
+                    }
+                    None => None,
+                };
+                match description {
+                    None | Some("") => println!("with undescribed {}-byte ICC profile", icc.len()),
                     Some(description) => {
                         println!(
                             "with {}-byte ICC profile (description: {})",

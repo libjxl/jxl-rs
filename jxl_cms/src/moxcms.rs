@@ -3,19 +3,21 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-//! Color Management System implementation using lcms2.
+//! Color Management System implementation using moxcms.
+
+use std::sync::Arc;
 
 use jxl::api::JxlColorProfile;
-use lcms2::{
-    AllowCache, ColorSpaceSignatureExt, Intent, PixelFormat, Profile, ThreadContext, Transform,
+use moxcms::{
+    ColorProfile, DataColorSpace, Layout, RenderingIntent, TransformF32Executor, TransformOptions,
 };
 
 use crate::{Error, JxlCms, JxlCmsTransformer, Result};
 
-/// CMS implementation using Little CMS (lcms2).
-pub struct Lcms2Cms;
+/// CMS implementation using moxcms.
+pub struct MoxCms;
 
-impl JxlCms for Lcms2Cms {
+impl JxlCms for MoxCms {
     fn initialize_transforms(
         &self,
         n: usize,
@@ -28,76 +30,67 @@ impl JxlCms for Lcms2Cms {
         let input_icc = input.try_as_icc().ok_or(Error::InputIccError)?;
         let output_icc = output.try_as_icc().ok_or(Error::OutputIccError)?;
 
-        // Parse profiles once to determine channel counts
-        let temp_input_profile = Profile::new_icc(input_icc.as_slice())
-            .map_err(|e| Error::Lcms2InputParseError(format!("{e}")))?;
-        let temp_output_profile = Profile::new_icc(output_icc.as_slice())
-            .map_err(|e| Error::Lcms2OutputParseError(format!("{e}")))?;
+        // Determine channel counts from parsed ICC profiles
+        let input = ColorProfile::new_from_slice(&input_icc)
+            .map_err(|e| Error::CmsInputParseError(e.to_string()))?;
+        let output = ColorProfile::new_from_slice(&output_icc)
+            .map_err(|e| Error::CmsOutputParseError(e.to_string()))?;
+        let input_layout = layout_from_color_space(input.color_space)?;
+        let output_layout = layout_from_color_space(input.color_space)?;
+        let input_channels = input_layout.channels();
+        let output_channels = output_layout.channels();
 
-        let input_channels = temp_input_profile.color_space().channels() as usize;
-        let output_channels = temp_output_profile.color_space().channels() as usize;
-
-        let input_format = channels_to_pixel_format(input_channels);
-        let output_format = channels_to_pixel_format(output_channels);
-
-        // Create transforms using ThreadContext for thread safety (implements Send).
-        // Use u8 pixel type with PixelFormat describing the actual f32 data layout.
-        let mut transforms: Vec<Box<dyn JxlCmsTransformer + Send>> = Vec::with_capacity(n);
-
-        for _ in 0..n {
-            let context = ThreadContext::new();
-
-            // Create profiles with the thread context
-            let input_profile = Profile::new_icc_context(&context, input_icc.as_slice())
-                .map_err(|e| Error::Lcms2InputParseError(format!("{e}")))?;
-            let output_profile = Profile::new_icc_context(&context, output_icc.as_slice())
-                .map_err(|e| Error::Lcms2OutputParseError(format!("{e}")))?;
-
-            let transform: Transform<u8, u8, ThreadContext, AllowCache> = Transform::new_context(
-                context,
-                &input_profile,
-                input_format,
-                &output_profile,
-                output_format,
-                Intent::RelativeColorimetric,
-            )
-            .map_err(|e| Error::Lcms2TransformError(format!("{e}")))?;
-
-            transforms.push(Box::new(Lcms2Transformer {
-                transform,
-                input_channels,
-                output_channels,
-                cmyk_buffer: if input_format == PixelFormat::CMYK_FLT {
-                    Some(Vec::new())
-                } else {
-                    None
-                },
-            }));
-        }
-
+        let options = TransformOptions {
+            rendering_intent: RenderingIntent::RelativeColorimetric,
+            ..Default::default()
+        };
+        let transform = input
+            .create_transform_f32(input_layout, &output, output_layout, options)
+            .map_err(|e| Error::CmsTransformError(e.to_string()))?;
+        let transforms = (0..n)
+            .map(|_| {
+                Box::new(MoxCmsTransformer {
+                    transform: Arc::clone(&transform),
+                    input_channels,
+                    output_channels,
+                    cmyk_buffer: (input.color_space == DataColorSpace::Cmyk).then(Vec::new),
+                }) as Box<dyn JxlCmsTransformer + Send>
+            })
+            .collect();
         Ok((output_channels, transforms))
     }
 }
 
-/// Maps channel count to lcms2 PixelFormat for f32 data.
-fn channels_to_pixel_format(channels: usize) -> PixelFormat {
-    match channels {
-        1 => PixelFormat::GRAY_FLT,
-        3 => PixelFormat::RGB_FLT,
-        4 => PixelFormat::CMYK_FLT,
-        _ => PixelFormat::RGB_FLT, // Default to RGB
-    }
+fn layout_from_color_space(color_space: DataColorSpace) -> Result<Layout> {
+    Ok(match color_space {
+        DataColorSpace::Gray => Layout::Gray,
+        DataColorSpace::Cmyk => Layout::Rgba,
+        DataColorSpace::Xyz
+        | DataColorSpace::Lab
+        | DataColorSpace::Luv
+        | DataColorSpace::YCbr
+        | DataColorSpace::Yxy
+        | DataColorSpace::Rgb
+        | DataColorSpace::Hsv
+        | DataColorSpace::Hls
+        | DataColorSpace::Cmy
+        | DataColorSpace::Color3 => Layout::Rgb,
+        color_space => {
+            return Err(Error::CmsTransformError(format!(
+                "Cannot handle ICC color space {color_space:?}"
+            )));
+        }
+    })
 }
 
-/// Transformer implementation using lcms2 with ThreadContext for thread safety.
-struct Lcms2Transformer {
-    transform: Transform<u8, u8, ThreadContext, AllowCache>,
+struct MoxCmsTransformer {
+    transform: Arc<TransformF32Executor>,
     input_channels: usize,
     output_channels: usize,
     cmyk_buffer: Option<Vec<f32>>,
 }
 
-impl JxlCmsTransformer for Lcms2Transformer {
+impl JxlCmsTransformer for MoxCmsTransformer {
     fn do_transform(&mut self, input: &[f32], output: &mut [f32]) -> Result<()> {
         let num_pixels = input.len() / self.input_channels;
 
@@ -110,24 +103,18 @@ impl JxlCmsTransformer for Lcms2Transformer {
             ));
         }
 
-        // We use [0 = max ink, 1], but lcms2 expects [0 = no ink, 100].
         let input = if let Some(buf) = &mut self.cmyk_buffer {
             buf.resize(input.len(), 0.0);
-            for (dst, &src) in buf.iter_mut().zip(input.iter()) {
-                *dst = (1.0 - src) * 100.0;
+            for (dst, &src) in buf.iter_mut().zip(input) {
+                *dst = 1.0 - src;
             }
             buf
         } else {
             input
         };
-
-        // Convert f32 slices to byte slices using bytemuck for safe casting
-        let input_bytes: &[u8] = bytemuck::cast_slice(input);
-        let output_bytes: &mut [u8] = bytemuck::cast_slice_mut(output);
-
-        self.transform.transform_pixels(input_bytes, output_bytes);
-
-        Ok(())
+        self.transform
+            .transform(input, &mut output[..expected_output_len])
+            .map_err(|e| Error::CmsTransformError(e.to_string()))
     }
 }
 
@@ -158,7 +145,7 @@ mod tests {
 
     #[test]
     fn test_create_transform() {
-        let cms = Lcms2Cms;
+        let cms = MoxCms;
         let result =
             cms.initialize_transforms(1, 1024, srgb_profile(), linear_srgb_profile(), 255.0);
         assert!(result.is_ok());
@@ -169,12 +156,12 @@ mod tests {
 
     #[test]
     fn test_transform_identity() {
-        let cms = Lcms2Cms;
+        let cms = MoxCms;
         let (_, mut transforms) = cms
             .initialize_transforms(1, 1024, srgb_profile(), srgb_profile(), 255.0)
             .unwrap();
 
-        let input = [0.5f32, 0.5, 0.5]; // Gray
+        let input = [0.5f32; 3]; // Gray
         let mut output = [0.0f32; 3];
 
         transforms[0].do_transform(&input, &mut output).unwrap();
@@ -192,23 +179,22 @@ mod tests {
 
     #[test]
     fn test_transform_srgb_to_linear() {
-        let cms = Lcms2Cms;
+        let cms = MoxCms;
         let (_, mut transforms) = cms
             .initialize_transforms(1, 1024, srgb_profile(), linear_srgb_profile(), 255.0)
             .unwrap();
 
         // sRGB mid-gray (0.5) should map to approximately 0.214 in linear
-        let input = [0.5f32, 0.5, 0.5];
+        let input = [0.5f32; 3];
         let mut output = [0.0f32; 3];
 
         transforms[0].do_transform(&input, &mut output).unwrap();
 
         // Linear value for sRGB 0.5 is approximately 0.214
-        for (i, element) in output.iter().enumerate() {
+        for (i, element) in output.into_iter().enumerate() {
             assert!(
                 (element - 0.214).abs() < 0.01,
-                "Output {i} = {}, expected ~0.214",
-                element
+                "Output {i} = {element}, expected ~0.214",
             );
         }
     }

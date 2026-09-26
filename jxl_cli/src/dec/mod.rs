@@ -244,7 +244,7 @@ pub fn decode_frames<In: JxlBitstreamInputExt>(
     if let Some(enc) = target_enc {
         let target_profile = JxlColorProfile::Simple(enc);
 
-        let cms = jxl_cms::lcms2::Lcms2Cms;
+        let cms = jxl_cms::moxcms::MoxCms;
         use jxl_cms::JxlCms;
         let (_out_chans, mut transformers) = cms
             .initialize_transforms(
