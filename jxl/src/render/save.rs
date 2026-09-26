@@ -7,6 +7,43 @@ use crate::api::{JxlColorType, JxlDataFormat, JxlOutputBuffer};
 use crate::error::{Error, Result};
 use crate::headers::Orientation;
 use crate::image::DataTypeTag;
+use crate::util::{SmallVec, StackOnly};
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum ChannelConversion {
+    None,
+    F32ToU8 {
+        bit_depth: u8,
+        dither_channel: usize,
+    },
+    I16ToU8 {
+        multiplier: i32,
+        max: i32,
+    },
+    I32ToU8 {
+        multiplier: i32,
+        max: i32,
+    },
+    F32ToU16 {
+        bit_depth: u8,
+    },
+    F32ToF16 {
+        clamp_range: Option<(f32, f32)>,
+    },
+}
+
+impl ChannelConversion {
+    pub fn input_type(&self, default_type: DataTypeTag) -> DataTypeTag {
+        match self {
+            Self::None => default_type,
+            Self::F32ToU8 { .. } | Self::F32ToU16 { .. } | Self::F32ToF16 { .. } => {
+                DataTypeTag::F32
+            }
+            Self::I16ToU8 { .. } => DataTypeTag::I16,
+            Self::I32ToU8 { .. } => DataTypeTag::I32,
+        }
+    }
+}
 
 #[derive(Debug)]
 pub struct SaveStage {
@@ -18,6 +55,7 @@ pub struct SaveStage {
     /// When true, fill alpha channel with opaque (1.0) values.
     /// Used when RGBA output is requested but image has no alpha channel.
     pub(super) fill_opaque_alpha: bool,
+    pub(super) conversions: SmallVec<ChannelConversion, 4, StackOnly>,
 }
 
 impl SaveStage {
@@ -28,15 +66,21 @@ impl SaveStage {
         mut color_type: JxlColorType,
         data_format: JxlDataFormat,
         fill_opaque_alpha: bool,
+        mut conversions: SmallVec<ChannelConversion, 4, StackOnly>,
     ) -> SaveStage {
         let mut channels = channels.to_vec();
+        while conversions.len() < channels.len() {
+            conversions.push(ChannelConversion::None);
+        }
         if color_type == JxlColorType::Bgr {
             color_type = JxlColorType::Rgb;
             channels.swap(0, 2);
+            conversions.swap(0, 2);
         }
         if color_type == JxlColorType::Bgra {
             color_type = JxlColorType::Rgba;
             channels.swap(0, 2);
+            conversions.swap(0, 2);
         }
         Self {
             channels,
@@ -45,6 +89,7 @@ impl SaveStage {
             color_type,
             data_format,
             fill_opaque_alpha,
+            conversions,
         }
     }
 
@@ -59,6 +104,18 @@ impl SaveStage {
 
     pub fn input_type(&self) -> DataTypeTag {
         self.data_format.data_type()
+    }
+
+    pub fn channel_input_type(&self, c: usize) -> DataTypeTag {
+        let idx = self.channels.iter().position(|&chan| chan == c);
+        match idx {
+            Some(i) => self
+                .conversions
+                .get(i)
+                .map(|conv| conv.input_type(self.data_format.data_type()))
+                .unwrap_or(self.data_format.data_type()),
+            None => self.data_format.data_type(),
+        }
     }
 
     pub fn check_buffer_size(

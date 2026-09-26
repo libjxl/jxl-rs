@@ -6,8 +6,8 @@
 use jxl_simd::{F32SimdVec, simd_function};
 
 use crate::color::tf;
+pub use crate::color::tf::TransferFunction;
 use crate::headers::color_encoding::CustomTransferFunction;
-use crate::render::stages::from_linear;
 use crate::render::{ErasedLocalState, RenderPipelineInPlaceStage};
 
 /// Convert encoded non-linear color samples to display-referred linear color samples.
@@ -133,8 +133,6 @@ impl RenderPipelineInPlaceStage for ToLinearStage {
         to_linear_process_dispatch(&self.tf, xsize, row)
     }
 }
-
-pub type TransferFunction = from_linear::TransferFunction;
 
 #[cfg(test)]
 mod test {

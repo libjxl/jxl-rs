@@ -27,9 +27,10 @@ use crate::image::{Image, OwnedRawImage, Rect};
 #[cfg(test)]
 use crate::render::SimpleRenderPipeline;
 use crate::render::buffer_splitter::BufferSplitter;
+use crate::render::save::ChannelConversion;
 use crate::render::stages::*;
 use crate::render::{LowMemoryRenderPipeline, RenderPipeline, RenderPipelineBuilder};
-use crate::util::SmallVec;
+use crate::util::{SmallVec, StackOnly};
 use crate::util::sync::{Arc, RwLock};
 
 #[cfg(test)]
@@ -95,48 +96,9 @@ macro_rules! pipeline {
         $op
     }};
 }
-
 pub(crate) use pipeline;
 
 impl Frame {
-    /// Add conversion stages for non-float output formats.
-    /// This is needed before saving to U8/U16/F16 formats to convert from the pipeline's f32.
-    fn add_conversion_stages<P: RenderPipeline>(
-        mut pipeline: RenderPipelineBuilder<P>,
-        channels: &[usize],
-        data_format: JxlDataFormat,
-        clamp_range_for_f16: Option<(f32, f32)>,
-    ) -> RenderPipelineBuilder<P> {
-        use crate::render::stages::{
-            ConvertF32ToF16Stage, ConvertF32ToU8Stage, ConvertF32ToU16Stage,
-        };
-
-        match data_format {
-            JxlDataFormat::U8 { bit_depth } => {
-                for &channel in channels {
-                    pipeline =
-                        pipeline.add_inout_stage(ConvertF32ToU8Stage::new(channel, bit_depth));
-                }
-            }
-            JxlDataFormat::U16 { bit_depth, .. } => {
-                for &channel in channels {
-                    pipeline =
-                        pipeline.add_inout_stage(ConvertF32ToU16Stage::new(channel, bit_depth));
-                }
-            }
-            JxlDataFormat::F16 { .. } => {
-                for &channel in channels {
-                    pipeline = pipeline.add_inout_stage(
-                        ConvertF32ToF16Stage::new_with_clamp_range(channel, clamp_range_for_f16),
-                    );
-                }
-            }
-            // F32 doesn't need conversion - the pipeline already uses f32
-            JxlDataFormat::F32 { .. } => {}
-        }
-        pipeline
-    }
-
     /// Returns `true` if any pixels were written to the output buffers during
     /// this call, `false` if the call was a no-op for the buffers (e.g. no new
     /// HF groups, no flush work, or the render pipeline was not yet ready).
@@ -620,22 +582,11 @@ impl Frame {
 
         let filters = &frame_header.restoration_filter;
         if filters.gab {
-            pipeline = pipeline
-                .add_inout_stage(GaborishStage::new(
-                    0,
-                    filters.gab_x_weight1,
-                    filters.gab_x_weight2,
-                ))
-                .add_inout_stage(GaborishStage::new(
-                    1,
-                    filters.gab_y_weight1,
-                    filters.gab_y_weight2,
-                ))
-                .add_inout_stage(GaborishStage::new(
-                    2,
-                    filters.gab_b_weight1,
-                    filters.gab_b_weight2,
-                ));
+            pipeline = pipeline.add_inout_stage(GaborishStage::new([
+                (filters.gab_x_weight1, filters.gab_x_weight2),
+                (filters.gab_y_weight1, filters.gab_y_weight2),
+                (filters.gab_b_weight1, filters.gab_b_weight2),
+            ]));
         }
 
         let rf = &frame_header.restoration_filter;
@@ -741,6 +692,8 @@ impl Frame {
 
         if frame_header.lf_level != 0 {
             for i in 0..3 {
+                let mut conv = SmallVec::new();
+                conv.push(ChannelConversion::None);
                 pipeline = pipeline.add_save_stage(
                     &[i],
                     Orientation::Identity,
@@ -748,11 +701,14 @@ impl Frame {
                     JxlColorType::Grayscale,
                     JxlDataFormat::f32(),
                     false,
+                    conv,
                 );
             }
         }
         if frame_header.can_be_referenced && frame_header.save_before_ct {
             for i in 0..num_channels {
+                let mut conv = SmallVec::new();
+                conv.push(ChannelConversion::None);
                 pipeline = pipeline.add_save_stage(
                     &[i],
                     Orientation::Identity,
@@ -760,6 +716,7 @@ impl Frame {
                     JxlColorType::Grayscale,
                     JxlDataFormat::f32(),
                     false,
+                    conv,
                 );
             }
         }
@@ -797,12 +754,9 @@ impl Frame {
         if frame_header.do_ycbcr {
             pipeline = pipeline.add_inplace_stage(YcbcrToRgbStage::new(0));
         } else if xyb_encoded {
-            pipeline = pipeline.add_inplace_stage(XybStage::new(0, output_color_info.clone()));
-        }
-
-        // XYB output is linear, so apply transfer function, but only if output is not linear itself
-        if xyb_encoded && !output_tf.is_linear() {
-            pipeline = pipeline.add_inplace_stage(FromLinearStage::new(0, output_tf.clone()));
+            let mut stage_color_info = output_color_info.clone();
+            stage_color_info.tf = output_tf.clone();
+            pipeline = pipeline.add_inplace_stage(XybColorConvertStage::new(0, stage_color_info));
         }
 
         if frame_header.needs_blending() {
@@ -822,6 +776,8 @@ impl Frame {
 
         if frame_header.can_be_referenced && !frame_header.save_before_ct {
             for i in 0..num_channels {
+                let mut conv = SmallVec::new();
+                conv.push(ChannelConversion::None);
                 pipeline = pipeline.add_save_stage(
                     &[i],
                     Orientation::Identity,
@@ -829,6 +785,7 @@ impl Frame {
                     JxlColorType::Grayscale,
                     JxlDataFormat::f32(),
                     false,
+                    conv,
                 );
             }
         }
@@ -934,13 +891,23 @@ impl Frame {
                         alpha_channel,
                     ));
                 }
-                // Add conversion stages for non-float output formats
-                pipeline = Self::add_conversion_stages(
-                    pipeline,
-                    color_source_channels,
-                    *df,
-                    clamp_range_for_f16,
-                );
+                let mut color_conversions: SmallVec<ChannelConversion, 4, StackOnly> =
+                    SmallVec::new();
+                for &c in color_source_channels {
+                    color_conversions.push(match *df {
+                        JxlDataFormat::U8 { bit_depth } => ChannelConversion::F32ToU8 {
+                            bit_depth,
+                            dither_channel: c,
+                        },
+                        JxlDataFormat::U16 { bit_depth, .. } => {
+                            ChannelConversion::F32ToU16 { bit_depth }
+                        }
+                        JxlDataFormat::F16 { .. } => ChannelConversion::F32ToF16 {
+                            clamp_range: clamp_range_for_f16,
+                        },
+                        JxlDataFormat::F32 { .. } => ChannelConversion::None,
+                    });
+                }
                 pipeline = pipeline.add_save_stage(
                     color_source_channels,
                     metadata.orientation,
@@ -948,6 +915,7 @@ impl Frame {
                     pixel_format.color_type,
                     *df,
                     fill_opaque_alpha,
+                    color_conversions,
                 );
             }
             let mut save_idx = if pixel_format.color_data_format.is_some() {
@@ -957,15 +925,30 @@ impl Frame {
             };
             for i in 0..frame_header.num_extra_channels as usize {
                 if let Some(df) = &pixel_format.extra_channel_format[i] {
-                    // Add conversion stages for non-float output formats
-                    pipeline = Self::add_conversion_stages(pipeline, &[3 + i], *df, None);
+                    let ec_channel = 3 + i;
+                    let ec_conversion = match *df {
+                        JxlDataFormat::U8 { bit_depth } => ChannelConversion::F32ToU8 {
+                            bit_depth,
+                            dither_channel: ec_channel,
+                        },
+                        JxlDataFormat::U16 { bit_depth, .. } => {
+                            ChannelConversion::F32ToU16 { bit_depth }
+                        }
+                        JxlDataFormat::F16 { .. } => {
+                            ChannelConversion::F32ToF16 { clamp_range: None }
+                        }
+                        JxlDataFormat::F32 { .. } => ChannelConversion::None,
+                    };
+                    let mut ec_conversions = SmallVec::new();
+                    ec_conversions.push(ec_conversion);
                     pipeline = pipeline.add_save_stage(
-                        &[3 + i],
+                        &[ec_channel],
                         metadata.orientation,
                         save_idx,
                         JxlColorType::Grayscale,
                         *df,
                         false,
+                        ec_conversions,
                     );
                     save_idx += 1;
                 }

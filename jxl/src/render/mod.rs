@@ -35,15 +35,19 @@ mod test;
 const MAX_BORDER: usize = 9;
 
 pub(crate) use builder::RenderPipelineBuilder;
-pub(crate) use channels::{Channels, ChannelsMut};
+#[allow(unused_imports)]
+pub(crate) use channels::{
+    Channels, ChannelsMut, ChannelsMutView, ChannelsView, ForEachChunk, StoreInterleaved, VecLoad,
+    VecStore,
+};
 pub(crate) use low_memory_pipeline::LowMemoryRenderPipeline;
+pub(crate) use low_memory_pipeline::row_buffers::RowBuffer;
 #[cfg(test)]
 pub(crate) use simple_pipeline::SimpleRenderPipeline;
 
 pub(crate) type ErasedLocalState = dyn Any + Send + Sync;
 
 pub enum StageSpecialCase {
-    F32ToU8 { channel: usize, bit_depth: u8 },
     ModularToF32 { channel: usize, bit_depth: u8 },
     Modular16ToF32 { channel: usize, bit_depth: u8 },
 }

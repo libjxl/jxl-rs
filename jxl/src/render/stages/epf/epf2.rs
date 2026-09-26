@@ -3,11 +3,13 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-use jxl_simd::{F32SimdVec, SimdMask, simd_function};
+use jxl_simd::{F32SimdVec, SimdDescriptor, SimdMask, simd_function};
 
 use crate::features::epf::SigmaSource;
 use crate::render::stages::epf::common::{get_sigma, prepare_sad_mul_storage};
-use crate::render::{Channels, ChannelsMut, ErasedLocalState, RenderPipelineInOutStage};
+use crate::render::{
+    Channels, ChannelsMut, ErasedLocalState, ForEachChunk, RenderPipelineInOutStage,
+};
 use crate::util::sync::{Arc, RwLock};
 use crate::{BLOCK_DIM, MIN_SIGMA};
 
@@ -47,10 +49,9 @@ impl Epf2Stage {
     }
 }
 
-simd_function!(
-epf2_process_row_chunk_dispatch,
-d: D,
-fn epf2_process_row_chunk(
+#[inline(always)]
+fn epf2_process_simd<D: SimdDescriptor>(
+    d: D,
     stage: &Epf2Stage,
     pos: (usize, usize),
     xsize: usize,
@@ -58,9 +59,12 @@ fn epf2_process_row_chunk(
     output_rows: &mut ChannelsMut<f32>,
 ) {
     let (xpos, ypos) = pos;
-    assert_eq!(input_rows.len(), 3, "Expected 3 channels, got {}", input_rows.len());
-    let (input_x, input_y, input_b) = (&input_rows[0], &input_rows[1], &input_rows[2]);
-    let (output_x, output_y, output_b) = output_rows.split_first_3_mut();
+    assert_eq!(
+        input_rows.len(),
+        3,
+        "Expected 3 channels, got {}",
+        input_rows.len()
+    );
 
     let sigma = stage.sigma.try_read().unwrap();
     let row_sigma = sigma.row(ypos / BLOCK_DIM);
@@ -71,64 +75,95 @@ fn epf2_process_row_chunk(
     let bsm = sm * stage.border_sad_mul;
     let sad_mul_storage = prepare_sad_mul_storage(xpos, ypos, sm, bsm);
 
-    for x in (0..xsize).step_by(D::F32Vec::LEN) {
-        let sigma = get_sigma(d, x + xpos, row_sigma);
-        let sad_mul = D::F32Vec::load(d, &sad_mul_storage[x % 8..]);
+    let scale0 = D::F32Vec::splat(d, stage.channel_scale[0]);
+    let scale1 = D::F32Vec::splat(d, stage.channel_scale[1]);
+    let scale2 = D::F32Vec::splat(d, stage.channel_scale[2]);
+    let c_one = D::F32Vec::splat(d, 1.0);
+    let c_zero = D::F32Vec::splat(d, 0.0);
+    let min_sigma = D::F32Vec::splat(d, MIN_SIGMA);
 
-        let sigma_mask = D::F32Vec::splat(d, MIN_SIGMA).gt(sigma);
-        if sigma_mask.all() {
-            D::F32Vec::load(d, &input_x[1][1 + x..]).store(&mut output_x[0][x..]);
-            D::F32Vec::load(d, &input_y[1][1 + x..]).store(&mut output_y[0][x..]);
-            D::F32Vec::load(d, &input_b[1][1 + x..]).store(&mut output_b[0][x..]);
-            continue;
-        }
+    ForEachChunk::<3, 3, 1, 3, 1>::run(
+        d,
+        xsize,
+        input_rows,
+        output_rows,
+        #[inline(always)]
+        |x, in_view, out_view| {
+            let sigma = get_sigma(d, x + xpos, row_sigma);
+            let sad_mul = D::F32Vec::load(d, &sad_mul_storage[x % 8..]);
 
-        let inv_sigma = sigma * sad_mul;
+            let sigma_mask = min_sigma.gt(sigma);
+            if sigma_mask.all() {
+                out_view.store::<0, 0>(in_view.load::<0, 1, 0>());
+                out_view.store::<1, 0>(in_view.load::<1, 1, 0>());
+                out_view.store::<2, 0>(in_view.load::<2, 1, 0>());
+                return;
+            }
 
-        let x_cc = D::F32Vec::load(d, &input_x[1][1 + x..]);
-        let y_cc = D::F32Vec::load(d, &input_y[1][1 + x..]);
-        let b_cc = D::F32Vec::load(d, &input_b[1][1 + x..]);
+            let inv_sigma = sigma * sad_mul;
 
-        let mut w_acc = D::F32Vec::splat(d, 1.0);
-        let mut x_acc = x_cc;
-        let mut y_acc = y_cc;
-        let mut b_acc = b_cc;
+            let x_cc = in_view.load::<0, 1, 0>();
+            let y_cc = in_view.load::<1, 1, 0>();
+            let b_cc = in_view.load::<2, 1, 0>();
 
-        for (y_off, x_off) in [(0, 1), (1, 0), (1, 2), (2, 1)] {
-            let (cx, cy, cb) = (
-                D::F32Vec::load(d, &input_x[y_off as usize][x_off + x..]),
-                D::F32Vec::load(d, &input_y[y_off as usize][x_off + x..]),
-                D::F32Vec::load(d, &input_b[y_off as usize][x_off + x..]),
-            );
-            let sad = (cx - x_cc).abs().mul_add(
-                D::F32Vec::splat(d, stage.channel_scale[0]),
-                (cy - y_cc).abs().mul_add(
-                    D::F32Vec::splat(d, stage.channel_scale[1]),
-                    (cb - b_cc).abs() * D::F32Vec::splat(d, stage.channel_scale[2]),
-                ),
-            );
-            let weight = sad
-                .mul_add(inv_sigma, D::F32Vec::splat(d, 1.0))
-                .max(D::F32Vec::splat(d, 0.0));
-            w_acc += weight;
-            x_acc = weight.mul_add(cx, x_acc);
-            y_acc = weight.mul_add(cy, y_acc);
-            b_acc = weight.mul_add(cb, b_acc);
-        }
+            let mut w_acc = c_one;
+            let mut x_acc = x_cc;
+            let mut y_acc = y_cc;
+            let mut b_acc = b_cc;
 
-        let inv_w = D::F32Vec::splat(d, 1.0) / w_acc;
+            macro_rules! step_neighbor {
+                ($row:expr, $col_offset:expr) => {{
+                    let cx = in_view.load::<0, $row, $col_offset>();
+                    let cy = in_view.load::<1, $row, $col_offset>();
+                    let cb = in_view.load::<2, $row, $col_offset>();
 
-        x_acc *= inv_w;
-        y_acc *= inv_w;
-        b_acc *= inv_w;
-        x_acc = sigma_mask.if_then_else_f32(D::F32Vec::load(d, &input_x[1][1+x..]), x_acc);
-        y_acc = sigma_mask.if_then_else_f32(D::F32Vec::load(d, &input_y[1][1+x..]), y_acc);
-        b_acc = sigma_mask.if_then_else_f32(D::F32Vec::load(d, &input_b[1][1+x..]), b_acc);
-        x_acc.store(&mut output_x[0][x..]);
-        y_acc.store(&mut output_y[0][x..]);
-        b_acc.store(&mut output_b[0][x..]);
+                    let sad = (cx - x_cc).abs().mul_add(
+                        scale0,
+                        (cy - y_cc)
+                            .abs()
+                            .mul_add(scale1, (cb - b_cc).abs() * scale2),
+                    );
+                    let weight = sad.mul_add(inv_sigma, c_one).max(c_zero);
+                    w_acc += weight;
+                    x_acc = weight.mul_add(cx, x_acc);
+                    y_acc = weight.mul_add(cy, y_acc);
+                    b_acc = weight.mul_add(cb, b_acc);
+                }};
+            }
+
+            step_neighbor!(0, 0);
+            step_neighbor!(1, -1);
+            step_neighbor!(1, 1);
+            step_neighbor!(2, 0);
+
+            let inv_w = c_one / w_acc;
+
+            x_acc *= inv_w;
+            y_acc *= inv_w;
+            b_acc *= inv_w;
+            x_acc = sigma_mask.if_then_else_f32(x_cc, x_acc);
+            y_acc = sigma_mask.if_then_else_f32(y_cc, y_acc);
+            b_acc = sigma_mask.if_then_else_f32(b_cc, b_acc);
+            out_view.store::<0, 0>(x_acc);
+            out_view.store::<1, 0>(y_acc);
+            out_view.store::<2, 0>(b_acc);
+        },
+    );
+}
+
+simd_function!(
+    epf2_process_row_chunk_dispatch,
+    d: D,
+    fn epf2_process_row_chunk(
+        stage: &Epf2Stage,
+        pos: (usize, usize),
+        xsize: usize,
+        input_rows: &Channels<f32>,
+        output_rows: &mut ChannelsMut<f32>,
+    ) {
+        epf2_process_simd(d, stage, pos, xsize, input_rows, output_rows);
     }
-});
+);
 
 impl RenderPipelineInOutStage for Epf2Stage {
     type InputT = f32;

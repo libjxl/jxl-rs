@@ -38,12 +38,12 @@ use crate::headers::CustomTransformData;
 use crate::headers::color_encoding::ColorSpace;
 use crate::headers::frame_header::{Encoding, FrameHeader, FrameType};
 use crate::headers::toc::Toc;
-use crate::image::{BufferRecycler, Image, OwnedRawImage, Rect};
+use crate::image::{BufferRecycler, DataTypeTag, Image, OwnedRawImage, Rect};
 #[cfg(test)]
 use crate::render::SimpleRenderPipeline;
 use crate::render::buffer_splitter::BufferSplitter;
 use crate::render::stages::Upsample8x;
-use crate::render::{Channels, ChannelsMut, RenderPipeline, RenderPipelineInOutStage};
+use crate::render::{Channels, ChannelsMut, RenderPipeline, RenderPipelineInOutStage, RowBuffer};
 use crate::util::sync::{Arc, Mutex, RwLock};
 use crate::util::tracing_wrappers::*;
 use crate::util::{
@@ -69,11 +69,12 @@ fn upsample_lf_group(
 
     let max_width = pixels.iter().map(|x| x.size().0).max().unwrap();
 
-    // Temporary buffer for 8 output rows
-    // We reuse this buffer for each iteration to minimize allocation
-    let mut temp_out_buf: [_; 8] = std::array::from_fn(|_| vec![0.0f32; max_width + 128]);
+    let mut input_buffer = RowBuffer::new(DataTypeTag::F32, 2, 0, 0, max_width / 8 + 4)?;
 
-    let mut input_rows_storage: [_; 5] = std::array::from_fn(|_| vec![0.0; max_width / 8 + 32]);
+    let mut temp_out_buf = RowBuffer::new(DataTypeTag::F32, 0, 3, 0, max_width)?;
+
+    let in_x0 = RowBuffer::x0_offset::<f32>();
+    let out_x0 = RowBuffer::x0_offset::<f32>();
 
     for c in 0..3 {
         let lf_img = &lf_image[c];
@@ -113,21 +114,26 @@ fn upsample_lf_group(
                 let iy = mirror(iy, lf_height);
                 let row = lf_img.row(to_storage_y(iy));
 
-                let storage = &mut input_rows_storage[(dy + 2) as usize];
-                storage[0] = row[ix0];
-                storage[1] = row[ix1];
-                storage[2..2 + num_blocks].copy_from_slice(&row[phys_x0..phys_x0 + num_blocks]);
-                storage[2 + num_blocks] = row[ix2];
-                storage[2 + num_blocks + 1] = row[ix3];
+                let storage = input_buffer.get_row_mut::<f32>(iy);
+                storage[in_x0 - 2] = row[ix0];
+                storage[in_x0 - 1] = row[ix1];
+                storage[in_x0..in_x0 + num_blocks]
+                    .copy_from_slice(&row[phys_x0..phys_x0 + num_blocks]);
+                storage[in_x0 + num_blocks] = row[ix2];
+                storage[in_x0 + num_blocks + 1] = row[ix3];
             }
 
-            let input_rows_refs = input_rows_storage.iter().map(|x| &x[..]).collect();
-            let input_channels = Channels::new(input_rows_refs, 1, 5);
+            let input_channels =
+                Channels::from_row_buffers(&[&input_buffer], in_x0, cy, 2, lf_height);
 
             {
                 // Prepare output refs
-                let output_rows_refs = temp_out_buf.iter_mut().map(|x| &mut x[..]).collect();
-                let mut output_channels = ChannelsMut::new(output_rows_refs, 1, 8);
+                let mut output_channels = ChannelsMut::from_row_buffers(
+                    std::slice::from_mut(&mut temp_out_buf),
+                    out_x0,
+                    y * 8,
+                    8,
+                );
 
                 upsample.process_row_chunk(
                     (0, 0),
@@ -141,10 +147,11 @@ fn upsample_lf_group(
 
             // Copy back to out_img
             let base_y = y * 8;
-            for (i, buf) in temp_out_buf.iter().enumerate() {
+            for i in 0..8 {
                 let out_y = base_y + i;
                 if out_y < out_height {
-                    out_img.row_mut(out_y)[..out_width].copy_from_slice(&buf[..out_width]);
+                    let buf = &temp_out_buf.get_row::<f32>(base_y + i)[out_x0..out_x0 + out_width];
+                    out_img.row_mut(out_y)[..out_width].copy_from_slice(buf);
                 }
             }
         }

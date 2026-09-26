@@ -27,7 +27,7 @@ impl SigmaSource {
     }
 }
 
-#[inline(always)]
+#[inline(never)]
 pub(super) fn prepare_sad_mul_storage(x: usize, y: usize, sm: f32, bsm: f32) -> [f32; 24] {
     let mut sad_mul_storage = [bsm; 24];
     if ![0, BLOCK_DIM - 1].contains(&(y % BLOCK_DIM)) {
@@ -76,3 +76,19 @@ fn get_sigma_from_row<D: SimdDescriptor>(d: D, x: usize, row_sigma: &[f32]) -> D
         above_8.if_then_else_f32(sigma1, sigma0)
     }
 }
+
+/// Macro for accumulating a pair of neighbor pixels into the 3-channel progressive accumulators.
+macro_rules! accumulate_pair {
+    ($in_view:expr, $out0:ident, $out1:ident, $out2:ident, $w_a:expr, $r_a:expr, $c_a:expr, $w_b:expr, $r_b:expr, $c_b:expr) => {
+        $out0 = $in_view
+            .load::<0, $r_a, $c_a>()
+            .mul_add($w_a, $in_view.load::<0, $r_b, $c_b>().mul_add($w_b, $out0));
+        $out1 = $in_view
+            .load::<1, $r_a, $c_a>()
+            .mul_add($w_a, $in_view.load::<1, $r_b, $c_b>().mul_add($w_b, $out1));
+        $out2 = $in_view
+            .load::<2, $r_a, $c_a>()
+            .mul_add($w_a, $in_view.load::<2, $r_b, $c_b>().mul_add($w_b, $out2));
+    };
+}
+pub(super) use accumulate_pair;

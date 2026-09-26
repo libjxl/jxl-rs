@@ -14,11 +14,10 @@ use crate::headers::Orientation;
 use crate::image::BufferRecycler;
 use crate::render::StageSpecialCase;
 use crate::render::internal::ChannelInfo;
-use crate::render::save::SaveStage;
-use crate::render::stages::{ConvertI16ToU8Stage, ConvertI32ToU8Stage};
-use crate::util::ShiftRightCeil;
+use crate::render::save::{ChannelConversion, SaveStage};
 use crate::util::sync::atomic::{AtomicBool, Ordering};
 use crate::util::tracing_wrappers::*;
+use crate::util::{ShiftRightCeil, SmallVec, StackOnly};
 
 pub(crate) struct RenderPipelineBuilder<Pipeline: RenderPipeline> {
     shared: RenderPipelineShared<Pipeline::Buffer>,
@@ -87,6 +86,7 @@ impl<Pipeline: RenderPipeline> RenderPipelineBuilder<Pipeline> {
         )
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn add_save_stage(
         self,
         channels: &[usize],
@@ -95,6 +95,7 @@ impl<Pipeline: RenderPipeline> RenderPipelineBuilder<Pipeline> {
         color_type: JxlColorType,
         data_format: JxlDataFormat,
         fill_opaque_alpha: bool,
+        conversions: SmallVec<ChannelConversion, 4, StackOnly>,
     ) -> Self {
         let stage = SaveStage::new(
             channels,
@@ -103,6 +104,7 @@ impl<Pipeline: RenderPipeline> RenderPipelineBuilder<Pipeline> {
             color_type,
             data_format,
             fill_opaque_alpha,
+            conversions,
         );
         self.add_stage_internal(Stage::Save(stage))
     }
@@ -151,50 +153,49 @@ impl<Pipeline: RenderPipeline> RenderPipelineBuilder<Pipeline> {
             if stage_is_used[i] {
                 match self.shared.stages[i].is_special_case() {
                     None => (),
-                    Some(StageSpecialCase::F32ToU8 { .. }) => (),
                     Some(StageSpecialCase::ModularToF32 { channel, bit_depth }) => {
-                        let n = channel_next_use[channel].unwrap();
-                        if let Some(StageSpecialCase::F32ToU8 {
-                            channel: c,
-                            bit_depth: b,
-                        }) = self.shared.stages[n].is_special_case()
+                        if let Some(n) = channel_next_use[channel]
+                            && let Stage::Save(ref mut save_stage) = self.shared.stages[n]
+                            && let Some(pos) =
+                                save_stage.channels.iter().position(|&c| c == channel)
+                            && let ChannelConversion::F32ToU8 { bit_depth: b, .. } =
+                                save_stage.conversions[pos]
+                            && b % bit_depth == 0
                         {
-                            assert_eq!(c, channel);
-                            if b % bit_depth == 0 {
-                                let mult = ((1 << b) - 1) / ((1 << bit_depth) - 1);
-                                // Remove the next stage, and replace the current stage with I32 -> U8
-                                // conversion.
-                                stage_is_used[n] = false;
-                                self.shared.stages[i] = Stage::InOut(Pipeline::box_inout_stage(
-                                    ConvertI32ToU8Stage::new(c, mult, (1 << b) - 1),
-                                ));
-                            }
+                            let mult = (((1u32 << b) - 1) / ((1u32 << bit_depth) - 1)) as i32;
+                            let max = ((1u32 << b) - 1) as i32;
+                            stage_is_used[i] = false;
+                            save_stage.conversions[pos] = ChannelConversion::I32ToU8 {
+                                multiplier: mult,
+                                max,
+                            };
                         }
                     }
                     Some(StageSpecialCase::Modular16ToF32 { channel, bit_depth }) => {
-                        let n = channel_next_use[channel].unwrap();
-                        if let Some(StageSpecialCase::F32ToU8 {
-                            channel: c,
-                            bit_depth: b,
-                        }) = self.shared.stages[n].is_special_case()
+                        if let Some(n) = channel_next_use[channel]
+                            && let Stage::Save(ref mut save_stage) = self.shared.stages[n]
+                            && let Some(pos) =
+                                save_stage.channels.iter().position(|&c| c == channel)
+                            && let ChannelConversion::F32ToU8 { bit_depth: b, .. } =
+                                save_stage.conversions[pos]
+                            && b % bit_depth == 0
                         {
-                            assert_eq!(c, channel);
-                            if b % bit_depth == 0 {
-                                let mult = ((1 << b) - 1) / ((1 << bit_depth) - 1);
-                                // Remove the next stage, and replace the current stage with I16 -> U8
-                                // conversion.
-                                stage_is_used[n] = false;
-                                self.shared.stages[i] = Stage::InOut(Pipeline::box_inout_stage(
-                                    ConvertI16ToU8Stage::new(c, mult, (1 << b) - 1),
-                                ));
-                            }
+                            let mult = (((1u32 << b) - 1) / ((1u32 << bit_depth) - 1)) as i32;
+                            let max = ((1u32 << b) - 1) as i32;
+                            stage_is_used[i] = false;
+                            save_stage.conversions[pos] = ChannelConversion::I16ToU8 {
+                                multiplier: mult,
+                                max,
+                            };
                         }
                     }
                 }
-                for (c, next_use) in channel_next_use.iter_mut().enumerate() {
-                    if self.shared.stages[i].uses_channel(c) {
-                        self.shared.channel_is_used[c] = true;
-                        *next_use = Some(i);
+                if stage_is_used[i] {
+                    for (c, next_use) in channel_next_use.iter_mut().enumerate() {
+                        if self.shared.stages[i].uses_channel(c) {
+                            self.shared.channel_is_used[c] = true;
+                            *next_use = Some(i);
+                        }
                     }
                 }
             }
@@ -207,7 +208,6 @@ impl<Pipeline: RenderPipeline> RenderPipelineBuilder<Pipeline> {
             .filter_map(|(s, used)| used.then_some(s))
             .collect();
         for (i, stage) in self.shared.stages.iter().enumerate() {
-            let input_type = stage.input_type();
             let output_type = stage.output_type();
             let shift = stage.shift();
             let border = stage.border();
@@ -226,18 +226,19 @@ impl<Pipeline: RenderPipeline> RenderPipelineBuilder<Pipeline> {
                         downsample: (0, 0),
                     });
                 } else {
+                    let channel_in_ty = stage.channel_input_type(c);
                     if let Some(ty) = info.ty
-                        && ty != input_type
+                        && ty != channel_in_ty
                     {
                         return Err(Error::PipelineChannelTypeMismatch(
                             stage.to_string(),
                             c,
-                            input_type,
+                            channel_in_ty,
                             ty,
                         ));
                     }
                     after_info.push(ChannelInfo {
-                        ty: Some(output_type.unwrap_or(input_type)),
+                        ty: Some(output_type.unwrap_or(channel_in_ty)),
                         downsample: shift,
                     });
                 }
@@ -269,7 +270,7 @@ impl<Pipeline: RenderPipeline> RenderPipelineBuilder<Pipeline> {
                 let cur_chan = &mut current_info[chan];
                 let next_chan = &mut next_info[chan];
                 let uses_channel = stage.uses_channel(chan);
-                let input_type = stage.input_type();
+                let input_type = stage.channel_input_type(chan);
 
                 if cur_chan.ty.is_none() {
                     cur_chan.ty = if uses_channel {

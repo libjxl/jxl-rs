@@ -6,10 +6,13 @@
 #![allow(clippy::needless_range_loop)]
 #![allow(clippy::too_many_arguments)]
 
-use jxl_simd::{F32SimdVec, simd_function};
+use jxl_simd::{F32SimdVec, SimdDescriptor, simd_function};
 
 use crate::headers::CustomTransformData;
-use crate::render::{Channels, ChannelsMut, ErasedLocalState, RenderPipelineInOutStage};
+use crate::render::{
+    Channels, ChannelsMut, ErasedLocalState, ForEachChunk, RenderPipelineInOutStage,
+    StoreInterleaved, VecLoad,
+};
 
 pub struct Upsample<const N: usize, const SHIFT: u8> {
     // Precomputed flattened kernels for SIMD optimization
@@ -90,7 +93,7 @@ impl UpsampleState {
         // Step 2: loads at offset + 4, needs SIMD_LEN more elements from there
         // For AVX-512 (SIMD_LEN=16), we need: xsize + 4 + 16 = xsize + 20
         // Add extra padding to be safe with future SIMD widths
-        let needed = xsize + 24;
+        let needed = xsize + 32;
         if self.col_min.len() < needed {
             self.col_min.resize(needed, 0.0);
             self.col_max.resize(needed, 0.0);
@@ -104,23 +107,23 @@ impl UpsampleState {
 #[inline(always)]
 fn compute_minmax<D: jxl_simd::SimdDescriptor>(
     d: D,
-    input: &[&[f32]],
+    input_rows: &Channels<f32>,
     xsize: usize,
     col_min: &mut [f32],
     col_max: &mut [f32],
     mins: &mut [f32],
     maxs: &mut [f32],
 ) {
-    let r0 = input[0];
-    let r1 = input[1];
-    let r2 = input[2];
-    let r3 = input[3];
-    let r4 = input[4];
-
     // Step 1: Compute column-wise min/max (vertical reduction across 5 rows)
     // Use div_ceil to process all elements (may over-read but buffers are padded)
     let col_fill_len = xsize + 4;
     let num_vecs = col_fill_len.div_ceil(D::F32Vec::LEN);
+    let slice_len = num_vecs * D::F32Vec::LEN;
+    let r0 = input_rows.get_row_slice(0, 0, -2, slice_len);
+    let r1 = input_rows.get_row_slice(0, 1, -2, slice_len);
+    let r2 = input_rows.get_row_slice(0, 2, -2, slice_len);
+    let r3 = input_rows.get_row_slice(0, 3, -2, slice_len);
+    let r4 = input_rows.get_row_slice(0, 4, -2, slice_len);
     for i in 0..num_vecs {
         let offset = i * D::F32Vec::LEN;
         let v0 = D::F32Vec::load(d, &r0[offset..]);
@@ -158,45 +161,69 @@ fn compute_minmax<D: jxl_simd::SimdDescriptor>(
     }
 }
 
-// Macro to generate the kernel convolution code (shared across 2x, 4x, 8x)
-macro_rules! kernel_conv {
-    ($d:expr, $k:expr, $r0:expr, $r1:expr, $r2:expr, $r3:expr, $r4:expr, $x:expr) => {{
-        let d = $d;
-        let k = $k;
-        // Compute 5x5 kernel using FMA with 3-way ILP
-        // Row 0
-        let mut acc0 = <D::F32Vec>::load(d, &$r0[$x..]) * <D::F32Vec>::splat(d, k[0]);
-        let mut acc1 = <D::F32Vec>::load(d, &$r0[$x + 1..]) * <D::F32Vec>::splat(d, k[1]);
-        let mut acc2 = <D::F32Vec>::load(d, &$r0[$x + 2..]) * <D::F32Vec>::splat(d, k[2]);
-        acc0 = <D::F32Vec>::load(d, &$r0[$x + 3..]).mul_add(<D::F32Vec>::splat(d, k[3]), acc0);
-        acc1 = <D::F32Vec>::load(d, &$r0[$x + 4..]).mul_add(<D::F32Vec>::splat(d, k[4]), acc1);
-        // Row 1
-        acc2 = <D::F32Vec>::load(d, &$r1[$x..]).mul_add(<D::F32Vec>::splat(d, k[5]), acc2);
-        acc0 = <D::F32Vec>::load(d, &$r1[$x + 1..]).mul_add(<D::F32Vec>::splat(d, k[6]), acc0);
-        acc1 = <D::F32Vec>::load(d, &$r1[$x + 2..]).mul_add(<D::F32Vec>::splat(d, k[7]), acc1);
-        acc2 = <D::F32Vec>::load(d, &$r1[$x + 3..]).mul_add(<D::F32Vec>::splat(d, k[8]), acc2);
-        acc0 = <D::F32Vec>::load(d, &$r1[$x + 4..]).mul_add(<D::F32Vec>::splat(d, k[9]), acc0);
-        // Row 2
-        acc1 = <D::F32Vec>::load(d, &$r2[$x..]).mul_add(<D::F32Vec>::splat(d, k[10]), acc1);
-        acc2 = <D::F32Vec>::load(d, &$r2[$x + 1..]).mul_add(<D::F32Vec>::splat(d, k[11]), acc2);
-        acc0 = <D::F32Vec>::load(d, &$r2[$x + 2..]).mul_add(<D::F32Vec>::splat(d, k[12]), acc0);
-        acc1 = <D::F32Vec>::load(d, &$r2[$x + 3..]).mul_add(<D::F32Vec>::splat(d, k[13]), acc1);
-        acc2 = <D::F32Vec>::load(d, &$r2[$x + 4..]).mul_add(<D::F32Vec>::splat(d, k[14]), acc2);
-        // Row 3
-        acc0 = <D::F32Vec>::load(d, &$r3[$x..]).mul_add(<D::F32Vec>::splat(d, k[15]), acc0);
-        acc1 = <D::F32Vec>::load(d, &$r3[$x + 1..]).mul_add(<D::F32Vec>::splat(d, k[16]), acc1);
-        acc2 = <D::F32Vec>::load(d, &$r3[$x + 2..]).mul_add(<D::F32Vec>::splat(d, k[17]), acc2);
-        acc0 = <D::F32Vec>::load(d, &$r3[$x + 3..]).mul_add(<D::F32Vec>::splat(d, k[18]), acc0);
-        acc1 = <D::F32Vec>::load(d, &$r3[$x + 4..]).mul_add(<D::F32Vec>::splat(d, k[19]), acc1);
-        // Row 4
-        acc2 = <D::F32Vec>::load(d, &$r4[$x..]).mul_add(<D::F32Vec>::splat(d, k[20]), acc2);
-        acc0 = <D::F32Vec>::load(d, &$r4[$x + 1..]).mul_add(<D::F32Vec>::splat(d, k[21]), acc0);
-        acc1 = <D::F32Vec>::load(d, &$r4[$x + 2..]).mul_add(<D::F32Vec>::splat(d, k[22]), acc1);
-        acc2 = <D::F32Vec>::load(d, &$r4[$x + 3..]).mul_add(<D::F32Vec>::splat(d, k[23]), acc2);
-        acc0 = <D::F32Vec>::load(d, &$r4[$x + 4..]).mul_add(<D::F32Vec>::splat(d, k[24]), acc0);
+#[inline(always)]
+fn upsample_simd<D: SimdDescriptor, const N: usize>(
+    d: D,
+    input_rows: &Channels<f32>,
+    xsize: usize,
+    flat_kernels: &[[f32; 25]],
+    col_min: &mut [f32],
+    col_max: &mut [f32],
+    mins: &mut [f32],
+    maxs: &mut [f32],
+    output_rows: &mut ChannelsMut<f32>,
+) where
+    f32: VecLoad<D, Vec = D::F32Vec> + StoreInterleaved<D, N>,
+{
+    compute_minmax(d, input_rows, xsize, col_min, col_max, mins, maxs);
 
-        acc0 + acc1 + acc2
-    }};
+    let c_zero = D::F32Vec::splat(d, 0.0);
+    for oy in 0..N {
+        let row_weights = &flat_kernels[oy * N..(oy + 1) * N];
+        let mut out_row = output_rows.select_row(oy);
+
+        ForEachChunk::<1, 5, 2, 1, 1, N>::run(
+            d,
+            xsize,
+            input_rows,
+            &mut out_row,
+            |x, in_view, out_view| {
+                let minval = D::F32Vec::load(d, &mins[x..]);
+                let maxval = D::F32Vec::load(d, &maxs[x..]);
+                let mut out = [c_zero; N];
+
+                macro_rules! process_row {
+                    ($ty:expr) => {{
+                        let p = [
+                            in_view.load::<0, $ty, -2>(),
+                            in_view.load::<0, $ty, -1>(),
+                            in_view.load::<0, $ty, 0>(),
+                            in_view.load::<0, $ty, 1>(),
+                            in_view.load::<0, $ty, 2>(),
+                        ];
+                        for tx in 0..5 {
+                            let v = p[tx];
+                            for ox in 0..N {
+                                let w = row_weights[ox][$ty * 5 + tx];
+                                out[ox] = v.mul_add(D::F32Vec::splat(d, w), out[ox]);
+                            }
+                        }
+                    }};
+                }
+                process_row!(0);
+                process_row!(1);
+                process_row!(2);
+                process_row!(3);
+                process_row!(4);
+
+                for ox in 0..N {
+                    out[ox] = out[ox].max(minval).min(maxval);
+                }
+
+                out_view.store_interleaved::<0, 0>(out);
+            },
+        );
+    }
 }
 
 // 2x upsampling SIMD implementation - single dispatch with integrated minmax
@@ -204,47 +231,26 @@ simd_function!(
     upsample_2x_simd_dispatch,
     d: D,
     fn upsample_2x_simd(
-        input: &[&[f32]],
+        input_rows: &Channels<f32>,
         xsize: usize,
         flat_kernels: &[[f32; 25]],
         col_min: &mut [f32],
         col_max: &mut [f32],
         mins: &mut [f32],
         maxs: &mut [f32],
-        output: &mut [&mut [f32]],
+        output_rows: &mut ChannelsMut<f32>,
     ) {
-        // Compute min/max using shared helper
-        compute_minmax(d, input, xsize, col_min, col_max, mins, maxs);
-
-        let r0 = input[0];
-        let r1 = input[1];
-        let r2 = input[2];
-        let r3 = input[3];
-        let r4 = input[4];
-
-        // Process using iterators for mins/maxs, manual indexing for output
-        let mins_iter = mins.chunks_exact(D::F32Vec::LEN);
-        let maxs_iter = maxs.chunks_exact(D::F32Vec::LEN);
-
-        for ((mins_chunk, maxs_chunk), x) in mins_iter
-            .zip(maxs_iter)
-            .zip((0..xsize).step_by(D::F32Vec::LEN))
-            .take(xsize.div_ceil(D::F32Vec::LEN))
-        {
-            let minval = D::F32Vec::load(d, mins_chunk);
-            let maxval = D::F32Vec::load(d, maxs_chunk);
-            let out_x = x * 2;
-
-            // Row 0
-            let r0_0 = kernel_conv!(d, &flat_kernels[0], r0, r1, r2, r3, r4, x).max(minval).min(maxval);
-            let r0_1 = kernel_conv!(d, &flat_kernels[1], r0, r1, r2, r3, r4, x).max(minval).min(maxval);
-            D::F32Vec::store_interleaved_2(r0_0, r0_1, &mut output[0][out_x..]);
-
-            // Row 1
-            let r1_0 = kernel_conv!(d, &flat_kernels[2], r0, r1, r2, r3, r4, x).max(minval).min(maxval);
-            let r1_1 = kernel_conv!(d, &flat_kernels[3], r0, r1, r2, r3, r4, x).max(minval).min(maxval);
-            D::F32Vec::store_interleaved_2(r1_0, r1_1, &mut output[1][out_x..]);
-        }
+        upsample_simd::<D, 2>(
+            d,
+            input_rows,
+            xsize,
+            flat_kernels,
+            col_min,
+            col_max,
+            mins,
+            maxs,
+            output_rows,
+        );
     }
 );
 
@@ -253,47 +259,26 @@ simd_function!(
     upsample_4x_simd_dispatch,
     d: D,
     fn upsample_4x_simd(
-        input: &[&[f32]],
+        input_rows: &Channels<f32>,
         xsize: usize,
         flat_kernels: &[[f32; 25]],
         col_min: &mut [f32],
         col_max: &mut [f32],
         mins: &mut [f32],
         maxs: &mut [f32],
-        output: &mut [&mut [f32]],
+        output_rows: &mut ChannelsMut<f32>,
     ) {
-        // Compute min/max using shared helper
-        compute_minmax(d, input, xsize, col_min, col_max, mins, maxs);
-
-        let r0 = input[0];
-        let r1 = input[1];
-        let r2 = input[2];
-        let r3 = input[3];
-        let r4 = input[4];
-
-        // Process using iterators for mins/maxs, manual indexing for output
-        let mins_iter = mins.chunks_exact(D::F32Vec::LEN);
-        let maxs_iter = maxs.chunks_exact(D::F32Vec::LEN);
-
-        for ((mins_chunk, maxs_chunk), x) in mins_iter
-            .zip(maxs_iter)
-            .zip((0..xsize).step_by(D::F32Vec::LEN))
-            .take(xsize.div_ceil(D::F32Vec::LEN))
-        {
-            let minval = D::F32Vec::load(d, mins_chunk);
-            let maxval = D::F32Vec::load(d, maxs_chunk);
-            let out_x = x * 4;
-
-            // Process all 4 output rows using a loop
-            for oy in 0..4 {
-                let base = oy * 4;
-                let v0 = kernel_conv!(d, &flat_kernels[base], r0, r1, r2, r3, r4, x).max(minval).min(maxval);
-                let v1 = kernel_conv!(d, &flat_kernels[base + 1], r0, r1, r2, r3, r4, x).max(minval).min(maxval);
-                let v2 = kernel_conv!(d, &flat_kernels[base + 2], r0, r1, r2, r3, r4, x).max(minval).min(maxval);
-                let v3 = kernel_conv!(d, &flat_kernels[base + 3], r0, r1, r2, r3, r4, x).max(minval).min(maxval);
-                D::F32Vec::store_interleaved_4(v0, v1, v2, v3, &mut output[oy][out_x..]);
-            }
-        }
+        upsample_simd::<D, 4>(
+            d,
+            input_rows,
+            xsize,
+            flat_kernels,
+            col_min,
+            col_max,
+            mins,
+            maxs,
+            output_rows,
+        );
     }
 );
 
@@ -302,51 +287,26 @@ simd_function!(
     upsample_8x_simd_dispatch,
     d: D,
     fn upsample_8x_simd(
-        input: &[&[f32]],
+        input_rows: &Channels<f32>,
         xsize: usize,
         flat_kernels: &[[f32; 25]],
         col_min: &mut [f32],
         col_max: &mut [f32],
         mins: &mut [f32],
         maxs: &mut [f32],
-        output: &mut [&mut [f32]],
+        output_rows: &mut ChannelsMut<f32>,
     ) {
-        // Compute min/max using shared helper
-        compute_minmax(d, input, xsize, col_min, col_max, mins, maxs);
-
-        let r0 = input[0];
-        let r1 = input[1];
-        let r2 = input[2];
-        let r3 = input[3];
-        let r4 = input[4];
-
-        // Process using iterators for mins/maxs, manual indexing for output
-        let mins_iter = mins.chunks_exact(D::F32Vec::LEN);
-        let maxs_iter = maxs.chunks_exact(D::F32Vec::LEN);
-
-        for ((mins_chunk, maxs_chunk), x) in mins_iter
-            .zip(maxs_iter)
-            .zip((0..xsize).step_by(D::F32Vec::LEN))
-            .take(xsize.div_ceil(D::F32Vec::LEN))
-        {
-            let minval = D::F32Vec::load(d, mins_chunk);
-            let maxval = D::F32Vec::load(d, maxs_chunk);
-            let out_x = x * 8;
-
-            // Process all 8 output rows using a loop
-            for oy in 0..8 {
-                let base = oy * 8;
-                let v0 = kernel_conv!(d, &flat_kernels[base], r0, r1, r2, r3, r4, x).max(minval).min(maxval);
-                let v1 = kernel_conv!(d, &flat_kernels[base + 1], r0, r1, r2, r3, r4, x).max(minval).min(maxval);
-                let v2 = kernel_conv!(d, &flat_kernels[base + 2], r0, r1, r2, r3, r4, x).max(minval).min(maxval);
-                let v3 = kernel_conv!(d, &flat_kernels[base + 3], r0, r1, r2, r3, r4, x).max(minval).min(maxval);
-                let v4 = kernel_conv!(d, &flat_kernels[base + 4], r0, r1, r2, r3, r4, x).max(minval).min(maxval);
-                let v5 = kernel_conv!(d, &flat_kernels[base + 5], r0, r1, r2, r3, r4, x).max(minval).min(maxval);
-                let v6 = kernel_conv!(d, &flat_kernels[base + 6], r0, r1, r2, r3, r4, x).max(minval).min(maxval);
-                let v7 = kernel_conv!(d, &flat_kernels[base + 7], r0, r1, r2, r3, r4, x).max(minval).min(maxval);
-                D::F32Vec::store_interleaved_8(v0, v1, v2, v3, v4, v5, v6, v7, &mut output[oy][out_x..]);
-            }
-        }
+        upsample_simd::<D, 8>(
+            d,
+            input_rows,
+            xsize,
+            flat_kernels,
+            col_min,
+            col_max,
+            mins,
+            maxs,
+            output_rows,
+        );
     }
 );
 
@@ -375,7 +335,6 @@ impl<const N: usize, const SHIFT: u8> RenderPipelineInOutStage for Upsample<N, S
         state: Option<&mut ErasedLocalState>,
         _previous_call_was_previous_row: bool,
     ) {
-        let input = &input_rows[0];
         let state: &mut UpsampleState = state.unwrap().downcast_mut().unwrap();
         state.ensure_capacity(xsize);
 
@@ -384,38 +343,38 @@ impl<const N: usize, const SHIFT: u8> RenderPipelineInOutStage for Upsample<N, S
         match N {
             2 => {
                 upsample_2x_simd_dispatch(
-                    input,
+                    input_rows,
                     xsize,
                     self.flat_kernels.as_slice(),
                     &mut state.col_min,
                     &mut state.col_max,
                     &mut state.mins,
                     &mut state.maxs,
-                    &mut output_rows[0],
+                    output_rows,
                 );
             }
             4 => {
                 upsample_4x_simd_dispatch(
-                    input,
+                    input_rows,
                     xsize,
                     self.flat_kernels.as_slice(),
                     &mut state.col_min,
                     &mut state.col_max,
                     &mut state.mins,
                     &mut state.maxs,
-                    &mut output_rows[0],
+                    output_rows,
                 );
             }
             8 => {
                 upsample_8x_simd_dispatch(
-                    input,
+                    input_rows,
                     xsize,
                     self.flat_kernels.as_slice(),
                     &mut state.col_min,
                     &mut state.col_max,
                     &mut state.mins,
                     &mut state.maxs,
-                    &mut output_rows[0],
+                    output_rows,
                 );
             }
             _ => unreachable!(),

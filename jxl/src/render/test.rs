@@ -18,8 +18,9 @@ use crate::headers::Orientation;
 use crate::image::{BufferRecycler, DataTypeTag, Image, ImageDataType, Rect};
 use crate::render::SimpleRenderPipeline;
 use crate::render::buffer_splitter::BufferSplitter;
-use crate::util::ShiftRightCeil;
+use crate::render::save::ChannelConversion;
 use crate::util::tracing_wrappers::{instrument, trace};
+use crate::util::{ShiftRightCeil, SmallVec};
 
 pub(super) trait RenderPipelineTestableStage<V> {
     type InputT: ImageDataType;
@@ -121,6 +122,8 @@ fn make_and_run_simple_pipeline_impl<InputT: ImageDataType, OutputT: ImageDataTy
     };
 
     for i in 0..input_images.len() {
+        let mut conv = SmallVec::new();
+        conv.push(ChannelConversion::None);
         pipeline = pipeline.add_save_stage(
             &[i],
             Orientation::Identity,
@@ -128,6 +131,7 @@ fn make_and_run_simple_pipeline_impl<InputT: ImageDataType, OutputT: ImageDataTy
             JxlColorType::Grayscale,
             jxl_data_type,
             false,
+            conv,
         );
     }
     let pipeline = pipeline.build()?;
