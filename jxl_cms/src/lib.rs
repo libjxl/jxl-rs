@@ -3,18 +3,18 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-pub mod lcms2;
+pub mod moxcms;
 
 use jxl::api::JxlColorProfile;
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
-    #[error("lcms2 failed to parse input ICC: {0}")]
-    Lcms2InputParseError(String),
-    #[error("lcms2 failed to parse output ICC: {0}")]
-    Lcms2OutputParseError(String),
-    #[error("lcms2 failed to create transform: {0}")]
-    Lcms2TransformError(String),
+    #[error("CMS failed to parse input ICC: {0}")]
+    CmsInputParseError(String),
+    #[error("CMS failed to parse output ICC: {0}")]
+    CmsOutputParseError(String),
+    #[error("CMS transform failed: {0}")]
+    CmsTransformError(String),
     #[error("Cannot create ICC for input profile")]
     InputIccError,
     #[error("Cannot create ICC for output profile")]
