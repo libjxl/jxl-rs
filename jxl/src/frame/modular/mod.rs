@@ -544,14 +544,23 @@ impl FullModularImage {
             .filter(|b| b.coded_channel_id >= 0 && b.info.is_meta())
             .count();
 
+        let has_small_group_tiles = buffer_info.iter().any(|bi| {
+            bi.grid_kind != ModularGridKind::None && {
+                let shift = bi.info.shift.unwrap_or((0, 0));
+                let (gw, gh) = bi.grid_kind.grid_dim(frame_header, shift);
+                gw <= 1 || gh <= 1
+            }
+        });
+
+        let can_do_partial_render = !has_problematic_palette_transform && !has_small_group_tiles;
+
         Ok(FullModularImage {
             scratch_space: PerThreadStorage::new(ScratchSpace::new),
             buffer_info,
             transform_steps,
             section_buffer_indices,
-            can_do_partial_render: !has_problematic_palette_transform,
-            can_do_early_partial_render: !has_problematic_palette_transform
-                && has_squeeze_transform,
+            can_do_partial_render,
+            can_do_early_partial_render: can_do_partial_render && has_squeeze_transform,
             needed_section0_channels_for_early_render: num_channels + num_meta_channels,
             has_decoded_data: AtomicBool::new(false),
             global_header: Some(header),
