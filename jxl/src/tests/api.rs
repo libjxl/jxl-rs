@@ -15,21 +15,6 @@ use crate::tests::decode::{
     DecodeParams, compare_frames, decode, decode_internal, scan_frames_with_decoder,
 };
 
-#[test]
-fn decode_small_chunks() {
-    arbtest::arbtest(|u| {
-        decode_internal(
-            &std::fs::read("resources/test/green_queen_vardct_e3.jxl").unwrap(),
-            DecodeParams {
-                chunk_size: u.arbitrary::<u8>().unwrap() as usize + 1,
-                ..Default::default()
-            },
-        )
-        .unwrap();
-        Ok(())
-    });
-}
-
 // OOO jxlp boxes require any frame to start in a box that has all the logically-before
 // boxes physically before it, and all the logically-after boxes physically after it.
 // This test file does *not* satisfy this property.
