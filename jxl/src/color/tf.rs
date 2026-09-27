@@ -352,7 +352,7 @@ fn hlg_ootf_inner_precise(exp: f64, [lr, lg, lb]: [f32; 3], [sr, sg, sb]: [&mut 
         let dg = *g as f64;
         let db = *b as f64;
         let mixed = dr.mul_add(lr, dg.mul_add(lg, db * lb));
-        let mult = mixed.powf(exp);
+        let mult = if mixed == 0.0 { mixed } else { mixed.powf(exp) };
         *r = (dr * mult) as f32;
         *g = (dg * mult) as f32;
         *b = (db * mult) as f32;
@@ -373,6 +373,26 @@ fn hlg_ootf_inner(exp: f32, [lr, lg, lb]: [f32; 3], [sr, sg, sb]: [&mut [f32]; 3
     }
 }
 
+#[inline(always)]
+fn hlg_ootf_inner_vec<D: SimdDescriptor>(
+    d: D,
+    exp: D::F32Vec,
+    [lr, lg, lb]: [D::F32Vec; 3],
+    [r, g, b]: [D::F32Vec; 3],
+) -> [D::F32Vec; 3] {
+    let mixed = r.mul_add(lr, g.mul_add(lg, b * lb));
+    let mult = crate::util::fast_powf_simd(d, mixed, exp);
+    let mult = D::F32Vec::splat(d, 0.1)
+        .gt(exp.abs())
+        .if_then_else_f32(D::F32Vec::splat(d, 1.0), mult);
+    [r * mult, g * mult, b * mult]
+}
+
+#[inline]
+pub(crate) fn hlg_system_gamma(intensity_display: f32) -> f32 {
+    (1.2f64 * 1.111f64.powf((intensity_display as f64 / 1e3).log2())) as f32
+}
+
 /// Converts scene-referred linear samples to display-referred linear samples using HLG OOTF.
 ///
 /// This version uses double precision arithmetic internally.
@@ -381,7 +401,7 @@ pub fn hlg_scene_to_display_precise(
     luminance_rgb: [f32; 3],
     samples_rgb: [&mut [f32]; 3],
 ) {
-    let system_gamma = 1.2f64 * 1.111f64.powf((intensity_display as f64 / 1e3).log2());
+    let system_gamma = hlg_system_gamma(intensity_display) as f64;
     let gamma_sub_one = system_gamma - 1.0;
     hlg_ootf_inner_precise(gamma_sub_one, luminance_rgb, samples_rgb);
 }
@@ -395,7 +415,7 @@ pub fn hlg_display_to_scene_precise(
     luminance_rgb: [f32; 3],
     samples_rgb: [&mut [f32]; 3],
 ) {
-    let system_gamma = 1.2f64 * 1.111f64.powf((intensity_display as f64 / 1e3).log2());
+    let system_gamma = hlg_system_gamma(intensity_display) as f64;
     let one_sub_gamma = 1.0 - system_gamma;
     hlg_ootf_inner_precise(one_sub_gamma / system_gamma, luminance_rgb, samples_rgb);
 }
@@ -408,7 +428,7 @@ pub fn hlg_scene_to_display(
     luminance_rgb: [f32; 3],
     samples_rgb: [&mut [f32]; 3],
 ) {
-    let system_gamma = 1.2f32 * 1.111f32.powf((intensity_display / 1e3).log2());
+    let system_gamma = hlg_system_gamma(intensity_display);
     let gamma_sub_one = system_gamma - 1.0;
     hlg_ootf_inner(gamma_sub_one, luminance_rgb, samples_rgb);
 }
@@ -422,9 +442,20 @@ pub fn hlg_display_to_scene(
     luminance_rgb: [f32; 3],
     samples_rgb: [&mut [f32]; 3],
 ) {
-    let system_gamma = 1.2f32 * 1.111f32.powf((intensity_display / 1e3).log2());
+    let system_gamma = hlg_system_gamma(intensity_display);
     let one_sub_gamma = 1.0 - system_gamma;
     hlg_ootf_inner(one_sub_gamma / system_gamma, luminance_rgb, samples_rgb);
+}
+
+#[inline(always)]
+pub(crate) fn hlg_display_to_scene_vec<D: SimdDescriptor>(
+    d: D,
+    system_gamma: D::F32Vec,
+    luminance_rgb: [D::F32Vec; 3],
+    samples_rgb: [D::F32Vec; 3],
+) -> [D::F32Vec; 3] {
+    let one_sub_gamma = D::F32Vec::splat(d, 1.0) - system_gamma;
+    hlg_ootf_inner_vec(d, one_sub_gamma / system_gamma, luminance_rgb, samples_rgb)
 }
 
 /// Converts scene-referred linear sample to HLG signal.
@@ -475,6 +506,30 @@ pub fn scene_to_hlg(samples: &mut [f32]) {
         };
         *s = y.copysign(*s);
     }
+}
+
+#[inline(always)]
+pub(crate) fn scene_to_hlg_vec<D: SimdDescriptor>(d: D, s: D::F32Vec) -> D::F32Vec {
+    let a = s.abs();
+    let y_small = (D::F32Vec::splat(d, 3.0) * a).sqrt();
+    let y_large = {
+        let log = crate::util::fast_log2f_simd(
+            d,
+            a.mul_add(
+                D::F32Vec::splat(d, 12.0),
+                D::F32Vec::splat(d, -HLG_B as f32),
+            ),
+        );
+        // log2 x = ln x / ln 2, therefore ln x = (ln 2)(log2 x)
+        log.mul_add(
+            D::F32Vec::splat(d, (HLG_A * std::f64::consts::LN_2) as f32),
+            D::F32Vec::splat(d, HLG_C as f32),
+        )
+    };
+    let a_threshold = D::F32Vec::splat(d, 1.0 / 12.0);
+    a.gt(a_threshold)
+        .if_then_else_f32(y_large, y_small)
+        .copysign(s)
 }
 
 /// Converts HLG signal to scene-referred linear sample.
@@ -767,8 +822,8 @@ mod test {
         arbtest::arbtest(|u| {
             let intensity_target = u.int_in_range(900..=1100)? as f32;
 
-            let lr = 0.2 + u.int_in_range(0..=255)? as f32 / 255.0;
-            let lb = 0.2 + u.int_in_range(0..=255)? as f32 / 255.0;
+            let lr = 0.2 + u.int_in_range(0..=255)? as f32 / 255.0 * 0.2;
+            let lb = 0.2 + u.int_in_range(0..=255)? as f32 / 255.0 * 0.2;
             let lg = 1.0 - lr - lb;
             let luminance_rgb = [lr, lg, lb];
 
@@ -794,7 +849,7 @@ mod test {
                 std::slice::from_mut(&mut precise_g),
                 std::slice::from_mut(&mut precise_b),
             ];
-            hlg_display_to_scene(intensity_target, luminance_rgb, precise);
+            hlg_display_to_scene_precise(intensity_target, luminance_rgb, precise);
 
             assert_close!(
                 all,
@@ -821,7 +876,7 @@ mod test {
                 std::slice::from_mut(&mut precise_g),
                 std::slice::from_mut(&mut precise_b),
             ];
-            hlg_scene_to_display(intensity_target, luminance_rgb, precise);
+            hlg_scene_to_display_precise(intensity_target, luminance_rgb, precise);
 
             assert_close!(
                 all,
@@ -835,6 +890,41 @@ mod test {
     }
 
     #[test]
+    fn hlg_ootf_simd_arb() {
+        arbtest::arbtest(|u| {
+            let d = jxl_simd::ScalarDescriptor::new().unwrap();
+
+            let intensity_target = u.int_in_range(900..=1100)? as f32;
+
+            let lr = 0.2 + u.int_in_range(0..=255)? as f32 / 255.0 * 0.2;
+            let lb = 0.2 + u.int_in_range(0..=255)? as f32 / 255.0 * 0.2;
+            let lg = 1.0 - lr - lb;
+            let luminance_rgb = [lr, lg, lb];
+
+            let r = u.int_in_range(0u32..=(1 << 24))? as f32 / (1 << 24) as f32;
+            let g = u.int_in_range(0u32..=(1 << 24))? as f32 / (1 << 24) as f32;
+            let b = u.int_in_range(0u32..=(1 << 24))? as f32 / (1 << 24) as f32;
+
+            let system_gamma = hlg_system_gamma(intensity_target);
+            let simd = hlg_display_to_scene_vec(d, system_gamma, luminance_rgb, [r, g, b]);
+
+            let mut scalar_r = r;
+            let mut scalar_g = g;
+            let mut scalar_b = b;
+            let scalar = [
+                std::slice::from_mut(&mut scalar_r),
+                std::slice::from_mut(&mut scalar_g),
+                std::slice::from_mut(&mut scalar_b),
+            ];
+            hlg_display_to_scene(intensity_target, luminance_rgb, scalar);
+
+            assert_close!(all, &simd, &[scalar_r, scalar_g, scalar_b], 7.2e-7);
+
+            Ok(())
+        });
+    }
+
+    #[test]
     fn scene_to_hlg_arb() {
         arbtest::arbtest(|u| {
             let mut samples = arb_samples(u)?;
@@ -842,6 +932,23 @@ mod test {
 
             scene_to_hlg(&mut samples);
             scene_to_hlg_precise(&mut precise);
+            assert_close!(all, &samples, &precise, 5e-7);
+            Ok(())
+        });
+    }
+
+    #[test]
+    fn scene_to_hlg_simd_arb() {
+        arbtest::arbtest(|u| {
+            let d = jxl_simd::ScalarDescriptor::new().unwrap();
+
+            let mut samples = arb_samples(u)?;
+            let mut precise = samples.clone();
+
+            scene_to_hlg(&mut samples);
+            for s in &mut precise {
+                *s = scene_to_hlg_vec(d, *s);
+            }
             assert_close!(all, &samples, &precise, 5e-7);
             Ok(())
         });

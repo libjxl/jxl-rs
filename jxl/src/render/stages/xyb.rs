@@ -202,7 +202,7 @@ fn process_xyb<D: SimdDescriptor>(
     row_x: &mut [f32],
     row_y: &mut [f32],
     row_b: &mut [f32],
-    apply_tf: impl Fn(D::F32Vec) -> D::F32Vec,
+    apply_tf: impl Fn([D::F32Vec; 3]) -> [D::F32Vec; 3],
 ) {
     let mat = params.mat.map(|x| D::F32Vec::splat(d, x));
     let bias_cbrt = params.bias_cbrt.map(|x| D::F32Vec::splat(d, x));
@@ -242,9 +242,7 @@ fn process_xyb<D: SimdDescriptor>(
         let g = mat[3].mul_add(l, mat[4].mul_add(m, mat[5] * s));
         let b = mat[6].mul_add(l, mat[7].mul_add(m, mat[8] * s));
 
-        let r = apply_tf(r);
-        let g = apply_tf(g);
-        let b = apply_tf(b);
+        let [r, g, b] = apply_tf([r, g, b]);
 
         r.store(xm);
         g.store(ym);
@@ -267,13 +265,25 @@ simd_function!(
             TransferFunction::Srgb => {
                 process_xyb(d, params, xsize, x, y, b, {
                     #[inline(always)]
-                    |a| tf::linear_to_srgb_simd_vec(d, a)
+                    |[r, g, b]| {
+                        [
+                            tf::linear_to_srgb_simd_vec(d, r),
+                            tf::linear_to_srgb_simd_vec(d, g),
+                            tf::linear_to_srgb_simd_vec(d, b),
+                        ]
+                    }
                 });
             }
             TransferFunction::Bt709 => {
                 process_xyb(d, params, xsize, x, y, b, {
                     #[inline(always)]
-                    |a| tf::linear_to_bt709_simd_vec(d, a)
+                    |[r, g, b]| {
+                        [
+                            tf::linear_to_bt709_simd_vec(d, r),
+                            tf::linear_to_bt709_simd_vec(d, g),
+                            tf::linear_to_bt709_simd_vec(d, b),
+                        ]
+                    }
                 });
             }
             TransferFunction::Pq { intensity_target } => {
@@ -281,36 +291,52 @@ simd_function!(
                 let threshold = D::F32Vec::splat(d, 1e-4);
                 process_xyb(d, params, xsize, x, y, b, {
                     #[inline(always)]
-                    |a| tf::linear_to_pq_simd_vec(d, y_mult, threshold, a)
+                    |[r, g, b]| {
+                        [
+                            tf::linear_to_pq_simd_vec(d, y_mult, threshold, r),
+                            tf::linear_to_pq_simd_vec(d, y_mult, threshold, g),
+                            tf::linear_to_pq_simd_vec(d, y_mult, threshold, b),
+                        ]
+                    }
                 });
             }
             TransferFunction::Gamma(g) if (*g - 1.0).abs() < f32::EPSILON => {
                 process_xyb(d, params, xsize, x, y, b, {
                     #[inline(always)]
-                    |a| a
+                    |arr| arr
                 });
             }
             TransferFunction::Gamma(g) => {
                 let g_vec = D::F32Vec::splat(d, *g);
                 process_xyb(d, params, xsize, x, y, b, {
                     #[inline(always)]
-                    |a| crate::util::fast_powf_simd(d, a.abs(), g_vec).copysign(a)
+                    |[r, g, b]| {
+                        [
+                            crate::util::fast_powf_simd(d, r.abs(), g_vec).copysign(r),
+                            crate::util::fast_powf_simd(d, g.abs(), g_vec).copysign(g),
+                            crate::util::fast_powf_simd(d, b.abs(), g_vec).copysign(b),
+                        ]
+                    }
                 });
             }
             TransferFunction::Hlg {
                 intensity_target,
                 luminance_rgb,
             } => {
+                let system_gamma = D::F32Vec::splat(d, tf::hlg_system_gamma(*intensity_target));
+                let luminance_rgb = luminance_rgb.map(|v| D::F32Vec::splat(d, v));
                 process_xyb(d, params, xsize, x, y, b, {
                     #[inline(always)]
-                    |a| a
+                    |arr| {
+                        let [r, g, b] =
+                            tf::hlg_display_to_scene_vec(d, system_gamma, luminance_rgb, arr);
+                        [
+                            tf::scene_to_hlg_vec(d, r),
+                            tf::scene_to_hlg_vec(d, g),
+                            tf::scene_to_hlg_vec(d, b),
+                        ]
+                    }
                 });
-                // TODO(veluca): SIMD this.
-                let rows = [&mut x[..xsize], &mut y[..xsize], &mut b[..xsize]];
-                tf::hlg_display_to_scene(*intensity_target, *luminance_rgb, rows);
-                tf::scene_to_hlg(&mut x[..xsize]);
-                tf::scene_to_hlg(&mut y[..xsize]);
-                tf::scene_to_hlg(&mut b[..xsize]);
             }
         }
     }
