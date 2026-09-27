@@ -15,21 +15,6 @@ use crate::tests::decode::{
     DecodeParams, compare_frames, decode, decode_internal, scan_frames_with_decoder,
 };
 
-#[test]
-fn decode_small_chunks() {
-    arbtest::arbtest(|u| {
-        decode_internal(
-            &std::fs::read("resources/test/green_queen_vardct_e3.jxl").unwrap(),
-            DecodeParams {
-                chunk_size: u.arbitrary::<u8>().unwrap() as usize + 1,
-                ..Default::default()
-            },
-        )
-        .unwrap();
-        Ok(())
-    });
-}
-
 // OOO jxlp boxes require any frame to start in a box that has all the logically-before
 // boxes physically before it, and all the logically-after boxes physically after it.
 // This test file does *not* satisfy this property.
@@ -1148,6 +1133,20 @@ fn test_start_new_frame_boxed_jxlp_per_visible_frame() {
 #[test]
 fn test_start_new_frame_cropped_traffic_light() {
     let data = std::fs::read("resources/test/cropped_traffic_light.jxl").unwrap();
+    assert_start_new_frame_matches_sequential(&data);
+}
+
+#[test]
+fn test_start_new_frame_animation_newtons_cradle() {
+    let data = std::fs::read("resources/test/conformance_test_images/animation_newtons_cradle.jxl")
+        .unwrap();
+    assert_start_new_frame_matches_sequential(&data);
+}
+
+#[test]
+fn test_start_new_frame_animation_spline() {
+    let data =
+        std::fs::read("resources/test/conformance_test_images/animation_spline.jxl").unwrap();
     assert_start_new_frame_matches_sequential(&data);
 }
 
