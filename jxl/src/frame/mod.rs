@@ -131,9 +131,7 @@ pub struct DecoderState {
     pub high_precision: bool,
     pub premultiply_output: bool,
     pub adjust_orientation: bool,
-    pub force_level5_splines: bool,
-    pub force_level5_patches: bool,
-    pub force_level5_modular: bool,
+    pub level5_limits: bool,
     pub sample_limit: Option<usize>,
     // Whether the latest level 1 LF frame was fully rendered.
     // If this is set to `true`, early flushing in the main frame
@@ -145,7 +143,7 @@ impl DecoderState {
     pub const MAX_STORED_FRAMES: usize = 4;
     pub const NUM_LF_FRAMES: usize = 4;
 
-    pub fn new(file_header: FileHeader, options: &JxlDecoderOptions) -> Self {
+    pub fn new(file_header: FileHeader, options: &JxlDecoderOptions, level5_limits: bool) -> Self {
         Self {
             file_header,
             reference_frames: Arc::new([None, None, None, None]),
@@ -160,9 +158,7 @@ impl DecoderState {
             high_precision: options.high_precision,
             premultiply_output: options.premultiply_output,
             adjust_orientation: options.adjust_orientation,
-            force_level5_splines: options.force_level5_splines,
-            force_level5_patches: options.force_level5_patches,
-            force_level5_modular: options.force_level5_modular,
+            level5_limits,
             sample_limit: options.sample_limit,
             lf_frame_was_rendered: false,
         }

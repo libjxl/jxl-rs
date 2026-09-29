@@ -38,18 +38,20 @@ pub struct JxlDecoderOptions {
     /// via the regular decoder API without producing pixels.
     pub scan_frames_only: bool,
     pub request_aux_boxes: Vec<JxlAuxBoxType>,
-    /// Whether to force Level 5 limits for splines (default: true).
-    /// When true, limits total spline area to min(8 * image_size + 2^25, 2^30).
-    /// When false, allows Level 10 limits (min(1024 * image_size + 2^32, 2^42)).
-    pub force_level5_splines: bool,
-    /// Whether to force Level 5 limits for patches (default: true).
-    /// When true, limits total patch area to max(8 * num_pixels, 2^20).
-    /// When false, allows Level 10 limits (max(1024 * num_pixels, 2^20)).
-    pub force_level5_patches: bool,
-    /// Whether to force Level 5 limits for modular channels (default: true).
-    /// When true, limits the number of channels after transforms to 256.
-    /// When false, allows Level 10 limits (2^16).
-    pub force_level5_modular: bool,
+    /// Maximum profile and level allowed when decoding (default: [`ProfileLevel::Main5`]).
+    /// When [`ProfileLevel::Main5`], enforces Level 5 complexity constraints defined by ISO/IEC 18181-1.
+    /// When [`ProfileLevel::Main10`], allows Level 10 limits (which requires a container with a Level 10 `jxll` box).
+    pub max_profile_level: ProfileLevel,
+}
+
+/// Profile and level for JPEG XL complexity constraints (ISO/IEC 18181-1).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
+pub enum ProfileLevel {
+    /// Enforce Main Profile Level 5 complexity constraints.
+    #[default]
+    Main5,
+    /// Allow Main Profile Level 10 limits (requires a container with a Level 10 `jxll` box).
+    Main10,
 }
 
 impl Default for JxlDecoderOptions {
@@ -65,9 +67,7 @@ impl Default for JxlDecoderOptions {
             premultiply_output: false,
             scan_frames_only: false,
             request_aux_boxes: Vec::new(),
-            force_level5_splines: true,
-            force_level5_patches: true,
-            force_level5_modular: true,
+            max_profile_level: ProfileLevel::Main5,
         }
     }
 }

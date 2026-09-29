@@ -248,7 +248,11 @@ pub fn meta_apply_transforms(
     max_palette_samples: usize,
     max_channels: usize,
     storage: ModularStorage,
+    level5_limits: bool,
 ) -> Result<(Vec<ModularBufferInfo>, Vec<TransformStep>)> {
+    if level5_limits && header.transforms.len() > 8 {
+        return Err(Error::TooManyModularTransforms(header.transforms.len(), 8));
+    }
     if channels.len() > max_channels {
         return Err(Error::TooManyModularChannels(channels.len(), max_channels));
     }

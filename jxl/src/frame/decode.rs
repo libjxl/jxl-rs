@@ -357,7 +357,7 @@ impl Frame {
                     self.header.size_padded().1,
                     self.decoder_state.extra_channel_info().len(),
                     &self.decoder_state.reference_frames[..],
-                    self.decoder_state.force_level5_patches,
+                    self.decoder_state.level5_limits,
                 )?;
                 *self.patches.try_write().unwrap() = p;
             }
@@ -412,7 +412,7 @@ impl Frame {
                     self.header.size().1 as u64,
                     &color_correlation_params,
                     self.decoder_state.high_precision,
-                    self.decoder_state.force_level5_splines,
+                    self.decoder_state.level5_limits,
                 )?;
             }
 
@@ -423,7 +423,11 @@ impl Frame {
                         * (self.color_channels + self.decoder_state.extra_channel_info().len())
                         / 16)
                     .min(1 << 22);
-                Some(Tree::read(br, size_limit)?)
+                Some(Tree::read(
+                    br,
+                    size_limit,
+                    self.decoder_state.level5_limits,
+                )?)
             } else {
                 None
             };
@@ -436,7 +440,7 @@ impl Frame {
                 self.buffer_recycler.clone(),
                 self.decoder_state.sample_limit,
                 self.decoder_state.modular_storage(),
-                self.decoder_state.force_level5_modular,
+                self.decoder_state.level5_limits,
             )?;
 
             // Ensure that, if we call this function again, we resume from just after
@@ -510,7 +514,7 @@ impl Frame {
                 br,
                 decoder_state.modular_storage(),
                 &mut scratch,
-                decoder_state.force_level5_modular,
+                decoder_state.level5_limits,
             )?;
         }
 
@@ -541,7 +545,7 @@ impl Frame {
                 br,
                 decoder_state.modular_storage(),
                 &mut scratch,
-                decoder_state.force_level5_modular,
+                decoder_state.level5_limits,
             )?;
         }
         Ok(())

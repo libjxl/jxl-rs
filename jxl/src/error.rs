@@ -285,6 +285,10 @@ pub enum Error {
     NoLfFrame(u32),
     #[error("Brotli decompress error: {0}")]
     Brotli(std::io::Error),
+    #[error("Too many modular transforms: {0} > {1}")]
+    TooManyModularTransforms(usize, usize),
+    #[error("Frame duration {0} is too short (min 1/120s)")]
+    FrameDurationTooShort(u32),
 }
 
 pub type Result<T, E = Error> = std::result::Result<T, E>;

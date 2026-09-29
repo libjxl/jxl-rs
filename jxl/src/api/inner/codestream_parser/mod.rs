@@ -12,6 +12,7 @@ use crate::api::inner::codestream_parser::image_info::ImageInfo;
 use crate::api::inner::process::SmallBuffer;
 use crate::api::{
     JxlColorProfile, JxlDecoderOptions, JxlOutputBuffer, JxlParallelRunner, JxlPixelFormat,
+    ProfileLevel,
 };
 use crate::error::{Error, Result};
 
@@ -51,6 +52,11 @@ enum ParserState {
         process_mode: ProcessMode,
     },
     Finished,
+}
+
+fn level5_limits(input: &CodestreamInput, decode_options: &JxlDecoderOptions) -> bool {
+    decode_options.max_profile_level == ProfileLevel::Main5
+        || input.box_parser().container_level() != Some(ProfileLevel::Main10)
 }
 
 fn check_size_limit(
@@ -263,6 +269,7 @@ impl CodestreamParser {
                                 .state_checkpoint(c.local_buffer.consumed())?,
                         );
 
+                        let level5_limits = level5_limits(input, decode_options);
                         c.local_buffer.with_br(|br, bits| {
                             c.frame_info.parse_frame_header(
                                 is_preview,
@@ -270,6 +277,7 @@ impl CodestreamParser {
                                 c.image_info.file_header(),
                                 br,
                                 bits,
+                                level5_limits,
                             )
                         })
                     })?;
@@ -313,6 +321,7 @@ impl CodestreamParser {
                         );
                     }
 
+                    let level5_limits = level5_limits(input, decode_options);
                     self.frame_info.make_frame(
                         &mut self.local_buffer,
                         toc,
@@ -321,6 +330,7 @@ impl CodestreamParser {
                         self.pixel_format.as_ref().unwrap(),
                         self.output_color_profile.as_ref().unwrap(),
                         process_mode,
+                        level5_limits,
                     )?;
 
                     if !matches!(process_mode, ProcessMode::Skip(..)) {
