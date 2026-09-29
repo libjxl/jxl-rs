@@ -1558,7 +1558,7 @@ impl U32SimdVec for U32VecAvx512 {
 
 #[derive(Clone, Copy, Debug)]
 #[repr(transparent)]
-pub struct U64VecAvx512(pub(crate) __m512i, pub(crate) Avx512Descriptor);
+pub struct U64VecAvx512(__m512i, Avx512Descriptor);
 
 impl U64SimdVec for U64VecAvx512 {
     type Descriptor = Avx512Descriptor;

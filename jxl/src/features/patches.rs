@@ -370,17 +370,6 @@ impl PatchesDictionary {
         mult.saturating_mul(num_pixels).max(1 << 20)
     }
 
-    // TODO(veluca): remove this in v0.8.0.
-    pub fn read(
-        br: &mut BitReader,
-        xsize: usize,
-        ysize: usize,
-        num_extra_channels: usize,
-        reference_frames: &[Option<ReferenceFrame>],
-    ) -> Result<PatchesDictionary> {
-        Self::read_internal(br, xsize, ysize, num_extra_channels, reference_frames, true)
-    }
-
     #[instrument(level = "debug", skip(br), ret, err)]
     pub(crate) fn read_internal(
         br: &mut BitReader,

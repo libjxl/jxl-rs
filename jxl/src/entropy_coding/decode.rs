@@ -33,7 +33,7 @@ pub fn unpack_signed(unsigned: u32) -> i32 {
 }
 
 #[derive(UnconditionalCoder, Debug, Clone, Copy)]
-pub(crate) struct Lz77Params {
+pub struct Lz77Params {
     pub enabled: bool,
     #[condition(enabled)]
     #[coder(u2S(224, 512, 4096, Bits(15) + 8))]
@@ -44,7 +44,7 @@ pub(crate) struct Lz77Params {
 }
 
 #[derive(Debug)]
-pub(crate) enum Codes {
+pub enum Codes {
     Huffman(HuffmanCodes),
     Ans(AnsCodes),
 }
@@ -341,16 +341,6 @@ impl SymbolReader {
         }
     }
 
-    #[inline(never)]
-    pub fn read_unsigned_clustered(
-        &mut self,
-        histograms: &Histograms,
-        br: &mut BitReader,
-        cluster: usize,
-    ) -> u32 {
-        self.read_unsigned_clustered_inline(histograms, br, cluster)
-    }
-
     #[inline(always)]
     pub fn read_signed_clustered_inline(
         &mut self,
@@ -360,16 +350,6 @@ impl SymbolReader {
     ) -> i32 {
         let unsigned = self.read_unsigned_clustered_inline(histograms, br, cluster);
         unpack_signed(unsigned)
-    }
-
-    #[inline(never)]
-    pub fn read_signed_clustered(
-        &mut self,
-        histograms: &Histograms,
-        br: &mut BitReader,
-        cluster: usize,
-    ) -> i32 {
-        self.read_signed_clustered_inline(histograms, br, cluster)
     }
 
     /// Specialized fast path for when all HybridUint configs are 420.
@@ -556,6 +536,7 @@ impl Histograms {
         self.context_map[context] as usize
     }
 
+    #[allow(dead_code)]
     pub fn num_histograms(&self) -> usize {
         *self.context_map.iter().max().unwrap() as usize + 1
     }
@@ -596,7 +577,7 @@ impl Histograms {
         self.codes.single_symbol(ctx)
     }
 
-    pub(crate) fn codes(&self) -> &Codes {
+    pub fn codes(&self) -> &Codes {
         &self.codes
     }
 
@@ -613,13 +594,13 @@ impl Histograms {
         self.codes.single_symbol(lz_dist_cluster) == Some(1) && lz_conf.is_split_exponent_zero()
     }
 
-    pub(crate) fn lz77_params(&self) -> Lz77Params {
+    pub fn lz77_params(&self) -> Lz77Params {
         self.lz77_params
     }
-    pub(crate) fn lz77_length_uint(&self) -> HybridUint {
+    pub fn lz77_length_uint(&self) -> HybridUint {
         self.lz77_length_uint.unwrap()
     }
-    pub(crate) fn uint(&self, cluster: usize) -> HybridUint {
+    pub fn uint(&self, cluster: usize) -> HybridUint {
         self.uint_configs[cluster]
     }
 }

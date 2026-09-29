@@ -20,7 +20,7 @@ mod tag;
 
 use header::read_header;
 use stream::IccStream;
-pub(crate) use stream::read_varint_from_reader;
+pub use stream::read_varint_from_reader;
 use tag::{read_single_command, read_tag_list};
 
 const ICC_CONTEXTS: usize = 41;
@@ -215,13 +215,6 @@ impl IncrementalIccReader {
         self.prev_bytes = [b, self.prev_bytes[0]];
         if self.len > PREAMBLE_SIZE && self.out_buf.len() == PREAMBLE_SIZE {
             self.check_preamble()?;
-        }
-        Ok(())
-    }
-
-    pub fn read_all(&mut self, br: &mut BitReader) -> Result<()> {
-        for _ in self.out_buf.len()..self.num_coded_bytes() {
-            self.read_one(br)?;
         }
         Ok(())
     }

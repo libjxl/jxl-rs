@@ -7,10 +7,9 @@ use crate::api::ProcessingResult;
 use crate::error::{Error, Result};
 
 /// The magic bytes for a bare JPEG XL codestream.
-pub(crate) const CODESTREAM_SIGNATURE: [u8; 2] = [0xff, 0x0a];
+const CODESTREAM_SIGNATURE: [u8; 2] = [0xff, 0x0a];
 /// The magic bytes for a file using the JPEG XL container format.
-pub(crate) const CONTAINER_SIGNATURE: [u8; 12] =
-    [0, 0, 0, 0xc, b'J', b'X', b'L', b' ', 0xd, 0xa, 0x87, 0xa];
+const CONTAINER_SIGNATURE: [u8; 12] = [0, 0, 0, 0xc, b'J', b'X', b'L', b' ', 0xd, 0xa, 0x87, 0xa];
 
 #[derive(Debug, PartialEq)]
 pub enum JxlSignatureType {
@@ -62,10 +61,8 @@ pub fn check_signature(file_prefix: &[u8]) -> ProcessingResult<Option<JxlSignatu
 
 #[cfg(test)]
 mod tests {
-    use crate::api::{
-        CODESTREAM_SIGNATURE, CONTAINER_SIGNATURE, JxlSignatureType, ProcessingResult,
-        check_signature,
-    };
+    use super::{CODESTREAM_SIGNATURE, CONTAINER_SIGNATURE, JxlSignatureType, check_signature};
+    use crate::api::ProcessingResult;
 
     macro_rules! signature_test {
         ($test_name:ident, $bytes:expr, Complete(Some($expected_type:expr))) => {

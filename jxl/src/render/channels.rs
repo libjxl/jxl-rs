@@ -13,9 +13,9 @@ use crate::util::{SmallVec, StackOnly};
 /// This eliminates nested Vec collections while maintaining the same indexing syntax.
 pub struct Channels<'a, T> {
     // The number of input rows should be maximized by the EPF0 stage, which has 21.
-    pub(crate) row_data: SmallVec<&'a [T], 32, StackOnly>,
+    row_data: SmallVec<&'a [T], 32, StackOnly>,
     num_channels: usize,
-    pub(crate) rows_per_channel: usize,
+    rows_per_channel: usize,
 }
 
 impl<'a, T> Channels<'a, T> {
@@ -47,11 +47,6 @@ impl<'a, T> Channels<'a, T> {
         self.num_channels
     }
 
-    /// Returns true if there are no channels.
-    pub fn is_empty(&self) -> bool {
-        self.num_channels == 0
-    }
-
     /// Returns an iterator over channel slices.
     pub fn iter(&self) -> impl Iterator<Item = &[&'a [T]]> {
         (0..self.num_channels).map(move |ch| &self[ch])
@@ -74,9 +69,9 @@ impl<'a, T> std::ops::Index<usize> for Channels<'a, T> {
 /// and `channels[ch][row]` returns `&mut [T]` (pixels for a specific row).
 pub struct ChannelsMut<'a, T> {
     // The number of output rows should be maximized by the Upsample8 stage, which has 8.
-    pub(crate) row_data: SmallVec<&'a mut [T], 8, StackOnly>,
+    row_data: SmallVec<&'a mut [T], 8, StackOnly>,
     num_channels: usize,
-    pub(crate) rows_per_channel: usize,
+    rows_per_channel: usize,
 }
 
 impl<'a, T> ChannelsMut<'a, T> {
@@ -106,11 +101,6 @@ impl<'a, T> ChannelsMut<'a, T> {
     /// Returns the number of channels.
     pub fn len(&self) -> usize {
         self.num_channels
-    }
-
-    /// Returns true if there are no channels.
-    pub fn is_empty(&self) -> bool {
-        self.num_channels == 0
     }
 
     /// Splits the first 3 channels into separate mutable slices.

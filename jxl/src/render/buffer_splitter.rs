@@ -140,7 +140,7 @@ impl<'a> BufferSplitter<'a> {
         }
     }
 
-    pub(crate) fn get_local_buffers(
+    pub fn get_local_buffers(
         &self,
         save_buffer_info: &[Option<SaveStageBufferInfo>],
         rect: Rect,

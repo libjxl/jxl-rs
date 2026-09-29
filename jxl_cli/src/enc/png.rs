@@ -9,8 +9,8 @@ use std::io::Write;
 use color_eyre::eyre::{Result, eyre};
 use jxl::api::{
     JxlColorEncoding, JxlColorProfile, JxlPrimaries, JxlTransferFunction, JxlWhitePoint,
+    RenderingIntent,
 };
-use jxl::headers::color_encoding::RenderingIntent;
 
 use crate::dec::{DecodeOutput, OutputDataType};
 

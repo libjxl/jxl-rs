@@ -284,7 +284,7 @@ impl FullModularImage {
 
     #[inline(always)]
     #[allow(dead_code)]
-    pub(crate) fn storage(&self) -> ModularStorage {
+    pub fn storage(&self) -> ModularStorage {
         self.storage
     }
 

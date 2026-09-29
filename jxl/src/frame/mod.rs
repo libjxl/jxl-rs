@@ -183,21 +183,6 @@ impl DecoderState {
     pub fn extra_channel_info(&self) -> &Vec<ExtraChannelInfo> {
         &self.file_header.image_metadata.extra_channel_info
     }
-
-    pub fn reference_frame(&self, i: usize) -> Option<&ReferenceFrame> {
-        assert!(i < Self::MAX_STORED_FRAMES);
-        self.reference_frames[i].as_ref()
-    }
-
-    #[cfg(test)]
-    pub fn set_use_simple_pipeline(&mut self, u: bool) {
-        self.use_simple_pipeline = u;
-    }
-
-    #[cfg(test)]
-    pub fn disable_16bit_modular_buffers(&mut self) {
-        self.allow_16bit_modular_buffers = false;
-    }
 }
 
 pub struct HfMetadata {

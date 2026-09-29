@@ -97,7 +97,7 @@ macro_rules! pipeline {
     }};
 }
 
-pub(crate) use pipeline;
+pub(super) use pipeline;
 
 impl Frame {
     /// Add conversion stages for non-float output formats.
@@ -552,7 +552,7 @@ impl Frame {
     }
 
     #[allow(clippy::too_many_arguments)]
-    pub(crate) fn build_render_pipeline<T: RenderPipeline>(
+    pub fn build_render_pipeline<T: RenderPipeline>(
         decoder_state: &DecoderState,
         frame_header: &FrameHeader,
         patches: Arc<RwLock<PatchesDictionary>>,

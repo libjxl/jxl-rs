@@ -10,10 +10,9 @@ use std::path::Path;
 use clap::{Arg, Command};
 use color_eyre::eyre::{Result, eyre};
 use jxl::api::{
-    JxlBitDepth, JxlColorEncoding, JxlColorProfile, JxlDecoder, JxlDecoderOptions, JxlOutputBuffer,
-    ProcessingResult,
+    ExtraChannel, JxlBitDepth, JxlColorEncoding, JxlColorProfile, JxlDecoder, JxlDecoderOptions,
+    JxlOutputBuffer, ProcessingResult,
 };
-use jxl::headers::extra_channels::ExtraChannel;
 use jxl::image::{Image, Rect};
 
 fn parse_jxl(path: &Path) -> Result<()> {

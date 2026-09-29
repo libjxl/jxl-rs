@@ -26,7 +26,7 @@ mod group_scheduler;
 mod helpers;
 mod input_buffers;
 mod render_group;
-pub(crate) mod row_buffers;
+pub mod row_buffers;
 mod run_stage;
 mod save;
 

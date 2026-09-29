@@ -20,7 +20,7 @@ use crate::util::ShiftRightCeil;
 use crate::util::sync::atomic::{AtomicBool, Ordering};
 use crate::util::tracing_wrappers::*;
 
-pub(crate) struct RenderPipelineBuilder<Pipeline: RenderPipeline> {
+pub struct RenderPipelineBuilder<Pipeline: RenderPipeline> {
     shared: RenderPipelineShared<Pipeline::Buffer>,
 }
 

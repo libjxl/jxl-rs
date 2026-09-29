@@ -6,7 +6,6 @@
 use crate::error::Result;
 use crate::frame::ReferenceFrame;
 use crate::headers::FileHeader;
-use crate::headers::extra_channels::ExtraChannelInfo;
 use crate::headers::frame_header::*;
 use crate::util::sync::Arc;
 
@@ -24,7 +23,6 @@ pub struct ExtendToImageDimensionsStage {
     pub image_size: (usize, usize),
     pub blending_info: BlendingInfo,
     pub ec_blending_info: Vec<BlendingInfo>,
-    pub extra_channels: Vec<ExtraChannelInfo>,
     pub reference_frames: Arc<[Option<ReferenceFrame>; 4]>,
     pub zeros: Vec<f32>,
 }
@@ -42,7 +40,6 @@ impl ExtendToImageDimensionsStage {
             image_size: (xsize, file_header.size.ysize() as usize),
             blending_info: frame_header.blending_info.clone(),
             ec_blending_info: frame_header.ec_blending_info.clone(),
-            extra_channels: file_header.image_metadata.extra_channel_info.clone(),
             reference_frames,
             zeros: vec![0f32; xsize],
         })

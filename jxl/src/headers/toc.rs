@@ -52,10 +52,6 @@ impl IncrementalTocReader {
         })
     }
 
-    pub fn num_read_entries(&self) -> u32 {
-        self.entries.len() as u32
-    }
-
     pub fn remaining_entries(&self) -> u32 {
         self.num_entries - self.entries.len() as u32
     }

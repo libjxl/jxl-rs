@@ -3,7 +3,7 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-use crate::headers::extra_channels::ExtraChannel;
+pub use crate::headers::extra_channels::ExtraChannel;
 use crate::image::DataTypeTag;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

@@ -340,30 +340,6 @@ impl Frame {
                 && self.header.num_extra_channels == 0)
     }
 
-    /// Given a bit reader pointing at the end of the TOC, returns a vector of `BitReader`s, each
-    /// of which reads a specific section.
-    pub fn sections<'a>(&self, br: &'a mut BitReader) -> Result<Vec<BitReader<'a>>> {
-        debug!(toc = ?self.toc);
-        let ret = self
-            .toc
-            .entries
-            .iter()
-            .scan(br, |br, count| Some(br.split_at(*count as usize)))
-            .collect::<Result<Vec<_>>>()?;
-        if !self.toc.permuted {
-            return Ok(ret);
-        }
-        let mut inv_perm = vec![0; ret.len()];
-        for (i, pos) in self.toc.permutation.iter().enumerate() {
-            inv_perm[*pos as usize] = i;
-        }
-        let mut shuffled_ret = ret.clone();
-        for (br, pos) in ret.into_iter().zip(inv_perm) {
-            shuffled_ret[pos] = br;
-        }
-        Ok(shuffled_ret)
-    }
-
     #[instrument(level = "debug", skip_all)]
     pub fn decode_lf_global(&mut self, br: &mut BitReader, allow_partial: bool) -> Result<()> {
         debug!(section_size = br.total_bits_available());
