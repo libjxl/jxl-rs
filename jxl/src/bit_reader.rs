@@ -8,7 +8,6 @@ use std::fmt::Debug;
 use byteorder::{ByteOrder, LittleEndian};
 
 use crate::error::Error;
-use crate::util::tracing_wrappers::*;
 
 /// Reads bits from a sequence of bytes.
 #[derive(Clone)]
@@ -76,15 +75,13 @@ impl<'a> BitReader<'a> {
     }
 
     /// Reads `num` bits from the buffer.
-    /// ```
-    /// # use jxl::bit_reader::BitReader;
+    /// ```ignore
     /// let mut br = BitReader::new(&[0, 1]);
     /// assert_eq!(br.read(8)?, 0);
     /// assert_eq!(br.read(4)?, 1);
     /// assert_eq!(br.read(4)?, 0);
     /// assert_eq!(br.total_bits_read(), 16);
     /// assert!(br.read(1).is_err());
-    /// # Ok::<(), jxl::error::Error>(())
     /// ```
     #[inline]
     pub fn read(&mut self, num: usize) -> Result<u64, Error> {
@@ -125,13 +122,11 @@ impl<'a> BitReader<'a> {
     }
 
     /// Skips `num` bits.
-    /// ```
-    /// # use jxl::bit_reader::BitReader;
+    /// ```ignore
     /// let mut br = BitReader::new(&[0, 1]);
     /// assert_eq!(br.read(8)?, 0);
     /// br.skip_bits(4)?;
     /// assert_eq!(br.total_bits_read(), 12);
-    /// # Ok::<(), jxl::error::Error>(())
     /// ```
     #[inline(never)]
     pub fn skip_bits(&mut self, mut n: usize) -> Result<(), Error> {
@@ -186,14 +181,12 @@ impl<'a> BitReader<'a> {
     }
 
     /// Jumps to the next byte boundary. The skipped bytes have to be 0.
-    /// ```
-    /// # use jxl::bit_reader::BitReader;
+    /// ```ignore
     /// let mut br = BitReader::new(&[0, 1]);
     /// assert_eq!(br.read(8)?, 0);
     /// br.skip_bits(4)?;
     /// br.jump_to_byte_boundary()?;
     /// assert_eq!(br.total_bits_read(), 16);
-    /// # Ok::<(), jxl::error::Error>(())
     /// ```
     #[inline(never)]
     pub fn jump_to_byte_boundary(&mut self) -> Result<(), Error> {
@@ -228,26 +221,6 @@ impl<'a> BitReader<'a> {
             self.bits_in_buf += 8;
             self.data = &self.data[1..];
         }
-    }
-
-    /// Splits off a separate BitReader to handle the next `n` *full* bytes.
-    /// If `self` is not aligned to a byte boundary, it skips to the next byte boundary.
-    /// `self` is automatically advanced by `n` bytes.
-    pub fn split_at(&mut self, n: usize) -> Result<BitReader<'a>, Error> {
-        self.jump_to_byte_boundary()?;
-        let mut ret = Self { ..*self };
-        self.skip_bits(n * 8)?;
-        let bytes_in_buf = ret.bits_in_buf / 8;
-        if n > bytes_in_buf {
-            // Prevent the returned bitreader from over-reading.
-            ret.data = &ret.data[..n - bytes_in_buf];
-        } else {
-            ret.bits_in_buf = n * 8;
-            ret.bit_buf &= (1u64 << (n * 8)) - 1;
-            ret.data = &[];
-        }
-        debug!(?n, ret=?ret);
-        Ok(ret)
     }
 }
 

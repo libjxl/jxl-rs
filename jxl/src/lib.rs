@@ -5,17 +5,17 @@
 
 #![deny(unsafe_code)]
 pub mod api;
-pub mod bit_reader;
-pub mod color;
-pub mod entropy_coding;
+mod bit_reader;
+mod color;
+mod entropy_coding;
 pub mod error;
-pub mod features;
-pub mod frame;
-pub mod headers;
-pub mod icc;
+mod features;
+mod frame;
+mod headers;
+mod icc;
 pub mod image;
-pub mod render;
-pub mod util;
+mod render;
+mod util;
 
 #[cfg(test)]
 mod tests;

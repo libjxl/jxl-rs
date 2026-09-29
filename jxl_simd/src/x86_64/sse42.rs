@@ -1240,7 +1240,7 @@ impl U32SimdVec for U32VecSse42 {
 
 #[derive(Clone, Copy, Debug)]
 #[repr(transparent)]
-pub struct U64VecSse42(pub(crate) __m128i, pub(crate) Sse42Descriptor);
+pub struct U64VecSse42(__m128i, Sse42Descriptor);
 
 impl U64SimdVec for U64VecSse42 {
     type Descriptor = Sse42Descriptor;

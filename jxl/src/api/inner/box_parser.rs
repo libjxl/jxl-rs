@@ -133,7 +133,7 @@ pub struct BoxParserCheckpoint {
     pub(super) file_position: u64,
     codestream_left: Option<u64>,
     is_valid_checkpoint: bool,
-    pub(crate) consumed_codestream: u64,
+    pub(super) consumed_codestream: u64,
     next_aux_box_idx: usize,
 }
 

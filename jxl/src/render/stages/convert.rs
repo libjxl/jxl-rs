@@ -880,6 +880,7 @@ impl ConvertF32ToF16Stage {
         }
     }
 
+    #[cfg(test)]
     pub fn new_with_unit_clamp(channel: usize, clamp_unit_range: bool) -> ConvertF32ToF16Stage {
         ConvertF32ToF16Stage {
             channel,

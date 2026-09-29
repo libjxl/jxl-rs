@@ -1396,7 +1396,7 @@ impl U32SimdVec for U32VecAvx {
 
 #[derive(Clone, Copy, Debug)]
 #[repr(transparent)]
-pub struct U64VecAvx(pub(crate) __m256i, pub(crate) AvxDescriptor);
+pub struct U64VecAvx(__m256i, AvxDescriptor);
 
 impl U64SimdVec for U64VecAvx {
     type Descriptor = AvxDescriptor;

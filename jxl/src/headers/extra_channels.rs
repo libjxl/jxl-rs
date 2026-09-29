@@ -60,6 +60,7 @@ pub struct ExtraChannelInfo {
 }
 
 impl ExtraChannelInfo {
+    #[cfg(test)]
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         all_default: bool,

@@ -10,12 +10,11 @@ use std::time::{Duration, Instant};
 use color_eyre::eyre::{Result, eyre};
 use jxl::api::states::WithImageInfo;
 use jxl::api::{
-    Endianness, JxlAnimation, JxlBitDepth, JxlBitstreamInput, JxlColorEncoding, JxlColorProfile,
-    JxlColorType, JxlDataFormat, JxlDecoder, JxlDecoderOptions, JxlOutputBuffer, JxlParallelRunner,
-    JxlParallelRunnerFun, JxlPixelFormat, ProcessingResult,
+    Endianness, ExtraChannel, JxlAnimation, JxlBitDepth, JxlBitstreamInput, JxlColorEncoding,
+    JxlColorProfile, JxlColorType, JxlDataFormat, JxlDecoder, JxlDecoderOptions, JxlOutputBuffer,
+    JxlParallelRunner, JxlParallelRunnerFun, JxlPixelFormat, ProcessingResult,
 };
-use jxl::headers::extra_channels::ExtraChannel;
-use jxl::image::{OwnedRawImage, Rect};
+use jxl::image::{OwnedRawImage, Rect, f16};
 use rayon::iter::{IntoParallelIterator, ParallelIterator};
 
 pub struct PartialRender {
@@ -533,22 +532,20 @@ fn apply_cms(
                         for c in 0..color_channels {
                             let idx = (x * samples_per_pixel + c) * 2;
                             let val = u16::from_ne_bytes([row_bytes[idx], row_bytes[idx + 1]]);
-                            row_color_buffer[x * input_channels + c] =
-                                jxl::util::f16::from_bits(val).to_f32();
+                            row_color_buffer[x * input_channels + c] = f16::from_bits(val).to_f32();
                         }
                         let k_idx = x * 2;
                         let k_val =
                             u16::from_ne_bytes([black_bytes[k_idx], black_bytes[k_idx + 1]]);
                         row_color_buffer[x * input_channels + color_channels] =
-                            jxl::util::f16::from_bits(k_val).to_f32();
+                            f16::from_bits(k_val).to_f32();
                     }
                 } else {
                     for x in 0..width {
                         for c in 0..color_channels {
                             let idx = (x * samples_per_pixel + c) * 2;
                             let val = u16::from_ne_bytes([row_bytes[idx], row_bytes[idx + 1]]);
-                            row_color_buffer[x * color_channels + c] =
-                                jxl::util::f16::from_bits(val).to_f32();
+                            row_color_buffer[x * color_channels + c] = f16::from_bits(val).to_f32();
                         }
                     }
                 }
@@ -626,7 +623,7 @@ fn apply_cms(
                     for c in 0..color_channels {
                         let idx = (x * samples_per_pixel + c) * 2;
                         let val = row_output_buffer[x * color_channels + c];
-                        let val_f16 = jxl::util::f16::from_f32(val);
+                        let val_f16 = f16::from_f32(val);
                         let u16_bytes = val_f16.to_bits().to_ne_bytes();
                         row_bytes_mut[idx] = u16_bytes[0];
                         row_bytes_mut[idx + 1] = u16_bytes[1];
