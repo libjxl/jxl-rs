@@ -36,9 +36,7 @@ pub struct Tree {
     pub num_properties: usize,
 }
 
-fn validate_tree(tree: &[TreeNode], num_properties: usize) -> Result<()> {
-    const HEIGHT_LIMIT: usize = 2048;
-
+fn validate_tree(tree: &[TreeNode], num_properties: usize, max_depth: usize) -> Result<()> {
     if tree.is_empty() {
         return Ok(());
     }
@@ -74,8 +72,8 @@ fn validate_tree(tree: &[TreeNode], num_properties: usize) -> Result<()> {
     }];
 
     while let Some(mut frame) = stack.pop() {
-        if frame.depth > HEIGHT_LIMIT {
-            return Err(Error::TreeTooTall(frame.depth, HEIGHT_LIMIT));
+        if frame.depth > max_depth {
+            return Err(Error::TreeTooTall(frame.depth, max_depth));
         }
 
         match (frame.stage, tree[frame.node]) {
@@ -281,7 +279,7 @@ pub(super) fn predict(
 
 impl Tree {
     #[instrument(level = "debug", skip(br), err)]
-    pub fn read(br: &mut BitReader, size_limit: usize) -> Result<Tree> {
+    pub fn read(br: &mut BitReader, size_limit: usize, level5_limits: bool) -> Result<Tree> {
         assert!(size_limit <= u32::MAX as usize);
         trace!(pos = br.total_bits_read());
         let tree_histograms = Histograms::decode(NUM_TREE_CONTEXTS, br, true)?;
@@ -350,7 +348,8 @@ impl Tree {
         tree_reader.check_final_state(&tree_histograms, br)?;
 
         let num_properties = max_property as usize + 1;
-        validate_tree(&tree, num_properties)?;
+        let max_depth = if level5_limits { 64 } else { 2048 };
+        validate_tree(&tree, num_properties, max_depth)?;
 
         let histograms = Histograms::decode(tree.len().div_ceil(2), br, true)?;
 
