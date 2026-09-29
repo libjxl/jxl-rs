@@ -7,6 +7,10 @@ use crate::api::JxlAuxBoxType;
 
 #[non_exhaustive]
 pub struct JxlDecoderOptions {
+    /// If true (default), applies the orientation transform from the image
+    /// header; basic info reports the oriented size. If false, pixels are
+    /// output in codestream order, basic info reports the codestream size,
+    /// and the caller is responsible for applying the orientation.
     pub adjust_orientation: bool,
     pub render_spot_colors: bool,
     pub coalescing: bool,

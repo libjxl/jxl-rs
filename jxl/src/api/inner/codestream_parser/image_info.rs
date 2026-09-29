@@ -88,7 +88,7 @@ impl ImageInfo {
         }
         let data = &file_header.image_metadata;
         self.basic_info = Some(JxlBasicInfo {
-            size: if data.orientation.is_transposing() {
+            size: if decode_options.adjust_orientation && data.orientation.is_transposing() {
                 (ysize, xsize)
             } else {
                 (xsize, ysize)
