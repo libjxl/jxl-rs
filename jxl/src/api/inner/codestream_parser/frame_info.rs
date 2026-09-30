@@ -118,6 +118,11 @@ impl FrameInfo {
             .or(self.frame.as_ref().map(|x| x.header()))
     }
 
+    #[cfg(test)]
+    pub fn current_toc(&self) -> Option<&crate::headers::toc::Toc> {
+        self.frame.as_ref().map(|x| x.toc())
+    }
+
     pub fn parse_frame_header(
         &mut self,
         is_preview: bool,
@@ -298,11 +303,6 @@ impl FrameInfo {
         }
 
         Ok(())
-    }
-
-    #[cfg(test)]
-    pub fn frame(&mut self) -> Option<&mut Frame> {
-        self.frame.as_deref_mut()
     }
 
     pub fn dequeue_ready_sections(&mut self) {
