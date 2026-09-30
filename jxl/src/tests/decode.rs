@@ -3,17 +3,14 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-use std::cell::RefCell;
 use std::path::Path;
-use std::rc::Rc;
 
 use crate::api::process::SequentialRunner;
 use crate::api::{
-    JxlDecoder, JxlDecoderOptions, JxlParallelRunner, JxlPixelFormat, ProcessingResult,
-    TestOptions, VisibleFrameInfo, states,
+    JxlDecoder, JxlDecoderInner, JxlDecoderOptions, JxlParallelRunner, JxlPixelFormat,
+    ProcessingResult, TestOptions, VisibleFrameInfo, states,
 };
 use crate::error::{Error, Result};
-use crate::frame::Frame;
 use crate::headers::FileHeader;
 use crate::headers::frame_header::FrameHeader;
 use crate::headers::toc::Toc;
@@ -24,7 +21,6 @@ pub struct DecodeParams<'a, T: ImageDataType = f32> {
     pub chunk_size: usize,
     pub use_simple_pipeline: bool,
     pub do_flush: bool,
-    pub callback: Option<Box<dyn FnMut(&FileHeader, &Frame, usize) -> Result<(), Error>>>,
     pub flush_callback: Option<&'a mut dyn FnMut(usize, usize, &[Image<T>]) -> Result<(), Error>>,
     pub parallel_runner: Option<&'a mut dyn JxlParallelRunner>,
     pub disable_16bit_modular_buffers: bool,
@@ -40,7 +36,6 @@ impl<'a, T: ImageDataType> Default for DecodeParams<'a, T> {
             chunk_size: usize::MAX,
             use_simple_pipeline: false,
             do_flush: false,
-            callback: None,
             flush_callback: None,
             parallel_runner: None,
             disable_16bit_modular_buffers: false,
@@ -82,10 +77,6 @@ pub fn decode<'a, T: ImageDataType>(
         ..Default::default()
     };
     let mut initialized_decoder = JxlDecoder::<states::Initialized>::new(options);
-
-    if let Some(callback) = params.callback {
-        initialized_decoder.set_frame_callback(callback);
-    }
 
     let original_input_len = input.len();
     let mut chunk_input = &input[0..0];
@@ -500,22 +491,19 @@ pub fn has_decoded_pixels(frames: &[Vec<Image<f32>>]) -> bool {
 }
 
 pub fn read_headers_and_toc(data: &[u8]) -> Result<(FileHeader, FrameHeader, Toc)> {
-    let result = Rc::new(RefCell::new(None));
+    let mut decoder = JxlDecoderInner::new(JxlDecoderOptions::default());
+    let mut input = data;
 
-    let r = result.clone();
-    decode::<f32>(
-        data,
-        DecodeParams {
-            callback: Some(Box::new(move |fh, f, _| {
-                let mut r = r.borrow_mut();
-                if r.is_none() {
-                    *r = Some((fh.clone(), f.header().clone(), f.toc().clone()));
-                }
-                Ok(())
-            })),
-            ..Default::default()
-        },
-    )?;
+    for _ in 0..2 {
+        match decoder.process(&mut input, None, None)? {
+            ProcessingResult::Complete { .. } => {}
+            ProcessingResult::NeedsMoreInput { .. } => panic!("Unexpected end of input"),
+        }
+    }
 
-    Ok(result.take().unwrap())
+    let fh = decoder.file_header().unwrap().clone();
+    let fr = decoder.raw_frame_header().unwrap().clone();
+    let toc = decoder.toc().unwrap().clone();
+
+    Ok((fh, fr, toc))
 }

@@ -13,8 +13,6 @@ use super::{
     JxlParallelRunner, JxlPixelFormat, ProcessingResult,
 };
 use crate::error::Result;
-#[cfg(test)]
-use crate::{frame::Frame, headers::FileHeader};
 
 pub mod states {
     pub trait JxlState {}
@@ -36,9 +34,6 @@ pub struct JxlDecoder<State: JxlState> {
     inner: Box<JxlDecoderInner>,
     _state: PhantomData<State>,
 }
-
-#[cfg(test)]
-pub type FrameCallback = dyn FnMut(&FileHeader, &Frame, usize) -> Result<()>;
 
 /// Information about a single visible frame discovered while decoding.
 #[derive(Debug, Clone)]
@@ -82,12 +77,6 @@ impl<S: JxlState> JxlDecoder<S> {
             inner,
             _state: PhantomData,
         }
-    }
-
-    /// Sets a callback that processes all frames by calling `callback(frame, frame_index)`.
-    #[cfg(test)]
-    pub fn set_frame_callback(&mut self, callback: Box<FrameCallback>) {
-        self.inner.set_frame_callback(callback);
     }
 
     /// Returns visible frame info entries collected so far.

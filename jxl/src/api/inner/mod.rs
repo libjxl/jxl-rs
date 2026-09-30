@@ -7,8 +7,6 @@ use box_parser::BoxParser;
 use codestream_parser::CodestreamParser;
 
 use super::{JxlBasicInfo, JxlColorProfile, JxlDecoderOptions, JxlPixelFormat};
-#[cfg(test)]
-use crate::api::FrameCallback;
 use crate::api::{JxlFrameHeader, VisibleFrameInfo, VisibleFrameSeekTarget};
 use crate::error::{Error, Result};
 
@@ -37,8 +35,22 @@ impl JxlDecoderInner {
     }
 
     #[cfg(test)]
-    pub fn set_frame_callback(&mut self, callback: Box<FrameCallback>) {
-        self.codestream_parser.frame_callback = Some(callback);
+    pub(crate) fn file_header(&self) -> Option<&crate::headers::FileHeader> {
+        if self.codestream_parser.image_info.is_complete() {
+            Some(self.codestream_parser.image_info.file_header())
+        } else {
+            None
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn raw_frame_header(&self) -> Option<&crate::headers::frame_header::FrameHeader> {
+        self.codestream_parser.frame_info.current_frame_header()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn toc(&self) -> Option<&crate::headers::toc::Toc> {
+        self.codestream_parser.frame_info.current_toc()
     }
 
     /// Obtains the image's basic information, if available.

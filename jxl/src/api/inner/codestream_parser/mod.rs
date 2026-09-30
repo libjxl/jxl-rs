@@ -3,8 +3,6 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-#[cfg(test)]
-use crate::api::FrameCallback;
 use crate::api::inner::box_parser::CodestreamInput;
 use crate::api::inner::codestream_parser::frame_info::FrameInfo;
 use crate::api::inner::codestream_parser::frame_scan_info::FrameScanInfo;
@@ -112,9 +110,6 @@ pub(super) struct CodestreamParser {
     /// Number of visible frames still to skip before returning to the caller.
     /// Set via `start_new_frame` when seeking to a non-keyframe.
     visible_frames_to_skip: usize,
-
-    #[cfg(test)]
-    pub frame_callback: Option<Box<FrameCallback>>,
 }
 
 impl CodestreamParser {
@@ -130,8 +125,6 @@ impl CodestreamParser {
             visible_frames_to_skip: 0,
             frame_scan_info: FrameScanInfo::new(),
             file_length: None,
-            #[cfg(test)]
-            frame_callback: None,
         }
     }
 
@@ -354,16 +347,6 @@ impl CodestreamParser {
                             Err(Error::OutOfBounds(_)) => Err(Error::SectionTooShort),
                             Err(err) => Err(err),
                         }?;
-                    }
-
-                    #[cfg(test)]
-                    {
-                        let num_frames = self.scanned_frames().len();
-                        if let Some(frame) = self.frame_info.frame() {
-                            self.frame_callback.as_mut().map_or(Ok(()), |cb| {
-                                cb(self.image_info.file_header(), frame, num_frames)
-                            })?;
-                        }
                     }
 
                     let is_last = self.frame_info.current_frame_header().unwrap().is_last;
