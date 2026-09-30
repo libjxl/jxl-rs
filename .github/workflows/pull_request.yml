@@ -139,6 +139,10 @@ jobs:
         with:
           prefix-key: ${{ matrix.os }}-test-${{ matrix.simd }}
 
+      - name: Require AVX-512 availability
+        if: ${{ matrix.simd == 'avx512' }}
+        run: cargo test --release -p jxl_simd --no-default-features --features avx512 --test required_avx512 -- --ignored --exact requires_avx512
+
       - name: Tests with SIMD feature ${{ matrix.simd }}
         if: ${{ matrix.simd != 'none' && !matrix.target }}
         run: cargo test --release --all --no-fail-fast --no-default-features --features ${{ matrix.simd }}
