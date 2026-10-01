@@ -292,7 +292,8 @@ impl<'a, 'b> PaletteStep<'a, 'b> {
                         let out_row = out_rect.row(y);
                         if clip {
                             for (out, &index) in out_row.iter_mut().zip(index_row.iter()) {
-                                *out = palette.get(index.clamp(0, palette_size as i16 - 1) as isize)
+                                *out = palette
+                                    .get((index as i32).clamp(0, palette_size - 1) as isize)
                                     as i16;
                             }
                         } else {
