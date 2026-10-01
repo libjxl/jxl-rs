@@ -150,9 +150,9 @@ impl DecoderState {
             lf_frames: std::array::from_fn(|_| None),
             render_spotcolors: options.render_spot_colors,
             #[cfg(test)]
-            use_simple_pipeline: false,
+            use_simple_pipeline: options.test_options.use_simple_pipeline,
             #[cfg(test)]
-            allow_16bit_modular_buffers: true,
+            allow_16bit_modular_buffers: !options.test_options.disable_16bit_modular_buffers,
             visible_frame_index: 0,
             nonvisible_frame_index: 0,
             high_precision: options.high_precision,
