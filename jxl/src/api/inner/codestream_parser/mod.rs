@@ -135,16 +135,6 @@ impl CodestreamParser {
         }
     }
 
-    #[cfg(test)]
-    pub(crate) fn set_use_simple_pipeline(&mut self, u: bool) {
-        self.frame_info.use_simple_pipeline = u;
-    }
-
-    #[cfg(test)]
-    pub(crate) fn disable_16bit_modular_buffers(&mut self) {
-        self.frame_info.disable_16bit_modular_buffers();
-    }
-
     pub(super) fn start_new_frame(
         &mut self,
         visible_frames_to_skip: usize,

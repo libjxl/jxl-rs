@@ -72,11 +72,6 @@ pub struct FrameInfo {
     hf_sections: Vec<Vec<Option<SectionBuffer>>>,
     // group indices that *might* have new renderable data.
     candidate_hf_sections: HashSet<usize>,
-
-    #[cfg(test)]
-    pub use_simple_pipeline: bool,
-    #[cfg(test)]
-    pub allow_16bit_modular_buffers: bool,
 }
 
 impl FrameInfo {
@@ -95,16 +90,7 @@ impl FrameInfo {
             hf_sections: vec![],
             candidate_hf_sections: HashSet::new(),
             pixels_dirty: false,
-            #[cfg(test)]
-            use_simple_pipeline: false,
-            #[cfg(test)]
-            allow_16bit_modular_buffers: true,
         }
-    }
-
-    #[cfg(test)]
-    pub fn disable_16bit_modular_buffers(&mut self) {
-        self.allow_16bit_modular_buffers = false;
     }
 
     pub fn clear(&mut self, clear_frame: bool) {
@@ -221,7 +207,6 @@ impl FrameInfo {
             // We finalize the previous frame here to allow progressive rendering
             // to work properly if a flush is requested while we parse a frame
             // header.
-            #[allow(unused_mut)]
             let mut decoder_state = self
                 .frame
                 .take()
@@ -232,11 +217,6 @@ impl FrameInfo {
                     DecoderState::new(file_header.clone(), decode_options, level5_limits)
                 });
             decoder_state.level5_limits = level5_limits;
-            #[cfg(test)]
-            {
-                decoder_state.use_simple_pipeline = self.use_simple_pipeline;
-                decoder_state.allow_16bit_modular_buffers = self.allow_16bit_modular_buffers;
-            }
             let mut frame =
                 Frame::from_header_and_toc(self.frame_header.take().unwrap(), toc, decoder_state)?;
 

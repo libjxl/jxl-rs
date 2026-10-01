@@ -225,16 +225,6 @@ impl JxlDecoder<WithImageInfo> {
     pub fn start_new_frame(&mut self, seek_target: VisibleFrameSeekTarget) {
         self.inner.start_new_frame(seek_target);
     }
-
-    #[cfg(test)]
-    pub(crate) fn set_use_simple_pipeline(&mut self, u: bool) {
-        self.inner.set_use_simple_pipeline(u);
-    }
-
-    #[cfg(test)]
-    pub(crate) fn disable_16bit_modular_buffers(&mut self) {
-        self.inner.disable_16bit_modular_buffers();
-    }
 }
 
 impl JxlDecoder<WithFrameInfo> {

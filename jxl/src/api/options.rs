@@ -5,6 +5,13 @@
 
 use crate::api::JxlAuxBoxType;
 
+#[cfg(test)]
+#[derive(Debug, Clone, Copy, Default)]
+pub struct TestOptions {
+    pub use_simple_pipeline: bool,
+    pub disable_16bit_modular_buffers: bool,
+}
+
 #[non_exhaustive]
 pub struct JxlDecoderOptions {
     /// If true (default), applies the orientation transform from the image
@@ -42,6 +49,8 @@ pub struct JxlDecoderOptions {
     /// When [`ProfileLevel::Main5`], enforces Level 5 complexity constraints defined by ISO/IEC 18181-1.
     /// When [`ProfileLevel::Main10`], allows Level 10 limits (which requires a container with a Level 10 `jxll` box).
     pub max_profile_level: ProfileLevel,
+    #[cfg(test)]
+    pub test_options: TestOptions,
 }
 
 /// Profile and level for JPEG XL complexity constraints (ISO/IEC 18181-1).
@@ -68,6 +77,8 @@ impl Default for JxlDecoderOptions {
             scan_frames_only: false,
             request_aux_boxes: Vec::new(),
             max_profile_level: ProfileLevel::Main5,
+            #[cfg(test)]
+            test_options: TestOptions::default(),
         }
     }
 }

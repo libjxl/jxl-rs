@@ -10,7 +10,7 @@ use std::rc::Rc;
 use crate::api::process::SequentialRunner;
 use crate::api::{
     JxlDecoder, JxlDecoderOptions, JxlParallelRunner, JxlPixelFormat, ProcessingResult,
-    VisibleFrameInfo, states,
+    TestOptions, VisibleFrameInfo, states,
 };
 use crate::error::{Error, Result};
 use crate::frame::Frame;
@@ -75,6 +75,10 @@ pub fn decode<'a, T: ImageDataType>(
     let options = JxlDecoderOptions {
         adjust_orientation: params.adjust_orientation,
         premultiply_output: params.premultiply_output,
+        test_options: TestOptions {
+            use_simple_pipeline: params.use_simple_pipeline,
+            disable_16bit_modular_buffers: params.disable_16bit_modular_buffers,
+        },
         ..Default::default()
     };
     let mut initialized_decoder = JxlDecoder::<states::Initialized>::new(options);
@@ -166,10 +170,6 @@ pub fn decode<'a, T: ImageDataType>(
         initialized_decoder,
         initialized_decoder.process(&mut chunk_input, Some(parallel_runner))
     );
-    decoder_with_image_info.set_use_simple_pipeline(params.use_simple_pipeline);
-    if params.disable_16bit_modular_buffers {
-        decoder_with_image_info.disable_16bit_modular_buffers();
-    }
 
     // Get basic info
     let basic_info = decoder_with_image_info.basic_info().clone();
