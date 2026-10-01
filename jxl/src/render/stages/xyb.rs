@@ -558,7 +558,6 @@ mod test {
         let opsin = OpsinInverseMatrix::default(&Empty {});
         arbtest::arbtest(|u| {
             let xsize = u.arbitrary_len::<usize>()?;
-            let intensity_target = u.arbitrary::<u8>()? as f32 * 2.0 + 1.0;
             let mut row_x = vec![0.0; round_up_size_to_cache_line::<f32>(xsize)];
             let mut row_y = vec![0.0; round_up_size_to_cache_line::<f32>(xsize)];
             let mut row_b = vec![0.0; round_up_size_to_cache_line::<f32>(xsize)];
@@ -573,8 +572,11 @@ mod test {
             let mut scalar_y = row_y.clone();
             let mut scalar_b = row_b.clone();
 
+            // Real-world display luminances: 20 nits (dim mobile in darkness),
+            // 255 nits (standard SDR), up to 10,000 nits (BT.2100 peak HDR).
+            let intensity_target = u.int_in_range(20..=10000)? as f32;
             let params = XybParams::new(&opsin, intensity_target);
-            let tf = TransferFunction::Srgb;
+            let tf = TransferFunction::Gamma(1.0);
 
             xyb_color_convert_process(d, &params, &tf, xsize, &mut row_x, &mut row_y, &mut row_b);
             xyb_color_convert_process(
@@ -597,7 +599,7 @@ mod test {
                     let max = simd.abs().max(scalar.abs());
                     let rel = abs / max;
                     assert!(
-                        abs < 2e-3 || rel < 2e-3,
+                        abs < 1e-4 || rel < 1e-3,
                         "simd {simd}, scalar {scalar}, abs {abs:?} rel {rel:?}",
                     );
                 }
