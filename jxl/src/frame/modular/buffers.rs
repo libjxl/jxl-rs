@@ -285,6 +285,7 @@ impl ModularBuffer {
             return ModularChannel::try_clone(self.data.try_read().unwrap().as_ref().unwrap());
         }
         let mut ret = None;
+        #[allow(deprecated)]
         let _ = self.remaining_uses.fetch_update(
             Ordering::Release,
             Ordering::Acquire,
@@ -322,6 +323,7 @@ impl ModularBuffer {
         if !can_consume || DISABLE_MODULAR_BUFFER_DEALLOCATION_FOR_DEBUG {
             return;
         }
+        #[allow(deprecated)]
         let _ = self.remaining_uses.fetch_update(
             Ordering::Release,
             Ordering::Acquire,

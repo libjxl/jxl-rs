@@ -386,13 +386,13 @@ pub struct FrameHeader {
     && (frame_type == kRegularFrame || frame_type == kSkipProgressive) */
     #[default(BlendingInfo::default(&field_nonserialized))]
     #[condition(frame_type == FrameType::RegularFrame || frame_type == FrameType::SkipProgressive)]
-    #[nonserialized(num_extra_channels : nonserialized.num_extra_channels, full_frame : full_frame)]
+    #[nonserialized(num_extra_channels : nonserialized.num_extra_channels, full_frame)]
     pub blending_info: BlendingInfo,
 
     #[size_coder(explicit(nonserialized.num_extra_channels))]
     #[condition(frame_type == FrameType::RegularFrame || frame_type == FrameType::SkipProgressive)]
     #[default_element(BlendingInfo::default(&field_nonserialized))]
-    #[nonserialized(num_extra_channels : nonserialized.num_extra_channels, full_frame: full_frame)]
+    #[nonserialized(num_extra_channels : nonserialized.num_extra_channels, full_frame)]
     pub ec_blending_info: Vec<BlendingInfo>,
 
     #[coder(u2S(0, 1, Bits(8), Bits(32)))]
@@ -434,7 +434,7 @@ pub struct FrameHeader {
     pub name: String,
 
     #[default(RestorationFilter::default(&field_nonserialized))]
-    #[nonserialized(encoding : encoding)]
+    #[nonserialized(encoding)]
     pub restoration_filter: RestorationFilter,
 
     #[default(Extensions::default())]
