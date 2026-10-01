@@ -188,7 +188,7 @@ pub struct ColorEncoding {
     pub custom_primaries: [CustomXY; 3],
     #[condition(!want_icc)]
     #[default(CustomTransferFunction::default(&field_nonserialized))]
-    #[nonserialized(color_space: color_space)]
+    #[nonserialized(color_space)]
     pub tf: CustomTransferFunction,
     #[condition(!want_icc)]
     #[default(RenderingIntent::Relative)]
