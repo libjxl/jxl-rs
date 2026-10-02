@@ -3,7 +3,7 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-use crate::api::inner::CodestreamParser;
+use crate::api::codestream_parser::CodestreamParser;
 use crate::api::{BoxParserCheckpoint, VisibleFrameInfo, VisibleFrameSeekTarget};
 use crate::frame::DecoderState;
 use crate::headers::Animation;

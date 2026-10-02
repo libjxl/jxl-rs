@@ -7,8 +7,8 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use criterion::{BenchmarkId, Criterion, SamplingMode, criterion_group, criterion_main};
-use jxl::api::JxlDecoderOptions;
-use jxl_cli::dec::{OutputDataType, decode_frames, decode_header};
+use jxl::api::{Event, JxlDecoder, JxlDecoderOptions};
+use jxl_cli::dec::{OutputDataType, decode_frames};
 
 fn decode_benches(c: &mut Criterion) {
     let mut group = c.benchmark_group("decode");
@@ -44,9 +44,15 @@ fn decode_benches(c: &mut Criterion) {
     for path in paths {
         let bytes = fs::read(&path).unwrap();
         let mut header_input = bytes.as_slice();
-        let header_decoder =
-            decode_header(&mut header_input, None, JxlDecoderOptions::default()).unwrap();
-        let pixel_count = header_decoder.basic_info().size.0 * header_decoder.basic_info().size.1;
+        let mut header_decoder = JxlDecoder::new(JxlDecoderOptions::default());
+        assert_eq!(
+            header_decoder
+                .process(&mut header_input, None, None)
+                .unwrap(),
+            Event::BasicInfo,
+        );
+        let basic_info = header_decoder.basic_info().unwrap();
+        let pixel_count = basic_info.size.0 * basic_info.size.1;
         group.throughput(criterion::Throughput::Elements(pixel_count as u64));
         group.bench_with_input(
             BenchmarkId::from_parameter(path.to_string_lossy()),

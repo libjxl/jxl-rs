@@ -3,8 +3,7 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-use crate::api::inner::CodestreamParser;
-use crate::api::inner::codestream_parser::check_size_limit;
+use crate::api::codestream_parser::{CodestreamParser, check_size_limit};
 use crate::api::{
     Endianness, JxlBasicInfo, JxlBitDepth, JxlColorEncoding, JxlColorProfile, JxlColorType,
     JxlDataFormat, JxlDecoderOptions, JxlExtraChannel, JxlPixelFormat, ToneMapping,
@@ -171,7 +170,7 @@ impl ImageInfo {
 }
 
 impl CodestreamParser {
-    pub(in super::super) fn update_default_output_options(&mut self) {
+    pub fn update_default_output_options(&mut self) {
         assert!(self.image_info.is_complete());
 
         // Only set default pixel_format if not already configured

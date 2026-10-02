@@ -2537,22 +2537,22 @@ mod test {
     /// Integration test: decode actual HDR PQ test file and verify ICC profile
     #[test]
     fn test_hdr_pq_file_icc_profile() {
-        use crate::api::{JxlDecoder, JxlDecoderOptions, ProcessingResult};
+        use crate::api::{Event, JxlDecoder, JxlDecoderOptions};
 
         let data = std::fs::read("resources/test/hdr_pq_test.jxl")
             .expect("Failed to read hdr_pq_test.jxl - run from jxl crate directory");
 
         let options = JxlDecoderOptions::default();
-        let decoder = JxlDecoder::new(options);
+        let mut decoder = JxlDecoder::new(options);
         let mut input: &[u8] = &data;
 
-        let decoder_info = match decoder.process(&mut input, None).unwrap() {
-            ProcessingResult::Complete { result } => result,
-            _ => panic!("Expected complete decoding"),
-        };
+        assert_eq!(
+            decoder.process(&mut input, None, None).unwrap(),
+            Event::BasicInfo
+        );
 
         // Get the color profile
-        let color_profile = decoder_info.output_color_profile();
+        let color_profile = decoder.output_color_profile().unwrap();
 
         // For HDR PQ content, we should be able to generate an ICC profile
         let icc = color_profile.try_as_icc();
@@ -2579,22 +2579,22 @@ mod test {
     /// Integration test: decode actual HDR HLG test file and verify ICC profile
     #[test]
     fn test_hdr_hlg_file_icc_profile() {
-        use crate::api::{JxlDecoder, JxlDecoderOptions, ProcessingResult};
+        use crate::api::{Event, JxlDecoder, JxlDecoderOptions};
 
         let data = std::fs::read("resources/test/hdr_hlg_test.jxl")
             .expect("Failed to read hdr_hlg_test.jxl - run from jxl crate directory");
 
         let options = JxlDecoderOptions::default();
-        let decoder = JxlDecoder::new(options);
+        let mut decoder = JxlDecoder::new(options);
         let mut input: &[u8] = &data;
 
-        let decoder_info = match decoder.process(&mut input, None).unwrap() {
-            ProcessingResult::Complete { result } => result,
-            _ => panic!("Expected complete decoding"),
-        };
+        assert_eq!(
+            decoder.process(&mut input, None, None).unwrap(),
+            Event::BasicInfo
+        );
 
         // Get the color profile
-        let color_profile = decoder_info.output_color_profile();
+        let color_profile = decoder.output_color_profile().unwrap();
 
         // For HDR HLG content, we should be able to generate an ICC profile
         let icc = color_profile.try_as_icc();

@@ -6,14 +6,13 @@
 use std::collections::{HashSet, VecDeque};
 use std::io::IoSliceMut;
 
-use crate::api::inner::CodestreamParser;
-use crate::api::inner::box_parser::CodestreamInput;
-use crate::api::inner::codestream_parser::{
-    ProcessMode, check_size_limit, validate_output_buffers,
+use crate::api::box_parser::CodestreamInput;
+use crate::api::codestream_parser::{
+    CodestreamParser, ProcessMode, check_size_limit, validate_output_buffers,
 };
-use crate::api::inner::process::SmallBuffer;
 use crate::api::{
     JxlColorProfile, JxlDecoderOptions, JxlOutputBuffer, JxlParallelRunner, JxlPixelFormat,
+    SmallBuffer,
 };
 use crate::bit_reader::BitReader;
 use crate::error::{Error, Result};
@@ -464,7 +463,7 @@ impl FrameInfo {
     // Err(_) if there was an error.
     pub fn process_sections(
         &mut self,
-        output_buffers: &mut Option<&mut [JxlOutputBuffer<'_>]>,
+        mut output_buffers: Option<&mut [JxlOutputBuffer<'_>]>,
         output_profile: &JxlColorProfile,
         pixel_format: &JxlPixelFormat,
         parallel_runner: &mut dyn JxlParallelRunner,
@@ -486,7 +485,7 @@ impl FrameInfo {
                 frame,
                 &buf.data,
                 true,
-                output_buffers,
+                &mut output_buffers,
                 output_profile,
                 pixel_format,
                 false,
@@ -594,7 +593,7 @@ impl FrameInfo {
         }
 
         self.pixels_dirty |= frame.decode_and_render_hf_groups(
-            output_buffers,
+            &mut output_buffers,
             pixel_format,
             group_readers,
             false,

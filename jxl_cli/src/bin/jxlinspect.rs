@@ -10,33 +10,30 @@ use std::path::Path;
 use clap::{Arg, Command};
 use color_eyre::eyre::{Result, eyre};
 use jxl::api::{
-    ExtraChannel, JxlBitDepth, JxlColorEncoding, JxlColorProfile, JxlDecoder, JxlDecoderOptions,
-    JxlOutputBuffer, ProcessingResult,
+    Event, ExtraChannel, JxlBitDepth, JxlColorEncoding, JxlColorProfile, JxlDecoder,
+    JxlDecoderOptions,
 };
-use jxl::image::{Image, Rect};
 
 fn parse_jxl(path: &Path) -> Result<()> {
     let file = File::open(path)?;
     let mut reader = BufReader::new(file);
 
-    let options = JxlDecoderOptions::default();
-    let initialized_decoder = JxlDecoder::<jxl::api::states::Initialized>::new(options);
+    let mut options = JxlDecoderOptions::default();
+    options.scan_frames_only = true;
+    let mut decoder = JxlDecoder::new(options);
 
-    let mut decoder_with_image_info = match initialized_decoder.process(&mut reader, None)? {
-        ProcessingResult::Complete { result } => result,
-        ProcessingResult::NeedsMoreInput { .. } => {
-            return Err(eyre!("Source file {:?} truncated", path));
-        }
-    };
+    if decoder.process(&mut reader, None, None)? != Event::BasicInfo {
+        return Err(eyre!("Source file {:?} truncated", path));
+    }
 
-    let info = decoder_with_image_info.basic_info().clone();
+    let info = decoder.basic_info().unwrap().clone();
 
     let how_lossy = if info.uses_original_profile {
         "(possibly) lossless"
     } else {
         "lossy"
     };
-    let color_space = format!("{}", decoder_with_image_info.embedded_color_profile());
+    let color_space = format!("{}", decoder.embedded_color_profile().unwrap());
     let alpha_info = if info
         .extra_channels
         .iter()
@@ -69,7 +66,7 @@ fn parse_jxl(path: &Path) -> Result<()> {
         print!(", float ({} exponent bits)", ebps);
     }
     println!();
-    match decoder_with_image_info.output_color_profile() {
+    match decoder.output_color_profile().unwrap() {
         JxlColorProfile::Icc(icc) => match moxcms::ColorProfile::new_from_slice(icc.as_slice()) {
             Err(_) => println!("with unparseable ICC profile"),
             Ok(profile) => {
@@ -128,56 +125,22 @@ fn parse_jxl(path: &Path) -> Result<()> {
     }
 
     if let Some(animation) = info.animation {
-        let pixel_format = decoder_with_image_info.current_pixel_format().clone();
-        let num_channels: usize = pixel_format.color_type.samples_per_pixel();
         let mut num_frames = 0;
         let mut total_seconds = 0.0;
 
         loop {
-            let decoder_with_frame_info =
-                match decoder_with_image_info.process(&mut reader, None)? {
-                    ProcessingResult::Complete { result } => result,
-                    ProcessingResult::NeedsMoreInput { .. } => {
-                        return Err(eyre!("Source file {:?} truncated", path));
-                    }
-                };
-
-            let duration = decoder_with_frame_info.frame_header().duration.unwrap();
-            total_seconds += duration;
-            println!("Frame {}, duration {}ms", num_frames, duration);
-
-            let mut outputs = vec![Image::<f32>::new((
-                info.size.0 * num_channels,
-                info.size.1,
-            ))?];
-
-            for _ in 0..info.extra_channels.len() {
-                outputs.push(Image::<f32>::new(info.size)?);
-            }
-
-            let mut output_bufs: Vec<JxlOutputBuffer<'_>> = outputs
-                .iter_mut()
-                .map(|x| {
-                    let rect = Rect {
-                        size: x.size(),
-                        origin: (0, 0),
-                    };
-                    JxlOutputBuffer::from_image_rect_mut(x.get_rect_mut(rect).into_raw())
-                })
-                .collect();
-
-            decoder_with_image_info =
-                match decoder_with_frame_info.process(&mut reader, &mut output_bufs, None)? {
-                    ProcessingResult::Complete { result } => result,
-                    ProcessingResult::NeedsMoreInput { .. } => {
-                        return Err(eyre!("Source file {:?} truncated", path));
-                    }
-                };
-
-            num_frames += 1;
-
-            if !decoder_with_image_info.has_more_frames() {
-                break;
+            match decoder.process(&mut reader, None, None)? {
+                Event::FrameHeader => {
+                    let duration = decoder.frame_header().unwrap().duration.unwrap();
+                    total_seconds += duration;
+                    println!("Frame {}, duration {}ms", num_frames, duration);
+                    num_frames += 1;
+                }
+                Event::FrameComplete { .. } => {}
+                Event::Complete => break,
+                _ => {
+                    return Err(eyre!("Source file {:?} truncated", path));
+                }
             }
         }
 
