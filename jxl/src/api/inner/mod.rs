@@ -145,6 +145,7 @@ impl JxlDecoderInner {
         self.codestream_parser.start_new_frame(
             seek_target.visible_frames_to_skip,
             seek_target.box_parser_checkpoint.consumed_codestream,
+            seek_target.decode_start_frame_counters,
         );
     }
 
