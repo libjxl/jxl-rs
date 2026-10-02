@@ -5,9 +5,7 @@
 
 use std::path::Path;
 
-use crate::tests::decode::{
-    DecodeParams, compare_frames_close, decode_internal, has_decoded_pixels,
-};
+use crate::tests::decode::{DecodeParams, compare_frames_close, decode, has_decoded_pixels};
 #[cfg(not(any(target_family = "wasm", target_arch = "wasm32")))]
 use crate::tests::parallel_runner::TestParallelRunner;
 
@@ -22,30 +20,26 @@ pub fn run(path: &Path) {
         let prefix_data = &file[..prefix_len];
 
         // Sequential one-shot decode of the prefix
-        let oneshot_frames = match decode_internal(
+        let oneshot_frames = decode(
             prefix_data,
             DecodeParams {
                 allow_partial: true,
                 ..Default::default()
             },
-        ) {
-            Ok((_, frames)) => frames,
-            Err(_) => vec![],
-        };
+        )
+        .unwrap_or_default();
 
         // Sequential chunked decode of the prefix
         let chunk_size = u.int_in_range(1..=4096)?;
-        let chunked_seq_frames = match decode_internal(
+        let chunked_seq_frames = decode(
             prefix_data,
             DecodeParams {
                 chunk_size,
                 allow_partial: true,
                 ..Default::default()
             },
-        ) {
-            Ok((_, frames)) => frames,
-            Err(_) => vec![],
-        };
+        )
+        .unwrap_or_default();
 
         // Parallel chunked decode of the prefix
         #[cfg(not(any(target_family = "wasm", target_arch = "wasm32")))]
@@ -53,7 +47,7 @@ pub fn run(path: &Path) {
             let mut runner = TestParallelRunner {
                 max_threads: u.int_in_range(2..=4)?,
             };
-            match decode_internal(
+            decode(
                 prefix_data,
                 DecodeParams {
                     chunk_size,
@@ -61,10 +55,8 @@ pub fn run(path: &Path) {
                     allow_partial: true,
                     ..Default::default()
                 },
-            ) {
-                Ok((_, frames)) => frames,
-                Err(_) => vec![],
-            }
+            )
+            .unwrap_or_default()
         };
 
         let check_match = |candidate_frames: &[Vec<crate::image::Image<f32>>],

@@ -10,10 +10,8 @@ use crate::api::{
     JxlTransferFunction, ProcessingResult, states,
 };
 use crate::error::Error;
-use crate::image::{Image, JxlOutputBuffer, Rect};
-use crate::tests::decode::{
-    DecodeParams, compare_frames, decode, decode_internal, scan_frames_with_decoder,
-};
+use crate::image::{Image, ImageDataType, JxlOutputBuffer, Rect};
+use crate::tests::decode::{DecodeParams, compare_frames, decode, scan_frames};
 
 // OOO jxlp boxes require any frame to start in a box that has all the logically-before
 // boxes physically before it, and all the logically-after boxes physically after it.
@@ -21,7 +19,7 @@ use crate::tests::decode::{
 #[test]
 fn decode_ooo_jxlp_invalid_animated_container() {
     let data = std::fs::read("resources/test/invalid_animated_ooo_jxlp.jxl").unwrap();
-    let res = decode(&data);
+    let res = decode::<f32>(&data, Default::default());
     assert!(
         matches!(res, Err(Error::InvalidBox)),
         "expected error due to frame start in non-valid checkpoint box"
@@ -124,66 +122,20 @@ fn test_default_output_tf_by_pixel_format() {
 #[test]
 fn test_fill_opaque_alpha_both_pipelines() {
     let file = std::fs::read("resources/test/basic.jxl").unwrap();
-    let rgba_format = JxlPixelFormat {
-        color_type: JxlColorType::Rgba,
-        color_data_format: Some(JxlDataFormat::f32()),
-        extra_channel_format: vec![],
-    };
 
     for use_simple in [true, false] {
-        let options = JxlDecoderOptions::default();
-        let decoder = JxlDecoder::<states::Initialized>::new(options);
-        let mut input = file.as_slice();
-
-        macro_rules! advance_decoder {
-            ($decoder:expr) => {
-                loop {
-                    match $decoder.process(&mut input, None).unwrap() {
-                        ProcessingResult::Complete { result } => break result,
-                        ProcessingResult::NeedsMoreInput { fallback, .. } => {
-                            if input.is_empty() {
-                                panic!("Unexpected end of input");
-                            }
-                            $decoder = fallback;
-                        }
-                    }
-                }
-            };
-            ($decoder:expr, $buffers:expr) => {
-                loop {
-                    match $decoder.process(&mut input, $buffers, None).unwrap() {
-                        ProcessingResult::Complete { result } => break result,
-                        ProcessingResult::NeedsMoreInput { fallback, .. } => {
-                            if input.is_empty() {
-                                panic!("Unexpected end of input");
-                            }
-                            $decoder = fallback;
-                        }
-                    }
-                }
-            };
-        }
-
-        let mut decoder = decoder;
-        let mut decoder = advance_decoder!(decoder);
-        decoder.set_use_simple_pipeline(use_simple);
-        decoder.set_pixel_format(rgba_format.clone()).unwrap();
-
-        let basic_info = decoder.basic_info().clone();
-        let (width, height) = basic_info.size;
-        let mut decoder = advance_decoder!(decoder);
-
-        let mut color_buffer = Image::<f32>::new((width * 4, height)).unwrap();
-        let mut buffers: Vec<_> = vec![JxlOutputBuffer::from_image_rect_mut(
-            color_buffer
-                .get_rect_mut(Rect {
-                    origin: (0, 0),
-                    size: (width * 4, height),
-                })
-                .into_raw(),
-        )];
-
-        let _decoder = advance_decoder!(decoder, &mut buffers);
+        let frames = decode::<f32>(
+            &file,
+            DecodeParams {
+                pixel_format: Some(JxlPixelFormat::rgba_f32(0)),
+                use_simple_pipeline: use_simple,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let color_buffer = &frames[0][0];
+        let (xs, height) = color_buffer.size();
+        let width = xs / 4;
 
         for y in 0..height {
             let row = color_buffer.row(y);
@@ -206,19 +158,30 @@ fn test_premultiply_output_straight_alpha() {
     let file =
         std::fs::read("resources/test/conformance_test_images/alpha_nonpremultiplied.jxl").unwrap();
 
-    let rgba_format = JxlPixelFormat {
-        color_type: JxlColorType::Rgba,
-        color_data_format: Some(JxlDataFormat::f32()),
-        extra_channel_format: vec![None],
-    };
-
     for use_simple in [true, false] {
-        let (straight_buffer, width, height) =
-            decode_with_format::<f32>(&file, &rgba_format, use_simple, false).unwrap();
-        let straight_buffer = &straight_buffer[0];
-        let (premul_buffer, _, _) =
-            decode_with_format::<f32>(&file, &rgba_format, use_simple, true).unwrap();
-        let premul_buffer = &premul_buffer[0];
+        let straight_frames = decode::<f32>(
+            &file,
+            DecodeParams {
+                pixel_format: Some(JxlPixelFormat::rgba_f32(1)),
+                use_simple_pipeline: use_simple,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let straight_buffer = &straight_frames[0][0];
+        let premul_frames = decode::<f32>(
+            &file,
+            DecodeParams {
+                pixel_format: Some(JxlPixelFormat::rgba_f32(1)),
+                use_simple_pipeline: use_simple,
+                premultiply_output: true,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let premul_buffer = &premul_frames[0][0];
+        let (xs, height) = straight_buffer.size();
+        let width = xs / 4;
 
         let mut found_semitransparent = false;
         for y in 0..height {
@@ -296,9 +259,18 @@ fn test_premultiply_output_straight_alpha() {
 #[test]
 fn test_premultiply_output_grayscale_as_rgba() {
     let file = std::fs::read("resources/test/gray_alpha_lossless.jxl").unwrap();
-    let (buffers, width, height) =
-        decode_with_format::<f32>(&file, &JxlPixelFormat::rgba_f32(1), false, true).unwrap();
-    let rgba = &buffers[0];
+    let frames = decode::<f32>(
+        &file,
+        DecodeParams {
+            pixel_format: Some(JxlPixelFormat::rgba_f32(1)),
+            premultiply_output: true,
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    let rgba = &frames[0][0];
+    let (xs, height) = rgba.size();
+    let width = xs / 4;
 
     for y in 0..height {
         let row = rgba.row(y);
@@ -316,19 +288,30 @@ fn test_premultiply_output_already_premultiplied() {
     let file =
         std::fs::read("resources/test/conformance_test_images/alpha_premultiplied.jxl").unwrap();
 
-    let rgba_format = JxlPixelFormat {
-        color_type: JxlColorType::Rgba,
-        color_data_format: Some(JxlDataFormat::f32()),
-        extra_channel_format: vec![None],
-    };
-
     for use_simple in [true, false] {
-        let (without_flag_buffer, width, height) =
-            decode_with_format::<f32>(&file, &rgba_format, use_simple, false).unwrap();
-        let without_flag_buffer = &without_flag_buffer[0];
-        let (with_flag_buffer, _, _) =
-            decode_with_format::<f32>(&file, &rgba_format, use_simple, true).unwrap();
-        let with_flag_buffer = &with_flag_buffer[0];
+        let without_flag_frames = decode::<f32>(
+            &file,
+            DecodeParams {
+                pixel_format: Some(JxlPixelFormat::rgba_f32(1)),
+                use_simple_pipeline: use_simple,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let without_flag_buffer = &without_flag_frames[0][0];
+        let with_flag_frames = decode::<f32>(
+            &file,
+            DecodeParams {
+                pixel_format: Some(JxlPixelFormat::rgba_f32(1)),
+                use_simple_pipeline: use_simple,
+                premultiply_output: true,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let with_flag_buffer = &with_flag_frames[0][0];
+        let (xs, height) = without_flag_buffer.size();
+        let width = xs / 4;
 
         for y in 0..height {
             let without_row = without_flag_buffer.row(y);
@@ -517,171 +500,108 @@ fn test_skip_frame_then_decode_next() {
     let _ = decoder.has_more_frames();
 }
 
-/// Test that u8 output matches f32 output within quantization tolerance.
-#[test]
-fn test_output_format_u8_matches_f32() {
+fn check_output_format_matches_f32<T: ImageDataType>() {
+    use crate::api::Endianness;
+    use crate::image::DataTypeTag;
+
+    let (data_format, scale, clamp, tolerance) = match T::DATA_TYPE_ID {
+        DataTypeTag::U8 => (JxlDataFormat::U8 { bit_depth: 8 }, 1.0 / 255.0, true, 0.004),
+        DataTypeTag::U16 => (
+            JxlDataFormat::U16 {
+                endianness: Endianness::native(),
+                bit_depth: 16,
+            },
+            1.0 / 65535.0,
+            true,
+            0.0001,
+        ),
+        DataTypeTag::F16 => (
+            JxlDataFormat::F16 {
+                endianness: Endianness::native(),
+            },
+            1.0,
+            false,
+            0.002,
+        ),
+        _ => unreachable!(),
+    };
+
     let file = std::fs::read("resources/test/conformance_test_images/bicycles.jxl").unwrap();
 
-    for (color_type, num_samples) in [(JxlColorType::Rgb, 3), (JxlColorType::Bgra, 4)] {
+    for color_type in [JxlColorType::Rgb, JxlColorType::Bgra] {
         let f32_format = JxlPixelFormat {
             color_type,
             color_data_format: Some(JxlDataFormat::f32()),
             extra_channel_format: vec![],
         };
-        let u8_format = JxlPixelFormat {
+        let format = JxlPixelFormat {
             color_type,
-            color_data_format: Some(JxlDataFormat::U8 { bit_depth: 8 }),
+            color_data_format: Some(data_format),
             extra_channel_format: vec![],
         };
 
-        for use_simple in [true, false] {
-            let (f32_buffer, width, height) =
-                decode_with_format::<f32>(&file, &f32_format, use_simple, false).unwrap();
-            let f32_buffer = &f32_buffer[0];
-            let (u8_buffer, _, _) =
-                decode_with_format::<u8>(&file, &u8_format, use_simple, false).unwrap();
-            let u8_buffer = &u8_buffer[0];
+        let f32_frames = decode::<f32>(
+            &file,
+            DecodeParams {
+                pixel_format: Some(f32_format),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let f32_buffer = &f32_frames[0][0];
+        let (xs, height) = f32_buffer.size();
 
-            let tolerance = 0.004;
-            let mut max_error: f32 = 0.0;
+        for use_simple in [true, false] {
+            let frames = decode::<T>(
+                &file,
+                DecodeParams {
+                    pixel_format: Some(format.clone()),
+                    use_simple_pipeline: use_simple,
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+            let buffer = &frames[0][0];
 
             for y in 0..height {
                 let f32_row = f32_buffer.row(y);
-                let u8_row = u8_buffer.row(y);
-                for x in 0..(width * num_samples) {
-                    let f32_val = f32_row[x].clamp(0.0, 1.0);
-                    let u8_val = u8_row[x] as f32 / 255.0;
-                    let error = (f32_val - u8_val).abs();
-                    max_error = max_error.max(error);
+                let row = buffer.row(y);
+                for x in 0..xs {
+                    let f32_val = if clamp {
+                        f32_row[x].clamp(0.0, 1.0)
+                    } else {
+                        f32_row[x]
+                    };
+                    let val = (row[x].to_f64() * scale) as f32;
+                    let error = (f32_val - val).abs();
                     assert!(
                         error < tolerance,
-                        "{:?} u8 mismatch at ({},{}): f32={}, u8={} (scaled={}), error={} (use_simple={})",
-                        color_type,
-                        x,
-                        y,
-                        f32_val,
-                        u8_row[x],
-                        u8_val,
-                        error,
-                        use_simple
+                        "{color_type:?} {:?} mismatch at ({x},{y}): f32={f32_val}, got={:?} (scaled={val}), error={error} (use_simple={use_simple})",
+                        T::DATA_TYPE_ID,
+                        row[x],
                     );
                 }
             }
         }
     }
+}
+
+/// Test that u8 output matches f32 output within quantization tolerance.
+#[test]
+fn test_output_format_u8_matches_f32() {
+    check_output_format_matches_f32::<u8>();
 }
 
 /// Test that u16 output matches f32 output within quantization tolerance.
 #[test]
 fn test_output_format_u16_matches_f32() {
-    use crate::api::Endianness;
-
-    let file = std::fs::read("resources/test/conformance_test_images/bicycles.jxl").unwrap();
-
-    for (color_type, num_samples) in [(JxlColorType::Rgb, 3), (JxlColorType::Bgra, 4)] {
-        let f32_format = JxlPixelFormat {
-            color_type,
-            color_data_format: Some(JxlDataFormat::f32()),
-            extra_channel_format: vec![],
-        };
-        let u16_format = JxlPixelFormat {
-            color_type,
-            color_data_format: Some(JxlDataFormat::U16 {
-                endianness: Endianness::native(),
-                bit_depth: 16,
-            }),
-            extra_channel_format: vec![],
-        };
-
-        for use_simple in [true, false] {
-            let (f32_buffer, width, height) =
-                decode_with_format::<f32>(&file, &f32_format, use_simple, false).unwrap();
-            let f32_buffer = &f32_buffer[0];
-            let (u16_buffer, _, _) =
-                decode_with_format::<u16>(&file, &u16_format, use_simple, false).unwrap();
-            let u16_buffer = &u16_buffer[0];
-
-            let tolerance = 0.0001;
-
-            for y in 0..height {
-                let f32_row = f32_buffer.row(y);
-                let u16_row = u16_buffer.row(y);
-                for x in 0..(width * num_samples) {
-                    let f32_val = f32_row[x].clamp(0.0, 1.0);
-                    let u16_val = u16_row[x] as f32 / 65535.0;
-                    let error = (f32_val - u16_val).abs();
-                    assert!(
-                        error < tolerance,
-                        "{:?} u16 mismatch at ({},{}): f32={}, u16={} (scaled={}), error={} (use_simple={})",
-                        color_type,
-                        x,
-                        y,
-                        f32_val,
-                        u16_row[x],
-                        u16_val,
-                        error,
-                        use_simple
-                    );
-                }
-            }
-        }
-    }
+    check_output_format_matches_f32::<u16>();
 }
 
 /// Test that f16 output matches f32 output within f16 precision tolerance.
 #[test]
 fn test_output_format_f16_matches_f32() {
-    use crate::api::Endianness;
-    use crate::util::f16;
-
-    let file = std::fs::read("resources/test/conformance_test_images/bicycles.jxl").unwrap();
-
-    for (color_type, num_samples) in [(JxlColorType::Rgb, 3), (JxlColorType::Bgra, 4)] {
-        let f32_format = JxlPixelFormat {
-            color_type,
-            color_data_format: Some(JxlDataFormat::f32()),
-            extra_channel_format: vec![],
-        };
-        let f16_format = JxlPixelFormat {
-            color_type,
-            color_data_format: Some(JxlDataFormat::F16 {
-                endianness: Endianness::native(),
-            }),
-            extra_channel_format: vec![],
-        };
-
-        for use_simple in [true, false] {
-            let (f32_buffer, width, height) =
-                decode_with_format::<f32>(&file, &f32_format, use_simple, false).unwrap();
-            let f32_buffer = &f32_buffer[0];
-            let (f16_buffer, _, _) =
-                decode_with_format::<f16>(&file, &f16_format, use_simple, false).unwrap();
-            let f16_buffer = &f16_buffer[0];
-
-            let tolerance = 0.002;
-
-            for y in 0..height {
-                let f32_row = f32_buffer.row(y);
-                let f16_row = f16_buffer.row(y);
-                for x in 0..(width * num_samples) {
-                    let f32_val = f32_row[x];
-                    let f16_val = f16_row[x].to_f32();
-                    let error = (f32_val - f16_val).abs();
-                    assert!(
-                        error < tolerance,
-                        "{:?} f16 mismatch at ({},{}): f32={}, f16={}, error={} (use_simple={})",
-                        color_type,
-                        x,
-                        y,
-                        f32_val,
-                        f16_val,
-                        error,
-                        use_simple
-                    );
-                }
-            }
-        }
-    }
+    check_output_format_matches_f32::<crate::util::f16>();
 }
 
 /// CMYK interleaved output matches the RGB color channels for C, M and Y, and
@@ -700,13 +620,28 @@ fn test_cmyk_pixel_format() {
     };
 
     for use_simple in [true, false] {
-        let (cmyk_buffers, width, height) =
-            decode_with_format::<u8>(&file, &cmyk_format, use_simple, false).unwrap();
-        let (reference_buffers, _, _) =
-            decode_with_format::<u8>(&file, &reference_format, use_simple, false).unwrap();
-        let cmyk = &cmyk_buffers[0];
-        let rgb = &reference_buffers[0];
-        let black = &reference_buffers[1];
+        let cmyk_frames = decode::<u8>(
+            &file,
+            DecodeParams {
+                pixel_format: Some(cmyk_format.clone()),
+                use_simple_pipeline: use_simple,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let reference_frames = decode::<u8>(
+            &file,
+            DecodeParams {
+                pixel_format: Some(reference_format.clone()),
+                use_simple_pipeline: use_simple,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let cmyk = &cmyk_frames[0][0];
+        let rgb = &reference_frames[0][0];
+        let black = &reference_frames[0][1];
+        let (width, height) = black.size();
 
         for y in 0..height {
             let cmyk_row = cmyk.row(y);
@@ -734,106 +669,17 @@ fn test_cmyk_pixel_format() {
 #[test]
 fn test_cmyk_pixel_format_requires_cmyk_image() {
     let file = std::fs::read("resources/test/basic.jxl").unwrap();
-    let result = decode_with_format::<u8>(&file, &JxlPixelFormat::cmyk8(0), false, false);
+    let result = decode::<f32>(
+        &file,
+        DecodeParams {
+            pixel_format: Some(JxlPixelFormat::cmyk8(0)),
+            ..Default::default()
+        },
+    );
     assert!(
         matches!(result, Err(Error::NotCmyk)),
         "expected NotCmyk, got {result:?}"
     );
-}
-
-/// Helper function to decode an image with a specific format, with buffers
-/// for the color channels (if requested) plus every requested extra channel
-/// plane. Returns the decoded buffers in process() buffer order.
-fn decode_with_format<T: crate::image::ImageDataType>(
-    file: &[u8],
-    pixel_format: &JxlPixelFormat,
-    use_simple: bool,
-    premultiply: bool,
-) -> Result<(Vec<Image<T>>, usize, usize), Error> {
-    let options = JxlDecoderOptions {
-        premultiply_output: premultiply,
-        ..Default::default()
-    };
-    decode_with_options(file, pixel_format, use_simple, options)
-}
-
-/// Like `decode_with_format`, but with full control over the decoder options.
-fn decode_with_options<T: crate::image::ImageDataType>(
-    file: &[u8],
-    pixel_format: &JxlPixelFormat,
-    use_simple: bool,
-    options: JxlDecoderOptions,
-) -> Result<(Vec<Image<T>>, usize, usize), Error> {
-    let mut decoder = JxlDecoder::<states::Initialized>::new(options);
-    let mut input = file;
-
-    let mut decoder = loop {
-        match decoder.process(&mut input, None)? {
-            ProcessingResult::Complete { result } => break result,
-            ProcessingResult::NeedsMoreInput { fallback, .. } => {
-                if input.is_empty() {
-                    panic!("Unexpected end of input");
-                }
-                decoder = fallback;
-            }
-        }
-    };
-    decoder.set_use_simple_pipeline(use_simple);
-    decoder.set_pixel_format(pixel_format.clone()).unwrap();
-
-    let (width, height) = decoder.basic_info().size;
-    let num_samples = pixel_format.color_type.samples_per_pixel();
-
-    let mut decoder = loop {
-        match decoder.process(&mut input, None)? {
-            ProcessingResult::Complete { result } => break result,
-            ProcessingResult::NeedsMoreInput { fallback, .. } => {
-                if input.is_empty() {
-                    panic!("Unexpected end of input");
-                }
-                decoder = fallback;
-            }
-        }
-    };
-
-    let mut images = Vec::new();
-    if pixel_format.color_data_format.is_some() {
-        images.push(Image::<T>::new((width * num_samples, height))?);
-    }
-    for ec_format in &pixel_format.extra_channel_format {
-        if ec_format.is_some() {
-            images.push(Image::<T>::new((width, height))?);
-        }
-    }
-    let mut buffers: Vec<JxlOutputBuffer> = images
-        .iter_mut()
-        .map(|image| {
-            let size = image.size();
-            JxlOutputBuffer::from_image_rect_mut(
-                image
-                    .get_rect_mut(Rect {
-                        origin: (0, 0),
-                        size,
-                    })
-                    .into_raw(),
-            )
-        })
-        .collect();
-
-    loop {
-        match decoder.process(&mut input, &mut buffers, None)? {
-            ProcessingResult::Complete { .. } => break,
-            ProcessingResult::NeedsMoreInput { fallback, .. } => {
-                if input.is_empty() {
-                    panic!("Unexpected end of input");
-                }
-                decoder = fallback;
-            }
-        }
-    }
-    drop(buffers);
-
-    Ok((images, width, height))
 }
 
 /// Regression test for ClusterFuzz issue 5342436251336704
@@ -844,7 +690,7 @@ fn test_fuzzer_smallbuffer_overflow() {
     let data = include_bytes!("../../tests/testdata/fuzzer_smallbuffer_overflow.jxl");
 
     let result = panic::catch_unwind(|| {
-        let _ = decode_internal(
+        let _ = decode::<f32>(
             data,
             DecodeParams {
                 chunk_size: 1024,
@@ -874,7 +720,7 @@ fn test_fuzzer_smallbuffer_overflow() {
 fn flush_without_partial_render_support() {
     let data = std::fs::read("resources/test/squeeze_empty_residual.jxl").unwrap();
     for chunk_size in 1..=16 {
-        decode_internal(
+        decode::<f32>(
             &data,
             DecodeParams {
                 chunk_size,
@@ -893,7 +739,7 @@ fn flush_without_partial_render_support() {
 fn flush_truncated_squeeze_missing_tiles() {
     let data = include_bytes!("../../tests/testdata/truncated_squeeze_flush_missing_tiles.jxl");
     for chunk_size in [64, 256, usize::MAX] {
-        decode_internal(
+        decode::<f32>(
             data,
             DecodeParams {
                 chunk_size,
@@ -910,7 +756,7 @@ fn flush_truncated_squeeze_missing_tiles() {
 fn flush_truncated_squeeze_missing_avg() {
     let data = include_bytes!("../../tests/testdata/truncated_squeeze_missing_avg.jxl");
     for chunk_size in [64, 256, usize::MAX] {
-        decode_internal(
+        decode::<f32>(
             data,
             DecodeParams {
                 chunk_size,
@@ -929,7 +775,7 @@ fn flush_truncated_squeeze_missing_avg() {
 fn flush_truncated_squeeze_small_tiles() {
     let data = include_bytes!("../../tests/testdata/truncated_squeeze_flush_small_tiles.jxl");
     for chunk_size in [64, 256, usize::MAX] {
-        decode_internal(
+        decode::<f32>(
             data,
             DecodeParams {
                 chunk_size,
@@ -995,9 +841,9 @@ fn wrap_with_jxlp_chunks(codestream: &[u8], chunk_starts: &[usize]) -> Vec<u8> {
 }
 
 fn assert_start_new_frame_matches_sequential(data: &[u8]) {
-    let scanned_frames = scan_frames_with_decoder(data, usize::MAX);
+    let scanned_frames = scan_frames(data, usize::MAX);
 
-    let (_n, sequential_frames) = decode(data).unwrap();
+    let sequential_frames = decode(data, Default::default()).unwrap();
 
     arbtest::arbtest(|u| {
         let initial_offset =
@@ -1118,15 +964,8 @@ fn test_start_new_frame_boxed_jxlp_per_visible_frame() {
     let codestream =
         std::fs::read("resources/test/conformance_test_images/animation_icos4d.jxl").unwrap();
 
-    let scanned_frames = scan_frames_with_decoder(&codestream, usize::MAX);
+    let scanned_frames = scan_frames(&codestream, usize::MAX);
     assert!(scanned_frames.len() > 1, "need multiple frames");
-
-    let (decoded_frames, _) = decode(&codestream).unwrap();
-    assert_eq!(
-        decoded_frames,
-        scanned_frames.len(),
-        "test file should have one codestream frame per visible frame",
-    );
 
     let mut chunk_starts: Vec<usize> = scanned_frames
         .iter()
@@ -1163,7 +1002,7 @@ fn test_start_new_frame_animation_spline() {
 #[test]
 fn test_scan_still_image() {
     let data = std::fs::read("resources/test/green_queen_vardct_e3.jxl").unwrap();
-    let frames = scan_frames_with_decoder(&data, usize::MAX);
+    let frames = scan_frames(&data, usize::MAX);
 
     assert_eq!(frames.len(), 1);
     assert!(frames[0].is_last);
@@ -1176,7 +1015,7 @@ fn test_scan_still_image() {
 fn test_scan_bare_animation() {
     let data =
         std::fs::read("resources/test/conformance_test_images/animation_icos4d_5.jxl").unwrap();
-    let frames = scan_frames_with_decoder(&data, usize::MAX);
+    let frames = scan_frames(&data, usize::MAX);
 
     assert!(frames.len() > 1, "expected multiple frames");
 
@@ -1196,7 +1035,7 @@ fn test_scan_bare_animation() {
 fn test_scan_animation_offsets_increase() {
     let data =
         std::fs::read("resources/test/conformance_test_images/animation_icos4d_5.jxl").unwrap();
-    let frames = scan_frames_with_decoder(&data, usize::MAX);
+    let frames = scan_frames(&data, usize::MAX);
 
     for i in 1..frames.len() {
         assert!(
@@ -1215,7 +1054,7 @@ fn test_scan_incremental() {
     let data =
         std::fs::read("resources/test/conformance_test_images/animation_icos4d_5.jxl").unwrap();
 
-    let frames = scan_frames_with_decoder(&data, 128);
+    let frames = scan_frames(&data, 128);
     assert!(frames.len() > 1);
     assert!(frames.last().unwrap().is_last);
 }
@@ -1223,7 +1062,7 @@ fn test_scan_incremental() {
 #[test]
 fn test_scan_keyframe_detection_still() {
     let data = std::fs::read("resources/test/green_queen_vardct_e3.jxl").unwrap();
-    let frames = scan_frames_with_decoder(&data, usize::MAX);
+    let frames = scan_frames(&data, usize::MAX);
 
     assert_eq!(frames.len(), 1);
     let f = &frames[0];
@@ -1237,7 +1076,7 @@ fn test_scan_decode_start_file_offset_consistency() {
     let data =
         std::fs::read("resources/test/conformance_test_images/animation_icos4d_5.jxl").unwrap();
 
-    let frames = scan_frames_with_decoder(&data, usize::MAX);
+    let frames = scan_frames(&data, usize::MAX);
 
     for frame in &frames {
         assert!(
@@ -1263,7 +1102,7 @@ fn test_scan_with_preview() {
         return;
     }
     let data = data.unwrap();
-    let frames = scan_frames_with_decoder(&data, usize::MAX);
+    let frames = scan_frames(&data, usize::MAX);
 
     assert!(frames.len() <= 1);
 }
@@ -1275,7 +1114,7 @@ fn test_scan_patches_not_keyframe() {
         return;
     }
     let data = data.unwrap();
-    let frames = scan_frames_with_decoder(&data, usize::MAX);
+    let frames = scan_frames(&data, usize::MAX);
 
     assert!(!frames.is_empty());
 }
@@ -1324,8 +1163,11 @@ fn test_scan_frames_only_empty_followup_no_panic_502853162() {
 /// Small regression test for issue #728: squeeze transform boundary bug.
 #[test]
 fn test_squeeze_boundary_minimal() {
-    let (_, frames) =
-        decode(&std::fs::read("resources/test/issue728_minimal.jxl").unwrap()).unwrap();
+    let frames = decode::<f32>(
+        &std::fs::read("resources/test/issue728_minimal.jxl").unwrap(),
+        Default::default(),
+    )
+    .unwrap();
     assert_eq!(frames.len(), 1);
     let frame = &frames[0];
     let buf = &frame[0];
@@ -1347,8 +1189,11 @@ fn test_squeeze_boundary_minimal() {
 /// Regression test for grid boundary bug with odd-width images (issue #728 variant).
 #[test]
 fn decode_test_strategic_solid_blue_grid_boundary() {
-    let (_, frames) =
-        decode(&std::fs::read("resources/test/strategic_solid_blue.jxl").unwrap()).unwrap();
+    let frames = decode::<f32>(
+        &std::fs::read("resources/test/strategic_solid_blue.jxl").unwrap(),
+        Default::default(),
+    )
+    .unwrap();
     assert_eq!(frames.len(), 1);
     let frame = &frames[0];
 
@@ -1383,8 +1228,8 @@ fn decode_test_strategic_solid_blue_grid_boundary() {
 #[test]
 fn test_fuzzer_vardct_grayscale_unused_channel() {
     let data = include_bytes!("../../tests/testdata/vardct_grayscale_unused_channel.jxl");
-    let (_, frames) = decode_internal(data, DecodeParams::default()).unwrap();
-    let (_, simple_frames) = decode_internal(
+    let frames = decode(data, Default::default()).unwrap();
+    let simple_frames = decode(
         data,
         DecodeParams {
             use_simple_pipeline: true,
@@ -1402,7 +1247,7 @@ fn test_fuzzer_vardct_grayscale_unused_channel() {
         &simple_frames[0],
     );
     // Streaming input with flushing exercises the low-memory pipeline's partial renders.
-    decode_internal(
+    decode::<f32>(
         data,
         DecodeParams {
             chunk_size: 1,
@@ -1417,8 +1262,8 @@ fn test_fuzzer_vardct_grayscale_unused_channel() {
 #[test]
 fn test_fuzzer_context_map_num_histograms_overflow() {
     let data = include_bytes!("../../tests/testdata/context_map_num_histograms_overflow.jxl");
-    let _ = decode_internal(data, DecodeParams::default());
-    let _ = decode_internal(
+    let _ = decode::<f32>(data, Default::default());
+    let _ = decode::<f32>(
         data,
         DecodeParams {
             chunk_size: 1024,
@@ -1436,7 +1281,7 @@ fn test_fuzzer_context_map_num_histograms_overflow() {
 #[test]
 fn test_fuzzer_modular_palette_empty_meta_channel() {
     let data = include_bytes!("../../tests/testdata/modular_palette_empty_meta_channel.jxl");
-    assert!(decode_internal(data, DecodeParams::default()).is_err());
+    assert!(decode::<f32>(data, Default::default()).is_err());
 }
 
 /// Regression test: a frame with patches that declares `upsampling = 4` and `ec_upsampling = [4]`
@@ -1449,7 +1294,7 @@ fn test_fuzzer_modular_palette_empty_meta_channel() {
 #[test]
 fn test_fuzzer_patches_ec_upsampling_dim_shift() {
     let data = include_bytes!("../../tests/testdata/patches_ec_upsampling_dim_shift.jxl");
-    let result = decode_internal(data, DecodeParams::default());
+    let result = decode::<f32>(data, Default::default());
     assert!(
         matches!(result, Err(Error::PatchesUnsupportedMixedUpsampling(..))),
         "expected a mixed upsampling error, got {:?}",
@@ -1467,12 +1312,12 @@ fn test_fuzzer_patches_ec_upsampling_dim_shift() {
 #[test]
 fn test_fuzzer_modular_rle_fast_path_without_lz77() {
     let data = include_bytes!("../../tests/testdata/modular_rle_fast_path_without_lz77.jxl");
-    let (_, frames) = decode_internal(data, DecodeParams::default()).unwrap();
+    let frames = decode::<f32>(data, Default::default()).unwrap();
     assert_eq!(frames.len(), 1);
     // A single 8x8 frame, with its three colour channels interleaved.
     assert_eq!(frames[0][0].size(), (3 * 8, 8));
     // Streaming input with flushing exercises the low-memory pipeline as well.
-    decode_internal(
+    decode::<f32>(
         data,
         DecodeParams {
             chunk_size: 1,
@@ -1489,9 +1334,9 @@ fn test_fuzzer_modular_rle_fast_path_without_lz77() {
 #[test]
 fn test_modular_rle_fast_path() {
     let data = include_bytes!("../../tests/testdata/modular_rle_fast_path.jxl");
-    let (_, frames) = decode_internal(data, DecodeParams::default()).unwrap();
+    let frames = decode(data, Default::default()).unwrap();
     let no_lz77 = include_bytes!("../../tests/testdata/modular_rle_fast_path_without_lz77.jxl");
-    let (_, no_lz77_frames) = decode_internal(no_lz77, DecodeParams::default()).unwrap();
+    let no_lz77_frames = decode(no_lz77, Default::default()).unwrap();
     compare_frames(
         Path::new("modular_rle_fast_path.jxl"),
         0,
@@ -1523,29 +1368,37 @@ fn test_adjust_orientation_disabled() {
         ),
         ("orientation8_rotate_90_ccw.jxl", Orientation::Rotate90Ccw),
     ];
-    let pixel_format = JxlPixelFormat {
-        color_type: JxlColorType::Rgba,
-        color_data_format: Some(JxlDataFormat::f32()),
-        extra_channel_format: vec![],
-    };
     const NUM_SAMPLES: usize = 4;
 
     for (name, orientation) in files {
         let file = std::fs::read(format!("resources/test/{name}")).unwrap();
         for use_simple in [true, false] {
-            let (oriented, ow, oh) =
-                decode_with_format::<f32>(&file, &pixel_format, use_simple, false).unwrap();
-            let options = JxlDecoderOptions {
-                adjust_orientation: false,
-                ..Default::default()
-            };
-            let (raw, rw, rh) =
-                decode_with_options::<f32>(&file, &pixel_format, use_simple, options).unwrap();
+            let oriented_frames = decode::<f32>(
+                &file,
+                DecodeParams {
+                    pixel_format: Some(JxlPixelFormat::rgba_f32(0)),
+                    use_simple_pipeline: use_simple,
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+            let raw_frames = decode::<f32>(
+                &file,
+                DecodeParams {
+                    pixel_format: Some(JxlPixelFormat::rgba_f32(0)),
+                    use_simple_pipeline: use_simple,
+                    adjust_orientation: false,
+                    ..Default::default()
+                },
+            )
+            .unwrap();
 
+            let oriented = &oriented_frames[0][0];
+            let raw = &raw_frames[0][0];
+            let (ow, oh) = (oriented.size().0 / NUM_SAMPLES, oriented.size().1);
+            let (rw, rh) = (raw.size().0 / NUM_SAMPLES, raw.size().1);
             assert_eq!((ow, oh), orientation.map_size((rw, rh)), "{name}");
 
-            let oriented = &oriented[0];
-            let raw = &raw[0];
             for y in 0..rh {
                 for x in 0..rw {
                     let (dx, dy) = orientation.display_pixel((x, y), (rw, rh));

@@ -10,14 +10,14 @@ macro_rules! declare_test_file_common {
             fn [<test_decode_test_file_ $ident>]() {
                 let path = std::path::Path::new("resources/test/").join($path);
                 let file = std::fs::read(&path).unwrap();
-                crate::tests::decode::decode(&file).unwrap();
+                crate::tests::decode::decode::<f32>(&file, Default::default()).unwrap();
             }
 
             #[test]
             fn [<test_decode_test_file_chunks_ $ident>]() {
                 let path = std::path::Path::new("resources/test/").join($path);
                 let file = std::fs::read(&path).unwrap();
-                crate::tests::decode::decode_internal(&file, crate::tests::decode::DecodeParams {
+                crate::tests::decode::decode::<f32>(&file, crate::tests::decode::DecodeParams {
                     chunk_size: 1,
                     ..Default::default()
                 }).unwrap();
@@ -29,7 +29,7 @@ macro_rules! declare_test_file_common {
                 let file = std::fs::read(&path).unwrap();
                 arbtest::arbtest(|u| {
                     let chunk_size = u.int_in_range(1..=1024)?;
-                    crate::tests::decode::decode_internal(
+                    crate::tests::decode::decode::<f32>(
                         &file,
                         crate::tests::decode::DecodeParams {
                             chunk_size,
@@ -45,25 +45,25 @@ macro_rules! declare_test_file_common {
             fn [<test_scan_test_file_ $ident>]() {
                 let path = std::path::Path::new("resources/test/").join($path);
                 let file = std::fs::read(&path).unwrap();
-                crate::tests::decode::scan_frames_with_decoder(&file, usize::MAX);
+                crate::tests::decode::scan_frames(&file, usize::MAX);
             }
 
             #[test]
             fn [<test_scan_test_file_chunks_ $ident>]() {
                 let path = std::path::Path::new("resources/test/").join($path);
                 let file = std::fs::read(&path).unwrap();
-                crate::tests::decode::scan_frames_with_decoder(&file, 1);
+                crate::tests::decode::scan_frames(&file, 1);
             }
 
             #[test]
             fn [<test_compare_pipelines_ $ident>]() {
                 let path = std::path::Path::new("resources/test/").join($path);
                 let file = std::fs::read(&path).unwrap();
-                let simple_frames = crate::tests::decode::decode_internal(&file, crate::tests::decode::DecodeParams {
+                let simple_frames = crate::tests::decode::decode(&file, crate::tests::decode::DecodeParams {
                     use_simple_pipeline: true,
                     ..Default::default()
-                }).unwrap().1;
-                let frames = crate::tests::decode::decode(&file).unwrap().1;
+                }).unwrap();
+                let frames = crate::tests::decode::decode(&file, Default::default()).unwrap();
                 assert_eq!(frames.len(), simple_frames.len());
                 for (fc, (f, sf)) in frames.into_iter().zip(simple_frames).enumerate() {
                     crate::tests::decode::compare_frames(&path, fc, &f, &sf);
