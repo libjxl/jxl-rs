@@ -10,7 +10,7 @@ use shuttle::thread;
 
 use crate::error::Error;
 use crate::image::Image;
-use crate::tests::decode::{DecodeParams, compare_frames, decode_internal};
+use crate::tests::decode::{DecodeParams, compare_frames, decode};
 use crate::tests::parallel_runner::TestParallelRunner;
 
 fn clone_images(imgs: &[Image<f32>]) -> Vec<Image<f32>> {
@@ -29,7 +29,7 @@ pub fn run_oneshot(path: &Path) {
     let file = std::fs::read(path).unwrap();
 
     // Oneshot sequential decode
-    let (_, seq_frames) = decode_internal(&file, DecodeParams::default()).unwrap();
+    let seq_frames = decode(&file, Default::default()).unwrap();
 
     if seq_frames.is_empty() {
         return;
@@ -44,7 +44,7 @@ pub fn run_oneshot(path: &Path) {
             .and_then(|x| x.parse().ok())
             .unwrap_or(4),
     };
-    let (_, par_frames) = decode_internal(
+    let par_frames = decode(
         &file,
         DecodeParams {
             parallel_runner: Some(&mut runner),
@@ -78,7 +78,7 @@ pub fn run_progressive(path: &Path) {
         };
 
     // Sequential progressive decode
-    let _ = decode_internal(
+    let _ = decode(
         &file,
         DecodeParams {
             chunk_size,
@@ -104,7 +104,7 @@ pub fn run_progressive(path: &Path) {
             .and_then(|x| x.parse().ok())
             .unwrap_or(4),
     };
-    let _ = decode_internal(
+    let _ = decode(
         &file,
         DecodeParams {
             chunk_size,
@@ -143,7 +143,7 @@ pub fn run_compare_pipelines_parallel(path: &Path) {
     let file = std::fs::read(path).unwrap();
 
     let mut runner_simple = TestParallelRunner { max_threads: 4 };
-    let (_, simple_frames) = decode_internal(
+    let simple_frames = decode(
         &file,
         DecodeParams {
             use_simple_pipeline: true,
@@ -154,7 +154,7 @@ pub fn run_compare_pipelines_parallel(path: &Path) {
     .unwrap();
 
     let mut runner_lowmem = TestParallelRunner { max_threads: 4 };
-    let (_, par_frames) = decode_internal(
+    let par_frames = decode(
         &file,
         DecodeParams {
             parallel_runner: Some(&mut runner_lowmem),
