@@ -10,7 +10,7 @@ use std::time::Duration;
 
 use clap::Parser;
 use color_eyre::eyre::{Result, WrapErr, eyre};
-use jxl::api::JxlDecoderOptions;
+use jxl::api::{JxlDecoderOptions, ProfileLevel};
 use jxl_cli::dec;
 use jxl_cli::dec::OutputDataType;
 use jxl_cli::enc::OutputFormat;
@@ -131,9 +131,9 @@ fn main() -> Result<()> {
         options.render_spot_colors = !matches!(output_format, Some(OutputFormat::Npy));
         options.skip_preview = skip_preview;
         options.high_precision = high_precision;
-        options.force_level5_splines = !allow_level10;
-        options.force_level5_patches = !allow_level10;
-        options.force_level5_modular = !allow_level10;
+        if allow_level10 {
+            options.max_profile_level = ProfileLevel::Main10;
+        }
         options
     };
     rayon::ThreadPoolBuilder::new()

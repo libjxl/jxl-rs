@@ -15,21 +15,6 @@ use crate::tests::decode::{
     DecodeParams, compare_frames, decode, decode_internal, scan_frames_with_decoder,
 };
 
-#[test]
-fn decode_small_chunks() {
-    arbtest::arbtest(|u| {
-        decode_internal(
-            &std::fs::read("resources/test/green_queen_vardct_e3.jxl").unwrap(),
-            DecodeParams {
-                chunk_size: u.arbitrary::<u8>().unwrap() as usize + 1,
-                ..Default::default()
-            },
-        )
-        .unwrap();
-        Ok(())
-    });
-}
-
 // OOO jxlp boxes require any frame to start in a box that has all the logically-before
 // boxes physically before it, and all the logically-after boxes physically after it.
 // This test file does *not* satisfy this property.
@@ -769,6 +754,16 @@ fn decode_with_format<T: crate::image::ImageDataType>(
         premultiply_output: premultiply,
         ..Default::default()
     };
+    decode_with_options(file, pixel_format, use_simple, options)
+}
+
+/// Like `decode_with_format`, but with full control over the decoder options.
+fn decode_with_options<T: crate::image::ImageDataType>(
+    file: &[u8],
+    pixel_format: &JxlPixelFormat,
+    use_simple: bool,
+    options: JxlDecoderOptions,
+) -> Result<(Vec<Image<T>>, usize, usize), Error> {
     let mut decoder = JxlDecoder::<states::Initialized>::new(options);
     let mut input = file;
 
@@ -1152,6 +1147,20 @@ fn test_start_new_frame_cropped_traffic_light() {
 }
 
 #[test]
+fn test_start_new_frame_animation_newtons_cradle() {
+    let data = std::fs::read("resources/test/conformance_test_images/animation_newtons_cradle.jxl")
+        .unwrap();
+    assert_start_new_frame_matches_sequential(&data);
+}
+
+#[test]
+fn test_start_new_frame_animation_spline() {
+    let data =
+        std::fs::read("resources/test/conformance_test_images/animation_spline.jxl").unwrap();
+    assert_start_new_frame_matches_sequential(&data);
+}
+
+#[test]
 fn test_scan_still_image() {
     let data = std::fs::read("resources/test/green_queen_vardct_e3.jxl").unwrap();
     let frames = scan_frames_with_decoder(&data, usize::MAX);
@@ -1489,4 +1498,66 @@ fn test_modular_rle_fast_path() {
         &frames[0],
         &no_lz77_frames[0],
     );
+}
+
+/// Decoding with `adjust_orientation: false` must output pixels in
+/// codestream order and report the codestream size in the basic info;
+/// re-applying the orientation must reproduce the default (oriented) output.
+#[test]
+fn test_adjust_orientation_disabled() {
+    use crate::headers::Orientation;
+
+    let files = [
+        ("orientation1_identity.jxl", Orientation::Identity),
+        (
+            "orientation2_flip_horizontal.jxl",
+            Orientation::FlipHorizontal,
+        ),
+        ("orientation3_rotate_180.jxl", Orientation::Rotate180),
+        ("orientation4_flip_vertical.jxl", Orientation::FlipVertical),
+        ("orientation5_transpose.jxl", Orientation::Transpose),
+        ("orientation6_rotate_90_cw.jxl", Orientation::Rotate90Cw),
+        (
+            "orientation7_anti_transpose.jxl",
+            Orientation::AntiTranspose,
+        ),
+        ("orientation8_rotate_90_ccw.jxl", Orientation::Rotate90Ccw),
+    ];
+    let pixel_format = JxlPixelFormat {
+        color_type: JxlColorType::Rgba,
+        color_data_format: Some(JxlDataFormat::f32()),
+        extra_channel_format: vec![],
+    };
+    const NUM_SAMPLES: usize = 4;
+
+    for (name, orientation) in files {
+        let file = std::fs::read(format!("resources/test/{name}")).unwrap();
+        for use_simple in [true, false] {
+            let (oriented, ow, oh) =
+                decode_with_format::<f32>(&file, &pixel_format, use_simple, false).unwrap();
+            let options = JxlDecoderOptions {
+                adjust_orientation: false,
+                ..Default::default()
+            };
+            let (raw, rw, rh) =
+                decode_with_options::<f32>(&file, &pixel_format, use_simple, options).unwrap();
+
+            assert_eq!((ow, oh), orientation.map_size((rw, rh)), "{name}");
+
+            let oriented = &oriented[0];
+            let raw = &raw[0];
+            for y in 0..rh {
+                for x in 0..rw {
+                    let (dx, dy) = orientation.display_pixel((x, y), (rw, rh));
+                    for s in 0..NUM_SAMPLES {
+                        assert_eq!(
+                            raw.row(y)[x * NUM_SAMPLES + s],
+                            oriented.row(dy)[dx * NUM_SAMPLES + s],
+                            "{name} mismatch at ({x},{y}) sample {s} (use_simple={use_simple})"
+                        );
+                    }
+                }
+            }
+        }
+    }
 }

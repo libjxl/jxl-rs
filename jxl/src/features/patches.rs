@@ -365,20 +365,9 @@ impl PatchesDictionary {
         Ok(())
     }
 
-    fn area_limit(num_pixels: usize, force_level5: bool) -> usize {
-        let mult: usize = if force_level5 { 8 } else { 1024 };
+    fn area_limit(num_pixels: usize, level5_limits: bool) -> usize {
+        let mult: usize = if level5_limits { 8 } else { 1024 };
         mult.saturating_mul(num_pixels).max(1 << 20)
-    }
-
-    // TODO(veluca): remove this in v0.8.0.
-    pub fn read(
-        br: &mut BitReader,
-        xsize: usize,
-        ysize: usize,
-        num_extra_channels: usize,
-        reference_frames: &[Option<ReferenceFrame>],
-    ) -> Result<PatchesDictionary> {
-        Self::read_internal(br, xsize, ysize, num_extra_channels, reference_frames, true)
     }
 
     #[instrument(level = "debug", skip(br), ret, err)]
@@ -388,7 +377,7 @@ impl PatchesDictionary {
         ysize: usize,
         num_extra_channels: usize,
         reference_frames: &[Option<ReferenceFrame>],
-        force_level5: bool,
+        level5_limits: bool,
     ) -> Result<PatchesDictionary> {
         let blendings_stride = num_extra_channels + 1;
         let patches_histograms = Histograms::decode(PatchContext::NUM, br, true)?;
@@ -414,7 +403,7 @@ impl PatchesDictionary {
         let mut positions: Vec<PatchPosition> = Vec::new();
         let mut blendings = Vec::new();
         let mut ref_positions = Vec::new_with_capacity(num_ref_patch)?;
-        let max_patch_area = Self::area_limit(num_pixels, force_level5);
+        let max_patch_area = Self::area_limit(num_pixels, level5_limits);
         let mut total_patch_area = 0usize;
         for _ in 0..num_ref_patch {
             let reference = patches_reader.read_unsigned(

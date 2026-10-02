@@ -107,7 +107,7 @@ fn get_small_squeeze_kernel(shift_diff: (usize, usize)) -> &'static [[f32; 25]] 
 }
 
 #[derive(Debug, Default)]
-pub(crate) struct SmoothUpsampleScratch {
+pub struct SmoothUpsampleScratch {
     buffer: [Vec<f32>; 5],
     ibuf: Vec<i32>,
     out_buf: Vec<i32>,

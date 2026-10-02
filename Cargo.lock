@@ -702,7 +702,6 @@ dependencies = [
  "array-init",
  "brotli-decompressor",
  "byteorder",
- "criterion",
  "jxl_macros",
  "jxl_simd",
  "jxl_transforms",

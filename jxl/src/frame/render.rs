@@ -10,6 +10,7 @@ use crate::api::{
     JxlPixelFormat,
 };
 use crate::bit_reader::BitReader;
+use crate::color::tf::TransferFunction;
 use crate::error::{Error, Result};
 use crate::features::epf::SigmaSource;
 use crate::features::noise::Noise;
@@ -96,7 +97,7 @@ macro_rules! pipeline {
     }};
 }
 
-pub(crate) use pipeline;
+pub(super) use pipeline;
 
 impl Frame {
     /// Add conversion stages for non-float output formats.
@@ -551,7 +552,7 @@ impl Frame {
     }
 
     #[allow(clippy::too_many_arguments)]
-    pub(crate) fn build_render_pipeline<T: RenderPipeline>(
+    pub fn build_render_pipeline<T: RenderPipeline>(
         decoder_state: &DecoderState,
         frame_header: &FrameHeader,
         patches: Arc<RwLock<PatchesDictionary>>,
@@ -567,6 +568,11 @@ impl Frame {
         let num_channels = frame_header.num_extra_channels as usize + 3;
         let num_temp_channels = if frame_header.has_noise() { 3 } else { 0 };
         let metadata = &decoder_state.file_header.image_metadata;
+        let output_orientation = if decoder_state.adjust_orientation {
+            metadata.orientation
+        } else {
+            Orientation::Identity
+        };
         let mut pipeline = RenderPipelineBuilder::<T>::new(
             num_channels + num_temp_channels,
             frame_header.size_upsampled(),
@@ -797,12 +803,9 @@ impl Frame {
         if frame_header.do_ycbcr {
             pipeline = pipeline.add_inplace_stage(YcbcrToRgbStage::new(0));
         } else if xyb_encoded {
-            pipeline = pipeline.add_inplace_stage(XybStage::new(0, output_color_info.clone()));
-        }
-
-        // XYB output is linear, so apply transfer function, but only if output is not linear itself
-        if xyb_encoded && !output_tf.is_linear() {
-            pipeline = pipeline.add_inplace_stage(FromLinearStage::new(0, output_tf.clone()));
+            let mut stage_color_info = output_color_info.clone();
+            stage_color_info.tf = output_tf.clone();
+            pipeline = pipeline.add_inplace_stage(XybColorConvertStage::new(0, stage_color_info));
         }
 
         if frame_header.needs_blending() {
@@ -943,7 +946,7 @@ impl Frame {
                 );
                 pipeline = pipeline.add_save_stage(
                     color_source_channels,
-                    metadata.orientation,
+                    output_orientation,
                     0,
                     pixel_format.color_type,
                     *df,
@@ -961,7 +964,7 @@ impl Frame {
                     pipeline = Self::add_conversion_stages(pipeline, &[3 + i], *df, None);
                     pipeline = pipeline.add_save_stage(
                         &[3 + i],
-                        metadata.orientation,
+                        output_orientation,
                         save_idx,
                         JxlColorType::Grayscale,
                         *df,

@@ -18,12 +18,6 @@ use crate::image::Rect;
 #[derive(Debug, Default, Clone)]
 pub struct Signature;
 
-impl Signature {
-    pub fn new() -> Signature {
-        Signature {}
-    }
-}
-
 impl crate::headers::encodings::UnconditionalCoder<()> for Signature {
     type Nonserialized = Empty;
     fn read_unconditional(_: &(), br: &mut BitReader, _: &Empty) -> Result<Signature, Error> {
@@ -155,6 +149,7 @@ pub struct Animation {
 #[validate]
 pub struct ToneMapping {
     #[all_default]
+    #[allow(dead_code)]
     pub all_default: bool,
     #[default(255.0)]
     pub intensity_target: f32,

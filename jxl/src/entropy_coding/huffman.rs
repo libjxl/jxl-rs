@@ -31,7 +31,7 @@ impl Debug for TableEntry {
 }
 
 #[derive(Debug)]
-pub(crate) struct Table {
+pub struct Table {
     entries: Vec<TableEntry>,
 }
 
@@ -500,7 +500,7 @@ impl HuffmanCodes {
         self.alphabet_sizes[cluster].saturating_sub(1) as u32
     }
 
-    pub(crate) fn table(&self, ctx: usize) -> &Table {
+    pub fn table(&self, ctx: usize) -> &Table {
         &self.tables[ctx]
     }
 }

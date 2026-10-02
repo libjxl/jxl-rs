@@ -72,7 +72,7 @@ pub fn meta_apply_local_transforms<'a, 'b>(
     buffer_storage: &'b mut Vec<LocalTransformBuffer<'a>>,
     header: &GroupHeader,
     storage: ModularStorage,
-    force_level5: bool,
+    level5_limits: bool,
 ) -> Result<(Vec<&'b mut ModularChannel>, Vec<TransformStep>)> {
     let mut transform_steps = vec![];
 
@@ -83,7 +83,11 @@ pub fn meta_apply_local_transforms<'a, 'b>(
         .enumerate()
         .collect();
 
-    let max_channels = max_channels(force_level5);
+    if level5_limits && header.transforms.len() > 8 {
+        return Err(Error::TooManyModularTransforms(header.transforms.len(), 8));
+    }
+
+    let max_channels = max_channels(level5_limits);
     if channels.len() > max_channels {
         return Err(Error::TooManyModularChannels(channels.len(), max_channels));
     }

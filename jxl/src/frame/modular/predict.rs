@@ -8,7 +8,7 @@ use num_traits::FromPrimitive;
 
 use crate::error::{Error, Result};
 use crate::headers::modular::WeightedHeader;
-use crate::image::{Image, ImageRect};
+use crate::image::Image;
 use crate::util::floor_log2_nonzero;
 
 #[repr(u8)]
@@ -123,16 +123,6 @@ impl PredictionData {
             leftleft,
             toprightright,
         }
-    }
-
-    pub fn get(rect: ImageRect<'_, i32>, x: usize, y: usize) -> Self {
-        Self::get_rows(
-            rect.row(y),
-            rect.row(y.saturating_sub(1)),
-            rect.row(y.saturating_sub(2)),
-            x,
-            y,
-        )
     }
 }
 

@@ -120,8 +120,9 @@ impl JxlCmsTransformer for MoxCmsTransformer {
 
 #[cfg(test)]
 mod tests {
-    use jxl::api::{JxlColorEncoding, JxlPrimaries, JxlTransferFunction, JxlWhitePoint};
-    use jxl::headers::color_encoding::RenderingIntent;
+    use jxl::api::{
+        JxlColorEncoding, JxlPrimaries, JxlTransferFunction, JxlWhitePoint, RenderingIntent,
+    };
 
     use super::*;
 

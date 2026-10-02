@@ -15,10 +15,10 @@ use image::error::{DecodingError, ImageFormatHint, LimitError, LimitErrorKind};
 use image::hooks::{GenericReader, register_decoding_hook, register_format_detection_hook};
 use image::{ColorType, ImageError, ImageResult, LimitSupport, Limits};
 use jxl::api::{
-    Endianness, JxlBitDepth, JxlColorType, JxlDataFormat, JxlDecoder as ApiJxlDecoder,
-    JxlDecoderOptions, JxlOutputBuffer, JxlPixelFormat, ProcessingResult, states,
+    Endianness, ExtraChannel, JxlBitDepth, JxlColorType, JxlDataFormat,
+    JxlDecoder as ApiJxlDecoder, JxlDecoderOptions, JxlOutputBuffer, JxlPixelFormat,
+    ProcessingResult, states,
 };
-use jxl::headers::extra_channels::ExtraChannel;
 
 const CODESTREAM_SIGNATURE: [u8; 2] = [0xff, 0x0a];
 const CONTAINER_SIGNATURE: [u8; 12] = [

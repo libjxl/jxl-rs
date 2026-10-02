@@ -166,7 +166,7 @@ pub(in crate::frame::modular) fn decode_modular_subbitstream(
     br: &mut BitReader,
     partial_decoded_buffers: Option<&mut usize>,
     scratch_space: &mut ScratchSpace,
-    force_level5: bool,
+    level5_limits: bool,
 ) -> Result<()> {
     // Skip decoding if all grids are zero-sized.
     let is_empty = buffers
@@ -193,7 +193,7 @@ pub(in crate::frame::modular) fn decode_modular_subbitstream(
                     &mut buffer_storage,
                     &h,
                     storage,
-                    force_level5,
+                    level5_limits,
                 )?;
                 (h, new_bufs)
             } else {
@@ -214,7 +214,7 @@ pub(in crate::frame::modular) fn decode_modular_subbitstream(
             })
             .sum::<usize>();
         let size_limit = (1024 + num_local_samples).min(1 << 20);
-        Some(Tree::read(br, size_limit)?)
+        Some(Tree::read(br, size_limit, level5_limits)?)
     } else {
         None
     };

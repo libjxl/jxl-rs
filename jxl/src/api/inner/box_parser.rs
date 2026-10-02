@@ -9,7 +9,7 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use std::io::{IoSliceMut, Read};
 
 use crate::api::inner::process::SmallBuffer;
-use crate::api::{JxlBitstreamInput, JxlSignatureType, check_signature_internal};
+use crate::api::{JxlBitstreamInput, JxlSignatureType, ProfileLevel, check_signature_internal};
 use crate::error::{Error, Result};
 #[cfg(feature = "brotli")]
 use crate::util::NewWithCapacity;
@@ -34,7 +34,7 @@ enum ParseState {
 }
 
 // Relevant box types.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum CodestreamBoxType {
     None,
     Jxlc,
@@ -133,7 +133,7 @@ pub struct BoxParserCheckpoint {
     pub(super) file_position: u64,
     codestream_left: Option<u64>,
     is_valid_checkpoint: bool,
-    pub(crate) consumed_codestream: u64,
+    pub(super) consumed_codestream: u64,
     next_aux_box_idx: usize,
 }
 
@@ -147,6 +147,7 @@ pub(super) struct BoxParser {
     // to box info
     codestream_pos_to_box: BTreeMap<u64, BoxParserCheckpoint>,
     allow_checkpoint: bool,
+    container_level: Option<ProfileLevel>,
     aux: AuxBoxState,
 }
 
@@ -167,6 +168,7 @@ impl BoxParser {
             latest_codestream_box: CodestreamBoxType::None,
             ooo_jxlp_buffer: HashMap::new(),
             version: None,
+            container_level: None,
             codestream_pos_to_box: BTreeMap::new(),
             allow_checkpoint: true,
             aux: AuxBoxState {
@@ -247,6 +249,10 @@ impl BoxParser {
             .get(&box_type)
             .map(|v| &**v)
             .unwrap_or_default()
+    }
+
+    pub(super) fn container_level(&self) -> Option<ProfileLevel> {
+        self.container_level
     }
 
     pub(super) fn trailing_box(&self) -> Option<&JxlAuxBox> {
@@ -623,6 +629,7 @@ impl BoxParser {
             b"jxlp" => 4,
             b"ftyp" => 8,
             b"brob" => 4,
+            b"jxll" => 1,
             _ => 0,
         };
 
@@ -725,6 +732,25 @@ impl BoxParser {
                 self.local_buffer.consume(4);
 
                 self.start_aux_box(inner_type, true, content_len);
+            }
+            b"jxll" => {
+                if self.version.is_none() || self.latest_codestream_box != CodestreamBoxType::None {
+                    return Err(Error::InvalidBox);
+                }
+                if self.container_level.is_some() {
+                    return Err(Error::InvalidBox);
+                }
+                if content_len != Some(0) {
+                    return Err(Error::InvalidBox);
+                }
+                let level = match self.local_buffer[0] {
+                    5 => ProfileLevel::Main5,
+                    10 => ProfileLevel::Main10,
+                    _ => return Err(Error::InvalidBox),
+                };
+                self.local_buffer.consume(1);
+                self.container_level = Some(level);
+                self.state = ParseState::BoxNeeded(8);
             }
             code => {
                 let ty = JxlAuxBoxType(*code);

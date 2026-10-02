@@ -16,7 +16,7 @@ mod identity;
 impl SaveStage {
     // Takes as input only those channels that are *actually* saved.
     #[allow(clippy::too_many_arguments)]
-    pub(crate) fn save_lowmem(
+    pub fn save_lowmem(
         &self,
         data: &[&RowBuffer],
         buffers: &mut [Option<OutputChannelRef>],

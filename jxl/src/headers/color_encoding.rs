@@ -46,17 +46,6 @@ pub enum WhitePoint {
     DCI = 11,
 }
 
-impl WhitePoint {
-    pub fn to_xy_coords(&self, custom: &CustomXY) -> (f32, f32) {
-        match self {
-            WhitePoint::D65 => (0.3127, 0.3290),
-            WhitePoint::E => (1.0 / 3.0, 1.0 / 3.0),
-            WhitePoint::DCI => (0.314, 0.351),
-            WhitePoint::Custom => custom.as_f32_coords(),
-        }
-    }
-}
-
 #[allow(clippy::upper_case_acronyms)]
 #[derive(UnconditionalCoder, Copy, Clone, PartialEq, Debug, FromPrimitive)]
 pub enum Primaries {
@@ -199,7 +188,7 @@ pub struct ColorEncoding {
     pub custom_primaries: [CustomXY; 3],
     #[condition(!want_icc)]
     #[default(CustomTransferFunction::default(&field_nonserialized))]
-    #[nonserialized(color_space: color_space)]
+    #[nonserialized(color_space)]
     pub tf: CustomTransferFunction,
     #[condition(!want_icc)]
     #[default(RenderingIntent::Relative)]

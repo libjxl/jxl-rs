@@ -170,9 +170,9 @@ fn validate_spline_point_pos<T: num_traits::ToPrimitive>(x: T, y: T) -> Result<(
 
 const CHANNEL_WEIGHT: [f32; 4] = [0.0042, 0.075, 0.07, 0.3333];
 
-fn area_limit(image_size: u64, force_level5: bool) -> u64 {
+fn area_limit(image_size: u64, level5_limits: bool) -> u64 {
     // Use saturating arithmetic to prevent overflow
-    if force_level5 {
+    if level5_limits {
         8u64.saturating_mul(image_size)
             .saturating_add(1u64 << 25)
             .min(1u64 << 30)
@@ -748,13 +748,13 @@ impl Splines {
         image_ysize: u64,
         color_correlation_params: &ColorCorrelationParams,
         high_precision: bool,
-        force_level5: bool,
+        level5_limits: bool,
     ) -> Result<()> {
         let mut total_estimated_area_reached = 0u64;
         let mut splines = Vec::new();
         // Use saturating_mul to prevent overflow with malicious image dimensions
         let image_area = image_xsize.saturating_mul(image_ysize);
-        let area_limit = area_limit(image_area, force_level5);
+        let area_limit = area_limit(image_area, level5_limits);
         for (index, qspline) in self.splines.iter().enumerate() {
             let spline = qspline.dequantize(
                 &self.starting_points[index],

@@ -270,11 +270,11 @@ pub struct FullModularImage {
     ready_transform_steps: Mutex<Vec<usize>>,
     pub(super) recycler: Arc<BufferRecycler>,
     storage: ModularStorage,
-    pub(super) force_level5: bool,
+    pub(super) level5_limits: bool,
 }
 
-pub(super) fn max_channels(force_level5: bool) -> usize {
-    if force_level5 { 256 } else { 1 << 16 }
+pub(super) fn max_channels(level5_limits: bool) -> usize {
+    if level5_limits { 256 } else { 1 << 16 }
 }
 
 impl FullModularImage {
@@ -284,7 +284,7 @@ impl FullModularImage {
 
     #[inline(always)]
     #[allow(dead_code)]
-    pub(crate) fn storage(&self) -> ModularStorage {
+    pub fn storage(&self) -> ModularStorage {
         self.storage
     }
 
@@ -310,7 +310,7 @@ impl FullModularImage {
         recycler: Arc<BufferRecycler>,
         sample_limit: Option<usize>,
         storage: ModularStorage,
-        force_level5: bool,
+        level5_limits: bool,
     ) -> Result<Self> {
         let mut channels = vec![];
         for c in 0..modular_color_channels {
@@ -372,7 +372,7 @@ impl FullModularImage {
                 delayed_ready_sections: Mutex::new(BTreeSet::new()),
                 recycler,
                 storage,
-                force_level5,
+                level5_limits,
             });
         }
 
@@ -393,7 +393,7 @@ impl FullModularImage {
 
         let max_palette_samples = sample_limit.unwrap_or(usize::MAX);
 
-        let max_channels = max_channels(force_level5);
+        let max_channels = max_channels(level5_limits);
 
         let (mut buffer_info, transform_steps) = transforms::meta_apply::meta_apply_transforms(
             &channels,
@@ -401,6 +401,7 @@ impl FullModularImage {
             max_palette_samples,
             max_channels,
             storage,
+            level5_limits,
         )?;
 
         // Assign each (channel, group) pair present in the bitstream to the section in which it
@@ -572,7 +573,7 @@ impl FullModularImage {
             delayed_ready_sections: Mutex::new(BTreeSet::new()),
             recycler,
             storage,
-            force_level5,
+            level5_limits,
         })
     }
 
@@ -603,7 +604,7 @@ impl FullModularImage {
                     br,
                     Some(&mut decoded_if_partial),
                     &mut scratch,
-                    self.force_level5,
+                    self.level5_limits,
                 )
             },
         );
@@ -696,7 +697,7 @@ impl FullModularImage {
                     br,
                     None,
                     &mut scratch,
-                    self.force_level5,
+                    self.level5_limits,
                 )?;
                 Ok(())
             },
@@ -1094,7 +1095,7 @@ pub(super) fn decode_vardct_lf(
     br: &mut BitReader,
     storage: ModularStorage,
     scratch_space: &mut ScratchSpace,
-    force_level5: bool,
+    level5_limits: bool,
 ) -> Result<()> {
     let extra_precision = br.read(2)?;
     debug!(?extra_precision);
@@ -1125,7 +1126,7 @@ pub(super) fn decode_vardct_lf(
         br,
         None,
         scratch_space,
-        force_level5,
+        level5_limits,
     )?;
     dequant_lf(
         r,
@@ -1156,7 +1157,7 @@ pub(super) fn decode_hf_metadata(
     br: &mut BitReader,
     storage: ModularStorage,
     scratch_space: &mut ScratchSpace,
-    force_level5: bool,
+    level5_limits: bool,
 ) -> Result<()> {
     let stream_id = ModularStreamId::LFMeta(group).get_id(frame_header);
     debug!(?stream_id);
@@ -1185,7 +1186,7 @@ pub(super) fn decode_hf_metadata(
         br,
         None,
         scratch_space,
-        force_level5,
+        level5_limits,
     )?;
     if storage == ModularStorage::I16 {
         decode_hf_metadata_finish::<i16>(&buffers, hf_meta, cr, r, count, frame_header)
@@ -1285,7 +1286,7 @@ pub(super) fn decode_quant_table(
     br: &mut BitReader,
     scratch_space: &mut ScratchSpace,
     storage: ModularStorage,
-    force_level5: bool,
+    level5_limits: bool,
 ) -> Result<Vec<i32>> {
     let bit_depth = BitDepth::integer_samples(8);
     let mut image = [
@@ -1303,7 +1304,7 @@ pub(super) fn decode_quant_table(
         br,
         None,
         scratch_space,
-        force_level5,
+        level5_limits,
     )?;
     let mut qtable = Vec::with_capacity(required_size_x * required_size_y * 3);
     for channel in image.iter_mut() {

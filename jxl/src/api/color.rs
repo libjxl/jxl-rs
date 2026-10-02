@@ -8,8 +8,9 @@ use std::fmt;
 
 use crate::color::tf::{hlg_to_scene, linear_to_pq_precise, pq_to_linear_precise};
 use crate::error::{Error, Result};
+pub use crate::headers::color_encoding::RenderingIntent;
 use crate::headers::color_encoding::{
-    ColorEncoding, ColorSpace, Primaries, RenderingIntent, TransferFunction, WhitePoint,
+    ColorEncoding, ColorSpace, Primaries, TransferFunction, WhitePoint,
 };
 use crate::util::{Matrix3x3, Vector3, inv_3x3_matrix, mul_3x3_matrix, mul_3x3_vector};
 
@@ -1334,7 +1335,7 @@ impl JxlColorProfile {
 
     /// Returns a copy of this profile with linear transfer function.
     /// For ICC profiles, returns None since we can't modify embedded ICC profiles.
-    /// This is used to create the CMS input profile for XYB images where XybStage
+    /// This is used to create the CMS input profile for XYB images where XybColorConvertStage
     /// outputs linear data.
     pub fn with_linear_tf(&self) -> Option<Self> {
         match self {

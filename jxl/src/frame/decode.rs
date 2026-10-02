@@ -340,30 +340,6 @@ impl Frame {
                 && self.header.num_extra_channels == 0)
     }
 
-    /// Given a bit reader pointing at the end of the TOC, returns a vector of `BitReader`s, each
-    /// of which reads a specific section.
-    pub fn sections<'a>(&self, br: &'a mut BitReader) -> Result<Vec<BitReader<'a>>> {
-        debug!(toc = ?self.toc);
-        let ret = self
-            .toc
-            .entries
-            .iter()
-            .scan(br, |br, count| Some(br.split_at(*count as usize)))
-            .collect::<Result<Vec<_>>>()?;
-        if !self.toc.permuted {
-            return Ok(ret);
-        }
-        let mut inv_perm = vec![0; ret.len()];
-        for (i, pos) in self.toc.permutation.iter().enumerate() {
-            inv_perm[*pos as usize] = i;
-        }
-        let mut shuffled_ret = ret.clone();
-        for (br, pos) in ret.into_iter().zip(inv_perm) {
-            shuffled_ret[pos] = br;
-        }
-        Ok(shuffled_ret)
-    }
-
     #[instrument(level = "debug", skip_all)]
     pub fn decode_lf_global(&mut self, br: &mut BitReader, allow_partial: bool) -> Result<()> {
         debug!(section_size = br.total_bits_available());
@@ -381,7 +357,7 @@ impl Frame {
                     self.header.size_padded().1,
                     self.decoder_state.extra_channel_info().len(),
                     &self.decoder_state.reference_frames[..],
-                    self.decoder_state.force_level5_patches,
+                    self.decoder_state.level5_limits,
                 )?;
                 *self.patches.try_write().unwrap() = p;
             }
@@ -436,7 +412,7 @@ impl Frame {
                     self.header.size().1 as u64,
                     &color_correlation_params,
                     self.decoder_state.high_precision,
-                    self.decoder_state.force_level5_splines,
+                    self.decoder_state.level5_limits,
                 )?;
             }
 
@@ -447,7 +423,11 @@ impl Frame {
                         * (self.color_channels + self.decoder_state.extra_channel_info().len())
                         / 16)
                     .min(1 << 22);
-                Some(Tree::read(br, size_limit)?)
+                Some(Tree::read(
+                    br,
+                    size_limit,
+                    self.decoder_state.level5_limits,
+                )?)
             } else {
                 None
             };
@@ -460,7 +440,7 @@ impl Frame {
                 self.buffer_recycler.clone(),
                 self.decoder_state.sample_limit,
                 self.decoder_state.modular_storage(),
-                self.decoder_state.force_level5_modular,
+                self.decoder_state.level5_limits,
             )?;
 
             // Ensure that, if we call this function again, we resume from just after
@@ -534,7 +514,7 @@ impl Frame {
                 br,
                 decoder_state.modular_storage(),
                 &mut scratch,
-                decoder_state.force_level5_modular,
+                decoder_state.level5_limits,
             )?;
         }
 
@@ -565,7 +545,7 @@ impl Frame {
                 br,
                 decoder_state.modular_storage(),
                 &mut scratch,
-                decoder_state.force_level5_modular,
+                decoder_state.level5_limits,
             )?;
         }
         Ok(())

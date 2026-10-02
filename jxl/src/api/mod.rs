@@ -25,7 +25,7 @@ pub use options::*;
 pub use signature::*;
 
 use crate::error::Result;
-use crate::headers::image_metadata::Orientation;
+pub use crate::headers::image_metadata::Orientation;
 pub use crate::image::JxlOutputBuffer;
 
 /// This type represents the return value of a function that reads input from a bitstream. The

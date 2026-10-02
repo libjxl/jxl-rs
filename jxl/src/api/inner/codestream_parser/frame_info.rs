@@ -139,6 +139,7 @@ impl FrameInfo {
         file_header: &FileHeader,
         br: &mut BitReader,
         bits: &mut usize,
+        level5_limits: bool,
     ) -> Result<()> {
         // For preview frames, use the preview dimensions instead of main image dimensions
         let nonserialized = if is_preview {
@@ -156,6 +157,15 @@ impl FrameInfo {
             frame_header.size_upsampled(),
             frame_header.num_extra_channels as usize,
         )?;
+
+        if level5_limits
+            && frame_header.duration > 0
+            && let Some(anim) = &file_header.image_metadata.animation
+            && (frame_header.duration as u128) * (anim.tps_denominator as u128) * 120
+                < (anim.tps_numerator as u128)
+        {
+            return Err(Error::FrameDurationTooShort(frame_header.duration));
+        }
 
         self.frame_header = Some(frame_header);
         *bits = br.total_bits_read();
@@ -194,6 +204,7 @@ impl FrameInfo {
         pixel_format: &JxlPixelFormat,
         output_profile: &JxlColorProfile,
         process_mode: ProcessMode,
+        level5_limits: bool,
     ) -> Result<()> {
         self.section_size = toc.entries.iter().map(|x| *x as u64).sum();
         self.ready_section_data = 0;
@@ -217,7 +228,10 @@ impl FrameInfo {
                 .map(|x| x.finalize())
                 .transpose()?
                 .flatten()
-                .unwrap_or_else(|| DecoderState::new(file_header.clone(), decode_options));
+                .unwrap_or_else(|| {
+                    DecoderState::new(file_header.clone(), decode_options, level5_limits)
+                });
+            decoder_state.level5_limits = level5_limits;
             #[cfg(test)]
             {
                 decoder_state.use_simple_pipeline = self.use_simple_pipeline;

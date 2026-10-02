@@ -43,6 +43,7 @@ pub fn fast_cos(x: f32) -> f32 {
     }
 }
 
+#[cfg(test)]
 #[inline(always)]
 pub fn fast_erff(x: f32) -> f32 {
     // Formula from

@@ -23,7 +23,7 @@ pub struct Toc {
 
     // Here we don't use `condition(permuted)`, because `jump_to_byte_boundary` needs to be executed in both cases
     #[default(Permutation::default())]
-    #[nonserialized(num_entries: nonserialized.num_entries, permuted: permuted)]
+    #[nonserialized(num_entries: nonserialized.num_entries, permuted)]
     pub permutation: Permutation,
 
     #[coder(u2S(Bits(10), Bits(14) + 1024, Bits(22) + 17408, Bits(30) + 4211712))]
@@ -50,10 +50,6 @@ impl IncrementalTocReader {
             permutation: None,
             entries,
         })
-    }
-
-    pub fn num_read_entries(&self) -> u32 {
-        self.entries.len() as u32
     }
 
     pub fn remaining_entries(&self) -> u32 {
