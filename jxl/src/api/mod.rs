@@ -5,10 +5,11 @@
 
 // #![warn(missing_docs)]
 
+mod box_parser;
+mod codestream_parser;
 mod color;
 mod data_types;
 mod decoder;
-mod inner;
 mod input;
 mod options;
 mod signature;
@@ -16,10 +17,10 @@ mod xyb_constants;
 
 use std::sync::atomic::{AtomicUsize, Ordering};
 
+pub use box_parser::{BoxParserCheckpoint, JxlAuxBox, JxlAuxBoxType};
 pub use color::*;
 pub use data_types::*;
 pub use decoder::*;
-pub use inner::*;
 pub use input::*;
 pub use options::*;
 pub use signature::*;
@@ -28,32 +29,20 @@ use crate::error::Result;
 pub use crate::headers::image_metadata::Orientation;
 pub use crate::image::JxlOutputBuffer;
 
-/// This type represents the return value of a function that reads input from a bitstream. The
-/// variant `Complete` indicates that the operation was completed successfully, and its return
-/// value is available. The variant `NeedsMoreInput` indicates that more input is needed, and the
-/// function should be called again. This variant comes with a `size_hint`, representing an
-/// estimate of the number of additional bytes needed, and a `fallback`, representing additional
-/// information that might be needed to call the function again (i.e. because it takes a decoder
-/// object by value).
-#[derive(Debug, PartialEq)]
-pub enum ProcessingResult<T, U> {
-    Complete { result: T },
-    NeedsMoreInput { size_hint: usize, fallback: U },
-}
-
-impl<T> ProcessingResult<T, ()> {
-    fn new(
-        result: Result<T, crate::error::Error>,
-    ) -> Result<ProcessingResult<T, ()>, crate::error::Error> {
-        match result {
-            Ok(v) => Ok(ProcessingResult::Complete { result: v }),
-            Err(crate::error::Error::OutOfBounds(v)) => Ok(ProcessingResult::NeedsMoreInput {
-                size_hint: v,
-                fallback: (),
-            }),
-            Err(e) => Err(e),
-        }
-    }
+/// Events emitted by [`JxlDecoder::process`] as decoding progresses.
+#[derive(Debug, PartialEq, Eq, Clone, Copy)]
+pub enum Event {
+    /// More input data is needed to continue decoding.
+    /// `size_hint` is an estimate of the number of additional bytes required.
+    NeedMoreInput { size_hint: usize },
+    /// Basic image information and color profiles are available.
+    BasicInfo,
+    /// A visible frame's header and TOC have been parsed.
+    FrameHeader,
+    /// The current visible frame has finished decoding.
+    FrameComplete { has_more_frames: bool },
+    /// All frames and any trailing container boxes have been processed.
+    Complete,
 }
 
 #[derive(Clone)]

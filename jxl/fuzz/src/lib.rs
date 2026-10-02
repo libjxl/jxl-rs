@@ -3,10 +3,7 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-use jxl::api::{
-    JxlColorType, JxlDecoder, JxlDecoderOptions, JxlParallelRunner, JxlParallelRunnerFun,
-    ProcessingResult, states,
-};
+use jxl::api::{Event, JxlDecoder, JxlDecoderOptions, JxlParallelRunner, JxlParallelRunnerFun};
 use jxl::image::{Image, JxlOutputBuffer, Rect};
 use rand::{Rng, SeedableRng};
 use rand_xorshift::XorShiftRng;
@@ -74,15 +71,6 @@ impl JxlParallelRunner for SimpleParallelRunner {
     }
 }
 
-pub fn reborrow<'a>(
-    runner: &'a mut Option<&mut dyn JxlParallelRunner>,
-) -> Option<&'a mut dyn JxlParallelRunner> {
-    match runner {
-        Some(r) => Some(&mut **r),
-        None => None,
-    }
-}
-
 #[derive(Clone, Debug)]
 pub struct FuzzConfig {
     pub progressive: bool,
@@ -104,16 +92,19 @@ impl Default for FuzzConfig {
     }
 }
 
-fn create_frame_buffers(
-    frame_size: (usize, usize),
-    samples_per_pixel: usize,
-    extra_channels: usize,
-) -> Result<Vec<Image<f32>>, ()> {
+fn create_frame_buffers(decoder: &JxlDecoder) -> Result<Vec<Image<f32>>, ()> {
+    let basic_info = decoder.basic_info().unwrap();
+    let frame_size = basic_info.size;
+    let samples_per_pixel = decoder
+        .current_pixel_format()
+        .unwrap()
+        .color_type
+        .samples_per_pixel();
     let mut outputs = match Image::<f32>::new((frame_size.0 * samples_per_pixel, frame_size.1)) {
         Ok(img) => vec![img],
         Err(_) => return Err(()),
     };
-    for _ in 0..extra_channels {
+    for _ in 0..basic_info.extra_channels.len() {
         match Image::<f32>::new(frame_size) {
             Ok(img) => outputs.push(img),
             Err(_) => return Err(()),
@@ -164,126 +155,63 @@ pub fn fuzz_decode(data: &[u8], config: FuzzConfig) -> Result<Vec<Vec<Image<f32>
     let mut chunk_input = &data[0..0];
     let mut remaining_input = data;
 
-    macro_rules! advance_decoder {
-        ($decoder:ident, $chunk_size:expr, $process:expr $(, flush: $fallback:ident => $flush:expr)?) => {{
-            loop {
-                let chunk_size = match rng.as_mut() {
-                    Some(rng) => $chunk_size(rng),
-                    None => remaining_input.len().max(1),
-                };
-                let all_provided = chunk_input.len().saturating_add(chunk_size) >= remaining_input.len();
-                let next_len = (chunk_input.len().saturating_add(chunk_size)).min(remaining_input.len());
-                chunk_input = &remaining_input[..next_len];
-                let available_before = chunk_input.len();
-
-                let res = match $process {
-                    Ok(r) => r,
-                    Err(_) => return Err(()),
-                };
-
-                let consumed = available_before - chunk_input.len();
-                remaining_input = &remaining_input[consumed..];
-
-                match res {
-                    ProcessingResult::Complete { result } => break result,
-                    ProcessingResult::NeedsMoreInput { fallback, .. } => {
-                        #[allow(unused_mut)]
-                        let mut fallback = fallback;
-                        $(
-                            if config.flush_intermediate {
-                                let $fallback = &mut fallback;
-                                $flush;
-                                if let Some(ref mut rng) = rng {
-                                    if rng.random_range(0..7) == 0 {
-                                        $flush;
-                                    }
-                                }
-                            }
-                        )?
-                        if remaining_input.is_empty() || (all_provided && consumed == 0) {
-                            return Err(());
-                        }
-                        $decoder = fallback;
-                    }
-                }
-            }
-        }};
-    }
-
-    let mut decoder = JxlDecoder::<states::Initialized>::new(decoder_options);
-    let mut decoder_with_image_info = advance_decoder!(
-        decoder,
-        |rng: &mut XorShiftRng| match rng.random_range(0..4) {
-            0 => 1,
-            1 => rng.random_range(2..32),
-            2 => rng.random_range(32..512),
-            _ => rng.random_range(512..4096),
-        },
-        decoder.process(&mut chunk_input, reborrow(&mut runner_opt))
-    );
-
-    let basic_info = decoder_with_image_info.basic_info().clone();
-    let (width, height) = basic_info.size;
-    let color_type = decoder_with_image_info.current_pixel_format().color_type;
-    let samples_per_pixel = if color_type == JxlColorType::Grayscale {
-        1
-    } else {
-        3
-    };
-    let extra_channels = basic_info.extra_channels.len();
-
-    let mut intermediate_outputs = if config.flush_intermediate {
-        Some(create_frame_buffers(
-            (width, height),
-            samples_per_pixel,
-            extra_channels,
-        )?)
-    } else {
-        None
-    };
-
+    let mut decoder = JxlDecoder::new(decoder_options);
+    let mut outputs: Option<Vec<Image<f32>>> = None;
     let mut all_frames = Vec::new();
 
     loop {
-        let mut decoder_with_frame_info = advance_decoder!(
-            decoder_with_image_info,
-            |rng: &mut XorShiftRng| rng.random_range(1..512),
-            decoder_with_image_info.process(&mut chunk_input, reborrow(&mut runner_opt)),
-            flush: fallback => {
-                if let Some(ref mut intermediate) = intermediate_outputs {
-                    let mut bufs = make_output_bufs(intermediate);
-                    let _ = fallback.flush_pixels(&mut bufs, reborrow(&mut runner_opt));
-                }
-            }
-        );
-
-        let frame_header = decoder_with_frame_info.frame_header();
-        let frame_size = frame_header.size;
-        let mut outputs = create_frame_buffers(frame_size, samples_per_pixel, extra_channels)?;
-
-        decoder_with_image_info = advance_decoder!(
-            decoder_with_frame_info,
-            |rng: &mut XorShiftRng| match rng.random_range(0..5) {
+        let chunk_size = match rng.as_mut() {
+            Some(rng) => match rng.random_range(0..5) {
                 0 => 1,
                 1 => rng.random_range(2..64),
                 2 => rng.random_range(64..512),
                 3 => rng.random_range(512..2048),
                 _ => remaining_input.len().max(1),
             },
-            {
-                let mut bufs = make_output_bufs(&mut outputs);
-                decoder_with_frame_info.process(&mut chunk_input, &mut bufs, reborrow(&mut runner_opt))
-            },
-            flush: fallback => {
-                let mut bufs = make_output_bufs(&mut outputs);
-                let _ = fallback.flush_pixels(&mut bufs, reborrow(&mut runner_opt));
+            None => remaining_input.len().max(1),
+        };
+        let all_provided = chunk_input.len().saturating_add(chunk_size) >= remaining_input.len();
+        let next_len = (chunk_input.len().saturating_add(chunk_size)).min(remaining_input.len());
+        chunk_input = &remaining_input[..next_len];
+        let available_before = chunk_input.len();
+
+        let mut bufs = outputs.as_deref_mut().map(make_output_bufs);
+        let event = decoder
+            .process(
+                &mut chunk_input,
+                bufs.as_deref_mut(),
+                runner_opt.as_deref_mut(),
+            )
+            .map_err(|_| ())?;
+
+        let consumed = available_before - chunk_input.len();
+        remaining_input = &remaining_input[consumed..];
+
+        match event {
+            Event::BasicInfo => {
+                outputs = Some(create_frame_buffers(&decoder)?);
             }
-        );
-
-        all_frames.push(outputs);
-
-        if !decoder_with_image_info.has_more_frames() {
-            break;
+            Event::FrameHeader => {}
+            Event::FrameComplete { has_more_frames } => {
+                all_frames.push(outputs.take().unwrap());
+                if has_more_frames {
+                    outputs = Some(create_frame_buffers(&decoder)?);
+                }
+            }
+            Event::Complete => break,
+            Event::NeedMoreInput { .. } => {
+                if config.flush_intermediate
+                    && let Some(ref mut bufs) = bufs
+                {
+                    let _ = decoder.flush_pixels(bufs, runner_opt.as_deref_mut());
+                    if rng.as_mut().is_some_and(|r| r.random_range(0..7) == 0) {
+                        let _ = decoder.flush_pixels(bufs, runner_opt.as_deref_mut());
+                    }
+                }
+                if remaining_input.is_empty() || (all_provided && consumed == 0) {
+                    return Err(());
+                }
+            }
         }
     }
     Ok(all_frames)
