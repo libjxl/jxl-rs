@@ -10,7 +10,7 @@ use std::time::Duration;
 
 use clap::Parser;
 use color_eyre::eyre::{Result, WrapErr, eyre};
-use jxl::api::{JxlDecoderOptions, ProfileLevel};
+use jxl::api::{Event, JxlDecoder, JxlDecoderOptions, ProfileLevel};
 use jxl_cli::dec;
 use jxl_cli::dec::OutputDataType;
 use jxl_cli::enc::OutputFormat;
@@ -140,34 +140,31 @@ fn main() -> Result<()> {
         .num_threads(opt.num_threads)
         .build_global()?;
 
-    // Handle --info flag: print image info and exit
-    if opt.info {
+    if opt.info || opt.preview {
         let mut reader = BufReader::new(&mut file);
-        let decoder = dec::decode_header(&mut reader, None, options(true))?;
-        let info = decoder.basic_info();
-        println!("Image size: {}x{}", info.size.0, info.size.1);
-        println!("Bit depth: {:?}", info.bit_depth);
-        println!("Orientation: {:?}", info.orientation);
-        if let Some(preview_size) = info.preview_size {
-            println!("Preview size: {}x{}", preview_size.0, preview_size.1);
-        } else {
-            println!("Preview: none");
+        let mut decoder = JxlDecoder::new(options(true));
+        if decoder.process(&mut reader, None, None)? != Event::BasicInfo {
+            return Err(eyre!("Source file truncated"));
         }
-        if let Some(anim) = &info.animation {
-            println!(
-                "Animation: {} loops, {}/{} tps",
-                anim.num_loops, anim.tps_numerator, anim.tps_denominator
-            );
+        let info = decoder.basic_info().unwrap();
+        if opt.info {
+            println!("Image size: {}x{}", info.size.0, info.size.1);
+            println!("Bit depth: {:?}", info.bit_depth);
+            println!("Orientation: {:?}", info.orientation);
+            if let Some(preview_size) = info.preview_size {
+                println!("Preview size: {}x{}", preview_size.0, preview_size.1);
+            } else {
+                println!("Preview: none");
+            }
+            if let Some(anim) = &info.animation {
+                println!(
+                    "Animation: {} loops, {}/{} tps",
+                    anim.num_loops, anim.tps_numerator, anim.tps_denominator
+                );
+            }
+            println!("Extra channels: {}", info.extra_channels.len());
+            return Ok(());
         }
-        println!("Extra channels: {}", info.extra_channels.len());
-        return Ok(());
-    }
-
-    // Handle --preview flag: check if preview exists
-    if opt.preview {
-        let mut reader = BufReader::new(&mut file);
-        let decoder = dec::decode_header(&mut reader, None, options(true))?;
-        let info = decoder.basic_info();
         if info.preview_size.is_none() {
             return Err(eyre!("This file does not contain a preview frame"));
         }

@@ -9,15 +9,14 @@
 //! loading APIs. JPEG XL files can then be opened by extension or detected by
 //! either of their standard signatures.
 
-use std::io::{BufRead, BufReader, Read, Seek};
+use std::io::{BufReader, Read, Seek};
 
 use image::error::{DecodingError, ImageFormatHint, LimitError, LimitErrorKind};
 use image::hooks::{GenericReader, register_decoding_hook, register_format_detection_hook};
 use image::{ColorType, ImageError, ImageResult, LimitSupport, Limits};
 use jxl::api::{
-    Endianness, ExtraChannel, JxlBitDepth, JxlColorType, JxlDataFormat,
+    Endianness, Event, ExtraChannel, JxlBitDepth, JxlColorType, JxlDataFormat,
     JxlDecoder as ApiJxlDecoder, JxlDecoderOptions, JxlOutputBuffer, JxlPixelFormat,
-    ProcessingResult, states,
 };
 
 const CODESTREAM_SIGNATURE: [u8; 2] = [0xff, 0x0a];
@@ -28,7 +27,7 @@ const CONTAINER_SIGNATURE: [u8; 12] = [
 /// An adapter implementing [`image::ImageDecoder`] for JPEG XL images.
 pub struct JxlDecoder<R: Read + Seek> {
     input: BufReader<R>,
-    decoder: ApiJxlDecoder<states::WithImageInfo>,
+    decoder: ApiJxlDecoder,
     width: u32,
     height: u32,
     color_type: ColorType,
@@ -40,13 +39,23 @@ impl<R: Read + Seek> JxlDecoder<R> {
     /// Creates an image decoder from a readable, seekable stream.
     pub fn new(reader: R) -> ImageResult<Self> {
         let mut input = BufReader::new(reader);
-        let decoder = ApiJxlDecoder::<states::Initialized>::new(JxlDecoderOptions::default());
-        let mut decoder = complete_or_truncated(decoder.process(&mut input, None), &mut input)?;
+        let mut decoder = ApiJxlDecoder::new(JxlDecoderOptions::default());
+        if decoder
+            .process(&mut input, None, None)
+            .map_err(image_error)?
+            != Event::BasicInfo
+        {
+            return Err(truncated_error());
+        }
 
-        let info = decoder.basic_info().clone();
+        let info = decoder.basic_info().unwrap().clone();
         let width = u32::try_from(info.size.0).map_err(|_| dimension_error())?;
         let height = u32::try_from(info.size.1).map_err(|_| dimension_error())?;
-        let grayscale = decoder.current_pixel_format().color_type.is_grayscale();
+        let grayscale = decoder
+            .current_pixel_format()
+            .unwrap()
+            .color_type
+            .is_grayscale();
         let has_alpha = info
             .extra_channels
             .iter()
@@ -60,10 +69,11 @@ impl<R: Read + Seek> JxlDecoder<R> {
                 color_data_format: Some(data_format),
                 extra_channel_format: vec![None; info.extra_channels.len()],
             })
-            .into_image_result()?;
+            .map_err(image_error)?;
 
         let icc_profile = decoder
             .output_color_profile()
+            .unwrap()
             .try_as_icc()
             .map(|profile| profile.into_owned());
 
@@ -81,8 +91,6 @@ impl<R: Read + Seek> JxlDecoder<R> {
     fn decode_into(mut self, buf: &mut [u8]) -> ImageResult<()> {
         assert_eq!(buf.len() as u64, image::ImageDecoder::total_bytes(&self));
 
-        let frame =
-            complete_or_truncated(self.decoder.process(&mut self.input, None), &mut self.input)?;
         let bytes_per_sample = match self.color_type {
             ColorType::L8 | ColorType::La8 | ColorType::Rgb8 | ColorType::Rgba8 => 1,
             ColorType::L16 | ColorType::La16 | ColorType::Rgb16 | ColorType::Rgba16 => 2,
@@ -94,12 +102,12 @@ impl<R: Read + Seek> JxlDecoder<R> {
         let buffer_is_aligned = buf.as_ptr().align_offset(bytes_per_sample) == 0;
 
         if bytes_per_sample == 1 || buffer_is_aligned {
-            decode_frame(frame, &mut self.input, buf, self.height)?;
+            decode_frame(&mut self.decoder, &mut self.input, buf, self.height)?;
         } else if bytes_per_sample == 2 {
             self.limits.reserve_usize(buf.len())?;
             let mut aligned = vec![0u16; buf.len() / 2];
             decode_frame(
-                frame,
+                &mut self.decoder,
                 &mut self.input,
                 bytemuck::cast_slice_mut(&mut aligned),
                 self.height,
@@ -109,7 +117,7 @@ impl<R: Read + Seek> JxlDecoder<R> {
             self.limits.reserve_usize(buf.len())?;
             let mut aligned = vec![0f32; buf.len() / 4];
             decode_frame(
-                frame,
+                &mut self.decoder,
                 &mut self.input,
                 bytemuck::cast_slice_mut(&mut aligned),
                 self.height,
@@ -225,56 +233,8 @@ fn jxl_color_type(grayscale: bool, alpha: bool) -> JxlColorType {
     }
 }
 
-fn complete_or_truncated<T, F, R: Read + Seek>(
-    mut result: jxl::error::Result<ProcessingResult<T, F>>,
-    input: &mut BufReader<R>,
-) -> ImageResult<T>
-where
-    F: Retry<T, R>,
-{
-    loop {
-        match result.map_err(image_error)? {
-            ProcessingResult::Complete { result } => return Ok(result),
-            ProcessingResult::NeedsMoreInput { fallback, .. } => {
-                if input.fill_buf()?.is_empty() {
-                    return Err(truncated_error());
-                }
-                result = fallback.retry(input);
-            }
-        }
-    }
-}
-
-trait Retry<T, R: Read + Seek> {
-    fn retry(self, input: &mut BufReader<R>) -> jxl::error::Result<ProcessingResult<T, Self>>
-    where
-        Self: Sized;
-}
-
-impl<R: Read + Seek> Retry<ApiJxlDecoder<states::WithImageInfo>, R>
-    for ApiJxlDecoder<states::Initialized>
-{
-    fn retry(
-        self,
-        input: &mut BufReader<R>,
-    ) -> jxl::error::Result<ProcessingResult<ApiJxlDecoder<states::WithImageInfo>, Self>> {
-        self.process(input, None)
-    }
-}
-
-impl<R: Read + Seek> Retry<ApiJxlDecoder<states::WithFrameInfo>, R>
-    for ApiJxlDecoder<states::WithImageInfo>
-{
-    fn retry(
-        self,
-        input: &mut BufReader<R>,
-    ) -> jxl::error::Result<ProcessingResult<ApiJxlDecoder<states::WithFrameInfo>, Self>> {
-        self.process(input, None)
-    }
-}
-
 fn decode_frame<R: Read + Seek>(
-    mut decoder: ApiJxlDecoder<states::WithFrameInfo>,
+    decoder: &mut ApiJxlDecoder,
     input: &mut BufReader<R>,
     buf: &mut [u8],
     height: u32,
@@ -283,33 +243,13 @@ fn decode_frame<R: Read + Seek>(
     let mut output = JxlOutputBuffer::new(buf, height as usize, bytes_per_row);
     loop {
         match decoder
-            .process(input, std::slice::from_mut(&mut output), None)
+            .process(input, Some(std::slice::from_mut(&mut output)), None)
             .map_err(image_error)?
         {
-            ProcessingResult::Complete { .. } => return Ok(()),
-            ProcessingResult::NeedsMoreInput { fallback, .. } => {
-                if input.fill_buf()?.is_empty() {
-                    return Err(truncated_error());
-                }
-                decoder = fallback;
-            }
+            Event::FrameHeader => {}
+            Event::FrameComplete { .. } => return Ok(()),
+            _ => return Err(truncated_error()),
         }
-    }
-}
-
-trait SetPixelFormatResult {
-    fn into_image_result(self) -> ImageResult<()>;
-}
-
-impl SetPixelFormatResult for () {
-    fn into_image_result(self) -> ImageResult<()> {
-        Ok(())
-    }
-}
-
-impl SetPixelFormatResult for jxl::error::Result<()> {
-    fn into_image_result(self) -> ImageResult<()> {
-        self.map_err(image_error)
     }
 }
 
